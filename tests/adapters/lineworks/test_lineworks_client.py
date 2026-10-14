@@ -284,3 +284,11 @@ def test_worker_disables_proxy_and_redirect_bounds_response(monkeypatch):
     assert json.loads(output.getvalue())["status"] == 201
     assert json.loads(output.getvalue())["headers"] == {"RateLimit-Reset": "12"}
     assert observed == [module.MAX_RESPONSE_BYTES + 1, "closed"]
+
+
+@pytest.mark.parametrize("timeout", [10 ** 400, -(10 ** 400)], ids=["huge", "negative_huge"])
+def test_unrepresentable_timeout_is_rejected_before_authentication(timeout):
+    wire = Wire([])
+    with pytest.raises(ClientError, match="validation_invalid"):
+        client(wire, timeout=timeout)
+    assert wire.calls == []

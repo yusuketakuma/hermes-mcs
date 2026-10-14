@@ -1,6 +1,8 @@
 """mcs_standalone without SDKs: the same Supervisor settings and /mcs
 context Hermes provides, tokens only from ~/.mcs/.env, and the send
 CLI's exit-code contract."""
+import threading
+
 import asyncio
 import io
 import json
@@ -280,3 +282,39 @@ def test_setup_code_raised_inside_the_adapter_keeps_exit_75(tmp_path, monkeypatc
         buffer=io.BytesIO(json.dumps({"text": "x"}).encode())))
     assert cli.main(["send", "--root", str(tmp_path), "--to",
                      "discord:1000000000000000001", "--quiet"]) == 75
+
+
+def test_nonregular_private_input_is_rejected_without_waiting_for_a_writer(tmp_path):
+    path = tmp_path / "synthetic-private-input"
+    os.mkfifo(path, mode=0o600)
+    entered = threading.Event()
+    finished = threading.Event()
+    errors = []
+
+    def read():
+        entered.set()
+        try:
+            config._private_bytes(path, "missing", "invalid")
+        except config.ConfigError as exc:
+            errors.append(str(exc))
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=read, daemon=True)
+    worker.start()
+    assert entered.wait(1)
+    refused_without_writer = finished.wait(0.2)
+    try:
+        if not refused_without_writer:
+            # Unblock the B reader too: the regression must not strand a thread.
+            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+            os.close(fd)
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+        assert errors == ["invalid"]
+        assert refused_without_writer
+    finally:
+        if worker.is_alive():
+            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+            os.close(fd)
+            worker.join(timeout=1)

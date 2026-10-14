@@ -60,6 +60,8 @@ class Supervisor:
         self._task = self._ctx.spawn_task(
             self._run(), name=f"mcs-slack:{self._worker_id}")
         if self._task is None or self._task.done():
+            if _LIVE.get(key) is self:
+                del _LIVE[key]
             self._log("worker_start_failed")
             return False
         self._ctx.on_unload(self.unload)

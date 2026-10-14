@@ -49,7 +49,7 @@ def api_lock(root):
                 raise exc
         except FileNotFoundError:
             pass
-        except (ValueError, KeyError, TypeError, RecursionError):
+        except (ValueError, KeyError, TypeError, RecursionError, OverflowError):
             raise ClientError("rate_state_invalid") from None
         try:
             yield

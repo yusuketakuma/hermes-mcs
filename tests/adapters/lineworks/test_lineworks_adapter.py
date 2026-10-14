@@ -889,3 +889,19 @@ def test_failure_after_text_accepted_stays_one(monkeypatch, tmp_path):
 
     w.client.upload_file = reject
     assert _send(tmp_path) == 1 and len(w.client.calls) == 1
+
+
+@pytest.mark.parametrize("until", [10 ** 400, -(10 ** 400)], ids=["huge", "negative_huge"])
+@pytest.mark.parametrize("part", [False, True], ids=["card", "part"])
+def test_unrepresentable_cooldown_is_rejected_before_any_send(tmp_path, until, part):
+    w = world(tmp_path)
+    spec = overflow_spec()
+    with open(os.path.join(w.dirs["state"], "rate-limit.json"), "w") as stream:
+        json.dump({"until": until}, stream)
+    if part:
+        out = asyncio.run(_worker(w)._perform_part(
+            {"spec": spec}, spec["parts"]["manifest"][1], CTX))
+    else:
+        out = asyncio.run(w.sender.perform(spec))
+    assert out == {"result": "not_sent", "error_code": "rate_state_invalid"}
+    assert w.client.calls == []
