@@ -822,3 +822,31 @@ def test_one_of_the_extended_targets_missing_is_repaired(monkeypatch):
     calls, result = _run(monkeypatch, PREFIX + VT + "。", [VT_ALL[0], VT_ALL[2]], VT_ALL)
     assert len(calls) == 2
     assert {item["action"] for item in result["requests"]} == {"体温確認", "血圧記録確認", "血糖記録確認"}
+
+
+CROSS = "本人の記録の確認と投薬を終えたので、主治医へ連絡をお願いします"
+RIGHT_NEG = "本人の記録を確認してください、転倒はありません"
+LEFT_DONE = "記録は確認済みですが、主治医へ連絡してください"
+CROSS_CONTACT = {"to": "医師", "kind": "request", "action": "主治医へ連絡",
+                 "evidence": "主治医へ連絡をお願いします"}
+LEFT_CONTACT = {"to": "医師", "kind": "request", "action": "主治医へ連絡",
+                "evidence": "主治医へ連絡してください"}
+
+
+@pytest.mark.parametrize("sentence,repaired", [
+    (RIGHT_NEG, [_confirm("記録確認", "本人の記録を確認してください")]),
+    (LEFT_DONE, [LEFT_CONTACT]),
+], ids=["negation_after_the_request", "done_report_before_the_request"])
+def test_a_negation_in_another_clause_does_not_hide_a_request(monkeypatch, sentence, repaired):
+    calls, result = _run(monkeypatch, PREFIX + sentence + "。", [], repaired)
+    assert len(calls) == 2 and result["requests"]
+
+
+@pytest.mark.parametrize("sentence,requests", [
+    (CROSS, [CROSS_CONTACT]),                       # 確認 is not chained across ので、
+    (RIGHT_NEG, [_confirm("記録確認", "本人の記録を確認してください")]),
+    (LEFT_DONE, [LEFT_CONTACT]),
+], ids=["listing_does_not_cross_a_clause", "right_negation_present", "left_done_present"])
+def test_clause_bounded_requests_add_no_call(monkeypatch, sentence, requests):
+    calls, _ = _run(monkeypatch, PREFIX + sentence + "。", requests)
+    assert len(calls) == 1

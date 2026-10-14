@@ -1688,8 +1688,9 @@ _REQUEST_END = (r"(?:お願い|ください|下さい|いただけ|いただき�
 # 確認と連絡を終えたので…連絡してください).
 _REQUEST_DIRECT = rf"(?:を)?(?:して)?{_REQUEST_END}"
 # one listing step: a particle, then text up to the NEXT confirm/contact stem
-_REQUEST_LINK = (r"(?:と|や|、|・|及び|および)"
-                 r"(?:(?!確認|連絡)[^。！？!?;；\r\n])*(?:確認|連絡)")
+_CLAUSE_MARK = r"ので|から|ため|けど|けれど|が、|、"
+_REQUEST_LINK = (r"(?:(?:と|や|・|及び|および)、?|、)"
+                 rf"(?:(?!確認|連絡|{_CLAUSE_MARK})[^。！？!?;；\r\n])*(?:確認|連絡)")
 _REQUEST_CUES = {
     # any number of listed stems, the last directly requested (確認と…確認と…確認をお願い)
     kind: re.compile(rf"{stem}(?=(?:{_REQUEST_LINK})*{_REQUEST_DIRECT})")
@@ -1715,7 +1716,7 @@ def _request_cues(body):
                 # clause (after ので/から/、…) is what a negation must sit in
                 found.append({"kind": kind, "ctx": ctx,
                               "chunks": _request_target(ctx[start:m.start()]),
-                              "clause": ctx[_clause_start(ctx[:m.start()]):]})
+                              "clause": ctx[_clause_start(ctx[:m.start()]):_clause_end(ctx, m.end())]})
                 start = m.end()
             _distinct_targets(found)
             if len(found) > 1:
@@ -1728,8 +1729,17 @@ def _request_cues(body):
 
 def _clause_start(before):
     """Start of the clause holding a request stem (after ので, から, 、 …)."""
-    marks = list(re.finditer(r"ので|から|ため|けど|けれど|が、|、", before))
+    marks = list(re.finditer(_CLAUSE_MARK, before))
     return marks[-1].end() if marks else 0
+
+
+def _clause_end(ctx, stem_end):
+    """End of the clause holding a request: past its listed stems and request
+    ending, up to the next clause mark (…してください、転倒はありません)."""
+    chain = re.match(rf"(?:{_REQUEST_LINK})*{_REQUEST_DIRECT}", ctx[stem_end:])
+    tail = stem_end + (chain.end() if chain else 0)
+    mark = re.search(_CLAUSE_MARK, ctx[tail:])
+    return tail + mark.start() if mark else len(ctx)
 
 
 def _distinct_targets(found):
