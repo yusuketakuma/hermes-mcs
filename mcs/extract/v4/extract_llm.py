@@ -1675,10 +1675,10 @@ def _completeness_issues(v, hints, body):
     return issues
 
 
-# v1 rx_actions' own change words; a stated direction also states a change.
+# v1 rx_actions' own change words. Each is met by its own action only: a generic
+# 変更 states no direction, and an increase or decrease keeps its direction.
 _RX_WORDS = {"start": "開始|追加", "stop": "中止|停止|終了", "decrease": "減量",
              "increase": "増量", "change": "変更(?!なし)"}
-_RX_STATED = {"change": {"change", "decrease", "increase"}}
 _RX_ANY = "|".join(_RX_WORDS.values())
 # A non-current change is denied, done, planned or weighed right at its own word:
 # 中止しません, 中止しなかった, 中止はしない, 変更無し, 中止済み, 開始予定, 中止は見送り.
@@ -1693,11 +1693,33 @@ _RX_PLANNED = (r"(?:を|は|も|が|の)?\s*(?:し|する|して|され)?"
                r"(?:ください|下さい|ほしい|欲しい|お願い|相談|依頼|提案|ます(?!た|か))")
 # 明日から架空薬Aを開始: a future time in the change's own clause
 _RX_FUTURE = r"明日|明後日|来週|来月|今後|次回|後日|翌日|今度|週明け"
+# 明日の退院に備えて本日開始しました: a nearer current time decides
+_RX_NOW = r"本日|今日|昨日|昨夜|今朝|先ほど|先程|現在|先日|今回"
+# 中止薬, 開始薬, 追加薬: the word is part of a noun, not a change
+_RX_NOUN_AFTER = r"薬|剤"
+# a name inside a longer one (架空薬A in 架空薬AA, 薬ZA in 架空薬ZA) is no occurrence of it;
+# a form after it (アムロジピン錠) is
+_RX_NAME_CHAR = r"[A-Za-zＡ-Ｚａ-ｚ0-9０-９ァ-ヶー一-龠々]"
+
+
+def _rx_bounded(name, text):
+    """``name`` occurs in ``text`` as itself, not only inside a longer word."""
+    return any(not re.match(_RX_NAME_GOES_ON, text[m.end():]) and not _rx_glued(text[:m.start()])
+               for m in re.finditer(re.escape(name), text))
+
+
+def _rx_glued(before):
+    """The text before a name runs into it (架空 before 薬ZA); a time word written
+    straight before a drug (本日架空薬A) does not."""
+    return bool(re.search(_RX_NAME_CHAR + "$", before) and not re.search(
+        r"(?:本日|今日|昨日|今朝|昨夜|現在|今回|先日|明日|当日|翌日|毎日|同日|後日)$", before))
 # AとBを開始, A5mgと架空薬Bを開始: a listing particle beside a known drug (and its dose)
 _RX_LIST = r"(?:と|や|・|及び|および)"
 # v1's _MED_TOKEN allows a space before the unit (5 mg)
 _RX_DOSE_ONE = r"\s*[0-9０-９.．]+\s*(?:mg|μg|mcg|g|mL|ml|錠|%|単位|包|枚|本|カプセル|cap|Cap|CAP)"
 _RX_DOSE = f"(?:{_RX_DOSE_ONE})?"
+# (defined here, after the dose it must not swallow: 架空薬A5mg)
+_RX_NAME_GOES_ON = rf"(?!錠|散|液|軟膏|テープ|カプセル|注|点眼|貼付|{_RX_DOSE_ONE}|{_RX_ANY}|内服|服用|投与)" + _RX_NAME_CHAR
 _RX_PARTICLE = r"\s*(?:を|は|も|の|が)?\s*"
 # 2.5mgから5mgへ増量, 1日2回から1回へ減量: a regimen range between the drug and its word
 _RX_AMOUNT = r"(?:1日|一日)?\s*[0-9０-９.．]+\s*(?:mg|μg|mcg|g|mL|ml|錠|%|単位|回|包|枚|滴|カプセル)"
@@ -1775,9 +1797,11 @@ def _named_in(text, names):
 
 
 def _rx_positions(hints, names, body):
-    """Change words to check, as (start, end, code): every v1 rx_action located in
-    the body, plus a known drug written directly before a change word that v1 did
-    not hint (本人のカロナールを中止: no medication keyword beside the brand)."""
+    """Change words to check, as (start, end, code, unknown): every v1 rx_action
+    located in the body, plus a known drug written directly before a change word that
+    v1 did not hint (本人のカロナールを中止: no medication keyword beside the brand).
+    ``unknown`` marks a fallback whose source word is longer than the known name
+    (ロナール in カロナール, カロナールA in カロナールAA): a drug never extracted."""
     seen = set()
     for act in hints.get("rx_actions") or []:
         code = act.get("action") if isinstance(act, dict) else None
@@ -1788,16 +1812,20 @@ def _rx_positions(hints, names, body):
         words = [m for m in re.finditer(_RX_WORDS[code], ctx) if m.start() <= 14]
         for found in re.finditer(re.escape(ctx), body) if words else ():
             start = found.start() + words[-1].start()
+            if re.match(_RX_NOUN_AFTER, body[found.start() + words[-1].end():]):
+                continue
             if start not in seen:
                 seen.add(start)
-                yield start, found.start() + words[-1].end(), code
+                yield start, found.start() + words[-1].end(), code, False
     for name in sorted(names, key=len, reverse=True):
-        rx = re.escape(name) + _RX_DOSE + _RX_PARTICLE + f"(?:{_RX_RANGE})?" + r"(" + _RX_ANY + r")"
+        rx = (re.escape(name) + f"((?:{_RX_NAME_GOES_ON})*)" + _RX_DOSE + _RX_PARTICLE
+              + f"(?:{_RX_RANGE})?" + r"(" + _RX_ANY + r")")
         for m in re.finditer(rx, body):
-            code = _RX_WORD_CODE.get(m.group(1))
-            if code and m.start(1) not in seen and not (code == "change" and body.startswith("変更なし", m.start(1))):
-                seen.add(m.start(1))
-                yield m.start(1), m.end(1), code
+            code = _RX_WORD_CODE.get(m.group(2))
+            if (code and m.start(2) not in seen and not re.match(_RX_NOUN_AFTER, body[m.end(2):])
+                    and not (code == "change" and body.startswith("変更なし", m.start(2)))):
+                seen.add(m.start(2))
+                yield m.start(2), m.end(2), code, bool(m.group(1)) or _rx_glued(body[:m.start()])
 
 
 def _rx_bindings(hints, names, body, *, every=False):
@@ -1811,7 +1839,7 @@ def _rx_bindings(hints, names, body, *, every=False):
     # scope it accompanies like と一緒に (same length, so positions hold)
     scoped = body.replace("と同時に", "と一緒に")
     carry = {}      # sentence head -> (end of its last change word, that change's drugs)
-    for start, end, code in sorted(_rx_positions(hints, names, body)):
+    for start, end, code, unknown in sorted(_rx_positions(hints, names, body)):
         head = max(body.rfind(c, 0, start) for c in "。！？!?;；\r\n") + 1
         tail = re.search(r"[。！？!?;；\r\n]", body[end:])
         tail = end + tail.start() if tail else len(body)
@@ -1841,8 +1869,11 @@ def _rx_bindings(hints, names, body, *, every=False):
         breaks = list(re.finditer(r"ので|ため|けど|けれど|が、|、", body[head:start]))
         asked = re.match(_RX_PLANNED, body[end:close])
         # "consult" (追加を相談) is no instruction: it is checked but never repaired
-        planned = ("consult" if asked and re.search(r"相談|提案", asked.group(0)) else bool(asked or re.search(
-            _RX_FUTURE, body[head + (breaks[-1].end() if breaks else 0):start])))
+        when = body[head + (breaks[-1].end() if breaks else 0):start]
+        future = [m.start() for m in re.finditer(_RX_FUTURE, when)]
+        now = [m.start() for m in re.finditer(_RX_NOW, when)]
+        planned = ("consult" if asked and re.search(r"相談|提案", asked.group(0)) else bool(
+            asked or (future and (not now or future[-1] > now[-1]))))
         # this change word's objects: AとBを開始 names two, Aを開始しBも開始 one each
         prior = list(re.finditer(_RX_ANY, body[lead:start]))
         base = lead + (prior[-1].end() if prior else 0)
@@ -1852,7 +1883,8 @@ def _rx_bindings(hints, names, body, *, every=False):
             base, region = base + along[-1].end(), region[along[-1].end():]
         spans = []
         for name in _named_in(region, names):
-            spans += [(m.start(), m.end(), name) for m in re.finditer(re.escape(name), region)]
+            spans += [(m.start(), m.end(), name) for m in re.finditer(re.escape(name), region)
+                      if not _rx_glued(body[:base + m.start()])]
         spans = sorted({(s, e) for s, e, _ in spans if not any(
             s2 <= s and e <= e2 and (s2, e2) != (s, e) for s2, e2, _ in spans)})
         objects, missed = _rx_objects(region, spans, code)
@@ -1868,8 +1900,13 @@ def _rx_bindings(hints, names, body, *, every=False):
             body[before[0]:start]) and before[1])
         if carried:
             for name in carried:
-                yield name, set(_RX_STATED.get(code, {code})), (lead, close, planned)
+                yield name, {code}, (lead, close, planned)
             carry[head] = (end, carried)
+            continue
+        if not objects and unknown:
+            # only a fragment of a longer source word is known: that drug was never extracted
+            if every or extract.patient_source_scope(scoped, start, end) == "patient":
+                yield "?", set(), (lead, close, planned)
             continue
         if not objects:
             if along:
@@ -1893,7 +1930,7 @@ def _rx_bindings(hints, names, body, *, every=False):
                 continue
             if name:
                 kept.append(name)
-            allowed = set(_RX_STATED.get(code, {code}))
+            allowed = {code}
             # AからBへ / AをBに変更: the source stops, the destination starts
             allowed |= {"from": {"stop"}, "to": {"start"}}.get(role, set())
             yield name, allowed, (lead, close, planned)
@@ -1925,6 +1962,12 @@ def _rx_action_gaps(v, hints, body):
     A listed drug the extraction never named keeps the gap open. Other people,
     past, planned and denied changes ask nothing."""
     bindings = list(_rx_bindings(hints, _rx_names(v, hints), body))
+    # a repair keeping a fragment (ロナール beside カロナール) beside the right name
+    # still names a drug the source never writes on its own
+    if bindings and any(med.get("action") in _RX_CONFLICT and med["name"] in body
+                        and not _rx_bounded(med["name"], body)
+                        for planned in (False, True) for med in _rx_covering(v, planned)):
+        return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
     # 架空薬Aを開始し、架空薬Aを中止: every action the source binds to that same drug,
     # done and planned apart, so a requested stop never excuses a recorded done stop
     stated = {}
@@ -1932,7 +1975,8 @@ def _rx_action_gaps(v, hints, body):
         stated.setdefault((target, bool(planned)), set()).update(allowed)
     for target, allowed, (lead, close, planned) in bindings:
         mine = [med for med in _rx_covering(v, planned)
-                if (med["name"] in body[lead:close] if target is None else med["name"] == target)
+                if (_rx_bounded(med["name"], body[lead:close])
+                    if target is None else med["name"] == target)
                 and any(m.start() < close and m.end() > lead
                         for m in re.finditer(re.escape(med["evidence"]), body))]
         if planned == "consult":
