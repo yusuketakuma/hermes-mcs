@@ -163,17 +163,22 @@ _CONTEXT_KEYS = frozenset({"category", "detail_key", "value_contains", "subject"
 def _context_units(body: str, got: list, references=None) -> list[dict]:
     """Grounded items and their grounded details, each one scoring unit."""
     import patient_context
+    from mcs_util import locate_quote_span
     units = []
     for item in got:
         if not isinstance(item, dict):
             continue
-        grounded = patient_context.context_items({"patient_context": [item]}, body)
+        # Score the observed labels; a newer validator must not erase an older
+        # engine's wrong subject/category before the common oracle can count it.
+        grounded = patient_context.context_items({"patient_context": [
+            {key: value for key, value in item.items() if key != "details"}]}, body)
         if not grounded:
             continue
         clean = grounded[0]
         parent = {"category": clean["category"], "subject": item.get("subject")}
         units.append({**parent, "detail_key": None, "value": clean["text"]})
-        for detail in clean.get("details", []):
+        for detail in patient_context.detail_items(item.get("details", []), body,
+                                                    locate_quote_span(body, clean["evidence"])):
             unit = {**parent, "detail_key": detail["key"], "value": detail["value"]}
             ref = detail.get("refers_to")
             token = ref.get("token") if isinstance(ref, dict) else None

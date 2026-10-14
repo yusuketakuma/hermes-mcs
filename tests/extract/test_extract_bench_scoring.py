@@ -232,6 +232,17 @@ def test_a_forbidden_context_is_a_violation_and_fp():
     assert score["raw"]["patient_context"] == [SUPPORT]
 
 
+def test_a_current_validator_cannot_hide_an_old_engines_family_as_patient_error():
+    import patient_context
+    case = next(c for c in extract_bench._synthetic_cases() if c["id"] == "odp-3")
+    legacy = _grounded_output(case, case["forbid"])
+    assert not patient_context.context_items(legacy, case["body"])[0]["details"]
+    score = extract_bench._score_case(case, legacy)
+    assert score["forbid_violations"] == ["patient_context:medication_management.support_method"]
+    validated = {"patient_context": patient_context.context_items(legacy, case["body"])}
+    assert not extract_bench._score_case(case, validated)["forbid_violations"]
+
+
 def test_a_failed_extraction_misses_every_context_label():
     case = _case(expect={"patient_context": [{"category": "medication_management"},
                                              {"category": "followup"}]})
