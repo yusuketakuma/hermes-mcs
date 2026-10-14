@@ -923,13 +923,13 @@ def test_an_unrepaired_change_word_leaves_the_message_in_attention(tmp_path, mon
 
 
 @pytest.mark.parametrize("integrity,state", [
-    ("absent", "complete"), ({}, "complete"),
+    ("absent", "complete"), ({}, "complete"), (None, "attention"),
     ({"completeness": {"0": {"state": "hint_gaps_resolved"}}}, "complete"),
     ({"completeness": None}, "attention"), ({"completeness": []}, "attention"),
     ({"completeness": "hint_gaps_resolved"}, "attention"),
     ({"completeness": {"0": "hint_gaps_resolved"}}, "attention"),
     ([], "attention"), ("synthetic", "attention"),
-], ids=["absent_legacy", "legacy_empty", "resolved", "null", "list", "string",
+], ids=["absent_legacy", "legacy_empty", "integrity_null", "resolved", "null", "list", "string",
         "string_entry", "integrity_list", "integrity_string"])
 def test_present_malformed_completeness_is_never_complete(tmp_path, monkeypatch, integrity, state):
     db = _ledger(tmp_path)
@@ -1105,3 +1105,57 @@ def test_an_accompanying_drug_is_not_the_object_of_a_non_drug_change(word):
     text = f"本人は架空薬A{word}架空薬Bを開始しました。"
     assert _rx_gap(text, [_med("架空薬A", text, action="none")])
     assert not _rx_gap(text, [_med("架空薬A", text, action="none"), _med("架空薬B", text)])
+
+
+def test_a_spaced_dose_still_marks_a_listed_drug_the_extraction_missed():
+    text = "本人は架空薬A5 mgと架空薬Bを開始しました。"
+    assert _rx_gap(text, [_med("架空薬A", text, dose="5 mg")])
+
+
+@pytest.mark.parametrize("text", ["本人は架空薬Aとリハビリを開始しました。", "本人は架空薬A5mgと食事を開始しました。"])
+def test_a_listed_non_medication_is_not_a_missed_drug(text):
+    assert not _rx_gap(text, [_med("架空薬A", text, dose="5mg" if "5mg" in text else None)])
+
+
+@pytest.mark.parametrize("text,denied", [
+    ("本人の架空薬Aを中止し経過観察予定です。", False),
+    ("本人の架空薬Aは中止しなかった。", True), ("本人の架空薬Aは中止しませんでした。", True),
+])
+def test_only_negation_at_the_change_word_denies_it(text, denied):
+    assert bool(_rx_gap(text, [_med("架空薬A", text, action="none")])) is not denied
+
+
+def test_a_drug_under_another_predicate_is_no_object_of_the_change():
+    text = "本人は架空薬Aを継続し架空薬Bを中止しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none"), _med("架空薬B", text, action="stop", status="past")])
+    assert _rx_gap(text, [_med("架空薬A", text, action="none"), _med("架空薬B", text, action="none")])
+
+
+@pytest.mark.parametrize("text", ["本人は架空薬A5mgを内服中。リハビリを開始しました。",
+                                  "本人は架空薬A5mgを内服中。心停止を認めました。"])
+def test_a_neighbouring_sentences_drug_does_not_make_a_non_drug_change_a_medication_one(text):
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none", dose="5mg")])
+
+
+@pytest.mark.parametrize("text", ["本人は架空薬Aを架空薬Bに変更しました。", "本人は架空薬Aから架空薬Bへ変更しました。"])
+def test_both_substitution_forms_accept_the_source_stop_and_destination_start(text):
+    assert not _rx_gap(text, [_med("架空薬A", text, action="stop", status="past"), _med("架空薬B", text)])
+
+
+def test_a_repair_cannot_erase_a_historical_action_of_the_same_drug():
+    text = "本人は以前に架空薬Aを開始しました。本人の架空薬Aを中止しました。"
+    body = PREFIX + text
+    prior = extract_llm._validate({**OBSERVATIONS, "meds": [
+        _med("架空薬A", "本人は以前に架空薬Aを開始しました", status="past")]}, body)
+    candidate = extract_llm._validate({**OBSERVATIONS, "meds": [
+        _med("架空薬A", "本人の架空薬Aを中止しました", action="stop", status="past")]}, body)
+    assert not extract_llm._quality_improves(candidate, prior, body, hints(body))
+
+
+@pytest.mark.parametrize("text", ["本人は架空薬Aと架空薬Bと架空薬Cを開始しました。",
+                                  "本人は架空薬A5mgと架空薬Bや架空薬Cを開始しました。"])
+def test_several_listed_drugs_the_extraction_missed_keep_the_gap(text):
+    assert _rx_gap(text, [_med("架空薬A", text, dose="5mg" if "5mg" in text else None)])
+    assert not _rx_gap(text.replace("架空薬B", "リハビリ").replace("架空薬C", "食事"),
+                       [_med("架空薬A", text.replace("架空薬B", "リハビリ").replace("架空薬C", "食事"),
+                             dose="5mg" if "5mg" in text else None)])
