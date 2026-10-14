@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "shadow評価の合格判定に合成データの出所確認を必須化",
+  "summary": "開発用のshadow評価で、入力が合成データだと明示されていない場合はモデルに送らず未評価とし、合格に数えません。監査の終了状態が欠けた場合も合格にしません。通常の収集・抽出・通知の動作は変わりません。",
+  "upgrade": "shadow評価のケースファイルには最上位に \"source\": \"synthetic\" が必要です（同梱の合成コーパスは記載済み）。定期処理・通知・既読化・人承認・モデル設定は変わりません。",
+  "details": [
+    "run_shadow_e2e は呼出側が source を明示する必要があり、synthetic 以外（未指定・人由来・不正値）はモデルも Jev も呼ばずに全段階を未評価、passed=false、理由 source_unconfirmed として返す。",
+    "scripts/development/semantic_shadow_e2e.py はケースファイル最上位の source が synthetic であることを確認してから渡し、それ以外はモデルを呼ばず終了コード1で止める。この印は架空データであることを示すだけで、人の臨床ラベルや人手評価の代わりにはならない。",
+    "監査結果に既知の終了状態（PASS・NEEDS_REVIEW・INCOMPLETE）と評価済みの印が無い場合は STATUS_MISSING とし、合格にしない。合格しなかったケースには最初に止まった段階の理由コードを付ける。",
+    "既存の抽出失敗・未完了・修復・後続投稿による失敗隠し・描画未完了・通知outboxを作らないことの検証はそのまま維持する。テストは完全合成のデータだけを使い、実データや外部Jevでの臨床精度は確認していない。"
+  ],
+  "refs": [
+    "mcs/semantic/eval/semantic_evaluation.py",
+    "scripts/development/semantic_shadow_e2e.py",
+    "tests/semantic/test_jev_value.py",
+    "tests/meta/test_maintenance_development_regressions.py"
+  ]
+}

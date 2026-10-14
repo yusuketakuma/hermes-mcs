@@ -13,7 +13,9 @@ Usage:
       --out /tmp/shadow-e2e.json [--jev] [--deadline 300]
 
 Without --jev (or without the API key) the audit stages honestly
-report INCOMPLETE — the driver never fabricates a pass.
+report INCOMPLETE — the driver never fabricates a pass. The cases file
+must declare top-level "source": "synthetic"; that marks the corpus as
+fictional, not as human clinical labels.
 """
 import argparse
 import json
@@ -53,6 +55,10 @@ def main() -> int:
                 or any(not isinstance(msg, dict) for msg in case["messages"])) for case in cases):
         print("cases file requires case objects and message objects", file=sys.stderr)
         return 1
+    if payload.get("source") != "synthetic":
+        # Unconfirmed provenance never reaches the model.
+        print("cases file must declare source: synthetic", file=sys.stderr)
+        return 1
 
     jev_client = None
     if args.jev:
@@ -67,7 +73,8 @@ def main() -> int:
                   "be INCOMPLETE", file=sys.stderr)
 
     report = semantic_evaluation.run_shadow_e2e(
-        cases, semantic.llm_chat, jev_client, deadline_s=args.deadline)
+        cases, semantic.llm_chat, jev_client, source=payload["source"],
+        deadline_s=args.deadline)
     Path(args.out).write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8")

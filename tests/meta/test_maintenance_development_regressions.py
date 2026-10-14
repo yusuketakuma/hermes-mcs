@@ -179,7 +179,7 @@ def test_shadow_cli_rejects_nonfinite_or_nonpositive_budget_before_model(
         monkeypatch, tmp_path, budget):
     module = _load("semantic_shadow_e2e")
     cases, output = tmp_path / "synthetic.json", tmp_path / "report.json"
-    cases.write_text(json.dumps({"cases": [{"id": "synthetic", "body": "合成の投稿"}]}))
+    cases.write_text(json.dumps({"source": "synthetic", "cases": [{"id": "synthetic", "body": "合成の投稿"}]}))
     calls = []
     monkeypatch.setitem(sys.modules, "semantic", SimpleNamespace(llm_chat=None))
     monkeypatch.setitem(sys.modules, "semantic_evaluation", SimpleNamespace(
@@ -200,7 +200,7 @@ def test_shadow_cli_preserves_valid_operator_fixture_and_budget(monkeypatch, tmp
     synthetic = [{"id": "synthetic-operator", "body": "合成の投稿"}]
     if thread:
         synthetic = [{"id": "synthetic-thread", "messages": [{"body": "合成の投稿"}]}]
-    cases.write_text(json.dumps({"cases": synthetic}))
+    cases.write_text(json.dumps({"source": "synthetic", "cases": synthetic}))
     calls = []
     def run(actual, model, client, **kwargs):
         calls.append((actual, model, client, kwargs))
@@ -211,8 +211,26 @@ def test_shadow_cli_preserves_valid_operator_fixture_and_budget(monkeypatch, tmp
     monkeypatch.setattr(sys, "argv", ["shadow", "--cases", str(cases), "--out", str(output),
                                       f"--deadline={budget}"])
     assert module.main() == 0
-    assert calls == [(synthetic, model, None, {"deadline_s": float(budget)})]
+    assert calls == [(synthetic, model, None, {"source": "synthetic", "deadline_s": float(budget)})]
     assert json.loads(output.read_text()) == {"cases": 1, "complete": 0}
+
+
+@pytest.mark.parametrize("source", [None, "human", "Synthetic", 1, "unknown"])
+def test_shadow_cli_unconfirmed_source_never_reaches_the_model(monkeypatch, tmp_path, capsys, source):
+    module = _load("semantic_shadow_e2e")
+    cases, output = tmp_path / "cases.json", tmp_path / "report.json"
+    payload = {"cases": [{"id": "case", "body": "合成の投稿"}]}
+    if source is not None:
+        payload["source"] = source
+    cases.write_text(json.dumps(payload))
+    calls = []
+    monkeypatch.setitem(sys.modules, "semantic", SimpleNamespace(llm_chat=None))
+    monkeypatch.setitem(sys.modules, "semantic_evaluation", SimpleNamespace(
+        run_shadow_e2e=lambda *a, **kw: calls.append(kw) or {"cases": 1, "complete": 1}))
+    monkeypatch.setattr(sys, "argv", ["shadow", "--cases", str(cases), "--out", str(output)])
+    assert module.main() == 1
+    assert calls == [] and not output.exists()
+    assert "source" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("kind", ["deep", "null_case", "number_case", "null_message", "string_messages"])
