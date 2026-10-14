@@ -1701,9 +1701,23 @@ def _request_cues(body):
     cues = []
     for sentence in re.finditer(r"[^。！？!?;；\r\n]+", body):
         ctx = sentence[0].strip()
-        cues += [{"kind": kind, "ctx": ctx} for kind, rx in _REQUEST_CUES.items()
-                 if ctx and rx.search(ctx)]
+        for kind, rx in _REQUEST_CUES.items():
+            found = [{"kind": kind, "ctx": ctx, "target": _request_target(ctx[:m.start()])}
+                     for m in rx.finditer(ctx)] if ctx else []
+            if len(found) > 1:
+                # 記録の確認と検査値の確認: one quote and one 確認 must not cover both
+                for cue in found:
+                    cue["siblings"] = [o["target"] for o in found if o is not cue]
+            cues += found
     return cues
+
+
+def _request_target(before):
+    """The word a request stem acts on (記録の確認 -> 記録), or None."""
+    clause = re.split(r"と|や|、|・|及び|および", before)[-1]
+    clause = re.sub(r"(?:の|を|へ|に|は|も|ご)+$", "", clause)
+    word = clause.rsplit("の", 1)[-1].removeprefix("ご")
+    return word if 0 < len(word) <= 20 else None
 
 
 def _request_covers(item, hint):
@@ -1713,6 +1727,11 @@ def _request_covers(item, hint):
     if not isinstance(quote, str) or not quote or not (quote in ctx or ctx in quote):
         return False
     action = item.get("action") if isinstance(item.get("action"), str) else ""
+    target, siblings = hint.get("target"), [s for s in hint.get("siblings") or [] if s]
+    if target and siblings and target not in action and (
+            target not in quote or any(s in quote for s in siblings)):
+        # several requests of this kind in one sentence: the item must name this one
+        return False
     stem = _REQUEST_STEMS[hint["kind"]]
     if stem in action or (hint["kind"] == "ask" and item.get("kind") == "question"):
         return True

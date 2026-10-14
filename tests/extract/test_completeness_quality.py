@@ -636,3 +636,40 @@ def test_a_later_request_ending_does_not_turn_a_report_into_a_request(monkeypatc
     monkeypatch.setattr(extract_llm, "_llm_call", model)
     extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 1
+
+
+TWO_CONFIRMS = "本人の記録の確認と検査値の確認をお願いします"
+RECORD = {"to": "不明", "kind": "request", "action": "記録確認", "evidence": TWO_CONFIRMS}
+LAB = {"to": "不明", "kind": "request", "action": "検査値確認", "evidence": TWO_CONFIRMS}
+
+
+@pytest.mark.parametrize("first", [[RECORD], [LAB]], ids=["lab_missing", "record_missing"])
+def test_one_quote_and_one_stem_do_not_cover_two_targets_of_one_kind(monkeypatch, first):
+    body = PREFIX + TWO_CONFIRMS + "。"
+    calls = []
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        return copy.deepcopy({**OBSERVATIONS, "requests": first if len(calls) == 1 else [RECORD, LAB]})
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    result = extract_llm.llm_extract(body, hints=hints(body))
+    assert len(calls) == 2
+    assert {item["action"] for item in result["requests"]} == {"記録確認", "検査値確認"}
+
+
+@pytest.mark.parametrize("requests", [
+    [RECORD, LAB],
+    [{**RECORD, "action": "記録と検査値の確認"}],     # one action names both targets
+], ids=["both_present", "one_action_both_targets"])
+def test_targets_named_by_the_extraction_add_no_call(monkeypatch, requests):
+    body = PREFIX + TWO_CONFIRMS + "。"
+    calls = []
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        return copy.deepcopy({**OBSERVATIONS, "requests": requests})
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    extract_llm.llm_extract(body, hints=hints(body))
+    assert len(calls) == 1
