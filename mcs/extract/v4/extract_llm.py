@@ -1662,13 +1662,32 @@ def _completeness_issues(v, hints, body):
         name = med.get("name") if isinstance(med, dict) else None
         if isinstance(name, str) and name not in names and _current_cue(body, name):
             issues.append(f"本文の薬剤候補「{name}」が未収載です。原文で再確認してください")
-    if not v.get("requests"):
-        for request in hints.get("requests") or []:
-            if (isinstance(request, dict) and request.get("kind") in ("confirm", "contact", "ask")
-                    and isinstance(request.get("ctx"), str) and _current_cue(body, request["ctx"])):
-                issues.append("本文の確認・連絡・質問候補が未収載です。原文で再確認してください")
-                break
+    for request in hints.get("requests") or []:
+        if (isinstance(request, dict) and request.get("kind") in _REQUEST_STEMS
+                and isinstance(request.get("ctx"), str) and _current_cue(body, request["ctx"])
+                and not any(_request_covers(item, request) for item in v.get("requests") or [])):
+            issues.append("本文の確認・連絡・質問候補が未収載です。原文で再確認してください")
+            break
     return issues
+
+
+# The rule hint's own action word. A quote spanning several requests covers
+# a hint only when the extracted action names it, not by overlap alone.
+_REQUEST_STEMS = {"confirm": "確認", "contact": "連絡", "ask": "教え"}
+
+
+def _request_covers(item, hint):
+    """An extracted request whose quote overlaps the hint sentence and names its action."""
+    quote = item.get("evidence") if isinstance(item, dict) else None
+    ctx = hint["ctx"]
+    if not isinstance(quote, str) or not quote or not (quote in ctx or ctx in quote):
+        return False
+    action = item.get("action") if isinstance(item.get("action"), str) else ""
+    stem = _REQUEST_STEMS[hint["kind"]]
+    if stem in action or (hint["kind"] == "ask" and item.get("kind") == "question"):
+        return True
+    # a paraphrased action still covers a quote that names only this request
+    return stem in quote and sum(s in quote for s in _REQUEST_STEMS.values()) == 1
 
 
 def _quality_improves(candidate, prior, body):

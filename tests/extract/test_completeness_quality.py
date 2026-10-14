@@ -515,3 +515,46 @@ def test_unsent_start_saved_past_the_deadline_is_released_for_the_next_run(tmp_p
         assert second["done"] == 2 and len(repairs) == 2
     finally:
         db.close()
+
+
+CONFIRM = {"to": "不明", "kind": "request", "action": "記録確認",
+           "evidence": "本人の記録を確認をお願いします"}
+CONTACT = {"to": "医師", "kind": "request", "action": "主治医へ連絡",
+           "evidence": "主治医への連絡をお願いします"}
+BOTH = "本人の記録の確認と主治医への連絡をお願いします"
+
+
+@pytest.mark.parametrize("tail,first,repaired", [
+    ("本人の記録を確認をお願いします。主治医への連絡をお願いします。", [CONFIRM], [CONFIRM, CONTACT]),
+    (BOTH + "。", [{**CONFIRM, "evidence": BOTH}],
+     [{**CONFIRM, "evidence": BOTH}, {**CONTACT, "evidence": BOTH}]),
+], ids=["second_sentence_missing", "one_quote_two_requests"])
+def test_one_extracted_request_does_not_hide_another_missing_request(monkeypatch, tail, first, repaired):
+    body = PREFIX + tail
+    calls = []
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        return copy.deepcopy({**OBSERVATIONS, "requests": first if len(calls) == 1 else repaired})
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    result = extract_llm.llm_extract(body, hints=hints(body))
+    assert len(calls) == 2
+    assert {item["action"] for item in result["requests"]} == {"記録確認", "主治医へ連絡"}
+
+
+@pytest.mark.parametrize("requests", [
+    [CONFIRM, CONTACT],
+    [{**CONFIRM, "action": "記録をチェック"}, CONTACT],     # paraphrase of a single-request quote
+], ids=["all_present", "paraphrased_single_request"])
+def test_covered_requests_do_not_add_a_call(monkeypatch, requests):
+    body = PREFIX + "本人の記録を確認をお願いします。主治医への連絡をお願いします。"
+    calls = []
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        return copy.deepcopy({**OBSERVATIONS, "requests": requests})
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    extract_llm.llm_extract(body, hints=hints(body))
+    assert len(calls) == 1
