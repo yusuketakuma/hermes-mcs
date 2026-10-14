@@ -2721,6 +2721,18 @@ class Ledger:
                       AND j.message_id=m.message_id AND j.state='failed'))
         """, (parent_id, project_id, project_id))}
 
+    def message_owners(self, message_ids) -> dict:
+        """Stored project_id of each given message id, whatever its body state
+        or parent: saves refuse to move a message to another project."""
+        ids = list(message_ids)
+        owners = {}
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            owners.update((r[0], r[1]) for r in self.db.execute(
+                "SELECT message_id,project_id FROM messages WHERE message_id IN ("
+                + ",".join("?" * len(chunk)) + ")", chunk))
+        return owners
+
     def mark_thread_read(self, project_id: int, parent_id: int,
                          last_reply_id: int, status: str) -> None:
         self.db.execute("""

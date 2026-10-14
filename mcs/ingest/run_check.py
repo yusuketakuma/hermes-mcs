@@ -1226,7 +1226,8 @@ def stage_thread_read(adapter, ledger, result, deadline):
             # refetch (saves never move project_id): queueing it would revive
             # the done job every tick. It is not this patient's stored reply
             # either, so the thread is never cleared while it remains.
-            foreign = missing & ledger.stored_reply_ids(parent)
+            foreign = {rid for rid, owner in ledger.message_owners(missing).items()
+                       if owner != pid}
             missing -= foreign
             if foreign:
                 result["errors"].append("thread_read: reply_stored_for_other_patient")

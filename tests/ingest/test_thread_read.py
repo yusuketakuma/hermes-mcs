@@ -162,6 +162,33 @@ def test_foreign_patient_reply_is_reported_never_requeued_and_never_cleared(db):
     assert result["threads_marked_read"] == [10]
 
 
+@pytest.mark.parametrize("body_state,stored_parent", [
+    ("snippet", 10), ("unknown", 10), ("full", 99)])
+def test_foreign_reply_is_detected_by_id_whatever_its_body_or_parent(
+        db, body_state, stored_parent):
+    # an unsettled body without a failed job, or the same id under another
+    # parent, is still owned by patient 2: a refetch for patient 1 is refused
+    _store(db, 10)
+    _store(db, 11, parent=stored_parent, pid=2, body_state=body_state,
+           first_seen=time.time() - 30 * 86400)
+    _store(db, 12, parent=10)
+    adapter = _adapter([True], server=[11, 12])
+    result = _result()
+    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    assert "thread_read: reply_stored_for_other_patient" in result["errors"]
+    assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
+    assert adapter.calls == ["check"]
+    assert db.db.execute("SELECT COUNT(*) FROM thread_read_marks").fetchone()[0] == 0
+
+
+def test_message_owners_reads_every_stored_id_across_chunks(db):
+    for mid in range(1000, 1501):
+        _store(db, mid, parent=10, pid=1 + mid % 2, body_state="unknown")
+    owners = db.message_owners([*range(1000, 1501), 99999])
+    assert len(owners) == 501 and 99999 not in owners
+    assert owners[1000] == 1 and owners[1001] == 2 and owners[1500] == 1
+
+
 def test_foreign_patient_reply_does_not_stand_in_for_an_unstored_one(db):
     _store(db, 10)
     _store(db, 11, parent=10, pid=2, first_seen=time.time() - 30 * 86400)
