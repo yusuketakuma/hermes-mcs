@@ -1685,12 +1685,27 @@ _RX_ANY = "|".join(_RX_WORDS.values())
 # A later predicate (中止し経過観察予定) or earlier text (副作用なしで) is something else.
 _RX_NOT_CURRENT = (r"(?:を|は|も|が|の)?\s*(?:し|する|して|され)?"
                    r"(?:ない|なく|なかっ|ません|せず|無し|なし|不要|済み|予定|検討|見送|拒否|ありません)")
+# A requested, consulted or not yet done change is checked as planned, never as done:
+# 開始してください, 追加を相談, 開始します
+_RX_PLANNED = (r"(?:を|は|も|が|の)?\s*(?:し|する|して|され)?"
+               r"(?:ください|下さい|ほしい|欲しい|お願い|相談|依頼|提案|ます(?!た))")
+# 明日から架空薬Aを開始: a future time in the change's own clause
+_RX_FUTURE = r"明日|明後日|来週|来月|今後|次回|後日|翌日|今度|週明け"
 # AとBを開始, A5mgと架空薬Bを開始: a listing particle beside a known drug (and its dose)
 _RX_LIST = r"(?:と|や|・|及び|および)"
 # v1's _MED_TOKEN allows a space before the unit (5 mg)
 _RX_DOSE_ONE = r"\s*[0-9０-９.．]+\s*(?:mg|μg|mcg|g|mL|ml|錠|%|単位)"
 _RX_DOSE = f"(?:{_RX_DOSE_ONE})?"
 _RX_PARTICLE = r"\s*(?:を|は|も|の|が)?\s*"
+# 2.5mgから5mgへ増量, 1日2回から1回へ減量: a regimen range between the drug and its word
+_RX_AMOUNT = r"(?:1日|一日)?\s*[0-9０-９.．]+\s*(?:mg|μg|mcg|g|mL|ml|錠|%|単位|回|包|枚|滴|カプセル)"
+_RX_RANGE = rf"(?:(?:{_RX_AMOUNT})\s*から\s*)?(?:{_RX_AMOUNT})\s*(?:へ|に|まで)?\s*"
+# AとB, A、B: a listing separator between two named drugs
+_RX_SEP = r"(?:と|や|・|及び|および|、|，|,)"
+# 服薬指導, 投薬管理: medication services, not drugs
+_RX_SERVICE = r"(?:服薬|投薬|薬剤|与薬|薬)(?:指導|管理|支援|確認|相談|説明|調整|カレンダー)"
+_RX_WORD_CODE = {w: c for c, rx in (("start", "開始|追加"), ("stop", "中止|停止|終了"), ("decrease", "減量"),
+                                    ("increase", "増量"), ("change", "変更")) for w in rx.split("|")}
 _RX_CONFLICT = {"start", "stop", "decrease", "increase", "change"}
 # Aと共に運動療法を開始: A accompanies; the change's object is what follows
 _RX_ALONG = r"と(?:共に|ともに|同時に|一緒に|いっしょに|併せて|あわせて)"
@@ -1701,6 +1716,7 @@ _RX_HINT_CAP = 10       # extract.extract_message keeps rx_actions[:10]
 
 def _rx_med_like(text):
     """An unnamed object reads as a medication: v1's medication words or a dose."""
+    text = re.sub(_RX_SERVICE, "", text)
     return bool(re.search(_RX_MED_WORD, text) or re.search(_RX_DOSE_ONE, text))
 
 
@@ -1715,7 +1731,7 @@ def _rx_objects(region, spans, code):
         if not objects:
             to = code == "change" and re.fullmatch(_RX_DOSE + r"\s*[へに]\s*", rest)
             listed = re.match(_RX_DOSE + r"\s*" + _RX_LIST + r"\s*", rest)
-            if to or re.fullmatch(_RX_DOSE + _RX_PARTICLE, rest):
+            if to or re.fullmatch(_RX_DOSE + _RX_PARTICLE + f"(?:{_RX_RANGE})?", rest):
                 objects.append((s, e, "to" if to else None))
             elif listed:
                 # Aと<unknown>(と<unknown>…)を開始: A is listed; each unknown member is
@@ -1726,7 +1742,7 @@ def _rx_objects(region, spans, code):
             continue
         ns, _, role = objects[-1]
         between = region[e:ns]
-        if re.fullmatch(_RX_DOSE + r"\s*" + _RX_LIST + r"\s*", between):
+        if re.fullmatch(_RX_DOSE + r"\s*" + _RX_SEP + r"\s*", between):
             objects.append((s, e, role))
         elif role == "to" and re.fullmatch(_RX_DOSE + r"\s*(?:から|を)\s*", between):
             objects.append((s, e, "from"))
@@ -1751,12 +1767,11 @@ def _named_in(text, names):
     return found
 
 
-def _rx_bindings(hints, names, body, *, every=False):
-    """Each patient-current rule change word's objects, as (name, allowed actions,
-    clause span). A name of None is an unnamed object; a listed neighbour that reads
-    as a medication but is no known drug yields ("?", ...), a drug never extracted.
-    With ``every`` the denied, past and other-person changes are kept too, so a
-    caller can count every change the source states for a drug."""
+def _rx_positions(hints, names, body):
+    """Change words to check, as (start, end, code): every v1 rx_action located in
+    the body, plus a known drug written directly before a change word that v1 did
+    not hint (本人のカロナールを中止: no medication keyword beside the brand)."""
+    seen = set()
     for act in hints.get("rx_actions") or []:
         code = act.get("action") if isinstance(act, dict) else None
         ctx = act.get("ctx") if isinstance(act, dict) else None
@@ -1764,60 +1779,93 @@ def _rx_bindings(hints, names, body, *, every=False):
             continue
         # v1 cuts ctx 14 characters before its change word
         words = [m for m in re.finditer(_RX_WORDS[code], ctx) if m.start() <= 14]
-        if not words:
+        for found in re.finditer(re.escape(ctx), body) if words else ():
+            start = found.start() + words[-1].start()
+            if start not in seen:
+                seen.add(start)
+                yield start, found.start() + words[-1].end(), code
+    for name in sorted(names, key=len, reverse=True):
+        rx = re.escape(name) + _RX_DOSE + _RX_PARTICLE + f"(?:{_RX_RANGE})?" + r"(" + _RX_ANY + r")"
+        for m in re.finditer(rx, body):
+            code = _RX_WORD_CODE.get(m.group(1))
+            if code and m.start(1) not in seen and not (code == "change" and body.startswith("変更なし", m.start(1))):
+                seen.add(m.start(1))
+                yield m.start(1), m.end(1), code
+
+
+def _rx_bindings(hints, names, body, *, every=False):
+    """Each patient-current rule change word's objects, as (name, allowed actions,
+    (clause start, clause end, planned)); a planned change (requested, consulted,
+    future) is met by a planned med, a done one by a current or past med. A name of None is an unnamed object; a listed neighbour that reads
+    as a medication but is no known drug yields ("?", ...), a drug never extracted.
+    With ``every`` the denied, past and other-person changes are kept too, so a
+    caller can count every change the source states for a drug."""
+    for start, end, code in _rx_positions(hints, names, body):
+        head = max(body.rfind(c, 0, start) for c in "。！？!?;；\r\n") + 1
+        tail = re.search(r"[。！？!?;；\r\n]", body[end:])
+        tail = end + tail.start() if tail else len(body)
+        mark = re.search(_CLAUSE_MARK, body[end:tail])
+        lead = head + _clause_start(body[head:start])
+        close = end + mark.start() if mark else tail
+        while True:
+            # から and 、 are no clause break inside AからBへ変更, 2.5mgから5mgへ増量
+            # or A5mg、Bを開始: the drug before them belongs to this change
+            joined = (re.search(_RX_DOSE + "から$", body[head:lead]) if code == "change" else None)
+            joined = (joined if joined and body[head:head + joined.start()].endswith(tuple(names))
+                      else re.search(f"(?:{_RX_AMOUNT})\\s*から$", body[head:lead])
+                      or re.search(_RX_DOSE + r"\s*[、，,]$", body[head:lead]))
+            if not joined or not (joined.group(0).endswith("から")
+                                  or body[head:head + joined.start()].endswith(tuple(names))):
+                break
+            previous = lead
+            lead = head + _clause_start(body[head:head + joined.start()])
+            if lead >= previous:
+                break
+        if not every and (re.match(_RX_NOT_CURRENT, body[end:close])
+                          or extract.patient_source_scope(body, start, end) != "patient"):
             continue
-        for found in re.finditer(re.escape(ctx), body):
-            start, end = found.start() + words[-1].start(), found.start() + words[-1].end()
-            head = max(body.rfind(c, 0, start) for c in "。！？!?;；\r\n") + 1
-            tail = re.search(r"[。！？!?;；\r\n]", body[end:])
-            tail = end + tail.start() if tail else len(body)
-            mark = re.search(_CLAUSE_MARK, body[end:tail])
-            lead = head + _clause_start(body[head:start])
-            close = end + mark.start() if mark else tail
-            source = [m for m in re.finditer(_RX_DOSE + "から$", body[head:lead])
-                      if code == "change" and body[head:head + m.start()].endswith(tuple(names))]
-            if source:
-                # AからBへ変更: から is no clause break here, the source drug belongs to it
-                lead = head + _clause_start(body[head:head + source[0].start()])
-            if not every and (re.match(_RX_NOT_CURRENT, body[end:close])
-                              or extract.patient_source_scope(body, start, end) != "patient"):
-                continue
-            # this change word's objects: AとBを開始 names two, Aを開始しBも開始 one each
-            prior = list(re.finditer(_RX_ANY, body[lead:start]))
-            base = lead + (prior[-1].end() if prior else 0)
-            region = body[base:start]
-            along = list(re.finditer(_RX_ALONG, region))
+        # から is no break for a time (明日から), but 通院予定ですが、 is another clause
+        breaks = list(re.finditer(r"ので|ため|けど|けれど|が、|、", body[head:start]))
+        asked = re.match(_RX_PLANNED, body[end:close])
+        # "consult" (追加を相談) is no instruction: it is checked but never repaired
+        planned = ("consult" if asked and re.search(r"相談|提案", asked.group(0)) else bool(asked or re.search(
+            _RX_FUTURE, body[head + (breaks[-1].end() if breaks else 0):start])))
+        # this change word's objects: AとBを開始 names two, Aを開始しBも開始 one each
+        prior = list(re.finditer(_RX_ANY, body[lead:start]))
+        base = lead + (prior[-1].end() if prior else 0)
+        region = body[base:start]
+        along = list(re.finditer(_RX_ALONG, region))
+        if along:
+            base, region = base + along[-1].end(), region[along[-1].end():]
+        spans = []
+        for name in _named_in(region, names):
+            spans += [(m.start(), m.end(), name) for m in re.finditer(re.escape(name), region)]
+        spans = sorted({(s, e) for s, e, _ in spans if not any(
+            s2 <= s and e <= e2 and (s2, e2) != (s, e) for s2, e2, _ in spans)})
+        objects, missed = _rx_objects(region, spans, code)
+        if missed:
+            yield "?", set(), (lead, close, planned)
+        if not objects:
             if along:
-                base, region = base + along[-1].end(), region[along[-1].end():]
-            spans = []
-            for name in _named_in(region, names):
-                spans += [(m.start(), m.end(), name) for m in re.finditer(re.escape(name), region)]
-            spans = sorted({(s, e) for s, e, _ in spans if not any(
-                s2 <= s and e <= e2 and (s2, e2) != (s, e) for s2, e2, _ in spans)})
-            objects, missed = _rx_objects(region, spans, code)
-            if missed:
-                yield "?", set(), (lead, close)
-            if not objects:
-                if along:
-                    # 本人Aと共に架空薬Bを開始 asks for B; Aと共に運動療法を開始 asks nothing
-                    if _rx_med_like(region):
-                        yield "?", set(), (lead, close)
-                    continue
-                if not every and not _rx_med_like(body[lead:close]):
-                    continue    # リハビリを開始, or a neighbouring clause's drug (…内服中。心停止)
-                objects = [(None, None, None)]
-            for s, e, role in objects:
-                name = region[s:e] if s is not None else None
-                # the nearest owner before each drug decides it (母の付き添いで本人の架空薬A)
-                at = base + s if name else start
-                last = list(re.finditer(r"の[ \t　]*", body[lead:at]))
-                if (not every and last
-                        and extract.patient_source_scope(body, lead + last[-1].end(), end) != "patient"):
-                    continue
-                allowed = set(_RX_STATED.get(code, {code}))
-                # AからBへ / AをBに変更: the source stops, the destination starts
-                allowed |= {"from": {"stop"}, "to": {"start"}}.get(role, set())
-                yield name, allowed, (lead, close)
+                # 本人Aと共に架空薬Bを開始 asks for B; Aと共に運動療法を開始 asks nothing
+                if _rx_med_like(region):
+                    yield "?", set(), (lead, close, planned)
+                continue
+            if not every and not _rx_med_like(body[lead:close]):
+                continue    # リハビリを開始, or a neighbouring clause's drug (…内服中。心停止)
+            objects = [(None, None, None)]
+        for s, e, role in objects:
+            name = region[s:e] if s is not None else None
+            # the nearest owner before each drug decides it (母の付き添いで本人の架空薬A)
+            at = base + s if name else start
+            last = list(re.finditer(r"の[ \t　]*", body[lead:at]))
+            if (not every and last
+                    and extract.patient_source_scope(body, lead + last[-1].end(), end) != "patient"):
+                continue
+            allowed = set(_RX_STATED.get(code, {code}))
+            # AからBへ / AをBに変更: the source stops, the destination starts
+            allowed |= {"from": {"stop"}, "to": {"start"}}.get(role, set())
+            yield name, allowed, (lead, close, planned)
 
 
 def _rx_names(v, hints):
@@ -1825,11 +1873,13 @@ def _rx_names(v, hints):
             if isinstance(med, dict) and isinstance(med.get("name"), str) and med["name"]}
 
 
-def _rx_covering(v):
-    """Meds that may state a change: verified, explicitly the patient's, not denied or planned."""
+def _rx_covering(v, planned=False):
+    """Meds that may state a change: verified, explicitly the patient's, not denied,
+    and done (current or past) or, for a planned change, planned."""
     return [med for med in v.get("meds") or [] if isinstance(med, dict)
             and med.get("subject") == "patient" and not med.get("negated")
-            and not med.get("unverified") and med.get("status") in ("current", "past")
+            and not med.get("unverified")
+            and med.get("status") in (("planned",) if planned else ("current", "past"))
             and isinstance(med.get("name"), str) and med["name"]
             and isinstance(med.get("evidence"), str) and med["evidence"]]
 
@@ -1842,20 +1892,20 @@ def _rx_action_gaps(v, hints, body):
     action, quoted over the clause, and no action its sentence never states.
     A listed drug the extraction never named keeps the gap open. Other people,
     past, planned and denied changes ask nothing."""
-    meds = _rx_covering(v)
     bindings = list(_rx_bindings(hints, _rx_names(v, hints), body))
-    # 架空薬Aを開始し、架空薬Aを中止: every action the source binds to that same drug
+    # 架空薬Aを開始し、架空薬Aを中止: every action the source binds to that same drug,
+    # done and planned apart, so a requested stop never excuses a recorded done stop
     stated = {}
-    for target, allowed, _ in bindings:
-        stated.setdefault(target, set()).update(allowed)
-    for target, allowed, (lead, close) in bindings:
-        mine = [med for med in meds
+    for target, allowed, (_, _, planned) in bindings:
+        stated.setdefault((target, bool(planned)), set()).update(allowed)
+    for target, allowed, (lead, close, planned) in bindings:
+        mine = [med for med in _rx_covering(v, planned)
                 if (med["name"] in body[lead:close] if target is None else med["name"] == target)
                 and any(m.start() < close and m.end() > lead
                         for m in re.finditer(re.escape(med["evidence"]), body))]
         # a wrong action kept beside the right one is a contradiction, not a repair
         if (not any(med.get("action") in allowed for med in mine)
-                or any(med.get("action") in _RX_CONFLICT - allowed - stated.get(med["name"], set())
+                or any(med.get("action") in _RX_CONFLICT - allowed - stated.get((med["name"], bool(planned)), set())
                        for med in mine)):
             return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
     return []
@@ -1876,8 +1926,8 @@ def _rx_superseded(prior, candidate, hints, body):
     for target, _, _ in _rx_bindings(hints, names, body, every=True):
         stated[target] = stated.get(target, 0) + 1
     current = {}
-    for target, allowed, span in _rx_bindings(hints, names, body):
-        current.setdefault(target, []).append((allowed, span))
+    for target, allowed, (lead, close, planned) in _rx_bindings(hints, names, body):
+        current.setdefault(target, []).append((allowed, (lead, close), planned))
 
     def rest(med):
         return {k: x for k, x in med.items() if not k.startswith("_")
@@ -1889,15 +1939,19 @@ def _rx_superseded(prior, candidate, hints, body):
         name = med.get("name") if isinstance(med, dict) else None
         if stated.get(name) != 1 or len(current.get(name, [])) != 1:
             continue                    # several changes or none for this drug: no replacement
-        (allowed, (lead, close)), = current[name]
+        (allowed, (lead, close), planned), = current[name]
+        if planned == "consult":
+            continue                    # a consultation instructs nothing to repair toward
         quote = med.get("evidence")
         fact = next(iter(_facts({"meds": [med]}, split_conditions=True)))
         # a neutral mention (none) may gain the source's action the same way
         if (fact not in kept and med.get("action") in (_RX_CONFLICT - allowed) | {None, "none"}
                 and isinstance(quote, str) and quote
                 and any(m.start() < close and m.end() > lead for m in re.finditer(re.escape(quote), body))
+                # a planned change stays planned: never turned into a done one
+                and (med.get("status") == "planned") == bool(planned)
                 and any(other.get("action") in allowed and rest(other) == rest(med)
-                        for other in _rx_covering(candidate) if other.get("name") == name)):
+                        for other in _rx_covering(candidate, bool(planned)) if other.get("name") == name)):
             gone.add(fact)
     return gone
 
