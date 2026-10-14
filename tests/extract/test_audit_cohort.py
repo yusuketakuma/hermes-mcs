@@ -372,3 +372,28 @@ def test_compare_replays_the_pinned_scope_and_drops_row_content(data_root, monke
     View.meta = {"generation_id": "older", "generated_at": 150}
     with pytest.raises(ac.CohortError, match="snapshot_older_than_pin"):
         ac.cmd_compare(args)
+
+
+@pytest.mark.parametrize("corrupt", [
+    lambda r: r.pop("content_hash"),
+    lambda r: r.update(extra="x"),
+    lambda r: r.update(classes={"unknown_cue": False}),
+    lambda r: r.update(classes={"storage": "no"}),
+    lambda r: r.update(classes={}),
+    lambda r: r.update(output_digest="not-a-digest"),
+    lambda r: r.update(set="inventory"),
+    lambda r: r.update(message_id="1"),
+], ids=["missing", "extra", "unknown_class", "nonbool", "empty_classes", "digest", "wrong_set", "id_type"])
+def test_a_corrupted_pin_row_is_refused_before_counting(corrupt):
+    pinned = pin_of([row(1), row(2)])
+    corrupt(pinned["rows"][0])
+    with pytest.raises(ac.CohortError, match="pin_schema"):
+        compare(pinned, [row(1, version=8, captured=True), row(2, version=8)])
+
+
+def test_a_duplicated_pin_row_is_refused_and_a_valid_pin_still_compares():
+    pinned = pin_of([row(1), row(2)])
+    assert compare(pinned, [row(1, version=8, captured=True), row(2, version=8)])["same_cohort"]["n"] == 2
+    pinned["rows"].append(dict(pinned["rows"][0]))
+    with pytest.raises(ac.CohortError, match="pin_schema"):
+        compare(pinned, [row(1, version=8), row(2, version=8)])

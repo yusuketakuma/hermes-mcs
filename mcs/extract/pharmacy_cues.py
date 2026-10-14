@@ -159,7 +159,8 @@ _DEFINITIONS = (
      ("symptoms", "patient_context.adl"), ("symptom_state",)),
     ("excretion", r"排泄|排便|排尿|便秘|下痢",
      ("symptoms", "patient_context.adl"), ("symptom_state",)),
-    ("renal_hepatic", r"腎機能|肝機能|eGFR|Cr|BUN|AST|ALT",
+    # ASCII abbreviations only as standalone tokens (not create/CRP/salt/last/paste)
+    ("renal_hepatic", r"腎機能|肝機能|クレアチニン|(?<![A-Za-z0-9])(?:eGFR|CrCl|Cre|Cr|BUN|AST|ALT)(?![A-Za-z])",
      ("labs", _OBSERVATIONS), ("vital_lab",)),
     ("pain_opioid", r"疼痛|痛み|麻薬|オピオイド",
      ("symptoms", "meds", _MEDICATION), ("symptom_state", "medication")),

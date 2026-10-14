@@ -2800,11 +2800,13 @@ def _ctx_lines(rows, root_id: int, budget: int = _CTX_TOTAL_MAX) -> list[str]:
     for row in ([root_row] if root_row else []) + replies:
         line = f"[{row['who'] or '投稿者'}] " \
                f"{_sanitize_ctx(row['body_text'][:_CTX_ITEM_MAX])}"
-        if used + len(line) > budget:
+        # the lines are joined with "\n", so each one after the first costs one more
+        cost = len(line) + (1 if parts else 0)
+        if used + cost > budget:
             continue
         parts.append((row["posted_at_ts"] or 0,
                       row["message_id"], line))
-        used += len(line)
+        used += cost
     parts.sort()
     return [p[2] for p in parts]
 

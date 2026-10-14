@@ -184,6 +184,23 @@ def _semantic(cohort: list[tuple[dict, dict | None]], labels, needed_cap: int,
     return result
 
 
+def _check_pin_rows(rows, cue_codes) -> None:
+    """A pinned row must be exactly what build_pin writes, or nothing is counted."""
+    seen = set()
+    for row in rows:
+        try:
+            kept = _pin_row(row, frozenset(cue_codes)) if isinstance(row, dict) else None
+        except CohortError:
+            kept = None
+        acceptance = (kept is not None and kept["reader"] == "reader_extract"
+                      and kept["extract_version"] == BASELINE_VERSION)
+        if (kept is None or {**kept, "set": row.get("set")} != row
+                or row["set"] != ("acceptance" if acceptance else "inventory")
+                or kept["message_id"] in seen):
+            raise CohortError("pin_schema")
+        seen.add(kept["message_id"])
+
+
 def compare(pin: dict, rows, definition: str, cue_codes, labels=None) -> dict:
     """Same IDs/hashes on the pinned membership; failures stay misses, exclusions add up."""
     header = pin["header"]
@@ -192,6 +209,7 @@ def compare(pin: dict, rows, definition: str, cue_codes, labels=None) -> dict:
         raise CohortError("pin_schema")
     if header.get("definition") != definition:
         raise CohortError("definition_changed")
+    _check_pin_rows(pin["rows"], cue_codes)
     now = _now_rows(rows, cue_codes)
     excluded = dict.fromkeys(EXCLUSIONS, 0)
     failures = {"no_output": 0, "held_prior": 0, "attention": 0}

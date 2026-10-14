@@ -211,3 +211,31 @@ def test_failed_same_generation_feedback_retains_the_prior_model_and_context_ori
             "complete" if route == "thin" else "attention")
     finally:
         led.close()
+
+
+@pytest.mark.parametrize("total", [1199, 1200, 1201, 1202])
+def test_context_lines_count_their_joining_newlines_within_the_budget(total):
+    head = len("[投稿者] ")
+    sizes = [400, 400, total - 800]
+    rows = [{"message_id": i + 1, "posted_at_ts": i, "who": None, "body_text": "合" * (size - head)}
+            for i, size in enumerate(sizes)]
+    lines = llm._ctx_lines(rows, 1, 1200)
+    assert len("\n".join(lines)) <= 1200
+    assert len(lines) == (3 if total + 2 <= 1200 else 2)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_a_full_thread_never_blocks_preparation(tmp_path, monkeypatch, enabled):
+    led = _ledger(tmp_path)
+    try:
+        body = "合成の経過" * 100
+        led.save_messages([_message(mid=1, body=body, posted_at="2026-09-19T00:00:00+09:00")]
+                          + [_message(mid=mid, body=body, parent_id=1,
+                                      posted_at=f"2026-09-19T00:0{mid}:00+09:00") for mid in range(2, 6)])
+        monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": enabled}})
+        rows, _ = llm._select_pending(led, 10, {5}, None, False)
+        jobs, _, blocked = llm._prepare_jobs(led, rows, llm._resolved_llm(), False)
+        assert blocked == 0 and len(jobs) == 1
+        assert len(jobs[0][1]) <= llm._CTX_TOTAL_MAX
+    finally:
+        led.close()

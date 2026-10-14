@@ -185,3 +185,17 @@ def test_captured_is_a_lexical_proxy_not_semantic_correctness():
     # The wrong start still carries the cue word: coverage, not a correct action.
     assert cue.captured(wrong, body, cue.matches(body)[0])
 
+
+
+@pytest.mark.parametrize("body", ["create the record.", "CRPは合成値です。", "cream was applied.",
+                                  "salt intake noted.", "the last visit.", "paste was used.",
+                                  "credit was noted.", "acrylic sheet."])
+def test_ascii_lab_abbreviations_do_not_match_inside_other_words(body):
+    assert CUE_CLASSES["renal_hepatic"].matches(body) == []
+
+
+@pytest.mark.parametrize("body", ["Cr 1.2です。", "Cr1.2でした。", "eGFR45です。", "ALT値は合成です。",
+                                  "AST/ALTを確認。", "BUNを測定。", "Cre 1.2です。", "Cre1.0でした。",
+                                  "CrCl45です。", "クレアチニンは合成値です。"])
+def test_standalone_ascii_lab_abbreviations_still_match(body):
+    assert CUE_CLASSES["renal_hepatic"].matches(body)
