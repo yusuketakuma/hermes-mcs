@@ -1885,6 +1885,7 @@ def test_batch_item_evidence_validates_against_own_body(
         extract_llm, "_llm_call",
         lambda p, **kw: {"items": [
             {"i": 0, "meds": [{"name": "ロキソプロフェン", "action": "stop",
+                               "status": "past", "subject": "patient", "negated": False,
                                "evidence": "ロキソプロフェン中止"}]},
             {"i": 1, "meds": [{"name": "ロキソプロフェン",
                                "evidence": "ロキソプロフェン中止"}]}]})

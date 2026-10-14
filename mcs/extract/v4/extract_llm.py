@@ -1680,7 +1680,15 @@ _RX_WORDS = {"start": "開始|追加", "stop": "中止|停止|終了", "decrease
              "increase": "増量", "change": "変更(?!なし)"}
 _RX_STATED = {"change": {"change", "decrease", "increase"}}
 _RX_ANY = "|".join(_RX_WORDS.values())
-_RX_NOT_CURRENT = r"ない|なし|なく|ません|不要|済み|以前|予定|検討|ありがとう"
+# A non-current change binds to its own word: 中止しません, 変更無し, 中止は見送り,
+# 中止済み, 開始予定. Text before the word (発熱はないものの) belongs to something else.
+_RX_NOT_CURRENT = r"ない|なし|無し|なく|ません|せず|不要|済み|予定|検討|見送|拒否|ありがとう"
+_RX_AFTER = 8           # characters after the change word its negation may sit in
+# AとBを開始, A5mgと架空薬Bを開始: a listing particle beside a known drug (and its dose)
+_RX_LIST = r"(?:と|や|・|及び|および)"
+_RX_DOSE = r"(?:[0-9０-９.．]+(?:mg|μg|mcg|g|mL|ml|錠|%|単位))?"
+_RX_CONFLICT = {"start", "stop", "decrease", "increase", "change"}
+_RX_HINT_CAP = 10       # extract.extract_message keeps rx_actions[:10]
 
 
 def _named_in(text, names):
@@ -1695,18 +1703,10 @@ def _named_in(text, names):
     return found
 
 
-def _rx_action_gaps(v, hints, body):
-    """Patient-current rule change words whose clause no extracted patient med states.
-
-    A name alone never covers a change: every drug named since the clause's
-    previous change word needs its own med with the matching action, quoted
-    over the clause. Other people, past, planned and denied changes ask nothing."""
-    meds = [med for med in v.get("meds") or [] if isinstance(med, dict)
-            and med.get("subject", "patient") == "patient" and not med.get("negated")
-            and isinstance(med.get("name"), str) and med["name"]
-            and isinstance(med.get("evidence"), str) and med["evidence"]]
-    names = {med.get("name") for med in [*(hints.get("medications") or []), *(v.get("meds") or [])]
-             if isinstance(med, dict) and isinstance(med.get("name"), str) and med["name"]}
+def _rx_bindings(hints, names, body):
+    """Each patient-current rule change word's objects, as (name, allowed actions,
+    clause span). A name of None is an unnamed object; a listed neighbour that is
+    no known drug yields ("?", ...), a drug never extracted."""
     for act in hints.get("rx_actions") or []:
         code = act.get("action") if isinstance(act, dict) else None
         ctx = act.get("ctx") if isinstance(act, dict) else None
@@ -1724,25 +1724,114 @@ def _rx_action_gaps(v, hints, body):
             mark = re.search(_CLAUSE_MARK, body[end:tail])
             lead = head + _clause_start(body[head:start])
             close = end + mark.start() if mark else tail
-            # an owner (母の…) is seen only from just past its の, so try those positions
-            if (re.search(_RX_NOT_CURRENT, body[lead:close])
-                    or any(extract.patient_source_scope(body, at, end) != "patient"
-                           for at in [start, *(lead + m.end() for m in re.finditer(
-                               r"の[ \t　]*", body[lead:start]))])):
+            source = [m for m in re.finditer(_RX_DOSE + "から$", body[head:lead])
+                      if code == "change" and body[head:head + m.start()].endswith(tuple(names))]
+            if source:
+                # AからBへ変更: から is no clause break here, the source drug belongs to it
+                lead = head + _clause_start(body[head:head + source[0].start()])
+            if (re.search(_RX_NOT_CURRENT, body[end:min(close, end + _RX_AFTER)])
+                    or extract.patient_source_scope(body, start, end) != "patient"):
                 continue
             # this change word's objects: AとBを開始 names two, Aを開始しBも開始 one each
             prior = list(re.finditer(_RX_ANY, body[lead:start]))
-            region = body[lead + (prior[-1].end() if prior else 0):start]
-            targets = _named_in(region, names) or [None]
-            if not all(any(med.get("action") in _RX_STATED.get(code, {code})
-                           and (med["name"] in body[lead:close] if target is None
-                                else med["name"] == target)
-                           and any(m.start() < close and m.end() > lead
-                                   for m in re.finditer(re.escape(med["evidence"]), body))
-                           for med in meds)
-                       for target in targets):
-                return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
+            base = lead + (prior[-1].end() if prior else 0)
+            region = body[base:start]
+            targets = _named_in(region, names)
+            # a listed neighbour that is no known drug is a drug the extraction missed
+            spans = sorted({m.span() for name in targets for m in re.finditer(re.escape(name), region)})
+            for s, e in spans:
+                after = re.match(_RX_DOSE + _RX_LIST, region[e:])
+                before = re.search(_RX_LIST + "$", region[:s])
+                if (after and not any(s2 == e + after.end() for s2, _ in spans)) or (
+                        before and not any(re.fullmatch(_RX_DOSE, region[e2:before.start()])
+                                           for _, e2 in spans if e2 <= before.start())):
+                    yield "?", set(), (lead, close)
+            for name in targets or [None]:
+                # the nearest owner before each drug decides it (母の付き添いで本人の架空薬A)
+                at = base + region.find(name) if name else start
+                last = list(re.finditer(r"の[ \t　]*", body[lead:at]))
+                if last and extract.patient_source_scope(body, lead + last[-1].end(), end) != "patient":
+                    continue
+                allowed = set(_RX_STATED.get(code, {code}))
+                if name and code == "change":
+                    # AからBへ変更: the source stops, the destination starts
+                    rest = region[region.find(name) + len(name):]
+                    allowed |= {"stop"} if re.match(_RX_DOSE + "から", rest) else (
+                        {"start"} if re.match(_RX_DOSE + "[へに]", rest) else set())
+                yield name, allowed, (lead, close)
+
+
+def _rx_names(v, hints):
+    return {med.get("name") for med in [*(hints.get("medications") or []), *(v.get("meds") or [])]
+            if isinstance(med, dict) and isinstance(med.get("name"), str) and med["name"]}
+
+
+def _rx_covering(v):
+    """Meds that may state a change: verified, explicitly the patient's, not denied or planned."""
+    return [med for med in v.get("meds") or [] if isinstance(med, dict)
+            and med.get("subject") == "patient" and not med.get("negated")
+            and not med.get("unverified") and med.get("status") in ("current", "past")
+            and isinstance(med.get("name"), str) and med["name"]
+            and isinstance(med.get("evidence"), str) and med["evidence"]]
+
+
+def _rx_action_gaps(v, hints, body):
+    """Patient-current rule change words whose clause no extracted patient med states.
+
+    A name alone never covers a change: every drug named since the clause's
+    previous change word needs its own verified patient med with the matching
+    action, quoted over the clause, and no action its sentence never states.
+    A listed drug the extraction never named keeps the gap open. Other people,
+    past, planned and denied changes ask nothing."""
+    meds = _rx_covering(v)
+    bindings = list(_rx_bindings(hints, _rx_names(v, hints), body))
+    # 架空薬Aを開始し、架空薬Aを中止: every action the source binds to that same drug
+    stated = {}
+    for target, allowed, _ in bindings:
+        stated.setdefault(target, set()).update(allowed)
+    for target, allowed, (lead, close) in bindings:
+        mine = [med for med in meds
+                if (med["name"] in body[lead:close] if target is None else med["name"] == target)
+                and any(m.start() < close and m.end() > lead
+                        for m in re.finditer(re.escape(med["evidence"]), body))]
+        # a wrong action kept beside the right one is a contradiction, not a repair
+        if (not any(med.get("action") in allowed for med in mine)
+                or any(med.get("action") in _RX_CONFLICT - allowed - stated.get(med["name"], set())
+                       for med in mine)):
+            return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
     return []
+
+
+def _rx_superseded(prior, candidate, hints, body):
+    """Prior medication facts a repair may replace: the source binds the drug to one
+    patient-current change, the prior item states no action or one that change
+    excludes, and the candidate carries the same item with an allowed action instead.
+    Every other field (dose, freq, route, subject, negation) must stay equal."""
+    if (not isinstance(hints, dict) or not isinstance(prior, dict) or not isinstance(candidate, dict)
+            # v1 keeps 10 rx_actions: a full list cannot prove a drug has only one change
+            or len(hints.get("rx_actions") or []) >= _RX_HINT_CAP):
+        return set()
+    bound = {}
+    for target, allowed, _ in _rx_bindings(hints, _rx_names(candidate, hints) | _rx_names(prior, hints), body):
+        bound.setdefault(target, []).append(allowed)
+
+    def rest(med):
+        return {k: x for k, x in med.items() if not k.startswith("_")
+                and k not in ("action", "status", "evidence", "unverified", "normalized")}
+
+    kept = _facts({"meds": candidate.get("meds") or []}, split_conditions=True)
+    gone = set()
+    for med in prior.get("meds") or []:
+        if not isinstance(med, dict) or len(bound.get(med.get("name"), [])) != 1:
+            continue                    # several changes or none for this drug: no replacement
+        allowed, = bound[med["name"]]
+        fact = next(iter(_facts({"meds": [med]}, split_conditions=True)))
+        # a neutral mention (none) may gain the source's action the same way
+        if (fact not in kept and med.get("action") in (_RX_CONFLICT - allowed) | {None, "none"}
+                and any(other.get("action") in allowed and rest(other) == rest(med)
+                        for other in _rx_covering(candidate) if other.get("name") == med["name"])):
+            gone.add(fact)
+    return gone
 
 
 # The rule hint's own action word. A quote spanning several requests covers
@@ -1885,8 +1974,15 @@ def _request_covers(item, hint):
     return stem in quote and sum(s in quote for s in _REQUEST_STEMS.values()) == 1
 
 
-def _quality_improves(candidate, prior, body):
-    """Optional gains must retain prior assertions and have their own source evidence."""
+def _quality_improves(candidate, prior, body, hints=None):
+    """Optional gains must retain prior assertions and have their own source evidence.
+
+    The one exception: a medication action the source contradicts (_rx_superseded)
+    may be replaced by the same item with the source's action."""
+    gone = _rx_superseded(prior, candidate, hints, body)
+    if gone:
+        prior = {**prior, "meds": [med for med in prior.get("meds") or [] if not (
+            isinstance(med, dict) and next(iter(_facts({"meds": [med]}, split_conditions=True))) in gone)]}
     if not _improves(candidate, prior):
         # Evidence is excluded from _facts. A neutral medication mention
         # may acquire its missing patient-owned quote without adding a
@@ -2172,7 +2268,9 @@ def llm_extract(body: str, *, context: str | None = None,
                     rv = _piece_validate(rd, piece, body, ctx=piece_context)
                     if rv is not None and not context:
                         rv.pop("reply", None)
-                    if (_quality_improves(rv, v, body) if completeness else _improves(rv, v)):
+                    # a replacement must see every change in the message, so only an unsplit body
+                    if (_quality_improves(rv, v, body, piece_hints if piece == body else None)
+                            if completeness else _improves(rv, v)):
                         v = rv
                 if completeness:
                     quality_note("dispatch_unknown" if rd is _DEFERRED else
