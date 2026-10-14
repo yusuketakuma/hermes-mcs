@@ -968,7 +968,8 @@ def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
             else:
                 dropped += drop("context_no_evidence" if isinstance(raw, dict) and not ev_rec
                                 else "context_shape")
-        if obligation_ids:
+        # A repair may return a kept fact again; one fact links once.
+        if obligation_ids and fact["fact_id"] not in obligations[oid]["fact_ids"]:
             obligations[oid]["fact_ids"].append(fact["fact_id"])
         facts.append(fact)
     return facts, dropped

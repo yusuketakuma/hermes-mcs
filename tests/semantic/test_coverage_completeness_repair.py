@@ -100,3 +100,32 @@ def test_coverage_repair_cannot_promote_a_fact_in_a_category_adjudicated_absent(
         assert not db.artifacts("canonical_projection") and not db.artifacts("semantic_facts_v4")
     finally:
         db.close()
+
+
+def test_a_repair_that_returns_a_kept_fact_again_links_it_once(tmp_path):
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(1, body=FIRST + SECOND)])
+    bundle = semantic.thread_bundle(db, 1, 1, [1])
+    scfg, _ = semantic.semantic_config(_canonical_cfg())
+    calls = []
+
+    def model(prompt):
+        calls.append(prompt)
+        presence = dict.fromkeys(facts.MANDATORY_CATEGORIES, "none")
+        presence["preference"] = "one"
+        # The repair re-returns the fact it kept, alongside the missing one.
+        return json.dumps({"facts": [preference(FIRST)] + ([preference(SECOND)] if len(calls) > 1 else []),
+                           "category_presence": presence})
+
+    try:
+        stage = drain._fact_stage(db, scfg, bundle["members"][0], 1, 1, bundle["source_fingerprint"],
+                                  semantic.policy_fingerprint(scfg), CoverageJev(), model,
+                                  time.monotonic() + 600)
+        assert len(calls) == 2 and stage["outcome"] is None
+        doc = stage["v2_doc"]
+        links = [ob["fact_ids"] for ob in doc["obligations"] if ob.get("fact_ids")]
+        assert links and all(len(ids) == len(set(ids)) for ids in links)
+        assert {fact["fact_id"] for fact in doc["facts"]} >= {fid for ids in links for fid in ids}
+    finally:
+        db.close()
