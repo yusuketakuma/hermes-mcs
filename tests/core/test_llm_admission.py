@@ -525,6 +525,44 @@ def test_admitted_chat_interruption_keeps_permit_unknown(admitted_env):
 
 
 
+@pytest.mark.parametrize("entry,lookup_failure", [
+    ("chat", False), ("probe", False), ("probe", True),
+])
+def test_sent_interruption_survives_failed_admission_cleanup(
+        admitted_env, monkeypatch, entry, lookup_failure):
+    import local_llm
+    import sqlite3
+    broker = _live_broker(admitted_env)
+    interruption = KeyboardInterrupt("synthetic interrupted request")
+    requests = []
+
+    def broken_state(*args, **kwargs):
+        raise sqlite3.OperationalError("synthetic state write unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(broker, "mark_unknown", broken_state)
+
+        def interrupted(*args):
+            requests.append(1)
+            if lookup_failure:
+                # Acquisition/sent succeeded; only post-request cleanup fails.
+                patch.setattr(broker, "_permit", broken_state)
+            raise interruption
+
+        with pytest.raises(KeyboardInterrupt) as failure:
+            if entry == "chat":
+                local_llm.admitted_chat("mcs.extract", "synthetic", request_fn=interrupted)
+            else:
+                local_llm.admitted_probe_format(
+                    "mcs.extract", local_llm.ENDPOINT, "synthetic", None,
+                    request_fn=interrupted)
+        assert failure.value is interruption
+    assert requests == [1]
+    row = broker.db.execute("SELECT state,outcome FROM permits").fetchone()
+    assert row["state"] == "sent" and row["outcome"] is None
+    assert not broker.acquire("gbrain.query", "RT")["admitted"]
+
+
 def test_admitted_chat_rt_deferral_releases_waiting_flag(admitted_env):
     """An RT intent the caller does not wait out is retired — the
     rt_waiting flag must not keep BACKLOG shut for the whole epoch."""
