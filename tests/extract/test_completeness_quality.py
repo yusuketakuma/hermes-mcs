@@ -970,7 +970,7 @@ def test_one_drugs_action_does_not_cover_another_drug_with_the_same_action(first
 def test_a_shorter_drug_name_does_not_cover_a_longer_one_containing_it(a_word, a_action, aa_action, covered):
     sentence = f"本人は架空薬Aを{a_word}し、架空薬AAを開始しました"
     body = PREFIX + sentence + "。"
-    meds = [{**STOPPED, "action": a_action, "status": "current", "evidence": sentence},
+    meds = [{**STOPPED, "action": a_action, "status": "past" if a_action == "stop" else "current", "evidence": sentence},
             {**STOPPED, "name": "架空薬AA", "action": aa_action, "status": "current", "evidence": sentence}]
     v = extract_llm._validate({**OBSERVATIONS, "meds": meds}, body)
     assert len(v["meds"]) == 2
@@ -1186,7 +1186,8 @@ def test_a_medication_service_is_not_a_missed_drug(service):
 def test_future_requested_or_consulted_changes_are_checked_as_planned(text, action):
     planned = _med("架空薬A", text, action=action, status="planned")
     assert not _rx_gap(text, [planned])
-    assert _rx_gap(text, [{**planned, "action": "none"}])                 # the planned action is missing
+    # an instruction needs its planned action; a consultation (追加を相談) states none
+    assert bool(_rx_gap(text, [{**planned, "action": "none"}])) is ("相談" not in text)
     assert _rx_gap(text, [_med("架空薬A", text, action=action)])          # not done yet
     body = PREFIX + text
     prior = extract_llm._validate({**OBSERVATIONS, "meds": [{**planned, "action": "none"}]}, body)
@@ -1232,3 +1233,41 @@ def test_a_requested_stop_does_not_excuse_a_recorded_done_stop():
                                   "本人は以前に架空薬Aと同時に架空薬Bを開始しました。"])
 def test_simultaneous_start_keeps_real_conditions_other_people_and_history_out(text):
     assert not _rx_gap(text, [_med("架空薬A", text, action="none")])
+
+
+def test_a_done_stop_must_be_past_and_a_repair_may_make_it_so(monkeypatch):
+    text = "本人の架空薬Aを中止しました。"
+    current, past = _med("架空薬A", text, action="stop"), _med("架空薬A", text, action="stop", status="past")
+    assert _rx_gap(text, [current])
+    assert _rx_gap(text, [current, past])            # the wrong current stop is kept beside the right one
+    assert not _rx_gap(text, [past])
+    calls, result = _repair(monkeypatch, text, [current], [past])
+    assert len(calls) == 2 and [(m["action"], m["status"]) for m in result["meds"]] == [("stop", "past")]
+
+
+def test_a_question_asks_for_no_action_and_allows_no_replacement():
+    text = "本人の架空薬Aを開始しますか。"
+    neutral = _med("架空薬A", text, action="none")
+    assert not _rx_gap(text, [neutral])
+    body = PREFIX + text
+    for status in ("current", "planned"):
+        prior = extract_llm._validate({**OBSERVATIONS, "meds": [{**neutral, "status": status}]}, body)
+        made = extract_llm._validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, status=status)]}, body)
+        assert not extract_llm._quality_improves(made, prior, body, hints(body))
+
+
+@pytest.mark.parametrize("text", ["本人は架空薬A1包と架空薬Bを開始しました。", "本人は架空薬A2カプセルと架空薬Bを開始しました。"])
+def test_package_count_doses_still_mark_a_listed_drug_the_extraction_missed(text):
+    assert _rx_gap(text, [_med("架空薬A", text)])
+
+
+def test_each_listed_drug_keeps_its_own_owner():
+    text = "本人の架空薬Aと母の架空薬Bを開始しました。"
+    assert _rx_gap(text, [_med("架空薬A", text, action="none")])
+    assert not _rx_gap(text, [_med("架空薬A", text)])
+
+
+@pytest.mark.parametrize("text", ["本人は架空薬Aを開始後、中止しました。", "本人は架空薬Aを開始し、その後中止しました。"])
+def test_an_elliptical_follow_up_change_carries_the_drug(text):
+    assert _rx_gap(text, [_med("架空薬A", text)])
+    assert not _rx_gap(text, [_med("架空薬A", text), _med("架空薬A", text, action="stop", status="past")])
