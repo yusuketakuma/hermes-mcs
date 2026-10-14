@@ -84,6 +84,13 @@ _BOUNDARY = re.compile(
     r"^[ \t　]*(?:[■●◆#]+|[【［\[][^】］\]\n]+[】］\]]|[^\s:：]{1,24}[:：])")
 _MEASUREMENT = re.compile(r"^[ \t　]*(\d+(?:[.．]\d+)?)(?![\d.．/／年月日-])[ \t　]*(kg|cm|mg/dL|g/dL|mL/min/1\.73m2|U/L|mmol/L|%|％)?", re.I)
 _REPORTED_DATE = re.compile(r"(?<!\d)\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?(?!\d)")
+# Drug storage/management/inquiry attributes only describe medication_management items.
+_DRUG_ONLY_KEYS = frozenset({"storage_status", "storage_place", "medication_manager", "inquiry_result",
+                             "interaction_check"})
+_PATIENT_OWNERS = ("ご本人", "本人", "患者", "利用者")
+_DRUG_OWNER = re.compile(
+    r"(?P<who>ご本人|本人|患者|利用者|ご家族|家族|母親|父親|祖母|祖父|長男|長女|次男|次女|娘|息子|夫|妻|兄|姉|弟|妹|孫|母|父)"
+    r"(?:さん|様)?の(?:お)?(?:内服薬|処方薬|残薬|薬)")
 
 
 def reference_item(value):
@@ -109,8 +116,25 @@ def reference_item(value):
     return {**value, "drug_names": list(value["drug_names"])}
 
 
-def detail_items(items, body: str, parent_span) -> list[dict]:
-    """Keep each raw attribute only inside its parent's unique source quote."""
+def _other_persons_drug(body: str, span, value: str) -> bool:
+    """Whether every quoted occurrence of value belongs to a non-patient's drug in its sentence."""
+    owned = []
+    at = body.find(value, span[0], span[1])
+    while at >= 0:
+        start = max(body.rfind(mark, 0, at) for mark in "。！？!?\n") + 1
+        end = min((i for i in (body.find(mark, at) for mark in "。！？!?\n") if i >= 0), default=len(body))
+        owners = list(_DRUG_OWNER.finditer(body, start, end))
+        # the nearest preceding owner, else the sentence's next one; the owner phrase itself is no value
+        if not any(o.start() <= at < o.end() for o in owners):
+            before = [o for o in owners if o.end() <= at]
+            owner = before[-1] if before else next(iter(owners), None)
+            owned.append(owner is not None and owner["who"] not in _PATIENT_OWNERS)
+        at = body.find(value, at + 1, span[1])
+    return bool(owned) and all(owned)
+
+
+def detail_items(items, body: str, parent_span, category=None, subject=None) -> list[dict]:
+    """Keep each raw attribute only inside its parent's unique source quote, category and drug owner."""
     if not isinstance(items, list) or not isinstance(body, str) or parent_span is None:
         return []
     result = []
@@ -122,6 +146,10 @@ def detail_items(items, body: str, parent_span) -> list[dict]:
         span = locate_quote_span(body, item["evidence"])
         if (span is None or span[0] < parent_span[0] or span[1] > parent_span[1]
                 or item["value"] not in body[span[0]:span[1]]):
+            continue
+        if category is not None and item["key"] in _DRUG_ONLY_KEYS and category != "medication_management":
+            continue
+        if subject in ("patient", "unspecified") and _other_persons_drug(body, span, item["value"]):
             continue
         clean = {"key": item["key"], "value": item["value"], "evidence": body[span[0]:span[1]]}
         reference = reference_item(item.get("refers_to"))
@@ -206,7 +234,7 @@ def context_items(doc, body: str) -> list[dict]:
             continue
         clean = {**item, "evidence": body[span[0]:span[1]]}
         if "details" in item:
-            clean["details"] = detail_items(item["details"], body, span)
+            clean["details"] = detail_items(item["details"], body, span, item["category"], item["subject"])
         result.append(clean)
     return result
 

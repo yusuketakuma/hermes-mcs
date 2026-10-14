@@ -116,3 +116,57 @@ def test_a_generic_storage_heading_is_no_drug_storage_detail(body):
                                       ("薬の置き場所：台所の棚。", "storage_place")])
 def test_a_drug_storage_heading_keeps_its_detail(body, key):
     assert [detail["key"] for item in extract_context(body) for detail in item.get("details", [])] == [key]
+
+
+def _kept(category, body, details, subject="patient"):
+    item = {"category": category, "text": body, "evidence": body, "subject": subject, "details": details}
+    return [detail["key"] for detail in context_items({"patient_context": [item]}, body)[0]["details"]]
+
+
+def test_a_drug_only_attribute_outside_medication_management_is_dropped():
+    body = "同意書は書類棚に保管しています。"
+    details = [{"key": "storage_place", "value": "書類棚", "evidence": body},
+               {"key": "storage_status", "value": "保管しています", "evidence": body}]
+    assert _kept("care_services", body, details) == []
+    assert _kept("medication_management", body, details) == ["storage_place", "storage_status"]
+
+
+@pytest.mark.parametrize("body,value", [
+    ("同居の夫の薬は一包化されていますが、本人の薬はシートのままです。", "一包化"),
+    ("合成長女さんの薬は冷蔵庫で保管しています。", "冷蔵庫"),
+])
+def test_another_persons_drug_detail_does_not_stay_on_the_patient(body, value):
+    key = "support_method" if value == "一包化" else "storage_place"
+    details = [{"key": key, "value": value, "evidence": body}]
+    assert _kept("medication_management", body, details) == []
+    assert _kept("medication_management", body, details, subject="family") == [key]
+
+
+@pytest.mark.parametrize("body,key,value", [
+    ("本人の薬は家族が一包化して渡しています。", "support_method", "一包化"),
+    ("合成薬Aと合成薬Bは一包化して、娘さんが渡しています。", "support_method", "一包化"),
+    ("本人の薬は冷蔵庫の扉側で保管しています。", "storage_place", "冷蔵庫の扉側"),
+    ("薬の管理は同居の合成長男さんが行っており、飲み忘れはありません。", "medication_manager", "合成長男さん"),
+    ("娘さんの薬は別で、本人の薬は娘さんが管理しています。", "medication_manager", "娘さん"),
+])
+def test_family_support_for_the_patients_own_drugs_is_kept(body, key, value):
+    assert _kept("medication_management", body, [{"key": key, "value": value, "evidence": body}]) == [key]
+
+
+@pytest.mark.parametrize("body,key,value", [
+    ("夫の薬は本人が管理しています。", "medication_manager", "本人"),
+    ("夫の薬は夫が管理しています。", "medication_manager", "夫"),
+    ("同居の母の薬は残薬が4錠ですが、本人の薬の残薬は0錠です。", "residual_quantity", "4錠"),
+    ("冷蔵庫で夫の薬を保管し、本人の薬は棚に置いています。", "storage_place", "冷蔵庫"),
+])
+def test_a_detail_of_another_persons_drug_is_dropped_wherever_the_value_sits(body, key, value):
+    assert _kept("medication_management", body, [{"key": key, "value": value, "evidence": body}]) == []
+
+
+@pytest.mark.parametrize("body,key,value", [
+    ("娘さんが本人の薬を管理しています。", "medication_manager", "娘さん"),
+    ("同居の母の薬は別ですが、本人の薬の残薬は0錠です。", "residual_quantity", "0錠"),
+    ("夫の薬は一包化、本人の薬も一包化しています。", "support_method", "一包化"),
+])
+def test_a_detail_of_the_patients_own_drug_is_kept_beside_another_persons(body, key, value):
+    assert _kept("medication_management", body, [{"key": key, "value": value, "evidence": body}]) == [key]
