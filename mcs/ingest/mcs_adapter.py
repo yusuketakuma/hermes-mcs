@@ -153,15 +153,15 @@ class _WSConn:
         if u.scheme != "ws" or not host:
             raise BootstrapError("cdp_ws_url_invalid")
         self._deadline = time.monotonic() + timeout
-        self._sock = socket.create_connection((host, port), timeout=timeout)
         self._buf = bytearray()
         path = u.path or "/"
         if u.query:
             path += "?" + u.query
+        self._sock = socket.create_connection((host, port), timeout=timeout)
         try:
             self._handshake(host, port, path)
-        except (BootstrapError, OSError):
-            self._sock.close()
+        except BaseException:
+            self.close()
             raise
 
     def _handshake(self, host: str, port: int, path: str):
