@@ -801,3 +801,24 @@ def test_an_unrelated_negation_does_not_hide_a_request(monkeypatch):
 def test_negated_or_target_named_requests_add_no_call(monkeypatch, tail, requests):
     calls, _ = _run(monkeypatch, PREFIX + tail, requests)
     assert len(calls) == 1
+
+
+def test_a_request_without_a_named_target_is_checked_without_failing(monkeypatch):
+    sentence = "確認をお願いします"
+    calls, result = _run(monkeypatch, PREFIX + sentence + "。", [], [_confirm("確認", sentence)])
+    assert len(calls) == 2 and result["requests"]
+
+
+VT = "本人の体温の確認と血圧の記録の確認と血糖の記録の確認をお願いします"
+VT_ALL = [_confirm("体温確認", VT), _confirm("血圧記録確認", VT), _confirm("血糖記録確認", VT)]
+
+
+def test_a_unique_target_stays_short_beside_extended_ones(monkeypatch):
+    calls, _ = _run(monkeypatch, PREFIX + VT + "。", VT_ALL)
+    assert len(calls) == 1
+
+
+def test_one_of_the_extended_targets_missing_is_repaired(monkeypatch):
+    calls, result = _run(monkeypatch, PREFIX + VT + "。", [VT_ALL[0], VT_ALL[2]], VT_ALL)
+    assert len(calls) == 2
+    assert {item["action"] for item in result["requests"]} == {"体温確認", "血圧記録確認", "血糖記録確認"}

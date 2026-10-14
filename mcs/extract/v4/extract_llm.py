@@ -1734,13 +1734,17 @@ def _clause_start(before):
 
 def _distinct_targets(found):
     """Each cue's target: its last word, extended (血圧の記録 vs 血糖の記録) only
-    while same-kind targets in the sentence would otherwise coincide."""
-    longest = max((len(c["chunks"]) for c in found), default=0)
-    for size in range(1, longest + 1):
-        names = ["".join(c["chunks"][-size:]) or None for c in found]
-        if size == longest or len({n for n in names if n}) == len([n for n in names if n]):
+    for cues whose targets would otherwise coincide; a unique one stays short."""
+    sizes = [1] * len(found)
+    while True:
+        names = ["".join(c["chunks"][-n:]) or None for c, n in zip(found, sizes)]
+        clashing = [i for i, name in enumerate(names)
+                    if name and names.count(name) > 1 and sizes[i] < len(found[i]["chunks"])]
+        if not clashing:
             break
-    for cue, name in zip(found, names if found else []):
+        for i in clashing:
+            sizes[i] += 1
+    for cue, name in zip(found, names):
         cue["target"] = name if name and len(name) <= 20 else None
 
 
