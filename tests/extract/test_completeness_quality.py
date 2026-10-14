@@ -925,12 +925,14 @@ def test_an_unrepaired_change_word_leaves_the_message_in_attention(tmp_path, mon
 
 @pytest.mark.parametrize("integrity,state", [
     ("absent", "complete"), ({}, "complete"), (None, "attention"),
-    ({"completeness": {"0": {"state": "hint_gaps_resolved"}}}, "complete"),
+    # the writer always records the remaining count; resolved means exactly integer 0
+    ({"completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}, "complete"),
+    ({"completeness": {"0": {"state": "hint_gaps_resolved"}}}, "attention"),
     ({"completeness": None}, "attention"), ({"completeness": []}, "attention"),
     ({"completeness": "hint_gaps_resolved"}, "attention"),
     ({"completeness": {"0": "hint_gaps_resolved"}}, "attention"),
     ([], "attention"), ("synthetic", "attention"),
-], ids=["absent_legacy", "legacy_empty", "integrity_null", "resolved", "null", "list", "string",
+], ids=["absent_legacy", "legacy_empty", "integrity_null", "resolved", "resolved_without_count", "null", "list", "string",
         "string_entry", "integrity_list", "integrity_string"])
 def test_present_malformed_completeness_is_never_complete(tmp_path, monkeypatch, integrity, state):
     db = _ledger(tmp_path)
@@ -1026,7 +1028,10 @@ def test_a_substitution_is_covered_by_the_source_stop_and_destination_start():
 def test_a_wrong_action_kept_beside_the_right_one_stays_unresolved():
     text = "本人の架空薬Aを中止しました。"
     assert _rx_gap(text, [_med("架空薬A", text), _med("架空薬A", text, action="stop", status="past")])
-    assert not _rx_gap(text, [_med("架空薬A", text, action="none"), _med("架空薬A", text, action="stop", status="past")])
+    # a neutral current item beside the stop keeps the stopped drug current for readers
+    assert _rx_gap(text, [_med("架空薬A", text, action="none"), _med("架空薬A", text, action="stop", status="past")])
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none", status="past"),
+                              _med("架空薬A", text, action="stop", status="past")])
 
 
 def _repair(monkeypatch, text, first, repaired):
@@ -1456,3 +1461,50 @@ def test_a_class_label_before_the_product_keeps_its_name(text, name):
 def test_a_class_labelled_rule_name_yields_to_the_product_name(text, name, action, status):
     assert not _rx_gap(text, [_med(name, text, action=action, status=status, dose="5mg")])
     assert _rx_gap(text, [_med(name, text, action="none", dose="5mg")])
+
+
+def test_a_substitution_needs_the_stop_and_the_start_not_a_generic_change():
+    text = "本人は架空薬Aから架空薬Bへ変更しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action="stop", status="past"), _med("架空薬B", text)])
+    assert _rx_gap(text, [_med("架空薬A", text, action="change"), _med("架空薬B", text, action="change")])
+
+
+def test_oyobi_joins_two_drugs():
+    text = "本人は架空薬A及び架空薬Bを開始しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text), _med("架空薬B", text)])
+
+
+def test_a_restart_beside_another_drugs_stop_is_grounded():
+    text = "本人の架空薬Aを再開しました。本人の架空薬Bを中止しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text), _med("架空薬B", text, action="stop", status="past")])
+
+
+def test_repeated_changes_of_one_drug_each_find_their_item():
+    text = "本人の架空薬Aを開始し、中止し、その後開始しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, status="past"), _med("架空薬A", text, action="stop", status="past"),
+                              _med("架空薬A", text)])
+
+
+@pytest.mark.parametrize("count", [7, -1, True, False, 0.0, "0", None])
+def test_a_resolved_entry_with_remaining_candidates_is_not_complete(tmp_path, monkeypatch, count):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body=PREFIX)])
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs: copy.deepcopy(OBSERVATIONS))
+    try:
+        assert extract_llm.run_pending(db, budget_s=300)["done"] == 1
+        artifact_id, meta = _final_meta(db)
+        meta["integrity"] = {"completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": count}}}
+        db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), artifact_id))
+        db.db.commit()
+        source = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        assert extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)["state"] == "attention"
+    finally:
+        db.close()
+
+
+def test_a_narrow_quote_cannot_borrow_another_occurrences_status():
+    old, now = "本人の架空薬Aを開始し、中止しました。", "本人の架空薬Aを開始しました。"
+    text = old + now
+    right = [_med("架空薬A", old, status="past"), _med("架空薬A", old, action="stop", status="past"), _med("架空薬A", now)]
+    assert not _rx_gap(text, right)
+    assert _rx_gap(text, [*right, _med("架空薬A", now, status="past")])

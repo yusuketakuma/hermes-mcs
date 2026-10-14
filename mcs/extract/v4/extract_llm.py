@@ -1677,7 +1677,7 @@ def _completeness_issues(v, hints, body):
 
 # v1 rx_actions' own change words. Each is met by its own action only: a generic
 # 変更 states no direction, and an increase or decrease keeps its direction.
-_RX_WORDS = {"start": "開始|追加", "stop": "中止|停止|終了", "decrease": "減量",
+_RX_WORDS = {"start": "開始|追加|再開|導入", "stop": "中止|停止|終了|中断|休薬", "decrease": "減量",
              "increase": "増量", "change": "変更(?!なし)"}
 _RX_ANY = "|".join(_RX_WORDS.values())
 # 変更なし states no change: never a change to cover, but kept as a position so an
@@ -1735,7 +1735,8 @@ _RX_DOSE_ONE = (r"\s*[0-9０-９.．]+\s*(?:mg|μg|mcg|g|mL|ml|錠|%|単位|包|
                 r"(?:\s*[0-9０-９]*\s*(?:錠|カプセル|包|枚|本|T|C)(?![A-Za-zＡ-Ｚａ-ｚ]))?")
 _RX_DOSE = f"(?:{_RX_DOSE_ONE})?"
 # (defined here, after the dose it must not swallow: 架空薬A5mg)
-_RX_NAME_GOES_ON = rf"(?!錠|散|液|軟膏|テープ|カプセル|注|点眼|貼付|{_RX_DOSE_ONE}|{_RX_ANY}|内服|服用|投与)" + _RX_NAME_CHAR
+_RX_NAME_GOES_ON = (rf"(?!錠|散|液|軟膏|テープ|カプセル|注|点眼|貼付|{_RX_DOSE_ONE}|{_RX_ANY}|内服|服用|投与"
+                    r"|及び)" + _RX_NAME_CHAR)
 _RX_PARTICLE = r"\s*(?:を|は|も|の|が)?\s*"
 # Aの投与を開始 (the drug's administration), Aを医師が中止 (an actor, the drug still the
 # patient's), Aを本日中止 / いったん中止 (a modifier of the change): still A's change
@@ -1753,8 +1754,7 @@ _RX_RANGE = rf"(?:(?:{_RX_AMOUNT})\s*から\s*)?(?:{_RX_AMOUNT})\s*(?:へ|に|�
 _RX_SEP = r"(?:と|や|・|及び|および|、|，|,)"
 # 服薬指導, 投薬管理: medication services, not drugs
 _RX_SERVICE = r"(?:服薬|投薬|薬剤|与薬|薬)(?:指導|管理|支援|確認|相談|説明|調整|カレンダー)"
-_RX_WORD_CODE = {w: c for c, rx in (("start", "開始|追加"), ("stop", "中止|停止|終了"), ("decrease", "減量"),
-                                    ("increase", "増量"), ("change", "変更")) for w in rx.split("|")}
+_RX_WORD_CODE = {w.split("(")[0]: c for c, rx in _RX_WORDS.items() for w in rx.split("|")}
 _RX_CONFLICT = {"start", "stop", "decrease", "increase", "change"}
 # Aと共に運動療法を開始: A accompanies; the change's object is what follows
 _RX_ALONG = r"と(?:共に|ともに|同時に|一緒に|いっしょに|併せて|あわせて)"
@@ -1967,9 +1967,9 @@ def _rx_bindings(hints, names, body, *, every=False, ground=False):
                 continue
             if name:
                 kept.append(name)
-            allowed = {code}
-            # AからBへ / AをBに変更: the source stops, the destination starts
-            allowed |= {"from": {"stop"}, "to": {"start"}}.get(role, set())
+            # AからBへ / AをBに変更: the source drug stops and the destination starts;
+            # a generic change on either would leave the replaced drug active
+            allowed = {"from": {"stop"}, "to": {"start"}}.get(role, {code})
             yield name, allowed, (lead, close, planned, denied, start)
         carry[head] = (end, kept)
 
@@ -2056,18 +2056,37 @@ def _rx_action_gaps(v, hints, body):
                 return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
             continue
         # a wrong action kept beside the right one is a contradiction, not a repair;
-        # a done stop is past (中止しました), so a stop still current contradicts it
-        # a start may be past only when the source stops the drug after it
-        # (開始し、その後中止); 中止し、その後開始 restarts it, current
-        later = {"stop"} if any(t == target and "stop" in ok and pl == planned and st > at
-                                for t, ok, (_, _, pl, _, st) in bindings) else set()
-        right = [_rx_right(med, allowed, planned, later) for med in mine]
+        # a done stop is past (中止しました), so a stop still current contradicts it.
+        # An item wrong here may be right for another change of the same drug
+        # (開始し、中止し、その後開始: one start past, one current), so it contradicts
+        # only when no change of that drug and action takes it
+        def right_somewhere(med):
+            # the other change must be one the item's own quote covers: a narrow quote of
+            # 再開 never borrows the earlier occurrence's past start
+            return any(t == target and med.get("action") in ok and pl == planned
+                       and _rx_right(med, ok, pl, _rx_later(bindings, t, pl, st))
+                       and any(m.start() < cl and m.end() > ld
+                               for m in re.finditer(re.escape(med["evidence"]), body))
+                       for t, ok, (ld, cl, pl, _, st) in bindings)
+        right = [_rx_right(med, allowed, planned, _rx_later(bindings, target, planned, at)) for med in mine]
         if (not any(right)
-                or any(med.get("action") in allowed and not ok for med, ok in zip(mine, right))
+                or any(med.get("action") in allowed and not ok and not right_somewhere(med)
+                       for med, ok in zip(mine, right))
+                # 中止しました beside a neutral current item: readers take the last item of a
+                # drug, so the neutral one would keep the stopped drug current
+                or (not planned and "stop" in allowed and any(
+                    med.get("action") in (None, "none") and med.get("status") == "current" for med in mine))
                 or any(med.get("action") in _RX_CONFLICT - allowed - stated.get((med["name"], bool(planned)), set())
                        for med in mine)):
             return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
     return []
+
+
+def _rx_later(bindings, target, planned, at):
+    """{"stop"} when the source stops ``target`` after the change at ``at``
+    (開始し、その後中止: the start may be past); 中止し、その後開始 restarts it."""
+    return {"stop"} if any(t == target and "stop" in ok and pl == planned and st > at
+                           for t, ok, (_, _, pl, _, st) in bindings) else set()
 
 
 def _rx_right(med, allowed, planned, later=()):
@@ -2275,7 +2294,12 @@ def _quality_improves(candidate, prior, body, hints=None):
     if gone:
         prior = {**prior, "meds": [med for med in prior.get("meds") or [] if not (
             isinstance(med, dict) and next(iter(_facts({"meds": [med]}, split_conditions=True))) in gone)]}
-    if not _improves(candidate, prior):
+    # dropping a contradicted item (a neutral duplicate beside the stop) is itself the gain
+    dropped = bool(gone) and candidate is not None and (
+        _facts(prior, split_conditions=True) <= _facts(candidate, split_conditions=True)
+        and _drop_total(candidate) <= _drop_total(prior)
+        and (prior.get("urgency") != "high" or candidate.get("urgency") == "high"))
+    if not dropped and not _improves(candidate, prior):
         # Evidence is excluded from _facts. A neutral medication mention
         # may acquire its missing patient-owned quote without adding a
         # predicate, provided every assertion and existing owned quote stays.
@@ -2490,8 +2514,8 @@ def llm_extract(body: str, *, context: str | None = None,
             nonlocal quality_record
             quality_record = {
                 "state": state,
-                "remaining_hint_candidates": len(_completeness_issues(v, piece_hints, piece))
-                if isinstance(piece_hints, dict) else None}
+                # always an integer: progress reads resolved only at exactly 0
+                "remaining_hint_candidates": len(_completeness_issues(v, piece_hints, piece))}
             if meta_out is not None:
                 meta_out.setdefault("completeness", {})[str(key)] = quality_record
 
@@ -3534,6 +3558,10 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
                    else {} if isinstance(meta, dict) and "integrity" not in meta else None)
         if bound and (not isinstance(quality, dict) or any(
                 not isinstance(entry, dict) or entry.get("state") != "hint_gaps_resolved"
+                # resolved is written with an integer 0 remaining; anything else
+                # (a count, a missing, null, bool or non-integer value) is no resolution
+                or type(entry.get("remaining_hint_candidates")) is not int
+                or entry["remaining_hint_candidates"] != 0
                 for entry in quality.values())):
             return out
         if (bound and not meta.get("error") and valid is not None
