@@ -1584,3 +1584,65 @@ def test_a_repair_after_an_invalid_answer_records_its_own_gaps(monkeypatch, repa
     assert len(calls) == 2
     states = {e["state"] for e in (meta.get("completeness") or {}).values()}
     assert states == ({state} if state else set())
+
+
+@pytest.mark.parametrize("name", ["リハビリ", "マッサージ", "スイミング"])
+@pytest.mark.parametrize("keep_neutral", [False, True])
+def test_a_model_name_alone_cannot_gain_a_medication_action(monkeypatch, name, keep_neutral):
+    text = f"本人は{name}を開始しました。"
+    neutral = _med(name, text, action="none")
+    repaired = ([neutral] if keep_neutral else []) + [_med(name, text)]
+    calls, result = _repair(monkeypatch, text, [neutral], repaired)
+    assert len(calls) == 2
+    assert [(m["name"], m["action"]) for m in result["meds"]] == [(name, "none")]
+    assert extract_llm._completeness_issues(result, hints(PREFIX + text), PREFIX + text)
+
+
+def test_an_unrelated_drug_does_not_support_a_model_only_name(monkeypatch):
+    text = "本人はリハビリを開始しました。本人の架空薬A5mgを開始しました。"
+    neutral = _med("リハビリ", text, action="none")
+    drug = _med("架空薬A", text, dose="5mg")
+    calls, result = _repair(monkeypatch, text, [neutral, drug], [neutral, drug, _med("リハビリ", text)])
+    assert len(calls) == 2
+    assert [(m["name"], m["action"]) for m in result["meds"]] == [("リハビリ", "none"), ("架空薬A", "start")]
+
+
+@pytest.mark.parametrize("text,name,dose", [
+    ("本人のカロナール5mgを中止しました。", "カロナール", "5mg"),
+    ("本人の降圧薬アムロジピンを中止しました。", "アムロジピン", None),
+    ("本人の架空薬Aを中止しました。", "架空薬A", None)])
+def test_independent_medication_context_still_allows_a_proven_action_repair(monkeypatch, text, name, dose):
+    calls, result = _repair(monkeypatch, text, [_med(name, text, action="none", dose=dose)],
+                            [_med(name, text, action="stop", status="past", dose=dose)])
+    assert len(calls) == 2
+    assert [(m["action"], m["status"]) for m in result["meds"]] == [("stop", "past")]
+    assert not extract_llm._completeness_issues(result, hints(PREFIX + text), PREFIX + text)
+
+
+def test_a_doseless_brand_keeps_its_gap_without_an_unsupported_action_repair(monkeypatch):
+    text = "本人のカロナールを中止しました。"
+    neutral = _med("カロナール", text, action="none")
+    stopped = _med("カロナール", text, action="stop", status="past")
+    assert _rx_gap(text, [neutral])
+    assert not _rx_gap(text, [stopped])
+    calls, result = _repair(monkeypatch, text, [neutral], [stopped])
+    assert len(calls) == 2
+    assert [(m["action"], m["status"]) for m in result["meds"]] == [("none", "current")]
+    assert extract_llm._completeness_issues(result, hints(PREFIX + text), PREFIX + text)
+
+
+@pytest.mark.parametrize("text", ["本人の架空薬Aを、中止しました。", "本人の架空薬Aは、本日中止しました。",
+                                  "本人の架空薬Aを本日、中止しました。"])
+def test_an_object_particle_comma_does_not_drop_its_medication(text):
+    assert _rx_gap(text, [_med("架空薬A", text, action="none")])
+    assert not _rx_gap(text, [_med("架空薬A", text, action="stop", status="past")])
+
+
+def test_a_particle_comma_does_not_carry_a_drug_into_a_different_non_drug_object():
+    text = "本人の架空薬Aは、リハビリを開始しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none")])
+
+
+def test_a_particle_comma_does_not_carry_a_drug_into_another_drugs_operation():
+    text = "本人の架空薬Aは、架空薬Bを中止しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none"), _med("架空薬B", text, action="stop", status="past")])
