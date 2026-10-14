@@ -715,6 +715,37 @@ def test_unknown_delivery_history_is_bounded(tmp_path, monkeypatch):
     assert held[-1]["outcome"] == "unknown" and "n" not in held[-1]   # newest kept
 
 
+@pytest.mark.parametrize("size", [0, 1, 49, 50, 5000])
+def test_unknown_archive_copies_only_retained_history(size):
+    # Given: full iteration would copy discarded records unnecessarily.
+    class SliceOnlyHistory(list):
+        def __iter__(self):
+            raise AssertionError("whole history must not be iterated")
+
+    history = SliceOnlyHistory({"outcome": "unknown", "n": i} for i in range(size))
+    delivery = {"outcome": "unknown", "n": 9999}
+    state = {"unknown_deliveries": history}
+    expected = [*history[-(health_watch.UNKNOWN_HISTORY - 1):], delivery]
+    # When
+    health_watch._archive_unknown(state, delivery)
+    # Then
+    assert state["unknown_deliveries"] == expected
+    assert state["unknown_deliveries"][-1] is not delivery
+    assert len(history) == size
+
+
+@pytest.mark.parametrize("history", [None, {}, "invalid"])
+def test_unknown_archive_accepts_non_list_history(history):
+    # Given
+    delivery = {"outcome": "unknown"}
+    state = {"unknown_deliveries": history}
+    # When
+    health_watch._archive_unknown(state, delivery)
+    # Then
+    assert state["unknown_deliveries"] == [delivery]
+    assert state["unknown_deliveries"][0] is not delivery
+
+
 @pytest.mark.parametrize("outcome", ["pending", "not_sent"])
 @pytest.mark.parametrize("disk_only", [False, True])
 def test_healthy_recovery_supersedes_unsent_alert_without_stdout_or_send(
