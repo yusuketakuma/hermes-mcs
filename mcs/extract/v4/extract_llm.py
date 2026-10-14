@@ -1740,7 +1740,7 @@ _RX_DOSE = f"(?:{_RX_DOSE_ONE})?"
 # (defined here, after the dose it must not swallow: 架空薬A5mg)
 _RX_NAME_GOES_ON = (rf"(?!錠|散|液|軟膏|テープ|カプセル|注|点眼|貼付|{_RX_DOSE_ONE}|{_RX_ANY}|内服|服用|投与"
                     r"|及び)" + _RX_NAME_CHAR)
-_RX_PARTICLE = r"\s*(?:を|は|も|の|が)?\s*"
+_RX_PARTICLE = r"\s*(?:(?:を|は|も|の|が)\s*(?:[、，,]\s*)?)?\s*"
 # Aの投与を開始 (the drug's administration), Aを医師が中止 (an actor, the drug still the
 # patient's), Aを本日中止 / いったん中止 (a modifier of the change): still A's change
 _RX_ADMIN = r"(?:の(?:投与|内服|服用|使用|投薬|処方)\s*(?:を|は|も|が)?\s*)?"
@@ -1748,7 +1748,7 @@ _RX_ACTOR = (r"(?:(?:主治医|医師|先生|看護師|薬剤師|訪問医|母|�
              r"(?:が|より|の判断で)\s*)?")
 _RX_ADVERB = (r"(?:(?:(?:本日|今日|昨日|今朝|明日|明後日|来週|来月|今後|次回|後日|翌日|今度|週明け)"
               r"(?:から|より|に)?|先ほど|先程|いったん|一旦|一時|再度|再び|すぐに?|直ちに"
-              r"|既に|すでに|新たに|新規に)\s*)?")
+              r"|既に|すでに|新たに|新規に)\s*(?:[、，,]\s*)?)?")
 # Aは副作用のため中止, Aは発疹が出たので中止: the reason sits between the drug and its change
 _RX_CAUSE = r"(?:[^\s。！？、を]{1,12}?(?:のため|ため|ので)\s*、?\s*)?"
 _RX_BETWEEN = _RX_ADMIN + _RX_CAUSE + _RX_ACTOR + _RX_ADVERB
@@ -1891,7 +1891,9 @@ def _rx_bindings(hints, names, body, *, every=False, ground=False):
             joined = (re.search(_RX_DOSE + "から$", body[head:lead]) if code == "change" else None)
             joined = (joined if joined and body[head:head + joined.start()].endswith(tuple(names))
                       else re.search(f"(?:{_RX_AMOUNT}|{_RX_FUTURE}|{_RX_NOW})\\s*から$", body[head:lead])
-                      or re.search(_RX_DOSE + r"\s*[、，,]$", body[head:lead])
+                      or re.search(_RX_DOSE + (
+                          _RX_PARTICLE + _RX_BETWEEN if re.fullmatch(_RX_BETWEEN, body[lead:start]) else "")
+                          + r"\s*[、，,]$", body[head:lead])
                       # 副作用のため中止: a reason followed directly by the change (an actor or
                       # adverb at most) keeps the drug before it; an object after the reason
                       # (架空薬Bを, 運動療法を) is that change's own
@@ -1996,11 +1998,23 @@ def _rx_bindings(hints, names, body, *, every=False, ground=False):
 
 
 def _rx_names(v, hints):
-    """Known drug names. A rule name carrying a class label (降圧薬アムロジピン) is known
-    by its product (アムロジピン), so the label never outranks the extracted name."""
+    """Candidate names from rules and the model, without confirming their drug category.
+
+    A rule's class label (降圧薬アムロジピン) never outranks the product name."""
     def named(items):
         return [m["name"] for m in items or [] if isinstance(m, dict) and isinstance(m.get("name"), str) and m["name"]]
     return {re.sub("^" + _RX_CLASS + "(?=.)", "", n) for n in named(hints.get("medications"))} | set(named(v.get("meds")))
+
+
+def _rx_action_names(names, hints, body):
+    """Names with independent medication cues for adding or replacing an action."""
+    rule_names = _rx_names({}, hints if isinstance(hints, dict) else {})
+    # A model-only name may invite review, but cannot justify a new medication action.
+    return {name for name in names if _rx_bounded(name, body) and (
+        name in rule_names or _rx_med_like(name) or any(
+            not _rx_glued(body[:m.start()]) and (
+                re.match(_RX_DOSE_ONE, body[m.end():]) or re.search(_RX_CLASS + r"\s*$", body[:m.start()]))
+            for m in re.finditer(re.escape(name), body)))}
 
 
 def _rx_covering(v, planned=False):
@@ -2131,6 +2145,7 @@ def _rx_superseded(prior, candidate, hints, body):
             or len(hints.get("rx_actions") or []) >= _RX_HINT_CAP):
         return set()
     names = _rx_names(candidate, hints) | _rx_names(prior, hints)
+    action_names = _rx_action_names(names, hints, body)
     stated = {}
     for target, _, _ in _rx_bindings(hints, names, body, every=True):
         stated[target] = stated.get(target, 0) + 1
@@ -2146,7 +2161,7 @@ def _rx_superseded(prior, candidate, hints, body):
     gone = set()
     for med in prior.get("meds") or []:
         name = med.get("name") if isinstance(med, dict) else None
-        if stated.get(name) != 1 or len(current.get(name, [])) != 1:
+        if name not in action_names or stated.get(name) != 1 or len(current.get(name, [])) != 1:
             continue                    # several changes or none for this drug: no replacement
         (allowed, (lead, close), planned), = current[name]
         if planned == "consult":
@@ -2351,10 +2366,13 @@ def _quality_improves(candidate, prior, body, hints=None):
 
         return owned_med_quotes(prior) < owned_med_quotes(candidate)
     protected = _facts(prior, split_conditions=True)
+    action_names = _rx_action_names(_rx_names(candidate, hints if isinstance(hints, dict) else {}), hints, body)
     for key in _FACT_LIST_FIELDS:
         for item in candidate.get(key) or []:
             if isinstance(item, dict) and not _facts({key: [item]}, split_conditions=True) <= protected:
                 if item.get("unverified") or locate_quote_span(body, item.get("evidence")) is None:
+                    return False
+                if key == "meds" and item.get("action") in _RX_CONFLICT and item.get("name") not in action_names:
                     return False
     return True
 
