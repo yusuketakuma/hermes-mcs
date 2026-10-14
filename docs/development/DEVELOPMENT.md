@@ -435,7 +435,7 @@ echo '{"command_id":"<uuid>","actor":"<人>","name":"nightly",
   $PY mcs/views/mcs_view.py control refstat_approve --project 1 --confirm-human
 
 # 3. 以後、任意の snapshot で再計算して突合
-$PY mcs/ops/mcs_refstats.py verify --name nightly   # match/drift/regression/unverified/superseded
+$PY mcs/ops/mcs_refstats.py verify --name nightly   # match/drift/regression/unverified/superseded/definition_missing/definition_changed
 ```
 
 - 承認は既存の人承認経路（`--confirm-human` + receipt）のみ。file は
@@ -446,6 +446,10 @@ $PY mcs/ops/mcs_refstats.py verify --name nightly   # match/drift/regression/unv
   artifact が snapshot に存在しない場合は `unverified`、旧承認の
   file に差し戻された場合は `superseded` で失敗（exit 2）。
   同一 snapshot での差分は `regression`、別 snapshot での差分は `drift`。
+- 抽出監査（`extraction_audit`）の統計を含む基準は、capture 時に監査の計測定義
+  （`audit_definition`）を記録する。verify で定義の記録が無ければ
+  `definition_missing`、現在の定義と違えば `definition_changed` とし、数値は比較
+  しない（exit 2）。新しい定義で capture し直し、本人承認を取り直す。
 - capture は `as_of` 未指定時に snapshot 生成時刻を query へ固定して
   保存するため、時間窓つき統計でもデータ不変の再 publish は `drift`
   にならない。
