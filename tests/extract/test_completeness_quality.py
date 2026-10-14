@@ -888,7 +888,7 @@ def test_a_rule_change_word_needs_a_matching_med_action_not_just_the_name(monkey
         {**STOPPED, "name": "架空薬B", "action": "start", "status": "current", "evidence": "架空薬Bを開始しました"}]),
     ("母の架空薬Aを中止しました。", []), ("母の現在の架空薬Aを中止しました。", []),
     ("本人は以前に架空薬Aを中止しました。", []),
-    ("本人の架空薬Aは中止しません。", []), ("本人の架空薬Aは中止済みです。", []),
+    ("本人の架空薬Aは中止しません。", []),
     ("本人の架空薬Aの中止を検討します。", []), ("本人の架空薬Aは変更なしです。", []),
 ])
 def test_matched_other_person_past_planned_or_denied_changes_add_no_call(monkeypatch, tail, meds):
@@ -1339,3 +1339,73 @@ def test_a_polite_denial_or_question_still_asks_nothing():
 def test_a_wrong_item_of_either_state_beside_the_right_one_stays_unresolved(text, right, wrong):
     assert not _rx_gap(text, [{**_med("架空薬A", text), **right}])
     assert _rx_gap(text, [{**_med("架空薬A", text), **right}, {**_med("架空薬A", text), **wrong}])
+
+
+def test_a_completed_stop_is_a_past_stop():
+    text = "本人の架空薬Aは中止済みです。"
+    assert _rx_gap(text, [_med("架空薬A", text, action="none")])
+    assert not _rx_gap(text, [_med("架空薬A", text, action="stop", status="past")])
+
+
+@pytest.mark.parametrize("text,past_start_ok", [("本人は架空薬Aを開始しました。", False),
+                                                ("本人は架空薬Aを開始し、その後中止しました。", True),
+                                                ("本人の架空薬Aを中止し、その後開始しました。", False)])
+def test_a_done_start_is_current_unless_the_source_stops_it_afterwards(text, past_start_ok):
+    meds = [_med("架空薬A", text, action="start", status="past")]
+    if "中止" in text:
+        meds.append(_med("架空薬A", text, action="stop", status="past"))
+    assert bool(_rx_gap(text, meds)) is not past_start_ok
+
+
+@pytest.mark.parametrize("text", ["本人の架空薬Aを医師が中止しました。", "本人の架空薬Aを母が中止しました。",
+                                  "本人のカロナールを本日中止しました。"])
+def test_an_actor_or_modifier_between_the_drug_and_its_change_keeps_the_object(text):
+    name = text[3:text.index("を")]
+    assert _rx_gap(text, [_med(name, text, action="none")])
+    assert not _rx_gap(text, [_med(name, text, action="stop", status="past")])
+
+
+def test_an_action_the_source_never_states_for_that_drug_is_not_grounded():
+    text = "本人は架空薬Aを中止しました。架空薬Bは内服中です。"
+    a = _med("架空薬A", text, action="stop", status="past")
+    assert not _rx_gap(text, [a, _med("架空薬B", text, action="none")])
+    assert _rx_gap(text, [a, _med("架空薬B", text, action="stop", status="past")])
+    history = "本人は以前に架空薬Aを開始していました。本人の架空薬Bを中止しました。"
+    assert not _rx_gap(history, [_med("架空薬A", history, status="past"),
+                                 _med("架空薬B", history, action="stop", status="past")])
+
+
+def test_a_shared_administration_noun_keeps_both_drugs_as_objects():
+    text = "本人は架空薬Aと架空薬Bの投与を開始しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text), _med("架空薬B", text)])
+    assert _rx_gap(text, [_med("架空薬A", text), _med("架空薬B", text, action="none")])
+
+
+@pytest.mark.parametrize("other", ["母の架空薬Bを開始しました。", "もし本人の架空薬Bを開始した場合は連絡してください。"])
+def test_another_persons_or_a_conditional_change_grounds_no_patient_action(other):
+    text = "本人の架空薬Aを開始しました。" + other
+    a = _med("架空薬A", text)
+    assert not _rx_gap(text, [a, _med("架空薬B", text, action="none")])
+    assert _rx_gap(text, [a, _med("架空薬B", text)])
+
+
+@pytest.mark.parametrize("ending", ["開始予定です", "開始を検討中です"])
+def test_an_undecided_change_supports_a_planned_item(ending):
+    text = f"本人の架空薬Aは{ending}。"
+    assert not _rx_gap(text, [_med("架空薬A", text, status="planned")])
+
+
+def test_two_changes_in_one_clause_keep_their_order():
+    text = "本人の架空薬Aを開始し架空薬Aを中止しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, status="past"), _med("架空薬A", text, action="stop", status="past")])
+
+
+def test_an_unnamed_change_proves_no_drugs_action():
+    text = "本人の架空薬Aを内服中に心停止しました。"
+    assert _rx_gap(text, [_med("架空薬A", text, action="stop", status="past")])
+
+
+def test_a_historical_stop_still_needs_a_past_item():
+    text = "本人は以前に架空薬Aを中止しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action="stop", status="past")])
+    assert _rx_gap(text, [_med("架空薬A", text, action="stop")])
