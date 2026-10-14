@@ -145,7 +145,7 @@ _PROMPT_SPEC = """あなたは在宅医療の多職種チャット記録を構�
 - "vitals": 数値のみ {"bt": 体温(℃), "hr": 脈拍/心拍数(「脈」「脈拍」「HR」), "rr": 呼吸数, "sbp": 収縮期血圧(血圧の上), "dbp": 拡張期血圧(血圧の下), "spo2": 酸素飽和度(SpO2), "bs": 血糖値(「血糖」「BS」「Glu」)} — キーは本文の測定名に忠実に割り当てる。「脈」はbsではなくhrである
 - "labs": 本文に結果が明記された検査・測定値の配列 [{"name": "検査・測定項目名", "value": 数値または短い結果表現, "unit": "原文の単位 または null", "flag": "high|low(基準外と明記された場合のみ) または省略", "evidence": "対象本文の完全一致引用", "subject": "patient|family|other", "status": "current|past|planned", "measured_on": "引用にある測定/採血日時の原文 または省略", "condition": "引用にある空腹時・食後・検体などの原文 または省略"}] — 体重・身長、腎機能(Cr/eGFR/BUN)・肝機能(AST/ALT)・血糖/ HbA1cも対象。本人・家族、実測・過去・予定を区別する。投稿日時を測定日時として補わず、単位・検体条件・正常異常・基準値を推測しない。記載の無い測定は含めない
 - "patient_context": 患者情報の配列 [{"category": "demographics|diagnoses|history|course|adl|living|care_level|care_services|care_team|contacts|allergies|devices|preferences|medication_management|nutrition|cognition|adverse_events|observations|followup", "text": "引用に含まれる原文値", "evidence": "対象本文の一意な完全一致引用", "subject": "patient|family|other"}] — 基本情報・診断・既往/経過・ADL・生活環境・介護度/サービス/担当者・連絡先・アレルギー・機器・意向・服薬管理・栄養・認知を見出しのない文章からも抽出する。textはevidenceに含まれる原文のまま、否定・過去・条件を省略して現在の状態を推測しない。参考コンテキストだけの情報は含めない。対象者を取り違えず、引用できない項目は省略する
-- patient_context の各項目に任意の "details": [{"key": "drug_name|medication_kind|prescriber|actual_dose|actual_frequency|residual_quantity|missed_doses|symptom|onset|response|outcome|certainty|observation_name|value|unit|measured_on|condition|swallowing|self_management|supporter|support_method|followup|assignee|due_text|observed_on|last_confirmed_on|confirmed_by|storage_status|storage_place|medication_manager|inquiry_result|interaction_check", "value": "原文文字列", "evidence": "その値を含む一意な完全一致引用"}] を追加できる。各detailの引用は親項目のevidence内で完結し、valueもdetail引用の原文に含まれること。薬剤名・処方元・実際の服用量/頻度・他院/OTC/サプリ・残薬/飲み忘れ、被疑薬・副作用症状/発生日/対応/転帰、測定名/値/単位/日時/条件、嚥下/自己管理/支援者/方法/変化、次回確認/担当/期限、薬の保管状況/保管場所/管理者、疑義照会・処方提案の結果、重複・相互作用の確認を拾う。照会の結果や確認は予定・否定・未確認の表現を原文のまま残し、実施済み・確定に言い換えない。一包化などの支援方法は support_method に入れる。観測日・最終確認日・確認者・確認状態は明記された原文だけを保存する。確認状態を推測したenumに置換せず、副作用の疑いを確定因果に変えない。欠けた情報は省略する
+- patient_context の各項目に任意の "details": [{"key": "drug_name|medication_kind|prescriber|actual_dose|actual_frequency|residual_quantity|missed_doses|symptom|onset|response|outcome|certainty|observation_name|value|unit|measured_on|condition|swallowing|self_management|supporter|support_method|followup|assignee|due_text|observed_on|last_confirmed_on|confirmed_by|storage_status|storage_place|medication_manager|inquiry_result|interaction_check", "value": "原文文字列", "evidence": "その値を含む一意な完全一致引用"}] を追加できる。各detailの引用は親項目のevidence内で完結し、valueもdetail引用の原文に含まれること。薬剤名・処方元・実際の服用量/頻度・他院/OTC/サプリ・残薬/飲み忘れ、被疑薬・副作用症状/発生日/対応/転帰、測定名/値/単位/日時/条件、嚥下/自己管理/支援者/方法/変化、次回確認/担当/期限、薬の保管状況/保管場所/管理者、疑義照会・処方提案の結果、重複・相互作用の確認を拾う。照会の結果や確認は予定・否定・未確認の表現を原文のまま残し、実施済み・確定に言い換えない。一包化は support_method に必ず残し、服薬カレンダーなど別の支援方法と両方あれば別々のdetailにする。薬を管理する人は medication_manager、薬の保管場所・状況は storage_place・storage_status、照会や処方提案への回答・未回答は inquiry_result に原文のまま残す。meds・events・requestsだけで代用しない。家族が本人の薬を管理することと、家族自身の薬の情報を区別する。観測日・最終確認日・確認者・確認状態は明記された原文だけを保存する。確認状態を推測したenumに置換せず、副作用の疑いを確定因果に変えない。欠けた情報は省略する
 - "summary": この投稿の要点を50字以内で(誰が・何を・次どうするか)
 - "points": この投稿で次に知るべき要点の配列(最大3件、各40字以内 — 依頼・処方変更・異常値・今後の予定を優先)
 - "urgency": "high" または "routine" または "unclear" — 至急・緊急・救急・搬送等の語が無くても、以下の臨床的な重大兆候・イベントがあれば "high": 死亡・看取り・心肺停止・呼吸停止、意識消失/意識がない、転倒後の状態変化、高熱(39°C超)または発熱の持続、SpO2低下、激しい疼痛の増悪、誤嚥・窒息、出血が止まらない等。過去形で済んだ出来事の単なる報告(例:「先月入院していた」)は "routine"。「緊急時は〜」「〜の場合は至急」等の条件・想定の記述や、緊急連絡先・搬送先の確認のような事務的な言及だけの場合も "routine"。判断材料が足りない・矛盾する場合は "unclear"
@@ -213,7 +213,14 @@ JSON:{"patient_context":[{"category":"living","text":"一人暮らしを続け�
 嚥下が難しいため、合成家族が一包化の薬を渡している。支援後の変化は未確認。
 次回は合成看護師が2026年10月9日に残薬を確認する。観測日は2026年10月7日、最終確認日は2026年10月6日。
 >>>
-JSON:{"patient_context":[{"category":"medication_management","text":"他院処方の合成薬Aを朝1錠服用している。残薬は4錠で、飲み忘れは未確認。","evidence":"他院処方の合成薬Aを朝1錠服用している。残薬は4錠で、飲み忘れは未確認。","subject":"patient","details":[{"key":"actual_dose","value":"1錠","evidence":"他院処方の合成薬Aを朝1錠服用している。"},{"key":"residual_quantity","value":"4錠","evidence":"残薬は4錠で、飲み忘れは未確認。"},{"key":"missed_doses","value":"未確認","evidence":"残薬は4錠で、飲み忘れは未確認。"}]},{"category":"adverse_events","text":"合成薬Aとの関連は疑いのままで、発疹も未確認。","evidence":"合成薬Aとの関連は疑いのままで、発疹も未確認。","subject":"patient","details":[{"key":"certainty","value":"疑いのまま","evidence":"合成薬Aとの関連は疑いのままで、発疹も未確認。"}]},{"category":"medication_management","text":"嚥下が難しいため、合成家族が一包化の薬を渡している。支援後の変化は未確認。","evidence":"嚥下が難しいため、合成家族が一包化の薬を渡している。支援後の変化は未確認。","subject":"patient","details":[{"key":"supporter","value":"合成家族","evidence":"嚥下が難しいため、合成家族が一包化の薬を渡している。"},{"key":"outcome","value":"未確認","evidence":"支援後の変化は未確認。"}]},{"category":"followup","text":"次回は合成看護師が2026年10月9日に残薬を確認する。観測日は2026年10月7日、最終確認日は2026年10月6日。","evidence":"次回は合成看護師が2026年10月9日に残薬を確認する。観測日は2026年10月7日、最終確認日は2026年10月6日。","subject":"patient","details":[{"key":"assignee","value":"合成看護師","evidence":"次回は合成看護師が2026年10月9日に残薬を確認する。"},{"key":"due_text","value":"2026年10月9日","evidence":"次回は合成看護師が2026年10月9日に残薬を確認する。"},{"key":"last_confirmed_on","value":"2026年10月6日","evidence":"観測日は2026年10月7日、最終確認日は2026年10月6日。"}]}],"labs":[{"name":"Cr","value":1.2,"unit":"mg/dL","subject":"patient","status":"past","measured_on":"2026年10月7日","condition":"空腹時採血","evidence":"前回の2026年10月7日の空腹時採血はCr 1.2mg/dL。"}],"summary":"服薬実態・疑いの有害事象・前回採血・服薬支援・次回確認を原文付きで記録","urgency":"routine"}
+JSON:{"patient_context":[{"category":"medication_management","text":"他院処方の合成薬Aを朝1錠服用している。残薬は4錠で、飲み忘れは未確認。","evidence":"他院処方の合成薬Aを朝1錠服用している。残薬は4錠で、飲み忘れは未確認。","subject":"patient","details":[{"key":"actual_dose","value":"1錠","evidence":"他院処方の合成薬Aを朝1錠服用している。"},{"key":"residual_quantity","value":"4錠","evidence":"残薬は4錠で、飲み忘れは未確認。"},{"key":"missed_doses","value":"未確認","evidence":"残薬は4錠で、飲み忘れは未確認。"}]},{"category":"adverse_events","text":"合成薬Aとの関連は疑いのままで、発疹も未確認。","evidence":"合成薬Aとの関連は疑いのままで、発疹も未確認。","subject":"patient","details":[{"key":"certainty","value":"疑いのまま","evidence":"合成薬Aとの関連は疑いのままで、発疹も未確認。"}]},{"category":"medication_management","text":"嚥下が難しいため、合成家族が一包化の薬を渡している。支援後の変化は未確認。","evidence":"嚥下が難しいため、合成家族が一包化の薬を渡している。支援後の変化は未確認。","subject":"patient","details":[{"key":"supporter","value":"合成家族","evidence":"嚥下が難しいため、合成家族が一包化の薬を渡している。"},{"key":"support_method","value":"一包化","evidence":"嚥下が難しいため、合成家族が一包化の薬を渡している。"},{"key":"outcome","value":"未確認","evidence":"支援後の変化は未確認。"}]},{"category":"followup","text":"次回は合成看護師が2026年10月9日に残薬を確認する。観測日は2026年10月7日、最終確認日は2026年10月6日。","evidence":"次回は合成看護師が2026年10月9日に残薬を確認する。観測日は2026年10月7日、最終確認日は2026年10月6日。","subject":"patient","details":[{"key":"assignee","value":"合成看護師","evidence":"次回は合成看護師が2026年10月9日に残薬を確認する。"},{"key":"due_text","value":"2026年10月9日","evidence":"次回は合成看護師が2026年10月9日に残薬を確認する。"},{"key":"last_confirmed_on","value":"2026年10月6日","evidence":"観測日は2026年10月7日、最終確認日は2026年10月6日。"}]}],"labs":[{"name":"Cr","value":1.2,"unit":"mg/dL","subject":"patient","status":"past","measured_on":"2026年10月7日","condition":"空腹時採血","evidence":"前回の2026年10月7日の空腹時採血はCr 1.2mg/dL。"}],"summary":"服薬実態・疑いの有害事象・前回採血・服薬支援・次回確認を原文付きで記録","urgency":"routine"}
+
+例9:
+対象本文:
+<<<
+服薬管理者は架空支援員です。合成薬Qの増量を処方提案、返事は保留と届きました。
+>>>
+JSON:{"meds":[{"name":"合成薬Q","action":"increase","status":"planned","subject":"patient","negated":false,"evidence":"合成薬Qの増量を処方提案、返事は保留と届きました"}],"events":["prescription_inquiry"],"patient_context":[{"category":"medication_management","text":"服薬管理者は架空支援員です","evidence":"服薬管理者は架空支援員です","subject":"patient","details":[{"key":"medication_manager","value":"架空支援員","evidence":"服薬管理者は架空支援員です"}]},{"category":"medication_management","text":"合成薬Qの増量を処方提案、返事は保留と届きました","evidence":"合成薬Qの増量を処方提案、返事は保留と届きました","subject":"patient","details":[{"key":"inquiry_result","value":"返事は保留","evidence":"合成薬Qの増量を処方提案、返事は保留と届きました"}]}],"urgency":"routine"}
 
 """
 
@@ -763,11 +770,9 @@ def _validate(d: dict, body: str | None = None,
     model's rendering of it. Dropped evidence/items are counted under
     "_evidence_dropped"/"_items_dropped" so the loss stays observable.
 
-    Known limit: enforcement is at the QUOTE level only. An item the
-    model derived from thread context (against instructions) keeps its
-    place in the output with its evidence dropped — legitimate
-    reference resolution ("あの薬" -> the med named in context) is
-    indistinguishable from instruction violation at this layer.
+    A confirmed medication quote must contain its name and agree with
+    its explicit person. Unresolved drug references and missing/unlocated
+    evidence remain unverified candidates under the compatibility contract.
 
     `drops`, when given, collects bounded failure detail for the repair
     pass: {"ev": [rejected quotes], "items": [fields with dropped
@@ -987,6 +992,29 @@ class _Validator:
             if st is None or sj is None or "negated" not in m:
                 item["unverified"] = True
             self.ev(item, m)
+            quote = item.get("evidence")
+            if quote is not None:
+                scope = clinical_values.patient_item_scope(item, self.body, surface=item["name"], default="unknown")
+                wrong_person = sj in _MED_SUBJECTS and scope in _MED_SUBJECTS and scope != sj
+                missing_name = _flat(item["name"]) not in _flat(quote)
+                if missing_name and sj in _MED_SUBJECTS:
+                    span = locate_quote_span(self.body, quote)
+                    # A reference at the quote's start must not mask a later explicit drug owner.
+                    scopes = [extract.patient_source_scope(self.body, span[0] + word.start(),
+                                                           span[0] + word.end(), default="unknown")
+                              for word in re.finditer(r"薬(?!剤師|局)|剤(?!師)|処方", quote)]
+                    if scopes:
+                        wrong_person = any(s in _MED_SUBJECTS and s != sj for s in scopes)
+                if wrong_person:
+                    self.drop_item("meds")
+                    continue
+                if missing_name and re.search(r"同薬|同剤|当該薬|その薬|あの薬|上記", quote):
+                    # Preserve a possible stop/reference, without confirming an unproved identity.
+                    self.miss(item.pop("evidence"))
+                    item["unverified"] = True
+                elif missing_name:
+                    self.drop_item("meds")
+                    continue
             item["normalized"] = clinical_values.medication_surface(item["name"])
             meds.append(item)
         out["meds"] = meds
@@ -1683,9 +1711,11 @@ def _current_cue(body, surface):
 
 def _completeness_issues(v, hints, body):
     """Source-bound missing hints request a reread, never establish clinical facts."""
-    if not isinstance(v, dict) or not isinstance(hints, dict):
+    if not isinstance(v, dict):
         return []
-    issues = []
+    issues = _pharmacy_gaps(v, body)
+    if not isinstance(hints, dict):
+        return issues
 
     for key, value in extract.patient_vitals(hints.get("vitals") or {}, body).items():
         if key not in (v.get("vitals") or {}) and any(
@@ -1710,6 +1740,68 @@ def _completeness_issues(v, hints, body):
                 and not any(_request_covers(item, request) for item in v.get("requests") or [])):
             issues.append("本文の確認・連絡・質問候補が未収載です。原文で再確認してください")
             break
+    return issues
+
+
+_PHARMACY_DETAIL_CUES = {
+    "support_method": re.compile(r"一包化|分包"),
+    "storage_status": re.compile(r"(?:冷蔵|室温|冷凍)(?:で)?保管|薬(?:剤)?の保管状況"),
+    "storage_place": re.compile(r"冷蔵庫|(?:服薬|薬)カレンダー|配薬ボックス|お薬箱|薬(?:剤)?の(?:保管場所|置き場)"),
+    "medication_manager": re.compile(r"(?:薬(?:剤)?の管理|服薬管理)[^。！？!?;；\n]{0,60}(?:が|担当|行)"),
+    "inquiry_result": _EVENT_CUES["prescription_inquiry"],
+    "interaction_check": re.compile(r"相互作用|重複(?:投薬|処方)"),
+}
+
+
+def _pharmacy_gaps(v, body):
+    """Ask once about missing source-local pharmacy details, without creating any facts."""
+    issues = []
+    for sentence in re.finditer(r"[^。！？!?;；\n]+", body):
+        text = sentence[0]
+        if not re.search(r"薬(?!剤師|局)|処方|内服|服薬|インスリン|一包化|分包", text):
+            continue
+        if (re.search(r"(?:薬局|病院|事業所)の(?:冷蔵庫|棚|保管庫)", text)
+                and not re.search(r"本人|患者|利用者", text)):
+            continue
+        for key, pattern in _PHARMACY_DETAIL_CUES.items():
+            for cue in pattern.finditer(text):
+                if extract.patient_source_scope(body, sentence.start() + cue.start(),
+                                                sentence.start() + cue.end()) in ("family", "other", "unknown"):
+                    continue
+                if key == "storage_place" and not re.search(r"保管|置き|置い", text):
+                    continue
+                if key == "support_method" and re.match(
+                        r"(?:を|は|が|も)?\s*(?:検討|希望|予定|不要|なし|され?ていません|していません)",
+                        text[cue.end():]):
+                    continue
+                if key == "interaction_check" and not re.search(r"確認|チェック|照合|点検|調べ", text):
+                    continue
+                if key == "inquiry_result":
+                    if "prescription_inquiry" not in (v.get("events") or []):
+                        issues.append("本文の薬剤の疑義照会・処方提案がeventsに未収載です。原文で再確認してください")
+                    if not re.search(r"回答|返答|了承|了解|承認|見送|変更なし|結果|未確認", text):
+                        continue
+                covered = False
+                for item in v.get("patient_context") or []:
+                    if (not isinstance(item, dict) or item.get("category") != "medication_management"
+                            or item.get("subject") != "patient"):
+                        continue
+                    for detail in item.get("details") or []:
+                        if not isinstance(detail, dict) or detail.get("key") != key:
+                            continue
+                        span = locate_quote_span(body, detail.get("evidence"))
+                        if span is None or not (span[0] < sentence.end() and sentence.start() < span[1]):
+                            continue
+                        # A calendar is another support method; it does not cover omitted packaging.
+                        if key == "support_method" and cue[0] not in str(detail.get("value", "")):
+                            continue
+                        covered = True
+                        break
+                    if covered:
+                        break
+                if not covered:
+                    issues.append(f"本文の服薬管理候補「{cue[0]}」の詳細 {key} が未収載です。原文で再確認してください")
+                break
     return issues
 
 
@@ -1741,8 +1833,8 @@ _RX_NOT_CURRENT = (_RX_VERB +
 _RX_UNDECIDED = _RX_VERB + r"(?:予定|検討)"
 # A requested, consulted or not yet done change is checked as planned, never as done:
 # 開始してください, 追加を相談, 開始します
-_RX_PLANNED = (_RX_VERB +
-               r"(?:ください|下さい|ほしい|欲しい|お願い|相談|依頼|提案|ます(?!た|か))")
+_RX_PLANNED = (_RX_VERB + r"(?:(?:主治医|処方医|医師|薬剤師|看護師)(?:へ|に)\s*)?"
+               r"(?:ください|下さい|ほしい|欲しい|お願い|相談|依頼|(?:処方)?提案|ます(?!た|か))")
 # 明日から架空薬Aを開始: a future time in the change's own clause
 _RX_FUTURE = r"明日|明後日|来週|来月|今後|次回|後日|翌日|今度|週明け"
 # 明日の退院に備えて本日開始しました: a nearer current time decides
@@ -2371,6 +2463,24 @@ def _request_covers(item, hint):
     return stem in quote and sum(s in quote for s in _REQUEST_STEMS.values()) == 1
 
 
+def _neutral_med_grounded(med, body):
+    """A new current neutral medication needs its own name, dose and patient quote."""
+    quote = med.get("evidence")
+    if (not isinstance(quote, str) or locate_quote_span(body, quote) is None
+            or clinical_values.patient_item_scope(med, body, surface=med.get("name")) != "patient"
+            or not _current_cue(body, quote)
+            or not _rx_bounded(_flat(med["name"]), _flat(quote))):
+        return False
+    if med.get("dose") is not None and (
+            not isinstance(med["dose"], str) or not any(
+                match[1] == med["name"] and match[2] + match[3] == med["dose"].replace(" ", "")
+                and not re.match(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９/／]", quote[match.end():])
+                for match in extract._MED_TOKEN.finditer(quote))):
+        return False
+    return not (isinstance(med.get("freq"), str) and med["freq"] and not re.search(
+        r"(?<![0-9])" + re.escape(med["freq"]) + r"(?![0-9])", quote))
+
+
 def _quality_improves(candidate, prior, body, hints=None):
     """Optional gains must retain prior assertions and have their own source evidence.
 
@@ -2401,15 +2511,7 @@ def _quality_improves(candidate, prior, body, hints=None):
                 if not med_is_patient_current(med) or med.get("action") not in (None, "none", "no_change"):
                     continue
                 quote = med.get("evidence")
-                if (not isinstance(quote, str) or locate_quote_span(body, quote) is None
-                        or clinical_values.patient_item_scope(med, body, surface=med.get("name")) != "patient"
-                        or not _current_cue(body, quote)
-                        or not isinstance(med.get("dose"), str)
-                        or not any(match[1] == med.get("name") and match[2] + match[3] == med["dose"].replace(" ", "")
-                                   and not re.match(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９/／]", quote[match.end():])
-                                   for match in extract._MED_TOKEN.finditer(quote))
-                        or (isinstance(med.get("freq"), str) and med["freq"] and not re.search(
-                            r"(?<![0-9])" + re.escape(med["freq"]) + r"(?![0-9])", quote))):
+                if not _neutral_med_grounded(med, body):
                     continue
                 quotes.add((next(iter(_facts({"meds": [med]}, split_conditions=True))), quote))
             return quotes
@@ -2428,6 +2530,10 @@ def _quality_improves(candidate, prior, body, hints=None):
         for item in candidate.get(key) or []:
             if isinstance(item, dict) and not _facts({key: [item]}, split_conditions=True) <= protected:
                 if item.get("unverified") or locate_quote_span(body, item.get("evidence")) is None:
+                    return False
+                if (key == "meds" and med_is_patient_current(item)
+                        and item.get("action") in (None, "none", "no_change")
+                        and not _neutral_med_grounded(item, body)):
                     return False
                 if key == "meds" and item.get("action") in _RX_CONFLICT and (
                         item.get("name") not in action_names
@@ -2558,6 +2664,8 @@ def llm_extract(body: str, *, context: str | None = None,
 
     def split_piece(key, piece, start, remaining):
         if len(piece) <= 1:
+            if meta_out is not None:
+                meta_out.update(failed_chunk=str(key), failure_reason="split_exhausted")
             return None
         smaller = max(1, len(piece) // 2)
         splits[key] = smaller
@@ -2701,6 +2809,9 @@ def llm_extract(body: str, *, context: str | None = None,
                     # are recorded, within the one repair already spent
                     quality_note("unresolved")
         if v is None:
+            if meta_out is not None:
+                meta_out.update(failed_chunk=str(key), failure_reason=(
+                    "response_or_transport" if d is None else "validation"))
             return None
         return finish_piece(key, v, quality_record)
 
@@ -2722,6 +2833,11 @@ def llm_extract(body: str, *, context: str | None = None,
                 mandatory_calls(j, later) for j, later in enumerate(chunks) if j > i))
             offset += len(piece)
             if result is None or result is _DEFERRED:
+                if meta_out is not None:
+                    meta_out.update(_integrity_summary(notes))
+                    meta_out["chunk_size"] = min(sizes) if sizes else chunk_size
+                    meta_out.setdefault("failed_chunk", str(i))
+                    meta_out.setdefault("failure_reason", "deferred" if result is _DEFERRED else "inference")
                 return result
             outs.extend(result)
         if not outs:

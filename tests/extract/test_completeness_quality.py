@@ -321,8 +321,9 @@ def test_same_name_other_person_or_past_fact_cannot_hide_a_current_patient_omiss
     assert len(calls) == 2
     assert extract_llm._facts(extract_llm._validate(first, body)) <= extract_llm._facts(result)
     if subject == "patient" and status == "current":
-        # Only the owned evidence improved: predicate count is unchanged.
-        assert extract_llm._facts(result) == extract_llm._facts(extract_llm._validate(first, body))
+        # The invalid family-as-patient prior is rejected before the repair.
+        assert not extract_llm._validate(first, body).get("meds")
+        assert len(result["meds"]) == 1
     else:
         assert len(result["meds"]) == 2
     assert any(med["evidence"] == current and med["subject"] == "patient"
@@ -341,8 +342,10 @@ def test_equal_predicate_cannot_gain_patient_evidence_from_a_different_drug_dose
     previous = {"name": "架空薬A", "dose": "5mg", "action": "none", "negated": False,
                 "subject": "patient", "status": "current", "evidence": earlier}
     candidate = {**previous, "evidence": current}
-    prior = extract_llm._validate({**OBSERVATIONS, "meds": [previous]}, body)
-    repaired = extract_llm._validate({**OBSERVATIONS, "meds": [previous, candidate]}, body)
+    # Exercise the repair guard on legacy stored output too; the current
+    # validator already rejects the mislabeled family quote.
+    prior = {**extract_llm._validate(OBSERVATIONS, body), "meds": [previous]}
+    repaired = {**prior, "meds": [previous, candidate]}
     assert extract_llm._facts(prior) == extract_llm._facts(repaired)
     assert not extract_llm._quality_improves(repaired, prior, body)
 
@@ -985,7 +988,8 @@ def test_a_shorter_drug_name_does_not_cover_a_longer_one_containing_it(a_word, a
 
 
 def _rx_gap(text, meds):
-    return extract_llm._rx_action_gaps(extract_llm._validate({"meds": meds}, text), hints(text), text)
+    # Legacy output can reach this guard without the new validator's scope rejection.
+    return extract_llm._rx_action_gaps({"meds": meds}, hints(text), text)
 
 
 def _med(name, text, action="start", status="current", dose=None):
