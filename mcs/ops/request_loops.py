@@ -6,6 +6,14 @@ from types import SimpleNamespace
 
 from mcs_requests import positive, valid_hash
 
+def latest_policy(db):
+    """Content of the newest semantic_policy artifact, or None."""
+    row = db.execute(
+        "SELECT content FROM artifacts WHERE kind='semantic_policy' "
+        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    return row["content"] if row else None
+
+
 _LOOP_REF_FIELDS = {
     "artifact_id", "source_fingerprint", "policy_fingerprint",
     "match_confirmed",
@@ -123,13 +131,9 @@ def current_candidate(db, project_id: int, artifact_id: int,
     if candidate_fingerprint != fingerprint or meta.get("invalidated"):
         raise ValueError("loop_candidate_stale")
 
-    policy_row = db.execute(
-        "SELECT content FROM artifacts WHERE kind='semantic_policy' "
-        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
-    if policy_row is None or not isinstance(policy_row["content"], str) \
-            or not valid_hash(policy_row["content"]):
+    policy = latest_policy(db)
+    if not isinstance(policy, str) or not valid_hash(policy):
         raise ValueError("loop_policy_missing")
-    policy = policy_row["content"]
     if meta.get("policy_fingerprint") != policy:
         raise ValueError("loop_policy_stale")
     return {"artifact_id": row["artifact_id"],

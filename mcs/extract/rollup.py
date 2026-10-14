@@ -13,7 +13,7 @@ replaced, not stacked):
 Deterministic — no LLM needed for the aggregation itself. A 'summary' line
 is taken from the newest extract_llm artifact when present.
 
-Usage: python3 rollup.py [--project <id>] [--all]
+Usage: python3 rollup.py [--project <id>]   (--all is accepted; same as no --project)
 Called by run_check for patients that received new messages this tick.
 """
 import argparse
@@ -27,7 +27,7 @@ import sys
 import time
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every module dir (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
@@ -799,7 +799,8 @@ def rebuild_many(ledger, project_ids, dirty_only: bool = False,
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", type=int, action="append", default=[])
-    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--all", action="store_true",
+                    help="compatibility only; without --project every patient is rebuilt")
     args = ap.parse_args()
     # same single-writer lock as the scheduled tick
     lock_fd = acquire_run_lock()

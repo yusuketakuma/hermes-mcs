@@ -505,11 +505,6 @@ def extract_message(body: str, posted_at: str) -> dict:
     year = None
     posted = None
     try:
-        # Python 3.10 needs an explicit UTC offset. A date-only "...Z"
-        # must stay invalid rather than acquiring a fabricated time.
-        if (isinstance(posted_at, str) and posted_at.endswith("Z")
-                and re.search(r"[T ]\d", posted_at)):
-            posted_at = posted_at[:-1] + "+00:00"
         posted = datetime.fromisoformat(posted_at)
         year = posted.year
     except (ValueError, TypeError):
@@ -770,7 +765,8 @@ def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--all", action="store_true",
+                    help="compatibility only; without --project every patient is processed")
     ap.add_argument("--project", type=int, default=0)
     ap.add_argument("--stats", action="store_true")
     ap.add_argument("--limit", type=int, default=0)

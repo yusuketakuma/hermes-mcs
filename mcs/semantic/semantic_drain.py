@@ -1,6 +1,7 @@
-"""Semantic drain engine (spec §14, §18): the durable-job worker —
-claiming jobs, staged extraction/summary/audit, Jev budget + circuit
-wiring, plan recording, and notice emission. Functions reach facade
+"""Semantic drain engine: the durable-job worker (spec §14, §18).
+
+Claims jobs, runs staged extraction/summary/audit, wires the Jev budget
+and circuit, records plans, and emits notices. Functions reach facade
 patch points (semantic.llm_chat / audit_claims / _process_job) through
 the module object so monkeypatching keeps working."""
 from __future__ import annotations
