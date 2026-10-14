@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "状態ファイルの場所がフォルダのときに読取りの後始末を修正",
+  "summary": "監視・バックアップ確認・更新処理が読む状態ファイルの場所がフォルダになっていても、読取り失敗として扱うだけで、開いたファイルを閉じ忘れません。常駐処理で開けるファイル数が減り続けることを防ぎます。",
+  "upgrade": "追加操作は不要です。状態ファイルの場所にフォルダがある場合は、従来どおり読めない記録として報告されます。",
+  "details": [
+    "safe_io.read_regular_nofollowとmcs_update._read_control_jsonで、os.fdopenが失敗したときにfdを閉じる。"
+  ],
+  "refs": [
+    "mcs/core/safe_io.py",
+    "mcs/ops/mcs_update.py",
+    "tests/core/test_safe_io_fd_cleanup.py",
+    "tests/ops/test_update_control_file_fd_cleanup.py"
+  ]
+}

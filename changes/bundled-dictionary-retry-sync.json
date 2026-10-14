@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "同梱辞書の作成を再実行したときの保存確認を修正",
+  "summary": "辞書ファイルの公開後に保存先の同期を確認できなかった場合、同じ作成をもう一度実行すると、同期を確認できるまで成功を返しません。所有者の読取りを外す特殊なumaskでも、新しい保存先フォルダの作成に失敗しなくなりました。",
+  "upgrade": "追加操作は不要です。以前に同期未確認と表示された辞書は、install-bundledを再実行すると同期を確認します。作成済み辞書の内容と設定は変更しません。",
+  "details": [
+    "install-bundledのpresent判定の前に保存先ディレクトリをfsyncし、失敗時はoutput_published_sync_unconfirmed（written=true）を返す。",
+    "新規作成した各ディレクトリをumaskによらず0700にしてから親ディレクトリを同期する。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_drug.py",
+    "tests/ops/test_private_output_durability.py"
+  ]
+}

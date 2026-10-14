@@ -217,7 +217,13 @@ def _valid_state(state):
 def _read_control_json(path):
     """Read a regular local control file without following links or waiting on FIFOs."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+    try:
+        # fdopen raises (e.g. IsADirectoryError) without closing ``fd``
+        handle = os.fdopen(fd, "r", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+    with handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             raise ValueError("control_file_not_regular")
         return json.load(handle)

@@ -256,7 +256,7 @@ def test_observer_components_share_a_read_view_during_writes(tmp_path, monkeypat
     writer.commit()
     readers = []
 
-    def components(c, cfg, days, *, now, checkpoint, payload_checkpoint):
+    def components(c, cfg, days, *, now, checkpoint, payload_checkpoint, **_):
         readers.append(c)
         assert c.in_transaction
         before = c.execute("SELECT COUNT(*) FROM witness").fetchone()[0]
@@ -286,7 +286,7 @@ def test_observer_interrupts_expensive_sql_and_closes_connection(tmp_path, monke
     monkeypatch.setattr(semantic_observe.time, "monotonic", lambda: next(ticks))
     readers = []
 
-    def expensive(c, cfg, days, *, now, checkpoint, payload_checkpoint):
+    def expensive(c, cfg, days, *, now, checkpoint, payload_checkpoint, **_):
         readers.append(c)
         c.execute("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL "
                   "SELECT x+1 FROM n WHERE x<100000000) SELECT SUM(x) FROM n").fetchone()
@@ -316,7 +316,7 @@ def test_sqlite_error_without_errorcode_stays_unavailable_and_closes_reader(
     sqlite3.connect(path).close()
     readers = []
 
-    def invalid(c, cfg, days, *, now, checkpoint, payload_checkpoint):
+    def invalid(c, cfg, days, *, now, checkpoint, payload_checkpoint, **_):
         readers.append(c)
         if failure == "binding":
             c.execute("SELECT ?", ({"synthetic": "unsupported binding"},))
@@ -396,3 +396,84 @@ def test_observation_failure_is_not_a_successful_empty_report(monkeypatch, capsy
         "status": "unavailable", "reason": "observation_database_unavailable"})
     assert semantic_observe.main() == 2
     assert "unavailable" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("limit", ["deadline", "size"])
+def test_quality_over_budget_keeps_other_components(tmp_path, monkeypatch, limit):
+    path = str(tmp_path / "synthetic.db")
+    db = Ledger(path)
+    try:
+        db.save_messages([_message(1), _message(2), _message(3)])
+    finally:
+        db.close()
+    import semantic_metrics
+    clock = [0]
+    real = semantic_metrics.thread_bundle
+
+    def exhausting(*a, **kw):
+        if limit == "deadline":
+            clock[0] = 100
+        else:
+            monkeypatch.setattr(semantic_observe, "OBSERVE_MAX_ITEMS", 0)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(semantic_observe.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(semantic_metrics, "thread_bundle", exhausting)
+    out = semantic_observe.observe(path, cfg=_cfg())
+    reason = f"observation_{'deadline' if limit == 'deadline' else 'size'}_exceeded"
+    assert out["current_quality"] == {"available": False, "reason": reason}
+    assert out["observation"]["status"] == "partial"
+    assert out["observation"]["unavailable_components"] == ["current_quality"]
+    assert "status" not in out and "jobs" in out and "pipeline_progress" in out
+
+
+@pytest.mark.parametrize("argv", [["--json"], []])
+def test_partial_observation_exits_two_after_printing_parts(tmp_path, monkeypatch,
+                                                           capsys, argv):
+    path = str(tmp_path / "synthetic.db")
+    Ledger(path).close()
+    real = semantic_observe.observe
+    monkeypatch.setattr(semantic_observe, "load_config", _cfg, raising=False)
+    monkeypatch.setattr(semantic_observe.sys, "argv", ["semantic_observe.py", *argv])
+
+    def partial(**kw):
+        out = real(path, cfg=_cfg(), days=kw["days"])
+        out["current_quality"] = {"available": False,
+                                  "reason": "observation_size_exceeded"}
+        out["observation"].update(status="partial",
+                                  unavailable_components=["current_quality"])
+        return out
+
+    monkeypatch.setattr(semantic_observe, "observe", partial)
+    assert semantic_observe.main() == 2
+    printed = capsys.readouterr().out
+    assert "observation_size_exceeded" in printed
+    assert "jobs" in printed
+
+
+def test_quality_finishing_past_the_deadline_is_not_complete(tmp_path, monkeypatch):
+    path = str(tmp_path / "synthetic.db")
+    db = Ledger(path)
+    try:
+        db.save_messages([_message(1)])
+    finally:
+        db.close()
+    import semantic_metrics
+    clock = [0]
+    real = semantic_metrics._current
+    looked_up = []
+
+    def last_lookup(*a, **kw):
+        result = real(*a, **kw)
+        if a[1] == semantic_metrics.KIND_SUMMARY:
+            clock[0] = 100     # the final summary lookup ends after the deadline
+            looked_up.append(a[1])
+        return result
+
+    monkeypatch.setattr(semantic_observe.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(semantic_metrics, "_current", last_lookup)
+    out = semantic_observe.observe(path, cfg=_cfg())
+    assert looked_up
+    assert out["observation"]["status"] == "partial"
+    assert out["current_quality"] == {"available": False,
+                                      "reason": "observation_deadline_exceeded"}

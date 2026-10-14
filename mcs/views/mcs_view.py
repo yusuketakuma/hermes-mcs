@@ -372,6 +372,10 @@ class View:
         cur = ("a.kind='extract_qc' AND m.project_id=? "
                + current_qc_pred(version=version))
         content = json_or_null("a.content")
+        # A non-array container is one unknown item, whatever its keys.
+        items = (f"CASE WHEN json_type({content},'$.items') IS NULL THEN '[]' "
+                 f"WHEN json_type({content},'$.items')='array' "
+                 f"THEN json_extract({content},'$.items') ELSE '[null]' END")
         base = ("FROM artifacts a JOIN messages m "
                 "ON m.message_id=a.message_id WHERE " + cur)
         summary = dict(self.db.execute(
@@ -391,7 +395,7 @@ class View:
                 f"SELECT COALESCE(json_extract({JSON_OBJECT_SQL},'$.verdict'),'?') v,"
                 " COUNT(*) c FROM artifacts a"
                 " JOIN messages m ON m.message_id=a.message_id,"
-                f" json_each({content},'$.items') je WHERE " + cur +
+                f" json_each({items}) je WHERE " + cur +
                 " GROUP BY v", (pid,)):
             summary.setdefault("verdicts", {})[r["v"]] = r["c"]
         summary.setdefault("verdicts", {})
@@ -419,7 +423,7 @@ class View:
             "m.posted_at_ts,m.sender_name,a.content,a.created_at " + base +
             f" AND (json_extract({content},'$.qc')='unevaluated'"
             f"  OR json_extract({content},'$.coverage.unchecked')>0"
-            f"  OR EXISTS(SELECT 1 FROM json_each({content},'$.items') je"
+            f"  OR EXISTS(SELECT 1 FROM json_each({items}) je"
             f"            WHERE json_extract({JSON_OBJECT_SQL},'$.verdict')"
             "                  IS NOT 'MATCH')"
             f"  OR (json_extract({content},'$.urgency.jev') IS NOT NULL"

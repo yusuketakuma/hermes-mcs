@@ -71,7 +71,9 @@ def test_qc_view_keeps_malformed_items_unknown(tmp_path, invalid_item):
         db.close()
 
 
-@pytest.mark.parametrize("invalid_items", ["synthetic invalid list", 7, True, {"x": "invalid"}])
+@pytest.mark.parametrize("invalid_items", [
+    "synthetic invalid list", 7, True, {"x": "invalid"}, {}, {"a": "bad", "b": "bad"},
+    {"x": {"verdict": "MATCH"}}, {"verdict": "MATCH"}, None])
 def test_qc_view_keeps_invalid_item_container_unknown(tmp_path, invalid_items):
     db = _seeded(tmp_path)
     try:
