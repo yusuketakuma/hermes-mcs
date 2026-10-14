@@ -36,9 +36,11 @@ def test_reap_is_bounded_when_a_descendant_holds_the_pipe(tmp_path, monkeypatch)
     finally:
         with suppress(OSError):
             os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait(timeout=5)
-        proc.stdin.close()
-        proc.stdout.close()
+        try:
+            proc.wait(timeout=5)
+        finally:
+            proc.stdin.close()
+            proc.stdout.close()
 
 
 def test_reap_collects_a_cooperative_child_normally():
