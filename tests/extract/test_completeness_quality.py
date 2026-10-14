@@ -882,7 +882,8 @@ def test_a_rule_change_word_needs_a_matching_med_action_not_just_the_name(monkey
 
 @pytest.mark.parametrize("tail,meds", [
     (STOP + "。", [STOPPED]),
-    ("本人の架空薬Aを減量しました。", [{**STOPPED, "action": "decrease", "evidence": "本人の架空薬Aを減量しました"}]),
+    ("本人の架空薬Aを減量しました。", [{**STOPPED, "action": "decrease", "status": "current",
+                                    "evidence": "本人の架空薬Aを減量しました"}]),
     ("本人の架空薬Aを中止し、架空薬Bを開始しました。", [
         {**STOPPED, "evidence": "架空薬Aを中止し"},
         {**STOPPED, "name": "架空薬B", "action": "start", "status": "current", "evidence": "架空薬Bを開始しました"}]),
@@ -1409,3 +1410,49 @@ def test_a_historical_stop_still_needs_a_past_item():
     text = "本人は以前に架空薬Aを中止しました。"
     assert not _rx_gap(text, [_med("架空薬A", text, action="stop", status="past")])
     assert _rx_gap(text, [_med("架空薬A", text, action="stop")])
+
+
+@pytest.mark.parametrize("word,action", [("増量", "increase"), ("減量", "decrease"), ("変更", "change")])
+def test_a_done_dose_change_is_current(word, action):
+    text = f"本人の架空薬Aを{word}しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action=action)])
+    assert _rx_gap(text, [_med("架空薬A", text, action=action, status="past")])
+
+
+@pytest.mark.parametrize("text", ["本人の架空薬Aは中止していません。", "本人の架空薬Aは中止されていない。"])
+def test_a_progressive_or_passive_denial_asks_nothing_and_grounds_nothing(text):
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none")])
+    assert _rx_gap(text, [_med("架空薬A", text, action="stop", status="past")])
+
+
+def test_ongoing_is_neither_denied_nor_planned():
+    text = "本人は架空薬Aを開始しています。"
+    assert not _rx_gap(text, [_med("架空薬A", text)])
+    assert _rx_gap(text, [_med("架空薬A", text, status="planned")])
+
+
+@pytest.mark.parametrize("text,name", [("本人の架空薬A5mgは変更なしです。", "架空薬A"), ("本人のカロナールは変更なしです。", "カロナール")])
+def test_no_change_grounds_no_extracted_change(text, name):
+    assert not _rx_gap(text, [_med(name, text, action="none")])
+    assert _rx_gap(text, [_med(name, text, action="change")])
+
+
+@pytest.mark.parametrize("text", ["本人のアムロジピン5mg錠を中止しました。", "本人のアムロジピン5mg1錠を中止しました。"])
+def test_a_strength_with_its_form_keeps_the_drug_as_the_object(text):
+    assert not _rx_gap(text, [_med("アムロジピン", text, action="stop", status="past", dose="5mg")])
+    assert _rx_gap(text, [_med("アムロジピン", text, action="none", dose="5mg")])
+
+
+@pytest.mark.parametrize("text,name", [("本人の降圧薬アムロジピンを中止しました。", "アムロジピン"),
+                                       ("本人は抗菌薬セフトリアキソンを開始しました。", "セフトリアキソン")])
+def test_a_class_label_before_the_product_keeps_its_name(text, name):
+    action, status = ("stop", "past") if "中止" in text else ("start", "current")
+    assert not _rx_gap(text, [_med(name, text, action=action, status=status)])
+
+
+@pytest.mark.parametrize("text,name,action,status", [
+    ("本人の降圧薬アムロジピン5mgを中止しました。", "アムロジピン", "stop", "past"),
+    ("本人の抗菌薬セフトリアキソン5mgを開始しました。", "セフトリアキソン", "start", "current")])
+def test_a_class_labelled_rule_name_yields_to_the_product_name(text, name, action, status):
+    assert not _rx_gap(text, [_med(name, text, action=action, status=status, dose="5mg")])
+    assert _rx_gap(text, [_med(name, text, action="none", dose="5mg")])
