@@ -1271,3 +1271,50 @@ def test_each_listed_drug_keeps_its_own_owner():
 def test_an_elliptical_follow_up_change_carries_the_drug(text):
     assert _rx_gap(text, [_med("架空薬A", text)])
     assert not _rx_gap(text, [_med("架空薬A", text), _med("架空薬A", text, action="stop", status="past")])
+
+
+@pytest.mark.parametrize("text,source,other", [("本人の架空薬Aを変更しました。", "change", "increase"),
+                                               ("本人の架空薬Aを増量しました。", "increase", "change"),
+                                               ("本人の架空薬Aを減量しました。", "decrease", "change")])
+def test_a_change_is_met_by_its_own_direction_only(text, source, other):
+    assert not _rx_gap(text, [_med("架空薬A", text, action=source)])
+    assert _rx_gap(text, [_med("架空薬A", text, action=other)])
+
+
+@pytest.mark.parametrize("text", ["本人の中止薬を確認しました。", "本人の開始薬は架空薬Aです。", "本人の追加薬はありません。"])
+def test_a_change_word_inside_a_noun_is_no_change(text):
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none")] if "架空薬A" in text else [])
+
+
+def test_a_shorter_name_cannot_stand_for_an_unnamed_longer_drug():
+    text = "本人の架空薬AAを開始しました。"
+    assert _rx_gap(text, [_med("架空薬A", text)])
+
+
+def test_a_nearer_current_time_outweighs_an_earlier_future_word():
+    text = "明日の退院に備えて本日架空薬Aを開始しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text)])
+    assert _rx_gap(text, [_med("架空薬A", text, status="planned")])
+
+
+@pytest.mark.parametrize("text,fragment", [("本人のカロナールを中止しました。", "ロナール"),
+                                           ("本人のカロナールAAを中止しました。", "カロナールA")])
+def test_an_unhinted_brand_named_only_by_a_fragment_keeps_the_gap(text, fragment):
+    assert not hints(PREFIX + text).get("rx_actions")
+    assert _rx_gap(text, [_med(fragment, text, action="stop", status="past")])
+    full = text[3:text.index("を")]
+    assert not _rx_gap(text, [_med(full, text, action="stop", status="past")])
+
+
+@pytest.mark.parametrize("text,fragment,full", [("本人のカロナールを中止しました。", "ロナール", "カロナール"),
+                                                ("本人の架空薬AAを中止しました。", "架空薬A", "架空薬AA")])
+def test_a_fragment_kept_beside_the_right_name_stays_unresolved(text, fragment, full):
+    right = _med(full, text, action="stop", status="past")
+    assert not _rx_gap(text, [right])
+    assert _rx_gap(text, [_med(fragment, text, action="stop", status="past"), right])
+
+
+def test_two_real_names_and_a_dose_glued_name_stay_valid():
+    text = "本人の架空薬A5mgと架空薬AAを中止しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action="stop", status="past", dose="5mg"),
+                              _med("架空薬AA", text, action="stop", status="past")])
