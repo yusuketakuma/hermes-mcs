@@ -33,9 +33,11 @@ from mcs_queries import (CHANGE_ACTIONS, DAY_S, EXTRACT_FEEDBACK_KIND,
                          med_is_patient_current, med_period_artifacts,
                          transition_cooccurrences, thread_reply_pairs)
 from project_metadata_view import get_project_metadata
-from drug_map import current_refs, _progress as drug_map_progress
+from drug_map import (current_refs, _current_refs_with_progress,
+                      _progress as drug_map_progress)
 import structured_view
 DEFINITION_VERSION = "2026-10-06"
+_DEFAULT_CURRENT_REFS = current_refs
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
 # 100 max, time buckets 120 — row-count caps bound the response size
@@ -521,7 +523,9 @@ def _med_candidate_breakdown(db, msgs):
     total = 0
     progress = drug_map_progress(db)
     for _pid, mid, _ts, meds in msgs:
-        refs = {ref["i"]: ref for ref in current_refs(db, mid)}
+        rows = (_current_refs_with_progress(db, mid, progress)
+                if current_refs is _DEFAULT_CURRENT_REFS else current_refs(db, mid))
+        refs = {ref["i"]: ref for ref in rows}
         for i, med in enumerate(meds):
             if not med_is_patient_current(med):
                 continue

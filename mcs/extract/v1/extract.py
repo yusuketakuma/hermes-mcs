@@ -313,7 +313,7 @@ def patient_vitals(values, body, *, patient_name=None):
                 if values[field] == actual[field]:
                     kept[field] = actual[field]
     # Partial LLM blood pressures still need their own label, side and patient span.
-    from extract_llm import _bp_side, _nearest_vital_label, _vitals_guard
+    from clinical_values import _bp_side, _nearest_vital_label, _vitals_guard
     partial = {key: values[key] for key in ("sbp", "dbp")
                if key not in kept and type(values.get(key)) in (int, float)}
     grounded = _vitals_guard(body, partial)
@@ -329,7 +329,7 @@ def patient_vitals(values, body, *, patient_name=None):
             continue
         if side in partial and grounded.get(side) == partial[side] == float(match[0].replace("．", ".")):
             kept[side] = partial[side]
-    from extract_llm import _bp_pair_unproven
+    from clinical_values import _bp_pair_unproven
     if "sbp" in kept and "dbp" in kept and _bp_pair_unproven(
             body, kept["sbp"], kept["dbp"],
             keep=lambda s, e: patient_source_scope(

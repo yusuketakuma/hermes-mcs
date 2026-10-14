@@ -352,7 +352,8 @@ def test_piece_hints_and_repair_hints_cannot_include_sibling_details(monkeypatch
         # Each supplied rule/context field belongs to this target piece only.
         blocks = [part.split(extract_llm._HINT_TAIL, 1)[0]
                   for part in prompt.split(extract_llm._HINT_HEAD)[1:]]
-        assert len(blocks) == (0 if extract_llm._REPAIR_HEAD in prompt else 1)
+        # Original and repair prompts each carry one target-only rule block.
+        assert len(blocks) == 1
         assert all(piece in block and other not in block for block in blocks)
         if piece not in repaired:
             repaired.add(piece)
@@ -394,7 +395,10 @@ def test_rule_hints_are_included_once_and_only_for_the_target_piece(monkeypatch,
     monkeypatch.setattr(extract_llm, "_rule_hints", rules)
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
     assert extract_llm.llm_extract(body, hints=rules({"body_text": body})) is not None
-    assert len(seen) > 1 if dense else len(seen) == 1
+    pieces = extract_llm.plan_chunks(body)
+    # The empty first candidate omits a medication in each piece:
+    # exactly one optional repair follows each original inference.
+    assert len(seen) == 2 * len(pieces)
     for prompt in seen:
         piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
         blocks = prompt.split(extract_llm._HINT_HEAD)[1:]

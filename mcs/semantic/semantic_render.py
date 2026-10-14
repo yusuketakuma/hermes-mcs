@@ -346,7 +346,7 @@ def _emit_degraded(ledger, scfg: dict) -> int:
     Each (root, fingerprint) pair dedupes via delivery_key."""
     import semantic
     cutoff = time.time() - scfg["delayed_notice_seconds"]
-    sent = 0
+    enqueued = 0
     # Only events still undelivered qualify — a base notification that
     # already reached Discord (accepted) or was dropped (suppressed)
     # must never get an extra "新着取得" degraded notice (§19.3). A
@@ -396,5 +396,5 @@ def _emit_degraded(ledger, scfg: dict) -> int:
                 "target_message_ids": arrivals,
                 "text": render_degraded(ledger, pid),
                 "policy_version": semantic.POLICY_VERSION})
-            sent += 1
-    return sent
+            enqueued += 1
+    return enqueued

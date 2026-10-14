@@ -52,8 +52,7 @@ STAGES = ("s0_prep", "s1_extract", "s2_fact_audit", "s3_repair",
 def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
                  stage: str, status: str, tx: bool = False,
                  **detail) -> None:
-    """One durable stage receipt. Fail-open by contract of the caller —
-    a receipt write error must never abort the pipeline itself.
+    """One durable stage receipt; storage errors propagate to the caller.
     ``tx=True`` inside a caller-held ``with ledger.db`` block (the
     non-tx variant commits immediately and would break the atomic
     publication boundary).
@@ -64,7 +63,7 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
     without consuming attempts, and must not append rows forever."""
     receipt = {"stage": stage, "status": status, **detail}
     # json_extract on a malformed meta row raises; the guarded document
-    # is NULL for such rows, so they are skipped (fail-open).
+    # is NULL for such rows, so malformed historical receipts are skipped.
     meta_doc = json_object_or_null("meta")
     prev = ledger.db.execute(
         "SELECT content FROM artifacts WHERE kind=? AND message_id=? "

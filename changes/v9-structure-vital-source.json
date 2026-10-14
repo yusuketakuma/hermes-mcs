@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "保存済みバイタルの読取からLLM実行層への依存を整理",
+  "summary": "保存済みバイタルの読取とLLM抽出で同じ根拠確認関数を使い、読取時にLLM実行モジュールを読み込まない構成に整理しました。数値・測定名・血圧の組合せを確認する条件と、旧結果の読取互換性は維持します。",
+  "upgrade": "追加のデータ操作は不要です。実行中のHermes gatewayまたは独立host・workerへ反映する場合は、対応するプロセスを再起動してください。抽出世代・モデル・稼働枠・保存形式・既読化・人承認条件は変更せず、一斉再抽出や過去通知の再投稿は行いません。",
+  "details": [
+    "測定名の最近接確認・血圧の側と組合せの確認・バイタル根拠確認を、実行担当のextract_llmから既存のclinical_valuesへ移す。正規表現・定数・6関数の本文と引数は同一に保つ。",
+    "ルールと保存値の読取はclinical_valuesを使い、extract_llmの既存helper名は同名aliasとして保持する。CLI・flat import・保存済みartifactの契約を変更しない。",
+    "既存のclinical_values source digestによる実行中コードの鮮度確認を維持する。ルール版・LLM世代は増やさない。",
+    "ルール読取と保存値読取の両入口について、LLM実行モジュールのimportを禁止した合成回帰を追加する。"
+  ],
+  "refs": [
+    "mcs/extract/clinical_values.py",
+    "mcs/extract/v1/extract.py",
+    "mcs/extract/v4/extract_llm.py",
+    "tests/extract/test_bp_pair_guard.py"
+  ]
+}

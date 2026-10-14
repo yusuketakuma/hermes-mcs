@@ -494,7 +494,9 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
         rejected = {f["fact"]: f["code"]
                     for f in fact_audit["findings"]
                     if f.get("fact")}
-        if _attempt == 0 and rejected \
+        coverage_missing = any(f.get("code") == "source_fact_coverage_missing"
+                               for f in fact_audit["findings"])
+        if _attempt == 0 and (rejected or coverage_missing) \
                 and _current(ledger, KIND_FACT_REPAIR,
                              mid, fp) is None:
             if time.monotonic() > deadline - 5:
@@ -535,7 +537,8 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                 return value
             try:
                 repair = repair_facts_v2(
-                    repair_llm, member, v2_doc, rejected, deadline - 5)
+                    repair_llm, member, v2_doc, rejected, deadline - 5,
+                    **({"coverage_missing": True} if coverage_missing else {}))
             except runtime.RuntimeGuardError:
                 if not sent:
                     # stopped before any dispatch — the one repair

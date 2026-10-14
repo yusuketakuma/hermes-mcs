@@ -2,6 +2,8 @@
 never pair a systolic and a diastolic value from different measurements,
 and a truncated 'BP' label is never read as a bare pulse 'P'. Fully
 synthetic bodies; no model, ledger or network."""
+import builtins
+
 import pytest
 
 import clinical_values
@@ -15,6 +17,19 @@ def _layers(body, values):
     return (extract_llm._vitals_guard(body, dict(values)),
             extract.patient_vitals(dict(values), body),
             clinical_values.patient_current_vitals(dict(values), body))
+
+
+@pytest.mark.parametrize("reader", [extract.patient_vitals, clinical_values.patient_current_vitals])
+def test_patient_vital_readers_do_not_load_llm_runtime(monkeypatch, reader):
+    original_import = builtins.__import__
+
+    def import_module(name, *args, **kwargs):
+        if name == "extract_llm":
+            pytest.fail("patient vital reader loaded the LLM runtime")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_module)
+    assert reader({"sbp": 120, "dbp": 80}, "本人の血圧120/80") == {"sbp": 120, "dbp": 80}
 
 
 @pytest.mark.parametrize("body", [
