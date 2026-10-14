@@ -1,6 +1,7 @@
-"""Semantic drain engine (spec §14, §18): the durable-job worker —
-claiming jobs, staged extraction/summary/audit, Jev budget + circuit
-wiring, plan recording, and notice emission. Functions reach facade
+"""Semantic drain engine: the durable-job worker (spec §14, §18).
+
+Claims jobs, runs staged extraction/summary/audit, wires the Jev budget
+and circuit, records plans, and emits notices. Functions reach facade
 patch points (semantic.llm_chat / audit_claims / _process_job) through
 the module object so monkeypatching keeps working."""
 from __future__ import annotations
@@ -493,7 +494,9 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
         rejected = {f["fact"]: f["code"]
                     for f in fact_audit["findings"]
                     if f.get("fact")}
-        if _attempt == 0 and rejected \
+        coverage_missing = any(f.get("code") == "source_fact_coverage_missing"
+                               for f in fact_audit["findings"])
+        if _attempt == 0 and (rejected or coverage_missing) \
                 and _current(ledger, KIND_FACT_REPAIR,
                              mid, fp) is None:
             if time.monotonic() > deadline - 5:
@@ -534,7 +537,8 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                 return value
             try:
                 repair = repair_facts_v2(
-                    repair_llm, member, v2_doc, rejected, deadline - 5)
+                    repair_llm, member, v2_doc, rejected, deadline - 5,
+                    **({"coverage_missing": True} if coverage_missing else {}))
             except runtime.RuntimeGuardError:
                 if not sent:
                     # stopped before any dispatch — the one repair

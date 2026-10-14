@@ -1,6 +1,8 @@
-"""Semantic input bundle + artifact read helpers (spec §12.1):
-thread bundling, fingerprints, current-artifact lookup, and the
-durable Jev daily-usage counter. Policy constants come from semantic_policy (a leaf)."""
+"""Semantic input bundles and artifact read helpers (spec §12.1).
+
+Thread bundling, fingerprints, current-artifact lookup, and the
+durable Jev daily-usage counter. Policy constants come from
+semantic_policy (a leaf)."""
 from __future__ import annotations
 
 import math

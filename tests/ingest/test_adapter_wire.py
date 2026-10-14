@@ -460,6 +460,57 @@ def test_ws_constructor_closes_socket_after_failed_handshake(monkeypatch):
     assert sock.closed
 
 
+def test_ws_constructor_closes_socket_after_invalid_unicode_url(monkeypatch):
+    sock = _FakeSock()
+    monkeypatch.setattr(mcs_adapter.socket, "create_connection",
+                        lambda *args, **kwargs: sock)
+    with pytest.raises(UnicodeEncodeError):
+        mcs_adapter._WSConn("ws://127.0.0.1:9222/devtools/\ud800", 5)
+    assert sock.closed
+    assert sock.sent == b""
+
+
+def test_ws_constructor_allocates_buffer_before_acquiring_socket(monkeypatch):
+    connections = []
+
+    def opened(*args, **kwargs):
+        sock = _FakeSock()
+        connections.append(sock)
+        return sock
+
+    def allocation_failed(*args, **kwargs):
+        raise MemoryError("synthetic buffer allocation failed")
+
+    monkeypatch.setattr(mcs_adapter.socket, "create_connection", opened)
+    monkeypatch.setattr(mcs_adapter, "bytearray", allocation_failed, raising=False)
+    with pytest.raises(MemoryError, match="synthetic buffer allocation failed"):
+        mcs_adapter._WSConn("ws://127.0.0.1:9222/devtools/synthetic", 5)
+    assert connections == []
+
+
+@pytest.mark.parametrize("close_failure", [False, True])
+def test_ws_constructor_preserves_interruption_during_handshake(monkeypatch, close_failure):
+    sock = _FakeSock()
+    interruption = KeyboardInterrupt("synthetic interrupted handshake")
+
+    def interrupted(*args):
+        raise interruption
+
+    def close():
+        sock.closed = True
+        if close_failure:
+            raise OSError("synthetic close failure")
+
+    monkeypatch.setattr(mcs_adapter.socket, "create_connection",
+                        lambda *args, **kwargs: sock)
+    monkeypatch.setattr(mcs_adapter._WSConn, "_handshake", interrupted)
+    monkeypatch.setattr(sock, "close", close)
+    with pytest.raises(KeyboardInterrupt) as failure:
+        mcs_adapter._WSConn("ws://127.0.0.1:9222/devtools/synthetic", 5)
+    assert failure.value is interruption
+    assert sock.closed
+
+
 def test_ws_recv_reassembles_fragments_and_answers_ping():
     payload = _ws_frame(b'{"id":1,"par', fin=False) \
         + _ws_frame(b"ping!", opcode=0x9) \

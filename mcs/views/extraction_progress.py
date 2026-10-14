@@ -27,12 +27,8 @@ def message_progress(db, row, *, cfg=None):
                     policy_fingerprint=policy_fingerprint(scfg))
             else:
                 import extract_llm
-                import local_llm
-                model = local_llm.resolve(cfg)[1]
-                if extract_llm.MODEL != extract_llm._MODEL_PIN:
-                    model = extract_llm.MODEL
                 progress = extract_llm.progress_for_message(
-                    db, row, model=model)
+                    db, row, model=extract_llm.resolved_model(cfg))
         except (sqlite3.DatabaseError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
             progress = None
     if (not isinstance(progress, dict)

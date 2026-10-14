@@ -1606,9 +1606,11 @@ def rebuild_facts_v2_cached(member: dict, ledger, source_fingerprint: str,
 def repair_facts_v2(llm_fn, member: dict, doc: dict,
                     rejected: dict, deadline: float | None = None,
                      *, chunk_size: int = 3000,
-                     request_following: bool = False) -> dict:
-    """Re-extract only the chunks owning ``rejected`` facts and merge the
-    repaired items into a re-validated document.
+                     request_following: bool = False,
+                     coverage_missing: bool = False) -> dict:
+    """Re-extract rejected owner chunks, or all chunks when source coverage is missing.
+
+    Merge repaired items into a re-validated document.
 
     ``rejected`` maps fact_id -> human-readable reason.  Returns
     ``{"doc", "repaired", "repaired_fact_ids", "owner_chunk_ids"}``;
@@ -1621,6 +1623,8 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
 
     if type(request_following) is not bool:
         raise ValueError("request_following must be boolean")
+    if type(coverage_missing) is not bool:
+        raise ValueError("coverage_missing must be boolean")
     generation_detail = {}
     if request_following:
         generation_detail["generation"] = _chunk_generation(
@@ -1629,7 +1633,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     unchanged = {"doc": doc, "repaired": False, "repaired_fact_ids": [],
                  "owner_chunk_ids": [], **generation_detail}
     if not isinstance(doc, dict) or not isinstance(member, dict) \
-            or not rejected or not callable(llm_fn):
+            or not (rejected or coverage_missing) or not callable(llm_fn):
         return unchanged
     prompt_template = (semantic_llm._FACT_V2_REQUEST_FOLLOWING_PROMPT
                        if request_following else semantic_llm._FACT_V2_PROMPT)
@@ -1662,12 +1666,12 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     facts_by_id = {f["fact_id"]: f for f in doc.get("facts", [])
                    if isinstance(f, dict) and f.get("fact_id")}
     rejected_ids = [fid for fid in rejected if fid in facts_by_id]
-    if not rejected_ids:
+    if not rejected_ids and not coverage_missing:
         return unchanged
 
     # rejected fact -> owning chunks via obligation links; evidence
     # quotes inside a chunk's text are a fallback locator.
-    owner_ids = set()
+    owner_ids = set(doc_chunk_ids) if coverage_missing else set()
     for fid in rejected_ids:
         fact = facts_by_id[fid]
         for oid in fact.get("obligation_ids", []):
@@ -1699,6 +1703,8 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             if any(obligations.get(oid, {}).get("owner_id") == cid
                    for oid in facts_by_id[fid].get("obligation_ids", []))
             or not facts_by_id[fid].get("obligation_ids"))
+        if coverage_missing:
+            feedback += "\n- 原文の重要な記載に取りこぼしがあります。既存の事実を保ち、同じ原文から不足を再確認してください。"
         base = _chunk_prompt(prompt_template, spec, manifest, source, chunk_size)
         base = base.rsplit("JSON:", 1)[0]
         prompt = base + semantic_llm._FACT_V2_REPAIR_SUFFIX % feedback

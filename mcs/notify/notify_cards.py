@@ -38,6 +38,7 @@ import os
 import secrets
 import time
 import uuid
+from collections import deque
 from contextlib import suppress
 
 import mcs_runtime
@@ -784,14 +785,16 @@ def _split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT) -> list:
     byte-exact into the sealed body (the plugin sends these verbatim)."""
     chunks, cur = [], ""
     for seg in text.splitlines(keepends=True):
-        while len(seg) > limit:
+        start = 0
+        while len(seg) - start > limit:
             take = limit - len(cur)
             if take <= 0:
                 chunks.append(cur)
                 cur = ""
                 take = limit
-            cur += seg[:take]
-            seg = seg[take:]
+            cur += seg[start:start + take]
+            start += take
+        seg = seg[start:]
         if cur and len(cur) + len(seg) > limit:
             if len(cur) >= limit // 2:
                 chunks.append(cur)
@@ -814,9 +817,9 @@ def _no_blank_chunks(chunks: list, limit: int) -> list:
     lossless and within ``limit``, except a blank run too long for its
     neighbours (about 2x ``limit``), whose excess whitespace drops."""
     out: list = []
-    queue, carry = list(chunks), ""
+    queue, carry = deque(chunks), ""
     while queue:
-        c, carry = carry + queue.pop(0), ""
+        c, carry = carry + queue.popleft(), ""
         room = limit - len(out[-1]) if out else 0
         if not c.strip():
             # whitespace fills the previous chunk; the rest leads with that
@@ -828,7 +831,7 @@ def _no_blank_chunks(chunks: list, limit: int) -> list:
                 k = len(out[-1].rstrip()) - 1
                 if c and out[-1][:k].strip():
                     out[-1], c = out[-1][:k], out[-1][k:] + c
-                    queue.insert(0, c)
+                    queue.appendleft(c)
                     continue
             carry = c
             continue
@@ -848,7 +851,7 @@ def _no_blank_chunks(chunks: list, limit: int) -> list:
             # the excess whitespace only
             c = c[lead - limit + 1:]
         out.append(c[:limit])
-        queue.insert(0, c[limit:])
+        queue.appendleft(c[limit:])
     if not out:
         return list(chunks)                # nothing visible at all
     # trailing carry: whitespace that did not fit is dropped likewise
@@ -1784,10 +1787,7 @@ def _meds_messages(db, card, context):
             (mid, mid, card["project_id"])))
     else:
         mids = [mid]
-    # ponytail: scans this thread; batch current facts if large threads make views slow.
-    for message_id in mids:
-        if any(structured_view.medication_entries(db, message_id)):
-            yield message_id
+    yield from structured_view.medication_post_ids(db, mids)
 
 
 def _meds_message(db, card, context) -> int | None:

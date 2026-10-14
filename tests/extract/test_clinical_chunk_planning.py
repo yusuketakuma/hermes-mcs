@@ -167,13 +167,24 @@ def test_dense_planning_bypasses_batch_even_when_source_is_short(db, monkeypatch
     for mid in (1, 2):
         db.save_messages([_message(mid=mid, body=source)])
     calls = []
+    repairs = []
     def infer(prompt, **kwargs):
         assert "items" not in kwargs.get("schema", {}).get("schema", {}).get("properties", {})
         calls.append(prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0])
+        repairs.append("未収載" in prompt)
         return {}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
-    assert extract_llm.run_pending(db, limit=3, budget_s=200, batch_k=2)["done"] == 2
-    assert len(calls) == 2 * len(clinical_chunking.plan_chunks(source))
+    pieces = clinical_chunking.plan_chunks(source)
+    first = extract_llm.run_pending(db, limit=3, budget_s=200, batch_k=2)
+    # Optional quality work may wait, but every mandatory first candidate
+    # must progress under the same budget, then be reused on the next pass.
+    assert repairs.count(False) == 2 * len(pieces)
+    assert first["done"] + first["deferred"] == 2
+    second = extract_llm.run_pending(db, limit=3, budget_s=200, batch_k=2)
+    assert first["done"] + second["done"] == 2
+    assert repairs.count(False) == 2 * len(pieces)
+    assert 0 < repairs.count(True) <= 2 * len(pieces)
+    assert all(calls.count(piece) <= 4 for piece in pieces)
 
 
 def test_pending_thin_confirmation_is_attention_even_with_bound_final(db):

@@ -44,6 +44,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 import bounded_http
 import clinical_values
+from clinical_values import (
+    _BP_NUM as _BP_NUM,
+    _BP_PAIR as _BP_PAIR,
+    _BP_SIDE_WORD as _BP_SIDE_WORD,
+    _VITAL_CLASS as _VITAL_CLASS,
+    _VITAL_LABELS as _VITAL_LABELS,
+    _VITAL_UNITS as _VITAL_UNITS,
+    _VITAL_WIN_BACK as _VITAL_WIN_BACK,
+    _VITAL_WIN_FWD as _VITAL_WIN_FWD,
+    _bp_number as _bp_number,
+    _bp_pair_unproven as _bp_pair_unproven,
+    _bp_readings as _bp_readings,
+    _bp_side as _bp_side,
+    _nearest_vital_label as _nearest_vital_label,
+    _vitals_guard as _vitals_guard,
+)
 import clinical_chunking
 import extraction_refresh
 import extract
@@ -55,7 +71,7 @@ from ledger import Ledger, LedgerReader
 from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_KIND,
                          current_extract_pred,
                          current_qc_pred,
-                         current_v4_id, json_or_null, qc_source_id)
+                         current_v4_id, json_or_null, med_is_patient_current, qc_source_id)
 from mcs_util import (CONF_PATH, HOME, acquire_run_lock, circuit_failure, circuit_open_s,
                       circuit_streak,
                       circuit_success, disk_floor_mb, disk_free_mb,
@@ -462,7 +478,7 @@ _REPAIR_CLOSE = """
 
 
 def _repair_prompt(posted_at: str | None, issues: list[str],
-                   prior: dict) -> str:
+                   prior: dict, hints: dict | None = None) -> str:
     """Feedback prompt for the bounded repair retry — ends with the
     OPEN target fence; the caller appends the body then _PROMPT_TAIL.
     `issues` are the concrete validation failures; `prior` is
@@ -471,6 +487,9 @@ def _repair_prompt(posted_at: str | None, issues: list[str],
     prompt = _REPAIR_HEAD + "\n".join(issues) + _REPAIR_MID
     prompt += _sanitize_ctx(json.dumps(prior, ensure_ascii=False))
     prompt += _REPAIR_CLOSE
+    hint = _hint_block(hints) if hints else ""
+    if hint:
+        prompt += _HINT_HEAD + hint + _HINT_TAIL
     prompt += _target_head(posted_at)
     return prompt
 
@@ -534,111 +553,6 @@ def _probe_format(deadline: float | None = None) -> str | None:
     return _FMT_MODE
 
 _VITAL_KEYS = {"bt", "hr", "rr", "sbp", "dbp", "spo2", "bs"}
-
-# Vital keys anchor to the measurement label NEAREST their value in the
-# body — labels precede the number (脈は48 / 血圧120/80), units follow
-# (48回／分, 98℃). A bare 回/分 or % is shared between vitals, so it is
-# not a distinguishing label. sbp/dbp share the 血圧 class — position
-# inside the N/M pair decides which.
-_VITAL_LABELS = {
-    "bt":   re.compile(r"体温|BT|Bt|bt|℃"),
-    # Bare P (BT36.5 P72) — not the P of BP/SpO2/PM.
-    "hr":   re.compile(r"脈拍|(?<!静)(?<!動)脈|心拍|HR|Hr|hr"
-                       r"|(?<![A-Za-z])P(?![A-Za-z])"),
-    "rr":   re.compile(r"呼吸|RR|Rr|rr"),
-    "bp":   re.compile(r"血圧|BP|Bp|bp|収縮|拡張|mmHg"),
-    "spo2": re.compile(r"SpO2|Spo2|SPO2|spo2|酸素飽和|酸素"),
-    "bs":   re.compile(r"血糖|BS|Bs|bs|Glu|glu|血糖値"),
-}
-# Forward window: only units that sit right after the number. A label
-# word after it (P72 SpO2…) names the NEXT reading, not this one.
-_VITAL_UNITS = {"bt": re.compile(r"℃"), "bp": re.compile(r"mmHg")}
-_VITAL_CLASS = {"bt": "bt", "hr": "hr", "rr": "rr",
-                "sbp": "bp", "dbp": "bp", "spo2": "spo2", "bs": "bs"}
-_VITAL_WIN_BACK = 14
-_VITAL_WIN_FWD = 8
-
-
-def _nearest_vital_label(body: str, s: int, e: int):
-    """Label class closest to the number — a preceding label beats
-    a following unit (a label after the number belongs to the NEXT
-    reading: 血圧120/80 脈60)."""
-    best = None
-    # search the window inside the body, not a slice of it: a slice cuts
-    # 'BP' to a bare 'P' whose look-behind can no longer see the 'B'
-    start = max(0, s - _VITAL_WIN_BACK)
-    for cls, rx in _VITAL_LABELS.items():
-        m_end = None
-        for m in rx.finditer(body, start, s):
-            m_end = m.end()
-        if m_end is not None:
-            dist = s - m_end
-            if best is None or dist < best[0]:
-                best = (dist, cls)
-    for cls, rx in _VITAL_UNITS.items():
-        fm = rx.search(body[e:e + _VITAL_WIN_FWD])
-        if fm is not None:
-            dist = 100 + fm.start()
-            if best is None or dist < best[0]:
-                best = (dist, cls)
-    return best[1] if best else None
-
-
-def _bp_side(body: str, s: int, e: int):
-    """120/80: before the slash is systolic, after is diastolic."""
-    if body[e:e + 1] in ("/", "／"):
-        return "sbp"
-    if body[s - 1:s] in ("/", "／"):
-        return "dbp"
-    return None
-
-
-# One blood-pressure reading is a written 'A/B' whose nearest label is a
-# blood-pressure label (BP/血圧/mmHg — never inferred from the values, so
-# an unlabelled date such as 10/12 is not one) or an explicitly
-# side-labelled single value.
-# numbers follow the guard's own grammar (\d+ with an optional ./． decimal)
-_BP_NUM = r"\d+(?:[.．]\d+)?"
-_BP_PAIR = re.compile(rf"(?<![\d.．])({_BP_NUM})\s*[/／]\s*({_BP_NUM})(?![\d.．])")
-_BP_SIDE_WORD = re.compile(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$")
-
-
-def _bp_readings(body: str, keep=None):
-    """(pairs, side-labelled values) of the body's blood pressures; spans
-    keep(start, end) rejects — another person's, say — are left out."""
-    accept = keep or (lambda s, e: True)
-    pairs = set()
-    for m in _BP_PAIR.finditer(body):
-        if _nearest_vital_label(body, m.start(1), m.end(1)) == "bp" \
-                and accept(m.start(), m.end()):
-            pairs.add((_bp_number(m[1]), _bp_number(m[2])))
-    sides = {"sbp": set(), "dbp": set()}
-    for m in re.finditer(rf"(?<![\d.．/／]){_BP_NUM}(?![\d.．/／])", body):
-        word = _BP_SIDE_WORD.search(body[max(0, m.start() - _VITAL_WIN_BACK):m.start()])
-        if word and accept(*m.span()):
-            sides["sbp" if word[1] == "収縮期" else "dbp"].add(_bp_number(m[0]))
-    return pairs, sides
-
-
-def _bp_number(text: str) -> float:
-    """The guard's token value (full-width point folded, no rounding)."""
-    return float(text.replace("．", "."))
-
-
-def _bp_pair_unproven(body: str, sbp, dbp, keep=None) -> bool:
-    """True when sbp and dbp come from the body's blood-pressure readings
-    but no single reading carries both: a side holds several different
-    values and this combination is never written as one reading. Values
-    with no such structure keep the existing per-value contract."""
-    pairs, sides = _bp_readings(body, keep)
-    if (sbp, dbp) in pairs:
-        return False
-    systolic = {upper for upper, _ in pairs} | sides["sbp"]
-    diastolic = {lower for _, lower in pairs} | sides["dbp"]
-    if sbp not in systolic and dbp not in diastolic:
-        return False
-    return len(systolic) > 1 or len(diastolic) > 1
-
 
 # Deterministic vital-sign thresholds, active only when the config
 # policy enables them (vital_threshold_policy). Vitals carry no
@@ -740,73 +654,6 @@ def _apply_vital_policy(out: dict, body: str | None,
     if vital_policy["mode"] == "high" and out.get("urgency") != "high":
         out["urgency"] = "high"
         out["urgency_evidence"] = [f["evidence"] for f in flags][:2]
-
-
-def _vitals_guard(body: str | None, vit: dict,
-                  drops: dict | None = None) -> dict:
-    """Anchor each vital to the label nearest its value in the body.
-
-    A mislabelled key ('脈は48' extracted as bs:48 — pulse shown as
-    blood sugar) is clinically dangerous: when the label nearest the
-    number names a different vital, remap to it; when the value is
-    absent or the nearest labels disagree, drop the key. A verbatim
-    value with no nearby label is kept — unverifiable, not contradicted
-    (same policy as evidence)."""
-    if not body or not vit:
-        return vit
-    toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
-            for m in re.finditer(r"\d+(?:[.．]\d+)?", body)]
-    issues = drops.setdefault("vitals", []) if drops is not None else []
-
-    def note(s):
-        if len(issues) < 6:
-            issues.append(s)
-
-    out = {}
-    for k, val in vit.items():
-        hits = [(s, e) for s, e, num in toks if num == val]
-        if not hits:
-            note(f"vitals.{k}={val:g} は本文に数値がありません")
-            continue
-        kcls = _VITAL_CLASS[k]
-        winners = {_nearest_vital_label(body, s, e) for s, e in hits}
-        if kcls in winners:
-            tgt = k
-            if kcls == "bp":
-                sides = [_bp_side(body, s, e) for s, e in hits]
-                # BP80/80: the value also stands on its own side
-                if k not in sides:
-                    tgt = next((side for side in sides if side), k)
-        else:
-            winners.discard(None)
-            if len(winners) != 1:
-                if len(winners) > 1:
-                    note(f"vitals.{k}={val:g} の測定名が本文で"
-                         "一意に特定できません")
-                else:
-                    out[k] = val    # verbatim, unlabelled — keep
-                continue
-            tgt = winners.pop()
-            if tgt == "bp":
-                tgt = next((_bp_side(body, s, e) for s, e in hits
-                            if _bp_side(body, s, e)), None)
-                if tgt is None:
-                    note(f"vitals.{k}={val:g} の測定名が本文で"
-                         "一意に特定できません")
-                    continue
-        if tgt != k:
-            if tgt in vit or tgt in out:
-                note(f"vitals.{k}={val:g} は本文では{tgt}の記述です")
-                continue
-            out[tgt] = val          # relabel, e.g. bs -> hr
-        else:
-            out[k] = val
-    if "sbp" in out and "dbp" in out \
-            and _bp_pair_unproven(body, out["sbp"], out["dbp"]):
-        note(f"vitals.sbp/dbp={out['sbp']:g}/{out['dbp']:g} は"
-             "本文で同じ測定ではありません")
-        del out["sbp"], out["dbp"]
-    return out
 
 
 # Free-text fields (summary/points): the model sometimes parrots JSON
@@ -1779,6 +1626,235 @@ def _repair_issues(drops: dict, v: dict | None) -> list[str]:
     return issues
 
 
+_QUALITY_CHECKPOINT = "completeness-v1"
+
+
+def _current_cue(body, surface):
+    """A literal patient-current occurrence can invite review without confirming a fact."""
+    if not isinstance(surface, str) or not surface:
+        return False
+    for match in re.finditer(re.escape(surface), body):
+        if extract.patient_source_scope(body, *match.span()) != "patient":
+            continue
+        left = re.split(r"[。！？!?;；\r\n]", body[:match.start()])[-1]
+        right = re.split(r"[。！？!?;；\r\n]", body[match.end():])[0]
+        if not re.search(r"ない|なし|なく|ません|不要|未使用|未測定|中止|済み|ありがとう", left + surface + right):
+            return True
+    return False
+
+
+def _completeness_issues(v, hints, body):
+    """Source-bound missing hints request a reread, never establish clinical facts."""
+    if not isinstance(v, dict) or not isinstance(hints, dict):
+        return []
+    issues = []
+
+    for key, value in extract.patient_vitals(hints.get("vitals") or {}, body).items():
+        if key not in (v.get("vitals") or {}) and any(
+                float(match[0].replace("．", ".")) == value and _current_cue(body, match[0])
+                for match in re.finditer(_BP_NUM, body)):
+            issues.append(f"本文の測定候補 {key}={value} が未収載です。原文で再確認してください")
+    names = {med.get("name") for med in v.get("meds") or []
+             if med_is_patient_current(med) and clinical_values.patient_item_scope(
+                 med, body, surface=med.get("name")) == "patient"
+             and _current_cue(body, med.get("evidence"))}
+    for med in hints.get("medications") or []:
+        name = med.get("name") if isinstance(med, dict) else None
+        if isinstance(name, str) and name not in names and _current_cue(body, name):
+            issues.append(f"本文の薬剤候補「{name}」が未収載です。原文で再確認してください")
+    # The rule hints' confirm/contact patterns also fire on reports (確認を終えた);
+    # the per-sentence cues apply the same request-ending test to every kind.
+    for request in _request_cues(body):
+        if (isinstance(request, dict) and request.get("kind") in _REQUEST_STEMS
+                and isinstance(request.get("ctx"), str)
+                and _request_current(body, request["ctx"], request["clause"])
+                and not any(_request_covers(item, request) for item in v.get("requests") or [])):
+            issues.append("本文の確認・連絡・質問候補が未収載です。原文で再確認してください")
+            break
+    return issues
+
+
+# The rule hint's own action word. A quote spanning several requests covers
+# a hint only when the extracted action names it, not by overlap alone.
+_REQUEST_STEMS = {"confirm": "確認", "contact": "連絡", "ask": "教え"}
+
+
+_REQUEST_END = (r"(?:お願い|ください|下さい|いただけ|いただきたい|いただきますよう|頂け|頂きたい"
+                r"|頂きますよう|ほしい|欲しい|願います)")
+# A stem is requested only when the request ending follows it directly
+# (確認をお願い, 確認してください) or when it is listed (と/や/、) through the
+# following confirm/contact stems up to one that is directly requested. Free text never
+# reaches a later ending past a report (連絡をいただきましたが…教えてください,
+# 確認と連絡を終えたので…連絡してください).
+_REQUEST_DIRECT = rf"(?:を)?(?:して)?{_REQUEST_END}"
+# one listing step: a particle, then text up to the NEXT confirm/contact stem
+_CLAUSE_MARK = r"ので|から|ため|けど|けれど|が、|、"
+_REQUEST_LINK = (r"(?:(?:と|や|・|及び|および)、?|、)"
+                 rf"(?:(?!確認|連絡|{_CLAUSE_MARK})[^。！？!?;；\r\n])*(?:確認|連絡)")
+_REQUEST_CUES = {
+    # any number of listed stems, the last directly requested (確認と…確認と…確認をお願い)
+    kind: re.compile(rf"{stem}(?=(?:{_REQUEST_LINK})*{_REQUEST_DIRECT})")
+    for kind, stem in (("confirm", "確認"), ("contact", "連絡"))}
+# the rule hints' own ask phrasing, tracked per sentence like confirm/contact
+_REQUEST_CUES["ask"] = re.compile(r"教えて(?:ください|いただけ|欲しい)")
+
+
+def _request_cues(body):
+    """Every sentence's confirm/contact/ask request, for the quality re-check only.
+
+    The rule hints keep one entry per pattern, so a second kind in the same
+    sentence (確認と…連絡をお願い) or a second sentence of one kind is not
+    hinted. A stem counts only as the object of a request ending, never
+    inside a noun (連絡記録) or a finished report (連絡をいただきました)."""
+    cues = []
+    for sentence in re.finditer(r"[^。！？!?;；\r\n]+", body):
+        ctx = sentence[0].strip()
+        for kind, rx in _REQUEST_CUES.items():
+            found, start = [], 0
+            for m in rx.finditer(ctx) if ctx else ():
+                # the target lies between the previous stem and this one; the
+                # clause (after ので/から/、…) is what a negation must sit in
+                found.append({"kind": kind, "ctx": ctx,
+                              "chunks": _request_target(ctx[start:m.start()]),
+                              "clause": ctx[_clause_start(ctx[:m.start()]):_clause_end(ctx, m.end())]})
+                start = m.end()
+            _distinct_targets(found)
+            if len(found) > 1:
+                # 記録の確認と検査値の確認: one quote and one 確認 must not cover both
+                for cue in found:
+                    cue["siblings"] = [o["target"] for o in found if o is not cue]
+            cues += found
+    return cues
+
+
+def _clause_start(before):
+    """Start of the clause holding a request stem (after ので, から, 、 …)."""
+    marks = list(re.finditer(_CLAUSE_MARK, before))
+    return marks[-1].end() if marks else 0
+
+
+def _clause_end(ctx, stem_end):
+    """End of the clause holding a request: past its listed stems and request
+    ending, up to the next clause mark (…してください、転倒はありません)."""
+    chain = re.match(rf"(?:{_REQUEST_LINK})*{_REQUEST_DIRECT}", ctx[stem_end:])
+    tail = stem_end + (chain.end() if chain else 0)
+    mark = re.search(_CLAUSE_MARK, ctx[tail:])
+    return tail + mark.start() if mark else len(ctx)
+
+
+def _distinct_targets(found):
+    """Each cue's target: its last word, extended (血圧の記録 vs 血糖の記録) only
+    for cues whose targets would otherwise coincide; a unique one stays short."""
+    sizes = [1] * len(found)
+    while True:
+        names = ["".join(c["chunks"][-n:]) or None for c, n in zip(found, sizes)]
+        clashing = [i for i, name in enumerate(names)
+                    if name and names.count(name) > 1 and sizes[i] < len(found[i]["chunks"])]
+        if not clashing:
+            break
+        for i in clashing:
+            sizes[i] += 1
+    for cue, name in zip(found, names):
+        cue["target"] = name if name and len(name) <= 20 else None
+
+
+def _request_current(body, ctx, clause):
+    """The request sentence is patient-scoped and its own clause is not negated."""
+    for match in re.finditer(re.escape(ctx), body):
+        if (extract.patient_source_scope(body, *match.span()) == "patient"
+                and not re.search(r"ない|なし|なく|ません|不要|未使用|未測定|中止|済み|ありがとう", clause)):
+            return True
+    return False
+
+
+def _request_target(before):
+    """The の-separated words before a request stem (本人の記録の確認 -> [本人, 記録]). ``before``
+    starts at the previous stem, so only its listing particle is dropped and
+    a と inside a word (かかと) is never a boundary."""
+    # a listing particle counts only right after a request stem of any kind
+    clause = re.split(r"(?:確認|連絡)(?:と|や|、|・|及び|および)", before)[-1]
+    clause = re.sub(r"^(?:と|や|、|・|及び|および)", "", clause)
+    clause = clause[_clause_start(clause):]      # 転倒がないので記録 -> 記録
+    clause = re.sub(r"(?:の|を|へ|に|は|も|ご)+$", "", clause)
+    return [c.removeprefix("ご") for c in clause.split("の") if c]
+
+
+def _names_target(text, target, siblings):
+    """``text`` mentions ``target`` outside any longer sibling that contains it
+    (記録 is not named by 看護記録); の is ignored (血糖記録 names 血糖の記録)."""
+    text = text.replace("の", "")
+    for longer in sorted((s for s in siblings if target in s and s != target), key=len, reverse=True):
+        text = text.replace(longer, "")
+    return target in text
+
+
+def _request_covers(item, hint):
+    """An extracted request whose quote overlaps the hint sentence and names its action."""
+    quote = item.get("evidence") if isinstance(item, dict) else None
+    ctx = hint["ctx"]
+    if not isinstance(quote, str) or not quote or not (quote in ctx or ctx in quote):
+        return False
+    action = item.get("action") if isinstance(item.get("action"), str) else ""
+    if "siblings" in hint:
+        # several requests of this kind in one sentence: the item must name this one
+        target, siblings = hint.get("target"), [s for s in hint["siblings"] if s]
+        if not target:
+            return False        # unidentified target: left to the one bounded re-read
+        if not _names_target(action, target, siblings) and (
+                not _names_target(quote, target, siblings)
+                or any(_names_target(quote, s, [target, *siblings]) for s in siblings)):
+            return False
+    target = hint.get("target")
+    if target and _names_target(action, target, [s for s in hint.get("siblings") or [] if s]):
+        return True             # 記録をチェックして主治医に伝達 names both targets
+    stem = _REQUEST_STEMS[hint["kind"]]
+    if stem in action or (hint["kind"] == "ask" and item.get("kind") == "question"):
+        return True
+    # a paraphrased action still covers a quote that names only this request
+    return stem in quote and sum(s in quote for s in _REQUEST_STEMS.values()) == 1
+
+
+def _quality_improves(candidate, prior, body):
+    """Optional gains must retain prior assertions and have their own source evidence."""
+    if not _improves(candidate, prior):
+        # Evidence is excluded from _facts. A neutral medication mention
+        # may acquire its missing patient-owned quote without adding a
+        # predicate, provided every assertion and existing owned quote stays.
+        if (candidate is None or prior is None
+                or _facts(candidate, split_conditions=True) != _facts(prior, split_conditions=True)
+                or _drop_total(candidate) > _drop_total(prior)
+                or candidate.get("urgency") != prior.get("urgency")):
+            return False
+
+        def owned_med_quotes(document):
+            quotes = set()
+            for med in document.get("meds") or []:
+                if not med_is_patient_current(med) or med.get("action") not in (None, "none", "no_change"):
+                    continue
+                quote = med.get("evidence")
+                if (not isinstance(quote, str) or locate_quote_span(body, quote) is None
+                        or clinical_values.patient_item_scope(med, body, surface=med.get("name")) != "patient"
+                        or not _current_cue(body, quote)
+                        or not isinstance(med.get("dose"), str)
+                        or not any(match[1] == med.get("name") and match[2] + match[3] == med["dose"].replace(" ", "")
+                                   and not re.match(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９/／]", quote[match.end():])
+                                   for match in extract._MED_TOKEN.finditer(quote))
+                        or (isinstance(med.get("freq"), str) and med["freq"] and not re.search(
+                            r"(?<![0-9])" + re.escape(med["freq"]) + r"(?![0-9])", quote))):
+                    continue
+                quotes.add((next(iter(_facts({"meds": [med]}, split_conditions=True))), quote))
+            return quotes
+
+        return owned_med_quotes(prior) < owned_med_quotes(candidate)
+    protected = _facts(prior, split_conditions=True)
+    for key in _FACT_LIST_FIELDS:
+        for item in candidate.get(key) or []:
+            if isinstance(item, dict) and not _facts({key: [item]}, split_conditions=True) <= protected:
+                if item.get("unverified") or locate_quote_span(body, item.get("evidence")) is None:
+                    return False
+    return True
+
+
 def _piece_reference(body: str, start: int, length: int) -> str:
     """Bounded source neighbours/active heading, for interpretation and never evidence."""
     if start == 0 and length == len(body):
@@ -1867,38 +1943,54 @@ def llm_extract(body: str, *, context: str | None = None,
     saved = chunks_in or {}
     splits = dict(splits_in or {})
     sizes = []
+    pending_quality = set()
 
-    def children(key, piece, start):
+    def mandatory_calls(key, piece):
+        if key in saved:
+            return 0  # completed or quality-pending first candidates were already paid for
+        if key in splits:
+            return sum(mandatory_calls(f"{key}:{i}", part)
+                       for i, part in enumerate(plan_chunks(piece, splits[key])))
+        return 1
+
+    def children(key, piece, start, remaining):
         parts = plan_chunks(piece, splits[key])
         if len(parts) < 2 or "".join(parts) != piece:
             return None
         out = []
         offset = start
         for child, part in enumerate(parts):
-            result = infer_piece(f"{key}:{child}", part, offset)
+            result = infer_piece(f"{key}:{child}", part, offset,
+                                 remaining + sum(mandatory_calls(f"{key}:{i}", later)
+                                                 for i, later in enumerate(parts) if i > child))
             offset += len(part)
             if result is None or result is _DEFERRED:
                 return result
             out.extend(result)
         return out
 
-    def split_piece(key, piece, start):
+    def split_piece(key, piece, start, remaining):
         if len(piece) <= 1:
             return None
         smaller = max(1, len(piece) // 2)
         splits[key] = smaller
         if on_split is not None:
             on_split(key, smaller)
-        return children(key, piece, start)
+        return children(key, piece, start, remaining)
 
-    def infer_piece(key, piece, start):
+    def infer_piece(key, piece, start, remaining):
         if deadline is not None and time.monotonic() > deadline:
             return _DEFERRED
-        if key in saved:
+        cached = saved.get(key)
+        quality_status = cached.get("_quality_status") if isinstance(cached, dict) else None
+        if key in saved and quality_status is None:
             sizes.append(len(piece))
-            return [saved[key]]              # {} is a completed empty result
+            result = {k: value for k, value in cached.items() if k != "_quality_result"}
+            if meta_out is not None and isinstance(cached.get("_quality_result"), dict):
+                meta_out.setdefault("completeness", {})[str(key)] = cached["_quality_result"]
+            return [result]                  # historical {} is still completed
         if key in splits:
-            return children(key, piece, start)
+            return children(key, piece, start, remaining)
         sizes.append(len(piece))
         piece_hints = hints if piece == body else _rule_hints(
             {"body_text": piece, "posted_at": posted_at}) if hints is not None else None
@@ -1907,13 +1999,17 @@ def llm_extract(body: str, *, context: str | None = None,
         scoped_prompt = prompt + reference + (_HINT_HEAD + hint + _HINT_TAIL if hint else "")
         piece_context = has_ctx or bool(reference)
         call_start = len(notes)
-        d = _llm_call(scoped_prompt + thead + piece + _PROMPT_TAIL,
-                      deadline=deadline, need_s=_MIN_CALL_S)
+        d = ({k: value for k, value in cached.items() if k != "_quality_status"}
+             if quality_status else _llm_call(scoped_prompt + thead + piece + _PROMPT_TAIL,
+                                             deadline=deadline, need_s=_MIN_CALL_S))
+        if deadline is not None and time.monotonic() > deadline:
+            # A dispatched failure still consumes its attempt after the deadline.
+            return None if d is None else _DEFERRED
         if d is _DEFERRED:
             return _DEFERRED
         if (d is None and len(notes) > call_start
                 and notes[-1].get("finish_reason") == "length"):
-            return split_piece(key, piece, start)
+            return split_piece(key, piece, start, remaining)
         drops: dict = {}
         v = _piece_validate(d, piece, body, drops, piece_context) if d is not None else None
         if v is not None and not context:
@@ -1927,7 +2023,23 @@ def llm_extract(body: str, *, context: str | None = None,
         # entire message. Multi-chunk thin output is still recorded on
         # the merged result via meta.thin below.
         thin = piece == body and _is_thin(v, body)
-        if d is not None and (v is None or drops or thin):
+        completeness = _completeness_issues(v, piece_hints, piece)
+
+        quality_record = None
+
+        def quality_note(state):
+            nonlocal quality_record
+            quality_record = {
+                "state": state,
+                "remaining_hint_candidates": len(_completeness_issues(v, piece_hints, piece))
+                if isinstance(piece_hints, dict) else None}
+            if meta_out is not None:
+                meta_out.setdefault("completeness", {})[str(key)] = quality_record
+
+        if completeness or quality_status:
+            quality_note("dispatch_unknown" if quality_status == "started" or not isinstance(piece_hints, dict)
+                         else "pending" if completeness else "hint_gaps_resolved")
+        if d is not None and quality_status != "started" and (v is None or drops or thin or completeness):
             # Bounded repair: one re-ask showing the rejected output
             # and the concrete failures — converts a would-be failure
             # (or a lossy/under-complete extraction) into a clean one
@@ -1935,37 +2047,76 @@ def llm_extract(body: str, *, context: str | None = None,
             # the budget is already gone; a salvaged v stays usable
             # either way.
             issues = _repair_issues(drops, v)
+            issues.extend(completeness)
             if thin:
                 issues.append(
                     "本文の情報量に対し抽出項目が少なすぎます — 対象本文を"
                     "再読し、症状・薬剤・依頼・バイタル・検査・今後の予定を"
                     "全て抽出してください")
-            if issues and (deadline is None
-                           or time.monotonic() < deadline):
+            repair_deadline = deadline - remaining * _MIN_CALL_S if deadline is not None else None
+            if completeness and v is not None:
+                pending = {**v, "_quality_status": "pending"}
+                if chunks_out is not None:
+                    chunks_out[key] = pending
+                if on_chunk is not None:
+                    if on_chunk(key, pending) is False:
+                        return _DEFERRED
+                if repair_deadline is not None and repair_deadline - time.monotonic() < _MIN_REPAIR_S:
+                    if quality_status == "pending" and not remaining:
+                        quality_note("skipped_budget")
+                    else:
+                        pending_quality.add(key)
+                    return finish_piece(key, v, quality_record, pending=key in pending_quality)
+            if issues and (repair_deadline is None or time.monotonic() < repair_deadline):
+                if completeness and v is not None and on_chunk is not None:
+                    if on_chunk(key, {**v, "_quality_status": "started"}) is False:
+                        # Nothing was dispatched: a start that may still have been
+                        # saved is released, so the next run retries the repair.
+                        on_chunk(key, {**v, "_quality_status": "pending"})
+                        return _DEFERRED
+                    if repair_deadline is not None and repair_deadline - time.monotonic() < _MIN_REPAIR_S:
+                        # The checkpoint wait spent the reserve, before any
+                        # inference dispatch. Only this proven unsent start is released.
+                        on_chunk(key, {**v, "_quality_status": "pending"})
+                        if quality_status == "pending" and not remaining:
+                            quality_note("skipped_budget")
+                        else:
+                            pending_quality.add(key)
+                        return finish_piece(key, v, quality_record, pending=key in pending_quality)
                 repair_start = len(notes)
                 rd = _llm_call(
-                    reference + _repair_prompt(posted_at, issues, d)
+                    reference + _repair_prompt(posted_at, issues, d, piece_hints)
                     + piece + _PROMPT_TAIL,
-                    deadline=deadline, need_s=_MIN_REPAIR_S)
+                    deadline=repair_deadline, need_s=_MIN_REPAIR_S)
                 if meta_out is not None:
                     meta_out["repairs"] = meta_out.get("repairs", 0) + 1
+                if repair_deadline is not None and time.monotonic() > repair_deadline:
+                    rd = _DEFERRED
                 if (rd is None and len(notes) > repair_start
                         and notes[-1].get("finish_reason") == "length"):
-                    return split_piece(key, piece, start)
+                    return split_piece(key, piece, start, remaining)
                 if rd is _DEFERRED and v is None:
                     return _DEFERRED
                 if rd is not None and rd is not _DEFERRED:
                     rv = _piece_validate(rd, piece, body, ctx=piece_context)
                     if rv is not None and not context:
                         rv.pop("reply", None)
-                    if _improves(rv, v):
+                    if (_quality_improves(rv, v, body) if completeness else _improves(rv, v)):
                         v = rv
+                if completeness:
+                    quality_note("dispatch_unknown" if rd is _DEFERRED else
+                                 "unresolved" if _completeness_issues(v, piece_hints, piece) else "hint_gaps_resolved")
         if v is None:
             return None
+        return finish_piece(key, v, quality_record)
+
+    def finish_piece(key, v, quality_record, *, pending=False):
+        checkpoint = {**v, "_quality_status": "pending"} if pending else (
+            {**v, "_quality_result": quality_record} if quality_record is not None else v)
         if chunks_out is not None:
-            chunks_out[key] = v
+            chunks_out[key] = checkpoint
         if on_chunk is not None:
-            on_chunk(key, v)
+            on_chunk(key, checkpoint)
         return [v]
 
     with _pin_target(_resolved_llm()):
@@ -1973,13 +2124,16 @@ def llm_extract(body: str, *, context: str | None = None,
         chunks = plan_chunks(body, chunk_size)
         offset = 0
         for i, piece in enumerate(chunks):
-            result = infer_piece(i, piece, offset)
+            result = infer_piece(i, piece, offset, sum(
+                mandatory_calls(j, later) for j, later in enumerate(chunks) if j > i))
             offset += len(piece)
             if result is None or result is _DEFERRED:
                 return result
             outs.extend(result)
         if not outs:
             return None
+        if pending_quality:
+            return _DEFERRED
         out = outs[0] if len(outs) == 1 else _merge(outs)
         if vital_policy:
             _apply_vital_policy(out, body, vital_policy)
@@ -2825,6 +2979,12 @@ def _saved_chunk_state(ledger, r, context=None, *, chunk_size=None):
             for counter in ("_items_dropped", "_evidence_dropped"):
                 if type(content.get(counter)) is int and content[counter] >= 0:
                     validated[counter] = max(validated.get(counter, 0), content[counter])
+            if meta.get("quality_pass") == _QUALITY_CHECKPOINT and meta.get("quality_status") in ("pending", "started"):
+                validated["_quality_status"] = meta["quality_status"]
+            elif meta.get("quality_pass") == _QUALITY_CHECKPOINT and meta.get("quality_status") in (
+                    "hint_gaps_resolved", "unresolved", "dispatch_unknown", "skipped_budget"):
+                validated["_quality_result"] = {"state": meta["quality_status"],
+                                                "remaining_hint_candidates": meta.get("quality_remaining")}
             saved[key] = validated
     return splits, saved
 
@@ -2845,6 +3005,15 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     "plan_version": PLAN_VERSION}
             if split_size is not None:
                 meta["split_size"] = split_size
+            quality_status = value.get("_quality_status")
+            if quality_status in ("pending", "started"):
+                meta.update(quality_pass=_QUALITY_CHECKPOINT, quality_status=quality_status)
+                value = {key: item for key, item in value.items() if key != "_quality_status"}
+            if isinstance(value.get("_quality_result"), dict):
+                quality = value["_quality_result"]
+                meta.update(quality_pass=_QUALITY_CHECKPOINT, quality_status=quality["state"],
+                            quality_remaining=quality["remaining_hint_candidates"])
+                value = {key: item for key, item in value.items() if key != "_quality_result"}
             ledger.artifact_add_tx("extract_llm_chunk", json.dumps(value, ensure_ascii=False),
                                    project_id=r["project_id"], message_id=r["message_id"],
                                    model=meta["actual_model"], meta=meta)
@@ -2869,7 +3038,7 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
 
     def count(key, piece):
         if key in saved:
-            return 1, 1
+            return int("_quality_status" not in saved[key]), 1
         if key in splits:
             counts = [count(f"{key}:{i}", part) for i, part in enumerate(plan_chunks(piece, splits[key]))]
             return sum(part[0] for part in counts), sum(part[1] for part in counts)
@@ -2897,6 +3066,12 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
         if (bound and (review and review[0] or any(
                 isinstance(meta.get(key), dict) and meta[key].get("applied") is False
                 for key in ("qc_fix", "human_fix")))):
+            return out
+        integrity = meta.get("integrity") if isinstance(meta, dict) else None
+        quality = integrity.get("completeness", {}) if isinstance(integrity, dict) else {}
+        if bound and isinstance(quality, dict) and any(
+                isinstance(entry, dict) and entry.get("state") != "hint_gaps_resolved"
+                for entry in quality.values()):
             return out
         if (bound and not meta.get("error") and valid is not None
                 and not valid.get("_items_dropped") and not valid.get("_evidence_dropped")
@@ -3388,18 +3563,45 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     prefilter = _prefilter_enabled() and admitted_ids is None
     jobs, skipped = _prepare_jobs(ledger, rows, target, prefilter)
     metas = [None] * len(jobs)
+    batch_metas = []
     checkpoints = queue.SimpleQueue()
+    checkpoint_stopped = threading.Event()
     parallel = workers > 1 and len(jobs) > 1
     leases = {}
 
-    def _checkpoint(index, chunk, value, split=False):
+    def _checkpoint(index, chunk, value, split=False, receipt=None):
         r, ctx = jobs[index][0], jobs[index][1]
-        if _owns_current_source(ledger, r, leases[index]):
-            if split:
-                r["_splits"][chunk] = value
-            _persist_chunks(ledger, r, {chunk: {} if split else value}, ctx,
-                            chunk_size=r["_chunk_size"], splits=r["_splits"],
-                            split_size=value if split else None)
+        saved = False
+        try:
+            # Only a start precedes a dispatch; releasing an unsent start back
+            # to pending stays durable after the deadline (owner check below).
+            if (isinstance(value, dict) and value.get("_quality_status") == "started"
+                    and (checkpoint_stopped.is_set() or time.monotonic() >= deadline)):
+                return False
+            if _owns_current_source(ledger, r, leases[index]):
+                if split:
+                    r["_splits"][chunk] = value
+                _persist_chunks(ledger, r, {chunk: {} if split else value}, ctx,
+                                chunk_size=r["_chunk_size"], splits=r["_splits"],
+                                split_size=value if split else None)
+                saved = True
+            return saved
+        finally:
+            if receipt is not None:
+                receipt["saved"] = saved
+                receipt["event"].set()
+
+    def _queue_checkpoint(index, chunk, value, split=False):
+        if split or "_quality_status" not in value:
+            checkpoints.put((index, chunk, value, split))
+            return None
+        receipt = {"event": threading.Event(), "saved": False}
+        checkpoints.put((index, chunk, value, False, receipt))
+        while not receipt["event"].is_set():
+            if checkpoint_stopped.is_set() or time.monotonic() >= deadline:
+                return False
+            receipt["event"].wait(min(0.05, max(0.0, deadline - time.monotonic())))
+        return receipt["saved"] and not checkpoint_stopped.is_set() and time.monotonic() < deadline
 
     def _flush_checkpoints():
         while True:
@@ -3437,11 +3639,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            vital_policy=vital_policy,
                            chunk_size=r["_chunk_size"],
                            splits_in=r["_splits"],
-                           on_split=(lambda key, size: checkpoints.put((index, key, size, True)))
+                           on_split=(lambda key, size: _queue_checkpoint(index, key, size, True))
                            if parallel else
                            (lambda key, size: _checkpoint(index, key, size, True)),
                            feedback=qc["notes"] if qc else None,
-                           on_chunk=(lambda i, v: checkpoints.put((index, i, v)))
+                           on_chunk=(lambda i, v: _queue_checkpoint(index, i, v))
                            if parallel else
                            (lambda i, v: _checkpoint(index, i, v)))
 
@@ -3658,12 +3860,20 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # own observation is applied here, before any of them run
             _observe(transport, at)
         residue = []
+        batch_metas.append(meta)
         for tup in tups:
             index, r, ctx, saved, hints, qc, lease = tup
             r["_transport"], r["_transport_at"] = transport, at
             if status == "ok" and index in results:
-                metas[index] = meta
-                _handle(r, ctx, results[index], meta, lease, {}, qc)
+                if _completeness_issues(results[index], hints, r["body_text"]):
+                    # The batch paid for this valid first candidate. Persist it
+                    # before the single lane attempts only its optional repair.
+                    saved[0] = {**results[index], "_quality_status": "pending"}
+                    _checkpoint(index, 0, saved[0])
+                    residue.append(tup)
+                else:
+                    metas[index] = meta
+                    _handle(r, ctx, results[index], meta, lease, {}, qc)
             elif transport == "expired":
                 # Every row was sent in the batch; a residue retry would
                 # lose its failure at the now-expired preflight floor.
@@ -3699,7 +3909,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 _probe_format(deadline=deadline)
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(
-                    max_workers=min(workers, len(units))) as pool:
+                    max_workers=min(workers, len(units))) as pool, contextlib.ExitStack() as cleanup:
+                cleanup.callback(checkpoint_stopped.set)  # release ack waiters before executor shutdown
                 futs = {}
                 for kind, payload in units:
                     if kind == "single":
@@ -3796,7 +4007,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                           else None,
                 "newest": (now_ts - age_max) if age_max is not None
                           else None},
-            "llm_calls": _llm_call_stats(metas)}
+            "llm_calls": _llm_call_stats([*metas, *batch_metas])}
 
 
 def _llm_call_stats(metas) -> dict | None:

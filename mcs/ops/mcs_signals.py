@@ -22,6 +22,7 @@ Honesty rules carried from the spec:
 from __future__ import annotations
 
 import hashlib
+from itertools import islice
 import json
 import re
 import sqlite3
@@ -161,22 +162,28 @@ def _self_author_pred(organizations, alias="m"):
                     for _ in organizations), list(organizations))
 
 
-def _self_post_exists(db, pid, ts, professions, organizations):
-    """A post authored by a responder identity (pharmacist profession
-    or a configured own-org) exists in the room after ts — visible
-    engagement on the record. No identity configured -> never counts."""
+def _self_post_pred(professions, organizations, alias=""):
     pred, params = [], []
     for col, vals in (("profession", professions),
                       ("organization", organizations)):
         for v in vals or ():
-            pred.append(f"{_member_sql(col)}>0")
+            column = f"{alias}.{col}" if alias else col
+            pred.append(f"{_member_sql(column)}>0")
             params.append(v)
+    return " OR ".join(pred), params
+
+
+def _self_post_exists(db, pid, ts, professions, organizations):
+    """A post authored by a responder identity (pharmacist profession
+    or a configured own-org) exists in the room after ts — visible
+    engagement on the record. No identity configured -> never counts."""
+    pred, params = _self_post_pred(professions, organizations)
     if not pred:
         return False
     return db.execute(
         f"SELECT 1 FROM messages WHERE project_id=? AND posted_at_ts>?"
         " AND body_state IS NOT 'deleted'"
-        f" AND ({' OR '.join(pred)}) LIMIT 1",
+        f" AND ({pred}) LIMIT 1",
         (pid, ts, *params)).fetchone() is not None
 
 
@@ -186,6 +193,45 @@ def _request_registered(db, mid):
     return db.execute(
         "SELECT 1 FROM requests WHERE source_message_id=? LIMIT 1",
         (mid,)).fetchone() is not None
+
+
+def _engagement_checker(db, candidates, professions, organizations):
+    """Read response witnesses in bounded batches at the original check point."""
+    candidates = iter(candidates)
+    pred, params = _self_post_pred(professions, organizations, "reply")
+    response = (" OR EXISTS (SELECT 1 FROM messages reply "
+                "WHERE reply.project_id=json_extract(c.value,'$[0]') "
+                "AND reply.posted_at_ts>json_extract(c.value,'$[2]') "
+                "AND reply.body_state IS NOT 'deleted' "
+                f"AND ({pred}))") if pred else ""
+    batch, matched, changes = {}, None, -1
+
+    def check(pid, mid, ts):
+        nonlocal batch, matched, changes
+        while mid not in batch:
+            batch = {row[1]: tuple(row) for row in islice(candidates, 256)}
+            changes = -1
+            if not batch:
+                return (_request_registered(db, mid)
+                        or _self_post_exists(db, pid, ts, professions, organizations))
+        if changes != db.total_changes:
+            try:
+                matched = {row[0] for row in db.execute(
+                    "SELECT json_extract(c.value,'$[1]') FROM json_each(?) c "
+                    "WHERE EXISTS (SELECT 1 FROM requests r "
+                    "WHERE r.source_message_id=json_extract(c.value,'$[1]'))"
+                    + response,
+                    (json.dumps(list(batch.values())), *params))}
+            except (sqlite3.Error, TypeError, ValueError, OverflowError):
+                # Preserve per-source failure order if a bulk read is unavailable.
+                matched = None
+            changes = db.total_changes
+        if matched is None:
+            return (_request_registered(db, mid)
+                    or _self_post_exists(db, pid, ts, professions, organizations))
+        return mid in matched
+
+    return check
 
 
 SELF_RESPONSE_REACTIONS = ("accepted", "completed")
@@ -579,10 +625,9 @@ def _pharmacist_request(db, now, th, sig_cfg):
     groups = {}
     for pid, mid, ts, act in rows:
         groups.setdefault((pid, mid, ts), []).append(act)
+    engaged = _engagement_checker(db, groups, profs, orgs)
     for (pid, mid, ts), acts in groups.items():
-        if _request_registered(db, mid):
-            continue
-        if _self_post_exists(db, pid, ts, profs, orgs):
+        if engaged(pid, mid, ts):
             continue
         if self_reaction and _self_reaction_response(db, mid):
             continue
@@ -634,10 +679,9 @@ def _rx_request_visibility(db, now, th, sig_cfg):
     groups = {}
     for pid, mid, ts, rto, act in rows:
         groups.setdefault((pid, mid, ts), []).append((rto, act))
+    engaged = _engagement_checker(db, groups, profs, orgs)
     for (pid, mid, ts), reqs in groups.items():
-        if _request_registered(db, mid):
-            continue
-        if _self_post_exists(db, pid, ts, profs, orgs):
+        if engaged(pid, mid, ts):
             continue
         detail = "」「".join(
             f"{a}（{t}宛）" if isinstance(t, str) and t else f"{a}"
@@ -753,10 +797,9 @@ def _adherence_concern(db, now, th, sig_cfg):
         hits = _adherence_phrases(body or "", patient_name=name)
         if hits:
             groups.setdefault((pid, mid, ts), []).extend(hits)
+    engaged = _engagement_checker(db, groups, profs, orgs)
     for (pid, mid, ts), found in groups.items():
-        if _request_registered(db, mid):
-            continue
-        if _self_post_exists(db, pid, ts, profs, orgs):
+        if engaged(pid, mid, ts):
             continue
         detail = "」「".join(dict.fromkeys(found))
         yield _key("adherence_concern", pid, mid), {
@@ -799,14 +842,13 @@ def _discharge_notice(db, now, th, sig_cfg):
               {self_pred}
             ORDER BY d.project_id, d.message_id""",
         (lookback, *self_params)).fetchall()
+    engaged = _engagement_checker(db, rows, profs, orgs)
     for pid, mid, ts in rows:
         if not _patient_transition(db, pid, mid):
             continue
         if mid in covered:
             continue                    # transition_reconciliation owns it
-        if _request_registered(db, mid):
-            continue
-        if _self_post_exists(db, pid, ts, profs, orgs):
+        if engaged(pid, mid, ts):
             continue
         yield _key("discharge_notice", pid, mid), {
             "type": "discharge_notice", "project_id": pid,
@@ -836,6 +878,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
               {self_pred}
             ORDER BY m.project_id, m.message_id""",
         (now - th["fyi_max_age_d"] * DAY_S, *self_params)).fetchall()
+    engaged = _engagement_checker(db, (row[:3] for row in rows), profs, orgs)
     for pid, mid, ts, content_s, body, name in rows:
         try:
             content = json.loads(content_s)
@@ -865,9 +908,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
                  and isinstance(s.get("text"), str) and s["text"].strip()]
         if not symps:
             continue
-        if _request_registered(db, mid):
-            continue
-        if _self_post_exists(db, pid, ts, profs, orgs):
+        if engaged(pid, mid, ts):
             continue
         yield _key("symptom_after_med_change", pid, mid), {
             "type": "symptom_after_med_change", "project_id": pid,

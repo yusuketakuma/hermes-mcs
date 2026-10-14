@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 import sqlite3
 import sys
+from contextlib import closing
 
 import job_ops
 import notify_cards
@@ -79,7 +80,7 @@ def test_deeper_since_fetches_gap_before_floor(monkeypatch, tmp_path):
         monkeypatch.setattr(sys, "argv", [
             "init_data.py", "--days", days, "--delay", "0"])
         init_data.main()
-    c = sqlite3.connect(db)
-    assert c.execute("select count(*) from messages").fetchone()[0] == 50
-    floor = c.execute("select history_floor from patients").fetchone()[0]
-    assert floor <= NOW - 59 * 86400
+    with closing(sqlite3.connect(db)) as c:
+        assert c.execute("select count(*) from messages").fetchone()[0] == 50
+        floor = c.execute("select history_floor from patients").fetchone()[0]
+        assert floor <= NOW - 59 * 86400

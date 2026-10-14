@@ -1,6 +1,7 @@
-"""Semantic notice rendering (spec §20, §19.3): the human-readable
-summary text, the code-only degraded notice, outbox delivery dedupe,
-and origin-event eligibility.
+"""Semantic notice rendering (spec §20, §19.3).
+
+Builds the human-readable summary text and the code-only degraded
+notice, and owns outbox delivery dedupe and origin-event eligibility.
 
 _emit_degraded resolves pipeline names through the semantic module so
 facade monkeypatch points (thread_bundle/_current/policy_fingerprint)
@@ -345,7 +346,7 @@ def _emit_degraded(ledger, scfg: dict) -> int:
     Each (root, fingerprint) pair dedupes via delivery_key."""
     import semantic
     cutoff = time.time() - scfg["delayed_notice_seconds"]
-    sent = 0
+    enqueued = 0
     # Only events still undelivered qualify — a base notification that
     # already reached Discord (accepted) or was dropped (suppressed)
     # must never get an extra "新着取得" degraded notice (§19.3). A
@@ -395,5 +396,5 @@ def _emit_degraded(ledger, scfg: dict) -> int:
                 "target_message_ids": arrivals,
                 "text": render_degraded(ledger, pid),
                 "policy_version": semantic.POLICY_VERSION})
-            sent += 1
-    return sent
+            enqueued += 1
+    return enqueued

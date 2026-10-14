@@ -6,6 +6,7 @@ import sys
 import time
 import datetime
 import sqlite3
+from contextlib import closing
 
 import mcs_adapter
 
@@ -110,7 +111,7 @@ def test_reauth_on_reached_chunk_retries_and_stores_reply(
     result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert adapter.logins == 1 and adapter.fetches == 2
     assert adapter.threads == 2
-    c = sqlite3.connect(str(tmp_path / "ledger.db"))
-    ids = {r[0] for r in c.execute("select message_id from messages")}
-    assert 101 in ids
+    with closing(sqlite3.connect(str(tmp_path / "ledger.db"))) as c:
+        ids = {r[0] for r in c.execute("select message_id from messages")}
+        assert 101 in ids
     assert rc == 0 and result["ok"]

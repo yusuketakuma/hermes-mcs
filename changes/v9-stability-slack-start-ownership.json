@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "Slack workerの起動失敗時に接続の参照を解放",
+  "summary": "Slack workerの起動が拒否されたとき、稼働中workerの一覧に失敗した接続を残さないようにしました。設定を切り替えて起動を繰り返しても、失敗した接続の参照が増え続けません。",
+  "upgrade": "追加操作は不要です。起動の可否、既存workerからの引き継ぎ、配送lockと認可の条件は変わりません。対象gatewayまたは独立ランタイムへの反映には既存手順で再起動が必要です。",
+  "details": ["起動に失敗したworker自身が現在のownerである場合だけ、共有一覧から取り除く。"],
+  "refs": ["adapters/slack/tasks.py"]
+}

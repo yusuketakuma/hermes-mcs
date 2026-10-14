@@ -948,10 +948,8 @@ def _agent_pid(label: str, unknown: int | None = None) -> int | None:
     that hung or could not start answers `unknown` — quiesce passes a
     non-None value so an unverifiable stop is never taken as stopped."""
     r = _run(["launchctl", "print", f"gui/{_uid()}/{label}"])
-    if r.returncode in (124, 127):
-        return unknown
     if r.returncode != 0:
-        return None
+        return None if r.returncode == 113 else unknown
     m = re.search(r"^\s*pid\s*=\s*(\d+)", r.stdout, re.M)
     return int(m.group(1)) if m else None
 
@@ -1471,6 +1469,10 @@ def _stop_update_child(child) -> None:
         # reaping; bound this fallback if process-group termination failed.
         with suppress(BaseException):
             child.wait(timeout=5)
+    for stream in (getattr(child, "stdout", None), getattr(child, "stderr", None)):
+        if stream is not None:
+            with suppress(BaseException):
+                stream.close()
 
 
 def _reinstall(applying: dict) -> None:
@@ -2209,6 +2211,10 @@ def _reconcile_membership(desired: dict) -> list[str]:
             continue
         if label not in desired_agents and label not in current:
             _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
+            stopped = _run(["launchctl", "print", f"gui/{_uid()}/{label}"])
+            if getattr(stopped, "returncode", None) != 113:
+                problems.append(f"agent_retirement_unverifiable:{label}")
+                continue
             with suppress(OSError):
                 os.unlink(path)
     return problems
@@ -2683,7 +2689,13 @@ def _replace_database(backup_path, expected_sha, before_replace):
     directory = os.path.dirname(LEDGER)
     _settle_staging(directory)
     fd, temporary = tempfile.mkstemp(dir=directory, prefix=".restore.", suffix=".db")
-    created = os.fstat(fd)
+    try:
+        created = os.fstat(fd)
+    except BaseException:
+        with suppress(OSError):
+            os.close(fd)
+        # Without the inode witness this path cannot be safely removed.
+        raise
     own = {"name": os.path.basename(temporary), "dev": created.st_dev,
            "ino": created.st_ino, "uid": created.st_uid}
     journaled = False

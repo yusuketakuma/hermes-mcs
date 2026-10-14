@@ -1731,6 +1731,8 @@ class Ledger:
                     (message_id, r["actor_id"], r["reaction_type"],
                      r.get("profession") or None, now, r.get("name") or None,
                      r.get("organization") or None) for r in rows])
+                # Keep SQLite's original error for invalid row types.
+                seen = set(seen)
                 for actor, kind in self.db.execute(
                         "SELECT actor_id,reaction_type FROM message_reaction_actors "
                         "WHERE message_id=? AND removed_at IS NULL",
@@ -2239,7 +2241,7 @@ class Ledger:
             "WHERE message_id=? AND state != 'withdrawn' "
             "ORDER BY attachment_id", (message_id,))]
 
-    def _semantic_member(self, row) -> dict:
+    def _semantic_member(self, row, attachments=None) -> dict:
         """Canonical member dict of the thread-input digest contract —
         one shape shared by the per-thread and per-message fingerprints."""
         body = row["body_text"] or ""
@@ -2256,7 +2258,8 @@ class Ledger:
             "profession": row["profession"] or "",
             "organization": row["organization"] or "",
             "posted_at": row["posted_at"] or "",
-            "attachments": self._semantic_attachments(row["message_id"]),
+            "attachments": (self._semantic_attachments(row["message_id"])
+                            if attachments is None else attachments),
         }
 
     @staticmethod
@@ -2279,7 +2282,21 @@ class Ledger:
             "organization,posted_at FROM messages WHERE project_id=? "
             "AND (message_id=? OR parent_id=?) "
             "ORDER BY posted_at_ts,message_id", (project_id, root, root))
-        members = [self._semantic_member(row) for row in rows]
+        first = rows.fetchone()
+        if first is None:
+            return self._semantic_digest([])
+        attachments = {}
+        for row in self.db.execute(
+                "SELECT a.message_id,a.attachment_id,a.file_id,a.name,a.bytes,a.sha256,a.state "
+                "FROM attachments a JOIN messages m ON m.message_id=a.message_id "
+                "WHERE m.project_id=? AND (m.message_id=? OR m.parent_id=?) "
+                "AND a.state != 'withdrawn' ORDER BY a.attachment_id", (project_id, root, root)):
+            item = dict(row)
+            message_id = item.pop("message_id")
+            attachments.setdefault(message_id, []).append(item)
+        members = [self._semantic_member(first, attachments.get(first["message_id"], []))]
+        members.extend(self._semantic_member(row, attachments.get(row["message_id"], []))
+                       for row in rows)
         return self._semantic_digest(members)
 
     def _semantic_message_fingerprint(self, project_id: int,
@@ -2690,18 +2707,31 @@ class Ledger:
           ORDER BY MAX(m.first_seen) DESC LIMIT ?
         """, (since, limit)).fetchall()
 
-    def stored_reply_ids(self, parent_id: int) -> set:
+    def stored_reply_ids(self, parent_id: int, *, project_id: int | None = None) -> set:
         """Replies settled for a thread clear: full/deleted bodies, plus
         stored incomplete ones whose reply job burnt out — waiting on a
         failed job would block the thread (and a THREAD_READ_MAX slot)
         until it ages out of the window."""
         return {r[0] for r in self.db.execute("""
           SELECT m.message_id FROM messages m
-          WHERE m.parent_id=? AND (m.body_state IN ('full','deleted')
+          WHERE m.parent_id=? AND (? IS NULL OR m.project_id=?)
+            AND (m.body_state IN ('full','deleted')
             OR EXISTS(SELECT 1 FROM fetch_jobs j WHERE j.kind='reply'
                       AND j.project_id=m.project_id
                       AND j.message_id=m.message_id AND j.state='failed'))
-        """, (parent_id,))}
+        """, (parent_id, project_id, project_id))}
+
+    def message_owners(self, message_ids) -> dict:
+        """Stored project_id of each given message id, whatever its body state
+        or parent: saves refuse to move a message to another project."""
+        ids = list(message_ids)
+        owners = {}
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            owners.update((r[0], r[1]) for r in self.db.execute(
+                "SELECT message_id,project_id FROM messages WHERE message_id IN ("
+                + ",".join("?" * len(chunk)) + ")", chunk))
+        return owners
 
     def mark_thread_read(self, project_id: int, parent_id: int,
                          last_reply_id: int, status: str) -> None:

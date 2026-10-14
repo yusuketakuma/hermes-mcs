@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from contextlib import closing
 
 import pytest
 
@@ -1510,42 +1511,42 @@ def test_consent_hold_defers_everything_but_restore_approve(
     import mcs_requests
     import mcs_update
 
-    db = _ledger(tmp_path)
-    db.ensure_patient(1)
-    data = tmp_path / "data"
-    data.mkdir()
-    cmd_dir = data / "cmd"
-    cmd_dir.mkdir()
-    notify_cards.mark_restored(str(data), backup_path=str(data / "b.db"),
-                               phase="awaiting_consent")
-    rid = "c" * 64
-    for req in (
-            {"cmd": "ops.pause", "project_id": 1, "feature": "semantic"},
-            {"cmd": "request.create", "project_id": 1,
-             "source_message_id": 1, "source_hash": "e" * 64,
-             "title": "synthetic", "reason": "synthetic"},
-            {"cmd": "ops.restore_approve", "project_id": None,
-             "report_id": rid, "backup_sha256": "d" * 64,
-             "backup_schema": 7, "reason": "synthetic"}):
-        req.update({"version": 1, "command_id": str(uuid.uuid4()),
-                    "actor": "t", "human_confirmed": True})
-        mcs_requests.enqueue(req, str(cmd_dir))
-    spawned = []
-    monkeypatch.setattr(mcs_update, "spawn_detached",
-                        lambda: spawned.append(1))
-    result = {"errors": []}
-    job_ops.drain_commands(db, result, str(cmd_dir))
+    with closing(_ledger(tmp_path)) as db:
+        db.ensure_patient(1)
+        data = tmp_path / "data"
+        data.mkdir()
+        cmd_dir = data / "cmd"
+        cmd_dir.mkdir()
+        notify_cards.mark_restored(str(data), backup_path=str(data / "b.db"),
+                                   phase="awaiting_consent")
+        rid = "c" * 64
+        for req in (
+                {"cmd": "ops.pause", "project_id": 1, "feature": "semantic"},
+                {"cmd": "request.create", "project_id": 1,
+                 "source_message_id": 1, "source_hash": "e" * 64,
+                 "title": "synthetic", "reason": "synthetic"},
+                {"cmd": "ops.restore_approve", "project_id": None,
+                 "report_id": rid, "backup_sha256": "d" * 64,
+                 "backup_schema": 7, "reason": "synthetic"}):
+            req.update({"version": 1, "command_id": str(uuid.uuid4()),
+                        "actor": "t", "human_confirmed": True})
+            mcs_requests.enqueue(req, str(cmd_dir))
+        spawned = []
+        monkeypatch.setattr(mcs_update, "spawn_detached",
+                            lambda: spawned.append(1))
+        result = {"errors": []}
+        job_ops.drain_commands(db, result, str(cmd_dir))
 
-    assert result["command_commands"] == 1        # consent only
-    assert result["ops_commands"] == 1
-    assert spawned == [1]                         # updater launched post-commit
-    left = sorted(p.name for p in cmd_dir.glob("*.json"))
-    assert len(left) == 2                         # pause + import stayed
-    receipt = json.loads(db.db.execute(
-        "SELECT receipt_json FROM command_receipts").fetchone()[0])
-    assert receipt["cmd"] == "ops.restore_approve"
-    assert receipt["outcome"] == "applied"
-    assert receipt["report_id"] == rid
+        assert result["command_commands"] == 1        # consent only
+        assert result["ops_commands"] == 1
+        assert spawned == [1]                         # updater launched post-commit
+        left = sorted(p.name for p in cmd_dir.glob("*.json"))
+        assert len(left) == 2                         # pause + import stayed
+        receipt = json.loads(db.db.execute(
+            "SELECT receipt_json FROM command_receipts").fetchone()[0])
+        assert receipt["cmd"] == "ops.restore_approve"
+        assert receipt["outcome"] == "applied"
+        assert receipt["report_id"] == rid
 
 
 @pytest.mark.parametrize("save_method", ["save_messages", "save_thread_replies"])

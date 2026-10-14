@@ -1221,7 +1221,16 @@ def stage_thread_read(adapter, ledger, result, deadline):
                 ledger.mark_thread_read(pid, parent, last, "confirmed")
                 continue
             server = {m.message_id for m in adapter.fetch_thread(pid, parent)}
-            missing = server - ledger.stored_reply_ids(parent)
+            missing = server - ledger.stored_reply_ids(parent, project_id=pid)
+            # A reply stored under another patient cannot be re-owned by a
+            # refetch (saves never move project_id): queueing it would revive
+            # the done job every tick. It is not this patient's stored reply
+            # either, so the thread is never cleared while it remains.
+            foreign = {rid for rid, owner in ledger.message_owners(missing).items()
+                       if owner != pid}
+            missing -= foreign
+            if foreign:
+                result["errors"].append("thread_read: reply_stored_for_other_patient")
             if missing:
                 # Store full replies before acknowledging the thread.
                 # never revive a burnt-out job: this runs every tick and
@@ -1234,6 +1243,7 @@ def stage_thread_read(adapter, ledger, result, deadline):
                 if any(ledger.job_state("reply", pid, rid) == "failed"
                        for rid in missing):
                     result["errors"].append("thread_read: reply_failed")
+            if missing or foreign:
                 continue
             ledger.mark_thread_read(pid, parent, last, "unknown")
             seen = set()

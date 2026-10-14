@@ -351,7 +351,7 @@ python3 mcs/semantic/eval/semantic_evaluation.py --input new-labelled/evaluation
 | canonical facts `semantic-facts/v2` / semantic artifact schema `2026-09-20` | これらはエンジンv3/4と独立。現行の事実生成→別の要約生成→Jev監査→条件付き全文修正は複数呼出し（`mcs/semantic/semantic_drain.py:235-337,659-749`）。 | evidence、facts、claim、通知を一つの**世代付きjob/receipt列**で結ぶ。現行fact schemaを無条件に改版しない。 |
 | 旧PASSのcache / 出力 | `policy_fingerprint`に`fact_source`がなく、切替後に古い要約を再利用し得る（`mcs/semantic/semantic_policy.py:160-163`）。確認済みfactは40件で切られ、通常の通知追記は`mandatory_facts`を読まない（`mcs/semantic/semantic_render.py:33-83`; `mcs/semantic/semantic_send_gate.py:334-393`）。 | fact source・engine・生成入力・修復結果・依存relation世代をcache/公開の照合対象にする。専用通知と通常/返信表示の両面でverified fact ID集合を全件追跡し、無言の件数省略を禁止する。 |
 
-旧`extract_llm`とcanonical経路を単に足して呼ぶのではなく、v4の生成を一つのjobとして段階化する。「一つの推論ロジック」は1本の無制限promptではない。現行`semantic_llm`には28,000文字超の要約入力をstubにする境界があり（`mcs/semantic/semantic_llm.py:198-245`）、長文は原文の所有範囲と重複文脈を区別したbounded chunkで網羅する。既存の3,000文字単位の耐久checkpointを失わず、chunk完了集合が原文の全範囲を覆わなければPASSにしない。
+旧`extract_llm`とcanonical経路を単に足して呼ぶのではなく、v4の生成を一つのjobとして段階化する。「一つの推論ロジック」は1本の無制限promptではない。この設計時点の`semantic_llm`には28,000文字超の要約入力をstubにする境界があった。現行ソースの`PROMPT_CHAR_LIMIT`は12,000文字（`mcs/semantic/semantic_llm.py`）であり、長文は原文の所有範囲と重複文脈を区別したbounded chunkで網羅する。既存の3,000文字単位の耐久checkpointを失わず、chunk完了集合が原文の全範囲を覆わなければPASSにしない。
 
 ### 一次推論から自己修正・公開まで
 
@@ -377,7 +377,7 @@ v4がPENDING/NEEDS_REVIEW、原文変更中、Jev未評価、旧参照未移行�
 
 ### 実測で選ぶスロット数とバックログ/リアルタイムの厳密な非重複
 
-現行テンプレートはllama-server `-np 2 -c 65536`で、複数枠は同じdecode batchを共有する（`deployment/launchagents/ai.mcs.llamaserver.plist`; [llama.cpp server batching](https://github.com/ggml-org/llama.cpp/blob/d81aef19941e145d04f88fb180ea89a67d052ab5/tools/server/README-dev.md#batching)）。**3枠を必須値にしない**。1枠・現行2枠・3枠をまず同じ入力と排他条件で比較し、4枠以上もコンテキストとメモリが成立する場合に候補とする。総コンテキスト65536を3枠へ均等割りするなら算術上約21,845token/slot、従来の約32,768token/slotを維持するには総量98304と追加KVメモリが必要だが、実際の`n_ctx`/KV配置は稼働するbinaryで確認する。本機は`hw.model=Mac16,10`、搭載メモリ16GiBと確認したM4 Mac miniで、Apple公称120GB/sはこの処理の実効帯域ではない（[モデル識別](https://support.apple.com/en-us/102852)、[技術仕様](https://support.apple.com/en-us/121555)）。
+この設計時点のテンプレートはllama-server `-np 2 -c 65536`だった。現行の配布テンプレートは`-np 3 -c 49152`（16,384token/slot）で、実機の設定・容量検証をこの文書から推定しない。以下の2枠比較は設計時点の条件で、複数枠は同じdecode batchを共有する（`deployment/launchagents/ai.mcs.llamaserver.plist`; [llama.cpp server batching](https://github.com/ggml-org/llama.cpp/blob/d81aef19941e145d04f88fb180ea89a67d052ab5/tools/server/README-dev.md#batching)）。**3枠を必須値にしない**。1枠・設計時点の2枠・3枠をまず同じ入力と排他条件で比較し、4枠以上もコンテキストとメモリが成立する場合に候補とする。総コンテキスト65536を3枠へ均等割りするなら算術上約21,845token/slot、従来の約32,768token/slotを維持するには総量98304と追加KVメモリが必要だが、実際の`n_ctx`/KV配置は稼働するbinaryで確認する。本機は`hw.model=Mac16,10`、搭載メモリ16GiBと確認したM4 Mac miniで、Apple公称120GB/sはこの処理の実効帯域ではない（[モデル識別](https://support.apple.com/en-us/102852)、[技術仕様](https://support.apple.com/en-us/121555)）。
 
 本番には全ての実際の接続元（MCS、Hermes主処理/補助/委譲/cron、GBrainを含めて検出した経路）を分類する**共通の強制受付境界**が先に必要。MCSの自動新着抽出は「新着優先BACKLOG」であり、人が待つ対話RTとは区別する。classは認証済み経路と操作種別で決め、clientの自己申告だけでRTへ昇格させない。backend直結・旧URL・未分類・fallbackを拒否できない場合、MCSだけのslot固定では非重複を保証できずv4の本番切替はNO-GOとする。受付世代epochと要求の終端を耐久記録し、`O_BACKLOG * O_RT = 0`を**送信前予約からbackend終端確認まで**維持する。server内の待機要求、取消し待ち、結果不明、Jev/QC中のjobも反対classへの切替を許さない。RT到着と新規背景受付の停止を原子的に行い、背景の自然完了または旧backend終了の確認**後**にRTを送る。stock serverへcancelを送っただけ、timeout・切断・`/slots`の一瞬の空きでは終了とみなさない。controller/backend再起動・旧epochの要求・結果不明は双方を閉じて照合する。RT継続流入中にも背景progressを保証するには実測で長さを決めた背景保護時間帯が必要だが、その間のRTは待機/延期し、排他を緩めない。滞留年齢・受付待ち・資源不足を明示する。
 

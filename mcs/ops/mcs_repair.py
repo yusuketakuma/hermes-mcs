@@ -444,12 +444,15 @@ def _log(path, *, create):
     flags = (os.O_RDWR | os.O_APPEND if create else os.O_RDONLY) \
         | os.O_NOFOLLOW | os.O_NONBLOCK
     fd = os.open(path, flags | (os.O_CREAT if create else 0), 0o600)
-    info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() \
-            or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1:
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() \
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1:
+            raise ValueError("private_audit_log_required")
+        return os.fdopen(fd, "r+b" if create else "rb")
+    except BaseException:
         os.close(fd)
-        raise ValueError("private_audit_log_required")
-    return os.fdopen(fd, "r+b" if create else "rb")
+        raise
 
 
 def _backup_proof(backup, expected, snapshot):

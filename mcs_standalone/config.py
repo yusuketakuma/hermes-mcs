@@ -149,8 +149,13 @@ def validate_credentials(value, transport):
 
 def _private_bytes(path, missing, invalid, limit=16384):
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-        with os.fdopen(fd, "rb") as stream:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            stream = os.fdopen(fd, "rb")
+        except BaseException:
+            os.close(fd)
+            raise
+        with stream:
             metadata = os.fstat(stream.fileno())
             if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
                     or metadata.st_uid != os.getuid() or metadata.st_size > limit):

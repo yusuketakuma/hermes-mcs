@@ -282,8 +282,8 @@ class LineWorksClient:
                  clock=time.time, monotonic=time.monotonic, timeout=20,
                  max_upload_bytes=24 * 1024 * 1024):
         if (not isinstance(credentials, Credentials) or isinstance(timeout, bool)
-                or not isinstance(timeout, int | float) or not math.isfinite(timeout)
-                or not 0 < timeout <= 120 or isinstance(max_upload_bytes, bool)
+                or not isinstance(timeout, int | float) or not 0 < timeout <= 120
+                or not math.isfinite(timeout) or isinstance(max_upload_bytes, bool)
                 or not isinstance(max_upload_bytes, int)
                 or not 0 < max_upload_bytes <= 24 * 1024 * 1024):
             raise ClientError("validation_invalid")

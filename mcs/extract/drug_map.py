@@ -461,7 +461,11 @@ def _source_meds(source) -> list[tuple[int, str]]:
 
 def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
     """Read only exact current-source annotations from the DB, never a dictionary."""
-    progress = _progress(db)
+    return _current_refs_with_progress(db, mid, _progress(db))
+
+
+def _current_refs_with_progress(db: sqlite3.Connection, mid: int, progress: dict | None) -> list[Annotation]:
+    """Reuse dictionary progress only within the caller's fixed snapshot."""
     if progress is not None and progress.get("dictionary") is None:
         return []
     source = _source(db, mid)

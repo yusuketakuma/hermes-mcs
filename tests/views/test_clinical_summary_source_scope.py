@@ -2,6 +2,7 @@
 import json
 import pytest
 import extract_llm
+import notify_cards
 import structured_view
 from extract_testkit import _ledger, _message, _hash
 
@@ -139,3 +140,65 @@ def test_missing_message_does_not_publish_forged_vital_but_nullable_legacy_row_s
     with store.db:
         store.db.execute("UPDATE messages SET body_text=NULL WHERE message_id=1")
     assert "バイタル: SpO2 80" in structured_view.structured_lines(store.db, 1)
+
+
+@pytest.mark.parametrize("body,group,nullable,status,wanted", [
+    ("本人は合成薬Aを開始。", False, False, "current", True),
+    ("母の状態：\n合成薬Aを開始。", False, False, "current", False),
+    ("合成薬Aを開始。", True, False, "current", False),
+    ("本人は合成薬Aを開始。", True, False, "current", True),
+    ("予定：\n合成薬Aを開始。", False, False, "planned", True),
+    ("完全合成の旧形式記録", False, True, "current", True),
+])
+def test_medication_presence_reuses_scope_without_dictionary_reads(
+        store, monkeypatch, body, group, nullable, status, wanted):
+    seed(store, body, {"meds": [{"name": "合成薬A", "subject": "patient",
+         "status": status, "evidence": "合成薬Aを開始"}]}, group=group)
+    if nullable:
+        with store.db:
+            store.db.execute("UPDATE messages SET body_text=NULL WHERE message_id=1")
+    assert bool(any(structured_view.medication_entries(store.db, 1))) is wanted
+    monkeypatch.setattr(structured_view, "_drug_refs",
+                        lambda *args: pytest.fail("presence reads dictionary annotations"))
+    before = store.db.total_changes
+    assert list(notify_cards._meds_messages(
+        store.db, {"kind": "notice"}, {"source_message_id": 1})) == ([1] if wanted else [])
+    assert store.db.total_changes == before
+
+
+def test_medication_presence_first_hit_does_not_consume_the_next_batch(store):
+    seed(store, "本人は合成薬Aを開始。", {"meds": [{"name": "合成薬A", "subject": "patient",
+         "status": "current", "evidence": "合成薬Aを開始"}]})
+    consumed = []
+
+    def ids():
+        for mid in range(1, 1001):
+            consumed.append(mid)
+            yield mid
+
+    assert next(structured_view.medication_post_ids(store.db, ids())) == 1
+    assert consumed == [1]
+
+
+def test_medication_presence_keeps_order_and_duplicates_across_bounded_batches(store):
+    body = "本人は合成薬Aを開始。"
+    doc = {"meds": [{"name": "合成薬A", "subject": "patient", "status": "current",
+                    "evidence": "合成薬Aを開始"}]}
+    store.save_messages([_message(mid=mid, body=body) for mid in range(1, 423)])
+    for mid in (1, 2, 3, 421):
+        store.artifact_add("extract_llm", json.dumps(doc), project_id=1, message_id=mid,
+                           meta={"hash": _hash(store, mid),
+                                 "extract_version": extract_llm.EXTRACT_VERSION})
+    ids = [3, 2, 3, 1, 999, *range(4, 423)]
+    expected = [mid for mid in ids if any(structured_view.medication_entries(store.db, mid))]
+    assert expected == [3, 2, 3, 1, 421]
+    before = store.db.total_changes
+    statements = []
+    store.db.set_trace_callback(statements.append)
+    try:
+        assert list(structured_view.medication_post_ids(store.db, iter(ids))) == expected
+    finally:
+        store.db.set_trace_callback(None)
+    reads = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+    assert len(reads) == 3
+    assert store.db.total_changes == before

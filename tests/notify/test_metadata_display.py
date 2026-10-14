@@ -1,6 +1,7 @@
 """スタンプ表示はcaptureの観測だけを使い、業務状態と本文配送を維持する。"""
 import json
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -34,7 +35,7 @@ def _react(kind="viewed", mine=True):
 
 
 def test_old_snapshot_and_shadow_are_unfetched(led):
-    with sqlite3.connect(":memory:") as old:
+    with closing(sqlite3.connect(":memory:")) as old, old:
         meta = get_message_metadata(old, 100)
         assert meta["reactions"] is None
         assert stamp_line(meta) == "スタンプ 未取得"
@@ -127,7 +128,7 @@ def test_schema7_snapshot_reads_as_unfetched(led, tmp_path):
     _msg(led, 100)
     snap = ledger.publish_snapshot(str(tmp_path / "data" / "ledger.db"),
                                    str(tmp_path / "snap"))
-    with sqlite3.connect(snap) as db:
+    with closing(sqlite3.connect(snap)) as db, db:
         db.execute("DROP TABLE message_metadata")
         db.execute("PRAGMA user_version=7")
     view = mcs_view.View(snap)
@@ -150,7 +151,7 @@ def test_cli_capture_freshness_and_separate_shadow_status(led, tmp_path):
               error="network_error")
     snap = ledger.publish_snapshot(str(tmp_path / "data" / "ledger.db"),
                                    str(tmp_path / "snap"))
-    with sqlite3.connect(snap) as db:
+    with closing(sqlite3.connect(snap)) as db, db:
         db.execute("UPDATE snapshot_meta SET generated_at=?", (NOW,))
     view = mcs_view.View(snap)
     try:

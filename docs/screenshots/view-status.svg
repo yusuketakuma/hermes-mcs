@@ -1,22 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="720" height="400" viewBox="0 0 720 400" font-family="Menlo, monospace">
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="400" viewBox="0 0 720 400" font-family="Menlo, monospace" role="img" aria-labelledby="status-title status-desc">
+  <title id="status-title">架空の取込状況とタイムラインの抜粋</title>
+  <desc id="status-desc">statusのitemsにある状況と、timelineのitemsにある投稿の一部を使った完全に架空の出力抜粋。完了記録と欠落未検証を区別し、実データや実端末の画面ではない。</desc>
   <rect width="720" height="400" rx="8" fill="#1e1e1e"/>
   <circle cx="24" cy="22" r="6" fill="#ff5f57"/>
   <circle cx="44" cy="22" r="6" fill="#febc2e"/>
   <circle cx="64" cy="22" r="6" fill="#28c840"/>
-  <text x="24" y="56" font-size="12" fill="#6a9955">$ mcs/views/mcs_view.py status --project 123</text>
+  <text x="24" y="56" font-size="12" fill="#6a9955">$ mcs/views/mcs_view.py status --project 123 # items[0] 抜粋・架空</text>
   <text x="24" y="82" font-size="12" fill="#d4d4d4">{</text>
   <text x="24" y="102" font-size="12" fill="#d4d4d4">  &quot;project_id&quot;: 123,</text>
   <text x="24" y="122" font-size="12" fill="#d4d4d4">  &quot;fetch_state&quot;: &quot;complete&quot;,</text>
-  <text x="24" y="142" font-size="12" fill="#d4d4d4">  &quot;last_successful_unread_fetch&quot;: &quot;2026-10-02T09:15:00+09:00&quot;,</text>
-  <text x="24" y="162" font-size="12" fill="#d4d4d4">  &quot;pending&quot;: {&quot;body&quot;: 0, &quot;replies&quot;: 2, &quot;attachments&quot;: 1},</text>
-  <text x="24" y="182" font-size="12" fill="#d4d4d4">  &quot;history_record&quot;: {&quot;kind&quot;: &quot;cutoff_reached&quot;, &quot;gapless_verified&quot;: false},</text>
+  <text x="24" y="142" font-size="12" fill="#d4d4d4">  &quot;last_successful_unread_fetch&quot;: 1790900100,</text>
+  <text x="24" y="162" font-size="12" fill="#d4d4d4">  &quot;incomplete_reply_roots&quot;: 2,</text>
+  <text x="24" y="182" font-size="12" fill="#d4d4d4">  &quot;history_record&quot;: &quot;cutoff_recorded&quot;, &quot;gapless_verified&quot;: false,</text>
   <text x="24" y="202" font-size="12" fill="#d4d4d4">  &quot;exact_missing_ranges&quot;: null,</text>
-  <text x="24" y="222" font-size="12" fill="#d4d4d4">  &quot;requests&quot;: {&quot;open&quot;: 1, &quot;in_progress&quot;: 0, &quot;done&quot;: 3}</text>
+  <text x="24" y="222" font-size="12" fill="#d4d4d4">  &quot;attachment_states&quot;: [{&quot;state&quot;: &quot;pending&quot;, &quot;count&quot;: 1}]</text>
   <text x="24" y="242" font-size="12" fill="#d4d4d4">}</text>
-  <text x="24" y="272" font-size="12" fill="#6a9955">$ mcs/views/mcs_view.py timeline --project 123 --limit 3</text>
+  <text x="24" y="272" font-size="12" fill="#6a9955">$ mcs/views/mcs_view.py timeline --project 123 --limit 3 # items 抜粋</text>
   <text x="24" y="296" font-size="12" fill="#d4d4d4">[</text>
   <text x="24" y="316" font-size="12" fill="#ce9178">  {&quot;message_id&quot;: 9021, &quot;posted_at&quot;: &quot;2026-10-02 09:12&quot;,</text>
-  <text x="24" y="336" font-size="12" fill="#ce9178">   &quot;sender&quot;: &quot;B野 花子&quot;, &quot;excerpt&quot;: &quot;本日の訪問時バイタルを…&quot;},</text>
+  <text x="24" y="336" font-size="12" fill="#ce9178">   &quot;sender_name&quot;: &quot;架空 太郎&quot;, &quot;body_text&quot;: &quot;本日の訪問時バイタルを…&quot;},</text>
   <text x="24" y="356" font-size="12" fill="#ce9178">  {&quot;message_id&quot;: 9014, &quot;posted_at&quot;: &quot;2026-10-01 17:40&quot;, ...}</text>
   <text x="24" y="376" font-size="12" fill="#d4d4d4">]</text>
 </svg>

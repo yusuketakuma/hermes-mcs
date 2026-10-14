@@ -90,7 +90,8 @@ LINE WORKSは[専用手順](LINEWORKS.md)で認証・公開HTTPS Callbackを設�
 
 ## 常駐・診断
 
-macOSの`ai.mcs.standalone`が、6定期ジョブ、抽出worker2本、cmd/cmd_int取込と接続を所有します。
+macOSの`ai.mcs.standalone`が、定期6ジョブ、抽出worker2本、cmd/cmd_int取込と接続を所有します。
+`backup.enabled=true`の場合は、offsite backupも同じhostの定期ジョブとして追加されます。
 LLMとrepo外の復旧watchdogは別のnative supervisorが所有します。
 個々の定期ジョブや抽出workerをcrontab・Hermes cron・LaunchAgentへ重複登録しません。
 

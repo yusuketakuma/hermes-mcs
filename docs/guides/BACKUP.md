@@ -316,6 +316,10 @@ run_check の同意待ち経路も通常の収集・derive・送信を凍結す�
 [updater の承認照合](../../mcs/ops/mcs_update.py) は、更新・rollback の
 損失報告 `report_id`、`backup_sha256`、`backup_schema` に束縛された receipt。
 人の確認・actor・reason と receipt commit が必要で、過去の更新承認で代用しない。
+この経路はDB全体をbackup時点へ戻すため、タスクの状態・改訂・操作履歴も巻き戻る。
+損失報告の件数・内容hashは投稿と添付の2表、配送履歴の7表が対象で、
+タスクや操作履歴を含む全DBの差分ではない。表示件数が0でも全体の損失が0とは限らない。
+承認前にbackup時点と、その後のタスク・操作を含むDB全体への影響を確認する。
 backup CLI の `restore.json` はその損失報告ではなく、offsite 配置後の hold を
 解除する汎用 CLI もこのモジュールにはない。
 

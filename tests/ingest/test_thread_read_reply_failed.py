@@ -3,6 +3,7 @@ once per thread and never treated as settled: no read acknowledgement,
 no confirm, the job is not revived. Synthetic stubs only — no real MCS."""
 import time
 from types import SimpleNamespace
+from contextlib import closing
 
 import run_check
 from ingest_testkit import _ledger
@@ -30,27 +31,27 @@ def _tick(db, adapter):
 
 
 def test_burnt_out_missing_reply_is_reported_once_and_never_settled(tmp_path):
-    db = _ledger(tmp_path)
-    _store(db, 10)
-    _store(db, 11, parent=10)
-    _fail(db, 12)
-    _fail(db, 13)
-    adapter = _adapter(server=[11, 12, 13, 14])
-    result = _tick(db, adapter)
-    assert result["errors"] == ["thread_read: reply_failed"]     # once per thread
-    assert adapter.calls == ["check"]                            # never cleared
-    assert result["threads_marked_read"] == []
-    assert db.job_state("reply", 1, 12) == "failed"              # not revived
-    assert db.job_state("reply", 1, 14) == "pending"             # new gap still queued
-    assert db.db.execute("SELECT count(*) FROM thread_read_marks").fetchone()[0] == 0
-    # stays a candidate and is reported again next tick
-    assert _tick(db, _adapter(server=[11, 12, 13, 14]))["errors"] == [
-        "thread_read: reply_failed"]
+    with closing(_ledger(tmp_path)) as db:
+        _store(db, 10)
+        _store(db, 11, parent=10)
+        _fail(db, 12)
+        _fail(db, 13)
+        adapter = _adapter(server=[11, 12, 13, 14])
+        result = _tick(db, adapter)
+        assert result["errors"] == ["thread_read: reply_failed"]     # once per thread
+        assert adapter.calls == ["check"]                            # never cleared
+        assert result["threads_marked_read"] == []
+        assert db.job_state("reply", 1, 12) == "failed"              # not revived
+        assert db.job_state("reply", 1, 14) == "pending"             # new gap still queued
+        assert db.db.execute("SELECT count(*) FROM thread_read_marks").fetchone()[0] == 0
+        # stays a candidate and is reported again next tick
+        assert _tick(db, _adapter(server=[11, 12, 13, 14]))["errors"] == [
+            "thread_read: reply_failed"]
 
 
 def test_pending_missing_reply_is_not_reported(tmp_path):
-    db = _ledger(tmp_path)
-    _store(db, 10)
-    _store(db, 11, parent=10)
-    assert _tick(db, _adapter(server=[11, 12]))["errors"] == []
-    assert db.job_state("reply", 1, 12) == "pending"
+    with closing(_ledger(tmp_path)) as db:
+        _store(db, 10)
+        _store(db, 11, parent=10)
+        assert _tick(db, _adapter(server=[11, 12]))["errors"] == []
+        assert db.job_state("reply", 1, 12) == "pending"

@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "LINE WORKSの不正な待機設定を送信前に拒否",
+  "summary": "待機記録やタイムアウトに扱えない大きな整数が含まれていても、例外で停止せず、既存の設定不正として拒否します。送信を始めていない待機記録の不正を、送信結果が不明な状態として記録しません。",
+  "upgrade": "追加操作は不要です。既存のタイムアウト上限、待機時間、送信先と承認条件は変わりません。常駐LINE WORKSアダプターへの反映には既存手順で再起動が必要です。",
+  "details": ["待機記録の整数変換失敗を既存のrate_state_invalidへ集約する。", "タイムアウトの範囲確認を有限数判定より先に行う。"],
+  "refs": ["adapters/lineworks/delivery.py", "adapters/lineworks/client.py"]
+}

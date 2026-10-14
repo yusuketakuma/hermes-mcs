@@ -1,6 +1,8 @@
 """Medication candidate stats/export integration with wholly fictional dictionaries."""
 
 from copy import deepcopy
+import json
+import sqlite3
 
 import pytest
 
@@ -147,6 +149,62 @@ def test_official_identities_have_separate_blocks_with_one_ref_read_per_message(
     review = after["drug_map_review"]
     assert review["status"] == "ok" and review["review_mentions"] == 2
     assert {row["name"] for row in review["items"]["items"]} == {"架空製品錠10mg", "キラナ"}
+
+
+@pytest.mark.parametrize("generation", ["active", "unrecorded", "disabled", "invalid"])
+def test_medication_stats_read_dictionary_progress_once_per_fixed_snapshot(store, tmp_path, generation):
+    for mid in (1, 2, 3):
+        _seed(store, mid=mid)
+    drug_map.derive(store, _dictionary(tmp_path))
+    with store.db:
+        if generation == "unrecorded":
+            store.db.execute("DELETE FROM artifacts WHERE kind=?", (drug_map.PROGRESS_KIND,))
+        elif generation in ("disabled", "invalid"):
+            content = json.dumps({"dictionary": None, "cursor": 3}) if generation == "disabled" else "["
+            store.db.execute("UPDATE artifacts SET content=? WHERE kind=?", (content, drug_map.PROGRESS_KIND))
+    snapshot = sqlite3.connect(":memory:")
+    store.db.backup(snapshot)
+    snapshot.row_factory = sqlite3.Row
+    snapshot.execute("PRAGMA query_only=ON")
+    queries = []
+    snapshot.set_trace_callback(queries.append)
+    try:
+        result = mcs_stats.run_stats(snapshot, SNAP_TS, {"stat": "meds"})["stats"]["meds"]
+        assert result["status"] == "ok" and result["action_totals"] == {"start": 3}
+        resolution = result["by_ingredient_candidate"]["by_resolution"]
+        visible = generation in ("active", "unrecorded")
+        assert resolution["resolved"]["numerator"] == (3 if visible else 0)
+        assert resolution["unavailable"]["numerator"] == (0 if visible else 3)
+        assert resolution["resolved"]["denominator"] == 3
+        progress_reads = [sql for sql in queries if sql.lstrip().upper().startswith("SELECT")
+                          and drug_map.PROGRESS_KIND in sql]
+        assert len(progress_reads) == 1
+    finally:
+        snapshot.close()
+
+
+def test_snapshot_stats_keep_the_two_argument_ref_reader_patchpoint(store, tmp_path, monkeypatch):
+    for mid in (1, 2, 3):
+        _seed(store, mid=mid)
+    drug_map.derive(store, _dictionary(tmp_path))
+    snapshot = sqlite3.connect(":memory:")
+    store.db.backup(snapshot)
+    snapshot.row_factory = sqlite3.Row
+    snapshot.execute("PRAGMA query_only=ON")
+    original, calls = mcs_stats.current_refs, []
+
+    def counted(connection, mid):
+        assert connection is snapshot
+        calls.append(mid)
+        return original(connection, mid)
+
+    monkeypatch.setattr(mcs_stats, "current_refs", counted)
+    try:
+        result = mcs_stats.run_stats(snapshot, SNAP_TS, {"stat": "meds"})["stats"]["meds"]
+        assert calls == [3, 2, 1]
+        assert result["by_ingredient_candidate"]["by_resolution"]["resolved"]["numerator"] == 3
+    finally:
+        snapshot.close()
 
 
 def test_review_does_not_call_missing_annotations_unknown_aliases(store, tmp_path):

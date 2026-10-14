@@ -40,7 +40,7 @@
   <rect x="380" y="443" width="104" height="30" rx="5" fill="#4e5058"/>
   <text x="432.0" y="462.0" font-size="12" fill="#fff" text-anchor="middle">MCSで開く ↗</text>
   <rect x="92" y="481" width="360" height="32" rx="5" fill="#1e1f22" stroke="#4e5058"/>
-  <text x="106" y="502" font-size="12" fill="#b5bac1">他の操作…</text>
+  <text x="106" y="502" font-size="12" fill="#b5bac1">その他の操作…</text>
   <text x="436" y="502" font-size="11" fill="#b5bac1" text-anchor="middle">▾</text>
   <circle cx="745" cy="114" r="9" fill="#5865f2"/>
   <text x="745" y="118" font-size="10" fill="#fff" text-anchor="middle">1</text>
@@ -62,6 +62,6 @@
   <text x="40" y="615" font-size="11" fill="#b5bac1">状態 — 担当・確認・タスク件数・スタンプ</text>
   <circle cx="24" cy="631" r="8" fill="#5865f2"/>
   <text x="24" y="635" font-size="9" fill="#fff" text-anchor="middle">4</text>
-  <text x="40" y="635" font-size="11" fill="#b5bac1">操作 — 確認する・担当する・タスク作成・MCSで開く と「他の操作…」</text>
+  <text x="40" y="635" font-size="11" fill="#b5bac1">操作 — 確認する・担当する・タスク作成・MCSで開く と「その他の操作…」</text>
   <text x="20" y="657" font-size="9" fill="#8b949e">名前・投稿・数値は架空です。実データ・実投稿の匿名化例は使用していません。</text>
 </svg>

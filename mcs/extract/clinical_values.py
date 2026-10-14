@@ -1,4 +1,4 @@
-"""Conservative surface normalization and quote-bound laboratory candidates."""
+"""Conservative surface normalization and quote-bound laboratory/vital candidates."""
 
 from datetime import date
 import re
@@ -50,7 +50,6 @@ def patient_current_vitals(values, body, *, patient_name=None):
     if isinstance(values, dict) and patient_item_scope({}, body, patient_name=patient_name) == "patient":
         # A source-labelled measurement overrides unscoped parsed compatibility.
         # Unmentioned/legacy fields keep their existing trusted-output contract.
-        from extract_llm import _bp_side, _nearest_vital_label
         observed = set()
         for match in re.finditer(r"\d+(?:[.．]\d+)?", body):
             label = _nearest_vital_label(body, *match.span())
@@ -254,3 +253,175 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             "unit": normalized_unit, "measured_on": measured_on if supported else None,
             "evidence": evidence,
             "confirmation": "quote_supported" if supported else "unverified"}
+
+
+# Vital keys anchor to the measurement label NEAREST their value in the
+# body — labels precede the number (脈は48 / 血圧120/80), units follow
+# (48回／分, 98℃). A bare 回/分 or % is shared between vitals, so it is
+# not a distinguishing label. sbp/dbp share the 血圧 class — position
+# inside the N/M pair decides which.
+_VITAL_LABELS = {
+    "bt":   re.compile(r"体温|BT|Bt|bt|℃"),
+    # Bare P (BT36.5 P72) — not the P of BP/SpO2/PM.
+    "hr":   re.compile(r"脈拍|(?<!静)(?<!動)脈|心拍|HR|Hr|hr"
+                       r"|(?<![A-Za-z])P(?![A-Za-z])"),
+    "rr":   re.compile(r"呼吸|RR|Rr|rr"),
+    "bp":   re.compile(r"血圧|BP|Bp|bp|収縮|拡張|mmHg"),
+    "spo2": re.compile(r"SpO2|Spo2|SPO2|spo2|酸素飽和|酸素"),
+    "bs":   re.compile(r"血糖|BS|Bs|bs|Glu|glu|血糖値"),
+}
+# Forward window: only units that sit right after the number. A label
+# word after it (P72 SpO2…) names the NEXT reading, not this one.
+_VITAL_UNITS = {"bt": re.compile(r"℃"), "bp": re.compile(r"mmHg")}
+_VITAL_CLASS = {"bt": "bt", "hr": "hr", "rr": "rr",
+                "sbp": "bp", "dbp": "bp", "spo2": "spo2", "bs": "bs"}
+_VITAL_WIN_BACK = 14
+_VITAL_WIN_FWD = 8
+
+
+def _nearest_vital_label(body: str, s: int, e: int):
+    """Label class closest to the number — a preceding label beats
+    a following unit (a label after the number belongs to the NEXT
+    reading: 血圧120/80 脈60)."""
+    best = None
+    # search the window inside the body, not a slice of it: a slice cuts
+    # 'BP' to a bare 'P' whose look-behind can no longer see the 'B'
+    start = max(0, s - _VITAL_WIN_BACK)
+    for cls, rx in _VITAL_LABELS.items():
+        m_end = None
+        for m in rx.finditer(body, start, s):
+            m_end = m.end()
+        if m_end is not None:
+            dist = s - m_end
+            if best is None or dist < best[0]:
+                best = (dist, cls)
+    for cls, rx in _VITAL_UNITS.items():
+        fm = rx.search(body[e:e + _VITAL_WIN_FWD])
+        if fm is not None:
+            dist = 100 + fm.start()
+            if best is None or dist < best[0]:
+                best = (dist, cls)
+    return best[1] if best else None
+
+
+def _bp_side(body: str, s: int, e: int):
+    """120/80: before the slash is systolic, after is diastolic."""
+    if body[e:e + 1] in ("/", "／"):
+        return "sbp"
+    if body[s - 1:s] in ("/", "／"):
+        return "dbp"
+    return None
+
+
+# One blood-pressure reading is a written 'A/B' whose nearest label is a
+# blood-pressure label (BP/血圧/mmHg — never inferred from the values, so
+# an unlabelled date such as 10/12 is not one) or an explicitly
+# side-labelled single value.
+# numbers follow the guard's own grammar (\d+ with an optional ./． decimal)
+_BP_NUM = r"\d+(?:[.．]\d+)?"
+_BP_PAIR = re.compile(rf"(?<![\d.．])({_BP_NUM})\s*[/／]\s*({_BP_NUM})(?![\d.．])")
+_BP_SIDE_WORD = re.compile(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$")
+
+
+def _bp_readings(body: str, keep=None):
+    """(pairs, side-labelled values) of the body's blood pressures; spans
+    keep(start, end) rejects — another person's, say — are left out."""
+    accept = keep or (lambda s, e: True)
+    pairs = set()
+    for m in _BP_PAIR.finditer(body):
+        if _nearest_vital_label(body, m.start(1), m.end(1)) == "bp" \
+                and accept(m.start(), m.end()):
+            pairs.add((_bp_number(m[1]), _bp_number(m[2])))
+    sides = {"sbp": set(), "dbp": set()}
+    for m in re.finditer(rf"(?<![\d.．/／]){_BP_NUM}(?![\d.．/／])", body):
+        word = _BP_SIDE_WORD.search(body[max(0, m.start() - _VITAL_WIN_BACK):m.start()])
+        if word and accept(*m.span()):
+            sides["sbp" if word[1] == "収縮期" else "dbp"].add(_bp_number(m[0]))
+    return pairs, sides
+
+
+def _bp_number(text: str) -> float:
+    """The guard's token value (full-width point folded, no rounding)."""
+    return float(text.replace("．", "."))
+
+
+def _bp_pair_unproven(body: str, sbp, dbp, keep=None) -> bool:
+    """True when sbp and dbp come from the body's blood-pressure readings
+    but no single reading carries both: a side holds several different
+    values and this combination is never written as one reading. Values
+    with no such structure keep the existing per-value contract."""
+    pairs, sides = _bp_readings(body, keep)
+    if (sbp, dbp) in pairs:
+        return False
+    systolic = {upper for upper, _ in pairs} | sides["sbp"]
+    diastolic = {lower for _, lower in pairs} | sides["dbp"]
+    if sbp not in systolic and dbp not in diastolic:
+        return False
+    return len(systolic) > 1 or len(diastolic) > 1
+
+
+def _vitals_guard(body: str | None, vit: dict,
+                  drops: dict | None = None) -> dict:
+    """Anchor each vital to the label nearest its value in the body.
+
+    A mislabelled key ('脈は48' extracted as bs:48 — pulse shown as
+    blood sugar) is clinically dangerous: when the label nearest the
+    number names a different vital, remap to it; when the value is
+    absent or the nearest labels disagree, drop the key. A verbatim
+    value with no nearby label is kept — unverifiable, not contradicted
+    (same policy as evidence)."""
+    if not body or not vit:
+        return vit
+    toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
+            for m in re.finditer(r"\d+(?:[.．]\d+)?", body)]
+    issues = drops.setdefault("vitals", []) if drops is not None else []
+
+    def note(s):
+        if len(issues) < 6:
+            issues.append(s)
+
+    out = {}
+    for k, val in vit.items():
+        hits = [(s, e) for s, e, num in toks if num == val]
+        if not hits:
+            note(f"vitals.{k}={val:g} は本文に数値がありません")
+            continue
+        kcls = _VITAL_CLASS[k]
+        winners = {_nearest_vital_label(body, s, e) for s, e in hits}
+        if kcls in winners:
+            tgt = k
+            if kcls == "bp":
+                sides = [_bp_side(body, s, e) for s, e in hits]
+                # BP80/80: the value also stands on its own side
+                if k not in sides:
+                    tgt = next((side for side in sides if side), k)
+        else:
+            winners.discard(None)
+            if len(winners) != 1:
+                if len(winners) > 1:
+                    note(f"vitals.{k}={val:g} の測定名が本文で"
+                         "一意に特定できません")
+                else:
+                    out[k] = val    # verbatim, unlabelled — keep
+                continue
+            tgt = winners.pop()
+            if tgt == "bp":
+                tgt = next((_bp_side(body, s, e) for s, e in hits
+                            if _bp_side(body, s, e)), None)
+                if tgt is None:
+                    note(f"vitals.{k}={val:g} の測定名が本文で"
+                         "一意に特定できません")
+                    continue
+        if tgt != k:
+            if tgt in vit or tgt in out:
+                note(f"vitals.{k}={val:g} は本文では{tgt}の記述です")
+                continue
+            out[tgt] = val          # relabel, e.g. bs -> hr
+        else:
+            out[k] = val
+    if "sbp" in out and "dbp" in out \
+            and _bp_pair_unproven(body, out["sbp"], out["dbp"]):
+        note(f"vitals.sbp/dbp={out['sbp']:g}/{out['dbp']:g} は"
+             "本文で同じ測定ではありません")
+        del out["sbp"], out["dbp"]
+    return out

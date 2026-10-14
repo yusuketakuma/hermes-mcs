@@ -13,6 +13,16 @@ from ingest_testkit import _ledger
 OLD = time.time() - 7 * 3600
 
 
+
+@pytest.fixture
+def db(tmp_path):
+    store = _ledger(tmp_path)
+    try:
+        yield store
+    finally:
+        store.close()
+
+
 def _store(db, mid, first_seen):
     db.db.execute(
         "INSERT INTO messages(message_id,project_id,posted_at,posted_at_ts,"
@@ -56,16 +66,14 @@ SLACK = {"notify": {"interactive": "slack"}}
     (SLACK, "discord", 3600, False),        # retired transport
     ({}, "discord", 3600, False),           # interactive off
 ])
-def test_card_delivery_stall(tmp_path, cfg, transport, age, stalled):
-    db = _ledger(tmp_path)
+def test_card_delivery_stall(db, cfg, transport, age, stalled):
     _render(db, transport, time.time() - age)
     _render(db, transport, OLD - 86400, state="delivered")
     reasons = run_check._backlog_stalls(db, cfg, time.time())
     assert ("card_delivery_stalled" in reasons) is stalled
 
 
-def test_semantic_stall_needs_old_due_job_and_no_progress(tmp_path):
-    db = _ledger(tmp_path)
+def test_semantic_stall_needs_old_due_job_and_no_progress(db):
     on = {"semantic": {"mode": "shadow", "project_ids": []}}
     _sem_job(db, 1, "pending", OLD)
     assert run_check._backlog_stalls(db, {}, time.time()) == []   # off
@@ -75,8 +83,7 @@ def test_semantic_stall_needs_old_due_job_and_no_progress(tmp_path):
     assert run_check._backlog_stalls(db, on, time.time()) == []
 
 
-def test_jev_block_is_named_instead_of_a_generic_stall(tmp_path):
-    db = _ledger(tmp_path)
+def test_jev_block_is_named_instead_of_a_generic_stall(db):
     on = {"semantic": {"mode": "shadow", "project_ids": []}}
     _store(db, 1, OLD)
     _artifact(db, 1, time.time())          # extraction itself is moving
@@ -102,11 +109,10 @@ def test_jev_block_is_named_instead_of_a_generic_stall(tmp_path):
     assert run_check._backlog_stalls(db, on, time.time()) == ["semantic_backlog_stalled"]
 
 
-def test_stall_check_failure_stays_a_plain_reason_code(tmp_path, monkeypatch):
+def test_stall_check_failure_stays_a_plain_reason_code(db, monkeypatch):
     """health_watch validates every reason as snake_case: a code carrying
     the exception type would void the whole list (and the flap guard)."""
     import health_watch
-    db = _ledger(tmp_path)
 
     def boom(*_args, **_kw):
         raise RuntimeError("synthetic")
@@ -119,8 +125,7 @@ def test_stall_check_failure_stays_a_plain_reason_code(tmp_path, monkeypatch):
     assert "stall_check_failed" in health_watch._REASON_JA
 
 
-def test_extract_stall_needs_unstarted_old_message_and_no_progress(tmp_path):
-    db = _ledger(tmp_path)
+def test_extract_stall_needs_unstarted_old_message_and_no_progress(db):
     _store(db, 1, time.time())
     assert run_check._backlog_stalls(db, {}, time.time()) == []   # fresh
     _store(db, 2, OLD)
@@ -133,8 +138,7 @@ def test_extract_stall_needs_unstarted_old_message_and_no_progress(tmp_path):
     assert run_check._backlog_stalls(db, {}, time.time()) == []
 
 
-def test_stall_degrades_overall_health(tmp_path):
-    db = _ledger(tmp_path)
+def test_stall_degrades_overall_health(db):
     _render(db, "slack", time.time() - 3600)
     health = run_check._health(db, {"errors": [], "notify": {}}, "ok",
                                cfg=SLACK)
@@ -142,8 +146,7 @@ def test_stall_degrades_overall_health(tmp_path):
     assert "card_delivery_stalled" in health["state_reasons"]
 
 
-def test_invalid_semantic_block_is_reported(tmp_path):
-    db = _ledger(tmp_path)
+def test_invalid_semantic_block_is_reported(db):
     result = {"errors": ["config: semantic_unknown_field"]}
     assert run_check._semantic_enabled(db, {"semantic": {"x": 1}},
                                        result) is False
@@ -153,8 +156,7 @@ def test_invalid_semantic_block_is_reported(tmp_path):
     assert result["errors"] == ["config: semantic_not_object"]
 
 
-def test_signal_detector_errors_reach_run_errors(tmp_path, monkeypatch):
-    db = _ledger(tmp_path)
+def test_signal_detector_errors_reach_run_errors(db, monkeypatch):
     monkeypatch.setattr(mcs_signals, "evaluate", lambda *a, **k: {
         "open": 0, "errors": ["handoff:ValueError"]})
     result = {"errors": []}

@@ -177,3 +177,5 @@ Slack slash commandの実テナント確認とHermes同居時の`/mcs`返答の�
   `/mcs`の`summary`は人が読む表示テキストを返す（失敗時は従来どおりJSON）。返答の公開範囲が未確認のため患者名は出さない。
 - 実装再レビュー反映: 経路（epoch・transport・配送先）が変わった未送noticeは取消して再発行、`resend_exhausted`は即保留、
   テキスト経路でも翌日分があれば送らない、カード停止時にテキスト送信先が無ければ送らない、snapshotの読取り失敗は元データ無しとして返す。
+
+2026-10-09の現行コード照合: カード機能の停止時は、発行済みrenderも全件が`queued/not_sent/cancelled`で、`granted/unknown`の送信試行が無いことを確認でき、テキスト送信先が設定されている場合だけ、凍結済み本文をテキスト経路へ一度戻す。日次機能が無効、翌日分がある、またはテキスト送信先が無い場合は未送信と確認できたnoticeを抑止し、送信済み・結果不明をテキストへ戻さない（`notify_cards._dispatch_notice`と`tests/notify/test_notify_summary_notice.py`）。
