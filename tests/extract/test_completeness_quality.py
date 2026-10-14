@@ -1318,3 +1318,24 @@ def test_two_real_names_and_a_dose_glued_name_stay_valid():
     text = "本人の架空薬A5mgと架空薬AAを中止しました。"
     assert not _rx_gap(text, [_med("架空薬A", text, action="stop", status="past", dose="5mg"),
                               _med("架空薬AA", text, action="stop", status="past")])
+
+
+@pytest.mark.parametrize("text", ["本人の架空薬Aを明日から開始いたします。", "本人の架空薬Aを明日から開始致します。"])
+def test_a_polite_planned_change_is_planned(text):
+    assert not _rx_gap(text, [_med("架空薬A", text, status="planned")])
+    assert _rx_gap(text, [_med("架空薬A", text)])
+
+
+def test_a_polite_denial_or_question_still_asks_nothing():
+    for text in ("本人の架空薬Aを開始いたしません。", "本人の架空薬Aを開始いたしますか。"):
+        assert not _rx_gap(text, [_med("架空薬A", text, action="none")])
+
+
+@pytest.mark.parametrize("text,right,wrong", [
+    ("本人の架空薬Aの追加を相談しました。", {"action": None, "status": "planned"}, {"action": "stop", "status": "current"}),
+    ("本人の架空薬Aの追加を相談しました。", {"action": None, "status": "planned"}, {"action": "stop", "status": "planned"}),
+    ("本人の架空薬Aを開始してください。", {"action": "start", "status": "planned"}, {"action": "start", "status": "current"}),
+])
+def test_a_wrong_item_of_either_state_beside_the_right_one_stays_unresolved(text, right, wrong):
+    assert not _rx_gap(text, [{**_med("架空薬A", text), **right}])
+    assert _rx_gap(text, [{**_med("架空薬A", text), **right}, {**_med("架空薬A", text), **wrong}])
