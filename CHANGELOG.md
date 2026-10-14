@@ -430,6 +430,7 @@
 - 進捗表示は保存済みmetadataが辞書以外の場合も停止せず、要確認として扱う。
 - 修正の開始記録を保存した直後に期限を迎えて送信しなかった場合も、未送信として修正待ちへ戻し、次の処理で再確認する。送信済み・送信結果不明の修正は再送しない。
 - 確認・連絡・質問の候補は1件ずつ照合し、別の依頼が抽出済みでも取りこぼした依頼を再確認の対象にする。同じ引用に複数の依頼があっても、抽出した依頼の内容が候補に当たる場合だけ充足とみなす。
+- 品質の再確認では、確認・連絡の依頼と質問を文ごと・種類ごとに候補とし、同じ文に複数の依頼がある場合や別の文に同じ種類の依頼がある場合も照合する。名詞の一部（連絡記録など）や受領の報告は依頼として扱わない。公開ルールの抽出結果と抽出世代は変えない。
 - 根拠: mcs/extract/v4/extract_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_drain.py、tests/extract/test_completeness_quality.py、tests/extract/test_clinical_chunk_planning.py、tests/extract/test_detail_clinical_extraction.py、tests/semantic/test_coverage_completeness_repair.py
 
 #### 薬剤統計で同じ辞書世代の反復確認を整理
