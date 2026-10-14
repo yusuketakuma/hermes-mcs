@@ -101,7 +101,7 @@ def test_new_detail_contract_marks_results_and_repends_existing_v5(db):
     assert extract_llm._replace_current(db, row, json.dumps(content))
     saved = db.db.execute("SELECT content,meta FROM artifacts WHERE kind='extract_llm'").fetchone()
     assert json.loads(saved[0]) == content
-    assert json.loads(saved[1])["patient_context_version"] == 2
+    assert json.loads(saved[1])["patient_context_version"] == extract_llm.PATIENT_CONTEXT_VERSION == 3
 
 
 def test_patient_context_prompt_change_invalidates_saved_chunk(db, monkeypatch):

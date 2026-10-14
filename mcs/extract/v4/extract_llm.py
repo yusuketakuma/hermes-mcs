@@ -100,7 +100,7 @@ TIMEOUT = 300
 # v6: source-bound clinical/context details re-enter the existing generation boundaries.
 # v7: reapply the single-reading BP merge contract to completed legacy outputs.
 EXTRACT_VERSION = 7
-PATIENT_CONTEXT_VERSION = 2
+PATIENT_CONTEXT_VERSION = 3
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in (("extract_llm", __file__),
@@ -137,12 +137,12 @@ _PROMPT_SPEC = """あなたは在宅医療の多職種チャット記録を構�
 出力キー(全て任意):
 - "meds": 薬剤名の配列 [{"name": "薬剤名", "dose": "40mg"等 または null, "action": "start|stop|change|decrease|increase|none" または null, "status": "current|past|planned", "subject": "patient|family|other", "negated": false, "route": "oral|topical|injection|infusion|inhalation|tube|other または省略", "freq": "服用頻度の原文表現(例:1日2回、隔日) または省略", "prn": 頓服なら true, "evidence": "根拠となる対象本文の完全一致引用"}] — 用量表記が無い薬剤も拾うこと。中止済み・過去の薬は status:"past"、開始予定・検討中は "planned"。本人以外(家族等)の薬は subject:"family"または"other"。否定文脈(「〜は使っていない」等)は negated:true。「〜の管理は出来ない」「〜は出来ない」等の能力・実施可否の記述は処方変更ではなく action:"none" にする。在宅酸素・人工呼吸器など調剤薬局の扱わない療法・機器は meds に入れない
 - "symptoms": 症状・状態変化の配列 [{"text": "症状名", "negated": false, "status": "new|ongoing|resolved|past", "subject": "patient|family|other(省略可)", "severity": "mild|moderate|severe(強さの記述がある場合のみ)", "onset": "発症時期の原文表現(例:昨日から) または省略", "duration": "継続期間の原文表現(例:3日間) または省略", "evidence": "対象本文の完全一致引用"}] — 「〜なし」「低下なし」等の否定文脈は negated=true。消失・治癒した症状は status:"resolved"、過去の症状は "past"。本人以外の症状は subject を付ける
-- "events": 該当するもの ["visit","exam","admission","discharge","transfer","fall","eol","care","family_contact","other"]
+- "events": 該当するもの ["visit","exam","admission","discharge","transfer","fall","eol","care","family_contact","prescription_inquiry","other"] — prescription_inquiry は処方・薬剤についての疑義照会・照会・処方提案が本文にある場合だけ（担当者会議の日程など薬剤以外の照会は含めない）。照会の実施完了や結果の確定を意味しない
 - "requests": [{"to": "医師|看護師|薬剤師|ケアマネ|介護士|家族|不明", "from": "本文に依頼者が明記された場合のみその職種・続柄、無ければ null", "kind": "request|question|self_plan", "action": "依頼内容を30字以内で", "condition": "条件の原文(「〜なら」「〜の場合」等) または null", "due": "YYYY-MM-DD形式の期限 または null", "due_text": "期限の原文表現(相対表現はそのまま) または null", "evidence": "対象本文の完全一致引用"}] — kind: 依頼（〜してください／〜していただけますか／〜をお願いできますか 等、相手に行動を求める丁寧表現を含む）は request、相手に答え・情報だけを求める問いは question、自分が行う予定は self_plan。一投稿に別の行動が複数あれば別項目にする。挨拶・完了済みの報告・単なる出来事は requests にしない。参考コンテキストや引用転載された過去の依頼は対象投稿の依頼にしない
 - "vitals": 数値のみ {"bt": 体温(℃), "hr": 脈拍/心拍数(「脈」「脈拍」「HR」), "rr": 呼吸数, "sbp": 収縮期血圧(血圧の上), "dbp": 拡張期血圧(血圧の下), "spo2": 酸素飽和度(SpO2), "bs": 血糖値(「血糖」「BS」「Glu」)} — キーは本文の測定名に忠実に割り当てる。「脈」はbsではなくhrである
 - "labs": 本文に結果が明記された検査・測定値の配列 [{"name": "検査・測定項目名", "value": 数値または短い結果表現, "unit": "原文の単位 または null", "flag": "high|low(基準外と明記された場合のみ) または省略", "evidence": "対象本文の完全一致引用", "subject": "patient|family|other", "status": "current|past|planned", "measured_on": "引用にある測定/採血日時の原文 または省略", "condition": "引用にある空腹時・食後・検体などの原文 または省略"}] — 体重・身長、腎機能(Cr/eGFR/BUN)・肝機能(AST/ALT)・血糖/ HbA1cも対象。本人・家族、実測・過去・予定を区別する。投稿日時を測定日時として補わず、単位・検体条件・正常異常・基準値を推測しない。記載の無い測定は含めない
 - "patient_context": 患者情報の配列 [{"category": "demographics|diagnoses|history|course|adl|living|care_level|care_services|care_team|contacts|allergies|devices|preferences|medication_management|nutrition|cognition|adverse_events|observations|followup", "text": "引用に含まれる原文値", "evidence": "対象本文の一意な完全一致引用", "subject": "patient|family|other"}] — 基本情報・診断・既往/経過・ADL・生活環境・介護度/サービス/担当者・連絡先・アレルギー・機器・意向・服薬管理・栄養・認知を見出しのない文章からも抽出する。textはevidenceに含まれる原文のまま、否定・過去・条件を省略して現在の状態を推測しない。参考コンテキストだけの情報は含めない。対象者を取り違えず、引用できない項目は省略する
-- patient_context の各項目に任意の "details": [{"key": "drug_name|medication_kind|prescriber|actual_dose|actual_frequency|residual_quantity|missed_doses|symptom|onset|response|outcome|certainty|observation_name|value|unit|measured_on|condition|swallowing|self_management|supporter|support_method|followup|assignee|due_text|observed_on|last_confirmed_on|confirmed_by", "value": "原文文字列", "evidence": "その値を含む一意な完全一致引用"}] を追加できる。各detailの引用は親項目のevidence内で完結し、valueもdetail引用の原文に含まれること。薬剤名・処方元・実際の服用量/頻度・他院/OTC/サプリ・残薬/飲み忘れ、被疑薬・副作用症状/発生日/対応/転帰、測定名/値/単位/日時/条件、嚥下/自己管理/支援者/方法/変化、次回確認/担当/期限を拾う。観測日・最終確認日・確認者・確認状態は明記された原文だけを保存する。確認状態を推測したenumに置換せず、副作用の疑いを確定因果に変えない。欠けた情報は省略する
+- patient_context の各項目に任意の "details": [{"key": "drug_name|medication_kind|prescriber|actual_dose|actual_frequency|residual_quantity|missed_doses|symptom|onset|response|outcome|certainty|observation_name|value|unit|measured_on|condition|swallowing|self_management|supporter|support_method|followup|assignee|due_text|observed_on|last_confirmed_on|confirmed_by|storage_status|storage_place|medication_manager|inquiry_result|interaction_check", "value": "原文文字列", "evidence": "その値を含む一意な完全一致引用"}] を追加できる。各detailの引用は親項目のevidence内で完結し、valueもdetail引用の原文に含まれること。薬剤名・処方元・実際の服用量/頻度・他院/OTC/サプリ・残薬/飲み忘れ、被疑薬・副作用症状/発生日/対応/転帰、測定名/値/単位/日時/条件、嚥下/自己管理/支援者/方法/変化、次回確認/担当/期限、薬の保管状況/保管場所/管理者、疑義照会・処方提案の結果、重複・相互作用の確認を拾う。照会の結果や確認は予定・否定・未確認の表現を原文のまま残し、実施済み・確定に言い換えない。一包化などの支援方法は support_method に入れる。観測日・最終確認日・確認者・確認状態は明記された原文だけを保存する。確認状態を推測したenumに置換せず、副作用の疑いを確定因果に変えない。欠けた情報は省略する
 - "summary": この投稿の要点を50字以内で(誰が・何を・次どうするか)
 - "points": この投稿で次に知るべき要点の配列(最大3件、各40字以内 — 依頼・処方変更・異常値・今後の予定を優先)
 - "urgency": "high" または "routine" または "unclear" — 至急・緊急・救急・搬送等の語が無くても、以下の臨床的な重大兆候・イベントがあれば "high": 死亡・看取り・心肺停止・呼吸停止、意識消失/意識がない、転倒後の状態変化、高熱(39°C超)または発熱の持続、SpO2低下、激しい疼痛の増悪、誤嚥・窒息、出血が止まらない等。過去形で済んだ出来事の単なる報告(例:「先月入院していた」)は "routine"。「緊急時は〜」「〜の場合は至急」等の条件・想定の記述や、緊急連絡先・搬送先の確認のような事務的な言及だけの場合も "routine"。判断材料が足りない・矛盾する場合は "unclear"
@@ -372,7 +372,7 @@ _SCHEMA = {
                 "type": "string",
                 "enum": ["visit", "exam", "admission", "discharge",
                          "transfer", "fall", "eol", "care",
-                         "family_contact", "other"]}},
+                         "family_contact", "prescription_inquiry", "other"]}},
             "requests": {"type": "array", "items": {
                 "type": "object",
                 "properties": {
@@ -682,7 +682,7 @@ def _clean_text(v, maxlen: int) -> str | None:
 
 _RX_ACTS = {"start", "stop", "change", "decrease", "increase", "none", None}
 _EVENTS = {"visit", "exam", "admission", "discharge", "transfer", "fall",
-           "eol", "care", "family_contact", "other"}
+           "eol", "care", "family_contact", "prescription_inquiry", "other"}
 # Discrete clinical events must be grounded in the target body — the
 # model sometimes lifts an event from thread context or invents one
 # (Jev audit: events are the largest NO_MATCH class). Unlisted kinds
@@ -701,6 +701,11 @@ _EVENT_CUES = {
         r"外来|" + extract.ENCOUNTER_CUE + r"|受診|検査|採血|レントゲン|エコー|心電図|"
         r"CT|MRI|血液検査|尿検査|処置"),
     "visit": re.compile(r"訪問|往診|来訪|訪れ|伺|参り|到着|向かい|家に来"),
+    # A bare 照会/疑義 is mostly not about a prescription (T9: 3/3 false cues);
+    # only 疑義照会, 処方提案 or an inquiry in the same clause as 処方/薬 counts.
+    "prescription_inquiry": re.compile(
+        r"疑義照会|処方提案|(?:処方|薬(?!剤師|局|師))[^。、，,;；！？!?\n]*照会"
+        r"|照会[^。、，,;；！？!?\n]*(?:処方|薬(?!剤師|局|師))"),
 }
 _MED_STATUSES = {"current", "past", "planned"}
 _MED_SUBJECTS = {"patient", "family", "other"}

@@ -56,6 +56,13 @@ DETAIL_LABELS = {
     "observed_on": ("観測日", "観察日"),
     "last_confirmed_on": ("最終確認日", "確認日"),
     "confirmed_by": ("確認者",),
+    # bare 保管状況/保管場所 also head documents (同意書, 紹介状); only drug-specific headings
+    "storage_status": ("薬剤保管状況", "薬の保管状況"),
+    "storage_place": ("薬剤保管場所", "薬の保管場所", "薬の置き場所"),
+    "medication_manager": ("服薬管理者", "薬の管理者"),
+    # a bare 照会結果 is often not about a drug (担当者会議, 営業時間), so no generic alias
+    "inquiry_result": ("疑義照会結果", "処方提案結果"),
+    "interaction_check": ("重複・相互作用確認", "相互作用確認", "重複投薬確認"),
 }
 DETAIL_KEYS = frozenset(DETAIL_LABELS)
 _DETAIL_ALIAS = {label: key for key, labels in DETAIL_LABELS.items() for label in labels}
