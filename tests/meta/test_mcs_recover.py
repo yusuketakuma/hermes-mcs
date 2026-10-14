@@ -411,14 +411,15 @@ def test_membership_reconcile_removes_undesired_agents(rec, tmp_path,
 
     def record_command(args, **kwargs):
         commands.append(args)
-        return subprocess.CompletedProcess(args, 0, "")
+        # launchd answers 113 once the booted-out label is gone
+        return subprocess.CompletedProcess(args, 113 if args[1] == "print" else 0, "")
 
     monkeypatch.setattr(rec.subprocess, "run", record_command)
     monkeypatch.setattr(rec.shutil, "which", lambda name: None)
     rec._reconcile_membership(snapshot)
-    # undesired owned agent removed; excluded + foreign survive
-    assert commands == [["launchctl", "bootout",
-                         f"gui/{os.getuid()}/ai.mcs.extract-old"]]
+    # undesired owned agent removed only after launchd confirms it is gone
+    target = f"gui/{os.getuid()}/ai.mcs.extract-old"
+    assert commands == [["launchctl", "bootout", target], ["launchctl", "print", target]]
     assert not (agents / "ai.mcs.extract-old.plist").exists()
     assert (agents / "ai.mcs.llamaserver.plist").exists()
     assert (agents / "unrelated.other.plist").exists()
@@ -1493,3 +1494,42 @@ def test_notify_refuses_a_symlinked_standalone_config(tmp_path, monkeypatch):
                         lambda *a, **k: calls.append(a) or None)
     mod._notify("synthetic")
     assert calls == []
+
+
+@pytest.mark.parametrize("print_code", [1, 124])
+def test_membership_keeps_an_agent_plist_launchd_did_not_report_gone(
+        rec, tmp_path, monkeypatch, print_code):
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    plist = agents / "ai.mcs.extract-old.plist"
+    plist.write_text("<plist/>")
+    monkeypatch.setattr(rec.subprocess, "run", lambda args, **kw: subprocess.CompletedProcess(
+        args, print_code if args[1] == "print" else 0, ""))
+    problems = rec._reconcile_membership({"agents": [], "cron": []})
+    assert plist.exists()
+    assert "agent_retirement_unverifiable:ai.mcs.extract-old" in problems
+
+
+def test_restore_staging_closes_its_fd_when_fstat_fails(rec, tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    monkeypatch.setattr(rec, "LEDGER", str(data / "ledger.db"))
+    monkeypatch.setattr(rec, "_load_state", lambda: {"applying": {}})
+    made = []
+    real_mkstemp, real_fstat = rec.tempfile.mkstemp, os.fstat
+
+    def mkstemp(*a, **k):
+        made.append(real_mkstemp(*a, **k))
+        return made[-1]
+
+    def fstat(fd):
+        if made and fd == made[-1][0]:
+            raise OSError(5, "synthetic fstat failure")
+        return real_fstat(fd)
+    monkeypatch.setattr(rec.tempfile, "mkstemp", mkstemp)
+    monkeypatch.setattr(rec.os, "fstat", fstat)
+    with pytest.raises(OSError):
+        rec._replace_database(str(tmp_path / "unused.db"), "0" * 64, lambda: None)
+    monkeypatch.undo()
+    with pytest.raises(OSError):
+        os.fstat(made[-1][0])          # closed, not leaked

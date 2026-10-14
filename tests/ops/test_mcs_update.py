@@ -183,7 +183,9 @@ def test_update_lock_nonblocking(updater):
     assert fd is not None
     assert updater.acquire_update_lock() is None
     os.close(fd)
-    assert updater.acquire_update_lock() is not None
+    reopened = updater.acquire_update_lock()
+    assert reopened is not None
+    os.close(reopened)
 
 
 @pytest.mark.parametrize("interrupted", [False, True])
@@ -2619,3 +2621,69 @@ def test_invalid_runtime_mode_is_reported_not_raised(updater, tmp_path, monkeypa
     notices = []
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **kw: notices.append(text) or True)
     assert updater.cmd_check() == 0 and notices
+
+
+@pytest.mark.parametrize("print_code", [113, 1, 124])
+def test_membership_removes_an_agent_plist_only_after_launchd_says_gone(
+        updater, tmp_path, monkeypatch, print_code):
+    import mcs_setup
+    agents = tmp_path / "update-agents"
+    agents.mkdir()
+    plist = agents / "ai.mcs.extract-retired.plist"
+    plist.write_text("<plist/>")
+    monkeypatch.setattr(updater, "AGENTS_DIR", str(agents))
+    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda path: False)
+    monkeypatch.setattr(updater.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
+        argv, print_code if argv[1] == "print" else 0, "", ""))
+    problems = updater._reconcile_membership({"cron": [], "agents": []})
+    gone = print_code == 113
+    assert plist.exists() is not gone
+    assert ("agent_retirement_unverifiable:ai.mcs.extract-retired" in problems) is not gone
+
+
+@pytest.mark.parametrize(("code", "expected"), [(113, None), (1, "unknown"), (124, "unknown")])
+def test_agent_pid_treats_only_not_found_as_stopped(updater, monkeypatch, code, expected):
+    monkeypatch.setattr(updater.subprocess, "run",
+                        lambda argv, **kw: subprocess.CompletedProcess(argv, code, "", ""))
+    assert updater._agent_pid("ai.mcs.synthetic", unknown="unknown") == expected
+
+
+def test_stopping_an_update_child_closes_its_pipes(updater):
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             start_new_session=True)
+    real = child.communicate
+
+    def interrupted(*a, **k):        # reaping must still close the pipes
+        raise subprocess.TimeoutExpired(child.args, 5)
+    child.communicate = interrupted
+    updater._stop_update_child(child)
+    child.communicate = real
+    assert child.returncode is not None
+    assert child.stdout.closed and child.stderr.closed
+
+
+def test_restore_staging_closes_its_fd_when_fstat_fails(updater, tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    monkeypatch.setattr(updater, "LEDGER", str(data / "ledger.db"))
+    monkeypatch.setattr(updater, "load_state", lambda: {"applying": {}})   # journaled, no prior copy
+    made = []
+    real_mkstemp, real_fstat = updater.tempfile.mkstemp, os.fstat
+
+    def mkstemp(*a, **k):
+        made.append(real_mkstemp(*a, **k))
+        return made[-1]
+
+    def fstat(fd):
+        if made and fd == made[-1][0]:
+            raise OSError(5, "synthetic fstat failure")
+        return real_fstat(fd)
+    monkeypatch.setattr(updater.tempfile, "mkstemp", mkstemp)
+    monkeypatch.setattr(updater.os, "fstat", fstat)
+    with pytest.raises(OSError):
+        updater._replace_database(str(tmp_path / "unused.db"), "0" * 64, lambda: None)
+    monkeypatch.undo()
+    with pytest.raises(OSError):
+        os.fstat(made[-1][0])          # closed, not leaked

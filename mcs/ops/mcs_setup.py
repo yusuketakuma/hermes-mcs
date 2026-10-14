@@ -3011,6 +3011,12 @@ def _agent_loaded(label: str) -> bool | None:
     return r.returncode == 0
 
 
+def _agent_absent(label: str) -> bool:
+    """True only when launchd reports `label` not found (113): any other
+    probe failure is not proof that a booted-out agent stopped."""
+    return _run(["launchctl", "print", f"gui/{os.getuid()}/{label}"]).returncode == 113
+
+
 def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
     """Bootout+bootstrap when the plist changed; bootstrap when absent.
     Converges loaded state to rendered content (R6)."""
@@ -3234,7 +3240,7 @@ def _retire_agents(labels, note, dry) -> int:
         note(f"agent {label}: undesired — bootout + remove")
         if not dry:
             _run(["launchctl", "bootout", f"gui/{uid}/{label}"])
-            if _agent_loaded(label) is not False:
+            if not _agent_absent(label):
                 note(f"  agent {label}: still loaded or unverifiable; keeping plist")
                 problems += 1
                 continue
@@ -3589,7 +3595,7 @@ def _retire_previous_runtime(prev, desired_mode, note, dry):
         return 0
     for label in sorted(labels):
         _run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
-        if _agent_loaded(label) is not False:
+        if not _agent_absent(label):
             note(f"previous agent {label}: stop unverifiable — no new service started")
             return 1
         # bootout does not persist: launchd reloads a left plist at next login

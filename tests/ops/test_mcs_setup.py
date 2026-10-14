@@ -1006,6 +1006,10 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
             loaded.add(argv[3].rsplit("/", 1)[-1][:-6])
         elif argv[:2] == ["launchctl", "bootout"]:
             loaded.discard(argv[2].rsplit("/", 1)[-1])
+        elif argv[:2] == ["launchctl", "print"]:
+            # launchd answers 113 for a label it does not know
+            rc = 0 if argv[2].rsplit("/", 1)[-1] in loaded else 113
+            return SimpleNamespace(returncode=rc, stdout="", stderr="")
         elif argv[1:3] == ["cron", "create"] and cron_applies:
             entries.append({"id": f"c{len(calls):05d}",
                             "name": argv[argv.index("--name") + 1],
