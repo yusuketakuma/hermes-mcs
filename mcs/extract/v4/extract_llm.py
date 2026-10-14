@@ -1678,13 +1678,14 @@ _REQUEST_STEMS = {"confirm": "確認", "contact": "連絡", "ask": "教え"}
 
 _REQUEST_END = r"(?:お願い|ください|下さい|いただけ|いただきたい|頂け|頂きたい|ほしい|欲しい|願います)"
 # A stem is requested only when the request ending follows it directly
-# (確認をお願い, 確認してください) or when it is listed (と/や/、) before a
-# confirm/contact that is itself directly requested. Free text between a
-# stem and a later ending (連絡をいただきましたが…教えてください) is not.
+# (確認をお願い, 確認してください) or when it is listed (と/や/、) before the
+# NEXT confirm/contact and that one is directly requested. Free text never
+# reaches a later ending past a report (連絡をいただきましたが…教えてください,
+# 確認と連絡を終えたので…連絡してください).
 _REQUEST_DIRECT = rf"(?:を)?(?:して)?{_REQUEST_END}"
 _REQUEST_CUES = {
     kind: re.compile(rf"{stem}(?={_REQUEST_DIRECT}|(?:と|や|、|・|及び|および)"
-                     rf"[^。！？!?;；\r\n]*?(?:確認|連絡){_REQUEST_DIRECT})")
+                     rf"(?:(?!確認|連絡)[^。！？!?;；\r\n])*(?:確認|連絡){_REQUEST_DIRECT})")
     for kind, stem in (("confirm", "確認"), ("contact", "連絡"))}
 # the rule hints' own ask phrasing, tracked per sentence like confirm/contact
 _REQUEST_CUES["ask"] = re.compile(r"教えて(?:ください|いただけ|欲しい)")
