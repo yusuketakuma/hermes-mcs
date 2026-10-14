@@ -611,3 +611,22 @@ def test_request_word_inside_a_noun_or_report_adds_no_call(monkeypatch, tail):
     monkeypatch.setattr(extract_llm, "_llm_call", model)
     extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("tail", [
+    "主治医から本人の件で連絡をいただきましたが、本人の体温を教えてください。",
+    "確認と連絡を終えたので、本人の体温を教えてください。",
+], ids=["received_contact_then_question", "finished_listing_then_question"])
+def test_a_later_request_ending_does_not_turn_a_report_into_a_request(monkeypatch, tail):
+    body = PREFIX + tail
+    question = {"to": "不明", "kind": "question", "action": "体温の確認",
+                "evidence": "本人の体温を教えてください"}
+    calls = []
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        return copy.deepcopy({**OBSERVATIONS, "requests": [question]})
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    extract_llm.llm_extract(body, hints=hints(body))
+    assert len(calls) == 1
