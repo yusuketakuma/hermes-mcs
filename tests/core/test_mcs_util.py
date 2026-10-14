@@ -10,6 +10,27 @@ def test_sentence_boundary_keeps_complete_quote_in_prior_chunk():
     assert util.text_chunks("前文。次文。末尾", 3) == ["前文。", "次文。", "末尾"]
 
 
+def test_long_line_keeps_boundaries_without_repeated_suffix_copies(monkeypatch):
+    copied = []
+
+    class Segment(str):
+        def __getitem__(self, key):
+            result = super().__getitem__(key)
+            if isinstance(key, slice):
+                copied.append(len(result))
+                return Segment(result)
+            return result
+
+    split = util.re.split
+    monkeypatch.setattr(util.re, "split",
+                        lambda *args: [Segment(s) for s in split(*args)])
+    text = "x" * 100_007 + "。" + "y" * 19 + "。tail"
+    chunks = util.text_chunks(text, 1000)
+    assert chunks == ["x" * 1000] * 100 + ["x" * 7 + "。" + "y" * 19 + "。tail"]
+    assert "".join(chunks) == text
+    assert sum(copied) <= 2 * len(text), "repeated suffix copies exceed linear budget"
+
+
 def test_atomic_write_basename_and_failure_preserve_destination(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "result.json"

@@ -27,6 +27,7 @@ Merge contract (v1 rules ∪ llm ∪ v4 canonical facts), per field:
 from __future__ import annotations
 
 import hashlib
+from itertools import islice
 import json
 import sqlite3
 
@@ -43,12 +44,23 @@ def _content_dict(r) -> dict | None:
     return loads_dict(r["content"]) if r else None
 
 
+def _latest_artifact_query(*, facts=False, mid="?"):
+    if facts:
+        where = (
+            f"a.message_id={mid} AND a.kind IN ({FACT_KINDS_SQL}) "
+            "AND m.body_state IS NOT 'deleted' "
+            "AND CASE WHEN json_valid(a.content) THEN "
+            "json_type(a.content)='object' ELSE 0 END "
+            f"{current_fact_pred('a', 'm')}")
+    else:
+        where = f"a.kind=? AND a.message_id={mid} {current_extract_pred()}"
+    return ("SELECT a.content FROM artifacts a JOIN messages m "
+            "ON m.message_id=a.message_id WHERE " + where +
+            " ORDER BY a.artifact_id DESC LIMIT 1")
+
+
 def latest_artifact(db, kind: str, mid: int) -> dict | None:
-    r = db.execute(
-        "SELECT a.content FROM artifacts a JOIN messages m "
-        "ON m.message_id=a.message_id WHERE a.kind=? AND a.message_id=? "
-        f"{current_extract_pred()} "
-        "ORDER BY a.artifact_id DESC LIMIT 1", (kind, mid)).fetchone()
+    r = db.execute(_latest_artifact_query(), (kind, mid)).fetchone()
     return _content_dict(r)
 
 
@@ -115,15 +127,7 @@ def latest_fact_artifact(db, mid: int) -> dict | None:
     ``current_fact_pred`` shadow rule every consumer shares); when the
     projection is stale, invalidated, or absent the legacy extraction
     is read instead — never the other way around."""
-    r = db.execute(
-        "SELECT a.content FROM artifacts a JOIN messages m "
-        "ON m.message_id=a.message_id WHERE a.message_id=? "
-        f"AND a.kind IN ({FACT_KINDS_SQL}) "
-        "AND m.body_state IS NOT 'deleted' "
-        "AND CASE WHEN json_valid(a.content) THEN "
-        "json_type(a.content)='object' ELSE 0 END "
-        f"{current_fact_pred('a', 'm')} "
-        "ORDER BY a.artifact_id DESC LIMIT 1", (mid,)).fetchone()
+    r = db.execute(_latest_artifact_query(facts=True), (mid,)).fetchone()
     return _content_dict(r)
 
 
@@ -171,19 +175,28 @@ def _empty_field(doc: dict, key: str) -> bool:
     return key not in doc or (isinstance(doc[key], list) and not doc[key])
 
 
-def _source_context(db, mid):
-    if db is None:
-        return None, None, "patient"
+def _source_context_columns(db, message="m"):
     columns = {r[1] for r in db.execute("PRAGMA table_info(patients)")}
     name = "p.patient_name" if "patient_name" in columns else "NULL"
     kind = "p.project_type" if "project_type" in columns else "NULL"
-    join = "LEFT JOIN patients p ON p.project_id=m.project_id" if columns else ""
-    row = db.execute(f"SELECT m.body_text,m.body_state,{name},{kind} FROM messages m "
-                     f"{join} WHERE m.message_id=?", (mid,)).fetchone()
+    join = f"LEFT JOIN patients p ON p.project_id={message}.project_id" if columns else ""
+    return f"{message}.body_text,{message}.body_state,{name},{kind}", join
+
+
+def _source_context_row(row):
     if row is None:
         return "", None, "patient"
     body = row[0] if row[1] in (None, "full") else ""
     return body, row[2], "unknown" if row[3] == "group" else "patient"
+
+
+def _source_context(db, mid):
+    if db is None:
+        return None, None, "patient"
+    fields, join = _source_context_columns(db)
+    row = db.execute(f"SELECT {fields} FROM messages m {join} WHERE m.message_id=?",
+                     (mid,)).fetchone()
+    return _source_context_row(row)
 
 
 def _item_scope(item, context, surface=None):
@@ -645,6 +658,33 @@ def medication_entries(db, mid: int) -> tuple[list, list]:
     v1 = latest_artifact(db, "extract_v1", mid) or {}
     return _med_entries(latest_fact_artifact(db, mid) or {}, v1, _drug_refs(db, mid),
                         context=_source_context(db, mid))
+
+
+def medication_post_ids(db, mids):
+    """Yield medication post IDs in input order without dictionary annotation reads."""
+    ids = iter(mids)
+    batch = list(islice(ids, 1))
+    if not batch:
+        return
+    fields, join = _source_context_columns(db, "source")
+    rule = _latest_artifact_query(mid="source.message_id")
+    fact = _latest_artifact_query(facts=True, mid="source.message_id")
+    # Sort only the bounded ID driver, not the original body/artifact blobs.
+    query = (f"SELECT requested.mid,({rule}),({fact}),{fields} "
+             "FROM (SELECT value mid FROM json_each(?) ORDER BY key LIMIT -1) requested "
+             "CROSS JOIN messages source ON source.message_id=requested.mid "
+             f"{join}")
+    while batch:
+        cursor = db.execute(query, ("extract_v1", json.dumps(batch)))
+        try:
+            for row in cursor:
+                v1 = loads_dict(row[1]) or {}
+                facts = loads_dict(row[2]) or {}
+                if any(_med_entries(facts, v1, context=_source_context_row(row[3:]))):
+                    yield row[0]
+        finally:
+            cursor.close()
+        batch = list(islice(ids, 400))
 
 
 # per-item prefix inside the 依頼: line — a plan of the poster or a
