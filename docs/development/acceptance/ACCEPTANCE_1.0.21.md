@@ -51,7 +51,7 @@ Python3.14.7・SQLite3.53.1のmacOS環境、`scripts/run_tests.sh`による一�
 
 レビュー後のローカル検証snapshotは`256695ea9433afc4e85af1d975bc4f2f1baa72b1`。Python3.14.7・pytest9.1.1で全体を一度実行し、終了0と対象ソースの不変を確認した。Slack Bolt未導入のモジュール1件と、明示SDK laneを要求する2件はスキップ。Discord SDK内部の非推奨API警告14件は保持し、テストや警告条件は変更しない。本節などの結果記録だけを検証後に更新した。
 
-companion固定SHAはリモート取得確認でHTTP422（該当commitなし）だったため、公開供給とexact CIは未受入のまま。追加課金・push・公開・本番変更は実施していない。
+companion固定SHAはリモート取得確認でHTTP422（該当commitなし）だったため、当時は公開供給とexact CIが未受入だった（その後の公開取得とrequired CIの成功は「Hermes固定と導入・更新」に記録）。追加課金・push・公開・本番変更は実施していない。
 
 ### レビュー後の追加修正
 
@@ -97,7 +97,7 @@ CodeRabbit CLI 0.9.0の初回は追加差分151テキストファイルを5分�
 | 一次仕様 | R08rec3は前回同一。R08rec1の改版と利用条件を取得し、医薬品節の変更区分・日付番兵・期限なし・一般名省略条件を確認 |
 | 実変換 | 全行をruntime converterへ通し、12,195 entries・約5.14MB（作成日metadata追加前の測定）。`terms_unconfirmed`で保留、容量上限内 |
 
-2026-10-14 05:47（JST、`checked_at` 2026-10-13T20:47:48Z）に同じ条件で公式yFileを再取得し、HTTP200・1,158,682 bytes・同じSHA256・member `y_20261013.csv`（6,083,884 bytes）で10/13の受入版と一致した。`check_drug_master_bundle.py`もok（19,286行・`R08rec3-medicine-42`・`activation:false`・人承認必須）。公開前の再確認として2026-10-14 09:45（JST、`checked_at` 2026-10-14T00:45:17Z）に同じ条件で公式menu（HTTP200）とyFileを取得し、HTTP200・1,158,682 bytes・同じSHA256・member `y_20261013.csv`（6,083,884 bytes）で同梱版と一致したため、更新なしとして既存bundleを配布する。
+2026-10-14 05:47（JST、`checked_at` 2026-10-13T20:47:48Z）に同じ条件で公式yFileを再取得し、HTTP200・1,158,682 bytes・同じSHA256・member `y_20261013.csv`（6,083,884 bytes）で10/13の受入版と一致した。`check_drug_master_bundle.py`もok（19,286行・`R08rec3-medicine-42`・`activation:false`・人承認必須）。公開前の再確認として2026-10-14 09:45（JST、`checked_at` 2026-10-14T00:45:17Z）に同じ条件で公式menu（HTTP200）とyFileを取得し、HTTP200・1,158,682 bytes・同じSHA256・member `y_20261013.csv`（6,083,884 bytes）で同梱版と一致したため、更新なしとして既存bundleを配布する。統合後の公開前にも2026-10-14 11:36（JST、`checked_at` 2026-10-14T02:36:35Z）に同じ条件で再取得し、menu・yFileともHTTP200、SHA256と`y_20261013.csv`が同梱版と一致した。
 
 旧20260930原本は保持。[manifest](../../../resources/drug-master/20261013/manifest.json)の`activation:false`と人承認必須を維持する。
 配布原本の検証であり、私有辞書の採用・承認・有効化・実データ再処理は行わない。公開原本の行をfixtureへ転用しない。
@@ -114,21 +114,21 @@ CodeRabbit CLI 0.9.0の初回は追加差分151テキストファイルを5分�
 
 ## Hermes固定と導入・更新
 
-推奨候補は公式v0.21.7 `71d34bad1045610252eda02ee79549436896e784`を含むMCS companion `f36c1da0016ce14c9c531cb9514ab4b0b667240d`（tree `cce192e4fbd754a0a33c9d4fc84b5b9c43f18444`）。2026-10-14に旧候補`dc42a048bff5fcc545a2f1a1d3982292c13eb098`から作業用のsession/state/監査ログ12件だけを配布treeから除外した。実装bytesは不変で、元のローカル内容とGit履歴は保持し、開発規約・agent選択設定3件は非機密のため残した。新候補も未公開。以下の`dc42a048`の記録は旧候補に対するもの。
+推奨候補は公式v0.21.7 `71d34bad1045610252eda02ee79549436896e784`を含むMCS companion `f36c1da0016ce14c9c531cb9514ab4b0b667240d`（tree `cce192e4fbd754a0a33c9d4fc84b5b9c43f18444`）。2026-10-14に旧候補`dc42a048bff5fcc545a2f1a1d3982292c13eb098`から作業用のsession/state/監査ログ12件だけを配布treeから除外した。実装bytesは不変で、元のローカル内容とGit履歴は保持し、開発規約・agent選択設定3件は非機密のため残した。新候補は当時未公開で、同日07:39 JSTに公開取得を確認した（下記）。以下の`dc42a048`の記録は旧候補に対するもの。
 install・updater・CIの固定値を一致させ、従来の`6f35b1ed`を認識する。既存3.14環境のHermes checkoutを自動変更しない。
 
 既存pin準備の独立受入と、companion契約19件・固定SDK21件・Hermes関連74件・MCS導入更新228件の成功証拠を対象同一性に応じて再利用する。公式版単体の2件不適合（本人確認context/認証stdin）はcompanionで解消。全Hermes suiteを実施済みとはしない。
 
-2026-10-14 05:47（JST）の公開GitHub APIによる`dc42a048`の取得はHTTP422（No commit found）で、公開供給は引き続き未受入。同時刻以降、最終tree（tested `5c8ddcfc`から実行・テスト・配備・resourceの775パスに差分なし）で`sh scripts/check_pinned_sdks.sh hermes`を実行し、`21 passed, 42 warnings in 27.70s`・終了0。隔離Hermes venv（Python3.14.8）のcheckoutはCI pin `dc42a048`のarchive全18,325ファイルと一致し、秘密envなし・テストのsocket遮断を維持した。これはローカルの固定SDK確認で、公開取得・exact CIの代わりではない。standalone専用SDK laneも最終treeで`sh scripts/check_pinned_sdks.sh standalone`を実行し、`12 passed, 14 warnings in 3.72s`・終了0・skip 0（新規の専用venv、Python3.14.8、`deployment/requirements-standalone.txt`とpytest9.1.1の実distribution一致、完全合成・一時HOME・socket遮断、775パスに差分なし）。警告はSDK内部の非推奨APIで、内容を保持する。新候補`f36c1da0`でも同じ固定Hermes SDK laneを2026-10-14に実行し、`21 passed, 42 warnings`・skip 0・終了0（16.68s）で、pinとsourceの一致を確認した。旧候補の契約19件は同laneに含まれるため、重ねて再実行していない。公開取得とexact CIは新候補でも未受入。
+2026-10-14 05:47（JST）の公開GitHub APIによる`dc42a048`の取得はHTTP422（No commit found）で、当時は公開供給が未受入だった。同時刻以降、最終tree（tested `5c8ddcfc`から実行・テスト・配備・resourceの775パスに差分なし）で`sh scripts/check_pinned_sdks.sh hermes`を実行し、`21 passed, 42 warnings in 27.70s`・終了0。隔離Hermes venv（Python3.14.8）のcheckoutはCI pin `dc42a048`のarchive全18,325ファイルと一致し、秘密envなし・テストのsocket遮断を維持した。これはローカルの固定SDK確認で、公開取得・exact CIの代わりではない。standalone専用SDK laneも最終treeで`sh scripts/check_pinned_sdks.sh standalone`を実行し、`12 passed, 14 warnings in 3.72s`・終了0・skip 0（新規の専用venv、Python3.14.8、`deployment/requirements-standalone.txt`とpytest9.1.1の実distribution一致、完全合成・一時HOME・socket遮断、775パスに差分なし）。警告はSDK内部の非推奨APIで、内容を保持する。新候補`f36c1da0`でも同じ固定Hermes SDK laneを2026-10-14に実行し、`21 passed, 42 warnings`・skip 0・終了0（16.68s）で、pinとsourceの一致を確認した。旧候補の契約19件は同laneに含まれるため、重ねて再実行していない。この時点では、公開取得とexact CIは新候補でも未受入だった。
 
 リリース経路の監査を受け、新規導入で軽量cloneから通常cloneへ切り替わり固定SHAがブランチに含まれない場合だけ、同じoriginから固定SHAをfetchして1回再試行する修正を追加した。取得できない場合は実行環境の作成前に停止し、接続と公開状況の確認を案内する（変更記録`hermes-companion-supply`）。installerの焦点テスト3件（ローカルbare Gitと外部stubで、通常cloneへの切替後の取得成功・取得不能での停止・再開）は成功した。導入・更新の関連6ファイル350件は成功。ShellCheck対応の同値な条件式整理後、最終書式のinstaller全81件も再確認した。Ruff 0.17.0のCI全範囲、gates 10/10、mine_gates、ShellCheck、shell構文も成功。2026-10-14の追加修正依頼では、固定対象 `0201dcd4`（比較元 `88620eb4`）の5ファイルをCodeRabbit 0.9.0で初回レビューし、`outcome: completed`・指摘0・対象漏れ0・終了0。追加修正はなく再レビュー不要。omoの独立レビューもACCEPT。根拠はローカル品質記録 `v1.0.21/blockers-20261014/`。
 
-新候補`f36c1da0`は2026-10-14 07:06 JSTの公開GitHub APIでもHTTP422（該当commitなし）。公開操作は未承認で、取得の受入条件を満たしていない。新規導入・過去版更新は[origins](../../../tests/fixtures/schema_upgrade/origins.json)と[更新経路](../../../tests/fixtures/schema_upgrade/update-paths.json)で全件追跡する。v1.0.20起点のschema-only抽出で新shape-11（schema9、trigger変更1件/index追加2件）を追加し、全21版・32経路を347件の合成回帰で確認した。既存の旧版fixture・履歴26経路は保持する。最終候補の公開配布・exact SHAの必須CI・サービス受入は別工程。実API/サービス再起動と合成入口の検証は区別する。
+新候補`f36c1da0`は2026-10-14 07:06 JST時点の公開GitHub APIでもHTTP422（該当commitなし）で、当時は公開操作が未承認だった（07:39 JSTの公開取得は下記）。新規導入・過去版更新は[origins](../../../tests/fixtures/schema_upgrade/origins.json)と[更新経路](../../../tests/fixtures/schema_upgrade/update-paths.json)で全件追跡する。v1.0.20起点のschema-only抽出で新shape-11（schema9、trigger変更1件/index追加2件）を追加し、全21版・32経路を347件の合成回帰で確認した。既存の旧版fixture・履歴26経路は保持する。最終候補の公開配布・exact SHAの必須CI・サービス受入は別工程。実API/サービス再起動と合成入口の検証は区別する。
 
-2026-10-14 07:39 JST、companion `f36c1da0`はforkの新規branch `mcs-pin/v0.21.7-20261014`で公開済みとなり、認証情報を無効にした公開branchのSHA照合と、SHA指定のfresh fetchでSHA・tree `cce192e4`の一致を確認した。匿名GitHub APIはrate limit（HTTP403）のため、Git経路の取得を証拠とする。MCS候補はDraft PR #54（head `eda24601`、base `7a4e0c60`）で、07:56 JSTにrequired workflow（ci・Japanese release notes）が成功した。これは`eda24601`に対する結果で、後続のheadは別に確認する。main merge・tag・Release・本番適用は未受入。
+2026-10-14 07:39 JST、companion `f36c1da0`はforkの新規branch `mcs-pin/v0.21.7-20261014`で公開済みとなり、認証情報を無効にした公開branchのSHA照合と、SHA指定のfresh fetchでSHA・tree `cce192e4`の一致を確認した。匿名GitHub APIはrate limit（HTTP403）のため、Git経路の取得を証拠とする。MCS候補はDraft PR #54（head `eda24601`、base `7a4e0c60`）で、07:56 JSTにrequired workflow（ci・Japanese release notes）が成功した。これは`eda24601`に対する結果で、後続のheadは別に確認する。この時点では、main merge・tag・Release・本番適用は未受入だった。
 
 ## 文書・全体監査の扱い
 
 前版の全体監査と公開receiptを区別して再利用し、全追跡ファイル群の同一性、今回差分と共有経路を8領域へ対応づけた（final-audit-delta）。追加master修正・通知追補・生成文書のhashと採否を最終差分記録へ対応づけた。未知の依存条件や未確認の配布経路を「問題なし」にしない。
 
-READMEは機能・画面例・導入・安全・導線の5項目を照合済。Slack8画面のカードUIは今回変更せず、運用診断の説明図を別に準備した。画像の外部公開・Release実表示は未実施。2026-10-14、全ファイル見直しで追加した16件を含む全28変更記録を、生成器（`release_notes.py build`、版1.0.21・日付2026-10-14）で未公開の1.0.21へ集約し直した。既存の12件はarchiveから戻して同じ手順で再生成し、本文は利用者の目的ごとに13項目へまとめ、28件すべての仕様・根拠は技術詳細の折りたたみに残した。README要約は`readme_release.py`で再生成し、同じCHANGELOGからRelease本文をexportした。旧版本文・旧版archiveは変更していない。同日、リリース経路の監査で追加した変更記録`hermes-companion-supply`を、既存28件のarchiveを変えずに加え、全29件（本文14項目・技術詳細29件）とした。merge後のレビュー（v1.0.20→main `f0646a3f`）で採用した修正はPR #55（`1dc65b03`、Codex独立受入・CodeRabbit承認・必須CI成功）で取り込み、その変更記録4件を既存29件のarchiveを変えずに加え、全33件（本文18項目・技術詳細33件）とした。
+READMEは機能・画面例・導入・安全・導線の5項目を照合済。Slack8画面のカードUIは今回変更せず、運用診断の説明図を別に準備した。画像の外部公開・Release実表示は未実施。2026-10-14、全ファイル見直しで追加した16件を含む全28変更記録を、生成器（`release_notes.py build`、版1.0.21・日付2026-10-14）で未公開の1.0.21へ集約し直した。既存の12件はarchiveから戻して同じ手順で再生成し、本文は利用者の目的ごとに13項目へまとめ、28件すべての仕様・根拠は技術詳細の折りたたみに残した。README要約は`readme_release.py`で再生成し、同じCHANGELOGからRelease本文をexportした。旧版本文・旧版archiveは変更していない。同日、リリース経路の監査で追加した変更記録`hermes-companion-supply`を、既存28件のarchiveを変えずに加え、全29件（本文14項目・技術詳細29件）とした。merge後のレビュー（v1.0.20→main `f0646a3f`）で採用した修正はPR #55（`1dc65b03`、Codex独立受入・CodeRabbit承認・必須CI成功）で取り込み、その変更記録4件を既存29件のarchiveを変えずに加え、全33件（本文18項目・技術詳細33件）とした。続いて全PR・全worktree・remoteの統合（PR #57）で回収した22件の変更記録を、既存33件のarchiveを変えずに加え、全55件（本文23項目・技術詳細55件）とした。
