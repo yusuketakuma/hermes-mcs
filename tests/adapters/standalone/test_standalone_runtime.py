@@ -4,6 +4,7 @@ CLI's exit-code contract."""
 import threading
 
 import asyncio
+import errno
 import io
 import json
 import os
@@ -318,3 +319,33 @@ def test_nonregular_private_input_is_rejected_without_waiting_for_a_writer(tmp_p
             fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
             os.close(fd)
             worker.join(timeout=1)
+
+
+def test_private_directory_failure_closes_the_open_descriptor(tmp_path, monkeypatch):
+    path = tmp_path / "synthetic-status.json"
+    path.mkdir()
+    opened = []
+    real_open = os.open
+
+    def record_open(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+
+    monkeypatch.setattr(config.os, "open", record_open)
+    try:
+        for _ in range(3):
+            with pytest.raises(config.ConfigError, match="^invalid$"):
+                config._private_bytes(path, "missing", "invalid")
+        assert len(opened) == 3
+        for fd in opened:
+            with pytest.raises(OSError) as error:
+                os.fstat(fd)
+            assert error.value.errno == errno.EBADF
+    finally:
+        # Keep the failing implementation's descriptors out of later tests.
+        for fd in set(opened):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
