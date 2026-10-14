@@ -70,3 +70,42 @@ def test_repeated_lab_label_and_value_do_not_inherit_quote_prefix_patient_scope(
 ])
 def test_single_blood_pressure_remains_grounded_to_patient_label_and_known_side(body, values, expected):
     assert extract.patient_vitals(values, body) == expected
+
+
+@pytest.mark.parametrize("person", ["お兄様", "兄様", "お姉様", "姉さん", "弟さん", "妹様", "孫さん"])
+def test_an_honorific_family_member_is_family(person):
+    body = f"ご家族から、{person}が合成薬Aを飲み忘れたと相談がありました。"
+    start = body.index("合成薬A")
+    assert extract.patient_source_scope(body, start, start + 4) == "family"
+
+
+def _meds(body, quote, subject):
+    med = {"name": "合成薬A", "dose": None, "action": "none", "status": "current", "subject": subject,
+           "negated": False, "evidence": quote}
+    return extract_llm._validate({"summary": "合成の要約", "meds": [med]}, body).get("meds", [])
+
+
+def test_an_honorific_family_medication_is_not_kept_as_the_patients():
+    body = "ご家族から、お兄様が合成薬Aを飲み忘れたと相談がありました。患者本人の服薬状況に変更はありません。"
+    quote = "お兄様が合成薬Aを飲み忘れたと相談がありました"
+    assert _meds(body, quote, "patient") == []
+    assert [med["subject"] for med in _meds(body, quote, "family")] == ["family"]
+
+
+def test_a_family_report_keeps_the_patients_own_medication():
+    body = "お姉様から、本人は合成薬Aを内服中と連絡がありました。"
+    assert [med["subject"] for med in _meds(body, "本人は合成薬Aを内服中", "patient")] == ["patient"]
+
+
+def test_honorific_family_and_patient_measurements_stay_apart():
+    body = "お兄様の体温37.8。本人の体温36.5。"
+    first, second = body.index("37.8"), body.index("36.5")
+    assert extract.patient_source_scope(body, first, first + 4) == "family"
+    assert extract.patient_source_scope(body, second, second + 4) == "patient"
+
+
+@pytest.mark.parametrize("person", ["姉川さん", "兄部様"])
+def test_a_named_person_starting_with_a_relation_is_not_family(person):
+    body = f"{person}が合成薬Aを飲んでいます。"
+    start = body.index("合成薬A")
+    assert extract.patient_source_scope(body, start, start + 4) != "family"
