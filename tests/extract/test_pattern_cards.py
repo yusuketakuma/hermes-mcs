@@ -470,7 +470,11 @@ def test_denylist_load_failure_never_echoes_a_name_and_removes_copies(tmp_path, 
     db = sqlite3.connect(db_path)
     try:
         with db:
+            # A non-JSON artifact reads as no names; a harvest bound still fails the load.
             db.execute("INSERT INTO artifacts(kind,content) VALUES('station_staff_v1','{bad')")
+            db.execute("CREATE TABLE future_identity_payload(payload TEXT)")
+            db.execute("INSERT INTO future_identity_payload VALUES(?)",
+                       ('{"name":' + "[" * 40 + '"x"' + "]" * 40 + "}",))
     finally:
         db.close()
     reader_temp = tmp_path / "reader-temp"
@@ -698,3 +702,65 @@ def test_non_identity_json_strings_do_not_reject_an_allowed_enum(tmp_path, snaps
     card_path.write_text(json.dumps(card), encoding="utf-8")
     result = run_cli(card_path, db_path)
     assert result.returncode == 0
+
+
+@pytest.mark.parametrize("kind", [
+    "station_staff_v1", "karte_summary", "self_profile_v1", "patient_rollup", "loop_event"])
+def test_non_json_rows_do_not_block_linting_and_valid_names_still_count(tmp_path, snapshot, kind):
+    db_path, _ = snapshot
+    db = sqlite3.connect(db_path)
+    try:
+        with db:
+            for content, meta in (("not json", "{}"), ("{}", "not json"), ("[truncated", None)):
+                db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+                           "VALUES(?,1,1,?,?)", (kind, content, meta))
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
+            if "command_receipts" in tables:
+                columns = [row[1] for row in db.execute("PRAGMA table_info(command_receipts)")]
+                db.execute(f"INSERT INTO command_receipts({','.join(columns)}) "
+                           f"VALUES({','.join('?' for _ in columns)})",
+                           ["not json" if column == "receipt_json" else "applied" if column == "outcome" else f"synthetic-{column}"
+                            for column in columns])
+    finally:
+        db.close()
+    card_path = tmp_path / "card.json"
+    card_path.write_text(json.dumps(clean_card()), encoding="utf-8")
+    result = run_cli(card_path, db_path)
+    assert result.returncode == 0 and result.stdout == result.stderr == ""
+    db = sqlite3.connect(db_path)
+    try:
+        with db:
+            db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+                       "VALUES('feedback_v1',1,1,?,'{}')", (json.dumps({"actor": "oral"}),))
+    finally:
+        db.close()
+    card = clean_card()
+    card["current_shape"] = "oral"
+    card_path.write_text(json.dumps(card), encoding="utf-8")
+    result = run_cli(card_path, db_path)
+    assert result.returncode == 1 and "oral" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("kind,content", [
+    ("station_staff_v1", {"staff": ["scalar staff member", 7, None, {"name": "GateSynthetic"}]}),
+    ("patient_rollup", {"top_senders": ["scalar sender", 3, ["GateSynthetic", 2]]}),
+])
+def test_scalar_array_members_do_not_block_linting(tmp_path, snapshot, kind, content):
+    db_path, _ = snapshot
+    db = sqlite3.connect(db_path)
+    try:
+        with db:
+            db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+                       "VALUES(?,1,1,?,'{}')", (kind, json.dumps(content)))
+    finally:
+        db.close()
+    card_path = tmp_path / "card.json"
+    card_path.write_text(json.dumps(clean_card()), encoding="utf-8")
+    result = run_cli(card_path, db_path)
+    assert result.returncode == 0 and result.stdout == result.stderr == ""
+    # the well-formed member beside the scalar ones still blocks its name
+    card = clean_card()
+    card["current_shape"] = "GateSynthetic"
+    card_path.write_text(json.dumps(card), encoding="utf-8")
+    result = run_cli(card_path, db_path)
+    assert result.returncode == 1 and "GateSynthetic" not in result.stdout + result.stderr

@@ -27,6 +27,7 @@ _HARVEST_MAX_DEPTH = 16
 _HARVEST_MAX_NODES = 10000
 
 # Named identities, including historical copies and optional request/notification schemas.
+# Non-JSON rows read as NULL (no names); the generic harvest still scans their text.
 NAME_SOURCES = {
     "patients.patient_name": (
         "patients", "SELECT patient_name FROM patients", "Patient identity."),
@@ -45,40 +46,40 @@ NAME_SOURCES = {
         "message_reaction_actors", "SELECT organization FROM message_reaction_actors",
         "Reaction actors' organizations, including historical actors."),
     "station_staff_v1.staff.name": (
-        "artifacts", "SELECT json_extract(s.value,'$.name') FROM artifacts a, "
-        "json_each(a.content,'$.staff') s WHERE a.kind='station_staff_v1'",
+        "artifacts", "SELECT json_extract(CASE WHEN json_valid(s.value) THEN s.value END,'$.name') FROM artifacts a, "
+        "json_each(CASE WHEN json_valid(a.content) THEN a.content END,'$.staff') s WHERE a.kind='station_staff_v1'",
         "Every historical staff roster's person names."),
     "station_staff_v1.staff.station": (
-        "artifacts", "SELECT json_extract(s.value,'$.station') FROM artifacts a, "
-        "json_each(a.content,'$.staff') s WHERE a.kind='station_staff_v1'",
+        "artifacts", "SELECT json_extract(CASE WHEN json_valid(s.value) THEN s.value END,'$.station') FROM artifacts a, "
+        "json_each(CASE WHEN json_valid(a.content) THEN a.content END,'$.staff') s WHERE a.kind='station_staff_v1'",
         "Every historical staff roster's facility names."),
     "karte_summary.updater.name": (
-        "artifacts", "SELECT json_extract(content,'$.updater.name') FROM artifacts "
+        "artifacts", "SELECT json_extract(CASE WHEN json_valid(content) THEN content END,'$.updater.name') FROM artifacts "
         "WHERE kind='karte_summary'", "Summary updater's person name."),
     "self_profile_v1.name": (
-        "artifacts", "SELECT json_extract(content,'$.name') FROM artifacts "
+        "artifacts", "SELECT json_extract(CASE WHEN json_valid(content) THEN content END,'$.name') FROM artifacts "
         "WHERE kind='self_profile_v1'", "Logged-in person's name, including old profiles."),
     "self_profile_v1.organizations": (
         "artifacts", "SELECT o.value FROM artifacts a, "
-        "json_each(a.content,'$.organizations') o WHERE a.kind='self_profile_v1'",
+        "json_each(CASE WHEN json_valid(a.content) THEN a.content END,'$.organizations') o WHERE a.kind='self_profile_v1'",
         "Logged-in person's organization names, including old profiles."),
     "patient_rollup.top_senders": (
-        "artifacts", "SELECT json_extract(s.value,'$[0]') FROM artifacts a, "
-        "json_each(a.content,'$.top_senders') s WHERE a.kind='patient_rollup'",
+        "artifacts", "SELECT json_extract(CASE WHEN json_valid(s.value) THEN s.value END,'$[0]') FROM artifacts a, "
+        "json_each(CASE WHEN json_valid(a.content) THEN a.content END,'$.top_senders') s WHERE a.kind='patient_rollup'",
         "Stored historical sender names in patient aggregates."),
     "requests.assignee": (
         "requests", "SELECT assignee FROM requests", "Free-text name or name(facility) label."),
     "command_receipts.actor": (
-        "command_receipts", "SELECT json_extract(receipt_json,'$.actor') FROM command_receipts",
+        "command_receipts", "SELECT json_extract(CASE WHEN json_valid(receipt_json) THEN receipt_json END,'$.actor') FROM command_receipts",
         "Human approval identity, which may be a free-text name."),
     "command_receipts.before.assignee": (
-        "command_receipts", "SELECT json_extract(receipt_json,'$.before.assignee') "
+        "command_receipts", "SELECT json_extract(CASE WHEN json_valid(receipt_json) THEN receipt_json END,'$.before.assignee') "
         "FROM command_receipts", "Historical pre-update assignee name/facility label."),
     "command_receipts.after.assignee": (
-        "command_receipts", "SELECT json_extract(receipt_json,'$.after.assignee') "
+        "command_receipts", "SELECT json_extract(CASE WHEN json_valid(receipt_json) THEN receipt_json END,'$.after.assignee') "
         "FROM command_receipts", "Historical post-update assignee name/facility label."),
     "command_receipts.owner": (
-        "command_receipts", "SELECT json_extract(receipt_json,'$.owner') FROM command_receipts",
+        "command_receipts", "SELECT json_extract(CASE WHEN json_valid(receipt_json) THEN receipt_json END,'$.owner') FROM command_receipts",
         "Historical notification ownership identity."),
     "notification_acknowledgements.actor": (
         "notification_acknowledgements", "SELECT actor FROM notification_acknowledgements",
@@ -90,13 +91,13 @@ NAME_SOURCES = {
         "notification_triage", "SELECT last_actor FROM notification_triage",
         "Last acting person's identity."),
     "artifacts.content.actor": (
-        "artifacts", "SELECT json_extract(content,'$.actor') FROM artifacts",
+        "artifacts", "SELECT json_extract(CASE WHEN json_valid(content) THEN content END,'$.actor') FROM artifacts",
         "All historical operation actors, including link, feedback, policy and approval rows."),
     "artifacts.meta.actor": (
-        "artifacts", "SELECT json_extract(meta,'$.actor') FROM artifacts",
+        "artifacts", "SELECT json_extract(CASE WHEN json_valid(meta) THEN meta END,'$.actor') FROM artifacts",
         "All historical operation actors stored in metadata, without a kind allowlist."),
     "artifacts.content.dismissed_by": (
-        "artifacts", "SELECT json_extract(content,'$.dismissed_by') FROM artifacts",
+        "artifacts", "SELECT json_extract(CASE WHEN json_valid(content) THEN content END,'$.dismissed_by') FROM artifacts",
         "Person who dismissed a signal, retained in its historical transition."),
 }
 
