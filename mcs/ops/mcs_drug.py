@@ -186,6 +186,8 @@ def install_bundled(args, *, directory: Path = BUNDLE, home: str = HOME) -> dict
         for new_dir in reversed(missing):
             new_dir.mkdir(mode=0o700)
             try:
+                # umask-independent: the next level's fsync opens this one
+                os.chmod(new_dir, 0o700)
                 fsync_dir(new_dir.parent)
             except OSError:
                 # No dictionary has been published. Remove this empty entry
@@ -199,6 +201,12 @@ def install_bundled(args, *, directory: Path = BUNDLE, home: str = HOME) -> dict
     if path.exists() or path.is_symlink():
         if drug_map.load(path, expected_sha256=sha) is None:
             raise ValueError("dictionary_unavailable")
+        try:
+            # a prior run may have published it without syncing the entry
+            fsync_dir(folder)
+        except OSError:
+            raise importer.MasterError("output_published_sync_unconfirmed",
+                                       written=True) from None
         out["state"] = "present"
     else:
         importer.write_private(result, path)

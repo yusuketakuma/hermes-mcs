@@ -99,26 +99,59 @@ def observe(db_path: str = DB, cfg: dict | None = None, days: int = 14, *,
         # Establish the read view before any of the component queries.
         c.execute("SELECT rootpage FROM sqlite_master LIMIT 1").fetchone()
         snapshot = _observe(c, cfg, days, now=started, checkpoint=budget.checkpoint,
-                            payload_checkpoint=budget.payload)
+                            payload_checkpoint=budget.payload, quality=False)
         budget.checkpoint()
-        snapshot["observation"] = {"status": "complete", "at": started,
+        # The heaviest scan runs last: exhausting the budget there leaves
+        # only this component unavailable, not the queues read before it.
+        quality = snapshot["current_quality"] = _bounded_quality(
+            c, cfg, budget.checkpoint, deadline)
+        limited = quality.get("reason") in _LIMIT_REASONS
+        snapshot["observation"] = {"status": "partial" if limited else "complete",
+                                   "at": started,
                                    "consistency": "single_read_transaction"}
+        if limited:
+            snapshot["observation"]["unavailable_components"] = ["current_quality"]
         return snapshot
     except _ObservationLimit as exc:
         return {"status": "unavailable", "reason": str(exc), "ts": int(started)}
     except sqlite3.Error as exc:
         return {"status": "unavailable", "ts": int(started),
-                "reason": ("observation_deadline_exceeded" if time.monotonic() >= deadline
-                           else "observation_size_exceeded"
-                           if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_TOOBIG
-                           else "observation_database_unavailable")}
+                "reason": _limit_reason(exc, deadline) or "observation_database_unavailable"}
     finally:
         if c is not None:
             c.close()
 
 
+_LIMIT_REASONS = ("observation_deadline_exceeded", "observation_size_exceeded")
+
+
+def _limit_reason(exc, deadline):
+    """The budget reason behind a SQLite error, or None for other failures."""
+    if time.monotonic() >= deadline:
+        return "observation_deadline_exceeded"
+    if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_TOOBIG:
+        return "observation_size_exceeded"
+    return None
+
+
+def _bounded_quality(c, cfg, checkpoint, deadline):
+    from semantic_metrics import current_quality
+    try:
+        quality = current_quality(SimpleNamespace(db=c), cfg, checkpoint=checkpoint)
+        checkpoint()   # its last lookup and decode may finish past the deadline
+        return quality
+    except _ObservationLimit as exc:
+        return {"available": False, "reason": str(exc)}
+    except sqlite3.Error as exc:
+        reason = _limit_reason(exc, deadline)
+        if reason is None:
+            raise
+        return {"available": False, "reason": reason}
+
+
 def _observe(c, cfg, days: int = 14, *, now: float | None = None,
-             checkpoint=lambda: None, payload_checkpoint=lambda raw: None) -> dict:
+             checkpoint=lambda: None, payload_checkpoint=lambda raw: None,
+             quality: bool = True) -> dict:
     now = time.time() if now is None else now
     from operational_status import interrupted_runs
     from operational_progress import collection_progress, pipeline_progress
@@ -158,7 +191,8 @@ def _observe(c, cfg, days: int = 14, *, now: float | None = None,
         **history,
         "audit_statuses_scope": "history",
         "history": history,
-        "current_quality": current_quality(ledger, cfg, checkpoint=checkpoint),
+        "current_quality": (current_quality(ledger, cfg, checkpoint=checkpoint)
+                            if quality else None),
         **usage,
         "jev_daily_budget": _daily_budget(cfg),
         "extract_llm_left": extract_left,
@@ -321,6 +355,11 @@ def _extract_recent(c, *, checkpoint=lambda: None) -> dict:
     return recent
 
 
+def _incomplete(snap) -> bool:
+    return (snap.get("status") == "unavailable"
+            or snap.get("observation", {}).get("status") == "partial")
+
+
 def _daily_budget(cfg) -> int:
     from semantic_policy import semantic_config
     return semantic_config(cfg if isinstance(cfg, dict) else {})[0]["daily_request_budget"]
@@ -341,7 +380,7 @@ def main() -> int:
     snap = observe(cfg=load_config(), days=days)
     if "--json" in sys.argv:
         print(json.dumps(snap, ensure_ascii=False))
-        return 2 if snap.get("status") == "unavailable" else 0
+        return 2 if _incomplete(snap) else 0
     if snap.get("status") == "unavailable":
         print(f"observation: unavailable ({snap['reason']})")
         return 2
@@ -398,7 +437,8 @@ def main() -> int:
     collection = snap["collection_progress"]
     print(f"履歴収集: 記録上の遅延{collection['lagging']}件 / {collection['rooms']}室 "
           f"（理由内訳: {collection['by_reason']}）")
-    return 0
+    # a partial snapshot printed its parts but is not a complete observation
+    return 2 if _incomplete(snap) else 0
 
 
 if __name__ == "__main__":

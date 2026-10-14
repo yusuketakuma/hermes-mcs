@@ -233,13 +233,15 @@ def test_unknown_or_future_build_dates_are_never_reported_as_current(tmp_path, m
     assert report["configured"]["id"] == report["bundled"]["dict_id"]
 
 
+# Expected lines are built at run time: a collection-time date breaks
+# when the suite crosses midnight before this test runs.
 @pytest.mark.parametrize("edit, line", [
     (lambda s: (s.pop("as_of"), s.pop("next_boundary_on")),
-     "作成基準日: 記録なし / 次の見直し日: 未確認"),
+     lambda: "作成基準日: 記録なし / 次の見直し日: 未確認"),
     (lambda s: s.update(as_of=(date.today() + timedelta(days=3)).isoformat(), next_boundary_on=None),
-     f"作成基準日: {(date.today() + timedelta(days=3)).isoformat()} / 次の見直し日: 未確認"),
+     lambda: f"作成基準日: {(date.today() + timedelta(days=3)).isoformat()} / 次の見直し日: 未確認"),
     (lambda s: s.update(next_boundary_on=None),
-     f"作成基準日: {date.today().isoformat()} / 次の見直し日: なし"),
+     lambda: f"作成基準日: {date.today().isoformat()} / 次の見直し日: なし"),
 ], ids=["legacy", "future_build_date", "verified_no_boundary"])
 def test_status_text_separates_an_unknown_boundary_from_none(tmp_path, monkeypatch, capsys, edit, line):
     bundle = _bundle(tmp_path)
@@ -247,4 +249,4 @@ def test_status_text_separates_an_unknown_boundary_from_none(tmp_path, monkeypat
     config = _rewrite(made["path"], home, edit)
     monkeypatch.setattr(mcs_drug, "load_config", lambda: config)
     assert mcs_drug.main(["status"]) == 0
-    assert line in capsys.readouterr().out
+    assert line() in capsys.readouterr().out
