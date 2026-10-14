@@ -1646,3 +1646,22 @@ def test_a_particle_comma_does_not_carry_a_drug_into_a_different_non_drug_object
 def test_a_particle_comma_does_not_carry_a_drug_into_another_drugs_operation():
     text = "本人の架空薬Aは、架空薬Bを中止しました。"
     assert not _rx_gap(text, [_med("架空薬A", text, action="none"), _med("架空薬B", text, action="stop", status="past")])
+
+
+@pytest.mark.parametrize("text", ["本人の架空薬Aの中止を撤回しました。", "本人の架空薬Aの中止を取り消しました。"])
+def test_a_withdrawn_change_grounds_no_action(text):
+    body = PREFIX + text
+    neutral = _med("架空薬A", text, action="none")
+    stopped = _med("架空薬A", text, action="stop", status="past")
+    assert not _rx_gap(text, [neutral])
+    assert _rx_gap(text, [stopped])
+    prior = extract_llm._validate({**OBSERVATIONS, "meds": [neutral]}, body)
+    added = extract_llm._validate({**OBSERVATIONS, "meds": [neutral, stopped]}, body)
+    assert not extract_llm._quality_improves(added, prior, body, hints(body))
+
+
+@pytest.mark.parametrize("text,action,status", [("本人は来週架空薬Aを開始します。", "start", "planned"),
+                                                ("本人は昨日架空薬Aを中止しました。", "stop", "past")])
+def test_a_time_word_glued_to_the_drug_keeps_its_change(text, action, status):
+    assert _rx_gap(text, [_med("架空薬A", text, action="none")])
+    assert not _rx_gap(text, [_med("架空薬A", text, action=action, status=status)])
