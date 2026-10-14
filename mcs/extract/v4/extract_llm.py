@@ -1666,7 +1666,8 @@ def _completeness_issues(v, hints, body):
     # the per-sentence cues apply the same request-ending test to every kind.
     for request in _request_cues(body):
         if (isinstance(request, dict) and request.get("kind") in _REQUEST_STEMS
-                and isinstance(request.get("ctx"), str) and _current_cue(body, request["ctx"])
+                and isinstance(request.get("ctx"), str)
+                and _request_current(body, request["ctx"], request["clause"])
                 and not any(_request_covers(item, request) for item in v.get("requests") or [])):
             issues.append("本文の確認・連絡・質問候補が未収載です。原文で再確認してください")
             break
@@ -1710,9 +1711,13 @@ def _request_cues(body):
         for kind, rx in _REQUEST_CUES.items():
             found, start = [], 0
             for m in rx.finditer(ctx) if ctx else ():
-                # the target lies between the previous stem and this one
-                found.append({"kind": kind, "ctx": ctx, "target": _request_target(ctx[start:m.start()])})
+                # the target lies between the previous stem and this one; the
+                # clause (after ので/から/、…) is what a negation must sit in
+                found.append({"kind": kind, "ctx": ctx,
+                              "chunks": _request_target(ctx[start:m.start()]),
+                              "clause": ctx[_clause_start(ctx[:m.start()]):]})
                 start = m.end()
+            _distinct_targets(found)
             if len(found) > 1:
                 # 記録の確認と検査値の確認: one quote and one 確認 must not cover both
                 for cue in found:
@@ -1721,21 +1726,49 @@ def _request_cues(body):
     return cues
 
 
+def _clause_start(before):
+    """Start of the clause holding a request stem (after ので, から, 、 …)."""
+    marks = list(re.finditer(r"ので|から|ため|けど|けれど|が、|、", before))
+    return marks[-1].end() if marks else 0
+
+
+def _distinct_targets(found):
+    """Each cue's target: its last word, extended (血圧の記録 vs 血糖の記録) only
+    while same-kind targets in the sentence would otherwise coincide."""
+    longest = max((len(c["chunks"]) for c in found), default=0)
+    for size in range(1, longest + 1):
+        names = ["".join(c["chunks"][-size:]) or None for c in found]
+        if size == longest or len({n for n in names if n}) == len([n for n in names if n]):
+            break
+    for cue, name in zip(found, names if found else []):
+        cue["target"] = name if name and len(name) <= 20 else None
+
+
+def _request_current(body, ctx, clause):
+    """The request sentence is patient-scoped and its own clause is not negated."""
+    for match in re.finditer(re.escape(ctx), body):
+        if (extract.patient_source_scope(body, *match.span()) == "patient"
+                and not re.search(r"ない|なし|なく|ません|不要|未使用|未測定|中止|済み|ありがとう", clause)):
+            return True
+    return False
+
+
 def _request_target(before):
-    """The word a request stem acts on (記録の確認 -> 記録), or None. ``before``
+    """The の-separated words before a request stem (本人の記録の確認 -> [本人, 記録]). ``before``
     starts at the previous stem, so only its listing particle is dropped and
     a と inside a word (かかと) is never a boundary."""
     # a listing particle counts only right after a request stem of any kind
     clause = re.split(r"(?:確認|連絡)(?:と|や|、|・|及び|および)", before)[-1]
-    clause = re.sub(r"^(?:と|や|、|・|及び|および)", "", clause).rsplit("、", 1)[-1]
+    clause = re.sub(r"^(?:と|や|、|・|及び|および)", "", clause)
+    clause = clause[_clause_start(clause):]      # 転倒がないので記録 -> 記録
     clause = re.sub(r"(?:の|を|へ|に|は|も|ご)+$", "", clause)
-    word = clause.rsplit("の", 1)[-1].removeprefix("ご")
-    return word if 0 < len(word) <= 20 else None
+    return [c.removeprefix("ご") for c in clause.split("の") if c]
 
 
 def _names_target(text, target, siblings):
     """``text`` mentions ``target`` outside any longer sibling that contains it
-    (記録 is not named by 看護記録)."""
+    (記録 is not named by 看護記録); の is ignored (血糖記録 names 血糖の記録)."""
+    text = text.replace("の", "")
     for longer in sorted((s for s in siblings if target in s and s != target), key=len, reverse=True):
         text = text.replace(longer, "")
     return target in text
@@ -1757,6 +1790,9 @@ def _request_covers(item, hint):
                 not _names_target(quote, target, siblings)
                 or any(_names_target(quote, s, [target, *siblings]) for s in siblings)):
             return False
+    target = hint.get("target")
+    if target and _names_target(action, target, [s for s in hint.get("siblings") or [] if s]):
+        return True             # 記録をチェックして主治医に伝達 names both targets
     stem = _REQUEST_STEMS[hint["kind"]]
     if stem in action or (hint["kind"] == "ask" and item.get("kind") == "question"):
         return True

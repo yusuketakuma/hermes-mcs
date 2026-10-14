@@ -753,3 +753,51 @@ def test_three_listed_requests_add_no_call_when_named_or_reported(monkeypatch, t
     monkeypatch.setattr(extract_llm, "_llm_call", model)
     extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 1
+
+
+BP_BS = "血圧の記録の確認と血糖の記録の確認をお願いします"
+
+
+def _run(monkeypatch, body, first, repaired=None):
+    calls = []
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        requests = first if len(calls) == 1 or repaired is None else repaired
+        return copy.deepcopy({**OBSERVATIONS, "requests": requests})
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    return calls, extract_llm.llm_extract(body, hints=hints(body))
+
+
+@pytest.mark.parametrize("first", [[_confirm("血糖記録確認", BP_BS)], [_confirm("血圧記録確認", BP_BS)]],
+                         ids=["bp_missing", "bs_missing"])
+def test_compound_targets_sharing_a_last_word_stay_distinct(monkeypatch, first):
+    both = [_confirm("血圧記録確認", BP_BS), _confirm("血糖記録確認", BP_BS)]
+    calls, result = _run(monkeypatch, PREFIX + BP_BS + "。", first, both)
+    assert len(calls) == 2
+    assert {item["action"] for item in result["requests"]} == {"血圧記録確認", "血糖記録確認"}
+
+
+def test_compound_targets_both_present_add_no_call(monkeypatch):
+    calls, _ = _run(monkeypatch, PREFIX + BP_BS + "。",
+                    [_confirm("血圧記録確認", BP_BS), _confirm("血糖記録確認", BP_BS)])
+    assert len(calls) == 1
+
+
+def test_an_unrelated_negation_does_not_hide_a_request(monkeypatch):
+    sentence = "本人は転倒がないので記録を確認してください"
+    calls, result = _run(monkeypatch, PREFIX + sentence + "。", [], [_confirm("記録確認", sentence)])
+    assert len(calls) == 2 and result["requests"]
+
+
+@pytest.mark.parametrize("tail,requests", [
+    ("本人の記録を確認しないでください。", []),                        # the request itself is negated
+    ("本人は転倒がないので記録を確認してください。",
+     [_confirm("記録確認", "本人は転倒がないので記録を確認してください")]),
+    (BOTH + "。", [{"to": "医師", "kind": "request", "action": "記録をチェックして主治医に伝達",
+                    "evidence": BOTH}]),                                # one paraphrase names both targets
+], ids=["negated_request", "unrelated_negation_present", "paraphrase_names_both_targets"])
+def test_negated_or_target_named_requests_add_no_call(monkeypatch, tail, requests):
+    calls, _ = _run(monkeypatch, PREFIX + tail, requests)
+    assert len(calls) == 1
