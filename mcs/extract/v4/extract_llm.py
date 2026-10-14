@@ -2921,7 +2921,8 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
                 isinstance(meta.get(key), dict) and meta[key].get("applied") is False
                 for key in ("qc_fix", "human_fix")))):
             return out
-        quality = (meta.get("integrity") or {}).get("completeness", {}) if isinstance(meta.get("integrity"), dict) else {}
+        integrity = meta.get("integrity") if isinstance(meta, dict) else None
+        quality = integrity.get("completeness", {}) if isinstance(integrity, dict) else {}
         if bound and isinstance(quality, dict) and any(
                 isinstance(entry, dict) and entry.get("state") != "hint_gaps_resolved"
                 for entry in quality.values()):

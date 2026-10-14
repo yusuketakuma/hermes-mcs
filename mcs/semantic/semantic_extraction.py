@@ -1608,8 +1608,9 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
                      *, chunk_size: int = 3000,
                      request_following: bool = False,
                      coverage_missing: bool = False) -> dict:
-    """Re-extract only the chunks owning ``rejected`` facts and merge the
-    repaired items into a re-validated document.
+    """Re-extract rejected owner chunks, or all chunks when source coverage is missing.
+
+    Merge repaired items into a re-validated document.
 
     ``rejected`` maps fact_id -> human-readable reason.  Returns
     ``{"doc", "repaired", "repaired_fact_ids", "owner_chunk_ids"}``;

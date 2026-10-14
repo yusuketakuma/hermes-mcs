@@ -449,3 +449,22 @@ def test_completeness_repair_cannot_raise_urgency_from_a_hint_without_source_evi
         result = extract_llm.llm_extract(body, hints=misleading_hints)
         assert len(calls) == 2 and quote in calls[1][0]
         assert result == prior
+
+
+@pytest.mark.parametrize("meta", [None, [], "synthetic", 1, False])
+def test_non_object_final_metadata_remains_attention_read_only(tmp_path, meta):
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=1, body=PREFIX)])
+        source = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+        db.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+            "VALUES(?,?,?,?,?,?,?)", (extract_llm.KIND, source["project_id"], 1,
+                                     "{}", extract_llm.MODEL, json.dumps(meta), 1))
+        db.db.commit()
+        db.db.execute("PRAGMA query_only=ON")
+        result = extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)
+        assert result["state"] == "attention"
+        assert result["completed"] == 0 and result["total"] == 1
+    finally:
+        db.close()
