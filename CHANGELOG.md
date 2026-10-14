@@ -247,7 +247,7 @@
 - 合成の EIO 注入（fstat・pread・fdopen）を20回繰り返しても開いている FD 数が増えず、記録ファイルに何も書かれないことを確認する回帰を追加した。
 - 根拠: adapters/common/journal.py、tests/adapters/common/test_journal_append_cleanup.py
 
-#### Discordのタスク状態変更の返答でタスク名を文字どおり表示
+#### Discordのタスク状態変更の返答でタスク名を書式として解釈しない
 
 - text.task_done_text が Discord 方言ではタスク名を escape_md で同じ長さの全角記号に置き換える。Slack・LINE WORKS の平文表示は変わらない。
 - 根拠: adapters/common/text.py
