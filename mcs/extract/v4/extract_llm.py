@@ -32,6 +32,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -66,6 +67,7 @@ import extract
 from clinical_chunking import PLAN_VERSION, plan_chunks
 import local_llm
 import patient_context
+import patient_state_context
 from patient_context import CATEGORIES, DETAIL_KEYS, context_items
 from ledger import Ledger, LedgerReader
 from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_KIND,
@@ -109,6 +111,7 @@ _LOADED_SOURCE_DIGESTS = {
                        ("clinical_chunking", clinical_chunking.__file__),
                        ("extraction_refresh", extraction_refresh.__file__),
                        ("patient_context", patient_context.__file__),
+                       ("patient_state_context", patient_state_context.__file__),
                        ("local_llm", local_llm.__file__))}
 # evidence quotes lengthen output; 900 truncated dense messages mid-JSON
 # (which then burned all 5 retries into permanent errors).  v4 adds
@@ -416,6 +419,7 @@ _SCHEMA = {
                     "details": {"type": "array", "items": {
                         "type": "object", "properties": {
                             "key": {"type": "string", "enum": sorted(DETAIL_KEYS)},
+                            "refers_to": {"type": "string", "pattern": "^S[1-9][0-9]*$"},
                             "value": {"type": "string", "minLength": 1},
                             "evidence": {"type": "string", "minLength": 1}},
                         "required": ["key", "value", "evidence"],
@@ -740,7 +744,7 @@ def _flat(text: str) -> str:
 
 
 def _validate(d: dict, body: str | None = None,
-              drops: dict | None = None, ctx: bool = False) -> dict | None:
+              drops: dict | None = None, ctx: bool = False, *, references=None) -> dict | None:
     """Schema check — malformed LLM output must not become a success
     artifact (it poisons downstream rollups, Oracle B20). Returns the
     cleaned dict or None when nothing salvageable remains.
@@ -773,7 +777,7 @@ def _validate(d: dict, body: str | None = None,
     guard: a med dose/freq or symptom onset/duration absent from the
     body is dropped at the key — it was lifted from the context."""
     out: dict = {}
-    v = _Validator(body, drops, ctx)
+    v = _Validator(body, drops, ctx, references)
     try:
         v.meds(d, out)
         v.symptoms(d, out)
@@ -805,10 +809,11 @@ class _Validator:
     """Per-field schema cleaning shared state: the evidence verifier +
     drop accounting used by every item validator in _validate."""
 
-    def __init__(self, body, drops, ctx=False):
+    def __init__(self, body, drops, ctx=False, references=None):
         self.body = body
         self.drops = drops
         self.ctx = ctx
+        self.references = references if isinstance(references, dict) else {}
         self.flat = _flat(body) if body is not None else None
         self.ev_dropped = 0
         self.items_dropped = 0
@@ -895,6 +900,33 @@ class _Validator:
                 missing = max(0, len(raw) - len(clean.get("details", []))) if isinstance(raw, list) else 1
                 for _ in range(missing):
                     self.drop_item("patient_context.details")
+                names = sorted({detail["value"] for detail in clean.get("details", [])
+                                if detail["key"] == "drug_name"})
+                for detail in clean.get("details", []):
+                    # Only the supplied S-map may turn model output into a source identity.
+                    detail.pop("refers_to", None)
+                    matches = [entry for entry in raw if isinstance(entry, dict)
+                        and entry.get("key") == detail["key"] and entry.get("value") == detail["value"]
+                        and locate_quote_span(self.body, entry.get("evidence"))
+                        == locate_quote_span(self.body, detail["evidence"]) and "refers_to" in entry] \
+                        if isinstance(raw, list) else []
+                    if not matches:
+                        continue
+                    candidate = matches[0]["refers_to"]
+                    token = candidate.get("token") if isinstance(candidate, dict) else candidate
+                    reference = self.references.get(token) if isinstance(token, str) else None
+                    resolved = patient_context.reference_item({**reference, "token": token}) \
+                        if isinstance(reference, dict) else None
+                    if (len(matches) != 1 or resolved is None or clean["subject"] != "patient"
+                            or resolved["key"] != detail["key"] or len(names) > 1
+                            or clinical_values.patient_item_scope(detail, self.body, default="patient",
+                                surface=(names or resolved["drug_names"] or [None])[0])
+                            not in ("patient", "past", "planned", "conditional")
+                            or (names and names != resolved["drug_names"])
+                            or (isinstance(candidate, dict) and candidate != resolved)):
+                        self.drop_item("patient_context.refers_to")
+                    else:
+                        detail["refers_to"] = resolved
             items.append({key: clean[key] for key in
                           ("category", "text", "evidence", "subject", "details") if key in clean})
         out["patient_context"] = items
@@ -2421,12 +2453,12 @@ def _piece_reference(body: str, start: int, length: int) -> str:
     return _CTX_HEAD + _sanitize_ctx(reference) + _CTX_TAIL if reference else ""
 
 
-def _piece_validate(document, piece, body, drops=None, ctx=False):
+def _piece_validate(document, piece, body, drops=None, ctx=False, references=None):
     """Evidence must first belong to the core, and remain unique in the whole source."""
-    scoped = _validate(document, piece, drops, ctx)
+    scoped = _validate(document, piece, drops, ctx, references=references)
     if scoped is None or piece == body:
         return scoped
-    validated = _validate(scoped, body, drops, ctx)
+    validated = _validate(scoped, body, drops, ctx, references=references)
     if validated is not None:
         for counter in ("_items_dropped", "_evidence_dropped"):
             validated[counter] = validated.get(counter, 0) + scoped.get(counter, 0)
@@ -2443,7 +2475,8 @@ def llm_extract(body: str, *, context: str | None = None,
                 feedback: list | None = None,
                 on_chunk=None,
                 vital_policy: dict | None = None,
-                chunk_size: int | None = None, on_split=None, splits_in: dict | None = None
+                chunk_size: int | None = None, on_split=None, splits_in: dict | None = None,
+                references: dict | None = None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
@@ -2478,6 +2511,10 @@ def llm_extract(body: str, *, context: str | None = None,
             context = context[cut:]
     if context:
         prompt += _CTX_HEAD + context + _CTX_TAIL
+    if references:
+        prompt += ("対象本文の「前と同じ」などが参考情報の項目を一意に指すdetailsだけ、refers_toにその[S番号]のS番号を付ける。"
+                   "value/text/evidenceは対象本文の原文だけとし、以前の値や薬剤名を転記しない。"
+                   "対応が曖昧、別薬剤、別人、参照不要ならrefers_toを省略する。\n")
     if feedback:
         flines = [str(x)[:140] for x in feedback if str(x).strip()][:8]
         if flines:
@@ -2561,7 +2598,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 and notes[-1].get("finish_reason") == "length"):
             return split_piece(key, piece, start, remaining)
         drops: dict = {}
-        v = _piece_validate(d, piece, body, drops, piece_context) if d is not None else None
+        v = _piece_validate(d, piece, body, drops, piece_context, references) if d is not None else None
         if v is not None and not context:
             # a reply classification without the thread it answers is
             # a guess (the rules live in _CTX_HEAD): drop it before it
@@ -2648,7 +2685,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 if rd is _DEFERRED and v is None:
                     return _DEFERRED
                 if rd is not None and rd is not _DEFERRED:
-                    rv = _piece_validate(rd, piece, body, ctx=piece_context)
+                    rv = _piece_validate(rd, piece, body, ctx=piece_context, references=references)
                     if rv is not None and not context:
                         rv.pop("reply", None)
                     # a replacement must see every change in the message, so only an unsplit body
@@ -2799,7 +2836,7 @@ def _karte_block(ledger, project_id: int, posted_at: str | None) -> str:
     return _KARTE_HEAD + _sanitize_ctx(comment[:_KARTE_MAX]) + _KARTE_TAIL
 
 
-def _thread_context(ledger, r) -> str | None:
+def _thread_context(ledger, r, *, budget=_CTX_TOTAL_MAX) -> str | None:
     """Reference-only context: the patient's 連携サマリー block (if any)
     followed by earlier members of the message's thread, selected and
     formatted by _ctx_lines within the remaining _CTX_TOTAL_MAX budget.
@@ -2827,7 +2864,7 @@ def _thread_context(ledger, r) -> str | None:
                     COALESCE(posted_at_ts,0) DESC, message_id DESC LIMIT 4""",
         (r["project_id"], root, r["message_id"], root, ts, ts,
          r["message_id"], root)).fetchall()
-    thread = "\n".join(_ctx_lines(rows, root, _CTX_TOTAL_MAX - len(karte)))
+    thread = "\n".join(_ctx_lines(rows, root, budget - len(karte)))
     return (karte + thread) or None
 
 
@@ -2866,6 +2903,7 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
     context = (r["_context"] if "_context" in r.keys() else _thread_context(ledger, r)) if can_bind else None
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
                 context_binding=_chunk_context(r, context) if can_bind else None)
+    meta.update(_frame_meta(r))
     if auto_retry:
         meta["auto_retry"] = auto_retry
     ledger.artifact_add_tx(
@@ -3141,6 +3179,7 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     bound_context = r["_context"] if "_context" in r.keys() else _thread_context(ledger, r)
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
                 context_binding=_chunk_context(r, bound_context))
+    meta.update(_frame_meta(r))
     if ctx:
         meta["ctx"] = True
     if integrity:
@@ -3175,6 +3214,15 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
                             lost=lost, feedback_id=human.get("feedback_id") if human else None)
             held_prior = True
         else:
+            if prior_meta and (human_failed or qc_failed or
+                               (isinstance(r, dict) and r.get("_kept_prior"))):
+                for key in ("actual_model", "plan_version", "context_binding", "context_snapshot",
+                            "context_digest", "patient_state_context", "ctx", "patient_context_version", "integrity"):
+                    if key in prior_meta:
+                        meta[key] = prior_meta[key]
+                    else:
+                        meta.pop(key, None)
+                actual_model = prior["model"]
             if prior_meta and prior_meta.get("extract_version") != EXTRACT_VERSION:
                 meta["upgrade"] = {"prior_artifact_id": prior["artifact_id"],
                     "prior_version": prior_meta.get("extract_version"),
@@ -3551,10 +3599,29 @@ def _actual_model(r) -> str:
 
 def _chunk_context(r, context: str | None, *, checkpoint: bool = False) -> str:
     """Bind completed results to their source and checkpoints to the local-hint contract."""
-    return hashlib.sha256(json.dumps(
-        [r["posted_at"], context,
+    binding = [r["posted_at"], context,
          _actual_model(r),
-         _PROMPT_HEAD, _SCHEMA, "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION],
+         _PROMPT_HEAD, _SCHEMA, "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION]
+    if isinstance(r, dict) and r.get("_frame"):
+        binding.append(r["_frame"]["digest"])
+    return hashlib.sha256(json.dumps(binding,
+        ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def _frame_meta(r):
+    frame = r.get("_frame") if isinstance(r, dict) else None
+    return ({"context_snapshot": frame["artifact_id"], "context_digest": frame["digest"],
+             "patient_state_context": frame["enabled"]} if frame else {})
+
+
+def _frame_refs(r):
+    return (r.get("_frame") or {}).get("refs") if isinstance(r, dict) else None
+
+
+def _context_contract():
+    """Bind the frozen-context/schema contract independently of local-hint source revisions."""
+    return hashlib.sha256(json.dumps([EXTRACT_VERSION, PATIENT_CONTEXT_VERSION, PLAN_VERSION,
+        _PROMPT_HEAD, _SCHEMA, _LOADED_SOURCE_DIGESTS["patient_state_context"]],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
@@ -3645,7 +3712,7 @@ def _saved_chunk_state(ledger, r, context=None, *, chunk_size=None):
             content = json.loads(content)
         except (ValueError, TypeError, RecursionError):
             continue
-        validated = _validate(content, r["body_text"]) if isinstance(content, dict) else None
+        validated = _validate(content, r["body_text"], references=_frame_refs(r)) if isinstance(content, dict) else None
         if validated is not None and not validated.get("_items_dropped") and not validated.get("_evidence_dropped"):
             for counter in ("_items_dropped", "_evidence_dropped"):
                 if type(content.get(counter)) is int and content[counter] >= 0:
@@ -3702,7 +3769,30 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
     reader = object.__new__(LedgerReader)      # borrow read methods; never open/write another DB
     reader.db = db
     r["_target"] = ("", model)
-    context = _thread_context(reader, r)
+    final = db.execute("SELECT content,meta,model FROM artifacts WHERE kind=? AND message_id=? "
+                       "AND (project_id IS NULL OR project_id=?) ORDER BY artifact_id DESC LIMIT 1",
+                       (KIND, r["message_id"], r["project_id"])).fetchone()
+    final_meta = (loads_dict(final["meta"]) or {}) if final else {}
+    settled = (final is not None and not final_meta.get("error")
+               and final_meta.get("hash") == r["content_hash"]
+               and final_meta.get("extract_version") == EXTRACT_VERSION
+               and final_meta.get("actual_model") == model and final["model"] == model)
+    # A retained result owns its original frame, even after a newer attempt.
+    if settled:
+        snapshot = (final_meta["context_snapshot"],) if "context_snapshot" in final_meta else None
+    else:
+        snapshot = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=? AND message_id=? "
+                              "AND model=? AND json_extract(" + json_or_null("meta") + ",'$.hash')=? "
+                              "ORDER BY artifact_id DESC LIMIT 1",
+                              (patient_state_context.KIND, r["project_id"], r["message_id"], model, r["content_hash"])).fetchone()
+    if snapshot is not None:
+        frame = patient_state_context.load(db, snapshot[0], r)
+        if frame is None:
+            return out
+        r["_frame"] = frame
+        context = frame["text"]
+    else:
+        context = _thread_context(reader, r)
     size = _saved_chunk_size(reader, r, context)
     splits, saved = _saved_chunk_state(reader, r, context, chunk_size=size)
     roots = plan_chunks(r["body_text"], size)
@@ -3724,9 +3814,6 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
                   (r["message_id"],)).fetchone():
         return out
     binding = _chunk_context(r, context)
-    final = db.execute("SELECT content,meta,model FROM artifacts WHERE kind=? AND message_id=? "
-                       "AND (project_id IS NULL OR project_id=?) ORDER BY artifact_id DESC LIMIT 1",
-                       (KIND, r["message_id"], r["project_id"])).fetchone()
     if final:
         try:
             meta, document = json.loads(final["meta"]), json.loads(final["content"])
@@ -3738,7 +3825,10 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
                  and meta.get("extract_version") == EXTRACT_VERSION
                  and meta.get("actual_model") == model and final["model"] == model
                  and meta.get("plan_version") == PLAN_VERSION and meta.get("context_binding") == binding)
-        valid = _validate(document, r["body_text"]) if isinstance(document, dict) else None
+        if "context_snapshot" in meta and _frame_meta(r) != {
+                key: meta.get(key) for key in ("context_snapshot", "context_digest", "patient_state_context")}:
+            return out
+        valid = _validate(document, r["body_text"], references=_frame_refs(r)) if isinstance(document, dict) else None
         review = db.execute(
             f"SELECT ({_thin_pending_sql()}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) "
             "FROM messages m WHERE m.message_id=? AND m.project_id=?", (r["message_id"], r["project_id"])).fetchone()
@@ -4075,14 +4165,17 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     return rows, fresh_selected
 
 
-def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int]:
+def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int, int]:
     """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
     skipped = 0
+    blocked = 0
+    cfg = load_config()
+    extract_cfg = cfg.get("extract") if isinstance(cfg, dict) else None
+    enabled = isinstance(extract_cfg, dict) and extract_cfg.get("patient_state_context") is True
     for r in rows:
         r = dict(r)
         r["_target"] = target
-        r["_context"] = _thread_context(ledger, r)
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
@@ -4096,11 +4189,27 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int]:
             if _mark_prefiltered(ledger, r):
                 skipped += 1
             continue
-        context = r["_context"]
+        base = _thread_context(ledger, r, budget=600) if enabled else _thread_context(ledger, r)
+        retry = ledger.db.execute("SELECT meta FROM artifacts WHERE kind=? AND message_id=? "
+            "AND json_extract(" + json_or_null("meta") + ",'$.error')=1 "
+            "AND json_extract(" + json_or_null("meta") + ",'$.hash')=? ORDER BY artifact_id DESC LIMIT 1",
+            (KIND, r["message_id"], r["content_hash"])).fetchone()
+        retry_meta = (loads_dict(retry[0]) or {}) if retry else {}
+        auto = retry_meta.get("auto_retry")
+        attempt = {key: r.get(key) for key in ("qc_src", "human_src", "thin_src")}
+        attempt["auto_retry"] = auto if type(auto) is int and auto >= 0 else 0
+        try:
+            r["_frame"] = patient_state_context.prepare(ledger, r, model=target[1],
+                contract=_context_contract(), attempt=attempt, enabled=enabled, base_context=base,
+                version=EXTRACT_VERSION)
+        except (ValueError, sqlite3.Error):
+            blocked += 1
+            continue
+        context = r["_context"] = r["_frame"]["text"]
         r["_chunk_size"] = _saved_chunk_size(ledger, r, context)
         r["_splits"], saved = _saved_chunk_state(ledger, r, context, chunk_size=r["_chunk_size"])
         jobs.append((r, context, saved, hints, qc))
-    return jobs, skipped
+    return jobs, skipped, blocked
 
 
 def _plan_units(claimed: list, batch_k: int) -> list:
@@ -4290,7 +4399,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # Manifest-declared conversions (admitted_ids) were explicitly
     # requested — the prefilter never overrides them.
     prefilter = _prefilter_enabled() and admitted_ids is None
-    jobs, skipped = _prepare_jobs(ledger, rows, target, prefilter)
+    jobs, skipped, context_blocked = _prepare_jobs(ledger, rows, target, prefilter)
+    deferred += context_blocked
     metas = [None] * len(jobs)
     batch_metas = []
     checkpoints = queue.SimpleQueue()
@@ -4361,6 +4471,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
         with _pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
+                           **({"references": _frame_refs(r)} if _frame_refs(r) else {}),
                            deadline=deadline, meta_out=meta,
                            posted_at=r["posted_at"],
                            chunks_in=saved,
@@ -4506,6 +4617,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # model cannot enrich).
                     content = _thin_retry_content(ledger, r)
                     if content is not None:
+                        r["_kept_prior"] = True
                         with lock(per_write_lock) as held:
                             if held:
                                 _replace_current(
@@ -4534,7 +4646,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if not _improves(d, prior) and not _protected_lost(prior or {}, d, r["body_text"]):
                     d = prior
                     r["_kept_prior"] = True
-            d["_model"] = _actual_model(r)
+            if not r.get("_kept_prior"):
+                d["_model"] = _actual_model(r)
             with lock(per_write_lock) as held:
                 if held:
                     _commit(r, d, ctx, integrity, qc)
@@ -4732,6 +4845,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "left_estimate_age_s": round(time.monotonic() - estimate["at"]),
             "fresh_selected": fresh_selected,
             "selected": len(rows), "deferred": deferred,
+            "context_blocked": context_blocked,
             "skipped": skipped, "lock_lost": lock_lost,
             "slow_deferred": slow_deferred,
             "circuit_open_s": round(circuit_s) or None,

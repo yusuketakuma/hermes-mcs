@@ -1,0 +1,382 @@
+"""Attempt frames use wholly synthetic, prior, source-grounded pharmacy reports."""
+import json
+import sqlite3
+
+import pytest
+
+import extract_llm
+import patient_state_context as state
+from extract_testkit import _hash, _ledger, _message
+from test_pharmacy_state import context
+
+
+def seed(led, mid=1, *, body="本人の合成薬Aの残薬は3錠。", value="3錠", subject="patient",
+         names=("合成薬A",), date="2026-10-01T10:00:00+09:00", pid=1, clean=True):
+    led.save_messages([_message(mid=mid, body=body, project_id=pid, posted_at=date)])
+    meta = {"hash": _hash(led, mid), "extract_version": extract_llm.EXTRACT_VERSION,
+            "actual_model": "synthetic-model"}
+    if clean:
+        meta["integrity"] = {"validation": {"items_dropped": 0, "evidence_dropped": 0}}
+    aid = led.artifact_add("extract_llm", json.dumps({"patient_context": [
+        context(body, subject=subject, names=names, values=(value,))]}),
+        project_id=pid, message_id=mid, model="synthetic-model", meta=meta)
+    return aid
+
+
+def target(led):
+    led.save_messages([_message(mid=999, body="残薬は2錠になりました。",
+                               posted_at="2026-10-03T10:00:00+09:00")])
+    return dict(led.db.execute("SELECT * FROM messages WHERE message_id=999").fetchone())
+
+
+def frame(led, row, **kwargs):
+    return state.prepare(led, row, model="synthetic-model", contract="synthetic-contract/1",
+                         attempt={"human": None, "qc": None, "thin": None}, enabled=True,
+                         base_context=None, version=extract_llm.EXTRACT_VERSION, **kwargs)
+
+
+def test_prior_reports_are_bounded_dated_and_bound_to_the_exact_source(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        row = target(led)
+        seed(led, 2, date=row["posted_at"])
+        seed(led, 3, date="2026-10-04T10:00:00+09:00")
+        seed(led, 4, pid=2)
+        result = frame(led, row)
+        assert len(result["refs"]) == 1
+        ref = result["refs"]["S1"]
+        assert ref["project_id"] == ref["message_id"] == 1
+        assert ref["content_hash"] == _hash(led) and len(ref["fingerprint"]) == 64
+        assert "2026-10-01" in result["text"] and '値="3錠"' in result["text"]
+        assert state.load(led.db, result["artifact_id"], row) == result
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize("options", [
+    {"clean": False}, {"subject": "family"}, {"subject": "other"}, {"subject": "unspecified"},
+    {"body": "家族の合成薬Aの残薬は3錠。", "subject": "patient"},
+    {"body": "以前は本人の合成薬Aの残薬は3錠。"},
+    {"body": "本人の合成薬Aの残薬は3錠の予定。"},
+    {"body": "本人の合成薬Aの残薬は3錠か未確認。"},
+    {"body": "本人の合成薬Aと合成薬Bの残薬は3錠。", "names": ("合成薬A", "合成薬B")},
+])
+def test_uncertain_other_subject_and_ambiguous_reports_are_not_references(tmp_path, options):
+    led = _ledger(tmp_path)
+    try:
+        seed(led, **options)
+        assert frame(led, target(led))["refs"] == {}
+    finally:
+        led.close()
+
+
+def test_newer_ambiguous_report_does_not_resurrect_older_positive(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        seed(led, 2, body="本人の合成薬Aの残薬は3錠か未確認。", date="2026-10-02T10:00:00+09:00")
+        assert frame(led, target(led))["refs"] == {}
+    finally:
+        led.close()
+
+
+def test_resume_reuses_saved_context_after_background_and_base_change(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        row = target(led)
+        first = frame(led, row)
+        seed(led, 2, body="本人の合成薬Aの残薬は8錠。", value="8錠", date="2026-10-02T10:00:00+09:00")
+        later = state.prepare(led, row, model="synthetic-model", contract="synthetic-contract/1",
+                              attempt={"human": None, "qc": None, "thin": None}, enabled=True,
+                              base_context="更新後の合成背景", version=extract_llm.EXTRACT_VERSION)
+        assert later == first and len(led.artifacts(state.KIND)) == 1
+        new_attempt = state.prepare(led, row, model="synthetic-model", contract="synthetic-contract/1",
+                                    attempt={"human": 123}, enabled=True, base_context=None,
+                                    version=extract_llm.EXTRACT_VERSION)
+        assert new_attempt["digest"] != first["digest"]
+        assert new_attempt["refs"]["S1"]["value"] == "8錠"
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize("base", [None, "", "合成thread\n" * 100])
+def test_disabled_context_is_byte_identical_but_still_durable(tmp_path, base):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        row = target(led)
+        result = state.prepare(led, row, model="synthetic-model", contract="v1", attempt={},
+                               enabled=False, base_context=base, version=extract_llm.EXTRACT_VERSION)
+        assert result["text"] == base and result["refs"] == {} and result["enabled"] is False
+    finally:
+        led.close()
+
+
+def test_budget_keeps_whole_reference_values_and_bounds_combined_context(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        for mid in range(1, 30):
+            seed(led, mid, body=f"本人の合成薬{mid}の残薬は3錠。", names=(f"合成薬{mid}",))
+        row = target(led)
+        result = state.prepare(led, row, model="synthetic-model", contract="v1", attempt={},
+                               enabled=True, base_context="背" * 600, version=extract_llm.EXTRACT_VERSION)
+        block, refs = state.format_state(state.history(led.db, row, version=extract_llm.EXTRACT_VERSION))
+        assert len(block) <= 600 and len(result["text"]) <= 1200
+        assert len(refs) < 29 and all(ref["value"] == "3錠" for ref in refs.values())
+        assert result["text"].startswith("背" * 600)
+    finally:
+        led.close()
+
+
+def test_only_newest_200_source_messages_can_contribute(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        for mid in range(2, 203):
+            led.save_messages([_message(mid=mid, posted_at="2026-10-02T10:00:00+09:00")])
+        assert frame(led, target(led))["refs"] == {}
+    finally:
+        led.close()
+
+
+def test_edited_deleted_or_foreign_artifact_never_contributes(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        aid = seed(led)
+        row = target(led)
+        with pytest.raises(sqlite3.IntegrityError, match="artifacts message relation"):
+            with led.db:
+                led.db.execute("UPDATE artifacts SET project_id=2 WHERE artifact_id=?", (aid,))
+        with led.db:
+            led.db.execute("UPDATE artifacts SET project_id=1 WHERE artifact_id=?", (aid,))
+            led.db.execute("UPDATE messages SET content_hash=? WHERE message_id=1", ("f" * 64,))
+        assert state.history(led.db, row, version=extract_llm.EXTRACT_VERSION) == []
+        with led.db:
+            led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=1")
+        assert state.history(led.db, row, version=extract_llm.EXTRACT_VERSION) == []
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize("relation", [None, "CONTRADICTION", "UNRESOLVED"])
+def test_canonical_precedence_requires_complete_verified_uncontested_patient_fact(tmp_path, relation):
+    from semantic_projection import PROJECTION_VERSION
+    led = _ledger(tmp_path)
+    body = "本人の合成薬Aの残薬は3錠。"
+    try:
+        seed(led)
+        row = target(led)
+        fact = {"fact_id": "f1", "validation_status": "verified", "subject": "patient:1",
+                "polarity": "affirmed", "epistemic": "reported", "workflow_status": "performed",
+                "evidence_quote": body}
+        doc = {"patient_context": [context(body)], "canonical_facts": [fact],
+               "canonical_relations": ([{"type": relation, "left_fact_id": "f1", "right_fact_id": "f2"}]
+                                       if relation else []),
+               "canonical_quality": {"coverage_status": "complete", "open_obligation_ids": [], "limitations": []}}
+        aid = led.artifact_add("canonical_projection", json.dumps(doc), project_id=1, message_id=1,
+                              meta={"hash": _hash(led), "projection_version": PROJECTION_VERSION})
+        block, refs = state.format_state(state.history(led.db, row, version=extract_llm.EXTRACT_VERSION))
+        assert bool(refs) is (relation is None)
+        with led.db:
+            doc["canonical_quality"]["coverage_status"] = "incomplete"
+            led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps(doc), aid))
+        assert state.format_state(state.history(led.db, row, version=extract_llm.EXTRACT_VERSION)) == ("", {})
+    finally:
+        led.close()
+
+
+def test_same_generation_held_report_and_newer_bad_quality_do_not_fall_back(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        aid = seed(led)
+        row = target(led)
+        led.artifact_add("extract_upgrade_v1", json.dumps({"state": "held_prior", "hash": _hash(led),
+            "prior_artifact_id": aid, "target_version": extract_llm.EXTRACT_VERSION}), project_id=1, message_id=1)
+        assert state.format_state(state.history(led.db, row, version=extract_llm.EXTRACT_VERSION)) == ("", {})
+        seed(led, 2, clean=False, date="2026-10-02T10:00:00+09:00")
+        assert state.format_state(state.history(led.db, row, version=extract_llm.EXTRACT_VERSION)) == ("", {})
+    finally:
+        led.close()
+
+
+def test_corrupt_snapshot_cannot_be_silently_replaced_with_changed_background(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        row = target(led)
+        first = frame(led, row)
+        bad = {**first, "text": "合成の改変"}
+        with led.db:
+            led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                           (json.dumps(bad), first["artifact_id"]))
+        assert state.load(led.db, first["artifact_id"], row) is None
+        with pytest.raises(ValueError, match="context_snapshot_invalid"):
+            frame(led, row)
+        assert len(led.artifacts(state.KIND)) == 1
+    finally:
+        led.close()
+
+
+def test_source_change_before_snapshot_refuses_the_attempt(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        row = target(led)
+        led.save_messages([_message(mid=999, body="合成の編集済み本文")])
+        with pytest.raises(ValueError, match="context_source_changed"):
+            frame(led, row)
+        assert led.artifacts(state.KIND) == []
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize("stamp", [None, True, float("inf"), float("nan"), 10**400])
+def test_nonfinite_and_untyped_target_times_cannot_read_background(tmp_path, stamp):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        row = {**target(led), "posted_at_ts": stamp}
+        assert state.history(led.db, row, version=extract_llm.EXTRACT_VERSION) == []
+    finally:
+        led.close()
+
+
+def test_a_full_base_block_is_never_cut_through_its_reference_delimiters(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        row = target(led)
+        base = "<<<\n" + "背" * 1191 + "\n>>>\n"
+        assert len(base) == 1200
+        result = state.prepare(led, row, model="synthetic-model", contract="v1", attempt={},
+                               enabled=True, base_context=base, version=extract_llm.EXTRACT_VERSION)
+        assert result["text"] == base and result["refs"] == {}
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize("mutation", ["counter", "model", "completeness", "failed_fix"])
+def test_incomplete_validation_or_provenance_never_becomes_a_reference(tmp_path, mutation):
+    led = _ledger(tmp_path)
+    try:
+        aid = seed(led)
+        meta = json.loads(led.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0])
+        if mutation == "counter":
+            meta["integrity"]["validation"]["items_dropped"] = True
+        elif mutation == "model":
+            meta["actual_model"] = "another-synthetic-model"
+        elif mutation == "completeness":
+            meta["integrity"]["completeness"] = {"0": {"state": "unresolved", "remaining_hint_candidates": 1}}
+        else:
+            meta["human_fix"] = {"applied": False}
+        with led.db:
+            led.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), aid))
+        assert frame(led, target(led))["refs"] == {}
+    finally:
+        led.close()
+
+
+def test_a_malformed_source_date_does_not_abort_the_attempt(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        row = target(led)
+        with led.db:
+            led.db.execute("UPDATE messages SET posted_at_ts=-1e100 WHERE message_id=1")
+        assert frame(led, row)["refs"] == {}
+    finally:
+        led.close()
+
+
+def test_two_values_in_one_parent_are_not_distributed_or_resolved_arbitrarily(tmp_path):
+    led = _ledger(tmp_path)
+    body = "本人の合成薬Aの残薬は3錠と8錠。"
+    try:
+        aid = seed(led, body=body)
+        with led.db:
+            led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps({
+                "patient_context": [context(body, values=("3錠", "8錠"))]}), aid))
+        assert frame(led, target(led))["refs"] == {}
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize("field,value", [("content", "not json"), ("meta", "not json"),
+                                         ("content", "[1]"), ("meta", "null"),
+                                         ("meta", "{}"), ("meta", '{"hash":1}')])
+def test_unparseable_snapshot_is_reported_without_an_untyped_worker_exception(tmp_path, field, value):
+    led = _ledger(tmp_path)
+    try:
+        row = target(led)
+        result = frame(led, row)
+        with led.db:
+            led.db.execute(f"UPDATE artifacts SET {field}=? WHERE artifact_id=?", (value, result["artifact_id"]))
+        assert state.load(led.db, result["artifact_id"], row) is None
+        with pytest.raises(ValueError, match="context_snapshot_invalid"):
+            frame(led, row)
+        assert len(led.artifacts(state.KIND)) == 1
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize("change", ["edited", "deleted", "extraction", "quality", "held", "time"])
+def test_reference_current_checks_the_exact_source_without_substituting_a_new_value(tmp_path, change):
+    led = _ledger(tmp_path)
+    try:
+        aid = seed(led)
+        row = target(led)
+        ref = {**frame(led, row)["refs"]["S1"], "token": "S1"}
+        original = json.loads(json.dumps(ref))
+        assert state.reference_current(led.db, row, ref, version=extract_llm.EXTRACT_VERSION)
+        if change == "edited":
+            led.save_messages([_message(mid=1, body="本人の合成薬Aの残薬は8錠。")])
+        elif change == "extraction":
+            with led.db:
+                led.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (aid,))
+        elif change == "quality":
+            meta = json.loads(led.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0])
+            meta["integrity"]["validation"]["items_dropped"] = 1
+            with led.db:
+                led.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), aid))
+        elif change == "held":
+            led.artifact_add("extract_upgrade_v1", json.dumps({"state": "held_prior", "hash": _hash(led),
+                "prior_artifact_id": aid, "target_version": extract_llm.EXTRACT_VERSION}), project_id=1, message_id=1)
+        else:
+            with led.db:
+                led.db.execute("UPDATE messages SET " + ("body_state='deleted'" if change == "deleted"
+                                                       else "posted_at_ts=posted_at_ts+1") + " WHERE message_id=1")
+        assert state.reference_current(led.db, row, ref, version=extract_llm.EXTRACT_VERSION) is False
+        assert ref == original
+    finally:
+        led.close()
+
+
+def test_a_stored_reference_does_not_depend_on_later_history_window_changes(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        row = target(led)
+        ref = {**frame(led, row)["refs"]["S1"], "token": "S1"}
+        for mid in range(2, 203):
+            led.save_messages([_message(mid=mid, posted_at="2026-10-02T10:00:00+09:00")])
+        assert state.history(led.db, row, version=extract_llm.EXTRACT_VERSION) == []
+        assert state.reference_current(led.db, row, ref, version=extract_llm.EXTRACT_VERSION)
+    finally:
+        led.close()
+
+
+def test_a_newly_recognized_second_value_invalidates_an_ambiguous_same_body_reference(tmp_path):
+    led = _ledger(tmp_path)
+    body = "本人の合成薬Aの残薬は3錠と8錠。"
+    try:
+        aid = seed(led, body=body)
+        row = target(led)
+        ref = {**frame(led, row)["refs"]["S1"], "token": "S1"}
+        assert state.reference_current(led.db, row, ref, version=extract_llm.EXTRACT_VERSION)
+        with led.db:
+            led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps({
+                "patient_context": [context(body, values=("3錠", "8錠"))]}), aid))
+        assert state.reference_current(led.db, row, ref, version=extract_llm.EXTRACT_VERSION) is False
+    finally:
+        led.close()

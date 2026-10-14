@@ -10,6 +10,21 @@ from test_extraction_review import _message, db
 __all__ = ["db"]
 
 
+def _framed_source(db, row):
+    """Inspect or seed the durable frame required by current-generation checkpoints."""
+    source = dict(row)
+    saved = db.db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? "
+        "ORDER BY artifact_id DESC LIMIT 1", (extract_llm.patient_state_context.KIND, source["message_id"])).fetchone()
+    if saved is None:
+        rows, _ = extract_llm._select_pending(db, 1, {source["message_id"]}, None, False)
+        jobs, _, blocked = extract_llm._prepare_jobs(db, rows, extract_llm._resolved_llm(), False)
+        assert not blocked and len(jobs) == 1
+        return jobs[0][0]
+    frame = extract_llm.patient_state_context.load(db.db, saved[0], source)
+    assert frame is not None
+    return {**source, "_frame": frame, "_context": frame["text"], "_target": extract_llm._resolved_llm()}
+
+
 def test_unrecoverable_length_stops_shrink_input_and_keep_retry_cap(db, monkeypatch):
     body = "服薬状況：" + "完全合成の詳細記載" * 80
     db.save_messages([_message(body=body)])
@@ -37,7 +52,7 @@ def test_unrecoverable_length_stops_shrink_input_and_keep_retry_cap(db, monkeypa
         db.db.commit()
     assert extract_llm.run_pending(db, limit=1, budget_s=200)["selected"] == 0
     assert seen[0] == body and len(set(seen)) > 1
-    row = db.db.execute("SELECT * FROM messages").fetchone()
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
     splits, saved = extract_llm._saved_chunk_state(db, row)
     assert 1 in splits.values() and saved == {}
 
@@ -198,7 +213,7 @@ def test_adaptive_layout_and_complete_chunks_survive_later_interruption(db, monk
     _fake_backend(monkeypatch, reply)
     with pytest.raises(RuntimeError, match="synthetic interrupted"):
         extract_llm.run_pending(db, limit=1, budget_s=200)
-    row = db.db.execute("SELECT * FROM messages").fetchone()
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
     size = extract_llm._saved_chunk_size(db, row)
     splits, saved = extract_llm._saved_chunk_state(db, row, chunk_size=size)
     assert size == extract_llm._CHUNK_SIZE and splits and saved
@@ -319,6 +334,7 @@ def test_late_nested_split_does_not_repeat_completed_original_chunk(db, monkeypa
     row = db.db.execute("SELECT * FROM messages").fetchone()
     roots = extract_llm.text_chunks(body, 120)
     if cached_empty:
+        row = _framed_source(db, row)
         extract_llm._persist_chunks(db, row, {0: {}})
         assert extract_llm._saved_chunk_state(db, row)[1][0] == {}
     seen = []
@@ -504,13 +520,13 @@ def test_verified_completed_results_survive_local_hint_checkpoint_revision(db, m
         "status": 200, "text": json.dumps({"patient_context": [_context(piece, "living")]}),
         "finish_reason": "stop"})
     assert extract_llm.run_pending(db, limit=1, budget_s=200)["done"] == 1
-    row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     final = db.db.execute("SELECT content,meta,model FROM artifacts WHERE kind='extract_llm'").fetchone()
     meta = json.loads(final["meta"])
     context = extract_llm._thread_context(db, row)
     old_binding = hashlib.sha256(json.dumps([
         row["posted_at"], context, final["model"], extract_llm._PROMPT_HEAD,
-        extract_llm._SCHEMA, "clinical-plan/v3", extract_llm.PLAN_VERSION],
+        extract_llm._SCHEMA, "clinical-plan/v3", extract_llm.PLAN_VERSION, row["_frame"]["digest"]],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     assert meta["context_binding"] == old_binding
     db.artifact_add("extract_llm_chunk", final["content"], project_id=1, message_id=1,

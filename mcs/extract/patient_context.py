@@ -1,4 +1,5 @@
 """Extract and read source-bound patient context without inferring current clinical state."""
+import math
 import re
 
 from mcs_util import locate_quote_span
@@ -85,6 +86,29 @@ _MEASUREMENT = re.compile(r"^[ \t　]*(\d+(?:[.．]\d+)?)(?![\d.．/／年月日
 _REPORTED_DATE = re.compile(r"(?<!\d)\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?(?!\d)")
 
 
+def reference_item(value):
+    """Read a resolved reference identity without fetching or substituting its value."""
+    fields = {"token", "key", "value", "drug_names", "project_id", "message_id", "content_hash",
+              "fingerprint", "parent_fingerprint", "posted_at_ts"}
+    if (not isinstance(value, dict) or set(value) != fields
+            or not isinstance(value.get("token"), str) or not re.fullmatch(r"S[1-9][0-9]*", value["token"])
+            or not isinstance(value.get("key"), str) or value["key"] not in DETAIL_KEYS
+            or not isinstance(value.get("value"), str) or not value["value"].strip()
+            or not isinstance(value.get("drug_names"), list) or len(value["drug_names"]) > 1
+            or any(not isinstance(name, str) or not name.strip() for name in value["drug_names"])
+            or any(type(value.get(key)) is not int or value[key] <= 0 for key in ("project_id", "message_id"))
+            or any(not isinstance(value.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", value[key])
+                   for key in ("content_hash", "fingerprint", "parent_fingerprint"))
+            or type(value.get("posted_at_ts")) not in (int, float)):
+        return None
+    try:
+        if not math.isfinite(value["posted_at_ts"]):
+            return None
+    except OverflowError:
+        return None
+    return {**value, "drug_names": list(value["drug_names"])}
+
+
 def detail_items(items, body: str, parent_span) -> list[dict]:
     """Keep each raw attribute only inside its parent's unique source quote."""
     if not isinstance(items, list) or not isinstance(body, str) or parent_span is None:
@@ -100,6 +124,9 @@ def detail_items(items, body: str, parent_span) -> list[dict]:
                 or item["value"] not in body[span[0]:span[1]]):
             continue
         clean = {"key": item["key"], "value": item["value"], "evidence": body[span[0]:span[1]]}
+        reference = reference_item(item.get("refers_to"))
+        if reference is not None and reference["key"] == clean["key"]:
+            clean["refers_to"] = reference
         if clean not in result:
             result.append(clean)
     return result

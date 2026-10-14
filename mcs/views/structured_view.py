@@ -704,7 +704,7 @@ _CONTEXT_SUBJECT_JP = {"family": "家族", "other": "本人以外", "unspecified
 
 def _pharmacy_detail_lines(db, mid: int) -> list[str]:
     """One short line per allowed detail, quoting only its own source value."""
-    from read_model import message_patient_context
+    from read_model import message_patient_context, reference_text
     row = db.execute("SELECT project_id,message_id,content_hash,body_state,body_text,posted_at_ts "
                      "FROM messages WHERE message_id=?", (mid,)).fetchone()
     if row is None:
@@ -717,7 +717,7 @@ def _pharmacy_detail_lines(db, mid: int) -> list[str]:
             if label is None:
                 continue
             line = (f"服薬管理（{label}）: 「{str(detail['value'])[:40]}」"
-                    + (f"(対象:{scope})" if scope else ""))
+                    + (f"(対象:{scope})" if scope else "") + reference_text(detail.get("refers_to")))
             if line not in lines:
                 lines.append(line)
     return lines

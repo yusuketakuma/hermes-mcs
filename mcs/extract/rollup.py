@@ -85,7 +85,8 @@ def pharmacy_state_items(artifact, message) -> list[dict]:
         for detail in parent["details"]:
             if detail["key"] not in PHARMACY_STATE_KEYS:
                 continue
-            fingerprint = hashlib.sha256(json.dumps([parent_fp, detail, names],
+            own_detail = {key: detail[key] for key in ("key", "value", "evidence")}
+            fingerprint = hashlib.sha256(json.dumps([parent_fp, own_detail, names],
                 sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             stamp = message.get("posted_at_ts")
             result.append({**detail, "parent": parent, "parent_fingerprint": parent_fp,

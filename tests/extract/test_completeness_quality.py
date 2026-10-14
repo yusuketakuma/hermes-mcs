@@ -389,6 +389,10 @@ def test_source_digest_change_does_not_requeue_completed_legacy_checkpoints_or_f
     db.save_messages([_message(body=body)])
     source = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     try:
+        rows, _ = extract_llm._select_pending(db, 1, {1}, None, False)
+        jobs, _, blocked = extract_llm._prepare_jobs(db, rows, extract_llm._resolved_llm(), False)
+        assert not blocked and len(jobs) == 1
+        source = jobs[0][0]
         # Historical completed leaves have no quality tag, even when empty.
         extract_llm._persist_chunks(db, source, {0: {}})
         before_binding = extract_llm._chunk_context(source, None, checkpoint=True)
