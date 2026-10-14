@@ -1159,3 +1159,71 @@ def test_several_listed_drugs_the_extraction_missed_keep_the_gap(text):
     assert not _rx_gap(text.replace("架空薬B", "リハビリ").replace("架空薬C", "食事"),
                        [_med("架空薬A", text.replace("架空薬B", "リハビリ").replace("架空薬C", "食事"),
                              dose="5mg" if "5mg" in text else None)])
+
+
+@pytest.mark.parametrize("text,action", [("本人のカロナールを中止しました。", "stop"), ("本人のアムロジピンを増量しました。", "increase")])
+def test_a_doseless_brand_without_a_rule_hint_still_needs_its_action(text, action):
+    name = text[3:text.index("を")]
+    assert not hints(PREFIX + text).get("rx_actions")
+    assert _rx_gap(text, [_med(name, text, action="none")])
+    assert not _rx_gap(text, [_med(name, text, action=action, status="past" if action == "stop" else "current")])
+
+
+def test_comma_separated_drugs_share_the_change():
+    text = "本人は架空薬A5mg、架空薬Bを開始しました。"
+    assert _rx_gap(text, [_med("架空薬A", text, action="none", dose="5mg"), _med("架空薬B", text)])
+    assert not _rx_gap(text, [_med("架空薬A", text, dose="5mg"), _med("架空薬B", text)])
+
+
+@pytest.mark.parametrize("service", ["服薬指導", "投薬管理"])
+def test_a_medication_service_is_not_a_missed_drug(service):
+    text = f"本人は架空薬A5mgと{service}を開始しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, dose="5mg")])
+
+
+@pytest.mark.parametrize("text,action", [("本人は明日から架空薬Aを開始します。", "start"),
+                                         ("本人の架空薬Aを中止してください。", "stop"),
+                                         ("本人の架空薬Aの追加を相談しました。", "start"),
+                                         ("本人は架空薬A5mgを開始してください。", "start")])
+def test_future_requested_or_consulted_changes_are_checked_as_planned(text, action):
+    planned = _med("架空薬A", text, action=action, status="planned")
+    assert not _rx_gap(text, [planned])
+    assert _rx_gap(text, [{**planned, "action": "none"}])                 # the planned action is missing
+    assert _rx_gap(text, [_med("架空薬A", text, action=action)])          # not done yet
+    body = PREFIX + text
+    prior = extract_llm._validate({**OBSERVATIONS, "meds": [{**planned, "action": "none"}]}, body)
+    done = extract_llm._validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, action=action)]}, body)
+    assert not extract_llm._quality_improves(done, prior, body, hints(body))
+
+
+@pytest.mark.parametrize("text", ["本人は明日通院予定ですが、架空薬Aを中止しました。",
+                                  "本人は来週受診予定ですが、架空薬Aを開始しました。"])
+def test_a_future_time_in_another_clause_does_not_plan_this_change(text):
+    action = "stop" if "中止" in text else "start"
+    assert _rx_gap(text, [_med("架空薬A", text, action="none")])
+    assert not _rx_gap(text, [_med("架空薬A", text, action=action, status="past" if action == "stop" else "current")])
+
+
+@pytest.mark.parametrize("text,action", [("本人の架空薬Aを2.5mgから5mgへ増量しました。", "increase"),
+                                         ("本人の架空薬Aを1日2回から1回へ減量しました。", "decrease")])
+def test_a_regimen_range_keeps_the_drug_as_the_object(text, action):
+    assert _rx_gap(text, [_med("架空薬A", text, action="none")])
+    assert not _rx_gap(text, [_med("架空薬A", text, action=action)])
+
+
+@pytest.mark.parametrize("text,action,repairable", [
+    ("本人は明日から架空薬Aを開始します。", "start", True), ("本人の架空薬Aを中止してください。", "stop", True),
+    ("本人の架空薬Aの追加を相談しました。", "start", False),
+])
+def test_a_planned_instruction_may_correct_its_planned_action_but_a_consultation_may_not(text, action, repairable):
+    body = PREFIX + text
+    prior = extract_llm._validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, action="none", status="planned")]}, body)
+    fixed = extract_llm._validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, action=action, status="planned")]}, body)
+    assert extract_llm._quality_improves(fixed, prior, body, hints(body)) is repairable
+
+
+def test_a_requested_stop_does_not_excuse_a_recorded_done_stop():
+    text = "本人の架空薬Aを開始しました。本人の架空薬Aを中止してください。"
+    right = [_med("架空薬A", text), _med("架空薬A", text, action="stop", status="planned")]
+    assert not _rx_gap(text, right)
+    assert _rx_gap(text, [*right, _med("架空薬A", text, action="stop", status="past")])
