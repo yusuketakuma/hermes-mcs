@@ -558,3 +558,56 @@ def test_covered_requests_do_not_add_a_call(monkeypatch, requests):
     monkeypatch.setattr(extract_llm, "_llm_call", model)
     extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 1
+
+
+SECOND_CONFIRM = {"to": "不明", "kind": "request", "action": "検査値確認",
+                  "evidence": "本人の検査値も確認してください"}
+
+
+@pytest.mark.parametrize("tail,first,repaired", [
+    # the rule hints name only the contact of a two-request sentence
+    (BOTH + "。", [{**CONTACT, "evidence": BOTH}],
+     [{**CONFIRM, "evidence": BOTH}, {**CONTACT, "evidence": BOTH}]),
+    # the rule hints keep one confirm; the second sentence's confirm is tracked too
+    ("本人の記録を確認をお願いします。本人の検査値も確認してください。", [CONFIRM],
+     [CONFIRM, SECOND_CONFIRM]),
+    # the rule hints keep one ask; a second sentence's question is tracked too
+    ("本人の食事量を教えてください。本人の体温も教えてください。",
+     [{"to": "不明", "kind": "question", "action": "食事量の確認",
+       "evidence": "本人の食事量を教えてください"}],
+     [{"to": "不明", "kind": "question", "action": "食事量の確認",
+       "evidence": "本人の食事量を教えてください"},
+      {"to": "不明", "kind": "question", "action": "体温の確認",
+       "evidence": "本人の体温も教えてください"}]),
+], ids=["confirm_missing_beside_contact", "second_sentence_same_kind", "second_question"])
+def test_request_cues_cover_what_the_rule_hints_merge(monkeypatch, tail, first, repaired):
+    body = PREFIX + tail
+    calls = []
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        return copy.deepcopy({**OBSERVATIONS, "requests": first if len(calls) == 1 else repaired})
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    result = extract_llm.llm_extract(body, hints=hints(body))
+    assert len(calls) == 2
+    assert {item["action"] for item in result["requests"]} == {item["action"] for item in repaired}
+
+
+@pytest.mark.parametrize("tail", [
+    "本人の連絡記録を確認してください。",           # 連絡 inside a noun is not a contact request
+    "主治医から本人の件で連絡をいただきました。",   # a received contact is a report
+])
+def test_request_word_inside_a_noun_or_report_adds_no_call(monkeypatch, tail):
+    body = PREFIX + tail
+    confirm = [{"to": "不明", "kind": "request", "action": "連絡記録確認",
+                "evidence": "本人の連絡記録を確認してください"}] if "記録" in tail else []
+    calls = []
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        return copy.deepcopy({**OBSERVATIONS, "requests": confirm})
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    extract_llm.llm_extract(body, hints=hints(body))
+    assert len(calls) == 1

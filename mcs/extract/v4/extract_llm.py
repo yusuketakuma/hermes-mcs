@@ -1662,7 +1662,7 @@ def _completeness_issues(v, hints, body):
         name = med.get("name") if isinstance(med, dict) else None
         if isinstance(name, str) and name not in names and _current_cue(body, name):
             issues.append(f"本文の薬剤候補「{name}」が未収載です。原文で再確認してください")
-    for request in hints.get("requests") or []:
+    for request in [*(hints.get("requests") or []), *_request_cues(body)]:
         if (isinstance(request, dict) and request.get("kind") in _REQUEST_STEMS
                 and isinstance(request.get("ctx"), str) and _current_cue(body, request["ctx"])
                 and not any(_request_covers(item, request) for item in v.get("requests") or [])):
@@ -1674,6 +1674,30 @@ def _completeness_issues(v, hints, body):
 # The rule hint's own action word. A quote spanning several requests covers
 # a hint only when the extracted action names it, not by overlap alone.
 _REQUEST_STEMS = {"confirm": "確認", "contact": "連絡", "ask": "教え"}
+
+
+_REQUEST_END = r"(?:お願い|ください|下さい|いただけ|いただきたい|頂け|頂きたい|ほしい|欲しい|願います)"
+_REQUEST_CUES = {
+    kind: re.compile(rf"{stem}(?=(?:{_REQUEST_END}|(?:を|して|と|や|、|・|及び|および)"
+                     rf"[^。！？!?;；\r\n]*{_REQUEST_END}))")
+    for kind, stem in (("confirm", "確認"), ("contact", "連絡"))}
+# the rule hints' own ask phrasing, tracked per sentence like confirm/contact
+_REQUEST_CUES["ask"] = re.compile(r"教えて(?:ください|いただけ|欲しい)")
+
+
+def _request_cues(body):
+    """Every sentence's confirm/contact/ask request, for the quality re-check only.
+
+    The rule hints keep one entry per pattern, so a second kind in the same
+    sentence (確認と…連絡をお願い) or a second sentence of one kind is not
+    hinted. A stem counts only as the object of a request ending, never
+    inside a noun (連絡記録) or a finished report (連絡をいただきました)."""
+    cues = []
+    for sentence in re.finditer(r"[^。！？!?;；\r\n]+", body):
+        ctx = sentence[0].strip()
+        cues += [{"kind": kind, "ctx": ctx} for kind, rx in _REQUEST_CUES.items()
+                 if ctx and rx.search(ctx)]
+    return cues
 
 
 def _request_covers(item, hint):
