@@ -1093,3 +1093,15 @@ def test_a_full_rule_action_list_cannot_prove_a_single_change():
     candidate = extract_llm._validate({**OBSERVATIONS, "meds": [
         _med("架空薬A", "本人の架空薬Aを開始しました", action="stop", status="past")]}, body)
     assert not extract_llm._quality_improves(candidate, prior, body, hints(body))
+
+
+@pytest.mark.parametrize("word", ["と共に", "と一緒に", "と同時に"])
+def test_an_accompanying_drug_is_not_the_object_of_a_non_drug_change(word):
+    text = f"本人は架空薬A{word}運動療法を開始しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none")])
+    if word == "と同時に":
+        return          # the shared source scope reads 同時に as conditional: no current change
+    # a drug started alongside it is still required
+    text = f"本人は架空薬A{word}架空薬Bを開始しました。"
+    assert _rx_gap(text, [_med("架空薬A", text, action="none")])
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none"), _med("架空薬B", text)])

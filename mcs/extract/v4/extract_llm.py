@@ -1688,6 +1688,10 @@ _RX_AFTER = 8           # characters after the change word its negation may sit 
 _RX_LIST = r"(?:と|や|・|及び|および)"
 _RX_DOSE = r"(?:[0-9０-９.．]+(?:mg|μg|mcg|g|mL|ml|錠|%|単位))?"
 _RX_CONFLICT = {"start", "stop", "decrease", "increase", "change"}
+# Aと共に運動療法を開始: A accompanies; the change's object is what follows
+_RX_ALONG = r"と(?:共に|ともに|同時に|一緒に|いっしょに|併せて|あわせて)"
+# an unnamed object reads as a medication only with v1's own medication words
+_RX_MED_WORD = r"薬|処方|内服|外用|点眼|貼付|錠|剤|坐薬|座薬|注射"
 _RX_HINT_CAP = 10       # extract.extract_message keeps rx_actions[:10]
 
 
@@ -1736,7 +1740,15 @@ def _rx_bindings(hints, names, body):
             prior = list(re.finditer(_RX_ANY, body[lead:start]))
             base = lead + (prior[-1].end() if prior else 0)
             region = body[base:start]
+            along = list(re.finditer(_RX_ALONG, region))
+            if along:
+                base, region = base + along[-1].end(), region[along[-1].end():]
             targets = _named_in(region, names)
+            if along and not targets:
+                # 本人Aと共に架空薬Bを開始 still asks for B; 運動療法 asks nothing
+                if re.search(_RX_MED_WORD, region):
+                    yield "?", set(), (lead, close)
+                continue
             # a listed neighbour that is no known drug is a drug the extraction missed
             spans = sorted({m.span() for name in targets for m in re.finditer(re.escape(name), region)})
             for s, e in spans:
