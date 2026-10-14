@@ -1690,6 +1690,8 @@ _RX_NO_CHANGE = r"変更(?:なし|無し)"
 _RX_VERB = r"(?:を|は|も|が|の)?\s*(?:いた|致)?(?:し|する|して|され)?"
 _RX_NOT_CURRENT = (_RX_VERB +
                    r"(?:ない|なく|なかっ|ません|せず|無し|なし|不要|予定|検討|見送|拒否|ありません"
+                   # 中止を撤回, 開始を取り消し, 中止を取りやめ: the change is withdrawn
+                   r"|撤回|取り?消|取消|取り?やめ|とりやめ|白紙"
                    # 中止していません, 中止されていない (not 開始しています: ongoing, current)
                    r"|て?い(?:ない|ません|なかっ)"
                    # できる/出来る states no done change (中止できません, できるか確認中, できます,
@@ -1729,7 +1731,7 @@ def _rx_glued(before):
     """The text before a name runs into it (架空 before 薬ZA); a time word written
     straight before a drug (本日架空薬A) does not."""
     return bool(re.search(_RX_NAME_CHAR + "$", before) and not re.search(
-        rf"(?:本日|今日|昨日|今朝|昨夜|現在|今回|先日|明日|当日|翌日|毎日|同日|後日|{_RX_CLASS})$", before))
+        rf"(?:{_RX_NOW}|{_RX_FUTURE}|当日|毎日|同日|{_RX_CLASS})$", before))
 # AとBを開始, A5mgと架空薬Bを開始: a listing particle beside a known drug (and its dose)
 _RX_LIST = r"(?:と|や|・|及び|および)"
 # v1's _MED_TOKEN allows a space before the unit (5 mg)
@@ -2028,6 +2030,24 @@ def _rx_covering(v, planned=False):
             and isinstance(med.get("evidence"), str) and med["evidence"]]
 
 
+def _rx_grounds(hints, names, body):
+    """Named patient changes an extracted action may rest on (history and 予定 count;
+    denials, withdrawals, conditions and other people's changes do not)."""
+    return [(t, ok, lead, close, pl) for t, ok, (lead, close, pl, *_) in _rx_bindings(
+        hints, names, body, ground=True) if t not in (None, "?")]
+
+
+def _rx_grounded(med, grounds, body):
+    """The med's action rests on a named change of that drug in a fitting state: planned
+    for a planned one, and a done (even historical) stop is past (以前に中止: stop/past)."""
+    return any(
+        med["action"] in ok and t == med["name"]
+        and (med.get("status") == "planned") == bool(pl)
+        and (pl or med["action"] != "stop" or med.get("status") == "past")
+        and any(m.start() < close and m.end() > lead for m in re.finditer(re.escape(med["evidence"]), body))
+        for t, ok, lead, close, pl in grounds)
+
+
 def _rx_action_gaps(v, hints, body):
     """Patient-current rule change words whose clause no extracted patient med states.
 
@@ -2044,17 +2064,9 @@ def _rx_action_gaps(v, hints, body):
     # only a named patient object proves its action: an unnamed one (心停止 beside the
     # drug) or another person's or a conditional change proves nothing
     stated_any = list(_rx_bindings(hints, names, body, every=True))
-    grounds = [(t, ok, lead, close, pl) for t, ok, (lead, close, pl, *_) in _rx_bindings(
-        hints, names, body, ground=True) if t not in (None, "?")]
+    grounds = _rx_grounds(hints, names, body)
     if stated_any and any(
-            med.get("action") in _RX_CONFLICT and not any(
-                med["action"] in ok and t == med["name"]
-                # the item's state must fit the change it rests on: planned for a planned
-                # one, and a done (even historical) stop is past (以前に中止: stop/past)
-                and (med.get("status") == "planned") == bool(pl)
-                and (pl or med["action"] != "stop" or med.get("status") == "past")
-                and any(m.start() < close and m.end() > lead for m in re.finditer(re.escape(med["evidence"]), body))
-                for t, ok, lead, close, pl in grounds)
+            med.get("action") in _RX_CONFLICT and not _rx_grounded(med, grounds, body)
             for planned in (False, True) for med in _rx_covering(v, planned)):
         return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
     # a repair keeping a fragment (ロナール beside カロナール) beside the right name
@@ -2367,12 +2379,22 @@ def _quality_improves(candidate, prior, body, hints=None):
         return owned_med_quotes(prior) < owned_med_quotes(candidate)
     protected = _facts(prior, split_conditions=True)
     action_names = _rx_action_names(_rx_names(candidate, hints if isinstance(hints, dict) else {}), hints, body)
+    # with the rule hints, an added action must rest on a change the source states,
+    # as the completeness check requires (only where the source has change words)
+    grounds = None
+    if isinstance(hints, dict):
+        names = _rx_names(candidate, hints)
+        if list(_rx_bindings(hints, names, body, every=True)):
+            grounds = _rx_grounds(hints, names, body)
     for key in _FACT_LIST_FIELDS:
         for item in candidate.get(key) or []:
             if isinstance(item, dict) and not _facts({key: [item]}, split_conditions=True) <= protected:
                 if item.get("unverified") or locate_quote_span(body, item.get("evidence")) is None:
                     return False
-                if key == "meds" and item.get("action") in _RX_CONFLICT and item.get("name") not in action_names:
+                if key == "meds" and item.get("action") in _RX_CONFLICT and (
+                        item.get("name") not in action_names
+                        # 中止を撤回しました: a withdrawn or denied change grounds no added action
+                        or (grounds is not None and not _rx_grounded(item, grounds, body))):
                     return False
     return True
 
