@@ -1221,7 +1221,7 @@ def stage_thread_read(adapter, ledger, result, deadline):
                 ledger.mark_thread_read(pid, parent, last, "confirmed")
                 continue
             server = {m.message_id for m in adapter.fetch_thread(pid, parent)}
-            missing = server - ledger.stored_reply_ids(parent)
+            missing = server - ledger.stored_reply_ids(parent, project_id=pid)
             if missing:
                 # Store full replies before acknowledging the thread.
                 # never revive a burnt-out job: this runs every tick and
