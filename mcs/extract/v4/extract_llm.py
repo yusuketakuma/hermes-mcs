@@ -1800,6 +1800,9 @@ def _rx_bindings(hints, names, body, *, every=False):
     as a medication but is no known drug yields ("?", ...), a drug never extracted.
     With ``every`` the denied, past and other-person changes are kept too, so a
     caller can count every change the source states for a drug."""
+    # The shared scope reads 時に in と同時に as a condition; for the change's own
+    # scope it accompanies like と一緒に (same length, so positions hold)
+    scoped = body.replace("と同時に", "と一緒に")
     for start, end, code in _rx_positions(hints, names, body):
         head = max(body.rfind(c, 0, start) for c in "。！？!?;；\r\n") + 1
         tail = re.search(r"[。！？!?;；\r\n]", body[end:])
@@ -1822,7 +1825,7 @@ def _rx_bindings(hints, names, body, *, every=False):
             if lead >= previous:
                 break
         if not every and (re.match(_RX_NOT_CURRENT, body[end:close])
-                          or extract.patient_source_scope(body, start, end) != "patient"):
+                          or extract.patient_source_scope(scoped, start, end) != "patient"):
             continue
         # から is no break for a time (明日から), but 通院予定ですが、 is another clause
         breaks = list(re.finditer(r"ので|ため|けど|けれど|が、|、", body[head:start]))
@@ -1860,7 +1863,7 @@ def _rx_bindings(hints, names, body, *, every=False):
             at = base + s if name else start
             last = list(re.finditer(r"の[ \t　]*", body[lead:at]))
             if (not every and last
-                    and extract.patient_source_scope(body, lead + last[-1].end(), end) != "patient"):
+                    and extract.patient_source_scope(scoped, lead + last[-1].end(), end) != "patient"):
                 continue
             allowed = set(_RX_STATED.get(code, {code}))
             # AからBへ / AをBに変更: the source stops, the destination starts

@@ -1099,8 +1099,6 @@ def test_a_full_rule_action_list_cannot_prove_a_single_change():
 def test_an_accompanying_drug_is_not_the_object_of_a_non_drug_change(word):
     text = f"本人は架空薬A{word}運動療法を開始しました。"
     assert not _rx_gap(text, [_med("架空薬A", text, action="none")])
-    if word == "と同時に":
-        return          # the shared source scope reads 同時に as conditional: no current change
     # a drug started alongside it is still required
     text = f"本人は架空薬A{word}架空薬Bを開始しました。"
     assert _rx_gap(text, [_med("架空薬A", text, action="none")])
@@ -1227,3 +1225,10 @@ def test_a_requested_stop_does_not_excuse_a_recorded_done_stop():
     right = [_med("架空薬A", text), _med("架空薬A", text, action="stop", status="planned")]
     assert not _rx_gap(text, right)
     assert _rx_gap(text, [*right, _med("架空薬A", text, action="stop", status="past")])
+
+
+@pytest.mark.parametrize("text", ["もし架空薬Aと同時に架空薬Bを開始する場合は連絡してください。",
+                                  "母は架空薬Aと同時に架空薬Bを開始しました。",
+                                  "本人は以前に架空薬Aと同時に架空薬Bを開始しました。"])
+def test_simultaneous_start_keeps_real_conditions_other_people_and_history_out(text):
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none")])
