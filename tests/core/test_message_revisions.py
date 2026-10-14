@@ -2,6 +2,7 @@
 import hashlib
 import json
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -90,7 +91,7 @@ def test_snapshot_contains_hash_chain_not_old_body(tmp_path):
         path = db.db.execute("PRAGMA database_list").fetchone()[2]
         snapshot = publish_snapshot(path, str(tmp_path / "snapshots"))
         assert snapshot is not None
-        with sqlite3.connect(f"file:{snapshot}?mode=ro&immutable=1", uri=True) as reader:
+        with closing(sqlite3.connect(f"file:{snapshot}?mode=ro&immutable=1", uri=True)) as reader, reader:
             history = [tuple(row) for row in reader.execute("SELECT * FROM message_revisions")]
             assert len(history) == 2
             assert "SYNTHETIC OLD SENTINEL" not in json.dumps(history)

@@ -4,6 +4,7 @@ leaves the 🧾 summary readable: the line says 未取得, never 空 and never
 the older summary; both rows are kept. Synthetic ledger."""
 import json
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -22,8 +23,8 @@ def test_an_undecodable_newest_summary_reads_as_not_fetched(led, bad, monkeypatc
         "comment": "合成の旧サマリー", "updated_at": "2026-09-30T10:00:00+09:00",
         "user": {"profession": "薬剤師", "name": "SYNTH"}, "is_editable": True})
     content = "[" * DEPTH + "]" * DEPTH if bad == "deep" else '{"comment": '
-    assert sqlite3.connect(":memory:").execute(
-        "SELECT json_valid(?)", (content,)).fetchone()[0] == (bad == "deep")
+    with closing(sqlite3.connect(":memory:")) as checker:
+        assert checker.execute("SELECT json_valid(?)", (content,)).fetchone()[0] == (bad == "deep")
     failures = []
     if bad == "deep":
         original_loads = json.loads

@@ -1,6 +1,7 @@
 """Acquisition reasons persist without claiming a missing clinical action."""
 import json
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -115,7 +116,7 @@ def test_bad_reason_is_rejected_before_retry_mutation(db):
 
 def test_schema8_job_shape_upgrades_without_fabricating_reasons(tmp_path):
     path = tmp_path / "legacy.sqlite"
-    with sqlite3.connect(path) as old:
+    with closing(sqlite3.connect(path)) as old, old:
         old.executescript("""
             CREATE TABLE fetch_jobs(
               job_id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT,project_id INTEGER,

@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2056,7 +2057,7 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
         "deferred_stages": result["deferred_stages"]}
     assert health["overall"] == "degraded"
     assert "run_deadline_exceeded" in health["state_reasons"]
-    with sqlite3.connect(data / "ledger.db") as db:
+    with closing(sqlite3.connect(data / "ledger.db")) as db, db:
         assert db.execute("SELECT status FROM runs").fetchone()[0] == "partial"
 
 
@@ -3200,7 +3201,7 @@ def test_run_lock_lost_ends_tick_without_later_stages(
     later.assert_not_called()
     assert "run_lock_lost" in json.loads(capsys.readouterr().out)["errors"]
     assert (data / "health.json").exists() is held
-    with sqlite3.connect(data / "ledger.db") as db:
+    with closing(sqlite3.connect(data / "ledger.db")) as db, db:
         assert db.execute("SELECT status FROM runs").fetchone()[0] == status
     fd = run_check.acquire_run_lock(str(data / "run.lock"))
     assert fd is not None          # the run lock was released on exit

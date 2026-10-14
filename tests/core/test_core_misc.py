@@ -9,6 +9,7 @@ import sqlite3
 import stat
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -638,8 +639,9 @@ def test_prune_attachments_14d_retention(tmp_path):
     n = maintenance.prune_attachments(str(dbp))
     assert n == 1
     assert not old_file.exists() and new_file.exists()
-    rows = {r[0]: r[1:] for r in sqlite3.connect(dbp).execute(
-        "SELECT file_id,state,local_path,name,bytes FROM attachments")}
+    with closing(sqlite3.connect(dbp)) as check:
+        rows = {r[0]: r[1:] for r in check.execute(
+            "SELECT file_id,state,local_path,name,bytes FROM attachments")}
     assert rows['f_old'][0] == 'pruned' and rows['f_old'][1] is None
     assert rows['f_old'][2] == 'old.jpg' and rows['f_old'][3] == 100
     assert rows['f_new'][0] == 'downloaded'
@@ -839,7 +841,8 @@ def test_preupdate_backups_in_same_second_keep_both_generations(
     assert first != second
     assert maintenance.valid_mcs_db(first)
     assert maintenance.valid_mcs_db(second)
-    with sqlite3.connect(first) as older, sqlite3.connect(second) as newer:
+    with (closing(sqlite3.connect(first)) as older,
+          closing(sqlite3.connect(second)) as newer, older, newer):
         assert older.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 1
         assert newer.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 2
 
@@ -1153,7 +1156,7 @@ def test_interrupted_derived_backfill_retries_without_advancing_version(
         patch.setattr(ledger.Ledger, "_backfill_v3", interrupted)
         with pytest.raises(sqlite3.OperationalError, match="synthetic backfill interruption"):
             ledger.Ledger(path)
-    with sqlite3.connect(path) as failed:
+    with closing(sqlite3.connect(path)) as failed, failed:
         assert failed.execute("PRAGMA user_version").fetchone()[0] == version
         assert failed.execute("SELECT body_text FROM messages").fetchone()[0] is None
         if drop_fts:
@@ -1183,7 +1186,7 @@ def test_backfill_exception_after_all_updates_rolls_back_the_batch(
     monkeypatch.setattr(ledger.Ledger, "_backfill_v3", interrupted)
     with pytest.raises(sqlite3.OperationalError, match="synthetic post-backfill interruption"):
         ledger.Ledger(path)
-    with sqlite3.connect(path) as failed:
+    with closing(sqlite3.connect(path)) as failed, failed:
         assert failed.execute("PRAGMA user_version").fetchone()[0] == version
         assert failed.execute("SELECT body_text FROM messages").fetchone()[0] is None
         if drop_fts:

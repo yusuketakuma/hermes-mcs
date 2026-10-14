@@ -9,7 +9,17 @@ from types import SimpleNamespace
 import job_ops
 import mcs_adapter
 import run_check
+import pytest
 from ingest_testkit import _ledger, _message
+
+
+@pytest.fixture
+def db(tmp_path):
+    store = _ledger(tmp_path)
+    try:
+        yield store
+    finally:
+        store.close()
 
 
 def _notified(db):
@@ -20,8 +30,7 @@ def _notified(db):
     return ids
 
 
-def test_thread_merge_keeps_embedded_unread_flag(tmp_path):
-    db = _ledger(tmp_path)
+def test_thread_merge_keeps_embedded_unread_flag(db):
     db.ensure_patient(1)
     parent = _message(mid=10)
     parent.reply_count = 1
@@ -38,8 +47,7 @@ def test_thread_merge_keeps_embedded_unread_flag(tmp_path):
     assert 11 in _notified(db)
 
 
-def test_post_ack_gap_walk_notifies_already_read_rows(tmp_path):
-    db = _ledger(tmp_path)
+def test_post_ack_gap_walk_notifies_already_read_rows(db):
     db.ensure_patient(1)
     db.save_messages([_message(mid=100)], project_id=1)
     # a head job already pending (from backfill) gets the flag merged in
@@ -58,8 +66,7 @@ def test_post_ack_gap_walk_notifies_already_read_rows(tmp_path):
     assert _notified(db) == [200]
 
 
-def test_plain_history_job_stays_quiet(tmp_path):
-    db = _ledger(tmp_path)
+def test_plain_history_job_stays_quiet(db):
     db.ensure_patient(1)
     db.job_add("history", 1, payload={"since": 0, "page": 1, "pages": 2})
     adapter = SimpleNamespace(fetch_history=lambda *a, **k: mcs_adapter.MessageBatch(
@@ -69,8 +76,7 @@ def test_plain_history_job_stays_quiet(tmp_path):
     assert _notified(db) == []
 
 
-def test_invalid_notify_flag_fails_the_job(tmp_path):
-    db = _ledger(tmp_path)
+def test_invalid_notify_flag_fails_the_job(db):
     db.ensure_patient(1)
     db.job_add("history_head", 1, payload={"since": 0, "notify": "yes"})
     result = {"errors": []}
@@ -90,8 +96,7 @@ def _store(db, mid, parent=None):
     db.db.commit()
 
 
-def test_reply_acknowledged_by_thread_read_is_notified_when_stored(tmp_path):
-    db = _ledger(tmp_path)
+def test_reply_acknowledged_by_thread_read_is_notified_when_stored(db):
     db.ensure_patient(1)
     _store(db, 10)
     _store(db, 11, parent=10)

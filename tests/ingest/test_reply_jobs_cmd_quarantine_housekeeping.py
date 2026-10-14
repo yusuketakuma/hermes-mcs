@@ -15,6 +15,16 @@ import run_check
 from ingest_testkit import _ledger
 
 
+
+@pytest.fixture
+def db(tmp_path):
+    store = _ledger(tmp_path)
+    try:
+        yield store
+    finally:
+        store.close()
+
+
 def _store(db, mid, parent, body_state):
     db.db.execute(
         "INSERT INTO messages(message_id,project_id,parent_id,posted_at,"
@@ -41,8 +51,7 @@ def _fail_reply_job(db, mid, parent):
     db.db.commit()
 
 
-def test_failed_reply_job_for_unstored_reply_is_not_revived(tmp_path):
-    db = _ledger(tmp_path)
+def test_failed_reply_job_for_unstored_reply_is_not_revived(db):
     _store(db, 11, 10, "full")
     _fail_reply_job(db, 12, 10)
     run_check.stage_thread_read(_adapter([True], [11, 12]), db,
@@ -51,8 +60,7 @@ def test_failed_reply_job_for_unstored_reply_is_not_revived(tmp_path):
     assert tuple(row) == ("failed", 9)
 
 
-def test_snippet_reply_with_burnt_out_job_no_longer_blocks_the_clear(tmp_path):
-    db = _ledger(tmp_path)
+def test_snippet_reply_with_burnt_out_job_no_longer_blocks_the_clear(db):
     _store(db, 11, 10, "snippet")
     _fail_reply_job(db, 11, 10)
     adapter = _adapter([True, False], [11])
@@ -64,8 +72,7 @@ def test_snippet_reply_with_burnt_out_job_no_longer_blocks_the_clear(tmp_path):
     assert tuple(row) == ("failed", 9)
 
 
-def test_torn_cmd_file_is_quarantined_after_an_hour(tmp_path):
-    db = _ledger(tmp_path)
+def test_torn_cmd_file_is_quarantined_after_an_hour(db, tmp_path):
     cmd = tmp_path / "cmd"
     cmd.mkdir()
     fresh, torn = cmd / "a.json", cmd / "b.json"
@@ -119,7 +126,7 @@ def test_overdue_backup_makes_housekeeping_run_past_the_deadline(
     assert "housekeeping" not in result["deferred_stages"]
 
 
-def test_command_whose_apply_fails_deterministically_is_quarantined(tmp_path, monkeypatch):
+def test_command_whose_apply_fails_deterministically_is_quarantined(db, tmp_path, monkeypatch):
     """A handler data error would re-fire on every drain and fail every
     tick: the file moves aside and the tick goes on. A storage error (and
     a not-ready schema, see test_mcs_features) still propagates so the
@@ -127,7 +134,6 @@ def test_command_whose_apply_fails_deterministically_is_quarantined(tmp_path, mo
     import sqlite3
     import uuid
     import mcs_requests
-    db = _ledger(tmp_path)
     cmd = tmp_path / "cmd"
     cmd.mkdir()
     (cmd / "a.json").write_text(json.dumps({

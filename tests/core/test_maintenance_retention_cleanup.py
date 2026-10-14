@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import time
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
@@ -86,7 +87,7 @@ def test_prune_attachments_commits_before_unlinking(tmp_path, monkeypatch):
     seen = []
 
     def unlink(path, *a, **k):
-        with sqlite3.connect(tmp_path / "ledger.db") as other:
+        with closing(sqlite3.connect(tmp_path / "ledger.db")) as other, other:
             seen.append(other.execute(
                 "SELECT state,local_path FROM attachments WHERE attachment_id=?",
                 (int(os.path.basename(path)),)).fetchone())
