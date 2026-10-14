@@ -148,6 +148,35 @@ def test_invalid_card_state_falls_back_safely(raw):
     assert notify_render._page(raw, 3, default=2) == 2
 
 
+def test_card_list_omits_original_body_but_body_view_keeps_it(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
+    card = _card(led)
+    old_source = notify_render._card_content(led.db, card)["source_fp"]
+    body = "完全合成の本文。" * 10000 + "SYNTHETIC-END"
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text=?,content_hash=? WHERE message_id=100",
+                       (body, "a" * 64))
+    changes = led.db.total_changes
+    statements = []
+    led.db.set_trace_callback(statements.append)
+    try:
+        face = notify_render._card_content(led.db, card)
+    finally:
+        led.db.set_trace_callback(None)
+    assert "body_text" not in statements[0].partition("FROM")[0], \
+        "card list must not retain original bodies"
+    assert face["shown"] == [100, 101]
+    assert "2投稿" in notify_render.display_text(face)
+    assert face["source_fp"] != old_source
+    assert "SYNTHETIC-END" not in face["preview_text"]
+    _, full_body = notify_render._card_body_text(
+        led.db, card, {"shown": "[100]"}, max_chars=None,
+        stamps=False, include_summary=False)
+    assert full_body.endswith(body)
+    assert led.db.total_changes == changes
+
+
 @pytest.mark.parametrize(
     ("message_ids", "expected"),
     [([100, 101], "後の投稿"), ([100, "invalid"], "退院時の投稿")],
