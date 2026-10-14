@@ -1662,7 +1662,9 @@ def _completeness_issues(v, hints, body):
         name = med.get("name") if isinstance(med, dict) else None
         if isinstance(name, str) and name not in names and _current_cue(body, name):
             issues.append(f"本文の薬剤候補「{name}」が未収載です。原文で再確認してください")
-    for request in [*(hints.get("requests") or []), *_request_cues(body)]:
+    # The rule hints' confirm/contact patterns also fire on reports (確認を終えた);
+    # the per-sentence cues apply the same request-ending test to every kind.
+    for request in _request_cues(body):
         if (isinstance(request, dict) and request.get("kind") in _REQUEST_STEMS
                 and isinstance(request.get("ctx"), str) and _current_cue(body, request["ctx"])
                 and not any(_request_covers(item, request) for item in v.get("requests") or [])):
@@ -1676,10 +1678,20 @@ def _completeness_issues(v, hints, body):
 _REQUEST_STEMS = {"confirm": "確認", "contact": "連絡", "ask": "教え"}
 
 
-_REQUEST_END = r"(?:お願い|ください|下さい|いただけ|いただきたい|頂け|頂きたい|ほしい|欲しい|願います)"
+_REQUEST_END = (r"(?:お願い|ください|下さい|いただけ|いただきたい|いただきますよう|頂け|頂きたい"
+                r"|頂きますよう|ほしい|欲しい|願います)")
+# A stem is requested only when the request ending follows it directly
+# (確認をお願い, 確認してください) or when it is listed (と/や/、) through the
+# following confirm/contact stems up to one that is directly requested. Free text never
+# reaches a later ending past a report (連絡をいただきましたが…教えてください,
+# 確認と連絡を終えたので…連絡してください).
+_REQUEST_DIRECT = rf"(?:を)?(?:して)?{_REQUEST_END}"
+# one listing step: a particle, then text up to the NEXT confirm/contact stem
+_REQUEST_LINK = (r"(?:と|や|、|・|及び|および)"
+                 r"(?:(?!確認|連絡)[^。！？!?;；\r\n])*(?:確認|連絡)")
 _REQUEST_CUES = {
-    kind: re.compile(rf"{stem}(?=(?:{_REQUEST_END}|(?:を|して|と|や|、|・|及び|および)"
-                     rf"[^。！？!?;；\r\n]*{_REQUEST_END}))")
+    # any number of listed stems, the last directly requested (確認と…確認と…確認をお願い)
+    kind: re.compile(rf"{stem}(?=(?:{_REQUEST_LINK})*{_REQUEST_DIRECT})")
     for kind, stem in (("confirm", "確認"), ("contact", "連絡"))}
 # the rule hints' own ask phrasing, tracked per sentence like confirm/contact
 _REQUEST_CUES["ask"] = re.compile(r"教えて(?:ください|いただけ|欲しい)")
@@ -1695,9 +1707,38 @@ def _request_cues(body):
     cues = []
     for sentence in re.finditer(r"[^。！？!?;；\r\n]+", body):
         ctx = sentence[0].strip()
-        cues += [{"kind": kind, "ctx": ctx} for kind, rx in _REQUEST_CUES.items()
-                 if ctx and rx.search(ctx)]
+        for kind, rx in _REQUEST_CUES.items():
+            found, start = [], 0
+            for m in rx.finditer(ctx) if ctx else ():
+                # the target lies between the previous stem and this one
+                found.append({"kind": kind, "ctx": ctx, "target": _request_target(ctx[start:m.start()])})
+                start = m.end()
+            if len(found) > 1:
+                # 記録の確認と検査値の確認: one quote and one 確認 must not cover both
+                for cue in found:
+                    cue["siblings"] = [o["target"] for o in found if o is not cue]
+            cues += found
     return cues
+
+
+def _request_target(before):
+    """The word a request stem acts on (記録の確認 -> 記録), or None. ``before``
+    starts at the previous stem, so only its listing particle is dropped and
+    a と inside a word (かかと) is never a boundary."""
+    # a listing particle counts only right after a request stem of any kind
+    clause = re.split(r"(?:確認|連絡)(?:と|や|、|・|及び|および)", before)[-1]
+    clause = re.sub(r"^(?:と|や|、|・|及び|および)", "", clause).rsplit("、", 1)[-1]
+    clause = re.sub(r"(?:の|を|へ|に|は|も|ご)+$", "", clause)
+    word = clause.rsplit("の", 1)[-1].removeprefix("ご")
+    return word if 0 < len(word) <= 20 else None
+
+
+def _names_target(text, target, siblings):
+    """``text`` mentions ``target`` outside any longer sibling that contains it
+    (記録 is not named by 看護記録)."""
+    for longer in sorted((s for s in siblings if target in s and s != target), key=len, reverse=True):
+        text = text.replace(longer, "")
+    return target in text
 
 
 def _request_covers(item, hint):
@@ -1707,6 +1748,15 @@ def _request_covers(item, hint):
     if not isinstance(quote, str) or not quote or not (quote in ctx or ctx in quote):
         return False
     action = item.get("action") if isinstance(item.get("action"), str) else ""
+    if "siblings" in hint:
+        # several requests of this kind in one sentence: the item must name this one
+        target, siblings = hint.get("target"), [s for s in hint["siblings"] if s]
+        if not target:
+            return False        # unidentified target: left to the one bounded re-read
+        if not _names_target(action, target, siblings) and (
+                not _names_target(quote, target, siblings)
+                or any(_names_target(quote, s, [target, *siblings]) for s in siblings)):
+            return False
     stem = _REQUEST_STEMS[hint["kind"]]
     if stem in action or (hint["kind"] == "ask" and item.get("kind") == "question"):
         return True
