@@ -482,6 +482,198 @@
         "expect": {
             "urgency": "high"
         }
+    },
+    {
+        "id": "odp-1",
+        "body": "本人の内服薬は先週から一包化に変更し、朝夕の分を配薬しています。",
+        "expect": {
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "support_method",
+                    "value_contains": "一包化",
+                    "subject": "patient"
+                }
+            ]
+        }
+    },
+    {
+        "id": "odp-2",
+        "body": "合成薬Aと合成薬Bは一包化して、娘さんが服薬カレンダーにセットしています。",
+        "expect": {
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "support_method",
+                    "value_contains": "一包化",
+                    "subject": "patient"
+                }
+            ]
+        }
+    },
+    {
+        "id": "odp-3",
+        "body": "同居の夫の薬は一包化されていますが、本人の薬はシートのまま自己管理です。",
+        "forbid": {
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "support_method",
+                    "value_contains": "一包化",
+                    "subject": "patient"
+                }
+            ]
+        }
+    },
+    {
+        "id": "storage-1",
+        "body": "本人の薬は冷蔵庫の扉側で保管しています。",
+        "expect": {
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "storage_place",
+                    "value_contains": "冷蔵庫",
+                    "subject": "patient"
+                }
+            ]
+        }
+    },
+    {
+        "id": "storage-2",
+        "body": "合成インスリンは未開封分を冷蔵保管、使用中の分は室温保管と確認しました。",
+        "expect": {
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "storage_status",
+                    "value_contains": "冷蔵保管",
+                    "subject": "patient"
+                }
+            ]
+        }
+    },
+    {
+        "id": "storage-3",
+        "body": "薬の管理は同居の合成長男さんが行っており、本人は自分では飲めていません。",
+        "expect": {
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "medication_manager",
+                    "value_contains": "合成長男"
+                }
+            ]
+        }
+    },
+    {
+        "id": "storage-4",
+        "body": "同意書の原本は事業所の書類棚に保管しています。",
+        "forbid": {
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "storage_place",
+                    "value_contains": "書類棚"
+                },
+                {
+                    "category": "medication_management",
+                    "detail_key": "storage_status",
+                    "value_contains": "保管"
+                }
+            ]
+        }
+    },
+    {
+        "id": "pinq-1",
+        "body": "合成薬Cの用量について処方医へ疑義照会し、減量で了承を得ました。",
+        "expect": {
+            "events": [
+                "prescription_inquiry"
+            ],
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "inquiry_result",
+                    "value_contains": "減量",
+                    "subject": "patient"
+                }
+            ]
+        }
+    },
+    {
+        "id": "pinq-2",
+        "body": "腎機能低下のため合成薬Dの減量を主治医へ処方提案しましたが、回答はまだです。",
+        "expect": {
+            "events": [
+                "prescription_inquiry"
+            ],
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "inquiry_result",
+                    "value_contains": "まだ",
+                    "subject": "patient"
+                }
+            ]
+        }
+    },
+    {
+        "id": "pinq-3",
+        "body": "担当者会議の日程を居宅介護支援事業所に照会しました。",
+        "forbid": {
+            "events": [
+                "prescription_inquiry"
+            ],
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "inquiry_result",
+                    "value_contains": "日程"
+                }
+            ]
+        }
+    },
+    {
+        "id": "ichk-1",
+        "body": "他院処方の合成薬Eと当院処方の合成薬Fに重複がないことを確認しました。",
+        "expect": {
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "interaction_check",
+                    "value_contains": "重複がない",
+                    "subject": "patient"
+                }
+            ]
+        }
+    },
+    {
+        "id": "ichk-2",
+        "body": "新たに始まった合成薬Gと既存薬の相互作用を確認し、問題はありませんでした。",
+        "expect": {
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "interaction_check",
+                    "value_contains": "問題はありません",
+                    "subject": "patient"
+                }
+            ]
+        }
+    },
+    {
+        "id": "ichk-3",
+        "body": "提出書類に重複がないか事務所で確認しました。",
+        "forbid": {
+            "patient_context": [
+                {
+                    "category": "medication_management",
+                    "detail_key": "interaction_check",
+                    "value_contains": "重複"
+                }
+            ]
+        }
     }
   ]
 }

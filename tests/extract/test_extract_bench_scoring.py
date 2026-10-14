@@ -58,9 +58,41 @@ GOLDEN = json.loads('''{"events": {"events": [0, 0, 12], "meds": [2, 0, 0], "req
 GOLDEN_FORBID = (51, "9101b98c1881d36237f2469440cabf74125ad2818e2df094cf03fb663f193afe")
 
 
+# The 84 cases the goldens were produced on; new cases are checked separately below,
+# so adding them never rewrites these constants.
+GOLDEN_CASE_IDS = frozenset({
+    'admission-event', 'alias-got', 'confuse-ast-alt', 'confuse-crp-cr', 'dates-posting',
+    'dates-two', 'exam-scheduled', 'family-med-not-patient', 'family-mother', 'family-value',
+    'fullwidth-date', 'fullwidth-hba1c', 'k-not-lab', 'med-no-dose', 'med-stop-simple',
+    'mixed-med-actions', 'no-value', 'past-med-history', 'percent-literal', 'plan-only',
+    'planned-med-start', 'prev-now', 'prev-now-hb', 'qualitative', 'range-high-flag',
+    'range-interval-only', 'range-invented-flag', 'range-low-arrow', 'range-normal-remark',
+    'request-only', 'request-with-role', 'review-discharge-only', 'review-eol-inflection',
+    'review-family-vital', 'review-multiple-bp', 'review-negated-admission',
+    'review-outpatient-synonym', 'review-visit-colloquial', 'symptom-negated', 'symptom-resolved',
+    'synth-context-clinical-unchanged', 'synth-greeting-no-request', 'synth-quoted-old-request',
+    'synth-reply-ack', 'synth-reply-answer', 'synth-reply-bare-confirm-not-done',
+    'synth-reply-cancel', 'synth-reply-done', 'synth-reply-done-other-object',
+    'synth-reply-intent', 'synth-reply-progress', 'synth-reply-thanks-only',
+    'synth-report-no-request', 'synth-request-condition-negated',
+    'synth-request-condition-paraphrased', 'synth-request-conditional',
+    'synth-request-family-addressee', 'synth-request-from-unstated', 'synth-request-multi-split',
+    'synth-request-negated', 'synth-request-polite-question-form', 'synth-request-question',
+    'synth-request-relative-due-unknown-date', 'synth-request-self-plan',
+    'synth-request-to-unstated', 'unit-case', 'unit-egfr', 'unit-no-conversion', 'urgent-bleeding',
+    'urgent-breathing', 'urgent-chunked-long', 'urgent-conditional-vital',
+    'urgent-consciousness-drop', 'urgent-fall', 'urgent-family-fall', 'urgent-low-explicit',
+    'urgent-past-transport', 'urgent-past-vital', 'urgent-spo2-low',
+    'urgent-transport-destination', 'urgent-unclear-vague', 'urgent-word-contact-card',
+    'urgent-word-contingency', 'vitals-and-ongoing-symptom',
+})
+
+
 def test_existing_scores_are_unchanged_on_canned_outputs():
+    cases = [case for case in extract_bench._synthetic_cases() if case["id"] in GOLDEN_CASE_IDS]
+    assert len(cases) == len(GOLDEN_CASE_IDS)
     scores = {}
-    for case in extract_bench._synthetic_cases():
+    for case in cases:
         for name, out in _variants(case):
             scores.setdefault(name, []).append(extract_bench._score_case(case, out))
     got = {name: {field: [a["tp"], a["fp"], a["fn"]]
@@ -70,6 +102,40 @@ def test_existing_scores_are_unchanged_on_canned_outputs():
     violations = sorted(v for row in scores["forbidden"] for v in row["forbid_violations"])
     digest = hashlib.sha256(json.dumps(violations, ensure_ascii=False).encode()).hexdigest()
     assert (len(violations), digest) == GOLDEN_FORBID
+
+
+NEW_CLASS_PREFIXES = ("odp-", "storage-", "pinq-", "ichk-")
+
+
+def _grounded_output(case, labels):
+    """An extraction that satisfies each label from the body's own sentence."""
+    items, events = [], []
+    for label in labels.get("patient_context", []):
+        sentence = next(part + "。" for part in case["body"].split("。") if label["value_contains"] in part)
+        items.append({"category": label["category"], "text": sentence, "evidence": sentence,
+                      "subject": label.get("subject", "patient"),
+                      "details": [{"key": label["detail_key"], "value": label["value_contains"],
+                                   "evidence": sentence}]})
+    events.extend(labels.get("events", []))
+    return {"patient_context": items, "events": events}
+
+
+def test_the_new_pharmacy_cases_cover_every_admitted_class_and_are_satisfiable():
+    cases = [case for case in extract_bench._synthetic_cases() if case["id"].startswith(NEW_CLASS_PREFIXES)]
+    assert {case["id"] for case in cases}.isdisjoint(GOLDEN_CASE_IDS)
+    for prefix in NEW_CLASS_PREFIXES:
+        group = [case for case in cases if case["id"].startswith(prefix)]
+        assert sum("expect" in case for case in group) >= 2 and sum("forbid" in case for case in group) >= 1
+    for case in cases:
+        assert extract_bench._section_valid(case.get("expect", {}))
+        assert extract_bench._section_valid(case.get("forbid", {}))
+        if "expect" in case:
+            score = extract_bench._score_case(case, _grounded_output(case, case["expect"]))
+            assert score["fields"]["patient_context"]["fn"] == 0 and not score["forbid_violations"]
+            assert score["fields"]["events"]["fn"] == 0
+        if "forbid" in case:
+            score = extract_bench._score_case(case, _grounded_output(case, case["forbid"]))
+            assert len(score["forbid_violations"]) == sum(len(v) for v in case["forbid"].values())
 
 
 BODY = "本人の服薬は合成家族が支援しています。一包化で朝に配薬しています。"
