@@ -809,7 +809,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
     if kind == "thread":
         msgs = [dict(m) for m in db.execute(
             """SELECT message_id,sender_id,sender_name,profession,organization,
-                      posted_at,body_text,body_state,first_seen,
+                      posted_at,body_state,first_seen,
                       reply_count FROM messages
                WHERE (message_id=? OR parent_id=?) AND project_id=?
                ORDER BY message_id<>?, posted_at_ts, message_id""",

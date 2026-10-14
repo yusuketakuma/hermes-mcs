@@ -238,3 +238,37 @@ def test_card_resolve_default_cfg_uses_conf_path(tmp_path, monkeypatch):
     with pytest.raises(_Stop):
         notify_transport.apply_card_resolve(object(), {"command_id": "c"})
     assert seen == [conf]
+
+
+# Recovered efficiency regressions (v9-eff-source-preserving-chunks).
+def test_long_single_line_keeps_boundaries_without_repeated_suffix_copies():
+    copied = []
+
+    class Segment(str):
+        def splitlines(self, keepends=False):
+            return [Segment(s) for s in super().splitlines(keepends)]
+
+        def __getitem__(self, key):
+            result = super().__getitem__(key)
+            if isinstance(key, slice):
+                copied.append(len(result))
+                return Segment(result)
+            return result
+
+    text = "head\n" + "x" * 100_007 + "\nend"
+    chunks = notify_cards._split_body_chunks(Segment(text))
+    assert chunks == [text[i:i + 1900] for i in range(0, len(text), 1900)]
+    assert sum(copied) <= 2 * len(text), "repeated suffix copies exceed linear budget"
+
+
+@pytest.mark.parametrize("text,limit,expected", [
+    ("", 4, []),
+    ("abcdef\nend", 4, ["abcd", "ef\n", "end"]),
+    ("a\n1234", 4, ["a\n", "1234"]),
+    ("a\n12345", 4, ["a\n12", "345"]),
+    ("ab\n\n\nc", 4, ["ab\n\n", "\nc"]),
+    ("a" + " " * 10 + "b", 4, ["a   ", "   b"]),
+    (" " * 8, 4, [" " * 4, " " * 4]),
+])
+def test_body_chunks_preserve_exact_text_and_boundaries(text, limit, expected):
+    assert notify_cards._split_body_chunks(text, limit) == expected

@@ -1,6 +1,7 @@
 """runtime_mode=standalone: Slack/Discord text uses `mcs_standalone send`
 with the sealed JSON contract; Hermes mode still uses `hermes send`."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -179,3 +180,42 @@ def test_hermes_mode_is_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     assert notify_flush._send_argv(cfg, cfg["notify_target"]) == [
         "/opt/hermes", "send", "--to", cfg["notify_target"], "--quiet"]
+
+
+@pytest.mark.parametrize("sender", ["mcs_standalone", "lineworks_adapter"])
+@pytest.mark.parametrize("size", [0, 6, 7, 8, 13, (1 << 20) + 7])
+def test_direct_sender_seal_bounds_reads_and_preserves_contract(monkeypatch, sender, size):
+    limit = 7 if size < (1 << 20) else size
+    monkeypatch.setattr(notify_flush, "_MAX_FILE_BYTES", limit)
+    data = b"s" * size
+    digest = hashlib.sha256(data).hexdigest()
+    reads = []
+    calls = []
+
+    class BoundedFile(io.BytesIO):
+        def read(self, count: int | None = -1) -> bytes:
+            assert count is not None
+            assert 0 < count <= 1 << 20, "seal read must be bounded"
+            block = super().read(count)
+            reads.append(len(block))
+            return block
+
+    monkeypatch.setattr(notify_flush, "open", lambda *a: BoundedFile(data), raising=False)
+
+    def child(*args, **kwargs):
+        calls.append(json.loads(kwargs["input"]))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(notify_flush.subprocess, "run", child)
+    args = ([sys.executable, f"/synthetic/{sender}/__main__.py"],
+            "synthetic notice", [("synthetic.bin", "/synthetic/file")])
+    if size > limit:
+        with pytest.raises(notify_flush._SendFailed, match="attachment_too_large"):
+            notify_flush._send(*args, attachment_pins={"/synthetic/file": digest})
+        assert calls == []
+    else:
+        notify_flush._send(*args, attachment_pins={"/synthetic/file": digest})
+        assert calls == [{"text": "synthetic notice", "files": [{
+            "name": "synthetic.bin", "path": "/synthetic/file",
+            "bytes": size, "sha256": digest}]}]
+    assert sum(reads) == min(size, limit + 1)

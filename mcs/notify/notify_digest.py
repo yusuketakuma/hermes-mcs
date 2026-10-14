@@ -73,14 +73,22 @@ def parse_scope(text) -> dict | str:
         elif key in ("station", "施設") and val:
             out["stations"].append(val[:60])
         elif key in ("project", "患者") and val:
-            ids = [int(v) for v in val.split(",")
-                   if v.isascii() and v.isdigit()]
+            try:
+                ids = [int(v) for v in val.split(",")
+                       if v.isascii() and v.isdigit()]
+            except ValueError:
+                return f"project の指定が不正です: {tok[:40]}"
             if not ids or len(ids) != len(val.split(",")):
                 return f"project の指定が不正です: {tok[:40]}"
             out["projects"] += ids
-        elif key in ("days", "日数") and val.isascii() and val.isdigit() \
-                and 1 <= int(val) <= MAX_DAYS:
-            out["days"] = int(val)
+        elif key in ("days", "日数") and val.isascii() and val.isdigit():
+            try:
+                days = int(val)
+            except ValueError:
+                days = 0
+            if not 1 <= days <= MAX_DAYS:
+                return f"絞込みを解釈できません: {tok[:40]}（{SCOPE_HELP}）"
+            out["days"] = days
         else:
             return f"絞込みを解釈できません: {tok[:40]}（{SCOPE_HELP}）"
     return out

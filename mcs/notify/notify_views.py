@@ -495,17 +495,21 @@ def patient_search_view(db, project_id, query) -> dict:
     for t in terms:
         sql += " AND instr(mcs_fold(body_text),?)>0"
         args.append(search_fold(t))
-    rows = db.execute(sql + " ORDER BY posted_at_ts DESC, message_id DESC",
-                      args).fetchall() if terms else []
+    rows, total = [], 0
+    if terms:
+        for row in db.execute(sql + " ORDER BY posted_at_ts DESC, message_id DESC", args):
+            total += 1
+            if len(rows) < SEARCH_HITS:
+                rows.append(row)
     items = [{"project_id": project_id,
               "text": f"・{_mmdd(r['posted_at'])} {_hhmm(r['posted_at'])} "
                       f"{_inline(r['profession'], 20) or '職種不明'}: "
                       f"{_snippet(r['body_text'], terms[0])}"}
-             for r in rows[:SEARCH_HITS]]
+             for r in rows]
     return {"title": f"🔎 {name} — 「{_inline(query, 40)}」の検索結果",
-            "head": [f"{len(rows)}件（取得済み投稿・新しい順）— MCS: "
+            "head": [f"{total}件（取得済み投稿・新しい順）— MCS: "
                      f"{project_url(project_id)}"],
-            "items": items, "more": max(0, len(rows) - SEARCH_HITS),
+            "items": items, "more": max(0, total - SEARCH_HITS),
             "empty": "取得済みの投稿に一致するものはありません。",
             "notes": [_coverage_line(db, project_id)]}
 

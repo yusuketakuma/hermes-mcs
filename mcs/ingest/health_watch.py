@@ -486,7 +486,7 @@ def _archive_unknown(state: dict, delivery: dict) -> None:
     bounded: keep the newest UNKNOWN_HISTORY records."""
     held = state.get("unknown_deliveries")
     held = held if isinstance(held, list) else []
-    state["unknown_deliveries"] = [*held, dict(delivery)][-UNKNOWN_HISTORY:]
+    state["unknown_deliveries"] = [*held[-UNKNOWN_HISTORY:], dict(delivery)][-UNKNOWN_HISTORY:]
 
 
 def _reconcile_delivery(state: dict, status: str, key: tuple,

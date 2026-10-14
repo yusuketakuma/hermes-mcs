@@ -764,17 +764,24 @@ def _send(argv: list[str], content: str,
             ("/lineworks_adapter/__main__.py", "/mcs_standalone/__main__.py")):
         sealed = []
         for name, path in files or []:
+            size = 0
+            hashed = hashlib.sha256()
             try:
                 with open(path, "rb") as handle:
-                    blob = handle.read(_MAX_FILE_BYTES + 1)
+                    while size <= _MAX_FILE_BYTES:
+                        block = handle.read(min(1 << 20, _MAX_FILE_BYTES + 1 - size))
+                        if not block:
+                            break
+                        size += len(block)
+                        hashed.update(block)
             except OSError:
                 raise _SendFailed("attachment_unavailable") from None
-            if len(blob) > _MAX_FILE_BYTES:
+            if size > _MAX_FILE_BYTES:
                 raise _SendFailed("attachment_too_large")
-            digest = hashlib.sha256(blob).hexdigest()
+            digest = hashed.hexdigest()
             if attachment_pins is not None and attachment_pins.get(path) != digest:
                 raise _SendFailed("attachment_mismatch")
-            sealed.append({"name": name, "path": path, "bytes": len(blob),
+            sealed.append({"name": name, "path": path, "bytes": size,
                            "sha256": digest})
         body = json.dumps({"text": content, "files": sealed}, ensure_ascii=False)
     else:

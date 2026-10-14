@@ -39,6 +39,42 @@ def _text(led, ev=None):
     return json.loads((ev or _digests(led)[-1])["payload"])["text"]
 
 
+@pytest.mark.parametrize("key,error_prefix", [
+    ("project", "project の指定が不正です:"),
+    ("患者", "project の指定が不正です:"),
+    ("days", "絞込みを解釈できません:"),
+    ("日数", "絞込みを解釈できません:"),
+])
+def test_scope_integer_decoder_failure_is_usage_error_before_io(
+        monkeypatch, capsys, key, error_prefix):
+    import mcs_util
+    raw = "1" * 5000
+    convert = int
+    try:
+        convert(raw)
+    except ValueError:
+        limited = True
+    else:
+        limited = False
+    if not limited:
+        def decoder(value, *args, **kwargs):
+            if value == raw:
+                raise ValueError("synthetic integer decoder limit")
+            return convert(value, *args, **kwargs)
+        monkeypatch.setattr(notify_digest, "int", decoder, raising=False)
+    scope = key + ":" + raw
+    error = notify_digest.parse_scope(scope)
+    assert isinstance(error, str) and error.startswith(error_prefix)
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **kw: pytest.fail("invalid scope opens DB"))
+    monkeypatch.setattr(mcs_util, "load_config", lambda *a, **kw: pytest.fail("invalid scope reads config"))
+    assert notify_digest.main(["--print", scope]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.strip() == error
+    assert raw not in captured.err
+    assert notify_digest.parse_scope("project:1,2 days:2") == {
+        "mine": False, "stations": [], "projects": [1, 2], "days": 2}
+
+
 def test_once_per_day_after_the_hour(led):
     assert notify_digest.maybe_enqueue(led, ON, now=_at("2026-10-01", 7)) == 0
     assert notify_digest.maybe_enqueue(led, {**ON, "daily_digest": {}},

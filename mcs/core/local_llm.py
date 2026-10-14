@@ -320,7 +320,8 @@ def admitted_chat(client_route: str, prompt: str, *,
         response = chat(prompt, deadline=deadline, extra_payload=extra,
                         error_out=err_out, **kw)
     except BaseException:
-        broker.mark_unknown(pid, "interrupted")
+        with suppress(Exception):
+            broker.mark_unknown(pid, "interrupted")
         raise
     if response is None:
         _retire_failed_send(broker, pid, err_out.get("kind"), "")
@@ -366,20 +367,21 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
     if err_out is None:
         err_out = {}
     try:
-        return probe_format(endpoint, model, schema,
+        mode = probe_format(endpoint, model, schema,
                             admission_token=sent["token"], error_out=err_out, **kw)
     except BaseException:
-        broker.mark_unknown(pid, "probe_error")
+        with suppress(Exception):
+            broker.mark_unknown(pid, "probe_error")
         raise
-    finally:
-        # Plain mode can also mean an interrupted transport. It proves
-        # neither completion nor that the backend stopped decoding.
-        p = broker._permit(pid)
-        if p is not None and p["state"] == "sent":
-            if err_out.get("kind"):
-                _retire_failed_send(broker, pid, err_out["kind"], "probe_")
-            else:
-                broker.terminal(pid, "done", proof="probe_returned")
+    # Plain mode can also mean an interrupted transport. It proves
+    # neither completion nor that the backend stopped decoding.
+    p = broker._permit(pid)
+    if p is not None and p["state"] == "sent":
+        if err_out.get("kind"):
+            _retire_failed_send(broker, pid, err_out["kind"], "probe_")
+        else:
+            broker.terminal(pid, "done", proof="probe_returned")
+    return mode
 
 
 def _retire_failed_send(broker, pid: int, kind: str | None,

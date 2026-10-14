@@ -1,5 +1,6 @@
 """Semantic ingestion revisions preserve coverage without reviving unchanged jobs."""
 
+import hashlib
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -181,3 +182,65 @@ def test_failure_after_seed_rolls_back_raw_notice_and_job_in_every_writer(tmp_pa
         assert after == before
     finally:
         reopened.close()
+
+
+def test_thread_generation_keeps_member_and_attachment_contract_with_constant_queries(tmp_path):
+    db = ledger.Ledger(str(tmp_path / "generation.db"))
+    try:
+        db.ensure_patient(1)
+        messages = [_message(mid, parent_id=1 if mid > 1 else None,
+                             body=f"synthetic source {mid}") for mid in range(1, 21)]
+        db.save_messages(messages, project_id=1)
+        with db.db:
+            db.db.execute("INSERT INTO attachments(attachment_id,message_id,file_id,name,state) "
+                          "VALUES(20,1,'second','second.txt','pending'),"
+                          "(10,1,'first','first.txt','failed'),"
+                          "(30,1,'withdrawn','withdrawn.txt','withdrawn'),"
+                          "(31,1,'unknown','unknown.txt',NULL),"
+                          "(40,2,'reply','reply.txt','pending')")
+            db.db.execute("INSERT INTO messages(message_id,project_id,parent_id,body_state,body_text) "
+                          "VALUES(100,2,1,'full','synthetic foreign'),"
+                          "(101,1,99,'full','synthetic other thread')")
+            db.db.execute("INSERT INTO attachments(attachment_id,message_id,file_id,name,state) "
+                          "VALUES(50,100,'foreign','foreign.txt','pending'),"
+                          "(60,101,'other','other.txt','pending')")
+        expected = [{
+            "message_id": m.message_id, "parent_id": m.parent_id,
+            "revision": hashlib.sha256(m.body_html.encode()).hexdigest(),
+            "body_state": "full", "reply_count": 0,
+            "sender_id": 7, "sender_name": "old", "sender_type": "user",
+            "profession": "看護師", "organization": "病棟A",
+            "posted_at": "2026-09-19T00:00:00+09:00", "attachments": [],
+        } for m in messages]
+        expected[0]["attachments"] = [
+            {"attachment_id": aid, "file_id": name, "name": name + ".txt",
+             "bytes": None, "sha256": None, "state": state}
+            for aid, name, state in ((10, "first", "failed"), (20, "second", "pending"))]
+        expected[1]["attachments"] = [
+            {"attachment_id": 40, "file_id": "reply", "name": "reply.txt",
+             "bytes": None, "sha256": None, "state": "pending"}]
+        digest = hashlib.sha256(json.dumps(expected, ensure_ascii=False,
+                                          sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        before = tuple(db.db.iterdump())
+        changes = db.db.total_changes
+        queries = []
+        db.db.set_trace_callback(queries.append)
+        actual = db._semantic_source_generation(1, 1)
+        db.db.set_trace_callback(None)
+        assert actual == digest
+        assert db.db.total_changes == changes and tuple(db.db.iterdump()) == before
+        assert sum(sql.lstrip().upper().startswith("SELECT") for sql in queries) <= 2
+    finally:
+        db.close()
+
+
+def test_empty_thread_generation_needs_no_attachment_query(tmp_path):
+    db = ledger.Ledger(str(tmp_path / "empty-generation.db"))
+    try:
+        queries = []
+        db.db.set_trace_callback(queries.append)
+        assert db._semantic_source_generation(1, 999) == hashlib.sha256(b"[]").hexdigest()
+        db.db.set_trace_callback(None)
+        assert sum(sql.lstrip().upper().startswith("SELECT") for sql in queries) == 1
+    finally:
+        db.close()

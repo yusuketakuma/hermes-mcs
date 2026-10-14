@@ -2,6 +2,7 @@
 
 import copy
 import json
+import sqlite3
 import time
 from types import SimpleNamespace
 
@@ -166,6 +167,35 @@ def test_complete_replaces_and_incomplete_keeps_old_set(db):
     assert not {"icon_url", "medium_icon_url"} & cols   # the icon is never kept
     assert reaction_actor_summary(db.db, 99)["state"] == "not_fetched"
 
+
+
+def test_complete_actor_walk_uses_linear_membership_comparisons(db):
+    save(db, message(reactions=reactions(viewed=32)))
+    comparisons = 0
+
+    class ActorId(int):
+        __hash__ = int.__hash__
+
+        def __eq__(self, other):
+            nonlocal comparisons
+            comparisons += 1
+            return int.__eq__(self, other)
+
+    rows = [{"actor_id": ActorId(i), "reaction_type": "viewed"} for i in range(32)]
+    db.save_reaction_actors(1, rows, True, now=100.0)
+    assert comparisons <= 2 * len(rows)
+    assert db.db.execute(
+        "SELECT COUNT(*) FROM message_reaction_actors WHERE removed_at IS NULL"
+    ).fetchone()[0] == len(rows)
+
+
+def test_invalid_actor_binding_keeps_original_error_and_rolls_back_complete_walk(db):
+    save(db, message(reactions=reactions(viewed=1)))
+    before = tuple(db.db.iterdump())
+    with pytest.raises(sqlite3.ProgrammingError):
+        db.save_reaction_actors(1, [{"actor_id": 5, "reaction_type": "viewed"},
+                                  {"actor_id": [], "reaction_type": "viewed"}], True)
+    assert tuple(db.db.iterdump()) == before
 
 
 @pytest.mark.parametrize("upgrade", [False, True])
