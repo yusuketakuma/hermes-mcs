@@ -10,8 +10,8 @@ repo との drift になる。
 
 | パス | 内容 |
 |---|---|
-| `launchagents/` | launchd plist テンプレート 6件。ジョブ構成・プレースホルダ規則・drainer 設計は [launchagents/README.md](launchagents/README.md) |
-| `scripts/` | hermes cron 用 wrapper スクリプト 6件（`~/.hermes/scripts/` へレンダリング） |
+| `launchagents/` | launchd plist テンプレート 8件。Hermes用の4件、独立host、外部health watch、LLMサーバ、復旧watchdog。ジョブ構成・プレースホルダ規則は [launchagents/README.md](launchagents/README.md) |
+| `scripts/` | 定期ジョブ用wrapper 6件と、明示有効化するoffsite backup用1件。Hermesは`~/.hermes/scripts/`、独立実行は`~/.mcs/scripts/`へレンダリング |
 | `recovery/` | `mcs_recover.py` — 更新中断を自律復旧する独立 watchdog ツール（install.sh が `~/.mcs-recovery/` へコピーし `org.mcs.recovery` で定期起動） |
 | `cco/` | [CCO terminal/file 隔離の候補設定・承認記録・検証説明](cco/cco-terminal-isolation.md) |
 

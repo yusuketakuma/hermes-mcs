@@ -62,7 +62,7 @@ Per target message, inside the shared drain queue:
    `explicit_no_fact` requires an adjudicated absence with no
    contradicting signal.  Open/ambiguous/failed obligations keep the
    coverage `incomplete`.
-5. **Relations** — `semantic_relations.reconcile` emits
+5. **Relations** — `semantic_relations.reconcile_facts` emits
    `EXPLICIT_SUPERSESSION` only when temporal ordering is known;
    unordered conflicting pairs become `CONTRADICTION` — never silent
    latest-wins.

@@ -193,6 +193,9 @@ Discord利用時はこのCLIのactor自己申告ではなく、上記native plat
 `restore_approve` は喪失レポート（`report_id`）とbackupの sha256/schema に束縛され、
 別の承認では代用できない。適用・巻戻し・DB置換の実行と結果は runner 側の receipt と
 運用通知で確認する。
+DB置換はタスクの状態・改訂・操作履歴もbackup時点へ戻す。
+損失報告の件数は投稿・添付と配送履歴の範囲で、DB全体の損失件数ではない。
+previewの3つのpinだけで影響確認を済ませず、[復元承認の範囲](../docs/guides/BACKUP.md#consent)を確認する。
 
 ## インタラクティブカード（mcs_discord）
 
