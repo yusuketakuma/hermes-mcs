@@ -15,9 +15,9 @@ from datetime import datetime
 import structured_view
 import drug_map
 from drug_map import candidate_note
-from rollup import current_cached_refs
+from rollup import current_cached_refs, pharmacy_state_items
 from ledger import karte_summary_block
-from patient_context import LABELS, context_items, extract_context
+from patient_context import DETAIL_LABELS, LABELS, context_items, extract_context
 from mcs_adapter import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from mcs_util import fold_map, register_search_fold, search_fold
@@ -75,6 +75,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
             lines.append(f"■ 次回予定: {roll['next_planned']}")
         lines.extend(_request_reply_lines(db, project_id, roll))
     lines.extend(_patient_context_lines(db, project_id, roll))
+    lines.extend(_pharmacy_state_lines(db, project_id, roll))
     lines.extend(_registered_clinical_lines(db, project_id))
     # the 連携サマリー line always reads the newest artifact: the rollup
     # holds a copy frozen at its last rebuild, which a newer fetch
@@ -151,6 +152,50 @@ def _patient_context_lines(db, project_id, roll) -> list[str]:
             lines.append(f"  この分類は他{len(valid) - 1}項目（原記録で全文確認）")
     if len(lines) == 1:
         lines.append("・まとめに反映された情報なし")
+    return lines
+
+
+def _pharmacy_state_lines(db, project_id, roll) -> list[str]:
+    """Private excerpts of pharmacy reports, rechecked against their unchanged source."""
+    from read_model import message_patient_context
+    state = roll.get("pharmacy_state")
+    items = state.get("items") if isinstance(state, dict) else None
+    if not isinstance(items, list) or not items:
+        return []
+    sources, valid = {}, []
+    for report in items:
+        if (not isinstance(report, dict) or type(report.get("project_id")) is not int
+                or report["project_id"] != project_id or type(report.get("message_id")) is not int
+                or not isinstance(report.get("fingerprint"), str) or not isinstance(report.get("parent"), dict)):
+            continue
+        mid = report["message_id"]
+        if mid not in sources:
+            source = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
+                                (project_id, mid)).fetchone()
+            current = (pharmacy_state_items({"patient_context": message_patient_context(db, dict(source))}, source)
+                       if source else [])
+            sources[mid] = (source, {item["fingerprint"] for item in current})
+        source, fingerprints = sources[mid]
+        # A correction can remove an assertion without changing the message body.
+        if (source and report.get("fingerprint") in fingerprints
+                and report in pharmacy_state_items({"patient_context": [report["parent"]]}, source)):
+            valid.append(report)
+    lines = ["■ 服薬管理の報告"]
+    for report in valid[:8]:
+        label = DETAIL_LABELS[report["key"]][0]
+        subject = {"patient": "本人", "family": "家族", "other": "他者", "unspecified": "主体未確認"}[report["subject"]]
+        names = "・".join(report["drug_names"])
+        title = f"{label}（{_mmdd(report['posted_at'])}・{subject}・投稿#{report['message_id']}）"
+        text = f"{names}: " if names else ""
+        # The whole parent wording, rather than a scalar alone, retains denial and plans.
+        text += report["parent"]["text"]
+        lines.append(f"・{title}: {_inline(report['value'], 80)} — {_inline(text, 200)}")
+    if not valid:
+        lines.append("・現在の原文と照合できる報告なし")
+    if len(valid) > 8:
+        lines.append(f"  他{len(valid) - 8}報告（原記録で全文確認）")
+    if state.get("truncated") is True:
+        lines.append("  集約は最新100報告まで（原記録で全文確認）")
     return lines
 
 

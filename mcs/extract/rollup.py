@@ -20,6 +20,7 @@ import argparse
 from datetime import date, datetime, timedelta
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -37,6 +38,7 @@ from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
 from mcs_util import HOME, acquire_run_lock, loads_dict
+from mcs_requests import valid_hash
 from semantic_projection import PROJECTION_VERSION
 from self_identity import normalize_sender_id
 from drug_map import (KIND as REF_KIND, PROGRESS_KIND, candidate_note, current_refs,
@@ -48,9 +50,9 @@ STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape, or when a scope/guard
 # change alters what build_rollup keeps: current-version caches are trusted
 # without per-read rebuilds, and dirty_projects() rebuilds every row stamped
-# with another version (9: med_period_candidate / unrefreshed_message_ids).
+# with another version (10: source-bound pharmacy reports).
 # Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
-PERIOD_CHECK_VERSION = 9
+PERIOD_CHECK_VERSION = 10
 # Pre-9 rollup keys; readers map them to the current names until rebuilt.
 _LEGACY_KEYS = {"current_med_period": "med_period_candidate",
                 "possibly_deleted": "unrefreshed_message_ids"}
@@ -58,6 +60,41 @@ _LEGACY_KEYS = {"current_med_period": "med_period_candidate",
 # after the request, from another sender. View-only, never a transition.
 _REPLY_STAGE = {k: i for i, k in enumerate(
     ("ack", "intent", "progress", "answer", "done", "cancel"))}
+
+PHARMACY_STATE_KEYS = frozenset({"inquiry_result", "storage_status", "storage_place",
+    "medication_manager", "interaction_check", "support_method", "residual_quantity",
+    "missed_doses", "followup"})
+PHARMACY_STATE_LIMIT = 100
+
+
+def pharmacy_state_items(artifact, message) -> list[dict]:
+    """Source-grounded pharmacy reports from one decoded current extraction, preserving each parent."""
+    message = dict(message)
+    if (message.get("body_state") not in (None, "full")
+            or type(message.get("project_id")) is not int or message["project_id"] <= 0
+            or type(message.get("message_id")) is not int or message["message_id"] <= 0
+            or not valid_hash(message.get("content_hash"))):
+        return []
+    result = []
+    for item in context_items(artifact, message.get("body_text")):
+        parent = {key: item[key] for key in ("category", "text", "evidence", "subject")}
+        parent["details"] = item.get("details", [])
+        identity = {key: parent[key] for key in ("category", "text", "evidence", "subject")}
+        parent_fp = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        names = sorted({detail["value"] for detail in parent["details"] if detail["key"] == "drug_name"})
+        for detail in parent["details"]:
+            if detail["key"] not in PHARMACY_STATE_KEYS:
+                continue
+            fingerprint = hashlib.sha256(json.dumps([parent_fp, detail, names],
+                sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            stamp = message.get("posted_at_ts")
+            result.append({**detail, "parent": parent, "parent_fingerprint": parent_fp,
+                "fingerprint": fingerprint, "drug_names": names, "subject": parent["subject"],
+                "project_id": message["project_id"], "message_id": message["message_id"],
+                "content_hash": message["content_hash"], "posted_at": message.get("posted_at"),
+                "posted_at_ts": stamp if type(stamp) in (int, float) and math.isfinite(stamp) else None,
+                "source": "chat"})
+    return result
 
 
 def _dicts(value) -> list[dict]:
@@ -169,7 +206,7 @@ def build_rollup(ledger, project_id: int) -> dict:
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
     patient_name = patient[0] if patient else None
     msgs = db.execute("""
-      SELECT message_id, posted_at, posted_at_ts, body_text, sender_id, sender_name, sender_type,
+      SELECT message_id, project_id, posted_at, posted_at_ts, body_text, sender_id, sender_name, sender_type,
              parent_id, updated_seen, body_state, content_hash
       FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
     """, (project_id,)).fetchall()
@@ -188,6 +225,7 @@ def build_rollup(ledger, project_id: int) -> dict:
                 **item, "source": "karte_summary", "updated_at": ks.get("updated_at"),
                 "fetched_at": ks.get("fetched_at")})
     out["patient_context"] = {"memo": context, "chat": {}}
+    out["pharmacy_state"] = {"items": [], "total": 0, "truncated": False, "source": "chat"}
     from read_model import _registered_data
     registered = _registered_data(db, "aggregate", project_id, None)
     if registered is not None and registered["total"]:
@@ -239,13 +277,20 @@ def build_rollup(ledger, project_id: int) -> dict:
         # per category; the detail read model retains all prior reports.
         context_doc = {"patient_context": merged_context(llm, lm, m["body_text"] or "")}
         message_context = {}
-        for item in merged_context(v1, context_doc, m["body_text"] or "") \
-                if m["body_state"] in (None, "full") else ():
+        reported_context = (merged_context(v1, context_doc, m["body_text"] or "")
+                            if m["body_state"] in (None, "full") else [])
+        for item in reported_context:
             message_context.setdefault(item["category"], []).append({
                 **item, "message_id": m["message_id"], "posted_at": m["posted_at"],
                 "content_hash": m["content_hash"], "source": "chat", "state": "reported"})
         for category, items in message_context.items():
             out["patient_context"]["chat"].setdefault(category, items)
+        state = out["pharmacy_state"]
+        for report in pharmacy_state_items({"patient_context": reported_context}, m):
+            state["total"] += 1
+            if len(state["items"]) < PHARMACY_STATE_LIMIT:
+                state["items"].append(report)
+        state["truncated"] = state["total"] > len(state["items"])
         if summary is None and isinstance(lm.get("summary"), str) \
                 and lm["summary"]:
             summary = {"text": lm["summary"], "at": m["posted_at"]}
