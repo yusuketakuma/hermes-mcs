@@ -136,27 +136,45 @@ def test_unstored_reply_blocks_the_clear_and_is_fetched_first(db):
     assert db.db.execute("SELECT count(*) FROM thread_read_marks").fetchone()[0] == 0
 
 
-def test_foreign_patient_reply_cannot_prove_acquisition_before_thread_clear(tmp_path):
-    db = _ledger(tmp_path)
-    try:
-        _store(db, 10)
-        _store(db, 11, parent=10, pid=2, first_seen=time.time() - 30 * 86400)
-        _store(db, 12, parent=10)
-        assert [tuple(row) for row in db.thread_read_candidates(
-            time.time() - run_check.THREAD_READ_WINDOW_S, 10)] == [(1, 10, 12)]
-        adapter = _adapter([True, False], server=[11, 12])
+def test_foreign_patient_reply_is_reported_never_requeued_and_never_cleared(db):
+    _store(db, 10)
+    _store(db, 11, parent=10, pid=2, first_seen=time.time() - 30 * 86400)
+    _store(db, 12, parent=10)
+    for _tick in range(2):
+        adapter = _adapter([True], server=[11, 12])
         result = _result()
         run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+        # a refetch cannot move message 11 to patient 1: nothing is queued,
+        # and patient 1 has not stored it, so the thread is not cleared
+        assert "thread_read: reply_stored_for_other_patient" in result["errors"]
         assert adapter.calls == ["check"]
-        assert result["threads_marked_read"] == []
-        assert [tuple(row) for row in db.db.execute(
-            "SELECT kind,project_id,message_id,parent_id FROM fetch_jobs")] == [
-                ("reply", 1, 11, 10)]
+        assert result.get("threads_marked_read", []) == []
+        assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
         assert db.db.execute("SELECT COUNT(*) FROM thread_read_marks").fetchone()[0] == 0
-        assert db.db.execute(
-            "SELECT project_id FROM messages WHERE message_id=11").fetchone()[0] == 2
-    finally:
-        db.close()
+    # once the reply is stored for this patient the normal clear resumes
+    with db.db:
+        db.db.execute("UPDATE messages SET project_id=1 WHERE message_id=11")
+    adapter = _adapter([True, False], server=[11, 12])
+    result = _result()
+    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    assert result["errors"] == []
+    assert adapter.calls == ["check", "clear", "check"]
+    assert result["threads_marked_read"] == [10]
+
+
+def test_foreign_patient_reply_does_not_stand_in_for_an_unstored_one(db):
+    _store(db, 10)
+    _store(db, 11, parent=10, pid=2, first_seen=time.time() - 30 * 86400)
+    _store(db, 12, parent=10)
+    adapter = _adapter([True], server=[11, 12, 13])
+    result = _result()
+    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    # only 13 (stored nowhere) is fetched; the foreign 11 is reported, not queued
+    assert [tuple(row) for row in db.db.execute(
+        "SELECT kind,project_id,message_id FROM fetch_jobs")] == [("reply", 1, 13)]
+    assert "thread_read: reply_stored_for_other_patient" in result["errors"]
+    assert adapter.calls == ["check"]
+    assert db.db.execute("SELECT COUNT(*) FROM thread_read_marks").fetchone()[0] == 0
 
 
 def test_scoped_stored_reply_ids_keep_settled_body_and_failed_job_contract(db):
