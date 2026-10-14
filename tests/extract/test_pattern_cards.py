@@ -764,3 +764,83 @@ def test_scalar_array_members_do_not_block_linting(tmp_path, snapshot, kind, con
     card_path.write_text(json.dumps(card), encoding="utf-8")
     result = run_cli(card_path, db_path)
     assert result.returncode == 1 and "GateSynthetic" not in result.stdout + result.stderr
+
+
+def test_sender_type_is_a_role_and_same_word_as_a_real_name_still_blocks(tmp_path, snapshot):
+    db_path, _ = snapshot
+    with sqlite3.connect(db_path) as db:
+        db.execute("UPDATE messages SET sender_type='patient'")
+    path = tmp_path / "card.json"
+    path.write_text(json.dumps(clean_card()))
+    result = run_cli(path, db_path)
+    assert result.returncode == 0 and result.stdout == result.stderr == ""
+    insert_name(db_path, "patients.patient_name", "patient")
+    result = run_cli(path, db_path)
+    assert result.returncode == 1 and "patient" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("kind,content", [
+    ("extract_llm", {field: [{"name": "oral"}]} ) for field in ("meds", "labs")
+] + [
+    ("patient_rollup", {field: [{"name": "oral"}]}) for field in (
+        "medications", "unverified_medications", "planned_medications", "recent_labs")
+] + [
+    ("extract_qc", {"items": [{"section": section, "item": {"name": "oral"}}]})
+    for section in ("meds", "labs")
+])
+def test_only_known_clinical_name_positions_are_not_person_names(tmp_path, snapshot, kind, content):
+    db_path, _ = snapshot
+    with sqlite3.connect(db_path) as db:
+        db.execute("INSERT INTO artifacts(kind,content) VALUES(?,?)", (kind, json.dumps(content)))
+    path = tmp_path / "card.json"
+    card = clean_card()
+    card["current_shape"] = "oral"
+    path.write_text(json.dumps(card))
+    result = run_cli(path, db_path)
+    assert result.returncode == 0 and result.stdout == result.stderr == ""
+    insert_name(db_path, "patients.patient_name", "oral")
+    result = run_cli(path, db_path)
+    assert result.returncode == 1 and "oral" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("kind,content", [
+    ("extract_llm", {"contacts": [{"name": "oral"}]}),
+    ("extract_llm", {"meds": [{"name": "合成薬", "actor": {"name": "oral"}}]}),
+    ("extract_llm", {"meds": {"name": "oral"}}),
+    ("extract_qc", {"items": [{"section": "requests", "item": {"name": "oral"}}]}),
+    ("extract_qc", {"items": [{"item": {"name": "oral", "section": "meds"}}]}),
+    ("patient_rollup", {"contacts": [{"name": "oral"}]}),
+    ("unknown_synthetic_kind", {"meds": [{"name": "oral"}]}),
+])
+def test_names_elsewhere_in_clinical_or_unknown_documents_remain_protected(tmp_path, snapshot, kind, content):
+    db_path, _ = snapshot
+    with sqlite3.connect(db_path) as db:
+        db.execute("INSERT INTO artifacts(kind,content) VALUES(?,?)", (kind, json.dumps(content)))
+    path = tmp_path / "card.json"
+    card = clean_card()
+    card["current_shape"] = "oral"
+    path.write_text(json.dumps(card))
+    result = run_cli(path, db_path)
+    assert result.returncode == 1 and "oral" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("origin", ["short_person", "unknown_role_column", "clinical_metadata"])
+def test_known_nonidentity_exceptions_do_not_spread_to_real_names_or_unknown_sources(tmp_path, snapshot, origin):
+    db_path, _ = snapshot
+    with sqlite3.connect(db_path) as db:
+        if origin == "short_person":
+            db.execute("UPDATE patients SET patient_name='p'")
+        elif origin == "unknown_role_column":
+            db.execute("CREATE TABLE future_identity(sender_type TEXT)")
+            db.execute("INSERT INTO future_identity VALUES('patient')")
+        else:
+            db.execute("INSERT INTO artifacts(kind,meta) VALUES('extract_llm',?)",
+                       (json.dumps({"labs": [{"name": "oral"}]}),))
+    card = clean_card()
+    card["current_shape"] = "oral"
+    path = tmp_path / "card.json"
+    path.write_text(json.dumps(card))
+    result = run_cli(path, db_path)
+    assert result.returncode == 1
+    name = {"short_person": "p", "unknown_role_column": "patient", "clinical_metadata": "oral"}[origin]
+    assert name not in result.stdout + result.stderr

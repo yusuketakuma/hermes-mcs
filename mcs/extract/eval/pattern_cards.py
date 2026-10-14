@@ -285,6 +285,19 @@ def _name_key(key: str) -> bool:
     return any(fnmatchcase(_normalise(key), pattern) for pattern in NAME_KEY_PATTERNS)
 
 
+def _clinical_name(kind, path, document) -> bool:
+    """Only declared drug/lab name positions have a non-identity meaning."""
+    if len(path) == 3 and type(path[1]) is int and path[2] == "name":
+        return ((kind == "extract_llm" and path[0] in ("meds", "labs"))
+                or (kind == "patient_rollup" and path[0] in (
+                    "medications", "unverified_medications", "planned_medications", "recent_labs")))
+    if (kind == "extract_qc" and len(path) == 4 and path[0] == "items"
+            and type(path[1]) is int and path[2:] == ("item", "name")):
+        item = document["items"][path[1]]
+        return isinstance(item, dict) and item.get("section") in ("meds", "labs")
+    return False
+
+
 def _generic_names(db: sqlite3.Connection, tables: set[str]) -> set[str]:
     """Harvest matching TEXT columns and nested JSON leaves, failing closed on bounds."""
     names = set()
@@ -293,10 +306,12 @@ def _generic_names(db: sqlite3.Connection, tables: set[str]) -> set[str]:
         for info in db.execute(f"PRAGMA table_xinfo({quoted_table})"):
             column = info[1]
             quoted_column = '"' + column.replace('"', '""') + '"'
-            column_is_name = _name_key(column)
+            # MCS user.type is a role; sender_name remains an explicit identity source.
+            column_is_name = _name_key(column) and (table, column) != ("messages", "sender_type")
+            kind_column = "kind" if (table, column) == ("artifacts", "content") else "NULL"
             # SQLite affinity does not constrain stored types; include actual TEXT values.
-            for (text,) in db.execute(
-                f"SELECT {quoted_column} FROM {quoted_table} "
+            for text, kind in db.execute(
+                f"SELECT {quoted_column},{kind_column} FROM {quoted_table} "
                 f"WHERE typeof({quoted_column})='text'"
             ):
                 if len(text.encode("utf-8")) > _HARVEST_MAX_BYTES:
@@ -307,21 +322,22 @@ def _generic_names(db: sqlite3.Connection, tables: set[str]) -> set[str]:
                     document = json.loads(text, object_pairs_hook=_unique_object)
                 except json.JSONDecodeError:
                     continue  # ordinary non-JSON TEXT, not a structured name container
-                stack: list[tuple[JSON, str | None, int]] = [(document, None, 0)]
+                stack = [(document, None, 0, ())]
                 visited = 0
                 while stack:
-                    value, key, depth = stack.pop()
+                    value, key, depth, path = stack.pop()
                     visited += 1
                     if depth > _HARVEST_MAX_DEPTH or visited > _HARVEST_MAX_NODES:
                         raise ValueError("identity_json_bounds")
                     if isinstance(value, str):
-                        if value.strip() and (column_is_name or (key is not None and _name_key(key))):
+                        if (value.strip() and (column_is_name or (key is not None and _name_key(key)))
+                                and not _clinical_name(kind, path, document)):
                             names.add(value.strip())
                     elif isinstance(value, dict):
-                        stack.extend((child, child_key, depth + 1)
+                        stack.extend((child, child_key, depth + 1, (*path, child_key))
                                      for child_key, child in value.items())
                     elif isinstance(value, list):
-                        stack.extend((child, key, depth + 1) for child in value)
+                        stack.extend((child, key, depth + 1, (*path, index)) for index, child in enumerate(value))
     return names
 
 
