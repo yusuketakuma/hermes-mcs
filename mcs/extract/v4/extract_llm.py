@@ -1927,6 +1927,9 @@ def llm_extract(body: str, *, context: str | None = None,
             if issues and (repair_deadline is None or time.monotonic() < repair_deadline):
                 if completeness and v is not None and on_chunk is not None:
                     if on_chunk(key, {**v, "_quality_status": "started"}) is False:
+                        # Nothing was dispatched: a start that may still have been
+                        # saved is released, so the next run retries the repair.
+                        on_chunk(key, {**v, "_quality_status": "pending"})
                         return _DEFERRED
                     if repair_deadline is not None and repair_deadline - time.monotonic() < _MIN_REPAIR_S:
                         # The checkpoint wait spent the reserve, before any
@@ -3427,7 +3430,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         r, ctx = jobs[index][0], jobs[index][1]
         saved = False
         try:
-            if (isinstance(value, dict) and "_quality_status" in value
+            # Only a start precedes a dispatch; releasing an unsent start back
+            # to pending stays durable after the deadline (owner check below).
+            if (isinstance(value, dict) and value.get("_quality_status") == "started"
                     and (checkpoint_stopped.is_set() or time.monotonic() >= deadline)):
                 return False
             if _owns_current_source(ledger, r, leases[index]):

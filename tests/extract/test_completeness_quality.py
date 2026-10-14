@@ -468,3 +468,46 @@ def test_non_object_final_metadata_remains_attention_read_only(tmp_path, meta):
         assert result["completed"] == 0 and result["total"] == 1
     finally:
         db.close()
+
+
+def test_unsent_start_saved_past_the_deadline_is_released_for_the_next_run(tmp_path, monkeypatch):
+    """A start persisted just before its acknowledgement wait expires was never
+    dispatched: the run must leave it pending so the next run repairs it."""
+    db = _ledger(tmp_path)
+    body = PREFIX + "本人の血圧120/80です。"
+    db.save_messages([_message(mid=i, body="合成" + label + "。" + body)
+                      for i, label in ((1, "A"), (2, "B"))])
+    monkeypatch.setattr(extract_llm, "_probe_format", lambda **kwargs: "plain")
+    real_clock, offset = time.monotonic, [0.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: real_clock() + offset[0])
+    real_persist = extract_llm._persist_chunks
+
+    def persist(ledger, r, chunks, *a, **k):
+        real_persist(ledger, r, chunks, *a, **k)
+        if any(isinstance(v, dict) and v.get("_quality_status") == "started"
+               for v in chunks.values()):
+            offset[0] = 10_000.0            # saved, then the ack wait hits the deadline
+    monkeypatch.setattr(extract_llm, "_persist_chunks", persist)
+    repairs = []
+
+    def model(prompt, **kwargs):
+        if "未収載" in prompt:
+            repairs.append(prompt)
+            return {**copy.deepcopy(OBSERVATIONS), "vitals": {"sbp": 120, "dbp": 80}}
+        return copy.deepcopy(OBSERVATIONS)
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    try:
+        first = extract_llm.run_pending(db, budget_s=300, workers=2)
+        assert first["done"] == 0 and not repairs
+        newest = {}
+        for mid, meta in db.db.execute("SELECT message_id,meta FROM artifacts "
+                                       "WHERE kind='extract_llm_chunk' ORDER BY artifact_id"):
+            newest[mid] = json.loads(meta).get("quality_status")
+        assert newest == {1: "pending", 2: "pending"}     # newest checkpoint is resumed
+        offset[0] = 0.0
+        monkeypatch.setattr(extract_llm, "_persist_chunks", real_persist)
+        second = extract_llm.run_pending(db, budget_s=300, workers=2)
+        assert second["done"] == 2 and len(repairs) == 2
+    finally:
+        db.close()
