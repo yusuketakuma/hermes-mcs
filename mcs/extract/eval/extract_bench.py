@@ -42,6 +42,20 @@ flag and measured_on must match when the label carries them (null pins
 absent). Only quote-supported outputs count: an unverified lab is shown
 apart as a candidate, so it is neither TP nor FP. A forbid lab label
 pinning "unverified": false is violated only by a confirmed output.
+
+Patient context (scored only when a case gives `expect.patient_context`)
+labels are {"category", "detail_key"?, "value_contains"?, "subject"?}.
+An output item counts only after the validator's own grounding (its
+evidence, and each detail's, located in the body). Each grounded item
+and each of its grounded details is a separate scoring unit: a label
+without detail_key matches item units on category and the item text,
+a label with detail_key matches detail units of that key and value, and
+subject compares the parent item. So two different details of one item
+are two facts, a category label and a detail label may both hit the
+same item, and one unit never satisfies two labels. Like events,
+unlisted extras are not FP — the model legitimately records more context
+than a case labels — but a forbid match is. Per-category counts are
+reported as patient_context.<category>.
 """
 from __future__ import annotations
 
@@ -141,6 +155,36 @@ def _match_lab(expected: dict, got: list) -> bool:
                for item in got)
 
 
+_CONTEXT_KEYS = frozenset({"category", "detail_key", "value_contains", "subject"})
+
+
+def _context_units(body: str, got: list) -> list[dict]:
+    """Grounded items and their grounded details, each one scoring unit."""
+    import patient_context
+    units = []
+    for item in got:
+        if not isinstance(item, dict):
+            continue
+        grounded = patient_context.context_items({"patient_context": [item]}, body)
+        if not grounded:
+            continue
+        clean = grounded[0]
+        parent = {"category": clean["category"], "subject": item.get("subject")}
+        units.append({**parent, "detail_key": None, "value": clean["text"]})
+        units.extend({**parent, "detail_key": d["key"], "value": d["value"]}
+                     for d in clean.get("details", []))
+    return units
+
+
+def _match_context(expected: dict, got: list) -> bool:
+    want = expected.get("value_contains")
+    return any(unit["category"] == expected.get("category")
+               and unit["detail_key"] == expected.get("detail_key")
+               and ("subject" not in expected or unit["subject"] == expected["subject"])
+               and (want is None or want in unit["value"])
+               for unit in got)
+
+
 def _reply_kind(section) -> str | None:
     return section.get("kind") if isinstance(section, dict) else None
 
@@ -196,6 +240,12 @@ def _score_case(case: dict, out: dict | None) -> dict:
             fields["vitals"] = {"tp": 0, "fp": 0, "fn": len(exp["vitals"])}
         if "labs" in exp:
             fields["labs"] = {"tp": 0, "fp": 0, "fn": len(exp["labs"])}
+        if "patient_context" in exp:
+            fields["patient_context"] = {"tp": 0, "fp": 0, "fn": len(exp["patient_context"])}
+            for label in exp["patient_context"]:
+                c = fields.setdefault(f"patient_context.{label['category']}",
+                                      {"tp": 0, "fp": 0, "fn": 0})
+                c["fn"] += 1
         if "urgency" in exp:
             fields["urgency"] = {"tp": 0, "fp": 0, "fn": 1}
         if "reply" in exp:
@@ -230,6 +280,15 @@ def _score_case(case: dict, out: dict | None) -> dict:
         fields["labs"] = _field_pr(
             exp["labs"], [lab for lab in got_labs if isinstance(lab, dict)
                           and not lab.get("unverified")], _match_lab)
+    got_context = out.get("patient_context") or []
+    context_units = _context_units(case.get("body", ""), got_context)
+    if "patient_context" in exp:
+        fields["patient_context"] = _field_pr(
+            exp["patient_context"], context_units, _match_context, strict_fp=False)
+        for category in sorted({label["category"] for label in exp["patient_context"]}):
+            fields[f"patient_context.{category}"] = _field_pr(
+                [label for label in exp["patient_context"] if label["category"] == category],
+                context_units, _match_context, strict_fp=False)
     if "urgency" in exp:
         ok = out.get("urgency") == exp["urgency"]
         fields["urgency"] = {"tp": int(ok), "fp": int(not ok),
@@ -270,6 +329,13 @@ def _score_case(case: dict, out: dict | None) -> dict:
                       if _match_request(request, got_requests))
     violations.extend(f"labs:{fl.get('name')}" for fl in
                       forbid.get("labs", []) if _match_lab(fl, got_labs))
+    for label in forbid.get("patient_context", []):
+        if _match_context(label, context_units):
+            path = ".".join(filter(None, (label["category"], label.get("detail_key"))))
+            violations.append(f"patient_context:{path}")
+            for field in ("patient_context", f"patient_context.{label['category']}"):
+                if field in fields:
+                    fields[field]["fp"] += 1
     if "urgency" in forbid and out.get("urgency") == forbid["urgency"]:
         violations.append(f"urgency:{forbid['urgency']}")
     forbid_reply = forbid.get("reply")
@@ -287,6 +353,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
     score["raw"]["reply"] = got_reply
     if "labs" in exp:
         score["raw"]["labs"] = got_labs
+    if "patient_context" in exp or "patient_context" in forbid:
+        score["raw"]["patient_context"] = got_context
     if "reply" in exp:
         score["reply_expected"] = _reply_kind(exp["reply"])
     return score
@@ -366,9 +434,21 @@ def _section_valid(section) -> bool:
     bad kind KEY, and the bench's reply shapes (null / list) are not
     extractor output."""
     import extract_llm
+    import patient_context
     if not isinstance(section, dict):
         return False
     section = dict(section)
+    # bench-only label shape (no quote to ground): check its vocabulary here
+    contexts = section.pop("patient_context", [])
+    if not isinstance(contexts, list) or any(
+            not isinstance(label, dict) or set(label) - _CONTEXT_KEYS
+            or label.get("category") not in patient_context.CATEGORIES
+            or ("detail_key" in label and label["detail_key"] not in patient_context.DETAIL_KEYS)
+            or ("value_contains" in label and not (
+                isinstance(label["value_contains"], str) and label["value_contains"].strip()))
+            or ("subject" in label and label["subject"] not in ("patient", "family", "other"))
+            for label in contexts):
+        return False
     replies = section.pop("reply", None)
     for r in (replies if isinstance(replies, list) else [replies]):
         if r is not None and _reply_kind(r) not in extract_llm._REPLY_KINDS:
