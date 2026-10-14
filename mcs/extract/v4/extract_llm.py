@@ -1683,13 +1683,15 @@ _RX_ANY = "|".join(_RX_WORDS.values())
 # A non-current change is denied, done, planned or weighed right at its own word:
 # 中止しません, 中止しなかった, 中止はしない, 変更無し, 中止済み, 開始予定, 中止は見送り.
 # A later predicate (中止し経過観察予定) or earlier text (副作用なしで) is something else.
-_RX_NOT_CURRENT = (r"(?:を|は|も|が|の)?\s*(?:し|する|して|され)?"
+# いたし/致し (開始いたします) is a polite form of し: it keeps the meaning that follows
+_RX_VERB = r"(?:を|は|も|が|の)?\s*(?:いた|致)?(?:し|する|して|され)?"
+_RX_NOT_CURRENT = (_RX_VERB +
                    r"(?:ない|なく|なかっ|ません|せず|無し|なし|不要|済み|予定|検討|見送|拒否|ありません"
                    # a question asks nothing either: 開始しますか
                    r"|ますか|でしょうか|か[？?])")
 # A requested, consulted or not yet done change is checked as planned, never as done:
 # 開始してください, 追加を相談, 開始します
-_RX_PLANNED = (r"(?:を|は|も|が|の)?\s*(?:し|する|して|され)?"
+_RX_PLANNED = (_RX_VERB +
                r"(?:ください|下さい|ほしい|欲しい|お願い|相談|依頼|提案|ます(?!た|か))")
 # 明日から架空薬Aを開始: a future time in the change's own clause
 _RX_FUTURE = r"明日|明後日|来週|来月|今後|次回|後日|翌日|今度|週明け"
@@ -1847,11 +1849,11 @@ def _rx_bindings(hints, names, body, *, every=False):
         lead = head + _clause_start(body[head:start])
         close = end + mark.start() if mark else tail
         while True:
-            # から and 、 are no clause break inside AからBへ変更, 2.5mgから5mgへ増量
-            # or A5mg、Bを開始: the drug before them belongs to this change
+            # から and 、 are no clause break inside AからBへ変更, 2.5mgから5mgへ増量,
+            # 明日から開始 or A5mg、Bを開始: the drug before them belongs to this change
             joined = (re.search(_RX_DOSE + "から$", body[head:lead]) if code == "change" else None)
             joined = (joined if joined and body[head:head + joined.start()].endswith(tuple(names))
-                      else re.search(f"(?:{_RX_AMOUNT})\\s*から$", body[head:lead])
+                      else re.search(f"(?:{_RX_AMOUNT}|{_RX_FUTURE}|{_RX_NOW})\\s*から$", body[head:lead])
                       or re.search(_RX_DOSE + r"\s*[、，,]$", body[head:lead]))
             if not joined or not (joined.group(0).endswith("から")
                                   or body[head:head + joined.start()].endswith(tuple(names))):
@@ -1862,8 +1864,9 @@ def _rx_bindings(hints, names, body, *, every=False):
                 break
         # a condition, history or plan qualifies the whole clause (もし…場合, 以前に…);
         # whose drug it is, is decided per drug below (本人のAと母のBを開始)
-        if not every and (re.match(_RX_NOT_CURRENT, body[end:close]) or extract.patient_source_scope(
-                scoped, start, end) in ("conditional", "past", "planned", "unknown")):
+        clause_scope = extract.patient_source_scope(scoped, start, end)
+        if not every and (re.match(_RX_NOT_CURRENT, body[end:close])
+                          or clause_scope in ("conditional", "past", "unknown")):
             continue
         # から is no break for a time (明日から), but 通院予定ですが、 is another clause
         breaks = list(re.finditer(r"ので|ため|けど|けれど|が、|、", body[head:start]))
@@ -1873,7 +1876,7 @@ def _rx_bindings(hints, names, body, *, every=False):
         future = [m.start() for m in re.finditer(_RX_FUTURE, when)]
         now = [m.start() for m in re.finditer(_RX_NOW, when)]
         planned = ("consult" if asked and re.search(r"相談|提案", asked.group(0)) else bool(
-            asked or (future and (not now or future[-1] > now[-1]))))
+            asked or clause_scope == "planned" or (future and (not now or future[-1] > now[-1]))))
         # this change word's objects: AとBを開始 names two, Aを開始しBも開始 one each
         prior = list(re.finditer(_RX_ANY, body[lead:start]))
         base = lead + (prior[-1].end() if prior else 0)
@@ -1979,9 +1982,20 @@ def _rx_action_gaps(v, hints, body):
                     if target is None else med["name"] == target)
                 and any(m.start() < close and m.end() > lead
                         for m in re.finditer(re.escape(med["evidence"]), body))]
+        # an item of the other state (done beside a planned change, or planned beside a
+        # done one) contradicts unless the source states that action in that state too
+        others = [med for med in _rx_covering(v, not planned)
+                  if (_rx_bounded(med["name"], body[lead:close]) if target is None else med["name"] == target)
+                  and any(m.start() < close and m.end() > lead
+                          for m in re.finditer(re.escape(med["evidence"]), body))]
+        if any(med.get("action") in _RX_CONFLICT - stated.get((med["name"], not planned), set())
+               for med in others):
+            return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
         if planned == "consult":
-            # 追加を相談: a planned item is enough; a consultation states no action
-            if not mine:
+            # 追加を相談: a planned item is enough, with no action; a planned action the
+            # consultation does not name (相談した追加に中止) still contradicts it
+            if not mine or any(med.get("action") in _RX_CONFLICT - allowed
+                               - stated.get((med["name"], True), set()) for med in mine):
                 return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
             continue
         # a wrong action kept beside the right one is a contradiction, not a repair;
