@@ -83,7 +83,13 @@ def read_regular_nofollow(path, limit: int, error, *,
     within ``limit``).  The caller rejects a result longer than ``limit``
     with its own error, since the file may grow after the fstat."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
+    try:
+        # fdopen raises (e.g. IsADirectoryError) without closing ``fd``
+        stream = os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+    with stream:
         st = os.fstat(stream.fileno())
         if not stat.S_ISREG(st.st_mode) or (check_size and st.st_size > limit):
             raise error()

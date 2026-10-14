@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "詳細診断で監査充足率だけが上限を超えても他の集計を表示",
+  "summary": "詳細診断（semantic_observe）で、最も重い現行監査の充足率の集計が読取り上限を超えた場合、その項目だけを確認不能とし、ジョブ件数・待ち時間・工程別の進捗は表示します。診断全体は完了扱いにせず、終了コード2を返します。",
+  "upgrade": "追加操作は不要です。読取り上限（10秒・20万項目・64MiB）は変わりません。JSONではobservation.statusがpartialとなり、unavailable_componentsに対象が示されます。",
+  "details": [
+    "current_qualityを同じ予算の最後に実行し、上限超過時はavailable=falseと理由だけを返す。他の部品の上限超過は従来どおり全体をunavailableにする。",
+    "partialの観測はJSON・表示とも終了コード2。",
+    "current_qualityの完了後にも期限を再確認し、最後の参照が期限を越えた場合もpartialとする。"
+  ],
+  "refs": [
+    "mcs/ops/semantic_observe.py",
+    "tests/semantic/test_semantic_observe.py"
+  ]
+}

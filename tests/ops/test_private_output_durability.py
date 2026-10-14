@@ -129,3 +129,54 @@ def test_bundled_directory_creation_sync_failure_is_retryable(
     monkeypatch.setattr(mcs_drug, "fsync_dir", fsync_dir)
     assert mcs_drug.main(argv) == 0
     assert json.loads(capsys.readouterr().out)["state"] == "written"
+
+
+def test_bundled_retry_after_unsynced_publication_syncs_before_present(
+        tmp_path, monkeypatch, capsys):
+    home = tmp_path / "home"
+    folder = home / "data" / "drug-map"
+    from safe_io import fsync_dir
+
+    def failing(directory):
+        if directory == folder:
+            raise OSError(errno.EIO, "synthetic publication sync failure")
+        return fsync_dir(directory)
+
+    monkeypatch.setattr(mcs_drug, "HOME", str(home))
+    monkeypatch.setattr(mcs_drug, "BUNDLE", _bundle(tmp_path))
+    argv = ["install-bundled", "--terms-checked-on", importer.EDITION_DATE.isoformat(),
+            "--confirmed-by", "synthetic", "--json"]
+    monkeypatch.setattr(importer, "fsync_dir", failing)
+    assert mcs_drug.main(argv) == 1
+    first = json.loads(capsys.readouterr().out)
+    assert first["reason"] == "output_published_sync_unconfirmed" and first["written"]
+    # the same retry must not call the unsynced entry "present" without syncing it
+    monkeypatch.setattr(mcs_drug, "fsync_dir", failing)
+    assert mcs_drug.main(argv) == 1
+    again = json.loads(capsys.readouterr().out)
+    assert again["reason"] == "output_published_sync_unconfirmed" and again["written"]
+    synced = []
+
+    def recording(directory):
+        synced.append(directory)
+        return fsync_dir(directory)
+
+    monkeypatch.setattr(mcs_drug, "fsync_dir", recording)
+    assert mcs_drug.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["state"] == "present"
+    assert synced == [folder.resolve()]
+
+
+def test_bundled_install_succeeds_under_an_owner_unreadable_umask(tmp_path):
+    home = tmp_path / "home"
+    args = SimpleNamespace(terms_checked_on=importer.EDITION_DATE.isoformat(),
+                           terms_record=None, confirmed_by="synthetic", approved_by=None)
+    bundle = _bundle(tmp_path)
+    previous = os.umask(0o400)
+    try:
+        result = mcs_drug.install_bundled(args, directory=bundle, home=str(home))
+    finally:
+        os.umask(previous)
+    assert result["state"] == "written"
+    for directory in (home, home / "data", home / "data" / "drug-map"):
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
