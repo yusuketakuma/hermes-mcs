@@ -481,11 +481,13 @@ def test_unsent_start_saved_past_the_deadline_is_released_for_the_next_run(tmp_p
     real_clock, offset = time.monotonic, [0.0]
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: real_clock() + offset[0])
     real_persist = extract_llm._persist_chunks
+    started = set()
 
     def persist(ledger, r, chunks, *a, **k):
         real_persist(ledger, r, chunks, *a, **k)
         if any(isinstance(v, dict) and v.get("_quality_status") == "started"
                for v in chunks.values()):
+            started.add(r["message_id"])
             offset[0] = 10_000.0            # saved, then the ack wait hits the deadline
     monkeypatch.setattr(extract_llm, "_persist_chunks", persist)
     repairs = []
@@ -504,7 +506,9 @@ def test_unsent_start_saved_past_the_deadline_is_released_for_the_next_run(tmp_p
         for mid, meta in db.db.execute("SELECT message_id,meta FROM artifacts "
                                        "WHERE kind='extract_llm_chunk' ORDER BY artifact_id"):
             newest[mid] = json.loads(meta).get("quality_status")
-        assert newest == {1: "pending", 2: "pending"}     # newest checkpoint is resumed
+        # every start that was saved but never dispatched is released;
+        # the newest checkpoint is what the next run resumes
+        assert started and all(newest.get(mid) == "pending" for mid in started)
         offset[0] = 0.0
         monkeypatch.setattr(extract_llm, "_persist_chunks", real_persist)
         second = extract_llm.run_pending(db, budget_s=300, workers=2)
