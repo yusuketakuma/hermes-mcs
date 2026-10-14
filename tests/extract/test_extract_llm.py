@@ -2647,7 +2647,8 @@ def test_v4_publication_between_prepare_and_insert_fences_legacy(tmp_path):
     published = []
 
     def publish_before_insert(sql):
-        if not published and sql.startswith("INSERT INTO artifacts(kind,"):
+        # The prior comparison now owns a write lock; race before that boundary.
+        if not published and sql == "BEGIN IMMEDIATE":
             other.artifact_add("semantic_facts_v4", '{"meds":[]}',
                                project_id=1, message_id=1,
                                meta={"hash": row["content_hash"], "engine_version": 4,

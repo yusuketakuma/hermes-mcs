@@ -76,6 +76,7 @@ from mcs_util import (CONF_PATH, HOME, acquire_run_lock, circuit_failure, circui
                       circuit_streak,
                       circuit_success, disk_floor_mb, disk_free_mb,
                       json_object, load_config, locate_quote_span,
+                      loads_dict,
                       text_chunks)  # noqa: F401 — historical helper re-export
 
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -2867,6 +2868,10 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
                          ensure_ascii=False),
         project_id=r["project_id"], message_id=r["message_id"],
         model=actual_model, meta=meta)
+    if attempts + 1 >= 5:
+        prior = _prior_extract(ledger.db, r)
+        if prior and loads_dict(prior["meta"]).get("extract_version") != EXTRACT_VERSION:
+            _record_hold_tx(ledger, r, prior, "attempts_exhausted")
 
 
 # Nightly automatic retry of permanently failed extractions (owner
@@ -3021,6 +3026,88 @@ def _current(ledger, mid: int, content_hash: str) -> bool:
         (KIND, mid, content_hash, EXTRACT_VERSION)).fetchone() is not None
 
 
+UPGRADE_KIND = "extract_upgrade_v1"
+
+
+def _upgrade_contract() -> str:
+    return hashlib.sha256(json.dumps([EXTRACT_VERSION, PATIENT_CONTEXT_VERSION,
+        _LOADED_SOURCE_DIGESTS], sort_keys=True).encode()).hexdigest()
+
+
+def _prior_extract(db, r):
+    return db.execute(
+        "SELECT a.* FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
+        f"WHERE a.kind=? AND m.message_id=? AND m.project_id=? AND m.content_hash=? {current_extract_pred()} "
+        "ORDER BY a.artifact_id DESC LIMIT 1",
+        (KIND, r["message_id"], r["project_id"], r["content_hash"])).fetchone()
+
+
+def _retains_assertion(prior, candidate):
+    if isinstance(prior, dict):
+        return isinstance(candidate, dict) and all(
+            key in ("evidence", "normalized", "unverified") or key.startswith("_")
+            or value is None or _retains_assertion(value, candidate.get(key))
+            for key, value in prior.items())
+    if isinstance(prior, list):
+        return isinstance(candidate, list) and all(
+            any(_retains_assertion(item, other) for other in candidate) for item in prior)
+    return type(prior) is type(candidate) and prior == candidate
+
+
+def _protected_lost(prior, candidate, body):
+    """Count grounded negation/nonpatient assertions lost by an automatic replacement."""
+    old, new = _validate(prior, body) or {}, _validate(candidate or {}, body) or {}
+    lost = {}
+    for field in _FACT_LIST_FIELDS:
+        for item in old.get(field) or []:
+            if (not isinstance(item, dict)
+                    or not (item.get("negated") is True or item.get("subject") in ("family", "other"))
+                    or locate_quote_span(body, item.get("evidence")) is None):
+                continue
+            if not any(_retains_assertion(item, other) for other in new.get(field) or []):
+                lost[field] = lost.get(field, 0) + 1
+    return lost
+
+
+def _hold_sql(*, human=False):
+    """Source-bound private receipts; a fresh human report bypasses automatic holds."""
+    prior = ("c.artifact_id" if human else "(SELECT p.artifact_id FROM artifacts p "
+        "JOIN messages pm ON pm.message_id=p.message_id "
+        f"WHERE p.kind='{KIND}' AND pm.message_id=m.message_id "
+        + current_extract_pred("p", "pm") + " ORDER BY p.artifact_id DESC LIMIT 1)")
+    reason = ("json_extract(u.content,'$.reason')='human_failed' "
+              "AND json_extract(u.content,'$.feedback_id')=h.artifact_id" if human else
+              "json_extract(u.content,'$.reason') IN ('protected_loss','qc_failed')")
+    return f"""SELECT 1 FROM artifacts u WHERE u.kind='{UPGRADE_KIND}'
+        AND u.project_id=m.project_id AND u.message_id=m.message_id
+        AND CASE WHEN json_valid(u.content) AND json_valid(u.meta) THEN
+            json_extract(u.content,'$.state')='held_prior'
+            AND json_extract(u.content,'$.hash')=m.content_hash
+            AND json_type(u.content,'$.prior_artifact_id')='integer'
+            AND json_extract(u.content,'$.prior_artifact_id')={prior}
+            AND json_extract(u.content,'$.target_version')={EXTRACT_VERSION}
+            AND json_extract(u.content,'$.contract')='{_upgrade_contract()}'
+            AND COALESCE(json_extract(u.meta,'$.invalidated'),0)=0
+            AND {reason} ELSE 0 END"""
+
+
+def _record_hold_tx(ledger, r, prior, reason, *, lost=None, feedback_id=None):
+    receipt = {"state": "held_prior", "reason": reason, "hash": r["content_hash"],
+        "prior_artifact_id": prior["artifact_id"], "target_version": EXTRACT_VERSION,
+        "contract": _upgrade_contract()}
+    if lost:
+        receipt["lost"] = lost
+    if feedback_id is not None:
+        receipt["feedback_id"] = feedback_id
+    raw = json.dumps(receipt, sort_keys=True)
+    if not ledger.db.execute(
+            "SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND message_id=? AND content=?",
+            (UPGRADE_KIND, r["project_id"], r["message_id"], raw)).fetchone():
+        ledger.artifact_add_tx(UPGRADE_KIND, raw, project_id=r["project_id"], message_id=r["message_id"],
+            meta={"hash": r["content_hash"], "contract": receipt["contract"]})
+    # Settled rejected chunks must never become a fresh human correction's input.
+    ledger.db.execute("DELETE FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=?",
+                      (r["message_id"],))
 
 def _replace_current(ledger, r, content: str, ctx: bool = False,
                      integrity: dict | None = None,
@@ -3057,29 +3144,55 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
         meta["qc_fix"] = qc_fix
     if extra_meta:
         meta.update(extra_meta)
+    held_prior = False
     with ledger.db:
-        # Source and v4 admission are checked by the INSERT itself, under
-        # SQLite's write lock; a preceding SELECT is not a transaction fence.
-        cur = ledger.db.execute(
-            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
-            "SELECT ?,project_id,message_id,?,?,?,? FROM messages m "
-            "WHERE message_id=? AND content_hash=? "
+        if not ledger.db.in_transaction:
+            ledger.db.execute("BEGIN IMMEDIATE")
+        source = ledger.db.execute(
+            "SELECT project_id,body_text FROM messages m WHERE message_id=? AND content_hash=? AND project_id=? "
             "AND (body_state IS NULL OR body_state='full') "
             f"AND {current_v4_id()} IS NULL",
-            (KIND, content, actual_model, json.dumps(meta), time.time(),
-             r["message_id"], r["content_hash"]))
-        if not cur.rowcount:
+            (r["message_id"], r["content_hash"], r["project_id"])).fetchone()
+        if source is None:
             return False
-        ledger.db.execute("""
-          DELETE FROM artifacts WHERE kind=? AND message_id=?
-            AND json_valid(meta)
-            AND artifact_id != ?
-        """, (KIND, r["message_id"], cur.lastrowid))
-        project_id = ledger.db.execute(
-            "SELECT project_id FROM artifacts WHERE artifact_id=?",
-            (cur.lastrowid,)).fetchone()[0]
+        prior = _prior_extract(ledger.db, r)
+        human = extra_meta.get("human_fix") if isinstance(extra_meta, dict) else None
+        old = loads_dict(prior["content"]) if prior else None
+        lost = _protected_lost(old, loads_dict(content), source["body_text"]) if old else {}
+        prior_meta = loads_dict(prior["meta"]) if prior else None
+        human_failed = isinstance(human, dict) and human.get("applied") is False
+        qc_failed = isinstance(qc_fix, dict) and qc_fix.get("applied") is False
+        old_carry = (prior_meta and prior_meta.get("extract_version") != EXTRACT_VERSION
+                     and (human_failed or qc_failed))
+        if old_carry or (lost and not (isinstance(human, dict) and human.get("applied") is True)):
+            reason = ("human_failed" if human_failed else "qc_failed") if old_carry else "protected_loss"
+            _record_hold_tx(ledger, r, prior, reason,
+                            lost=lost, feedback_id=human.get("feedback_id") if human else None)
+            held_prior = True
+        else:
+            if prior_meta and prior_meta.get("extract_version") != EXTRACT_VERSION:
+                meta["upgrade"] = {"prior_artifact_id": prior["artifact_id"],
+                    "prior_version": prior_meta.get("extract_version"),
+                    "facts_lost": len(_facts(_validate(old, source["body_text"]) or {})
+                                      - _facts(_validate(loads_dict(content) or {}, source["body_text"]) or {}))}
+            # Keep the INSERT fence even though the prior check owns the write lock.
+            cur = ledger.db.execute(
+                "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                "SELECT ?,project_id,message_id,?,?,?,? FROM messages m "
+                "WHERE message_id=? AND content_hash=? "
+                "AND (body_state IS NULL OR body_state='full') "
+                f"AND {current_v4_id()} IS NULL",
+                (KIND, content, actual_model, json.dumps(meta), time.time(),
+                 r["message_id"], r["content_hash"]))
+            if not cur.rowcount:
+                return False
+            ledger.db.execute(
+                "DELETE FROM artifacts WHERE kind=? AND message_id=? "
+                "AND json_valid(meta) AND artifact_id != ?",
+                (KIND, r["message_id"], cur.lastrowid))
+        project_id = source["project_id"]
     _rerender_cards(ledger, project_id, r["message_id"])
-    return True
+    return not held_prior
 
 
 def _rerender_cards(ledger, project_id, message_id) -> None:
@@ -3149,6 +3262,7 @@ def _human_flagged_sql(val: str = "h.artifact_id") -> str:
           AND h.message_id=m.message_id
           AND c.kind='{KIND}' AND c.message_id=m.message_id
           {current_extract_pred('c')}
+          AND NOT EXISTS ({_hold_sql(human=True)})
         ORDER BY h.artifact_id DESC LIMIT 1"""
 
 
@@ -3184,7 +3298,8 @@ def pending_pred() -> str:
                         WHERE f.kind='{KIND}' AND f.message_id=m.message_id
                           {current_extract_pred('f')}
                           AND json_extract({json_or_null('f.meta')},'$.extract_version')={EXTRACT_VERSION}
-                          AND json_extract({json_or_null('f.meta')},'$.qc_fix') IS NOT NULL))
+                          AND json_extract({json_or_null('f.meta')},'$.qc_fix') IS NOT NULL)
+        AND (NOT {_has_kind(UPGRADE_KIND, 'u0', project=True)} OR NOT EXISTS ({_hold_sql()})))
              OR ({_has_kind(EXTRACT_FEEDBACK_KIND, 'h0')}
                  AND EXISTS ({_human_flagged_sql(val="1")})))"""
 
@@ -3597,6 +3712,12 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
 
     counts = [count(i, piece) for i, piece in enumerate(roots)]
     out.update(completed=sum(part[0] for part in counts), total=sum(part[1] for part in counts))
+    queued = db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND m.project_id=? "
+                  f"AND ({pending_pred()}) AND ({_retry_budget_sql()})",
+                  (r["message_id"], r["project_id"])).fetchone()
+    if not queued and db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND EXISTS ({_hold_sql()})",
+                  (r["message_id"],)).fetchone():
+        return out
     binding = _chunk_context(r, context)
     final = db.execute("SELECT content,meta,model FROM artifacts WHERE kind=? AND message_id=? "
                        "AND (project_id IS NULL OR project_id=?) ORDER BY artifact_id DESC LIMIT 1",
@@ -3605,6 +3726,8 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
         try:
             meta, document = json.loads(final["meta"]), json.loads(final["content"])
         except (ValueError, TypeError, RecursionError):
+            return out
+        if not isinstance(meta, dict):
             return out
         bound = (isinstance(meta, dict) and meta.get("hash") == r["content_hash"]
                  and meta.get("extract_version") == EXTRACT_VERSION
@@ -3622,6 +3745,12 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
         # absent is legacy-complete; a present malformed record is never complete
         quality = (integrity.get("completeness", {}) if isinstance(integrity, dict)
                    else {} if isinstance(meta, dict) and "integrity" not in meta else None)
+        validation = integrity.get("validation") if isinstance(integrity, dict) else None
+        if bound and isinstance(integrity, dict) and "validation" in integrity and (
+                not isinstance(validation, dict) or any(
+                    type(validation.get(key)) is not int or validation[key] < 0
+                    for key in ("items_dropped", "evidence_dropped"))):
+            return out
         if bound and (not isinstance(quality, dict) or any(
                 not isinstance(entry, dict) or entry.get("state") != "hint_gaps_resolved"
                 # resolved is written with an integer 0 remaining; anything else
@@ -3637,8 +3766,11 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
             out.update(state="complete", completed=out["total"])
             return out
         if not bound or meta.get("error"):
+            if queued:
+                out["state"] = "processing"  # backoff and another worker's lease still mean queued
             return out
-    out["state"] = "processing"
+    elif queued:
+        out["state"] = "processing"
     return out
 
 
@@ -3698,6 +3830,7 @@ def _mark_prefiltered(ledger, r) -> bool:
     path as _replace_current (v4 fence, hash gate, supersede sweep)."""
     return _replace_current(
         ledger, r, _PREFILTER_CONTENT,
+        integrity={"validation": {"items_dropped": 0, "evidence_dropped": 0}},
         extra_meta={"prefilter": "no_signal"})
 
 
@@ -3758,6 +3891,44 @@ _ERROR_ROWS_SQL = """FROM artifacts e WHERE e.message_id=m.message_id AND e.kind
                  ELSE 0 END"""
 
 
+def _retry_budget_sql() -> str:
+    """Shared selection/progress boundary; waiting does not mean exhausted."""
+    return f"""NOT EXISTS (SELECT 1 FROM artifacts bad
+        WHERE bad.kind='{KIND}' AND bad.message_id=m.message_id AND NOT json_valid(bad.meta))
+        AND NOT EXISTS (SELECT 1 FROM artifacts e WHERE e.kind='{KIND}' AND e.message_id=m.message_id
+          AND CASE WHEN json_valid(e.meta) THEN json_extract(e.meta,'$.error')=1
+            AND COALESCE(json_extract(e.meta,'$.extract_version'),0)={EXTRACT_VERSION}
+            AND json_extract(e.meta,'$.hash')=m.content_hash
+            AND COALESCE(json_extract(e.meta,'$.attempts'),0)>=5 ELSE 0 END)"""
+
+
+def upgrade_status(db, *, model: str | None) -> dict:
+    """Count every full-source upgrade outcome once, without exposing source or identifiers."""
+    out = dict.fromkeys(("done_clean", "held_prior", "needs_review", "failed", "pending",
+                         "projection_shadowed"), 0)
+    rows = db.execute(f"""SELECT m.*, ({current_v4_id()}) AS projection,
+        (SELECT a.meta FROM artifacts a WHERE a.kind='{KIND}' AND a.message_id=m.message_id
+            {current_extract_pred()} ORDER BY a.artifact_id DESC LIMIT 1) AS latest_meta,
+        ({pending_pred()}) AS pending, ({_retry_budget_sql()}) AS retryable,
+        EXISTS ({_hold_sql()}) AS held,
+        EXISTS (SELECT 1 {_ERROR_ROWS_SQL}
+            AND COALESCE(json_extract({json_or_null('e.meta')},'$.attempts'),0)>=5) AS failed
+        FROM messages m WHERE {ELIGIBLE_MESSAGE}""", (KIND, EXTRACT_VERSION))
+    for row in rows:
+        integrity = (loads_dict(row["latest_meta"]) or {}).get("integrity")
+        validation = integrity.get("validation") if isinstance(integrity, dict) else None
+        dropped = isinstance(validation, dict) and any(
+            type(validation.get(key)) is int and validation[key] > 0
+            for key in ("items_dropped", "evidence_dropped"))
+        state = ("projection_shadowed" if row["projection"] is not None else
+                 "failed" if row["failed"] else "held_prior" if row["held"] else
+                 "pending" if row["pending"] and row["retryable"] else
+                 "done_clean" if not dropped and progress_for_message(db, row, model=model)["state"] == "complete" else
+                 "needs_review")
+        out[state] += 1
+    return {"target_version": EXTRACT_VERSION, **out, "total": sum(out.values())}
+
+
 def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None) -> str:
     """run_pending's due-row selection.
 
@@ -3788,11 +3959,8 @@ def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None) -> str:
                           AND claim.project_id=m.project_id
                           AND claim.message_id=m.message_id
                           AND claim.next_try > ?)
-        AND NOT EXISTS (SELECT 1 FROM artifacts bad
-                        WHERE bad.kind=? AND bad.message_id=m.message_id
-                          AND NOT json_valid(bad.meta))
+        AND ({_retry_budget_sql()})
         AND {pending_pred()}
-        AND attempts < 5
         AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try'))
                       {_ERROR_ROWS_SQL}), 0) <= ?
       ORDER BY m.posted_at_ts {order}, m.message_id {order}
@@ -3883,7 +4051,6 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
             shard[1] if shard else 1,
             shard[0] if shard else 0,
             now,
-            KIND,
             KIND, EXTRACT_VERSION,
             now,
             n)).fetchall()
@@ -4076,7 +4243,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     _gc_stale_artifacts(ledger, lock, per_write_lock)
     rows, fresh_selected = _select_pending(ledger, limit, admitted_ids,
                                            shard, oldest_first)
-    done = failed = deferred = lock_lost = 0
+    done = failed = deferred = lock_lost = held_prior = 0
     done_pids = set()
     endpoint_down = False
     breaker_fed = False
@@ -4206,7 +4373,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
     def _commit(r, d, ctx, integrity, qc):
         """Persist one validated result — the caller holds the lock."""
-        nonlocal done, deferred
+        nonlocal done, deferred, held_prior
         # QC-flagged/thin/human-reported rows already hold a current
         # artifact — replacing it is the point of the feedback pass.
         if qc is None and not r["thin_src"] and not r["human_src"] \
@@ -4216,6 +4383,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if r["human_src"]:
             extra["human_fix"] = {"feedback_id": r["human_src"],
                                   "applied": True}
+        if not r.get("_kept_prior"):
+            integrity = {**(integrity or {}), "validation": {
+                key[1:]: d.get(key, 0) for key in ("_items_dropped", "_evidence_dropped")}}
         if not _replace_current(ledger, r,
                                 json.dumps(d, ensure_ascii=False),
                                 ctx=ctx is not None,
@@ -4224,7 +4394,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                          "applied": True}
                                         if qc else None),
                                 extra_meta=extra or None):
-            deferred += 1
+            if ledger.db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
+                                 f"AND EXISTS ({_hold_sql()})", (r["message_id"],)).fetchone():
+                held_prior += 1
+            else:
+                deferred += 1
             return
         # the whole body is now covered — checkpoints for
         # it are dead weight (F14)
@@ -4352,8 +4526,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     prior = json.loads(content)
                 except (ValueError, TypeError, RecursionError):
                     prior = None
-                if not _improves(d, prior):
+                if not _improves(d, prior) and not _protected_lost(prior or {}, d, r["body_text"]):
                     d = prior
+                    r["_kept_prior"] = True
             d["_model"] = _actual_model(r)
             with lock(per_write_lock) as held:
                 if held:
@@ -4543,9 +4718,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 _release(ledger, r, lease)
     left, age_min, age_max, estimate = _backlog_report(
-        ledger, len(rows), limit, done + skipped)
+        ledger, len(rows), limit, done + skipped + held_prior)
     now_ts = time.time()
-    return {"done": done, "failed": failed, "left": left,
+    return {"done": done, "failed": failed, "held_prior": held_prior, "left": left,
             # pending as of the last full count, minus what this process
             # settled since; age says how stale the count is
             "left_estimate": max(0, estimate["left"] - estimate["done"]),
@@ -4698,6 +4873,7 @@ def main() -> int:
 
 def _main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--upgrade-status", action="store_true", help="read-only aggregate upgrade status; no LLM calls")
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--budget", type=float, default=180)
     ap.add_argument("--revive-failed", action="store_true",
@@ -4729,6 +4905,13 @@ def _main() -> int:
                          "batched LLM call (0-8; 0 disables — every "
                          "message gets its own call)")
     args = ap.parse_args()
+    if args.upgrade_status:
+        led = LedgerReader(DB)
+        try:
+            print(json.dumps(upgrade_status(led.db, model=_resolved_llm()[1])))
+        finally:
+            led.close()
+        return 0
     if args.revive_failed:
         # DB-only bookkeeping: no LLM call, no run lock needed (a single
         # UPDATE per row; drainers re-select revived rows on their own)

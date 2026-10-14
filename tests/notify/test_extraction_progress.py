@@ -138,3 +138,25 @@ def test_real_legacy_checkpoint_reaches_private_summary_read_only(led, change):
     text = notify_views.patient_summary_text(led.db, 1, cfg=cfg)[1]
     assert f"{progress['total']}区間中{progress['completed']}区間完了" in text
     assert "SOURCE_CANARY" not in text and "完了は抽出処理のみ" not in text
+
+
+@pytest.mark.parametrize("attempts,state", [(0, "processing"), (1, "processing"), (5, "attention")])
+def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(led, attempts, state):
+    import json
+    import notify_render
+    _patient(led)
+    _msg(led, 1, body="SOURCE_CANARY 合成の経過報告です。")
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    led.artifact_add(extract_llm.KIND, json.dumps({"summary": "合成の旧結果"}), project_id=1, message_id=1,
+        meta={"hash": row["content_hash"], "extract_version": extract_llm.EXTRACT_VERSION - 1})
+    if attempts:
+        extract_llm._fail(led, row, attempts - 1)
+    cfg = {"local_llm": {"model": extract_llm.MODEL}}
+    led.db.execute("PRAGMA query_only=ON")
+    assert extraction_progress.message_progress(led.db, row, cfg=cfg)["state"] == state
+    progress = extraction_progress.patient_progress(led.db, 1, cfg=cfg)
+    assert progress[state] == 1 and progress["complete"] == 0
+    text = notify_render._summary_block(led.db, 1, cfg=cfg)["text"]
+    assert ("解析要確認" in text) == (state == "attention")
+    assert ("解析更新中" in text) == (state == "processing")
+    assert "SOURCE_CANARY" not in text

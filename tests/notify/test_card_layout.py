@@ -3,6 +3,7 @@ per-post 要約 states, state footer, primary buttons, thread posts, and the
 LINE WORKS planning rules. Synthetic ledger only."""
 import json
 
+import extract_llm
 import notify_cards
 import notify_render
 from notify_testkit import (
@@ -62,7 +63,8 @@ def test_failed_extraction_is_named_on_the_post(led):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
         "created_at) VALUES('extract_llm',1,100,'{}','m',?,?)",
-        (json.dumps({"error": 1, "attempts": 5, "hash": f"{100:064x}"}), NOW))
+        (json.dumps({"error": 1, "attempts": 5, "hash": f"{100:064x}",
+                     "extract_version": extract_llm.EXTRACT_VERSION}), NOW))
     led.db.commit()
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     summary = notify_render._summary_block(led.db, 100, cfg=CFG, label=False)["text"]
