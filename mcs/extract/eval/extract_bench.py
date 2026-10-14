@@ -587,8 +587,9 @@ def cmd_run(args) -> int:
             out = None
         scores.append(_score_case(c, out))
         scores[-1]["patient_state_mode"] = mode
+        # Only the effective model input; the mode is recorded on its own field.
         scores[-1]["context_sha256"] = hashlib.sha256(json.dumps(
-            [mode, context, references], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+            [context, references], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         scores[-1]["performance"] = {
             "elapsed_s": elapsed, "calls": meta.get("calls"),
             "repairs": meta.get("repairs", 0),

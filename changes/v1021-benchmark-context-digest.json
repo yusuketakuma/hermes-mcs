@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "抽出ベンチの文脈digestを実際の入力だけから計算",
+  "summary": "開発用ベンチの参考情報オン／オフ比較で、記録する文脈のdigestを実際にモデルへ渡す文脈と参照表だけから計算するようにしました。参考情報の無いケースは両モードで同じdigestになります。",
+  "upgrade": "追加操作は不要です。開発用ベンチの記録だけの変更で、抽出・通知・既読化・人承認・モデルの動作は変わりません。以前の記録のdigestはモードを含んでいたため、新しい記録と直接は一致しません。",
+  "details": [
+    "context_sha256 は [文脈, 参照表] から計算し、モードは既存の patient_state_mode 欄に記録する。参考情報があるケースでは従来どおりオンとオフでdigestが異なる。",
+    "参考情報の無い承認済み合成ケースで、両モードのモデル呼出しの入力とdigestが一致することを確かめる回帰を追加した。"
+  ],
+  "refs": [
+    "mcs/extract/eval/extract_bench.py",
+    "tests/extract/test_patient_state_scoring.py"
+  ]
+}

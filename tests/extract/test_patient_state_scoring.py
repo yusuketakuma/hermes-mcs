@@ -111,3 +111,27 @@ def test_off_mode_can_call_a_baseline_engine_without_the_reference_parameter(tmp
     assert bench.cmd_run(SimpleNamespace(cases=str(path), mock_ok=False, out=str(tmp_path / "out.json"),
                                           tag="baseline", patient_state="off")) == 0
     assert calls == [(case["body"], None, case["posted_at"])]
+
+
+def test_a_case_without_history_has_the_same_effective_input_and_digest_in_both_modes(tmp_path, monkeypatch):
+    plain = next(case for case in bench._load_cases(bench.DEFAULT_CASES) if not case.get("patient_state"))
+    monkeypatch.setattr(bench, "_synthetic_cases", lambda: [plain])
+    path = tmp_path / "approved-synthetic.json"
+    path.write_text(json.dumps({"cases": [plain]}))
+    received = []
+
+    def infer(body, **kwargs):
+        received.append((kwargs.get("context"), kwargs.get("references", {})))
+        return {}
+
+    monkeypatch.setattr(llm, "llm_extract", infer)
+    digests = []
+    for mode in ("off", "on"):
+        out = tmp_path / (mode + ".json")
+        assert bench.cmd_run(SimpleNamespace(cases=str(path), mock_ok=False, out=str(out),
+                                              tag=mode, patient_state=mode)) == 0
+        report = json.loads(out.read_text())
+        assert report["patient_state_mode"] == mode
+        digests.append(report["cases"][0]["context_sha256"])
+    assert received[0] == received[1]
+    assert digests[0] == digests[1]
