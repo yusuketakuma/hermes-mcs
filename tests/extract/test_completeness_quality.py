@@ -1508,3 +1508,52 @@ def test_a_narrow_quote_cannot_borrow_another_occurrences_status():
     right = [_med("架空薬A", old, status="past"), _med("架空薬A", old, action="stop", status="past"), _med("架空薬A", now)]
     assert not _rx_gap(text, right)
     assert _rx_gap(text, [*right, _med("架空薬A", now, status="past")])
+
+
+@pytest.mark.parametrize("text,denied", [("本人の架空薬A5mgは中止できません。", True), ("本人の架空薬A5mgは中止出来ない。", True),
+                                         ("本人の架空薬A5mgは中止できるか確認中です。", True),
+                                         ("本人の架空薬A5mgは中止出来るか確認中です。", True),
+                                         ("本人の架空薬A5mgは中止できます。", True), ("本人の架空薬A5mgは中止出来ます。", True),
+                                         ("本人の架空薬A5mgは中止できましたか。", True),
+                                         ("本人の架空薬A5mgは中止出来ましたか。", True),
+                                         ("本人の架空薬A5mgは中止できた。", False),
+                                         ("本人の架空薬A5mgは中止できました。", False)])
+def test_inability_denies_the_change_but_a_done_one_does_not(text, denied):
+    stop = _med("架空薬A", text, action="stop", status="past", dose="5mg")
+    assert bool(_rx_gap(text, [stop])) is denied
+    assert bool(_rx_gap(text, [_med("架空薬A", text, action="none", dose="5mg")])) is not denied
+
+
+@pytest.mark.parametrize("text", ["本人の架空薬A5mgは副作用のため中止しました。", "本人の架空薬A5mgは発疹が出たので中止しました。"])
+def test_a_reason_between_the_drug_and_its_change_keeps_the_drug(text):
+    assert _rx_gap(text, [_med("架空薬A", text, action="none", dose="5mg")])
+    assert not _rx_gap(text, [_med("架空薬A", text, action="stop", status="past", dose="5mg")])
+
+
+def test_a_drug_named_after_the_reason_is_that_changes_own():
+    text = "本人の架空薬A5mgは副作用のため架空薬Bを中止しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none", dose="5mg"), _med("架空薬B", text, action="stop", status="past")])
+
+
+def test_a_drugs_own_service_is_no_change_of_the_drug():
+    text = "本人は架空薬A5mgの服薬指導を開始しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none", dose="5mg")])
+
+
+@pytest.mark.parametrize("text,action,status", [("本人は入院時に架空薬A5mgを開始しました。", "start", "current"),
+                                                ("退院時に架空薬A5mgを中止しました。", "stop", "past")])
+def test_an_event_time_of_a_done_change_is_no_condition(text, action, status):
+    assert _rx_gap(text, [_med("架空薬A", text, action="none", dose="5mg")])
+    assert not _rx_gap(text, [_med("架空薬A", text, action=action, status=status, dose="5mg")])
+    cond = "もし入院時に架空薬Aを開始する場合は連絡してください。"
+    assert not _rx_gap(cond, [_med("架空薬A", cond, action="none")])
+
+
+def test_a_drugs_service_grounds_no_start_of_the_drug():
+    text = "本人は架空薬A5mgの服薬指導を開始しました。"
+    assert _rx_gap(text, [_med("架空薬A", text, dose="5mg")])
+
+
+def test_a_reason_followed_by_another_object_keeps_its_clause():
+    text = "本人は架空薬A5mgを内服しているので運動療法を開始しました。"
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none", dose="5mg")])
