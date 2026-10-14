@@ -3,7 +3,7 @@ import pytest
 
 from ledger import Ledger
 from test_interaction_latency import NOW, pair, post
-from mcs_queries import thread_reply_pairs
+from mcs_queries import coverage_gaps, incomplete_reply_roots, thread_reply_pairs
 
 
 @pytest.fixture
@@ -63,3 +63,34 @@ def test_reply_tie_break_and_unplaced_roots_are_deterministic(store):
     rows = thread_reply_pairs(store.db, since=NOW, until=NOW + 1, as_of=NOW + 1000)
     # Then
     assert [(r["root_id"], r["reply_id"]) for r in rows] == [(10, 11), (20, None)]
+
+
+@pytest.mark.parametrize("room_count", [0, 1, 20])
+def test_coverage_gaps_preserves_counts_with_constant_query_count(store, room_count):
+    # Given: full/deleted replies complete one root; snippets do not count.
+    with store.db:
+        for pid in range(1, room_count + 1):
+            store.db.execute(
+                "INSERT INTO patients(project_id,is_archived) VALUES(?,?)",
+                (pid, int(pid == 20)))
+            store.db.execute(
+                "INSERT INTO messages(message_id,project_id,body_state,reply_count) "
+                "VALUES(?,?,'full',2)", (pid * 10, pid))
+        if room_count:
+            store.db.execute(
+                "INSERT INTO messages(message_id,project_id,parent_id,body_state) "
+                "VALUES(11,1,10,'full'),(12,1,10,'deleted'),(13,1,10,'snippet')")
+    expected = sum(incomplete_reply_roots(store.db, pid)
+                   for pid in range(1, min(room_count, 19) + 1))
+    queries = []
+    store.db.set_trace_callback(queries.append)
+    # When
+    try:
+        result = coverage_gaps(store.db)
+    finally:
+        store.db.set_trace_callback(None)
+    # Then
+    assert result == {"incomplete_rooms": [], "jobs": {},
+                      "partial_bodies": int(bool(room_count)), "reply_gaps": expected}
+    assert expected == max(0, min(room_count, 19) - 1)
+    assert sum(query.lstrip().upper().startswith("SELECT") for query in queries) == 4

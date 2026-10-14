@@ -506,8 +506,9 @@ def coverage_gaps(db) -> dict:
     partial = db.execute(
         f"SELECT count(*) FROM messages WHERE COALESCE(body_state,'') NOT IN "
         f"('full','deleted') AND project_id IN ({live})").fetchone()[0]
-    reply_gaps = sum(incomplete_reply_roots(db, r["project_id"])
-                     for r in db.execute(live))
+    reply_gaps = db.execute(
+        f"SELECT COUNT(*) FROM messages m WHERE m.project_id IN ({live}) "
+        f"AND {REPLY_GAP}").fetchone()[0]
     return {"incomplete_rooms": rooms, "jobs": jobs,
             "partial_bodies": partial, "reply_gaps": reply_gaps}
 
