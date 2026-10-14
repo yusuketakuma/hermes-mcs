@@ -4,6 +4,8 @@ from __future__ import annotations
 import math
 import re
 
+from pharmacy_cues import CUE_CLASSES
+
 
 def finite_number(value):
     if type(value) not in (int, float):
@@ -81,7 +83,7 @@ SIGNAL_TYPES = (
     "transition_reconciliation", "pharmacist_request_unanswered",
     "rx_request_visibility", "adherence_concern", "discharge_notice",
     "symptom_after_med_change")
-STAT_PRESETS = ("operational", "pharmacy")
+STAT_PRESETS = ("operational", "pharmacy", "extraction_audit")
 _SCOPE = {"since": finite_number, "until": finite_number,
           "as_of": finite_number, "project_id": _integer}
 _RATIO = {"numerator": _integer, "denominator": _integer,
@@ -131,6 +133,41 @@ _STATS = {
     "overview": _counts("rooms_total", "rooms_with_posts_in_scope", "posts_in_scope",
                          "distinct_senders_in_scope", "distinct_organizations_in_scope"),
 }
+
+# Audit records contain fixed vocabulary and counts, never source labels.
+_AUDIT_CLASS = {"class": _enum(*CUE_CLASSES)}
+_AUDIT_STRATUM = {**_AUDIT_CLASS,
+    "reader": _enum("reader_extract", "reader_projection", "no_output"),
+    "reason": _enum("none", "missing", "stale", "failed"),
+    "version": lambda v: isinstance(v, str) and re.fullmatch(r"ver_(?:[0-9]+|unknown)", v) is not None,
+    "length": _enum("len_s", "len_m", "len_l"),
+    "profession": _enum("pharmacist", "physician", "nurse", "care_manager", "other"),
+    "month": lambda v: isinstance(v, str) and re.fullmatch(r"month_(?:[0-9]{6}|unknown)", v) is not None}
+_AUDIT_POPULATION = _counts("cue_posts", "reader_extract", "reader_projection", "no_output",
+                            "no_output_missing", "no_output_stale", "no_output_failed")
+_AUDIT_REASON = _enum("validation_metadata_missing", "attachments_missing", "requests_missing",
+    *("data_error:" + code for code in ("ValueError", "RecursionError", "TypeError", "KeyError",
+        "AttributeError", "OverflowError", "OSError", "OperationalError", "DatabaseError",
+        "InterfaceError", "IntegrityError", "ProgrammingError", "NotSupportedError", "DataError")))
+for _audit_name, _audit_counts in (
+        ("omission_proxy", {**_counts("cue_posts", "captured_posts", "missed_posts", "attention_posts"),
+                            "missed_rate": finite_number, "interval": dict.fromkeys(("low", "high"), finite_number)}),
+        ("validation_drops", _counts("observed_posts", "unknown_posts", "items_dropped", "evidence_dropped")),
+        ("prefilter_cue_conflict", _counts("posts")), ("thin_residual", _counts("posts"))):
+    _STATS[_audit_name] = {"reason": _AUDIT_REASON,
+        "rows": _items({**_AUDIT_STRATUM, **_audit_counts}),
+        "by_class": _items({**_AUDIT_CLASS, **_audit_counts})}
+    if _audit_name in ("omission_proxy", "validation_drops"):
+        _STATS[_audit_name]["population"] = _AUDIT_POPULATION
+_STATS.update({
+    "feedback_by_field": {"reason": _AUDIT_REASON, "invalid_reports": _integer,
+        "rows": _items({"field": _enum("summary", "urgency", "meds", "symptoms", "requests", "vitals",
+                                       "patient_context", "labs", "events", "other"), "reports": _integer})},
+    "attachment_share": {"reason": _AUDIT_REASON, "population_posts": _integer,
+        "rows": _items({key: _AUDIT_STRATUM[key] for key in ("reader", "length")} | _counts("posts", "with_attachments"))},
+    "request_loop_state": {"reason": _AUDIT_REASON, "rows": _items({**_AUDIT_CLASS,
+        **_counts("open", "resolution_candidate", "closed", "stale", "evaluation_unavailable")})},
+})
 _BASE = {"type": _token, "contract": _enum("mcs-read-model/1"),
          "snapshot_generation_id": _token, "content_omitted": _BOOL}
 _FACT = {"fact_id": _token, "kind": _enum(*FACT_KINDS),

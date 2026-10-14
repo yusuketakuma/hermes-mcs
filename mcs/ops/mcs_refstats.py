@@ -184,6 +184,14 @@ def cmd_capture(args) -> int:
                 except (ValueError, OverflowError, OSError):
                     raise ValueError("refstat_time_unrepresentable") from None
         result = view.stats(vars(args))
+        from export_schema import validate_record
+        from extraction_audit import STAT_NAMES
+        from read_model import CONTRACT
+        for name, value in result.get("stats", {}).items():
+            if name in STAT_NAMES:
+                validate_record({"type": "stat", "contract": CONTRACT,
+                    "snapshot_generation_id": result["snapshot"]["generation_id"],
+                    "preset": "extraction_audit", "name": name, "value": value})
     finally:
         view.close()
     ref = {"schema": "refstat_v1", "name": args.name,

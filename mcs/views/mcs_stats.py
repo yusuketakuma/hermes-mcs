@@ -36,7 +36,8 @@ from project_metadata_view import get_project_metadata
 from drug_map import (current_refs, _current_refs_with_progress,
                       _progress as drug_map_progress)
 import structured_view
-DEFINITION_VERSION = "2026-10-06"
+import extraction_audit
+DEFINITION_VERSION = "2026-10-14"
 _DEFAULT_CURRENT_REFS = current_refs
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
@@ -1397,7 +1398,36 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
     return result
 
 
+
+def st_validation_drops(db, scope):
+    return extraction_audit.collect(db, scope)["validation_drops"]
+
+def st_prefilter_cue_conflict(db, scope):
+    return extraction_audit.collect(db, scope)["prefilter_cue_conflict"]
+
+def st_thin_residual(db, scope):
+    return extraction_audit.collect(db, scope)["thin_residual"]
+
+def st_feedback_by_field(db, scope):
+    return extraction_audit.collect(db, scope)["feedback_by_field"]
+
+def st_omission_proxy(db, scope):
+    return extraction_audit.collect(db, scope)["omission_proxy"]
+
+def st_attachment_share(db, scope):
+    return extraction_audit.collect(db, scope)["attachment_share"]
+
+def st_request_loop_state(db, scope):
+    return extraction_audit.collect(db, scope)["request_loop_state"]
+
 REGISTRY = {
+    "validation_drops": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_validation_drops},
+    "prefilter_cue_conflict": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_prefilter_cue_conflict},
+    "thin_residual": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_thin_residual},
+    "feedback_by_field": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_feedback_by_field},
+    "omission_proxy": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_omission_proxy},
+    "attachment_share": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_attachment_share},
+    "request_loop_state": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_request_loop_state},
     # name -> {tier, needs, fn}
     "overview": {"tier": "T1", "needs": ["metadata"], "fn": st_overview},
     "data_quality": {"tier": "T0", "needs": ["metadata"],
@@ -1442,6 +1472,7 @@ REGISTRY = {
 }
 
 PRESETS = {
+    "extraction_audit": list(extraction_audit.STAT_NAMES),
     "operational": ["data_quality", "patient_activity",
                     "med_change_burden", "open_loop_aging",
                     "med_change_followup", "rx_expiry",
@@ -1469,12 +1500,17 @@ def run_stats(db, snapshot_ts: int, args: dict) -> dict:
         raise ValueError("stat_or_preset_required")
     scope = _scope(args, snapshot_ts)
     stats = {}
+    audit_results = None
     for name in names:
         if name == "interaction_latency":
             _validate_interaction_options(args.get("profession_map"),
                                           args.get("interaction_privacy_policy"))
         try:
-            if name == "interaction_latency":
+            if name in extraction_audit.STAT_NAMES:
+                if audit_results is None:
+                    audit_results = extraction_audit.collect(db, scope)
+                stats[name] = audit_results[name]
+            elif name == "interaction_latency":
                 stats[name] = st_interaction_latency(
                     db, scope, profession_map=args.get("profession_map"),
                     privacy_policy=args.get("interaction_privacy_policy"))
@@ -1484,4 +1520,6 @@ def run_stats(db, snapshot_ts: int, args: dict) -> dict:
                 AttributeError, OverflowError, OSError, sqlite3.Error) as e:
             stats[name] = _result("unavailable", scope, {},
                                   reason=f"data_error:{type(e).__name__}")
+            if name in extraction_audit.STAT_NAMES:
+                audit_results = {key: stats[name] for key in extraction_audit.STAT_NAMES}
     return {"stats": stats}
