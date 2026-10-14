@@ -850,3 +850,128 @@ def test_a_negation_in_another_clause_does_not_hide_a_request(monkeypatch, sente
 def test_clause_bounded_requests_add_no_call(monkeypatch, sentence, requests):
     calls, _ = _run(monkeypatch, PREFIX + sentence + "。", requests)
     assert len(calls) == 1
+
+
+STOP = "本人の架空薬Aを中止しました"
+STOPPED = {"name": "架空薬A", "dose": None, "action": "stop", "status": "past",
+           "subject": "patient", "negated": False, "evidence": STOP}
+NAMED = {**STOPPED, "action": "none", "status": "current"}
+
+
+TWO_STARTS = "本人は架空薬A5mgを開始し、架空薬B10mgも開始しました"
+A_START = {**STOPPED, "dose": "5mg", "action": "start", "status": "current", "evidence": "架空薬A5mgを開始し"}
+B_START = {**A_START, "name": "架空薬B", "dose": "10mg", "evidence": "架空薬B10mgも開始しました"}
+
+
+@pytest.mark.parametrize("first", [[], [NAMED], [{**STOPPED, "action": "start"}]],
+                         ids=["missing", "name_only", "other_action"])
+def test_a_rule_change_word_needs_a_matching_med_action_not_just_the_name(monkeypatch, first):
+    body = PREFIX + STOP + "。"
+    calls = []
+
+    def model(*args, **kwargs):
+        calls.append(args)
+        return copy.deepcopy({**OBSERVATIONS, "meds": first if len(calls) == 1 else [*first, STOPPED]})
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    result = extract_llm.llm_extract(body, hints=hints(body))
+    assert len(calls) == 2
+    assert extract_llm._facts(extract_llm._validate({**OBSERVATIONS, "meds": first}, body)) <= extract_llm._facts(result)
+    assert any(med["action"] == "stop" and med["evidence"] == STOP for med in result["meds"])
+
+
+@pytest.mark.parametrize("tail,meds", [
+    (STOP + "。", [STOPPED]),
+    ("本人の架空薬Aを減量しました。", [{**STOPPED, "action": "decrease", "evidence": "本人の架空薬Aを減量しました"}]),
+    ("本人の架空薬Aを中止し、架空薬Bを開始しました。", [
+        {**STOPPED, "evidence": "架空薬Aを中止し"},
+        {**STOPPED, "name": "架空薬B", "action": "start", "status": "current", "evidence": "架空薬Bを開始しました"}]),
+    ("母の架空薬Aを中止しました。", []), ("母の現在の架空薬Aを中止しました。", []),
+    ("本人は以前に架空薬Aを中止しました。", []),
+    ("本人の架空薬Aは中止しません。", []), ("本人の架空薬Aは中止済みです。", []),
+    ("本人の架空薬Aの中止を検討します。", []), ("本人の架空薬Aは変更なしです。", []),
+])
+def test_matched_other_person_past_planned_or_denied_changes_add_no_call(monkeypatch, tail, meds):
+    body = PREFIX + tail
+    calls = []
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
+                        calls.append(args) or copy.deepcopy({**OBSERVATIONS, "meds": meds}))
+    extract_llm.llm_extract(body, hints=hints(body))
+    assert len(calls) == 1
+
+
+def _final_meta(db):
+    row = db.db.execute("SELECT artifact_id, meta FROM artifacts WHERE kind=? "
+                        "ORDER BY artifact_id DESC LIMIT 1", (extract_llm.KIND,)).fetchone()
+    return row["artifact_id"], json.loads(row["meta"])
+
+
+def test_an_unrepaired_change_word_leaves_the_message_in_attention(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body=PREFIX + STOP + "。")])
+    calls = []
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
+                        calls.append(args) or copy.deepcopy({**OBSERVATIONS, "meds": [NAMED]}))
+    try:
+        assert extract_llm.run_pending(db, budget_s=300)["done"] == 1 and len(calls) == 2
+        states = {e["state"] for e in _final_meta(db)[1]["integrity"]["completeness"].values()}
+        assert states == {"unresolved"}
+        source = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        assert extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)["state"] == "attention"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("integrity,state", [
+    ("absent", "complete"), ({}, "complete"),
+    ({"completeness": {"0": {"state": "hint_gaps_resolved"}}}, "complete"),
+    ({"completeness": None}, "attention"), ({"completeness": []}, "attention"),
+    ({"completeness": "hint_gaps_resolved"}, "attention"),
+    ({"completeness": {"0": "hint_gaps_resolved"}}, "attention"),
+    ([], "attention"), ("synthetic", "attention"),
+], ids=["absent_legacy", "legacy_empty", "resolved", "null", "list", "string",
+        "string_entry", "integrity_list", "integrity_string"])
+def test_present_malformed_completeness_is_never_complete(tmp_path, monkeypatch, integrity, state):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body=PREFIX)])
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs: copy.deepcopy(OBSERVATIONS))
+    try:
+        assert extract_llm.run_pending(db, budget_s=300)["done"] == 1
+        artifact_id, meta = _final_meta(db)
+        meta.pop("integrity", None)
+        if integrity != "absent":
+            meta["integrity"] = integrity
+        db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), artifact_id))
+        db.db.commit()
+        source = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        assert extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)["state"] == state
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("first,covered", [
+    ([A_START, {**B_START, "action": None}], False),
+    ([A_START], False),
+    ([A_START, B_START], True),
+], ids=["b_name_only", "b_missing", "both"])
+@pytest.mark.parametrize("sentence", [
+    TWO_STARTS, "本人は架空薬A5mgと架空薬B10mgを開始しました", "本人は架空薬A5mgを開始し架空薬B10mgも開始しました",
+], ids=["comma", "shared_predicate", "no_comma"])
+def test_one_drugs_action_does_not_cover_another_drug_with_the_same_action(first, covered, sentence):
+    body = PREFIX + sentence + "。"
+    first = [{**med, "evidence": sentence} if sentence != TWO_STARTS else med for med in first]
+    v = extract_llm._validate({**OBSERVATIONS, "meds": first}, body)
+    assert bool(extract_llm._completeness_issues(v, hints(body), body)) is not covered
+
+
+@pytest.mark.parametrize("a_word,a_action,aa_action,covered", [
+    ("開始", "start", None, False), ("開始", "start", "start", True), ("中止", "stop", "start", True),
+], ids=["aa_name_only", "both_started", "a_stopped_aa_started"])
+def test_a_shorter_drug_name_does_not_cover_a_longer_one_containing_it(a_word, a_action, aa_action, covered):
+    sentence = f"本人は架空薬Aを{a_word}し、架空薬AAを開始しました"
+    body = PREFIX + sentence + "。"
+    meds = [{**STOPPED, "action": a_action, "status": "current", "evidence": sentence},
+            {**STOPPED, "name": "架空薬AA", "action": aa_action, "status": "current", "evidence": sentence}]
+    v = extract_llm._validate({**OBSERVATIONS, "meds": meds}, body)
+    assert len(v["meds"]) == 2
+    assert bool(extract_llm._completeness_issues(v, hints(body), body)) is not covered

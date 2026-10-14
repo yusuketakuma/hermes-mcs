@@ -1662,6 +1662,7 @@ def _completeness_issues(v, hints, body):
         name = med.get("name") if isinstance(med, dict) else None
         if isinstance(name, str) and name not in names and _current_cue(body, name):
             issues.append(f"本文の薬剤候補「{name}」が未収載です。原文で再確認してください")
+    issues += _rx_action_gaps(v, hints, body)
     # The rule hints' confirm/contact patterns also fire on reports (確認を終えた);
     # the per-sentence cues apply the same request-ending test to every kind.
     for request in _request_cues(body):
@@ -1672,6 +1673,76 @@ def _completeness_issues(v, hints, body):
             issues.append("本文の確認・連絡・質問候補が未収載です。原文で再確認してください")
             break
     return issues
+
+
+# v1 rx_actions' own change words; a stated direction also states a change.
+_RX_WORDS = {"start": "開始|追加", "stop": "中止|停止|終了", "decrease": "減量",
+             "increase": "増量", "change": "変更(?!なし)"}
+_RX_STATED = {"change": {"change", "decrease", "increase"}}
+_RX_ANY = "|".join(_RX_WORDS.values())
+_RX_NOT_CURRENT = r"ない|なし|なく|ません|不要|済み|以前|予定|検討|ありがとう"
+
+
+def _named_in(text, names):
+    """Names written in ``text``, longest first, so 架空薬A inside 架空薬AA is not a second drug."""
+    found, taken = [], []
+    for name in sorted(names, key=len, reverse=True):
+        for m in re.finditer(re.escape(name), text):
+            if not any(m.start() < e and s < m.end() for s, e in taken):
+                taken.append(m.span())
+                if name not in found:
+                    found.append(name)
+    return found
+
+
+def _rx_action_gaps(v, hints, body):
+    """Patient-current rule change words whose clause no extracted patient med states.
+
+    A name alone never covers a change: every drug named since the clause's
+    previous change word needs its own med with the matching action, quoted
+    over the clause. Other people, past, planned and denied changes ask nothing."""
+    meds = [med for med in v.get("meds") or [] if isinstance(med, dict)
+            and med.get("subject", "patient") == "patient" and not med.get("negated")
+            and isinstance(med.get("name"), str) and med["name"]
+            and isinstance(med.get("evidence"), str) and med["evidence"]]
+    names = {med.get("name") for med in [*(hints.get("medications") or []), *(v.get("meds") or [])]
+             if isinstance(med, dict) and isinstance(med.get("name"), str) and med["name"]}
+    for act in hints.get("rx_actions") or []:
+        code = act.get("action") if isinstance(act, dict) else None
+        ctx = act.get("ctx") if isinstance(act, dict) else None
+        if code not in _RX_WORDS or not isinstance(ctx, str) or not ctx:
+            continue
+        # v1 cuts ctx 14 characters before its change word
+        words = [m for m in re.finditer(_RX_WORDS[code], ctx) if m.start() <= 14]
+        if not words:
+            continue
+        for found in re.finditer(re.escape(ctx), body):
+            start, end = found.start() + words[-1].start(), found.start() + words[-1].end()
+            head = max(body.rfind(c, 0, start) for c in "。！？!?;；\r\n") + 1
+            tail = re.search(r"[。！？!?;；\r\n]", body[end:])
+            tail = end + tail.start() if tail else len(body)
+            mark = re.search(_CLAUSE_MARK, body[end:tail])
+            lead = head + _clause_start(body[head:start])
+            close = end + mark.start() if mark else tail
+            # an owner (母の…) is seen only from just past its の, so try those positions
+            if (re.search(_RX_NOT_CURRENT, body[lead:close])
+                    or any(extract.patient_source_scope(body, at, end) != "patient"
+                           for at in [start, *(lead + m.end() for m in re.finditer(
+                               r"の[ \t　]*", body[lead:start]))])):
+                continue
+            # this change word's objects: AとBを開始 names two, Aを開始しBも開始 one each
+            prior = list(re.finditer(_RX_ANY, body[lead:start]))
+            region = body[lead + (prior[-1].end() if prior else 0):start]
+            targets = _named_in(region, names) or [None]
+            if not all(any(med.get("action") in _RX_STATED.get(code, {code})
+                           and (med["name"] in body[lead:close] if target is None
+                                else med["name"] == target)
+                           and any(m.start() < close and m.end() > lead
+                                   for m in re.finditer(re.escape(med["evidence"]), body))
+                           for med in meds)
+                       for target in targets):
+                return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
+    return []
 
 
 # The rule hint's own action word. A quote spanning several requests covers
@@ -3068,10 +3139,12 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
                 for key in ("qc_fix", "human_fix")))):
             return out
         integrity = meta.get("integrity") if isinstance(meta, dict) else None
-        quality = integrity.get("completeness", {}) if isinstance(integrity, dict) else {}
-        if bound and isinstance(quality, dict) and any(
-                isinstance(entry, dict) and entry.get("state") != "hint_gaps_resolved"
-                for entry in quality.values()):
+        # absent is legacy-complete; a present malformed record is never complete
+        quality = (integrity.get("completeness", {}) if isinstance(integrity, dict)
+                   else {} if integrity is None else None)
+        if bound and (not isinstance(quality, dict) or any(
+                not isinstance(entry, dict) or entry.get("state") != "hint_gaps_resolved"
+                for entry in quality.values())):
             return out
         if (bound and not meta.get("error") and valid is not None
                 and not valid.get("_items_dropped") and not valid.get("_evidence_dropped")
