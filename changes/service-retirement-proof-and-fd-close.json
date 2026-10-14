@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "サービス停止の確認と後始末を厳格化",
+  "summary": "導入・更新・復旧で不要になった常駐サービスを止めるとき、OSが『登録なし』と答えた場合だけ設定ファイルを削除します。確認が一時的に失敗したときは停止済みとみなさず、設定を残して要確認として報告します。更新・復旧・修復の途中でエラーが起きても、開いたファイルや子プロセスの出力を閉じ忘れません。",
+  "upgrade": "追加操作は不要です。停止を確認できなかった場合は従来どおり設定が残り、要確認として表示されるので、サービスの状態を確認してから再実行してください。",
+  "details": [
+    "launchctl print が113（not found）を返した場合だけ退役済みとする（mcs_setup の _retire_agents・_retire_previous_runtime、mcs_update と mcs_recover の _reconcile_membership、mcs_update._agent_pid）。",
+    "mcs_repair._log・_replace_database（更新と復旧）で fstat/fdopen が失敗したら fd を閉じる。更新子プロセスの停止時は pipe を閉じる。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/mcs_update.py",
+    "mcs/ops/mcs_repair.py",
+    "deployment/recovery/mcs_recover.py"
+  ]
+}

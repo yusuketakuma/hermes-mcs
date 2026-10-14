@@ -392,8 +392,9 @@ def test_retire_previous_hermes_removes_plists_so_login_does_not_reload(monkeypa
     for label in ("ai.mcs.extract-drainer", "local.mcs-cmd"):
         (agents / (label + ".plist")).write_text("x")
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: None)
-    monkeypatch.setattr(mcs_setup, "_agent_loaded", lambda label: False)
+    # launchd answers 113 once a booted-out label is gone
+    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **k: SimpleNamespace(
+        returncode=113 if argv[:2] == ["launchctl", "print"] else 0))
     prev = {"runtime_mode": "hermes",
             "agents": [{"label": "ai.mcs.extract-drainer"}, {"label": "local.mcs-cmd"}]}
     assert mcs_setup._retire_previous_runtime(prev, "standalone", lambda m: None, False) == 0
@@ -626,3 +627,21 @@ def test_host_service_creates_owner_only_files(tmp_path):
     assert plistlib.loads(plist.encode())["Umask"] == 0o077
     _, unit = service.render(tmp_path, platform="linux")
     assert "\nUMask=0077\n" in unit.split("[Service]", 1)[1].split("[Install]", 1)[0]
+
+
+@pytest.mark.parametrize("print_code", [1, 124])
+def test_retirement_keeps_plists_unless_launchd_reports_not_found(
+        monkeypatch, tmp_path, print_code):
+    """Only launchd's 113 (not found) proves a booted-out agent stopped; a
+    generic failure keeps the plist and blocks the new runtime."""
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    (agents / "ai.mcs.extract-drainer.plist").write_text("x")
+    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
+    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **k: SimpleNamespace(
+        returncode=print_code if argv[:2] == ["launchctl", "print"] else 0))
+    prev = {"runtime_mode": "hermes", "agents": [{"label": "ai.mcs.extract-drainer"}]}
+    assert mcs_setup._retire_previous_runtime(prev, "standalone", lambda m: None, False) == 1
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    assert mcs_setup._retire_agents({"ai.mcs.extract-drainer"}, lambda m: None, False) == 1
+    assert (agents / "ai.mcs.extract-drainer.plist").exists()

@@ -652,3 +652,20 @@ def test_audit_directory_sync_failure_keeps_complete_record_and_blocks_duplicate
     with pytest.raises(ValueError, match="stage_order_required"):
         _record(independent)
     assert independent["log"].read_bytes() == first
+
+
+@pytest.mark.parametrize("failing", ["fstat", "fdopen"])
+def test_private_audit_log_open_failure_closes_its_fd(tmp_path, monkeypatch, failing):
+    log = tmp_path / "synthetic-audit.log"
+    log.write_bytes(b"")
+    log.chmod(0o600)
+
+    def boom(*a, **k):
+        raise OSError(5, "synthetic I/O failure")
+    monkeypatch.setattr(mcs_repair.os, failing, boom)
+    before = len(os.listdir("/dev/fd"))
+    for _ in range(20):
+        with pytest.raises(OSError):
+            mcs_repair._log(str(log), create=False)
+    monkeypatch.undo()
+    assert len(os.listdir("/dev/fd")) == before

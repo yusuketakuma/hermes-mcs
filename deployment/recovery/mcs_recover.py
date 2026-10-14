@@ -842,7 +842,12 @@ def _reconcile_membership(snapshot):
             and label not in EXCLUDED_LABELS
         if owned and label not in desired_agents \
                 and label not in KNOWN_AGENT_LABELS:
-            _launchctl(["bootout", f"gui/{os.getuid()}/{label}"])
+            target = f"gui/{os.getuid()}/{label}"
+            _launchctl(["bootout", target])
+            check = _launchctl(["print", target])
+            if check is None or check.returncode != 113:
+                problems.append("agent_retirement_unverifiable:" + label)
+                continue
             try:
                 os.unlink(path)
             except OSError:
@@ -1226,7 +1231,11 @@ def _replace_database(backup_path, expected_sha, before_replace):
     directory = os.path.dirname(LEDGER)
     _settle_staging(directory)
     fd, temporary = tempfile.mkstemp(dir=directory, prefix=".restore.", suffix=".db")
-    created = os.fstat(fd)
+    try:
+        created = os.fstat(fd)
+    except BaseException:
+        os.close(fd)
+        raise
     own = {"name": os.path.basename(temporary), "dev": created.st_dev,
            "ino": created.st_ino, "uid": created.st_uid}
     journaled = False
