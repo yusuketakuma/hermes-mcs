@@ -2631,7 +2631,23 @@ def _piece_validate(document, piece, body, drops=None, ctx=False, references=Non
     scoped = _validate(document, piece, drops, ctx, references=references)
     if scoped is None or piece == body:
         return scoped
-    validated = _validate(scoped, body, drops, ctx, references=references)
+    repeated = drops is not None and bool(piece) and body.count(piece) > 1
+    global_drops = {} if repeated else drops
+    validated = _validate(scoped, body, global_drops, ctx, references=references)
+    if repeated:
+        for reason, values in global_drops.items():
+            # No substring of an exactly repeated core can become globally unique.
+            # Keep the rejection/counters, but do not ask for an impossible quote.
+            if reason == "ev":
+                continue
+            if reason == "items":
+                values = [field for field in values if field not in ("patient_context", "reply")]
+            if values:
+                target = drops.setdefault(reason, [])
+                if reason == "items":
+                    values = [field for field in values if field not in target]
+                limit = 6 if reason == "vitals" else 5
+                target.extend(values[:max(0, limit - len(target))])
     if validated is not None:
         for counter in ("_items_dropped", "_evidence_dropped"):
             validated[counter] = validated.get(counter, 0) + scoped.get(counter, 0)
