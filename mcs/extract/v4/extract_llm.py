@@ -754,6 +754,14 @@ def _flat(text: str) -> str:
     return "".join(unicodedata.normalize("NFKC", text).split())
 
 
+def _nonspecific_med_name(name: str) -> bool:
+    """Bare medication words and person-owned variants identify no particular drug."""
+    generic = re.fullmatch(r"(?:(.+)の)?(?:薬|お薬|内服薬|処方薬|服用薬)", _flat(name))
+    return bool(generic and (not generic[1]
+                            or extract._person_scope(generic[1], None) != "unknown"
+                            or re.fullmatch(extract._NAMED_PERSON, generic[1])))
+
+
 def _validate(d: dict, body: str | None = None,
               drops: dict | None = None, ctx: bool = False, *, references=None) -> dict | None:
     """Schema check — malformed LLM output must not become a success
@@ -972,6 +980,10 @@ class _Validator:
                     and rt is not False):
                 self.drop_item("meds")
                 continue
+            if _nonspecific_med_name(m["name"]):
+                self.drop_item("meds", f"meds[{index}].nameが薬剤を特定しない一般表現です。"
+                               "本文に薬剤名がなければmedsに入れず、服薬管理情報はpatient_contextに残してください。")
+                continue
             dose = m.get("dose")
             if type(dose) in (int, float) \
                     and -1e308 <= dose <= 1e308:
@@ -1024,6 +1036,20 @@ class _Validator:
                 elif missing_name:
                     self.drop_item("meds", f"meds[{index}].evidenceにnameが含まれていません。"
                                    "別の文を流用せず、薬剤名を含む本文を引用し、服用者のsubjectを確認してください。")
+                    continue
+                # Only the named drug's direct non-use contradicts its current affirmation.
+                if (st == "current" and m.get("negated") is False
+                        and scope not in ("past", "planned", "conditional")
+                        and _flat(quote).count(_flat(item["name"])) == 1 and re.search(
+                        re.escape(_flat(item["name"])) + _RX_DOSE + _RX_PARTICLE
+                        + r"(?:(?:服用|内服|使用|投与)(?:は|を|も)?"
+                          r"(?:して(?:いない|いません)|せず|しない|しません)"
+                          r"|飲(?:んで(?:いない|いません)|まず|まない|みません)"
+                          r"|使(?:わず|わない|って(?:いない|いません)))"
+                          r"(?!こと|事|わけ|訳|場合|とき|時|なら|と|か|が|けど|けれど|ものの"
+                          r"|で|だ|ほう|方|よう|予定|つもり|日|回)", _flat(quote))):
+                    self.drop_item("meds", f"meds[{index}]のcurrent・negated:falseが引用の不使用と矛盾します。"
+                                   "本文の服用状況を再確認し、否定と時点を保持してください。")
                     continue
             item["normalized"] = clinical_values.medication_surface(item["name"])
             meds.append(item)
@@ -1768,7 +1794,8 @@ def _completeness_issues(v, hints, body):
              and _current_cue(body, med.get("evidence"))}
     for med in hints.get("medications") or []:
         name = med.get("name") if isinstance(med, dict) else None
-        if isinstance(name, str) and name not in names and _current_cue(body, name):
+        if (isinstance(name, str) and not _nonspecific_med_name(name)
+                and name not in names and _current_cue(body, name)):
             issues.append(f"本文の薬剤候補「{name}」が未収載です。原文で再確認してください")
     issues += _rx_action_gaps(v, hints, body)
     # The rule hints' confirm/contact patterns also fire on reports (確認を終えた);

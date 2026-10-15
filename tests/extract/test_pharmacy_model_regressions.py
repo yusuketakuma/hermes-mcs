@@ -4,6 +4,7 @@ import copy
 import pytest
 
 import extract_llm
+import rollup
 
 
 def hints(body):
@@ -13,6 +14,131 @@ def hints(body):
 def medication(name, quote, subject="patient"):
     return {"name": name, "action": "none", "status": "current", "subject": subject,
             "negated": False, "evidence": quote}
+
+
+@pytest.mark.parametrize("wording", [
+    "使用せず", "使わず", "服用していない", "内服していません",
+    "飲んでいない", "飲んでいません", "飲まずに", "飲まない", "飲みません",
+])
+def test_explicit_nonuse_cannot_become_a_current_medication(wording):
+    body = f"本人の解熱剤は{wording}、経過観察としました。"
+    drops = {}
+    out = extract_llm._validate({"summary": "合成要約", "meds": [medication("解熱剤", body)]}, body, drops)
+    states = {}
+    rollup._med_states({"body_text": body, "posted_at": "2032-06-01"}, {}, out, states)
+    assert not out.get("meds") and not states
+    assert any("不使用" in issue for issue in extract_llm._repair_issues(drops, out))
+
+
+@pytest.mark.parametrize("wording", [
+    "使用しています", "服用中です", "使用していないわけではありません",
+    "服用しないことはありません", "服用しないと発作が出ます", "保管容器は使用せず袋に入れました",
+    "服用していない日がある", "服用していない回がある", "飲んでいない日もあります",
+])
+def test_nonuse_guard_keeps_use_double_negation_and_unrelated_denials(wording):
+    body = f"本人の合成薬Mは{wording}。合成薬Nは使用せず。"
+    out = extract_llm._validate({"meds": [medication("合成薬M", body)]}, body)
+    assert out["meds"][0]["name"] == "合成薬M"
+
+
+def test_a_quote_with_old_nonuse_and_a_later_use_is_not_reinterpreted():
+    body = "本人の合成薬Mは使用せず経過観察とし、翌日から本人の合成薬Mを服用しています。"
+    out = extract_llm._validate({"meds": [medication("合成薬M", body)]}, body)
+    assert out["meds"][0]["name"] == "合成薬M"
+
+
+@pytest.mark.parametrize("flags", [{"negated": True}, {"action": "stop", "status": "past"}])
+def test_correct_nonuse_or_past_stop_remains_suppressed(flags):
+    body = "本人の合成薬Mは使用していません。"
+    out = extract_llm._validate({"meds": [{**medication("合成薬M", body), **flags}]}, body)
+    states = {}
+    rollup._med_states({"body_text": body, "posted_at": "2032-06-01"}, {}, out, states)
+    assert out["meds"][0]["name"] == "合成薬M"
+    assert states["合成薬M"][0] == "suppressed"
+
+
+@pytest.mark.parametrize("name", ["薬", "お薬", "内服薬", "処方薬", "本人の薬", "同居の夫の薬"])
+def test_unspecified_medication_words_do_not_become_drug_names(name):
+    body = f"{name}は一包化しています。"
+    detail = context(body, "support_method", "一包化")
+    detail["subject"] = "family" if "夫" in name else "patient"
+    drops = {}
+    out = extract_llm._validate({"meds": [medication(name, body, detail["subject"])],
+                                "patient_context": [detail]}, body, drops)
+    assert not out.get("meds")
+    assert out["patient_context"][0]["details"][0]["value"] == "一包化"
+    assert any("一般表現" in issue for issue in extract_llm._repair_issues(drops, out))
+
+
+@pytest.mark.parametrize("name", [
+    "合成薬M", "未知の合成製品Q", "降圧薬", "解熱剤", "ビタミンC",
+    "血圧の薬", "便秘の薬", "痛み止めの薬",
+])
+def test_named_products_and_specific_drug_classes_remain(name):
+    body = f"本人の{name}を服用しています。"
+    out = extract_llm._validate({"meds": [medication(name, body)]}, body)
+    assert out["meds"][0]["name"] == name
+
+
+def test_a_purpose_named_medication_keeps_its_stop():
+    body = "本人は血圧の薬を中止しました。"
+    out = extract_llm._validate({"meds": [{**medication("血圧の薬", body),
+                                         "action": "stop", "status": "past"}]}, body)
+    assert out["meds"][0]["action"] == "stop" and out["meds"][0]["status"] == "past"
+
+
+@pytest.mark.parametrize("name", ["内服薬", "処方薬"])
+def test_unnamed_medication_hints_do_not_force_an_impossible_repair(monkeypatch, name):
+    body = f"本人は{name}5mgを服用しています。"
+    rule = hints(body)
+    assert rule.get("medications")
+    candidate = {"summary": "薬名の記載なし", "patient_context": [
+        {"category": "medication_management", "subject": "patient", "text": body, "evidence": body}]}
+    calls = []
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k: calls.append(a) or copy.deepcopy(candidate))
+    meta = {}
+    out = extract_llm.llm_extract(body, hints=rule, meta_out=meta)
+    assert out["patient_context"] and not out.get("meds")
+    assert len(calls) == 1 and not meta.get("repairs")
+    assert not extract_llm._completeness_issues(out, rule, body)
+
+
+@pytest.mark.parametrize("name", ["合成薬M", "降圧薬", "血圧の薬"])
+def test_specific_drug_hints_still_require_the_missing_medication(name):
+    body = f"本人は{name}5mgを服用しています。"
+    rule = {"medications": [{"name": name}]}
+    assert any("薬剤候補" in issue for issue in
+               extract_llm._completeness_issues({"summary": "合成要約"}, rule, body))
+
+
+@pytest.mark.parametrize("generic", [False, True])
+def test_nonuse_and_unspecified_names_use_only_one_existing_repair(monkeypatch, generic):
+    body = "本人の薬は一包化しています。" if generic else "本人の解熱剤は使用せず経過観察としました。"
+    name = "本人の薬" if generic else "解熱剤"
+    initial = {"summary": "合成要約", "meds": [medication(name, body)]}
+    repaired = {"summary": "合成要約", "patient_context": [context(body, "support_method", "一包化")]} \
+        if generic else {"summary": "合成要約", "meds": [{**medication(name, body), "negated": True}]}
+    calls = []
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k:
+                        calls.append(a) or copy.deepcopy(initial if len(calls) == 1 else repaired))
+    meta = {}
+    out = extract_llm.llm_extract(body, meta_out=meta)
+    assert len(calls) == 2 and meta["repairs"] == 1
+    if generic:
+        assert not out.get("meds") and out["patient_context"]
+    else:
+        assert out["meds"][0]["negated"] is True
+
+
+def test_repeated_wrong_nonuse_is_not_coerced_or_retried_again(monkeypatch):
+    body = "本人の解熱剤は使用せず経過観察としました。"
+    wrong = {"summary": "合成要約", "meds": [medication("解熱剤", body)]}
+    calls = []
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k: calls.append(a) or copy.deepcopy(wrong))
+    meta = {}
+    out = extract_llm.llm_extract(body, meta_out=meta)
+    assert not out.get("meds") and out["summary"] == "合成要約"
+    assert len(calls) == 2 and meta["repairs"] == 1
 
 
 @pytest.mark.parametrize("quote", ["本人の薬に変更はありません", "兄が合成薬Zを服用しています"])

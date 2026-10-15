@@ -32,7 +32,7 @@ def test_medication_surface_when_width_or_kana_varies(name, monkeypatch):
 
 @pytest.mark.parametrize("names", [
     ("タキソール", "タキソテール"), ("サクシン", "サクシゾン"),
-    ("ロキソニン", "ロキソプロフェン"), ("薬", "処方薬"),
+    ("ロキソニン", "ロキソプロフェン"), ("降圧薬", "利尿薬"),
     ("アムロジピンOD錠5mg「合成甲」", "アムロジピンOD錠5mg「合成乙」"),
     ("合成配合剤A/B", "合成配合剤AB"),
 ])
