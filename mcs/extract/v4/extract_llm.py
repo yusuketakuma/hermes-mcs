@@ -850,12 +850,16 @@ class _Validator:
             if len(lst) < 5:
                 lst.append(str(q)[:60])
 
-    def drop_item(self, field: str):
+    def drop_item(self, field: str, reason: str | None = None):
         self.items_dropped += 1
         if self.drops is not None:
             lst = self.drops.setdefault("items", [])
             if field not in lst and len(lst) < 5:
                 lst.append(field)
+            if reason:
+                reasons = self.drops.setdefault("reasons", [])
+                if len(reasons) < 5:
+                    reasons.append(reason)
 
     def ev(self, item: dict, source: dict):
         q = source.get("evidence")
@@ -946,7 +950,7 @@ class _Validator:
             self.drop_item("meds")
             return
         meds = []
-        for m in d["meds"]:
+        for index, m in enumerate(d["meds"]):
             st = self.enum(m, "status", _MED_STATUSES) \
                 if isinstance(m, dict) else False
             sj = self.enum(m, "subject", _MED_SUBJECTS) \
@@ -1009,14 +1013,16 @@ class _Validator:
                     if scopes:
                         wrong_person = any(s in _MED_SUBJECTS and s != sj for s in scopes)
                 if wrong_person:
-                    self.drop_item("meds")
+                    self.drop_item("meds", f"meds[{index}].subjectと引用の対象者が一致しません。"
+                                   "薬剤名を含む本文の引用と服用者を対応させて再抽出してください。")
                     continue
                 if missing_name and re.search(r"同薬|同剤|当該薬|その薬|あの薬|上記", quote):
                     # Preserve a possible stop/reference, without confirming an unproved identity.
                     self.miss(item.pop("evidence"))
                     item["unverified"] = True
                 elif missing_name:
-                    self.drop_item("meds")
+                    self.drop_item("meds", f"meds[{index}].evidenceにnameが含まれていません。"
+                                   "別の文を流用せず、薬剤名を含む本文を引用し、服用者のsubjectを確認してください。")
                     continue
             item["normalized"] = clinical_values.medication_surface(item["name"])
             meds.append(item)
@@ -1253,11 +1259,40 @@ class _Validator:
         if vit:
             out["vitals"] = vit
 
+    def current_prose(self, text: str, field: str) -> bool:
+        """Do not present a source's explicitly noncurrent reading without its qualifier."""
+        if not isinstance(self.body, str):
+            return True
+        # Only explicit measurement syntax is checked, never a nearby drug dose or body weight.
+        readings = [(m.start(group), m.end(group))
+                    for pattern in (*extract._VITAL_PATTERNS.values(),
+                                    r"(?:収縮期|拡張期)(?:血圧)?[:：はが=\s]*(\d+(?:[.．]\d+)?)")
+                    for m in re.finditer(pattern, text) for group in range(1, (m.lastindex or 0) + 1)]
+        for start, end in readings:
+            cls = _nearest_vital_label(text, start, end)
+            if cls is None or extract.patient_source_scope(text, start, end) != "patient":
+                continue
+            left = max(text.rfind(mark, 0, start) for mark in "。！？!?\n") + 1
+            if (re.search(clinical_values._OTHER_TIME, text[left:start])
+                    and not clinical_values._vital_current(text, start)):
+                continue
+            hits = [m.span() for m in re.finditer(r"\d+(?:[.．]\d+)?", self.body)
+                    if clinical_values._bp_number(m[0]) == clinical_values._bp_number(text[start:end])
+                    and _nearest_vital_label(self.body, *m.span()) == cls]
+            if hits and (all(extract.patient_source_scope(self.body, s, e)
+                             in clinical_values._NOT_PATIENT_CURRENT for s, e in hits)
+                         or clinical_values._vital_superseded(self.body, cls, hits)):
+                self.drop_item(field, f"{field}の測定値は本文では本人の現在の値ではありません。"
+                               "要約・要点でも対象者・時点・条件を保持し、未測定の値を補わないでください。")
+                return False
+        return True
+
     def scalars(self, d: dict, out: dict):
         if "summary" in d:
             s = _clean_text(d["summary"], 60)
             if s:
-                out["summary"] = s
+                if self.current_prose(s, "summary"):
+                    out["summary"] = s
             else:
                 self.drop_item("summary")
         if "urgency" in d:
@@ -1291,7 +1326,7 @@ class _Validator:
             if isinstance(d["points"], list):
                 out["points"] = [p for p in
                                  (_clean_text(x, 40) for x in d["points"])
-                                 if p][:3]
+                                 if p and self.current_prose(p, "points")][:3]
             else:
                 self.drop_item("points")
 
@@ -1685,6 +1720,7 @@ def _repair_issues(drops: dict, v: dict | None) -> list[str]:
     issues += [f"{s} (vitalsのキーは本文の測定名に合わせてください)"
                for s in drops.get("vitals") or []]
     issues += list(drops.get("labs") or [])
+    issues += list(drops.get("reasons") or [])
     issues += [f"event「{e}」の根拠表現を確認できませんでした"
                "（対象本文の言い換え・活用も再確認し、根拠がなければ省いてください）"
                for e in drops.get("events") or []]

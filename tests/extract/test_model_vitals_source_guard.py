@@ -33,6 +33,67 @@ def test_a_missing_current_value_is_never_filled_in():
     assert "dbp" not in _validated(SUPERSEDED, {"sbp": 90})
 
 
+def test_current_vitals_cannot_leak_a_rejected_old_value_through_prose():
+    drops = {}
+    out = extract_llm._validate({"vitals": {"sbp": 90, "dbp": 80},
+        "summary": "血圧測定結果の記録。収縮期90、拡張期80。",
+        "points": ["収縮期血圧90", "拡張期血圧80"]}, SUPERSEDED, drops)
+    assert out["vitals"] == {"sbp": 90}
+    assert "summary" not in out and out["points"] == ["収縮期血圧90"]
+    assert out["_items_dropped"] == 2
+    assert any("要約・要点" in issue for issue in extract_llm._repair_issues(drops, out))
+
+
+@pytest.mark.parametrize("body,text", [
+    (SUPERSEDED, "午前の血圧120/80。現在は収縮期90。"),
+    (SUPERSEDED, "収縮期血圧90"),
+    (FAMILY, "本人の脈拍72。同居娘さんの血圧180/110"),
+    (FAMILY, "娘さんの血圧180/110と高値"),
+    (FAMILY, "本人の脈拍72"),
+    ("血圧160を超えたら連絡してください。", "血圧160を超えたら連絡"),
+    ("現在の血圧140/90です。", "血圧140/90"),
+    ("以前の血圧120/80。現在は140/90です。", "以前の血圧120/80"),
+    ("現在の体温36.5℃です。", "体温36度5分"),
+    (FAMILY, "血圧安定、合成薬180mgを確認"),
+    (SUPERSEDED, "血圧は未測定、体重80kg"),
+])
+def test_qualified_or_uncontradicted_vital_prose_survives(body, text):
+    out = extract_llm._validate({"summary": text, "points": [text]}, body)
+    assert out["summary"] == text and out["points"] == [text]
+    assert "_items_dropped" not in out
+
+
+@pytest.mark.parametrize("body,text", [
+    (FAMILY, "血圧180/110"),
+    ("家族の体温38.5℃、本人の体温36.5℃。", "体温38.5℃"),
+    ("もしSpO2が90を下回れば連絡してください。", "SpO2は90です"),
+    ("過去の脈拍は110でした。現在の脈拍は70です。", "脈拍110"),
+])
+def test_unqualified_prose_cannot_recast_another_person_or_noncurrent_value(body, text):
+    out = extract_llm._validate({"summary": text, "points": [text], "urgency": "routine"}, body)
+    assert "summary" not in out and out["points"] == []
+
+
+@pytest.mark.parametrize("repair_correctly", [False, True])
+def test_vital_prose_uses_at_most_one_repair_and_never_saves_the_rejected_value(monkeypatch, repair_correctly):
+    calls = []
+    invalid = {"summary": "拡張期血圧80", "points": ["拡張期血圧80"], "vitals": {"sbp": 90}}
+    valid = {"summary": "収縮期血圧90、拡張期は未測定", "points": ["収縮期血圧90"], "vitals": {"sbp": 90}}
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        return valid if repair_correctly and len(calls) == 2 else invalid
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    meta = {}
+    out = extract_llm.llm_extract(SUPERSEDED, meta_out=meta)
+    assert len(calls) == 2 and meta["repairs"] == 1
+    assert "80" not in out.get("summary", "") and all("80" not in p for p in out.get("points", []))
+    assert out["vitals"] == {"sbp": 90}
+    if repair_correctly:
+        assert out["summary"] == valid["summary"]
+
+
 @pytest.mark.parametrize("body,vitals", [
     ("本人の血圧180/110でした。", {"sbp": 180, "dbp": 110}),
     ("母の血圧は180/110、本人の血圧も180/110でした。", {"sbp": 180, "dbp": 110}),
