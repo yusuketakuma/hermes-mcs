@@ -101,7 +101,8 @@ TIMEOUT = 300
 # "unclear" — so all bodies are re-extracted under the new contract.
 # v6: source-bound clinical/context details re-enter the existing generation boundaries.
 # v7: reapply the single-reading BP merge contract to completed legacy outputs.
-EXTRACT_VERSION = 7
+# v8: v1.0.21 pharmacy details, person/time-scoped vitals and source-bound repair feedback.
+EXTRACT_VERSION = 8
 PATIENT_CONTEXT_VERSION = 3
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
