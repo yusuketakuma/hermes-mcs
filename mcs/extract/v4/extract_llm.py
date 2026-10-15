@@ -377,7 +377,7 @@ _SCHEMA = {
                     "onset": {"type": ["string", "null"]},
                     "duration": {"type": ["string", "null"]},
                     "evidence": {"type": "string"}},
-                "required": ["text"],
+                "required": ["text", "negated"],
                 "additionalProperties": False}},
             "events": {"type": "array", "items": {
                 "type": "string",
@@ -397,7 +397,7 @@ _SCHEMA = {
                     "due": {"type": ["string", "null"]},
                     "due_text": {"type": ["string", "null"]},
                     "evidence": {"type": "string"}},
-                "required": ["action"],
+                "required": ["to", "from", "kind", "action"],
                 "additionalProperties": False}},
             "vitals": {"type": "object", "properties": {
                 k: {"type": "number"} for k in
@@ -449,6 +449,8 @@ _SCHEMA = {
                 "evidence": {"type": "string"}},
                 "required": ["kind"],
                 "additionalProperties": False}},
+        # An omitted section concealed negative findings in constrained output.
+        "required": ["symptoms"],
         "additionalProperties": False}}
 
 # Batch envelope: same per-message object plus the target index. The
@@ -457,7 +459,7 @@ _SCHEMA = {
 _BATCH_ITEM = dict(_SCHEMA["schema"])
 _BATCH_ITEM["properties"] = dict(_SCHEMA["schema"]["properties"])
 _BATCH_ITEM["properties"]["i"] = {"type": "integer"}
-_BATCH_ITEM["required"] = ["i"]
+_BATCH_ITEM["required"] = [*_SCHEMA["schema"]["required"], "i"]
 _SCHEMA_BATCH = {
     "name": "mcs_extract_batch",
     "schema": {"type": "object",

@@ -283,7 +283,7 @@ def test_schema_batch_item_inherits_kind_condition_reply():
         "items"]["properties"]
     req = props["requests"]["items"]["properties"]
     assert "kind" in req and "condition" in req
-    assert props["requests"]["items"]["required"] == ["action"]
+    assert props["requests"]["items"]["required"] == ["to", "from", "kind", "action"]
     assert props["reply"]["required"] == ["kind"]
     assert set(props["reply"]["properties"]) == {"kind", "evidence"}
 
