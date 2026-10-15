@@ -1014,6 +1014,13 @@ class _Validator:
             self.ev(item, m)
             quote = item.get("evidence")
             if quote is not None:
+                flat_quote = _flat(quote)
+                mentions = list(re.finditer(re.escape(_flat(item["name"])), flat_quote))
+                if mentions and all(re.match(r"(?:さん|氏)(?:の|は|が|に|を|へ|から|と|[、。])",
+                                             flat_quote[mention.end():]) for mention in mentions):
+                    self.drop_item("meds", f"meds[{index}].nameは引用中で敬称付きの人物です。"
+                                   "人物名と薬剤名を区別して再抽出してください。")
+                    continue
                 scope = clinical_values.patient_item_scope(item, self.body, surface=item["name"], default="unknown")
                 wrong_person = sj in _MED_SUBJECTS and scope in _MED_SUBJECTS and scope != sj
                 missing_name = _flat(item["name"]) not in _flat(quote)

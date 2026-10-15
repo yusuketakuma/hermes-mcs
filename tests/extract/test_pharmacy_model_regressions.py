@@ -16,6 +16,34 @@ def medication(name, quote, subject="patient"):
             "negated": False, "evidence": quote}
 
 
+@pytest.mark.parametrize("suffix", ["さんの", "氏の", "さんは", "さんに"])
+def test_a_person_addressed_in_the_quote_is_not_a_medication(suffix):
+    body = f"架空太郎{suffix}合成薬Mの継続を確認しました。"
+    drops = {}
+    out = extract_llm._validate({"summary": "合成要約", "meds": [medication("架空太郎", body)]}, body, drops)
+    assert not out.get("meds")
+    assert any("人物" in issue for issue in extract_llm._repair_issues(drops, out))
+
+
+def test_repeated_person_mentions_do_not_turn_into_a_drug():
+    body = "架空太郎さんの処方を確認。架空太郎さんは合成薬Mを服用しています。"
+    out = extract_llm._validate({"summary": "合成要約", "meds": [medication("架空太郎", body)]}, body)
+    assert not out.get("meds")
+
+
+@pytest.mark.parametrize("name,body", [
+    ("合成薬M", "架空太郎さんの合成薬Mを確認しました。"),
+    ("未知さん配合錠", "本人は未知さん配合錠を服用しています。"),
+    ("架空薬", "架空薬の使用後の様子を確認しました。"),
+    ("合成薬M", "合成薬Mさんの記録とは別に、本人の合成薬Mを確認しました。"),
+    ("ステロイド", "ステロイド様の副作用に注意しながら合成薬Mの内服を継続。"),
+    ("合成薬M", "合成薬M様の作用があるため本人は内服継続中。"),
+])
+def test_person_guard_keeps_unknown_products_and_separate_drug_mentions(name, body):
+    out = extract_llm._validate({"meds": [medication(name, body)]}, body)
+    assert out["meds"][0]["name"] == name
+
+
 @pytest.mark.parametrize("wording", [
     "使用せず", "使わず", "服用していない", "内服していません",
     "飲んでいない", "飲んでいません", "飲まずに", "飲まない", "飲みません",
