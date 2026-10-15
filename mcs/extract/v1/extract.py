@@ -158,13 +158,17 @@ def patient_clinical_quotes(body, *, patient_name=None):
 
 
 def _person_scope(person, patient_name):
-    if re.fullmatch(rf"(?:{_FAMILY_PERSON})(?:ご本人|本人)?", person):
+    # 「同居の娘さん」: _NAMED_PERSON also takes の, so read its relation tail, not the whole as a name.
+    if re.fullmatch(rf"(?:.+の)?(?:{_FAMILY_PERSON})(?:ご本人|本人)?", person):
         return "family"
     if re.fullmatch(rf"(?:{_OTHER_PERSON})(?:ご本人|本人)?", person):
         return "other"
     alias = person.removesuffix("ご本人").removesuffix("本人").removesuffix("さん").removesuffix("様")
-    known_name = (isinstance(patient_name, str) and patient_name.strip()
-                  and re.sub(r"\s+", "", alias) == re.sub(r"\s+", "", patient_name))
+    alias = re.sub(r"\s+", "", alias)
+    name = re.sub(r"\s+", "", patient_name) if isinstance(patient_name, str) else ""
+    # Strip an explicit time modifier, never a の inside another person's name.
+    known_name = bool(name) and (alias == name or re.fullmatch(
+        rf"(?:{_CURRENT_MARK.pattern})の{re.escape(name)}", alias) is not None)
     return "patient" if re.fullmatch(_SELF_PERSON, person) or known_name else "unknown"
 
 
@@ -335,7 +339,8 @@ def patient_vitals(values, body, *, patient_name=None):
             keep=lambda s, e: patient_source_scope(
                 body, s, e, patient_name=patient_name) == "patient"):
         del kept["sbp"], kept["dbp"]  # two readings never make one pair
-    return kept
+    from clinical_values import _current_only
+    return _current_only(kept, body, patient_name)  # an earlier reading is not the current one
 _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm"),
              (r"(?:ご)?連絡(?:ください|をお願い|いただき)", "contact"),
              (r"共有(?:いたします|します|をお願い|させて)", "share"),

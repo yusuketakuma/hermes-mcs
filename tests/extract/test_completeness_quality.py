@@ -1673,3 +1673,20 @@ def test_a_withdrawn_change_grounds_no_action(text):
 def test_a_time_word_glued_to_the_drug_keeps_its_change(text, action, status):
     assert _rx_gap(text, [_med("架空薬A", text, action="none")])
     assert not _rx_gap(text, [_med("架空薬A", text, action=action, status=status)])
+
+
+@pytest.mark.parametrize("body,answer", [
+    ("午前の血圧136/82。現在の収縮期血圧は98、拡張期血圧は測定できませんでした。",
+     {"vitals": {"sbp": 98}}),
+    ("午前の血圧136/82。現在の血圧は測定できませんでした。", {"summary": "現在は測定できず"}),
+])
+def test_superseded_vital_hints_do_not_force_a_false_unresolved_repair(monkeypatch, body, answer):
+    calls = []
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
+                        calls.append(args) or copy.deepcopy(answer))
+    meta = {}
+    result = extract_llm.llm_extract(body, hints=hints(body), meta_out=meta)
+    assert result == answer
+    assert len(calls) == 1
+    assert not extract_llm._completeness_issues(result, hints(body), body)
+    assert not meta.get("completeness")

@@ -474,6 +474,9 @@ _REPAIR_HEAD = """あなたは在宅医療チャット記録の構造化抽出�
 「対象本文」に対する前回のJSON出力に以下の問題がありました。対象本文を再読し、問題を修正した完全なJSONのみを出力してください。
 evidenceは対象本文からの完全一致引用のみ有効です(切り詰め・言い換え・コンテキストからの引用は無効)。
 不明な項目は省略し、推測で補わないでください。
+vitalsは配列ではなく単一objectにし、bt/hr/rr/sbp/dbp/spo2/bsの数値だけを入れてください。evidenceやnullは入れず、本文の本人の測定値と測定名を対応させ、家族・過去の別測定・未測定の値を混ぜないでください。
+medsは薬剤名を含む引用と、その薬を服用する対象者のsubjectを対応させてください。本人に変更がないという別の文を家族の薬の根拠にせず、家族の薬はsubject:"family"として保持してください。
+patient_context.detailsのvalueはevidenceに含まれる原文の連続した文字列だけにしてください。別の箇所の値を連結・要約せず別々のdetailにし、各evidenceを親項目の引用内に収め、否定・予定・未確認の修飾も原文のまま残してください。
 
 問題:
 """
@@ -1717,7 +1720,7 @@ def _completeness_issues(v, hints, body):
     if not isinstance(hints, dict):
         return issues
 
-    for key, value in extract.patient_vitals(hints.get("vitals") or {}, body).items():
+    for key, value in clinical_values.patient_current_vitals(hints.get("vitals") or {}, body).items():
         if key not in (v.get("vitals") or {}) and any(
                 float(match[0].replace("．", ".")) == value and _current_cue(body, match[0])
                 for match in re.finditer(_BP_NUM, body)):

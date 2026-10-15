@@ -213,3 +213,41 @@ def test_optional_negative_or_planned_details_retain_the_raw_qualification(monke
     assert len(calls) == 1
     assert out["patient_context"][0]["details"][0]["value"] == value
     assert not extract_llm._completeness_issues(out, None, body)
+
+
+@pytest.mark.parametrize("field,rule", [
+    ("vitals", "配列ではなく単一object"),
+    ("meds", "薬剤名を含む引用"),
+    ("patient_context.details", "原文の連続した文字列"),
+])
+def test_repair_restates_rejected_field_contract_without_schema_support(field, rule):
+    issues = extract_llm._repair_issues({"items": [field]}, {"summary": "合成要約"})
+    prompt = extract_llm._repair_prompt(None, issues, {field: []})
+    assert rule in prompt
+
+
+@pytest.mark.parametrize("body,first,repaired,field", [
+    ("本人の脈拍は64です。", {"vitals": [{"hr": 64}]}, {"vitals": {"hr": 64}}, "vitals"),
+    ("母は合成薬Zを服用中です。本人の処方は変わりません。",
+     {"meds": [medication("合成薬Z", "本人の処方は変わりません")]},
+     {"meds": [medication("合成薬Z", "母は合成薬Zを服用中です", "family")]}, "meds"),
+    ("本人の合成薬Zは開封後も遮光保管しています。",
+     {"patient_context": [context("本人の合成薬Zは開封後も遮光保管しています。", "storage_status", "光を避けて保管")]},
+     {"patient_context": [context("本人の合成薬Zは開封後も遮光保管しています。", "storage_status", "遮光保管")]}, "patient_context"),
+])
+def test_one_repair_recovers_only_source_valid_shape_owner_and_raw_detail(monkeypatch, body, first, repaired, field):
+    calls = []
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        return copy.deepcopy(first if len(calls) == 1 else repaired)
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    meta = {}
+    out = extract_llm.llm_extract(body, meta_out=meta)
+    assert len(calls) == 2 and meta["repairs"] == 1
+    assert out[field] and not out.get("_items_dropped")
+    if field == "meds":
+        assert out[field][0]["subject"] == "family"
+    if field == "patient_context":
+        assert out[field][0]["details"][0]["value"] == "遮光保管"
