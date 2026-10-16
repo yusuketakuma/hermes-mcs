@@ -1,0 +1,21 @@
+{
+  "category": "changed",
+  "title": "AIエージェントがURLだけで導入・更新・復旧の手順を選び、前回のopt-outで再導入できるように",
+  "summary": "READMEの冒頭とAGENTS.mdに、導入済みかどうかで新規導入・更新・復旧の手順書を選ぶ表を追加しました。install.shは成功時に使ったopt-out（--no-llm・--no-brew・--no-plugin・--no-recovery）を記録し、更新の計画がそれを表示するため、再導入を伴う更新でopt-outを聞き直さずに済みます。デスクトップ版のAIが使う scripts/install_local.py は、取得元と版が違う導入済みの checkout に対して古い install.sh を実行せず、更新手順を案内して止まります。",
+  "upgrade": "追加操作は不要です。記録はこの版以降の install.sh を利用者が直接実行して成功したときに作られます。1.0.21以前に導入した環境では記録がないため、再導入を伴う更新では従来どおり opt-out を確認します。更新ツールが行う再導入は記録を変えません。install_local.py を版の違う導入済み環境で使っていた場合は、UPGRADE_AGENT.md の更新手順を使ってください。",
+  "details": [
+    "install.sh は全工程の成功後に ~/.mcs/data/install_options.json を書き、--dry-run はその作成・更新を表示する。--no-services と --mode は記録しない。更新ツールの再導入（MCS_UPDATE_REINSTALL）は、Python 移行や修復で足した --no-llm・--no-plugin・--no-recovery を利用者の選択として残さないよう記録を変えない。",
+    "mcs_update plan は記録を install_args として返す。シンボリックリンク・形式不正・既知のopt-out以外を含む記録は null とする。適用の既定動作は変えず、--install-arg の指定は従来どおり必要。",
+    "UPGRADE_AGENT.md の起動役取得を \"${TAG}:scripts/mcs_upgrade.py\" に直した。zsh では \"$TAG:s…\" が変数修飾子として解釈され、起動役の代わりにtag情報が書き出されていた。",
+    "復旧機能を導入済みの環境では、notesが求める場合を除き再導入に --no-recovery を付けないよう手順を明記した。",
+    "install_local.py は導入先の HEAD が取得元と違うとき、導入先の install.sh を実行せずに終了コード2で止まり、UPGRADE_AGENT.md を案内する。同じ版の再導入は従来どおり。"
+  ],
+  "refs": [
+    "install.sh",
+    "mcs/ops/mcs_update.py",
+    "docs/guides/UPGRADE_AGENT.md",
+    "README.md",
+    "AGENTS.md",
+    "scripts/install_local.py"
+  ]
+}

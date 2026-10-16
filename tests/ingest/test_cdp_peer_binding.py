@@ -86,3 +86,25 @@ def test_missing_lsof_fails_closed(monkeypatch):
     monkeypatch.setattr(mcs_adapter.os, "access", lambda path, mode: False)
     assert a.auto_login(PROFILE, CHROME, wait_s=0) == "failed"
     assert not _leaked(sent)
+
+
+def _account(uid, shell="/bin/zsh"):
+    return SimpleNamespace(pw_uid=uid, pw_shell=shell)
+
+
+def test_another_login_account_stops_auto_login_before_chrome(monkeypatch):
+    """Loopback CDP is reachable by every local account: with another one
+    able to log in, the debugging Chrome is never started nor filled."""
+    a = mcs_adapter.MCSAdapter()
+    started = []
+    monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: started.append(1))
+    monkeypatch.setattr(mcs_adapter, "_login_accounts",
+                        lambda: [_account(os.getuid()), _account(4294967294, "/usr/bin/false"),
+                                 _account(65534, "/usr/sbin/nologin")])
+    assert mcs_adapter._other_login_accounts() == 0       # nobody-style service accounts
+    monkeypatch.setattr(mcs_adapter, "_login_accounts",
+                        lambda: [_account(os.getuid()), _account(4999, "/usr/bin/false"),
+                                 _account(5000), _account(1_000_000_007)])
+    assert mcs_adapter._other_login_accounts() == 2       # directory uids count too
+    assert a._auto_login(PROFILE, CHROME) == "manual_required:multi_user_host"
+    assert started == []

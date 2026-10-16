@@ -2,7 +2,8 @@
 
 The codebase keeps a flat import namespace (`import ledger`) split
 across subdirectories — each dir holding .py files is an import root,
-at any depth (e.g. extract/v1/, extract/v4/). Entry-point modules put
+at any depth (e.g. extract/v1/, extract/v4/), except retired v2/v3 engines.
+Entry-point modules put
 the mcs/ root on sys.path and import this module; importing it
 prepends every module dir so local modules resolve ahead of any
 same-named installed package. See AGENTS.md "システムと入口".
@@ -18,6 +19,9 @@ def _import_roots() -> list[str]:
     for root, dirs, files in os.walk(_PKG):
         dirs[:] = sorted(d for d in dirs
                          if not d.startswith((".", "_")))
+        # Updates can leave untracked retired engines; never reactivate them.
+        if root == os.path.join(_PKG, "extract"):
+            dirs[:] = [d for d in dirs if d not in {"v2", "v3"}]
         if root != _PKG and any(f.endswith(".py") for f in files):
             roots.append(root)
     return roots

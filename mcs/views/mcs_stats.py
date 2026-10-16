@@ -262,12 +262,15 @@ def _urgency_rule_outcomes(db, w, p) -> dict:
 def st_overview(db, scope):
     """ST-001: rooms / patients / posts / senders / orgs / period."""
     w, p = _where(scope)
-    rooms = db.execute("SELECT COUNT(*) FROM patients").fetchone()[0]
+    # a project-scoped caller sees only its own room, never deployment totals
+    pw, pp = ((" WHERE project_id = ?", [scope["project_id"]])
+              if scope["project_id"] is not None else ("", []))
+    rooms = db.execute(f"SELECT COUNT(*) FROM patients{pw}", pp).fetchone()[0]
     state_rows = db.execute(
         "SELECT CASE WHEN is_archived=1 THEN 'archived' "
         "       WHEN fetch_state IS NULL THEN 'unknown' "
-        "       ELSE fetch_state END s, COUNT(*) FROM patients "
-        "GROUP BY s").fetchall()
+        f"       ELSE fetch_state END s, COUNT(*) FROM patients{pw} "
+        "GROUP BY s", pp).fetchall()
     posts = db.execute(
         f"SELECT COUNT(*) FROM messages m WHERE 1=1{w}", p).fetchone()[0]
     active_rooms = db.execute(
@@ -281,7 +284,7 @@ def st_overview(db, scope):
         f" WHERE organization NOT NULL AND organization!=''{w}",
         p).fetchone()[0]
     rng = db.execute(
-        "SELECT MIN(posted_at_ts), MAX(posted_at_ts) FROM messages"
+        f"SELECT MIN(posted_at_ts), MAX(posted_at_ts) FROM messages{pw}", pp
     ).fetchone()
     return _result("ok", scope, {
         "rooms_total": rooms,

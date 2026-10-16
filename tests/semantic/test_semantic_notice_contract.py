@@ -20,6 +20,7 @@ def test_notice_preserves_all_sections_and_uses_instant_order(tmp_path):
                 targets=[1, 2], quality="full")
         assert "2026/09/20 05:00 JST" in text
         assert all(f"【提案】{c['text']}" in text for c in claims)
-        assert all(item in text for item in limitations)
+        assert not any(item in text for item in limitations)
+        assert "要約対象外の情報があります。MCS原文を確認してください。" in text
     finally:
         db.close()

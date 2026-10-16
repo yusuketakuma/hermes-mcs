@@ -16,7 +16,7 @@ from semantic_policy import (KIND_AUDIT, KIND_FACT_AUDIT, KIND_FACTS_V2,
                              KIND_SUMMARY)
 from semantic_testkit import (_canonical_cfg, _drain, _FakeJev, _ledger,
                               _cfg, _llm_v2, _med_fact, _message, NO_FACTS, _patient,
-                              _preflight_jev, _seeded_two)
+                              _preflight_jev, _seeded_two, _summary_from_facts)
 
 
 def _summary_doc(db, mid):
@@ -168,8 +168,7 @@ def _many_facts_llm(n, statement_len=20):
     the >40 corpus the old max_facts cap silently dropped."""
     def llm(prompt):
         if "要約器" in prompt:
-            return json.dumps({"claims": [], "limitations": []},
-                              ensure_ascii=False)
+            return _summary_from_facts(prompt)
         quote = ("アムロジピン" if "アムロジピン" in prompt
                  else "メトホルミン" if "メトホルミン" in prompt else "薬")
         facts = [{"statement": (f"合成事実{i:03d}番 "
@@ -284,8 +283,7 @@ def test_repair_reopening_obligations_never_publishes_pass(tmp_path):
     try:
         def llm(prompt):
             if "要約器" in prompt:
-                return json.dumps({"claims": [], "limitations": []},
-                                  ensure_ascii=False)
+                return _summary_from_facts(prompt)
             if "監査で不合格" in prompt:     # repair drops the fact
                 return json.dumps(
                     {"facts": [], "category_presence":
@@ -440,10 +438,15 @@ def test_canonical_switch_reaudits_summary_and_renders_new_facts(tmp_path):
         p = _patient(db)
         p.messages = [_message(1, body="合成記録を希望します。")]
         db.save_patient(p, notify={"source": "unread"}, semantic=True)
-        def empty(_prompt):
-            return '{"facts":[],"claims":[],"limitations":[]}'
+        def initial_llm(prompt):
+            if "要約器" in prompt:
+                return _summary_from_facts(prompt)
+            return json.dumps({"facts": [{
+                "kind": "preference", "statement": "合成記録を希望",
+                "status": "not_stated", "polarity": "affirmed",
+                "evidence_quote": "合成記録を希望"}]})
         semantic.run_due(db, _cfg("enforce", loop_mode="off"), {"errors": []},
-                         time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=empty)
+                         time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=initial_llm)
         old = _artifacts(db, KIND_SUMMARY, 1)[-1]
         assert _meta(old)["audit_status"] == "PASS"
         db.semantic_seed(1, [1], {"source": "replay"})
@@ -452,7 +455,7 @@ def test_canonical_switch_reaudits_summary_and_renders_new_facts(tmp_path):
         def canonical_llm(prompt):
             calls.append(prompt)
             if "要約器" in prompt:
-                return '{"claims":[],"limitations":[]}'
+                return _summary_from_facts(prompt)
             return json.dumps({"facts": [{
                 "kind": "preference", "statement": "合成記録を希望",
                 "subject_role": "patient", "polarity": "affirmed",

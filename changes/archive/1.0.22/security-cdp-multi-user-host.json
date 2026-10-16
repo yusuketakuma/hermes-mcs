@@ -1,0 +1,15 @@
+{
+  "category": "security",
+  "title": "別のユーザーがログインできるMacでは、自動ログインがCDP付きChromeを使わないように",
+  "summary": "自動ログインが使うChromeのデバッグ用の待受は、同じMacのすべてのアカウントから操作できます。ログイン可能な別のアカウントがあるMacでは、自動ログインはそのChromeを起動せず、MCSのパスワードも入力せずに手動ログインが必要な状態（manual_required:multi_user_host）として止まります。単一ユーザーのMacでは動作は変わりません。",
+  "upgrade": "単一ユーザーのMacでは追加操作は不要です。別のユーザーアカウントがあるMacでは自動ログインが止まり、手動ログインの通知が出ます。不要なアカウントを削除するか、MCSの運用を単一ユーザーのMacへ移してください。",
+  "details": [
+    "mcs_adapter._auto_login は、uid が macOS 501以上・Linux 1000以上で、シェルが nologin/false でない自分以外のアカウント（pwd）があれば _ensure_chrome の前に manual_required:multi_user_host を返す。大きな uid のディレクトリアカウントも数え、nobody 系はシェルで除外する。下限未満の root・システムアカウントは数えない。",
+    "テストはホストのアカウント構成に依存しないよう _login_accounts を共通設定で空にし、判定と停止を合成の pwd エントリで検証する。",
+    "Claude Security スキャン（2026-10-16、F1、CWE-306）の指摘。--remote-debugging-pipe への置換は常駐の仲介プロセスが必要なため今回は行わない。"
+  ],
+  "refs": [
+    "mcs/ingest/mcs_adapter.py",
+    "SECURITY.md"
+  ]
+}

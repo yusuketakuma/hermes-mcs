@@ -364,6 +364,20 @@ def test_quiesce_stops_legacy_drainer_only_when_installed(updater, monkeypatch,
     assert ran[0][2].endswith("/ai.mcs.extract-drainer-rt")
 
 
+def test_reinstall_marks_install_sh_as_an_updater_run(updater, monkeypatch):
+    seen = []
+
+    class Install(_Install):
+        calls: list = []
+
+        def __init__(self, argv, **kw):
+            seen.append(kw["env"].get(mcs_update.REINSTALL_ENV))
+            super().__init__(argv, **kw)
+    monkeypatch.setattr(mcs_update.subprocess, "Popen", lambda argv, *a, **kw: Install(argv, **kw))
+    updater._reinstall({"reinstall": True, "install_args": ["--no-llm"]})
+    assert seen == ["1"]
+
+
 def test_interrupted_reinstall_is_never_rerun_unattended(updater, monkeypatch):
     calls = _fake_install(monkeypatch)
     updater._reinstall({"reinstall": True, "reinstall_done": True})

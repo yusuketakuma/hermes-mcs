@@ -25,6 +25,9 @@
   確認後に届いた返信も既読になる場合があり、読取り時に見つかった追加返信は取得ジョブへ
   登録する。失敗・確認不能は未確認のまま再試行する
 - API はリダイレクト拒否・proxy 無効。Bearer は許可 origin 以外へ送らない
+- 自動ログインが使うChromeのCDP（127.0.0.1の待受）は、同じMacのすべてのOSアカウントから到達できる。
+  そのため、ログイン可能な別のアカウントがあるMacでは、自動ログインはCDP付きChromeを起動せず、
+  パスワードも入力せずに`manual_required:multi_user_host`で止まる。単一ユーザーのMacで運用する
 - ローカルLLM の推論経路は loopback 固定・proxy 無効
 - Hermes モード（`runtime_mode` 未指定/`hermes`）では、Slack/Discord の対話カード
   addon は Hermes が接続済みの client と interaction だけを使う。Discord SDK は必要な関数内で遅延 import し、独自 Bot・token 取得・

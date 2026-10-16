@@ -14,7 +14,7 @@ import semantic_extraction as se
 import semantic_loops
 import semantic_send_gate
 import semantic_v4 as v4
-from semantic_testkit import NO_FACTS, _cfg, _kind_rows, _ledger, _message, _patient, _PassJev
+from semantic_testkit import _summary_from_facts, NO_FACTS, _cfg, _kind_rows, _ledger, _message, _patient, _PassJev
 
 HELD = ("semantic_summary", "semantic_audit", "semantic_coverage",
         "semantic_facts_audit")
@@ -35,7 +35,7 @@ class _Llm:
 
     def __call__(self, prompt):
         if "要約器" in prompt:
-            return json.dumps({"claims": [], "limitations": []})
+            return _summary_from_facts(prompt)
         self.extractions += 1
         if "アムロジピン" in prompt:
             facts = [_fact("アムロジピン 5mg", "アムロジピン5mgを継続")]

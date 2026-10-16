@@ -105,6 +105,18 @@ def test_same_head_shallow_and_full_checkouts_are_reused(home, source, tmp_path,
     assert Path(_ran(home)[0]) == dest.resolve()
 
 
+def test_installed_checkout_at_another_version_is_never_installed_over(home, source, capsys):
+    dest = home / ".mcs"
+    subprocess.run(["git", "clone", "-q", str(source), str(dest)], check=True)
+    before = _git(dest, "rev-parse", "HEAD")
+    (source / "README").write_text("fictional newer revision")
+    _git(source, "commit", "-qam", "newer fictional commit")
+    assert install_local.main([], source=str(source)) == 2
+    assert "UPGRADE_AGENT.md" in capsys.readouterr().err
+    assert _git(dest, "rev-parse", "HEAD") == before
+    assert not (home / "install-ran").exists()
+
+
 def test_recorded_install_location_wins_without_dest(home, source, tmp_path):
     previous = tmp_path / "elsewhere" / "mcs"
     subprocess.run(["git", "clone", "-q", str(source), str(previous)], check=True)

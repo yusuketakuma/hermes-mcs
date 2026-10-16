@@ -56,7 +56,7 @@ def audit_code(bundle: dict, facts: list, summary: dict) -> list:
         findings.extend(claim_quantity_findings(c, facts))
         for r in c["fact_refs"]:
             covered.add(r)
-        if c["claim_kind"] == "reported_fact" and not c["evidence_refs"]:
+        if c["claim_kind"] in ("reported_fact", "limitation") and not c["evidence_refs"]:
             findings.append({"code": "claim_without_evidence",
                              "claim": c["claim_id"]})
     for i, f in enumerate(facts):
@@ -98,10 +98,9 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
     if jev_client is None or not _probability(match_threshold) \
             or type(per_request) is not int or not 1 <= per_request <= 48:
         return [{"code": "support_unevaluated"}], False
-    claims = [c for c in summary["claims"]
-              if c["claim_kind"] != "limitation"]
+    claims = summary["claims"]
     if not claims:
-        return findings, True
+        return [{"code": "support_unevaluated"}], False
     members = {m["message_id"]: m for m in bundle["members"]}
     ev_ctx = {}
     for f in summary.get("_facts", []):
@@ -442,6 +441,8 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
 
 def audit_status_for(code_findings: list, jev_findings: list,
                      evaluated: bool, repaired: bool) -> str:
+    if any(f["code"] == "input_oversize" for f in code_findings):
+        return "NEEDS_REVIEW"
     if not evaluated or any(f["code"] == "input_incomplete"
                             for f in code_findings):
         return "PENDING"

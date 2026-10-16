@@ -1,11 +1,16 @@
 # MCS 更新実行手順書（AIエージェント用）
 
-1.0.21候補の推奨Hermes agentはv0.21.7ベースのMCS companion（固定commit `f36c1da0016ce14c9c531cb9514ab4b0b667240d`）です。新規導入・CI・更新時の固定値をそろえています。既存の3.14環境のcheckoutを自動で変更する指示ではありません。従来の固定版 `6f35b1ed` も過去版として認識し、Python実行環境の移行が必要な場合だけ既存の確認付き経路で新しい固定版へ進めます。固定commitは、forkの公開branch `mcs-pin/v0.21.7-20261014` から認証なしで取得できることを確認済みです。
+1.0.21・1.0.22の推奨Hermes agentはv0.21.7ベースのMCS companion（固定commit `f36c1da0016ce14c9c531cb9514ab4b0b667240d`）です。新規導入・CI・更新時の固定値をそろえています。既存の3.14環境のcheckoutを自動で変更する指示ではありません。従来の固定版 `6f35b1ed` も過去版として認識し、Python実行環境の移行が必要な場合だけ既存の確認付き経路で新しい固定版へ進めます。固定commitは、forkの公開branch `mcs-pin/v0.21.7-20261014` から認証なしで取得できることを確認済みです。
 
 
-このガイドはv1.0.21候補のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は受入票で確認する。
-1.0.21候補の合成検証・公開・実機反映の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.21.md)で追跡する。
+このガイドはv1.0.22のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は受入票で確認する。
+1.0.22の合成検証・公開・実機反映の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.22.md)、
+1.0.21は[1.0.21の受入票](../development/acceptance/ACCEPTANCE_1.0.21.md)で追跡する。
 過去の1.0.13実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)に残す。
+
+### 1.0.22で追加された更新時の確認
+
+`plan` の `install_args` は、利用者が直接実行して成功した install.sh の opt-out です。再導入（`route=reinstall`）ではこれを使い、`null` のときだけ確認します（§4）。1.0.21以前の導入には記録がありません。起動役の取り出しは zsh でも動くよう `"${TAG}:scripts/mcs_upgrade.py"` と書きます。抽出の旧世代（`mcs/extract/v2`・`v3`）のファイルが checkout に残っていても import されません。
 
 ### 1.0.21で追加された運用診断
 
@@ -69,7 +74,7 @@ v1.0.0〜1.0.2は手動更新条件を保持し、standaloneの外部applyは阻
 schema巻戻しの個別復旧同意を更新承認で代用できません。
 
 [更新経路manifest](../../tests/fixtures/schema_upgrade/update-paths.json)は過去26経路の根拠と、
-現行21公開版（v1.0.0〜v1.0.20）・32経路のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
+現行22公開版（v1.0.0〜v1.0.21）・34経路のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
 テストは完全合成でGit履歴に依存しませんが、旧target updater全体の26経路再実行、
 実Git・host協調停止・SDK導入・実機配備を検証したものではありません。
 launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
@@ -98,7 +103,7 @@ launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
 
 | # | 確認 | コマンド | 合格条件 |
 |---|---|---|---|
-| 1 | checkout | `git -C ~/.mcs rev-parse --show-toplevel`（別の場所に導入した場合はそのパス。以下 `$REPO`） | パスが出る |
+| 1 | checkout | 次の順で最初に見つかったものを使う（以下 `$REPO`）: `sed -n 1p ~/.mcs-recovery/repo_path` → `grep -o "/[^']*/mcs/ops/mcs_cli.py" ~/.local/bin/mcs`（末尾の `/mcs/ops/mcs_cli.py` を除く） → `readlink ~/.hermes/plugins/mcs-discord-commands`（末尾の `/hermes_plugin` を除く） → `git -C ~/.mcs rev-parse --show-toplevel` → `git -C ~/.local/share/hermes-mcs rev-parse --show-toplevel`（`install_local.py` の置き場所） | 候補が `git -C "$REPO" rev-parse --show-toplevel` で同じパスを返す。どれも無ければユーザーに確認する |
 | 2 | 導入形態 | `python3 -c "import json;print(json.load(open('$HOME/.mcs/config.json')).get('runtime_mode','hermes'))"` | `hermes` か `standalone` |
 | 3 | Python | hermes: `PY=~/.hermes/hermes-agent/venv/bin/python` / standalone: `PY=~/.mcs/venv/bin/python3`。`$PY -V` | 3.10 以上（更新ツールの入口。1.0.18 への更新で 3.14 未満の venv は 3.14 へ移行される） |
 
@@ -112,7 +117,7 @@ launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
 ```bash
 git -C "$REPO" fetch --tags origin
 WORK=$(mktemp -d)        # 本人だけが読める作業dir。共有の /tmp 直下に置かない
-git -C "$REPO" show "$TAG:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"
+git -C "$REPO" show "${TAG}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"   # ${TAG}: zshでは "$TAG:s…" が修飾子になる
 "$PY" "$WORK/mcs_upgrade.py" --repo "$REPO" --no-fetch plan --to "$TAG"
 ```
 
@@ -127,6 +132,7 @@ git -C "$REPO" show "$TAG:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"
 | `schema_bump` | DB の版変更。あれば事前バックアップからの復元が巻戻しに含まれる |
 | `restarts` | 更新後に必要な再起動（`gateway`・`lineworks_adapter`） |
 | `recovery_tool_changed` | 復旧 watchdog の変更。`reinstall` 経路なら自動で反映（`--no-recovery` を付けた場合を除く）。`apply` 経路では適用後に、承認を得て `./install.sh <opt-out> --no-services` を再実行する |
+| `install_args` | 前回成功した install.sh の opt-out（`~/.mcs/data/install_options.json`）。`null` は記録なし（1.0.21 以前の導入） |
 | `notes` | 現在版より新しく移行先までの各版の「更新時の注意」（CHANGELOG） |
 
 1.0.13以降、macOS 標準 `/usr/bin/python3` の SQLite は WAL-reset 影響版のため、
@@ -139,7 +145,7 @@ git -C "$REPO" show "$TAG:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"
 merge 後の `services` が置き換える。`reinstall` 経路では `--install-arg=--no-recovery` を付けて apply する
 （install.sh は不一致の watchdog を置き換えずに停止するため）。自動で別 Python へは切り替えない。
 
-`$TAG:scripts/mcs_upgrade.py` が無い（v1.0.10 以前を移行先にした）場合は、その版へはこの手順で更新できない。
+`${TAG}:scripts/mcs_upgrade.py` が無い（v1.0.10 以前を移行先にした）場合は、その版へはこの手順で更新できない。
 
 ## 3. 阻害要因の解消
 
@@ -159,7 +165,7 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 | `schema_bump_auto_blocked` | `update.mode=auto` では schema 変更を適用しない。ユーザーと方針を決める（`notify` へ変更等） |
 | `standalone_external_apply` | 独立モードは host 経由で更新する（[STANDALONE.md](STANDALONE.md#更新復旧)）。`reinstall` がある場合は同書の再導入手順 |
 | `legacy_source_manual` | v1.0.0〜1.0.2 からの更新。§8 の手動経路へ |
-| `reinstall_incomplete` | 前回の再導入が install.sh の途中で中断した。`status` を示し **【ユーザー確認】** の上で `cd "$REPO" && ./install.sh <前回と同じ opt-out> --no-services` → `"$PY" mcs/ops/mcs_setup.py services` → `"$PY" mcs/ops/mcs_update.py reinstall-done`（HEAD が再導入した版のときだけ完了を記録し、残りの後処理を復旧処理で完了）→ `check`。復旧処理は install.sh を無人で再実行しない |
+| `reinstall_incomplete` | 前回の再導入が install.sh の途中で中断した。`status` を示し **【ユーザー確認】** の上で `cd "$REPO" && ./install.sh <前回と同じ opt-out（plan の install_args）> --no-services` → `"$PY" mcs/ops/mcs_setup.py services` → `"$PY" mcs/ops/mcs_update.py reinstall-done`（HEAD が再導入した版のときだけ完了を記録し、残りの後処理を復旧処理で完了）→ `check`。復旧処理は install.sh を無人で再実行しない |
 | `recovery_incomplete`（復旧レポート） | 抽出処理の起動確認が未完了。中断記録を保持するため、起動失敗の原因を修復して `recover` を再実行する。同じ復旧の再試行では起動済み処理を停止し直さない |
 | `update_state_corrupt` | `data/update_state.json` が読めない。内容を変えずに報告し、ユーザー判断を待つ |
 | `tag_not_fetched` | `git fetch --tags origin` が失敗している。ネットワーク・タグ名を確認 |
@@ -174,9 +180,14 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 
 - 現在版→移行先、`route`、停止の見込み時間
 - `notes` の要約（版ごと。必要な追加操作を明示）
-- `reinstall` の場合: install.sh の再実行と、導入時に付けた opt-out の確認。
-  記録が無いため、ユーザーに `--no-llm`（自前 LLM サーバ）・`--no-brew`・`--no-plugin`・`--no-recovery`
-  のどれを使っていたか確認する（`--mode` は不要。設定から自動判定）
+- `reinstall` の場合: install.sh の再実行と、使う opt-out。`plan` の `install_args` が配列なら
+  その opt-out を使い、確認は不要（空配列は opt-out なし）。`null` のときだけ、ユーザーに
+  `--no-llm`（自前 LLM サーバ）・`--no-brew`・`--no-plugin`・`--no-recovery` のどれを使っていたか確認する
+  （`--mode` は不要。設定から自動判定）。どちらの場合も、`~/.mcs-recovery/` があるなら復旧機能は導入済みなので、
+  `install_args` や回答に `--no-recovery` があっても除き、`notes` が求める場合だけ付ける
+  （付けると復旧ツールが古いまま残る）。
+  記録は利用者が install.sh を直接実行して成功したときだけ更新される。更新ツールが行う再導入は、
+  Python 移行や修復のために足した opt-out を記録しない
 - `schema_bump` の有無、`restarts`
 
 ## 5. 適用
@@ -186,7 +197,7 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 ```bash
 # route=apply
 "$PY" "$WORK/mcs_upgrade.py" --repo "$REPO" --no-fetch apply --to "$TAG"
-# route=reinstall（確認した opt-out だけを --install-arg=… で付ける）
+# route=reinstall（install_args の各要素、または確認した opt-out を --install-arg=… で付ける）
 "$PY" "$WORK/mcs_upgrade.py" --repo "$REPO" --no-fetch apply --to "$TAG" --reinstall --install-arg=--no-llm
 ```
 

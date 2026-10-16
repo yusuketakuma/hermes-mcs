@@ -1,0 +1,20 @@
+{
+  "category": "security",
+  "title": "要約の制約欄による監査回避と表示の偽装を防止",
+  "summary": "制約として生成された主張にも根拠検査と意味監査を適用し、主張が空の要約を監査完了と扱わなくなりました。自由記述の制約は原文確認の定型文に置き換え、要約本文や有効時点の改行で監査見出し・出所表示を偽装できないようにしました。",
+  "upgrade": "設定変更は不要です。Hermes接続では更新反映にgateway再起動が必要です。既存の保存形式は維持し、添付未解析とカテゴリ別の判定未確定の定型表示は保持します。監査方針の更新で旧PASSと未送信の旧通知は失効し、再監査が完了するまで送信しません。旧artifactは保持し、既定modeは変更しません。",
+  "details": [
+    "limitationの主張をJev監査から除外せず、証拠なしは修復または確認の対象にする。",
+    "要約・抽出済み事実・有効時点は単行化し、見出し・末尾の構造記号を内容用の記号へ置換する。",
+    "モデルの自由記述limitationsを通知へ転記せず、コードの既知の定型文だけ維持する。",
+    "コード生成の制約文はcode_limitationsへ分離し、モデルが同じ文面や同名フィールドを返しても生成元として採用しない。旧limitationsは保存互換のため保持するが、表示上は未検証の固定文へ置換する。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_audit.py",
+    "mcs/semantic/semantic_render.py",
+    "mcs/semantic/semantic_send_gate.py",
+    "mcs/semantic/semantic_policy.py",
+    "mcs/semantic/semantic_llm.py",
+    "mcs/semantic/semantic_drain.py"
+  ]
+}

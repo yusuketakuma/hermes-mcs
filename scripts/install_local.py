@@ -137,10 +137,15 @@ def _judge(source, dest, notes):
     if _is_checkout(dest):
         if os.path.realpath(_git(dest, "rev-parse", "--show-toplevel")) != dest:
             raise Refused(f"{dest} は別の checkout の内側です。checkout の最上位か空のフォルダを指定してください")
-        if _git(dest, "rev-parse", "HEAD") != _git(source, "rev-parse", "HEAD"):
+        dest_head, source_head = _git(dest, "rev-parse", "HEAD"), _git(source, "rev-parse", "HEAD")
+        if dest_head != source_head:
             if not _roots(source) & _roots(dest):
                 raise Refused(f"{dest} は別のプロジェクトの checkout です")
-            notes.append("導入先の checkout は元と別の版です。導入先の版のまま導入し、更新は mcs update で行います")
+            # Running the destination's own (other-version) install.sh would leave the
+            # requested version uninstalled; versions change only through the target updater.
+            raise Refused(f"{dest} は導入済みで、取得元と版が違います（導入先 {dest_head[:8]} / 取得元 "
+                          f"{source_head[:8]}）。ここでは導入も版の変更もしません。"
+                          "docs/guides/UPGRADE_AGENT.md の手順で移行先の版の更新ツールを使ってください")
         return "reuse", dest
     entries = set(os.listdir(dest))
     if not entries:

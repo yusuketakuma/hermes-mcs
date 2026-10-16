@@ -68,7 +68,8 @@ def test_notice_includes_mandatory_section(tmp_path):
                                       quality="full")
         assert "抽出済み事実" in text
         assert "薬剤｜アムロジピン継続" in text
-        assert "既存の制約" in text
+        assert "既存の制約" not in text
+        assert "要約対象外の情報があります。MCS原文を確認してください。" in text
     finally:
         db.close()
 

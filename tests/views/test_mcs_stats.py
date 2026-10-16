@@ -201,6 +201,17 @@ def test_overview_counts(db):
     assert st["rooms_by_state"]["archived"] == 1
 
 
+def test_overview_project_scope_hides_other_rooms(db):
+    _msg(db, 1, pid=1, ts=1789900000)
+    _msg(db, 2, pid=2, sender=2, prof="薬剤師", ts=1789800000)
+    db.execute("INSERT INTO patients VALUES (1,0,'ok',0),(2,1,'done',0)")
+    st = run(db, stat="overview", project=1)["overview"]
+    assert st["rooms_total"] == 1 and st["posts_in_scope"] == 1
+    assert st["rooms_by_state"] == {"ok": 1}
+    assert st["stored_range"] == {"first_posted_ts": 1789900000,
+                                  "last_posted_ts": 1789900000}
+
+
 def test_parsed_requires_current_revision(db):
     _msg(db, 1, chash="new")
     _extract(db, 1, "old", [])          # stale parse -> not counted

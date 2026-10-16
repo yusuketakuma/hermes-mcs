@@ -747,7 +747,9 @@ def _defuse_control_syntax(text: str) -> str:
 
 def _compose_body(content: str,
                   files: list[tuple[str, str]] | None) -> str:
-    body = _defuse_control_syntax(content)
+    # Hermes parses mentions/links in every field, including file followups.
+    body = (_defuse_control_syntax(content).replace("<", "＜").replace(">", "＞")
+            .replace("@", "＠").replace("](", "］("))
     if files:
         body += "".join(f"\nMEDIA:{_media_path(fn, path)}"
                         for fn, path in files)

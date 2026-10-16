@@ -3,7 +3,7 @@
   "synthetic": true,
   "origins": "origins.json",
   "target": {
-    "version": "v1.0.21",
+    "version": "v1.0.22",
     "code": "current workspace updater",
     "schema": "ledger.SCHEMA_VERSION"
   },
@@ -13,7 +13,7 @@
     "original_runner": "upgrade_routes.py",
     "original_log": "upgrade-routes-2.log",
     "artifact_location": "unversioned isolated temporary task directory; absolute path not recorded",
-    "tag_checks": "2026-10-04 local git rev-parse, cat-file -e and diff --quiet: commits agree with origins.json; updater absent through v1.0.2; standalone starts at v1.0.10; install.sh differs through v1.0.9 but is identical across v1.0.10-v1.0.12; 2026-10-13 local v1.0.20 tag dereferences to bbca0e09484f9115e88660ba764a7a79071d88e3; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py exist at that exact commit.",
+    "tag_checks": "2026-10-04 local git rev-parse, cat-file -e and diff --quiet: commits agree with origins.json; updater absent through v1.0.2; standalone starts at v1.0.10; install.sh differs through v1.0.9 but is identical across v1.0.10-v1.0.12; 2026-10-13 local v1.0.20 tag dereferences to bbca0e09484f9115e88660ba764a7a79071d88e3; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py exist at that exact commit. 2026-10-16 local v1.0.21 tag dereferences to 802d45c9a50034a735e6138648f44b49722509ae; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py exist at that exact commit.",
     "claim": "Historical success is a recorded result, not a rerun of historical updater binaries. Current contract tests use stored synthetic objects and original DDL, without repository Git history."
   },
   "source_features": [
@@ -119,6 +119,11 @@
     },
     {
       "release": "v1.0.20",
+      "updater": true,
+      "standalone": true
+    },
+    {
+      "release": "v1.0.21",
       "updater": true,
       "standalone": true
     }
@@ -470,6 +475,18 @@
     },
     {
       "source": "v1.0.20",
+      "runtime": "standalone",
+      "entry": "host",
+      "external_plan": "standalone_external_apply"
+    },
+    {
+      "source": "v1.0.21",
+      "runtime": "hermes",
+      "entry": "target_bootstrap",
+      "external_plan": null
+    },
+    {
+      "source": "v1.0.21",
       "runtime": "standalone",
       "entry": "host",
       "external_plan": "standalone_external_apply"

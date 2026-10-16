@@ -2,6 +2,9 @@
 
 エージェント作業用の最小指示。詳細は `README.md`・`SECURITY.md`。
 
+このMacへの導入・更新・復旧を頼まれた場合は開発作業ではない。`README.md` 冒頭の「AIエージェントへ」の表で
+`docs/guides/SETUP_AGENT.md`（新規）か `docs/guides/UPGRADE_AGENT.md`（導入済み・復旧）を選んで従う。
+
 ## システムと入口
 
 MCS の医療・介護チャットを収集・解析するローカルシステム。

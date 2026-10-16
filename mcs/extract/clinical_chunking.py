@@ -8,7 +8,8 @@ from mcs_util import text_chunks
 PLAN_VERSION = 1
 # These are output-pressure units, not measured tokenizer counts or a speed promise.
 _OUTPUT_BUDGET = 850
-_DOSE = re.compile(r"\d+(?:\.\d+)?\s*(?:mg|μg|mcg|g|ml|錠|包|滴|kg|cm|%|割|回)", re.I)
+# bounded repeats: an unbounded digit run backtracks quadratically per search
+_DOSE = re.compile(r"(?<![\d.])\d{1,8}(?:\.\d{1,6})?(?!\d)\s{0,8}(?:mg|μg|mcg|g|ml|錠|包|滴|kg|cm|%|割|回)", re.I)
 _OBSERVATION = re.compile(r"体重|身長|血糖|体温|脈拍|血圧|SpO2|HbA1c|eGFR|\b(?:Cr|AST|ALT|BUN|CRP|Na|K|Hb|Alb)\b", re.I)
 _CHANGE = re.compile(r"中止|終了|開始|変更|増量|減量|頓服|指示|希望|予定|痛|睡眠|減少|残薬|飲み忘れ|嚥下|支援|確認")
 _FIELD = re.compile(r"(?:^|\n)[ \t　]*(?:[■●◆・*-][ \t　]*)?[^\n:：]{1,24}[:：]")

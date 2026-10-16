@@ -8,7 +8,7 @@ from mcs_util import payload_hash
 import semantic_jev as jev
 
 SCHEMA_VERSION = "2026-09-20"
-POLICY_VERSION = "2026-09-21.2"
+POLICY_VERSION = "2026-10-16.1"
 JOB_KIND = "semantic"
 QC_JOB_KIND = "extract_qc"
 QC_ARTIFACT = "extract_qc"
