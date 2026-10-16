@@ -184,10 +184,21 @@ def cmd_capture(args) -> int:
                 except (ValueError, OverflowError, OSError):
                     raise ValueError("refstat_time_unrepresentable") from None
         result = view.stats(vars(args))
+        from export_schema import validate_record
+        from extraction_audit import STAT_NAMES, definition_fingerprint
+        from read_model import CONTRACT
+        for name, value in result.get("stats", {}).items():
+            if name in STAT_NAMES:
+                validate_record({"type": "stat", "contract": CONTRACT,
+                    "snapshot_generation_id": result["snapshot"]["generation_id"],
+                    "preset": "extraction_audit", "name": name, "value": value})
     finally:
         view.close()
     ref = {"schema": "refstat_v1", "name": args.name,
            "captured_at": int(time.time()), **result}
+    if set(STAT_NAMES) & set(result.get("stats") or {}):
+        # Audit numbers mean nothing across cue/reader definitions.
+        ref["audit_definition"] = definition_fingerprint()
     pending = _ref_path(args.data_dir, args.name, "pending")
     atomic_write(pending, lambda f: json.dump(
         ref, f, ensure_ascii=False, sort_keys=True, allow_nan=False, indent=1),
@@ -276,10 +287,18 @@ def cmd_verify(args) -> int:
     # statuses: unverified (no approval artifact for these exact bytes),
     # superseded (a NEWER approval exists for a different hash — the
     # file was rolled back or replaced), match, drift, regression
+    from extraction_audit import STAT_NAMES, definition_fingerprint
+    audited = bool(set(STAT_NAMES) & set(ref_stats))
+    reference_definition = ref.get("audit_definition") if audited else None
+    current_definition = definition_fingerprint() if audited else None
     if approval is None:
         status = "unverified"
     elif approvals[0].get("file_hash") != file_hash:
         status = "superseded"
+    elif audited and not isinstance(reference_definition, str):
+        status = "definition_missing"
+    elif audited and reference_definition != current_definition:
+        status = "definition_changed"
     elif not diffs:
         status = "match"
     else:
@@ -293,7 +312,11 @@ def cmd_verify(args) -> int:
               "same_snapshot": same_snapshot,
               "reference_snapshot": ref_snapshot,
               "current_snapshot": result.get("snapshot"),
-              "diffs": diffs}
+              # numbers under another audit definition are not compared
+              "diffs": [] if status.startswith("definition_") else diffs}
+    if audited:
+        report.update(reference_definition=reference_definition,
+                      current_definition=current_definition)
     print(json.dumps(report, ensure_ascii=False, allow_nan=False))
     return 0 if status == "match" else 2
 

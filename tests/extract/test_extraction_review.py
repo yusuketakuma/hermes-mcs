@@ -67,6 +67,41 @@ def test_schema_allows_subject_and_raw_relative_deadline():
     assert "due_text" in props["requests"]["items"]["properties"]
 
 
+@pytest.mark.parametrize("schema", [
+    extract_llm._SCHEMA["schema"],
+    extract_llm._SCHEMA_BATCH["schema"]["properties"]["items"]["items"],
+])
+def test_generation_contract_keeps_symptoms_and_request_metadata(schema):
+    assert "symptoms" in schema.get("required", [])
+    symptoms = schema["properties"]["symptoms"]["items"]
+    assert "negated" in symptoms["required"]
+    assert symptoms["properties"]["negated"]["type"] == "boolean"
+    request = schema["properties"]["requests"]["items"]
+    assert {"to", "from", "kind", "action"} <= set(request["required"])
+    for key in ("to", "from", "kind"):
+        assert "null" in request["properties"][key]["type"]
+
+
+def test_explicit_unknown_request_metadata_does_not_invent_roles_or_kind():
+    body = "次回までに確認をお願いします。"
+    out = extract_llm._validate({
+        "symptoms": [], "requests": [{"to": None, "from": None,
+            "kind": None, "action": "確認", "evidence": body}],
+        "summary": body, "urgency": "routine"}, body)
+    assert out["symptoms"] == []
+    assert out["requests"] == [{"to": None, "action": "確認", "evidence": body}]
+
+
+def test_negative_symptom_and_legacy_sparse_output_remain_valid():
+    body = "発熱はありません。"
+    old = {"symptoms": [{"text": "発熱", "negated": True, "evidence": body}],
+           "summary": body, "urgency": "routine"}
+    out = extract_llm._validate(old, body)
+    assert out["symptoms"][0]["negated"] is True
+    assert "requests" not in out
+    assert extract_llm._validate({"summary": body, "urgency": "routine"}, body)
+
+
 def test_claimed_head_does_not_starve_other_pending_messages(db, monkeypatch):
     db.save_messages([_message(1, day=20), _message(2, day=19)])
     row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()

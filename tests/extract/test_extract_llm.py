@@ -283,7 +283,7 @@ def test_schema_batch_item_inherits_kind_condition_reply():
         "items"]["properties"]
     req = props["requests"]["items"]["properties"]
     assert "kind" in req and "condition" in req
-    assert props["requests"]["items"]["required"] == ["action"]
+    assert props["requests"]["items"]["required"] == ["to", "from", "kind", "action"]
     assert props["reply"]["required"] == ["kind"]
     assert set(props["reply"]["properties"]) == {"kind", "evidence"}
 
@@ -1884,7 +1884,8 @@ def test_batch_item_evidence_validates_against_own_body(
     monkeypatch.setattr(
         extract_llm, "_llm_call",
         lambda p, **kw: {"items": [
-            {"i": 0, "meds": [{"name": "ロキソプロフェン",
+            {"i": 0, "meds": [{"name": "ロキソプロフェン", "action": "stop",
+                               "status": "past", "subject": "patient", "negated": False,
                                "evidence": "ロキソプロフェン中止"}]},
             {"i": 1, "meds": [{"name": "ロキソプロフェン",
                                "evidence": "ロキソプロフェン中止"}]}]})
@@ -2646,7 +2647,8 @@ def test_v4_publication_between_prepare_and_insert_fences_legacy(tmp_path):
     published = []
 
     def publish_before_insert(sql):
-        if not published and sql.startswith("INSERT INTO artifacts(kind,"):
+        # The prior comparison now owns a write lock; race before that boundary.
+        if not published and sql == "BEGIN IMMEDIATE":
             other.artifact_add("semantic_facts_v4", '{"meds":[]}',
                                project_id=1, message_id=1,
                                meta={"hash": row["content_hash"], "engine_version": 4,

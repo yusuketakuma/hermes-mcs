@@ -543,3 +543,80 @@ def test_maximum_unicode_actor_reason_still_verifies_reference(tmp_path, capsys)
     finally:
         store.close()
     capsys.readouterr()
+
+
+def _audit_ref(tmp_path, db, name="audit"):
+    argv = ["capture", "--name", name, "--preset", "extraction_audit",
+            "--snapshot", str(_snapshot(tmp_path)), "--data-dir", str(tmp_path)]
+    assert mcs_refstats.main(argv) == 0
+    requests.apply_command(db, _approve_req(name, _pending_hash(tmp_path, name)))
+    return Path(mcs_refstats._ref_path(tmp_path, name, "approved"))
+
+
+def _last(capsys):
+    return json.loads(capsys.readouterr().out.splitlines()[-1])
+
+
+def test_audit_capture_binds_the_definition_and_the_same_definition_matches(tmp_path, capsys):
+    import extraction_audit
+    db = _db(tmp_path)
+    try:
+        db.save_messages([_msg()])
+        approved = _audit_ref(tmp_path, db)
+        snap = _snapshot(tmp_path)
+    finally:
+        db.close()
+    assert json.loads(approved.read_text())["audit_definition"] == extraction_audit.definition_fingerprint()
+    assert _verify(tmp_path, name="audit", snapshot=snap) == 0
+    assert _last(capsys)["status"] == "match"
+
+
+def test_a_changed_audit_definition_never_matches_equal_numbers(tmp_path, capsys, monkeypatch):
+    import extraction_audit
+    db = _db(tmp_path)
+    try:
+        db.save_messages([_msg()])
+        _audit_ref(tmp_path, db)
+        snap = _snapshot(tmp_path)
+    finally:
+        db.close()
+    reference = extraction_audit.definition_fingerprint()
+    monkeypatch.setattr(extraction_audit, "definition_fingerprint", lambda: "f" * 64)
+    assert _verify(tmp_path, name="audit", snapshot=snap) == 2
+    report = _last(capsys)
+    assert report["status"] == "definition_changed" and report["diffs"] == []
+    assert report["reference_definition"] == reference and report["current_definition"] == "f" * 64
+
+
+def test_an_old_audit_reference_without_a_definition_is_not_compared(tmp_path, capsys):
+    db = _db(tmp_path)
+    try:
+        db.save_messages([_msg()])
+        approved = _audit_ref(tmp_path, db)
+        data = json.loads(approved.read_text())
+        data.pop("audit_definition")
+        # an approved audit refstat from before the binding existed
+        pending = Path(mcs_refstats._ref_path(tmp_path, "audit", "pending"))
+        pending.write_text(json.dumps(data))
+        requests.apply_command(db, _approve_req("audit", mcs_refstats.file_sha256(pending)))
+        snap = _snapshot(tmp_path)
+    finally:
+        db.close()
+    assert _verify(tmp_path, name="audit", snapshot=snap) == 2
+    report = _last(capsys)
+    assert report["status"] == "definition_missing" and report["diffs"] == []
+
+
+def test_non_audit_presets_keep_their_old_shape_and_comparison(tmp_path, capsys):
+    db = _db(tmp_path)
+    try:
+        db.save_messages([_msg()])
+        _capture(tmp_path)
+        assert "audit_definition" not in json.loads(
+            Path(mcs_refstats._ref_path(tmp_path, "base", "pending")).read_text())
+        requests.apply_command(db, _approve_req("base", _pending_hash(tmp_path)))
+        snap = _snapshot(tmp_path)
+    finally:
+        db.close()
+    assert _verify(tmp_path, snapshot=snap) == 0
+    assert _last(capsys)["status"] == "match"

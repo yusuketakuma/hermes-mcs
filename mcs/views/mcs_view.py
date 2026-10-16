@@ -510,27 +510,8 @@ class View:
         return result
 
     def _loop_links(self, pid, *, request_id=None, loop_id=None):
-        # The request row is the authority; link artifacts contain no task state.
-        rows = self.db.execute("""
-          SELECT a.artifact_id,a.created_at,a.content,r.request_id,r.status,r.revision,r.title
-          FROM artifacts a JOIN requests r ON r.project_id=a.project_id
-            AND r.request_id=CASE WHEN json_valid(a.content)
-              THEN json_extract(a.content,'$.request_id') END
-          WHERE a.kind='request_loop_link' AND a.project_id=?
-            AND (? IS NULL OR r.request_id=?)
-            AND (? IS NULL OR CASE WHEN json_valid(a.content)
-              THEN json_extract(a.content,'$.loop_artifact_id') END=?)
-          ORDER BY a.artifact_id DESC
-        """, (pid, request_id, request_id, loop_id, loop_id))
-        links = []
-        for row in rows:
-            item = dict(row)
-            link = loads_dict(item.pop("content"))
-            if link is None:
-                continue
-            item["link"] = link
-            links.append(item)
-        return links
+        from request_loops import loop_links
+        return loop_links(self.db, pid, request_id=request_id, loop_id=loop_id)
 
     def _attachments(self, project, message_id, limit, cursor):
         self._message(project, message_id)
@@ -623,154 +604,21 @@ class View:
                                      project_id=pid, limit=limit)
 
     def _loops(self, pid, limit):
-        """Open-Loop candidates + their relation events. Candidates are
-        advisory only — promotion to a formal request goes through the
-        human-confirmed request path, never automatic (INV-11)."""
-        from semantic import thread_bundle
-        import semantic_jev as jev
-        from semantic_loops import _rejected_pair
-        from request_loops import valid_origin_evidence
+        """Open-Loop candidates and relations; only human-confirmed operations create requests."""
+        from request_loops import effective_loop_state
 
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("bad_limit")
         items = []
         policy = self._current_policy()
         bundles = {}
-        for r in self.db.execute(
-                "SELECT artifact_id,message_id,content,meta,created_at "
+        for row in self.db.execute(
+                "SELECT artifact_id,project_id,message_id,content,meta,created_at "
                 "FROM artifacts WHERE kind='loop_candidate' "
-                "AND project_id=? ORDER BY artifact_id DESC LIMIT ?",
-                (pid, limit)):
-            try:
-                cand = json.loads(r["content"])
-            except (ValueError, TypeError, RecursionError):
-                continue
-            if not isinstance(cand, dict):
-                continue
-            origin = cand.get("origin") or {}
-            if not isinstance(origin, dict):
-                origin = {}
-            try:
-                candidate_meta = json.loads(r["meta"] or "{}")
-            except (ValueError, TypeError, RecursionError):
-                candidate_meta = {}
-            if not isinstance(candidate_meta, dict):
-                candidate_meta = {}
-            source = self.db.execute(
-                "SELECT content_hash,COALESCE(parent_id,message_id) root "
-                "FROM messages WHERE project_id=? AND message_id=?",
-                (pid, r["message_id"])).fetchone()
-            root = source["root"] if source else None
-            if root not in bundles:
-                bundles[root] = thread_bundle(self, pid, root) if root else None
-            bundle = bundles[root]
-            candidate_fp = candidate_meta.get(
-                "source_fingerprint", candidate_meta.get("fingerprint"))
-            current = bool(
-                source and bundle and not candidate_meta.get("invalidated")
-                and origin.get("revision") == source["content_hash"]
-                and candidate_fp == bundle["source_fingerprint"]
-                and policy
-                and candidate_meta.get("policy_fingerprint") == policy)
-            members = {m["message_id"]: m for m in bundle["members"]} if bundle else {}
-            cand["adoption_eligible"] = current and valid_origin_evidence(
-                origin, members.get(r["message_id"]))
-            events = []                       # (created_at, event)
-            evaluated_pairs = set()
-            for e in self.db.execute(
-                    "SELECT content,meta,created_at FROM artifacts "
-                    "WHERE kind='loop_event' AND project_id=? "
-                    "AND CASE WHEN json_valid(content) THEN "
-                    "json_extract(content,'$.loop_artifact_id')=? OR "
-                    "(json_extract(content,'$.loop_artifact_id') IS NULL AND "
-                    "json_extract(content,'$.loop_origin_id')=?) ELSE 0 END "
-                    "ORDER BY artifact_id DESC LIMIT 50",
-                    (pid, r["artifact_id"], r["message_id"])):
-                try:
-                    ev = json.loads(e["content"])
-                    meta = json.loads(e["meta"] or "{}")
-                except (ValueError, TypeError, RecursionError):
-                    continue
-                if not isinstance(ev, dict):
-                    continue
-                trigger_id = ev.get("trigger_message_id")
-                trigger = members.get(trigger_id) if requests.positive(trigger_id) else None
-                ev["stale"] = not (
-                    current and bundle and trigger and isinstance(meta, dict)
-                    and meta.get("source_fingerprint", meta.get("fingerprint"))
-                    == bundle["source_fingerprint"]
-                    and policy
-                    and meta.get("policy_fingerprint") == policy
-                    and ev.get("origin_revision") == origin.get("revision")
-                    and ev.get("trigger_revision") == trigger["revision"])
-                confidence = jev._finite(ev.get("confidence"))
-                if (not ev["stale"] and confidence is not None
-                        and 0 <= confidence <= 1
-                        and isinstance(ev.get("relation"), str)
-                        and isinstance(ev.get("reported_relation"), str)
-                        and ev.get("relation") in jev.LOOP_RELATION_OPTIONS
-                        and ev.get("reported_relation") in jev.LOOP_RELATION_OPTIONS):
-                    evaluated_pairs.add((trigger_id, ev["trigger_revision"]))
-                if ev.get("relation") == "unrelated":
-                    # Keep unrelated evaluations for dedup, hide them from the display.
-                    continue
-                if ev.get("loop_artifact_id") == r["artifact_id"] or (
-                        ev.get("loop_artifact_id") is None
-                        and ev.get("loop_origin_id") == r["message_id"]):
-                    events.append((e["created_at"], ev))
-            cand["relation_events"] = [ev for _, ev in events[:5]]
-            # shortcut: suppression uses the existing 50-event window;
-            # query older matching events if long histories need exact counts.
-            unavailable = set()
-            if current:
-                for rejection in self.db.execute(
-                        "SELECT content,meta FROM artifacts WHERE kind='loop_relation_rejected' "
-                        "AND project_id=? AND CASE WHEN json_valid(content) THEN "
-                        "json_extract(content,'$.loop_artifact_id')=? ELSE 0 END",
-                        (pid, r["artifact_id"])):
-                    receipt, meta = loads_dict(rejection["content"]), loads_dict(rejection["meta"])
-                    if not receipt or not meta or not isinstance(meta.get("retry_scope"), str):
-                        continue
-                    parsed = _rejected_pair(receipt, meta, policy, meta["retry_scope"])
-                    if not parsed or meta.get("fingerprint") != bundle["source_fingerprint"]:
-                        continue
-                    (loop_id, trigger_id, revision), _ = parsed
-                    trigger = members.get(trigger_id)
-                    if (loop_id == r["artifact_id"] and trigger
-                            and revision == trigger["revision"]
-                            and (trigger_id, revision) not in evaluated_pairs):
-                        unavailable.add((trigger_id, revision))
-            cand["relation_evaluation_unavailable"] = len(unavailable)
-            cand["relation_evaluation_notice"] = (
-                f"後続の投稿{len(unavailable)}件について関係評価を取得できませんでした"
-                if unavailable else None)
-            # a completion/cancellation report relation promotes the
-            # candidate to RESOLUTION_CANDIDATE for display — the stored
-            # artifact stays immutable (§17.3). History is derived the
-            # same way: the stored record only logs its creation entry,
-            # later transitions live in relation events.
-            history = cand.get("history")
-            history = [entry for entry in history if isinstance(entry, dict)] \
-                if isinstance(history, list) else []
-            for ts, e in reversed(events):
-                if not e["stale"] and e.get("relation") in ("completion_report",
-                                         "cancellation_report"):
-                    history.append({
-                        "state": "RESOLUTION_CANDIDATE", "at": ts,
-                        "trigger_message_id":
-                            e.get("trigger_message_id"),
-                        "relation": e.get("relation")})
-            cand["history"] = history
-            cand["current"] = current
-            cand["effective_state"] = "STALE" if not current else (
-                "RESOLUTION_CANDIDATE"
-                if any(not e["stale"] and e.get("relation") in ("completion_report",
-                                             "cancellation_report")
-                       for _, e in events)
-                else cand.get("state"))
-            cand["artifact_id"] = r["artifact_id"]
-            cand["linked_requests"] = self._loop_links(pid, loop_id=r["artifact_id"])
-            items.append(cand)
+                "AND project_id=? ORDER BY artifact_id DESC LIMIT ?", (pid, limit)):
+            candidate = effective_loop_state(self.db, row, policy=policy, bundles=bundles)
+            if candidate is not None:
+                items.append(candidate)
         return {"items": items, "scope": "loop_candidates"}
 
     def _receipt(self, project, command_id, payload_hash):

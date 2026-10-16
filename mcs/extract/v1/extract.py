@@ -89,7 +89,7 @@ _URGENT_INACTIVE = re.compile(
     r"(?=$|[、,]|ので|ため|から|けど|けれど|が|と))")
 
 _SELF_PERSON = r"ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?"
-_FAMILY_PERSON = r"ご家族|家族|お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|母|父|娘(?:さん|様)?|息子(?:さん|様)?|夫|妻|兄|姉|弟|妹|孫|同居者"
+_FAMILY_PERSON = r"ご家族|家族|お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|母|父|娘(?:さん|様)?|息子(?:さん|様)?|夫|妻|お?兄(?:さん|様)?|お?姉(?:さん|様)?|(?:弟|妹|孫)(?:さん|様)?|同居者"
 _OTHER_PERSON = r"本人以外|他者|他人|第三者|他の(?:患者|利用者)|他患者|別の(?:患者|利用者)|別患者|(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ)(?:さん|様)?"
 _CLINICAL_OWNER = (r"症状|状態|体調|意識|呼吸|体温|血圧|収縮期|拡張期|容態|病歴|入院|退院|搬送|死亡|脈拍|酸素|薬|服薬|Cr|eGFR|AST|ALT|BUN|HbA1c|Hb|Na|K|血糖|採血|検査|BP|SpO2|熱|体重|身長|weight|height|BS|Glu|glucose|BNP|INR|CRP|Alb|[胸腹頭背腰]痛|"
                    + "|".join(map(re.escape, _SYMPTOMS)))
@@ -158,13 +158,17 @@ def patient_clinical_quotes(body, *, patient_name=None):
 
 
 def _person_scope(person, patient_name):
-    if re.fullmatch(rf"(?:{_FAMILY_PERSON})(?:ご本人|本人)?", person):
+    # 「同居の娘さん」: _NAMED_PERSON also takes の, so read its relation tail, not the whole as a name.
+    if re.fullmatch(rf"(?:.+の)?(?:{_FAMILY_PERSON})(?:ご本人|本人)?", person):
         return "family"
     if re.fullmatch(rf"(?:{_OTHER_PERSON})(?:ご本人|本人)?", person):
         return "other"
     alias = person.removesuffix("ご本人").removesuffix("本人").removesuffix("さん").removesuffix("様")
-    known_name = (isinstance(patient_name, str) and patient_name.strip()
-                  and re.sub(r"\s+", "", alias) == re.sub(r"\s+", "", patient_name))
+    alias = re.sub(r"\s+", "", alias)
+    name = re.sub(r"\s+", "", patient_name) if isinstance(patient_name, str) else ""
+    # Strip an explicit time modifier, never a の inside another person's name.
+    known_name = bool(name) and (alias == name or re.fullmatch(
+        rf"(?:{_CURRENT_MARK.pattern})の{re.escape(name)}", alias) is not None)
     return "patient" if re.fullmatch(_SELF_PERSON, person) or known_name else "unknown"
 
 
@@ -335,7 +339,8 @@ def patient_vitals(values, body, *, patient_name=None):
             keep=lambda s, e: patient_source_scope(
                 body, s, e, patient_name=patient_name) == "patient"):
         del kept["sbp"], kept["dbp"]  # two readings never make one pair
-    return kept
+    from clinical_values import _current_only
+    return _current_only(kept, body, patient_name)  # an earlier reading is not the current one
 _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm"),
              (r"(?:ご)?連絡(?:ください|をお願い|いただき)", "contact"),
              (r"共有(?:いたします|します|をお願い|させて)", "share"),
@@ -355,7 +360,7 @@ _MED_PERIOD = re.compile(
 ENCOUNTER_CUE = (r"(?:診察|往診|診療)(?!医|所|科|機関|方針|報酬|体制|契約|情報|録|券|室|"
                  r"の(?:説明|方針|契約|案内|資料)|について(?:の)?(?:説明|案内|資料)|"
                  r"に関する(?:説明|案内|資料))|診て(?:くれ|いただ|もら)")
-RULE_VERSION = 20
+RULE_VERSION = 21
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問(?:診療)?|診察|往診)")

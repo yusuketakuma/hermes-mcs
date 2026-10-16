@@ -145,7 +145,8 @@ def _v_signal_dismiss(req: dict, base: set) -> str | None:
 
 # ⚠ report target parts (card modal select) — stored verbatim
 EXTRACT_FEEDBACK_FIELDS = ("summary", "urgency", "meds", "symptoms",
-                           "requests", "vitals", "other")
+                           "requests", "vitals", "patient_context", "labs",
+                           "events", "other")
 
 
 def _v_extract_feedback(req: dict, base: set) -> str | None:

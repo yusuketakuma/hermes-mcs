@@ -31,10 +31,11 @@ from __future__ import annotations
 
 import json
 import math
-from mcs_queries import ELIGIBLE_MESSAGE
+from datetime import datetime
+from mcs_queries import ELIGIBLE_MESSAGE, JST
 from semantic_projection import PROJECTION_VERSION
 
-from patient_context import context_items, extract_context, merged_context
+from patient_context import context_items, extract_context, merged_context, reference_item
 
 CONTRACT = "mcs-read-model/1"
 SCOPES = ("aggregate", "detail")
@@ -309,7 +310,55 @@ def message_patient_context(db, message, scope="detail", *, by_kind=None, art_ro
             break
     source = {key: message.get(key) for key in
               ("project_id", "message_id", "content_hash", "posted_at_ts")}
+    if scope == "detail":
+        selected = next((row for row in art_rows
+                         if row["artifact_id"] == by_kind["extract_llm"]["artifact_id"]), None)
+        meta = selected["meta"] if selected is not None else None
+        _context_references(db, message, items, json.loads(meta) if isinstance(meta, str) else meta)
     return _context_projection(items, scope, source)
+
+
+def _context_references(db, message, items, meta):
+    details = [detail for item in items for detail in item.get("details", []) if "refers_to" in detail]
+    if not details:
+        return
+    import extract_llm
+    import patient_state_context
+    target = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
+                        (message["project_id"], message["message_id"])).fetchone()
+    frame = (patient_state_context.load(db, meta.get("context_snapshot"), dict(target))
+             if target is not None and isinstance(meta, dict)
+             and target["content_hash"] == message["content_hash"] else None)
+    for detail in details:
+        ref = detail["refers_to"]
+        supplied = (frame["refs"].get(ref["token"]) if frame and frame["enabled"]
+                    and meta.get("patient_state_context") is True
+                    and frame["digest"] == meta.get("context_digest") else None)
+        current = (isinstance(supplied, dict) and ref == {**supplied, "token": ref["token"]}
+                   and patient_state_context.reference_current(db, dict(target), ref,
+                                                               version=extract_llm.EXTRACT_VERSION))
+        # An invalid antecedent's old value/date must not escape through detail JSON.
+        detail["refers_to"] = {**ref, "state": "current"} if current else {"state": "updated"}
+
+
+def reference_text(reference):
+    """Render only a checked frozen value/date; an updated source never supplies a replacement."""
+    if not isinstance(reference, dict):
+        return ""
+    if reference.get("state") == "updated":
+        return "（参照先は更新済み）"
+    if reference.get("state") != "current":
+        return ""
+    ref = reference_item({key: value for key, value in reference.items() if key != "state"})
+    if ref is None:
+        return "（参照先は更新済み）"
+    try:
+        date = datetime.fromtimestamp(ref["posted_at_ts"], JST).strftime("%m-%d")
+    except (ValueError, OverflowError, OSError):
+        return "（参照先は更新済み）"
+    value = " ".join(ref["value"].split())
+    quote = value[:40] + ("…" if len(value) > 40 else "")
+    return f"（参照: {date}「{quote}」）"
 
 
 def _context_projection(items, scope, source):

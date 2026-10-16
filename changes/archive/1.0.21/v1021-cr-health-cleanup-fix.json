@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "稼働監視の読取り後に接続の待ち時間設定が戻らない場合を修正",
+  "summary": "稼働状態の観測で一時的な区切り（savepoint）の解除に失敗した場合でも、収集処理の接続の待ち時間設定を元に戻すようにしました。",
+  "upgrade": "追加操作は不要です。収集・監視の判定、通知、既読化、人承認条件は変わりません。",
+  "details": [
+    "観測用の読取りで RELEASE が失敗しても、busy_timeout を元の値へ戻す。読取り上限・進捗ハンドラの復元、元の例外と呼出し側の代替計数への切替は従来どおり。",
+    "テストの後片付けで子プロセスの終了待ちが時間切れになっても、標準入出力を必ず閉じる。完全合成の接続で、修正前に設定が戻らないことを確かめる回帰を追加した。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "tests/ingest/test_run_check_observation.py",
+    "tests/ingest/test_stab_worker_reap.py"
+  ]
+}

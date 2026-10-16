@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "抽出監査の基準統計を計測定義に結び付けて照合",
+  "summary": "抽出監査の統計を基準として保存するときに監査の計測定義を記録し、照合時に定義が違う・記録が無い場合は数値が偶然一致しても一致と判定しないようにしました。",
+  "upgrade": "通常の基準統計（operational・pharmacy など）には追加操作は不要です。抽出監査の基準統計を使う場合は、既存の承認済み基準に定義の記録が無いため照合で definition_missing となるので、新しい定義で取り直して本人承認を受けてください。",
+  "details": [
+    "capture は保存する統計に抽出監査の統計が含まれるときだけ、extraction_audit.definition_fingerprint を audit_definition として記録する。共通の契約や既存統計の DEFINITION_VERSION は変えない。",
+    "verify は未承認・差し替え済みの判定を優先したうえで、抽出監査の基準に定義の記録が無ければ definition_missing、現在の定義と違えば definition_changed とし、数値の差分を比較せず一致・ドリフト・回帰のいずれとも判定しない。基準と現在の定義hashを結果に示す。",
+    "承認の受領記録・ファイルhashの照合・人承認の経路は従来どおり。完全合成の台帳で、同じ数値・同じ日付でも定義が違えば一致しないこと、定義の記録が無い旧基準を比較しないこと、通常の基準は従来どおり一致することを確認した。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_refstats.py",
+    "tests/ops/test_mcs_refstats.py"
+  ]
+}

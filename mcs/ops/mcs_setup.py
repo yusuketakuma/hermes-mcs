@@ -182,6 +182,7 @@ CONFIG_RULES = {
     "notify":                (False, _dict),
     "signals":               (False, _dict),
     "semantic":              (False, _dict),
+    "extract":               (False, _dict),
     "update":                (False, _dict),
     "local_llm":             (False, _dict),
     "health":                (False, _dict),
@@ -373,6 +374,9 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
         if err:
             errors.append(f"{key}: {err}")
     sig = cfg.get("signals")
+    ext = cfg.get("extract")
+    if isinstance(ext, dict) and "patient_state_context" in ext and type(ext["patient_state_context"]) is not bool:
+        errors.append("extract.patient_state_context: must be a boolean")
     if isinstance(sig, dict) and "notify" in sig and type(sig["notify"]) is not bool:
         errors.append("signals.notify: must be a boolean")
     ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}

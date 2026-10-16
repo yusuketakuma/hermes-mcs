@@ -70,3 +70,113 @@ def test_repeated_lab_label_and_value_do_not_inherit_quote_prefix_patient_scope(
 ])
 def test_single_blood_pressure_remains_grounded_to_patient_label_and_known_side(body, values, expected):
     assert extract.patient_vitals(values, body) == expected
+
+
+@pytest.mark.parametrize("person", ["お兄様", "兄様", "お姉様", "姉さん", "弟さん", "妹様", "孫さん"])
+def test_an_honorific_family_member_is_family(person):
+    body = f"ご家族から、{person}が合成薬Aを飲み忘れたと相談がありました。"
+    start = body.index("合成薬A")
+    assert extract.patient_source_scope(body, start, start + 4) == "family"
+
+
+def _meds(body, quote, subject):
+    med = {"name": "合成薬A", "dose": None, "action": "none", "status": "current", "subject": subject,
+           "negated": False, "evidence": quote}
+    return extract_llm._validate({"summary": "合成の要約", "meds": [med]}, body).get("meds", [])
+
+
+def test_an_honorific_family_medication_is_not_kept_as_the_patients():
+    body = "ご家族から、お兄様が合成薬Aを飲み忘れたと相談がありました。患者本人の服薬状況に変更はありません。"
+    quote = "お兄様が合成薬Aを飲み忘れたと相談がありました"
+    assert _meds(body, quote, "patient") == []
+    assert [med["subject"] for med in _meds(body, quote, "family")] == ["family"]
+
+
+def test_a_family_report_keeps_the_patients_own_medication():
+    body = "お姉様から、本人は合成薬Aを内服中と連絡がありました。"
+    assert [med["subject"] for med in _meds(body, "本人は合成薬Aを内服中", "patient")] == ["patient"]
+
+
+def test_honorific_family_and_patient_measurements_stay_apart():
+    body = "お兄様の体温37.8。本人の体温36.5。"
+    first, second = body.index("37.8"), body.index("36.5")
+    assert extract.patient_source_scope(body, first, first + 4) == "family"
+    assert extract.patient_source_scope(body, second, second + 4) == "patient"
+
+
+@pytest.mark.parametrize("person", ["姉川さん", "兄部様"])
+def test_a_named_person_starting_with_a_relation_is_not_family(person):
+    body = f"{person}が合成薬Aを飲んでいます。"
+    start = body.index("合成薬A")
+    assert extract.patient_source_scope(body, start, start + 4) != "family"
+
+
+def _scope_of(body, word):
+    start = body.index(word)
+    return extract.patient_source_scope(body, start, start + len(word))
+
+
+@pytest.mark.parametrize("body,word", [
+    ("同居の娘さんの血圧は180/110でした。", "180"),
+    ("本人の娘さんの体温37.5。", "37.5"),
+    ("近所の息子様が合成薬Aを飲んでいます。", "合成薬A"),
+])
+def test_a_modified_family_member_is_family(body, word):
+    assert _scope_of(body, word) == "family"
+
+
+@pytest.mark.parametrize("body,word", [
+    ("田中さんの血圧120/80。", "120"),
+    ("娘川さんの体温37.5。", "37.5"),
+    ("担当の看護師さんの体温37.5。", "37.5"),
+])
+def test_a_name_or_non_family_modifier_is_not_made_family(body, word):
+    assert _scope_of(body, word) != "family"
+
+
+def test_a_named_patient_stays_the_patient():
+    body = "田中さんの血圧120/80。"
+    start = body.index("120")
+    assert extract.patient_source_scope(body, start, start + 3, patient_name="田中") == "patient"
+
+
+def test_a_modified_family_report_keeps_the_patients_own_value():
+    body = "同居の娘さんより、本人の体温は36.8でした。"
+    assert _scope_of(body, "36.8") == "patient"
+
+
+def test_the_same_value_for_a_modified_family_member_and_the_patient_stays_apart():
+    body = "同居の娘さんの体温37.5。本人の体温37.5。"
+    first, second = body.index("37.5"), body.rindex("37.5")
+    assert extract.patient_source_scope(body, first, first + 4) == "family"
+    assert extract.patient_source_scope(body, second, second + 4) == "patient"
+
+
+@pytest.mark.parametrize("body,name,expected", [
+    ("現在の佐藤さんの血圧90/60。", "佐藤", "patient"),
+    ("現在の田中さんの血圧90/60。", "佐藤", "unknown"),
+    ("現在の佐藤さんの血圧90/60。", None, "unknown"),
+])
+def test_a_modified_name_is_matched_by_its_own_name(body, name, expected):
+    start = body.index("90")
+    assert extract.patient_source_scope(body, start, start + 2, patient_name=name) == expected
+
+
+@pytest.mark.parametrize("person,name,expected", [
+    ("みのりさん", "り", "unknown"), ("たのうえさん", "うえ", "unknown"),
+    ("みのりさん", "みのり", "patient"), ("たのうえさん", "たのうえ", "patient"),
+    ("現在のみのりさん", "みのり", "patient"), ("本日の佐藤さん", "佐藤", "patient"),
+])
+def test_a_no_inside_a_name_is_not_a_modifier_matching_another_patient(person, name, expected):
+    body = f"{person}の血圧120/80です。"
+    start = body.index("120")
+    assert extract.patient_source_scope(body, start, start + 3, patient_name=name) == expected
+
+
+@pytest.mark.parametrize("name", ["みのり", "このみ"])
+def test_a_no_inside_the_patients_own_name_is_not_a_modifier(name):
+    body = f"{name}さんの血圧120/80。"
+    start = body.index("120")
+    assert extract.patient_source_scope(body, start, start + 3, patient_name=name) == "patient"
+    assert clinical_values.patient_current_vitals({"sbp": 120, "dbp": 80}, body, patient_name=name) == {
+        "sbp": 120, "dbp": 80}

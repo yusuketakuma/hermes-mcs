@@ -2914,7 +2914,8 @@ def test_report_modal_records_feedback(world):
     asyncio.run(world.interact(act, ix))
     field, note = ix.response.modal.children
     assert [o.value for o in field.component.options] == [
-        "summary", "urgency", "meds", "symptoms", "requests", "vitals", "other"]
+        "summary", "urgency", "meds", "symptoms", "requests", "vitals",
+            "patient_context", "labs", "events", "other"]
     assert field.component.min_values == 1
     modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
     s = FakeInteraction(f"mcs:m:{modal_id}", message_id=msg.id, components=[

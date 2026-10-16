@@ -1,0 +1,310 @@
+{
+  "version": 1,
+  "note": "完全創作の背景参照4正例と背景混入・別人2負例。実投稿と匿名化例は不使用。",
+  "cases": [
+    {
+      "id": "state-ref-residual",
+      "body": "本人の合成薬Aの残薬数は前回と同じです。",
+      "posted_at": "2026-10-02T10:00:00+09:00",
+      "patient_state": [
+        {
+          "message": {
+            "project_id": 1,
+            "message_id": 1,
+            "content_hash": "8fd31f34c91bffd47582693ac90a45fcdd921d41f6ebda96b9098d590c020ae0",
+            "body_state": "full",
+            "body_text": "本人の合成薬Aの残薬は3錠。",
+            "posted_at": "2026-10-01T10:00:00+09:00",
+            "posted_at_ts": 1790816400.0
+          },
+          "extraction": {
+            "patient_context": [
+              {
+                "category": "medication_management",
+                "text": "本人の合成薬Aの残薬は3錠。",
+                "evidence": "本人の合成薬Aの残薬は3錠。",
+                "subject": "patient",
+                "details": [
+                  {
+                    "key": "drug_name",
+                    "value": "合成薬A",
+                    "evidence": "本人の合成薬Aの残薬は3錠。"
+                  },
+                  {
+                    "key": "residual_quantity",
+                    "value": "3錠",
+                    "evidence": "本人の合成薬Aの残薬は3錠。"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "patient_context": [
+          {
+            "category": "medication_management",
+            "detail_key": "residual_quantity",
+            "value_contains": "前回と同じ",
+            "subject": "patient",
+            "refers_to": "S1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "state-ref-storage",
+      "body": "本人の合成薬Aの保管場所は前と同じ場所です。",
+      "posted_at": "2026-10-02T10:00:00+09:00",
+      "patient_state": [
+        {
+          "message": {
+            "project_id": 1,
+            "message_id": 1,
+            "content_hash": "88b45332988dd0385b70c0f38db4c1321f9d27c1bf8ac867fde8bd3598a4889d",
+            "body_state": "full",
+            "body_text": "本人の合成薬Aは冷蔵庫に保管しています。",
+            "posted_at": "2026-10-01T10:00:00+09:00",
+            "posted_at_ts": 1790816400.0
+          },
+          "extraction": {
+            "patient_context": [
+              {
+                "category": "medication_management",
+                "text": "本人の合成薬Aは冷蔵庫に保管しています。",
+                "evidence": "本人の合成薬Aは冷蔵庫に保管しています。",
+                "subject": "patient",
+                "details": [
+                  {
+                    "key": "drug_name",
+                    "value": "合成薬A",
+                    "evidence": "本人の合成薬Aは冷蔵庫に保管しています。"
+                  },
+                  {
+                    "key": "storage_place",
+                    "value": "冷蔵庫",
+                    "evidence": "本人の合成薬Aは冷蔵庫に保管しています。"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "patient_context": [
+          {
+            "category": "medication_management",
+            "detail_key": "storage_place",
+            "value_contains": "前と同じ場所",
+            "subject": "patient",
+            "refers_to": "S1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "state-ref-manager",
+      "body": "本人の合成薬Aの管理者は前と同じ人です。",
+      "posted_at": "2026-10-02T10:00:00+09:00",
+      "patient_state": [
+        {
+          "message": {
+            "project_id": 1,
+            "message_id": 1,
+            "content_hash": "b7f602994743e9a57032c31af1cc8ea19e085ea1f669a3e11bcf78ce3c77ee64",
+            "body_state": "full",
+            "body_text": "本人の合成薬Aの管理者は合成長男です。",
+            "posted_at": "2026-10-01T10:00:00+09:00",
+            "posted_at_ts": 1790816400.0
+          },
+          "extraction": {
+            "patient_context": [
+              {
+                "category": "medication_management",
+                "text": "本人の合成薬Aの管理者は合成長男です。",
+                "evidence": "本人の合成薬Aの管理者は合成長男です。",
+                "subject": "patient",
+                "details": [
+                  {
+                    "key": "drug_name",
+                    "value": "合成薬A",
+                    "evidence": "本人の合成薬Aの管理者は合成長男です。"
+                  },
+                  {
+                    "key": "medication_manager",
+                    "value": "合成長男",
+                    "evidence": "本人の合成薬Aの管理者は合成長男です。"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "patient_context": [
+          {
+            "category": "medication_management",
+            "detail_key": "medication_manager",
+            "value_contains": "前と同じ人",
+            "subject": "patient",
+            "refers_to": "S1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "state-ref-support",
+      "body": "本人の合成薬Aの服薬支援は以前と同じ方法です。",
+      "posted_at": "2026-10-02T10:00:00+09:00",
+      "patient_state": [
+        {
+          "message": {
+            "project_id": 1,
+            "message_id": 1,
+            "content_hash": "6ff7a8c5f569363b3519698601dc09955a68be78c8cb08e78a4d7ab158026f60",
+            "body_state": "full",
+            "body_text": "本人の合成薬Aは一包化して渡しています。",
+            "posted_at": "2026-10-01T10:00:00+09:00",
+            "posted_at_ts": 1790816400.0
+          },
+          "extraction": {
+            "patient_context": [
+              {
+                "category": "medication_management",
+                "text": "本人の合成薬Aは一包化して渡しています。",
+                "evidence": "本人の合成薬Aは一包化して渡しています。",
+                "subject": "patient",
+                "details": [
+                  {
+                    "key": "drug_name",
+                    "value": "合成薬A",
+                    "evidence": "本人の合成薬Aは一包化して渡しています。"
+                  },
+                  {
+                    "key": "support_method",
+                    "value": "一包化",
+                    "evidence": "本人の合成薬Aは一包化して渡しています。"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "patient_context": [
+          {
+            "category": "medication_management",
+            "detail_key": "support_method",
+            "value_contains": "以前と同じ方法",
+            "subject": "patient",
+            "refers_to": "S1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "state-negative-no-lift",
+      "body": "本人の合成薬Aの残薬は2錠です。",
+      "posted_at": "2026-10-02T10:00:00+09:00",
+      "patient_state": [
+        {
+          "message": {
+            "project_id": 1,
+            "message_id": 1,
+            "content_hash": "8fd31f34c91bffd47582693ac90a45fcdd921d41f6ebda96b9098d590c020ae0",
+            "body_state": "full",
+            "body_text": "本人の合成薬Aの残薬は3錠。",
+            "posted_at": "2026-10-01T10:00:00+09:00",
+            "posted_at_ts": 1790816400.0
+          },
+          "extraction": {
+            "patient_context": [
+              {
+                "category": "medication_management",
+                "text": "本人の合成薬Aの残薬は3錠。",
+                "evidence": "本人の合成薬Aの残薬は3錠。",
+                "subject": "patient",
+                "details": [
+                  {
+                    "key": "drug_name",
+                    "value": "合成薬A",
+                    "evidence": "本人の合成薬Aの残薬は3錠。"
+                  },
+                  {
+                    "key": "residual_quantity",
+                    "value": "3錠",
+                    "evidence": "本人の合成薬Aの残薬は3錠。"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "forbid": {
+        "patient_context": [
+          {
+            "category": "medication_management",
+            "detail_key": "residual_quantity",
+            "value_contains": "3錠",
+            "subject": "patient"
+          }
+        ]
+      }
+    },
+    {
+      "id": "state-negative-family",
+      "body": "同居の家族の合成薬Aの残薬は2錠です。",
+      "posted_at": "2026-10-02T10:00:00+09:00",
+      "patient_state": [
+        {
+          "message": {
+            "project_id": 1,
+            "message_id": 1,
+            "content_hash": "8fd31f34c91bffd47582693ac90a45fcdd921d41f6ebda96b9098d590c020ae0",
+            "body_state": "full",
+            "body_text": "本人の合成薬Aの残薬は3錠。",
+            "posted_at": "2026-10-01T10:00:00+09:00",
+            "posted_at_ts": 1790816400.0
+          },
+          "extraction": {
+            "patient_context": [
+              {
+                "category": "medication_management",
+                "text": "本人の合成薬Aの残薬は3錠。",
+                "evidence": "本人の合成薬Aの残薬は3錠。",
+                "subject": "patient",
+                "details": [
+                  {
+                    "key": "drug_name",
+                    "value": "合成薬A",
+                    "evidence": "本人の合成薬Aの残薬は3錠。"
+                  },
+                  {
+                    "key": "residual_quantity",
+                    "value": "3錠",
+                    "evidence": "本人の合成薬Aの残薬は3錠。"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "forbid": {
+        "patient_context": [
+          {
+            "category": "medication_management",
+            "detail_key": "residual_quantity",
+            "value_contains": "2錠",
+            "subject": "patient"
+          }
+        ]
+      }
+    }
+  ]
+}

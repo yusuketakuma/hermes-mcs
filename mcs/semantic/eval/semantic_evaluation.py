@@ -1063,19 +1063,30 @@ def evaluate_jev_incremental(cases: list, llm_fn, jev_client,
 
 
 def run_shadow_e2e(cases: list, llm_fn, jev_client,
-                   *, deadline_s: float = 300,
+                   *, source: str, deadline_s: float = 300,
                    chunk_size: int = 3000) -> dict:
     """Per-case shadow run of the canonical pipeline.
 
     ``cases`` entries use the bench corpus shape (``messages`` or a
     single ``body``).  Returns a stage-indexed report; ``complete``
-    counts cases whose audit reached PASS (after at most one repair)."""
+    counts cases whose audit reached PASS (after at most one repair).
+    ``source`` is the caller's explicit provenance of the cases: only
+    "synthetic" input reaches the model; anything else is reported as
+    not evaluated, never passed."""
     import time
     import semantic_audit
     import semantic_extraction
     import semantic_relations
     import semantic_render
 
+    if source != "synthetic":
+        # Unconfirmed provenance never reaches the model or counts as passed.
+        return {"schema_version": "shadow-e2e-v1", "source": "unconfirmed",
+                "cases": len(cases), "complete": 0,
+                "per_case": [{"id": str(case.get("id", "case")) if isinstance(case, dict) else "case",
+                              "facts": 0, "passed": False, "reason": "source_unconfirmed",
+                              "stages": dict.fromkeys(("extract", "relations", "audit", "repair", "render"),
+                                                      "not_evaluated")} for case in cases]}
     deadline = time.monotonic() + deadline_s
     per_case = []
     complete = 0
@@ -1108,8 +1119,8 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                     stages["relations"] = "incomplete"
             except Exception as error:
                 stages["relations"] = f"error:{type(error).__name__}"
-            audit = semantic_audit.audit_facts_v2(
-                jev_client, doc, member["body_original"], deadline)
+            audit = _terminal_audit(semantic_audit.audit_facts_v2(
+                jev_client, doc, member["body_original"], deadline))
             audit_status = audit["status"]
             if audit["evaluated"] and audit["status"] != "PASS":
                 rejected = {f["fact"]: f["code"]
@@ -1136,9 +1147,9 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                                 stages["relations"] = "incomplete"
                         except Exception as error:
                             stages["relations"] = f"error:{type(error).__name__}"
-                        audit = semantic_audit.audit_facts_v2(
+                        audit = _terminal_audit(semantic_audit.audit_facts_v2(
                             jev_client, doc, member["body_original"],
-                            deadline)
+                            deadline))
                         audit_status = f"{audit['status']} (post-repair)"
             all_audits_passed &= audit["evaluated"] and audit["status"] == "PASS"
             # Preserve the first failing message's audit in a thread report.
@@ -1159,10 +1170,37 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
         if passed:
             complete += 1
         per_case.append({"id": cid, "facts": case_doc_facts,
-                         "passed": passed, "stages": stages})
-    return {"schema_version": "shadow-e2e-v1",
+                         "passed": passed, "stages": stages,
+                         "reason": None if passed else _shadow_reason(
+                             stages, all_audits_passed, all_renders_complete)})
+    return {"schema_version": "shadow-e2e-v1", "source": "synthetic",
             "cases": len(per_case), "complete": complete,
             "per_case": per_case}
+
+
+_AUDIT_STATUSES = frozenset({"PASS", "NEEDS_REVIEW", "INCOMPLETE"})  # audit_facts_v2 terminals
+
+
+def _terminal_audit(audit) -> dict:
+    """An audit without a known terminal status is reported, never a PASS."""
+    if (not isinstance(audit, dict) or not isinstance(audit.get("status"), str)
+            or audit["status"] not in _AUDIT_STATUSES
+            or type(audit.get("evaluated")) is not bool):
+        return {"status": "STATUS_MISSING", "evaluated": False, "findings": []}
+    return audit
+
+
+def _shadow_reason(stages: dict, audits_passed: bool, renders_complete: bool) -> str:
+    """The first stage that kept a shadow case from passing, as a code."""
+    if stages["extract"] != "ok":
+        return "extract_" + stages["extract"].split(":")[0]
+    if stages["relations"] != "ok":
+        return "relations_" + stages["relations"].split(":")[0]
+    if not isinstance(stages["audit"], str) or stages["audit"].startswith("STATUS_MISSING"):
+        return "audit_status_missing"
+    if not audits_passed or not stages["audit"].startswith("PASS"):
+        return "audit_not_pass"
+    return "render_incomplete" if not renders_complete else "unknown"
 
 
 if __name__ == "__main__":

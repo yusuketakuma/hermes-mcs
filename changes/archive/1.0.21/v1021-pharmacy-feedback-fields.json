@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "患者情報・検査値・出来事の誤りも報告できるように",
+  "summary": "通知の誤り報告で、患者情報・服薬管理、検査値、出来事を個別に指定できるようになります。",
+  "upgrade": "更新後、利用中のHermes gatewayまたは独立通知アダプターを再起動してください。報告の確認手順は従来どおりです。",
+  "details": [
+    "Slack・Discord・LINE WORKSが使う共通の選択肢と、処理側の許可項目を同期する。",
+    "人による確認と理由、表示した抽出結果と本文hashへの固定、操作記録、同一報告による再抽出が1回で終わる条件を維持する。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_operations.py",
+    "adapters/common/text.py"
+  ]
+}

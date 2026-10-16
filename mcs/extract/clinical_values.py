@@ -63,6 +63,16 @@ def patient_current_vitals(values, body, *, patient_name=None):
     return kept
 
 
+def _current_only(vitals: dict, body: str, patient_name=None) -> dict:
+    """Leave out a vital whose every source reading is superseded by an explicitly current one."""
+    def superseded(key, value):
+        if key not in _VITAL_CLASS or type(value) not in (int, float):
+            return False
+        spans = [m.span() for m in re.finditer(r"\d+(?:[.．]\d+)?", body) if _bp_number(m[0]) == value]
+        return bool(spans) and _vital_superseded(body, _VITAL_CLASS[key], spans, patient_name)
+    return {key: value for key, value in vitals.items() if not superseded(key, value)}
+
+
 def fold_surface(text: str) -> str:
     """Fold width, case and kana without erasing identity-bearing punctuation."""
     text = unicodedata.normalize("NFKC", text).casefold()
@@ -360,6 +370,45 @@ def _bp_pair_unproven(body: str, sbp, dbp, keep=None) -> bool:
     return len(systolic) > 1 or len(diastolic) > 1
 
 
+# A model's flat vitals carry no person or time: a reading that is another
+# person's, conditional or planned is never the patient's current value.
+_NOT_PATIENT_CURRENT = ("family", "other", "conditional", "planned", "past")
+
+
+# Other times a reading can be written at; the nearest mark before it decides.
+_OTHER_TIME = r"午前|午後|朝|昼|夕方?|夜|前回|以前|過去|昨日|先週|先月|昨年"
+
+
+def _vital_current(body: str, pos: int) -> bool:
+    """Whether the nearest time mark before pos in its sentence is an explicitly current one."""
+    import extract
+    left = max(body.rfind(mark, 0, pos) for mark in "。！？!?\n") + 1
+    last = None
+    for last in re.finditer(rf"{extract._CURRENT_MARK.pattern}|{_OTHER_TIME}", body[left:pos]):
+        pass
+    return last is not None and extract._CURRENT_MARK.fullmatch(last[0]) is not None
+
+
+def _vital_superseded(body: str, cls: str, spans, patient_name=None) -> bool:
+    """True when the patient's same vital is explicitly reported as current and none of spans is that report."""
+    import extract
+
+    def patient(start, end):
+        return extract.patient_source_scope(body, start, end, patient_name=patient_name) == "patient"
+
+    # Only the value's own same-vital readings of the patient count, never another person's equal value.
+    own = [(s, e) for s, e in spans if _nearest_vital_label(body, s, e) == cls
+           and patient(s, e)]
+    if not own or any(_vital_current(body, s) for s, _ in own):
+        return False
+    # The patient's current report: a current reading (血圧は現在90/60), or a current
+    # mention without one (現在の血圧は測定できませんでした).
+    return (any(_nearest_vital_label(body, *m.span()) == cls and _vital_current(body, m.start()) and patient(*m.span())
+                for m in re.finditer(r"\d+(?:[.．]\d+)?", body))
+            or any(_vital_current(body, m.start()) and patient(*m.span())
+                   for m in _VITAL_LABELS[cls].finditer(body)))
+
+
 def _vitals_guard(body: str | None, vit: dict,
                   drops: dict | None = None) -> dict:
     """Anchor each vital to the label nearest its value in the body.
@@ -372,6 +421,7 @@ def _vitals_guard(body: str | None, vit: dict,
     (same policy as evidence)."""
     if not body or not vit:
         return vit
+    import extract
     toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
             for m in re.finditer(r"\d+(?:[.．]\d+)?", body)]
     issues = drops.setdefault("vitals", []) if drops is not None else []
@@ -385,6 +435,11 @@ def _vitals_guard(body: str | None, vit: dict,
         hits = [(s, e) for s, e, num in toks if num == val]
         if not hits:
             note(f"vitals.{k}={val:g} は本文に数値がありません")
+            continue
+        hits = [(s, e) for s, e in hits
+                if extract.patient_source_scope(body, s, e) not in _NOT_PATIENT_CURRENT]
+        if not hits:
+            note(f"vitals.{k}={val:g} は本文では本人以外・条件付き・予定・過去の記述です")
             continue
         kcls = _VITAL_CLASS[k]
         winners = {_nearest_vital_label(body, s, e) for s, e in hits}
@@ -412,6 +467,9 @@ def _vitals_guard(body: str | None, vit: dict,
                     note(f"vitals.{k}={val:g} の測定名が本文で"
                          "一意に特定できません")
                     continue
+        if _vital_superseded(body, _VITAL_CLASS[tgt], hits):
+            note(f"vitals.{k}={val:g} は本文の現在の測定ではありません")
+            continue
         if tgt != k:
             if tgt in vit or tgt in out:
                 note(f"vitals.{k}={val:g} は本文では{tgt}の記述です")

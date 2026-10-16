@@ -132,13 +132,44 @@ def test_shadow_e2e_runs_all_stages():
     cases = [{"id": "e2e-1", "body": BODY,
               "expect": {"facts": []}}]
     llm = _llm(GOOD_FACTS, presence={"medication": "one"})
-    report = seval.run_shadow_e2e(cases, llm, _Jev())
+    report = seval.run_shadow_e2e(cases, llm, _Jev(), source="synthetic")
     assert report["schema_version"] == "shadow-e2e-v1"
     case = report["per_case"][0]
     assert case["stages"]["extract"] == "ok"
     assert case["stages"]["audit"] == "PASS"
     assert "facts" in case["stages"]["render"]
     assert report["complete"] == 1
+    assert report["source"] == "synthetic" and case["reason"] is None
+
+
+@pytest.mark.parametrize("source", [None, "human", "real", "Synthetic", 1])
+def test_shadow_e2e_unconfirmed_source_is_not_evaluated_and_never_calls_the_model(source):
+    def model(_prompt):
+        raise AssertionError("an unconfirmed input reached the model")
+
+    class Jev(_Jev):
+        def evaluate(self, *args):
+            raise AssertionError("an unconfirmed input reached Jev")
+    report = seval.run_shadow_e2e([{"id": "u1", "body": BODY}], model, Jev(), source=source)
+    assert (report["source"], report["cases"], report["complete"]) == ("unconfirmed", 1, 0)
+    case = report["per_case"][0]
+    assert not case["passed"] and case["reason"] == "source_unconfirmed"
+    assert set(case["stages"].values()) == {"not_evaluated"}
+
+
+@pytest.mark.parametrize("audit", [{}, {"evaluated": True}, {"status": "PASSED", "evaluated": True},
+                                   {"status": "PASS"}, None, {"status": [], "evaluated": True},
+                                   {"status": {}, "evaluated": True},
+                                   {"status": ["PASS"], "evaluated": True}, ["PASS"]])
+def test_shadow_e2e_missing_terminal_audit_status_never_passes(monkeypatch, audit):
+    import semantic_audit
+    monkeypatch.setattr(semantic_audit, "audit_facts_v2", lambda *args: audit)
+    llm = _llm(GOOD_FACTS, presence={"medication": "one"})
+    report = seval.run_shadow_e2e([{"id": "s1", "body": BODY}], llm, _Jev(), source="synthetic")
+    case = report["per_case"][0]
+    assert report["complete"] == 0 and not case["passed"]
+    assert case["stages"]["audit"] == "STATUS_MISSING"
+    assert case["reason"] == "audit_status_missing"
 
 
 def test_shadow_e2e_incomplete_coverage_never_counts_as_passed():
@@ -146,7 +177,7 @@ def test_shadow_e2e_incomplete_coverage_never_counts_as_passed():
     category presence) must not count as a passed shadow case — the
     evaluator is no more lenient than the drain gate."""
     llm = _llm(GOOD_FACTS, presence={"medication": "ambiguous"})
-    report = seval.run_shadow_e2e([{"id": "c1", "body": BODY}], llm, _Jev())
+    report = seval.run_shadow_e2e([{"id": "c1", "body": BODY}], llm, _Jev(), source="synthetic")
     case = report["per_case"][0]
     assert report["complete"] == 0
     assert not case["passed"]
@@ -168,7 +199,7 @@ def test_shadow_e2e_repair_stage_visible():
                     out["answers"][key]["choice"] = "contradicts"
         return out
     jev.evaluate = once_contradict
-    report = seval.run_shadow_e2e([{"id": "r1", "body": BODY}], llm, jev)
+    report = seval.run_shadow_e2e([{"id": "r1", "body": BODY}], llm, jev, source="synthetic")
     stages = report["per_case"][0]["stages"]
     assert stages["repair"] in ("repaired", "failed", "skipped")
     assert stages["audit"] is not None
@@ -177,7 +208,7 @@ def test_shadow_e2e_repair_stage_visible():
 def test_shadow_e2e_extraction_failure_recorded():
     def dead(_prompt):
         raise ConnectionError("down")
-    report = seval.run_shadow_e2e([{"id": "x", "body": BODY}], dead, _Jev())
+    report = seval.run_shadow_e2e([{"id": "x", "body": BODY}], dead, _Jev(), source="synthetic")
     stages = report["per_case"][0]["stages"]
     # A model outage surfaces as an incomplete extraction stage (the
     # contract converts model failure to non-terminal incomplete), and
@@ -212,7 +243,7 @@ def test_shadow_e2e_later_message_cannot_hide_failed_stage(monkeypatch, failure)
     cases = [{"id": "thread", "messages": [
         {"message_id": i, "body": BODY} for i in (1, 2)]}]
     report = seval.run_shadow_e2e(
-        cases, _llm(GOOD_FACTS, presence={"medication": "one"}), _Jev())
+        cases, _llm(GOOD_FACTS, presence={"medication": "one"}), _Jev(), source="synthetic")
     assert len(calls) == 2
     assert report["complete"] == 0
     case = report["per_case"][0]
@@ -228,7 +259,7 @@ def test_shadow_e2e_honors_chunk_budget():
         prompts.append(prompt)
         return _llm([])(prompt)
 
-    seval.run_shadow_e2e([{"id": "chunked", "body": body}], llm, _Jev(), chunk_size=30)
+    seval.run_shadow_e2e([{"id": "chunked", "body": body}], llm, _Jev(), chunk_size=30, source="synthetic")
     assert len(prompts) > 1
 
 
@@ -261,7 +292,7 @@ def test_incomplete_render_cannot_pass_shadow_report(monkeypatch):
 
     monkeypatch.setattr(semantic_render, "mandatory_render", tiny_page)
     report = seval.run_shadow_e2e(CASES,
-        _llm(GOOD_FACTS, presence={"medication": "one"}), _Jev())
+        _llm(GOOD_FACTS, presence={"medication": "one"}), _Jev(), source="synthetic")
     assert report["complete"] == 0
     assert not report["per_case"][0]["passed"]
     assert "incomplete" in report["per_case"][0]["stages"]["render"]
@@ -302,6 +333,6 @@ def test_shadow_relations_use_repaired_facts_for_following_message(monkeypatch):
     monkeypatch.setattr(semantic_audit, "audit_facts_v2", audit)
     monkeypatch.setattr(semantic_relations, "reconcile_facts", relations)
     report = seval.run_shadow_e2e([{"id": "thread", "messages": [
-        {"message_id": 1, "body": BODY}, {"message_id": 2, "body": BODY}]}], None, None)
+        {"message_id": 1, "body": BODY}, {"message_id": 2, "body": BODY}]}], None, None, source="synthetic")
     assert report["complete"] == 1
     assert histories[-1] == ["repaired"]

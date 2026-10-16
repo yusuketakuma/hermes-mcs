@@ -64,7 +64,7 @@ def _reference_selection(db, now, limit=10_000):
 def _new_selection(db, now, fresh, limit=10_000):
     return [r["message_id"] for r in db.db.execute(
         extract_llm._selection_sql("DESC", "", fresh),
-        (KIND, EXTRACT_VERSION, None, 1, 0, now, KIND, KIND,
+        (KIND, EXTRACT_VERSION, None, 1, 0, now, KIND,
          EXTRACT_VERSION, now, limit)).fetchall()]
 
 

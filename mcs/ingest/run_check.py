@@ -410,9 +410,12 @@ def _bounded_health_read(db, read):
     finally:
         db.set_progress_handler(None, 0)
         db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, previous_limit)
-        if savepoint:
-            db.execute("RELEASE mcs_health_observation")
-        db.execute(f"PRAGMA busy_timeout={previous_wait}")
+        try:
+            if savepoint:
+                db.execute("RELEASE mcs_health_observation")
+        finally:
+            # A failed RELEASE must not leave the tick connection's short wait behind.
+            db.execute(f"PRAGMA busy_timeout={previous_wait}")
 
 
 def _pending_health(db, now):

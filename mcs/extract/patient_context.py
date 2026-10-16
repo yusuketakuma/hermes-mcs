@@ -1,4 +1,5 @@
 """Extract and read source-bound patient context without inferring current clinical state."""
+import math
 import re
 
 from mcs_util import locate_quote_span
@@ -56,6 +57,13 @@ DETAIL_LABELS = {
     "observed_on": ("観測日", "観察日"),
     "last_confirmed_on": ("最終確認日", "確認日"),
     "confirmed_by": ("確認者",),
+    # bare 保管状況/保管場所 also head documents (同意書, 紹介状); only drug-specific headings
+    "storage_status": ("薬剤保管状況", "薬の保管状況"),
+    "storage_place": ("薬剤保管場所", "薬の保管場所", "薬の置き場所"),
+    "medication_manager": ("服薬管理者", "薬の管理者"),
+    # a bare 照会結果 is often not about a drug (担当者会議, 営業時間), so no generic alias
+    "inquiry_result": ("疑義照会結果", "処方提案結果"),
+    "interaction_check": ("重複・相互作用確認", "相互作用確認", "重複投薬確認"),
 }
 DETAIL_KEYS = frozenset(DETAIL_LABELS)
 _DETAIL_ALIAS = {label: key for key, labels in DETAIL_LABELS.items() for label in labels}
@@ -76,10 +84,57 @@ _BOUNDARY = re.compile(
     r"^[ \t　]*(?:[■●◆#]+|[【［\[][^】］\]\n]+[】］\]]|[^\s:：]{1,24}[:：])")
 _MEASUREMENT = re.compile(r"^[ \t　]*(\d+(?:[.．]\d+)?)(?![\d.．/／年月日-])[ \t　]*(kg|cm|mg/dL|g/dL|mL/min/1\.73m2|U/L|mmol/L|%|％)?", re.I)
 _REPORTED_DATE = re.compile(r"(?<!\d)\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?(?!\d)")
+# Drug storage/management/inquiry attributes only describe medication_management items.
+_DRUG_ONLY_KEYS = frozenset({"storage_status", "storage_place", "medication_manager", "inquiry_result",
+                             "interaction_check"})
+_PATIENT_OWNERS = ("ご本人", "本人", "患者", "利用者")
+_DRUG_OWNER = re.compile(
+    r"(?P<who>ご本人|本人|患者|利用者|ご家族|家族|母親|父親|祖母|祖父|長男|長女|次男|次女|娘|息子|夫|妻|兄|姉|弟|妹|孫|母|父)"
+    r"(?:さん|様)?の(?:お)?(?:内服薬|処方薬|残薬|薬)")
 
 
-def detail_items(items, body: str, parent_span) -> list[dict]:
-    """Keep each raw attribute only inside its parent's unique source quote."""
+def reference_item(value):
+    """Read a resolved reference identity without fetching or substituting its value."""
+    fields = {"token", "key", "value", "drug_names", "project_id", "message_id", "content_hash",
+              "fingerprint", "parent_fingerprint", "posted_at_ts"}
+    if (not isinstance(value, dict) or set(value) != fields
+            or not isinstance(value.get("token"), str) or not re.fullmatch(r"S[1-9][0-9]*", value["token"])
+            or not isinstance(value.get("key"), str) or value["key"] not in DETAIL_KEYS
+            or not isinstance(value.get("value"), str) or not value["value"].strip()
+            or not isinstance(value.get("drug_names"), list) or len(value["drug_names"]) > 1
+            or any(not isinstance(name, str) or not name.strip() for name in value["drug_names"])
+            or any(type(value.get(key)) is not int or value[key] <= 0 for key in ("project_id", "message_id"))
+            or any(not isinstance(value.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", value[key])
+                   for key in ("content_hash", "fingerprint", "parent_fingerprint"))
+            or type(value.get("posted_at_ts")) not in (int, float)):
+        return None
+    try:
+        if not math.isfinite(value["posted_at_ts"]):
+            return None
+    except OverflowError:
+        return None
+    return {**value, "drug_names": list(value["drug_names"])}
+
+
+def _other_persons_drug(body: str, span, value: str) -> bool:
+    """Whether every quoted occurrence of value belongs to a non-patient's drug in its sentence."""
+    owned = []
+    at = body.find(value, span[0], span[1])
+    while at >= 0:
+        start = max(body.rfind(mark, 0, at) for mark in "。！？!?\n") + 1
+        end = min((i for i in (body.find(mark, at) for mark in "。！？!?\n") if i >= 0), default=len(body))
+        owners = list(_DRUG_OWNER.finditer(body, start, end))
+        # the nearest preceding owner, else the sentence's next one; the owner phrase itself is no value
+        if not any(o.start() <= at < o.end() for o in owners):
+            before = [o for o in owners if o.end() <= at]
+            owner = before[-1] if before else next(iter(owners), None)
+            owned.append(owner is not None and owner["who"] not in _PATIENT_OWNERS)
+        at = body.find(value, at + 1, span[1])
+    return bool(owned) and all(owned)
+
+
+def detail_items(items, body: str, parent_span, category=None, subject=None) -> list[dict]:
+    """Keep each raw attribute only inside its parent's unique source quote, category and drug owner."""
     if not isinstance(items, list) or not isinstance(body, str) or parent_span is None:
         return []
     result = []
@@ -92,7 +147,14 @@ def detail_items(items, body: str, parent_span) -> list[dict]:
         if (span is None or span[0] < parent_span[0] or span[1] > parent_span[1]
                 or item["value"] not in body[span[0]:span[1]]):
             continue
+        if category is not None and item["key"] in _DRUG_ONLY_KEYS and category != "medication_management":
+            continue
+        if subject in ("patient", "unspecified") and _other_persons_drug(body, span, item["value"]):
+            continue
         clean = {"key": item["key"], "value": item["value"], "evidence": body[span[0]:span[1]]}
+        reference = reference_item(item.get("refers_to"))
+        if reference is not None and reference["key"] == clean["key"]:
+            clean["refers_to"] = reference
         if clean not in result:
             result.append(clean)
     return result
@@ -172,7 +234,7 @@ def context_items(doc, body: str) -> list[dict]:
             continue
         clean = {**item, "evidence": body[span[0]:span[1]]}
         if "details" in item:
-            clean["details"] = detail_items(item["details"], body, span)
+            clean["details"] = detail_items(item["details"], body, span, item["category"], item["subject"])
         result.append(clean)
     return result
 

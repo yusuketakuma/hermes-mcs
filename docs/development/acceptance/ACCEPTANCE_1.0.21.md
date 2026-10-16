@@ -99,6 +99,8 @@ CodeRabbit CLI 0.9.0の初回は追加差分151テキストファイルを5分�
 
 2026-10-14 05:47（JST、`checked_at` 2026-10-13T20:47:48Z）に同じ条件で公式yFileを再取得し、HTTP200・1,158,682 bytes・同じSHA256・member `y_20261013.csv`（6,083,884 bytes）で10/13の受入版と一致した。`check_drug_master_bundle.py`もok（19,286行・`R08rec3-medicine-42`・`activation:false`・人承認必須）。公開前の再確認として2026-10-14 09:45（JST、`checked_at` 2026-10-14T00:45:17Z）に同じ条件で公式menu（HTTP200）とyFileを取得し、HTTP200・1,158,682 bytes・同じSHA256・member `y_20261013.csv`（6,083,884 bytes）で同梱版と一致したため、更新なしとして既存bundleを配布する。統合後の公開前にも2026-10-14 11:36（JST、`checked_at` 2026-10-14T02:36:35Z）に同じ条件で再取得し、menu・yFileともHTTP200、SHA256と`y_20261013.csv`が同梱版と一致した。
 
+拡張候補 `c48fb07d` のリリース準備として、2026-10-15 18:47（JST、取得時刻 `2026-10-15T09:47:45Z`）に公式menu・yFileを新しく取得した。no-proxy/no-redirect、45秒・32MiB上限で両方HTTP200を確認し、ZIPの1,158,682 bytes・SHA256、member `y_20261013.csv`、CSVの6,083,884 bytes・SHA256は上表および同梱manifestと一致した。更新はなく、20261013版を継続同梱する。現在のruntime converterを使う同梱検査も全19,286行で成功（`status:ok`、終了0）。利用条件・採用判断の入力がない変換は引き続き`terms_unconfirmed`で保留され、私有辞書は作成・有効化していない。この確認は公式配布資産の照合であり、実LLM評価・最終RC・公開の受入を意味しない。
+
 旧20260930原本は保持。[manifest](../../../resources/drug-master/20261013/manifest.json)の`activation:false`と人承認必須を維持する。
 配布原本の検証であり、私有辞書の採用・承認・有効化・実データ再処理は行わない。公開原本の行をfixtureへ転用しない。
 

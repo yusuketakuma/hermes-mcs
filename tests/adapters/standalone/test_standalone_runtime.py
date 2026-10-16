@@ -285,6 +285,28 @@ def test_setup_code_raised_inside_the_adapter_keeps_exit_75(tmp_path, monkeypatc
                      "discord:1000000000000000001", "--quiet"]) == 75
 
 
+def _release_fifo_reader(path):
+    """Open the FIFO for writing to unblock a waiting reader; ENXIO means it already left."""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+    except OSError as exc:
+        if exc.errno != errno.ENXIO:
+            raise
+        return
+    os.close(fd)
+
+
+def test_releasing_a_fifo_whose_reader_already_left_is_not_an_error(tmp_path):
+    path = tmp_path / "synthetic-finished-reader"
+    os.mkfifo(path, mode=0o600)
+    with pytest.raises(OSError) as raw:
+        os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+    assert raw.value.errno == errno.ENXIO  # the cleanup race this helper absorbs
+    _release_fifo_reader(path)
+    with pytest.raises(FileNotFoundError):
+        _release_fifo_reader(tmp_path / "missing-fifo")  # other errors still surface
+
+
 def test_nonregular_private_input_is_rejected_without_waiting_for_a_writer(tmp_path):
     path = tmp_path / "synthetic-private-input"
     os.mkfifo(path, mode=0o600)
@@ -308,16 +330,14 @@ def test_nonregular_private_input_is_rejected_without_waiting_for_a_writer(tmp_p
     try:
         if not refused_without_writer:
             # Unblock the B reader too: the regression must not strand a thread.
-            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
-            os.close(fd)
+            _release_fifo_reader(path)
         worker.join(timeout=1)
         assert not worker.is_alive()
         assert errors == ["invalid"]
         assert refused_without_writer
     finally:
         if worker.is_alive():
-            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
-            os.close(fd)
+            _release_fifo_reader(path)
             worker.join(timeout=1)
 
 
