@@ -721,8 +721,9 @@ _EVENT_CUES = {
     # A bare 照会/疑義 is mostly not about a prescription (T9: 3/3 false cues);
     # only 疑義照会, 処方提案 or an inquiry in the same clause as 処方/薬 counts.
     "prescription_inquiry": re.compile(
-        r"疑義照会|処方提案|(?:処方|薬(?!剤師|局|師))[^。、，,;；！？!?\n]*照会"
-        r"|照会[^。、，,;；！？!?\n]*(?:処方|薬(?!剤師|局|師))"),
+        # clause spans are bounded so one long clause cannot scan quadratically
+        r"疑義照会|処方提案|(?:処方|薬(?!剤師|局|師))[^。、，,;；！？!?\n]{0,200}照会"
+        r"|照会[^。、，,;；！？!?\n]{0,200}(?:処方|薬(?!剤師|局|師))"),
 }
 _MED_STATUSES = {"current", "past", "planned"}
 _MED_SUBJECTS = {"patient", "family", "other"}

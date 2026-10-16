@@ -126,12 +126,9 @@ def test_fact_source_switch_holds_old_notice_and_rechecks_receipts(
         if canonical:
             db.semantic_seed(1, [1], {"source": "replay"})
 
-            def empty(_prompt):
-                return '{"facts":[],"claims":[],"limitations":[]}'
-
             out = semantic.run_due(db, changed, {"errors": []},
                                    time.monotonic() + 300,
-                                   jev_client=_FakeJev(), llm_fn=empty)
+                                   jev_client=_FakeJev(choice_map={"status": "not_stated"}), llm_fn=_llm_v2)
             assert out["done"] == 1
             current = db.artifacts("semantic_summary", message_id=1)[-1]
             assert json.loads(current["meta"])["policy_fingerprint"] != json.loads(old["meta"])["policy_fingerprint"]

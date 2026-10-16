@@ -27,6 +27,12 @@ import json
 from mcs_util import loads_dict
 
 
+def semantic_text_line(text: str) -> str:
+    """Keep summary values on one content line, without structural markers."""
+    return " ".join(text.split()).replace("■", "□").replace(
+        "▶", "▷").replace("─────", "—")
+
+
 class DeferredSend(Exception):
     """Not deliverable under CURRENT policy (e.g. semantic mode left
     enforce) — the committed intent stays pending for a later flush;
@@ -354,13 +360,14 @@ def semantic_summary_block(ledger, r, cfg: dict) -> str:
             _sem.policy_fingerprint(scfg))
         if cur is None:
             return ""
+        from semantic_render import summary_limitations
         summ = cur["content"]
         # Keep every audited claim; the send path's chunker is the one
         # place that splits a notification.
-        lines = [str(c.get("text", ""))
+        lines = [semantic_text_line(str(c.get("text", "")))
                  for c in summ.get("claims", [])
                  if isinstance(c, dict) and c.get("text")]
-        mfacts = [x for x in (summ.get("mandatory_facts") or [])
+        mfacts = [semantic_text_line(x) for x in (summ.get("mandatory_facts") or [])
                   if isinstance(x, str) and x]
         if not lines and not mfacts:
             return ""
@@ -369,8 +376,7 @@ def semantic_summary_block(ledger, r, cfg: dict) -> str:
             if body:
                 body += "\n"
             body += "■ 抽出済み事実（監査済み）\n" + "\n".join(f"・{x}" for x in mfacts)
-        lims = [str(x) for x in (summ.get("limitations") or [])
-                if isinstance(x, str)]
+        lims = summary_limitations(summ)
         if lims:
             body += "\n・（原文確認）" + "；".join(lims)
         return f"\n───── 要約（自動検査済） ─────\n{body}"

@@ -149,6 +149,8 @@ _UPDATE_PM_ENV = "_MCS_UPDATE_PM"   # post-merge child handshake token
 RUNTIME_MIN = (3, 14)
 RUN_LOCK_FD_ENV = "MCS_UPDATE_RUN_LOCK_FD"
 RUNTIME_BACKUP_ENV = "MCS_UPDATE_RUNTIME_BACKUP"
+# install.sh leaves data/install_options.json alone when the updater runs it
+REINSTALL_ENV = "MCS_UPDATE_REINSTALL"
 MIGRATION_INSTALL_ARGS = ("--no-llm", "--no-plugin")
 # scripts/mcs_upgrade.py --keep-hermes-checkout SHA: the operator's own
 # Python-3.14-ready Hermes checkout stays where it is during the migration
@@ -897,8 +899,21 @@ def _plan(tag, cfg, state, current, target_sha) -> dict:
         "schema_bump": bump[0] if bump else None,
         "restarts": restarts,
         "recovery_tool_changed": recovery_changed,
+        "install_args": recorded_install_args(),
         "notes": [] if noop else upgrade_notes(tag, cur_tag) + _recovery_notes(cfg, blockers, reinstall),
     }
+
+
+def recorded_install_args() -> list[str] | None:
+    """The opt-outs of the last successful install.sh run, or None when
+    no valid record exists (installs before 1.0.22 wrote none)."""
+    try:
+        args = _read_control_json(os.path.join(DATA, "install_options.json"))["install_args"]
+        if isinstance(args, list) and set(args) <= INSTALL_ARGS:
+            return sorted(set(args))
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return None
 
 
 def _recovery_notes(cfg, blockers, reinstall) -> list[str]:
@@ -1484,6 +1499,8 @@ def _reinstall(applying: dict) -> None:
         return
     args = [a for a in applying.get("install_args") or [] if a in INSTALL_ARGS]
     env, fds = os.environ.copy(), ()
+    # migration/repair args are forced, not the operator's opt-outs: keep the record
+    env[REINSTALL_ENV] = "1"
     migration = applying.get("runtime_migration")
     if migration:
         env[RUNTIME_BACKUP_ENV] = migration["backup_path"]

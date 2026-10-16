@@ -1,0 +1,11 @@
+{
+  "category": "security",
+  "title": "統計のoverviewが許可されたプロジェクトの範囲だけを返すように",
+  "summary": "プロジェクトを指定した統計のoverviewで、部屋の総数・部屋の状態の内訳・保存済み投稿の期間が、許可されていない部屋も含む全体の値になっていました。指定したプロジェクトの範囲に限って返します。プロジェクトを指定しない運用者の集計は変わりません。",
+  "upgrade": "追加操作は不要です。Slack/Discordの/mcsから使う場合は、Hermes pluginの更新を反映するためgatewayを再起動してください。",
+  "details": [
+    "mcs_stats.st_overview の rooms_total・rooms_by_state・stored_range に scope の project_id を適用した。",
+    "Claude Security スキャン（2026-10-16、F5、CWE-862）の指摘。"
+  ],
+  "refs": ["mcs/views/mcs_stats.py"]
+}

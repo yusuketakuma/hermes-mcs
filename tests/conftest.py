@@ -221,6 +221,8 @@ def _guarded_mcs_call(*args, **kwargs):
 
 _install(mcs_worker, "bounded_call", _guarded_mcs_call)
 _install(mcs_adapter, "bounded_call", _guarded_mcs_call)
+# the host's own OS accounts must not decide auto-login tests
+_install(mcs_adapter, "_login_accounts", lambda: [])
 
 
 def _restore() -> None:

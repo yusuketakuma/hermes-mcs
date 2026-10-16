@@ -348,9 +348,12 @@ _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm
              (r"教えて(?:ください|いただけ|欲しい)", "ask"),
              (r"報告(?:いたします|します|をお願い)", "report"))
 
+# Bounded repeats keep findall linear in the body length: the lazy name
+# class shares digits with the dose, so unbounded runs backtrack cubically.
 _MED_TOKEN = re.compile(
-    r"([ァ-ヶー一-龥][ァ-ヶー一-龥A-Za-z0-9０-９・ー\-]*?)"
-    r"(\d+(?:\.\d+)?)\s*(mg|μg|mcg|g|mL|単位|錠|cap|カプセル|包|枚|本)")
+    r"([ァ-ヶー一-龥][ァ-ヶー一-龥A-Za-z0-9０-９・ー\-]{0,30}?)"
+    # (?<!\d): a dose never starts inside a longer number (7+ digits match nothing)
+    r"(?<!\d)(\d{1,6}(?:\.\d{1,4})?)\s{0,8}(mg|μg|mcg|g|mL|単位|錠|cap|カプセル|包|枚|本)")
 _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬|座薬|注射")
 # date range like 8/17-9/6 or 9/24-10/7 (med periods)
 _MED_PERIOD = re.compile(

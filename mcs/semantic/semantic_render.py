@@ -11,12 +11,13 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime
 import time
+import re
 
 from mcs_queries import JST
 from mcs_util import payload_hash, positive
 from mcs_util import loads_dict
 import semantic_facts as sf
-from semantic_send_gate import enforce_block_reason
+from semantic_send_gate import enforce_block_reason, semantic_text_line
 
 _SECTION_LABEL = {"medication": "薬剤・処方に関する情報",
                   "status": "現在の状況（対象投稿時点）",
@@ -31,6 +32,26 @@ _CATEGORY_LABEL = {
     "care_event": "診療・ケア", "request_pending": "依頼・未決",
     "preference": "希望", "other_observation": "その他の所見",
 }
+
+
+_LIMITATION_NOTICE = "要約対象外の情報があります。MCS原文を確認してください。"
+
+
+def summary_limitations(summary: dict) -> list[str]:
+    """Render only fixed code vocabulary from the mixed limitations channel."""
+    allowed = {f"{label}の判定が未確定のため要約対象外（原文確認）"
+               for label in _CATEGORY_LABEL.values()}
+    allowed.add("対象投稿または文脈が大きすぎるため要約を生成できませんでした")
+    lines = []
+    for item in summary.get("code_limitations") or []:
+        if isinstance(item, str) and (item in allowed or re.fullmatch(
+                r"対象投稿・文脈に添付[0-9]+件があります。添付内容は解析していません。", item)):
+            if item not in lines:
+                lines.append(item)
+    # Matching a template does not establish provenance for model/old mixed text.
+    if any(item not in lines for item in summary.get("limitations") or []):
+        lines.insert(0, _LIMITATION_NOTICE)
+    return lines
 
 
 MANDATORY_PAGE_BUDGET = 1900    # chars/page — the send-path chunk bound
@@ -142,6 +163,7 @@ def mandatory_render(doc: dict,
                 f"、時点:{fact.get('event_time') or '不明'}"
                 f"{_attr_desc(fact)}"
                 f"{fact_binding(fid)}{_evidence_desc(fact)}）")
+        line = semantic_text_line(line)
         lines.append(line)
         fact_ids.append(fid)
         entries.append((line, fid))
@@ -225,21 +247,21 @@ def render_notice(ledger, project_id: int, root_id: int,
         lines.append("\n■ 今回の重要情報")
         for c in by_sec.get("medication", []) + by_sec.get("status", []):
             prefix = "【提案】" if c["claim_kind"] == "inference" else ""
-            lines.append(f"・{prefix}{c['text']}")
+            lines.append(f"・{prefix}{semantic_text_line(c['text'])}")
     for sec in ("pharmacy", "followup", "progress", "flow", "other"):
         if by_sec.get(sec):
             lines.append(f"\n■ {_SECTION_LABEL[sec]}")
             for c in by_sec[sec]:
                 prefix = "【提案】" if c["claim_kind"] == "inference" else ""
-                lines.append(f"・{prefix}{c['text']}")
+                lines.append(f"・{prefix}{semantic_text_line(c['text'])}")
     mfacts = summary.get("mandatory_facts") or []
     if mfacts:
         lines.append("\n■ 抽出済み事実（監査済み）")
         m_overview = summary.get("mandatory_overview")
         if m_overview:
-            lines.append(f"・{m_overview}")
-        lines.extend(f"・{x}" for x in mfacts)
-    lims = summary.get("limitations") or []
+            lines.append(f"・{semantic_text_line(m_overview)}")
+        lines.extend(f"・{semantic_text_line(x)}" for x in mfacts)
+    lims = summary_limitations(summary)
     if lims:
         lines.append("\n■ 原文・制約")
         lines.extend(f"・{x}" for x in lims)

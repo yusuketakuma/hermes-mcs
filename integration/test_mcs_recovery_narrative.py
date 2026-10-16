@@ -69,7 +69,7 @@ from notify_testkit import _dispatch, _intent, _latest_render  # noqa: E402
 from ops_testkit import (_git, _make_repo, _mk_schema,  # noqa: E402
                          _seed_consent)
 from semantic_testkit import (_canonical_cfg, _message, _PassJev,  # noqa: E402
-                              _patient)
+                              _patient, _summary_from_facts)
 from slack_testkit import SLACK  # noqa: E402
 
 NO_FACTS = {c: "none" for c in sf.MANDATORY_CATEGORIES}
@@ -133,23 +133,24 @@ def _threads(bot):
 
 def _narrative_llm(n_facts=None):
     """Fake Qwen completion: v2 extraction emitting one fact per
-    ``メドNN番`` token actually present in the prompt — chunk-split
+    ``メド[NN]番`` token actually present in the prompt — chunk-split
     bodies therefore merge back to the full corpus with no duplicate
-    fact_ids. The summarizer prompt gets an empty claims doc.
+    fact_ids. The summarizer supports one extracted fact; the mandatory
+    renderer must still preserve every other verified fact.
     ``n_facts`` (failure-path knob) drops indices >= the cap."""
     def llm(prompt):
         if "要約器" in prompt:
-            return json.dumps({"claims": [], "limitations": []},
-                              ensure_ascii=False)
+            return _summary_from_facts(prompt)
         idxs = sorted({int(m) for m in
-                       re.findall(r"メド(\d+)番", prompt)})
+                       re.findall(r"メド\[(\d+)\]番", prompt)})
         if n_facts is not None:
             idxs = [i for i in idxs if i < n_facts]
-        facts = [{"statement": f"メド{i:02d}番を投与",
+        # Bracketed synthetic identifiers are not unrecognized quantity units.
+        facts = [{"statement": f"メド[{i:02d}]番を投与",
                   "kind": "medication_event", "action": "continue",
                   "subject_role": "patient", "polarity": "affirmed",
                   "workflow_status": "performed", "importance": "T1",
-                  "evidence_quote": f"メド{i:02d}番"}
+                  "evidence_quote": f"メド[{i:02d}]番"}
                  for i in idxs]
         presence = dict(NO_FACTS)
         presence["medication"] = "one" if facts else "none"
@@ -361,7 +362,7 @@ def _run_narrative(tmp_path):
     try:
         # ---- 1. ingest: parent w/ 41-fact body (>4 body parts) + attachment
         p = _patient(led)
-        body_lines = [f"メド{i:02d}番を投与します。" for i in range(41)]
+        body_lines = [f"メド[{i:02d}]番を投与します。" for i in range(41)]
         body = ("\n".join(body_lines)
                 + "\nSYNTHETIC-NARRATIVE-BODY "
                 + "補足記載。" * 1400)          # ~10k chars -> >4 parts
@@ -450,7 +451,7 @@ def _run_narrative(tmp_path):
         # ---- 4. late reply -> second target coverage ----------------
         p2 = _patient(led)
         p2.messages = [_message(2, parent=1,
-                                body="メド41番の効果を確認しました。")]
+                                body="メド[41]番の効果を確認しました。")]
         led.save_patient(p2, semantic=True)
         out3 = _drain(led, _NarrativeJev(), llm=semantic.llm_chat)
         v4r2 = led.db.execute(
@@ -780,7 +781,7 @@ def test_failure_fact_dropped_means_not_all_facts(tmp_path):
     led = _ledger.Ledger(str(tmp / "data" / "ledger.db"))
     p = _patient(led)
     p.messages = [_message(1, body="\n".join(
-        f"メド{i:02d}番を投与します。" for i in range(41)))]
+        f"メド[{i:02d}]番を投与します。" for i in range(41)))]
     led.save_patient(p, semantic=True)
     try:
         out = _drain(led, _NarrativeJev(), llm=_narrative_llm(n_facts=40))
@@ -908,7 +909,7 @@ def test_failure_eval_label_drop_means_diagnostic_not_pass(tmp_path):
     (tmp / "data").mkdir()
     led = _ledger.Ledger(str(tmp / "data" / "ledger.db"))
     p = _patient(led)
-    p.messages = [_message(1, body="メド00番を投与します。")]
+    p.messages = [_message(1, body="メド[00]番を投与します。")]
     led.save_patient(p, semantic=True)
     try:
         _drain(led, _AuditFailJev(

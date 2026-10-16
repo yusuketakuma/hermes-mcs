@@ -2687,3 +2687,27 @@ def test_restore_staging_closes_its_fd_when_fstat_fails(updater, tmp_path, monke
     monkeypatch.undo()
     with pytest.raises(OSError):
         os.fstat(made[-1][0])          # closed, not leaked
+
+
+@pytest.mark.parametrize("body, expected", [
+    ('{"v": 1, "install_args": ["--no-recovery", "--no-llm"]}', ["--no-llm", "--no-recovery"]),
+    ('{"v": 1, "install_args": []}', []),
+    (None, None),                                        # pre-1.0.22 install: no record
+    ("not json", None),
+    ('["--no-llm"]', None),
+    ('{"install_args": ["--no-services"]}', None),       # never an operator opt-out
+    ('{"install_args": [{"x": 1}]}', None),
+    ('{"install_args": "--no-llm"}', None),
+])
+def test_recorded_install_args_only_trusts_known_opt_outs(tmp_path, monkeypatch, body, expected):
+    monkeypatch.setattr(mcs_update, "DATA", str(tmp_path))
+    if body is not None:
+        (tmp_path / "install_options.json").write_text(body)
+    assert mcs_update.recorded_install_args() == expected
+
+
+def test_recorded_install_args_ignores_a_symlinked_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcs_update, "DATA", str(tmp_path))
+    (tmp_path / "real.json").write_text('{"install_args": ["--no-llm"]}')
+    (tmp_path / "install_options.json").symlink_to(tmp_path / "real.json")
+    assert mcs_update.recorded_install_args() is None

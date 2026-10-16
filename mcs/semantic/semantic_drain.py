@@ -862,6 +862,8 @@ def _apply_mandatory_render(summary: dict, findings: list, status: str,
         summary["mandatory_pages"] = mandatory["pages"]
         summary["mandatory_overview"] = mandatory["overview"]
     if mandatory["limitations"]:
+        code_lims = summary.setdefault("code_limitations", [])
+        code_lims.extend(x for x in mandatory["limitations"] if x not in code_lims)
         existing_lims = summary.get("limitations") or []
         summary["limitations"] = existing_lims + [
             x for x in mandatory["limitations"]

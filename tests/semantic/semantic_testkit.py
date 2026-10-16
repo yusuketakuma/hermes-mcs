@@ -4,6 +4,7 @@ drain drivers, evaluation records and semantic-facts/v2 ``fact``/``doc``
 builders.  Not a test module (no ``test_`` prefix); sibling files import
 it via the tests/ sys.path bootstrap."""
 import json
+import re
 import time
 from types import SimpleNamespace
 
@@ -142,12 +143,20 @@ def _med_fact(drug, quote, action):
             "importance": "T1", "evidence_quote": quote}
 
 
+def _summary_from_facts(prompt):
+    """One supported synthetic claim; the mandatory layer must retain other facts."""
+    brief = prompt.split("事実候補(番号付き):\n", 1)[1].split("\n命題評価(参考):", 1)[0]
+    claims = [{"section": "other", "claim_kind": "reported_fact",
+               "text": text, "fact_refs": [int(index)]}
+              for index, text in re.findall(r"^(\d+)\. \[.*?\] (.+)$", brief, re.M)[:1]]
+    return json.dumps({"claims": claims, "limitations": []}, ensure_ascii=False)
+
+
 def _llm_v2(prompt):
-    """Per-target v2 extraction + empty summary.  The prompt embeds the
+    """Per-target v2 extraction + supported summary.  The prompt embeds the
     member body, so the response is keyed by which drug it mentions."""
     if "要約器" in prompt:
-        return json.dumps({"claims": [], "limitations": []},
-                          ensure_ascii=False)
+        return _summary_from_facts(prompt)
     if "アムロジピン" in prompt:
         return json.dumps({
             "facts": [_med_fact("アムロジピン", "アムロジピン5mgを継続",

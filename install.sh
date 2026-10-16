@@ -646,6 +646,7 @@ dry_run_plan() {
         plan_line "6/6 recovery" "$RECOVERY_DIR/mcs_recover.py [$(state "$RECOVERY_DIR/mcs_recover.py")], repo_path = $REPO"
         plan_line "" "plist $WATCH_PLIST [$(state "$WATCH_PLIST")]; (re)load org.mcs.recovery only when changed or not loaded"
     fi
+    plan_line "opt-outs" "$MCS_DATA/install_options.json [$(state "$MCS_DATA/install_options.json")] (the update plan shows it as install_args; pass each as --install-arg)"
 }
 
 if [ "$MODE" != install ]; then
@@ -1162,6 +1163,20 @@ else
         skip "watchdog: not macOS — install the timer manually"
         sum "6/6 recovery: tool installed; watchdog skipped (not macOS)"
     fi
+fi
+
+# ------------------------------------------------------------ opt-outs
+# The updater's plan reports these so a reinstall repeats the same opt-outs
+# without asking (mcs_update.INSTALL_ARGS; --no-services is the updater's own).
+# Updater runs add migration/repair opt-outs the operator did not choose.
+if [ -z "${MCS_UPDATE_REINSTALL:-}" ]; then
+    _opts=""
+    for _o in brew:"$SKIP_BREW" llm:"$SKIP_LLM" plugin:"$SKIP_PLUGIN" recovery:"$SKIP_RECOVERY"; do
+        if [ "${_o#*:}" -eq 1 ]; then _opts="$_opts${_opts:+, }\"--no-${_o%%:*}\""; fi
+    done
+    printf '{"v": 1, "install_args": [%s]}\n' "$_opts" > "$MCS_DATA/install_options.json.tmp" \
+        || die "cannot write $MCS_DATA/install_options.json — repair permissions or disk space, then re-run install.sh"
+    publish "$MCS_DATA/install_options.json.tmp" "$MCS_DATA/install_options.json" || :
 fi
 
 # ------------------------------------------------------------ summary

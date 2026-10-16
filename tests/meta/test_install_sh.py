@@ -508,6 +508,8 @@ def test_install_run_then_rerun_converges(tmp_path):
 
     r1 = _run(env, hermes_home)
     assert r1.returncode == 0, r1.stderr
+    assert json.loads((home / ".mcs" / "data" / "install_options.json").read_text()) \
+        == {"v": 1, "install_args": []}
     recovery = home / ".mcs-recovery" / "mcs_recover.py"
     assert recovery.is_file() and os.access(recovery, os.X_OK)
     first_gen = recovery.read_bytes()
@@ -660,6 +662,22 @@ def test_skip_flags_bypass_stages(tmp_path):
     assert not any(c.startswith("curl") and "-o" in c
                    for c in _calls(stub_root))
     assert any(c.startswith("git clone") for c in _calls(stub_root))
+    # the updater's plan repeats these opt-outs on a reinstall
+    assert json.loads((home / ".mcs" / "data" / "install_options.json").read_text()) \
+        == {"v": 1, "install_args": ["--no-llm", "--no-plugin", "--no-recovery"]}
+
+
+def test_updater_run_keeps_the_operator_opt_out_record(tmp_path):
+    """The updater adds migration/repair opt-outs (--no-llm --no-plugin);
+    they must not replace what the operator chose."""
+    home, hermes_home, _stub_root, env = _world(tmp_path)
+    record = home / ".mcs" / "data" / "install_options.json"
+    assert _run(env, hermes_home).returncode == 0
+    before = record.read_bytes()
+    r = _run({**env, "MCS_UPDATE_REINSTALL": "1"}, hermes_home,
+             "--no-llm", "--no-plugin", "--no-services")
+    assert r.returncode == 0, r.stderr
+    assert record.read_bytes() == before
 
 
 def test_no_brew_and_no_services_flags(tmp_path):

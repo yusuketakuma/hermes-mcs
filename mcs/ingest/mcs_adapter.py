@@ -126,6 +126,23 @@ class BootstrapError(MCSError):
         super().__init__("bootstrap_error", detail)
 
 
+def _login_accounts() -> list:
+    import pwd
+    return pwd.getpwall()
+
+
+def _other_login_accounts() -> int:
+    """Count other local accounts that can log in (they could drive the CDP port)."""
+    import sys
+    floor = 501 if sys.platform == "darwin" else 1000
+    me = os.getuid()
+    # no uid ceiling: directory accounts can have large uids; nobody-style
+    # service accounts are excluded by their nologin/false shell
+    return sum(1 for p in _login_accounts()
+               if p.pw_uid >= floor and p.pw_uid != me
+               and not p.pw_shell.endswith(("nologin", "false")))
+
+
 def _allowed_port(u) -> bool:
     try:
         return u.port in (None, 443)
@@ -1389,11 +1406,16 @@ class MCSAdapter:
         Returns 'ok' | 'manual_required' | 'keychain_locked' | 'failed'.
         'manual_required:no_form' distinguishes a missing login form
         (page never rendered / app redirected) from a submitted login
-        that never validated. Credentials are filled only into a CDP
+        that never validated; 'manual_required:multi_user_host' means
+        another local account can log in, so the CDP Chrome is not used. Credentials are filled only into a CDP
         listener verified as this profile's Chrome (_cdp_peer_owned);
         any other peer ends the attempt as 'failed'."""
         # per-attempt journal facts (run_check records them)
         self.healed_tabs, self.chrome_restarted = 0, False
+        if _other_login_accounts():
+            # the CDP port is reachable by every local account: never open
+            # it or type the password while another account can log in
+            return "manual_required:multi_user_host"
         try:
             self._ensure_chrome(profile_dir, chrome_bin)
         except (MCSError, OSError):  # incl. deadline_exceeded

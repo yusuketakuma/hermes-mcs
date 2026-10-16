@@ -243,6 +243,8 @@ def _oversize_stub(bundle: dict, target_id: int) -> dict:
             "claims": [],
             "limitations": ["対象投稿または文脈が大きすぎるため"
                             "要約を生成できませんでした"],
+            "code_limitations": ["対象投稿または文脈が大きすぎるため"
+                                 "要約を生成できませんでした"],
             "audit_status": "pending", "_input_oversize": True}
 
 
@@ -352,12 +354,16 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
                     bool: "boolean", int: "number", float: "number"}.get(
                         type(item), "unknown")
             return result(None, "model", f"limitations_item_{code}")
+    code_limitations = []
     attachment_count = sum(len(m.get("attachments", [])) for m in bundle["members"])
     if attachment_count:
-        limitations.append(f"対象投稿・文脈に添付{attachment_count}件があります。添付内容は解析していません。")
+        disclosure = f"対象投稿・文脈に添付{attachment_count}件があります。添付内容は解析していません。"
+        limitations.append(disclosure)
+        code_limitations.append(disclosure)
     return result({"summary_id": f"sum_{bundle['bundle_id']}",
                    "input_bundle_id": bundle["bundle_id"],
                    "schema_version": SCHEMA_VERSION,
                    "target_message_id": target_id,
                    "claims": claims, "limitations": limitations,
+                   "code_limitations": code_limitations,
                    "audit_status": "pending"})
