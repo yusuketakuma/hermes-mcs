@@ -198,8 +198,12 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 # route=apply
 "$PY" "$WORK/mcs_upgrade.py" --repo "$REPO" --no-fetch apply --to "$TAG"
 # route=reinstall（install_args の各要素、または確認した opt-out を --install-arg=… で付ける）
-"$PY" "$WORK/mcs_upgrade.py" --repo "$REPO" --no-fetch apply --to "$TAG" --reinstall --install-arg=--no-llm
+"$PY" "$WORK/mcs_upgrade.py" --repo "$REPO" --no-fetch apply --to "$TAG" --reinstall
 ```
+
+上の再導入例は opt-out なしの場合。§4 で確定した opt-out があるときだけ、各要素を
+`--install-arg=…` として追加する。`--no-llm` は自前 LLM サーバー・モデルの導入を省略する指定で、
+既存の LLM 処理を停止する設定ではない。
 
 `--no-fetch` は起動役の事前取得を省くだけで、適用自体はタグの照合のためネットワークを使う。
 適用は移行先版の `mcs_update.apply` が行う: 更新ロック取得 → 検査 → `data/backups/preupdate-*.db` 取得 →

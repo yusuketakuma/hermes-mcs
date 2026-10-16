@@ -20,7 +20,7 @@ def test_shared_plan_contract_and_dense_short_corpus():
     parts = clinical_chunking.plan_chunks(source)
     assert len(parts) > 1 and "".join(parts) == source
     assert all(len(part) <= 3000 for part in parts)
-    assert clinical_chunking.PLAN_VERSION == 1
+    assert clinical_chunking.PLAN_VERSION == 2
 
 
 @pytest.mark.parametrize("source", ["", " \n\t", "未知の自由記載です。", "Ａ\n家族：\n服薬なし。\n", "😀" * 3020])
@@ -216,3 +216,18 @@ def test_compact_hints_omit_empty_optional_keys_but_keep_false_semantics():
     block = extract_llm._hint_block(hints)
     assert '"v"' not in block and '"events"' not in block and '"labs"' not in block
     assert '"negated":false' in block
+
+
+def test_previous_plan_checkpoints_are_retained_but_not_reused(db, monkeypatch):
+    db.save_messages([_message(body="独居です。")])
+    row = dict(db.db.execute("SELECT * FROM messages").fetchone())
+    row["_target"] = ("", "synthetic")
+    with monkeypatch.context() as old:
+        old.setattr(extract_llm, "PLAN_VERSION", 1)
+        extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
+        assert extract_llm._saved_chunk_state(db, row, chunk_size=100) == ({}, {0: {}})
+    assert extract_llm.PLAN_VERSION == clinical_chunking.PLAN_VERSION == 2
+    assert extract_llm._saved_chunk_state(db, row, chunk_size=100) == ({}, {})
+    assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == 1
+    extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
+    assert extract_llm._saved_chunk_state(db, row, chunk_size=100) == ({}, {0: {}})

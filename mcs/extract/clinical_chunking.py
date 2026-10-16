@@ -5,7 +5,7 @@ import unicodedata
 from mcs_util import text_chunks
 
 # Bump whenever boundaries or density weights change: checkpoints pin this contract.
-PLAN_VERSION = 1
+PLAN_VERSION = 2
 # These are output-pressure units, not measured tokenizer counts or a speed promise.
 _OUTPUT_BUDGET = 850
 # bounded repeats: an unbounded digit run backtracks quadratically per search
