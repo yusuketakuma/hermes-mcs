@@ -203,8 +203,23 @@ def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
     if footer and blocks:
         blocks.append(dict(_DIVIDER))
     for item in footer:
-        blocks.extend(_contexts(_names(item["text"], names) if silent else item["text"]))
+        text = _names(item["text"], names) if silent else item["text"]
+        blocks.extend(_link_context(text) or _contexts(text))
     return blocks
+
+
+def _link_context(text):
+    """A footer line carrying 「MCSで開く https://…」 (the urgent notice) as
+    a mrkdwn context with a real link; None keeps the plain_text form."""
+    found = re.search(r"MCSで開く (https://[^\s<>|]+)", text)
+    if not found or urlsplit(found[1]).scheme != "https" or not urlsplit(found[1]).hostname:
+        return None
+    link = f"<{escape(found[1], quote=False)}|MCSで開く>"
+    mrkdwn = (escape(text[:found.start()], quote=False) + link
+              + escape(text[found.end():], quote=False))
+    if len(mrkdwn) > _CONTEXT_MAX:
+        return None
+    return [{"type": "context", "elements": [{"type": "mrkdwn", "text": mrkdwn}]}]
 
 
 def render(spec, names=None):

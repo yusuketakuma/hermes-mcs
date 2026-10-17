@@ -99,8 +99,11 @@ def notification_preview(db, card, content, *, limit=600) -> str:
                 else:   # an indented item row belongs to the fact above
                     facts[-1] += ("" if facts[-1].endswith(":") else "、") \
                         + line.strip("　").removeprefix("・")
+            # the urgency fact is the badge below; never repeat it as the main text
+            facts = [line for line in facts if not line.startswith("🚨")]
             main = next((line for line in facts if any(
-                word in line for word in ("依頼", "予定", "症状", "注意"))), facts[0] if facts else "要約内容を確認できません")
+                word in line for word in ("依頼", "予定", "症状", "注意"))),
+                facts[0] if facts else _preview_post(message["body_text"]) or "要約内容を確認できません")
         else:
             state = "要約作成失敗" if _extraction_failed(db, mid) else "要約処理待ち"
             main = f"原文・{state}: " + (_preview_post(message["body_text"]) or "本文なし")
@@ -115,9 +118,16 @@ def notification_preview(db, card, content, *, limit=600) -> str:
     items = []
     for entry in signals.values():
         signal = entry["content"]
-        _mid, message = _signal_evidence(db, signal)
+        mid, message = _signal_evidence(db, signal)
+        summary = f"{signal_label(signal)}{_inline(signal.get('note'), 120)}{signal_state_suffix(signal)}"
+        if mid is None:
+            # a register alert has no post by design: no sender/time to be 未取得
+            patient = _inline(_patient_name(db, signal.get("project_id")), 30) \
+                or f"project {signal.get('project_id')}"
+            items.append(f"{patient}: {summary}")
+            continue
         header = _preview_header(db, signal.get("project_id"), message)
-        items.append(_preview_line(header, f"{signal_label(signal)}{_inline(signal.get('note'), 120)}（{signal_state(signal)}）"))
+        items.append(_preview_line(header, summary))
     if not items:
         return "確認候補: 現在の表示対象を確認できません。"
     prefix = f"確認候補 {len(signals)}件: " if card["kind"] == "digest" else "確認候補（記録上）: "
@@ -535,7 +545,7 @@ SIGNAL_TYPE_LABEL = {
     "rx_period_expiry": "処方期限間近",
     "rx_period_lapsed": "処方期限切れ",
 }
-SIGNAL_STATE_LABEL = {"open": "未確認", "resolved": "解消",
+SIGNAL_STATE_LABEL = {"open": "未解消", "resolved": "解消",
                       "dismissed": "却下"}
 # One spelling on every surface and layout, no source qualifier (owner
 # 2026-10-09): the model verdict carries 🚨 plus words so it never reads
@@ -550,6 +560,12 @@ def signal_label(sig: dict) -> str:
 
 def signal_state(sig: dict) -> str:
     return SIGNAL_STATE_LABEL.get(sig.get("state") or "open", "状態不明")
+
+
+def signal_state_suffix(sig: dict) -> str:
+    """「 · 解消」 etc.; nothing for an open signal, which is the default
+    state and must not read as a human confirmation (未確認)."""
+    return "" if (sig.get("state") or "open") == "open" else f" · {signal_state(sig)}"
 
 
 def patient_heading(db, pid) -> str:
@@ -691,7 +707,7 @@ def _signal_compact(db, pid, contents: list, plain: bool = False) -> list:
                 " " if plain or urgency == "llm" else "")
             if urgency == "llm":
                 line += structured_view.urgency_qc_suffix(db, mid)
-        lines.append(f"・{line}{s.get('note') or ''}（{signal_state(s)}）")
+        lines.append(f"・{line}{s.get('note') or ''}{signal_state_suffix(s)}")
     return _fit_item([{"type": "text", "rule": True,
                        "text": patient_heading(db, pid)},
                       {"type": "text", "text": "\n".join(lines)}])
@@ -722,7 +738,7 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
         stamp_line = thread_stamp_row(
             db, mid, m["sender_id"] if "sender_id" in m.keys() else None,
             observed_time=stamp_time)
-    body = m["body_text"] or ""
+    body = m["body_text"] or ("（本文なし）" if m["body_state"] in (None, "full") else "（本文未取得）")
     if layout >= 2:
         if stamp_line:
             out.append(stamp_line)
@@ -740,9 +756,12 @@ def _signal_body(db, sig: dict, stamps=True, *, cfg=None, include_summary=True,
                  layout=1, stamp_time=True) -> str:
     """Full-text view of one signal — the thread post and 'body'
     action surface: 【種別】note / state, then the evidence post."""
-    lines = [f"{signal_label(sig)}{sig.get('note') or ''} / 状態: {signal_state(sig)}"]
+    lines = [f"{signal_label(sig)}{sig.get('note') or ''}{signal_state_suffix(sig)}"]
     mid, m = _signal_evidence(db, sig)
-    if m and m["body_text"]:
+    if mid is None:
+        # no evidence post (register alerts): the patient must still be named
+        lines[0] = f"{patient_heading(db, sig.get('project_id'))} · {lines[0]}"
+    if m:
         lines.append(_message_post(
             db, mid, m, _sender_tag(m, db),
             head=f"↳ {patient_heading(db, sig.get('project_id'))} · ",
@@ -836,15 +855,18 @@ def _card_content(db, card, *, cfg=None) -> dict:
             containers = [{"type": "heading", "text":
                            f"💬 {patient_heading(db, card['project_id'])}"}]
             meta = [URGENCY_PLAIN[u] for u in ("llm", "rule") if u in urgency][:1]
-            meta.append(f"{_mmdd(first.get('posted_at'))}〜")
+            if "?" not in _mmdd(first.get("posted_at")):
+                meta.append(f"{_mmdd(first.get('posted_at'))}〜")
             if context:
                 meta.append(context)
             meta.extend(_progress_summary(progress_by_mid))
-            containers.append({"type": "text", "text": " · ".join(meta)})
+            if meta:
+                containers.append({"type": "text", "text": " · ".join(meta)})
         else:
             containers = [{"type": "heading", "text":
                            f"💬 {patient_heading(db, card['project_id'])}"
-                           f" · 起点 {_mmdd(first.get('posted_at'))}"
+                           + ("" if "?" in _mmdd(first.get("posted_at"))
+                              else f" · 起点 {_mmdd(first.get('posted_at'))}")
                            + (f" {tag}" if tag else "")}]
             if context:
                 containers.append({"type": "text", "text": context})
