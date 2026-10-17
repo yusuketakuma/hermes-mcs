@@ -27,7 +27,7 @@ def test_exact_fixture_scores_and_synthetic_labels_do_not_pass_g6():
 def test_human_label_schema_can_pass_explicit_criteria():
     report = evaluation.evaluate_records([_record("human")], MANIFEST, CRITERIA)
     assert report["gate"] == {"pass": True, "reasons": [],
-                              "g6_eligible": True}
+                              "g6_eligible": False}
 
 
 def test_cross_split_identity_is_rejected():
@@ -85,6 +85,7 @@ def test_gate_uses_held_out_test_metrics():
     for index in range(9):
         record = _record("human")
         record["case_id"] = f"dev-{index}"
+        record["label"]["receipt"]["receipt_id"] = f"dev-receipt-{index}"
         record["split"] = "dev"
         record["account_id"] = f"account-dev-{index}"
         record["project_id"] = f"project-dev-{index}"
@@ -165,6 +166,7 @@ def test_missing_case_telemetry_cannot_be_hidden_by_other_cases(missing):
     first = _record("human")
     second = copy.deepcopy(first)
     second["case_id"] = "case-2"
+    second["label"]["receipt"]["receipt_id"] = "second-receipt"
     if missing == "requests":
         second["candidate"]["usage"].pop("requests")
     else:

@@ -3,6 +3,8 @@ per-post 要約 states, state footer, primary buttons, thread posts, and the
 LINE WORKS planning rules. Synthetic ledger only."""
 import json
 
+import pytest
+
 import extract_llm
 import notify_cards
 import notify_render
@@ -116,7 +118,7 @@ def test_signal_thread_posts_are_keyed_per_signal(led):
     notify_cards.sweep(led, CFG, now=NOW)
     names = [p["name"] for p in _spec(led)["parts"]["manifest"]
              if p["kind"] == "body_part"]
-    assert len(names) == 2 and all(n.startswith("s:") for n in names)
+    assert len(names) == 4 and all(n.startswith("s:") for n in names)
     assert names[0] != names[1]
     body = "".join(_spec(led)["parts"]["thread_body_parts"])
     assert "/ 状態: 未確認" in body and "↳ 患者A · " in body
@@ -162,7 +164,7 @@ def test_lineworks_card_member_names_repost_marker_and_more(led):
 def _lw_reissue(led, change=False):
     render = _lw_render(led)
     spec = json.loads(render["spec_json"])
-    assert not any("スタンプ" in b for b in spec["parts"]["thread_body_parts"])
+    assert any("スタンプ 未取得" in b for b in spec["parts"]["thread_body_parts"])
     _lw_deliver(led, render)
     led.db.execute(
         "UPDATE notification_render_parts SET state='delivered',"
@@ -204,3 +206,69 @@ def test_lineworks_card_split_breaks_at_a_line():
     assert len(head) <= 1000 and head.endswith("\n↓ 続き")
     assert head.removesuffix("\n↓ 続き") + "\n" + rest == text
     assert notify_render.lineworks_card_split("短い") == ("短い", "")
+
+
+@pytest.mark.parametrize("off_page", [False, True])
+@pytest.mark.parametrize("changed_field", ["reply", "actor", "failed"])
+def test_lineworks_stamp_change_revises_only_changed_post(led, off_page, changed_field):
+    _seed_thread(led, mids=tuple(range(100, 115)) if off_page else (100, 101))
+    _dispatch(led, _intent(led), LINEWORKS)
+    render = _latest_render(led)
+    if off_page:
+        assert 100 not in notify_cards._card_content(led.db, _card(led), cfg=LINEWORKS)["shown"]
+    _lw_deliver(led, render)
+    observed = {"reactions": {"value": [{"type": "viewed", "count": 2,
+                                         "self_reacted": False}], "observed_at": NOW}}
+    with led.db:
+        led.db.execute("INSERT INTO message_metadata(message_id,source,content,checked_at,last_error) "
+                       "VALUES(100,'capture',?,?,NULL)", (json.dumps(observed), NOW))
+    actors = [{"actor_id": 7, "reaction_type": "viewed", "name": "合成人員"}]
+    led.save_reaction_actors(100, actors, True, now=NOW)
+    assert notify_cards.sweep(led, LINEWORKS, now=NOW + 1)["updated"] == 1
+    spec = json.loads(_latest_render(led)["spec_json"])
+    root = next(p for p in spec["parts"]["manifest"] if p.get("name") == "m:100:header#1")
+    reply = next(p for p in spec["parts"]["manifest"] if p.get("name") == "m:101:header#1")
+    text = spec["parts"]["thread_body_parts"][int(root["part_id"].split(":")[1]) - 1]
+    assert text.index("要約 処理待ち") < text.index("スタンプ 👀2")
+    assert "本文" not in text
+    assert "本文" in spec["parts"]["thread_body_parts"]
+    assert "合成人員" in text and "投稿時点" in text
+    assert "prior_remote_id" not in root
+    assert reply["prior_remote_id"]  # the unchanged reply is skipped, not reposted
+    from adapters.common import envelopes
+    from notify_lineworks_testkit import MID, _apply, _claim
+    claim = _claim(_latest_render(led), attempt="c" * 16)
+    assert _apply(led, envelopes.transport_begin(claim))["granted"]
+    assert _apply(led, envelopes.transport_receipt(claim, "delivered", message_id=MID))["applied"]
+    for part in spec["parts"]["manifest"][1:]:
+        remote_id = part.get("prior_remote_id") or "lw:revision:" + part["part_id"]
+        assert _apply(led, envelopes.part_receipt(claim, part, "delivered", remote_id=remote_id))["applied"]
+    assert notify_cards.sweep(led, LINEWORKS, now=NOW + 2)["updated"] == 0
+    # Re-observation of unchanged counts is not a new immutable post.
+    observed["reactions"]["observed_at"] = NOW + 600
+    with led.db:
+        led.db.execute("UPDATE message_metadata SET content=?,checked_at=? WHERE message_id=100",
+                       (json.dumps(observed), NOW + 600))
+    led.save_reaction_actors(100, actors, True, now=NOW + 600)
+    assert notify_cards.sweep(led, LINEWORKS, now=NOW + 601)["updated"] == 0
+    # An unrelated reply update must also reuse the timestamp-only changed root.
+    from notify_testkit import _extract
+    if changed_field == "reply":
+        _extract(led, 101, {"summary": "合成返信の新しい要約"}, kind="extract_llm")
+    elif changed_field == "actor":
+        led.save_reaction_actors(100, [{**actors[0], "name": "合成更新名"}], True, now=NOW + 601)
+    else:
+        with led.db:
+            led.db.execute("UPDATE message_metadata SET last_error='network_error' WHERE message_id=100")
+    assert notify_cards.sweep(led, LINEWORKS, now=NOW + 602)["updated"] == 1
+    revised = json.loads(_latest_render(led)["spec_json"])
+    root = next(p for p in revised["parts"]["manifest"] if p.get("name") == "m:100:header#1")
+    reply = next(p for p in revised["parts"]["manifest"] if p.get("name") == "m:101:header#1")
+    if changed_field == "reply":
+        assert root["prior_remote_id"]
+        assert "prior_remote_id" not in reply
+    else:
+        assert "prior_remote_id" not in root
+        assert reply["prior_remote_id"]
+        revised_text = revised["parts"]["thread_body_parts"][int(root["part_id"].split(":")[1]) - 1]
+        assert ("合成更新名" if changed_field == "actor" else "再取得失敗") in revised_text

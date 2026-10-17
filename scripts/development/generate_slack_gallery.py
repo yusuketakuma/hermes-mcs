@@ -151,22 +151,24 @@ class Screen:
         return self.rule(x, y, width)
 
     def thread_post(self, x, y, width, size=17, sender=SENDER, stamps=True):
-        """One native thread post: source line, the body, then stamps."""
-        y = self.paragraph(x, y, f"↳ 10-01 09:40 {sender}", width, size, INK, True)
-        y = self.paragraph(x, y + 2, BODY, width, size)
+        """One native thread post: source line, summary, stamps, then the
+        source text folded behind a collapsed 原文（N字） block."""
+        y = self.paragraph(x, y, f"↳ 10-01 09:40 {sender}", width, size, MUTED)
+        for bullet in POSTS[0][1]:
+            y = self.paragraph(x, y - 2, "・" + bullet, width, size)
         if stamps:
-            y = self.paragraph(x, y, RULE, width, size, MUTED)
             y = self.paragraph(x, y - 2, "スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
                                width, size, GREEN)
-        return y
+        self.rect(x - 8, y - size - 2, width + 16, size + 22, "#f3f6f4", 8, "#dce2dd")
+        return self.paragraph(x, y + 4, f"▸ 原文（{len(BODY)}字）", width, size, MUTED) + 8
 
     def finish(self):
         return "\n".join(self.parts + ["</svg>"]) + "\n"
 
 
 def overview():
-    s = Screen(1, "連絡の要点と原文を、同じSlackで。", "カードで確認・担当を共有。本文と添付はスレッドへ。", 1000)
-    s.line(662, 194, 662, 919)
+    s = Screen(1, "連絡の要点と原文を、同じSlackで。", "返信も要約・スタンプを先に。原文は折りたたみ、添付も同じスレッドへ。", 1200)
+    s.line(662, 194, 662, 1119)
     x, y = s.app(188, 227)
     # Slack wraps controls in a narrow pane; the menu remains one select.
     s.actions(x, s.card(x, y, 397), wrap=True)

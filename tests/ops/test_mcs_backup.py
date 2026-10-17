@@ -47,7 +47,11 @@ def world(tmp_path, monkeypatch):
     db.close()
     monkeypatch.setattr(maintenance, "BACKUP_DIR", str(source_dir / "backups"))
     monkeypatch.setattr(maintenance.time, "strftime", lambda _: "20261003")
-    maintenance.daily_backup(str(source))
+    # This fixture exercises backup contracts, not ambient disk capacity.
+    usage = maintenance.shutil.disk_usage(source_dir)
+    monkeypatch.setattr(maintenance.shutil, "disk_usage",
+                        lambda _: type(usage)(usage.total, usage.used, 16 * 1024**3))
+    assert maintenance.daily_backup(str(source)) is None
     snapshot = source_dir / "backups" / "ledger-20261003.db"
     destination, scratch = tmp_path / "medium", tmp_path / "local"
     destination.mkdir(mode=0o700)
@@ -475,6 +479,13 @@ def test_cli_explicit_policy_fd_receipt_and_drill(world, tmp_path):
          "--destination", str(target)], input=KEY, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stdout.decode()
     assert json.loads(result.stdout)["restore_pending"] is True
+    state = json.loads((records / "backup_state.json").read_text())
+    assert state["last_escrow_drill_at"] == state["last_drill_at"]
+    assert state["last_verify_key_source"] == "key_fd"
+    proof = json.loads((records / state["last_drill_record"]).read_text())
+    assert proof["key_source"] == "key_fd"
+    assert proof["outbound_attempts"] == 0
+    assert proof["recovery_scope"] == "collect_only"
     assert notify_cards.restore_awaiting_consent(str(target))
     assert (target / "ledger.db").stat().st_mode & 0o777 == 0o600
     assert all(p.stat().st_mode & 0o777 == 0o600 for p in target.iterdir())
@@ -753,7 +764,7 @@ def test_cli_failure_keeps_last_successful_receipt_and_verification(world, tmp_p
     assert KEY.hex() not in capsys.readouterr().out
     state = json.loads((tmp_path / "records" / "backup_state.json").read_text())
     assert state["receipt"]["sha256"] == receipt["sha256"]
-    assert state["last_verify_at"] == NOW and state["last_action_status"] == "failed"
+    assert "last_verify_at" not in state and state["last_action_status"] == "failed"
     assert backup.status(str(tmp_path / "records"), world[3])["last_attempt_failed"] is True
 
 
@@ -930,3 +941,45 @@ def test_every_raised_backup_code_is_in_the_known_set():
               and node.args and isinstance(node.args[0], ast.Constant)}
     assert raised and raised <= backup.FAILURE_CODES
     assert "backup_io_or_policy_failed" in backup.FAILURE_CODES
+
+
+def test_offsite_verify_and_escrow_proofs_are_distinct(world, tmp_path, capsys, monkeypatch):
+    args = _cli_args(world, tmp_path)
+    assert backup.main(['offsite', *args, '--keychain', '--snapshot', str(world[0])],
+                       keychain_reader=lambda: KEY) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    state_path = tmp_path / 'records' / 'backup_state.json'
+    assert 'last_verify_at' not in json.loads(state_path.read_text())
+    target = str(Path(world[3].scratch_dir) / 'keychain-drill')
+    assert backup.main(['drill', *args, '--keychain', '--bundle', receipt['bundle'],
+                        '--sha256', receipt['sha256'], '--destination', target],
+                       keychain_reader=lambda: KEY) == 0
+    capsys.readouterr()
+    state = json.loads(state_path.read_text())
+    assert state['last_verify_key_source'] == 'keychain'
+    drill_record = json.loads((tmp_path / 'records' / state['last_drill_record']).read_text())
+    assert drill_record['outbound_attempts'] == 0
+    assert drill_record['held_render_count'] == 0
+    assert 'last_escrow_drill_at' not in state
+    # Verifying an older snapshot must not roll back offsite freshness.
+    records = backup._records(str(tmp_path / 'records'), world[3])
+    older = {'verified_at': NOW, 'inventory': {'last_successful_run': NOW - 60}}
+    backup._record_success(records, state, 'verify', older, key_source='key_fd')
+    latest = json.loads(state_path.read_text())
+    assert latest['source_last_successful_run'] == NOW
+    assert latest['last_verified_source_at'] == NOW - 60
+    result = backup.status(str(tmp_path / 'records'), world[3])
+    assert result['recovery_scope'] == 'collect_only'
+    assert result['expired_bundle_override_available'] is False
+    assert result['bundle_age_seconds'] == result['snapshot_data_lag_seconds'] == 0
+
+
+def test_restore_count_includes_pending_parts_of_delivered_cards(tmp_path):
+    with sqlite3.connect(tmp_path / 'ledger.db') as db:
+        db.execute('CREATE TABLE notification_renders(delivery_id TEXT,state TEXT)')
+        db.execute('CREATE TABLE notification_render_parts(delivery_id TEXT,state TEXT)')
+        db.executemany('INSERT INTO notification_renders VALUES (?,?)',
+                       [('a','delivered'), ('b','delivered'), ('c','cancelled'), ('d','queued')])
+        db.executemany('INSERT INTO notification_render_parts VALUES (?,?)',
+                       [('a','pending'), ('a','unknown'), ('b','delivered'), ('c','held')])
+    assert backup._held_render_count(str(tmp_path)) == 2

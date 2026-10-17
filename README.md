@@ -39,7 +39,7 @@ MCSサーバーの負荷対策として、自動取得の間隔を5分から10�
 
 ![Slackの全体像：通知カードと本文・添付のスレッドを並べた画面例](docs/screenshots/slack-gallery/01-overview.png)
 
-カードで要点を読み、スレッドで原文と添付を確認します。
+カードで要点を読み、スレッドの返信も要約・スタンプ・本文の順に確認できます。添付も同じスレッドに届きます。
 
 ![通知から確認・タスクまで：新しい投稿がカードとスレッドで届き、職員の確認・担当・タスク作成が記録されてカード表示に戻る流れ](docs/assets/notification-flow.svg)
 
@@ -56,7 +56,7 @@ MCSサーバーの負荷対策として、自動取得の間隔を5分から10�
 
 `確認する`・`担当する`の結果を、カードの状態欄に名前で表示します。新しい返信で表示内容が変わると、確認状態も更新されます。
 MCSのスタンプは、カードと未確認一覧に `スタンプ 👀2` のような絵文字と件数で表示します。
-押下者取得を有効にすると、Slack・Discordのスレッドの各投稿に、スタンプの件数と押した人の氏名を1行で表示し、古い一覧・再取得失敗を区別します。投稿ごとの観測日時は、押した時刻ではありません。
+押下者取得を有効にすると、Slack・DiscordのスレッドとLINE WORKSの原文投稿に、スタンプの件数と押した人の氏名を1行で表示し、古い一覧・再取得失敗を区別します。投稿ごとの観測日時は、押した時刻ではありません。
 **カードの確認済み表示やMCSの「完了」スタンプは、正式なタスク完了を意味しません。**
 
 <a name="slack-menu"></a>
@@ -182,6 +182,9 @@ LINE WORKSではカードのボタンと本人との1:1トークの `mcs JSON` �
 | 暗号化offsite・鍵escrow・別配置への復元 | `mcs_backup.py`。保存先・鍵・独立SHA receipt・保持のオーナー承認が必要。定期運用は明示opt-in、新端末の復元は同意待ちで停止。[バックアップ・端末喪失ガイド](docs/guides/BACKUP.md) |
 | 構造化薬歴・観測値とチャット候補の別出典閲覧 | `project_metadata.py`（明示sync）と`mcs_view.py`のsnapshot読取り。表示は`--publication`で明示し、`include_chat`は既定off。同一項目・正本・対応完了を自動判定しません。GETはsession・未読保持・権限の実受入後に承認。[MCS連携データの条件](docs/roadmap/mcs-api-survey.md) |
 | 薬剤の表層名とは独立した候補注釈・照会 | 私有辞書の出所・SHA・承認に束縛した成分・一般名処方・製品候補を併記し、`mcs drug`で照会・参考検索・更新差分を確認できます。別名の薬剤行を統合せず、総称や複数候補を成分に確定しません。公式master原本は[システム更新に同梱](resources/drug-master/README.md)し、`mcs drug install-bundled`で運用者の確認日・確認者を入力して私有辞書を作れます。辞書の承認・有効化は運用者が行います。[抽出の範囲と残条件](docs/roadmap/extraction.md) |
+| 薬剤の変更経緯と記録の照合 | `mcs drug timeline/reconcile`で、商品名・一般名をまたぐ言及、開始・中止・増減・予定、構造化薬歴との違いを取得範囲・情報時点付きで確認します。本人・家族・過去・予定を区別し、服用中や処方の正本を自動確定しません。 |
+| 規格・剤形・マスター更新の確認 | `mcs drug related/check-surface/master-impact`で名称候補、記載された規格・剤形・単位の差、公式マスターの名称・廃止・経過措置変更と採用辞書への影響を確認します。辞書の採用・有効化は別の人承認操作です。[薬剤ワークフロー仕様](docs/specs/DRUG_MASTER_WORKFLOWS.md) |
+
 | 導入・更新・ローカル診断の統一入口 | `sh scripts/mcs install`、導入後の`mcs setup`・`mcs update`・`mcs doctor`。診断結果やSDK版の取得は接続・更新後プロセスの受入証明ではありません。[更新時の確認](docs/guides/UPGRADE_AGENT.md) |
 
 <a name="use-cases"></a>
@@ -397,10 +400,11 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 | 使い方・画面・データの読み方 | [利用者ガイド](docs/guides/USER_GUIDE.md) |
 | 導入・接続・設定・トラブル対応 | [導入ガイド](docs/guides/INSTALLATION.md) · [LINE WORKS接続](docs/guides/LINEWORKS.md) · [スタンドアローン](docs/guides/STANDALONE.md) · [エージェント向け手順](docs/guides/SETUP_AGENT.md) |
 | データ取扱い・安全境界・AI・復旧の限界 | [SECURITY](SECURITY.md) |
-| 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [1.0.20候補の受入票](docs/development/acceptance/ACCEPTANCE_1.0.20.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) |
+| 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [1.0.23候補の受入票](docs/development/acceptance/ACCEPTANCE_1.0.23.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) |
 | 開発・コマンド・統計・アラート定義 | [開発リファレンス](docs/development/DEVELOPMENT.md) · [Hermesプラグイン](hermes_plugin/README.md) |
 | エクスポート・意味解析の評価 | [外部出力契約](docs/specs/external-export-contract.md) · [意味解析の評価](docs/specs/semantic-evaluation.md) · [rollout](docs/specs/semantic-facts-v2-rollout.md) |
 | 今後の計画 | [ロードマップ](docs/ROADMAP.md) |
+| 候補の封印評価・昇格条件 | [候補評価仕様](docs/specs/SEALED_CANDIDATE_EVALUATION.md)。合成評価と実データの人手評価を分離し、候補指紋と独立承認receiptを照合します。 |
 | リリースとREADMEの更新ルール | [リリースノート規則](docs/development/RELEASE_NOTES.md) · [README運用](docs/development/README_MAINTENANCE.md) |
 
 ## ライセンス

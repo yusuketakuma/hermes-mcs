@@ -252,7 +252,7 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
                 entry = groups.setdefault(identity, {
                     "id": identity, "kind": kind, "display": display, "aliases": [],
                     "codes": {"general_name" if general else "medicine": code},
-                    "source_codes": [], "forms": []})
+                    "source_codes": [], "forms": [], "products": []})
                 if entry["display"] != display:
                     raise MasterError("source_identity_text_conflict")
                 aliases = [row[4], row[34]]
@@ -266,6 +266,8 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
                 entry["source_codes"].append({
                     "medicine": medicine, "drug_price": row[31] or None,
                     "general_name": row[36] or None})
+                entry["products"].append({"medicine": medicine, "name": row[4],
+                                          "unit": row[9], "form_code": row[27]})
                 reasons["candidate_rows"] += 1
     except csv.Error:
         raise MasterError("csv_parse_invalid") from None
@@ -380,6 +382,50 @@ def main(argv=None) -> int:
         print(json.dumps({"status": "refused", "reason": code,
                           "written": isinstance(error, MasterError) and error.written}))
         return 1
+
+
+
+
+def catalog(path: Path, pin: dict[str, JSON]) -> dict:
+    """Read all pinned official rows, including inactive codes, without creating candidates."""
+    edition = pin.get("edition")
+    if (not isinstance(edition, str) or not re.fullmatch(r"[0-9]{8}", edition)
+            or pin.get("member") != f"y_{edition}.csv"):
+        raise MasterError("pin_edition_or_member")
+    try:
+        edition_day = date(int(edition[:4]), int(edition[4:6]), int(edition[6:]))
+    except ValueError:
+        raise MasterError("pin_edition_or_member") from None
+    as_of = _iso(pin.get("as_of"))
+    if as_of < edition_day:
+        raise MasterError("pin_edition_or_member")
+    # Catalogue comparisons accept an explicit older edition of this exact
+    # reviewed layout; candidate conversion remains pinned to EDITION.
+    expected, _, _, _, _, _ = _check_pin({**pin, "edition": EDITION,
+        "member": f"y_{EDITION}.csv", "as_of": max(as_of, EDITION_DATE).isoformat()})
+    raw = _read(path, MAX_INPUT_BYTES)
+    if hashlib.sha256(raw).hexdigest() != expected:
+        raise MasterError("source_hash_mismatch")
+    data = _master_csv(path, pin["member"], raw)
+    rows = {}
+    try:
+        for row in csv.reader(io.StringIO(data.decode("cp932"), newline=""), strict=True):
+            if len(rows) >= MAX_ROWS:
+                raise MasterError("row_bound")
+            _check_master_row(row)
+            code = row[2]
+            if code in rows:
+                raise MasterError("duplicate_medicine_code")
+            rows[code] = {"medicine": code, "name": row[4], "unit": row[9],
+                          "form_code": row[27], "change": row[0],
+                          "abolished_on": row[30], "transition_until": row[33],
+                          "general_code": row[36], "general_name": row[37]}
+    except (csv.Error, UnicodeDecodeError):
+        raise MasterError("csv_parse_invalid") from None
+    if not rows:
+        raise MasterError("empty_master")
+    return {"sha256": expected, "edition": edition, "layout": LAYOUT, "rows": rows,
+            "read_only": True, "candidate_only": True}
 
 
 if __name__ == "__main__":

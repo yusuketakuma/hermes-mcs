@@ -31,7 +31,7 @@ def parts_text(parts: dict) -> str:
 
 # Card behaviour (read by notify_cards). LINE WORKS posts cannot be
 # edited or deleted, and its "thread" is a logical grouping in the room.
-EDITABLE = False               # no stamp line; an update is a new post
+EDITABLE = False               # changed content is a new post; identical parts are reused
 ALWAYS_THREAD = True
 MORE_BUTTON = True             # その他の操作 opens the 1:1 menu
 DRUG_ROW_NEEDS_THREAD = False

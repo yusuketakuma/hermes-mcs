@@ -797,6 +797,8 @@ def test_run_due_switch_hides_then_revives_only_current_projections(
                 "SELECT COUNT(*) FROM artifacts").fetchone()[0] == hidden_count
 
         cfg["semantic"]["fact_source"] = "canonical"
+        from candidate_testkit import approved_config
+        cfg = approved_config(cfg)
         out = tick()
         revived_mids = ({1, 2} if change in ("none", "superseded") else
                         set() if change in ("context", "policy") else {2})

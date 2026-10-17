@@ -359,6 +359,9 @@ def gate_snapshot_readonly() -> list[str]:
                               and k.value.value is True for k in node.keywords)
             database = node.args[0] if node.args else next(
                 (k.value for k in node.keywords if k.arg == "database"), None)
+            # A literal in-memory database cannot open the live ledger or a snapshot.
+            if isinstance(database, ast.Constant) and database.value == ":memory:":
+                continue
             # Examine the URI argument itself, across line breaks. A marker
             # in a comment, another argument or another assignment proves
             # nothing about this connection (FIX-G1).

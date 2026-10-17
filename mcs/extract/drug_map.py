@@ -22,8 +22,7 @@ SCHEMA = "mcs-drug-map/1"
 SOURCE_SCHEMA = "mcs-drug-map/2"
 RESOLVER_VERSION = "mcs-drug-ref/1"
 KIND = "med_ref"
-# 20261013 whole master: 19,286 rows, 12,195 entries, ~5.14 MB JSON
-# (20260930: 19,272 rows, 12,792 identities, ~5.43 MiB).
+# Source product names, units and form metadata retain a bounded whole master.
 MAX_BYTES = 8 * 1024 * 1024
 MAX_ENTRIES = 20000
 PROGRESS_KIND = "med_ref_progress"
@@ -42,11 +41,21 @@ class Source:
 
 
 @dataclass(frozen=True)
+class Product:
+    medicine: str
+    name: str
+    unit: str
+    form_code: str
+
+
+@dataclass(frozen=True)
 class Entry:
     id: str
     kind: Literal["ingredient", "class", "general_name", "product"]
     display: str
     aliases: tuple[str, ...] = ()
+    products: tuple[Product, ...] = ()
+    source_codes: tuple[str, ...] = ()
 
 
 class Candidate(TypedDict):
@@ -117,6 +126,26 @@ class DrugMap:
     @property
     def approved(self) -> bool:
         return bool(self.source.approved_by)
+
+    def related_names(self, name: str, *, limit: int = 200) -> dict:
+        """Expand exact official identities without erasing product strength or form."""
+        if not _text(name) or type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("drug_map_related_argument")
+        ref = self.resolve(name)
+        codes = {c["code"] for c in ref["cands"]}
+        entries = {e.id: e for hits in self.aliases.values() for e in hits if e.id in codes}
+        names = sorted({a for e in entries.values() for a in e.aliases})
+        products = {p.medicine: p for e in entries.values() for p in e.products}
+        return {"status": ref["status"], "candidate_only": True,
+                "approved": self.approved, "dictionary_sha256": self.sha256,
+                "resolver_version": RESOLVER_VERSION, "identities": sorted(codes),
+                "official_identity": bool(entries) and all(
+                    e.kind in ("general_name", "product") for e in entries.values()),
+                "names": names[:limit], "name_count": len(names),
+                "products": [asdict(products[k]) for k in sorted(products)[:limit]],
+                "product_count": len(products),
+                "truncated": len(names) > limit or len(products) > limit,
+                "metadata_available": bool(products)}
 
     def lookup(self, name: str) -> dict:
         """Explain an offline candidate lookup; approval never confirms a medication."""
@@ -364,11 +393,27 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
             raise ValueError("drug_map_entry")
         if document["schema"] == SOURCE_SCHEMA and not _source_identity(entry):
             raise ValueError("drug_map_source_identity")
+        products = entry.get("products", [])
+        if (not isinstance(products, list) or len(products) > MAX_ENTRIES
+                or any(not isinstance(p, dict) or set(p) != {"medicine", "name", "unit", "form_code"}
+                       or not all(isinstance(v, str) and len(v) <= 200
+                                  and not any(ord(c) < 32 for c in v) for v in p.values())
+                       or not re.fullmatch(r"[0-9]{1,9}", p["medicine"])
+                       or not _text(p["name"]) or not re.fullmatch(r"[0-9]", p["form_code"])
+                       for p in products)
+                or len({p["medicine"] for p in products}) != len(products)
+                or (products and (document["schema"] != SOURCE_SCHEMA
+                    or {p["medicine"] for p in products}
+                    != {r["medicine"] for r in entry["source_codes"]}))):
+            raise ValueError("drug_map_product_metadata")
         ids.add(entry["id"])
         # /1 ingredient/class identities remain unchanged. /2 uses explicit
         # official product/general-name identity, never inferred ingredients.
         candidate = Entry(entry["id"], entry["kind"], entry["display"],
-                          tuple(sorted(set([entry["display"], *entry["aliases"]]))))
+                          tuple(sorted(set([entry["display"], *entry["aliases"]]))),
+                          tuple(Product(**p) for p in products),
+                          tuple(r["medicine"] for r in entry.get("source_codes", []))
+                          if document["schema"] == SOURCE_SCHEMA else ())
         for alias in {fold(a) for a in [entry["display"], *entry["aliases"]]}:
             if not alias:
                 raise ValueError("drug_map_empty_alias")
@@ -764,3 +809,27 @@ def impact(db: sqlite3.Connection, before: DrugMap, after: DrugMap, *,
             "explanation": "更新前後の辞書で、公開スナップショットの現行抽出にある薬剤名を照合し直した件数です。"
                            "辞書照合結果の変化であり、診療上の問題件数ではありません。"
                            "DB・辞書・設定は変更していません。"}
+
+
+def compare_surfaces(observed: str, reference: str, *, observed_unit=None,
+                     reference_unit=None) -> dict:
+    """Flag explicit spelling-level differences, never dose or ingredient equivalence."""
+    if (not _text(observed) or not _text(reference)
+            or any(v is not None and not _text(v) for v in (observed_unit, reference_unit))):
+        raise ValueError("drug_surface_argument")
+    left, right = split_surface(observed), split_surface(reference)
+    differences, missing = [], []
+    for field in ("strength", "form"):
+        a, b = left[field], right[field]
+        if a is None or b is None:
+            missing.append(field)
+        elif a != b:
+            differences.append(field + "_difference")
+    if observed_unit is None or reference_unit is None:
+        missing.append("unit")
+    elif fold(observed_unit) != fold(reference_unit):
+        differences.append("unit_difference")
+    return {"status": "review" if differences else "unknown" if missing else "no_difference_observed",
+            "reasons": differences, "missing": missing, "observed": left, "reference": right,
+            "observed_unit": observed_unit, "reference_unit": reference_unit,
+            "candidate_only": True, "equivalence_confirmed": False}

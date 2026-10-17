@@ -13,7 +13,13 @@ _SECTION_MAX = 3000
 _HEADER_MAX = 150
 _CONTEXT_MAX = 2000
 _BLOCK_MAX = 50
+_CONTAINER_MAX = 10              # child blocks of one container block
 SCHEMA = "mcs-card-render/v2"
+# thread chunks of a header/body-split post (notify_cards names them):
+# the post's summary+stamps chunk and its source-text chunks
+_HEADER_PART = re.compile(r"^(m:[1-9][0-9]{0,18}):header#1$")
+_BODY_PART = re.compile(r"^(m:[1-9][0-9]{0,18})#[1-9][0-9]{0,4}$")
+_STAMP_LINE = "スタンプ "          # message_metadata.thread_stamp_line prefix
 LINK_ACTION = "mcs:link"          # URL buttons still post an action — acked
 MENU_ACTION = "mcs:menu"          # the compact 操作 select — value = token
 _DIVIDER = {"type": "divider"}
@@ -66,6 +72,41 @@ def _sections(text):
     ]
 
 
+def _contexts(text):
+    return [{"type": "context",
+             "elements": [{"type": "plain_text", "text": text[i:i + _CONTEXT_MAX]}]}
+            for i in range(0, len(text), _CONTEXT_MAX)]
+
+
+def thread_part_blocks(spec, part, text):
+    """Block Kit for one thread chunk of a header/body-split post, or
+    None for the plain text reply every other chunk keeps. The header
+    chunk reads post line (context) → summary (sections) → stamp line
+    (context); a source-text chunk whose post has a header part folds
+    behind a collapsed 「原文（N字）」 container. ``text`` is the
+    unescaped chunk — plain_text blocks never parse it."""
+    name = str((part or {}).get("name") or "")
+    if _HEADER_PART.fullmatch(name):
+        lines = text.split("\n")
+        rest = [ln for ln in lines[1:] if ln]
+        summary = "\n".join(ln for ln in rest if not ln.startswith(_STAMP_LINE))
+        blocks = _contexts(lines[0]) + (_sections(summary) if summary else [])
+        for ln in rest:
+            if ln.startswith(_STAMP_LINE):
+                blocks.extend(_contexts(ln))
+        return blocks
+    found = _BODY_PART.fullmatch(name)
+    if not found or f"{found.group(1)}:header#1" not in {
+            str(p.get("name") or "") for p in spec["parts"].get("manifest") or []}:
+        return None
+    sections = _sections(text)
+    if len(sections) > _CONTAINER_MAX:
+        return None                      # longer than one container holds
+    return [{"type": "container", "is_collapsible": True, "default_collapsed": True,
+             "title": {"type": "plain_text", "text": f"原文（{len(text)}字）"},
+             "child_blocks": sections}]
+
+
 def _post_buttons(parts) -> dict:
     """container index -> Block Kit button for runner-minted per-post
     actions (parts["slack"]["post_actions"], validated by spec)."""
@@ -91,12 +132,7 @@ def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
         if item.get("rule") and blocks:
             blocks.append(dict(_DIVIDER))
         if card_kind == "thread" and item.get("rule") and kind == "text":
-            text = item["text"]
-            blocks.extend(
-                {"type": "context",
-                 "elements": [{"type": "plain_text",
-                               "text": text[i:i + _CONTEXT_MAX]}]}
-                for i in range(0, len(text), _CONTEXT_MAX))
+            blocks.extend(_contexts(item["text"]))
             continue
         if kind == "heading" and len(item["text"]) <= _HEADER_MAX:
             blocks.append({
@@ -119,13 +155,7 @@ def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
     if footer and blocks:
         blocks.append(dict(_DIVIDER))
     for item in footer:
-        text = _names(item["text"], names) if silent else item["text"]
-        blocks.extend(
-            {"type": "context",
-             "elements": [{"type": "plain_text",
-                           "text": text[i:i + _CONTEXT_MAX]}]}
-            for i in range(0, len(text), _CONTEXT_MAX)
-        )
+        blocks.extend(_contexts(_names(item["text"], names) if silent else item["text"]))
     return blocks
 
 

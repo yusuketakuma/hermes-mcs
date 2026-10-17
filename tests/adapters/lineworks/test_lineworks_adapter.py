@@ -433,7 +433,7 @@ def test_changed_route_epoch_blocks_card_parts_and_private_answers(tmp_path):
 
 
 @pytest.mark.parametrize("op", ["update", "revoke"])
-def test_replacement_invalidates_old_private_confirmation_even_with_unknown_send(tmp_path, op):
+def test_unknown_update_keeps_old_buttons_while_revoke_retires_them(tmp_path, op):
     w = world(tmp_path)
     spec = overflow_spec()
     spec["op"] = op
@@ -446,13 +446,16 @@ def test_replacement_invalidates_old_private_confirmation_even_with_unknown_send
                                      reg=w.reg, worker_id="synthetic", log=lambda *a, **kw: None)
     w.client.error = ClientError("transport_unknown")
     assert asyncio.run(worker._perform({"spec": spec}))["result"] == "unknown"
-    assert w.reg.token(TOKEN) is None
+    assert (w.reg.token(TOKEN) is None) is (op == "revoke")
     resumed = registry.Registry(w.dirs["state"], scope=w.settings)
     resumed.reload()
-    assert resumed.token(TOKEN) is None
+    assert (resumed.token(TOKEN) is None) is (op == "revoke")
     w.client.error = None
-    asyncio.run(w.actions._confirm(cid, False, "operator", actor))
-    assert command_files(w) == []
+    if op == "revoke":
+        asyncio.run(w.actions._confirm(cid, False, "operator", actor))
+        assert command_files(w) == []
+    else:
+        assert resumed.confirm(cid)["token"] == TOKEN
 
 
 def test_followup_round_robin_does_not_starve_ready_answer_after_32_pending(tmp_path, monkeypatch):

@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "バックアップと復旧訓練の証拠を区別",
+  "summary": "保存成功、復号検証、別保管鍵からの復旧訓練を分けて記録します。古いbackupの検証で最新保存の鮮度を巻き戻しません。",
+  "upgrade": "従来記録は保持します。別保管鍵の訓練はkey-fdで実施してください。期限超過の復元overrideは提供せず、復元後は収集のみ再開し通知保留を維持します。",
+  "refs": [
+    "mcs/ops/mcs_backup.py",
+    "mcs/views/card_worker_status.py"
+  ],
+  "details": [
+    "offsite成功とverify成功を分離し、key-fdのdrillだけlast_escrow_drill_atへ記録する。",
+    "復元先の未完部品を含む保留render数を読取り専用で計測し、collect-onlyとoutbound_attempts=0を訓練記録へ残す。"
+  ]
+}

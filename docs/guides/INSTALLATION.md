@@ -286,6 +286,8 @@ and re-run install.sh`）、後続ステージは実行されない。原因を�
 `--notify-target discord:<チャンネルID>`・`--plugin-chat-ids`、
 トークンは `DISCORD_BOT_TOKEN`。例は `init --help` の末尾にも表示される。
 
+1.0.23ではSlack・Discordとも、指定profileの所有者を確認できる接続だけが配送workerを起動します。Discordは設定したapplication_idと実bot IDも照合します。更新後は使用中の全profileのgatewayを再起動し、指定profileの`worker_started`を確認してください。所有者不明・不一致・起動失敗はdoctorで区別し、gatewayのPIDが生存していることだけを配送成功の根拠にしません。
+
 - 既存の `~/.mcs/config.json` が壊れている（JSON として読めない・
   オブジェクトでない）場合、`init` は何も書かずに停止する（exit 1）。
   手で直すか、`init --yes` で `config.json.corrupt-<日時>`（0600・

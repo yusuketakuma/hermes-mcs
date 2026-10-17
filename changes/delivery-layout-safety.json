@@ -1,0 +1,20 @@
+{
+  "category": "changed",
+  "title": "通知の表示更新による再送とLINE WORKSの追加投稿を制限",
+  "summary": "既存カードは表示版を維持し、更新だけを理由に一括再送しません。新規カードは要約・スタンプと原文を分離し、LINE WORKSでは本文区画だけの更新時に原文とカードのボタンを再利用します。配送部品の上限超過は末尾を省略せず保留として記録します。",
+  "upgrade": "Hermesの全対象gatewayと利用中の独立adapterを再起動してください。LINE WORKSでは新着の要約を最大120秒待ちます（緊急通知を除く）。1投稿の初回部品数に加えて最大3件まで更新を追加し、最後に上限を明示します。追加投稿は撤回できません。既存カードを新表示へ一括移行しないため、自動移行による追加投稿はありません。旧版へ戻すと新表示で作成されたカードの指紋が変わり再送し得るため、配送を停止して対象を確認してから復旧してください。",
+  "details": [
+    "CARD_LAYOUT=3は新規カードのみ。layout 1/2のactor fingerprintとthread layout識別子を従来形式に保持する。",
+    "LINE WORKSの同じ表示対象・UI操作のカード面は旧token付きの部品を保持し、カードのprior_remote_idを厳格に検証する。結果不明の置換で旧ボタンを先行失効しない。原文世代の変更に対するstale_sourceは維持する。",
+    "LINE WORKSの観測時刻と時計由来の古い情報表示は再投稿を起こさず、投稿時点と表示する。",
+    "health.cards.layout_inventoryはtransport・layout・配送状態別件数と結果不明部品のあるカード数を読取り専用で報告する。",
+    "結果不明の部品は読取り専用planの配送仕様hash・部品hash・試行ID・状態と、人承認・理由・worker停止の証拠を一致させてops.card_part_resolveで解決する。LINE WORKSの不在申告は重複リスク受容を明示必須とし、restore holdや再送予算を解除しない。",
+    "LINE WORKSカードと操作tokenの再利用は同じ原文世代に限定する。原文変更後は新しい操作tokenを持つ更新版カードを送り、旧世代のtokenを復活させない。",
+    "配送部品数と旧本文の整理部品数、どちらの上限保留も起動時の復旧・spec再発行から除外し、workerへ保留中の配送計画を渡さない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "adapters/lineworks/delivery.py",
+    "tests/notify/test_delivery_v1023.py"
+  ]
+}

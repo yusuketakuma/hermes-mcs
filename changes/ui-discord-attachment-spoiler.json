@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "Discordの画像添付を伏せ字（スポイラー）で配送",
+  "summary": "Discordのスレッドへ配送する画像ファイル（png・jpg・jpeg・gif・webp・heic・bmp）は、キャプションとファイル名だけを表示し、画像本体はタップしたときに表示されるスポイラー添付として送ります。PDFなど画像以外のファイルの表示は変わりません。",
+  "upgrade": "コード更新後、Hermes利用時はgatewayの再起動が必要です。既存の添付は再送しません。Discordはスポイラー添付のファイル名を `SPOILER_` 付きで保存するため、既存の添付投稿のキャプション更新ではこの接頭辞を無視して同じファイルと照合します。",
+  "details": [
+    "添付の送信はこれまでと同じ1通のメッセージで、`discord.File` の `spoiler` 指定だけを追加する。",
+    "添付投稿をComponents V2のコンテナにまとめる案は、キャプション更新の既存経路（本文編集）が使えなくなるため採用しない。"
+  ],
+  "refs": [
+    "adapters/discord/cards.py",
+    "adapters/discord/delivery.py"
+  ]
+}

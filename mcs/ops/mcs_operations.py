@@ -242,7 +242,14 @@ def _v_update(req: dict, base: set) -> str | None:
     return None
 
 
+def _v_drug_alias(req, base):
+    from drug_alias import validate_operation
+    return validate_operation(req, base)
+
+
 _OPS_VALIDATORS = {
+    "ops.drug_alias_apply": _v_drug_alias,
+    "ops.drug_alias_rollback": _v_drug_alias,
     "ops.scan": _v_scan,
     "ops.retry": _v_retry,
     "ops.pause": _v_pause_resume,
@@ -894,6 +901,9 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     """Apply one validated operation without committing its transaction."""
     db = getattr(db, "db", db)
     current = time.time() if now is None else float(now)
+    if req["cmd"] in ("ops.drug_alias_apply", "ops.drug_alias_rollback"):
+        from drug_alias import apply_tx as apply_alias_tx
+        return apply_alias_tx(db, req, filesystem_changes)
     if req["cmd"] == "ops.scan":
         return _apply_scan_tx(db, req, current)
     if req["cmd"] == "ops.retry":

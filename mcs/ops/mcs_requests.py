@@ -131,6 +131,9 @@ def _request_extras(req):
 def validate(req):
     if not isinstance(req, dict):
         return "bad_command"
+    if req.get("cmd") == "ops.card_part_resolve":
+        from notify_transport import validate_card_part_resolve
+        return validate_card_part_resolve(req)
     if req.get("cmd") == "ops.card_resolve":
         # Scope is derived from the stored render/coverage, not the
         # envelope — the positive project_id rule does not apply and a
@@ -148,7 +151,7 @@ def validate(req):
     if not _text(req.get("actor"), 120):
         return "bad_actor"
     if req.get("cmd") in ("ops.update_apply", "ops.update_rollback",
-                          "ops.restore_approve"):
+                          "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback"):
         # System-wide lifecycle ops are projectless — they govern the
         # whole install, not one patient. The shared identity fields
         # (human_confirmed/actor/command_id) were already checked above;

@@ -282,7 +282,7 @@ def _when_posted(posted_at) -> str:
     return f"{_mmdd(posted_at)} {_hhmm(posted_at)}" if posted_at else "日時未取得"
 
 
-def thread_stamp_row(db, mid, sender_id) -> str:
+def thread_stamp_row(db, mid, sender_id, *, observed_time=True) -> str:
     """A post's stamp row for its thread message, or "" for an observed
     zero (owner 2026-10-07): unfetched, failed and own stamps still show."""
     meta = get_message_metadata(db, mid)
@@ -290,7 +290,7 @@ def thread_stamp_row(db, mid, sender_id) -> str:
     if stamp_counts(meta) == {} and not self_stamps(meta) \
             and not meta["last_error"]:
         return ""
-    return thread_stamp_line(meta, reaction_actor_summary(db, mid))
+    return thread_stamp_line(meta, reaction_actor_summary(db, mid), observed_time=observed_time)
 
 
 def _sender_tag(m, db=None) -> str:
@@ -489,14 +489,15 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True) -> di
     if block and not label:
         # layout 2: the post line above already heads the summary
         block = dict(block, text=block["text"].removeprefix("📋 要約\n"))
+    state = (progress_by_mid.get(mid) if progress_by_mid is not None
+             else _progress_state(db, mid, cfg))
     if not block:
-        block = {"type": "text", "text": ("📋 要約 " if label else "要約 ") + (
-            "作成失敗" if _extraction_failed(db, mid) else "処理待ち")}
+        empty = ("作成失敗" if _extraction_failed(db, mid) else
+                 "要確認" if state and state["state"] == "attention" else "処理待ち")
+        block = {"type": "text", "text": ("📋 要約 " if label else "要約 ") + empty}
     # layout 2 (label=False) reports extraction progress once on the
     # card's meta line instead of under every post
-    progress = "" if not label else _progress_label(
-        progress_by_mid.get(mid) if progress_by_mid is not None
-        else _progress_state(db, mid, cfg))
+    progress = "" if not label else _progress_label(state)
     if progress:
         block["text"] += "\n" + progress
     return block
@@ -697,17 +698,13 @@ SECTION_RULE = "─" * 12
 
 
 def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
-                  include_summary=True, layout=1) -> str:
+                  include_summary=True, layout=1, stamp_time=True) -> str:
     """One MCS post as a thread message.
 
-    Layout 2 (owner 2026-10-08): header, the optional 📋 summary (then a
-    SECTION_RULE), the posted body itself, and the stamp line as a trailer
-    behind one SECTION_RULE — the body is what staff open the thread for.
-    Layout 1 keeps the 2026-10-03 order (header, 📋 summary, stamps,
-    SECTION_RULE, 📄 本文) so delivered posts never re-post unchanged.
-    Native thread delivery omits the optional summary; private body views
-    retain it. ``stamps=False`` leaves the stamp line out (LINE WORKS
-    posts cannot be edited, so a stamp change must not force a re-post)."""
+    Each post shows its summary, stamp observation, then source body.
+    Layout 1 retains its section labels; layout 2 uses the post header.
+    ``stamps=False`` and ``include_summary=False`` remain available to
+    callers that explicitly request only the original text."""
     if m["body_state"] == "deleted":
         return head + _deleted_line(m["posted_at"], sender)
     title = f"{head}{_when_posted(m['posted_at'])} {sender}"
@@ -718,14 +715,15 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
     stamp_line = ""
     if stamps:
         stamp_line = thread_stamp_row(
-            db, mid, m["sender_id"] if "sender_id" in m.keys() else None)
+            db, mid, m["sender_id"] if "sender_id" in m.keys() else None,
+            observed_time=stamp_time)
     body = m["body_text"] or ""
     if layout >= 2:
-        if include_summary:
+        if stamp_line:
+            out.append(stamp_line)
+        if include_summary or stamp_line:
             out.append(SECTION_RULE)
         out.append(body)
-        if stamp_line:
-            out += [SECTION_RULE, stamp_line]
         return "\n".join(out)
     if stamp_line:
         out.append(stamp_line)
@@ -734,7 +732,7 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
 
 
 def _signal_body(db, sig: dict, stamps=True, *, cfg=None, include_summary=True,
-                 layout=1) -> str:
+                 layout=1, stamp_time=True) -> str:
     """Full-text view of one signal — the thread post and 'body'
     action surface: 【種別】note / state, then the evidence post."""
     lines = [f"{signal_label(sig)}{sig.get('note') or ''} / 状態: {signal_state(sig)}"]
@@ -744,7 +742,7 @@ def _signal_body(db, sig: dict, stamps=True, *, cfg=None, include_summary=True,
             db, mid, m, _sender_tag(m, db),
             head=f"↳ {patient_heading(db, sig.get('project_id'))} · ",
             stamps=stamps, cfg=cfg, include_summary=include_summary,
-            layout=layout))
+            layout=layout, stamp_time=stamp_time))
     return "\n".join(lines)
 
 
@@ -762,6 +760,7 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
     if not isinstance(shown, list):
         shown = []
     layout = card["layout"] if "layout" in card.keys() else 1
+    stamp_time = "transport" not in card.keys() or card["transport"] != "lineworks"
     if card["kind"] == "thread":
         lines = []
         bare = ("transport" in card.keys()
@@ -780,7 +779,7 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
                 continue
             lines.append(_message_post(db, mid, m, _sender_tag(m, db),
                                        head=head, stamps=stamps, cfg=cfg,
-                                       include_summary=include_summary, layout=layout))
+                                       include_summary=include_summary, layout=layout, stamp_time=stamp_time))
         title = f"💬 {patient_heading(db, card['project_id'])} — 本文"
         text = "\n\n".join(lines)
     else:
@@ -788,7 +787,7 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
         sigs = _latest_signals(db, shown, card["project_id"])
         text = "\n\n— — —\n\n".join(
             _signal_body(db, sigs[k]["content"], stamps, cfg=cfg,
-                         include_summary=include_summary, layout=layout) for k in shown
+                         include_summary=include_summary, layout=layout, stamp_time=stamp_time) for k in shown
             if k in sigs)
         title = ("アラート — 本文" if card["kind"] == "digest"
                  else "シグナル — 本文")
@@ -924,13 +923,18 @@ def _card_content(db, card, *, cfg=None) -> dict:
         _add_page_marker(containers, page, pages)
     for i in pages_idx[page]:
         containers.extend(rendered[i])
-    # Names belong to each post's body, never the aggregate card footer.
-    # Their displayed state still participates in presentation drift so a
-    # late complete walk, expiry or failure refreshes an already posted body.
-    actor_fp = payload_hash([
-        (mid, actor_line(reaction_actor_summary(db, mid)))
-        for mid, _meta in card_reactions(
-            db, card, None if kind == "thread" else shown)])
+    reactions = []
+    stamp_time = "transport" not in card.keys() or card["transport"] != "lineworks"
+    for mid, meta in card_reactions(db, card, None if kind == "thread" else shown):
+        actors = reaction_actor_summary(db, mid)
+        if layout < 3:
+            # Retain the deployed fingerprint: upgrading alone must not resend.
+            reactions.append((mid, actor_line(actors)))
+        else:
+            stamp = (thread_stamp_line(meta, actors, observed_time=stamp_time)
+                     if stamp_counts(meta) != {} or self_stamps(meta) or meta["last_error"] else "")
+            reactions.append((mid, actor_line(actors) if stamp_time else "", stamp))
+    actor_fp = payload_hash(reactions)
     content = {"containers": containers, "footer": footer,
             "shown": shown, "shown_kind": shown_kind,
             "page": page, "pages": pages,
@@ -940,7 +944,9 @@ def _card_content(db, card, *, cfg=None) -> dict:
             # from the computed urgency verdict — never from text, which
             # may quote a staff-typed 🚨
             "urgent": urgent}
-    if "transport" in card.keys() and card["transport"] in ("slack", "discord"):
+    if layout >= 3:
+        content["thread_layout"] = "native-summary-stamps-body/v3"
+    elif "transport" in card.keys() and card["transport"] in ("slack", "discord"):
         content["thread_layout"] = "native-body-without-summary/v1"
     if layout >= 2:
         content["layout"] = layout

@@ -347,7 +347,7 @@ class DeliveryWorker(worker.DeliveryWorker):
                     or (channel is not None and str(channel.id) != str(thread.id))):
                 return {"result": "unknown", "error_code": "edit_target_unverified"}
             if attachment and not any(
-                    getattr(a, "filename", None) == part.get("name")
+                    str(getattr(a, "filename", None)).removeprefix("SPOILER_") == part.get("name")
                     and getattr(a, "size", None) == part.get("bytes") for a in getattr(msg, "attachments", ())):
                 return {"result": "unknown", "error_code": "edit_file_unverified"}
             verified = True

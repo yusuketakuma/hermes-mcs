@@ -16,6 +16,7 @@ from adapters.common import envelopes, journal, registry
 from adapters.common import worker as worker_mod
 from adapters.common.spec import token_map
 from adapters.slack import paths as slack_paths
+from adapters.slack.cards import thread_part_blocks
 import notify_cards as runner_cards
 import notify_cmds as runner_cmds
 import notify_reconcile
@@ -164,16 +165,18 @@ def test_foreign_workspace_cannot_send():
 
 @pytest.mark.parametrize(
     ("context_profile", "native_profile", "primary_profile", "expected"), [
-        (None, "absent", None, True),
+        # expected: True starts; otherwise (owner source, refusal reason) —
+        # an owner nobody can name refuses rather than starting blind
+        (None, "absent", None, ("none", "owner_unverified")),
         ("cco", "absent", None, True),
-        ("foreign", "absent", None, False),
-        ("cco", "foreign", None, False),
+        ("foreign", "absent", None, ("ctx", "profile_mismatch")),
+        ("cco", "foreign", None, ("adapter", "profile_mismatch")),
         ("foreign", "cco", None, True),
         ("cco", None, None, True),
-        ("default", None, None, False),
-        (None, None, None, False),
+        ("default", None, None, ("ctx", "profile_mismatch")),
+        (None, None, None, ("adapter", "profile_mismatch")),
         ("default", "cco", None, True),
-        ("cco", None, "default", False),
+        ("cco", None, "default", ("runner", "profile_mismatch")),
         ("default", None, "cco", True),
     ])
 def test_factory_uses_existing_secondary_workspace_client(
@@ -216,12 +219,13 @@ def test_factory_uses_existing_secondary_workspace_client(
                 _primary_profile_name=primary_profile)
         supervisor = make_slack_factory(Context())(
             SimpleNamespace(client=primary), native_adapter)
-        if not expected:
+        if expected is not True:
+            source, reason = expected
             assert supervisor is None
             assert selected == primary.calls == secondary.calls == []
             assert [(r.name, json.loads(r.getMessage())) for r in caplog.records] == [
-                ("hermes.plugin.mcs_slack", {
-                    "event": "worker_disabled", "reason": "profile_mismatch"})]
+                ("hermes.plugin.mcs_slack", {"event": "worker_owner", "code": source}),
+                ("hermes.plugin.mcs_slack", {"event": "worker_disabled", "reason": reason})]
             return
         assert supervisor is not None
         assert await supervisor._sender.bind()
@@ -600,8 +604,11 @@ def test_slack_thread_parts_post_under_bound_root_only(led, monkeypatch):
     assert [p["text"] for p in w.client.thread_posts] \
         == spec["parts"]["thread_body_parts"]
     assert all(p["thread_ts"] == "1790000000.000001"
-               and p["channel"] == SCOPE["channel_id"]
-               and "blocks" not in p for p in w.client.thread_posts)
+               and p["channel"] == SCOPE["channel_id"] for p in w.client.thread_posts)
+    # header/body-split chunks add Block Kit beside the same plain text
+    assert all(("blocks" in p) == bool(thread_part_blocks(spec, part, p["text"]))
+               for p, part in zip(w.client.thread_posts,
+                                  [m for m in spec["parts"]["manifest"] if m["kind"] == "body_part"]))
     drug_tokens = [token for token, context in token_map(spec).items()
                    if context["action"] in ("meds", "drugsearch")]
     assert drug_tokens

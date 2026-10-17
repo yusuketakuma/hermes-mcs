@@ -101,12 +101,13 @@ def test_factory_settings_pass_the_command_epoch_gate(tmp_path, monkeypatch):
             captured.update(settings)
 
         def start(self):
-            pass
+            return True
 
     from adapters.slack import tasks
     monkeypatch.setattr(tasks, "Supervisor", FakeSupervisor)
+    from types import SimpleNamespace
     assert card_workers.make_slack_factory(_Ctx(_config(tmp_path)))(
-        object(), None) is not None
+        object(), SimpleNamespace(_owner_profile=None)) is not None
     assert captured["route_epoch"] == 3
     result = commands.answer(captured, "not json", user="U1", channel="C1")
     assert json.loads(result)["error"] == "bad_command"

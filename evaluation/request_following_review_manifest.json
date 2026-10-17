@@ -2,6 +2,7 @@
   "version": "request-following-review-queue/1",
   "dataset_id": "fictional-request-following-heldout-20261004",
   "source": "fully_synthetic",
+  "data_origin": "synthetic",
   "split": "test",
   "case_count": 220,
   "min_cases": 200,

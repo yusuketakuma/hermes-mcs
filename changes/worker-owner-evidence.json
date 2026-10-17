@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "通知workerの所有者と起動状況を確認",
+  "summary": "Discordでも設定された担当profileと実際のBotを照合し、所有者不明の起動を防ぎます。起動証拠を診断へ表示します。",
+  "upgrade": "Hermes利用時は対象の全profile gatewayを再起動してください。固定SDKから所有者情報を取得できない場合は起動を保留します。",
+  "refs": [
+    "hermes_plugin/card_workers.py",
+    "mcs/views/card_worker_status.py"
+  ],
+  "details": [
+    "所有者判定の出所を記録し、Supervisor.startの成功時だけ起動証跡を保存する。",
+    "doctorは復元markerと未解除の個別holdを照合し、読取不能を保留なしとしない。"
+  ]
+}

@@ -2252,6 +2252,45 @@ def _rollback_backup_error(entry: dict) -> str | None:
     return "backup_invalid: " + entry["backup_path"]
 
 
+_CARD_LAYOUT_RE = re.compile(r"^CARD_LAYOUT\s*=\s*(\d+)", re.M)
+
+
+def _target_card_layout(ref: str) -> int:
+    """The card layout the code at ref renders; 1 before the constant existed."""
+    r = _git(["show", f"{ref}:mcs/notify/notify_cards.py"])
+    m = _CARD_LAYOUT_RE.search(r.stdout) if r.returncode == 0 else None
+    return int(m.group(1)) if m else 1
+
+
+def _rollback_layout_error(entry: dict) -> str | None:
+    """Old code has no guard for cards of a newer layout: it reads them as
+    drifted and re-renders/re-sends every one. Refuse before any side
+    effect; the way back is the human-consent restore, not old code on a
+    newer ledger. Checks the DB that will be live after the rollback."""
+    path = (entry["backup_path"] if entry.get("schema_bump")
+            and entry.get("backup_path") else LEDGER)
+    if not os.path.isfile(path):
+        return None
+    try:
+        con = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro",
+                              uri=True)
+        try:
+            # shortcut: revoked/deleted cards count too, narrow by
+            # delivery_state if a rollback is ever blocked by dead cards only
+            stored = con.execute(
+                "SELECT COALESCE(MAX(layout),1) FROM notification_cards"
+            ).fetchone()[0]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None                     # no cards table: nothing to misread
+    target = _target_card_layout(entry["prev_sha"])
+    if stored <= target:
+        return None
+    return (f"rollback_blocked_layout_floor: ledger layout {stored} > "
+            f"target layout {target} ({entry['prev_sha'][:12]})")
+
+
 def _rollback_tree(entry: dict, on_hold=None) -> None:
     """Restore tracked files to prev_sha — shared by rollback() and the
     post-merge failure path. Caller holds both locks and drainers are
@@ -2260,6 +2299,9 @@ def _rollback_tree(entry: dict, on_hold=None) -> None:
     prev = entry["prev_sha"]
     if load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(prev):
         raise UpdateError("standalone_runtime_missing_in_target")
+    err = _rollback_layout_error(entry)
+    if err:
+        raise UpdateError(err)
     # runtime first: once the tree is back on prev, an older updater that
     # knows nothing of runtime_migration may run the next recovery
     _restore_runtime(entry)
@@ -2368,7 +2410,7 @@ def rollback(command_id: str | None = None) -> int:
             if not _tree_clean():
                 raise UpdateError("tree_dirty_before_rollback")
             # an unusable backup aborts before the journal: nothing runs
-            err = _rollback_backup_error(entry)
+            err = _rollback_backup_error(entry) or _rollback_layout_error(entry)
             if err:
                 raise UpdateError(err)
             # crash-visible journal BEFORE quiesce (H4): recover can

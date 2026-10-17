@@ -286,8 +286,27 @@ def _backlog_stalls(ledger, cfg, now: float, *, marks: dict | None = None) -> li
             "SELECT MIN(created_at) FROM notification_renders "
             "WHERE state='queued' AND transport=?",
             (notify_cards.active_transport(cfg),)).fetchone()[0]
-        if oldest is not None and now - oldest > CARD_STALL_S:
+        progress = db.execute(
+            "SELECT MAX(updated_at) FROM notification_renders "
+            "WHERE state='delivered' AND transport=?",
+            (notify_cards.active_transport(cfg),)).fetchone()[0]
+        part_progress = db.execute(
+            "SELECT MAX(p.updated_at) FROM notification_render_parts p "
+            "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
+            "WHERE p.state='delivered' AND r.transport=?",
+            (notify_cards.active_transport(cfg),)).fetchone()[0]
+        latest_progress = max((v for v in (progress, part_progress)
+                               if v is not None and v <= now), default=None)
+        if (oldest is not None and now - oldest > CARD_STALL_S
+                and (latest_progress is None or now - latest_progress > CARD_STALL_S)):
             reasons.append("card_delivery_stalled")
+            import card_worker_status
+            worker = card_worker_status.diagnose(notify_cards.data_root(ledger), cfg)
+            if worker["state"] in ("unknown", "disabled"):
+                reasons.append(worker["reason"])
+        if db.execute("SELECT 1 FROM notification_restore_holds "
+                      "WHERE released_at IS NULL LIMIT 1").fetchone():
+            reasons.append("restore_delivery_held")
     marks = {} if marks is None else marks
     window = now - BACKLOG_STALL_S
     scfg, errors = semantic_policy.semantic_config(cfg)

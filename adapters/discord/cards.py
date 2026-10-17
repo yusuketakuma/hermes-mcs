@@ -296,6 +296,16 @@ def no_pings():
     return discord.AllowedMentions.none()
 
 
+_IMAGE_SUFFIX = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".bmp")
+
+
+def spoiler_attachment(name: str) -> bool:
+    """Images (care photos, documents shot by phone) upload as spoilers:
+    the thread shows the caption and the file name, the picture only on
+    tap. Discord stores them as ``SPOILER_<name>``."""
+    return str(name or "").lower().endswith(_IMAGE_SUFFIX)
+
+
 async def send_attachment(target, path: str | BinaryIO, name: str,
                           content: str | None = None):
     """File upload for a durable attachment part — kept here so
@@ -305,7 +315,8 @@ async def send_attachment(target, path: str | BinaryIO, name: str,
     import discord  # SDK required only inside the handler boundary
     kwargs = {"content": content} if content else {}
     return await target.send(
-        file=discord.File(path, filename=name),
+        file=discord.File(path, filename=name,
+                          **({"spoiler": True} if spoiler_attachment(name) else {})),
         allowed_mentions=discord.AllowedMentions.none(), **kwargs)
 
 

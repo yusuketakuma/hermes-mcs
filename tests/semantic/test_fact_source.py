@@ -40,9 +40,8 @@ def test_fact_source_canonical_with_gate():
     out, errors = _scfg({
         "mode": "off", "fact_source": "canonical",
         "fact_source_gate": "g6-v1:abc123"})
-    assert out["fact_source"] == "canonical"
-    assert out["fact_source_gate"] == "g6-v1:abc123"
-    assert not errors
+    assert out["fact_source"] == "legacy"
+    assert errors
 
 
 def test_fact_source_invalid_value_fails_closed():
@@ -130,6 +129,8 @@ class _Args:
     def __init__(self, fact_source, gate_evidence=None):
         self.fact_source = fact_source
         self.gate_evidence = gate_evidence
+        self.confirm_human = True
+        self.reason = "reviewed_sealed_holdout"
 
 
 def _cmd_cfg(tmp_path, monkeypatch, cfg):
@@ -147,7 +148,7 @@ def _shipped_criteria_identity():
     against the shipped G6 criteria file (synthetic record)."""
     from semantic_testkit import MANIFEST, _record
     criteria = json.loads((Path(__file__).resolve().parents[2] / "evaluation"
-                           / "g6-criteria-v1.json").read_text())
+                           / "g6-criteria-v2.json").read_text())
     report = evaluation.evaluate_records([_record("human")], MANIFEST,
                                          criteria)
     return report["criteria_version"], report["criteria_sha256"]
@@ -213,13 +214,15 @@ def test_fact_source_canonical_pins_gate(tmp_path, monkeypatch):
     conf = _cmd_cfg(tmp_path, monkeypatch, {"mcs_login_id": "x",
                                             "notify_target": "slack"})
     ev = tmp_path / "report.json"
-    ev.write_text(json.dumps(_report()), encoding="utf-8")
+    from candidate_testkit import approved_config
+    approved = approved_config({'semantic': {'fact_source': 'canonical'}})
+    ev.write_text(json.dumps(approved['semantic']['fact_source_evidence']), encoding="utf-8")
     assert mcs_setup.cmd_fact_source(
         _Args("canonical", str(ev))) == 0
     sem = json.loads(conf.read_text())["semantic"]
     assert sem["fact_source"] == "canonical"
     assert sem["fact_source_gate"].startswith(
-        _shipped_criteria_identity()[0] + ":")
+        _shipped_criteria_identity()[1] + ":")
     # The pinned config passes the production validator.
     out, errors = semantic_config(json.loads(conf.read_text()))
     assert out["fact_source"] == "canonical" and not errors
@@ -285,4 +288,17 @@ def test_fact_source_canonical_rejects_untrusted_receipts(
     evidence.write_text(json.dumps(report), encoding="utf-8")
     assert mcs_setup.cmd_fact_source(
         _Args("canonical", str(evidence))) == 1
+    assert conf.read_bytes() == before
+
+
+def test_report_alone_never_mints_human_approval(tmp_path, monkeypatch):
+    from candidate_testkit import approved_config
+    conf = _cmd_cfg(tmp_path, monkeypatch, {'mcs_login_id': 'x', 'notify_target': 'local'})
+    before = conf.read_bytes()
+    approved = approved_config({'semantic': {'fact_source': 'canonical'}})
+    ev = tmp_path / 'report.json'
+    ev.write_text(json.dumps(approved['semantic']['fact_source_evidence']))
+    args = _Args('canonical', str(ev))
+    args.confirm_human = False
+    assert mcs_setup.cmd_fact_source(args) == 1
     assert conf.read_bytes() == before

@@ -68,7 +68,7 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
     ]
     monkeypatch.setattr("hermes_cli.plugins.get_plugin_manager",
                         lambda: manager)
-    host = SimpleNamespace(name="Slack", platform="slack",
+    host = SimpleNamespace(name="Slack", platform="slack", _owner_profile="cco",
                            _plugin_handler_native=None,
                            _plugin_handlers_wired=None)
     host._get_client = lambda channel_id, team_id=None: host._plugin_handler_native.client

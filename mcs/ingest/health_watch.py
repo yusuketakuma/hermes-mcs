@@ -578,6 +578,20 @@ _BACKUP_FAILURE_JA = {
 }
 
 _REASON_JA = {
+    "worker_start_unverified": ("通知workerの起動を確認できません",
+                                "slack_profile / profile と対象gatewayの worker_started を確認"),
+    "worker_start_failed": ("通知workerの起動に失敗しました",
+                            "gatewayのworker_start_failed記録を確認してください"),
+    "worker_restart_required": ("通知workerのコード版が更新前です",
+                                "対象の全profile gatewayを再起動し worker_started を確認"),
+    "profile_mismatch": ("通知workerの担当profileが一致しません",
+                         "通知設定のprofileとgatewayの所有profileを一致させて再起動"),
+    "owner_unverified": ("通知workerの所有profileを確認できません",
+                         "固定Hermes版とprofile設定を確認。所有不明のworkerは起動しません"),
+    "application_mismatch": ("DiscordのBotと通知設定が一致しません",
+                             "Bot IDとapplication_idを確認"),
+    "restore_delivery_held": ("復元後の通知を保留しています",
+                              "復元は収集再開までです。配送先照合と個別承認なしに通知を再開しません"),
     "run_failed": ("収集の実行が失敗しました",
                    f"data/run_check.log の末尾を確認。続く場合は {_CHECK}"),
     "session_expired": ("MCSのログインが切れ、自動の再ログインも失敗しました",
@@ -595,15 +609,15 @@ _REASON_JA = {
                               "次回以降に再取得されます。続く場合はMCSの画面と閲覧権限を確認"),
     "notification_failed": ("通知の送信に失敗しました",
                             "通知先の設定と Hermes gateway（独立接続なら ai.mcs.standalone）の稼働を確認"),
-    "notification_deferred": ("通知を先送りしました", "次回の収集で送信されます"),
+    "notification_deferred": ("通知を先送りしました", "doctor で先送り理由を確認。送信条件が整うまで保留されます"),
     "notification_parked": ("通知が待機中です", "次回の収集で再確認されます"),
     "notification_held": ("通知が保留されています",
                           "python3 mcs/ops/mcs_setup.py doctor で保留理由を確認"),
     "notification_pending": ("送信待ちの通知があります",
-                             "次回の収集で送信されます。長く続く場合は gateway の稼働を確認"),
+                             "doctor で待ちの理由と通知先・gateway の稼働を確認"),
     "disk_low": ("ディスクの空き容量が不足しています", "不要なファイルを削除するか保存先を広げる"),
     "card_delivery_stalled": ("カードの配送が30分以上止まっています",
-                              "hermes gateway restart（独立接続なら ai.mcs.standalone の再起動）"),
+                              "slack_profile / profile と worker_started の記録を確認。設定が正しくworkerが停止している場合は hermes gateway restart"),
     "extract_backlog_stalled": ("要約の抽出が6時間以上止まっています",
                                 "llama-server と extract-drainer の稼働を確認（launchctl list | grep mcs）"),
     "semantic_backlog_stalled": ("意味チェックが6時間以上止まっています",
@@ -644,7 +658,7 @@ _REASON_JA = {
 _STANDALONE_ACTION = {
     "notification_failed": "通知先の設定と独立接続のhostの稼働を確認"
                            f"（{_STANDALONE_STATUS}）",
-    "notification_pending": f"次回の収集で送信されます。長く続く場合は {_STANDALONE_STATUS} を確認",
+    "notification_pending": f"doctor で待ちの理由と {_STANDALONE_STATUS} を確認",
     "card_delivery_stalled": _STANDALONE_RESTART,
     "extract_backlog_stalled": f"llama-server の稼働と {_STANDALONE_STATUS} の extract-0・extract-2 を確認",
 }
@@ -770,6 +784,19 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             if isinstance(cause, str) and cause in _BACKUP_FAILURE_JA:
                 meaning, action = _BACKUP_FAILURE_JA[cause]
         extra = ""
+        if base in ("notification_pending", "notification_deferred", "notification_parked"):
+            wait = report.get("notify_wait") or {}
+            waits = wait.get("reasons") or {}
+            if report.get("observations_recorded") or not waits or any(
+                    code in waits for code in ("stale", "unknown", "unrecorded")):
+                action = "doctor で現在の待ち理由を確認。記録だけでは再送可否を判断できません"
+            elif any("unknown" in code for code in waits):
+                action = "送信先と配送記録を照合。送信結果が不明な通知は自動で再送しません"
+            elif wait.get("attention") or any(
+                    "hold" in code or "exhausted" in code for code in waits):
+                action = "doctor で保留・再試行上限の理由を確認。解除には該当する承認手順が必要です"
+            else:
+                action = "送信条件を次回の収集で再確認します。配送完了はまだ確認できていません"
         if base == "notification_pending":
             n = report.get("notify_pending")
             age = _hours(oldest.get("notify"))

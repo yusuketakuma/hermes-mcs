@@ -337,7 +337,8 @@ def status(state_dir: str, policy: BackupPolicy
         "v": 1, "policy_id": policy.policy_id,
         "max_rpo_seconds": policy.max_rpo_seconds}
     for field in ("last_offsite_at", "last_offsite_attempt_at", "last_verify_at",
-                  "last_drill_at", "last_restore_at", "source_last_successful_run"):
+                  "last_drill_at", "last_escrow_drill_at", "last_restore_at",
+                  "source_last_successful_run", "last_verified_source_at", "last_bundle_created_at"):
         value = state.get(field)
         if value is not None and (
                 not _finite_number(value) or value < 0):
@@ -348,6 +349,15 @@ def status(state_dir: str, policy: BackupPolicy
         and not isinstance(source_at, bool) else None
     out["rpo_seconds"] = age
     out["within_rpo"] = (0 <= age <= policy.max_rpo_seconds) if age is not None else None
+    offsite_at = out["last_bundle_created_at"]
+    out["bundle_age_seconds"] = (time.time() - offsite_at
+        if isinstance(offsite_at, (int, float)) else None)
+    out["snapshot_data_lag_seconds"] = (offsite_at - source_at
+        if isinstance(offsite_at, (int, float)) and isinstance(source_at, (int, float)) else None)
+    out["last_verify_key_source"] = (state.get("last_verify_key_source")
+        if state.get("last_verify_key_source") in ("keychain", "key_fd") else None)
+    out["recovery_scope"] = "collect_only"
+    out["expired_bundle_override_available"] = False
     out["last_action"] = state.get("last_action") if state.get("last_action") in (
         "offsite", "verify", "drill", "restore") else None
     # A later verify/drill success must not hide a failed offsite attempt.
@@ -368,30 +378,57 @@ def _failure_code(exc: BaseException) -> str:
     return code if code in FAILURE_CODES else "backup_io_or_policy_failed"
 
 
-def _record_success(records: _Records, state, action: str, result) -> None:
+def _record_success(records: _Records, state, action: str, result, *,
+                    key_source: str = "unknown", destination: str | None = None) -> None:
     now = time.time()
     update = {**state, "last_action": action, "last_action_status": "ok",
               "last_attempt_at": now}
     update.pop("last_error", None)
     if action == "offsite":
         update.pop("last_offsite_error", None)
-        update.update(last_offsite_at=now, last_verify_at=now,
+        update.update(last_offsite_at=now,
                       last_offsite_status="ok", last_offsite_attempt_at=now,
-                      receipt=result,
+                      receipt=result, last_bundle_created_at=result["created_at"],
                       source_last_successful_run=result["last_successful_run"])
     else:
         update.update(last_verify_at=result["verified_at"],
-                      source_last_successful_run=result["inventory"]["last_successful_run"])
+                      last_verified_source_at=result["inventory"]["last_successful_run"],
+                      last_verify_key_source=key_source)
+        if action == "drill" and key_source == "key_fd":
+            update["last_escrow_drill_at"] = now
         if action in ("drill", "restore"):
             folder = records.root / "drills"
             folder.mkdir(mode=0o700, exist_ok=True)
             _private_directory(folder)
             name = "drills/" + os.urandom(16).hex() + ".json"
             records.write(name, {"v": 1, "action": action,
-                                "policy_id": state["policy_id"], "report": result})
+                                "policy_id": state["policy_id"], "key_source": key_source,
+                                "recovery_scope": "collect_only", "delivery_policy": "hold_all",
+                                "outbound_attempts": 0,
+                                "held_render_count": _held_render_count(destination),
+                                "report": result})
             update["last_" + action + "_at"] = now
             update["last_" + action + "_record"] = name
     records.write("backup_state.json", update)
+
+
+def _held_render_count(destination: str | None) -> int | None:
+    if destination is None:
+        return None
+    with _inventory_connection(Path(destination) / "ledger.db", None, None) as db:
+        columns = {r[1] for r in db.execute("PRAGMA table_info(notification_renders)")}
+        if "state" not in columns:
+            return None
+        part_columns = {r[1] for r in db.execute("PRAGMA table_info(notification_render_parts)")}
+        pending_parts = ""
+        if {'state', 'delivery_id'} <= part_columns:
+            pending_parts = (" OR EXISTS(SELECT 1 FROM notification_render_parts p "
+                             "WHERE p.delivery_id=r.delivery_id "
+                             "AND p.state IN ('pending','unknown','held'))")
+        return db.execute("SELECT COUNT(*) FROM notification_renders r "
+                          "WHERE r.state!='cancelled' AND "
+                          "(r.state IN ('queued','sending','unknown','held')" +
+                          pending_parts + ")").fetchone()[0]
 
 
 def _private_directory(path: Path) -> None:
@@ -1227,7 +1264,9 @@ def main(argv: list[str] | None = None, *,
                     result = verify(args.bundle, args.sha256, policy, lambda: key,
                                     drill_destination=args.destination
                                     if args.action == "drill" else None)
-                _record_success(records, state, args.action, result)
+                _record_success(records, state, args.action, result,
+                                key_source="keychain" if args.keychain else "key_fd",
+                                destination=args.destination if args.action in ("drill", "restore") else None)
             except (BackupError, OSError, ValueError, TypeError, sqlite3.Error,
                     RecursionError) as exc:
                 now = time.time()

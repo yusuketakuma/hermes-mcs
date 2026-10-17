@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
 
+from semantic_acceptance import METRICS, ADDITIONAL_METRICS, evaluate_gate as _gate
 from semantic_facts import RELATION_TYPES
 from mcs_util import atomic_write
 from mcs_util import payload_hash
@@ -30,15 +31,6 @@ from stats_math import wilson_interval  # noqa: F401  re-exported for callers
 SCHEMA_VERSION = "semantic-evaluation/v3"
 SPLITS = ("dev", "calibration", "test")
 LIFECYCLE_STAGES = ("verified", "rendered", "delivered")
-METRICS = (
-    "important_fact_recall", "final_recall", "critical_overclaim",
-    "medication_recall", "negation_recall", "time_recall",
-    "speaker_relation_recall", "loop_conformity",
-    "loop_false_resolution", "loop_precision", "loop_unresolved_miss_rate", "defer_rate",
-    "mandatory_fact_recall", "rendered_fact_recall",
-    "delivered_fact_recall",
-    "relation_accuracy", "evidence_closure", "silent_drop",
-)
 ATTRIBUTE_FIELDS = ("medication", "negation", "time", "speaker_relation")
 _MISSING = object()
 
@@ -165,6 +157,10 @@ def validate_manifest(manifest: dict) -> dict:
     manifest = _dict(manifest, "manifest")
     for field in ("version", "bundle_version", "candidate_version"):
         _id(manifest.get(field), f"manifest_{field}")
+    if manifest.get('data_origin', 'synthetic') not in ('synthetic', 'real_authorized'):
+        raise EvaluationError('manifest_data_origin_invalid')
+    if manifest.get('source') == 'fully_synthetic' and manifest.get('data_origin', 'synthetic') != 'synthetic':
+        raise EvaluationError('manifest_data_origin_mismatch')
     if "label_version" in manifest:
         _id(manifest["label_version"], "manifest_label_version")
     if "splits" in manifest:
@@ -181,12 +177,12 @@ def validate_criteria(criteria: dict) -> dict:
     required = _list(required, "criteria_required_metrics")
     if not required or any(not isinstance(x, str) for x in required):
         raise EvaluationError("criteria_required_metrics_invalid")
-    if any(name not in METRICS for name in required):
+    if any(name not in METRICS + ADDITIONAL_METRICS for name in required):
         raise EvaluationError("criteria_required_metrics_invalid")
     minimums = _dict(criteria.get("minimums") or {}, "criteria_minimums")
     maximums = _dict(criteria.get("maximums") or {}, "criteria_maximums")
-    if any(name not in METRICS for name in minimums) \
-            or any(name not in METRICS for name in maximums):
+    if any(name not in METRICS + ADDITIONAL_METRICS for name in minimums) \
+            or any(name not in METRICS + ADDITIONAL_METRICS for name in maximums):
         raise EvaluationError("criteria_metric_invalid")
     for value in (*minimums.values(), *maximums.values()):
         if isinstance(value, bool) or not isinstance(value, int | float) \
@@ -201,7 +197,29 @@ def validate_criteria(criteria: dict) -> dict:
     human_min = criteria.get("min_human_labels", 1)
     if type(human_min) is not int or human_min < 1:
         raise EvaluationError("criteria_min_human_labels_invalid")
+    extras = {}
+    for field in ('denominator_minimums', 'strata_minimums'):
+        if field in criteria:
+            values = _dict(criteria[field], field)
+            if any(type(v) is not int or v < 1 for v in values.values()):
+                raise EvaluationError(field + '_invalid')
+            extras[field] = values
+    for field in ('min_patients', 'min_threads'):
+        if field in criteria:
+            if type(criteria[field]) is not int or criteria[field] < 1:
+                raise EvaluationError(field + '_invalid')
+            extras[field] = criteria[field]
+    if 'sealed_holdout' in criteria:
+        if criteria['sealed_holdout'] is not True:
+            raise EvaluationError('sealed_holdout_invalid')
+        extras['sealed_holdout'] = True
+    if 'wilson_metrics' in criteria:
+        values = _list(criteria['wilson_metrics'], 'wilson_metrics')
+        if any(v not in required for v in values):
+            raise EvaluationError('wilson_metrics_invalid')
+        extras['wilson_metrics'] = values
     return {
+        **extras,
         "version": _id(criteria["version"], "criteria_version"),
         "required_metrics": required,
         "minimums": {k: float(v) for k, v in minimums.items()},
@@ -263,6 +281,10 @@ def _validate_bundle(bundle: dict, record: dict, manifest: dict) -> set:
 
 def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) -> None:
     _dict(candidate, "candidate")
+    if 'ai_priority' in candidate and type(candidate['ai_priority']) is not bool:
+        raise EvaluationError('candidate_ai_priority_invalid')
+    if 'urgency' in candidate and candidate['urgency'] not in ('high', 'routine', 'unclear'):
+        raise EvaluationError('candidate_urgency_invalid')
     if _id(candidate.get("version"), "candidate_version") != \
             manifest["candidate_version"]:
         raise EvaluationError("candidate_version_mismatch")
@@ -332,6 +354,10 @@ def _validate_label(label, manifest: dict, candidate: dict) -> str:
     if label is None:
         return "missing"
     label = _dict(label, "label")
+    if 'ai_priority' in label and type(label['ai_priority']) is not bool:
+        raise EvaluationError('label_ai_priority_invalid')
+    if 'urgency' in label and label['urgency'] not in ('high', 'routine', 'unclear'):
+        raise EvaluationError('label_urgency_invalid')
     source = label.get("source")
     if source not in ("human", "synthetic"):
         raise EvaluationError("label_source_invalid")
@@ -410,6 +436,7 @@ def validate_records(records: list[dict], manifest: dict) -> dict:
     seen = {field: {} for field in ("account_id", "project_id", "thread_id")}
     provenance = {"human": 0, "synthetic": 0, "missing": 0}
     normalized = []
+    receipts = set()
     for index, record in enumerate(records, 1):
         if not isinstance(record, dict):
             raise EvaluationError(f"record_{index}_object_required")
@@ -432,9 +459,19 @@ def validate_records(records: list[dict], manifest: dict) -> dict:
         candidate = _dict(record.get("candidate"), "candidate")
         _validate_candidate(candidate, manifest, attachment_ids)
         source = _validate_label(record.get("label"), manifest, candidate)
+        origin = record.get('data_origin', manifest.get('data_origin', 'synthetic'))
+        if origin not in ('synthetic', 'real_authorized'):
+            raise EvaluationError('data_origin_invalid')
+        if manifest.get('data_origin', 'synthetic') != origin:
+            raise EvaluationError('data_origin_mismatch')
+        if source == 'human':
+            receipt_id = record['label']['receipt']['receipt_id']
+            if receipt_id in receipts:
+                raise EvaluationError('label_receipt_duplicate')
+            receipts.add(receipt_id)
         provenance[source] += 1
         normalized.append({**record, "case_id": case_id, "split": split,
-                           "_label_source": source})
+                           "_label_source": source, "data_origin": origin})
     return {"records": normalized, "provenance": provenance}
 
 
@@ -657,6 +694,26 @@ def _scope_report(records: list[dict]) -> dict:
         "evidence_closure": _success_metric(*counts["evidenced"]),
         "silent_drop": _error_metric(*counts["silent_drop"]),
     }
+    for field, name in (('urgency', 'urgency_recall'), ('ai_priority', 'ai_priority_accuracy')):
+        eligible = [r for r in records if field in (r.get('label') or {})]
+        if field == 'urgency':
+            eligible = [r for r in eligible if r['label'][field] == 'high']
+        metrics[name] = _success_metric(sum(r['candidate'].get(field) == r['label'][field]
+                                             for r in eligible), len(eligible))
+    paired = []
+    for record in records:
+        ab = record.get('patient_state_ab') or {}
+        scores = (record.get('label') or {}).get('patient_state_ab') or {}
+        arms = ab.get('arms', {})
+        if (ab.get('same_case_sha256') == payload_hash(record['bundle'])
+                and ab.get('off_fingerprint') != ab.get('on_fingerprint')
+                and all(isinstance(arms.get(arm), dict)
+                        and scores.get(arm + '_sha256') == payload_hash(arms[arm])
+                        and type(scores.get(arm + '_score')) in (int, float)
+                        and 0 <= scores[arm + '_score'] <= 1 for arm in ('off', 'on'))):
+            paired.append(scores)
+    metrics['patient_state_ab_noninferiority'] = _success_metric(sum(
+        row['on_score'] >= row['off_score'] for row in paired), len(records))
     for name, values in attrs.items():
         metrics[f"{name}_recall"] = _success_metric(*values)
     latency = {
@@ -681,53 +738,6 @@ def _scope_report(records: list[dict]) -> dict:
             "fact_lifecycle": lifecycle}
 
 
-def _gate(report: dict, criteria: dict, provenance: dict) -> dict:
-    reasons = []
-    if min(provenance["human"], report["splits"]["test"]["cases"]) < criteria["min_human_labels"]:
-        reasons.append("human_labels_insufficient")
-    if provenance["human"] != sum(provenance.values()):
-        reasons.append("human_labels_required")
-    required_splits = set(criteria["required_splits"])
-    if any(report["splits"].get(split, {}).get("cases", 0) == 0
-           for split in required_splits):
-        reasons.append("required_split_missing")
-    heldout = report["splits"]["test"]
-    if heldout["fact_lifecycle"]["complete"] != heldout["cases"]:
-        reasons.append("fact_lifecycle_incomplete")
-    metrics = heldout["metrics"]
-    reasons.extend(f"denominator_zero:{name}" for name in METRICS
-                   if metrics[name]["denominator"] == 0)
-    if heldout["latency"]["denominator"] == 0:
-        reasons.append("denominator_zero:latency")
-    if heldout["usage"]["denominator"] == 0:
-        reasons.append("denominator_zero:usage")
-    if heldout["latency"]["missing"]:
-        reasons.append("telemetry_missing:latency")
-    reasons.extend(f"telemetry_missing:{field}"
-                   for field in ("requests", "input_tokens", "output_tokens")
-                   if heldout["usage"][field]["denominator"]
-                   < heldout["cases"])
-    for name in criteria["required_metrics"]:
-        metric = metrics.get(name)
-        if metric is None:
-            reasons.append(f"metric_missing:{name}")
-            continue
-        if metric["denominator"] == 0:
-            continue
-        minimum = criteria["minimums"].get(name)
-        if minimum is not None and metric["rate"] < minimum:
-            reasons.append(f"below_threshold:{name}")
-        maximum = criteria["maximums"].get(name)
-        if maximum is not None and metric["rate"] > maximum:
-            reasons.append(f"above_threshold:{name}")
-        if name == "critical_overclaim" and metric["errors"] > 0:
-            reasons.append("critical_overclaim")
-    if metrics.get("critical_overclaim", {}).get("errors", 0) > 0 \
-            and "critical_overclaim" not in reasons:
-        reasons.append("critical_overclaim")
-    return {"pass": not reasons, "reasons": reasons,
-            "g6_eligible": not reasons and provenance["human"]
-            == sum(provenance.values())}
 
 
 def criteria_sha256(criteria: dict) -> str:
@@ -748,6 +758,8 @@ def evaluate_records(records: list[dict], manifest: dict,
                        ("version", "bundle_version", "candidate_version")}
     if "label_version" in manifest:
         manifest_report["label_version"] = manifest["label_version"]
+    if criteria.get('sealed_holdout'):
+        manifest_report = {key + '_sha256': payload_hash(value) for key, value in manifest_report.items()}
     report = {
         "schema_version": SCHEMA_VERSION,
         "manifest": manifest_report,
@@ -763,6 +775,12 @@ def evaluate_records(records: list[dict], manifest: dict,
     report["latency"] = overall["latency"]
     report["usage"] = overall["usage"]
     report["fact_lifecycle"] = overall["fact_lifecycle"]
+    report['data_origin'] = {origin: sum(r['split'] == 'test' and r['data_origin'] == origin
+                                               and r['_label_source'] == 'human' for r in records)
+                             for origin in ('real_authorized', 'synthetic')}
+    if criteria.get('sealed_holdout'):
+        from semantic_holdout import evidence_summary
+        report['evidence'] = evidence_summary(records, manifest, criteria)
     report["gate"] = _gate(report, criteria, checked["provenance"])
     return report
 

@@ -45,7 +45,7 @@ def _patient(db, pid=1):
 
 
 def _cfg(mode="shadow", **kw):
-    return {"semantic": {"mode": mode,
+    cfg = {"semantic": {"mode": mode,
                          "summary_mode": kw.pop("summary_mode", mode),
                          "loop_mode": kw.pop("loop_mode", mode),
                          "threshold_mode": "calibrated",
@@ -53,6 +53,10 @@ def _cfg(mode="shadow", **kw):
                          "daily_request_budget": kw.pop("budget", 50),
                          "project_ids": kw.pop("project_ids", None),
                          **kw}}
+    if cfg['semantic'].get('fact_source') == 'canonical':
+        from candidate_testkit import approved_config
+        return approved_config(cfg)
+    return cfg
 
 
 class _FakeJev:

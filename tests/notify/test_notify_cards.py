@@ -614,11 +614,11 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     title, text = notify_render._card_body_text(
         led.db, card, {"shown": "[100, 101]"})
     assert "09-24 08:" in text
-    # layout 2: header -> (summary) -> body -> stamps as a trailer
+    # layout 2: header -> summary -> stamps -> body
     rule = notify_render.SECTION_RULE
-    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n要約 処理待ち\n{rule}\n"
-            f"本文\n{rule}\nスタンプ 未取得") in text
-    assert f"08:41 職員\n要約 処理待ち\n{rule}\n本文\n{rule}\nスタンプ 未取得" in text
+    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n要約 処理待ち\nスタンプ 未取得\n{rule}\n"
+            f"本文") in text
+    assert f"08:41 職員\n要約 処理待ち\nスタンプ 未取得\n{rule}\n本文" in text
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):
@@ -2768,3 +2768,18 @@ def test_health_cards_lists_unsettled_attempts_for_resolve(led, tmp_path):
     assert w["state"] == "granted"
     assert w["channel_id"] == r["channel_id"]
     assert w["resolve_scope"] == notify_cards.stored_scope(r)
+
+
+@pytest.mark.parametrize("phase,result", [("started", None), ("result", "delivered")])
+@pytest.mark.parametrize("proof", ["remote_absent", "api_rejected", "no_journal_started"])
+def test_resolve_never_overrides_part_send_evidence(led, tmp_path, phase, result, proof):
+    render = _deliverable(led, tmp_path)
+    aid = f"{1:016x}"
+    _begin(led, render)
+    _journal(tmp_path, {"attempt_id": "p:" + render["delivery_id"].replace("-", "") + ":body:0001", "phase": phase, "result": result,
+                        "delivery_id": render["delivery_id"], "part_id": "body:0001",
+                        "message_id": "synthetic-part"})
+    receipt = _resolve(led, render, aid, evidence={
+        "method": "synthetic_check", "worker_stopped": True,
+        "proof": proof, "ref": "synthetic"})
+    _rejected_no_reissue(led, receipt, "journal_contradicts_proof")
