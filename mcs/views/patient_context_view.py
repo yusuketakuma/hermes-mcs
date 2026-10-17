@@ -218,18 +218,15 @@ def changes(db, ev, since_ts) -> dict:
 def replies(db, project_id) -> dict:
     """連絡・返答の確認: request candidates with the thread's later replies as recorded.
     A missing reply reads 返答が見つからない, never 未対応; a 完了-like reply is not a formal completion."""
-    import sqlite3
     from ledger import LedgerReader
     from notify_views import REPLY_LABELS
     from rollup import build_rollup
     # The cached rollup can outlive an edited/deleted request, reply or plan post; rebuild
     # these rows from the current hash-bound extractions so nothing stale reads as current.
+    # A read failure propagates: an unreadable source is not "no requests" (取得失敗≠記録なし).
     reader = object.__new__(LedgerReader)
     reader.db = db
-    try:
-        roll = build_rollup(reader, project_id)
-    except sqlite3.OperationalError:
-        roll = {}  # a snapshot without the inputs proves no request rows
+    roll = build_rollup(reader, project_id)
     live = {r[0] for r in db.execute("SELECT message_id FROM messages WHERE project_id=? AND body_state='full'",
                                      (project_id,))}
     # a request whose post was since edited away or deleted is no longer a written request
