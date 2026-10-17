@@ -1839,6 +1839,7 @@ def _init_standalone_connectors(cfg: dict, args, integration_ok: bool) -> bool:
 
 
 def cmd_init(args) -> int:
+    args._config_saved = False
     # --yes may archive a corrupt config: defer that write until the desired
     # interpreter (including --set overrides) has been verified.
     if not args.yes and not _guard_config(False):
@@ -1945,6 +1946,7 @@ def cmd_init(args) -> int:
         os.chmod(d, 0o700)
     _write_atomic(CONF_PATH, json.dumps(cfg, ensure_ascii=False,
                                       indent=2, sort_keys=True) + "\n", 0o600)
+    args._config_saved = True
     print(f"設定ファイルを保存しました: {CONF_PATH}")
     if not args.yes:
         print("続いて通知サービスへの接続を設定します。"
@@ -4117,8 +4119,12 @@ def main(argv: list[str] | None = None) -> int:
     except (KeyboardInterrupt, EOFError):
         if args.cmd != "init":
             raise
-        print("\n設定を中止しました。途中まで保存した設定は残っています。"
-              "初期設定をもう一度実行すると、保存済みの設定を保持して進められます。")
+        if getattr(args, "_config_saved", False):
+            print("\n設定を中止しました。途中まで保存した設定は残っています。"
+                  "初期設定をもう一度実行すると、保存済みの設定を保持して進められます。")
+        else:
+            print("\n設定を中止しました。今回の変更は設定ファイルに保存していません。"
+                  "認証情報は途中まで保存されている場合があります。同じ操作で設定をやり直せます。")
         return 130
 
 

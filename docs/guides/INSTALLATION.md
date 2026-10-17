@@ -212,9 +212,11 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`、旧版は `.prev`。復旧対象の checkout を `~/.mcs-recovery/repo_path` に記録。15分間隔で中断した update を復旧）。内容・記録が変わった時か未ロード時だけ再読込 | macOS では配備前に復旧用 Python（既定は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの、または `--recovery-python`）の Python ≥3.14 と SQLite の WAL-reset 修正を検査し、影響版・版不明なら tool・plist を配備せず停止（自動で別 Python へ切り替えない）。bootstrap 失敗でも停止 |
 
 最後に「ソフトの準備が完了しました」として各段階の結果と、次に実行する
-コマンド（venv インタプリタのフルパス付きの `init`・非対話版の例・
-復旧用の `services`・`check`）が表示される。手動で残るのは `mcs_setup.py init`
-（秘密情報と選択が必要）だけ。
+初期設定のコマンド（`mcs setup` と venv インタプリタのフルパス付きの `init`）、
+設定後の `check` が表示される。対話端末では、そのまま初期設定へ進むか
+後で行うかを選べる。非対話で設定する場合は、
+[SETUP_AGENT.md の「5-1. 設定ウィザード実行」](SETUP_AGENT.md#5-1-設定ウィザード実行)
+にある `init --yes` の例を参照する。
 
 ### A-2. 通知先（Slack / Discord）側の準備
 
