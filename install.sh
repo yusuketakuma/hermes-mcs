@@ -518,6 +518,9 @@ preflight() {
     fi
     _brew_fills=0
     if [ "$SKIP_BREW" -eq 0 ] && command -v brew >/dev/null 2>&1; then _brew_fills=1; fi
+    if [ "$RUNTIME_MODE" = hermes ] && [ "$SKIP_BREW" -eq 1 ] && ! command -v uv >/dev/null 2>&1; then
+        pf_ng "uv が未導入です（Hermes の導入に uv が必要です）" "brew install uv"
+    fi
     if _py="$(find_py)"; then pf_ok "Python 3.14: $_py"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "Python 3.14 は未導入です。段階1で python@3.14 を導入します"
     else pf_ng "実行できる Python 3.14 が見つかりません" "brew install python@3.14"; fi
@@ -626,7 +629,7 @@ dry_run_plan() {
         plan_line "2/6 独立接続" "専用 Python 環境 $VENV と deployment/requirements-standalone.txt の公式 SDK を導入（runtime_mode=standalone）"
     else
     plan_line "2/6 Hermes" "ソース $HERMES_DIR [$(state "$HERMES_DIR")] @ $HERMES_PIN （既存の取得済みソースは保持）"
-    plan_line "" "Python 環境 $VENV [$(state "$VENV_PY")] + pip install -e hermes-agent[messaging]"
+    plan_line "" "Python 環境 $VENV [$(state "$VENV_PY")] + uv pip install -e hermes-agent[messaging]（Hermes ディレクトリで実行）"
     plan_line "" "起動コマンド $SHIM [$(state "$SHIM")] （MCS 以外の既存ファイルは保持）"
     fi
     if [ "$RUNTIME_MODE" = standalone ]; then plan_line "3/6 プラグイン" "MCS 単独接続では使用しません"

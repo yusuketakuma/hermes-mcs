@@ -1156,6 +1156,7 @@ def test_dry_run_prints_plan_and_writes_nothing(tmp_path):
     assert "導入予定（--dry-run" in r.stdout
     assert "4/6 ローカルAI 省略" in " ".join(r.stdout.split())
     assert "mcs_setup.py services" in r.stdout
+    assert "uv pip install -e hermes-agent[messaging]（Hermes ディレクトリで実行）" in r.stdout
     assert list(home.iterdir()) == []
 
 
@@ -1337,10 +1338,11 @@ def test_hermes_install_uses_its_own_uv_security_overrides(tmp_path):
     assert (stub / "uv-pip-cwd").read_text().strip() == str(hermes_home / "hermes-agent")
 
 
-def test_missing_uv_stops_before_hermes_checkout_or_venv_changes(tmp_path):
+@pytest.mark.parametrize("mode", [[], ["--preflight"], ["--dry-run"]])
+def test_missing_uv_stops_before_hermes_checkout_or_venv_changes(tmp_path, mode):
     home, hermes_home, stub, env = _world(tmp_path)
     (stub / "bin/uv").unlink()
-    result = _run(env, hermes_home, "--no-brew", "--no-llm")
+    result = _run(env, hermes_home, "--no-brew", "--no-llm", *mode)
     assert result.returncode != 0
     assert "uv が必要" in result.stdout + result.stderr
     assert not (hermes_home / "hermes-agent").exists()

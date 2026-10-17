@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "Hermes導入前に必要なツールと実際の導入方法を案内",
+  "summary": "Hermesの導入計画を実際のuvによる方法へ合わせ、Homebrewの導入を省略する場合はuv不足を事前確認で案内します。",
+  "upgrade": "--no-brewでHermesを導入・更新する場合はuvを事前に導入してください。不足している場合はファイルを変更する前に対処方法を表示して停止します。",
+  "details": [
+    "独立レビューS1/S2を反映し、dry-runの導入方法にuvとHermesディレクトリでの実行を明記。",
+    "Hermesモードかつ--no-brewでuvが無い場合を事前確認の要対処に追加。通常導入でHomebrewがuvを導入する経路と独立動作は保持。",
+    "合成入口で通常導入・preflight・dry-runのuv不足と変更前停止を回帰し、既存の計画表示テストで実導入との一致を確認。"
+  ],
+  "refs": [
+    "install.sh",
+    "tests/meta/test_install_sh.py"
+  ]
+}
