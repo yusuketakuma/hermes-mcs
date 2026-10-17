@@ -145,7 +145,8 @@ def test_card_links():
 
 def test_owner_labels():
     names = {"u1": "合成 花子"}
-    assert present_slack.owner_label("<@u1>", names) == "<@u1>"
+    # Slack private answers are escaped plain text: a name, never a literal <@id>
+    assert present_slack.owner_label("<@u1> と <@u9>", names) == "合成 花子 と メンバー"
     assert present_discord.owner_label("<@u1>", names) == "<@u1>"
     assert present_lineworks.owner_label("<@u1> と <@u9>", names) == \
         "合成 花子 と メンバー"

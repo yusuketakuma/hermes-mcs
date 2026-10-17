@@ -3290,7 +3290,7 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
         ref = context.get("extract_ref") or {}
         view = meds_view(db, card["project_id"], mid,
                          can_report=ref.get("message_id") == mid,
-                         can_search=drug_search_available(db), page=page)
+                         can_search=drug_search_available(db), page=page, cfg=cfg)
         if len(posts) > 1:
             view["head"].insert(0, f"薬剤記載のある投稿 {selected + 1}/{len(posts)}（新しい順）")
         navigation, token_ctx = [], {}

@@ -47,7 +47,7 @@ def test_meds_view_lists_the_posts_medication_without_dictionary(led):
     # one post, one page: no navigation or page lines
     assert view["head"][0].startswith("09-24 ")
     assert view["head"][0].endswith("の投稿 — 1件")
-    assert "有効化されていない" in view["head"][1]
+    assert "設定されていない" in view["head"][1]   # the real reason: no dictionary configured
     assert len(view["head"]) == 2
     assert view["page"] == 0 and view["pages"] == 1
     assert view["items"] == [{"project_id": 1,

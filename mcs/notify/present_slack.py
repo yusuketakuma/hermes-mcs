@@ -34,7 +34,10 @@ def card_link(card) -> str | None:
 
 
 def owner_label(owner: str, member_names) -> str:
-    return owner
+    """Private answers are escaped plain text, where <@U…> would show literally:
+    the configured member name (or メンバー) replaces it, as on LINE WORKS."""
+    import notify_render
+    return notify_render.lineworks_member_names(owner, member_names)
 
 POST_ACTIONS = True           # 💊 button beside each medication post
 ACCENT_URGENT = False

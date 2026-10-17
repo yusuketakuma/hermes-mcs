@@ -449,8 +449,8 @@ def unacked_view(db, transport, now=None, projects=None,
     current content carries no live acknowledgement, grouped by patient
     (oldest card's patient first), oldest first; assigned-but-unconfirmed
     cards are marked. Digest cards span projects and are left out.
-    On LINE WORKS the owner mention becomes the ``member_names`` name or
-    メンバー (``lineworks_member_names``), never the raw user id."""
+    On LINE WORKS and Slack the owner mention becomes the ``member_names`` name
+    or メンバー (``lineworks_member_names``), never the raw user id."""
     now = time.time() if now is None else now
     rows = db.execute(
         """SELECT c.*, t.owner, EXISTS (
