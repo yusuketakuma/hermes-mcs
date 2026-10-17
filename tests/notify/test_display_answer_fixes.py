@@ -76,8 +76,7 @@ def test_addressed_window_sits_in_its_own_heading(led):
     _msg(led, 100, ts=int(T - 60))
     text = _digest(led, "日数:3")
     assert "直近3日" in text
-    assert "■ 自分宛で返信の記録なし（直近7日）" in text or \
-        "自分宛で返信の記録なし" not in text
+    assert "■ 自分宛で返信の記録なし（直近7日）\n0件（メンション未判定）" in text
 
 
 def test_unacked_head_says_unfetched_instead_of_zero(led):
