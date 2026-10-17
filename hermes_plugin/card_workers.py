@@ -73,6 +73,48 @@ def _event_logger(name: str):
     return eventlog.make_logger(f"hermes.plugin.{name}")
 
 
+def _owner_identity(ctx, adapter):
+    """Resolve the immutable adapter owner before legacy context fallback."""
+    profile = getattr(adapter, "_owner_profile", None)
+    if profile is not None:
+        return profile, "adapter"
+    runner = getattr(adapter, "gateway_runner", None)
+    profile = getattr(runner, "_primary_profile_name", None)
+    if profile is not None:
+        return profile, "runner"
+    profile = getattr(ctx, "profile_name", None)
+    if profile is not None:
+        return profile, "ctx"
+    if hasattr(adapter, "_owner_profile"):
+        return "default", "adapter"
+    return None, "none"
+
+
+def _worker_witness(settings, transport, reason):
+    from .bridge import _adapter_modules
+    _adapter_modules()
+    import card_worker_status
+    try:
+        card_worker_status.record(settings["data_root"], transport,
+                                  settings["profile"], reason)
+    except (OSError, ValueError):
+        _event_logger("mcs_" + transport)("worker_status_failed")
+
+
+def _owner_allowed(ctx, adapter, settings, transport):
+    profile, source = _owner_identity(ctx, adapter)
+    log = _event_logger("mcs_" + transport)
+    log("worker_owner", code=source)
+    if profile is None or profile != settings["profile"]:
+        reason = "owner_unverified" if profile is None else "profile_mismatch"
+        log("worker_disabled", reason=reason)
+        # A foreign adapter must not overwrite the legitimate owner's witness.
+        witness = {**settings, "profile": profile}
+        _worker_witness(witness, transport, reason)
+        return False
+    return True
+
+
 def make_discord_factory(ctx):
     def factory(native, adapter):
         """Bound at connect() per Bot instance — registers the
@@ -83,13 +125,30 @@ def make_discord_factory(ctx):
             # opted in but unusable: queued cards would wait silently
             _event_logger("mcs_discord")("worker_disabled",
                                           reason="config_incomplete")
-        if settings is None or _standalone_owned(settings["data_root"]):
+        if settings is None:
+            return None
+        if _standalone_owned(settings["data_root"]):
+            _event_logger("mcs_discord")("worker_disabled", reason="standalone_owned")
+            return None
+        if not _owner_allowed(ctx, adapter, settings, "discord"):
+            return None
+        user_id = _id_text(getattr(getattr(native, "user", None), "id", None))
+        app_id = _id_text(getattr(native, "application_id", None))
+        if (user_id is None or user_id != settings["application_id"]
+                or (app_id is not None and app_id != user_id)):
+            _event_logger("mcs_discord")("worker_disabled", reason="application_mismatch")
+            _worker_witness(settings, "discord", "application_mismatch")
             return None
         _ensure_repo_root()
         from adapters.discord.tasks import Supervisor
         supervisor = Supervisor(ctx=ctx, bot=native, settings=settings,
                                 log=_event_logger("mcs_discord"))
-        supervisor.start()
+        if not supervisor.start():
+            _event_logger("mcs_discord")("worker_disabled", reason="worker_start_failed")
+            _worker_witness(settings, "discord", "worker_start_failed")
+            return None
+        _event_logger("mcs_discord")("worker_started")
+        _worker_witness(settings, "discord", "worker_started")
         return supervisor
     return factory
 
@@ -145,17 +204,10 @@ def make_slack_factory(ctx):
                 _event_logger("mcs_slack")("worker_disabled",
                                             reason="config_incomplete")
             return None
-        # Multiplex adapters can inherit this config; only its owner may send.
-        profile = getattr(adapter, "_owner_profile", None)
-        if profile is None:
-            runner = getattr(adapter, "gateway_runner", None)
-            profile = getattr(runner, "_primary_profile_name", None)
-        if profile is None:
-            profile = getattr(ctx, "profile_name", None)
-        if profile is None and hasattr(adapter, "_owner_profile"):
-            profile = "default"
-        if profile is not None and profile != settings["profile"]:
-            _event_logger("mcs_slack")("worker_disabled", reason="profile_mismatch")
+        if _standalone_owned(settings["data_root"]):
+            _event_logger("mcs_slack")("worker_disabled", reason="standalone_owned")
+            return None
+        if not _owner_allowed(ctx, adapter, settings, "slack"):
             return None
         _ensure_repo_root()
         from adapters.common import paths
@@ -170,6 +222,11 @@ def make_slack_factory(ctx):
         supervisor = Supervisor(ctx=ctx, app=native, adapter=adapter,
                                 settings=settings,
                                 log=_event_logger("mcs_slack"))
-        supervisor.start()
+        if not supervisor.start():
+            _event_logger("mcs_slack")("worker_disabled", reason="worker_start_failed")
+            _worker_witness(settings, "slack", "worker_start_failed")
+            return None
+        _event_logger("mcs_slack")("worker_started")
+        _worker_witness(settings, "slack", "worker_started")
         return supervisor
     return factory

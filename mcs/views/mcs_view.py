@@ -678,12 +678,12 @@ class View:
         only projects they are authorized for; operator-only results
         (card_resolve) are withheld entirely."""
         if receipt.get("kind") not in ("notification", "refresh",
-                                       "ops.card_resolve"):
+                                       "ops.card_resolve", "ops.card_part_resolve"):
             # Ordinary request receipts carry full before/after records
             # and use project_id, not the card channel's projects list.
             # They must stay behind the project-scoped receipt reader.
             return {"outcome": "rejected", "error": "receipt_kind_mismatch"}
-        if receipt.get("kind") == "ops.card_resolve" \
+        if receipt.get("kind") in ("ops.card_resolve", "ops.card_part_resolve") \
                 and context.get("operator") is not True:
             return {"outcome": "rejected", "error": "operator_only"}
         actor = receipt.get("actor")
@@ -842,11 +842,16 @@ def _parser():
                         default=Path(HOME) / "data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path(HOME) / "data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
+    plan = subs.add_parser("card_part_plan", help="Local operator: inspect an unknown part without approving a write")
+    plan.add_argument("--delivery-id", required=True)
+    plan.add_argument("--part-id", required=True)
     for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
-            parsers = [actions.add_parser(action) for action in ("scan", "retry", "pause", "resume", "adopt_summary", "signal_dismiss", "signal_policy", "refstat_approve", "card_resolve")]
+            action_names = ("scan", "retry", "pause", "resume", "adopt_summary", "signal_dismiss",
+                            "signal_policy", "refstat_approve", "card_resolve", "card_part_resolve")
+            parsers = [actions.add_parser(action) for action in action_names]
             for write in parsers:
                 write.add_argument("--confirm-human", action="store_true", required=True,
                                    help="Queue an exact human-approved operation from JSON stdin.")
@@ -868,7 +873,7 @@ def _parser():
             # and wrong; notification_receipt keys on command_id only
             projectless = (kind in ("status", "signals", "cross_lists", "response_observations",
                                     "notification_receipt", "read_model")
-                           or (kind == "control" and index == len(parsers) - 1))
+                           or (kind == "control" and action_names[index] in ("card_resolve", "card_part_resolve")))
             child.add_argument("--project", type=int,
                                required=not projectless)
             if kind == "read_model":
@@ -936,7 +941,13 @@ def main(argv=None):
     view = None
     try:
         view = View(snapshot)  # Gate commands on an upgraded, published snapshot; never open the live writer DB.
-        if action in ("create", "update") or args["kind"] == "control":
+        if args["kind"] == "card_part_plan":
+            if (not requests.valid_uuid(args["delivery_id"])
+                    or not requests._text(args["part_id"], 64)):
+                raise ValueError("bad_part_identity")
+            from notify_transport import card_part_resolve_plan
+            result = card_part_resolve_plan(view.db, args["delivery_id"], args["part_id"])
+        elif action in ("create", "update") or args["kind"] == "control":
             req = requests.parse_command(sys.stdin.buffer.read(requests.MAX_COMMAND_BYTES + 1))
             if not isinstance(req, dict) or req.keys() & {"cmd", "version", "project_id", "human_confirmed"}:
                 raise ValueError("bad_command_envelope")
@@ -945,7 +956,7 @@ def main(argv=None):
                 raise ValueError("reason_required")
             req = {**req, "cmd": command, "version": 1,
                    "human_confirmed": confirmed}
-            if action != "card_resolve":
+            if action not in ("card_resolve", "card_part_resolve"):
                 req["project_id"] = args["project"]
             result = requests.enqueue(req, cmd_dir)
         elif args["kind"] == "notification_receipt":
@@ -961,7 +972,8 @@ def main(argv=None):
         else:
             result = view.read(**args)
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))
-        return 1 if result.get("outcome") == "unknown" else 0
+        return 1 if (result.get("outcome") == "unknown" or
+                     (args["kind"] == "card_part_plan" and "error" in result)) else 0
     except (ValueError, OSError, sqlite3.Error, RecursionError) as error:
         # User text/SQL/paths must never be interpolated into error logs.
         code = str(error) if type(error) is ValueError and str(error).replace("_", "").isalnum() else type(error).__name__

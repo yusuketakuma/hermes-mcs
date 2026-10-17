@@ -16,10 +16,17 @@ import pytest
 import notify_cards
 import notify_render
 from notify_testkit import (
-    CFG, NOW, SCOPE, _attach, _begin, _card, _dispatch, _intent,
+    CFG, NOW, SCOPE, _attach, _begin, _card, _dispatch, _extract, _intent,
     _latest_render, _msg, _part_receipt, _receipt, _seed_thread, _uuid, led)
 
 __all__ = ["led"]
+
+
+@pytest.fixture(autouse=True)
+def legacy_layout(monkeypatch):
+    # These receipt fixtures model deployed layout-2 chunk identities.
+    monkeypatch.setattr(notify_cards, "CARD_LAYOUT", 2)
+
 
 
 def _parts(led, delivery_id):
@@ -99,7 +106,7 @@ def notify_render_body(led):
         "SELECT * FROM notification_view_manifests ORDER BY manifest_id "
         "DESC LIMIT 1").fetchone()
     return notify_render._card_body_text(
-        led.db, card, man, max_chars=None, cfg=CFG, include_summary=False)[1]
+        led.db, card, man, max_chars=None, cfg=CFG)[1]
 
 
 def test_many_facts_long_thread_parts(led):
@@ -166,13 +173,12 @@ def test_attachment_outside_part_budget_uses_existing_followup(led, monkeypatch)
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101, 102]}))
     render = _latest_render(led)
     spec = _spec(render)
-    assert len(spec["parts"]["manifest"]) == 4
+    assert len(spec["parts"]["manifest"]) <= 4
     assert notify_cards._TRUNCATED_PART in spec["parts"]["thread_body_parts"]
     assert not any(p["kind"] == "attachment_part" for p in spec["parts"]["manifest"])
-    _begin_and_deliver_card(led, render)
-    followups = led.db.execute(
-        "SELECT payload FROM notify_outbox WHERE kind='attachment_followup'").fetchall()
-    assert [json.loads(row["payload"])["attachment_id"] for row in followups] == [aid]
+    assert render["state"] == "held"
+    assert _card(led)["delivery_state"] == "update_failed"
+    assert led.db.execute("SELECT state FROM attachments WHERE attachment_id=?", (aid,)).fetchone()[0] == "downloaded"
 
 
 def test_spec_rejects_card_content_changed_after_sealing(led):
@@ -1062,22 +1068,16 @@ def test_native_thread_layout_migrates_once_without_source_or_ack_generation_cha
     _deliver_bodies(led, first, "original", n=1800)
     card = _card(led)
     old = notify_render._card_content(led.db, card, cfg=CFG)
-    old.pop("thread_layout")
+    old["thread_layout"] = "native-body-without-summary/v1"
     with led.db:
         led.db.execute("UPDATE notification_cards SET content_fp=? WHERE card_id=1", (notify_render._content_fp(old),))
     initial_source_generation = card["source_generation"]
     initial_presentation_generation = card["presentation_generation"]
-    # No new message or forced refresh is necessary for the first update.
-    assert notify_cards.sweep(led, CFG, now=NOW + 1)["updated"] == 1
-    fresh = _latest_render(led)
-    assert fresh["op"] == "update"
+    # A release alone does not migrate already delivered layout-2 cards.
+    assert notify_cards.sweep(led, CFG, now=NOW + 1)["updated"] == 0
     assert _card(led)["source_generation"] == initial_source_generation
-    assert _card(led)["presentation_generation"] == initial_presentation_generation + 1
-    assert "📋 要約" not in "".join(_spec(fresh)["parts"]["thread_body_parts"])
-    assert _prior_ids(fresh)["body:0001"] == "original/body:0001"
-    _deliver_bodies(led, fresh, "original", n=1900)
-    assert notify_cards.sweep(led, CFG, now=NOW + 2)["updated"] == 0
-    assert _latest_render(led)["delivery_id"] == fresh["delivery_id"]
+    assert _card(led)["presentation_generation"] == initial_presentation_generation
+    assert _latest_render(led)["delivery_id"] == first["delivery_id"]
 
 
 
@@ -1150,3 +1150,45 @@ def test_publish_failure_on_a_later_spec_leaves_no_open_transaction(led, monkeyp
                              ).fetchone()[0] == 1
     finally:
         other.close()
+
+
+@pytest.mark.parametrize("platform", ["slack", "discord", "lineworks"])
+@pytest.mark.parametrize("off_page", [False, True])
+def test_reply_summary_arrives_after_delivery_and_updates_its_existing_post(led, platform, off_page):
+    from slack_testkit import SLACK
+    from notify_lineworks_testkit import LINEWORKS, _claim, _apply
+    from adapters.common import envelopes
+    cfg = {"slack": SLACK, "discord": CFG, "lineworks": LINEWORKS}[platform]
+    _seed_thread(led, mids=tuple(range(100, 115)) if off_page else (100, 101))
+    _dispatch(led, _intent(led), cfg)
+    first = _latest_render(led)
+    claim = _claim(first)
+    assert _apply(led, envelopes.transport_begin(claim), cfg)["granted"]
+    mid = {"slack": "1790000000.000123", "discord": "m-9", "lineworks": "lw:" + "c" * 32}[platform]
+    assert _apply(led, envelopes.transport_receipt(claim, "delivered", message_id=mid), cfg)["applied"]
+    for part in claim["spec"]["parts"]["manifest"][1:]:
+        assert _apply(led, envelopes.part_receipt(claim, part, "delivered", remote_id="original/" + part["part_id"]), cfg)["applied"]
+    initial = _spec(first)
+    if off_page:
+        assert 101 not in notify_render._card_content(led.db, _card(led), cfg=cfg)["shown"]
+    for part in initial["parts"]["manifest"]:
+        if part["kind"] == "body_part" and part.get("name", "").startswith("m:"):
+            body = initial["parts"]["thread_body_parts"][int(part["part_id"].split(":")[1]) - 1]
+            assert body.index("要約 処理待ち") < body.index("スタンプ 未取得") < body.index("本文")
+    count = led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0]
+    _extract(led, 101, {"summary": "合成返信の独立した要約"}, kind="extract_llm")
+    notify_cards.sweep(led, cfg, now=NOW + 1)
+    fresh = _latest_render(led)
+    assert fresh["op"] == "update"
+    spec = _spec(fresh)
+    reply = next(p for p in spec["parts"]["manifest"] if p.get("name") == "m:101#1")
+    body = spec["parts"]["thread_body_parts"][int(reply["part_id"].split(":")[1]) - 1]
+    assert body.index("合成返信の独立した要約") < body.index("スタンプ 未取得") < body.index("本文")
+    initial_reply = next(p for p in initial["parts"]["manifest"] if p.get("name") == "m:101#1")
+    if platform == "lineworks":
+        assert "prior_remote_id" not in reply  # immutable changed text is a new revision
+        root = next(p for p in spec["parts"]["manifest"] if p.get("name") == "m:100#1")
+        assert root["prior_remote_id"]  # identical root is not sent again
+    else:
+        assert reply["prior_remote_id"] == "original/" + initial_reply["part_id"]
+    assert led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == count

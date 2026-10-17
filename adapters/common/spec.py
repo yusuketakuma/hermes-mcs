@@ -396,7 +396,11 @@ def _validate_manifest(manifest, *, spec=None) -> None:
                     or (kind == "attachment_part" and not p.get("caption"))):
                 _err("bad_edit_only")
         if "prior_remote_id" in p and (
-                kind not in ("body_part", "attachment_part")
+                (kind not in ("body_part", "attachment_part")
+                 and not (kind == "card" and spec is not None
+                          and spec.get("op") == "update"
+                          and spec.get("delivery", {}).get("transport") == "lineworks"
+                          and p["prior_remote_id"] == spec["delivery"].get("message_id")))
                 or not _text(p["prior_remote_id"], 64)):
             # only a body chunk (rewritten in place) or an unchanged
             # attachment (reused) names its earlier post, by transport id

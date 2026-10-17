@@ -818,8 +818,7 @@ def test_init_set_cannot_mint_or_repin_canonical(
     assert not (tmp_path / "c.json").exists()
 
 
-def test_init_keeps_existing_canonical_on_unrelated_set(monkeypatch, tmp_path):
-    import json
+def test_init_rejects_stale_canonical_on_unrelated_set(monkeypatch, tmp_path):
     sem = {"mode": "off", "fact_source": "canonical",
            "fact_source_gate": "existing:pin"}
     _init_env(monkeypatch, tmp_path, {
@@ -827,10 +826,8 @@ def test_init_keeps_existing_canonical_on_unrelated_set(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs_setup.sys, "argv",
                         ["mcs_setup", "init", "--yes",
                          "--set", "self_posts=true"])
-    assert mcs_setup.main() == 0
-    saved = json.loads((tmp_path / "c.json").read_text())
-    assert saved["self_posts"] is True
-    assert saved["semantic"] == sem
+    assert mcs_setup.main() == 1
+    assert not (tmp_path / "c.json").exists()
 
 
 def test_wizard_defaults_and_gates(monkeypatch, tmp_path):

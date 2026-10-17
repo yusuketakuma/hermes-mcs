@@ -75,9 +75,9 @@ class TalkScreen(Screen):
 
 def delivery():
     s = TalkScreen(1, "同じトークルームで、要約・原文・添付を確認。",
-                   "カードに続いて原文と添付を連続投稿。入力・確認は本人との1:1トークへ。")
+                   "新規カードは要約・スタンプと原文を分けて投稿。更新は変わった区画だけ。")
     s.panel(24, "① 共有トークルーム", "MCS Botからの新着通知カード")
-    s.panel(568, "②・③ 同じトークルームの続き", "スレッドではなく、通常のトークとして届きます")
+    s.panel(568, "② 同じトークルームの続き", "新しい表示形式3 / 要約は抜粋")
     s.bot(44, 245)
     sender, bullets = POSTS[0]
     summary = [("📋 要約", GREEN, True), *(("・" + b, INK, False) for b in bullets)]
@@ -87,15 +87,20 @@ def delivery():
                           ("📝 タスク 1件 · スタンプ 👀2 🙆1 · 自分 1投稿", INK, False)])
     s.template(66, y, ["確認する", "担当する", "タスク作成", "MCSで開く", "その他の操作"])
     s.bot(588, 245)
-    # layout 2: a non-editable post carries the header and body only — the
-    # summary stays on the card (notify_cards include_summary)
+    # Layout 3 separates the header and original; later header updates reuse the original.
     y = s.block(610, 286, [(f"↳ 山田 花子 · 10-01 09:40 {SENDER}", INK, True),
-                           (BODY, INK, False)])
-    s.bot(588, y + 10)
-    s.rect(610, y + 51, 422, 100, "#fff", 9, "#d5e1e5")
-    s.rect(626, y + 67, 390, 68, "#f0f5f1", 8)
-    s.text(646, y + 94, "添付ファイル", 18, INK, True)
-    s.text(646, y + 124, "服薬カレンダー.jpg", 16, MUTED)
+                          ("・次回訪問時に残薬を確認してほしいとの連絡", INK, False),
+                          ("スタンプ 👀2 🙆1 · 投稿時点", MUTED, False)])
+    y = s.block(610, y + 14, [(BODY, INK, False)])
+    s.rect(610, y + 14, 422, 74, "#fff", 9, "#d5e1e5")
+    s.text(626, y + 43, "添付ファイル", 17, INK, True)
+    s.text(626, y + 70, "服薬カレンダー.jpg", 16, MUTED)
+    s.text(588, y + 125, "③ 後からスタンプが変わったとき", 16, GREEN, True)
+    y = s.block(610, y + 143, [(f"↳ 更新 山田 花子 · 10-01 09:40 {SENDER}", INK, True),
+                              ("・次回訪問時に残薬を確認してほしいとの連絡", INK, False),
+                              ("スタンプ 👀3 🙆1 · 投稿時点", MUTED, False),
+                              ("（本文は変更なし）", MUTED, False)])
+    s.paragraph(588, y + 35, "この更新では原文・添付・カードを再投稿しません。", 468, 15, GREEN)
     return s.finish()
 
 

@@ -51,7 +51,9 @@ def test_bind_failure_is_retried_until_the_workspace_binds(tmp_path, monkeypatch
 
     client.auth_test = flaky_auth
     logs = []
-    ctx = SimpleNamespace(get_config=lambda key, default=None: settings.get(key, default))
+    # the gateway profile names the owner; without one the factory refuses to start
+    ctx = SimpleNamespace(profile_name="cco",
+                          get_config=lambda key, default=None: settings.get(key, default))
 
     async def scenario():
         sup = make_slack_factory(ctx)(_App(client), None)

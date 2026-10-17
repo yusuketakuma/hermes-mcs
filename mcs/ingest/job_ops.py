@@ -153,7 +153,10 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             # derived from the stored render/coverage — so it must branch
             # before the common apply_command validation would reject it.
             try:
-                if req["cmd"] == "ops.card_resolve":
+                if req["cmd"] == "ops.card_part_resolve":
+                    import notify_transport
+                    receipt = notify_transport.apply_card_part_resolve(ledger, req)
+                elif req["cmd"] == "ops.card_resolve":
                     import notify_transport
                     receipt = notify_transport.apply_card_resolve(ledger, req)
                 else:

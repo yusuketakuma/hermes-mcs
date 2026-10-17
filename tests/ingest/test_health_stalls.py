@@ -176,3 +176,12 @@ def test_failed_alert_enqueue_is_visible():
     run_check._fail_run(ledger, SimpleNamespace(no_notify=True), result, 1,
                         "failed", "crash:X", time.monotonic() + 10, "run")
     assert result["errors"] == ["crash:X", "alert_enqueue_failed: OSError"]
+
+
+def test_large_backlog_with_recent_delivery_is_not_stalled(db):
+    now = time.time()
+    for _ in range(300):
+        _render(db, 'slack', now - 7200)
+    _render(db, 'slack', now - 60, state='delivered')
+    assert 'card_delivery_stalled' not in run_check._backlog_stalls(db, SLACK, now)
+    assert 'card_delivery_stalled' in run_check._backlog_stalls(db, SLACK, now + 1900)

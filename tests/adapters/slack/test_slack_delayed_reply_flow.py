@@ -28,11 +28,13 @@ def test_delayed_reply_is_new_in_original_thread_and_broadcast_once(led, monkeyp
     notify_cards.publish_flags(SLACK, str(world.root))
     asyncio.run(_granted_card(world.worker, led, world.root))
 
+    # the reply arrives as its summary/stamps header, then its source text;
+    # only the header is broadcast to the channel
     posts = world.client.thread_posts[before:]
-    assert len(posts) == 1
-    assert posts[0]["thread_ts"] == original_ts
-    assert posts[0]["reply_broadcast"] is True
-    assert "合成の遅れて届いた返信" in posts[0]["text"]
+    assert len(posts) == 2
+    assert all(p["thread_ts"] == original_ts for p in posts)
+    assert [p.get("reply_broadcast") for p in posts] == [True, None]
+    assert "合成の遅れて届いた返信" in posts[1]["text"]
     assert _card(led)["message_id"] == original_ts
     assert led.db.execute("SELECT COUNT(*) FROM notification_cards").fetchone()[0] == 1
     assert led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?",
@@ -40,4 +42,4 @@ def test_delayed_reply_is_new_in_original_thread_and_broadcast_once(led, monkeyp
 
     _dispatch(led, intent, SLACK, now=clock[0])
     asyncio.run(_granted_card(world.worker, led, world.root))
-    assert len(world.client.thread_posts) == before + 1
+    assert len(world.client.thread_posts) == before + 2

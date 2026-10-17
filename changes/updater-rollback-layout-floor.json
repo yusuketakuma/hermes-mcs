@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "新しいカード表示を作成した後は旧版へのロールバックを拒否",
+  "summary": "更新後に新しいカード表示（layout 3）の通知カードが1件でも作成されると、その表示を扱えない旧版へのロールバックは実行前に拒否します。旧コードが新しいカードを変更済みと誤認して全件を再描画・再送する事故を防ぎます。拒否は停止・journal・ツリー変更のどれも行う前に判定し、受領結果と通知に理由（rollback_blocked_layout_floor）を記録します。",
+  "upgrade": "v1.0.23はschema変更を伴わないため、ロールバック時に更新前DBの自動復元はありません。新しいカードが作成された後にv1.0.22以前へ戻す必要がある場合は、v1.0.23に留まるか、人承認のrestore手順で更新前バックアップを復元してから戻してください。旧コードを直接起動したりDBを直接書き換えて回避しないでください。schema変更を伴う更新では復元されるバックアップ側の内容で判定するため、従来どおりロールバックできます。",
+  "details": [
+    "mcs_update.rollback() は backup 検査と同列（journal・quiesce の前）に _rollback_layout_error を評価し、UpdateError で rollback_failed として受領を消費する。",
+    "_rollback_tree にも同じ検査を置き、apply失敗時の自動rollbackと中断回復のrollback経路（旧コードをcheckoutする全経路）を reset 前に止める。",
+    "判定: ロールバック後に稼働するDB（schema_bump なら backup、それ以外は ledger）の notification_cards.layout の最大値が、戻り先 commit の mcs/notify/notify_cards.py の CARD_LAYOUT（定数が無い版は1）を超えるとき拒否。ledger や cards 表が無ければ従来どおり。",
+    "deployment/recovery/mcs_recover.py の reset は head==target／head==prev の同一コードへの再整列と merge --abort（新コード未実行）のみで、新コードから旧コードへ移す経路が無いため変更しない。"
+  ],
+  "refs": ["mcs/ops/mcs_update.py", "tests/ops/test_mcs_update_rollback_floor.py"]
+}

@@ -289,7 +289,7 @@ def actor_line(summary) -> str:
             + f" · 観測 {when:%m-%d %H:%M}")
 
 
-def thread_stamp_line(metadata, summary=None) -> str:
+def thread_stamp_line(metadata, summary=None, *, observed_time=True) -> str:
     """スレッド投稿の1行: 絵文字ごとの件数と（取得済みなら）押した人、観測日時。"""
     counts = stamp_counts(metadata)
     failed = "・再取得失敗" if metadata["last_error"] else ""
@@ -318,10 +318,14 @@ def thread_stamp_line(metadata, summary=None) -> str:
     if mine:
         text += f" · 自分 {mine}"
     state = summary.get("state")
-    if counts and state in ("failed", "stale"):
+    if counts and (state == "failed" or (state == "stale" and observed_time)):
         text += " · 押した人 " + ("取得失敗" if state == "failed" else "古い情報")
-    when = datetime.fromtimestamp(metadata["reactions_observed_at"], JST)
-    return text + f" · {when:%m-%d %H:%M}時点" + failed
+    if observed_time:
+        when = datetime.fromtimestamp(metadata["reactions_observed_at"], JST)
+        text += f" · {when:%m-%d %H:%M}時点"
+    if not observed_time:
+        text += " · 投稿時点"
+    return text + failed
 
 
 def others_reaction_count(metadata) -> int | None:

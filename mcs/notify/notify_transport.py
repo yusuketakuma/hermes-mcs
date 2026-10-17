@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 
 from mcs_requests import canonical, payload_hash, positive, valid_uuid
 import notify_cards as cards
@@ -501,7 +501,7 @@ def _receipt_check(attempt, render, req) -> str | None:
     return None
 
 
-def apply_part_receipt(ledger, req, cfg, now=None) -> dict:
+def apply_part_receipt(ledger, req, cfg, now=None, *, _in_transaction=False) -> dict:
     """part_receipt: settle one durable part of a render (thread/body/
     attachment). Same echo contract as the card attempt — the receipt
     can only settle the exact sealed part it names. A failed thread
@@ -509,8 +509,9 @@ def apply_part_receipt(ledger, req, cfg, now=None) -> dict:
     'card' part and is settled through transport_receipt only."""
     db = cards._db(ledger)
     now = time.time() if now is None else now
-    with db:
-        db.execute("BEGIN IMMEDIATE")
+    with nullcontext() if _in_transaction else db:
+        if not _in_transaction:
+            db.execute("BEGIN IMMEDIATE")
         render = _render_for(db, req["delivery_id"])
         part = db.execute(
             "SELECT * FROM notification_render_parts WHERE delivery_id=? "
@@ -832,6 +833,8 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
         else:
             receipt["outcome"] = "rejected"
             receipt["error"] = error
+        if req.get("transport") == "lineworks" and req.get("evidence", {}).get("proof") == "remote_absent":
+            receipt["evidence_limit"] = "操作者の申告。未送信の確定ではなく、重複送信のリスクが残ります。"
         db.execute(
             "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
             (req["command_id"], digest, None, None,
@@ -979,17 +982,26 @@ def _journal_contradiction(ledger, req) -> str | None:
     except OSError:
         return "journal_unverifiable"
     rec = attempts.get(req["attempt_id"]) or {"rows": [], "tainted": False}
-    rows = [r for r in rec["rows"] if not r.get("part_id")]
+    rows = list(rec["rows"])
+    for aid, record in attempts.items():
+        if aid != req["attempt_id"]:
+            rows.extend(row for row in record["rows"]
+                        if row.get("delivery_id") == req["delivery_id"] and row.get("part_id"))
     delivered = [r for r in rows if r.get("phase") == "result"
                  and r.get("result") == "delivered"]
     if req["result"] == "mark_delivered":
         # a delivered row that recorded no message id witnesses the send
         # but cannot contradict the operator's id
         ids = {str(r["message_id"]) for r in delivered
-               if r.get("message_id") not in (None, "")}
+               if not r.get("part_id") and r.get("message_id") not in (None, "")}
         return "message_id_mismatch" \
             if ids - {str(req["message_id"])} else None
-    if delivered:
+    if (delivered or any(r.get("part_id") not in (None, "", "card")
+                         and r.get("phase") == "started" for r in rows)
+            or cards._db(ledger).execute(
+                "SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
+                "AND (state='delivered' OR (kind!='card' AND state='unknown')) LIMIT 1",
+                (req["delivery_id"],)).fetchone()):
         return "journal_contradicts_proof"
     if req["evidence"].get("proof") == "no_journal_started" and (
             any(r.get("phase") == "started" for r in rows)
@@ -1018,3 +1030,147 @@ def _card_projects(db, render, card) -> list:
                 projects.update(
                     s["content"].get("project_id") for s in sigs.values())
     return sorted(p for p in projects if positive(p))
+
+
+def card_part_resolve_plan(ledger, delivery_id, part_id) -> dict:
+    """Read-only sealed identity for an unknown delivery part, without source text."""
+    db = cards._db(ledger)
+    render = _render_for(db, delivery_id)
+    part = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                      (delivery_id, part_id)).fetchone()
+    if render is None or part is None:
+        return {"error": "unknown_part"}
+    if part["kind"] == "card" or part["state"] != "unknown" or not part["attempt_id"]:
+        return {"error": "part_not_resolvable"}
+    return {"version": 1, "cmd": "ops.card_part_resolve", **cards.stored_scope(render),
+            "transport": render["transport"],
+            "delivery_id": delivery_id, "part_id": part_id, "attempt_id": part["attempt_id"],
+            "manifest_sha256": render["payload_hash"], "payload_sha256": part["payload_sha256"],
+            "expected_state": "unknown"}
+
+
+def validate_card_part_resolve(req) -> str | None:
+    """Validate human approval of exactly one sealed unknown part."""
+    from mcs_requests import _text, valid_hash
+    if not isinstance(req, dict):
+        return "bad_command"
+    transport = req.get("transport")
+    if transport not in cards.SUPPORTED_TRANSPORTS:
+        return "bad_transport"
+    allowed = {"version", "cmd", "command_id", "actor", "human_confirmed", "reason",
+               "delivery_id", "attempt_id", "part_id", "manifest_sha256", "payload_sha256",
+               "expected_state", "result", "remote_id", "evidence", "transport"} | set(cards.scope_fields(transport))
+    if req.keys() - allowed:
+        return "unknown_field"
+    if type(req.get("version")) is not int or req["version"] != 1 or req.get("cmd") != "ops.card_part_resolve":
+        return "bad_version"
+    if not valid_uuid(req.get("command_id")) or not valid_uuid(req.get("delivery_id")):
+        return "bad_command_identity"
+    if req.get("human_confirmed") is not True:
+        return "human_confirmation_required"
+    for key, limit in (("actor", 120), ("reason", 2000), ("attempt_id", 120), ("part_id", 64)):
+        if not _text(req.get(key), limit):
+            return "bad_" + key
+    for key in cards.scope_fields(transport):
+        if not _text(req.get(key), 200):
+            return "bad_" + key
+    if any(not valid_hash(req.get(key)) for key in ("manifest_sha256", "payload_sha256")):
+        return "bad_hash"
+    if req.get("expected_state") != "unknown" or req.get("result") not in _RESOLVE_RESULTS:
+        return "bad_resolution"
+    evidence = req.get("evidence")
+    if not isinstance(evidence, dict) or evidence.keys() - {"method", "ref", "worker_stopped", "proof", "duplicate_risk_accepted"}:
+        return "bad_evidence"
+    if not _text(evidence.get("method"), 200) or not _text(evidence.get("ref"), 500):
+        return "bad_evidence"
+    if evidence.get("worker_stopped") is not True:
+        return "worker_not_proven_stopped"
+    if req["result"] == "mark_delivered":
+        if not _text(req.get("remote_id"), 64):
+            return "remote_id_required"
+    elif evidence.get("proof") not in ("no_journal_started", "api_rejected", "remote_absent"):
+        return "bad_proof"
+    elif transport == "lineworks" and evidence.get("proof") == "remote_absent" and evidence.get("duplicate_risk_accepted") is not True:
+        return "duplicate_risk_acknowledgement_required"
+    return None
+
+
+def _part_resolution_journal_error(ledger, req):
+    import notify_reconcile
+    try:
+        attempts, incomplete = notify_reconcile.scan_journals(cards.notify_dirs(cards.data_root(ledger)))
+    except OSError:
+        return "journal_unverifiable"
+    rows = [row for record in attempts.values() for row in record["rows"]
+            if row.get("delivery_id") == req["delivery_id"] and row.get("part_id") == req["part_id"]]
+    delivered = [row for row in rows if row.get("phase") == "result" and row.get("result") == "delivered"]
+    if req["result"] == "mark_delivered":
+        if any(row.get("remote_id") not in (None, "", req["remote_id"]) for row in delivered):
+            return "remote_id_mismatch"
+        return None
+    if delivered or incomplete:
+        return "journal_contradicts_proof"
+    proof = req["evidence"]["proof"]
+    if proof == "no_journal_started" and any(row.get("phase") == "started" for row in rows):
+        return "journal_contradicts_proof"
+    if proof == "api_rejected" and not any(row.get("phase") == "result" and row.get("result") == "not_sent" for row in rows):
+        return "api_rejection_unproven"
+    return None
+
+
+def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
+    """Resolve one unknown part through the normal receipt path under a human receipt."""
+    db = cards._db(ledger)
+    now = time.time() if now is None else now
+    if cfg is None:
+        import mcs_util
+        cfg = mcs_util.load_config(mcs_util.CONF_PATH)
+    digest, specs = payload_hash(req), []
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        old = db.execute("SELECT payload_hash,receipt_json FROM command_receipts WHERE command_id=?",
+                         (req.get("command_id"),)).fetchone()
+        if old:
+            return (json.loads(old["receipt_json"]) if old["payload_hash"] == digest
+                    else {"outcome": "rejected", "error": "command_id_conflict"})
+        error = validate_card_part_resolve(req)
+        receipt = {"kind": "ops.card_part_resolve", "command_id": req.get("command_id"),
+                   "actor": req.get("actor"), "reason": req.get("reason"),
+                   "delivery_id": req.get("delivery_id"), "part_id": req.get("part_id"),
+                   "processed_at": now}
+        if error is None:
+            plan = card_part_resolve_plan(db, req["delivery_id"], req["part_id"])
+            error = plan.get("error")
+            if not error and any(req.get(key) != value for key, value in plan.items()):
+                error = "stale_part_plan"
+        if error is None:
+            error = _part_resolution_journal_error(ledger, req)
+        if error is None:
+            render = _render_for(db, req["delivery_id"])
+            card = cards._card_row(db, render["card_id"])
+            fact = {**cards.stored_scope(render),
+                    **{key: render[key] for key in ("delivery_id", "render_rev", "payload_hash", "route_epoch", "correlation")},
+                    "part_id": req["part_id"], "attempt_id": req["attempt_id"],
+                    "result": "delivered" if req["result"] == "mark_delivered" else "not_sent",
+                    "remote_id": req.get("remote_id"), "error_code": "operator_part_resolve"}
+            settled = apply_part_receipt(db, fact, cfg, now, _in_transaction=True)
+            if not settled["applied"]:
+                raise RuntimeError("sealed part changed inside resolution transaction")
+            receipt.update(outcome="applied", scope=cards.stored_scope(render),
+                           projects=_card_projects(db, render, card), part_state=settled["part_state"],
+                           manifest_sha256=req["manifest_sha256"], payload_sha256=req["payload_sha256"],
+                           attempt_id=req["attempt_id"], evidence=req["evidence"])
+            if req["transport"] == "lineworks" and req["result"] == "mark_not_sent":
+                receipt["evidence_limit"] = "操作者の申告。未送信の確定ではなく、重複送信のリスクが残ります。"
+            if (card is not None and card["delivery_state"] != "update_failed"
+                    and cards.restore_pending(cards.data_root(ledger)) is None
+                    and not cards._resend_exhausted(db, card["card_id"])):
+                cards._issue_render(db, card["card_id"], cfg, now, specs, force=req["result"] == "mark_not_sent")
+        else:
+            receipt.update(outcome="rejected", error=error)
+        db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
+                   (req["command_id"], digest, None, None, receipt["outcome"], canonical(receipt).decode(), now))
+        cards.mark_snapshot_dirty(db)
+    if specs:
+        cards._publish_specs(db, cards.notify_dirs(cards.data_root(ledger)), specs, now)
+    return receipt

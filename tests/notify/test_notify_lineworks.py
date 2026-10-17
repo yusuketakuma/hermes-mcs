@@ -86,9 +86,8 @@ def test_lineworks_grant_receipt_action_updates_and_retires_old_buttons(led):
     assert new_spec["delivery"]["message_id"] == MID
     assert _token_for(new_spec, "ack") != old_token
     assert _card(led)["message_id"] == MID
-    # A replay on an undeletable older LINE WORKS post must reauthorize,
-    # rather than returning a cached success from its earlier click.
-    assert _apply(led, old_request)["error"] == "token_expired"
+    # Until replacement is confirmed, the old immutable post keeps its buttons.
+    assert _apply(led, old_request)["outcome"] == "applied"
     claim = _claim(update, attempt="d" * 16)
     assert _apply(led, envelopes.transport_begin(claim))["granted"]
     assert _apply(led, envelopes.transport_receipt(

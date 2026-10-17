@@ -120,7 +120,7 @@ def test_card_reads_each_current_message_once_and_reuses_even_unknown_progress(l
 
 
 @pytest.mark.parametrize("platform", ["slack", "discord", "lineworks"])
-def test_thread_body_and_attachment_caption_keep_source_without_duplicate_summary(led, tmp_path, monkeypatch, platform):
+def test_thread_body_includes_summary_and_attachment_caption_keeps_source(led, tmp_path, monkeypatch, platform):
     import hashlib
     from notify_testkit import CFG, _latest_render
     from slack_testkit import SLACK
@@ -147,9 +147,8 @@ def test_thread_body_and_attachment_caption_keep_source_without_duplicate_summar
     assert raw in body and "📄 本文" not in body
     caption = next(part["caption"] for part in spec["parts"]["manifest"] if part["kind"] == "attachment_part")
     assert "合成所属" in caption
-    # layout 2: the face carries every post's summary, so no transport
-    # repeats it in the body post
-    assert "GENERATED-SUMMARY-CANARY" not in body and "解析更新中" not in body
+    assert body.index("GENERATED-SUMMARY-CANARY") < body.index("スタンプ 未取得") < body.index(raw)
+    assert "解析更新中" not in body
     assert "📋 要約" not in body
     if platform == "lineworks":
         assert "GENERATED-SUMMARY-CANARY" in caption

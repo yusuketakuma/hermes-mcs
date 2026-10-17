@@ -47,6 +47,8 @@ def test_canonical_active_never_falls_back_to_completed_legacy(led, monkeypatch)
     cfg = {"semantic": {"mode": "shadow", "fact_source": "canonical",
                         "project_ids": [1], "fact_source_gate": "synthetic"},
            "local_llm": {"model": "synthetic-local"}}
+    from candidate_testkit import approved_config
+    cfg = approved_config(cfg)
     progress = extraction_progress.patient_progress(led.db, 1, cfg=cfg)
     assert progress["processing"] == 1 and progress["complete"] == 0
     assert calls[0]["model"] == "synthetic-local"

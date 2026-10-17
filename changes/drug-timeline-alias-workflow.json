@@ -1,0 +1,8 @@
+{
+  "category": "added",
+  "title": "薬剤の言及履歴と別名の承認操作を追加",
+  "summary": "患者別に薬剤の記載を投稿順で確認し、予定・否定・過去・他者の言及と未取得・未抽出を区別できます。辞書別名は影響プレビューを固定し、人が確認した操作だけを既存receipt経路で適用・復旧できます。",
+  "upgrade": "mcs drug timeline と alias-propose/apply/rollback/receipt を明示実行します。別名適用には管理者の --confirm-human・reason・command-id が必要です。辞書更新にLLMの全件再抽出は伴いません。公開snapshotに反映されるまで結果確認は待機します。外部export・LINE WORKSのpushへの自動追加はありません。",
+  "details": ["辞書SHA、resolver版、影響snapshot hashで古い提案を拒否し、部分失敗では旧辞書pinを保持する。"],
+  "refs": ["mcs/views/drug_timeline.py", "mcs/ops/drug_alias.py", "mcs/ops/mcs_drug.py"]
+}

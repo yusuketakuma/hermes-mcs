@@ -17,7 +17,7 @@ from adapters.common.spec import token_map
 from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
 from .actions import origin as parse_action_origin
-from .cards import mention_ids, render, validate
+from .cards import mention_ids, render, thread_part_blocks, validate
 from .paths import notify_dirs
 
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
@@ -111,8 +111,21 @@ async def _call(fn, **kwargs):
     return await fn(**kwargs)
 
 
-# first chunk of one MCS post in a thread card (notify_cards._body_groups)
-_NEW_POST = re.compile(r"m:[1-9][0-9]{0,18}#1")
+# first chunk of one MCS post in a thread card (notify_cards._body_groups):
+# its summary/stamps header when the post is header/body-split, else
+# its first source-text chunk
+_NEW_POST = re.compile(r"(m:[1-9][0-9]{0,18})#1")
+_HEADER_POST = re.compile(r"m:[1-9][0-9]{0,18}:header#1")
+
+
+def _announces(spec, part) -> bool:
+    """The one chunk of a post that may broadcast to the channel."""
+    name = str(part.get("name") or "")
+    if _HEADER_POST.fullmatch(name):
+        return True
+    found = _NEW_POST.fullmatch(name)
+    return bool(found) and f"{found.group(1)}:header#1" not in {
+        str(p.get("name") or "") for p in spec["parts"].get("manifest") or []}
 # chat.update rejections that prove the prior reply cannot be edited
 _REPOST_ON_UPDATE = frozenset({"message_not_found", "cant_update_message",
                                "edit_window_closed"})
@@ -446,12 +459,15 @@ class DeliveryWorker(_BaseWorker):
         if not thread_ts:
             return {"result": "not_sent",
                     "error_code": "thread_root_missing"}
+        # Block Kit for a header/body-split chunk; the plain ``text`` stays
+        # the fallback and the remote-match/verify identity either way
+        blocks = thread_part_blocks(spec, part, text) if part else None
         # Slack parses explicit mentions even without automatic name linking.
         # Use the same escaped wire text for both sends and remote verification.
         # mrkdwn=False: user-authored *bold*/_x_/~y~ stay literal text.
         text = escape(text, quote=False)
         if part and part.get("edit_only") is True:
-            return await self._edit_only_prior(spec, part, text, ctx)
+            return await self._edit_only_prior(spec, part, text, ctx, blocks=blocks)
         if spec["op"] == "update" or spec["delivery"].get("thread_id"):
             # writing into an existing thread — an identical reply
             # authored by this bot binds the part to its real ts
@@ -463,7 +479,7 @@ class DeliveryWorker(_BaseWorker):
             # extraction arrived, a reply joined): rewrite that reply so
             # the thread keeps one post per chunk
             edited = await self._rewrite_prior(
-                thread_ts, (part or {}).get("prior_remote_id"), text, ctx)
+                thread_ts, (part or {}).get("prior_remote_id"), text, ctx, blocks=blocks)
             if edited is not None:
                 return edited
         sender = self._sender.single_attempt()
@@ -477,11 +493,11 @@ class DeliveryWorker(_BaseWorker):
                      if spec["op"] == "update" and part is not None
                      and part.get("kind") == "body_part"
                      and not part.get("prior_remote_id")
-                     and _NEW_POST.fullmatch(str(part.get("name") or ""))
+                     and _announces(spec, part)
                      else {})
         try:
-            response = await _call(
-                sender.chat_postMessage,
+            response = await self._blocks_call(
+                sender.chat_postMessage, blocks,
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, text=text, link_names=False,
                 mrkdwn=False, unfurl_links=False, unfurl_media=False,
@@ -499,7 +515,24 @@ class DeliveryWorker(_BaseWorker):
                     "error_code": "bad_slack_response"}
         return {"result": "delivered", "remote_id": ts}
 
-    async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False):
+    async def _blocks_call(self, fn, blocks, **kwargs):
+        """One Slack write carrying ``blocks`` beside the plain text. An
+        ``invalid_blocks`` rejection (a workspace without the block type;
+        nothing was written) resends the same text once without blocks,
+        so a new block never costs a part its send."""
+        if not blocks:
+            return await _call(fn, **kwargs)
+        try:
+            return await _call(fn, blocks=blocks, **kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if _payload(getattr(exc, "response", None)).get("error") != "invalid_blocks":
+                raise
+        self._log("blocks_rejected", reason="slack_container_unsupported")
+        return await _call(fn, **kwargs)
+
+    async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False, blocks=None):
         """Edit one exact owned reply; no text dedupe, upload or fresh-post fallback."""
         thread_ts, prior = ctx.get("thread_id"), part.get("prior_remote_id")
         if (spec.get("op") != "update" or not isinstance(thread_ts, str) or thread_ts != spec["delivery"].get("thread_id")
@@ -539,8 +572,9 @@ class DeliveryWorker(_BaseWorker):
         if not isinstance(ts, str) or not _TS.fullmatch(ts):
             return {"result": "unknown", "error_code": "edit_target_unverified"}
         try:
-            response = await _call(sender.chat_update, channel=self._settings["channel_id"],
-                                   ts=ts, text=text, link_names=False, mrkdwn=False)
+            response = await self._blocks_call(
+                sender.chat_update, blocks, channel=self._settings["channel_id"],
+                ts=ts, text=text, link_names=False, mrkdwn=False)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -558,7 +592,7 @@ class DeliveryWorker(_BaseWorker):
         return {"result": "delivered", "remote_id": prior}
 
     async def _rewrite_prior(self, thread_ts: str, prior, text: str,
-                             ctx: dict):
+                             ctx: dict, blocks=None):
         """chat.update this bot's earlier reply of the same chunk and
         return the delivered outcome, or None so the caller posts fresh
         exactly as before (no prior, target gone, foreign or already
@@ -580,8 +614,8 @@ class DeliveryWorker(_BaseWorker):
         if not self._sender.authored(target) or sender is None:
             return None
         try:
-            response = await _call(
-                sender.chat_update,
+            response = await self._blocks_call(
+                sender.chat_update, blocks,
                 channel=self._settings["channel_id"], ts=prior, text=text,
                 link_names=False, mrkdwn=False)
         except asyncio.CancelledError:

@@ -15,28 +15,45 @@ rollout stages, the evidence gate, and the operating commands.
 | `shadow`    | produced, not audited | `extract_llm` (canonical artifacts written for comparison; the Jev fact audit is canonical-only) |
 | `canonical` | produced, must PASS audit | `canonical_projection` artifacts (legacy shape, canonical source) |
 
-Set it through the activation command — it validates the resulting
-config before writing:
+Set it through the activation command; it validates the resulting config
+before writing. The default remains `legacy`.
 
 ```sh
 python3 mcs/ops/mcs_setup.py fact-source shadow
-python3 mcs/ops/mcs_setup.py fact-source canonical --gate-evidence report.json
+python3 mcs/ops/mcs_setup.py fact-source canonical \
+  --gate-evidence /private/evaluation/report.json \
+  --confirm-human --reason reviewed_sealed_holdout
 ```
 
-`canonical` requires `--gate-evidence`: a `semantic_evaluation` report
-scored against the shipped `evaluation/g6-criteria-v1.json` — its
-`criteria_sha256` and `criteria_version` must match that file (normalized
-and hashed the way the evaluator embeds them) — with `schema_version`,
-`gate.pass` and `gate.g6_eligible` true, `gate.reasons` an empty list, and
-`label_provenance.human` at least the shipped `min_human_labels` (200).
-Synthetic, failing or foreign-criteria reports are rejected.  The config
-stores a pinned token `<criteria version>:<report sha256-prefix>` (the
-prefix is the shipped criteria `version`); selecting a non-canonical
-source clears the pin.  A canonical config without the pin is rejected by
-the production validator (`config: semantic_fact_source_gate_required`).
-`mcs_setup.py init --set` cannot select `canonical` or change its pin
-(including through a whole `semantic` object); an unchanged existing
-selection passes through, and promotion goes only through `fact-source`.
+`canonical` requires the exact shipped [v2 criteria](../../evaluation/g6-criteria-v2.json),
+a metrics-only report bound to the loaded runtime candidate and sealed local
+run, and independent human approval. The command recomputes metric gates;
+`gate.pass=true` or human-label declarations alone do not authorize promotion.
+Synthetic data remains ineligible even when humans label it. The test split
+needs at least 200 human-labelled, authorized real cases, the prescribed
+patient/thread/stratum counts, metric denominators and complete observations.
+See [sealed candidate evaluation](SEALED_CANDIDATE_EVALUATION.md) for the
+input contract, exact thresholds, receipts and remaining acceptance work.
+
+The config stores `fact_source_evidence`, `fact_source_approval`, and a full
+`<criteria sha256>:<report sha256>:<candidate fingerprint>` token in
+`fact_source_gate`. A separate owner-only approval receipt under
+`data/semantic_approvals/` binds those values and the snapshot/holdout hashes.
+Runtime rechecks both the evidence and receipt. Code, prompt, model ID,
+interpretation settings or threshold changes invalidate the binding; missing
+or mismatched evidence fails closed to legacy/off. The receipt is not a
+signature against an attacker with the same OS account.
+
+The original [v1 criteria](../../evaluation/g6-criteria-v1.json) remain for
+historical comparisons. Old v1 reports and shortened version/report tokens
+cannot activate the current candidate. `fact-source legacy` or `shadow`
+clears config references but preserves approval history. `init --set` cannot
+select canonical or change its pin; promotion goes through `fact-source`.
+
+The sealed runner generates local-model candidates and scores sealed labels.
+It does not yet join the existing audit, final claims/loops, rendering and
+delivery receipts into that run. Its successful execution is therefore not
+production G6 acceptance, and missing observations still fail the gate.
 
 ## Canonical pipeline
 
@@ -159,3 +176,5 @@ Runs canonical extraction + audit over the labelled corpus and reports
 .mandatory_recall`, and `gate.pass` (true only when every case was
 actually evaluated).  Without `TYPESAFE_API_KEY` the audit cannot run
 and the report records `evaluated: false` — never a synthetic pass.
+
+The Jev incremental-value experiment is a separate synthetic comparison; its report is not the sealed v2 activation evidence described above.

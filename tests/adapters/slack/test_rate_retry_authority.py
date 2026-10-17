@@ -77,19 +77,22 @@ def test_rate_limit_retry_needs_current_authority(tmp_path, monkeypatch, target,
                 w.worker.release_scope_lock()
 
         asyncio.run(scenario())
-        assert waits == [2.0]
+        # a post is two thread chunks (summary/stamps header, source text);
+        # a repeated 429 is waited out once per chunk
+        parts = 2 if target == "body" else 1
+        assert waits == [2.0] * (parts if mode == "repeat429" else 1)
         results = [r for rows in journal.scan(w.dirs["state"]).values() for r in rows
                    if r.get("phase") == "result"
                    and (r.get("kind") == "body_part") == (target == "body")]
         if mode == "none":
-            assert len(attempts) == 2 and results[-1]["result"] == "delivered"
+            assert len(attempts) == parts + 1 and results[-1]["result"] == "delivered"
         else:
             # a lost authority or a second 429 never sends again; the 429 stands
-            assert len(attempts) == (2 if mode == "repeat429" else 1)
+            assert len(attempts) == (2 * parts if mode == "repeat429" else 1)
             assert (results[-1]["result"], results[-1]["error_code"]) == ("not_sent", "ratelimited")
         assert ("retry_skipped" in logs) == (mode in ("off", "epoch", "restore"))
         if target == "body":
-            assert len(w.client.thread_posts) == (1 if mode == "none" else 0)
+            assert len(w.client.thread_posts) == (parts if mode == "none" else 0)
     finally:
         led.close()
 

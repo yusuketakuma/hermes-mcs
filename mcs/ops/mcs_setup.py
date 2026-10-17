@@ -1941,9 +1941,10 @@ def cmd_fact_source(args) -> int:
             return 1
         try:
             raw = _evaluation_input(args.gate_evidence)
-            report = json.loads(raw)
+            from semantic_candidate import strict_json
+            report = strict_json(raw)
         except (OSError, ValueError, RecursionError) as e:
-            print(f"fact_source: gate evidence unreadable ({e})")
+            print(f"fact_source: gate evidence unreadable ({type(e).__name__})")
             return 1
         gate = report.get("gate") if isinstance(report, dict) else None
         provenance = report.get("label_provenance") \
@@ -1955,10 +1956,7 @@ def cmd_fact_source(args) -> int:
                 or not isinstance(gate, dict) or gate.get("pass") is not True \
                 or gate.get("g6_eligible") is not True \
                 or type(human) is not int or human < 1:
-            reasons = gate.get("reasons") if isinstance(gate, dict) \
-                else None
-            print("fact_source: gate evidence does not pass on "
-                  f"human-labelled data{f' ({reasons})' if reasons else ''}")
+            print("fact_source: gate evidence does not pass on human-labelled data")
             return 1
         try:
             criteria, criteria_sha = _shipped_g6_criteria()
@@ -1977,15 +1975,34 @@ def cmd_fact_source(args) -> int:
             problem = (f"{human} human labels < min_human_labels "
                        f"{criteria['min_human_labels']}")
         elif not isinstance(reasons, list) or reasons:
-            problem = f"gate reasons not empty ({reasons!r})"
+            problem = "gate reasons not empty"
         if problem:
             print(f"fact_source: gate evidence rejected — {problem}")
             return 1
-        digest = hashlib.sha256(raw).hexdigest()[:16]
-        criteria_version = criteria["version"]
-        sem["fact_source_gate"] = f"{criteria_version}:{digest}"
+        from semantic_candidate import promotion_problem, token, record_approval
+        sem["fact_source"] = source
+        try:
+            problem = promotion_problem(cfg, report)
+        except (ValueError, TypeError, KeyError, OSError, AttributeError):
+            problem = "invalid_report"
+        if problem:
+            print(f"fact_source: gate evidence rejected — {problem}")
+            return 1
+        if (getattr(args, 'confirm_human', False) is not True
+                or getattr(args, 'reason', None) != 'reviewed_sealed_holdout'):
+            print('fact_source: --confirm-human --reason reviewed_sealed_holdout required')
+            return 1
+        try:
+            sem['fact_source_approval'] = record_approval(cfg, report)
+        except (OSError, ValueError):
+            print('fact_source: approval receipt could not be recorded')
+            return 1
+        sem["fact_source_evidence"] = report
+        sem["fact_source_gate"] = token(cfg, report)
     else:
         sem.pop("fact_source_gate", None)
+        sem.pop("fact_source_evidence", None)
+        sem.pop("fact_source_approval", None)
     sem["fact_source"] = source
     # Fail closed: never write a config the production validator rejects.
     errors, _ = validate_config(cfg)
@@ -2654,10 +2671,17 @@ def cmd_doctor(args) -> int:
         "selected": selected, "recovery": recovery, "desired_recovery": desired}
     from operational_status import stored_status, status_lines
     operations = stored_status(HOME, cfg)
+    from card_worker_status import diagnose
+    worker = diagnose(os.path.join(HOME, 'data'), cfg)
+    checks['card_worker'] = _doctor_check([], [worker['reason']]
+        if worker['state'] in ('unknown', 'disabled') else [])
+    checks['restore_delivery'] = _doctor_check([],
+        ['restore_delivery_unverified'] if worker['restore_delivery_held'] is None else
+        ['restore_delivery_held'] if worker['restore_delivery_held'] else [])
     report = {"mode": mode, "python": sys.version.split()[0],
               "sqlite": sqlite3.sqlite_version, "checks": checks,
               "runtimes": runtimes,
-              "operations": operations,
+              "operations": operations, "card_worker": worker,
               "source": _doctor_source(cfg, probe="services" in probes and not config_errors),
               "recovery_selection": {"explicit": "recovery_python" in cfg,
                                      "matches_deployed": matches}}
@@ -2665,6 +2689,11 @@ def cmd_doctor(args) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         print(f"doctor: mode={mode}, Python={report['python']}, SQLite={report['sqlite']}")
+        print(f"  card worker: {worker['state']} ({worker['reason']})")
+        if worker['restore_delivery_held']:
+            print("  restore: collect_only — 配送は復元保留中")
+        elif worker['restore_delivery_held'] is None:
+            print("  restore: unknown — 復元保留の状態を確認できません")
         for line in status_lines(operations):
             print(line)
         source = report["source"]
@@ -2701,7 +2730,7 @@ SCRIPTS_DIR = os.path.join(HERMES_HOME, "scripts")
 AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
 REPO_ROOT = REPO
 G6_CRITERIA_PATH = os.path.join(REPO_ROOT, "evaluation",
-                                "g6-criteria-v1.json")
+                                "g6-criteria-v2.json")
 
 CRON_JOBS = [
     ("MCS unread check", "*/10 * * * *", "mcs_check.sh"),
@@ -3901,6 +3930,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--gate-evidence",
                    help="semantic_evaluation report JSON proving the "
                         "human-labelled gate passed (canonical only)")
+    p.add_argument("--confirm-human", action="store_true")
+    p.add_argument("--reason", choices=["reviewed_sealed_holdout"])
     p.set_defaults(fn=cmd_fact_source)
     p = sub.add_parser("jev-value",
                        help="run Jev incremental-value evaluation and "

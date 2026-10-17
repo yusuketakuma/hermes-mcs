@@ -110,3 +110,19 @@ def test_every_wait_code_has_a_label():
     for code in notify_cards.RESEAT_REASONS | {"intent_card_delivery_unknown", "card_parts_pending",
                                                "card_parts_unknown", "unknown", "stale", "unrecorded"}:
         assert code in health_watch._WAIT_JA
+
+
+@pytest.mark.parametrize('mode', ['hermes', 'standalone'])
+@pytest.mark.parametrize('reason', ['notification_pending', 'notification_deferred', 'notification_parked'])
+@pytest.mark.parametrize('wait,expected', [
+    ({'reasons': {'card_parts_unknown': 2}}, '自動で再送しません'),
+    ({'reasons': {'hold_reason:resend_exhausted': 1}}, '承認手順'),
+    ({'reasons': {'stale': 1}}, '現在の待ち理由'),
+    ({'reasons': {'card_parts_pending': 1}}, '配送完了はまだ'),
+    (None, '現在の待ち理由'),
+])
+def test_wait_actions_do_not_promise_delivery(mode, reason, wait, expected):
+    report = {'runtime_mode': mode, 'notify_wait': ({'attention': 0, **wait} if wait else None)}
+    rows = '\n'.join(health_watch._reason_rows(report, [reason]))
+    assert expected in rows
+    assert '次回の収集で送信されます' not in rows

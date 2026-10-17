@@ -132,6 +132,10 @@ def test_snapshot_gate_flags_connect_line_without_mode_ro(
 
 
 @pytest.mark.parametrize(("call", "allowed"), [
+    ("sqlite3.connect(':memory:')", True),
+    ("sqlite3.connect(database=':memory:')", True),
+    ("sqlite3.connect(':memory:' + path)", False),
+    ("sqlite3.connect('/tmp/:memory:')", False),
     ("sqlite3.connect(\n 'file:synthetic?mode=ro', uri=True)", True),
     ("sqlite3.connect(\n f'file:{path}?mode=ro', uri=True)", True),
     ("sqlite3.connect('file:synthetic?mode=ro')", False),

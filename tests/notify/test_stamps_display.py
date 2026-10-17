@@ -329,9 +329,7 @@ def test_evidence_shows_actor_counts_for_own_posts_only(led, tmp_path):
 
 
 def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
-    """Owner order (2026-10-08, layout 2) for every message: header, the
-    plain summary, a rule, the body as posted to MCS, a rule, then the
-    MCS stamps as the trailer."""
+    """Each root and reply shows summary, stamps, then the original body."""
     _patient(led)
     _self_known(led)
     _post(led, 100, OTHER, ts=NOW - 100)
@@ -347,13 +345,11 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
                                   "スタンプ 未取得")):
         lines = post.split("\n")
         assert lines[1] == f"・要約{mid}"
-        assert lines[2] == notify_render.SECTION_RULE
-        assert lines[3] == led.db.execute(
+        assert lines[2].startswith(stamps)
+        assert lines[3] == notify_render.SECTION_RULE
+        assert lines[4] == led.db.execute(
             "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
-        # one merged stamp line, as the trailer behind the second rule
-        assert lines[4] == notify_render.SECTION_RULE
-        assert lines[5].startswith(stamps)
-        assert post.count(notify_render.SECTION_RULE) == 2
+        assert post.count(notify_render.SECTION_RULE) == 1
 
 
 def test_long_post_keeps_summary_and_stamps_with_its_body():
@@ -511,33 +507,29 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
             result = asyncio.run(worker._perform_part({"spec": spec}, part, context))
             assert result["result"] == "delivered"
             if part["name"].startswith("m:"):
-                mid = int(part["name"].split("#", 1)[0][2:])
+                mid = int(part["name"].split("#", 1)[0][2:].removesuffix(":header"))
                 posts.setdefault(mid, []).append(calls[-1][0])
     assert set(posts) == {100, 101}
     for mid in (100, 101):
         post = "".join(posts[mid])
         assert "<@" not in post and "@everyone" not in post
-        # layout 2: no transport repeats the face summary in the post
-        assert post.count(notify_render.SECTION_RULE) == (0 if platform == "lineworks" else 1)
-        front, _rule, tail = post.partition(notify_render.SECTION_RULE)
-        assert "📋 要約" not in post
-        if platform != "lineworks":
-            assert "解析更新中" not in post
-        # layout 2: LINE WORKS posts header and body only; Slack/Discord
-        # put the body first and stamps behind the rule
-        assert "📄 本文" not in post
-        assert ("スタンプ" in tail) is (platform != "lineworks")
-        if platform == "lineworks":
-            # LINE WORKS cannot edit a post: no stamp line at all, so a
-            # stamp change never re-posts the body
-            assert "スタンプ" not in post and "合成他者" not in post
-            continue
+        assert post.count(notify_render.SECTION_RULE) == 0
+        front = posts[mid][0]
+        tail = "".join(posts[mid][1:])
+        assert "📋 要約" not in post and "📄 本文" not in post
+        assert "要約 処理待ち" in front
+        assert "解析更新中" not in post
+        assert front.index("要約 処理待ち") < front.index("スタンプ")
+        assert "スタンプ" not in tail
+
         assert f"合成本人{201 - mid}" not in post
         if mid == 100:
             # one's own post counts and names others only
-            assert "スタンプ 👀1 合成他者100＜＠UFAKE＞ · 自分 👀 · " in post
+            assert "スタンプ 👀1 合成他者100＜＠UFAKE＞ · 自分 👀" in post
         else:
-            assert "スタンプ 👀2 合成本人101・合成他者101＜＠UFAKE＞ · 自分 👀 · " in post
+            assert "スタンプ 👀2 合成本人101・合成他者101＜＠UFAKE＞ · 自分 👀" in post
+        assert ("投稿時点" in post) is (platform == "lineworks")
+        assert "時点" in post
     for _, kwargs in calls:
         if platform == "slack":
             assert kwargs["link_names"] is False and kwargs["unfurl_links"] is False

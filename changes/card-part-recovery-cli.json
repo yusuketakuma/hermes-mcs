@@ -1,0 +1,8 @@
+{
+  "category": "added",
+  "title": "通知の本文・添付partの復旧をローカルCLIから確認",
+  "summary": "配送結果が不明な通知partについて、通知先・attempt・hashを読取り専用で確認し、人が承認した結果を既存の受付経路へ渡せるようになりました。",
+  "upgrade": "新しい設定は不要です。ローカル運用者が公開snapshotで計画を確認し、worker停止・理由・必要な重複リスク承認を含むJSONをcontrol card_part_resolve --confirm-humanへ渡します。自動再送や復元保留の一括解除は行いません。",
+  "details": ["card_part_planは患者本文を返さず、承認・enqueue・DB書込みをしない。", "既存のカード単位card_resolveはproject指定不要の契約を維持する。チャットtoolへの公開は追加しない。"],
+  "refs": ["mcs/views/mcs_view.py", "tests/views/test_card_part_cli.py", "docs/guides/NOTIFICATION_RECOVERY.md"]
+}

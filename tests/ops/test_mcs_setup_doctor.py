@@ -219,3 +219,18 @@ assert source['restart_request'] == {'status': 'unknown'}
     monkeypatch.setattr(mcs_setup, "_gateway_sources_mtime", lambda: None)
     source = mcs_setup._doctor_source({"runtime_mode": "standalone"}, probe=True)
     assert source["restart_request"] == {"status": "unknown"}
+
+
+@pytest.mark.parametrize('state,reason', [('unknown', 'worker_start_unverified'),
+                                         ('disabled', 'profile_mismatch')])
+def test_doctor_exposes_worker_and_restore_holds(local_config, monkeypatch, capsys, state, reason):
+    import card_worker_status
+    monkeypatch.setattr(card_worker_status, 'diagnose', lambda *a: {
+        'state': state, 'reason': reason, 'restore_delivery_held': True,
+        'recovery_scope': 'collect_only'})
+    assert mcs_setup.main(['doctor', '--json']) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['card_worker']['reason'] == reason
+    assert result['card_worker']['recovery_scope'] == 'collect_only'
+    assert result['checks']['card_worker']['status'] == 'warning'
+    assert result['checks']['restore_delivery']['status'] == 'warning'

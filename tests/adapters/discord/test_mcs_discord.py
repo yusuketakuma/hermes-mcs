@@ -2359,8 +2359,8 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         body = "\n".join(thread.sent)
         assert "📄 本文" not in body and "追記あり" in body and "スタンプ 未取得" in body
         post = next(p for p in thread.sent if "追記あり" in p)
-        assert post.index("追記あり") < post.index("スタンプ 未取得")   # body first, stamps trail
-        assert "📋 要約" not in body and "処理待ち" not in body and "解析更新中" not in body
+        assert post.index("要約 処理待ち") < post.index("スタンプ 未取得") < post.index("追記あり")
+        assert "📋 要約" not in body and "解析更新中" not in body
         _, current_spec = world.spec()
         assert current_spec["delivery"]["thread_id"] == str(original_thread_id)
         assert "要約 処理待ち" in notify_cards._card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]

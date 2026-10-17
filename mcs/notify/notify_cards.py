@@ -91,7 +91,9 @@ RESTORE_RECEIPT = "restore_reconcile.json"
 # still gets a visible marker part, never a silently dropped tail
 THREAD_PART_LIMIT = 1900
 MAX_PARTS = 256
-_TRUNCATED_PART = "（上限を超えたため残りは省略 — 原本を参照）"
+LINEWORKS_SUMMARY_WAIT_S = 120
+LINEWORKS_POST_UPDATES = 3
+_TRUNCATED_PART = "（配送上限のため更新を保留 — 原本を参照）"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notification_cards(
   card_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -304,10 +306,10 @@ _LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
 # tests/notify/test_card_extras.py pins them equal
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
 MAX_POST_ACTIONS = 5          # spec.MAX_POST_ACTIONS
-# Card face layout stamped at creation: existing cards keep layout 1 (no
+# Card face layout stamped at creation: existing cards keep layout 1/2 (no
 # fingerprint change, no mass re-render / LINE WORKS re-post); cards
 # created from now on use the current one (owner decision 2026-10-08)
-CARD_LAYOUT = 2
+CARD_LAYOUT = 3
 TASK_HINT_MAX = 300           # 📝 prefill — the modal field holds 1000
 STAFF_CHOICES = 25            # Discord/Slack select option ceiling
 TASK_VIEW_LIMIT = 12          # ephemeral list rows — 12 tasks x <=2
@@ -1037,13 +1039,13 @@ def _body_groups(db, card, planned, prior) -> list:
             "(message_id=? OR parent_id=?) ORDER BY posted_at_ts,message_id",
             (card["project_id"], card["root_message_id"], card["root_message_id"])):
         key = f"m:{row[0]}"
-        if key + "#1" in prior:
+        if key + "#1" in prior or key + ":header#1" in prior:
             owner = key
         elif row[0] in carried:
             owners[row[0]] = owner
     groups = []
     for mid in planned:
-        if f"m:{mid}#1" in prior or mid in announced:
+        if f"m:{mid}#1" in prior or f"m:{mid}:header#1" in prior or mid in announced:
             groups.append((f"m:{mid}", [mid]))
         elif mid in frozen:
             continue
@@ -1146,6 +1148,56 @@ def _same_thread_delivered_parts(db, card):
     return body, attachments
 
 
+def _lineworks_update_budget(db, card, keyed):
+    """Keep each source post to its initial chunks plus three later messages."""
+    previous, sent, initial = {}, {}, {}
+    for row in db.execute("SELECT spec_json,delivery_id FROM notification_renders "
+                          "WHERE card_id=? AND state='delivered' ORDER BY render_rev",
+                          (card["card_id"],)):
+        old = json.loads(row["spec_json"])["parts"]
+        receipts = {p["part_id"]: p for p in db.execute(
+            "SELECT part_id,state,error_code FROM notification_render_parts WHERE delivery_id=?",
+            (row["delivery_id"],))}
+        landed = {key for key, receipt in receipts.items() if receipt["state"] == "delivered"}
+        counts = {}
+        for part in old.get("manifest", []):
+            name = part.get("name", "")
+            receipt = receipts.get(part["part_id"])
+            if part["kind"] != "body_part" or not receipt or not name.startswith(("m:", "s:")):
+                continue
+            group = name.split("#")[0].removesuffix(":header").removesuffix(":limit")
+            if part["part_id"] in landed:
+                previous[name] = old["thread_body_parts"][int(part["part_id"].split(":")[1]) - 1]
+            if (not part.get("prior_remote_id") and (receipt["state"] in ("delivered", "unknown")
+                    or receipt["error_code"] == "operator_part_resolve")):
+                counts[group] = counts.get(group, 0) + 1
+        for group, count in counts.items():
+            initial.setdefault(group, count)
+            sent[group] = sent.get(group, 0) + count
+    groups = {}
+    for name, chunk in keyed:
+        group = name.split("#")[0].removesuffix(":header")
+        groups.setdefault(group, []).append((name, chunk))
+    out = []
+    for group, chunks in groups.items():
+        if group not in initial:
+            out.extend(chunks)
+            continue
+        remaining = initial[group] + LINEWORKS_POST_UPDATES - sent[group]
+        changed = sum(previous.get(name) != chunk for name, chunk in chunks)
+        limit_key = group + ":limit#1"
+        if limit_key in previous or changed >= remaining > 0 or (changed and remaining <= 0):
+            # Keep all proven old text; the last allowed message explains the cap.
+            out.extend((name, text) for name, text in previous.items()
+                       if name.split("#")[0].removesuffix(":header").removesuffix(":limit") == group
+                       and name != limit_key)
+            if remaining > 0 or limit_key in previous:
+                out.append((limit_key, "↳ この投稿の更新上限に達しました。最新の要約・スタンプ・原文はMCSで確認してください。"))
+        else:
+            out.extend(chunks)
+    return out
+
+
 def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -> None:
     """Seal the ordered delivery plan into the spec: the card is always
     part 0; a thread-bound render adds the thread, every body chunk and
@@ -1153,6 +1205,27 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
     names, per body chunk and unchanged attachment, the message that
     already carries it (``prior_remote_id``) so each stays one post."""
     parts = spec["parts"]
+    reused_card = None
+    if card["transport"] == "lineworks" and spec["op"] == "update":
+        old = db.execute("SELECT spec_json FROM notification_renders WHERE card_id=? "
+                         "AND state='delivered' ORDER BY render_rev DESC LIMIT 1",
+                         (card["card_id"],)).fetchone()
+        if old:
+            previous = json.loads(old[0])
+            def strip_tokens(rows):
+                return [[{k: v for k, v in b.items() if k != "token"}
+                         for b in row] for row in rows]
+            prior_view = db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
+                                    (previous["parts"]["manifest_id"],)).fetchone()
+            if (prior_view and json.loads(prior_view[0]) == content["shown"]
+                    and previous["source_generation"] == spec["source_generation"]
+                    and previous["ui_revision"] == spec["ui_revision"]
+                    and _scope_match(previous["delivery"], stored_scope(card))
+                    and strip_tokens(previous["parts"]["action_rows"]) == strip_tokens(parts["action_rows"])):
+                for field in ("containers", "footer", "action_rows", "preview_text"):
+                    if field in previous["parts"]:
+                        parts[field] = previous["parts"][field]
+                reused_card = card["message_id"]
     visible = {"containers": parts["containers"], "footer": parts["footer"],
                "action_rows": parts["action_rows"]}
     if "preview_text" in parts:
@@ -1161,6 +1234,8 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
     manifest = [{"part_id": "card", "kind": "card", "index": 0,
                  "sha256": hashlib.sha256(card_payload).hexdigest(),
                  "bytes": len(card_payload)}]
+    if reused_card:
+        manifest[0]["prior_remote_id"] = reused_card
     if not in_thread_body or spec["op"] == "revoke":
         parts["manifest"] = manifest
         return
@@ -1182,31 +1257,37 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
         keyed.extend(present.overflow(parts, _split_body_chunks))
     for key, mids in _body_groups(db, card, planned, posts):
         man = {"shown": json.dumps(mids, ensure_ascii=False)}
-        # a transport that cannot edit a post gets no stamp line, so
-        # only a change of the original text or its extraction re-posts;
-        # from layout 2 its card face already carries each post's summary
-        layout = card["layout"] if "layout" in card.keys() else 1
-        body = _card_body_text(db, card, man, max_chars=None,
-                               stamps=editable, cfg=cfg,
-                               include_summary=not editable and layout < 2)[1]
+        body = _card_body_text(db, card, man, max_chars=None, cfg=cfg)[1]
         # lossless — no chunk dropped
-        chunks = _split_body_chunks(body)
+        header, divider, original = body.partition("\n" + "─" * 12 + "\n")
+        header_chunks = []
+        if divider and card["layout"] >= 3:
+            header_chunks = _split_body_chunks(header)
+            keyed += [(f"{key}:header#{k}", c)
+                      for k, c in enumerate(header_chunks, 1)]
+            chunks = _split_body_chunks(original)
+        else:
+            # Existing names remain stable until a new source post is issued.
+            chunks = _split_body_chunks(body)
         keyed += [(f"{key}#{k}", c) for k, c in enumerate(chunks, 1)]
         if editable:
             for old_key, (remote_id, sha) in verified_body.items():
                 prefix, separator, number = old_key.rpartition("#")
-                if (separator and prefix == key and number.isascii() and number.isdecimal() and int(number) > len(chunks)
-                        and sha != _sha_text(_THREAD_BODY_COLLECTED)):
+                counts = {key: len(chunks), key + ":header": len(header_chunks)}
+                if (separator and prefix in counts and number.isascii() and number.isdecimal()
+                        and int(number) > counts[prefix] and sha != _sha_text(_THREAD_BODY_COLLECTED)):
                     cleanup.append((old_key, _THREAD_BODY_COLLECTED))
                     posts[old_key] = remote_id
+    if not editable and update:
+        keyed = _lineworks_update_budget(db, card, keyed)
     attachments = _plan_attachments(db, planned)
     if len(keyed) + len(attachments) > MAX_PARTS - 2:
-        # One shared budget includes card, thread and an explicit omission
-        # marker. Unplanned downloaded attachments retain the existing
-        # attachment-followup path after the card is delivered.
-        keyed = keyed[:MAX_PARTS - 3]
-        attachments = attachments[:MAX_PARTS - 3 - len(keyed)]
-        keyed.append(("truncated#1", _TRUNCATED_PART))
+        # Hold the render as a whole: retaining the earliest chunks silently
+        # loses new replies and can overwrite already delivered content.
+        card["_cleanup_budget_hold"] = True
+        card["_part_budget_error"] = "part_budget_exceeded"
+        keyed = [("truncated#1", _TRUNCATED_PART)]
+        attachments = []
     if len(keyed) + len(attachments) + len(cleanup) > MAX_PARTS - 2:
         # Keep the resource bound and withhold this whole render: never
         # report success while a proven old summary chunk remains untouched.
@@ -1436,12 +1517,6 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     delivery scope, minted action tokens and the journaled parts
     manifest — a worker never needs a registry/snapshot lookup to aim."""
     card.update(gens)
-    if not presenter(card["transport"]).EDITABLE:
-        # Older cards cannot be edited or deleted remotely. Retire their
-        # buttons locally before minting any replacement render tokens.
-        db.execute("UPDATE notification_action_tokens SET expires_at=? "
-                   "WHERE card_id=? AND expires_at>?",
-                   (now, card["card_id"], now))
     cur = db.execute(
         """INSERT INTO notification_view_manifests(
              card_id,render_rev,source_generation,presentation_generation,
@@ -1675,6 +1750,18 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         return None      # delete already landed — _render_needed would
                          # say no regardless of drift, so skip content
     content = _card_content(db, card, cfg=cfg)
+    if (card["transport"] == "lineworks" and card["kind"] == "thread"
+            and not content.get("urgent")):
+        from notify_render import _structured_block, _extraction_failed, _progress_state
+        pending = db.execute("SELECT message_id,first_seen FROM messages WHERE project_id=? "
+                             "AND (message_id=? OR parent_id=?)",
+                             (card["project_id"], card["root_message_id"], card["root_message_id"]))
+        if any(row["first_seen"] and 0 <= now - row["first_seen"] < LINEWORKS_SUMMARY_WAIT_S
+               and _structured_block(db, row["message_id"]) is None
+               and not _extraction_failed(db, row["message_id"])
+               and (_progress_state(db, row["message_id"], cfg) or {}).get("state") != "attention"
+               for row in pending):
+            return None
     gens = _generation_drift(card, content)
     if not _render_needed(db, card, latest, gens, cfg, now, force):
         return None                        # delivered/terminal & no drift
@@ -1686,7 +1773,8 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     _persist_render(db, card, spec, op, rev, now)
     if card.get("_cleanup_budget_hold"):
         db.execute("UPDATE notification_renders SET state='held',parts_state='held' WHERE delivery_id=?", (spec["delivery_id"],))
-        db.execute("UPDATE notification_render_parts SET state='held',error_code='thread_cleanup_budget_exceeded' WHERE delivery_id=?", (spec["delivery_id"],))
+        db.execute("UPDATE notification_render_parts SET state='held',error_code=? WHERE delivery_id=?",
+                   (card.get("_part_budget_error", "thread_cleanup_budget_exceeded"), spec["delivery_id"]))
         db.execute("UPDATE notification_cards SET delivery_state='update_failed' WHERE card_id=?", (card_id,))
         return None
     specs.append(spec)
@@ -1880,7 +1968,8 @@ def assignee_choices(db, limit=STAFF_CHOICES) -> list:
 
 def _cleanup_budget_held(db, delivery_id):
     return db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND state='held' "
-                      "AND error_code='thread_cleanup_budget_exceeded' LIMIT 1", (delivery_id,)).fetchone() is not None
+                      "AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded') "
+                      "LIMIT 1", (delivery_id,)).fetchone() is not None
 
 
 def _publish_specs(db, dirs, specs, now) -> list:
@@ -3873,6 +3962,17 @@ def retired_transports(cfg) -> tuple[str, ...]:
     return tuple(t for t in SUPPORTED_TRANSPORTS if t != active)
 
 
+def layout_migration_counts(db) -> list:
+    """Read-only counts of retained layouts and cards blocked by unknown parts."""
+    return [dict(row) for row in db.execute("""
+        SELECT c.transport,c.layout,c.delivery_state,COUNT(*) AS cards,
+               SUM(EXISTS(SELECT 1 FROM notification_render_parts p
+                   JOIN notification_renders r USING(delivery_id)
+                   WHERE r.card_id=c.card_id AND p.state='unknown')) AS unknown_parts
+        FROM notification_cards c GROUP BY c.transport,c.layout,c.delivery_state
+        ORDER BY c.transport,c.layout,c.delivery_state""")]
+
+
 def health_cards(ledger, cfg=None) -> dict:
     """The health.json 'cards' section — counts and ages plus the
     bounded unsettled-attempt worklist an operator resolves via
@@ -3942,6 +4042,13 @@ def health_cards(ledger, cfg=None) -> dict:
         "message_deleted": states.get("message_deleted", 0),
         "revoked": states.get("revoked", 0),
         "oldest_pending_age_s": round(now - oldest, 1) if oldest else 0,
+        "layout_inventory": layout_migration_counts(db),
+        "unknown_parts": [dict(row) for row in db.execute(
+            "SELECT r.delivery_id,r.card_id,r.transport,r.payload_hash AS manifest_sha256,"
+            "p.part_id,p.payload_sha256 FROM notification_render_parts p "
+            "JOIN notification_renders r USING(delivery_id) WHERE p.state='unknown' "
+            "ORDER BY p.updated_at LIMIT 20")],
+        "unknown_part_resolution": "card_part_resolve_planで部品を確認し、人承認付きops.card_part_resolveで解除してください。",
         "renders_queued": queued,
         "renders_unknown": unknown,
         "attempts_unsettled": unsettled["c"],

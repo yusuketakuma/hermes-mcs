@@ -56,6 +56,7 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
            "extract_qc": "off",
            "threshold_mode": "shadow_only", "calibration_version": None,
            "fact_source": "legacy", "fact_source_gate": None,
+           "fact_source_evidence": None, "fact_source_approval": None,
            "model": jev.JEV_MODEL,
            "daily_request_budget": 0,
            "attempt_timeout_seconds": 20.0,
@@ -94,7 +95,7 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
     fact_source = block.get("fact_source", "legacy")
     gate = block.get("fact_source_gate")
     if gate is not None and (not isinstance(gate, str)
-                             or not gate.strip() or len(gate) > 160):
+                             or not gate.strip() or len(gate) > 194):
         errors.append("config: semantic_fact_source_gate_invalid")
         gate = None
     out["fact_source_gate"] = gate
@@ -161,7 +162,23 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
             out["project_ids"] = sorted(set(v))
     if out["nomatch_threshold"] >= out["match_threshold"]:
         errors.append("config: semantic_threshold_order_invalid")
+    if fact_source == "canonical":
+        from semantic_candidate import promotion_problem, token, approval_matches
+        evidence = block.get("fact_source_evidence")
+        out["fact_source_evidence"] = evidence
+        out["fact_source_approval"] = block.get("fact_source_approval")
+        try:
+            problem = promotion_problem(cfg, evidence)
+            if (problem or gate != token(cfg, evidence)
+                    or not approval_matches(cfg, evidence, out["fact_source_approval"])):
+                errors.append("config: semantic_fact_source_evidence_mismatch")
+        except (ValueError, TypeError, KeyError, OSError, AttributeError):
+            errors.append("config: semantic_fact_source_evidence_invalid")
+    if not errors and fact_source != 'legacy':
+        from semantic_candidate import candidate_fingerprint
+        out['candidate_fingerprint'] = candidate_fingerprint(cfg)
     if errors:
+        out["fact_source"] = "legacy"
         out["mode"] = "off"
     return out, errors
 
@@ -176,4 +193,5 @@ def policy_fingerprint(scfg: dict) -> str:
     fact_source = scfg.get("fact_source", "legacy")
     if fact_source != "legacy":
         policy["fact_source"] = fact_source
+        policy["candidate_fingerprint"] = scfg.get("candidate_fingerprint")
     return payload_hash(policy)

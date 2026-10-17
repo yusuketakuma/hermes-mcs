@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "通知の待ち理由と配送の進行に合った案内",
+  "summary": "送信結果不明・保留・再試行上限・古い記録を区別し、次回送信を約束しません。大量の待ち行列でも配送が進んでいれば停滞扱いにしません。",
+  "upgrade": "監視を行う収集プロセスへ反映してください。通知の保留・承認・配送予算は解除しません。",
+  "refs": [
+    "mcs/ingest/health_watch.py",
+    "mcs/ingest/run_check.py"
+  ],
+  "details": [
+    "unknown・held・exhausted・stale・missingの理由別に両runtimeの案内を検証する。",
+    "最後のカード又は部品の配送進捗を最古queued時刻と併せて停滞判定に使用する。"
+  ]
+}

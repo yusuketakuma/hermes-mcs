@@ -7,6 +7,14 @@ request. Successful runs write one aggregate JSON report and nothing to
 stdout. Validation errors contain only a line/field code; source text is never
 printed.
 
+Current activation uses [sealed candidate evaluation](SEALED_CANDIDATE_EVALUATION.md)
+and [g6-criteria-v2.json](../../evaluation/g6-criteria-v2.json). That specification
+owns the local-model `generate`/`score` CLI, candidate binding, independent
+approval receipt, data-origin and holdout requirements. This page also retains
+the older offline scorer and three-method comparison workflows; their outputs
+alone do not establish current activation eligibility. No real-data G6 run has
+been completed as part of this change.
+
 ## Pending request-following review assets (1.0.13)
 
 The [source-first review protocol](../../evaluation/request_following_review_protocol.md)
@@ -22,8 +30,8 @@ receipts, model outputs or completed labels. This queue is not an
 `evaluation_candidate` or a G6 report. Its nonmedical cases alone do not
 provide denominators for every required medication/clinical metric.
 Real candidate outputs, human labels, calibration, lifecycle and capacity
-measurements still enter the existing evaluation workflow below; the
-200-label canonical gate and its criteria are unchanged.
+measurements still need the sealed v2 workflow. Human review of these synthetic
+assets never converts them into the authorized real cases required by G6.
 
 Run it with explicit versions and acceptance criteria:
 
@@ -35,11 +43,14 @@ python mcs/semantic/eval/semantic_evaluation.py \
   --output report.json
 ```
 
-The manifest fixes the input versions. The minimum fields are:
+The manifest fixes the input versions. The basic offline format below is not
+the complete sealed v2 manifest (which also requires the seal, split registry,
+reviewer roster and review bindings described in the linked specification):
 
 ```json
 {
   "version": "manifest-v1",
+  "data_origin": "synthetic",
   "bundle_version": "bundle-v1",
   "candidate_version": "candidate-v1",
   "label_version": "label-v1"
@@ -62,7 +73,10 @@ A label has `source: "human"` or `source: "synthetic"`, a `facts` list, and a
 `loops` list whose entries use `loop_id` and boolean `resolved`. A human label
 must also bind a durable labelling `receipt` (`receipt_id`, `labelled_at`,
 `reviewer`); the validator checks its shape, while authenticity stays the
-review process's job — a bare `source` string cannot mint provenance. Fact IDs
+review process's job — a bare `source` string cannot mint provenance. Receipts
+must be unique. Sealed v2 additionally checks two distinct blind reviewers
+and adjudication on disagreement, each bound to the candidate and label.
+Missing data origin defaults to synthetic; human labels do not change origin. Fact IDs
 are the matching key. Label facts own `important`, medication, negation, time, and
 speaker relation fields. Candidate facts and claims use `fact_id`/`fact_refs`.
 The label must annotate every candidate claim with the
@@ -139,7 +153,9 @@ delivery unprovable. Full `accepted` intents still need receipts covering
 every chunk; the target/fingerprint recheck applies to partial attribution.
 
 The criteria file fixes the gate. `required_metrics` defaults to all WP08
-metrics, but keeping it explicit is recommended:
+metrics. The following historical format example is illustrative, not the
+current production criteria; v2 adds minimum denominators, selected Wilson
+lower-bound gates, urgency, effective AI priority and patient-state A/B metrics:
 
 ```json
 {
@@ -183,11 +199,12 @@ The gate is false when human labels are insufficient, a required split is
 empty, a required metric or telemetry section has a zero denominator, a
 threshold is missed, any critical overclaim is present, or a held-out case's
 fact lifecycle is incomplete (`fact_lifecycle_incomplete`). `g6_eligible`
-additionally requires every case label to be human. The current task has no
-real human labels, so synthetic fixtures and their passing unit tests do not
-constitute G6 or a production
-quality claim; a reviewed label file and approved criteria must be supplied
-later. Thresholds are evaluated against the held-out `test` split; the
+additionally requires human labels on authorized real test data. Current v2
+requires at least 200 such cases plus sealed holdout/review checks, patient,
+thread and stratum minimums, and per-metric denominators. Synthetic fixtures
+and passing unit tests do not constitute G6 or a production quality claim.
+Promotion also requires the loaded candidate binding and independent approval
+receipt; an aggregate report alone is insufficient. Thresholds are evaluated against the held-out `test` split; the
 aggregate report is descriptive and cannot hide a test failure.
 
 The focused regression is run through the isolated project runner:
@@ -294,7 +311,7 @@ snapshotモードの評価票source_textは、対象message IDと、親返信関
 
 reviewed.jsonlに方式別の記入値を保存する。元評価票のhashをhuman_labels=nullとして再検査し、原文/選択肢変更、review IDの重複/欠落、未記入、方式対応表の不正を拒否する。model/DBには接続しない。この段階は対応の復元だけであり、記入者が人である証明、記入内容の妥当性、semantic_evaluationへの品質ラベル変換、合否判断は行わない。
 
-評価reportにはcriteria_versionに加え、正規化済みcriteria全体とcriteria_sha256を含める。任意の余剰キーではなく、実際にgateへ適用した閾値・対象指標・必要split・最小人手件数を固定する。同じ版名のファイルが書き換わっても内容差を検出できる。正式な初期基準は `evaluation/g6-criteria-v1.json`。このhashは評価開始前に固定したことの時刻証明にはならないため、評価計画とともに元ファイルを保管する。
+評価reportにはcriteria_versionに加え、正規化済みcriteria全体とcriteria_sha256を含める。任意の余剰キーではなく、実際にgateへ適用した閾値・対象指標・必要split・最小人手件数を固定する。同じ版名のファイルが書き換わっても内容差を検出できる。正式な初期基準 `evaluation/g6-criteria-v1.json` は履歴比較用に保持する。現行の昇格基準は `evaluation/g6-criteria-v2.json` であり、v1の結果では昇格できない。このhashは評価開始前に固定したことの時刻証明にはならないため、評価計画とともに元ファイルを保管する。
 
 ### 方式を伏せた主張ID
 
@@ -311,7 +328,7 @@ reviewed.jsonlに方式別の記入値を保存する。元評価票のhashをhu
 completedの各human_labels[A/B/C]には自由記述だけでなく評価器のlabel schema（明示source/version/facts/claims/loops）が必要。全対象集合・account/project/split・bundle指紋・主張本文を照合し、元ラベルがあるrecordは上書きしない。既存validatorで構造を検査する。syntheticはsyntheticのまま保持し、humanへの自動昇格はしない。人間による記入の真正性と、固定前の構造化factsの生成来歴は別途確認が必要。
 
 
-### 定量評価の実行順序
+### 旧3方式比較の定量評価手順（v1履歴比較）
 
 1. 許可済みの固定入力・3方式の実出力から、方式ごとの未ラベルcandidate-recordsを準備する。計測値の欠測を0で埋めない。各recordの`artifact_ids.final_id`に対象`semantic_summary`のartifact IDを入れ、下の`--lifecycle-snapshot`で`verified_fact_ids`・`rendered_fact_ids`・`delivered_fact_ids`を台帳snapshotから付与する（読み取り専用。証明できない段階は付与せず、理由コードを`fact_lifecycle_observations`に残す）。既に段階リストを持つrecordは上書きせず拒否する。この付与は評価票作成（candidate全体のhash固定）より**前**に行う。
 2. comparison.jsonlの各outputへ対応candidate全体をevaluation_candidateとして含める。claim_textsの順番をcandidate.claimsと揃え、IDはc1,c2…にする。原文・候補・方式対応を保存する。
@@ -335,11 +352,13 @@ python3 mcs/semantic/eval/semantic_evaluation.py --input new-labelled/evaluation
   --output audited-report.json
 ```
 
+この手順はv1比較の再現用で、現行v2の封印runnerや独立承認receiptを生成しない。現行の実行順序は[封印候補評価](SEALED_CANDIDATE_EVALUATION.md)を参照する。
+
 これらのファイル名は入力例であり、実人手ラベル入りのデータを同梱したという意味ではない。snapshotモードが返す定性比較資料に架空の構造化factsや計測値を補って定量評価へ進めない。
 
 ## 要約v4次期推論エンジン統合実装計画（段階実装中）
 
-この節は既存のG6評価契約を変えず、次期**推論エンジンv4**の実装・検証・切替条件を定める。七領域と要約刷新を一つにしたタスク、依存関係、障害復旧、Discord/Slackのスレッド配送、導入更新、外部連携の詳細は、Hermes作業場の `/Users/yusuke/.hermes/hermes-agent/.omo/plans/mcs-seven-domain-reliability.md` のIS-1〜IS-8 / Todo 1〜20を正本とする。ここではv4の臨床品質・速度・排他・版移行を読み切れる契約にする。計画段階であり、実MCS、患者データ、ローカルLLM、Jev、Discord/Slack、本番DBや稼働設定にはアクセスも変更もしない。
+この節は当初の推論エンジン計画を記録する。現行G6の追加条件は封印候補評価仕様を優先する。以下は次期**推論エンジンv4**の実装・検証・切替条件を定める。七領域と要約刷新を一つにしたタスク、依存関係、障害復旧、Discord/Slackのスレッド配送、導入更新、外部連携の詳細は、Hermes作業場の `/Users/yusuke/.hermes/hermes-agent/.omo/plans/mcs-seven-domain-reliability.md` のIS-1〜IS-8 / Todo 1〜20を正本とする。ここではv4の臨床品質・速度・排他・版移行を読み切れる契約にする。計画段階であり、実MCS、患者データ、ローカルLLM、Jev、Discord/Slack、本番DBや稼働設定にはアクセスも変更もしない。
 
 ### 計画作成時の制約と区別する版
 
@@ -387,7 +406,7 @@ v4がPENDING/NEEDS_REVIEW、原文変更中、Jev未評価、旧参照未移行�
 
 1. **契約・移行**: 実装時には合成temp DBで旧v1/v2/v3の実在する成果物+QC→v4 PASS/失敗→旧worker遅延完了→現行版切替→旧生成payloadの上書き→rollbackを実行し、原文・既発行receiptを保ったまま非PASSや遅延旧結果がv4のcurrentを覆わないことを示す。新保存契約を知らない旧drainer/tick/手動workerを停止・退役させてから共存を始める。v3エンジンによる履歴の新規推論受付は既定0、旧成果物の**v4への再解析**は対象source/依存閉包と期限を固定した有限cohortで順次進める。総LLM/Jev要求・token・再試行上限、QC遅延高水位、停止/再開cursorを永続化し、再起動/日付変更で補充しない。旧履歴全件の処理完了はv4新着移行の前提にしないが、未移行履歴に依存する患者現在値を「完全なv4」と表示しない。旧PASSのfact-source切替は新しい内部fingerprintを要求する。
 2. **shadow比較**: v4は新着・許可された有限backfillだけを処理し、visibleな旧版選択と通知を変えずに、S0–S8のreceipt、全factの描画、通常/専用通知の合成結果を比較する。Jev未設定なら勝手に許可や予算を付与せず、未評価をPASSにしない。途中停止、予算不足、入力変更、旧worker混在、41/120件、本文第5part、候補枠数・複数クライアントの競合を合成故障注入する。
-3. **品質・性能ゲート**: `evaluation/g6-criteria-v1.json`のheld-out testで人手ラベル**200件以上**、`mandatory_fact_recall=rendered_fact_recall=evidence_closure=1.0`、`silent_drop=critical_overclaim=loop_false_resolution=0`、既存のrecall/precision/defer閾値を一つも緩めない。薬剤師の負担軽減は盲検比較で確認時間・照合手順と誤見逃しを実測して別に証明する。`evaluation/README.md`の**全巡回p95<15分**を維持し、従来2枠に対して同条件でRT遅延の非劣化と計測誤差を超える処理容量改善を確認する。合成評価だけで臨床G6合格や短縮を宣言しない。
+3. **品質・性能ゲート**: 現行 `evaluation/g6-criteria-v2.json` の封印済みheld-out testで許可済み実データの人手ラベル**200件以上**と患者/thread/層別・metric別分母下限を満たし、`mandatory_fact_recall=rendered_fact_recall=evidence_closure=1.0`、`silent_drop=critical_overclaim=loop_false_resolution=0`、既存のrecall/precision/defer閾値を一つも緩めない。薬剤師の負担軽減は盲検比較で確認時間・照合手順と誤見逃しを実測して別に証明する。`evaluation/README.md`の**全巡回p95<15分**を維持し、従来2枠に対して同条件でRT遅延の非劣化と計測誤差を超える処理容量改善を確認する。合成評価だけで臨床G6合格や短縮を宣言しない。
 4. **本番移行の停止点**: 原文の継続保存・旧参照の安全な切替・全クライアント入口排他・採用枠数での実モデル容量・G6人手評価・version-bound activationのいずれかが欠ければ切替しない。configだけでcanonical/enforceを有効化しない。運用者が別途承認した設定と評価receiptに従い、小さな対象→段階拡大し、問題時には新規v4受付を閉じ、まだ旧生成成果が存在する対象だけ旧版を明示選択する。既に上書き済みなら原文+pendingへ戻し、有限の再処理なしに旧結果を復元したと偽らない。既発行通知・原文は切替操作で削除しない。
 
 本節は現行実装の合格証明ではない。コードと資料の照合表、反例、合成実行の範囲、未測定条件はHermes作業場の調査記録 `/Users/yusuke/.hermes/hermes-agent/.omo/ulw-research/20260925-112553/SYNTHESIS.md` に残す。今ある実証は完全合成の41件欠落、policy fingerprint衝突、Jev回答欠落、非PASS v4 reader誤選択と、既存のmandatory表示・修復テスト6件の成功までである。

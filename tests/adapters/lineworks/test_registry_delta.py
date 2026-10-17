@@ -79,7 +79,7 @@ def test_committed_malformed_delta_row_fails_closed(tmp_path, line):
         registry.Registry(str(tmp_path))
 
 
-def test_lineworks_burst_rewrites_registry_once_and_retires_before_send(tmp_path, monkeypatch):
+def test_lineworks_burst_rewrites_registry_once_and_retires_after_success(tmp_path, monkeypatch):
     w = world(tmp_path)
     worker = lw_worker(w)
     writes = _count_rewrites(monkeypatch, w.reg)
@@ -89,7 +89,7 @@ def test_lineworks_burst_rewrites_registry_once_and_retires_before_send(tmp_path
     send = w.client.send_message
 
     def checked(content, **targets):
-        # the durable state at HTTP time: the old pin is already gone
+        # The old pin survives until the replacement is confirmed.
         seen.append(registry.Registry(w.dirs["state"], scope=w.settings).token(TOKEN))
         return send(content, **targets)
 
@@ -104,7 +104,8 @@ def test_lineworks_burst_rewrites_registry_once_and_retires_before_send(tmp_path
             assert writes == []
     asyncio.run(burst())
     assert len(writes) == 1
-    assert seen and seen[0] is None
+    assert seen and seen[0] is not None
+    assert w.reg.token(TOKEN) is None
     restored = registry.Registry(w.dirs["state"], scope=w.settings)
     assert any(c.get("card_key") == "card-4" for c in restored._data["tokens"].values())
 

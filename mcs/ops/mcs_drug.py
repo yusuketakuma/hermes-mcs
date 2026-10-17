@@ -1,4 +1,4 @@
-"""医薬品辞書の状態・候補照会・参考検索・更新差分・更新影響を読取り専用で確認し、同梱マスターから私有辞書を新規作成する。"""
+"""薬剤言及履歴・辞書照会と人承認付きの別名切替を扱う。"""
 from __future__ import annotations
 
 import argparse
@@ -307,10 +307,55 @@ def _bundled_display(command, report):
     print("  python3 mcs/ops/mcs_setup.py init --set " + shlex.quote("drug_map=" + setting))
 
 
+def _workflow(args):
+    import drug_alias
+    import drug_timeline
+    import mcs_requests
+    import mcs_view
+    try:
+        view = mcs_view.View(args.snapshot)
+        try:
+            if args.command == "timeline":
+                report = drug_timeline.timeline(view, args.project, name=args.name,
+                    since=args.since, until=args.until, limit=args.limit, cursor=args.cursor, cfg=load_config())
+            elif args.command == "reconcile":
+                import drug_reconciliation
+                report = drug_reconciliation.reconcile(view, args.project, since=args.since,
+                    until=args.until, limit=args.limit, cursor=args.cursor, cfg=load_config())
+            elif args.command == "alias-propose":
+                report = drug_alias.proposal(view.db, load_config(), args.alias, args.target)
+                drug_alias._write_new(args.out, mcs_requests.canonical(report))
+            elif args.command == "alias-receipt":
+                if not mcs_requests.valid_uuid(args.command_id):
+                    raise ValueError("bad_command_id")
+                row = view.db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
+                                      (args.command_id,)).fetchone()
+                report = json.loads(row[0]) if row else {"outcome": "not_observed"}
+                if row and report.get("cmd") not in ("ops.drug_alias_apply", "ops.drug_alias_rollback"):
+                    report = ({k: report.get(k) for k in ("command_id", "outcome", "error")}
+                              if report.get("outcome") == "rejected" else {"outcome": "not_observed"})
+            else:
+                request = {"version": 1, "cmd": "ops.drug_alias_" + args.command.split("-")[1],
+                    "command_id": args.command_id, "actor": args.actor,
+                    "human_confirmed": args.confirm_human, "reason": args.reason}
+                if args.command == "alias-apply":
+                    request["proposal"] = drug_alias.private_json(args.proposal, 16384)[0]
+                else:
+                    request["approval_id"] = args.approval_id
+                report = mcs_requests.enqueue(request, args.cmd_dir)
+        finally:
+            view.close()
+    except (ValueError, TypeError, OSError, sqlite3.Error):
+        print("drug: snapshot・私有ファイル・別名・世代・人承認条件を確認してください。", file=sys.stderr)
+        return 1
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("lookup", "search"):
+    for name in ("lookup", "search", "related"):
         command = sub.add_parser(name)
         command.add_argument("name")
         command.add_argument("--dictionary", help="私有辞書の絶対パス（省略時は既存設定）")
@@ -327,6 +372,21 @@ def main(argv=None) -> int:
                                  help="公開スナップショット（省略時は既定の公開先）")
         command.add_argument("--limit", type=_limit, default=50)
         command.add_argument("--json", action="store_true")
+    command = sub.add_parser("check-surface", help="記載された薬名・規格・剤形・単位の差を確認")
+    command.add_argument("name")
+    command.add_argument("--reference", required=True)
+    command.add_argument("--unit")
+    command.add_argument("--reference-unit")
+    command.add_argument("--json", action="store_true")
+    command = sub.add_parser("master-impact", help="公式マスターの版間差分と採用辞書への影響を確認")
+    for side in ("before", "after"):
+        command.add_argument("--" + side, type=Path, required=True, help="CSV又はZIPの原本")
+        command.add_argument("--" + side + "-pin", type=Path, required=True,
+                             help="入力原本のSHA256・版・仕様を固定するpin JSON")
+    command.add_argument("--dictionary", help="採用辞書の絶対パス（省略時は既存設定）")
+    command.add_argument("--sha256", help="採用辞書のSHA256")
+    command.add_argument("--limit", type=_limit, default=100)
+    command.add_argument("--json", action="store_true")
     command = sub.add_parser("install-bundled",
                              help="同梱の公式医薬品マスターから私有辞書を新規作成する")
     command.add_argument("--terms-checked-on", required=True,
@@ -339,7 +399,72 @@ def main(argv=None) -> int:
     command.add_argument("--json", action="store_true")
     command = sub.add_parser("status", help="同梱版と設定中の辞書の対応を確認する")
     command.add_argument("--json", action="store_true")
+    for name in ("timeline", "reconcile"):
+        command = sub.add_parser(name, help="薬剤の変更経緯・構造化薬歴との照合候補")
+        command.add_argument("--project", type=int, required=True)
+        if name == "timeline":
+            command.add_argument("--name")
+        command.add_argument("--since", type=int)
+        command.add_argument("--until", type=int)
+        command.add_argument("--cursor")
+        command.add_argument("--limit", type=_limit, default=50)
+        command.add_argument("--snapshot", type=Path, default=SNAPSHOT)
+        command.add_argument("--json", action="store_true")
+    command = sub.add_parser("alias-propose", help="別名の辞書衝突と影響をプレビュー")
+    command.add_argument("alias")
+    command.add_argument("target")
+    command.add_argument("--snapshot", type=Path, default=SNAPSHOT)
+    command.add_argument("--out", type=Path, required=True, help="新規の私有提案JSON（既存は上書きしない）")
+    command.add_argument("--json", action="store_true")
+    for name in ("alias-apply", "alias-rollback"):
+        command = sub.add_parser(name, help="管理者による辞書切替/復旧を人承認付きでenqueue")
+        if name == "alias-apply":
+            command.add_argument("--proposal", type=Path, required=True)
+        else:
+            command.add_argument("--approval-id", required=True)
+        command.add_argument("--confirm-human", action="store_true", required=True)
+        command.add_argument("--reason", required=True,
+                             choices=["dictionary_alias_reviewed", "dictionary_alias_rollback"])
+        command.add_argument("--actor", required=True)
+        command.add_argument("--command-id", required=True, help="再実行時も同じUUIDを指定")
+        command.add_argument("--snapshot", type=Path, default=SNAPSHOT)
+        command.add_argument("--cmd-dir", type=Path, default=Path(HOME) / "data/cmd")
+        command.add_argument("--json", action="store_true")
+    command = sub.add_parser("alias-receipt", help="辞書操作の保存済みreceiptをsnapshotから確認")
+    command.add_argument("command_id")
+    command.add_argument("--snapshot", type=Path, default=SNAPSHOT)
+    command.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
+    if args.command == "master-impact":
+        import import_drug_master as importer
+        import drug_master_compare
+        try:
+            before_pin = loads_dict(importer._read(args.before_pin, 65536))
+            after_pin = loads_dict(importer._read(args.after_pin, 65536))
+            if before_pin is None or after_pin is None:
+                raise ValueError("master_pin_required")
+            if args.dictionary is not None or args.sha256 is not None:
+                adopted = _dictionary(args.dictionary, args.sha256)
+            else:
+                adopted, _ = drug_map.configured(load_config())
+            report = drug_master_compare.compare(args.before, before_pin,
+                args.after, after_pin, adopted=adopted, limit=args.limit)
+        except (ValueError, TypeError, OSError, importer.MasterError):
+            print("drug: マスター原本・pin・採用辞書の権限とSHA256を確認してください。", file=sys.stderr)
+            return 1
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+    if args.command == "check-surface":
+        try:
+            report = drug_map.compare_surfaces(args.name, args.reference,
+                observed_unit=args.unit, reference_unit=args.reference_unit)
+        except (ValueError, TypeError):
+            print("drug: 薬名・規格・単位の入力を確認してください。", file=sys.stderr)
+            return 1
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+    if args.command in ("timeline", "reconcile", "alias-propose", "alias-apply", "alias-rollback", "alias-receipt"):
+        return _workflow(args)
     if args.command in ("install-bundled", "status"):
         import import_drug_master as importer
         try:
@@ -368,7 +493,9 @@ def main(argv=None) -> int:
                       if args.command == "impact" else before.diff(after, limit=args.limit))
         else:
             dictionary = _dictionary(args.dictionary, args.sha256)
-            if args.command == "search":
+            if args.command == "related":
+                report = dictionary.related_names(args.name, limit=args.limit)
+            elif args.command == "search":
                 report = dictionary.search(args.name, limit=args.limit)
             else:
                 report = dictionary.lookup(args.name)
@@ -387,7 +514,7 @@ def main(argv=None) -> int:
     except (ValueError, TypeError, OSError):
         print("drug: 辞書の設定・所有者権限・SHA256を確認してください。", file=sys.stderr)
         return 1
-    if args.json:
+    if args.json or args.command == "related":
         print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
     else:
         _display(report, args.command)

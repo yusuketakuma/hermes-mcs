@@ -115,6 +115,12 @@ POST_PART = re.compile(r"([ms]:[^#]+)#([1-9][0-9]*)")
 def chunk_text(spec, name, chunk):
     """A body chunk as posted: thread posts carry their own ↳ line, so only
     multi-chunk posts get （k/n）; card overflow is marked as continuation."""
+    if ":header#" in name and spec.get("op") == "update":
+        group = name.split(":header#", 1)[0]
+        bodies = [p for p in spec["parts"].get("manifest", [])
+                  if p.get("name", "").startswith(group + "#")]
+        suffix = "\n（本文は変更なし）" if bodies and all(p.get("prior_remote_id") for p in bodies) else ""
+        return "↳ 更新 " + chunk.removeprefix("↳ ") + suffix
     if name.startswith("display#"):
         return "↳ 続き\n" + chunk
     post = POST_PART.fullmatch(name)
@@ -158,6 +164,10 @@ class Sender:
         if any(spec["delivery"].get(key) != self.settings[key] for key in SCOPE_KEYS) \
                 or not self.route_current(spec):
             return {"result": "not_sent", "error_code": "scope_mismatch"}
+        reused = next((p.get("prior_remote_id") for p in spec["parts"].get("manifest", [])
+                       if p["kind"] == "card"), None)
+        if reused:
+            return {"result": "delivered", "message_id": reused}
         try:
             content = ({"type": "text",
                         "text": "\n".join(filter(None, ("⛔ 取り下げ済み", cards.heading(spec))))}
@@ -207,9 +217,15 @@ class DeliveryWorker(BaseWorker):
             return {"result": "not_sent", "error_code": "scope_mismatch"}
         # A replaced/revoked post and its already-open DM previews share the old pin.
         # Retire before HTTP even if the replacement later has an unknown outcome.
-        self._reg.retire_card_tokens(spec["card_key"])
+        if spec["op"] == "revoke":
+            self._reg.retire_card_tokens(spec["card_key"])
         outcome = await self._sender.perform(claim["spec"])
         if outcome["result"] == "delivered" and claim["spec"]["op"] != "revoke":
+            reused = any(p.get("prior_remote_id") for p in spec["parts"].get("manifest", [])
+                         if p["kind"] == "card")
+            if reused:
+                return outcome  # keep the original token lifetime and confirmation state
+            self._reg.retire_card_tokens(spec["card_key"])
             tokens = {token: {**context, **self.scope(),
                               "route_epoch": spec["delivery"]["route_epoch"],
                               "message_id": outcome["message_id"]}
