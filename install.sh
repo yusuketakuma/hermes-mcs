@@ -308,9 +308,8 @@ raise SystemExit(0 if valid else 1)
 ' 2>/dev/null
 }
 
-# Updater-proven runtime migration: the inherited run.lock FD and the
-# journaled backup path must both verify; prints the backup path.
-migration_backup() {
+# Verify the inherited run.lock and journaled path, including resumed installs.
+migration_path() {
     _mb_py="${PYBIN:-$(find_py || true)}"
     [ -n "$_mb_py" ] || return 1
     "$_mb_py" -I -c '
@@ -328,7 +327,7 @@ try:
             or (lock.st_dev, lock.st_ino) != (held.st_dev, held.st_ino)):
         raise ValueError
     backup = os.environ.get("MCS_UPDATE_RUNTIME_BACKUP", "")
-    if (not os.path.isabs(backup) or os.path.lexists(backup)
+    if (not os.path.isabs(backup)
             or not re.fullmatch(re.escape(sys.argv[1]) + r"\.pre-python314(?:\.[1-9][0-9]*)?", backup)):
         raise ValueError
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -336,6 +335,13 @@ try:
 except (OSError, ValueError, OverflowError):
     raise SystemExit(1) from None
 ' "$VENV" "$MCS_DATA/run.lock"
+}
+
+# Moving the old venv always requires an unused backup; never replace one.
+migration_backup() {
+    _mb_backup="$(migration_path)" || return 1
+    [ ! -e "$_mb_backup" ] && [ ! -L "$_mb_backup" ] || return 1
+    printf '%s\n' "$_mb_backup"
 }
 
 # [project].requires-python of the Hermes checkout, judged by the Python 3.14
@@ -818,50 +824,67 @@ fi
     || die "$HERMES_DIR は存在しますが Git で取得したフォルダではありません。退避（mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")）後、install.sh を再実行してください"
 HEAD_SHA="$(git -C "$HERMES_DIR" rev-parse HEAD)" \
     || die "$HERMES_DIR の現在の版（HEAD）を読み取れません。修復または退避して install.sh を再実行してください"
+_runtime_backup=""
 if [ -f "$CLONE_MARK" ]; then
     [ "$HEAD_SHA" = "$HERMES_PIN" ] \
         || die "取得した版 $HEAD_SHA は指定版 $HERMES_PIN と一致しません。install.sh を再実行してください"
     rm -f "$CLONE_MARK"
     ok "Hermes の固定版 $HERMES_PIN を取得しました"
     _ck="固定版 $HERMES_PIN を取得"
-elif [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] && ! py_ok "$VENV_PY" 14 15 \
-        && [ -n "${MCS_UPDATE_KEEP_HERMES_CHECKOUT:-}" ]; then
+elif [ -n "${MCS_UPDATE_KEEP_HERMES_CHECKOUT:-}" ] \
+        && { [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; }; then
     # Operator-confirmed (mcs_upgrade --keep-hermes-checkout): keep this exact,
     # clean checkout that already declares Python 3.14 support; never move it.
     [ "$HEAD_SHA" = "$MCS_UPDATE_KEEP_HERMES_CHECKOUT" ] \
         || die "Python 移行: $HERMES_DIR の版 $HEAD_SHA が確認済みの $MCS_UPDATE_KEEP_HERMES_CHECKOUT と一致しません。既存ソースと環境は保持しました"
-    [ -z "$(git -C "$HERMES_DIR" status --porcelain --untracked-files=no)" ] \
+    _checkout_status="$(git -C "$HERMES_DIR" status --porcelain --untracked-files=no)" \
+        || die "Python 移行: $HERMES_DIR の変更状態を確認できません。既存ソースと環境は保持しました"
+    [ -z "$_checkout_status" ] \
         || die "Python 移行: $HERMES_DIR にコミットされていない変更があります。既存ソースと環境は保持しました"
     hermes_admits_314 \
         || die "Python 移行: $HERMES_DIR は Python 3.14 対応を宣言していません。既存ソースと環境は保持しました"
-    migration_backup >/dev/null \
+    migration_path >/dev/null \
         || die "Python 移行のロックまたはバックアップが不正です。既存ソースと環境は保持しました"
     ok "Python 3.14 への移行に、確認済みの Hermes $HEAD_SHA を保持します"
     _ck="確認済みの版 $HEAD_SHA を保持"
+elif [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; then
+    # Re-check even at the target pin: a crash may precede the venv move,
+    # and the checkout may have been edited before this retry.
+    _branch_status=0
+    git -C "$HERMES_DIR" symbolic-ref -q HEAD >/dev/null 2>&1 || _branch_status=$?
+    case "$_branch_status" in 0|1) ;; *)
+        die "Python 移行: $HERMES_DIR のブランチ状態を確認できません。既存ソースと環境は保持しました" ;;
+    esac
+    _checkout_status="$(git -C "$HERMES_DIR" status --porcelain --untracked-files=no)" \
+        || die "Python 移行: $HERMES_DIR の変更状態を確認できません。既存ソースと環境は保持しました"
+    if [ "$_branch_status" -eq 0 ] || [ -n "$_checkout_status" ]; then
+        die "Python 移行: $HERMES_DIR はブランチ上にあるか未コミットの変更があります。既存ソースと環境は保持しました"
+    fi
+    _runtime_backup="$(migration_path)" \
+        || die "Python 移行のロックまたはバックアップが不正です。既存ソースと環境は保持しました"
+    if [ "$HEAD_SHA" = "$HERMES_PIN" ]; then
+        skip "Hermes は固定版 $HERMES_PIN を取得済みです"
+        _ck="取得済みの固定版を保持"
+    else
+        # Update only a recognized, clean, detached old pin. Its complete
+        # dependency environment is backed up even if Python is already 3.14.
+        case " $HERMES_PREVIOUS_PINS " in *" $HEAD_SHA "*) ;; *)
+            die "Python 移行: $HERMES_DIR は未検証の版 $HEAD_SHA です。$HERMES_PIN への変更を確認・実施してから再実行してください。既存環境は保持しました" ;;
+        esac
+        migration_backup >/dev/null \
+            || die "Python 移行のロックまたはバックアップが不正です。既存ソースと環境は保持しました"
+        if ! git -C "$HERMES_DIR" fetch -q "$HERMES_REPO" "$HERMES_PIN" \
+            || ! git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN"; then
+            die "Python 移行: $HERMES_DIR を $HERMES_PIN に変更できません。既存環境は保持しました"
+        fi
+        [ "$(git -C "$HERMES_DIR" rev-parse HEAD)" = "$HERMES_PIN" ] \
+            || die "Python 移行: 変更後も $HERMES_DIR が指定版 $HERMES_PIN と一致しません"
+        ok "Hermes を $HEAD_SHA から $HERMES_PIN へ変更しました"
+        _ck="旧固定版から $HERMES_PIN へ変更"
+    fi
 elif [ "$HEAD_SHA" = "$HERMES_PIN" ]; then
     skip "Hermes は固定版 $HERMES_PIN を取得済みです"
     _ck="取得済みの固定版を保持"
-elif [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] && ! py_ok "$VENV_PY" 14 15; then
-    # Runtime migration: the earlier pins require Python <3.14, so the
-    # rebuilt venv needs the current pin. Move only a clean, detached,
-    # previously validated checkout, and only once the lock verifies.
-    case " $HERMES_PREVIOUS_PINS " in *" $HEAD_SHA "*) ;; *)
-        die "Python 移行: $HERMES_DIR は未検証の版 $HEAD_SHA です。$HERMES_PIN への変更を確認・実施してから再実行してください。既存環境は保持しました" ;;
-    esac
-    if git -C "$HERMES_DIR" symbolic-ref -q HEAD >/dev/null 2>&1 \
-            || [ -n "$(git -C "$HERMES_DIR" status --porcelain --untracked-files=no)" ]; then
-        die "Python 移行: $HERMES_DIR はブランチ上にあるか未コミットの変更があります。既存ソースと環境は保持しました"
-    fi
-    migration_backup >/dev/null \
-        || die "Python 移行のロックまたはバックアップが不正です。既存ソースと環境は保持しました"
-    if ! git -C "$HERMES_DIR" fetch -q "$HERMES_REPO" "$HERMES_PIN" \
-        || ! git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN"; then
-        die "Python 移行: $HERMES_DIR を $HERMES_PIN に変更できません。既存環境は保持しました"
-    fi
-    [ "$(git -C "$HERMES_DIR" rev-parse HEAD)" = "$HERMES_PIN" ] \
-        || die "Python 移行: 変更後も $HERMES_DIR が指定版 $HERMES_PIN と一致しません"
-    ok "Python 3.14 用に Hermes を $HEAD_SHA から $HERMES_PIN へ変更しました"
-    _ck="旧固定版から $HERMES_PIN へ変更"
 else
     warn "$HERMES_DIR は $HEAD_SHA です（指定固定版 $HERMES_PIN とは異なります）"
     warn "  取得済みソースを保持します。版の変更は更新手順に従ってください"
@@ -870,11 +893,16 @@ fi
 
 # venv: converge on re-run — a venv without a usable python is rebuilt,
 # and PIP_MARK brackets the package install so a failed one is retried
-if ! py_ok "$VENV_PY" 14 15; then
+if { [ -n "$_runtime_backup" ] && [ ! -e "$_runtime_backup" ] && [ ! -L "$_runtime_backup" ] \
+        && { [ -e "$VENV" ] || [ -L "$VENV" ]; }; } || ! py_ok "$VENV_PY" 14 15; then
     PYBIN="$(find_py)" \
         || die "Hermes には Python 3.14 が必要です（3.15以降は対象外）。brew install python@3.14 を実行して install.sh を再実行してください"
     if [ -e "$VENV" ]; then
-        warn "$VENV の Python 3.14 が使用できないため環境を再作成します"
+        if py_ok "$VENV_PY" 14 15; then
+            warn "$VENV の実行環境を退避して再作成します"
+        else
+            warn "$VENV の Python 3.14 が使用できないため環境を再作成します"
+        fi
     fi
     preserve_old_venv
     uv venv --python "$PYBIN" "$VENV" || die "uv による Python 環境の作成に失敗しました。上のエラーを確認し install.sh を再実行してください"
