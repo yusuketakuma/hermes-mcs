@@ -225,6 +225,7 @@ def test_expired_session_401_keeps_attachment_pending(tmp_path, monkeypatch):
     m.attachments = [_att("file0")]
     db.save_messages([m])
     monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)  # independent of the host's free disk
     adapter = SimpleNamespace(download=_raise_401,
                               _probe_session_ok=lambda: False)
     with pytest.raises(mcs_adapter.SessionExpired):
@@ -240,6 +241,7 @@ def test_401_with_live_session_is_recorded(tmp_path, monkeypatch):
     m.attachments = [_att("file0")]
     db.save_messages([m])
     monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)  # independent of the host's free disk
     adapter = SimpleNamespace(download=_raise_401,
                               _probe_session_ok=lambda: True)
     result = {"errors": []}

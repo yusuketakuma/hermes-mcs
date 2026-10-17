@@ -29,6 +29,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
+from clinical_values import FAMILY_PERSON, OTHER_PERSON, PAST_MARK
 from patient_context import extract_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import ELIGIBLE_MESSAGE
@@ -45,7 +46,22 @@ _SYMPTOMS = ("発熱", "お熱", "高熱", "血尿", "疼痛", "痛み", "嘔気
              "意識消失", "意識障害", "意識低下", "意識がない", "意識なし",
              "意識不明", "反応がない", "食欲低下", "食欲不振", "不眠", "せん妄",
              "誤嚥", "嚥下", "出血", "褥瘡", "皮膚", "倦怠", "疲労", "脱水",
-             "低血糖")
+             "低血糖",
+             # care/nursing wording: excretion, swallowing, skin, behaviour, incidents
+             "失禁", "尿閉", "頻尿", "血便", "下血", "むせ", "口腔乾燥", "口内炎", "しびれ", "麻痺",
+             "振戦", "ふらつき", "傾眠", "意欲低下", "不安", "抑うつ", "不穏", "興奮", "幻覚", "妄想",
+             "徘徊", "帰宅願望", "介護抵抗", "拒薬", "拒食", "掻痒", "かゆみ", "発赤", "発汗", "冷汗",
+             "チアノーゼ", "頻脈", "徐脈", "不整脈", "体重減少", "転落", "誤薬")
+# Only particles, fillers, time words or further listed symptoms may sit between a
+# symptom and its negation, so 「発熱・疼痛なし」「発熱は本日はなし」 are negated while
+# 「痛みが取れない」「食欲不振で食べられない」「発熱あり、疼痛なし」 keep 発熱 positive, and
+# a negated negation (「ないわけではない」) stays positive.
+_LISTED_SYMPTOM = "|".join(map(re.escape, sorted(_SYMPTOMS, key=len, reverse=True)))
+_SYMPTOM_NEGATION = re.compile(
+    r"さ?(?:[はもがの]|の?訴え|症状|等|など|特に|本日|今日|今回|現在|今朝|夜間|日中|明らかな|[ \t　]"
+    r"|[・/／、とや](?:" + _LISTED_SYMPTOM + r"))*"
+    r"(?:なし|無し|ありません|ない|認めず|認めない|認められず|見られず|見られない|見られません|否定|[(（][-−－][)）])"
+    r"(?!(?:では|じゃ)(?:ない|ありません)|わけ(?:では|じゃ)(?:ない|ありません))")
 _ADHERENCE = ("残薬", "飲み忘れ", "飲み残し", "未使用", "服薬不良",
               "アドヒアランス", "一包化", "お薬カレンダー", "自己注射",
               "残あり", "残なし")
@@ -89,8 +105,7 @@ _URGENT_INACTIVE = re.compile(
     r"(?=$|[、,]|ので|ため|から|けど|けれど|が|と))")
 
 _SELF_PERSON = r"ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?"
-_FAMILY_PERSON = r"ご家族|家族|お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|母|父|娘(?:さん|様)?|息子(?:さん|様)?|夫|妻|お?兄(?:さん|様)?|お?姉(?:さん|様)?|(?:弟|妹|孫)(?:さん|様)?|同居者"
-_OTHER_PERSON = r"本人以外|他者|他人|第三者|他の(?:患者|利用者)|他患者|別の(?:患者|利用者)|別患者|(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ)(?:さん|様)?"
+_FAMILY_PERSON, _OTHER_PERSON = FAMILY_PERSON, OTHER_PERSON
 _CLINICAL_OWNER = (r"症状|状態|体調|意識|呼吸|体温|血圧|収縮期|拡張期|容態|病歴|入院|退院|搬送|死亡|脈拍|酸素|薬|服薬|Cr|eGFR|AST|ALT|BUN|HbA1c|Hb|Na|K|血糖|採血|検査|BP|SpO2|熱|体重|身長|weight|height|BS|Glu|glucose|BNP|INR|CRP|Alb|[胸腹頭背腰]痛|"
                    + "|".join(map(re.escape, _SYMPTOMS)))
 _NAMED_PERSON = r"[ぁ-んァ-ヶ一-龥A-Za-z0-9]{1,16}(?:さん|様)"
@@ -108,6 +123,10 @@ _SCOPE_HEADING = re.compile(
 _REPORTING = re.compile(r"(?:より|から|が(?:報告|連絡|説明|相談|話)|は(?:報告|連絡|説明|相談|話))")
 _CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
 _NONCURRENT_MARK = re.compile(r"過去|既往|以前(?!から|より)|先月(?!から|より)|先週(?!から|より)|昨年|一昨年")
+# A reading taken 昨日/前回 is no current measurement, while 昨日中止 stays a recent change.
+_MEASURED_PAST_MARK = re.compile(rf"(?:{PAST_MARK})(?!から|より)")
+# 「昨日、体温…」: a past word heading the sentence before a comma dates every reading of it.
+_SENTENCE_PAST_LEAD = re.compile(rf"[ \t　]*(?:{PAST_MARK})(?!から|より)(?:は|に|の|も)?[、,]")
 _CONDITIONAL_MARK = re.compile(
     r"もし|万一|万が一|(?:場合|とき|(?<![0-9０-９一二三四五六七八九十])(?<!採血)(?<!測定)(?<!検査)(?<!服用)(?<!投与)(?<!訪問)(?<!往診)時)(?:は|には|に)|"
     r"なら(?!ない|なく|なかった|れ|ず|ぬ)|たら(?!しい)|ければ")
@@ -230,7 +249,8 @@ def _scope_events(body, patient_name, provider_fields):
     return tuple(sorted(events, key=lambda event: event[0]))
 
 
-def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False):
+def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False,
+                         measurement=False):
     """Resolve an original span's reported person and explicit noncurrent scope, never from a keyword mask."""
     if not isinstance(body, str) or not 0 <= start < end <= len(body):
         return "unknown"
@@ -263,7 +283,11 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
         return "conditional"
     if period != "current" and not _CURRENT_MARK.search(clause):
         return period
-    if _NONCURRENT_MARK.search(clause) and not (_CURRENT_MARK.search(clause) or _URGENT_REQUEST.search(clause)):
+    sentence = max(body.rfind(c, 0, start) for c in "。！？!?\n") + 1
+    if (_NONCURRENT_MARK.search(clause)
+            or (measurement and (_MEASURED_PAST_MARK.search(clause)
+                                 or _SENTENCE_PAST_LEAD.match(body, sentence, start)))) \
+            and not (_CURRENT_MARK.search(clause) or _URGENT_REQUEST.search(clause)):
         return "past"
     if re.search(r"(?:予定|目標|参考|基準)(?:の|は|値|:|：)", clause) and not _CURRENT_MARK.search(clause):
         return "planned"
@@ -305,7 +329,8 @@ def patient_vitals(values, body, *, patient_name=None):
     kept = {}
     for key, pattern in _VITAL_PATTERNS.items():
         for match in re.finditer(pattern, body):
-            if patient_source_scope(body, match.start(), match.end(), patient_name=patient_name) != "patient":
+            if patient_source_scope(body, match.start(), match.end(), patient_name=patient_name,
+                                    measurement=True) != "patient":
                 continue
             actual = ({"sbp": int(match[1]), "dbp": int(match[2])} if key == "sbp" else
                       {key: float(match[1].replace("．", ".")) if "." in match[1].replace("．", ".")
@@ -329,7 +354,8 @@ def patient_vitals(values, body, *, patient_name=None):
         label = re.search(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$", body[max(0, start - 14):start])
         if side is None and label is not None:
             side = "sbp" if label[1] == "収縮期" else "dbp"
-        if side is None or patient_source_scope(body, start, end, patient_name=patient_name) != "patient":
+        if side is None or patient_source_scope(body, start, end, patient_name=patient_name,
+                                                measurement=True) != "patient":
             continue
         if side in partial and grounded.get(side) == partial[side] == float(match[0].replace("．", ".")):
             kept[side] = partial[side]
@@ -363,7 +389,7 @@ _MED_PERIOD = re.compile(
 ENCOUNTER_CUE = (r"(?:診察|往診|診療)(?!医|所|科|機関|方針|報酬|体制|契約|情報|録|券|室|"
                  r"の(?:説明|方針|契約|案内|資料)|について(?:の)?(?:説明|案内|資料)|"
                  r"に関する(?:説明|案内|資料))|診て(?:くれ|いただ|もら)")
-RULE_VERSION = 21
+RULE_VERSION = 23
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問(?:診療)?|診察|往診)")
@@ -625,7 +651,7 @@ def extract_message(body: str, posted_at: str) -> dict:
     vit, mentions = {}, []
     for k, pat in _VITAL_PATTERNS.items():
         for m in re.finditer(pat, body):
-            scope = patient_source_scope(body, m.start(), m.end())
+            scope = patient_source_scope(body, m.start(), m.end(), measurement=True)
             if k == "sbp":
                 values = {"sbp": int(m.group(1)), "dbp": int(m.group(2))}
             else:
@@ -641,7 +667,9 @@ def extract_message(body: str, posted_at: str) -> dict:
         out["vital_mentions"] = mentions
 
     # --- symptoms / adherence flags ---
-    sym = [s for s in _SYMPTOMS if s in body]
+    # A symptom counts when at least one mention is not directly negated (発熱なし, 吐き気は見られません).
+    sym = [s for s in _SYMPTOMS
+           if any(not _SYMPTOM_NEGATION.match(body, m.end()) for m in re.finditer(re.escape(s), body))]
     if sym:
         out["symptoms"] = sym
     adh = [s for s in _ADHERENCE if s in body]
@@ -663,8 +691,7 @@ def extract_message(body: str, posted_at: str) -> dict:
 
     # --- actors / voices ---
     actors = set()
-    if re.search(r"ご家族|家族|娘|息子|奥さ|ご主人|姉|妹|兄|弟|親族|妻|夫",
-                 body):
+    if re.search(rf"{_FAMILY_PERSON}|親族", body):
         actors.add("family")
     if re.search(r"[（(]本人[)）]", body):
         actors.add("patient_voice")

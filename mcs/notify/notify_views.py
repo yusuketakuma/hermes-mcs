@@ -9,6 +9,7 @@ come from notify_render.
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime
 
@@ -531,6 +532,34 @@ def _snippet(text, term, width=40) -> str:
             + ("…" if end < len(flat) else ""))
 
 
+# A bounded reading of a question as a source search: 「最後に残薬について報告されたのは
+# いつ？」 → 「残薬」. Only the phrasing around the subject is dropped; an unreadable
+# question is searched literally and the reader is asked for a search term.
+_QUESTION_LEAD = re.compile(r"^(?:最後に|最後の|最新の|直近の|最近の|一番新しい)")
+_QUESTION_SUBJECT_END = re.compile(
+    r"について|に関する|に関して|に触れた|に言及した|の変化|の推移|の経過|の様子|の状況")
+_QUESTION_TAIL = re.compile(
+    r"(?:は|が|を)?(?:報告|記載|言及|連絡|相談|記録|投稿)?(?:され|し|あっ)?(?:た|て)?"
+    r"(?:の|もの|投稿|記録)?(?:は|が)?(?:いつ|どれ|何|なに|どこ|ある)?(?:ですか|でしょうか|か)?[？?。]?$")
+_QUESTION_WORD = re.compile(r"いつ|どれ|何|なに|どこ|どう|誰|だれ")
+
+
+def _question_term(query):
+    """(term, latest) for a question like 「〜について/〜の変化/最後の〜？」, else None;
+    ("", latest) when no searchable subject remains."""
+    text = str(query or "").strip()
+    if (not text or len(text.split()) > 1
+            or not (re.search(r"[？?]$", text) or _QUESTION_SUBJECT_END.search(text)
+                    or _QUESTION_LEAD.match(text))):
+        return None
+    latest = bool(_QUESTION_LEAD.match(text))
+    term = _QUESTION_SUBJECT_END.split(_QUESTION_LEAD.sub("", text))[0]
+    term = _QUESTION_TAIL.sub("", term, count=1).strip()
+    if not term or _QUESTION_WORD.search(term) or not search_fold(term):
+        return "", latest
+    return term, latest
+
+
 def patient_search_view(db, project_id, query) -> dict:
     """🔎 stored messages of one project containing every whitespace-
     separated term, newest first. Substring match over whitespace-
@@ -538,7 +567,9 @@ def patient_search_view(db, project_id, query) -> dict:
     ロキソニン, ＢＳ matches bs) — the same rule as the ``mcs_view``
     search; the FTS5 index's unicode61 tokenizer cannot split Japanese
     into words."""
-    terms = [t for t in str(query or "").split() if search_fold(t)][:5]
+    question = _question_term(query)
+    terms = ([question[0]] if question and question[0] else
+             [t for t in str(query or "").split() if search_fold(t)][:5])
     name = _inline(_patient_name(db, project_id), 30) or f"project {project_id}"
     sql = ("SELECT message_id,posted_at,profession,body_text FROM messages "
            "WHERE project_id=? AND body_state='full'")
@@ -555,13 +586,18 @@ def patient_search_view(db, project_id, query) -> dict:
             if len(rows) < SEARCH_HITS:
                 rows.append(row)
     items = [{"project_id": project_id,
-              "text": f"・{_mmdd(r['posted_at'])} {_hhmm(r['posted_at'])} "
+              "text": f"・{_mmdd(r['posted_at'])} {_hhmm(r['posted_at'])} 投稿#{r['message_id']} "
                       f"{_inline(r['profession'], 20) or '職種不明'}: "
                       f"{_snippet(r['body_text'], terms[0])}"}
              for r in rows]
+    head = [f"{total}件（取得済み投稿・新しい順）— MCS: {project_url(project_id)}"]
+    if question and question[0]:
+        head.insert(0, f"「{_inline(question[0], 40)}」を含む投稿を検索しました"
+                    + ("（先頭が最も新しい記録）" if question[1] else ""))
+    elif question:
+        head.insert(0, "質問を検索語に置き換えられませんでした。調べたい語（例: 残薬）を入力してください")
     return {"title": f"🔎 {name} — 「{_inline(query, 40)}」の検索結果",
-            "head": [f"{total}件（取得済み投稿・新しい順）— MCS: "
-                     f"{project_url(project_id)}"],
+            "head": head,
             "items": items, "more": max(0, total - SEARCH_HITS),
             "empty": "取得済みの投稿に一致するものはありません。",
             "notes": [_coverage_line(db, project_id)]}
@@ -686,3 +722,105 @@ def drug_search_view(db, cfg, project_id, query) -> dict:
             "items": items, "more": max(0, found["total"] - len(items)),
             "empty": "一致する候補はありません。一般名・製品名など別の表記でも試してください。",
             "notes": []}
+
+
+CONTEXT_SECTIONS = {
+    "background": "患者さんの全体像", "changes": "前回から変わったこと",
+    "replies": "連絡・返答の確認", "previsit": "訪問前の確認ノート",
+    "timeline": "経過タイムライン", "discrepancies": "記録の食い違い",
+    "handoff": "引継ぎ用の記録", "transition_course": "退院・移行時の経過",
+}
+from patient_context_view import ROLE_LABELS as CONTEXT_ROLES  # noqa: E402 - one role source
+
+
+def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0):
+    """Existing private list surface, retaining original wording and source references."""
+    import patient_context_view as views
+    ev = views.evidence(db, project_id, cfg=cfg)
+    rows, head = [], []
+
+    def add(items, group):
+        for item in items:
+            date = item.get("posted_at_ts")
+            date = datetime.fromtimestamp(date, JST).strftime("%Y-%m-%d %H:%M") if isinstance(date, (int, float)) else item.get("at") or "投稿日時未確認"
+            source = "連携サマリー" if item.get("source") == "karte_summary" else f"投稿#{item.get('message_id', '?')}"
+            suffix = " · ".join(str(v) for v in (date, source, item.get("sender")) if v)
+            text = str(item.get("quote") or item.get("text") or "")
+            if item.get("event_date_text"):
+                suffix += f" · 出来事の記載: {item['event_date_text']}"
+            if item.get("reply"):
+                text += "\n" + item["reply"]
+            rows.append({"group": group, "text": text + "\n" + suffix})
+
+    def add_deleted(items):
+        add([{"message_id": d["message_id"], "at": "削除を確認 " + datetime.fromtimestamp(
+            d["observed_at"], JST).strftime("%Y-%m-%d %H:%M")} for d in items], "削除された記録")
+
+    if section == "background":
+        view = views.role_order(views.background(ev), role)
+        facts = {fact["id"]: fact for fact in ev.get("nightly_facts", [])}
+        for sentence in view["summary"]:
+            add([facts[key] for key in sentence["fact_ids"] if key in facts], "夜間に整理した記録")
+        for group in view["sections"]:
+            add(group["items"], LABELS.get(group["category"], (group["category"],))[0])
+        # posters' own profession/name/organization, as recorded on their posts
+        posters = views.participants(db, project_id)
+        for who in posters["items"]:
+            text = " ".join(v for v in (who["profession"], who["name"]) if v)
+            text += f"／{who['organization']}" if who["organization"] else ""
+            rows.append({"group": "関係者・事業者（投稿者から取得）",
+                         "text": f"{text}\n投稿{who['messages']}件 · 最終投稿 "
+                                 + (str(who["last_seen"])[:16].replace("T", " ") if who["last_seen"] else "日時未確認")})
+        if not role and posters["roles"]:
+            head.append("表示順の候補（投稿者の職種から）: " + "／".join(CONTEXT_ROLES[r] for r in posters["roles"]))
+        head.append(f"表示順: {CONTEXT_ROLES[role]}")
+    elif section == "changes":
+        view = views.changes(db, ev, since)
+        head.append("前回の表示依頼: " + (datetime.fromtimestamp(since, JST).strftime("%Y-%m-%d %H:%M") if since else "初回"))
+        for key, label in (("new_report", "新しい報告"), ("edited", "訂正された報告"),
+                           ("retrospective", "後から取得した記録"), ("backfill_found", "過去記録から追加発見")):
+            add(view["by_discovery"].get(key, []), label)
+        # a deleted post shows only when its deletion was observed, never its old text
+        add_deleted(view["by_discovery"]["deleted"])
+    elif section in ("previsit", "handoff"):
+        view = views.previsit(db, ev, now) if section == "previsit" else views.handoff(db, ev)
+        for kind, items in view.get("recent", {}).items():
+            if kind == "deleted":
+                add_deleted(items)
+            else:
+                add(items, "最近の記録")
+        add(view["written_checks"], "原文に書かれた確認事項")
+        add(view["unanswered"], "返答が見つからない記録")
+        if view.get("next_planned"):
+            head.append("記録上の予定: " + view["next_planned"])
+    elif section == "discrepancies":
+        view = views.discrepancies(ev, posters=views.participants(db, project_id)["items"])
+        for group in view["items"]:
+            label = {"time_unknown": "時点未確認", "differing_records": "異なる記載", "change_over_time": "時点の異なる記載",
+                     "provider_not_posting": "投稿者に見当たらない事業者の記載"}[group["kind"]]
+            add(group["records"], label)
+    elif section == "transition_course":
+        view = views.transition_course(ev)
+        for group in view["items"]:
+            add([group["anchor"]], "入退院・移行の記録")
+            add(group["nearby"], "前後14日の記録")
+            if group["no_record"]:
+                head.append("この範囲で記載なし: " + "・".join(LABELS.get(k, (k,))[0] for k in group["no_record"]))
+    else:
+        view = views.replies(db, project_id) if section == "replies" else views.timeline(ev)
+        add(view["items"], CONTEXT_SECTIONS[section])
+    nightly = ev["coverage"].get("nightly") or {}
+    if ev.get("as_of"):
+        head.insert(0, "夜間まとめの反映時点: " + datetime.fromtimestamp(ev["as_of"], JST).strftime("%Y-%m-%d %H:%M"))
+    head.append(_coverage_line(db, project_id))
+    if nightly:
+        head.append(f"取込済み {nightly.get('fetched', 0)}件 / 点検済み {nightly.get('analyzed', 0)}件 / 未点検 {nightly.get('unscanned', 0)}件 / 本文未取得・不完全 {nightly.get('incomplete', 0)}件")
+        head.append(f"原文に対応する引用 {nightly.get('evidence_supported', 0)} / {nightly.get('evidence_total', 0)}件")
+        head.append(f"まとめ未反映 {nightly.get('unreflected', 0)}件")
+        if (nightly.get("attachments") or {}).get("count"):
+            head.append(f"添付 {nightly['attachments']['count']}件（内容は未解析）")
+    pages = max(1, (len(rows) + 7) // 8)
+    page = min(page, pages - 1)
+    return {"title": f"{_patient_name(db, project_id)} — {CONTEXT_SECTIONS[section]}",
+            "head": head, "items": rows[page * 8:(page + 1) * 8],
+            "notes": view.get("notes", []), "empty": "この範囲で該当する記録は見つかりません", "page": page, "pages": pages}

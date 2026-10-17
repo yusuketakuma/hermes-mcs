@@ -297,7 +297,7 @@ class Actions:
         ctx = self._reg.token(token)
         if not ctx or actor != origin.get("actor"):
             return None
-        private_meds = ctx.get("ephemeral") is True and ctx.get("action") == "meds"
+        private_meds = ctx.get("ephemeral") is True and ctx.get("action") in ("meds", "summary", "search")
         if private_meds and ctx.get("actor") != actor:
             return None
         if ctx.get("action") != "task_status" and (
@@ -736,21 +736,21 @@ class Actions:
                 # 📋 transition tokens must land before their buttons
                 token_ctx = result.get("token_ctx") or {}
                 navigation = []
-                if thread_ts:
+                if thread_ts or (pin and pin.get("action") in ("summary", "search")):
                     token_ctx = {
                         token: {**context, "verified_thread_id": thread_ts,
                                 "verified_card_message_id": pin["message_id"]}
                         for token, context in token_ctx.items()
                         if isinstance(token, str) and _TOKEN.fullmatch(token)
                         and isinstance(context, dict)
-                        and context.get("action") == "meds"
+                        and context.get("action") in ("meds", "summary", "search")
                         and context.get("ephemeral") is True
                         and context.get("actor") == rec["actor"]
                         and all(context.get(key) == pin.get(key)
                                 for key in ("card_key", "kind", "project_id",
                                             "channel_id", "team_id", "message_id"))}
                     for button in result.get("navigation") or []:
-                        if (isinstance(button, dict) and button.get("id") == "meds"
+                        if (isinstance(button, dict) and button.get("id") in ("meds", "summary", "search")
                                 and button.get("ui") == "button"
                                 and isinstance(button.get("token"), str)
                                 and button.get("token") in token_ctx

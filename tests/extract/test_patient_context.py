@@ -93,10 +93,12 @@ def test_category_order_and_display_headings_are_fixed():
     from patient_context import LABELS
     assert [(k, v[0]) for k, v in LABELS.items()] == [
         ("demographics", "基本情報"), ("diagnoses", "主病名"), ("history", "既往歴"),
-        ("course", "現病歴"), ("adl", "ADL"), ("living", "生活環境"), ("care_level", "介護度"),
+        ("course", "現病歴"), ("services_provided", "実施内容"), ("incidents", "事故・ヒヤリハット"),
+        ("adl", "ADL"), ("living", "生活環境"), ("care_level", "介護度"),
         ("care_services", "利用サービス"), ("care_team", "担当"), ("contacts", "キーパーソン"),
         ("allergies", "アレルギー"), ("devices", "医療処置"), ("preferences", "療養方針"),
-        ("medication_management", "服薬管理"), ("nutrition", "食事"), ("cognition", "認知機能"),
+        ("medication_management", "服薬管理"), ("nutrition", "食事"), ("excretion", "排泄"),
+        ("skin_wound", "皮膚・褥瘡"), ("oral_health", "口腔"), ("cognition", "認知機能"),
         ("adverse_events", "薬物有害事象"), ("observations", "検査・観測値"),
-        ("followup", "変更後の経過")]
+        ("plan_goals", "計画・目標"), ("orders_documents", "指示・連携文書"), ("followup", "変更後の経過")]
     assert "副作用歴" in LABELS["adverse_events"] and "副作用歴" not in LABELS["allergies"]

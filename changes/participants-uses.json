@@ -1,0 +1,20 @@
+{
+  "category": "changed",
+  "title": "関係者・事業者の一覧を依頼・確認・統計に活用",
+  "summary": "投稿者から自動生成した関係者・事業者の一覧を、タスク作成の担当者候補（その患者の部屋に投稿した職員を先頭に）、返答が見つからない依頼の依頼者表示（職種・氏名・事業所と最終投稿日時）、記録の食い違い（投稿者に見当たらない事業者の記載の候補）、統計 poster_gaps（事業所ごとの最終投稿からの日数）、全体像の表示順候補の5か所で使います。候補提示に留め、利用中の契約や主担当は判定しません。",
+  "upgrade": "追加操作は不要です。担当者候補の名簿の範囲は変わらず並び順だけ変わります。統計の定義版が2026-10-17になります。",
+  "details": [
+    "notify_cards.assignee_choices(project_id=...) はその部屋の投稿者を先頭に安定ソートする（名簿の出所・件数上限は不変）",
+    "patient_context_view.replies の各行に sender（依頼を書いた投稿者と最終投稿日時）を付け、previsit/handoff/replies の表示に出る",
+    "patient_context_view.discrepancies(ev, posters) は care_team の記載が事業所名を含み投稿者の所属に一致しない場合に kind=provider_not_posting を追加する",
+    "mcs_stats に poster_gaps（T1, metadata）を追加し DEFINITION_VERSION を 2026-10-17 に更新",
+    "patient_context_view.participants に sender_id と roles（投稿者の職種からの表示順候補）を追加し、標準表示の見出しに候補行を出す"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/views/patient_context_view.py",
+    "mcs/notify/notify_views.py",
+    "mcs/views/mcs_stats.py",
+    "mcs/views/mcs_view.py"
+  ]
+}

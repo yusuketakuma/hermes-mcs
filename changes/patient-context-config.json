@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "夜間の患者まとめの生成・閲覧を個別に設定",
+  "summary": "夜間生成と限定閲覧を別々に設定でき、明示した保存データ診断で未生成・更新待ち・過去走査待ち・根拠点検待ち・失敗・完了の件数を確認できます。",
+  "upgrade": "生成・限定閲覧とも省略時は有効です。既存環境も設定を省略したまま更新すると有効になります。明示したfalseは維持し、不正な設定は無効として診断します。extract.patient_context_nightlyのenabledとpublicationにtrueまたはfalseを指定します。生成だけを評価する場合はpublication=false、生成も止める場合はenabled=falseを明示してください。extract.patient_state_contextは既定無効のままで、共有チャットへの自動配信はありません。第2入力源は将来の対応です。",
+  "details": [
+    "夜間生成と限定閲覧の設定を診断し、明示した保存データ診断では生成状態ごとの件数を表示する。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "docs/guides/USER_GUIDE.md"
+  ]
+}

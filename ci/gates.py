@@ -310,7 +310,7 @@ def gate_plugin_sandbox() -> list[str]:
                     continue
                 if m in _PLUGIN_FORBIDDEN_IMPORTS:
                     bad.append(f"{path.name}:{node.lineno} imports {m}")
-        async_members = _ASYNC_MEMBERS | ({"Event", "get_running_loop", "wait_for", "run", "TimeoutError"}
+        async_members = _ASYNC_MEMBERS | ({"Event", "get_running_loop", "wait_for", "run", "TimeoutError", "create_task"}
                                          if identity == "lineworks/__main__.py" else set())
         if independent:
             async_members |= _STANDALONE_ASYNC

@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "通知の取りこぼしと更新・復旧時の手動変更消失を修正",
+  "summary": "Discordでguild_idが未設定の場合、後から届く結果を黙って捨てず「設定が不完全」として扱うようにしました。LINE WORKSのボタン操作は、通知の再送待ちの間も後回しにされず処理されます。更新の中断復旧は、更新と関係のないプログラムの手動変更を消さずに要手動対応として通知します。更新ツールは、版を適用しないまま終わった場合に終了コード2を返します。",
+  "upgrade": "通常は追加操作は不要です。Hermes接続のDiscordでguild_id（サーバーID）を設定していない場合は、設定するまでカード操作が使えません（mcs_setup checkで未設定と表示されます）。復旧が手動変更を理由に停止した場合は、変更を確認・退避してから復旧をやり直してください。",
+  "details": [
+    "Hermes接続のDiscordカード設定でguild_idが無い場合はカード操作を有効にせず、worker_disabled（config_incomplete）を記録する。",
+    "LINE WORKS独立アダプターは、配送処理を1本に保ち、429時の再試行待ちを含む配送中にも受信したボタン操作を処理する。同じイベントループとRegistryを使い、停止時は進行中の配送の終了を待つ。",
+    "mcs_update・mcs_recoverの中断復旧は、追跡中ファイルの変更が更新前後の差分に含まれない場合はreset --hardを行わずescalateする。",
+    "scripts/mcs_upgrade.py applyは、更新プログラムが0で終了してもHEADが指定版でなければ説明を表示して2を返す。"
+  ],
+  "refs": [
+    "hermes_plugin/card_workers.py",
+    "adapters/lineworks/__main__.py",
+    "deployment/recovery/mcs_recover.py",
+    "mcs/ops/mcs_update.py",
+    "scripts/mcs_upgrade.py"
+  ]
+}

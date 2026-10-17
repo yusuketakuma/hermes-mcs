@@ -38,6 +38,9 @@ def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
     roles = _config_ids(ctx.get_config("allowed_role_ids", None),
                         projects=False) or frozenset()
     guild_id = _id_text(ctx.get_config("guild_id", None))
+    if guild_id is None:
+        # required: delayed results are only delivered to the configured guild
+        return None
     # the guild id is the @everyone role — never a grant
     roles = frozenset(r for r in roles if str(r) != guild_id)
     return {**settings, "data_root": data_root.strip(),

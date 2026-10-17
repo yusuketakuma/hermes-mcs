@@ -337,9 +337,13 @@ def test_bootstrap_executes_only_target_and_cleans_private_tree(
     monkeypatch.setattr(launcher, "_git", git)
     before = (_sha(source), _sha(Path(updater.LEDGER)), config.read_bytes())
     options = ["--reinstall", "--install-arg=--no-llm"] if command == "apply" else []
+    # This synthetic target logs its invocation but never changes HEAD. apply must
+    # report not-applied (2), while a read-only plan still succeeds.
     assert launcher.main(["--repo", str(objects.root), "--no-fetch", command,
-                          "--to", objects.target, *options]) == 0
-    seen = json.loads(capfd.readouterr().out)
+                          "--to", objects.target, *options]) == (2 if command == "apply" else 0)
+    captured = capfd.readouterr()
+    assert ("適用されていません" in captured.err) == (command == "apply")
+    seen = json.loads(captured.out)
     assert seen["entry"] == "synthetic-target"
     assert seen["argv"] == [command, "--tag", objects.target, *options]
     assert seen["repo"] == seen["cwd"] == str(objects.root)

@@ -159,6 +159,21 @@ def _clean():
     return None if r is None or r.returncode != 0 else r.stdout.strip() == ""
 
 
+def _local_changes_outside(prev, target):
+    """Tracked dirty paths the prev..target update never touches (someone's
+    manual edit a reset would destroy); None when git cannot tell."""
+    if not prev or not target:
+        return None
+    paths = []
+    for args in (["diff", "--name-only", "--no-renames", "-z", prev, target],
+                 ["diff", "--name-only", "--no-renames", "-z", "HEAD"]):
+        r = _git(args)
+        if r is None or r.returncode != 0:
+            return None
+        paths.append(set(filter(None, r.stdout.split("\0"))))
+    return sorted(paths[1] - paths[0])
+
+
 def _valid_state(state):
     """Check journal shapes before any recovery decision or mutation."""
     if not isinstance(state, dict) or type(state.get("v")) is not int \
@@ -1400,6 +1415,7 @@ def _recovery_explanation(detail):
         "target tree could not": "更新先のプログラムを正常な状態に戻せません。導入先フォルダーを確認してください。",
         "prev tree could not": "更新前のプログラムを正常な状態に戻せません。導入先フォルダーを確認してください。",
         "resume incomplete:": "一部の常駐処理を復旧できません。復旧結果の記録と常駐処理の状態を確認してください。",
+        "local changes outside update:": "更新と関係のないプログラムの手動変更があるため、自動で元に戻しませんでした。変更を確認・退避してから復旧をやり直してください。",
         "unclassifiable repo state": "プログラムの状態を判定できないため、自動変更を見送りました。更新記録と導入先の状態を確認してください。",
         "restore_marker_unreadable": "復元の保留記録を読み取れません。保留を維持して記録を確認してください。",
         "backup_unreadable:": "復元用バックアップを読み取れません。保存先とファイルの状態を確認してください。",
@@ -1593,6 +1609,12 @@ def recover(if_stale=False):
         if head == target:
             if not clean:
                 tree_reset = True
+                foreign = _local_changes_outside(prev, target)
+                if foreign is None:
+                    return git_failed("diff")
+                if foreign:
+                    return escalate("local changes outside update: "
+                                    + ",".join(foreign)[:160])
                 if _runtime_mode() == "standalone" and not _standalone_target_supported(target):
                     return escalate("standalone_runtime_missing_in_target")
                 r = _git(["reset", "--hard", target])
@@ -1668,6 +1690,12 @@ def recover(if_stale=False):
             if not clean:
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach
+                foreign = _local_changes_outside(prev, target)
+                if foreign is None:
+                    return git_failed("diff")
+                if foreign:
+                    return escalate("local changes outside update: "
+                                    + ",".join(foreign)[:160])
                 if _runtime_mode() == "standalone" and not _standalone_target_supported(prev):
                     return escalate("standalone_runtime_missing_in_target")
                 _git_out(["reset", "--hard", prev])

@@ -1963,7 +1963,7 @@ def task_form(db, card) -> dict:
     """Live data for the 📝 modal — the task text prefill (the first
     request the source message's extraction found) and the assignee
     choices. Returned with the modal-open result, never persisted."""
-    form: dict = {"staff": assignee_choices(db)}
+    form: dict = {"staff": assignee_choices(db, project_id=card["project_id"])}
     ctx = _render_context(db, card)
     mid = ctx.get("source_message_id")
     m = db.execute(
@@ -1980,13 +1980,14 @@ def task_form(db, card) -> dict:
     return form
 
 
-def assignee_choices(db, limit=STAFF_CHOICES) -> list:
+def assignee_choices(db, limit=STAFF_CHOICES, project_id=None) -> list:
     """Assignee options for a task — ``name（station）`` strings, the
     shape resolve_staff stores. The MCS station staff roster
     (station_staff_v1, fetched from MCS) is the source; without it the
     senders observed posting under our own stations (self profile) stand
     in. Empty -> the plugins fall back to free text. This is the single
-    swap point for another roster source."""
+    swap point for another roster source. With project_id, roster members
+    who have posted in that patient's room come first."""
     from mcs_queries import staff_directory
     from self_identity import _latest_self_profile, latest_station_staff
     out, seen = [], set()
@@ -2002,7 +2003,7 @@ def assignee_choices(db, limit=STAFF_CHOICES) -> list:
     for s in latest_station_staff(db):
         add(s.get("name"), s.get("station"))
     if out:
-        return out
+        return _room_first(db, out, project_id)
     prof = _latest_self_profile(db)
     own = [" ".join(o.split()) for o in prof.get("organizations") or []
            if isinstance(o, str) and o.strip()]
@@ -2015,7 +2016,16 @@ def assignee_choices(db, limit=STAFF_CHOICES) -> list:
         match = next((o for o in own if o in stations), None)
         if match:
             add(r["sender_name"], match)
-    return out
+    return _room_first(db, out, project_id)
+
+
+def _room_first(db, labels, project_id):
+    # labels are ``name（station）``; the stable sort keeps the roster order within each half
+    if project_id is None or not labels:
+        return labels
+    from patient_context_view import participants
+    posted = {" ".join(w["name"].split()) for w in participants(db, project_id)["items"]}
+    return sorted(labels, key=lambda s: s.split("（")[0] not in posted)
 
 
 
@@ -3090,7 +3100,7 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         tok_params = json.loads(tok["params"] or "{}")
     except (json.JSONDecodeError, TypeError):
         tok_params = {}
-    if action == "meds" and tok_params.get("ephemeral"):
+    if action in ("meds", "summary", "search") and tok_params.get("ephemeral"):
         if tok_params.get("actor") != actor:
             return {**base, "outcome": "rejected", "error": "actor_mismatch"}
         if card["transport"] == "discord" and (
@@ -3141,6 +3151,11 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         return _act_body(db, base, card, tok, cfg=cfg)
     if action in ("summary", "mytasks", "unacked", "search", "digest",
                   "meds", "drugsearch"):
+        # A 🧾 click carries no input, so the same user's later clicks on one
+        # card reuse its command_id: only a prompt resend is a replay.
+        if (action == "summary" and replay is not None and "context_since" in replay
+                and now - (replay.get("processed_at") or 0) <= LIVE_RESULT_S):
+            tok_params = {**tok_params, "since": replay["context_since"], "_replay": True}
         return _act_view(db, base, card, action, req.get("input") or {}, now,
                          cfg, tok_params)
     if action == "tasks":
@@ -3208,9 +3223,26 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
                 "text": parts_text(got["parts"],
                                    card["transport"])}
     if action == "summary":
-        title, text = patient_summary_text(db, card["project_id"], cfg=cfg)
-        return {**base, "outcome": "applied", "action": "summary",
-                "title": title, "body": text}
+        from patient_nightly import options
+
+        def legacy():
+            title, text = patient_summary_text(db, card["project_id"], cfg=cfg)
+            return {**base, "outcome": "applied", "action": "summary",
+                    "title": title, "body": text}
+        if not all(options(cfg).values()):
+            return legacy()
+        opened = False
+        try:
+            db.execute("SAVEPOINT patient_context")
+            opened = True
+            result = _context_navigation(db, base, card, params or {}, cfg, now, legacy)
+        except Exception:  # a broken nightly view must never hide the existing summary
+            if opened:
+                db.execute("ROLLBACK TO patient_context")
+            result = legacy()
+        if opened:
+            db.execute("RELEASE patient_context")
+        return result
     if action in ("search", "drugsearch") and not inputs.get("query"):
         # the click opens the keyword modal; its submit carries input
         return {**base, "outcome": "applied", "action": action,
@@ -3243,17 +3275,8 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
         navigation, token_ctx = [], {}
 
         def navigate(label, target, target_page=0):
-            token = _mint_token(db, card["card_id"], "meds", {
-                "message_id": target, "page": target_page, "ephemeral": True,
-                "actor": base["actor"],
-                "origin_thread_id": (base.get("origin") or {}).get("thread_id")}, {}, now)
-            navigation.append({"id": "meds", "ui": "button", "label": label,
-                               "style": "secondary", "token": token})
-            token_ctx[token] = {"action": "meds", "card_key": card["card_key"],
-                "kind": card["kind"], "project_id": card["project_id"],
-                "channel_id": card["channel_id"], "team_id": card["team_id"],
-                "message_id": card["message_id"], "actor": base["actor"],
-                "ephemeral": True}
+            _private_button(db, base, card, now, navigation, token_ctx, "meds", label,
+                            {"message_id": target, "page": target_page})
 
         if selected > 0:
             navigate("新しい投稿", posts[selected - 1])
@@ -3271,6 +3294,85 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
     else:
         view = patient_search_view(db, card["project_id"], inputs["query"])
     return {**base, "outcome": "applied", "action": "list", "list": view}
+
+
+def _private_button(db, base, card, now, navigation, token_ctx, action, label, params):
+    """One clicker-only button of a private view; the token pins actor and card."""
+    token = _mint_token(db, card["card_id"], action, {
+        **params, "ephemeral": True, "actor": base["actor"],
+        "origin_thread_id": (base.get("origin") or {}).get("thread_id")}, {}, now)
+    navigation.append({"id": action, "ui": "button", "label": label,
+                       "style": "secondary", "token": token})
+    token_ctx[token] = {"action": action, "card_key": card["card_key"],
+        "kind": card["kind"], "project_id": card["project_id"],
+        "channel_id": card["channel_id"], "team_id": card["team_id"],
+        "message_id": card["message_id"], "actor": base["actor"], "ephemeral": True}
+
+
+def _context_navigation(db, base, card, params, cfg, now, legacy):
+    from notify_views import CONTEXT_ROLES, CONTEXT_SECTIONS, patient_context_list
+    section, role, page = params.get("section", "background"), params.get("role", ""), params.get("page", 0)
+    if (not isinstance(section, str) or section not in CONTEXT_SECTIONS
+            or not isinstance(role, str) or role not in CONTEXT_ROLES
+            or type(page) is not int or not 0 <= page <= 100000):
+        return {**base, "outcome": "rejected", "error": "action_not_applicable"}
+    identity = hashlib.sha256(canonical([base["actor"], card["transport"],
+        card["channel_id"], card["team_id"]])).hexdigest()
+    kind = "patient_context_view_checkpoint_v1"
+    row = db.execute("SELECT artifact_id,content FROM artifacts WHERE kind=? AND project_id=? "
+        "AND json_extract(meta,'$.viewer')=? ORDER BY artifact_id DESC LIMIT 1",
+        (kind, card["project_id"], identity)).fetchone()
+    since = params.get("since", (loads_dict(row["content"]) or {}).get("at", 0) if row else 0)
+    if type(since) not in (int, float) or not math.isfinite(since) or since < 0:
+        return {**base, "outcome": "rejected", "error": "action_not_applicable"}
+    navigation, token_ctx = [], {}
+    if "section" not in params:
+        # The card's 🧾 keeps showing the existing summary; the nightly views open from it.
+        result = legacy()
+        for target in ("background", "changes", "previsit", "replies", "timeline"):
+            _private_button(db, base, card, now, navigation, token_ctx, "summary",
+                            CONTEXT_SECTIONS[target], {"section": target, "page": 0, "role": "", "since": since})
+        _context_checkpoint(db, card, identity, row, params, now)
+        return {**result, "context_since": since, "navigation": navigation, "token_ctx": token_ctx}
+    view = patient_context_list(db, card["project_id"], section, cfg=cfg,
+                               since=since, now=now, role=role, page=page)
+
+    def navigate(label, target=section, target_page=0, target_role=role, action="summary"):
+        _private_button(db, base, card, now, navigation, token_ctx, action, label,
+                        {"section": target, "page": target_page, "role": target_role, "since": since})
+
+    sections = list(CONTEXT_SECTIONS)
+    index = sections.index(section)
+    for offset, arrow in ((-1, "← "), (1, "→ ")):
+        target = sections[(index + offset) % len(sections)]
+        navigate(arrow + CONTEXT_SECTIONS[target], target)
+    if section == "background":
+        roles = list(CONTEXT_ROLES)
+        target = roles[(roles.index(role) + 1) % len(roles)]
+        navigate("表示順: " + CONTEXT_ROLES[target], target_role=target)
+    else:
+        navigate("原文を検索", action="search")
+    if view["page"]:
+        navigate("前の8件", target_page=view["page"] - 1)
+    if view["page"] + 1 < view["pages"]:
+        navigate("次の8件", target_page=view["page"] + 1)
+    _context_checkpoint(db, card, identity, row, params, now)
+    return {**base, "outcome": "applied", "action": "list", "list": view,
+            "context_since": since, "navigation": navigation, "token_ctx": token_ctx}
+
+
+def _context_checkpoint(db, card, identity, row, params, now):
+    # Record viewing time only, never clinical acknowledgement. Tokens retain
+    # the prior checkpoint throughout this private navigation session.
+    if params.get("ephemeral") or params.get("_replay"):
+        return
+    if row:
+        db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                   (json.dumps({"at": now}), row["artifact_id"]))
+    else:
+        db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES(?,?,?,?,?)",
+                   ("patient_context_view_checkpoint_v1", card["project_id"], json.dumps({"at": now}),
+                    json.dumps({"viewer": identity}), now))
 
 
 def _act_page(db, base, card, tok, tok_params, cfg, now, specs) -> dict:

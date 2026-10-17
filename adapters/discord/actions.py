@@ -61,7 +61,7 @@ def _answer_view(tasks, result: dict, index: int):
     if tasks:
         return _task_view(tasks)
     if index == 0 and result.get("navigation"):
-        return thread_drug_view({"parts": {"action_rows": [result["navigation"]]}})
+        return thread_drug_view({"parts": {"action_rows": [result["navigation"]]}}, private=True)
     return None
 
 

@@ -92,6 +92,7 @@ async def serve(root, port):
     server = None
     thread = None
     server_started = False
+    delivery_task = None
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
     registered_signals = []
@@ -120,17 +121,28 @@ async def serve(root, port):
                 if current != scope:
                     _log("configuration_changed_restart_required")
                     break
-                await worker.tick()
-                inbox.expire()
-                for pending in inbox.pending():
-                    working, event = inbox.take(pending)
-                    try:
-                        await actions.handle(event)
-                    except Exception as exc:
-                        inbox.finish(working, "unknown")
-                        _log("callback_processing_unknown", error=type(exc).__name__)
-                    else:
-                        inbox.finish(working, "processed")
+                # One event loop owns the registry; no concurrent reload or second delivery tick.
+                try:
+                    inbox.expire()
+                    for pending in inbox.pending():
+                        working, event = inbox.take(pending)
+                        try:
+                            await actions.handle(event)
+                        except Exception as exc:
+                            inbox.finish(working, "unknown")
+                            _log("callback_processing_unknown", error=type(exc).__name__)
+                        else:
+                            inbox.finish(working, "processed")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    _log("callback_processing_failed", error=type(exc).__name__)
+                if delivery_task is not None and delivery_task.done():
+                    finished, delivery_task = delivery_task, None
+                    finished.result()
+                if delivery_task is None:
+                    delivery_task = asyncio.create_task(worker.tick())
+                    await asyncio.sleep(0)
                 await actions.sweep_followups()
             except asyncio.CancelledError:
                 raise
@@ -143,22 +155,29 @@ async def serve(root, port):
     finally:
         worker.stop()
         try:
-            if server:
+            if delivery_task is not None:
                 try:
-                    if server_started:
-                        await asyncio.to_thread(server.shutdown)
-                finally:
-                    server.server_close()
+                    await delivery_task
+                except Exception as exc:
+                    _log("tick_failed", error=type(exc).__name__)
         finally:
             try:
-                if thread and server_started:
-                    thread.join(timeout=5)
+                if server:
+                    try:
+                        if server_started:
+                            await asyncio.to_thread(server.shutdown)
+                    finally:
+                        server.server_close()
             finally:
                 try:
-                    worker.release_scope_lock()
+                    if thread and server_started:
+                        thread.join(timeout=5)
                 finally:
-                    for sig in registered_signals:
-                        loop.remove_signal_handler(sig)
+                    try:
+                        worker.release_scope_lock()
+                    finally:
+                        for sig in registered_signals:
+                            loop.remove_signal_handler(sig)
 
 
 def _wait_api_lock(root):

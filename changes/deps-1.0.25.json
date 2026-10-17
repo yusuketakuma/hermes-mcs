@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "開発・検証用ツールを最新の安定版へ更新",
+  "summary": "lint に使う ruff を 0.17.1 に、OpenWiki 更新ワークフローの jsdom を 30.1.3 に更新しました。MCS の実行時の動作は変わりません。",
+  "upgrade": "追加操作は不要です。独立動作用の Slack/Discord SDK（slack-bolt 1.30.0、slack-sdk 3.45.0、discord.py 2.7.1、aiohttp 3.14.5 と推移依存）、pytest 9.1.1、GitHub Actions（checkout v7.0.1、setup-python v7.0.0、setup-node v7.1.0、create-pull-request v8.1.1）は 2026-10-17 時点で最新安定版のため変更していません。",
+  "details": [
+    "ruff 0.17.0→0.17.1（Makefile と CI の固定値を同時に更新）。",
+    "jsdom 30.1.2→30.1.3。mermaid は OpenWiki 0.7.2 が 11 系を要求するため 11 系最新の 11.17.2 を維持（12.2.0 は非互換）。openwiki 0.7.2 は最新。",
+    "Node は長期サポート版の 24 を維持（26 は長期サポート開始前）。",
+    "収集・解析コアは標準ライブラリのみの方針を維持し、新しい依存は追加していない。"
+  ],
+  "refs": [
+    "Makefile",
+    ".github/workflows/ci.yml",
+    ".github/workflows/openwiki-update.yml"
+  ]
+}

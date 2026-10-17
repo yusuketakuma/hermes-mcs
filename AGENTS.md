@@ -68,7 +68,7 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
   独立Slack/Discordの `standalone.py` は接続・task終了待ちのasyncioも使用する。
   正確なSDK/asyncio許可は `ci/gates.py` に限定し、通常adapterへ拡張しない。
   独立LINE WORKSの `__main__.py` だけは常駐起動/停止用の
-  `Event`・`get_running_loop`・`wait_for`・`run` も使う
+  `Event`・`get_running_loop`・`wait_for`・`run`・`create_task` も使う
 - テストは一時DB+スタブのみ。実 MCS・Discord・Slack・LINE WORKS・Keychain・原本DB・
   ローカルLLM・Jev へ**一切アクセスしない**
 - 患者データ・秘密情報は repo に入れない（`data/`・`.env`・`config.json`等は ignore 済み）

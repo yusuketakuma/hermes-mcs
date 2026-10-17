@@ -14,10 +14,11 @@ from adapters.lineworks.client import ClientError
 from lineworks_testkit import NOW, SECRET, event, raw, signature, world
 
 
-def run_once(monkeypatch, tmp_path, w, box, *, invalid_scope=False):
+def run_once(monkeypatch, tmp_path, w, box, *, invalid_scope=False, wait_for_callback=False):
     observed = []
     callbacks = {}
     calls = 0
+    handled = asyncio.Event()
 
     def settings(_root):
         nonlocal calls
@@ -31,10 +32,16 @@ def run_once(monkeypatch, tmp_path, w, box, *, invalid_scope=False):
 
     async def tick():
         observed.append("tick")
+        if wait_for_callback:
+            body = raw(event())
+            assert box.accept(body, signature(body), w.settings["application_id"]) == 200
+            await handled.wait()
+            observed.append("delivery_finished")
         callbacks[signal.SIGTERM]()
 
     async def handle(value):
         observed.append(value)
+        handled.set()
 
     worker = SimpleNamespace(acquire_scope_lock=lambda: True, reconcile=reconcile, tick=tick,
                              stop=lambda: observed.append("worker_stopped"),
@@ -130,3 +137,18 @@ def test_poll_timeout_uses_asyncio_exception_across_supported_python_versions(mo
     monkeypatch.setattr(asyncio, "wait_for", wait)
     observed = run_once(monkeypatch, tmp_path, w, box)
     assert event() in observed
+
+
+def test_callback_arriving_during_delivery_is_handled_before_tick_finishes(monkeypatch, tmp_path):
+    w = world(tmp_path)
+    box = server.CallbackInbox(Path(w.dirs["state"]) / "callbacks", w.settings,
+                               SECRET, clock=lambda: NOW)
+    # Advance the daemon's poll without waiting real seconds; keep the outer timeout.
+    wait_for = asyncio.wait_for
+    async def poll(value, *, timeout):
+        return await wait_for(value, timeout=0.001 if timeout == 2 else timeout)
+    monkeypatch.setattr(asyncio, "wait_for", poll)
+    observed = run_once(monkeypatch, tmp_path, w, box, wait_for_callback=True)
+    assert observed.index("tick") < observed.index(event()) < observed.index("delivery_finished")
+    assert observed.count("tick") == 1
+    assert box.pending() == []

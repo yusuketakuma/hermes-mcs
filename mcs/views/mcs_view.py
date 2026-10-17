@@ -603,6 +603,28 @@ class View:
         return read_model.read_model(self.db, scope=scope,
                                      project_id=pid, limit=limit)
 
+    def _patient_context(self, pid, view, since, query, role):
+        """Source-grounded patient context projections over this snapshot."""
+        import patient_context_view as pcv
+        from mcs_util import load_config
+        if view == "search":
+            return pcv.search(self.db, pid, query or "")
+        if view == "replies":
+            return pcv.replies(self.db, pid)
+        # current publication settings gate the nightly prose, not the flag stored at generation
+        ev = pcv.evidence(self.db, pid, cfg=load_config())
+        now = self.meta["generated_at"]
+        return {
+            "background": lambda: pcv.role_order(pcv.background(ev), role),
+            "participants": lambda: pcv.participants(self.db, pid),
+            "changes": lambda: pcv.changes(self.db, ev, since if since is not None else now - 7 * 86400),
+            "previsit": lambda: pcv.previsit(self.db, ev, now),
+            "timeline": lambda: pcv.timeline(ev),
+            "discrepancies": lambda: pcv.discrepancies(ev, posters=pcv.participants(self.db, pid)["items"]),
+            "handoff": lambda: pcv.handoff(self.db, ev),
+            "transition_course": lambda: pcv.transition_course(ev),
+        }[view]()
+
     def _loops(self, pid, limit):
         """Open-Loop candidates and relations; only human-confirmed operations create requests."""
         from request_loops import effective_loop_state
@@ -758,7 +780,7 @@ class View:
              message_id=None, request_id=None, status=None, command_id=None,
              payload_hash=None, since=None, until=None, scope="aggregate",
              dataset=None, item_id=None, publication=False, unread_only=False,
-             include_chat=False, max_age_s=None):
+             include_chat=False, max_age_s=None, view=None, role=None):
         projectless = ("status", "read_model", "cross_lists", "response_observations")
         if (project is not None and not requests.positive(project)) \
                 or (kind not in projectless and project is None):
@@ -804,6 +826,9 @@ class View:
                     now=self.meta["generated_at"])
             return {"snapshot": self.meta, "warnings": WARNINGS,
                     "project_id": project, "dataset": dataset, **result}
+        if kind == "patient_context":
+            return {"snapshot": self.meta, "warnings": WARNINGS,
+                    **self._patient_context(project, view, since, query, role)}
         handlers = {
             **dict.fromkeys(("search", "timeline", "thread", "candidates"),
                             lambda: self._messages(kind, project, limit, cursor, query, message_id, since, until)),
@@ -845,7 +870,7 @@ def _parser():
     plan = subs.add_parser("card_part_plan", help="Local operator: inspect an unknown part without approving a write")
     plan.add_argument("--delivery-id", required=True)
     plan.add_argument("--part-id", required=True)
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations", "patient_context"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
@@ -883,12 +908,21 @@ def _parser():
                 # explicit --limit bounds honestly via 'truncated'
                 child.add_argument("--limit", type=int, default=None)
             elif kind not in ("evidence", "receipt", "notification_receipt", "project_metadata", "cross_lists",
-                            "control") and (kind != "requests" or index == 0):
+                            "control", "patient_context") and (kind != "requests" or index == 0):
                 child.add_argument("--limit", type=int, default=50)
                 if kind != "signals":
                     child.add_argument("--cursor")
         if kind == "search":
             sub.add_argument("--query", required=True)
+        if kind == "patient_context":
+            sub.add_argument("--view", required=True, choices=(
+                "background", "changes", "replies", "previsit", "timeline", "discrepancies",
+                "handoff", "search", "transition_course", "participants"))
+            sub.add_argument("--since", type=int, help="changes: inclusive epoch seconds (default: 7 days)")
+            sub.add_argument("--query", help="search: whitespace-separated terms")
+            from patient_context_view import ROLE_ORDER
+            sub.add_argument("--role", choices=tuple(sorted(ROLE_ORDER)),
+                             help="background: section order only; access is unchanged")
         if kind == "response_observations":
             sub.add_argument("--publication", action="store_true")
             sub.add_argument("--max-age-s", type=float)

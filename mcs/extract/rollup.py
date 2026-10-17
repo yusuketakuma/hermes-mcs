@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from ledger import Ledger, LedgerReader, karte_summary_block
-from clinical_values import patient_item_scope, patient_current_vitals
+from clinical_values import fold_surface, lab_analyte, lab_candidate, patient_item_scope, patient_current_vitals
 from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
@@ -304,15 +304,29 @@ def build_rollup(ledger, project_id: int) -> dict:
             if vit:
                 latest_vitals = {"at": m["posted_at"], **vit}
         # v4 labs: newest report per analyte wins (msgs walk newest-first)
+        post_labs = {}
         for lb in _dicts(lm.get("labs")):
             if lb.get("subject") in ("family", "other") or lb.get("status") in ("past", "planned") \
                     or lb.get("condition") or patient_item_scope(
                         lb, m["body_text"], patient_name=patient_name,
                         surface=lb.get("name")) != "patient":
                 continue  # source detail retains history; it cannot fill current patient labs
-            if isinstance(lb, dict) and isinstance(lb.get("name"), str) \
-                    and lb["name"].strip() and lb["name"] not in latest_labs:
-                latest_labs[lb["name"]] = {"at": m["posted_at"], **lb}
+            if isinstance(lb, dict) and isinstance(lb.get("name"), str) and lb["name"].strip():
+                # Cr/クレアチニン, CRP/crp are one analyte: the newest report keeps the slot.
+                post_labs.setdefault(lab_analyte(lb["name"]) or fold_surface(lb["name"]), []).append(lb)
+        for key, reports in post_labs.items():
+            # Within one post, only a quote-verified sampling date orders readings; when the
+            # dates cannot order them, no current value is asserted (nor taken from older posts).
+            dated = [(lab_candidate(r["name"], r.get("value", ""), r.get("unit"), r.get("evidence"),
+                                    measured_on=r.get("measured_on"))["measured_on"], r) for r in reports]
+            days = [day for day, _ in dated]
+            if len(reports) == 1:
+                chosen = reports[0]
+            elif None not in days and days.count(max(days)) == 1:
+                chosen = max(dated, key=lambda pair: pair[0])[1]
+            else:
+                chosen = None
+            latest_labs.setdefault(key, chosen and {"at": m["posted_at"], **chosen})
         per, chk = _period_candidates(m, v1, as_of, patient_name=patient_name)
         if med_period is None:
             med_period = per
@@ -363,6 +377,7 @@ def build_rollup(ledger, project_id: int) -> dict:
             symptoms[t] = posted_by_ts.get(pts, str(pts))
     if latest_vitals:
         out["latest_vitals"] = latest_vitals
+    latest_labs = {k: v for k, v in latest_labs.items() if v}
     if latest_labs:
         out["recent_labs"] = list(latest_labs.values())[:15]
     if med_period:

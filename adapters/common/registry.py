@@ -359,6 +359,8 @@ class Registry:
                  and r.get("card_key") == ref["card_key"]
                  and r.get("channel_id") == ref["channel_id"]
                  and r.get("message_id") == ref.get("message_id")
+                 # a clicker's private-view buttons are not part of the card's render
+                 and r.get("ephemeral") is not True
                  and isinstance(r.get("action"), str)
                  and r["action"] in actions
                  and type(r.get("at")) in (int, float)

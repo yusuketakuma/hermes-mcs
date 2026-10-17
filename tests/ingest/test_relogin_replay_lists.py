@@ -111,8 +111,10 @@ def test_unread_replay_keeps_records_of_patients_acked_before_expiry(tmp_path):
                                      if p not in marked]),
         fetch_unread_messages=fetch, fetch_unread_replies=replies,
         oldest_unread_id=lambda pid: 5,
-        fetch_latest=lambda pid: {"message_id": next(latest),
-                                  "is_self_only": False},
+        # strict-acked patients re-probe their stored newest id (no gap)
+        fetch_latest=lambda pid: {
+            "message_id": next(latest) if pid == 1 else pid * 100,
+            "is_self_only": False},
         mark_patient_read=lambda pid, *a, **k: marked.add(pid))
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": [], "run_id": 7}
@@ -153,7 +155,8 @@ def test_unread_replay_keeps_a_mark_failure_of_a_patient_no_longer_unread(tmp_pa
         fetch_unread_messages=lambda pid, ts: mcs_adapter.MessageBatch(
             messages=[_message(mid=pid, project_id=pid, unread=True)],
             reached=True),
-        fetch_unread_replies=replies, mark_patient_read=mark)
+        fetch_unread_replies=replies, mark_patient_read=mark,
+        fetch_latest=lambda pid: {"message_id": pid, "is_self_only": False})
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": [], "run_id": 7}
     run_check._with_relogin(

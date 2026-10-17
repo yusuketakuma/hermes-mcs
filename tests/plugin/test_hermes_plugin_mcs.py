@@ -735,6 +735,7 @@ def test_interactive_settings_derives_application_id(tmp_path):
         "interactive": True,
         "data_root": str(tmp_path / "data"),
         "channel_id": "42",
+        "guild_id": "7",
     })
     ctx = _Context(settings)
     bot = SimpleNamespace(user=SimpleNamespace(id=123456789))

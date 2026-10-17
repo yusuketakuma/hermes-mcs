@@ -1,0 +1,25 @@
+{
+  "category": "added",
+  "title": "薬局以外の職種が書く記録も患者背景として取得",
+  "summary": "訪問看護・訪問診療・ケアマネ・訪問介護・施設/通所・リハ・栄養・歯科・相談員が日々書く定型見出し（排泄、皮膚・褥瘡、口腔、実施したケア、事故、計画・会議、指示書・連携文書、家族・制度、認知・行動など）を患者背景として原文のまま保持します。分類は19から26、属性は32から35に増えます。関係者・事業者の一覧を投稿者の職種・氏名・事業所名から自動で作り、「患者さんの全体像」とCLIで確認できます。表示順に訪問介護・施設/通所・リハビリ・栄養・歯科・相談員を追加し、閲覧範囲は変えません。",
+  "upgrade": "追加操作は不要です。更新後、ルール世代が23に上がるため既存投稿のルール抽出が通常の処理で順次やり直され、完了まで旧結果が使われます。夜間の患者背景処理は契約（ルール世代23・LLM世代9・患者背景契約4）が変わるため旧走査結果を再利用せず、夜間枠で患者の履歴を再走査します。再走査が済むまで、その患者の夜間ビューは未反映扱いになります。既存の「排泄」見出しはADLではなく排泄の分類に入ります（動作は「トイレ動作」「排泄介助」）。--role と通知カードの表示順に helper / facility / rehab / nutrition / dental / msw が増え、care の表示名は「ケアマネ・介護」になります。",
+  "details": [
+    "patient_context.LABELS に7分類（services_provided, incidents, excretion, skin_wound, oral_health, plan_goals, orders_documents）と既存分類への見出し語を追加。1ラベル1分類と接頭ペアの一致順を合成テストで固定。",
+    "DETAIL_LABELS に valid_period（有効期間/指示期間/計画期間。期限 due_text・観測日とは別）、body_site（部位）、food_texture（食形態/主食形態/副食形態/とろみ）を追加し、単独見出し時の分類を明示。評価尺度は observations の見出しとして原文のまま残し、尺度名・版・部位・時点を結合しない。",
+    "v1 ルール: _SYMPTOMS に介護・看護の本文表現を追加（否定判定は既存のまま）。RULE_VERSION 22→23。",
+    "LLM: 固定プロンプトの分類・属性 enum、文言（在宅医療・介護）、介護職の合成例を追加。EXTRACT_VERSION 8→9、PATIENT_CONTEXT_VERSION 3→4。評価資産 pattern_cards の許容分類・属性を同期。",
+    "表示: patient_context_view.ROLE_LABELS / ROLE_ORDER を役割の正本とし、CLI --role の choices と通知カードの表示順ボタンが同じ一覧を参照。食形態を前回比較の対象属性に追加。",
+    "関係者・事業者: patient_context_view.participants が messages の投稿者メタデータ（職種・氏名・事業所）を既存 mcs_queries.staff_directory で集計し、CLI --view participants と背景一覧の末尾（関係者・事業者（投稿者から取得））に投稿件数・最終投稿日時付きで出す。契約・主担当・現在の関与は判定しない。",
+    "docs/specs/patient-context.md に職種別見出し語彙の節と世代更新を記載。",
+    "完全合成の10職種73見出しで、更新前は15見出し、更新後は73見出しが保持される（tests/extract/test_role_data_extension.py）。実投稿での抽出精度・網羅率は未測定。"
+  ],
+  "refs": [
+    "mcs/extract/patient_context.py",
+    "mcs/extract/v1/extract.py",
+    "mcs/extract/v4/extract_llm.py",
+    "mcs/views/patient_context_view.py",
+    "mcs/notify/notify_views.py",
+    "mcs/views/mcs_view.py",
+    "docs/specs/patient-context.md"
+  ]
+}

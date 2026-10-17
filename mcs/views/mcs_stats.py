@@ -37,7 +37,7 @@ from drug_map import (current_refs, _current_refs_with_progress,
                       _progress as drug_map_progress)
 import structured_view
 import extraction_audit
-DEFINITION_VERSION = "2026-10-14"
+DEFINITION_VERSION = "2026-10-17"
 _DEFAULT_CURRENT_REFS = current_refs
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
@@ -346,6 +346,28 @@ def st_professions(db, scope):
         "notes": ["raw recorded profession values — no profession_map "
                   "normalization yet",
                   "non-posting staff never appear; not a roster"]})
+
+
+def st_poster_gaps(db, scope):
+    """ST-021: per room and posting organization, days since its last post as of as_of —
+    a candidate for a quiet link, never proof that anyone stopped caring (no post ≠ no care)."""
+    w, params = "", [scope["as_of"]]
+    if scope["project_id"] is not None:
+        w, params = " AND m.project_id = ?", params + [scope["project_id"]]
+    rows = db.execute(
+        f"""SELECT m.project_id, m.organization, MAX(m.posted_at_ts) last_ts, COUNT(*) posts,
+                   COUNT(DISTINCT COALESCE(m.sender_id, m.sender_name)) senders
+            FROM messages m WHERE m.posted_at_ts < ? AND NULLIF(m.organization,'') IS NOT NULL
+                  AND m.body_state IS NOT 'deleted'{w}
+            GROUP BY m.project_id, m.organization ORDER BY last_ts ASC, m.project_id""", params).fetchall()
+    return _result("ok", scope, {
+        "by_organization": _items(
+            [{"project_id": r[0], "organization": r[1], "last_posted_at_ts": r[2],
+              "days_since_last": int((scope["as_of"] - r[2]) // DAY_S), "posts": r[3], "senders": r[4]}
+             for r in rows], scope["limit"]),
+        "notes": ["no post is not no involvement — a candidate only",
+                  "organizations as written on posts; deleted posts excluded; not normalized",
+                  "--since/--until do not apply; as_of only"]})
 
 
 def st_workload(db, scope):
@@ -1439,6 +1461,7 @@ REGISTRY = {
                          "fn": st_patient_activity},
     "professions": {"tier": "T1", "needs": ["metadata", "profession_map"],
                     "fn": st_professions},
+    "poster_gaps": {"tier": "T1", "needs": ["metadata"], "fn": st_poster_gaps},
     "workload": {"tier": "T1", "needs": ["metadata"], "fn": st_workload},
     "doc_burden": {"tier": "T1", "needs": ["metadata"], "fn": st_doc_burden},
     "meds": {"tier": "T1", "needs": ["med_events", "drug_map"],

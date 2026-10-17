@@ -144,10 +144,12 @@ def _button_items(spec, primary_actions=PRIMARY_ACTIONS):
     return primary + links, menu
 
 
-def thread_drug_view(spec):
+def thread_drug_view(spec, *, private=False):
     """Runner-issued medication actions on the first companion-thread body."""
     import discord
     drug_actions = {"meds", "drugsearch"}
+    if private:
+        drug_actions |= {"summary", "search"}
     rows = [[button for row in spec["parts"].get("action_rows") or []
              for button in row if button.get("id") in drug_actions]]
     buttons, _ = _button_items({"parts": {"action_rows": rows}}, drug_actions)

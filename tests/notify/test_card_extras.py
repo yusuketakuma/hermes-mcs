@@ -173,7 +173,7 @@ def test_search_opens_modal_then_answers_hits(led):
     view = r["list"]
     assert view["head"][0].startswith("1件（取得済み投稿・新しい順）")
     assert view["items"] == [{"project_id": 1, "text":
-                              "・09-24 08:42 看護師: 昨日から 発熱 あり。解熱剤を使用"}]
+                              "・09-24 08:42 投稿#102 看護師: 昨日から 発熱 あり。解熱剤を使用"}]
     assert any(n.startswith("履歴取得:") for n in view["notes"])
     # the hits reach the clicker once — never the durable receipt
     stored = led.db.execute("SELECT receipt_json FROM command_receipts "

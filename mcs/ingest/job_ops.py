@@ -113,7 +113,12 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
         # Preserve queued writes when the restore guard cannot be read.
         consent_only = True
     try:
-        names = sorted(os.listdir(cmd_dir))
+        # A writer holding the queue lock is publishing an earlier command: wait for the
+        # next drain instead of overtaking it (mcs_requests.queue_lock).
+        with mcs_requests.queue_lock(cmd_dir, wait=False) as locked:
+            if not locked:
+                return
+            names = sorted(os.listdir(cmd_dir))
     except OSError:
         return
     for name in names:

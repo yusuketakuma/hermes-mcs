@@ -31,7 +31,7 @@ jobs:
       - name: ruff
         # lint scope lives in the Makefile (LINT_PATHS); keep the pin equal to
         # the Makefile RUFF pin
-        run: pip install "ruff==0.17.0" && make lint
+        run: pip install "ruff==0.17.1" && make lint
       - name: Check bundled public medicine master
         run: python3 scripts/development/check_drug_master_bundle.py
       # no -x: every failure of the run is reported, not only the first
@@ -164,7 +164,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: yusuketakuma/hermes-agent
-          ref: f36c1da0016ce14c9c531cb9514ab4b0b667240d
+          ref: b7758d8555931846f4b8f798d4ea9715f65077ca
           path: hermes-agent
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:

@@ -43,7 +43,7 @@ def test_clean_first_candidate_recovers_a_supported_missing_hint(monkeypatch, ta
     assert len(calls) == 2
     assert extract_llm._facts(extract_llm._validate(OBSERVATIONS, body)) <= extract_llm._facts(result)
     assert set(addition) <= result.keys()
-    assert extract_llm.EXTRACT_VERSION == 8
+    assert extract_llm.EXTRACT_VERSION == 9
 
 
 @pytest.mark.parametrize("tail", [

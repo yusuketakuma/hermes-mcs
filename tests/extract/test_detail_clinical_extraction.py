@@ -187,7 +187,7 @@ def test_actual_length_stop_splits_only_when_needed_and_preserves_full_coverage(
     def compact(text):
         return "".join(text.split())
     assert compact("".join(entry["text"] for entry in content["patient_context"])) == compact(body)
-    assert meta["extract_version"] == extract_llm.EXTRACT_VERSION and meta["patient_context_version"] == 3
+    assert meta["extract_version"] == extract_llm.EXTRACT_VERSION and meta["patient_context_version"] == 4
     assert meta["integrity"]["length_stops"] >= 1
     assert meta["integrity"]["chunk_size"] < extract_llm._CHUNK_SIZE
     assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == 0

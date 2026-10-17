@@ -63,9 +63,12 @@ def test_launcher_runs_target_updater_against_live_repo(tmp_path, capfd):
              {"mcs/ops/mcs_update.py": stub, "mcs/_mcs_path.py": ""})
     _git(repo, "fetch", "-q", "--tags")
     launcher = _launcher()
+    # the stub exits 0 without applying: the launcher must not report success
     assert launcher.main(["--repo", str(repo), "--no-fetch", "apply",
-                          "--reinstall", "--install-arg=--no-llm"]) == 0
-    seen = json.loads(capfd.readouterr().out)
+                          "--reinstall", "--install-arg=--no-llm"]) == 2
+    captured = capfd.readouterr()
+    assert "v1.2.0 は適用されていません" in captured.err
+    seen = json.loads(captured.out)
     assert seen["argv"] == ["apply", "--tag", "v1.2.0", "--reinstall",
                             "--install-arg=--no-llm"]
     assert seen["repo"] == os.path.realpath(repo)
@@ -73,6 +76,17 @@ def test_launcher_runs_target_updater_against_live_repo(tmp_path, capfd):
     assert not Path(seen["file"]).exists()          # temp copy removed
     # the live checkout itself was not touched
     assert _git(repo, "status", "--porcelain").stdout == ""
+
+
+def test_launcher_apply_succeeds_only_when_the_tag_is_checked_out(tmp_path, capfd):
+    repo, bare = _make_repo(tmp_path)
+    stub = ("import os, subprocess\n"
+            "subprocess.run(['git', '-C', os.environ['MCS_UPDATE_REPO'], 'checkout', '-q',"
+            " 'refs/tags/v1.2.0'], check=True)\n")
+    _release(tmp_path / "remote-work", bare, "v1.2.0", {"mcs/ops/mcs_update.py": stub})
+    _git(repo, "fetch", "-q", "--tags")
+    assert _launcher().main(["--repo", str(repo), "--no-fetch", "apply"]) == 0
+    assert "適用されていません" not in capfd.readouterr().err
 
 
 def test_launcher_refuses_target_without_updater(tmp_path):

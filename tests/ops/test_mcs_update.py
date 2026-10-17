@@ -923,6 +923,7 @@ def test_recover_mixed_tree_after_merge_stage_crash(updater, tmp_path,
     (repo / "introduced.txt").write_text("new")
     work = tmp_path / "remote-work"
     (work / "introduced.txt").write_text("new")
+    (work / "f.txt").write_text("three")    # the dirty path is one the update touches
     _git(work, "add", ".")
     _git(work, "commit", "-qm", "c3")
     _git(work, "tag", "v1.2.0")
@@ -2151,9 +2152,11 @@ def test_resume_retry_bounces_once_then_only_ensures(
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    # a real prev: the dirty-tree reset checks the path is one the update touches
+    prev = _git(repo, "rev-list", "-n1", "v1.0.0").stdout.strip()
     state = updater._default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": head,
-                         "prev_sha": "0" * 40, "at": time.time()}
+                         "prev_sha": prev, "at": time.time()}
     state["stages"] = [{"stage": "post_merge", "at": time.time()}]
     updater.save_state(state)
     assert updater.recover_interrupted() == 1

@@ -127,6 +127,8 @@ _CATEGORIES = (
     "care_services", "care_team", "contacts", "allergies", "devices", "preferences",
     "medication_management", "nutrition", "cognition", "adverse_events",
     "observations", "followup",
+    "services_provided", "incidents", "excretion", "skin_wound", "oral_health",
+    "plan_goals", "orders_documents",
 )
 _DETAILS = (
     "drug_name", "medication_kind", "prescriber", "actual_dose", "actual_frequency",
@@ -136,7 +138,7 @@ _DETAILS = (
     "assignee", "due_text", "observed_on", "last_confirmed_on", "confirmed_by",
     # planned pharmacy details (plan T10); not yet runtime DETAIL_KEYS
     "storage_status", "storage_place", "medication_manager", "inquiry_result",
-    "interaction_check",
+    "interaction_check", "valid_period", "body_site", "food_texture",
 )
 _FIELDS = {
     "meds": ("name", "dose", "action", "status", "subject", "negated", "route",

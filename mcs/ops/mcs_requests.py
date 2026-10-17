@@ -1,11 +1,12 @@
 """Human-confirmed local requests; no network or automatic task creation."""
+import fcntl
 import json
 import os
 import re
 import tempfile
 import time
 import uuid
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from datetime import date
 from pathlib import Path
 
@@ -356,6 +357,27 @@ def _apply_request_tx(db, req, pid, now):
     return error, rid, before, after
 
 
+_QUEUED = re.compile(r"request-([0-9]{20})-")
+
+
+@contextmanager
+def queue_lock(cmd_dir, *, wait=True):
+    """The order in which this lock is taken is the order commands apply: enqueue names and
+    publishes a command while holding it, and drain lists the inbox only while holding it,
+    so a drain never overtakes a writer however long that writer stalls."""
+    # beside the inbox (like _circuit_lock), so the inbox itself holds only commands
+    fd = os.open(os.path.normpath(cmd_dir) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locked = True
+        except BlockingIOError:
+            locked = False
+        yield locked
+    finally:
+        os.close(fd)  # closing releases the flock
+
+
 def enqueue(req, cmd_dir):
     error = validate(req)
     if error:
@@ -363,28 +385,33 @@ def enqueue(req, cmd_dir):
     raw = canonical(req)
     if len(raw) > MAX_COMMAND_BYTES:
         raise ValueError("command_too_large")
-    # The inbox must already exist; never accidentally create a host-like path in a container.
-    fd, temp = tempfile.mkstemp(prefix="request-", suffix=".tmp", dir=cmd_dir)
     receipt = {"command_id": req["command_id"], "payload_hash": payload_hash(req), "outcome": "queued"}
-    published = False
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.link(temp, temp[:-4] + ".json")  # Atomic publication without clobbering pending input.
-        published = True
-        os.unlink(temp)
-        fsync_dir(cmd_dir)
-    except OSError:
-        if not published:
-            raise
-        return {**receipt, "outcome": "unknown", "error": "queue_durability_unknown"}
-    finally:
-        # An ignored .tmp is safer than masking the primary result or
-        # deleting published input.
-        with suppress(OSError):
-            Path(temp).unlink(missing_ok=True)
+    # The inbox must already exist; never accidentally create a host-like path in a container.
+    with queue_lock(cmd_dir):
+        # drain_commands applies files in name order: number after every queued command,
+        # even if the clock stepped back, so the lock order is the apply order.
+        queued = [int(m[1]) for name in os.listdir(cmd_dir) if (m := _QUEUED.match(name))]
+        seq = max([time.time_ns(), *(n + 1 for n in queued)])
+        fd, temp = tempfile.mkstemp(prefix=f"request-{seq:020d}-", suffix=".tmp", dir=cmd_dir)
+        published = False
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.link(temp, temp[:-4] + ".json")  # Atomic publication without clobbering pending input.
+            published = True
+            os.unlink(temp)
+            fsync_dir(cmd_dir)
+        except OSError:
+            if not published:
+                raise
+            return {**receipt, "outcome": "unknown", "error": "queue_durability_unknown"}
+        finally:
+            # An ignored .tmp is safer than masking the primary result or
+            # deleting published input.
+            with suppress(OSError):
+                Path(temp).unlink(missing_ok=True)
     return receipt
 
 
