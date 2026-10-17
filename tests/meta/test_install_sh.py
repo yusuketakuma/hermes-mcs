@@ -232,6 +232,7 @@ if [ "$1" = "-" ] && [ -n "$STUB_REAL_PYTHON" ]; then
     exec "$STUB_REAL_PYTHON" -B "$STUB_ROOT/runtime-check.py" --persist "$@"
 fi
 case "$*" in
+  *"mcs_setup.py init"*) exit "${STUB_SETUP_EXIT:-0}" ;;
   *"mcs_setup.py services"*)
     if [ -d "$HOME/.mcs/data/cmd" ] && [ -d "$HOME/.mcs/data/cmd_int" ]; then
         echo "datadirs-ready" >> "$STUB_LOG"
@@ -534,8 +535,8 @@ def test_install_run_then_rerun_converges(tmp_path):
     assert loaded == {"ai.mcs.llamaserver", "org.mcs.recovery"}
     # the pinned clone is reported pinned; final summary lists next steps
     assert "Hermes の固定版" in r1.stdout
-    assert "ソフトの導入が完了しました。結果:" in r1.stdout
-    assert "初期設定（init）で Gateway の反映と動作条件の確認" in r1.stdout
+    assert "ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。" in r1.stdout
+    assert "専用 Chrome の起動・MCS へのログイン" in r1.stdout
 
     r2 = _run(env, hermes_home)
     assert r2.returncode == 0, r2.stderr
@@ -730,7 +731,7 @@ def test_backslash_home_and_final_instructions_survive(tmp_path):
         == f"{ROOT}\n"
     venv_py = hermes_home / "hermes-agent" / "venv" / "bin" / "python"
     assert f"'{venv_py}' '{ROOT}/mcs/ops/mcs_setup.py' init\n" in r.stdout
-    assert "init --yes \\\n        --login-id <ID>" in r.stdout
+    assert "後で続ける場合のコマンド:" in r.stdout
     assert f"'{venv_py}' '{ROOT}/mcs/ops/mcs_setup.py' check" in r.stdout
     shim = (home / ".local" / "bin" / "hermes").read_text()
     assert f"exec '{venv_py.parent / 'hermes'}' \"$@\"" in shim
@@ -1198,7 +1199,7 @@ def test_failed_stage_stops_install_then_rerun_recovers(
     assert r.returncode != 0
     assert message in r.stderr
     assert STOPPED in r.stderr
-    assert "ソフトの導入が完了しました。" not in r.stdout
+    assert "ソフトの準備が完了しました" not in r.stdout
     if switch not in ("STUB_FAIL_WATCHDOG", "STUB_WATCHDOG_NOLOAD"):
         # stopped before stage 6 — the old tool is untouched
         assert (rec / "mcs_recover.py").read_bytes() == old_gen
@@ -1246,7 +1247,7 @@ def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
     assert json.loads((home / ".mcs/config.json").read_text())["runtime_mode"] == "standalone"
     for command in ("-m lineworks_adapter init", "-m mcs_standalone status"):
         assert f"cd '{ROOT}' && " in first.stdout.split(command)[0].splitlines()[-1]
-    assert "lineworks_adapter のサービスを別に起動しないでください" in " ".join(first.stdout.split())
+    assert "専用サービスを別に起動しないでください" in first.stdout
     assert "-m lineworks_adapter service" not in first.stdout
     calls = _calls(stub)
     text = "\n".join(calls)

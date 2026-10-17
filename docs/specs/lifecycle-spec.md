@@ -110,13 +110,18 @@ pip install・モデル DL の `.part`）は続きから収束する。
 | services | `~/.mcs/data{,/cmd,/cmd_int}` 作成 + `mcs_setup.py services` へ委譲 | 停止 |
 | recovery📋 | `mcs_recover.py` → `~/.mcs-recovery/`（旧版は `.prev`）+ `repo_path` に checkout を記録 + `org.mcs.recovery` launchd watchdog bootstrap（変更時・未ロード時のみ） | 停止 |
 
-新規作成物は `umask 077`（所有者のみ）。完了時に `ソフトの導入が完了しました。結果:`
+新規作成物は `umask 077`（所有者のみ）。ソフト準備完了時に日本語の準備結果
 と次のコマンド（venv インタプリタのフルパス付き）を表示する。
+導入前の対話中止は終了コード130。準備後に初期設定を後回しにする場合は0だが、
+初期設定・接続確認まで完了したことは意味しない。開始した初期設定の失敗・中断は
+その終了コードを返し、ソフトの再導入ではなく設定の再開を案内する。
 
-残る1ステップ `mcs_setup.py init`（対話ウィザード）:
+初期設定 `mcs_setup.py init`（導入直後に続けるか、後から再開する対話ウィザード）:
 
-- 設定項目を最大12節で案内（使わない機能の節は非表示）。Enterで現状・既定値を採用し、
-  `-` で任意キー削除・`--set KEY=JSON` で非対話も可
+- 必須項目と対象・権限範囲を確認する推奨コース、全設定を確認する詳細コースを選択。
+  推奨コースでは高度な項目の既存値を保持し、未設定の項目に既定値を使う。
+  詳細コースは設定項目を最大12節で案内（使わない機能の節は非表示）。
+  Enterで現状・既定値を採用し、`-` で任意キー削除・`--set KEY=JSON` で非対話も可。
 - `interactive=discord|slack` 選択時は公開 CLI のみで: plugin settings を
   `hermes -p <profile> config set`（serving profile・allowlist は質問）、
   Discord または Slack の token を profile .env へ（env または getpass）

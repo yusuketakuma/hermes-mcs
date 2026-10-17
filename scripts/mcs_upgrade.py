@@ -18,6 +18,7 @@ docs/guides/UPGRADE_AGENT.md.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -95,14 +96,107 @@ class _JapaneseParser(argparse.ArgumentParser):
         self.exit(2, f"入力内容を確認してください。--help で指定方法を確認できます。\n詳細: {message}\n")
 
 
-def main(argv=None) -> int:
+def _choose(prompt, choices, default="1"):
+    while True:
+        print(prompt)
+        for key, label in choices:
+            print(f"  {key}. {label}")
+        try:
+            answer = input(f"番号を入力して Enter（省略時 {default}）: ").strip() or default
+        except (EOFError, KeyboardInterrupt):
+            print("\n中止しました。更新は開始していません。")
+            return "0"
+        if answer in {key for key, _ in choices}:
+            return answer
+        print("表示されている番号を入力してください。")
+
+
+def interactive_update(cmd, env, repo):
+    """Explain the target updater's plan before an explicit local update."""
+    print("手順 2/3: この Mac を更新できるか確認しています。")
+    try:
+        result = subprocess.run(cmd, env=env, cwd=repo, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        print("確認が時間内に終わりませんでした。更新は開始していません。担当者に接続と導入状態の確認を依頼してください。")
+        return 1
+    try:
+        report = json.loads(result.stdout)
+        if result.returncode or not isinstance(report, dict):
+            raise ValueError
+    except (ValueError, RecursionError):
+        print("更新の確認に失敗しました。更新は開始していません。担当者に mcs doctor での確認を依頼してください。")
+        return 1
+    route = report.get("route")
+    if route == "noop" and not report.get("blockers"):
+        print("すでに選択した版です。更新は不要です。")
+        return 0
+    if route not in ("apply", "reinstall") or report.get("blockers"):
+        print("この状態では更新を開始できません。現在の設定とデータは変更していません。")
+        if "update_in_progress_or_interrupted" in report.get("blockers", []):
+            print("更新が進行中、または中断しています。少し待ってから mcs recover で確認してください。")
+        elif "standalone_external_apply" in report.get("blockers", []):
+            print("MCS 単独実行の構成は、この自動更新では適用できません。担当者に docs/guides/STANDALONE.md と docs/guides/UPGRADE_AGENT.md の手動更新手順を依頼してください。")
+        elif "restore_consent_pending" in report.get("blockers", []):
+            print("データを戻す前の人による確認が必要です。通知された内容を担当者と確認してください。")
+        else:
+            print("担当者に mcs doctor と mcs update plan での確認を依頼してください。")
+        return 1
+    print("確認できました。更新中は収集や通知が一時的に止まる場合があります。")
+    if route == "reinstall":
+        if report.get("reinstall_requires_recovery_repair"):
+            print("復旧用の実行環境に設定の不一致があります。更新は開始しません。担当者に docs/guides/UPGRADE_AGENT.md の復旧用 Python 修復手順を依頼してください。")
+            return 1
+        install_args = report.get("install_args")
+        if not isinstance(install_args, list) or any(
+                arg not in ("--no-llm", "--no-brew", "--no-plugin", "--no-recovery")
+                for arg in install_args):
+            print("以前の導入設定を確認できないため、更新を開始しません。担当者に docs/guides/UPGRADE_AGENT.md の再導入手順を依頼してください。")
+            return 1
+        print("以前の導入設定を引き継ぎ、必要な実行環境も更新します。通常より時間がかかる場合があります。")
+    if report.get("schema_bump"):
+        print("保存データの形式も更新します。古い版へ戻す際は追加の確認が必要になる場合があります。")
+    for note in report.get("notes", []):
+        text = note.get("notes") if isinstance(note, dict) else note
+        if isinstance(text, str) and text.strip():
+            print("更新時の注意:\n" + text)
+    print("手順 3/3: 更新を実行するか選んでください。")
+    answer = _choose("判断に迷う場合は、確認結果を担当者に相談してから進めてください。", [
+        ("1", "今回は終了する・担当者に相談する（わからない場合の推奨）"),
+        ("2", "収集・通知の一時停止を確認して、更新を開始する"),
+        ("0", "中止する")])
+    if answer != "2":
+        print("更新は開始していません。再開するときは mcs update を実行してください。")
+        return 0
+    apply_cmd = list(cmd)
+    apply_cmd[2] = "apply"
+    if route == "reinstall":
+        apply_cmd.append("--reinstall")
+        apply_cmd.extend(f"--install-arg={arg}" for arg in install_args)
+    result = subprocess.run(apply_cmd, env=env, cwd=repo)
+    if result.returncode:
+        print("更新は完了していません。繰り返し実行せず、mcs recover で状態を確認してください。")
+        return result.returncode
+    try:
+        checked = subprocess.run(cmd, env=env, cwd=repo, capture_output=True, text=True, timeout=600)
+        final = json.loads(checked.stdout)
+        if (checked.returncode or not isinstance(final, dict)
+                or final.get("route") != "noop" or final.get("blockers")):
+            raise ValueError
+    except (subprocess.TimeoutExpired, OSError, ValueError, RecursionError):
+        print("更新の完了を確認できませんでした。再度更新する前に mcs recover と mcs doctor で状態を確認してください。")
+        return 1
+    print("選択した版への更新完了を確認しました。mcs doctor で動作を確認し、通知先で応答を確認してください。")
+    return 0
+
+
+def _main(argv=None) -> int:
     ap = _JapaneseParser(description=__doc__.splitlines()[0])
     ap.add_argument("--repo", default=".", help="MCSの保存先フォルダ（省略時: 現在のフォルダ）")
     ap.add_argument("--no-fetch", action="store_true",
                     help="通信せず、取得済みの版情報を使う")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("plan", "apply"):
-        p = sub.add_parser(name, help="更新内容を確認する（変更しません・JSON出力）" if name == "plan" else "更新を実行する")
+    for name in ("plan", "apply", "guide"):
+        p = sub.add_parser(name, help="更新内容を確認する（変更しません・JSON出力）" if name == "plan" else "日本語の対話形式で更新を案内する" if name == "guide" else "更新を実行する")
         p.add_argument("--to", help="更新する版（例: v1.0.23。省略時: 最新の正式版）")
         p.add_argument("--keep-hermes-checkout", metavar="SHA",
                        help="指定したHermesの版を維持する（未変更でPython 3.14対応のもの）。"
@@ -111,6 +205,16 @@ def main(argv=None) -> int:
             p.add_argument("--reinstall", action="store_true", help="必要なソフトと設定も再導入する")
             p.add_argument("--install-arg", action="append", default=[], help="再導入に渡すオプション（例: --install-arg=--no-llm。複数指定可）")
     args = ap.parse_args(argv)
+    if args.cmd == "guide":
+        if not sys.stdin.isatty():
+            print("対話形式の更新はターミナルで mcs update を実行してください。")
+            return 2
+        print("MCS 更新のご案内 — 設定と保存済みデータを引き継いで更新します。")
+        print("手順 1/3: 更新する版を選びます。")
+        if _choose("通常は最新の正式版を選んでください。", [
+                ("1", "最新の正式版を調べる（わからない場合の推奨）" if not args.to
+                 else "指定された版を確認する"), ("0", "中止する")]) == "0":
+            return 0
     if sys.version_info < (3, 10):
         raise SystemExit("Python 3.10以上が必要です。Hermesまたは "
                          "~/.mcs/venv のPythonを使ってください（UPGRADE_AGENT.md 第1節）")
@@ -128,7 +232,7 @@ def main(argv=None) -> int:
         updater = os.path.join(tmp, "mcs", "ops", "mcs_update.py")
         if not os.path.exists(updater):
             raise SystemExit(f"{tag} に更新プログラム mcs/ops/mcs_update.py がありません")
-        cmd = [sys.executable, updater, args.cmd, "--tag", tag]
+        cmd = [sys.executable, updater, "plan" if args.cmd == "guide" else args.cmd, "--tag", tag]
         if args.cmd == "apply":
             cmd += ["--reinstall"] if args.reinstall else []
             cmd += [f"--install-arg={a}" for a in args.install_arg]
@@ -137,6 +241,9 @@ def main(argv=None) -> int:
         if args.keep_hermes_checkout:
             env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = args.keep_hermes_checkout
         try:
+            if args.cmd == "guide":
+                print(f"更新する版: {tag}")
+                return interactive_update(cmd, env, repo)
             rc = subprocess.run(cmd, env=env, cwd=repo).returncode
         except OSError as exc:
             raise SystemExit(f"更新プログラムを起動できませんでした。Pythonの実行環境を確認してください（{exc.strerror}）") from None
@@ -149,6 +256,22 @@ def main(argv=None) -> int:
         return rc
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def main(argv=None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return _main(arguments)
+    except SystemExit as exc:
+        if "guide" not in arguments or not isinstance(exc.code, str):
+            raise
+        print("更新の準備に失敗しました。ネット接続と導入状態を担当者に確認してもらい、再度 mcs update を実行してください。")
+        return 1
+    except (OSError, KeyboardInterrupt):
+        if "guide" not in arguments:
+            raise
+        print("更新の案内を終了しました。処理の途中だった場合は、再実行の前に mcs recover で確認してください。")
+        return 1
 
 
 if __name__ == "__main__":

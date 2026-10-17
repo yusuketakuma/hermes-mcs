@@ -860,6 +860,8 @@ def test_wizard_discord_scope_and_answers(monkeypatch, tmp_path):
               {"mcs_login_id": "u1", "notify_target": "slack"})
 
     def answer(prompt=""):
+        if "setup_detail" in prompt:
+            return "2"
         if "notify.interactive" in prompt:
             return "discord"
         if "notify.discord." in prompt:
@@ -897,6 +899,8 @@ def test_wizard_slack_scope_and_answers(monkeypatch, tmp_path):
     prompts = []
 
     def answer(prompt=""):
+        if "setup_detail" in prompt:
+            return "2"
         prompts.append(prompt)
         if "notify.interactive" in prompt:
             return "slack"
@@ -946,7 +950,8 @@ def test_wizard_dash_removes_optional_key(monkeypatch, tmp_path):
         "notify_max_age_h": 24})
     monkeypatch.setattr(
         "builtins.input",
-        lambda prompt="": "-" if "notify_max_age_h" in prompt else "")
+        lambda prompt="": "2" if "setup_detail" in prompt else (
+            "-" if "notify_max_age_h" in prompt else ""))
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
     monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
     assert mcs_setup.main() == 0

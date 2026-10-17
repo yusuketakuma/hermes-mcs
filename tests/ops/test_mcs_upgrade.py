@@ -675,3 +675,13 @@ def test_updater_bad_arguments_explain_help_in_japanese(capsys):
         mcs_update._build_parser().parse_args(["--unknown-synthetic-flag"])
     assert stopped.value.code == 2
     assert "入力内容を確認してください" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_plan_exposes_reinstall_recovery_repair(updater, monkeypatch, tmp_path, repair):
+    import mcs_setup
+    _plan_env(updater, monkeypatch, tmp_path, ["install_sh_changed"])
+    monkeypatch.setattr(mcs_setup, "recovery_repair_pending", lambda cfg: repair)
+    report = updater.plan("v1.2.0")
+    assert report["route"] == "reinstall"
+    assert report["reinstall_requires_recovery_repair"] is repair

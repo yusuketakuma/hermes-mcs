@@ -2,16 +2,18 @@
 
 1.0.25候補の推奨Hermes agentは **[公式v0.22.2](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.2)をベースにしたMCS companion** です。導入とCIは同じcommit `b7758d8555931846f4b8f798d4ea9715f65077ca` に固定します。MCS用の本人確認コンテキストと認証設定の互換性を維持した版を使います。既存checkoutの移行は更新手順に従います。この固定commitはMCS companionの公開ブランチへ反映済みで、固定SHAの取得と実SDKによる合成統合テストを確認しています。本番への反映は更新手順で別途行います。
 
+**初めての方は[日本語の対話形式で進める手順](EASY_SETUP.md)を先にお読みください。** このページは設定の詳細と管理担当者向けの補足です。
 
-このガイドはv1.0.21候補のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は受入票で確認する。
-現行版の検証と制約は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.21.md)、過去の実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)で追跡する。
+このガイドは現行のinstall/update/setup/doctorと復旧手順に対応します。v1.0.25候補では日本語の対話入口を追加しています。公開前の未受入事項は受入票で確認してください。
+過去版の検証記録は[1.0.21のリリース受入票](../development/acceptance/ACCEPTANCE_1.0.21.md)、実機受入の進め方は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)を参照してください。1.0.25の受入結果はリリース準備で別途確認します。
 
 ### 2026-10-04追記: 現在のローカル入口
 
 [共通CLI](../../mcs/ops/mcs_cli.py)は実装済みです。初回は
 `sh scripts/mcs install`、導入後は`mcs install / update / setup / doctor`を利用できます。
 `install.sh`が`~/.local/bin/mcs`を配置するため、同ディレクトリをPATHへ追加します。
-`mcs setup`は既存の`init`へ委譲し、既存設定・非表示の秘密入力を維持します。
+`mcs setup`は既存の`init`へ委譲し、推奨コース／全項目コースを選べます。既存設定・非表示の秘密入力を維持します。
+`mcs update`は更新計画と実行確認、`mcs recover`は中断した更新の状態確認と復旧確認を日本語で案内します。既存の明示サブコマンドと自動監視の動作は維持します。
 下記の`install.sh`、`mcs_setup.py init/check/doctor`、更新bootstrapは引き続き利用できます。
 
 `mcs doctor --json`は既定で通信・秘密取得・患者DBの参照をせず、
@@ -64,8 +66,8 @@ LLM・復旧設定のファイル配置や一時ファイルの削除に失敗�
 権限・空き容量を修復して再実行する。`--recovery-python` を明示した場合は、
 `--no-recovery` と併用した事前チェックでも指定を検証する。
 
-`install.sh` の最後に `ソフトの導入が完了しました。結果:` と、次に実行するコマンドが
-**フルパスで**表示される。それをそのままコピーして実行する（下はその形。
+`install.sh` の最後に「ソフトの準備が完了しました」と、次に実行するコマンドが
+**フルパスで**表示される。ターミナルでの実行時は初期設定へ続けて進む選択肢も表示する。それをそのままコピーして実行する（下はその形。
 `python` は install.sh が作った venv のインタプリタで、macOS 標準の
 `python3` では動かない）:
 
@@ -84,7 +86,7 @@ CDP ポート `:9333` 付きで起動してください（§A-5）。
 **成功の目安**:
 
 - `--preflight` の最終行が `事前確認: 導入を妨げる問題 0件、注意 N件`（exit 0）
-- `install.sh` が `ソフトの導入が完了しました。結果:` と 6 ステージ分の結果を表示して終わる
+- `install.sh` が `ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。` と 6 ステージ分の結果を表示して終わる
   （途中で止まった場合は `エラー: 導入を中断しました。…` が出る — §7-1）
 - `check` の最終行が `設定確認: 正常 （問題0件、注意N件）`（exit 0）。
   `注意:` 行は動作を止めないが、内容は一度確認する
@@ -209,7 +211,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 | 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期6件（`backup.enabled=true`ならoffsiteを加え7件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`、旧版は `.prev`。復旧対象の checkout を `~/.mcs-recovery/repo_path` に記録。15分間隔で中断した update を復旧）。内容・記録が変わった時か未ロード時だけ再読込 | macOS では配備前に復旧用 Python（既定は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの、または `--recovery-python`）の Python ≥3.14 と SQLite の WAL-reset 修正を検査し、影響版・版不明なら tool・plist を配備せず停止（自動で別 Python へ切り替えない）。bootstrap 失敗でも停止 |
 
-最後に `ソフトの導入が完了しました。結果:` として各ステージの結果と、次に実行する
+最後に「ソフトの準備が完了しました」として各段階の結果と、次に実行する
 コマンド（venv インタプリタのフルパス付きの `init`・非対話版の例・
 復旧用の `services`・`check`）が表示される。手動で残るのは `mcs_setup.py init`
 （秘密情報と選択が必要）だけ。
@@ -249,9 +251,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 インタプリタを使うのが確実 — macOS 標準の `/usr/bin/python3` は
 3.9 系で古い）
 
-対話ウィザードが設定項目を最大12節で案内する（各項目に
-説明と既定値を表示、Enter でそのまま進行。関連機能がオフの項目は
-自動スキップ）。`init` が行うこと:
+対話ウィザードで推奨コースと詳細コースを選びます。推奨コースは必須情報・通知先・権限範囲を確認し、高度な設定は既存値を保持、未設定なら既定値を使います。詳細コースは全設定を順に案内します。各項目は説明と選択肢を表示し、Enterで表示された値を使います。関連機能がオフの項目は自動スキップします。`init` が行うこと:
 
 - `~/.mcs/config.json` を生成（0600）
 - Keychain `mcs-adapter` へ MCS パスワードを登録
@@ -470,7 +470,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 
 ## 4. config.json 設定リファレンス
 
-`~/.mcs/config.json`（0600）。`init` のウィザードが全項目を案内する
+`~/.mcs/config.json`（0600）。`init` の詳細コースが全項目を案内する
 （`--set KEY=JSON` で非対話設定も可）。必須は `mcs_login_id` と
 `notify_target` の2つのみ。
 

@@ -233,12 +233,19 @@ def main(argv=None, source=None):
         print(f"注意: {note}")
     sys.stdout.flush()   # keep this summary ahead of install.sh output
     child_env = {**os.environ, "MCS_ROOT": os.path.abspath(os.path.expanduser(RUNTIME_ROOT))}
-    if args.dry_run:
+    preflight = any(flag in passthrough for flag in ("--preflight", "--check-only"))
+    if args.dry_run or preflight:
         if action == "clone":
             # install.sh plans against its own location; the clone does not exist yet.
-            print("--dry-run: ソースフォルダを作成していないため install.sh の計画は作成後に確認してください")
+            if preflight:
+                print("導入前の確認は未実施です。保管先にプログラムがないため確認できません。"
+                      "プログラムを配置した後に、同じ確認コマンドを実行してください。"
+                      "この操作では配置も変更も行っていません。", file=sys.stderr)
+                return 2
+            print("確認のみ: プログラムはまだ配置していません。配置後の詳細な確認は導入時に行います")
             return 0
-        return subprocess.run(["sh", os.path.join(dest, "install.sh"), "--dry-run", *passthrough],
+        return subprocess.run(["sh", os.path.join(dest, "install.sh"),
+                               *(["--dry-run"] if args.dry_run else []), *passthrough],
                               cwd=dest, env=child_env).returncode
     if action == "clone":
         try:
