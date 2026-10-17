@@ -871,6 +871,7 @@ def plan(tag: str) -> dict:
 
 
 def _plan(tag, cfg, state, current, target_sha) -> dict:
+    import mcs_setup
     cur_tag, cur_sha = current["tag"], current["sha"]
     blockers = precheck_local(cfg)
     tag_errors = precheck_tag(tag)
@@ -915,6 +916,7 @@ def _plan(tag, cfg, state, current, target_sha) -> dict:
         "restarts": restarts,
         "recovery_tool_changed": recovery_changed,
         "install_args": recorded_install_args(),
+        "reinstall_requires_recovery_repair": bool(reinstall and mcs_setup.recovery_repair_pending(cfg)),
         "notes": [] if noop else upgrade_notes(tag, cur_tag) + _recovery_notes(cfg, blockers, reinstall),
     }
 

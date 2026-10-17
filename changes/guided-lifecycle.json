@@ -6,7 +6,8 @@
   "details": [
     "推奨コースもログインID・通知先・対象範囲・操作権限は確認し、高度な既存設定を保持する。",
     "更新は計画確認→明示実行→再計画で対象版への反映を確認し、終了コード0だけで完了表示しない。",
-    "mcs recoverは配備された独立Pythonと対話対応を確認してから復旧ツールへ委譲する。",
+    "mcs recoverは配備された独立Pythonと対話対応を確認してから復旧ツールへ委譲する。中断記録・復元保留を示し、既定は実行せず終了する。既存の復元承認・実行中更新の保護を維持する。",
+    "更新計画は復旧用Pythonの修復が必要かを返し、対話式更新が修復前の再導入を開始しないようにする。",
     "実接続・通知・本番配備の確認はソフト準備や合成テストと区別する。"
   ],
   "refs": [
@@ -14,6 +15,8 @@
     "mcs/ops/mcs_setup.py",
     "mcs/ops/mcs_cli.py",
     "scripts/mcs_upgrade.py",
+    "deployment/recovery/mcs_recover.py",
+    "mcs/ops/mcs_update.py",
     "docs/guides/EASY_SETUP.md"
   ]
 }
