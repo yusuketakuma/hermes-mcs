@@ -219,6 +219,7 @@ DB を開いて移行（加法 migration）→ 事後検証。失敗時は自動
 2. `lineworks_adapter` があれば、[LINEWORKS.md](LINEWORKS.md) の手順で独立アダプターを再起動し `python -m lineworks_adapter check`。1.0.15では自動更新・巻戻し・復旧後の再起動を追加しましたが、この版への初回更新後も明示的な再起動と反映確認を行います。
 3. `notes` にある追加操作（承認済みのもの）を実行する。`apply` 経路で `recovery_tool_changed` が true なら §2 の表のとおり install.sh を再実行する。
 4. 使用中のgatewayまたは独立host・通知アダプターと抽出ワーカー2本について、更新後に起動したプロセスであることと稼働状態を確認します。古いworkerが新しい通知形式を保留している場合、保存ファイルを削除して再送させず、更新したworkerで通常の配送を再開します。
+   Hermes の Slack では、カードを送るのは plugin settings の `slack_profile` の profile だけです。複数 profile の gateway で他の profile の接続が見送られた場合は、イベントログ `hermes.plugin.mcs_slack` に `worker_disabled`（`reason=profile_mismatch`）が出ます。これは正常な動作です。`channel_not_found` だけを根拠に再送しません。成否不明（`unknown`）や再送上限（`resend_exhausted`）の配送を、保存データの書換えや強制再送で解除しません。
 5. 検証:
 
 ```bash

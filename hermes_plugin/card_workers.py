@@ -145,6 +145,18 @@ def make_slack_factory(ctx):
                 _event_logger("mcs_slack")("worker_disabled",
                                             reason="config_incomplete")
             return None
+        # Multiplex adapters can inherit this config; only its owner may send.
+        profile = getattr(adapter, "_owner_profile", None)
+        if profile is None:
+            runner = getattr(adapter, "gateway_runner", None)
+            profile = getattr(runner, "_primary_profile_name", None)
+        if profile is None:
+            profile = getattr(ctx, "profile_name", None)
+        if profile is None and hasattr(adapter, "_owner_profile"):
+            profile = "default"
+        if profile is not None and profile != settings["profile"]:
+            _event_logger("mcs_slack")("worker_disabled", reason="profile_mismatch")
+            return None
         _ensure_repo_root()
         from adapters.common import paths
         flags = paths.read_flags(settings["data_root"])
