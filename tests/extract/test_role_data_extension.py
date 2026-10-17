@@ -131,3 +131,15 @@ def test_written_negations_of_care_symptoms(body, kept):
     # review EV2: 「なく」「認められない」 negate; 「否定しない」 and a negated negation keep the symptom
     import extract
     assert bool(extract.extract_message(body, "2026-10-06T10:00:00+09:00").get("symptoms")) is kept, body
+
+
+@pytest.mark.parametrize("body, current", [
+    ("昨日の体温38.5℃と本日の体温36.5℃。", {"bt": 36.5}),
+    ("本日の体温36.5℃と昨日の体温38.5℃。", {"bt": 36.5}),
+    ("昨日の体温38.5℃と本日36.5℃。", None),          # the second reading names no vital: nothing current
+    ("昨日から体温38.5℃が続く。", {"bt": 38.5}),
+    ("昨日、体温38.5℃。本日体温36.5℃。", {"bt": 36.5})])
+def test_each_reading_takes_its_own_time_word_within_one_clause(body, current):
+    # review EV5: a past and a current reading in one clause are not mixed up
+    import extract
+    assert extract.extract_message(body, "2026-10-06T10:00:00+09:00").get("vitals") == current

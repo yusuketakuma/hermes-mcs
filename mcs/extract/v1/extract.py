@@ -286,6 +286,16 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
     if period != "current" and not _CURRENT_MARK.search(clause):
         return period
     sentence = max(body.rfind(c, 0, start) for c in "。！？!?\n") + 1
+    if measurement and _CURRENT_MARK.search(clause) and (
+            _NONCURRENT_MARK.search(clause) or _MEASURED_PAST_MARK.search(clause)):
+        # 「昨日の体温38.5℃と本日の体温36.5℃」: one clause with both times — each reading
+        # takes the nearest time word written before it within the clause
+        before = body[left:start]
+        nearest = max([(m.end(), "past") for rx in (_NONCURRENT_MARK, _MEASURED_PAST_MARK)
+                       for m in rx.finditer(before)]
+                      + [(m.end(), "current") for m in _CURRENT_MARK.finditer(before)], default=None)
+        if nearest is not None:
+            return "past" if nearest[1] == "past" else scope
     if (_NONCURRENT_MARK.search(clause)
             or (measurement and (_MEASURED_PAST_MARK.search(clause)
                                  or _SENTENCE_PAST_LEAD.match(body, sentence, start)))) \
