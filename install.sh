@@ -705,7 +705,10 @@ if [ -t 0 ] && [ -t 1 ]; then
     printf '\nこれから行うこと\n'
     printf '  必要なソフト、通知連携、この Mac で動く AI、自動実行、復旧ツールを準備します。\n'
     printf '  指定した省略オプションは維持します。連携方式: %s\n' "$RUNTIME_MODE"
-    printf '  初回はインターネット接続が必要です。AI の取得は約 5.7 GB で時間がかかります。\n'
+    printf '  初回はインターネット接続が必要です。\n'
+    if [ "$SKIP_LLM" -eq 0 ] && [ "$OS" = Darwin ] && [ ! -f "$MODEL_FILE" ]; then
+        printf '  AI の取得は約 5.7 GB で時間がかかります。\n'
+    fi
     printf '  準備後に、MCS のログイン情報と通知先を画面に沿って設定します。\n'
     printf '  1) この内容で導入する（推奨）\n  2) 今は中止する\n'
     choose '選択 [1・推奨 / 2 / 0・中止]: '

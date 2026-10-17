@@ -1,4 +1,6 @@
 """Synthetic checks for the beginner setup path; no live services."""
+import json
+
 import pytest
 
 import mcs_setup
@@ -59,6 +61,35 @@ def test_cancellation_does_not_write_config_or_secrets(monkeypatch, tmp_path, ca
     assert mcs_setup.main(['init']) == 130
     assert not (tmp_path / 'c.json').exists()
     assert '保存していません' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('interruption', [EOFError, KeyboardInterrupt])
+@pytest.mark.parametrize('existing', [False, True])
+def test_cancellation_during_password_input_does_not_claim_config_saved(
+        monkeypatch, tmp_path, capsys, interruption, existing):
+    cfg = {'mcs_login_id': 'synthetic-login', 'notify_target': 'slack', 'trickle_pages': 7}
+    _init_env(monkeypatch, tmp_path, cfg)
+    path = tmp_path / 'c.json'
+    original = json.dumps(cfg).encode()
+    if existing:
+        path.write_bytes(original)
+    monkeypatch.setattr(mcs_setup, '_wizard', lambda cfg: cfg.update(trickle_pages=2))
+
+    def interrupt(prompt):
+        raise interruption('synthetic-private-input')
+
+    monkeypatch.setattr(mcs_setup.getpass, 'getpass', interrupt)
+    monkeypatch.setattr(mcs_setup, '_keychain_store', lambda *a: pytest.fail('secret write'))
+    monkeypatch.setattr(mcs_setup, '_write_atomic', lambda *a: pytest.fail('config write'))
+    assert mcs_setup.main(['init']) == 130
+    assert path.exists() is existing
+    if existing:
+        assert path.read_bytes() == original
+    assert not (tmp_path / '.env').exists()
+    output = capsys.readouterr().out
+    assert '今回の変更は設定ファイルに保存していません' in output
+    assert '途中まで保存した設定は残っています' not in output
+    assert 'synthetic-private-input' not in output
 
 
 @pytest.mark.parametrize('interruption', [EOFError, KeyboardInterrupt])

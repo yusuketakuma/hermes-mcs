@@ -30,7 +30,8 @@ def test_guided_choice_cancels_without_running_next_step(answer):
 
 
 @pytest.mark.parametrize('answer', [b'0\n', b'2\n'])
-def test_installer_confirmation_cancellation_is_not_success(tmp_path, answer):
+@pytest.mark.parametrize(('skip_llm', 'model_exists'), [(False, False), (True, False), (False, True)])
+def test_installer_confirmation_cancellation_is_not_success(tmp_path, answer, skip_llm, model_exists):
     import os
     import selectors
     import shutil
@@ -42,9 +43,14 @@ def test_installer_confirmation_cancellation_is_not_success(tmp_path, answer):
     if sys.platform != 'darwin' or not shutil.which('script'):
         pytest.skip('BSD script(1) gives the installer a terminal')
     home, _, stub_root, env = _world(tmp_path)
+    if model_exists:
+        model = home / '.mcs/models/Qwen3.5-9B-Q4_K_M.gguf'
+        model.parent.mkdir(parents=True)
+        model.write_bytes(b'synthetic-existing-model')
+    before = set(home.rglob('*'))
     with subprocess.Popen(
         ['script', '-q', '/dev/null', 'sh', str(INSTALL), '--mode', 'standalone',
-         '--no-brew', '--no-llm'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+         '--no-brew', *(['--no-llm'] if skip_llm else [])], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, env=env,
     ) as process, selectors.DefaultSelector() as ready:
         ready.register(process.stdout, selectors.EVENT_READ)
@@ -67,6 +73,9 @@ def test_installer_confirmation_cancellation_is_not_success(tmp_path, answer):
                 process.kill()
         assert process.returncode == 130, output
     assert '中止しました'.encode() in output
+    assert ('AI の取得は約 5.7 GB'.encode() in output) is (not skip_llm and not model_exists)
     assert b'=== 1/6' not in output
-    assert not (home / '.mcs').exists()
+    assert set(home.rglob('*')) == before
+    if model_exists:
+        assert model.read_bytes() == b'synthetic-existing-model'
     assert not any(call.startswith(('brew install', 'uv pip', 'git clone')) for call in _calls(stub_root))
