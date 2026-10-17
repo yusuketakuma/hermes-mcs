@@ -6,7 +6,7 @@
   "details": [
     "既読化（mark-read）の確定後は、代替経路に限らず常に最新投稿IDが保管済みか確認し、未保管なら通知付きのhistory_head取得を予約してpost_ack_gapを記録する。",
     "data/cmdへの要求ファイル名を送信時刻（ナノ秒）始まりにし、取込み時の名前順が送信順と一致するようにした。原子的な公開・権限・検証は変更なし。",
-    "frontier_patientsをproject_id順に固定し、stage_backfill・stage_self_probeは実行ごとに開始位置を1つずつ回転する。取得内容は変更なし。",
+    "frontier_patientsをproject_id順に固定し、stage_backfill・stage_self_probeは時間切れで到達しなかった位置を段階ごとに保存し、次回はそこから再開する。取得内容は変更なし。",
     "SQLite接続にPRAGMA fullfsync=ON・checkpoint_fullfsync=ONを追加した（macOS以外では効果なし）。",
     "運用操作の投入と取込みは共有ロック（data/cmd.lock）で直列化し、ロックを取った順が適用順になる。書込み中の投入があれば取込みは次回に回し、どれだけ長く止まっていても追い越さない。時計が戻っても番号は既存の要求より後ろになる。この順序の保証は更新後に投入された要求が対象で、更新前から残っている要求の投入順は復元できません（旧形式の要求は新形式の後に適用）。"
   ],

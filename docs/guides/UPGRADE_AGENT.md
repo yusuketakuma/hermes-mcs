@@ -12,7 +12,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 
 ### 1.0.25で追加された更新時の確認
 
-- Hermes経由の環境では、更新時に`--reinstall`を指定して上記の固定版へ移行します。認識済みの旧固定版だけが対象で、未知のcommit・ブランチ上・変更中のcheckoutは自動で置き換えません。§4で確定した導入済み機能とopt-outを維持し、使用中のgatewayを再起動してください。独立動作ではhostと使用中の通知アダプターを更新・再起動します。
+- Hermes経由の環境では、更新時に`--reinstall`を指定して上記の固定版へ移行します。Pythonが既に3.14でも、認識済みの旧固定版はコードと接続用ライブラリを更新し、旧環境を退避して新しい環境を作ります。未知のcommit・ブランチ上・変更中のcheckoutは自動で置き換えません。§4で確定した導入済み機能とopt-outを維持し、使用中のgatewayを再起動してください。独立動作ではhostと使用中の通知アダプターを更新・再起動します。
 - 夜間の患者まとめは、`extract.patient_context_nightly.enabled`（生成）と`publication`（限定閲覧）が**省略時ともに有効**です。既存環境も設定を省略したまま更新すると有効になります。明示した`false`は維持し、不正な設定では無効にして診断します。生成だけを評価する場合は`publication=false`、夜間処理を止める場合は`enabled=false`を明示してください。新着抽出に過去文脈を注入する`extract.patient_state_context`は既定無効のままです。共有チャットへの自動配信・第2入力源は追加しません。
 - ルール世代23・LLM抽出世代9・患者背景契約4へ更新します。抽出workerの再起動後、旧世代の結果は通常の処理で順次再生成され、一時的に処理待ちが増えます。夜間の患者背景処理は契約不一致の旧走査結果を再利用せず、夜間枠で履歴を再走査します。再走査が済むまで夜間ビューは未反映扱いになります。履歴を消す操作、手動の全件再解析、保存済み結果の書換えは不要です。
 - DB schemaは9のままで、既存の履歴・設定・バックアップを保持します。checkout外の`~/.mcs-recovery/mcs_recover.py`も§2の表に従って同期し、復旧機能を使う環境では`--no-recovery`で省略しません。復旧本体の同期と、本番の復元操作は別です。復元hold・送信結果不明・再送上限は更新で解除せず、対象backupと損失報告へ束縛した既存の人承認を使います。
@@ -182,7 +182,8 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 |---|---|
 | `tree_dirty` | `git -C "$REPO" status --short` を示し、**【ユーザー確認】**。他の作業者の変更の可能性がある。勝手に退避・破棄しない |
 | `config: …` / `new_config: …` | 現在 / 移行先の設定検証エラー。キーと理由を示し、承認後に `"$PY" "$REPO/mcs/ops/mcs_setup.py" init --set KEY=JSON` で直す（秘密値は扱わない） |
-| `update_in_progress_or_interrupted` | 前回の更新が途中。`"$PY" "$REPO/mcs/ops/mcs_update.py" status` を示し、`recover` を実行してから再計画 |
+| `update_in_progress_or_interrupted` | 前回の更新が途中。`"$PY" "$REPO/mcs/ops/mcs_update.py" status` を確認し、§7の移行先版の更新ツールで復旧してから再計画 |
+| `runtime_migration_pending`（復旧レポート） | Pythonや接続用ライブラリの移行が途中。定期の復旧ツールは環境・更新記録を保持して停止する。通常の復旧を繰り返さず、§7の移行先版の更新ツールを確認する |
 | `restore_consent_pending` | DB 復元の人承認待ち。[バックアップ・復元ガイド §8](BACKUP.md#consent) の損失報告・バックアップhashに束縛された復元承認手順をユーザーが行う |
 | `hermes_not_resolvable` / `standalone_interpreter_unavailable` | 実行基盤が無い。`./install.sh --preflight` の `対処:` を確認しユーザーと対処 |
 | `insufficient_disk` | DB の2倍+64MB の空きが必要。ユーザーに空き容量の確保を依頼 |
@@ -236,7 +237,7 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 適用は移行先版の `mcs_update.apply` が行う: 更新ロック取得 → 検査 → `data/backups/preupdate-*.db` 取得 →
 実行ロック → 常駐処理の停止 → `git merge --ff-only` → 新コードで（再導入 →）サービス再同期 → 再起動 →
 DB を開いて移行（加法 migration）→ 事後検証。失敗時は自動で元の SHA へ戻し、schema 変更があれば DB を復元する
-（復元前の損失報告に人承認が必要な場合は保留になる）。install.sh の副作用（brew・venv）は巻き戻らない。
+（復元前の損失報告に人承認が必要な場合は保留になる）。移行記録にあるHermesのコードとvenvは退避から戻せるが、brewなど再導入のその他の副作用は巻き戻らない。
 
 【検証】終了コード 0。0 以外は §7。
 
@@ -257,6 +258,11 @@ rm -r "$WORK"
 ```
 
 ## 7. 失敗時・巻戻し
+
+Pythonや接続用ライブラリの移行中に止まった場合は、**移行先版の**`mcs/ops/mcs_update.py recover`で退避した環境を戻します。通常の`mcs recover`や定期の復旧監視は、この移行を進めず停止します。
+管理担当者は、記録された安全な独立Python（`recovery_python`）と更新記録の移行先SHAを確認してください。MCSのHEADがそのSHAと一致する場合は、そのPythonで`"$REPO/mcs/ops/mcs_update.py" recover`を実行します。HEADが異なる場合や対象コードがない場合は、旧版の更新ツールを代わりに起動せず、記録を保持して管理担当者が移行先コードによる復旧方法を確認します。壊れたvenvのPythonや自動選択した別Pythonは使いません。
+Hermesのコードが更新開始時・移行先のどちらとも違う場合、ブランチ上や変更中の場合、移行記録が空・不正な場合も、環境や退避を動かす前に停止します。既存の`--keep-hermes-checkout`を明示した環境は、記録したcommitから変わっておらず変更もない場合に限り、ブランチ上でも保持できます。変更を破棄したり記録を削除したりして回避しないでください。
+1.0.24以前の更新ツールが作った古い移行記録が残っている場合も、移行先の版を記録から確認できず停止することがあります。管理担当者が元の更新対象と退避を確認してください。
 
 - apply が非0: `status` の `attempts[$TAG].detail` を報告する。自動巻戻し済みなら checkout は元の SHA。
   `rollback failed — escalate` の場合は追加操作をせず報告する（復旧 watchdog と人の判断に委ねる）。
