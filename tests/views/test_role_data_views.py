@@ -171,5 +171,27 @@ def test_same_day_rule_decides_differing_records():
                 "message_id": mid, "content_hash": "h", "posted_at_ts": mid, "source": "chat"}
     def kinds(*rows):
         return [g["kind"] for g in discrepancies({"items": list(rows)})["items"]]
-    assert kinds(obs(1, "120", "10/1"), obs(2, "120", "10/1"), obs(3, "130", "10/2")) == ["change_over_time"]
-    assert kinds(obs(1, "120", "10/1"), obs(2, "130", "10/1")) == ["differing_records"]
+    assert kinds(obs(1, "120", "2026-10-01"), obs(2, "120", "2026-10-01"), obs(3, "130", "2026-10-02")) == ["change_over_time"]
+    assert kinds(obs(1, "120", "2026-10-01"), obs(2, "130", "2026-10-01")) == ["differing_records"]
+
+
+def test_written_dates_compare_as_calendar_days():
+    # EV1: ISO and Japanese spellings of one day are the same day; unknown or year-less dates stay unknown
+    from patient_context_view import discrepancies
+
+    def obs(mid, value, day):
+        details = [{"key": "observation_name", "value": "合成値"}, {"key": "unit", "value": "mmHg"},
+                   {"key": "value", "value": value}, {"key": "measured_on", "value": day}]
+        return {"category": "observations", "subject": "patient", "text": value, "quote": value, "details": details,
+                "message_id": mid, "content_hash": "h", "posted_at_ts": mid, "source": "chat"}
+
+    def kinds(*rows):
+        return [g["kind"] for g in discrepancies({"items": list(rows)})["items"]]
+    assert kinds(obs(1, "120", "2026-10-01"), obs(2, "130", "2026年10月1日")) == ["differing_records"]
+    assert kinds(obs(1, "120", "2026-10-01"), obs(2, "130", "2026年10月2日")) == ["change_over_time"]
+    assert kinds(obs(1, "120", "不明"), obs(2, "130", "未確認")) == ["time_unknown"]
+    assert kinds(obs(1, "120", "10月1日"), obs(2, "130", "10/1")) == ["differing_records"]    # same month/day
+    assert kinds(obs(1, "120", "10月1日"), obs(2, "130", "2026年10月1日")) == ["time_unknown"]  # no year guessed
+    from clinical_values import written_day
+    assert written_day("2026/2/30") is None and written_day("2026-10-01と2026-10-02") is None
+    assert written_day("2026年10月1日") == written_day("2026-10-01") and written_day("2月30日") is None

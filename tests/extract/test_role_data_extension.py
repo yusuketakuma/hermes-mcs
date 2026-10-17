@@ -119,3 +119,15 @@ def test_cannot_rule_out_is_not_a_negation():
                        ("誤嚥は否定しきれない。", True), ("誤嚥は否定。", False)):
         symptoms = extract.extract_message(body, "2026-10-06T10:00:00+09:00").get("symptoms")
         assert (bool(symptoms)) is kept, (body, symptoms)
+
+
+
+@pytest.mark.parametrize("body, kept", [
+    ("失禁なく経過しています。", False), ("誤薬はなく、内服できています。", False),
+    ("転倒は認められない。", False), ("せん妄は見当たらない。", False), ("発熱は認めません。", False),
+    ("誤嚥は否定しない。", True), ("誤嚥は否定されない。", True), ("誤嚥は否定できない。", True),
+    ("失禁あり。", True), ("失禁なくはない。", True)])
+def test_written_negations_of_care_symptoms(body, kept):
+    # review EV2: 「なく」「認められない」 negate; 「否定しない」 and a negated negation keep the symptom
+    import extract
+    assert bool(extract.extract_message(body, "2026-10-06T10:00:00+09:00").get("symptoms")) is kept, body

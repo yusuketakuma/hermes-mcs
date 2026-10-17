@@ -148,6 +148,30 @@ _LAB_UNITS = {
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
+_MONTH_DAY = re.compile(r"(?<![\d/年-])(\d{1,2})[/月](\d{1,2})日?(?![\d/])")
+
+
+def written_day(text) -> tuple | None:
+    """A comparable key for the one date a text writes: ("ymd", date) for a full
+    date (2026-10-01, 2026/10/1 and 2026年10月1日 are one day) or ("md", month,
+    day) for a date written without its year. 不明/未確認, an impossible date or
+    two dates give None. A year is never guessed, so the two kinds never match."""
+    if not isinstance(text, str):
+        return None
+    text = unicodedata.normalize("NFKC", text)
+    full, short = list(_DATE.finditer(text)), list(_MONTH_DAY.finditer(_DATE.sub("", text)))
+    try:
+        if len(full) == 1 and not short:
+            return ("ymd", date(*map(int, full[0].groups())))
+        if len(short) == 1 and not full:
+            month, day = map(int, short[0].groups())
+            date(2000, month, day)          # a leap year: only checks the month/day exists
+            return ("md", month, day)
+    except ValueError:
+        return None
+    return None
+
+
 class LabDetails(TypedDict, total=False):
     reported_measured_on: str
     condition: str

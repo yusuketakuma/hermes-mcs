@@ -309,11 +309,13 @@ def discrepancies(ev, posters=None) -> dict:
     for (category, subject, key, identity), rows in groups.items():
         if len({r["value"] for r in rows}) < 2:
             continue
-        dates = [r["event_date_text"] for r in rows]
+        # compare the written dates as calendar days; the original wording stays on each record
+        from clinical_values import written_day
+        dates = [written_day(r["event_date_text"]) for r in rows]
         same_day = {}
-        for r in rows:
-            same_day.setdefault(r["event_date_text"], set()).add(r["value"])
-        kind = ("time_unknown" if None in dates
+        for day, r in zip(dates, rows):
+            same_day.setdefault(day, set()).add(r["value"])
+        kind = ("time_unknown" if None in dates or len({d[0] for d in dates}) > 1
                 else "differing_records" if any(len(v) > 1 for v in same_day.values()) else "change_over_time")
         out.append({"category": category, "subject": subject, "key": key, "identity": list(identity),
                     "kind": kind, "records": rows})
