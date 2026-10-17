@@ -16,7 +16,7 @@ from adapters.lineworks import __main__ as cli
 from adapters.lineworks import server
 from hermes_plugin.card_workers import _interactive_settings
 from lineworks_testkit import NOW, SECRET, event, raw, signature, world
-from ops_testkit import _git, _make_repo
+from ops_testkit import _git, _load, _make_repo
 
 updater = test_mcs_update.updater   # shared fixture
 
@@ -87,13 +87,19 @@ def test_lineworks_callback_is_handled_before_a_slow_delivery_tick(monkeypatch, 
     assert json.loads(pending.with_suffix(".done").read_text()) == {"result": "processed"}
 
 
-@pytest.mark.parametrize("dirty", ["update_path", "unrelated_path", "index_only"])
-def test_updater_recovery_resets_only_update_paths(updater, tmp_path, monkeypatch, dirty):
+@pytest.mark.parametrize("at", ["prev", "target"])
+@pytest.mark.parametrize("dirty", ["update_path", "unrelated_path", "index_only",
+                                  "third_worktree", "third_staged", "third_index_only"])
+def test_updater_recovery_resets_only_update_paths(updater, tmp_path, monkeypatch, dirty, at):
     repo, bare = _make_repo(tmp_path)
     monkeypatch.setattr(mcs_update, "REPO", str(repo))
     monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
     monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(mcs_update, "restart_agents", lambda **k: [])
+    monkeypatch.setattr(mcs_update, "restart_services", lambda *a, **k: None)
+    monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(mcs_update, "_postcheck", lambda *a: [])
     work = tmp_path / "remote-work"
     (work / "g.txt").write_text("operator")
     _git(work, "add", ".")
@@ -107,24 +113,189 @@ def test_updater_recovery_resets_only_update_paths(updater, tmp_path, monkeypatc
     _git(repo, "checkout", "-q", "v1.1.5")
     prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
     target = _git(repo, "rev-list", "-n1", "v1.2.0").stdout.strip()
-    path = "f.txt" if dirty == "update_path" else "g.txt"
-    (repo / path).write_text("CHANGED")
-    if dirty == "index_only":
-        # staged, then only the worktree file put back: git diff HEAD is empty, the index is not
-        _git(repo, "add", "g.txt")
-        (repo / "g.txt").write_text("operator")
+    head = prev if at == "prev" else target
+    _git(repo, "checkout", "-q", "--detach", head)
+    path = "f.txt" if dirty == "update_path" or dirty.startswith("third_") else "g.txt"
+    original = (repo / path).read_text()
+    # A mixed checkout contains known versions; a third edit has no such provenance.
+    changed = ("three" if at == "prev" else "two") if dirty == "update_path" else "MANUAL THIRD CONTENT"
+    (repo / path).write_text(changed)
+    if dirty in ("index_only", "third_staged", "third_index_only"):
+        _git(repo, "add", path)
+    if dirty in ("index_only", "third_index_only"):
+        (repo / path).write_text(original)
     state = updater._default_state()
     state["applying"] = {"tag": "v1.2.0", "sha": target, "prev_sha": prev,
                          "at": time.time() - 4000}
     state["stages"] = [{"stage": "merge", "at": time.time() - 3000}]
     updater.save_state(state)
+    journal = Path(updater.STATE_PATH).read_bytes()
+    worktree = (repo / path).read_bytes()
+    index = _git(repo, "show", f":{path}").stdout
     if dirty == "update_path":
         assert updater.recover_interrupted() == 0
-        assert (repo / "f.txt").read_text() == "two"
+        assert (repo / "f.txt").read_text() == ("two" if at == "prev" else "three")
+        assert _git(repo, "show", ":f.txt").stdout == ("two" if at == "prev" else "three")
     else:
         assert updater.recover_interrupted() == 1
-        assert (repo / "g.txt").read_text() == ("operator" if dirty == "index_only" else "CHANGED")
-        assert _git(repo, "show", ":g.txt").stdout == ("CHANGED" if dirty == "index_only" else "operator")
+        assert (repo / path).read_bytes() == worktree
+        assert _git(repo, "show", f":{path}").stdout == index
+        assert Path(updater.STATE_PATH).read_bytes() == journal
         report = json.loads(Path(updater.REPORT_PATH).read_text())
-        assert report["detail"] == "local changes outside update: g.txt"
-    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
+        assert report["detail"] == "local changes outside update: " + path
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
+
+
+def _provenance_repo(tmp_path):
+    repo, _ = _make_repo(tmp_path)
+    _git(repo, "config", "core.filemode", "true")
+    for name in ("untouched.txt", "deleted.txt", "rename-from.txt"):
+        (repo / name).write_text(name)
+    (repo / "f.txt").chmod(0o644)
+    (repo / ".gitignore").write_text("ignored.txt\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "previous tree")
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "f.txt").write_text("three")
+    (repo / "added.txt").write_text("known addition")
+    (repo / "empty-added.txt").touch()
+    (repo / "deleted.txt").unlink()
+    (repo / "rename-from.txt").rename(repo / "rename-to.txt")
+    (repo / "nested").mkdir()
+    (repo / "nested/target.txt").write_text("known nested addition")
+    (repo / "ignored.txt").write_text("known ignored addition")
+    _git(repo, "add", "-f", "ignored.txt")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "target tree")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    return repo, prev, target
+
+
+def _provenance_snapshot(repo):
+    files = {}
+    for path in repo.rglob("*"):
+        relative = path.relative_to(repo)
+        if relative.parts[0] != ".git" and path.is_file():
+            files[str(relative)] = (path.read_bytes(), path.stat().st_mode & 0o777)
+    return (_git(repo, "rev-parse", "HEAD").stdout,
+            _git(repo, "ls-files", "--stage", "-v").stdout, files)
+
+
+@pytest.mark.parametrize("helper", ["updater", "watchdog"])
+@pytest.mark.parametrize("case", [
+    "added_untracked", "deleted_recreated", "rename_source_recreated", "ignored_collision",
+    "directory_prefix_collision", "filemode_disabled", "assume_unchanged", "assume_unchanged_known",
+    "skip_worktree", "skip_worktree_known", "intent_to_add", "control_path",
+    "unrelated_untracked", "known_mixed_versions", "known_absences",
+])
+def test_recovery_provenance_checks_filesystem_not_only_git_status(
+        updater, tmp_path, monkeypatch, helper, case):
+    repo, prev, target = _provenance_repo(tmp_path)
+    at_target = case in ("deleted_recreated", "rename_source_recreated", "filemode_disabled")
+    _git(repo, "checkout", "-q", "--detach", target if at_target else prev)
+    protected = None
+    unknown = case in ("assume_unchanged", "assume_unchanged_known", "skip_worktree",
+                       "skip_worktree_known", "intent_to_add", "control_path")
+    if case in ("added_untracked", "deleted_recreated", "rename_source_recreated", "ignored_collision"):
+        protected = {"added_untracked": "added.txt", "deleted_recreated": "deleted.txt",
+                     "rename_source_recreated": "rename-from.txt", "ignored_collision": "ignored.txt"}[case]
+        (repo / protected).write_text("MANUAL THIRD CONTENT")
+        if case == "ignored_collision":
+            assert _git(repo, "check-ignore", "ignored.txt").returncode == 0
+    elif case == "directory_prefix_collision":
+        (repo / "nested").write_text("MANUAL PREFIX FILE")
+    elif case == "filemode_disabled":
+        protected = "f.txt"
+        _git(repo, "config", "core.filemode", "false")
+        (repo / protected).chmod(0o755)
+        assert _git(repo, "status", "--porcelain").stdout == ""
+    elif case.startswith(("assume_unchanged", "skip_worktree")):
+        protected = "untouched.txt"
+        assume = case.startswith("assume_unchanged")
+        _git(repo, "update-index", "--assume-unchanged" if assume else "--skip-worktree", protected)
+        if not case.endswith("_known"):
+            (repo / protected).write_text("MANUAL HIDDEN CONTENT")
+        (repo / "f.txt").write_text("three")
+        assert _git(repo, "ls-files", "-v", protected).stdout.startswith("h " if assume else "S ")
+        assert protected not in _git(repo, "diff", "--name-only").stdout
+        assert "f.txt" in _git(repo, "diff", "--name-only").stdout
+    elif case == "intent_to_add":
+        (repo / "empty-added.txt").touch()
+        _git(repo, "add", "-N", "empty-added.txt")
+        staged = _git(repo, "ls-files", "--stage", "empty-added.txt").stdout.split()
+        assert staged[:2] == ["100644", _git(repo, "rev-parse", f"{target}:empty-added.txt").stdout.strip()]
+    elif case == "control_path":
+        name = "control\twith\rcarriage\nnewline.txt"
+        (repo / name).write_text("MANUAL CONTROL PATH")
+        _git(repo, "add", name)
+    elif case == "unrelated_untracked":
+        (repo / "operator-notes.txt").write_text("keep these unrelated notes")
+    elif case == "known_mixed_versions":
+        (repo / "f.txt").write_text("three")
+        _git(repo, "add", "f.txt")
+        (repo / "f.txt").write_text("two")
+    else:
+        (repo / "added.txt").write_text("known addition")
+        (repo / "deleted.txt").unlink()
+
+    tool = updater if helper == "updater" else _load()
+    monkeypatch.setattr(tool, "REPO", str(repo))
+    before = _provenance_snapshot(repo)
+    refused = False
+    try:
+        foreign = tool._local_changes_outside(target, prev) if at_target else tool._local_changes_outside(prev, target)
+    except updater.UpdateError:
+        assert helper == "updater" and (unknown or case == "directory_prefix_collision")
+        foreign = None
+        refused = True
+    if unknown:
+        assert foreign is None
+        assert helper == "watchdog" or refused
+    elif protected is not None:
+        assert foreign is not None and protected in foreign
+    elif case == "directory_prefix_collision":
+        assert foreign is None or any(path == "nested" or path.startswith("nested/") for path in foreign)
+    else:
+        assert foreign == []
+    assert _provenance_snapshot(repo) == before
+
+
+def test_rollback_preserves_third_content_before_restoring_runtime(updater, tmp_path, monkeypatch):
+    repo, prev, target = _provenance_repo(tmp_path)
+    _git(repo, "checkout", "-q", "--detach", target)
+    (repo / "f.txt").write_text("MANUAL THIRD CONTENT")
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "hermes"})
+    monkeypatch.setattr(updater, "_rollback_layout_error", lambda entry: None)
+    monkeypatch.setattr(updater, "_restore_runtime", lambda entry: pytest.fail("runtime restore before refusal"))
+    git = updater._git
+
+    def no_reset(args, *positional, **kwargs):
+        assert args[0] != "reset", "reset before refusing third content"
+        return git(args, *positional, **kwargs)
+
+    monkeypatch.setattr(updater, "_git", no_reset)
+    before = _provenance_snapshot(repo)
+    with pytest.raises(updater.UpdateError) as stopped:
+        updater._rollback_tree({"prev_sha": prev, "sha": target})
+    assert "f.txt" in str(stopped.value)
+    assert _provenance_snapshot(repo) == before
+
+
+@pytest.mark.parametrize("helper", ["updater", "watchdog"])
+def test_recovery_keeps_a_dangling_symlink_without_following_it(
+        updater, tmp_path, monkeypatch, helper):
+    repo, prev, target = _provenance_repo(tmp_path)
+    _git(repo, "checkout", "-q", "--detach", prev)
+    path = repo / "f.txt"
+    path.unlink()
+    path.symlink_to("missing-target")
+    tool = updater if helper == "updater" else _load()
+    monkeypatch.setattr(tool, "REPO", str(repo))
+    index = _git(repo, "ls-files", "--stage", "-v").stdout
+
+    assert tool._local_changes_outside(prev, target) == ["f.txt"]
+
+    assert path.is_symlink() and os.readlink(path) == "missing-target"
+    assert not (repo / "missing-target").exists()
+    assert _git(repo, "ls-files", "--stage", "-v").stdout == index

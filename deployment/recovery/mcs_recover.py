@@ -163,38 +163,95 @@ def _clean():
 
 
 def _local_changes_outside(prev, target):
-    """Dirty paths a recovery reset must not destroy.
+    """Unsafe states before resetting to target, allowing known update versions."""
+    try:
+        if not prev or not target:
+            raise ValueError("update range unknown")
+        snapshots = []
+        for args, index in ((["ls-tree", "-rz", prev], False),
+                            (["ls-tree", "-rz", target], False),
+                            (["ls-files", "--stage", "-v", "-z"], True)):
+            result = _git(args)
+            if result is None or result.returncode != 0:
+                raise ValueError("tree/index unreadable")
+            versions = {}
+            for record in filter(None, result.stdout.split("\0")):
+                meta, sep, path = record.partition("\t")
+                fields = meta.split()
+                if index:
+                    if not fields or fields.pop(0) != "H":
+                        raise ValueError("unsupported index flags")
+                if not sep or len(fields) != 3 or path in versions:
+                    raise ValueError("tree/index malformed")
+                mode, middle, last = fields
+                blob = middle if index else last
+                if (last != "0" if index else middle != "blob") or mode not in {
+                        "100644", "100755", "120000"}:
+                    raise ValueError("tree/index type unknown")
+                parts = path.split("/")
+                if (path.startswith("/") or any(ord(c) < 32 for c in path)
+                        or any(p in {"", ".", ".."} for p in parts)):
+                    raise ValueError("tree/index path invalid")
+                versions[path] = (mode, blob)
+            snapshots.append(versions)
+        ita_views = []
+        for visibility in ("--ita-visible-in-index", "--ita-invisible-in-index"):
+            result = _git(["diff", "--cached", "--raw", "--no-renames", "--no-ext-diff",
+                           "--no-textconv", "--no-abbrev", "--no-relative", "-z", visibility, prev])
+            if result is None or result.returncode != 0:
+                raise ValueError("index intent unreadable")
+            ita_views.append(result.stdout)
+        if ita_views[0] != ita_views[1]:
+            raise ValueError("intent-to-add index")
 
-    Range-external paths are foreign.  A range-touched path is safe only when
-    each worktree/index version matches prev or target; pathname membership
-    alone cannot distinguish an interrupted checkout from a third edit.
-    """
-    if not prev or not target:
-        return None
-    paths = []
-    for args in (["diff", "--name-only", "--no-renames", "-z", prev, target],
-                 ["diff", "--name-only", "--no-renames", "-z"],
-                 ["diff", "--cached", "--name-only", "--no-renames", "-z"]):
-        r = _git(args)
-        if r is None or r.returncode != 0:
-            return None
-        paths.append(set(filter(None, r.stdout.split("\0"))))
-    dirty = paths[1] | paths[2]
-    foreign = dirty - paths[0]
-    for path in dirty & paths[0]:
-        for cached in (False, True):
-            flag = ["--cached"] if cached else []
-            known = False
-            for revision in (prev, target):
-                r = _git(["diff", *flag, "--quiet", revision, "--", path])
-                if r is None or r.returncode not in (0, 1):
+        def worktree_version(path):
+            full = Path(REPO)
+            for part in path.split("/")[:-1]:
+                full /= part
+                try:
+                    if not stat.S_ISDIR(full.lstat().st_mode):
+                        raise ValueError("non-directory ancestor")
+                except FileNotFoundError:
                     return None
-                if r.returncode == 0:
-                    known = True
-                    break
-            if not known:
-                foreign.add(path)
-    return sorted(foreign)
+            full /= path.split("/")[-1]
+            try:
+                before = full.lstat()
+            except FileNotFoundError:
+                return None
+            digest = hashlib.sha1(usedforsecurity=False)  # Git blob identity, not authentication.
+            if stat.S_ISLNK(before.st_mode):
+                content = os.fsencode(os.readlink(full))
+                digest.update(f"blob {len(content)}\0".encode() + content)
+                return "120000", digest.hexdigest()
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError("non-file at tracked path")
+            fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                opened = os.fstat(stream.fileno())
+                if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                    raise ValueError("file changed during inspection")
+                digest.update(f"blob {opened.st_size}\0".encode())
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                after = os.fstat(stream.fileno())
+                if (after.st_size, after.st_mtime_ns, after.st_mode) != (
+                        opened.st_size, opened.st_mtime_ns, opened.st_mode):
+                    raise ValueError("file changed during inspection")
+            return ("100755" if opened.st_mode & stat.S_IXUSR else "100644"), digest.hexdigest()
+
+        old, new, index = snapshots
+        foreign = []
+        for path in sorted(old.keys() | new.keys() | index.keys()):
+            known = {old.get(path), new.get(path)}
+            if index.get(path) not in known:
+                foreign.append(path)
+            elif path not in index and path not in new:
+                continue  # Reset does not touch this untracked path.
+            elif worktree_version(path) not in known:
+                foreign.append(path)
+        return foreign
+    except (OSError, ValueError):
+        return None
 
 
 def _valid_state(state):
@@ -1438,7 +1495,7 @@ def _recovery_explanation(detail):
         "target tree could not": "更新先のプログラムを正常な状態に戻せません。導入先フォルダーを確認してください。",
         "prev tree could not": "更新前のプログラムを正常な状態に戻せません。導入先フォルダーを確認してください。",
         "resume incomplete:": "一部の常駐処理を復旧できません。復旧結果の記録と常駐処理の状態を確認してください。",
-        "local changes outside update:": "更新と関係のないプログラムの手動変更があるため、自動で元に戻しませんでした。変更を確認・退避してから復旧をやり直してください。",
+        "local changes outside update:": "更新前後の内容と一致しないプログラムの手動変更があるため、自動で元に戻しませんでした。変更を確認・退避してから復旧をやり直してください。",
         "unclassifiable repo state": "プログラムの状態を判定できないため、自動変更を見送りました。更新記録と導入先の状態を確認してください。",
         "restore_marker_unreadable": "復元の保留記録を読み取れません。保留を維持して記録を確認してください。",
         "backup_unreadable:": "復元用バックアップを読み取れません。保存先とファイルの状態を確認してください。",
@@ -1724,7 +1781,7 @@ def recover(if_stale=False):
             if not clean:
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach
-                foreign = _local_changes_outside(prev, target)
+                foreign = _local_changes_outside(target, prev)
                 if foreign is None:
                     return git_failed("diff")
                 if foreign:

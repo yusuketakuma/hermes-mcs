@@ -157,6 +157,80 @@ def test_mixed_tree_resets_to_prev(rec, tmp_path, dirty):
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
 
 
+@pytest.mark.parametrize("head_at", ["prev", "target"])
+@pytest.mark.parametrize("dirty", ["worktree", "staged", "index_only"])
+def test_recover_preserves_third_content_at_either_update_head(
+        rec, tmp_path, head_at, dirty):
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    path = repo / "f.txt"
+    path.write_text("target")
+    _git(repo, "commit", "-qam", "target")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    head = prev if head_at == "prev" else target
+    _git(repo, "checkout", "-q", head)
+    head_text = path.read_text()
+
+    path.write_text("operator third content")
+    if dirty in ("staged", "index_only"):
+        _git(repo, "add", "f.txt")
+    if dirty == "index_only":
+        path.write_text(head_text)
+    worktree_before = path.read_bytes()
+    index_before = _git(repo, "ls-files", "--stage", "-z").stdout
+    index_text_before = _git(repo, "show", ":f.txt").stdout
+    state = _applying(prev, sha=target, stage="applying")
+    Path(rec.STATE_PATH).write_text(json.dumps(state))
+
+    assert rec.recover() == 1
+
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
+    assert path.read_bytes() == worktree_before
+    assert _git(repo, "ls-files", "--stage", "-z").stdout == index_before
+    assert _git(repo, "show", ":f.txt").stdout == index_text_before
+    assert json.loads(Path(rec.STATE_PATH).read_text()) == state
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == "escalate"
+    assert report["detail"] == "local changes outside update: f.txt"
+
+
+@pytest.mark.parametrize("head_at", ["prev", "target"])
+def test_recover_accepts_known_index_and_worktree_mixture(
+        rec, tmp_path, monkeypatch, head_at):
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    path = repo / "f.txt"
+    path.write_text("target")
+    _git(repo, "commit", "-qam", "target")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    head = prev if head_at == "prev" else target
+    head_text = "one" if head_at == "prev" else "target"
+    other_text = "target" if head_at == "prev" else "one"
+    _git(repo, "checkout", "-q", head)
+    expected_index = _git(repo, "ls-files", "--stage", "-z").stdout
+    # Index and worktree deliberately hold opposite, known commit versions.
+    path.write_text(other_text)
+    _git(repo, "add", "f.txt")
+    path.write_text(head_text)
+    state = _applying(prev, sha=target, stage="applying")
+    Path(rec.STATE_PATH).write_text(json.dumps(state))
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda snapshot: [])
+
+    assert rec.recover() == 0
+
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
+    assert path.read_text() == head_text
+    assert _git(repo, "show", ":f.txt").stdout == head_text
+    assert _git(repo, "ls-files", "--stage", "-z").stdout == expected_index
+    assert _git(repo, "status", "--porcelain", "-uno").stdout == ""
+    after = json.loads(Path(rec.STATE_PATH).read_text())
+    assert after["applying"] is None and after["stages"] == []
+    assert after["executed"] == state["executed"]
+    assert after["applied"] == ([] if head_at == "prev" else [state["applying"]])
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == ("mixed_tree_reset" if head_at == "prev" else "resumed")
+
+
 def test_mixed_tree_preserves_untracked_update_collision(rec, tmp_path,
                                                          monkeypatch):
     repo = _make_repo(tmp_path)

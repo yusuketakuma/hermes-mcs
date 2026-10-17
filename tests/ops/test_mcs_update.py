@@ -2163,7 +2163,8 @@ def test_resume_retry_bounces_once_then_only_ensures(
     assert calls == [True, False]
     assert updater.recover_interrupted() == 1
     assert calls[2:] == [False, False]
-    (repo / "f.txt").write_text("dirty")
+    # A provable mixed checkout can reset; a third edit must instead be held.
+    (repo / "f.txt").write_text("one")
     assert updater.recover_interrupted() == 1
     assert calls[4:] == [True, False]
 

@@ -1,8 +1,14 @@
 {
   "category": "fixed",
   "title": "中断更新時の手編集を保護",
-  "summary": "更新対象のファイルであっても、更新前後の版と一致しない手編集があれば自動復旧を停止し、内容を破棄しません。",
+  "summary": "更新対象のファイルであっても、更新前後の内容・実行権限と一致しない手編集や未追跡ファイルの衝突があれば、自動復旧や元の版への復帰を停止して内容を保護します。",
   "upgrade": "追加操作は不要です。中断更新の復旧が停止した場合は、表示された対象ファイルを確認してから再実行してください。",
-  "details": ["worktree と index の両方を更新前後の既知内容と照合する。"],
-  "refs": ["mcs/ops/mcs_update.py", "deployment/recovery/mcs_recover.py"]
+  "details": [
+    "Gitの差分表示に頼らず、更新前後のtree・index・実ファイルの種類/実行権限/blobを照合する。",
+    "無関係な未追跡ファイルは保持し、種類や内容を確かめられない場合は自動で破棄しない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "deployment/recovery/mcs_recover.py"
+  ]
 }
