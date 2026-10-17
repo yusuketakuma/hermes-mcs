@@ -356,7 +356,12 @@ def transition_course(ev) -> dict:
 
 
 def role_order(view, role) -> dict:
-    """職種に合う並び順: reorders background sections only; never adds or removes content."""
+    """職種に合う並び順: reorders background sections only; never adds or removes content.
+    The role's categories come first; the rest (and the standard view) follow the fixed
+    category order, so 病名・既往 never sink below whatever was posted last."""
+    from patient_context import LABELS
     first = ROLE_ORDER.get(role, ())
     rank = {c: n for n, c in enumerate(first)}
-    return {**view, "sections": sorted(view["sections"], key=lambda s: rank.get(s["category"], len(first)))}
+    base = {c: n for n, c in enumerate(LABELS)}
+    return {**view, "sections": sorted(view["sections"], key=lambda s: (
+        rank.get(s["category"], len(first)), base.get(s["category"], len(base))))}

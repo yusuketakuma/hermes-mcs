@@ -29,7 +29,9 @@ def test_role_order_only_reorders_sections():
     ordered = role_order(view, "helper")
     assert [s["category"] for s in ordered["sections"]] == ["services_provided", "excretion", "adl", "followup"]
     assert sorted(s["category"] for s in ordered["sections"]) == sorted(s["category"] for s in view["sections"])
-    assert role_order(view, "unknown-role")["sections"] == view["sections"]
+    # without a role order the sections follow the fixed category order (newest post no longer leads)
+    assert [s["category"] for s in role_order(view, "unknown-role")["sections"]] == [
+        "services_provided", "adl", "excretion", "followup"]
 
 
 def _poster(mid, name, profession, organization, pid=1, parent=None, sender=None):
@@ -77,7 +79,7 @@ def test_chat_background_lists_participants_after_the_sections(tmp_path, role):
     finally:
         db.close()
     rows = [r for r in view["items"] if r["group"] == "関係者・事業者（投稿者から取得）"]
-    assert rows and rows[0]["text"] == "看護師 合成看護師／合成訪問看護ステーション\n投稿1件 · 最終投稿 2026-10-01 09:00"
+    assert rows and rows[0]["text"] == "看護師 合成看護師／合成訪問看護ステーション\n投稿1件 · 最終投稿 2026/10/01 09:00"   # viewed in 2027: the year stays
 
 
 def test_role_candidates_follow_the_posters_professions(tmp_path):
@@ -106,8 +108,8 @@ def test_standard_background_offers_role_candidates_without_switching(tmp_path):
         nurse = notify_views.patient_context_list(db.db, 1, "background", cfg={}, since=0, now=1_800_000_000, role="nurse")
     finally:
         db.close()
-    assert "表示順の候補（投稿者の職種から）: 看護" in plain["head"] and "表示順: 標準" in plain["head"]
-    assert not any(h.startswith("表示順の候補") for h in nurse["head"])
+    assert "表示順: 標準（候補: 看護）" in plain["head"]
+    assert "表示順: 看護" in nurse["head"]
 
 
 def test_unanswered_requests_name_who_asked_and_their_last_post(tmp_path):

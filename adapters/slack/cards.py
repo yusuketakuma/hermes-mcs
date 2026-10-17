@@ -118,6 +118,47 @@ def _post_buttons(parts) -> dict:
             for a in own.get("post_actions") or []}
 
 
+_HEADER_MAX = 150              # Slack header block text limit
+_ANSWER_BLOCKS = 49            # 50 per message, one kept for the navigation row
+
+
+def context_list_blocks(view: dict, allowed) -> list | None:
+    """Block Kit for a private patient-context view: title header, the
+    status/participants lines as context, a bold heading per group, each
+    row's original quotes as plain text and its source as a small context
+    line. Rows outside this deployment's scope are dropped exactly like the
+    text form. None (keep the text answer) for any other list or when the
+    page would not fit one message."""
+    if not isinstance(view, dict) or view.get("layout") != "patient_context":
+        return None
+    items = [i for i in view.get("items") or []
+             if isinstance(i, dict) and allowed(i.get("project_id"))]
+    blocks = [{"type": "header", "text": {"type": "plain_text",
+                                          "text": str(view.get("title") or "患者の記録")[:_HEADER_MAX]}}]
+    head = "\n".join(str(x) for x in view.get("head") or [] if x)
+    if head:
+        blocks += _contexts(head)
+    group = None
+    for item in items:
+        if item.get("group") != group:
+            if group is not None:
+                blocks.append({"type": "divider"})
+            group = item.get("group")
+            blocks.append({"type": "section", "text": {
+                "type": "mrkdwn", "text": f"*{escape(str(group or ''), quote=False)}*"}})
+        quotes = "\n".join(str(q) for q in item.get("quotes") or [] if q)
+        if quotes:
+            blocks += _sections(quotes)
+        if item.get("source"):
+            blocks += _contexts(str(item["source"]))
+    if not items:
+        blocks += _sections(str(view.get("empty") or "該当なし"))
+    notes = "\n".join(str(x) for x in view.get("notes") or [] if x)
+    if notes:
+        blocks += _contexts(notes)
+    return blocks if len(blocks) <= _ANSWER_BLOCKS else None
+
+
 def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
     """Visible containers/footer of the shared display model as Block
     Kit — used for cards and the clicker-only 📊 answer. On a thread

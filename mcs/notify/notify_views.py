@@ -735,24 +735,68 @@ CONTEXT_SECTIONS = {
 from patient_context_view import ROLE_LABELS as CONTEXT_ROLES  # noqa: E402 - one role source
 
 
+CONTEXT_PAGE_SIZE = 8
+_PARTICIPANTS_SHOWN = 4
+
+
+def _bare_quote(text: str, category) -> str:
+    """The quote without its own heading when the group already shows it
+    (「服薬管理：…」 under ■ 服薬管理); the wording after the heading is kept."""
+    for label in sorted(LABELS.get(category, ()), key=len, reverse=True):
+        m = re.match(rf"\s*{re.escape(label)}\s*[:：]\s*", text)
+        if m and text[m.end():].strip():
+            return text[m.end():]
+    return text
+
+
 def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0):
-    """Existing private list surface, retaining original wording and source references."""
+    """Private patient-context views as source-bound rows: each row keeps the original
+    quotes and one compact source line (when · who · which post); consecutive items of
+    one post in one group share that line. Every row carries project_id so the
+    transports' scope filter keeps them."""
     import patient_context_view as views
     ev = views.evidence(db, project_id, cfg=cfg)
     rows, head = [], []
+    year = datetime.fromtimestamp(now, JST).year if isinstance(now, (int, float)) else None
 
-    def add(items, group):
+    def stamp(at):
+        return at.strftime("%m/%d %H:%M" if at.year == year else "%Y/%m/%d %H:%M")
+
+    def when(item):
+        ts = item.get("posted_at_ts")
+        if not isinstance(ts, (int, float)):
+            return item.get("at") or "投稿日時未確認"
+        return stamp(datetime.fromtimestamp(ts, JST))
+
+    def posted(text):  # an ISO posted_at as stored, in the same short form
+        try:
+            at = datetime.fromisoformat(str(text))
+        except ValueError:
+            return "日時未確認"
+        return stamp(at.astimezone(JST) if at.tzinfo else at)
+
+    def source_of(item):
+        where = "連携サマリー" if item.get("source") == "karte_summary" else f"投稿#{item.get('message_id', '?')}"
+        who = " ".join(str(v) for v in (item.get("profession"), item.get("sender")) if v)
+        line = " · ".join(v for v in (when(item), who, where) if v)
+        if item.get("event_date_text"):
+            line += f" · 出来事の記載: {item['event_date_text']}"
+        return line
+
+    def add(items, group, category=None):
         for item in items:
-            date = item.get("posted_at_ts")
-            date = datetime.fromtimestamp(date, JST).strftime("%Y-%m-%d %H:%M") if isinstance(date, (int, float)) else item.get("at") or "投稿日時未確認"
-            source = "連携サマリー" if item.get("source") == "karte_summary" else f"投稿#{item.get('message_id', '?')}"
-            suffix = " · ".join(str(v) for v in (date, source, item.get("sender")) if v)
-            text = str(item.get("quote") or item.get("text") or "")
-            if item.get("event_date_text"):
-                suffix += f" · 出来事の記載: {item['event_date_text']}"
-            if item.get("reply"):
-                text += "\n" + item["reply"]
-            rows.append({"group": group, "text": text + "\n" + suffix})
+            quote = str(item.get("quote") or item.get("text") or "")
+            if category:
+                quote = _bare_quote(quote, category)
+            quotes = [q for q in (quote, item.get("reply")) if q]
+            source = source_of(item)
+            last = rows[-1] if rows else None
+            if (last and last["group"] == group and last.get("message_id") == item.get("message_id")
+                    and last["source"] == source and quotes and not item.get("reply")):
+                last["quotes"] += quotes        # same post, same group: one source line
+            else:
+                rows.append({"group": group, "project_id": project_id,
+                             "message_id": item.get("message_id"), "quotes": quotes, "source": source})
 
     def add_deleted(items):
         add([{"message_id": d["message_id"], "at": "削除を確認 " + datetime.fromtimestamp(
@@ -764,18 +808,24 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         for sentence in view["summary"]:
             add([facts[key] for key in sentence["fact_ids"] if key in facts], "夜間に整理した記録")
         for group in view["sections"]:
-            add(group["items"], LABELS.get(group["category"], (group["category"],))[0])
+            add(group["items"], LABELS.get(group["category"], (group["category"],))[0], group["category"])
         # posters' own profession/name/organization, as recorded on their posts
         posters = views.participants(db, project_id)
+        names = []
         for who in posters["items"]:
             text = " ".join(v for v in (who["profession"], who["name"]) if v)
+            names.append(text)
             text += f"／{who['organization']}" if who["organization"] else ""
-            rows.append({"group": "関係者・事業者（投稿者から取得）",
-                         "text": f"{text}\n投稿{who['messages']}件 · 最終投稿 "
-                                 + (str(who["last_seen"])[:16].replace("T", " ") if who["last_seen"] else "日時未確認")})
+            rows.append({"group": "関係者・事業者（投稿者から取得）", "project_id": project_id,
+                         "quotes": [text], "source": f"投稿{who['messages']}件 · 最終投稿 "
+                         + (posted(who["last_seen"]) if who["last_seen"] else "日時未確認")})
+        if names:
+            rest = len(names) - _PARTICIPANTS_SHOWN
+            head.append("関係者: " + "／".join(names[:_PARTICIPANTS_SHOWN]) + (f"（他{rest}名）" if rest > 0 else ""))
+        order = f"表示順: {CONTEXT_ROLES[role]}"
         if not role and posters["roles"]:
-            head.append("表示順の候補（投稿者の職種から）: " + "／".join(CONTEXT_ROLES[r] for r in posters["roles"]))
-        head.append(f"表示順: {CONTEXT_ROLES[role]}")
+            order += "（候補: " + "／".join(CONTEXT_ROLES[r] for r in posters["roles"]) + "）"
+        head.append(order)
     elif section == "changes":
         view = views.changes(db, ev, since)
         head.append("前回の表示依頼: " + (datetime.fromtimestamp(since, JST).strftime("%Y-%m-%d %H:%M") if since else "初回"))
@@ -811,6 +861,9 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     else:
         view = views.replies(db, project_id) if section == "replies" else views.timeline(ev)
         add(view["items"], CONTEXT_SECTIONS[section])
+    for row in rows:
+        row.pop("message_id", None)
+        row["text"] = "\n".join(row["quotes"] + [row["source"]])   # the text transports' form
     nightly = ev["coverage"].get("nightly") or {}
     if ev.get("as_of"):
         head.insert(0, "夜間まとめの反映時点: " + datetime.fromtimestamp(ev["as_of"], JST).strftime("%Y-%m-%d %H:%M"))
@@ -821,8 +874,11 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         head.append(f"まとめ未反映 {nightly.get('unreflected', 0)}件")
         if (nightly.get("attachments") or {}).get("count"):
             head.append(f"添付 {nightly['attachments']['count']}件（内容は未解析）")
-    pages = max(1, (len(rows) + 7) // 8)
+    pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
-    return {"title": f"{_patient_name(db, project_id)} — {CONTEXT_SECTIONS[section]}",
-            "head": head, "items": rows[page * 8:(page + 1) * 8],
+    title = f"{_patient_name(db, project_id)} — {CONTEXT_SECTIONS[section]}"
+    if pages > 1:
+        title += f"（{page + 1}/{pages}ページ）"
+    return {"title": title, "layout": "patient_context", "head": head,
+            "items": rows[page * CONTEXT_PAGE_SIZE:(page + 1) * CONTEXT_PAGE_SIZE],
             "notes": view.get("notes", []), "empty": "この範囲で該当する記録は見つかりません", "page": page, "pages": pages}

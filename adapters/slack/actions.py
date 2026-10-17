@@ -15,7 +15,7 @@ from adapters.common.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
                                  ja, modal_fields, preview_text,
                                  search_query, split_body, view_answer,
                                  view_scope_ok)
-from .cards import LINK_ACTION, MENU_ACTION, _sections, render_parts
+from .cards import LINK_ACTION, MENU_ACTION, _sections, context_list_blocks, render_parts
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
 _LINK = re.compile("^" + re.escape(LINK_ACTION) + "$")
@@ -340,7 +340,8 @@ class Actions:
                 if thread_ts:
                     kwargs["thread_ts"] = thread_ts
                 if blocks and index == 0:
-                    kwargs["blocks"] = blocks
+                    kwargs["blocks"] = blocks + (
+                        [{"type": "actions", "elements": navigation}] if navigation else [])
                 elif navigation and index == 0:
                     kwargs["blocks"] = _sections(unescape(chunk)) + [
                         {"type": "actions", "elements": navigation}]
@@ -764,10 +765,12 @@ class Actions:
                 if token_ctx:
                     await asyncio.to_thread(self._reg.put_tokens, token_ctx,
                                             durable=bool(thread_ts))
-                cards = (_parts_blocks(result)
+                cards = ((_parts_blocks(result) or (
+                    context_list_blocks(result.get("list"), allowed)
+                    if result.get("action") == "list" else None))
                          if view_scope_ok(result, allowed) else None)
                 if cards:
-                    # 📊: one Block Kit card; the text is the fallback
+                    # 📊 / patient context: one Block Kit message; the text is the fallback
                     answer = answer[:1]
                 for index, (message, tasks) in enumerate(answer):
                     await self._say(origin["channel_id"], rec["user"],
