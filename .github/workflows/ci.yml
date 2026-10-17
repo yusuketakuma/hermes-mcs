@@ -171,10 +171,12 @@ jobs:
           python-version: "3.14"
       - name: install hermes (pinned ref) + integration test deps
         run: |
-          python -m venv hermes-agent/.venv
-          hermes-agent/.venv/bin/python -m pip install -e './hermes-agent[messaging]'
-          # Hermes keeps its test tooling in a PEP 735 group (pip >= 25.1).
-          hermes-agent/.venv/bin/python -m pip install --group './hermes-agent/pyproject.toml:dev'
+          python -m pip install "uv==0.13.1"
+          uv venv --python python hermes-agent/.venv
+          # Match install.sh: Hermes owns the security overrides for voice/crypto.
+          cd hermes-agent
+          uv pip install --python .venv/bin/python -e '.[messaging]'
+          uv pip install --python .venv/bin/python --group dev
       # Use the same isolated lane as local verification. It checks the
       # installed distributions and imported source against the pin above,
       # and rejects an empty or incomplete SDK test collection.

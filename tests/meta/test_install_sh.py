@@ -104,6 +104,7 @@ case "$1" in
     cp "$STUB_ROOT/venv-python" "$last/bin/python"
     cp "$STUB_ROOT/venv-python" "$last/bin/python3"; exit 0 ;;
   pip)
+    pwd > "$STUB_ROOT/uv-pip-cwd"
     [ -z "$STUB_FAIL_PIP" ] || { echo "error: build failed" >&2; exit 1; }
     case "$*" in *requirements-standalone.txt*) exit 0 ;; esac
     cp "$STUB_ROOT/venv-hermes" "$(dirname "$py")/hermes"; exit 0 ;;
@@ -1327,3 +1328,20 @@ def test_japanese_help_is_read_only(tmp_path):
     assert 'パスワード・トークンは画面に表示しません' in result.stdout
     assert list(home.iterdir()) == []
     assert _calls(stub_root) == []
+
+
+def test_hermes_install_uses_its_own_uv_security_overrides(tmp_path):
+    home, hermes_home, stub, env = _world(tmp_path)
+    result = _run(env, hermes_home, "--no-brew", "--no-llm")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (stub / "uv-pip-cwd").read_text().strip() == str(hermes_home / "hermes-agent")
+
+
+def test_missing_uv_stops_before_hermes_checkout_or_venv_changes(tmp_path):
+    home, hermes_home, stub, env = _world(tmp_path)
+    (stub / "bin/uv").unlink()
+    result = _run(env, hermes_home, "--no-brew", "--no-llm")
+    assert result.returncode != 0
+    assert "uv が必要" in result.stdout + result.stderr
+    assert not (hermes_home / "hermes-agent").exists()
+    assert not any(call.startswith("git clone") for call in _calls(stub))

@@ -18,6 +18,10 @@ def test_hermes_ci_runs_the_guarded_sdk_lane():
     # installs process isolation before collection, and rejects missing tests.
     assert "working-directory: hermes-mcs" in step
     assert re.search(r"run:\s+sh scripts/check_pinned_sdks\.sh hermes\s*$", step)
+    install = job.split("      - name: install hermes (pinned ref) + integration test deps\n", 1)[1]
+    assert "cd hermes-agent\n" in install
+    assert "uv pip install --python .venv/bin/python -e '.[messaging]'" in install
+    assert "uv pip install --python .venv/bin/python --group dev" in install
     for name, suffix in (
         ("MCS_TEST_PYTHON", "hermes-agent/.venv/bin/python"),
         ("MCS_HERMES_SOURCE", "hermes-agent"),

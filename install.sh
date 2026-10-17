@@ -786,6 +786,8 @@ if [ "$RUNTIME_MODE" = standalone ]; then
     sum "2/6 実行環境:  独立した Python 環境と公式接続 SDK を導入"
 else
 say "【2/6】Hermes の実行環境"
+command -v uv >/dev/null 2>&1 \
+    || die "Hermes の安全な依存設定を使うため uv が必要です。brew install uv を実行し、install.sh を再実行してください"
 mkdir -p "$HERMES_HOME"
 # checkout: a fresh clone is bracketed by CLONE_MARK, so an interrupted
 # clone/checkout is redone on re-run instead of being accepted unpinned.
@@ -872,11 +874,7 @@ if ! py_ok "$VENV_PY" 14 15; then
         warn "$VENV の Python 3.14 が使用できないため環境を再作成します"
     fi
     preserve_old_venv
-    if command -v uv >/dev/null 2>&1; then
-        uv venv --python "$PYBIN" "$VENV" || die "uv による Python 環境の作成に失敗しました。上のエラーを確認し install.sh を再実行してください"
-    else
-        "$PYBIN" -m venv "$VENV" || die "Python 環境の作成に失敗しました。上のエラーを確認し install.sh を再実行してください"
-    fi
+    uv venv --python "$PYBIN" "$VENV" || die "uv による Python 環境の作成に失敗しました。上のエラーを確認し install.sh を再実行してください"
     : > "$PIP_MARK"
     _venv="Python 環境を作成"
 else
@@ -884,13 +882,8 @@ else
 fi
 if [ -f "$PIP_MARK" ] || [ ! -x "$VENV_HERMES" ]; then
     : > "$PIP_MARK"
-    _pip=""
-    if command -v uv >/dev/null 2>&1; then
-        uv pip install --python "$VENV_PY" -e "${HERMES_DIR}[messaging]" || _pip=1
-    else
-        "$VENV_PY" -m pip install -e "${HERMES_DIR}[messaging]" || _pip=1
-    fi
-    [ -z "$_pip" ] \
+    # Hermes's uv security overrides apply only when its project is selected.
+    (cd "$HERMES_DIR" && uv pip install --python "$VENV_PY" -e ".[messaging]") \
         || die "$VENV への Hermes 導入に失敗しました。上のエラー（通信・コンパイラ等）を解消し install.sh を再実行してください。失敗した導入を再試行します"
     rm -f "$PIP_MARK"
     _venv="$_venv, Hermes を導入"

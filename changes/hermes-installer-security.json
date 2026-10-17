@@ -1,0 +1,20 @@
+{
+  "category": "security",
+  "title": "Hermesの安全な依存設定を導入とCIで確実に適用",
+  "summary": "導入する場所によってHermesの安全な依存設定が読み込まれず、古い音声接続用ライブラリが選ばれる問題を修正しました。Hermes自身の設定を使って解決し、CIも同じ方法で確認します。",
+  "upgrade": "Hermes経由の導入・更新にはuvが必要です。--no-brewを使う場合は事前にuvを導入してください。uvがない場合はHermesのcheckoutや実行環境を変更する前に停止し、pipへ切り替えません。独立動作用の固定SDKの導入方法は変わりません。",
+  "details": [
+    "MCS cwdからuv/pipでHermes[messaging]を解決するとdiscord.py voice extra由来のPyNaCl1.5.0が選ばれ、Hermes cwdの既存tool.uv.override-dependenciesでは1.6.2が選ばれることを実resolverで再現。",
+    "installerはHermesディレクトリでuv pip installを実行し、既存の音声/暗号依存の安全設定を適用する。voice機能や検証を省略せず、uvのない場合のpip代替はHermesに限り停止。",
+    "CIはuv0.13.1を固定し、Hermes cwdで同じmessagingおよび既存devgroupを導入する。uv版は2026-10-18 JSTに公式PyPIへ新しく照合（2026-10-14公開、MIT OR Apache-2.0、Requires-Python>=3.8）。",
+    "既存の実SDK版照合へPyNaCl1.6系列とcore cryptographyの固定版も含め、解決場所の誤りが再発した場合を検出する。",
+    "合成の実installer入口でHermes cwdを観測し、uv欠如はclone/venv変更前に停止することを回帰。失敗markerと再実行・旧venv保護・人承認は維持。"
+  ],
+  "refs": [
+    "install.sh",
+    ".github/workflows/ci.yml",
+    "integration/test_pinned_sdk_versions.py",
+    "tests/meta/test_install_sh.py",
+    "tests/meta/test_sdk_ci_lanes.py"
+  ]
+}
