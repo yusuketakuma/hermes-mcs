@@ -8,7 +8,6 @@ right; authorization stays with the caller and ``role_order`` only
 reorders sections.
 """
 from datetime import datetime, timedelta
-import json
 import re
 
 from mcs_queries import JST
@@ -219,12 +218,18 @@ def changes(db, ev, since_ts) -> dict:
 def replies(db, project_id) -> dict:
     """連絡・返答の確認: request candidates with the thread's later replies as recorded.
     A missing reply reads 返答が見つからない, never 未対応; a 完了-like reply is not a formal completion."""
+    import sqlite3
+    from ledger import LedgerReader
     from notify_views import REPLY_LABELS
-    from rollup import current_cached_refs
-    row = db.execute("SELECT content, meta FROM artifacts WHERE kind='patient_rollup' AND project_id=? "
-                     "AND json_valid(content) ORDER BY artifact_id DESC LIMIT 1", (project_id,)).fetchone()
-    roll = json.loads(row[0]) if row else {}
-    roll = current_cached_refs(db, project_id, roll, row[1]) if isinstance(roll, dict) and row else {}
+    from rollup import build_rollup
+    # The cached rollup can outlive an edited/deleted request, reply or plan post; rebuild
+    # these rows from the current hash-bound extractions so nothing stale reads as current.
+    reader = object.__new__(LedgerReader)
+    reader.db = db
+    try:
+        roll = build_rollup(reader, project_id)
+    except sqlite3.OperationalError:
+        roll = {}  # a snapshot without the inputs proves no request rows
     live = {r[0] for r in db.execute("SELECT message_id FROM messages WHERE project_id=? AND body_state='full'",
                                      (project_id,))}
     # a request whose post was since edited away or deleted is no longer a written request
@@ -313,8 +318,11 @@ def discrepancies(ev, posters=None) -> dict:
         if len({r["value"] for r in rows}) < 2:
             continue
         dates = [r["event_date_text"] for r in rows]
+        same_day = {}
+        for r in rows:
+            same_day.setdefault(r["event_date_text"], set()).add(r["value"])
         kind = ("time_unknown" if None in dates
-                else "differing_records" if len(set(dates)) < len(dates) else "change_over_time")
+                else "differing_records" if any(len(v) > 1 for v in same_day.values()) else "change_over_time")
         out.append({"category": category, "subject": subject, "key": key, "identity": list(identity),
                     "kind": kind, "records": rows})
     orgs = {s.strip() for w in posters or [] for s in (w.get("organization") or "").split(",") if s.strip()}

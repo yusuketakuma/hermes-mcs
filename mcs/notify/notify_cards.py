@@ -1990,42 +1990,54 @@ def assignee_choices(db, limit=STAFF_CHOICES, project_id=None) -> list:
     who have posted in that patient's room come first."""
     from mcs_queries import staff_directory
     from self_identity import _latest_self_profile, latest_station_staff
-    out, seen = [], set()
+    out, seen, keys = [], set(), {}
 
-    def add(name, station):
+    def add(name, station, sid=None):
         name = " ".join(str(name or "").split())
         label = f"{name}（{station}）" if station else name
         if name and name not in seen and len(label) <= 75 \
                 and len(out) < limit:
             seen.add(name)
             out.append(label)
+            keys[label] = (sid, name, station)
 
     for s in latest_station_staff(db):
-        add(s.get("name"), s.get("station"))
+        add(s.get("name"), s.get("station"), s.get("staff_id"))
     if out:
-        return _room_first(db, out, project_id)
+        return _room_first(db, out, keys, project_id)
     prof = _latest_self_profile(db)
     own = [" ".join(o.split()) for o in prof.get("organizations") or []
            if isinstance(o, str) and o.strip()]
     if not own:
         return []
-    add(prof.get("name"), own[0])
+    add(prof.get("name"), own[0], prof.get("sender_id"))
     for r in staff_directory(db):
         stations = {" ".join(s.split())
                     for s in (r["organization"] or "").split(",")}
         match = next((o for o in own if o in stations), None)
         if match:
             add(r["sender_name"], match)
-    return _room_first(db, out, project_id)
+    return _room_first(db, out, keys, project_id)
 
 
-def _room_first(db, labels, project_id):
-    # labels are ``name（station）``; the stable sort keeps the roster order within each half
+def _room_first(db, labels, keys, project_id):
+    """Roster members proven to have posted in this room first; the stable sort keeps the
+    roster order otherwise. A known id must match the poster's sender_id; without an id
+    the name and the station must both match, so a namesake elsewhere never jumps ahead."""
     if project_id is None or not labels:
         return labels
     from patient_context_view import participants
-    posted = {" ".join(w["name"].split()) for w in participants(db, project_id)["items"]}
-    return sorted(labels, key=lambda s: s.split("（")[0] not in posted)
+    from self_identity import normalize_sender_id
+    posters = participants(db, project_id)["items"]
+    ids = {normalize_sender_id(w["sender_id"]) for w in posters} - {None}
+    named = {(" ".join(w["name"].split()), s.strip()) for w in posters
+             for s in (w["organization"] or "").split(",") if s.strip()}
+
+    def posted(label):
+        sid, name, station = keys[label]
+        sid = normalize_sender_id(sid)
+        return sid in ids if sid is not None else (name, station) in named
+    return sorted(labels, key=lambda s: not posted(s))
 
 
 

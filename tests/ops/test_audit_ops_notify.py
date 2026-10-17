@@ -87,7 +87,7 @@ def test_lineworks_callback_is_handled_before_a_slow_delivery_tick(monkeypatch, 
     assert json.loads(pending.with_suffix(".done").read_text()) == {"result": "processed"}
 
 
-@pytest.mark.parametrize("dirty", ["update_path", "unrelated_path"])
+@pytest.mark.parametrize("dirty", ["update_path", "unrelated_path", "index_only"])
 def test_updater_recovery_resets_only_update_paths(updater, tmp_path, monkeypatch, dirty):
     repo, bare = _make_repo(tmp_path)
     monkeypatch.setattr(mcs_update, "REPO", str(repo))
@@ -109,6 +109,10 @@ def test_updater_recovery_resets_only_update_paths(updater, tmp_path, monkeypatc
     target = _git(repo, "rev-list", "-n1", "v1.2.0").stdout.strip()
     path = "f.txt" if dirty == "update_path" else "g.txt"
     (repo / path).write_text("CHANGED")
+    if dirty == "index_only":
+        # staged, then only the worktree file put back: git diff HEAD is empty, the index is not
+        _git(repo, "add", "g.txt")
+        (repo / "g.txt").write_text("operator")
     state = updater._default_state()
     state["applying"] = {"tag": "v1.2.0", "sha": target, "prev_sha": prev,
                          "at": time.time() - 4000}
@@ -119,7 +123,8 @@ def test_updater_recovery_resets_only_update_paths(updater, tmp_path, monkeypatc
         assert (repo / "f.txt").read_text() == "two"
     else:
         assert updater.recover_interrupted() == 1
-        assert (repo / "g.txt").read_text() == "CHANGED"
+        assert (repo / "g.txt").read_text() == ("operator" if dirty == "index_only" else "CHANGED")
+        assert _git(repo, "show", ":g.txt").stdout == ("CHANGED" if dirty == "index_only" else "operator")
         report = json.loads(Path(updater.REPORT_PATH).read_text())
         assert report["detail"] == "local changes outside update: g.txt"
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev

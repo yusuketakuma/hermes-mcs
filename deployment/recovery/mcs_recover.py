@@ -161,17 +161,20 @@ def _clean():
 
 def _local_changes_outside(prev, target):
     """Tracked dirty paths the prev..target update never touches (someone's
-    manual edit a reset would destroy); None when git cannot tell."""
+    manual edit a reset would destroy); None when git cannot tell. Dirty means
+    worktree-vs-index OR index-vs-HEAD, so staged content survives even when
+    the worktree file was put back (same rule as mcs_update)."""
     if not prev or not target:
         return None
     paths = []
     for args in (["diff", "--name-only", "--no-renames", "-z", prev, target],
-                 ["diff", "--name-only", "--no-renames", "-z", "HEAD"]):
+                 ["diff", "--name-only", "--no-renames", "-z"],
+                 ["diff", "--cached", "--name-only", "--no-renames", "-z"]):
         r = _git(args)
         if r is None or r.returncode != 0:
             return None
         paths.append(set(filter(None, r.stdout.split("\0"))))
-    return sorted(paths[1] - paths[0])
+    return sorted((paths[1] | paths[2]) - paths[0])
 
 
 def _valid_state(state):

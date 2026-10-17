@@ -111,14 +111,13 @@ def test_standard_background_offers_role_candidates_without_switching(tmp_path):
 
 
 def test_unanswered_requests_name_who_asked_and_their_last_post(tmp_path):
-    import json
     from test_read_model import _db
     from patient_context_view import replies
     db = _db(tmp_path, ())
     db.save_messages([_poster(1, "合成看護師", "看護師", "合成訪問看護ステーション", sender=11),
                       _poster(3, "合成看護師", "看護師", "合成訪問看護ステーション", sender=11)], project_id=1)
-    db.db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES('patient_rollup',1,?,'{}',0)",
-                  (json.dumps({"recent_requests": [{"mid": 1, "at": "10-01", "ctx": "合成依頼"}]}, ensure_ascii=False),))
+    from test_read_model import _artifact, _hash_of
+    _artifact(db, "extract_v1", 1, {"requests": [{"kind": "nurse", "ctx": "合成依頼"}]}, {"hash": _hash_of(db, 1)})
     try:
         rows = replies(db.db, 1)["items"]
     finally:
@@ -157,3 +156,18 @@ def test_poster_gaps_rank_quiet_organizations_as_candidates_only():
     assert st["definition_version"] == "2026-10-17" and "candidate" in st["notes"][0]
     scoped = mcs_stats.run_stats(db, SNAP_TS, {"stat": "poster_gaps", "limit": 20, "project": 2})["stats"]["poster_gaps"]
     assert [r["project_id"] for r in scoped["by_organization"]["items"]] == [2]
+
+
+def test_same_day_rule_decides_differing_records():
+    # review F5: repeated equal values on one date are not a conflict; differing values on one date are
+    from patient_context_view import discrepancies
+
+    def obs(mid, value, day):
+        details = [{"key": "observation_name", "value": "合成値"}, {"key": "unit", "value": "mmHg"},
+                   {"key": "value", "value": value}, {"key": "measured_on", "value": day}]
+        return {"category": "observations", "subject": "patient", "text": value, "quote": value, "details": details,
+                "message_id": mid, "content_hash": "h", "posted_at_ts": mid, "source": "chat"}
+    def kinds(*rows):
+        return [g["kind"] for g in discrepancies({"items": list(rows)})["items"]]
+    assert kinds(obs(1, "120", "10/1"), obs(2, "120", "10/1"), obs(3, "130", "10/2")) == ["change_over_time"]
+    assert kinds(obs(1, "120", "10/1"), obs(2, "130", "10/1")) == ["differing_records"]

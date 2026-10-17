@@ -13,8 +13,9 @@ FAMILY_PERSON = (r"ご家族|家族|ご主人|主人|旦那(?:さん|様)?|奥(?
                  r"お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|母|父|"
                  r"(?:長男|長女|次男|次女)(?:さん|様)?|娘(?:さん|様)?|息子(?:さん|様)?|夫|妻|"
                  r"お?兄(?:さん|様)?|お?姉(?:さん|様)?|(?:弟|妹|孫)(?:さん|様)?|同居者")
-OTHER_PERSON = (r"本人以外|他者|他人|第三者|他の(?:患者|利用者)|他患者|別の(?:患者|利用者)|別患者|"
-                r"(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ|ヘルパー|介護士|介護職員?)(?:さん|様)?")
+# care staff: another person, except when they are the one measuring/treating the patient
+STAFF_PERSON = r"(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ|ヘルパー|介護士|介護職員?)(?:さん|様)?"
+OTHER_PERSON = rf"本人以外|他者|他人|第三者|他の(?:患者|利用者)|他患者|別の(?:患者|利用者)|別患者|{STAFF_PERSON}"
 # A reading written at one of these times is not the current one.
 PAST_MARK = r"昨日|前回|先日|入院中|入院時"
 

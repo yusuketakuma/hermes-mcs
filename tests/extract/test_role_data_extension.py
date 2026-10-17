@@ -102,3 +102,20 @@ def test_visit_and_contact_basics_reuse_existing_categories():
             "家族構成: 妻と二人暮らし\n現病名: 合成病\n事業者名: 合成訪問看護ステーション、合成薬局")
     assert [i["category"] for i in extract_context(body)] == [
         "demographics", "contacts", "contacts", "living", "living", "diagnoses", "care_team"]
+
+
+def test_care_staff_measuring_the_patient_keeps_the_patients_vitals():
+    # review F1: ヘルパー/介護士 joined the other-person words; as the measurer they are not the subject
+    import extract
+    for body in ("本人に対しヘルパーが血圧120/80を測定しました。", "本人に対し介護士が体温36.8℃を測定しました。"):
+        doc = extract.extract_message(body, "2026-10-06T10:00:00+09:00")
+        assert doc.get("vitals") == ({"sbp": 120, "dbp": 80} if "血圧" in body else doc.get("vitals")) and doc.get("vitals"), body
+
+
+def test_cannot_rule_out_is_not_a_negation():
+    # review F2: 「否定できない」 keeps the symptom; a plain 「否定」 still negates it
+    import extract
+    for body, kept in (("誤嚥は否定できない。", True), ("転倒は否定できません。", True),
+                       ("誤嚥は否定しきれない。", True), ("誤嚥は否定。", False)):
+        symptoms = extract.extract_message(body, "2026-10-06T10:00:00+09:00").get("symptoms")
+        assert (bool(symptoms)) is kept, (body, symptoms)

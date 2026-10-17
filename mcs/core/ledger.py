@@ -227,14 +227,15 @@ class Ledger:
             self._preflight(tables)
             self.db.execute("PRAGMA foreign_keys=ON")
             self.db.execute("PRAGMA busy_timeout=30000")
+            # macOS fsync() leaves data in the drive cache; no-ops elsewhere.
+            # Set before _init so the first schema writes/migration are covered.
+            self.db.execute("PRAGMA fullfsync=ON")
+            self.db.execute("PRAGMA checkpoint_fullfsync=ON")
             self._init()
             self._install_relation_guards(
                 new_database=not tables, audit=version != SCHEMA_VERSION)
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
-            # macOS fsync() leaves data in the drive cache; no-ops elsewhere
-            self.db.execute("PRAGMA fullfsync=ON")
-            self.db.execute("PRAGMA checkpoint_fullfsync=ON")
             # a checkpoint truncates the -wal file back to this size; without
             # it one long reader leaves a WAL at its high-water mark forever
             self.db.execute(f"PRAGMA journal_size_limit={JOURNAL_SIZE_LIMIT}")

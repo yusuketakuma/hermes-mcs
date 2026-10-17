@@ -353,13 +353,16 @@ def _tree_clean() -> bool:
 
 def _local_changes_outside(prev, target) -> list[str]:
     """Tracked dirty paths the prev..target update never touches (someone's
-    manual edit a reset would destroy). Raises UpdateError when git cannot tell."""
+    manual edit a reset would destroy). Dirty means the worktree differs from
+    the index OR the index differs from HEAD: staged content survives even when
+    the worktree file was put back. Raises UpdateError when git cannot tell."""
     if not prev or not target:
         raise UpdateError("diff: update range unknown")
-    touched, dirty = (set(filter(None, _git_out(args).split("\0"))) for args in (
+    touched, unstaged, staged = (set(filter(None, _git_out(args).split("\0"))) for args in (
         ["diff", "--name-only", "--no-renames", "-z", prev, target],
-        ["diff", "--name-only", "--no-renames", "-z", "HEAD"]))
-    return sorted(dirty - touched)
+        ["diff", "--name-only", "--no-renames", "-z"],
+        ["diff", "--cached", "--name-only", "--no-renames", "-z"]))
+    return sorted((unstaged | staged) - touched)
 
 
 def remote_tag_sha(tag: str) -> str | None:

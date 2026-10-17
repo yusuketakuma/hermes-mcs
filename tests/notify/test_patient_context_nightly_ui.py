@@ -49,7 +49,8 @@ def test_all_sections_reachable_and_actor_bound(led):
     assert json.loads(row["content"]) == {"at": NOW}
     assert "discord:1001" not in row["meta"]
     receipts = led.db.execute("SELECT receipt_json FROM command_receipts").fetchall()
-    assert all('"navigation"' not in row[0] and '"list"' not in json.loads(row[0]) for row in receipts)
+    assert receipts and all("navigation" not in json.loads(row[0]) and "list" not in json.loads(row[0])
+                            for row in receipts)
 
 
 def test_previous_time_preserved_in_navigation_and_per_actor(led):

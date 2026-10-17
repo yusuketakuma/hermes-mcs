@@ -101,14 +101,33 @@ def test_unpublished_nightly_adds_nothing(ctx):
     assert ev["nightly_facts"] == [] and ev["summary"] == []
 
 
+def _requests(ctx, rows, planned=None):
+    """Hash-bound extractions carrying each post's request (LLM, so a thread reply can answer it)
+    and the plan (rule extraction) as written."""
+    for mid, text in rows:
+        _artifact(ctx.db, "extract_llm", mid, {"requests": [{"to": "pharmacy", "action": text}]},
+                  {"hash": _hash_of(ctx.db, mid)})
+    if planned:
+        body = ctx.db.db.execute("SELECT body_text FROM messages WHERE message_id=?", (planned[0],)).fetchone()[0]
+        _artifact(ctx.db, "extract_v1", planned[0], {"patient_context": extract_context(body),
+                                                      "next_planned": planned[1]}, {"hash": _hash_of(ctx.db, planned[0])})
+
+
+def _reply(ctx, mid, parent, kind):
+    import mcs_adapter
+    ctx.db.save_messages([mcs_adapter.Message(
+        message_id=mid, project_id=1, parent_id=parent, sender_id=2, sender_name="返信者", sender_type="user",
+        profession="", organization="", posted_at="2026-09-19T00:00:00+09:00", body_html="<p>架空の返信</p>",
+        body_state="full", is_unread=False, reply_count=0)], project_id=1)
+    ctx.db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (T0 + parent * DAY + 3600, mid))
+    _artifact(ctx.db, "extract_llm", mid, {"reply": {"kind": kind}}, {"hash": _hash_of(ctx.db, mid)})
+
+
 def test_replies_never_claim_untreated_or_formal_completion(ctx):
-    roll = {"recent_requests": [{"mid": 2, "at": "10-01", "ctx": "架空依頼"},
-                                {"mid": 3, "at": "10-02", "ctx": "架空依頼2", "reply_state": "done"}],
-            "next_planned": "架空訪問"}
-    ctx.db.db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES"
-                      "('patient_rollup',1,?,'{}',0)", (json.dumps(roll, ensure_ascii=False),))
+    _requests(ctx, [(2, "架空依頼"), (3, "架空依頼2")], planned=(5, "架空訪問"))
+    _reply(ctx, 30, 3, "done")
     got = pcv.replies(ctx.db.db, 1)
-    assert [r["reply"] for r in got["items"]] == ["返答が見つからない", "返信あり（完了・記録上）"]
+    assert [r["reply"] for r in got["items"]] == ["返信あり（完了・記録上）", "返答が見つからない"]  # newest first
     assert "未対応" not in json.dumps(got, ensure_ascii=False)
     note = pcv.previsit(ctx.db.db, pcv.evidence(ctx.db.db, 1), T0 + 7 * DAY)
     assert [r["message_id"] for r in note["unanswered"]] == [2]
@@ -117,13 +136,10 @@ def test_replies_never_claim_untreated_or_formal_completion(ctx):
 
 
 def test_previsit_lists_every_check_once_per_post_without_fixed_cap(ctx):
-    roll = {"recent_requests": [{"mid": 5, "ctx": "架空依頼A"}, {"mid": 2, "ctx": "架空依頼B"},
-                                {"mid": 3, "ctx": "架空依頼C"}, {"mid": 4, "ctx": "架空依頼D"}]}
-    ctx.db.db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES"
-                      "('patient_rollup',1,?,'{}',0)", (json.dumps(roll, ensure_ascii=False),))
+    _requests(ctx, [(5, "架空依頼A"), (2, "架空依頼B"), (3, "架空依頼C"), (4, "架空依頼D")])
     note = pcv.previsit(ctx.db.db, pcv.evidence(ctx.db.db, 1), T0 + 7 * DAY)
     assert [i["message_id"] for i in note["written_checks"]] == [5]  # written follow-up first
-    assert [r["message_id"] for r in note["unanswered"]] == [2, 3, 4]  # post 5 not repeated; no cap
+    assert [r["message_id"] for r in note["unanswered"]] == [4, 3, 2]  # newest first; post 5 not repeated; no cap
 
 
 def test_residual_values_without_written_dates_are_not_assumed_simultaneous(ctx):
@@ -164,9 +180,7 @@ def test_every_matching_item_receives_nightly_attributes(ctx):
 
 
 def test_replies_drop_requests_whose_post_is_gone(ctx):
-    roll = {"recent_requests": [{"mid": 2, "ctx": "架空依頼"}, {"mid": 3, "ctx": "架空依頼2"}]}
-    ctx.db.db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES"
-                      "('patient_rollup',1,?,'{}',0)", (json.dumps(roll, ensure_ascii=False),))
+    _requests(ctx, [(2, "架空依頼"), (3, "架空依頼2")])
     ctx.db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=3")
     ctx.db.db.commit()
     assert [r["message_id"] for r in pcv.replies(ctx.db.db, 1)["items"]] == [2]
@@ -275,3 +289,24 @@ def test_private_views_keep_negation_plan_and_family_in_mentions(ctx, section):
     mentions = [r for r in rendered if "架空錠" in r["text"] or "架空のむくみ" in r["text"]]
     assert mentions
     assert all(body in row["text"] for row in mentions)
+
+
+def test_replies_follow_the_current_posts_not_a_cached_rollup(ctx):
+    # review F4: an old cached rollup row never reads as the current request, reply or plan
+    _requests(ctx, [(2, "架空依頼"), (3, "架空依頼2")], planned=(5, "架空訪問"))
+    _reply(ctx, 30, 3, "done")
+    stale = {"recent_requests": [{"mid": 2, "ctx": "古い依頼", "reply_state": "done"}], "next_planned": "古い予定"}
+    ctx.db.db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES"
+                      "('patient_rollup',1,?,'{}',0)", (json.dumps(stale, ensure_ascii=False),))
+    got = pcv.replies(ctx.db.db, 1)
+    assert [(r["message_id"], r["text"], r["reply_state"]) for r in got["items"]] == [
+        (3, "架空依頼2", "done"), (2, "架空依頼", None)] and got["next_planned"] == "架空訪問"
+    # request post edited: its old extraction no longer proves a request
+    ctx.db.save_messages([_message(2, body="依頼は取り消しました")], project_id=1)
+    assert [r["message_id"] for r in pcv.replies(ctx.db.db, 1)["items"]] == [3]
+    # reply post edited away: the done state is not kept from the old reply
+    ctx.db.save_messages([_message(30, parent=3, body="別の話題です")], project_id=1)
+    assert [r["reply_state"] for r in pcv.replies(ctx.db.db, 1)["items"]] == [None]
+    # plan post deleted: the plan is gone too
+    ctx.db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=5")
+    assert pcv.replies(ctx.db.db, 1)["next_planned"] is None

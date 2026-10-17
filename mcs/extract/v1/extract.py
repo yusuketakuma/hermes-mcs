@@ -29,7 +29,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
-from clinical_values import FAMILY_PERSON, OTHER_PERSON, PAST_MARK
+from clinical_values import FAMILY_PERSON, OTHER_PERSON, PAST_MARK, STAFF_PERSON
 from patient_context import extract_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import ELIGIBLE_MESSAGE
@@ -60,7 +60,7 @@ _LISTED_SYMPTOM = "|".join(map(re.escape, sorted(_SYMPTOMS, key=len, reverse=Tru
 _SYMPTOM_NEGATION = re.compile(
     r"さ?(?:[はもがの]|の?訴え|症状|等|など|特に|本日|今日|今回|現在|今朝|夜間|日中|明らかな|[ \t　]"
     r"|[・/／、とや](?:" + _LISTED_SYMPTOM + r"))*"
-    r"(?:なし|無し|ありません|ない|認めず|認めない|認められず|見られず|見られない|見られません|否定|[(（][-−－][)）])"
+    r"(?:なし|無し|ありません|ない|認めず|認めない|認められず|見られず|見られない|見られません|否定(?!でき|しきれ|し(?:難|がた))|[(（][-−－][)）])"
     r"(?!(?:では|じゃ)(?:ない|ありません)|わけ(?:では|じゃ)(?:ない|ありません))")
 _ADHERENCE = ("残薬", "飲み忘れ", "飲み残し", "未使用", "服薬不良",
               "アドヒアランス", "一包化", "お薬カレンダー", "自己注射",
@@ -236,7 +236,7 @@ def _scope_events(body, patient_name, provider_fields):
         tail = match.start() + len(person)
         if _REPORTING.match(body, tail) and not re.fullmatch(_SELF_PERSON, person) and not re.fullmatch(_COMPOUND_PERSON, person):
             continue
-        if (re.fullmatch(r"(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ)(?:さん|様)?", person)
+        if (re.fullmatch(STAFF_PERSON, person)
                 and _CLINICAL_ACTOR.match(body, tail)):
             k = bisect.bisect_left(stops, match.start())
             before = body[stops[k - 1] + 1 if k else 0:match.start()]

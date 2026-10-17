@@ -111,7 +111,7 @@ def test_pre_merge_interrupt_restores(rec, tmp_path):
     assert report["result"] == "interrupted_pre_merge"
 
 
-@pytest.mark.parametrize("dirty", ["update_path", "unrelated_path"])
+@pytest.mark.parametrize("dirty", ["update_path", "unrelated_path", "index_only"])
 def test_mixed_tree_resets_to_prev(rec, tmp_path, dirty):
     repo = _make_repo(tmp_path)
     (repo / "g.txt").write_text("operator")
@@ -126,6 +126,10 @@ def test_mixed_tree_resets_to_prev(rec, tmp_path, dirty):
     # change is someone's manual edit and must survive
     path = "f.txt" if dirty == "update_path" else "g.txt"
     (repo / path).write_text("CHANGED")
+    if dirty == "index_only":
+        # staged, then only the worktree file put back: git diff HEAD is empty, the index is not
+        _git(repo, "add", "g.txt")
+        (repo / "g.txt").write_text("operator")
     state = _applying(prev, sha=target, stage="applying")
     with open(rec.STATE_PATH, "w") as f:
         json.dump(state, f)
@@ -136,7 +140,8 @@ def test_mixed_tree_resets_to_prev(rec, tmp_path, dirty):
         assert json.loads(report_path.read_text())["result"] == "mixed_tree_reset"
     else:
         assert rec.recover() == 1
-        assert (repo / "g.txt").read_text() == "CHANGED"
+        assert (repo / "g.txt").read_text() == ("operator" if dirty == "index_only" else "CHANGED")
+        assert _git(repo, "show", ":g.txt").stdout == ("CHANGED" if dirty == "index_only" else "operator")
         report = json.loads(report_path.read_text())
         assert report["result"] == "escalate"
         assert report["detail"] == "local changes outside update: g.txt"

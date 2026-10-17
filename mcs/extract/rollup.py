@@ -202,6 +202,13 @@ def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread):
             req_thread.append((row, root, ts, sender_id))
 
 
+def _stored_lab_ok(r) -> bool:
+    """A stored lab report whose fields have the types lab_candidate reads."""
+    value = r.get("value", "")
+    return (type(value) in (str, int, float)
+            and all(r.get(k) is None or isinstance(r.get(k), str) for k in ("unit", "evidence", "measured_on")))
+
+
 def build_rollup(ledger, project_id: int) -> dict:
     db = ledger.db
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
@@ -315,6 +322,11 @@ def build_rollup(ledger, project_id: int) -> dict:
                 # Cr/クレアチニン, CRP/crp are one analyte: the newest report keeps the slot.
                 post_labs.setdefault(lab_analyte(lb["name"]) or fold_surface(lb["name"]), []).append(lb)
         for key, reports in post_labs.items():
+            if not all(_stored_lab_ok(r) for r in reports):
+                # a malformed stored report is unreadable, not absent: no current value from
+                # this post, and none revived from older posts either
+                latest_labs.setdefault(key, None)
+                continue
             # Within one post, only a quote-verified sampling date orders readings; when the
             # dates cannot order them, no current value is asserted (nor taken from older posts).
             dated = [(lab_candidate(r["name"], r.get("value", ""), r.get("unit"), r.get("evidence"),
