@@ -407,6 +407,23 @@ def test_undo_resumes_when_interrupted_before_the_reset(updater, tmp_path, monke
     assert order.index("quiesce") < order.index("runtime")
 
 
+def test_undo_reports_manual_content_without_restoring_runtime(updater, tmp_path, monkeypatch):
+    from ops_testkit import _git
+    repo, _, old, _, order, _ = _interrupted(
+        updater, tmp_path, monkeypatch, rollback_shaped=True)
+    (repo / "f.txt").write_text("manual content")
+    head = _git(repo, "rev-parse", "HEAD").stdout
+    applying = updater.load_state()["applying"]
+    python = (old / "bin/python3").read_bytes()
+    assert updater.recover_interrupted() == 1
+    assert updater._last_report()["detail"] == "local changes outside update: f.txt"
+    assert (repo / "f.txt").read_text() == "manual content"
+    assert _git(repo, "rev-parse", "HEAD").stdout == head
+    assert updater.load_state()["applying"] == applying
+    assert (old / "bin/python3").read_bytes() == python
+    assert "runtime" not in order and "reset" not in order
+
+
 def test_undo_waiting_for_restore_consent_holds_with_drainers_stopped(updater, tmp_path, monkeypatch):
     repo, prev, old, runtime, order, notices = _interrupted(updater, tmp_path, monkeypatch)
     held = []

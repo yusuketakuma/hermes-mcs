@@ -394,19 +394,35 @@ def _local_changes_outside(prev, target) -> list[str]:
         if ita_views[0] != ita_views[1]:
             raise ValueError("intent-to-add index")
 
+        old, new, index = snapshots
+        directories = set()
+        for path in old.keys() | new.keys():
+            parts = path.split("/")
+            directories.update("/".join(parts[:n]) for n in range(1, len(parts)))
+
         def worktree_version(path):
             full = Path(REPO)
             for part in path.split("/")[:-1]:
                 full /= part
                 try:
                     if not stat.S_ISDIR(full.lstat().st_mode):
-                        raise ValueError("non-directory ancestor")
+                        ancestor = full.relative_to(REPO).as_posix()
+                        if worktree_version(ancestor) not in {old.get(ancestor), new.get(ancestor)}:
+                            raise ValueError("unknown non-directory ancestor")
+                        return None
                 except FileNotFoundError:
                     return None
             full /= path.split("/")[-1]
             try:
                 before = full.lstat()
             except FileNotFoundError:
+                return None
+            if stat.S_ISDIR(before.st_mode) and path in directories:
+                # A known directory may replace a leaf, but no private children may be lost.
+                for child in full.iterdir():
+                    name = path + "/" + child.name
+                    if worktree_version(name) not in {old.get(name), new.get(name)}:
+                        raise ValueError("unknown directory content")
                 return None
             digest = hashlib.sha1(usedforsecurity=False)  # Git blob identity, not authentication.
             if stat.S_ISLNK(before.st_mode):
@@ -429,7 +445,6 @@ def _local_changes_outside(prev, target) -> list[str]:
                     raise ValueError("file changed during inspection")
             return ("100755" if opened.st_mode & stat.S_IXUSR else "100644"), digest.hexdigest()
 
-        old, new, index = snapshots
         foreign = []
         for path in sorted(old.keys() | new.keys() | index.keys()):
             known = {old.get(path), new.get(path)}
@@ -3506,10 +3521,10 @@ def recover_interrupted(if_stale: bool = False) -> int:
                         f"HEAD={head[:12]} prev={str(prev)[:12]} "
                         f"target={str(target)[:12]} clean={clean}")
     except UpdateError as e:
-        # git itself failed (timeout / spawn / nonzero: HEAD, status,
-        # reset, merge --abort) — the tree is unmeasurable: escalate,
-        # which inside a consent hold keeps the freeze (see escalate).
-        return escalate(f"git unverifiable: {e}")
+        # A content hold is distinct from a Git measurement/operation failure.
+        detail = str(e)
+        return escalate(detail if detail.startswith("local changes outside update:")
+                        else f"git unverifiable: {detail}")
     finally:
         for fd in (run_fd, upd_fd):
             if fd is not None:

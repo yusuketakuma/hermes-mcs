@@ -175,7 +175,13 @@ def _provenance_snapshot(repo):
     files = {}
     for path in repo.rglob("*"):
         relative = path.relative_to(repo)
-        if relative.parts[0] != ".git" and path.is_file():
+        if relative.parts[0] == ".git":
+            continue
+        if path.is_symlink():
+            files[str(relative)] = ("symlink", os.readlink(path))
+        elif path.is_dir():
+            files[str(relative)] = ("directory", path.stat().st_mode & 0o777)
+        elif path.is_file():
             files[str(relative)] = (path.read_bytes(), path.stat().st_mode & 0o777)
     return (_git(repo, "rev-parse", "HEAD").stdout,
             _git(repo, "ls-files", "--stage", "-v").stdout, files)
@@ -299,3 +305,78 @@ def test_recovery_keeps_a_dangling_symlink_without_following_it(
     assert path.is_symlink() and os.readlink(path) == "missing-target"
     assert not (repo / "missing-target").exists()
     assert _git(repo, "ls-files", "--stage", "-v").stdout == index
+
+
+def _file_directory_repo(tmp_path):
+    repo, _ = _make_repo(tmp_path)
+    (repo / ".gitignore").write_text("shape/ignored.txt\n")
+    (repo / "shape").write_text("known file endpoint")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "file endpoint")
+    file_commit = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "shape").unlink()
+    (repo / "shape").mkdir()
+    (repo / "shape/known.txt").write_text("known directory endpoint")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "directory endpoint")
+    directory_commit = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    return repo, file_commit, directory_commit
+
+
+@pytest.mark.parametrize("helper", ["updater", "watchdog"])
+@pytest.mark.parametrize("direction", ["file_to_directory", "directory_to_file"])
+@pytest.mark.parametrize("at", ["source", "destination"])
+def test_recovery_allows_known_file_directory_transitions(
+        updater, tmp_path, monkeypatch, helper, direction, at):
+    repo, file_commit, directory_commit = _file_directory_repo(tmp_path)
+    origin, destination = ((file_commit, directory_commit) if direction == "file_to_directory"
+                           else (directory_commit, file_commit))
+    _git(repo, "checkout", "-q", "--detach", origin if at == "source" else destination)
+    tool = updater if helper == "updater" else _load()
+    monkeypatch.setattr(tool, "REPO", str(repo))
+    before = _provenance_snapshot(repo)
+    try:
+        assert tool._local_changes_outside(origin, destination) == []
+    finally:
+        assert _provenance_snapshot(repo) == before
+
+
+@pytest.mark.parametrize("helper", ["updater", "watchdog"])
+@pytest.mark.parametrize("collision", [
+    "tracked_third", "untracked_child", "ignored_child", "nested_empty_directory", "symlink_ancestor",
+])
+def test_file_directory_reset_preserves_unknown_children(
+        updater, tmp_path, monkeypatch, helper, collision):
+    repo, file_commit, directory_commit = _file_directory_repo(tmp_path)
+    private = None
+    if collision == "tracked_third":
+        (repo / "shape/known.txt").write_text("MANUAL THIRD CONTENT")
+    elif collision in ("untracked_child", "ignored_child"):
+        name = "ignored.txt" if collision == "ignored_child" else "operator-notes.txt"
+        (repo / "shape" / name).write_text("MANUAL CHILD CONTENT")
+        if collision == "ignored_child":
+            assert _git(repo, "check-ignore", "shape/ignored.txt").returncode == 0
+    elif collision == "nested_empty_directory":
+        (repo / "shape/operator/empty").mkdir(parents=True)
+    else:
+        private = tmp_path / "synthetic-private-target"
+        private.mkdir()
+        (private / "known.txt").write_text("SYNTHETIC PRIVATE CONTENT")
+        (repo / "shape/known.txt").unlink()
+        (repo / "shape").rmdir()
+        (repo / "shape").symlink_to(private, target_is_directory=True)
+    tool = updater if helper == "updater" else _load()
+    monkeypatch.setattr(tool, "REPO", str(repo))
+    before = _provenance_snapshot(repo)
+    private_before = ((private / "known.txt").read_bytes() if private is not None else None)
+    try:
+        foreign = tool._local_changes_outside(directory_commit, file_commit)
+    except updater.UpdateError:
+        assert helper == "updater"
+        foreign = None
+    assert foreign is None or foreign
+    assert _provenance_snapshot(repo) == before
+    if private is not None:
+        assert (repo / "shape").is_symlink()
+        assert os.readlink(repo / "shape") == str(private)
+        assert (private / "known.txt").read_bytes() == private_before
