@@ -213,7 +213,7 @@ def test_addressed_signal_rows_stay_in_window_and_count_a_post_once(led):
     _meta(led, 110, mentions=[{"type": "user", "id": SELF}], reactions=[])
     _signal_row(led, "pru:1:110", stype="pharmacist_request_unanswered", mids=[110])
     sec = _section(_digest(led, cfg), "自分宛で返信の記録なし")
-    assert "1件（直近7日）" in sec and "2件" not in sec
+    assert "（直近7日）\n1件\n" in sec and "2件" not in sec
     assert sec.count("・project 1 ") == 1
     assert "薬剤師宛の依頼に返信の記録なし" in sec
 
@@ -222,7 +222,7 @@ def test_addressed_header_marks_mentions_undetermined_without_self_id(led):
     _patient(led)
     _post(led, 110, OTHER, ts=NOW - 5000)
     sec = _section(_digest(led), "自分宛で返信の記録なし")
-    assert "0件（直近7日・メンション未判定）" in sec
+    assert "（直近7日）\n0件（メンション未判定）" in sec
 
 
 def test_self_mentioned_and_evidence_flags(led, tmp_path):
@@ -280,7 +280,7 @@ def test_fit_parts_folds_list_rows_not_disclosures(led):
         assert "・…他" in sec
         assert "取得状況" in text
     full = _section(notify_render.parts_text(parts), "反応がない自分の投稿")
-    assert full.count("0時間経過・観測") == notify_digest.MAX_LIST
+    assert full.count("1時間未満・観測") == notify_digest.MAX_LIST
     assert "・…他30件" in full
 
 

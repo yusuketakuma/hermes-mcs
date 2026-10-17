@@ -54,7 +54,18 @@ ERR_JA = {
     "action_not_applicable": "この投稿では利用できない操作です。最新のカードでやり直してください。",
     "actor_mismatch": "この表示は操作した本人だけが使えます。元のカードから開き直してください。",
     "origin_mismatch": "このカードのボタンではありません。最新のカードから操作してください。",
+    "card_missing": "対象カードが見つかりません。",
+    "signal_not_open": "この候補はすでに閉じられています。最新のカードを確認してください。",
+    "signal_not_found": "対象の候補が見つかりません。",
+    "signal_corrupt": "候補の記録を読み取れないため処理できません。管理者に連絡してください。",
+    "project_mismatch": "対象の患者が見つかりません。最新のカードでやり直してください。",
+    "project_not_found": "対象の患者が見つかりません。最新のカードでやり直してください。",
+    "payload_changed": "抽出結果が更新されたため報告できません。最新のカードでやり直してください。",
 }
+# a dispatch exception may land before or after the commit: say neither
+CRASH_TEXT = ("処理中にエラーが発生しました。最新のカードで結果を確認してからやり直してください。"
+              "続く場合は管理者に連絡してください。")
+UNKNOWN_ERROR_TEXT = "この操作は完了できませんでした。最新のカードからやり直してください。"
 
 
 def ja(result: dict | None) -> str:
@@ -63,7 +74,9 @@ def ja(result: dict | None) -> str:
     err = result.get("error")
     if result.get("outcome") == "applied" or result.get("applied"):
         return "反映しました。"
-    return ERR_JA.get(str(err), f"拒否されました: {err}")
+    if str(err).startswith("crash:"):
+        return CRASH_TEXT
+    return ERR_JA.get(str(err), UNKNOWN_ERROR_TEXT)
 
 
 BODY_CHUNK = 1900          # under the 2000-char message ceiling
@@ -134,11 +147,16 @@ def split_body(text: str, limit: int = BODY_CHUNK,
 
 
 
-def _answer_chunks(value: str) -> list:
+LONG_NOTICE = "\n…長文のためここまで表示しています。"
+# only a post body has its full text in MCS; a list or summary has no MCS screen
+BODY_LONG_NOTICE = LONG_NOTICE + "続きはMCSで確認してください。"
+DIGEST_LONG_NOTICE = LONG_NOTICE + "絞込み（施設・患者・日数）で範囲を狭めてください。"
+
+
+def _answer_chunks(value: str, notice: str = LONG_NOTICE) -> list:
     chunks = split_body(value, max_chunks=BODY_MAX_CHUNKS + 1)
     if len(chunks) <= BODY_MAX_CHUNKS:
         return chunks
-    notice = "\n…長文のためここまで表示しています。続きはMCSで確認してください。"
     chunks = chunks[:BODY_MAX_CHUNKS]
     chunks[-1] = chunks[-1][:BODY_CHUNK - len(notice)] + notice
     return chunks
@@ -162,7 +180,7 @@ def body_messages(result: dict, *, plain: bool = False) -> list:
         title = title[:79] + "…"
     # escaped per chunk: a chunk is its own message, so a split line's
     # remainder starts a line there
-    chunks = [_literal(c, plain) for c in _answer_chunks(body)]
+    chunks = [_literal(c, plain) for c in _answer_chunks(body, BODY_LONG_NOTICE)]
     heading = title if plain else f"**{_literal(title, plain)}**"
     return [f"{heading}（{i + 1}/{len(chunks)}）\n{c}"
             if len(chunks) > 1 else f"{heading}\n{c}"
@@ -262,9 +280,9 @@ def modal_fields(action: str, form: dict | None = None,
                  "required": True, "max": 100, "default": ""}]
     if action == "digest":
         return [{"id": "query", "required": False, "max": 100,
-                 "label": "絞込み（all / mine / station:名前 / days:1-7）",
-                 "default": "all"},
-                {"id": "name", "label": "担当の名前（mine用）",
+                 "label": "絞込み（全体 / 担当 / 施設:名前 / 日数:1-7）",
+                 "default": "全体"},
+                {"id": "name", "label": "担当の名前（担当で絞る場合）",
                  "required": False, "max": 120, "default": clicker[:120]}]
     return []
 
@@ -385,7 +403,11 @@ def list_messages(result: dict, allowed, markdown: bool = True, *,
         lines.append(lit(view.get("empty") or "該当なし"))
     rest = len(items) - min(len(items), LIST_SHOW) + int(view.get("more") or 0)
     if rest > 0:
-        lines.append(f"他{rest}件")
+        shown = {i.get("group") for i in items[:LIST_SHOW]}
+        hidden = [g for g in dict.fromkeys(i.get("group") for i in items[LIST_SHOW:])
+                  if g and g not in shown]
+        lines.append(f"他{rest}件（ここでは{LIST_SHOW}件まで表示）"
+                     + (f": {lit('・'.join(hidden))}" if hidden else ""))
     lines += [lit(x) for x in view.get("notes") or []]
     return _answer_chunks("\n".join(lines))
 
@@ -419,7 +441,8 @@ def view_answer(result: dict | None, allowed,
     if action == "digest" and isinstance(result.get("text"), str):
         # rendered by the runner from the shared display model in this
         # card's transport dialect (notify_render.parts_text)
-        return [(m, None) for m in _answer_chunks(result["text"])]
+        return [(m, None) for m in _answer_chunks(result["text"],
+                                                  DIGEST_LONG_NOTICE)]
     if action in ("body", "summary") and result.get("body"):
         return [(m, None) for m in body_messages(result, plain=plain)]
     if action == "tasks":
@@ -435,30 +458,38 @@ def view_answer(result: dict | None, allowed,
     return None
 
 
+# registry.CONFIRM_TTL_S (600 s) — the pending confirm's lifetime
+CONFIRM_TTL_NOTE = "\nこの確認は10分で無効になります。"
+
+
 def preview_text(action: str, payload: dict, markdown: bool) -> str:
     """The human-confirm preview of a task/dismiss/report payload —
-    Discord markdown (bold heading, code-quoted signal) or Slack plain
+    Discord markdown (bold heading) or Slack plain
     text."""
     bold = "**" if markdown else ""
     if action == "dismiss":
-        key = payload["signal_key"]
         code = dict(DISMISS_REASONS).get(payload.get("reason_code"))
+        reason = payload["reason"][:400]
         return (f"{bold}確認 — 候補の却下{bold}\n"
-                f"signal: {f'`{key}`' if markdown else key}\n"
                 + (f"区分: {code}\n" if code else "")
-                + f"理由: {payload['reason'][:400]}")
+                + (f"理由: {reason}\n" if reason != code else "")
+                + "確定すると、この候補を却下済みにし、あなたの名前と理由を記録します。"
+                + CONFIRM_TTL_NOTE)
     if action == "report":
         return (f"{bold}確認 — 抽出の誤り報告{bold}\n"
                 f"箇所: {dict(FEEDBACK_FIELDS).get(payload['field'], '?')}\n"
                 f"メモ: {payload['reason'][:400]}\n"
-                "確定すると、この投稿の要約の抽出を1回だけ再実行します。")
+                "確定すると、この投稿の要約の抽出を1回だけ再実行し、"
+                "あなたの名前と理由を記録します。" + CONFIRM_TTL_NOTE)
     out = (f"{bold}確認 — タスク作成{bold}\n"
            f"内容: {payload['title'][:200]}")
     if payload.get("assignee"):
         out += f"\n担当: {payload['assignee'][:120]}"
     if payload.get("due_date"):
         out += f"\n期限: {payload['due_date']}"
-    return out + f"\n理由: {payload['reason'][:400]}"
+    return (out + f"\n理由: {payload['reason'][:400]}\n"
+            "確定すると、この投稿にタスクを作成し、あなたの名前と理由を記録します。"
+            + CONFIRM_TTL_NOTE)
 
 
 def _task_answers(items: list) -> list:

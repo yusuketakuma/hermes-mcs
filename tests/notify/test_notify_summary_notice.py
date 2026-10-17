@@ -262,7 +262,7 @@ def test_hermes_summary_keeps_names_out(led, tmp_path):
          "allowed_chat_ids": {"42"}, "project_ids": frozenset({1})},
         {"user_id": "1001", "chat_id": "42", "scope_id": None,
          "profile": None, "message_id": None})
-    assert "期限切れタスク 1件: project 1" in out and "患者A" not in out
+    assert "期限切れタスク 1件（1人）: project 1" in out and "患者A" not in out
     assert "患者A" in summary.answer(path, "station:みどり", now=NOW)["text"]
 
 

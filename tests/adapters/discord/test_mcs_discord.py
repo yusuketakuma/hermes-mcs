@@ -953,22 +953,30 @@ def test_confirm_preview_text_per_transport():
     req = {"title": "件" * 250, "reason": "理" * 450,
            "assignee": "担当者A", "due_date": "2026-10-01"}
     tail = (f"内容: {'件' * 200}\n担当: 担当者A\n期限: 2026-10-01\n"
-            f"理由: {'理' * 400}")
+            f"理由: {'理' * 400}\n"
+            "確定すると、この投稿にタスクを作成し、あなたの名前と理由を記録します。\n"
+            "この確認は10分で無効になります。")
     assert text.preview_text("request", req, True) \
         == "**確認 — タスク作成**\n" + tail
     assert text.preview_text("request", req, False) \
         == "確認 — タスク作成\n" + tail
     assert text.preview_text(
         "request", {"title": "t", "reason": "r"}, False) \
-        == "確認 — タスク作成\n内容: t\n理由: r"
+        == ("確認 — タスク作成\n内容: t\n理由: r\n"
+            "確定すると、この投稿にタスクを作成し、あなたの名前と理由を記録します。\n"
+            "この確認は10分で無効になります。")
     report = {"field": "meds", "reason": "用量が違う"}
     assert text.preview_text("report", report, False).startswith(
         "確認 — 抽出の誤り報告\n箇所: 薬\nメモ: 用量が違う")
     dismiss = {"signal_key": "sig:1", "reason": "r"}
     assert text.preview_text("dismiss", dismiss, True) \
-        == "**確認 — 候補の却下**\nsignal: `sig:1`\n理由: r"
+        == ("**確認 — 候補の却下**\n理由: r\n"
+            "確定すると、この候補を却下済みにし、あなたの名前と理由を記録します。\n"
+            "この確認は10分で無効になります。")
     assert text.preview_text("dismiss", dismiss, False) \
-        == "確認 — 候補の却下\nsignal: sig:1\n理由: r"
+        == ("確認 — 候補の却下\n理由: r\n"
+            "確定すると、この候補を却下済みにし、あなたの名前と理由を記録します。\n"
+            "この確認は10分で無効になります。")
 
 
 @pytest.mark.parametrize("due,ok", [
@@ -2876,7 +2884,7 @@ def test_task_modal_roster_prefill_confirm_and_footer(world):
     modal_id = ix2.response.modal.custom_id[len("mcs:m:"):]
     preview = submit("2026-10-01")
     assert preview["content"].startswith("**確認 — タスク作成**\n内容: 残薬を確認")
-    assert preview["content"].endswith("\n理由: 通知カードからタスク作成")
+    assert "\n理由: 通知カードからタスク作成\n確定すると" in preview["content"]
     cid = next(b.custom_id for b in preview["view"].items
                if not b.custom_id.endswith(":cancel"))
     confirm = FakeInteraction(cid, message_id=msg.id)

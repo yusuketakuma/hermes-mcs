@@ -38,7 +38,8 @@ def test_long_private_answer_retains_its_budget_and_announces_omission(action, m
     assert len(answer) == text.BODY_MAX_CHUNKS
     assert all(len(message) <= 2000 for message, _ in answer)
     assert "長文のため" in answer[-1][0]
-    assert "MCSで確認" in answer[-1][0]
+    # only a post body is in MCS; lists and summaries name no MCS screen
+    assert ("MCSで確認" in answer[-1][0]) == (action == "body")
 
 
 def test_legacy_chunk_api_keeps_its_explicit_prefix_contract():

@@ -44,7 +44,7 @@ NOTICE_BUDGET = 1900     # relayed text notice (one chat message)
 # candidate count's (design #13: 期限・予定・依頼は含めない)
 EXCLUDED_SIGNALS = frozenset({"request_overdue", "request_aging",
                               "rx_period_expiry", "rx_period_lapsed"})
-SCOPE_HELP = "all / mine / station:名前 / project:ID,ID / days:1-7（空白区切りで組合せ）"
+SCOPE_HELP = "全体 / 担当 / 施設:名前 / 患者:ID,ID / 日数:1-7（空白区切りで組合せ）"
 
 
 def settings(cfg) -> dict | None:
@@ -77,9 +77,9 @@ def parse_scope(text) -> dict | str:
                 ids = [int(v) for v in val.split(",")
                        if v.isascii() and v.isdigit()]
             except ValueError:
-                return f"project の指定が不正です: {tok[:40]}"
+                return f"患者の指定が不正です（患者IDは数字で指定してください）: {tok[:40]}"
             if not ids or len(ids) != len(val.split(",")):
-                return f"project の指定が不正です: {tok[:40]}"
+                return f"患者の指定が不正です（患者IDは数字で指定してください）: {tok[:40]}"
             out["projects"] += ids
         elif key in ("days", "日数") and val.isascii() and val.isdigit():
             try:
@@ -102,7 +102,7 @@ def _scope_label(flt, name) -> str:
         parts.append("施設 " + "・".join(plain_notice(s, 30)
                                          for s in flt["stations"]))
     if flt["projects"]:
-        parts.append("project " + ",".join(map(str, flt["projects"][:5]))
+        parts.append("患者ID " + ",".join(map(str, flt["projects"][:5]))
                      + ("…" if len(flt["projects"]) > 5 else ""))
     return " / ".join(parts) or "全患者"
 
@@ -173,7 +173,8 @@ OWN_POST_DAYS = 7
 
 def _ago(seconds) -> str:
     return (f"{int(seconds // DAY_S)}日経過" if seconds >= DAY_S
-            else f"{int(seconds // 3600)}時間経過")
+            else f"{int(seconds // 3600)}時間経過" if seconds >= 3600
+            else "1時間未満")
 
 
 def _observed(meta) -> str:
@@ -215,9 +216,9 @@ def _own_unreacted(db, until, ok, room, self_id) -> list:
         elif others == 0:
             rows.append(f"・{room(r['project_id'])} "
                         f"{_ago(until - r['posted_at_ts'])}・{_observed(meta)}")
-    head = [f"反応なし {len(rows)}投稿（直近{OWN_POST_DAYS}日）"]
+    head = [f"反応なし {len(rows)}投稿"]
     if unfetched or invalid:
-        head.append(f"スタンプ未取得 {unfetched}投稿・取得不正 {invalid}")
+        head.append(_stamp_gaps(unfetched, invalid))
     return head + _listed(rows)
 
 
@@ -288,8 +289,8 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
             self_id is None and _recent_posts(db, until, ok, "")):
         return []
     # 本人ID不明の件数はシグナル行だけ — 見出しで判定外を明示する
-    undetermined = "・メンション未判定" if self_id is None else ""
-    return [f"{len(rows)}件（直近{OWN_POST_DAYS}日{undetermined}）",
+    undetermined = "（メンション未判定）" if self_id is None else ""
+    return [f"{len(rows)}件{undetermined}",
             *notes, *_listed(rows)]
 
 
@@ -375,9 +376,11 @@ def build(db, cfg, since: float, until: float, flt=None, *,
 
     today = end.date().isoformat()
     tasks = [t for t in db.execute(
-        "SELECT project_id, due_date FROM requests "
+        "SELECT project_id, assignee, due_date FROM requests "
         "WHERE status IN ('open','in_progress') ORDER BY request_id")
-        if ok(t["project_id"])]
+        if ok(t["project_id"])
+        # mine: the reader's own tasks, as the footer says — not the room's
+        and (not flt["mine"] or assignee_matches(t["assignee"], name))]
     late = [t["project_id"] for t in tasks
             if t["due_date"] and t["due_date"] < today]
     due = [t["project_id"] for t in tasks if t["due_date"] == today]
@@ -398,7 +401,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     patients = len(live if keep is None else live & keep)
     summary = (f"新着 {len(rows)}件・緊急度高 {len(urgent)}件"
                + (f"・アラート {sum(by_type.values())}件" if signals_on else "")
-               + f"・未完了タスク {len(tasks)}件（期限切れ {len(late)}・本日期限 {len(due)}）")
+               + f"・未完了タスク {len(tasks)}件" + _nonzero(
+                   (("期限切れ", len(late)), ("本日期限", len(due)))))
     containers = [
         {"type": "heading", "text": title},
         {"type": "text", "text": f"対象: {_scope_label(flt, name)} {patients}人・{span}"
@@ -414,7 +418,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     for label, pids in (("期限切れタスク", late), ("本日期限タスク", due)):
         if pids:
             rooms_ = list(dict.fromkeys(pids))
-            todo.append(f"・{label} {len(pids)}件: " + _ids(rooms_, room))
+            todo.append(f"・{label} {len(pids)}件（{len(rooms_)}人）: "
+                        + _ids(rooms_, room))
     if stale_by:
         todo.append(f"・滞留アラート（{STALE_ALERT_D}日超・未確認）"
                     f"{sum(stale_by.values())}件: " + "・".join(
@@ -422,10 +427,10 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     section("要対応", todo)
     section(f"緊急度高 {len(urgent)}件", [
         f"・{room(p)} {_posted_hhmm(db, m)}" + (
-            " 🚨 緊急度高" + structured_view.urgency_qc_suffix(db, m)
+            " 🚨" + structured_view.urgency_qc_suffix(db, m)
             if u == "llm" else " 🚨")
         for p, m, u in urgent], fold=True)
-    section("自分宛で返信の記録なし",
+    section(f"自分宛で返信の記録なし（直近{OWN_POST_DAYS}日）",
             _addressed_unanswered(db, until, ok, room, self_id, signals_on), fold=True)
 
     per: dict = {}
@@ -444,11 +449,12 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             f"{_signal_ja(k)} {n}" for k, n in sorted(by_type.items()))])
 
     reacted, reaction_counts = _self_reaction_count(db, since, until, keep)
+    # an observed zero is omitted; unfetched stamps are counted in 取得状況
     section(f"MCS 本人スタンプ: {reacted}投稿", [
         "・" + "・".join(f"{label} {count}" for label, count in
-                        sorted(reaction_counts.items())) if reaction_counts else "・本人反応なし"])
+                        sorted(reaction_counts.items()))] if reaction_counts else [])
     if cfg.get("metadata_refresh_publish") is True:
-        section("反応がない自分の投稿",
+        section(f"反応がない自分の投稿（直近{OWN_POST_DAYS}日）",
                 _own_unreacted(db, until, ok, room, self_id), fold=True)
 
     # 連携サマリー (#21): artifacts stored in the window that change an
@@ -494,8 +500,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     stamp_states = [get_message_metadata(db, r["message_id"])["reactions_status"]
                     for r in rows]
     if "not_fetched" in stamp_states or "invalid" in stamp_states:
-        cov.append(f"・スタンプ未取得 {stamp_states.count('not_fetched')}投稿"
-                   f"・取得不正 {stamp_states.count('invalid')}")
+        cov.append("・" + _stamp_gaps(stamp_states.count("not_fetched"),
+                                      stamp_states.count("invalid")))
     held = db.execute("SELECT count(*) FROM notify_outbox WHERE "
                       "state='failed' AND next_try IS NULL").fetchone()[0]
     if held:
@@ -507,6 +513,16 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         footer.append("※ 担当: 担当者欄が表示名と一致する未完了タスク")
     return fit_parts({"containers": containers,
                       "footer": [{"type": "text", "text": t} for t in footer]})
+
+
+def _nonzero(parts) -> str:
+    shown = "・".join(f"{k} {n}" for k, n in parts if n)
+    return f"（{shown}）" if shown else ""
+
+
+def _stamp_gaps(unfetched, invalid) -> str:
+    return "・".join(t for t, n in ((f"スタンプ未取得 {unfetched}投稿", unfetched),
+                                    (f"取得不正 {invalid}投稿", invalid)) if n)
 
 
 _JOB_JA = {"extract_claim": "抽出準備", "extract_qc": "抽出監査",
@@ -561,7 +577,7 @@ def view(db, cfg, scope_text, *, name=None, allowed=None, now=None,
     if isinstance(flt, str):
         return {"error": flt}
     if flt["mine"] and not " ".join(str(name or "").split()):
-        return {"error": "mine には担当の名前が必要です。名前欄に入力してください。"}
+        return {"error": "担当で絞るには名前が必要です。名前欄に入力してください。"}
     now = time.time() if now is None else now
     return {"parts": build(db, cfg, now - flt["days"] * DAY_S, now, flt,
                            names=names, name=name, allowed=allowed,
