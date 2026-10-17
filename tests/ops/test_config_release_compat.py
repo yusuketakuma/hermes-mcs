@@ -96,7 +96,7 @@ def test_secondary_system_transport_is_selected_before_its_scope_prompts(monkeyp
         key = prompt.split('設定項目: ', 1)[1].split()[0].rstrip(':')
         assert key in kinds, f'unexpected setting prompt: {key}'
         assert key not in seen, f'fixture answer was rejected: {key}'
-        if kinds[key].startswith('req') and '現在:' not in prompt and '既定:' not in prompt:
+        if kinds[key].startswith('req') and '現在:' not in prompt and '推奨:' not in prompt:
             assert key in answers, f'missing fixture answer for required setting: {key}'
         seen.append(key)
         return answers.get(key, '')
