@@ -269,3 +269,237 @@ def test_apply_pre_reset_rollback_failure_survives_recovery(
         assert updater._head_sha() == after
         assert Path(live).read_bytes() == original_db
         assert restarts == []
+
+
+@pytest.mark.parametrize("phase", ["source_only", "venv_partial", "pip_done"])
+@pytest.mark.parametrize("consent_pending", [False, True])
+@pytest.mark.parametrize("legacy_journal", [False, True])
+def test_python314_pin_refresh_crashes_restore_original_dependencies(
+        updater, tmp_path, monkeypatch, phase, consent_pending, legacy_journal):
+    from ops_testkit import _git
+    from test_python314_runtime_migration import _checkout, _interrupted
+
+    repo, prev, venv, runtime, order, notices = _interrupted(
+        updater, tmp_path, monkeypatch)
+    backup = Path(str(venv) + ".pre-python314")
+    # Both environments run Python 3.14: dependency identity must also recover.
+    (backup / "bin/python3").write_text("#!/bin/sh\necho 3 14\n")
+    (backup / "dependencies").write_text("old-installed-dependencies")
+    (venv / "dependencies").write_text("new-installed-dependencies")
+    pip_mark = venv / ".mcs-pip-incomplete"
+    if phase == "source_only":
+        venv.rename(runtime / "not-built-yet")
+        backup.rename(venv)
+    elif phase == "venv_partial":
+        pip_mark.touch()
+    else:
+        (venv / "bin/hermes").write_text("#!/bin/sh\nexit 0\n")
+    checkout = tmp_path / "hermes-source"
+    old_head, new_head = _checkout(checkout)
+    _git(checkout, "checkout", "-q", "--detach", new_head)
+    state = updater.load_state()
+    applying = state["applying"]
+    applying["runtime_migration"].update(checkout=str(checkout), checkout_head=old_head,
+                                         checkout_target=new_head)
+    if legacy_journal:
+        applying["runtime_migration"].pop("checkout_target")
+        monkeypatch.setattr(updater, "HERMES_PIN", new_head)
+    applying.update(schema_bump=consent_pending,
+                    backup_path=str(tmp_path / "synthetic-schema-backup.db"))
+    updater.save_state(state)
+    Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
+    held = []
+    if consent_pending:
+        def needs_consent(*args, **kwargs):
+            raise updater.RestoreConsentPending({"report_id": "synthetic-pin-refresh"})
+
+        monkeypatch.setattr(updater, "_restore_db", needs_consent)
+        monkeypatch.setattr(updater, "_consent_hold",
+                            lambda *args: held.append(True) or "synthetic-pin-refresh")
+    assert updater.recover_interrupted() == 0
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
+    assert _git(checkout, "rev-parse", "HEAD").stdout.strip() == old_head
+    assert (venv / "bin/python3").read_text().endswith("echo 3 14\n")
+    assert (venv / "dependencies").read_text() == "old-installed-dependencies"
+    assert not backup.exists()
+    assert order.index("quiesce") < order.index("runtime") < order.index("reset")
+    if phase != "source_only":
+        assert (runtime / "venv.python314-aside/dependencies").read_text() \
+            == "new-installed-dependencies"
+        assert (runtime / "venv.python314-aside/.mcs-pip-incomplete").exists() \
+            == (phase == "venv_partial")
+    after = updater.load_state()
+    if consent_pending:
+        assert held and "restart" not in order and not notices
+        assert after["applying"]["rollback"] is True
+        assert after["applying"]["runtime_migration"]["checkout_head"] == old_head
+        assert Path(updater.MARKER_PATH).read_text() == "synthetic writer freeze"
+    else:
+        assert "restart" in order and after["applying"] is None
+        assert after["executed"]["cid-mig"]["result"] == "rolled_back"
+        assert not Path(updater.MARKER_PATH).exists()
+
+
+@pytest.mark.parametrize("phase", ["source_only", "venv_backed_up"])
+@pytest.mark.parametrize("change", ["unknown", "branch", "dirty", "other_known_pin"])
+@pytest.mark.parametrize("operation", ["recover", "restore", "rollback"])
+def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
+        updater, tmp_path, monkeypatch, phase, change, operation):
+    from ops_testkit import _git
+    from test_python314_runtime_migration import _checkout, _interrupted
+
+    _repo, _prev, venv, runtime, order, _notices = _interrupted(
+        updater, tmp_path, monkeypatch)
+    backup = Path(str(venv) + ".pre-python314")
+    (backup / "dependencies").write_text("old-installed-dependencies")
+    (venv / "dependencies").write_text("new-installed-dependencies")
+    if phase == "source_only":
+        venv.rename(runtime / "not-built-yet")
+        backup.rename(venv)
+    checkout = tmp_path / "hermes-source"
+    old_head, target = _checkout(checkout)
+    _git(checkout, "checkout", "-q", "--detach", target)
+    if change in ("unknown", "other_known_pin"):
+        (checkout / "f").write_text("synthetic later source")
+        _git(checkout, "add", "f")
+        _git(checkout, "-c", "user.email=f@example.invalid", "-c", "user.name=F",
+             "commit", "-q", "-m", "synthetic later commit")
+        other = _git(checkout, "rev-parse", "HEAD").stdout.strip()
+        monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS",
+                            frozenset({old_head, other} if change == "other_known_pin"
+                                      else {old_head}))
+    elif change == "branch":
+        _git(checkout, "checkout", "-q", "-b", "local/org-build")
+    else:
+        (checkout / "f").write_text("synthetic manual edit")
+    state = updater.load_state()
+    applying = state["applying"]
+    applying["runtime_migration"].update(checkout=str(checkout), checkout_head=old_head,
+                                         checkout_target=target)
+    if operation == "rollback":
+        state["applied"] = [applying]
+        state["applying"] = None
+        state["stages"] = []
+    updater.save_state(state)
+    Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
+    journal = Path(updater.STATE_PATH).read_bytes()
+    source = (checkout / "f").read_bytes()
+    head = _git(checkout, "rev-parse", "HEAD").stdout.strip()
+    envs = {path: {str(item.relative_to(path)): (item.read_bytes(), item.stat().st_ino)
+                   for item in path.rglob("*") if item.is_file()}
+            for path in (venv, backup)}
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("source drift must stop before journals, venvs, or workers change")
+
+    for name in ("_clean_stale_git_locks", "_services_reconcile", "restart_agents",
+                 "_enqueue_notice", "quiesce", "_reinstall"):
+        monkeypatch.setattr(updater, name, forbidden)
+    for attempt in range(2):
+        if operation == "restore":
+            with pytest.raises(updater.UpdateError, match="runtime_restore_checkout_changed"):
+                updater._restore_runtime(applying)
+        else:
+            assert (updater.recover_interrupted() if operation == "recover"
+                    else updater.rollback()) == 1
+        assert Path(updater.STATE_PATH).read_bytes() == journal
+        assert (checkout / "f").read_bytes() == source
+        assert _git(checkout, "rev-parse", "HEAD").stdout.strip() == head
+        for path, before in envs.items():
+            assert {str(item.relative_to(path)): (item.read_bytes(), item.stat().st_ino)
+                    for item in path.rglob("*") if item.is_file()} == before
+        assert backup.exists() == (phase == "venv_backed_up")
+        assert not list(runtime.glob("venv.python314-aside*"))
+        assert Path(updater.MARKER_PATH).read_text() == "synthetic writer freeze"
+        assert order == (["runtime"] * (attempt + 1) if operation == "restore" else [])
+
+
+def test_pin_refresh_restore_keeps_explicitly_confirmed_clean_branch(
+        updater, tmp_path, monkeypatch):
+    from ops_testkit import _git
+    from test_python314_runtime_migration import _checkout, _interrupted
+
+    _repo, _prev, venv, _runtime, _order, _notices = _interrupted(
+        updater, tmp_path, monkeypatch)
+    checkout = tmp_path / "hermes-source"
+    head, _target = _checkout(checkout)
+    _git(checkout, "checkout", "-q", "-b", "local/org-build")
+    state = updater.load_state()
+    state["applying"]["runtime_migration"].update(
+        checkout=str(checkout), checkout_head=head, checkout_target=head, kept_checkout=True)
+    updater.save_state(state)
+    assert updater.recover_interrupted() == 0
+    assert (venv / "bin/python3").read_text().endswith("echo 3 13\n")
+    assert _git(checkout, "symbolic-ref", "--short", "HEAD").stdout.strip() == "local/org-build"
+    assert _git(checkout, "rev-parse", "HEAD").stdout.strip() == head
+    assert updater.load_state()["applying"] is None
+
+
+@pytest.mark.parametrize("case", ["null", "false", "zero", "empty_string", "empty_list",
+                                  "empty_dict", "string", "list", "missing_paths",
+                                  "venv_type", "backup_type", "checkout_empty",
+                                  "head_type", "target_type", "keep_type"])
+@pytest.mark.parametrize("operation", ["plan", "restore", "recover"])
+def test_invalid_runtime_migration_is_preserved_before_any_action(
+        updater, tmp_path, monkeypatch, case, operation):
+    venv, backup = tmp_path / "venv", tmp_path / "venv.pre-python314"
+    venv.mkdir()
+    backup.mkdir()
+    (venv / "dependencies").write_text("synthetic current dependencies")
+    (backup / "dependencies").write_text("synthetic old dependencies")
+    valid = {"venv": str(venv), "backup_path": str(backup)}
+    source = {**valid, "checkout": str(tmp_path / "checkout"), "checkout_head": "a" * 40}
+    invalid = {"null": None, "false": False, "zero": 0, "empty_string": "",
+               "empty_list": [], "empty_dict": {}, "string": "broken", "list": [valid],
+               "missing_paths": {"updater_python": "3.14.8"},
+               "venv_type": {**valid, "venv": []},
+               "backup_type": {**valid, "backup_path": False},
+               "checkout_empty": {**valid, "checkout": ""},
+               "head_type": {**source, "checkout_head": []},
+               "target_type": {**source, "checkout_target": None},
+               "keep_type": {**source, "kept_checkout": "yes"}}[case]
+    state = updater._default_state()
+    applying = {"sha": "a" * 40, "prev_sha": "b" * 40, "tag": "v1.0.25",
+                "runtime_migration": invalid, "reinstall": True}
+    state.update(applying=applying, stages=[{"stage": "runtime_migration", "at": 1}])
+    updater.save_state(state)
+    Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
+    journal = Path(updater.STATE_PATH).read_bytes()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid migration must stop before planning or changing assets")
+
+    for name in ("_runtime_venv", "_clean_stale_git_locks", "journal", "quiesce",
+                 "restart_agents", "_enqueue_notice", "_reinstall"):
+        monkeypatch.setattr(updater, name, forbidden)
+    if operation == "recover":
+        assert updater.recover_interrupted() == 1
+    else:
+        with pytest.raises(updater.UpdateError):
+            if operation == "plan":
+                updater._plan_runtime_migration(state, held_fd=5)
+            else:
+                updater._restore_runtime(applying)
+    assert Path(updater.STATE_PATH).read_bytes() == journal
+    assert state["applying"]["runtime_migration"] == invalid
+    assert (venv / "dependencies").read_text() == "synthetic current dependencies"
+    assert (backup / "dependencies").read_text() == "synthetic old dependencies"
+    assert not list(tmp_path.glob("venv.python314-aside*"))
+    assert Path(updater.MARKER_PATH).read_text() == "synthetic writer freeze"
+
+
+def test_existing_standalone_migration_is_verified_without_replanning(updater, tmp_path, monkeypatch):
+    migration = {"venv": str(tmp_path / "venv"),
+                 "backup_path": str(tmp_path / "venv.pre-python314")}
+    state = updater._default_state()
+    state["applying"] = {"runtime_migration": migration}
+    updater.save_state(state)
+    journal = Path(updater.STATE_PATH).read_bytes()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a valid existing migration must be kept without re-planning")
+
+    monkeypatch.setattr(updater, "_runtime_venv", forbidden)
+    updater._plan_runtime_migration(state, held_fd=5)
+    assert state["applying"]["runtime_migration"] == migration
+    assert Path(updater.STATE_PATH).read_bytes() == journal

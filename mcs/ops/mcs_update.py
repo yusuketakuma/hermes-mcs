@@ -561,10 +561,10 @@ def precheck_local(cfg: dict) -> list[str]:
 def _migration_checkout_problem(cfg: dict) -> str | None:
     """Refuse before merge what install.sh would refuse mid-migration."""
     try:
-        venv, checkout = _runtime_venv(cfg)
+        _venv, checkout = _runtime_venv(cfg)
     except (ValueError, KeyError, OSError):
         return None          # the runtime gate already reports a bad selection
-    if checkout is None or not _needs_migration(venv):
+    if checkout is None:
         return None
     def git(*args):
         return subprocess.run(["git", "-C", checkout, *args], capture_output=True,
@@ -575,7 +575,7 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
         dirty = git("status", "--porcelain", "--untracked-files=no")
     except (OSError, subprocess.TimeoutExpired):
         return "hermes_checkout_unreadable"
-    if head.returncode != 0 or dirty.returncode != 0:
+    if head.returncode != 0 or dirty.returncode != 0 or branch.returncode not in (0, 1):
         return "hermes_checkout_unreadable"
     if dirty.stdout.strip():
         return "hermes_checkout_branch_or_dirty"
@@ -1681,10 +1681,23 @@ def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
     parent decides (so its post-merge timeout includes T_INSTALL); the
     child only re-checks when an older parent could not."""
     applying = state["applying"]
-    if applying.get("runtime_migration"):
+    if "runtime_migration" in applying:
+        _check_runtime_restore(applying)
         return
     venv, checkout = _runtime_venv(load_config())
-    if not _needs_migration(venv):
+    needs_python = _needs_migration(venv)
+    head_sha = None
+    if checkout:
+        head = subprocess.run(["git", "-C", checkout, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=30)
+        if head.returncode != 0 or not HEX_RE.fullmatch(head.stdout.strip()):
+            raise UpdateError("runtime_migration_checkout_unreadable")
+        head_sha = head.stdout.strip()
+    found = _runtime_version(venv) if not needs_python else None
+    refresh_pin = (head_sha in HERMES_PREVIOUS_PINS and head_sha != HERMES_PIN
+                   and not os.environ.get(KEEP_CHECKOUT_ENV)
+                   and found is not None and RUNTIME_MIN <= found[1] < (3, 15))
+    if not needs_python and not refresh_pin:
         return
     if held_fd is None and not os.environ.get(RUN_LOCK_FD_ENV, "").isdecimal():
         # An older updater parent cannot hand over run.lock: roll back and
@@ -1693,13 +1706,10 @@ def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
     migration = {"venv": venv, "backup_path": _free_sibling(venv, ".pre-python314"),
                  "updater_python": ".".join(map(str, sys.version_info[:3]))}
     if checkout:
-        head = subprocess.run(["git", "-C", checkout, "rev-parse", "HEAD"],
-                              capture_output=True, text=True, timeout=30)
-        if head.returncode != 0 or not HEX_RE.fullmatch(head.stdout.strip()):
-            raise UpdateError("runtime_migration_checkout_unreadable")
-        migration.update(checkout=checkout, checkout_head=head.stdout.strip())
+        migration.update(checkout=checkout, checkout_head=head_sha, checkout_target=HERMES_PIN)
         if os.environ.get(KEEP_CHECKOUT_ENV) == migration["checkout_head"]:
             migration["kept_checkout"] = True
+            migration["checkout_target"] = head_sha
     applying["runtime_migration"] = migration
     args = list(applying.get("install_args") or [])
     applying["install_args"] = args + [a for a in MIGRATION_INSTALL_ARGS if a not in args]
@@ -1716,8 +1726,48 @@ def _use_migrated_runtime(migration: dict) -> None:
     _SERVICES_PYTHON = python
 
 
+def _check_runtime_restore(entry: dict) -> str | None:
+    if "runtime_migration" not in entry:
+        return None
+    migration = entry["runtime_migration"]
+    if not isinstance(migration, dict) or not migration:
+        raise UpdateError("runtime_migration_invalid")
+    for key in ("venv", "backup_path"):
+        if not isinstance(migration.get(key), str) or not os.path.isabs(migration[key]):
+            raise UpdateError("runtime_migration_invalid")
+    if "kept_checkout" in migration and not isinstance(migration["kept_checkout"], bool):
+        raise UpdateError("runtime_migration_invalid")
+    checkout, head = migration.get("checkout"), migration.get("checkout_head")
+    if not any(key in migration for key in
+               ("checkout", "checkout_head", "checkout_target", "kept_checkout")):
+        return None
+    target = migration.get("checkout_target", head if migration.get("kept_checkout") else HERMES_PIN)
+    if not isinstance(checkout, str) or not os.path.isabs(checkout) \
+            or not isinstance(head, str) or not HEX_RE.fullmatch(head) \
+            or not isinstance(target, str) or not HEX_RE.fullmatch(target):
+        raise UpdateError("runtime_restore_checkout_unreadable")
+    try:
+        def git(*args):
+            return subprocess.run(["git", "-C", checkout, *args], capture_output=True,
+                                  text=True, timeout=30)
+        now = git("rev-parse", "HEAD")
+        branch = git("symbolic-ref", "-q", "HEAD")
+        dirty = git("status", "--porcelain", "--untracked-files=no")
+    except (OSError, subprocess.TimeoutExpired):
+        raise UpdateError("runtime_restore_checkout_unreadable") from None
+    if now.returncode != 0 or dirty.returncode != 0 or branch.returncode not in (0, 1):
+        raise UpdateError("runtime_restore_checkout_unreadable")
+    current = now.stdout.strip()
+    if dirty.stdout.strip() or current not in {head, target} \
+            or branch.returncode == 0 and not migration.get("kept_checkout") \
+            or migration.get("kept_checkout") and current != head:
+        raise UpdateError("runtime_restore_checkout_changed")
+    return current
+
+
 def _restore_runtime(entry: dict) -> None:
     """Undo a runtime migration: keep the new venv aside, restore the old."""
+    current = _check_runtime_restore(entry)  # before touching either environment
     migration = entry.get("runtime_migration") or {}
     venv, backup = migration.get("venv"), migration.get("backup_path")
     # a moved symlink venv is renamed back as the link itself; its external
@@ -1730,9 +1780,7 @@ def _restore_runtime(entry: dict) -> None:
     if checkout and head:
         # install.sh may have moved the checkout before (or without) the venv;
         # the old venv's editable install expects the pre-migration source
-        now = subprocess.run(["git", "-C", checkout, "rev-parse", "HEAD"],
-                             capture_output=True, text=True, timeout=30)
-        if now.returncode == 0 and now.stdout.strip() == head:
+        if current == head:
             return
         r = subprocess.run(["git", "-C", checkout, "checkout", "-q", "--detach", head],
                            capture_output=True, text=True, timeout=120)
@@ -2019,6 +2067,12 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             # leave the system running NEW code while claiming nothing
             # happened; fall back to the surgical rollback path
             entry = state["applying"]
+            try:
+                _check_runtime_restore(entry)
+            except UpdateError as e:
+                rollback_failed = True
+                _report("runtime_restore_blocked", str(e))
+                return 1               # retain the original journal and marker
             if entry.get("schema_bump") and entry.get("backup_path"):
                 # journal rollback-shaped BEFORE the reset, like
                 # rollback(): a failed/interrupted DB restore must
@@ -2540,6 +2594,12 @@ def rollback(command_id: str | None = None) -> int:
             err = _rollback_backup_error(entry) or _rollback_layout_error(entry)
             if err:
                 raise UpdateError(err)
+            try:
+                _check_runtime_restore(entry)
+            except UpdateError as e:
+                _report("runtime_restore_blocked", str(e))
+                print("Hermes のソースが更新記録と一致しないため、変更せず停止しました。詳細:", e)
+                return 1
             # crash-visible journal BEFORE quiesce (H4): recover can
             # converge the tree toward prev even if we die mid-reset
             state["applying"] = _rollback_applying(
@@ -3153,6 +3213,11 @@ def recover_interrupted(if_stale: bool = False) -> int:
             return 0
         if if_stale and _journal_is_fresh(state, applying):
             return 0                   # fresh journal — leave it alone
+        try:
+            _check_runtime_restore(applying or {})
+        except UpdateError as e:
+            _report("runtime_restore_blocked", str(e))
+            return 1                   # no journal, source, venv or drainer changes
         removed = _clean_stale_git_locks()
         prev = (applying or {}).get("prev_sha")
         target = (applying or {}).get("sha")

@@ -97,11 +97,13 @@ def test_hermes_checkout_head_is_recorded_and_restored(updater, tmp_path, monkey
     old_head, new_head = _checkout(checkout)
     venv = _venv(checkout, version_ok=False)
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(updater, "HERMES_PIN", new_head)
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
     state = _state(updater)
     updater._plan_runtime_migration(state)
     migration = state["applying"]["runtime_migration"]
     assert migration["checkout_head"] == old_head
+    assert migration["checkout_target"] == new_head
     # install.sh moved the venv aside, rebuilt it and advanced the checkout
     os.rename(venv, migration["backup_path"])
     _venv(checkout)
@@ -284,7 +286,7 @@ def test_checkout_is_restored_even_when_install_failed_before_the_venv_move(upda
     subprocess.run(["git", "-C", str(checkout), "checkout", "-q", "--detach", new_head], check=True)
     updater._restore_runtime({"runtime_migration": {
         "venv": str(venv), "backup_path": str(checkout / "venv.pre-python314"),
-        "checkout": str(checkout), "checkout_head": old_head}})
+        "checkout": str(checkout), "checkout_head": old_head, "checkout_target": new_head}})
     head = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
                           capture_output=True, text=True, check=True).stdout.strip()
     assert head == old_head and (venv / "bin" / "python3").read_text().endswith("echo 3 13\n")
@@ -511,3 +513,128 @@ def test_an_explicit_keep_is_decided_before_the_pin_rules(
     monkeypatch.setattr(updater, "_checkout_admits_python314", lambda c: ready)
     monkeypatch.setenv(updater.KEEP_CHECKOUT_ENV, head if keep == "head" else "c" * 40)
     assert updater._migration_checkout_problem({}) == expected
+
+
+def test_supported_previous_pin_refresh_is_journaled_and_restores_old_dependencies(
+        updater, tmp_path, monkeypatch):
+    checkout = tmp_path / "hermes-agent"
+    old_head, new_head = _checkout(checkout)
+    venv = _venv(checkout)
+    (venv / "synthetic-deps").write_text("previous pin dependencies")
+    (venv / "bin/hermes").write_text("synthetic installed CLI")
+    monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS", frozenset({old_head}))
+    monkeypatch.setattr(updater, "HERMES_PIN", new_head)
+    monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
+    monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
+    state = _state(updater)
+    updater._plan_runtime_migration(state, held_fd=5)
+    saved = updater.load_state()["applying"]
+    migration = saved["runtime_migration"]
+    assert migration["checkout"] == str(checkout)
+    assert migration["checkout_head"] == old_head
+    assert migration["checkout_target"] == new_head
+    assert migration["venv"] == str(venv)
+    assert saved["reinstall"] is True and "--no-plugin" in saved["install_args"]
+    assert not Path(migration["backup_path"]).exists()
+    assert (venv / "synthetic-deps").read_text() == "previous pin dependencies"
+    assert updater.load_state()["stages"][-1]["stage"] == "runtime_migration"
+    order = []
+
+    def reinstall(applying):
+        assert updater.load_state()["applying"]["runtime_migration"] == migration
+        os.rename(venv, migration["backup_path"])
+        _venv(checkout)
+        (venv / "synthetic-deps").write_text("new pin dependencies")
+        subprocess.run(["git", "-C", str(checkout), "checkout", "-q", "--detach", new_head],
+                       check=True)
+        applying["reinstall_done"] = True
+        order.append("reinstall")
+
+    monkeypatch.setattr(updater, "_reinstall", reinstall)
+    monkeypatch.setattr(updater, "_services_reconcile",
+                        lambda: order.append(("services", updater._SERVICES_PYTHON)))
+    monkeypatch.setattr(updater, "restart_agents", lambda: order.append("restart") or [])
+    monkeypatch.setattr(updater, "_postcheck", lambda state, sha: [])
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: True)
+    assert updater._post_merge(state) == 0
+    assert order == ["reinstall", ("services", str(venv / "bin/python3")), "restart"]
+    applied = updater.load_state()["applied"][-1]
+    assert applied["runtime_migration"] == migration and applied["reinstall_done"] is True
+    assert (Path(migration["backup_path"]) / "synthetic-deps").read_text() \
+        == "previous pin dependencies"
+    assert (venv / "synthetic-deps").read_text() == "new pin dependencies"
+    updater._restore_runtime(applied)
+    # Both runtimes report 3.14: distinguish dependency generations, not versions.
+    assert (venv / "bin/python3").read_text().endswith("echo 3 14\n")
+    assert (venv / "synthetic-deps").read_text() == "previous pin dependencies"
+    assert (checkout / "venv.python314-aside/synthetic-deps").read_text() == "new pin dependencies"
+    assert subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip() == old_head
+
+
+@pytest.mark.parametrize("case, expected", [
+    ("current", None), ("unknown", "hermes_checkout_unknown_commit"),
+    ("branch", "hermes_checkout_branch_or_dirty"), ("dirty", "hermes_checkout_branch_or_dirty"),
+    ("keep", None), ("mismatched_keep", "keep_hermes_checkout_mismatch"),
+    ("unready_keep", "keep_hermes_checkout_python_unsupported"),
+    ("keep_dirty", "hermes_checkout_branch_or_dirty")])
+def test_supported_runtime_checkout_guards_and_idempotence(
+        updater, tmp_path, monkeypatch, case, expected):
+    checkout = tmp_path / "hermes-agent"
+    head, next_head = _checkout(checkout)
+    venv = _venv(checkout)
+    (venv / "synthetic-deps").write_text("installed dependencies")
+    monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS",
+                        frozenset() if case == "unknown" else frozenset({head}))
+    monkeypatch.setattr(updater, "HERMES_PIN", head if case == "current" else next_head)
+    monkeypatch.setattr(updater, "_checkout_admits_python314", lambda c: case != "unready_keep")
+    monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
+    if "keep" in case:
+        monkeypatch.setenv(updater.KEEP_CHECKOUT_ENV,
+                           "c" * 40 if case == "mismatched_keep" else head)
+        subprocess.run(["git", "-C", str(checkout), "checkout", "-q", "-b", "local/org-build"],
+                       check=True)
+    if case == "branch":
+        subprocess.run(["git", "-C", str(checkout), "checkout", "-q", "-b", "local/org-build"],
+                       check=True)
+    if case in ("dirty", "keep_dirty"):
+        (checkout / "f").write_text("local edit")
+    assert updater._migration_checkout_problem({}) == expected
+    state = _state(updater)
+    if expected is None:
+        updater._plan_runtime_migration(state, held_fd=5)
+        assert "runtime_migration" not in state["applying"]
+        assert state["applying"]["reinstall"] is False
+        assert not list(checkout.glob("venv.pre-python314*"))
+    assert (venv / "synthetic-deps").read_text() == "installed dependencies"
+    assert subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip() == head
+    assert (checkout / "f").read_text() == ("local edit" if case in ("dirty", "keep_dirty") else "0")
+
+
+def test_supported_runtime_precheck_refuses_unreadable_branch_ref(updater, tmp_path, monkeypatch):
+    checkout = tmp_path / "hermes-agent"
+    head, _ = _checkout(checkout)
+    venv = _venv(checkout)
+    (venv / "synthetic-deps").write_text("installed dependencies")
+    monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(updater, "HERMES_PIN", head)
+    monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
+    run = updater.subprocess.run
+    calls = []
+
+    def unreadable_branch(argv, *args, **kwargs):
+        calls.append(argv)
+        if argv[:3] == ["git", "-C", str(checkout)] and argv[3:4] == ["symbolic-ref"]:
+            return subprocess.CompletedProcess(argv, 128, "", "synthetic unreadable branch ref")
+        return run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(updater.subprocess, "run", unreadable_branch)
+    assert updater._migration_checkout_problem({}) == "hermes_checkout_unreadable"
+    assert any(argv[3:4] == ["symbolic-ref"] for argv in calls)
+    assert all(argv[3] in ("rev-parse", "symbolic-ref", "status") for argv in calls)
+    assert (checkout / "f").read_text() == "0"
+    assert (venv / "synthetic-deps").read_text() == "installed dependencies"
+    assert not list(checkout.glob("venv.pre-python314*"))
