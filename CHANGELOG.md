@@ -29,6 +29,10 @@
 - **返信も含めて要約・スタンプ・本文の順に表示**
   Slack・Discord・LINE WORKSへ届ける各投稿に、その投稿自身の要約、スタンプの観測状況、原文を順に表示します。返信の要約が後から完成した場合も配送内容へ反映し、未作成・作成失敗は区別して表示します。
 
+![1.0.23のSlack通知で要約・スタンプ・本文を順に表示する説明図](https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/a890214bcef26bd36af18ad945427f9ca13b4159/docs/screenshots/slack-gallery/01-overview.png)
+
+架空のデータによる表示の説明図です。返信にも要約とスタンプを先に表示し、原文を続けて確認できます。
+
 ### 改善
 
 - **バックアップと復旧訓練の証拠を区別**
