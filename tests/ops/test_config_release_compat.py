@@ -81,7 +81,7 @@ def test_fresh_channel_default_reuses_the_operators_notification_target(monkeypa
 def test_secondary_system_transport_is_selected_before_its_scope_prompts(monkeypatch):
     cfg = {'runtime_mode': 'standalone', 'mcs_login_id': 'fictional-login',
            'notify_target': 'discord:1234567890'}
-    answers = {'notify_system_target': 'slack:C1234567890',
+    answers = {'setup_detail': 'detailed', 'notify_system_target': 'slack:C1234567890',
                'notify.slack.profile': 'default', 'notify.slack.application_id': 'A1234567890',
                'notify.slack.team_id': 'T1234567890', 'notify.slack.allowed_user_ids': 'U1234567890',
                'notify.slack.project_ids': '101', 'notify.discord.profile': 'default',
@@ -90,6 +90,7 @@ def test_secondary_system_transport_is_selected_before_its_scope_prompts(monkeyp
     seen = []
     kinds = {key: kind for _, items in mcs_setup.WIZARD
              for key, kind, *_ in items}
+    kinds['setup_detail'] = 'choice:recommended,detailed'
 
     def answer(prompt):
         key = prompt.split('設定項目: ', 1)[1].split()[0].rstrip(':')
