@@ -1689,11 +1689,16 @@ def test_refused_reset_at_target_does_not_bounce_drainers_every_pass(rec, tmp_pa
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
 
 
-@pytest.mark.parametrize("at", ["target", "prev"])
-@pytest.mark.parametrize("held", [False, True])
-@pytest.mark.parametrize("reinstall_done", [False, True])
+_MIGRATION = {"from": "3.14.7", "to": "3.14.8"}
+
+
+@pytest.mark.parametrize("at,held,reinstall_done,migration", [
+    *[(at, held, done, _MIGRATION) for at in ("target", "prev") for held in (False, True)
+      for done in (False, True)],
+    # an empty or malformed record still holds: only the target updater may clear it
+    *[("target", False, False, bad) for bad in ({}, None, False, [])]])
 def test_runtime_migration_is_left_to_the_target_updater(rec, tmp_path, monkeypatch,
-                                                         at, held, reinstall_done):
+                                                         at, held, reinstall_done, migration):
     """An interrupted interpreter/venv migration belongs to the target
     version's mcs_update recover: three watchdog passes change nothing
     (journal, marker, tree, venv, backup, DB), restart nothing and notify
@@ -1713,8 +1718,8 @@ def test_runtime_migration_is_left_to_the_target_updater(rec, tmp_path, monkeypa
     db = tmp_path / "data" / "mcs.db"
     db.write_bytes(b"synthetic-db")
     state = _applying(prev, sha=target, stage="runtime_migration")
-    state["applying"].update({"runtime_migration": {"from": "3.14.7", "to": "3.14.8",
-                                                    "backup": str(backup)},
+    state["applying"].update({"runtime_migration": (dict(migration, backup=str(backup))
+                                                    if migration else migration),
                               "reinstall": True, "reinstall_done": reinstall_done})
     if held:
         state["applying"].update({"rollback": True, "backup_path": str(db) + ".bak"})
@@ -1727,6 +1732,7 @@ def test_runtime_migration_is_left_to_the_target_updater(rec, tmp_path, monkeypa
                 (repo / "f.txt").read_text(), _git(repo, "rev-parse", "HEAD").stdout,
                 (venv / "pyvenv.cfg").read_text(), (backup / "pyvenv.cfg").read_text(),
                 db.read_bytes())
+    assert not rec._load_state().get("_corrupt")   # the record is accepted as state, not as corruption
     before = snapshot()
     notices, restarts = [], []
     monkeypatch.setattr(rec, "_notify", lambda text: notices.append(text))
