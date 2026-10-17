@@ -85,13 +85,17 @@ def test_changes_classify_by_observation_record(ctx):
         {"category": "living", "text": "架空発見", "quote": "架空発見", "message_id": 4, "posted_at_ts": T0,
          "discovery": "backfill_found", "found_at": since + 40},
         {"category": "living", "text": "架空旧発見", "quote": "架空旧発見", "message_id": 4, "posted_at_ts": T0,
-         "discovery": "backfill_found", "found_at": since - 40}]}
+         "discovery": "backfill_found", "found_at": since - 40},
+        # EV3: a post the reader has not seen before stays new/retrospective even if the scan tagged it
+        {"category": "living", "text": "架空遅着", "quote": "架空遅着", "message_id": 2, "posted_at_ts": T0,
+         "discovery": "backfill_found", "found_at": since + 50}]}
     got = pcv.changes(ctx.db.db, pcv.evidence(ctx.db.db, 1), since)["by_discovery"]
     assert {i["message_id"] for i in got["new_report"]} == {5, 6}
     assert {i["message_id"] for i in got["retrospective"]} == {2}
     assert {i["message_id"] for i in got["edited"]} == {1}
     assert got["deleted"] == [{"message_id": 3, "observed_at": since + 30}]
     assert [i["text"] for i in got["backfill_found"]] == ["架空発見"]
+    assert "架空遅着" in [i["text"] for i in got["retrospective"]]
     assert "残薬" not in json.dumps(got["deleted"], ensure_ascii=False)
 
 

@@ -193,11 +193,13 @@ def changes(db, ev, since_ts) -> dict:
         revised[mid] = (state, at)
 
     def kind(item):
-        if item["discovery"] == "backfill_found":
-            return "backfill_found" if (item.get("found_at") or -1) >= since_ts else None
+        # the reader's own observation decides first: a post first seen since is new (or
+        # retrospective) even when the nightly scan also tagged it backfill_found
         first, posted = seen.get(item["message_id"], (None, None))
         if isinstance(first, (int, float)) and first >= since_ts:  # unseen before: new to the reader
             return "new_report" if isinstance(posted, (int, float)) and posted >= since_ts else "retrospective"
+        if item["discovery"] == "backfill_found" and (item.get("found_at") or -1) >= since_ts:
+            return "backfill_found"
         return "edited" if item["message_id"] in revised else None
 
     groups = {k: [] for k in ("new_report", "retrospective", "edited", "backfill_found")}

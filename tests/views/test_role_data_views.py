@@ -155,6 +155,9 @@ def test_poster_gaps_rank_quiet_organizations_as_candidates_only():
     st = mcs_stats.run_stats(db, SNAP_TS, {"stat": "poster_gaps", "limit": 20})["stats"]["poster_gaps"]
     rows = [(r["project_id"], r["organization"], r["days_since_last"], r["posts"]) for r in st["by_organization"]["items"]]
     assert rows == [(1, "合成訪問看護", 20, 1), (1, "合成薬局", 2, 1), (2, "合成訪問看護", 1, 1)]
+    _post(db, 5, pid=3, sender=5, name="同時刻", org="合成クリニック", ts=int(SNAP_TS))   # EV4: posted exactly at as_of
+    same = mcs_stats.run_stats(db, SNAP_TS, {"stat": "poster_gaps", "limit": 20, "project": 3})["stats"]["poster_gaps"]
+    assert [(r["organization"], r["days_since_last"]) for r in same["by_organization"]["items"]] == [("合成クリニック", 0)]
     assert st["definition_version"] == "2026-10-17" and "candidate" in st["notes"][0]
     scoped = mcs_stats.run_stats(db, SNAP_TS, {"stat": "poster_gaps", "limit": 20, "project": 2})["stats"]["poster_gaps"]
     assert [r["project_id"] for r in scoped["by_organization"]["items"]] == [2]

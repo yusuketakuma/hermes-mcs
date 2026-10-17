@@ -357,7 +357,7 @@ def st_poster_gaps(db, scope):
     rows = db.execute(
         f"""SELECT m.project_id, m.organization, MAX(m.posted_at_ts) last_ts, COUNT(*) posts,
                    COUNT(DISTINCT COALESCE(m.sender_id, m.sender_name)) senders
-            FROM messages m WHERE m.posted_at_ts < ? AND NULLIF(m.organization,'') IS NOT NULL
+            FROM messages m WHERE m.posted_at_ts <= ? AND NULLIF(m.organization,'') IS NOT NULL
                   AND m.body_state IS NOT 'deleted'{w}
             GROUP BY m.project_id, m.organization ORDER BY last_ts ASC, m.project_id""", params).fetchall()
     return _result("ok", scope, {
