@@ -7,11 +7,20 @@
     "mcs_update と mcs_recover の対象外変更検知を、作業ツリー対インデックスとインデックス対HEADの和集合に変更（git判定失敗時は従来どおり停止）",
     "ヘルパー・介護士・介護職員が測定・処置の主体である文では患者の値として扱う（職員語彙を STAFF_PERSON に一本化）",
     "否定できない・否定しきれない・否定し難いは症状の否定として扱わない",
-    "連絡・返答の確認、訪問前の確認ノート、引継ぎ用の記録は、依頼・返信・予定を保存済み集計ではなく現在の本文に結び付いた抽出から作る",
+    "連絡・返答の確認、訪問前の確認ノート、引継ぎ用の記録は、依頼・返信・予定を保存済み集計ではなく現在の本文に結び付いた抽出から作る。読取りに失敗した場合は0件として表示せずエラーとして扱う",
     "記録の食い違いは同じ日付で値が異なる場合だけ異なる記載とし、日付ごとの変化は時点の異なる記載とする",
     "担当者候補の部屋優先は名簿のIDと投稿者IDの一致（IDがない場合は氏名と所属の一致）で判定する",
     "保存済み検査値の型が不正な投稿はその検査の現在値を出さず、古い値も復活させない",
     "ledger の fullfsync 設定を初回のスキーマ書込みより前に適用する"
   ],
-  "refs": ["mcs/ops/mcs_update.py", "deployment/recovery/mcs_recover.py", "mcs/extract/v1/extract.py", "mcs/extract/clinical_values.py", "mcs/extract/rollup.py", "mcs/views/patient_context_view.py", "mcs/notify/notify_cards.py", "mcs/core/ledger.py"]
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "deployment/recovery/mcs_recover.py",
+    "mcs/extract/v1/extract.py",
+    "mcs/extract/clinical_values.py",
+    "mcs/extract/rollup.py",
+    "mcs/views/patient_context_view.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/core/ledger.py"
+  ]
 }

@@ -310,3 +310,15 @@ def test_replies_follow_the_current_posts_not_a_cached_rollup(ctx):
     # plan post deleted: the plan is gone too
     ctx.db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=5")
     assert pcv.replies(ctx.db.db, 1)["next_planned"] is None
+
+
+def test_unreadable_reply_sources_are_an_error_not_zero_requests(ctx, monkeypatch):
+    # review F4 follow-up: a read failure must not render as an empty, confirmed list
+    import sqlite3
+    import rollup
+
+    def unreadable(*_a, **_k):
+        raise sqlite3.OperationalError("synthetic unreadable input")
+    monkeypatch.setattr(rollup, "build_rollup", unreadable)
+    with pytest.raises(sqlite3.OperationalError):
+        pcv.replies(ctx.db.db, 1)
