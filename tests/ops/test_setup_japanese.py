@@ -16,7 +16,7 @@ def test_numbered_choices_keep_existing_config_values(raw, expected):
     assert mcs_setup._parse_answer("choice:hermes,standalone", raw) == (True, expected)
 
 
-def test_invalid_choice_reprompts_and_enter_keeps_existing_value(monkeypatch):
+def test_invalid_choice_reprompts_and_enter_keeps_existing_value(monkeypatch, capsys):
     answers = iter(["3", ""])
     prompts = []
 
@@ -28,9 +28,23 @@ def test_invalid_choice_reprompts_and_enter_keeps_existing_value(monkeypatch):
     assert mcs_setup._ask("runtime_mode", "choice:hermes,standalone", "hermes",
                           "どの方法で使いますか？", "standalone", present=True) == "standalone"
     assert len(prompts) == 2
-    assert prompts[0].index("どの方法") < prompts[0].index("runtime_mode")
+    output = capsys.readouterr().out
+    assert output.index("どの方法") < output.index("2. MCS だけで動かす")
+    assert prompts[0].index("番号を選んでください") < prompts[0].index("runtime_mode")
     assert "現在: standalone" in prompts[0]
-    assert "2=standalone" in prompts[0]
+    assert "（現在の設定・Enter で保持）" in output
+
+
+@pytest.mark.parametrize("cur, default, label, expected", [
+    (None, False, "推奨: いいえ", False), (None, True, "推奨: はい", True),
+    (False, True, "現在: いいえ", False), (True, False, "現在: はい", True),
+])
+def test_boolean_question_labels_keep_current_or_recommended_value(
+        monkeypatch, cur, default, label, expected):
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "")
+    assert mcs_setup._ask("synthetic", "bool", default, "使いますか？", cur) is expected
+    assert label in prompts[0]
 
 
 def test_unused_connectors_have_no_empty_steps(monkeypatch, capsys):
@@ -90,7 +104,8 @@ def test_hermes_token_reuse_respects_japanese_consent(monkeypatch, tmp_path, cap
     result = mcs_setup._apply_standalone_credentials(
         SimpleNamespace(yes=False), {"discord"}, [("DISCORD_BOT_TOKEN", "DiscordのBotトークン")])
     assert result is consented
-    assert "はい / いいえ" in prompts[0]
+    assert "1=はい / 2=いいえ" in prompts[0]
+    assert "推奨: いいえ" in prompts[0]
     assert env.exists() is consented
     if consented:
         assert env.read_text() == "DISCORD_BOT_TOKEN=synthetic-reuse-token\n"

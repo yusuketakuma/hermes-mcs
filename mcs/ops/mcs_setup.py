@@ -1229,12 +1229,15 @@ def _ask(key: str, kind: str, default, desc: str, cur, present=False):
     keep_null = present and cur is None and key == "semantic.project_ids"
     marks = []
     default_label = "初期値" if key == "notify.interactive" else "推奨"
+    value_label = _fmt(eff)
+    if kind == "bool" and isinstance(eff, bool):
+        value_label = "はい" if eff else "いいえ"
     if keep_null:
         marks.append("現在: null（全対象）")
     if cur is not None:
-        marks.append(f"現在: {_fmt(cur)}")
+        marks.append(f"現在: {value_label}")
     elif eff is not None:
-        marks.append(f"{default_label}: {_fmt(eff)}（Enter で選択）")
+        marks.append(f"{default_label}: {value_label}（Enter で選択）")
     if kind == "bool":
         marks.append("1=はい / 2=いいえ")
     elif kind.startswith("choice:"):
