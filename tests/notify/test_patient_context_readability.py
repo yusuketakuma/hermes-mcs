@@ -10,6 +10,7 @@ from test_patient_context_v3_views import DAY, T0, ctx  # noqa: F401 - shared sy
 from test_read_model import _artifact, _hash_of
 from semantic_testkit import _message
 
+__all__ = ["ctx"]   # the shared fixture is used by name below
 NOW = T0 + 30 * DAY
 
 
