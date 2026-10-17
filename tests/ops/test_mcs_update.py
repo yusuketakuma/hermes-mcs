@@ -336,7 +336,7 @@ def test_impact_summary_distinguishes_gateway_and_independent_adapter(
     monkeypatch.setattr(updater, "load_config",
                         lambda: {"notify": {"interactive": "lineworks"}})
     impact = updater.impact_summary("synthetic-before", "v1.1.0")
-    assert any("gateway restart" in line for line in impact) is gateway
+    assert any("通知接続（gateway）の再起動" in line for line in impact) is gateway
     assert any("LINE WORKS" in line and "再起動" in line for line in impact) is lineworks
     # without the LINE WORKS adapter (plan() restarts none) there is no note
     monkeypatch.setattr(updater, "load_config", lambda: {})
@@ -2566,7 +2566,7 @@ def test_core_change_requires_gateway_restart_and_notice(updater, monkeypatch):
                         lambda: {"notify": {"interactive": "lineworks"}})
     assert updater._plugin_changed("v1.1.0", {})
     impact = updater.impact_summary("synthetic-before", "v1.1.0")
-    assert any("gateway restart" in line for line in impact)
+    assert any("通知接続（gateway）の再起動" in line for line in impact)
     assert any("LINE WORKS" in line and "再起動" in line for line in impact)
 
 
@@ -2575,7 +2575,7 @@ def test_lineworks_impact_only_when_the_adapter_is_in_use(updater, monkeypatch):
     for cfg in ({}, {"notify": {"interactive": "slack"}}, {"notify": "lineworks"}):
         monkeypatch.setattr(updater, "load_config", lambda cfg=cfg: cfg)
         impact = updater.impact_summary("synthetic-before", "v1.1.0")
-        assert any("gateway restart" in line for line in impact)
+        assert any("通知接続（gateway）の再起動" in line for line in impact)
         assert not any("LINE WORKS" in line for line in impact)
 
 
@@ -2711,3 +2711,89 @@ def test_recorded_install_args_ignores_a_symlinked_record(tmp_path, monkeypatch)
     (tmp_path / "real.json").write_text('{"install_args": ["--no-llm"]}')
     (tmp_path / "install_options.json").symlink_to(tmp_path / "real.json")
     assert mcs_update.recorded_install_args() is None
+
+
+def test_empty_rollback_keeps_receipt_code_and_japanese_display(updater, capsys):
+    assert mcs_update.rollback(command_id="synthetic-empty-rollback") == 0
+    state = mcs_update.load_state()
+    assert state["executed"]["synthetic-empty-rollback"]["result"] == "nothing_to_rollback"
+    assert "元に戻す更新はありません" in capsys.readouterr().out
+
+
+def test_updater_subcommand_parser_keeps_japanese_help(capsys):
+    with pytest.raises(SystemExit) as stopped:
+        mcs_update._build_parser().parse_args(["apply", "--help"])
+    assert stopped.value.code == 0
+    output = capsys.readouterr().out
+    assert "使い方:" in output
+    assert "オプション:" in output
+    assert "この説明を表示して終了する" in output
+
+
+@pytest.mark.parametrize("original,translated", mcs_update._ENV_DIAGNOSTIC_TRANSLATIONS)
+def test_postcheck_accepts_only_same_legacy_diagnostic(
+        updater, monkeypatch, original, translated):
+    import ledger
+    import mcs_setup
+    from types import SimpleNamespace
+
+    values = tuple(f"synthetic-{i}" for i in range(original.count("{}")))
+    before = original.format(*values)
+    after = translated.format(*values)
+    monkeypatch.setattr(mcs_update, "_head_sha", lambda: "synthetic-sha")
+    monkeypatch.setattr(mcs_update, "_tree_clean", lambda: True)
+    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_update, "_agent_pid", lambda label: 123)
+    monkeypatch.setattr(ledger, "Ledger", lambda path:
+                        SimpleNamespace(db=SimpleNamespace(close=lambda: None)))
+    monkeypatch.setattr(mcs_setup, "check_environment", lambda cfg: ([after], []))
+    # An old English journal must tolerate exactly the same Japanese finding.
+    state = {"baseline_check": [before]}
+    assert mcs_update._postcheck(state, "synthetic-sha") == []
+    assert mcs_update._postcheck({"baseline_check": [after]}, "synthetic-sha") == []
+    assert mcs_update._postcheck({}, "synthetic-sha") == ["new_env_error: " + after]
+    # A changed path, status, slot count or broker detail must still block.
+    for i in range(len(values)):
+        changed = list(values)
+        changed[i] += "-changed"
+        new_error = translated.format(*changed)
+        monkeypatch.setattr(mcs_setup, "check_environment",
+                            lambda cfg, error=new_error: ([error], []))
+        assert mcs_update._postcheck(state, "synthetic-sha") == ["new_env_error: " + new_error]
+    unexpected = "synthetic-new-environment-failure"
+    monkeypatch.setattr(mcs_setup, "check_environment", lambda cfg: ([after, unexpected], []))
+    assert mcs_update._postcheck(state, "synthetic-sha") == ["new_env_error: " + unexpected]
+
+
+def test_legacy_baseline_matches_current_environment_probe(updater, monkeypatch):
+    import mcs_setup
+
+    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
+    monkeypatch.setattr(mcs_setup, "CHROME_BIN", "/synthetic-missing-chrome")
+    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda path: False)
+    monkeypatch.setattr(mcs_setup, "_check_llm", lambda cfg: ([], []))
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: True)
+    monkeypatch.setattr(mcs_setup, "env_value", lambda *args, **kwargs: None)
+    monkeypatch.delenv("MCS_LLM_ADMISSION", raising=False)
+    errors, _ = mcs_setup.check_environment({})
+    assert len(errors) == 1
+    assert mcs_update._environment_error_identity(errors[0]) == (
+        mcs_update._environment_error_identity("Chrome binary missing: /synthetic-missing-chrome"))
+
+
+def test_legacy_baseline_matches_current_slot_probe(monkeypatch):
+    import local_llm
+    import mcs_setup
+
+    monkeypatch.setattr(local_llm, "resolve", lambda cfg: ("synthetic-endpoint", "model"))
+    monkeypatch.setattr(local_llm, "probe_urls", lambda endpoint: ("models", "slots"))
+    monkeypatch.setattr(local_llm, "SLOT_COUNT", 3)
+    monkeypatch.setattr(local_llm, "bounded_request",
+                        lambda url, *args: (200, {}, b"[{}]" if url == "slots" else b"{}"))
+    errors, _ = mcs_setup._check_llm({})
+    assert len(errors) == 1
+    original = "llama-server advertises 1 slots but the selected count is 3 — fix -np or lower SLOT_COUNT"
+    assert mcs_update._environment_error_identity(errors[0]) == mcs_update._environment_error_identity(original)
+    changed = original.replace("1 slots", "2 slots")
+    assert mcs_update._environment_error_identity(errors[0]) != mcs_update._environment_error_identity(changed)

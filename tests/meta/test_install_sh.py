@@ -265,7 +265,7 @@ def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False):
     stubs = dict(STUBS)
     if not brew:
         del stubs["brew"]
-    if path_hermes:        # a hermes on PATH that is not our venv
+    if path_hermes:        # a Hermes コマンド that is not our venv
         stubs["hermes"] = '#!/bin/sh\necho "path-hermes $*" >> "$STUB_LOG"\n'
     # find_py prefers python3.14 before python3; shadow them so a
     # host Python (e.g. /usr/bin/python3.12 on Linux CI) never replaces the stub.
@@ -397,7 +397,7 @@ def test_recovery_runtime_gate_fails_before_watchdog_installation(
         flags.insert(0, "--" + mode)
     r = _run(env, hermes_home, *flags)
     assert r.returncode == 1, r.stdout + r.stderr
-    assert "recovery" in r.stdout + r.stderr
+    assert "復旧" in r.stdout + r.stderr
     assert not (home / ".mcs-recovery").exists()
     assert not (home / "Library/LaunchAgents/org.mcs.recovery.plist").exists()
     assert _bootstraps(stub_root, "org.mcs.recovery") == []
@@ -533,9 +533,9 @@ def test_install_run_then_rerun_converges(tmp_path):
     loaded = {(p.name) for p in (stub_root / "state" / "loaded").iterdir()}
     assert loaded == {"ai.mcs.llamaserver", "org.mcs.recovery"}
     # the pinned clone is reported pinned; final summary lists next steps
-    assert "hermes-agent cloned (pinned" in r1.stdout
-    assert "Installed. Summary:" in r1.stdout
-    assert "init already syncs the gateway and validates" in r1.stdout
+    assert "Hermes の固定版" in r1.stdout
+    assert "ソフトの導入が完了しました。結果:" in r1.stdout
+    assert "初期設定（init）で Gateway の反映と動作条件の確認" in r1.stdout
 
     r2 = _run(env, hermes_home)
     assert r2.returncode == 0, r2.stderr
@@ -602,9 +602,9 @@ def test_existing_hermes_checkout_never_rewritten(tmp_path):
     r = _run(env, hermes_home)
     assert r.returncode == 0, r.stderr
     assert marker.read_text() == "do not touch"
-    assert "not pinned" in r.stderr
+    assert "指定固定版" in r.stderr
     assert "(pinned" not in r.stdout
-    assert "NOT the validated pin" in r.stdout          # summary is honest
+    assert "検証済み固定版とは異なります" in r.stdout          # summary is honest
     calls = _calls(stub_root)
     assert not any(c.startswith("git clone") for c in calls)
     assert not any(" checkout " in c for c in calls)
@@ -618,15 +618,15 @@ def test_plugin_link_collision_is_bounded_error(tmp_path):
 
     r = _run(env, hermes_home)
     assert r.returncode == 1
-    assert "not a symlink" in r.stderr
-    assert "remove it manually" in r.stderr             # recovery step
+    assert "リンクではありません" in r.stderr
+    assert "内容を確認・退避" in r.stderr             # recovery step
 
 
 def test_missing_brew_fails_with_recovery_hint(tmp_path):
     home, hermes_home, _, env = _world(tmp_path, brew=False)
     r = _run(env, hermes_home)
     assert r.returncode == 1
-    assert "brew not found" in r.stderr
+    assert "Homebrew が見つかりません" in r.stderr
     assert "install.sh" in r.stderr                     # actionable hint
 
 
@@ -652,7 +652,7 @@ def test_skip_flags_bypass_stages(tmp_path):
     r = _run(env, hermes_home, "--no-llm", "--no-plugin",
              "--no-recovery")
     assert r.returncode == 0, r.stderr
-    assert "stage skipped (--no-llm)" in r.stdout
+    assert "--no-llm のため省略します" in r.stdout
     assert not (hermes_home / "plugins" / "mcs-discord-commands").exists()
     assert not (home / ".mcs-recovery").exists()
     agents = home / "Library" / "LaunchAgents"
@@ -686,7 +686,7 @@ def test_no_brew_and_no_services_flags(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path, brew=False)
     r = _run(env, hermes_home, "--no-brew", "--no-services")
     assert r.returncode == 0, r.stderr
-    assert "stage skipped (--no-brew)" in r.stdout
+    assert "--no-brew のため省略します" in r.stdout
     assert not any(c.startswith("brew install") for c in _calls(stub_root))
     assert not any("mcs_setup.py" in c for c in _calls(stub_root))
 
@@ -697,7 +697,7 @@ def test_unknown_option_is_bounded_error(tmp_path, flag):
     home, hermes_home, _, env = _world(tmp_path)
     r = _run(env, hermes_home, flag)
     assert r.returncode == 2
-    assert "unknown option" in r.stderr
+    assert "未対応のオプション" in r.stderr
     assert not hermes_home.exists()
     assert not (home / flag).exists()
 
@@ -776,7 +776,7 @@ def test_env_hermes_home_is_not_silently_overridden(tmp_path):
     r = _run({**env, "HERMES_HOME": str(tmp_path / "profile-x")},
              hermes_home)
     assert r.returncode == 0, r.stderr
-    assert "is NOT used" in r.stderr
+    assert "は使用しません" in r.stderr
     envs = {c for c in _calls(stub_root) if c.startswith("hermes-env")}
     assert envs == {f"hermes-env HERMES_HOME={hermes_home}"}
 
@@ -816,7 +816,7 @@ def test_checkout_with_venv_missing_python_is_rebuilt(tmp_path):
     shutil.copy(stub_root / "venv-hermes", venv / "bin" / "hermes")
     r = _run(env, hermes_home)
     assert r.returncode == 0, r.stderr
-    assert "no usable Python" in r.stderr
+    assert "Python 3.14 が使用できない" in r.stderr
     assert os.access(venv / "bin" / "python", os.X_OK)
     assert any(c.startswith("uv pip install") for c in _calls(stub_root))
 
@@ -827,7 +827,7 @@ def test_failed_pip_install_converges_on_rerun(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     r1 = _run({**env, "STUB_FAIL_PIP": "1"}, hermes_home)
     assert r1.returncode == 1
-    assert "installing hermes-agent" in r1.stderr
+    assert "Hermes 導入に失敗" in r1.stderr
     r2 = _run(env, hermes_home)
     assert r2.returncode == 0, r2.stderr
     assert "already exists" not in r2.stderr
@@ -844,13 +844,13 @@ def test_interrupted_checkout_is_resumed_and_never_called_pinned(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     r1 = _run({**env, "STUB_FAIL_CHECKOUT_ONCE": "1", "STUB_FAIL_FETCH": "1"}, hermes_home)
     assert r1.returncode == 1
-    assert "pinned" not in r1.stdout
+    assert "固定版" not in r1.stdout
     assert (hermes_home / ".hermes-agent.install-in-progress").exists()
     r2 = _run(env, hermes_home)
     assert r2.returncode == 0, r2.stderr
     head = (hermes_home / "hermes-agent" / ".git" / "HEAD").read_text()
     assert head.strip() == _pin()
-    assert "not pinned" not in r2.stderr
+    assert "指定固定版" not in r2.stderr
     assert not (hermes_home / ".hermes-agent.install-in-progress").exists()
     assert sum(c.startswith("git clone") for c in _calls(stub_root)) == 2
 
@@ -901,7 +901,7 @@ exec "$STUB_REAL_GIT" "$@"
         assert not (hermes_home / ".hermes-agent.install-in-progress").exists()
     else:
         assert result.returncode == 1
-        assert "verify network access and publication" in result.stderr
+        assert "通信と指定版の公開状況を確認" in result.stderr
         assert git("-C", str(checkout), "rev-parse", "HEAD") == base
         assert (hermes_home / ".hermes-agent.install-in-progress").exists()
         assert not (checkout / "venv").exists()
@@ -911,7 +911,7 @@ exec "$STUB_REAL_GIT" "$@"
 def test_interrupted_clone_is_redone(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     r1 = _run({**env, "STUB_FAIL_CLONE": "1"}, hermes_home)
-    assert r1.returncode == 1 and "git clone" in r1.stderr
+    assert r1.returncode == 1 and "取得に失敗しました" in r1.stderr
     r2 = _run(env, hermes_home)
     assert r2.returncode == 0, r2.stderr
     head = (hermes_home / "hermes-agent" / ".git" / "HEAD").read_text()
@@ -923,7 +923,7 @@ def test_unreadable_head_is_fatal(tmp_path):
     (hermes_home / "hermes-agent" / ".git").mkdir(parents=True)
     r = _run({**env, "STUB_FAIL_REVPARSE": "1"}, hermes_home)
     assert r.returncode == 1
-    assert "cannot read HEAD" in r.stderr
+    assert "現在の版（HEAD）を読み取れません" in r.stderr
 
 
 def test_shim_symlink_is_replaced_not_written_through(tmp_path):
@@ -951,7 +951,7 @@ def test_foreign_shim_file_is_left_alone(tmp_path):
     r = _run(env, hermes_home)
     assert r.returncode == 0, r.stderr
     assert shim.read_text() == "#!/bin/sh\n# my own hermes launcher\n"
-    assert "not the MCS shim" in r.stderr
+    assert "MCS の起動コマンドではない" in r.stderr
 
 
 def test_other_checkout_requires_force_repo(tmp_path):
@@ -1009,7 +1009,7 @@ def test_llama_plist_change_reloads_only_when_not_serving(tmp_path):
     plist.write_text(plist.read_text().replace("49152", "4096"))
     r = _run({**env, "STUB_LLM_SERVING": "1"}, hermes_home)
     assert r.returncode == 0, r.stderr
-    assert "plist changed" in r.stderr and "launchctl bootout" in r.stderr
+    assert "起動設定を更新しました" in r.stderr and "launchctl bootout" in r.stderr
     assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 2
 
 
@@ -1020,7 +1020,7 @@ def test_unloaded_hermes_llamacpp_plist_gets_a_load_hint(tmp_path):
     (agents / "ai.hermes.llamacpp.plist").write_text("<plist/>")
     r = _run(env, hermes_home)
     assert r.returncode == 0, r.stderr
-    assert "NOT loaded" in r.stderr and "launchctl bootstrap" in r.stderr
+    assert "未起動" in r.stderr and "launchctl bootstrap" in r.stderr
     assert not (agents / "ai.mcs.llamaserver.plist").exists()
 
 
@@ -1028,7 +1028,7 @@ def test_model_download_resumes_from_part(tmp_path):
     """F15: a dropped download keeps .part; the re-run resumes it."""
     home, hermes_home, stub_root, env = _world(tmp_path)
     r1 = _run({**env, "STUB_FAIL_MODEL_ONCE": "1"}, hermes_home)
-    assert r1.returncode == 1 and "resume" in r1.stderr
+    assert r1.returncode == 1 and "再開します" in r1.stderr
     part = hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf.part"
     assert part.read_text() == "stub-model-"
     r2 = _run(env, hermes_home)
@@ -1065,15 +1065,15 @@ def test_dry_run_plans_no_second_llm_when_hermes_manages_it(tmp_path):
     agents.mkdir(parents=True, exist_ok=True)
     (agents / "ai.hermes.llamacpp.plist").write_text("<plist/>")
     r = _run(env, hermes_home, "--dry-run")
-    plan = r.stdout[r.stdout.index("=== plan"):]
-    assert "hermes-managed" in plan and "is kept" in plan
+    plan = r.stdout[r.stdout.index("=== 導入予定"):]
+    assert "Hermes 管理の" in plan and "を保持" in plan
     assert "ai.mcs.llamaserver" not in plan
 
 
 def test_model_checksum_mismatch_is_fatal(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     r = _run({**env, "MCS_MODEL_SHA256": "0" * 64}, hermes_home)
-    assert r.returncode == 1 and "checksum mismatch" in r.stderr
+    assert r.returncode == 1 and "モデルの整合性が確認できません" in r.stderr
     assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf").exists()
 
 
@@ -1087,7 +1087,7 @@ def test_model_download_is_pinned_and_verified_by_default(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     del env["MCS_MODEL_SHA256"]
     r = _run(env, hermes_home)
-    assert r.returncode == 1 and "checksum mismatch" in r.stderr
+    assert r.returncode == 1 and "モデルの整合性が確認できません" in r.stderr
     assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf").exists()
 
 
@@ -1107,8 +1107,8 @@ def test_preflight_all_ok_writes_nothing(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     r = _run(env, None, "--preflight")
     assert r.returncode == 0, r.stdout
-    assert "0 blocker(s)" in r.stdout
-    assert "  NG " not in r.stdout
+    assert "導入を妨げる問題 0件" in r.stdout
+    assert "  要対処 " not in r.stdout
     assert list(home.iterdir()) == []
     assert not any(c.split()[0] in ("brew", "uv", "launchctl")
                    and "print" not in c for c in _calls(stub_root))
@@ -1127,12 +1127,12 @@ def test_preflight_reports_blockers_with_fixes(tmp_path):
               "STUB_CURL_FAIL": "github.com"}, None, "--preflight")
     assert r.returncode == 1
     out = r.stdout
-    for text in ("NG    running as root", "NG    Homebrew not installed",
-                 "NG    disk: only", "NG    network: cannot reach github.com",
-                 "NG    existing install points at another checkout"):
+    for text in ("要対処  管理者 root で実行されています", "要対処  Homebrew が未導入です",
+                 "要対処  ディスク:", "要対処  通信: github.com に接続できません",
+                 "要対処  既存の導入先は別のフォルダです"):
         assert text in out, out
-    assert out.count("fix: ") >= 5
-    assert "5 blocker(s)" in out
+    assert out.count("対処: ") >= 5
+    assert "導入を妨げる問題 5件" in out
     assert sorted(p.name for p in home.iterdir()) == [".mcs-recovery"]
 
 
@@ -1144,15 +1144,15 @@ def test_preflight_flags_worktree(tmp_path):
     shutil.copy(INSTALL, wt / "install.sh")
     (wt / ".git").write_text("gitdir: /elsewhere/.git/worktrees/wt\n")
     r = _run(env, None, "--preflight", script=wt / "install.sh")
-    assert "git worktree" in r.stdout
+    assert "Git の作業用フォルダ" in r.stdout
 
 
 def test_dry_run_prints_plan_and_writes_nothing(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     r = _run(env, None, "--dry-run", "--no-llm")
     assert r.returncode == 0, r.stdout
-    assert "plan (--dry-run" in r.stdout
-    assert "4/6 llm        skipped" in r.stdout
+    assert "導入予定（--dry-run" in r.stdout
+    assert "4/6 ローカルAI 省略" in " ".join(r.stdout.split())
     assert "mcs_setup.py services" in r.stdout
     assert list(home.iterdir()) == []
 
@@ -1166,27 +1166,27 @@ def test_foreign_mcs_launcher_blocks_preflight_and_install_before_stage1(tmp_pat
     shim.write_text("#!/bin/sh\n# some other tool\n")
     r = _run(env, None, "--dry-run", "--no-llm")
     assert r.returncode == 1, r.stdout
-    assert "NG    " + str(shim) + " exists and is not an MCS lifecycle launcher" in r.stdout
+    assert "要対処  " + str(shim) + " は MCS の起動コマンドではありません" in r.stdout
     r = _run(env, hermes_home)
-    assert r.returncode != 0 and "not an MCS lifecycle launcher" in r.stderr
+    assert r.returncode != 0 and "MCS の起動コマンドではない" in r.stderr
     assert not any(c.startswith(("brew", "git", "uv", "venv-python")) for c in _calls(stub_root))
     assert shim.read_text() == "#!/bin/sh\n# some other tool\n"
 
 
-STOPPED = "installation stopped; repair the failed stage and re-run install.sh"
+STOPPED = "導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください"
 
 
 @pytest.mark.parametrize("switch,message", [
-    ("STUB_FAIL_PLUGIN", "plugins enable failed"),
-    ("STUB_FAIL_SERVICES", "services reported problems"),
-    ("STUB_FAIL_WATCHDOG", "watchdog bootstrap failed"),
+    ("STUB_FAIL_PLUGIN", "プラグインの有効化に失敗しました"),
+    ("STUB_FAIL_SERVICES", "常駐サービスの登録に問題があります"),
+    ("STUB_FAIL_WATCHDOG", "復旧監視を起動できません"),
     # exit 0 is not proof: the label must answer `print` afterwards
-    ("STUB_WATCHDOG_NOLOAD", "watchdog bootstrap failed"),
+    ("STUB_WATCHDOG_NOLOAD", "復旧監視を起動できません"),
 ])
 def test_failed_stage_stops_install_then_rerun_recovers(
         tmp_path, switch, message):
     """A failed stage is a non-zero stop with a repair hint — never a
-    warn-and-continue 'Installed.'. Once repaired, a plain re-run
+    warn-and-continue 'ソフトの導入が完了しました。'. Once repaired, a plain re-run
     converges and the previous recovery generation survives both runs."""
     home, hermes_home, stub_root, env = _world(tmp_path)
     rec = home / ".mcs-recovery"
@@ -1198,7 +1198,7 @@ def test_failed_stage_stops_install_then_rerun_recovers(
     assert r.returncode != 0
     assert message in r.stderr
     assert STOPPED in r.stderr
-    assert "Installed." not in r.stdout
+    assert "ソフトの導入が完了しました。" not in r.stdout
     if switch not in ("STUB_FAIL_WATCHDOG", "STUB_WATCHDOG_NOLOAD"):
         # stopped before stage 6 — the old tool is untouched
         assert (rec / "mcs_recover.py").read_bytes() == old_gen
@@ -1220,7 +1220,7 @@ def test_transient_watchdog_bootstrap_error_is_retried(tmp_path):
     r = _run({**env, "STUB_FAIL_WATCHDOG_ONCE": "1"}, hermes_home)
     assert r.returncode == 0, r.stderr
     assert STOPPED not in r.stderr
-    assert "recovery watchdog loaded" in r.stdout
+    assert "復旧監視を起動しました" in r.stdout
 
 
 def test_standalone_documented_service_preserves_literal_paths(tmp_path):
@@ -1246,7 +1246,7 @@ def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
     assert json.loads((home / ".mcs/config.json").read_text())["runtime_mode"] == "standalone"
     for command in ("-m lineworks_adapter init", "-m mcs_standalone status"):
         assert f"cd '{ROOT}' && " in first.stdout.split(command)[0].splitlines()[-1]
-    assert "do not also run a separate lineworks_adapter service" in " ".join(first.stdout.split())
+    assert "lineworks_adapter のサービスを別に起動しないでください" in " ".join(first.stdout.split())
     assert "-m lineworks_adapter service" not in first.stdout
     calls = _calls(stub)
     text = "\n".join(calls)
@@ -1282,11 +1282,11 @@ def test_fresh_mac_without_python_explains_instead_of_silent_exit(tmp_path):
     r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services",
              "--recovery-python", "/synthetic/recovery/python3")
     assert r.returncode != 0
-    assert "--recovery-python is verified before anything is written" in r.stderr
+    assert "--recovery-python は導入前に Python 3.14 で検証します" in r.stderr
     assert not (home / ".mcs").exists()
     r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services")
-    assert "the recovery interpreter is checked in stage 6" in r.stderr
-    assert "1/6 Homebrew packages" in r.stdout
+    assert "復旧用 Python は段階6で確認します" in r.stderr
+    assert "【1/6】基本ソフトの準備（Homebrew）" in r.stdout
 
 
 def test_fresh_mac_preflight_defers_recovery_check_when_brew_installs_python(tmp_path):
@@ -1294,11 +1294,11 @@ def test_fresh_mac_preflight_defers_recovery_check_when_brew_installs_python(tmp
     _without_supported_python(stub_root)
     r = _run(env, None, "--preflight")
     assert r.returncode == 0, r.stdout
-    assert "0 blocker(s)" in r.stdout
-    assert "recovery interpreter is checked in stage 6" in r.stdout  # uname stub = Darwin
+    assert "導入を妨げる問題 0件" in r.stdout
+    assert "段階6で復旧用 Python を確認します" in r.stdout  # uname stub = Darwin
     # --recovery-python cannot be verified without Python: still a blocker
     r = _run(env, None, "--preflight", "--recovery-python", "/synthetic/recovery/python3")
-    assert r.returncode == 1 and "recovery template interpreter unsafe" in r.stdout
+    assert r.returncode == 1 and "復旧サービスのテンプレートに問題があります: Python の安全条件" in r.stdout
 
 
 def test_hermes_install_routes_lineworks_without_plugin_or_gateway(tmp_path):
@@ -1307,11 +1307,22 @@ def test_hermes_install_routes_lineworks_without_plugin_or_gateway(tmp_path):
     the lineworks_adapter steps (no secret values are printed)."""
     home, hermes_home, stub_root, env = _world(tmp_path)
     plan = _run(env, None, "--dry-run", "--no-plugin", "--no-llm")
-    assert "skipped (--no-plugin; LINE WORKS does not use it)" in plan.stdout
+    assert "省略（--no-plugin。LINE WORKS では不要）" in plan.stdout
     r = _run(env, hermes_home, "--no-llm", "--no-plugin", "--no-recovery")
     assert r.returncode == 0, r.stderr
-    assert "notify.interactive=lineworks does not use it" in r.stdout
-    assert "interactive cards need this plugin" not in r.stdout
+    assert "LINE WORKS では不要" in r.stdout
+    assert "操作カードにはこのプラグインが必要" not in r.stdout
     for sub in ("init", "check", "service"):
         assert f"cd '{ROOT}' && " in r.stdout.split(f"-m lineworks_adapter {sub}")[0].splitlines()[-1]
     assert "docs/guides/LINEWORKS.md" in r.stdout
+
+
+def test_japanese_help_is_read_only(tmp_path):
+    home, _, stub_root, env = _world(tmp_path)
+    result = _run(env, None, '--help')
+    assert result.returncode == 0
+    assert '使い方:' in result.stdout
+    assert '次の6段階' in result.stdout
+    assert 'パスワード・トークンは画面に表示しません' in result.stdout
+    assert list(home.iterdir()) == []
+    assert _calls(stub_root) == []

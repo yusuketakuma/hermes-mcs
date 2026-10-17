@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Independent MCS update recovery — lives OUTSIDE the repo
-(~/.mcs-recovery/mcs_recover.py) so a broken new release can never
-take the recovery path down with it (R5).
+"""MCS の更新が中断されたときに復旧する独立ツール。
 
-stdlib + git only. Works when the repo's new code can't import, the
-Hermes gateway is dead, or the DB won't open. Driven by the journal in
-data/update_state.json — never trusts HEAD alone (R1).
+導入先は ~/.mcs-recovery/mcs_recover.py です。MCS 本体のプログラムが
+起動できなくても、data/update_state.json の更新記録に基づいて復旧します。
 
-  python3 mcs_recover.py            classify + recover if needed
-  python3 mcs_recover.py --if-stale watchdog mode: act only on an
-                                  interrupted/stale apply
-  python3 mcs_recover.py --status   print state + repo diagnosis
+使い方:
+  python3 mcs_recover.py --help      この説明を表示（変更しません）
+  python3 mcs_recover.py --status    現在の状態を JSON で表示（変更しません）
+  python3 mcs_recover.py             中断を確認し、必要な復旧を実行
+  python3 mcs_recover.py --if-stale  定期監視用。30 分以上進んでいない更新だけを復旧
 
-Writes data/recovery_report.json on every action; exits 0 when there
-is nothing to do (watchdog-silent convention).
+復旧はプログラムや常駐処理を変更する場合があります。データベースを
+バックアップから戻す際は、失われるデータの確認と、その復元への人の承認が必要です。
+承認待ちは自動解除しません。結果は data/recovery_report.json に保存します。
+定期監視では対応不要の場合は何も表示せず、終了コード 0 で終わります。
+問題を調べるときは、まず --status と復旧結果の記録を確認してください。
 """
 import fcntl
 import glob
@@ -1384,6 +1385,39 @@ def _restore_db(backup_path, on_hold=None):
     return None
 
 
+def _recovery_explanation(detail):
+    """機械向けの復旧理由を、通知用の日本語に変換する。"""
+    reasons = {
+        "git unverifiable:": "プログラムの保存状態を確認できません。Git と導入先フォルダーを確認してください。",
+        "standalone_runtime_missing_in_target": "戻し先の版は独立動作に対応していません。独立動作に対応した版を選んでください。",
+        "reinstall_incomplete": "必要な再インストールが完了していません。更新ガイドに従って導入を完了してください。",
+        "restore_consent without": "復元の承認待ち記録と更新記録が一致しません。記録を確認し、保留を解除しないでください。",
+        "restore_consent with": "復元の承認待ち中にプログラムの保存状態が変わっています。保留を維持して更新記録を確認してください。",
+        "restore_consent hold lost": "承認待ちの復元先と現在のプログラムが一致しません。更新記録を確認してください。",
+        "restore_incomplete": "データベースの復元が未完了で、更新記録との整合を確認できません。復旧結果の記録を確認してください。",
+        "MERGE_HEAD without": "プログラムの統合が中断されていますが、戻し先の版が分かりません。更新記録を確認してください。",
+        "merge --abort failed": "中断した統合を取り消せないか、戻し先の版を確認できません。導入先の Git の状態を確認してください。",
+        "target tree could not": "更新先のプログラムを正常な状態に戻せません。導入先フォルダーを確認してください。",
+        "prev tree could not": "更新前のプログラムを正常な状態に戻せません。導入先フォルダーを確認してください。",
+        "resume incomplete:": "一部の常駐処理を復旧できません。復旧結果の記録と常駐処理の状態を確認してください。",
+        "unclassifiable repo state": "プログラムの状態を判定できないため、自動変更を見送りました。更新記録と導入先の状態を確認してください。",
+        "restore_marker_unreadable": "復元の保留記録を読み取れません。保留を維持して記録を確認してください。",
+        "backup_unreadable:": "復元用バックアップを読み取れません。保存先とファイルの状態を確認してください。",
+        "live_db_unreadable": "現在のデータベースを読み取れません。復旧結果の記録とデータベースの状態を確認してください。",
+        "restore_marker_failed:": "復元の保留記録を保存できません。保存先の権限と空き容量を確認してください。",
+        "restore_report_failed:": "復元で失われるデータを確認できません。確認できるまで復元を進めないでください。",
+        "restore_consent_pending:": "データベースの復元は人の承認待ちです。失われるデータの報告を確認してください。",
+        "restore_failed:": "データベースを復元できません。保留を維持して復旧結果の記録を確認してください。",
+        "restore_verify_failed": "復元後のデータベースを確認できません。復旧結果の記録を確認してください。",
+    }
+    if detail.startswith("rollback db restore: "):
+        detail = detail[len("rollback db restore: "):]
+    for prefix, explanation in reasons.items():
+        if detail.startswith(prefix):
+            return explanation
+    return "復旧を完了できません。data/recovery_report.json の原因記録を確認してください。"
+
+
 def recover(if_stale=False):
     state = _load_state()
     if state.get("_corrupt"):
@@ -1470,7 +1504,7 @@ def recover(if_stale=False):
                               + " — hold kept, retried next pass",
                               "[MCS] 復元承認待ちの保留中に復旧を進め"
                               "られません（保留は維持・自動再試行・"
-                              f"要確認）: {detail}")
+                              f"要確認）: {_recovery_explanation(detail)}")
                 return 1
             cid = (applying or {}).get("command_id")
             if cid:
@@ -1483,14 +1517,14 @@ def recover(if_stale=False):
                 # DB restore finished — keep drainers down and the marker
                 _report_alert("escalate", state, detail,
                               "[MCS] 更新の中断復旧ができません"
-                              f"（要手動対応）: {detail} — DB の復元が"
+                              f"（要手動対応）: {_recovery_explanation(detail)} データベースの復元が"
                               "未完了のため常駐処理は停止したままです",
                               writers_stopped=True)
                 return 1
             dkey = _drainers_key(state, head)
             _report_alert("escalate", state, detail,
                           "[MCS] 更新の中断復旧ができません"
-                          f"（要手動対応）: {detail}",
+                          f"（要手動対応）: {_recovery_explanation(detail)}",
                           drainers_key=dkey)
             drainers(dkey)
             _remove_marker()
@@ -1621,7 +1655,7 @@ def recover(if_stale=False):
             _save_state(state)
             _remove_marker()
             _report("resumed", "post-merge converged after crash")
-            _notify("[MCS] 更新の中断を検出し、post-merge を完了しました")
+            _notify("[MCS] 中断された更新の、プログラム切り替え後の処理を完了しました")
             return _restart_services("resumed", _runtime_mode() == "standalone"
                                      or bool(applying.get("plugin_changed")))
         if prev and head == prev:
@@ -1675,7 +1709,12 @@ def _finish(state, result, removed):
     state.pop("restore_consent", None)
     _save_state(state)
     _report(result, "removed locks: " + ",".join(removed))
-    _notify(f"[MCS] 更新が中断され復旧しました: {result}")
+    explanation = {
+        "merge_aborted": "中断されたプログラムの統合を取り消し、更新前の状態に戻しました。",
+        "mixed_tree_reset": "更新前後のファイルが混在していたため、更新前の状態に戻しました。",
+        "interrupted_pre_merge": "プログラムの切り替え前に中断した更新を終了しました。",
+    }.get(result, "中断された更新の復旧を完了しました。")
+    _notify("[MCS] " + explanation)
     # = mcs_update._finish_recovery: the tree is back on prev, so the
     # adapter needs no refresh; only the standalone host is re-requested
     return _restart_services(result, _runtime_mode() == "standalone", lineworks=False)
@@ -1689,7 +1728,15 @@ def _remove_marker():
 
 
 def main():
-    if "--status" in sys.argv:
+    args = sys.argv[1:]
+    if "--help" in args or "-h" in args:
+        print(__doc__)
+        return 0
+    if any(arg not in ("--status", "--if-stale") for arg in args):
+        print("指定されたオプションは使えません。--help で使い方を確認してください。復旧は実行していません。",
+              file=sys.stderr)
+        return 2
+    if "--status" in args:
         state = _load_state()
         print(json.dumps({"state": state, "head": _head(),
                           "clean": _clean()},

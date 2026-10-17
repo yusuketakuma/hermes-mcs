@@ -1,4 +1,4 @@
-"""MCS environment setup + required-condition validation.
+"""MCSの初期設定・動作確認・常駐サービスの設定。
 
 `init` interactively (or via flags) provisions what a fresh machine
 needs: ~/.mcs/config.json, ~/.mcs/.env secrets, and the macOS Keychain
@@ -55,9 +55,9 @@ from typing import Literal, TypedDict
 # The old updater imports these helpers before migrating its Python runtime.
 if sys.version_info < (3, 10):
     raise SystemExit(
-        "mcs_setup imports require Python >= 3.10 — use the install-time "
-        "interpreter ~/.hermes/hermes-agent/venv/bin/python "
-        "(/usr/bin/python3 is too old)")
+        "設定ツールの読み込みにはPython 3.10以上が必要です。導入時のPythonを使ってください: "
+        "~/.hermes/hermes-agent/venv/bin/python "
+        "（/usr/bin/python3は古すぎます）")
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every subdirectory holding .py files (any depth) as an import root
@@ -94,50 +94,51 @@ def _evaluation_input(path) -> bytes:
 # ---- typesafe config rules ------------------------------------------
 # name -> (required, check) — check(v) -> error string | None
 def _nonempty_str(v):
-    return None if isinstance(v, str) and v.strip() else "must be a non-empty string"
+    return None if isinstance(v, str) and v.strip() else "空でない文字列を指定してください"
 
 
 def _bool(v):
-    return None if type(v) is bool else "must be a boolean"
+    return None if type(v) is bool else "true（有効）かfalse（無効）を指定してください"
 
 
 def _int_range(lo, hi):
     def f(v):
         if type(v) is not int or not (lo <= v <= hi):
-            return f"must be an integer in [{lo},{hi}]"
+            return f"{lo}から{hi}までの整数を指定してください"
         return None
     return f
 
 
 def _num(v):
     return (None if type(v) in (int, float) and 0 < v <= 1e9
-            else "must be a finite number in (0,1e9]")
+            else "0より大きく10億以下の数値を指定してください")
 
 
 def _bot_profile(v):
     ok = isinstance(v, str) and re.fullmatch(r"[a-z0-9_-]+", v)
-    return None if ok else "must match [a-z0-9_-]+"
+    return None if ok else "半角英小文字・数字・ハイフン・アンダースコアだけで指定してください"
 
 
 def _dict(v):
-    return None if isinstance(v, dict) else "must be an object"
+    return None if isinstance(v, dict) else "JSONオブジェクト（キーと値の組）を指定してください"
 
 
 def _drug_map_config(value):
     import drug_map
-    return drug_map.config_error(value)
+    problem = drug_map.config_error(value)
+    return f"薬剤辞書の設定を確認してください（詳細: {problem}）" if problem else None
 
 
 def _recovery_python_problem(path, update_repo=None):
     """An independent runtime cannot live in either mutable checkout."""
     if not isinstance(path, str) or not os.path.isabs(path):
-        return "must be an explicit absolute interpreter path"
+        return "Python実行ファイルの絶対パスを指定してください"
     try:
         for root in (REPO_ROOT, update_repo):
             if root is not None and Path(path).resolve().is_relative_to(Path(root).resolve()):
-                return "recovery interpreter must be outside the mutable checkout"
+                return "復旧用Pythonは更新対象フォルダーの外に置いてください"
     except (OSError, RuntimeError):
-        return "recovery interpreter path unverifiable"
+        return "復旧用Pythonの保存場所を確認できません"
     return None
 
 
@@ -145,23 +146,23 @@ def _urgency_escalation(v):
     """Reuse notify_urgent.settings(): on/shadow with a policy it would
     silently drop (no explicit room_cooldown_min, bad type) is an error."""
     if not isinstance(v, dict):
-        return "must be an object"
+        return "JSONオブジェクト（キーと値の組）を指定してください"
     mode = v.get("mode", "off")
     if mode not in ("off", "on", "shadow"):
-        return 'mode: must be "off", "on" or "shadow"'
+        return 'mode: "off"（無効）、"on"（有効）、"shadow"（比較のみ）から選んでください'
     if mode == "off":
         return None
     import notify_urgent
     if notify_urgent.settings({"urgency_escalation": v}) is None:
-        return ("policy incomplete: source must be \"llm\", room_cooldown_min "
-                "is required, after_min/repeat_min/room_cooldown_min must be "
-                "positive numbers and max_repeats/max_per_day non-negative integers")
+        return ("通知条件が不足しています。sourceは\"llm\"とし、room_cooldown_minを"
+                "指定してください。after_min/repeat_min/room_cooldown_minは"
+                "正の数、max_repeats/max_per_dayは0以上の整数で指定してください")
     return None
 
 
 CONFIG_RULES = {
     "runtime_mode":          (False, lambda v: None if v in ("hermes", "standalone")
-                             else 'must be "hermes" or "standalone"'),
+                             else '"hermes"（Hermes経由）か"standalone"（独立動作）を選んでください'),
     "recovery_python":       (False, _recovery_python_problem),
     "mcs_login_id":          (True,  _nonempty_str),
     "notify_target":         (True,  _nonempty_str),
@@ -191,7 +192,7 @@ CONFIG_RULES = {
     "backup":                (False, _backup_config),
     "urgency_escalation":    (False, _urgency_escalation),
     "watchdog_grace_s":      (False, lambda v: None if type(v) is int and 0 <= v <= 3600
-                             else "must be an integer between 0 and 3600"),
+                             else "0から3600までの整数を指定してください"),
 }
 
 
@@ -210,13 +211,13 @@ def _validate_standalone(cfg: dict) -> list[str]:
             continue
         transport, _, channel = target.strip().partition(":")
         if transport not in ("discord", "slack", "lineworks"):
-            errors.append(f"{key}: standalone sends only to discord:, slack: "
-                          "or lineworks: targets")
+            errors.append(f"{key}: 独立動作の通知先はdiscord:、slack:、"
+                          "lineworks:のいずれかで指定してください")
         elif transport == "discord" and not channel.isdecimal():
-            errors.append(f"{key}: standalone needs discord:<channel id>")
+            errors.append(f"{key}: 独立動作ではdiscord:<チャンネルID>を指定してください")
         elif transport == "slack" and not re.fullmatch(r"[CGD][A-Z0-9]{8,}", channel):
-            errors.append(f"{key}: standalone needs slack:<C/G/D conversation id> "
-                          "(thread and user targets are Hermes-only)")
+            errors.append(f"{key}: 独立動作ではslack:<C/G/Dで始まる会話ID>を指定してください "
+                          "（スレッド・ユーザー宛ての指定はHermes経由のみ対応）")
     return errors
 
 
@@ -228,7 +229,7 @@ def _validate_llm(ll: dict) -> list[str]:
     for key in ("url", "model"):
         if key in ll and (not isinstance(ll[key], str)
                           or not ll[key].strip()):
-            errors.append(f"local_llm.{key}: must be a non-empty string")
+            errors.append(f"local_llm.{key}: 空でない文字列を指定してください")
     url = ll.get("url")
     if isinstance(url, str) and url.strip():
         try:
@@ -237,9 +238,9 @@ def _validate_llm(ll: dict) -> list[str]:
             allowed = False
         if not allowed:
             errors.append(
-                "local_llm.url: must be an http:// endpoint on loopback "
-                "(127.0.0.1/localhost/::1), no credentials/fragment — "
-                "message bodies must not leave the machine")
+                "local_llm.url: この端末内のhttp://接続先を指定してください "
+                "（127.0.0.1/localhost/::1）。認証情報や#以降の指定は使えません。"
+                "投稿本文を端末の外へ送信しないための制限です")
     return errors
 
 
@@ -255,10 +256,10 @@ def _validate_notify(ntf: dict) -> list[str]:
     errors = []
     if "interactive" in ntf \
             and ntf["interactive"] not in ("discord", "slack", "lineworks", "off"):
-        errors.append('notify.interactive: must be "discord", '
-                      '"slack", "lineworks" or "off"')
+        errors.append('notify.interactive: "discord"、'
+                      '"slack"、"lineworks"、"off"（無効）から選んでください')
     if "card_thread" in ntf and type(ntf["card_thread"]) is not bool:
-        errors.append("notify.card_thread: must be a boolean")
+        errors.append("notify.card_thread: true（有効）かfalse（無効）を指定してください")
     for key in ("route_epoch", "card_thread_archive_min"):
         if key in ntf:
             err = _int_range(1, 10 ** 9)(ntf[key])
@@ -274,51 +275,51 @@ def _validate_notify(ntf: dict) -> list[str]:
         d = ntf.get(transport)
         if d is None:
             if ntf.get("interactive") == transport:
-                errors.append(f'notify.{transport}: required when '
-                              f'interactive is "{transport}"')
+                errors.append(f'notify.{transport}: 通知カードの接続設定が必要です。'
+                              f'現在の接続先は"{transport}"です')
         elif not isinstance(d, dict):
-            errors.append(f"notify.{transport}: must be an object")
+            errors.append(f"notify.{transport}: JSONオブジェクト（キーと値の組）を指定してください")
         else:
             errors.extend(
-                f"notify.{transport}.{k}: must be a non-empty string"
+                f"notify.{transport}.{k}: 空でない文字列を指定してください"
                 for k in ("profile", "application_id", tenant,
                           "channel_id")
                 if not isinstance(d.get(k), str) or not d[k].strip())
             # delivery_scope() rejects a slack block carrying
             # guild_id outright — flag it at config time too
             if transport in ("slack", "lineworks") and "guild_id" in d:
-                errors.append(f"notify.{transport}.guild_id: not allowed "
-                              f"({transport} scope uses team_id)")
+                errors.append(f"notify.{transport}.guild_id: この項目は使えません "
+                              f"（{transport}ではteam_idを指定してください）")
             if transport == "lineworks":
                 for key in ("application_id", "team_id"):
                     v = d.get(key)
                     if not (isinstance(v, str) and re.fullmatch(r"[1-9][0-9]{0,18}", v)
                             and 0 < int(v) < 2**63):
-                        errors.append(f"notify.lineworks.{key}: must be a positive decimal string")
+                        errors.append(f"notify.lineworks.{key}: 0より大きい整数を文字列で指定してください")
                 for key in ("channel_id", "profile"):
                     v = d.get(key)
                     pattern = r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}" if key == "channel_id" else r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"
                     if not isinstance(v, str) or not re.fullmatch(pattern, v):
-                        errors.append(f"notify.lineworks.{key}: invalid identifier")
+                        errors.append(f"notify.lineworks.{key}: IDの形式を確認してください")
                 users = d.get("allowed_user_ids")
                 if not (isinstance(users, list) and users
                         and all(isinstance(v, str) and re.fullmatch(
                             r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}", v) for v in users)):
-                    errors.append("notify.lineworks.allowed_user_ids: non-empty identifier list required")
+                    errors.append("notify.lineworks.allowed_user_ids: IDを1件以上のリストで指定してください")
                 names = d.get("user_names", {})
                 if not (isinstance(names, dict) and all(
                         isinstance(k, str) and re.fullmatch(r"[A-Za-z0-9._@-]{1,128}", k)
                         and isinstance(v, str) and 0 < len(v.strip()) <= 40
                         for k, v in names.items())):
-                    errors.append("notify.lineworks.user_names: {userId: 表示名(40字以内)} required")
+                    errors.append("notify.lineworks.user_names: {userId: 表示名(40字以内)}の形式で指定してください")
                 automatic = d.get("project_ids_auto", False)
                 if type(automatic) is not bool:
-                    errors.append("notify.lineworks.project_ids_auto: must be a boolean")
+                    errors.append("notify.lineworks.project_ids_auto: true（有効）かfalse（無効）を指定してください")
                 projects = d.get("project_ids", [])
                 if not (isinstance(projects, list)
                         and all(type(v) is int and 0 < v < 2**63 for v in projects)
                         and (projects or automatic is True)):
-                    errors.append("notify.lineworks.project_ids: positive integer list required (or project_ids_auto=true)")
+                    errors.append("notify.lineworks.project_ids: 0より大きい整数のリスト、またはproject_ids_auto=trueを指定してください")
     return errors
 
 
@@ -328,14 +329,14 @@ def _validate_update(upd: dict) -> list[str]:
     soon as detected' (explicit opt-in, default is delayed)."""
     errors = []
     if "mode" in upd and upd["mode"] not in ("off", "notify", "auto"):
-        errors.append('update.mode: must be "off", "notify" or "auto"')
+        errors.append('update.mode: "off"（無効）、"notify"（通知のみ）、"auto"（自動更新）から選んでください')
     if "auto_delay_h" in upd:
         v = upd["auto_delay_h"]
         if type(v) not in (int, float) or not 0 <= v <= 1e9:
-            errors.append("update.auto_delay_h: must be a finite number in [0,1e9]")
+            errors.append("update.auto_delay_h: 0以上10億以下の数値を指定してください")
     if "include_prerelease" in upd \
             and type(upd["include_prerelease"]) is not bool:
-        errors.append("update.include_prerelease: must be a boolean")
+        errors.append("update.include_prerelease: true（有効）かfalse（無効）を指定してください")
     return errors
 
 
@@ -348,8 +349,8 @@ def _validate_health(h: dict) -> list[str]:
     if "tick_interval_s" in h:
         v = h["tick_interval_s"]
         if type(v) not in (int, float) or not 0 < v <= 86400:
-            errors.append("health.tick_interval_s: must be a finite "
-                          "number in (0,86400]")
+            errors.append("health.tick_interval_s: "
+                          "0より大きく86400以下の数値を指定してください")
     if "max_missed_runs" in h:
         err = _int_range(0, 100)(h["max_missed_runs"])
         if err:
@@ -362,13 +363,13 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
     conditions. Unknown keys warn (forward-compat) but never fail."""
     errors, warnings = [], []
     if not isinstance(cfg, dict):
-        return ["config.json is not a JSON object"], []
-    warnings.extend(f"unknown config key: {key}"
+        return ["config.jsonはJSONオブジェクト（キーと値の組）で保存してください"], []
+    warnings.extend(f"未対応の設定項目: {key}（この版では使いません）"
                     for key in sorted(set(cfg) - set(CONFIG_RULES)))
     for key, (required, check) in CONFIG_RULES.items():
         if key not in cfg:
             if required:
-                errors.append(f"missing required key: {key}")
+                errors.append(f"必須の設定項目がありません: {key}")
             continue
         err = check(cfg[key])
         if err:
@@ -376,16 +377,16 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
     sig = cfg.get("signals")
     ext = cfg.get("extract")
     if isinstance(ext, dict) and "patient_state_context" in ext and type(ext["patient_state_context"]) is not bool:
-        errors.append("extract.patient_state_context: must be a boolean")
+        errors.append("extract.patient_state_context: true（有効）かfalse（無効）を指定してください")
     if isinstance(sig, dict) and "notify" in sig and type(sig["notify"]) is not bool:
-        errors.append("signals.notify: must be a boolean")
+        errors.append("signals.notify: true（有効）かfalse（無効）を指定してください")
     ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
     if isinstance(sig, dict) and sig.get("notify") is True \
             and ntf.get("interactive", "off") == "off":
         # alerts are delivered as cards only: with cards off every alert
         # is held and nothing says so
-        errors.append('signals.notify: requires notify.interactive '
-                      '("slack", "discord" or "lineworks") — alerts are cards')
+        errors.append('signals.notify: アラートは通知カードで届くため、notify.interactiveを'
+                      '"slack"、"discord"、"lineworks"のいずれかに設定してください')
     esc = cfg.get("urgency_escalation")
     if isinstance(esc, dict) and esc.get("mode") == "on" and (
             ntf.get("card_thread") is not True
@@ -393,8 +394,8 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
         # the re-check notice posts only in the source thread, which
         # needs card threads on Slack/Discord; anywhere else it waits
         # out its hold and is dropped
-        errors.append('urgency_escalation.mode "on": requires notify.card_thread '
-                      'true and notify.interactive "slack" or "discord"')
+        errors.append('urgency_escalation.mode "on": 再確認通知にはnotify.card_threadを'
+                      'true、notify.interactiveを"slack"か"discord"に設定してください')
     if isinstance(sig, dict):
         for key in ("self_organizations", "self_professions",
                     "request_targets", "med_exclude_names"):
@@ -403,36 +404,35 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                 if not (isinstance(v, list)
                         and all(isinstance(x, str) and x.strip()
                                 for x in v)):
-                    errors.append(f"signals.{key}: must be a list of "
-                                  "non-empty strings")
+                    errors.append(f"signals.{key}: 空でない文字列を並べたリストを指定してください")
         for key in ("digest", "self_reaction_response"):
             if key in sig and type(sig[key]) is not bool:
-                errors.append(f"signals.{key}: must be a boolean")
+                errors.append(f"signals.{key}: true（有効）かfalse（無効）を指定してください")
         if "digest_interval_h" in sig:
             err = _num(sig["digest_interval_h"])
             if err:
                 errors.append(f"signals.digest_interval_h: {err}")
         if "tiers" in sig and not isinstance(sig["tiers"], dict):
-            errors.append("signals.tiers: must be an object")
+            errors.append("signals.tiers: JSONオブジェクト（キーと値の組）を指定してください")
     dd = cfg.get("daily_digest")
     if isinstance(dd, dict):
         if "enabled" in dd and type(dd["enabled"]) is not bool:
-            errors.append("daily_digest.enabled: must be a boolean")
+            errors.append("daily_digest.enabled: true（有効）かfalse（無効）を指定してください")
         if "hour_jst" in dd:
             err = _int_range(0, 23)(dd["hour_jst"])
             if err:
                 errors.append(f"daily_digest.hour_jst: {err}")
         if "include_names" in dd and type(dd["include_names"]) is not bool:
-            errors.append("daily_digest.include_names: must be a boolean")
+            errors.append("daily_digest.include_names: true（有効）かfalse（無効）を指定してください")
         if "scope" in dd:
             import notify_digest
             flt = (notify_digest.parse_scope(dd["scope"])
                    if isinstance(dd["scope"], str) and len(dd["scope"]) <= 200
-                   else "must be a string")
+                   else "文字列で指定してください")
             if isinstance(flt, str) or flt["mine"]:
-                errors.append("daily_digest.scope: " + (
+                errors.append("daily_digest.scope: 通知する範囲の指定を確認してください。" + (
                     flt if isinstance(flt, str) else
-                    "mine needs a clicker — use station:/project:/days:"))
+                    "mineは操作したユーザーの指定が必要です。station:/project:/days:を使ってください"))
     if isinstance(cfg.get("notify"), dict):
         errors.extend(_validate_notify(cfg["notify"]))
         # a scope block for the transport that is NOT active is stale —
@@ -448,25 +448,26 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
             if other != act and other not in used and isinstance(cfg["notify"].get(other),
                                            dict):
                 warnings.append(
-                    f"notify.{other}: scope configured but interactive "
-                    f"is {act!r} — ignored until you switch back")
+                    f"notify.{other}: 接続設定がありますが、現在の通知先は"
+                    f"{act!r}です。切り替えるまでこの設定は使いません")
         for transport in ("discord", "slack", "lineworks"):
             scope = cfg["notify"].get(transport)
             projects = scope.get("project_ids") if isinstance(scope, dict) else None
             if isinstance(projects, list) and len(projects) > PROJECT_SCOPE_MAX \
                     and scope.get("project_ids_auto") is not True:
                 warnings.append(
-                    f"notify.{transport}.project_ids: {len(projects)} ids exceed "
-                    f"the {PROJECT_SCOPE_MAX}-project card/summary scope — only "
-                    "the lowest ids are counted; use project_ids_auto=true")
+                    f"notify.{transport}.project_ids: {len(projects)}件は"
+                    f"カード・要約の上限{PROJECT_SCOPE_MAX}件を超えています。"
+                    "IDの小さい順に集計します。project_ids_auto=trueの利用を検討してください")
     if isinstance(cfg.get("local_llm"), dict):
         errors.extend(_validate_llm(cfg["local_llm"]))
     if isinstance(cfg.get("semantic"), dict):
         try:
             from semantic_policy import semantic_config
-            errors.extend(semantic_config(cfg)[1])
+            errors.extend(f"semantic: 意味解析の設定を確認してください（詳細: {error}）"
+                          for error in semantic_config(cfg)[1])
         except Exception as e:  # validator itself must not crash check
-            errors.append(f"semantic: validator failed ({type(e).__name__})")
+            errors.append(f"semantic: 設定の検証に失敗しました（{type(e).__name__}）")
     if isinstance(cfg.get("update"), dict):
         errors.extend(_validate_update(cfg["update"]))
     if isinstance(cfg.get("health"), dict):
@@ -490,20 +491,20 @@ def _validate_standalone_scope(cfg: dict) -> list[str]:
             continue
         scope = ntf.get(transport)
         if not isinstance(scope, dict):
-            errors.append(f"notify.{transport}: explicit scope required in standalone mode")
+            errors.append(f"notify.{transport}: 独立動作では操作を許可する範囲を明示してください")
             continue
         users = scope.get("allowed_user_ids")
         if not (isinstance(users, list) and users and all(
                 isinstance(uid, str) and uid.strip() for uid in users)):
-            errors.append(f"notify.{transport}.allowed_user_ids: non-empty identifier list required")
+            errors.append(f"notify.{transport}.allowed_user_ids: IDを1件以上のリストで指定してください")
         automatic = scope.get("project_ids_auto", False)
         if type(automatic) is not bool:
-            errors.append(f"notify.{transport}.project_ids_auto: must be a boolean")
+            errors.append(f"notify.{transport}.project_ids_auto: true（有効）かfalse（無効）を指定してください")
         projects = scope.get("project_ids", [])
         if not (isinstance(projects, list) and all(
                 type(pid) is int and 0 < pid < 2**63 for pid in projects)
                 and (projects or automatic is True)):
-            errors.append(f"notify.{transport}.project_ids: positive integer list required (or project_ids_auto=true)")
+            errors.append(f"notify.{transport}.project_ids: 0より大きい整数のリスト、またはproject_ids_auto=trueを指定してください")
         if transport == "discord" and "allowed_chat_ids" in scope:
             chats = scope["allowed_chat_ids"]
             try:
@@ -512,12 +513,12 @@ def _validate_standalone_scope(cfg: dict) -> list[str]:
             except ValueError:
                 valid_chats = False
             if not valid_chats:
-                errors.append("notify.discord.allowed_chat_ids: non-empty channel identifier list required")
+                errors.append("notify.discord.allowed_chat_ids: チャンネルIDを1件以上のリストで指定してください")
         if transport == "discord" and "allowed_role_ids" in scope:
             roles = scope["allowed_role_ids"]
             if not (isinstance(roles, list) and all(isinstance(role, str)
                     and role.strip() and role != scope.get("guild_id") for role in roles)):
-                errors.append("notify.discord.allowed_role_ids: identifier list required; @everyone is not allowed")
+                errors.append("notify.discord.allowed_role_ids: IDをリストで指定してください。@everyoneは許可できません")
     return errors
 
 
@@ -641,9 +642,9 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     try:
         mcs_runtime.mode(cfg)
     except ValueError:
-        return ["runtime_mode is invalid — select hermes or standalone before checking runtime services"], []
+        return ["実行方法が不正です。hermes（Hermes経由）かstandalone（独立動作）を設定してから再確認してください"], []
     if sys.platform != "darwin":
-        warnings.append("not macOS — Keychain/launchd steps do not apply")
+        warnings.append("macOS以外のため、キーチェーンとlaunchdの設定は対象外です")
     else:
         # The .env MCS_PASSWORD fallback covers a rebooted machine whose
         # login keychain is still locked — when present, keychain
@@ -653,10 +654,10 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE])
         if r.returncode != 0:
             (warnings if env_pw else errors).append(
-                f"Keychain entry '{KEYCHAIN_SERVICE}' not found"
-                + (" — .env fallback present, re-login still works"
+                f"キーチェーンに'{KEYCHAIN_SERVICE}'が見つかりません"
+                + (" — .envに予備の認証情報があるため、再ログインできます"
                    if env_pw else
-                   " — re-login cannot inject the MCS password"))
+                   " — MCSパスワードを取得できず、再ログインできません。初期設定でパスワードを登録してください"))
         else:
             # entry existence is not enough — the SECRET must be readable
             # non-interactively. A locked keychain (or an ACL prompt this
@@ -672,23 +673,23 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                 if (w.returncode == 36 or "interaction is not allowed"
                         in err or "keychain is locked" in err):
                     (warnings if env_pw else errors).append(
-                        f"Keychain entry '{KEYCHAIN_SERVICE}' is present but "
-                        "unreadable — the keychain may be locked or access "
-                        "may require an interactive permission prompt. "
-                        + (".env fallback present — re-login still works "
-                           "without Keychain access."
+                        f"キーチェーンに'{KEYCHAIN_SERVICE}'はありますが、"
+                        "読み取れません。キーチェーンのロックや、"
+                        "画面でのアクセス許可が必要な可能性があります。"
+                        + (".envに予備の認証情報があるため、"
+                           "キーチェーンを使わずに再ログインできます。"
                            if env_pw else
-                           "Check the login keychain lock and this process's "
-                           "access permission in an interactive session, then "
-                           "re-run check; or use the existing init password "
-                           "input to configure the .env fallback."))
+                           "ログインキーチェーンのロックと、このプログラムの"
+                           "アクセス権限を画面で確認し、"
+                           "checkを再実行してください。または初期設定のパスワード入力で"
+                           ".envにも予備の認証情報を保存してください。"))
                 else:
                     errors.append(
-                        f"Keychain entry '{KEYCHAIN_SERVICE}' exists but its "
-                        f"password cannot be read (rc={w.returncode}) — "
-                        "re-register via `mcs_setup init`")
+                        f"キーチェーンに'{KEYCHAIN_SERVICE}'はありますが、"
+                        f"パスワードを読み取れません（終了コード={w.returncode}）。"
+                        "`mcs_setup.py init`で再登録してください")
     if not os.path.exists(CHROME_BIN):
-        errors.append(f"Chrome binary missing: {CHROME_BIN}")
+        errors.append(f"Chromeが見つかりません。インストール先を確認してください: {CHROME_BIN}")
     llm_errors, llm_warnings = _check_llm(cfg)
     errors.extend(llm_errors)
     warnings.extend(llm_warnings)
@@ -705,20 +706,20 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                   os.path.join(REPO_ROOT, "mcs_standalone", "__main__.py"),
                   "check", "--root", HOME], timeout=30)
         if r.returncode:
-            errors.append("standalone check failed — see "
+            errors.append("独立動作の診断に失敗しました。次の手順を確認してください: "
                           "docs/guides/STANDALONE.md")
         if sys.platform == "darwin" and _agent_loaded("ai.hermes.gateway"):
-            warnings.append("ai.hermes.gateway is loaded while MCS serves "
-                            "Slack/Discord itself — remove that platform from "
-                            "Hermes or stop the gateway (docs/guides/STANDALONE.md)")
+            warnings.append("MCSが独立して接続していますが、Hermesの接続サービスも稼働しています。"
+                            "Slack/Discordの二重接続を避けるため、Hermes側の接続設定を外すか、"
+                            "Hermesの接続サービスを停止してください（docs/guides/STANDALONE.md）")
     elif lineworks or (isinstance(target, str) and target.startswith("lineworks:")):
         r = _run([sys.executable, os.path.join(REPO_ROOT, "lineworks_adapter", "__main__.py"),
                   "check", "--root", HOME], timeout=20)
         if r.returncode:
-            errors.append("LINE WORKS adapter local check failed — run `python -m lineworks_adapter check` and follow docs/guides/LINEWORKS.md to repair the existing credentials")
+            errors.append("LINE WORKS接続の診断に失敗しました。`python -m lineworks_adapter check`を実行し、docs/guides/LINEWORKS.mdに従って認証情報を確認してください")
     elif not _hermes_ok(exe):
-        errors.append(f"hermes CLI not resolvable ({exe}) — "
-                      "notifications cannot be sent")
+        errors.append(f"Hermesコマンドが見つかりません（{exe}）。"
+                      "通知を送信できません。install.shでHermesの導入状態を確認してください")
     elif isinstance(cfg.get("notify"), dict) \
             and cfg["notify"].get("interactive") in ("discord", "slack"):
         # The gateway is hermes's own supervised service — cards and
@@ -726,33 +727,33 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         r = _hermes_cli(exe, "", "gateway", "status")
         if not (r and r.returncode == 0
                 and "supervised" in (r.stdout or "")):
-            warnings.append("hermes gateway is not supervised — "
-                            "`mcs_setup services` installs it via "
+            warnings.append("Hermesの接続サービスが常駐管理されていません。"
+                            "`mcs_setup.py services`で設定してください。使用する処理: "
                             "`hermes gateway install`")
         elif _plugin_newer_than_gateway(r.stdout or ""):
             # the gateway loads plugin code once at startup — a stale
             # worker serves cards without companion thread bodies
             # (2026-09 incident); surface the pending restart here
             warnings.append(
-                "gateway-loaded sources (" + ", ".join(
+                "接続サービスが使うプログラム（" + ", ".join(
                     d + "/" for d in mcs_runtime.GATEWAY_SOURCE_DIRS)
-                + ") are newer than the running gateway — "
-                "`hermes gateway restart` so workers load current code")
+                + "）が稼働中のサービスより新しくなっています。"
+                "`hermes gateway restart`で新しいプログラムを読み込んでください")
     sem = cfg.get("semantic")
     if isinstance(sem, dict) and sem.get("mode", "off") != "off" \
             and env_value("TYPESAFE_API_KEY") is None:
-        errors.append("semantic.mode is enabled but TYPESAFE_API_KEY "
-                      "is not resolvable — Jev verdicts fail as "
+        errors.append("意味解析は有効ですが、TYPESAFE_API_KEYを"
+                      "取得できません。外部解析の認証情報を設定してください。エラーコード: "
                       "no_api_key")
     elif env_value("TYPESAFE_API_KEY") is None:
-        warnings.append("TYPESAFE_API_KEY not set — needed when "
-                        "semantic.mode is enabled")
+        warnings.append("TYPESAFE_API_KEYは未設定です。"
+                        "外部の意味解析を有効にする場合に必要です")
     if sys.platform == "darwin" and cfg.get("runtime_mode") != "standalone":
         agents = os.path.expanduser("~/Library/LaunchAgents")
         labels = _agent_labels(cfg)
         warnings.extend(
-            f"LaunchAgent {label} not installed — templates and "
-            "install steps in deployment/launchagents/README.md"
+            f"常駐処理{label}が未導入です。設定のひな形と"
+            "導入手順はdeployment/launchagents/README.mdを確認してください"
             for label in labels
             if not os.path.exists(os.path.join(agents, f"{label}.plist")))
         # plist presence is not liveness: an installed-but-unloaded
@@ -765,16 +766,16 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                          timeout=10).returncode == 0
         if not domain_ok:
             warnings.append(
-                f"launchd gui/{os.getuid()} unreachable from this "
-                "session — cannot verify agent load state")
+                f"このセッションから常駐処理の管理先gui/{os.getuid()}に"
+                "接続できないため、稼働状態を確認できません")
         for label in labels:
             plist = os.path.join(agents, f"{label}.plist")
             if not os.path.exists(plist) or not domain_ok:
                 continue
             if not _agent_loaded(label):
                 errors.append(
-                    f"LaunchAgent {label} installed but not loaded — "
-                    "run `mcs_setup.py services` or "
+                    f"常駐処理{label}は導入済みですが読み込まれていません。"
+                    "`mcs_setup.py services`を実行してください。個別の起動方法: "
                     f"`launchctl bootstrap gui/{os.getuid()} {plist}`")
     # T20: with the admission boundary enabled, every MCS LLM route
     # must be registered — a missing route fails closed FOREVER, so a
@@ -787,17 +788,17 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                        if broker.routes.get(r) != "BACKLOG"]
             if missing:
                 errors.append(
-                    "admission broker route table lacks "
+                    "AIの実行枠の登録に不足があります: "
                     + ", ".join(missing)
-                    + " — those callers are rejected permanently while "
-                      "MCS_LLM_ADMISSION is set")
+                    + " — MCS_LLM_ADMISSIONが有効な間、"
+                      "これらの処理は受け付けられません。実行枠の登録を確認してください")
             elif not broker.is_open():
                 warnings.append(
-                    "admission epoch is closed — LLM work defers until "
-                    "the backend is verified empty and the epoch "
-                    "reopens")
+                    "AIの実行受付を一時停止しています。実行中の処理がないことを"
+                    "確認して受付を再開するまで、"
+                    "AI処理は待機します")
         except Exception as e:
-            errors.append(f"admission broker unusable: {e}")
+            errors.append(f"AIの実行枠を管理できません。設定と稼働状態を確認してください（詳細: {e}）")
     return errors, warnings
 
 
@@ -947,22 +948,26 @@ def _semantic_on(cfg):
 
 
 WIZARD = [
-    ("基本設定", [
+    ("使い方とMCSのアカウント", [
         ("runtime_mode", "choice:hermes,standalone", "hermes",
-         "実行モード — hermes=既存Hermes接続 / standalone=Hermesなしで全機能", None),
+         "どの方法で使いますか？ hermes=Hermesと連携 / standalone=MCSだけで動かす", None),
         ("mcs_login_id", "req", None,
          "MCS のログインID", None),
+    ]),
+    ("通知の送り先", [
         ("notify_target", "req", None,
          "通知の送り先（例: slack:<チャンネルID>、"
          "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
         ("notify_system_target", "opt", None,
          "障害・システム通知の送り先（空欄=notify_target と同じ）", None),
     ]),
-    ("カード通知（Slack / Discord / LINE WORKS）", [
+    ("通知の形式を選ぶ", [
         ("notify.interactive", "choice:off,slack,discord,lineworks", "off",
-         "通知形式 — slack/discord/lineworks=カード / off=従来テキストのみ", None),
+         "どの形式で通知しますか？ slack/discord/lineworks=ボタン付き通知 / off=文章のみ", None),
+    ]),
+    ("LINE WORKSの接続先と操作できる人", [
         ("notify.lineworks.profile", "req", "default",
-         "独自アダプターの配送プロファイル名", _lineworks_on),
+         "このLINE WORKS接続を区別する名前（通常はdefault）", _lineworks_on),
         ("notify.lineworks.application_id", "req", None,
          "LINE WORKS Bot ID", _lineworks_on),
         ("notify.lineworks.team_id", "req", None,
@@ -975,8 +980,10 @@ WIZARD = [
          "配信・操作を許可するMCSプロジェクトID・カンマ区切り（必須）", _lineworks_on),
         ("notify.lineworks.project_ids_auto", "bool", False,
          "公開済みscope snapshotからプロジェクトを解決（通常はオフ）", _lineworks_on),
+    ]),
+    ("Slackの接続先と操作できる人", [
         ("notify.slack.profile", "req", None,
-         "配送スコープのプロファイル名", _slack_on),
+         "この接続先を区別する名前（プロファイル名。例: mcs）", _slack_on),
         ("notify.slack.application_id", "req", None,
          "Slack アプリID", _slack_on),
         ("notify.slack.team_id", "req", None,
@@ -989,8 +996,10 @@ WIZARD = [
          "公開済みscope snapshotからプロジェクトを解決", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
         ("notify.slack.project_ids", "intlist", [],
          "閲覧・操作を許可するMCSプロジェクトID・カンマ区切り（自動解決がオフなら必須）", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
+    ]),
+    ("Discordの接続先と操作できる人", [
         ("notify.discord.profile", "req", None,
-         "配送スコープのプロファイル名", _discord_on),
+         "この接続先を区別する名前（プロファイル名。例: mcs）", _discord_on),
         ("notify.discord.application_id", "req", None,
          "Discord アプリケーションID", _discord_on),
         ("notify.discord.guild_id", "req", None,
@@ -1007,22 +1016,26 @@ WIZARD = [
          "閲覧・操作を許可するMCSプロジェクトID・カンマ区切り（自動解決がオフなら必須）", lambda cfg: cfg.get("runtime_mode") == "standalone" and _discord_on(cfg)),
         ("notify.operator", "opt", None,
          "運用者の Discord ユーザーID（空欄可）", _discord_on),
+    ]),
+    ("通知のまとめ方と対象期間", [
         ("notify.card_thread", "bool", True,
-         "患者スレッドごとにカードをまとめる", lambda cfg: _slack_on(cfg) or _discord_on(cfg)),
+         "同じ患者の通知を1つのスレッドにまとめますか？", lambda cfg: _slack_on(cfg) or _discord_on(cfg)),
         ("notify.card_thread_archive_min", "int", 10080,
-         "カードスレッドをアーカイブするまでの分数", lambda cfg: _slack_on(cfg) or _discord_on(cfg)),
+         "スレッドをアーカイブするまでの時間（分。10080分=7日）", lambda cfg: _slack_on(cfg) or _discord_on(cfg)),
         ("notify.route_epoch", "int", 1,
-         "配送先を変えたとき+1する番号（通常はそのまま）", _cards_on),
+         "通知先の変更を区別する番号（通常はそのまま。通知先を変更する場合のみ1増やす）", _cards_on),
         ("notify_bot_profile", "opt", None,
-         "通知投稿に使う hermes プロファイル（空欄=既定）", lambda cfg: cfg.get("runtime_mode") != "standalone"),
+         "通知に使うHermesの設定名（複数の接続設定がある場合のみ入力）", lambda cfg: cfg.get("runtime_mode") != "standalone"),
         ("notify_max_age_h", "num", None,
-         "この時間より古い投稿は通知しない。期間内の新規取込みは既読でも通知（時間・空欄=制限なし）", None),
+         "何時間前までの投稿を通知しますか？（空欄=制限なし。期間内に新しく取り込んだ投稿は既読でも通知）", None),
         ("notify_all_replies", "bool", False,
          "リアルタイムで新規取得した返信は既読・投稿時刻によらず全件通知（履歴一括取込みは対象外）", None),
         ("hermes_bin", "opt", None,
          "hermes コマンドのパス（空欄=自動検出）", lambda cfg: cfg.get("runtime_mode") != "standalone"),
+    ]),
+    ("朝のまとめ通知", [
         ("daily_digest.enabled", "bool", False,
-         "朝の日次ダイジェスト（件数とID。患者名は include_names で追加）を notify_target に送る", None),
+         "朝に1日分のまとめを通知先へ送りますか？（件数とID。患者名は次の項目で選びます）", None),
         ("daily_digest.hour_jst", "int", 8,
          "日次ダイジェストを送る時刻（JST・0-23時）", _digest_on),
         ("daily_digest.include_names", "bool", False,
@@ -1032,10 +1045,10 @@ WIZARD = [
          "日次ダイジェストの対象患者（例: station:○○ / project:1,2 / days:3。空欄=全患者）",
          _digest_on),
     ]),
-    ("収集ポリシー", [
+    ("取り込む投稿と履歴", [
         ("self_posts", "bool", False,
-         "自分自身の投稿も取り込んで通知する（未読APIは自投稿を返さない"
-         "ため、最新probe経由で検出）", None),
+         "自分がMCSに投稿した内容も取り込んで通知しますか？（未読一覧には自分の投稿が含まれない"
+         "ため、最新の投稿を別途確認します）", None),
         ("metadata_shadow", "bool", False,
          "未読保持の実証・運用合意後のみスタンプを再取得（shadow・反応値は非公開）",
          None),
@@ -1049,24 +1062,24 @@ WIZARD = [
          "deep runで登録薬剤・検査項目・観測値をGET取得（既読化操作は行わない）",
          None),
         ("deep_history", "bool", True,
-         "初回に全履歴を遡って保存する", None),
+         "初回に過去の投稿もすべて取り込みますか？（件数によって時間がかかります）", None),
         ("discover_archived", "bool", False,
-         "アーカイブ済み患者も収集対象にする", None),
+         "MCSでアーカイブ済みの患者も取り込みますか？", None),
         ("trickle_pages", "int", 3,
          "1回の実行で履歴を遡るページ数（1-40）", None),
         ("job_budget_seconds", "num", None,
          "内部処理の時間予算・秒（空欄=既定）", None),
     ]),
-    ("ローカルLLM（空欄=既定 llama.cpp :8080 / Qwen3.5-9B）", [
+    ("このMacで動くAI（通常はEnterで進めます）", [
         ("local_llm.url", "opt", None,
-         "chat/completions エンドポイント URL（loopback http のみ）",
+         "AIの接続先URL（通常は空欄。既定は http://127.0.0.1:8080/v1/chat/completions。指定する場合は /v1/chat/completions まで入力してください。外部URLは指定できません）",
          None),
         ("local_llm.model", "opt", None,
-         "モデル名（OpenAI互換 API の model フィールド）", None),
+         "AIモデル名（通常は空欄でQwen3.5-9B。別のモデルを導入した場合のみ指定）", None),
     ]),
-    ("アラート（機械が要確認箇所を列挙）", [
+    ("確認が必要な内容の通知", [
         ("signals.notify", "bool", False,
-         "アラートを通知カードに出す", None),
+         "確認が必要な内容の候補を通知カードに表示しますか？", None),
         ("signals.digest", "bool", False,
          "複数候補をダイジェストにまとめて送る", _signals_on),
         ("signals.digest_interval_h", "num", None,
@@ -1081,10 +1094,10 @@ WIZARD = [
         ("signals.med_exclude_names", "csv", None,
          "薬剤判定から除外する語・カンマ区切り（空欄可）", None),
     ]),
-    ("意味解析 semantic（要約の自動検査など・通常は off のまま）", [
+    ("外部サービスによる追加解析（通常は使いません）", [
         ("semantic.mode", "choice:off,shadow,enforce", "off",
-         "意味解析モード — off以外は本文を外部Jev APIへ送信 "
-         "shadow=記録のみ / enforce=判定に使用", None),
+         "追加解析を使いますか？ off=使わない（推奨）。off以外は投稿本文を外部のJev APIへ送信します。"
+         "shadow=結果を記録するだけ / enforce=結果を判定に使用", None),
         ("semantic.project_ids", "reqintlist", None,
          "対象プロジェクトID・カンマ区切り（modeがoff以外では必須）",
          _semantic_on),
@@ -1146,12 +1159,12 @@ def _parse_answer(kind: str, raw: str):
     if kind in ("req", "opt"):
         return True, raw
     if kind == "bool":
-        v = raw.lower()
+        v = {"はい": "y", "いいえ": "n"}.get(raw, raw.lower())
         if v in ("y", "yes", "1", "true", "on"):
             return True, True
         if v in ("n", "no", "0", "false", "off"):
             return True, False
-        return False, "y か n で答えてください"
+        return False, "「はい」か「いいえ」、または y / n で答えてください"
     if kind == "int":
         try:
             return True, int(raw)
@@ -1177,8 +1190,10 @@ def _parse_answer(kind: str, raw: str):
         return True, parts
     if kind.startswith("choice:"):
         opts = kind.split(":", 1)[1].split(",")
+        if raw in {str(i) for i in range(1, len(opts) + 1)}:
+            raw = opts[int(raw) - 1]
         return ((True, raw) if raw in opts
-                else (False, "次のいずれかで入力: " + ", ".join(opts)))
+                else (False, "表示された番号、または次の値で入力: " + ", ".join(opts)))
     return True, raw
 
 
@@ -1197,12 +1212,13 @@ def _ask(key: str, kind: str, default, desc: str, cur, present=False):
     elif eff is not None:
         marks.append(f"既定: {_fmt(eff)}")
     if kind == "bool":
-        marks.append("Y/n" if eff else "y/N")
+        marks.append("はい / いいえ（y / nでも入力できます）")
     elif kind.startswith("choice:"):
-        marks.append("/".join(kind.split(":", 1)[1].split(",")))
+        marks.append(" / ".join(f"{i}={value}" for i, value in
+                                enumerate(kind.split(":", 1)[1].split(","), 1)))
     if cur is not None and kind in ("opt", "num", "csv", "intlist"):
         marks.append("`-` で削除")
-    prompt = (f"  {key} — {desc}"
+    prompt = (f"  {desc}\n    設定項目: {key}"
               + (f" [{' / '.join(marks)}]" if marks else "") + ": ")
     while True:
         raw = input(prompt).strip()
@@ -1225,10 +1241,16 @@ def _wizard(cfg: dict):
     """Walk every config key in sections — Enter accepts the shown
     current/default value, so a beginner can step through safely.
     Items whose feature is off are skipped via their gate."""
-    print("\n各項目は Enter で現在値/既定値のまま進みます。"
-          "わからない項目は Enter で構いません。")
-    for i, (title, items) in enumerate(WIZARD, 1):
-        print(f"\n【{i}/{len(WIZARD)}】{title}")
+    print("\nMCSの設定を順番に案内します。使わない接続先の質問は省略します。\n"
+          "現在値がある項目はEnterで保持します。未設定の項目は表示された既定値を使います。\n"
+          "必須項目は空欄では進めません。IDは名前ではなく、各サービスの識別番号を入力してください。\n"
+          "複数指定は半角カンマで区切ります。パスワード・トークンは後で非表示入力します。")
+    step = 0
+    for title, items in WIZARD:
+        if not any(when is None or when(cfg) for *_, when in items):
+            continue
+        step += 1
+        print(f"\n【手順 {step}】{title}")
         for key, kind, default, desc, when in items:
             if when is not None and not when(cfg):
                 continue
@@ -1295,8 +1317,10 @@ def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
         hermes_tok = None if tok or args.yes else env_value(
             env_key, paths=[os.path.expanduser("~/.hermes/.env")], check_env=False)
         # switching from Hermes: reuse its token only on explicit consent
-        if hermes_tok and input(f"  {env_key}: ~/.hermes/.env の値を使いますか？"
-                                "[y/N]: ").strip().lower() in ("y", "yes"):
+        if hermes_tok and _ask(
+                env_key, "bool", False,
+                "Hermesに保存済みの認証情報を使いますか？（~/.hermes/.envから読み込みます）",
+                None):
             tok = hermes_tok
         if not tok and not args.yes:
             tok = getpass.getpass(f"  {desc}（{ENV_PATH} へ保存。空欄=スキップ）: ") or None
@@ -1308,9 +1332,9 @@ def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
         try:
             _env_write(ENV_PATH, updates)
         except ValueError:
-            print("  .env: invalid token format; existing file retained")
+            print("  .env: トークンの形式が正しくありません。既存のファイルを保持しました")
             return False
-        print(f"  {', '.join(sorted(updates))}: {ENV_PATH} へ保存 (0600)")
+        print(f"  {', '.join(sorted(updates))}: {ENV_PATH} へ保存しました（本人のみ読み書きできます）")
     if missing:
         print("  未設定: " + ", ".join(missing)
               + f" — {ENV_PATH} に KEY=値 で追加するか init を再実行")
@@ -1334,12 +1358,12 @@ def _plugin_settings_plan(transport: str, nd: dict, args) -> tuple:
         # operator-specific allowlists: flag > existing value > prompt
         lists = (
             ("allowed_user_ids", getattr(args, "plugin_user_ids", None),
-             "カード操作を許可する Discord user ID", ""),
+             "カード操作を許可する DiscordユーザーID", ""),
             ("allowed_chat_ids", getattr(args, "plugin_chat_ids", None),
-             "コマンドを受け付ける Discord channel ID",
+             "コマンドを受け付ける DiscordチャンネルID",
              nd.get("channel_id", "")),
             ("project_ids", getattr(args, "plugin_project_ids", None),
-             "対象とする MCS project ID", ""),
+             "対象とする MCSプロジェクトID", ""),
         )
     else:
         fixed["slack_adapter_enabled"] = "true"
@@ -1349,9 +1373,9 @@ def _plugin_settings_plan(transport: str, nd: dict, args) -> tuple:
         lists = (
             ("slack_allowed_user_ids",
              getattr(args, "plugin_user_ids", None),
-             "カード操作を許可する Slack user ID", ""),
+             "カード操作を許可する SlackユーザーID", ""),
             ("project_ids", getattr(args, "plugin_project_ids", None),
-             "対象とする MCS project ID", ""),
+             "対象とする MCSプロジェクトID", ""),
         )
     return fixed, lists
 
@@ -1368,8 +1392,7 @@ def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
     def _store(env_key, tok) -> bool:
         ok = _hermes_config_set(exe, profile, env_key, tok)
         print(f"  {env_key}: "
-              + (f"hermes {'-p ' + profile if profile else '既定'} "
-                 ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
+              + (f"Hermesの設定「{profile or '既定'}」の.envに保存しました" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
         return ok
 
     failed = False
@@ -1409,11 +1432,11 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
         used = {interactive} | {
             str(cfg.get(k) or "").partition(":")[0]
             for k in ("notify_target", "notify_system_target")}
-        wanted = [("DISCORD_BOT_TOKEN", "Discord bot token")] if "discord" in used else []
+        wanted = [("DISCORD_BOT_TOKEN", "DiscordのBotトークン")] if "discord" in used else []
         if "slack" in used:
-            wanted.append(("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"))
+            wanted.append(("SLACK_BOT_TOKEN", "SlackのBotトークン（xoxb-で始まる値）"))
         if interactive == "slack":
-            wanted.append(("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
+            wanted.append(("SLACK_APP_TOKEN", "Slackのアプリトークン（xapp-で始まる値）"))
         return _apply_standalone_credentials(args, used, wanted)
     if not isinstance(ntf, dict) \
             or ntf.get("interactive") not in ("discord", "slack"):
@@ -1421,7 +1444,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
     transport = ntf["interactive"]
     exe = _hermes_exe(cfg)
     if not _hermes_ok(exe):
-        print("\nhermes CLI が見つかりません — プラグイン設定は後で "
+        print("\nHermesコマンドが見つかりません。連携設定は後で "
               "`hermes config set "
               f"{PLUGIN_SETTINGS}.<key> <値>` で行ってください")
         return False
@@ -1433,19 +1456,17 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
             profile = ""
         else:
             profile = input(
-                "\nプラグイン設定を書き込む hermes プロファイル名"
-                f"（multiplex 構成では {label} を受け持つ profile。"
-                "空欄=既定）: ").strip()
-    print(f"\n{label} 連携 — hermes "
-          f"{'-p ' + profile if profile else '既定'}"
-          " profile にプラグイン設定を書き込みます")
+                "\n連携設定を保存するHermesの設定名（プロファイル）"
+                f"。複数の接続設定がある場合は、{label}を担当する設定名を入力してください。"
+                "空欄で既定の設定を使います: ").strip()
+    print(f"\n{label}連携: Hermesの設定「{profile or '既定'}」へ保存します")
 
     fixed, lists = _plugin_settings_plan(transport, nd, args)
     if transport == "discord":
-        tokens = (("DISCORD_BOT_TOKEN", "Discord bot token"),)
+        tokens = (("DISCORD_BOT_TOKEN", "DiscordのBotトークン"),)
     else:
-        tokens = (("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"),
-                  ("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
+        tokens = (("SLACK_BOT_TOKEN", "SlackのBotトークン（xoxb-で始まる値）"),
+                  ("SLACK_APP_TOKEN", "Slackのアプリトークン（xapp-で始まる値）"))
     missing = []
     failed = False
     for key, val in fixed.items():
@@ -1475,7 +1496,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
         if key == "project_ids":
             lit = _project_ids_yaml(flag_val)
             if lit is None:
-                print(f"  settings.{key}: 正の整数の project ID を"
+                print(f"  settings.{key}: 0より大きい整数のプロジェクトID を"
                       "カンマ区切りで指定してください")
                 missing.append(key)
                 failed = True
@@ -1544,9 +1565,9 @@ def _guard_config(yes: bool) -> bool:
     if why is None:
         return True
     if not yes:
-        print(f"config: {CONF_PATH} is unreadable or invalid ({why}) — "
-              "nothing written. Fix it by hand, or re-run `mcs_setup.py "
-              "init --yes` to move it aside and start from defaults")
+        print(f"設定ファイル{CONF_PATH}を読み取れないか、形式が不正です（詳細: {why}）。"
+              "保存していません。ファイルを修正するか、`mcs_setup.py "
+              "init --yes`で元のファイルを退避し、初期値から設定してください")
         return False
     base = f"{CONF_PATH}.corrupt-{time.strftime('%Y%m%dT%H%M%S')}"
     dst, n = base, 0
@@ -1556,8 +1577,8 @@ def _guard_config(yes: bool) -> bool:
     os.rename(CONF_PATH, dst)
     with suppress(OSError):
         os.chmod(dst, 0o600)
-    print(f"config: {CONF_PATH} was unreadable or invalid ({why}) — "
-          f"moved to {dst}; continuing from defaults")
+    print(f"設定ファイル{CONF_PATH}を読み取れないか、形式が不正でした（詳細: {why}）。"
+          f"{dst}へ退避し、初期値から設定を続けます")
     return True
 
 
@@ -1601,12 +1622,12 @@ def _init_apply_set_overrides(cfg: dict, set_args) -> int | None:
     for kv in set_args or []:
         k, sep, v = kv.partition("=")
         if not sep or not k.strip():
-            print(f"--set: expected KEY=VALUE, got {kv!r}")
+            print(f"--setは設定キー=値の形式で指定してください（指定値: {kv!r}）")
             return 1
         try:
             val = json.loads(v)
         except RecursionError:
-            print("--set: JSON nesting is too deep — nothing written")
+            print("--setのJSONの入れ子が深すぎます。変更は保存していません")
             return 1
         except ValueError:
             val = v
@@ -1617,9 +1638,9 @@ def _init_apply_set_overrides(cfg: dict, set_args) -> int | None:
     selection = (_get_key(cfg, "semantic.fact_source"),
                  _get_key(cfg, "semantic.fact_source_gate"))
     if selection[0] == "canonical" and selection != fact_selection:
-        print("--set: semantic.fact_source=canonical (and its gate) can "
-              "only be set via `mcs_setup.py fact-source canonical "
-              "--gate-evidence <report>` — config not written")
+        print("--setでは検証済み解析結果の採用（semantic.fact_source=canonical）と承認情報を変更できません。"
+              "専用の`mcs_setup.py fact-source canonical "
+              "--gate-evidence <report>`を使ってください。設定は保存していません")
         return 1
     return None
 
@@ -1630,8 +1651,8 @@ def _init_apply_section_flags(cfg: dict, args) -> None:
         sem = cfg.get("semantic")
         if not isinstance(sem, dict):
             if sem is not None:
-                print("config: existing 'semantic' is not an object — "
-                      "resetting")
+                print("既存の意味解析設定（semantic）の形式が不正です。"
+                      "この設定項目を空にして設定し直します")
             sem = cfg["semantic"] = {}
         sem["mode"] = args.semantic_mode
         if args.project_ids is not None:
@@ -1640,8 +1661,8 @@ def _init_apply_section_flags(cfg: dict, args) -> None:
         sig = cfg.get("signals")
         if not isinstance(sig, dict):
             if sig is not None:
-                print("config: existing 'signals' is not an object — "
-                      "resetting")
+                print("既存のアラート設定（signals）の形式が不正です。"
+                      "この設定項目を空にして設定し直します")
             sig = cfg["signals"] = {}
         sig["notify"] = args.signals_notify
 
@@ -1663,8 +1684,8 @@ def _init_apply_section_flags(cfg: dict, args) -> None:
         sig = cfg.get("signals")
         if not isinstance(sig, dict):
             if sig is not None:
-                print("config: existing 'signals' is not an object — "
-                      "resetting")
+                print("既存のアラート設定（signals）の形式が不正です。"
+                      "この設定項目を空にして設定し直します")
             sig = cfg["signals"] = {}
         if orgs:
             sig["self_organizations"] = orgs
@@ -1715,8 +1736,8 @@ def _init_store_secrets(args, login_id) -> int | None:
     pw = os.environ.get("MCS_SETUP_PASSWORD")
     if pw is None and not args.yes:
         pw = getpass.getpass(
-            "MCS password (stored in Keychain 'mcs-adapter' + .env "
-            "reboot fallback, leave empty to skip): ")
+            "MCSのパスワード（入力は表示されません。Keychainのmcs-adapterと、"
+            "再起動時に使う本人専用の.envへ保存。空欄なら変更しません）: ")
     keychain_failed = False
     if pw:
         # .env carries the same secret as the reboot fallback — after a
@@ -1724,11 +1745,11 @@ def _init_store_secrets(args, login_id) -> int | None:
         # auto_login reads MCS_PASSWORD when the keychain can't answer.
         updates["MCS_PASSWORD"] = pw
         if not _keychain_store(login_id or "mcs", pw):
-            print("keychain update not verified — check the existing entry; "
-                  "the .env fallback is handled below")
+            print("Keychainへの保存を確認できません。既存の登録内容を確認してください。"
+                  "再起動時に使う.envへの保存結果は続けて表示します")
             keychain_failed = True
         else:
-            print(f"keychain: '{KEYCHAIN_SERVICE}' registered")
+            print(f"Keychain: '{KEYCHAIN_SERVICE}' を登録しました")
 
     ts_key = os.environ.get("TYPESAFE_API_KEY")
     if ts_key:
@@ -1737,9 +1758,9 @@ def _init_store_secrets(args, login_id) -> int | None:
         try:
             _env_write(ENV_PATH, updates)
         except ValueError:
-            print(".env: invalid credential format; existing file retained")
+            print(".env: 認証情報の形式が正しくありません。既存のファイルを保持しました")
             return 1
-        print(f".env: wrote {sorted(updates)} to {ENV_PATH} (0600)")
+        print(f".env: {sorted(updates)} を {ENV_PATH} に保存しました（本人のみ読書き可能）")
     if keychain_failed:
         return 1
     return None
@@ -1794,11 +1815,11 @@ def cmd_init(args) -> int:
     try:
         mcs_runtime.mode(cfg)
     except ValueError:
-        print("init: runtime_mode must be 'hermes' or 'standalone' — nothing written")
+        print("初期設定: 実行方法はhermesまたはstandaloneを指定してください。変更は保存していません")
         return 1
     why = _init_recovery_problem(cfg)
     if why:
-        print("init: recovery_python " + why + " — nothing written")
+        print("初期設定: 復旧用Python " + why + "。変更は保存していません")
         return 1
     checked_recovery = cfg.get("recovery_python")
     # standalone keeps the plugin grants in config.json: an id list it
@@ -1808,8 +1829,8 @@ def cmd_init(args) -> int:
     if mcs_runtime.standalone(cfg) and getattr(args, "plugin_project_ids", None):
         literal = _project_ids_yaml(args.plugin_project_ids)
         if literal is None:
-            print("init: --plugin-project-ids: 正の整数の project ID を"
-                  "カンマ区切りで指定してください — nothing written")
+            print("init: --plugin-project-ids: 0より大きい整数のプロジェクトID を"
+                  "カンマ区切りで指定してください。変更は保存していません")
             return 1
         standalone_projects = json.loads(literal)
 
@@ -1824,11 +1845,11 @@ def cmd_init(args) -> int:
     # The wizard can change the selected recovery interpreter.
     why = None if cfg.get("recovery_python") == checked_recovery else _init_recovery_problem(cfg)
     if why:
-        print("init: recovery_python " + why + " — config.json not written")
+        print("初期設定: 復旧用Python " + why + "。config.jsonは保存していません")
         return 1
     errors, _ = validate_config(cfg)
     if errors:
-        print("init: invalid configuration — nothing written")
+        print("初期設定: 設定に誤りがあるため保存していません。次の項目を直してください")
         for error in errors:
             print("  " + error)
         return 1
@@ -1845,7 +1866,7 @@ def cmd_init(args) -> int:
         except ValueError:
             reason = "invalid_dictionary"
         if reason:
-            print(f"init: drug_map {reason} — nothing written")
+            print(f"初期設定: 薬剤辞書の設定を確認してください（詳細: {reason}）。変更は保存していません")
             return 1
     login_id = cfg.get("mcs_login_id")
 
@@ -1863,7 +1884,7 @@ def cmd_init(args) -> int:
         os.chmod(d, 0o700)
     _write_atomic(CONF_PATH, json.dumps(cfg, ensure_ascii=False,
                                       indent=2, sort_keys=True) + "\n", 0o600)
-    print(f"config: wrote {CONF_PATH}")
+    print(f"設定を保存しました: {CONF_PATH}")
     integration_ok = _apply_plugin_integration(cfg, args)
     if cfg.get("runtime_mode") == "standalone":
         integration_ok = _init_standalone_connectors(cfg, args, integration_ok)
@@ -1890,16 +1911,16 @@ def cmd_init(args) -> int:
     if mcs_runtime.mode(cfg) != mode_before:
         # config alone does not switch runtimes: the interpreter, the
         # schedule and the Slack/Discord connection belong to install.sh
-        print(f"init: runtime_mode is now {mcs_runtime.mode(cfg)} — run "
-              f"`./install.sh --mode {mcs_runtime.mode(cfg)}` to install its "
-              "runtime and move the scheduled jobs (docs/guides/STANDALONE.md)")
+        print(f"初期設定: 実行方法を{mcs_runtime.mode(cfg)}に変更しました。"
+              f"`./install.sh --mode {mcs_runtime.mode(cfg)}`で実行環境を導入し、"
+              "定期処理を移行してください（docs/guides/STANDALONE.md）")
     check_result = cmd_check(args)
     if not integration_ok:
         if cfg.get("runtime_mode") == "standalone":
-            print("init: FAIL — standalone credentials were not fully written; repair the connector and re-run init")
+            print("初期設定: 独立接続の認証情報を保存できませんでした。接続設定を確認し、mcs setupを再実行してください")
         else:
-            print("init: FAIL — Hermes plugin settings were not fully "
-                  "written; repair the serving profile/CLI and re-run init")
+            print("初期設定: Hermes連携の設定をすべて"
+                  "保存できませんでした。使用するプロファイルとHermesコマンドを確認してinitを再実行してください")
         return 1
     return 1 if gateway_result else check_result
 
@@ -1928,23 +1949,23 @@ def cmd_fact_source(args) -> int:
     cfg = load_config()
     existing_sem = cfg.get("semantic")
     if existing_sem is not None and not isinstance(existing_sem, dict):
-        print("fact_source: 'semantic' in config.json is not an object "
-              "— fix the file manually before changing fact_source")
+        print("解析結果の採用方法: config.jsonのsemanticの形式が不正です。"
+              "変更前にファイルを修正してください")
         return 1
     sem = cfg.setdefault("semantic", {})
     source = args.fact_source
     if source == "canonical":
         if not args.gate_evidence:
-            print("fact_source: canonical requires --gate-evidence "
-                  "(a semantic_evaluation report with a passing "
-                  "human-labelled gate)")
+            print("検証済み解析結果の採用には--gate-evidenceが必要です "
+                  "（人が正解を付けた評価で合格した"
+                  "semantic_evaluationレポート）")
             return 1
         try:
             raw = _evaluation_input(args.gate_evidence)
             from semantic_candidate import strict_json
             report = strict_json(raw)
         except (OSError, ValueError, RecursionError) as e:
-            print(f"fact_source: gate evidence unreadable ({type(e).__name__})")
+            print(f"評価証拠を読み取れません。指定ファイルを確認してください（{type(e).__name__}）")
             return 1
         gate = report.get("gate") if isinstance(report, dict) else None
         provenance = report.get("label_provenance") \
@@ -1956,28 +1977,28 @@ def cmd_fact_source(args) -> int:
                 or not isinstance(gate, dict) or gate.get("pass") is not True \
                 or gate.get("g6_eligible") is not True \
                 or type(human) is not int or human < 1:
-            print("fact_source: gate evidence does not pass on human-labelled data")
+            print("人が正解を付けたデータでの評価に合格していません。採用条件を満たす評価証拠が必要です")
             return 1
         try:
             criteria, criteria_sha = _shipped_g6_criteria()
         except Exception as e:
             # the gate cannot be judged without its criteria — fail closed
-            print(f"fact_source: shipped G6 criteria unreadable "
+            print(f"配布されているG6評価基準を読み取れません "
                   f"({type(e).__name__}: {e})")
             return 1
         reasons = gate.get("reasons")
         problem = None
         if report.get("criteria_sha256") != criteria_sha \
                 or report.get("criteria_version") != criteria["version"]:
-            problem = ("not scored against the shipped G6 criteria "
+            problem = ("配布されているG6評価基準での採点ではありません "
                        f"({os.path.relpath(G6_CRITERIA_PATH, REPO_ROOT)})")
         elif human < criteria["min_human_labels"]:
-            problem = (f"{human} human labels < min_human_labels "
+            problem = (f"人が正解を付けたデータは{human}件で、必要件数に達していません。必要件数: "
                        f"{criteria['min_human_labels']}")
         elif not isinstance(reasons, list) or reasons:
-            problem = "gate reasons not empty"
+            problem = "評価の不合格理由が残っています"
         if problem:
-            print(f"fact_source: gate evidence rejected — {problem}")
+            print(f"評価証拠を受け付けられません。評価条件を確認してください（詳細: {problem}）")
             return 1
         from semantic_candidate import promotion_problem, token, record_approval
         sem["fact_source"] = source
@@ -1986,16 +2007,16 @@ def cmd_fact_source(args) -> int:
         except (ValueError, TypeError, KeyError, OSError, AttributeError):
             problem = "invalid_report"
         if problem:
-            print(f"fact_source: gate evidence rejected — {problem}")
+            print(f"評価証拠を受け付けられません。評価条件を確認してください（詳細: {problem}）")
             return 1
         if (getattr(args, 'confirm_human', False) is not True
                 or getattr(args, 'reason', None) != 'reviewed_sealed_holdout'):
-            print('fact_source: --confirm-human --reason reviewed_sealed_holdout required')
+            print('人による確認と理由の指定が必要です: --confirm-human --reason reviewed_sealed_holdout')
             return 1
         try:
             sem['fact_source_approval'] = record_approval(cfg, report)
         except (OSError, ValueError):
-            print('fact_source: approval receipt could not be recorded')
+            print('承認記録を保存できません。保存先の権限と空き容量を確認してください')
             return 1
         sem["fact_source_evidence"] = report
         sem["fact_source_gate"] = token(cfg, report)
@@ -2009,13 +2030,13 @@ def cmd_fact_source(args) -> int:
     sem_errors = [e for e in errors
                   if e.startswith(("config: semantic", "semantic:"))]
     if sem_errors:
-        print("fact_source: refusing to write invalid semantic config — "
+        print("意味解析の設定に誤りがあるため保存していません。修正してください: "
               + "; ".join(sem_errors))
         return 1
     _write_atomic(CONF_PATH, json.dumps(cfg, ensure_ascii=False,
                                       indent=2, sort_keys=True) + "\n", 0o600)
-    print(f"config: semantic.fact_source = {source}"
-          + (f" (gate {sem['fact_source_gate']})"
+    print(f"解析結果の採用方法を保存しました: semantic.fact_source = {source}"
+          + (f"（評価証拠の識別子: {sem['fact_source_gate']}）"
              if source == "canonical" else ""))
     return 0
 
@@ -2032,17 +2053,17 @@ def cmd_jev_value(args) -> int:
     import semantic_jev as jev
     import semantic_evaluation
     if not math.isfinite(args.deadline) or args.deadline <= 0:
-        print("jev-value: deadline must be finite and positive")
+        print("追加解析の評価: 制限時間は0より大きい有限の数値で指定してください")
         return 1
     try:
         raw = _evaluation_input(args.cases)
         payload = json.loads(raw)
     except (OSError, ValueError, RecursionError):
-        print("jev-value: cases unreadable")
+        print("追加解析の評価: 評価ケースを読み取れません。指定ファイルを確認してください")
         return 1
     cases = payload.get("cases") if isinstance(payload, dict) else None
     if not isinstance(cases, list) or not cases:
-        print("jev-value: cases file has no cases list")
+        print("追加解析の評価: ファイルにcasesのリストがありません")
         return 1
     try:
         allowed = {}
@@ -2056,7 +2077,7 @@ def cmd_jev_value(args) -> int:
                 or len({case["id"] for case in cases}) != len(cases):
             raise ValueError("synthetic_cases_required")
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
-        print("jev-value: checked-in synthetic cases required")
+        print("追加解析の評価: 配布されている完全合成の評価ケースを使用してください")
         return 1
     cfg = load_config()
     scfg = cfg.get("semantic") or {}
@@ -2075,13 +2096,13 @@ def cmd_jev_value(args) -> int:
     try:
         semantic_evaluation.write_report(args.out, report)
     except OSError as e:
-        print(f"jev-value: cannot write report ({e})")
+        print(f"追加解析の評価: レポートを保存できません。保存先を確認してください（{e}）")
         return 1
     audit = report["audit"]
-    print(f"jev-value: cases={report['cases']} "
-          f"evaluated={report['evaluated']} "
-          f"deterministic={audit['deterministic_findings']} "
-          f"jev_incremental={audit['jev_incremental_findings']} "
+    print(f"追加解析の評価: ケース数={report['cases']} "
+          f"評価済み={report['evaluated']} "
+          f"ルールで検出={audit['deterministic_findings']} "
+          f"Jevで追加検出={audit['jev_incremental_findings']} "
           f"-> {args.out}")
     return 0 if report["evaluated"] else 2
 
@@ -2113,11 +2134,11 @@ def _semantic_queue_warnings(db, sem: dict, now: float):
             (kind, now - 86400, *params)).fetchone()[0]
         age_d = (now - oldest) / 86400 if oldest else 0
         if done_24h == 0 and age_d >= 1:
-            yield (f"{kind} jobs pending={pending} with no progress "
-                   f"for {age_d:.1f}d — drain may be stalled")
+            yield (f"{kind}: 待機{pending}件、"
+                   f"{age_d:.1f}日間進捗がありません。解析処理の稼働を確認してください")
         elif age_d > 3:
-            yield (f"{kind} jobs pending={pending} oldest eligible "
-                   f"wait={age_d:.1f}d — review drain capacity")
+            yield (f"{kind}: 待機{pending}件、実行可能な処理の最長待ち時間は"
+                   f"{age_d:.1f}日です。解析処理の処理能力を確認してください")
 
 
 def _extract_queue_warnings(db):
@@ -2127,9 +2148,9 @@ def _extract_queue_warnings(db):
         "SELECT COUNT(*) FROM messages m WHERE " + extract_llm.pending_pred()
     ).fetchone()[0]
     if backlog > 500:
-        yield (f"extract_llm backlog={backlog} messages — "
-               "drainers (ai.mcs.extract-drainer*) serve newest eligible first; "
-               "review eligible backlog and recent progress")
+        yield (f"AI解析の待機は{backlog}件です。"
+               "解析処理（ai.mcs.extract-drainer*）は実行可能な新しい投稿から処理します。"
+               "待機件数と最近の進捗を確認してください")
 
 
 def _fact_pipeline_warnings(db, sem: dict):
@@ -2146,14 +2167,14 @@ def _fact_pipeline_warnings(db, sem: dict):
         " 'semantic_facts_v2','canonical_projection')"
     ).fetchone()
     if llm_done > 50 and v2 == 0:
-        yield ("semantic shadow pipeline produced 0 "
-               f"semantic_facts_v2 against {llm_done} "
-               "extract_llm — the semantic drain has never "
-               "run (check semantic queue/scheduling)")
+        yield ("比較用の意味解析結果がありません。"
+               f"{llm_done}件のAI解析結果に対してsemantic_facts_v2は0件です。"
+               "意味解析の実行が"
+               "確認できません。意味解析の待機列と実行間隔を確認してください")
     if fact_source == "canonical" and v2 > 0 and canon == 0:
-        yield ("fact_source=canonical but canonical_projection"
-               " has 0 artifacts — every generation parks "
-               "non-PASS (check v4_diagnostic / semantic_audit)")
+        yield ("検証済み解析結果を採用する設定ですが、canonical_projection"
+               "の生成結果が0件です。公開条件を満たしていない可能性があります。"
+               "v4_diagnostic / semantic_auditで確認してください")
 
 
 def _queue_warnings(cfg: dict | None = None) -> list[str]:
@@ -2175,7 +2196,7 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
             out.extend(_extract_queue_warnings(db))
             out.extend(_fact_pipeline_warnings(db, sem))
     except Exception as e:
-        out.append(f"queue health unreadable ({type(e).__name__})")
+        out.append(f"待機処理の状態を読み取れません（{type(e).__name__}）")
     return out
 
 
@@ -2186,27 +2207,27 @@ def cmd_check(args) -> int:
     e0, w0 = check_runtime(cfg)
     why = _config_problem()
     if why:
-        e0 = e0 + [f"{CONF_PATH} is unreadable or invalid ({why}) — "
-                   "every setting reads as unset; fix it by hand or run "
-                   "`mcs_setup.py init --yes` to move it aside"]
+        e0 = e0 + [f"設定ファイル{CONF_PATH}を読み取れないか、形式が不正です（詳細: {why}）。"
+                   "すべて未設定として扱われています。修正するか、"
+                   "`mcs_setup.py init --yes`で退避して設定し直してください"]
     e1, w1 = validate_config(cfg)
     e2, w2 = check_environment(cfg)
     e3, w3 = _script_drift() if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
     errors = e0 + e1 + e2 + e3
     warnings = w0 + w1 + w2 + w3 + _queue_warnings(cfg)
     for w in warnings:
-        print(f"  warn : {w}")
+        print(f"  注意: {w}")
     for e in errors:
-        print(f"  error: {e}")
+        print(f"  問題: {e}")
     if errors:
-        print(f"blockers ({len(errors)}) — fix in this order:")
+        print(f"動作を妨げる問題が{len(errors)}件あります。次の順で修正してください:")
         for i, e in enumerate(errors, 1):
             m = re.search(r"`([^`]+)`", e)
             fix = m.group(1) if m else (
-                "mcs_setup.py init" if e in e1 else "see the error above")
-            print(f"  {i}. {e.split(' — ')[0]}\n     fix: {fix}")
-    print("check: " + ("FAIL" if errors else "OK")
-          + f" ({len(errors)} errors, {len(warnings)} warnings)")
+                "mcs_setup.py init" if e in e1 else "上記の問題の説明を確認してください")
+            print(f"  {i}. {e.split(' — ')[0]}\n     対処: {fix}")
+    print("設定確認: " + ("要修正" if errors else "正常")
+          + f" （問題{len(errors)}件、注意{len(warnings)}件）")
     return 1 if errors else 0
 
 
@@ -2232,24 +2253,24 @@ def _check_llm(cfg: dict) -> tuple[list[str], list[str]]:
         models_url, slots_url = local_llm.probe_urls(endpoint)
         status, _, raw = local_llm.bounded_request(models_url, "GET", None, 3)
         if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
-            return [], ["local LLM models probe failed"]
+            return [], ["ローカルAIのモデル情報を取得できません。AIサーバーの稼働と接続先を確認してください"]
     except (OSError, ValueError, RuntimeError):
-        return [], ["local LLM models unavailable"]
+        return [], ["ローカルAIに接続できません。AIサーバーの稼働と接続先を確認してください"]
     try:
         status, _, raw = local_llm.bounded_request(slots_url, "GET", None, 3)
         if len(raw) > bounded_http.MAX_RESPONSE_BYTES:
-            return [], ["local LLM /slots unreadable — response too large"]
+            return [], ["ローカルAIの同時処理枠を確認できません。応答が大きすぎます"]
         slots = json.loads(raw.decode("utf-8"))
         if status != 200 or not isinstance(slots, list) \
                 or not all(isinstance(slot, dict) for slot in slots):
-            return [], ["local LLM /slots unreadable — mismatch cannot be verified"]
+            return [], ["ローカルAIの同時処理枠を読み取れないため、設定との一致を確認できません"]
         if len(slots) < local_llm.SLOT_COUNT:
             errors.append(
-                f"llama-server advertises {len(slots)} slots but the "
-                f"selected count is {local_llm.SLOT_COUNT} — fix -np "
-                "or lower SLOT_COUNT")
+                f"AIサーバーの同時処理枠は{len(slots)}ですが、"
+                f"設定では{local_llm.SLOT_COUNT}です。サーバーの-npを修正するか、"
+                "SLOT_COUNTを減らしてください")
     except (OSError, ValueError, RuntimeError, RecursionError):
-        warnings.append("local LLM /slots unreadable — mismatch cannot be verified")
+        warnings.append("ローカルAIの同時処理枠を読み取れないため、設定との一致を確認できません")
     return errors, warnings
 
 
@@ -2309,12 +2330,12 @@ print(json.dumps({'python': '.'.join(map(str, sys.version_info[:3])),
 def _runtime_problem(facts: RuntimeFacts | None, *, recovery: bool = False,
                      allow_runtime_migration: bool = False) -> str | None:
     if facts is None:
-        return "runtime metadata unavailable"
+        return "実行環境の情報を取得できません"
     minimum = (3, 10) if allow_runtime_migration and not recovery else (3, 14)
     if tuple(map(int, facts["python"].split("."))) < minimum:
-        return "runtime Python version unsupported"
+        return "実行環境のPythonの版が対応範囲外です"
     if not sqlite_wal_safe(tuple(map(int, facts["sqlite"].split(".")))):
-        return "runtime SQLite WAL-reset fix missing"
+        return "実行環境のSQLiteに、データ保存の安全性に必要な修正がありません"
     return None
 
 
@@ -2464,7 +2485,7 @@ def _sync_recovery(cfg, note, dry) -> int:
     if actual == desired:
         return 0
     if sys.platform != "darwin" or not _recovery_owned():
-        note("recovery: ownership or platform unverifiable — not replaced")
+        note("復旧監視: 所有者またはOSを確認できないため、置き換えていません")
         return 1
     try:
         text = Path(REPO_ROOT, "deployment/launchagents",
@@ -2473,10 +2494,10 @@ def _sync_recovery(cfg, note, dry) -> int:
             "RECOVERY_PYTHON": desired, "RECOVERY": RECOVERY_DIR,
             "DATA": str(Path(HOME, "data"))}.items()})
         if _recovery_executable(plistlib.loads(body.encode())) != desired:
-            note("recovery: template differs from desired executable — not replaced")
+            note("復旧監視: 設定のひな形と使用するPythonが一致しないため、置き換えていません")
             return 1
     except (OSError, ValueError, TypeError):
-        note("recovery: template unverifiable — not replaced")
+        note("復旧監視: 設定のひな形を確認できないため、置き換えていません")
         return 1
     uid = os.getuid()
     target = f"gui/{uid}/{RECOVERY_LABEL}"
@@ -2486,20 +2507,20 @@ def _sync_recovery(cfg, note, dry) -> int:
                     or not re.search(r"^\s*state = (?:not running|waiting)\s*$",
                                      current.stdout or "", re.M))) \
             or (not loaded and current.returncode != 113):
-        note("recovery: active or state unknown — not replaced")
+        note("復旧監視: 実行中または状態不明のため、置き換えていません")
         return 1
-    note("recovery: owned idle interpreter selection drift")
+    note("復旧監視: 停止中の既存監視で、使用するPythonの設定変更を検出しました")
     if dry:
         return 0
     data = Path(HOME, "data")
     try:
         st = data.lstat()
     except OSError:
-        note("recovery: data lock directory unavailable — not replaced")
+        note("復旧監視: 排他制御用の保存先がないため、置き換えていません")
         return 1
     if (data.resolve() != data or not stat.S_ISDIR(st.st_mode)
             or st.st_uid != uid or stat.S_IMODE(st.st_mode) != 0o700):
-        note("recovery: data lock directory unsafe — not replaced")
+        note("復旧監視: 排他制御用の保存先の安全性を確認できないため、置き換えていません")
         return 1
     fds = []
     parent_held = _update_parent_holds_locks(data)
@@ -2510,7 +2531,7 @@ def _sync_recovery(cfg, note, dry) -> int:
             fds.append(fd)
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode) or st.st_uid != uid:
-                note("recovery: lock ownership unknown — not replaced")
+                note("復旧監視: 排他制御ファイルの所有者が不明のため、置き換えていません")
                 return 1
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -2521,18 +2542,18 @@ def _sync_recovery(cfg, note, dry) -> int:
             if _run(["launchctl", "bootout", target]).returncode != 0:
                 return 1
             if _run(["launchctl", "print", target], timeout=10).returncode != 113:
-                note("recovery: unload unverifiable — plist unchanged")
+                note("復旧監視: 停止を確認できないため、常駐設定は変更していません")
                 return 1
         _write_atomic(str(path), body, 0o600)
         if loaded and _run(["launchctl", "bootstrap", f"gui/{uid}", str(path)]).returncode != 0:
-            note("recovery: safe desired plist installed but bootstrap failed — no fallback")
+            note("復旧監視: 新しい常駐設定を保存しましたが起動に失敗しました。別のPythonへの自動切り替えは行いません")
             return 1
         if loaded and _run(["launchctl", "print", target], timeout=10).returncode != 0:
-            note("recovery: desired watchdog load unverifiable — no fallback")
+            note("復旧監視: 新しい監視の起動を確認できません。別のPythonへの自動切り替えは行いません")
             return 1
         return 0
     except (OSError, BlockingIOError):
-        note("recovery: lock busy or operation failed — not replaced")
+        note("復旧監視: 他の処理が使用中か、操作に失敗したため、置き換えていません")
         return 1
     finally:
         for fd in reversed(fds):
@@ -2689,32 +2710,59 @@ def cmd_doctor(args) -> int:
     if getattr(args, "json", False):
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
-        print(f"doctor: mode={mode}, Python={report['python']}, SQLite={report['sqlite']}")
-        print(f"  card worker: {worker['state']} ({worker['reason']})")
+        labels = {
+            "hermes": "Hermes経由", "standalone": "独立動作", "invalid": "設定不正",
+            "healthy": "正常", "warning": "注意あり", "blocked": "要修正",
+            "not_checked": "未確認", "unknown": "確認できません", "stale": "古い記録",
+            "started": "起動済み", "disabled": "停止・無効", "not_applicable": "対象外",
+            "worker_started": "配送処理の起動を確認しました",
+            "profile_mismatch": "使用するプロファイルが一致しません",
+            "owner_unverified": "配送の担当を確認できません",
+            "application_mismatch": "接続アプリが一致しません",
+            "standalone_owned": "独立動作が配送を担当しています",
+            "worker_start_failed": "配送処理の起動に失敗しました",
+            "worker_restart_required": "配送処理の再起動が必要です",
+            "worker_start_unverified": "配送処理の起動を確認できません",
+            "worker_not_hermes_owned": "Hermes経由の配送は対象外です",
+            "running_revision_unknown": "稼働中（読み込み済みの版は未確認）",
+            "requested": "再起動を要求済み", "failed": "失敗",
+            "supervisor_restart_verified": "管理プロセスの再起動を確認済み",
+            "configuration": "設定", "interpreter": "この診断の実行環境",
+            "runtime": "常駐処理の実行環境", "recovery_runtime": "復旧用の実行環境",
+            "selected": "選択した実行環境", "recovery": "復旧用の実行環境",
+            "llm": "ローカルAI", "services": "常駐処理", "credentials": "認証情報",
+            "data": "保存データ", "current": "現在の実行環境",
+        }
+        print(f"動作診断: 実行方法={labels.get(mode, mode)}、Python={report['python']}、SQLite={report['sqlite']}")
+        print(f"  通知の配送処理: {labels.get(worker['state'], '未確認')}"
+              f"（{labels.get(worker['reason'], '診断コード: ' + worker['reason'])}）")
         if worker['restore_delivery_held']:
-            print("  restore: collect_only — 配送は復元保留中")
+            print("  復元後の保留: 収集のみ継続し、配送は保留しています")
         elif worker['restore_delivery_held'] is None:
-            print("  restore: unknown — 復元保留の状態を確認できません")
+            print("  復元後の保留: 状態を確認できません")
         for line in status_lines(operations):
             print(line)
         source = report["source"]
-        print(f"  disk revision: {source['disk']['revision'] or 'unknown'}, "
-              f"dirty={source['disk']['dirty']}")
-        print(f"  gateway source: {source['gateway']['status']}, "
-              f"PID={source['gateway']['pid']}, start={source['gateway']['started_at']}, "
-              f"loaded revision={source['gateway']['source_revision'] or 'unknown'}")
-        print(f"  gateway restart request: {source['restart_request']['status']} "
-              "(supervisor PID evidence only; application health is separate)")
+        dirty = {True: "あり", False: "なし", None: "未確認"}[source['disk']['dirty']]
+        print(f"  保存されているプログラムの版: {source['disk']['revision'] or '未確認'}、"
+              f"未コミットの変更={dirty}")
+        started_at = source['gateway']['started_at']
+        started = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(started_at)) if started_at else "未確認"
+        print(f"  接続サービス: {labels.get(source['gateway']['status'], '未確認')}、"
+              f"プロセスID={source['gateway']['pid'] or '未確認'}、開始時刻={started}、"
+              f"読み込み済みの版={source['gateway']['source_revision'] or '未確認'}")
+        print(f"  接続サービスの再起動: {labels.get(source['restart_request']['status'], '未確認')} "
+              "（管理プロセスの確認結果です。アプリの正常動作は別途確認が必要です）")
         for role, facts in runtimes.items():
             if facts is not None:
-                print(f"  {role}: Python={facts['python']}, SQLite={facts['sqlite']}, "
-                      f"SDK metadata={json.dumps(facts['packages'])}")
+                print(f"  {labels.get(role, role)}: Python={facts['python']}、SQLite={facts['sqlite']}、"
+                      f"接続ライブラリの版={json.dumps(facts['packages'])}")
         for scope, check in checks.items():
-            print(f"  {scope}: {check['status']} "
-                  f"({check['errors']} errors, {check['warnings']} warnings)")
-        print("configuration: mcs setup check (fix steps); runtime/SQLite: review mcs install "
-              "(SQLite >=3.51.3, 3.50.7 or 3.44.6); "
-              "unchecked probes: --probe llm / --probe services")
+            print(f"  {labels.get(scope, scope)}: {labels[check['status']]} "
+                  f"（問題{check['errors']}件、注意{check['warnings']}件）")
+        print("設定の修正方法はmcs setup checkで確認してください。Python・SQLiteの問題はmcs installの導入手順を確認してください。"
+              "SQLiteは修正済みの対応系列（3.51.3以上、3.50.7以上、3.44.6以上）が必要です。"
+              "追加診断: --probe llm（AI）、--probe services（常駐処理）、--probe data（保存データ）")
     return 1 if any(check["status"] == "blocked" for check in checks.values()) else 0
 
 
@@ -2799,12 +2847,12 @@ def _hermes_py_problem() -> str | None:
 def _py_problem(exe: str) -> str | None:
     """None when `exe` is an executable Python >= 3.14."""
     if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
-        return f"interpreter {exe} is missing or not executable"
+        return f"Python（{exe}）が見つからないか、実行できません"
     r = _run([exe, "-c",
               "import sys; sys.exit(sys.version_info < (3, 14))"],
              timeout=20)
     if r.returncode != 0:
-        return (f"interpreter {exe} is not a working Python >= 3.14 "
+        return (f"Python（{exe}）を起動できないか、3.14未満です "
                 f"(rc={r.returncode})")
     # Inspect the actual service interpreter's linked SQLite, not the
     # version of a sqlite3 executable or a different Python on PATH.
@@ -2815,7 +2863,7 @@ def _py_problem(exe: str) -> str | None:
               "(v[:2] == (3,44) and v >= (3,44,6)) else 1)"],
              timeout=20)
     if r.returncode:
-        return "service interpreter lacks the SQLite WAL-reset fix (need >=3.51.3, 3.50.7 or 3.44.6)"
+        return "常駐処理のSQLiteに安全なデータ保存の修正がありません（3.51.3以上、3.50.7以上、または3.44.6以上の対応系列が必要です）"
     return None
 
 
@@ -2873,7 +2921,7 @@ def _owned_label(label: str) -> bool:
 
 
 def _install_fix(stage: str) -> str:
-    return f"re-run `{os.path.join(REPO_ROOT, 'install.sh')}` ({stage})"
+    return f"`{os.path.join(REPO_ROOT, 'install.sh')}`を再実行してください（{stage}）"
 
 
 def _standalone_py_problem(cfg: dict) -> str | None:
@@ -2892,31 +2940,31 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
     standalone = cfg.get("runtime_mode") == "standalone"
     why = _standalone_py_problem(cfg) if standalone else _hermes_py_problem()
     if why:
-        errors.append(f"{why} — cron wrappers and launchd agents cannot "
-                      "start; " + _install_fix(
-                          "stage 2 rebuilds the standalone venv" if standalone else "stage 2 rebuilds the hermes-agent venv")
-                      + ", then `mcs_setup.py services`")
+        errors.append(f"{why} — 定期処理・常駐処理を"
+                      "開始できません。" + _install_fix(
+                          "手順2で独立動作のPython環境を再構築" if standalone else "手順2でHermesのPython環境を再構築")
+                      + "、続いて`mcs_setup.py services`を実行してください")
     exe = _hermes_exe(cfg) if not standalone else ""
     if not standalone and _hermes_ok(exe) and not _hermes_ok(_hermes_exe(cfg, LAUNCHD_PATH)):
         errors.append(
-            f"hermes resolves here ({exe}) but not on the launchd PATH "
-            f"({LAUNCHD_PATH}) — scheduled jobs cannot send; "
-            f"`ln -s {shlex.quote(exe)} ~/.local/bin/hermes` (or "
-            "init --set hermes_bin=...)")
+            f"この操作環境ではHermes（{exe}）を使えますが、常駐処理の検索先"
+            f"（{LAUNCHD_PATH}）では見つからず、定期処理から通知できません。"
+            f"`ln -s {shlex.quote(exe)} ~/.local/bin/hermes`または"
+            "init --set hermes_bin=...で指定してください")
     if standalone:
         path = _standalone_service_path()
         if not os.path.exists(path):
-            warnings.append("standalone supervised service not installed — run `mcs_setup.py services` or run `python -m mcs_standalone run` in a supervisor")
+            warnings.append("独立動作の常駐設定が未導入です。`mcs_setup.py services`を実行してください。個別の起動方法: 常駐管理ツールから`python -m mcs_standalone run`を起動してください")
         elif not _standalone_loaded():
-            errors.append("standalone service installed but not loaded — run `mcs_setup.py services`")
+            errors.append("独立動作の常駐処理は導入済みですが読み込まれていません。`mcs_setup.py services`を実行してください")
         else:
             try:
                 from mcs_standalone.service import render
                 _, desired = render(HOME, platform=sys.platform)
                 if Path(path).read_text(encoding="utf-8") != desired:
-                    errors.append("standalone service differs from current source — run `mcs_setup.py services`")
+                    errors.append("独立動作の常駐設定が現在のプログラムと一致しません。`mcs_setup.py services`を実行してください")
             except (OSError, ValueError):
-                errors.append("standalone service content unverifiable")
+                errors.append("独立動作の常駐設定を確認できません")
         if os.path.exists(path):
             e, w = _check_standalone_health()
             errors += e
@@ -2929,24 +2977,24 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
         return errors, warnings   # check_environment already warns
     tool = os.path.join(RECOVERY_DIR, "mcs_recover.py")
     plist = os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")
-    fix = _install_fix("stage 6 installs the recovery tool + watchdog")
+    fix = _install_fix("手順6で復旧ツールと定期監視を導入")
     try:
         deployed = Path(tool).read_bytes()
     except OSError:
         deployed = None
     if deployed is None or not os.path.exists(plist):
-        warnings.append(f"update recovery watchdog ({RECOVERY_LABEL}) not "
-                        f"installed — a broken update cannot self-heal; "
+        warnings.append(f"更新の復旧監視（{RECOVERY_LABEL}）が"
+                        f"未導入です。更新が中断しても自動復旧できません。"
                         + fix)
     else:
         why = _runtime_problem(_recovery_runtime(), recovery=True)
         if why:
-            errors.append(f"recovery watchdog {why} — restore-time writes/checkpoints "
-                          "are not verified safe; " + fix)
+            errors.append(f"復旧監視: {why}。復元時のデータ保存を"
+                          "安全に行えるか確認できません。" + fix)
         with suppress(OSError):
             if deployed != Path(REPO_ROOT, "deployment", "recovery",
                                 "mcs_recover.py").read_bytes():
-                warnings.append(f"{tool} differs from the repo copy — "
+                warnings.append(f"復旧ツール{tool}が配布版と異なります。"
                                 + fix)
         try:
             recorded = Path(RECOVERY_DIR, "repo_path").read_text(
@@ -2954,25 +3002,25 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
         except OSError:
             recorded = HOME   # mcs_recover.py's own fallback
         if os.path.realpath(recorded) != os.path.realpath(REPO_ROOT):
-            warnings.append(f"recovery watchdog recovers {recorded}, not "
-                            f"this checkout {REPO_ROOT} — " + fix)
+            warnings.append(f"復旧監視の対象は{recorded}です。"
+                            f"この導入先{REPO_ROOT}とは異なります。" + fix)
         if not _agent_loaded(RECOVERY_LABEL):
-            errors.append(f"LaunchAgent {RECOVERY_LABEL} installed but not "
-                          f"loaded — `launchctl bootstrap gui/{uid} "
+            errors.append(f"復旧監視{RECOVERY_LABEL}は導入済みですが"
+                          f"読み込まれていません。起動方法: `launchctl bootstrap gui/{uid} "
                           f"{plist}`")
     if not any(_agent_loaded(lb) for lb in LLAMA_LABELS):
         installed = [lb for lb in LLAMA_LABELS if os.path.exists(
             os.path.join(AGENTS_DIR, f"{lb}.plist"))]
         if installed:
             lp = os.path.join(AGENTS_DIR, f"{installed[0]}.plist")
-            errors.append(f"LaunchAgent {installed[0]} installed but not "
-                          "loaded — the local LLM is down; "
+            errors.append(f"ローカルAIの常駐処理{installed[0]}は導入済みですが"
+                          "読み込まれておらず、AIは停止しています。起動方法: "
                           f"`launchctl bootstrap gui/{uid} {lp}`")
         else:
             warnings.append(
-                "no llama-server LaunchAgent (" + " / ".join(LLAMA_LABELS)
-                + ") — fine for a self-managed server on local_llm.url; "
-                "otherwise " + _install_fix("stage 4"))
+                "ローカルAIの常駐設定がありません（" + " / ".join(LLAMA_LABELS)
+                + "）。local_llm.urlの接続先で独自に管理している場合は問題ありません。"
+                "それ以外は" + _install_fix("手順4"))
     return errors, warnings
 
 
@@ -3059,7 +3107,7 @@ def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
         # bootout would kill this very process (the updater running as
         # ai.mcs.cron.mcs-update): a detached helper reloads the job once
         # this run has ended (the job abandons its process group).
-        note(f"agent {label}: reload after this run exits")
+        note(f"常駐処理{label}: この設定処理の終了後に読み込み直します")
         if not dry:
             target = f"gui/{uid}/{label}"
             script = ('while kill -0 "$1" 2>/dev/null; do sleep 5; done; '
@@ -3074,11 +3122,11 @@ def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
                              start_new_session=True)
         return True
     if _agent_loaded(label):
-        note(f"agent {label}: reload (content changed)")
+        note(f"常駐処理{label}: 設定が変わったため読み込み直します")
         if not dry:
             _run(["launchctl", "bootout", f"gui/{uid}/{label}"])
     else:
-        note(f"agent {label}: bootstrap")
+        note(f"常駐処理{label}: 起動します")
     if dry:
         return True
     # imported here, not at module top: an older-generation mcs_update
@@ -3087,7 +3135,7 @@ def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
     from mcs_util import launchd_bootstrap
     err = launchd_bootstrap(label, dst, _run)
     if err:
-        note(f"  bootstrap failed: {err}")
+        note(f"  起動に失敗しました。常駐処理の状態を確認してください: {err}")
     return err is None
 
 
@@ -3150,7 +3198,7 @@ def _script_drift() -> tuple[list[str], list[str]]:
     try:
         subs = _service_subs()
     except ValueError as e:     # validate_config names the offending key
-        return [f"config: {e} — scripts not compared"], []
+        return [f"設定に問題があります: {e}。定期処理のファイル比較は行っていません"], []
     for name, body in _rendered_scripts(subs):
         try:
             cur = Path(directory, name).read_text(encoding="utf-8")
@@ -3159,12 +3207,12 @@ def _script_drift() -> tuple[list[str], list[str]]:
             continue
         if cur != body:
             drifted.append(name)
-    errors = [f"deployed scripts differ from the repo in {directory}: "
+    errors = [f"配備済みの定期処理が配布版と異なります（{directory}）: "
               + ", ".join(drifted)
-              + " — run `mcs_setup.py services` to resync"] if drifted else []
-    warnings = [f"scripts not deployed to {directory}: "
+              + " — `mcs_setup.py services`で同期してください"] if drifted else []
+    warnings = [f"定期処理が{directory}に未配備です: "
                 + ", ".join(missing)
-                + " — run `mcs_setup.py services`"] if missing else []
+                + " — `mcs_setup.py services`を実行してください"] if missing else []
     return errors, warnings
 
 
@@ -3180,9 +3228,9 @@ def _sync_scripts(subs, manifest, note, dry, directory=None) -> None:
         with suppress(OSError):
             cur = Path(dst).read_text(encoding="utf-8")
         if cur == body:
-            note(f"script {name}: up to date")
+            note(f"定期処理{name}: 最新の内容です")
             continue
-        note(f"script {name}: write {dst}")
+        note(f"定期処理{name}: {dst}に保存します")
         if not dry:
             os.makedirs(directory, mode=0o700, exist_ok=True)
             _write_atomic(dst, body, 0o755)
@@ -3206,7 +3254,7 @@ def _sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
     loaded state; retire owned-but-undesired agents from our naming
     space only, never install.sh-owned labels (S5)."""
     if sys.platform != "darwin":
-        note("launchd: not macOS — skipping agents")
+        note("macOS以外のため、launchdの常駐設定は行いません")
         return 0
     problems = 0
     desired = _desired_agents(subs, load_config() if cfg is None else cfg)
@@ -3218,7 +3266,7 @@ def _sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
             cur = None
         changed = cur != body
         if changed:
-            note(f"agent {label}: write {dst}")
+            note(f"常駐処理{label}: {dst}に設定を保存します")
             if not dry:
                 _write_atomic(dst, body)
         if changed or not _agent_loaded(label):
@@ -3229,7 +3277,7 @@ def _sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
                      "loaded": False})
                 continue
         else:
-            note(f"agent {label}: loaded")
+            note(f"常駐処理{label}: 読み込み済みです")
         manifest["agents"].append({"label": label,
                                    "sha256": _sha256(body),
                                    "loaded": True})
@@ -3248,14 +3296,14 @@ def _retire_agents(labels, note, dry) -> int:
         path = _standalone_service_path()
         if not os.path.exists(path):
             return _retire_standalone_health(note, dry)
-        note("standalone service: disable + stop")
+        note("独立動作の常駐処理: 自動起動を無効にして停止します")
         if dry:
             return _retire_standalone_health(note, dry)
         if _run(["systemctl", "--user", "disable", "--now", STANDALONE_UNIT]).returncode:
             return 1
         state = _run(["systemctl", "--user", "is-active", "--quiet", STANDALONE_UNIT])
         if state.returncode not in (3, 4):  # inactive / unknown unit; other errors are unverifiable
-            note("standalone service: stop unverifiable; keeping unit")
+            note("独立動作の常駐処理: 停止を確認できないため、設定ファイルを保持します")
             return 1
         try:
             os.unlink(path)
@@ -3271,11 +3319,11 @@ def _retire_agents(labels, note, dry) -> int:
         path = os.path.join(AGENTS_DIR, label + ".plist")
         if not _owned_label(label) or not os.path.exists(path):
             continue
-        note(f"agent {label}: undesired — bootout + remove")
+        note(f"常駐処理{label}: 現在の設定では不要なため、停止して設定を削除します")
         if not dry:
             _run(["launchctl", "bootout", f"gui/{uid}/{label}"])
             if not _agent_absent(label):
-                note(f"  agent {label}: still loaded or unverifiable; keeping plist")
+                note(f"  常駐処理{label}: 稼働中または停止を確認できないため、設定ファイルを保持します")
                 problems += 1
                 continue
             try:
@@ -3311,8 +3359,8 @@ def _verify_cron_after(hermes, created, owned_scripts, desired_scripts,
     if after is None or not all(_cron_converged(after, sched, script)
                                 for _, sched, script in
                                 (CRON_JOBS if jobs is None else jobs)):
-        note("cron: post-change state unverifiable or not exactly one "
-             "job per script — re-run services")
+        note("定期処理: 変更後の状態を確認できないか、同じ処理が"
+             "重複・不足しています。servicesを再実行してください")
         problems += 1
     # owned-but-undesired jobs still live after the change
     survivors = [e for e in after or []
@@ -3321,7 +3369,7 @@ def _verify_cron_after(hermes, created, owned_scripts, desired_scripts,
                  and e["script"] not in desired_scripts]
     left = list(dict.fromkeys(e["script"] for e in survivors))
     if left:
-        note("cron: undesired job still present after remove ("
+        note("定期処理: 削除後も不要な処理が残っています（"
              + ", ".join(left) + ")")
         problems += 1
     # any confirmed create stays owned whatever else failed (this
@@ -3363,8 +3411,8 @@ def _sync_cron(prev, hermes, manifest, note,
     persist = False
     entries = _cron_list(hermes)
     if entries is None:
-        note("cron: list unparseable — unverifiable, "
-             "no cron mutations performed")
+        note("定期処理: 登録一覧を読み取れないため、"
+             "登録内容は変更していません")
         return 1, persist
     problems = 0
     mutated = False
@@ -3382,8 +3430,8 @@ def _sync_cron(prev, hermes, manifest, note,
     dups = sorted(s for s in desired_scripts
                   if sum(e.get("script") == s for e in entries) > 1)
     if dups:
-        note("cron: duplicate owned scripts — resolve job IDs manually "
-             f"({', '.join(dups)}), then re-run services")
+        note("定期処理: 同じ処理が重複しています。処理IDを手動で確認・整理してください "
+             f"({', '.join(dups)}）。続いてservicesを再実行してください")
         return 1, persist
     owned_scripts = desired_scripts | {
         c.get("script") for c in prev.get("cron", [])
@@ -3394,13 +3442,13 @@ def _sync_cron(prev, hermes, manifest, note,
                               or script in existing):
             # identity seen but its script is unparseable — neither
             # 'exists' (unverified) nor safe to create (duplicate)
-            note(f"cron '{name}': a job with this name exists but its "
-                 f"script is not {script} or is unreadable — no create; "
-                 "inspect `hermes cron list --all` and remove or fix it")
+            note(f"定期処理'{name}': 同名の処理がありますが、"
+                 f"実行ファイルが{script}ではないか読み取れません。追加していません。"
+                 "`hermes cron list --all`で確認して修正してください")
             problems += 1
             continue
         if entry is None:
-            note(f"cron '{name}': create ({sched} -> {script})")
+            note(f"定期処理'{name}': 登録します（実行間隔 {sched} → {script}）")
             mutated = True
             if not dry:
                 r = _run(
@@ -3408,7 +3456,7 @@ def _sync_cron(prev, hermes, manifest, note,
                      "--name", name, "--script", script,
                      "--no-agent", "--deliver", "local"])
                 if r.returncode != 0:
-                    note(f"  create failed: "
+                    note(f"  登録に失敗しました。処理の一覧を確認してください: "
                          f"{(r.stderr or r.stdout).strip()}")
                     problems += 1
                     continue
@@ -3420,7 +3468,7 @@ def _sync_cron(prev, hermes, manifest, note,
         cur_sched = _norm_sched(entry.get("schedule"))
         want_sched = _norm_sched(sched)
         if cur_sched and want_sched and cur_sched != want_sched:
-            note(f"cron '{name}': schedule "
+            note(f"定期処理'{name}': 実行間隔を変更します "
                  f"{cur_sched} -> {sched}")
             mutated = True
             if not dry:
@@ -3428,11 +3476,11 @@ def _sync_cron(prev, hermes, manifest, note,
                     [hermes, "cron", "edit", entry["id"],
                      "--schedule", sched])
                 if r.returncode != 0:
-                    note(f"  edit failed: "
+                    note(f"  変更に失敗しました。処理の一覧を確認してください: "
                          f"{(r.stderr or r.stdout).strip()}")
                     problems += 1
         else:
-            note(f"cron '{name}': exists")
+            note(f"定期処理'{name}': 登録済みです")
         manifest["cron"].append(
             {"name": name, "schedule": sched, "script": script,
              "id": entry["id"]})
@@ -3440,14 +3488,14 @@ def _sync_cron(prev, hermes, manifest, note,
         script = entry.get("script")
         if script and script in owned_scripts \
                 and script not in desired_scripts:
-            note(f"cron '{entry.get('name', script)}': "
-                 f"undesired — remove {entry['id']}")
+            note(f"定期処理'{entry.get('name', script)}': "
+                 f"現在の設定では不要なため、削除します（ID: {entry['id']}）")
             mutated = True
             if not dry:
                 r = _run(
                     [hermes, "cron", "remove", entry["id"]])
                 if r.returncode != 0:
-                    note(f"  remove failed: "
+                    note(f"  削除に失敗しました。処理の一覧を確認してください: "
                          f"{(r.stderr or r.stdout).strip()}")
                     problems += 1
     if mutated and not dry:
@@ -3470,19 +3518,19 @@ def _sync_gateway(cfg, hermes, note, dry) -> int:
     up = bool(r and r.returncode == 0
               and "supervised" in (r.stdout or ""))
     if up:
-        note("gateway: supervised")
+        note("接続サービス: 常駐管理されています")
         return 0
     if dry:
-        note("gateway: install + start")
+        note("接続サービス: 常駐設定を導入して起動します")
         return 0
     for sub in ("install", "start"):
         r = _hermes_cli(hermes, "", "gateway", sub)
         if not (r and r.returncode == 0):
             detail = (r.stderr or r.stdout).strip() \
                 if r else "no response"
-            note(f"gateway {sub} failed: {detail}")
+            note(f"接続サービスの{sub}操作に失敗しました。稼働状態を確認してください: {detail}")
             return 1
-    note("gateway: installed + started")
+    note("接続サービス: 常駐設定の導入と起動が完了しました")
     return 0
 
 
@@ -3513,7 +3561,7 @@ def _retire_standalone_health(note, dry) -> int:
     paths = [path for path in map(_health_unit_path, HEALTH_UNITS) if os.path.exists(path)]
     if not paths:
         return 0
-    note("standalone health watch: disable + stop")
+    note("独立動作の稼働監視: 自動起動を無効にして停止します")
     if dry:
         return 0
     if _run(["systemctl", "--user", "disable", "--now", HEALTH_TIMER]).returncode:
@@ -3544,21 +3592,21 @@ def _check_standalone_health() -> tuple[list[str], list[str]]:
         if current is None:
             installed = False
         elif current != body:
-            errors.append("standalone health watch differs from current source — run `mcs_setup.py services`")
+            errors.append("独立動作の稼働監視が現在の配布版と異なります — `mcs_setup.py services`を実行してください")
             break
     if not installed:
-        warnings.append("standalone health watch not installed — a stopped host raises no alert; run `mcs_setup.py services`")
+        warnings.append("独立動作の稼働監視が未導入です。本体が停止しても警報が出ません。`mcs_setup.py services`を実行してください")
     elif not _standalone_health_loaded():
-        errors.append("standalone health watch installed but not loaded — run `mcs_setup.py services`")
+        errors.append("独立動作の稼働監視は導入済みですが、読み込まれていません — `mcs_setup.py services`を実行してください")
     try:
         import health_watch
         _, reasons, details = health_watch.standalone_host_reasons(HOME, time.time(), load_config())
     except Exception as exc:   # diagnostics only: never fail doctor on the reader
-        warnings.append(f"standalone status unreadable ({type(exc).__name__})")
+        warnings.append(f"独立動作の状態を読み取れません（{type(exc).__name__}）")
         return errors, warnings
     for code in reasons:
         extra = details.get(code)
-        warnings.append(f"standalone host: {code}" + (f" ({extra})" if extra else "")
+        warnings.append(f"独立動作に確認が必要です（診断コード: {code}）" + (f" ({extra})" if extra else "")
                         + " — see `python -m mcs_standalone status` and data/standalone.log")
     return errors, warnings
 
@@ -3577,12 +3625,12 @@ def _sync_standalone_health(manifest, note, dry) -> int:
             current = None
         if current != body:
             changed = True
-            note(f"standalone health watch: write {path}")
+            note(f"独立動作の稼働監視: {path}に設定を保存します")
             if not dry:
                 _write_atomic(path, body, 0o600)
     loaded = _standalone_health_loaded()
     if not changed and loaded:
-        note("standalone health watch: loaded")
+        note("独立動作の稼働監視: 読み込み済みです")
     elif not dry:
         if sys.platform == "darwin":
             if not _agent_reconcile(HEALTH_LABEL, _health_unit_path(bodies[0][0]), note, False):
@@ -3593,13 +3641,13 @@ def _sync_standalone_health(manifest, note, dry) -> int:
             # restart (not start) so a rewritten timer takes its new schedule
             if _run(["systemctl", "--user", "enable", HEALTH_TIMER]).returncode \
                     or _run(["systemctl", "--user", "restart", HEALTH_TIMER]).returncode:
-                note("standalone health watch: enable failed")
+                note("独立動作の稼働監視: 有効化に失敗しました。常駐設定を確認してください")
                 return 1
         if not _standalone_health_loaded():
-            note("standalone health watch did not become active")
+            note("独立動作の稼働監視: 起動を確認できません。常駐設定を確認してください")
             return 1
     else:
-        note("standalone health watch: load")
+        note("独立動作の稼働監視: 起動します")
     for name, body in bodies:
         manifest["agents"].append({"label": HEALTH_LABEL if sys.platform == "darwin" else name,
                                    "sha256": _sha256(body), "loaded": not dry})
@@ -3625,12 +3673,12 @@ def _retire_previous_runtime(prev, desired_mode, note, dry):
     scripts = {row.get("script") for row in prev.get("cron", []) if isinstance(row, dict)} & (
         {script for _, _, script in CRON_JOBS} | {"mcs_offsite.sh"})
     if dry:
-        note("previous Hermes MCS jobs: stop " + ", ".join(sorted(labels | scripts)))
+        note("以前のHermes経由のMCS処理を停止します: " + ", ".join(sorted(labels | scripts)))
         return 0
     for label in sorted(labels):
         _run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
         if not _agent_absent(label):
-            note(f"previous agent {label}: stop unverifiable — no new service started")
+            note(f"以前の常駐処理{label}: 停止を確認できないため、新しい処理は起動していません")
             return 1
         # bootout does not persist: launchd reloads a left plist at next login
         with suppress(FileNotFoundError):
@@ -3639,7 +3687,7 @@ def _retire_previous_runtime(prev, desired_mode, note, dry):
         exe = _hermes_exe(load_config())
         entries = _cron_list(exe)
         if entries is None:
-            note("previous Hermes cron state unverifiable — no new service started")
+            note("以前のHermes定期処理の状態を確認できないため、新しい処理は起動していません")
             return 1
         for entry in entries:
             if entry.get("script") in scripts:
@@ -3655,7 +3703,7 @@ def _sync_standalone_service(manifest, note, dry):
     """Install one supervised host; its scheduler owns every MCS job."""
     from mcs_standalone.service import render, request_restart
     if sys.platform != "darwin" and not sys.platform.startswith("linux"):
-        note("standalone services require launchd or systemd; use an external supervisor")
+        note("独立動作の常駐設定にはlaunchdかsystemdが必要です。このOSでは別の常駐管理ツールを使ってください")
         return 1
     _, body = render(HOME, platform=sys.platform)
     path = _standalone_service_path()
@@ -3665,7 +3713,7 @@ def _sync_standalone_service(manifest, note, dry):
         current = None
     changed = current != body
     running = _standalone_loaded()
-    note(f"standalone service: {'update' if changed else 'up to date'} {path}")
+    note(f"独立動作の常駐処理: {'設定を更新します' if changed else '最新の設定です'} {path}")
     if not dry:
         if changed:
             _write_atomic(path, body, 0o600)
@@ -3685,7 +3733,7 @@ def _sync_standalone_service(manifest, note, dry):
                 # Starting without -k never kills a live host or its updater.
                 start = ["launchctl", "kickstart", f"gui/{os.getuid()}/{STANDALONE_LABEL}"] if sys.platform == "darwin" else ["systemctl", "--user", "start", STANDALONE_UNIT]
                 if _run(start).returncode:
-                    note("standalone start failed; service was preserved")
+                    note("独立動作の起動に失敗しました。既存のサービス設定は保持しています")
                     return 1
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline:
@@ -3695,7 +3743,7 @@ def _sync_standalone_service(manifest, note, dry):
                     except (OSError, ValueError):
                         time.sleep(0.2)
                 else:
-                    note("standalone restart request failed; service was preserved")
+                    note("独立動作の再起動要求に失敗しました。既存のサービス設定は保持しています")
                     return 1
         elif sys.platform == "darwin":
             if not _agent_reconcile(STANDALONE_LABEL, path, note, False):
@@ -3703,7 +3751,7 @@ def _sync_standalone_service(manifest, note, dry):
         elif _run(["systemctl", "--user", "enable", "--now", STANDALONE_UNIT]).returncode:
             return 1
         if not _standalone_loaded():
-            note("standalone service did not become active")
+            note("独立動作の起動を確認できません。常駐処理の状態を確認してください")
             return 1
     manifest["agents"].append({"label": STANDALONE_LABEL if sys.platform == "darwin" else STANDALONE_UNIT,
                               "sha256": _sha256(body), "loaded": not dry})
@@ -3729,13 +3777,13 @@ def _record_llm_slots(manifest, note) -> None:
             "plist_np": plist_np,
             "consistent": plist_np == local_llm.SLOT_COUNT}
         if plist_np != local_llm.SLOT_COUNT:
-            note(f"WARNING: plist -np {plist_np} != selected "
-                 f"{local_llm.SLOT_COUNT} — deployment width drifts "
-                 "from the measured selection")
+            note(f"注意: AIの常駐設定の同時処理枠（-np={plist_np}）が、"
+                 f"選択した{local_llm.SLOT_COUNT}枠と一致しません。"
+                 "測定して選んだ設定に合わせてください")
     except Exception as e:
         # a manifest annotation must never take the services run down —
         # the agents/cron above were the real work
-        note(f"manifest llm_slots: {type(e).__name__}: {e}")
+        note(f"AIの同時処理枠を管理記録へ保存できません（{type(e).__name__}: {e}）")
 
 
 def cmd_services(args) -> int:
@@ -3744,12 +3792,12 @@ def cmd_services(args) -> int:
     try:
         selected_mode = mcs_runtime.mode(cfg)
     except ValueError:
-        print("services: invalid runtime_mode — nothing changed")
+        print("常駐設定: 実行方法が不正です。hermesかstandaloneを指定してください。変更していません")
         return 1
     try:
         subs = _service_subs(cfg)
     except ValueError as e:
-        print(f"services: config: {e} — nothing changed")
+        print(f"常駐設定: 設定に問題があります。修正して再実行してください: {e}。変更していません")
         return 1
     problems = 0
     persist_partial = False
@@ -3759,19 +3807,20 @@ def cmd_services(args) -> int:
                 "agents": [], "cron": []}
 
     def note(msg):
-        print(("  [dry] " if dry else "  ") + msg)
+        print(("  [変更予定のみ] " if dry else "  ") + msg)
 
     why = _standalone_py_problem(cfg) if selected_mode == "standalone" else _hermes_py_problem()
     if why:
         # every wrapper/plist is rendered with __PYTHON__ — a missing
         # interpreter would make each job fail at every run
-        print(f"services: {why} — nothing rendered; "
-              + _install_fix("stage 2 rebuilds the standalone venv" if selected_mode == "standalone" else "stage 2 rebuilds the hermes-agent venv")
-              + ", then re-run services")
+        print(f"常駐設定: {why}。設定ファイルは作成していません。"
+              + _install_fix("手順2で独立動作のPython環境を再構築" if selected_mode == "standalone" else "手順2でHermesのPython環境を再構築")
+              + "。続いてservicesを再実行してください")
         return 1
     runtime_errors = runtime_gate_errors(cfg, repair_recovery=True)
     if runtime_errors:
-        print("services: " + "; ".join(runtime_errors) + " — nothing changed")
+        print("常駐設定: 実行環境に問題があります。導入時のPythonと復旧監視の設定を確認してください。詳細: "
+              + "; ".join(runtime_errors) + "。変更していません")
         return 1
     if _sync_recovery(cfg, note, dry):
         return 1
@@ -3787,7 +3836,7 @@ def cmd_services(args) -> int:
             try:
                 _save_manifest(manifest)
             except OSError:
-                note("standalone manifest write failed")
+                note("独立動作の管理記録を保存できません。保存先の権限と空き容量を確認してください")
                 problems += 1
         return 1 if problems else 0
     hermes = _hermes_exe(cfg)
@@ -3805,11 +3854,11 @@ def cmd_services(args) -> int:
             notify_cards.ensure_dirs(os.path.join(HOME, "data"))
             notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
         except Exception as e:
-            note(f"notify flags publish failed: {type(e).__name__}: {e} — re-run services")
+            note(f"通知設定を保存できません（{type(e).__name__}: {e}）。servicesを再実行してください")
             flags_failed = True
 
     if not _hermes_ok(hermes):
-        note(f"cron: hermes not resolvable ({hermes}) — skipped")
+        note(f"定期処理: Hermesコマンドが見つからないため設定を見送りました（{hermes}）")
         problems += 1
     else:
         cron_problems, persist_partial = _sync_cron(
@@ -3828,16 +3877,16 @@ def cmd_services(args) -> int:
             problems += _sync_gateway(cfg, hermes, note, dry)
         restarted = False
         if switching and not blocked and flags_failed:
-            note("gateway: restart deferred until the notify flags publish")
+            note("接続サービス: 通知設定の保存が完了するまで再起動を保留します")
         elif switching and not blocked:
             # a gateway that loaded while standalone owned the bot skipped
             # /mcs and the card workers — reload it under the new flags
-            note("gateway: restart (switched back from standalone)")
+            note("接続サービス: 独立動作からHermes経由に戻したため再起動します")
             if not dry:
                 r = _hermes_cli(hermes, "", "gateway", "restart")
                 restarted = bool(r and r.returncode == 0)
                 if not restarted:
-                    note("  gateway restart failed — run `hermes gateway restart`")
+                    note("  接続サービスの再起動に失敗しました。`hermes gateway restart`で再実行してください")
                     problems += 1
         if switching and not restarted:
             manifest["gateway_restart_pending"] = True
@@ -3849,116 +3898,102 @@ def cmd_services(args) -> int:
     if not dry and (not problems or persist_partial):
         try:
             _save_manifest(manifest)
-            note(f"manifest: {MANIFEST_PATH}")
+            note(f"管理記録の保存先: {MANIFEST_PATH}")
         except OSError as e:
-            note(f"manifest write failed: {e}")
+            note(f"管理記録を保存できません。保存先の権限と空き容量を確認してください: {e}")
             problems += 1
     return 1 if problems or flags_failed else 0
 
 
+class _SetupParser(argparse.ArgumentParser):
+    """設定コマンド共通の、日本語のヘルプと引数エラー。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, add_help=False, **kwargs)
+        self._positionals.title = "コマンド・必須の指定"
+        self._optionals.title = "オプション"
+        self.add_argument("-h", "--help", action="help", help="使い方を表示して終了します（変更しません）")
+
+    def format_help(self):
+        return super().format_help().replace("usage: ", "使い方: ", 1)
+
+    def format_usage(self):
+        return super().format_usage().replace("usage: ", "使い方: ", 1)
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(2, f"指定内容に誤りがあります。--helpでコマンドと入力形式を確認してください。詳細: {message}\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     if sys.version_info < (3, 14):
-        print("mcs_setup requires Python >= 3.14 — use the upgraded runtime", file=sys.stderr)
+        print("設定ツールにはPython 3.14以上が必要です。install.shで導入したPythonを使ってください", file=sys.stderr)
         return 1
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = _SetupParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser(
-        "init", help="provision config/env/keychain — "
-                     "interactive run walks every setting",
+        "init", help='質問に答えて初期設定を保存します（パスワードは非表示入力）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="non-interactive example (secrets via environment):\n"
-               "  MCS_SETUP_PASSWORD=... python3 mcs/ops/mcs_setup.py init "
-               "--yes \\\n"
-               "    --login-id you@example.com "
-               "--notify-target slack:C0CHANNELID \\\n"
-               "    --set self_posts=true "
-               "--set 'notify.interactive=\"slack\"'\n"
-               "--set values are JSON (strings need inner quotes); a "
-               "config.json that is\nnot valid JSON stops init — --yes "
-               "moves it to config.json.corrupt-<ts> first.")
-    p.add_argument("--login-id")
+        epilog='質問なしでの実行例（bash/zshの端末で実行）:\n  read -r -s MCS_SETUP_PASSWORD\n  export MCS_SETUP_PASSWORD\n  python3 mcs/ops/mcs_setup.py init --yes --login-id you@example.com --notify-target slack:C0CHANNELID --set self_posts=true\n  unset MCS_SETUP_PASSWORD\n最初のreadコマンドでMCSパスワードを非表示入力し、Enterを押してください。パスワードをコマンドへ直接書かず、環境変数MCS_SETUP_PASSWORDで渡します。実行後はunsetで削除します。\n--setの値はJSONです。壊れたconfig.jsonは通常停止します。--yesでは元のファイルをconfig.json.corrupt-<日時>へ退避して初期値から設定します。')
+    p.add_argument("--login-id", help="MCSのログインID")
     p.add_argument("--runtime-mode", choices=("hermes", "standalone"),
-                   help="select the runtime explicitly (omitted keeps the existing mode)")
+                   help='実行方法を指定します（省略すると現在の設定を保持）')
     p.add_argument("--recovery-python",
-                   help="explicit absolute independent Python path outside the mutable checkout")
+                   help='復旧専用Pythonの絶対パス（更新対象フォルダの外にあるもの）')
     p.add_argument("--notify-target",
-                   help="hermes send target for notifications "
-                        "(e.g. slack:C0CHANNELID, discord:1234)")
+                   help='通知先（例: slack:C0CHANNELID、discord:1234）')
     p.add_argument("--set", action="append", metavar="KEY=JSON",
-                   help="set any config key (repeatable; dotted keys "
-                        "nest, values are JSON — e.g. "
-                        "--set self_posts=true "
-                        '--set notify.interactive=\'"slack"\')')
-    p.add_argument("--semantic-mode", choices=["off", "shadow", "enforce"])
-    p.add_argument("--project-ids", type=int, nargs="*")
-    p.add_argument("--signals-notify", action=argparse.BooleanOptionalAction)
+                   help='設定キーとJSON値を指定します（繰り返し可能）。例: --set self_posts=true。文字列値には引用符が必要です')
+    p.add_argument("--semantic-mode", choices=["off", "shadow", "enforce"],
+                   help="外部の意味解析: off=無効、shadow=比較、enforce=反映（有効時は本文を外部送信）")
+    p.add_argument("--project-ids", type=int, nargs="*", help="意味解析の対象プロジェクトID（空白区切り）")
+    p.add_argument("--signals-notify", action=argparse.BooleanOptionalAction, help="アラートを通知します（--no-signals-notifyで無効）")
     p.add_argument("--self-org", dest="self_orgs", action="append",
                    metavar="NAME",
-                   help="override own facility name — repeatable or "
-                        "comma-separated; normally derived from MCS "
-                        "/users/self automatically "
-                        "(signals.self_organizations)")
+                   help='自施設名を手動指定します（通常はMCSから取得。複数はカンマ区切りまたは繰り返し指定）')
     p.add_argument("--self-professions", metavar="A,B",
-                   help="override responder professions, comma-"
-                        "separated (signals.self_professions; "
-                        "normally derived from MCS /users/self)")
+                   help='自職種を手動指定します（通常はMCSから取得。複数はカンマ区切り）')
     p.add_argument("--plugin-profile", metavar="NAME",
-                   help="hermes profile serving Discord/Slack — plugin "
-                        "settings are written there (multiplex; "
-                        "empty/omitted = default profile)")
+                   help='Slack/Discordに接続するHermesの設定名（プロファイル）。省略すると既定の設定へ保存')
     p.add_argument("--plugin-user-ids", metavar="A,B",
-                   help="user ids allowed to operate cards "
-                        "(discord: allowed_user_ids / "
-                        "slack: slack_allowed_user_ids)")
+                   help='通知カードを操作できるユーザーのID（複数はカンマ区切り）')
     p.add_argument("--plugin-role-ids", metavar="A,B",
-                   help="Discord guild role ids whose members may "
-                        "operate cards (allowed_role_ids; discord only)")
+                   help='通知カードの操作を許可するDiscordロールのID（Discordのみ）')
     p.add_argument("--plugin-chat-ids", metavar="A,B",
-                   help="Discord channel ids that accept /mcs commands "
-                        "(allowed_chat_ids; discord only — slack pins "
-                        "a single channel via notify.slack.channel_id)")
+                   help='/mcsコマンドを受け付けるDiscordチャンネルID。Slackは通知先チャンネルに固定')
     p.add_argument("--plugin-project-ids", metavar="A,B",
-                   help="MCS project ids the plugin may read "
-                        "(plugins ... settings.project_ids)")
+                   help='閲覧・操作を許可するMCSプロジェクトID（複数はカンマ区切り）')
     p.add_argument("--yes", action="store_true",
-                   help="non-interactive — never prompt")
+                   help='質問せず、指定値と既存設定で実行します。壊れた設定ファイルは退避して初期値から設定')
     p.set_defaults(fn=cmd_init)
     p = sub.add_parser("fact-source",
-                       help="set semantic.fact_source "
-                            "(legacy|shadow|canonical)")
+                       help='解析結果の採用方法を設定します（legacy=従来、shadow=比較、canonical=検証済み結果）')
     p.add_argument("fact_source",
                    choices=["legacy", "shadow", "canonical"])
     p.add_argument("--gate-evidence",
-                   help="semantic_evaluation report JSON proving the "
-                        "human-labelled gate passed (canonical only)")
-    p.add_argument("--confirm-human", action="store_true")
-    p.add_argument("--reason", choices=["reviewed_sealed_holdout"])
+                   help='人が正解を付けた評価の合格証拠JSON（canonicalへの変更に必須）')
+    p.add_argument("--confirm-human", action="store_true", help="人が評価証拠を確認したことを明示します")
+    p.add_argument("--reason", choices=["reviewed_sealed_holdout"], help="承認理由（未使用の評価データによる検証結果を確認済み）")
     p.set_defaults(fn=cmd_fact_source)
     p = sub.add_parser("jev-value",
-                       help="run Jev incremental-value evaluation and "
-                            "write the evidence report JSON")
+                       help='Jevによる追加解析の効果を評価し、証拠レポートをJSONで保存します')
     p.add_argument("--cases", required=True,
-                   help="JSON with exact copied cases from evaluation's "
-                        "extract_cases, extract_cases_labs or semantic_completeness_cases "
-                        "(unique synthetic subset allowed)")
-    p.add_argument("--out", required=True, help="report output path")
+                   help='評価用の完全合成ケースJSON（既存のextract_cases等から変更せず選択。実データは禁止）')
+    p.add_argument("--out", required=True, help='評価レポートの保存先')
     p.add_argument("--deadline", type=float, default=120.0,
-                   help="evaluation deadline in seconds")
+                   help='評価の制限時間（秒）')
     p.set_defaults(fn=cmd_jev_value)
     p = sub.add_parser("services",
-                       help="install the selected runtime's supervised services "
-                            "(renders deployment/ templates; idempotent)")
+                       help='選択した実行方法の常駐・定期処理を設定します（再実行可能）')
     p.add_argument("--dry-run", action="store_true",
-                   help="print the actions without applying them")
+                   help='変更予定だけを表示します（設定やサービスは変更しません）')
     p.set_defaults(fn=cmd_services, yes=True)
-    p = sub.add_parser("check", help="validate required conditions")
+    p = sub.add_parser("check", help='必要な設定と動作条件を確認し、問題と対処方法を表示します')
     p.set_defaults(fn=cmd_check, yes=True)
-    p = sub.add_parser("doctor", help="local read-only counts by scope "
-                                      "(not_checked is not healthy; exit 1 only "
-                                      "on a blocked scope); use check for blockers")
-    p.add_argument("--json", action="store_true", help="safe shared JSON result")
+    p = sub.add_parser("doctor", help='状態を読取り専用で診断します。未確認は正常扱いしません。設定の修正方法はcheckで確認')
+    p.add_argument("--json", action="store_true", help='診断結果を機械処理用のJSONで表示します')
     p.add_argument("--probe", action="append", choices=("llm", "services", "data"),
-                   help="explicit read-only scope (repeatable); default is local only")
+                   help='追加で確認する範囲（llm=AI、services=常駐処理、data=保存データ）。複数指定可能')
     p.set_defaults(fn=cmd_doctor, yes=True)
     args = ap.parse_args(argv)
     return args.fn(args)

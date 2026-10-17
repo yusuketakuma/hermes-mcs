@@ -232,3 +232,26 @@ def test_bootstrap_drug_route_uses_only_temporary_pinned_interpreter(tmp_path):
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [str(ROOT / "mcs/ops/mcs_cli.py"), *arguments]
     assert not (tmp_path / "NEVER").exists()
+
+
+def test_bootstrap_help_and_invalid_command_are_japanese(tmp_path):
+    env = dict(os.environ, HOME=str(tmp_path), MCS_ROOT=str(tmp_path / "root"))
+    for arguments, code, expected in [
+        (["--help"], 0, "初めて導入するとき"),
+        (["unknown"], 2, "操作名が正しくありません"),
+        (["setup"], 1, "実行に必要なPythonが見つかりません"),
+    ]:
+        result = subprocess.run(["/bin/sh", str(ROOT / "scripts/mcs"), *arguments],
+                                env=env, capture_output=True, text=True, timeout=10)
+        assert result.returncode == code
+        assert expected in result.stdout + result.stderr
+
+
+def test_cli_update_help_is_japanese(pinned, capsys):
+    with pytest.raises(SystemExit) as result:
+        mcs_cli.main(["update", "--help"])
+    assert result.value.code == 0
+    output = capsys.readouterr().out
+    assert "使い方:" in output
+    assert "変更せず更新内容を確認" in output
+    assert "再導入に渡すオプション" in output

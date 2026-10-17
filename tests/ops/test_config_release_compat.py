@@ -88,9 +88,15 @@ def test_secondary_system_transport_is_selected_before_its_scope_prompts(monkeyp
                'notify.discord.application_id': '1234567891', 'notify.discord.guild_id': '1234567892',
                'notify.discord.allowed_user_ids': '1234567893', 'notify.discord.project_ids': '101'}
     seen = []
+    kinds = {key: kind for _, items in mcs_setup.WIZARD
+             for key, kind, *_ in items}
 
     def answer(prompt):
-        key = prompt.split(' — ')[0].strip()
+        key = prompt.split('設定項目: ', 1)[1].split()[0].rstrip(':')
+        assert key in kinds, f'unexpected setting prompt: {key}'
+        assert key not in seen, f'fixture answer was rejected: {key}'
+        if kinds[key].startswith('req') and '現在:' not in prompt and '既定:' not in prompt:
+            assert key in answers, f'missing fixture answer for required setting: {key}'
         seen.append(key)
         return answers.get(key, '')
 
@@ -111,7 +117,7 @@ def test_legacy_updater_can_import_setup_but_cannot_run_commands(monkeypatch, ca
     spec.loader.exec_module(module)
     assert callable(module._runtime_problem)
     assert module.main(['services']) == 1
-    assert 'requires Python >= 3.14' in capsys.readouterr().err
+    assert 'Python 3.14以上が必要です' in capsys.readouterr().err
 
 
 @pytest.mark.parametrize('python,sqlite,allowed,blocked', [
@@ -134,4 +140,4 @@ def test_migration_preflight_preserves_sqlite_and_metadata_gates(
         assert mcs_setup._runtime_problem(facts, recovery=True, allow_runtime_migration=True)
     monkeypatch.setattr(mcs_setup, '_runtime_probe', lambda exe: None)
     assert mcs_setup.runtime_gate_errors({}, allow_runtime_migration=True) == [
-        'selected_runtime: runtime metadata unavailable']
+        'selected_runtime: 実行環境の情報を取得できません']

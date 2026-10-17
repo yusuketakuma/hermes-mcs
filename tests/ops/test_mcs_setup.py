@@ -12,8 +12,8 @@ import mcs_util
 
 def test_missing_required_keys():
     errors, warnings = mcs_setup.validate_config({})
-    assert "missing required key: mcs_login_id" in errors
-    assert "missing required key: notify_target" in errors
+    assert "必須の設定項目がありません: mcs_login_id" in errors
+    assert "必須の設定項目がありません: notify_target" in errors
 
 
 def test_minimal_valid_config():
@@ -25,7 +25,7 @@ def test_minimal_valid_config():
 def test_standalone_scope_is_required_for_text_and_card_delivery():
     base = {"runtime_mode": "standalone", "mcs_login_id": "u1",
             "notify_target": "slack:C1234567890"}
-    assert any("explicit scope required" in error for error in mcs_setup.validate_config(base)[0])
+    assert any("操作を許可する範囲を明示" in error for error in mcs_setup.validate_config(base)[0])
     scope = {"profile": "default", "application_id": "A1234567890",
              "team_id": "T1234567890", "channel_id": "C1234567890",
              "allowed_user_ids": ["U1234567890"], "project_ids": [101]}
@@ -45,8 +45,8 @@ def test_daily_digest_block_is_typed():
     assert errors == [] and warnings == []
     errors, _ = mcs_setup.validate_config(
         {**base, "daily_digest": {"enabled": "yes", "hour_jst": 24}})
-    assert errors == ["daily_digest.enabled: must be a boolean",
-                      "daily_digest.hour_jst: must be an integer in [0,23]"]
+    assert errors == ["daily_digest.enabled: true（有効）かfalse（無効）を指定してください",
+                      "daily_digest.hour_jst: 0から23までの整数を指定してください"]
 
 
 @pytest.mark.parametrize("value", [False, True])
@@ -76,14 +76,14 @@ def test_self_reaction_response_requires_boolean():
     assert ok == ([], [])
     errors, _ = mcs_setup.validate_config(
         {**base, "signals": {"self_reaction_response": "true"}})
-    assert errors == ["signals.self_reaction_response: must be a boolean"]
+    assert errors == ["signals.self_reaction_response: true（有効）かfalse（無効）を指定してください"]
 
 
 def _assert_bool_key(key, value):
     errors, warnings = mcs_setup.validate_config({
         "mcs_login_id": "synthetic", "notify_target": "slack:#synthetic",
         key: value})
-    assert errors == [f"{key}: must be a boolean"]
+    assert errors == [f"{key}: true（有効）かfalse（無効）を指定してください"]
     assert warnings == []
 
 
@@ -140,7 +140,7 @@ def test_unknown_keys_warn_not_fail():
         "mcs_login_id": "u", "notify_target": "slack",
         "future_key": True})
     assert errors == []
-    assert warnings == ["unknown config key: future_key"]
+    assert warnings == ["未対応の設定項目: future_key（この版では使いません）"]
 
 
 def test_semantic_block_delegates_to_production_validator():
@@ -210,7 +210,7 @@ def test_check_environment_resolves_hermes_binary(monkeypatch,
     monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: None)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: False)
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
-    assert any("hermes CLI not resolvable" in e for e in errors)
+    assert any("Hermesコマンドが見つかりません" in e for e in errors)
 
     # PATH hit -> clean
     monkeypatch.setattr(mcs_setup.shutil, "which",
@@ -218,7 +218,7 @@ def test_check_environment_resolves_hermes_binary(monkeypatch,
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
-    assert not any("hermes CLI" in e for e in errors)
+    assert not any("Hermesコマンド" in e for e in errors)
 
     # explicit hermes_bin is honored over PATH
     calls = []
@@ -226,7 +226,7 @@ def test_check_environment_resolves_hermes_binary(monkeypatch,
                         lambda p: calls.append(p) or True)
     errors, _ = mcs_setup.check_environment(
         {"notify_target": "slack", "hermes_bin": "/opt/h/hermes"})
-    assert not any("hermes CLI" in e for e in errors)
+    assert not any("Hermesコマンド" in e for e in errors)
     assert calls[-1] == "/opt/h/hermes"
 
     # the profile pattern is validate_config's alone — `check` joins both
@@ -258,7 +258,7 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
 
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
-    assert any("keychain may be locked or access" in e.lower() for e in errors)
+    assert any("キーチェーンのロックや" in e.lower() for e in errors)
 
     # missing entry -> the re-register message, not the locked one
     def missing(argv, **kw):
@@ -266,8 +266,8 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
                                stderr="could not be found")
     monkeypatch.setattr(mcs_setup.subprocess, "run", missing)
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
-    assert any("not found" in e for e in errors)
-    assert not any("keychain is locked" in e.lower() for e in errors)
+    assert any(mcs_setup.KEYCHAIN_SERVICE in e and "見つかりません" in e for e in errors)
+    assert not any("キーチェーンのロックや" in e for e in errors)
 
 
 def test_check_environment_flags_installed_but_unloaded_agent(
@@ -298,7 +298,7 @@ def test_check_environment_flags_installed_but_unloaded_agent(
         {"notify_target": "slack"})
     missing = [lb for lb in mcs_setup.AGENT_LABELS if lb not in loaded]
     for label in missing:
-        assert any(label in e and "not loaded" in e for e in errors)
+        assert any(label in e and "読み込まれていません" in e for e in errors)
 
     # GUI domain unreachable -> warn once, no per-agent errors
     monkeypatch.setattr(mcs_setup, "_run",
@@ -306,8 +306,8 @@ def test_check_environment_flags_installed_but_unloaded_agent(
     monkeypatch.setattr(mcs_setup, "_agent_loaded", lambda label: False)
     errors, warnings = mcs_setup.check_environment(
         {"notify_target": "slack"})
-    assert not any("not loaded" in e for e in errors)
-    assert any("unreachable" in w for w in warnings)
+    assert not any("読み込まれていません" in e for e in errors)
+    assert any("接続できない" in w for w in warnings)
 
 
 def test_queue_warnings_distinguish_stall_from_lag(monkeypatch,
@@ -337,7 +337,7 @@ def test_queue_warnings_distinguish_stall_from_lag(monkeypatch,
         db.db.commit()
         assert not mcs_setup._queue_warnings({})
         assert not mcs_setup._queue_warnings({"semantic": {**cfg["semantic"], "project_ids": [2]}})
-        assert any("stalled" in w for w in mcs_setup._queue_warnings(cfg))
+        assert any("進捗がありません" in w for w in mcs_setup._queue_warnings(cfg))
         db.db.execute("UPDATE fetch_jobs SET state='done',updated_at=?", (now,))
         db.db.commit()
         db.job_add("extract_qc", 1, 1)
@@ -367,8 +367,8 @@ def test_queue_warnings_preserve_findings_when_later_query_fails(
     warnings = mcs_setup._queue_warnings({
         "semantic": {"mode": "shadow", "project_ids": [1]}})
     assert len(warnings) == 2
-    assert "stalled" in warnings[0]
-    assert warnings[1] == "queue health unreadable (OperationalError)"
+    assert "進捗がありません" in warnings[0]
+    assert warnings[1] == "待機処理の状態を読み取れません（OperationalError）"
 
 
 @pytest.mark.parametrize("name", ["runtime#literal", "runtime?literal", "runtime%23literal"])
@@ -399,8 +399,8 @@ def test_queue_warning_uses_the_exact_database_read_only(monkeypatch, tmp_path, 
     monkeypatch.setattr(sqlite3, "connect", read_only_connect)
     warnings = mcs_setup._queue_warnings({
         "semantic": {"extract_qc": "annotate", "project_ids": [1]}})
-    assert len(warnings) == 1 and "extract_qc jobs pending=1" in warnings[0]
-    assert "stalled" in warnings[0]
+    assert len(warnings) == 1 and "extract_qc: 待機1件" in warnings[0]
+    assert "進捗がありません" in warnings[0]
     assert not (tmp_path / "runtime").exists()
 
 
@@ -638,9 +638,9 @@ def test_check_environment_locked_keychain_with_env_fallback(monkeypatch):
 
     errors, warnings = mcs_setup.check_environment(
         {"notify_target": "slack"})
-    assert not any("keychain is locked" in e.lower() for e in errors)
-    assert any("keychain may be locked or access" in w.lower() for w in warnings)
-    assert any("env fallback" in w.lower() for w in warnings)
+    assert not any("キーチェーンのロックや" in e for e in errors)
+    assert any("キーチェーンのロックや" in w.lower() for w in warnings)
+    assert any("予備の認証情報" in w for w in warnings)
 
 
 def test_signals_new_keys_validated():
@@ -867,7 +867,7 @@ def test_wizard_discord_scope_and_answers(monkeypatch, tmp_path):
                     "notify.discord.application_id": "app1",
                     "notify.discord.guild_id": "g1",
                     "notify.discord.channel_id": "c1"}[
-                        prompt.split(" ")[2]]
+                        prompt.split("設定項目: ", 1)[1].split()[0].rstrip(":")]
         if "self_posts" in prompt:
             return "y"
         if "trickle_pages" in prompt:
@@ -905,7 +905,7 @@ def test_wizard_slack_scope_and_answers(monkeypatch, tmp_path):
                     "notify.slack.application_id": "A1",
                     "notify.slack.team_id": "T1",
                     "notify.slack.channel_id": "C1"}[
-                        prompt.split(" ")[2]]
+                        prompt.split("設定項目: ", 1)[1].split()[0].rstrip(":")]
         return ""
 
     monkeypatch.setattr("builtins.input", answer)
@@ -1532,7 +1532,7 @@ def test_invalid_runtime_doctor_fails_without_service_probes(monkeypatch, capsys
     monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("invalid mode must not probe Hermes"))
     monkeypatch.setattr(mcs_setup, "_run", lambda *args, **kwargs: pytest.fail("invalid mode must not probe services"))
     assert mcs_setup.cmd_doctor(SimpleNamespace()) == 1
-    assert "runtime: blocked" in capsys.readouterr().out
+    assert "常駐処理の実行環境: 要修正" in capsys.readouterr().out
 
 def _plugin_args(**kw):
     from types import SimpleNamespace
@@ -1678,7 +1678,7 @@ def test_init_fails_when_plugin_settings_not_written(
                         ["mcs_setup", "init", "--yes"])
     assert mcs_setup.main() == 1
     assert ran == ["gateway", "check"]
-    assert "init: FAIL — Hermes plugin settings were not fully written" \
+    assert "初期設定: Hermes連携の設定をすべて保存できませんでした" \
         in capsys.readouterr().out
     # the config itself was still written before the Hermes step
     saved = json.loads((tmp_path / "c.json").read_text())
@@ -1861,7 +1861,7 @@ def test_local_llm_block_validation(monkeypatch):
     errors, _w = mcs_setup.validate_config({
         "mcs_login_id": "u", "notify_target": "slack",
         "local_llm": {"url": "https://evil.example.com/v1/chat"}})
-    assert any("local_llm.url" in e and "loopback" in e
+    assert any("local_llm.url" in e and "この端末内" in e
                for e in errors)
 
     errors, _w = mcs_setup.validate_config({
@@ -1880,7 +1880,7 @@ def test_stale_transport_scope_warns(monkeypatch):
                               "team_id": "t", "channel_id": "c"},
                    "discord": {"profile": "p", "application_id": "a",
                                "guild_id": "g", "channel_id": "c"}}})
-    assert any("notify.discord" in w and "ignored" in w
+    assert any("notify.discord" in w and "使いません" in w
                for w in warnings)
 
 
@@ -1924,7 +1924,7 @@ def test_agent_reconcile_retries_transient_bootstrap(
     assert state["calls"].count("bootstrap") == boots
     assert state["calls"][-1] == "print"
     assert sleeps == [1] * sum(rc != 0 for rc in outcomes)
-    assert any("bootstrap failed" in n for n in notes) is (not ok)
+    assert any("起動に失敗しました" in n for n in notes) is (not ok)
 
 
 def test_check_reports_deployed_script_drift(monkeypatch, tmp_path, capsys):
@@ -2030,31 +2030,31 @@ def test_check_flags_invalid_config_file(monkeypatch, tmp_path, capsys):
     assert mcs_setup.cmd_check(None) == 0      # absent = fresh, not broken
     conf.write_text("{")
     assert mcs_setup.cmd_check(None) == 1
-    assert "unreadable or invalid" in capsys.readouterr().out
+    assert "読み取れないか、形式が不正" in capsys.readouterr().out
 
 
 def test_check_prints_prioritized_blocker_summary(monkeypatch, capsys):
     """Blockers end the output in priority order (runtime before config),
     each with a one-line fix."""
     _check_only(monkeypatch,
-                runtime=(["interpreter /h/py is missing — cannot start; "
-                          "re-run `/r/install.sh` (stage 2)"], []),
-                config=(["missing required key: mcs_login_id"],
-                        ["unknown config key: x"]))
+                runtime=(["Python（/h/py）が見つかりません。"
+                          "`/r/install.sh`を再実行してください（手順2）"], []),
+                config=(["必須の設定項目がありません: mcs_login_id"],
+                        ["未対応の設定項目: x"]))
     assert mcs_setup.cmd_check(None) == 1
     out = capsys.readouterr().out
-    summary = out[out.index("blockers (2)"):]
-    assert summary.index("interpreter /h/py is missing") \
-        < summary.index("missing required key")
-    assert "fix: /r/install.sh" in summary
-    assert "fix: mcs_setup.py init" in summary
-    assert out.rstrip().endswith("check: FAIL (2 errors, 1 warnings)")
+    summary = out[out.index("動作を妨げる問題が2件"):]
+    assert summary.index("Python（/h/py）が見つかりません") \
+        < summary.index("必須の設定項目がありません")
+    assert "対処: /r/install.sh" in summary
+    assert "対処: mcs_setup.py init" in summary
+    assert out.rstrip().endswith("設定確認: 要修正 （問題2件、注意1件）")
 
 
 def test_check_ok_prints_no_blocker_summary(monkeypatch, capsys):
     _check_only(monkeypatch)
     assert mcs_setup.cmd_check(None) == 0
-    assert "blockers" not in capsys.readouterr().out
+    assert "動作を妨げる問題" not in capsys.readouterr().out
 
 
 def test_doctor_is_local_and_does_not_run_check(monkeypatch, capsys):
@@ -2089,12 +2089,12 @@ def test_check_runtime_verifies_services_interpreter(monkeypatch, tmp_path):
     cfg = {"hermes_bin": _stub_py(tmp_path / "hermes", 0)}
     monkeypatch.setattr(mcs_setup, "HERMES_PY", str(tmp_path / "absent"))
     errors, _ = mcs_setup.check_runtime(cfg)
-    assert any("absent is missing" in e and "install.sh" in e
+    assert any("absent）が見つからない" in e and "install.sh" in e
                for e in errors)
     monkeypatch.setattr(mcs_setup, "HERMES_PY",
                         _stub_py(tmp_path / "old-py", 1))
     errors, _ = mcs_setup.check_runtime(cfg)
-    assert any("not a working Python >= 3.14" in e for e in errors)
+    assert any("起動できないか、3.14未満" in e for e in errors)
     monkeypatch.setattr(mcs_setup, "HERMES_PY",
                         _stub_py(tmp_path / "py", 0))
     assert mcs_setup.check_runtime(cfg) == ([], [])
@@ -2112,7 +2112,7 @@ def test_check_runtime_hermes_must_resolve_on_launchd_path(monkeypatch,
                         shell_only if path is None else None)
     monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: exe == shell_only)
     errors, _ = mcs_setup.check_runtime({})
-    assert any("launchd PATH" in e
+    assert any("常駐処理の検索先" in e
                and f"ln -s {shell_only} ~/.local/bin/hermes" in e
                for e in errors)
     # an explicit hermes_bin is what every job uses -> fine
@@ -2148,9 +2148,9 @@ def test_check_runtime_nothing_installed_only_warns(monkeypatch, tmp_path):
     _runtime_darwin(monkeypatch, tmp_path)
     errors, warnings = mcs_setup.check_runtime({"hermes_bin": "/x"})
     assert errors == []
-    assert any("org.mcs.recovery" in w and "not installed" in w
+    assert any("org.mcs.recovery" in w and "未導入" in w
                for w in warnings)
-    assert any("no llama-server LaunchAgent" in w for w in warnings)
+    assert any("ローカルAIの常駐設定がありません" in w for w in warnings)
 
 
 def test_check_runtime_recovery_watchdog(monkeypatch, tmp_path):
@@ -2169,9 +2169,9 @@ def test_check_runtime_recovery_watchdog(monkeypatch, tmp_path):
     (rec / "repo_path").write_text("/elsewhere\n")
     loaded.discard("org.mcs.recovery")
     errors, warnings = mcs_setup.check_runtime({"hermes_bin": "/x"})
-    assert any("differs from the repo copy" in w for w in warnings)
-    assert any("recovers /elsewhere" in w for w in warnings)
-    assert any("org.mcs.recovery installed but not loaded" in e
+    assert any("配布版と異なります" in w for w in warnings)
+    assert any("対象は/elsewhere" in w for w in warnings)
+    assert any("org.mcs.recoveryは導入済みですが読み込まれていません" in e
                and "launchctl bootstrap" in e for e in errors)
 
 
@@ -2180,7 +2180,7 @@ def test_check_runtime_llama_agent_installed_but_unloaded(monkeypatch,
     _runtime_darwin(monkeypatch, tmp_path)
     (tmp_path / "agents" / "ai.mcs.llamaserver.plist").write_text("x")
     errors, _ = mcs_setup.check_runtime({"hermes_bin": "/x"})
-    assert any("ai.mcs.llamaserver installed but not loaded" in e
+    assert any("ai.mcs.llamaserverは導入済みですが読み込まれておらず" in e
                for e in errors)
 
 
@@ -2196,7 +2196,7 @@ def test_services_refuses_missing_interpreter(monkeypatch, tmp_path,
     assert mcs_setup.cmd_services(args) == 1
     assert calls == []
     assert not (tmp_path / "scripts").exists()
-    assert "nothing rendered" in capsys.readouterr().out
+    assert "設定ファイルは作成していません" in capsys.readouterr().out
 
 
 def test_plugin_role_ids_written_only_when_given(monkeypatch):
@@ -2224,7 +2224,7 @@ def test_all_replies_config_requires_boolean():
     base = {"mcs_login_id": "u1", "notify_target": "slack:#mcs"}
     assert mcs_setup.validate_config({**base, "notify_all_replies": True}) == ([], [])
     errors, _ = mcs_setup.validate_config({**base, "notify_all_replies": "true"})
-    assert errors == ["notify_all_replies: must be a boolean"]
+    assert errors == ["notify_all_replies: true（有効）かfalse（無効）を指定してください"]
 
 
 @pytest.mark.parametrize("raw", [b'{"a":0,"b":1,"c":2}', b'null', b'[' * 2000 + b']' * 2000], ids=["object", "null", "deep"])
@@ -2241,7 +2241,7 @@ def test_check_rejects_unreadable_slots_and_uses_bounded_probe(monkeypatch, raw)
     _, warnings = mcs_setup.check_environment({"local_llm": {"url": "http://127.0.0.1:8089/v1/chat/completions"}})
     assert calls == [("http://127.0.0.1:8089/v1/models", "GET", None, 3),
                      ("http://127.0.0.1:8089/slots", "GET", None, 3)]
-    assert any("/slots unreadable" in w for w in warnings)
+    assert any("同時処理枠を読み取れない" in w for w in warnings)
 
 
 @pytest.mark.parametrize("raw", [b'\xff', b'[' * 2000 + b']' * 2000], ids=["encoding", "deep"])
@@ -2286,8 +2286,8 @@ def test_alerts_need_an_interactive_transport():
     base = {"mcs_login_id": "u1", "notify_target": "slack:#mcs",
             "signals": {"notify": True}}
     errors, _ = mcs_setup.validate_config(base)
-    assert errors == ['signals.notify: requires notify.interactive '
-                      '("slack", "discord" or "lineworks") — alerts are cards']
+    assert errors == ['signals.notify: アラートは通知カードで届くため、notify.interactiveを'
+                      '"slack"、"discord"、"lineworks"のいずれかに設定してください']
     scope = {"profile": "default", "application_id": "A1234567890",
              "team_id": "T1234567890", "channel_id": "C1234567890"}
     assert mcs_setup.validate_config(
@@ -2359,7 +2359,7 @@ def test_init_invalid_runtime_mode_set_writes_no_secret(monkeypatch, tmp_path, c
     monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic")
     monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init", "--yes", "--set", 'runtime_mode="standalon"'])
     assert mcs_setup.main() == 1
-    assert "nothing written" in capsys.readouterr().out
+    assert "変更は保存していません" in capsys.readouterr().out
     assert not (tmp_path / ".env").exists() and not (tmp_path / "c.json").exists()
 
 
@@ -2384,3 +2384,24 @@ def test_wizard_missing_project_ids_still_required(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
     assert mcs_setup._ask("semantic.project_ids", "reqintlist", None, "d",
                           None, False) == [3]
+
+
+@pytest.mark.parametrize("argv", [["--help"], ["init", "--help"],
+                                  ["services", "--help"], ["doctor", "--help"],
+                                  ["--unknown-option"]])
+def test_japanese_cli_guidance_does_not_read_or_change_config(monkeypatch, capsys, argv):
+    monkeypatch.setattr(mcs_setup, "load_config", lambda: pytest.fail("guidance must not read config"))
+    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: pytest.fail("guidance must not run services"))
+    with pytest.raises(SystemExit) as stopped:
+        mcs_setup.main(argv)
+    output = capsys.readouterr()
+    if argv == ["--unknown-option"]:
+        assert stopped.value.code == 2
+        assert "指定内容に誤りがあります" in output.err
+        assert "--help" in output.err
+    else:
+        assert stopped.value.code == 0
+        assert "使い方:" in output.out
+        assert "オプション" in output.out
+        assert "変更しません" in output.out
+        assert "show this help message" not in output.out

@@ -71,9 +71,9 @@ def test_unsafe_checkout_or_missing_proof_changes_nothing(tmp_path, case):
     assert (checkout / ".git/HEAD").read_text().strip() == head
     assert (venv / "bin/python").read_text() == "#!/bin/sh\nexit 1\n"
     assert not (checkout / "venv.pre-python314").exists()
-    expected = {"unknown_commit": "unknown commit", "branch": "on a branch or has local changes",
-                "dirty": "on a branch or has local changes",
-                "no_lock": "lock or backup is invalid"}[case]
+    expected = {"unknown_commit": "未検証の版", "branch": "ブランチ上にあるか未コミットの変更",
+                "dirty": "ブランチ上にあるか未コミットの変更",
+                "no_lock": "ロックまたはバックアップが不正"}[case]
     assert expected in result.stderr
 
 
@@ -141,9 +141,9 @@ def test_confirmed_own_checkout_is_kept_and_venv_rebuilt(tmp_path, case):
         return
     assert result.returncode == 1, result.stdout + result.stderr
     assert (venv / "bin/python").read_text() == "#!/bin/sh\nexit 1\n"
-    assert {"mismatch": "not the confirmed", "old_python": "does not declare Python 3.14",
-            "previous_pin_unready": "does not declare Python 3.14",
-            "dirty": "has local changes", "no_lock": "lock or backup is invalid"}[case] \
+    assert {"mismatch": "と一致しません", "old_python": "Python 3.14 対応を宣言していません",
+            "previous_pin_unready": "Python 3.14 対応を宣言していません",
+            "dirty": "コミットされていない変更", "no_lock": "ロックまたはバックアップが不正"}[case] \
         in result.stderr
 
 
@@ -170,9 +170,9 @@ def test_an_explicit_keep_is_judged_before_the_current_pin_too(tmp_path, case):
     assert (checkout / ".git/HEAD").read_text().strip() == head
     if case == "kept":
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "keeping the confirmed hermes-agent checkout" in result.stdout
+        assert "確認済みの Hermes" in result.stdout
         return
     assert result.returncode == 1, result.stdout + result.stderr
     assert (venv / "bin/python").read_text() == "#!/bin/sh\nexit 1\n"
-    assert {"mismatch": "not the confirmed", "unready": "does not declare Python 3.14",
-            "dirty": "has local changes"}[case] in result.stderr
+    assert {"mismatch": "と一致しません", "unready": "Python 3.14 対応を宣言していません",
+            "dirty": "コミットされていない変更"}[case] in result.stderr

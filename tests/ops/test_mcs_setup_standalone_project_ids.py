@@ -28,7 +28,7 @@ def _run(monkeypatch, tmp_path, ids):
 def test_unusable_project_ids_write_nothing(monkeypatch, tmp_path, capsys, ids):
     code, stored = _run(monkeypatch, tmp_path, ids)
     assert code == 1
-    assert "project ID" in capsys.readouterr().out
+    assert "プロジェクトID" in capsys.readouterr().out
     assert stored == []
     assert not (tmp_path / "c.json").exists()
     assert not (tmp_path / ".env").exists()

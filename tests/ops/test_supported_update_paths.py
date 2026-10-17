@@ -189,8 +189,8 @@ def test_manifest_preserves_exact_historical_26_and_supported_sources():
                  for t in (11, 12) for mode in ("hermes", "standalone")}
     expected |= {("v1.0.11", "v1.0.12", mode) for mode in ("hermes", "standalone")}
     assert historical == expected and len(historical) == 26
-    assert MANIFEST["target"]["version"] == "v1.0.23"
-    assert set(FEATURES) == set(ORIGINS) == {f"v1.0.{n}" for n in range(23)}
+    assert MANIFEST["target"]["version"] == "v1.0.24"
+    assert set(FEATURES) == set(ORIGINS) == {f"v1.0.{n}" for n in range(24)}
     assert {(p["source"], p["runtime"]) for p in PATHS} == {
         (release, mode) for release, flags in FEATURES.items()
         for mode in (["hermes", "standalone"] if flags["standalone"] else ["hermes"])}
@@ -405,7 +405,7 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
     # The unchanged default watchdog is a pre-merge blocker naming the step.
     result = updater.plan(objects.target)
     assert result["route"] == "blocked"
-    assert "recovery_runtime: runtime Python version unsupported" in result["blockers"]
+    assert "recovery_runtime: 実行環境のPythonの版が対応範囲外です" in result["blockers"]
     assert any("recovery_python" in note for note in result["notes"])
     assert updater.apply(objects.target, objects.after, None, reinstall=install) == 1
     assert not merged() and objects.head == objects.before

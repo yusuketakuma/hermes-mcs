@@ -54,8 +54,8 @@ git clone https://github.com/yusuketakuma/hermes-mcs.git
 cd hermes-mcs
 
 ./install.sh --preflight   # 1. 読取り専用の事前チェック（何も書き込まない）
-                           #    NG 行の下の "fix:" を実行し、
-                           #    "preflight: 0 blocker(s)" になるまで繰り返す
+                           #    要対処の行の下の "対処:" を実行し、
+                           #    "事前確認: 導入を妨げる問題 0件" になるまで繰り返す
 ./install.sh --dry-run     # 2. （任意）各ステージで何が作られるかを表示
 ./install.sh               # 3. 本導入。途中で止まっても直して再実行すれば続きから進む
 ```
@@ -64,7 +64,7 @@ LLM・復旧設定のファイル配置や一時ファイルの削除に失敗�
 権限・空き容量を修復して再実行する。`--recovery-python` を明示した場合は、
 `--no-recovery` と併用した事前チェックでも指定を検証する。
 
-`install.sh` の最後に `Installed. Summary:` と、次に実行するコマンドが
+`install.sh` の最後に `ソフトの導入が完了しました。結果:` と、次に実行するコマンドが
 **フルパスで**表示される。それをそのままコピーして実行する（下はその形。
 `python` は install.sh が作った venv のインタプリタで、macOS 標準の
 `python3` では動かない）:
@@ -75,7 +75,7 @@ $PY mcs/ops/mcs_setup.py init       # 4. 本体設定・最終チェック。Sla
 $PY mcs/ops/mcs_setup.py doctor     #    （困ったとき）範囲別の件数だけの読取り診断（check の代わりではない）
 ```
 
-`init` が `check: OK` で終われば初回設定は完了です。`--no-services` で
+`init` が `設定確認: 正常` で終われば初回設定は完了です。`--no-services` で
 導入した場合や、更新後に配置 drift が出た場合だけ、`services` → `check`
 を実行します。LINE WORKSでは[接続ガイド](LINEWORKS.md)で認証・Callback・独立常駐を設定し、再診断してください。
 収集開始前に Chrome を MCS にログインしたプロファイルで
@@ -83,11 +83,11 @@ CDP ポート `:9333` 付きで起動してください（§A-5）。
 
 **成功の目安**:
 
-- `--preflight` の最終行が `preflight: 0 blocker(s), N warning(s)`（exit 0）
-- `install.sh` が `Installed. Summary:` と 6 ステージ分の結果を表示して終わる
-  （途中で止まった場合は `error: installation stopped; ...` が出る — §7-1）
-- `check` の最終行が `check: OK (0 errors, N warnings)`（exit 0）。
-  `warn` 行は動作を止めないが、内容は一度確認する
+- `--preflight` の最終行が `事前確認: 導入を妨げる問題 0件、注意 N件`（exit 0）
+- `install.sh` が `ソフトの導入が完了しました。結果:` と 6 ステージ分の結果を表示して終わる
+  （途中で止まった場合は `エラー: 導入を中断しました。…` が出る — §7-1）
+- `check` の最終行が `設定確認: 正常 （問題0件、注意N件）`（exit 0）。
+  `注意:` 行は動作を止めないが、内容は一度確認する
 - `check` が OK であれば `local.mcs-cmd`・`local.mcs-int`・
   `ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`・`org.mcs.recovery`
   と、llama-server（`ai.hermes.llamacpp` か `ai.mcs.llamaserver` の
@@ -147,7 +147,7 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 ```bash
 git clone https://github.com/yusuketakuma/hermes-mcs.git
 cd hermes-mcs
-./install.sh --preflight   # 読取り専用の事前チェック（OK / WARN / NG と fix: を表示）
+./install.sh --preflight   # 読取り専用の事前チェック（正常 / 注意 / 要対処 と 対処: を表示）
 ./install.sh               # 冪等: 何度実行しても既存分は skip、中断分は再開
 ```
 
@@ -155,8 +155,8 @@ cd hermes-mcs
 
 | オプション | 動作 |
 |---|---|
-| `--preflight`（別名 `--check-only`） | 前提条件を読取り専用で確認し `OK`/`WARN`/`NG` を表示。NG には `fix:` 行で直し方が付く。NG が1つでもあれば exit 1。何も書き込まない |
-| `--dry-run` | preflight に加えて、各ステージが何を作成・変更するか（`[new]`/`[exists]`）を表示。何も書き込まない。NG があれば exit 1 |
+| `--preflight`（別名 `--check-only`） | 前提条件を読取り専用で確認し `正常`/`注意`/`要対処` を表示。要対処には `対処:` 行で直し方が付く。要対処が1つでもあれば exit 1。何も書き込まない |
+| `--dry-run` | preflight に加えて、各ステージが何を作成・変更するか（`[新規]`/`[既存]`）を表示。何も書き込まない。要対処があれば exit 1 |
 | `--mode hermes\|standalone` | 実行方式。省略時は既存 `config.json` の `runtime_mode` を引き継ぎ、それも無い初回の対話実行では尋ねる（Enter=hermes）。非対話は hermes。standalone では位置引数 `HERMES_HOME` は指定不可（[STANDALONE.md](STANDALONE.md)） |
 | `--recovery-python PATH` | 復旧 watchdog（stage 6）を実行する既存の独立 Python の絶対パス。何かを書き込む前に Python ≥3.14 と SQLite の WAL-reset 修正を検証し、更新されるチェックアウト内の実行ファイルは拒否する。私有 `config.json` の `recovery_python` に保存される（後から `mcs_setup.py init --yes --recovery-python <絶対パス>` でも変更可）。未指定時は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの。代替 Python の自動選択・導入はしない |
 | `--force-repo` | 別の checkout から導入済みの環境（plugin symlink・`~/.mcs-recovery/repo_path`・services）を、この checkout に切り替えることを許可する（§A-7） |
@@ -197,8 +197,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 全ジョブをこのインタプリタで起動するため。
 
 `install.sh` が行うこと（6 ステージ）。**失敗したステージで install は
-止まり**（非 0 終了・`error: installation stopped; repair the failed stage
-and re-run install.sh`）、後続ステージは実行されない。原因を直して
+止まり**（非 0 終了・`エラー: 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください`）、後続ステージは実行されない。原因を直して
 再実行すれば、完了済みの部分は skip され中断箇所から続く:
 
 | # | 内容 | 再実行・失敗時 |
@@ -210,7 +209,7 @@ and re-run install.sh`）、後続ステージは実行されない。原因を�
 | 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期6件（`backup.enabled=true`ならoffsiteを加え7件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`、旧版は `.prev`。復旧対象の checkout を `~/.mcs-recovery/repo_path` に記録。15分間隔で中断した update を復旧）。内容・記録が変わった時か未ロード時だけ再読込 | macOS では配備前に復旧用 Python（既定は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの、または `--recovery-python`）の Python ≥3.14 と SQLite の WAL-reset 修正を検査し、影響版・版不明なら tool・plist を配備せず停止（自動で別 Python へ切り替えない）。bootstrap 失敗でも停止 |
 
-最後に `Installed. Summary:` として各ステージの結果と、次に実行する
+最後に `ソフトの導入が完了しました。結果:` として各ステージの結果と、次に実行する
 コマンド（venv インタプリタのフルパス付きの `init`・非対話版の例・
 復旧用の `services`・`check`）が表示される。手動で残るのは `mcs_setup.py init`
 （秘密情報と選択が必要）だけ。
@@ -250,7 +249,7 @@ and re-run install.sh`）、後続ステージは実行されない。原因を�
 インタプリタを使うのが確実 — macOS 標準の `/usr/bin/python3` は
 3.9 系で古い）
 
-対話ウィザードが全 config キーをセクション別に案内する（各項目に
+対話ウィザードが設定項目を最大12節で案内する（各項目に
 説明と既定値を表示、Enter でそのまま進行。関連機能がオフの項目は
 自動スキップ）。`init` が行うこと:
 
@@ -334,9 +333,9 @@ and re-run install.sh`）、後続ステージは実行されない。原因を�
   4. 配置 drift: `~/.hermes/scripts/` の wrapper が repo から描画した
      内容と一致するか
 
-  出力は `warn :` / `error:` 行の後、エラーがあれば
-  `blockers (N) — fix in this order:` に番号付きで要約（各項目に
-  `fix:` 行）、最後に `check: OK|FAIL (N errors, N warnings)`。
+  出力は `注意:` / `問題:` 行の後、エラーがあれば
+  `動作を妨げる問題がN件あります。次の順で修正してください:` に番号付きで要約（各項目に
+  `対処:` 行）、最後に `設定確認: 正常／要修正 （問題N件、注意N件）`。
   上から順に直して再実行する
 - `doctor` — 既定ではローカルの読取りだけで、configuration・
   interpreter・runtime・recovery_runtime などの範囲ごとに状態と
@@ -421,12 +420,12 @@ wrapper・plist（`__REPO__`）、復旧ツールが復旧する checkout を記
   再実行する**（ステージ 3・5・6 が新しいパスへ張り替える）。移動だけ
   では plugin・定期ジョブ・watchdog が旧パスを指したまま壊れる
 - 旧 checkout がまだ存在する場合、install.sh は
-  `this machine is installed from another checkout (<旧パス>)` で停止する
-  （preflight では `existing install points at another checkout` の NG）。
+  `この Mac は別フォルダ（<旧パス>）から導入されています。` で始まる案内を表示して停止する
+  （preflight では 「既存の導入先は別のフォルダです」 の 要対処）。
   切り替える意図なら `./install.sh --force-repo`、そうでなければ旧 checkout
   側の `install.sh` を使う。旧パスが既に存在しなければ競合扱いにならない
 - 記録のずれは `check` が
-  `recovery watchdog recovers <パス>, not this checkout <パス>` として警告する
+  `復旧監視の対象は<パス>です。` で始まる案内で、現在の導入先との違いを警告する
 
 ## 3. Path B — スタンドアローン（Hermesなし・全MCS機能）
 
@@ -452,7 +451,7 @@ installerは独立venvと公式接続SDK、ローカルLLM、常駐プロセス�
 用意します。ウィザードがMCS設定・配信先・許可ユーザー・プロジェクト範囲と
 認証情報を設定します。初回設定中は接続が起動できず再試行する場合があります。
 設定後の`check`はHermes未導入をエラー扱いせず、実際の必須条件を検証します。
-`check: FAIL`を想定内として無視しないでください。
+`設定確認: 要修正`を想定内として無視しないでください。
 
 ### B-2. 接続・常駐・更新
 
@@ -568,70 +567,72 @@ cronに追加され7件になる。別に LLM サーバ常駐の
 まず `./install.sh --preflight`（導入前・導入途中）または
 `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check`
 （導入後）を実行し、出力されたメッセージを下の表で引く。どちらも
-直し方を `fix:` 行に出すので、基本はそれを上から順に実行して再実行する。
+直し方を `対処:` 行に出すので、基本はそれを上から順に実行して再実行する。
 表中の `$PY` は `~/.hermes/hermes-agent/venv/bin/python`。
 
 ### 7-1. `install.sh --preflight` / `install.sh` のメッセージ
 
-| メッセージ | 原因 | 対処 |
+| 表示内容の要旨（パス・版番号などは環境によって異なります） | 原因 | 対処 |
 |---|---|---|
-| `NG running as root` / `error: do not run install.sh as root or with sudo` | `sudo` や root で実行した | 普段のユーザーで `sudo` なしに再実行 |
-| `NG macOS X is too old` | macOS 13 未満 | macOS をアップデート |
-| `NG Xcode Command Line Tools missing` / `NG git missing` | 開発ツール未導入 | `xcode-select --install` |
-| `NG Homebrew not installed` / `error: brew not found` | Homebrew 未導入 | `fix:` 行の Homebrew 公式インストールコマンドを実行（brew を使わないなら `--no-brew`） |
-| `NG no Python 3.14 on PATH` | `--no-brew` 等で brew が Python を入れられない | `brew install python@3.14`（brew があれば stage 1 が入れるので NG にならない） |
-| `NG disk: only N GB free` | 空き容量不足（モデル込みで約 12 GB） | 空きを作って再実行 |
-| `NG network: cannot reach github.com` / `huggingface.co` | clone・モデル DL に必要な通信ができない | ネットワーク・プロキシを確認し `curl -I <URL>` で疎通確認 |
-| `NG port 8080 is taken by a process that is not an LLM server` | 別のプロセスが :8080 を使用 | `lsof -nP -iTCP:8080 -sTCP:LISTEN` で特定して停止、または自前 LLM なら `--no-llm` |
-| `NG existing install points at another checkout: <パス>` / `error: this machine is installed from another checkout` | 別の checkout から導入済み | 旧 checkout の `install.sh` を使うか、切り替えるなら `./install.sh --force-repo`（§A-7） |
-| `NG custom HERMES_HOME (...) is not supported by the services stage` | `~/.hermes` 以外を引数に指定 | 既定の `~/.hermes` を使うか `--no-services` を付ける |
-| `NG <HERMES_HOME>/hermes-agent exists but is not a git checkout` / `cannot read HEAD of ...` | hermes-agent ディレクトリが壊れている | `fix:` 行の `mv ... .bak` で退避して再実行（stage 2 が clone し直す） |
-| `WARN hermes-agent checkout is at X, not the validated pin` | 既存 checkout が検証済み commit と違う（保持される） | そのままでも続行可。揃えるなら `fix:` 行の `git ... checkout --detach <pin>` |
-| `WARN running from a git worktree` | worktree から実行している | main checkout から実行する |
-| `WARN Google Chrome missing` | Chrome 未導入（brew があれば stage 1 が入れる） | `brew install --cask google-chrome` |
-| `unknown option: ...`（exit 2） | 存在しないオプション | `./install.sh -h` で確認 |
-| `error: installation stopped; repair the failed stage and re-run install.sh` | 直前の `error:` 行のステージで停止した | その `error:` の指示に従って直し、`./install.sh` を再実行（完了分は skip） |
-| `error: model download failed — re-run install.sh to resume` | モデル DL が途中で失敗 | そのまま `./install.sh` を再実行（`.part` から再開） |
-| `error: model checksum mismatch` | DL 結果が `install.sh` 記録の sha256（または `MCS_MODEL_SHA256`）と不一致 | 通信経路を確認し、上書きしている場合は値を確認して再実行（`.part` は削除済みで最初から DL） |
-| `error: installing hermes-agent into ... failed` | pip install の失敗（通信・コンパイラ） | 上に出たエラーを直して再実行（pip install をやり直す） |
-| `error: llama-server not found` | llama.cpp 未導入 | `brew install llama.cpp`、または `--no-llm` |
-| `error: plugins enable failed` | hermes CLI・profile 設定の問題 | hermes の設定を直すか profile の `config.yaml` の `plugins.enabled` に `mcs-discord-commands` を追加して再実行 |
-| `error: services reported problems` | stage 5 の `mcs_setup.py services` が失敗 | 直前の services の出力を確認、`$PY mcs/ops/mcs_setup.py check` の blocker を直して再実行 |
-| `recovery template interpreter unsafe or unverified`（preflight NG）/ `desired recovery interpreter unsafe/unknown or deployed selection drift — nothing written` / `recovery desired interpreter unsafe or unverified — nothing in stage 6 installed` | 復旧 watchdog 用 Python（既定は上記の `python3.14` 候補）が Python <3.14、または SQLite の WAL-reset 修正が無い・版不明。導入済みジョブと選択が異なる場合も停止 | 修正済み SQLite をリンクした既存の独立 Python を `--recovery-python <絶対パス>` で指定して再実行するか、`--no-recovery` で stage 6 を省く。既存ジョブとの不一致は `mcs_setup.py init --yes --recovery-python <絶対パス>` で希望を保存し、復旧ジョブが実行中でない時に `mcs_setup.py services` で修復 |
-| `warn: ~/.local/bin is not on PATH` | shell から `hermes` が見えない | シェルの profile で `~/.local/bin` を PATH に追加（定期ジョブは独自の PATH を使うので影響しない） |
-| `warn: ai.mcs.llamaserver plist changed but the running server was kept` | plist 更新時にサーバが応答中だった | 処理が空いた時に表示された `launchctl bootout ...; launchctl bootstrap ...` を実行 |
-| `warn: hermes-managed .../ai.hermes.llamacpp.plist exists but is NOT loaded` | hermes 管理の LLM agent が止まっている | 表示された `launchctl bootstrap ...` を実行 |
+| 管理者 root で実行されています | `sudo` や root で実行した | 普段のユーザーで `sudo` なしに再実行 |
+| `macOS <版> は古すぎます` | macOS 13 未満 | macOS をアップデート |
+| `Xcode Command Line Tools が未導入です`／`git が未導入です` | 開発ツール未導入 | `xcode-select --install` |
+| Homebrew が未導入です | Homebrew 未導入 | `対処:` 行の Homebrew 公式インストールコマンドを実行（brew を使わないなら `--no-brew`） |
+| 実行できる Python 3.14 が見つかりません | `--no-brew` 等で brew が Python を入れられない | `brew install python@3.14`（brew があれば stage 1 が入れるので 要対処 にならない） |
+| `ディスク: <パス> の空きは N GB です（必要容量は約 N GB、モデルは5.7 GB）` | 空き容量不足（モデル込みで約 12 GB） | 空きを作って再実行 |
+| `通信: <接続先> に接続できません` | clone・モデル DL に必要な通信ができない | ネットワーク・プロキシを確認し `curl -I <URL>` で疎通確認 |
+| `ポート8080が AI サーバー以外の処理に使用されています` | 別のプロセスが :8080 を使用 | `lsof -nP -iTCP:8080 -sTCP:LISTEN` で特定して停止、または自前 LLM なら `--no-llm` |
+| 既存の導入先は別のフォルダです | 別の checkout から導入済み | 旧 checkout の `install.sh` を使うか、切り替えるなら `./install.sh --force-repo`（§A-7） |
+| `常駐サービスは独自の HERMES_HOME（<パス>）に対応していません` | `~/.hermes` 以外を引数に指定 | 既定の `~/.hermes` を使うか `--no-services` を付ける |
+| `<パス> は存在しますが Git で取得したフォルダではありません`／`<パス> の現在の版（HEAD）を読み取れません` | hermes-agent ディレクトリが壊れている | `対処:` 行の `mv ... .bak` で退避して再実行（stage 2 が clone し直す） |
+| `Hermes は <現在の版> です。検証済み固定版 <指定版> と異なります（現状を保持します）` | 既存 checkout が検証済み commit と違う（保持される） | そのままでも続行可。揃えるなら `対処:` 行の `git ... checkout --detach <pin>` |
+| `Git の作業用フォルダ（<パス>）から実行しています` | worktree から実行している | main checkout から実行する |
+| Google Chrome が未導入です | Chrome 未導入（brew があれば stage 1 が入れる） | `brew install --cask google-chrome` |
+| `未対応のオプションです: <指定値>` | 存在しないオプション | `./install.sh -h` で確認 |
+| 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください | 直前の `エラー:` 行のステージで停止した | その `エラー:` の指示に従って直し、`./install.sh` を再実行（完了分は skip） |
+| `モデル取得に失敗しました` | モデル DL が途中で失敗 | そのまま `./install.sh` を再実行（`.part` から再開） |
+| `モデルの整合性が確認できません（SHA256: <検証値>）` | DL 結果が `install.sh` 記録の sha256（または `MCS_MODEL_SHA256`）と不一致 | 通信経路を確認し、上書きしている場合は値を確認して再実行（`.part` は削除済みで最初から DL） |
+| Hermes 導入に失敗しました | pip install の失敗（通信・コンパイラ） | 上に出たエラーを直して再実行（pip install をやり直す） |
+| llama-server が見つかりません | llama.cpp 未導入 | `brew install llama.cpp`、または `--no-llm` |
+| プラグインの有効化に失敗しました | hermes CLI・profile 設定の問題 | hermes の設定を直すか profile の `config.yaml` の `plugins.enabled` に `mcs-discord-commands` を追加して再実行 |
+| `常駐サービスの登録に問題があります` | stage 5 の `mcs_setup.py services` が失敗 | 直前の services の出力を確認、`$PY mcs/ops/mcs_setup.py check` の blocker を直して再実行 |
+| `復旧サービスのテンプレートに問題があります: Python の安全条件を満たさないか、確認できません`／`指定した復旧用 Python の安全性が確認できないか、稼働設定と一致しません` | 復旧 watchdog 用 Python（既定は上記の `python3.14` 候補）が Python <3.14、または SQLite の WAL-reset 修正が無い・版不明。導入済みジョブと選択が異なる場合も停止 | 修正済み SQLite をリンクした既存の独立 Python を `--recovery-python <絶対パス>` で指定して再実行するか、`--no-recovery` で stage 6 を省く。既存ジョブとの不一致は `mcs_setup.py init --yes --recovery-python <絶対パス>` で希望を保存し、復旧ジョブが実行中でない時に `mcs_setup.py services` で修復 |
+| `<パス> が PATH にありません` | shell から `hermes` が見えない | シェルの profile で `~/.local/bin` を PATH に追加（定期ジョブは独自の PATH を使うので影響しない） |
+| `AI サーバーの起動設定を更新しましたが、稼働中の処理は保持しました` | plist 更新時にサーバが応答中だった | 処理が空いた時に表示された `launchctl bootout ...; launchctl bootstrap ...` を実行 |
+| `Hermes 管理の <パス> は未起動で、ポート8080の応答もありません` | hermes 管理の LLM agent が止まっている | 表示された `launchctl bootstrap ...` を実行 |
+
 
 ### 7-2. `mcs_setup.py check` / `doctor` のメッセージ
 
-| メッセージ | 原因・対処 |
+| 表示内容の要旨（詳しい説明と対処は診断結果に表示されます） | 原因・対処 |
 |---|---|
-| `mcs_setup requires Python >= 3.14` / `mcs_setup imports require Python >= 3.10` | 素の `python3`（3.9 系）や旧 venv で実行した — `$PY`（Python 3.14 の venv）で実行する。1.0.17 以前の venv は更新ツールで移行する（[更新手順](UPGRADE_AGENT.md)） |
-| `service interpreter lacks the SQLite WAL-reset fix (need >=3.51.3, 3.50.7 or 3.44.6)` / `runtime SQLite WAL-reset fix missing` | 定期ジョブ（または復旧 watchdog）を実際に動かす Python のリンクする SQLite が影響版。`services`・`update` は変更前に停止し、`doctor` は `checks.runtime` / `checks.recovery_runtime` を blocked にする（`runtimes.*` は事実の表示だけ） — 修正済み SQLite（§1 の要件）をリンクした Python で venv を作り直す。復旧側は `--recovery-python` / `init --recovery-python` で安全な独立 Python を指定する |
-| `interpreter ~/.hermes/hermes-agent/venv/bin/python is missing or not executable` | 定期ジョブが起動できない — `./install.sh` を再実行（stage 2 が venv を作り直す）→ `$PY mcs/ops/mcs_setup.py services`。`services` もこの状態では何も描画せず止まる（独立モードでは専用venvを診断する） |
-| `hermes resolves here (...) but not on the launchd PATH` | 手元の shell では見えるが定期ジョブから見えない — 表示の `ln -s <hermes> ~/.local/bin/hermes`、または `init --set hermes_bin='"<パス>"'` |
-| `config.json is unreadable or invalid` / init の `config: ... nothing written` | `~/.mcs/config.json` が壊れている — 手で直すか `$PY mcs/ops/mcs_setup.py init --yes` で `config.json.corrupt-<日時>` へ退避して作り直す |
-| `missing required key: mcs_login_id` / `notify_target` | `init` で再登録（両方とも必須） |
-| `Keychain entry 'mcs-adapter' not found` | パスワード未登録 — `init` で登録（`.env` `MCS_PASSWORD` があれば警告に格下げ） |
-| `Keychain entry ... unreadable` | login keychain がロック中 — `security unlock-keychain` か GUI ログイン。再起動後も収集が必要な場合は `init` の `.env` フォールバック設定を確認 |
-| `Chrome binary missing` | Chrome が `/Applications` に無い — `brew install --cask google-chrome` |
-| `local LLM endpoint not reachable (http://127.0.0.1:8080/v1/models)` | llama-server 未起動 — Path A-1 または [スタンドアローン導入](STANDALONE.md)。収集自体は動く（警告） |
-| `llama-server advertises N slots` | `-np` が選択スロット数（3）未満 — plist の `-np 3` を確認 |
-| `LaunchAgent ai.hermes.llamacpp`（または `ai.mcs.llamaserver`）`installed but not loaded — the local LLM is down` | LLM サーバが止まっている — 表示の `launchctl bootstrap gui/<uid> <plist>` |
-| `no llama-server LaunchAgent (...)`（警告） | 自前サーバを `local_llm.url` で使うなら問題なし。そうでなければ `./install.sh`（stage 4） |
-| `update recovery watchdog (org.mcs.recovery) not installed`（警告） | `./install.sh`（stage 6。`--no-recovery` で導入しなかった場合は想定内） |
-| `~/.mcs-recovery/mcs_recover.py differs from the repo copy`（警告） | 復旧ツールが古い — `./install.sh` を再実行（旧版は `.prev` に残る） |
-| `recovery watchdog recovers <パス>, not this checkout <パス>`（警告） | checkout を移動した・別 checkout から実行している — 正しい checkout で `./install.sh`（§A-7） |
-| `LaunchAgent org.mcs.recovery installed but not loaded` | 表示の `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/org.mcs.recovery.plist` |
-| `LaunchAgent <label> installed but not loaded` | MCS の agent が止まっている — `$PY mcs/ops/mcs_setup.py services` |
-| `LaunchAgent <label> not installed`（警告） | `services` 未実行 — `$PY mcs/ops/mcs_setup.py services` |
-| `deployed scripts differ from the repo in ~/.hermes/scripts` | 更新後に services を再実行していない — `$PY mcs/ops/mcs_setup.py services` |
-| `scripts not deployed to ~/.hermes/scripts`（警告） | `services` 未実行 — `$PY mcs/ops/mcs_setup.py services` |
-| `launchd gui/<uid> unreachable from this session`（警告） | ssh 等 GUI セッション外で実行している — ログイン中の端末で再実行して確認 |
-| `hermes CLI not resolvable` | hermes 未導入（Hermesモードのエラー。独立モードならSTANDALONE.mdを確認。Path Aなら `install.sh` 再実行か `hermes_bin` 設定） |
-| `hermes gateway is not supervised` | `services` を実行（`hermes gateway install`+`start` で常駐化） |
-| `gateway-loaded sources (...) are newer than the running gateway`（警告） | `hermes gateway restart`（§A-6） |
-| `TYPESAFE_API_KEY is not resolvable` | semantic 有効時に必須 — `~/.mcs/.env` に登録 |
+| 設定ツールに必要な Python の版を満たしていません | 素の `python3`（3.9 系）や旧 venv で実行した — `$PY`（Python 3.14 の venv）で実行する。1.0.17 以前の venv は更新ツールで移行する（[更新手順](UPGRADE_AGENT.md)） |
+| 実行用または復旧用 Python の SQLite が安全条件を満たしていません | 定期ジョブ（または復旧 watchdog）を実際に動かす Python のリンクする SQLite が影響版。`services`・`update` は変更前に停止し、`doctor` は `checks.runtime` / `checks.recovery_runtime` を blocked にする（`runtimes.*` は事実の表示だけ） — 修正済み SQLite（§1 の要件）をリンクした Python で venv を作り直す。復旧側は `--recovery-python` / `init --recovery-python` で安全な独立 Python を指定する |
+| 実行用 Python が見つからないか、実行できません | 定期ジョブが起動できない — `./install.sh` を再実行（stage 2 が venv を作り直す）→ `$PY mcs/ops/mcs_setup.py services`。`services` もこの状態では何も描画せず止まる（独立モードでは専用venvを診断する） |
+| 定期実行から Hermes を呼び出せません | 手元の shell では見えるが定期ジョブから見えない — 表示の `ln -s <hermes> ~/.local/bin/hermes`、または `init --set hermes_bin='"<パス>"'` |
+| 設定ファイルを読み取れないか、形式が不正です | `~/.mcs/config.json` が壊れている — 手で直すか `$PY mcs/ops/mcs_setup.py init --yes` で `config.json.corrupt-<日時>` へ退避して作り直す |
+| 必須設定（mcs_login_id、notify_target）が不足しています | `init` で再登録（両方とも必須） |
+| Keychain に MCS のパスワードが登録されていません | パスワード未登録 — `init` で登録（`.env` `MCS_PASSWORD` があれば警告に格下げ） |
+| Keychain の登録内容を読み取れません | login keychain がロック中 — `security unlock-keychain` か GUI ログイン。再起動後も収集が必要な場合は `init` の `.env` フォールバック設定を確認 |
+| Google Chrome が見つかりません | Chrome が `/Applications` に無い — `brew install --cask google-chrome` |
+| ローカル AI に接続できません | llama-server 未起動 — Path A-1 または [スタンドアローン導入](STANDALONE.md)。収集自体は動く（警告） |
+| AI の同時処理枠が不足しています | `-np` が選択スロット数（3）未満 — plist の `-np 3` を確認 |
+| ローカル AI の起動設定はありますが、起動していません | LLM サーバが止まっている — 表示の `launchctl bootstrap gui/<uid> <plist>` |
+| ローカル AI の起動設定がありません（注意） | 自前サーバを `local_llm.url` で使うなら問題なし。そうでなければ `./install.sh`（stage 4） |
+| 更新の復旧監視が未導入です（注意） | `./install.sh`（stage 6。`--no-recovery` で導入しなかった場合は想定内） |
+| 配置済みの復旧ツールが配布版と異なります（注意） | 復旧ツールが古い — `./install.sh` を再実行（旧版は `.prev` に残る） |
+| 復旧監視が別の保存先を参照しています（注意） | checkout を移動した・別 checkout から実行している — 正しい checkout で `./install.sh`（§A-7） |
+| 復旧監視の設定はありますが、起動していません | 表示の `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/org.mcs.recovery.plist` |
+| 常駐処理の設定はありますが、起動していません | MCS の agent が止まっている — `$PY mcs/ops/mcs_setup.py services` |
+| 常駐処理の設定がありません（注意） | `services` 未実行 — `$PY mcs/ops/mcs_setup.py services` |
+| 配置済みのスクリプトが配布版と異なります | 更新後に services を再実行していない — `$PY mcs/ops/mcs_setup.py services` |
+| 定期実行スクリプトが未配置です（注意） | `services` 未実行 — `$PY mcs/ops/mcs_setup.py services` |
+| このセッションから macOS の常駐処理を確認できません（注意） | ssh 等 GUI セッション外で実行している — ログイン中の端末で再実行して確認 |
+| Hermes コマンドが見つかりません | hermes 未導入（Hermesモードのエラー。独立モードならSTANDALONE.mdを確認。Path Aなら `install.sh` 再実行か `hermes_bin` 設定） |
+| Hermes の通知接続が常駐管理されていません | `services` を実行（`hermes gateway install`+`start` で常駐化） |
+| 通知接続が更新前のプログラムで動いています（注意） | `hermes gateway restart`（§A-6） |
+| 外部の意味解析に必要な TYPESAFE_API_KEY が未設定です | semantic 有効時に必須 — `~/.mcs/.env` に登録 |
+
 
 ### 7-3. その他の症状
 

@@ -171,7 +171,7 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 | `config: …` / `new_config: …` | 現在 / 移行先の設定検証エラー。キーと理由を示し、承認後に `"$PY" "$REPO/mcs/ops/mcs_setup.py" init --set KEY=JSON` で直す（秘密値は扱わない） |
 | `update_in_progress_or_interrupted` | 前回の更新が途中。`"$PY" "$REPO/mcs/ops/mcs_update.py" status` を示し、`recover` を実行してから再計画 |
 | `restore_consent_pending` | DB 復元の人承認待ち。[バックアップ・復元ガイド §8](BACKUP.md#consent) の損失報告・バックアップhashに束縛された復元承認手順をユーザーが行う |
-| `hermes_not_resolvable` / `standalone_interpreter_unavailable` | 実行基盤が無い。`./install.sh --preflight` の `fix:` を確認しユーザーと対処 |
+| `hermes_not_resolvable` / `standalone_interpreter_unavailable` | 実行基盤が無い。`./install.sh --preflight` の `対処:` を確認しユーザーと対処 |
 | `insufficient_disk` | DB の2倍+64MB の空きが必要。ユーザーに空き容量の確保を依頼 |
 | `not_fast_forward: …` | checkout が移行先の祖先でない（ローカルコミットや新しすぎる版）。**【ユーザー確認】** |
 | `untracked_collision: …` | 未追跡ファイルが移行先の追跡ファイルと衝突。内容を示し **【ユーザー確認】** |
@@ -253,7 +253,7 @@ rm -r "$WORK"
 - 適用後に問題が見つかり戻す場合（ユーザー承認後）: `"$PY" "$REPO/mcs/ops/mcs_update.py" rollback`。
   schema 変更があった更新は DB 復元を伴い、損失報告への人承認を求められることがある。
 - `rollback_blocked_layout_floor` は保存済みカード形式を戻り先が扱えないことを示します。自動巻戻し・中断復旧にも同じ下限を適用し、旧コードへの切替前に拒否します。1.0.23から旧版へ戻すには、必要な損失確認と人承認を経て更新前backupを復元してください。復元holdは維持し、通常収集や通知を手動で強制再開しません。
-- install.sh が失敗した場合は出力末尾の `NG` / `fix:` を示し、ユーザーと対処してから §2 からやり直す。
+- install.sh が失敗した場合は出力末尾の `要対処` / `対処:` を示し、ユーザーと対処してから §2 からやり直す。
 
 ## 8. v1.0.0〜1.0.2 からの手動経路
 
@@ -280,3 +280,16 @@ MCS 更新: <現在版> → <移行先>（route=<…>）
 - 検証: status <…>、check <exit>、再plan <noop>
 - 各版の注意で実施した操作 / 未実施の操作と理由
 ```
+
+## 更新・復旧の日本語表示
+
+更新ランチャーと更新管理コマンドのヘルプ、対処案内、更新の影響説明は日本語です。
+`mcs update --help` で操作を確認できます。コマンド名・引数・終了コードと
+計画/状態のJSONは自動処理との互換性のため維持しています。JSON内の状態コードは翻訳しません。
+
+復旧ツールの使い方だけを確認するときは、
+`python3 ~/.mcs-recovery/mcs_recover.py --help` を使います。
+`--help` / `-h` は復旧を実行しません。不明な引数もエラーで終了し、復旧を開始しません。
+`--status` は引き続き機械処理用JSONを返します。引数なしの実行は復旧処理なので、
+ヘルプの代わりに実行しないでください。配備済みの復旧コピーは通常の更新・同期後に反映されます。
+OSや外部コマンドの技術的な詳細には英語が含まれることがあります。

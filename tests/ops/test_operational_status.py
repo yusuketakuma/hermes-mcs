@@ -286,7 +286,7 @@ def test_doctor_includes_stored_operations_without_probes_or_exit_change(
         for scope in ("llm", "services", "credentials", "data"):
             assert report["checks"][scope]["status"] == "not_checked"
     else:
-        assert output.startswith("doctor: mode=hermes")
+        assert output.startswith("動作診断: 実行方法=Hermes経由")
         assert all(line in output for line in observation.status_lines(expected))
-        assert "configuration: mcs setup check" in output
+        assert "設定の修正方法はmcs setup check" in output
     assert before == (health.read_bytes(), health.stat().st_mtime_ns)

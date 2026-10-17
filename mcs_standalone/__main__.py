@@ -150,7 +150,10 @@ def initialize(root, transport, *, yes=False):
         if yes or not sys.stdin.isatty():
             raise config.ConfigError("credential_entry_requires_terminal") from None
         fields = ["bot_token", *(["app_token"] if transport == "slack" else [])]
-        value = {key: getpass.getpass(transport + " " + key + ": ").strip() for key in fields}
+        labels = {"bot_token": "Botトークン（Slackはxoxb-で始まる値）",
+                  "app_token": "アプリトークン（xapp-で始まる値）"}
+        print("接続先の管理画面で発行したトークンを入力してください。入力は表示されません。")
+        value = {key: getpass.getpass(f"{transport}: {labels[key]}: ").strip() for key in fields}
         _coded(config.validate_credentials, value, transport)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".standalone-init-", dir=path.parent)
@@ -164,7 +167,7 @@ def initialize(root, transport, *, yes=False):
         fsync_dir(str(path.parent))
     finally:
         os.unlink(temporary)
-    print("認証設定を0600で保存しました。")
+    print("認証設定を保存しました（本人だけが読み書きできる権限）。")
     return 0
 
 
@@ -220,8 +223,8 @@ def check(root: str) -> int:
     if problem:
         print(problem, file=sys.stderr)
         return 1
-    print("standalone: " + (", ".join(sorted(used)) or "no Slack/Discord use")
-          + " — local configuration OK (no network request)")
+    print("standalone: " + (", ".join(sorted(used)) or "Slack/Discordの接続設定なし")
+          + " — 接続設定の確認が完了しました（外部通信はしていません）")
     return 0
 
 
@@ -238,14 +241,18 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Hermes なしで Slack / Discord と接続する MCS ランタイム")
     subs = parser.add_subparsers(dest="command", required=True)
     for name in ("run", "send", "check", "init", "status", "service"):
-        sub = subs.add_parser(name)
+        descriptions = {"run": "MCSの常駐処理を開始します", "send": "指定先へ通知を送ります",
+                        "check": "必要な設定を確認します", "init": "通知先の認証情報を設定します",
+                        "status": "機械処理用のJSONで稼働状態を表示します",
+                        "service": "常駐サービスの設定内容を表示します"}
+        sub = subs.add_parser(name, help=descriptions[name], description=descriptions[name])
         sub.add_argument("--root", default=HOME, help="設定とdataの保存先（既定: ~/.mcs）")
         if name == "send":
             sub.add_argument("--to", required=True)
             sub.add_argument("--quiet", action="store_true")
         if name == "init":
-            sub.add_argument("--transport", choices=("slack", "discord"), required=True)
-            sub.add_argument("--yes", action="store_true")
+            sub.add_argument("--transport", choices=("slack", "discord"), required=True, help="認証情報を登録する通知先")
+            sub.add_argument("--yes", action="store_true", help="質問しません。認証情報が未登録なら停止します")
     args = parser.parse_args(argv)
     try:
         if args.command == "run":
@@ -264,6 +271,8 @@ def main(argv=None) -> int:
         return check(args.root)
     except config.ConfigError as exc:
         # Codes only: native exceptions can embed paths or secret values.
+        if args.command in ("init", "check"):
+            print("接続設定を確認できません。通知先・操作権限・認証情報を確認してください。")
         print(str(exc), file=sys.stderr)
         if args.command != "send":
             return 1

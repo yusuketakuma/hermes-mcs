@@ -111,7 +111,7 @@ def test_old_standalone_venv_is_preserved_and_busy_runtime_is_not_replaced(tmp_p
     preserved = venv if busy else home / '.mcs/venv.pre-python314'
     assert (preserved / 'prior-marker').read_text() == 'synthetic prior runtime'
     if busy:
-        assert 'still in use' in result.stderr
+        assert '稼働中です' in result.stderr
         assert not (home / '.mcs/venv.pre-python314').exists()
     else:
         assert (venv / 'bin/python3').exists()
@@ -130,7 +130,7 @@ def test_existing_installation_cannot_race_a_scheduled_tick_during_runtime_rebui
     (data / marker).write_text('synthetic established installation')
     result = _run(env, None, '--mode', 'standalone', *FLAGS)
     assert result.returncode == 1
-    assert 'coordinated Python runtime migration' in result.stderr
+    assert 'Python 移行には更新ツールが必要' in result.stderr
     assert py.read_text() == '#!/bin/sh\nexit 1\n'
     assert not (home / '.mcs/venv.pre-python314').exists()
 
@@ -164,7 +164,7 @@ def test_updater_migration_requires_inherited_matching_run_lock(tmp_path, proof)
             assert (home / '.mcs/venv.pre-python314.1/bin/python3').read_text() == '#!/bin/sh\nexit 1\n'
         else:
             assert py.read_text() == '#!/bin/sh\nexit 1\n'
-            assert 'migration lock or backup is invalid' in result.stderr
+            assert '移行ロックまたはバックアップが不正' in result.stderr
         # The helper must not release the updater's shared lock description.
         other = os.open(selected, os.O_RDWR)
         try:

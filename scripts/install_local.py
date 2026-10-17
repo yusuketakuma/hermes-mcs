@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Place a permanent MCS checkout on this Mac and run its install.sh there.
+"""この Mac の恒久的な保存先に MCS を配置し、導入を開始します。
 
 Desktop agents (Claude, Codex) often clone into a temporary workspace.
 install.sh points services and plugins at the checkout it runs from, so
@@ -46,7 +46,7 @@ def _git(path, *args, check=True):
     except (OSError, subprocess.SubprocessError) as error:
         raise Refused(f"git を実行できません（{type(error).__name__}）") from None
     if check and result.returncode != 0:
-        raise Refused(f"git {args[0]} failed in {path}: {result.stderr.strip()[:200]}")
+        raise Refused(f"{path} で git {args[0]} に失敗しました: {result.stderr.strip()[:200]}")
     return result.stdout.strip()
 
 
@@ -98,13 +98,13 @@ def plan(source, dest=None):
         root = os.environ["MCS_ROOT"]
         if not root or os.path.realpath(os.path.abspath(os.path.expanduser(root))) != \
                 os.path.realpath(os.path.expanduser(RUNTIME_ROOT)):
-            raise Refused("導入先のデータは ~/.mcs 固定です。MCS_ROOT を unset してから再実行してください")
+            raise Refused("導入先のデータは ~/.mcs 固定です。unset MCS_ROOT を実行してから再実行してください")
     if not _is_checkout(source):
-        raise Refused("このフォルダは git の checkout ではありません。git clone で取得してください")
+        raise Refused("このフォルダは Git で取得したソースフォルダではありません。git clone で取得してください")
     source = _git(source, "rev-parse", "--show-toplevel")
     notes = []
     if _git(source, "status", "--porcelain"):
-        notes.append("元の checkout に commit されていない変更があります。導入先には commit 済みの内容だけが入ります")
+        notes.append("元のソースフォルダにコミットされていない変更があります。導入先にはコミット済みの内容だけが入ります")
     if dest is None:
         recorded = os.path.expanduser(RECORDED_REPO)
         if os.path.isfile(recorded):
@@ -120,7 +120,7 @@ def plan(source, dest=None):
         action, dest = _judge(source, RUNTIME_ROOT, notes)
     except DataOnly:
         notes.append(f"{os.path.expanduser(RUNTIME_ROOT)} には既存の設定・データだけがあるため、"
-                     f"{os.path.expanduser(FALLBACK_SOURCE)} に checkout を置きます")
+                     f"{os.path.expanduser(FALLBACK_SOURCE)} にソースフォルダを置きます")
         action, dest = _judge(source, FALLBACK_SOURCE, notes)
     return action, dest, notes
 
@@ -136,11 +136,11 @@ def _judge(source, dest, notes):
         raise Refused(f"{dest} はフォルダではありません")
     if _is_checkout(dest):
         if os.path.realpath(_git(dest, "rev-parse", "--show-toplevel")) != dest:
-            raise Refused(f"{dest} は別の checkout の内側です。checkout の最上位か空のフォルダを指定してください")
+            raise Refused(f"{dest} は別のソースフォルダの内側です。ソースフォルダの最上位か空のフォルダを指定してください")
         dest_head, source_head = _git(dest, "rev-parse", "HEAD"), _git(source, "rev-parse", "HEAD")
         if dest_head != source_head:
             if not _roots(source) & _roots(dest):
-                raise Refused(f"{dest} は別のプロジェクトの checkout です")
+                raise Refused(f"{dest} は別のプロジェクトのソースフォルダです")
             # Running the destination's own (other-version) install.sh would leave the
             # requested version uninstalled; versions change only through the target updater.
             raise Refused(f"{dest} は導入済みで、取得元と版が違います（導入先 {dest_head[:8]} / 取得元 "
@@ -151,7 +151,7 @@ def _judge(source, dest, notes):
     if not entries:
         return "clone", dest
     if entries & RUNTIME_ENTRIES:
-        raise DataOnly(f"{dest} には既存の設定・データがありますが checkout ではありません。"
+        raise DataOnly(f"{dest} には既存の設定・データがありますがソースフォルダではありません。"
                       "データは移動しません。--dest で別の空フォルダを指定してください")
     raise Refused(f"{dest} は空ではないフォルダです")
 
@@ -184,9 +184,23 @@ def clone(source, dest):
         raise
 
 
+class _Parser(argparse.ArgumentParser):
+    def format_usage(self):
+        return super().format_usage().replace("usage: ", "使い方: ", 1)
+
+    def format_help(self):
+        return super().format_help().replace("usage: ", "使い方: ", 1)
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(2, f"入力を確認してください。--help で指定方法を確認できます。\n詳細: {message}\n")
+
+
 def main(argv=None, source=None):
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--dest", help="恒久的な checkout の置き場所（省略時は既存の導入先、なければ ~/.mcs。"
+    parser = _Parser(description=__doc__.split("\n")[0], add_help=False)
+    parser._optionals.title = "オプション"
+    parser.add_argument("-h", "--help", action="help", help="この説明を表示して終了します")
+    parser.add_argument("--dest", help="恒久的なソースフォルダの置き場所（省略時は既存の導入先、なければ ~/.mcs。"
                                        "~/.mcs に設定・データだけがある場合は ~/.local/share/hermes-mcs）")
     parser.add_argument("--dry-run", action="store_true",
                         help="計画だけを表示し、何も書き込まない（install.sh --dry-run も実行）")
@@ -211,9 +225,9 @@ def main(argv=None, source=None):
     except Refused as error:
         print(f"install_local: {error}", file=sys.stderr)
         return 2
-    print(f"取得元の checkout: {source}")
+    print(f"取得元のソースフォルダ: {source}")
     label = {"use_source": "このまま使う", "clone": "新しく作る", "reuse": "既存を使う"}[action]
-    print(f"恒久的な checkout: {dest}（{label}）")
+    print(f"恒久的なソースフォルダ: {dest}（{label}）")
     print(f"MCS の設定・収集データ: {os.path.expanduser(RUNTIME_ROOT)}（移動しません）")
     for note in notes:
         print(f"注意: {note}")
@@ -222,7 +236,7 @@ def main(argv=None, source=None):
     if args.dry_run:
         if action == "clone":
             # install.sh plans against its own location; the clone does not exist yet.
-            print("--dry-run: checkout を作成していないため install.sh の計画は作成後に確認してください")
+            print("--dry-run: ソースフォルダを作成していないため install.sh の計画は作成後に確認してください")
             return 0
         return subprocess.run(["sh", os.path.join(dest, "install.sh"), "--dry-run", *passthrough],
                               cwd=dest, env=child_env).returncode
@@ -230,10 +244,10 @@ def main(argv=None, source=None):
         try:
             clone(source, dest)
         except (Refused, OSError, subprocess.SubprocessError) as error:
-            print(f"install_local: checkout を作成できませんでした（{type(error).__name__}）。"
+            print(f"install_local: ソースフォルダを作成できませんでした（{type(error).__name__}）。"
                   "途中の作業フォルダは削除しました。原因を直して再実行してください", file=sys.stderr)
             return 4
-        print(f"checkout を作成しました: {dest}", flush=True)
+        print(f"ソースフォルダを作成しました: {dest}", flush=True)
     return subprocess.run(["sh", os.path.join(dest, "install.sh"), *passthrough],
                           cwd=dest, env=child_env).returncode
 

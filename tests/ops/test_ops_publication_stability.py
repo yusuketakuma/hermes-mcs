@@ -46,7 +46,7 @@ def test_update_plan_nonobject_is_a_failure_result_not_an_exception(monkeypatch,
     monkeypatch.setattr(mcs_cli.subprocess, "run", lambda *args, **kwargs:
                         SimpleNamespace(returncode=0, stdout=json.dumps(report), stderr=""))
     assert mcs_cli.main(["update", "plan", "--no-fetch"]) == 1
-    assert "Update plan did not return JSON." in capsys.readouterr().err
+    assert "更新内容の確認結果を読み取れませんでした（JSON形式ではありません）。" in capsys.readouterr().err
 
 
 def test_update_plan_deep_json_is_a_failure_result_not_an_exception(monkeypatch, capsys):
@@ -55,4 +55,4 @@ def test_update_plan_deep_json_is_a_failure_result_not_an_exception(monkeypatch,
     monkeypatch.setattr(mcs_cli.subprocess, "run", lambda *args, **kwargs:
                         SimpleNamespace(returncode=0, stdout=body, stderr=""))
     assert mcs_cli.main(["update", "plan", "--no-fetch"]) == 1
-    assert "Update plan did not return JSON." in capsys.readouterr().err
+    assert "更新内容の確認結果を読み取れませんでした（JSON形式ではありません）。" in capsys.readouterr().err

@@ -46,7 +46,7 @@ def test_invalid_scope_fails_closed(key, value):
 def test_missing_scope_and_explicit_auto_scope():
     cfg = config()
     del cfg["notify"]["lineworks"]
-    assert any("notify.lineworks: required" in e for e in mcs_setup.validate_config(cfg)[0])
+    assert any("notify.lineworks: 通知カードの接続設定が必要です" in e for e in mcs_setup.validate_config(cfg)[0])
     cfg = config()
     cfg["notify"]["lineworks"].update(project_ids=[], project_ids_auto=True)
     assert mcs_setup.validate_config(cfg)[0] == []
@@ -87,8 +87,8 @@ def test_local_diagnostic_has_no_hermes_gateway_or_secret_output(monkeypatch, tm
     assert calls[0][0][-3:] == ["check", "--root", mcs_setup.HOME]
     assert calls[0][0][1] == str(Path(mcs_setup.REPO_ROOT) / "lineworks_adapter" / "__main__.py")
     assert calls[0][1]["timeout"] == 20
-    assert not any("hermes CLI" in e or "synthetic-secret" in e for e in errors + warnings)
-    assert any("adapter local check failed" in e for e in errors) is bool(result)
+    assert not any("Hermesコマンド" in e or "synthetic-secret" in e for e in errors + warnings)
+    assert any("LINE WORKS接続の診断に失敗しました" in e for e in errors) is bool(result)
 
 
 def test_lineworks_never_installs_hermes_gateway():

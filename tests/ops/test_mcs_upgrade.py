@@ -77,7 +77,7 @@ def test_launcher_runs_target_updater_against_live_repo(tmp_path, capfd):
 
 def test_launcher_refuses_target_without_updater(tmp_path):
     repo, _ = _make_repo(tmp_path)
-    with pytest.raises(SystemExit, match="no mcs/ops/mcs_update.py"):
+    with pytest.raises(SystemExit, match="更新プログラム mcs/ops/mcs_update.py がありません"):
         _launcher().main(["--repo", str(repo), "--no-fetch", "plan",
                           "--to", "v1.1.0"])
 
@@ -91,7 +91,7 @@ def test_launcher_requires_a_fetched_release_tag_not_a_same_named_branch(tmp_pat
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "synthetic non-release branch")
     before = _git(repo, "rev-parse", "HEAD").stdout
-    with pytest.raises(SystemExit, match="git ls-tree failed"):
+    with pytest.raises(SystemExit, match="git ls-tree に失敗しました"):
         _launcher().main(["--repo", str(repo), "--no-fetch", "plan", "--to", "v1.2.0"])
     assert _git(repo, "rev-parse", "HEAD").stdout == before
     assert _git(repo, "status", "--porcelain").stdout == ""
@@ -108,10 +108,10 @@ def test_launcher_uses_the_release_tag_despite_an_ambiguous_ref(tmp_path, capfd)
 
 
 @pytest.mark.parametrize("mode,kind,path,error", [
-    ("120000", "blob", "mcs/link.py", "unsupported entry"),
-    ("160000", "commit", "mcs/submodule", "unsupported entry"),
-    ("100644", "blob", "mcs/../escape.py", "unsafe path"),
-    ("100644", "blob", "/escape.py", "unsafe path"),
+    ("120000", "blob", "mcs/link.py", "扱えない種類のファイル"),
+    ("160000", "commit", "mcs/submodule", "扱えない種類のファイル"),
+    ("100644", "blob", "mcs/../escape.py", "安全でないファイルパス"),
+    ("100644", "blob", "/escape.py", "安全でないファイルパス"),
 ])
 def test_extract_rejects_nonfiles_and_unsafe_paths(tmp_path, monkeypatch, mode, kind, path, error):
     launcher = _launcher()
@@ -171,7 +171,7 @@ def test_git_unavailable_reports_launch_failure(tmp_path, monkeypatch):
         raise FileNotFoundError(2, "synthetic missing git")
 
     monkeypatch.setattr(launcher.subprocess, "run", run)
-    with pytest.raises(SystemExit, match="git tag failed: synthetic missing git"):
+    with pytest.raises(SystemExit, match="git tag を起動できませんでした"):
         launcher.latest_tag(str(tmp_path))
 
 
@@ -500,7 +500,7 @@ def test_launcher_git_failure_never_reports_remote_credential_text(tmp_path, mon
                                                     text.encode() if binary else text))
     with pytest.raises(SystemExit) as failure:
         launcher._git(str(tmp_path), "fetch", binary=binary)
-    assert "git fetch failed" in str(failure.value)
+    assert "git fetch に失敗しました" in str(failure.value)
     assert secret not in str(failure.value)
     assert "example.invalid" not in str(failure.value)
 
@@ -519,7 +519,7 @@ def test_launcher_passes_only_a_full_confirmed_hermes_commit(tmp_path, capfd, mo
     assert json.loads(capfd.readouterr().out)["keep"] == "a" * 40
     assert launcher.main(["--repo", str(repo), "--no-fetch", "plan"]) == 0
     assert json.loads(capfd.readouterr().out)["keep"] is None
-    with pytest.raises(SystemExit, match="40-hex"):
+    with pytest.raises(SystemExit, match="40桁"):
         launcher.main(["--repo", str(repo), "--no-fetch", "apply",
                        "--keep-hermes-checkout", "abc123"])
 
@@ -636,3 +636,28 @@ def test_cli_accepts_a_prerelease_and_rejects_non_ascii_digits(monkeypatch):
     with pytest.raises(SystemExit) as result:
         mcs_cli.main(["update", "plan", "--to", "v١.٠.٢"])
     assert result.value.code == 2
+
+
+def test_updater_help_explains_actions_in_japanese(capsys):
+    with pytest.raises(SystemExit) as stopped:
+        mcs_update._build_parser().parse_args(["--help"])
+    assert stopped.value.code == 0
+    output = capsys.readouterr().out
+    assert "元の版への復帰" in output
+    assert "使い方:" in output
+    assert "この説明を表示して終了する" in output
+    assert "変更せずに更新内容" in output
+    assert "設定・承認に従って更新" in output
+    with pytest.raises(SystemExit) as stopped:
+        _launcher().main(["apply", "--help"])
+    assert stopped.value.code == 0
+    output = capsys.readouterr().out
+    assert "再導入" in output
+    assert "40桁" in output
+
+
+def test_updater_bad_arguments_explain_help_in_japanese(capsys):
+    with pytest.raises(SystemExit) as stopped:
+        mcs_update._build_parser().parse_args(["--unknown-synthetic-flag"])
+    assert stopped.value.code == 2
+    assert "入力内容を確認してください" in capsys.readouterr().err

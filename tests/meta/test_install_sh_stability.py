@@ -35,12 +35,12 @@ exec /bin/COMMAND "$@"
     failed_path = str(dst) + (".tmp" if target == "llama_cleanup" else "")
     failed = _run({**env, "STUB_FAIL_PUBLISH": failed_path}, hermes_home)
     assert failed.returncode != 0, failed.stdout + failed.stderr
-    assert STOPPED in failed.stderr and "Installed." not in failed.stdout
+    assert STOPPED in failed.stderr and "ソフトの導入が完了しました。" not in failed.stdout
     assert dst.read_bytes() == prior
     assert len(_bootstraps(stub_root, "llamaserver")) + len(
         _bootstraps(stub_root, "org.mcs.recovery")) == launches
     if target.startswith("llama"):
-        assert "=== 5/6" not in failed.stdout
+        assert "=== 【5/6】" not in failed.stdout
     repaired = _run(env, hermes_home)
     assert repaired.returncode == 0, repaired.stdout + repaired.stderr
     assert dst.read_text() == old
@@ -53,5 +53,5 @@ def test_explicit_recovery_selection_checked_when_recovery_skipped(tmp_path, mod
     result = _run(env, hermes_home, mode, "--no-recovery",
                   "--recovery-python", "relative-python")
     assert result.returncode != 0, result.stdout + result.stderr
-    assert "recovery template interpreter unsafe or unverified" in result.stdout
+    assert "復旧サービスのテンプレートに問題があります: Python の安全条件を満たさないか、確認できません" in result.stdout
     assert list(home.iterdir()) == []

@@ -73,7 +73,7 @@ def test_default_clones_to_runtime_root_and_runs_its_installer(home, source):
 def test_uncommitted_source_changes_are_reported_and_not_copied(home, source, capsys):
     (source / "local-edit").write_text("fictional")
     assert install_local.main([], source=str(source)) == 0
-    assert "commit されていない変更" in capsys.readouterr().out
+    assert "コミットされていない変更" in capsys.readouterr().out
     assert not (home / ".mcs" / "local-edit").exists()
 
 
@@ -296,3 +296,16 @@ def test_launchctl_timeout_means_no_gui_session(monkeypatch):
     env = install_local.environment()
     assert env["gui_session"] is False
     assert any("launchd" in problem for problem in install_local.local_problems(env))
+
+
+def test_japanese_help_and_invalid_arguments(capsys):
+    with pytest.raises(SystemExit) as help_exit:
+        install_local.main(["--help"])
+    assert help_exit.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "使い方:" in help_text and "オプション" in help_text
+    assert "この Mac の恒久的な保存先" in help_text
+    with pytest.raises(SystemExit) as invalid_exit:
+        install_local.main(["--dest"])
+    assert invalid_exit.value.code == 2
+    assert "--help で指定方法を確認" in capsys.readouterr().err

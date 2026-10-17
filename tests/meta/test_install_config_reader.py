@@ -39,7 +39,7 @@ def test_unsafe_config_stops_before_installer_effects(tmp_path, mode, kind):
             assert any(line.startswith("python3 - ") for line in _calls(stub))
             pytest.fail("installer config reader blocked on a FIFO")
         assert child.returncode != 0, stdout + stderr
-        assert "unreadable" in stderr
+        assert "読み取れない" in stderr
         assert sorted(path.name for path in home.iterdir()) == [".mcs"]
         assert not any(line.startswith(("git clone", "uv ", "brew install",
                                         "venv-hermes", "launchctl"))

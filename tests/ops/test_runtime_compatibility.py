@@ -516,14 +516,14 @@ def test_invalid_render_config_is_reported_not_raised(updater, monkeypatch, tmp_
     errors = updater.precheck_local(cfg)
     assert any(e.startswith("config: ") and e.endswith("_config_invalid") for e in errors)
     errors, _ = mcs_setup._script_drift()
-    assert errors and errors[0].startswith("config: ")
+    assert errors and errors[0].startswith("設定に問題があります: ")
     before = _tree(tmp_path)
     assert updater.apply("v1.2.0", "a" * 40, None) == 1
-    assert "nothing changed" in capsys.readouterr().out
+    assert "変更はありません" in capsys.readouterr().out
     assert _tree(tmp_path) == before
     monkeypatch.setattr(mcs_setup.mcs_runtime, "mode", lambda c: "hermes")
     assert mcs_setup.cmd_services(SimpleNamespace(dry_run=False)) == 1
-    assert "services: config: " in capsys.readouterr().out
+    assert "常駐設定: 設定に問題があります" in capsys.readouterr().out
     assert _tree(tmp_path) == before
 
 
@@ -538,7 +538,7 @@ def test_bad_recovery_init_stops_before_keychain_and_env(monkeypatch, tmp_path, 
                                     "--recovery-python", str(tmp_path / "independent-python")])
     assert mcs_setup.main() == 1
     assert not (tmp_path / ".env").exists() and not (tmp_path / "c.json").exists()
-    assert "nothing written" in capsys.readouterr().out
+    assert "変更は保存していません" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("plist", [[], "synthetic-invalid-plist", 123])

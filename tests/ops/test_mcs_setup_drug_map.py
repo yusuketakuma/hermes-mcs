@@ -81,7 +81,7 @@ def test_invalid_explicit_dictionary_preserves_all_writes(
         path.mkdir()
     assert _run(monkeypatch, ["drug_map=" + json.dumps(proposed)]) == 1
     output = capsys.readouterr().out
-    assert output == f"init: drug_map {reason} — nothing written\n"
+    assert output == f"初期設定: 薬剤辞書の設定を確認してください（詳細: {reason}）。変更は保存していません\n"
     assert events == []
     assert [path.read_bytes() for path in files] == before
     assert not list(tmp_path.glob("c.json.corrupt-*"))

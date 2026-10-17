@@ -1,4 +1,4 @@
-"""MCS self-update — detection, apply, rollback, interrupted recovery.
+"""MCSの更新 — 新しい版の確認・適用・元の版への復帰・中断した更新の復旧。
 
 Drives the update lifecycle documented in docs/dev-records/auto-update-plan.md:
 
@@ -476,22 +476,22 @@ def impact_summary(cur_sha: str, tag: str) -> list[str]:
            n.endswith("/config.json") for n in names):
         notes.append("新しい必須設定の可能性があります")
     if any(n.startswith("deployment/") for n in names):
-        notes.append("services 再実行が必要な変更を含みます")
+        notes.append("定期実行の設定し直し（services）が必要な変更を含みます")
     if "install.sh" in names:
-        notes.append("install.sh に差分 — 依存追加の可能性、"
-                     "auto モードでは適用を中止します")
+        notes.append("導入手順（install.sh）が変わっています。必要なソフトが増える可能性があるため、"
+                     "自動更新（auto）では適用を中止します")
     cfg = load_config()
     # mcs_standalone/ is loaded only by the standalone connector
     connector = ("mcs_standalone/",) if mcs_runtime.standalone(cfg) else ()
     if any(n.startswith(tuple(path + "/" for path in mcs_runtime.GATEWAY_SOURCE_DIRS)
                         + connector) for n in names):
-        notes.append("plugin 変更 — 適用後に gateway restart（standalone では ai.mcs.standalone の再起動）が必要です")
+        notes.append("通知機能が変わっています。適用後に通知接続（gateway）の再起動が必要です。独立動作では ai.mcs.standalone を再起動してください")
     # same condition as plan()'s lineworks_adapter restart
     interactive = (cfg.get("notify") or {}).get("interactive") \
         if isinstance(cfg.get("notify"), dict) else None
     if interactive == "lineworks" and any(n.startswith((
             "mcs/", "adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
-        notes.append("LINE WORKS 変更 — 適用後に独立アダプターの check と再起動が必要です")
+        notes.append("LINE WORKSの接続機能が変わっています。適用後に接続診断（check）と独立アダプターの再起動が必要です")
     return notes
 
 
@@ -1440,6 +1440,87 @@ def _services_reconcile() -> None:
         raise UpdateError(f"services_failed: exit_{r.returncode}")
 
 
+# Old update journals contain English diagnostics. Match only these translated
+# templates, retaining every dynamic value so new failures still block updates.
+_ENV_DIAGNOSTIC_TRANSLATIONS = (
+    (
+        'runtime_mode is invalid — select hermes or standalone before checking runtime '
+        'services',
+        '実行方法が不正です。hermes（Hermes経由）かstandalone（独立動作）を設定してから再確認してください',
+    ),
+    (
+        "Keychain entry '{}' not found — re-login cannot inject the MCS password",
+        "キーチェーンに'{}'が見つかりません — MCSパスワードを取得できず、再ログインできません。初期設定でパスワードを登録してください",
+    ),
+    (
+        "Keychain entry '{}' is present but unreadable — the keychain may be locked or access "
+        'may require an interactive permission prompt. Check the login keychain lock and this '
+        "process's access permission in an interactive session, then re-run check; or use the "
+        'existing init password input to configure the .env fallback.',
+        "キーチェーンに'{}'はありますが、読み取れません。キーチェーンのロックや、画面でのアクセス許可が必要な可能性があります。ログインキーチェーンのロックと、"
+        'このプログラムのアクセス権限を画面で確認し、checkを再実行してください。または初期設定のパスワード入力で.envにも予備の認証情報を保存してください。',
+    ),
+    (
+        "Keychain entry '{}' exists but its password cannot be read (rc={}) — re-register via "
+        '`mcs_setup init`',
+        "キーチェーンに'{}'はありますが、パスワードを読み取れません（終了コード={}）。`mcs_setup.py init`で再登録してください",
+    ),
+    (
+        'Chrome binary missing: {}',
+        'Chromeが見つかりません。インストール先を確認してください: {}',
+    ),
+    (
+        'standalone check failed — see docs/guides/STANDALONE.md',
+        '独立動作の診断に失敗しました。次の手順を確認してください: docs/guides/STANDALONE.md',
+    ),
+    (
+        'LINE WORKS adapter local check failed — run `python -m lineworks_adapter check` and '
+        'follow docs/guides/LINEWORKS.md to repair the existing credentials',
+        'LINE WORKS接続の診断に失敗しました。`python -m lineworks_adapter check`を実行し、'
+        'docs/guides/LINEWORKS.mdに従って認証情報を確認してください',
+    ),
+    (
+        'hermes CLI not resolvable ({}) — notifications cannot be sent',
+        'Hermesコマンドが見つかりません（{}）。通知を送信できません。install.shでHermesの導入状態を確認してください',
+    ),
+    (
+        'semantic.mode is enabled but TYPESAFE_API_KEY is not resolvable — Jev verdicts fail '
+        'as no_api_key',
+        '意味解析は有効ですが、TYPESAFE_API_KEYを取得できません。外部解析の認証情報を設定してください。エラーコード: no_api_key',
+    ),
+    (
+        'LaunchAgent {} installed but not loaded — run `mcs_setup.py services` or `launchctl '
+        'bootstrap gui/{} {}`',
+        '常駐処理{}は導入済みですが読み込まれていません。`mcs_setup.py services`を実行してください。個別の起動方法: `launchctl '
+        'bootstrap gui/{} {}`',
+    ),
+    (
+        'admission broker route table lacks {} — those callers are rejected permanently while '
+        'MCS_LLM_ADMISSION is set',
+        'AIの実行枠の登録に不足があります: {} — MCS_LLM_ADMISSIONが有効な間、これらの処理は受け付けられません。実行枠の登録を確認してください',
+    ),
+    (
+        'admission broker unusable: {}',
+        'AIの実行枠を管理できません。設定と稼働状態を確認してください（詳細: {}）',
+    ),
+    (
+        'llama-server advertises {} slots but the selected count is {} — fix -np or lower '
+        'SLOT_COUNT',
+        'AIサーバーの同時処理枠は{}ですが、設定では{}です。サーバーの-npを修正するか、SLOT_COUNTを減らしてください',
+    ),
+)
+
+
+def _environment_error_identity(message: str):
+    for original, translated in _ENV_DIAGNOSTIC_TRANSLATIONS:
+        for template in (original, translated):
+            pattern = "(.*?)".join(re.escape(part) for part in template.split("{}"))
+            match = re.fullmatch(pattern, message, flags=re.DOTALL)
+            if match:
+                return original, match.groups()
+    return message, ()
+
+
 def _postcheck(state: dict, expect_sha: str) -> list[str]:
     """Positive verification — 'no new error' alone is never success."""
     errors = []
@@ -1457,8 +1538,9 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
         import mcs_setup
         cfg = load_config()
         errs, _ = mcs_setup.check_environment(cfg)
-        baseline = set(state.get("baseline_check") or [])
-        new = [e for e in errs if e not in baseline]
+        baseline = {_environment_error_identity(e)
+                    for e in (state.get("baseline_check") or [])}
+        new = [e for e in errs if _environment_error_identity(e) not in baseline]
         errors.extend("new_env_error: " + e for e in new)
     except Exception:
         errors.append("postcheck_unverifiable")
@@ -1800,21 +1882,21 @@ def _apply_validate_args(tag: str | None, sha: str | None,
                          install_args: tuple) -> int | None:
     """Reject malformed apply arguments before any state is read."""
     if not release_tag(tag):
-        print("apply: bad tag", tag)
+        print("更新する版の指定が正しくありません（例: v1.0.23）:", tag)
         return 2
     if sha is not None and not HEX_RE.fullmatch(sha):
-        print("apply: bad sha", sha)
+        print("更新先のコミット識別子が正しくありません:", sha)
         return 2
     if os.environ.get("MCS_UPDATE_REPO") and mcs_runtime.standalone(load_config()):
         # the launcher's temp copy cannot drive the standalone host's
         # cooperative quiesce — standalone updates go through the host
-        print("apply: standalone_external_apply")
+        print("独立動作中のため、この方法では更新できません。UPGRADE_AGENT.mdの独立動作向け手順を確認してください（standalone_external_apply）")
         return 2
     # reinstall is an operator-only CLI option: receipt applies never
     # carry it, and cmd_check's auto path never passes it
     if (reinstall and command_id) or (install_args and not reinstall) \
             or any(a not in INSTALL_ARGS for a in install_args):
-        print("apply: bad reinstall options")
+        print("再導入のオプションが正しくありません。apply --help を確認してください")
         return 2
     return None
 
@@ -1894,11 +1976,11 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     if runtime_errors:
         # Even acquiring update.lock or writing local_checks is a mutation.
         # Keep an existing interrupted journal untouched for safe recovery.
-        print("apply: " + "; ".join(runtime_errors) + " — nothing changed")
+        print("更新を開始できません。実行環境の問題を解消してください（変更はありません）: " + "; ".join(runtime_errors))
         return 1
     state = load_state()
     if state.get("_corrupt"):
-        print("update_state corrupt — refusing to act")
+        print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
         return 2
     if state.get("applying") or state.get("stages"):
         return recover_interrupted()
@@ -1950,7 +2032,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                 except Exception as qe:
                     # keep the consent report intact — the hold (and its
                     # awaiting-consent freeze) already stands; log only
-                    print("consent hold: quiesce failed:",
+                    print("復元の承認待ちは維持していますが、処理の一時停止に失敗しました。詳細:",
                           f"{type(qe).__name__}: {qe}"[:200])
                 return rc
             except Exception as e:
@@ -2399,7 +2481,7 @@ def rollback(command_id: str | None = None) -> int:
     before anything is stopped."""
     state = load_state()
     if state.get("_corrupt"):
-        print("update_state corrupt — refusing to act")
+        print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
         return 2
     # an interrupted apply/rollback journal belongs to recovery — rolling
     # back the last APPLIED entry would overwrite it (same rule as apply)
@@ -2407,7 +2489,7 @@ def rollback(command_id: str | None = None) -> int:
         return recover_interrupted()
     upd_fd = acquire_update_lock()
     if upd_fd is None:
-        print("another updater is active — retry later")
+        print("別の更新処理が動いています。完了するまで待ってから再実行してください")
         return 2
     run_fd = None
     quiesced = False
@@ -2427,7 +2509,7 @@ def rollback(command_id: str | None = None) -> int:
                 state.setdefault("executed", {})[command_id] = {
                     "result": "nothing_to_rollback", "at": time.time()}
                 save_state(state)
-            print("nothing_to_rollback")
+            print("元に戻す更新はありません（nothing_to_rollback）")
             return 0
         run_fd = _acquire_run_lock_wait()
         if run_fd is None:
@@ -2459,7 +2541,7 @@ def rollback(command_id: str | None = None) -> int:
                 # a bound ops.restore_approve receipt lands.
                 state = load_state()
                 rid = _consent_hold(state, e, entry.get("backup_path"))
-                print("restore held: consent pending", rid)
+                print("復元は承認待ちです。restore_report.jsonで影響を確認してください。確認番号:", rid)
                 consent_hold = True
                 return 2
             except Exception as e:
@@ -2516,7 +2598,7 @@ def rollback(command_id: str | None = None) -> int:
                 save_state(state)
             _enqueue_notice(f"[MCS] ロールバックに失敗しました: {e}",
                             use_run_lock=run_fd is None)
-            print("rollback failed:", e)
+            print("元の版に戻せませんでした。管理者に確認してください。詳細:", e)
             return 1
     finally:
         # a consent hold keeps BOTH markers: they are what durably holds
@@ -2930,7 +3012,7 @@ def reinstall_done() -> int:
     already promoted — reinstall_done, then lets recover converge."""
     fd = acquire_update_lock()
     if fd is None:
-        print("reinstall-done: another updater is running")
+        print("別の更新処理が終わるまで、再導入の完了を記録できません")
         return 1
     try:
         state = load_state()
@@ -2939,10 +3021,10 @@ def reinstall_done() -> int:
         applying = state.get("applying")
         rec = applying or (state.get("applied") or [None])[-1]
         if not rec or not rec.get("reinstall") or rec.get("reinstall_done"):
-            print("reinstall-done: no unfinished reinstall")
+            print("完了記録が必要な再導入はありません")
             return 2
         if _head_sha() != rec.get("sha"):
-            print("reinstall-done: HEAD is not the reinstalled version")
+            print("現在の版が再導入した版と一致しないため、完了を記録できません")
             return 2
         rec["reinstall_done"] = True
         save_state(state)
@@ -3403,7 +3485,7 @@ def cmd_check() -> int:
     waits on a flaky network (P16)."""
     state = load_state()
     if state.get("_corrupt"):
-        print("update_state corrupt — refusing to act")
+        print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
         return 2
     cfg = load_config()
     upd = cfg.get("update") if isinstance(cfg.get("update"), dict) else {}
@@ -3502,7 +3584,7 @@ def cmd_check() -> int:
 def cmd_status() -> int:
     state = load_state()
     if state.get("_corrupt"):
-        print("update_state.json: corrupt/unknown — escalate")
+        print("update_state.jsonを読み取れず、更新状況を確認できません。削除せず管理者に確認してください")
         return 2
     cur_tag, cur_sha = current_version()
     print(json.dumps({"current_tag": cur_tag, "current_sha": cur_sha,
@@ -3519,7 +3601,7 @@ def cmd_apply(args) -> int:
 
 def cmd_plan(args) -> int:
     if not release_tag(args.tag):
-        print("plan: bad tag", args.tag)
+        print("確認する版の指定が正しくありません（例: v1.0.23）:", args.tag)
         return 2
     print(json.dumps(plan(args.tag), ensure_ascii=False, indent=2))
     return 0
@@ -3537,35 +3619,55 @@ def cmd_post_merge() -> int:
     return _post_merge(state)
 
 
+class _JapaneseParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._positionals.title = "操作"
+        self._optionals.title = "オプション"
+        for action in self._actions:
+            if isinstance(action, argparse._HelpAction):
+                action.help = "この説明を表示して終了する"
+
+    def format_help(self):
+        return super().format_help().replace("usage: ", "使い方: ", 1)
+
+    def format_usage(self):
+        return super().format_usage().replace("usage: ", "使い方: ", 1)
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(2, f"入力内容を確認してください。--help で指定方法を確認できます。\n詳細: {message}\n")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     # handlers are lambdas so a module attribute replaced after import
     # (tests, callers) is the one dispatched
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = _JapaneseParser(description=__doc__.splitlines()[0])
     ap.add_argument("--post-merge", action="store_true",
                     help=argparse.SUPPRESS)
     # no subcommand = check (the cron/launchd default)
     ap.set_defaults(fn=lambda args: cmd_check())
     sub = ap.add_subparsers(dest="cmd")
-    ap_p = sub.add_parser("apply")
-    ap_p.add_argument("--tag")
-    ap_p.add_argument("--sha")
-    ap_p.add_argument("--base-sha")
-    ap_p.add_argument("--command-id")
+    ap_p = sub.add_parser("apply", help="指定した版へ更新する")
+    ap_p.add_argument("--tag", help="更新する版（例: v1.0.23）")
+    ap_p.add_argument("--sha", help="確認済みの更新先コミット識別子")
+    ap_p.add_argument("--base-sha", help="更新前に一致を確認するコミット識別子")
+    ap_p.add_argument("--command-id", help="承認済み操作の識別子")
     ap_p.add_argument("--reinstall", action="store_true",
-                      help="also re-run install.sh on the merged tree")
+                      help="更新後にinstall.shを実行し、必要なソフトと設定を再導入する")
     ap_p.add_argument("--install-arg", action="append", default=[],
-                      choices=sorted(INSTALL_ARGS))
+                      choices=sorted(INSTALL_ARGS), help="再導入に渡すオプション（複数指定可）")
     ap_p.set_defaults(fn=lambda args: cmd_apply(args))
-    pl_p = sub.add_parser("plan", help="read-only upgrade plan (JSON)")
-    pl_p.add_argument("--tag", required=True)
+    pl_p = sub.add_parser("plan", help="変更せずに更新内容と実行を妨げる条件を確認する（JSON出力）")
+    pl_p.add_argument("--tag", required=True, help="確認する版（例: v1.0.23）")
     pl_p.set_defaults(fn=lambda args: cmd_plan(args))
-    sub.add_parser("check").set_defaults(fn=lambda args: cmd_check())
-    sub.add_parser("status").set_defaults(fn=lambda args: cmd_status())
-    sub.add_parser("rollback").set_defaults(fn=lambda args: rollback())
-    sub.add_parser("recover").set_defaults(
+    sub.add_parser("check", help="新しい版を確認し、設定・承認に従って更新する（省略時の動作）").set_defaults(fn=lambda args: cmd_check())
+    sub.add_parser("status", help="現在の版と更新履歴を表示する（JSON出力）").set_defaults(fn=lambda args: cmd_status())
+    sub.add_parser("rollback", help="直近の更新前の版に戻す（データ復元には承認が必要な場合があります）").set_defaults(fn=lambda args: rollback())
+    sub.add_parser("recover", help="更新履歴を確認し、中断した更新を安全に復旧する").set_defaults(
         fn=lambda args: recover_interrupted())
     sub.add_parser("reinstall-done",
-                   help="after finishing an interrupted install.sh by hand"
+                   help="中断したinstall.shを手動で完了させた後、完了を記録する"
                    ).set_defaults(fn=lambda args: reinstall_done())
     return ap
 

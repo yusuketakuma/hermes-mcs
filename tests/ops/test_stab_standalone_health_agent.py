@@ -69,9 +69,9 @@ def test_doctor_reports_missing_watch_and_host_problems(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: {"runtime_mode": "standalone"})
     errors, warnings = mcs_setup._check_standalone_health()
     assert errors == []
-    assert warnings[0].startswith("standalone health watch not installed")
-    assert warnings[1].startswith("standalone host: standalone_child_failing (cmd 3回連続)")
+    assert warnings[0].startswith("独立動作の稼働監視が未導入です")
+    assert warnings[1].startswith("独立動作に確認が必要です（診断コード: standalone_child_failing） (cmd 3回連続)")
     for name, body in service.render_health(tmp_path, platform="linux"):
         (tmp_path / "units" / name).write_text(body)
     errors, _ = mcs_setup._check_standalone_health()
-    assert errors == ["standalone health watch installed but not loaded — run `mcs_setup.py services`"]
+    assert errors == ["独立動作の稼働監視は導入済みですが、読み込まれていません — `mcs_setup.py services`を実行してください"]

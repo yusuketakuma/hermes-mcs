@@ -1,51 +1,42 @@
 #!/bin/sh
-# Install everything MCS needs on a fresh machine, in idempotent stages:
+# MCS の導入に必要なソフトを、次の6段階で準備します。
+#   1. 基本ソフト（Homebrew・Python・Google Chrome など）
+#   2. 実行環境（Hermes 経由、または MCS 単独）
+#   3. Slack／Discord の操作カード用プラグイン
+#   4. この Mac で動かす AI（llama-server と約5.7 GBのモデル）
+#   5. 定期収集などの常駐サービス
+#   6. 更新に失敗したときの復旧ツールと独立した監視
 #
-#   1. Homebrew packages (git, python, uv, llama.cpp, Google Chrome)
-#   2. hermes-agent checkout (pinned) + venv + ~/.local/bin/hermes shim
-#   3. Discord command plugin (symlink + `hermes plugins enable`)
-#   4. local LLM — llama-server on 127.0.0.1:8080 + Qwen3.5-9B model
-#   5. scheduled services — launchd agents + hermes cron jobs
-#      (delegated to `mcs_setup.py services`)
-#   6. update recovery — ~/.mcs-recovery tool + independent launchd
-#      watchdog (org.mcs.recovery), outside the repo so a broken new
-#      release can never take the recovery path down with it
+# 使い方: ./install.sh [オプション] [HERMES_HOME]
+# HERMES_HOME: Hermes の保存先（省略時 ~/.hermes）
 #
-#   ./install.sh [OPTIONS] [HERMES_HOME]   HERMES_HOME defaults to ~/.hermes
+# 最初は --preflight で準備状況を確認してください。
+#   --preflight, --check-only  変更せずに確認。問題と対処を表示します。
+#                             導入できない問題があると終了コード1になります。
+#   --dry-run                 変更せず、事前確認と導入予定を表示します。
+#   --mode hermes             Hermes を通じて接続します（既定）。
+#   --mode standalone         Hermes を使わず MCS 単独で接続します。
+#                             専用の Python 環境と公式接続 SDK を導入します。
+#                             省略時は既存の設定を優先します。
+#   --recovery-python PATH    復旧に使う独立した Python の絶対パス。
+#                             更新対象フォルダの外にある既存のものを指定します。
+#   --force-repo              既存の導入先をこのフォルダへ切り替えます。
+#                             プラグイン・復旧ツール・サービスの参照先が変わります。
+#   --no-brew                 基本ソフトの導入を省略（導入済みの場合）。
+#   --no-llm                  ローカル AI の導入を省略。別途 OpenAI 互換
+#                             サーバーを 127.0.0.1:8080 で動かしてください。
+#   --no-plugin               操作カード用プラグインの導入を省略。
+#                             Slack／Discord の操作カードには必要です。
+#   --no-services             定期収集などの常駐サービスの登録を省略。
+#   --no-recovery             復旧ツールと更新監視の導入を省略。
+#   -h, --help                この説明を表示します。
 #
-#   --preflight     read-only check of every prerequisite (alias
-#                   --check-only): prints OK / WARN / NG with the fix
-#                   command; exits 1 when a blocker (NG) exists.
-#                   Nothing is written. Run this first.
-#   --mode MODE     hermes or standalone (existing config, then hermes
-#                   when unspecified). Standalone installs
-#                   its own venv and official connector SDKs; Hermes
-#                   is neither downloaded nor configured.
-#   --recovery-python PATH  existing independent Python outside the mutable checkout
-#   --dry-run       preflight + the per-stage plan of what would be
-#                   written or changed; nothing is written
-#   --force-repo    allow re-pointing an existing install (plugin
-#                   symlink, ~/.mcs-recovery/repo_path, services) at
-#                   this checkout when it was installed from another one
-#   --no-brew       skip stage 1 (assume git/python/uv/llama.cpp are
-#                   already provided some other way)
-#   --no-llm        skip stage 4 (you run your own LLM server — MCS
-#                   expects an OpenAI-compatible endpoint on
-#                   127.0.0.1:8080; keep it serving there)
-#   --no-plugin     skip stage 3 (needed for discord/slack cards;
-#                   text-only notify.interactive=off installs may skip)
-#   --no-services   skip stage 5 (launchd agents + hermes cron)
-#   --no-recovery   skip stage 6 (update watchdog)
-#   -h, --help      show this usage
-#
-# Run as your normal user (never sudo). Re-running is safe: every stage
-# checks first and skips what exists, and an interrupted clone, venv or
-# model download is resumed, so partially-installed machines converge.
-# A stage that fails stops the install with a non-zero exit — repair
-# it and re-run; later stages never run on top of a broken one.
-# What is NOT automated (needs your secrets / interactive choices):
-# `mcs_setup.py init` (guided all-settings wizard), the Discord/Slack
-# tokens, and the plugin settings block — the final summary lists them.
+# 通常のユーザーで実行してください（sudo は使いません）。
+# 導入済みのものは確認して維持します。途中で止まった場合は表示された
+# 原因を解消し、同じコマンドを再実行してください。失敗した段階で停止し、
+# その後の段階は実行しません。取得途中のファイルは再開に利用します。
+# 最後に mcs setup を案内します。ログイン情報や通知先は、そこで
+# 説明を読みながら入力します。パスワード・トークンは画面に表示しません。
 set -eu
 # files this script creates are the owner's only; existing modes are kept
 umask 077
@@ -65,11 +56,11 @@ FORCE_REPO=0
 ARG_HOME=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --mode)       [ $# -ge 2 ] || { printf '%s\n' '--mode needs hermes or standalone' >&2; exit 2; }
+        --mode)       [ $# -ge 2 ] || { printf '%s\n' '--mode の後に hermes または standalone を指定してください' >&2; exit 2; }
                       RUNTIME_MODE="$2"; RUNTIME_EXPLICIT=1; shift
-                      case "$RUNTIME_MODE" in hermes|standalone) ;; *) printf '%s\n' 'invalid --mode' >&2; exit 2 ;; esac ;;
+                      case "$RUNTIME_MODE" in hermes|standalone) ;; *) printf '%s\n' '--mode は hermes または standalone を指定してください' >&2; exit 2 ;; esac ;;
         --no-brew)     SKIP_BREW=1 ;;
-        --recovery-python) if [ $# -lt 2 ] || [ -z "$2" ]; then printf '%s\n' '--recovery-python needs an absolute path' >&2; exit 2; fi
+        --recovery-python) if [ $# -lt 2 ] || [ -z "$2" ]; then printf '%s\n' '--recovery-python の後に Python の絶対パスを指定してください' >&2; exit 2; fi
                       RECOVERY_OPTION="$2"; shift ;;
         --no-llm)      SKIP_LLM=1 ;;
         --no-plugin)   SKIP_PLUGIN=1 ;;
@@ -79,9 +70,9 @@ while [ $# -gt 0 ]; do
         --preflight|--check-only) MODE=preflight ;;
         --dry-run)     MODE=dry-run ;;
         -h|--help)     usage; exit 0 ;;
-        -*) printf 'unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+        -*) printf '未対応のオプションです: %s\n' "$1" >&2; usage >&2; exit 2 ;;
         *)  if [ -z "$ARG_HOME" ]; then ARG_HOME="$1"
-            else printf 'unexpected argument: %s\n' "$1" >&2; exit 2; fi ;;
+            else printf '余分な引数があります: %s\n' "$1" >&2; exit 2; fi ;;
     esac
     shift
 done
@@ -91,25 +82,25 @@ done
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ ! -e "$HOME/.mcs/config.json" ] \
         && [ ! -L "$HOME/.mcs/config.json" ] \
         && [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ]; then
-    printf '%s\n' "How should MCS connect to Slack/Discord?" \
-        "  1) hermes      — through Hermes Agent" \
-        "  2) standalone  — without Hermes Agent"
-    printf 'choose 1 or 2 [1]: '
+    printf '%s\n' "【導入方法】Slack／Discord への接続方法を選んでください。" \
+        "  1) Hermes を通じて接続する（hermes）" \
+        "  2) MCS 単独で接続する（standalone）"
+    printf '1 または 2 を入力してください（Enter: 1）: '
     _answer=""
     read -r _answer || :
     case "$_answer" in
         2|standalone) RUNTIME_MODE=standalone ;;
         ""|1|hermes) RUNTIME_MODE=hermes ;;
-        *) printf '%s\n' "invalid choice — use --mode hermes|standalone" >&2; exit 2 ;;
+        *) printf '%s\n' "1 または 2 を選んで再実行してください。--mode hermes または --mode standalone でも指定できます" >&2; exit 2 ;;
     esac
     RUNTIME_EXPLICIT=1
 fi
 
 say()  { printf '\n=== %s ===\n' "$1"; }
-ok()   { printf '  ok: %s\n' "$*"; }
-skip() { printf '  skip: %s\n' "$*"; }
-warn() { printf '  warn: %s\n' "$*" >&2; }
-die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+ok()   { printf '  完了: %s\n' "$*"; }
+skip() { printf '  省略: %s\n' "$*"; }
+warn() { printf '  注意: %s\n' "$*" >&2; }
+die()  { printf 'エラー: %s\n' "$*" >&2; exit 1; }
 SUMMARY=""
 sum()  { SUMMARY="$SUMMARY  $*
 "; }
@@ -140,7 +131,7 @@ link_target() {
 
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 if [ "${MCS_ROOT+x}" = x ]; then
-    [ -n "$MCS_ROOT" ] || die "MCS_ROOT is empty; unset MCS_ROOT before installing (data root is ~/.mcs)"
+    [ -n "$MCS_ROOT" ] || die "MCS_ROOT が空です。unset MCS_ROOT を実行してから導入してください（データの保存先は ~/.mcs）"
     case "$MCS_ROOT" in
         \~/*) _mcs_root="$HOME/${MCS_ROOT#\~/}" ;;
         *) _mcs_root="$MCS_ROOT" ;;
@@ -159,16 +150,16 @@ if [ "${MCS_ROOT+x}" = x ]; then
     }' "$_mcs_root")"
     _mcs_default="$(physpath "$HOME/.mcs")"
     _mcs_root="$(physpath "$_mcs_root" 2>/dev/null)" \
-        || die "MCS_ROOT is unsupported by the installer; unset MCS_ROOT (data root is ~/.mcs)"
+        || die "この MCS_ROOT は導入に使えません。unset MCS_ROOT を実行してください（データの保存先は ~/.mcs）"
     [ "$_mcs_root" = "$_mcs_default" ] \
-        || die "MCS_ROOT is unsupported by the installer; unset MCS_ROOT (data root is ~/.mcs)"
+        || die "この MCS_ROOT は導入に使えません。unset MCS_ROOT を実行してください（データの保存先は ~/.mcs）"
 fi
 MCS_ROOT="$(abspath "$HOME")/.mcs"
 export MCS_ROOT
 if [ -e "$HOME/.mcs/config.json" ] || [ -L "$HOME/.mcs/config.json" ]; then
     MODE_PY="$HOME/.mcs/venv/bin/python3"
     if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
-    [ -n "$MODE_PY" ] || die "existing config requires Python to select its runtime mode; pass --mode explicitly"
+    [ -n "$MODE_PY" ] || die "既存設定の接続方法を確認するには Python が必要です。Python を導入して再実行してください"
     RUNTIME_MODE="$("$MODE_PY" - "$HOME/.mcs/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
 import json
 import os
@@ -192,8 +183,8 @@ try:
 except (OSError, ValueError, AttributeError, TypeError, RecursionError):
     raise SystemExit(1) from None
 PYMODE
-)" || die "config.json unreadable: cannot select runtime from existing config; repair it (use --mode only to override a readable object's runtime)"
-    case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "runtime mode could not be read; pass --mode explicitly" ;; esac
+)" || die "config.json を読み取れないため接続方法を決定できません。設定ファイルを修復してください（--mode は読み取れる設定の接続方法だけを上書きします）"
+    case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "接続方法を読み取れません。--mode hermes または --mode standalone を指定してください" ;; esac
 fi
 DEFAULT_HERMES_HOME="$(abspath "$HOME")/.hermes"
 ENV_HERMES_HOME="${HERMES_HOME:-}"
@@ -201,13 +192,13 @@ if [ -n "$ARG_HOME" ]; then HERMES_HOME="$(abspath "$ARG_HOME")"
 else HERMES_HOME="$DEFAULT_HERMES_HOME"; fi
 if [ -n "$ENV_HERMES_HOME" ] \
         && [ "$(abspath "$ENV_HERMES_HOME")" != "$HERMES_HOME" ]; then
-    warn "HERMES_HOME=$ENV_HERMES_HOME from your environment is NOT used — installing into $HERMES_HOME (pass it as the argument to install there)"
+    warn "環境変数 HERMES_HOME=$ENV_HERMES_HOME は使用しません。導入先は $HERMES_HOME です（別の保存先は引数で指定してください）"
 fi
 # every hermes command below must act on the home being installed
 export HERMES_HOME
 RUNTIME_HOME="$HERMES_HOME"
 if [ "$RUNTIME_MODE" = standalone ]; then
-    [ -z "$ARG_HOME" ] || die "standalone mode does not accept HERMES_HOME"
+    [ -z "$ARG_HOME" ] || die "MCS 単独接続では HERMES_HOME を指定できません。保存先の引数を外してください"
     RUNTIME_HOME="$HOME/.mcs"
     SKIP_PLUGIN=1
 fi
@@ -340,19 +331,19 @@ preserve_old_venv() {
     if [ ! -e "$VENV" ] && [ ! -L "$VENV" ]; then return; fi
     if [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; then
         _prior_venv="$(migration_backup)" \
-            || die "runtime migration lock or backup is invalid — existing venv retained"
+            || die "実行環境の移行ロックまたはバックアップが不正です。既存の Python 環境は保持しました"
     else
         # A scheduled tick can start after a process check; established installs
         # require the updater's inherited run.lock for runtime migration.
         if [ -e "$MCS_DATA/ledger.db" ] || [ -e "$MCS_DATA/service_manifest.json" ]; then
-            die "existing MCS installation requires a coordinated Python runtime migration — existing venv retained; follow the release upgrade procedure"
+            die "導入済み MCS の Python 移行には更新ツールが必要です。既存環境は保持しました。リリースの更新手順に従ってください"
         fi
         _runtime_processes="$(ps -axo command=)" \
-            || die "cannot verify runtime is stopped — existing venv retained"
+            || die "実行環境の停止を確認できません。既存の Python 環境は保持しました"
         if printf '%s\n' "$_runtime_processes" | MCS_VENV_PREFIX="$VENV/" awk '
             index($0, ENVIRON["MCS_VENV_PREFIX"]) == 1 { busy=1 }
             END { exit !busy }'; then
-            die "existing runtime is still in use — stop its gateway/standalone service with its normal stop command, then re-run; existing venv retained"
+            die "既存環境は稼働中です。Gateway または独立接続サービスを通常の停止手順で止めてから再実行してください。既存環境は保持しました"
         fi
         unset _runtime_processes
         _prior_venv="$VENV.pre-python314"
@@ -362,8 +353,8 @@ preserve_old_venv() {
             _prior_venv="$VENV.pre-python314.$_prior_n"
         done
     fi
-    mv "$VENV" "$_prior_venv" || die "old runtime could not be preserved — nothing rebuilt"
-    ok "previous runtime preserved: $_prior_venv"
+    mv "$VENV" "$_prior_venv" || die "旧実行環境を退避できません。再構築は行っていません"
+    ok "旧実行環境の退避先: $_prior_venv"
 }
 
 recovery_runtime_ok() {  # <probe host Python>; never substitutes the template's executable
@@ -376,7 +367,7 @@ import mcs_setup
 try:
     cfg = mcs_setup._owner_config(sys.argv[3])
 except ValueError as exc:
-    raise SystemExit("recovery config " + str(exc)) from None
+    raise SystemExit("復旧設定を読み取れません: " + str(exc)) from None
 if sys.argv[4]:
     cfg["recovery_python"] = sys.argv[4]
 if sys.argv[5] == "1" and "recovery_python" not in cfg:
@@ -384,26 +375,26 @@ if sys.argv[5] == "1" and "recovery_python" not in cfg:
 desired = mcs_setup._recovery_python(cfg)
 problem = mcs_setup._recovery_python_problem(desired, sys.argv[1])
 if problem:
-    raise SystemExit("recovery " + problem)
+    raise SystemExit("復旧用 Python に問題があります: " + problem)
 if "recovery_python" in cfg and os.path.lexists(
         Path(mcs_setup.AGENTS_DIR, mcs_setup.RECOVERY_LABEL + ".plist")):
     with open(Path(mcs_setup.AGENTS_DIR, mcs_setup.RECOVERY_LABEL + ".plist"), "rb") as stream:
         deployed = mcs_setup._recovery_executable(plistlib.load(stream))
     if deployed != desired:
-        raise SystemExit("existing recovery selection drift: use mcs setup init --yes then mcs setup services for owned idle repair")
+        raise SystemExit("復旧用 Python の設定と稼働設定が一致しません。処理が動いていないことを確認し、mcs setup init --yes、mcs setup services の順に修復してください")
 from html import escape
 text = Path(sys.argv[2]).read_text()
 rendered = mcs_setup._render_template(text, {"RECOVERY_PYTHON":escape(desired, quote=False)})
 actual = mcs_setup._recovery_executable(plistlib.loads(rendered.encode()))
 problem = mcs_setup._recovery_python_problem(actual, sys.argv[1])
 if problem:
-    raise SystemExit("recovery template " + problem)
+    raise SystemExit("復旧サービスのテンプレートに問題があります: " + problem)
 if "recovery_python" in cfg and actual != desired:
-    raise SystemExit("recovery template target differs from explicit selection")
+    raise SystemExit("復旧サービスのテンプレートが指定した Python と一致しません")
 facts = mcs_setup._runtime_probe(actual) if actual is not None else None
 problem = mcs_setup._runtime_problem(facts, recovery=True)
 if problem:
-    print("recovery " + problem, file=sys.stderr)
+    print("復旧用 Python に問題があります: " + problem, file=sys.stderr)
     sys.exit(1)
 print(desired)
 ' "$REPO" "$RECOVERY_TEMPLATE" "$HOME/.mcs/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY"
@@ -425,11 +416,11 @@ bootstrap_agent() {  # <label> <plist>
 # differs; returns 0 when dst changed
 publish() {
     if [ -f "$2" ] && cmp -s "$1" "$2"; then
-        rm -f "$1" || die "cannot remove temporary file $1 — repair permissions, then re-run install.sh"
+        rm -f "$1" || die "一時ファイル $1 を削除できません。アクセス権を確認して install.sh を再実行してください"
         return 1
     fi
     # Called in an if: POSIX shells disable errexit throughout this function.
-    mv -f "$1" "$2" || die "cannot publish $2 — repair permissions or disk space, then re-run install.sh"
+    mv -f "$1" "$2" || die "$2 を配置できません。アクセス権と空き容量を確認して install.sh を再実行してください"
 }
 # the checkout an existing install points at, when it is not $REPO
 # (a recorded checkout that no longer exists is not a conflict)
@@ -459,85 +450,85 @@ mcs_shim_conflict() {
 
 # ------------------------------------------------------------ preflight
 PF_NG=0; PF_WARN=0
-pf_ok()   { printf '  OK    %s\n' "$1"; }
+pf_ok()   { printf '  正常  %s\n' "$1"; }
 pf_info() { printf '  --    %s\n' "$1"; }
 pf_warn() {
-    printf '  WARN  %s\n' "$1"; PF_WARN=$((PF_WARN + 1))
-    if [ -n "${2:-}" ]; then printf '        fix: %s\n' "$2"; fi
+    printf '  注意  %s\n' "$1"; PF_WARN=$((PF_WARN + 1))
+    if [ -n "${2:-}" ]; then printf '        対処: %s\n' "$2"; fi
 }
 pf_ng() {
-    printf '  NG    %s\n        fix: %s\n' "$1" "$2"; PF_NG=$((PF_NG + 1))
+    printf '  要対処  %s\n        対処: %s\n' "$1" "$2"; PF_NG=$((PF_NG + 1))
 }
 pf_net() {  # <label> <url> <needed: 1 = blocker when unreachable>
     if curl -sSfIL -m 10 -o /dev/null "$2" >/dev/null 2>&1; then
-        pf_ok "network: $1 reachable"
+        pf_ok "通信: $1 に接続できました"
     elif [ "$3" -eq 1 ]; then
-        pf_ng "network: cannot reach $1" "check network/proxy settings, then: curl -I $2"
+        pf_ng "通信: $1 に接続できません" "ネットワーク・プロキシ設定を確認して接続を再確認: curl -I $2"
     else
-        pf_warn "network: cannot reach $1 (not needed right now)"
+        pf_warn "通信: $1 に接続できません（今回は不要です）"
     fi
 }
 
 preflight() {
-    say "preflight (read-only — nothing is written)"
-    pf_info "runtime mode: $RUNTIME_MODE (change with --mode hermes|standalone)"
+    say "事前確認（設定やファイルは変更しません）"
+    pf_info "接続方法: ${RUNTIME_MODE}（--mode hermes または --mode standalone で変更）"
     if [ "$IS_ROOT" -eq 1 ]; then
-        pf_ng "running as root" "re-run as your normal user, without sudo"
+        pf_ng "管理者 root で実行されています" "sudo を使わず、通常のユーザーで再実行してください"
     else
-        pf_ok "running as a normal user"
+        pf_ok "通常のユーザーで実行されています"
     fi
     if [ "$OS" = Darwin ]; then
         _v="$(sw_vers -productVersion 2>/dev/null || echo unknown)"
         case "${_v%%.*}" in
-            ''|*[!0-9]*) pf_warn "macOS version unknown ($_v)" ;;
+            ''|*[!0-9]*) pf_warn "macOS の版を確認できません（${_v}）" ;;
             *) if [ "${_v%%.*}" -ge 13 ]; then pf_ok "macOS $_v"
-               else pf_ng "macOS $_v is too old (Homebrew/llama.cpp need 13+)" "upgrade macOS (System Settings > General > Software Update)"; fi ;;
+               else pf_ng "macOS $_v は古すぎます（Homebrew／llama.cpp は13以降が必要）" "システム設定 → 一般 → ソフトウェアアップデートで macOS を更新してください"; fi ;;
         esac
         _arch="$(uname -m)"
-        if [ "$_arch" = arm64 ]; then pf_ok "arch $_arch (Apple silicon)"
-        else pf_warn "arch $_arch — the local LLM runs without Metal and is slow" ""; fi
+        if [ "$_arch" = arm64 ]; then pf_ok "CPU: ${_arch}（Apple シリコン）"
+        else pf_warn "CPU: $_arch — ローカル AI の Metal 高速化が使えず、処理に時間がかかります" ""; fi
         if xcode-select -p >/dev/null 2>&1; then pf_ok "Xcode Command Line Tools"
-        else pf_ng "Xcode Command Line Tools missing" "xcode-select --install"; fi
+        else pf_ng "Xcode Command Line Tools が未導入です" "xcode-select --install"; fi
     else
-        pf_warn "not macOS ($OS) — the llama-server LaunchAgent (4) and watchdog (6) are skipped" ""
+        pf_warn "macOS ではありません（${OS}）。段階4の AI 常駐設定と段階6の復旧監視を省略します" ""
     fi
 
-    if [ "$SKIP_BREW" -eq 1 ]; then pf_info "Homebrew not used (--no-brew)"
+    if [ "$SKIP_BREW" -eq 1 ]; then pf_info "Homebrew の導入を省略します（--no-brew）"
     elif command -v brew >/dev/null 2>&1; then pf_ok "Homebrew: $(command -v brew)"
-    else pf_ng "Homebrew not installed" "$BREW_INSTALL"
+    else pf_ng "Homebrew が未導入です" "$BREW_INSTALL"
     fi
     _brew_fills=0
     if [ "$SKIP_BREW" -eq 0 ] && command -v brew >/dev/null 2>&1; then _brew_fills=1; fi
     if _py="$(find_py)"; then pf_ok "Python 3.14: $_py"
-    elif [ "$_brew_fills" -eq 1 ]; then pf_info "no Python 3.14 yet — stage 1 installs python@3.14"
-    else pf_ng "no Python 3.14 on PATH" "brew install python@3.14"; fi
+    elif [ "$_brew_fills" -eq 1 ]; then pf_info "Python 3.14 は未導入です。段階1で python@3.14 を導入します"
+    else pf_ng "実行できる Python 3.14 が見つかりません" "brew install python@3.14"; fi
     if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }; then
         if [ -n "$_py" ] && RECOVERY_PYTHON="$(recovery_runtime_ok "$_py")"; then
-            pf_ok "recovery template interpreter: Python >=3.14 and safe SQLite"
+            pf_ok "復旧用 Python: 3.14以降で SQLite の安全条件を満たしています"
         elif [ -z "$_py" ] && [ -z "$RECOVERY_OPTION" ] && [ "$_brew_fills" -eq 1 ]; then
             # same as the install path: stage 6 re-verifies after stage 1 adds Python
-            pf_warn "recovery interpreter is checked in stage 6 after python@3.14 is installed" ""
+            pf_warn "python@3.14 の導入後、段階6で復旧用 Python を確認します" ""
         else
-            pf_ng "recovery template interpreter unsafe or unverified" \
-                "select an existing safe independent executable with --recovery-python; no fallback or binary installation is performed"
+            pf_ng "復旧サービスのテンプレートに問題があります: Python の安全条件を満たさないか、確認できません" \
+                "安全条件を満たす独立した既存 Python を --recovery-python で指定してください。自動で別の Python を選択・導入することはありません"
         fi
     fi
     _need_clone=0
     if [ "$RUNTIME_MODE" = hermes ] && { [ -f "$CLONE_MARK" ] || [ ! -e "$HERMES_DIR" ]; }; then _need_clone=1; fi
     if command -v git >/dev/null 2>&1; then pf_ok "git: $(command -v git)"
-    elif [ "$_brew_fills" -eq 1 ]; then pf_info "git missing — stage 1 installs it"
-    elif [ "$_need_clone" -eq 1 ]; then pf_ng "git missing" "xcode-select --install   (or: brew install git)"
+    elif [ "$_brew_fills" -eq 1 ]; then pf_info "git は未導入です。段階1で導入します"
+    elif [ "$_need_clone" -eq 1 ]; then pf_ng "git が未導入です" "xcode-select --install   （または brew install git）"
     fi
 
     _need_gb=12
     if [ "$SKIP_LLM" -eq 1 ] || [ -f "$MODEL_FILE" ]; then _need_gb=6; fi
     _free_kb="$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {print $4}')"
     case "$_free_kb" in
-        ''|*[!0-9]*) pf_warn "disk: free space on $HOME unknown" "" ;;
+        ''|*[!0-9]*) pf_warn "ディスク: $HOME の空き容量を確認できません" "" ;;
         *) if [ "$_free_kb" -ge $((_need_gb * 1024 * 1024)) ]; then
-               pf_ok "disk: $((_free_kb / 1024 / 1024)) GB free (need ~$_need_gb GB)"
+               pf_ok "ディスク: 空き $((_free_kb / 1024 / 1024)) GB（必要容量は約 $_need_gb GB）"
            else
-               pf_ng "disk: only $((_free_kb / 1024 / 1024)) GB free on $HOME (need ~$_need_gb GB incl. the 5.7 GB model)" "free up disk space, then re-run"
+               pf_ng "ディスク: $HOME の空きは $((_free_kb / 1024 / 1024)) GB です（必要容量は約 $_need_gb GB、モデルは5.7 GB）" "空き容量を増やして再実行してください"
            fi ;;
     esac
     pf_net github.com https://github.com "$_need_clone"
@@ -546,107 +537,107 @@ preflight() {
     pf_net huggingface.co "$MODEL_URL" "$_need_hf"
 
     if [ "$RUNTIME_MODE" = standalone ]; then
-        pf_info "standalone runtime: $VENV (Hermes is not required)"
+        pf_info "MCS 単独接続の実行環境: ${VENV}（Hermes は不要です）"
         pf_net pypi.org https://pypi.org 1
     else
-    if command -v hermes >/dev/null 2>&1; then pf_info "hermes on PATH: $(command -v hermes)"
-    else pf_info "hermes not on PATH yet — stage 2 writes $SHIM"; fi
+    if command -v hermes >/dev/null 2>&1; then pf_info "Hermes コマンド: $(command -v hermes)"
+    else pf_info "Hermes コマンドは未導入です。段階2で $SHIM を作成します"; fi
     if [ -f "$CLONE_MARK" ]; then
-        pf_info "interrupted hermes-agent clone at $HERMES_DIR — stage 2 redoes it"
+        pf_info "$HERMES_DIR の取得が途中で止まっています。段階2でやり直します"
     elif [ -e "$HERMES_DIR/.git" ]; then
         if ! _h="$(git -C "$HERMES_DIR" rev-parse HEAD 2>/dev/null)"; then
-            pf_ng "cannot read HEAD of $HERMES_DIR" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")   # stage 2 then re-clones"
-        elif [ "$_h" = "$HERMES_PIN" ]; then pf_ok "hermes-agent checkout at the pinned commit"
-        else pf_warn "hermes-agent checkout is at $_h, not the validated pin $HERMES_PIN (kept as is)" "git -C $(shell_quote "$HERMES_DIR") checkout --detach $HERMES_PIN"; fi
+            pf_ng "$HERMES_DIR の現在の版（HEAD）を読み取れません" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")   # 段階2で再取得します"
+        elif [ "$_h" = "$HERMES_PIN" ]; then pf_ok "Hermes は検証済みの固定版です"
+        else pf_warn "Hermes は $_h です。検証済み固定版 $HERMES_PIN と異なります（現状を保持します）" "git -C $(shell_quote "$HERMES_DIR") checkout --detach $HERMES_PIN"; fi
     elif [ -e "$HERMES_DIR" ]; then
-        pf_ng "$HERMES_DIR exists but is not a git checkout" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")"
-    else pf_info "no hermes-agent checkout yet — stage 2 clones $HERMES_PIN"; fi
-    if py_ok "$VENV_PY" 14 15; then pf_ok "hermes venv python: $VENV_PY"
-    elif [ -e "$VENV" ]; then pf_info "hermes venv has no usable Python 3.14 — stage 2 recreates it"
-    else pf_info "no hermes venv yet — stage 2 creates it"; fi
+        pf_ng "$HERMES_DIR は存在しますが Git で取得したフォルダではありません" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")"
+    else pf_info "Hermes は未取得です。段階2で $HERMES_PIN を取得します"; fi
+    if py_ok "$VENV_PY" 14 15; then pf_ok "Hermes 用 Python: $VENV_PY"
+    elif [ -e "$VENV" ]; then pf_info "Hermes 用 Python 3.14 が使用できません。段階2で環境を再作成します"
+    else pf_info "Hermes 用 Python 環境は未作成です。段階2で作成します"; fi
     fi
 
     if [ -f "$REPO/.git" ]; then
-        pf_warn "running from a git worktree ($REPO) — services and the plugin will point here and break if it is removed" "run install.sh from the main checkout"
+        pf_warn "Git の作業用フォルダ（${REPO}）から実行しています。サービスとプラグインはこの場所を参照するため、削除すると動かなくなります" "恒久的に使うメインのフォルダから install.sh を実行してください"
     fi
     _c="$(repo_conflict)"
     if [ -n "$_c" ] && [ "$FORCE_REPO" -eq 0 ]; then
-        pf_ng "existing install points at another checkout: $_c" "run $(shell_quote "$_c/install.sh"), or re-run with --force-repo to switch to $REPO"
+        pf_ng "既存の導入先は別のフォルダです: $_c" "$(shell_quote "$_c/install.sh") を実行してください。$REPO へ切り替える場合は --force-repo を指定します"
     elif [ -n "$_c" ]; then
-        pf_warn "--force-repo: will switch the install from $_c to $REPO" ""
+        pf_warn "--force-repo: 導入先を $_c から $REPO へ切り替えます" ""
     fi
     case "$(mcs_shim_conflict)" in
-        foreign) pf_ng "$MCS_SHIM exists and is not an MCS lifecycle launcher" "mv $(shell_quote "$MCS_SHIM") $(shell_quote "$MCS_SHIM.bak")   # it is never overwritten" ;;
+        foreign) pf_ng "$MCS_SHIM は MCS の起動コマンドではありません" "mv $(shell_quote "$MCS_SHIM") $(shell_quote "$MCS_SHIM.bak")   # 自動では上書きしません" ;;
         other) if [ "$FORCE_REPO" -eq 0 ]; then
-                   pf_ng "$MCS_SHIM points at another checkout" "re-run with --force-repo to switch it to $REPO"
-               else pf_warn "--force-repo: will switch $MCS_SHIM to $REPO" ""; fi ;;
+                   pf_ng "$MCS_SHIM は別のフォルダを参照しています" "$REPO へ切り替える場合は --force-repo を指定して再実行してください"
+               else pf_warn "--force-repo: $MCS_SHIM の参照先を $REPO へ切り替えます" ""; fi ;;
     esac
     if [ "$RUNTIME_MODE" = hermes ] && [ "$HERMES_HOME" != "$DEFAULT_HERMES_HOME" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
-        pf_ng "custom HERMES_HOME ($HERMES_HOME) is not supported by the services stage" "use the default ~/.hermes, or add --no-services"
+        pf_ng "常駐サービスは独自の HERMES_HOME（${HERMES_HOME}）に対応していません" "既定の ~/.hermes を使うか、--no-services でサービス登録を省略してください"
     fi
 
     if [ "$OS" = Darwin ]; then
-        if [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then pf_ok "Google Chrome installed"
-        elif [ "$_brew_fills" -eq 1 ]; then pf_info "Google Chrome missing — stage 1 installs it"
-        else pf_warn "Google Chrome missing (MCS login needs it)" "brew install --cask google-chrome"; fi
+        if [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then pf_ok "Google Chrome は導入済みです"
+        elif [ "$_brew_fills" -eq 1 ]; then pf_info "Google Chrome は未導入です。段階1で導入します"
+        else pf_warn "Google Chrome が未導入です（MCS ログインに必要）" "brew install --cask google-chrome"; fi
     fi
     if llm_serving; then
-        pf_ok "port 8080: an OpenAI-compatible server answers"
+        pf_ok "ポート8080: OpenAI 互換サーバーの応答を確認しました"
     elif command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:8080 -sTCP:LISTEN >/dev/null 2>&1; then
         if [ "$SKIP_LLM" -eq 1 ]; then
-            pf_warn "port 8080: something listens but /v1/models does not answer yet" ""
+            pf_warn "ポート8080は使用中ですが /v1/models の応答がありません" ""
         else
-            pf_ng "port 8080 is taken by a process that is not an LLM server" "lsof -nP -iTCP:8080 -sTCP:LISTEN   # stop it, or pass --no-llm"
+            pf_ng "ポート8080が AI サーバー以外の処理に使用されています" "lsof -nP -iTCP:8080 -sTCP:LISTEN   # 使用中の処理を確認して停止するか --no-llm を指定してください"
         fi
     elif [ "$SKIP_LLM" -eq 1 ]; then
-        pf_warn "port 8080: nothing answers — with --no-llm keep your own server on 127.0.0.1:8080" ""
-    else pf_ok "port 8080 free (stage 4 starts llama-server there)"; fi
+        pf_warn "ポート8080の応答がありません。--no-llm の場合はご自身のサーバーを 127.0.0.1:8080 で起動してください" ""
+    else pf_ok "ポート8080は使用できます（段階4で AI サーバーを起動します）"; fi
 
-    printf '\npreflight: %s blocker(s), %s warning(s)\n' "$PF_NG" "$PF_WARN"
+    printf '\n事前確認: 導入を妨げる問題 %s件、注意 %s件\n' "$PF_NG" "$PF_WARN"
 }
 
-plan_line() { printf '  %-14s %s\n' "$1" "$2"; }
-state() { if [ -e "$1" ] || [ -L "$1" ]; then printf 'exists'; else printf 'new'; fi; }
+plan_line() { printf '  %s %s\n' "$1" "$2"; }
+state() { if [ -e "$1" ] || [ -L "$1" ]; then printf '既存'; else printf '新規'; fi; }
 dry_run_plan() {
-    say "plan (--dry-run: nothing below is executed)"
-    plan_line "launcher" "$HOME/.local/bin/mcs -> selected runtime + $REPO/mcs/ops/mcs_cli.py"
-    if [ "$SKIP_BREW" -eq 1 ]; then plan_line "1/6 brew" "skipped (--no-brew)"
-    else plan_line "1/6 brew" "brew install any of: git python@3.14 uv llama.cpp, cask google-chrome (installed ones are skipped)"; fi
+    say "導入予定（--dry-run: 以下の処理は実行しません）"
+    plan_line "起動コマンド" "$HOME/.local/bin/mcs → 選択した実行環境 + $REPO/mcs/ops/mcs_cli.py"
+    if [ "$SKIP_BREW" -eq 1 ]; then plan_line "1/6 基本ソフト" "省略（--no-brew）"
+    else plan_line "1/6 基本ソフト" "git・python@3.14・uv・llama.cpp・Google Chrome の未導入分を Homebrew で導入"; fi
     if [ "$RUNTIME_MODE" = standalone ]; then
-        plan_line "2/6 standalone" "venv $VENV + official SDKs from deployment/requirements-standalone.txt; runtime_mode=standalone"
+        plan_line "2/6 独立接続" "専用 Python 環境 $VENV と deployment/requirements-standalone.txt の公式 SDK を導入（runtime_mode=standalone）"
     else
-    plan_line "2/6 hermes" "checkout $HERMES_DIR [$(state "$HERMES_DIR")] @ $HERMES_PIN (existing checkouts are kept)"
-    plan_line "" "venv $VENV [$(state "$VENV_PY")] + pip install -e hermes-agent[messaging]"
-    plan_line "" "shim $SHIM [$(state "$SHIM")] (a foreign file there is left alone)"
+    plan_line "2/6 Hermes" "ソース $HERMES_DIR [$(state "$HERMES_DIR")] @ $HERMES_PIN （既存の取得済みソースは保持）"
+    plan_line "" "Python 環境 $VENV [$(state "$VENV_PY")] + pip install -e hermes-agent[messaging]"
+    plan_line "" "起動コマンド $SHIM [$(state "$SHIM")] （MCS 以外の既存ファイルは保持）"
     fi
-    if [ "$RUNTIME_MODE" = standalone ]; then plan_line "3/6 plugin" "not used in standalone mode"
-    elif [ "$SKIP_PLUGIN" -eq 1 ]; then plan_line "3/6 plugin" "skipped (--no-plugin; LINE WORKS does not use it)"
-    else plan_line "3/6 plugin" "symlink $PLUGIN_LINK [$(state "$PLUGIN_LINK")] -> $REPO/hermes_plugin; hermes plugins enable mcs-discord-commands"; fi
-    if [ "$SKIP_LLM" -eq 1 ] || [ "$OS" != Darwin ]; then plan_line "4/6 llm" "skipped"
+    if [ "$RUNTIME_MODE" = standalone ]; then plan_line "3/6 プラグイン" "MCS 単独接続では使用しません"
+    elif [ "$SKIP_PLUGIN" -eq 1 ]; then plan_line "3/6 プラグイン" "省略（--no-plugin。LINE WORKS では不要）"
+    else plan_line "3/6 プラグイン" "リンク $PLUGIN_LINK [$(state "$PLUGIN_LINK")] -> $REPO/hermes_plugin; hermes plugins enable mcs-discord-commands"; fi
+    if [ "$SKIP_LLM" -eq 1 ] || [ "$OS" != Darwin ]; then plan_line "4/6 ローカルAI" "省略"
     else
         # mirror stage 4's order: a hermes-managed agent or a foreign
         # server on :8080 is kept — no second llama-server is planned
         if [ -f "$HERMES_LLAMA_PLIST" ]; then
-            plan_line "4/6 llm" "hermes-managed $HERMES_LLAMA_PLIST [exists] is kept (load state checked; no model download, no second server)"
+            plan_line "4/6 ローカルAI" "Hermes 管理の $HERMES_LLAMA_PLIST を保持（起動状態を確認。モデル取得・サーバー重複起動はしません）"
         elif llm_serving \
                 && [ ! -f "$LLAMA_PLIST" ] && ! loaded ai.mcs.llamaserver; then
-            plan_line "4/6 llm" "a server already answers on :8080 — kept (nothing installed)"
+            plan_line "4/6 ローカルAI" "ポート8080の既存サーバーを保持（追加導入なし）"
         else
-            plan_line "4/6 llm" "model $MODEL_FILE [$(state "$MODEL_FILE")] (~5.7 GB download when new)"
-            plan_line "" "plist $LLAMA_PLIST [$(state "$LLAMA_PLIST")]; launchctl bootstrap ai.mcs.llamaserver when not loaded"
+            plan_line "4/6 ローカルAI" "AI モデル $MODEL_FILE [$(state "$MODEL_FILE")] （新規の場合は約5.7 GBを取得）"
+            plan_line "" "起動設定 $LLAMA_PLIST [$(state "$LLAMA_PLIST")]; launchctl bootstrap ai.mcs.llamaserver 未起動の場合に起動"
         fi
     fi
-    if [ "$SKIP_SERVICES" -eq 1 ]; then plan_line "5/6 services" "skipped (--no-services)"
+    if [ "$SKIP_SERVICES" -eq 1 ]; then plan_line "5/6 常駐サービス" "省略（--no-services）"
     else
-        plan_line "5/6 services" "mkdir $MCS_DATA{,/cmd,/cmd_int} (mode 700)"
-        plan_line "" "$VENV_PY $SETUP services (selected runtime supervisor)"
+        plan_line "5/6 常駐サービス" "mkdir $MCS_DATA{,/cmd,/cmd_int} （本人のみアクセス可: 700）"
+        plan_line "" "$VENV_PY $SETUP services （選択した接続方法の常駐管理）"
     fi
-    if [ "$SKIP_RECOVERY" -eq 1 ]; then plan_line "6/6 recovery" "skipped (--no-recovery)"
+    if [ "$SKIP_RECOVERY" -eq 1 ]; then plan_line "6/6 復旧" "省略（--no-recovery）"
     else
-        plan_line "6/6 recovery" "$RECOVERY_DIR/mcs_recover.py [$(state "$RECOVERY_DIR/mcs_recover.py")], repo_path = $REPO"
-        plan_line "" "plist $WATCH_PLIST [$(state "$WATCH_PLIST")]; (re)load org.mcs.recovery only when changed or not loaded"
+        plan_line "6/6 復旧" "$RECOVERY_DIR/mcs_recover.py [$(state "$RECOVERY_DIR/mcs_recover.py")], repo_path = $REPO"
+        plan_line "" "起動設定 $WATCH_PLIST [$(state "$WATCH_PLIST")]; 変更があるか未起動の場合だけ org.mcs.recovery を起動・再起動"
     fi
-    plan_line "opt-outs" "$MCS_DATA/install_options.json [$(state "$MCS_DATA/install_options.json")] (the update plan shows it as install_args; pass each as --install-arg)"
+    plan_line "省略項目の保存" "$MCS_DATA/install_options.json [$(state "$MCS_DATA/install_options.json")] （更新計画の install_args に表示。更新時は各項目を --install-arg で指定）"
 }
 
 if [ "$MODE" != install ]; then
@@ -657,85 +648,85 @@ if [ "$MODE" != install ]; then
 fi
 
 # ---------------------------------------------------------- guards
-[ "$IS_ROOT" -eq 0 ] || die "do not run install.sh as root or with sudo — it installs into your own home; re-run as your normal user"
+[ "$IS_ROOT" -eq 0 ] || die "install.sh は root や sudo で実行しないでください。自分のホームへ導入するため、通常のユーザーで再実行してください"
 # mcs_setup services renders cron wrappers/plists against ~/.hermes (its
 # HERMES_PY and scripts dir are fixed there) — a custom HERMES_HOME would
 # install services pointing at an interpreter that does not exist
 if [ "$RUNTIME_MODE" = hermes ] && [ "$HERMES_HOME" != "$DEFAULT_HERMES_HOME" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
-    printf '%s\n' "custom HERMES_HOME ($HERMES_HOME) is not supported by the services stage;" \
-        "use the default ~/.hermes, or pass --no-services and register services yourself" >&2
+    printf '%s\n' "常駐サービスは独自の HERMES_HOME（${HERMES_HOME}）に対応していません。" \
+        "既定の ~/.hermes を使うか、--no-services を指定してサービスを手動登録してください" >&2
     exit 2
 fi
 CONFLICT="$(repo_conflict)"
 if [ -n "$CONFLICT" ]; then
-    [ "$FORCE_REPO" -eq 1 ] || die "this machine is installed from another checkout ($CONFLICT); run that checkout's install.sh, or re-run with --force-repo to switch the plugin, recovery tool and services to $REPO"
-    warn "--force-repo: switching the install from $CONFLICT to $REPO"
+    [ "$FORCE_REPO" -eq 1 ] || die "この Mac は別フォルダ（${CONFLICT}）から導入されています。その場所の install.sh を実行してください。プラグイン・復旧・サービスを $REPO へ切り替える場合は --force-repo を指定します"
+    warn "--force-repo: 導入先を $CONFLICT から $REPO へ切り替えます"
 fi
 case "$(mcs_shim_conflict)" in
-    foreign) die "$MCS_SHIM is not an MCS lifecycle launcher; left untouched — move it aside and re-run" ;;
-    other) [ "$FORCE_REPO" -eq 1 ] || die "$MCS_SHIM points at another checkout; use --force-repo to switch" ;;
+    foreign) die "$MCS_SHIM は MCS の起動コマンドではないため変更しません。別の場所へ退避して再実行してください" ;;
+    other) [ "$FORCE_REPO" -eq 1 ] || die "$MCS_SHIM は別のフォルダを参照しています。切り替える場合は --force-repo を指定してください" ;;
 esac
 if [ -f "$REPO/.git" ]; then
-    warn "running from a git worktree ($REPO) — services and the plugin will point here and break if the worktree is removed; prefer the main checkout"
+    warn "Git の作業用フォルダ（${REPO}）から実行しています。ここを削除するとサービスとプラグインが動かなくなります。恒久的なメインのフォルダを使ってください"
 fi
 
 if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }; then
     if _probe_host="$(find_py)"; then
         RECOVERY_PYTHON="$(recovery_runtime_ok "$_probe_host")" \
-            || die "desired recovery interpreter unsafe/unknown or deployed selection drift — nothing written"
+            || die "指定した復旧用 Python の安全性が確認できないか、稼働設定と一致しません。変更は行っていません"
     elif [ -n "$RECOVERY_OPTION" ]; then
-        die "--recovery-python is verified before anything is written, which needs Python 3.14 (e.g. brew install python@3.14); install one and re-run — nothing written"
+        die "--recovery-python は導入前に Python 3.14 で検証します。brew install python@3.14 などで導入して再実行してください。変更は行っていません"
     else
         # A fresh Mac gets Python from stage 1; stage 6 checks the recovery runtime then.
-        warn "no Python 3.14 yet — the recovery interpreter is checked in stage 6"
+        warn "Python 3.14 は未導入です。復旧用 Python は段階6で確認します"
     fi
 fi
 
 # every non-zero exit from here on is a stopped install, not a usage error
 trap 'if [ "$?" -ne 0 ]; then
-    printf "%s\n" "error: installation stopped; repair the failed stage and re-run install.sh" >&2
+    printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください" >&2
 fi' EXIT
 
 # ---------------------------------------------------------------- 1. brew
-say "1/6 Homebrew packages"
+say "【1/6】基本ソフトの準備（Homebrew）"
 if [ "$SKIP_BREW" -eq 1 ]; then
-    skip "stage skipped (--no-brew) — assuming git/python/uv/llama.cpp/Chrome are already provided"
-    sum "1/6 brew:     skipped (--no-brew)"
+    skip "--no-brew のため省略します。git・Python・uv・llama.cpp・Chrome は別途導入済みである必要があります"
+    sum "1/6 基本ソフト:     省略（--no-brew）"
 elif ! command -v brew >/dev/null 2>&1; then
-    die "brew not found — install Homebrew first:
+    die "Homebrew が見つかりません。先に次のコマンドで導入してください:
   $BREW_INSTALL
-then re-run install.sh (or pass --no-brew if you manage these tools yourself)"
+その後 install.sh を再実行してください（基本ソフトを別途管理する場合は --no-brew）"
 else
     _new=""
     for pkg in git python@3.14 uv llama.cpp; do
         if brew list --versions "$pkg" >/dev/null 2>&1; then
-            skip "$pkg already installed"
+            skip "$pkg は導入済みです"
         else
-            printf '  install: %s\n' "$pkg"
+            printf '  導入中: %s\n' "$pkg"
             (umask 022; brew install "$pkg")
             _new="$_new $pkg"
         fi
     done
     if [ "$OS" != Darwin ]; then
-        skip "google-chrome cask: not macOS — install Chrome/Chromium yourself"
+        skip "macOS ではないため Chrome の導入を省略します。Chrome／Chromium を別途導入してください"
     elif brew list --cask --versions google-chrome >/dev/null 2>&1 \
             || [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
-        skip "google-chrome already installed"
+        skip "Google Chrome は導入済みです"
     else
-        printf '  install: %s\n' "google-chrome (cask)"
+        printf '  導入中: %s\n' "google-chrome (cask)"
         (umask 022; brew install --cask google-chrome)
         _new="$_new google-chrome"
     fi
-    if [ -n "$_new" ]; then sum "1/6 brew:     installed$_new"
-    else sum "1/6 brew:     all packages already present"; fi
+    if [ -n "$_new" ]; then sum "1/6 基本ソフト:     導入済み:$_new"
+    else sum "1/6 基本ソフト:     すべて導入済みです"; fi
 fi
 
 # ----------------------------------------------------------- 2. hermes
 if [ "$RUNTIME_MODE" = standalone ]; then
-    say "2/6 standalone runtime"
+    say "【2/6】MCS 単独接続の実行環境"
     mkdir -p "$RUNTIME_HOME"
     if ! py_ok "$VENV_PY" 14 15; then
-        PYBIN="$(find_py)" || die "Python 3.14 required — brew install python@3.14"
+        PYBIN="$(find_py)" || die "Python 3.14 が必要です。brew install python@3.14 で導入してください"
         preserve_old_venv
         if command -v uv >/dev/null 2>&1; then
             uv venv --python "$PYBIN" "$VENV"
@@ -745,7 +736,7 @@ if [ "$RUNTIME_MODE" = standalone ]; then
         : > "$PIP_MARK"
     fi
     REQUIREMENTS="$REPO/deployment/requirements-standalone.txt"
-    [ -f "$REQUIREMENTS" ] || die "standalone requirements file is missing"
+    [ -f "$REQUIREMENTS" ] || die "独立接続の依存一覧がありません。deployment/requirements-standalone.txt を確認してください"
     if [ -f "$PIP_MARK" ] || ! cmp -s "$REQUIREMENTS" "$VENV/.mcs-connector-requirements"; then
         : > "$PIP_MARK"
         if command -v uv >/dev/null 2>&1; then
@@ -757,106 +748,106 @@ if [ "$RUNTIME_MODE" = standalone ]; then
         mv -f "$VENV/.mcs-connector-requirements.tmp" "$VENV/.mcs-connector-requirements"
         rm -f "$PIP_MARK"
     fi
-    py_ok "$VENV_PY" 14 15 || die "standalone interpreter unavailable after install"
+    py_ok "$VENV_PY" 14 15 || die "導入後の独立接続用 Python を実行できません。上のエラーを確認してください"
     MCS_PY="$VENV_PY"
-    sum "2/6 runtime:  standalone venv and official connector SDKs"
+    sum "2/6 実行環境:  独立した Python 環境と公式接続 SDK を導入"
 else
-say "2/6 hermes-agent"
+say "【2/6】Hermes の実行環境"
 mkdir -p "$HERMES_HOME"
 # checkout: a fresh clone is bracketed by CLONE_MARK, so an interrupted
 # clone/checkout is redone on re-run instead of being accepted unpinned.
 # An existing checkout without the marker is someone's — never rewritten.
 if [ -f "$CLONE_MARK" ] || [ ! -e "$HERMES_DIR" ]; then
     command -v git >/dev/null 2>&1 \
-        || die "git is required to install hermes-agent — brew install git (or xcode-select --install), then re-run install.sh"
+        || die "Hermes の導入には git が必要です。brew install git または xcode-select --install を実行後、install.sh を再実行してください"
     : > "$CLONE_MARK"
     rm -rf "$HERMES_DIR"   # only ever our own interrupted clone (marker)
-    printf '  clone: %s @%s -> %s\n' "$HERMES_REPO" "$HERMES_PIN" "$HERMES_DIR"
+    printf '  ソース取得: %s @%s → %s\n' "$HERMES_REPO" "$HERMES_PIN" "$HERMES_DIR"
     if ! git clone --filter=blob:none "$HERMES_REPO" "$HERMES_DIR"; then
         rm -rf "$HERMES_DIR"
         git clone "$HERMES_REPO" "$HERMES_DIR" \
-            || die "git clone of $HERMES_REPO failed — check network access to github.com, then re-run install.sh"
+            || die "$HERMES_REPO の取得に失敗しました。github.com への接続を確認し install.sh を再実行してください"
     fi
     if ! git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN"; then
         # Full clones may omit commits reachable only through non-branch refs.
         if ! git -C "$HERMES_DIR" fetch -q origin "$HERMES_PIN" \
             || ! git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN"; then
-            die "cannot retrieve pinned commit $HERMES_PIN from $HERMES_REPO — verify network access and publication of this companion commit before retrying; venv setup has not started"
+            die "$HERMES_REPO の固定版 $HERMES_PIN を取得できません。通信と指定版の公開状況を確認してください。Python 環境の作成は開始していません"
         fi
     fi
 fi
 [ -e "$HERMES_DIR/.git" ] \
-    || die "$HERMES_DIR exists but is not a git checkout — move it aside (mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")), then re-run install.sh"
+    || die "$HERMES_DIR は存在しますが Git で取得したフォルダではありません。退避（mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")）後、install.sh を再実行してください"
 HEAD_SHA="$(git -C "$HERMES_DIR" rev-parse HEAD)" \
-    || die "cannot read HEAD of $HERMES_DIR — repair it or move it aside, then re-run install.sh"
+    || die "$HERMES_DIR の現在の版（HEAD）を読み取れません。修復または退避して install.sh を再実行してください"
 if [ -f "$CLONE_MARK" ]; then
     [ "$HEAD_SHA" = "$HERMES_PIN" ] \
-        || die "fresh checkout is at $HEAD_SHA, not the pinned $HERMES_PIN — re-run install.sh"
+        || die "取得した版 $HEAD_SHA は指定版 $HERMES_PIN と一致しません。install.sh を再実行してください"
     rm -f "$CLONE_MARK"
-    ok "hermes-agent cloned (pinned $HERMES_PIN)"
-    _ck="cloned at pin $HERMES_PIN"
+    ok "Hermes の固定版 $HERMES_PIN を取得しました"
+    _ck="固定版 $HERMES_PIN を取得"
 elif [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] && ! py_ok "$VENV_PY" 14 15 \
         && [ -n "${MCS_UPDATE_KEEP_HERMES_CHECKOUT:-}" ]; then
     # Operator-confirmed (mcs_upgrade --keep-hermes-checkout): keep this exact,
     # clean checkout that already declares Python 3.14 support; never move it.
     [ "$HEAD_SHA" = "$MCS_UPDATE_KEEP_HERMES_CHECKOUT" ] \
-        || die "runtime migration: $HERMES_DIR is at $HEAD_SHA, not the confirmed $MCS_UPDATE_KEEP_HERMES_CHECKOUT — existing checkout and venv retained"
+        || die "Python 移行: $HERMES_DIR の版 $HEAD_SHA が確認済みの $MCS_UPDATE_KEEP_HERMES_CHECKOUT と一致しません。既存ソースと環境は保持しました"
     [ -z "$(git -C "$HERMES_DIR" status --porcelain --untracked-files=no)" ] \
-        || die "runtime migration: $HERMES_DIR has local changes — existing checkout and venv retained"
+        || die "Python 移行: $HERMES_DIR にコミットされていない変更があります。既存ソースと環境は保持しました"
     hermes_admits_314 \
-        || die "runtime migration: $HERMES_DIR does not declare Python 3.14 support — existing checkout and venv retained"
+        || die "Python 移行: $HERMES_DIR は Python 3.14 対応を宣言していません。既存ソースと環境は保持しました"
     migration_backup >/dev/null \
-        || die "runtime migration lock or backup is invalid — existing checkout and venv retained"
-    ok "keeping the confirmed hermes-agent checkout $HEAD_SHA for the Python 3.14 runtime"
-    _ck="kept confirmed checkout $HEAD_SHA"
+        || die "Python 移行のロックまたはバックアップが不正です。既存ソースと環境は保持しました"
+    ok "Python 3.14 への移行に、確認済みの Hermes $HEAD_SHA を保持します"
+    _ck="確認済みの版 $HEAD_SHA を保持"
 elif [ "$HEAD_SHA" = "$HERMES_PIN" ]; then
-    skip "hermes-agent checkout already at pin $HERMES_PIN"
-    _ck="kept existing checkout (pinned)"
+    skip "Hermes は固定版 $HERMES_PIN を取得済みです"
+    _ck="取得済みの固定版を保持"
 elif [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] && ! py_ok "$VENV_PY" 14 15; then
     # Runtime migration: the earlier pins require Python <3.14, so the
     # rebuilt venv needs the current pin. Move only a clean, detached,
     # previously validated checkout, and only once the lock verifies.
     case " $HERMES_PREVIOUS_PINS " in *" $HEAD_SHA "*) ;; *)
-        die "runtime migration: $HERMES_DIR is at an unknown commit $HEAD_SHA — move it to $HERMES_PIN yourself, then re-run; existing venv retained" ;;
+        die "Python 移行: $HERMES_DIR は未検証の版 $HEAD_SHA です。$HERMES_PIN への変更を確認・実施してから再実行してください。既存環境は保持しました" ;;
     esac
     if git -C "$HERMES_DIR" symbolic-ref -q HEAD >/dev/null 2>&1 \
             || [ -n "$(git -C "$HERMES_DIR" status --porcelain --untracked-files=no)" ]; then
-        die "runtime migration: $HERMES_DIR is on a branch or has local changes — existing checkout and venv retained"
+        die "Python 移行: $HERMES_DIR はブランチ上にあるか未コミットの変更があります。既存ソースと環境は保持しました"
     fi
     migration_backup >/dev/null \
-        || die "runtime migration lock or backup is invalid — existing checkout and venv retained"
+        || die "Python 移行のロックまたはバックアップが不正です。既存ソースと環境は保持しました"
     if ! git -C "$HERMES_DIR" fetch -q "$HERMES_REPO" "$HERMES_PIN" \
         || ! git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN"; then
-        die "runtime migration: could not move $HERMES_DIR to $HERMES_PIN — existing venv retained"
+        die "Python 移行: $HERMES_DIR を $HERMES_PIN に変更できません。既存環境は保持しました"
     fi
     [ "$(git -C "$HERMES_DIR" rev-parse HEAD)" = "$HERMES_PIN" ] \
-        || die "runtime migration: $HERMES_DIR is not at $HERMES_PIN after checkout"
-    ok "hermes-agent moved $HEAD_SHA -> $HERMES_PIN for the Python 3.14 runtime"
-    _ck="moved previous pin to $HERMES_PIN"
+        || die "Python 移行: 変更後も $HERMES_DIR が指定版 $HERMES_PIN と一致しません"
+    ok "Python 3.14 用に Hermes を $HEAD_SHA から $HERMES_PIN へ変更しました"
+    _ck="旧固定版から $HERMES_PIN へ変更"
 else
-    warn "$HERMES_DIR is at $HEAD_SHA, not pinned $HERMES_PIN"
-    warn "  (keeping existing checkout; update deliberately)"
-    _ck="kept existing checkout at $HEAD_SHA (NOT the validated pin)"
+    warn "$HERMES_DIR は $HEAD_SHA です（指定固定版 $HERMES_PIN とは異なります）"
+    warn "  取得済みソースを保持します。版の変更は更新手順に従ってください"
+    _ck="取得済みの $HEAD_SHA を保持（検証済み固定版とは異なります）"
 fi
 
 # venv: converge on re-run — a venv without a usable python is rebuilt,
 # and PIP_MARK brackets the package install so a failed one is retried
 if ! py_ok "$VENV_PY" 14 15; then
     PYBIN="$(find_py)" \
-        || die "Python >=3.14,<3.15 is required for hermes-agent — brew install python@3.14, then re-run install.sh"
+        || die "Hermes には Python 3.14 が必要です（3.15以降は対象外）。brew install python@3.14 を実行して install.sh を再実行してください"
     if [ -e "$VENV" ]; then
-        warn "$VENV has no usable Python 3.14 — recreating it"
+        warn "$VENV の Python 3.14 が使用できないため環境を再作成します"
     fi
     preserve_old_venv
     if command -v uv >/dev/null 2>&1; then
-        uv venv --python "$PYBIN" "$VENV" || die "uv venv failed — re-run install.sh"
+        uv venv --python "$PYBIN" "$VENV" || die "uv による Python 環境の作成に失敗しました。上のエラーを確認し install.sh を再実行してください"
     else
-        "$PYBIN" -m venv "$VENV" || die "python -m venv failed — re-run install.sh"
+        "$PYBIN" -m venv "$VENV" || die "Python 環境の作成に失敗しました。上のエラーを確認し install.sh を再実行してください"
     fi
     : > "$PIP_MARK"
-    _venv="venv created"
+    _venv="Python 環境を作成"
 else
-    _venv="venv kept"
+    _venv="Python 環境を保持"
 fi
 if [ -f "$PIP_MARK" ] || [ ! -x "$VENV_HERMES" ]; then
     : > "$PIP_MARK"
@@ -867,16 +858,16 @@ if [ -f "$PIP_MARK" ] || [ ! -x "$VENV_HERMES" ]; then
         "$VENV_PY" -m pip install -e "${HERMES_DIR}[messaging]" || _pip=1
     fi
     [ -z "$_pip" ] \
-        || die "installing hermes-agent into $VENV failed — fix the error above (network/compiler), then re-run install.sh (the install is retried)"
+        || die "$VENV への Hermes 導入に失敗しました。上のエラー（通信・コンパイラ等）を解消し install.sh を再実行してください。失敗した導入を再試行します"
     rm -f "$PIP_MARK"
-    _venv="$_venv, hermes-agent installed"
+    _venv="$_venv, Hermes を導入"
 fi
 # this interpreter is what stage 5 bakes into every plist/wrapper
 py_ok "$VENV_PY" 14 15 \
-    || die "$VENV_PY is missing or not Python 3.14 — remove $VENV and re-run install.sh"
+    || die "$VENV_PY がないか Python 3.14 ではありません。$VENV の内容を確認・退避してから install.sh を再実行してください"
 [ -x "$VENV_HERMES" ] \
-    || die "$VENV_HERMES is missing after the install — remove $VENV and re-run install.sh"
-ok "hermes venv: $VENV_PY"
+    || die "導入後も $VENV_HERMES がありません。$VENV の内容を確認・退避してから install.sh を再実行してください"
+ok "Hermes 用 Python 環境: $VENV_PY"
 MCS_PY="$VENV_PY"
 hermes_cli() { (unset PYTHONPATH PYTHONHOME; exec "$VENV_HERMES" "$@"); }
 
@@ -898,22 +889,22 @@ elif [ -e "$SHIM" ] && [ ! -L "$SHIM" ]; then
     _shim=foreign
 fi
 case "$_shim" in
-    keep) skip "shim $SHIM up to date"; _shimsum="shim kept" ;;
+    keep) skip "起動コマンド $SHIM は最新です"; _shimsum="起動コマンドを保持" ;;
     foreign)
-        warn "$SHIM exists and is not the MCS shim — left untouched; make sure 'hermes' on PATH runs $VENV_HERMES"
-        _shimsum="shim NOT written ($SHIM is someone else's)" ;;
+        warn "$SHIM は MCS の起動コマンドではないため保持します。hermes コマンドが $VENV_HERMES を実行することを確認してください"
+        _shimsum="起動コマンドを作成せず保持（$SHIM は別の用途で使用中）" ;;
     replace)
         printf '%s\n' "$SHIM_BODY" > "$SHIM.tmp.$$"
         chmod 700 "$SHIM.tmp.$$"
         mv -f "$SHIM.tmp.$$" "$SHIM"
-        ok "shim: $SHIM -> $VENV_HERMES"
-        _shimsum="shim written" ;;
+        ok "起動コマンド: $SHIM -> $VENV_HERMES"
+        _shimsum="起動コマンドを作成" ;;
 esac
 case ":$PATH:" in
     *":$HERMES_BIN_DIR:"*) ;;
-    *) warn "$HERMES_BIN_DIR is not on PATH — add it to your shell profile to run 'hermes'" ;;
+    *) warn "$HERMES_BIN_DIR が PATH にありません。hermes を使えるようシェルの設定で PATH に追加してください" ;;
 esac
-sum "2/6 hermes:   $_ck; $_venv; $_shimsum"
+sum "2/6 Hermes:   $_ck; $_venv; $_shimsum"
 fi
 
 # Publish a pinned lifecycle entrypoint for both runtimes. A foreign command
@@ -921,23 +912,23 @@ fi
 MCS_BODY="$(printf '#!/bin/sh\n# MCS lifecycle launcher\nunset PYTHONPATH PYTHONHOME\nexport MCS_LIFECYCLE_PINNED=1\nexec %s %s "$@"' \
     "$(shell_quote "$MCS_PY")" "$(shell_quote "$REPO/mcs/ops/mcs_cli.py")")"
 case "$(mcs_shim_conflict)" in
-    foreign) die "$MCS_SHIM is not an MCS lifecycle launcher; left untouched" ;;
-    other) [ "$FORCE_REPO" -eq 1 ] || die "$MCS_SHIM points at another checkout; use --force-repo to switch" ;;
+    foreign) die "$MCS_SHIM は MCS の起動コマンドではないため変更しません" ;;
+    other) [ "$FORCE_REPO" -eq 1 ] || die "$MCS_SHIM は別のフォルダを参照しています。切り替える場合は --force-repo を指定してください" ;;
 esac
 mkdir -p "$HERMES_BIN_DIR"
 printf '%s\n' "$MCS_BODY" > "$MCS_SHIM.tmp.$$"
 chmod 700 "$MCS_SHIM.tmp.$$"
 publish "$MCS_SHIM.tmp.$$" "$MCS_SHIM" || :
-sum "launcher:    $MCS_SHIM (interpreter $MCS_PY)"
+sum "起動コマンド: ${MCS_SHIM}（Python: ${MCS_PY}）"
 case ":$PATH:" in
     *":$HERMES_BIN_DIR:"*) ;;
-    *) warn "$HERMES_BIN_DIR is not on PATH — add it to your shell profile to run 'mcs'" ;;
+    *) warn "$HERMES_BIN_DIR が PATH にありません。mcs を使えるようシェルの設定で PATH に追加してください" ;;
 esac
 
 # Verify the desired target before even the first private config write.
 if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }; then
     RECOVERY_PYTHON="$(recovery_runtime_ok "$MCS_PY")" \
-        || die "recovery desired interpreter unsafe or unknown — config not written"
+        || die "指定した復旧用 Python の安全性を確認できません。設定は保存していません"
 fi
 # Persist explicit selections only; never discard an unreadable config.
 if [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; then
@@ -951,88 +942,88 @@ from mcs_util import CONF_PATH, atomic_write
 try:
     cfg = mcs_setup._owner_config(CONF_PATH)
 except ValueError as exc:
-    raise SystemExit(f"config.json {exc} — repair it before selecting a runtime") from None
+    raise SystemExit(f"config.json を読み取れません（{exc}）。接続方法を選ぶ前に修復してください") from None
 cfg["runtime_mode"] = sys.argv[2]
 if sys.argv[3]:
     cfg["recovery_python"] = sys.argv[3]
 why = mcs_setup._init_recovery_problem(cfg, sys.argv[1])
 if why:
-    raise SystemExit("desired recovery " + why + " — config not written")
+    raise SystemExit("復旧用 Python の設定に問題があります: " + why + "。設定は保存していません")
 atomic_write(CONF_PATH, lambda handle: json.dump(cfg, handle, ensure_ascii=False, indent=2), 0o600)
 PYMODE
 fi
 
 # -------------------------------------------------------- 3. plugin
-say "3/6 Discord/Slack command plugin"
+say "【3/6】Slack／Discord の操作カード用プラグイン"
 if [ "$SKIP_PLUGIN" -eq 1 ]; then
     if [ "$RUNTIME_MODE" = standalone ]; then
-        skip "not used in standalone mode — the standalone connector serves the cards"
-        sum "3/6 plugin:   not used (standalone)"
+        skip "MCS 単独接続では使用しません。独立接続機能が操作カードを提供します"
+        sum "3/6 プラグイン:   MCS 単独接続では不要"
     else
-        skip "stage skipped (--no-plugin) — Slack/Discord cards need this plugin; re-run without the flag before enabling notify.interactive=slack or discord (notify.interactive=lineworks does not use it — see docs/guides/LINEWORKS.md)"
-        sum "3/6 plugin:   skipped (--no-plugin)"
+        skip "--no-plugin のため省略します。Slack／Discord の操作カードを有効にする前に、このオプションなしで再実行してください（LINE WORKS では不要。docs/guides/LINEWORKS.md を参照）"
+        sum "3/6 プラグイン:   省略（--no-plugin）"
     fi
 else
     mkdir -p "$HERMES_HOME/plugins"
     if [ -e "$PLUGIN_LINK" ] && [ ! -L "$PLUGIN_LINK" ]; then
-        die "$PLUGIN_LINK exists and is not a symlink — remove it manually, then re-run install.sh"
+        die "$PLUGIN_LINK はリンクではありません。内容を確認・退避してから install.sh を再実行してください"
     fi
     if [ -L "$PLUGIN_LINK" ] && [ "$(readlink "$PLUGIN_LINK")" = "$REPO/hermes_plugin" ]; then
-        skip "plugin link already -> $REPO/hermes_plugin"
+        skip "プラグインのリンクは設定済み → $REPO/hermes_plugin"
     else
         ln -sfn "$REPO/hermes_plugin" "$PLUGIN_LINK"
-        ok "linked: $PLUGIN_LINK -> $REPO/hermes_plugin"
+        ok "リンクを作成: $PLUGIN_LINK -> $REPO/hermes_plugin"
     fi
     if hermes_cli config get plugins.enabled 2>/dev/null \
             | grep -q "mcs-discord-commands"; then
-        skip "plugin already enabled"
+        skip "プラグインは有効化済みです"
     elif hermes_cli plugins enable mcs-discord-commands --no-allow-tool-override; then
-        ok "plugin enabled"
+        ok "プラグインを有効化しました"
     else
-        die "plugins enable failed — repair the Hermes CLI/plugin configuration (or add 'mcs-discord-commands' to plugins.enabled in the profile config.yaml), then re-run install.sh"
+        die "プラグインの有効化に失敗しました。Hermes の設定を修復するか、プロファイルの config.yaml の plugins.enabled に mcs-discord-commands を追加して install.sh を再実行してください"
     fi
-    sum "3/6 plugin:   linked + enabled"
+    sum "3/6 プラグイン:   リンク作成・有効化済み"
 fi
 
 # -------------------------------------------------- 4. local LLM server
-say "4/6 local LLM (llama-server :8080)"
+say "【4/6】この Mac で動かす AI（llama-server、ポート8080）"
 if [ "$SKIP_LLM" -eq 1 ]; then
-    skip "stage skipped (--no-llm) — keep your own OpenAI-compatible server answering on 127.0.0.1:8080"
-    sum "4/6 llm:      skipped (--no-llm)"
+    skip "--no-llm のため省略します。別途 OpenAI 互換サーバーを 127.0.0.1:8080 で動かしてください"
+    sum "4/6 ローカルAI:      省略（--no-llm）"
 elif [ "$OS" != Darwin ]; then
-    skip "not macOS — the llama-server LaunchAgent is macOS-only; serve an OpenAI-compatible endpoint on 127.0.0.1:8080 yourself"
-    sum "4/6 llm:      skipped (not macOS)"
+    skip "AI の常駐設定は macOS 専用です。別途 OpenAI 互換サーバーを 127.0.0.1:8080 で動かしてください"
+    sum "4/6 ローカルAI:      macOS 以外のため省略"
 else
     SERVING=0
     if llm_serving; then SERVING=1; fi
     if [ -f "$HERMES_LLAMA_PLIST" ]; then
         # hermes manages its own llama.cpp agent — never start a second one
         if loaded ai.hermes.llamacpp; then
-            skip "hermes-managed ai.hermes.llamacpp is loaded — it serves :8080"
-            sum "4/6 llm:      hermes-managed ai.hermes.llamacpp (loaded)"
+            skip "Hermes 管理の AI（ai.hermes.llamacpp）が起動済みです。ポート8080を使用します"
+            sum "4/6 ローカルAI:      Hermes 管理の AI が起動済み（ai.hermes.llamacpp）"
         elif [ "$SERVING" -eq 1 ]; then
-            skip "ai.hermes.llamacpp is not loaded, but a server answers on :8080 — leaving it"
-            sum "4/6 llm:      existing server on :8080 kept"
+            skip "ai.hermes.llamacpp は未起動ですがポート8080に応答があるため、既存サーバーを保持します"
+            sum "4/6 ローカルAI:      ポート8080の既存サーバーを保持"
         else
-            warn "hermes-managed $HERMES_LLAMA_PLIST exists but is NOT loaded and nothing answers on :8080 — load it:"
+            warn "Hermes 管理の $HERMES_LLAMA_PLIST は未起動で、ポート8080の応答もありません。次のコマンドで起動してください:"
             warn "  launchctl bootstrap gui/$(id -u) $(shell_quote "$HERMES_LLAMA_PLIST")"
-            sum "4/6 llm:      WARNING ai.hermes.llamacpp not loaded — see the warning above"
+            sum "4/6 ローカルAI:      注意: ai.hermes.llamacpp は未起動です。上の対処を確認してください"
         fi
     elif [ "$SERVING" -eq 1 ] && [ ! -f "$LLAMA_PLIST" ] && ! loaded ai.mcs.llamaserver; then
-        skip "an OpenAI-compatible server is already answering on :8080 — leaving it in place"
-        sum "4/6 llm:      existing server on :8080 kept"
+        skip "ポート8080の OpenAI 互換サーバーは応答しているため保持します"
+        sum "4/6 ローカルAI:      ポート8080の既存サーバーを保持"
     else
         LLAMA_BIN="$(command -v llama-server || true)"
         if [ -z "$LLAMA_BIN" ] && command -v brew >/dev/null 2>&1; then
             LLAMA_BIN="$(brew --prefix)/bin/llama-server"
         fi
         if [ -z "$LLAMA_BIN" ] || [ ! -x "$LLAMA_BIN" ]; then
-            die "llama-server not found — brew install llama.cpp (or pass --no-llm and serve :8080 yourself), then re-run install.sh"
+            die "llama-server が見つかりません。brew install llama.cpp で導入して再実行してください（別サーバーをポート8080で動かす場合は --no-llm）"
         fi
         if [ -f "$MODEL_FILE" ]; then
-            skip "model already present"
+            skip "AI モデルは取得済みです"
         else
-            printf '  downloading model (~5.7 GB, resumable): %s\n' "$MODEL_FILE"
+            printf '  AI モデルを取得中（約5.7 GB、中断後に再開できます）: %s\n' "$MODEL_FILE"
             mkdir -p "$MODEL_DIR"
             # .part is kept on failure so the next run resumes (-C -).
             # A .part that already holds every byte (interrupted between
@@ -1045,19 +1036,19 @@ else
                     | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v}')"
             fi
             if [ -n "$_want" ] && [ "$_have" = "$_want" ]; then
-                printf '  partial file already complete (%s bytes)\n' "$_have"
+                printf '  取得途中のファイルは全容量を取得済みです（%s バイト）\n' "$_have"
             else
                 curl -fL --retry 5 --retry-delay 5 -C - --progress-bar \
                         -o "$MODEL_FILE.part" "$MODEL_URL" \
-                    || die "model download failed — re-run install.sh to resume (partial file: $MODEL_FILE.part)"
+                    || die "モデル取得に失敗しました。install.sh を再実行すると再開します（途中のファイル: $MODEL_FILE.part）"
             fi
             _got="$(shasum -a 256 < "$MODEL_FILE.part" | awk '{print $1}')"
             if [ "$_got" != "$MODEL_SHA256" ]; then
                 rm -f "$MODEL_FILE.part"
-                die "model checksum mismatch (got $_got) — the partial file was removed; re-run install.sh"
+                die "モデルの整合性が確認できません（SHA256: ${_got}）。取得途中のファイルを削除しました。install.sh を再実行してください"
             fi
             mv -f "$MODEL_FILE.part" "$MODEL_FILE"
-            ok "model downloaded"
+            ok "AI モデルを取得しました"
         fi
         mkdir -p "$AGENTS_DIR" "$RUNTIME_HOME/logs"
         sed -e "s|__LLAMA_BIN__|$(xml_sed "$LLAMA_BIN")|g" \
@@ -1069,52 +1060,52 @@ else
         if publish "$LLAMA_PLIST.tmp" "$LLAMA_PLIST"; then _changed=1; fi
         if ! loaded ai.mcs.llamaserver; then
             bootstrap_agent ai.mcs.llamaserver "$LLAMA_PLIST" \
-                || die "launchctl bootstrap failed for ai.mcs.llamaserver — inspect $LLAMA_PLIST, then re-run install.sh"
-            ok "llama-server LaunchAgent started"
-            sum "4/6 llm:      llama-server started"
+                || die "AI サーバーの起動に失敗しました。$LLAMA_PLIST を確認し install.sh を再実行してください"
+            ok "AI サーバーの常駐サービスを起動しました"
+            sum "4/6 ローカルAI:      AI サーバーを起動"
         elif [ "$_changed" -eq 0 ]; then
-            skip "ai.mcs.llamaserver already loaded, plist unchanged"
-            sum "4/6 llm:      llama-server already running"
+            skip "AI サーバーは起動済みで、起動設定にも変更はありません"
+            sum "4/6 ローカルAI:      AI サーバーは起動済み"
         elif [ "$SERVING" -eq 1 ]; then
             # never interrupt a serving model mid-request — tell the user
-            warn "ai.mcs.llamaserver plist changed but the running server was kept; apply it when idle:"
+            warn "AI サーバーの起動設定を更新しましたが、稼働中の処理は保持しました。処理が終わってから次を実行して反映してください:"
             warn "  launchctl bootout gui/$(id -u)/ai.mcs.llamaserver; launchctl bootstrap gui/$(id -u) $(shell_quote "$LLAMA_PLIST")"
-            sum "4/6 llm:      plist updated — reload pending (see warning)"
+            sum "4/6 ローカルAI:      起動設定を更新、再起動待ち（上の注意を参照）"
         else
             launchctl bootout "gui/$(id -u)/ai.mcs.llamaserver" 2>/dev/null || true
             bootstrap_agent ai.mcs.llamaserver "$LLAMA_PLIST" \
-                || die "launchctl bootstrap failed for ai.mcs.llamaserver — inspect $LLAMA_PLIST, then re-run install.sh"
-            ok "llama-server reloaded with the updated plist"
-            sum "4/6 llm:      llama-server reloaded (plist changed)"
+                || die "AI サーバーの起動に失敗しました。$LLAMA_PLIST を確認し install.sh を再実行してください"
+            ok "更新した設定で AI サーバーを再起動しました"
+            sum "4/6 ローカルAI:      設定変更に合わせて AI サーバーを再起動"
         fi
     fi
 fi
 
 # ------------------------------------------- 5. launchd + hermes cron
-say "5/6 scheduled services ($RUNTIME_MODE)"
+say "【5/6】定期収集などの常駐サービス（${RUNTIME_MODE}）"
 # the agents stage 5/6 load log to / watch these — they must exist first
 # (new ones are 0700 via umask; existing modes are kept)
 mkdir -p "$HOME/.mcs" "$MCS_DATA" "$MCS_DATA/cmd" "$MCS_DATA/cmd_int"
 if [ "$SKIP_SERVICES" -eq 1 ]; then
-    skip "stage skipped (--no-services) — run it later:"
+    skip "--no-services のため省略します。後で次のコマンドで登録してください:"
     skip "  $(shell_quote "$MCS_PY") $(shell_quote "$SETUP") services"
-    sum "5/6 services: skipped (--no-services)"
+    sum "5/6 常駐サービス: 省略（--no-services）"
 elif "$MCS_PY" "$SETUP" services; then
-    ok "services installed"
-    sum "5/6 services: installed (interpreter $MCS_PY)"
+    ok "常駐サービスを登録しました"
+    sum "5/6 常駐サービス: 登録済み（Python: ${MCS_PY}）"
 else
-    die "services reported problems — see deployment/launchagents/README.md, then re-run install.sh"
+    die "常駐サービスの登録に問題があります。deployment/launchagents/README.md を確認し install.sh を再実行してください"
 fi
 
 # --------------------------------- 6. update recovery (independent)
-say "6/6 update recovery (watchdog + tool)"
+say "【6/6】更新失敗に備える復旧ツールと監視"
 if [ "$SKIP_RECOVERY" -eq 1 ]; then
-    skip "stage skipped (--no-recovery)"
-    sum "6/6 recovery: skipped (--no-recovery)"
+    skip "--no-recovery のため省略します"
+    sum "6/6 復旧: 省略（--no-recovery）"
 else
     if [ "$OS" = Darwin ]; then
         RECOVERY_PYTHON="$(recovery_runtime_ok "$MCS_PY")" \
-            || die "recovery desired interpreter unsafe or unverified — nothing in stage 6 installed; no fallback was selected"
+            || die "復旧用 Python の安全性が確認できません。段階6は導入していません。別の Python へ自動切替はしていません"
     fi
     mkdir -p "$RECOVERY_DIR"
     RECOVERY_SRC="$REPO/deployment/recovery/mcs_recover.py"
@@ -1139,7 +1130,7 @@ else
     # the tool runs outside the repo — record which checkout it recovers
     printf '%s\n' "$REPO" > "$RECOVERY_DIR/repo_path.tmp"
     if publish "$RECOVERY_DIR/repo_path.tmp" "$RECOVERY_DIR/repo_path"; then _rchanged=1; fi
-    ok "recovery tool: $RECOVERY_DST"
+    ok "復旧ツール: $RECOVERY_DST"
 
     if [ "$OS" = Darwin ]; then
         mkdir -p "$AGENTS_DIR"
@@ -1150,18 +1141,18 @@ else
             > "$WATCH_PLIST.tmp"
         if publish "$WATCH_PLIST.tmp" "$WATCH_PLIST"; then _rchanged=1; fi
         if [ "$_rchanged" -eq 0 ] && loaded org.mcs.recovery; then
-            skip "recovery watchdog already loaded, unchanged"
-            sum "6/6 recovery: watchdog already loaded"
+            skip "復旧監視は起動済みで変更はありません"
+            sum "6/6 復旧: 復旧監視は起動済み"
         else
             launchctl bootout "gui/$(id -u)/org.mcs.recovery" 2>/dev/null || true
             bootstrap_agent org.mcs.recovery "$WATCH_PLIST" \
-                || die "watchdog bootstrap failed — inspect $WATCH_PLIST (or load it: launchctl bootstrap gui/$(id -u) $(shell_quote "$WATCH_PLIST")), then re-run install.sh"
-            ok "recovery watchdog loaded (StartInterval 900)"
-            sum "6/6 recovery: watchdog (re)loaded"
+                || die "復旧監視を起動できません。$WATCH_PLIST を確認してください（起動: launchctl bootstrap gui/$(id -u) $(shell_quote "$WATCH_PLIST")）。その後 install.sh を再実行してください"
+            ok "復旧監視を起動しました（15分ごと）"
+            sum "6/6 復旧: 復旧監視を起動・再起動"
         fi
     else
-        skip "watchdog: not macOS — install the timer manually"
-        sum "6/6 recovery: tool installed; watchdog skipped (not macOS)"
+        skip "復旧監視の自動登録は macOS 専用です。定期実行を別途設定してください"
+        sum "6/6 復旧: ツールを導入。macOS 以外のため復旧監視登録を省略"
     fi
 fi
 
@@ -1175,7 +1166,7 @@ if [ -z "${MCS_UPDATE_REINSTALL:-}" ]; then
         if [ "${_o#*:}" -eq 1 ]; then _opts="$_opts${_opts:+, }\"--no-${_o%%:*}\""; fi
     done
     printf '{"v": 1, "install_args": [%s]}\n' "$_opts" > "$MCS_DATA/install_options.json.tmp" \
-        || die "cannot write $MCS_DATA/install_options.json — repair permissions or disk space, then re-run install.sh"
+        || die "導入オプションを $MCS_DATA/install_options.json に保存できません。アクセス権と空き容量を確認し install.sh を再実行してください"
     publish "$MCS_DATA/install_options.json.tmp" "$MCS_DATA/install_options.json" || :
 fi
 
@@ -1185,52 +1176,49 @@ SETUPQ="$(shell_quote "$SETUP")"
 # `-m` resolves only from the checkout: install.sh may run from elsewhere.
 INREPO="cd $(shell_quote "$REPO") &&"
 printf '\n============================================================\n'
-printf 'Installed. Summary:\n'
+printf 'ソフトの導入が完了しました。結果:\n'
 printf '%s' "$SUMMARY"
 printf '============================================================\n'
-printf '\nOne guided step remains — it needs your secrets/choices:\n\n'
+printf '\n次は初期設定です。以下のコマンドを実行し、案内に沿ってログイン情報や通知先を入力してください:\n\n'
 printf '    %s setup\n' "$(shell_quote "$MCS_SHIM")"
-printf '    # equivalent existing entrypoint:\n'
+printf '    # 上のコマンドが使えない場合は、次でも同じ初期設定を開始できます:\n'
 printf '    %s %s init\n' "$PYQ" "$SETUPQ"
 if [ "$RUNTIME_MODE" = standalone ]; then
     cat <<'EOF'
 
-Select your notification destination and explicit actor/project scopes.
-The wizard stores connector secrets with hidden prompts in owner-only files.
-Hermes profiles, plugins and gateway are not used.
-Run init first; the host waits until configuration and credentials are ready.
-Then run the required-condition check and inspect status:
+通知先、操作を許可するユーザー、対象プロジェクトを選んでください。
+認証情報は非表示で入力し、本人だけが読めるファイルに保存します。
+MCS 単独接続では Hermes のプロファイル・プラグイン・Gateway は使いません。
+最初に初期設定を完了してください。設定と認証情報が揃うまで接続を待機します。
+設定後は次のコマンドで必要な条件と稼働状態を確認してください:
 EOF
     printf '    %s %s check\n' "$PYQ" "$SETUPQ"
     printf '    %s %s -m mcs_standalone status\n' "$INREPO" "$PYQ"
     cat <<'EOF'
 
-LINE WORKS (notify.interactive=lineworks): enter its secrets on your own
-terminal with the command below; the standalone host starts the adapter,
-so do not also run a separate lineworks_adapter service.
+LINE WORKS を選んだ場合（notify.interactive=lineworks）は、次のコマンドで
+認証情報を入力してください。独立接続の常駐サービスが接続機能を起動するため、
+lineworks_adapter のサービスを別に起動しないでください。
 EOF
     printf '    %s %s -m lineworks_adapter init\n' "$INREPO" "$PYQ"
-    printf '\nSee docs/guides/STANDALONE.md (including switching from Hermes).\n'
+    printf '\n詳しくは docs/guides/STANDALONE.md を参照してください（Hermes からの切替も記載）。\n'
     exit 0
 fi
 cat <<'EOF'
 
-The wizard covers EVERY config.json setting (Enter keeps the
-current/default — a partially configured install just confirms
-existing values). When you pick notify.interactive=slack or
-discord it also, through the public hermes CLI only:
+設定画面では、すべての設定項目を順に確認します。
+Enter を押すと現在値または既定値を採用します。導入済みの場合も既存値を確認できます。
+Slack／Discord の操作カードを選ぶと、Hermes の公式コマンドで次を行います:
 
-  - writes the plugin settings block (snapshot/inbox/allowlists and
-    the notify.<transport> scope — slack_* keys for Slack) into the
-    hermes profile you name — multiplex setups: the profile that
-    serves that transport
-  - stores DISCORD_BOT_TOKEN (or SLACK_BOT_TOKEN + SLACK_APP_TOKEN)
-    in the profile .env (env var or prompt — never an argv flag),
-    skipping tokens already configured
-  - syncs the supervised gateway when interactive is configured
-  - runs the final required-condition check and reports blockers
+  - 指定した Hermes プロファイルへ、通知先・操作を許可するユーザー・
+    対象プロジェクトなどの設定を保存します。複数プロファイルがある場合は、
+    その通知先に接続しているものを指定してください。
+  - 接続トークンをプロファイルの .env に保存します。入力は非表示で、
+    設定済みなら再入力は不要です。トークンをコマンドの引数に書かないでください。
+  - 操作カードに必要な Gateway の常駐設定を反映します。
+  - 最後に必要な条件を確認し、動かない原因があれば対処を表示します。
 
-Non-interactive equivalent (slack):
+自動化向け: 質問なしで設定する例（Slack）:
 
 EOF
 printf '    %s %s init --yes \\\n' "$PYQ" "$SETUPQ"
@@ -1238,19 +1226,18 @@ cat <<'EOF'
         --login-id <ID> --notify-target slack:<channel_id> \
         --set 'notify.interactive="slack"' \
         --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C"}' \
-        --plugin-profile <serving profile> \
+        --plugin-profile <接続中のプロファイル> \
         --plugin-user-ids <uid> \
         --plugin-project-ids <pid>
-    # SLACK_BOT_TOKEN=<token> SLACK_APP_TOKEN=<token> in the
-    #   environment store the tokens
-    # Discord: notify.interactive="discord" + notify.discord={profile,
-    #   application_id, guild_id, channel_id}; the token comes from
-    #   DISCORD_BOT_TOKEN in the environment
+    # SLACK_BOT_TOKEN と SLACK_APP_TOKEN は環境変数から保存します。
+    # Discord の場合: notify.interactive="discord" と notify.discord
+    # （profile・application_id・guild_id・channel_id）を設定し、
+    # DISCORD_BOT_TOKEN を環境変数で渡します。
 
-LINE WORKS (notify.interactive=lineworks) uses neither the Hermes
-plugin nor the gateway. After init, enter its secrets on your own
-terminal (hidden prompts, owner-only file), check, then run it or
-generate the resident service (docs/guides/LINEWORKS.md):
+LINE WORKS（notify.interactive=lineworks）は Hermes のプラグインと
+Gateway を使いません。初期設定後、ご自身のターミナルで次を順に実行してください。
+認証情報を非表示で入力して本人専用ファイルへ保存し、設定を確認して常駐登録します。
+詳しくは docs/guides/LINEWORKS.md を参照してください。
 
 EOF
 for sub in init check service; do
@@ -1258,19 +1245,18 @@ for sub in init check service; do
 done
 cat <<'EOF'
 
-init already syncs the gateway and validates the install.
-Only when services were skipped, or check reports deployed-script drift,
-run services and check again:
+初期設定（init）で Gateway の反映と動作条件の確認も行います。
+常駐サービスの登録を省略した場合、または診断（check）で配置ファイルの不一致が
+報告された場合だけ、次の2つを実行してください:
 
 EOF
-printf '    %s %s services   # picks up gateway\n' "$PYQ" "$SETUPQ"
+printf '    %s %s services   # Gateway を含む常駐サービスを登録\n' "$PYQ" "$SETUPQ"
 printf '    %s %s check\n' "$PYQ" "$SETUPQ"
 cat <<'EOF'
 
-Notes:
-- node.js is NOT a dependency — the pipeline and plugin are pure
-  Python (stdlib + hermes-bundled discord.py).
-- Jev/typesafe needs only TYPESAFE_API_KEY — the init wizard stores
-  it in ~/.mcs/.env. Nothing to install.
-- ollama is shared embedding infra, not required by MCS itself.
+補足:
+- Node.js の導入は不要です。MCS は Python で動きます。
+- 外部 AI の Jev／Typesafe を使う場合は TYPESAFE_API_KEY を初期設定で
+  ~/.mcs/.env に保存します。追加ソフトの導入は不要です。
+- Ollama は共用の埋め込み処理用で、MCS 自体の動作には必須ではありません。
 EOF

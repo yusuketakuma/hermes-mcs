@@ -73,6 +73,29 @@ TYPESAFE_API_KEY・LINE WORKS の Client Secret / Bot Secret / Private Key**。
   エージェントが結果だけを検証する（例: `.env` の存在と Keychain
   エントリの有無を確認する — **中身は表示しない**）。
 
+## 質問画面の案内
+
+`install.sh` の導入方法の選択、進捗、エラーと次の操作は日本語で表示します。
+導入後は表示された `mcs setup` を実行して、アカウント・通知先・通知形式・
+接続先ごとの権限・通知のまとめ方・朝のまとめ・収集範囲・AI・追加解析の順に設定します。
+使わない接続先の質問と見出しは表示しません。
+
+- 質問の日本語を先に読み、必要なら下の「設定項目」で設定キーを確認できます。
+- Enter は既存の値を保持します。既存値がなければ表示された既定値を使います。
+  必須項目に既定値がなければ、入力するまで先へ進みません。
+- はい／いいえの質問は `はい`・`いいえ` または `y`・`n` で回答できます。
+  選択式の質問は表示された番号でも、`hermes` など従来の値でも回答できます。
+- 複数のIDは半角カンマで区切ります。ユーザー名・チャンネル名とIDは別物です。
+  接続先IDの取得手順は本書のPhase 4、[導入ガイド](INSTALLATION.md)、
+  [LINE WORKS](LINEWORKS.md) の該当する導入手順を参照してください。
+- パスワードとトークンは本人の端末で非表示入力します。AIとの会話へ貼り付けません。
+- 外部Jev APIへ本文を送る追加解析は、従来どおり既定で無効です。
+  初心者向けの案内でも、自動で有効化しません。
+
+質問を省略する既存の `--yes`・`--set` は引き続き使用できます。
+コマンド名、オプション名、設定キー、機械処理用JSONの形式は変更していません。
+OSや依存ソフトが返す技術的な詳細には英語が含まれることがあります。
+
 ## Phase 1 — 前提条件の確認
 
 既存の回答・導入形態・通知先・操作範囲を最初にまとめ、未決事項だけを
@@ -91,29 +114,29 @@ Path B は `~/.mcs/venv/bin/python3`）。
 |---|---|---|---|
 | 1 | macOS である | `uname -s` | `Darwin` |
 | 2 | 現 checkout のルート | `ls ./install.sh`。無ければ既存 clone 先へ移動する。新規取得が必要なら `git clone https://github.com/yusuketakuma/hermes-mcs.git` → `cd hermes-mcs`（git が無ければ先に `xcode-select --install`） | ルートの `./install.sh` が存在 |
-| 3 | 前提一式（読取り専用） | `./install.sh --preflight` | exit 0・最終行 `preflight: 0 blocker(s), N warning(s)` |
+| 3 | 前提一式（読取り専用） | `./install.sh --preflight` | exit 0・最終行 `事前確認: 導入を妨げる問題 0件、注意 N件` |
 | 4 | 既存の MCS 設定 | `ls ~/.mcs/config.json 2>/dev/null` | あれば既存の指示で維持/再設定を決め、未決の場合だけ確認 |
 
 `--preflight` は何も書き込まず、root 実行・macOS 版・Xcode CLT・
-Homebrew・Python（brew が入れられない場合のみ NG）・git・空き容量・
+Homebrew・Python（brew が入れられない場合のみ 要対処）・git・空き容量・
 github.com / huggingface.co への疎通・既存 hermes-agent checkout・
 別 checkout からの既存導入・Chrome・:8080 の使用状況を
-`OK`/`WARN`/`NG` で出す。NG と一部の WARN には `fix:` 行が付く。
+`正常`/`注意`/`要対処` で出す。要対処と一部の注意には `対処:` 行が付く。
 
 【失敗時】
 
-- 3: **NG 行ごとに、その下の `fix:` を実行してから `--preflight` を
-  再実行する**（全 NG が消えるまで）。ソフトウェアの導入を伴う fix
+- 3: **要対処の行ごとに、その下の `対処:` を実行してから `--preflight` を
+  再実行する**（要対処がなくなるまで）。ソフトウェアの導入を伴う fix
   （Homebrew 公式インストーラ・`xcode-select --install`・
   `brew install ...`）はユーザー承認のうえで実行、または GUI 操作が
   要るのでユーザー自身に実行してもらう。次は必ず【ユーザー確認】:
-  - `existing install points at another checkout` → 旧 checkout を使うか、
+  - 「既存の導入先は別のフォルダです」 → 旧 checkout を使うか、
     `--force-repo` でこの checkout に切り替えるか（既存導入の張替え）
-  - `port 8080 is taken by a process that is not an LLM server` →
+  - 「ポート8080を別のプロセスが使用しています」 →
     そのプロセスを止めるか、`--no-llm` で自前サーバを使うか
-  - `custom HERMES_HOME` → 既定 `~/.hermes` にするか `--no-services` か
-  - `running as root` → エージェント自身が sudo/root で動いていないか確認
-  WARN は続行可。内容はユーザーに伝える（例: `Google Chrome missing` は
+  - 「常駐サービスは独自の HERMES_HOME に対応していません」 → 既定 `~/.hermes` にするか `--no-services` か
+  - 「管理者 root で実行されています」 → エージェント自身が sudo/root で動いていないか確認
+  注意は続行可。内容はユーザーに伝える（例: 「Google Chrome が未導入です」 は
   stage 1 が入れない構成なら `brew install --cask google-chrome`）
 - 4: 既存 `~/.mcs/config.json` がある → 指示・回答から維持/再設定が
   決まっていればその方針を使う。未決の場合だけ **【ユーザー確認】**:
@@ -147,8 +170,8 @@ Phase 1 の `--preflight` が exit 0 であることが前提。
 ./install.sh             # Phase 1 の【ユーザー確認】で決めたフラグ（--no-llm / --force-repo 等）を付ける
 ```
 
-【検証】出力の最後に `Installed. Summary:` と 6 ステージ分の結果
-（`1/6 brew:` 〜 `6/6 recovery:`）が出て exit 0。加えて:
+【検証】出力の最後に `ソフトの導入が完了しました。結果:` と 6 ステージ分の結果
+（`1/6 基本ソフト:` 〜 `6/6 復旧:`）が出て exit 0。加えて:
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python -V        # 3.14（以後の mcs_setup はこのインタプリタ）
@@ -157,16 +180,15 @@ curl -sf -m 3 http://127.0.0.1:8080/v1/models    # llama-server 応答（--no-ll
 cat ~/.mcs-recovery/repo_path                    # この checkout の絶対パス（--no-recovery 以外）
 ```
 
-Summary に続いて表示される `init`・`services`・`check` のコマンド
+導入結果に続いて表示される `init`・`services`・`check` のコマンド
 （venv インタプリタと `mcs_setup.py` のフルパス付き）を Phase 5 で使う。
 
-【失敗時】install.sh は失敗したステージで止まり、`error: <原因と直し方>`
-と `error: installation stopped; repair the failed stage and re-run
-install.sh` を出す（後続ステージは実行されない）。`error:` 行の指示を
+【失敗時】install.sh は失敗したステージで止まり、`エラー: <原因と直し方>`
+と `エラー: 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください` を出す（後続ステージは実行されない）。`エラー:` 行の指示を
 実行し、同じフラグで `./install.sh` を再実行する — 完了済みの部分は
 skip され、中断した clone/checkout・venv・pip install・モデル DL
 （`.part` から再開）は続きから進む。よくある原因と対処は
-INSTALLATION.md §7-1。`warn:` 行（`~/.local/bin` が PATH に無い、
+INSTALLATION.md §7-1。`注意:` 行（`~/.local/bin` が PATH に無い、
 llama plist の再読込保留、hermes 管理 LLM agent の未ロード等）は
 install を止めないが、表示されたコマンドをユーザーに案内する。
 
@@ -265,7 +287,8 @@ MCS `init`の後に、ユーザー端末で`python -m lineworks_adapter init/che
 行ってからMCS `check`を再実行します。秘密値を`--set`や環境変数へ渡しません。
 
 `init` は既存の `~/.mcs/config.json` が壊れていると何も書かずに止まる
-（`config: ... is unreadable or invalid ... nothing written`）。
+（`設定ファイル<パス>を読み取れないか、形式が不正です（詳細: <理由>）。保存していません。`
+で始まる案内を表示する）。
 **【ユーザー確認】** 手で直すか、`--yes` で `config.json.corrupt-<日時>` に
 退避して既定値から作り直すか。`init` は最後に `check` を自動実行する。
 
@@ -318,17 +341,17 @@ hermes config set plugins.entries.mcs-discord-commands.settings.slack_adapter_en
 ### 5-4. 必須条件の検証
 
 【検証】`init` の自動チェックで exit 0・最終行
-`check: OK (0 errors, N warnings)` を確認する。設定・サービスを後から
+`設定確認: 正常 （問題0件、注意N件）` を確認する。設定・サービスを後から
 直した場合だけ `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check`
 を再実行する。
 
 【失敗時】`check` はエラーを優先度順（実行基盤 → config → マシン →
-配置 drift）に並べ、最後に `blockers (N) — fix in this order:` として
-番号付きの要約と `fix:` 行を出す。**1 番から順に直して `check` を
+配置 drift）に並べ、最後に `動作を妨げる問題がN件あります。次の順で修正してください:` として
+番号付きの要約と `対処:` 行を出す。**1 番から順に直して `check` を
 再実行する**（上位の原因が下位のエラーを引き起こしていることがある）。
 報告用の要約には `doctor` を使う — ローカルの読取りだけで範囲ごとの
 状態と件数を出し、`check` は実行しない。`not_checked` は正常を意味せず、
-終了コードは `blocked` の範囲があるときだけ 1（`check` が FAIL でも 0 に
+終了コードは `blocked` の範囲があるときだけ 1（`check` が要修正 でも 0 に
 なり得る）。`--probe llm` / `--probe services` で明示した範囲だけ追加確認する。
 blocker 一覧と launchd agent の状態は `check` で確認する:
 
@@ -338,17 +361,17 @@ blocker 一覧と launchd agent の状態は `check` で確認する:
 
 メッセージ別の対処は INSTALLATION.md §7-2。主なもの:
 
-- `interpreter ... is missing or not executable` → `./install.sh` 再実行
+- 実行用Pythonが見つからない、または実行できない → `./install.sh` 再実行
   （stage 2 が venv を作り直す）→ `services`
-- `hermes resolves here (...) but not on the launchd PATH` → 表示の
+- 定期実行からHermesを呼び出せない → 表示の
   `ln -s ... ~/.local/bin/hermes`
-- `missing required key` → `init` で再登録
-- `Keychain entry ... unreadable` → `security unlock-keychain` を
+- 必須設定が不足している → `init` で再登録
+- Keychainの登録内容を読み取れない → `security unlock-keychain` を
   ユーザーに依頼
-- `LaunchAgent ... installed but not loaded` → 表示の
+- 常駐処理の設定はあるが起動していない → 表示の
   `launchctl bootstrap ...`（MCS 4件なら `services` 再実行）
-- `deployed scripts differ from the repo` → `services` 再実行
-- `recovery watchdog recovers <パス>, not this checkout` → 正しい
+- 配置済みのスクリプトが配布版と異なる → `services` 再実行
+- 復旧監視が別の保存先を参照している → 正しい
   checkout で `./install.sh`（移動した場合。別 checkout が残っていれば
   `--force-repo` は【ユーザー確認】）
 - `hermes gateway is not supervised` → `services` 再実行
@@ -416,8 +439,8 @@ Linuxのsystemd候補は実機適用・検証済みとは報告しません。
 ```text
 【MCS セットアップ完了】
 - 導入形態: A(hermes アドオン) / B(スタンドアロン)
-- 事前チェック: install.sh --preflight = 0 blocker(s) / 警告N件
-- install.sh: Installed（runtime_modeと使用フラグ: …）
+- 事前チェック: install.sh --preflight = 導入を妨げる問題 0件 / 注意N件
+- install.sh: 導入完了（runtime_modeと使用フラグ: …）
 - 設定: ~/.mcs/config.json（notify_target=…、interactive=…）
 - 秘密情報: Keychain mcs-adapter=登録済み / .env=設定済み
 - LINE WORKS利用時: 認証ファイル=権限確認済み、独立プロセス=稼働/不要/未起動

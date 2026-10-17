@@ -106,7 +106,7 @@ def test_standalone_config_validation():
         assert any(f"notify.discord.{key}" in e for e in mcs_setup.validate_config(cfg)[0])
     cfg = config()
     cfg["notify_target"] = "telegram:1"
-    assert any("standalone sends only" in e for e in mcs_setup.validate_config(cfg)[0])
+    assert any("独立動作の通知先は" in e for e in mcs_setup.validate_config(cfg)[0])
     cfg["notify_target"] = "discord:#general"
     assert any(e.startswith("notify_target:") for e in mcs_setup.validate_config(cfg)[0])
     cfg["runtime_mode"] = "other"
@@ -603,7 +603,7 @@ def test_keychain_store_updates_existing_item_under_its_account(monkeypatch):
 
 def test_standalone_target_scope_is_not_warned_as_ignored():
     cfg = config("slack")
-    warn = "notify.discord: scope configured but interactive"
+    warn = "notify.discord: 接続設定がありますが、現在の通知先は"
     assert not any(w.startswith(warn) for w in mcs_setup.validate_config(cfg)[1])
     del cfg["runtime_mode"]
     assert any(w.startswith(warn) for w in mcs_setup.validate_config(cfg)[1])

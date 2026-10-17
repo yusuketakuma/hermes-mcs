@@ -14,4 +14,4 @@ def test_optional_extract_config_is_recognized(block):
 @pytest.mark.parametrize("value", [1, "true", None, [], {}])
 def test_reference_flag_rejects_implicit_boolean_conversion(value):
     errors, _ = mcs_setup.validate_config({**BASE, "extract": {"patient_state_context": value}})
-    assert "extract.patient_state_context: must be a boolean" in errors
+    assert "extract.patient_state_context: true（有効）かfalse（無効）を指定してください" in errors

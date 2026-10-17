@@ -41,9 +41,10 @@ def initialize(root):
         return 0
     if not sys.stdin.isatty():
         raise ClientError("credential_entry_requires_terminal")
+    print("LINE WORKSの開発者画面で発行した認証情報を入力します。入力は表示されません。")
     values = {"bot_id": scope["application_id"]}
-    for key, label in (("client_id", "Client ID"), ("client_secret", "Client Secret"),
-                       ("service_account", "Service Account"), ("bot_secret", "Bot Secret")):
+    for key, label in (("client_id", "アプリのClient ID"), ("client_secret", "アプリのClient Secret"),
+                       ("service_account", "サービスアカウント（Service Account）"), ("bot_secret", "Botの認証用秘密値（Bot Secret）")):
         values[key] = getpass.getpass(label + ": ").strip()
     key = Path(input("ダウンロードした秘密鍵の絶対パス: ").strip()).expanduser().resolve(strict=True)
     values["private_key_path"] = str(key)
@@ -74,7 +75,7 @@ def check(root):
     scope = settings(root, require_interactive=False)
     client, _ = load_credentials(root, scope)
     _sign(b"mcs-local-key-check", client.credentials.private_key_path, 10)
-    print("LINE WORKS: local configuration and RSA signing OK (no network request)")
+    print("LINE WORKS: 設定と秘密鍵による署名の確認が完了しました（外部通信はしていません）")
     return 0
 
 
@@ -225,7 +226,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="独立LINE WORKS Botアダプター")
     subs = parser.add_subparsers(dest="command", required=True)
     for name in ("init", "check", "run", "send", "service", "status"):
-        sub = subs.add_parser(name)
+        descriptions = {"init": "LINE WORKSの認証情報を設定します", "check": "設定と秘密鍵を確認します",
+                        "run": "LINE WORKSへの接続を開始します", "send": "指定先へ通知を送ります",
+                        "service": "常駐サービスの設定を生成します",
+                        "status": "機械処理用のJSONで処理待ち件数を表示します"}
+        sub = subs.add_parser(name, help=descriptions[name], description=descriptions[name])
         sub.add_argument("--root", default=HOME, help="設定とdataの保存先（既定: ~/.mcs）")
         if name == "run":
             sub.add_argument("--port", type=int, default=8788)
@@ -260,6 +265,8 @@ def main(argv=None):
         return 0
     except (ClientError, OSError, ValueError) as exc:
         # Never echo native exceptions: they can embed local paths or secret values.
+        if args.command in ("init", "check"):
+            print("LINE WORKSの設定を確認できません。認証情報と秘密鍵の場所・アクセス権を確認してください。")
         print(getattr(exc, "error_code", "local_configuration_error"), file=sys.stderr)
         # EX_TEMPFAIL: provably nothing was accepted, so the collector may retry.
         return 75 if getattr(exc, "not_sent", False) else 1

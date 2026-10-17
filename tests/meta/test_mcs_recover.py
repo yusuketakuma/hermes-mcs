@@ -1195,11 +1195,15 @@ def test_git_failure_outside_hold_still_escalates(rec, tmp_path,
         json.dump(_applying(prev, stage="merge"), f)
     Path(rec.MARKER_PATH).write_text("1")
     monkeypatch.setattr(rec, "_git", lambda args, timeout=rec.T_GIT: None)
+    notices = []
+    monkeypatch.setattr(rec, "_notify", notices.append)
     assert rec.recover() == 1
     report = json.loads(Path(rec.REPORT_PATH).read_text())
     assert report["result"] == "escalate"
     assert report["detail"] == "git unverifiable: rev-parse HEAD"
     assert not Path(rec.MARKER_PATH).exists()
+    assert "保存状態を確認できません" in notices[0]
+    assert "git unverifiable" not in notices[0]
 
 
 # ------------------------------------------ escalation notice dedup
@@ -1569,3 +1573,46 @@ def test_incomplete_restore_never_finishes_without_restoring_target(
         report = json.loads(Path(rec.REPORT_PATH).read_text())
         assert report["writers_stopped"] is True
         assert "restore_incomplete" in report["detail"]
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h", "--unknown"])
+def test_cli_guidance_never_recovers(rec, monkeypatch, capsys, flag):
+    monkeypatch.setattr(rec.sys, "argv", ["mcs_recover.py", flag])
+    monkeypatch.setattr(rec, "recover", lambda **kw: pytest.fail("must not recover"))
+    monkeypatch.setattr(rec, "_load_state", lambda: pytest.fail("must not read state"))
+    result = rec.main()
+    captured = capsys.readouterr()
+    if flag == "--unknown":
+        assert result == 2
+        assert "復旧は実行していません" in captured.err
+    else:
+        assert result == 0
+        assert "人の承認" in captured.out
+        assert "--status" in captured.out
+        assert "変更しません" in captured.out
+
+
+def test_status_keeps_json_contract(rec, monkeypatch, capsys):
+    state = {"v": 1, "applying": None, "stages": [], "applied": []}
+    monkeypatch.setattr(rec.sys, "argv", ["mcs_recover.py", "--status"])
+    monkeypatch.setattr(rec, "_load_state", lambda: state)
+    monkeypatch.setattr(rec, "_head", lambda: "synthetic-sha")
+    monkeypatch.setattr(rec, "_clean", lambda: True)
+    monkeypatch.setattr(rec, "recover", lambda **kw: pytest.fail("must not recover"))
+    assert rec.main() == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "state": state, "head": "synthetic-sha", "clean": True}
+
+
+@pytest.mark.parametrize("detail,expected", [
+    ("git unverifiable: rev-parse HEAD", "保存状態を確認できません"),
+    ("rollback db restore: restore_consent_pending:synthetic", "人の承認待ち"),
+    ("rollback db restore: restore_failed: synthetic-private-path", "保留を維持"),
+    ("reinstall_incomplete", "再インストール"),
+    ("unclassifiable repo state — synthetic", "自動変更を見送りました"),
+    ("unexpected synthetic-private-path", "復旧を完了できません"),
+])
+def test_recovery_notice_explains_reason_without_raw_details(rec, detail, expected):
+    message = rec._recovery_explanation(detail)
+    assert expected in message
+    assert "synthetic" not in message

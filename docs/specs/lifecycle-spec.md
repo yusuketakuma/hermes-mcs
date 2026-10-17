@@ -91,8 +91,8 @@ MCSサーバーの負荷対策として、自動取得を5分から10分間隔�
 ## 4. 初期インストール仕様 ✅
 
 入口は `./install.sh` 1本（冪等・再実行安全）。`--preflight`
-（別名 `--check-only`）は読取り専用の前提チェック（OK/WARN/NG +
-`fix:`、NG があれば exit 1）、`--dry-run` はそれに各段の計画表示を
+（別名 `--check-only`）は読取り専用の前提チェック（正常/注意/要対処 +
+`対処:`、要対処があれば exit 1）、`--dry-run` はそれに各段の計画表示を
 加える（どちらも書込みなし）。root 実行は拒否、未知オプションは
 exit 2、別 checkout からの既存導入（`~/.mcs-recovery/repo_path`・
 plugin symlink）への上書きは `--force-repo` 指定時のみ。
@@ -110,13 +110,13 @@ pip install・モデル DL の `.part`）は続きから収束する。
 | services | `~/.mcs/data{,/cmd,/cmd_int}` 作成 + `mcs_setup.py services` へ委譲 | 停止 |
 | recovery📋 | `mcs_recover.py` → `~/.mcs-recovery/`（旧版は `.prev`）+ `repo_path` に checkout を記録 + `org.mcs.recovery` launchd watchdog bootstrap（変更時・未ロード時のみ） | 停止 |
 
-新規作成物は `umask 077`（所有者のみ）。完了時に `Installed. Summary:`
+新規作成物は `umask 077`（所有者のみ）。完了時に `ソフトの導入が完了しました。結果:`
 と次のコマンド（venv インタプリタのフルパス付き）を表示する。
 
 残る1ステップ `mcs_setup.py init`（対話ウィザード）:
 
-- 全 config キーを5節で網羅（Enter=現状/既定・ゲートで不要項目を skip・
-  `-` で任意キー削除・`--set KEY=JSON` で非対話も可）
+- 設定項目を最大12節で案内（使わない機能の節は非表示）。Enterで現状・既定値を採用し、
+  `-` で任意キー削除・`--set KEY=JSON` で非対話も可
 - `interactive=discord|slack` 選択時は公開 CLI のみで: plugin settings を
   `hermes -p <profile> config set`（serving profile・allowlist は質問）、
   Discord または Slack の token を profile .env へ（env または getpass）
@@ -141,7 +141,7 @@ launchd PATH での `hermes` 解決・`org.mcs.recovery` の導入/drift/
 `repo_path`/ロード・llama-server agent のロード）→ config 型検証 →
 Keychain・Chrome・LLM・トークン解決・launchd 5件・gateway
 supervised（discord/slack 時）→ wrapper drift の順に検証し、末尾に
-`blockers (N) — fix in this order` を出す。現行`doctor`は読取り専用の診断で、
+`動作を妨げる問題がN件あります。次の順で修正してください:` を出す。現行`doctor`は読取り専用の診断で、
 `check`・Keychain・原本DBへアクセスしない。選択Python/SQLite・設定・
 配置・復旧runtimeなどの状態を出し、`not_checked`を正常扱いしない。
 LLM・サービスの追加probeは明示した範囲だけに限る。`init` は壊れた config.json では停止し、

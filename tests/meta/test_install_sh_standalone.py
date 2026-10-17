@@ -9,12 +9,12 @@ def test_standalone_preflight_and_plan_skip_hermes(tmp_path):
     home, _, stub_root, env = _world(tmp_path)
     r = _run(env, None, "--preflight", "--mode", "standalone")
     assert r.returncode == 0, r.stdout
-    assert "runtime mode: standalone" in r.stdout
-    assert "hermes venv" not in r.stdout and "hermes on PATH" not in r.stdout
+    assert "接続方法: standalone" in r.stdout
+    assert "Hermes 用 Python" not in r.stdout and "Hermes コマンド" not in r.stdout
     r = _run(env, None, "--dry-run", "--no-llm", "--mode", "standalone")
     assert r.returncode == 0, r.stdout
-    assert "2/6 standalone" in r.stdout and "2/6 hermes" not in r.stdout
-    assert "not used in standalone mode" in r.stdout.split("3/6 plugin")[1].splitlines()[0]
+    assert "2/6 独立接続" in r.stdout and "2/6 Hermes" not in r.stdout
+    assert "MCS 単独接続では使用しません" in r.stdout.split("3/6 プラグイン")[1].splitlines()[0]
     assert "--no-plugin" not in r.stdout
     assert list(home.iterdir()) == []
 
@@ -22,11 +22,11 @@ def test_standalone_preflight_and_plan_skip_hermes(tmp_path):
 def test_mode_defaults_follow_existing_config(tmp_path):
     home, _, _, env = _world(tmp_path)
     r = _run(env, None, "--preflight")              # no tty, no config -> hermes
-    assert "runtime mode: hermes" in r.stdout
+    assert "接続方法: hermes" in r.stdout
     (home / ".mcs").mkdir()
     (home / ".mcs" / "config.json").write_text(json.dumps({"runtime_mode": "standalone"}))
     r = _run(env, None, "--preflight")
-    assert "runtime mode: standalone" in r.stdout
+    assert "接続方法: standalone" in r.stdout
     assert _run(env, None, "--preflight", "--mode", "bogus").returncode == 2
 
 
@@ -71,7 +71,7 @@ def test_interactive_install_asks_for_the_runtime(tmp_path):
         output = b""
         deadline = time.monotonic() + 10
         try:
-            while b"choose 1 or 2 [1]: " not in output:
+            while "1 または 2 を入力してください（Enter: 1）: ".encode() not in output:
                 remaining = deadline - time.monotonic()
                 assert remaining > 0 and ready.select(remaining), output
                 chunk = os.read(process.stdout.fileno(), 4096)
@@ -81,7 +81,7 @@ def test_interactive_install_asks_for_the_runtime(tmp_path):
             # closing it at once lets script(1) deliver EOF (^D) first.
             process.stdin.write(b"2\n")
             process.stdin.flush()
-            while b"=== 1/6" not in output:
+            while "=== 【1/6】".encode() not in output:
                 remaining = deadline - time.monotonic()
                 assert remaining > 0 and ready.select(remaining), output
                 chunk = os.read(process.stdout.fileno(), 4096)
@@ -93,7 +93,7 @@ def test_interactive_install_asks_for_the_runtime(tmp_path):
             if process.poll() is None:
                 process.kill()
         assert process.returncode == 0, output
-    assert b"2/6 standalone runtime" in output, output
+    assert "【2/6】MCS 単独接続の実行環境".encode() in output, output
     assert not hermes_home.exists()
 
 
@@ -111,7 +111,7 @@ def test_rerun_on_an_existing_install_never_prompts_or_writes(tmp_path):
     cfg.write_text('{"mcs_login_id": "synthetic"}\n')
     r = subprocess.run(["script", "-q", "/dev/null", "sh", str(INSTALL), "--preflight"],
                        stdin=subprocess.DEVNULL, env=env, capture_output=True, text=True, timeout=120)
-    assert "choose 1 or 2" not in r.stdout and "runtime mode: hermes" in r.stdout
+    assert "1 または 2 を入力してください" not in r.stdout and "接続方法: hermes" in r.stdout
     r = subprocess.run(["sh", str(INSTALL), "--no-llm", "--no-brew"], env=env,
                        capture_output=True, text=True, timeout=120)
     assert cfg.read_text() == '{"mcs_login_id": "synthetic"}\n'
@@ -129,6 +129,6 @@ def test_mode_selection_refuses_a_symlinked_config(tmp_path):
     elsewhere.write_text(json.dumps({"runtime_mode": "hermes"}))
     (home / ".mcs" / "config.json").symlink_to(elsewhere)
     r = _run(env, None, "--mode", "standalone", "--no-llm", "--no-brew", "--no-recovery")
-    assert r.returncode == 1 and "config.json unreadable" in r.stderr, r.stdout + r.stderr
+    assert r.returncode == 1 and "config.json を読み取れない" in r.stderr, r.stdout + r.stderr
     assert (home / ".mcs" / "config.json").is_symlink()
     assert json.loads(elsewhere.read_text()) == {"runtime_mode": "hermes"}

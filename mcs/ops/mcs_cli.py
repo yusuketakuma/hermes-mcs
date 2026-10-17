@@ -1,4 +1,4 @@
-"""Unified install, update, setup and local doctor entrypoint."""
+"""MCSの導入・更新・初期設定・診断・医薬品マスター確認を行います。"""
 from __future__ import annotations
 
 import argparse
@@ -17,10 +17,30 @@ from mcs_requests import release_tag  # noqa: E402
 from mcs_util import load_config  # noqa: E402
 
 
+class _JapaneseParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._positionals.title = "操作"
+        self._optionals.title = "オプション"
+        for action in self._actions:
+            if isinstance(action, argparse._HelpAction):
+                action.help = "この説明を表示して終了する"
+
+    def format_help(self):
+        return super().format_help().replace("usage: ", "使い方: ", 1)
+
+    def format_usage(self):
+        return super().format_usage().replace("usage: ", "使い方: ", 1)
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(2, f"入力内容を確認してください。--help で指定方法を確認できます。\n詳細: {message}\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Route arguments without shells, retaining downstream contracts."""
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("command", choices=("install", "update", "setup", "doctor", "drug"))
+    ap = _JapaneseParser(description=__doc__)
+    ap.add_argument("command", choices=("install", "update", "setup", "doctor", "drug"), help="install: 導入 / update: 更新 / setup: 初期設定 / doctor: 診断 / drug: 医薬品マスター確認")
     forwarded = list(sys.argv[1:] if argv is None else argv)
     args = ap.parse_args(forwarded[:1])
     rest = forwarded[1:]
@@ -38,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         if os.path.abspath(python) != os.path.abspath(sys.executable):
             if not os.access(python, os.X_OK):
                 if args.command != "doctor":
-                    print("Selected runtime interpreter missing; run mcs install.",
+                    print("選択した実行環境のPythonが見つかりません。mcs install で導入してください。",
                           file=sys.stderr)
                     return 1
             else:
@@ -60,22 +80,22 @@ def main(argv: list[str] | None = None) -> int:
             import mcs_setup
             return mcs_setup.main(["doctor", *rest])
         case "update":
-            update = argparse.ArgumentParser(prog="mcs update")
-            update.add_argument("phase", choices=("plan", "apply", "rollback"))
-            update.add_argument("--to")
-            update.add_argument("--no-fetch", action="store_true")
-            update.add_argument("--reinstall", action="store_true")
-            update.add_argument("--install-arg", action="append", default=[],
+            update = _JapaneseParser(prog="mcs update", description="更新内容の確認・更新の実行・元の版への復帰を行います。")
+            update.add_argument("phase", choices=("plan", "apply", "rollback"), help="plan: 変更せず更新内容を確認（JSON出力） / apply: 更新を実行 / rollback: 元の版に戻す")
+            update.add_argument("--to", help="更新する版（例: v1.0.23。省略時: 最新の正式版）")
+            update.add_argument("--no-fetch", action="store_true", help="通信せず、取得済みの版情報を使う（planでは常に有効）")
+            update.add_argument("--reinstall", action="store_true", help="更新時に必要なソフトと設定も再導入する")
+            update.add_argument("--install-arg", action="append", default=[], help="再導入に渡すオプション（例: --install-arg=--no-llm。複数指定可）",
                                 choices=("--no-llm", "--no-brew", "--no-plugin",
                                          "--no-recovery"))
             opts = update.parse_args(rest)
             if opts.to and not release_tag(opts.to):
-                update.error("--to must be a release tag")
+                update.error("--to には公開版を指定してください（例: --to v1.0.23）")
             if opts.phase != "apply" and (opts.reinstall or opts.install_arg):
-                update.error("--reinstall/--install-arg require apply")
+                update.error("--reinstall と --install-arg は更新の実行（apply）でのみ使えます")
             if opts.phase == "rollback":
                 if opts.to or opts.no_fetch:
-                    update.error("rollback does not accept --to/--no-fetch")
+                    update.error("元の版に戻す操作（rollback）では --to と --no-fetch は指定できません")
                 os.execv(sys.executable, [sys.executable,
                          str(REPO / "mcs/ops/mcs_update.py"), "rollback"])
             cmd = [sys.executable, str(REPO / "scripts/mcs_upgrade.py"),
@@ -93,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
                     result = subprocess.run(cmd, capture_output=True, text=True,
                                             timeout=600)
                 except subprocess.TimeoutExpired:
-                    print("Update plan timed out; check network and retry.",
+                    print("更新内容の確認が時間内に終わりませんでした。接続状況を確認して再実行してください。",
                           file=sys.stderr)
                     return 1
                 print(result.stdout, end="")
@@ -105,12 +125,12 @@ def main(argv: list[str] | None = None) -> int:
                     if not isinstance(report, dict):
                         raise ValueError
                 except (ValueError, RecursionError):
-                    print("Update plan did not return JSON.", file=sys.stderr)
+                    print("更新内容の確認結果を読み取れませんでした（JSON形式ではありません）。更新は実行していません。管理者に確認してください。", file=sys.stderr)
                     return 1
                 return 1 if report.get("route") == "blocked" else 0
             os.execv(sys.executable, cmd)
         case _:
-            ap.error("unsupported command")
+            ap.error("この操作には対応していません。--help で操作名を確認してください")
     return 1
 
 
