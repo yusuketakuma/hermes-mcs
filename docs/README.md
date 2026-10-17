@@ -13,6 +13,8 @@
 | 過去の記録 `dev-records/` | [開発記録の索引](dev-records/README.md) · [自動更新の設計履歴](dev-records/auto-update-plan.md) |
 | 過去リリースの原本 | [形式移行前の記録](releases/archive/) |
 
+1.0.25の患者背景・職種別情報・操作変更は[実装計画](development/plans/PATIENT_CONTEXT_1.0.25.md)、[構造化契約](specs/patient-context.md)、[受入条件](development/acceptance/ACCEPTANCE_1.0.25.md)に対応付けています。
+
 開発リファレンスの生成表は `scripts/development/update_readme.py`、
 READMEの見直し記録は `development/readme-review.json` で管理します。
 

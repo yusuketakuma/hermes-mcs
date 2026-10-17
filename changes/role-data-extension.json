@@ -9,7 +9,7 @@
     "v1 ルール: _SYMPTOMS に介護・看護の本文表現を追加（否定判定は既存のまま）。RULE_VERSION 22→23。",
     "LLM: 固定プロンプトの分類・属性 enum、文言（在宅医療・介護）、介護職の合成例を追加。EXTRACT_VERSION 8→9、PATIENT_CONTEXT_VERSION 3→4。評価資産 pattern_cards の許容分類・属性を同期。",
     "表示: patient_context_view.ROLE_LABELS / ROLE_ORDER を役割の正本とし、CLI --role の choices と通知カードの表示順ボタンが同じ一覧を参照。食形態を前回比較の対象属性に追加。",
-    "関係者・事業者: patient_context_view.participants が messages の投稿者メタデータ（職種・氏名・事業所）を既存 mcs_queries.staff_directory で集計し、CLI --view participants と背景一覧の末尾（関係者・事業者（投稿者から取得））に投稿件数・最終投稿日時付きで出す。契約・主担当・現在の関与は判定しない。",
+    "関係者・事業者: patient_context_view.participants が messages の投稿者メタデータ（職種・氏名・事業所）を患者の部屋に限定したSQLで集計し（削除済み投稿を除外し、投稿者IDと所属を分離）、、CLI --view participants と背景一覧の末尾（関係者・事業者（投稿者から取得））に投稿件数・最終投稿日時付きで出す。契約・主担当・現在の関与は判定しない。",
     "docs/specs/patient-context.md に職種別見出し語彙の節と世代更新を記載。",
     "完全合成の10職種73見出しで、更新前は15見出し、更新後は73見出しが保持される（tests/extract/test_role_data_extension.py）。実投稿での抽出精度・網羅率は未測定。"
   ],
