@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import time
 from mcs_util import loads_dict
 from mcs_queries import (current_projection_id, current_v4_id, current_v4_pred,
@@ -753,11 +752,7 @@ def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
 
 # ---------- finite conversion manifests (legacy retirement) ----------
 
-def _time_value(value) -> bool:
-    try:
-        return type(value) in (int, float) and math.isfinite(value)
-    except OverflowError:
-        return False
+from stats_math import finite_number as _time_value  # noqa: E402 - one shared rule
 
 
 def _valid_cohort(doc) -> bool:

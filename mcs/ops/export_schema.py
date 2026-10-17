@@ -1,19 +1,12 @@
 """Project and validate aggregate export records with a shared field allowlist."""
 from __future__ import annotations
 
-import math
 import re
 
 from pharmacy_cues import CUE_CLASSES
 
 
-def finite_number(value):
-    if type(value) not in (int, float):
-        return False
-    try:
-        return math.isfinite(value)
-    except OverflowError:
-        return False
+from stats_math import finite_number  # noqa: E402,F401 - one shared rule, re-exported for callers
 
 
 # Explicit diagnostics for familiar raw-content keys. The exhaustive

@@ -2,6 +2,16 @@
 import math
 
 
+def finite_number(value) -> bool:
+    """A real int/float that is finite (bool, str, NaN, ±inf and huge ints are not)."""
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def wilson_interval(successes: int, denominator: int,
                     z: float = 1.96) -> dict[str, float | None]:
     """Return a bounded 95% Wilson interval without a statistics package."""

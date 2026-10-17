@@ -21,7 +21,6 @@ import argparse
 from datetime import datetime
 import fcntl
 import json
-import math
 import os
 import re
 import sys
@@ -63,15 +62,7 @@ STANDALONE_WATCHED_JOBS = ("extract-0", "extract-2", "lineworks", "cmd",
                            "cmd_int", "mcs_check", "mcs_deep")
 
 
-def _finite_number(value) -> bool:
-    # mirrors mcs_backup's finite check; the tick_no_ext gate keeps the
-    # watchdog off the manual-only C1 modules that hold the shared copy
-    if type(value) not in (int, float):
-        return False
-    try:
-        return math.isfinite(value)
-    except OverflowError:
-        return False
+from stats_math import finite_number as _finite_number  # noqa: E402 - one shared rule
 
 
 def _tick_settings(cfg: dict) -> tuple[dict, float, float]:

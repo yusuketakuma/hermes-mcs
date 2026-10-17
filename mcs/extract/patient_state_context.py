@@ -2,7 +2,6 @@
 from datetime import datetime
 import hashlib
 import json
-import math
 import re
 
 from clinical_values import patient_item_scope
@@ -24,11 +23,7 @@ def _digest(value):
                                     separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
-def _finite(value):
-    try:
-        return type(value) in (int, float) and math.isfinite(value)
-    except OverflowError:
-        return False
+from stats_math import finite_number as _finite  # noqa: E402 - one shared rule
 
 
 def _canonical_report(document, report):
