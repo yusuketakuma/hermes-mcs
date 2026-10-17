@@ -759,8 +759,8 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     rows, head = [], []
     year = datetime.fromtimestamp(now, JST).year if isinstance(now, (int, float)) else None
 
-    def stamp(at):
-        return at.strftime("%m/%d %H:%M" if at.year == year else "%Y/%m/%d %H:%M")
+    def stamp(at):   # the day is enough to find the post; the year only when it is not this year
+        return at.strftime("%m/%d" if at.year == year else "%Y/%m/%d")
 
     def when(item):
         ts = item.get("posted_at_ts")
@@ -775,13 +775,19 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             return "日時未確認"
         return stamp(at.astimezone(JST) if at.tzinfo else at)
 
+    room = project_url(project_id)
+
     def source_of(item):
-        where = "連携サマリー" if item.get("source") == "karte_summary" else f"投稿#{item.get('message_id', '?')}"
-        who = " ".join(str(v) for v in (item.get("profession"), item.get("sender")) if v)
-        line = " · ".join(v for v in (when(item), who, where) if v)
+        """(date, rest, link): short provenance — the date (a link to the patient's MCS room
+        where the transport can show one), the profession (the name only when there is
+        none; names are listed once in the 関係者 line) and the post number."""
+        karte = item.get("source") == "karte_summary"
+        where = "連携サマリー" if karte else f"#{item.get('message_id', '?')}"
+        rest = " ".join(v for v in (str(item.get("profession") or item.get("sender") or ""), where) if v)
         if item.get("event_date_text"):
-            line += f" · 出来事の記載: {item['event_date_text']}"
-        return line
+            rest += f" · 出来事の記載: {item['event_date_text']}"
+        dated = isinstance(item.get("posted_at_ts"), (int, float))
+        return when(item), rest, (room if dated and not karte else None)
 
     def add(items, group, category=None):
         for item in items:
@@ -789,14 +795,16 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             if category:
                 quote = _bare_quote(quote, category)
             quotes = [q for q in (quote, item.get("reply")) if q]
-            source = source_of(item)
+            date, rest, link = source_of(item)
+            source = f"{date} {rest}".strip()
             last = rows[-1] if rows else None
             if (last and last["group"] == group and last.get("message_id") == item.get("message_id")
                     and last["source"] == source and quotes and not item.get("reply")):
                 last["quotes"] += quotes        # same post, same group: one source line
             else:
-                rows.append({"group": group, "project_id": project_id,
-                             "message_id": item.get("message_id"), "quotes": quotes, "source": source})
+                rows.append({"group": group, "project_id": project_id, "message_id": item.get("message_id"),
+                             "quotes": quotes, "source": source, "date": date, "source_rest": rest,
+                             **({"url": link} if link else {})})
 
     def add_deleted(items):
         add([{"message_id": d["message_id"], "at": "削除を確認 " + datetime.fromtimestamp(
@@ -863,17 +871,21 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         add(view["items"], CONTEXT_SECTIONS[section])
     for row in rows:
         row.pop("message_id", None)
-        row["text"] = "\n".join(row["quotes"] + [row["source"]])   # the text transports' form
+        # text transports: the source rides at the end of the last quote line, not on a line of its own
+        tail = f"（{row['source']}）"
+        row["text"] = ("\n".join(row["quotes"][:-1] + [row["quotes"][-1] + "　" + tail])
+                       if row["quotes"] else tail)
     nightly = ev["coverage"].get("nightly") or {}
+    status = []   # how complete the record is: kept, but below the records instead of above them
     if ev.get("as_of"):
-        head.insert(0, "夜間まとめの反映時点: " + datetime.fromtimestamp(ev["as_of"], JST).strftime("%Y-%m-%d %H:%M"))
-    head.append(_coverage_line(db, project_id))
+        status.append("夜間まとめの反映時点: " + datetime.fromtimestamp(ev["as_of"], JST).strftime("%Y-%m-%d %H:%M"))
+    status.append(_coverage_line(db, project_id))
     if nightly:
-        head.append(f"取込済み {nightly.get('fetched', 0)}件 / 点検済み {nightly.get('analyzed', 0)}件 / 未点検 {nightly.get('unscanned', 0)}件 / 本文未取得・不完全 {nightly.get('incomplete', 0)}件")
-        head.append(f"原文に対応する引用 {nightly.get('evidence_supported', 0)} / {nightly.get('evidence_total', 0)}件")
-        head.append(f"まとめ未反映 {nightly.get('unreflected', 0)}件")
+        status.append(f"取込済み {nightly.get('fetched', 0)}件 / 点検済み {nightly.get('analyzed', 0)}件 / 未点検 {nightly.get('unscanned', 0)}件 / 本文未取得・不完全 {nightly.get('incomplete', 0)}件")
+        status.append(f"原文に対応する引用 {nightly.get('evidence_supported', 0)} / {nightly.get('evidence_total', 0)}件")
+        status.append(f"まとめ未反映 {nightly.get('unreflected', 0)}件")
         if (nightly.get("attachments") or {}).get("count"):
-            head.append(f"添付 {nightly['attachments']['count']}件（内容は未解析）")
+            status.append(f"添付 {nightly['attachments']['count']}件（内容は未解析）")
     pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
     title = f"{_patient_name(db, project_id)} — {CONTEXT_SECTIONS[section]}"
@@ -881,4 +893,5 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         title += f"（{page + 1}/{pages}ページ）"
     return {"title": title, "layout": "patient_context", "head": head,
             "items": rows[page * CONTEXT_PAGE_SIZE:(page + 1) * CONTEXT_PAGE_SIZE],
-            "notes": view.get("notes", []), "empty": "この範囲で該当する記録は見つかりません", "page": page, "pages": pages}
+            "notes": list(view.get("notes", [])) + status, "empty": "この範囲で該当する記録は見つかりません",
+            "page": page, "pages": pages}

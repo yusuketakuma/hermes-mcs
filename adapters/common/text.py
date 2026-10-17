@@ -373,7 +373,14 @@ def list_messages(result: dict, allowed, markdown: bool = True, *,
         if i.get("group") and i["group"] != group:
             group = i["group"]
             lines.append(f"■ {lit(group)}")
-        lines.append(lit(i.get("text") or ""))
+        if not plain and i.get("url") and i.get("date") and i.get("quotes"):
+            # markdown transports: the source date links to the patient's MCS room
+            rest = f" {lit(i['source_rest'])}" if i.get("source_rest") else ""
+            quotes = [lit(q) for q in i["quotes"]]
+            quotes[-1] += f"　（[{lit(i['date'])}](<{i['url']}>){rest}）"
+            lines.append("\n".join(quotes))
+        else:
+            lines.append(lit(i.get("text") or ""))
     if not items:
         lines.append(lit(view.get("empty") or "該当なし"))
     rest = len(items) - min(len(items), LIST_SHOW) + int(view.get("more") or 0)

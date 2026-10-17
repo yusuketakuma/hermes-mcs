@@ -149,7 +149,14 @@ def context_list_blocks(view: dict, allowed) -> list | None:
         quotes = "\n".join(str(q) for q in item.get("quotes") or [] if q)
         if quotes:
             blocks += _sections(quotes)
-        if item.get("source"):
+        if item.get("date") and item.get("url"):
+            # the date opens the patient's MCS room; the rest stays plain
+            link = str(item["url"])
+            text = f"<{escape(link, quote=False)}|{escape(str(item['date']), quote=False)}>"
+            rest = str(item.get("source_rest") or "")
+            text += f" {escape(rest, quote=False)}" if rest else ""
+            blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": text[:_CONTEXT_MAX]}]})
+        elif item.get("source"):
             blocks += _contexts(str(item["source"]))
     if not items:
         blocks += _sections(str(view.get("empty") or "該当なし"))

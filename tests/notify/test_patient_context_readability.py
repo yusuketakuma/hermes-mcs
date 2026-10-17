@@ -47,8 +47,22 @@ def test_one_post_in_one_group_shares_a_single_source_line(ctx):
     pairs = [(row["group"], row["source"]) for row in view["items"]]
     assert all(a != b for a, b in zip(pairs, pairs[1:]))
     for row in view["items"]:
-        assert row["text"] == "\n".join(row["quotes"] + [row["source"]])
-        assert "T" not in row["source"].split(" · ")[-1]           # no raw ISO timestamps anywhere
+        # the short source rides at the end of the last quote line, never on a line of its own
+        assert row["text"].splitlines()[-1].endswith(f"（{row['source']}）")
+        assert len(row["text"].splitlines()) == max(1, len(row["quotes"]))
+        assert "T" not in row["source"]                           # no raw ISO timestamps anywhere
+
+
+def test_the_source_date_links_to_the_patients_mcs_room(ctx):
+    from adapters.common.text import list_messages as render
+    from mcs_adapter import project_url
+    rows = [r for r in _view(ctx, "timeline")["items"] if r.get("url")]
+    assert rows and all(r["url"] == project_url(1) for r in rows)
+    discord = "\n".join(render({"outcome": "applied", "action": "list", "list": _view(ctx, "timeline")},
+                               lambda pid: pid == 1, True))
+    assert f"]({'<'}{project_url(1)}{'>'})" in discord                   # masked link, no embed preview
+    plain = "\n".join(_shown(_view(ctx, "timeline"), lambda pid: pid == 1))
+    assert project_url(1) not in plain                                   # LINE WORKS / plain keep it short
 
 
 def test_long_views_name_their_page_and_participants_head_the_view(ctx):

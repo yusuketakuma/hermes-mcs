@@ -284,7 +284,7 @@ def test_deleted_record_is_labelled_with_observation_time_in_private_views(ctx, 
     ctx.db.db.commit()
     result = patient_context_list(ctx.db.db, 1, section, cfg={}, since=T0,
                                   now=observed + DAY)
-    rows = [i for i in result["items"] if "投稿#3" in i["text"]]
+    rows = [i for i in result["items"] if "#3）" in i["text"]]
     assert len(rows) == 1
     assert rows[0]["group"] == "削除された記録"
     assert "削除を確認" in rows[0]["text"]

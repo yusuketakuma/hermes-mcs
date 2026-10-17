@@ -3,7 +3,8 @@ from adapters.slack.cards import context_list_blocks
 
 VIEW = {"layout": "patient_context", "title": "合成患者 — 患者さんの全体像（1/2ページ）",
         "head": ["関係者: 看護師 合成看護師", "表示順: 標準"],
-        "items": [{"group": "主病名", "project_id": 1, "quotes": ["合成疾患A"], "source": "10/01 09:00 · 看護師 合成看護師 · 投稿#1"},
+        "items": [{"group": "主病名", "project_id": 1, "quotes": ["合成疾患A"], "source": "10/01 看護師 #1", "date": "10/01",
+                   "source_rest": "看護師 #1", "url": "https://www.medical-care.net/projects/medical/1"},
                   {"group": "主病名", "project_id": 1, "quotes": ["合成疾患<B>"], "source": "10/02 09:00 · 投稿#2"},
                   {"group": "服薬管理", "project_id": 1, "quotes": ["残薬3日分", "家族が管理"], "source": "10/03 · 投稿#3"},
                   {"group": "服薬管理", "project_id": 2, "quotes": ["別患者"], "source": "x"}],
@@ -28,3 +29,9 @@ def test_empty_other_and_oversized_views():
     assert context_list_blocks({**VIEW, "layout": None}, lambda pid: True) is None
     many = {**VIEW, "items": [{"group": f"g{i}", "project_id": 1, "quotes": ["q"], "source": "s"} for i in range(20)]}
     assert context_list_blocks(many, lambda pid: True) is None              # over one message: text answer
+
+
+def test_source_date_is_a_link_to_the_room():
+    blocks = context_list_blocks(VIEW, lambda pid: pid == 1)
+    linked = [b for b in blocks if b["type"] == "context" and b["elements"][0]["type"] == "mrkdwn"]
+    assert linked[0]["elements"][0]["text"] == "<https://www.medical-care.net/projects/medical/1|10/01> 看護師 #1"

@@ -79,7 +79,7 @@ def test_chat_background_lists_participants_after_the_sections(tmp_path, role):
     finally:
         db.close()
     rows = [r for r in view["items"] if r["group"] == "関係者・事業者（投稿者から取得）"]
-    assert rows and rows[0]["text"] == "看護師 合成看護師／合成訪問看護ステーション\n投稿1件 · 最終投稿 2026/10/01 09:00"   # viewed in 2027: the year stays
+    assert rows and rows[0]["text"] == "看護師 合成看護師／合成訪問看護ステーション　（投稿1件 · 最終投稿 2026/10/01）"   # viewed in 2027: the year stays
 
 
 def test_role_candidates_follow_the_posters_professions(tmp_path):

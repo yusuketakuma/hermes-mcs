@@ -121,7 +121,7 @@ def test_pagination_preserves_quotes_and_sources(led, monkeypatch):
     second = click(led, page["token"], now=NOW + 1)
     # the two overflow records, then the poster list that closes the background section
     assert len(second["list"]["items"]) == 3
-    assert "投稿#9" in second["list"]["items"][1]["text"]
+    assert "#9）" in second["list"]["items"][1]["text"]
     assert second["list"]["items"][2]["group"] == "関係者・事業者（投稿者から取得）"
 
 
@@ -165,8 +165,8 @@ def test_nightly_summary_uses_fact_id_not_same_text_source(led, monkeypatch):
     result = open_section(led, spec)
     row = result["list"]["items"][0]
     assert row["group"] == "夜間に整理した記録"
-    assert "投稿#101" in row["text"] and "合成職員B" in row["text"]
-    assert "投稿#100" not in row["text"]
+    assert "#101）" in row["text"] and "合成職員B" in row["text"]
+    assert "#100）" not in row["text"]
 
 
 def test_omitted_options_enable_private_summary_navigation(led):
