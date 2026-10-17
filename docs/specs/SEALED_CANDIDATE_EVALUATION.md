@@ -32,6 +32,8 @@
 
 昇格証拠そのもの、承認参照、retry/時間budget、通知までの待機時間、mode、summary/loop mode、project scopeは指紋から除く。承認日付だけで解釈cacheを変えない。legacyの既存policy hashを維持し、canonical/shadowのpolicy hashには候補指紋を含める。
 
+定数は配列・辞書・集合・正規表現・タイムゾーンを含め、型と値を安定した形式で束ねる。実行中の表示cacheや失敗回数など、明示した可変状態は除く。未知の定数型を黙って省略しない。この識別範囲の修正前に作成した候補の証拠・承認は流用せず、現候補で再評価・再承認する。
+
 新トークンは完全長の `criteria_sha256:report_sha256:candidate_fingerprint`（194文字）。report hashはJSONファイルの空白を含むraw bytesではなく、`payload_hash(report)` のcanonical JSONを対象とする。起動時とdoctorの設定検査で再照合する。旧 `<criteria version>:<短いdigest>` や任意文字列は通らない。`PLAN_VERSION=1` から `2`、prompt、model、context flag、判定閾値の変更でも以前の証拠は失効する。
 
 ロードコードのdigestにはPython code objectを使うため、Python環境・配置変更でも再評価が必要になる場合がある。指紋はモデルファイルの重み自体のhashではない。同じmodel idの重み差替え検知は、この識別契約の保証範囲外でありモデル資産管理で扱う。
@@ -65,6 +67,8 @@ python3 mcs/semantic/eval/semantic_snapshot.py score \
 recordsの基本形は既存[評価仕様](semantic-evaluation.md)の識別子とbundleを使用する。各recordは `case_id/account_id/project_id/thread_id/patient_id/split/stratum/data_origin/bundle` を持つ。bundleの `messages` は `message_id/body` と必要な `revision/posted_at/body_state/patient_reports` を持つ。実効AI優先判定にはbundleの `project_type`、必要なら `patient_name` を使う。project_type欠測は患者本人と決めずgroup相当で保留する。生成入力にcandidateやlabelを持ち込まない。
 
 `run.json` は本文を含むrecords、生成されたcandidate/documents、同一bundleのpatient-state off/on出力、候補指紋、snapshot hash、予測全体のhashを保存する。`external_audit_used=false`、`local_only=true` を記録する。**runはmetrics-onlyではないためrepo・CI・一般共有への出力対象にしない。**
+
+生成時の `run_seal_sha256` はrecordsに加え、manifest（reviewer名簿・split registry等）、候補指紋、runの生成元情報、予測hashも束ねる。採点とblindレビュー入口で照合し、生成後の誤変更や別runとの取り違えを拒否する。旧形式のrunは再生成し、既存ファイルへhashだけを後付けして継続しない。同一OS所有者による意図的なhash再計算を防ぐ署名ではない。
 
 現在のlatency/usageはcanonical facts生成部分の計測であり、先行するA/B抽出を含む全工程の性能値ではない。
 

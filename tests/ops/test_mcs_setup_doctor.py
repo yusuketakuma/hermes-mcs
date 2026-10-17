@@ -38,6 +38,26 @@ def test_default_doctor_checks_no_services_secrets_or_network(local_config, monk
     assert "synthetic-private-id" not in out
 
 
+@pytest.mark.parametrize("explicit", [False, True])
+def test_data_probe_reaches_restore_diagnosis_only_when_requested(
+        local_config, monkeypatch, capsys, explicit):
+    import card_worker_status
+    probes = []
+    def diagnose(root, cfg, *, probe_data=False):
+        probes.append(probe_data)
+        return {"state": "unknown", "reason": "worker_start_unverified",
+                "restore_delivery_held": False if probe_data else None,
+                "recovery_scope": "collect_only"}
+    monkeypatch.setattr(card_worker_status, "diagnose", diagnose)
+    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: pytest.fail("service probe"))
+    monkeypatch.setattr(local_llm, "bounded_request", lambda *a: pytest.fail("network"))
+    args = ["doctor", "--json"] + (["--probe", "data"] if explicit else [])
+    assert mcs_setup.main(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert probes == [explicit]
+    assert report["card_worker"]["restore_delivery_held"] is (False if explicit else None)
+
+
 def test_explicit_llm_probe_is_bounded_and_other_scopes_stay_unchecked(
         local_config, monkeypatch, capsys):
     calls = []

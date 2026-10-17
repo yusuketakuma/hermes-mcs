@@ -1,6 +1,6 @@
 # 1.0.23 リリース候補受入票
 
-2026-10-17。作業branch `release/v1.0.23-prep`、実行コード固定SHA `9c8b4b85a9fadec201335b377b683c2970cce5e0`、前版 `v1.0.22 / f8c6c20d`。同SHA以降は失敗した合成fixture・期待値と受入文書のみを修正する。公開可の判定ではない。
+2026-10-17。作業branch `release/v1.0.23-prep`、実行コード固定SHA `9c8b4b85a9fadec201335b377b683c2970cce5e0`、前版 `v1.0.22 / f8c6c20d`。この固定候補の後、ユーザーのUI/ロジックレビューにより8件の追加修正を実施した（下記追補）。旧全体検証を新差分の成功証拠として扱わない。公開可の判定ではない。
 
 ## 範囲と現在の判定
 
@@ -161,3 +161,24 @@ CodeRabbitの対象は前版本番f8c6c20d→固定35cb1832、139テキストフ
 | 評価承認1失敗・監視文言1失敗 | 旧い文字列だけのgateは拒否、新しい独立receiptを持つ合成承認で成功とmanifest失敗を検証。配送完了を断定しない監視文言へ整合。全対象2ファイル278件成功 |
 
 5スキップはDiscord/Slack SDK未導入の標準環境と明示SDK専用lane。別の固定Hermes21件・standalone12件の成功を参照し、スキップを成功件数へ足さない。関連コード/環境が不変の13,690件を再利用し、全体を無変更で繰り返さない。局所件数は重複を含むため合算しない。
+
+## UI・ロジックレビュー8件の修正追補（2026-10-17）
+
+修正開始時HEAD `e184c98290da7cd726cf25ed258baa951085864f`。レビューで確認した8件をリリースworktreeのローカル差分へ反映。公開・配備・実データ処理は行わない。
+
+| 指摘 | 修正と回帰証拠 |
+|---|---|
+| LINE WORKS待機延長 | 投稿ごとに未期限分を保留し、期限済み投稿と既配送投稿の要約更新を進める。待機分のintentは完了にしない。連続返信・複合coverage・緊急例外を検証 |
+| canonical薬名の用量化 | 同一fact引用に束縛されたdrug_nameを使用。欠測・複数候補は不明を維持し、不一致にしない |
+| alias影響過少 | 新旧resolver結果で規格付き表記への波及も計数 |
+| Discord添付説明更新 | 原名とSDK送信時のspoiler名を照合。固定SDKの重複prefix集約も反映し、所有者・thread・サイズ検証は保持 |
+| 候補定数の識別漏れ | 型付き再帰正規化で規則表・集合・正規表現等を束縛。未知型は拒否し、ロード済みworkerの指紋固定を維持 |
+| 評価生成元の未封印 | records/manifest/run/候補指紋/予測hashを生成時に封印し、score・blind入口で検査 |
+| 部分journalで復旧停止 | private一時ファイルをfsync後、排他的linkで完全な内容だけ公開。部分write・fsync失敗・process中断の合成回帰 |
+| doctor data選択肢欠落 | CLIから明示probe_dataを渡す。既定のDB非接続とサービス・ネットワーク非接続を検証 |
+
+検証: 意味解析領域＋薬剤関連1,598件、通知領域＋worker/hold診断1,347件、Discord＋setup診断568件成功。通常環境の実SDKファイル1skipは別の固定Hermes lane（24件成功）で検証。重複prefix追加後は実SDK＋配送回帰33件が成功。標準lint、10/10 CI gates、mine gates、生成README/Release整合、Slack8枚・LINE WORKS2枚の画像生成check成功。実画面の端末操作、実接続、実データ評価は未実施。
+
+旧runの封印・候補承認は再生成/再承認が必要。構造薬名を持たない既存事実は不明として保持する。既に破損したjournalの自動削除や本番の保留解除は行わない。修正後の固定CodeRabbitレビューはローカル品質記録 `review-eight-fixes-coderabbit.jsonl` / `review-eight-fixes-scope.json` へ保存し、最終結果は同記録で照合する。
+
+修正後CodeRabbitは固定snapshotの150ファイルを完走（exit 0 / review_completed / completed）。追加7指摘中6件を修正し、GC指摘1件は現行のspec全体削除経路と実GC回帰から不適用と確認した。追加修正は公開snapshotなしのalias受付、破損coverageの保留、診断接続の確実なclose、通知部品復旧の拒否receiptとsavepoint、LINE WORKSのname:null対応、利用ガイド整合。修正後の通知全領域・復旧・診断・LINE WORKS adapter・薬剤CLIは1,455件成功。個別のdoctor39件、alias25件、part復旧/LINE WORKS101件も成功。固定snapshot後の追加差分は合成回帰で照合し、自動レビューの上限に従い3回目は実行していない。全体テストの旧13,690件成功をこの差分の全件実行に読み替えない。変更は未コミット・未公開・未配備。

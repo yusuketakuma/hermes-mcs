@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "評価候補の定数と生成元情報の照合を補強",
+  "summary": "判定候補の選択肢・規則表・正規表現が変わった場合も以前の昇格証拠を使えないようにしました。生成後に評価manifestや元snapshotの識別情報が変更された場合は、採点と盲検レビュー資料の処理を拒否します。",
+  "upgrade": "既定のlegacyは変更ありません。以前の候補指紋と封印前runは再利用できないため、canonicalへの昇格には新しい候補でrunを再生成し、レビューと承認をやり直してください。ロード済みworkerが途中のファイル更新だけで新候補を承認することはありません。",
+  "details": [
+    "候補定数を型付きで再帰正規化し、辞書・配列・集合・regexのpattern/flags・timezoneを照合。不明型と非有限値は明示的に拒否し、既知の実行時cache/counterだけを除外する。",
+    "recordsだけでなくmanifest、candidate fingerprint、run情報、予測hashを一つのrun sealに束縛する。scoreとblind prepare/mergeの両入口で検査する。",
+    "同じOS所有者が全内容とhashを意図的に再作成する攻撃を防ぐ署名基盤ではない。実データや実サービスによる検証・昇格は行っていない。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_candidate.py",
+    "mcs/semantic/eval/semantic_snapshot.py",
+    "mcs/semantic/eval/semantic_snapshot_blind.py"
+  ]
+}

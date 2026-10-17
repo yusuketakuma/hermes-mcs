@@ -1153,20 +1153,24 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                     "part_id": req["part_id"], "attempt_id": req["attempt_id"],
                     "result": "delivered" if req["result"] == "mark_delivered" else "not_sent",
                     "remote_id": req.get("remote_id"), "error_code": "operator_part_resolve"}
+            db.execute("SAVEPOINT part_resolution")
             settled = apply_part_receipt(db, fact, cfg, now, _in_transaction=True)
             if not settled["applied"]:
-                raise RuntimeError("sealed part changed inside resolution transaction")
-            receipt.update(outcome="applied", scope=cards.stored_scope(render),
-                           projects=_card_projects(db, render, card), part_state=settled["part_state"],
-                           manifest_sha256=req["manifest_sha256"], payload_sha256=req["payload_sha256"],
-                           attempt_id=req["attempt_id"], evidence=req["evidence"])
-            if req["transport"] == "lineworks" and req["evidence"].get("proof") == "remote_absent":
-                receipt["evidence_limit"] = "操作者の申告。未送信の確定ではなく、重複送信のリスクが残ります。"
-            if (card is not None and card["delivery_state"] != "update_failed"
-                    and cards.restore_pending(cards.data_root(ledger)) is None
-                    and not cards._resend_exhausted(db, card["card_id"])):
-                cards._issue_render(db, card["card_id"], cfg, now, specs, force=req["result"] == "mark_not_sent")
-        else:
+                db.execute("ROLLBACK TO part_resolution")
+                error = "part_settle_rejected"
+            db.execute("RELEASE part_resolution")
+            if error is None:
+                receipt.update(outcome="applied", scope=cards.stored_scope(render),
+                               projects=_card_projects(db, render, card), part_state=settled["part_state"],
+                               manifest_sha256=req["manifest_sha256"], payload_sha256=req["payload_sha256"],
+                               attempt_id=req["attempt_id"], evidence=req["evidence"])
+                if req["transport"] == "lineworks" and req["evidence"].get("proof") == "remote_absent":
+                    receipt["evidence_limit"] = "操作者の申告。未送信の確定ではなく、重複送信のリスクが残ります。"
+                if (card is not None and card["delivery_state"] != "update_failed"
+                        and cards.restore_pending(cards.data_root(ledger)) is None
+                        and not cards._resend_exhausted(db, card["card_id"])):
+                    cards._issue_render(db, card["card_id"], cfg, now, specs, force=req["result"] == "mark_not_sent")
+        if error is not None:
             receipt.update(outcome="rejected", error=error)
         db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                    (req["command_id"], digest, None, None, receipt["outcome"], canonical(receipt).decode(), now))

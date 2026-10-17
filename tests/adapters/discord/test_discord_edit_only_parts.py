@@ -57,14 +57,26 @@ def test_unknown_or_gone_never_posts(world, fault):
     assert len(world[1].sent) == 2 and world[3].edits == 0
 
 
-def test_file_caption_edits_exact_owned_message_without_upload(world):
-    world[2].attachments = [SimpleNamespace(filename="synthetic.pdf", size=10)]
+@pytest.mark.parametrize("name,remote_name", [
+    ("synthetic.pdf", "synthetic.pdf"),
+    ("SPOILER_synthetic.pdf", "SPOILER_synthetic.pdf"),
+    ("photo.jpg", "SPOILER_photo.jpg"),
+    ("SPOILER_photo.jpg", "SPOILER_photo.jpg"),
+    ("SPOILER_SPOILER_photo.jpg", "SPOILER_photo.jpg"),
+    ("SPOILER_SPOILER_synthetic.pdf", "SPOILER_synthetic.pdf"),
+])
+def test_file_caption_edits_exact_owned_message_without_upload(world, name, remote_name):
+    world[2].attachments = [SimpleNamespace(filename=remote_name, size=10)]
     part = {"kind": "attachment_part", "part_id": "attach:0001", "prior_remote_id": "6001",
-            "edit_only": True, "name": "synthetic.pdf", "bytes": 10, "sha256": "a" * 64, "caption": "metadata only"}
+            "edit_only": True, "name": name, "bytes": 10, "sha256": "a" * 64, "caption": "metadata only"}
     w, t, _, _, spec, _ = world
     out = asyncio.run(w._part(_claim(spec), part, {"thread_id": "7700", "thread": t, "consumed": set()}))
     assert out == {"result": "delivered", "remote_id": "6001"}
     assert world[2].content == "metadata only" and len(t.sent) == 2
+    part["bytes"] = 11
+    out = asyncio.run(w._part(_claim(spec), part, {"thread_id": "7700", "thread": t, "consumed": set()}))
+    assert out["result"] == "unknown" and world[2].edits == 1
+    part["bytes"] = 10
     part["name"] = "other.pdf"
     out = asyncio.run(w._part(_claim(spec), part, {"thread_id": "7700", "thread": t, "consumed": set()}))
     assert out["result"] == "unknown" and len(t.sent) == 2

@@ -908,3 +908,15 @@ def test_unrepresentable_cooldown_is_rejected_before_any_send(tmp_path, until, p
         out = asyncio.run(w.sender.perform(spec))
     assert out == {"result": "not_sent", "error_code": "rate_state_invalid"}
     assert w.client.calls == []
+
+
+def test_update_header_accepts_valid_manifest_with_null_card_name():
+    spec = overflow_spec()
+    spec["op"] = "update"
+    spec["delivery"]["message_id"] = cards.logical_message_id(spec)
+    spec["parts"]["manifest"][0]["name"] = None
+    for part in spec["parts"]["manifest"]:
+        if part["kind"] == "body_part":
+            part["prior_remote_id"] = "lw:" + "e" * 32
+    assert cards.validate(spec) is spec
+    assert delivery.chunk_text(spec, "m:100:header#1", "↳ 合成見出し") == "↳ 更新 合成見出し\n（本文は変更なし）"

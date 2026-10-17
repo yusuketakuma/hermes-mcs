@@ -339,6 +339,13 @@ class DeliveryWorker(worker.DeliveryWorker):
         me = getattr(getattr(self._bot, "user", None), "id", None)
         if me is None or pid in ctx["consumed"]:
             return {"result": "unknown", "error_code": "edit_target_unverified"}
+        name = part.get("name") or ""
+        uploaded_name = name
+        # discord.py collapses repeated original spoiler prefixes to one.
+        while uploaded_name.startswith("SPOILER_"):
+            uploaded_name = uploaded_name[8:]
+        if uploaded_name != name or cards.spoiler_attachment(name):
+            uploaded_name = "SPOILER_" + uploaded_name
         verified = False
         try:
             msg = await thread.fetch_message(pid)
@@ -347,7 +354,7 @@ class DeliveryWorker(worker.DeliveryWorker):
                     or (channel is not None and str(channel.id) != str(thread.id))):
                 return {"result": "unknown", "error_code": "edit_target_unverified"}
             if attachment and not any(
-                    str(getattr(a, "filename", None)).removeprefix("SPOILER_") == part.get("name")
+                    getattr(a, "filename", None) in (name, uploaded_name)
                     and getattr(a, "size", None) == part.get("bytes") for a in getattr(msg, "attachments", ())):
                 return {"result": "unknown", "error_code": "edit_file_unverified"}
             verified = True

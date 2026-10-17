@@ -3957,7 +3957,7 @@ def main(argv: list[str] | None = None) -> int:
                                       "(not_checked is not healthy; exit 1 only "
                                       "on a blocked scope); use check for blockers")
     p.add_argument("--json", action="store_true", help="safe shared JSON result")
-    p.add_argument("--probe", action="append", choices=("llm", "services"),
+    p.add_argument("--probe", action="append", choices=("llm", "services", "data"),
                    help="explicit read-only scope (repeatable); default is local only")
     p.set_defaults(fn=cmd_doctor, yes=True)
     args = ap.parse_args(argv)

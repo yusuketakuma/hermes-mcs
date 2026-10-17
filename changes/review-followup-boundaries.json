@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "通知復旧の拒否処理とLINE WORKS更新表示を修正",
+  "summary": "部品の配送状態を復旧できない場合は拒否結果を保存し、同じ操作が繰り返されることを防ぎます。LINE WORKSでは部品名が空のカードを含む更新でも見出しを表示できます。",
+  "upgrade": "追加操作は不要です。配送復旧の人承認条件と既定値は変わりません。稼働中の通知workerへの反映には通常の更新・再起動手順が必要です。",
+  "details": [
+    "部品解決が適用されなかった場合はsavepointまで変更を戻し、part_settle_rejectedを保存する。保存障害は引き続き伝播して全体をrollbackする。",
+    "validatorが許すcard部品のname:nullをLINE WORKSの更新見出し処理で安全に扱う。"
+  ],
+  "refs": [
+    "mcs/notify/notify_transport.py",
+    "adapters/lineworks/delivery.py"
+  ]
+}

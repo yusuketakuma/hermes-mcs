@@ -416,7 +416,12 @@ def _thread_context(db, card, msgs) -> str:
     live = [m for m in msgs if m["body_state"] != "deleted"]
     parts = [f"{len(msgs)}投稿"] if msgs else []
     replies = (msgs[0].get("reply_count") or 0) if msgs else 0
-    missing = replies - (len(msgs) - 1)
+    waiting = card.get("_summary_wait_ids", set())
+    if waiting:
+        root = db.execute("SELECT reply_count FROM messages WHERE message_id=? AND project_id=?",
+                          (card["root_message_id"], card["project_id"])).fetchone()
+        replies = (root[0] or 0) if root else 0
+    missing = replies - (len(msgs) + len(waiting) - 1)
     if missing > 0:
         parts.append(f"返信未取得 {missing}件")
     ids = [m["message_id"] for m in live]
@@ -814,6 +819,8 @@ def _card_content(db, card, *, cfg=None) -> dict:
                ORDER BY message_id<>?, posted_at_ts, message_id""",
             (card["root_message_id"], card["root_message_id"],
              card["project_id"], card["root_message_id"]))]
+        waiting = card.get("_summary_wait_ids", set())
+        msgs = [m for m in msgs if m["message_id"] not in waiting]
         if isinstance(cfg, dict):
             progress_by_mid = {m["message_id"]: _progress_state(db, m["message_id"], cfg)
                                for m in msgs if m["body_state"] != "deleted"}
@@ -841,8 +848,8 @@ def _card_content(db, card, *, cfg=None) -> dict:
                            + (f" {tag}" if tag else "")}]
             if context:
                 containers.append({"type": "text", "text": context})
-        new = sum(1 for m in msgs[1:] if (m.get("first_seen") or 0)
-                  > (_card_created(card) or float("inf")))
+        new = sum(1 for m in msgs if m["message_id"] != card["root_message_id"]
+                  and (m.get("first_seen") or 0) > (_card_created(card) or float("inf")))
         if new:
             containers.append({"type": "text", "text": f"🆕 返信+{new}"})
         # per post: sender line + its full 📋 要約 (or its empty state)
@@ -926,6 +933,8 @@ def _card_content(db, card, *, cfg=None) -> dict:
     reactions = []
     stamp_time = "transport" not in card.keys() or card["transport"] != "lineworks"
     for mid, meta in card_reactions(db, card, None if kind == "thread" else shown):
+        if mid in card.get("_summary_wait_ids", set()):
+            continue
         actors = reaction_actor_summary(db, mid)
         if layout < 3:
             # Retain the deployed fingerprint: upgrading alone must not resend.

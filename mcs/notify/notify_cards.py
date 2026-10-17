@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import math
 import os
 import secrets
@@ -934,9 +935,11 @@ def _thread_plan_ids(db, card, shown) -> list:
     # and stale/failed state updates, even after their card page moves away.
     # Legacy unnamed posts keep the frozen compatibility path in _body_groups.
     covered = _announced_ids(db, card) | _delivered_members(db, card, legacy=False)
+    waiting = card.get("_summary_wait_ids", set())
+    covered -= waiting
     if not covered - set(shown):
         return list(shown)
-    wanted = covered | {m for m in shown if positive(m)}
+    wanted = (covered | {m for m in shown if positive(m)}) - waiting
     # thread order, same query shape as the card face; ids outside
     # this card's thread/project never enter the plan
     return [r["message_id"] for r in db.execute(
@@ -1456,6 +1459,30 @@ def _generation_drift(card, content) -> dict:
     return gens
 
 
+def _ready_intent_ids(db, card, *, unbound=False):
+    """Only bind an intent when every covered post is outside its summary wait."""
+    waiting = card.get("_summary_wait_ids", set())
+    rows = db.execute("SELECT event_id,coverage FROM notification_intent_cards "
+                      "WHERE card_id=? AND state='pending'" +
+                      (" AND delivery_id IS NULL" if unbound else ""), (card["card_id"],))
+    ready = []
+    for row in rows:
+        try:
+            coverage = json.loads(row["coverage"])
+        except (ValueError, TypeError, RecursionError):
+            continue  # damaged coverage is never proof that an intent was delivered
+        if not isinstance(coverage, list) or not coverage:
+            continue
+        if card["kind"] == "thread":
+            if any(not positive(mid) for mid in coverage):
+                continue
+        elif any(not isinstance(key, str) or not key for key in coverage):
+            continue
+        if not waiting.intersection(coverage):
+            ready.append(row["event_id"])
+    return sorted(ready)
+
+
 def _render_needed(db, card, latest, gens, cfg, now, force) -> bool:
     """Whether the display model owes a new render — cancelling a
     queued/held render whose content already went stale, honoring the
@@ -1479,10 +1506,7 @@ def _render_needed(db, card, latest, gens, cfg, now, force) -> bool:
     suspended = (card["delivery_state"] == "update_failed"
                  and latest is not None
                  and latest["route_epoch"] == route_epoch(cfg))
-    unbound_intent = db.execute(
-        "SELECT 1 FROM notification_intent_cards WHERE card_id=? "
-        "AND state='pending' AND delivery_id IS NULL LIMIT 1",
-        (card["card_id"],)).fetchone() is not None
+    unbound_intent = bool(_ready_intent_ids(db, card, unbound=True))
     needed = force or bool(gens) or latest is None \
         or (not suspended and (unbound_intent or epoch_changed
                                or latest["state"] in ("not_sent", "cancelled")))
@@ -1545,10 +1569,7 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
              if card["transport"] in ("slack", "lineworks")
              or (card["message_id"] and card["channel_id"])
              else (delivery_scope(cfg) or {}))
-    event_ids = sorted(
-        r["event_id"] for r in db.execute(
-            "SELECT event_id FROM notification_intent_cards "
-            "WHERE card_id=? AND state='pending'", (card["card_id"],)))
+    event_ids = _ready_intent_ids(db, card)
     correlation = secrets.token_hex(16)
     spec = {
         "schema": f"mcs-card-render/v{TRANSPORT_VERSIONS[card['transport']]}",
@@ -1709,11 +1730,12 @@ def _persist_render(db, card, spec, op, rev, now):
          canonical(spec).decode(),
          payload_hash(spec), spec["delivery"]["correlation"], now, now))
     _seed_parts(db, spec, now)
-    db.execute(
+    db.executemany(
         """UPDATE notification_intent_cards
            SET delivery_id=?, required_render_rev=?
-           WHERE card_id=? AND state='pending'""",
-        (spec["delivery_id"], rev, card["card_id"]))
+           WHERE card_id=? AND event_id=? AND state='pending'""",
+        [(spec["delivery_id"], rev, card["card_id"], event_id)
+         for event_id in spec["delivery"]["intent_event_ids"]])
     db.execute(
         """UPDATE notification_cards SET source_generation=?,
              source_fp=?, presentation_generation=?, content_fp=?,
@@ -1770,13 +1792,29 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         from notify_render import _structured_block, _extraction_failed, _progress_state
         pending = db.execute("SELECT message_id,first_seen FROM messages WHERE project_id=? "
                              "AND (message_id=? OR parent_id=?)",
-                             (card["project_id"], card["root_message_id"], card["root_message_id"]))
-        if any(row["first_seen"] and 0 <= now - row["first_seen"] < LINEWORKS_SUMMARY_WAIT_S
-               and _structured_block(db, row["message_id"]) is None
-               and not _extraction_failed(db, row["message_id"])
-               and (_progress_state(db, row["message_id"], cfg) or {}).get("state") != "attention"
-               for row in pending):
-            return None
+                             (card["project_id"], card["root_message_id"], card["root_message_id"])).fetchall()
+        delivered = _delivered_members(db, card, legacy=True) | _delivered_members(db, card, legacy=False)
+        for name in _prior_body_posts(db, card):
+            match = re.fullmatch(r"m:([1-9][0-9]*)(?::header)?#[1-9][0-9]*", name)
+            if match:
+                delivered.add(int(match.group(1)))
+        waiting = {row["message_id"] for row in pending
+                   if row["message_id"] not in delivered
+                   and row["first_seen"] and 0 <= now - row["first_seen"] < LINEWORKS_SUMMARY_WAIT_S
+                   and _structured_block(db, row["message_id"]) is None
+                   and not _extraction_failed(db, row["message_id"])
+                   and (_progress_state(db, row["message_id"], cfg) or {}).get("state") != "attention"}
+        if waiting:
+            ready = {row["message_id"] for row in pending} - waiting
+            if not ready:
+                return None
+            # Publish ready posts without consuming newer posts' own deadlines.
+            # The global source fingerprint remains intact for stale-action guards;
+            # shown sets and intent binding describe only this render's coverage.
+            card["_summary_wait_ids"] = waiting
+            content = _card_content(db, card, cfg=cfg)
+            if not (ready - delivered) and _content_fp(content) == card["content_fp"]:
+                return None  # only the still-waiting posts changed
     gens = _generation_drift(card, content)
     if not _render_needed(db, card, latest, gens, cfg, now, force):
         return None                        # delivered/terminal & no drift

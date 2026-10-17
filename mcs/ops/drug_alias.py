@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, suppress
+from dataclasses import replace
 from difflib import SequenceMatcher
 import hashlib
 import json
@@ -9,10 +10,11 @@ import os
 from pathlib import Path
 import re
 import stat
+import tempfile
 
 import drug_map
 from mcs_requests import canonical, payload_hash, valid_hash, valid_uuid
-from safe_io import atomic_write, create_exclusive, fsync_dir
+from safe_io import atomic_write, fsync_dir
 
 
 def private_json(path, limit=drug_map.MAX_BYTES):
@@ -44,6 +46,10 @@ def safe_alias(alias):
 
 def impact_snapshot(db, before, alias, target):
     """Bind aggregate effects to source generations without exporting post IDs/text."""
+    entries = {e.id: e for hits in before.aliases.values() for e in hits}
+    if target not in entries:
+        raise ValueError("alias_target_or_collision")
+    after = replace(before, aliases={**before.aliases, alias: (entries[target],)})
     digest = hashlib.sha256()
     counts = {"posts": 0, "unextracted": 0, "mentions_changed": 0}
     for row in db.execute("SELECT message_id,content_hash,body_state FROM messages ORDER BY message_id"):
@@ -59,9 +65,8 @@ def impact_snapshot(db, before, alias, target):
         except ValueError:
             counts["unextracted"] += 1
             continue
-        counts["mentions_changed"] += sum(drug_map.fold(name) == alias
-            and {c["code"] for c in before.resolve(name)["cands"]} != {target}
-            for _, name in meds)
+        counts["mentions_changed"] += sum(before.resolve(name) != after.resolve(name)
+                                           for _, name in meds)
     return {"hash": digest.hexdigest(), "counts": counts}
 
 
@@ -138,12 +143,21 @@ def validate_operation(req, common):
 
 
 def _write_new(path, raw):
-    fd = create_exclusive(path)
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(raw)
-        stream.flush()
-        os.fsync(stream.fileno())
-    fsync_dir(path.parent)
+    """Publish a fully synced private file without replacing an existing destination."""
+    path = Path(path)
+    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=".alias-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # link is an atomic, exclusive publication. A crash before it leaves
+        # only staging; a later failure leaves complete, recoverable JSON.
+        os.link(staging, path)
+        fsync_dir(path.parent)
+    finally:
+        with suppress(OSError):
+            os.unlink(staging)
 
 
 @contextmanager

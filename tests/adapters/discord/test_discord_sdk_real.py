@@ -20,6 +20,23 @@ from adapters.common import spec as spec_mod  # noqa: E402
 from adapters.discord import cards  # noqa: E402
 
 
+@pytest.mark.parametrize("name,expected", [
+    ("photo.jpg", "SPOILER_photo.jpg"),
+    ("SPOILER_photo.jpg", "SPOILER_photo.jpg"),
+    ("SPOILER_report.pdf", "SPOILER_report.pdf"),
+    ("SPOILER_SPOILER_photo.jpg", "SPOILER_photo.jpg"),
+    ("SPOILER_SPOILER_report.pdf", "SPOILER_report.pdf"),
+])
+def test_attachment_original_spoiler_prefix_matches_pinned_sdk(name, expected):
+    import io
+    kwargs = {"spoiler": True} if cards.spoiler_attachment(name) else {}
+    attachment = discord.File(io.BytesIO(b"synthetic"), filename=name, **kwargs)
+    try:
+        assert attachment.filename == expected
+    finally:
+        attachment.close()
+
+
 def _spec():
     return {
         "schema": "mcs-card-render/v1",

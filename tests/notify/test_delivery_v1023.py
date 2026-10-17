@@ -270,3 +270,127 @@ def test_lw_gc_missing_spec_does_not_reuse_unproven_card_tokens(led):
     for token, until in expiry:
         assert led.db.execute("SELECT expires_at FROM notification_action_tokens WHERE token=?", (token,)).fetchone()[0] == until
     assert lw_cards.validate(latest) is latest
+
+
+@pytest.mark.parametrize("combined_intent", [False, True])
+def test_lw_continuous_replies_keep_individual_deadlines_and_pending_coverage(
+        led, monkeypatch, combined_intent):
+    import itertools
+    import notify_lineworks_testkit as kit
+    from notify_testkit import _msg, _attach, _token_for
+    attempts = itertools.count(100)
+    claim = kit._claim
+    monkeypatch.setattr(kit, "_claim", lambda render: claim(render, f"{next(attempts):016x}"))
+    _seed_thread(led, mids=(100,))
+    led.db.execute("UPDATE messages SET first_seen=? WHERE message_id=100", (NOW,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), LINEWORKS)
+    for mid, offset in ((101, 60), (102, 110)):
+        _msg(led, mid, parent=100)
+        led.db.execute("UPDATE messages SET first_seen=? WHERE message_id=?", (NOW + offset, mid))
+        covered = list(range(100, mid + 1)) if combined_intent else [mid]
+        _dispatch(led, _intent(led, payload={"message_ids": covered}), LINEWORKS, now=NOW + offset)
+        assert _latest_render(led) is None
+    attachment_id = _attach(led, 102)
+    for eligible, offset in ((100, 120), (101, 180), (102, 230)):
+        assert cards.sweep(led, LINEWORKS, now=NOW + offset)["updated"] == 1
+        render = _latest_render(led)
+        spec = json.loads(render["spec_json"])
+        shown = json.loads(led.db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
+                                        (spec["parts"]["manifest_id"],)).fetchone()[0])
+        assert set(shown) == set(range(100, eligible + 1))
+        token = led.db.execute("SELECT need_manifest_id FROM notification_action_tokens WHERE token=?",
+                               (_token_for(spec, "ack"),)).fetchone()
+        assert token["need_manifest_id"] == spec["parts"]["manifest_id"]
+        attachments = {p["attachment_id"] for p in spec["parts"]["manifest"]
+                       if p["kind"] == "attachment_part"}
+        assert attachments == ({attachment_id} if eligible == 102 else set())
+        names = {p.get("name") for p in spec["parts"]["manifest"] if p["kind"] == "body_part"}
+        assert f"m:{eligible}:header#1" in names
+        assert all(f"m:{mid}:header#1" not in names for mid in range(eligible + 1, 103))
+        # Source guards still bind the full current thread; ack uses only shown.
+        assert _card(led)["source_fp"] == notify_render._source_fp(led.db, _card(led))
+        deliver_lw(led, render)
+        for intent in led.db.execute("SELECT coverage,state,delivery_id FROM notification_intent_cards"):
+            if any(mid > eligible for mid in json.loads(intent["coverage"])):
+                assert intent["state"] == "pending" and intent["delivery_id"] is None
+        if eligible < 102:
+            assert cards.sweep(led, LINEWORKS, now=NOW + offset + 1)["updated"] == 0
+    assert {r[0] for r in led.db.execute("SELECT state FROM notification_intent_cards")} == {"delivered"}
+
+
+def test_lw_wait_does_not_delay_urgent_thread(led, monkeypatch):
+    _seed_thread(led, mids=(100, 101))
+    led.db.execute("UPDATE messages SET first_seen=?", (NOW,))
+    monkeypatch.setattr(notify_render.structured_view, "message_urgency", lambda db, mid: "rule")
+    _dispatch(led, _intent(led), LINEWORKS)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    names = {p.get("name") for p in spec["parts"]["manifest"]}
+    assert {"m:100:header#1", "m:101:header#1"} <= names
+
+
+def test_lw_expired_post_gets_one_later_summary_update(led, monkeypatch):
+    import itertools
+    import notify_lineworks_testkit as kit
+    from notify_testkit import _extract, _msg
+    attempts = itertools.count(100)
+    claim = kit._claim
+    monkeypatch.setattr(kit, "_claim", lambda render: claim(render, f"{next(attempts):016x}"))
+    _seed_thread(led, mids=(100,))
+    led.db.execute("UPDATE messages SET first_seen=?", (NOW,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), LINEWORKS)
+    assert cards.sweep(led, LINEWORKS, now=NOW + 120)["updated"] == 1
+    deliver_lw(led, _latest_render(led))
+    _msg(led, 101, parent=100)
+    led.db.execute("UPDATE messages SET first_seen=? WHERE message_id=101", (NOW + 120,))
+    _dispatch(led, _intent(led, payload={"message_ids": [101]}), LINEWORKS, now=NOW + 120)
+    _extract(led, 100, {"summary": "合成の完成した要約"}, kind="extract_llm")
+    assert cards.sweep(led, LINEWORKS, now=NOW + 121)["updated"] == 1
+    revised = deliver_lw(led, _latest_render(led))
+    assert any("合成の完成した要約" in text for text in revised["parts"]["thread_body_parts"])
+    original = next(p for p in revised["parts"]["manifest"] if p.get("name") == "m:100#1")
+    assert original["prior_remote_id"]
+    assert all(p.get("name") != "m:101:header#1" for p in revised["parts"]["manifest"])
+    assert cards.sweep(led, LINEWORKS, now=NOW + 122)["updated"] == 0
+
+
+def test_lw_ready_reply_does_not_miscount_waiting_root_as_missing(led):
+    from notify_testkit import _extract
+    _seed_thread(led)
+    led.db.execute("UPDATE messages SET first_seen=?", (NOW,))
+    led.db.execute("UPDATE messages SET reply_count=3 WHERE message_id=100")
+    _extract(led, 101, {"summary": "合成の返信要約"}, kind="extract_llm")
+    _dispatch(led, _intent(led), LINEWORKS)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    shown = json.loads(led.db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
+                                     (spec["parts"]["manifest_id"],)).fetchone()[0])
+    assert shown == [101]
+    texts = "\n".join(block.get("text", "") for block in spec["parts"]["containers"])
+    assert "返信未取得 2件" in texts
+    assert all(p.get("name") != "m:100:header#1" for p in spec["parts"]["manifest"])
+
+
+@pytest.mark.parametrize("coverage", ['{', 'null', '123', '{}', '[{}]', '[true]', '[0]', '["100"]'])
+@pytest.mark.parametrize("waiting_reply", [False, True])
+def test_invalid_intent_coverage_never_binds_or_blocks_ready_posts(led, coverage, waiting_reply):
+    from notify_testkit import _msg
+    _seed_thread(led, mids=(100,))
+    led.db.execute("UPDATE messages SET first_seen=?", (NOW,))
+    event = _intent(led, payload={"message_ids": [100]})
+    _dispatch(led, event, LINEWORKS)
+    assert _latest_render(led) is None
+    if waiting_reply:
+        _msg(led, 101, parent=100)
+        led.db.execute("UPDATE messages SET first_seen=? WHERE message_id=101", (NOW + 60,))
+        _dispatch(led, _intent(led, payload={"message_ids": [101]}), LINEWORKS, now=NOW + 60)
+    led.db.execute("UPDATE notification_intent_cards SET coverage=? WHERE event_id=?",
+                   (coverage, event["event_id"]))
+    led.db.commit()
+    assert cards.sweep(led, LINEWORKS, now=NOW + 120)["updated"] == 1
+    render = _latest_render(led)
+    spec = json.loads(render["spec_json"])
+    assert event["event_id"] not in spec["delivery"]["intent_event_ids"]
+    assert "m:100:header#1" in {p.get("name") for p in spec["parts"]["manifest"]}
+    deliver_lw(led, render)
+    damaged = led.db.execute("SELECT state,delivery_id FROM notification_intent_cards WHERE event_id=?",
+                             (event["event_id"],)).fetchone()
+    assert damaged["state"] == "pending" and damaged["delivery_id"] is None

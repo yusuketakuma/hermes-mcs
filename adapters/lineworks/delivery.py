@@ -118,7 +118,7 @@ def chunk_text(spec, name, chunk):
     if ":header#" in name and spec.get("op") == "update":
         group = name.split(":header#", 1)[0]
         bodies = [p for p in spec["parts"].get("manifest", [])
-                  if p.get("name", "").startswith(group + "#")]
+                  if str(p.get("name") or "").startswith(group + "#")]
         suffix = "\n（本文は変更なし）" if bodies and all(p.get("prior_remote_id") for p in bodies) else ""
         return "↳ 更新 " + chunk.removeprefix("↳ ") + suffix
     if name.startswith("display#"):

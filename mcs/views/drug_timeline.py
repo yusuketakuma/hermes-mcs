@@ -66,13 +66,30 @@ def mentions(reader, mid, *, cfg=None):
                            local_model=semantic.llm_model(cfg or {}))
     if errors or bundle is None or bundle["source_fingerprint"] != meta.get("fingerprint") or policy_fingerprint(scfg) != meta.get("policy_fingerprint"):
         return None
-    from semantic_projection import _v2_drug_ref
     doc, error = reproject_doc(reader, mid, meta)
     if error:
         return None
-    return source, [{**fact, "name": _v2_drug_ref(fact.get("statement") or "") or "処方薬"}
-                    for fact in doc.get("facts", [])
+    return source, [_canonical_mention(fact, doc) for fact in doc.get("facts", [])
                     if fact.get("kind") in ("medication_event", "medication_exposure")]
+
+
+def _canonical_mention(fact, doc):
+    """Use only drug names grounded in this fact's own evidence, retaining unknown names."""
+    quotes = [e["quote"] for e in doc.get("evidence", [])
+              if e.get("evidence_id") in fact.get("evidence_ids", [])
+              and isinstance(e.get("quote"), str)]
+    context = fact.get("patient_context") or {}
+    names = []
+    for detail in context.get("details", []):
+        name, evidence = detail.get("value"), detail.get("evidence")
+        if (detail.get("key") == "drug_name" and isinstance(name, str) and name.strip()
+                and isinstance(evidence, str) and name in evidence
+                and any(evidence in quote for quote in quotes) and name not in names):
+            names.append(name)
+    known = len(names) == 1
+    return {**fact, "name": names[0] if known else "薬名不明",
+            "name_state": "grounded" if known else "ambiguous" if names else "unknown",
+            "name_candidates": names, "evidence_quotes": quotes}
 
 
 def change_details(med, subject, candidate):
@@ -168,9 +185,12 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
                 if dictionary == "derived" else {})
         for i, med in enumerate(meds):
             ref = refs.get(i) if source[1] == "extract_llm" else None
-            if ref is None and active is not None:
+            known_name = med.get("name_state") not in ("unknown", "ambiguous")
+            if ref is None and active is not None and known_name:
                 ref = {**active.resolve(med["name"]), "dict_sha256": active.sha256,
                        "resolver_version": drug_map.RESOLVER_VERSION, "resolved_on_read": True}
+            if name is not None and not known_name:
+                continue
             if name is not None and drug_map.fold(name) != drug_map.fold(med["name"]):
                 codes = {c["code"] for c in (ref or {}).get("cands", [])}
                 if (ref or {}).get("status") != "resolved" or not (query_codes & codes):

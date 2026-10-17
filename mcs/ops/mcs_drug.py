@@ -313,38 +313,39 @@ def _workflow(args):
     import mcs_requests
     import mcs_view
     try:
-        view = mcs_view.View(args.snapshot)
-        try:
-            if args.command == "timeline":
-                report = drug_timeline.timeline(view, args.project, name=args.name,
-                    since=args.since, until=args.until, limit=args.limit, cursor=args.cursor, cfg=load_config())
-            elif args.command == "reconcile":
-                import drug_reconciliation
-                report = drug_reconciliation.reconcile(view, args.project, since=args.since,
-                    until=args.until, limit=args.limit, cursor=args.cursor, cfg=load_config())
-            elif args.command == "alias-propose":
-                report = drug_alias.proposal(view.db, load_config(), args.alias, args.target)
-                drug_alias._write_new(args.out, mcs_requests.canonical(report))
-            elif args.command == "alias-receipt":
-                if not mcs_requests.valid_uuid(args.command_id):
-                    raise ValueError("bad_command_id")
-                row = view.db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
-                                      (args.command_id,)).fetchone()
-                report = json.loads(row[0]) if row else {"outcome": "not_observed"}
-                if row and report.get("cmd") not in ("ops.drug_alias_apply", "ops.drug_alias_rollback"):
-                    report = ({k: report.get(k) for k in ("command_id", "outcome", "error")}
-                              if report.get("outcome") == "rejected" else {"outcome": "not_observed"})
+        if args.command in ("alias-apply", "alias-rollback"):
+            request = {"version": 1, "cmd": "ops.drug_alias_" + args.command.split("-")[1],
+                "command_id": args.command_id, "actor": args.actor,
+                "human_confirmed": args.confirm_human, "reason": args.reason}
+            if args.command == "alias-apply":
+                request["proposal"] = drug_alias.private_json(args.proposal, 16384)[0]
             else:
-                request = {"version": 1, "cmd": "ops.drug_alias_" + args.command.split("-")[1],
-                    "command_id": args.command_id, "actor": args.actor,
-                    "human_confirmed": args.confirm_human, "reason": args.reason}
-                if args.command == "alias-apply":
-                    request["proposal"] = drug_alias.private_json(args.proposal, 16384)[0]
-                else:
-                    request["approval_id"] = args.approval_id
-                report = mcs_requests.enqueue(request, args.cmd_dir)
-        finally:
-            view.close()
+                request["approval_id"] = args.approval_id
+            report = mcs_requests.enqueue(request, args.cmd_dir)
+        else:
+            view = mcs_view.View(args.snapshot)
+            try:
+                if args.command == "timeline":
+                    report = drug_timeline.timeline(view, args.project, name=args.name,
+                        since=args.since, until=args.until, limit=args.limit, cursor=args.cursor, cfg=load_config())
+                elif args.command == "reconcile":
+                    import drug_reconciliation
+                    report = drug_reconciliation.reconcile(view, args.project, since=args.since,
+                        until=args.until, limit=args.limit, cursor=args.cursor, cfg=load_config())
+                elif args.command == "alias-propose":
+                    report = drug_alias.proposal(view.db, load_config(), args.alias, args.target)
+                    drug_alias._write_new(args.out, mcs_requests.canonical(report))
+                elif args.command == "alias-receipt":
+                    if not mcs_requests.valid_uuid(args.command_id):
+                        raise ValueError("bad_command_id")
+                    row = view.db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
+                                          (args.command_id,)).fetchone()
+                    report = json.loads(row[0]) if row else {"outcome": "not_observed"}
+                    if row and report.get("cmd") not in ("ops.drug_alias_apply", "ops.drug_alias_rollback"):
+                        report = ({k: report.get(k) for k in ("command_id", "outcome", "error")}
+                                  if report.get("outcome") == "rejected" else {"outcome": "not_observed"})
+            finally:
+                view.close()
     except (ValueError, TypeError, OSError, sqlite3.Error):
         print("drug: snapshot・私有ファイル・別名・世代・人承認条件を確認してください。", file=sys.stderr)
         return 1

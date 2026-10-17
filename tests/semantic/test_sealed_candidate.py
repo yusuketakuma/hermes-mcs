@@ -325,3 +325,68 @@ def test_disk_edit_does_not_replace_loaded_class_code(tmp_path, monkeypatch):
     original = candidate._sources()
     source.write_text('class Surface:\n    def method(self): return 999\n')
     assert candidate._sources() == original
+
+
+@pytest.mark.parametrize('module_name,constant,kind', [
+    ('semantic_jev', 'PROPOSITIONS', 'dict'),
+    ('semantic_facts', 'FACT_KINDS', 'tuple'),
+    ('semantic_relations', '_GENERIC_WORDS', 'set'),
+    ('semantic_jev', 'JEV_ALLOWED_ENDPOINTS', 'frozenset'),
+    ('semantic_extraction', '_SENTENCE_BREAK', 'regex'),
+    ('semantic_projection', '_CARE_EVENT_KEYWORDS', 'list'),
+])
+def test_loaded_interpretation_collections_change_new_worker_identity(monkeypatch, module_name, constant, kind):
+    import importlib
+    import re
+    module = importlib.import_module(module_name)
+    before = getattr(module, constant)
+    monkeypatch.setattr(candidate, '_LOADED_SOURCES', None)
+    original = candidate.candidate_fingerprint({})
+    if kind == 'dict':
+        changed = {**before, 'synthetic_added_rule': {'options': ['one', 'two']}}
+    elif kind == 'regex':
+        changed = re.compile(before.pattern, before.flags ^ re.IGNORECASE)
+    elif kind in ('set', 'frozenset'):
+        changed = type(before)([*before, 'synthetic-added-option'])
+    else:
+        changed = type(before)([*before, 'synthetic-added-rule'])
+    monkeypatch.setattr(module, constant, changed)
+    assert candidate.candidate_fingerprint({}) == original
+    monkeypatch.setattr(candidate, '_LOADED_SOURCES', None)
+    assert candidate.candidate_fingerprint({}) != original
+
+
+def test_constant_normalization_is_order_independent_but_preserves_type_and_regex_flags():
+    import re
+    from zoneinfo import ZoneInfo
+    normalize = candidate._constant
+    assert normalize({'a': (1, {'x', 'y'}), 'b': None}) == normalize({'b': None, 'a': (1, {'y', 'x'})})
+    assert normalize([1, 2]) != normalize((1, 2))
+    assert normalize({'a'}) != normalize(frozenset({'a'}))
+    assert normalize(True) != normalize(1)
+    assert normalize(re.compile('rule', re.I)) != normalize(re.compile('rule'))
+    assert normalize(ZoneInfo('Asia/Tokyo')) != normalize(ZoneInfo('UTC'))
+    assert normalize({'nested': ['a', 'b']}) != normalize({'nested': ['a', 'c']})
+
+
+@pytest.mark.parametrize('value', [object(), {'nested': object()}, float('nan'), float('inf')])
+def test_unknown_or_nonfinite_constant_fails_instead_of_silently_disappearing(monkeypatch, value):
+    import sys
+    import types
+    module = types.ModuleType('synthetic_constant_contract')
+    module.RULE = value
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(candidate, '_MODULES', (module.__name__,))
+    with pytest.raises((TypeError, ValueError), match='candidate_constant'):
+        candidate._sources()
+
+
+def test_runtime_counters_do_not_change_candidate_sources(monkeypatch):
+    import semantic
+    original = candidate._sources()
+    monkeypatch.setattr(semantic, '_LONG_UNSAVED', {'synthetic-message': 2})
+    monkeypatch.setattr(semantic, '_LONG_MARK_FAILURES', {'busy': 10, 'error': 3})
+    monkeypatch.setattr(semantic, '_FMT_MODE', 'plain')
+    monkeypatch.setattr(semantic, '_FMT_TS', 1234.5)
+    monkeypatch.setattr(semantic, '_LLM_FAILURE', 'synthetic-failure')
+    assert candidate._sources() == original

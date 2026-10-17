@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import marshal
 import math
 import types
 from pathlib import Path
 import re
+from zoneinfo import ZoneInfo
 
 from mcs_util import payload_hash
 
@@ -16,6 +18,38 @@ _MODULES = ('semantic_extraction', 'semantic_facts', 'semantic_audit',
             'semantic_relations', 'semantic_render', 'semantic_llm', 'semantic_jev',
             'semantic', 'semantic_assessment', 'semantic_projection', 'semantic_policy',
             'semantic_acceptance', 'structured_view')
+
+
+# Process-local probe/counter state is not an interpretation constant.
+_RUNTIME_STATE = {'semantic': frozenset({'_FMT_MODE', '_FMT_TS', '_LONG_UNSAVED',
+                                       '_LONG_MARK_FAILURES', '_LLM_FAILURE'})}
+
+
+def _constant(value):
+    """Normalize supported constant types without executing arbitrary objects."""
+    kind = type(value)
+    if value is None or kind in (str, bool, int):
+        return [kind.__name__, value]
+    if kind is float:
+        if not math.isfinite(value):
+            raise ValueError('nonfinite_candidate_constant')
+        return ['float', repr(value)]
+    if kind is bytes:
+        return ['bytes', value.hex()]
+    if isinstance(value, re.Pattern):
+        return ['regex', _constant(value.pattern), value.flags]
+    if isinstance(value, ZoneInfo):
+        if not isinstance(value.key, str):
+            raise ValueError('unkeyed_candidate_timezone')
+        return ['timezone', value.key]
+    def order(item):
+        return json.dumps(item, sort_keys=True, ensure_ascii=True, separators=(',', ':'))
+    if kind is dict:
+        return ['dict', sorted([[_constant(k), _constant(v)] for k, v in value.items()], key=order)]
+    if kind in (tuple, list, set, frozenset):
+        items = [_constant(item) for item in value]
+        return [kind.__name__, sorted(items, key=order) if kind in (set, frozenset) else items]
+    raise TypeError('unsupported_candidate_constant')
 
 
 def _sources():
@@ -41,8 +75,8 @@ def _sources():
                     if isinstance(function, types.FunctionType):
                         key = f'{class_name}.{method_name}.{accessor}'
                         code[key] = hashlib.sha256(marshal.dumps(function.__code__)).hexdigest()
-        constants = {key: value for key, value in vars(module).items()
-                     if key.isupper() and isinstance(value, (str, int, float, bool))}
+        constants = {key: _constant(value) for key, value in vars(module).items()
+                     if key.isupper() and key not in _RUNTIME_STATE.get(name, ())}
         sources[name] = payload_hash({'code': code, 'constants': constants})
     return sources
 

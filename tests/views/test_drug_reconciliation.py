@@ -196,3 +196,20 @@ def test_change_completion_preserves_epistemic(epistemic):
     assert result['epistemic'] == epistemic
     assert result['implementation'] == ('performed_report' if epistemic in ('asserted', 'reported')
                                         else 'not_established')
+
+
+@pytest.mark.parametrize("grounded", [True, False])
+def test_canonical_reconciliation_uses_grounded_name_or_retains_unknown(corpus, monkeypatch, grounded):
+    timeline_kit.canonical_source(corpus, monkeypatch, grounded=grounded)
+    monkeypatch.setattr("project_metadata_view.time.time", lambda: NOW)
+    structured(corpus, [period("キラナ錠10mg")])
+    result = drug_reconciliation.reconcile(view_of(corpus), 1)
+    item = result["items"][0]
+    if grounded:
+        assert item["reason"] == "surface_difference"
+        assert "strength_difference" in item["comparisons"][0]["comparison"]["reasons"]
+    else:
+        assert item["status"] == "unknown"
+        assert item["reason"] == "mention_name_not_established"
+        assert not item["comparisons"]
+    assert item["absence_confirmed"] is False

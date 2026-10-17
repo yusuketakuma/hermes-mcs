@@ -175,3 +175,50 @@ def test_lineworks_part_evidence_limit_matches_proof(led, proof):
     assert receipt["outcome"] == "applied"
     assert ("evidence_limit" in receipt) == (proof == "remote_absent")
     assert transport.apply_card_part_resolve(led, req, LINEWORKS, NOW + 2) == receipt
+
+
+def test_settlement_rejection_rolls_back_partial_changes_and_consumes_command(led, monkeypatch):
+    from pathlib import Path
+    import job_ops
+    import mcs_util
+    req = prepare(led)
+    before = [tuple(row) for row in led.db.execute("SELECT * FROM notification_render_parts")]
+    renders = led.db.execute("SELECT COUNT(*) FROM notification_renders").fetchone()[0]
+    calls = []
+
+    def reject(db, *args, **kwargs):
+        calls.append(True)
+        db.execute("UPDATE notification_render_parts SET state='delivered'")
+        return {"applied": False, "error": "part_conflict"}
+
+    monkeypatch.setattr(transport, "apply_part_receipt", reject)
+    monkeypatch.setattr(mcs_util, "load_config", lambda path: CFG)
+    command_dir = Path(cards.data_root(led)) / "cmd"
+    command_dir.mkdir()
+    command = command_dir / "synthetic-resolution.json"
+    command.write_text(json.dumps(req))
+    result = {"errors": []}
+    job_ops.drain_commands(led, result, str(command_dir))
+    assert not command.exists()
+    assert result["errors"] == ["cmd_invalid: part_settle_rejected"]
+    receipt = transport.apply_card_part_resolve(led, req, CFG, NOW + 2)
+    assert receipt["outcome"] == "rejected" and receipt["error"] == "part_settle_rejected"
+    assert calls == [True]
+    assert [tuple(row) for row in led.db.execute("SELECT * FROM notification_render_parts")] == before
+    assert led.db.execute("SELECT COUNT(*) FROM notification_renders").fetchone()[0] == renders
+
+
+def test_settlement_storage_failure_still_propagates_and_rolls_back(led, monkeypatch):
+    import sqlite3
+    req = prepare(led)
+    before = [tuple(row) for row in led.db.execute("SELECT * FROM notification_render_parts")]
+
+    def fail(db, *args, **kwargs):
+        db.execute("UPDATE notification_render_parts SET state='delivered'")
+        raise sqlite3.OperationalError("synthetic storage failure")
+
+    monkeypatch.setattr(transport, "apply_part_receipt", fail)
+    with pytest.raises(sqlite3.OperationalError, match="synthetic storage failure"):
+        transport.apply_card_part_resolve(led, req, CFG, NOW + 1)
+    assert [tuple(row) for row in led.db.execute("SELECT * FROM notification_render_parts")] == before
+    assert led.db.execute("SELECT 1 FROM command_receipts WHERE command_id=?", (req["command_id"],)).fetchone() is None

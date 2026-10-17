@@ -42,3 +42,29 @@ def test_individual_restore_hold_and_unreadable_are_distinct(tmp_path):
     with sqlite3.connect(tmp_path / 'ledger.db') as db:
         db.execute('UPDATE notification_restore_holds SET released_at=123')
     assert workers.diagnose(tmp_path, cfg, probe_data=True)['restore_delivery_held'] is False
+
+
+def test_data_probe_closes_connection_on_success_and_query_failure(tmp_path, monkeypatch):
+    import sqlite3
+    import pytest
+    real_connect = sqlite3.connect
+    db = real_connect(tmp_path / 'ledger.db')
+    db.close()
+    opened = []
+    def connect(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+    monkeypatch.setattr(workers.sqlite3, 'connect', connect)
+    assert workers.diagnose(tmp_path, {}, probe_data=True)['restore_delivery_held'] is False
+    with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+        opened[-1].execute('SELECT 1')
+    db = real_connect(tmp_path / 'ledger.db')
+    try:
+        db.execute('CREATE TABLE notification_restore_holds(other TEXT)')
+        db.commit()
+    finally:
+        db.close()
+    assert workers.diagnose(tmp_path, {}, probe_data=True)['restore_delivery_held'] is None
+    with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+        opened[-1].execute('SELECT 1')

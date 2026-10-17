@@ -402,3 +402,36 @@ def test_authorization_boolean_schema_version_rejected(tmp_path):
     source['authorization_receipt_sha256'] = payload_hash(receipt)
     with pytest.raises(EvaluationError, match='authorization_receipt_mismatch'):
         snapshot.generate(source, cfg, receipt)
+
+
+@pytest.mark.parametrize('mutation', ['snapshot', 'local_only', 'audit', 'manifest', 'records', 'missing_seal'])
+def test_generated_envelope_tampering_is_rejected_before_scoring(tmp_path, monkeypatch, mutation):
+    import extract_llm
+    import semantic_extraction
+    record, docs, cfg = fixture(tmp_path)
+    monkeypatch.setattr(extract_llm, 'llm_extract', lambda *a, **k: {})
+    monkeypatch.setattr(semantic_extraction, 'extract_facts_v2', lambda *a, **k: copy.deepcopy(docs[0]))
+    source = {'records': [record], 'data_origin': 'synthetic', 'manifest': {
+        **MANIFEST, 'holdout_manifest_sha256': payload_hash(holdout_payload([record]))}}
+    run = snapshot.generate(source, cfg)
+    snapshot.validate_generated_run(run)
+    reviewed = copy.deepcopy(run['records'])
+    if mutation == 'snapshot':
+        run['run']['snapshot_sha256'] = 'b' * 64
+    elif mutation == 'local_only':
+        run['run']['local_only'] = False
+    elif mutation == 'audit':
+        run['run']['external_audit_used'] = True
+    elif mutation == 'manifest':
+        run['manifest']['reviewers'] = ['changed-reviewer']
+    elif mutation == 'records':
+        run['records'][0]['candidate']['status'] = 'changed'
+        # Updating the old records-only digest does not repair the enclosing seal.
+        run['predictions_sha256'] = payload_hash(run['records'])
+    else:
+        del run['run_seal_sha256']
+    def forbidden(*args, **kwargs):
+        pytest.fail('changed envelope reached evaluator')
+    monkeypatch.setattr(snapshot, 'evaluate_records', forbidden)
+    with pytest.raises(EvaluationError, match='generated_run_seal_mismatch'):
+        snapshot.score(run, reviewed, cfg, CRITERIA)

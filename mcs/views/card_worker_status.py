@@ -1,6 +1,7 @@
 """配送workerの起動証拠を非機密の状態とコード版で照合する。"""
 from __future__ import annotations
 
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -81,8 +82,8 @@ def diagnose(root, cfg, *, probe_data=False):
             ledger = Path(root) / 'ledger.db'
             if ledger.is_symlink():
                 raise ValueError('invalid')
-            with sqlite3.connect(ledger.resolve().as_uri() + '?mode=ro', uri=True,
-                                 timeout=1) as db:
+            with closing(sqlite3.connect(ledger.resolve().as_uri() + '?mode=ro', uri=True,
+                                         timeout=1)) as db:
                 db.set_progress_handler(lambda: 1, 100_000)
                 table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                                    "AND name='notification_restore_holds'").fetchone()

@@ -126,3 +126,52 @@ def test_changed_dictionary_pin_hides_old_candidates(corpus, tmp_path):
         cfg={"drug_map": {"path": str(tmp_path / "new.json"), "sha256": "f" * 64}})
     assert report["items"][0]["candidate"] is None
     assert report["coverage"]["dictionary"] == "pending" and "照合中" in report["explanation"]
+
+
+def canonical_source(store, monkeypatch, *, name="キラナ錠5mg", grounded=True, extra_names=()):
+    statement = name + "を開始"
+    current(store, 1, [])
+    row = store.db.execute("SELECT artifact_id FROM artifacts ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    store.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                     (json.dumps({"fingerprint": "synthetic", "policy_fingerprint": "synthetic"}), row[0]))
+    quote = statement + "、" + "、".join(extra_names)
+    fact = {"kind": "medication_event", "statement": statement, "subject": "patient:1",
+            "action": "start", "polarity": "affirmed", "epistemic": "reported",
+            "workflow_status": "performed", "event_time": "2026-10-01", "quantity": "5mg",
+            "evidence_ids": ["e1"], "patient_context": {"details": [
+                {"key": "drug_name", "value": value, "evidence": quote}
+                for value in ([name, *extra_names] if grounded else [])]}}
+    doc = {"facts": [fact], "evidence": [{"evidence_id": "e1", "quote": quote}]}
+    monkeypatch.setattr("drug_map._source", lambda *a: (row[0], "semantic_facts_v4", "{}", "synthetic", 1))
+    monkeypatch.setattr("semantic_v4.reproject_doc", lambda *a: (doc, None))
+    monkeypatch.setattr("semantic_store.thread_bundle", lambda *a, **k: {"source_fingerprint": "synthetic"})
+    monkeypatch.setattr("semantic_policy.semantic_config", lambda *a: ({}, []))
+    monkeypatch.setattr("semantic_policy.policy_fingerprint", lambda *a: "synthetic")
+    monkeypatch.setattr("semantic.llm_model", lambda *a: "synthetic")
+    return doc
+
+
+def test_canonical_grounded_drug_name_keeps_strength_and_search(corpus, monkeypatch):
+    doc = canonical_source(corpus, monkeypatch)
+    report = drug_timeline.timeline(view_of(corpus), 1, name="キラナ錠5mg")
+    mention = report["items"][0]["mention"]
+    assert mention["name"] == "キラナ錠5mg" and mention["name_state"] == "grounded"
+    assert mention["statement"] == doc["facts"][0]["statement"]
+    assert mention["quantity"] == "5mg"
+    assert mention["evidence_quotes"] == [doc["evidence"][0]["quote"]]
+    assert not drug_timeline.timeline(view_of(corpus), 1, name="5mg")["items"]
+
+
+@pytest.mark.parametrize("case", ["missing", "foreign_evidence", "ambiguous"])
+def test_canonical_unestablished_names_keep_evidence_without_guessing(corpus, monkeypatch, case):
+    doc = canonical_source(corpus, monkeypatch, grounded=case != "missing",
+                           extra_names=("キラーナ錠10mg",) if case == "ambiguous" else ())
+    if case == "foreign_evidence":
+        doc["facts"][0]["evidence_ids"] = ["different-fact"]
+    report = drug_timeline.timeline(view_of(corpus), 1)
+    item = report["items"][0]
+    assert item["mention"]["name"] == "薬名不明"
+    assert item["mention"]["name_state"] == ("ambiguous" if case == "ambiguous" else "unknown")
+    assert item["mention"]["statement"] == "キラナ錠5mgを開始"
+    assert item["candidate"] is None and item["matching"] == "pending"
+    assert not drug_timeline.timeline(view_of(corpus), 1, name="5mg")["items"]

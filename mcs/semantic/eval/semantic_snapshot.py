@@ -201,15 +201,33 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
                                             'arms': arms}})
     if fingerprint != candidate_fingerprint(cfg):
         raise EvaluationError('candidate_changed_during_run')
-    return {'records': output, 'manifest': manifest,
+    generated = {'records': output, 'manifest': manifest,
             'candidate_fingerprint': fingerprint,
             'run': {'external_audit_used': False, 'local_only': True,
                     'snapshot_sha256': payload_hash(snapshot)},
             'predictions_sha256': payload_hash(output)}
+    generated['run_seal_sha256'] = generated_run_hash(generated)
+    return generated
+
+
+_RUN_FIELDS = frozenset({'records', 'manifest', 'candidate_fingerprint', 'run', 'predictions_sha256'})
+
+
+def generated_run_hash(generated: dict) -> str:
+    """Bind source/run identity and review manifest together with predictions."""
+    return payload_hash({key: generated[key] for key in sorted(_RUN_FIELDS)})
+
+
+def validate_generated_run(generated: dict) -> None:
+    if (not isinstance(generated, dict)
+            or set(generated) != _RUN_FIELDS | {'run_seal_sha256'}
+            or generated.get('run_seal_sha256') != generated_run_hash(generated)):
+        raise EvaluationError('generated_run_seal_mismatch')
 
 
 def score(generated: dict, reviewed: list[dict], cfg: dict, criteria: dict) -> dict:
     """Score human labels only when every prediction still matches the sealed run."""
+    validate_generated_run(generated)
     original = generated.get('records', [])
     if (generated.get('predictions_sha256') != payload_hash(original)
             or generated.get('candidate_fingerprint') != candidate_fingerprint(cfg)):

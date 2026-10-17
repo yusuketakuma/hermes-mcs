@@ -49,6 +49,9 @@ def reconcile(view, project_id, *, since=None, until=None, limit=50, cursor=None
         if item["subject_bucket"] != "patient":
             candidates.append({**base, "status": "not_comparable", "reason": context[0], "comparisons": []})
             continue
+        if med.get("name_state") in ("unknown", "ambiguous"):
+            candidates.append({**base, "status": "unknown", "reason": "mention_name_not_established", "comparisons": []})
+            continue
         if structured["last_complete_at"] is None:
             candidates.append({**base, "status": "unknown", "reason": "structured_not_observed", "comparisons": []})
             continue

@@ -17,6 +17,8 @@ def _require(condition, reason):
 
 
 def _records(run):
+    from semantic_snapshot import validate_generated_run
+    validate_generated_run(run)
     rows = run.get('records')
     _require(isinstance(rows, list) and rows, 'blind_records_required')
     _require(run.get('predictions_sha256') == payload_hash(rows), 'generated_seal_mismatch')

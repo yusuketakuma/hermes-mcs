@@ -7,6 +7,7 @@ from mcs_util import payload_hash
 from semantic_evaluation import EvaluationError
 from semantic_holdout import evidence_summary, holdout_payload
 from semantic_snapshot_blind import prepare, merge
+from semantic_snapshot import generated_run_hash
 
 
 def run_fixture():
@@ -25,8 +26,11 @@ def run_fixture():
                 'split_registry': {'dev': [], 'calibration': [], 'test': [
                     {'patient_id': row['patient_id'], 'thread_id': row['thread_id']}]},
                 'holdout_manifest_sha256': payload_hash(holdout_payload([row]))}
-    return {'records': [row], 'manifest': manifest, 'predictions_sha256': payload_hash([row]),
-            'candidate_fingerprint': 'synthetic-fingerprint'}
+    run = {'records': [row], 'manifest': manifest, 'predictions_sha256': payload_hash([row]),
+            'candidate_fingerprint': 'synthetic-fingerprint',
+            'run': {'local_only': True, 'external_audit_used': False, 'snapshot_sha256': 'a' * 64}}
+    run['run_seal_sha256'] = generated_run_hash(run)
+    return run
 
 
 def fill(sheet, key, position, *, score=1):
@@ -43,6 +47,7 @@ def fill(sheet, key, position, *, score=1):
 
 def prepared():
     run = run_fixture()
+    run['run_seal_sha256'] = generated_run_hash(run)
     pack = prepare(run, ['one', 'two'])
     reviews = [fill(sheet, pack['coordinator_key'], i)
                for i, sheet in enumerate(pack['worksheets'])]
@@ -145,6 +150,7 @@ def test_merged_labels_flow_through_existing_score_without_promoting_synthetic_o
     run['predictions_sha256'] = payload_hash([row])
     run['run'] = {'local_only': True, 'external_audit_used': False,
                   'snapshot_sha256': 'a' * 64}
+    run['run_seal_sha256'] = generated_run_hash(run)
     pack = prepare(run, ['one', 'two'])
     reviews = [fill(sheet, pack['coordinator_key'], i)
                for i, sheet in enumerate(pack['worksheets'])]
@@ -167,6 +173,7 @@ def test_adjudication_only_changes_disagreed_case_in_mixed_batch():
     run['records'].append(second)
     run['predictions_sha256'] = payload_hash(run['records'])
     run['manifest']['holdout_manifest_sha256'] = payload_hash(holdout_payload(run['records']))
+    run['run_seal_sha256'] = generated_run_hash(run)
     pack = prepare(run, ['one', 'two'])
     key = pack['coordinator_key']
     reviews = [fill(sheet, key, i) for i, sheet in enumerate(pack['worksheets'])]
@@ -200,6 +207,7 @@ def test_worksheets_distinguish_target_from_context_without_source_identifiers()
     row['patient_state_ab']['same_case_sha256'] = payload_hash(row['bundle'])
     run['predictions_sha256'] = payload_hash(run['records'])
     run['manifest']['holdout_manifest_sha256'] = payload_hash(holdout_payload(run['records']))
+    run['run_seal_sha256'] = generated_run_hash(run)
     pack = prepare(run, ['one', 'two'])
     for sheet in pack['worksheets']:
         messages = sheet['cases'][0]['source']['messages']
@@ -209,4 +217,19 @@ def test_worksheets_distinguish_target_from_context_without_source_identifiers()
                for i, sheet in enumerate(pack['worksheets'])]
     reviews[0]['cases'][0]['source']['messages'][1]['evaluation_target'] = True
     with pytest.raises(EvaluationError, match='worksheet_changed'):
+        merge(run, pack['coordinator_key'], reviews)
+
+
+@pytest.mark.parametrize('field', ['run', 'manifest', 'run_seal_sha256'])
+def test_blind_paths_refuse_changed_generation_envelope(field):
+    run, pack, reviews = prepared()
+    if field == 'run':
+        run['run']['snapshot_sha256'] = 'b' * 64
+    elif field == 'manifest':
+        run['manifest']['reviewers'].append('unexpected-reviewer')
+    else:
+        del run[field]
+    with pytest.raises(EvaluationError, match='generated_run_seal_mismatch'):
+        prepare(run, ['one', 'two'])
+    with pytest.raises(EvaluationError, match='generated_run_seal_mismatch'):
         merge(run, pack['coordinator_key'], reviews)

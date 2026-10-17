@@ -1,0 +1,22 @@
+{
+  "category": "fixed",
+  "title": "薬剤履歴の薬名・別名変更の影響確認と中断復旧を修正",
+  "summary": "構造化された薬剤事実の用量を薬名として表示せず、根拠付きの薬名と規格を検索・薬歴照合に使います。薬名が未確定の場合は不明として原文根拠を残します。別名追加で規格付き表記の照合も変わる場合を影響件数に含め、書込み途中の失敗で辞書切替の復旧が行き詰まる問題も防ぎます。 別名の適用・復旧コマンドは、snapshotが未公開・破損していても人承認付きで受け付けます。",
+  "upgrade": "通常は追加操作不要です。既存の別名提案は影響プレビューを作り直して承認してください。薬名の構造属性がない既存の事実は薬名不明と表示し、推測による照合は行いません。既に破損した切替journalがある場合は自動削除せず手動復旧が必要です。辞書の自動承認・LLM再抽出・通知設定の変更はありません。",
+  "details": [
+    "薬名は同一factの引用に含まれるpatient_contextのdrug_nameを使用し、複数候補・欠測は薬歴に見当たらないとの判定へ変換しない。",
+    "別名の影響件数は新旧resolverの実結果を比較し、旧ingredient/class辞書のstem照合への波及も数える。",
+    "辞書・提案・journalは0600の一時ファイルを同期してから排他的にlink公開する。公開前の失敗は再試行でき、公開後の同期失敗でも完全なjournalから承認付きrollbackができる。",
+    "alias-apply/rollbackはsnapshotを開かず既存enqueue検証へ進み、提案作成・履歴・receipt照会だけが公開snapshotを必要とする。"
+  ],
+  "refs": [
+    "mcs/ops/drug_alias.py",
+    "mcs/views/drug_timeline.py",
+    "mcs/views/drug_reconciliation.py",
+    "tests/ops/test_drug_alias.py",
+    "tests/views/test_drug_timeline.py",
+    "tests/views/test_drug_reconciliation.py",
+    "mcs/ops/mcs_drug.py",
+    "tests/ops/test_mcs_drug_workflows.py"
+  ]
+}

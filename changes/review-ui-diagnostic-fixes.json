@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "添付説明の更新と復旧診断を修正",
+  "summary": "Discordで元からSPOILER_で始まる添付名でも説明文を更新できるようにしました。doctor --probe dataで復元後の送信保留状態を読取り専用で確認できます。",
+  "upgrade": "Discord接続workerを更新後に再起動してください。診断は明示的な--probe data指定時だけDBを確認し、既定の診断範囲は変わりません。",
+  "details": [
+    "添付の元名と画像送信時に追加されたprefixを区別し、所有者・thread・サイズの照合を維持する。",
+    "doctor CLIのdata選択肢を実診断経路へ接続する。",
+    "明示データ診断のSQLite接続を成功・例外どちらでも閉じる。"
+  ],
+  "refs": [
+    "adapters/discord/delivery.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/views/card_worker_status.py"
+  ]
+}
