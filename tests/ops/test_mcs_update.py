@@ -1101,9 +1101,10 @@ def test_rollback_restarts_agents_on_unexpected_error(
     monkeypatch.setattr(mcs_update, "_gateway_restart_if_needed",
                         lambda s: None)
     state = updater._default_state()
-    state["applied"] = [{"tag": "v1.1.0", "sha": "t" * 40,
-                         "prev_sha": _git(repo, "rev-parse", "HEAD")
-                         .stdout.strip(), "at": time.time()}]
+    state["applied"] = [{"tag": "v1.1.0",
+                         "sha": _git(repo, "rev-parse", "HEAD").stdout.strip(),
+                         "prev_sha": _git(repo, "rev-list", "-n1", "v1.0.0").stdout.strip(),
+                         "at": time.time()}]
     updater.save_state(state)
     rc = updater.rollback("cid-rb")
     assert rc == 1
@@ -1792,9 +1793,10 @@ def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
     state = updater._default_state()
-    state["applied"] = [{"tag": "v1.1.0", "sha": "t" * 40,
-                         "prev_sha": _git(repo, "rev-parse", "HEAD")
-                         .stdout.strip(), "at": time.time()}]
+    state["applied"] = [{"tag": "v1.1.0",
+                         "sha": _git(repo, "rev-parse", "HEAD").stdout.strip(),
+                         "prev_sha": _git(repo, "rev-list", "-n1", "v1.0.0").stdout.strip(),
+                         "at": time.time()}]
     updater.save_state(state)
     assert updater.rollback("cid-rb") == 1
     assert ("bootstrap", "ai.mcs.a") in fake.calls   # a brought back

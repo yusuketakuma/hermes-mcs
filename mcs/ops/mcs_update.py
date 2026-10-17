@@ -2696,6 +2696,10 @@ def rollback(command_id: str | None = None) -> int:
                 _report("runtime_restore_blocked", str(e))
                 print("Hermes のソースが更新記録と一致しないため、変更せず停止しました。詳細:", e)
                 return 1
+            foreign = _local_changes_outside(entry.get("sha"), prev)
+            if foreign:
+                raise UpdateError("local changes outside update: "
+                                  + ",".join(foreign)[:160])
             # crash-visible journal BEFORE quiesce (H4): recover can
             # converge the tree toward prev even if we die mid-reset
             state["applying"] = _rollback_applying(

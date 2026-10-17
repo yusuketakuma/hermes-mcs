@@ -380,3 +380,48 @@ def test_file_directory_reset_preserves_unknown_children(
         assert (repo / "shape").is_symlink()
         assert os.readlink(repo / "shape") == str(private)
         assert (private / "known.txt").read_bytes() == private_before
+
+
+def test_rollback_untracked_collision_refuses_before_journal_and_recovery_is_noop(
+        updater, tmp_path, monkeypatch):
+    repo, prev, target = _provenance_repo(tmp_path)
+    (repo / "deleted.txt").write_text("UNTRACKED OPERATOR CONTENT")
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "hermes"})
+    events, notices = [], []
+    monkeypatch.setattr(updater, "quiesce", lambda: events.append("quiesce") or [])
+    monkeypatch.setattr(updater, "restart_agents", lambda **k: events.append("restart") or [])
+    monkeypatch.setattr(updater, "restart_services", lambda *a, **k: events.append("services"))
+    monkeypatch.setattr(updater, "_restore_runtime", lambda entry: events.append("runtime"))
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **k: notices.append(text) or True)
+    entry = {"tag": "v1.0.26", "sha": target, "prev_sha": prev, "at": time.time() - 4000}
+    state = updater._default_state()
+    state["applied"] = [entry]
+    updater.save_state(state)
+    assert updater._tree_clean()
+    before = _provenance_snapshot(repo)
+    cid = "synthetic-untracked-rollback"
+
+    assert updater.rollback(cid) == 1
+    refused = updater.load_state()
+    events_after_refusal = list(events)
+    notice_count = len(notices)
+    journal = Path(updater.STATE_PATH).read_bytes()
+    assert updater.recover_interrupted() == 0
+    recovered = updater.load_state()
+
+    assert refused["applied"] == recovered["applied"] == [entry]
+    assert _provenance_snapshot(repo) == before
+    assert {
+        "applying": refused["applying"], "stages": refused["stages"],
+        "events_after_refusal": events_after_refusal, "events_after_recovery": events,
+        "receipt_after_refusal": refused["executed"][cid]["result"],
+        "receipt_after_recovery": recovered["executed"][cid]["result"],
+        "recovery_notices": notices[notice_count:],
+    } == {
+        "applying": None, "stages": [],
+        "events_after_refusal": [], "events_after_recovery": [],
+        "receipt_after_refusal": "rollback_failed", "receipt_after_recovery": "rollback_failed",
+        "recovery_notices": [],
+    }
+    assert Path(updater.STATE_PATH).read_bytes() == journal
