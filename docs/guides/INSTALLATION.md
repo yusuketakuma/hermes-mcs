@@ -392,6 +392,20 @@ Discord を使う場合は、対象チャンネルで新着投稿があるとカ
   `slack_allowed_user_ids`/`slack_profile`/`project_ids`/
   `data_root`）と `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` を serving
   profile に自動で書き込む — 既設定の値は保持される
+- **Slack カードを送るのは `slack_profile` で指定した profile だけ** —
+  複数 profile を1つの gateway で動かす場合、他の profile が同じ plugin
+  settings を引き継いでいても、その Slack 接続はカード配送を始めない。
+  見送った接続はイベントログ `hermes.plugin.mcs_slack` に
+  `worker_disabled`（`reason=profile_mismatch`）を1行残す。カードが
+  届かないときは、`slack_profile` が配送させたい bot の profile 名と
+  一致しているかを先に確認する。plugin のコードを更新した後は上記の
+  とおり `hermes gateway restart` で反映する
+- **配送の失敗を手作業で再送しない** — `channel_not_found` だけを根拠に
+  再送しない（接続した bot の profile 違いでも起きる）。成否不明
+  （`unknown`）や再送上限（`resend_exhausted`）の配送も、保存データの
+  書換えや強制再送で解除しない。原因を直したうえで、既存の確認・解除の
+  手順だけを使う。対応する解除手順がないものは保留を維持し、未解決として
+  報告する
 
 ### A-7. checkout の場所と移動
 

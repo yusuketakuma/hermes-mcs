@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "複数Bot運用時のSlack通知先エラーを防止",
+  "summary": "複数のHermesプロファイルが同じ通知設定を継承しても、指定されたプロファイルのBotだけがMCSのSlack通知を担当します。別Botによるworkerの引継ぎと、通知先へアクセスできず送信に失敗する問題を防ぎます。",
+  "upgrade": "HermesのSlack通知を利用する場合はgatewayの再起動が必要です。通知先・承認条件・既定値は変更しません。送信結果不明の通知や再送上限で保留された通知は自動で解除しません。",
+  "details": [
+    "Slack adapterの所有プロファイルを優先し、主adapterではgatewayの起動時に固定された主プロファイル名を参照する。従来SDKで取得できない場合はPluginContextのprofile_nameを利用し、既存の単一プロファイル起動との互換性を維持する。",
+    "設定と異なるプロファイルではSupervisor作成前に終了し、既存の通知worker・共有client・配送journalに触れない。",
+    "対象外プロファイルでworkerを起動しなかった場合は、秘密情報や識別子を含まないprofile_mismatch理由コードを記録する。",
+    "通常CIで、主・従プロファイルの起動順と再接続を実Supervisor・共有ロックで検証し、別Botが正しいworkerを停止したり操作ハンドラーを登録したりしないことを回帰防止する。"
+  ],
+  "refs": [
+    "hermes_plugin/card_workers.py"
+  ]
+}

@@ -162,8 +162,27 @@ def test_foreign_workspace_cannot_send():
     asyncio.run(scenario())
 
 
-def test_factory_uses_existing_secondary_workspace_client(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("context_profile", "native_profile", "primary_profile", "expected"), [
+        (None, "absent", None, True),
+        ("cco", "absent", None, True),
+        ("foreign", "absent", None, False),
+        ("cco", "foreign", None, False),
+        ("foreign", "cco", None, True),
+        ("cco", None, None, True),
+        ("default", None, None, False),
+        (None, None, None, False),
+        ("default", "cco", None, True),
+        ("cco", None, "default", False),
+        ("default", None, "cco", True),
+    ])
+def test_factory_uses_existing_secondary_workspace_client(
+        tmp_path, monkeypatch, caplog, context_profile, native_profile,
+        primary_profile, expected):
+    caplog.set_level("INFO", logger="hermes.plugin")
     class Context:
+        profile_name = context_profile
+
         def get_config(self, key, default=None):
             return settings.get(key, default)
 
@@ -189,9 +208,21 @@ def test_factory_uses_existing_secondary_workspace_client(tmp_path, monkeypatch)
         return secondary
 
     async def scenario():
+        native_adapter = SimpleNamespace(_get_client=workspace_client)
+        if native_profile != "absent":
+            native_adapter._owner_profile = native_profile
+        if primary_profile is not None:
+            native_adapter.gateway_runner = SimpleNamespace(
+                _primary_profile_name=primary_profile)
         supervisor = make_slack_factory(Context())(
-            SimpleNamespace(client=primary),
-            SimpleNamespace(_get_client=workspace_client))
+            SimpleNamespace(client=primary), native_adapter)
+        if not expected:
+            assert supervisor is None
+            assert selected == primary.calls == secondary.calls == []
+            assert [(r.name, json.loads(r.getMessage())) for r in caplog.records] == [
+                ("hermes.plugin.mcs_slack", {
+                    "event": "worker_disabled", "reason": "profile_mismatch"})]
+            return
         assert supervisor is not None
         assert await supervisor._sender.bind()
         assert (await supervisor._sender.perform(_spec()))["result"] == "delivered"
@@ -1339,8 +1370,10 @@ def test_slack_thread_part_needs_the_proven_card_root(led):
                    "remote_id": "1790000000.000001"}
 
 
-def test_rebuilt_slack_app_takes_over_from_live_predecessor(tmp_path,
-                                                            monkeypatch):
+@pytest.mark.parametrize("launcher", ["default", "cco"])
+@pytest.mark.parametrize("foreign_owner", [None, "foreign"])
+def test_rebuilt_slack_app_takes_over_from_live_predecessor(
+        tmp_path, monkeypatch, caplog, launcher, foreign_owner):
     """Hermes rebuilds its AsyncApp on an in-process reconnect and re-runs
     the factory on the new app while the old supervisor still holds the
     scope lock; the successor must take over and wire its handlers."""
@@ -1355,7 +1388,7 @@ def test_rebuilt_slack_app_takes_over_from_live_predecessor(tmp_path,
                 "team_id": "T_SYNTHETIC", "application_id": "A_SYNTHETIC",
                 "channel_id": "C_SYNTHETIC", "profile": "cco",
                 "allowed_user_ids": {"U_OPERATOR"}, "project_ids": {1}}
-    logs = []
+    caplog.set_level("INFO", logger="hermes.plugin")
 
     class App:
         def __init__(self):
@@ -1375,30 +1408,75 @@ def test_rebuilt_slack_app_takes_over_from_live_predecessor(tmp_path,
         def view(self, name):
             return self._wire(name)
 
+    config = {
+        "slack_adapter_enabled": True, "slack_team_id": settings["team_id"],
+        "slack_application_id": settings["application_id"],
+        "slack_channel_id": settings["channel_id"], "slack_profile": "cco",
+        "slack_allowed_user_ids": ["U_OPERATOR"], "project_ids": [1],
+        "data_root": str(tmp_path),
+    }
+
     class Ctx:
+        profile_name = launcher
+
+        def get_config(self, key, default=None):
+            return config.get(key, default)
+
         def spawn_task(self, coro, name=None):
             return asyncio.ensure_future(coro)
 
         def on_unload(self, fn):
             pass
 
+    factory = make_slack_factory(Ctx())
+
     async def scenario():
-        old_app, new_app = App(), App()
-        old = slack_tasks.Supervisor(ctx=Ctx(), app=old_app, adapter=None,
-                                     settings=settings,
-                                     log=lambda e, **f: logs.append(e))
-        assert old.start()
-        await asyncio.wait_for(old_app.wired.wait(), 5)
-        new = slack_tasks.Supervisor(ctx=Ctx(), app=new_app, adapter=None,
-                                     settings=settings,
-                                     log=lambda e, **f: logs.append(e))
-        assert new.start()
-        await asyncio.wait_for(new_app.wired.wait(), 5)
-        assert old._task.done()
-        assert not old._actions._active and new._actions._active
-        assert "scope_lock_unavailable" not in logs
-        new.unload()
-        await new._task
+        supervisors = []
+        key = registry.scope_key(settings)
+
+        def connect(app, owner):
+            native = SimpleNamespace(
+                _owner_profile=owner,
+                gateway_runner=SimpleNamespace(_primary_profile_name="default"),
+                _get_client=lambda channel, team_id=None: app.client)
+            supervisor = factory(app, native)
+            if supervisor is not None:
+                supervisors.append(supervisor)
+            return supervisor
+
+        old_app, new_app, foreign_app = App(), App(), App()
+        try:
+            assert connect(foreign_app, foreign_owner) is None
+            assert key not in slack_tasks._LIVE
+            old = connect(old_app, "cco")
+            assert old is not None
+            await asyncio.wait_for(old_app.wired.wait(), 5)
+            assert slack_tasks._LIVE[key] is old
+
+            assert connect(foreign_app, foreign_owner) is None
+            assert slack_tasks._LIVE[key] is old
+            assert not old._stopping and old._actions._active
+
+            new = connect(new_app, "cco")
+            assert new is not None
+            await asyncio.wait_for(new_app.wired.wait(), 5)
+            assert old._task.done()
+            assert not old._actions._active and new._actions._active
+            assert slack_tasks._LIVE[key] is new
+
+            assert connect(foreign_app, foreign_owner) is None
+            assert slack_tasks._LIVE[key] is new
+            assert not new._stopping and new._actions._active
+            assert foreign_app.handlers == foreign_app.client.calls == []
+            assert not any("scope_lock_unavailable" in record.getMessage()
+                           for record in caplog.records)
+        finally:
+            for supervisor in supervisors:
+                supervisor.unload()
+            await asyncio.wait_for(asyncio.gather(
+                *(supervisor._task for supervisor in supervisors)), 5)
+        assert key not in slack_tasks._LIVE
+
     asyncio.run(scenario())
 
 
