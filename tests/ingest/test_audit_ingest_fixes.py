@@ -179,3 +179,38 @@ def test_ledger_connection_uses_full_fsync(tmp_path):
     assert db.db.execute("PRAGMA fullfsync").fetchone()[0] == 1
     assert db.db.execute("PRAGMA checkpoint_fullfsync").fetchone()[0] == 1
     db.close()
+
+
+@pytest.mark.parametrize("stage,margin", [
+    (run_check.stage_self_probe, run_check.SELF_PROBE_MARGIN_S),
+    (run_check.stage_backfill, 30)])
+@pytest.mark.parametrize("patients,run_ids", [(2, (1, 3, 5)), (3, (1, 4, 7))])
+def test_walk_resumes_where_the_deadline_stopped_whatever_the_run_ids(
+        tmp_path, monkeypatch, stage, margin, patients, run_ids):
+    """CR: run ids are shared with deep and other runs, so a rotation keyed
+    on them restarted at the same patient every tick. Each stage keeps its
+    own cursor: one visit per tick still reaches every patient in turn."""
+    db = _ledger(tmp_path)
+    for pid in range(1, patients + 1):
+        db.ensure_patient(pid)
+        db.save_messages([_message(mid=pid * 10, project_id=pid)])
+        db.set_coverage(pid, db.high_watermark(pid))
+    visited = []
+
+    def latest(pid):
+        visited.append(pid)
+        return {"message_id": pid * 10, "is_self_only": False}
+
+    def history(pid, since, **kw):
+        visited.append(pid)
+        raise mcs_adapter.MCSError("http_error", status=502)
+    adapter = SimpleNamespace(fetch_latest=latest, fetch_history=history)
+    monkeypatch.setattr(run_check, "time", SimpleNamespace(
+        monotonic=lambda: len(visited) * 100, time=time.time))
+    ticks = []
+    for run_id in run_ids:
+        visited.clear()
+        stage(adapter, db, {"errors": [], "new_messages": 0, "backfilled": 0}, margin + 50, run_id)
+        ticks.append(list(visited))
+    assert ticks == [[i % patients + 1] for i in range(len(run_ids))]   # in turn, wrapping
+    db.close()

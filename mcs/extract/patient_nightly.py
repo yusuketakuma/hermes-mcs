@@ -339,13 +339,23 @@ def _pending(db, pid, cfg, *, now=None):
     return snapshot, progress, pending
 
 
+def _out_of_scope(snapshot) -> bool:
+    """No readable scope, or MCS explicitly refused this patient: not nightly work.
+    A fetch failure of another kind stays in scope (not counted as nothing to do)."""
+    return not snapshot["scope"] or snapshot["scope"].get("fetch_reason") in (
+        "forbidden", "permission_denied", "access_revoked")
+
+
 def status(db, cfg):
-    """Count work states without returning patients, source values or summaries."""
+    """Count work states without returning patients, source values or summaries.
+    Patients run_due never works on are left out, so the counts match the worker."""
     counts = dict.fromkeys(("initial_pending", "delta_pending", "history_pending",
                            "audit_pending", "failed", "complete"), 0)
     for row in db.execute("SELECT project_id FROM patients WHERE is_archived=0 ORDER BY project_id"):
         pid = row[0]
         snapshot, progress, pending = _pending(db, pid, cfg)
+        if _out_of_scope(snapshot):
+            continue
         old, _ = _latest(db, KIND, pid)
         counts["initial_pending"] += int(not old)
         counts["delta_pending"] += int(bool(old) and pending["A"])
@@ -470,7 +480,7 @@ def run_due(ledger, cfg, *, deadline, admit):
             return {"status": "deferred", "done": 0}
         pid = row[0]
         snapshot, progress, pending = _pending(ledger.db, pid, cfg, now=now)
-        if not snapshot["scope"] or snapshot["scope"].get("fetch_reason") in ("forbidden", "permission_denied", "access_revoked"):
+        if _out_of_scope(snapshot):
             continue
         for lane, due in pending.items():
             if due:

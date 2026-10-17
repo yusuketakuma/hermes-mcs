@@ -1614,7 +1614,6 @@ def recover(if_stale=False):
             return git_failed("status")
         if head == target:
             if not clean:
-                tree_reset = True
                 foreign = _local_changes_outside(prev, target)
                 if foreign is None:
                     return git_failed("diff")
@@ -1623,6 +1622,9 @@ def recover(if_stale=False):
                                     + ",".join(foreign)[:160])
                 if _runtime_mode() == "standalone" and not _standalone_target_supported(target):
                     return escalate("standalone_runtime_missing_in_target")
+                # only a reset that passed both gates counts: an escalated pass must
+                # not make every later pass of the same condition bounce the drainers
+                tree_reset = True
                 r = _git(["reset", "--hard", target])
                 if r is None or r.returncode != 0:
                     return git_failed("reset --hard")

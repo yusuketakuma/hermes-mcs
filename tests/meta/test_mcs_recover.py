@@ -1662,3 +1662,28 @@ def test_recovery_notice_explains_reason_without_raw_details(rec, detail, expect
     message = rec._recovery_explanation(detail)
     assert expected in message
     assert "synthetic" not in message
+
+
+def test_refused_reset_at_target_does_not_bounce_drainers_every_pass(rec, tmp_path, monkeypatch):
+    """CR: HEAD at target with a manual edit outside the update escalates
+    without resetting; that must not count as a tree reset, so only the
+    first pass bounces the drainers and the edit is kept."""
+    repo = _make_repo(tmp_path)
+    (repo / "g.txt").write_text("operator")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "c2")
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "f.txt").write_text("target")
+    _git(repo, "commit", "-qam", "target")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "g.txt").write_text("MANUAL")
+    calls = []
+    monkeypatch.setattr(rec, "_restart_drainers",
+                        lambda **k: calls.append(k.get("bounce", True)) or [])
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(_applying(prev, sha=target, stage="applying"), f)
+    for _ in range(3):
+        assert rec.recover() == 1
+    assert calls == [True, False, False]
+    assert (repo / "g.txt").read_text() == "MANUAL"
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target

@@ -1295,15 +1295,42 @@ def stage_thread_read(adapter, ledger, result, deadline):
 
 # ---------- stage: coverage backfill ----------
 
-def _rotated(rows: list, run_id) -> list:
-    """Start each tick's patient walk one position later, so a deadline
-    break does not skip the same tail patients every tick."""
-    # shortcut: stateless rotation by run_id — a skipped patient waits up
-    # to n-m ticks; a persisted cursor would bound it to ~n/m ticks
-    if not rows or not isinstance(run_id, int):
+WALK_CURSOR_KIND = "patient_walk_cursor_v1"
+
+
+def _walk_order(ledger, stage: str) -> list:
+    """This stage's patient walk, starting where its last deadline stopped.
+    Run ids are shared with deep and other runs, so they cannot order a
+    walk; the stage's own stored cursor (one artifact row) does."""
+    rows = list(ledger.frontier_patients())
+    cur = ledger.db.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND json_valid(content) "
+        "AND json_valid(meta) AND json_extract(meta,'$.stage')=? "
+        "ORDER BY artifact_id DESC LIMIT 1", (WALK_CURSOR_KIND, stage)).fetchone()
+    nxt = json.loads(cur[0]).get("next") if cur else None
+    if not rows or type(nxt) is not int:
         return rows
-    k = (run_id - 1) % len(rows)   # run 1 starts at the head
+    k = next((i for i, r in enumerate(rows) if r["project_id"] >= nxt), 0)
     return rows[k:] + rows[:k]
+
+
+def _save_walk(ledger, stage: str, nxt) -> None:
+    """Store where the next tick of this stage starts (one row per stage)."""
+    if type(nxt) is not int:
+        return
+    content = json.dumps({"next": nxt})
+    row = ledger.db.execute(
+        "SELECT artifact_id, content FROM artifacts WHERE kind=? AND json_valid(meta) "
+        "AND json_extract(meta,'$.stage')=? ORDER BY artifact_id DESC LIMIT 1",
+        (WALK_CURSOR_KIND, stage)).fetchone()
+    if row and row[1] == content:
+        return
+    with ledger.db:
+        if row:
+            ledger.db.execute("UPDATE artifacts SET content=?, created_at=? WHERE artifact_id=?",
+                              (content, time.time(), row[0]))
+        else:
+            ledger.artifact_add_tx(WALK_CURSOR_KIND, content, meta={"stage": stage})
 
 
 def stage_backfill(adapter, ledger, result, deadline, run_id,
@@ -1320,10 +1347,13 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
     newest stored message, so storing a new unread cannot skip older
     unfetched items (Oracle B06). Coverage only advances on a complete
     walk; a gap stays visible via coverage_lag."""
-    for row in _rotated(ledger.frontier_patients(), run_id):
+    order = _walk_order(ledger, "backfill")
+    nxt = None
+    for row in order:
         pid = row["project_id"]
         if time.monotonic() > deadline - 30:
             result["errors"].append("deadline_exceeded")
+            nxt = pid   # the next tick starts at the first patient not reached
             break
         wm = ledger.high_watermark(pid)
         cov = ledger.coverage_ts(pid)
@@ -1394,6 +1424,8 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
                         {"pid": pid, "lag_s": lag, "reason": stall})
                     result["errors"].append(
                         f"backfill {pid}: coverage_stalled_{stall}")
+    # only a deadline moves the cursor; a full walk or an exception leaves it as it was
+    _save_walk(ledger, "backfill", nxt)
 
 
 def _head_stall(ledger, pid: int) -> str | None:
@@ -1434,13 +1466,16 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
     (probe_mid) so it is not re-fetched every tick.
     """
     probed = 0
-    for row in _rotated(ledger.frontier_patients(), run_id):
+    order = _walk_order(ledger, "self_probe")
+    nxt = None
+    for row in order:
         pid = row["project_id"]
         wm = ledger.high_watermark(pid)
         if not wm:
             continue  # never imported — the durable history jobs own it
         if time.monotonic() > deadline - SELF_PROBE_MARGIN_S:
             result["errors"].append("self_probe: deadline_exceeded")
+            nxt = pid
             break
         try:
             probe = adapter.fetch_latest(pid)
@@ -1495,6 +1530,7 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
             result["errors"].append(f"probe {pid}: {batch.error.kind}")
             if isinstance(batch.error, SessionExpired):
                 raise batch.error
+    _save_walk(ledger, "self_probe", nxt)
     result["self_probe"] = probed
 
 

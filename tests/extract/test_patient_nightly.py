@@ -705,3 +705,21 @@ def test_unbrokered_nightly_request_sends_pinned_slot(monkeypatch):
                             nightly.time.time() + 90) == {}
     assert len(sent) == 1
     assert sent[0]["id_slot"] == 2
+
+
+@pytest.mark.parametrize('reason', ['forbidden', 'permission_denied', 'access_revoked'])
+def test_status_counts_only_patients_the_worker_would_work_on(runtime, reason):
+    # an explicitly refused patient is out of scope for both; another fetch failure stays in scope
+    led, _, calls = runtime
+    seed(led, mid=1, pid=1)
+    seed(led, mid=2, pid=2)
+    seed(led, mid=3, pid=3)
+    led.db.execute('UPDATE patients SET fetch_reason=? WHERE project_id=2', (reason,))
+    led.db.execute("UPDATE patients SET fetch_reason='timeout' WHERE project_id=3")
+    led.db.commit()
+    assert nightly.status(led.db, CFG)['initial_pending'] == 2
+    finish(runtime)
+    assert {p['project_id'] for p in calls if 'source' in p} <= {1, 3}
+    assert document(led, pid=2) is None
+    counts = nightly.status(led.db, CFG)
+    assert counts['initial_pending'] == 0 and counts['complete'] == 2
