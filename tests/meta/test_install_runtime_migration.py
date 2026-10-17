@@ -35,7 +35,9 @@ def _held(lock):
     return fd
 
 
-@pytest.mark.parametrize("previous", [PREVIOUS, "6f35b1ed84536f7e7fd2f605f7779dd051cce05f"])
+@pytest.mark.parametrize("previous", [PREVIOUS, "6f35b1ed84536f7e7fd2f605f7779dd051cce05f",
+                                      "f36c1da0016ce14c9c531cb9514ab4b0b667240d",
+                                      "b7758d8555931846f4b8f798d4ea9715f65077ca"])
 def test_previous_pin_moves_to_the_current_pin_then_venv_is_rebuilt(tmp_path, previous):
     home, hermes_home, checkout, venv, lock, env = _established(tmp_path, previous)
     fd = _held(lock)

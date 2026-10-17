@@ -1,0 +1,19 @@
+{
+  "category": "security",
+  "title": "Hermesの接続・認証で使う依存を修正版へ更新",
+  "summary": "Hermesの接続・認証に使う依存の既知の問題に対処した固定版へ移行します。独立動作用の接続環境は従来の固定版を維持します。",
+  "upgrade": "Hermes経由の環境は、通常の更新手順で再導入（--reinstall）を指定し、gatewayを再起動してください。既存の省略オプションと復旧専用Pythonは維持します。以前の固定版は移行元としてだけ扱い、更新成功の代替には使いません。独立動作（Hermesなし）ではHermesの移行は不要です。",
+  "details": [
+    "Hermes companion 2c08ca7ade8f867d07e4bff6581be54405b0c9d0 はv0.22.2統合版b7758d8を基準に、aiohttp3.14.5・PyJWT2.15.1・mcp2.3.0・slack-sdk3.45.0と、必要なmcp-types2.3.0・yarl1.25.1だけを更新。",
+    "aiohttp GHSA-2g87-pp6c-29x5、PyJWTの版別advisory、mcp GHSA-84m7-p3x7-pcfvを一次資料へ照合。PyPIの空の一覧だけでは安全と判定しない。PyJWTのoptions再利用は完全合成の再現条件で呼出元の設定が変わらず、期限切れを拒否することを確認。",
+    "uv.lockの整合と正規installer/CIの実resolver・import元・実版は区別して受入。core PyJWTとdev mcpも既存の実SDK版照合へ追加。",
+    "install.sh・mcs_update・CIの固定SHAを一致させ、b7758d8を認識済み移行元へ追加。未知のcheckout・ローカル変更・人承認・holdの保護は維持。",
+    "一次資料: https://github.com/yusuketakuma/hermes-agent/commit/2c08ca7ade8f867d07e4bff6581be54405b0c9d0、https://github.com/aio-libs/aiohttp/security/advisories/GHSA-2g87-pp6c-29x5"
+  ],
+  "refs": [
+    "install.sh",
+    "mcs/ops/mcs_update.py",
+    ".github/workflows/ci.yml",
+    "integration/test_pinned_sdk_versions.py"
+  ]
+}

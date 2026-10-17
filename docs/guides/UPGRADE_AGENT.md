@@ -1,6 +1,6 @@
 # MCS 更新実行手順書（AIエージェント用）
 
-1.0.25候補の推奨Hermes agentはv0.22.2ベースのMCS companion（固定commit `b7758d8555931846f4b8f798d4ea9715f65077ca`）です。新規導入・CI・更新の固定値をそろえています。以前の固定版 `f36c1da` と、それ以前の認識済み固定版は再導入経路の移行対象です。変更中・未知のcheckoutは自動で置き換えません。Hermes経由の環境は再導入（`--reinstall`）で固定版を移行し、gatewayを再起動します。独立動作（Hermesなし）の環境はHermesの移行対象ではありません。
+1.0.25候補の推奨Hermes agentはv0.22.2ベースのMCS companion（固定commit `2c08ca7ade8f867d07e4bff6581be54405b0c9d0`）です。新規導入・CI・更新の固定値をそろえています。以前の固定版 `b7758d8`・`f36c1da` と、それ以前の認識済み固定版は再導入経路の移行対象です。変更中・未知のcheckoutは自動で置き換えません。Hermes経由の環境は再導入（`--reinstall`）で固定版を移行し、gatewayを再起動します。独立動作（Hermesなし）の環境はHermesの移行対象ではありません。
 
 
 このガイドはv1.0.25候補のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は受入票で確認する。

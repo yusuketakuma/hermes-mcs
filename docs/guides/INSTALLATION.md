@@ -1,6 +1,6 @@
 # インストールガイド
 
-1.0.25候補の推奨Hermes agentは **[公式v0.22.2](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.2)をベースにしたMCS companion** です。導入とCIは同じcommit `b7758d8555931846f4b8f798d4ea9715f65077ca` に固定します。MCS用の本人確認コンテキストと認証設定の互換性を維持した版を使います。既存checkoutの移行は更新手順に従います。この固定commitはMCS companionの公開ブランチへ反映済みで、固定SHAの取得と実SDKによる合成統合テストを確認しています。本番への反映は更新手順で別途行います。
+1.0.25候補の推奨Hermes agentは **[公式v0.22.2](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.2)をベースにしたMCS companion** です。導入とCIは同じcommit `2c08ca7ade8f867d07e4bff6581be54405b0c9d0` に固定します。MCS用の本人確認コンテキストと認証設定の互換性を維持した版を使います。既存checkoutの移行は更新手順に従います。この固定版は依存の既知の問題に対処した候補です。公開前に、配布元からの固定SHAの取得と実SDKによる合成統合テストを別々に確認します。本番への反映は更新手順で別途行います。
 
 **初めての方は[日本語の対話形式で進める手順](EASY_SETUP.md)を先にお読みください。** このページは設定の詳細と管理担当者向けの補足です。
 

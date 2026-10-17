@@ -157,8 +157,9 @@ MIGRATION_INSTALL_ARGS = ("--no-llm", "--no-plugin")
 KEEP_CHECKOUT_ENV = "MCS_UPDATE_KEEP_HERMES_CHECKOUT"
 # mirror install.sh: a migration accepts the current pin as is and moves only
 # the previous pins (HERMES_PIN / HERMES_PREVIOUS_PINS)
-HERMES_PIN = "b7758d8555931846f4b8f798d4ea9715f65077ca"
-HERMES_PREVIOUS_PINS = frozenset({"f36c1da0016ce14c9c531cb9514ab4b0b667240d",
+HERMES_PIN = "2c08ca7ade8f867d07e4bff6581be54405b0c9d0"
+HERMES_PREVIOUS_PINS = frozenset({"b7758d8555931846f4b8f798d4ea9715f65077ca",
+                                  "f36c1da0016ce14c9c531cb9514ab4b0b667240d",
                                   "6f35b1ed84536f7e7fd2f605f7779dd051cce05f",
                                   "fd50a275e2616118c48fe07e7e1c878782b15ccd",
                                   "1e8fbfe6b41399a46e232f6cde5618cfdfa2729a",
