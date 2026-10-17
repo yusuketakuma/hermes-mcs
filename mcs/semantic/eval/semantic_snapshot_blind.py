@@ -57,6 +57,8 @@ def prepare(run: dict, reviewer_ids: list[str]) -> dict:
             # Source scope identifiers and generation provenance stay with coordinator.
             source = [{'body': m['body'], 'posted_at': m.get('posted_at'),
                        'body_state': m.get('body_state'),
+                       'evaluation_target': (row['bundle'].get('target_message_ids') is None
+                                             or m['message_id'] in row['bundle']['target_message_ids']),
                        'patient_reports': m.get('patient_reports', [])}
                       for m in row['bundle']['messages']]
             case = {'review_id': uuid.uuid4().hex, 'source': {'project_type': row['bundle'].get('project_type'),
@@ -145,9 +147,9 @@ def merge(run: dict, coordinator_key: dict, reviews: list[dict],
     for index, (left, right) in enumerate(zip(first, second, strict=True)):
         agreement = left[1]['label_sha256'] == right[1]['label_sha256']
         _require(agreement or decided is not None, 'adjudication_required')
-        final = copy.deepcopy(decided[index][0] if decided is not None else left[0])
+        final = copy.deepcopy(left[0] if agreement else decided[index][0])
         final['reviews'] = [left[1], right[1]]
-        if decided is not None:
+        if not agreement:
             final['adjudication'] = decided[index][1]
         result[index]['label'] = final
     return result

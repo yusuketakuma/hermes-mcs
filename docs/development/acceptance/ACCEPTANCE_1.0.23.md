@@ -1,6 +1,6 @@
 # 1.0.23 リリース候補受入票
 
-2026-10-17。作業branch `release/v1.0.23-prep`、基準HEAD `5d71c1a0d7e51d8da1aec2bd6006626b68a26ac6`、前版 `v1.0.22 / f8c6c20d`。未コミット差分を含む実装中の記録であり、公開可ではない。
+2026-10-17。作業branch `release/v1.0.23-prep`、基準HEAD `5d71c1a0d7e51d8da1aec2bd6006626b68a26ac6`、前版 `v1.0.22 / f8c6c20d`。統合候補 `03b9b078` と独立レビュー修正を追跡する。公開可の判定ではない。
 
 ## 範囲と現在の判定
 
@@ -9,11 +9,11 @@ Fableレビューの1〜32、Slack/Discord表示改善、導入・更新・復�
 | レビュー項目 | 成果物・条件 | 状態 |
 |---|---|---|
 | 1 | 既存レイアウト固定・移行対象の読取診断 | 実装・局所検証済み |
-| 2 | rollback時の再投稿防止 | 更新・復旧経路の確認中 |
+| 2 | rollback時の再投稿防止 | 実装・通常/外部recoverの関連335件成功 |
 | 3 | worker所有者と起動証跡のdoctor/health診断 | 実装・局所検証済み |
 | 4 | 所有者不明時の拒否・固定SDK属性契約 | 実装済み・固定Hermes 21件とstandalone 12件成功 |
 | 5 | LINE WORKS文書・画面の整合 | guide・SVG/PNG2枚・生成check・目視済み |
-| 6 | 1.0.23更新手順 | 更新済み・updater最終契約と照合待ち |
+| 6 | 1.0.23更新手順 | 更新済み・rollback下限と復元制約を照合済み |
 | 7 | 1.0.22からの更新fixture | schema/更新364件成功・tick19件は編集静止後 |
 | 8 | 名前付き受入ゲートと固定候補 | 本票で追跡中 |
 | 9 | 待機理由行列・Discord所有者照合 | 実装・局所検証済み |
@@ -29,8 +29,8 @@ Fableレビューの1〜32、Slack/Discord表示改善、導入・更新・復�
 | 19 | 復元collect-only・配送holdの可視化 | 実装・局所検証済み |
 | 20 | RPO鮮度・年齢/遅延の区別・overrideなし | 実装・文書化済み |
 | 21 | offsite/verify/escrow証跡分離 | 実装・局所回帰済み（root313件・別保管鍵CLI1件）。固定候補全体検証は別ゲート |
-| 22 | 全profile再起動と稼働証拠 | 診断実装済み・更新経路確認中 |
-| 23 | 表示変更の分類・更新注意 | 最終文書整合待ち |
+| 22 | 全profile再起動と稼働証拠 | 診断・更新手順整合済み。実機再起動は未実施 |
+| 23 | 表示変更の分類・更新注意 | 変更記録・CHANGELOG・READMEの整合確認済み |
 | 24 | clean install・22→23 plan/apply | 更新回帰済み・配布経路確認中 |
 | 25 | standalone所有判定と表示 | 実装・局所検証済み |
 | 26 | レイアウト変化で保留/上限を解除しない | 実装・局所検証済み |
@@ -55,18 +55,18 @@ Fableレビューの1〜32、Slack/Discord表示改善、導入・更新・復�
 | ゲート | 状態 |
 |---|---|
 | 全実装要件→コード/テスト/設定/資産/文書/配布物の対応表 | [取り込み対応表](UPDATE_ITEMS_1.0.23.md)を作成。項目12/13/15の補完実装も同期済み |
-| インストーラー・アップデーター・リカバリーの実入口・中断/再実行/rollback | 担当検証中 |
+| インストーラー・アップデーター・リカバリーの実入口・中断/再実行/rollback | 通常・外部recover関連335件、既存導入/更新fixtureを全体検証で確認 |
 | 全126WTの製品差分・未追跡・独自履歴の処置 | [最終照合台帳](WORKTREE_INTEGRATION_1.0.23.md)で完了。未収録5合成テストを追加、元WT保持。最終候補commitとの再照合は別ゲート |
 | 全repoの不要コード・配置・文書整理 | [全領域調査](REPOSITORY_HYGIENE_1.0.23.md)。削除根拠のある候補0、古い現行文書導線を修正 |
 | `scripts/run_tests.sh` 全体＋関連integration | 編集完了後 |
 | 固定Hermes SDK `check_pinned_sdks.sh hermes` とstandalone SDK | Hermes 21件、standalone 12件成功。固定SDKを隔離導入、生サービス通信なし |
-| `ruff check` CI全範囲、`ci/gates.py`、`ci/mine_gates.py --check` | 最終差分で未完 |
-| `release_notes.py` check/build、`tests/release` | 未完 |
-| `update_readme.py --check`、`readme_release.py --check`、1.0.23 READMEレビュー | 未完 |
-| Slack/LINE WORKS gallery生成・check・目視 | 統合待ち |
+| `ruff check` CI全範囲、`ci/gates.py`、`ci/mine_gates.py --check` | 03b9b078でRuff・全10gate・mine gates成功。後続評価修正後も確認する |
+| `release_notes.py` check/build、`tests/release` | 最終候補で確認待ち |
+| `update_readme.py --check`、`readme_release.py --check`、1.0.23 READMEレビュー | 最終候補で確認待ち |
+| Slack/LINE WORKS gallery生成・check・目視 | Slack8枚・LINE WORKS2枚成功。目視済み、以後画像変更なし |
 | 公式薬剤masterの新規取得時刻・ZIP SHA・bundle検証 | 2026-10-17T02:11:57Z再取得、同梱20261013 ZIP SHA `c3efc8aa772b9bf54cfa992e8df3bc82480f86f35bbeb52522d0997144140fb5` と一致。bundle 19,286行検証成功、activation=false。importer追加変更後も再検証成功 |
 | CodeRabbit固定差分（比較元は前版本番相当SHA、秘密/実データ除外） | round1は131 text files全件、completed/exit0。3指摘のうち2採用、1は既存NULL安全処理により不採用。補完実装と修正後のround2待ち |
-| 最終候補のGit差分・未追跡・意図しない変更確認 | 未完 |
+| 最終候補のGit差分・未追跡・意図しない変更確認 | 最終候補で確認待ち |
 | 最終SHAの必須CI | push未承認につき未実施 |
 
 ## 証跡の所在
@@ -85,7 +85,7 @@ Fableレビューの1〜32、Slack/Discord表示改善、導入・更新・復�
 | D3 | master版間の名称/廃止/経過措置を全行比較、採用辞書への影響、総件数と省略 | `importer.catalog`・`drug_master_compare.compare`と`master-impact`。廃止済み行も保持、旧辞書code照合・総数/省略・固定SHA拒否を専用test/CLIで検証。旧v1互換・8MiB上限維持 |
 | D4 | 開始/中止/増減/変更予定を原文根拠とcode候補で時系列化、人物・時点・予定/実施を区別 | `timeline`のmention/change/drug_groups。`test_drug_reconciliation.py`で本人/家族・過去/予定・否定・動作とepistemicを確認。実施の記載はaffirmed＋performed/done＋asserted/reportedだけ |
 | D5 | 取得済み構造化薬歴と投稿を照合、差の確認候補と情報時点/取得漏れを表示 | `reconcile`。構造化薬歴の取得時点・保存期間・失敗後の旧情報を保持。欠測名・単位不足・他者・古い情報・ページ継続を`test_drug_reconciliation.py`で確認 |
-| W1 | 全126登録WT、非merge68 SHA・merge16 SHAを追跡。既統合/後続置換/レビュー基準を区別し、未収録5合成testsを取り込み | [全件台帳の最終処置](WORKTREE_INTEGRATION_1.0.23.md#最終の意味照合結果)を確認。追加33件・後継機能215件成功。全126WT・非merge68 SHAとmerge16 SHAを処置済み、最終commitは未実施 |
+| W1 | 全126登録WT、非merge68 SHA・merge16 SHAを追跡。既統合/後続置換/レビュー基準を区別し、未収録5合成testsを取り込み | [全件台帳の最終処置](WORKTREE_INTEGRATION_1.0.23.md#最終の意味照合結果)を確認。追加33件・後継機能215件成功。全126WT・非merge68 SHAとmerge16 SHAを処置済み、統合候補03b9b078へ記録済み |
 
 元WTの変更・履歴・保留・未終了ツールを保持する。旧レビューsnapshotや統合済み変更は重複投入せず、取り込み判定と根拠を記録する。
 
@@ -128,3 +128,9 @@ Doctorの既定DB probeによる既存契約の回帰を修正した。DB読取�
 最終4ファイルの評価回帰125件成功。完全合成200caseのgenerate→scoreで全必須metricの分母と数値閾値を満たせることを確認し、syntheticのG6不合格は維持した。実データ評価・実モデル・外部監査・配送は実行していない。後付け改変と不一致の拒否、CLIの私有出力・汎用エラーも確認した。
 
 通常・外部の両recoverでrestore_incompleteをinterrupted_pre_mergeへ誤分類しない修正は関連335件成功。補助的な保留件数SQL失敗を復元全体の失敗としない修正はbackup102件成功。
+
+### 固定候補の独立レビュー追補
+
+Claudeが03b9b078の評価経路を独立確認。二重読みの一致項目を裁定で上書きする指摘を採用し、不一致項目だけ裁定するよう修正。混在2caseの回帰は修正前に失敗、修正後16件成功。複数返信では全sourceを束縛したままtargetのみを評価するよう補完。実runtimeのbundle・summary/audit保存経路を使う回帰、対象と文脈を区別したblind資料、不一致/欠測/bool schema拒否を含む最終131件成功。
+
+全WTの最終HEAD照合では集約先以外の現存123件が初回と一致。2件は初回から実体のない登録であり、新たな削除ではない。証跡 `worktree-head-preservation.json`。

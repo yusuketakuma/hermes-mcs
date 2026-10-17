@@ -158,3 +158,55 @@ def test_merged_labels_flow_through_existing_score_without_promoting_synthetic_o
     report = semantic_snapshot.score(run, merged, {}, CRITERIA)
     assert not report['gate']['g6_eligible']
     assert report['data_origin'] == {'real_authorized': 0, 'synthetic': 1}
+
+
+def test_adjudication_only_changes_disagreed_case_in_mixed_batch():
+    run = run_fixture()
+    second = copy.deepcopy(run['records'][0])
+    second['case_id'] = 'synthetic-second-case'
+    run['records'].append(second)
+    run['predictions_sha256'] = payload_hash(run['records'])
+    run['manifest']['holdout_manifest_sha256'] = payload_hash(holdout_payload(run['records']))
+    pack = prepare(run, ['one', 'two'])
+    key = pack['coordinator_key']
+    reviews = [fill(sheet, key, i) for i, sheet in enumerate(pack['worksheets'])]
+    reviews[1]['cases'][1]['human_labels']['scores'] = {'A': 0.5, 'B': 0.5}
+    adjudication = fill(dict(pack['worksheets'][0], reviewer='three'), key, 0, score=0.25)
+    for document in [*reviews, adjudication]:
+        for index, case in enumerate(document['cases']):
+            human = case['human_labels']
+            human['review_receipt_id'] += f'-{index}'
+            human['label']['receipt']['receipt_id'] += f'-{index}'
+    result = merge(run, key, reviews, adjudication)
+    agreed, disputed = [row['label'] for row in result]
+    assert agreed['patient_state_ab']['off_score'] == 1
+    assert agreed['patient_state_ab']['on_score'] == 1
+    assert agreed['receipt']['reviewer'] == 'one'
+    assert 'adjudication' not in agreed
+    assert disputed['patient_state_ab']['off_score'] == 0.25
+    assert disputed['patient_state_ab']['on_score'] == 0.25
+    assert disputed['receipt']['reviewer'] == 'three'
+    assert disputed['adjudication']['receipt_id'] == 'review-three-1'
+    assert all(len(label['reviews']) == 2 for label in (agreed, disputed))
+    assert evidence_summary(result, run['manifest'], {})['sealed']
+    assert [{k: v for k, v in row.items() if k != 'label'} for row in result] == run['records']
+
+
+def test_worksheets_distinguish_target_from_context_without_source_identifiers():
+    run = run_fixture()
+    row = run['records'][0]
+    row['bundle']['messages'].append({'message_id': 2, 'body': 'synthetic context'})
+    row['bundle']['target_message_ids'] = [1]
+    row['patient_state_ab']['same_case_sha256'] = payload_hash(row['bundle'])
+    run['predictions_sha256'] = payload_hash(run['records'])
+    run['manifest']['holdout_manifest_sha256'] = payload_hash(holdout_payload(run['records']))
+    pack = prepare(run, ['one', 'two'])
+    for sheet in pack['worksheets']:
+        messages = sheet['cases'][0]['source']['messages']
+        assert [m['evaluation_target'] for m in messages] == [True, False]
+        assert all('message_id' not in m for m in messages)
+    reviews = [fill(sheet, pack['coordinator_key'], i)
+               for i, sheet in enumerate(pack['worksheets'])]
+    reviews[0]['cases'][0]['source']['messages'][1]['evaluation_target'] = True
+    with pytest.raises(EvaluationError, match='worksheet_changed'):
+        merge(run, pack['coordinator_key'], reviews)

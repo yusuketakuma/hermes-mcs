@@ -29,7 +29,7 @@ def source_bundle(record, cfg):
     fields = {'schema_version', 'bundle_sha256', 'candidate_fingerprint',
               'policy_fingerprint', 'generation_sha256', 'bundle', 'artifacts',
               'notify_outbox', 'requests', 'finals', 'loop_ids'}
-    if not isinstance(obs, dict) or set(obs) != fields or obs['schema_version'] != 1:
+    if not isinstance(obs, dict) or set(obs) != fields or type(obs['schema_version']) is not int or obs['schema_version'] != 1:
         raise EvaluationError('observation_schema_invalid')
     from semantic_candidate import candidate_fingerprint
     if obs['candidate_fingerprint'] != candidate_fingerprint(cfg):
@@ -57,9 +57,28 @@ def source_bundle(record, cfg):
                 or member.get('body_state') != 'full'):
             raise EvaluationError('observation_source_mismatch')
         ids.add(member['message_id'])
+    root = bundle.get('root_id')
+    if (type(root) is not int or root not in ids
+            or any(m.get('parent_id') not in (None, root) for m in members)):
+        raise EvaluationError('observation_root_invalid')
+    target_members(record, bundle)
     if bundle.get('source_fingerprint') != bundle_fingerprint(members, local_model=resolve(cfg)[1]):
         raise EvaluationError('observation_source_fingerprint_mismatch')
     return bundle
+
+
+def target_members(record, bundle):
+    """Keep the full source context, but evaluate only explicitly sealed targets."""
+    members = bundle['members']
+    targets = record['bundle'].get('target_message_ids')
+    if targets is None:
+        return members  # historical single/all-target snapshots
+    if (not isinstance(targets, list) or not targets
+            or any(type(mid) is not int for mid in targets)
+            or len(set(targets)) != len(targets)
+            or not set(targets) <= {m['message_id'] for m in members}):
+        raise EvaluationError('observation_targets_invalid')
+    return [member for member in members if member['message_id'] in targets]
 
 
 def _rows(db, table, rows, columns, json_fields=()):
@@ -95,6 +114,10 @@ def attach(record, documents, candidate, cfg):
         raise EvaluationError('observation_generation_mismatch')
     fp, policy = bundle['source_fingerprint'], obs['policy_fingerprint']
     members = bundle['members']
+    selected = target_members(record, bundle)
+    selected_ids = {m['message_id'] for m in selected}
+    if len(docs) != len(selected):
+        raise EvaluationError('observation_target_documents_mismatch')
     mids = {m['message_id'] for m in members}
     with closing(sqlite3.connect(':memory:')) as db:
         db.row_factory = sqlite3.Row
@@ -138,7 +161,12 @@ def attach(record, documents, candidate, cfg):
                     or payload.get('target_message_id') not in mids):
                 raise EvaluationError('observation_delivery_binding_mismatch')
         verified = []
-        for member, doc in zip(members, docs, strict=True):
+        for member, doc in zip(selected, docs, strict=True):
+            source = doc.get('source', {})
+            if (str(source.get('message_id')) != str(member['message_id'])
+                    or source.get('revision') != member['revision']
+                    or source.get('source_fingerprint') != fp):
+                raise EvaluationError('observation_document_source_mismatch')
             stored = _current(SimpleNamespace(db=db), 'semantic_facts_v2', member['message_id'], fp, policy)
             if stored is None or _doc_hash(stored['content']) != _doc_hash(doc):
                 raise EvaluationError('observation_document_mismatch')
@@ -147,7 +175,7 @@ def attach(record, documents, candidate, cfg):
                 raise EvaluationError('observation_' + reason)
             verified.extend(ids)
         finals = obs['finals']
-        if not isinstance(finals, list) or len(finals) != len(members):
+        if not isinstance(finals, list) or len(finals) != len(selected):
             raise EvaluationError('observation_finals_incomplete')
         claims, rendered, delivered, targets = [], [], [], set()
         for final in finals:
@@ -155,11 +183,11 @@ def attach(record, documents, candidate, cfg):
                 raise EvaluationError('observation_final_schema_invalid')
             row = db.execute("SELECT * FROM artifacts WHERE artifact_id=? AND kind='semantic_summary'", (final['final_id'],)).fetchone()
             audit = db.execute("SELECT * FROM artifacts WHERE artifact_id=? AND kind='semantic_audit'", (final['audit_id'],)).fetchone()
-            if row is None or audit is None or row['message_id'] != audit['message_id'] or row['message_id'] in targets:
+            if row is None or audit is None or row['message_id'] != audit['message_id'] or row['message_id'] in targets or row['message_id'] not in selected_ids:
                 raise EvaluationError('observation_final_binding_mismatch')
-            for selected, kind in ((row, 'semantic_summary'), (audit, 'semantic_audit')):
+            for selected_row, kind in ((row, 'semantic_summary'), (audit, 'semantic_audit')):
                 newest = db.execute('SELECT MAX(artifact_id) FROM artifacts WHERE kind=? AND message_id=?', (kind, row['message_id'])).fetchone()[0]
-                if newest != selected['artifact_id']:
+                if newest != selected_row['artifact_id']:
                     raise EvaluationError('observation_final_not_current')
             targets.add(row['message_id'])
             summary, meta = json.loads(row['content']), json.loads(row['meta'])
@@ -178,7 +206,7 @@ def attach(record, documents, candidate, cfg):
                 refs = claim.get('fact_refs', [])
                 if any(type(ref) is int for ref in refs):
                     from semantic_projection import project_v2_facts
-                    projection = project_v2_facts(docs[next(i for i, m in enumerate(members) if m['message_id'] == row['message_id'])])
+                    projection = project_v2_facts(docs[next(i for i, m in enumerate(selected) if m['message_id'] == row['message_id'])])
                     if not isinstance(projection, list) or any(type(ref) is not int or not 0 <= ref < len(projection) or not projection[ref].get('fact_id') for ref in refs):
                         raise EvaluationError('observation_claim_fact_binding_missing')
                     claim['fact_refs'] = [projection[ref]['fact_id'] for ref in refs]
@@ -211,7 +239,7 @@ def attach(record, documents, candidate, cfg):
                         'time': {'event_time': fact.get('event_time'), 'valid_time': fact.get('valid_time')},
                         'speaker_relation': {'subject': fact.get('subject'), 'actor': fact.get('actor')}}
             if fact.get('kind') == 'medication_event':
-                enriched['medication'] = projected['drug_ref']
+                enriched['medication'] = projected.get('drug_ref')
             facts.append(enriched)
     out = {**candidate, 'facts': facts, 'claims': claims, 'loops': loops, 'status': 'complete',
            'relations': [relation for doc in docs for relation in doc.get('relations', [])],

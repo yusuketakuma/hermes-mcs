@@ -93,6 +93,7 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
         source_hash = payload_hash({k: v for k, v in snapshot.items()
                                     if k != 'authorization_receipt_sha256'})
         if (not isinstance(authorization, dict) or set(authorization) != expected
+                or type(authorization['schema_version']) is not int
                 or authorization['schema_version'] != 1
                 or authorization['purpose'] != 'sealed_candidate_evaluation'
                 or authorization['data_origin'] != 'real_authorized'
@@ -104,7 +105,7 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
             raise EvaluationError('authorization_receipt_mismatch')
     fingerprint = candidate_fingerprint(cfg)
     output = []
-    from semantic_snapshot_observations import source_bundle, attach
+    from semantic_snapshot_observations import source_bundle, target_members, attach
     for record in records:
         if record.get('data_origin') != snapshot['data_origin']:
             raise EvaluationError('data_origin_mismatch')
@@ -115,6 +116,10 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
             raise EvaluationError('snapshot_body_required')
     for record in records:
         observed_bundle = source_bundle(record, cfg)
+        selected_members = target_members(record, observed_bundle or {'members': record['bundle']['messages']})
+        selected_ids = {m['message_id'] for m in selected_members} if selected_members else None
+        selected_messages = [m for m in record['bundle']['messages']
+                             if selected_ids is None or m['message_id'] in selected_ids]
         started = time.monotonic()
         usage = {'requests': 0, 'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
         telemetry_complete = True
@@ -142,7 +147,7 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
                 arm_cfg = copy.deepcopy(cfg)
                 arm_cfg.setdefault('extract', {})['patient_state_context'] = enabled
                 outputs = []
-                for message in record['bundle']['messages']:
+                for message in selected_messages:
                     context, references = patient_state_context.format_state(
                         message.get('patient_reports', [])) if enabled else ('', {})
                     result = extract_llm.llm_extract(message['body'], context=context or None,
@@ -156,12 +161,12 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
         finally:
             extract_llm._CALL_NOTES.target = prior_target
         started = time.monotonic()
-        for message_index, msg in enumerate(record['bundle']['messages']):
+        for message_index, msg in enumerate(selected_messages):
             member = {'project_id': record['project_id'], 'message_id': msg['message_id'],
                       'revision': msg.get('revision', 'r1'), 'body_original': msg['body'],
                       'body_state': 'full', 'posted_at': msg.get('posted_at', '')}
             if observed_bundle is not None:
-                member = observed_bundle['members'][message_index]
+                member = selected_members[message_index]
             result = semantic_extraction.extract_facts_v2(
                 chat, member, started + 300, jev_client=None,
                 source_fingerprint=(observed_bundle['source_fingerprint']
@@ -176,7 +181,7 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
                      'latency_ms': (time.monotonic() - started) * 1000,
                      'usage': usage if telemetry_complete else None}
         selected = arms['on' if cfg.get('extract', {}).get('patient_state_context') else 'off']['outputs']
-        priority = effective_ai_priority(record['bundle'], selected)
+        priority = effective_ai_priority({**record['bundle'], 'messages': selected_messages}, selected)
         if priority is not None:
             candidate['ai_priority'] = priority
         candidate, observations = attach(record, documents, candidate, cfg)

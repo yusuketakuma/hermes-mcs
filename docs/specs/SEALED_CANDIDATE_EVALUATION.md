@@ -139,14 +139,16 @@ configにはmetrics-onlyの `semantic.fact_source_evidence`、完全長token `fa
 
 ### 私有snapshotの観測adapter
 
+`record.bundle.target_message_ids` に評価対象のmessage IDを重複なしの整数配列で明示できる。全messagesとruntime bundleは文脈として保持してsource fingerprintを照合する一方、facts・A/B・実効AI表示・finals・lifecycleの採点対象は指定投稿だけとする。runtime drainがrootまたは選択targetだけを処理した複数memberのthreadを取り込める。対象外の返信に現世代のfacts/finalsを要求せず、文脈の変更はsource不一致として拒否する。対象集合はholdoutと観測bundle hashに含まれ、採点時の後付け変更を認めない。省略時は従来通り全member対象。空・重複・bundle外のIDは拒否する。
+
 各recordの任意の `sealed_observations` に次を含める。外部DBへの接続や後付けmetricsの入力ではなく、許可されたsnapshotの実artifact/outbox行を、固定schemaのインメモリSQLiteへ読み込む。
 
 - `schema_version:1`、入力bundleの `bundle_sha256`、現在の `candidate_fingerprint` と `policy_fingerprint`。
 - `bundle`: runtimeの `thread_bundle` 形。全memberのproject/message/body/revision/posted_atを入力と照合し、`bundle_fingerprint(..., local_model=現在model)` を再計算する。
-- `generation_sha256`: 生成された全documentのdoc配列hash。保存済みsemantic_facts_v2も、同じ生成docの `_doc_hash` と完全一致する必要がある。
+- `generation_sha256`: 評価対象として生成されたdocumentのdoc配列hash（元bundleのmember順）。保存済みsemantic_facts_v2も、同じ生成docの `_doc_hash` と完全一致する必要がある。
 - `artifacts`: artifact_id/project_id/message_id/kind/content/meta/created_at。許可kindはfacts-v2、fact-audit、summary、summary-audit、loop-candidate/event/rejected、request-loop-linkのみ。content/metaはJSON objectで、全行のsource/policy/project/messageを照合する。request-loop-linkは既存保存形式に従いcontent内のsource_fingerprint/policy_fingerprintを使う。
 - `notify_outbox`: event_id/project_id/kind/state/payload/progress。semantic_noticeのみ。実際のchunk receiptを既存 `fact_lifecycle` で検査する。`requests`: project_id/request_id/status/revision/title。
-- `finals`: 各memberにつきfinal_id/audit_id/summary_sha256。最新のsummaryと、runtime `_write_result` が同一transactionで直後に保存するauditの連続ID対を照合する。PASSとtarget revisionを要求し、古い対への差替えを拒否する。
+- `finals`: 各評価対象につきfinal_id/audit_id/summary_sha256。最新のsummaryと、runtime `_write_result` が同一transactionで直後に保存するauditの連続ID対を照合する。PASSとtarget revisionを要求し、古い対への差替えを拒否する。
 - `loop_ids`: snapshot内のloop_candidate artifact IDの昇順全件。`effective_loop_state` で現世代を読む。報告上の完了候補はresolvedへ変換せず、人が結合したrequestが全てdone/cancelledのときだけresolvedとする。
 
 監査は既存fact-auditのdoc hash/PASS/coverageを検査する。verified/rendered/deliveredはそれぞれ独立したreceiptから取り、前段の成功から次段を推定しない。最終claimsは保存済みsummaryを読み、整数fact_refsは同じdocの既存 `project_v2_facts` 順から安定fact IDへ変換する。全claimの参照が検証済みfact集合に含まれなければ拒否する。candidateの属性比較用には、polarity→negation、event_time/valid_time→time、subject/actor→speaker_relation、既存projectionのdrug_ref→medicationを明示的に写す。人labelもこの構造で採点する。
@@ -182,3 +184,5 @@ prepare出力は `worksheets`（2名分）と `coordinator_key` を含む私有p
 [fact-source回帰](../../tests/semantic/test_fact_source.py)は実際の設定書込みと旧token拒否、人承認なしでの拒否を検査する。`candidate_testkit.approved_config` の集計・receiptは全て捏造した単体テスト入力であり、公開用の品質結果でも実データの昇格証拠でもない。
 
 標準の隔離runnerで実行する。実患者データ・原本DB・ローカルLLM・Jevは使用しない。
+
+二重読み資料は各投稿の評価対象/文脈のみを区別し、元の投稿IDは表示しない。候補の内容をA/B出力と照合すると設定armを推測できる場合があり、資料生成だけでは実際の盲検を保証しない。一致済みの二重判断は第三者裁定で置き換えず、不一致の項目だけを裁定する。

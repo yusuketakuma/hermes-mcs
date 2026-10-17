@@ -15,7 +15,7 @@ from semantic_testkit import _record, MANIFEST, CRITERIA
 from test_semantic_lifecycle import _chain, _receipt, v2_fact
 
 
-def fixture(tmp_path, cfg=None, full=False):
+def fixture(tmp_path, cfg=None, full=False, multi=False):
     cfg = cfg or {}
     facts = [v2_fact('f1', evidence_ids=['e1'])]
     if full:
@@ -23,11 +23,18 @@ def fixture(tmp_path, cfg=None, full=False):
     ledger, final_id, event_id, chunks, summary = _chain(tmp_path, facts)
     try:
         from local_llm import resolve
-        bundle = thread_bundle(ledger, 1, 1, local_model=resolve(cfg)[1])
+        if multi:
+            from semantic_testkit import _patient, _message
+            patient = _patient(ledger)
+            root = _message(1)
+            root.reply_count = 1
+            patient.messages = [root, _message(2, parent=1, body='合成の返信文脈')]
+            ledger.save_patient(patient)
+        bundle = thread_bundle(ledger, 1, 1, target_ids=[1] if multi else None, local_model=resolve(cfg)[1])
         fp, policy = bundle['source_fingerprint'], observations.policy_identity(cfg)
         _receipt(ledger, event_id, 'accepted', len(chunks))
         doc = json.loads(ledger.db.execute("SELECT content FROM artifacts WHERE kind='semantic_facts_v2'").fetchone()[0])
-        doc['source']['source_fingerprint'] = fp
+        doc['source'].update(source_fingerprint=fp, message_id='1', revision=bundle['members'][0]['revision'])
         if full:
             doc['relations'] = [{'left_fact_id': 'f1', 'right_fact_id': 'f2', 'type': 'COMPLEMENTS'}]
         from semantic_v4 import _doc_hash
@@ -48,6 +55,16 @@ def fixture(tmp_path, cfg=None, full=False):
         audit_id = ledger.artifact_add('semantic_audit', json.dumps({'status': 'PASS', 'findings': [], 'target_message_id': 1}),
                                        project_id=1, message_id=1,
                                        meta={'fingerprint': fp, 'policy_fingerprint': policy, 'audit_status': 'PASS'})
+        if multi:
+            summary = {**summary, 'limitations': ['合成の返信を文脈として保持'],
+                       'claims': [{'claim_id': 'c1', 'text': '合成事実', 'fact_refs': [0]}]}
+            from semantic_drain import _write_result
+            with ledger.db:
+                _write_result(ledger, 1, 1, {'summary': summary, 'findings': [], 'repaired': False},
+                              fp, {m['message_id']: m for m in bundle['members']},
+                              'PASS', policy, 'enforce')
+            final_id = ledger.db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE kind='semantic_summary'").fetchone()[0]
+            audit_id = ledger.db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE kind='semantic_audit'").fetchone()[0]
         loop_ids = []
         if full:
             loop_ids.append(ledger.artifact_add('loop_candidate', json.dumps({
@@ -68,9 +85,11 @@ def fixture(tmp_path, cfg=None, full=False):
         record.pop('label')
         record.update(project_id=1, data_origin='synthetic')
         record['bundle']['attachments'] = []
-        record['bundle']['messages'] = [dict(message_id=1, body=m['body_original'],
+        record['bundle']['messages'] = [dict(message_id=m['message_id'], body=m['body_original'],
                                              revision=m['revision'], posted_at=m['posted_at'])
                                         for m in bundle['members']]
+        if multi:
+            record['bundle']['target_message_ids'] = [1]
         record['sealed_observations'] = dict(schema_version=1, bundle_sha256=payload_hash(record['bundle']),
             candidate_fingerprint=candidate_fingerprint(cfg), policy_fingerprint=policy,
             generation_sha256=payload_hash([doc]), bundle=bundle, artifacts=rows,
@@ -312,3 +331,74 @@ def test_cli_database_error_is_private_and_does_not_write_output(tmp_path, monke
                           '--output', str(output)]) == 2
     assert capsys.readouterr().err == 'sealed snapshot evaluation failed\n'
     assert not output.exists()
+
+
+def test_multi_member_runtime_target_receipts_do_not_require_context_finals(tmp_path, monkeypatch):
+    import semantic
+    import extract_llm
+    import semantic_extraction
+    monkeypatch.setattr(semantic, 'llm_model', lambda: 'synthetic-local')
+    record, docs, cfg = fixture(tmp_path, multi=True)
+    obs = record['sealed_observations']
+    assert len(obs['bundle']['members']) == 2
+    assert {r['message_id'] for r in obs['artifacts']} == {1}
+    assert len(obs['finals']) == 1
+    extracted, ab_bodies = [], []
+    def extract(chat, member, deadline, **kwargs):
+        extracted.append(member['message_id'])
+        assert kwargs['source_fingerprint'] == obs['bundle']['source_fingerprint']
+        return copy.deepcopy(docs[0])
+    def ab(body, **kwargs):
+        ab_bodies.append(body)
+        return {'urgency': 'high'}
+    monkeypatch.setattr(semantic_extraction, 'extract_facts_v2', extract)
+    monkeypatch.setattr(extract_llm, 'llm_extract', ab)
+    source = {'records': [record], 'data_origin': 'synthetic', 'manifest': {
+        **MANIFEST, 'holdout_manifest_sha256': payload_hash(holdout_payload([record]))}}
+    run = snapshot.generate(source, cfg)
+    assert extracted == [1]
+    assert ab_bodies == [record['bundle']['messages'][0]['body']] * 2
+    result = run['records'][0]
+    assert len(result['bundle']['messages']) == 2
+    assert result['candidate']['status'] == 'complete'
+    assert result['candidate']['delivered_fact_ids'] == ['f1']
+    assert result['candidate']['claims'][0]['fact_refs'] == ['f1']
+    assert len(result['documents']) == 1
+    # Enlarging the scored scope cannot borrow the target's receipts for context.
+    other = copy.deepcopy(record)
+    other['bundle']['target_message_ids'] = [1, 2]
+    other['sealed_observations']['bundle_sha256'] = payload_hash(other['bundle'])
+    with pytest.raises(EvaluationError, match='target_documents_mismatch'):
+        observations.attach(other, docs, {}, cfg)
+    # Context remains part of source identity even though not a scored target.
+    other = copy.deepcopy(record)
+    other['bundle']['messages'][1]['body'] += '変更'
+    other['sealed_observations']['bundle_sha256'] = payload_hash(other['bundle'])
+    with pytest.raises(EvaluationError, match='source_mismatch'):
+        observations.attach(other, docs, {}, cfg)
+
+
+@pytest.mark.parametrize('field,value', [('schema_version', True), ('bundle', None)])
+def test_observation_shape_is_strict(tmp_path, field, value):
+    record, docs, cfg = fixture(tmp_path)
+    if field == 'bundle':
+        record['sealed_observations']['bundle'].pop('root_id')
+    else:
+        record['sealed_observations'][field] = value
+    with pytest.raises(EvaluationError, match='schema_invalid|root_invalid'):
+        observations.attach(record, docs, {}, cfg)
+
+
+def test_authorization_boolean_schema_version_rejected(tmp_path):
+    record, _, cfg = fixture(tmp_path)
+    record['data_origin'] = 'real_authorized'
+    source = {'records': [record], 'data_origin': 'real_authorized', 'manifest': {
+        **MANIFEST, 'holdout_manifest_sha256': payload_hash(holdout_payload([record]))}}
+    receipt = {'schema_version': True, 'purpose': 'sealed_candidate_evaluation',
+               'data_origin': 'real_authorized', 'snapshot_sha256': payload_hash(source),
+               'holdout_manifest_sha256': source['manifest']['holdout_manifest_sha256'],
+               'receipt_id': 'synthetic-permission', 'authorized_by': 'synthetic-owner',
+               'authorized_at': '2026-10-17'}
+    source['authorization_receipt_sha256'] = payload_hash(receipt)
+    with pytest.raises(EvaluationError, match='authorization_receipt_mismatch'):
+        snapshot.generate(source, cfg, receipt)

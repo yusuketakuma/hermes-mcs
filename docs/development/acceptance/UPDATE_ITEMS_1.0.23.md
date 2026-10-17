@@ -1,6 +1,6 @@
 # 1.0.23 取り込み対応表（更新項目 → 成果物、導入・更新・復旧の実入口）
 
-2026-10-17。作業branch `release/v1.0.23-prep`、未コミット差分を含む作業ツリーの読取り記録。
+2026-10-17。作業branch `release/v1.0.23-prep`、固定候補 `03b9b078` と、その独立レビュー修正を追跡する記録。
 判定の正本は [受入票](ACCEPTANCE_1.0.23.md)。本表は「どの項目がどのコード・テスト・設定・資産・文書・配布物に対応するか」と
 「導入・更新・復旧・配布・起動の実入口がこの版でどう変わり、何で検証したか」を1か所で追跡する。
 品質合格・実環境受入・公開可否を意味しない。実データ・実サービス・実LLM・本番配備は未実施。
@@ -17,16 +17,16 @@
 | `mcs/ops/mcs_update.py plan` | 読取専用の更新計画（阻害要因・schema_bump） | 変更なし | `tests/ops/test_supported_update_paths.py`（v1.0.0〜v1.0.22 → 候補、fixture は `tests/fixtures/schema_upgrade/`） | 成功（Codex 側: schema/更新364件成功） |
 | `mcs/ops/mcs_update.py apply` | 停止 → backup → merge → post-merge → 再起動。失敗時は `_rollback_tree` で自動巻戻し | `_rollback_tree` 先頭に layout 下限ガード（§2 項目2） | `tests/ops/test_mcs_update.py`・`test_update_*.py`・`test_mcs_update_rollback_floor.py` | 成功（216件、Python 3.13。3.14 は §4） |
 | `mcs/ops/mcs_update.py rollback` | 直前 applied の prev_sha へ戻す（人の指示） | journal/quiesce 前に `_rollback_backup_error` と同列で layout 下限ガードを評価。拒否は `rollback_failed` receipt と通知のみで副作用なし | 同上 | 成功 |
-| `mcs/ops/mcs_update.py recover` / `recover_interrupted` | 中断 apply/rollback の収束。rollback 形 journal は `_rollback_tree` 経由 | `_rollback_tree` のガードで網羅 | `tests/ops/test_update_recovery_stability.py`・`test_update_rollback_guards.py` | 成功 |
-| `deployment/recovery/mcs_recover.py` + `org.mcs.recovery.plist`（`--if-stale`、900秒） | repo 外の独立 watchdog。更新で壊れた新版から復旧経路を守る | 変更なし。reset は head==target / head==prev への同一コード再整列と `merge --abort`（新コード未実行）のみで、新コードから旧コードへ移す経路が無いため layout ガード不要（§2 項目2 の確認結果） | `tests/meta/test_mcs_recover*.py`・`test_recovery_*.py`・`integration/test_mcs_recovery_narrative.py` | 対象外（確認済み） |
+| `mcs/ops/mcs_update.py recover` / `recover_interrupted` | 中断 apply/rollback の収束。rollback 形 journal は `_rollback_tree` 経由 | `_rollback_tree` のガードと restore_incomplete の保留維持 | `tests/ops/test_update_recovery_stability.py`・`test_update_rollback_guards.py` | 成功 |
+| `deployment/recovery/mcs_recover.py` + `org.mcs.recovery.plist`（`--if-stale`、900秒） | repo 外の独立 watchdog。更新で壊れた新版から復旧経路を守る | restore_incomplete を通常の pre-merge 中断と誤分類しない。rollback journal 不正・MERGE_HEAD・復元先HEAD不一致では保留を保持。reset は同一コード再整列であり、layout 下限ガードは updater が担当 | `tests/meta/test_mcs_recover*.py`・`test_recovery_*.py`・`integration/test_mcs_recovery_narrative.py` | 成功（通常recoverと合わせ関連335件） |
 | `deployment/scripts/mcs_update.sh` | launchd から `mcs_update.py check` を定期実行 | 変更なし | `tests/ops/test_mcs_cli.py` | 対象外 |
 | `deployment/launchagents/*.plist`（extract-drainer×2、llamaserver、standalone、cmd、health、int、recovery） | 定期ジョブ・worker の起動 | 変更なし。manifest 照合は `_reconcile_membership` | `tests/ops/test_update_membership_shape.py`・`test_lifecycle_standalone.py` | 対象外 |
 | `mcs/ops/mcs_setup.py services` / `check` / `doctor` | 配備・診断 | `doctor` に worker 所有者・起動証跡・layout 件数の表示（Codex） | `tests/ops/test_mcs_setup_doctor.py`・`test_mcs_setup.py`（Python 3.14 必須） | 成功（Codex 側 313件）。3.13 venv では `requires Python >= 3.14` で不成立＝環境要件であり失敗ではない |
-| Hermes gateway 起動（`hermes_plugin/card_workers.py`） | Slack/Discord worker の起動。所有者 profile 不明・不一致は起動拒否 | `_owner_identity` / `_owner_allowed`（Codex） | `tests/plugin/test_card_worker_owner.py`、固定SDK lane（§3） | 成功（局所）／固定SDK lane は fixture 1件不足 |
+| Hermes gateway 起動（`hermes_plugin/card_workers.py`） | Slack/Discord worker の起動。所有者 profile 不明・不一致は起動拒否 | `_owner_identity` / `_owner_allowed`（Codex） | `tests/plugin/test_card_worker_owner.py`、固定SDK lane（§3） | 成功（局所・固定Hermes 21件・standalone 12件） |
 | `mcs_standalone/` | Hermes 無しの単一 host | 変更なし | `tests/ops/test_mcs_setup_standalone*.py`・`integration/test_standalone_*.py` | 対象外 |
 | `lineworks_adapter/` → `adapters/lineworks/` | 独立 LINE WORKS adapter | 配送側: 要約待機・改訂上限・同一カード token 再利用（Codex） | `tests/adapters/lineworks/`・`tests/notify/test_notify_lineworks.py` | 成功（局所） |
 | 配布物 `resources/drug-master/` | 公式 master 原本と manifest | importer 変更後に bundle 再検証（Codex） | 受入票「公式薬剤master」行 | 成功（ZIP SHA 一致、activation=false） |
-| 更新時の運用手順 `docs/guides/UPGRADE_AGENT.md` §1.0.23 | AI/人向け更新手順 | layout3 後の rollback 制約、全 profile 再起動、hold 非解除を追記（Codex） | `readme_release.py --check`（最終差分で） | 未確認（最終文書整合待ち） |
+| 更新時の運用手順 `docs/guides/UPGRADE_AGENT.md` §1.0.23 | AI/人向け更新手順 | layout3 後の rollback 制約、全 profile 再起動、hold 非解除を追記（Codex） | `readme_release.py --check`（最終差分で） | 成功（README・変更履歴・生成物の整合確認） |
 
 ### rollback 下限ガードの帰結（利用者影響）
 
@@ -43,9 +43,9 @@ v1.0.23 は schema 変更を伴わない（`update-paths.json`: v1.0.22 と shap
 | 1 | 既存 layout 固定・移行対象の読取診断 | `mcs/notify/notify_cards.py` `layout_migration_counts`（`health.json` の `cards.layout_inventory`） | `tests/notify/test_card_layout.py` | `changes/archive/1.0.23/delivery-layout-safety.json`、UPGRADE_AGENT §1.0.23 | 実装・局所検証済み |
 | 2 | rollback 時の再投稿防止 | `mcs/ops/mcs_update.py` `_target_card_layout` / `_rollback_layout_error`（`rollback()` 前判定と `_rollback_tree` backstop） | `tests/ops/test_mcs_update_rollback_floor.py`（7件） | `changes/archive/1.0.23/updater-rollback-layout-floor.json`、UPGRADE_AGENT §1.0.23・§7 | 実装・局所検証済み（§1 の全呼出元確認を含む） |
 | 3 | worker 所有者と起動証跡の doctor/health 診断 | `mcs/views/card_worker_status.py` `record`/`status`/`diagnose`、`mcs/ops/mcs_setup.py` `cmd_doctor` | `tests/ingest/test_card_worker_status.py`、`tests/ops/test_mcs_setup_doctor.py` | `changes/archive/1.0.23/worker-owner-evidence.json` | 実装・局所検証済み |
-| 4 | 所有者不明時の拒否・固定SDK 属性契約 | `hermes_plugin/card_workers.py` `_owner_identity`/`_owner_allowed` | `tests/plugin/test_card_worker_owner.py`、`integration/test_hermes_slack.py` | `changes/archive/1.0.23/slack-profile-worker.json` | 実装済み・SDK 検証: §3（fixture 不足1件） |
+| 4 | 所有者不明時の拒否・固定SDK 属性契約 | `hermes_plugin/card_workers.py` `_owner_identity`/`_owner_allowed` | `tests/plugin/test_card_worker_owner.py`、`integration/test_hermes_slack.py` | `changes/archive/1.0.23/slack-profile-worker.json` | 実装済み・固定Hermes 21件・standalone 12件成功（§3） |
 | 5 | LINE WORKS 文書・画面の整合 | — | `scripts/development/generate_lineworks_gallery.py --check` | `docs/guides/LINEWORKS.md`、`docs/screenshots/lineworks-gallery/01-delivery.*`・`02-task-confirm.png`・`assets.json` | 生成 check・目視済み |
-| 6 | 1.0.23 更新手順 | — | `readme_release.py --check`（最終） | `docs/guides/UPGRADE_AGENT.md` §1.0.23 | 更新済み・updater 最終契約と照合待ち |
+| 6 | 1.0.23 更新手順 | — | `readme_release.py --check`（最終） | `docs/guides/UPGRADE_AGENT.md` §1.0.23 | 更新済み・rollback下限と復元制約を照合済み |
 | 7 | 1.0.22 からの更新 fixture | `mcs/ops/mcs_update.py plan/apply` | `tests/ops/test_supported_update_paths.py`、`tests/ops/test_release_origin_tick.py` | `tests/fixtures/schema_upgrade/update-paths.json`・`origins.json`（v1.0.22 = f8c6c20d を追加） | 364件成功・tick は編集静止後 |
 | 8 | 名前付き受入ゲートと固定候補 | — | — | `ACCEPTANCE_1.0.23.md`、本表 | 追跡中 |
 | 9 | 待機理由行列・Discord 所有者照合 | `mcs/ingest/health_watch.py` `_wait_label`/`_wait_summary`/`_reason_rows`、`hermes_plugin/card_workers.py` | `tests/ingest/test_health_watch_wait_reasons.py`、`tests/plugin/test_card_worker_owner.py` | `changes/archive/1.0.23/delivery-wait-progress.json` | 実装・局所検証済み |
@@ -62,7 +62,7 @@ v1.0.23 は schema 変更を伴わない（`update-paths.json`: v1.0.22 と shap
 | 20 | RPO 鮮度・年齢/遅延の区別・override なし | `mcs/ops/mcs_backup.py` | 同上 | `docs/guides/BACKUP.md` | 実装・文書化済み |
 | 21 | offsite/verify/escrow 証跡分離 | `mcs/ops/mcs_backup.py` `offsite`/`keygen`（key-fd・Keychain） | 同上（50件） | `changes/archive/1.0.23/backup-evidence-separation.json` | 実装済み・最終差分再検証待ち |
 | 22 | 全 profile 再起動と稼働証拠 | `mcs/views/card_worker_status.py`、`mcs/ops/mcs_setup.py doctor` | `tests/ops/test_mcs_setup_doctor.py` | UPGRADE_AGENT §1.0.23（`worker_started` 確認） | 診断実装済み・更新経路確認中 |
-| 23 | 表示変更の分類・更新注意 | — | `release_notes.py check`（最終） | `changes/*.json` の category/upgrade（表示変更は `changed`、gateway 再起動を明記） | 最終文書整合待ち |
+| 23 | 表示変更の分類・更新注意 | — | `release_notes.py check`（最終） | `changes/archive/1.0.23/*.json` の category/upgrade（表示変更は `changed`、gateway 再起動を明記） | 最終文書整合待ち |
 | 24 | clean install・22→23 plan/apply | `install.sh`、`mcs/ops/mcs_update.py` | `tests/meta/test_install_sh*.py`、`tests/ops/test_supported_update_paths.py` | §1 | 更新回帰済み・配布経路確認中 |
 | 25 | standalone 所有判定と表示 | `mcs/views/card_worker_status.py`、`mcs/ops/mcs_setup.py` | `tests/ops/test_mcs_setup_standalone.py` | — | 実装・局所検証済み |
 | 26 | layout 変化で保留/上限を解除しない | `mcs/notify/notify_cards.py`（`_cleanup_budget_held`、`_pending_reason`） | `tests/notify/test_delivery_v1023.py` | `changes/archive/1.0.23/delivery-layout-safety.json` | 実装・局所検証済み |
