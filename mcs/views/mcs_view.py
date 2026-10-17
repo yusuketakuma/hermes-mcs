@@ -608,7 +608,7 @@ class View:
         import patient_context_view as pcv
         from mcs_util import load_config
         if view == "search":
-            return pcv.search(self.db, pid, query or "")
+            return pcv.search(self.db, pid, query)
         if view == "replies":
             return pcv.replies(self.db, pid)
         # current publication settings gate the nightly prose, not the flag stored at generation

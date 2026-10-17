@@ -57,7 +57,7 @@ rollupの `patient_context` は `memo` と `chat` を別々に持つ。チャッ
 
 ## 服薬管理の報告の集約と参照（1.0.21、抽出世代8への更新と同時に一貫させる）
 
-本節は実装済みの契約で、抽出世代8（ルール世代22）で適用する。配備後は通常の抽出workerが旧世代の結果を順次再抽出し、保存済みの結果を直接書き換えない。本番への配備と、参照情報（`patient_state_context`、既定false）の有効化は別の判断で、まだ行っていない。
+本節は実装済みの契約で、抽出世代8（ルール世代21）で適用する。配備後は通常の抽出workerが旧世代の結果を順次再抽出し、保存済みの結果を直接書き換えない。本番への配備と、参照情報（`patient_state_context`、既定false）の有効化は別の判断で、まだ行っていない。
 
 - **集約**: `rollup.pharmacy_state_items` は現在の抽出から、`inquiry_result`・`storage_status`・`storage_place`・`medication_manager`・`interaction_check`・`support_method`・`residual_quantity`・`missed_doses`・`followup` の根拠付き detail を1件ずつの list で返す。同じ親の `drug_name` を全件付け、値を薬剤ごとに分配しない。親の引用・text・主体、親と項目の fingerprint、project・message・本文hash・投稿時刻を持つ。rollup の `pharmacy_state` は `{items, total, truncated, source}` で新しい投稿順に最大100報告。最新の報告は現在の確定状態ではなく、否定・予定・過去の原文を保つ。
 - **本人向け表示**: 患者の記録まとめは最大8件と残り件数・集約上限を示し、表示前に現在の本文と抽出から再計算した fingerprint と一致する報告だけを出す。共有カードには上記の限定5属性と区分だけを出す。

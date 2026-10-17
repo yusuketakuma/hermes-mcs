@@ -567,6 +567,8 @@ def patient_search_view(db, project_id, query) -> dict:
     ロキソニン, ＢＳ matches bs) — the same rule as the ``mcs_view``
     search; the FTS5 index's unicode61 tokenizer cannot split Japanese
     into words."""
+    if not isinstance(query, str) or not query.strip() or len(query) > 500:
+        raise ValueError("bad_query")
     question = _question_term(query)
     terms = ([question[0]] if question and question[0] else
              [t for t in str(query or "").split() if search_fold(t)][:5])

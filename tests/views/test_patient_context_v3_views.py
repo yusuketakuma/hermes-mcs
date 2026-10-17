@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import mcs_view
+import notify_views
 import patient_context_view as pcv
 from patient_context import extract_context
 from semantic_testkit import _message
@@ -241,6 +242,26 @@ def test_cli_view_dispatch(ctx):
     assert got["view"] == "background"
     args = mcs_view._parser().parse_args(["patient_context", "--project", "1", "--view", "changes", "--since", "5"])
     assert (args.kind, args.view, args.since) == ("patient_context", "changes", 5)
+
+
+@pytest.mark.parametrize("search", [
+    lambda db, query: mcs_view.View._patient_context(
+        SimpleNamespace(db=db), 1, "search", None, query, None),
+    lambda db, query: pcv.search(db, 1, query),
+    lambda db, query: notify_views.patient_search_view(db, 1, query),
+], ids=["cli", "context", "shared"])
+@pytest.mark.parametrize("query", [None, "", " \t\u3000", "語" * 501, 42, [], {}])
+def test_search_rejects_invalid_input_before_reading_posts(search, query):
+    with pytest.raises(ValueError, match="^bad_query$"):
+        search(None, query)
+
+
+@pytest.mark.parametrize("query, count", [("架空病B", 1), ("語" * 500, 0)])
+def test_patient_context_search_accepts_valid_query_and_length_boundary(ctx, query, count):
+    got = mcs_view.View._patient_context(SimpleNamespace(db=ctx.db.db), 1,
+                                       "search", None, query, None)
+    assert got["view"] == "search" and len(got["items"]) == count
+    assert got["notes"]
 
 
 def test_real_nightly_helper_without_artifact_falls_back_to_chat_items(tmp_path, monkeypatch):
