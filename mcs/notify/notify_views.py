@@ -22,6 +22,7 @@ from patient_context import DETAIL_LABELS, LABELS, context_items, extract_contex
 from mcs_adapter import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from mcs_util import fold_map, register_search_fold, search_fold
+from message_metadata import stamp_counts
 import notify_render
 from notify_render import (
     _current_generation, _hhmm, _inline, _mmdd, _patient_name, _source_fp,
@@ -481,7 +482,7 @@ def unacked_view(db, transport, now=None, projects=None,
     for r in rows:
         groups.setdefault(r["project_id"], []).append(r)
     items = []
-    self_reacted = 0
+    self_reacted = unfetched = 0
     for pid, cards in groups.items():
         group = _inline(_patient_name(db, pid), 30) or f"project {pid}"
         with_reactions = [(c, card_reactions(db, c)) for c in cards]
@@ -491,6 +492,8 @@ def unacked_view(db, transport, now=None, projects=None,
             for r in meta["reactions"] or []))
         self_reacted += sum(1 for _, reactions in with_reactions if any(
             r["self_reacted"] for _, meta in reactions for r in meta["reactions"] or []))
+        unfetched += any(stamp_counts(meta) is None
+                         for _, reactions in with_reactions for _, meta in reactions)
         for c, reactions in with_reactions:
             at = datetime.fromtimestamp(c["created_at"], JST)
             kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 アラート"
@@ -508,8 +511,10 @@ def unacked_view(db, transport, now=None, projects=None,
             items.append({"project_id": pid, "group": group, "text": line})
     assigned = sum(1 for r in rows if r["owner"])
     out = {"title": "🗂 未確認一覧（直近7日に更新されたカード）",
-           "head": [f"未確認 {len(rows)}件（うち担当者あり {assigned}件）",
-                    f"MCSで本人反応あり {self_reacted}件"],
+           "head": [f"未確認 {len(rows)}件（うち担当者あり {assigned}件）"]
+           # an observed zero is omitted; unfetched stamps are said so
+           + ([f"MCSで本人反応あり {self_reacted}件"] if self_reacted
+              else ["MCSで本人反応: 未取得あり"] if unfetched else []),
            "empty": "未確認のカードはありません。",
            "notes": ["※ 本人反応があるカードは同患者内の末尾に表示します。"]}
     out["items"], out["more"] = _limit(items)
@@ -626,24 +631,26 @@ def drug_search_available(db) -> bool:
 
 def _candidate_line(ref, dictionary_active: bool) -> str:
     """One mention's dictionary status in plain words. Ambiguous/generic
-    references never name an ingredient (same rule as candidate_note)."""
+    references never name an ingredient (same rule as candidate_note).
+    Without an active dictionary nothing was looked up: no line (the
+    head says why once)."""
     if ref is None:
-        return ("　→ 辞書照合はまだありません（次回の処理で反映）"
-                if dictionary_active else "　→ 辞書候補なし")
+        return "\n　→ 辞書照合はまだありません（次回の処理で反映）" \
+            if dictionary_active else ""
     status, cands = ref.get("status"), ref.get("cands") or []
     if status == "resolved" and candidate_note(ref):
         c = cands[0]
-        return (f"　→ 候補: {_inline(c['display'], 60)}"
+        return (f"\n　→ 候補: {_inline(c['display'], 60)}"
                 f"（{DRUG_KIND_JA.get(c['kind'], c['kind'])}・{_inline(c['code'], 20)}）")
     if status == "ambiguous":
-        return f"　→ 複数の候補（{len(cands)}件）: 用量・剤形を原文で確認してください"
+        return f"\n　→ 複数の候補（{len(cands)}件）: 用量・剤形を原文で確認してください"
     if status == "generic":
-        return "　→ 総称のため個別の薬剤は特定できません"
-    return "　→ 辞書に一致する候補はありません（似た名前から推定しません）"
+        return "\n　→ 総称のため個別の薬剤は特定できません"
+    return "\n　→ 辞書に一致する候補はありません（似た名前から推定しません）"
 
 
 def meds_view(db, project_id, message_id, *, can_report=False,
-              can_search=False, page=0) -> dict:
+              can_search=False, page=0, cfg=None) -> dict:
     """💊 one post's medication mentions — the card's own 薬剤 selection
     (structured_view) with each mention's current dictionary candidate.
     Read-only: nothing here confirms a prescription."""
@@ -658,19 +665,18 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     meds, unverified = structured_view.medication_entries(db, message_id)
     refs = [ref for _, ref in meds + unverified if ref]
     active = drug_search_available(db)
-    try:
-        posted_day = datetime.fromisoformat(row["posted_at"]).date().isoformat()
-    except (ValueError, TypeError):
-        posted_day = "日付不明"
-    head = [f"{posted_day} {_hhmm(row['posted_at'])} "
+    when = f"{_mmdd(row['posted_at'])} {_hhmm(row['posted_at'])}"
+    head = [f"{'日時不明' if '?' in when else when} "
             f"{_inline(row['profession'], 20) or '職種不明'}の投稿 — "
             f"{len(meds) + len(unverified)}件"]
     if refs:
         head.append("辞書の候補はすべて未確認です")
-    elif not active:
-        head.append(_DICTIONARY_STATE["inactive"])
+    if not active:
+        # the reason needs cfg; without it the old generic wording stays
+        head.append(_DICTIONARY_STATE[
+            drug_map.active_dictionary(db, cfg)[1] if cfg is not None else "inactive"])
     items = [{"project_id": project_id,
-              "text": f"・{_inline(text, 120)}{label}\n"
+              "text": f"・{_inline(text, 120)}{label}"
                       f"{_candidate_line(ref, active)}"}
              for entries, label in ((meds, ""), (unverified, "（未確認）"))
              for text, ref in entries]

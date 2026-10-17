@@ -40,8 +40,8 @@ def _text(led, ev=None):
 
 
 @pytest.mark.parametrize("key,error_prefix", [
-    ("project", "project の指定が不正です:"),
-    ("患者", "project の指定が不正です:"),
+    ("project", "患者の指定が不正です（患者IDは数字で指定してください）:"),
+    ("患者", "患者の指定が不正です（患者IDは数字で指定してください）:"),
     ("days", "絞込みを解釈できません:"),
     ("日数", "絞込みを解釈できません:"),
 ])
@@ -137,7 +137,7 @@ def test_counts_ids_and_no_patient_content(led):
     cfg = {**ON, "notify_max_age_h": 48}
     notify_digest.maybe_enqueue(led, cfg, now=T)
     text = _text(led)
-    assert "新着 3件・緊急度高 1件・未完了タスク 0件（期限切れ 0・本日期限 0）" in text
+    assert "新着 3件・緊急度高 1件・未完了タスク 0件\n" in text
     assert "■ 新着（患者別 1人）\n・project 1 3件（看護師 1・医師 1・職種不明 1）" in text
     assert "■ 緊急度高 1件\n・project 1 09-24 08:40 🚨" in text
     for secret in ("秘密の本文", "本人が急変", "患者A", "患者B", "職員"):
@@ -176,7 +176,7 @@ def test_ai_urgency_row_is_marked_at_least_as_strongly_as_rule(led, monkeypatch)
     monkeypatch.setattr(structured_view, "urgency_qc_suffix", lambda db, m: "")
     notify_digest.maybe_enqueue(led, ON, now=T)
     text = _text(led)
-    assert "🚨 緊急度高" in text
+    assert "■ 緊急度高 2件" in text
     assert "・project 1 09-24 08:41 🚨" in text
 
 def _summary_at(led, pid, at, comment="連携の秘密本文", empty=False):

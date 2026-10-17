@@ -45,13 +45,13 @@ def test_meds_view_lists_the_posts_medication_without_dictionary(led):
     view = r["list"]
     assert view["title"].startswith("💊 ") and view["title"].endswith("選択した投稿の薬剤")
     # one post, one page: no navigation or page lines
-    assert view["head"][0].startswith("2026-09-24 ")
+    assert view["head"][0].startswith("09-24 ")
     assert view["head"][0].endswith("の投稿 — 1件")
     assert "有効化されていない" in view["head"][1]
     assert len(view["head"]) == 2
     assert view["page"] == 0 and view["pages"] == 1
     assert view["items"] == [{"project_id": 1,
-                              "text": "・キラナ 5mg[開始]\n　→ 辞書候補なし"}]
+                              "text": "・キラナ 5mg[開始]"}]
     assert "参考情報" not in "".join(view["notes"])
     # ⚠ pins this same post, so the report hint is offered
     assert "抽出の誤りは「誤りを報告」→「薬」から報告できます。" in view["notes"]
