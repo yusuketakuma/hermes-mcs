@@ -1473,6 +1473,18 @@ def recover(if_stale=False):
         if not applying and not stages:
             _remove_marker()                # orphan — writer is dead
             return 0
+        if (applying or {}).get("runtime_migration"):
+            # The interpreter/venv migration (and its code+venv backup) is
+            # owned by the target version's mcs_update recover; this generic
+            # watchdog must not touch tree, venv, DB, journal or marker, nor
+            # restart writers/senders. Report (deduped) and stop every pass.
+            _report_alert("runtime_migration_pending", state,
+                          "runtime_migration interrupted — recover with the target mcs_update",
+                          "[MCS] 実行環境の移行中に更新が中断しました。復旧ツールは何も変更せず、"
+                          "常駐処理も止めたままにしています。移行先の版の更新ツール"
+                          "（mcs_update.py recover）で復旧してください",
+                          writers_stopped=True)
+            return 1
         removed = _clean_stale_git_locks()
         prev = (applying or {}).get("prev_sha")
         target = (applying or {}).get("sha")

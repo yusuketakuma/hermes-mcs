@@ -1687,3 +1687,57 @@ def test_refused_reset_at_target_does_not_bounce_drainers_every_pass(rec, tmp_pa
     assert calls == [True, False, False]
     assert (repo / "g.txt").read_text() == "MANUAL"
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
+
+
+@pytest.mark.parametrize("at", ["target", "prev"])
+@pytest.mark.parametrize("held", [False, True])
+@pytest.mark.parametrize("reinstall_done", [False, True])
+def test_runtime_migration_is_left_to_the_target_updater(rec, tmp_path, monkeypatch,
+                                                         at, held, reinstall_done):
+    """An interrupted interpreter/venv migration belongs to the target
+    version's mcs_update recover: three watchdog passes change nothing
+    (journal, marker, tree, venv, backup, DB), restart nothing and notify
+    once; once the updater has cleared the journal the next pass is normal."""
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "f.txt").write_text("target")
+    _git(repo, "commit", "-qam", "target")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    if at == "prev":
+        _git(repo, "checkout", "-q", prev)
+    (repo / "f.txt").write_text("half-written")            # a mid-migration tree
+    venv, backup = tmp_path / "hermes-venv", tmp_path / "hermes-venv.prev"
+    for d in (venv, backup):
+        d.mkdir()
+        (d / "pyvenv.cfg").write_text(d.name)
+    db = tmp_path / "data" / "mcs.db"
+    db.write_bytes(b"synthetic-db")
+    state = _applying(prev, sha=target, stage="runtime_migration")
+    state["applying"].update({"runtime_migration": {"from": "3.14.7", "to": "3.14.8",
+                                                    "backup": str(backup)},
+                              "reinstall": True, "reinstall_done": reinstall_done})
+    if held:
+        state["applying"].update({"rollback": True, "backup_path": str(db) + ".bak"})
+        state["restore_consent"] = {"report_id": "r1", "backup_path": str(db) + ".bak", "at": 1}
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(state, f)
+    Path(rec.MARKER_PATH).write_text("{}")
+    def snapshot():
+        return (Path(rec.STATE_PATH).read_bytes(), Path(rec.MARKER_PATH).read_bytes(),
+                (repo / "f.txt").read_text(), _git(repo, "rev-parse", "HEAD").stdout,
+                (venv / "pyvenv.cfg").read_text(), (backup / "pyvenv.cfg").read_text(),
+                db.read_bytes())
+    before = snapshot()
+    notices, restarts = [], []
+    monkeypatch.setattr(rec, "_notify", lambda text: notices.append(text))
+    monkeypatch.setattr(rec, "_restart_drainers", lambda **k: restarts.append(k) or [])
+    monkeypatch.setattr(rec, "_restart_services", lambda *a, **k: restarts.append(a) or 0)
+    for _ in range(3):
+        assert rec.recover(if_stale=True) == 1
+    assert snapshot() == before and restarts == []
+    assert len(notices) == 1 and "mcs_update.py recover" in notices[0]
+    assert json.loads(Path(rec.REPORT_PATH).read_text())["result"] == "runtime_migration_pending"
+    # the target updater recovered and cleared the journal: the watchdog's normal pass resumes
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump({"v": 1, "applying": None, "stages": [], "applied": [], "attempts": {}, "executed": {}}, f)
+    assert rec.recover() == 0 and not os.path.exists(rec.MARKER_PATH)
