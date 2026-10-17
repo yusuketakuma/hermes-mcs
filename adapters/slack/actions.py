@@ -10,7 +10,7 @@ import time
 
 from hermes_plugin import projects
 from adapters.common import confirm, envelopes, paths, registry
-from adapters.common.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
+from adapters.common.text import (ERR_JA, MODAL_ACTIONS, RECEIPT_TEXT, MODAL_TITLES, SEARCH_EMPTY,
                                  VIEW_FORMS, digest_inputs,
                                  ja, modal_fields, preview_text,
                                  search_query, split_body, view_answer,
@@ -409,6 +409,9 @@ class Actions:
         token = origin.pop("token")
         actor = origin.pop("actor")
         user = body["user"]["id"]
+        if self._reg.token(token) is None:   # lapsed card, not a refusal
+            await self._say(origin["channel_id"], user, ERR_JA["unknown_token"])
+            return
         ctx = self._pinned(token, {**origin, "actor": actor}, actor)
         if ctx is None:
             await self._say(origin["channel_id"], user, "権限がありません。")
@@ -546,21 +549,16 @@ class Actions:
             "user": pending["user"], "modal_id": modal_id})
         await self.sweep_followups()
 
-    def _payload(self, pending, result):
-        """The shared human payload; any refusal -> None (one fixed
-        reply, see _preview)."""
-        got = envelopes.human_payload(
-            pending["action"], pending["actor"], pending["context"],
-            result.get("params") or {}, pending["fields"])
-        return None if isinstance(got, str) else got
-
     async def _preview(self, pending, result):
         origin = pending["origin"]
-        payload = self._payload(pending, result)
-        if payload is None or not projects.project_allowed(
+        payload = envelopes.human_payload(
+            pending["action"], pending["actor"], pending["context"],
+            result.get("params") or {}, pending["fields"])
+        if isinstance(payload, str) or not projects.project_allowed(
                 self._settings, payload["project_id"]):
             await self._say(origin["channel_id"], pending["user"],
-                            "入力または対象が無効です。")
+                            payload if isinstance(payload, str)
+                            else "対象が無効です。")
             return
         confirm_id = confirm.open_confirm(
             self._reg, token=pending["token"], actor=pending["actor"],
@@ -614,8 +612,10 @@ class Actions:
         payload = pending["payload"]
         # project scope (card and payload) and the interactive route gate
         # only 確定 — a 取消 drops the actor's own preview and queues nothing
-        allowed = bool(cancel) or (await self._interactive()
-                                   and bool(self._pinned(
+        if not cancel and not await self._interactive():
+            await self._say(origin["channel_id"], user, ERR_JA["interactive_off"])
+            return
+        allowed = bool(cancel) or (bool(self._pinned(
                                        pending["token"],
                                        {**origin, "actor": actor}, actor))
                                    and projects.project_allowed(
@@ -654,9 +654,9 @@ class Actions:
                     origin["channel_id"], user,
                     "受付結果を確認できませんでした。結果の通知をお待ちください。"),
                 on_failed=lambda: self._say(origin["channel_id"], user,
-                                            "送信に失敗しました。")):
+                                            "送信に失敗しました。もう一度確定してください。")):
             return
-        await self._say(origin["channel_id"], user, "受け付けました。")
+        await self._say(origin["channel_id"], user, RECEIPT_TEXT)
         await self.sweep_followups()
 
     async def sweep_followups(self):

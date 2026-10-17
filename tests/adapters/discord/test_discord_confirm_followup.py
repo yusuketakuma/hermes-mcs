@@ -100,7 +100,7 @@ def test_confirm_after_kill_switch_is_denied_but_cancellable(tmp_path, monkeypat
         "payload": payload})
     confirm = FakeInteraction("mcs:c:" + CID, message_id=9)
     asyncio.run(act.on_interaction(confirm))
-    assert confirm.response.message["content"] == "権限がありません。"
+    assert confirm.response.message["content"] == "現在インタラクティブ通知は停止中です。"
     assert not os.listdir(dirs["cmd_int"])
     assert not reg.confirm(CID).get("in_flight")
     cancel = FakeInteraction("mcs:c:" + CID + ":cancel", message_id=9)

@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "ボタン操作の返答を具体的にそろえました",
+  "summary": "操作の結果は「反映しました」だけでなく、タスク #N の作成・更新、候補の却下、誤り報告の記録、確認・担当の変更として示します。失効したカードやボタン操作の停止中は「権限がありません」ではなく理由を示し、受付の文言はSlack・Discord・LINE WORKSで同じにしました。",
+  "upgrade": "追加操作は不要です。Hermesモードではgateway再起動後、独立モードとLINE WORKSアダプターでは各プロセスの再起動後に反映されます。",
+  "details": [
+    "Slackで失効したカードのボタンを押したとき、カードが更新された可能性を示す。ボタン操作が停止中の確定はSlack・Discordとも停止中と答える。",
+    "Slackの確定前に入力の不備があったとき、共通の理由文（期限の形式など）をそのまま示す。",
+    "受付後の文言を「受け付けました。結果は反映後に表示されます。」にそろえ、Discordの内部IDを出さない。Slackの送信失敗にも再操作の案内を付けた。",
+    "LINE WORKSの入力で番号の範囲外・必須の空欄・文字数超過・期限の形式誤りを、その場で理由を添えて聞き直す。入力のやり直しは不要になった。",
+    "LINE WORKSの1000字カードは投稿の区切り線で分け、投稿の途中で切らない。長い回答のページ送りボタンは最後の分割に付ける。"
+  ],
+  "refs": ["adapters/common/text.py", "adapters/slack/actions.py", "adapters/discord/actions.py", "adapters/lineworks/actions.py", "mcs/notify/present_lineworks.py"]
+}

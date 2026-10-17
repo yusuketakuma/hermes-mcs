@@ -617,7 +617,9 @@ class Actions:
             return
         if taken == "denied":
             self._deny_reason(interaction, scope_denial)
-            await self._ephemeral(interaction, "権限がありません。")
+            await self._ephemeral(interaction, text.ERR_JA["interactive_off"]
+                                  if scope_denial == "interactive_off"
+                                  else "権限がありません。")
             return
         if taken == "busy":
             # a 確定 is queueing this command right now — neither a
@@ -667,7 +669,7 @@ class Actions:
                          command_id=cid)
         await self._followup(
             interaction,
-            f"受け付けました（`{cid[:8]}…`）。結果は反映後に表示されます。")
+            text.RECEIPT_TEXT)
         result = await self._wait_result(cid, HUMAN_WAIT_S)
         if result is None:
             return                        # supervisor sweeps followups

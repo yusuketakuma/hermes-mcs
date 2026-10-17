@@ -68,12 +68,31 @@ CRASH_TEXT = ("処理中にエラーが発生しました。最新のカード�
 UNKNOWN_ERROR_TEXT = "この操作は完了できませんでした。最新のカードからやり直してください。"
 
 
+RECEIPT_TEXT = "受け付けました。結果は反映後に表示されます。"
+
+
+def _applied_text(result: dict) -> str:
+    """Say what was applied, so several receipts in one DM stay matchable."""
+    rid, action = result.get("request_id"), result.get("action")
+    if action == "ack":
+        return "確認を取り消しました。" if result.get("withdrawn") else "確認済みにしました。"
+    if action == "assign":
+        return "担当を外しました。" if result.get("released") else "担当にしました。"
+    if result.get("field"):
+        return "誤りの報告を記録しました。"
+    if result.get("signal_key"):
+        return "候補を却下しました。"
+    if type(rid) is int:     # notification receipts carry a uuid request_id
+        return f"タスク #{rid} を{'作成' if result.get('before') is None else '更新'}しました。"
+    return "反映しました。"
+
+
 def ja(result: dict | None) -> str:
     if not result:
         return "結果を取得できませんでした（処理中の可能性があります）。"
     err = result.get("error")
     if result.get("outcome") == "applied" or result.get("applied"):
-        return "反映しました。"
+        return _applied_text(result)
     if str(err).startswith("crash:"):
         return CRASH_TEXT
     return ERR_JA.get(str(err), UNKNOWN_ERROR_TEXT)

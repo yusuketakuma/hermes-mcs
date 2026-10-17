@@ -149,9 +149,9 @@ class Actions:
         for chunk in text.split_body(got.get("text") or got["error"]):
             await self._say(user, chunk)
 
-    async def _prompt(self, user, session):
+    async def _prompt(self, user, session, retry=""):
         field = session["definitions"][session["index"]]
-        lines = [field["label"]]
+        lines = [retry, field["label"]] if retry else [field["label"]]
         if field.get("options"):
             lines += [f"{i + 1}. {label}" for i, (_, label) in enumerate(field["options"])]
             lines.append("番号で返信してください。")
@@ -195,10 +195,16 @@ class Actions:
             if value.isascii() and value.isdigit() and 1 <= int(value) <= len(options):
                 value = options[int(value) - 1][0]
             elif value not in {v for v, _ in options}:
-                await self._prompt(user, session)
+                await self._prompt(user, session, f"入力を確認できませんでした（1〜{len(options)}の番号）。")
                 return
-        if (field["required"] and not value.strip()) or len(value) > field.get("max", 2000):
-            await self._prompt(user, session)
+        if field["required"] and not value.strip():
+            await self._prompt(user, session, "入力を確認できませんでした（入力が必要です）。")
+            return
+        if len(value) > field.get("max", 2000):
+            await self._prompt(user, session, f"入力を確認できませんでした（最大{field.get('max', 2000)}文字）。")
+            return
+        if field["id"] == "due_date" and value and not text.valid_due(value):
+            await self._prompt(user, session, "入力を確認できませんでした（YYYY-MM-DD 形式）。")
             return
         session["fields"][field["id"]] = value
         session["index"] += 1
@@ -274,7 +280,7 @@ class Actions:
                     user, "送信に失敗しました。もう一度「確定する」を押してください。"),
                 reraise_queued=True):
             return
-        await self._say(user, "受け付けました。")
+        await self._say(user, text.RECEIPT_TEXT)
 
     async def sweep_followups(self):
         self._followup_cursor, window = confirm.followup_window(self.reg, self._followup_cursor)
@@ -338,9 +344,9 @@ class Actions:
         for index, (message, tasks) in enumerate(answer):
             if index == 0 and navigation:
                 chunks = text.split_body(message, limit=1000, max_chunks=None)
-                await self._say(user, chunks[0], navigation)
-                for chunk in chunks[1:]:
+                for chunk in chunks[:-1]:
                     await self._say(user, chunk)
+                await self._say(user, chunks[-1], navigation)
             else:
                 await self._say(user, message)
             if tasks:
