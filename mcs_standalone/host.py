@@ -65,13 +65,5 @@ class Host:
             raise RuntimeError("standalone_host_unload_failed") from None
 
 
-def raise_ended(done, waiter):
-    """Unexpected connection or worker exits must trigger supervised recovery."""
-    for task in done - {waiter}:
-        if not task.cancelled() and task.exception() is not None:
-            raise task.exception()
-        raise RuntimeError(f"ended:{task.get_name()}")
-
-
 # Fixed event codes only; adapters.common.eventlog drops anything else.
 log = eventlog.make_logger("mcs.standalone")
