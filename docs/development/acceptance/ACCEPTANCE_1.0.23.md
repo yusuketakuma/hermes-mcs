@@ -182,3 +182,15 @@ CodeRabbitの対象は前版本番f8c6c20d→固定35cb1832、139テキストフ
 旧runの封印・候補承認は再生成/再承認が必要。構造薬名を持たない既存事実は不明として保持する。既に破損したjournalの自動削除や本番の保留解除は行わない。修正後の固定CodeRabbitレビューはローカル品質記録 `review-eight-fixes-coderabbit.jsonl` / `review-eight-fixes-scope.json` へ保存し、最終結果は同記録で照合する。
 
 修正後CodeRabbitは固定snapshotの150ファイルを完走（exit 0 / review_completed / completed）。追加7指摘中6件を修正し、GC指摘1件は現行のspec全体削除経路と実GC回帰から不適用と確認した。追加修正は公開snapshotなしのalias受付、破損coverageの保留、診断接続の確実なclose、通知部品復旧の拒否receiptとsavepoint、LINE WORKSのname:null対応、利用ガイド整合。修正後の通知全領域・復旧・診断・LINE WORKS adapter・薬剤CLIは1,455件成功。個別のdoctor39件、alias25件、part復旧/LINE WORKS101件も成功。固定snapshot後の追加差分は合成回帰で照合し、自動レビューの上限に従い3回目は実行していない。全体テストの旧13,690件成功をこの差分の全件実行に読み替えない。変更は未コミット・未公開・未配備。
+
+
+### 2026-10-17 push・配備準備時の再照合
+
+ユーザーが全変更commit/push、本番配備、全WTのmain統合と不要WT削除を明示承認。
+修正commit `2b1ce9da` はレビュー8件と追加の妥当6件を含む。意味解析/薬剤1598件、Discord/setup568件、最終通知/復旧/診断/LW/薬剤CLI1455件成功。固定Hermes SDK24件および添付prefix回帰を含む33件成功。件数は重複するため合算しない。追加CodeRabbitは150ファイル完走、上限2巡を維持する。
+
+公式masterを2026-10-17T04:48:56Zに再取得した。公式downloadMenuとyFileのHTTP200、同梱20261013 ZIPのSHA256 `c3efc8aa772b9bf54cfa992e8df3bc82480f86f35bbeb52522d0997144140fb5` と一致、全19,286行bundle検証成功。activation=falseと私有辞書の人承認を保持する。
+
+126WTを再照合、旧dirty599パスの未反映製品変更0。旧製品52 HEADとレビュー用7 HEADは現行treeを変更しない履歴統合を行った。レビュー用合成基準は製品内容へ再適用していない。詳細は `deploy-worktree-disposition.json`。元の本番hotfixは `6697b8a3` として保存し、既統合 `4237548b` との全5ファイル一致を確認した。
+
+最終SHAのリモートCIはpush後に確認する。正式タスク `v1023-core-all` の取得は旧 `v1020-claude-p23` の所有権により拒否された。旧所有権を解除せず、これに依存する正式な独立レビュー・最終完了は保留する。本番適用を成功扱いしない。不要WTは稼働・所有印・未保存ファイルを確認し、復元証跡を保持して別台帳へ削除結果を残す。
