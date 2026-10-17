@@ -33,11 +33,12 @@ def test_old_version_and_dead_worker_are_not_start_proof(tmp_path, monkeypatch):
 def test_individual_restore_hold_and_unreadable_are_distinct(tmp_path):
     import sqlite3
     cfg = {'runtime_mode': 'standalone'}
-    assert workers.diagnose(tmp_path, cfg)['restore_delivery_held'] is None
+    assert workers.diagnose(tmp_path, cfg, probe_data=True)['restore_delivery_held'] is None
     with sqlite3.connect(tmp_path / 'ledger.db') as db:
         db.execute('CREATE TABLE notification_restore_holds(released_at REAL)')
         db.execute('INSERT INTO notification_restore_holds VALUES (NULL)')
-    assert workers.diagnose(tmp_path, cfg)['restore_delivery_held'] is True
+    assert workers.diagnose(tmp_path, cfg)['restore_delivery_held'] is None
+    assert workers.diagnose(tmp_path, cfg, probe_data=True)['restore_delivery_held'] is True
     with sqlite3.connect(tmp_path / 'ledger.db') as db:
         db.execute('UPDATE notification_restore_holds SET released_at=123')
-    assert workers.diagnose(tmp_path, cfg)['restore_delivery_held'] is False
+    assert workers.diagnose(tmp_path, cfg, probe_data=True)['restore_delivery_held'] is False

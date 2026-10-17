@@ -2672,7 +2672,8 @@ def cmd_doctor(args) -> int:
     from operational_status import stored_status, status_lines
     operations = stored_status(HOME, cfg)
     from card_worker_status import diagnose
-    worker = diagnose(os.path.join(HOME, 'data'), cfg)
+    worker = diagnose(os.path.join(HOME, 'data'), cfg,
+                      probe_data='data' in probes and not config_errors)
     checks['card_worker'] = _doctor_check([], [worker['reason']]
         if worker['state'] in ('unknown', 'disabled') else [])
     checks['restore_delivery'] = _doctor_check([],

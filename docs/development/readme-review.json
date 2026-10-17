@@ -1,67 +1,58 @@
 {
-  "version": "1.0.22",
+  "version": "1.0.23",
   "sections": {
     "features": {
-      "notes": "2026-10-16 1.0.22: 機能一覧（収集・保存・通知・操作）と既定値に変更なし。新しい入口は導入支援のみで、READMEの機能表・既定off項目の記述はソース（mcs/_mcs_path.py は旧v2/v3抽出を読込み対象から外すだけで現行v1ルール・v4 LLM抽出は不変）と一致し変更不要。 追補（同日）: Claude Securityスキャンの5件の修正は既存機能の安全性の修正で、機能一覧・既定値は不変（統計overviewは指定プロジェクト範囲に限定、要約の制約欄は定型文化）。",
+      "notes": "2026-10-17 1.0.23候補: 薬剤の名称横断履歴、規格/剤形/単位確認、master版差分、変更経緯、構造化薬歴照合をCLI実装と照合して機能表へ追加。新規layout3、旧layout1/2保持、part人承認復旧、候補指紋の昇格条件を確認。取得10分、既読化、人承認の既定を変更しない。",
       "sources": [
         "README.md",
-        "mcs/_mcs_path.py",
-        "mcs/extract/v4/extract_llm.py",
-        "mcs/extract/v1/extract.py",
-        "mcs/views/mcs_stats.py",
-        "mcs/semantic/semantic_render.py"
+        "mcs/ops/mcs_drug.py",
+        "mcs/views/drug_timeline.py",
+        "mcs/views/drug_reconciliation.py",
+        "mcs/views/drug_master_compare.py",
+        "mcs/notify/notify_cards.py"
       ]
     },
     "demos": {
-      "notes": "2026-10-16 1.0.22: カード・スレッド・CLIの表示を変える変更はないため、Slack画面例（先頭）・Discord/LINE WORKS画像・説明図は変更なし。本人向け回答・人承認条件の表示もソースと同じ。 追補: 通知文のメンション・リンク書式の全角化と要約の単行化は、Slack画面例（カード）の表示を変えない。Hermesのテキスト通知だけが対象。",
+      "notes": "2026-10-17 1.0.23候補: Slack先頭の完全合成説明図を維持。Slack返信の要約/スタンプヘッダと原文折畳み、Discord添付表示、LINE WORKSの新規ヘッダ/原文分離と旧カード維持を実装・生成元と照合。本人向け表示と人承認境界を維持。画像生成checkと実SDK/実アプリの受入は別に追跡。",
       "sources": [
         "README.md",
-        "docs/screenshots/slack-gallery/README.md",
         "scripts/development/generate_slack_gallery.py",
-        "mcs/notify/notify_render.py",
-        "mcs/notify/notify_flush.py"
+        "scripts/development/generate_lineworks_gallery.py",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "adapters/discord/delivery.py"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-16 1.0.22: README冒頭に「AIエージェントへ」の表を追加し、~/.mcs/config.json と ~/.mcs-recovery/repo_path の有無で SETUP_AGENT（新規）・UPGRADE_AGENT（導入済み）・§7（中断）を選ぶ導線をソースと照合（repo_pathはinstall.shのrecovery段で作成、--no-recoveryでは§1で特定）。クイックスタートのコマンドは変更なし。install.shのopt-out記録とplanのinstall_args、install_local.pyの別版停止、zsh安全な起動役取得をUPGRADE_AGENT/LOCAL_AGENT_INSTALLへ反映。",
+      "notes": "2026-10-17 1.0.23候補: 新規/導入済みの手順分岐と導入コマンドを維持。1.0.23更新節を追加し全profile再起動とowner起動証跡、旧layout rollback制約を案内。対象更新元v1.0.0〜22の23版36経路をfixtureと照合。SDK・updater最終統合の結果は受入票に残す。 layout3作成後の旧版rollback拒否と更新前backupの人承認復元条件を明記。固定Hermes21件・standalone12件成功。",
       "sources": [
         "README.md",
-        "AGENTS.md",
-        "install.sh",
-        "mcs/ops/mcs_update.py",
-        "scripts/install_local.py",
-        "scripts/mcs_upgrade.py",
-        "docs/guides/SETUP_AGENT.md",
         "docs/guides/UPGRADE_AGENT.md",
-        "docs/guides/LOCAL_AGENT_INSTALL.md"
+        "docs/guides/INSTALLATION.md",
+        "tests/fixtures/schema_upgrade/update-paths.json",
+        "hermes_plugin/card_workers.py"
       ]
     },
     "safety": {
-      "notes": "2026-10-16 1.0.22: 送信先・権限・承認・既読化・no-redirect/no-proxyに変更なし。AI向けの表は秘密値をチャットに書かせず端末で入力させ、収集・通知・既読化・サービス起動を依頼範囲に限る既存の実行契約（SETUP_AGENT §0）と一致。install_options.jsonはopt-outだけを保存し秘密値を含まない（シンボリックリンク・不正形式は不採用）。同梱医薬品マスター20261013は2026-10-16の公式照合で一致、activation=false維持。 追補: SECURITY.mdに、自動ログイン用ChromeのCDPが同じMacの全アカウントから到達できるため、別のログイン可能なアカウントがあるMacでは自動ログインを止める（manual_required:multi_user_host）ことを追記し、mcs_adapter._auto_loginと照合。送信前の無害化（notify_flush）、要約監査の強化と監査方針の版更新による旧PASSの失効（semantic_audit/semantic_policy）、統計の範囲（mcs_stats）をソースと照合。",
+      "notes": "2026-10-17 1.0.23候補: 原文/患者名の外部通知と端末previewの境界を維持。薬剤照合を候補として表示し服用中/臨床同等性を確定しない。sealed実データ評価と合成の区別・独立人承認receipt、unknown/復元holdの維持、collect-only復元・RPO overrideなしを確認。masterは10月17日再取得SHA一致、自動採用なし。 別保存の利用許可receipt、盲検資料作成/裁定、同一候補の既存監査/描画/配送証跡取込を確認。doctorのDB読取は--probe dataへ限定。",
       "sources": [
         "README.md",
         "SECURITY.md",
-        "docs/guides/SETUP_AGENT.md",
-        "install.sh",
-        "mcs/ops/mcs_update.py",
-        "resources/drug-master/20261013/manifest.json",
-        "docs/specs/official-drug-master.md",
-        "mcs/ingest/mcs_adapter.py",
-        "mcs/notify/notify_flush.py",
-        "mcs/semantic/semantic_audit.py",
-        "mcs/semantic/semantic_policy.py",
-        "mcs/views/mcs_stats.py"
+        "mcs/semantic/semantic_acceptance.py",
+        "mcs/ops/mcs_backup.py",
+        "docs/guides/BACKUP.md",
+        "docs/specs/DRUG_MASTER_WORKFLOWS.md"
       ]
     },
     "docs": {
-      "notes": "2026-10-16 1.0.22: CHANGELOG 1.0.22を2件の変更記録から生成器で作成し、READMEの最新変更（GENERATED:release）も生成器で更新。受入票ACCEPTANCE_1.0.22.mdを追加し、UPGRADE_AGENTの対象版・受入票リンクを1.0.22へ更新。READMEの新しいリンク（各手順書・raw URL・§1/§7アンカー）を確認。 追補: CHANGELOG 1.0.22を変更記録7件から再生成し、受入票にClaude Securityの結果とCodeRabbitの2回のレビューを記録。",
+      "notes": "2026-10-17 1.0.23候補: 更新受入導線を1.0.23へ更新し、薬剤ワークフローと封印候補評価の仕様へリンク。DEVELOPMENTの旧1.0.13現行案内をROADMAPへ修正、旧計画/履歴を保持。生成表はupdate_readmeから再生成。全WTと整理の追跡票を受入票から参照。",
       "sources": [
         "README.md",
-        "CHANGELOG.md",
-        "docs/guides/UPGRADE_AGENT.md",
-        "docs/development/acceptance/ACCEPTANCE_1.0.22.md",
-        "scripts/development/release_notes.py",
-        "scripts/development/readme_release.py"
+        "docs/README.md",
+        "docs/development/DEVELOPMENT.md",
+        "docs/development/acceptance/ACCEPTANCE_1.0.23.md",
+        "docs/specs/SEALED_CANDIDATE_EVALUATION.md",
+        "docs/specs/DRUG_MASTER_WORKFLOWS.md"
       ]
     }
   }

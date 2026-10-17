@@ -23,10 +23,12 @@ from semantic_holdout import holdout_payload
 
 
 def _private(path: str, *, output=False) -> Path:
-    p = Path(path).resolve()
+    p = Path(path).absolute()
     repo = Path(__file__).resolve().parents[3]
-    if p.is_relative_to(repo) or os.environ.get('CI'):
+    if p.resolve().is_relative_to(repo) or os.environ.get('CI'):
         raise EvaluationError('private_local_path_required')
+    if p.is_symlink():
+        raise EvaluationError('regular_nofollow_file_required')
     if p.exists() and (p.stat().st_mode & 0o077 or not p.is_file()):
         raise EvaluationError('owner_only_file_required')
     if output and p.exists():
@@ -62,7 +64,7 @@ def effective_ai_priority(bundle: dict, outputs: list) -> bool | None:
                    for index in range(1, len(messages) + 1))
 
 
-def generate(snapshot: dict, cfg: dict) -> dict:
+def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> dict:
     """Generate immutable predictions without labels, network audit or production writes."""
     import local_llm
     import semantic_extraction
@@ -85,8 +87,24 @@ def generate(snapshot: dict, cfg: dict) -> dict:
         raise EvaluationError('authorization_receipt_required')
     if manifest.get('holdout_manifest_sha256') != payload_hash(holdout_payload(records)):
         raise EvaluationError('holdout_seal_mismatch')
+    if snapshot['data_origin'] == 'real_authorized':
+        expected = {'schema_version', 'purpose', 'data_origin', 'snapshot_sha256',
+                    'holdout_manifest_sha256', 'receipt_id', 'authorized_by', 'authorized_at'}
+        source_hash = payload_hash({k: v for k, v in snapshot.items()
+                                    if k != 'authorization_receipt_sha256'})
+        if (not isinstance(authorization, dict) or set(authorization) != expected
+                or authorization['schema_version'] != 1
+                or authorization['purpose'] != 'sealed_candidate_evaluation'
+                or authorization['data_origin'] != 'real_authorized'
+                or authorization['snapshot_sha256'] != source_hash
+                or authorization['holdout_manifest_sha256'] != manifest['holdout_manifest_sha256']
+                or any(not isinstance(authorization[key], str) or not authorization[key].strip()
+                       for key in ('receipt_id', 'authorized_by', 'authorized_at'))
+                or payload_hash(authorization) != snapshot['authorization_receipt_sha256']):
+            raise EvaluationError('authorization_receipt_mismatch')
     fingerprint = candidate_fingerprint(cfg)
     output = []
+    from semantic_snapshot_observations import source_bundle, attach
     for record in records:
         if record.get('data_origin') != snapshot['data_origin']:
             raise EvaluationError('data_origin_mismatch')
@@ -96,6 +114,7 @@ def generate(snapshot: dict, cfg: dict) -> dict:
         if not messages or any(not isinstance(m.get('body'), str) for m in messages):
             raise EvaluationError('snapshot_body_required')
     for record in records:
+        observed_bundle = source_bundle(record, cfg)
         started = time.monotonic()
         usage = {'requests': 0, 'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
         telemetry_complete = True
@@ -137,12 +156,16 @@ def generate(snapshot: dict, cfg: dict) -> dict:
         finally:
             extract_llm._CALL_NOTES.target = prior_target
         started = time.monotonic()
-        for msg in record['bundle']['messages']:
+        for message_index, msg in enumerate(record['bundle']['messages']):
             member = {'project_id': record['project_id'], 'message_id': msg['message_id'],
                       'revision': msg.get('revision', 'r1'), 'body_original': msg['body'],
                       'body_state': 'full', 'posted_at': msg.get('posted_at', '')}
-            result = semantic_extraction.extract_facts_v2(chat, member, started + 300,
-                                                         jev_client=None)
+            if observed_bundle is not None:
+                member = observed_bundle['members'][message_index]
+            result = semantic_extraction.extract_facts_v2(
+                chat, member, started + 300, jev_client=None,
+                source_fingerprint=(observed_bundle['source_fingerprint']
+                                    if observed_bundle is not None else None))
             documents.append(result)
             facts.extend(result['doc']['facts'])
         candidate = {'version': manifest['candidate_version'], 'status': 'deferred',
@@ -156,10 +179,12 @@ def generate(snapshot: dict, cfg: dict) -> dict:
         priority = effective_ai_priority(record['bundle'], selected)
         if priority is not None:
             candidate['ai_priority'] = priority
-        # No invented audit, rendering or delivery receipts: these stay unobserved.
+        candidate, observations = attach(record, documents, candidate, cfg)
+        # Imported receipts are observations, never new network audit/delivery calls.
         record = {k: v for k, v in record.items() if k not in ('label', 'candidate')}
         output.append({**record, 'candidate': candidate, 'documents': documents,
                        'candidate_sha256': payload_hash(candidate),
+                       'sealed_observation_binding': observations,
                        'patient_state_ab': {'same_case_sha256': payload_hash(record['bundle']),
                                             'off_fingerprint': arms['off']['fingerprint'],
                                             'on_fingerprint': arms['on']['fingerprint'],
@@ -193,11 +218,16 @@ def score(generated: dict, reviewed: list[dict], cfg: dict, criteria: dict) -> d
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('generate', 'score'))
+    parser.add_argument('action', choices=('generate', 'score', 'blind-prepare', 'blind-merge'))
     parser.add_argument('--input', required=True)
     parser.add_argument('--config', required=True)
     parser.add_argument('--output', required=True)
     parser.add_argument('--reviewed')
+    parser.add_argument('--authorization')
+    parser.add_argument('--reviewers', nargs=2)
+    parser.add_argument('--key')
+    parser.add_argument('--reviews', nargs=2)
+    parser.add_argument('--adjudications')
     args = parser.parse_args(argv)
     try:
         from safe_io import read_regular_nofollow
@@ -205,7 +235,21 @@ def main(argv=None) -> int:
         cfg = strict_json(read_regular_nofollow(_private(args.config), 1024 * 1024, ValueError))
         output = _private(args.output, output=True)
         if args.action == 'generate':
-            result = generate(source, cfg)
+            authorization = (strict_json(read_regular_nofollow(_private(args.authorization),
+                             1024 * 1024, ValueError)) if args.authorization else None)
+            if args.authorization and Path(args.authorization).resolve() in (Path(args.input).resolve(), Path(args.config).resolve()):
+                raise EvaluationError('independent_authorization_file_required')
+            result = generate(source, cfg, authorization)
+        elif args.action == 'blind-prepare':
+            from semantic_snapshot_blind import prepare
+            result = prepare(source, args.reviewers or [])
+        elif args.action == 'blind-merge':
+            from semantic_snapshot_blind import merge
+            def read_private(path):
+                return strict_json(read_regular_nofollow(_private(path), 64 * 1024 * 1024, ValueError))
+            result = merge(source, read_private(args.key),
+                           [read_private(path) for path in (args.reviews or [])],
+                           read_private(args.adjudications) if args.adjudications else None)
         else:
             reviewed = strict_json(read_regular_nofollow(_private(args.reviewed), 64 * 1024 * 1024, ValueError))
             criteria = json.loads((Path(__file__).resolve().parents[3] /
@@ -215,7 +259,7 @@ def main(argv=None) -> int:
         fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'w') as handle:
             json.dump(result, handle, ensure_ascii=False, allow_nan=False)
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
         print('sealed snapshot evaluation failed', file=sys.stderr)
         return 2
     return 0

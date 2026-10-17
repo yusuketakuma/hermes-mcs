@@ -415,20 +415,23 @@ def _record_success(records: _Records, state, action: str, result, *,
 def _held_render_count(destination: str | None) -> int | None:
     if destination is None:
         return None
-    with _inventory_connection(Path(destination) / "ledger.db", None, None) as db:
-        columns = {r[1] for r in db.execute("PRAGMA table_info(notification_renders)")}
-        if "state" not in columns:
-            return None
-        part_columns = {r[1] for r in db.execute("PRAGMA table_info(notification_render_parts)")}
-        pending_parts = ""
-        if {'state', 'delivery_id'} <= part_columns:
-            pending_parts = (" OR EXISTS(SELECT 1 FROM notification_render_parts p "
-                             "WHERE p.delivery_id=r.delivery_id "
-                             "AND p.state IN ('pending','unknown','held'))")
-        return db.execute("SELECT COUNT(*) FROM notification_renders r "
-                          "WHERE r.state!='cancelled' AND "
-                          "(r.state IN ('queued','sending','unknown','held')" +
-                          pending_parts + ")").fetchone()[0]
+    try:
+        with _inventory_connection(Path(destination) / "ledger.db", None, None) as db:
+            columns = {r[1] for r in db.execute("PRAGMA table_info(notification_renders)")}
+            if "state" not in columns:
+                return None
+            part_columns = {r[1] for r in db.execute("PRAGMA table_info(notification_render_parts)")}
+            pending_parts = ""
+            if {'state', 'delivery_id'} <= part_columns:
+                pending_parts = (" OR EXISTS(SELECT 1 FROM notification_render_parts p "
+                                 "WHERE p.delivery_id=r.delivery_id "
+                                 "AND p.state IN ('pending','unknown','held'))")
+            return db.execute("SELECT COUNT(*) FROM notification_renders r "
+                              "WHERE r.state!='cancelled' AND "
+                              "(r.state IN ('queued','sending','unknown','held')" +
+                              pending_parts + ")").fetchone()[0]
+    except sqlite3.Error:
+        return None
 
 
 def _private_directory(path: Path) -> None:

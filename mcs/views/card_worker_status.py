@@ -58,7 +58,7 @@ def status(root, transport, profile):
         return {'state': 'unknown', 'reason': 'worker_start_unverified'}
 
 
-def diagnose(root, cfg):
+def diagnose(root, cfg, *, probe_data=False):
     """Report the configured Hermes owner and restore hold without changing either."""
     notify = cfg.get('notify') or {}
     transport = notify.get('interactive')
@@ -74,7 +74,9 @@ def diagnose(root, cfg):
         hold = False
     except OSError:
         hold = True
-    if not hold:
+    if not hold and not probe_data:
+        hold = None
+    elif not hold:
         try:
             ledger = Path(root) / 'ledger.db'
             if ledger.is_symlink():

@@ -943,7 +943,8 @@ def test_every_raised_backup_code_is_in_the_known_set():
     assert "backup_io_or_policy_failed" in backup.FAILURE_CODES
 
 
-def test_offsite_verify_and_escrow_proofs_are_distinct(world, tmp_path, capsys, monkeypatch):
+@pytest.mark.parametrize("count_error", [False, True])
+def test_offsite_verify_and_escrow_proofs_are_distinct(world, tmp_path, capsys, monkeypatch, count_error):
     args = _cli_args(world, tmp_path)
     assert backup.main(['offsite', *args, '--keychain', '--snapshot', str(world[0])],
                        keychain_reader=lambda: KEY) == 0
@@ -951,6 +952,18 @@ def test_offsite_verify_and_escrow_proofs_are_distinct(world, tmp_path, capsys, 
     state_path = tmp_path / 'records' / 'backup_state.json'
     assert 'last_verify_at' not in json.loads(state_path.read_text())
     target = str(Path(world[3].scratch_dir) / 'keychain-drill')
+    if count_error:
+        from contextlib import contextmanager
+        original_connection = backup._inventory_connection
+
+        @contextmanager
+        def connection(path, *args):
+            if path == Path(target) / 'ledger.db':
+                raise sqlite3.OperationalError('synthetic count unavailable')
+            with original_connection(path, *args) as db:
+                yield db
+
+        monkeypatch.setattr(backup, '_inventory_connection', connection)
     assert backup.main(['drill', *args, '--keychain', '--bundle', receipt['bundle'],
                         '--sha256', receipt['sha256'], '--destination', target],
                        keychain_reader=lambda: KEY) == 0
@@ -959,7 +972,9 @@ def test_offsite_verify_and_escrow_proofs_are_distinct(world, tmp_path, capsys, 
     assert state['last_verify_key_source'] == 'keychain'
     drill_record = json.loads((tmp_path / 'records' / state['last_drill_record']).read_text())
     assert drill_record['outbound_attempts'] == 0
-    assert drill_record['held_render_count'] == 0
+    assert drill_record['held_render_count'] == (None if count_error else 0)
+    assert state['last_drill_at'] == NOW
+    assert state['last_action_status'] == 'ok'
     assert 'last_escrow_drill_at' not in state
     # Verifying an older snapshot must not roll back offsite freshness.
     records = backup._records(str(tmp_path / 'records'), world[3])
@@ -983,3 +998,10 @@ def test_restore_count_includes_pending_parts_of_delivered_cards(tmp_path):
         db.executemany('INSERT INTO notification_render_parts VALUES (?,?)',
                        [('a','pending'), ('a','unknown'), ('b','delivered'), ('c','held')])
     assert backup._held_render_count(str(tmp_path)) == 2
+
+
+def test_restore_count_old_schema_is_unknown(tmp_path):
+    with sqlite3.connect(tmp_path / 'ledger.db') as db:
+        db.execute('CREATE TABLE notification_renders(state TEXT)')
+        db.execute('CREATE TABLE notification_render_parts(delivery_id TEXT,state TEXT)')
+    assert backup._held_render_count(str(tmp_path)) is None

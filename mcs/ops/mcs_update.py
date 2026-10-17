@@ -2263,10 +2263,14 @@ def _target_card_layout(ref: str) -> int:
 
 
 def _rollback_layout_error(entry: dict) -> str | None:
-    """Old code has no guard for cards of a newer layout: it reads them as
+    """Refuse a rollback whose target code cannot read the stored card layout.
+
+    Old code has no guard for cards of a newer layout: it reads them as
     drifted and re-renders/re-sends every one. Refuse before any side
     effect; the way back is the human-consent restore, not old code on a
-    newer ledger. Checks the DB that will be live after the rollback."""
+    newer ledger. Checks the DB that will be live after the rollback and
+    passes only on a readable MAX(layout) or a provably absent cards table —
+    a DB that cannot be read is unverified, never safe."""
     path = (entry["backup_path"] if entry.get("schema_bump")
             and entry.get("backup_path") else LEDGER)
     if not os.path.isfile(path):
@@ -2275,6 +2279,12 @@ def _rollback_layout_error(entry: dict) -> str | None:
         con = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro",
                               uri=True)
         try:
+            columns = {row[1] for row in con.execute(
+                "PRAGMA table_info(notification_cards)")}
+            if "layout" not in columns:
+                # no cards table, or a schema older than the layout column:
+                # every card is layout 1 and nothing can be misread
+                return None
             # shortcut: revoked/deleted cards count too, narrow by
             # delivery_state if a rollback is ever blocked by dead cards only
             stored = con.execute(
@@ -2282,8 +2292,15 @@ def _rollback_layout_error(entry: dict) -> str | None:
             ).fetchone()[0]
         finally:
             con.close()
-    except sqlite3.Error:
-        return None                     # no cards table: nothing to misread
+    except sqlite3.Error as e:
+        if path != LEDGER:
+            # an unreadable backup already fails closed downstream:
+            # rollback() rejects it in _rollback_backup_error and the bail
+            # path's _restore_db escalates with writers stopped. Keep the
+            # backup validation in those paths; recovery preserves an
+            # incomplete restore until the bound target is restored.
+            return None
+        return f"rollback_layout_unverified: {e}"
     target = _target_card_layout(entry["prev_sha"])
     if stored <= target:
         return None
@@ -3114,7 +3131,13 @@ def recover_interrupted(if_stale: bool = False) -> int:
             # a wedge that keeps every send denied forever.
             return escalate("restore_consent without a rollback "
                             "journal — refusing to classify")
+        if (applying or {}).get("restore_incomplete") and not rollback_shaped:
+            return escalate("restore_incomplete without a rollback "
+                            "journal — refusing to classify")
         if os.path.exists(os.path.join(REPO, ".git", "MERGE_HEAD")):
+            if (applying or {}).get("restore_incomplete"):
+                return escalate("restore_incomplete with MERGE_HEAD — "
+                                "refusing to classify")
             if held():
                 # the rollback tree reset already completed before the
                 # consent hold began — a MERGE_HEAD here is drift
@@ -3136,6 +3159,11 @@ def recover_interrupted(if_stale: bool = False) -> int:
             return _finish_recovery(state, "interrupted_pre_merge", removed)
 
         head = _head_sha()
+        if applying.get("restore_incomplete") and head != target:
+            # A pre-reset rollback failure may leave HEAD at prev. It is
+            # not an interrupted forward merge and must keep writers frozen.
+            return escalate("restore_incomplete has not reached rollback "
+                            "target — refusing to classify")
         clean = _tree_clean()
         if head == target:
             if not clean:

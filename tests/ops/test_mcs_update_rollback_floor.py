@@ -49,7 +49,8 @@ def test_rollback_refuses_before_journal_when_target_lacks_the_layout(
     assert any("layout 3 > target layout 1" in n for n in notices)
 
 
-@pytest.mark.parametrize("ledger", ["absent", "no_table", "layout_ok"])
+@pytest.mark.parametrize("ledger", ["absent", "no_table", "no_layout_column",
+                                    "layout_ok"])
 def test_rollback_layout_floor_passes_when_nothing_can_be_misread(
         updater, tmp_path, monkeypatch, ledger):  # noqa: F811
     repo, _ = _make_repo(tmp_path)
@@ -57,8 +58,39 @@ def test_rollback_layout_floor_passes_when_nothing_can_be_misread(
     before, _ = _state(updater, repo)
     if ledger == "no_table":
         sqlite3.connect(updater.LEDGER).close()
+    elif ledger == "no_layout_column":          # schema older than layouts
+        con = sqlite3.connect(updater.LEDGER)
+        con.execute("CREATE TABLE notification_cards(card_id INTEGER PRIMARY KEY)")
+        con.commit()
+        con.close()
     elif ledger == "layout_ok":
         _cards(updater.LEDGER, 1, 1)
+    assert updater._rollback_layout_error(
+        updater.load_state()["applied"][-1]) is None
+
+
+def test_rollback_layout_floor_treats_an_unreadable_ledger_as_unverified(
+        updater, tmp_path, monkeypatch):  # noqa: F811
+    """A DB that cannot answer MAX(layout) is not evidence of safety."""
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    _state(updater, repo)
+    with open(updater.LEDGER, "wb") as f:
+        f.write(b"not a sqlite file" * 64)
+    err = updater._rollback_layout_error(updater.load_state()["applied"][-1])
+    assert err and err.startswith("rollback_layout_unverified:")
+
+
+def test_rollback_layout_floor_defers_an_unreadable_backup_to_the_restore(
+        updater, tmp_path, monkeypatch):  # noqa: F811
+    """The bail path must still reset the tree so recovery classifies the
+    journal as a pending restore; _restore_db then fails closed."""
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    backup = tmp_path / "pre.db"
+    backup.write_bytes(b"garbage" * 64)
+    _state(updater, repo, schema_bump=True, backup_path=str(backup))
+    _cards(updater.LEDGER, 3)
     assert updater._rollback_layout_error(
         updater.load_state()["applied"][-1]) is None
 

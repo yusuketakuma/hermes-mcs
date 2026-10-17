@@ -2,7 +2,7 @@
 
 本書は 1.0.23 の監査項目11–15に対応する実装契約である。既定の `legacy` は変更しない。候補と証拠が一致しない `canonical` は `legacy` / `mode=off` に戻し、設定エラーを返す。
 
-**評価用の候補生成・採点・昇格防御は実装済みだが、現在のローカル生成経路だけではG6を完了できない。** 監査、最終claims/loops、描画、配送の観測を生成していないためである。未観測を成功に補完しない。今回、実データ、実LLM、実サービス、実機での昇格は実行していない。
+**ローカル生成と、同一候補の既存監査・最終claims/loops・描画・配送証跡を生成時に封印する経路を実装した。** 外部監査や配送をこのrunnerが実行することはない。証跡なしはdeferred、供給された証跡の欠測・不一致は拒否し、未観測を成功に補完しない。今回、実データ、実LLM、実サービス、実機での昇格は実行していない。
 
 ## 1. 正本と構成
 
@@ -14,6 +14,8 @@
 | 集計・由来・型検査 | [semantic_evaluation.py](../../mcs/semantic/eval/semantic_evaluation.py) |
 | holdout・split・二重読み | [semantic_holdout.py](../../mcs/semantic/eval/semantic_holdout.py) |
 | 私有snapshotの候補生成・採点CLI | [semantic_snapshot.py](../../mcs/semantic/eval/semantic_snapshot.py) |
+| 既存証跡の生成時封印 | [semantic_snapshot_observations.py](../../mcs/semantic/eval/semantic_snapshot_observations.py) |
+| 二重盲検資料と採点の結合 | [semantic_snapshot_blind.py](../../mcs/semantic/eval/semantic_snapshot_blind.py) |
 | 新基準 | [g6-criteria-v2.json](../../evaluation/g6-criteria-v2.json) |
 | 旧基準（比較用に保持） | [g6-criteria-v1.json](../../evaluation/g6-criteria-v1.json) |
 
@@ -32,7 +34,7 @@
 
 新トークンは完全長の `criteria_sha256:report_sha256:candidate_fingerprint`（194文字）。report hashはJSONファイルの空白を含むraw bytesではなく、`payload_hash(report)` のcanonical JSONを対象とする。起動時とdoctorの設定検査で再照合する。旧 `<criteria version>:<短いdigest>` や任意文字列は通らない。`PLAN_VERSION=1` から `2`、prompt、model、context flag、判定閾値の変更でも以前の証拠は失効する。
 
-ロードコードのdigestにはPython code objectを使うため、Python環境・配置変更でも再評価が必要になる場合がある。指紋はモデルファイルの重み自体のhashではない。同じmodel idで重みを差し替えたことを証明する契約は未実装。
+ロードコードのdigestにはPython code objectを使うため、Python環境・配置変更でも再評価が必要になる場合がある。指紋はモデルファイルの重み自体のhashではない。同じmodel idの重み差替え検知は、この識別契約の保証範囲外でありモデル資産管理で扱う。
 
 ## 3. CLIと入力・出力境界
 
@@ -58,7 +60,7 @@ python3 mcs/semantic/eval/semantic_snapshot.py score \
 | 副作用 | 本番DB、通知先、MCS、Keychainには接続しない。本文と中間出力は私有runに残る |
 | 終了値 | 処理成功0、入力/出力エラー2。**scoreの0はG6合格ではない**。`report.gate`を確認する |
 
-`generate` はsnapshotの `records`、`manifest`、`data_origin` を読む。`real_authorized` では `authorization_receipt_sha256`（64桁hex）を要求する。この値の形式とsnapshotとの結合は検査するが、外部の利用許可台帳の実在・権限まで認証する仕組みではない。データ利用許可の確認は別途必要である。
+`generate` はsnapshotの `records`、`manifest`、`data_origin` を読む。`real_authorized` では `authorization_receipt_sha256`（64桁hex）を要求する。`--authorization "$PRIVATE/authorization.json"` により入力/configと別保存の許可receiptも必須とする。receiptは厳格なキー集合 `schema_version=1/purpose=sealed_candidate_evaluation/data_origin=real_authorized/snapshot_sha256/holdout_manifest_sha256/receipt_id/authorized_by/authorized_at` を持つ。snapshot_sha256はauthorization_receipt_sha256を除いた入力全体、holdout hashはmanifestと照合し、receipt全体のhashを入力のauthorization_receipt_sha256と照合する。未指定・不一致は拒否する。署名・人の本人性・許可発行者の権限を自動認証する仕組みではなく、許可台帳の管理は人運用に残る。合成はこのreceiptで実由来へ昇格しない。
 
 recordsの基本形は既存[評価仕様](semantic-evaluation.md)の識別子とbundleを使用する。各recordは `case_id/account_id/project_id/thread_id/patient_id/split/stratum/data_origin/bundle` を持つ。bundleの `messages` は `message_id/body` と必要な `revision/posted_at/body_state/patient_reports` を持つ。実効AI優先判定にはbundleの `project_type`、必要なら `patient_name` を使う。project_type欠測は患者本人と決めずgroup相当で保留する。生成入力にcandidateやlabelを持ち込まない。
 
@@ -86,7 +88,7 @@ manifestとrecordの `data_origin` は `synthetic` または `real_authorized`�
 | label_sha256 | labelからreviews/adjudication/receiptを除いた内容のhash |
 | `label.adjudication` | 2件の判断が最終labelと一致しない場合、別の名簿内reviewer・一意receipt・最終label hashを要求 |
 
-reviewerの実在や実際に候補名を伏せて読んだことをhashだけで証明するものではない。新runnerはblind worksheetの作成・配布UIを持たず、runのA/B識別子も伏せない。独立二重読みの準備、blind化、裁定記録は私有のレビュー手順で実施する。これを自動化した完全なblind運用経路は未実装である。
+reviewerの実在や実際に候補名を伏せて読んだことをhashだけで証明するものではない。新runnerのblind-prepare/mergeが方式名を伏せた独立資料と二重読み・裁定の結合を提供する（§7）。資料の個別配布、reviewerの独立性と本人性の確認は人運用である。
 
 ## 5. v2の合否と各metricの対象
 
@@ -125,29 +127,55 @@ configにはmetrics-onlyの `semantic.fact_source_evidence`、完全長token `fa
 
 `fact-source legacy` / `fact-source shadow` はこれらの設定上の参照を外す。過去の私有receiptは履歴として残す。`init --set` はcanonical選択・pinの変更経路にならない。doctorは既存のconfiguration checkに不一致を出す。
 
-## 7. 項目11–15の受入状況と残る実装
+## 7. 項目11–15の受入状況
 
-| 項目 | 確認済み実装 | 未完・未確認 |
+| 項目 | 実装済み経路 | 人運用・実環境での受入待ち、要件外の保証 |
 |---|---|---|
-| 11 候補同一性 | 版/prompt/schema/model/設定/実効バイタル方針を固定、tokenと独立receipt照合、不一致legacy/off、旧証拠失効 | 実機配備後のコード・モデル照合は未実施。同一model idの重み差替え検知なし |
-| 12 データ由来 | manifest/record由来一致、合成への人labelでG6不可、実由来件数下限 | 実データ利用許可台帳との独立照合は未実装、実データ評価未実施 |
-| 13 holdout/レビュー | source封印、split registry、一意receipt、名簿、二重読み/裁定のhash契約、層別下限 | registry完全性・reviewer実在・blind実施の確認は人運用。新runner専用blind worksheet経路は未実装 |
-| 14 基準/安全指標 | v1保持/v2追加、分母/Wilson、緊急度、実効AI優先、同一case A/Bの生成・採点gate | A/B採点rubricの固定と実データの達成値は未確認。独立classifierは追加しない |
-| 15 封印runner | repo/CI外、local-only、ロード候補刻印、予測変更拒否、metrics-only report、人承認照合 | **G6を通せるend-to-end生成経路は未完**。Jev監査、最終claims/loops、verified/rendered/delivered観測を生成していない |
+| 11 候補同一性 | 版/prompt/schema/model/設定/実効バイタル方針、tokenと独立承認receipt、不一致legacy/off | 実機配備後の照合は未実施。同一model idの重みhash固定は今回の識別契約外 |
+| 12 データ由来 | manifest/record一致、合成人labelでG6不可、別保存の利用許可receiptをsnapshot/holdout/purposeへ結合 | 許可者の権限・本人性は運用確認。署名基盤は提供しない。実データ評価未実施 |
+| 13 holdout/レビュー | source封印、split registry、一意receipt、名簿、二重読み/裁定hash、層別下限、blind-prepare/merge | registry完全性・reviewer実在・独立blind実施の確認は人運用 |
+| 14 基準/安全指標 | v1保持/v2、分母/Wilson、緊急度/実効AI優先、同一case A/B生成と採点 | A/B採点rubricをレビュー前に人が固定。実データ達成値は未測定 |
+| 15 封印runner | repo/CI外local-only生成、同一source/candidate/policy/generationの既存証跡読取り、生成時封印、後付け予測変更拒否、metrics-only報告 | 外部監査/配送をrunnerから実行しない。既存観測の品質と実サービス受領、本番G6は未検証 |
 
-項目15の残作業は、既存 `semantic_lifecycle.fact_lifecycle` 等が読む実際の監査・描画・配送証跡を、同一source/candidate/policyへ束ねた私有snapshotから取り込む経路である。現在の `score` はlabel以外の後付け変更を拒否するため、後からcandidateのlifecycle配列を書き足して合格させることはできない。観測receiptを候補と一緒に封印する生成段階の統合と、その一致・欠測・世代差異の回帰テストが必要となる。local-only実行で外部監査を実施したと捏造することや、未配送を配送済みへ補完することは解決策に含めない。
+### 私有snapshotの観測adapter
 
-### local-only受入と本番G6の境界
+各recordの任意の `sealed_observations` に次を含める。外部DBへの接続や後付けmetricsの入力ではなく、許可されたsnapshotの実artifact/outbox行を、固定schemaのインメモリSQLiteへ読み込む。
 
-項目15のlocal-model-only生成・封印・採点という実装経路は合成スタブで検証済みである。実モデル接続・実データ品質・配送を含む本番G6の受入は未実施であり、同じ完了状態にしない。
+- `schema_version:1`、入力bundleの `bundle_sha256`、現在の `candidate_fingerprint` と `policy_fingerprint`。
+- `bundle`: runtimeの `thread_bundle` 形。全memberのproject/message/body/revision/posted_atを入力と照合し、`bundle_fingerprint(..., local_model=現在model)` を再計算する。
+- `generation_sha256`: 生成された全documentのdoc配列hash。保存済みsemantic_facts_v2も、同じ生成docの `_doc_hash` と完全一致する必要がある。
+- `artifacts`: artifact_id/project_id/message_id/kind/content/meta/created_at。許可kindはfacts-v2、fact-audit、summary、summary-audit、loop-candidate/event/rejected、request-loop-linkのみ。content/metaはJSON objectで、全行のsource/policy/project/messageを照合する。request-loop-linkは既存保存形式に従いcontent内のsource_fingerprint/policy_fingerprintを使う。
+- `notify_outbox`: event_id/project_id/kind/state/payload/progress。semantic_noticeのみ。実際のchunk receiptを既存 `fact_lifecycle` で検査する。`requests`: project_id/request_id/status/revision/title。
+- `finals`: 各memberにつきfinal_id/audit_id/summary_sha256。最新のsummaryと、runtime `_write_result` が同一transactionで直後に保存するauditの連続ID対を照合する。PASSとtarget revisionを要求し、古い対への差替えを拒否する。
+- `loop_ids`: snapshot内のloop_candidate artifact IDの昇順全件。`effective_loop_state` で現世代を読む。報告上の完了候補はresolvedへ変換せず、人が結合したrequestが全てdone/cancelledのときだけresolvedとする。
 
-| 区分 | コード根拠と残作業 |
-|---|---|
-| 既存機能・実環境検証待ち | [semantic_v4.py](../../mcs/semantic/semantic_v4.py) のfact監査判定、[semantic_llm.py](../../mcs/semantic/semantic_llm.py) の最終要約、[semantic_loops.py](../../mcs/semantic/semantic_loops.py) のloop更新、[semantic_render.py](../../mcs/semantic/semantic_render.py) の描画、[semantic_lifecycle.py](../../mcs/semantic/eval/semantic_lifecycle.py) の監査/描画/配送receipt読取りは既存機能。今回その実データ品質・実サービス受領を確認していない |
-| 新runnerへの統合が未実装 | [semantic_snapshot.generate](../../mcs/semantic/eval/semantic_snapshot.py) はfactsとA/B抽出を生成するが、上記最終claims/loopsとlifecycle証跡を同一候補に結び付けて封印するadapterを持たない。外部呼出しを追加せず、許可済み私有snapshotの同一世代receiptを読取り、欠測・不一致を保ったまま生成時に固定する統合が必要 |
-| 盲検資料の既存機能と追加統合 | [semantic_blind.py](../../mcs/semantic/eval/semantic_blind.py) は従来3方式の匿名化資料・方式復元を持つ。新runnerのpatient-state A/Bと二重レビュー契約に対応した資料生成adapterは未実装。reviewer実在・許可台帳・blind実施の独立確認は運用上の受入事項 |
+監査は既存fact-auditのdoc hash/PASS/coverageを検査する。verified/rendered/deliveredはそれぞれ独立したreceiptから取り、前段の成功から次段を推定しない。最終claimsは保存済みsummaryを読み、整数fact_refsは同じdocの既存 `project_v2_facts` 順から安定fact IDへ変換する。全claimの参照が検証済みfact集合に含まれなければ拒否する。candidateの属性比較用には、polarity→negation、event_time/valid_time→time、subject/actor→speaker_relation、既存projectionのdrug_ref→medicationを明示的に写す。人labelもこの構造で採点する。
+
+観測を供給しない場合は従来通りdeferredでlifecycle欠測を保持する。供給した場合の欠測・別世代・不正receiptはrun生成を拒否する。配送0件を証明するreceiptは0件として保持し、未配送を成功へ補完しない。生成完了後はcandidateと観測bindingを予測hashに含め、scoreはlabel以外の変更を拒否する。同じOS所有者が全入力とhashを作り直す攻撃を防ぐ署名基盤ではない。
+
+### 新runnerの二重盲検資料
+
+```sh
+python3 mcs/semantic/eval/semantic_snapshot.py blind-prepare \
+  --input "$PRIVATE/run.json" --config "$PRIVATE/candidate-config.json" \
+  --reviewers reviewer-one reviewer-two --output "$PRIVATE/review-pack.json"
+
+python3 mcs/semantic/eval/semantic_snapshot.py blind-merge \
+  --input "$PRIVATE/run.json" --config "$PRIVATE/candidate-config.json" \
+  --key "$PRIVATE/coordinator-key.json" \
+  --reviews "$PRIVATE/review-one.json" "$PRIVATE/review-two.json" \
+  --output "$PRIVATE/reviewed-records.json"
+```
+
+prepare出力は `worksheets`（2名分）と `coordinator_key` を含む私有packである。管理者は各worksheetだけを各reviewerへ個別配布し、keyとpack全体は渡さない。方式のA/B順序とreview_idはreviewerごとに無作為化し、source/candidate/arm内容の変更をmergeで拒否する。本文のPII匿名化を保証する資料ではない。
+
+人が各caseのhuman_labelsに通常gold label（source=human、本人のreceiptを含む）、scores {A,B}、独立したreview_receipt_id、blind:trueを記入する。adapterがreceiptや採点を捏造することはない。不一致は別reviewerの裁定documentを `--adjudications` に指定する。裁定documentは第一worksheetの全caseをコピーしてreviewerを第三者に変更し、その人のhuman_labelsを記入する。merge結果を既存scoreの--reviewedへ渡す。全出力は0600・新規排他的作成、repo/CI外のみ。
+
+完全合成200caseのgenerate→receipt読取り→score回帰で、全必須metricの分母と数値閾値が充足可能であることを確認する。合成由来と人レビュー不足によってG6は不合格を維持する。これは実データG6達成の報告ではない。
 
 ## 8. 合成検証
+
+[生成時観測回帰](../../tests/semantic/test_snapshot_observations.py)と[盲検資料回帰](../../tests/semantic/test_snapshot_blind.py)は、source/candidate/policy/generation/doc不一致、監査・配送欠測、改変、私有CLI出力、許可receiptと全metric観測を検査する。
 
 [sealed candidate回帰](../../tests/semantic/test_sealed_candidate.py)は、候補不一致、PLAN変更、合成人label、receipt重複、seal/split/二重読み/裁定、分母・Wilson、新指標欠測、原文混入、loopback制約、予測改変、別保存承認不在、重複JSONキー・非有限値、既存実効AI表示との一致を検査する。
 

@@ -179,3 +179,93 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     assert updater.recover_interrupted() == 0
     assert restarts == [1] and not Path(updater.MARKER_PATH).exists()
     assert updater.load_state()["applying"] is None
+
+
+@pytest.mark.parametrize("shape", ["previous_clean", "previous_dirty", "merge_head",
+                                   "missing_backup", "unknown_head"])
+def test_incomplete_restore_never_finishes_without_restoring_target(
+        updater, tmp_path, monkeypatch, shape):
+    state = updater._default_state()
+    applying = {"sha": "a" * 40, "prev_sha": "b" * 40, "rollback": True,
+                "backup_path": str(tmp_path / "synthetic-backup.db"),
+                "restore_incomplete": True, "command_id": "synthetic-held"}
+    if shape == "missing_backup":
+        applying.pop("backup_path")
+    state.update(applying=applying, stages=[{"stage": "rollback", "at": 1}])
+    updater.save_state(state)
+    Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
+    if shape == "merge_head":
+        git_dir = Path(updater.REPO, ".git")
+        git_dir.mkdir(parents=True)
+        (git_dir / "MERGE_HEAD").write_text("c" * 40)
+    monkeypatch.setattr(updater, "_head_sha", lambda: "c" * 40 if shape == "unknown_head" else "b" * 40)
+    monkeypatch.setattr(updater, "_tree_clean", lambda: shape != "previous_dirty")
+    monkeypatch.setattr(updater, "_clean_stale_git_locks", lambda: [])
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("incomplete restore must not reset, finish, restore an unbound DB, or restart writers")
+
+    for name in ("_git", "_git_out", "_restore_db", "restart_agents", "_enqueue_notice",
+                 "_finish_recovery", "_undo_interrupted_migration"):
+        monkeypatch.setattr(updater, name, forbidden)
+    for _ in range(2):
+        assert updater.recover_interrupted() == 1
+        after = updater.load_state()
+        assert after["applying"] == applying and after["stages"] == state["stages"]
+        assert after["executed"]["synthetic-held"]["result"] == "escalated"
+        assert Path(updater.MARKER_PATH).read_text() == "synthetic writer freeze"
+        report = json.loads(Path(updater.REPORT_PATH).read_text())
+        assert report["writers_stopped"] is True
+        assert "restore_incomplete" in report["detail"]
+
+
+@pytest.mark.parametrize("failure_stage", ["layout_floor", "standalone_target", "runtime"])
+def test_apply_pre_reset_rollback_failure_survives_recovery(
+        updater, tmp_path, monkeypatch, failure_stage):
+    import maintenance
+    import mcs_setup
+    from ops_testkit import _git
+
+    repo, live, back, _before, after, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    updater.save_state(updater._default_state())
+    cfg = {"runtime_mode": "standalone", "update": {"mode": "notify"}}
+    monkeypatch.setattr(updater, "load_config", lambda: cfg)
+    monkeypatch.setattr(mcs_setup, "runtime_gate_errors", lambda *a, **k: [])
+    monkeypatch.setattr(updater, "precheck_local", lambda c: [])
+    monkeypatch.setattr(updater, "remote_tag_sha", lambda t: after)
+    monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
+    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: back)
+    monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
+    monkeypatch.setattr(updater, "_needs_migration", lambda v: False)
+    monkeypatch.setattr(updater, "_standalone_target_supported", lambda ref: True)
+
+    def runtime_failure(*args):
+        raise updater.UpdateError("synthetic runtime restore failure")
+
+    def child_failed(sha):
+        updater._remove_marker()
+        if failure_stage == "layout_floor":
+            monkeypatch.setattr(updater, "_rollback_layout_error",
+                                lambda entry: "rollback_blocked_layout_floor: synthetic")
+        elif failure_stage == "standalone_target":
+            monkeypatch.setattr(updater, "_standalone_target_supported", lambda ref: False)
+        else:
+            monkeypatch.setattr(updater, "_restore_runtime", runtime_failure)
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(updater, "_run_post_merge", child_failed)
+    original_db = Path(live).read_bytes()
+    assert updater.apply("v1.1.0", after, "synthetic-apply") == 1
+    assert updater._head_sha() == after
+    applying = updater.load_state()["applying"]
+    assert applying["restore_incomplete"] is True
+    assert applying["prev_sha"] == after
+    for _ in range(2):
+        assert updater.recover_interrupted() == 1
+        assert updater.load_state()["applying"] == applying
+        assert Path(updater.MARKER_PATH).exists()
+        assert updater._head_sha() == after
+        assert Path(live).read_bytes() == original_db
+        assert restarts == []

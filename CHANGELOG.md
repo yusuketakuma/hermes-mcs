@@ -6,6 +6,213 @@
 
 ## [Unreleased]
 
+## [1.0.23] — 2026-10-17
+
+**返信の要約と薬剤確認を拡充し、通知・更新・復元の安全性を改善**
+
+返信にも要約・スタンプ・本文の順で表示し、医薬品マスターを使う5つの確認機能を追加します。更新後は利用中の接続プロファイルを再起動してください。新形式カードの作成後は旧版へ直接戻せず、人承認付きの更新前バックアップ復元が必要です。
+
+### 新機能
+
+- **通知の本文・添付partの復旧をローカルCLIから確認**
+  配送結果が不明な通知partについて、通知先・attempt・hashを読取り専用で確認し、人が承認した結果を既存の受付経路へ渡せるようになりました。
+
+- **薬剤の変更経緯と薬歴の照合候補を確認**
+  薬剤コードの候補ごとに開始・中止・増減量・変更の記載を整理し、本人・家族、予定・実施の記載、過去・現在を区別できます。取得済みの構造化薬歴と投稿の薬名・明記された規格を比較し、情報時点と未取得・未抽出を添えて確認候補を示します。
+
+- **薬剤名の横断検索とマスター更新の確認候補**
+  公式一般名コードで結び付く商品名・一般名を規格と剤形を残して参照し、明示された規格・剤形・単位の食違いとマスター更新の影響を確認できます。
+
+- **薬剤の言及履歴と別名の承認操作を追加**
+  患者別に薬剤の記載を投稿順で確認し、予定・否定・過去・他者の言及と未取得・未抽出を区別できます。辞書別名は影響プレビューを固定し、人が確認した操作だけを既存receipt経路で適用・復旧できます。
+
+- **返信も含めて要約・スタンプ・本文の順に表示**
+  Slack・Discord・LINE WORKSへ届ける各投稿に、その投稿自身の要約、スタンプの観測状況、原文を順に表示します。返信の要約が後から完成した場合も配送内容へ反映し、未作成・作成失敗は区別して表示します。
+
+### 改善
+
+- **バックアップと復旧訓練の証拠を区別**
+  保存成功、復号検証、別保管鍵からの復旧訓練を分けて記録します。古いbackupの検証で最新保存の鮮度を巻き戻しません。
+
+- **通知の表示更新による再送とLINE WORKSの追加投稿を制限**
+  既存カードは表示版を維持し、更新だけを理由に一括再送しません。新規カードは要約・スタンプと原文を分離し、LINE WORKSでは変化のない原文を再送せず、元投稿の世代が同じ場合だけボタンを再利用します。配送部品の上限超過は末尾を省略せず保留として記録します。
+
+- **抽出候補の昇格証拠を実行する候補に固定**
+  モデル・プロンプト・抽出版・患者状態コンテキスト・判定設定が証拠と一致しない場合、canonical を有効にせず legacy に戻します。合成データへの人ラベルは実データの昇格証拠に数えません。
+
+- **Discordの画像添付を伏せ字（スポイラー）で配送**
+  Discordのスレッドへ配送する画像ファイル（png・jpg・jpeg・gif・webp・heic・bmp）は、キャプションとファイル名だけを表示し、画像本体はタップしたときに表示されるスポイラー添付として送ります。PDFなど画像以外のファイルの表示は変わりません。
+
+- **Slackのスレッド投稿で原文を折りたたみ、要約とスタンプを常に表示**
+  新しく作成されるカードのSlackスレッドでは、各投稿の見出し行とスタンプ行を小さな補足表示、要約を主内容として表示し、原文は「原文（N字）」の折りたたみブロックに収めます。要約だけを連続して読めるようになり、原文は必要なときに開きます。既存のカードや旧形式の投稿の表示は変わりません。
+
+- **新しいカード表示を作成した後は旧版へのロールバックを拒否**
+  更新後に新しいカード表示（layout 3）の通知カードが1件でも作成されると、その表示を扱えない旧版へのロールバックは実行前に拒否します。旧コードが新しいカードを変更済みと誤認して全件を再描画・再送する事故を防ぎます。拒否は停止・journal・ツリー変更のどれも行う前に判定し、受領結果と通知に理由（rollback_blocked_layout_floor）を記録します。
+
+### 不具合修正
+
+- **通知の待ち理由と配送の進行に合った案内**
+  送信結果不明・保留・再試行上限・古い記録を区別し、次回送信を約束しません。大量の待ち行列でも配送が進んでいれば停滞扱いにしません。
+
+- **複数Bot運用時のSlack通知先エラーを防止**
+  複数のHermesプロファイルが同じ通知設定を継承しても、指定されたプロファイルのBotだけがMCSのSlack通知を担当します。別Botによるworkerの引継ぎと、通知先へアクセスできず送信に失敗する問題を防ぎます。
+
+- **更新時のLLM導入指定と長文の分割結果の再利用を修正**
+  更新手順の例からLLM導入を省略する固定指定を除き、記録済みの導入設定を引き継ぐ説明へ修正しました。長文の分割規則の版を更新し、旧規則のチェックポイントが新版として再利用されることを防ぎます。
+
+- **通知workerの所有者と起動状況を確認**
+  Discordでも設定された担当profileと実際のBotを照合し、所有者不明の起動を防ぎます。起動証拠を診断へ表示します。
+
+### 更新時の注意
+
+- 従来記録は保持します。別保管鍵の訓練はkey-fdで実施してください。期限超過の復元overrideは提供せず、復元後は収集のみ再開し通知保留を維持します。
+
+- 新しい設定は不要です。ローカル運用者が公開snapshotで計画を確認し、worker停止・理由・必要な重複リスク承認を含むJSONをcontrol card_part_resolve --confirm-humanへ渡します。自動再送や復元保留の一括解除は行いません。
+
+- Hermesの全対象gatewayと利用中の独立adapterを再起動してください。LINE WORKSでは新着の要約を最大120秒待ちます（緊急通知を除く）。1投稿の初回部品数に加えて最大3件まで更新を追加し、最後に上限を明示します。追加投稿は撤回できません。既存カードを新表示へ一括移行しないため、自動移行による追加投稿はありません。新形式カードの作成後は旧版への直接rollbackを拒否します。戻す場合は人承認付きの手順で更新前backupを復元し、配送保留を維持してください。
+
+- 監視を行う収集プロセスへ反映してください。通知の保留・承認・配送予算は解除しません。
+
+- mcs drug timeline と reconcile を私有環境で明示実行します。横断的な名称照合には承認済み辞書と公開snapshotの辞書世代の一致が必要です。薬歴照合は既に取得された medication_periods を読み、追加取得・LLM再抽出・処方更新・外部exportは行いません。既定の通知・収集設定は変わりません。
+
+- 既存辞書は引き続き読めます。商品別の剤形・単位照合には追加情報を含む辞書の再作成と通常の明示承認・設定が必要です。辞書の自動有効化や全投稿のLLM再抽出は行いません。
+
+- mcs drug timeline と alias-propose/apply/rollback/receipt を明示実行します。別名適用には管理者の --confirm-human・reason・command-id が必要です。辞書更新にLLMの全件再抽出は伴いません。公開snapshotに反映されるまで結果確認は待機します。外部export・LINE WORKSのpushへの自動追加はありません。
+
+- 既定のlegacyは変更ありません。既存canonical利用者は旧トークンが失効するため、新基準v2による封印評価と二重の人レビューを実施してfact-source canonical --confirm-human --reason reviewed_sealed_holdoutで再設定してください。PLAN_VERSION 1から2への変更でも旧証拠は失効します。実データ評価はrepo・CI外の私有ファイルでローカルモデルだけを使い、実機での昇格は今回実施していません。
+
+- HermesのSlack通知を利用する場合はgatewayの再起動が必要です。通知先・承認条件・既定値は変更しません。送信結果不明の通知や再送上限で保留された通知は自動で解除しません。
+
+- コード更新後、Hermes利用時は使用中の全profileのgateway、独立接続では該当サービスを再起動し、指定ownerの起動証跡を確認します。新規カードだけ新しい表示形式を使い、既存layout1/2を表示版だけで一斉再送しません。旧カードの実内容が変わる場合は旧形式の更新処理を維持します。LINE WORKSでは投稿を編集・撤回できず、変更内容を追加投稿します。結果不明・再試行停止・復元保留は自動解除しません。取得範囲、通知先、既読化、人承認条件、抽出モデルは維持します。
+
+- コード更新後、Hermes利用時はgatewayの再起動が必要です。既存の添付は再送しません。Discordはスポイラー添付のファイル名を `SPOILER_` 付きで保存するため、既存の添付投稿のキャプション更新ではこの接頭辞を無視して同じファイルと照合します。
+
+- コード更新後、Hermes利用時はgatewayの再起動が必要です。折りたたみブロック（Slackのcontainerブロック）に対応していないワークスペースでSlackが拒否した場合は、同じ投稿を従来の本文テキストで1回だけ送り直し、イベントログに `blocks_rejected`（`reason=slack_container_unsupported`）を記録します。再送上限は消費しません。既存カードの再描画は行いません。
+
+- 旧保存結果は削除しません。分割規則の版を参照する再利用条件を満たさなくなるため、対象が再処理される際に計算し直します。全件再解析や抽出世代の変更は行いません。再導入のopt-outは記録済みの設定に合わせて指定してください。
+
+- v1.0.23はschema変更を伴わないため、ロールバック時に更新前DBの自動復元はありません。新しいカードが作成された後にv1.0.22以前へ戻す必要がある場合は、v1.0.23に留まるか、人承認のrestore手順で更新前バックアップを復元してから戻してください。旧コードを直接起動したりDBを直接書き換えて回避しないでください。schema変更を伴う更新では復元されるバックアップ側の内容で判定するため、従来どおりロールバックできます。 自動ロールバックの復元未完了が記録された場合、復旧の再試行だけでは停止状態を解除しません。診断に従って人による復旧を行ってください。
+
+- Hermes利用時は対象の全profile gatewayを再起動してください。固定SDKから所有者情報を取得できない場合は起動を保留します。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### バックアップと復旧訓練の証拠を区別
+
+- offsite成功とverify成功を分離し、key-fdのdrillだけlast_escrow_drill_atへ記録する。
+- 復元先の未完部品を含む保留render数を読取り専用で計測し、collect-onlyとoutbound_attempts=0を訓練記録へ残す。
+- 復元後の補助的な保留件数取得に失敗した場合は件数をunknownとして記録し、成功済みの復元/訓練を失敗扱いにしない。
+- 根拠: mcs/ops/mcs_backup.py、mcs/views/card_worker_status.py
+
+#### 通知の本文・添付partの復旧をローカルCLIから確認
+
+- card_part_planは患者本文を返さず、承認・enqueue・DB書込みをしない。
+- 既存のカード単位card_resolveはproject指定不要の契約を維持する。チャットtoolへの公開は追加しない。
+- 根拠: mcs/views/mcs_view.py、tests/views/test_card_part_cli.py、docs/guides/NOTIFICATION_RECOVERY.md
+
+#### 通知の表示更新による再送とLINE WORKSの追加投稿を制限
+
+- CARD_LAYOUT=3は新規カードのみ。layout 1/2のactor fingerprintとthread layout識別子を従来形式に保持する。
+- LINE WORKSの同じ表示対象・UI操作のカード面は旧token付きの部品を保持し、カードのprior_remote_idを厳格に検証する。結果不明の置換で旧ボタンを先行失効しない。原文世代の変更に対するstale_sourceは維持する。
+- LINE WORKSの観測時刻と時計由来の古い情報表示は再投稿を起こさず、投稿時点と表示する。
+- health.cards.layout_inventoryはtransport・layout・配送状態別件数と結果不明部品のあるカード数を読取り専用で報告する。
+- 結果不明の部品は読取り専用planの配送仕様hash・部品hash・試行ID・状態と、人承認・理由・worker停止の証拠を一致させてops.card_part_resolveで解決する。LINE WORKSの不在申告は重複リスク受容を明示必須とし、restore holdや再送予算を解除しない。
+- LINE WORKSカードと操作tokenの再利用は同じ原文世代に限定する。原文変更後は新しい操作tokenを持つ更新版カードを送り、旧世代のtokenを復活させない。
+- 配送部品数と旧本文の整理部品数、どちらの上限保留も起動時の復旧・spec再発行から除外し、workerへ保留中の配送計画を渡さない。
+- 根拠: mcs/notify/notify_cards.py、adapters/lineworks/delivery.py、tests/notify/test_delivery_v1023.py
+
+#### 通知の待ち理由と配送の進行に合った案内
+
+- unknown・held・exhausted・stale・missingの理由別に両runtimeの案内を検証する。
+- 最後のカード又は部品の配送進捗を最古queued時刻と併せて停滞判定に使用する。
+- 根拠: mcs/ingest/health_watch.py、mcs/ingest/run_check.py
+
+#### 薬剤の変更経緯と薬歴の照合候補を確認
+
+- 服用量を製剤規格に読み替えず、未取得の単位は不明のまま保持する。
+- 単一コード候補だけをページ内でまとめ、曖昧な薬名から同一薬や服用中を確定しない。
+- 実施記載は肯定かつasserted/reportedの根拠に限り、推測・不明は実施確定へ強めない。
+- 根拠: mcs/views/drug_timeline.py、mcs/views/drug_reconciliation.py、mcs/ops/mcs_drug.py
+
+#### 薬剤名の横断検索とマスター更新の確認候補
+
+- 旧版との比較は同じ42項目layoutの固定hash付き公開CSVまたはZIPを読み、廃止・経過措置・名称変更・採用辞書の一致を確認候補として返す。
+- 剤形コードは内用薬等の大分類であり、錠剤等の文字表記とは区別する。成分同等性、処方の正誤、禁忌を確定しない。
+- 根拠: mcs/extract/drug_map.py、mcs/ops/import_drug_master.py、mcs/views/drug_master_compare.py、mcs/ops/mcs_drug.py
+
+#### 薬剤の言及履歴と別名の承認操作を追加
+
+- 辞書SHA、resolver版、影響snapshot hashで古い提案を拒否し、部分失敗では旧辞書pinを保持する。
+- 根拠: mcs/views/drug_timeline.py、mcs/ops/drug_alias.py、mcs/ops/mcs_drug.py
+
+#### 抽出候補の昇格証拠を実行する候補に固定
+
+- 旧G6基準v1を保存し、v2では層別件数・患者/スレッド数・指標分母下限、適用可能な指標のWilson下限を追加。緊急度・AI優先度・同一症例の患者状態A/Bを必須にする。
+- 封印manifest、全splitの患者/スレッド登録、重複しないreceipt、独立したblind二重読みと不一致の裁定を検査する。
+- semantic_snapshot generate/scoreは実ロードした候補の指紋を保存し、原文・個別識別子を含む報告を昇格時に拒否する。未観測の監査・描画・配送は成功として補完しない。
+- 昇格レポートとは別の私有receiptで人承認を記録し、起動時も候補・基準・report・snapshot・holdoutの一致を確認する。
+- AI優先表示の合成評価は固定文字列のインメモリSQLiteだけを使用し、CIは可変パスやファイルDBの読取り専用条件を維持する。
+- 私有snapshotの同一source・candidate・policy・生成docに束縛された既存監査、最終主張、loop、描画・配送receiptを生成時に封印。別保存の利用許可receiptと二重盲検資料の生成・結合CLIを追加し、欠測や不一致を拒否する。外部監査・配送は実行せず、合成評価を実データG6の合格にしない。
+- 根拠: mcs/semantic/semantic_candidate.py、mcs/semantic/eval/semantic_snapshot.py、evaluation/g6-criteria-v2.json、ci/gates.py、mcs/semantic/eval/semantic_snapshot_observations.py、mcs/semantic/eval/semantic_snapshot_blind.py、tests/semantic/test_snapshot_observations.py、tests/semantic/test_snapshot_blind.py
+
+#### 複数Bot運用時のSlack通知先エラーを防止
+
+- Slack adapterの所有プロファイルを優先し、主adapterではgatewayの起動時に固定された主プロファイル名を参照する。従来SDKで取得できない場合はPluginContextのprofile_nameを利用し、既存の単一プロファイル起動との互換性を維持する。
+- 設定と異なるプロファイルではSupervisor作成前に終了し、既存の通知worker・共有client・配送journalに触れない。
+- 対象外プロファイルでworkerを起動しなかった場合は、秘密情報や識別子を含まないprofile_mismatch理由コードを記録する。
+- 通常CIで、主・従プロファイルの起動順と再接続を実Supervisor・共有ロックで検証し、別Botが正しいworkerを停止したり操作ハンドラーを登録したりしないことを回帰防止する。
+- 根拠: hermes_plugin/card_workers.py
+
+#### 返信も含めて要約・スタンプ・本文の順に表示
+
+- 各投稿の本文配送で共通の要約・スタンプ表示を使用し、既存の投稿キーと配送receiptによりSlack・Discordの更新先を維持する。
+- 新規論理カードにlayout3を割り当て、要約・スタンプのヘッダと原文を別部品にする。既存layout1/2の部品名・指紋は保持する。
+- 長文分割、余剰の旧本文片の整理、送信結果不明の保留、投稿数上限と添付配送の安全条件を維持する。
+- 現在のカード表示ページ外にある返信も後着の要約を反映する回帰テストを追加する。
+- 現在のカード表示ページ外のスタンプ更新も投稿ごとの表示差分として検知する。LINE WORKSは変更した投稿だけを改訂し、同じ観測内容では追加しない。
+- LINE WORKSの投稿内スタンプは観測日時を省き、同じ件数・押下者・取得状態を再観測しただけでは改訂投稿を増やさない。Slack・Discordの観測日時表示は維持する。
+- 根拠: mcs/notify/notify_cards.py、mcs/notify/notify_render.py
+
+#### Discordの画像添付を伏せ字（スポイラー）で配送
+
+- 添付の送信はこれまでと同じ1通のメッセージで、`discord.File` の `spoiler` 指定だけを追加する。
+- 添付投稿をComponents V2のコンテナにまとめる案は、キャプション更新の既存経路（本文編集）が使えなくなるため採用しない。
+- 根拠: adapters/discord/cards.py、adapters/discord/delivery.py
+
+#### Slackのスレッド投稿で原文を折りたたみ、要約とスタンプを常に表示
+
+- 要約・スタンプの見出し部分（`m:投稿ID:header#1`）と原文部分（`m:投稿ID#k`）に分割された投稿だけを対象とし、見出し部分のない旧形式の投稿は従来どおり本文テキストのみで送る。
+- Block Kitは追加情報として送り、`text`には従来と同じ本文全文を入れる。重複防止の本文一致判定とリモート検証は変更しない。
+- 既存投稿の更新（chat.update）でも同じblocksを同送し、textだけの更新で折りたたみが消えないようにする。
+- 原文が1つのcontainerに収まらない長さの場合は従来の本文テキストで送る。
+- 根拠: adapters/slack/cards.py、adapters/slack/delivery.py
+
+#### 更新時のLLM導入指定と長文の分割結果の再利用を修正
+
+- clinical_chunking.PLAN_VERSIONを1から2へ更新。
+- 旧版チェックポイントの保持・再利用拒否と新版の再利用を合成テストで確認。
+- 根拠: mcs/extract/clinical_chunking.py、docs/guides/UPGRADE_AGENT.md
+
+#### 新しいカード表示を作成した後は旧版へのロールバックを拒否
+
+- mcs_update.rollback() は backup 検査と同列（journal・quiesce の前）に _rollback_layout_error を評価し、UpdateError で rollback_failed として受領を消費する。
+- _rollback_tree にも同じ検査を置き、apply失敗時の自動rollbackと中断回復のrollback経路（旧コードをcheckoutする全経路）を reset 前に止める。
+- 判定: ロールバック後に稼働するDB（schema_bump なら backup、それ以外は ledger）の notification_cards.layout の最大値が、戻り先 commit の mcs/notify/notify_cards.py の CARD_LAYOUT（定数が無い版は1）を超えるとき拒否。ledger・cards 表・layout 列が無ければ全カードが layout 1 なので従来どおり。live ledger が読めない場合は rollback_layout_unverified で拒否し、安全と推定しない。読めない backup は既存の backup 検査と restore 失敗（writer 停止のまま escalate）に委ねる。
+- 更新失敗後の自動rollbackがreset前に失敗した場合も、通常・外部の両復旧入口はrestore_incompleteを維持し、更新前中断として完了・writer再起動しない。rollback先への到達と実際のDB復元が確認できる経路以外は人による復旧が必要な停止状態を保持する。
+- 根拠: mcs/ops/mcs_update.py、tests/ops/test_mcs_update_rollback_floor.py、deployment/recovery/mcs_recover.py、tests/ops/test_update_recovery_stability.py、tests/meta/test_mcs_recover.py
+
+#### 通知workerの所有者と起動状況を確認
+
+- 所有者判定の出所を記録し、Supervisor.startの成功時だけ起動証跡を保存する。
+- doctorは復元markerと未解除の個別holdを照合し、読取不能を保留なしとしない。
+- doctorの既定はDBをprobeしない。復元markerなしはunknown、明示した--probe dataだけが読取専用で個別restore holdを照合する。
+- 根拠: hermes_plugin/card_workers.py、mcs/views/card_worker_status.py
+
+</details>
+
 ## [1.0.22] — 2026-10-16
 
 **セキュリティ修正5件と、AIによる導入・更新・復旧の改善**

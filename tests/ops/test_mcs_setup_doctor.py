@@ -225,7 +225,7 @@ assert source['restart_request'] == {'status': 'unknown'}
                                          ('disabled', 'profile_mismatch')])
 def test_doctor_exposes_worker_and_restore_holds(local_config, monkeypatch, capsys, state, reason):
     import card_worker_status
-    monkeypatch.setattr(card_worker_status, 'diagnose', lambda *a: {
+    monkeypatch.setattr(card_worker_status, 'diagnose', lambda *a, **kw: {
         'state': state, 'reason': reason, 'restore_delivery_held': True,
         'recovery_scope': 'collect_only'})
     assert mcs_setup.main(['doctor', '--json']) == 0

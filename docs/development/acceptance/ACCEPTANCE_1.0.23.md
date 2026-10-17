@@ -11,7 +11,7 @@ Fableレビューの1〜32、Slack/Discord表示改善、導入・更新・復�
 | 1 | 既存レイアウト固定・移行対象の読取診断 | 実装・局所検証済み |
 | 2 | rollback時の再投稿防止 | 更新・復旧経路の確認中 |
 | 3 | worker所有者と起動証跡のdoctor/health診断 | 実装・局所検証済み |
-| 4 | 所有者不明時の拒否・固定SDK属性契約 | 実装済み・SDK検証待ち |
+| 4 | 所有者不明時の拒否・固定SDK属性契約 | 実装済み・固定Hermes 21件とstandalone 12件成功 |
 | 5 | LINE WORKS文書・画面の整合 | guide・SVG/PNG2枚・生成check・目視済み |
 | 6 | 1.0.23更新手順 | 更新済み・updater最終契約と照合待ち |
 | 7 | 1.0.22からの更新fixture | schema/更新364件成功・tick19件は編集静止後 |
@@ -20,9 +20,9 @@ Fableレビューの1〜32、Slack/Discord表示改善、導入・更新・復�
 | 10 | LINE WORKS要約待機・公開条件・改訂上限 | 実装・局所検証済み |
 | 11 | 候補指紋と独立人承認receipt | 実装・局所検証済み |
 | 12 | 実データと合成の品質証拠区別 | 実装・局所検証済み |
-| 13 | holdout封印・split・blind二重評価 | 実装・局所検証済み |
+| 13 | holdout封印・split・blind二重評価 | blind資料作成・二重レビュー・裁定・元候補への結合まで実装、局所検証済み |
 | 14 | 分母・Wilson・緊急度/AI優先・A/B基準 | 実装・局所検証済み |
-| 15 | 私有snapshotのローカル評価runner | 実装済み・実データ/モデル受入未実施 |
+| 15 | 私有snapshotのローカル評価runner | claims/loops・監査/描画/配送証跡の同一候補束縛を実装・局所検証済み。実データ/モデル受入未実施 |
 | 16 | 薬剤言及履歴と取得範囲 | 実装・局所検証済み |
 | 17 | 別名提案・承認・rollback | 実装・局所検証済み |
 | 18 | 自動export禁止・私有表示境界 | 局所検証済み |
@@ -54,18 +54,18 @@ Fableレビューの1〜32、Slack/Discord表示改善、導入・更新・復�
 
 | ゲート | 状態 |
 |---|---|
-| 全実装要件→コード/テスト/設定/資産/文書/配布物の対応表 | 集約中 |
+| 全実装要件→コード/テスト/設定/資産/文書/配布物の対応表 | [取り込み対応表](UPDATE_ITEMS_1.0.23.md)を作成。項目12/13/15の補完実装も同期済み |
 | インストーラー・アップデーター・リカバリーの実入口・中断/再実行/rollback | 担当検証中 |
 | 全126WTの製品差分・未追跡・独自履歴の処置 | [最終照合台帳](WORKTREE_INTEGRATION_1.0.23.md)で完了。未収録5合成テストを追加、元WT保持。最終候補commitとの再照合は別ゲート |
 | 全repoの不要コード・配置・文書整理 | [全領域調査](REPOSITORY_HYGIENE_1.0.23.md)。削除根拠のある候補0、古い現行文書導線を修正 |
 | `scripts/run_tests.sh` 全体＋関連integration | 編集完了後 |
-| 固定Hermes SDK `check_pinned_sdks.sh hermes` とstandalone SDK | 未完、依存未導入skipは不可 |
+| 固定Hermes SDK `check_pinned_sdks.sh hermes` とstandalone SDK | Hermes 21件、standalone 12件成功。固定SDKを隔離導入、生サービス通信なし |
 | `ruff check` CI全範囲、`ci/gates.py`、`ci/mine_gates.py --check` | 最終差分で未完 |
 | `release_notes.py` check/build、`tests/release` | 未完 |
 | `update_readme.py --check`、`readme_release.py --check`、1.0.23 READMEレビュー | 未完 |
 | Slack/LINE WORKS gallery生成・check・目視 | 統合待ち |
 | 公式薬剤masterの新規取得時刻・ZIP SHA・bundle検証 | 2026-10-17T02:11:57Z再取得、同梱20261013 ZIP SHA `c3efc8aa772b9bf54cfa992e8df3bc82480f86f35bbeb52522d0997144140fb5` と一致。bundle 19,286行検証成功、activation=false。importer追加変更後も再検証成功 |
-| CodeRabbit固定差分（比較元は前版本番相当SHA、秘密/実データ除外） | 現在の拡張差分は未実施 |
+| CodeRabbit固定差分（比較元は前版本番相当SHA、秘密/実データ除外） | round1は131 text files全件、completed/exit0。3指摘のうち2採用、1は既存NULL安全処理により不採用。補完実装と修正後のround2待ち |
 | 最終候補のGit差分・未追跡・意図しない変更確認 | 未完 |
 | 最終SHAの必須CI | push未承認につき未実施 |
 
@@ -118,3 +118,13 @@ W1の最終記録は705件のdirty/untrackedパス観測（集約先の作業中
 配送の独立レビュー3件を修正した。card自身のunknownを子部品の矛盾から除外する回帰12件と既存復旧78件が成功。LINE WORKSはsource_generationが同じ場合だけカード/トークンを再利用し、変更後の新ボタンが操作可能・旧ボタンがstale_sourceとなることを確認した。新旧の部品予算超過holdは直接公開・recoverの両方から除外し64件成功。3修正の専用回帰は27件成功（対象重複のため合算しない）。固定候補の全体検証は別ゲート。
 
 追跡IDはFable 1〜32、D1〜D5、W1の計38件で欠落なし。全体テスト・CodeRabbit固定差分・固定Hermes/standalone SDK・最終Git差分・exact CIは前掲ゲートの未完了状態を維持する。局所検証件数は重複を含み、合算して全体成功件数を作らない。
+
+Doctorの既定DB probeによる既存契約の回帰を修正した。DB読取は既存の明示 `--probe data` に限定し、markerなし・未probeはunknown。関連96件成功。
+
+### 評価経路の補完と最終局所検証
+
+項目12は別保存の私有利用許可receiptをsnapshot/holdout/purposeへ結合し、欠測・不一致を拒否する。項目13は独立A/B資料、二重読み、第三者裁定、元候補へのlabel結合をCLIで実装。項目15は既存の監査・最終claims/loops・描画/配送receiptを同じsource/candidate/policy/generationに束縛して生成時に封印する。人の実在・実際の盲検実施・利用許可の権限は運用確認であり、自動で保証しない。
+
+最終4ファイルの評価回帰125件成功。完全合成200caseのgenerate→scoreで全必須metricの分母と数値閾値を満たせることを確認し、syntheticのG6不合格は維持した。実データ評価・実モデル・外部監査・配送は実行していない。後付け改変と不一致の拒否、CLIの私有出力・汎用エラーも確認した。
+
+通常・外部の両recoverでrestore_incompleteをinterrupted_pre_mergeへ誤分類しない修正は関連335件成功。補助的な保留件数SQL失敗を復元全体の失敗としない修正はbackup102件成功。

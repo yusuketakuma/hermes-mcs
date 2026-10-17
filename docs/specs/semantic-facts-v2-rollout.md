@@ -51,9 +51,12 @@ clears config references but preserves approval history. `init --set` cannot
 select canonical or change its pin; promotion goes through `fact-source`.
 
 The sealed runner generates local-model candidates and scores sealed labels.
-It does not yet join the existing audit, final claims/loops, rendering and
-delivery receipts into that run. Its successful execution is therefore not
-production G6 acceptance, and missing observations still fail the gate.
+It binds existing audit, final claims/loops, rendering and delivery receipts
+from a private snapshot to the same source, candidate, policy and generation
+before sealing that run. Blind worksheets and an independent authorization
+receipt support review; no external audit or delivery is invented or invoked.
+Successful execution is not production G6 acceptance, and missing or mismatched
+observations still fail the gate.
 
 ## Canonical pipeline
 

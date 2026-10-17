@@ -1506,7 +1506,13 @@ def recover(if_stale=False):
             # 'finish' into a wedge that keeps every send denied.
             return escalate("restore_consent without a rollback "
                             "journal — refusing to classify")
+        if (applying or {}).get("restore_incomplete") and not rollback_shaped:
+            return escalate("restore_incomplete without a rollback "
+                            "journal — refusing to classify")
         if os.path.exists(os.path.join(REPO, ".git", "MERGE_HEAD")):
+            if (applying or {}).get("restore_incomplete"):
+                return escalate("restore_incomplete with MERGE_HEAD — "
+                                "refusing to classify")
             if held():
                 # rollback's tree reset completed before the consent
                 # hold — a MERGE_HEAD here is drift
@@ -1540,6 +1546,11 @@ def recover(if_stale=False):
             return _finish(state, "interrupted_pre_merge", removed)
 
         head = _head()
+        if applying.get("restore_incomplete") and head != target:
+            # A pre-reset rollback failure may leave HEAD at prev. It is
+            # not an interrupted forward merge and must keep writers frozen.
+            return escalate("restore_incomplete has not reached rollback "
+                            "target — refusing to classify")
         if not head:
             return git_failed("rev-parse HEAD")
         clean = _clean()

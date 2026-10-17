@@ -9,6 +9,7 @@
   ],
   "details": [
     "offsite成功とverify成功を分離し、key-fdのdrillだけlast_escrow_drill_atへ記録する。",
-    "復元先の未完部品を含む保留render数を読取り専用で計測し、collect-onlyとoutbound_attempts=0を訓練記録へ残す。"
+    "復元先の未完部品を含む保留render数を読取り専用で計測し、collect-onlyとoutbound_attempts=0を訓練記録へ残す。",
+    "復元後の補助的な保留件数取得に失敗した場合は件数をunknownとして記録し、成功済みの復元/訓練を失敗扱いにしない。"
   ]
 }

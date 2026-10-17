@@ -1533,3 +1533,39 @@ def test_restore_staging_closes_its_fd_when_fstat_fails(rec, tmp_path, monkeypat
     monkeypatch.undo()
     with pytest.raises(OSError):
         os.fstat(made[-1][0])          # closed, not leaked
+
+
+@pytest.mark.parametrize("shape", ["previous_clean", "previous_dirty", "merge_head",
+                                   "missing_backup", "unknown_head"])
+def test_incomplete_restore_never_finishes_without_restoring_target(
+        rec, tmp_path, monkeypatch, shape):
+    state = _applying("b" * 40, sha="a" * 40, stage="rollback")
+    applying = state["applying"]
+    applying.update(rollback=True, backup_path=str(tmp_path / "synthetic-backup.db"),
+                    restore_incomplete=True, command_id="synthetic-held")
+    if shape == "missing_backup":
+        applying.pop("backup_path")
+    rec._save_state(state)
+    Path(rec.MARKER_PATH).write_text("synthetic writer freeze")
+    if shape == "merge_head":
+        git_dir = Path(rec.REPO, ".git")
+        git_dir.mkdir(parents=True)
+        (git_dir / "MERGE_HEAD").write_text("c" * 40)
+    monkeypatch.setattr(rec, "_head", lambda: "c" * 40 if shape == "unknown_head" else "b" * 40)
+    monkeypatch.setattr(rec, "_clean", lambda: shape != "previous_dirty")
+    monkeypatch.setattr(rec, "_clean_stale_git_locks", lambda: [])
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("incomplete restore must not reset, finish, restore an unbound DB, or restart writers")
+
+    for name in ("_git", "_git_out", "_restore_db", "_restart_drainers", "_restart_services", "_finish"):
+        monkeypatch.setattr(rec, name, forbidden)
+    for _ in range(2):
+        assert rec.recover() == 1
+        after = rec._load_state()
+        assert after["applying"] == applying and after["stages"] == state["stages"]
+        assert after["executed"]["synthetic-held"]["result"] == "escalated"
+        assert Path(rec.MARKER_PATH).read_text() == "synthetic writer freeze"
+        report = json.loads(Path(rec.REPORT_PATH).read_text())
+        assert report["writers_stopped"] is True
+        assert "restore_incomplete" in report["detail"]
