@@ -25,7 +25,7 @@ def test_private_summary_uses_only_validated_counts_and_no_checkpoint_text(led, 
     monkeypatch.setattr(extract_llm, "progress_for_message", read, raising=False)
     led.db.execute("PRAGMA query_only=ON")
     progress = extraction_progress.patient_progress(led.db, 1, cfg={})
-    assert progress == {"processing": 1, "complete": 1, "attention": 1,
+    assert progress == {"processing": 1, "complete": 1, "attention": 1, "unknown": 0,
                         "completed": 4, "total": 7, "posts": 3, "limited": False}
     text = notify_views.patient_summary_text(led.db, 1, cfg={})[1]
     assert "処理中1・完了1・要確認1（7区間中4区間完了）" in text
@@ -60,7 +60,8 @@ def test_unknown_configuration_is_attention_not_complete(led, monkeypatch, cfg):
     _patient(led)
     _msg(led, 1)
     monkeypatch.setattr(extract_llm, "progress_for_message", lambda *a, **k: pytest.fail("unbound reader"), raising=False)
-    assert extraction_progress.patient_progress(led.db, 1, cfg=cfg)["attention"] == 1
+    progress = extraction_progress.patient_progress(led.db, 1, cfg=cfg)
+    assert progress["unknown"] == 1 and progress["attention"] == progress["complete"] == 0
 
 
 @pytest.mark.parametrize("fault", ["snippet", "null", "bad_hash"])
@@ -74,7 +75,10 @@ def test_unfetched_or_partial_source_cannot_be_complete(led, monkeypatch, fault)
             led.db.execute("UPDATE messages SET body_state=? WHERE message_id=1",
                            (None if fault == "null" else "snippet",))
     monkeypatch.setattr(extract_llm, "progress_for_message", lambda *a, **k: pytest.fail("partial source"), raising=False)
-    assert extraction_progress.patient_progress(led.db, 1, cfg={})["attention"] == 1
+    progress = extraction_progress.patient_progress(led.db, 1, cfg={})
+    assert progress["unknown"] == 1 and progress["attention"] == progress["complete"] == 0
+    # an unfetched post is shown as unknown, never as a finding (要確認)
+    assert "要確認0・状況未取得1" in extraction_progress.summary_lines(led.db, 1, cfg={})[0]
 
 
 @pytest.mark.parametrize("reply", [None, {"state": "complete", "completed": 4, "total": 1},
@@ -83,7 +87,8 @@ def test_malformed_backend_result_does_not_claim_completion(led, monkeypatch, re
     _patient(led)
     _msg(led, 1)
     monkeypatch.setattr(extract_llm, "progress_for_message", lambda *a, **k: reply, raising=False)
-    assert extraction_progress.patient_progress(led.db, 1, cfg={})["attention"] == 1
+    progress = extraction_progress.patient_progress(led.db, 1, cfg={})
+    assert progress["unknown"] == 1 and progress["complete"] == 0
 
 
 def test_newest_twenty_scope_is_explicit_and_other_patient_deleted_posts_excluded(led, monkeypatch):
@@ -104,13 +109,13 @@ def test_newest_twenty_scope_is_explicit_and_other_patient_deleted_posts_exclude
     lines = extraction_progress.summary_lines(led.db, 1, cfg={})
     assert seen == list(range(22, 2, -1))
     assert "最新20投稿" in lines[0] and "完了20" in lines[0]
-    assert "以前の投稿は対象外" in lines[0] and len(lines) == 1
+    assert "（20区間中20区間完了・以前の投稿は対象外）" in lines[0] and len(lines) == 1
 
 
 def test_no_fetched_post_is_unconfirmed_not_a_zero_post_completion(led):
     _patient(led)
     assert extraction_progress.summary_lines(led.db, 1, cfg={}) == [
-        "抽出の処理状況: 要確認（表示対象の取得済み投稿なし）"]
+        "抽出の処理状況: 取得済みの投稿はありません"]
 
 
 @pytest.mark.parametrize("change", ["none", "source_edit", "model"])

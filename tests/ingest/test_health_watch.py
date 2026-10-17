@@ -966,3 +966,9 @@ def test_degraded_flapping_does_not_realert_until_interval(tmp_path):
     assert not tick(4600, "ok", [])
     later = 4000 + health_watch.REALERT_S
     assert tick(later, "degraded", ["stage_errors"])           # interval passed
+
+
+def test_standalone_owned_reason_is_shown_in_japanese():
+    text = "\n".join(health_watch._reason_rows({}, ["standalone_owned"]))
+    assert "standalone_owned" not in text
+    assert "独立動作が配送を担当しています" in text

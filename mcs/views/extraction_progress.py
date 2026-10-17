@@ -46,13 +46,14 @@ def patient_progress(db, project_id, *, cfg=None):
     rows = db.execute("SELECT * FROM messages WHERE project_id=? AND body_state IS NOT 'deleted' "
                       "ORDER BY posted_at_ts DESC,message_id DESC LIMIT ?",
                       (project_id, LATEST_POSTS + 1)).fetchall()
-    result = {"processing": 0, "complete": 0, "attention": 0,
+    result = {"processing": 0, "complete": 0, "attention": 0, "unknown": 0,
               "completed": 0, "total": 0, "posts": min(len(rows), LATEST_POSTS),
               "limited": len(rows) > LATEST_POSTS}
     for raw in rows[:LATEST_POSTS]:
         progress = message_progress(db, raw, cfg=cfg)
         if progress is None:
-            result["attention"] += 1
+            # not fetched / lookup failed: unknown, never a finding (要確認)
+            result["unknown"] += 1
             continue
         result[progress["state"]] += 1
         result["completed"] += progress["completed"]
@@ -64,12 +65,17 @@ def summary_lines(db, project_id, *, cfg=None):
     """One count-only line about extraction progress for the patient."""
     progress = patient_progress(db, project_id, cfg=cfg)
     if not progress["posts"]:
-        return ["抽出の処理状況: 要確認（表示対象の取得済み投稿なし）"]
+        return ["抽出の処理状況: 取得済みの投稿はありません"]
     scope = f"最新{progress['posts']}投稿"
     line = (f"抽出の処理状況（{scope}）: 処理中{progress['processing']}・"
             f"完了{progress['complete']}・要確認{progress['attention']}")
+    if progress["unknown"]:
+        line += f"・状況未取得{progress['unknown']}"
+    notes = []
     if progress["total"]:
-        line += f"（{progress['total']}区間中{progress['completed']}区間完了）"
+        notes.append(f"{progress['total']}区間中{progress['completed']}区間完了")
     if progress["limited"]:
-        line += "（以前の投稿は対象外）"
+        notes.append("以前の投稿は対象外")
+    if notes:
+        line += f"（{'・'.join(notes)}）"
     return [line]

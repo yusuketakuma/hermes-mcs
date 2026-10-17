@@ -590,6 +590,8 @@ _REASON_JA = {
                          "固定Hermes版とprofile設定を確認。所有不明のworkerは起動しません"),
     "application_mismatch": ("DiscordのBotと通知設定が一致しません",
                              "Bot IDとapplication_idを確認"),
+    "standalone_owned": ("独立動作が配送を担当しています",
+                         "runtime_mode と通知設定のどちらが配送を担当するか確認"),
     "restore_delivery_held": ("復元後の通知を保留しています",
                               "復元は収集再開までです。配送先照合と個別承認なしに通知を再開しません"),
     "run_failed": ("収集の実行が失敗しました",

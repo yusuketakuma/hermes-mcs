@@ -102,8 +102,9 @@ def test_signal_face_labels_type_and_state_in_japanese(led):
     notify_cards.sweep(led, CFG, now=NOW)
     texts = _texts(_spec(led))
     assert texts[0] == "🔔 アラート · 要確認"           # discharge is immediate
-    assert "・【期限超過】note s1（解消）" in texts[-1]
-    assert "・【退院連絡】note s2（未確認）" in texts[-1]
+    assert "・【期限超過】note s1 · 解消" in texts[-1]
+    assert "・【退院連絡】note s2\n" in texts[-1] + "\n"
+    assert "未確認" not in texts[-1]
     assert "resolved" not in "".join(texts)
 
 
@@ -121,7 +122,7 @@ def test_signal_thread_posts_are_keyed_per_signal(led):
     assert len(names) == 4 and all(n.startswith("s:") for n in names)
     assert names[0] != names[1]
     body = "".join(_spec(led)["parts"]["thread_body_parts"])
-    assert "/ 状態: 未確認" in body and "↳ 患者A · " in body
+    assert "状態:" not in body and "未確認" not in body and "↳ 患者A · " in body
     assert "[MCS]" not in body and "project 1" not in body
 
 
