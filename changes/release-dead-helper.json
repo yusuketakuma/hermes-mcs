@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "患者の記録表示で使っていない内部処理を整理",
+  "summary": "呼出しのない日付変換処理を削除しました。表示・保存データ・操作方法は変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": ["patient_context_view._day はコード・テスト・CLI・adapter・plugin・導入更新復旧経路から参照がなく、既存の日付表示は各表示処理が担うため削除。"],
+  "refs": ["mcs/views/patient_context_view.py"]
+}

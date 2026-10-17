@@ -7,10 +7,9 @@ current clinical state, a formal completion or which of two records is
 right; authorization stays with the caller and ``role_order`` only
 reorders sections.
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 import re
 
-from mcs_queries import JST
 from read_model import read_model
 
 # One source for every role surface (CLI --role, chat 表示順 buttons): labels and order only,
@@ -51,10 +50,6 @@ _ROLE_OF_PROFESSION = (("看護", "nurse"), ("歯科", "dental"), ("医師", "ph
                        ("理学", "rehab"), ("作業療法", "rehab"), ("言語", "rehab"), ("リハ", "rehab"),
                        ("栄養", "nutrition"), ("施設", "facility"), ("通所", "facility"), ("デイ", "facility"))
 _ORG_WORD = re.compile(r"事業所|ステーション|クリニック|薬局|病院|医院|診療所|センター|施設|居宅|訪問看護|訪問介護|デイ")
-
-
-def _day(ts):
-    return datetime.fromtimestamp(ts, JST).strftime("%Y-%m-%d") if isinstance(ts, (int, float)) else None
 
 
 def _mentions(db, project_id, senders):
