@@ -42,8 +42,28 @@ set -eu
 umask 077
 
 usage() {
-    # print the header comment block (everything after the shebang)
+    # Keep the complete Japanese prerequisites and option explanations above.
     awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+    printf '\n通常はオプションなしで実行し、画面の番号を選んでください。\n'
+    printf 'ソフトの準備後は、初期設定へ続けて進むか後で設定するか選べます。\n'
+}
+
+# EOF is cancellation, never acceptance of a recommended action.
+choose() {
+    while :; do
+        printf '%s' "$1"
+        _answer=""
+        if ! read -r _answer; then
+            printf '\n入力を終了したため、ここで中止しました。\n'
+            return 130
+        fi
+        case "$_answer" in
+            ""|1) _answer=1; return ;;
+            2) return ;;
+            0) printf '中止しました。\n'; return 130 ;;
+            *) printf '1 または 2 を入力してください。中止は 0 です。\n' ;;
+        esac
+    done
 }
 
 MODE=install
@@ -82,16 +102,15 @@ done
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ ! -e "$HOME/.mcs/config.json" ] \
         && [ ! -L "$HOME/.mcs/config.json" ] \
         && [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ]; then
-    printf '%s\n' "【導入方法】Slack／Discord への接続方法を選んでください。" \
-        "  1) Hermes を通じて接続する（hermes）" \
-        "  2) MCS 単独で接続する（standalone）"
-    printf '1 または 2 を入力してください（Enter: 1）: '
-    _answer=""
-    read -r _answer || :
+    printf '%s\n' "MCS の導入を始めます。番号を入力して Enter キーで進みます。" \
+        "Slack / Discord との連携方式を選んでください。" \
+        "  1) わからないので推奨を使う — Hermes Agent と連携（標準）" \
+        "  2) MCS 単独で使う — Hermes Agent を導入しない" \
+        "LINE WORKS を使う場合も、通知先は後の初期設定で選べます。"
+    choose '選択 [1・推奨 / 2 / 0・中止]: '
     case "$_answer" in
-        2|standalone) RUNTIME_MODE=standalone ;;
-        ""|1|hermes) RUNTIME_MODE=hermes ;;
-        *) printf '%s\n' "1 または 2 を選んで再実行してください。--mode hermes または --mode standalone でも指定できます" >&2; exit 2 ;;
+        2) RUNTIME_MODE=standalone ;;
+        1) RUNTIME_MODE=hermes ;;
     esac
     RUNTIME_EXPLICIT=1
 fi
@@ -682,6 +701,17 @@ if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0
     fi
 fi
 
+if [ -t 0 ] && [ -t 1 ]; then
+    printf '\nこれから行うこと\n'
+    printf '  必要なソフト、通知連携、この Mac で動く AI、自動実行、復旧ツールを準備します。\n'
+    printf '  指定した省略オプションは維持します。連携方式: %s\n' "$RUNTIME_MODE"
+    printf '  初回はインターネット接続が必要です。AI の取得は約 5.7 GB で時間がかかります。\n'
+    printf '  準備後に、MCS のログイン情報と通知先を画面に沿って設定します。\n'
+    printf '  1) この内容で導入する（推奨）\n  2) 今は中止する\n'
+    choose '選択 [1・推奨 / 2 / 0・中止]: '
+    [ "$_answer" = 1 ] || { printf '導入を中止しました。\n'; exit 130; }
+fi
+
 # every non-zero exit from here on is a stopped install, not a usage error
 trap 'if [ "$?" -ne 0 ]; then
     printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください" >&2
@@ -1171,92 +1201,58 @@ if [ -z "${MCS_UPDATE_REINSTALL:-}" ]; then
 fi
 
 # ------------------------------------------------------------ summary
+# Software preparation succeeded; a later setup failure has its own guidance.
+trap - EXIT
+SETUP_STATUS=0
 PYQ="$(shell_quote "$MCS_PY")"
 SETUPQ="$(shell_quote "$SETUP")"
 # `-m` resolves only from the checkout: install.sh may run from elsewhere.
 INREPO="cd $(shell_quote "$REPO") &&"
 printf '\n============================================================\n'
-printf 'ソフトの導入が完了しました。結果:\n'
+printf 'ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。\n'
 printf '%s' "$SUMMARY"
 printf '============================================================\n'
-printf '\n次は初期設定です。以下のコマンドを実行し、案内に沿ってログイン情報や通知先を入力してください:\n\n'
-printf '    %s setup\n' "$(shell_quote "$MCS_SHIM")"
-printf '    # 上のコマンドが使えない場合は、次でも同じ初期設定を開始できます:\n'
+printf '\n次は MCS のログイン情報と通知先を設定します。\n'
+printf 'アカウント情報は、ご自身の端末で入力してください。\n'
+printf '準備ができていない項目は初期設定の案内に従って後で設定できます。\n'
+printf '初期設定だけでは MCS に接続できません。専用 Chrome の起動・MCS へのログイン、通知先の接続確認まで行ってください。\n'
+printf '手順書: docs/guides/EASY_SETUP.md\n'
+printf '後で続ける場合のコマンド:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
+printf '    # 同じ初期設定を開く別のコマンド:\n'
 printf '    %s %s init\n' "$PYQ" "$SETUPQ"
+if [ -t 0 ] && [ -t 1 ]; then
+    printf '\n  1) 続けて初期設定を始める（推奨）\n  2) 後で設定する\n'
+    if ! choose '選択 [1・推奨 / 2 / 0・終了]: '; then
+        _answer=2
+        printf 'ソフトの準備は完了しています。初期設定は後で再開できます。\n'
+    fi
+    if [ "$_answer" = 1 ]; then
+        "$MCS_PY" "$SETUP" init || SETUP_STATUS=$?
+        if [ "$SETUP_STATUS" -ne 0 ]; then
+            printf '\nソフトの準備は完了していますが、初期設定は完了していません。\n'
+            printf '入力内容や表示された問題を確認し、次のコマンドで再開してください:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
+        fi
+    fi
+fi
+printf '\n設定後の確認コマンド:\n    %s %s check\n' "$PYQ" "$SETUPQ"
 if [ "$RUNTIME_MODE" = standalone ]; then
-    cat <<'EOF'
-
-通知先、操作を許可するユーザー、対象プロジェクトを選んでください。
-認証情報は非表示で入力し、本人だけが読めるファイルに保存します。
-MCS 単独接続では Hermes のプロファイル・プラグイン・Gateway は使いません。
-最初に初期設定を完了してください。設定と認証情報が揃うまで接続を待機します。
-設定後は次のコマンドで必要な条件と稼働状態を確認してください:
-EOF
-    printf '    %s %s check\n' "$PYQ" "$SETUPQ"
     printf '    %s %s -m mcs_standalone status\n' "$INREPO" "$PYQ"
-    cat <<'EOF'
-
-LINE WORKS を選んだ場合（notify.interactive=lineworks）は、次のコマンドで
-認証情報を入力してください。独立接続の常駐サービスが接続機能を起動するため、
-lineworks_adapter のサービスを別に起動しないでください。
-EOF
-    printf '    %s %s -m lineworks_adapter init\n' "$INREPO" "$PYQ"
-    printf '\n詳しくは docs/guides/STANDALONE.md を参照してください（Hermes からの切替も記載）。\n'
-    exit 0
+    printf '\n詳しい説明: docs/guides/STANDALONE.md\n'
 fi
 cat <<'EOF'
 
-設定画面では、すべての設定項目を順に確認します。
-Enter を押すと現在値または既定値を採用します。導入済みの場合も既存値を確認できます。
-Slack／Discord の操作カードを選ぶと、Hermes の公式コマンドで次を行います:
-
-  - 指定した Hermes プロファイルへ、通知先・操作を許可するユーザー・
-    対象プロジェクトなどの設定を保存します。複数プロファイルがある場合は、
-    その通知先に接続しているものを指定してください。
-  - 接続トークンをプロファイルの .env に保存します。入力は非表示で、
-    設定済みなら再入力は不要です。トークンをコマンドの引数に書かないでください。
-  - 操作カードに必要な Gateway の常駐設定を反映します。
-  - 最後に必要な条件を確認し、動かない原因があれば対処を表示します。
-
-自動化向け: 質問なしで設定する例（Slack）:
-
+LINE WORKS を選んだ場合は、専用の接続設定も必要です。
+詳しい説明: docs/guides/LINEWORKS.md
 EOF
-printf '    %s %s init --yes \\\n' "$PYQ" "$SETUPQ"
-cat <<'EOF'
-        --login-id <ID> --notify-target slack:<channel_id> \
-        --set 'notify.interactive="slack"' \
-        --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C"}' \
-        --plugin-profile <接続中のプロファイル> \
-        --plugin-user-ids <uid> \
-        --plugin-project-ids <pid>
-    # SLACK_BOT_TOKEN と SLACK_APP_TOKEN は環境変数から保存します。
-    # Discord の場合: notify.interactive="discord" と notify.discord
-    # （profile・application_id・guild_id・channel_id）を設定し、
-    # DISCORD_BOT_TOKEN を環境変数で渡します。
-
-LINE WORKS（notify.interactive=lineworks）は Hermes のプラグインと
-Gateway を使いません。初期設定後、ご自身のターミナルで次を順に実行してください。
-認証情報を非表示で入力して本人専用ファイルへ保存し、設定を確認して常駐登録します。
-詳しくは docs/guides/LINEWORKS.md を参照してください。
-
-EOF
-for sub in init check service; do
+for sub in init check; do
     printf '    %s %s -m lineworks_adapter %s\n' "$INREPO" "$PYQ" "$sub"
 done
-cat <<'EOF'
-
-初期設定（init）で Gateway の反映と動作条件の確認も行います。
-常駐サービスの登録を省略した場合、または診断（check）で配置ファイルの不一致が
-報告された場合だけ、次の2つを実行してください:
-
-EOF
-printf '    %s %s services   # Gateway を含む常駐サービスを登録\n' "$PYQ" "$SETUPQ"
-printf '    %s %s check\n' "$PYQ" "$SETUPQ"
-cat <<'EOF'
-
-補足:
-- Node.js の導入は不要です。MCS は Python で動きます。
-- 外部 AI の Jev／Typesafe を使う場合は TYPESAFE_API_KEY を初期設定で
-  ~/.mcs/.env に保存します。追加ソフトの導入は不要です。
-- Ollama は共用の埋め込み処理用で、MCS 自体の動作には必須ではありません。
-EOF
+if [ "$RUNTIME_MODE" = standalone ]; then
+    printf 'MCS が LINE WORKS の接続を起動します。専用サービスを別に起動しないでください。\n'
+else
+    printf 'LINE WORKS の接続設定と確認を終えたら、自動起動を登録します:\n'
+    printf '    %s %s -m lineworks_adapter service\n' "$INREPO" "$PYQ"
+fi
+printf '\n自動実行の登録を省略した場合は、初期設定後に次を実行してください。\n'
+printf '    %s %s services\n' "$PYQ" "$SETUPQ"
+exit "$SETUP_STATUS"

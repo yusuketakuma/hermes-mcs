@@ -4,9 +4,8 @@
 needs: ~/.mcs/config.json, ~/.mcs/.env secrets, and the macOS Keychain
 entry the adapter reads at re-login (service 'mcs-adapter' — on the
 Mac mini this is the same login keychain Chrome uses). Existing values
-are merged, never silently overwritten. An interactive run walks EVERY
-config key as a guided wizard (sectioned, defaults shown, Enter keeps
-the current value); `--yes` runs flags only and `--set KEY=JSON` covers
+are merged, never silently overwritten. An interactive run offers recommended or detailed setup
+(sectioned, defaults shown, Enter keeps the current value); `--yes` runs flags only and `--set KEY=JSON` covers
 any key non-interactively. With notify.interactive="slack"/"discord",
 init also mirrors the plugin settings + bot token into hermes through
 the public `hermes [-p profile] config set` CLI — never hermes-agent
@@ -970,7 +969,7 @@ WIZARD = [
          "通知の送り先（例: slack:<チャンネルID>、"
          "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
         ("notify_system_target", "opt", None,
-         "障害・システム通知の送り先（空欄=notify_target と同じ）", None),
+         "エラーや動作状況の通知先（空欄なら通常の通知と同じ場所）", None),
     ]),
     ("通知の形式を選ぶ", [
         ("notify.interactive", "choice:off,slack,discord,lineworks", "off",
@@ -1170,12 +1169,12 @@ def _parse_answer(kind: str, raw: str):
     if kind in ("req", "opt"):
         return True, raw
     if kind == "bool":
-        v = {"はい": "y", "いいえ": "n"}.get(raw, raw.lower())
-        if v in ("y", "yes", "1", "true", "on"):
+        v = raw.lower()
+        if v in ("y", "yes", "1", "true", "on", "はい", "オン"):
             return True, True
-        if v in ("n", "no", "0", "false", "off"):
+        if v in ("n", "no", "0", "2", "false", "off", "いいえ", "オフ"):
             return True, False
-        return False, "「はい」か「いいえ」、または y / n で答えてください"
+        return False, "1（はい）か 2（いいえ）で答えてください（y / n も使えます）"
     if kind == "int":
         try:
             return True, int(raw)
@@ -1208,6 +1207,19 @@ def _parse_answer(kind: str, raw: str):
     return True, raw
 
 
+_CHOICE_LABELS = {
+    "recommended": "必要な項目だけ設定する（わからない場合はこちら）",
+    "detailed": "すべての設定を一つずつ確認する",
+    "hermes": "Hermes と連携する（Hermes を導入済みの方）",
+    "standalone": "MCS だけで動かす（Hermes が不要）",
+    "off": "使わない", "slack": "Slack のカード通知（通知を使う場合の推奨）",
+    "discord": "Discord のカード通知", "lineworks": "LINE WORKS のカード通知",
+    "shadow": "外部サービスへ送信して結果を記録する",
+    "enforce": "外部サービスへ送信して判定に使う",
+    "annotate": "外部サービスの検査結果を付ける",
+}
+
+
 def _ask(key: str, kind: str, default, desc: str, cur, present=False):
     """One wizard item. Returns the value to store, or _UNSET.
     `present`: the key exists in cfg (so cur=None is an explicit null)."""
@@ -1216,28 +1228,51 @@ def _ask(key: str, kind: str, default, desc: str, cur, present=False):
     # semantic.project_ids: null = all projects) — Enter keeps it
     keep_null = present and cur is None and key == "semantic.project_ids"
     marks = []
+    default_label = "初期値" if key == "notify.interactive" else "推奨"
     if keep_null:
         marks.append("現在: null（全対象）")
     if cur is not None:
         marks.append(f"現在: {_fmt(cur)}")
     elif eff is not None:
-        marks.append(f"既定: {_fmt(eff)}")
+        marks.append(f"{default_label}: {_fmt(eff)}（Enter で選択）")
     if kind == "bool":
-        marks.append("はい / いいえ（y / nでも入力できます）")
+        marks.append("1=はい / 2=いいえ")
     elif kind.startswith("choice:"):
-        marks.append(" / ".join(f"{i}={value}" for i, value in
-                                enumerate(kind.split(":", 1)[1].split(","), 1)))
+        print(f"\n  {desc}")
+        for number, option in enumerate(kind.split(":", 1)[1].split(","), 1):
+            label = ("カードを使わない（文字だけの通知）"
+                     if key == "notify.interactive" and option == "off"
+                     else _CHOICE_LABELS.get(option, option))
+            suffix = "（現在の設定・Enter で保持）" if option == cur else (
+                f"（{default_label}・Enter で選択）" if cur is None and option == default else "")
+            print(f"    {number}. {label}{suffix}")
+        marks.append("番号または設定名")
     if cur is not None and kind in ("opt", "num", "csv", "intlist"):
         marks.append("`-` で削除")
-    prompt = (f"  {desc}\n    設定項目: {key}"
+    question = "番号を選んでください" if kind.startswith("choice:") else desc
+    prompt = (f"  {question}\n    設定項目: {key}"
               + (f" [{' / '.join(marks)}]" if marks else "") + ": ")
     while True:
         raw = input(prompt).strip()
+        if raw.lower() in ("q", "quit", "中止"):
+            raise KeyboardInterrupt
+        if raw in ("?", "わからない"):
+            if key in ("notify_target", "notify_system_target"):
+                print("    Slack は投稿先チャンネルを開き、チャンネル名 → 詳細の最下部でIDを確認します。"
+                      "\n    slack: に続けてそのIDを入力します（入力形式の例: slack:C0123456789）。"
+                      "\n    Discord / LINE WORKS は担当者に通知先のIDを確認してください。"
+                      "\n    手順: docs/guides/EASY_SETUP.md、詳しいIDの調べ方: docs/guides/INSTALLATION.md")
+            if kind.startswith("req") and eff is None:
+                print("    この項目は施設ごとに異なるため、自動で決められません。"
+                      "管理者に確認してください。q で保存せず中止できます。")
+                continue
+            print("    Enter で現在の設定を保持します。未設定なら表示された推奨設定を使います。")
+            continue
         if not raw:
             if keep_null:
                 return None
             if kind.startswith("req") and eff is None:
-                print("    必須項目です — 値を入力してください")
+                print("    必須項目です — 値を入力してください。わからない場合は ?、中止は q。")
                 continue
             return eff if eff is not None else _UNSET
         if raw == "-" and cur is not None and not kind.startswith("req"):
@@ -1251,19 +1286,30 @@ def _ask(key: str, kind: str, default, desc: str, cur, present=False):
 def _wizard(cfg: dict):
     """Walk every config key in sections — Enter accepts the shown
     current/default value, so a beginner can step through safely.
+    Recommended setup skips advanced items while retaining existing values.
     Items whose feature is off are skipped via their gate."""
-    print("\nMCSの設定を順番に案内します。使わない接続先の質問は省略します。\n"
-          "現在値がある項目はEnterで保持します。未設定の項目は表示された既定値を使います。\n"
-          "必須項目は空欄では進めません。IDは名前ではなく、各サービスの識別番号を入力してください。\n"
-          "複数指定は半角カンマで区切ります。パスワード・トークンは後で非表示入力します。")
+    print("\nMCS の設定を順番にご案内します。番号を入力して Enter を押してください。"
+          "\n空欄で Enter を押すと、現在の設定を保持します。未設定なら推奨設定を使います。"
+          "\n必須のIDは施設の管理者に確認してください。? で説明、q または Ctrl+C で中止できます。")
+    detailed = _ask("setup_detail", "choice:recommended,detailed", "recommended",
+                    "設定の進め方", None) == "detailed"
+    basic = {"runtime_mode", "mcs_login_id", "notify_target", "notify_system_target",
+             "notify.interactive", "self_posts", "deep_history"}
     step = 0
     for title, items in WIZARD:
         if not any(when is None or when(cfg) for *_, when in items):
             continue
         step += 1
         print(f"\n【手順 {step}】{title}")
+        if not detailed:
+            print("  詳細設定は現在の値を保持し、未設定の項目は推奨設定を使います。")
         for key, kind, default, desc, when in items:
             if when is not None and not when(cfg):
+                continue
+            if not detailed and key not in basic and not kind.startswith("req") \
+                    and not key.endswith(("project_ids", "project_ids_auto", "allowed_role_ids")):
+                if not _has_key(cfg, key) and default is not None:
+                    _set_key(cfg, key, default)
                 continue
             if key in ("notify.slack.channel_id", "notify.discord.channel_id") \
                     and _get_key(cfg, key) is None:
@@ -1544,8 +1590,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
             failed = True
     if missing:
         print("  未設定: " + ", ".join(missing) +
-              " — 後で `hermes config set "
-              f"{PLUGIN_SETTINGS}.<key> <値>` で設定してください")
+              " — 通知や操作に必要です。管理者に確認して初期設定をもう一度実行してください。")
 
     failed |= _plugin_store_tokens(exe, profile, tokens, args)
     return not failed
@@ -1851,7 +1896,12 @@ def cmd_init(args) -> int:
         _init_standalone_grants(cfg, args, standalone_projects)
 
     if not args.yes:
-        _wizard(cfg)
+        try:
+            _wizard(cfg)
+        except (KeyboardInterrupt, EOFError):
+            print("\n設定を中止しました。設定ファイルやパスワードは保存していません。"
+                  "同じ操作で最初からやり直せます。")
+            return 130
 
     # The wizard can change the selected recovery interpreter.
     why = None if cfg.get("recovery_python") == checked_recovery else _init_recovery_problem(cfg)
@@ -1895,7 +1945,11 @@ def cmd_init(args) -> int:
         os.chmod(d, 0o700)
     _write_atomic(CONF_PATH, json.dumps(cfg, ensure_ascii=False,
                                       indent=2, sort_keys=True) + "\n", 0o600)
-    print(f"設定を保存しました: {CONF_PATH}")
+    print(f"設定ファイルを保存しました: {CONF_PATH}")
+    if not args.yes:
+        print("続いて通知サービスへの接続を設定します。"
+              "\nアプリの認証情報と操作を許可する人・場所のIDを用意してください。"
+              "\n入力中のパスワードは表示されません。Ctrl+C で中止すると、保存済みの設定は残ります。")
     integration_ok = _apply_plugin_integration(cfg, args)
     if cfg.get("runtime_mode") == "standalone":
         integration_ok = _init_standalone_connectors(cfg, args, integration_ok)
@@ -1933,7 +1987,16 @@ def cmd_init(args) -> int:
             print("初期設定: Hermes連携の設定をすべて"
                   "保存できませんでした。使用するプロファイルとHermesコマンドを確認してinitを再実行してください")
         return 1
-    return 1 if gateway_result else check_result
+    result = 1 if gateway_result else check_result
+    if result:
+        print("設定は保存しましたが、利用開始に必要な確認が残っています。"
+              "上に表示された項目を確認してください。"
+              "\nmcs doctor で残っている確認項目を調べ、mcs setup で初期設定を再開してください。"
+              "更新が中断した場合に限り、mcs recover で復旧を確認してください。")
+    else:
+        print("初期設定と動作条件の確認が完了しました。"
+              "実際の通知が届くことを、通知先の画面で確認してください。")
+    return result
 
 
 def _shipped_g6_criteria() -> tuple[dict, str]:
@@ -3985,7 +4048,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = _SetupParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser(
-        "init", help='質問に答えて初期設定を保存します（パスワードは非表示入力）',
+        "init", help='質問に答えて初期設定を保存します（推奨 / 詳細、パスワードは非表示入力）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='質問なしでの実行例（bash/zshの端末で実行）:\n  read -r -s MCS_SETUP_PASSWORD\n  export MCS_SETUP_PASSWORD\n  python3 mcs/ops/mcs_setup.py init --yes --login-id you@example.com --notify-target slack:C0CHANNELID --set self_posts=true\n  unset MCS_SETUP_PASSWORD\n最初のreadコマンドでMCSパスワードを非表示入力し、Enterを押してください。パスワードをコマンドへ直接書かず、環境変数MCS_SETUP_PASSWORDで渡します。実行後はunsetで削除します。\n--setの値はJSONです。壊れたconfig.jsonは通常停止します。--yesでは元のファイルをconfig.json.corrupt-<日時>へ退避して初期値から設定します。')
     p.add_argument("--login-id", help="MCSのログインID")
@@ -4049,7 +4112,14 @@ def main(argv: list[str] | None = None) -> int:
                    help='追加で確認する範囲（llm=AI、services=常駐処理、data=保存データ）。複数指定可能')
     p.set_defaults(fn=cmd_doctor, yes=True)
     args = ap.parse_args(argv)
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except (KeyboardInterrupt, EOFError):
+        if args.cmd != "init":
+            raise
+        print("\n設定を中止しました。途中まで保存した設定は残っています。"
+              "初期設定をもう一度実行すると、保存済みの設定を保持して進められます。")
+        return 130
 
 
 if __name__ == "__main__":

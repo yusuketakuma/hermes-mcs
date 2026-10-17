@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import plistlib
 from pathlib import Path
 import subprocess
 import sys
@@ -40,12 +41,40 @@ class _JapaneseParser(argparse.ArgumentParser):
 def main(argv: list[str] | None = None) -> int:
     """Route arguments without shells, retaining downstream contracts."""
     ap = _JapaneseParser(description=__doc__)
-    ap.add_argument("command", choices=("install", "update", "setup", "doctor", "drug"), help="install: 導入 / update: 更新 / setup: 初期設定 / doctor: 診断 / drug: 医薬品マスター確認")
+    ap.add_argument("command", choices=("install", "update", "setup", "doctor", "drug", "recover"), help="install: 導入 / update: 更新 / setup: 初期設定 / doctor: 診断 / drug: 医薬品マスター確認 / recover: 中断した更新の復旧")
     forwarded = list(sys.argv[1:] if argv is None else argv)
     args = ap.parse_args(forwarded[:1])
     rest = forwarded[1:]
     if args.command == "install":
         os.execv("/bin/sh", ["/bin/sh", str(REPO / "install.sh"), *rest])
+
+    if args.command == "recover":
+        recovery = _JapaneseParser(prog="mcs recover", description="中断した更新を対話形式で復旧します")
+        recovery.add_argument("--status", action="store_true", help="状態を JSON で表示する（変更しない）")
+        opts = recovery.parse_args(rest)
+        tool = Path.home() / ".mcs-recovery" / "mcs_recover.py"
+        if not tool.is_file():
+            print("復旧ツールが見つかりません。担当者に導入状態の確認を依頼してください。", file=sys.stderr)
+            return 1
+        try:
+            if not opts.status and "\nINTERACTIVE_GUIDE_VERSION = 1\n" not in tool.read_text(encoding="utf-8"):
+                print("配備済みの復旧ツールは対話形式に未対応です。担当者にツールの更新を依頼してください。")
+                return 1
+            plist = Path.home() / "Library/LaunchAgents/org.mcs.recovery.plist"
+            with plist.open("rb") as stream:
+                installed = plistlib.load(stream)
+            command = installed.get("ProgramArguments")
+            if ("Program" in installed or not isinstance(command, list) or len(command) != 3
+                    or command[1:] != [str(tool), "--if-stale"]
+                    or not isinstance(command[0], str) or not os.path.isabs(command[0])
+                    or not os.access(command[0], os.X_OK)):
+                raise ValueError
+        except (OSError, ValueError, TypeError, AttributeError):
+            print("独立した復旧用の実行環境を確認できません。担当者に復旧ツールの導入状態を確認してもらってください。")
+            return 1
+        os.execv(command[0], [command[0], str(tool),
+                             "--status" if opts.status else "--interactive"])
+        return 1
 
     # The bootstrap can start on either installed runtime. Configuration
     # selects the one that owns the jobs, never whichever Python is on PATH.
@@ -81,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             return mcs_setup.main(["doctor", *rest])
         case "update":
             update = _JapaneseParser(prog="mcs update", description="更新内容の確認・更新の実行・元の版への復帰を行います。")
-            update.add_argument("phase", choices=("plan", "apply", "rollback"), help="plan: 変更せず更新内容を確認（JSON出力） / apply: 更新を実行 / rollback: 元の版に戻す")
+            update.add_argument("phase", nargs="?", default="guide", choices=("guide", "plan", "apply", "rollback"), help="guide: 対話形式の更新案内 / plan: 変更せず更新内容を確認（JSON出力） / apply: 更新を実行 / rollback: 元の版に戻す")
             update.add_argument("--to", help="更新する版（例: v1.0.23。省略時: 最新の正式版）")
             update.add_argument("--no-fetch", action="store_true", help="通信せず、取得済みの版情報を使う（planでは常に有効）")
             update.add_argument("--reinstall", action="store_true", help="更新時に必要なソフトと設定も再導入する")

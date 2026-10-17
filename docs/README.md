@@ -5,7 +5,7 @@
 
 | 種別 | 文書 |
 |---|---|
-| 利用・導入 `guides/` | [利用者ガイド](guides/USER_GUIDE.md) · [導入手順](guides/INSTALLATION.md) · [AIエージェント向け導入](guides/SETUP_AGENT.md) · [LINE WORKS接続](guides/LINEWORKS.md) |
+| 利用・導入 `guides/` | [利用者ガイド](guides/USER_GUIDE.md) · [初めての導入・更新](guides/EASY_SETUP.md) · [詳細な導入手順](guides/INSTALLATION.md) · [AIエージェント向け導入](guides/SETUP_AGENT.md) · [LINE WORKS接続](guides/LINEWORKS.md) |
 | 開発・保守 `development/` | [開発・運用リファレンス](development/DEVELOPMENT.md) · [リリースノート規則](development/RELEASE_NOTES.md) · [README運用](development/README_MAINTENANCE.md) |
 | 仕様 `specs/` | [ライフサイクル](specs/lifecycle-spec.md) · [外部出力契約](specs/external-export-contract.md) · [意味解析の評価](specs/semantic-evaluation.md) · [封印候補の評価・昇格](specs/SEALED_CANDIDATE_EVALUATION.md) · [意味解析の段階導入](specs/semantic-facts-v2-rollout.md) |
 | 今後の計画 | [ロードマップ](ROADMAP.md) → [詳細計画](roadmap/) |

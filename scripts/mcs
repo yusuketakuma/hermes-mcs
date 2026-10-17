@@ -5,12 +5,12 @@ REPO="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)"
 case "${1:-}" in
     install) shift; exec /bin/sh "$REPO/install.sh" "$@" ;;
     ""|-h|--help)
-        printf '%s\n' '使い方: mcs install|update|setup|doctor|drug [オプション]' \
+        printf '%s\n' '使い方: mcs install|update|recover|setup|doctor|drug [オプション]' \
             '初めて導入するとき: sh scripts/mcs install [オプション]' \
-            'install: 導入 / update: 更新 / setup: 初期設定 / doctor: 診断 / drug: 医薬品マスターの確認'
+            'install: 導入 / update: 更新の案内 / recover: 中断した更新の復旧 / setup: 初期設定 / doctor: 診断 / drug: 医薬品マスターの確認'
         exit 0 ;;
-    update|setup|doctor|drug) ;;
-    *) printf '%s\n' '操作名が正しくありません。install（導入）、update（更新）、setup（設定）、doctor（診断）、drug（医薬品確認）から選んでください。' >&2; exit 2 ;;
+    update|recover|setup|doctor|drug) ;;
+    *) printf '%s\n' '操作名が正しくありません。install（導入）、update（更新）、recover（復旧）、setup（設定）、doctor（診断）、drug（医薬品確認）から選んでください。' >&2; exit 2 ;;
 esac
 unset PYTHONPATH PYTHONHOME
 for PY in "${MCS_ROOT:-$HOME/.mcs}/venv/bin/python3" \
