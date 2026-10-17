@@ -24,4 +24,6 @@ qlmanage -t -s 780 -o /tmp docs/releases/v1.0.25/guided-lifecycle.svg
 sips -s format png /tmp/guided-lifecycle.svg.png --out docs/releases/v1.0.25/guided-lifecycle.png
 ```
 
-2026-10-17にローカル描画を確認。公開時は画像commitの固定SHAを使い、raw URL到達とGitHub Release実画面での表示を別々に確認します。未公開のURLを本文へ追加して成功扱いしません。
+2026-10-17にローカル描画を確認。画像は固定commit `aaa4aa488373cb9691458e0c4df222ecd5103376` へ反映済みで、認証付きGitHub原本APIから取得したPNGのbytesとSHA256がローカルと一致しました。このリポジトリは非公開のため、未認証のraw URLは404になります。閲覧権限は広げず、[認証付きGitHubの画像ページ](https://github.com/yusuketakuma/hermes-mcs/blob/aaa4aa488373cb9691458e0c4df222ecd5103376/docs/releases/v1.0.25/guided-lifecycle.png)を使います。
+
+この環境ではChromeの表示窓とin-app browserへの接続を利用できず、GitHub Release実画面での描画は未確認です。原本取得の成功を実画面表示の証拠にはしません。

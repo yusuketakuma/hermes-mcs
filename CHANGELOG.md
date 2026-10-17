@@ -6,6 +6,249 @@
 
 ## [Unreleased]
 
+## [1.0.25] — 2026-10-18
+
+**夜間の患者まとめと多職種の記録を、原文とともに確認**
+
+患者背景の夜間整理と8つの本人向け表示を追加し、多職種の記録・関係者情報を活用します。導入・更新・復旧は日本語の質問で進められます。
+
+> Hermes経由の環境は、依存の既知の問題に対処した固定版へ再導入し、gatewayを再起動してください。導入・更新にはuvが必要です。既存の省略オプションと復旧専用Pythonは維持します。
+
+| 変更 | 以前 | 今回 | 利用者のメリット |
+|---|---|---|---|
+| 患者の記録 | 投稿ごとの抽出と従来のまとめ | 夜間の原文点検と背景・変化など8画面 | 訪問前や引継ぎ時に根拠の投稿をたどれる |
+| 多職種の情報 | 19分類・32属性 | 26分類・35属性と投稿者からの関係者一覧 | ケアの記録、依頼元、担当候補を同じ導線で確認できる |
+| 導入・更新・復旧 | 日本語の項目別設定とコマンド操作 | 推奨コースと実行前の確認 | 必要な入力と次の操作を確認しながら進められる |
+
+[導入・更新・復旧の操作フローを見る（説明図）](https://github.com/yusuketakuma/hermes-mcs/blob/aaa4aa488373cb9691458e0c4df222ecd5103376/docs/releases/v1.0.25/guided-lifecycle.png)。実画面のキャプチャではありません。リポジトリへの閲覧権限が必要です。
+
+### 新機能
+
+- **夜間の空き時間に、過去の記録と患者背景を整理**
+  23:00〜翌03:30に保存済みの原文を少しずつ点検し、中断した箇所は次の夜に再開します。新着処理を優先し、点検済みで変化がなければ同じ推論を繰り返しません。
+
+- **背景・変化・訪問前の確認などを、原文付きの8画面で確認**
+  依頼と返答、経過、記載の食い違い、引継ぎ、退院前後の情報を押した本人に表示します。返信が見つからないことを未対応と断定せず、異なる記載の正誤も自動では決めません。
+
+- **多職種の記録と関係者情報を活用**
+  看護・診療・薬局・介護・施設・リハ・栄養・歯科・相談員などの見出しに対応し、住所・電話・キーパーソン・駐車場・家族構成・現病名も原文から保持します。投稿者の職種・氏名・事業所を患者の部屋ごとに一覧にし、担当候補、依頼者表示、記載の相違候補、最終投稿の統計、表示順の候補へつなげます。利用中の契約や主担当は推定しません。
+
+- **導入・更新・復旧を日本語の質問で案内**
+  導入後に初期設定へ進むかを選び、必要な項目だけの推奨コースと詳細コースを使い分けられます。更新と復旧は状態を確認し、自分で実行を選んだ場合だけ進めます。
+
+### 改善
+
+- **患者の操作をまとめ、検索と食い違いの確認へ進みやすく**
+  患者カードには患者の操作を置き、全体の集計・自分のタスク・未確認一覧は集計カードへまとめました。検索を必須の操作にし、患者まとめの初期5項目に「記録の食い違い」を追加しました。8画面すべてへ矢印で移動できます。
+
+- **説明と検証用ツールを整理**
+  利用ガイド・実装計画・画面例を現在の分類と操作へ合わせ、使われていない内部処理を削除しました。開発用ツールを更新し、収集・解析コアは標準ライブラリの構成を維持します。
+
+### 不具合修正
+
+- **Hermesの接続・認証で使う依存を修正版へ更新**
+  公式v0.22.2を基にしたMCS用固定版で、接続・認証関連の既知の問題に対処しました。導入する場所によって安全な依存設定が読み込まれず古い版を選ぶ経路も修正しました。独立動作用の接続環境は別の固定依存を使います。
+
+- **主体・否定・時点を取り違える抽出を修正**
+  家族や職員自身の値を本人の値にせず、職員が本人を測った値は保持します。「否定できない」を症状なしと扱わず、過去の測定を現在値に混ぜません。型が壊れた最新検査値から古い値を復活させる問題も修正しました。
+
+- **訂正・削除された依頼や予定を表示に残さない**
+  依頼・返信・予定は現在の本文に対応する抽出から作ります。読取りに失敗したときは0件と表示せずエラーにし、別時点の値の変化は同時点の食い違いと区別します。
+
+- **収集・通知・更新中断時の取りこぼしを修正**
+  既読化直前の新着を再確認し、巡回の開始位置を回転させ、運用操作は送信順に適用します。LINE WORKSの操作が通知の再送待ちで後回しになる問題、Discordの設定不足で操作結果を失う問題、更新・復旧でステージ済みの手動変更を消す問題を修正しました。macOSの同期書込みも強化しました。
+
+- **中断時の案内を実際の保存状態へ合わせる**
+  初期設定の保存前と保存後を区別し、モデルを取得しない場合に取得量を表示しません。更新先を適用しなかった場合は成功にせず終了コード2を返します。
+
+### 動作・設定の変更
+
+- **夜間まとめの生成・限定閲覧は既定で有効**
+  既存環境も設定を省略して更新すると有効になります。明示したfalseは維持し、不正な値は無効として診断します。共有チャットへの夜間文章の自動配信はなく、以前の背景を新着抽出へ注入する設定は既定無効のままです。
+
+- **抽出を新しい世代で順次やり直す**
+  ルール世代23・LLM抽出世代9・患者背景契約4へ更新し、通常の処理で再抽出します。旧契約の夜間走査は再利用せず、再走査が済むまで未反映として扱います。統計の定義版は2026-10-17になります。
+
+- **既読化前の確認を追加**
+  既読化した患者ごとに、最新投稿を確認するGETが1回増えます。自動収集の間隔は10分です。
+
+### 更新時の注意
+
+- [通常の更新手順](docs/guides/UPGRADE_AGENT.md)を使ってください。Hermes経由は再導入（--reinstall）とuvが必要です。--no-brewを使う場合はuvを事前に導入してください。uvがなければ事前確認で対処方法を案内し、Hermesのcheckoutや実行環境を変更する前に停止します。導入済み機能・省略オプション・復旧専用Pythonを維持し、復旧本体も同期します。更新中は収集・抽出・通知が一時停止します。
+
+- 更新後は使用中のgateway・通知アダプター・抽出workerへ新しいコードを反映してください。Hermesの認識済み旧固定版だけを移行し、未知のcommitやローカル変更があれば停止して確認します。
+
+- 夜間生成を止める場合はextract.patient_context_nightly.enabled=false、生成だけを評価する場合はpublication=falseを明示してください。更新後は再抽出・再走査の待ち件数が一時的に増えます。手動の全件再解析や履歴の削除は不要です。
+
+- Hermes接続のDiscordでguild_id（サーバーID）が未設定の場合は、設定するまでカード操作を使えません。診断結果に沿って設定してください。
+
+- 送信結果不明・復元保留・再送上限と人承認は更新で解除しません。住所・電話は定期の共有抜粋へ一括転載せず、要求時の背景情報として扱います。第2入力源は将来対応です。
+
+- 同梱医薬品マスターは公式20261013版で、今回の新しい照合でも同一でした。私有辞書の採用・承認・有効化は別操作です。実データでの臨床精度・実機性能の評価は、合成検証や配備結果とは区別してください。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### 既読化直前の新着の取りこぼしと、操作・巡回の順序の偏りを修正
+
+- 既読化（mark-read）の確定後は、代替経路に限らず常に最新投稿IDが保管済みか確認し、未保管なら通知付きのhistory_head取得を予約してpost_ack_gapを記録する。
+- data/cmdへの要求ファイル名を送信時刻（ナノ秒）始まりにし、取込み時の名前順が送信順と一致するようにした。原子的な公開・権限・検証は変更なし。
+- frontier_patientsをproject_id順に固定し、stage_backfill・stage_self_probeは実行ごとに開始位置を1つずつ回転する。取得内容は変更なし。
+- SQLite接続にPRAGMA fullfsync=ON・checkpoint_fullfsync=ONを追加した（macOS以外では効果なし）。
+- 運用操作の投入と取込みは共有ロック（data/cmd.lock）で直列化し、ロックを取った順が適用順になる。書込み中の投入があれば取込みは次回に回し、どれだけ長く止まっていても追い越さない。時計が戻っても番号は既存の要求より後ろになる。この順序の保証は更新後に投入された要求が対象で、更新前から残っている要求の投入順は復元できません（旧形式の要求は新形式の後に適用）。
+- 根拠: mcs/ingest/run_check.py、mcs/ops/mcs_requests.py、mcs/core/ledger.py、mcs/ingest/job_ops.py
+
+#### 通知の取りこぼしと更新・復旧時の手動変更消失を修正
+
+- Hermes接続のDiscordカード設定でguild_idが無い場合はカード操作を有効にせず、worker_disabled（config_incomplete）を記録する。
+- LINE WORKS独立アダプターは、配送処理を1本に保ち、429時の再試行待ちを含む配送中にも受信したボタン操作を処理する。同じイベントループとRegistryを使い、停止時は進行中の配送の終了を待つ。
+- mcs_update・mcs_recoverの中断復旧は、追跡中ファイルの変更が更新前後の差分に含まれない場合はreset --hardを行わずescalateする。
+- scripts/mcs_upgrade.py applyは、更新プログラムが0で終了してもHEADが指定版でなければ説明を表示して2を返す。
+- 根拠: hermes_plugin/card_workers.py、adapters/lineworks/__main__.py、deployment/recovery/mcs_recover.py、mcs/ops/mcs_update.py、scripts/mcs_upgrade.py
+
+#### 患者ごとの操作と全体の操作を整理
+
+- 患者カードの検索を部品数で省かれる任意行から通常の患者操作へ移し、secondary操作は1行5ボタン以内に分ける。全体3操作はdigestカードにだけ作成し、既存の40部品予算内で表示する。
+- 最初の5節はbackground・changes・previsit・replies・discrepancies。全8節と標準＋10職種の表示順への既存の循環操作を維持する。
+- 廃止済みdeferは新たに作成しない。旧カードのトークンに対する書込み権限・世代検査とaction_retired応答を保つため、共通語彙とSlackの許可定義を保持する。
+- 根拠: mcs/notify/notify_cards.py、docs/guides/USER_GUIDE.md、scripts/development/generate_slack_gallery.py
+
+#### 開発・検証用ツールを最新の安定版へ更新
+
+- ruff 0.17.0→0.17.1（Makefile と CI の固定値を同時に更新）。
+- jsdom 30.1.2→30.1.3。mermaid は OpenWiki 0.7.2 が 11 系を要求するため 11 系最新の 11.17.2 を維持（12.2.0 は非互換）。openwiki 0.7.2 は最新。
+- Node は長期サポート版の 24 を維持（26 は長期サポート開始前）。
+- 収集・解析コアは標準ライブラリのみの方針を維持し、新しい依存は追加していない。
+- 根拠: Makefile、.github/workflows/ci.yml、.github/workflows/openwiki-update.yml
+
+#### 家族・介護職の測定値、否定された症状、過去の測定値を本人の現在値として扱わないよう修正
+
+- 家族（ご主人・旦那さん・奥さん・嫁・長男・長女・次男・次女・配偶者など）と介護職（ヘルパー・介護士・介護職員）の語彙をclinical_valuesに一本化し、主体判定・薬の持ち主判定・家族の登場判定で共有する。
+- 症状は、助詞・時点の語（本日・今回など）・並べた別の症状（「発熱・疼痛なし」「咳と痰なし」）を挟んで否定（なし・ありません・認めず・見られません・(-)など）が続く記述を数えない。同じ症状の否定されていない記述が1つでもあれば症状として残す。「痛みが取れない」のような動詞の否定、「ないわけではない」のような否定の打消し、別の症状だけが否定された「発熱あり、疼痛なし」の発熱は症状として残す。
+- 昨日・前回・先日・入院中・入院時の測定値は過去の記述として扱う。「昨日、体温…」のように文頭の過去の語が読点で区切られていても、その文の測定値すべてに及ぶ（同じ区切りに「本日」などがあれば現在の記述）。「昨日から」「前回より」は現在の記述のまま。薬の開始・中止など測定以外の記述の判定は変えない。
+- 最新の検査値は検査項目（未知の名前は全角半角・大文字小文字をそろえた名前）ごとに最も新しい報告を残す。同じ投稿に同じ項目が複数あるときは、原文で確認できる採血・検査日が最も新しいものを採用し、日付で順序を決められなければその投稿からは現在値を表示しない（古い投稿の値でも埋めない）。
+- 根拠: mcs/extract/v1/extract.py、mcs/extract/clinical_values.py、mcs/extract/patient_context.py、mcs/extract/rollup.py
+
+#### 導入と更新を日本語の質問に沿って進められるように
+
+- 推奨コースもログインID・通知先・対象範囲・操作権限は確認し、高度な既存設定を保持する。
+- 更新は計画確認→明示実行→再計画で対象版への反映を確認し、終了コード0だけで完了表示しない。
+- mcs recoverは配備された独立Pythonと対話対応を確認してから復旧ツールへ委譲する。中断記録・復元保留を示し、既定は実行せず終了する。既存の復元承認・実行中更新の保護を維持する。
+- 更新計画は復旧用Pythonの修復が必要かを返し、対話式更新が修復前の再導入を開始しないようにする。
+- 実接続・通知・本番配備の確認はソフト準備や合成テストと区別する。
+- 根拠: install.sh、mcs/ops/mcs_setup.py、mcs/ops/mcs_cli.py、scripts/mcs_upgrade.py、deployment/recovery/mcs_recover.py、mcs/ops/mcs_update.py、docs/guides/EASY_SETUP.md
+
+#### 導入・初期設定の案内を保存状況に合わせて表示
+
+- initは設定ファイルの原子的な保存が完了したかを追跡して中断時の案内を分ける。設定ファイルの保存前でも認証情報が一部保存されている可能性は明示する。
+- install.shの対話確認では--no-llm・既存モデル・macOS以外で新規モデルの5.7GB取得を案内しない。
+- INSTALLATIONの完了画面の説明を現行表示へ合わせ、非対話例はSETUP_AGENTのinit --yes節へリンクする。
+- 根拠: mcs/ops/mcs_setup.py、install.sh、docs/guides/INSTALLATION.md
+
+#### Hermesの接続・認証で使う依存を修正版へ更新
+
+- Hermes companion 2c08ca7ade8f867d07e4bff6581be54405b0c9d0 はv0.22.2統合版b7758d8を基準に、aiohttp3.14.5・PyJWT2.15.1・mcp2.3.0・slack-sdk3.45.0と、必要なmcp-types2.3.0・yarl1.25.1だけを更新。
+- aiohttp GHSA-2g87-pp6c-29x5、PyJWTの版別advisory、mcp GHSA-84m7-p3x7-pcfvを一次資料へ照合。PyPIの空の一覧だけでは安全と判定しない。PyJWTのoptions再利用は完全合成の再現条件で呼出元の設定が変わらず、期限切れを拒否することを確認。
+- uv.lockの整合と正規installer/CIの実resolver・import元・実版は区別して受入。core PyJWTとdev mcpも既存の実SDK版照合へ追加。
+- install.sh・mcs_update・CIの固定SHAを一致させ、b7758d8を認識済み移行元へ追加。未知のcheckout・ローカル変更・人承認・holdの保護は維持。
+- 一次資料: https://github.com/yusuketakuma/hermes-agent/commit/2c08ca7ade8f867d07e4bff6581be54405b0c9d0、https://github.com/aio-libs/aiohttp/security/advisories/GHSA-2g87-pp6c-29x5
+- 根拠: install.sh、mcs/ops/mcs_update.py、.github/workflows/ci.yml、integration/test_pinned_sdk_versions.py
+
+#### Hermes導入前に必要なツールと実際の導入方法を案内
+
+- 独立レビューS1/S2を反映し、dry-runの導入方法にuvとHermesディレクトリでの実行を明記。
+- Hermesモードかつ--no-brewでuvが無い場合を事前確認の要対処に追加。通常導入でHomebrewがuvを導入する経路と独立動作は保持。
+- 合成入口で通常導入・preflight・dry-runのuv不足と変更前停止を回帰し、既存の計画表示テストで実導入との一致を確認。
+- 根拠: install.sh、tests/meta/test_install_sh.py
+
+#### Hermesの安全な依存設定を導入とCIで確実に適用
+
+- MCS cwdからuv/pipでHermes[messaging]を解決するとdiscord.py voice extra由来のPyNaCl1.5.0が選ばれ、Hermes cwdの既存tool.uv.override-dependenciesでは1.6.2が選ばれることを実resolverで再現。
+- installerはHermesディレクトリでuv pip installを実行し、既存の音声/暗号依存の安全設定を適用する。voice機能や検証を省略せず、uvのない場合のpip代替はHermesに限り停止。
+- CIはuv0.13.1を固定し、Hermes cwdで同じmessagingおよび既存devgroupを導入する。uv版は2026-10-18 JSTに公式PyPIへ新しく照合（2026-10-14公開、MIT OR Apache-2.0、Python3.8以降）。
+- 既存の実SDK版照合へPyNaCl1.6系列とcore cryptographyの固定版も含め、解決場所の誤りが再発した場合を検出する。
+- 合成の実installer入口でHermes cwdを観測し、uv欠如はclone/venv変更前に停止することを回帰。失敗markerと再実行・旧venv保護・人承認は維持。
+- 根拠: install.sh、.github/workflows/ci.yml、integration/test_pinned_sdk_versions.py、tests/meta/test_install_sh.py、tests/meta/test_sdk_ci_lanes.py
+
+#### 推奨する Hermes を公式 v0.22.2 ベースへ更新
+
+- MCS 用版は公式 v0.22.2（2026-10-15 公開）をベースに、MCS が必要とする独自の連携契約（コマンド文脈・実行確認・非同期の事前処理）を引き継いでいる。
+- 固定コミットを install.sh・更新処理・CI でそろえ、旧固定版を移行元の一覧に追加。
+- 公式との統合で衝突した2か所（かんばんの任意列、ツール検索の空クエリ案内）は、公式の変更と MCS 用の追加を両方残した。
+- 根拠: install.sh、mcs/ops/mcs_update.py、.github/workflows/ci.yml
+
+#### 関係者・事業者の一覧を依頼・確認・統計に活用
+
+- notify_cards.assignee_choices(project_id=...) はその部屋の投稿者を先頭に安定ソートする（名簿の出所・件数上限は不変）
+- patient_context_view.replies の各行に sender（依頼を書いた投稿者と最終投稿日時）を付け、previsit/handoff/replies の表示に出る
+- patient_context_view.discrepancies(ev, posters) は care_team の記載が事業所名を含み投稿者の所属に一致しない場合に kind=provider_not_posting を追加する
+- mcs_stats に poster_gaps（T1, metadata）を追加し DEFINITION_VERSION を 2026-10-17 に更新
+- patient_context_view.participants に sender_id と roles（投稿者の職種からの表示順候補）を追加し、標準表示の見出しに候補行を出す
+- 根拠: mcs/notify/notify_cards.py、mcs/views/patient_context_view.py、mcs/notify/notify_views.py、mcs/views/mcs_stats.py、mcs/views/mcs_view.py
+
+#### 夜間の患者まとめの生成・閲覧を個別に設定
+
+- 夜間生成と限定閲覧の設定を診断し、明示した保存データ診断では生成状態ごとの件数を表示する。
+- 根拠: mcs/ops/mcs_setup.py、docs/guides/USER_GUIDE.md
+
+#### 夜間の空き時間に患者背景と過去の記録を少しずつ整理
+
+- 既存slot 2、引用検査、artifacts保存、read modelを再利用。新規DBスキーマ・常駐サービス・依存なし。
+- 推論前後の入力署名と保存時のdata_versionを照合し、途中結果や入力が変わった結果は公開しない。閲覧時も削除・訂正・対応変更・観測済み権限失効を確認する。
+- 取得範囲・点検範囲・引用の対応・人手評価を分けて表示し、反映時点以降の取得を未反映として示す。
+- 原文段落の引用選択は意味の言い換えを行わない。Cの再点検は原文との構造・属性照合であり、臨床的な正確性を自動判定しない。
+- 解析に失敗した投稿は未点検のまま投稿単位で再試行を管理し、同じ患者のほかの履歴調査を止めない。
+- 共通のLLM入場制御を使わない設定でも、夜間リクエスト本文にslot 2の指定を渡し、新着用の枠へ割り込まない。
+- 根拠: mcs/extract/patient_nightly.py、mcs/extract/v4/extract_llm.py、docs/specs/patient-context.md
+
+#### 患者の背景・変化・返信状況などを原文根拠付きで確認
+
+- 全表示は read_model の現行・根拠検証済みの患者背景項目、各投稿の現行抽出の薬剤・症状の記載、夜間処理の公開済み事実の共通一覧から作る。
+- 前回からの変化は初回取得時刻と改訂履歴で、新しい報告・遡及取得・編集・削除（IDと観測時刻のみ）・過去記録からの発見を区別する。
+- 記載の食い違いは同じ検査項目・単位・条件（薬は薬剤名）だけを比べ、明記された日付がない記録を同時とみなさない。
+- 編集・削除・別患者・引用不一致の投稿に由来する項目や依頼候補は表示しない。
+- 検索は既存の患者別検索（🔎）と同じ規則を使う。
+- 本人向けの既存summary/list操作から8種類の表示、職種別の並び順、8件単位のページ移動、既存の原文検索へ移動できる。操作トークンは利用者・患者・通知先の範囲に結び付ける。
+- 前回の表示依頼時刻は利用者別のハッシュと時刻だけで保持し、同じ表示内の移動や操作の再送では比較基準を進めない。配送・既読・臨床上の確認や完了の記録とは区別する。
+- 訪問前の確認でも、削除された投稿は本文を表示せず、削除を確認した時点と投稿番号を表示する。
+- 薬剤名・症状名だけで否定、予定、家族の情報が失われないよう、各画面の薬・症状の言及は元の本文を表示する。
+- 患者の検索は「最後に残薬について報告されたのはいつ？」「食事量の変化は？」「残薬に関する記録」のような質問を、主題の語（残薬・食事量）の原文検索に置き換え、置き換えた語を表示する。各結果に日時・投稿番号・職種・原文の抜粋と取得範囲を示す。主題を取り出せない質問は推測で答えず、検索語の入力を案内する。
+- 根拠: mcs/views/patient_context_view.py、mcs/views/mcs_view.py、mcs/notify/notify_views.py、mcs/notify/notify_cards.py、adapters/slack/actions.py、adapters/discord/cards.py、adapters/discord/actions.py、docs/guides/USER_GUIDE.md
+
+#### 患者の記録表示で使っていない内部処理を整理
+
+- patient_context_view._day はコード・テスト・CLI・adapter・plugin・導入更新復旧経路から参照がなく、既存の日付表示は各表示処理が担うため削除。
+- 根拠: mcs/views/patient_context_view.py
+
+#### 更新・復旧でステージ済みの手動変更を失わないよう修正ほか
+
+- mcs_update と mcs_recover の対象外変更検知を、作業ツリー対インデックスとインデックス対HEADの和集合に変更（git判定失敗時は従来どおり停止）
+- ヘルパー・介護士・介護職員が測定・処置の主体である文では患者の値として扱う（職員語彙を STAFF_PERSON に一本化）
+- 否定できない・否定しきれない・否定し難いは症状の否定として扱わない
+- 連絡・返答の確認、訪問前の確認ノート、引継ぎ用の記録は、依頼・返信・予定を保存済み集計ではなく現在の本文に結び付いた抽出から作る。読取りに失敗した場合は0件として表示せずエラーとして扱う
+- 記録の食い違いは同じ日付で値が異なる場合だけ異なる記載とし、日付ごとの変化は時点の異なる記載とする
+- 担当者候補の部屋優先は名簿のIDと投稿者IDの一致（IDがない場合は氏名と所属の一致）で判定する
+- 保存済み検査値の型が不正な投稿はその検査の現在値を出さず、古い値も復活させない
+- ledger の fullfsync 設定を初回のスキーマ書込みより前に適用する
+- 根拠: mcs/ops/mcs_update.py、deployment/recovery/mcs_recover.py、mcs/extract/v1/extract.py、mcs/extract/clinical_values.py、mcs/extract/rollup.py、mcs/views/patient_context_view.py、mcs/notify/notify_cards.py、mcs/core/ledger.py
+
+#### 薬局以外の職種が書く記録も患者背景として取得
+
+- patient_context.LABELS に7分類（services_provided, incidents, excretion, skin_wound, oral_health, plan_goals, orders_documents）と既存分類への見出し語を追加。1ラベル1分類と接頭ペアの一致順を合成テストで固定。
+- DETAIL_LABELS に valid_period（有効期間/指示期間/計画期間。期限 due_text・観測日とは別）、body_site（部位）、food_texture（食形態/主食形態/副食形態/とろみ）を追加し、単独見出し時の分類を明示。評価尺度は observations の見出しとして原文のまま残し、尺度名・版・部位・時点を結合しない。
+- v1 ルール: _SYMPTOMS に介護・看護の本文表現を追加（否定判定は既存のまま）。RULE_VERSION 22→23。
+- LLM: 固定プロンプトの分類・属性 enum、文言（在宅医療・介護）、介護職の合成例を追加。EXTRACT_VERSION 8→9、PATIENT_CONTEXT_VERSION 3→4。評価資産 pattern_cards の許容分類・属性を同期。
+- 表示: patient_context_view.ROLE_LABELS / ROLE_ORDER を役割の正本とし、CLI --role の choices と通知カードの表示順ボタンが同じ一覧を参照。食形態を前回比較の対象属性に追加。
+- 関係者・事業者: patient_context_view.participants が messages の投稿者メタデータ（職種・氏名・事業所）を患者の部屋に限定したSQLで集計し（削除済み投稿を除外し、投稿者IDと所属を分離）、、CLI --view participants と背景一覧の末尾（関係者・事業者（投稿者から取得））に投稿件数・最終投稿日時付きで出す。契約・主担当・現在の関与は判定しない。
+- docs/specs/patient-context.md に職種別見出し語彙の節と世代更新を記載。
+- 完全合成の10職種73見出しで、更新前は15見出し、更新後は73見出しが保持される（tests/extract/test_role_data_extension.py）。実投稿での抽出精度・網羅率は未測定。
+- 根拠: mcs/extract/patient_context.py、mcs/extract/v1/extract.py、mcs/extract/v4/extract_llm.py、mcs/views/patient_context_view.py、mcs/notify/notify_views.py、mcs/views/mcs_view.py、docs/specs/patient-context.md
+
+</details>
+
+
 ## [1.0.24] — 2026-10-17
 
 **導入・更新・復旧を分かりやすい日本語で案内**

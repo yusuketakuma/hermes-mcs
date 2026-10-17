@@ -14,7 +14,7 @@
 | 日本語の導入・更新・復旧 | install → setup、mcs CLI → target updater / 独立recovery | 推奨/詳細、再入力・中止・後回し。計画と明示適用を分離し、未適用を成功としない。復旧本体は再導入で同期 |
 | 抽出・収集・保存・配送修正 | v1/clinical_values/rollup/ledger/pipeline/adapter | 家族/職員/否定/過去の誤採用、古い依頼・予定、既読化直前の新着、巡回/操作順序、fullfsyncを回帰 |
 | 更新の安全性 | update/recoveryのdirty検査と既存restore承認 | indexのみの変更も検出し、対象外の手動変更を消すresetを拒否。復元hold・送信結果不明を解除しない |
-| 依存 | Hermes固定版b7758d8、開発pin、独立SDK固定版 | coreはstdlib。Hermesとstandaloneは別環境、既存専用SDK laneで受入 |
+| 依存 | Hermes固定版2c08ca7（v0.22.2＋依存修正）、開発pin、独立SDK固定版 | coreはstdlib。Hermesとstandaloneは別環境、既存専用SDK laneで受入 |
 
 生成・限定閲覧は省略時に有効、明示falseは維持し、不正値は無効とする。既存環境にも適用される。`patient_state_context`は既定無効。第2入力源はユーザー指示で将来対応とし、実装しない。住所・電話は定期の共有抜粋へ一括転載しない。
 
@@ -34,6 +34,14 @@
 - ソフトの合成中断・checkpoint再開は実停電実験と区別する。実通信・実Mac新規導入・医学的正確性をローカル成功から推定しない。
 
 ## レビューと最終検証の条件
+
+Claudeがbf3bf4da固定の一時WTで職種抽出・views・notify・core、ボタンと3adapter全体、installer・setup・update・recoveryの関連検証をPython3.14.8で実行し、3つの必須検証が全てexit0。対話レビューG1〜G3は6d831ccbで修正し29件成功。新Hermes固定版の実SDK、最終固定差分・全体suiteはこの成功から推定せず、別証拠へ束縛する。
+
+Hermesの依存一次照合で旧固定版のaiohttp/PyJWT/mcpに既知advisoryを発見し、2c08ca7で4直接依存と必要な2推移依存を更新した。元327packageのうち対象外320recordを保持し、uv lock --check --offlineに成功。MCS導入・更新・CIの3pinとガイドを一致させ、旧b775を移行元に追加。前本番f36とb775からの合成移行を含む30件成功（203件は選択対象外）。PyPIの空欄を安全証明とせず、公式advisory・合成再現と実SDKを区別する。
+
+Hermes依存の独立レビューとCodeRabbit（b7758d8→2c08ca7、2/2ファイル、outcome=completed、指摘0・exit0）が完了。対象327packageの構成を保持し、Hermes関連66件と固定MCS SDK26件に成功し、原本18,675ファイルのhashが一致した。
+
+実resolverで、MCSの場所から導入するとHermesの安全な依存設定を読まずPyNaCl1.5.0を選ぶ経路を再現した。`4e2cc7c1`でHermesの場所からuvで解決し、uv欠如はHermes変更前に停止する。CIもuv0.13.1の同じ導入経路へ合わせ、PyNaCl1.6系列と暗号依存の実版検査を加えた。導入・中断・移行・独立動作・CI構成の関連127件がPython3.14.8で成功。独立レビューS1/S2はf350ce3fで計画表示とuv不足の事前確認へ反映し、関連16件が成功（71件は選択対象外）。修正後の実resolverとSDK受入は別の固定source/envへ記録し、合成installerだけでは代替しない。
 
 初回コミット `b8a19ff4` を先に固定して独立レビューとCodeRabbit（82/82ファイル、outcome=completed、exit0）を実施。指摘13点を検証し `343355b2` で修正、読取り失敗の0件化を `40b1dd15` で追加修正した。対話機能とボタン再編の独立レビュー、および統合候補の固定CodeRabbitは別の受入として記録する。
 

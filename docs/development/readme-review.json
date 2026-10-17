@@ -1,59 +1,65 @@
 {
-  "version": "1.0.24",
+  "version": "1.0.25",
   "sections": {
     "features": {
-      "notes": "2026-10-17 1.0.24候補: 初期設定のWIZARD全12区分、条件外区分の省略、番号・はい/いいえ入力、Enterによる既存値保持を実装と照合。導入・更新・復旧の利用者向け表示を日本語化する変更で、通知・取得範囲・モデル・人承認の既定値を変更しない。公開・配備の受入は別途確認する。",
+      "notes": "2026-10-17 1.0.25候補: 夜間まとめは23:00〜翌03:30の既存空き枠で動き、生成・限定閲覧は省略時true、明示falseと不正値の停止を維持。26分類35属性、10職種、関係者の自動一覧と活用5点、全8画面を実装と照合した。patient_state_contextは既定false、第二入力源は将来対応。共有チャットへ夜間文章を自動配信しない。",
       "sources": [
         "README.md",
-        "mcs/ops/mcs_setup.py",
-        "tests/ops/test_setup_japanese.py",
-        "mcs/ops/mcs_update.py"
+        "mcs/extract/patient_nightly.py",
+        "mcs/extract/patient_context.py",
+        "mcs/views/patient_context_view.py",
+        "mcs/notify/notify_views.py",
+        "tests/extract/test_role_data_acceptance.py"
       ]
     },
     "demos": {
-      "notes": "2026-10-17 1.0.24候補: Slack先頭の合成画面例と、Discord/LINE WORKSの折りたたみ導線を維持。今回のadapter差分はLINE WORKS初期設定CLIの案内文で、チャットカード・本人向け確認・人承認ボタンの変更はない。既存の生成元とREADMEの説明を照合した。初期設定の完全合成説明図を新設し、実画面と区別。PNG全体と390px幅を目視確認済み。公開URL・Release表示は公開後に別途確認する。",
+      "notes": "2026-10-17 1.0.25候補: Slackを先頭に維持。03は患者操作と全体操作を分け検索を必須側へ、07は初期5節に食い違いを追加し8節循環を説明。生成元からSVG/PNGとhashを同期し親が画像を確認した。LINE WORKSのmore、本人向け表示と確定操作を維持し、Discordの薬剤表示の既存経路も保持。v1.0.25操作フロー図は実画面と区別し通常幅と390px幅を確認。固定commitの画像は認証付きGitHub APIで原本bytes/hash一致。非公開repoのため閲覧権限が必要な通常リンクを使い、権限は広げない。Release実表示はブラウザー接続不能で未確認。",
       "sources": [
         "README.md",
         "scripts/development/generate_slack_gallery.py",
-        "scripts/development/generate_lineworks_gallery.py",
-        "adapters/lineworks/__main__.py",
-        "docs/releases/v1.0.24/README.md",
-        "docs/releases/v1.0.24/japanese-setup.svg"
+        "docs/screenshots/slack-gallery/README.md",
+        "mcs/notify/notify_cards.py",
+        "adapters/slack/cards.py",
+        "adapters/discord/cards.py",
+        "adapters/lineworks/cards.py",
+        "docs/releases/v1.0.25/README.md"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-17 1.0.24候補: READMEの事前診断「要対処」「対処:」「導入を妨げる問題 0件」、完了表示「ソフトの導入が完了しました。結果:」をinstall.shと照合。新規/既存の導線、恒久配置、設定ウィザード、移行先版コードによる更新を維持。復旧 --help/-h は説明のみ、未知の引数は変更前に停止する実装を確認。",
+      "notes": "2026-10-17 1.0.25候補: 新規導入の確認→導入→初期設定への接続、推奨/詳細コースと後回し、引数なしupdateの計画→明示適用→再確認、recoverの既定中止を実装と照合。READMEにEASY_SETUP導線と初期設定接続を反映。Hermes v0.22.2固定版への再導入、既存opt-outと独立復旧Pythonの保持、全25更新元40経路の案内を照合。 2026-10-18: Hermesの導入はuv必須とし、そのディレクトリで安全な依存設定を適用。--no-brewではuv事前導入、欠如時はHermes変更前に停止する。",
       "sources": [
         "README.md",
         "install.sh",
-        "scripts/install_local.py",
-        "docs/guides/SETUP_AGENT.md",
-        "docs/guides/LOCAL_AGENT_INSTALL.md",
-        "docs/guides/UPGRADE_AGENT.md",
-        "deployment/recovery/mcs_recover.py"
+        "mcs/ops/mcs_setup.py",
+        "mcs/ops/mcs_cli.py",
+        "scripts/mcs_upgrade.py",
+        "deployment/recovery/mcs_recover.py",
+        "docs/guides/EASY_SETUP.md",
+        "docs/guides/UPGRADE_AGENT.md"
       ]
     },
     "safety": {
-      "notes": "2026-10-17 1.0.24候補: README/SECURITYの通知先への本文等の外部送信、権限、人承認、復旧の限界を保持。日本語化後も外部解析の送信説明、秘密値の非表示入力と環境変数経由、既存トークン再利用の明示回答、ローカルAIの接続制限を実装と照合。機械用JSON/コードを維持し、旧英語診断との比較互換により既存異常を新規異常に誤判定しない。実通知や復旧操作をこの文書レビューでは実行していない。",
+      "notes": "2026-10-17 1.0.25候補: 外部通知の送信範囲・端末プレビュー・人承認と復旧holdを保持。住所/電話は要求時の背景表示で扱い定期抜粋へ一括転載しない。原文の主体/否定/時点/取得失敗と0件を区別し、旧文章の失効・現在hash・閲覧scopeを確認。署名/actor/origin/token/receiptとno-proxy/no-redirectゲートを維持。ステージ済み変更を消すresetを拒否する。臨床精度と実機性能の評価は未実施。 HermesとCIの導入経路を同じuv解決へそろえ、実SDKでPyNaCl1.6系列・暗号依存の固定版も検査する。",
       "sources": [
         "README.md",
         "SECURITY.md",
-        "mcs/ops/mcs_setup.py",
+        "docs/specs/patient-context.md",
+        "mcs/views/patient_context_view.py",
         "mcs/ops/mcs_update.py",
-        "tests/ops/test_mcs_update.py",
-        "deployment/recovery/mcs_recover.py"
+        "deployment/recovery/mcs_recover.py",
+        "tests/notify/test_patient_context_nightly_ui.py"
       ]
     },
     "docs": {
-      "notes": "2026-10-17 1.0.24候補: READMEから導入・恒久配置・更新・ライフサイクル仕様への導線を確認し、ガイドの成功表示・対処表を日本語CLI表示と照合。初期設定説明図にはソース、完全合成の区別、再生成方法、未公開の境界を記録。既存履歴・仕様の配置は変更不要。CHANGELOG/README自動要約と1.0.24受入票の最終リンク整合はrelease buildで検証する。",
+      "notes": "2026-10-17 1.0.25候補: 導入/更新/復旧はguides、契約はspecs、計画/受入はdevelopmentに整理し既存履歴を保持。旧19/32・未コミットの現行説明を履歴へ区別し26/35と後続統合を追記、関係者一覧の自前SQL説明へ修正。README主要導線・生成DEVELOPMENT・版別受入/図を照合し、リリース本文はCHANGELOGからexportする。",
       "sources": [
         "README.md",
-        "docs/guides/INSTALLATION.md",
-        "docs/guides/LOCAL_AGENT_INSTALL.md",
-        "docs/guides/UPGRADE_AGENT.md",
-        "docs/guides/SETUP_AGENT.md",
-        "docs/specs/lifecycle-spec.md",
-        "docs/releases/v1.0.24/README.md"
+        "docs/README.md",
+        "docs/development/plans/PATIENT_CONTEXT_1.0.25.md",
+        "docs/specs/patient-context.md",
+        "docs/development/acceptance/ACCEPTANCE_1.0.25.md",
+        "docs/development/DEVELOPMENT.md",
+        "docs/releases/v1.0.25/README.md"
       ]
     }
   }
