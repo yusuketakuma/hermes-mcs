@@ -2704,7 +2704,7 @@ def test_request_free_text_fields_are_length_capped():
 @pytest.mark.parametrize(("cfg", "expect"), [
     ({}, None),
     ({"semantic": {"fact_source": "canonical",
-                   "fact_source_gate": "g6-v1:synthetic"}}, {7}),
+                   "fact_source_gate": "g6-v1:synthetic"}}, set()),
     # canonical without its gate errors back to legacy: fail CLOSED
     ({"semantic": {"fact_source": "canonical"}}, set()),
     ({"semantic": {"fact_source": "bogus"}}, set()),
@@ -2718,15 +2718,26 @@ def test_legacy_admissions_single_t18_boundary(monkeypatch, cfg, expect):
     assert extract_llm.legacy_admissions(object(), cfg) == expect
 
 
+def test_legacy_admissions_accepts_independently_bound_evidence(monkeypatch):
+    import semantic_v4
+    from candidate_testkit import approved_config
+    cfg = approved_config({"semantic": {"fact_source": "canonical"}})
+    monkeypatch.setattr(semantic_v4, "active_legacy_admissions", lambda ledger: {7})
+    assert extract_llm.legacy_admissions(object(), cfg) == {7}
+
+
 def test_legacy_admissions_manifest_error_fails_closed(monkeypatch):
     import semantic_v4
+    from candidate_testkit import approved_config
+    called = []
 
     def boom(ledger):
+        called.append(True)
         raise RuntimeError("manifest")
     monkeypatch.setattr(semantic_v4, "active_legacy_admissions", boom)
-    assert extract_llm.legacy_admissions(object(), {"semantic": {
-        "fact_source": "canonical",
-        "fact_source_gate": "g6-v1:synthetic"}}) == set()
+    cfg = approved_config({"semantic": {"fact_source": "canonical"}})
+    assert extract_llm.legacy_admissions(object(), cfg) == set()
+    assert called == [True]
 
 
 def test_llm_call_stats_dedups_shared_meta_and_ignores_junk():

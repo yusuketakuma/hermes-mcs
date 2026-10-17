@@ -1,6 +1,6 @@
 # 1.0.23 リリース候補受入票
 
-2026-10-17。作業branch `release/v1.0.23-prep`、基準HEAD `5d71c1a0d7e51d8da1aec2bd6006626b68a26ac6`、前版 `v1.0.22 / f8c6c20d`。統合候補 `03b9b078` と独立レビュー修正を追跡する。公開可の判定ではない。
+2026-10-17。作業branch `release/v1.0.23-prep`、実行コード固定SHA `9c8b4b85a9fadec201335b377b683c2970cce5e0`、前版 `v1.0.22 / f8c6c20d`。同SHA以降は失敗した合成fixture・期待値と受入文書のみを修正する。公開可の判定ではない。
 
 ## 範囲と現在の判定
 
@@ -14,8 +14,8 @@ Fableレビューの1〜32、Slack/Discord表示改善、導入・更新・復�
 | 4 | 所有者不明時の拒否・固定SDK属性契約 | 実装済み・固定Hermes 21件とstandalone 12件成功 |
 | 5 | LINE WORKS文書・画面の整合 | guide・SVG/PNG2枚・生成check・目視済み |
 | 6 | 1.0.23更新手順 | 更新済み・rollback下限と復元制約を照合済み |
-| 7 | 1.0.22からの更新fixture | schema/更新364件成功・tick19件は編集静止後 |
-| 8 | 名前付き受入ゲートと固定候補 | 本票で追跡中 |
+| 7 | 1.0.22からの更新fixture | 全体検証でorigin tickを含む更新回帰を確認。schema復元fixture追補は96件成功 |
+| 8 | 名前付き受入ゲートと固定候補 | 実行コード9c8b4b85に固定し本票で追跡 |
 | 9 | 待機理由行列・Discord所有者照合 | 実装・局所検証済み |
 | 10 | LINE WORKS要約待機・公開条件・改訂上限 | 実装・局所検証済み |
 | 11 | 候補指紋と独立人承認receipt | 実装・局所検証済み |
@@ -31,7 +31,7 @@ Fableレビューの1〜32、Slack/Discord表示改善、導入・更新・復�
 | 21 | offsite/verify/escrow証跡分離 | 実装・局所回帰済み（root313件・別保管鍵CLI1件）。固定候補全体検証は別ゲート |
 | 22 | 全profile再起動と稼働証拠 | 診断・更新手順整合済み。実機再起動は未実施 |
 | 23 | 表示変更の分類・更新注意 | 変更記録・CHANGELOG・READMEの整合確認済み |
-| 24 | clean install・22→23 plan/apply | 更新回帰済み・配布経路確認中 |
+| 24 | clean install・22→23 plan/apply | 合成の新規導入・全対応更新元・復元経路を検証。実機配備未実施 |
 | 25 | standalone所有判定と表示 | 実装・局所検証済み |
 | 26 | レイアウト変化で保留/上限を解除しない | 実装・局所検証済み |
 | 27 | LINE WORKS同一カード/トークン再利用 | 実装・局所検証済み |
@@ -50,23 +50,23 @@ Fableレビューの1〜32、Slack/Discord表示改善、導入・更新・復�
 
 ## 必須の最終ゲート
 
-以下は現在差分の固定後に証拠を対応付ける。過去候補の成功やskipを今回の成功に流用しない。
+固定候補の結果を示す。実行コードと依存が不変の成功結果は再利用し、全体検証の失敗は修正対象ファイルを全件再検証する。SDK専用skipは別laneの成功と区別する。
 
 | ゲート | 状態 |
 |---|---|
 | 全実装要件→コード/テスト/設定/資産/文書/配布物の対応表 | [取り込み対応表](UPDATE_ITEMS_1.0.23.md)を作成。項目12/13/15の補完実装も同期済み |
-| インストーラー・アップデーター・リカバリーの実入口・中断/再実行/rollback | 通常・外部recover関連335件、既存導入/更新fixtureを全体検証で確認 |
-| 全126WTの製品差分・未追跡・独自履歴の処置 | [最終照合台帳](WORKTREE_INTEGRATION_1.0.23.md)で完了。未収録5合成テストを追加、元WT保持。最終候補commitとの再照合は別ゲート |
+| インストーラー・アップデーター・リカバリーの実入口・中断/再実行/rollback | 通常・外部recover関連335件、全体検証の導入/更新成功、schema復元fixture追補96件成功 |
+| 全126WTの製品差分・未追跡・独自履歴の処置 | [最終照合台帳](WORKTREE_INTEGRATION_1.0.23.md)で完了。未収録5合成テストを追加、元WT保持。123現存元WTのHEAD不変を最終照合。残る2登録は初回から不存在 |
 | 全repoの不要コード・配置・文書整理 | [全領域調査](REPOSITORY_HYGIENE_1.0.23.md)。削除根拠のある候補0、古い現行文書導線を修正 |
-| `scripts/run_tests.sh` 全体＋関連integration | 編集完了後 |
-| 固定Hermes SDK `check_pinned_sdks.sh hermes` とstandalone SDK | Hermes 21件、standalone 12件成功。固定SDKを隔離導入、生サービス通信なし |
-| `ruff check` CI全範囲、`ci/gates.py`、`ci/mine_gates.py --check` | 03b9b078でRuff・全10gate・mine gates成功。後続評価修正後も確認する |
-| `release_notes.py` check/build、`tests/release` | 最終候補で確認待ち |
-| `update_readme.py --check`、`readme_release.py --check`、1.0.23 READMEレビュー | 最終候補で確認待ち |
+| `scripts/run_tests.sh` 全体＋関連integration | 9c8b4b85で13,690 passed / 21 failed / 5 skipped / 41 subtests passed。失敗fixtureの全対象ファイル再検証結果は後掲 |
+| 固定Hermes SDK `check_pinned_sdks.sh hermes` とstandalone SDK | 修正後Hermes 21件成功（42 warnings）、standalone 12件成功を再利用。固定SDKを隔離導入、生サービス通信なし |
+| `ruff check` CI全範囲、`ci/gates.py`、`ci/mine_gates.py --check` | 最終コードでRuff・全10gate成功。mine gatesは対象incident契約不変の成功を再利用 |
+| `release_notes.py` check/build、`tests/release` | 1.0.23生成・check成功。release testsは全体検証で成功 |
+| `update_readme.py --check`、`readme_release.py --check`、1.0.23 READMEレビュー | 生成・check・5領域の具体的な照合記録成功 |
 | Slack/LINE WORKS gallery生成・check・目視 | Slack8枚・LINE WORKS2枚成功。目視済み、以後画像変更なし |
 | 公式薬剤masterの新規取得時刻・ZIP SHA・bundle検証 | 2026-10-17T02:11:57Z再取得、同梱20261013 ZIP SHA `c3efc8aa772b9bf54cfa992e8df3bc82480f86f35bbeb52522d0997144140fb5` と一致。bundle 19,286行検証成功、activation=false。importer追加変更後も再検証成功 |
-| CodeRabbit固定差分（比較元は前版本番相当SHA、秘密/実データ除外） | round1は131 text files全件、completed/exit0。3指摘のうち2採用、1は既存NULL安全処理により不採用。補完実装と修正後のround2待ち |
-| 最終候補のGit差分・未追跡・意図しない変更確認 | 最終候補で確認待ち |
+| CodeRabbit固定差分（比較元は前版本番相当SHA、秘密/実データ除外） | round1は131件、round2は139件全件をcompleted/exit0。round2の7指摘を妥当と確認して修正・対象検証済み。上限2巡を保持、3巡目なし |
+| 最終候補のGit差分・未追跡・意図しない変更確認 | 実行コード9c8b4b85以降は8テストと3受入文書の追補のみ。最終文書commit後にclean確認 |
 | 最終SHAの必須CI | push未承認につき未実施 |
 
 ## 証跡の所在
@@ -117,7 +117,7 @@ W1の最終記録は705件のdirty/untrackedパス観測（集約先の作業中
 
 配送の独立レビュー3件を修正した。card自身のunknownを子部品の矛盾から除外する回帰12件と既存復旧78件が成功。LINE WORKSはsource_generationが同じ場合だけカード/トークンを再利用し、変更後の新ボタンが操作可能・旧ボタンがstale_sourceとなることを確認した。新旧の部品予算超過holdは直接公開・recoverの両方から除外し64件成功。3修正の専用回帰は27件成功（対象重複のため合算しない）。固定候補の全体検証は別ゲート。
 
-追跡IDはFable 1〜32、D1〜D5、W1の計38件で欠落なし。全体テスト・CodeRabbit固定差分・固定Hermes/standalone SDK・最終Git差分・exact CIは前掲ゲートの未完了状態を維持する。局所検証件数は重複を含み、合算して全体成功件数を作らない。
+追跡IDはFable 1〜32、D1〜D5、W1の計38件で欠落なし。各最終ゲートは前掲の最新結果を参照する。リモートexact CI・実環境受入は未実施。局所検証件数は重複を含み、合算して全体成功件数を作らない。
 
 Doctorの既定DB probeによる既存契約の回帰を修正した。DB読取は既存の明示 `--probe data` に限定し、markerなし・未probeはunknown。関連96件成功。
 
@@ -134,3 +134,30 @@ Doctorの既定DB probeによる既存契約の回帰を修正した。DB読取�
 Claudeが03b9b078の評価経路を独立確認。二重読みの一致項目を裁定で上書きする指摘を採用し、不一致項目だけ裁定するよう修正。混在2caseの回帰は修正前に失敗、修正後16件成功。複数返信では全sourceを束縛したままtargetのみを評価するよう補完。実runtimeのbundle・summary/audit保存経路を使う回帰、対象と文脈を区別したblind資料、不一致/欠測/bool schema拒否を含む最終131件成功。
 
 全WTの最終HEAD照合では集約先以外の現存123件が初回と一致。2件は初回から実体のない登録であり、新たな削除ではない。証跡 `worktree-head-preservation.json`。
+
+### 最終レビュー7件の修正と検証
+
+CodeRabbitの対象は前版本番f8c6c20d→固定35cb1832、139テキストファイルで対象漏れなし。画像・受入運用記録・ROADMAPは送信対象から除外し、既存のローカル検証を使用した。修正後のコードは9c8b4b85。
+
+- LINE WORKSのGC済みspecでも例外にせず、永続部品記録で改訂上限を維持。消去済み本文と根拠のないtokenは再構成しない。復旧receiptの申告注記はremote_absentのみ。通知全体1,288件成功。
+- 診断件数が取得不能でも成功済み復元を失敗にしない。診断module読込失敗でも起動済みworkerを保持し、実起動失敗は伝播する。関連126件成功。
+- Git読取失敗を旧layoutと推定せず拒否。関連14件成功。
+- loaded class methodsを候補指紋へ含め、manifest/snapshotの由来不一致を推論前に拒否。関連70件成功。
+
+### 正式受入・未実施の境界
+
+旧sessionのsemantic.py所有予約は終了証跡がなく維持している。これと重なる旧い広範囲のcore-all予約に依存する台帳上のfinal-verify/independent-reviewは開始できず、`parents.finalization_allowed=false`。現在所有する具体的範囲の実装・独立レビュー・検証結果とは区別し、親タスクを正式完了と宣言しない。台帳・保留・未終了ツールの強制解除なし。
+
+公開・push/PR/tag・本番適用・実データ評価・実モデル/実配送は未実施。合成評価をG6昇格の証拠には使用しない。layout3作成後の旧版への直接rollbackは拒否し、人承認の更新前backup復元を必要とする。
+
+### 全体検証の失敗21件の解消
+
+全体実行は13,690成功・21失敗・5スキップ・41 subtests成功（1,099.61秒）。21件は変更後の契約に追随していないfixture/期待値で、実行コードは9c8b4b85から変更していない。失敗を許容したりテストをskipしたりせず、以下の対象ファイル全件を再検証した。
+
+| 対象 | 修正と結果 |
+|---|---|
+| adapter 8失敗・4ファイル | Discord主体ID、Supervisor.startの明示True、layout3の別メッセージ順序をfixtureへ反映。244件成功。順序assert追加後の対象1件も成功 |
+| schema復元10失敗・復旧narrative1失敗 | 合成Gitのカード形式読取を明示。layout防御と人承認・復元・重複防止のassertは保持。全対象2ファイルとrollback安全回帰96件成功 |
+| 評価承認1失敗・監視文言1失敗 | 旧い文字列だけのgateは拒否、新しい独立receiptを持つ合成承認で成功とmanifest失敗を検証。配送完了を断定しない監視文言へ整合。全対象2ファイル278件成功 |
+
+5スキップはDiscord/Slack SDK未導入の標準環境と明示SDK専用lane。別の固定Hermes21件・standalone12件の成功を参照し、スキップを成功件数へ足さない。関連コード/環境が不変の13,690件を再利用し、全体を無変更で繰り返さない。局所件数は重複を含むため合算しない。

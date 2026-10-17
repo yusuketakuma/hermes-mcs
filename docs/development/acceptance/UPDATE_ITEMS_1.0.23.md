@@ -1,6 +1,6 @@
 # 1.0.23 取り込み対応表（更新項目 → 成果物、導入・更新・復旧の実入口）
 
-2026-10-17。作業branch `release/v1.0.23-prep`、固定候補 `03b9b078` と、その独立レビュー修正を追跡する記録。
+2026-10-17。作業branch `release/v1.0.23-prep`、実行コード固定候補 `9c8b4b85` と、その合成fixture・受入文書の追補を追跡する記録。
 判定の正本は [受入票](ACCEPTANCE_1.0.23.md)。本表は「どの項目がどのコード・テスト・設定・資産・文書・配布物に対応するか」と
 「導入・更新・復旧・配布・起動の実入口がこの版でどう変わり、何で検証したか」を1か所で追跡する。
 品質合格・実環境受入・公開可否を意味しない。実データ・実サービス・実LLM・本番配備は未実施。
@@ -12,7 +12,7 @@
 
 | 入口 | 役割 | 1.0.23での変更 | 検証 | 状態 |
 |---|---|---|---|---|
-| `install.sh` | 新規導入（`--preflight` / `--mode hermes\|standalone` / `--recovery-python`）。段階6で復旧ツールを repo 外へ配置 | 変更なし | `tests/meta/test_install_sh*.py`・`test_install_local.py`・`test_install_runtime_migration.py`（合成） | 対象外（回帰は最終差分で再実行） |
+| `install.sh` | 新規導入（`--preflight` / `--mode hermes\|standalone` / `--recovery-python`）。段階6で復旧ツールを repo 外へ配置 | 変更なし | `tests/meta/test_install_sh*.py`・`test_install_local.py`・`test_install_runtime_migration.py`（合成） | 変更不要。全体検証で既存導入回帰成功 |
 | `scripts/mcs_upgrade.py` | 更新の起動役。TARGET tag の updater を現 checkout に対して実行。stdlib のみ | 変更なし | `tests/ops/test_mcs_upgrade.py` | 対象外 |
 | `mcs/ops/mcs_update.py plan` | 読取専用の更新計画（阻害要因・schema_bump） | 変更なし | `tests/ops/test_supported_update_paths.py`（v1.0.0〜v1.0.22 → 候補、fixture は `tests/fixtures/schema_upgrade/`） | 成功（Codex 側: schema/更新364件成功） |
 | `mcs/ops/mcs_update.py apply` | 停止 → backup → merge → post-merge → 再起動。失敗時は `_rollback_tree` で自動巻戻し | `_rollback_tree` 先頭に layout 下限ガード（§2 項目2） | `tests/ops/test_mcs_update.py`・`test_update_*.py`・`test_mcs_update_rollback_floor.py` | 成功（216件、Python 3.13。3.14 は §4） |
@@ -46,24 +46,24 @@ v1.0.23 は schema 変更を伴わない（`update-paths.json`: v1.0.22 と shap
 | 4 | 所有者不明時の拒否・固定SDK 属性契約 | `hermes_plugin/card_workers.py` `_owner_identity`/`_owner_allowed` | `tests/plugin/test_card_worker_owner.py`、`integration/test_hermes_slack.py` | `changes/archive/1.0.23/slack-profile-worker.json` | 実装済み・固定Hermes 21件・standalone 12件成功（§3） |
 | 5 | LINE WORKS 文書・画面の整合 | — | `scripts/development/generate_lineworks_gallery.py --check` | `docs/guides/LINEWORKS.md`、`docs/screenshots/lineworks-gallery/01-delivery.*`・`02-task-confirm.png`・`assets.json` | 生成 check・目視済み |
 | 6 | 1.0.23 更新手順 | — | `readme_release.py --check`（最終） | `docs/guides/UPGRADE_AGENT.md` §1.0.23 | 更新済み・rollback下限と復元制約を照合済み |
-| 7 | 1.0.22 からの更新 fixture | `mcs/ops/mcs_update.py plan/apply` | `tests/ops/test_supported_update_paths.py`、`tests/ops/test_release_origin_tick.py` | `tests/fixtures/schema_upgrade/update-paths.json`・`origins.json`（v1.0.22 = f8c6c20d を追加） | 364件成功・tick は編集静止後 |
+| 7 | 1.0.22 からの更新 fixture | `mcs/ops/mcs_update.py plan/apply` | `tests/ops/test_supported_update_paths.py`、`tests/ops/test_release_origin_tick.py` | `tests/fixtures/schema_upgrade/update-paths.json`・`origins.json`（v1.0.22 = f8c6c20d を追加） | 全体検証でtick成功、schema復元fixture追補96件成功 |
 | 8 | 名前付き受入ゲートと固定候補 | — | — | `ACCEPTANCE_1.0.23.md`、本表 | 追跡中 |
 | 9 | 待機理由行列・Discord 所有者照合 | `mcs/ingest/health_watch.py` `_wait_label`/`_wait_summary`/`_reason_rows`、`hermes_plugin/card_workers.py` | `tests/ingest/test_health_watch_wait_reasons.py`、`tests/plugin/test_card_worker_owner.py` | `changes/archive/1.0.23/delivery-wait-progress.json` | 実装・局所検証済み |
-| 10 | LINE WORKS 要約待機（最大120秒）・公開条件・改訂上限（最大3件） | `mcs/notify/present_lineworks.py`、`adapters/lineworks/delivery.py`、`mcs/notify/notify_cards.py` `_lineworks_update_budget` | `tests/notify/test_notify_lineworks.py`、`tests/notify/test_delivery_v1023.py` | `changes/archive/1.0.23/delivery-layout-safety.json` | 実装・最終局所検証中 |
+| 10 | LINE WORKS 要約待機（最大120秒）・公開条件・改訂上限（最大3件） | `mcs/notify/present_lineworks.py`、`adapters/lineworks/delivery.py`、`mcs/notify/notify_cards.py` `_lineworks_update_budget` | `tests/notify/test_notify_lineworks.py`、`tests/notify/test_delivery_v1023.py` | `changes/archive/1.0.23/delivery-layout-safety.json` | 実装・通知全体1,288件成功 |
 | 11 | 候補指紋と独立人承認 receipt | `mcs/semantic/semantic_candidate.py` `candidate_fingerprint`/`promotion_problem`、`mcs/semantic/semantic_acceptance.py` | `tests/semantic/test_sealed_candidate.py`、`tests/semantic/test_fact_source.py` | `changes/archive/1.0.23/sealed-candidate-evaluation.json`、`docs/specs/SEALED_CANDIDATE_EVALUATION.md` | 実装・局所検証済み |
 | 12 | 実データと合成の品質証拠区別 | `mcs/semantic/eval/semantic_evaluation.py`・`semantic_snapshot.py` | `tests/semantic/test_semantic_evaluation.py` | `docs/specs/semantic-evaluation.md`、`evaluation/request_following_review_manifest.json` | 実装・局所検証済み |
 | 13 | holdout 封印・split・blind 二重評価 | `mcs/semantic/eval/semantic_holdout.py` `holdout_payload`、`semantic_snapshot.py` | `tests/semantic/test_sealed_candidate.py` | `docs/specs/SEALED_CANDIDATE_EVALUATION.md` | 実装・局所検証済み |
-| 14 | 分母・Wilson・緊急度/AI優先・A/B 基準 | `mcs/core/stats_math.py` `wilson_interval`、`mcs/semantic/semantic_policy.py` | `tests/semantic/test_semantic_evaluation.py` | `evaluation/g6-criteria-v2.json`、`ci/gates.py` | 実装・追補検証中 |
+| 14 | 分母・Wilson・緊急度/AI優先・A/B 基準 | `mcs/core/stats_math.py` `wilson_interval`、`mcs/semantic/semantic_policy.py` | `tests/semantic/test_semantic_evaluation.py` | `evaluation/g6-criteria-v2.json`、`ci/gates.py` | 実装・局所/全体検証成功 |
 | 15 | 私有 snapshot のローカル評価 runner | `mcs/semantic/eval/semantic_snapshot.py` | 同上 | `docs/specs/semantic-facts-v2-rollout.md` | 実装済み・実データ/モデル受入未実施 |
 | 16 | 薬剤言及履歴と取得範囲 | `mcs/views/drug_timeline.py`、`mcs/ops/mcs_drug.py` | `tests/views/test_drug_timeline.py` | `changes/archive/1.0.23/drug-timeline-alias-workflow.json`、`docs/specs/DRUG_MASTER_WORKFLOWS.md` | 実装・局所検証済み |
 | 17 | 別名提案・承認・rollback | `mcs/ops/drug_alias.py`、`mcs/ops/mcs_drug.py`（alias-propose / alias-receipt） | `tests/ops/test_drug_alias.py` | 同上（`--confirm-human`・reason・command-id 必須） | 実装・局所検証済み |
 | 18 | 自動 export 禁止・私有表示境界 | `mcs/views/drug_reconciliation.py`・`drug_timeline.py`（読取のみ、追加取得・export なし） | `tests/views/test_drug_reconciliation.py` | `docs/specs/external-export-contract.md`、`changes/archive/1.0.23/drug-history-reconciliation.json` upgrade | 局所検証済み |
 | 19 | 復元 collect-only・配送 hold の可視化 | `mcs/ops/mcs_backup.py`（drill）、`mcs/views/card_worker_status.py` | `tests/ops/test_mcs_backup.py` | `changes/archive/1.0.23/backup-evidence-separation.json`、`docs/guides/BACKUP.md`・`NOTIFICATION_RECOVERY.md` | 実装・局所検証済み |
 | 20 | RPO 鮮度・年齢/遅延の区別・override なし | `mcs/ops/mcs_backup.py` | 同上 | `docs/guides/BACKUP.md` | 実装・文書化済み |
-| 21 | offsite/verify/escrow 証跡分離 | `mcs/ops/mcs_backup.py` `offsite`/`keygen`（key-fd・Keychain） | 同上（50件） | `changes/archive/1.0.23/backup-evidence-separation.json` | 実装済み・最終差分再検証待ち |
-| 22 | 全 profile 再起動と稼働証拠 | `mcs/views/card_worker_status.py`、`mcs/ops/mcs_setup.py doctor` | `tests/ops/test_mcs_setup_doctor.py` | UPGRADE_AGENT §1.0.23（`worker_started` 確認） | 診断実装済み・更新経路確認中 |
-| 23 | 表示変更の分類・更新注意 | — | `release_notes.py check`（最終） | `changes/archive/1.0.23/*.json` の category/upgrade（表示変更は `changed`、gateway 再起動を明記） | 最終文書整合待ち |
-| 24 | clean install・22→23 plan/apply | `install.sh`、`mcs/ops/mcs_update.py` | `tests/meta/test_install_sh*.py`、`tests/ops/test_supported_update_paths.py` | §1 | 更新回帰済み・配布経路確認中 |
+| 21 | offsite/verify/escrow 証跡分離 | `mcs/ops/mcs_backup.py` `offsite`/`keygen`（key-fd・Keychain） | 同上（50件） | `changes/archive/1.0.23/backup-evidence-separation.json` | 実装・backup/worker関連126件成功 |
+| 22 | 全 profile 再起動と稼働証拠 | `mcs/views/card_worker_status.py`、`mcs/ops/mcs_setup.py doctor` | `tests/ops/test_mcs_setup_doctor.py` | UPGRADE_AGENT §1.0.23（`worker_started` 確認） | 診断と更新手順の整合確認済み。実機再起動なし |
+| 23 | 表示変更の分類・更新注意 | — | `release_notes.py check`（最終） | `changes/archive/1.0.23/*.json` の category/upgrade（表示変更は `changed`、gateway 再起動を明記） | 変更履歴・README整合成功 |
+| 24 | clean install・22→23 plan/apply | `install.sh`、`mcs/ops/mcs_update.py` | `tests/meta/test_install_sh*.py`、`tests/ops/test_supported_update_paths.py` | §1 | 合成新規導入・対応更新経路を確認。実機配備なし |
 | 25 | standalone 所有判定と表示 | `mcs/views/card_worker_status.py`、`mcs/ops/mcs_setup.py` | `tests/ops/test_mcs_setup_standalone.py` | — | 実装・局所検証済み |
 | 26 | layout 変化で保留/上限を解除しない | `mcs/notify/notify_cards.py`（`_cleanup_budget_held`、`_pending_reason`） | `tests/notify/test_delivery_v1023.py` | `changes/archive/1.0.23/delivery-layout-safety.json` | 実装・局所検証済み |
 | 27 | LINE WORKS 同一カード/トークン再利用 | `mcs/notify/notify_cards.py` `_mint_token`、`adapters/lineworks/delivery.py` | `tests/notify/test_notify_lineworks.py`、`tests/adapters/lineworks/test_registry_delta.py` | 同上 | 実装・局所検証済み |
@@ -119,3 +119,5 @@ standalone SDK lane（`sh scripts/check_pinned_sdks.sh standalone`）: `deployme
 - 全ワークツリー集約は [WORKTREE_INTEGRATION_1.0.23.md](WORKTREE_INTEGRATION_1.0.23.md)。
 
 補完成果: `semantic_snapshot_observations.py` / `semantic_snapshot_blind.py`、専用2テスト、`semantic_snapshot.py` の `--authorization` / `blind-prepare` / `blind-merge`。通常・外部recoverのrestore_incomplete維持は関連335件、backup補助件数エラーのunknown扱いは102件成功。
+
+最終全体検証は13,690成功・21失敗・5SDK専用スキップ。実装変更なしのfixture整合後、全失敗を含む対象ファイル全件がadapter244件・schema/復旧96件・評価承認/監視278件で成功した。詳細と未実施境界は受入票の末尾。

@@ -2359,7 +2359,12 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         body = "\n".join(thread.sent)
         assert "📄 本文" not in body and "追記あり" in body and "スタンプ 未取得" in body
         post = next(p for p in thread.sent if "追記あり" in p)
-        assert post.index("要約 処理待ち") < post.index("スタンプ 未取得") < post.index("追記あり")
+        # Layout 3 keeps the summary/stamps in a separate header message.
+        assert post == "追記あり"
+        post_index = thread.sent.index(post)
+        assert post_index > 0
+        header = thread.sent[post_index - 1]
+        assert header.index("要約 処理待ち") < header.index("スタンプ 未取得")
         assert "📋 要約" not in body and "解析更新中" not in body
         _, current_spec = world.spec()
         assert current_spec["delivery"]["thread_id"] == str(original_thread_id)

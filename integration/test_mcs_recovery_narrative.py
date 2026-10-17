@@ -34,6 +34,7 @@ import re
 import shutil
 from contextlib import suppress
 import sqlite3
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -118,7 +119,7 @@ def isolated_narrative_state(monkeypatch):
                  "RUN_LOCK", "MARKER_PATH", "REPORT_PATH", "RESTORE_REPORT_PATH",
                  "BACKUP_DIR", "MANIFEST_PATH", "quiesce", "_services_reconcile",
                  "_reconcile_membership", "_postcheck", "load_config",
-                 "_enqueue_notice", "restart_gateway", "restart_agents"):
+                 "_enqueue_notice", "restart_gateway", "restart_agents", "_git"):
         monkeypatch.setattr(mcs_update, name, getattr(mcs_update, name))
 
 
@@ -653,6 +654,18 @@ def _run_narrative(tmp_path):
             N.data / "restore_report.json")
         before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
         after = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
+        original_git = mcs_update._git
+
+        def target_git(args, timeout=mcs_update.T_GIT):
+            # The narrative increments only schema version; its pre-send
+            # backup and restore target use the same card layout. The minimal
+            # Git fixture has no notification implementation of its own.
+            if args == ["show", f"{before}:mcs/notify/notify_cards.py"]:
+                return subprocess.CompletedProcess(
+                    args, 0, f"CARD_LAYOUT = {notify_cards.CARD_LAYOUT}\n", "")
+            return original_git(args, timeout)
+
+        mcs_update._git = target_git
         state = mcs_update._default_state()
         state["applied"] = [{"tag": "v1.1.0", "sha": after,
                              "prev_sha": before, "schema_bump": True,

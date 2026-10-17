@@ -30,7 +30,8 @@ def test_bind_failure_is_retried_until_the_workspace_binds(tmp_path, monkeypatch
         (tmp_path / name).mkdir()
     (tmp_path / "flags" / "notify.json").write_text(
         json.dumps({"interactive": True, "transport": "slack"}))
-    monkeypatch.setattr(Supervisor, "start", lambda self: None)
+    # The factory requires explicit startup success; this stub suppresses only scheduling.
+    monkeypatch.setattr(Supervisor, "start", lambda self: True)
     real_sleep = asyncio.sleep
     waits = []
 

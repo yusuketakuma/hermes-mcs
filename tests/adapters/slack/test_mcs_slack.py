@@ -201,7 +201,8 @@ def test_factory_uses_existing_secondary_workspace_client(
     (tmp_path / "flags" / "notify.json").write_text(
         json.dumps({"interactive": True, "transport": "slack"}))
     from adapters.slack.tasks import Supervisor
-    monkeypatch.setattr(Supervisor, "start", lambda self: None)
+    # The factory requires explicit startup success; this stub suppresses only scheduling.
+    monkeypatch.setattr(Supervisor, "start", lambda self: True)
     primary = FakeClient(team="T_PRIMARY")
     secondary = FakeClient()
     selected = []

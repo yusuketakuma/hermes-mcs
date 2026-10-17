@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 from typing import TypedDict
 
 import pytest
@@ -271,6 +272,13 @@ def test_released_schema_update_rollback_requires_bound_consent(
         head[0] = "a" * 40
         return ""
 
+    def git(args, timeout=None):
+        # This fixture stubs Git, not the layout guard. Its synthetic target
+        # supports the historical layout-1/2 cards, but never layout 3.
+        assert args == ["show", "a" * 40 + ":mcs/notify/notify_cards.py"]
+        return subprocess.CompletedProcess(args, 0, "CARD_LAYOUT = 2\n", "")
+
+    monkeypatch.setattr(updater, "_git", git)
     monkeypatch.setattr(updater, "_git_out", git_out)
     monkeypatch.setattr(updater, "_head_sha", lambda: head[0])
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)

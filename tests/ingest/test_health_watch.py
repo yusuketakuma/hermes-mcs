@@ -934,7 +934,7 @@ def test_alert_text_is_japanese_with_jst_times():
                      "・収集の一部の処理でエラーがありました",
                      "　→ 次回の収集で再試行されます。続く場合は data/run_check.log を確認",
                      "・送信待ちの通知があります",
-                     "　→ 次回の収集で送信されます。長く続く場合は gateway の稼働を確認",
+                     "　→ doctor で現在の待ち理由を確認。記録だけでは再送可否を判断できません",
                      "最終正常 01-01 09:00 / 最新記録 01-01 10:00（JST）",
                      "コード: degraded stage_errors,notification_pending"]
 

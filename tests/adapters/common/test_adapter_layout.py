@@ -112,7 +112,8 @@ for transport in ('slack', 'discord'):
 flags.write_text(json.dumps({'interactive': True, 'transport': 'slack'}))
 assert isinstance(workers.make_slack_factory(slack)(object(), None), Fake)
 discord = Ctx({**base, 'interactive': True, 'application_id': '333', 'channel_id': '444'})
-assert isinstance(workers.make_discord_factory(discord)(object(), None), Fake)
+native = types.SimpleNamespace(user=types.SimpleNamespace(id=333), application_id=333)
+assert isinstance(workers.make_discord_factory(discord)(native, None), Fake)
 assert len(bound) == 2
 assert not [name for name in sys.modules if name.startswith('hermes_plugins.mcs.mcs_')]
 """
