@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="650" viewBox="0 0 390 650" role="img" aria-labelledby="title desc">
+<title id="title">日本語で、一つずつ初期設定</title><desc id="desc">最大12区分から必要な手順だけ表示。目的別の質問に番号や「はい・いいえ」で答えられる、完全合成の説明図。</desc>
+<rect width="390" height="650" fill="#f3f6fa"/>
+<g font-family="Hiragino Sans, sans-serif" fill="#172b40">
+<text x="24" y="36" font-size="13" fill="#506176">MCS 1.0.24 ・ 完全合成の説明図</text>
+<text x="24" y="76" font-size="24" font-weight="700">日本語で、一つずつ初期設定</text>
+<text x="24" y="106" font-size="16">何を決めるか分かってから、回答。</text>
+<rect x="20" y="128" width="350" height="130" rx="14" fill="white" stroke="#d4dee9"/>
+<text x="36" y="157" font-size="14" font-weight="700" fill="#166367">目的ごとに順番に進む</text>
+<text x="36" y="190" font-size="17" font-weight="700">1　使い方とMCSのアカウント</text>
+<text x="36" y="218" font-size="17">2　通知の送り先</text>
+<text x="36" y="243" font-size="14" fill="#506176">最大12区分。使わない接続設定は省略。</text>
+<rect x="20" y="274" width="350" height="146" rx="14" fill="white" stroke="#d4dee9"/>
+<text x="36" y="304" font-size="14" font-weight="700" fill="#166367">選択肢は番号でも回答できる</text>
+<text x="36" y="336" font-size="18" font-weight="700">どの方法で使いますか？</text>
+<text x="36" y="367" font-size="16">1 = hermes　Hermesと連携</text>
+<text x="36" y="395" font-size="16">2 = standalone　MCSだけで動かす</text>
+<rect x="20" y="436" width="350" height="128" rx="14" fill="white" stroke="#d4dee9"/>
+<text x="36" y="466" font-size="14" font-weight="700" fill="#166367">オン・オフは日本語で回答できる</text>
+<text x="36" y="501" font-size="25" font-weight="700">はい　／　いいえ</text>
+<text x="36" y="537" font-size="15" fill="#506176">これまでの y / n でも入力できます。</text>
+<text x="24" y="597" font-size="16" font-weight="700">Enterで表示中の現在値・既定値を保持。</text>
+<text x="24" y="623" font-size="14" fill="#506176">必須項目が未入力なら、入力を案内します。</text>
+</g>
+</svg>
