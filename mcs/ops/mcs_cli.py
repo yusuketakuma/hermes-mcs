@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Final
+from xml.parsers.expat import ExpatError
 
 REPO: Final = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "mcs"))
@@ -69,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
                     or not isinstance(command[0], str) or not os.path.isabs(command[0])
                     or not os.access(command[0], os.X_OK)):
                 raise ValueError
-        except (OSError, ValueError, TypeError, AttributeError):
+        except (OSError, ValueError, TypeError, AttributeError, ExpatError):
             print("独立した復旧用の実行環境を確認できません。担当者に復旧ツールの導入状態を確認してもらってください。")
             return 1
         os.execv(command[0], [command[0], str(tool),

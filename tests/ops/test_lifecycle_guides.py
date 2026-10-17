@@ -126,6 +126,31 @@ def test_unified_recovery_bypasses_broken_runtime_selection(monkeypatch, tmp_pat
     assert calls == [[sys.executable, str(tool), "--interactive"]]
 
 
+@pytest.mark.parametrize("argv", [["recover"], ["recover", "--status"]],
+                         ids=["interactive", "status"])
+def test_unified_recovery_rejects_malformed_plist(monkeypatch, tmp_path, capsys, argv):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool = tmp_path / ".mcs-recovery" / "mcs_recover.py"
+    tool.parent.mkdir()
+    tool.write_text("# synthetic\nINTERACTIVE_GUIDE_VERSION = 1\n")
+    plist = tmp_path / "Library/LaunchAgents/org.mcs.recovery.plist"
+    plist.parent.mkdir(parents=True)
+    plist.write_text('<?xml version="1.0"?><plist version="1.0"><dict>')
+    tool_before, plist_before = tool.read_bytes(), plist.read_bytes()
+    monkeypatch.setattr(mcs_cli, "load_config",
+                        lambda: pytest.fail("must not fall back to runtime selection"))
+    monkeypatch.setattr(mcs_cli.os, "execv",
+                        lambda *args: pytest.fail("must not execute recovery"))
+
+    assert mcs_cli.main(argv) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ("独立した復旧用の実行環境を確認できません。"
+                            "担当者に復旧ツールの導入状態を確認してもらってください。\n")
+    assert captured.err == ""
+    assert tool.read_bytes() == tool_before and plist.read_bytes() == plist_before
+
+
 def test_guide_fetch_failure_is_japanese_and_nonfatal(monkeypatch, capsys):
     launcher = _launcher()
     _terminal(monkeypatch, [""])

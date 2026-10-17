@@ -1,4 +1,5 @@
 """Synthetic regressions for the ingest audit fixes (temp DB + stubs only)."""
+import json
 import time
 import uuid
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import mcs_adapter
 import mcs_requests
 import run_check
 from ingest_testkit import _ledger, _message, _unread_patient
+from mcs_queries import paused
 
 
 def _strict_adapter(latest_id, marks):
@@ -74,6 +76,38 @@ def test_commands_drain_in_submission_order(tmp_path, monkeypatch):
 def _ops(cmd):
     return {"version": 1, "command_id": str(uuid.uuid4()), "actor": "t", "human_confirmed": True,
             "project_id": 1, "cmd": cmd, "feature": "semantic"}
+
+
+def test_legacy_commands_precede_numbered_commands_without_reordering_each_group(tmp_path):
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    cmd_dir = tmp_path / "data" / "cmd"
+    cmd_dir.mkdir(parents=True)
+    legacy = [_ops("ops.pause"), _ops("ops.resume")]
+    numbered = [_ops("ops.pause"), _ops("ops.resume")]
+    try:
+        for name, req in zip(("request-zzzzzzzz.json", "request-aaaaaaaa.json"), legacy):
+            before = set(cmd_dir.glob("*.json"))
+            assert mcs_requests.enqueue(req, str(cmd_dir))["outcome"] == "queued"
+            published, = set(cmd_dir.glob("*.json")) - before
+            published.rename(cmd_dir / name)  # Simulate queued files surviving the old writer.
+            assert (cmd_dir / name).read_bytes() == mcs_requests.canonical(req)
+        for req in numbered:
+            assert mcs_requests.enqueue(req, str(cmd_dir))["outcome"] == "queued"
+        result = {"errors": []}
+
+        job_ops.drain_commands(db, result, str(cmd_dir))
+
+        rows = db.db.execute("SELECT content,meta FROM artifacts WHERE kind='semantic_control' "
+                             "ORDER BY artifact_id").fetchall()
+        assert [row["content"] for row in rows] == ["running", "paused", "paused", "running"]
+        assert [json.loads(row["meta"])["command_id"] for row in rows] == [
+            req["command_id"] for req in (legacy[1], legacy[0], *numbered)]
+        assert paused(db, 1) is False
+        assert result["errors"] == [] and result["ops_commands"] == 4
+        assert not list(cmd_dir.glob("*.json"))
+    finally:
+        db.close()
 
 
 def _drained(db, cmd_dir, monkeypatch):

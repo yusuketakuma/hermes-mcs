@@ -118,7 +118,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
         with mcs_requests.queue_lock(cmd_dir, wait=False) as locked:
             if not locked:
                 return
-            names = sorted(os.listdir(cmd_dir))
+            # Legacy queued input predates numbered requests; keep each group's lexical order.
+            names = sorted(os.listdir(cmd_dir), key=lambda name: (bool(mcs_requests._QUEUED.match(name)), name))
     except OSError:
         return
     for name in names:
