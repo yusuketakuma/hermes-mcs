@@ -52,3 +52,12 @@ def test_a_room_poster_beyond_the_cap_still_comes_first(led):
     got = notify_cards.assignee_choices(led.db, project_id=1)
     assert got[0] == "合成職員29（合成薬局）" and len(got) == notify_cards.STAFF_CHOICES
     assert notify_cards.assignee_choices(led.db)[-1] == f"合成職員{notify_cards.STAFF_CHOICES - 1:02d}（合成薬局）"
+
+
+def test_thread_names_never_show_an_unknown_date(led):
+    # display audit BUG 12: signal cards (no root post) used to end in 「— ??-??」
+    _patient(led, 1)
+    card = {"project_id": 1, "root_message_id": None, "created_at": 1_790_000_000.0}
+    assert notify_cards._thread_name(led.db, card).endswith("— 09-21")   # 2026-09-21 23:13 JST
+    assert "?" not in notify_cards._thread_name(led.db, {**card, "root_message_id": 999})
+    assert notify_cards._thread_name(led.db, {**card, "created_at": None}) == "💬 患者A"

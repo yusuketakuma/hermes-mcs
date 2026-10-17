@@ -1841,13 +1841,18 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
 def _thread_name(db, card) -> str:
     name = _patient_name(db, card["project_id"]) \
         or f"project {card['project_id']}"
-    d = "??-??"
+    d = None
     if card["root_message_id"]:
         r = db.execute("SELECT posted_at FROM messages WHERE message_id=?",
                        (card["root_message_id"],)).fetchone()
         if r:
             d = _mmdd(r["posted_at"])
-    title = f"💬 {name} — {d}"
+    if (not d or "?" in d) and isinstance(card["created_at"], (int, float)):
+        # signal cards have no root post: the day the card was made, in JST
+        from datetime import datetime
+        from mcs_queries import JST
+        d = f"{datetime.fromtimestamp(card['created_at'], JST):%m-%d}"
+    title = f"💬 {name}" + (f" — {d}" if d and "?" not in d else "")
     return title if len(title) <= 100 else title[:99] + "…"
 
 
