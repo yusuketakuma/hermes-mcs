@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "使われていないコードと記録の整理",
+  "summary": "呼び出し元のない内部処理と参照のない古い記録文書を削除し、テスト2件を対象の領域へ移しました。動作は変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs_standalone/host.py の raise_ended を削除。",
+    "docs/development/readme-review-1.0.16.json と docs/releases/HISTORY_REVIEW.md を削除（git 履歴に残る）。",
+    "テスト2件を tests/views と tests/adapters/lineworks へ移動。"
+  ],
+  "refs": [
+    "mcs_standalone/host.py",
+    "tests/views/test_card_worker_status.py",
+    "tests/adapters/lineworks/test_lineworks_service.py"
+  ]
+}
