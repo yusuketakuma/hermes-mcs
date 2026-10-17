@@ -231,7 +231,8 @@ class Actions:
             return
         cid = confirm.open_confirm(self.reg, token=session["token"], actor=actor,
                                    origin=session["origin"], payload=payload)
-        await self._say(user, text.preview_text(session["action"], payload, markdown=False), [
+        await self._say(user, text.preview_text(session["action"], payload, markdown=False,
+                                                target=(session.get("context") or {}).get("target")), [
             {"type": "message", "label": label, "postback": f"mcs:c:{cid}{suffix}"}
             for label, suffix in confirm.CHOICES])
 

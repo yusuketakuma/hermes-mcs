@@ -462,27 +462,30 @@ def view_answer(result: dict | None, allowed,
 CONFIRM_TTL_NOTE = "\nこの確認は10分で無効になります。"
 
 
-def preview_text(action: str, payload: dict, markdown: bool) -> str:
+def preview_text(action: str, payload: dict, markdown: bool, target: str | None = None) -> str:
     """The human-confirm preview of a task/dismiss/report payload —
     Discord markdown (bold heading) or Slack plain
     text."""
     bold = "**" if markdown else ""
+    # the render-pinned patient/post, display only (the command is pinned separately)
+    about = (f"対象: {_literal(str(target)[:120], not markdown)}\n"
+             if isinstance(target, str) and target.strip() else "")
     if action == "dismiss":
         code = dict(DISMISS_REASONS).get(payload.get("reason_code"))
         reason = payload["reason"][:400]
-        return (f"{bold}確認 — 候補の却下{bold}\n"
+        return (f"{bold}確認 — 候補の却下{bold}\n" + about
                 + (f"区分: {code}\n" if code else "")
                 + (f"理由: {reason}\n" if reason != code else "")
                 + "確定すると、この候補を却下済みにし、あなたの名前と理由を記録します。"
                 + CONFIRM_TTL_NOTE)
     if action == "report":
-        return (f"{bold}確認 — 抽出の誤り報告{bold}\n"
+        return (f"{bold}確認 — 抽出の誤り報告{bold}\n" + about +
                 f"箇所: {dict(FEEDBACK_FIELDS).get(payload['field'], '?')}\n"
                 f"メモ: {payload['reason'][:400]}\n"
                 "確定すると、この投稿の要約の抽出を1回だけ再実行し、"
                 "あなたの名前と理由を記録します。" + CONFIRM_TTL_NOTE)
-    out = (f"{bold}確認 — タスク作成{bold}\n"
-           f"内容: {payload['title'][:200]}")
+    out = (f"{bold}確認 — タスク作成{bold}\n" + about
+           + f"内容: {payload['title'][:200]}")
     if payload.get("assignee"):
         out += f"\n担当: {payload['assignee'][:120]}"
     if payload.get("due_date"):

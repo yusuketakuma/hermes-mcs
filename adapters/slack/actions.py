@@ -565,7 +565,8 @@ class Actions:
         confirm_id = confirm.open_confirm(
             self._reg, token=pending["token"], actor=pending["actor"],
             origin=origin, payload=payload)
-        text = preview_text(pending["action"], payload, markdown=False)
+        text = preview_text(pending["action"], payload, markdown=False,
+                            target=(pending.get("context") or {}).get("target"))
         blocks = [{"type": "section", "text":
                    {"type": "plain_text", "text": text[:3000]}},
                   {"type": "actions", "elements": [

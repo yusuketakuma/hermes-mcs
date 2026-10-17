@@ -494,7 +494,8 @@ class Actions:
             "actor": actor, "origin": pending["origin"],
             "payload": preview})
         await self._send_preview(interaction, pending["action"],
-                                 preview, confirm_id)
+                                 preview, confirm_id,
+                                 (pending.get("context") or {}).get("target"))
 
     async def _search(self, interaction, modal_id: str,
                       pending: dict) -> None:
@@ -552,7 +553,7 @@ class Actions:
         return out
 
     async def _send_preview(self, interaction, action: str,
-                            payload: dict, confirm_id: str) -> None:
+                            payload: dict, confirm_id: str, target: str | None = None) -> None:
         import discord
 
         view = discord.ui.View(timeout=None)
@@ -565,7 +566,7 @@ class Actions:
         view.add_item(yes)
         view.add_item(no)
         await self._followup(interaction,
-                             text.preview_text(action, payload, True),
+                             text.preview_text(action, payload, True, target=target),
                              view=view)
 
     # -- confirm ------------------------------------------------------------

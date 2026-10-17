@@ -2883,7 +2883,7 @@ def test_task_modal_roster_prefill_confirm_and_footer(world):
     asyncio.run(world.interact(act, ix2))
     modal_id = ix2.response.modal.custom_id[len("mcs:m:"):]
     preview = submit("2026-10-01")
-    assert preview["content"].startswith("**確認 — タスク作成**\n内容: 残薬を確認")
+    assert preview["content"].startswith("**確認 — タスク作成**\n対象: 患者A · 09-24 08:40の投稿\n内容: 残薬を確認")
     assert "\n理由: 通知カードからタスク作成\n確定すると" in preview["content"]
     cid = next(b.custom_id for b in preview["view"].items
                if not b.custom_id.endswith(":cancel"))

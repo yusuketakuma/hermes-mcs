@@ -1886,6 +1886,8 @@ def _render_context(db, card) -> dict:
       ``expected_signal_artifact_id`` must equal what was rendered.
     - ``extract_ref``: the extraction a ⚠ report would pin (see
       ``_extract_ref``).
+    - ``target``: display only — 「患者 · MM-DD HH:MMの投稿」 for the human
+      confirm preview; never used to build a command.
     Digests span projects, so no card-level source pin is emitted."""
     ctx: dict = {}
     if card["kind"] == "thread":
@@ -1899,6 +1901,7 @@ def _render_context(db, card) -> dict:
             ref = _extract_ref(db, card["project_id"], root=mid)
             if ref:
                 ctx["extract_ref"] = ref
+            _confirm_target(db, ctx)
         return ctx
     keys = _anchor_keys(card)
     sigs = _latest_signals(db, keys, card["project_id"])
@@ -1920,7 +1923,18 @@ def _render_context(db, card) -> dict:
         ref = _extract_ref(db, card["project_id"], mid=mid)
         if ref:
             ctx["extract_ref"] = ref
+        _confirm_target(db, ctx)
     return ctx
+
+
+def _confirm_target(db, ctx):
+    """What a confirm preview names: the patient and the pinned post's time."""
+    name = _patient_name(db, ctx["project_id"]) or f"患者ID {ctx['project_id']}"
+    r = db.execute("SELECT posted_at FROM messages WHERE message_id=?",
+                   (ctx["source_message_id"],)).fetchone()
+    at = str(r["posted_at"]) if r and r["posted_at"] else ""
+    when = f"{at[5:10]} {at[11:16]}の投稿" if len(at) >= 16 else "投稿（日時不明）"
+    ctx["target"] = f"{name} · {when}"
 
 
 def _meds_messages(db, card, context):
