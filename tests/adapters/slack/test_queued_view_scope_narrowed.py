@@ -12,11 +12,14 @@ from adapters.common.text import SCOPE_CHANGED_TEXT
 from adapters.slack.actions import Actions
 from adapters.slack.delivery import SlackCardAdapter
 from adapters.slack.paths import ensure_dirs
-from notify_testkit import NOW, _add_request, _patient, _token_for
+from notify_testkit import (
+    NOW, _add_request, _dispatch, _intent, _latest_render, _patient,
+    _seed_thread, _signal_row, _token_for,
+)
 from slack_testkit import SCOPE, SLACK
 from slack_actions_testkit import App, ack
 from slack_actions_testkit import _no_modal_wait  # noqa: F401  (used via usefixtures)
-from test_notify_slack import _command, _drain, _slack_render
+from test_notify_slack import _command, _drain
 
 pytestmark = pytest.mark.usefixtures("_no_modal_wait")
 
@@ -26,7 +29,11 @@ async def _scenario(tmp_path, scope, expired):
     root.mkdir()
     led = ledger.Ledger(str(root / "ledger.db"))
     try:
-        render = _slack_render(led)
+        _seed_thread(led)
+        _signal_row(led, "synthetic-digest", mids=[100])
+        _dispatch(led, _intent(led, kind="signal", pid=None, payload={
+            "digest": True, "signal_keys": ["synthetic-digest"]}), SLACK)
+        render = _latest_render(led)
         spec = json.loads(render["spec_json"])
         assert _drain(led, _command(render))["granted"]
         receipt = _command(render, "transport_receipt")

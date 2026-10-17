@@ -11,6 +11,7 @@ import pytest
 
 from adapters.common import paths as shared_paths
 from adapters.common import registry
+from adapters.common import text as common_text
 from adapters.slack import actions as slack_actions
 from adapters.slack.actions import Actions
 from adapters.slack.delivery import SlackCardAdapter
@@ -23,6 +24,20 @@ from slack_actions_testkit import _no_modal_wait  # noqa: F401  (used via usefix
 
 ROOT = Path(__file__).resolve().parents[3]
 pytestmark = pytest.mark.usefixtures("_no_modal_wait")
+
+
+def test_legacy_defer_token_reaches_the_runner_retired_response(tmp_path):
+    async def scenario():
+        actions, app, _, dirs = fixture(tmp_path, kind="defer")
+        body, action = click()
+        await actions._action(ack, body, action)
+        env = command(dirs)
+        assert env["token"] == TOKEN and validate_int(env) is None
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="rejected", error="action_retired")
+        await actions.sweep_followups()
+        assert app.client.messages[-1]["text"] == common_text.ERR_JA["action_retired"]
+    asyncio.run(scenario())
 
 
 def test_body_goes_only_to_original_user_after_runner_result(tmp_path):

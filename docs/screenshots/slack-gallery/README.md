@@ -15,11 +15,11 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 |---|---|
 | `01-overview` | `docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・本文・添付の配送）、`mcs/notify/notify_render.py`の`_message_post`（新しいカードのnativeスレッドは`↳`見出し・要約・スタンプ・本文。返信にも同じ順で表示）、`adapters/slack/cards.py`の`thread_part_blocks`（見出し行とスタンプ行は小さな補足表示、原文は`原文（N字）`の折りたたみブロック）、`mcs/notify/notify_cards.py`（添付の`📎`行と要約を含まない見出し） |
 | `02-notification` | `mcs/notify/notify_render.py`の`_card_content`・`_thread_context`・`_footer`（概要・投稿ごとの要約・状態の区画）、`adapters/slack/cards.py`（区画間の区切り線、`確認する`・`担当する`・`タスク作成`のボタンと「操作を選ぶ…」、`MCSで開く`のテキストリンク）、`mcs/notify/notify_cards.py`の`_ACTIONS`、`mcs/views/message_metadata.py`（スタンプ件数と自分の投稿数） |
-| `03-actions` | 同カード実装（ボタン以外の操作をボタン行の順に選択メニューへ。未完了タスクがあれば`タスク一覧`が先頭。表示項目は状態・設定に依存） |
+| `03-actions` | 同カード実装（ボタン以外の操作をボタン行の順に選択メニューへ。未完了タスクがあれば`タスク一覧`が先頭。患者の検索は常に含み、全体の新着集計・自分のタスク・未確認一覧は集計カードだけ。その他の表示項目は状態・設定に依存） |
 | `04-task-form` | `adapters/common/text.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
 | `05-task-preview` | 同`preview_text`と`_preview`（本人向け、確定する／取消） |
 | `06-task-list` | `adapters/slack/actions.py`の`_task_blocks`・`_task_text`（本人向けの一覧。各タスクの直後にその状態操作） |
-| `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（患者の記録まとめ。暫定集約・取得範囲・原本確認・背景／療養情報の本人向け抜粋）、`mcs/views/extraction_progress.py`（現在のsource/model/prompt/layoutへ束縛した処理中・完了・要確認と完了区間数。最新20投稿まで、履歴や臨床情報の完全性とは区別） |
+| `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（患者の記録まとめ。暫定集約・取得範囲・原本確認・背景／療養情報の本人向け抜粋）、`mcs/views/extraction_progress.py`（現在のsource/model/prompt/layoutへ束縛した処理中・完了・要確認と完了区間数。最新20投稿まで、履歴や臨床情報の完全性とは区別）、`notify_cards._context_navigation`（最初の5節・各節から8節への循環。夜間機能が有効な場合） |
 | `08-urgent-notice` | `mcs/notify/alert_view.py`の`render_parts`を完全合成のメモリDBで実行（患者本人／対象未確認、同投稿の一意な原文引用、投稿日時と緊急度の判定時刻、原本確認、未対応を断定しない記録表示）。`notify_urgent.py`の配送前検証と既存通知スレッドへの追加配送は別の安全条件。 |
 
 表示例では絵文字や一部の長い行を読みやすく簡略化する。
@@ -38,6 +38,10 @@ python3 scripts/development/readme_release.py --check
 既存のlibrsvg/Cairoとインストール済み日本語フォントを隔離環境で使って再描画した。
 2026-10-17の`01-overview`は要約・スタンプ・本文を並べるため高さを1200pxへ広げ、
 macOS標準Quick LookとImageMagickで1650×1800pxのPNGを描画した。
+2026-10-17のボタン再編では`03-actions`と`07-patient-summary`を更新した。
+Inkscapeのない環境では一時コピーのSVG viewportだけを正方形へ広げてQuick Lookで描画し、
+元の1650px幅・縦横比の範囲をImageMagickで切り出した。SVG本体の配置は変えず、
+`verify_png()`と`asset_hashes()`でPNGの完結性・寸法・SVG/PNGのハッシュを検査・同期した。
 絵文字の描画は環境によって異なり、実アプリの表示とは区別する。
 `scripts/development/generate_slack_gallery.py`の説明用の例とレイアウトを修正し、SVGとPNGを一緒に更新する。
 8画面の文字切れ・重なり・説明・本人向け表示・人承認条件を確認する。

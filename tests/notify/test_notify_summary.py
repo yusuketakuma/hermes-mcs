@@ -12,7 +12,7 @@ import notify_render
 from adapters.common import text
 from adapters.slack.actions import _parts_blocks
 from notify_testkit import (
-    NOW, _add_request, _click, _delivered_card, _patient, led, pinned_clock)
+    NOW, _add_request, _click, _delivered_digest, _patient, led, pinned_clock)
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
@@ -184,7 +184,7 @@ def test_modal_inputs_default_to_all_and_the_clicker():
 
 
 def test_card_click_opens_scope_modal_then_answers_in_card_dialect(led):
-    spec = _delivered_card(led)
+    spec = _delivered_digest(led)
     _add_request(led, "残薬", "山田 太郎", "2000-01-01")
     first = _click(led, spec, "digest")
     assert (first["outcome"], first["modal"]) == ("applied", True)

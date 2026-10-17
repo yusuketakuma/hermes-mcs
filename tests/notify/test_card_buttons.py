@@ -117,7 +117,8 @@ def test_digest_ack_label_follows_toggle(led):
     assert spec["kind"] == "digest"
     assert _button(spec, "ack")["label"] == "このページを確認する"
     # a digest spans projects: no MCS link, no single-patient summary
-    assert not {"link", "summary", "request"} & set(_ids(spec))
+    assert not {"link", "summary", "search", "request"} & set(_ids(spec))
+    assert {"digest", "mytasks", "unacked"} <= set(_ids(spec))
     _click(led, spec, "ack", now=NOW + 1)
     assert _button(_spec(led), "ack")["style"] == "success"
 
@@ -211,13 +212,94 @@ def test_button_rows_layout_and_link(led):
     rows = [[b["id"] for b in row] for row in spec["parts"]["action_rows"]]
     # primary row first; card_thread on: 本文 lives in the thread; no
     # task yet -> no タスク一覧; no extract_llm result -> no 誤りを報告
-    assert rows == [["ack", "assign", "request", "link"], ["summary"],
-                    ["digest", "mytasks", "unacked", "search"]]
+    assert rows == [["ack", "assign", "request", "link"], ["summary", "search"]]
     link = _button(spec, "link")
     assert link == {"id": "link", "ui": "link", "label": "MCSで開く",
                     "url": "https://www.medical-care.net/projects/medical/1"}
     assert "defer" not in _ids(spec)
     assert all(len(row) <= 5 for row in rows) and len(rows) <= 5
+
+
+@pytest.mark.parametrize("gate,expected", [
+    ("current", "action_retired"), ("off", "interactive_off"),
+    ("stale", "stale_source"), ("revoked", "card_revoked"),
+])
+def test_legacy_defer_keeps_write_action_guards(led, gate, expected):
+    spec = _delivered_card(led)
+    card = notify_cards._card_row(led.db, 1)
+    token = notify_cards._mint_token(led.db, 1, "defer", None,
+                                    {"source_gen": card["source_generation"]}, NOW)
+    if gate == "stale":
+        led.db.execute("UPDATE notification_cards SET source_generation=source_generation+1")
+    elif gate == "revoked":
+        led.db.execute("UPDATE notification_cards SET delivery_state='revoked'")
+    led.db.commit()
+    out = notify_cards.apply_notification(led, {
+        "command_id": f"{token}:{'ab' * 8}", "actor": A, "token": token,
+        "origin": dict(ORIGIN, message_id="m-9")},
+        CFG_OFF if gate == "off" else CFG, now=NOW)
+    assert out["outcome"] == "rejected" and out["error"] == expected
+    assert "defer" not in _ids(spec)
+    assert led.db.execute("SELECT COUNT(*) FROM notification_triage").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("transport", ["slack", "discord", "lineworks"])
+@pytest.mark.parametrize("kind", ["thread", "signal"])
+@pytest.mark.parametrize("in_thread_body", [False, True])
+def test_patient_actions_fit_worst_case_without_global_shortcuts(
+        led, monkeypatch, transport, kind, in_thread_body):
+    from adapters.common import spec as worker_spec
+    spec = _delivered_card(led)
+    card = dict(notify_cards._card_row(led.db, 1))
+    card.update(kind=kind, transport=transport,
+                anchor_key=json.dumps({"signal_keys": ["synthetic-key"]}))
+    content = {"manifest_id": 1, "shown_kind": "messages", "containers": [],
+               "footer": [], "page": 1, "pages": 3,
+               "toggles": {"acked": False, "assigned": False, "has_tasks": True}}
+    context = {"source_message_id": 100, "source_hash": f"{100:064x}",
+               "extract_ref": {"artifact_id": 1}, "signals": {"synthetic-key": {}}}
+    monkeypatch.setattr(notify_cards, "_meds_message", lambda *a: 100)
+    monkeypatch.setattr(notify_cards, "drug_search_available", lambda db: True)
+    post_count = worker_spec.MAX_POST_ACTIONS if (
+        kind == "thread" and ((transport == "slack" and in_thread_body)
+                              or (transport == "discord" and not in_thread_body))) else 0
+    reserve = 2 * post_count
+    rows = notify_cards._action_rows(
+        led.db, card, content, NOW, context,
+        in_thread_body=in_thread_body, reserve=reserve)
+    ids = [b["id"] for row in rows for b in row]
+    expected = {"ack", "assign", "request", "link", "tasks", "summary",
+                "search", "report", "prev", "next"}
+    if kind == "signal":
+        expected.add("dismiss")
+    if not in_thread_body:
+        expected.add("body")
+    if transport == "lineworks":
+        expected.add("more")
+    if in_thread_body or transport != "slack":
+        expected |= {"meds", "drugsearch"}
+    assert set(ids) == expected and len(ids) == len(expected)
+    assert len(rows) <= worker_spec.MAX_ROWS
+    assert all(len(row) <= worker_spec.MAX_BUTTONS for row in rows)
+    row_cost = sum(len(row) + 1 for row in rows)
+    containers = [{"type": "text", "text": "合成の投稿", "rule": True}
+                  for _ in range(worker_spec.MAX_COMPONENTS - row_cost - reserve - 1)]
+    spec["kind"] = kind
+    spec["delivery"]["transport"] = transport
+    spec["parts"] = {"containers": containers, "action_rows": rows,
+                     "footer": [{"type": "text", "text": "合成の状態"}]}
+    if post_count:
+        spec["parts"][transport] = {"post_actions": [{"at": index, "button": {
+            "id": "meds", "ui": "button", "style": "secondary", "label": "薬剤",
+            "token": f"{index:032x}"}} for index in range(post_count)]}
+    assert len(containers) + 1 + row_cost + reserve == worker_spec.MAX_COMPONENTS
+    assert worker_spec.validate(spec) is spec
+    spec["parts"]["containers"].append({"type": "text", "text": "合成の超過部品"})
+    with pytest.raises(ValueError, match="component_budget"):
+        worker_spec.validate(spec)
+    if kind == "signal" and not in_thread_body:
+        assert [[b["id"] for b in row] for row in rows[1:3]] == [
+            ["body", "tasks", "summary", "search", "report"], ["dismiss"]]
 
 
 # ---------- 📝 tasks in the footer / ☑ ------------------------------------
