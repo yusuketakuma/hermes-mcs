@@ -52,9 +52,12 @@ def test_actual_distribution_versions_match_lane(lane, request):
         assert project, "explicit immutable Hermes source archive is required"
         data = tomllib.loads(Path(project).read_text())
         requirements = data["project"]["optional-dependencies"]["messaging"]
+        # The security-updated JWT is a core dependency; the lane requires Python 3.14.
+        requirements += [r.split(";", 1)[0].strip() for r in data["project"]["dependencies"]
+                         if r.startswith("PyJWT[")]
         # Hermes moved its dev tooling from an extra to a PEP 735 group.
         requirements += [r for r in data["dependency-groups"]["dev"]
-                         if r.startswith("pytest==")]
+                         if r.startswith(("pytest==", "mcp=="))]
         assert metadata.version("hermes-agent") == data["project"]["version"]
     actual = {}
     for requirement in requirements:
