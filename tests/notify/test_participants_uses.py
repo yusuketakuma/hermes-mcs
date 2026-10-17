@@ -38,3 +38,17 @@ def test_a_namesake_elsewhere_never_jumps_ahead(led):
                    (f"{300:064x}", f"{301:064x}"))
     assert notify_cards.assignee_choices(led.db, project_id=1) == [
         "合成C（合成薬局）", "合成A（合成薬局）", "同名職員（合成薬局）"]
+
+
+def test_a_room_poster_beyond_the_cap_still_comes_first(led):
+    # NA1: the room-first order applies before the 25-choice cap, never after it
+    _patient(led, 1)
+    roster = [{"staff_id": 300 + i, "name": f"合成職員{i:02d}", "station": "合成薬局"} for i in range(30)]
+    with led.db:
+        mcs_signals.record_station_staff(led.db, roster)
+    led.db.execute("INSERT INTO messages(message_id,project_id,sender_id,sender_name,profession,organization,"
+                   "posted_at,posted_at_ts,body_text,content_hash,body_state) VALUES"
+                   "(400,1,329,'合成職員29','薬剤師','合成薬局','2026-09-24T08:00',1,'本文',?,'full')", (f"{400:064x}",))
+    got = notify_cards.assignee_choices(led.db, project_id=1)
+    assert got[0] == "合成職員29（合成薬局）" and len(got) == notify_cards.STAFF_CHOICES
+    assert notify_cards.assignee_choices(led.db)[-1] == f"合成職員{notify_cards.STAFF_CHOICES - 1:02d}（合成薬局）"

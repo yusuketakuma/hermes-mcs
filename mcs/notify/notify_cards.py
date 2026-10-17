@@ -1999,8 +1999,7 @@ def assignee_choices(db, limit=STAFF_CHOICES, project_id=None) -> list:
     def add(name, station, sid=None):
         name = " ".join(str(name or "").split())
         label = f"{name}（{station}）" if station else name
-        if name and name not in seen and len(label) <= 75 \
-                and len(out) < limit:
+        if name and name not in seen and len(label) <= 75:
             seen.add(name)
             out.append(label)
             keys[label] = (sid, name, station)
@@ -2008,7 +2007,8 @@ def assignee_choices(db, limit=STAFF_CHOICES, project_id=None) -> list:
     for s in latest_station_staff(db):
         add(s.get("name"), s.get("station"), s.get("staff_id"))
     if out:
-        return _room_first(db, out, keys, project_id)
+        # the room's own posters first, then the cap: a long roster must not hide them
+        return _room_first(db, out, keys, project_id)[:limit]
     prof = _latest_self_profile(db)
     own = [" ".join(o.split()) for o in prof.get("organizations") or []
            if isinstance(o, str) and o.strip()]
@@ -2021,7 +2021,7 @@ def assignee_choices(db, limit=STAFF_CHOICES, project_id=None) -> list:
         match = next((o for o in own if o in stations), None)
         if match:
             add(r["sender_name"], match)
-    return _room_first(db, out, keys, project_id)
+    return _room_first(db, out, keys, project_id)[:limit]
 
 
 def _room_first(db, labels, keys, project_id):
@@ -3338,7 +3338,15 @@ def _context_navigation(db, base, card, params, cfg, now, legacy):
     row = db.execute("SELECT artifact_id,content FROM artifacts WHERE kind=? AND project_id=? "
         "AND json_extract(meta,'$.viewer')=? ORDER BY artifact_id DESC LIMIT 1",
         (kind, card["project_id"], identity)).fetchone()
-    since = params.get("since", (loads_dict(row["content"]) or {}).get("at", 0) if row else 0)
+    saved = (loads_dict(row["content"]) or {}) if row else {}
+    # A prompt resend of the last opening (same command, within the live window) keeps
+    # that opening's baseline instead of advancing it: the receipt's processed_at is the
+    # command's first use, so it cannot tell a later re-opening's resend apart.
+    if ("since" not in params and saved.get("command_id") == base.get("command_id")
+            and type(saved.get("at")) in (int, float) and 0 <= now - saved["at"] <= LIVE_RESULT_S
+            and type(saved.get("since")) in (int, float)):
+        params = {**params, "since": saved["since"], "_replay": True}
+    since = params.get("since", saved.get("at", 0))
     if type(since) not in (int, float) or not math.isfinite(since) or since < 0:
         return {**base, "outcome": "rejected", "error": "action_not_applicable"}
     navigation, token_ctx = [], {}
@@ -3348,7 +3356,7 @@ def _context_navigation(db, base, card, params, cfg, now, legacy):
         for target in ("background", "changes", "previsit", "replies", "discrepancies"):
             _private_button(db, base, card, now, navigation, token_ctx, "summary",
                             CONTEXT_SECTIONS[target], {"section": target, "page": 0, "role": "", "since": since})
-        _context_checkpoint(db, card, identity, row, params, now)
+        _context_checkpoint(db, card, identity, row, params, now, since, base.get("command_id"))
         return {**result, "context_since": since, "navigation": navigation, "token_ctx": token_ctx}
     view = patient_context_list(db, card["project_id"], section, cfg=cfg,
                                since=since, now=now, role=role, page=page)
@@ -3377,17 +3385,19 @@ def _context_navigation(db, base, card, params, cfg, now, legacy):
             "context_since": since, "navigation": navigation, "token_ctx": token_ctx}
 
 
-def _context_checkpoint(db, card, identity, row, params, now):
+def _context_checkpoint(db, card, identity, row, params, now, since=None, command_id=None):
     # Record viewing time only, never clinical acknowledgement. Tokens retain
-    # the prior checkpoint throughout this private navigation session.
+    # the prior checkpoint throughout this private navigation session; the
+    # opening's own baseline and command let a prompt resend reuse it.
     if params.get("ephemeral") or params.get("_replay"):
         return
+    content = json.dumps({"at": now, **({"since": since, "command_id": command_id}
+                                        if command_id and since is not None else {})})
     if row:
-        db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
-                   (json.dumps({"at": now}), row["artifact_id"]))
+        db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (content, row["artifact_id"]))
     else:
         db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES(?,?,?,?,?)",
-                   ("patient_context_view_checkpoint_v1", card["project_id"], json.dumps({"at": now}),
+                   ("patient_context_view_checkpoint_v1", card["project_id"], content,
                     json.dumps({"viewer": identity}), now))
 
 

@@ -49,7 +49,7 @@ def test_all_sections_reachable_and_actor_bound(led):
     assert notify_views.CONTEXT_SECTIONS[sections[0]] in click(
         led, token, now=NOW + len(sections))["list"]["title"]
     row = led.db.execute("SELECT content,meta FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
-    assert json.loads(row["content"]) == {"at": NOW}
+    assert json.loads(row["content"])["at"] == NOW and set(json.loads(row["content"])) <= {"at", "since", "command_id"}
     assert "discord:1001" not in row["meta"]
     receipts = led.db.execute("SELECT receipt_json FROM command_receipts").fetchall()
     assert receipts and all("navigation" not in json.loads(row[0]) and "list" not in json.loads(row[0])
@@ -147,6 +147,22 @@ def test_replayed_summary_does_not_advance_checkpoint(led):
     assert first["context_since"] == second["context_since"] == 0
     row = led.db.execute("SELECT content FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
     assert json.loads(row[0])["at"] == NOW
+
+
+@pytest.mark.parametrize("later", [3601, 2 * 86400])
+def test_resend_of_a_later_reopening_keeps_that_openings_baseline(led, later):
+    # NA2: the same 🧾 command reopened after the live window, then resent 30s later,
+    # must show the same 前回から baseline and must not advance the checkpoint again
+    spec = _delivered_card(led)
+    req = {"command_id": "same-view", "actor": "discord:1001", "token": _token_for(spec, "summary"),
+           "origin": dict(ORIGIN, message_id="m-9")}
+    first = notify_cards.apply_notification(led, req, ENABLED, now=NOW)
+    reopened = notify_cards.apply_notification(led, req, ENABLED, now=NOW + later)
+    resent = notify_cards.apply_notification(led, req, ENABLED, now=NOW + later + 30)
+    assert first["context_since"] == 0 and reopened["context_since"] == NOW
+    assert resent["context_since"] == reopened["context_since"]
+    row = led.db.execute("SELECT content FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
+    assert json.loads(row[0])["at"] == NOW + later
 
 
 def test_nightly_summary_uses_fact_id_not_same_text_source(led, monkeypatch):
