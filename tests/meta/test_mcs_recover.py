@@ -111,7 +111,9 @@ def test_pre_merge_interrupt_restores(rec, tmp_path):
     assert report["result"] == "interrupted_pre_merge"
 
 
-@pytest.mark.parametrize("dirty", ["update_path", "unrelated_path", "index_only"])
+@pytest.mark.parametrize("dirty", ["update_path", "update_third",
+                                    "unrelated_path", "index_only",
+                                    "index_update_third"])
 def test_mixed_tree_resets_to_prev(rec, tmp_path, dirty):
     repo = _make_repo(tmp_path)
     (repo / "g.txt").write_text("operator")
@@ -124,12 +126,12 @@ def test_mixed_tree_resets_to_prev(rec, tmp_path, dirty):
     _git(repo, "checkout", "-q", prev)
     # half-applied checkout touches only update paths; any other tracked
     # change is someone's manual edit and must survive
-    path = "f.txt" if dirty == "update_path" else "g.txt"
-    (repo / path).write_text("CHANGED")
-    if dirty == "index_only":
+    path = "f.txt" if dirty.startswith("update") or dirty.startswith("index_update") else "g.txt"
+    (repo / path).write_text("target" if dirty == "update_path" else "CHANGED")
+    if dirty in ("index_only", "index_update_third"):
         # staged, then only the worktree file put back: git diff HEAD is empty, the index is not
-        _git(repo, "add", "g.txt")
-        (repo / "g.txt").write_text("operator")
+        _git(repo, "add", path)
+        (repo / path).write_text("one" if dirty == "index_update_third" else "operator")
     state = _applying(prev, sha=target, stage="applying")
     with open(rec.STATE_PATH, "w") as f:
         json.dump(state, f)
@@ -140,11 +142,18 @@ def test_mixed_tree_resets_to_prev(rec, tmp_path, dirty):
         assert json.loads(report_path.read_text())["result"] == "mixed_tree_reset"
     else:
         assert rec.recover() == 1
-        assert (repo / "g.txt").read_text() == ("operator" if dirty == "index_only" else "CHANGED")
-        assert _git(repo, "show", ":g.txt").stdout == ("CHANGED" if dirty == "index_only" else "operator")
+        if dirty == "index_update_third":
+            assert (repo / "f.txt").read_text() == "one"
+            assert _git(repo, "show", ":f.txt").stdout == "CHANGED"
+        elif dirty == "update_third":
+            assert (repo / "f.txt").read_text() == "CHANGED"
+            assert _git(repo, "show", ":f.txt").stdout == "one"
+        else:
+            assert (repo / "g.txt").read_text() == ("operator" if dirty == "index_only" else "CHANGED")
+            assert _git(repo, "show", ":g.txt").stdout == ("CHANGED" if dirty == "index_only" else "operator")
         report = json.loads(report_path.read_text())
         assert report["result"] == "escalate"
-        assert report["detail"] == "local changes outside update: g.txt"
+        assert report["detail"] == "local changes outside update: " + path
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
 
 
@@ -159,7 +168,7 @@ def test_mixed_tree_preserves_untracked_update_collision(rec, tmp_path,
     target = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _git(repo, "checkout", "-q", prev)
     (repo / "added.txt").write_text("user content")
-    (repo / "f.txt").write_text("interrupted checkout")
+    (repo / "f.txt").write_text("target")
     state = _applying(prev, sha=target, stage="applying")
     with open(rec.STATE_PATH, "w") as f:
         json.dump(state, f)

@@ -353,17 +353,36 @@ def _tree_clean() -> bool:
 
 
 def _local_changes_outside(prev, target) -> list[str]:
-    """Tracked dirty paths the prev..target update never touches (someone's
-    manual edit a reset would destroy). Dirty means the worktree differs from
-    the index OR the index differs from HEAD: staged content survives even when
-    the worktree file was put back. Raises UpdateError when git cannot tell."""
+    """Dirty paths a recovery reset must not destroy.
+
+    A dirty path outside ``prev..target`` is always foreign.  A dirty path
+    inside that range is safe only when both its worktree and index versions
+    still match one of the two known commits; an interrupted checkout can
+    produce either combination, but an operator's third edit cannot be told
+    apart from it by pathname alone.
+    """
     if not prev or not target:
         raise UpdateError("diff: update range unknown")
     touched, unstaged, staged = (set(filter(None, _git_out(args).split("\0"))) for args in (
         ["diff", "--name-only", "--no-renames", "-z", prev, target],
         ["diff", "--name-only", "--no-renames", "-z"],
         ["diff", "--cached", "--name-only", "--no-renames", "-z"]))
-    return sorted((unstaged | staged) - touched)
+    dirty = unstaged | staged
+    foreign = dirty - touched
+    for path in dirty & touched:
+        for cached in (False, True):
+            flag = ["--cached"] if cached else []
+            known = False
+            for revision in (prev, target):
+                result = _git(["diff", *flag, "--quiet", revision, "--", path])
+                if result is None or result.returncode not in (0, 1):
+                    raise UpdateError("diff: content provenance unknown")
+                if result.returncode == 0:
+                    known = True
+                    break
+            if not known:
+                foreign.add(path)
+    return sorted(foreign)
 
 
 def remote_tag_sha(tag: str) -> str | None:

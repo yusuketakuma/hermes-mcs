@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "中断更新時の手編集を保護",
+  "summary": "更新対象のファイルであっても、更新前後の版と一致しない手編集があれば自動復旧を停止し、内容を破棄しません。",
+  "upgrade": "追加操作は不要です。中断更新の復旧が停止した場合は、表示された対象ファイルを確認してから再実行してください。",
+  "details": ["worktree と index の両方を更新前後の既知内容と照合する。"],
+  "refs": ["mcs/ops/mcs_update.py", "deployment/recovery/mcs_recover.py"]
+}

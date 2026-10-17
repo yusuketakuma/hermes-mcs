@@ -919,7 +919,7 @@ def test_recover_mixed_tree_after_merge_stage_crash(updater, tmp_path,
     target = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
     # simulate a partially-written checkout: tracked file has target
     # content, update-introduced file exists untracked
-    (repo / "f.txt").write_text("partial-checkout-state")
+    (repo / "f.txt").write_text("three")
     (repo / "introduced.txt").write_text("new")
     work = tmp_path / "remote-work"
     (work / "introduced.txt").write_text("new")

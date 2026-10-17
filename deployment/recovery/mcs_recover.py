@@ -163,10 +163,12 @@ def _clean():
 
 
 def _local_changes_outside(prev, target):
-    """Tracked dirty paths the prev..target update never touches (someone's
-    manual edit a reset would destroy); None when git cannot tell. Dirty means
-    worktree-vs-index OR index-vs-HEAD, so staged content survives even when
-    the worktree file was put back (same rule as mcs_update)."""
+    """Dirty paths a recovery reset must not destroy.
+
+    Range-external paths are foreign.  A range-touched path is safe only when
+    each worktree/index version matches prev or target; pathname membership
+    alone cannot distinguish an interrupted checkout from a third edit.
+    """
     if not prev or not target:
         return None
     paths = []
@@ -177,7 +179,22 @@ def _local_changes_outside(prev, target):
         if r is None or r.returncode != 0:
             return None
         paths.append(set(filter(None, r.stdout.split("\0"))))
-    return sorted((paths[1] | paths[2]) - paths[0])
+    dirty = paths[1] | paths[2]
+    foreign = dirty - paths[0]
+    for path in dirty & paths[0]:
+        for cached in (False, True):
+            flag = ["--cached"] if cached else []
+            known = False
+            for revision in (prev, target):
+                r = _git(["diff", *flag, "--quiet", revision, "--", path])
+                if r is None or r.returncode not in (0, 1):
+                    return None
+                if r.returncode == 0:
+                    known = True
+                    break
+            if not known:
+                foreign.add(path)
+    return sorted(foreign)
 
 
 def _valid_state(state):
