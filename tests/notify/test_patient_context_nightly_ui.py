@@ -38,6 +38,7 @@ def test_all_sections_reachable_and_actor_bound(led):
     spec = _delivered_card(led)
     token = click(led, _token_for(spec, "summary"))["navigation"][0]["token"]
     sections = list(notify_views.CONTEXT_SECTIONS)
+    assert len(sections) == 8
     for index, section in enumerate(sections):
         result = click(led, token, now=NOW + index)
         assert result["action"] == "list"
@@ -45,6 +46,8 @@ def test_all_sections_reachable_and_actor_bound(led):
         assert len(result["navigation"]) <= 5
         token = result["navigation"][1]["token"]
         assert click(led, token, actor="discord:2002", now=NOW + index)["error"] == "actor_mismatch"
+    assert notify_views.CONTEXT_SECTIONS[sections[0]] in click(
+        led, token, now=NOW + len(sections))["list"]["title"]
     row = led.db.execute("SELECT content,meta FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
     assert json.loads(row["content"]) == {"at": NOW}
     assert "discord:1001" not in row["meta"]
@@ -76,6 +79,18 @@ def test_role_cycle_and_search_reuse_existing_modal(led):
     changes = click(led, role["navigation"][1]["token"], now=NOW + 2)
     search = click(led, changes["navigation"][2]["token"], now=NOW + 3)
     assert search["action"] == "search" and search["modal"]
+
+
+def test_all_ten_profession_orders_cycle_back_to_standard(led):
+    spec = _delivered_card(led)
+    result = open_section(led, spec)
+    roles = list(notify_views.CONTEXT_ROLES)
+    assert len(roles) == 11
+    for index, role in enumerate(roles):
+        assert f"表示順: {notify_views.CONTEXT_ROLES[role]}" in result["list"]["head"]
+        button = next(b for b in result["navigation"] if b["label"].startswith("表示順:"))
+        result = click(led, button["token"], now=NOW + index + 1)
+    assert "表示順: 標準" in result["list"]["head"]
 
 
 def test_shadow_does_not_expose_navigation(led):
@@ -168,7 +183,8 @@ def test_first_click_keeps_existing_summary_text(led):
     title, body = notify_views.patient_summary_text(led.db, pid, cfg=ENABLED)
     assert (result["title"], result["body"]) == (title, body)
     assert [b["label"] for b in result["navigation"]] == [
-        notify_views.CONTEXT_SECTIONS[k] for k in ("background", "changes", "previsit", "replies", "timeline")]
+        notify_views.CONTEXT_SECTIONS[k] for k in (
+            "background", "changes", "previsit", "replies", "discrepancies")]
 
 
 def test_broken_nightly_view_falls_back_to_existing_summary(led, monkeypatch):

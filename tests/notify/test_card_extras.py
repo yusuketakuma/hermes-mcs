@@ -11,7 +11,7 @@ import notify_cmds
 import notify_render
 import notify_views
 from notify_testkit import (
-    CFG, NOW, ORIGIN, _add_request, _click, _deliver, _delivered_card, _msg,
+    CFG, NOW, ORIGIN, _add_request, _click, _deliver, _delivered_card, _delivered_digest, _msg,
     _spec, led, pinned_clock)
 
 __all__ = ["led", "pinned_clock"]
@@ -28,13 +28,14 @@ def test_card_limits_mirror_the_worker_spec():
     """The runner budgets cards with copies of the worker's ceilings."""
     from adapters.common import spec as worker_spec
     assert notify_cards.MAX_COMPONENTS == worker_spec.MAX_COMPONENTS
+    assert notify_cards.MAX_BUTTONS == worker_spec.MAX_BUTTONS
     assert notify_cards.MAX_POST_ACTIONS == worker_spec.MAX_POST_ACTIONS
 
 
 def test_extra_row_is_budgeted(led):
-    spec = _delivered_card(led)
+    spec = _delivered_digest(led)
     assert [b["id"] for b in spec["parts"]["action_rows"][-1]] == [
-        "digest", "mytasks", "unacked", "search"]
+        "digest", "mytasks", "unacked"]
     card = notify_cards._card_row(led.db, 1)
     content = notify_render._card_content(led.db, card)
     content["manifest_id"] = 1
@@ -53,8 +54,20 @@ def test_extra_row_is_budgeted(led):
     assert "digest" not in [b["id"] for r in rows for b in r]
 
 
+def test_patient_search_survives_an_exhausted_optional_button_budget(led):
+    _delivered_card(led)
+    card = notify_cards._card_row(led.db, 1)
+    content = notify_render._card_content(led.db, card)
+    content["manifest_id"] = 1
+    rows = notify_cards._action_rows(
+        led.db, card, content, NOW, reserve=notify_cards.MAX_COMPONENTS)
+    ids = {b["id"] for row in rows for b in row}
+    assert {"summary", "search"} <= ids
+    assert not ids & {"digest", "mytasks", "unacked"}
+
+
 def test_my_tasks_matches_display_name_overdue_first(led):
-    spec = _delivered_card(led)
+    spec = _delivered_digest(led)
     later = _add_request(led, "来週の確認", "山田 太郎（みどり訪看）", "2026-12-01")
     late = _add_request(led, "昨日の確認", "山田太郎", "2026-01-01")
     undated = _add_request(led, "期限なし", "山田 太郎", status="in_progress")
@@ -82,7 +95,7 @@ def test_my_tasks_matches_display_name_overdue_first(led):
 def test_list_counts_respect_the_plugin_project_scope(led):
     """Head counts cover only the projects the plugin may show — the
     plugin's static project list rides in input.projects."""
-    spec = _delivered_card(led)
+    spec = _delivered_digest(led)
     led.db.execute("INSERT INTO patients(project_id,patient_name,"
                    "is_archived) VALUES(2,'患者B',0)")
     _add_request(led, "範囲内", "山田", "2026-01-01")
@@ -104,7 +117,7 @@ def test_list_counts_respect_the_plugin_project_scope(led):
 
 
 def test_my_tasks_without_name_says_why(led):
-    spec = _delivered_card(led)
+    spec = _delivered_digest(led)
     _add_request(led, "件", "山田")
     view = _click(led, spec, "mytasks")["list"]
     assert view["items"] == [] and "表示名を取得できない" in view["empty"]
@@ -112,7 +125,8 @@ def test_my_tasks_without_name_says_why(led):
 
 def test_unacked_lists_until_acknowledged(led):
     spec = _delivered_card(led)
-    view = _click(led, spec, "unacked")["list"]
+    digest = _delivered_digest(led)
+    view = _click(led, digest, "unacked")["list"]
     assert view["head"][0] == "未確認 1件（うち担当者あり 0件）"
     item = view["items"][0]
     assert (item["project_id"], item["group"]) == (1, "患者A")
@@ -122,23 +136,24 @@ def test_unacked_lists_until_acknowledged(led):
 
     _click(led, spec, "assign")
     _deliver(led)
-    view = _click(led, _spec(led), "unacked")["list"]
+    view = _click(led, digest, "unacked")["list"]
     assert view["head"][0] == "未確認 1件（うち担当者あり 1件）"
     assert "担当中: <@1001>" in view["items"][0]["text"]
 
     _click(led, _spec(led), "ack")
     _deliver(led)
-    view = _click(led, _spec(led), "unacked")["list"]
+    view = _click(led, digest, "unacked")["list"]
     assert view["items"] == [] and view["head"][0].startswith("未確認 0件")
 
     # new content since the ack -> unconfirmed again
     _msg(led, 102, parent=100)
     notify_cards.sweep(led, CFG, now=NOW)
-    assert _click(led, _spec(led), "unacked")["list"]["items"]
+    assert _click(led, digest, "unacked")["list"]["items"]
 
 
 def test_unacked_leaves_out_old_cards(led):
-    spec = _delivered_card(led)
+    _delivered_card(led)
+    spec = _delivered_digest(led)
     old = NOW - notify_views.UNACKED_WINDOW_S - 1
     led.db.execute("UPDATE notification_cards SET created_at=?,updated_at=?", (old, old))
     led.db.execute("UPDATE notification_view_manifests SET created_at=?", (old,))

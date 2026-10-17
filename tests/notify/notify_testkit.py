@@ -185,10 +185,10 @@ def _spec(led, card_id=1):
     return json.loads(_latest_render(led, card_id)["spec_json"])
 
 
-def _deliver(led):
+def _deliver(led, card_id=1):
     """Land the latest render (card + body parts) so the next action
     re-renders as an update."""
-    r = _latest_render(led)
+    r = _latest_render(led, card_id)
     n = next(_SEQ)
     _begin(led, r, n=n)
     _receipt(led, r, f"{n:016x}", message_id="m-9", n=5000 + n)
@@ -201,6 +201,20 @@ def _delivered_card(led):
     _dispatch(led, _intent(led))
     _deliver(led)
     return _spec(led)
+
+
+def _delivered_digest(led):
+    """A delivered digest with the global view buttons, over synthetic signals."""
+    if not led.db.execute("SELECT 1 FROM patients WHERE project_id=1").fetchone():
+        _seed_thread(led)
+    _signal_row(led, "synthetic-digest", mids=[100])
+    _dispatch(led, _intent(led, kind="signal", pid=None, payload={
+        "digest": True, "signal_keys": ["synthetic-digest"]}))
+    card_id = led.db.execute(
+        "SELECT card_id FROM notification_cards WHERE kind='digest' "
+        "ORDER BY card_id DESC LIMIT 1").fetchone()[0]
+    _deliver(led, card_id)
+    return _spec(led, card_id)
 
 
 def _click(led, spec, action, inputs=None, *, actor=CLICKER, now=NOW,

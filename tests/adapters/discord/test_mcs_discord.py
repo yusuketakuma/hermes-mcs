@@ -2965,7 +2965,9 @@ def test_old_defer_button_answers_retired(world):
 
 def test_my_tasks_uses_display_name_and_project_scope(world):
     world.seed()
-    world.dispatch()
+    world.signal("synthetic-digest", mids=[100])
+    world.dispatch(kind="signal", pid=None, payload={
+        "digest": True, "signal_keys": ["synthetic-digest"]})
     worker, reg, bot, spec = _delivered(world)
     _add_request(world.led, "残薬確認", "山田 花子（みどり薬局）",
                  "2026-01-01")
@@ -2989,9 +2991,16 @@ def test_unacked_list_links_the_card(world):
     world.dispatch()
     worker, reg, bot, spec = _delivered(world)
     msg = bot.channels[42].sent[0]
+    world.signal("synthetic-digest", mids=[100])
+    world.dispatch(kind="signal", pid=None, payload={
+        "digest": True, "signal_keys": ["synthetic-digest"]})
+    digest = json.loads(world.led.db.execute(
+        "SELECT r.spec_json FROM notification_renders r JOIN notification_cards c "
+        "USING(card_id) WHERE c.kind='digest' ORDER BY r.render_rev DESC LIMIT 1").fetchone()[0])
+    asyncio.run(_deliver(world, worker))
     act = world.mkactions(reg, bot)
-    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'unacked')}",
-                         message_id=msg.id)
+    ix = FakeInteraction(f"mcs:a:{world.token(digest, 'unacked')}",
+                         message_id=bot.channels[42].sent[-1].id)
     asyncio.run(world.interact(act, ix))
     out = "\n".join(m["content"] for m in ix.followup.sent)
     assert "■ 患者A" in out and "未確認" in out

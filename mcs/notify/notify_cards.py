@@ -306,6 +306,7 @@ _LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
 # mirrored from adapters/common/spec (core never imports adapters);
 # tests/notify/test_card_extras.py pins them equal
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
+MAX_BUTTONS = 5              # spec.MAX_BUTTONS
 MAX_POST_ACTIONS = 5          # spec.MAX_POST_ACTIONS
 # Card face layout stamped at creation: existing cards keep layout 1/2 (no
 # fingerprint change, no mass re-render / LINE WORKS re-post); cards
@@ -696,6 +697,8 @@ def _action_rows(db, card, content, now, context=None,
     ack_label = "このページを確認する" if kind == "digest" else None
 
     def btn(action, params=None, label=None, style=None):
+        if len(row) == MAX_BUTTONS:
+            flush()
         tok = _mint_token(db, card["card_id"], action, params, need, now)
         b = {"id": action, "ui": "button",
              "style": style or _ACTIONS[action][1],
@@ -737,6 +740,7 @@ def _action_rows(db, card, content, now, context=None,
         btn("tasks")
     if positive(pid):
         btn("summary")
+        btn("search")
     if context.get("extract_ref"):
         btn("report")
     if kind == "signal" and len(keys) == 1 \
@@ -761,16 +765,16 @@ def _action_rows(db, card, content, now, context=None,
         if content["page"] + 1 < content["pages"]:
             btn("next", {"page": content["page"] + 1})
     flush()
-    # row 4 — clicker-scoped lists (ephemeral answers). Optional: only
+    # digest-only lists (ephemeral answers). Optional: only
     # as many as the worker's component ceiling still allows — a spec
     # over budget is rejected whole and the card would not render at all
-    used = (sum(c["type"] != "meta" for c in content["containers"])
-            + sum(f["type"] == "text" for f in content["footer"])
-            + sum(len(r) + 1 for r in rows))
-    extras = ["digest", "mytasks", "unacked"] + (["search"] if positive(pid) else [])
-    for action in extras[:max(0, MAX_COMPONENTS - used - 1 - reserve)]:
-        btn(action)
-    flush()
+    if kind == "digest":
+        used = (sum(c["type"] != "meta" for c in content["containers"])
+                + sum(f["type"] == "text" for f in content["footer"])
+                + sum(len(r) + 1 for r in rows))
+        for action in ["digest", "mytasks", "unacked"][:max(0, MAX_COMPONENTS - used - 1 - reserve)]:
+            btn(action)
+        flush()
     return rows
 
 
@@ -3341,7 +3345,7 @@ def _context_navigation(db, base, card, params, cfg, now, legacy):
     if "section" not in params:
         # The card's 🧾 keeps showing the existing summary; the nightly views open from it.
         result = legacy()
-        for target in ("background", "changes", "previsit", "replies", "timeline"):
+        for target in ("background", "changes", "previsit", "replies", "discrepancies"):
             _private_button(db, base, card, now, navigation, token_ctx, "summary",
                             CONTEXT_SECTIONS[target], {"section": target, "page": 0, "role": "", "since": since})
         _context_checkpoint(db, card, identity, row, params, now)

@@ -192,13 +192,12 @@ def notification():
 
 
 def menu():
-    s = Screen(3, "次の操作を、ひとつのメニューから。", "記録まとめ・誤りの報告・検索など、ボタン以外の操作を選びます。", 1040)
+    s = Screen(3, "次の操作を、ひとつのメニューから。", "この患者の記録まとめ・検索・誤りの報告を、メニューから選びます。", 1040)
     x, y = s.app()
     y = s.card(x, y)
     s.actions(x, y)
     # notify_cards._action_rows order; the card has open tasks (📝 タスク 1件)
-    labels = ("タスク一覧", "患者の記録まとめ", "誤りを報告", "全体の新着集計",
-              "自分のタスク", "未確認一覧", "この患者を検索")
+    labels = ("タスク一覧", "患者の記録まとめ", "この患者を検索", "誤りを報告")
     mx, my = x + 378, y + 48
     s.rect(mx, my, 300, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
     for i, label in enumerate(labels):
@@ -206,6 +205,7 @@ def menu():
         if i == 0:
             s.rect(mx + 7, yy - 2, 286, 38, "#e5f3ec", 4)
         s.text(mx + 24, yy + 24, label, 19, GREEN if i == 0 else INK, i == 0)
+    s.text(x, 920, "全体の新着集計・自分のタスク・未確認一覧は、集計カードのメニューへ。", 17, MUTED)
     return s.finish()
 
 
@@ -294,6 +294,16 @@ def patient_summary():
     for row in rows:
         y = s.paragraph(x, y, row, 758, 19)
         y += 10
+    y += 12
+    for labels in (("患者さんの全体像", "前回から変わったこと"),
+                   ("訪問前の確認ノート", "連絡・返答の確認", "記録の食い違い")):
+        left = x
+        for label in labels:
+            width = 28 + sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in label) * 9
+            s.button(left, y, label, width)
+            left += width + 10
+        y += 52
+    s.text(x, y + 20, "各画面の ←・→ から、経過・引継ぎ・退院時を含む8つの表示へ。", 17, MUTED)
     return s.finish()
 
 

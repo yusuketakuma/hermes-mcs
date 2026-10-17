@@ -10,6 +10,7 @@ import pytest
 
 from adapters.common import envelopes, spec as spec_mod, text
 from adapters.discord import cards as discord_cards
+from adapters.lineworks import cards as lineworks_cards
 from adapters.slack import cards as slack_cards
 from discord_testkit import _fake_discord
 
@@ -146,6 +147,56 @@ def test_slack_footer_stays_plain_without_mentions():
 
 def test_slack_mention_ids_reads_footer_only():
     assert slack_cards.mention_ids(_spec(slack=True)) == {"U0AB12CD"}
+
+
+@pytest.mark.parametrize("kind,secondary", [
+    ("thread", ["body", "tasks", "summary", "search", "report", "meds", "drugsearch", "prev", "next"]),
+    ("signal", ["body", "tasks", "summary", "search", "report", "dismiss", "meds", "drugsearch", "prev", "next"]),
+    ("digest", ["body", "prev", "next", "digest", "mytasks", "unacked"]),
+])
+def test_secondary_action_sets_reach_all_three_transport_menus(monkeypatch, kind, secondary):
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    spec = _spec(footer=())
+    spec["kind"] = kind
+    spec["parts"].pop("manifest")
+    primary = ["ack", "assign"] + ([] if kind == "digest" else ["request"])
+    buttons = [{"id": action, "ui": "button", "style": "secondary",
+                "label": action, "token": f"{index:032x}"}
+               for index, action in enumerate(primary + secondary, 1)]
+    if kind != "digest":
+        buttons.append(dict(LINK))
+    spec["parts"]["action_rows"] = [buttons[i:i + 5] for i in range(0, len(buttons), 5)]
+    tokens = {b["token"]: b["id"] for b in buttons if b.get("token")}
+
+    slack_spec = copy.deepcopy(spec)
+    slack_spec["schema"] = "mcs-card-render/v2"
+    slack_spec["delivery"].pop("guild_id")
+    slack_spec["delivery"].update(transport="slack", team_id="T1", profile="p")
+    _, blocks = slack_cards.render(slack_spec)
+    menu = next(element for block in blocks if block["type"] == "actions"
+                for element in block["elements"] if element["type"] == "static_select")
+    assert [tokens[option["value"]] for option in menu["options"]] == secondary
+    assert any(block["type"] == "context" and block["elements"][0]["type"] == "mrkdwn"
+               for block in blocks) == (kind != "digest")
+
+    _, options = discord_cards._button_items(spec)
+    assert [tokens[option.value] for option in options] == secondary
+    spec["parts"]["thread_drug_actions"] = True
+    _, options = discord_cards._button_items(spec)
+    assert [tokens[option.value] for option in options] == [
+        action for action in secondary if action not in {"meds", "drugsearch"}]
+    thread = discord_cards.thread_drug_view(spec)
+    assert ([] if thread is None else [tokens[b.custom_id.removeprefix("mcs:a:")]
+                                      for b in thread.items]) == [
+        action for action in secondary if action in {"meds", "drugsearch"}]
+
+    spec["parts"]["action_rows"].append([
+        {"id": "more", "ui": "button", "label": "その他の操作", "token": "f" * 32}])
+    menu = lineworks_cards.secondary(spec)
+    assert [button["id"] for button in menu] == secondary
+    assert len(menu) <= 10
+    assert [button["label"] for button in lineworks_cards.action_buttons(spec)] == (
+        primary + ([] if kind == "digest" else [LINK["label"]]) + ["その他の操作"])
 
 
 # ---------- shared modal definitions ------------------------------------

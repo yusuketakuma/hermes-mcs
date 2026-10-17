@@ -44,4 +44,15 @@
 <text x="240" y="955.7999999999997" font-size="19" fill="#202124">・観測値: 取得済み 1項目</text>
 <text x="240" y="996.1999999999997" font-size="19" fill="#202124">  体重: 45.2 kg（記録日 2026-10-06）</text>
 <text x="240" y="1036.5999999999997" font-size="19" fill="#202124">■ 連携サマリー（MCS）: 未取得</text>
+<rect x="240" y="1088.9999999999998" width="172" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="254" y="1115.9999999999998" font-size="18" fill="#202124">患者さんの全体像</text>
+<rect x="422" y="1088.9999999999998" width="208" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="436" y="1115.9999999999998" font-size="18" fill="#202124">前回から変わったこと</text>
+<rect x="240" y="1140.9999999999998" width="190" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="254" y="1167.9999999999998" font-size="18" fill="#202124">訪問前の確認ノート</text>
+<rect x="440" y="1140.9999999999998" width="172" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="454" y="1167.9999999999998" font-size="18" fill="#202124">連絡・返答の確認</text>
+<rect x="622" y="1140.9999999999998" width="154" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="636" y="1167.9999999999998" font-size="18" fill="#202124">記録の食い違い</text>
+<text x="240" y="1212.9999999999998" font-size="17" fill="#66716f">各画面の ←・→ から、経過・引継ぎ・退院時を含む8つの表示へ。</text>
 </svg>
