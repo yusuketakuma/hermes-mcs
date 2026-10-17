@@ -75,3 +75,57 @@ def test_failed_supervisor_does_not_record_started(monkeypatch, tmp_path, transp
     assert 'worker_started' not in events
     assert card_worker_status.status(tmp_path, transport, 'owner') == {
         'state': 'disabled', 'reason': 'worker_start_failed'}
+
+
+@pytest.mark.parametrize('transport', ['discord', 'slack'])
+@pytest.mark.parametrize('failure_at', ['adapter_modules', 'status_import'])
+@pytest.mark.parametrize('startup_error', [False, True])
+def test_diagnostic_import_failure_preserves_started_supervisor(
+        tmp_path, monkeypatch, transport, failure_at, startup_error):
+    import builtins
+    import importlib
+    from hermes_plugin import bridge
+    from adapters.common import paths
+    settings = {'data_root': str(tmp_path), 'profile': 'owner', 'application_id': '101'}
+    monkeypatch.setattr(cw, '_interactive_settings', lambda *_: dict(settings))
+    monkeypatch.setattr(cw, '_slack_adapter_settings', lambda *_: dict(settings))
+    monkeypatch.setattr(cw, '_standalone_owned', lambda *_: False)
+    monkeypatch.setattr(paths, 'read_flags', lambda *_: {
+        'interactive': True, 'transport': transport, 'route_epoch': 1})
+    events, instances = [], []
+    monkeypatch.setattr(cw, '_event_logger', lambda *_: lambda event, **kw: events.append(event))
+    tasks = importlib.import_module(f'adapters.{transport}.tasks')
+    class Supervisor:
+        def __init__(self, **kw):
+            self.started = False
+            instances.append(self)
+        def start(self):
+            if startup_error:
+                raise ImportError('actual-startup-failed')
+            self.started = True
+            return True
+    monkeypatch.setattr(tasks, 'Supervisor', Supervisor)
+    if failure_at == 'adapter_modules':
+        def unavailable():
+            raise ImportError('diagnostic-bootstrap-unavailable')
+        monkeypatch.setattr(bridge, '_adapter_modules', unavailable)
+    else:
+        original_import = builtins.__import__
+        def limited_import(name, *args, **kwargs):
+            if name == 'card_worker_status':
+                raise ImportError('diagnostic-status-unavailable')
+            return original_import(name, *args, **kwargs)
+        monkeypatch.setattr(builtins, '__import__', limited_import)
+    factory = getattr(cw, f'make_{transport}_factory')(NS(get_config=lambda k, d=None: d))
+    native, adapter = NS(user=NS(id=101), application_id=101), NS(_owner_profile='owner')
+    if startup_error:
+        with pytest.raises(ImportError, match='actual-startup-failed'):
+            factory(native, adapter)
+        assert not instances[0].started
+        assert 'worker_started' not in events
+        assert 'worker_status_failed' not in events
+    else:
+        result = factory(native, adapter)
+        assert result is instances[0] and result.started
+        assert 'worker_started' in events
+        assert 'worker_status_failed' in events

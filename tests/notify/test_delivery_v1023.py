@@ -3,6 +3,8 @@ import asyncio
 import copy
 import json
 
+import pytest
+
 import notify_cards as cards
 import notify_render
 from adapters.common import spec as spec_module
@@ -88,7 +90,8 @@ def test_layout_inventory_is_read_only_and_counts_unknown(led):
     assert led.db.total_changes == before
 
 
-def test_lw_post_budget_preserves_original_and_emits_limit_notice(led, monkeypatch):
+@pytest.mark.parametrize("collect", [False, True])
+def test_lw_post_budget_preserves_original_and_emits_limit_notice(led, monkeypatch, collect):
     _seed_thread(led, mids=(100,))
     revision = [0]
     import notify_lineworks_testkit as kit
@@ -103,6 +106,9 @@ def test_lw_post_budget_preserves_original_and_emits_limit_notice(led, monkeypat
     count = sum(p["kind"] == "body_part" for p in first["parts"]["manifest"])
     initial = count
     for n in range(1, 8):
+        if collect:
+            cards.gc(led, LINEWORKS, now=NOW + n)
+            assert _latest_render(led)["spec_json"] is None
         revision[0] = n
         with led.db:
             specs = []
@@ -244,3 +250,23 @@ def test_lineworks_new_source_keeps_a_usable_write_button(led):
     assert _apply(led, envelopes.notification(old, actor, origin))["error"] == "stale_source"
     result = _apply(led, envelopes.notification(new, actor, origin))
     assert result["outcome"] == "applied", result
+
+
+def test_lw_gc_missing_spec_does_not_reuse_unproven_card_tokens(led):
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), LINEWORKS)
+    original = deliver_lw(led, _latest_render(led))
+    expiry = [tuple(r) for r in led.db.execute("SELECT token,expires_at FROM notification_action_tokens")]
+    cards.gc(led, LINEWORKS, now=NOW + 1)
+    assert _latest_render(led)["spec_json"] is None
+    with led.db:
+        led.db.execute("UPDATE message_metadata SET last_error='synthetic_failure' WHERE message_id=100")
+        specs = []
+        cards._issue_render(led.db, 1, LINEWORKS, NOW + 2, specs, force=True)
+    latest = specs[0]
+    assert "prior_remote_id" not in latest["parts"]["manifest"][0]
+    assert latest["parts"]["action_rows"] != original["parts"]["action_rows"]
+    assert latest["source_generation"] == original["source_generation"]
+    for token, until in expiry:
+        assert led.db.execute("SELECT expires_at FROM notification_action_tokens WHERE token=?", (token,)).fetchone()[0] == until
+    assert lw_cards.validate(latest) is latest

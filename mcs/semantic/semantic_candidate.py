@@ -25,6 +25,22 @@ def _sources():
         code = {key: hashlib.sha256(marshal.dumps(value.__code__)).hexdigest()
                 for key, value in vars(module).items()
                 if isinstance(value, types.FunctionType) and value.__module__ == name}
+        for class_name, cls in vars(module).items():
+            if not isinstance(cls, type) or cls.__module__ != name:
+                continue
+            for method_name, member in vars(cls).items():
+                methods = {}
+                if isinstance(member, types.FunctionType):
+                    methods['method'] = member
+                elif isinstance(member, (staticmethod, classmethod)):
+                    methods[type(member).__name__] = member.__func__
+                elif isinstance(member, property):
+                    methods = {accessor: getattr(member, accessor)
+                               for accessor in ('fget', 'fset', 'fdel')}
+                for accessor, function in methods.items():
+                    if isinstance(function, types.FunctionType):
+                        key = f'{class_name}.{method_name}.{accessor}'
+                        code[key] = hashlib.sha256(marshal.dumps(function.__code__)).hexdigest()
         constants = {key: value for key, value in vars(module).items()
                      if key.isupper() and isinstance(value, (str, int, float, bool))}
         sources[name] = payload_hash({'code': code, 'constants': constants})

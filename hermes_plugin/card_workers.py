@@ -91,13 +91,13 @@ def _owner_identity(ctx, adapter):
 
 
 def _worker_witness(settings, transport, reason):
-    from .bridge import _adapter_modules
-    _adapter_modules()
-    import card_worker_status
     try:
+        from .bridge import _adapter_modules
+        _adapter_modules()
+        import card_worker_status
         card_worker_status.record(settings["data_root"], transport,
                                   settings["profile"], reason)
-    except (OSError, ValueError):
+    except (ImportError, OSError, ValueError):
         _event_logger("mcs_" + transport)("worker_status_failed")
 
 

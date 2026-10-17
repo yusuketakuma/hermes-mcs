@@ -250,7 +250,7 @@ def test_real_origin_needs_separate_bound_authorization(tmp_path, monkeypatch):
     record, docs, cfg = fixture(tmp_path)
     record['data_origin'] = 'real_authorized'  # purely synthetic control fixture
     source = {'records': [record], 'data_origin': 'real_authorized',
-              'manifest': {**MANIFEST, 'holdout_manifest_sha256': payload_hash(holdout_payload([record]))}}
+              'manifest': {**MANIFEST, 'data_origin': 'real_authorized', 'holdout_manifest_sha256': payload_hash(holdout_payload([record]))}}
     receipt = {'schema_version': 1, 'purpose': 'sealed_candidate_evaluation',
                'data_origin': 'real_authorized', 'snapshot_sha256': payload_hash(source),
                'holdout_manifest_sha256': source['manifest']['holdout_manifest_sha256'],
@@ -393,7 +393,7 @@ def test_authorization_boolean_schema_version_rejected(tmp_path):
     record, _, cfg = fixture(tmp_path)
     record['data_origin'] = 'real_authorized'
     source = {'records': [record], 'data_origin': 'real_authorized', 'manifest': {
-        **MANIFEST, 'holdout_manifest_sha256': payload_hash(holdout_payload([record]))}}
+        **MANIFEST, 'data_origin': 'real_authorized', 'holdout_manifest_sha256': payload_hash(holdout_payload([record]))}}
     receipt = {'schema_version': True, 'purpose': 'sealed_candidate_evaluation',
                'data_origin': 'real_authorized', 'snapshot_sha256': payload_hash(source),
                'holdout_manifest_sha256': source['manifest']['holdout_manifest_sha256'],

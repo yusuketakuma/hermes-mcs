@@ -7,7 +7,8 @@
     "mcs_update.rollback() は backup 検査と同列（journal・quiesce の前）に _rollback_layout_error を評価し、UpdateError で rollback_failed として受領を消費する。",
     "_rollback_tree にも同じ検査を置き、apply失敗時の自動rollbackと中断回復のrollback経路（旧コードをcheckoutする全経路）を reset 前に止める。",
     "判定: ロールバック後に稼働するDB（schema_bump なら backup、それ以外は ledger）の notification_cards.layout の最大値が、戻り先 commit の mcs/notify/notify_cards.py の CARD_LAYOUT（定数が無い版は1）を超えるとき拒否。ledger・cards 表・layout 列が無ければ全カードが layout 1 なので従来どおり。live ledger が読めない場合は rollback_layout_unverified で拒否し、安全と推定しない。読めない backup は既存の backup 検査と restore 失敗（writer 停止のまま escalate）に委ねる。",
-    "更新失敗後の自動rollbackがreset前に失敗した場合も、通常・外部の両復旧入口はrestore_incompleteを維持し、更新前中断として完了・writer再起動しない。rollback先への到達と実際のDB復元が確認できる経路以外は人による復旧が必要な停止状態を保持する。"
+    "更新失敗後の自動rollbackがreset前に失敗した場合も、通常・外部の両復旧入口はrestore_incompleteを維持し、更新前中断として完了・writer再起動しない。rollback先への到達と実際のDB復元が確認できる経路以外は人による復旧が必要な停止状態を保持する。",
+    "旧版のカード形式はGitツリーで確認し、読取失敗を旧形式と推定せずrollback_layout_unverifiedで停止する。"
   ],
   "refs": [
     "mcs/ops/mcs_update.py",

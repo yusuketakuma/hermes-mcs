@@ -240,3 +240,88 @@ def test_vital_threshold_change_invalidates_candidate():
     cfg = approved_config({'semantic': {'fact_source': 'canonical'}})
     cfg['vital_urgency'] = {'mode': 'high', 'thresholds': {'spo2_lte': 91}}
     assert semantic_config(cfg)[0]['fact_source'] == 'legacy'
+
+
+@pytest.mark.parametrize('origin,manifest_origin', [
+    ('real_authorized', None), ('real_authorized', 'synthetic'),
+    ('synthetic', 'real_authorized')])
+def test_snapshot_origin_mismatch_rejected_before_any_model(monkeypatch, origin, manifest_origin):
+    import local_llm
+    import extract_llm
+    import semantic_extraction
+    def forbidden(*args, **kwargs):
+        pytest.fail('model called before origin validation')
+    monkeypatch.setattr(local_llm, 'chat', forbidden)
+    monkeypatch.setattr(extract_llm, 'llm_extract', forbidden)
+    monkeypatch.setattr(semantic_extraction, 'extract_facts_v2', forbidden)
+    record = _record()
+    record.pop('candidate')
+    record.pop('label')
+    record['data_origin'] = origin
+    manifest = {**MANIFEST, 'holdout_manifest_sha256': payload_hash(holdout.holdout_payload([record]))}
+    if manifest_origin is not None:
+        manifest['data_origin'] = manifest_origin
+    with pytest.raises(evaluation.EvaluationError, match='manifest_data_origin_mismatch'):
+        snapshot.generate({'records': [record], 'manifest': manifest, 'data_origin': origin}, {})
+
+
+def test_loaded_jev_method_change_only_affects_new_worker_fingerprint(monkeypatch):
+    import semantic_jev
+    monkeypatch.setattr(candidate, '_LOADED_SOURCES', None)
+    original = candidate.candidate_fingerprint({})
+    def changed_evaluate(self, *args, **kwargs):
+        raise AssertionError('synthetic method is fingerprinted, never called')
+    monkeypatch.setattr(semantic_jev.JevClient, 'evaluate', changed_evaluate)
+    assert candidate.candidate_fingerprint({}) == original
+    monkeypatch.setattr(candidate, '_LOADED_SOURCES', None)
+    assert candidate.candidate_fingerprint({}) != original
+
+
+@pytest.mark.parametrize('accessor', ['method', 'static', 'class_method', 'fget', 'fset', 'fdel'])
+def test_class_callable_surfaces_are_fingerprinted_without_evaluation(monkeypatch, accessor):
+    import sys
+    import types
+    module = types.ModuleType('synthetic_candidate_surface')
+    exec('''class Surface:
+    def method(self): return 1
+    @staticmethod
+    def static(): return 1
+    @classmethod
+    def class_method(cls): return 1
+    @property
+    def prop(self): raise AssertionError("descriptor must not execute")
+    @prop.setter
+    def prop(self, value): pass
+    @prop.deleter
+    def prop(self): pass
+''', module.__dict__)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(candidate, '_MODULES', (module.__name__,))
+    original = candidate._sources()
+    def changed(*args):
+        return 2
+    cls = module.Surface
+    if accessor in ('fget', 'fset', 'fdel'):
+        old = vars(cls)['prop']
+        methods = {name: getattr(old, name) for name in ('fget', 'fset', 'fdel')}
+        methods[accessor] = changed
+        setattr(cls, 'prop', property(**methods))
+    else:
+        value = staticmethod(changed) if accessor == 'static' else classmethod(changed) if accessor == 'class_method' else changed
+        setattr(cls, accessor, value)
+    assert candidate._sources() != original
+
+
+def test_disk_edit_does_not_replace_loaded_class_code(tmp_path, monkeypatch):
+    import importlib.util
+    import sys
+    source = tmp_path / 'synthetic_loaded_surface.py'
+    source.write_text('class Surface:\n    def method(self): return 1\n')
+    spec = importlib.util.spec_from_file_location('synthetic_loaded_surface', source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(candidate, '_MODULES', (module.__name__,))
+    original = candidate._sources()
+    source.write_text('class Surface:\n    def method(self): return 999\n')
+    assert candidate._sources() == original

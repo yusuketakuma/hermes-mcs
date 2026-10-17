@@ -82,6 +82,11 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
         raise EvaluationError('snapshot_records_required')
     if snapshot.get('data_origin') not in ('synthetic', 'real_authorized'):
         raise EvaluationError('data_origin_required')
+    if (not isinstance(manifest, dict)
+            or manifest.get('data_origin', 'synthetic') != snapshot['data_origin']
+            or (manifest.get('source') == 'fully_synthetic'
+                and snapshot['data_origin'] != 'synthetic')):
+        raise EvaluationError('manifest_data_origin_mismatch')
     if snapshot['data_origin'] == 'real_authorized' and not re.fullmatch(
             '[0-9a-f]{64}', str(snapshot.get('authorization_receipt_sha256', ''))):
         raise EvaluationError('authorization_receipt_required')

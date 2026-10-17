@@ -943,7 +943,7 @@ def test_every_raised_backup_code_is_in_the_known_set():
     assert "backup_io_or_policy_failed" in backup.FAILURE_CODES
 
 
-@pytest.mark.parametrize("count_error", [False, True])
+@pytest.mark.parametrize("count_error", [None, sqlite3.OperationalError, OSError, ValueError])
 def test_offsite_verify_and_escrow_proofs_are_distinct(world, tmp_path, capsys, monkeypatch, count_error):
     args = _cli_args(world, tmp_path)
     assert backup.main(['offsite', *args, '--keychain', '--snapshot', str(world[0])],
@@ -959,7 +959,7 @@ def test_offsite_verify_and_escrow_proofs_are_distinct(world, tmp_path, capsys, 
         @contextmanager
         def connection(path, *args):
             if path == Path(target) / 'ledger.db':
-                raise sqlite3.OperationalError('synthetic count unavailable')
+                raise count_error('synthetic count unavailable')
             with original_connection(path, *args) as db:
                 yield db
 
@@ -1005,3 +1005,13 @@ def test_restore_count_old_schema_is_unknown(tmp_path):
         db.execute('CREATE TABLE notification_renders(state TEXT)')
         db.execute('CREATE TABLE notification_render_parts(delivery_id TEXT,state TEXT)')
     assert backup._held_render_count(str(tmp_path)) is None
+
+
+def test_held_render_count_accepts_relative_restore_destination(tmp_path, monkeypatch):
+    destination = tmp_path / 'relative-restored'
+    destination.mkdir()
+    with sqlite3.connect(destination / 'ledger.db') as db:
+        db.execute('CREATE TABLE notification_renders(delivery_id TEXT, state TEXT)')
+        db.execute("INSERT INTO notification_renders VALUES('synthetic-delivery','held')")
+    monkeypatch.chdir(tmp_path)
+    assert backup._held_render_count('relative-restored') == 1

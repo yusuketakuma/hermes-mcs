@@ -2257,8 +2257,15 @@ _CARD_LAYOUT_RE = re.compile(r"^CARD_LAYOUT\s*=\s*(\d+)", re.M)
 
 def _target_card_layout(ref: str) -> int:
     """The card layout the code at ref renders; 1 before the constant existed."""
-    r = _git(["show", f"{ref}:mcs/notify/notify_cards.py"])
-    m = _CARD_LAYOUT_RE.search(r.stdout) if r.returncode == 0 else None
+    path = "mcs/notify/notify_cards.py"
+    r = _git(["show", f"{ref}:{path}"])
+    if r.returncode != 0:
+        # Only a successfully read tree can establish that this predates cards.
+        # A listed but unreadable blob (or an unreadable tree) is not legacy.
+        if not _git_out(["ls-tree", "-z", ref, "--", path]):
+            return 1
+        raise UpdateError("target_card_layout_unreadable")
+    m = _CARD_LAYOUT_RE.search(r.stdout)
     return int(m.group(1)) if m else 1
 
 
@@ -2301,7 +2308,10 @@ def _rollback_layout_error(entry: dict) -> str | None:
             # incomplete restore until the bound target is restored.
             return None
         return f"rollback_layout_unverified: {e}"
-    target = _target_card_layout(entry["prev_sha"])
+    try:
+        target = _target_card_layout(entry["prev_sha"])
+    except UpdateError as e:
+        return f"rollback_layout_unverified: {e}"
     if stored <= target:
         return None
     return (f"rollback_blocked_layout_floor: ledger layout {stored} > "

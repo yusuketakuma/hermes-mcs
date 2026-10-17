@@ -118,9 +118,6 @@ def test_target_card_layout_parses_the_constant(updater, monkeypatch):  # noqa: 
     monkeypatch.setattr(updater, "_git", git)
     assert updater._target_card_layout("abc") == 2
     assert seen == [["show", "abc:mcs/notify/notify_cards.py"]]
-    monkeypatch.setattr(updater, "_git", lambda argv: subprocess.CompletedProcess(
-        argv, 128, "", ""))
-    assert updater._target_card_layout("abc") == 1
 
 
 def test_rollback_tree_refuses_before_any_reset(updater, tmp_path, monkeypatch):  # noqa: F811
@@ -130,8 +127,46 @@ def test_rollback_tree_refuses_before_any_reset(updater, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(updater, "load_config", lambda: {})
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: None)
-    monkeypatch.setattr(updater, "_git", lambda argv: calls.append(argv)
+    monkeypatch.setattr(updater, "_git", lambda argv, timeout=None: calls.append(argv)
                         or subprocess.CompletedProcess(argv, 1, "", ""))
-    with pytest.raises(updater.UpdateError, match="rollback_blocked_layout_floor"):
+    with pytest.raises(updater.UpdateError, match="rollback_layout_unverified"):
         updater._rollback_tree({"prev_sha": "0" * 40})
     assert not any("reset" in call for call in calls)
+
+
+def test_target_layout_accepts_only_proven_absent_path_as_legacy(updater, monkeypatch):  # noqa: F811
+    calls = []
+
+    def git(argv, timeout=None):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 128 if argv[0] == "show" else 0, "", "")
+
+    monkeypatch.setattr(updater, "_git", git)
+    assert updater._target_card_layout("synthetic-ref") == 1
+    assert calls == [["show", "synthetic-ref:mcs/notify/notify_cards.py"],
+                     ["ls-tree", "-z", "synthetic-ref", "--", "mcs/notify/notify_cards.py"]]
+
+
+@pytest.mark.parametrize("failure", ["missing_blob", "unreadable_tree", "timeout"])
+def test_git_read_failure_is_unverified_even_for_layout_one(
+        updater, monkeypatch, failure):  # noqa: F811
+    _cards(updater.LEDGER, 1)
+    calls = []
+
+    def git(argv, timeout=None):
+        calls.append(argv)
+        if failure == "timeout":
+            raise updater.UpdateError("git_timeout: show")
+        if argv[0] == "show" or failure == "unreadable_tree":
+            return subprocess.CompletedProcess(argv, 128, "", "exit=128")
+        return subprocess.CompletedProcess(
+            argv, 0, "100644 blob " + "a" * 40 + "\tmcs/notify/notify_cards.py\0", "")
+
+    monkeypatch.setattr(updater, "_git", git)
+    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(updater, "_restore_runtime", lambda entry: pytest.fail("no restore"))
+    entry = {"prev_sha": "b" * 40}
+    assert updater._rollback_layout_error(entry).startswith("rollback_layout_unverified:")
+    with pytest.raises(updater.UpdateError, match="rollback_layout_unverified"):
+        updater._rollback_tree(entry)
+    assert all(call[0] in ("show", "ls-tree") for call in calls)

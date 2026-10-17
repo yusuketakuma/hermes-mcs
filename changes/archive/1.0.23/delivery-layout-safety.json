@@ -10,7 +10,8 @@
     "health.cards.layout_inventoryはtransport・layout・配送状態別件数と結果不明部品のあるカード数を読取り専用で報告する。",
     "結果不明の部品は読取り専用planの配送仕様hash・部品hash・試行ID・状態と、人承認・理由・worker停止の証拠を一致させてops.card_part_resolveで解決する。LINE WORKSの不在申告は重複リスク受容を明示必須とし、restore holdや再送予算を解除しない。",
     "LINE WORKSカードと操作tokenの再利用は同じ原文世代に限定する。原文変更後は新しい操作tokenを持つ更新版カードを送り、旧世代のtokenを復活させない。",
-    "配送部品数と旧本文の整理部品数、どちらの上限保留も起動時の復旧・spec再発行から除外し、workerへ保留中の配送計画を渡さない。"
+    "配送部品数と旧本文の整理部品数、どちらの上限保留も起動時の復旧・spec再発行から除外し、workerへ保留中の配送計画を渡さない。",
+    "配送済み本文のGC後もLINE WORKSの更新は失敗せず、残存する部品の配送記録から初回枠と改訂回数を維持する。消去された本文は復元せず、証拠のない旧tokenの再利用は行わない。部品復旧の操作者申告の注記はremote_absentに限定する。"
   ],
   "refs": [
     "mcs/notify/notify_cards.py",

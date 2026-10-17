@@ -105,6 +105,7 @@
 - offsite成功とverify成功を分離し、key-fdのdrillだけlast_escrow_drill_atへ記録する。
 - 復元先の未完部品を含む保留render数を読取り専用で計測し、collect-onlyとoutbound_attempts=0を訓練記録へ残す。
 - 復元後の補助的な保留件数取得に失敗した場合は件数をunknownとして記録し、成功済みの復元/訓練を失敗扱いにしない。
+- 復元成功後の補助的な保留件数診断は相対パスに対応し、SQLite・ファイルシステム・URI変換の失敗をunknownとして扱う。成功済み復元を診断の失敗だけで失敗に変更しない。
 - 根拠: mcs/ops/mcs_backup.py、mcs/views/card_worker_status.py
 
 #### 通知の本文・添付partの復旧をローカルCLIから確認
@@ -122,6 +123,7 @@
 - 結果不明の部品は読取り専用planの配送仕様hash・部品hash・試行ID・状態と、人承認・理由・worker停止の証拠を一致させてops.card_part_resolveで解決する。LINE WORKSの不在申告は重複リスク受容を明示必須とし、restore holdや再送予算を解除しない。
 - LINE WORKSカードと操作tokenの再利用は同じ原文世代に限定する。原文変更後は新しい操作tokenを持つ更新版カードを送り、旧世代のtokenを復活させない。
 - 配送部品数と旧本文の整理部品数、どちらの上限保留も起動時の復旧・spec再発行から除外し、workerへ保留中の配送計画を渡さない。
+- 配送済み本文のGC後もLINE WORKSの更新は失敗せず、残存する部品の配送記録から初回枠と改訂回数を維持する。消去された本文は復元せず、証拠のない旧tokenの再利用は行わない。部品復旧の操作者申告の注記はremote_absentに限定する。
 - 根拠: mcs/notify/notify_cards.py、adapters/lineworks/delivery.py、tests/notify/test_delivery_v1023.py
 
 #### 通知の待ち理由と配送の進行に合った案内
@@ -156,6 +158,7 @@
 - 昇格レポートとは別の私有receiptで人承認を記録し、起動時も候補・基準・report・snapshot・holdoutの一致を確認する。
 - AI優先表示の合成評価は固定文字列のインメモリSQLiteだけを使用し、CIは可変パスやファイルDBの読取り専用条件を維持する。
 - 私有snapshotの同一source・candidate・policy・生成docに束縛された既存監査、最終主張、loop、描画・配送receiptを生成時に封印。別保存の利用許可receiptと二重盲検資料の生成・結合CLIを追加し、欠測や不一致を拒否する。外部監査・配送は実行せず、合成評価を実データG6の合格にしない。
+- 候補指紋へロード済みクラスメソッドを含める。snapshotとmanifestのデータ由来不一致は推論前に拒否する。二重読みの一致項目は裁定で上書きせず、スレッド全体を束縛したまま明示targetのみを評価する。
 - 根拠: mcs/semantic/semantic_candidate.py、mcs/semantic/eval/semantic_snapshot.py、evaluation/g6-criteria-v2.json、ci/gates.py、mcs/semantic/eval/semantic_snapshot_observations.py、mcs/semantic/eval/semantic_snapshot_blind.py、tests/semantic/test_snapshot_observations.py、tests/semantic/test_snapshot_blind.py
 
 #### 複数Bot運用時のSlack通知先エラーを防止
@@ -202,6 +205,7 @@
 - _rollback_tree にも同じ検査を置き、apply失敗時の自動rollbackと中断回復のrollback経路（旧コードをcheckoutする全経路）を reset 前に止める。
 - 判定: ロールバック後に稼働するDB（schema_bump なら backup、それ以外は ledger）の notification_cards.layout の最大値が、戻り先 commit の mcs/notify/notify_cards.py の CARD_LAYOUT（定数が無い版は1）を超えるとき拒否。ledger・cards 表・layout 列が無ければ全カードが layout 1 なので従来どおり。live ledger が読めない場合は rollback_layout_unverified で拒否し、安全と推定しない。読めない backup は既存の backup 検査と restore 失敗（writer 停止のまま escalate）に委ねる。
 - 更新失敗後の自動rollbackがreset前に失敗した場合も、通常・外部の両復旧入口はrestore_incompleteを維持し、更新前中断として完了・writer再起動しない。rollback先への到達と実際のDB復元が確認できる経路以外は人による復旧が必要な停止状態を保持する。
+- 旧版のカード形式はGitツリーで確認し、読取失敗を旧形式と推定せずrollback_layout_unverifiedで停止する。
 - 根拠: mcs/ops/mcs_update.py、tests/ops/test_mcs_update_rollback_floor.py、deployment/recovery/mcs_recover.py、tests/ops/test_update_recovery_stability.py、tests/meta/test_mcs_recover.py
 
 #### 通知workerの所有者と起動状況を確認
@@ -209,6 +213,7 @@
 - 所有者判定の出所を記録し、Supervisor.startの成功時だけ起動証跡を保存する。
 - doctorは復元markerと未解除の個別holdを照合し、読取不能を保留なしとしない。
 - doctorの既定はDBをprobeしない。復元markerなしはunknown、明示した--probe dataだけが読取専用で個別restore holdを照合する。
+- 起動後の診断moduleの読込失敗でも起動済みsupervisorの参照を保持する。実際のworker起動失敗は隠さない。
 - 根拠: hermes_plugin/card_workers.py、mcs/views/card_worker_status.py
 
 </details>

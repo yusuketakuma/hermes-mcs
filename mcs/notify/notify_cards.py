@@ -1151,26 +1151,41 @@ def _same_thread_delivered_parts(db, card):
 def _lineworks_update_budget(db, card, keyed):
     """Keep each source post to its initial chunks plus three later messages."""
     previous, sent, initial = {}, {}, {}
+    candidates = dict(keyed)
+    seen = set()
+    limit_text = "↳ この投稿の更新上限に達しました。最新の要約・スタンプ・原文はMCSで確認してください。"
     for row in db.execute("SELECT spec_json,delivery_id FROM notification_renders "
                           "WHERE card_id=? AND state='delivered' ORDER BY render_rev",
                           (card["card_id"],)):
-        old = json.loads(row["spec_json"])["parts"]
-        receipts = {p["part_id"]: p for p in db.execute(
-            "SELECT part_id,state,error_code FROM notification_render_parts WHERE delivery_id=?",
-            (row["delivery_id"],))}
-        landed = {key for key, receipt in receipts.items() if receipt["state"] == "delivered"}
+        # GC removes source text, but retains the sealed part identities and
+        # receipts. Those receipts still consume the immutable-post budget.
+        old = json.loads(row["spec_json"]).get("parts", {}) if row["spec_json"] else {}
+        manifest = {p["part_id"]: p for p in old.get("manifest", [])}
+        receipts = db.execute(
+            "SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY idx",
+            (row["delivery_id"],)).fetchall()
         counts = {}
-        for part in old.get("manifest", []):
-            name = part.get("name", "")
-            receipt = receipts.get(part["part_id"])
-            if part["kind"] != "body_part" or not receipt or not name.startswith(("m:", "s:")):
+        for receipt in receipts:
+            name = receipt["name"] or ""
+            if receipt["kind"] != "body_part" or not name.startswith(("m:", "s:")):
                 continue
             group = name.split("#")[0].removesuffix(":header").removesuffix(":limit")
-            if part["part_id"] in landed:
-                previous[name] = old["thread_body_parts"][int(part["part_id"].split(":")[1]) - 1]
-            if (not part.get("prior_remote_id") and (receipt["state"] in ("delivered", "unknown")
+            part = manifest.get(receipt["part_id"], {})
+            identity = (name, receipt["payload_sha256"], receipt["remote_id"])
+            if receipt["state"] == "delivered":
+                text = candidates.get(name)
+                if name.endswith(":limit#1"):
+                    text = limit_text
+                if part:
+                    text = old["thread_body_parts"][int(receipt["part_id"].split(":")[1]) - 1]
+                previous[name] = text if text is not None and _sha_text(text) == receipt["payload_sha256"] else None
+            reused = (part.get("prior_remote_id") if part else
+                      receipt["remote_id"] and identity in seen)
+            if (not reused and (receipt["state"] in ("delivered", "unknown")
                     or receipt["error_code"] == "operator_part_resolve")):
                 counts[group] = counts.get(group, 0) + 1
+            if receipt["state"] == "delivered" and receipt["remote_id"]:
+                seen.add(identity)
         for group, count in counts.items():
             initial.setdefault(group, count)
             sent[group] = sent.get(group, 0) + count
@@ -1190,9 +1205,9 @@ def _lineworks_update_budget(db, card, keyed):
             # Keep all proven old text; the last allowed message explains the cap.
             out.extend((name, text) for name, text in previous.items()
                        if name.split("#")[0].removesuffix(":header").removesuffix(":limit") == group
-                       and name != limit_key)
+                       and name != limit_key and text is not None)
             if remaining > 0 or limit_key in previous:
-                out.append((limit_key, "↳ この投稿の更新上限に達しました。最新の要約・スタンプ・原文はMCSで確認してください。"))
+                out.append((limit_key, limit_text))
         else:
             out.extend(chunks)
     return out
@@ -1210,8 +1225,8 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
         old = db.execute("SELECT spec_json FROM notification_renders WHERE card_id=? "
                          "AND state='delivered' ORDER BY render_rev DESC LIMIT 1",
                          (card["card_id"],)).fetchone()
-        if old:
-            previous = json.loads(old[0])
+        previous = json.loads(old[0]) if old and old[0] else None
+        if previous and "parts" in previous:
             def strip_tokens(rows):
                 return [[{k: v for k, v in b.items() if k != "token"}
                          for b in row] for row in rows]

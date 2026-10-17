@@ -1160,7 +1160,7 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                            projects=_card_projects(db, render, card), part_state=settled["part_state"],
                            manifest_sha256=req["manifest_sha256"], payload_sha256=req["payload_sha256"],
                            attempt_id=req["attempt_id"], evidence=req["evidence"])
-            if req["transport"] == "lineworks" and req["result"] == "mark_not_sent":
+            if req["transport"] == "lineworks" and req["evidence"].get("proof") == "remote_absent":
                 receipt["evidence_limit"] = "操作者の申告。未送信の確定ではなく、重複送信のリスクが残ります。"
             if (card is not None and card["delivery_state"] != "update_failed"
                     and cards.restore_pending(cards.data_root(ledger)) is None

@@ -142,3 +142,36 @@ def test_unknown_card_remote_absent_can_be_human_resolved(led):
          'evidence':{'method':'synthetic_lookup','ref':'synthetic-only','worker_stopped':True,'proof':'remote_absent'}}
     result=transport.apply_card_resolve(led,req,CFG,NOW+1)
     assert result['outcome']=='applied', result
+
+
+@pytest.mark.parametrize("proof", ["remote_absent", "api_rejected"])
+def test_lineworks_part_evidence_limit_matches_proof(led, proof):
+    from adapters.common import envelopes
+    from notify_lineworks_testkit import LINEWORKS, MID, _apply, _claim, _render
+    render = _render(led)
+    claim = _claim(render)
+    assert _apply(led, envelopes.transport_begin(claim))["granted"]
+    assert _apply(led, envelopes.transport_receipt(claim, "delivered", message_id=MID))["applied"]
+    target = next(p for p in claim["spec"]["parts"]["manifest"] if p["kind"] == "body_part")
+    for part in claim["spec"]["parts"]["manifest"][1:]:
+        unknown = part == target
+        assert _apply(led, envelopes.part_receipt(
+            claim, part, "unknown" if unknown else "delivered",
+            remote_id=None if unknown else "lw:synthetic:" + part["part_id"]))["applied"]
+    req = {**transport.card_part_resolve_plan(led, render["delivery_id"], target["part_id"]),
+           "command_id": _uuid(915), "actor": "synthetic-operator",
+           "human_confirmed": True, "reason": "合成の配送確認", "result": "mark_not_sent",
+           "evidence": {"method": "synthetic_lookup", "ref": "synthetic-proof",
+                        "worker_stopped": True, "proof": proof}}
+    if proof == "remote_absent":
+        req["evidence"]["duplicate_risk_accepted"] = True
+    else:
+        from pathlib import Path
+        root = Path(cards.notify_dirs(cards.data_root(led))["lineworks_state"])
+        (root / "journal-synthetic.jsonl").write_text(json.dumps({
+            "attempt_id": req["attempt_id"], "delivery_id": req["delivery_id"],
+            "part_id": req["part_id"], "phase": "result", "result": "not_sent"}) + "\n")
+    receipt = transport.apply_card_part_resolve(led, req, LINEWORKS, NOW + 1)
+    assert receipt["outcome"] == "applied"
+    assert ("evidence_limit" in receipt) == (proof == "remote_absent")
+    assert transport.apply_card_part_resolve(led, req, LINEWORKS, NOW + 2) == receipt

@@ -416,7 +416,7 @@ def _held_render_count(destination: str | None) -> int | None:
     if destination is None:
         return None
     try:
-        with _inventory_connection(Path(destination) / "ledger.db", None, None) as db:
+        with _inventory_connection((Path(destination) / "ledger.db").resolve(), None, None) as db:
             columns = {r[1] for r in db.execute("PRAGMA table_info(notification_renders)")}
             if "state" not in columns:
                 return None
@@ -430,7 +430,7 @@ def _held_render_count(destination: str | None) -> int | None:
                               "WHERE r.state!='cancelled' AND "
                               "(r.state IN ('queued','sending','unknown','held')" +
                               pending_parts + ")").fetchone()[0]
-    except sqlite3.Error:
+    except (sqlite3.Error, OSError, ValueError):
         return None
 
 

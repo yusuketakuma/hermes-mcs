@@ -9,7 +9,8 @@
     "semantic_snapshot generate/scoreは実ロードした候補の指紋を保存し、原文・個別識別子を含む報告を昇格時に拒否する。未観測の監査・描画・配送は成功として補完しない。",
     "昇格レポートとは別の私有receiptで人承認を記録し、起動時も候補・基準・report・snapshot・holdoutの一致を確認する。",
     "AI優先表示の合成評価は固定文字列のインメモリSQLiteだけを使用し、CIは可変パスやファイルDBの読取り専用条件を維持する。",
-    "私有snapshotの同一source・candidate・policy・生成docに束縛された既存監査、最終主張、loop、描画・配送receiptを生成時に封印。別保存の利用許可receiptと二重盲検資料の生成・結合CLIを追加し、欠測や不一致を拒否する。外部監査・配送は実行せず、合成評価を実データG6の合格にしない。"
+    "私有snapshotの同一source・candidate・policy・生成docに束縛された既存監査、最終主張、loop、描画・配送receiptを生成時に封印。別保存の利用許可receiptと二重盲検資料の生成・結合CLIを追加し、欠測や不一致を拒否する。外部監査・配送は実行せず、合成評価を実データG6の合格にしない。",
+    "候補指紋へロード済みクラスメソッドを含める。snapshotとmanifestのデータ由来不一致は推論前に拒否する。二重読みの一致項目は裁定で上書きせず、スレッド全体を束縛したまま明示targetのみを評価する。"
   ],
   "refs": [
     "mcs/semantic/semantic_candidate.py",
