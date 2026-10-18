@@ -499,7 +499,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
         return {"status": "deferred", "done": 0}
     started = time.monotonic()
     scanned = 0
-    best = {}   # lane -> (key, snapshot, progress) of the leading candidate
+    best = {}   # lane -> (key, snapshot, progress, version) of the leading candidate
     for row in ledger.db.execute("SELECT project_id FROM patients WHERE is_archived=0 ORDER BY project_id"):
         if time.monotonic() + COMMIT_MARGIN >= deadline:
             return {"status": "deferred", "done": 0}
@@ -507,6 +507,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
         if complete is not None and not complete(pid):
             continue
         scanned += 1
+        # Capture before the reused inputs: a concurrent publisher during
+        # selection must invalidate them just as one during inference does.
+        published_version = _published_version(ledger.db, pid)
         snapshot, progress, pending = _pending(ledger.db, pid, cfg, now=now)
         if _out_of_scope(snapshot):
             continue
@@ -515,7 +518,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
             # chosen patient is not re-read after selection.
             key = (not snapshot["initial"] if lane == "A" else False, progress.get("last_attempt", 0), pid)
             if due and (lane not in best or key < best[lane][0]):
-                best[lane] = (key, snapshot, progress)
+                best[lane] = (key, snapshot, progress, published_version)
     stats = {"scanned": scanned, "scan_ms": int((time.monotonic() - started) * 1000)}
     rotation, _ = _latest(ledger.db, PROGRESS, 0)
     sequence = "AAAAAABBBC"
@@ -524,7 +527,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
                  if sequence[(index + i) % len(sequence)] in best), None)
     if lane is None:
         return {"status": "complete", "done": 0, **stats}
-    (_, _, pid), snapshot, progress = best[lane]
+    (_, _, pid), snapshot, progress, frozen_ver = best[lane]
     if lane == "A":
         # Facts need hydrated items; the hydrated read must still match the
         # selection-time signature the reused progress reset came from.
@@ -535,7 +538,6 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
     frozen_scan_sig = _digest([tuple(r) for r in ledger.db.execute(
         "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
         (SCAN, pid))])
-    frozen_ver = _published_version(ledger.db, pid)
     meta = {"source_sig": snapshot["source_sig"], "contract": snapshot["contract"],
             "model": snapshot["contract"]["model"], "night_id": night_id}
     result = None

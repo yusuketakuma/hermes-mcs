@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/development/llm_lane_bench.sh"
 TOOLS = {"/usr/bin/curl": "curl", "/bin/launchctl": "launchctl",
          "/opt/homebrew/bin/llama-bench": "llama-bench", "/usr/bin/pgrep": "pgrep",
@@ -14,10 +16,12 @@ TOOLS = {"/usr/bin/curl": "curl", "/bin/launchctl": "launchctl",
 OUT = ".local/state/mcs-quality/v1.0.27/llm-bench"
 
 
-def _render(tmp_path, launchctl_body="exit 113\n", curl_body="exit 7\n", bench_body="exit 0\n"):
+def _render(tmp_path, launchctl_body="exit 113\n", curl_body="exit 7\n", bench_body="exit 0\n",
+            pgrep_body="exit 1\n"):
     stub = tmp_path / "stub"
     stub.mkdir(exist_ok=True)
-    bodies = {"launchctl": launchctl_body, "curl": curl_body, "llama-bench": bench_body}
+    bodies = {"launchctl": launchctl_body, "curl": curl_body, "llama-bench": bench_body,
+              "pgrep": pgrep_body}
     body = SCRIPT.read_text(encoding="utf-8").replace("/usr/bin/python3", sys.executable)
     for path, name in TOOLS.items():
         (stub / name).write_text('#!/bin/sh\ntouch "$0.called"\nprintf "%s\\n" "$@" >> "$0.args"\n'
@@ -97,9 +101,33 @@ def test_phase_guards_never_reach_the_tools(tmp_path):
     assert "POST" not in args and "chat/completions" not in args
 
 
+@pytest.mark.parametrize("curl_rc,server_rc,pgrep_rc", [
+    (28, 113, 1), (7, 0, 1), (7, 97, 1), (7, 113, 0), (7, 113, 2),
+])
+def test_bench_requires_server_and_process_confirmed_absent(tmp_path, curl_rc, server_rc, pgrep_rc):
+    runner = _render(
+        tmp_path,
+        launchctl_body=f'case "$2" in */ai.mcs.extract-drainer*) exit 113;; esac\nexit {server_rc}\n',
+        curl_body=f"exit {curl_rc}\n", pgrep_body=f"exit {pgrep_rc}\n",
+        bench_body='if [ "$1" = --version ]; then echo synthetic; exit 0; fi\nexit 88\n')
+    proc = _run(tmp_path, runner, "--phase", "bench", "--i-stopped-the-workers")
+    assert proc.returncode == 4, proc.stderr
+    assert "llama-bench" not in _called(tmp_path)
+
+
+def test_bench_starts_only_after_all_absence_checks_pass(tmp_path):
+    runner = _render(tmp_path, bench_body='if [ "$1" = --version ]; then echo synthetic; exit 0; fi\nexit 88\n')
+    proc = _run(tmp_path, runner, "--phase", "bench", "--i-stopped-the-workers")
+    assert proc.returncode == 6   # the synthetic benchmark failure, after successful guards
+    assert "-m" in (tmp_path / "stub/llama-bench.args").read_text().splitlines()
+    service_calls = (tmp_path / "stub/launchctl.args").read_text()
+    assert "ai.hermes.llamacpp" in service_calls and "ai.mcs.llamaserver" in service_calls
+    assert "-x\nllama-server\n" in (tmp_path / "stub/pgrep.args").read_text()
+
+
 def _summary(tmp_path, name, ub, mode, **values):
     base = {"n": 9, "errors": 0, "timeouts": 0, "timeout_rate": 0.0, "json_valid_rate": 1.0,
-            "valid_per_hour": 100.0, "realtime_p95": 4000, "realtime_n": 6,
+            "valid_per_hour": 100.0, "realtime_p95": 4000, "realtime_n": 6, "realtime_valid_n": 6,
             "rss_kb_after": 7000000, "swap_used_mb_after": 0.0}
     run = tmp_path / OUT / name
     run.mkdir(parents=True)
@@ -123,6 +151,46 @@ def test_report_applies_adoption_rule(tmp_path):
     _summary(tmp_path, "r4", 128, "serial", valid_per_hour=140.0, rss_kb_after=None)
     proc = _run(tmp_path, _render(tmp_path), "--report")
     assert "未計測のため判定不可" in [ln for ln in proc.stdout.splitlines() if ln.startswith("r4 |")][0]
+
+
+@pytest.mark.parametrize("bad", [
+    {"http_code": 503}, {"curl_rc": 28}, {"json_valid": False}, {"finish_reason": "length"},
+])
+def test_fast_realtime_failures_cannot_pass_adoption_rule(tmp_path, bad):
+    _summary(tmp_path, "r1", 512, "serial")
+    run = tmp_path / OUT / "r2"
+    (run / "e2e").mkdir(parents=True)
+    (run / "env.json").write_text(json.dumps({"phase": "e2e", "server_ub": 256}))
+    ok = {"warmup": False, "block": "1", "http_code": 200, "curl_rc": 0,
+          "json_valid": True, "finish_reason": "stop", "timings": None,
+          "wall_ms": 1000, "foreign_busy_before": 0}
+    rows = [{**ok, "mode": "serial"} for _ in range(9)] + [
+        {**ok, "mode": "realtime", "wall_ms": 10, **bad} for _ in range(6)]
+    (run / "e2e/requests.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    mem = {"rss_kb": 6000000, "swap_used_mb": 0}
+    block = {"block": 1, "mode": "serial", "wall_s": 100, "mem_before": mem, "mem_after": mem}
+    (run / "e2e/blocks.jsonl").write_text(json.dumps(block) + "\n")
+    runner = _render(tmp_path)
+    runner.write_text(runner.read_text().rsplit('main "$@"', 1)[0]
+                      + '\nRUN_DIR="$OUT_ROOT/r2"\nsummarize\nreport\n')
+    proc = _run(tmp_path, runner)
+    assert proc.returncode == 0, proc.stderr
+    result = json.load(open(run / "summary.json"))["e2e"]["serial"]
+    assert result["realtime_n"] == 6 and result["realtime_valid_n"] == 0
+    assert result["realtime_p95"] is None
+    row = next(line for line in proc.stdout.splitlines() if line.startswith("r2 | 256 | serial |"))
+    assert "判定不可" in row and "条件成立" not in row
+    assert _called(tmp_path) == []
+
+
+@pytest.mark.parametrize("which,valid_n", [("r1", 5), ("r1", None), ("r2", 5), ("r2", None)])
+def test_report_requires_complete_realtime_evidence_for_baseline_and_candidate(tmp_path, which, valid_n):
+    for name, ub, rate in (("r1", 512, 100), ("r2", 256, 120)):
+        extra = {"realtime_valid_n": valid_n} if name == which else {}
+        _summary(tmp_path, name, ub, "serial", valid_per_hour=rate, **extra)
+    proc = _run(tmp_path, _render(tmp_path), "--report")
+    row = next(line for line in proc.stdout.splitlines() if line.startswith("r2 |"))
+    assert proc.returncode == 0 and "判定不可" in row and "条件成立" not in row
 
 
 def test_script_static_safety():

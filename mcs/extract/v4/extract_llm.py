@@ -1439,7 +1439,7 @@ def _integrity_summary(notes: list) -> dict:
     calls = len(notes)
     usage, timings, repair_timings = {}, {}, {}
     finishes = {}
-    repair_calls = probe_calls = downgrades = 0
+    repair_calls = probe_runs = downgrades = 0
     slot_wait_ms = slot_wait_unconfirmed = 0
     slot_waits = False
     for note in notes:
@@ -1451,7 +1451,7 @@ def _integrity_summary(notes: list) -> dict:
         for key in ("probe", "downgrades"):
             if type(note.get(key)) is int:
                 if key == "probe":
-                    probe_calls += note[key]
+                    probe_runs += note[key]
                 else:
                     downgrades += note[key]
         if type(note.get("slot_wait_ms")) is int:
@@ -1462,7 +1462,13 @@ def _integrity_summary(notes: list) -> dict:
             if key in ("prompt_tokens", "completion_tokens", "total_tokens") \
                     and type(value) is int and value >= 0:
                 usage[key] = usage.get(key, 0) + value
-        for key, value in (note.get("timings") or {}).items():
+        measured = note.get("timings") or {}
+        paired = all(type(measured.get(key)) in (int, float)
+                     and 0 <= measured[key] <= sys.float_info.max
+                     for key in ("prompt_n", "cache_n"))
+        for key, value in measured.items():
+            if key in ("prompt_n", "cache_n") and not paired:
+                continue
             if key in ("prompt_n", "prompt_ms", "predicted_n", "predicted_ms", "cache_n") \
                     and type(value) in (int, float) and 0 <= value <= sys.float_info.max:
                 timings[key] = timings.get(key, 0) + value
@@ -1481,7 +1487,7 @@ def _integrity_summary(notes: list) -> dict:
                # calls == first_calls + repair_calls always holds
                "first_calls": calls - repair_calls,
                "repair_calls": repair_calls,
-               "probe_calls": probe_calls,
+               "probe_runs": probe_runs,
                "format_downgrades": downgrades,
                "repair_timings": repair_timings or None}
     if slot_waits:
@@ -1509,7 +1515,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
     integrity metadata is appended to thread-local integrity notes
     consumed by ``llm_extract``; the visible result is unchanged.
     `kind` labels the note ("first"/"repair"); the note also carries
-    whether this call's probe actually sent and how many format
+    whether this call completed a format-check run and how many format
     downgrades preceded the answer. Known limit: a probe or downgrade
     whose call then returns None/_DEFERRED without a note is uncounted
     (the row re-runs)."""
@@ -1519,7 +1525,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
         return _DEFERRED
     probed_at = _FMT_TS
     fmt = _probe_format(deadline=deadline)
-    probe = int(_FMT_TS != probed_at)   # _FMT_TS moves only when the ladder actually sent
+    probe = int(_FMT_TS != probed_at)   # one format-check run may send multiple requests
     if fmt is None:
         return _DEFERRED   # no idle slot to probe on — nothing sent
     endpoint, model = _resolved_llm()
@@ -1579,6 +1585,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
             else None)
         _CALL_NOTES.transport_at = time.monotonic()
         if _CALL_NOTES.transport == "expired":
+            _integrity_note(response, kind, probe, downgrades, err_out)
             return None  # a sent timeout consumes an attempt, not endpoint health
         if response is None and (err_out.get("kind") in ("unreachable", "busy")
                                  or expired) \
@@ -5263,8 +5270,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     llm_calls = _llm_call_stats([*metas, *batch_metas])
     if pre_probes:
         # the resident's real probe site is the pre-fanout one
-        llm_calls = llm_calls or {"probe_calls": 0}
-        llm_calls["probe_calls"] = (llm_calls.get("probe_calls") or 0) + pre_probes
+        llm_calls = llm_calls or {"probe_runs": 0}
+        llm_calls["probe_runs"] = (llm_calls.get("probe_runs") or 0) + pre_probes
     return {"done": done, "failed": failed, "held_prior": held_prior, "left": left,
             "carried": carried, "carry": carry_out,
             # pending as of the last full count, minus what this process
@@ -5290,7 +5297,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
 
 _COUNT_KEYS = ("calls", "first_calls", "repair_calls", "repair_wins",
-               "length_stops", "length_resplits", "probe_calls",
+               "length_stops", "length_resplits", "probe_runs",
                "format_downgrades", "checkpoint_reuses")
 
 

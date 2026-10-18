@@ -1,5 +1,6 @@
 """Synthetic acceptance of the single selection-time read in run_due (p3b)."""
 import json
+import sqlite3
 
 import pytest
 
@@ -89,3 +90,48 @@ def test_result_reports_scan_size(runtime):
     result = step(runtime)
     assert result['status'] == 'complete' and result['scanned'] == 3
     assert 'synthetic' not in json.dumps(result) and '合成' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('during_pending', [False, True])
+def test_progress_published_during_selection_is_preserved(runtime, monkeypatch, during_pending):
+    led, clock, _ = runtime
+    seed(led)
+    newest = {'attempts': 5, 'next_try': clock.wall + 3600,
+              'failure': 'TimeoutError', 'last_attempt': clock.wall,
+              'source_sig': nightly._snapshot(led.db, 1, {})['source_sig']}
+    conn = sqlite3.connect(led.db.execute('PRAGMA database_list').fetchone()[2])
+    inserted = []
+
+    def publish():
+        if not inserted:
+            inserted.append(True)
+            conn.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
+                         "VALUES (?,1,NULL,?,'','{}',?)",
+                         (nightly.PROGRESS, json.dumps(newest), clock.wall))
+            conn.commit()
+
+    pending, latest = nightly._pending, nightly._latest
+
+    def racing_pending(*args, **kwargs):
+        result = pending(*args, **kwargs)
+        if during_pending:
+            publish()
+        return result
+
+    def racing_latest(db, kind, pid, mid=None):
+        if not during_pending and (kind, pid) == (nightly.PROGRESS, 0):
+            publish()
+        return latest(db, kind, pid, mid)
+
+    def fail_summary(*args):
+        raise TimeoutError('synthetic')
+
+    monkeypatch.setattr(nightly, '_pending', racing_pending)
+    monkeypatch.setattr(nightly, '_latest', racing_latest)
+    monkeypatch.setattr(nightly, '_summary', fail_summary)
+    try:
+        assert step(runtime)['status'] == 'source_changed'
+        assert document(led, nightly.PROGRESS) == newest
+        assert not led.db.in_transaction
+    finally:
+        conn.close()

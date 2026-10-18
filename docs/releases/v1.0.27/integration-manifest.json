@@ -1,0 +1,114 @@
+{
+  "version": "1.0.27",
+  "date": "2026-10-19",
+  "production_base": "982c471b19a26ef790afb135c7d0c9d3d69c0702",
+  "integration_merge": "d106bcc8b12be35c93654bceac3f7caeb4097926",
+  "worktree_tips": [
+    {
+      "branch": "refs/heads/main",
+      "head": "982c471b19a26ef790afb135c7d0c9d3d69c0702",
+      "integrated": true,
+      "dirty_status_count": 1
+    },
+    {
+      "branch": null,
+      "head": "1c11122808bde5472800df24fb01b94f6f1158be",
+      "integrated": true,
+      "dirty_status_count": 34
+    },
+    {
+      "branch": "refs/heads/audit/v1.0.20-claude",
+      "head": "7d746824f60481f059b277d0763fa7fc169dc847",
+      "integrated": true,
+      "dirty_status_count": 1
+    },
+    {
+      "branch": "refs/heads/feat/drug-setup-default-on",
+      "head": "ed33246bdbbea783b0d948ce77fcebcf5c4adcf6",
+      "integrated": true,
+      "dirty_status_count": 0
+    },
+    {
+      "branch": "refs/heads/feat/llm-lanes-123",
+      "head": "b8d261164cab5f041c5d20d6cc3d25cb4b6058ad",
+      "integrated": true,
+      "dirty_status_count": 0
+    },
+    {
+      "branch": "refs/heads/ci/release-notes-tag-only",
+      "head": "e076d82b9bed4127cbc304459183061da757df08",
+      "integrated": true,
+      "dirty_status_count": 0
+    },
+    {
+      "branch": "refs/heads/release/v1.0.23-prep",
+      "head": "1c11122808bde5472800df24fb01b94f6f1158be",
+      "integrated": true,
+      "dirty_status_count": 0
+    },
+    {
+      "branch": "refs/heads/develop/v1.0.25",
+      "head": "5ecea075500cba976764b508cdaef5004ce8795f",
+      "integrated": true,
+      "dirty_status_count": 0
+    },
+    {
+      "branch": null,
+      "head": "35b5a5531e04441391bfb43b8389a7ca43a5dc94",
+      "integrated": true,
+      "dirty_status_count": 64
+    },
+    {
+      "branch": null,
+      "head": "97ddfec548f77c13b98f7c9393827a5749b10cbb",
+      "integrated": true,
+      "dirty_status_count": 1
+    },
+    {
+      "branch": "refs/heads/fix/v1026-ops",
+      "head": "bb889e9eeae252ba7e8b67748c5261ad06c286d7",
+      "integrated": true,
+      "dirty_status_count": 0
+    },
+    {
+      "branch": "refs/heads/worktree-wf_04c119de-b76-12",
+      "head": "c04ac78b02f0d5093fb7ccf4cea7e11c32647dff",
+      "integrated": true,
+      "dirty_status_count": 1
+    },
+    {
+      "branch": "refs/heads/v1020-p3b-m",
+      "head": "970f6272a487f9f15c806f552a8a207e6eed7147",
+      "integrated": true,
+      "dirty_status_count": 1
+    },
+    {
+      "branch": "refs/heads/v1020-lane-semantic",
+      "head": "7510d3855f29d468851b4cad76233a165d0d0cc9",
+      "integrated": true,
+      "dirty_status_count": 1
+    },
+    {
+      "branch": "refs/heads/v1020-lane-core",
+      "head": "702648c95b57f6c98d211105c0efa00a091b0f0d",
+      "integrated": true,
+      "dirty_status_count": 1
+    }
+  ],
+  "legacy_dirty": "前回受入以降の変更なし。旧草稿100ファイルは反映済みまたは上位実装済み。statusのディレクトリ集約では98件。Fとowner lockは未取込で保持。合成probe7件は正式testsへ収録。",
+  "drug_master": {
+    "checked_at": "2026-10-19T07:07:08.843459+09:00",
+    "source": "https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/yFile",
+    "edition": "20261013",
+    "archive_bytes": 1158682,
+    "archive_sha256": "c3efc8aa772b9bf54cfa992e8df3bc82480f86f35bbeb52522d0997144140fb5",
+    "archive_matches": true,
+    "members": [
+      "y_20261013.csv"
+    ],
+    "csv_sha256": "6fa8f08ca4341ac530e5f4081d3fd3bbebbfcdd278c0d0ec0f172a0c1af018d1",
+    "csv_matches": true,
+    "activation_changed": false
+  },
+  "release_gates": "最終候補のCodeRabbit・CI・公開・本番結果は後続receiptで確認。準備時点では未完。"
+}

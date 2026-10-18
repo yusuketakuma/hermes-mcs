@@ -2748,7 +2748,7 @@ def test_llm_call_stats_dedups_shared_meta_and_ignores_junk():
          {"calls": 2}])
     unreported = {
         "first_calls": None, "repair_calls": None, "repair_wins": None,
-        "length_stops": None, "length_resplits": None, "probe_calls": None,
+        "length_stops": None, "length_resplits": None, "probe_runs": None,
         "format_downgrades": None, "checkpoint_reuses": None,
         "prompt_n": None, "cache_n": None, "repair_prompt_n": None,
         "repair_cache_n": None, "repair_issues": None, "cache_hit_ratio": None}

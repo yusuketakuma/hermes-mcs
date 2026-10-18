@@ -51,17 +51,16 @@ EOF
   exit 2
 }
 
-guard_workers() {
-  [ "$STOPPED" = 1 ] || usage
-  local label rc
-  for label in $LABELS; do
+guard_unloaded() {
+  local code=$1 labels=$2 label rc
+  for label in $labels; do
     "$LAUNCHCTL" print "gui/$(id -u)/$label" >/dev/null 2>&1
     rc=$?
     # 113 = not found is the only proof the agent is unloaded (mcs_recover
     # convention); 0 = loaded, 97 = guard stub, anything else = unverifiable
     if [ "$rc" != 113 ]; then
-      echo "worker still loaded or unverifiable (launchctl print rc=$rc): $label" >&2
-      exit 3
+      echo "service still loaded or unverifiable (launchctl print rc=$rc): $label" >&2
+      exit "$code"
     fi
   done
 }
@@ -71,9 +70,19 @@ server_reachable() {
 }
 
 guard_phase() {
+  local rc
   if [ "$PHASE" = bench ]; then
-    if server_reachable; then
-      echo "llama-server is still answering on $SERVER: llama-bench would load the same model twice and swap — stop the server agent first" >&2
+    server_reachable
+    rc=$?
+    # An HTTP timeout is not proof the model was unloaded.
+    if [ "$rc" != 7 ]; then
+      echo "server still answering or unverifiable (curl rc=$rc) — stop the server agent first" >&2
+      exit 4
+    fi
+    guard_unloaded 4 "ai.hermes.llamacpp ai.mcs.llamaserver"
+    "$PGREP" -x llama-server >/dev/null 2>&1
+    if [ "$?" != 1 ]; then
+      echo "llama-server process still present or unverifiable" >&2
       exit 4
     fi
   elif ! server_reachable; then
@@ -349,6 +358,8 @@ else:
         bg = [r for r in rows if r["mode"] == mode and not r["warmup"]]
         rt = [r for r in rows if r["mode"] == "realtime" and str(r["block"]) in {str(b) for b in bids}]
         valid = [r for r in bg if r["http_code"] == 200 and r["curl_rc"] == 0 and r["json_valid"]]
+        rt_valid = [r for r in rt if r["http_code"] == 200 and r["curl_rc"] == 0
+                    and r["json_valid"] is True and r.get("finish_reason") == "stop"]
         block_s = sum(b["wall_s"] for b in blocks if b["mode"] == mode)
         t = [r["timings"] for r in bg if r["timings"]]
         pn = [x for x in t if isinstance(x.get("predicted_n"), (int, float)) and x.get("predicted_ms")]
@@ -369,8 +380,9 @@ else:
             "valid_per_hour": round(len(valid) / block_s * 3600, 1) if block_s else None,
             "block_s": round(block_s, 1) if block_s else None,
             "realtime_n": len(rt),
-            "realtime_p50": pct([r["wall_ms"] for r in rt], 0.5),
-            "realtime_p95": pct([r["wall_ms"] for r in rt], 0.95),
+            "realtime_valid_n": len(rt_valid),
+            "realtime_p50": pct([r["wall_ms"] for r in rt_valid], 0.5),
+            "realtime_p95": pct([r["wall_ms"] for r in rt_valid], 0.95),
             "rss_kb_before": mem[0]["mem_before"].get("rss_kb") if mem else None,
             "rss_kb_after": mem[-1]["mem_after"].get("rss_kb") if mem else None,
             "swap_used_mb_before": mem[0]["mem_before"].get("swap_used_mb") if mem else None,
@@ -385,7 +397,7 @@ else:
         lines.append(f"  {mode}: n={s['n']} errors={s['errors']} timeouts={s['timeouts']} "
                      f"json_valid={show(s['json_valid_rate'])} decode_tps={show(s['decode_tps'])} "
                      f"cache={show(s['cache_ratio'])} valid/h={show(s['valid_per_hour'])} "
-                     f"rt p50/p95={show(s['realtime_p50'])}/{show(s['realtime_p95'])} (n={s['realtime_n']}) "
+                     f"rt p50/p95={show(s['realtime_p50'])}/{show(s['realtime_p95'])} (valid={s['realtime_valid_n']}/{s['realtime_n']}) "
                      f"rss={show(s['rss_kb_before'])}->{show(s['rss_kb_after'])} "
                      f"swap={show(s['swap_used_mb_before'])}->{show(s['swap_used_mb_after'])} "
                      f"foreign_busy={s['foreign_busy']}")
@@ -413,10 +425,14 @@ base = next((r for r in rows if r["server_ub"] == 512 and r["mode"] == "serial")
 # higher is better / lower is better, per recommendations.md 5
 UP = ("valid_per_hour", "json_valid_rate")
 DOWN = ("realtime_p95", "timeout_rate", "rss_kb_after", "swap_used_mb_after")
-print("run | -ub | mode | valid/h | rt p95 (n) | json_valid | timeout | rss_after | swap_after | 判定")
+print("run | -ub | mode | valid/h | rt p95 (valid/n) | json_valid | timeout | rss_after | swap_after | 判定")
 for r in rows:
     if base is None:
         verdict = "未計測のため判定不可 (baseline 512 serial なし)"
+    elif any(type(x.get("realtime_n")) is not int or x["realtime_n"] < 1
+             or type(x.get("realtime_valid_n")) is not int
+             or x["realtime_valid_n"] != x["realtime_n"] for x in (base, r)):
+        verdict = "新着応答の失敗・欠測により判定不可"
     elif r is base:
         verdict = "基準"
     elif any(r.get(k) is None or base.get(k) is None for k in UP + DOWN):
@@ -429,11 +445,12 @@ for r in rows:
     def show(v):
         return "未計測" if v is None else v
     print(f"{r['run']} | {show(r['server_ub'])} | {r['mode']} | {show(r.get('valid_per_hour'))} | "
-          f"{show(r.get('realtime_p95'))} ({show(r.get('realtime_n'))}) | {show(r.get('json_valid_rate'))} | "
+          f"{show(r.get('realtime_p95'))} ({show(r.get('realtime_valid_n'))}/{show(r.get('realtime_n'))}) | {show(r.get('json_valid_rate'))} | "
           f"{show(r.get('timeout_rate'))} | {show(r.get('rss_kb_after'))} | {show(r.get('swap_used_mb_after'))} | {verdict}")
 print()
 print("採用規則 (recommendations.md 5): 保存済み有効結果/時間が baseline (-ub 512 × serial) より改善し、"
       "新着 p95・JSON 妥当性・timeout 率・RSS/swap のいずれも悪化しない候補のみ。欠測は 0 扱いしない。")
+print("新着応答は基準・候補とも全件成功・JSON 妥当・正常終了が必須。失敗と欠測は判定不可。")
 print("最終判断は所有者。本記録の判定は pending measurement window。")
 PYEOF
 }
@@ -453,7 +470,8 @@ main() {
     exit 0
   fi
   case "$PHASE" in bench|e2e) ;; *) usage ;; esac
-  guard_workers
+  [ "$STOPPED" = 1 ] || usage
+  guard_unloaded 3 "$LABELS"
   RUN_DIR=$OUT_ROOT/$(date -u +%Y%m%dT%H%M%SZ)
   mkdir -p "$RUN_DIR"
   if [ "$DRY_RUN" = 1 ]; then

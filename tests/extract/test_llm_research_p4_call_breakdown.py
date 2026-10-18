@@ -3,6 +3,8 @@ downgrade/checkpoint reuse) with codes only; synthetic bodies, stubbed backend."
 import json
 import os
 
+import pytest
+
 import extract_llm
 from extract_testkit import _ledger, _message
 from test_extraction_review import db
@@ -53,7 +55,7 @@ def test_run_pending_breaks_calls_down_by_reason(db, monkeypatch):
     stats = res["llm_calls"]
     assert (stats["calls"], stats["first_calls"], stats["repair_calls"]) == (4, 3, 1)
     assert (stats["length_stops"], stats["length_resplits"]) == (1, 1)
-    assert stats["probe_calls"] == 0 and stats["format_downgrades"] == 0
+    assert stats["probe_runs"] == 0 and stats["format_downgrades"] == 0
     assert stats["checkpoint_reuses"] in (None, 0)
     integrity = _integrity(db)
     assert integrity["repairs"] == 1 and "repair_wins" not in integrity
@@ -107,7 +109,7 @@ def test_format_downgrade_is_counted_on_the_answered_call(monkeypatch):
     assert extract_llm._FMT_MODE == "object"
 
 
-def test_probe_is_counted_once_per_actual_send(tmp_path, monkeypatch):
+def test_probe_is_counted_once_per_format_check(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
     monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda **kw: 0)
@@ -119,13 +121,64 @@ def test_probe_is_counted_once_per_actual_send(tmp_path, monkeypatch):
     first, second = {}, {}
     extract_llm.llm_extract("合成の本文", meta_out=first)
     extract_llm.llm_extract("合成の本文", meta_out=second)
-    assert first["probe_calls"] == 1 and second["probe_calls"] == 0
+    assert first["probe_runs"] == 1 and second["probe_runs"] == 0
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
     db = _ledger(tmp_path)
     db.save_messages([_message(mid=1, body="合成の本文一"), _message(mid=2, body="合成の本文二")])
     res = extract_llm.run_pending(db, limit=10, budget_s=200, workers=2)
-    assert res["done"] == 2 and res["llm_calls"]["probe_calls"] == 1
+    assert res["done"] == 2 and res["llm_calls"]["probe_runs"] == 1
     db.close()
+
+
+def test_probe_run_counts_one_ladder_with_two_requests(monkeypatch):
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(extract_llm, "_choose_slot", lambda: 1)
+    monkeypatch.setattr(extract_llm, "_resolved_llm", lambda: (extract_llm.local_llm.ENDPOINT, "synthetic"))
+    monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(extract_llm._CALL_NOTES, "items", [], raising=False)
+    replies = [
+        {"status": 400, "text": None, "finish_reason": None},
+        {"status": 200, "text": '{"ok":true}', "finish_reason": "stop"},
+        VALID,
+    ]
+    calls = []
+
+    def chat(prompt, **kwargs):
+        calls.append(kwargs.get("response_format"))
+        return replies.pop(0)
+
+    monkeypatch.setattr(extract_llm.local_llm, "chat", chat)
+    assert extract_llm._llm_call("合成本文") == {"summary": "合成の部分結果"}
+    assert [call["type"] for call in calls] == ["json_schema", "json_object", "json_object"]
+    summary = extract_llm._integrity_summary(extract_llm._note_list())
+    assert summary["probe_runs"] == 1 and "probe_calls" not in summary
+    assert summary["calls"] == summary["first_calls"] == 1
+
+
+@pytest.mark.parametrize("deadline_expired", [False, True])
+@pytest.mark.parametrize("kind", ["first", "repair"])
+def test_sent_timeout_keeps_one_call_and_slot_wait_note(monkeypatch, deadline_expired, kind):
+    now = [100.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm, "_resolved_llm", lambda: (extract_llm.local_llm.ENDPOINT, "synthetic"))
+    monkeypatch.setattr(extract_llm, "_choose_slot", lambda: 1)
+    monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(extract_llm._CALL_NOTES, "items", [], raising=False)
+
+    def send(prompt, **kwargs):
+        kwargs["error_out"].update(kind="transport", slot_wait_ms=0, slot_wait_confirmed=0)
+        now[0] = 101.0 if deadline_expired else 100.5
+        return None
+
+    monkeypatch.setattr(extract_llm.local_llm, "chat", send)
+    assert extract_llm._llm_call("合成の本文", deadline=101.0, kind=kind) is None
+    summary = extract_llm._integrity_summary(extract_llm._note_list())
+    assert summary["calls"] == 1
+    assert (summary["first_calls"], summary["repair_calls"]) == (
+        (1, 0) if kind == "first" else (0, 1))
+    assert summary["slot_wait_ms"] == 0 and summary["slot_wait_unconfirmed"] == 1
 
 
 def test_llm_call_stats_keys_are_fixed_and_unreported_is_none():

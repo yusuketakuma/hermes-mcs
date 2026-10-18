@@ -123,3 +123,22 @@ def test_cache_hit_ratio_aggregate():
     assert big["cache_hit_ratio"] is None and big["calls"] == 2
     assert big["prompt_n"] is None and big["cache_n"] is None
     json.dumps(big, allow_nan=False)
+
+
+def test_cache_ratio_pairs_measurements_before_per_row_aggregation():
+    for missing in ({"prompt_n": 700}, {"cache_n": 700}):
+        summary = extract_llm._integrity_summary([
+            {"kind": "repair", "timings": {"prompt_n": 100, "cache_n": 100}},
+            {"kind": "repair", "timings": {**missing, "prompt_ms": 2.0}},
+        ])
+        stats = extract_llm._llm_call_stats([summary])
+        assert stats["cache_hit_ratio"] == 0.5
+        assert (stats["prompt_n"], stats["cache_n"],
+                stats["repair_prompt_n"], stats["repair_cache_n"]) == (100, 100, 100, 100)
+        assert stats["calls"] == 2 and stats["prompt_ms"] == 2.0
+    summary = extract_llm._integrity_summary([
+        {"timings": {"prompt_n": 100}}, {"timings": {"cache_n": 100}},
+    ])
+    stats = extract_llm._llm_call_stats([summary])
+    assert stats["cache_hit_ratio"] is None
+    assert stats["prompt_n"] is None and stats["cache_n"] is None

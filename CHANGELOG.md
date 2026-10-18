@@ -6,6 +6,105 @@
 
 ## [Unreleased]
 
+## [1.0.27] — 2026-10-19
+
+**過去分の解析を続けながら、患者コンテキストを24時間作成**
+
+新着と過去分のレーンを分け、保存待ちの結果を持ち越して処理を進めます。薬剤辞書が未設定なら対話で追加照合を提案します。更新時はサービス設定とworkerを再起動し、既存の公開・人承認条件を保持します。
+
+| 変更 | 以前 | 今回 | 利用者への効果 |
+|---|---|---|---|
+| 患者コンテキスト | 夜間に作成 | レーン3で24時間作成 | 夜間を待たずに処理を進められる |
+| 保存待ちの解析結果 | 待ち切れで捨てる場合がある | 所有権と本文を確認して持ち越す | 同じ入力の再推論を抑える |
+| 薬剤辞書の初期設定 | 別操作で設定 | 未設定なら対話中に提案 | 利用条件の確認から設定へ進める |
+
+### 改善
+
+- **初期設定で同梱の医薬品辞書による薬剤名の照合を既定で提案**
+  対話の初期設定に「医薬品辞書」の手順を追加しました。辞書が未設定のとき、同梱の公式医薬品マスターから私有辞書を作成して薬剤名の照合に使うことを既定「はい」で提案します。利用条件を確認した日・確認した人・照合の承認は運用者が入力し、承認しない場合は参照のみで照合しません。
+
+- **新着と過去分の処理を分け、患者コンテキストを24時間作成**
+  新着はレーン1、過去分はレーン2・3が担当し、2・3はGPUを順番に使います。患者コンテキストは夜間限定をやめ、レーン3で24時間、現行世代で解析済みのアクティブ患者から作成します（再試行上限に達した投稿は対象判定から除外）。ローカルLLMはMCS専用となり、閲覧・公開の条件は維持します。
+
+- **処理待ちを次の実行時刻に合わせ、推論の計測を改善**
+  過去分の処理待ちを次に処理できる時刻に合わせ、修復の問いかけでは共通の指示を先に送ります。タイムアウト後は最大10秒の範囲で推論枠の空きを確認し、確認できたかどうかを記録します。実機での速度改善量は未測定で、性能比較は承認した時間窓に実施する手順を用意しています。
+
+### 不具合修正
+
+- **保存待ちの解析結果を保持し、一時的な競合から再開**
+  収集と保存が重なった際、完成した過去分の解析結果を次の周回へ持ち越します。GPUの順番待ちを解析失敗に数えず、患者コンテキストの作成も一時的なデータベース競合から再試行します。患者コンテキストの呼出時間上限は60秒から300秒になります。
+
+- **並行処理の保存状態と性能比較の判定を修正**
+  別の処理が更新した患者コンテキストの再試行状態を、古い状態で上書きしないようにしました。性能比較ではサーバ停止を複数の観測で確かめ、新着応答に失敗や欠測がある結果を採用候補にしません。
+
+### 更新時の注意
+
+- **通常の更新ツールでサービス設定を反映**
+  更新ツールがサービス設定の再同期と再起動を行います。手動でcheckoutだけを更新した場合は `mcs_setup.py services` が必要です。旧worker引数のままでは起動しないため、[更新ガイド](docs/guides/UPGRADE_AGENT.md)に従って新しいレーンでの起動を確認してください。
+
+- **設定・履歴・公開条件を保持**
+  モデル、DB形式、LLM抽出世代9、ルール世代24、患者コンテキスト設定の名前と既定値は維持します。処理日の区切りも日本時間03:30のままです。設定済みの薬剤辞書は保持し、非対話の `init --yes` では辞書を自動作成・承認しません。
+
+- **性能比較は別の実行窓で**
+  通常更新ではベンチマークを実行せず、サーバの `-ub` 設定も変更しません。[開発手順](docs/development/DEVELOPMENT.md)に従い、承認した時間窓で停止・測定・復帰を行います。新着応答の成功件数を持たない旧計測結果は採用判定に使えません。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### 初期設定で同梱の医薬品辞書による薬剤名の照合を既定で提案
+
+- 辞書の作成は既存の install-bundled と同じ経路。保留・失敗時は理由と次の操作を表示し、設定は変更しない。
+- 運用者の確認入力中の EOF/Ctrl+C は初期設定全体の中止で、辞書も設定も書かない。辞書作成後・設定保存前（設定の検証・パスワード入力）の中止や失敗では未採用の私有辞書だけが残り得る。設定保存後の中止では保存済み設定も残る。
+- --set drug_map=... の検証経路と既存の承認・有効化の境界は不変。
+- 根拠: mcs/ops/mcs_setup.py
+
+#### 保存待ちの解析結果を保持し、一時的な競合から再開
+
+- 不具合修正：semanticのllm_chatはGPUターン取得後の送信下限を_TURN_MIN_CALL_S（60秒）と残り時間の半分の小さい方にし、短いジョブ予算でも未競合なら必ず送信する。ターン待ちで残りが半分未満になった呼出しは試行を消費せずbusyとして延期する（MCS_LLM_TURN_LOCK設定時にバックログの意味抽出が静かに停止したり、ロック待ちの失敗が再試行回数を減らしたりしない）。
+- 不具合修正：probe_formatはPROBE_TURN_MIN_S（2秒）をchatのturn_min_sに渡し、ターン取得後の残りが下限未満なら送信せずbusy（None）を返して次回に再プローブする（admitted_probe_formatも同じ経路）。レーン再起動時に形式検出が打ち切られてplainとしてクールダウン中固定され、解析失敗が試行として課金される事象をなくす。
+- 不具合修正：常駐抽出の_handleで失敗行の記録とQC/thin/human再発行の4箇所の書込みがrun.lock取得に3秒しか待たず、10分tickの保持中は何も書かずにleaseを解放して同じ行を再推論し、患者が患者コンテキスト作成の対象から外れ続けていた問題を、これらの書込みだけ既定60秒待ちの_write_lockに戻して修正（同一欠陥の指摘2件を1修正で解消）。
+- 速度・安定性：lane 3常駐ループのcontext_laneブロック（事前_settle_carryと患者コンテキスト実行）と--stop-afterのbudget計算を既存のtryの内側へ移動（純粋なインデント移動、return 0/continue/breakは従来どおり）。database is lockedなどsqliteの一時エラーはextract_loop_errorとして記録し30秒後に再試行するため、常駐が終了せず持ち越し中の抽出結果も次回に書き込まれる。
+- 速度・安定性：患者コンテキスト作成のrun_dueは推論完了後、run lockが他プロセスに保持されていても1秒間隔で最大60回（単位deadlineと日の終端−COMMIT_MARGINを超えない範囲）取得を再試行してからdeferredを返す。取得後のadmit()・source_sig・scan署名の再確認は従来どおり。定期処理やレーン2がrun lockを握る瞬間に重なっても完了した推論結果を捨てず同じ依頼を繰り返さない（同一箇所の指摘3件を1修正で解消。単位deadlineまでの待機ではなく短い上限に留めた）。
+- 速度・安定性：患者コンテキスト作成のLLM呼出timeout（CALL_SECONDS）をextract_llm.TIMEOUTと同じ300秒に揃える。入口ガード・turn_min_s・単位deadlineはこの値から派生するため他のコード変更はない。リアルタイム応答との同時推論で応答が遅い場合でも、早すぎるtimeoutで患者を失敗扱いにして再試行を長く先送りしない。テストはstep()の既定deadlineを600秒、_ask直呼びの+90を+600、03:29のwall-endケースを600秒に引き上げ、新しい入口ガード（305秒）で誤ってdeferredにならないようにした。
+- 不具合修正：持ち越した抽出結果（lock-bound carry）のclaim leaseを、run_pending末尾と_settle_carryのkeep分岐で_renew（next_try一致条件付きUPDATE、長さは初回claimと同じ）により更新し、更新できなかった（別workerが再claim済み）結果だけをdeferredとして捨てる。lane 3が患者コンテキスト作成（最長15分/単位）を挟んでも持ち越し結果がlease失効で破棄されて再推論されない。_renewは本文ハッシュが選択時と一致する行だけ延長し、持ち越し中に本文が更新された結果は捨てて新本文の選択を妨げない。
+- 不具合修正：semantic_drainはLLMNotSent(llm_turn_busy)を同じ回でJev照会があっても1時間のdeferred_backoffではなく60秒の短い延期（deferred）にする。抽出レーンとの一時的なGPU競合で意味抽出ジョブが1時間止まらない。
+- 不具合修正：抽出側の_probe_formatもGPUターン待ちでprobeがNoneを返した場合はキャッシュ済みモードと_FMT_TSを変えずに返す（semantic側と同じ）。一度probeが混み合っただけで後続行が再probeと延期を繰り返さない。
+- 不具合修正（独立レビューH1/H2）：持ち越し結果の lease 更新が拒否された（本文変更・lease喪失）場合は自分の旧claimを同時に解放し、新本文が次の選択で直ちに解析対象になる。複数の持ち越しで途中の sqlite 一時エラーが起きても、更新済み lease をその場で持ち越しリストへ書き戻すため、常駐の再試行で完成済み結果を所有権喪失と誤判定して捨てない。
+- 根拠: mcs/core/local_llm.py、mcs/semantic/semantic.py、mcs/extract/v4/extract_llm.py、mcs/extract/patient_nightly.py、tests/core/test_local_llm.py、tests/semantic/test_semantic_llm_retry.py、tests/extract/test_lane_slot_and_lock.py、tests/extract/test_patient_nightly.py、mcs/semantic/semantic_drain.py、tests/extract/test_slot_routing.py
+
+#### 並行処理の保存状態と性能比較の判定を修正
+
+- W1: 候補読取り前に既存の公開版番号を固定し、保存直前のBEGIN IMMEDIATE内で比較。選択中・選択後の別接続更新を合成回帰で検証。
+- T1/W2/W3: 期限到達時の計測保持、呼出ごとのprompt_n/cache_n対だけの集計、probe_runsへの名称訂正。
+- B1/B2: bench開始には両サーバlaunchdラベル不在・プロセス不在・接続不可が必要。HTTPの時間切れを停止の証拠にしない。比較元と候補の新着応答を全件成功・JSON妥当・正常終了に限定。
+- 根拠: mcs/extract/patient_nightly.py、mcs/extract/v4/extract_llm.py、scripts/development/llm_lane_bench.sh
+
+#### 新着と過去分の処理を分け、患者コンテキストを24時間作成
+
+- `local_llm.LANES` が規約の正本。`--lane 2|3` は `MCS_LLM_SLOT`（wire id）と `MCS_LLM_TURN_LOCK`（`data/llm_turn.lock`）を設定し、HTTP要求中だけflockを保持する。
+- 旧可変枠（`_ELASTIC_*`、`elastic_hold`/`elastic_resume`）と夜間の時間帯判定を削除。レーン3は各周回の最初に `patient_nightly.run_due` を呼び、`patient_extraction_complete` が真の患者だけを対象にする。admissionは更新中・回路・設定変更・メモリ・ディスクで判定する。レーン2/3のターン待ちで期限が切れた呼出しは `busy` として送信なし扱いになり、患者の失敗回数・遮断器・LLM停止判定に数えない。
+- run.lock の再取得待ち（常駐は3秒）が切れた完了結果は `carry` に保持し、次の周回の終了時ロックで保存する。原文が変わった分と claim lease の残りが120秒を切った分は保存せず解放する。レーン3は患者コンテキスト作成の前に持ち越し分を先に保存する。
+- 2026-10-18の所有者機の実測: 2枠同時のデコードが平均約10 t/s、単独で58 t/s。ロック待ち切れで捨てていた完了結果が1日約136件。いずれも保証値ではない。
+- レビュー反映（7a37526c 後）: 持ち越し内容をログに出さない、持ち越し保存を保存した周回の件数・患者に計上、レーン3の周回前の持ち越し保存は短い待ちでロック中の結果を保持、更新検知時は旧コードで保存せず解放、GPUの番を取れても必要時間が残らなければ busy、admission の permit は busy を未送信として解放、semantic の形式probeは busy で plain を固定しない。
+- 根拠: mcs/core/local_llm.py、mcs/extract/v4/extract_llm.py、mcs/extract/patient_nightly.py、deployment/launchagents/ai.mcs.extract-drainer.plist、deployment/launchagents/ai.mcs.extract-drainer-2.plist、deployment/scripts/mcs_check.sh
+
+#### 処理待ちを次の実行時刻に合わせ、推論の計測を改善
+
+- 提案1（夜間 run.lock 待ち中の結果保持）: 部分採用。本体（同一 run_due 内の短い再取得ループ・BEGIN IMMEDIATE 下の再確認・推論中はロックなし）は hardening（1c55a151）で実装済みのため、残る2点だけ追加: 待ちループが admit() 偽（更新中・設定変更・回路・ディスク）で即終了し、deferred 結果に reason=run_lock と lock_wait_s、progressed/failed 結果に lock_wait_s を付ける。見送り: 呼出をまたぐ in-process 持ち越し（carry）は、run_due が呼出ごとに無状態で、snapshot/scan 署名・data_version・night_id・lane・rotation を呼出間で保持・再検証する状態と更新境界のフェンスを新設することになり、救える件数（run.lock が60秒超連続保持される頻度）が未測定のため。代替: lock_wait_s と reason=run_lock を nightly ログ行で集計し、60秒上限超過が常態なら上限を単位deadlineまで伸ばす（1行、既存テストの「61秒以下」は意図した要件変更として改訂）。レーン3の順序は不変。
+- 提案2（常駐の待機短縮）: 採用。pause(120)×2 と pause(min(300, next_retry)) の3箇所だけを、_next_due_in が返す次の将来 due 時刻（抽出再試行・fetch_jobs の semantic/extract_qc の next_try・レーン3の患者コンテキスト再試行）と持ち越し結果の有無で短縮する idle() に置換（下限5秒、上限は従来値）。期限超過で選ばれない行は短縮対象外、DB例外時は固定ポーリング。回路/ディスク・接続先停止(30)・ロック競合(5)・一時エラー(30)の待機は不変。レビュー修正: _next_retry に省略可能な after 引数を追加し、_next_due_in は将来の行だけから MIN を取る（期限切れで選ばれない行が後ろの将来 due を隠して固定120秒に戻る取りこぼしを解消。既定 None は tests/extract/test_retry_timestamp.py の契約を維持）。見送り分: レーン3 nightly の deferred（容量ゲート/ロック喪失）の早期起床、endpoint-down の30秒。計測: 各待機で標準出力に数値のみのJSON行 {idle_s, due_in_s, carried, ts}。全失敗分岐の次回再試行時刻も将来の行だけから求める（_next_retry(led, after=now)）。各待機は数値のみのJSON行 {idle_s, due_in_s, carried, ts} を標準出力に残す。
+- 提案3（プロンプト順序と prefix cache）: 部分採用。調査で通常・batch・nightly・semantic の各プロンプトは固定部先行を確認し、唯一可変先行だった分割片の修復問合せ（reference + _repair_prompt）だけを _REPAIR_HEAD 先頭・参考文脈は前回出力フェンスの後に組み替えた（_repair_prompt に reference 引数）。_llm_call_stats に cache_hit_ratio（Σcache_n/(Σcache_n+Σprompt_n)、両方報告した meta のみ、無ければ null）を追加。失効束縛（_context_contract は _PROMPT_HEAD と _SCHEMA のみ）に修復プロンプトは含まれず checkpoint は失効しない。見送り: 修復ヘッドへの _PROMPT_SPEC 共有は修復問合せごとに約5,400字増え、修復の出力契約を変える一方で省けるのは次の単発呼出の spec 分のみ（examples は再評価）で、CI の合成資産では品質影響を確認できないため。代替: lane 2 の pass で repairs が1以上の 行群の cache 比率が repairs が0の行群より 0.15 以上低く、かつ prompt_ms が LLM 時間の 1/3 超なら別項目として組み替える。_PROMPT_HEAD 全体の共有は slot context（16,384 token）超過の恐れがあるため採らない。
+- 提案4（LLM 呼出しの内訳）: 採用。_integrity_summary が first_calls/repair_calls/probe_runs/format_downgrades/repair_timings を返し、meta に repairs/repair_wins/length_resplits/checkpoint_reuses と固定9キーの修復理由ヒストグラム repair_issues（コードのみ、指摘文なし）を積み、_llm_call_stats は固定キー集合（未報告は null）、並列 run_pending の fan-out 前 probe は llm_calls.probe_runs に加算。calls == first_calls + repair_calls を維持。監査（cbcb35d3）で二重送信は未検出（carry→commit は推論なし、ロック喪失後の再実行は checkpoint から0呼出で復元、修復は拒否出力を載せた1回のみ）。見送り: 独立の resent カウンタ（行ごとに追加のDB読取りが要り、checkpoint_reuses が1以上 かつ calls==0 と run 単位の lock_lost/carried/deferred で既に観測可能）、後続のプロンプト/ルール修正と修復ヘッド組み替え（_PROMPT_HEAD/_SCHEMA 変更は全 checkpoint を失効させるため、受入済み200行以上の内訳を見てから）。
+- 提案5（-ub と背景並列のベンチ）: 採用（判定は測定窓待ち）。scripts/development/llm_lane_bench.sh を追加: --phase bench（llama-bench、サーバ停止中のみ。16GB機で同一モデルの二重ロードが swap するため）と --phase e2e（稼働中サーバのみ）を /slots 応答で相互に拒否、--i-stopped-the-workers と launchctl print 113 以外は fail-closed、合成プロンプト生成、数値のみの requests.jsonl/summary.json、稼働中サーバの実 argv（server_ub）で run を紐づけ、--report が複数 run を -ub×mode で集計して採用規則（baseline 512×serial に対し保存済み有効結果/時間が改善し、新着p95・JSON妥当性・timeout率・RSS/swap が悪化しない候補のみ条件成立、欠測は判定不可）を機械評価。llama-bench は --spec-type/-np を取れず候補絞込みにのみ使い、採用可否は e2e で決める。テストは dry-run・ガード・report のみ（実サーバに触れない）。本ワークフローではサービス停止もベンチ実行もしていない。decision: pending measurement window。
+- 提案6（タイムアウト後の slot 解放確認）: 採用。local_llm に SLOT_WAIT_MAX_S=10/SLOT_WAIT_POLL_S=0.5/SLOT_WAIT_IDLE_SAMPLES=2 と _wait_slot_idle を追加し、MCS_LLM_TURN_LOCK 設定下で id_slot が整数の送信済み要求が OSError（タイムアウト・切断）で失敗したときだけ、対象枠の is_processing=false を2回連続観測するまで（最長10秒・呼出元期限内）flock を保持してから解放。error_out に slot_wait_ms/slot_wait_confirmed、extract の integrity に待機があった行だけ slot_wait_ms/slot_wait_unconfirmed。admission の permit/reconcile は不変。部分採用の注記: 待機は呼出元 deadline で打ち切るため、semantic.llm_chat と run deadline で切られた抽出送信では待機0で終わり、効くのは extract の TIMEOUT 打ち切りと patient_nightly。slot_wait_ms=0 の件数でその頻度を測り、deadline を最大10秒超えて待つ案は別判断。未送信タイムアウト（unreachable）や非OSErrorでは待機しない。
+- 小さな整理（提案3の派生、候補選択の重複読取り）: 採用。run_due の候補集計をレーン毎の先頭候補1件（key・選択時 snapshot・progress）だけ保持する形にし、選択後の _snapshot/_pending 再読取りを除去（lane A は hydrate 読取りの source_sig が選択時と一致しなければ source_changed で終了）。complete/progressed/failed 結果に scanned/scan_ms を付ける。推論後の data_version・fresh snapshot・run lock・admit・BEGIN IMMEDIATE・署名比較は不変。見送り: 候補の事前フィルタ（messages に行版数が無く、PRAGMA data_version/total_changes は DB 全体単位で単位ごとに失効し、時刻だけの判定は禁止）。代替: scan_ms が lane 3 単位時間の大部分を占めると実測された場合のみ、PROGRESS meta に判定入力の署名 digest を保存して前回の pending を再利用する案を比較する。CodeRabbit指摘により、BEGIN IMMEDIATE 内で選択時の KIND/PROGRESS の最新 artifact_id も照合し、別のレーン3プロセスが先に保存した結果を古い入力で上書きしない（source_changed で次の単位に再選択）。
+- 計測の集約: nightly ログ行の lock_wait_s/reason/scanned/scan_ms、常駐の idle 行、llm_calls の内訳（repair_issues は固定9キーの件数のみ）と cache_hit_ratio、integrity の slot_wait_ms、ベンチの summary.json はいずれも数値のみで、本文・患者id・氏名・プロンプト本文を含まない。
+- 統合レビュー: probe_runsは形式検出処理1巡の回数でHTTP要求数ではない。cache_hit_ratioは同じ呼出でprompt_n/cache_nの両方を取得できた測定だけを合算。期限切れの送信でも呼出・slot待機の計測を残す。idleの連続観測は取消完了の証明ではなく、未確認時も期限内で待機を終える。
+- 根拠: mcs/core/local_llm.py、mcs/extract/patient_nightly.py、mcs/extract/v4/extract_llm.py、scripts/development/llm_lane_bench.sh、docs/development/DEVELOPMENT.md、tests/core/test_llm_research_p6_timeout_slot.py、tests/extract/test_llm_research_p1_nightly_keep.py、tests/extract/test_llm_research_p2_waits.py、tests/extract/test_llm_research_p3_prompt_cache.py、tests/extract/test_llm_research_p3b_pending_dedup.py、tests/extract/test_llm_research_p4_call_breakdown.py、tests/meta/test_llm_research_p5_ubatch_bench.py
+
+</details>
+
 ## [1.0.26] — 2026-10-18
 
 **患者の記録を読みやすく、Slackの原文表示と通知を改善**
