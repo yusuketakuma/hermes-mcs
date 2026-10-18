@@ -150,7 +150,9 @@ def test_days_window_is_not_cut_by_notify_max_age(led):
 def test_mine_without_a_name_asks_for_one(led):
     assert "名前" in notify_digest.view(led.db, {}, "mine", now=NOW)["error"]
     assert isinstance(notify_digest.parse_scope("days:²"), str)
-    assert isinstance(notify_digest.parse_scope("project:１"), str)
+    # IME full-width digits read as ASCII; other numeric forms stay invalid
+    assert notify_digest.parse_scope("project:１")["projects"] == [1]
+    assert isinstance(notify_digest.parse_scope("project:¹"), str)
 
 
 def test_parts_text_dialects():

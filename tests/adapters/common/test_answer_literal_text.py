@@ -33,7 +33,7 @@ def test_discord_list_and_tasks_escape_items_not_markup():
         "notes": ["> 引用"]}}
     out = text.view_answer(result, lambda pid: True)[0][0].split("\n")
     assert out == ["**🔎 a＿b**", "＃ 見出し", "■ ～～群～～",
-                   "・｜｜x｜｜ https://e.example/a_b", "＞ 引用"]
+                   "・｜｜x｜｜ https://e.example/a_b", "", "＞ 引用"]
     tasks = text.view_answer({"outcome": "applied", "action": "tasks", "tasks": [
         {"request_id": 1, "status": "open", "title": "[x](https://e.example)",
          "assignee": "**誰**"}]}, lambda pid: True)[0][0]

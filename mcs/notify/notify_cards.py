@@ -1847,7 +1847,8 @@ def _thread_name(db, card) -> str:
                        (card["root_message_id"],)).fetchone()
         if r:
             d = _mmdd(r["posted_at"])
-    if (not d or "?" in d) and isinstance(card["created_at"], (int, float)):
+    if (not d or "?" in d) and card["kind"] != "thread" \
+            and isinstance(card["created_at"], (int, float)):
         # signal cards have no root post: the day the card was made, in JST
         from datetime import datetime
         from mcs_queries import JST

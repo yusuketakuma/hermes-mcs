@@ -144,24 +144,28 @@ def context_list_blocks(view: dict, allowed) -> list | None:
             if group is not None:
                 blocks.append({"type": "divider"})
             group = item.get("group")
-            blocks.append({"type": "section", "text": {
-                "type": "mrkdwn", "text": f"*{escape(str(group or ''), quote=False)}*"}})
+            if group:   # an untitled group (timeline, replies) has no heading of its own
+                blocks.append({"type": "section", "text": {
+                    "type": "mrkdwn", "text": f"*{escape(str(group), quote=False)}*"}})
         quotes = "\n".join(str(q) for q in item.get("quotes") or [] if q)
         if quotes:
             blocks += _sections(quotes)
         if item.get("date") and item.get("url"):
-            # the date opens the patient's MCS room; the rest stays plain
+            # the date opens the MCS room; the rest is plain_text so * _ ~ ` stay literal
             link = str(item["url"])
             text = f"<{escape(link, quote=False)}|{escape(str(item['date']), quote=False)}>"
-            rest = str(item.get("source_rest") or "")
-            text += f" {escape(rest, quote=False)}" if rest else ""
-            blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": text[:_CONTEXT_MAX]}]})
+            rest = _contexts(str(item.get("source_rest") or ""))
+            elements = [{"type": "mrkdwn", "text": text[:_CONTEXT_MAX]}]
+            blocks.append({"type": "context", "elements": elements + (rest[0]["elements"] if rest else [])})
+            blocks += rest[1:]
         elif item.get("source"):
             blocks += _contexts(str(item["source"]))
     if not items:
         blocks += _sections(str(view.get("empty") or "該当なし"))
     notes = "\n".join(str(x) for x in view.get("notes") or [] if x)
     if notes:
+        if items:
+            blocks.append({"type": "divider"})   # status notes are not a source line of the last group
         blocks += _contexts(notes)
     return blocks if len(blocks) <= _ANSWER_BLOCKS else None
 

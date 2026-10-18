@@ -465,8 +465,9 @@ def unacked_view(db, transport, now=None, projects=None,
     current content carries no live acknowledgement, grouped by patient
     (oldest card's patient first, archived patients last), oldest first; assigned-but-unconfirmed
     cards are marked. Digest cards span projects and are left out.
-    On LINE WORKS and Slack the owner mention becomes the ``member_names`` name
-    or メンバー (``lineworks_member_names``), never the raw user id."""
+    On LINE WORKS the owner mention becomes the ``member_names`` name or
+    メンバー (``lineworks_member_names``); on Slack it is the bare user id,
+    never the mention syntax."""
     now = time.time() if now is None else now
     rows = db.execute(
         """SELECT c.*, t.owner, EXISTS (
@@ -510,8 +511,9 @@ def unacked_view(db, transport, now=None, projects=None,
             for r in meta["reactions"] or []))
         self_reacted += sum(1 for _, reactions in with_reactions if any(
             r["self_reacted"] for _, meta in reactions for r in meta["reactions"] or []))
-        unfetched += any(stamp_counts(meta) is None
-                         for _, reactions in with_reactions for _, meta in reactions)
+        # archived rooms' stamps are never fetched (same rule as the digest's stamp_states)
+        unfetched += pid not in archived and any(
+            stamp_counts(meta) is None for _, reactions in with_reactions for _, meta in reactions)
         for c, reactions in with_reactions:
             at = datetime.fromtimestamp(c["created_at"], JST)
             kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 アラート"
@@ -689,7 +691,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
             f"{len(meds) + len(unverified)}件"]
     if refs:
         head.append("辞書の候補はすべて未確認です")
-    if not active:
+    elif not active:
         # the reason needs cfg; without it the old generic wording stays
         head.append(_DICTIONARY_STATE[
             drug_map.active_dictionary(db, cfg)[1] if cfg is not None else "inactive"])
@@ -760,13 +762,19 @@ from patient_context_view import ROLE_LABELS as CONTEXT_ROLES  # noqa: E402 - on
 
 
 CONTEXT_PAGE_SIZE = 8
+DISCOVERY_LABELS = (("new_report", "新しい報告"), ("edited", "訂正された報告"),
+                    ("retrospective", "後から取得した記録"), ("backfill_found", "過去記録から追加発見"))
 _PARTICIPANTS_SHOWN = 4
 
 
 def _bare_quote(text: str, category) -> str:
     """The quote without its own heading when the group already shows it
-    (「服薬管理：…」 under ■ 服薬管理); the wording after the heading is kept."""
+    (「服薬管理：…」 under ■ 服薬管理); the wording after the heading is kept.
+    A sub-heading that says more than the group heading (残薬, 副作用歴) stays."""
+    heading = LABELS.get(category, (category,))[0]
     for label in sorted(LABELS.get(category, ()), key=len, reverse=True):
+        if not (label in heading or heading in label):
+            continue
         m = re.match(rf"\s*{re.escape(label)}\s*[:：]\s*", text)
         if m and text[m.end():].strip():
             return text[m.end():]
@@ -786,11 +794,22 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     def stamp(at):   # the day is enough to find the post; the year only when it is not this year
         return at.strftime("%m/%d" if at.year == year else "%Y/%m/%d")
 
-    def when(item):
+    def stamp_time(at):
+        return stamp(at) + at.strftime(" %H:%M")
+
+    def posted_at(item):   # the post time from posted_at_ts, else from an ISO 'at'; None when neither
         ts = item.get("posted_at_ts")
-        if not isinstance(ts, (int, float)):
-            return item.get("at") or "投稿日時未確認"
-        return stamp(datetime.fromtimestamp(ts, JST))
+        if isinstance(ts, (int, float)):
+            return datetime.fromtimestamp(ts, JST)
+        try:
+            at = datetime.fromisoformat(str(item.get("at")))
+        except ValueError:     # e.g. 「削除を確認 …」 passes through unchanged
+            return None
+        return at.astimezone(JST) if at.tzinfo else at
+
+    def when(item):
+        at = posted_at(item)
+        return stamp(at) if at else (item.get("at") or "投稿日時未確認")
 
     def posted(text):  # an ISO posted_at as stored, in the same short form
         try:
@@ -810,7 +829,7 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         rest = " ".join(v for v in (str(item.get("profession") or item.get("sender") or ""), where) if v)
         if item.get("event_date_text"):
             rest += f" · 出来事の記載: {item['event_date_text']}"
-        dated = isinstance(item.get("posted_at_ts"), (int, float))
+        dated = posted_at(item) is not None
         return when(item), rest, (room if dated and not karte else None)
 
     def add(items, group, category=None):
@@ -831,8 +850,8 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
                              **({"url": link} if link else {})})
 
     def add_deleted(items):
-        add([{"message_id": d["message_id"], "at": "削除を確認 " + datetime.fromtimestamp(
-            d["observed_at"], JST).strftime("%Y-%m-%d %H:%M")} for d in items], "削除された記録")
+        add([{"message_id": d["message_id"], "at": "削除を確認 " + stamp_time(datetime.fromtimestamp(
+            d["observed_at"], JST))} for d in items], "削除された記録")
 
     if section == "background":
         view = views.role_order(views.background(ev), role)
@@ -840,7 +859,8 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         for sentence in view["summary"]:
             add([facts[key] for key in sentence["fact_ids"] if key in facts], "夜間に整理した記録")
         for group in view["sections"]:
-            add(group["items"], LABELS.get(group["category"], (group["category"],))[0], group["category"])
+            add(group["items"], views.SECTION_LABELS.get(group["category"], (group["category"],))[0],
+                group["category"])
         # posters' own profession/name/organization, as recorded on their posts
         posters = views.participants(db, project_id)
         names = []
@@ -860,21 +880,23 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         head.append(order)
     elif section == "changes":
         view = views.changes(db, ev, since)
-        head.append("前回の表示依頼: " + (datetime.fromtimestamp(since, JST).strftime("%Y-%m-%d %H:%M") if since else "初回"))
-        for key, label in (("new_report", "新しい報告"), ("edited", "訂正された報告"),
-                           ("retrospective", "後から取得した記録"), ("backfill_found", "過去記録から追加発見")):
+        head.append("前回の表示依頼: " + (stamp_time(datetime.fromtimestamp(since, JST)) if since else "初回"))
+        for key, label in DISCOVERY_LABELS:
             add(view["by_discovery"].get(key, []), label)
         # a deleted post shows only when its deletion was observed, never its old text
         add_deleted(view["by_discovery"]["deleted"])
     elif section in ("previsit", "handoff"):
         view = views.previsit(db, ev, now) if section == "previsit" else views.handoff(db, ev)
-        for kind, items in view.get("recent", {}).items():
+        recent = view.get("recent", {})
+        labels = dict(DISCOVERY_LABELS)
+        for kind, items in recent.items():
             if kind == "deleted":
                 add_deleted(items)
             else:
-                add(items, "最近の記録")
+                add(items, labels.get(kind, "最近の記録"))
         add(view["written_checks"], "原文に書かれた確認事項")
-        add(view["unanswered"], "返答が見つからない記録")
+        # the heading already says 返答が見つからない; each row need not repeat it
+        add([{**r, "reply": None} for r in view["unanswered"]], "返答が見つからない記録")
         if view.get("next_planned"):
             head.append("記録上の予定: " + view["next_planned"])
     elif section == "discrepancies":
@@ -882,17 +904,24 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         for group in view["items"]:
             label = {"time_unknown": "時点未確認", "differing_records": "異なる記載", "change_over_time": "時点の異なる記載",
                      "provider_not_posting": "投稿者に見当たらない事業者の記載"}[group["kind"]]
+            if group["key"] in DETAIL_LABELS:   # which attribute (and drug/observation) differs
+                label += " — " + DETAIL_LABELS[group["key"]][0]
+                identity = "・".join(str(v) for v in group.get("identity") or [] if v)
+                label += f"（{identity}）" if identity else ""
             add(group["records"], label)
     elif section == "transition_course":
         view = views.transition_course(ev)
         for group in view["items"]:
-            add([group["anchor"]], "入退院・移行の記録")
-            add(group["nearby"], "前後14日の記録")
+            day = when(group["anchor"])
+            add(group.get("anchors") or [group["anchor"]], "入退院・移行の記録")
+            add(group["nearby"], f"{day}の前後14日の記録")
             if group["no_record"]:
-                head.append("この範囲で記載なし: " + "・".join(LABELS.get(k, (k,))[0] for k in group["no_record"]))
+                head.append(f"{day}の前後14日で記載なし: "
+                            + "・".join(views.SECTION_LABELS.get(k, (k,))[0] for k in group["no_record"]))
     else:
         view = views.replies(db, project_id) if section == "replies" else views.timeline(ev)
-        add(view["items"], CONTEXT_SECTIONS[section])
+        # one group whose heading would only repeat the view title
+        add(view["items"], "")
     for row in rows:
         row.pop("message_id", None)
         # text transports: the source rides at the end of the last quote line, not on a line of its own
@@ -902,7 +931,7 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     nightly = ev["coverage"].get("nightly") or {}
     status = []   # how complete the record is: kept, but below the records instead of above them
     if ev.get("as_of"):
-        status.append("夜間まとめの反映時点: " + datetime.fromtimestamp(ev["as_of"], JST).strftime("%Y-%m-%d %H:%M"))
+        status.append("夜間まとめの反映時点: " + stamp_time(datetime.fromtimestamp(ev["as_of"], JST)))
     status.append(_coverage_line(db, project_id))
     if nightly:
         status.append(f"取込済み {nightly.get('fetched', 0)}件 / 点検済み {nightly.get('analyzed', 0)}件 / 未点検 {nightly.get('unscanned', 0)}件 / 本文未取得・不完全 {nightly.get('incomplete', 0)}件")
@@ -912,10 +941,18 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             status.append(f"添付 {nightly['attachments']['count']}件（内容は未解析）")
     pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
-    title = f"{_patient_name(db, project_id)} — {CONTEXT_SECTIONS[section]}"
+    name = _inline(_patient_name(db, project_id), 30) or f"project {project_id}"
+    title = f"{name} — {CONTEXT_SECTIONS[section]}"
+    start = page * CONTEXT_PAGE_SIZE
+    shown = rows[start:start + CONTEXT_PAGE_SIZE]
     if pages > 1:
         title += f"（{page + 1}/{pages}ページ）"
+        head.append(f"全{len(rows)}件中 {start + 1}〜{start + len(shown)}件目")
+        # a group carried over from the previous page says so in its heading
+        carried = rows[start - 1]["group"] if start else None
+        shown = [{**row, "group": f"{row['group']}（続き）"} if carried and row["group"] == carried else row
+                 for row in shown]
     return {"title": title, "layout": "patient_context", "head": head,
-            "items": rows[page * CONTEXT_PAGE_SIZE:(page + 1) * CONTEXT_PAGE_SIZE],
+            "items": shown,
             "notes": list(view.get("notes", [])) + status, "empty": "この範囲で該当する記録は見つかりません",
             "page": page, "pages": pages}

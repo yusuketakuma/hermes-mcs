@@ -29,7 +29,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
-from clinical_values import FAMILY_PERSON, OTHER_PERSON, PAST_MARK, STAFF_PERSON
+from clinical_values import CARE_WORKER, FAMILY_PERSON, OTHER_PERSON, PAST_MARK, STAFF_PERSON
 from patient_context import extract_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import ELIGIBLE_MESSAGE
@@ -63,7 +63,8 @@ _SYMPTOM_NEGATION = re.compile(
     r"(?:なし|無し|なく|無く|ありません|ない|認めず|認めない|認めません|認められず|認められない|認められません"
     r"|見られず|見られない|見られません|見当たらない"
     r"|否定(?!でき|しきれ|し(?:難|がた|ない|ません)|されない|されず)|[(（][-−－][)）])"
-    r"(?!(?:では|じゃ)(?:ない|ありません)|わけ(?:では|じゃ)(?:ない|ありません))")
+    # 「なくはない」「なくもない」 negate the negation: the symptom stays
+    r"(?!(?:では|じゃ)(?:ない|ありません)|わけ(?:では|じゃ)(?:ない|ありません)|[はも](?:ない|ありません))")
 _ADHERENCE = ("残薬", "飲み忘れ", "飲み残し", "未使用", "服薬不良",
               "アドヒアランス", "一包化", "お薬カレンダー", "自己注射",
               "残あり", "残なし")
@@ -217,6 +218,9 @@ def _scope_events(body, patient_name, provider_fields):
         # A report-source heading is not the clinical subject below it.
         if re.fullmatch(rf"(?:{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:から|より)", label):
             continue
+        # 【ヘルパー報告】: a staff report heading names its writer, not the subject.
+        if re.fullmatch(rf"(?:{STAFF_PERSON})(?:から|より)?の?(?:報告|記録|連絡|申し送り)", label):
+            continue
         if re.fullmatch(rf"{_COMPOUND_PERSON}|{_NAMED_PERSON}", label):
             events.append((match.start(), _person_scope(label, patient_name), None))
         elif re.search(_OTHER_PERSON, label):
@@ -246,6 +250,14 @@ def _scope_events(body, patient_name, provider_fields):
             after = body[tail:stops[k] if k < len(stops) else len(body)]
             if _CLINICAL_RECIPIENT.search(before) and not re.search(r"自身|自分", after):
                 continue  # A prescribing/measuring clinician is the actor, not the recipient.
+        # 「ヘルパーが入浴介助」: a care worker is the subject only as a value's owner (の体温/は体温).
+        # 「ヘルパーが体温測定」: the measurer is the actor, as with 本人に対し…を測定 above.
+        if re.fullmatch(CARE_WORKER, person) and (
+                (not match["link"].startswith("の")
+                 and not re.match(rf"[ \t　]*(?:{_CLINICAL_OWNER})", body[match.end():], re.I))
+                or (match["link"] == "が" and re.match(r"[^。！？!?;；\n]*?(?:測定|測っ|測り|計測|検温)", body[match.end():])
+                    and not re.match(r"[^。！？!?;；\n]*?(?:自身|自分)", body[match.end():]))):
+            continue
         subject = _person_scope(person, patient_name)
         events.append((match.start(), subject, None))
     return tuple(sorted(events, key=lambda event: event[0]))
@@ -681,7 +693,7 @@ def extract_message(body: str, posted_at: str) -> dict:
     # --- symptoms / adherence flags ---
     # A symptom counts when at least one mention is not directly negated (発熱なし, 吐き気は見られません).
     sym = [s for s in _SYMPTOMS
-           if any(not _SYMPTOM_NEGATION.match(body, m.end()) for m in re.finditer(re.escape(s), body))]
+           if any(not _SYMPTOM_NEGATION.match(body, m.end()) for m in re.finditer(re.escape(s) + ("(?!定)" if s == "不安" else ""), body))]
     if sym:
         out["symptoms"] = sym
     adh = [s for s in _ADHERENCE if s in body]

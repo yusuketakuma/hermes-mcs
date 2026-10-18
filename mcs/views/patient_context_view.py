@@ -10,6 +10,7 @@ reorders sections.
 from datetime import timedelta
 import re
 
+from patient_context import LABELS
 from read_model import read_model
 
 # One source for every role surface (CLI --role, chat 表示順 buttons): labels and order only,
@@ -49,6 +50,14 @@ _ROLE_OF_PROFESSION = (("看護", "nurse"), ("歯科", "dental"), ("医師", "ph
                        ("ヘルパー", "helper"), ("訪問介護", "helper"), ("介護福祉", "helper"),
                        ("理学", "rehab"), ("作業療法", "rehab"), ("言語", "rehab"), ("リハ", "rehab"),
                        ("栄養", "nutrition"), ("施設", "facility"), ("通所", "facility"), ("デイ", "facility"))
+# medication/symptom mentions are view-only groups (not extraction categories): their headings,
+# ordered right after 服薬管理; every heading and the fixed section order read SECTION_LABELS
+MENTION_LABELS = {"medications": ("薬剤の記載",), "symptoms": ("症状の記載",)}
+SECTION_LABELS = {}
+for _c, _labels in LABELS.items():
+    SECTION_LABELS[_c] = _labels
+    if _c == "medication_management":
+        SECTION_LABELS.update(MENTION_LABELS)
 _ORG_WORD = re.compile(r"事業所|ステーション|クリニック|薬局|病院|医院|診療所|センター|施設|居宅|訪問看護|訪問介護|デイ")
 
 
@@ -324,7 +333,9 @@ def discrepancies(ev, posters=None) -> dict:
     orgs = {s.strip() for w in posters or [] for s in (w.get("organization") or "").split(",") if s.strip()}
     for item in ev["items"] if orgs else []:
         text = item.get("text") or ""
-        if item["category"] == "care_team" and _ORG_WORD.search(text) and not any(o in text for o in orgs):
+        # each written provider separately: one posting organization does not cover the others
+        written = [s for s in re.split(r"[、,，／/\n]", text) if _ORG_WORD.search(s)]
+        if item["category"] == "care_team" and any(not any(o in s for o in orgs) for s in written):
             out.append({"category": "care_team", "subject": item["subject"], "key": "organization", "identity": [],
                         "kind": "provider_not_posting", "records": [{**item, "value": text}]})
     return {"view": "discrepancies", "items": out}
@@ -347,15 +358,19 @@ def search(db, project_id, query) -> dict:
 def transition_course(ev) -> dict:
     """退院・移行時の経過: items within 14 days of a written admission/discharge and the
     categories with no record in that window (absence of a record, not of care)."""
-    anchors = [i for i in ev["items"] if _TRANSITION.search(i["text"] or "")
-               and isinstance(i["posted_at_ts"], (int, float))]
+    by_post = {}  # one group per post: its matching items share one window and one no_record line
+    for i in ev["items"]:
+        if _TRANSITION.search(i["text"] or "") and isinstance(i["posted_at_ts"], (int, float)):
+            by_post.setdefault(i["message_id"] if i["message_id"] is not None else id(i), []).append(i)
     out = []
-    for anchor in anchors:
+    for anchors in by_post.values():
+        anchor = anchors[0]
         near = [i for i in ev["items"] if isinstance(i["posted_at_ts"], (int, float))
-                and abs(i["posted_at_ts"] - anchor["posted_at_ts"]) <= _WINDOW and i is not anchor]
-        out.append({"anchor": anchor, "nearby": near,
+                and abs(i["posted_at_ts"] - anchor["posted_at_ts"]) <= _WINDOW
+                and not any(i is a for a in anchors)]
+        out.append({"anchor": anchor, "anchors": anchors, "nearby": near,
                     "no_record": sorted({"medication_management", "adl", "care_services", "followup"}
-                                        - {i["category"] for i in near})})
+                                        - {i["category"] for i in near + anchors})})
     return {"view": "transition_course", "items": out}
 
 
@@ -363,9 +378,8 @@ def role_order(view, role) -> dict:
     """職種に合う並び順: reorders background sections only; never adds or removes content.
     The role's categories come first; the rest (and the standard view) follow the fixed
     category order, so 病名・既往 never sink below whatever was posted last."""
-    from patient_context import LABELS
     first = ROLE_ORDER.get(role, ())
     rank = {c: n for n, c in enumerate(first)}
-    base = {c: n for n, c in enumerate(LABELS)}
+    base = {c: n for n, c in enumerate(SECTION_LABELS)}
     return {**view, "sections": sorted(view["sections"], key=lambda s: (
         rank.get(s["category"], len(first)), base.get(s["category"], len(base))))}
