@@ -1714,6 +1714,7 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
     is written by the caller once the batch is consumed."""
     now = time.time()
     scope = ("" if archived else "NOT ") + _ARCHIVED_JOB
+    turn_key = "archived_turn" if archived else "turn"
     kind_ph = ",".join("?" * len(kinds))
     eligible = ("json_valid(payload) "
                 "AND COALESCE(json_extract(payload,'$.eligible'),0)=1")
@@ -1739,7 +1740,7 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
                 # an absent marker keeps arrival first (its ordinary
                 # priority), so backfill wins the SECOND contention.
                 turn_next = ("arrival"
-                             if _sched_state(ledger).get("turn")
+                             if _sched_state(ledger).get(turn_key)
                              != "arrival" else "backfill")
                 share = 1 if turn_next == "backfill" else 0
             else:
@@ -1762,7 +1763,7 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
         AND NOT ({eligible}) AND {scope}
       ORDER BY {order} LIMIT ?
     """, (now, *kinds, JOB_KIND, share)).fetchall() if share else []
-    mutation = {"turn": turn_next}
+    mutation = {"turn": turn_next, "turn_key": turn_key}
     contested = arrivals or backfill
     if turn_next and contested:
         mutation["turn_job_id"] = contested[0]["job_id"]
@@ -2039,7 +2040,7 @@ def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
         if selected["qc"]:
             sched["qc_last_served_at"] = time.time()
         if sched_mut.get("turn") and sched_mut.get("turn_consumed"):
-            sched["turn"] = sched_mut["turn"]
+            sched[sched_mut.get("turn_key", "turn")] = sched_mut["turn"]
         if long_seen or long_defers:
             _merge_long_defers(ledger, sched, long_seen or {})
         _sched_write(ledger, sched)

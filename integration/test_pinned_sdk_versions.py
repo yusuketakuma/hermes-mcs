@@ -29,6 +29,20 @@ def _pin(requirement):
     return name.split("[", 1)[0], version
 
 
+CORE_PINS = ("cryptography", "pyjwt")
+
+
+def _core_pins(dependencies):
+    """Security-critical core pins, found by normalized name so no spelling skips them."""
+    def name(requirement):
+        return re.split(r"[\[=<>!~\s]", requirement, maxsplit=1)[0].lower()
+
+    pins = [r.split(";", 1)[0].strip() for r in dependencies]
+    pins = [r for r in pins if name(r) in CORE_PINS]
+    assert sorted({name(r) for r in pins}) == sorted(CORE_PINS), pins
+    return pins
+
+
 def test_actual_distribution_versions_match_lane(lane, request):
     if lane == "standalone":
         requirements = []
@@ -53,8 +67,7 @@ def test_actual_distribution_versions_match_lane(lane, request):
         data = tomllib.loads(Path(project).read_text())
         requirements = data["project"]["optional-dependencies"]["messaging"]
         # Security-critical core pins apply on the lane's required Python 3.14.
-        requirements += [r.split(";", 1)[0].strip() for r in data["project"]["dependencies"]
-                         if r.startswith(("PyJWT[", "cryptography=="))]
+        requirements += _core_pins(data["project"]["dependencies"])
         # Hermes moved its dev tooling from an extra to a PEP 735 group.
         requirements += [r for r in data["dependency-groups"]["dev"]
                          if r.startswith(("pytest==", "mcp=="))]

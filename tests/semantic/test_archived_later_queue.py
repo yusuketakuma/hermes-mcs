@@ -169,10 +169,51 @@ def test_archived_single_slot_turn_survives_empty_active_pass_and_reopen(led):
             assert [r["message_id"] for r in due] == [10 if expected == "arrival" else 11]
             assert (len(arrivals), len(backfill)) == ((1, 0) if expected == "arrival" else (0, 1))
             assert mutation["turn"] == expected
-            semantic_drain._sched_write(store, mutation)
+            state = semantic_drain._sched_state(store)
+            state[mutation["turn_key"]] = mutation["turn"]
+            semantic_drain._sched_write(store, state)
             store.close()
             store = Ledger(path)
-            assert semantic_drain._sched_state(store)["turn"] == expected
+            assert semantic_drain._sched_state(store)["archived_turn"] == expected
+            assert "turn" not in semantic_drain._sched_state(store)
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("first_pid, second_pid", [(1, 2), (2, 1)])
+def test_patient_classes_keep_independent_turns_after_real_drain_and_reopen(
+        led, first_pid, second_pid):
+    def seed_pair(store, pid, mid):
+        _patient(store, pid)
+        with store.db:
+            store.db.execute("UPDATE patients SET is_archived=0 WHERE project_id=?", (pid,))
+        store.save_messages([_message(mid=mid, project_id=pid, body=BODY, unread=True)],
+                            project_id=pid, semantic=True, notify={"source": "unread"})
+        store.save_messages([_message(mid=mid + 1, project_id=pid, body=BODY)],
+                            project_id=pid, semantic=True)
+        if pid == 1:
+            with store.db:
+                store.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+
+    def drain(store):
+        result = {"errors": []}
+        out = semantic.run_due(store, _cfg("shadow", budget=100000), result,
+                               time.monotonic() + 300, jev_client=_FakeJev(),
+                               llm_fn=_llm, max_jobs=1)
+        assert out["done"] == 1 and not out["failed"] and not result["errors"]
+        return out["lanes"]
+
+    seed_pair(led, first_pid, 30)
+    assert drain(led) == {"arrival": 1, "backfill": 0}
+    assert drain(led) == {"arrival": 0, "backfill": 1}
+    path = led.db.execute("PRAGMA database_list").fetchone()[2]
+    led.close()
+    store = Ledger(path)
+    try:
+        seed_pair(store, second_pid, 40)
+        assert drain(store) == {"arrival": 1, "backfill": 0}
+        sched = semantic_drain._sched_state(store)
+        assert sched["turn"] == sched["archived_turn"] == "arrival"
     finally:
         store.close()
 
@@ -262,4 +303,5 @@ def test_fairness_turn_changes_only_when_its_contested_job_is_served(
     assert out["lock_skipped"].get(semantic_drain.JOB_KIND, 0) == (0 if archive_held else 1)
     sched = semantic_drain._sched_state(led)
     assert sched["arrival_selected"] == done and sched["backfill_selected"] == 0
-    assert sched.get("turn") == expected_turn
+    assert sched.get("archived_turn" if mixed else "turn") == expected_turn
+    assert sched.get("turn" if mixed else "archived_turn") is None

@@ -55,3 +55,36 @@ def test_optional_sdk_module_can_collect_without_python311_tomllib(monkeypatch):
         "sdk_optional_lane", ROOT / "integration/test_pinned_sdk_versions.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+
+
+def _sdk_lane_module():
+    spec = importlib.util.spec_from_file_location(
+        "sdk_pinned_versions", ROOT / "integration/test_pinned_sdk_versions.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_core_pins_are_found_by_normalized_name():
+    module = _sdk_lane_module()
+    dependencies = [
+        "requests==2.32.5",
+        'pyjwt[crypto]==2.10.1; python_version >= "3.14"',
+        "Cryptography==46.0.1",
+    ]
+    pins = module._core_pins(dependencies)
+    assert pins == ["pyjwt[crypto]==2.10.1", "Cryptography==46.0.1"]
+    # The exact pinned version reaches the distribution comparison unchanged.
+    assert [module._pin(pin) for pin in pins] == [("pyjwt", "2.10.1"), ("Cryptography", "46.0.1")]
+    assert module._pin("PyJWT==9.9.9") == ("PyJWT", "9.9.9")
+
+
+@pytest.mark.parametrize("dependencies", [
+    ["PyJWT==2.10.1"],
+    ["cryptography==46.0.1", "pyjwt-stub==1.0"],
+    [],
+])
+def test_core_pins_require_both_packages(dependencies):
+    module = _sdk_lane_module()
+    with pytest.raises(AssertionError):
+        module._core_pins(dependencies)

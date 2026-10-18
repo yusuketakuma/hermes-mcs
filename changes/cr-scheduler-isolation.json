@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "患者区分ごとに解析の処理順を保持",
+  "summary": "アーカイブ済み患者の解析が、アクティブ患者の新着・過去記録の交互処理順に影響する問題を修正します。区分ごとに処理順を保存し、再起動後も保持します。",
+  "upgrade": "稼働中の解析workerへ新しいコードを反映してください。既存のアクティブ患者の処理順を保持し、アーカイブ済み患者の交互順は最初の競合から独立して記録します。処理枠・モデル・抽出世代・DB schemaは変わりません。",
+  "details": [
+    "既存のsemantic_sched行内でactiveのturnとarchived_turnを分離する。実際に実行された対象ジョブのturn_job_id・消費状態に対応する区分だけを保存する。",
+    "active→archivedとarchived→activeの両方向を、実run_dueとDB再オープンで検証する。ロック等で実行されなかった候補では処理順を更新しない。",
+    "実SDKレーンのPyJWT・cryptography検査は依存名の表記を正規化し、どちらかが検出されない場合も失敗させる。製品の依存固定値は変更しない。"
+  ],
+  "refs": ["mcs/semantic/semantic_drain.py", "tests/semantic/test_archived_later_queue.py", "integration/test_pinned_sdk_versions.py", "tests/meta/test_sdk_ci_lanes.py"]
+}
