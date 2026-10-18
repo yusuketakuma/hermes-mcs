@@ -5266,16 +5266,22 @@ def _background_nightly(ledger, held, initial_state, stop=None):
                 or busy.get(local_llm.REALTIME_SLOT) is not False):
             return False
         from semantic_policy import JOB_KIND, QC_JOB_KIND, semantic_config
-        if semantic_config(current)[1]:
+        scfg, errors = semantic_config(current)
+        if errors:
             return False
         admitted = legacy_admissions(ledger, current)
         if _select_pending(ledger, 1, admitted, None, False)[0]:
             return False
-        # Match semantic/QC eligibility: future retries do not consume idle
-        # capacity, but become higher priority as soon as their backoff ends.
+        if scfg["mode"] == "off":
+            return True
+        # The resident creates a Jev client only with a positive budget.
+        qc_active = (scfg["extract_qc"] == "annotate"
+                     and scfg["daily_request_budget"] > 0)
+        # Enabled jobs take priority as soon as their backoff ends.
         return ledger.db.execute(
             "SELECT 1 FROM fetch_jobs WHERE state='pending' AND next_try<=? "
-            "AND kind IN (?,?) LIMIT 1", (time.time(), JOB_KIND, QC_JOB_KIND)).fetchone() is None
+            "AND (kind=? OR (kind=? AND ?)) LIMIT 1",
+            (time.time(), JOB_KIND, QC_JOB_KIND, qc_active)).fetchone() is None
 
     try:
         if not admit():

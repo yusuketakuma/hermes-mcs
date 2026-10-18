@@ -92,21 +92,42 @@ def test_capacity_gates(capacity, monkeypatch, gate):
 
 @pytest.mark.parametrize("kind", ["semantic", "extract_qc"])
 @pytest.mark.parametrize("delay", [-1, 0, 60])
-def test_only_due_jobs_block_nightly(capacity, monkeypatch, kind, delay):
+@pytest.mark.parametrize("mode", ["off", "shadow"])
+@pytest.mark.parametrize("qc", ["off", "annotate"])
+@pytest.mark.parametrize("budget", [0, 10])
+def test_only_enabled_due_jobs_block_nightly(
+        capacity, monkeypatch, kind, delay, mode, qc, budget):
     now = [1000.0]
     monkeypatch.setattr(worker.time, "time", lambda: now[0])
-    capacity[0].db.execute(
+    capacity[1]["semantic"] = {"mode": mode, "project_ids": None,
+                               "extract_qc": qc, "daily_request_budget": budget}
+    db = capacity[0].db
+    db.execute(
         "INSERT INTO fetch_jobs(kind,state,next_try,created_at,updated_at) VALUES(?,'pending',?,0,0)",
         (kind, now[0] + delay))
+    before = tuple(db.execute("SELECT * FROM fetch_jobs").fetchone())
+    enabled = mode != "off" and (
+        kind == "semantic" or (qc == "annotate" and budget > 0))
     result = run(capacity)
-    if delay <= 0:
+    if enabled and delay <= 0:
         assert result["status"] == "deferred"
         assert not capacity[3]
     else:
         assert result["done"] == 1
-        now[0] += delay
-        # A retry becoming due during inference also prevents publication.
-        assert not capacity[3][0]()
+        now[0] += max(delay, 0)
+        # Becoming due during inference blocks publication only while enabled.
+        assert capacity[3][0]() == (not enabled)
+    assert tuple(db.execute("SELECT * FROM fetch_jobs").fetchone()) == before
+
+
+@pytest.mark.parametrize("semantic", [
+    [], {"mode": "invalid"}, {"mode": "off", "daily_request_budget": "10"},
+])
+def test_invalid_semantic_config_never_admits_nightly(capacity, monkeypatch, semantic):
+    capacity[1]["semantic"] = semantic
+    monkeypatch.setattr(worker, "_select_pending", lambda *a: pytest.fail("invalid config"))
+    assert run(capacity)["status"] == "deferred"
+    assert not capacity[3]
 
 
 def test_failure_isolated_and_no_sensitive_error(capacity, monkeypatch):
