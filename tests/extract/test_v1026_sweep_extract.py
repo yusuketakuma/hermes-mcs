@@ -26,7 +26,6 @@ def test_care_worker_visit_report_keeps_patient_vitals(body, vitals):
     "ヘルパーの体温38.5℃",
     "介護職員 体温38.4℃",
     "ヘルパーが自身の体温を測定。体温38.5℃。",
-    "介護士が自分の血圧を測定。血圧150/90。",
     "ヘルパーが昨日発熱。体温38.5℃。",
     "ヘルパーは風邪で欠勤。体温38.5℃。",
     "ヘルパーが発熱のため体温を測定。体温38.5℃。",
@@ -38,6 +37,12 @@ def test_care_worker_owned_value_stays_other(body):
     doc = extract.extract_message(body, POSTED)
     assert "vitals" not in doc
     assert {m["scope"] for m in doc["vital_mentions"]} == {"other"}
+
+
+def test_care_worker_reflexive_keeps_unknown_scope_without_patient_values():
+    doc = extract.extract_message("介護士が自分の血圧を測定。血圧150/90。", POSTED)
+    assert "vitals" not in doc
+    assert {m["scope"] for m in doc["vital_mentions"]} == {"unknown"}
 
 
 @pytest.mark.parametrize("body, expected", [
