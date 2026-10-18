@@ -1,14 +1,32 @@
 # 開発・運用リファレンス — hermes-mcs
 
-現在の開発順序は[ROADMAP](../ROADMAP.md)、1.0.23候補の実装・未検証事項は[受入票](acceptance/ACCEPTANCE_1.0.23.md)で追跡する。
-過去1.0.13の開発・受入項目は[旧計画](plans/RELEASE_1.0.13.md)に保持する。
+開発計画は[ROADMAP](../ROADMAP.md)の基準版・日付を確認し、版ごとの実装・未検証事項は[リリース記録](../releases/README.md)で追跡する。
 統一入口は[共通CLI](../../mcs/ops/mcs_cli.py)。導入する版の手順はCHANGELOGと導入ガイドを参照し、実装・合成検証と実機・実API・人手の受入を区別する。
 
 開発者・運用担当者向けの詳細リファレンス。
-1.0.14〜1.0.15の監査記録はgit履歴に移しました。取り出し方は[監査記録](AUDITS.md)を参照。
+1.0.14〜1.0.15の監査記録はgit履歴に移しました。取り出し方は[監査記録](../releases/archive/AUDITS.md)を参照。
 利用者向けの概要は [README.md](../../README.md)、画面イメージ・データ解説は [USER_GUIDE.md](../guides/USER_GUIDE.md)、導入は [INSTALLATION.md](../guides/INSTALLATION.md) を参照。
 
 ## 構成
+
+### 目的からコードと資料を探す
+
+| 目的 | 配置と境界 |
+|---|---|
+| 収集・保存・解析・表示 | `mcs/`。`core/` は保存と共通基盤、`ingest/` は収集、`extract/` は抽出、`semantic/` は意味解析、`notify/` は通知の組立て、`views/` は読取り表示、`ops/` は管理操作 |
+| 通知先への接続 | `adapters/{slack,discord,lineworks}/` と共通の `adapters/common/`。Hermes接続の入口は `hermes_plugin/`、独立hostは `mcs_standalone/`、LINE WORKSの互換CLI入口は `lineworks_adapter/` |
+| 導入・常駐・復旧 | 入口は `install.sh` と `scripts/mcs`。`deployment/launchagents/` は常駐設定、`deployment/scripts/` は定期実行wrapper、`deployment/recovery/` はcheckout外へ配置する復旧ツール |
+| 開発用の生成・検査 | `scripts/development/` は文書・画面・リリース記録などの生成器。`ci/` は安全ゲートと事故記録の回帰対応、`.github/workflows/` はCI・リリース連携 |
+| 合成テスト | `tests/` は実装領域に対応し、共通ヘルパーは `tests/support/`、固定の入力は `tests/fixtures/`。実SDKとの契約確認は `integration/` で別に実行 |
+| 評価のコードと入力 | 評価器は `mcs/extract/eval/`・`mcs/semantic/eval/`、固定の評価基準・合成資産は `evaluation/`。定期処理と評価実行を分ける |
+| 配布する公開原本 | `resources/drug-master/`。公式原本と出典・版・hashを保持し、本番の私有辞書やテストfixtureと混ぜない |
+| 現在の手順と契約 | `docs/guides/` は操作、`docs/specs/` は契約、`docs/development/` は開発手順。入口は[文書の索引](../README.md) |
+| 計画と履歴 | `docs/ROADMAP.md`・`docs/roadmap/` は基準日付きの計画。版ごとの受入・計画・画像は `docs/releases/v版番号/`、版横断の事故証跡は `docs/dev-records/` |
+| 変更の記録 | `changes/` は未リリースの変更記録、`changes/archive/` は生成後の履歴。利用者向けの正本はルートの `CHANGELOG.md` |
+
+ルートの `Makefile`・`pyproject.toml`・`conftest.py` は共通の開発・検証設定、`AGENTS.md`・`SECURITY.md` は作業と安全の制約です。コード移動時は、CLI・pluginの入口、導入先、生成器、テストと文書参照を一緒に確認します。
+
+`mcs/_mcs_path.py` による既存のflat importを維持します。旧抽出世代 `v2/`・`v3/` は説明のみで、残存コードを実行対象へ戻しません。更新用コードと独立した復旧ツールの共通処理は、checkoutが壊れた場合にも復旧できるよう各配置先に保持し、対応テストで一致を確認します。
 
 ### モジュール一覧（自動生成）
 

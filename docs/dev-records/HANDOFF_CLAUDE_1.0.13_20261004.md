@@ -251,7 +251,7 @@ LSPのflat import/generic既存診断・JSON Biome未導入を成功扱いにし
 ## 引継ぎ後の完了状況（Claude Code、2026-10-05）
 
 未完16項目はローカル実装・合成検証の範囲で完了した。外部条件は
-[開発・受入計画](../development/plans/RELEASE_1.0.13.md)§6、経過は
+[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)§6、経過は
 [全体レビュー記録](stability-1.0.13-20261004.md)の末尾2節に記録した。
 
 | 項目 | 到達点 |

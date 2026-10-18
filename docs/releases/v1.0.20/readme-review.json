@@ -89,7 +89,7 @@
         "mcs/semantic/eval/semantic_bench.py",
         "mcs/semantic/eval/semantic_v4_cohort.py",
         "mcs/ops/semantic_observe.py",
-        "docs/development/acceptance/ACCEPTANCE_1.0.20.md"
+        "docs/releases/v1.0.20/ACCEPTANCE_1.0.20.md"
       ]
     }
   }
