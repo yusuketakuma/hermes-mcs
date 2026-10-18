@@ -768,6 +768,9 @@ def _init_env(monkeypatch, tmp_path, cfg):
     # HOME rewrote the live gateway LaunchAgent on 2026-10-04.
     monkeypatch.setattr(mcs_setup, "_sync_gateway", lambda *a, **k: 0)
     monkeypatch.setattr(mcs_setup, "load_config", lambda: dict(cfg))
+    # the dictionary step reads a bundle: generic init tests get none (skipped)
+    import mcs_drug
+    monkeypatch.setattr(mcs_drug, "BUNDLE", tmp_path / "no-bundle")
 
 
 def test_init_set_flag_covers_any_key(monkeypatch, tmp_path):

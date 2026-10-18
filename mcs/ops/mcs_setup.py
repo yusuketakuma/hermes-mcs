@@ -1328,6 +1328,67 @@ def _wizard(cfg: dict):
             _set_key(cfg, key,
                      _ask(key, kind, default, desc, _get_key(cfg, key),
                           _has_key(cfg, key)))
+    _wizard_drug_map(cfg, step + 1)
+
+
+def _wizard_drug_map(cfg: dict, step: int) -> None:
+    """Offer the bundled official medicine master as the matching dictionary
+    (default: yes). Every operator input is shown and taken only from a real
+    answer; EOF/Ctrl+C abort init like any other item. An existing `drug_map`
+    pin is never touched, and a held or failed conversion leaves cfg as is."""
+    if cfg.get("drug_map") is not None:
+        return
+    from datetime import date
+    from types import SimpleNamespace
+    import mcs_drug
+    try:
+        manifest, _ = mcs_drug._bundle(mcs_drug.BUNDLE)
+    except (ValueError, OSError):
+        print(f"\n【手順 {step}】医薬品辞書\n  同梱の公式医薬品マスターを読めないため、辞書の設定は省略します。")
+        return
+    print(f"\n【手順 {step}】医薬品辞書（同梱の公式医薬品マスターで薬剤名を照合）"
+          f"\n  同梱の公式医薬品マスター（版 {manifest['edition']}）から私有辞書を作成し、"
+          "投稿に書かれた薬剤名を辞書と照合して候補を表示します。"
+          "\n  利用条件の確認と採用の承認は運用者の入力として記録します。自動では埋めません。"
+          f"\n  利用条件: {manifest['terms']['url']}")
+    if not _ask("drug_map.bundled", "bool", True,
+                "同梱の公式医薬品マスターで薬剤名を照合する", None):
+        print("  辞書は設定しません。後から mcs_drug.py install-bundled と init --set drug_map=... で設定できます。")
+        return
+    today = date.today()
+    while True:
+        checked = _ask("drug_map.terms_checked_on", "req", today.isoformat(),
+                       "利用条件を確認した日（YYYY-MM-DD・Enter で今日）", None)
+        try:
+            if date.fromisoformat(checked) <= today:
+                break
+        except ValueError:
+            pass
+        print("    YYYY-MM-DD 形式で、今日以前の日付を入力してください")
+    print("  採用方針（install-bundled と同じ）: 変更区分 0/3/5 の行だけを候補にし、抹消 1・廃止 9 と"
+          "\n    収載日・変更日が今日より後の行は除外します。終了日 0・廃止日 99999999 は期限なしです。"
+          "\n    辞書は薬剤名の照合候補を示すだけで、成分や治療上の同等性は確定しません。")
+    confirmed = _ask("drug_map.confirmed_by", "req", cfg.get("mcs_login_id"),
+                     "利用条件と採用方針を確認した人（氏名またはID・表示の値は Enter で採用）", None)
+    approve = _ask("drug_map.approve", "bool", True,
+                   f"辞書の照合を有効にする（承認者として「{confirmed}」を記録。いいえなら参照のみで照合しない）",
+                   None)
+    args = SimpleNamespace(terms_checked_on=checked, confirmed_by=confirmed,
+                           approved_by=confirmed if approve else None, terms_record=None)
+    try:
+        out = mcs_drug.install_bundled(args, directory=mcs_drug.BUNDLE, home=HOME)
+    except (ValueError, OSError) as error:
+        print(f"  辞書を作成できませんでした（{error}）。照合は有効になっていません。"
+              "\n  設定は変更せず続行します。原因を確認してから mcs_drug.py install-bundled で再作成してください。")
+        return
+    if out["path"] is None:
+        print(f"  辞書の作成を保留しました（{out['held']}）。照合は有効になっていません。"
+              "\n  設定は変更せず続行します。保留理由を解消してから mcs_drug.py install-bundled で再作成してください。")
+        return
+    cfg["drug_map"] = {"path": out["path"], "sha256": out["sha256"]}
+    print(f"  辞書を{'作成' if out['state'] == 'written' else '再利用'}しました: {out['path']}（{out['entries']}件）"
+          + ("。照合は定期処理で有効になります。" if approve
+             else "。承認者なしのため参照のみで、照合は行いません。"))
 
 
 PLUGIN_SETTINGS = "plugins.entries.mcs-discord-commands.settings"
@@ -1933,6 +1994,9 @@ def cmd_init(args) -> int:
         if reason:
             print(f"初期設定: 薬剤辞書の設定を確認してください（詳細: {reason}）。変更は保存していません")
             return 1
+    if args.yes and cfg.get("drug_map") is None:
+        print("初期設定: 医薬品辞書は未設定のため薬剤名の照合は行いません。利用条件を確認してから"
+              " mcs_drug.py install-bundled で辞書を作成し、init --set drug_map=... で設定してください")
     login_id = cfg.get("mcs_login_id")
 
     if _init_store_secrets(args, login_id):

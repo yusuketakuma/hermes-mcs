@@ -8,6 +8,7 @@ import pytest
 import drug_map
 import mcs_setup
 from test_drug_map import DOCUMENT, _source_document
+from test_mcs_drug_bundled import _bundle
 from test_mcs_setup import _init_env
 
 
@@ -184,3 +185,129 @@ def test_explicit_rollback_to_legacy_dictionary_is_allowed(tmp_path, monkeypatch
     assert json.loads(files[0].read_text())["drug_map"] == new
     assert _run(monkeypatch, ["drug_map=" + json.dumps(old)]) == 0
     assert json.loads(files[0].read_text())["drug_map"] == old
+
+
+# ---- interactive init: the bundled official master is offered by default
+
+def _wizard_env(monkeypatch, tmp_path, cfg=None, bundle=None):
+    import mcs_drug
+    cfg = cfg or {"mcs_login_id": "fictional-user", "notify_target": "slack"}
+    _init_env(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(mcs_drug, "BUNDLE", bundle if bundle is not None else _bundle(tmp_path))
+    monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
+    prompts = []
+
+    def answers(table):
+        def answer(prompt=""):
+            prompts.append(prompt)
+            for needle, reply in table.items():
+                if needle in prompt:
+                    return reply() if callable(reply) else reply
+            return ""
+        return answer
+    return prompts, answers
+
+
+def _saved(tmp_path):
+    return json.loads((tmp_path / "c.json").read_text())
+
+
+def test_wizard_pins_the_bundled_dictionary_on_enter(tmp_path, monkeypatch, capsys):
+    """Enter on every item: dictionary written under HOME, pinned, approved."""
+    from datetime import date
+    prompts, answers = _wizard_env(monkeypatch, tmp_path)
+    monkeypatch.setattr("builtins.input", answers({}))
+    assert mcs_setup.main() == 0
+    cfg = _saved(tmp_path)
+    pin = cfg["drug_map"]
+    assert set(pin) == {"path", "sha256"}
+    assert str(tmp_path.resolve() / "data" / "drug-map") in pin["path"]
+    dictionary = drug_map.load(pin["path"], expected_sha256=pin["sha256"])
+    assert dictionary.approved and dictionary.source.approved_by == "fictional-user"
+    assert dictionary.source.terms_checked_on == date.today().isoformat()
+    out = capsys.readouterr().out
+    assert "辞書を作成しました" in out and "照合は定期処理で有効になります" in out
+    # the policy the operator confirms is shown, not implied by the prompt
+    assert "変更区分 0/3/5" in out and "抹消 1・廃止 9" in out and "同等性は確定しません" in out
+    assert any("drug_map.bundled" in p for p in prompts)
+
+
+def test_wizard_declines_the_dictionary_without_writing(tmp_path, monkeypatch):
+    prompts, answers = _wizard_env(monkeypatch, tmp_path)
+    monkeypatch.setattr("builtins.input", answers({"drug_map.bundled": "2"}))
+    assert mcs_setup.main() == 0
+    assert "drug_map" not in _saved(tmp_path)
+    assert not (tmp_path / "data" / "drug-map").exists()
+    assert not any("drug_map.terms_checked_on" in p for p in prompts)
+
+
+def test_wizard_reference_only_when_approval_is_declined(tmp_path, monkeypatch, capsys):
+    prompts, answers = _wizard_env(monkeypatch, tmp_path)
+    monkeypatch.setattr("builtins.input", answers({"drug_map.approve": "2"}))
+    assert mcs_setup.main() == 0
+    pin = _saved(tmp_path)["drug_map"]
+    dictionary = drug_map.load(pin["path"], expected_sha256=pin["sha256"])
+    assert not dictionary.approved
+    assert "参照のみで、照合は行いません" in capsys.readouterr().out
+
+
+def test_wizard_records_typed_operator_names_and_rejects_bad_dates(tmp_path, monkeypatch):
+    dates = iter(["2999-01-01", "not-a-date", "2026-10-01"])
+    prompts, answers = _wizard_env(monkeypatch, tmp_path)
+    monkeypatch.setattr("builtins.input", answers({
+        "drug_map.terms_checked_on": lambda: next(dates),
+        "drug_map.confirmed_by": "fictional-pharmacist"}))
+    assert mcs_setup.main() == 0
+    pin = _saved(tmp_path)["drug_map"]
+    dictionary = drug_map.load(pin["path"], expected_sha256=pin["sha256"])
+    assert dictionary.source.terms_checked_on == "2026-10-01"
+    assert dictionary.source.approved_by == "fictional-pharmacist"
+    assert sum("drug_map.terms_checked_on" in p for p in prompts) == 3
+    # the approval question names the person that will be recorded
+    assert any("drug_map.approve" in p and "fictional-pharmacist" in p for p in prompts)
+
+
+def test_wizard_never_touches_an_existing_pin(tmp_path, monkeypatch):
+    existing = _dictionary(tmp_path, "existing.json")
+    cfg = {"mcs_login_id": "fictional-user", "notify_target": "slack", "drug_map": existing}
+    prompts, answers = _wizard_env(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr("builtins.input", answers({}))
+    assert mcs_setup.main() == 0
+    assert _saved(tmp_path)["drug_map"] == existing
+    assert not any("drug_map." in p for p in prompts)
+    assert not (tmp_path / "data" / "drug-map").exists()
+
+
+def test_wizard_hold_or_failure_leaves_config_unchanged(tmp_path, monkeypatch, capsys):
+    # a manifest whose CSV hash disagrees with the archive: conversion refuses
+    bundle = _bundle(tmp_path, manifest_csv_sha="0" * 64)
+    prompts, answers = _wizard_env(monkeypatch, tmp_path, bundle=bundle)
+    monkeypatch.setattr("builtins.input", answers({}))
+    assert mcs_setup.main() == 0
+    assert "drug_map" not in _saved(tmp_path)
+    out = capsys.readouterr().out
+    assert "照合は有効になっていません" in out and "辞書を作成しました" not in out
+
+
+def test_wizard_eof_at_an_operator_input_saves_nothing(tmp_path, monkeypatch):
+    def answer(prompt=""):
+        if "drug_map.confirmed_by" in prompt:
+            raise EOFError
+        return ""
+    _wizard_env(monkeypatch, tmp_path)
+    monkeypatch.setattr("builtins.input", answer)
+    assert mcs_setup.main() == 130
+    assert not (tmp_path / "c.json").exists()
+    assert not (tmp_path / "data" / "drug-map").exists()
+
+
+def test_yes_mode_never_creates_a_dictionary(tmp_path, monkeypatch, capsys):
+    import mcs_drug
+    _init_env(monkeypatch, tmp_path, {"mcs_login_id": "fictional-user", "notify_target": "slack"})
+    monkeypatch.setattr(mcs_drug, "BUNDLE", _bundle(tmp_path))
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init", "--yes"])
+    assert mcs_setup.main() == 0
+    assert "drug_map" not in _saved(tmp_path)
+    assert not (tmp_path / "data" / "drug-map").exists()
+    assert "医薬品辞書は未設定" in capsys.readouterr().out
