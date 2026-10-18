@@ -13,4 +13,5 @@ def test_private_summary_click_passes_current_config(monkeypatch):
     monkeypatch.setattr(notify_cards, "patient_summary_text", summary)
     result = notify_cards._act_view(None, {}, {"project_id": 1}, "summary", {}, 0, cfg=cfg)
     assert seen == [(1, cfg)]
-    assert result["body"] == "情報抽出: 処理中"
+    # db=None makes the nightly navigation fail, so the notice precedes the summary
+    assert result["body"].endswith("\n\n情報抽出: 処理中")
