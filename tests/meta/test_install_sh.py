@@ -80,6 +80,10 @@ if [ "$1" = "-C" ]; then
       status)
         [ -z "$STUB_GIT_DIRTY" ] || echo " M synthetic"
         exit 0 ;;
+      ls-files)
+        [ -z "$STUB_FAIL_INDEX" ] || exit 128
+        printf '%s synthetic\\n' "${STUB_GIT_INDEX_FLAG:-H}"
+        exit 0 ;;
     esac
 fi
 exit 0

@@ -163,6 +163,43 @@ def test_python314_unrelated_checkout_without_migration_is_kept(tmp_path):
     assert _mutations(env) == []
 
 
+@pytest.mark.parametrize("flag", ["h", "S", "unreadable"])
+@pytest.mark.parametrize("kept", [False, True])
+@pytest.mark.parametrize("head", [_pin(), PREVIOUS_314[0]])
+def test_hidden_or_unreadable_index_stops_before_installer_changes(tmp_path, flag, kept, head):
+    _, hermes_home, checkout, venv, lock, env = _established314(tmp_path, head)
+    before = _runtime_files(venv)
+    env.update(STUB_GIT_INDEX_FLAG=flag)
+    if flag == "unreadable":
+        env["STUB_FAIL_INDEX"] = "1"
+    if kept:
+        env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = head
+    fd = _held(lock)
+    try:
+        env.update(MCS_UPDATE_RUN_LOCK_FD=str(fd),
+                   MCS_UPDATE_RUNTIME_BACKUP=str(venv) + ".pre-python314")
+        result = _run(env, hermes_home, "--mode", "hermes", *FLAGS, pass_fds=(fd,))
+    finally:
+        os.close(fd)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert ("追跡設定を確認できません" if flag == "unreadable"
+            else "変更の確認を省略する Git 設定") in result.stderr
+    assert _runtime_files(venv) == before
+    assert (checkout / ".git/HEAD").read_text().strip() == head
+    assert not (checkout / "venv.pre-python314").exists()
+    assert _mutations(env) == []
+
+
+def test_normal_reinstall_keeps_hidden_index_without_migration(tmp_path):
+    _, hermes_home, checkout, venv, _, env = _established314(tmp_path, _pin())
+    before = _runtime_files(venv)
+    env["STUB_GIT_INDEX_FLAG"] = "h"
+    result = _run(env, hermes_home, "--mode", "hermes", *FLAGS)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _runtime_files(venv) == before
+    assert _mutations(env) == []
+
+
 @pytest.mark.parametrize("phase", ["checkout_moved", "pip_pending", "pip_complete"])
 def test_python314_refresh_resumes_installer_crash(tmp_path, phase):
     _, hermes_home, checkout, venv, lock, env = _established314(tmp_path, _pin())
