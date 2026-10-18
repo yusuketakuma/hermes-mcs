@@ -55,9 +55,9 @@
       "sources": [
         "README.md",
         "docs/README.md",
-        "docs/development/plans/PATIENT_CONTEXT_1.0.25.md",
+        "docs/releases/v1.0.25/PATIENT_CONTEXT_1.0.25.md",
         "docs/specs/patient-context.md",
-        "docs/development/acceptance/ACCEPTANCE_1.0.25.md",
+        "docs/releases/v1.0.25/ACCEPTANCE_1.0.25.md",
         "docs/development/DEVELOPMENT.md",
         "docs/releases/v1.0.25/README.md"
       ]

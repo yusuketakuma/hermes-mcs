@@ -101,8 +101,8 @@ installerが実行可能launcherをPATH上に配置する。repo直下の`mcs/`�
 - 新GET/actor/publication/enforce、バックアップ保存先、実データ修復、
   秘密・氏名・外部連携の本番有効化はそれぞれ既存のオーナー判断と実機受入が必要。
   原MCS確認のユーザー完了申告は引き継ぎ、新しい挙動の受入と混同しない。
-- final releaseは[RELEASE_NOTES](../RELEASE_NOTES.md)と
-  [README_MAINTENANCE](../README_MAINTENANCE.md)に従う。1.0.13の番号へ先行書換えして
+- final releaseは[RELEASE_NOTES](../../development/RELEASE_NOTES.md)と
+  [README_MAINTENANCE](../../development/README_MAINTENANCE.md)に従う。1.0.13の番号へ先行書換えして
   公開済み1.0.12のCHANGELOG・README見直し記録・archiveを壊さない。
 - 公開承認・配備承認・実データ操作は区別する。この文書整合だけで外部操作を開始しない。
 

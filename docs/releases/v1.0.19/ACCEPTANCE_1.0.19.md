@@ -27,7 +27,7 @@
 
 ## 新規導入と全過去版更新
 
-[origins](../../../tests/fixtures/schema_upgrade/origins.json)と[update paths](../../../tests/fixtures/schema_upgrade/update-paths.json)を正本とする。更新元は全19公開版、Hermes19経路とstandalone9経路で、targetはv1.0.19。v1.0.19はDDL・SCHEMA_VERSIONを変更しない。v1.0.18からの更新は実行環境の移行を伴わない。1.0.17以前からのPython 3.14移行と中断時の復旧は1.0.18の受入範囲（[1.0.18受入票](ACCEPTANCE_1.0.18.md)）を維持し、本版は保持経路の判定を追加した。新規導入の経路（install.sh・初期設定）は保持経路以外を変更しない。
+[origins](../../../tests/fixtures/schema_upgrade/origins.json)と[update paths](../../../tests/fixtures/schema_upgrade/update-paths.json)を正本とする。更新元は全19公開版、Hermes19経路とstandalone9経路で、targetはv1.0.19。v1.0.19はDDL・SCHEMA_VERSIONを変更しない。v1.0.18からの更新は実行環境の移行を伴わない。1.0.17以前からのPython 3.14移行と中断時の復旧は1.0.18の受入範囲（[1.0.18受入票](../v1.0.18/ACCEPTANCE_1.0.18.md)）を維持し、本版は保持経路の判定を追加した。新規導入の経路（install.sh・初期設定）は保持経路以外を変更しない。
 
 ## 検証の区別
 
