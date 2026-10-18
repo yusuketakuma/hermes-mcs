@@ -244,8 +244,6 @@ def _scope_events(body, patient_name, provider_fields):
             continue
         person = match["person"]
         tail = match.start() + len(person)
-        if person == "自分" and re.search(rf"(?:{CARE_WORKER})(?:が|は)[ \t　]*$", body[:match.start()]):
-            continue  # 「介護士が自分の…」 keeps the explicitly named staff owner.
         if _REPORTING.match(body, tail) and not re.fullmatch(_SELF_PERSON, person) and not re.fullmatch(_COMPOUND_PERSON, person):
             continue
         if (re.fullmatch(STAFF_PERSON, person)
