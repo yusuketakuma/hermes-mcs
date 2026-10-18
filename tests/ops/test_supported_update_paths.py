@@ -33,6 +33,11 @@ def _id(path):
     return f"{path['source']}-{path.get('target', 'current')}-{path['runtime']}"
 
 
+def _blob_id(content):
+    return hashlib.sha1(f"blob {len(content)}\0".encode() + content,
+                        usedforsecurity=False).hexdigest()
+
+
 class _Objects:
     """Git's object/working-tree boundary, explicitly not real Git validation."""
     def __init__(self, root, origin, install_changed, target, schema):
@@ -56,8 +61,7 @@ class _Objects:
         }
         if install_changed:
             self.new["install.sh"] = b"# synthetic changed installer\n"
-        self.blobs = {hashlib.sha256(v).hexdigest()[:40]: v
-                      for v in [*self.old.values(), *self.new.values()]}
+        self.blobs = {_blob_id(v): v for v in [*self.old.values(), *self.new.values()]}
         self.materialize(self.old)
 
     def materialize(self, files):
@@ -73,8 +77,12 @@ class _Objects:
         self.calls.append(args)
         rc, out = 0, ""
         command = args[0]
-        if command == "status" or command == "ls-files" or command == "fetch":
+        if command == "status" or command == "fetch":
             pass
+        elif command == "ls-files":
+            if args[1:] == ["--stage", "-v", "-z"]:
+                out = "".join(f"H 100644 {_blob_id(content)} 0\t{name}\0"
+                              for name, content in sorted(self.tree("HEAD").items()))
         elif command == "describe":
             out = self.source_tag if self.head == self.before else self.target
         elif command == "rev-parse":
@@ -98,7 +106,7 @@ class _Objects:
             tree = self.tree(args[2])
             prefix = args[4] + "/" if len(args) > 3 else ""
             out = "".join(
-                f"100644 blob {hashlib.sha256(content).hexdigest()[:40]}\t{name}\0"
+                f"100644 blob {_blob_id(content)}\t{name}\0"
                 for name, content in sorted(tree.items()) if name.startswith(prefix))
         elif command == "diff":
             changed = {name for name in self.old.keys() | self.new.keys()
@@ -189,12 +197,22 @@ def test_manifest_preserves_exact_historical_26_and_supported_sources():
                  for t in (11, 12) for mode in ("hermes", "standalone")}
     expected |= {("v1.0.11", "v1.0.12", mode) for mode in ("hermes", "standalone")}
     assert historical == expected and len(historical) == 26
-    assert MANIFEST["target"]["version"] == "v1.0.25"
-    assert set(FEATURES) == set(ORIGINS) == {f"v1.0.{n}" for n in range(25)}
+    assert MANIFEST["target"]["version"] == "v1.0.26"
+    assert set(FEATURES) == set(ORIGINS) == {f"v1.0.{n}" for n in range(26)}
     assert {(p["source"], p["runtime"]) for p in PATHS} == {
         (release, mode) for release, flags in FEATURES.items()
         for mode in (["hermes", "standalone"] if flags["standalone"] else ["hermes"])}
     assert all(len(o["commit"]) == 40 for o in RELEASES)
+
+
+def test_synthetic_git_provenance_accepts_endpoints_and_rejects_local_edits(
+        tmp_path, monkeypatch, updater):
+    objects, _, _, _, _ = _world(tmp_path, monkeypatch, updater, ELIGIBLE[0], install=True)
+    assert updater._local_changes_outside(objects.before, objects.after) == []
+    objects.run(["merge", "--ff-only", f"refs/tags/{objects.target}"])
+    assert updater._local_changes_outside(objects.before, objects.after) == []
+    (objects.root / "install.sh").write_bytes(b"# synthetic local change\n")
+    assert updater._local_changes_outside(objects.before, objects.after) == ["install.sh"]
 
 
 @pytest.mark.parametrize("path", MANIFEST["historical_paths"], ids=_id)
