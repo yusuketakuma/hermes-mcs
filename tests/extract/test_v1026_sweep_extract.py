@@ -13,6 +13,7 @@ POSTED = "2026-10-18T09:00:00+09:00"
     ("介護士が排泄介助。体温36.6℃", {"bt": 36.6}),
     ("ヘルパーが体温測定。体温36.8℃", {"bt": 36.8}),
     ("ヘルパーさんが血圧を測定しました。血圧118/76", {"sbp": 118, "dbp": 76}),
+    ("ヘルパーが体温を測った。体温36.8℃", {"bt": 36.8}),
 ])
 def test_care_worker_visit_report_keeps_patient_vitals(body, vitals):
     doc = extract.extract_message(body, POSTED)
@@ -20,7 +21,19 @@ def test_care_worker_visit_report_keeps_patient_vitals(body, vitals):
     assert "vital_mentions" not in doc
 
 
-@pytest.mark.parametrize("body", ["ヘルパーさんは体温38.2℃", "ヘルパーの体温38.5℃", "介護職員 体温38.4℃"])
+@pytest.mark.parametrize("body", [
+    "ヘルパーさんは体温38.2℃",
+    "ヘルパーの体温38.5℃",
+    "介護職員 体温38.4℃",
+    "ヘルパーが自身の体温を測定。体温38.5℃。",
+    "介護士が自分の血圧を測定。血圧150/90。",
+    "ヘルパーが昨日発熱。体温38.5℃。",
+    "ヘルパーは風邪で欠勤。体温38.5℃。",
+    "ヘルパーが発熱のため体温を測定。体温38.5℃。",
+    "ヘルパーが訪問中に発熱。体温38.5℃。",
+    "ヘルパーが体温測定後に発熱。体温38.5℃。",
+    "ヘルパーが体温測定、自身の体温38.5℃。",
+])
 def test_care_worker_owned_value_stays_other(body):
     doc = extract.extract_message(body, POSTED)
     assert "vitals" not in doc
