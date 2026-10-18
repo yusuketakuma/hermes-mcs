@@ -11,7 +11,8 @@ from test_patient_context_v3_views import _reply, T0, DAY
 
 
 @pytest.mark.parametrize("old_reply", [None, "done"])
-def test_explicit_full_request_read_keeps_old_request_and_its_reply(tmp_path, old_reply):
+@pytest.mark.parametrize("source_kind", ["extract_llm", "extract_v1"])
+def test_explicit_full_request_read_keeps_old_request_and_its_reply(tmp_path, old_reply, source_kind):
     store = _db(tmp_path, ())
     try:
         # The newest 15 requests were answered. The first request must still be
@@ -19,8 +20,9 @@ def test_explicit_full_request_read_keeps_old_request_and_its_reply(tmp_path, ol
         for mid in range(1, 17):
             store.save_messages([_message(mid, body=f"架空依頼{mid}の確認をお願いします。")], project_id=1)
             store.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (T0 + mid * DAY, mid))
-            _artifact(store, "extract_llm", mid,
-                      {"requests": [{"to": "pharmacy", "action": f"架空依頼{mid}"}]},
+            request = ({"to": "pharmacy", "action": f"架空依頼{mid}"} if source_kind == "extract_llm"
+                       else {"kind": "pharmacy", "ctx": f"架空依頼{mid}"})
+            _artifact(store, source_kind, mid, {"requests": [request]},
                       {"hash": _hash_of(store, mid)})
             if mid > 1 or old_reply:
                 _reply(SimpleNamespace(db=store), mid + 100, mid, old_reply if mid == 1 else "done")
@@ -31,7 +33,11 @@ def test_explicit_full_request_read_keeps_old_request_and_its_reply(tmp_path, ol
         assert [r["mid"] for r in full] == list(range(16, 0, -1))
         assert all(r["reply_state"] == "done" for r in full[:-1])
         assert full[-1].get("reply_state") == old_reply
-        assert full[:-1] == ordinary
+        if source_kind == "extract_llm":
+            assert full[:-1] == ordinary
+        else:
+            # Preserve the saved rollup's historical LLM-only reply scan.
+            assert all("reply_state" not in r for r in ordinary)
         # The three patient screens use the full projection, not the ordinary
         # bounded rollup. A reply outside the old cap must also be respected.
         evidence = {"project_id": 1, "items": [], "as_of": None, "coverage": {}}
