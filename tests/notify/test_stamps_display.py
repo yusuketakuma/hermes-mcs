@@ -466,7 +466,11 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
                    for element in block.get("elements", []))
         stamp_context = [element for block in blocks if block["type"] == "context"
                          for element in block["elements"] if "スタンプ" in element["text"]]
-        assert len(stamp_context) == 1 and stamp_context[0]["type"] == "plain_text"
+        # the footer total plus each post's own row on the card face, all
+        # plain text: actor names never become Slack mentions
+        assert len(stamp_context) == 3 and all(e["type"] == "plain_text" for e in stamp_context)
+        assert all("<@" not in e["text"] for e in stamp_context)
+        assert "合成他者101" in stamp_context[1]["text"] and stamp_context[2]["text"] == "スタンプ 👀3 · 自分 2投稿"
     elif platform == "discord":
         view = discord_cards.build_view(spec)
         assert any("-# スタンプ 👀3" in getattr(child, "content", "")
@@ -502,6 +506,16 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
                                          send=lambda content: calls.append((content["text"], {})))
         context = {"card_message_id": "lw:" + "c" * 32}
     posts = {}
+    if platform == "slack":
+        # the Slack card face carries each post: its line and summary
+        # containers, then the stamp row and the folded original
+        containers = spec["parts"]["containers"]
+        rules = [i for i, c in enumerate(containers) if c.get("rule")] + [len(containers)]
+        for mid, post in zip((100, 101), spec["parts"]["slack"]["face_posts"]):
+            end = next(i for i in rules if i > post["at"])
+            front = "\n".join(c.get("text", "") for c in containers[post["at"]:end]
+                              if c["type"] == "text") + "\n" + "\n".join(post["stamps"])
+            posts[mid] = [front, post["original"]]
     for part in spec["parts"]["manifest"]:
         if part["kind"] == "body_part":
             result = asyncio.run(worker._perform_part({"spec": spec}, part, context))
