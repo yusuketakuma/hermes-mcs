@@ -565,17 +565,20 @@ def _probe_format(deadline: float | None = None) -> str | None:
     if local_llm.admission_enabled():
         # T20: the probe sends real inference POSTs — it passes the
         # same admission gate and consumes its class budget
-        _FMT_MODE = local_llm.admitted_probe_format(
+        mode = local_llm.admitted_probe_format(
             "mcs.extract", endpoint, model, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
             slot=_choose_slot(),
             verify=lambda text: json_object(text) is not None)
     else:
-        _FMT_MODE = local_llm.probe_format(
+        mode = local_llm.probe_format(
             endpoint, model, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
             slot=_choose_slot(),
             verify=lambda text: json_object(text) is not None)
+    if mode is None:
+        return _FMT_MODE  # GPU turn busy: nothing sent, probe again next call
+    _FMT_MODE = mode
     _FMT_TS = time.monotonic()
     return _FMT_MODE
 
@@ -3739,7 +3742,7 @@ _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
 _CARRY_MARGIN_S = 120    # a carried result is dropped this close to its
                          # lease expiry rather than committed under a
                          # claim another worker may already hold
-_RESIDENT_WRITE_WAIT_S = 3   # residents carry instead of waiting out the tick
+_RESIDENT_WRITE_WAIT_S = 3   # residents carry commits instead of waiting out the tick
 
 _BATCH_K = 0                     # --batch default: off. Measured net
                                  # negative (Sep 2026): K=4 accepted 46%,
@@ -3810,6 +3813,23 @@ def _release(ledger, r, lease: float | None):
         "AND project_id=? AND message_id=? AND next_try=?",
         (r["project_id"], r["message_id"], lease))
     ledger.db.commit()
+
+
+def _renew(ledger, r, lease: float) -> float | None:
+    """Extend OUR lease on a carried result so the context units it
+    waits through cannot outlive the claim; None when the lease was
+    lost (lapsed and re-claimed) — the result is then dropped."""
+    now = time.time()
+    # must outlast one 900 s context unit plus _CARRY_MARGIN_S, or the
+    # next settle drops it; same length as a fresh claim
+    new = max(lease, now + _EXTRACT_LEASE_S + TIMEOUT + 30)
+    cur = ledger.db.execute(
+        "UPDATE fetch_jobs SET next_try=?, updated_at=? "
+        "WHERE kind='extract_claim' AND project_id=? AND message_id=? "
+        "AND next_try=?",
+        (new, now, r["project_id"], r["message_id"], lease))
+    ledger.db.commit()
+    return new if cur.rowcount > 0 else None
 
 
 def _actual_model(r) -> str:
@@ -4826,7 +4846,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         "SELECT content FROM artifacts WHERE artifact_id=?",
                         (qc["src"],)).fetchone()
                     if src is not None:
-                        with lock(per_write_lock) as held:
+                        # these writes are never carried: a skipped one
+                        # re-selects the row for another paid call, so
+                        # wait out the tick (default 60 s), not write_wait_s
+                        with _write_lock(per_write_lock) as held:
                             if held:
                                 _replace_current(
                                     ledger, r, src["content"],
@@ -4845,7 +4868,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         " AND c.message_id=?",
                         (r["human_src"], KIND, r["message_id"])).fetchone()
                     if src is not None:
-                        with lock(per_write_lock) as held:
+                        with _write_lock(per_write_lock) as held:
                             if held:
                                 _replace_current(
                                     ledger, r, src["content"],
@@ -4862,13 +4885,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     content = _thin_retry_content(ledger, r)
                     if content is not None:
                         r["_kept_prior"] = True
-                        with lock(per_write_lock) as held:
+                        with _write_lock(per_write_lock) as held:
                             if held:
                                 _replace_current(
                                     ledger, r, content,
                                     extra_meta={"thin_retried": True})
                     return
-                with lock(per_write_lock) as held:
+                with _write_lock(per_write_lock) as held:
                     if held and not _current(ledger, r["message_id"],
                                              r["content_hash"]):
                         # _fail carries auto_retry so a revived refail
@@ -5080,7 +5103,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _release(ledger, r, lease)
                         deferred += 1
                     else:
-                        carry_out.append((r, lease, commit))
+                        lease = _renew(ledger, r, lease)
+                        if lease is None:
+                            deferred += 1
+                        else:
+                            carry_out.append((r, lease, commit))
                 for r, d, ctx, integrity, qc, lease in pending_writes:
                     # still lock-bound, or the body changed/lease lapsed
                     # while we waited: the row stays pending for the
@@ -5088,8 +5115,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if held and _owns_current_source(ledger, r, lease):
                         _commit(r, d, ctx, integrity, qc)
                     elif carry is not None and not held \
-                            and lease > time.time() + _CARRY_MARGIN_S:
-                        carry_out.append((r, lease, functools.partial(
+                            and lease > time.time() + _CARRY_MARGIN_S \
+                            and (renewed := _renew(ledger, r, lease)):
+                        carry_out.append((r, renewed, functools.partial(
                             _commit, r, d, ctx, integrity, qc)))
                         keep_claims.add(id(r))
                     else:
@@ -5294,7 +5322,9 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
             elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
                 _release(ledger, r, lease)
             else:
-                keep.append((r, lease, commit))
+                lease = _renew(ledger, r, lease)
+                if lease is not None:
+                    keep.append((r, lease, commit))
     carry[:] = keep
 
 
@@ -5492,39 +5522,40 @@ def _main() -> int:
                 if stop is not None and time.monotonic() > stop:
                     total["stopped"] = "stop_after"
                     break
-                if context_lane:
-                    # lane 3 serves patient context first; it yields to
-                    # semantic/extraction only when nothing is due. A
-                    # carried result is written first so a long context
-                    # run cannot outlive its claim lease.
-                    if mcs_util._updater_state() != nightly_state:
-                        # an updater ran since the last pass: old code
-                        # must not write the carried result either
-                        _settle_carry(led, carry, write=False)
-                        return 0
-                    _settle_carry(led, carry, final=False, fence=nightly_state)
-                    nightly = _background_nightly(led, nightly_state, stop)
-                    if nightly.get("status") != "off":
-                        print(json.dumps({"nightly": nightly, "ts": time.time()},
-                                         ensure_ascii=False), flush=True)
-                    if nightly.get("run_lock_lost") == "updated":
-                        _settle_carry(led, carry, write=False)
-                        return 0
-                    if nightly.get("done"):
-                        pause(1)
-                        continue
-                # the inner batch must also honor --stop-after: its
-                # budget is the remaining allowance, not a fresh 3600 s
-                # (F13)
-                budget = 3600
-                if stop is not None:
-                    budget = min(budget, stop - time.monotonic())
-                    if budget <= 0:
-                        total["stopped"] = "stop_after"
-                        break
-                # One newest extraction per lane before semantic/QC;
-                # existing claim leases exclude the other worker's item.
                 try:
+                    if context_lane:
+                        # lane 3 serves patient context first; it yields to
+                        # semantic/extraction only when nothing is due. A
+                        # carried result gets its lock attempt first and its
+                        # claim lease renewed, so the context units it waits
+                        # through cannot outlive the claim.
+                        if mcs_util._updater_state() != nightly_state:
+                            # an updater ran since the last pass: old code
+                            # must not write the carried result either
+                            _settle_carry(led, carry, write=False)
+                            return 0
+                        _settle_carry(led, carry, final=False, fence=nightly_state)
+                        nightly = _background_nightly(led, nightly_state, stop)
+                        if nightly.get("status") != "off":
+                            print(json.dumps({"nightly": nightly, "ts": time.time()},
+                                             ensure_ascii=False), flush=True)
+                        if nightly.get("run_lock_lost") == "updated":
+                            _settle_carry(led, carry, write=False)
+                            return 0
+                        if nightly.get("done"):
+                            pause(1)
+                            continue
+                    # the inner batch must also honor --stop-after: its
+                    # budget is the remaining allowance, not a fresh 3600 s
+                    # (F13)
+                    budget = 3600
+                    if stop is not None:
+                        budget = min(budget, stop - time.monotonic())
+                        if budget <= 0:
+                            total["stopped"] = "stop_after"
+                            break
+                    # One newest extraction per lane before semantic/QC;
+                    # existing claim leases exclude the other worker's item.
                     adm, vpol = _admitted()
                     if args.semantic and time.monotonic() < semantic_first_until:
                         recent = _recent_arrivals(led)

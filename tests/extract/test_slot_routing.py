@@ -116,6 +116,17 @@ def test_extract_probe_format_uses_choose_slot(monkeypatch):
                           for b in bodies)
 
 
+def test_extract_busy_probe_keeps_cached_mode(monkeypatch):
+    """A probe that lost the GPU turn (None) must not erase the cached
+    mode: the next row waits its turn instead of re-probing and deferring."""
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", "object")
+    monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(local_llm, "probe_format", lambda *a, **k: None)
+    monkeypatch.setattr(local_llm, "admitted_probe_format", lambda *a, **k: None)
+    assert extract_llm._probe_format() == "object"
+    assert extract_llm._FMT_MODE == "object" and extract_llm._FMT_TS == 0.0
+
+
 def test_slot_override_out_of_range_falls_back(monkeypatch):
     """A _SLOT_OVERRIDE past the deployed count must not go unpinned."""
     monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE",

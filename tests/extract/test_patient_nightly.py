@@ -55,7 +55,7 @@ def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state
     led.db.commit()
 
 
-def step(runtime, *, cfg=CFG, admit=lambda: True, seconds=120, **kw):
+def step(runtime, *, cfg=CFG, admit=lambda: True, seconds=600, **kw):
     led, clock, _ = runtime
     result = nightly.run_due(led, cfg, deadline=clock.mono + seconds, admit=admit, **kw)
     clock.wall += 1
@@ -107,7 +107,7 @@ def test_default_enables_generation_and_private_reading(runtime):
     assert nightly.nightly_view_input(led.db, 1, cfg={}) is not None
 
 
-@pytest.mark.parametrize('at,seconds', [('2026-10-18T03:29:00', 120),
+@pytest.mark.parametrize('at,seconds', [('2026-10-18T03:29:00', 600),
                                       ('2026-10-17T23:00:00', 64)])
 def test_insufficient_time_never_starts_inference(runtime, at, seconds):
     led, clock, calls = runtime
@@ -713,8 +713,8 @@ def test_unbrokered_nightly_request_sends_pinned_slot(monkeypatch):
     monkeypatch.setattr(nightly.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(nightly.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
     with nightly.local_llm.pinned_slot(2):
-        assert nightly._ask({}, {}, nightly.time.monotonic() + 90, lambda: True,
-                            nightly.time.time() + 90) == {}
+        assert nightly._ask({}, {}, nightly.time.monotonic() + 600, lambda: True,
+                            nightly.time.time() + 600) == {}
     assert len(sent) == 1
     assert sent[0]["id_slot"] == 2
 
@@ -746,5 +746,27 @@ def test_turn_wait_expiry_defers_without_charging_the_patient(monkeypatch):
     monkeypatch.setattr(nightly.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(nightly.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
     with pytest.raises(nightly.Deferred, match="nightly_turn_busy"):
-        nightly._ask({}, {}, nightly.time.monotonic() + 90, lambda: True,
-                     nightly.time.time() + 90)
+        nightly._ask({}, {}, nightly.time.monotonic() + 600, lambda: True,
+                     nightly.time.time() + 600)
+
+
+def test_finished_inference_waits_briefly_for_the_run_lock(runtime, monkeypatch):
+    led, clock, calls = runtime
+    seed(led)
+    tries = []
+    def contended():
+        tries.append(1)
+        return os.open(os.devnull, os.O_RDONLY) if len(tries) > 3 else None
+    def sleep(seconds):
+        clock.mono += seconds
+        clock.wall += seconds
+    monkeypatch.setattr(nightly, 'acquire_run_lock', contended)
+    monkeypatch.setattr(nightly.time, 'sleep', sleep, raising=False)
+    assert step(runtime)['status'] == 'progressed'
+    assert len(calls) == 1 and len(tries) == 4 and document(led)
+    # a holder that never yields costs at most the short cap, not the unit deadline
+    seed(led, mid=2, pid=2)
+    monkeypatch.setattr(nightly, 'acquire_run_lock', lambda: None)
+    before = clock.mono
+    assert step(runtime)['status'] == 'deferred'
+    assert clock.mono - before <= 61 and document(led, pid=2) is None

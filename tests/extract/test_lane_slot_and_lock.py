@@ -1,7 +1,9 @@
 """Extraction retries a result whose per-write lock wait timed out,
 carries it across resident run_pending calls, and the --lane CLI maps
 lanes to wire slots."""
+import json
 import os
+import time
 
 import pytest
 
@@ -67,8 +69,8 @@ def test_lock_lost_twice_defers_without_burning_attempts(tmp_path,
 
 
 def _claims(db):
-    return db.db.execute(
-        "SELECT next_try FROM fetch_jobs WHERE kind='extract_claim'").fetchall()
+    return [row[0] for row in db.db.execute(
+        "SELECT next_try FROM fetch_jobs WHERE kind='extract_claim'")]
 
 
 def _carry_one(db, monkeypatch, tmp_path):
@@ -116,6 +118,66 @@ def test_carried_result_near_lease_expiry_is_dropped(tmp_path, monkeypatch):
     assert db.artifacts("extract_llm", message_id=1) == []
     assert _claims(db) == []
     assert res["left"] == 1
+    db.close()
+
+
+def _decay_lease(db, carry, left_s):
+    """Context units ate most of the claim lease: the row and the carried
+    tuple now expire `left_s` from now."""
+    r, _lease, commit = carry[0]
+    decayed = time.time() + left_s
+    db.db.execute("UPDATE fetch_jobs SET next_try=? WHERE kind='extract_claim'",
+                  (decayed,))
+    db.db.commit()
+    carry[0] = (r, decayed, commit)
+
+
+def test_carried_result_lease_is_renewed_while_lock_bound(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    _decay_lease(db, carry, extract_llm._CARRY_MARGIN_S + 80)
+    res = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
+                                  write_wait_s=1, carry=carry)
+    assert res["deferred"] == 0 and len(res["carry"]) == 1
+    renewed = res["carry"][0][1]
+    # outlasts one 900 s context unit plus the carry margin
+    assert renewed - time.time() > 900 + extract_llm._CARRY_MARGIN_S
+    assert _claims(db) == [renewed]
+    state["blocked"] = 0
+    res = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
+                                  write_wait_s=1, carry=res["carry"])
+    assert res["carried"] == 1 and res["carry"] == []
+    assert len(db.artifacts("extract_llm", message_id=1)) == 1
+    assert _claims(db) == []
+    db.close()
+
+
+def test_carried_result_with_lost_lease_is_dropped(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    # another worker re-claimed the row after our lease lapsed
+    db.db.execute("UPDATE fetch_jobs SET next_try=next_try+1 WHERE kind='extract_claim'")
+    db.db.commit()
+    res = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
+                                  write_wait_s=1, carry=carry)
+    assert res["deferred"] == 1 and res["carry"] == [] and res["carried"] == 0
+    assert len(_claims(db)) == 1
+    assert db.artifacts("extract_llm", message_id=1) == []
+    db.close()
+
+
+def test_non_final_settle_renews_kept_lease(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    _decay_lease(db, carry, extract_llm._CARRY_MARGIN_S + 80)
+    extract_llm._settle_carry(db, carry, final=False)
+    assert len(carry) == 1
+    assert carry[0][1] - time.time() > 900 + extract_llm._CARRY_MARGIN_S
+    assert _claims(db) == [carry[0][1]]
+    db.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
+    db.db.commit()
+    extract_llm._settle_carry(db, carry, final=False)
+    assert carry == []
     db.close()
 
 
@@ -343,3 +405,57 @@ def test_lane3_rechecks_update_after_acquiring_settlement_lock(tmp_path, monkeyp
         assert _claims(db) == []
     finally:
         db.db.close()
+
+
+def test_failure_write_waits_for_lock_instead_of_skipping(tmp_path, monkeypatch):
+    """A failed extraction's error row is not carried, so it must wait out
+    the tick's lock (default 60 s) rather than the resident's 3 s: a
+    skipped _fail re-selects the row for another paid LLM call."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="合成の本文です。" * 20)])
+    state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=0)
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+
+    def extract(body, **_kw):
+        state["blocked"] = 10   # longer than the resident wait, shorter than 60
+        return None
+    monkeypatch.setattr(extract_llm, "llm_extract", extract)
+    res = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
+                                  write_wait_s=extract_llm._RESIDENT_WRITE_WAIT_S,
+                                  carry=[])
+    assert res["failed"] == 1
+    metas = [json.loads(a["meta"]) for a in db.artifacts("extract_llm", message_id=1)]
+    assert [m["attempts"] for m in metas if m.get("error")] == [1]
+    assert _claims(db) == []
+    db.close()
+
+
+def test_lane3_survives_transient_settle_error(monkeypatch, capsys):
+    """A sqlite error from the pre-context settle is logged as
+    extract_loop_error and the resident keeps running."""
+    import sqlite3
+    import mcs_util
+    now = [0.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(extract_llm.time, "sleep",
+                        lambda s: now.__setitem__(0, now[0] + s))
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.setattr(extract_llm.sys, "argv", [
+        "extract_llm", "--all", "--lane", "3", "--stop-after", "100"])
+    monkeypatch.setattr(extract_llm, "Ledger",
+                        lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm, "_background_nightly",
+                        lambda *a: {"status": "off", "done": 0})
+    settles = []
+
+    def settle(led, carry, **kw):
+        settles.append(kw)
+        if len(settles) == 1:
+            raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: {
+        "done": 1, "failed": 0, "left": 1, "selected": 1, "carry": []})
+    assert extract_llm.main() == 0
+    assert "extract_loop_error" in capsys.readouterr().err
+    assert len(settles) >= 3   # raised, retried, exit settle

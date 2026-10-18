@@ -255,6 +255,10 @@ _LONG_MAX = 500
 # attempt, so it is not sent (free defer — the background lanes take it;
 # a tick lane never can)
 _LONG_MIN_CALL_S = 620.0
+# Least time a send may have left after the backlog GPU turn is won;
+# capped at half the live window so a short job budget never reports
+# busy uncontended, and a turn won with scraps is deferred, not sent.
+_TURN_MIN_CALL_S = 60.0
 
 
 def _long_key(model: str, prompt: str) -> str:
@@ -382,9 +386,8 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             response_format=rf,
             extra_payload={"id_slot": local_llm.request_slot()},
             request_fn=local_llm.bounded_request, error_out=err_out,
-            # the job budget (45 s default) is the call's own floor; only
-            # the explicit long-output contract adds one after the turn
-            turn_min_s=_LONG_MIN_CALL_S if level else 0.0)
+            turn_min_s=_LONG_MIN_CALL_S if level
+            else min(_TURN_MIN_CALL_S, timeout / 2))
         if response is not None and response.get("admission"):
             # a denial/deferral never left — the verdict, never model text
             raise runtime.LLMNotSent(

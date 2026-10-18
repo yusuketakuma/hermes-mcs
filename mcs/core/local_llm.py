@@ -95,6 +95,9 @@ def lane_slot(lane) -> int:
 # Realtime (lane 1) never takes it.
 TURN_LOCK_ENV = "MCS_LLM_TURN_LOCK"
 TURN_LOCK_POLL_S = 0.2
+# A probe turn won with less than this left is reported busy, not sent:
+# a reaped probe would be cached as "plain" for the whole cooldown.
+PROBE_TURN_MIN_S = 2.0
 
 
 @contextmanager
@@ -692,7 +695,8 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                 'Reply with {"ok": true}', endpoint=endpoint, model=model,
                 max_tokens=20, timeout=remaining, deadline=operation_deadline,
                 response_format=rf, extra_payload=payload,
-                request_fn=request_fn, error_out=error_out)
+                request_fn=request_fn, error_out=error_out,
+                turn_min_s=PROBE_TURN_MIN_S)
             if response is None:
                 if error_out.get("kind") == "busy":
                     return None  # nothing sent: probe again next call

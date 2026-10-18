@@ -441,3 +441,40 @@ def test_retire_failed_send_treats_busy_as_never_sent():
     local_llm._retire_failed_send(broker, 7, "busy", "")
     local_llm._retire_failed_send(broker, 8, "transport", "")
     assert calls == [("terminal", 7, "not_sent", "busy"), ("unknown", 8, "transport")]
+
+
+def _hold_turn_for(path, seconds):
+    """Hold the turn flock on a second descriptor and drop it after
+    *seconds* (same process: flock conflicts across descriptors)."""
+    holder = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    timer = threading.Timer(seconds, os.close, [holder])
+    timer.start()
+    return timer
+
+
+def test_probe_turn_won_with_scraps_is_busy_not_sent(tmp_path, monkeypatch):
+    """A probe that wins the backlog turn with less than its floor left
+    is reported busy (nothing sent) instead of being reaped and cached
+    as "plain" for the cooldown."""
+    path = str(tmp_path / "turn.lock")
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
+    timer = _hold_turn_for(path, 1.0)
+    try:
+        err = {}
+        assert local_llm.probe_format(
+            "http://127.0.0.1:8080/v1/chat/completions", "m", None,
+            timeout=local_llm.PROBE_TURN_MIN_S + 0.5,
+            request_fn=lambda *a, **k: pytest.fail("probe sent with scraps"),
+            error_out=err) is None
+        assert err == {"kind": "busy"}
+    finally:
+        timer.join()
+    assert _lock_is_free(path)
+
+
+def test_probe_uncontended_turn_is_sent(tmp_path, monkeypatch):
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
+    assert local_llm.probe_format(
+        "http://127.0.0.1:8080/v1/chat/completions", "m", None, timeout=10,
+        request_fn=_fake_request(_response('{"ok": true}'))) == "object"

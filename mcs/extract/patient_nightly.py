@@ -17,7 +17,7 @@ KIND = "patient_context_nightly_v1"
 SCAN = "patient_context_scan_v1"
 PROGRESS = "patient_context_progress_v1"
 CONTRACT = "patient-context-nightly/1"
-CALL_SECONDS = 60
+CALL_SECONDS = 300
 COMMIT_MARGIN = 5
 MAX_FACTS = 256
 MAX_SUMMARY = 12
@@ -571,7 +571,16 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
     scans_now = _digest([tuple(r) for r in ledger.db.execute(
         "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
         (SCAN, pid))])
-    fd = acquire_run_lock()
+    # A finished inference is worth a short wait: the tick and lane 2 hold
+    # the run lock for minutes, and dropping the result would send the
+    # same prompt again on the next iteration.
+    fd = None
+    for _ in range(60):
+        fd = acquire_run_lock()
+        if (fd is not None or time.monotonic() + COMMIT_MARGIN >= deadline
+                or time.time() + COMMIT_MARGIN >= end):
+            break
+        time.sleep(1)
     if fd is None:
         return {"status": "deferred", "done": 0}
     try:
