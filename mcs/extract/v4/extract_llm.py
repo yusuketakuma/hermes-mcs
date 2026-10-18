@@ -4243,7 +4243,8 @@ def upgrade_status(db, *, model: str | None) -> dict:
     return {"target_version": EXTRACT_VERSION, **out, "total": sum(out.values())}
 
 
-def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None) -> str:
+def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None,
+                   archived: bool | None = None) -> str:
     """run_pending's due-row selection.
 
     Retry state is read through correlated subqueries instead of a
@@ -4254,9 +4255,15 @@ def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None) -> str:
     query (attempts: MAX(COALESCE(attempts,0)) or 0 without error rows;
     due: COALESCE(MAX(next_try),0) <= now); message_id breaks posted_at
     ties, which were unordered before (M5). ``fresh`` True/False keeps
-    only never-extracted / previously-extracted messages (M12)."""
+    only never-extracted / previously-extracted messages (M12).
+    ``archived`` partitions patients without adding a sort before LIMIT."""
     fresh_sql = ("" if fresh is None else
                  f" AND {_FRESH_SQL}" if fresh else f" AND NOT {_FRESH_SQL}")
+    archived_sql = ""
+    if archived is not None:
+        archived_sql = (" AND " + ("" if archived else "NOT ")
+                        + "EXISTS (SELECT 1 FROM patients p WHERE p.project_id=m.project_id"
+                          " AND COALESCE(p.is_archived,0)!=0)")
     return f"""
       SELECT m.message_id, m.project_id, m.body_text, m.content_hash,
              m.parent_id, m.posted_at, m.posted_at_ts,
@@ -4266,7 +4273,7 @@ def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None) -> str:
              COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,'$.attempts'),0))
                        {_ERROR_ROWS_SQL}), 0) AS attempts
       FROM messages m
-      WHERE {ELIGIBLE_MESSAGE}{adm_sql}{fresh_sql}
+      WHERE {ELIGIBLE_MESSAGE}{adm_sql}{archived_sql}{fresh_sql}
         AND (? IS NULL OR m.message_id % ? = ?)
         AND NOT EXISTS (SELECT 1 FROM fetch_jobs claim
                         WHERE claim.kind='extract_claim'
@@ -4357,8 +4364,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     # time.time(), so it is compared against the same Python clock —
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
-    def _select(fresh, n):
-        return ledger.db.execute(_selection_sql(order, adm_sql, fresh), (
+    def _select(fresh, n, archived):
+        return ledger.db.execute(_selection_sql(order, adm_sql, fresh, archived), (
             KIND, EXTRACT_VERSION,
             *adm_params,
             shard[1] if shard else None,
@@ -4369,18 +4376,18 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
             now,
             n)).fetchall()
 
-    if oldest_first:
-        rows = _select(None, limit)
-        fresh_selected = None
-    else:
-        # New arrivals first (M12): never-extracted messages outrank
-        # re-extraction (a version bump re-pends the whole corpus, an
-        # error retry, a QC/thin/report re-pend), each newest first. The
-        # two disjoint passes select from exactly the former row set.
-        rows = _select(True, limit)
-        fresh_selected = len(rows)
-        if len(rows) < limit:
-            rows += _select(False, limit - len(rows))
+    rows, fresh_selected = [], None if oldest_first else 0
+    # Active patients precede archived ones in both order modes. Each
+    # class keeps its former order: fresh then re-extraction for newest,
+    # chronological only for oldest. Disjoint filters keep LIMIT streaming.
+    for archived in (False, True):
+        for fresh in ((None,) if oldest_first else (True, False)):
+            if len(rows) >= limit:
+                return rows, fresh_selected
+            selected = _select(fresh, limit - len(rows), archived)
+            rows += selected
+            if fresh_selected is not None and fresh:
+                fresh_selected += len(selected)
     return rows, fresh_selected
 
 

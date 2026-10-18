@@ -1693,13 +1693,19 @@ def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
         sched.pop("long_defers", None)
 
 
-def _due_lanes(ledger, kinds: tuple, max_jobs: int) -> tuple[list, list, dict]:
+_ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
+                 "WHERE p.project_id=fetch_jobs.project_id AND p.is_archived)")
+
+
+def _due_lanes(ledger, kinds: tuple, max_jobs: int,
+               archived: bool = False) -> tuple[list, list, dict]:
     """Two-lane due selection with a persisted fairness share.
 
     Arrival-seeded jobs (payload.eligible=1 — a real notification event
     spawned them) keep priority, but the backfill cohort always gets a
     guaranteed share of this drain's window, so a continuous arrival
-    stream can never starve runnable backlog (GAP-6). At max_jobs < 4
+    stream can never starve runnable backlog within this patient class
+    (GAP-6). At max_jobs < 4
     a single share slot would otherwise displace the only arrival slot:
     the persisted 'turn' marker alternates cohorts instead of
     permanently starving either.
@@ -1707,18 +1713,19 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int) -> tuple[list, list, dict]:
     Returns (arrival_jobs, backfill_jobs, sched_mutation) — the mutation
     is written by the caller once the batch is consumed."""
     now = time.time()
+    scope = ("" if archived else "NOT ") + _ARCHIVED_JOB
     kind_ph = ",".join("?" * len(kinds))
     eligible = ("json_valid(payload) "
                 "AND COALESCE(json_extract(payload,'$.eligible'),0)=1")
     arrivals_due = ledger.db.execute(f"""
       SELECT COUNT(*) FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
-        AND {eligible}
+        AND {eligible} AND {scope}
     """, (now, *kinds)).fetchone()[0]
     backlog_due = ledger.db.execute(f"""
       SELECT COUNT(*) FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
-        AND NOT ({eligible})
+        AND NOT ({eligible}) AND {scope}
     """, (now, *kinds)).fetchone()[0]
     share = 0
     turn_next = None
@@ -1745,14 +1752,14 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int) -> tuple[list, list, dict]:
     arrivals = ledger.db.execute(f"""
       SELECT * FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
-        AND {eligible}
+        AND {eligible} AND {scope}
       ORDER BY {order} LIMIT ?
     """, (now, *kinds, JOB_KIND, max_jobs - share)).fetchall() \
         if max_jobs - share > 0 else []
     backfill = ledger.db.execute(f"""
       SELECT * FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
-        AND NOT ({eligible})
+        AND NOT ({eligible}) AND {scope}
       ORDER BY {order} LIMIT ?
     """, (now, *kinds, JOB_KIND, share)).fetchall() if share else []
     return list(arrivals), list(backfill), {"turn": turn_next}
@@ -1811,25 +1818,43 @@ def _job_lock(ledger, job_id):
 
 def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
                 max_jobs: int, long_defers: dict | None = None) -> tuple:
-    """Due-job selection for one drain pass.
+    """Select active patients first, retaining each cohort's bounded fairness."""
+    active = _select_due_class(
+        ledger, lane, kinds, qc_active, max_jobs, long_defers, False)
+    remaining = max_jobs - len(active[0])
+    if remaining <= 0:
+        return active
+    archived = _select_due_class(
+        ledger, lane, kinds, qc_active, remaining, long_defers, True)
+    due, qc_jobs, arrivals, backfill = [
+        a + b for a, b in zip(active[:4], archived[:4])]
+    return (due, qc_jobs, arrivals, backfill,
+            {"turn": active[4].get("turn") or archived[4].get("turn")})
+
+
+def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
+                      max_jobs: int, long_defers: dict | None,
+                      archived: bool) -> tuple:
+    """Due-job selection for one patient class in a drain pass.
 
     Returns (due, qc_jobs, arrivals, backfill, sched_mut): the ordered
     candidate list, its per-cohort split, and the fairness turn to persist.
     ``long_defers`` ({str(job_id): {"g", "n"}}) keeps jobs known to need
     the long-output budget out of the realtime lane.
     """
+    scope = ("" if archived else "NOT ") + _ARCHIVED_JOB
     if lane is None:
         qc_rows = []
         if qc_active and max_jobs > 1:
             qc_rows = ledger.db.execute(
                 "SELECT * FROM fetch_jobs WHERE state='pending' "
-                "AND kind=? AND next_try<=? ORDER BY job_id LIMIT ?",
+                f"AND kind=? AND next_try<=? AND {scope} ORDER BY job_id LIMIT ?",
                 (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
         qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
         qc_jobs = list(qc_rows[:qc_share])
         arrivals, backfill, sched_mut = _due_lanes(
             ledger, (JOB_KIND,) if qc_jobs else kinds,
-            max_jobs - len(qc_jobs))
+            max_jobs - len(qc_jobs), archived)
         # unused lane capacity flows back to QC — same rule the backfill
         # cohort uses against an idle arrival lane
         spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
@@ -1853,7 +1878,7 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
             # (same input generation only: a re-seed gets a new try)
             rows = ledger.db.execute(
                 f"SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? "
-                f"AND kind=? AND {eligible} "
+                f"AND kind=? AND {eligible} AND {scope} "
                 "AND NOT EXISTS (SELECT 1 FROM json_each(?) s"
                 " WHERE s.key=CAST(fetch_jobs.job_id AS TEXT)"
                 " AND json_extract(s.value,'$.g')=CASE WHEN json_valid("
@@ -1879,7 +1904,7 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
                         kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
                     for row in ledger.db.execute(
                         "SELECT * FROM fetch_jobs WHERE state='pending' "
-                        "AND next_try<=? AND kind=? ORDER BY "
+                        f"AND next_try<=? AND kind=? AND {scope} ORDER BY "
                         f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
                         (time.time(), kind, max_jobs + 8)).fetchall()]
         # Include extra candidates so another worker's current job cannot
@@ -2228,6 +2253,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         # T14: the backfill cohort additionally gets a guaranteed share of
         # every window — a continuous arrival stream cannot starve runnable
         # backlog (persisted accounting row keeps it restart-safe).
+        # These shares apply within each patient class; archived patients
+        # receive only capacity left by active patients.
         # QC dedicated frame (observed 2026-09-30): kind ordering puts every
         # semantic row ahead of QC in both cohorts, and a ~240 s generation
         # consumes the whole window — QC rows sat pending for hours at

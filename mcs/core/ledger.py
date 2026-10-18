@@ -1154,7 +1154,13 @@ class Ledger:
                                   notify_max_age_s):
         """Keep notification eligibility and semantic coverage in the save
         transaction for unread, backfill and reply arrivals alike."""
-        if not (notify or semantic) or self.is_archived(project_id):
+        if not (notify or semantic):
+            return
+        if self.is_archived(project_id):
+            seed_ids = sorted(set(new_ids) | set(changed_ids))
+            if semantic and seed_ids:
+                self._semantic_seed_tx(project_id, seed_ids, {
+                    "source": "history_import", "notification_free": True})
             return
         origin = {"source": "history_import"}
         if notify:
