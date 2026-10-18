@@ -91,12 +91,13 @@ def test_empty_and_long_scoped_summary_keeps_disclosures_on_every_renderer(
     assert "対応がなかったことを意味せず" not in empty
 
 
-def test_archived_patients_do_not_leak_tasks_signals_or_summary_updates(led):
-    # Given: an archived room with each non-message summary source.
+def test_archived_patients_are_listed_last_and_marked_in_every_source(led):
+    # Given: an active room and an archived room with each non-message source.
     _patient(led, 1)
     _patient(led, 2, name="ARCHIVED-NAME-CANARY", archived=1)
     _msg(led, 200, pid=2)
     _add_request(led, pid=2, src_mid=200, due="2000-01-01")
+    _add_request(led, pid=1, src_mid=200, due="2000-01-01")
     _signal_row(led, "archived", pid=2, mids=[200], stype="adherence_concern")
     for at in (NOW - 2 * 86400, NOW - 10):
         led.artifact_add("karte_summary", '{"empty":false}', project_id=2)
@@ -105,11 +106,59 @@ def test_archived_patients_do_not_leak_tasks_signals_or_summary_updates(led):
     led.db.commit()
     # When: building an unrestricted private summary.
     parts = notify_digest.view(led.db, {"signals": {"notify": True}}, "", now=NOW)["parts"]
-    # Then: archive filtering applies to every source, not only the new-message query.
+    # Then: archived rooms stay visible after active ones, marked, and are
+    # not counted as target patients (owner decision 2026-10-18).
     out = notify_render.parts_text(parts)
-    assert "ARCHIVED-NAME-CANARY" not in out and "project 2" not in out
-    assert "未完了タスク 0件" in out and "アラート 0件" in out
-    assert "連携サマリー更新" not in out
+    assert "対象: 全患者 1人・" in out
+    late = next(line for line in out.splitlines() if line.startswith("・期限切れタスク"))
+    assert late.startswith("・期限切れタスク 2件（2人）: ")
+    assert late.endswith(", ARCHIVED-NAME-CANARY（アーカイブ済み）")
+    assert "アラート 1件" in out
+    assert "■ 連携サマリー更新\n・1件: ARCHIVED-NAME-CANARY（アーカイブ済み）" in out
+
+
+def test_archived_rooms_follow_active_ones_regardless_of_insert_order(led):
+    # Given: archived rooms recorded BEFORE the active ones, in the
+    # summary-update and addressed-unanswered sections.
+    _patient(led, 1, name="合成在宅")
+    _patient(led, 2, name="合成退所", archived=1)
+    for pid, mid in ((2, 200), (1, 100)):
+        _msg(led, mid, pid=pid, ts=int(NOW) - 3600)
+        _signal_row(led, f"req-{pid}", pid=pid, mids=[mid],
+                    stype="pharmacist_request_unanswered")
+        for at in (NOW - 2 * 86400, NOW - 10):
+            led.artifact_add("karte_summary", '{"empty":false}', project_id=pid)
+            led.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id="
+                           "(SELECT max(artifact_id) FROM artifacts)", (at,))
+    led.db.commit()
+    # When: building the summary.
+    parts = notify_digest.view(led.db, {"signals": {"notify": True}}, "", now=NOW)["parts"]
+    out = notify_render.parts_text(parts)
+    # Then: active first in both sections; archived keeps its mark.
+    assert "・2件: 合成在宅, 合成退所（アーカイブ済み）" in out
+    asked = [line for line in out.splitlines() if "薬剤師宛の依頼に返信の記録なし" in line]
+    assert [line.split()[0] for line in asked] == ["・合成在宅", "・合成退所（アーカイブ済み）"]
+
+
+def test_archived_alert_counts_are_listed_after_active_ones_and_marked(led):
+    # Given: an archived-only open alert and a stale one, plus an active alert.
+    _patient(led, 1, name="合成在宅")
+    _patient(led, 2, name="合成退所", archived=1)
+    _signal_row(led, "arch", pid=2, stype="adherence_concern")
+    _signal_row(led, "act", pid=1, stype="med_followup")
+    led.db.execute("UPDATE artifacts SET created_at=? WHERE kind='signal_v1'",
+                   (NOW - 30 * 86400,))
+    led.db.commit()
+    # When: building the summary.
+    parts = notify_digest.view(led.db, {"signals": {"notify": True}}, "", now=NOW)["parts"]
+    out = notify_render.parts_text(parts)
+    # Then: totals keep both classes; per-type lines separate them, active first.
+    assert "アラート 2件" in out
+    pending = out.split("■ 確認待ちのアラート\n", 1)[1].split("\n■", 1)[0].splitlines()
+    assert len(pending) == 2 and pending[1].endswith("（アーカイブ済み）")
+    assert "（アーカイブ済み）" not in pending[0]
+    stale = [line for line in out.splitlines() if line.startswith("・滞留アラート")]
+    assert len(stale) == 2 and "（アーカイブ済み）" in stale[1] and "（アーカイブ済み）" not in stale[0]
 
 
 def _metadata(led, reactions, *, error=None):

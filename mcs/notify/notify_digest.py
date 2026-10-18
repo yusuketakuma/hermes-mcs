@@ -239,8 +239,10 @@ def _response_state(db, r, self_id, as_of) -> tuple:
     return replied, mine, f"自分の返信{reply}・{stamp}"
 
 
-def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
-    """自分宛で応答未観測: 既存シグナルと、本人userメンション後の返信・本人反応なし。"""
+def _addressed_unanswered(db, until, ok, room, self_id, signals_on,
+                          archived=frozenset()) -> list:
+    """自分宛で応答未観測: 既存シグナルと、本人userメンション後の返信・本人反応なし。
+    アーカイブ済み患者の行はアクティブ患者の後に並べる。"""
     rows, signal_mids = [], set()
     if signals_on:
         for c in mcs_signals._latest_signal_states(db).values():
@@ -259,8 +261,8 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
             signal_mids.add(msg["message_id"])
             state = (_response_state(db, msg, self_id, until)[2]
                      if self_id else "本人ID不明")
-            rows.append(f"・{room(c['project_id'])} "
-                        f"薬剤師宛の依頼に返信の記録なし・{state}")
+            rows.append((c["project_id"], f"・{room(c['project_id'])} "
+                         f"薬剤師宛の依頼に返信の記録なし・{state}"))
     unknown, station = 0, 0
     if self_id is not None:
         for r in _recent_posts(db, until, ok, ""):
@@ -276,8 +278,10 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
                 continue          # a signal row already lists this post
             replied, mine, state = _response_state(db, r, self_id, until)
             if not replied and not mine:
-                rows.append(f"・{room(r['project_id'])} "
-                            f"自分宛・{_ago(until - r['posted_at_ts'])}・{state}")
+                rows.append((r["project_id"], f"・{room(r['project_id'])} "
+                             f"自分宛・{_ago(until - r['posted_at_ts'])}・{state}"))
+    # stable: each class keeps its signal-then-mention order before MAX_LIST
+    rows = [t for _pid, t in sorted(rows, key=lambda r: r[0] in archived)]
     notes = [] if self_id is not None else [
         "本人の送信者IDが不明のためメンションは判定していません。"]
     if station:
@@ -334,19 +338,25 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     """The summary display model for [since, until). ``flt`` is a
     parse_scope dict (None = all); ``names`` shows patient names next to
     project ids; ``allowed`` is the caller's project scope."""
+    import notify_views
     flt = flt or parse_scope("")
     keep = scope_projects(db, flt, name, allowed)
     live = {r[0] for r in db.execute(
         "SELECT project_id FROM patients WHERE COALESCE(is_archived,0)=0")}
+    # archived patients stay listed, after the active ones and marked;
+    # stamp-based sections keep them out (their stamps are never fetched)
+    archived = {r[0] for r in db.execute(
+        "SELECT project_id FROM patients WHERE is_archived=1")}
 
     def ok(pid) -> bool:
-        return pid in live and (keep is None or pid in keep)
+        return keep is None or pid in keep
 
     def room(pid) -> str:
         name_ = _plain(_patient_name(db, pid)) if names else ""
         # staff read names; the internal id only identifies a room when
         # names are off or missing
-        return name_ or f"project {pid}"
+        return (name_ or f"project {pid}") \
+            + (notify_views.ARCHIVED_MARK if pid in archived else "")
 
     start = datetime.fromtimestamp(since, JST)
     end = datetime.fromtimestamp(until, JST)
@@ -364,9 +374,9 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         """SELECT m.message_id, m.project_id, m.profession, m.posted_at_ts
            FROM messages m JOIN patients p ON p.project_id=m.project_id
            WHERE m.first_seen>=? AND m.first_seen<?
-             AND COALESCE(p.is_archived,0)=0
              AND COALESCE(m.body_state,'')!='deleted'
-           ORDER BY m.first_seen, m.message_id""", (since, until))
+           ORDER BY COALESCE(p.is_archived,0), m.first_seen, m.message_id""",
+        (since, until))
         # history imports land with first_seen now but an old post time
         if ok(r["project_id"])
         # an unknown post time cannot be proven old (Ledger._filter_notify_age)
@@ -387,20 +397,30 @@ def build(db, cfg, since: float, until: float, flt=None, *,
 
     sig = cfg.get("signals")
     signals_on = isinstance(sig, dict) and sig.get("notify") is True
-    by_type: dict = {}
-    stale_by: dict = {}
+    # per type, split active (False) / archived (True) so archived alerts
+    # are counted in the total but listed after active ones, marked
+    by_type: dict = {False: {}, True: {}}
+    stale_by: dict = {False: {}, True: {}}
     if signals_on:
         for c in mcs_signals._latest_signal_states(db).values():
             if c and c["state"] == "open" and ok(c["project_id"]) \
                     and c["type"] not in EXCLUDED_SIGNALS:
-                by_type[c["type"]] = by_type.get(c["type"], 0) + 1
+                part = by_type[c["project_id"] in archived]
+                part[c["type"]] = part.get(c["type"], 0) + 1
         for _key, c in _stale_open_unacked(db, until):
             if ok(c["project_id"]):
-                stale_by[c["type"]] = stale_by.get(c["type"], 0) + 1
+                part = stale_by[c["project_id"] in archived]
+                part[c["type"]] = part.get(c["type"], 0) + 1
+
+    def by_class(counts) -> list:
+        """[(suffix, {type: n})] — active first, then archived, non-empty."""
+        return [(notify_views.ARCHIVED_MARK if is_archived else "", counts[is_archived])
+                for is_archived in (False, True) if counts[is_archived]]
 
     patients = len(live if keep is None else live & keep)
     summary = (f"新着 {len(rows)}件・緊急度高 {len(urgent)}件"
-               + (f"・アラート {sum(by_type.values())}件" if signals_on else "")
+               + (f"・アラート {sum(n for d in by_type.values() for n in d.values())}件"
+                  if signals_on else "")
                + f"・未完了タスク {len(tasks)}件" + _nonzero(
                    (("期限切れ", len(late)), ("本日期限", len(due)))))
     containers = [
@@ -417,13 +437,13 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     todo = []
     for label, pids in (("期限切れタスク", late), ("本日期限タスク", due)):
         if pids:
-            rooms_ = list(dict.fromkeys(pids))
+            rooms_ = sorted(dict.fromkeys(pids), key=lambda p: p in archived)
             todo.append(f"・{label} {len(pids)}件（{len(rooms_)}人）: "
                         + _ids(rooms_, room))
-    if stale_by:
-        todo.append(f"・滞留アラート（{STALE_ALERT_D}日超・未確認）"
-                    f"{sum(stale_by.values())}件: " + "・".join(
-                        f"{_signal_ja(k)} {n}" for k, n in sorted(stale_by.items())))
+    for mark, counts in by_class(stale_by):
+        todo.append(f"・滞留アラート（{STALE_ALERT_D}日超・未確認）{mark}"
+                    f"{sum(counts.values())}件: " + "・".join(
+                        f"{_signal_ja(k)} {n}" for k, n in sorted(counts.items())))
     section("要対応", todo)
     section(f"緊急度高 {len(urgent)}件", [
         f"・{room(p)} {_posted_hhmm(db, m)}" + (
@@ -431,22 +451,24 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             if u == "llm" else " 🚨")
         for p, m, u in urgent], fold=True)
     section(f"自分宛で返信の記録なし（直近{OWN_POST_DAYS}日）",
-            _addressed_unanswered(db, until, ok, room, self_id, signals_on), fold=True)
+            _addressed_unanswered(db, until, ok, room, self_id, signals_on,
+                                  archived), fold=True)
 
     per: dict = {}
     for r in rows:
         prof = per.setdefault(r["project_id"], {})
         key = _plain(r["profession"]) or "職種不明"
         prof[key] = prof.get(key, 0) + 1
-    ranked = sorted(per.items(), key=lambda kv: (-sum(kv[1].values()), kv[0]))
+    ranked = sorted(per.items(), key=lambda kv: (kv[0] in archived,
+                                                 -sum(kv[1].values()), kv[0]))
     section(f"新着（患者別 {len(per)}人）", [
         f"・{room(pid)} {sum(p.values())}件（" + "・".join(
             f"{k} {n}" for k, n in sorted(p.items(), key=lambda x: -x[1]))
         + "）" for pid, p in ranked], fold=True)
 
-    if by_type:
-        section("確認待ちのアラート", ["・" + "・".join(
-            f"{_signal_ja(k)} {n}" for k, n in sorted(by_type.items()))])
+    section("確認待ちのアラート", [
+        "・" + "・".join(f"{_signal_ja(k)} {n}" for k, n in sorted(counts.items())) + mark
+        for mark, counts in by_class(by_type)])
 
     reacted, reaction_counts = _self_reaction_count(db, since, until, keep)
     # an observed zero is omitted; unfetched stamps are counted in 取得状況
@@ -476,7 +498,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
                 and ok(r["project_id"]):
             summaries.append(r["project_id"])
     # count rooms, not artifacts — one room refetched twice is one update
-    updated = list(dict.fromkeys(summaries))
+    updated = sorted(dict.fromkeys(summaries), key=lambda p: p in archived)
     section("連携サマリー更新", [f"・{len(updated)}件: " + _ids(updated, room)]
             if updated else [])
 
@@ -484,7 +506,6 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     cov = []
     incomplete = [r for r in gaps["incomplete_rooms"] if ok(r[0])]
     if incomplete:
-        import notify_views
         cov.append(f"・取得未完了のルーム {len(incomplete)}件: " + _ids(
             incomplete, lambda r: f"{room(r[0])}（{notify_views.fetch_reason_ja(r[1])}）"))
     else:
@@ -498,7 +519,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     if gaps["reply_gaps"]:
         cov.append(f"・返信の取得未完了スレッド{scoped}: {gaps['reply_gaps']}件")
     stamp_states = [get_message_metadata(db, r["message_id"])["reactions_status"]
-                    for r in rows]
+                    for r in rows if r["project_id"] not in archived]
     if "not_fetched" in stamp_states or "invalid" in stamp_states:
         cov.append("・" + _stamp_gaps(stamp_states.count("not_fetched"),
                                       stamp_states.count("invalid")))

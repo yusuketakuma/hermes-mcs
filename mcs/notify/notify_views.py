@@ -382,6 +382,19 @@ def _limit(items) -> tuple:
     return items[:LIST_FETCH], max(0, len(items) - LIST_FETCH)
 
 
+ARCHIVED_MARK = "（アーカイブ済み）"
+
+
+def archived_ids(db, pids) -> set:
+    """The archived subset of ``pids`` — listed after active patients."""
+    pids = sorted({p for p in pids if p is not None})
+    if not pids:
+        return set()
+    return {r[0] for r in db.execute(
+        "SELECT project_id FROM patients WHERE is_archived=1 AND project_id IN ("
+        + ",".join("?" * len(pids)) + ")", pids)}
+
+
 def _in_scope(rows, projects) -> list:
     """Rows inside the plugin's project scope (None = unscoped) — the
     head counts must never include projects the plugin hides."""
@@ -412,8 +425,10 @@ def my_tasks_view(db, name, now=None, projects=None) -> dict:
     def overdue(r):
         return bool(r["due_date"] and r["due_date"] < today)
 
-    rows.sort(key=lambda r: (not overdue(r), r["due_date"] is None,
-                             r["due_date"] or "", r["request_id"]))
+    archived = archived_ids(db, (r["project_id"] for r in rows))
+    rows.sort(key=lambda r: (r["project_id"] in archived, not overdue(r),
+                             r["due_date"] is None, r["due_date"] or "",
+                             r["request_id"]))
     out["head"] = [f"未完了 {len(rows)}件（うち期限切れ "
                    f"{sum(map(overdue, rows))}件）"]
     # only the rows handed to the plugin are formatted, and each
@@ -422,8 +437,9 @@ def my_tasks_view(db, name, now=None, projects=None) -> dict:
     for r in rows[:LIST_FETCH]:
         pid = r["project_id"]
         if pid not in names:
-            names[pid] = (_inline(_patient_name(db, pid), 30)
-                          or f"project {pid}")
+            names[pid] = ((_inline(_patient_name(db, pid), 30)
+                           or f"project {pid}")
+                          + (ARCHIVED_MARK if pid in archived else ""))
         # who it is for, what to do, when — the id last for the CLI
         line = f"・{names[pid]}: {_inline(r['title'], 60)}"
         if r["due_date"]:
@@ -447,7 +463,7 @@ def unacked_view(db, transport, now=None, projects=None,
                  member_names=None) -> dict:
     """🗂 delivered thread/signal cards created or content-rendered within the window whose
     current content carries no live acknowledgement, grouped by patient
-    (oldest card's patient first), oldest first; assigned-but-unconfirmed
+    (oldest card's patient first, archived patients last), oldest first; assigned-but-unconfirmed
     cards are marked. Digest cards span projects and are left out.
     On LINE WORKS and Slack the owner mention becomes the ``member_names`` name
     or メンバー (``lineworks_member_names``), never the raw user id."""
@@ -481,10 +497,12 @@ def unacked_view(db, transport, now=None, projects=None,
     groups: dict = {}
     for r in rows:
         groups.setdefault(r["project_id"], []).append(r)
+    archived = archived_ids(db, groups)
     items = []
     self_reacted = unfetched = 0
-    for pid, cards in groups.items():
-        group = _inline(_patient_name(db, pid), 30) or f"project {pid}"
+    for pid, cards in sorted(groups.items(), key=lambda g: g[0] in archived):
+        group = ((_inline(_patient_name(db, pid), 30) or f"project {pid}")
+                 + (ARCHIVED_MARK if pid in archived else ""))
         with_reactions = [(c, card_reactions(db, c)) for c in cards]
         # Stable partition: acknowledgement remains independent of MCS stamps.
         with_reactions.sort(key=lambda pair: any(
