@@ -5479,8 +5479,8 @@ def _main() -> int:
             total = {"done": 0, "failed": 0, "left": 0}
             context_lane = _SLOT_OVERRIDE == local_llm.LANES[3]
             semantic_first_until = 0.0
-            from mcs_util import _updater_state
-            nightly_state = _updater_state()
+            import mcs_util
+            nightly_state = mcs_util._updater_state()
             carry: list = []   # finished results waiting for the run lock
 
             while True:
@@ -5492,6 +5492,11 @@ def _main() -> int:
                     # semantic/extraction only when nothing is due. A
                     # carried result is written first so a long context
                     # run cannot outlive its claim lease.
+                    if mcs_util._updater_state() != nightly_state:
+                        # an updater ran since the last pass: old code
+                        # must not write the carried result either
+                        _settle_carry(led, carry, write=False)
+                        return 0
                     _settle_carry(led, carry, final=False)
                     nightly = _background_nightly(led, nightly_state, stop)
                     if nightly.get("status") != "off":

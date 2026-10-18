@@ -267,3 +267,29 @@ def test_update_stop_does_not_commit_old_carried_result(tmp_path, monkeypatch):
     assert db.artifacts("extract_llm", message_id=1) == []
     assert _claims(db) == []
     db.db.close()
+
+
+def test_context_lane_checks_update_fence_before_settling_carry(tmp_path, monkeypatch):
+    """Lane 3 compares the updater fence before its pre-context settle, so
+    an update between passes never lets old code write the carried
+    result (Codex L4 follow-up)."""
+    import mcs_util
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    state["blocked"] = 0
+    monkeypatch.setattr(db, "close", lambda: None)
+    monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "10"])
+
+    def run(*a, **kw):
+        monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 124))
+        return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
+    monkeypatch.setattr(extract_llm, "run_pending", run)
+    monkeypatch.setattr(extract_llm, "_background_nightly",
+                        lambda *a: {"status": "deferred", "done": 0})
+    assert extract_llm.main() == 0
+    assert db.artifacts("extract_llm", message_id=1) == []
+    assert _claims(db) == []
+    db.db.close()
