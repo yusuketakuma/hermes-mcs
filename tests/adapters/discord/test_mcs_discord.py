@@ -952,8 +952,8 @@ def test_action_foreign_thread_denied(world):
 def test_confirm_preview_text_per_transport():
     req = {"title": "件" * 250, "reason": "理" * 450,
            "assignee": "担当者A", "due_date": "2026-10-01"}
-    tail = (f"内容: {'件' * 200}\n担当: 担当者A\n期限: 2026-10-01\n"
-            f"理由: {'理' * 400}\n"
+    tail = (f"内容: {'件' * 250}\n担当: 担当者A\n期限: 2026-10-01\n"
+            f"理由: {'理' * 450}\n"
             "確定すると、この投稿にタスクを作成し、あなたの名前と理由を記録します。\n"
             "この確認は10分で無効になります。")
     assert text.preview_text("request", req, True) \
@@ -1033,7 +1033,11 @@ def test_action_ignores_foreign_and_denies(world):
     assert len(list((world.data / "cmd_int").glob("*.json"))) == before
 
 
-def test_request_modal_full_flow(world):
+@pytest.mark.parametrize("title, reason", [
+    ("服薬確認", "フォロー要"),
+    ("合" * 996 + "内容末尾", "理" * 1996 + "理由末尾"),
+])
+def test_request_modal_full_flow(world, title, reason):
     """request click -> modal -> submit -> preview -> confirm ->
     request.create lands as a human-confirmed command."""
     world.seed()
@@ -1056,8 +1060,8 @@ def test_request_modal_full_flow(world):
     submit = FakeInteraction(
         f"mcs:m:{modal_id}", message_id=msg.id,
         components=[{"components": [
-            {"custom_id": "title", "value": "服薬確認"},
-            {"custom_id": "reason", "value": "フォロー要"},
+            {"custom_id": "title", "value": title},
+            {"custom_id": "reason", "value": reason},
             {"custom_id": "assignee", "value": ""},
             {"custom_id": "due_date", "value": ""}]}])
     asyncio.run(world.interact(act, submit))
@@ -1073,6 +1077,9 @@ def test_request_modal_full_flow(world):
     assert pend["payload"]["source_message_id"] == 100
     assert pend["payload"]["source_hash"] == f"{100:064x}"
     assert pend["payload"]["human_confirmed"] is True
+    assert pend["payload"]["title"] == title and pend["payload"]["reason"] == reason
+    shown = "".join(part["content"] for part in submit.followup.sent)
+    assert title in shown and reason in shown
 
     # 3. confirm -> the pinned payload is enqueued verbatim
     confirm = FakeInteraction(cid, message_id=msg.id)
@@ -1082,7 +1089,7 @@ def test_request_modal_full_flow(world):
         "FROM requests").fetchall()
     assert len(rows) == 1
     assert rows[0]["source_message_id"] == 100
-    assert rows[0]["title"] == "服薬確認"
+    assert rows[0]["title"] == title
 
 
 def test_modal_wrong_actor_and_origin(world):
@@ -3348,3 +3355,55 @@ def test_thread_post_line_is_subtext_but_signal_patient_heading_is_not():
     signal = {"kind": "signal", "parts": {"containers": containers, "footer": []}}
     zones, _ = _zones(signal, escape_md)
     assert zones[1][0] == "10-01 09:40 合成さん"
+
+
+@pytest.mark.parametrize("fill", ["合", "🩺"])
+def test_confirmation_preview_keeps_full_payload_with_last_only_buttons(world, fill):
+    _, reg, bot = world.mkworker()
+    act = world.mkactions(reg, bot)
+    payload = {"title": fill * 996 + "内容末尾", "reason": fill * 1996 + "理由末尾",
+               "assignee": "合" * 116 + "担当末尾", "due_date": "2026-10-18"}
+    ix = FakeInteraction("synthetic-preview")
+    asyncio.run(act._send_preview(ix, "request", payload, "synthetic-confirm", target="合成患者・合成投稿"))
+    sent = ix.followup.sent
+    assert len(sent) > 1
+    assert all(len(m["content"]) <= 2000 and m["ephemeral"] and not m["pings"] for m in sent)
+    assert all(m["view"] is MISSING for m in sent[:-1])
+    assert [b.label for b in sent[-1]["view"].items] == ["確定する", "取消"]
+    for value in payload.values():
+        assert value in "".join(m["content"] for m in sent)
+
+
+@pytest.mark.parametrize("fail_at", [1, 2])
+def test_confirmation_preview_stops_before_buttons_after_followup_failure(world, fail_at):
+    _, reg, bot = world.mkworker()
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction("synthetic-preview")
+    send = ix.followup.send
+    attempts = 0
+    async def fail(content, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == fail_at:
+            raise RuntimeError("synthetic preview failure")
+        await send(content, **kwargs)
+    ix.followup.send = fail
+    payload = {"title": "合" * 1000, "reason": "🩺" * 2000}
+    asyncio.run(act._send_preview(ix, "request", payload, "synthetic-confirm"))
+    assert attempts == fail_at
+    assert all(m["view"] is MISSING for m in ix.followup.sent)
+    assert any(event == "followup_failed" for event, _ in world.logs)
+
+
+def test_confirmation_preview_continuation_cannot_start_active_markdown(world):
+    _, reg, bot = world.mkworker()
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction("synthetic-preview")
+    # The field's # is not originally line-leading, but a hard wrap makes it so.
+    reason = "合" * (text.BODY_CHUNK - len("理由: ")) + "# 合成見出し <@1001>"
+    payload = {"title": "合成タスク", "reason": reason}
+    asyncio.run(act._send_preview(ix, "request", payload, "synthetic-confirm"))
+    assert len(ix.followup.sent) > 1
+    assert all(not message["content"].startswith("#") for message in ix.followup.sent)
+    assert "＃ 合成見出し" in "".join(message["content"] for message in ix.followup.sent)
+    assert all(not message["pings"] for message in ix.followup.sent)
