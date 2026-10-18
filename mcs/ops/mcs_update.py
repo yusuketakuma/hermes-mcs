@@ -48,6 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
+from cli_args import JapaneseArgumentParser as _JapaneseParser  # noqa: E402
 import mcs_runtime  # noqa: E402
 from mcs_requests import RELEASE_TAG_RE, parse_command, release_tag  # noqa: E402
 
@@ -3814,26 +3815,6 @@ def cmd_post_merge() -> int:
             or os.environ.get(_UPDATE_PM_ENV) != applying.get("sha"):
         return 2
     return _post_merge(state)
-
-
-class _JapaneseParser(argparse.ArgumentParser):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._positionals.title = "操作"
-        self._optionals.title = "オプション"
-        for action in self._actions:
-            if isinstance(action, argparse._HelpAction):
-                action.help = "この説明を表示して終了する"
-
-    def format_help(self):
-        return super().format_help().replace("usage: ", "使い方: ", 1)
-
-    def format_usage(self):
-        return super().format_usage().replace("usage: ", "使い方: ", 1)
-
-    def error(self, message):
-        self.print_usage(sys.stderr)
-        self.exit(2, f"入力内容を確認してください。--help で指定方法を確認できます。\n詳細: {message}\n")
 
 
 def _build_parser() -> argparse.ArgumentParser:
