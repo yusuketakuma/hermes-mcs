@@ -707,6 +707,25 @@
       "release_subtests_passed": 41,
       "release_test_log_sha256": "dae7108966db2830f6f63e32f090c66c708116e2e05bcf70adbb349e82bdd881",
       "stamp_false_positive_evidence_sha256": "5624bcaffa8a977898b861bd0cee3e55072b0386bfb4a28b201d969e5b603fc2"
+    },
+    "ci_cancel_fixture_correction": {
+      "first_candidate": "73fca9b8e964b6176c98db9d57068915dcb8ece7",
+      "first_run_id": 39122071195,
+      "macos_passed": 4389,
+      "macos_failed": 1,
+      "failed_test": "test_delivered_primary_with_unknown_body_part_survives_cancel_and_late_part_receipt",
+      "cause": "Obsolete short-body companion assumption after Slack face placement; product runtime unchanged",
+      "corrected_tests_passed": 41,
+      "skipped": 0,
+      "coverage": [
+        "legacy companion body",
+        "current oversized body companion",
+        "unchanged cancellation and late receipt safety assertions"
+      ],
+      "manifest_sha256": "70010d3830be1bd34d3aea38184a9d8a5c1956c2c4c918521a7983f96386e2ba",
+      "requires_final_sha_ci": true,
+      "independent_review_sha256": "e835fb116e1195080c79a8008761af28677021e0fbc993615491fad58f40adc9",
+      "independent_review": "accepted; independently 41 passed, no skipped"
     }
   },
   "not_performed": [

@@ -72,7 +72,12 @@ def _request(case):
 
 
 @pytest.fixture
-def case(tmp_path, monkeypatch):
+def case(tmp_path, monkeypatch, request):
+    # Companion-body receipts exist on legacy cards or the current long-body fallback.
+    part_mode = getattr(request, "param", None)
+    if part_mode == "legacy":
+        import present_slack
+        monkeypatch.setattr(present_slack, "BODY_ON_FACE", False)
     root = tmp_path / "synthetic-install"
     root.mkdir()
     led = make_ledger(root, data_dir=True)
@@ -90,6 +95,10 @@ def case(tmp_path, monkeypatch):
     events, old_renders = [], []
     for pid, mid in ((1, 100), (2, 200)):
         _seed_thread(led, pid=pid, root=mid, mids=(mid,))
+        if part_mode == "overflow":
+            led.db.execute("UPDATE messages SET body_text=?,content_hash=? WHERE message_id=?",
+                           ("合成" * 16000, "b" * 64, mid))
+            led.db.commit()
         old_event = _intent(led, pid=pid, payload={"message_ids": [mid]})
         assert _dispatch(led, old_event, SLACK)["dispatched"]
         render = dict(_latest_render(led, pid))
@@ -424,6 +433,7 @@ def test_late_receipts_cannot_revive_the_three_cancelled_events(case):
             _assert_cancelled(case)
 
 
+@pytest.mark.parametrize("case", ["legacy", "overflow"], indirect=True)
 def test_delivered_primary_with_unknown_body_part_survives_cancel_and_late_part_receipt(case):
     db = case.led.db
     render, aid = case.old_renders[0]
