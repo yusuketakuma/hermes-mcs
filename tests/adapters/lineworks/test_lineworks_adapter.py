@@ -920,3 +920,57 @@ def test_update_header_accepts_valid_manifest_with_null_card_name():
             part["prior_remote_id"] = "lw:" + "e" * 32
     assert cards.validate(spec) is spec
     assert delivery.chunk_text(spec, "m:100:header#1", "↳ 合成見出し") == "↳ 更新 合成見出し\n（本文は変更なし）"
+
+
+def test_long_confirmation_preview_keeps_full_private_payload_and_final_buttons(tmp_path):
+    w = world(tmp_path)
+    values = ("合" * 996 + "内容末尾", "担" * 116 + "担当末尾", "2026-10-18", "🩺" * 1996 + "理由末尾")
+    async def scenario():
+        await w.actions.handle(event(postback="mcs:a:" + TOKEN))
+        env = command_files(w)[0]
+        result = {"request_id": env["request_id"], "outcome": "applied", "modal": True,
+                  "action": "request", "params": {"project_id": 1}, "form": {}}
+        paths.atomic_write(str(Path(w.dirs["cmd_results"]) / (paths.safe_name(env["request_id"]) + ".json")), raw(result))
+        await w.actions.sweep_followups()
+        for value in values[:-1]:
+            await w.actions.handle(event(text=value, channel=None))
+        before = len(w.client.calls)
+        await w.actions.handle(event(text=values[-1], channel=None))
+        calls = w.client.calls[before:]
+        assert len(calls) > 1
+        assert all(target == {"user_id": "operator", "channel_id": None} for _, _, target in calls)
+        contents = [content for _, content, _ in calls]
+        assert all(content["type"] == "text" and len(content["text"]) <= 1000 for content in contents[:-1])
+        final = contents[-1]
+        assert final["type"] == "flex"
+        final_text = final["contents"]["body"]["contents"][0]["text"]
+        assert len(final_text) <= 1000 and len(final["altText"]) <= 400
+        shown = "".join(content["text"] for content in contents[:-1]) + final_text
+        cid, pending = next(iter(w.reg._data["pending_confirms"].items()))
+        for key, value in zip(("title", "assignee", "due_date", "reason"), values):
+            assert value in shown and pending["payload"][key] == value
+        await w.actions.handle(event(postback="mcs:c:" + cid, channel=None))
+        human = [c for c in command_files(w) if c.get("cmd") == "request.create"]
+        assert human == [pending["payload"]]
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fail_at", [1, 2])
+def test_confirmation_preview_send_failure_prevents_later_buttons(tmp_path, fail_at):
+    from adapters.common import text
+    w = world(tmp_path)
+    sent = w.client.send_message
+    attempts = 0
+    def fail(content, **targets):
+        nonlocal attempts
+        attempts += 1
+        if attempts == fail_at:
+            raise ClientError("synthetic_preview_failure")
+        return sent(content, **targets)
+    w.client.send_message = fail
+    preview = text.preview_text("request", {"title": "合" * 1000, "reason": "🩺" * 2000}, False)
+    with pytest.raises(ClientError, match="synthetic_preview_failure"):
+        asyncio.run(w.actions._say("operator", preview,
+                    [{"type": "message", "label": "確定する", "postback": "mcs:c:synthetic"}]))
+    assert attempts == fail_at
+    assert all(content["type"] == "text" for _, content, _ in w.client.calls)

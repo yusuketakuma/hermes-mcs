@@ -1164,3 +1164,57 @@ def test_lapsed_card_token_says_so_instead_of_permission(tmp_path):
         await actions._action(ack, body, action)
         assert app.client.messages[-1]["text"] == common_text.ERR_JA["unknown_token"]
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fill", ["合", "🩺", "&"])
+def test_confirmation_preview_keeps_full_payload_with_buttons_only_after_all_parts(tmp_path, fill):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        fields = {"title": fill * 996 + "内容末尾", "reason": fill * 1996 + "理由末尾",
+                  "assignee": fill * 116 + "担当末尾", "due_date": "2026-10-18"}
+        pending = {"action": "request", "actor": "slack:T_SYNTHETIC:U_OPERATOR", "token": TOKEN,
+                   "origin": {**SCOPE, "message_id": TS}, "user": "U_OPERATOR",
+                   "context": {**reg.token(TOKEN)["context"], "target": "合成患者・合成投稿"}, "fields": fields}
+        await actions._preview(pending, {"params": {"project_id": 123}})
+        messages = app.client.messages
+        assert len(messages) > 1
+        assert all(len(m["text"].encode()) <= 4000 for m in messages)
+        assert all(m["user"] == "U_OPERATOR" and not m["link_names"] for m in messages)
+        sections = [b["text"]["text"] for m in messages for b in m["blocks"] if b["type"] == "section"]
+        assert all(len(s) <= 3000 for s in sections)
+        assert all(b["text"]["type"] == "plain_text" for m in messages for b in m["blocks"] if b["type"] == "section")
+        assert all(b["type"] != "actions" for m in messages[:-1] for b in m["blocks"])
+        button = messages[-1]["blocks"][-1]["elements"][0]
+        cid = button["action_id"].split(":")[-1]
+        payload = reg.confirm(cid)["payload"]
+        for key, value in fields.items():
+            assert value in "".join(sections)
+            assert value in slack_actions.unescape("".join(m["text"] for m in messages))
+            assert payload[key] == value
+        body, _ = click()
+        await actions._confirm(ack, body, button)
+        assert command(dirs) == payload
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fail_at", [1, 2])
+def test_confirmation_preview_stops_before_buttons_when_part_fails(tmp_path, fail_at):
+    async def scenario():
+        actions, app, reg, _ = fixture(tmp_path, kind="request")
+        sent = app.client.chat_postEphemeral
+        attempts = 0
+        async def fail(**kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == fail_at:
+                raise RuntimeError("synthetic preview failure")
+            await sent(**kwargs)
+        app.client.chat_postEphemeral = fail
+        pending = {"action": "request", "actor": "slack:T_SYNTHETIC:U_OPERATOR", "token": TOKEN,
+                   "origin": {**SCOPE, "message_id": TS}, "user": "U_OPERATOR",
+                   "context": reg.token(TOKEN)["context"],
+                   "fields": {"title": "🩺" * 1000, "reason": "合" * 2000}}
+        await actions._preview(pending, {"params": {"project_id": 123}})
+        assert attempts == fail_at
+        assert all(b["type"] != "actions" for m in app.client.messages for b in m["blocks"])
+    asyncio.run(scenario())

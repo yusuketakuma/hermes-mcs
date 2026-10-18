@@ -489,12 +489,16 @@ def preview_text(action: str, payload: dict, markdown: bool, target: str | None 
     Discord markdown (bold heading) or Slack plain
     text."""
     bold = "**" if markdown else ""
+
+    def lit(value):
+        return _literal(str(value), not markdown)
+
     # the render-pinned patient/post, display only (the command is pinned separately)
     about = (f"対象: {_literal(str(target)[:120], not markdown)}\n"
              if isinstance(target, str) and target.strip() else "")
     if action == "dismiss":
         code = dict(DISMISS_REASONS).get(payload.get("reason_code"))
-        reason = payload["reason"][:400]
+        reason = lit(payload["reason"])
         return (f"{bold}確認 — 候補の却下{bold}\n" + about
                 + (f"区分: {code}\n" if code else "")
                 + (f"理由: {reason}\n" if reason != code else "")
@@ -503,16 +507,16 @@ def preview_text(action: str, payload: dict, markdown: bool, target: str | None 
     if action == "report":
         return (f"{bold}確認 — 抽出の誤り報告{bold}\n" + about +
                 f"箇所: {dict(FEEDBACK_FIELDS).get(payload['field'], '?')}\n"
-                f"メモ: {payload['reason'][:400]}\n"
+                f"メモ: {lit(payload['reason'])}\n"
                 "確定すると、この投稿の要約の抽出を1回だけ再実行し、"
                 "あなたの名前と理由を記録します。" + CONFIRM_TTL_NOTE)
     out = (f"{bold}確認 — タスク作成{bold}\n" + about
-           + f"内容: {payload['title'][:200]}")
+           + f"内容: {lit(payload['title'])}")
     if payload.get("assignee"):
-        out += f"\n担当: {payload['assignee'][:120]}"
+        out += f"\n担当: {lit(payload['assignee'])}"
     if payload.get("due_date"):
         out += f"\n期限: {payload['due_date']}"
-    return (out + f"\n理由: {payload['reason'][:400]}\n"
+    return (out + f"\n理由: {lit(payload['reason'])}\n"
             "確定すると、この投稿にタスクを作成し、あなたの名前と理由を記録します。"
             + CONFIRM_TTL_NOTE)
 

@@ -557,17 +557,17 @@ class Actions:
         import discord
 
         view = discord.ui.View(timeout=None)
-        yes = discord.ui.Button(style=discord.ButtonStyle.success,
-                                label="確定する",
-                                custom_id=f"{CONFIRM_PREFIX}{confirm_id}")
-        no = discord.ui.Button(style=discord.ButtonStyle.secondary,
-                               label="取消",
-                               custom_id=f"{CONFIRM_PREFIX}{confirm_id}:cancel")
-        view.add_item(yes)
-        view.add_item(no)
-        await self._followup(interaction,
-                             text.preview_text(action, payload, True, target=target),
-                             view=view)
+        for label, suffix in confirm.CHOICES:
+            view.add_item(discord.ui.Button(
+                style=discord.ButtonStyle.secondary if suffix else discord.ButtonStyle.success,
+                label=label, custom_id=f"{CONFIRM_PREFIX}{confirm_id}{suffix}"))
+        chunks = text.split_body(text.preview_text(action, payload, True, target=target), max_chunks=None)
+        for index, chunk in enumerate(chunks):
+            # A hard-wrapped continuation can begin with a new Markdown block marker.
+            shown = text.escape_md(chunk) if index else chunk
+            if not await self._followup(interaction, shown,
+                                        view=view if index == len(chunks) - 1 else None):
+                break  # do not offer confirmation after a failed preview part
 
     # -- confirm ------------------------------------------------------------
 
@@ -806,7 +806,7 @@ class Actions:
             self._log("respond_failed", error=type(e).__name__)
 
     async def _followup(self, interaction, text: str,
-                        view=None) -> None:
+                        view=None) -> bool:
         try:
             # discord.py validates `view is not MISSING`, so a plain
             # None would TypeError — only pass a real view through
@@ -814,5 +814,7 @@ class Actions:
             if view is not None:
                 kwargs["view"] = view
             await interaction.followup.send(text, **kwargs)
+            return True
         except Exception as e:
             self._log("followup_failed", error=type(e).__name__)
+            return False

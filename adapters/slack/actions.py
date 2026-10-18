@@ -320,12 +320,12 @@ class Actions:
         return ctx
 
     async def _say(self, channel, user, text, *, blocks=None, thread_ts=None,
-                   navigation=None):
+                   navigation=None) -> bool:
         from .delivery import RETRY_ALLOWED, _call   # one Retry-After resend, as for cards
         client = self._client()
         if client is None:
             self._log("followup_failed", error="retry_policy_unknown")
-            return
+            return False
 
         async def still_active():
             return self._active
@@ -334,7 +334,7 @@ class Actions:
         try:
             for index, chunk in enumerate(_ephemeral_chunks(text)):
                 if not self._active:
-                    return
+                    return False
                 kwargs = {"channel": channel, "user": user,
                           "text": chunk, "link_names": False}
                 if thread_ts:
@@ -346,8 +346,10 @@ class Actions:
                     kwargs["blocks"] = _sections(unescape(chunk)) + [
                         {"type": "actions", "elements": navigation}]
                 await _call(client.chat_postEphemeral, **kwargs)
+            return True
         except Exception as exc:
             self._log("followup_failed", error=type(exc).__name__)
+            return False
         finally:
             RETRY_ALLOWED.reset(token)
 
@@ -565,15 +567,20 @@ class Actions:
             origin=origin, payload=payload)
         text = preview_text(pending["action"], payload, markdown=False,
                             target=(pending.get("context") or {}).get("target"))
-        blocks = [{"type": "section", "text":
-                   {"type": "plain_text", "text": text[:3000]}},
-                  {"type": "actions", "elements": [
+        buttons = {"type": "actions", "elements": [
                       {"type": "button", "text": {"type": "plain_text",
                                                 "text": label},
                        "action_id": f"mcs:c:{confirm_id}{suffix}"}
-                      for label, suffix in confirm.CHOICES]}]
-        await self._say(origin["channel_id"], pending["user"],
-                        "確認", blocks=blocks)
+                      for label, suffix in confirm.CHOICES]}
+        # At most five bytes per source character after HTML escaping (&amp;).
+        # Stay within _say's escaped-text budget and Slack's 4000-byte advice.
+        chunks = split_body(text, limit=_EPHEMERAL_MAX // 5, max_chunks=None)
+        for index, chunk in enumerate(chunks):
+            blocks = _sections(chunk)
+            if index == len(chunks) - 1:
+                blocks.append(buttons)
+            if not await self._say(origin["channel_id"], pending["user"], chunk, blocks=blocks):
+                break  # never offer confirmation after an unreadable preview part
 
     # Reply rule (confirm and modal, as Discord's _on_confirm/_on_modal):
     # a click that fails _scope (inactive worker, foreign team/app, user
