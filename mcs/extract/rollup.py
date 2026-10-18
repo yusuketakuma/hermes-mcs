@@ -214,6 +214,38 @@ def _stored_lab_ok(r) -> bool:
             and all(r.get(k) is None or isinstance(r.get(k), str) for k in ("unit", "evidence", "measured_on")))
 
 
+def _match_request_replies(req_thread, replies):
+    """Match later replies once per thread, excluding the requester's own posts."""
+    threads = {}
+    # Sort normalized timestamps: SQL puts NULL last, but its normalized 0 can
+    # follow negative timestamps. Row references preserve the displayed order.
+    for row, root, ts, sender in sorted(req_thread, key=lambda r: r[2], reverse=True):
+        if sender is None:
+            continue
+        if root not in threads:
+            threads[root] = (sorted(replies.get(root, ()), key=lambda r: r[0]), {}, [])
+        pending, kinds, done = threads[root]
+        while pending and pending[-1][0] > ts:
+            rts, other, kind = pending.pop()
+            if other is None:
+                continue
+            latest = kinds.setdefault(kind, [])
+            # Excluding one sender only needs the two newest distinct senders.
+            if len(latest) < 2 and all(s != other for _, s in latest):
+                latest.append((rts, other))
+            if kind == "done":
+                # Replies arrive newest first; retain the two oldest distinct
+                # senders to find the earliest done after excluding one sender.
+                done[:] = [(rts, other)] + [p for p in done if p[1] != other][:1]
+        stages = [kind for kind, latest in kinds.items() if any(s != sender for _, s in latest)]
+        if stages:
+            row["reply_state"] = max(stages, key=_REPLY_STAGE.get)
+            done_at = next((at for at, s in done if s != sender), None)
+            cancel_at = next((at for at, s in kinds.get("cancel", ()) if s != sender), None)
+            if done_at is not None and cancel_at is not None and cancel_at > done_at:
+                row["reply_conflict"] = True
+
+
 def build_rollup(ledger, project_id: int, *, request_limit: int | None = 15) -> dict:
     db = ledger.db
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
@@ -417,19 +449,7 @@ def build_rollup(ledger, project_id: int, *, request_limit: int | None = 15) -> 
     # sender in the same thread counts, no per-request action matching
     # (that is the Loop path). Unknown sender IDs cannot prove different
     # authors. NULL posted_at_ts is 0 and never 'later'.
-    for row, root, ts, sender in req_thread:
-        seen = [(rts, kind) for rts, rsender, kind in replies.get(root, ())
-                if rts > ts and sender is not None and rsender is not None
-                and rsender != sender]
-        if seen:
-            row["reply_state"] = max(
-                (kind for _, kind in seen), key=_REPLY_STAGE.get)
-            # conflict = a cancel later than the EARLIEST done (seen is
-            # newest-first, so done_at[0] would be the newest)
-            done_at = [rts for rts, kind in seen if kind == "done"]
-            if done_at and any(kind == "cancel" and rts > min(done_at)
-                               for rts, kind in seen):
-                row["reply_conflict"] = True
+    _match_request_replies(req_thread, replies)
     if requests:
         out["recent_requests"] = requests[:request_limit]
     if canonical:

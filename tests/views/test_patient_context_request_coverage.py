@@ -50,3 +50,48 @@ def test_explicit_full_request_read_keeps_old_request_and_its_reply(tmp_path, ol
         assert store.db.total_changes == before
     finally:
         store.close()
+
+
+def test_reply_index_matches_previous_semantics_for_mixed_threads_and_times():
+    import random
+
+    rng = random.Random(1026)
+    senders = [None, "a", "b", "c", "d"]
+    kinds = tuple(rollup._REPLY_STAGE)
+    for _ in range(100):
+        # Deliberately unsorted: NULL->0 can follow negative SQL timestamps.
+        replies = {root: [(rng.randrange(-3, 8), rng.choice(senders), rng.choice(kinds))
+                          for _ in range(40)] for root in range(3)}
+        requests = [({}, rng.randrange(4), rng.randrange(-3, 8), rng.choice(senders))
+                    for _ in range(30)]
+        expected = []
+        for _, root, ts, sender in requests:
+            row = {}
+            seen = [(at, kind) for at, other, kind in replies.get(root, ())
+                    if at > ts and sender is not None and other is not None and other != sender]
+            if seen:
+                row["reply_state"] = max((kind for _, kind in seen), key=rollup._REPLY_STAGE.get)
+                done = [at for at, kind in seen if kind == "done"]
+                if done and any(kind == "cancel" and at > min(done) for at, kind in seen):
+                    row["reply_conflict"] = True
+            expected.append(row)
+        original = {root: list(rows) for root, rows in replies.items()}
+        rollup._match_request_replies(requests, replies)
+        assert [row for row, *_ in requests] == expected
+        assert replies == original
+
+
+def test_full_reply_scan_reads_each_thread_reply_once():
+    class CountedReplies(list):
+        visits = 0
+
+        def __iter__(self):
+            for row in super().__iter__():
+                self.visits += 1
+                yield row
+
+    replies = CountedReplies([(1, "b", "done")] * 3000)
+    requests = [({}, 1, 0, "a") for _ in range(3000)]
+    rollup._match_request_replies(requests, {1: replies})
+    assert all(row == {"reply_state": "done"} for row, *_ in requests)
+    assert replies.visits == len(replies)
