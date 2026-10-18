@@ -651,7 +651,82 @@ def test_supported_runtime_precheck_refuses_unreadable_branch_ref(updater, tmp_p
     monkeypatch.setattr(updater.subprocess, "run", unreadable_branch)
     assert updater._migration_checkout_problem({}) == "hermes_checkout_unreadable"
     assert any(argv[3:4] == ["symbolic-ref"] for argv in calls)
-    assert all(argv[3] in ("rev-parse", "symbolic-ref", "status") for argv in calls)
+    assert all(argv[3] in ("rev-parse", "symbolic-ref", "status", "ls-files") for argv in calls)
     assert (checkout / "f").read_text() == "0"
     assert (venv / "synthetic-deps").read_text() == "installed dependencies"
     assert not list(checkout.glob("venv.pre-python314*"))
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+@pytest.mark.parametrize("kept", [False, True])
+@pytest.mark.parametrize("operation", ["preflight", "restore"])
+def test_hidden_hermes_edits_stop_before_environment_changes(
+        updater, tmp_path, monkeypatch, flag, kept, operation):
+    from ops_testkit import _git
+
+    checkout = tmp_path / "hermes-agent"
+    old_head, target = _checkout(checkout)
+    _git(checkout, "checkout", "-q", "--detach", target)
+    venv = _venv(checkout)
+    (venv / "dependencies").write_text("synthetic new dependencies")
+    backup = checkout / "venv.pre-python314"
+    backup.mkdir()
+    (backup / "dependencies").write_text("synthetic old dependencies")
+    _git(checkout, "update-index", flag, "f")
+    (checkout / "f").write_text("synthetic manual edit")
+    # Real Git hides the edit from status, but it is still operator-owned.
+    assert _git(checkout, "status", "--porcelain", "--untracked-files=no").stdout == ""
+    monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(updater, "HERMES_PIN", target)
+    monkeypatch.setattr(updater, "_checkout_admits_python314", lambda _: True)
+    monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
+    if kept:
+        monkeypatch.setenv(updater.KEEP_CHECKOUT_ENV, target)
+    before = {p: (p.read_bytes(), p.stat().st_ino)
+              for root in (venv, backup) for p in root.rglob("*") if p.is_file()}
+    if operation == "preflight":
+        assert updater._migration_checkout_problem({}) == "hermes_checkout_branch_or_dirty"
+    else:
+        migration = {"checkout": str(checkout), "checkout_head": target if kept else old_head,
+                     "checkout_target": target, "venv": str(venv), "backup_path": str(backup)}
+        if kept:
+            migration["kept_checkout"] = True
+        with pytest.raises(updater.UpdateError) as rejected:
+            updater._restore_runtime({"runtime_migration": migration})
+        assert all(p.exists() and (p.read_bytes(), p.stat().st_ino) == value
+                   for p, value in before.items())
+        assert str(rejected.value) == "runtime_restore_checkout_changed"
+    assert (checkout / "f").read_text() == "synthetic manual edit"
+    assert _git(checkout, "rev-parse", "HEAD").stdout.strip() == target
+    assert not list(checkout.glob("venv.python314-aside*"))
+
+
+@pytest.mark.parametrize("operation", ["preflight", "restore"])
+def test_unreadable_hermes_index_stops_before_environment_changes(
+        updater, tmp_path, monkeypatch, operation):
+    checkout = tmp_path / "hermes-agent"
+    head, target = _checkout(checkout)
+    venv = _venv(checkout)
+    backup = checkout / "venv.pre-python314"
+    backup.mkdir()
+    (backup / "dependencies").write_text("synthetic original dependencies")
+    monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(updater, "HERMES_PIN", head)
+    run = updater.subprocess.run
+
+    def unreadable_index(argv, *args, **kwargs):
+        if argv[:4] == ["git", "-C", str(checkout), "ls-files"]:
+            return subprocess.CompletedProcess(argv, 128, "", "synthetic unreadable index")
+        return run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(updater.subprocess, "run", unreadable_index)
+    if operation == "preflight":
+        assert updater._migration_checkout_problem({}) == "hermes_checkout_unreadable"
+    else:
+        with pytest.raises(updater.UpdateError, match="runtime_restore_checkout_unreadable"):
+            updater._restore_runtime({"runtime_migration": {
+                "checkout": str(checkout), "checkout_head": head, "checkout_target": target,
+                "venv": str(venv), "backup_path": str(backup)}})
+    assert (venv / "bin/python3").read_text().endswith("echo 3 14\n")
+    assert (backup / "dependencies").read_text() == "synthetic original dependencies"
+    assert not list(checkout.glob("venv.python314-aside*"))

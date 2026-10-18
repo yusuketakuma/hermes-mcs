@@ -666,11 +666,13 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
         head = git("rev-parse", "HEAD")
         branch = git("symbolic-ref", "-q", "HEAD")
         dirty = git("status", "--porcelain", "--untracked-files=no")
+        index = git("ls-files", "-v", "-z")
     except (OSError, subprocess.TimeoutExpired):
         return "hermes_checkout_unreadable"
-    if head.returncode != 0 or dirty.returncode != 0 or branch.returncode not in (0, 1):
+    if head.returncode != 0 or dirty.returncode != 0 or index.returncode != 0 \
+            or branch.returncode not in (0, 1):
         return "hermes_checkout_unreadable"
-    if dirty.stdout.strip():
+    if dirty.stdout.strip() or any(not row.startswith("H ") for row in index.stdout.split("\0") if row):
         return "hermes_checkout_branch_or_dirty"
     keep = os.environ.get(KEEP_CHECKOUT_ENV)
     if keep:
@@ -1846,12 +1848,15 @@ def _check_runtime_restore(entry: dict) -> str | None:
         now = git("rev-parse", "HEAD")
         branch = git("symbolic-ref", "-q", "HEAD")
         dirty = git("status", "--porcelain", "--untracked-files=no")
+        index = git("ls-files", "-v", "-z")
     except (OSError, subprocess.TimeoutExpired):
         raise UpdateError("runtime_restore_checkout_unreadable") from None
-    if now.returncode != 0 or dirty.returncode != 0 or branch.returncode not in (0, 1):
+    if now.returncode != 0 or dirty.returncode != 0 or index.returncode != 0 \
+            or branch.returncode not in (0, 1):
         raise UpdateError("runtime_restore_checkout_unreadable")
     current = now.stdout.strip()
-    if dirty.stdout.strip() or current not in {head, target} \
+    if dirty.stdout.strip() or any(not row.startswith("H ") for row in index.stdout.split("\0") if row) \
+            or current not in {head, target} \
             or branch.returncode == 0 and not migration.get("kept_checkout") \
             or migration.get("kept_checkout") and current != head:
         raise UpdateError("runtime_restore_checkout_changed")

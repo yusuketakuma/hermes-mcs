@@ -825,6 +825,13 @@ fi
 HEAD_SHA="$(git -C "$HERMES_DIR" rev-parse HEAD)" \
     || die "$HERMES_DIR の現在の版（HEAD）を読み取れません。修復または退避して install.sh を再実行してください"
 _runtime_backup=""
+if [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; then
+    _checkout_flags="$(git -C "$HERMES_DIR" ls-files -v)" \
+        || die "Python 移行: $HERMES_DIR の追跡設定を確認できません。既存ソースと環境は保持しました"
+    if [ -n "$_checkout_flags" ] && printf '%s\n' "$_checkout_flags" | grep -qv '^H '; then
+        die "Python 移行: $HERMES_DIR に変更の確認を省略する Git 設定があります。設定と手編集を確認してください。既存ソースと環境は保持しました"
+    fi
+fi
 if [ -f "$CLONE_MARK" ]; then
     [ "$HEAD_SHA" = "$HERMES_PIN" ] \
         || die "取得した版 $HEAD_SHA は指定版 $HERMES_PIN と一致しません。install.sh を再実行してください"

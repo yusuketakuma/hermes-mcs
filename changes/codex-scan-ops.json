@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "Hermes の手編集を復旧前に確認",
+  "summary": "Git で変更の確認を省略する設定がある場合は、Hermes の実行環境を更新・復元する前に停止します。手編集によりソースの切替が拒否され、実行環境だけが戻る状態を防ぎます。",
+  "upgrade": "Hermes の更新や復旧で停止した場合は、assume-unchanged・skip-worktree の設定と対象ファイルの手編集を管理担当者が確認してください。手編集や退避した実行環境を破棄して進めないでください。通常の再導入では、既存のソースと実行環境を保持する条件を変えません。",
+  "details": [
+    "更新前の確認・インストーラーの移行処理・実行環境の復元で、追跡ファイルの確認を省略する Git フラグを検出する。",
+    "追跡設定を読み取れない場合も停止し、ソース・現在の実行環境・退避先を保持する。",
+    "一時 Git と合成の実行環境で、変更前に退避先が移動してしまうことと、修正後に保持されることを検証する。"
+  ],
+  "refs": ["install.sh", "mcs/ops/mcs_update.py", "tests/ops/test_python314_runtime_migration.py", "tests/meta/test_install_runtime_migration.py"]
+}
