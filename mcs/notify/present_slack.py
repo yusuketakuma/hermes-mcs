@@ -48,7 +48,7 @@ ACCENT_URGENT = False
 # answers and any post the card cannot hold.
 BODY_ON_FACE = True
 FACE_ORIGINAL_MAX = 30000     # one collapsible container: 10 sections of 3000
-BLOCK_MAX = 50                # Block Kit blocks per message
+BLOCK_MAX = 50                # conservative app budget, including container children
 _SECTION_MAX = 3000
 _CONTEXT_MAX = 2000
 _HEADER_MAX = 150
@@ -61,8 +61,8 @@ def _count(text, size) -> int:
 def face_block_count(parts, face_posts=()) -> int:
     """An upper bound on the Block Kit blocks adapters/slack/cards.render
     builds for this card face plus ``face_posts`` (each: its stamp rows
-    as contexts and one folded original). Never below the real count, so
-    a card it admits always fits one message."""
+    as contexts and one folded original with its child sections). Count
+    all levels conservatively; Slack's nested-block accounting is unspecified."""
     n = 0
     for item in parts["containers"]:
         kind = item["type"]
@@ -84,5 +84,5 @@ def face_block_count(parts, face_posts=()) -> int:
     n += 2 * any(b.get("ui") != "link" for b in buttons)
     n += sum(b.get("ui") == "link" for b in buttons)
     for post in face_posts:
-        n += sum(_count(s, _CONTEXT_MAX) for s in post["stamps"]) + 1
+        n += sum(_count(s, _CONTEXT_MAX) for s in post["stamps"]) + 1 + _count(post["original"], _SECTION_MAX)
     return n
