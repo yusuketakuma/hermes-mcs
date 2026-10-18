@@ -223,7 +223,7 @@ def replies(db, project_id) -> dict:
     # A read failure propagates: an unreadable source is not "no requests" (取得失敗≠記録なし).
     reader = object.__new__(LedgerReader)
     reader.db = db
-    roll = build_rollup(reader, project_id)
+    roll = build_rollup(reader, project_id, request_limit=None)
     live = {r[0] for r in db.execute("SELECT message_id FROM messages WHERE project_id=? AND body_state='full'",
                                      (project_id,))}
     # a request whose post was since edited away or deleted is no longer a written request

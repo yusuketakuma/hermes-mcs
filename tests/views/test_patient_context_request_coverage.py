@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import patient_context_view as pcv
 import rollup
 from semantic_testkit import _message
 from test_read_model import _artifact, _db, _hash_of
@@ -31,6 +32,15 @@ def test_explicit_full_request_read_keeps_old_request_and_its_reply(tmp_path, ol
         assert all(r["reply_state"] == "done" for r in full[:-1])
         assert full[-1].get("reply_state") == old_reply
         assert full[:-1] == ordinary
+        # The three patient screens use the full projection, not the ordinary
+        # bounded rollup. A reply outside the old cap must also be respected.
+        evidence = {"project_id": 1, "items": [], "as_of": None, "coverage": {}}
+        unanswered = [] if old_reply else [1]
+        assert len(pcv.replies(store.db, 1)["items"]) == 16
+        assert [r["message_id"] for r in pcv.previsit(
+            store.db, evidence, T0 + 20 * DAY)["unanswered"]] == unanswered
+        assert [r["message_id"] for r in pcv.handoff(
+            store.db, evidence)["unanswered"]] == unanswered
         assert store.db.total_changes == before
     finally:
         store.close()

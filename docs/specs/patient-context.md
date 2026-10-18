@@ -121,7 +121,7 @@ canonical v3/v4の既存事実にもoptional patient_contextを同じ事実引�
 
 ## 夜間の患者背景と本人向け表示（1.0.25）
 
-`patient_nightly` が夜間の入力確認・調査・保存・再開を所有し、`patient_context_view` が既存read modelから各画面を作る。日中の `patient_rollup` と `patient_state_context` の契約は変更しない。新しいテーブル・常駐プロセス・依存は追加しない。利用手順と設定は [USER_GUIDE](../guides/USER_GUIDE.md)、要件の対応表は [実装・受入計画](../development/plans/PATIENT_CONTEXT_1.0.25.md) を参照する。
+`patient_nightly` が夜間の入力確認・調査・保存・再開を所有し、`patient_context_view` が既存read modelから各画面を作る。日中の `patient_rollup` と `patient_state_context` の契約は変更しない。新しいテーブル・常駐プロセス・依存は追加しない。利用手順と設定は [USER_GUIDE](../guides/USER_GUIDE.md)、要件の対応表は [実装・受入計画](../releases/v1.0.25/PATIENT_CONTEXT_1.0.25.md) を参照する。
 
 ### 処理と原文の保持
 
