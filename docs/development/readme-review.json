@@ -1,65 +1,79 @@
 {
-  "version": "1.0.25",
+  "version": "1.0.26",
   "sections": {
     "features": {
-      "notes": "2026-10-17 1.0.25候補: 夜間まとめは23:00〜翌03:30の既存空き枠で動き、生成・限定閲覧は省略時true、明示falseと不正値の停止を維持。26分類35属性、10職種、関係者の自動一覧と活用5点、全8画面を実装と照合した。patient_state_contextは既定false、第二入力源は将来対応。共有チャットへ夜間文章を自動配信しない。 夜間状況の件数は処理と同じ対象範囲を使い、アクセス拒否と一時的な取得失敗を区別する。 最終指摘では検索語未入力と該当なしを分け、CLI・患者背景・通知の共有検索表示で同じ入力条件を使う。",
+      "notes": "2026-10-18 1.0.26候補: 患者の記録まとめ全8画面のproject_id付きscope判定、読取り失敗時の基本まとめへの案内、関係者と出典表示を実装へ照合。アーカイブ患者は一覧末尾・通常解析の残り枠、夜間まとめとスタンプ取得はactiveのみ。Slackの新形式カード内原文と、新着案内・添付・収まらない投稿のスレッド表示へREADMEを訂正した。確定画面は対象と全文を表示し最後だけ確定ボタン。夜間生成・限定閲覧の省略時true、patient_state_context既定false、第2入力源未実装を維持。ルール世代24による通常再抽出とLLM世代9維持をCHANGELOGへ明記。",
       "sources": [
         "README.md",
-        "mcs/extract/patient_nightly.py",
-        "mcs/extract/patient_context.py",
-        "mcs/views/patient_context_view.py",
+        "mcs/notify/notify_cards.py",
         "mcs/notify/notify_views.py",
-        "tests/extract/test_role_data_acceptance.py"
+        "mcs/notify/notify_digest.py",
+        "mcs/notify/present_slack.py",
+        "mcs/extract/v1/extract.py",
+        "mcs/extract/patient_nightly.py",
+        "mcs/views/patient_context_view.py",
+        "adapters/common/text.py",
+        "adapters/slack/actions.py",
+        "adapters/discord/actions.py"
       ]
     },
     "demos": {
-      "notes": "2026-10-17 1.0.25候補: Slackを先頭に維持。03は患者操作と全体操作を分け検索を必須側へ、07は初期5節に食い違いを追加し8節循環を説明。生成元からSVG/PNGとhashを同期し親が画像を確認した。LINE WORKSのmore、本人向け表示と確定操作を維持し、Discordの薬剤表示の既存経路も保持。v1.0.25操作フロー図は実画面と区別し通常幅と390px幅を確認。固定commitの画像は認証付きGitHub APIで原本bytes/hash一致。非公開repoのため閲覧権限が必要な通常リンクを使い、権限は広げない。Release実表示はブラウザー接続不能で未確認。",
+      "notes": "2026-10-18 1.0.26候補: Slack先頭と8枚の完全合成説明図を保持。01〜03の新形式カード内の要約→スタンプ→原文折りたたみを現行sourceへ照合し、既存画像監査を再利用。02をローカルで再び開き、行順・折りたたみ・下部操作と文字欠けを確認。版別SVG/PNGは02と同一bytesを保存し、由来とhashをREADMEへ記録。Discordの本文thread、LINE WORKSの投稿見出しと別本文、本人向け確認と人承認の配置は保持。390px相当、実Slack画面、GitHub Releaseの取得・表示は未確認。SDK52 lane passは実サービス配信や実画面検証へ昇格しない。",
       "sources": [
         "README.md",
         "scripts/development/generate_slack_gallery.py",
         "docs/screenshots/slack-gallery/README.md",
-        "mcs/notify/notify_cards.py",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/releases/v1.0.26/README.md",
         "adapters/slack/cards.py",
         "adapters/discord/cards.py",
         "adapters/lineworks/cards.py",
-        "docs/releases/v1.0.25/README.md"
+        "docs/guides/USER_GUIDE.md"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-17 1.0.25候補: 新規導入の確認→導入→初期設定への接続、推奨/詳細コースと後回し、引数なしupdateの計画→明示適用→再確認、recoverの既定中止を実装と照合。READMEにEASY_SETUP導線と初期設定接続を反映。Hermes v0.22.2固定版への再導入、既存opt-outと独立復旧Pythonの保持、全25更新元40経路の案内を照合。 2026-10-18: Hermesの導入はuv必須とし、そのディレクトリで安全な依存設定を適用。--no-brewではuv事前導入、欠如時はHermes変更前に停止する。 2026-10-18最終修正: Python3.14導入済みの認識済み旧Hermesもコードと依存を退避・更新する。移行中断時は通常復旧を停止し、移行先updaterと独立復旧Pythonを確認する手順へ接続した。 はい・いいえの質問では推奨値と保存済み回答も同じ言葉で示す。表示だけを変更し、認証情報の再利用は明示同意・Enter不同意を維持する。",
+      "notes": "2026-10-18 1.0.26候補: installのpreflight・推奨コース・初期設定への接続、Hermes導入時のuv必須とno-brew時の事前検査を確認し、既存の新規導入手順は変更不要と判断。更新は移行先ツールの計画・バックアップ・適用に従い、既存省略オプションと復旧専用Pythonを維持。今回の手編集保護・Git省略設定の停止とcheckout外復旧本体同期はCHANGELOGと更新ガイドへ接続。26公開版42更新経路の合成証拠は受入票が所有し、新規実機導入・更新・復旧はこのREADME確認では実施していない。",
       "sources": [
         "README.md",
         "install.sh",
         "mcs/ops/mcs_setup.py",
         "mcs/ops/mcs_cli.py",
         "scripts/mcs_upgrade.py",
+        "mcs/ops/mcs_update.py",
         "deployment/recovery/mcs_recover.py",
         "docs/guides/EASY_SETUP.md",
-        "docs/guides/UPGRADE_AGENT.md"
+        "docs/guides/UPGRADE_AGENT.md",
+        "tests/fixtures/schema_upgrade/update-paths.json"
       ]
     },
     "safety": {
-      "notes": "2026-10-17 1.0.25候補: 外部通知の送信範囲・端末プレビュー・人承認と復旧holdを保持。住所/電話は要求時の背景表示で扱い定期抜粋へ一括転載しない。原文の主体/否定/時点/取得失敗と0件を区別し、旧文章の失効・現在hash・閲覧scopeを確認。署名/actor/origin/token/receiptとno-proxy/no-redirectゲートを維持。ステージ済み変更を消すresetを拒否する。臨床精度と実機性能の評価は未実施。 HermesとCIの導入経路を同じuv解決へそろえ、実SDKでPyNaCl1.6系列・暗号依存の固定版も検査する。 中断した実行環境の移行記録は空・不正でも自動解除せず、Hermesの版・branch・変更状態を復元前にも確認して環境と退避を保持する。",
+      "notes": "2026-10-18 1.0.26候補: 外部通知に患者名・本文・対象添付が含まれる説明、端末プレビュー、未取得と0件・未返信記録と未対応の区別を維持。カード内原文・スタンプ表示先にREADMEを合わせた。確認内容の全文表示でもactor・権限・有効期限・人確定は維持し、Slack通知の取消は対象計画・未発行/未送信確定・worker停止・人承認と理由等が必要。送信結果不明や復元のholdは更新で解除しない。更新/復旧の手編集・未知checkout保護、医薬品masterの同梱と私有辞書採用承認を分離。実データ臨床精度・実機性能・実チャット配信は未実施と記録。",
       "sources": [
         "README.md",
         "SECURITY.md",
         "docs/specs/patient-context.md",
-        "mcs/views/patient_context_view.py",
+        "adapters/common/spec.py",
+        "adapters/common/text.py",
         "mcs/ops/mcs_update.py",
         "deployment/recovery/mcs_recover.py",
-        "tests/notify/test_patient_context_nightly_ui.py"
+        "docs/guides/NOTIFICATION_RECOVERY.md",
+        "resources/drug-master/README.md",
+        "tests/adapters/common/test_confirmation_preview.py"
       ]
     },
     "docs": {
-      "notes": "2026-10-17 1.0.25候補: 導入/更新/復旧はguides、契約はspecs、計画/受入はdevelopmentに整理し既存履歴を保持。旧19/32・未コミットの現行説明を履歴へ区別し26/35と後続統合を追記、関係者一覧の自前SQL説明へ修正。README主要導線・生成DEVELOPMENT・版別受入/図を照合し、リリース本文はCHANGELOGからexportする。",
+      "notes": "2026-10-18 1.0.26候補: docs/READMEを目的別主索引、developmentを現行開発手順、releases/v版を過去計画・受入・画像の置場として実ファイルへ照合。旧公開入口のguidesを保持し、27移動文書の参照追従の証拠を再利用。1.0.26の版別README・画像を追加し、受入票と更新ガイドへの導線を確認。25変更記録を同一bytesでarchiveし、本文は12目的別項目と世代変更、最大3比較へ集約。技術detailsとrefsは全件保持。版の正本はGit tagとCHANGELOGであり、plugin versionは独立契約として変更不要。生成blockは既存生成器で同期し、公開・配備の完了とは区別。",
       "sources": [
         "README.md",
+        "CHANGELOG.md",
         "docs/README.md",
-        "docs/releases/v1.0.25/PATIENT_CONTEXT_1.0.25.md",
-        "docs/specs/patient-context.md",
-        "docs/releases/v1.0.25/ACCEPTANCE_1.0.25.md",
+        "docs/releases/README.md",
+        "docs/releases/v1.0.26/README.md",
+        "docs/releases/v1.0.26/ACCEPTANCE_1.0.26.md",
         "docs/development/DEVELOPMENT.md",
-        "docs/releases/v1.0.25/README.md"
+        "docs/guides/UPGRADE_AGENT.md",
+        "docs/development/RELEASE_NOTES.md",
+        "hermes_plugin/plugin.yaml"
       ]
     }
   }

@@ -5,7 +5,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 1.0.25・1.0.26の推奨Hermes agentはv0.22.2ベースのMCS companion（固定commit `2c08ca7ade8f867d07e4bff6581be54405b0c9d0`）です。新規導入・CI・更新の固定値をそろえています。以前の固定版 `b7758d8`・`f36c1da` と、それ以前の認識済み固定版は再導入経路の移行対象です。変更中・未知のcheckoutは自動で置き換えません。Hermes経由の環境は再導入（`--reinstall`）で固定版を移行し、gatewayを再起動します。独立動作（Hermesなし）の環境はHermesの移行対象ではありません。
 
 
-このガイドはv1.0.26候補のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は受入票で確認する。
+このガイドはv1.0.26候補のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は[1.0.26の受入票](../releases/v1.0.26/ACCEPTANCE_1.0.26.md)で確認する。
 1.0.22の合成検証・公開・実機反映の状況は[リリース受入票](../releases/v1.0.22/ACCEPTANCE_1.0.22.md)、
 1.0.21は[1.0.21の受入票](../releases/v1.0.21/ACCEPTANCE_1.0.21.md)で追跡する。
 過去の1.0.13実機受入計画は[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)に残す。

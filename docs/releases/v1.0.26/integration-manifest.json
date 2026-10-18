@@ -1,0 +1,639 @@
+{
+  "version": "1.0.26",
+  "integration_commit": "d318cdd5b6b3e5b3ff278922100b8464d9257729",
+  "runtime_reference": "c47b0a8e6e3200f56cc99ad843c1073e4c732b1d",
+  "production_baseline": "35b5a5531e04441391bfb43b8389a7ca43a5dc94",
+  "previous_published_version": "1.0.25",
+  "published_baseline": "5ecea075500cba976764b508cdaef5004ce8795f",
+  "worktrees_count": 54,
+  "all_original_tips_integrated": true,
+  "worktrees": [
+    {
+      "name": ".mcs",
+      "head": "35b5a5531e04441391bfb43b8389a7ca43a5dc94",
+      "integrated": true
+    },
+    {
+      "name": "codex-4077",
+      "head": "1c11122808bde5472800df24fb01b94f6f1158be",
+      "integrated": true
+    },
+    {
+      "name": "audit-v1.0.20-claude",
+      "head": "7d746824f60481f059b277d0763fa7fc169dc847",
+      "integrated": true
+    },
+    {
+      "name": "japanese-tools",
+      "head": "35b5a5531e04441391bfb43b8389a7ca43a5dc94",
+      "integrated": true
+    },
+    {
+      "name": "notification-cancel-retry",
+      "head": "7c6a828df66935117809f5fad32af9d7d6914cd8",
+      "integrated": true
+    },
+    {
+      "name": "notification-cancel-without-send",
+      "head": "5bcdf9c1de97057c4186508db739eb9f7b8f6b1e",
+      "integrated": true
+    },
+    {
+      "name": "release-v1.0.23",
+      "head": "1c11122808bde5472800df24fb01b94f6f1158be",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25",
+      "head": "5ecea075500cba976764b508cdaef5004ce8795f",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-buttons",
+      "head": "e22ee4e41eaa7e5512b26c978509ee9652c4122a",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-commit-review",
+      "head": "b8a19ff44eb57556e4e605d885166fc1872a6582",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-final-cr",
+      "head": "34d5cf737af42596b89b7f2a4f22605d29af80de",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-final-review",
+      "head": "c9d32c7be3e3c105cf8cf869b21bb76158dafb5c",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-final-suite",
+      "head": "32b4627fc9ff6541130cdfc286369f24520e150f",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-final-suite-5ecea075500c",
+      "head": "5ecea075500cba976764b508cdaef5004ce8795f",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-guided",
+      "head": "4bc1d85043749d8f3c6bee772e514d6e43857fba",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-guided-recovery",
+      "head": "eefbc252bf2113cf8d81913715a73faaa361072d",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-guided-review-fixes",
+      "head": "6d831ccb9520435d54311c3f2d0456de6f700fcc",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-pin-refresh",
+      "head": "89036bfcf87c2a69810f0431cdd55e9945febc20",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-postrelease-audit",
+      "head": "5ecea075500cba976764b508cdaef5004ce8795f",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-review",
+      "head": "35b5a5531e04441391bfb43b8389a7ca43a5dc94",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-review-fixes",
+      "head": "40b1dd15fb1f72b9dd0d3909ca71e7faace6f1ea",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-role-boundaries",
+      "head": "1f86f5d64946640580bdd5d5d5aebd600066a589",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-secure-sdk",
+      "head": "db85649066d0537d7247cbb39d434a992849840b",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-supply-sdk",
+      "head": "5ecea075500cba976764b508cdaef5004ce8795f",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.25-update-matrix",
+      "head": "7d1bdb5b6c129c0284a02f6d868545e299f1081e",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-archived-queue",
+      "head": "1c6775703a09b2ecf5e46d4d3de486c4914e1c29",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-care-worker-scope",
+      "head": "4e2661c122d463933ddeed6538a8ccdf48cc4f7d",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-chat-preview",
+      "head": "f90522c7941e9e9178c47b6fa229db4d16b91741",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-claude-sweep",
+      "head": "5d9e2aa805038d19981e3521e9a9dce226de44e8",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-cli-parser",
+      "head": "75143e1a7132e93b5e0015892f0ec3581a049f9e",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-codex-final",
+      "head": "c47b0a8e6e3200f56cc99ad843c1073e4c732b1d",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-codex-scan",
+      "head": "a4d7eb85f2f77daf0df0d3606eb88873ef330c97",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-codex-scan-review",
+      "head": "eb5000e8bbf559fc1da7bb3e0e0acfdf0ba724e4",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-codex-stage2",
+      "head": "04e05fb1e1011e37bc8c6ee061e8d6b837e4636f",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-core-probes",
+      "head": "97ddfec548f77c13b98f7c9393827a5749b10cbb",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-core-scan",
+      "head": "0edc738d261c1d5918e3bd4a06c44d927de866dd",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-display-answers",
+      "head": "69be602e1b7d8258aced52c85f6d3e34826d4a72",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-display-render",
+      "head": "8c52fad97c92f7ac313ad1a280a758c663ec00aa",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-doc-organization",
+      "head": "14dbf1232b3b18776ae457f30be8b87848b790a5",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-face-budget",
+      "head": "a986e359c1871a0a48860ee071b91bf5f605d4ab",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-face-delivery-fix",
+      "head": "241c2cdf40afaa2b40d6679ca02b5ccfb31dae2c",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-hidden-index",
+      "head": "8787027c80d8b9f8b39d2d0f59d5442fa90fa2ee",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-lists-review-581ce8d",
+      "head": "581ce8d214d114ff2db3a877490981f8ec785aa4",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-nightly-idle",
+      "head": "2dd9fa54a5ede3e5ee04ec4aafdd6d7bdfe8e42e",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-ops",
+      "head": "bb889e9eeae252ba7e8b67748c5261ad06c286d7",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-ops3-review",
+      "head": "4d3446ef2c6372a8d50829d4a764e669f5683658",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-provider-name",
+      "head": "726bf9ecef651ab745ef2fb8bee9ad0f03d588db",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-readability",
+      "head": "581ce8d214d114ff2db3a877490981f8ec785aa4",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-release-origins",
+      "head": "4f70aee44179dbedbb82a343a67b5bb488c5e7f7",
+      "integrated": true
+    },
+    {
+      "name": "v1.0.26-release-origins-baseline",
+      "head": "23ccb28b8c49433a13d3b0c4b92012a098081b01",
+      "integrated": true
+    },
+    {
+      "name": "wf_04c119de-b76-12",
+      "head": "c04ac78b02f0d5093fb7ccf4cea7e11c32647dff",
+      "integrated": true
+    },
+    {
+      "name": "wf_b0df567d-353-3",
+      "head": "970f6272a487f9f15c806f552a8a207e6eed7147",
+      "integrated": true
+    },
+    {
+      "name": "wf_eee116be-215-4",
+      "head": "7510d3855f29d468851b4cad76233a165d0d0cc9",
+      "integrated": true
+    },
+    {
+      "name": "wf_eee116be-215-6",
+      "head": "702648c95b57f6c98d211105c0efa00a091b0f0d",
+      "integrated": true
+    }
+  ],
+  "pending_fragments_before_build": 25,
+  "changes": [
+    {
+      "record": "changes/archive/1.0.26/archived-later-lists.json",
+      "title": "一覧でアーカイブ済み患者をアクティブ患者の後に表示",
+      "implementation_and_verification_refs": [
+        "mcs/notify/notify_views.py",
+        "mcs/notify/notify_digest.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/archived-later-queue.json",
+      "title": "アーカイブ済み患者の解析を後回しにしてアクティブ患者を優先",
+      "implementation_and_verification_refs": [
+        "mcs/core/ledger.py",
+        "mcs/extract/v1/extract.py",
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/semantic/semantic_drain.py",
+        "tests/semantic/test_archived_later_queue.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/chat-confirm-preview.json",
+      "title": "確定前に入力内容を最後まで確認できるよう修正",
+      "implementation_and_verification_refs": [
+        "adapters/common/text.py",
+        "adapters/slack/actions.py",
+        "adapters/discord/actions.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/chat-patient-fallback-notice.json",
+      "title": "患者の記録まとめを読み込めなかったときに、その旨を表示",
+      "implementation_and_verification_refs": [
+        "mcs/notify/notify_cards.py",
+        "tests/notify/test_patient_context_nightly_ui.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/cli-parser-consolidation.json",
+      "title": "コマンドの日本語案内を共通化",
+      "implementation_and_verification_refs": [
+        "mcs/ops/cli_args.py",
+        "mcs/ops/mcs_cli.py",
+        "mcs/ops/mcs_update.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/codex-scan-clinical-scope.json",
+      "title": "介助者自身の測定値を患者の記録へ混ぜないよう修正",
+      "implementation_and_verification_refs": [
+        "mcs/extract/v1/extract.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/codex-scan-core.json",
+      "title": "過去の依頼の確認漏れと収集順の読取り失敗を修正",
+      "implementation_and_verification_refs": [
+        "mcs/extract/rollup.py",
+        "mcs/views/patient_context_view.py",
+        "mcs/ingest/run_check.py",
+        "tests/views/test_patient_context_request_coverage.py",
+        "tests/ingest/test_walk_order.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/codex-scan-ops.json",
+      "title": "Hermes の手編集を復旧前に確認",
+      "implementation_and_verification_refs": [
+        "install.sh",
+        "mcs/ops/mcs_update.py",
+        "tests/ops/test_python314_runtime_migration.py",
+        "tests/meta/test_install_runtime_migration.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/codex-scan-provider-name.json",
+      "title": "事業所名に区切り文字がある場合の確認候補を修正",
+      "implementation_and_verification_refs": [
+        "mcs/views/patient_context_view.py",
+        "tests/views/test_v1026_sweep_views.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/confirm-preview-target.json",
+      "title": "確定する前に患者と投稿を確認",
+      "implementation_and_verification_refs": [
+        "579ad44cdb2a8090c3e0a55ea148c4383e511410",
+        "mcs/notify/notify_cards.py",
+        "adapters/common/text.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/context-hash-consolidation.json",
+      "title": "患者背景の整合性確認を共通化",
+      "implementation_and_verification_refs": [
+        "mcs/extract/patient_state_context.py",
+        "mcs/core/mcs_util.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/display-answer-fixes.json",
+      "title": "本人だけに届く回答の表示を修正",
+      "implementation_and_verification_refs": [
+        "mcs/notify/notify_digest.py",
+        "mcs/notify/notify_views.py",
+        "adapters/common/text.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/display-render-fixes.json",
+      "title": "アラートと通知プレビューの誤解を招く表示を修正",
+      "implementation_and_verification_refs": [
+        "mcs/notify/notify_render.py",
+        "mcs/views/extraction_progress.py",
+        "mcs/ingest/health_watch.py",
+        "adapters/slack/cards.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/nightly-idle-admission.json",
+      "title": "停止した解析機能の待機記録が夜間まとめを妨げる問題を修正",
+      "implementation_and_verification_refs": [
+        "mcs/extract/v4/extract_llm.py",
+        "tests/extract/test_nightly_worker.py",
+        "deployment/launchagents/README.md"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/notification-cancel.json",
+      "title": "未発行のSlack通知を送信せず取り消す運用者向け手順",
+      "implementation_and_verification_refs": [
+        "mcs/ops/notification_cancel.py",
+        "docs/guides/NOTIFICATION_RECOVERY.md"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/patient-context-readability.json",
+      "title": "患者の記録まとめが本番の範囲設定で空になる問題を修正し、見やすく表示",
+      "implementation_and_verification_refs": [
+        "mcs/notify/notify_views.py",
+        "mcs/views/patient_context_view.py",
+        "adapters/slack/cards.py",
+        "adapters/slack/actions.py",
+        "adapters/common/text.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/receipt-wording-fixes.json",
+      "title": "ボタン操作の返答を具体的にそろえました",
+      "implementation_and_verification_refs": [
+        "adapters/common/text.py",
+        "adapters/slack/actions.py",
+        "adapters/discord/actions.py",
+        "adapters/lineworks/actions.py",
+        "mcs/notify/present_lineworks.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/repository-document-organization.json",
+      "title": "操作手順と過去のリリース記録を探しやすく整理",
+      "implementation_and_verification_refs": [
+        "docs/README.md",
+        "docs/releases/README.md",
+        "docs/development/DEVELOPMENT.md"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/slack-card-face-body.json",
+      "title": "Slackの通知カードに投稿ごとのスタンプと原文の折りたたみを表示",
+      "implementation_and_verification_refs": [
+        "mcs/notify/present_slack.py",
+        "mcs/notify/notify_cards.py",
+        "adapters/common/spec.py",
+        "adapters/slack/cards.py",
+        "docs/guides/USER_GUIDE.md"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/slack-face-delivery-fixes.json",
+      "title": "Slackの薬剤ボタン・返信通知・長文への切替を修正",
+      "implementation_and_verification_refs": [
+        "adapters/slack/delivery.py",
+        "mcs/notify/notify_cards.py",
+        "tests/adapters/slack/test_slack_face_posts.py",
+        "tests/adapters/slack/test_slack_delayed_reply_flow.py",
+        "mcs/notify/present_slack.py",
+        "docs/guides/USER_GUIDE.md"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/v1026-claude-sweep.json",
+      "title": "患者の記録と依頼一覧を読み取りやすく修正",
+      "implementation_and_verification_refs": [
+        "27c77d042f30b254dea9bf61539fd5bea4054e66"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/v1026-cleanup.json",
+      "title": "使われていないコードと記録の整理",
+      "implementation_and_verification_refs": [
+        "mcs_standalone/host.py",
+        "tests/views/test_card_worker_status.py",
+        "tests/adapters/lineworks/test_lineworks_service.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/v1026-judgement-fixes.json",
+      "title": "担当者候補・前回からの比較・記録の食い違い・症状の否定などの判定を修正",
+      "implementation_and_verification_refs": [
+        "mcs/notify/notify_cards.py",
+        "mcs/views/patient_context_view.py",
+        "mcs/extract/clinical_values.py",
+        "mcs/extract/v1/extract.py",
+        "mcs/views/mcs_stats.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/v1026-ops-fixes.json",
+      "title": "更新前の操作待ちと復旧エラーの案内を修正",
+      "implementation_and_verification_refs": [
+        "mcs/ingest/job_ops.py",
+        "mcs/ops/mcs_cli.py"
+      ]
+    },
+    {
+      "record": "changes/archive/1.0.26/v1026-update-third-content.json",
+      "title": "中断更新時の手編集を保護",
+      "implementation_and_verification_refs": [
+        "mcs/ops/mcs_update.py",
+        "deployment/recovery/mcs_recover.py",
+        "docs/guides/UPGRADE_AGENT.md"
+      ]
+    }
+  ],
+  "legacy_dirty": {
+    "files": 100,
+    "reflected": 29,
+    "hash_or_superset_only": 3,
+    "superseded_by_later_implementation": 68,
+    "unresolved": 0,
+    "originals_preserved": true,
+    "receipt_sha256": "42237ccb45b6a6e039c292ae689851742616297ae33255283e61441aff3af1ba"
+  },
+  "probe_disposition": {
+    "status": "consolidated into expanded committed regression",
+    "tests": [
+      "tests/views/test_patient_context_request_coverage.py",
+      "tests/ingest/test_walk_order.py"
+    ],
+    "original_retained": true
+  },
+  "official_master": {
+    "checked_utc": "2026-10-18T08:36:42.969826+00:00",
+    "checked_jst": "2026-10-18T17:36:42.969857+09:00",
+    "edition": "20261013",
+    "member": "y_20261013.csv",
+    "rows": 19286,
+    "source_urls": [
+      "https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/",
+      "https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/yFile",
+      "https://www.mhlw.go.jp/chosakuken/index.html",
+      "https://shinryohoshu.mhlw.go.jp/shinryohoshu/file/spec/R08rec1.pdf",
+      "https://shinryohoshu.mhlw.go.jp/shinryohoshu/file/spec/R08rec3.pdf"
+    ],
+    "archive_sha256": "c3efc8aa772b9bf54cfa992e8df3bc82480f86f35bbeb52522d0997144140fb5",
+    "csv_sha256": "6fa8f08ca4341ac530e5f4081d3fd3bbebbfcdd278c0d0ec0f172a0c1af018d1",
+    "matches_existing_bundle": true,
+    "all_rows_validated": true,
+    "private_dictionary_generated": false,
+    "activation": false,
+    "operator_approval_required": true,
+    "converter_held": "terms_unconfirmed",
+    "receipt_sha256": "6429fb7351674b579bb407cfbd57c9b32ed44770aca92e89f6c00c5f676becf7"
+  },
+  "validation_evidence": {
+    "full_suite_a4": {
+      "passed": 14824,
+      "failed": 1,
+      "skipped": 5,
+      "subtests_passed": 41,
+      "log_sha256": "2867356fc68504745bc50f850c25fa5797bd15ea308e4d143f532b9496b4741b"
+    },
+    "final_c47_performance": {
+      "passed": 1,
+      "skipped": 0,
+      "p95_seconds": 20.2595,
+      "threshold_seconds": 30,
+      "log_sha256": "f163fc7db811a062b9f5b2339312eb966c52b6e9299b6c7d16df66e0e045879c"
+    },
+    "final_related_integration": {
+      "passed": 654,
+      "skipped": 0
+    },
+    "strict_sdk_lanes": {
+      "passed": 52,
+      "skipped": 0,
+      "counting": "lane totals, not unique nodeids"
+    },
+    "update_origins": 26,
+    "update_paths": 42,
+    "lifecycle_nodes_passed": 4472,
+    "release_documents": {
+      "passed": 31,
+      "subtests_passed": 41,
+      "failed": 0,
+      "skipped": 0,
+      "log_sha256": "d32d805d1825e8ba353c30a2b763abd3334141633a0be508cebc86b3b7164607",
+      "metadata_static_checks": [
+        {
+          "command": "python3 scripts/development/release_notes.py check",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 scripts/development/readme_release.py --check --version 1.0.26",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 scripts/development/update_readme.py --check",
+          "exit_code": 0,
+          "reuse": "No generated sources changed after this check; latest README separately verified"
+        },
+        {
+          "command": "python3 scripts/development/generate_slack_gallery.py --check",
+          "exit_code": 0,
+          "result": "8 fictional Slack illustrations verified",
+          "reuse": "Source images and generator unchanged throughout metadata work"
+        },
+        {
+          "command": "git diff --check",
+          "exit_code": 0
+        }
+      ],
+      "metadata_receipt_sha256": "e4cf0547e2c709b23829d20d21f1750851250f43e00e56ac5a984a0d17c514bd",
+      "root_links": 79,
+      "missing_links": 0
+    }
+  },
+  "not_performed": [
+    "live provider acceptance",
+    "native mobile and accessibility acceptance",
+    "exact release SHA GitHub CI",
+    "push/tag/publication/deployment",
+    "release-wide CodeRabbit: authenticated shared skill catalog empty; administrator restoration pending",
+    "390px image rendering: browser local-file protocol blocked"
+  ],
+  "lifecycle_evidence_sha256": "ff190460c1aae35e21efed120702d7a7cf536a9b2860f359330cc9d5583c7924",
+  "dependency_security": {
+    "receipt_sha256": "04e0e67ef50f42a7d52f7d905183ecfe415a7954541991342a341bf84650763d",
+    "fixed_versions_checked": 21,
+    "yanked": 0,
+    "lock_distribution_hashes_matched": 317,
+    "new_confirmed_product_vulnerabilities": 0,
+    "limitation": "cryptography 50.0.1 bundles OpenSSL 4.0.2; affected API reachability not established in inspected required MCS paths; optional plugins, other operating systems and source builds unverified",
+    "optional_update": "cryptography 50.0.2 wheel bundles OpenSSL 4.0.3; requires coordinated Hermes pin/lock and MCS SDK validation"
+  },
+  "integration_independent_review_sha256": "3aa880350286fcb72e4b0b811e75ec34a521a15b11728e437e5d070528fcc4ac"
+}

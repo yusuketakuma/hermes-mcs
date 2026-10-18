@@ -8,6 +8,7 @@
 
 | 版 | 記録 |
 |---|---|
+| 1.0.26 | [受入・公開前の残件](v1.0.26/ACCEPTANCE_1.0.26.md) · [統合対応表](v1.0.26/integration-manifest.json) · [画面例](v1.0.26/README.md) |
 | 1.0.25 | [受入](v1.0.25/ACCEPTANCE_1.0.25.md) · [患者背景の計画](v1.0.25/PATIENT_CONTEXT_1.0.25.md) · [画面例](v1.0.25/README.md) |
 | 1.0.24 | [受入](v1.0.24/ACCEPTANCE_1.0.24.md) · [画面例](v1.0.24/README.md) |
 | 1.0.23 | [受入](v1.0.23/ACCEPTANCE_1.0.23.md) · [調査](v1.0.23/AUDIT_1.0.23.md) · [構成確認](v1.0.23/REPOSITORY_HYGIENE_1.0.23.md) · [更新取り込み](v1.0.23/UPDATE_ITEMS_1.0.23.md) · [ワークツリー統合](v1.0.23/WORKTREE_INTEGRATION_1.0.23.md) · [図の準備](v1.0.23/VISUAL_PREPARATION.md) |
