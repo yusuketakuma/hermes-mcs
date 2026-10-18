@@ -55,7 +55,7 @@ from mcs_queries import ELIGIBLE_MESSAGE
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
                       HOME, RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost,
                       acquire_run_lock, code_stamp as _code_stamp,
-                      disk_floor_mb, load_config)
+                      disk_floor_mb, load_config, loads_dict)
 import job_ops
 import maintenance
 import notify_flush
@@ -1307,7 +1307,7 @@ def _walk_order(ledger, stage: str) -> list:
         "SELECT content FROM artifacts WHERE kind=? AND json_valid(content) "
         "AND json_valid(meta) AND json_extract(meta,'$.stage')=? "
         "ORDER BY artifact_id DESC LIMIT 1", (WALK_CURSOR_KIND, stage)).fetchone()
-    nxt = json.loads(cur[0]).get("next") if cur else None
+    nxt = (loads_dict(cur[0]) or {}).get("next") if cur else None
     if not rows or type(nxt) is not int:
         return rows
     k = next((i for i, r in enumerate(rows) if r["project_id"] >= nxt), 0)

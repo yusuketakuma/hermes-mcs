@@ -178,7 +178,7 @@ def _decode_blobs(blobs: dict):
     return v1, lm, llm, has_fact_source
 
 
-def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread):
+def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, request_limit):
     """Append one message's v1/llm request rows to the rollup lists."""
     requests.extend({"kind": rq.get("kind"), "ctx": rq.get("ctx"),
                      "at": m["posted_at"], "mid": m["message_id"]}
@@ -196,9 +196,9 @@ def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread):
             if isinstance(rq.get(src), str) and rq[src]:
                 row[dst] = rq[src]
         requests.append(row)
-        # Only the first 15 requests reach the read model; discarded
-        # rows need no reply scan, but all replies remain evidence.
-        if len(requests) <= 15:
+        # Only returned requests need a reply scan. The ordinary rollup
+        # keeps its cap; an explicit full read checks every request.
+        if request_limit is None or len(requests) <= request_limit:
             req_thread.append((row, root, ts, sender_id))
 
 
@@ -209,7 +209,7 @@ def _stored_lab_ok(r) -> bool:
             and all(r.get(k) is None or isinstance(r.get(k), str) for k in ("unit", "evidence", "measured_on")))
 
 
-def build_rollup(ledger, project_id: int) -> dict:
+def build_rollup(ledger, project_id: int, *, request_limit: int | None = 15) -> dict:
     db = ledger.db
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
     patient_name = patient[0] if patient else None
@@ -359,7 +359,7 @@ def build_rollup(ledger, project_id: int) -> dict:
         _med_states(m, v1, lm, med_state, patient_name=patient_name)
         _symptom_ts(m, v1, lm, ts, sym_pos, sym_neg, patient_name=patient_name)
         root = m["parent_id"] or m["message_id"]
-        _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread)
+        _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, request_limit)
         # reply lives only in extract_llm; read it there even when a
         # canonical_projection / semantic_facts_v4 blob shadows lm
         kind = _llm_reply_kind(llm)
@@ -426,7 +426,7 @@ def build_rollup(ledger, project_id: int) -> dict:
                                for rts, kind in seen):
                 row["reply_conflict"] = True
     if requests:
-        out["recent_requests"] = requests[:15]
+        out["recent_requests"] = requests[:request_limit]
     if canonical:
         out["canonical_facts"] = list(canonical.values())
     if next_planned:
