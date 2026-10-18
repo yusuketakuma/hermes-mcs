@@ -120,6 +120,8 @@ _HEADER_POST = re.compile(r"m:[1-9][0-9]{0,18}:header#1")
 
 def _announces(spec, part) -> bool:
     """The one chunk of a post that may broadcast to the channel."""
+    if part.get("broadcast") is False:
+        return False
     name = str(part.get("name") or "")
     if _HEADER_POST.fullmatch(name):
         return True

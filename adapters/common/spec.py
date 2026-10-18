@@ -80,7 +80,7 @@ POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
 MAX_POST_ACTIONS = 5
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
-    "attachment_id", "path", "unavailable", "prior_remote_id", "caption", "edit_only"})
+    "attachment_id", "path", "unavailable", "prior_remote_id", "caption", "edit_only", "broadcast"})
 MAX_CAPTION = 300
 
 # Buttons a card keeps as buttons on every transport; every other
@@ -414,6 +414,14 @@ def _validate_manifest(manifest, *, spec=None) -> None:
                 and not _HEX64.fullmatch(str(p["sha256"])):
             _err("bad_part_sha256")
         kind = p["kind"]
+        if "broadcast" in p:
+            if (type(p["broadcast"]) is not bool or kind != "body_part"
+                    or spec is None or spec.get("kind") != "thread"
+                    or spec.get("delivery", {}).get("transport") != "slack"
+                    or (p["broadcast"] and (spec.get("op") != "update"
+                        or not spec["delivery"].get("intent_event_ids")
+                        or p.get("prior_remote_id") or p.get("edit_only")))):
+                _err("bad_broadcast")
         if "edit_only" in p:
             if (type(p["edit_only"]) is not bool or kind not in ("body_part", "attachment_part")
                     or not p.get("prior_remote_id") or spec is None or spec.get("op") != "update"
