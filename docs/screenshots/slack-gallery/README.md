@@ -13,7 +13,7 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 
 | 画面 | 根拠 |
 |---|---|
-| `01-overview` | `docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・本文・添付の配送）、`mcs/notify/notify_render.py`の`_message_post`（新しいカードのnativeスレッドは`↳`見出し・要約・スタンプ・本文。返信にも同じ順で表示）、`adapters/slack/cards.py`の`thread_part_blocks`（見出し行とスタンプ行は小さな補足表示、原文は`原文（N字）`の折りたたみブロック）、`mcs/notify/notify_cards.py`（添付の`📎`行と要約を含まない見出し） |
+| `01-overview` | `docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・添付の配送）、`mcs/notify/notify_cards.py`の`_face_posts`（投稿ごとの要約の下にスタンプ行と原文をカード本文へ。返信にも同じ順。添付の`📎`行と要約を含まない見出し）、`adapters/slack/cards.py`の`render_parts`・`_folded_original`（スタンプ行は小さな補足表示、原文は`原文（N字）`の折りたたみブロック）、`present_slack.face_block_count`（収まらない投稿はスレッド本文へ） |
 | `02-notification` | `mcs/notify/notify_render.py`の`_card_content`・`_thread_context`・`_footer`（概要・投稿ごとの要約・状態の区画）、`adapters/slack/cards.py`（区画間の区切り線、`確認する`・`担当する`・`タスク作成`のボタンと「操作を選ぶ…」、`MCSで開く`のテキストリンク）、`mcs/notify/notify_cards.py`の`_ACTIONS`、`mcs/views/message_metadata.py`（スタンプ件数と自分の投稿数） |
 | `03-actions` | 同カード実装（ボタン以外の操作をボタン行の順に選択メニューへ。未完了タスクがあれば`タスク一覧`が先頭。患者の検索は常に含み、全体の新着集計・自分のタスク・未確認一覧は集計カードだけ。その他の表示項目は状態・設定に依存） |
 | `04-task-form` | `adapters/common/text.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
@@ -39,6 +39,7 @@ python3 scripts/development/readme_release.py --check
 2026-10-17の`01-overview`は要約・スタンプ・本文を並べるため高さを1200pxへ広げ、
 macOS標準Quick LookとImageMagickで1650×1800pxのPNGを描画した。
 2026-10-17のボタン再編では`03-actions`と`07-patient-summary`を更新した。
+2026-10-18のカード配置変更（要約・スタンプ・原文の折りたたみをカードへ、添付だけスレッドへ）では`01-overview`・`02-notification`・`03-actions`を更新し、`02-notification`の高さを1060pxへ広げ、同じQuick Look＋ImageMagickの手順で描画した。
 Inkscapeのない環境では一時コピーのSVG viewportだけを正方形へ広げてQuick Lookで描画し、
 元の1650px幅・縦横比の範囲をImageMagickで切り出した。SVG本体の配置は変えず、
 `verify_png()`と`asset_hashes()`でPNGの完結性・寸法・SVG/PNGのハッシュを検査・同期した。

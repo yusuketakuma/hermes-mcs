@@ -73,7 +73,7 @@ PARTS_KEYS = frozenset({
     # spec's own transport may carry its key — see _transport_parts_cost
     "slack", "discord", "lineworks"})
 # what each transport namespace may hold
-TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions"}),
+TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions", "face_posts"}),
                        "discord": frozenset({"post_actions", "accent"}),
                        "lineworks": frozenset()}
 POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
@@ -248,6 +248,30 @@ def _validate_button(b) -> None:
         _err("bad_button_id")
 
 
+FACE_ORIGINAL_MAX = 30000      # one collapsible container: 10 sections of 3000
+MAX_FACE_POSTS = 8             # one thread-card page (notify_render.PAGE_THREAD)
+
+
+def _validate_face_posts(spec, parts, posts) -> None:
+    """Slack thread-card posts shown whole on the card: under the post line
+    at ``at``, its stamp rows and its folded original (plain text)."""
+    rules = {i for i, c in enumerate(parts["containers"])
+             if c.get("rule") and c.get("type") == "text"}
+    if spec.get("kind") != "thread" or not isinstance(posts, list) \
+            or not 0 < len(posts) <= MAX_FACE_POSTS:
+        _err("bad_face_posts")
+    seen = set()
+    for post in posts:
+        if not isinstance(post, dict) or post.keys() != {"at", "stamps", "original"} \
+                or type(post["at"]) is not int or post["at"] not in rules \
+                or post["at"] in seen or not isinstance(post["stamps"], list) \
+                or len(post["stamps"]) > 4 \
+                or not all(_text(x, MAX_TEXT) for x in post["stamps"]) \
+                or not _text(post["original"], FACE_ORIGINAL_MAX):
+            _err("bad_face_post")
+        seen.add(post["at"])
+
+
 def _transport_parts_cost(spec, parts) -> int:
     """Validate the per-transport namespace and return the component
     slots it adds: a post action turns one text line into a section
@@ -263,6 +287,8 @@ def _transport_parts_cost(spec, parts) -> int:
         _known_keys(own, allowed, f"{name}_parts")
         if "accent" in own and own["accent"] != "urgent":
             _err("bad_accent")
+        if "face_posts" in own:
+            _validate_face_posts(spec, parts, own["face_posts"])
         actions = own.get("post_actions")
         if actions is None:
             continue

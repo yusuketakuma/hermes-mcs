@@ -144,10 +144,18 @@ def test_thread_body_includes_summary_and_attachment_caption_keeps_source(led, t
     assert "GENERATED-SUMMARY-CANARY" in face
     assert "解析中 1" in face
     body = "".join(spec["parts"]["thread_body_parts"])
-    assert raw in body and "📄 本文" not in body
     caption = next(part["caption"] for part in spec["parts"]["manifest"] if part["kind"] == "attachment_part")
     assert "合成所属" in caption
-    assert body.index("GENERATED-SUMMARY-CANARY") < body.index("スタンプ 未取得") < body.index(raw)
+    if platform == "slack":
+        # Slack keeps summary, stamps and the folded original on the card face;
+        # only the attachment goes to the thread.
+        assert body == ""
+        post = spec["parts"]["slack"]["face_posts"][0]
+        assert post["original"] == raw and post["stamps"] == ["スタンプ 未取得"]
+        body = "\n".join(post["stamps"]) + "\n" + raw
+    else:
+        assert raw in body and "📄 本文" not in body
+        assert body.index("GENERATED-SUMMARY-CANARY") < body.index("スタンプ 未取得") < body.index(raw)
     assert "解析更新中" not in body
     assert "📋 要約" not in body
     if platform == "lineworks":

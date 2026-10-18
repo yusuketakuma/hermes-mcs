@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "患者の記録まとめを読み込めなかったときに、その旨を表示",
+  "summary": "夜間の患者まとめの画面を開けなかった場合、これまでは基本のまとめを黙って表示していました。先頭に「患者の記録まとめを読み込めなかったため、基本のまとめを表示しています」と1行示し、取得失敗と通常表示を区別できるようにしました。内部の例外文は表示しません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "notify_cards._act_view の既存 fallback 経路で legacy summary の本文先頭に案内を付ける（fallback 自体の条件は不変）。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "tests/notify/test_patient_context_nightly_ui.py"
+  ]
+}
