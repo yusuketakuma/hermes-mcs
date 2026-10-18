@@ -1,15 +1,18 @@
 """Late synthetic replies reach their original Slack thread and channel once."""
 import asyncio
+import json
+import pytest
 
 import notify_cards
-from notify_testkit import NOW, _card, _dispatch, _intent, _msg, _seed_thread
+from notify_testkit import NOW, _card, _dispatch, _intent, _latest_render, _msg, _seed_thread
 from slack_testkit import SLACK, _granted_card, _mkworld
 from slack_testkit import isolated_slack_ledger as led
 
 __all__ = ["led"]
 
 
-def test_delayed_reply_is_new_in_original_thread_and_broadcast_once(led, monkeypatch):
+@pytest.mark.parametrize("legacy", [False, pytest.param(True, marks=pytest.mark.thread_bodies)])
+def test_delayed_reply_is_new_in_original_thread_and_broadcast_once(led, monkeypatch, legacy):
     clock = [NOW]
     monkeypatch.setattr(notify_cards.time, "time", lambda: clock[0])
     _seed_thread(led)
@@ -28,13 +31,20 @@ def test_delayed_reply_is_new_in_original_thread_and_broadcast_once(led, monkeyp
     notify_cards.publish_flags(SLACK, str(world.root))
     asyncio.run(_granted_card(world.worker, led, world.root))
 
-    # the reply arrives as its summary/stamps header, then its source text;
-    # only the header is broadcast to the channel
+    # The new layout keeps the original on the card, with one short broadcast
+    # notice. Legacy cards keep their header/body split and broadcast once too.
     posts = world.client.thread_posts[before:]
-    assert len(posts) == 2
+    expected = 2 if legacy else 1
+    assert len(posts) == expected
     assert all(p["thread_ts"] == original_ts for p in posts)
-    assert [p.get("reply_broadcast") for p in posts] == [True, None]
-    assert "合成の遅れて届いた返信" in posts[1]["text"]
+    assert [p.get("reply_broadcast") for p in posts] == ([True, None] if legacy else [True])
+    if legacy:
+        assert "合成の遅れて届いた返信" in posts[1]["text"]
+    else:
+        assert "新しい返信をカードに追加しました。" in posts[0]["text"]
+        assert "合成の遅れて届いた返信" not in posts[0]["text"]
+        current = json.loads(_latest_render(led)["spec_json"])
+        assert "合成の遅れて届いた返信" in [p["original"] for p in current["parts"]["slack"]["face_posts"]]
     assert _card(led)["message_id"] == original_ts
     assert led.db.execute("SELECT COUNT(*) FROM notification_cards").fetchone()[0] == 1
     assert led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?",
@@ -42,4 +52,14 @@ def test_delayed_reply_is_new_in_original_thread_and_broadcast_once(led, monkeyp
 
     _dispatch(led, intent, SLACK, now=clock[0])
     asyncio.run(_granted_card(world.worker, led, world.root))
-    assert len(world.client.thread_posts) == before + 2
+    assert len(world.client.thread_posts) == before + expected
+
+    # Re-rendering accepted content is an edit, never a fresh notification.
+    issued = []
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text='合成の編集後返信',content_hash=? WHERE message_id=202", ("e" * 64,))
+        notify_cards._issue_render(led.db, 1, SLACK, clock[0] + 1, issued, force=True)
+    notify_cards._publish_specs(led.db, notify_cards.notify_dirs(str(world.root)), issued, clock[0] + 1)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    assert len(world.client.thread_posts) == before + expected
+    assert sum(bool(p.get("reply_broadcast")) for p in world.client.thread_posts[before:]) == 1

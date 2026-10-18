@@ -367,6 +367,7 @@ def test_delivered_tokens_bind_clicks_to_workspace_and_message(tmp_path):
     assert stored["message_id"] == "1790000000.000001"
 
 
+@pytest.mark.thread_bodies
 def test_receipt_survives_unflushed_registry_with_usable_buttons(led):
     _seed_thread(led)
     private_body = "REPLAY-SYNTHETIC-BODY"
@@ -486,6 +487,7 @@ def test_receipt_survives_unflushed_registry_with_usable_buttons(led):
     ).fetchone()[0] == "delivered"
 
 
+@pytest.mark.thread_bodies
 def test_runner_grant_posts_card_and_body_inside_card_thread(led):
     _seed_thread(led)
     private_body = "PRIVATE-SYNTHETIC-MESSAGE"
@@ -585,6 +587,7 @@ def _big_body(led, chars=4200):
     led.db.commit()
 
 
+@pytest.mark.thread_bodies
 def test_slack_thread_parts_post_under_bound_root_only(led, monkeypatch):
     monkeypatch.setattr(runner_cards, "drug_search_available", lambda _db: True)
     _seed_thread(led)
@@ -759,13 +762,15 @@ def test_slack_private_medication_pages_and_post_navigation_roundtrip(led):
         assert "新しい投稿" in buttons
         text, buttons = await click_answer(buttons["新しい投稿"])
         assert names[0] in text and names[5] not in text
-        assert w.client.thread_posts
+        # The original is on the card; only the clicker's private answer uses the thread.
+        assert w.client.thread_posts == []
         assert len(w.client.calls) == shared_calls
         actions.unload()
 
     asyncio.run(scenario())
 
 
+@pytest.mark.thread_bodies
 def test_slack_started_only_part_is_unknown_and_never_resent(led, monkeypatch):
     # the runner clock is frozen; registry stamps must still order the
     # old render's buttons before the update's
@@ -854,6 +859,7 @@ def test_slack_started_only_part_is_unknown_and_never_resent(led, monkeypatch):
     assert row["state"] == "unknown" and row["error_code"] == "worker_crash"
 
 
+@pytest.mark.thread_bodies
 def test_slack_ambiguous_part_failure_stays_unknown_no_resend(led):
     _seed_thread(led)
     _big_body(led)
@@ -883,6 +889,7 @@ def test_slack_ambiguous_part_failure_stays_unknown_no_resend(led):
     assert rows and rows[-1]["result"] == "unknown"
 
 
+@pytest.mark.thread_bodies
 def test_slack_definitive_part_reject_is_not_sent_not_unknown(led):
     _seed_thread(led)
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
@@ -897,6 +904,7 @@ def test_slack_definitive_part_reject_is_not_sent_not_unknown(led):
     assert rows[-1]["error_code"] == "channel_not_found"
 
 
+@pytest.mark.thread_bodies
 def test_slack_update_binds_own_reply_foreign_never_binds(led):
     _seed_thread(led)
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
@@ -941,6 +949,7 @@ def _rewrite(w, spec, text, prior, part_id="body:0001", ctx=None):
 
 @pytest.mark.parametrize("kind", ["body_part", "attachment_part"])
 @pytest.mark.parametrize("failure", ["timeout", "rejected", "malformed"])
+@pytest.mark.thread_bodies
 def test_unverified_slack_history_never_posts_or_uploads_again(
         led, monkeypatch, kind, failure):
     w, spec, _ = _rewrite_world(led)
@@ -978,6 +987,7 @@ def test_unverified_slack_history_never_posts_or_uploads_again(
 @pytest.mark.parametrize("pagination", [
     {"has_more": True}, {"response_metadata": {"next_cursor": "synthetic-next"}}],
     ids=["has_more", "next_cursor"])
+@pytest.mark.thread_bodies
 def test_incomplete_slack_history_never_authorizes_resend(
         led, monkeypatch, kind, pagination):
     w, spec, _ = _rewrite_world(led)
@@ -1010,6 +1020,7 @@ def test_incomplete_slack_history_never_authorizes_resend(
     assert len(w.client.upload_calls) == uploaded
 
 
+@pytest.mark.thread_bodies
 def test_slack_update_rewrites_the_earlier_reply_of_a_changed_chunk(led):
     """The chunk's text changed after its first post (the extraction
     arrived): the update rewrites that reply — one reply per chunk, the
@@ -1025,6 +1036,7 @@ def test_slack_update_rewrites_the_earlier_reply_of_a_changed_chunk(led):
     assert replies[0]["text"] == "変更後の本文"
 
 
+@pytest.mark.thread_bodies
 def test_slack_body_special_characters_are_literal_and_dedupe_after_restart(led):
     from html import unescape
     w, spec, _ = _rewrite_world(led)
@@ -1041,6 +1053,7 @@ def test_slack_body_special_characters_are_literal_and_dedupe_after_restart(led)
     assert again == first and len(w.client.thread_posts) == posted
 
 
+@pytest.mark.thread_bodies
 def test_slack_rewrite_keeps_special_characters_literal_and_reuses_same_id(led):
     from html import unescape
     w, spec, replies = _rewrite_world(led)
@@ -1056,6 +1069,7 @@ def test_slack_rewrite_keeps_special_characters_literal_and_reuses_same_id(led):
     assert len(_updates(w)) == 1 and len(w.client.thread_posts) == posted
 
 
+@pytest.mark.thread_bodies
 def test_slack_rewrite_never_touches_a_foreign_or_missing_reply(led):
     w, spec, replies = _rewrite_world(led)
     posted = len(w.client.thread_posts)
@@ -1074,6 +1088,7 @@ def test_slack_rewrite_never_touches_a_foreign_or_missing_reply(led):
 
 @pytest.mark.parametrize("error", ["message_not_found",
                                    "cant_update_message"])
+@pytest.mark.thread_bodies
 def test_slack_rejected_update_falls_back_to_a_new_reply(led, error):
     w, spec, replies = _rewrite_world(led)
     posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
@@ -1086,6 +1101,7 @@ def test_slack_rejected_update_falls_back_to_a_new_reply(led, error):
 
 @pytest.mark.parametrize("status,error", [(429, "ratelimited"),
                                           (200, "invalid_blocks")])
+@pytest.mark.thread_bodies
 def test_slack_rate_limited_update_never_posts_a_duplicate(led, status, error):
     """Regression: a 429 on chat.update fell back to chat.postMessage,
     leaving the old reply plus a notifying duplicate (mass re-render)."""
@@ -1097,6 +1113,7 @@ def test_slack_rate_limited_update_never_posts_a_duplicate(led, status, error):
     assert len(w.client.thread_posts) == posted
 
 
+@pytest.mark.thread_bodies
 def test_slack_unknown_update_outcome_never_posts_a_second_reply(led):
     w, spec, replies = _rewrite_world(led)
     posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
@@ -1106,6 +1123,7 @@ def test_slack_unknown_update_outcome_never_posts_a_second_reply(led):
     assert len(w.client.thread_posts) == posted
 
 
+@pytest.mark.thread_bodies
 def test_slack_one_reply_is_rewritten_for_only_one_chunk(led):
     w, spec, replies = _rewrite_world(led)
     posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
@@ -1117,6 +1135,7 @@ def test_slack_one_reply_is_rewritten_for_only_one_chunk(led):
     assert len(w.client.thread_posts) == posted + 1
 
 
+@pytest.mark.thread_bodies
 def test_slack_rewrite_survives_a_crash_between_update_and_result(led):
     """A rerun after the update landed but before its result was
     journaled finds the new text already remote and binds to it — no

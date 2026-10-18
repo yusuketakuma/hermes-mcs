@@ -381,23 +381,33 @@ class DeliveryWorker(_BaseWorker):
     # -- durable render parts (T9) ----------------------------------------
 
     def _pin_active_thread(self, claim, ctx, records):
-        """Pin private drug answers only after a delivered body reply."""
+        """Pin drug answers after a delivered reply or a proven card-face thread."""
         spec = claim["spec"]
         message_id = ctx.get("card_message_id")
         root = spec["delivery"].get("thread_id") or message_id
         if (not isinstance(message_id, str) or not _TS.fullmatch(message_id)
                 or not isinstance(root, str) or not _TS.fullmatch(root)):
             return
+        # Both callers supply card_message_id only after a successful primary
+        # result: _deliver_parts after settlement, _resume_parts from the journal.
+        # Reuse that proof instead of scanning the whole journal again per card.
+        face_thread = (spec.get("kind") == "thread" and root == message_id
+                       and bool((spec["parts"].get("slack") or {}).get("face_posts"))
+                       and self._ours(spec["delivery"]))
         for part in spec["parts"].get("manifest") or []:
-            if part.get("kind") != "body_part":
+            face_part = face_thread and part.get("kind") == "thread"
+            if part.get("kind") != "body_part" and not face_part:
                 continue
             rows = records.get(envelopes.part_attempt_id(
                 spec["delivery_id"], part["part_id"]), [])
+            if face_part:
+                rows = [next((r for r in reversed(rows) if r.get("phase") == "result"), {})]
             if any(row.get("phase") == "result"
                    and row.get("result") == "delivered"
                    and isinstance(row.get("remote_id"), str)
                    and _TS.fullmatch(row["remote_id"])
-                   and row["remote_id"] not in (root, message_id) for row in rows):
+                   and (row["remote_id"] == root if face_part
+                        else row["remote_id"] not in (root, message_id)) for row in rows):
                 pins = {}
                 for token in token_map(spec):
                     current = self._reg.token(token)
@@ -424,7 +434,7 @@ class DeliveryWorker(_BaseWorker):
             await super()._attempt_part(claim, part, ctx)
         finally:
             RETRY_ALLOWED.reset(token)
-        if part["kind"] == "body_part":
+        if part["kind"] in ("thread", "body_part"):
             records = await asyncio.to_thread(self._jview.refresh)
             self._pin_active_thread(claim, ctx, records)
 
@@ -491,6 +501,7 @@ class DeliveryWorker(_BaseWorker):
         # reply would otherwise reach only the thread's followers
         broadcast = ({"reply_broadcast": True}
                      if spec["op"] == "update" and part is not None
+                     and spec["delivery"].get("intent_event_ids")
                      and part.get("kind") == "body_part"
                      and not part.get("prior_remote_id")
                      and _announces(spec, part)

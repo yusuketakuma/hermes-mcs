@@ -9,6 +9,7 @@ from slack_testkit import isolated_slack_ledger as led, _rewrite_world, ROOT_TS
 from adapters.slack.cards import thread_part_blocks
 
 __all__ = ["led"]
+pytestmark = pytest.mark.thread_bodies
 
 HEADER = "↳ 10-17 09:12 合成看護師\n要約: 合成の発熱と食欲低下\nスタンプ 👍2 ✅1"
 BODY = "（1/2）合成の原文です。" * 20

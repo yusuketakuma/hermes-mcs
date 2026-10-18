@@ -1004,13 +1004,24 @@ def _delivered_members(db, card, *, legacy: bool) -> set:
         "WHERE missing.delivery_id=r.delivery_id AND missing.kind='body_part' "
         "AND missing.state!='delivered')")
     for r in db.execute(
-            f"""SELECT DISTINCT r.delivery_id, m.shown
+            f"""SELECT DISTINCT r.delivery_id, r.spec_json, m.shown
                FROM notification_renders r
                JOIN notification_render_parts p ON p.delivery_id=r.delivery_id
                LEFT JOIN notification_view_manifests m
                  ON m.manifest_id=r.manifest_id
                WHERE r.card_id=? AND p.kind='body_part' AND p.name {named}
                  AND p.state='delivered' {complete}""", (card["card_id"],)):
+        # Header/body-split plans identify each delivered post by name. The
+        # shown set also includes face-only and deleted posts, so it cannot
+        # prove that those posts rode an older combined thread body. Keep the
+        # original membership rule for historical unsplit/legacy plans.
+        prior_spec = json.loads(r["spec_json"] or "{}")
+        manifest = (prior_spec.get("parts") or {}).get("manifest") or []
+        names = [p.get("name") or "" for p in manifest if p.get("kind") == "body_part"]
+        if not legacy and any(re.fullmatch(r"m:[1-9][0-9]*:header#1", name) for name in names):
+            out.update(int(match[1]) for name in names
+                       if (match := re.fullmatch(r"m:([1-9][0-9]*)(?::header)?#[1-9][0-9]*", name)))
+            continue
         rows = [r["shown"]] + [c[0] for c in db.execute(
             "SELECT coverage FROM notification_intent_cards "
             "WHERE delivery_id=?", (r["delivery_id"],))]
@@ -1311,6 +1322,7 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     verified_body, verified_attachments = _same_thread_delivered_parts(db, card) if update else ({}, {})
     present = presenter(card["transport"])
     editable = present.EDITABLE
+    announced = _announced_ids(db, card) if update and face_mids else set()
     if hasattr(present, "overflow"):
         keyed.extend(present.overflow(parts, _split_body_chunks))
     for key, mids in _body_groups(db, card, planned, posts):
@@ -1321,14 +1333,22 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
         header_chunks = []
         if mids and set(mids) <= face_mids:
             chunks = []                    # the card face carries this post whole
+            notice = header.split("\n", 1)[0] + "\n新しい返信をカードに追加しました。"
+            prior_notice = verified_body.get(key + ":header#1")
+            if divider and update and (
+                    any(mid in announced and mid != card["root_message_id"] for mid in mids)
+                    or (prior_notice and prior_notice[1] == _sha_text(notice))):
+                # Keep the existing journaled header identity: a new reply
+                # broadcasts once; later renders reuse/edit that exact post.
+                header_chunks = [notice]
         elif divider and card["layout"] >= 3:
             header_chunks = _split_body_chunks(header)
-            keyed += [(f"{key}:header#{k}", c)
-                      for k, c in enumerate(header_chunks, 1)]
             chunks = _split_body_chunks(original)
         else:
             # Existing names remain stable until a new source post is issued.
             chunks = _split_body_chunks(body)
+        keyed += [(f"{key}:header#{k}", c)
+                  for k, c in enumerate(header_chunks, 1)]
         keyed += [(f"{key}#{k}", c) for k, c in enumerate(chunks, 1)]
         if editable:
             for old_key, (remote_id, sha) in verified_body.items():
