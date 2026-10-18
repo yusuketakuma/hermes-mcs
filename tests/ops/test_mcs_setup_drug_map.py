@@ -227,7 +227,7 @@ def test_wizard_pins_the_bundled_dictionary_on_enter(tmp_path, monkeypatch, caps
     assert dictionary.approved and dictionary.source.approved_by == "fictional-user"
     assert dictionary.source.terms_checked_on == date.today().isoformat()
     out = capsys.readouterr().out
-    assert "辞書を作成しました" in out and "照合は定期処理で有効になります" in out
+    assert "辞書を作成しました" in out and "照合は設定を保存した後の定期処理で有効になります" in out
     # the policy the operator confirms is shown, not implied by the prompt
     assert "変更区分 0/3/5" in out and "抹消 1・廃止 9" in out and "同等性は確定しません" in out
     assert any("drug_map.bundled" in p for p in prompts)

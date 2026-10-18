@@ -1387,7 +1387,7 @@ def _wizard_drug_map(cfg: dict, step: int) -> None:
         return
     cfg["drug_map"] = {"path": out["path"], "sha256": out["sha256"]}
     print(f"  辞書を{'作成' if out['state'] == 'written' else '再利用'}しました: {out['path']}（{out['entries']}件）"
-          + ("。照合は定期処理で有効になります。" if approve
+          + ("。照合は設定を保存した後の定期処理で有効になります。" if approve
              else "。承認者なしのため参照のみで、照合は行いません。"))
 
 
