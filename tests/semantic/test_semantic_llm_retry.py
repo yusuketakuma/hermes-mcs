@@ -1017,18 +1017,33 @@ def test_turn_won_with_scraps_of_window_is_busy(tmp_path, monkeypatch):
     busy: the lock, not the model, ate the budget, so no attempt is
     charged for a request that would be reaped mid-decode."""
     import fcntl
+    import local_llm
     import os
     import semantic_runtime
     calls = []
     path = _turn_lock_env(monkeypatch, tmp_path, calls)
     holder = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(holder, fcntl.LOCK_EX)
-    timer = threading.Timer(1.4, os.close, [holder])
-    timer.start()
+    # release 1.4 s after the FIRST lock attempt, not after an arbitrary
+    # point before the call: a slow test thread must not shift the hold
+    # into the 2 s window and let the request through
+    real_flock = fcntl.flock
+    timer = []
+
+    def flock(fd, operation):
+        if not timer and operation == (fcntl.LOCK_EX | fcntl.LOCK_NB):
+            timer.append(threading.Timer(1.4, os.close, [holder]))
+            timer[0].start()
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(local_llm.fcntl, "flock", flock)
     try:
         with pytest.raises(semantic_runtime.LLMNotSent) as info:
             semantic.llm_chat("synthetic JSON:", timeout=2)
         assert info.value.stage == "llm_turn_busy"
         assert calls == []
     finally:
-        timer.join()
+        if timer:
+            timer[0].join()
+        else:
+            os.close(holder)
