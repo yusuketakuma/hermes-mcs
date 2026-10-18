@@ -1,0 +1,19 @@
+{
+  "category": "changed",
+  "title": "Slackの通知カードに投稿ごとのスタンプと原文の折りたたみを表示",
+  "summary": "Slackでは投稿ごとの要約の下に、スレッドと同じスタンプ行（押した人を含む）と「原文（N字）」の折りたたみをカード本文に表示します。返信も同じ順でカードに続け、スレッドには画像やPDFなどの添付だけを投稿します。原文が長すぎてカード1件に収まらない投稿と、それ以降の投稿は従来どおりスレッドへ本文を投稿します。Discord・LINE WORKSの配置は変わりません。",
+  "upgrade": "追加操作は不要です。gateway再起動後、配信済みのSlackカードは次の更新時に新しい配置へ書き換えられ、スレッドの旧本文投稿は「集約済み」の表示に置き換わります（新しい投稿は増えません）。",
+  "details": [
+    "present_slack.BODY_ON_FACE で Slack だけ有効。face_block_count がカード1件（50ブロック）に収まる範囲を判定し、FACE_ORIGINAL_MAX（30000字）を超える原文はスレッドへ。",
+    "notify_cards._face_posts が投稿ごとの {at, stamps, original} を parts.slack.face_posts に載せ、該当投稿の本文chunkは manifest から外す（添付と💊の thread part は維持）。",
+    "adapters/common/spec が face_posts を検証（thread カードのみ、最大8件、at は rule 行の index、スタンプ最大4行）。",
+    "adapters/slack/cards.render_parts が各投稿の要約の後にスタンプ context と折りたたみ container を描画し、thread_part_blocks と同じ _folded_original を共用。"
+  ],
+  "refs": [
+    "mcs/notify/present_slack.py",
+    "mcs/notify/notify_cards.py",
+    "adapters/common/spec.py",
+    "adapters/slack/cards.py",
+    "docs/guides/USER_GUIDE.md"
+  ]
+}

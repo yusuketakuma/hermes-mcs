@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import notify_cards
+import present_slack
 import notify_cmds
 import pytest
 
@@ -101,6 +102,8 @@ async def _grant(led, root, cfg, sender, reg):
 
 def _setup(led, tmp_path, monkeypatch, transport):
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+    # the scenarios need a pending thread body part on every transport
+    monkeypatch.setattr(present_slack, "BODY_ON_FACE", False)
     root = str(tmp_path / "data")
     cfg = _config(transport)
     notify_cards.ensure_dirs(root)

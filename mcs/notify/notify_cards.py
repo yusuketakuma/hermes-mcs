@@ -1220,12 +1220,48 @@ def _lineworks_update_budget(db, card, keyed):
     return out
 
 
-def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -> None:
+def _face_posts(db, card, parts, content, present) -> tuple:
+    """([face post], message ids the card face carries whole) for a
+    thread card whose transport shows bodies on the card: each shown
+    post's stamp rows (the same row its thread post had) and its
+    original, in page order, while the original fits one folded block
+    and the face stays within one message. A post that does not fit, and
+    every post after it, keeps its thread post (no text is dropped)."""
+    import notify_render
+    rules = [i for i, c in enumerate(parts["containers"])
+             if c.get("rule") and c.get("type") == "text"]
+    posts, mids = [], set()
+    for at, mid in zip(rules, content["shown"]):
+        m = db.execute("SELECT sender_id,body_text,body_state FROM messages "
+                       "WHERE message_id=? AND project_id=?",
+                       (mid, card["project_id"])).fetchone() if positive(mid) else None
+        if m is None:
+            break
+        if m["body_state"] == "deleted":
+            mids.add(mid)                  # the face's deletion line is the whole post
+            continue
+        original = m["body_text"] or ("（本文なし）" if m["body_state"] in (None, "full")
+                                      else "（本文未取得）")
+        stamp = notify_render.thread_stamp_row(db, mid, m["sender_id"])
+        post = {"at": at, "stamps": [ln for ln in stamp.split("\n") if ln],
+                "original": original}
+        if len(original) > present.FACE_ORIGINAL_MAX \
+                or present.face_block_count(parts, [*posts, post]) > present.BLOCK_MAX:
+            break
+        posts.append(post)
+        mids.add(mid)
+    return posts, frozenset(mids)
+
+
+def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
+                         face_mids=frozenset()) -> None:
     """Seal the ordered delivery plan into the spec: the card is always
     part 0; a thread-bound render adds the thread, every body chunk and
     every covered attachment as individually journaled parts. An update
     names, per body chunk and unchanged attachment, the message that
-    already carries it (``prior_remote_id``) so each stays one post."""
+    already carries it (``prior_remote_id``) so each stays one post.
+    A post in ``face_mids`` is shown whole on the card: it gets no body
+    chunk, and its earlier thread chunks are rewritten as collected."""
     parts = spec["parts"]
     reused_card = None
     if card["transport"] == "lineworks" and spec["op"] == "update":
@@ -1283,7 +1319,9 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
         # lossless — no chunk dropped
         header, divider, original = body.partition("\n" + "─" * 12 + "\n")
         header_chunks = []
-        if divider and card["layout"] >= 3:
+        if mids and set(mids) <= face_mids:
+            chunks = []                    # the card face carries this post whole
+        elif divider and card["layout"] >= 3:
             header_chunks = _split_body_chunks(header)
             keyed += [(f"{key}:header#{k}", c)
                       for k, c in enumerate(header_chunks, 1)]
@@ -1647,8 +1685,15 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
                                         else _thread_name(db, card))
     # the body travels inside the spec as individually journaled
     # durable parts — the card stays a summary surface while the
-    # thread carries the untruncated shown-set text (T7)
-    _build_part_manifest(db, card, spec, content, in_thread_body, cfg=cfg)
+    # thread carries the untruncated shown-set text (T7). Where the
+    # transport shows bodies on the card, the posts the face holds whole
+    # leave the thread (attachments and the rest stay there).
+    face_posts, face_mids = [], frozenset()
+    if (in_thread_body and op != "revoke" and card["kind"] == "thread"
+            and card["layout"] >= 3 and getattr(present, "BODY_ON_FACE", False)):
+        face_posts, face_mids = _face_posts(db, card, spec["parts"], content, present)
+    _build_part_manifest(db, card, spec, content, in_thread_body, cfg=cfg,
+                         face_mids=face_mids)
     if any(b["id"] == "meds" for row in spec["parts"]["action_rows"] for b in row):
         spec["parts"]["drug_view_navigation"] = True
     if present.THREAD_DRUG_ACTIONS and spec["parts"].get("thread_body_parts"):
@@ -1656,6 +1701,8 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     own = {}
     if post_mids:
         own["post_actions"] = _post_actions(db, card, content, post_mids, now)
+    if face_posts:
+        own["face_posts"] = face_posts
     if present.ACCENT_URGENT and content.get("urgent"):
         own["accent"] = "urgent"
     if own:
@@ -3276,6 +3323,8 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
             if opened:
                 db.execute("ROLLBACK TO patient_context")
             result = legacy()
+            result["body"] = ("患者の記録まとめを読み込めなかったため、基本のまとめを表示しています。"
+                              "もう一度、元のカードから開いてください。\n\n" + result["body"])
         if opened:
             db.execute("RELEASE patient_context")
         return result

@@ -102,9 +102,21 @@ def thread_part_blocks(spec, part, text):
     sections = _sections(text)
     if len(sections) > _CONTAINER_MAX:
         return None                      # longer than one container holds
-    return [{"type": "container", "is_collapsible": True, "default_collapsed": True,
-             "title": {"type": "plain_text", "text": f"原文（{len(text)}字）"},
-             "child_blocks": sections}]
+    return [_folded_original(text)]
+
+
+def _folded_original(text):
+    """The post's original as one collapsed 「原文（N字）」 container."""
+    return {"type": "container", "is_collapsible": True, "default_collapsed": True,
+            "title": {"type": "plain_text", "text": f"原文（{len(text)}字）"},
+            "child_blocks": _sections(text)}
+
+
+def _face_posts(parts) -> dict:
+    """post-line container index -> (stamp rows, original) the card itself
+    shows under that post's summary (parts["slack"]["face_posts"])."""
+    own = parts.get("slack") or {}
+    return {p["at"]: p for p in own.get("face_posts") or []}
 
 
 def _post_buttons(parts) -> dict:
@@ -177,10 +189,23 @@ def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
     line, so the summary under it reads as the post's main content."""
     blocks = []
     accessories = _post_buttons(parts)
+    face = _face_posts(parts)
+    pending = None
+
+    def close_post():
+        # the post's stamps and folded original follow its summary
+        if pending:
+            for line in pending["stamps"]:
+                blocks.extend(_contexts(line))
+            blocks.append(_folded_original(pending["original"]))
+
     for index, item in enumerate(parts["containers"]):
         kind = item["type"]
         if kind == "meta":
             continue
+        if item.get("rule"):
+            close_post()
+            pending = face.get(index)
         if item.get("rule") and blocks:
             blocks.append(dict(_DIVIDER))
         if card_kind == "thread" and item.get("rule") and kind == "text":
@@ -202,6 +227,7 @@ def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
             # stays a context line like every other post
             sections[0]["accessory"] = accessories[index - 1]
         blocks.extend(sections)
+    close_post()
 
     footer = [i for i in parts.get("footer") or [] if i["type"] == "text"]
     if footer and blocks:

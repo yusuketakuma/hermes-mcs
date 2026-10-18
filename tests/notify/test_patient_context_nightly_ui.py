@@ -212,6 +212,8 @@ def test_broken_nightly_view_falls_back_to_existing_summary(led, monkeypatch):
     monkeypatch.setattr(patient_context_view, "evidence", broken)
     result = click(led, entry, now=NOW + 1)
     assert result["action"] == "summary" and result["body"]
+    assert result["body"].startswith("患者の記録まとめを読み込めなかったため")
+    assert "synthetic nightly failure" not in result["body"]
 
 
 def test_later_click_by_same_user_on_same_card_advances_checkpoint(led):

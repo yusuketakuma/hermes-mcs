@@ -36,6 +36,8 @@ POSTS = (
      ("確認結果を担当者会議で共有してほしいとの連絡",
       "区分: 連絡")),
 )
+STAMPS = ("スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
+          "スタンプ 👀3 田中・佐藤・鈴木 / 🙆1 高橋 · 10-01 10:30時点")
 STATE = ("👤 担当: 田中 · ✅ 確認: 田中",
          "📝 タスク 1件 · スタンプ 👀5 🙆2 · 自分 2投稿")
 RULE = "─" * 12
@@ -135,30 +137,26 @@ class Screen:
 
     def card(self, x, y, width=770, full=False):
         """Card zones top to bottom: patient title, meta line, per post a
-        small time/sender line over its summary, state."""
+        small time/sender line over its summary, its stamp row and the
+        source text folded behind a collapsed 原文（N字） block, state."""
         y = self.paragraph(x, y, HEADING, width, 21, INK, True)
         y = self.paragraph(x, y - 4, META.format(n=2 if full else 1), width, 17, MUTED)
         if full:
             y = self.paragraph(x, y - 4, "🆕 返信+1", width, 17, GREEN)
-        for sender, bullets in POSTS[:2 if full else 1]:
+        for (sender, bullets), stamps in zip(POSTS[:2 if full else 1], STAMPS):
             y = self.rule(x, y, width)
             y = self.paragraph(x, y, sender, width, 15, MUTED)
             for bullet in bullets:
                 y = self.paragraph(x, y - 2, "・" + bullet, width, 18)
+            y = self.paragraph(x, y - 2, stamps, width, 15, GREEN)
+            y = self.fold(x, y, width, 16)
         y = self.rule(x, y, width)
         for line in STATE if full else ("📝 タスク 1件 · スタンプ 👀2 🙆1",):
             y = self.paragraph(x, y - 2, line, width, 17, MUTED)
         return self.rule(x, y, width)
 
-    def thread_post(self, x, y, width, size=17, sender=SENDER, stamps=True):
-        """One native thread post: source line, summary, stamps, then the
-        source text folded behind a collapsed 原文（N字） block."""
-        y = self.paragraph(x, y, f"↳ 10-01 09:40 {sender}", width, size, MUTED)
-        for bullet in POSTS[0][1]:
-            y = self.paragraph(x, y - 2, "・" + bullet, width, size)
-        if stamps:
-            y = self.paragraph(x, y - 2, "スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
-                               width, size, GREEN)
+    def fold(self, x, y, width, size=17):
+        """The collapsed 原文（N字） container block under a post."""
         self.rect(x - 8, y - size - 2, width + 16, size + 22, "#f3f6f4", 8, "#dce2dd")
         return self.paragraph(x, y + 4, f"▸ 原文（{len(BODY)}字）", width, size, MUTED) + 8
 
@@ -167,7 +165,7 @@ class Screen:
 
 
 def overview():
-    s = Screen(1, "連絡の要点と原文を、同じSlackで。", "返信も要約・スタンプを先に。原文は折りたたみ、添付も同じスレッドへ。", 1200)
+    s = Screen(1, "連絡の要点と原文を、同じSlackで。", "要約・スタンプ・折りたたみの原文はカードに。画像やPDFの添付はスレッドへ。", 1200)
     s.line(662, 194, 662, 1119)
     x, y = s.app(188, 227)
     # Slack wraps controls in a narrow pane; the menu remains one select.
@@ -176,16 +174,14 @@ def overview():
     s.text(689, 257, "# mcs-demo", 16, MUTED)
     s.line(682, 275, 1059, 275)
     s.text(689, 313, "MCS", 18, INK, True)
-    y = s.thread_post(689, 348, 354, 16)
-    s.text(689, y + 24, "MCS", 18, INK, True)
-    y = s.paragraph(689, y + 58, "📎 服薬カレンダー.jpg — 山田 花子 10-01 09:40 佐藤さん", 354, 16)
+    y = s.paragraph(689, 348, "📎 服薬カレンダー.jpg — 山田 花子 10-01 09:40 佐藤さん", 354, 16)
     s.rect(689, y - 8, 200, 120, "#f3f6f4", 8, "#dce2dd")
     s.text(789, y + 58, "画像", 16, MUTED)
     return s.finish()
 
 
 def notification():
-    s = Screen(2, "通知カードから、確認と担当を共有。", "上から概要・投稿ごとの要約・状態・操作の順。区切り線で分かれます。", 950)
+    s = Screen(2, "通知カードから、確認と担当を共有。", "上から概要・投稿ごとの要約・スタンプ・原文・状態・操作の順。区切り線で分かれます。", 1060)
     x, y = s.app()
     s.actions(x, s.card(x, y, full=True), confirmed=True)
     return s.finish()

@@ -42,3 +42,47 @@ def owner_label(owner: str, member_names) -> str:
 
 POST_ACTIONS = True           # 💊 button beside each medication post
 ACCENT_URGENT = False
+
+# Thread cards carry each shown post's stamp row and folded original on
+# the card itself (owner 2026-10-18); the thread keeps attachments, 💊
+# answers and any post the card cannot hold.
+BODY_ON_FACE = True
+FACE_ORIGINAL_MAX = 30000     # one collapsible container: 10 sections of 3000
+BLOCK_MAX = 50                # Block Kit blocks per message
+_SECTION_MAX = 3000
+_CONTEXT_MAX = 2000
+_HEADER_MAX = 150
+
+
+def _count(text, size) -> int:
+    return max(1, -(-len(text) // size))
+
+
+def face_block_count(parts, face_posts=()) -> int:
+    """An upper bound on the Block Kit blocks adapters/slack/cards.render
+    builds for this card face plus ``face_posts`` (each: its stamp rows
+    as contexts and one folded original). Never below the real count, so
+    a card it admits always fits one message."""
+    n = 0
+    for item in parts["containers"]:
+        kind = item["type"]
+        if kind == "meta":
+            continue
+        if item.get("rule") and n:
+            n += 1                                   # divider
+        if item.get("rule") and kind == "text":
+            n += _count(item["text"], _CONTEXT_MAX)
+        elif kind == "heading" and len(item["text"]) <= _HEADER_MAX:
+            n += 1
+        else:
+            text = (f"{item['name']}: {item['value']}" if kind == "field"
+                    else item["text"])
+            n += _count(text, _SECTION_MAX) + (kind == "quote")
+    footer = [i for i in parts.get("footer") or [] if i["type"] == "text"]
+    n += bool(footer) + sum(_count(i["text"], _CONTEXT_MAX) for i in footer)
+    buttons = [b for row in parts.get("action_rows") or [] for b in row]
+    n += 2 * any(b.get("ui") != "link" for b in buttons)
+    n += sum(b.get("ui") == "link" for b in buttons)
+    for post in face_posts:
+        n += sum(_count(s, _CONTEXT_MAX) for s in post["stamps"]) + 1
+    return n
