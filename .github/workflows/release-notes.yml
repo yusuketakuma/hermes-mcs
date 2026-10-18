@@ -1,8 +1,9 @@
 name: Japanese release notes
 
 on:
+  # a plain push to main starts nothing: drafts come from vX.Y.Z tags and
+  # existing notes are synchronized on release events or by manual dispatch
   push:
-    branches: [main]
     tags: ['v*']
   pull_request:
   release:
@@ -63,7 +64,6 @@ jobs:
   sync-existing:
     needs: check
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' && inputs.action == 'sync_existing')
     runs-on: ubuntu-latest

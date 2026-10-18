@@ -86,10 +86,10 @@ python3 scripts/development/release_notes.py export --version X.Y.Z \
 
 `.github/workflows/release-notes.yml`が次を行う。
 
-1. PR・main更新・リリース時に、全versionの見出し・順番・空段落・必須段落・折りたたみを検査する。
+1. PR・リリース時に、全versionの見出し・順番・空段落・必須段落・折りたたみを検査する。mainへの通常pushでは起動しない。
    README要約・見直し記録・参照リンクも検査し、tagではversionの一致も確認する。
 2. `vX.Y.Z`タグのpushではタグ内のCHANGELOGから新しいRelease下書きを作る。公開はしない。
-3. main更新、既存Releaseの公開・編集、手動の`sync_existing`実行では、mainのCHANGELOGから既存Releaseのタイトル・本文を同期する。
+3. 既存Releaseの公開・編集、手動の`sync_existing`実行では、mainのCHANGELOGから既存Releaseのタイトル・本文を同期する。
 4. 全対象を事前確認し、内容が同じReleaseは書き換えない。途中の競合編集を検出した場合は停止する。
 5. 更新後に本文一致を読み直して検証する。tag・公開日時・draft・prerelease・添付資産を更新しない。
 
