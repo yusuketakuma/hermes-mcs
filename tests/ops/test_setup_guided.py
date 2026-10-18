@@ -22,11 +22,12 @@ def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
            'notify': {'interactive': 'slack'}}
     answers = {'notify.slack.profile': 'default', 'notify.slack.application_id': 'A123',
                'notify.slack.team_id': 'T123', 'notify.slack.allowed_user_ids': 'U123',
-               'notify.slack.project_ids': '101'}
+               'notify.slack.project_ids': '101', 'drug_map.bundled': 'いいえ'}
     seen = []
 
     def answer(prompt):
         key = prompt.split('設定項目: ', 1)[1].split()[0].rstrip(':')
+        assert key not in seen, f'fixture answer was rejected: {key}'
         seen.append(key)
         return answers.get(key, '')
 

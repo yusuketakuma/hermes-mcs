@@ -164,5 +164,14 @@
       "product_code_changed": false,
       "test_sha256": "d0712f594a04a5bbc1f5d2f3b2ae3c17ba490552e4ff923080d423beab2564ad"
     }
+  },
+  "github_ci_exception": {
+    "approved_on": "2026-10-19",
+    "instruction": "課金できないのでバイパスしてください",
+    "hosted_run": 39173150674,
+    "jobs_started": 0,
+    "substitution": "isolated local macOS suite, pinned SDKs, static and release checks",
+    "linux_hosted_execution": "not verified",
+    "permanent_workflow_change": false
   }
 }

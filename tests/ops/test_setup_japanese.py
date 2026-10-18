@@ -49,7 +49,15 @@ def test_boolean_question_labels_keep_current_or_recommended_value(
 
 def test_unused_connectors_have_no_empty_steps(monkeypatch, capsys):
     cfg = {"mcs_login_id": "synthetic", "notify_target": "local"}
-    monkeypatch.setattr("builtins.input", lambda _: "")
+    seen = set()
+
+    def answer(prompt):
+        key = prompt.split("設定項目: ", 1)[1].split()[0].rstrip(":")
+        assert key not in seen, f"fixture answer was rejected: {key}"
+        seen.add(key)
+        return "いいえ" if key == "drug_map.bundled" else ""
+
+    monkeypatch.setattr("builtins.input", answer)
     mcs_setup._wizard(cfg)
     output = capsys.readouterr().out
     assert "【手順 1】" in output

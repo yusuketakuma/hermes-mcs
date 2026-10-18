@@ -69,7 +69,8 @@ def test_null_required_channel_still_requires_an_explicit_value(monkeypatch, cap
 def test_fresh_channel_default_reuses_the_operators_notification_target(monkeypatch, transport, channel):
     key = f'notify.{transport}.channel_id'
     monkeypatch.setattr(mcs_setup, 'WIZARD', [('synthetic', [(key, 'req', None, 'channel', None)])])
-    monkeypatch.setattr('builtins.input', lambda *a: '')
+    replies = iter(['', '', 'いいえ'] * 2)
+    monkeypatch.setattr('builtins.input', lambda *a: next(replies))
     cfg = {'notify_target': transport + ':' + channel}
     mcs_setup._wizard(cfg)
     assert cfg['notify'][transport]['channel_id'] == channel
@@ -81,7 +82,7 @@ def test_fresh_channel_default_reuses_the_operators_notification_target(monkeypa
 def test_secondary_system_transport_is_selected_before_its_scope_prompts(monkeypatch):
     cfg = {'runtime_mode': 'standalone', 'mcs_login_id': 'fictional-login',
            'notify_target': 'discord:1234567890'}
-    answers = {'setup_detail': 'detailed', 'notify_system_target': 'slack:C1234567890',
+    answers = {'setup_detail': 'detailed', 'drug_map.bundled': 'いいえ', 'notify_system_target': 'slack:C1234567890',
                'notify.slack.profile': 'default', 'notify.slack.application_id': 'A1234567890',
                'notify.slack.team_id': 'T1234567890', 'notify.slack.allowed_user_ids': 'U1234567890',
                'notify.slack.project_ids': '101', 'notify.discord.profile': 'default',
@@ -91,6 +92,7 @@ def test_secondary_system_transport_is_selected_before_its_scope_prompts(monkeyp
     kinds = {key: kind for _, items in mcs_setup.WIZARD
              for key, kind, *_ in items}
     kinds['setup_detail'] = 'choice:recommended,detailed'
+    kinds['drug_map.bundled'] = 'bool'
 
     def answer(prompt):
         key = prompt.split('設定項目: ', 1)[1].split()[0].rstrip(':')
