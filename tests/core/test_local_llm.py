@@ -443,13 +443,24 @@ def test_retire_failed_send_treats_busy_as_never_sent():
     assert calls == [("terminal", 7, "not_sent", "busy"), ("unknown", 8, "transport")]
 
 
-def _hold_turn_for(path, seconds):
-    """Hold the turn flock on a second descriptor and drop it after
-    *seconds* (same process: flock conflicts across descriptors)."""
+def _hold_turn_for(path, seconds, monkeypatch):
+    """Hold the turn flock on a second descriptor and drop it *seconds*
+    after the FIRST non-blocking lock attempt (same process: flock
+    conflicts across descriptors). Arming the timer at the first attempt,
+    not at return, keeps a slow test thread from shifting the hold out of
+    the probe's window."""
     holder = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(holder, fcntl.LOCK_EX)
     timer = threading.Timer(seconds, os.close, [holder])
-    timer.start()
+    real_flock = fcntl.flock
+
+    def flock(fd, operation):
+        if not timer.is_alive() and not timer.finished.is_set() \
+                and operation == (fcntl.LOCK_EX | fcntl.LOCK_NB):
+            timer.start()
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(local_llm.fcntl, "flock", flock)
     return timer
 
 
@@ -459,7 +470,7 @@ def test_probe_turn_won_with_scraps_is_busy_not_sent(tmp_path, monkeypatch):
     as "plain" for the cooldown."""
     path = str(tmp_path / "turn.lock")
     monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
-    timer = _hold_turn_for(path, 1.0)
+    timer = _hold_turn_for(path, 1.0, monkeypatch)
     try:
         err = {}
         assert local_llm.probe_format(
@@ -469,7 +480,10 @@ def test_probe_turn_won_with_scraps_is_busy_not_sent(tmp_path, monkeypatch):
             error_out=err) is None
         assert err == {"kind": "busy"}
     finally:
-        timer.join()
+        if timer.is_alive():
+            timer.join()
+        else:
+            timer.cancel()
     assert _lock_is_free(path)
 
 

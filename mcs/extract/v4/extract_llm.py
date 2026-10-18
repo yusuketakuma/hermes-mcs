@@ -5092,7 +5092,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                 chunks_out, qc)
         if pending_writes or carry:
             with lock(per_write_lock) as held:
-                for r, lease, commit in carry or ():
+                for i, (r, lease, commit) in enumerate(carry or ()):
                     if held and _owns_current_source(ledger, r, lease):
                         if commit():
                             # the thunk counted it in the pass that
@@ -5107,11 +5107,17 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _release(ledger, r, lease)
                         deferred += 1
                     else:
-                        lease = _renew(ledger, r, lease)
-                        if lease is None:
+                        renewed = _renew(ledger, r, lease)
+                        if renewed is None:
+                            # body changed or lease lost: our old claim
+                            # must not keep hiding the new body
+                            _release(ledger, r, lease)
                             deferred += 1
                         else:
-                            carry_out.append((r, lease, commit))
+                            # the caller keeps this list if we raise
+                            # below: its lease must match the DB now
+                            carry[i] = (r, renewed, commit)
+                            carry_out.append((r, renewed, commit))
                 for r, d, ctx, integrity, qc, lease in pending_writes:
                     # still lock-bound, or the body changed/lease lapsed
                     # while we waited: the row stays pending for the
@@ -5319,16 +5325,22 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
         if held and fence is not None:
             import mcs_util
             write = write and mcs_util._updater_state() == fence
-        for r, lease, commit in carry:
+        for i, (r, lease, commit) in enumerate(carry):
             if held and write and _owns_current_source(ledger, r, lease):
                 commit()
                 _release(ledger, r, lease)
             elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
                 _release(ledger, r, lease)
             else:
-                lease = _renew(ledger, r, lease)
-                if lease is not None:
-                    keep.append((r, lease, commit))
+                renewed = _renew(ledger, r, lease)
+                if renewed is None:
+                    _release(ledger, r, lease)
+                else:
+                    # written back at once: a transient sqlite error on a
+                    # later item leaves this list to the resident's retry,
+                    # whose owner fence must match the renewed DB lease
+                    carry[i] = (r, renewed, commit)
+                    keep.append((r, renewed, commit))
     carry[:] = keep
 
 

@@ -12,7 +12,8 @@
     "速度・安定性：患者コンテキスト作成のLLM呼出timeout（CALL_SECONDS）をextract_llm.TIMEOUTと同じ300秒に揃える。入口ガード・turn_min_s・単位deadlineはこの値から派生するため他のコード変更はない。リアルタイム応答との同時推論で応答が遅い場合でも、早すぎるtimeoutで患者を失敗扱いにして再試行を長く先送りしない。テストはstep()の既定deadlineを600秒、_ask直呼びの+90を+600、03:29のwall-endケースを600秒に引き上げ、新しい入口ガード（305秒）で誤ってdeferredにならないようにした。",
     "不具合修正：持ち越した抽出結果（lock-bound carry）のclaim leaseを、run_pending末尾と_settle_carryのkeep分岐で_renew（next_try一致条件付きUPDATE、長さは初回claimと同じ）により更新し、更新できなかった（別workerが再claim済み）結果だけをdeferredとして捨てる。lane 3が患者コンテキスト作成（最長15分/単位）を挟んでも持ち越し結果がlease失効で破棄されて再推論されない。_renewは本文ハッシュが選択時と一致する行だけ延長し、持ち越し中に本文が更新された結果は捨てて新本文の選択を妨げない。",
     "不具合修正：semantic_drainはLLMNotSent(llm_turn_busy)を同じ回でJev照会があっても1時間のdeferred_backoffではなく60秒の短い延期（deferred）にする。抽出レーンとの一時的なGPU競合で意味抽出ジョブが1時間止まらない。",
-    "不具合修正：抽出側の_probe_formatもGPUターン待ちでprobeがNoneを返した場合はキャッシュ済みモードと_FMT_TSを変えずに返す（semantic側と同じ）。一度probeが混み合っただけで後続行が再probeと延期を繰り返さない。"
+    "不具合修正：抽出側の_probe_formatもGPUターン待ちでprobeがNoneを返した場合はキャッシュ済みモードと_FMT_TSを変えずに返す（semantic側と同じ）。一度probeが混み合っただけで後続行が再probeと延期を繰り返さない。",
+    "不具合修正（独立レビューH1/H2）：持ち越し結果の lease 更新が拒否された（本文変更・lease喪失）場合は自分の旧claimを同時に解放し、新本文が次の選択で直ちに解析対象になる。複数の持ち越しで途中の sqlite 一時エラーが起きても、更新済み lease をその場で持ち越しリストへ書き戻すため、常駐の再試行で完成済み結果を所有権喪失と誤判定して捨てない。"
   ],
   "refs": [
     "mcs/core/local_llm.py",

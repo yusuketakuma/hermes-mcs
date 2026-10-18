@@ -177,6 +177,80 @@ def test_carried_result_with_changed_body_is_dropped(tmp_path, monkeypatch):
     extract_llm._settle_carry(db, carry, final=False)
     assert carry == []
     assert db.artifacts("extract_llm", message_id=1) == []
+    # our old claim is gone too, so the new body is selectable at once
+    assert _claims(db) == []
+    rows, _ = extract_llm._select_pending(db, 1, None, None, False)
+    assert len(rows) == 1
+    db.close()
+
+
+def test_run_pending_drop_of_changed_body_releases_own_claim(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    db.db.execute("UPDATE messages SET content_hash='changed' WHERE message_id=1")
+    db.db.commit()
+    res = extract_llm.run_pending(db, limit=1, budget_s=30, per_write_lock=True,
+                                  write_wait_s=1, carry=carry)
+    assert res["carry"] == [] and res["deferred"] == 1
+    assert _claims(db) == []
+    db.close()
+
+
+@pytest.mark.parametrize("settle", [False, True])
+def test_drop_of_lost_lease_preserves_the_replacement_claim(tmp_path, monkeypatch,
+                                                            settle):
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    db.db.execute("UPDATE fetch_jobs SET next_try=next_try+10 WHERE kind='extract_claim'")
+    db.db.commit()
+    replacement = _claims(db)
+    if settle:
+        extract_llm._settle_carry(db, carry, final=False)
+    else:
+        carry = extract_llm.run_pending(db, limit=1, budget_s=30, per_write_lock=True,
+                                        write_wait_s=1, carry=carry)["carry"]
+    assert carry == []
+    assert _claims(db) == replacement
+    db.close()
+
+
+@pytest.mark.parametrize("settle", [False, True])
+def test_transient_error_after_a_renewal_keeps_the_renewed_lease(tmp_path, monkeypatch,
+                                                                 settle):
+    """A sqlite error on the second carried item must not leave the
+    first item's in-memory lease behind its renewed DB lease: the
+    resident retries the same list and would otherwise drop a paid
+    result as "not owned"."""
+    import sqlite3
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=i, body="合成の本文です。" * 20) for i in (1, 2)])
+    state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=10 ** 6)
+    carry = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
+                                    write_wait_s=1, carry=[])["carry"]
+    assert len(carry) == 2
+    original = extract_llm._renew
+    calls = []
+
+    def interrupted_renew(ledger, row, lease):
+        calls.append(row["message_id"])
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("database is locked")
+        return original(ledger, row, lease)
+
+    monkeypatch.setattr(extract_llm, "_renew", interrupted_renew)
+    with pytest.raises(sqlite3.OperationalError):
+        if settle:
+            extract_llm._settle_carry(db, carry, final=False)
+        else:
+            extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
+                                    write_wait_s=1, carry=carry)
+    monkeypatch.setattr(extract_llm, "_renew", original)
+    assert sorted(_claims(db)) == sorted(lease for _r, lease, _c in carry)
+    state["blocked"] = 0
+    extract_llm._settle_carry(db, carry, final=False)
+    assert carry == []
+    assert len(db.artifacts("extract_llm")) == 2
+    assert _claims(db) == []
     db.close()
 
 
