@@ -166,6 +166,20 @@ def test_carried_result_with_lost_lease_is_dropped(tmp_path, monkeypatch):
     db.close()
 
 
+def test_carried_result_with_changed_body_is_dropped(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    # the body was edited while the result waited for the lock: the claim
+    # must lapse so the new body is selected, not be renewed
+    db.db.execute("UPDATE messages SET content_hash='changed' WHERE message_id=1")
+    db.db.commit()
+    assert extract_llm._renew(db, carry[0][0], carry[0][1]) is None
+    extract_llm._settle_carry(db, carry, final=False)
+    assert carry == []
+    assert db.artifacts("extract_llm", message_id=1) == []
+    db.close()
+
+
 def test_non_final_settle_renews_kept_lease(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     state, carry = _carry_one(db, monkeypatch, tmp_path)

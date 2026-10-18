@@ -10,7 +10,7 @@
     "速度・安定性：lane 3常駐ループのcontext_laneブロック（事前_settle_carryと患者コンテキスト実行）と--stop-afterのbudget計算を既存のtryの内側へ移動（純粋なインデント移動、return 0/continue/breakは従来どおり）。database is lockedなどsqliteの一時エラーはextract_loop_errorとして記録し30秒後に再試行するため、常駐が終了せず持ち越し中の抽出結果も次回に書き込まれる。",
     "速度・安定性：患者コンテキスト作成のrun_dueは推論完了後、run lockが他プロセスに保持されていても1秒間隔で最大60回（単位deadlineと日の終端−COMMIT_MARGINを超えない範囲）取得を再試行してからdeferredを返す。取得後のadmit()・source_sig・scan署名の再確認は従来どおり。定期処理やレーン2がrun lockを握る瞬間に重なっても完了した推論結果を捨てず同じ依頼を繰り返さない（同一箇所の指摘3件を1修正で解消。単位deadlineまでの待機ではなく短い上限に留めた）。",
     "速度・安定性：患者コンテキスト作成のLLM呼出timeout（CALL_SECONDS）をextract_llm.TIMEOUTと同じ300秒に揃える。入口ガード・turn_min_s・単位deadlineはこの値から派生するため他のコード変更はない。リアルタイム応答との同時推論で応答が遅い場合でも、早すぎるtimeoutで患者を失敗扱いにして再試行を長く先送りしない。テストはstep()の既定deadlineを600秒、_ask直呼びの+90を+600、03:29のwall-endケースを600秒に引き上げ、新しい入口ガード（305秒）で誤ってdeferredにならないようにした。",
-    "不具合修正：持ち越した抽出結果（lock-bound carry）のclaim leaseを、run_pending末尾と_settle_carryのkeep分岐で_renew（next_try一致条件付きUPDATE、長さは初回claimと同じ）により更新し、更新できなかった（別workerが再claim済み）結果だけをdeferredとして捨てる。lane 3が患者コンテキスト作成（最長15分/単位）を挟んでも持ち越し結果がlease失効で破棄されて再推論されない。",
+    "不具合修正：持ち越した抽出結果（lock-bound carry）のclaim leaseを、run_pending末尾と_settle_carryのkeep分岐で_renew（next_try一致条件付きUPDATE、長さは初回claimと同じ）により更新し、更新できなかった（別workerが再claim済み）結果だけをdeferredとして捨てる。lane 3が患者コンテキスト作成（最長15分/単位）を挟んでも持ち越し結果がlease失効で破棄されて再推論されない。_renewは本文ハッシュが選択時と一致する行だけ延長し、持ち越し中に本文が更新された結果は捨てて新本文の選択を妨げない。",
     "不具合修正：semantic_drainはLLMNotSent(llm_turn_busy)を同じ回でJev照会があっても1時間のdeferred_backoffではなく60秒の短い延期（deferred）にする。抽出レーンとの一時的なGPU競合で意味抽出ジョブが1時間止まらない。",
     "不具合修正：抽出側の_probe_formatもGPUターン待ちでprobeがNoneを返した場合はキャッシュ済みモードと_FMT_TSを変えずに返す（semantic側と同じ）。一度probeが混み合っただけで後続行が再probeと延期を繰り返さない。"
   ],

@@ -3818,7 +3818,9 @@ def _release(ledger, r, lease: float | None):
 def _renew(ledger, r, lease: float) -> float | None:
     """Extend OUR lease on a carried result so the context units it
     waits through cannot outlive the claim; None when the lease was
-    lost (lapsed and re-claimed) — the result is then dropped."""
+    lost (lapsed and re-claimed) or the body changed underneath — the
+    result is then dropped so the live claim stops hiding the new body
+    from selection."""
     now = time.time()
     # must outlast one 900 s context unit plus _CARRY_MARGIN_S, or the
     # next settle drops it; same length as a fresh claim
@@ -3826,8 +3828,10 @@ def _renew(ledger, r, lease: float) -> float | None:
     cur = ledger.db.execute(
         "UPDATE fetch_jobs SET next_try=?, updated_at=? "
         "WHERE kind='extract_claim' AND project_id=? AND message_id=? "
-        "AND next_try=?",
-        (new, now, r["project_id"], r["message_id"], lease))
+        "AND next_try=? AND EXISTS (SELECT 1 FROM messages m "
+        "WHERE m.message_id=fetch_jobs.message_id "
+        "AND m.project_id=fetch_jobs.project_id AND m.content_hash=?)",
+        (new, now, r["project_id"], r["message_id"], lease, r["content_hash"]))
     ledger.db.commit()
     return new if cur.rowcount > 0 else None
 
