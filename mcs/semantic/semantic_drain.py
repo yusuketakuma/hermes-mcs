@@ -1511,6 +1511,10 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         return "stale"
     except runtime.LLMNotSent as e:
         _PASS_REASON["not_sent"] = getattr(e, "stage", None)
+        if _PASS_REASON["not_sent"] == "llm_turn_busy":
+            # the other lane held the GPU turn: the endpoint is healthy
+            # and the next pass normally gets it, so no hourly backoff
+            return "deferred"
         # admission hold / refused connection: the LLM request never
         # left, so no attempt is consumed — but Jev calls this pass
         # already made (e.g. the per-chunk preflight) are real spend:

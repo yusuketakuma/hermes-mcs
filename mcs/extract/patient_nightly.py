@@ -1,4 +1,4 @@
-"""夜間の患者背景を原文の根拠から作り、調査の続きと公開条件を保持する。"""
+"""患者コンテキストを原文の根拠から作り、調査の続きと公開条件を保持する。"""
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -17,7 +17,7 @@ KIND = "patient_context_nightly_v1"
 SCAN = "patient_context_scan_v1"
 PROGRESS = "patient_context_progress_v1"
 CONTRACT = "patient-context-nightly/1"
-CALL_SECONDS = 60
+CALL_SECONDS = 300
 COMMIT_MARGIN = 5
 MAX_FACTS = 256
 MAX_SUMMARY = 12
@@ -45,12 +45,15 @@ def options(cfg):
 
 
 def night_window(now):
-    """Return the starting night's date and absolute end, including midnight."""
+    """Return the current work day's id and absolute end.
+
+    Patient context runs at any hour since 2026-10-18 (lane 3's first
+    priority); the day id still rolls at 03:30 JST so a night's work
+    keeps one id across midnight and progress keys stay comparable with
+    earlier night-only records."""
     stamp = datetime.fromtimestamp(now, JST)
     minute = stamp.hour * 60 + stamp.minute
-    if 210 <= minute < 1380:
-        return None
-    start = stamp.date() if minute >= 1380 else stamp.date() - timedelta(days=1)
+    start = stamp.date() if minute >= 210 else stamp.date() - timedelta(days=1)
     end = datetime.combine(start + timedelta(days=1), datetime.min.time(), JST)
     return start.isoformat(), (end + timedelta(hours=3, minutes=30)).timestamp()
 
@@ -61,6 +64,13 @@ def _latest(db, kind, pid, mid=None):
                      "AND message_id IS ? ORDER BY artifact_id DESC LIMIT 1",
                      (kind, pid, mid)).fetchone()
     return (loads_dict(row[0]) or {}, loads_dict(row[1]) or {}) if row else ({}, {})
+
+
+def _published_version(db, pid):
+    """Newest context/progress row of this patient: the selection-time
+    inputs are stale once it moves."""
+    return db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE project_id=? "
+                      "AND kind IN (?,?)", (pid, KIND, PROGRESS)).fetchone()[0]
 
 
 def _replace(ledger, kind, pid, content, meta, mid=None):
@@ -376,13 +386,22 @@ def _ask(cfg, payload, deadline, admit, end):
     endpoint, model = local_llm.resolve(cfg)
     chat = (lambda prompt, **kw: local_llm.admitted_chat("mcs.extract", prompt, **kw)) \
         if local_llm.admission_enabled() else local_llm.chat
+    err: dict = {}
+    # the turn wait (lane 2's request) may precede the send: the call
+    # window applies from the send, and a turn won with less than a
+    # call left is reported busy rather than sent to time out
     response = chat(prompt,
                                      endpoint=endpoint, model=model, timeout=CALL_SECONDS,
-                                     max_tokens=1600, deadline=min(deadline, time.monotonic() + CALL_SECONDS),
+                                     max_tokens=1600, deadline=deadline,
                                      response_format={"type": "json_object"},
-                                     extra_payload={"id_slot": local_llm.request_slot()})
+                                     extra_payload={"id_slot": local_llm.request_slot()},
+                                     error_out=err, turn_min_s=CALL_SECONDS + COMMIT_MARGIN)
     if response and response.get("admission"):
         raise Deferred("nightly_admission_deferred")
+    if response is None and err.get("kind") == "busy":
+        # lane 2 held the GPU turn for the whole call window: nothing
+        # was sent, so the patient is not charged a failure
+        raise Deferred("nightly_turn_busy")
     if not response or response.get("finish_reason") != "stop" or response.get("status") != 200:
         raise ValueError("nightly_incomplete_response")
     answer = loads_dict(response.get("text"))
@@ -464,8 +483,12 @@ def _scan(cfg, source, saved, night_id, deadline, admit, end):
             "facts": list(facts.values()), "audited": False}
 
 
-def run_due(ledger, cfg, *, deadline, admit):
-    """Advance one fair idle-lane unit, freezing inputs across inference and commit."""
+def run_due(ledger, cfg, *, deadline, admit, complete=None):
+    """Advance one fair idle-lane unit, freezing inputs across inference and commit.
+
+    ``complete(project_id)`` limits the candidates to patients whose
+    stored posts are all extracted under the current LLM generation
+    (owner rule 2026-10-18); None admits every active patient."""
     now = time.time()
     window = night_window(now)
     if not options(cfg)["enabled"] or not window:
@@ -474,31 +497,45 @@ def run_due(ledger, cfg, *, deadline, admit):
     deadline = min(deadline, time.monotonic() + end - now)
     if time.monotonic() + COMMIT_MARGIN >= deadline or not admit():
         return {"status": "deferred", "done": 0}
-    candidates = {k: [] for k in "ABC"}
+    started = time.monotonic()
+    scanned = 0
+    best = {}   # lane -> (key, snapshot, progress) of the leading candidate
     for row in ledger.db.execute("SELECT project_id FROM patients WHERE is_archived=0 ORDER BY project_id"):
         if time.monotonic() + COMMIT_MARGIN >= deadline:
             return {"status": "deferred", "done": 0}
         pid = row[0]
+        if complete is not None and not complete(pid):
+            continue
+        scanned += 1
         snapshot, progress, pending = _pending(ledger.db, pid, cfg, now=now)
         if _out_of_scope(snapshot):
             continue
         for lane, due in pending.items():
-            if due:
-                candidates[lane].append((not snapshot["initial"] if lane == "A" else False,
-                                         progress.get("last_attempt", 0), pid))
+            # Only the leader's selection-time snapshot is kept, so the
+            # chosen patient is not re-read after selection.
+            key = (not snapshot["initial"] if lane == "A" else False, progress.get("last_attempt", 0), pid)
+            if due and (lane not in best or key < best[lane][0]):
+                best[lane] = (key, snapshot, progress)
+    stats = {"scanned": scanned, "scan_ms": int((time.monotonic() - started) * 1000)}
     rotation, _ = _latest(ledger.db, PROGRESS, 0)
     sequence = "AAAAAABBBC"
     index = rotation.get("cursor", 0) % len(sequence)
     lane = next((sequence[(index + i) % len(sequence)] for i in range(len(sequence))
-                 if candidates[sequence[(index + i) % len(sequence)]]), None)
+                 if sequence[(index + i) % len(sequence)] in best), None)
     if lane is None:
-        return {"status": "complete", "done": 0}
-    _, _, pid = min(candidates[lane])
-    snapshot = _snapshot(ledger.db, pid, cfg, hydrate=lane == "A")
-    _, progress, _ = _pending(ledger.db, pid, cfg)
+        return {"status": "complete", "done": 0, **stats}
+    (_, _, pid), snapshot, progress = best[lane]
+    if lane == "A":
+        # Facts need hydrated items; the hydrated read must still match the
+        # selection-time signature the reused progress reset came from.
+        hydrated = _snapshot(ledger.db, pid, cfg)
+        if hydrated["source_sig"] != snapshot["source_sig"]:
+            return {"status": "source_changed", "done": 0, **stats}
+        snapshot = hydrated
     frozen_scan_sig = _digest([tuple(r) for r in ledger.db.execute(
         "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
         (SCAN, pid))])
+    frozen_ver = _published_version(ledger.db, pid)
     meta = {"source_sig": snapshot["source_sig"], "contract": snapshot["contract"],
             "model": snapshot["contract"]["model"], "night_id": night_id}
     result = None
@@ -553,9 +590,18 @@ def run_due(ledger, cfg, *, deadline, admit):
     scans_now = _digest([tuple(r) for r in ledger.db.execute(
         "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
         (SCAN, pid))])
-    fd = acquire_run_lock()
-    if fd is None:
-        return {"status": "deferred", "done": 0}
+    # A finished inference is worth a short wait: the tick and lane 2 hold
+    # the run lock for minutes, and dropping the result would send the
+    # same prompt again on the next iteration.
+    waited = 0
+    while (fd := acquire_run_lock()) is None:
+        # the cap, the unit deadline, the day end and a withdrawn
+        # admission (updater, config, breaker, disk) all end the wait
+        if (waited >= 60 or time.monotonic() + COMMIT_MARGIN >= deadline
+                or time.time() + COMMIT_MARGIN >= end or not admit()):
+            return {"status": "deferred", "done": 0, "reason": "run_lock", "lock_wait_s": waited}
+        time.sleep(1)
+        waited += 1
     try:
         if not admit():
             return {"status": "deferred", "done": 0}
@@ -570,7 +616,11 @@ def run_due(ledger, cfg, *, deadline, admit):
                     "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
                     (SCAN, pid))])
             if (fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
+                    or _published_version(ledger.db, pid) != frozen_ver
                     or time.monotonic() >= deadline or time.time() >= end):
+                # another publisher (a second lane-3 process) wrote this
+                # patient's context or progress since selection: our
+                # inputs are stale, the next unit re-selects
                 ledger.db.rollback()
                 return {"status": "source_changed", "done": 0}
             prior = progress if lane == "A" else saved
@@ -599,4 +649,5 @@ def run_due(ledger, cfg, *, deadline, admit):
             raise
     finally:
         os.close(fd)
-    return {"status": "failed" if failure else "progressed", "done": int(not failure), "lane": lane}
+    return {"status": "failed" if failure else "progressed", "done": int(not failure), "lane": lane,
+            "lock_wait_s": waited, **stats}

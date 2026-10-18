@@ -13,6 +13,7 @@ tool access.  There is no cloud fallback and no service change.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import math
 import os
@@ -64,20 +65,83 @@ def probe_urls(endpoint: str) -> tuple[str, str]:
         base = ENDPOINT.split("/v1/", 1)[0]
     return f"{base}/v1/models", f"{base}/slots"
 
-# Three fixed lanes: wire slot 1 is realtime (MCS arrivals + Hermes),
-# slots 0 and 2 are backlog. Background workers never borrow realtime.
-BACKGROUND_SLOT = 0
-REALTIME_SLOT = 1
-BACKGROUND_SLOTS = (0, 2)
+# Three fixed lanes, named 1/2/3 for operators; the llama.cpp wire
+# id_slot is lane - 1. Lane 1 (wire 0) is realtime: the 10-min tick's
+# new arrivals and interactive commands. Lanes 2 and 3 (wire 1, 2) are
+# backlog: past posts, semantic/QC and (lane 3 first) patient context.
+# Background workers never borrow realtime. An out-of-range wire value
+# is UNPINNED on llama.cpp and could land on realtime, so only wire
+# values from this table ever reach a request.
+LANES = {1: 0, 2: 1, 3: 2}
+REALTIME_SLOT = LANES[1]
+BACKGROUND_SLOTS = (LANES[2], LANES[3])
+BACKGROUND_SLOT = LANES[2]
 SLOT_COUNT = 3
 ROLLBACK_SLOT_COUNT = 2
 
 
+def lane_slot(lane) -> int:
+    """Wire id_slot of a lane name (1/2/3); ValueError for anything else."""
+    if type(lane) is not int or lane not in LANES:
+        raise ValueError("invalid_llm_lane")
+    return LANES[lane]
+
+
+# Backlog lanes take turns on the shared GPU: with two slots decoding
+# at once, one lane's prompt phase stalls the other's decode to a token
+# per ubatch (measured 2026-10-18: 58 t/s alone, 10 t/s average). A
+# backlog worker sets MCS_LLM_TURN_LOCK to a lock-file path and every
+# chat() of that process then holds one flock across the request.
+# Realtime (lane 1) never takes it.
+TURN_LOCK_ENV = "MCS_LLM_TURN_LOCK"
+TURN_LOCK_POLL_S = 0.2
+# A probe turn won with less than this left is reported busy, not sent:
+# a reaped probe would be cached as "plain" for the whole cooldown.
+PROBE_TURN_MIN_S = 2.0
+# After a SENT request dies in transport (timeout/reset) llama.cpp may
+# keep decoding on our pinned slot until it notices the disconnect; the
+# turn is held while /slots is polled so the other lane does not start
+# into a still-busy GPU.
+SLOT_WAIT_MAX_S = 10.0
+SLOT_WAIT_POLL_S = 0.5
+SLOT_WAIT_IDLE_SAMPLES = 2
+
+
+@contextmanager
+def _turn(deadline: float | None, min_s: float = 0.0):
+    """Hold the backlog GPU turn for one request; yields False when the
+    caller's deadline expires while waiting, or fewer than ``min_s``
+    seconds remain once the turn is ours (nothing was sent either way)."""
+    path = os.environ.get(TURN_LOCK_ENV)
+    if not path:
+        yield True
+        return
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if deadline is not None \
+                        and time.monotonic() + TURN_LOCK_POLL_S >= deadline:
+                    yield False
+                    return
+                time.sleep(TURN_LOCK_POLL_S)
+        if deadline is not None and time.monotonic() + min_s > deadline:
+            yield False  # the wait ate the time a send needs
+            return
+        yield True
+    finally:
+        os.close(fd)  # closing the descriptor drops the flock
+
+
 def request_slot() -> int:
-    """Wire id_slot selected for this process. ``MCS_LLM_SLOT`` (decimal)
-    overrides the default — scoped to whatever process the operator
-    sets it on; the check uses realtime and the resident workers use
-    one of the two background slots. Unset keeps the background default. An override at or beyond the deployed slot
+    """Wire id_slot selected for this process. ``MCS_LLM_SLOT`` (decimal
+    wire value, lane - 1) overrides the default — scoped to whatever
+    process the operator sets it on; the check uses realtime (lane 1)
+    and the resident workers one of the two backlog lanes. Unset keeps
+    the lane-2 default. An override at or beyond the deployed slot
     count is invalid — llama.cpp treats out-of-range id_slot as
     UNPINNED, which could land on the real-time slot; fall back to the
     background slot instead."""
@@ -157,18 +221,52 @@ _IDLE_GAP_S = 1.0
 _RECONCILED_AT: dict = {}
 
 
-def _slots_idle(endpoint: str, deadline: float | None) -> bool:
+def _slots_idle(endpoint: str, deadline: float | None, request=None,
+                slot: int | None = None) -> bool:
+    # resolved per call: tests monkeypatch module-level bounded_request
+    request = request or bounded_request
     try:
-        status, _headers, raw = bounded_request(
+        status, _headers, raw = request(
             probe_urls(endpoint)[1], "GET", None, 2, deadline)
         if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
             return False
         slots = json.loads(raw.decode("utf-8"))
     except Exception:
         return False
-    return (isinstance(slots, list) and bool(slots)
-            and all(isinstance(s, dict) and s.get("is_processing") is False
-                    for s in slots))
+    if not isinstance(slots, list) or not slots:
+        return False
+    if slot is not None:
+        return any(isinstance(s, dict) and s.get("id") == slot
+                   and s.get("is_processing") is False for s in slots)
+    return all(isinstance(s, dict) and s.get("is_processing") is False
+               for s in slots)
+
+
+def _wait_slot_idle(request, endpoint: str, slot: int,
+                    deadline: float | None, error_out: dict | None) -> None:
+    """Hold the turn until the pinned slot reports idle in
+    SLOT_WAIT_IDLE_SAMPLES consecutive samples, or SLOT_WAIT_MAX_S / the
+    caller's deadline passes. A single idle sample, a missing slot, bad
+    JSON or a failed GET resets the run. Expiry is UNCONFIRMED but still
+    releases the turn — it is never held forever. Idle is a stop
+    observation, not a cancel receipt: a slot-pinned request the server
+    still queues may decode after the next send (that sender's own
+    transport path handles it)."""
+    start = time.monotonic()
+    until = start + SLOT_WAIT_MAX_S
+    if deadline is not None:
+        until = min(until, deadline)
+    idle = 0
+    while idle < SLOT_WAIT_IDLE_SAMPLES and time.monotonic() < until:
+        idle = idle + 1 if _slots_idle(endpoint, until, request=request,
+                                       slot=slot) else 0
+        if idle < SLOT_WAIT_IDLE_SAMPLES:
+            if time.monotonic() + SLOT_WAIT_POLL_S >= until:
+                break
+            time.sleep(SLOT_WAIT_POLL_S)
+    if error_out is not None:
+        error_out["slot_wait_ms"] = int((time.monotonic() - start) * 1000)
+        error_out["slot_wait_confirmed"] = int(idle >= SLOT_WAIT_IDLE_SAMPLES)
 
 
 def backend_idle_evidence(endpoint: str = ENDPOINT,
@@ -392,8 +490,9 @@ def _retire_failed_send(broker, pid: int, kind: str | None,
     and only an HTTP 200 with an unusable body proves it finished; any
     other failure leaves the permit ``unknown`` so it keeps occupying
     its class (the module's fail-closed rule)."""
-    if kind == "unreachable":
-        broker.terminal(pid, "not_sent", proof="unreachable")
+    if kind in ("unreachable", "busy"):
+        # refused connection, or the GPU turn never came: never sent
+        broker.terminal(pid, "not_sent", proof=kind)
     elif kind == "protocol":
         broker.terminal(pid, "done", proof=f"{proof_prefix}malformed_200")
     else:
@@ -465,7 +564,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
          max_tokens: int = MAX_TOKENS, timeout: float = TIMEOUT,
          deadline: float | None = None, response_format=None,
          extra_payload: dict | None = None,
-         request_fn=None, error_out: dict | None = None) -> dict | None:
+         request_fn=None, error_out: dict | None = None,
+         turn_min_s: float = 0.0) -> dict | None:
     """One chat-completions round trip.
 
     Returns ``{"text", "finish_reason", "usage", "status"}`` on a parsed
@@ -496,24 +596,39 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
         body.update(extra_payload)
     # a reaped worker, so a slow response cannot extend the deadline
     send = request_fn or bounded_request
-    try:
-        status, _headers, raw = send(endpoint, "POST", body, timeout,
-                                     deadline)
-    except urllib.error.HTTPError as error:
-        status, raw = error.code, b""
-    except Exception as error:
-        # Transport seam failures fail closed; runtime guards still
-        # propagate so budget/circuit stops are never swallowed.
-        if error.__class__.__name__ == "RuntimeGuardError":
-            raise
-        if error_out is not None:
+    with _turn(deadline, turn_min_s) as turn:
+        if not turn:
+            # the deadline passed while another backlog lane held the
+            # GPU: nothing was sent and the server is fine, so callers
+            # defer without charging an attempt or the breaker
+            if error_out is not None:
+                error_out["kind"] = "busy"
+            return None
+        try:
+            status, _headers, raw = send(endpoint, "POST", body, timeout,
+                                         deadline)
+        except urllib.error.HTTPError as error:
+            status, raw = error.code, b""
+        except Exception as error:
+            # Transport seam failures fail closed; runtime guards still
+            # propagate so budget/circuit stops are never swallowed.
+            if error.__class__.__name__ == "RuntimeGuardError":
+                raise
             reason = getattr(error, "reason", error)
-            error_out["kind"] = (
-                "unreachable"
-                if isinstance(reason, ConnectionRefusedError)
-                or isinstance(error, bounded_http.NotSentTimeout)
-                else "transport")
-        return None
+            kind = ("unreachable"
+                    if isinstance(reason, ConnectionRefusedError)
+                    or isinstance(error, bounded_http.NotSentTimeout)
+                    else "transport")
+            if error_out is not None:
+                error_out["kind"] = kind
+            # a sent request that died in transport may still be decoding
+            # on our slot: keep the turn until the slot reports idle
+            if kind == "transport" and isinstance(error, OSError) \
+                    and os.environ.get(TURN_LOCK_ENV) \
+                    and type(body.get("id_slot")) is int:
+                _wait_slot_idle(send, endpoint, body["id_slot"], deadline,
+                                error_out)
+            return None
     if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
         return {"text": None, "finish_reason": None, "usage": None,
                 "status": status}
@@ -590,6 +705,8 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
     does the calls they precede.
     """
     verify = verify or (lambda text: isinstance(_json_obj(text), dict))
+    if error_out is None:
+        error_out = {}
     # A malformed OR out-of-range caller slot must not become an
     # unpinned request — llama.cpp treats out-of-range id_slot as
     # unpinned, which could land the probe on the real-time slot.
@@ -626,10 +743,12 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                 'Reply with {"ok": true}', endpoint=endpoint, model=model,
                 max_tokens=20, timeout=remaining, deadline=operation_deadline,
                 response_format=rf, extra_payload=payload,
-                request_fn=request_fn, error_out=error_out)
+                request_fn=request_fn, error_out=error_out,
+                turn_min_s=PROBE_TURN_MIN_S)
             if response is None:
-                if error_out is not None:
-                    error_out.setdefault("kind", "transport")
+                if error_out.get("kind") == "busy":
+                    return None  # nothing sent: probe again next call
+                error_out.setdefault("kind", "transport")
                 break
             if response["status"] != 200:
                 continue

@@ -857,7 +857,7 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         view = views.role_order(views.background(ev), role)
         facts = {fact["id"]: fact for fact in ev.get("nightly_facts", [])}
         for sentence in view["summary"]:
-            add([facts[key] for key in sentence["fact_ids"] if key in facts], "夜間に整理した記録")
+            add([facts[key] for key in sentence["fact_ids"] if key in facts], "患者コンテキスト")
         for group in view["sections"]:
             add(group["items"], views.SECTION_LABELS.get(group["category"], (group["category"],))[0],
                 group["category"])
@@ -931,7 +931,7 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     nightly = ev["coverage"].get("nightly") or {}
     status = []   # how complete the record is: kept, but below the records instead of above them
     if ev.get("as_of"):
-        status.append("夜間まとめの反映時点: " + stamp_time(datetime.fromtimestamp(ev["as_of"], JST)))
+        status.append("患者コンテキストの反映時点: " + stamp_time(datetime.fromtimestamp(ev["as_of"], JST)))
     status.append(_coverage_line(db, project_id))
     if nightly:
         status.append(f"取込済み {nightly.get('fetched', 0)}件 / 点検済み {nightly.get('analyzed', 0)}件 / 未点検 {nightly.get('unscanned', 0)}件 / 本文未取得・不完全 {nightly.get('incomplete', 0)}件")

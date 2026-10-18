@@ -122,7 +122,7 @@ def _resident(monkeypatch, result):
     monkeypatch.setattr(extract_llm, "Ledger",
                         lambda *a: type("DB", (), {"close": lambda self: None})())
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: dict(result))
-    monkeypatch.setattr(extract_llm, "_next_retry", lambda led: None)
+    monkeypatch.setattr(extract_llm, "_next_retry", lambda led, **kw: None)
     assert extract_llm.main() == 0
     return sleeps
 

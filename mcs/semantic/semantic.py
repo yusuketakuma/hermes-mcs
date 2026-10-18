@@ -226,11 +226,13 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
         if local_llm.admission_enabled():
             # T20: the probe sends real inference POSTs — it takes a
             # class permit (a held verdict yields "plain")
-            _FMT_MODE = local_llm.admitted_probe_format(
-                "mcs.semantic", endpoint, model, None, **kw) or "plain"
+            mode = local_llm.admitted_probe_format(
+                "mcs.semantic", endpoint, model, None, **kw)
         else:
-            _FMT_MODE = local_llm.probe_format(
-                endpoint, model, None, **kw) or "plain"
+            mode = local_llm.probe_format(endpoint, model, None, **kw)
+        if mode is None:
+            return _FMT_MODE  # GPU turn busy: nothing sent, probe again next call
+        _FMT_MODE = mode
     except Exception:
         _FMT_MODE = "plain"
     _FMT_TS = time.monotonic()
@@ -253,6 +255,10 @@ _LONG_MAX = 500
 # attempt, so it is not sent (free defer — the background lanes take it;
 # a tick lane never can)
 _LONG_MIN_CALL_S = 620.0
+# Least time a send may have left after the backlog GPU turn is won;
+# capped at half the live window so a short job budget never reports
+# busy uncontended, and a turn won with scraps is deferred, not sent.
+_TURN_MIN_CALL_S = 60.0
 
 
 def _long_key(model: str, prompt: str) -> str:
@@ -379,7 +385,9 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             if level else max_tokens,
             response_format=rf,
             extra_payload={"id_slot": local_llm.request_slot()},
-            request_fn=local_llm.bounded_request, error_out=err_out)
+            request_fn=local_llm.bounded_request, error_out=err_out,
+            turn_min_s=_LONG_MIN_CALL_S if level
+            else min(_TURN_MIN_CALL_S, timeout / 2))
         if response is not None and response.get("admission"):
             # a denial/deferral never left — the verdict, never model text
             raise runtime.LLMNotSent(
@@ -415,6 +423,11 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             if level == 1 and timeout >= _LONG_MIN_CALL_S:
                 continue  # one long-ceiling retry in what is left
         break
+    if response is None and err_out.get("kind") == "busy":
+        # the other backlog lane held the GPU turn past the deadline:
+        # nothing sent, endpoint healthy — a short defer, no backoff
+        _failed("busy")
+        raise runtime.LLMNotSent("llm_turn_busy")
     if response is None and err_out.get("kind") == "unreachable":
         _failed("unreachable")
         raise runtime.LLMNotSent("llm_unreachable")

@@ -1,0 +1,30 @@
+{
+  "category": "fixed",
+  "title": "ローカルLLM処理経路の不具合修正と安定化",
+  "summary": "レーン2/3のGPU交代ロック導入で起きうる、過去分の意味抽出の静かな停止、形式検出の途中打ち切りによるplain固定、抽出失敗の記録漏れによる同じ投稿への再推論、患者コンテキスト作成の推論結果の破棄と早すぎるtimeoutを修正しました。lane 3常駐はsqliteの一時エラーで終了せず再試行します。",
+  "upgrade": "追加操作は変更記録 llm-lanes-123 の常駐plist再同期・再起動以外にありません。患者コンテキスト作成のLLM呼出timeoutの既定は60秒から300秒（extract_llm.TIMEOUTと同じ）になります。設定項目・モデル・DB schemaは変わりません。",
+  "details": [
+    "不具合修正：semanticのllm_chatはGPUターン取得後の送信下限を_TURN_MIN_CALL_S（60秒）と残り時間の半分の小さい方にし、短いジョブ予算でも未競合なら必ず送信する。ターン待ちで残りが半分未満になった呼出しは試行を消費せずbusyとして延期する（MCS_LLM_TURN_LOCK設定時にバックログの意味抽出が静かに停止したり、ロック待ちの失敗が再試行回数を減らしたりしない）。",
+    "不具合修正：probe_formatはPROBE_TURN_MIN_S（2秒）をchatのturn_min_sに渡し、ターン取得後の残りが下限未満なら送信せずbusy（None）を返して次回に再プローブする（admitted_probe_formatも同じ経路）。レーン再起動時に形式検出が打ち切られてplainとしてクールダウン中固定され、解析失敗が試行として課金される事象をなくす。",
+    "不具合修正：常駐抽出の_handleで失敗行の記録とQC/thin/human再発行の4箇所の書込みがrun.lock取得に3秒しか待たず、10分tickの保持中は何も書かずにleaseを解放して同じ行を再推論し、患者が患者コンテキスト作成の対象から外れ続けていた問題を、これらの書込みだけ既定60秒待ちの_write_lockに戻して修正（同一欠陥の指摘2件を1修正で解消）。",
+    "速度・安定性：lane 3常駐ループのcontext_laneブロック（事前_settle_carryと患者コンテキスト実行）と--stop-afterのbudget計算を既存のtryの内側へ移動（純粋なインデント移動、return 0/continue/breakは従来どおり）。database is lockedなどsqliteの一時エラーはextract_loop_errorとして記録し30秒後に再試行するため、常駐が終了せず持ち越し中の抽出結果も次回に書き込まれる。",
+    "速度・安定性：患者コンテキスト作成のrun_dueは推論完了後、run lockが他プロセスに保持されていても1秒間隔で最大60回（単位deadlineと日の終端−COMMIT_MARGINを超えない範囲）取得を再試行してからdeferredを返す。取得後のadmit()・source_sig・scan署名の再確認は従来どおり。定期処理やレーン2がrun lockを握る瞬間に重なっても完了した推論結果を捨てず同じ依頼を繰り返さない（同一箇所の指摘3件を1修正で解消。単位deadlineまでの待機ではなく短い上限に留めた）。",
+    "速度・安定性：患者コンテキスト作成のLLM呼出timeout（CALL_SECONDS）をextract_llm.TIMEOUTと同じ300秒に揃える。入口ガード・turn_min_s・単位deadlineはこの値から派生するため他のコード変更はない。リアルタイム応答との同時推論で応答が遅い場合でも、早すぎるtimeoutで患者を失敗扱いにして再試行を長く先送りしない。テストはstep()の既定deadlineを600秒、_ask直呼びの+90を+600、03:29のwall-endケースを600秒に引き上げ、新しい入口ガード（305秒）で誤ってdeferredにならないようにした。",
+    "不具合修正：持ち越した抽出結果（lock-bound carry）のclaim leaseを、run_pending末尾と_settle_carryのkeep分岐で_renew（next_try一致条件付きUPDATE、長さは初回claimと同じ）により更新し、更新できなかった（別workerが再claim済み）結果だけをdeferredとして捨てる。lane 3が患者コンテキスト作成（最長15分/単位）を挟んでも持ち越し結果がlease失効で破棄されて再推論されない。_renewは本文ハッシュが選択時と一致する行だけ延長し、持ち越し中に本文が更新された結果は捨てて新本文の選択を妨げない。",
+    "不具合修正：semantic_drainはLLMNotSent(llm_turn_busy)を同じ回でJev照会があっても1時間のdeferred_backoffではなく60秒の短い延期（deferred）にする。抽出レーンとの一時的なGPU競合で意味抽出ジョブが1時間止まらない。",
+    "不具合修正：抽出側の_probe_formatもGPUターン待ちでprobeがNoneを返した場合はキャッシュ済みモードと_FMT_TSを変えずに返す（semantic側と同じ）。一度probeが混み合っただけで後続行が再probeと延期を繰り返さない。",
+    "不具合修正（独立レビューH1/H2）：持ち越し結果の lease 更新が拒否された（本文変更・lease喪失）場合は自分の旧claimを同時に解放し、新本文が次の選択で直ちに解析対象になる。複数の持ち越しで途中の sqlite 一時エラーが起きても、更新済み lease をその場で持ち越しリストへ書き戻すため、常駐の再試行で完成済み結果を所有権喪失と誤判定して捨てない。"
+  ],
+  "refs": [
+    "mcs/core/local_llm.py",
+    "mcs/semantic/semantic.py",
+    "mcs/extract/v4/extract_llm.py",
+    "mcs/extract/patient_nightly.py",
+    "tests/core/test_local_llm.py",
+    "tests/semantic/test_semantic_llm_retry.py",
+    "tests/extract/test_lane_slot_and_lock.py",
+    "tests/extract/test_patient_nightly.py",
+    "mcs/semantic/semantic_drain.py",
+    "tests/extract/test_slot_routing.py"
+  ]
+}

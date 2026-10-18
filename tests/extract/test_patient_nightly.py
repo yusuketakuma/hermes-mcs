@@ -55,9 +55,9 @@ def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state
     led.db.commit()
 
 
-def step(runtime, *, cfg=CFG, admit=lambda: True, seconds=120):
+def step(runtime, *, cfg=CFG, admit=lambda: True, seconds=600, **kw):
     led, clock, _ = runtime
-    result = nightly.run_due(led, cfg, deadline=clock.mono + seconds, admit=admit)
+    result = nightly.run_due(led, cfg, deadline=clock.mono + seconds, admit=admit, **kw)
     clock.wall += 1
     clock.mono += 1
     return result
@@ -78,17 +78,16 @@ def document(led, kind=nightly.KIND, pid=1):
     return json.loads(row[0]) if row else None
 
 
-@pytest.mark.parametrize('at,night', [
-    ('2026-10-17T22:59:59', None), ('2026-10-17T23:00:00', '2026-10-17'),
-    ('2026-10-17T23:59:59', '2026-10-17'), ('2026-10-18T00:00:00', '2026-10-17'),
-    ('2026-10-18T03:29:59', '2026-10-17'), ('2026-10-18T03:30:00', None),
-    ('2026-10-18T04:00:00', None)])
-def test_night_window(at, night):
-    result = nightly.night_window(stamp(at))
-    if night is None:
-        assert result is None
-    else:
-        assert result == (night, stamp('2026-10-18T03:30:00'))
+@pytest.mark.parametrize('at,day', [
+    ('2026-10-17T12:00:00', '2026-10-17'), ('2026-10-17T22:59:59', '2026-10-17'),
+    ('2026-10-17T23:00:00', '2026-10-17'), ('2026-10-18T00:00:00', '2026-10-17'),
+    ('2026-10-18T03:29:59', '2026-10-17'), ('2026-10-18T03:30:00', '2026-10-18'),
+    ('2026-10-18T04:00:00', '2026-10-18')])
+def test_night_window(at, day):
+    """Patient context runs around the clock: every instant has a day
+    id, the id rolls at 03:30 JST and ends at the next 03:30."""
+    end = stamp('2026-10-18T03:30:00' if day == '2026-10-17' else '2026-10-19T03:30:00')
+    assert nightly.night_window(stamp(at)) == (day, end)
 
 
 @pytest.mark.parametrize('cfg', [None, {'extract': {'patient_context_nightly': {'enabled': False}}},
@@ -108,7 +107,7 @@ def test_default_enables_generation_and_private_reading(runtime):
     assert nightly.nightly_view_input(led.db, 1, cfg={}) is not None
 
 
-@pytest.mark.parametrize('at,seconds', [('2026-10-18T03:29:00', 120),
+@pytest.mark.parametrize('at,seconds', [('2026-10-18T03:29:00', 600),
                                       ('2026-10-17T23:00:00', 64)])
 def test_insufficient_time_never_starts_inference(runtime, at, seconds):
     led, clock, calls = runtime
@@ -240,6 +239,19 @@ def test_patients_take_turns_and_incomplete_records_not_counted_analyzed(runtime
     assert cov['fetched'] == 2 and cov['analyzed'] == 1 and cov['incomplete'] == 1
     assert cov['human_accuracy'] is None
     assert cov['attachments']['analysis'] == 'not_assessed'
+
+
+def test_incomplete_patient_is_skipped_until_extraction_catches_up(runtime):
+    """complete() gates candidates: a patient with posts still pending
+    the current LLM generation is passed over, a complete one proceeds."""
+    led, _, calls = runtime
+    seed(led, pid=1)
+    seed(led, mid=2, pid=2)
+    assert step(runtime, complete=lambda pid: pid == 2)['status'] == 'progressed'
+    assert document(led, pid=1) is None and document(led, pid=2)
+    assert len(calls) == 1
+    assert step(runtime, complete=lambda pid: False)['status'] == 'complete'
+    assert document(led, pid=1) is None
 
 
 def test_failure_backoff_does_not_starve_other_patient(runtime, monkeypatch):
@@ -701,8 +713,8 @@ def test_unbrokered_nightly_request_sends_pinned_slot(monkeypatch):
     monkeypatch.setattr(nightly.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(nightly.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
     with nightly.local_llm.pinned_slot(2):
-        assert nightly._ask({}, {}, nightly.time.monotonic() + 90, lambda: True,
-                            nightly.time.time() + 90) == {}
+        assert nightly._ask({}, {}, nightly.time.monotonic() + 600, lambda: True,
+                            nightly.time.time() + 600) == {}
     assert len(sent) == 1
     assert sent[0]["id_slot"] == 2
 
@@ -723,3 +735,38 @@ def test_status_counts_only_patients_the_worker_would_work_on(runtime, reason):
     assert document(led, pid=2) is None
     counts = nightly.status(led.db, CFG)
     assert counts['initial_pending'] == 0 and counts['complete'] == 2
+
+
+def test_turn_wait_expiry_defers_without_charging_the_patient(monkeypatch):
+    def busy(prompt, error_out=None, **kw):
+        if error_out is not None:
+            error_out["kind"] = "busy"
+        return None
+    monkeypatch.setattr(nightly.local_llm, "chat", busy)
+    monkeypatch.setattr(nightly.local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(nightly.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
+    with pytest.raises(nightly.Deferred, match="nightly_turn_busy"):
+        nightly._ask({}, {}, nightly.time.monotonic() + 600, lambda: True,
+                     nightly.time.time() + 600)
+
+
+def test_finished_inference_waits_briefly_for_the_run_lock(runtime, monkeypatch):
+    led, clock, calls = runtime
+    seed(led)
+    tries = []
+    def contended():
+        tries.append(1)
+        return os.open(os.devnull, os.O_RDONLY) if len(tries) > 3 else None
+    def sleep(seconds):
+        clock.mono += seconds
+        clock.wall += seconds
+    monkeypatch.setattr(nightly, 'acquire_run_lock', contended)
+    monkeypatch.setattr(nightly.time, 'sleep', sleep, raising=False)
+    assert step(runtime)['status'] == 'progressed'
+    assert len(calls) == 1 and len(tries) == 4 and document(led)
+    # a holder that never yields costs at most the short cap, not the unit deadline
+    seed(led, mid=2, pid=2)
+    monkeypatch.setattr(nightly, 'acquire_run_lock', lambda: None)
+    before = clock.mono
+    assert step(runtime)['status'] == 'deferred'
+    assert clock.mono - before <= 61 and document(led, pid=2) is None

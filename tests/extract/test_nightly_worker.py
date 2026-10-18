@@ -1,4 +1,4 @@
-"""Synthetic idle-capacity tests: no real LLM, host probes or production DB."""
+"""Synthetic lane-3 patient-context tests: no real LLM, host probes or production DB."""
 import os
 import sys
 from types import SimpleNamespace
@@ -8,73 +8,59 @@ import pytest
 import extract_llm as worker
 import mcs_util
 import patient_nightly
-from extract_testkit import _ledger
+from extract_testkit import _hash, _ledger, _message, _v2_artifact
+
+LANES = worker.local_llm.LANES
 
 
 @pytest.fixture
 def capacity(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     cfg = {"extract": {"patient_context_nightly": {"enabled": True}}}
-    monkeypatch.setattr(worker, "_SLOT_OVERRIDE", 2)
+    monkeypatch.setattr(worker, "_SLOT_OVERRIDE", LANES[3])
     monkeypatch.setattr(worker, "load_config", lambda: cfg)
     monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
     monkeypatch.setattr(worker, "circuit_open_s", lambda led: 0)
     monkeypatch.setattr(worker, "disk_free_mb", lambda led: 100000)
     monkeypatch.setattr(worker, "_nightly_memory_available", lambda: True)
-    monkeypatch.setattr(worker, "_slots_busy", lambda deadline: {1: False, 2: False})
-    monkeypatch.setattr(worker, "legacy_admissions", lambda led, cfg: None)
-    selections = []
-    def select(led, limit, admitted_ids, shard, oldest_first):
-        assert led is ledger and limit == 1
-        assert admitted_ids is None and shard is None and oldest_first is False
-        return selections, 0
-    monkeypatch.setattr(worker, "_select_pending", select)
     calls = []
 
-    def run_due(led, config, *, deadline, admit):
+    def run_due(led, config, *, deadline, admit, complete):
         assert led is ledger and config == cfg
         assert deadline > worker.time.monotonic()
-        assert worker.local_llm.request_slot() == 2
+        assert worker.local_llm.request_slot() == LANES[3]
         assert admit()
-        calls.append(admit)
+        calls.append((admit, complete))
         return {"status": "done", "done": 1}
 
-    monkeypatch.setitem(sys.modules, "patient_nightly", SimpleNamespace(run_due=run_due, options=patient_nightly.options, night_window=lambda now: ("synthetic-night", now + 900)))
-    yield ledger, cfg, selections, calls
+    monkeypatch.setitem(sys.modules, "patient_nightly", SimpleNamespace(run_due=run_due, options=patient_nightly.options))
+    yield ledger, cfg, calls
     ledger.close()
 
 
-def run(capacity, held=lambda: False, stop=None):
-    return worker._background_nightly(capacity[0], held, (False, 123), stop)
+def run(capacity, stop=None, state=(False, 123)):
+    return worker._background_nightly(capacity[0], state, stop)
 
 
-def test_idle_only_and_rechecks_new_arrival(capacity):
-    assert run(capacity)["done"] == 1
-    capacity[2].append({"message_id": 1})
-    assert not capacity[3][0]()
-    assert run(capacity)["status"] == "deferred"
-
-
-@pytest.mark.parametrize("slot", [0, 1, None])
-def test_other_slots_never_enter_engine(capacity, monkeypatch, slot):
+@pytest.mark.parametrize("slot", [LANES[1], LANES[2], None])
+def test_other_lanes_never_enter_engine(capacity, monkeypatch, slot):
     monkeypatch.setattr(worker, "_SLOT_OVERRIDE", slot)
     assert run(capacity)["status"] == "off"
-    assert not capacity[3]
+    assert not capacity[2]
 
 
 def test_disabled_has_no_probes(capacity, monkeypatch):
     capacity[1]["extract"]["patient_context_nightly"]["enabled"] = False
-    monkeypatch.setattr(worker, "_slots_busy", lambda deadline: pytest.fail("probe while off"))
+    for probe in ("_nightly_memory_available", "disk_free_mb", "circuit_open_s"):
+        monkeypatch.setattr(worker, probe, lambda *a: pytest.fail("probe while off"))
     assert run(capacity)["status"] == "off"
+    assert not capacity[2]
 
 
-@pytest.mark.parametrize("gate", ["held", "expired", "memory", "disk", "unknown_disk", "circuit", "slot", "probe", "update"])
+@pytest.mark.parametrize("gate", ["expired", "memory", "disk", "unknown_disk", "circuit", "update", "mid_update"])
 def test_capacity_gates(capacity, monkeypatch, gate):
-    held, stop = lambda: False, None
-    if gate == "held":
-        def held():
-            return True
-    elif gate == "expired":
+    stop, state = None, (False, 123)
+    if gate == "expired":
         stop = worker.time.monotonic() - 1
     elif gate == "memory":
         monkeypatch.setattr(worker, "_nightly_memory_available", lambda: False)
@@ -82,58 +68,30 @@ def test_capacity_gates(capacity, monkeypatch, gate):
         monkeypatch.setattr(worker, "disk_free_mb", lambda led: 0 if gate == "disk" else None)
     elif gate == "circuit":
         monkeypatch.setattr(worker, "circuit_open_s", lambda led: 60)
-    elif gate in ("slot", "probe"):
-        monkeypatch.setattr(worker, "_slots_busy", lambda deadline: {1: False, 2: True} if gate == "slot" else None)
     elif gate == "update":
         monkeypatch.setattr(mcs_util, "_updater_state", lambda: (True, 124))
-    assert run(capacity, held, stop)["done"] == 0
-    assert not capacity[3]
+    elif gate == "mid_update":
+        state = (True, 123)
+        monkeypatch.setattr(mcs_util, "_updater_state", lambda: state)
+    assert run(capacity, stop, state)["status"] == "deferred"
+    assert not capacity[2]
 
 
-@pytest.mark.parametrize("kind", ["semantic", "extract_qc"])
-@pytest.mark.parametrize("delay", [-1, 0, 60])
-@pytest.mark.parametrize("mode", ["off", "shadow"])
-@pytest.mark.parametrize("qc", ["off", "annotate"])
-@pytest.mark.parametrize("budget", [0, 10])
-def test_only_enabled_due_jobs_block_nightly(
-        capacity, monkeypatch, kind, delay, mode, qc, budget):
-    now = [1000.0]
-    monkeypatch.setattr(worker.time, "time", lambda: now[0])
-    capacity[1]["semantic"] = {"mode": mode, "project_ids": None,
-                               "extract_qc": qc, "daily_request_budget": budget}
-    db = capacity[0].db
-    db.execute(
-        "INSERT INTO fetch_jobs(kind,state,next_try,created_at,updated_at) VALUES(?,'pending',?,0,0)",
-        (kind, now[0] + delay))
-    before = tuple(db.execute("SELECT * FROM fetch_jobs").fetchone())
-    enabled = mode != "off" and (
-        kind == "semantic" or (qc == "annotate" and budget > 0))
-    result = run(capacity)
-    if enabled and delay <= 0:
-        assert result["status"] == "deferred"
-        assert not capacity[3]
-    else:
-        assert result["done"] == 1
-        now[0] += max(delay, 0)
-        # Becoming due during inference blocks publication only while enabled.
-        assert capacity[3][0]() == (not enabled)
-    assert tuple(db.execute("SELECT * FROM fetch_jobs").fetchone()) == before
-
-
-@pytest.mark.parametrize("semantic", [
-    [], {"mode": "invalid"}, {"mode": "off", "daily_request_budget": "10"},
-])
-def test_invalid_semantic_config_never_admits_nightly(capacity, monkeypatch, semantic):
-    capacity[1]["semantic"] = semantic
-    monkeypatch.setattr(worker, "_select_pending", lambda *a: pytest.fail("invalid config"))
-    assert run(capacity)["status"] == "deferred"
-    assert not capacity[3]
+def test_engine_gets_extraction_complete_rule(capacity):
+    ledger, _, calls = capacity
+    ledger.save_messages([_message(mid=1, project_id=1), _message(mid=2, project_id=2)])
+    _v2_artifact(ledger, 1, _hash(ledger, 1), project_id=1)
+    assert run(capacity)["done"] == 1
+    admit, complete = calls[0]
+    assert admit() and callable(complete)
+    assert complete(1) is True    # every post extracted under EXTRACT_VERSION
+    assert complete(2) is False   # one eligible post still pending
 
 
 def test_failure_isolated_and_no_sensitive_error(capacity, monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("private text")
-    monkeypatch.setitem(sys.modules, "patient_nightly", SimpleNamespace(run_due=fail, options=patient_nightly.options, night_window=lambda now: ("synthetic-night", now + 900)))
+    monkeypatch.setitem(sys.modules, "patient_nightly", SimpleNamespace(run_due=fail, options=patient_nightly.options))
     assert run(capacity) == {"status": "error", "done": 0, "error": "RuntimeError"}
 
 
@@ -159,29 +117,55 @@ def test_linux_memory(monkeypatch, text, expected):
     assert worker._nightly_memory_available() is expected
 
 
-@pytest.mark.parametrize("idle,slot,expected", [(True, 2, 1), (False, 2, 0), (True, 0, 0)])
-def test_resident_integration(monkeypatch, idle, slot, expected):
-    now, calls = [0.0], []
+@pytest.mark.parametrize("idle", [True, False])
+@pytest.mark.parametrize("lane,nightly_first", [("3", True), ("2", False)])
+def test_resident_integration(monkeypatch, idle, lane, nightly_first):
+    now, events = [0.0], []
     monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
     monkeypatch.setenv("MCS_LLM_SLOT", "1")
+    monkeypatch.setenv(worker.local_llm.TURN_LOCK_ENV, "/synthetic/turn.lock")
     previous_slot = worker._SLOT_OVERRIDE
     monkeypatch.setattr(worker.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
-    monkeypatch.setattr(worker, "_slots_busy", lambda deadline: {1: False, 2: False})
     monkeypatch.setattr(worker, "load_config", lambda: {})
     monkeypatch.setattr(worker, "Ledger", lambda *args: SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--slot", str(slot), "--stop-after", "1"])
-    monkeypatch.setattr(worker, "run_pending", lambda *args, **kwargs: {
-        "done": 0 if idle else 1, "failed": 0, "left": 0 if idle else 1,
-        "selected": 0 if idle else 1})
-    def nightly(*args):
-        calls.append(args)
+    monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--lane", lane, "--stop-after", "1"])
+
+    def pending(*args, **kwargs):
+        events.append("run_pending")
+        assert kwargs["carry"] == []
+        return {"done": 0 if idle else 1, "failed": 0, "left": 0 if idle else 1,
+                "selected": 0 if idle else 1, "carried": 0, "carry": []}
+    monkeypatch.setattr(worker, "run_pending", pending)
+
+    def nightly(led, state, stop):
+        events.append("nightly")
+        assert state == (False, 123) and stop is not None
+        assert os.environ["MCS_LLM_SLOT"] == str(worker.local_llm.lane_slot(int(lane)))
+        assert os.environ[worker.local_llm.TURN_LOCK_ENV].endswith("data/llm_turn.lock")
         return {"status": "deferred", "done": 0}
     monkeypatch.setattr(worker, "_background_nightly", nightly)
     assert worker.main() == 0
-    assert len(calls) == expected
+    assert events[0] == ("nightly" if nightly_first else "run_pending")
+    assert ("nightly" in events) is nightly_first
     assert os.environ["MCS_LLM_SLOT"] == "1"
+    assert os.environ[worker.local_llm.TURN_LOCK_ENV] == "/synthetic/turn.lock"
     assert worker._SLOT_OVERRIDE == previous_slot
+
+
+def test_resident_exits_when_nightly_sees_update(monkeypatch):
+    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
+    monkeypatch.delenv(worker.local_llm.TURN_LOCK_ENV, raising=False)
+    monkeypatch.setattr(worker, "load_config", lambda: {})
+    monkeypatch.setattr(worker, "Ledger", lambda *args: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "1"])
+    monkeypatch.setattr(worker, "run_pending", lambda *a, **k: pytest.fail("extraction after update"))
+    monkeypatch.setattr(worker, "_background_nightly", lambda *a: {
+        "status": "deferred", "done": 0, "run_lock_lost": "updated"})
+    assert worker.main() == 0
+    assert "MCS_LLM_SLOT" not in os.environ
+    assert worker.local_llm.TURN_LOCK_ENV not in os.environ
 
 
 def test_config_failure_isolated(capacity, monkeypatch):
@@ -198,11 +182,11 @@ def test_memory_probe_failure_defers(monkeypatch):
 
 
 def test_update_during_engine_signals_resident_exit(capacity, monkeypatch):
-    def engine(led, cfg, *, deadline, admit):
+    def engine(led, cfg, *, deadline, admit, complete):
         monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 124))
         assert not admit()
         return {"status": "deferred", "done": 0}
-    monkeypatch.setitem(sys.modules, "patient_nightly", SimpleNamespace(run_due=engine, options=patient_nightly.options, night_window=lambda now: ("synthetic-night", now + 900)))
+    monkeypatch.setitem(sys.modules, "patient_nightly", SimpleNamespace(run_due=engine, options=patient_nightly.options))
     assert run(capacity)["run_lock_lost"] == "updated"
 
 
@@ -210,26 +194,17 @@ def test_configuration_change_cancels_publication(capacity, monkeypatch):
     assert run(capacity)["done"] == 1
     monkeypatch.setattr(worker, "load_config", lambda: {
         "extract": {"patient_context_nightly": {"enabled": False}}})
-    assert not capacity[3][0]()
+    assert not capacity[2][0][0]()
 
 
 def test_omitted_options_enable_idle_worker(capacity):
     capacity[1].clear()
     assert run(capacity)["done"] == 1
-    assert len(capacity[3]) == 1
+    assert len(capacity[2]) == 1
 
 
 @pytest.mark.parametrize("value", [None, [], {"enabled": "true"}, {"unknown": True}])
 def test_malformed_options_fail_closed(capacity, value):
     capacity[1]["extract"]["patient_context_nightly"] = value
     assert run(capacity)["status"] == "off"
-    assert not capacity[3]
-
-
-def test_daytime_skips_all_capacity_probes(capacity, monkeypatch):
-    monkeypatch.setattr(sys.modules["patient_nightly"], "night_window", lambda now: None)
-    monkeypatch.setattr(worker, "_nightly_memory_available", lambda: pytest.fail("daytime memory probe"))
-    monkeypatch.setattr(worker, "_slots_busy", lambda deadline: pytest.fail("daytime slot probe"))
-    monkeypatch.setattr(worker, "_select_pending", lambda *args: pytest.fail("daytime backlog probe"))
-    assert run(capacity) == {"status": "off", "done": 0}
-    assert not capacity[3]
+    assert not capacity[2]

@@ -2773,7 +2773,7 @@ _NIGHTLY_COUNTS = ("initial_pending", "delta_pending", "history_pending",
 
 
 def _doctor_nightly(cfg: dict, *, probe: bool) -> dict:
-    """夜間の患者まとめを、明示診断時だけ読取り専用で件数確認する。"""
+    """患者コンテキスト作成を、明示診断時だけ読取り専用で件数確認する。"""
     from patient_nightly import options
     result = {"status": "not_checked", **options(cfg), "counts": None}
     if not probe:
@@ -2918,7 +2918,7 @@ def cmd_doctor(args) -> int:
             print("  復元後の保留: 収集のみ継続し、配送は保留しています")
         elif worker['restore_delivery_held'] is None:
             print("  復元後の保留: 状態を確認できません")
-        print(f"  夜間の患者まとめ: {labels.get(nightly['status'], '未確認')}、"
+        print(f"  患者コンテキスト作成: {labels.get(nightly['status'], '未確認')}、"
               f"生成={'有効' if nightly['enabled'] else '無効'}、"
               f"限定閲覧={'有効' if nightly['publication'] else '無効'}")
         if nightly["counts"] is not None:

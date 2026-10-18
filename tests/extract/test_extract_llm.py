@@ -2746,10 +2746,17 @@ def test_llm_call_stats_dedups_shared_meta_and_ignores_junk():
     stats = extract_llm._llm_call_stats(
         [shared, shared, None, {"calls": True, "usage": {"total_tokens": "9"}},
          {"calls": 2}])
+    unreported = {
+        "first_calls": None, "repair_calls": None, "repair_wins": None,
+        "length_stops": None, "length_resplits": None, "probe_calls": None,
+        "format_downgrades": None, "checkpoint_reuses": None,
+        "prompt_n": None, "cache_n": None, "repair_prompt_n": None,
+        "repair_cache_n": None, "repair_issues": None, "cache_hit_ratio": None}
     assert stats == {"calls": 3, "prompt_ms": 10, "predicted_ms": 5.5,
-                     "tokens": 40}
+                     "tokens": 40, **unreported}
     assert extract_llm._llm_call_stats([{"calls": 2}]) == {
-        "calls": 2, "prompt_ms": None, "predicted_ms": None, "tokens": None}
+        "calls": 2, "prompt_ms": None, "predicted_ms": None, "tokens": None,
+        **unreported}
     assert extract_llm._llm_call_stats([None, {}]) is None
 
 

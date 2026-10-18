@@ -38,8 +38,8 @@ def test_jobs_quiesce_and_restart_after_the_updater_finishes(tmp_path, monkeypat
     host.tick(now)
     assert set(host.children) == {"extract-0", "extract-2", "mcs_check", "mcs_deep", "mcs_health", "update"}
     assert all(kw["env"]["MCS_ROOT"] == str(tmp_path) for _, kw, _ in launched)
-    assert host.argv["extract-0"][-2:] == ["0", "--semantic"]
-    assert host.argv["extract-2"][-2:] == ["2", "--semantic"]
+    assert host.argv["extract-0"][-3:] == ["--lane", "2", "--semantic"]
+    assert host.argv["extract-2"][-3:] == ["--lane", "3", "--semantic"]
     host.tick(now + 0.5)
     assert len(launched) == 6  # one instance per job and scheduled minute
 

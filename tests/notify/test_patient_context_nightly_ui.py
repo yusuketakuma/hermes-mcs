@@ -180,7 +180,7 @@ def test_nightly_summary_uses_fact_id_not_same_text_source(led, monkeypatch):
     monkeypatch.setattr(patient_context_view, "evidence", evidence)
     result = open_section(led, spec)
     row = result["list"]["items"][0]
-    assert row["group"] == "夜間に整理した記録"
+    assert row["group"] == "患者コンテキスト"
     assert "#101）" in row["text"] and "合成職員B" in row["text"]
     assert "#100）" not in row["text"]
 

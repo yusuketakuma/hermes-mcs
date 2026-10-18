@@ -18,7 +18,8 @@ if [ "$WATCHDOG_GRACE" -gt 0 ]; then
   set -- "$@" --watchdog-grace "$WATCHDOG_GRACE"
 fi
 
-export MCS_LLM_SLOT=1
+# lane 1 (realtime) = wire id_slot 0; see local_llm.LANES
+export MCS_LLM_SLOT=0
 
 "$PY" __REPO__/mcs/ingest/run_check.py "$@" >>"$LOG" 2>&1
 rc=$?

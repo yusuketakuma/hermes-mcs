@@ -35,6 +35,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import functools
 import threading
 import time
 import unicodedata
@@ -504,15 +505,20 @@ _REPAIR_CLOSE = """
 
 
 def _repair_prompt(posted_at: str | None, issues: list[str],
-                   prior: dict, hints: dict | None = None) -> str:
+                   prior: dict, hints: dict | None = None,
+                   reference: str = "") -> str:
     """Feedback prompt for the bounded repair retry — ends with the
     OPEN target fence; the caller appends the body then _PROMPT_TAIL.
     `issues` are the concrete validation failures; `prior` is
     sanitized before fencing (model output is data, same trust class
-    as context)."""
+    as context). The fixed head leads so the slot's prefix cache shares
+    _REPAIR_HEAD across repair calls; `reference` (a finished
+    _CTX_HEAD/_CTX_TAIL block, or "") goes after the prior-output fence,
+    keeping the single-call order context -> hints -> target."""
     prompt = _REPAIR_HEAD + "\n".join(issues) + _REPAIR_MID
     prompt += _sanitize_ctx(json.dumps(prior, ensure_ascii=False))
     prompt += _REPAIR_CLOSE
+    prompt += reference
     hint = _hint_block(hints) if hints else ""
     if hint:
         prompt += _HINT_HEAD + hint + _HINT_TAIL
@@ -564,17 +570,20 @@ def _probe_format(deadline: float | None = None) -> str | None:
     if local_llm.admission_enabled():
         # T20: the probe sends real inference POSTs — it passes the
         # same admission gate and consumes its class budget
-        _FMT_MODE = local_llm.admitted_probe_format(
+        mode = local_llm.admitted_probe_format(
             "mcs.extract", endpoint, model, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
             slot=_choose_slot(),
             verify=lambda text: json_object(text) is not None)
     else:
-        _FMT_MODE = local_llm.probe_format(
+        mode = local_llm.probe_format(
             endpoint, model, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
             slot=_choose_slot(),
             verify=lambda text: json_object(text) is not None)
+    if mode is None:
+        return _FMT_MODE  # GPU turn busy: nothing sent, probe again next call
+    _FMT_MODE = mode
     _FMT_TS = time.monotonic()
     return _FMT_MODE
 
@@ -1406,26 +1415,49 @@ def _note_list() -> list:
     return notes
 
 
-def _integrity_note(response) -> None:
+def _integrity_note(response, kind: str = "first", probe: int = 0,
+                     downgrades: int = 0, err_out: dict | None = None) -> None:
     """Bounded per-call integrity record for the legacy path: counts and
     token usage only — never payload text."""
-    _note_list().append({
+    # probe/downgrade counts ride on the answered call's note so
+    # `calls == len(notes)` stays untouched
+    note = {
         "status": None if response is None else response.get("status"),
         "finish_reason": None if response is None
                          else response.get("finish_reason"),
         "usage": None if response is None else response.get("usage"),
         "timings": None if response is None else response.get("timings"),
-    })
+        "kind": kind, "probe": probe, "downgrades": downgrades,
+    }
+    if type((err_out or {}).get("slot_wait_ms")) is int:
+        note["slot_wait_ms"] = err_out["slot_wait_ms"]
+        note["slot_wait_confirmed"] = err_out.get("slot_wait_confirmed")
+    _note_list().append(note)
 
 
 def _integrity_summary(notes: list) -> dict:
     calls = len(notes)
-    usage, timings = {}, {}
+    usage, timings, repair_timings = {}, {}, {}
     finishes = {}
+    repair_calls = probe_calls = downgrades = 0
+    slot_wait_ms = slot_wait_unconfirmed = 0
+    slot_waits = False
     for note in notes:
         finish = note.get("finish_reason")
         if finish is not None:
             finishes[finish] = finishes.get(finish, 0) + 1
+        repair = note.get("kind") == "repair"
+        repair_calls += int(repair)
+        for key in ("probe", "downgrades"):
+            if type(note.get(key)) is int:
+                if key == "probe":
+                    probe_calls += note[key]
+                else:
+                    downgrades += note[key]
+        if type(note.get("slot_wait_ms")) is int:
+            slot_waits = True
+            slot_wait_ms += note["slot_wait_ms"]
+            slot_wait_unconfirmed += int(note.get("slot_wait_confirmed") == 0)
         for key, value in (note.get("usage") or {}).items():
             if key in ("prompt_tokens", "completion_tokens", "total_tokens") \
                     and type(value) is int and value >= 0:
@@ -1434,19 +1466,34 @@ def _integrity_summary(notes: list) -> dict:
             if key in ("prompt_n", "prompt_ms", "predicted_n", "predicted_ms", "cache_n") \
                     and type(value) in (int, float) and 0 <= value <= sys.float_info.max:
                 timings[key] = timings.get(key, 0) + value
+                if repair and key in ("prompt_n", "cache_n"):
+                    repair_timings[key] = repair_timings.get(key, 0) + value
     timings = {key: value for key, value in timings.items()
                if 0 <= value <= sys.float_info.max}
-    return {"calls": calls,
-            "length_stops": finishes.get("length", 0),
-            "finish_reasons": finishes,
-            "usage": usage or None,
-            "timings": timings or None}
+    repair_timings = {key: value for key, value in repair_timings.items()
+                      if 0 <= value <= sys.float_info.max}
+    summary = {"calls": calls,
+               "length_stops": finishes.get("length", 0),
+               "finish_reasons": finishes,
+               "usage": usage or None,
+               "timings": timings or None,
+               # legacy notes without a kind count as first calls, so
+               # calls == first_calls + repair_calls always holds
+               "first_calls": calls - repair_calls,
+               "repair_calls": repair_calls,
+               "probe_calls": probe_calls,
+               "format_downgrades": downgrades,
+               "repair_timings": repair_timings or None}
+    if slot_waits:
+        summary["slot_wait_ms"] = slot_wait_ms
+        summary["slot_wait_unconfirmed"] = slot_wait_unconfirmed
+    return summary
 
 
 def _llm_call(prompt: str, deadline: float | None = None,
               schema: dict | None = None,
               max_tokens: int = MAX_TOKENS,
-              need_s: float | None = None) -> dict | None:
+              need_s: float | None = None, kind: str = "first") -> dict | None:
     """One chat-completions round-trip -> the model's JSON object, or
     None on transport/parse failure. Applies the probed
     response_format; a format rejected mid-run (server restart/model
@@ -1460,15 +1507,23 @@ def _llm_call(prompt: str, deadline: float | None = None,
     request killed mid-decode by the deadline wastes the whole
     generation, while a deferred row just stays pending.  Response
     integrity metadata is appended to thread-local integrity notes
-    consumed by ``llm_extract``; the visible result is unchanged."""
+    consumed by ``llm_extract``; the visible result is unchanged.
+    `kind` labels the note ("first"/"repair"); the note also carries
+    whether this call's probe actually sent and how many format
+    downgrades preceded the answer. Known limit: a probe or downgrade
+    whose call then returns None/_DEFERRED without a note is uncounted
+    (the row re-runs)."""
     global _FMT_MODE
     if deadline is not None \
             and deadline - time.monotonic() < (need_s or 0):
         return _DEFERRED
+    probed_at = _FMT_TS
     fmt = _probe_format(deadline=deadline)
+    probe = int(_FMT_TS != probed_at)   # _FMT_TS moves only when the ladder actually sent
     if fmt is None:
         return _DEFERRED   # no idle slot to probe on — nothing sent
     endpoint, model = _resolved_llm()
+    downgrades = 0
     while True:
         # the same floor gates retries: a format degrade (4xx) loops
         # back here and would otherwise re-fire a full call that can
@@ -1491,7 +1546,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 "mcs.extract", prompt, endpoint=endpoint, model=model,
                 max_tokens=max_tokens, timeout=TIMEOUT,
                 deadline=deadline, response_format=rf,
-                request_fn=_opener_request, error_out=err_out)
+                request_fn=_opener_request, error_out=err_out,
+                turn_min_s=need_s or 0)
             if response is not None and response.get("admission"):
                 return _DEFERRED
         else:
@@ -1500,7 +1556,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
                 response_format=rf,
                 extra_payload={"id_slot": _choose_slot()},
-                request_fn=_opener_request, error_out=err_out)
+                request_fn=_opener_request, error_out=err_out,
+                turn_min_s=need_s or 0)
         # Endpoint health of this call for run_pending's breaker: refused /
         # not sent and 503 are outages, a pre-deadline transport failure
         # (timeout, reset) is a slow or stuck server, a 2xx answer (or a 200
@@ -1511,6 +1568,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
         _CALL_NOTES.transport = (
             "unreachable" if response is None
             and err_out.get("kind") == "unreachable"
+            else "busy" if response is None and err_out.get("kind") == "busy"
             else "unavailable" if status == 503
             else "transport" if response is None and not expired
             and err_out.get("kind") == "transport"
@@ -1522,7 +1580,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
         _CALL_NOTES.transport_at = time.monotonic()
         if _CALL_NOTES.transport == "expired":
             return None  # a sent timeout consumes an attempt, not endpoint health
-        if response is None and (err_out.get("kind") == "unreachable"
+        if response is None and (err_out.get("kind") in ("unreachable", "busy")
                                  or expired) \
                 or response is not None and response.get("status") == 503:
             # Connection refused or 503 (still loading the model) — the
@@ -1536,8 +1594,9 @@ def _llm_call(prompt: str, deadline: float | None = None,
         # rejection is the message's own failure.
         if status in (400, 404, 422) and fmt != "plain":
             fmt = _FMT_MODE = _NEXT_FMT[fmt]
+            downgrades += 1
             continue
-        _integrity_note(response)
+        _integrity_note(response, kind, probe, downgrades, err_out)
         # a length stop is truncated JSON: json_object would salvage an
         # inner complete object (one med dict) that validates to {} and
         # gets saved as the message's extraction — reject it as failed
@@ -1754,6 +1813,12 @@ def _is_thin(v: dict | None, body: str | None) -> bool:
     return (v is not None and body is not None
             and len(body) >= _THIN_BODY_MIN
             and len(_facts(v)) < _THIN_FACTS_MIN)
+
+
+# closed set of repair-trigger codes for the meta histogram: the drops
+# buckets (incl. the legacy vitals key) plus the three non-drop triggers
+_ISSUE_KEYS = ("ev", "items", "reasons", "labs", "events", "vitals",
+               "structure", "completeness", "thin")
 
 
 def _repair_issues(drops: dict, v: dict | None) -> list[str]:
@@ -2730,6 +2795,10 @@ def llm_extract(body: str, *, context: str | None = None,
     thead = _target_head(posted_at)
     notes = _note_list()
     notes.clear()
+
+    def bump(key, n=1):
+        if meta_out is not None:
+            meta_out[key] = meta_out.get(key, 0) + n
     chunk_size = _CHUNK_SIZE if chunk_size is None else chunk_size
     if type(chunk_size) is not int or not 1 <= chunk_size <= _CHUNK_SIZE:
         raise ValueError("extract_chunk_size_invalid")
@@ -2770,6 +2839,7 @@ def llm_extract(body: str, *, context: str | None = None,
             return None
         smaller = max(1, len(piece) // 2)
         splits[key] = smaller
+        bump("length_resplits")
         if on_split is not None:
             on_split(key, smaller)
         return children(key, piece, start, remaining)
@@ -2778,6 +2848,8 @@ def llm_extract(body: str, *, context: str | None = None,
         if deadline is not None and time.monotonic() > deadline:
             return _DEFERRED
         cached = saved.get(key)
+        if key in saved:
+            bump("checkpoint_reuses")
         quality_status = cached.get("_quality_status") if isinstance(cached, dict) else None
         if key in saved and quality_status is None:
             sizes.append(len(piece))
@@ -2843,6 +2915,15 @@ def llm_extract(body: str, *, context: str | None = None,
             # the budget is already gone; a salvaged v stays usable
             # either way.
             issues = _repair_issues(drops, v)
+            if meta_out is not None:
+                # codes only, never issue text; counted before the budget
+                # check so it is the denominator of what failed validation
+                hist = meta_out.setdefault("repair_issues", dict.fromkeys(_ISSUE_KEYS, 0))
+                for code in _ISSUE_KEYS[:6]:
+                    hist[code] += len(drops.get(code) or [])
+                hist["structure"] += int(v is None)
+                hist["completeness"] += len(completeness)
+                hist["thin"] += int(thin)
             issues.extend(completeness)
             if thin:
                 issues.append(
@@ -2881,11 +2962,10 @@ def llm_extract(body: str, *, context: str | None = None,
                         return finish_piece(key, v, quality_record, pending=key in pending_quality)
                 repair_start = len(notes)
                 rd = _llm_call(
-                    reference + _repair_prompt(posted_at, issues, d, piece_hints)
+                    _repair_prompt(posted_at, issues, d, piece_hints, reference)
                     + piece + _PROMPT_TAIL,
-                    deadline=repair_deadline, need_s=_MIN_REPAIR_S)
-                if meta_out is not None:
-                    meta_out["repairs"] = meta_out.get("repairs", 0) + 1
+                    deadline=repair_deadline, need_s=_MIN_REPAIR_S, kind="repair")
+                bump("repairs")
                 if repair_deadline is not None and time.monotonic() > repair_deadline:
                     rd = _DEFERRED
                 if (rd is None and len(notes) > repair_start
@@ -2901,6 +2981,7 @@ def llm_extract(body: str, *, context: str | None = None,
                     if (_quality_improves(rv, v, body, piece_hints if piece == body else None)
                             if completeness else _improves(rv, v)):
                         v = rv
+                        bump("repair_wins")
                 if completeness:
                     quality_note("dispatch_unknown" if rd is _DEFERRED else
                                  "unresolved" if _completeness_issues(v, piece_hints, piece) else "hint_gaps_resolved")
@@ -3243,8 +3324,9 @@ def _clear_error_tx(ledger, mid: int):
 
 
 @contextlib.contextmanager
-def _write_lock(enabled: bool):
-    """Hold the run lock only across a DB write when `enabled`.
+def _write_lock(enabled: bool, wait_s: float = 60):
+    """Hold the run lock only across a DB write when `enabled`, waiting
+    up to ``wait_s`` seconds for it.
 
     The tick caller already holds the lock for the whole run, so it
     passes False. The standalone --all backlog drainer passes True so it
@@ -3260,7 +3342,7 @@ def _write_lock(enabled: bool):
     while leases are held would stall the drainer for no proven gain."""
     fd = None
     if enabled:
-        for _ in range(60):
+        for _ in range(max(1, int(wait_s))):
             fd = acquire_run_lock()
             if fd is not None:
                 break
@@ -3667,23 +3749,64 @@ def _qc_feedback(ledger, src_artifact_id):
             "notes": notes[:6]}
 
 
-def _next_retry(ledger) -> float | None:
+def _next_retry(ledger, *, after: float | None = None) -> float | None:
     """Earliest next_try among retriable error artifacts, or None when
-    nothing is retriable (all remaining are permanent failures)."""
+    nothing is retriable (all remaining are permanent failures). With
+    `after`, only next_try later than it count: a past-due row that stays
+    unselected (other shard, gate) must not hide a later due time."""
     safe_meta = json_or_null("meta")
     timestamp = f"json_extract({safe_meta},'$.next_try')"
-    row = ledger.db.execute(
-        f"SELECT MIN({timestamp}) FROM artifacts "
-        "WHERE kind=? AND json_valid(meta) "
-        "AND json_extract(meta,'$.error')=1 "
-        "AND COALESCE(json_extract(meta,'$.attempts'),0) < 5 "
-        f"AND json_type({safe_meta},'$.next_try') IN ('integer','real') "
-        f"AND {timestamp} BETWEEN -{sys.float_info.max!r} AND {sys.float_info.max!r}",
-        (KIND,)).fetchone()
+    sql = (f"SELECT MIN({timestamp}) FROM artifacts "
+           "WHERE kind=? AND json_valid(meta) "
+           "AND json_extract(meta,'$.error')=1 "
+           "AND COALESCE(json_extract(meta,'$.attempts'),0) < 5 "
+           f"AND json_type({safe_meta},'$.next_try') IN ('integer','real') "
+           f"AND {timestamp} BETWEEN -{sys.float_info.max!r} AND {sys.float_info.max!r}")
+    params: list = [KIND]
+    if after is not None:
+        sql += f" AND {timestamp} > ?"
+        params.append(after)
+    row = ledger.db.execute(sql, params).fetchone()
     return row[0] if row and row[0] is not None else None
 
 
-_SLOT_OVERRIDE = None  # --slot: pin this process to a specific id_slot
+# a wake re-runs the selection scan, lane 3 a whole-patient scan — never
+# more often than this
+_IDLE_FLOOR_S = 5.0
+
+
+def _next_due_in(ledger, now: float, *, semantic: bool, context: bool) -> float | None:
+    """Seconds until the earliest FUTURE retry/due time this resident can
+    serve, or None. Past-due rows are excluded on purpose: a row that was
+    due and still not selected is gated (shard, admission, poison, lock)
+    and polling faster cannot serve it."""
+    try:
+        due = [t for t in (_next_retry(ledger, after=now),) if t is not None]
+        if semantic:
+            import semantic_policy
+            row = ledger.db.execute(
+                "SELECT MIN(next_try) FROM fetch_jobs WHERE state='pending' "
+                "AND next_try > ? AND kind IN (?,?)",
+                (now, semantic_policy.JOB_KIND, semantic_policy.QC_JOB_KIND)).fetchone()
+            if row and row[0] is not None:
+                due.append(row[0])
+        if context:
+            import patient_nightly
+            safe = json_or_null("content")
+            t = f"json_extract({safe},'$.next_try')"
+            row = ledger.db.execute(
+                f"SELECT MIN({t}) FROM artifacts WHERE kind IN (?,?) "
+                f"AND COALESCE(json_extract({safe},'$.attempts'),0) < 5 "
+                f"AND json_type({safe},'$.next_try') IN ('integer','real') AND {t} > ?",
+                (patient_nightly.PROGRESS, patient_nightly.SCAN, now)).fetchone()
+            if row and row[0] is not None:
+                due.append(row[0])
+    except Exception:
+        return None   # a locked/odd DB must not kill the resident; fall back to the fixed poll
+    return min(due) - now if due else None
+
+
+_SLOT_OVERRIDE = None  # --lane: this process's backlog wire id_slot
 
 
 def _slots_busy(deadline: float | None) -> dict | None:
@@ -3699,24 +3822,16 @@ def _slots_busy(deadline: float | None) -> dict | None:
         return None
 
 
-# Elastic backlog (2026-10-01): the slot-2 worker is the second backlog
-# lane only while the GPU is quiet. All slots share one GPU, so while
-# the realtime slot (Hermes, new arrivals) is decoding, slot 2 starts
-# no new work — backlog runs on slot 0 alone — and it resumes once the
-# realtime slot has been idle for _ELASTIC_QUIET_S. An in-flight call
-# is never interrupted; the gate applies before each item.
-_ELASTIC_SLOT = 2
-_ELASTIC_QUIET_S = 120.0
-_ELASTIC_POLL_S = 5.0
-
-
-def _elastic_hold(gate: dict, now: float) -> bool:
-    """True while the elastic lane stays idle. A failed /slots probe
-    records nothing — the server is down and every lane waits anyway."""
-    busy = _slots_busy(None)
-    if busy and busy.get(local_llm.REALTIME_SLOT) is True:
-        gate["rt_busy_at"] = now
-    return now - gate.get("rt_busy_at", float("-inf")) < _ELASTIC_QUIET_S
+def patient_extraction_complete(ledger, project_id) -> bool:
+    """True when no stored post of the patient still needs the current
+    LLM extraction (EXTRACT_VERSION) — the same pending predicate the
+    drainers select by, so patient context never reads a half-done
+    patient (2026-10-18 owner rule). Posts past the retry ceiling can
+    never be selected, so they do not hold the patient back."""
+    return ledger.db.execute(
+        f"SELECT 1 FROM messages m WHERE m.project_id=? AND {pending_pred()}"
+        f" AND ({_retry_budget_sql()}) LIMIT 1",
+        (project_id,)).fetchone() is None
 
 
 def _choose_slot() -> int:
@@ -3739,6 +3854,10 @@ def pinned_slot_busy(deadline: float | None = None) -> bool:
 
 _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
                          # lease only costs bounded duplicate inference
+_CARRY_MARGIN_S = 120    # a carried result is dropped this close to its
+                         # lease expiry rather than committed under a
+                         # claim another worker may already hold
+_RESIDENT_WRITE_WAIT_S = 3   # residents carry commits instead of waiting out the tick
 
 _BATCH_K = 0                     # --batch default: off. Measured net
                                  # negative (Sep 2026): K=4 accepted 46%,
@@ -3809,6 +3928,27 @@ def _release(ledger, r, lease: float | None):
         "AND project_id=? AND message_id=? AND next_try=?",
         (r["project_id"], r["message_id"], lease))
     ledger.db.commit()
+
+
+def _renew(ledger, r, lease: float) -> float | None:
+    """Extend OUR lease on a carried result so the context units it
+    waits through cannot outlive the claim; None when the lease was
+    lost (lapsed and re-claimed) or the body changed underneath — the
+    result is then dropped so the live claim stops hiding the new body
+    from selection."""
+    now = time.time()
+    # must outlast one 900 s context unit plus _CARRY_MARGIN_S, or the
+    # next settle drops it; same length as a fresh claim
+    new = max(lease, now + _EXTRACT_LEASE_S + TIMEOUT + 30)
+    cur = ledger.db.execute(
+        "UPDATE fetch_jobs SET next_try=?, updated_at=? "
+        "WHERE kind='extract_claim' AND project_id=? AND message_id=? "
+        "AND next_try=? AND EXISTS (SELECT 1 FROM messages m "
+        "WHERE m.message_id=fetch_jobs.message_id "
+        "AND m.project_id=fetch_jobs.project_id AND m.content_hash=?)",
+        (new, now, r["project_id"], r["message_id"], lease, r["content_hash"]))
+    ledger.db.commit()
+    return new if cur.rowcount > 0 else None
 
 
 def _actual_model(r) -> str:
@@ -4556,9 +4696,19 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 shard: tuple[int, int] | None = None,
                 oldest_first: bool = False,
                 batch_k: int = 0,
-                vital_policy: dict | None = None) -> dict:
+                vital_policy: dict | None = None,
+                write_wait_s: float = 60,
+                carry: list | None = None) -> dict:
     """Extract up to `limit` pending/stale messages within budget_s.
     Returns {'done': n, 'left': n, 'failed': n}.
+
+    ``write_wait_s`` bounds each per-write lock wait. With ``carry`` (a
+    list from the previous call's ``result["carry"]``) a finished result
+    whose lock wait timed out keeps its claim lease and rides to the
+    next call instead of being deferred, so the GPU moves on while the
+    tick holds the run lock for minutes; the carried commit is retried
+    under the next call's end-of-run lock and dropped only when its
+    lease nears expiry or the source moved (then re-extracted later).
 
     `workers` fans out the LLM calls across threads — llama.cpp assigns
     each unpinned request to a free slot, so workers should not exceed
@@ -4578,7 +4728,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     remains for explicit use."""
     _validate_run_args(limit, budget_s)
     deadline = time.monotonic() + budget_s
-    lock = _write_lock
+    lock = functools.partial(_write_lock, wait_s=write_wait_s)
     # Any artifact for an older body is stale, including retry state.
     _gc_stale_artifacts(ledger, lock, per_write_lock)
     rows, fresh_selected = _select_pending(ledger, limit, admitted_ids,
@@ -4617,8 +4767,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         elif kind == "transport":
             _feed_breaker()
     # finished results whose per-write lock wait timed out (the tick
-    # holds the run lock for minutes) — written before returning
+    # holds the run lock for minutes) — written before returning, or
+    # carried to the next call (see `carry`)
     pending_writes: list = []
+    carry_out: list = []
+    carried = 0
+    keep_claims: set = set()
     # thread contexts + any durable chunk checkpoints are loaded on the
     # calling thread — worker threads never touch the sqlite handle
     target = _resolved_llm()
@@ -4713,14 +4867,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            if parallel else
                            (lambda i, v: _checkpoint(index, i, v)))
 
-    def _commit(r, d, ctx, integrity, qc):
-        """Persist one validated result — the caller holds the lock."""
+    def _commit(r, d, ctx, integrity, qc) -> bool:
+        """Persist one validated result — the caller holds the lock.
+        True when the artifact was written (a carried commit from an
+        earlier pass counts it in the pass that finally wrote it)."""
         nonlocal done, deferred, held_prior
         # QC-flagged/thin/human-reported rows already hold a current
         # artifact — replacing it is the point of the feedback pass.
         if qc is None and not r["thin_src"] and not r["human_src"] \
                 and _current(ledger, r["message_id"], r["content_hash"]):
-            return
+            return False
         extra = {"thin_retried": True} if r["thin_src"] else {}
         if r["human_src"]:
             extra["human_fix"] = {"feedback_id": r["human_src"],
@@ -4741,7 +4897,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 held_prior += 1
             else:
                 deferred += 1
-            return
+            return False
         # the whole body is now covered — checkpoints for
         # it are dead weight (F14)
         ledger.db.execute(
@@ -4751,6 +4907,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         ledger.db.commit()
         done += 1
         done_pids.add(r["project_id"])
+        return True
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
         nonlocal done, failed, deferred, endpoint_down, lock_lost, slow_deferred
@@ -4808,7 +4965,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         "SELECT content FROM artifacts WHERE artifact_id=?",
                         (qc["src"],)).fetchone()
                     if src is not None:
-                        with lock(per_write_lock) as held:
+                        # these writes are never carried: a skipped one
+                        # re-selects the row for another paid call, so
+                        # wait out the tick (default 60 s), not write_wait_s
+                        with _write_lock(per_write_lock) as held:
                             if held:
                                 _replace_current(
                                     ledger, r, src["content"],
@@ -4827,7 +4987,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         " AND c.message_id=?",
                         (r["human_src"], KIND, r["message_id"])).fetchone()
                     if src is not None:
-                        with lock(per_write_lock) as held:
+                        with _write_lock(per_write_lock) as held:
                             if held:
                                 _replace_current(
                                     ledger, r, src["content"],
@@ -4844,13 +5004,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     content = _thin_retry_content(ledger, r)
                     if content is not None:
                         r["_kept_prior"] = True
-                        with lock(per_write_lock) as held:
+                        with _write_lock(per_write_lock) as held:
                             if held:
                                 _replace_current(
                                     ledger, r, content,
                                     extra_meta={"thin_retried": True})
                     return
-                with lock(per_write_lock) as held:
+                with _write_lock(per_write_lock) as held:
                     if held and not _current(ledger, r["message_id"],
                                              r["content_hash"]):
                         # _fail carries auto_retry so a revived refail
@@ -4976,13 +5136,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             return pool.submit(_extract,
                                (index, (r, ctx, saved, hints, qc)))
 
+        pre_probes = 0
         if parallel and units:
             # settle the probed output format before fanning out — the
             # workers would otherwise race to mutate the global mode.
             # Below the smallest floor every unit defers anyway, so the
             # probe would be a call nobody uses.
             if deadline - time.monotonic() >= _MIN_CALL_S:
+                probed_at = _FMT_TS
                 _probe_format(deadline=deadline)
+                pre_probes = int(_FMT_TS != probed_at)
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(
                     max_workers=min(workers, len(units))) as pool, contextlib.ExitStack() as cleanup:
@@ -5045,14 +5208,46 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             (index, (r, ctx, saved, hints, qc)))
                         _handle(r, ctx, d, metas[index], lease,
                                 chunks_out, qc)
-        if pending_writes:
+        if pending_writes or carry:
             with lock(per_write_lock) as held:
+                for i, (r, lease, commit) in enumerate(carry or ()):
+                    if held and _owns_current_source(ledger, r, lease):
+                        if commit():
+                            # the thunk counted it in the pass that
+                            # produced it; this pass is the one reporting
+                            done += 1
+                            done_pids.add(r["project_id"])
+                        _release(ledger, r, lease)
+                        carried += 1
+                    elif held or lease <= time.time() + _CARRY_MARGIN_S:
+                        # the source moved / lease lapsed, or no time
+                        # left to wait: stays pending, no attempt burned
+                        _release(ledger, r, lease)
+                        deferred += 1
+                    else:
+                        renewed = _renew(ledger, r, lease)
+                        if renewed is None:
+                            # body changed or lease lost: our old claim
+                            # must not keep hiding the new body
+                            _release(ledger, r, lease)
+                            deferred += 1
+                        else:
+                            # the caller keeps this list if we raise
+                            # below: its lease must match the DB now
+                            carry[i] = (r, renewed, commit)
+                            carry_out.append((r, renewed, commit))
                 for r, d, ctx, integrity, qc, lease in pending_writes:
                     # still lock-bound, or the body changed/lease lapsed
                     # while we waited: the row stays pending for the
                     # next run — deferred, no attempt burned
                     if held and _owns_current_source(ledger, r, lease):
                         _commit(r, d, ctx, integrity, qc)
+                    elif carry is not None and not held \
+                            and lease > time.time() + _CARRY_MARGIN_S \
+                            and (renewed := _renew(ledger, r, lease)):
+                        carry_out.append((r, renewed, functools.partial(
+                            _commit, r, d, ctx, integrity, qc)))
+                        keep_claims.add(id(r))
                     else:
                         deferred += 1
     finally:
@@ -5060,11 +5255,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             _flush_checkpoints()
         finally:
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
-                _release(ledger, r, lease)
+                if id(r) not in keep_claims:
+                    _release(ledger, r, lease)
     left, age_min, age_max, estimate = _backlog_report(
         ledger, len(rows), limit, done + skipped + held_prior)
     now_ts = time.time()
+    llm_calls = _llm_call_stats([*metas, *batch_metas])
+    if pre_probes:
+        # the resident's real probe site is the pre-fanout one
+        llm_calls = llm_calls or {"probe_calls": 0}
+        llm_calls["probe_calls"] = (llm_calls.get("probe_calls") or 0) + pre_probes
     return {"done": done, "failed": failed, "held_prior": held_prior, "left": left,
+            "carried": carried, "carry": carry_out,
             # pending as of the last full count, minus what this process
             # settled since; age says how stale the count is
             "left_estimate": max(0, estimate["left"] - estimate["done"]),
@@ -5084,45 +5286,77 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                           else None,
                 "newest": (now_ts - age_max) if age_max is not None
                           else None},
-            "llm_calls": _llm_call_stats([*metas, *batch_metas])}
+            "llm_calls": llm_calls}
+
+
+_COUNT_KEYS = ("calls", "first_calls", "repair_calls", "repair_wins",
+               "length_stops", "length_resplits", "probe_calls",
+               "format_downgrades", "checkpoint_reuses")
 
 
 def _llm_call_stats(metas) -> dict | None:
-    """Sum calls/prompt_ms/predicted_ms/tokens over per-row metas (a
-    batch meta shared by several rows counts once); a field no meta
-    reported is None, and all-None collapses to None."""
-    llm_calls = {"calls": 0, "prompt_ms": 0.0, "predicted_ms": 0.0,
-                 "tokens": 0}
-    have_calls = have_toks = False
-    have_ms = set()
+    """Sum the fixed count keys, prompt_ms/predicted_ms/tokens, the
+    prompt_n/cache_n pairs (first and repair calls; only metas reporting
+    both) and the repair_issues histogram over per-row metas (a batch
+    meta shared by several rows counts once); a field no meta reported
+    is None, and all-None collapses to None. cache_hit_ratio =
+    Σcache_n/(Σcache_n+Σprompt_n) over the metas that reported both,
+    None otherwise."""
+    llm_calls = dict.fromkeys(_COUNT_KEYS, 0)
+    llm_calls.update({"prompt_ms": 0.0, "predicted_ms": 0.0, "tokens": 0,
+                      "prompt_n": 0, "cache_n": 0,
+                      "repair_prompt_n": 0, "repair_cache_n": 0,
+                      "cache_hit_ratio": None, "repair_issues": None})
+    have = set()
     seen_meta = set()
+
+    def finite(value):
+        return type(value) in (int, float) and 0 <= value <= sys.float_info.max
+
     for meta in metas:
         if not isinstance(meta, dict) or id(meta) in seen_meta:
             continue
         seen_meta.add(id(meta))
-        n = meta.get("calls")
-        if type(n) is int:
-            llm_calls["calls"] += n
-            have_calls = True
+        for key in _COUNT_KEYS:
+            if type(meta.get(key)) is int:
+                llm_calls[key] += meta[key]
+                have.add(key)
         timings = meta.get("timings")
         if isinstance(timings, dict):
             for key in ("prompt_ms", "predicted_ms"):
-                value = timings.get(key)
-                if type(value) in (int, float) and 0 <= value <= sys.float_info.max:
-                    llm_calls[key] += value
-                    have_ms.add(key)
+                if finite(timings.get(key)):
+                    llm_calls[key] += timings[key]
+                    have.add(key)
+        for source, prefix in (("timings", ""), ("repair_timings", "repair_")):
+            pair = meta.get(source)
+            if isinstance(pair, dict) and finite(pair.get("prompt_n")) \
+                    and finite(pair.get("cache_n")):
+                llm_calls[prefix + "prompt_n"] += pair["prompt_n"]
+                llm_calls[prefix + "cache_n"] += pair["cache_n"]
+                have.add(prefix + "prompt_n")
+        issues = meta.get("repair_issues")
+        if isinstance(issues, dict):
+            hist = llm_calls["repair_issues"] or dict.fromkeys(_ISSUE_KEYS, 0)
+            for key in _ISSUE_KEYS:
+                if type(issues.get(key)) is int:
+                    hist[key] += issues[key]
+            llm_calls["repair_issues"] = hist
         usage = meta.get("usage")
         if isinstance(usage, dict) \
                 and type(usage.get("total_tokens")) is int:
             llm_calls["tokens"] += usage["total_tokens"]
-            have_toks = True
-    if not have_calls:
-        llm_calls["calls"] = None
-    for key in ("prompt_ms", "predicted_ms"):
-        if key not in have_ms or not 0 <= llm_calls[key] <= sys.float_info.max:
+            have.add("tokens")
+    for key in (*_COUNT_KEYS, "prompt_ms", "predicted_ms", "tokens"):
+        if key not in have or not finite(llm_calls[key]):
             llm_calls[key] = None
-    if not have_toks:
-        llm_calls["tokens"] = None
+    for prefix in ("", "repair_"):
+        if prefix + "prompt_n" not in have or not finite(llm_calls[prefix + "prompt_n"]) \
+                or not finite(llm_calls[prefix + "cache_n"]):
+            llm_calls[prefix + "prompt_n"] = llm_calls[prefix + "cache_n"] = None
+    if llm_calls["prompt_n"] is not None:
+        total = llm_calls["prompt_n"] + llm_calls["cache_n"]
+        if 0 < total < sys.float_info.max:
+            llm_calls["cache_hit_ratio"] = round(llm_calls["cache_n"] / total, 3)
     return llm_calls if any(
         v is not None for v in llm_calls.values()) else None
 
@@ -5228,17 +5462,55 @@ def _nightly_memory_available() -> bool:
     return False
 
 
-def _background_nightly(ledger, held, initial_state, stop=None):
-    """Use only idle elastic capacity; recheck higher-priority work at each boundary."""
+def _settle_carry(ledger, carry: list, *, final: bool = True,
+                  write: bool = True, fence=None) -> None:
+    """Lock attempt for results carried across run_pending calls.
+    ``final`` (resident exit) releases whatever is still lock-bound or
+    no longer owned — it stays pending and re-extracts later, no attempt
+    burned; a non-final pass (lane 3 before patient context) waits only
+    the resident's short window and keeps lock-bound results carried.
+    ``write=False`` (an updater ran) releases without committing so old
+    code never writes after the update fence; ``fence`` (the resident's
+    initial updater state) is re-read under the lock for the same
+    reason — an updater may finish while we wait for the lock."""
+    if not carry:
+        return
+    keep = []
+    with _write_lock(True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S) as held:
+        if held and fence is not None:
+            import mcs_util
+            write = write and mcs_util._updater_state() == fence
+        for i, (r, lease, commit) in enumerate(carry):
+            if held and write and _owns_current_source(ledger, r, lease):
+                commit()
+                _release(ledger, r, lease)
+            elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
+                _release(ledger, r, lease)
+            else:
+                renewed = _renew(ledger, r, lease)
+                if renewed is None:
+                    _release(ledger, r, lease)
+                else:
+                    # written back at once: a transient sqlite error on a
+                    # later item leaves this list to the resident's retry,
+                    # whose owner fence must match the renewed DB lease
+                    carry[i] = (r, renewed, commit)
+                    keep.append((r, renewed, commit))
+    carry[:] = keep
+
+
+def _background_nightly(ledger, initial_state, stop=None):
+    """Lane 3's first priority: one patient-context unit (up to 15 min)
+    per call, any hour. ``admit`` is re-checked at every unit boundary;
+    the per-patient extraction-complete rule lives in run_due."""
     import mcs_util
 
-    if _SLOT_OVERRIDE != _ELASTIC_SLOT:
+    if _SLOT_OVERRIDE != local_llm.LANES[3]:
         return {"status": "off", "done": 0}
     try:
         cfg = load_config()
         import patient_nightly
-        if (not patient_nightly.options(cfg)["enabled"]
-                or not patient_nightly.night_window(time.time())):
+        if not patient_nightly.options(cfg)["enabled"]:
             return {"status": "off", "done": 0}
     except Exception as exc:
         return {"status": "error", "done": 0, "error": type(exc).__name__}
@@ -5247,49 +5519,27 @@ def _background_nightly(ledger, held, initial_state, stop=None):
         deadline = min(deadline, stop)
 
     def admit():
-        # This checks the full eligible backlog, not the recent-only semantic
-        # priority subset or this worker's shard. Unknown capacity is not idle.
-        if (time.monotonic() >= deadline or held()
+        # Unknown capacity is not idle: memory, disk, breaker, updater
+        # and an unchanged config all have to be proven.
+        if (time.monotonic() >= deadline
                 or mcs_util._updater_state() != initial_state
                 or initial_state[0] or circuit_open_s(ledger)):
             return False
-        current = load_config()
-        if current != cfg:
+        if load_config() != cfg:
             return False
         if not _nightly_memory_available():
             return False
         free = disk_free_mb(ledger)
-        if free is None or free < disk_floor_mb():
-            return False
-        busy = _slots_busy(deadline)
-        if (not busy or busy.get(_ELASTIC_SLOT) is not False
-                or busy.get(local_llm.REALTIME_SLOT) is not False):
-            return False
-        from semantic_policy import JOB_KIND, QC_JOB_KIND, semantic_config
-        scfg, errors = semantic_config(current)
-        if errors:
-            return False
-        admitted = legacy_admissions(ledger, current)
-        if _select_pending(ledger, 1, admitted, None, False)[0]:
-            return False
-        if scfg["mode"] == "off":
-            return True
-        # The resident creates a Jev client only with a positive budget.
-        qc_active = (scfg["extract_qc"] == "annotate"
-                     and scfg["daily_request_budget"] > 0)
-        # Enabled jobs take priority as soon as their backoff ends.
-        return ledger.db.execute(
-            "SELECT 1 FROM fetch_jobs WHERE state='pending' AND next_try<=? "
-            "AND (kind=? OR (kind=? AND ?)) LIMIT 1",
-            (time.time(), JOB_KIND, QC_JOB_KIND, qc_active)).fetchone() is None
+        return free is not None and free >= disk_floor_mb()
 
     try:
         if not admit():
             result = {"status": "deferred", "done": 0}
         else:
-            with local_llm.pinned_slot(_ELASTIC_SLOT):
+            with local_llm.pinned_slot(local_llm.LANES[3]):
                 result = patient_nightly.run_due(
-                    ledger, cfg, deadline=deadline, admit=admit)
+                    ledger, cfg, deadline=deadline, admit=admit,
+                    complete=functools.partial(patient_extraction_complete, ledger))
     except Exception as exc:
         # Nightly failures must not interrupt collection or normal extraction.
         result = {"status": "error", "done": 0, "error": type(exc).__name__}
@@ -5301,11 +5551,16 @@ def _background_nightly(ledger, held, initial_state, stop=None):
 def main() -> int:
     global _SLOT_OVERRIDE
     previous = _SLOT_OVERRIDE
+    turn = os.environ.get(local_llm.TURN_LOCK_ENV)
     try:
         with local_llm.pinned_slot(local_llm.BACKGROUND_SLOT):
             return _main()
     finally:
         _SLOT_OVERRIDE = previous
+        if turn is None:
+            os.environ.pop(local_llm.TURN_LOCK_ENV, None)
+        else:
+            os.environ[local_llm.TURN_LOCK_ENV] = turn
 
 
 def _main() -> int:
@@ -5321,16 +5576,15 @@ def _main() -> int:
                          "polling for new work — use --stop-after for a "
                          "bounded run (ignores budget pacing)")
     ap.add_argument("--workers", type=int, default=1,
-                    help="concurrent LLM calls — all background calls pin "
-                         "to id_slot=BACKGROUND_SLOT (see local_llm), so "
-                         "extra workers only queue server-side on the "
-                         "same slot; kept for a future multi-background-"
-                         "slot layout")
+                    help="concurrent LLM calls — every call of this "
+                         "process pins to its lane's wire slot, so extra "
+                         "workers only queue server-side on that slot")
     ap.add_argument("--stop-after", type=float, default=0,
                     help="with --all: stop after N seconds (bounded run)")
-    ap.add_argument("--slot", type=int, default=None,
-                    help="with --all: pin this drainer's LLM calls to "
-                         "background id_slot 0 or 2")
+    ap.add_argument("--lane", type=int, default=None,
+                    help="with --all: this drainer's backlog lane, 2 or 3 "
+                         "(lane 1 is realtime; lane 3 serves patient "
+                         "context first). Wire id_slot is lane - 1")
     ap.add_argument("--shard", default=None, metavar="I/N",
                     help="with --all: process only message_id %% N == I "
                          "— disjoint shards let two drainers share the "
@@ -5365,7 +5619,7 @@ def _main() -> int:
     if not (0 <= args.batch <= 8):
         print(json.dumps({"ok": False, "error": "bad_batch"}))
         return 2
-    if not args.all and (args.shard or args.slot is not None
+    if not args.all and (args.shard or args.lane is not None
                          or args.stop_after or args.semantic):
         print(json.dumps({"ok": False, "error": "resident options require --all"}))
         return 2
@@ -5380,17 +5634,21 @@ def _main() -> int:
         except ValueError:
             print(json.dumps({"ok": False, "error": "bad_shard"}))
             return 2
-    if args.all and args.slot is None:
-        args.slot = local_llm.BACKGROUND_SLOT
-    if args.slot is not None:
+    if args.all and args.lane is None:
+        args.lane = 2
+    if args.lane is not None:
         global _SLOT_OVERRIDE
-        # T19: a slot past the deployed count goes UNPINNED on the
-        # wire — bound to the measured selection, not a raw range
-        if args.slot not in local_llm.BACKGROUND_SLOTS:
-            print(json.dumps({"ok": False, "error": "bad_slot"}))
+        # T19: an unknown lane would reach the wire out of range and go
+        # UNPINNED — only the two backlog lanes map to a wire slot here
+        if args.lane not in (2, 3):
+            print(json.dumps({"ok": False, "error": "bad_lane"}))
             return 2
-        _SLOT_OVERRIDE = args.slot
-        os.environ["MCS_LLM_SLOT"] = str(args.slot)
+        _SLOT_OVERRIDE = local_llm.lane_slot(args.lane)
+        os.environ["MCS_LLM_SLOT"] = str(_SLOT_OVERRIDE)
+        # lanes 2 and 3 take turns on the GPU (local_llm._turn)
+        os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
+        os.environ[local_llm.TURN_LOCK_ENV] = os.path.join(
+            HOME, "data", "llm_turn.lock")
     print(json.dumps({"event": "extractor_started", "pid": os.getpid(),
                       "extract_version": EXTRACT_VERSION,
                       "source_digests": _LOADED_SOURCE_DIGESTS}),
@@ -5424,42 +5682,63 @@ def _main() -> int:
                 if remaining > 0:
                     time.sleep(remaining)
 
-            total = {"done": 0, "failed": 0, "left": 0}
-            elastic = _SLOT_OVERRIDE == _ELASTIC_SLOT
-            gate: dict = {}
-            semantic_first_until = 0.0
-            from mcs_util import _updater_state
-            nightly_state = _updater_state()
+            def idle(seconds):
+                # wake for the earliest future due job, or at the floor while
+                # a finished result is carried (保存待ち), instead of the fixed poll
+                due = 0.0 if carry else _next_due_in(
+                    led, time.time(), semantic=args.semantic, context=context_lane)
+                if due is not None:
+                    seconds = min(seconds, max(_IDLE_FLOOR_S, due))
+                print(json.dumps({"idle_s": round(seconds, 1),
+                                  "due_in_s": None if due is None else round(due, 1),
+                                  "carried": len(carry), "ts": time.time()}), flush=True)
+                pause(seconds)
 
-            def held() -> bool:
-                """Elastic gate with one log line per hold/resume."""
-                hold = elastic and _elastic_hold(gate, time.monotonic())
-                if hold != gate.get("held", False):
-                    gate["held"] = hold
-                    print(json.dumps({"event": "elastic_hold" if hold
-                                      else "elastic_resume",
-                                      "ts": time.time()}), flush=True)
-                return hold
+            total = {"done": 0, "failed": 0, "left": 0}
+            context_lane = _SLOT_OVERRIDE == local_llm.LANES[3]
+            semantic_first_until = 0.0
+            import mcs_util
+            nightly_state = mcs_util._updater_state()
+            carry: list = []   # finished results waiting for the run lock
 
             while True:
                 if stop is not None and time.monotonic() > stop:
                     total["stopped"] = "stop_after"
                     break
-                if held():
-                    pause(_ELASTIC_POLL_S)
-                    continue
-                # the inner batch must also honor --stop-after: its
-                # budget is the remaining allowance, not a fresh 3600 s
-                # (F13)
-                budget = 3600
-                if stop is not None:
-                    budget = min(budget, stop - time.monotonic())
-                    if budget <= 0:
-                        total["stopped"] = "stop_after"
-                        break
-                # One newest extraction per lane before semantic/QC;
-                # existing claim leases exclude the other worker's item.
                 try:
+                    if context_lane:
+                        # lane 3 serves patient context first; it yields to
+                        # semantic/extraction only when nothing is due. A
+                        # carried result gets its lock attempt first and its
+                        # claim lease renewed, so the context units it waits
+                        # through cannot outlive the claim.
+                        if mcs_util._updater_state() != nightly_state:
+                            # an updater ran since the last pass: old code
+                            # must not write the carried result either
+                            _settle_carry(led, carry, write=False)
+                            return 0
+                        _settle_carry(led, carry, final=False, fence=nightly_state)
+                        nightly = _background_nightly(led, nightly_state, stop)
+                        if nightly.get("status") != "off":
+                            print(json.dumps({"nightly": nightly, "ts": time.time()},
+                                             ensure_ascii=False), flush=True)
+                        if nightly.get("run_lock_lost") == "updated":
+                            _settle_carry(led, carry, write=False)
+                            return 0
+                        if nightly.get("done"):
+                            pause(1)
+                            continue
+                    # the inner batch must also honor --stop-after: its
+                    # budget is the remaining allowance, not a fresh 3600 s
+                    # (F13)
+                    budget = 3600
+                    if stop is not None:
+                        budget = min(budget, stop - time.monotonic())
+                        if budget <= 0:
+                            total["stopped"] = "stop_after"
+                            break
+                    # One newest extraction per lane before semantic/QC;
+                    # existing claim leases exclude the other worker's item.
                     adm, vpol = _admitted()
                     if args.semantic and time.monotonic() < semantic_first_until:
                         recent = _recent_arrivals(led)
@@ -5471,10 +5750,13 @@ def _main() -> int:
                                     vital_policy=vpol,
                                     workers=max(1, min(args.workers, 8)),
                                     shard=shard, batch_k=args.batch,
-                                    admitted_ids=adm)
+                                    admitted_ids=adm,
+                                    write_wait_s=_RESIDENT_WRITE_WAIT_S,
+                                    carry=carry)
+                    carry = r.pop("carry", None) or []  # internal; never logged
                     sem = None
                     ran_semantic = False
-                    if args.semantic and not held():
+                    if args.semantic:
                         sem = _background_semantic(led, stop)
                         print(json.dumps({"semantic": sem,
                                           "ts": time.time()},
@@ -5492,6 +5774,7 @@ def _main() -> int:
                             # the new code instead of re-locking. A plain
                             # reacquire timeout under unchanged code left the
                             # job pending — stay resident.
+                            _settle_carry(led, carry, write=False)
                             return 0
                 except Exception as e:
                     # a transient failure ('database is locked') must not
@@ -5515,23 +5798,13 @@ def _main() -> int:
                 if r["left"] == 0 or (
                         r["done"] == 0 and r["failed"] == 0
                         and r.get("selected", 0) == 0):
-                    if elastic:
-                        nightly = _background_nightly(led, held, nightly_state, stop)
-                        if nightly.get("status") != "off":
-                            print(json.dumps({"nightly": nightly, "ts": time.time()},
-                                             ensure_ascii=False), flush=True)
-                        if nightly.get("run_lock_lost") == "updated":
-                            return 0
-                        if nightly.get("done"):
-                            pause(1)
-                            continue
                     # Queue drained (or only poison-gated/permanent-failure
                     # rows remain — they count in `left` but can never be
                     # selected). Stay resident and poll instead of exiting:
                     # under launchd KeepAlive an exit just means a respawn
                     # every 30 s re-running the full scan forever, and the
                     # poll interval still beats the 10-min tick for picking up newly fetched messages.
-                    pause(120)
+                    idle(120)
                     continue
                 if r["done"] == 0 and (r.get("circuit_open_s")
                                        or r.get("disk_low")):
@@ -5549,15 +5822,16 @@ def _main() -> int:
                 elif r["done"] == 0:
                     # Everything selectable failed or is backed off —
                     # wait for the earliest retry instead of quitting.
-                    nt = _next_retry(led)
+                    nt = _next_retry(led, after=time.time())
                     if nt is None:
                         # no retriable error row (e.g. endpoint-down
                         # failures write none): stay resident and poll
-                        pause(120)
+                        idle(120)
                         continue
-                    pause(min(300.0, max(5.0, nt - time.time())))
+                    idle(min(300.0, max(5.0, nt - time.time())))
                 else:
                     pause(1)  # yield the write window between batches
+            _settle_carry(led, carry, fence=nightly_state)
             print(json.dumps(total, ensure_ascii=False))
         else:
             # Bounded single batch: keep the whole-run lock so the batch

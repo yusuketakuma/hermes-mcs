@@ -4,7 +4,11 @@ Fake loopback only — no real service is touched.  Canonical acceptance
 rejects truncation/empty/malformed output; legacy callers keep their
 existing ``{}`` result while recording bounded integrity metadata.
 """
+import fcntl
 import json
+import os
+import threading
+import time
 
 import pytest
 
@@ -181,8 +185,8 @@ def test_chat_ignores_unrepresentable_timing():
 
 
 def test_llm_chat_pins_background_slot(monkeypatch):
-    """semantic.llm_chat must pin every call to slot 1 (wire id_slot 0)
-    so slot 2 stays reserved for real-time traffic."""
+    """semantic.llm_chat must pin every call to lane 2 (wire id_slot 1)
+    so lane 1 stays reserved for real-time traffic."""
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     seen = {}
 
@@ -193,7 +197,7 @@ def test_llm_chat_pins_background_slot(monkeypatch):
     monkeypatch.setattr(local_llm, "chat", fake_chat)
     assert semantic.llm_chat("hi") == "ok"
     assert seen["extra_payload"] == {"id_slot": local_llm.BACKGROUND_SLOT}
-    assert local_llm.BACKGROUND_SLOT == 0
+    assert local_llm.BACKGROUND_SLOT == local_llm.LANES[2] == 1
 
 
 def test_probe_format_pins_background_slot(monkeypatch):
@@ -325,3 +329,166 @@ def test_probe_urls_follow_endpoint_authority():
 def test_deep_json_response_is_a_protocol_failure():
     deep = b'{"nested":' + b'[' * 10000 + b'0' + b']' * 10000 + b'}'
     assert local_llm.chat("synthetic", request_fn=lambda *args: (200, {}, deep)) is None
+
+
+@pytest.mark.parametrize("lane, wire", [(1, 0), (2, 1), (3, 2)])
+def test_lane_slot_maps_lane_to_wire(lane, wire):
+    assert local_llm.lane_slot(lane) == wire
+
+
+@pytest.mark.parametrize("bad", [0, 4, "2", None, 2.0, True])
+def test_lane_slot_rejects_unknown_lanes(bad):
+    """Anything but the three named lanes would reach llama.cpp out of
+    range and go UNPINNED — fail closed instead."""
+    with pytest.raises(ValueError, match="invalid_llm_lane"):
+        local_llm.lane_slot(bad)
+
+
+def _lock_is_free(path) -> bool:
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def test_turn_without_env_never_touches_a_lock(monkeypatch):
+    monkeypatch.delenv(local_llm.TURN_LOCK_ENV, raising=False)
+    monkeypatch.setattr(local_llm.fcntl, "flock",
+                        lambda *a: pytest.fail("flock without turn lock"))
+    response = local_llm.chat("prompt", request_fn=_fake_request(
+        _response("{}")))
+    assert response["text"] == "{}"
+
+
+def test_turn_serializes_concurrent_chats_and_releases(tmp_path, monkeypatch):
+    """Two backlog callers never decode at once; the flock is dropped
+    after each request so a third taker gets it immediately."""
+    path = str(tmp_path / "turn.lock")
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
+    monkeypatch.setattr(local_llm, "TURN_LOCK_POLL_S", 0.01)
+    spans = []
+
+    def send(endpoint, method, body, timeout, deadline=None):
+        start = time.monotonic()
+        time.sleep(0.05)
+        spans.append((start, time.monotonic()))
+        return 200, {}, json.dumps(_response("{}")).encode()
+
+    def worker():
+        assert local_llm.chat("prompt", request_fn=send)["text"] == "{}"
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(spans) == 2
+    first, second = sorted(spans)
+    assert first[1] <= second[0]
+    assert _lock_is_free(path)
+
+
+def test_turn_releases_lock_when_request_raises(tmp_path, monkeypatch):
+    path = str(tmp_path / "turn.lock")
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
+    err = {}
+    assert local_llm.chat("prompt", request_fn=lambda *a, **k: 1 / 0,
+                          error_out=err) is None
+    assert err == {"kind": "transport"}
+    assert _lock_is_free(path)
+
+
+def test_turn_deadline_while_held_is_busy(tmp_path, monkeypatch):
+    """The deadline passing while another lane holds the turn sends
+    nothing and reports the busy (not-sent, endpoint healthy) class."""
+    path = str(tmp_path / "turn.lock")
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
+    holder = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    try:
+        err = {}
+        assert local_llm.chat(
+            "prompt", deadline=time.monotonic() + 0.1,
+            request_fn=lambda *a, **k: pytest.fail("sent while held"),
+            error_out=err) is None
+        assert err == {"kind": "busy"}
+    finally:
+        os.close(holder)
+    assert _lock_is_free(path)
+
+
+def test_turn_won_with_too_little_time_left_is_busy(tmp_path, monkeypatch):
+    """A turn acquired after the wait ate the time a send needs is not
+    sent (busy), so the request cannot time out mid-decode."""
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
+    err = {}
+    assert local_llm.chat(
+        "prompt", deadline=time.monotonic() + 1.0, turn_min_s=5.0,
+        request_fn=lambda *a, **k: pytest.fail("sent with too little time"),
+        error_out=err) is None
+    assert err == {"kind": "busy"}
+
+
+def test_retire_failed_send_treats_busy_as_never_sent():
+    calls = []
+    broker = type("B", (), {
+        "terminal": lambda self, pid, state, proof=None: calls.append(("terminal", pid, state, proof)),
+        "mark_unknown": lambda self, pid, proof: calls.append(("unknown", pid, proof))})()
+    local_llm._retire_failed_send(broker, 7, "busy", "")
+    local_llm._retire_failed_send(broker, 8, "transport", "")
+    assert calls == [("terminal", 7, "not_sent", "busy"), ("unknown", 8, "transport")]
+
+
+def _hold_turn_for(path, seconds, monkeypatch):
+    """Hold the turn flock on a second descriptor and drop it *seconds*
+    after the FIRST non-blocking lock attempt (same process: flock
+    conflicts across descriptors). Arming the timer at the first attempt,
+    not at return, keeps a slow test thread from shifting the hold out of
+    the probe's window."""
+    holder = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    timer = threading.Timer(seconds, os.close, [holder])
+    real_flock = fcntl.flock
+
+    def flock(fd, operation):
+        if not timer.is_alive() and not timer.finished.is_set() \
+                and operation == (fcntl.LOCK_EX | fcntl.LOCK_NB):
+            timer.start()
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(local_llm.fcntl, "flock", flock)
+    return timer
+
+
+def test_probe_turn_won_with_scraps_is_busy_not_sent(tmp_path, monkeypatch):
+    """A probe that wins the backlog turn with less than its floor left
+    is reported busy (nothing sent) instead of being reaped and cached
+    as "plain" for the cooldown."""
+    path = str(tmp_path / "turn.lock")
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
+    timer = _hold_turn_for(path, 1.0, monkeypatch)
+    try:
+        err = {}
+        assert local_llm.probe_format(
+            "http://127.0.0.1:8080/v1/chat/completions", "m", None,
+            timeout=local_llm.PROBE_TURN_MIN_S + 0.5,
+            request_fn=lambda *a, **k: pytest.fail("probe sent with scraps"),
+            error_out=err) is None
+        assert err == {"kind": "busy"}
+    finally:
+        if timer.is_alive():
+            timer.join()
+        else:
+            timer.cancel()
+    assert _lock_is_free(path)
+
+
+def test_probe_uncontended_turn_is_sent(tmp_path, monkeypatch):
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
+    assert local_llm.probe_format(
+        "http://127.0.0.1:8080/v1/chat/completions", "m", None, timeout=10,
+        request_fn=_fake_request(_response('{"ok": true}'))) == "object"

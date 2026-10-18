@@ -14,7 +14,12 @@ def test_partial_backend_metrics_do_not_invent_missing_zeros():
     assert summary["usage"] == {"prompt_tokens": 11}
     assert summary["timings"] == {"prompt_ms": 3.0}
     assert extract_llm._llm_call_stats([summary]) == {
-        "calls": 1, "prompt_ms": 3.0, "predicted_ms": None, "tokens": None}
+        "calls": 1, "prompt_ms": 3.0, "predicted_ms": None, "tokens": None,
+        "first_calls": 1, "repair_calls": 0, "repair_wins": None,
+        "length_stops": 0, "length_resplits": None, "probe_calls": 0,
+        "format_downgrades": 0, "checkpoint_reuses": None,
+        "prompt_n": None, "cache_n": None, "repair_prompt_n": None,
+        "repair_cache_n": None, "repair_issues": None, "cache_hit_ratio": None}
 
 
 @pytest.mark.parametrize("key", ["prompt_ms", "predicted_ms"])
@@ -37,5 +42,11 @@ def test_statistics_timing_overflow_is_unknown_without_losing_other_fields():
     stats = extract_llm._llm_call_stats([
         {"calls": 1, "timings": {"prompt_ms": sys.float_info.max, "predicted_ms": 2.0}},
         {"calls": 1, "timings": {"prompt_ms": sys.float_info.max, "predicted_ms": 3.0}}])
-    assert stats == {"calls": 2, "prompt_ms": None, "predicted_ms": 5.0, "tokens": None}
+    assert stats == {
+        "calls": 2, "prompt_ms": None, "predicted_ms": 5.0, "tokens": None,
+        "first_calls": None, "repair_calls": None, "repair_wins": None,
+        "length_stops": None, "length_resplits": None, "probe_calls": None,
+        "format_downgrades": None, "checkpoint_reuses": None,
+        "prompt_n": None, "cache_n": None, "repair_prompt_n": None,
+        "repair_cache_n": None, "repair_issues": None, "cache_hit_ratio": None}
     json.dumps(stats, allow_nan=False)

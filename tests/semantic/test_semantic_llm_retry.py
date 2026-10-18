@@ -197,7 +197,34 @@ def _refused_connection(monkeypatch, calls):
     monkeypatch.setattr(local_llm, "chat", refused)
 
 
-@pytest.mark.parametrize("not_sent", [_held_admission, _refused_connection])
+def _turn_busy(monkeypatch, calls):
+    import local_llm
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+
+    def busy(prompt, error_out=None, **kw):
+        calls.append(prompt)
+        if error_out is not None:
+            error_out["kind"] = "busy"
+        return None
+    monkeypatch.setattr(local_llm, "chat", busy)
+
+
+def test_turn_wait_expiry_is_not_an_outage(monkeypatch):
+    """The other backlog lane holding the GPU turn past the deadline is a
+    not-sent class outside the LLM-down reasons: no breaker, no hourly
+    backoff."""
+    import semantic_drain
+    import semantic_runtime
+    calls = []
+    _turn_busy(monkeypatch, calls)
+    with pytest.raises(semantic_runtime.LLMNotSent) as info:
+        semantic.llm_chat("synthetic prompt")
+    assert info.value.stage == "llm_turn_busy"
+    assert info.value.stage not in semantic_drain._LLM_DOWN_REASONS
+    assert calls[-1] == "synthetic prompt"  # a format probe may precede it
+
+
+@pytest.mark.parametrize("not_sent", [_held_admission, _refused_connection, _turn_busy])
 def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
                                                       not_sent):
     """U07-F01: an admission hold or a refused connection means the local
@@ -232,13 +259,17 @@ def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
         db.close()
 
 
-@pytest.mark.parametrize("jev_spent, expected", [(0, "deferred"),
-                                                 (1, "deferred_backoff")])
+@pytest.mark.parametrize("stage, jev_spent, expected", [
+    ("llm_unreachable", 0, "deferred"),
+    ("llm_unreachable", 1, "deferred_backoff"),
+    ("llm_turn_busy", 1, "deferred"),
+])
 def test_not_sent_llm_defers_only_when_no_jev_was_spent(
-        monkeypatch, jev_spent, expected):
+        monkeypatch, stage, jev_spent, expected):
     """A held/unreachable local LLM costs no attempt, but a pass that
     already spent Jev requests backs off hourly so the job cannot
-    re-spend the shared Jev budget every minute while the LLM is down."""
+    re-spend the shared Jev budget every minute while the LLM is down.
+    A lost GPU turn is not an outage: short defer even after Jev spend."""
     import semantic_drain
     import semantic_runtime
 
@@ -249,7 +280,7 @@ def test_not_sent_llm_defers_only_when_no_jev_was_spent(
 
     def inner(*args, **kwargs):
         client.requests_made += jev_spent
-        raise semantic_runtime.LLMNotSent("llm_unreachable")
+        raise semantic_runtime.LLMNotSent(stage)
 
     monkeypatch.setattr(semantic_drain, "_process_job_inner", inner)
     assert semantic_drain._process_job(
@@ -941,3 +972,78 @@ def test_admitted_long_ceiling_retry_held_is_not_sent(monkeypatch, tmp_path):
                        match="llm_admission:held"):
         semantic.llm_chat("抽出 JSON:", timeout=900)
     assert len(calls) == 2
+
+
+def test_probe_blocked_by_turn_is_not_cached_as_plain(monkeypatch):
+    """A probe that never left (GPU turn busy) leaves the format mode
+    unprobed so the next call probes again instead of sending plain
+    for the whole cooldown."""
+    import local_llm
+    monkeypatch.setattr(semantic, "_FMT_MODE", None)
+    monkeypatch.setattr(semantic, "_FMT_TS", 0.0)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(local_llm, "probe_format", lambda *a, **k: None)
+    assert semantic._probe_format("http://127.0.0.1:8080", "synthetic", 4) is None
+    assert semantic._FMT_MODE is None and semantic._FMT_TS == 0.0
+
+
+def _turn_lock_env(monkeypatch, tmp_path, calls):
+    import local_llm
+    path = str(tmp_path / "turn.lock")
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic, "_FMT_MODE", "plain")
+    monkeypatch.setattr(semantic, "_FMT_TS", time.monotonic())
+
+    def send(endpoint, method, body, timeout, deadline=None):
+        calls.append(timeout)
+        return 200, {}, json.dumps(_response('{"facts": []}')).encode()
+    monkeypatch.setattr(local_llm, "bounded_request", send)
+    return path
+
+
+def test_turn_floor_never_exceeds_job_window(tmp_path, monkeypatch):
+    """The turn floor is capped by the live window: an uncontended call
+    on a job budget shorter than the floor is sent, not reported busy
+    (the real lock path, not a stubbed chat)."""
+    calls = []
+    _turn_lock_env(monkeypatch, tmp_path, calls)
+    assert semantic.llm_chat("synthetic JSON:", timeout=45) == '{"facts": []}'
+    assert len(calls) == 1
+
+
+def test_turn_won_with_scraps_of_window_is_busy(tmp_path, monkeypatch):
+    """A turn won with less than half the window left is deferred as
+    busy: the lock, not the model, ate the budget, so no attempt is
+    charged for a request that would be reaped mid-decode."""
+    import fcntl
+    import local_llm
+    import os
+    import semantic_runtime
+    calls = []
+    path = _turn_lock_env(monkeypatch, tmp_path, calls)
+    holder = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    # release 1.4 s after the FIRST lock attempt, not after an arbitrary
+    # point before the call: a slow test thread must not shift the hold
+    # into the 2 s window and let the request through
+    real_flock = fcntl.flock
+    timer = []
+
+    def flock(fd, operation):
+        if not timer and operation == (fcntl.LOCK_EX | fcntl.LOCK_NB):
+            timer.append(threading.Timer(1.4, os.close, [holder]))
+            timer[0].start()
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(local_llm.fcntl, "flock", flock)
+    try:
+        with pytest.raises(semantic_runtime.LLMNotSent) as info:
+            semantic.llm_chat("synthetic JSON:", timeout=2)
+        assert info.value.stage == "llm_turn_busy"
+        assert calls == []
+    finally:
+        if timer:
+            timer[0].join()
+        else:
+            os.close(holder)

@@ -144,11 +144,11 @@ def test_resident_exits_only_when_an_updater_ran(monkeypatch, lost, passes):
     assert calls == [1] * passes
 
 
-@pytest.mark.parametrize("slot", [0, 2])
-def test_second_worker_runs_semantic_on_its_own_slot(monkeypatch, tmp_path, slot):
+@pytest.mark.parametrize("lane", [2, 3])
+def test_second_worker_runs_semantic_on_its_own_slot(monkeypatch, tmp_path, lane):
     """main() pins every resident to BACKGROUND_SLOT for extraction; the
-    semantic pass must follow the validated --slot lane instead of
-    queueing on slot 0 behind the other worker."""
+    semantic pass must follow the validated --lane (wire id lane - 1)
+    instead of queueing on lane 2 behind the other worker."""
     import semantic_drain as drain
     seen = []
     lock = str(tmp_path / "run.lock")
@@ -162,10 +162,10 @@ def test_second_worker_runs_semantic_on_its_own_slot(monkeypatch, tmp_path, slot
     monkeypatch.setattr(drain, "run_due", run_due)
     calls = []
     _resident(monkeypatch, calls, extract_llm._background_semantic,
-              argv_extra=("--slot", str(slot)))
+              argv_extra=("--lane", str(lane)))
     with pytest.raises(KeyboardInterrupt):
         extract_llm.main()
-    assert seen == [slot]
+    assert seen == [local_llm.LANES[lane]]
     assert "MCS_LLM_SLOT" not in os.environ          # main() restored the process
 
 
