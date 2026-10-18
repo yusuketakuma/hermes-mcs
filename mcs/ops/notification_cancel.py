@@ -124,9 +124,6 @@ def apply(root, request):
     if (data.is_symlink() or (data / "ledger.db").is_symlink()
             or archive.parent.is_symlink() or archive.is_symlink()):
         raise ValueError("unsafe_data_path")
-    for marker in ("update_in_progress.marker", "restore_pending.json"):
-        if os.path.lexists(data / marker):
-            raise ValueError("lifecycle_operation_pending")
     locks = []
     try:
         for name in ("update.lock", "run.lock"):
@@ -134,6 +131,9 @@ def apply(root, request):
             if fd is None:
                 raise ValueError("operation_lock_held")
             locks.append(fd)
+        for marker in ("update_in_progress.marker", "restore_pending.json"):
+            if os.path.lexists(data / marker):
+                raise ValueError("lifecycle_operation_pending")
         _workers_stopped(data)
         with closing(sqlite3.connect((data / "ledger.db").resolve().as_uri() + "?mode=rw",
                                      uri=True, timeout=1)) as db, db:

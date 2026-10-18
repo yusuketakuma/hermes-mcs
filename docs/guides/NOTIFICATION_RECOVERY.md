@@ -59,8 +59,9 @@ CLIは`version`・`cmd`・`human_confirmed`を付け、既存のcommand inboxへ
 配送結果不明の通知自体は拒否します。過去の別通知に結果不明の部品があっても、その記録は変更しません。
 
 ```sh
-python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
-  plan --event-id EVENT_ID > /absolute/private/cancel-plan.json
+(umask 077
+ python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
+   plan --event-id EVENT_ID > /absolute/private/cancel-plan.json)
 # 通知ワーカーを正規の手順で停止し、停止を確認してから実行する。
 python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
   --plan /absolute/private/cancel-plan.json --command-id COMMAND_UUID \

@@ -212,6 +212,27 @@ def test_lifecycle_markers_preserve_the_queue(case, marker):
     assert _snapshot(case.led.db) == before
 
 
+@pytest.mark.parametrize("marker", ["restore_pending.json", "update_in_progress.marker"])
+def test_lifecycle_marker_created_during_lock_acquisition_preserves_queue(case, monkeypatch, marker):
+    request = _request(case)
+    acquire = cancel.acquire_run_lock
+    def lifecycle_race(path):
+        fd = acquire(path)
+        if Path(path).name == "run.lock":
+            (case.data / marker).write_text("{}")
+        return fd
+    monkeypatch.setattr(cancel, "acquire_run_lock", lifecycle_race)
+    before = _snapshot(case.led.db)
+    with pytest.raises(ValueError, match="lifecycle_operation_pending"):
+        cancel.apply(case.root, request)
+    assert _snapshot(case.led.db) == before
+    assert not (case.data / "notification_cancellations").exists()
+    monkeypatch.setattr(cancel, "acquire_run_lock", acquire)
+    (case.data / marker).unlink()
+    cancel.apply(case.root, request)  # both locks were released on rejection
+    _assert_cancelled(case)
+
+
 @pytest.mark.parametrize("lock_name", ["update.lock", "run.lock"])
 def test_existing_lock_refuses_cancellation_without_modifying_queue(case, lock_name):
     request = _request(case)
