@@ -1271,8 +1271,8 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     every covered attachment as individually journaled parts. An update
     names, per body chunk and unchanged attachment, the message that
     already carries it (``prior_remote_id``) so each stays one post.
-    A post in ``face_mids`` is shown whole on the card: it gets no body
-    chunk, and its earlier thread chunks are rewritten as collected."""
+    A post in ``face_mids`` is shown whole on the card: only its new-reply
+    notice remains in the thread; earlier body chunks become collected."""
     parts = spec["parts"]
     reused_card = None
     if card["transport"] == "lineworks" and spec["op"] == "update":

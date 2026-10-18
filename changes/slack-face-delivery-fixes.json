@@ -7,12 +7,15 @@
     "薬剤ボタンのスレッド確認情報は、配信済みカードと同じルートのスレッド配信記録に基づいて登録し、復旧時も同じ証跡で復元します。",
     "カード内原文の後続返信には既存のheader部品・配送台帳を用いた短い案内を残します。原文の二重投稿や新しい配送状態は追加しません。",
     "分割済み本文の配送対象は部品名から確認し、カードにだけ表示された投稿を古い結合本文に含まれると誤認しません。本文表示の欠落の修正であり、原本DBのデータ消失はありません。旧結合本文の互換経路を維持します。",
-    "Slackテストは実際の既定配置で実行し、旧スレッド本文の機構を調べるテストだけ明示的に旧配置を選びます。"
+    "Slackテストは実際の既定配置で実行し、旧スレッド本文の機構を調べるテストだけ明示的に旧配置を選びます。",
+    "カードのブロック予算は折りたたみ内部も含めて計算し、超過する投稿の全文は既存のスレッド配送へ回します。利用ガイドと画面例の説明も、新着案内・長文の配送先に合わせました。"
   ],
   "refs": [
     "adapters/slack/delivery.py",
     "mcs/notify/notify_cards.py",
     "tests/adapters/slack/test_slack_face_posts.py",
-    "tests/adapters/slack/test_slack_delayed_reply_flow.py"
+    "tests/adapters/slack/test_slack_delayed_reply_flow.py",
+    "mcs/notify/present_slack.py",
+    "docs/guides/USER_GUIDE.md"
   ]
 }

@@ -45,7 +45,7 @@ ACCENT_URGENT = False
 
 # Thread cards carry each shown post's stamp row and folded original on
 # the card itself (owner 2026-10-18); the thread keeps attachments, 💊
-# answers and any post the card cannot hold.
+# answers, new-reply notices and any post the card cannot hold.
 BODY_ON_FACE = True
 FACE_ORIGINAL_MAX = 30000     # one collapsible container: 10 sections of 3000
 BLOCK_MAX = 50                # conservative app budget, including container children

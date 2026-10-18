@@ -39,7 +39,7 @@ python3 scripts/development/readme_release.py --check
 2026-10-17の`01-overview`は要約・スタンプ・本文を並べるため高さを1200pxへ広げ、
 macOS標準Quick LookとImageMagickで1650×1800pxのPNGを描画した。
 2026-10-17のボタン再編では`03-actions`と`07-patient-summary`を更新した。
-2026-10-18のカード配置変更（要約・スタンプ・原文の折りたたみをカードへ、添付だけスレッドへ）では`01-overview`・`02-notification`・`03-actions`を更新し、`02-notification`の高さを1060pxへ広げ、同じQuick Look＋ImageMagickの手順で描画した。
+2026-10-18のカード配置変更（要約・スタンプ・原文の折りたたみをカードへ、添付・後から届いた返信の新着案内・収まらない本文をスレッドへ）では`01-overview`・`02-notification`・`03-actions`を更新し、`02-notification`の高さを1060pxへ広げ、同じQuick Look＋ImageMagickの手順で描画した。
 Inkscapeのない環境では一時コピーのSVG viewportだけを正方形へ広げてQuick Lookで描画し、
 元の1650px幅・縦横比の範囲をImageMagickで切り出した。SVG本体の配置は変えず、
 `verify_png()`と`asset_hashes()`でPNGの完結性・寸法・SVG/PNGのハッシュを検査・同期した。
