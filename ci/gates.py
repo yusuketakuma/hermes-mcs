@@ -349,11 +349,20 @@ def gate_snapshot_readonly() -> list[str]:
             bad.append(f"{path.name}:{line} write-mode Ledger(")
         if path.name in _SQLITE_RW_OK:
             continue
-        for node in ast.walk(ast.parse(text)):
+        tree = ast.parse(text)
+        # Only the locked apply function may write; the cancellation plan
+        # remains subject to the same read-only checks as every other view.
+        operator_writes = {node for fn in tree.body
+                           if path == MCS / "ops/notification_cancel.py"
+                           and isinstance(fn, ast.FunctionDef) and fn.name == "apply"
+                           for node in ast.walk(fn)}
+        for node in ast.walk(tree):
             if not (isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
                     and isinstance(node.func.value, ast.Name)
                     and node.func.value.id == "sqlite3" and node.func.attr == "connect"):
+                continue
+            if node in operator_writes:
                 continue
             uri_enabled = any(k.arg == "uri" and isinstance(k.value, ast.Constant)
                               and k.value.value is True for k in node.keywords)
@@ -414,6 +423,11 @@ def gate_writer_lock() -> list[str]:
             else:
                 continue
             if callee == "Ledger":
+                ledger_sites.append((name, node.lineno))
+            if (path == MCS / "ops/notification_cancel.py" and name == "apply" and callee == "connect"
+                    and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "sqlite3"):
                 ledger_sites.append((name, node.lineno))
             if name is not None and isinstance(node.func, ast.Name):
                 calls[name].add(callee)
