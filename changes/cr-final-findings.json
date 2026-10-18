@@ -1,0 +1,20 @@
+{
+  "category": "fixed",
+  "title": "集計期間と更新前確認の不一致を修正",
+  "summary": "日次サマリーで全角の日数指定が集計期間へ反映されない問題と、Hermesの移行が不要な更新を手元のブランチ・変更で停止してしまう問題を修正します。Slackの出典URLも共通の検証を通し、不正な形式はリンクを付けず表示します。",
+  "upgrade": "更新後は使用中のgatewayまたは独立接続と通知workerへ新しいコードを反映してください。Hermesの実際の移行、明示したcheckout保持の照合、Gitの隠し変更の検出は引き続き適用します。通知先・取得範囲・モデル・処理枠・抽出世代・DB形式は変更しません。",
+  "details": [
+    "日数と施設等のキー分離を共通化し、施設名の表記と従来の数値検証を保持する。",
+    "Hermes固定版の更新判定を事前確認と移行計画で共有する。HEADと隠しindexは常に照合し、ブランチ・通常の手編集・未知版による停止は移行が必要な場合に限る。明示KEEP・復旧の保護は維持する。",
+    "SlackのURL検証をカード・出典・フッターで共用し、解析不能なURLを含めて本文の表示を保持する。",
+    "Slackの代替本文と測定値テストを実値で照合し、仕様の過去世代と現在世代・導入ガイドの版別受入票を明確にする。"
+  ],
+  "refs": [
+    "mcs/notify/notify_digest.py",
+    "mcs/ops/mcs_update.py",
+    "adapters/slack/cards.py",
+    "tests/notify/test_notify_digest.py",
+    "tests/ops/test_python314_runtime_migration.py",
+    "tests/adapters/slack/test_patient_context_blocks.py"
+  ]
+}

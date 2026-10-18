@@ -22,7 +22,8 @@ def test_card_face_carries_the_fold_and_the_thread_stays_empty(led):
     folds = [b for b in card["blocks"] if b.get("type") == "container"]
     assert [b["title"]["text"] for b in folds] == ["原文（6字）", "原文（2字）"]
     assert folds[0]["child_blocks"][0]["text"]["text"] == "合成の元投稿"
-    assert "原文" not in json.dumps(card.get("text", ""))
+    # the fallback text may say 「原文・要約処理待ち」; the fold title and body must not leak into it
+    assert "原文（" not in str(card.get("text") or "") and "合成の元投稿" not in str(card.get("text") or "")
     assert w.client.thread_posts == []
 
 

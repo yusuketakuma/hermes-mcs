@@ -91,7 +91,9 @@ def test_once_per_day_after_the_hour(led):
     assert first["since"] == T - 86400 and second["since"] == first["until"]
 
 
-@pytest.mark.parametrize("scope,days", [("days:3", 3), ("日数:1", 1)])
+@pytest.mark.parametrize("scope,days", [
+    ("days:3", 3), ("日数:1", 1), ("日数：３", 3), ("ＤＡＹＳ：３", 3),
+])
 def test_daily_explicit_days_controls_content_and_recorded_window(led, scope, days):
     _patient(led)
     _seen(led, 100, T - 2 * 86400)
@@ -101,6 +103,24 @@ def test_daily_explicit_days_controls_content_and_recorded_window(led, scope, da
     assert payload["since"] == T - days * 86400
     assert ("新着 1件" in payload["text"]) is (days == 3)
     assert all(e["route"] == "text" for e in _digests(led))
+
+
+@pytest.mark.parametrize("days", ["days:3", "日数：３", "ｄａｙｓ:３", "ＤＡＹＳ：3"])
+@pytest.mark.parametrize("renderer", ["daily_parts", "build_text"])
+def test_daily_fullwidth_days_selects_window_without_normalizing_station(led, days, renderer):
+    for pid, station in ((1, "Ａ棟：東"), (2, "A棟:東")):
+        _patient(led, pid)
+        led.db.execute("UPDATE patients SET station_name=? WHERE project_id=?", (station, pid))
+    _seen(led, 100, T - 2 * 86400)
+    _seen(led, 101, T - 4 * 86400)  # outside the requested three days
+    _seen(led, 102, T - 2 * 86400, pid=2)  # a different, ASCII-named station
+    cfg = {**ON, "daily_digest": {**ON["daily_digest"], "scope": f"施設：Ａ棟：東 {days}"}}
+    result = getattr(notify_digest, renderer)(led.db, cfg, T - 86400, T)
+    text = notify_digest.parts_text(result, "plain") if isinstance(result, dict) else result
+    assert "対象: 施設 Ａ棟：東 1人・直近3日" in text
+    assert "新着 1件" in text
+    assert "・project 1 1件" in text
+    assert "project 2" not in text
 
 
 def test_body_is_built_outside_the_write_lock(led, monkeypatch):

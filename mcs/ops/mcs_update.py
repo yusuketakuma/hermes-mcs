@@ -655,7 +655,7 @@ def precheck_local(cfg: dict) -> list[str]:
 def _migration_checkout_problem(cfg: dict) -> str | None:
     """Refuse before merge what install.sh would refuse mid-migration."""
     try:
-        _venv, checkout = _runtime_venv(cfg)
+        venv, checkout = _runtime_venv(cfg)
     except (ValueError, KeyError, OSError):
         return None          # the runtime gate already reports a bad selection
     if checkout is None:
@@ -665,17 +665,25 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
                               text=True, timeout=30)
     try:
         head = git("rev-parse", "HEAD")
-        branch = git("symbolic-ref", "-q", "HEAD")
-        dirty = git("status", "--porcelain", "--untracked-files=no")
         index = git("ls-files", "-v", "-z")
     except (OSError, subprocess.TimeoutExpired):
         return "hermes_checkout_unreadable"
-    if head.returncode != 0 or dirty.returncode != 0 or index.returncode != 0 \
-            or branch.returncode not in (0, 1):
+    if head.returncode != 0 or not HEX_RE.fullmatch(head.stdout.strip()) or index.returncode != 0:
         return "hermes_checkout_unreadable"
-    if dirty.stdout.strip() or any(not row.startswith("H ") for row in index.stdout.split("\0") if row):
+    if any(not row.startswith("H ") for row in index.stdout.split("\0") if row):
         return "hermes_checkout_branch_or_dirty"
     keep = os.environ.get(KEEP_CHECKOUT_ENV)
+    if not keep and not _needs_migration(venv) and not _refresh_runtime_pin(venv, head.stdout.strip()):
+        return None
+    try:
+        branch = git("symbolic-ref", "-q", "HEAD")
+        dirty = git("status", "--porcelain", "--untracked-files=no")
+    except (OSError, subprocess.TimeoutExpired):
+        return "hermes_checkout_unreadable"
+    if dirty.returncode != 0 or branch.returncode not in (0, 1):
+        return "hermes_checkout_unreadable"
+    if dirty.stdout.strip():
+        return "hermes_checkout_branch_or_dirty"
     if keep:
         # the operator confirmed this exact checkout: kept as is, never moved
         # (decided before the pin rules, exactly as install.sh does)
@@ -1754,6 +1762,14 @@ def _needs_migration(venv: str) -> bool:
     return found is not None and found[1] < RUNTIME_MIN
 
 
+def _refresh_runtime_pin(venv: str, head: str | None) -> bool:
+    """Whether a supported runtime needs dependencies from the new Hermes pin."""
+    if head not in HERMES_PREVIOUS_PINS or head == HERMES_PIN or os.environ.get(KEEP_CHECKOUT_ENV):
+        return False
+    found = _runtime_version(venv)
+    return found is not None and RUNTIME_MIN <= found[1] < (3, 15)
+
+
 def _runtime_python(venv: str) -> str | None:
     """The rebuilt venv's interpreter when it reports >= RUNTIME_MIN."""
     found = _runtime_version(venv)
@@ -1789,11 +1805,7 @@ def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
         if head.returncode != 0 or not HEX_RE.fullmatch(head.stdout.strip()):
             raise UpdateError("runtime_migration_checkout_unreadable")
         head_sha = head.stdout.strip()
-    found = _runtime_version(venv) if not needs_python else None
-    refresh_pin = (head_sha in HERMES_PREVIOUS_PINS and head_sha != HERMES_PIN
-                   and not os.environ.get(KEEP_CHECKOUT_ENV)
-                   and found is not None and RUNTIME_MIN <= found[1] < (3, 15))
-    if not needs_python and not refresh_pin:
+    if not needs_python and not _refresh_runtime_pin(venv, head_sha):
         return
     if held_fd is None and not os.environ.get(RUN_LOCK_FD_ENV, "").isdecimal():
         # An older updater parent cannot hand over run.lock: roll back and

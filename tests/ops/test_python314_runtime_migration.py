@@ -591,7 +591,7 @@ def test_supported_previous_pin_refresh_is_journaled_and_restores_old_dependenci
 
 
 @pytest.mark.parametrize("case, expected", [
-    ("current", None), ("unknown", "hermes_checkout_unknown_commit"),
+    ("current", None), ("unknown", None),
     ("branch", "hermes_checkout_branch_or_dirty"), ("dirty", "hermes_checkout_branch_or_dirty"),
     ("keep", None), ("mismatched_keep", "keep_hermes_checkout_mismatch"),
     ("unready_keep", "keep_hermes_checkout_python_unsupported"),
@@ -633,11 +633,12 @@ def test_supported_runtime_checkout_guards_and_idempotence(
 
 def test_supported_runtime_precheck_refuses_unreadable_branch_ref(updater, tmp_path, monkeypatch):
     checkout = tmp_path / "hermes-agent"
-    head, _ = _checkout(checkout)
+    head, target = _checkout(checkout)
     venv = _venv(checkout)
     (venv / "synthetic-deps").write_text("installed dependencies")
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
-    monkeypatch.setattr(updater, "HERMES_PIN", head)
+    monkeypatch.setattr(updater, "HERMES_PIN", target)
+    monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS", frozenset({head}))
     monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
     run = updater.subprocess.run
     calls = []
@@ -651,7 +652,9 @@ def test_supported_runtime_precheck_refuses_unreadable_branch_ref(updater, tmp_p
     monkeypatch.setattr(updater.subprocess, "run", unreadable_branch)
     assert updater._migration_checkout_problem({}) == "hermes_checkout_unreadable"
     assert any(argv[3:4] == ["symbolic-ref"] for argv in calls)
-    assert all(argv[3] in ("rev-parse", "symbolic-ref", "status", "ls-files") for argv in calls)
+    assert all(argv[0] in ("git", str(venv / "bin/python3")) for argv in calls)
+    assert all(argv[3] in ("rev-parse", "symbolic-ref", "status", "ls-files")
+               for argv in calls if argv[0] == "git")
     assert (checkout / "f").read_text() == "0"
     assert (venv / "synthetic-deps").read_text() == "installed dependencies"
     assert not list(checkout.glob("venv.pre-python314*"))
@@ -730,3 +733,34 @@ def test_unreadable_hermes_index_stops_before_environment_changes(
     assert (venv / "bin/python3").read_text().endswith("echo 3 14\n")
     assert (backup / "dependencies").read_text() == "synthetic original dependencies"
     assert not list(checkout.glob("venv.python314-aside*"))
+
+
+@pytest.mark.parametrize("pin", ["current", "unknown"])
+@pytest.mark.parametrize("local_edit", ["branch", "dirty"])
+def test_nonmigrating_checkout_is_preserved_by_precheck_and_plan(
+        updater, tmp_path, monkeypatch, pin, local_edit):
+    """A pure MCS update must not impose the installer migration contract."""
+    from ops_testkit import _git
+
+    checkout = tmp_path / "hermes-agent"
+    head, target = _checkout(checkout)
+    venv = _venv(checkout)
+    (venv / "dependencies").write_text("installed synthetic dependencies")
+    monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(updater, "HERMES_PIN", head if pin == "current" else target)
+    monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS", frozenset())
+    monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
+    if local_edit == "branch":
+        _git(checkout, "checkout", "-q", "-b", "local/retained")
+    else:
+        (checkout / "f").write_text("synthetic manual edit")
+    before = {p: (p.read_bytes(), p.stat().st_ino)
+              for p in (checkout / "f", venv / "bin/python3", venv / "dependencies")}
+    assert updater._migration_checkout_problem({}) is None
+    state = _state(updater)
+    updater._plan_runtime_migration(state, held_fd=5)
+    assert "runtime_migration" not in state["applying"]
+    assert state["applying"]["reinstall"] is False
+    assert {p: (p.read_bytes(), p.stat().st_ino) for p in before} == before
+    assert _git(checkout, "rev-parse", "HEAD").stdout.strip() == head
+    assert not list(checkout.glob("venv.pre-python314*"))

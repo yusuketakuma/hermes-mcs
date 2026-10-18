@@ -1,4 +1,6 @@
 """Slack shows the patient-context views as Block Kit; other lists keep their text form."""
+import pytest
+
 from adapters.slack.cards import context_list_blocks
 
 VIEW = {"layout": "patient_context", "title": "合成患者 — 患者さんの全体像（1/2ページ）",
@@ -36,3 +38,22 @@ def test_source_date_is_a_link_to_the_room():
     linked = [b for b in blocks if b["type"] == "context" and b["elements"][0]["type"] == "mrkdwn"]
     assert linked[0]["elements"][0]["text"] == "<https://www.medical-care.net/projects/medical/1|10/01>"
     assert linked[0]["elements"][1] == {"type": "plain_text", "text": "看護師 #1"}
+
+
+@pytest.mark.parametrize("url", [
+    "http://www.medical-care.net/projects/medical/1",      # not https
+    "https://www.medical-care.net/a|b",                    # breaks <url|label>
+    "https://www.medical-care.net/a b",                    # whitespace
+    "https://www.medical-care.net/a\x01b",                 # control character
+    "https://www.medical-care.net/<x>",                    # markup delimiters
+    "https:///projects/medical/1",                         # no host
+    "https://[::1",                                        # urlsplit raises ValueError
+    "javascript:alert(1)", "", None, 7,
+])
+def test_unsafe_source_url_falls_back_to_the_plain_date_line(url):
+    view = {**VIEW, "items": [{**VIEW["items"][0], "url": url}]}
+    blocks = context_list_blocks(view, lambda pid: pid == 1)
+    contexts = [b for b in blocks if b["type"] == "context"]
+    assert all(e["type"] == "plain_text" for b in contexts for e in b["elements"])
+    assert contexts[-1]["elements"][0]["text"] == "10/01 看護師 #1"
+    assert str(url) not in str(blocks) or url == ""

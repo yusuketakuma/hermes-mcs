@@ -63,15 +63,18 @@ def settings(cfg) -> dict | None:
 _FULLWIDTH_NUM = str.maketrans("０１２３４５６７８９，", "0123456789,")
 
 
+def _scope_token(tok):
+    cut = min((i for i in (tok.find(":"), tok.find("：")) if i >= 0), default=len(tok))
+    # Normalize the key only; station names after the first colon stay as typed.
+    return unicodedata.normalize("NFKC", tok[:cut]).lower(), tok[cut + 1:]
+
+
 def parse_scope(text) -> dict | str:
     """``all mine station:X project:1,2 days:3`` -> filter dict, or a JA
     error string. Kinds combine with AND; repeated station/project OR."""
     out = {"mine": False, "stations": [], "projects": [], "days": 1}
     for tok in str(text or "").split():
-        # an IME's full-width colon/digits/comma read as the help text's ASCII forms
-        cut = min((i for i in (tok.find(":"), tok.find("：")) if i >= 0), default=len(tok))
-        key, val = tok[:cut], tok[cut + 1:]   # the station name after the first colon stays as typed
-        key = unicodedata.normalize("NFKC", key).lower()
+        key, val = _scope_token(tok)
         # only full-width digits and comma: NFKC would also turn ² into 2
         num = val.translate(_FULLWIDTH_NUM)
         if key in ("all", "全体") and not val:
@@ -573,7 +576,7 @@ def _daily_since(cfg, since, until):
     scope = (settings(cfg) or {}).get("scope", "all")
     flt = parse_scope(scope)
     if not isinstance(flt, str) and any(
-            tok.partition(":")[0].lower() in ("days", "日数")
+            _scope_token(tok)[0] in ("days", "日数")
             for tok in scope.split()):
         return until - flt["days"] * DAY_S
     return since

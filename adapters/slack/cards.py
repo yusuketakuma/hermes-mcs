@@ -134,6 +134,19 @@ _HEADER_MAX = 150              # Slack header block text limit
 _ANSWER_BLOCKS = 49            # 50 per message, one kept for the navigation row
 
 
+def _safe_url(url) -> bool:
+    """True only for an https URL with a host that cannot break out of a
+    mrkdwn <url|label> link: no whitespace, control characters or <>|."""
+    if not isinstance(url, str) or not url:
+        return False
+    try:
+        parsed = urlsplit(url)
+        return bool(parsed.scheme == "https" and parsed.netloc and parsed.hostname
+                    and not any(c.isspace() or ord(c) < 32 or c in "<>|" for c in url))
+    except ValueError:                 # e.g. an unbalanced IPv6 bracket
+        return False
+
+
 def context_list_blocks(view: dict, allowed) -> list | None:
     """Block Kit for a private patient-context view: title header, the
     status/participants lines as context, a bold heading per group, each
@@ -162,16 +175,17 @@ def context_list_blocks(view: dict, allowed) -> list | None:
         quotes = "\n".join(str(q) for q in item.get("quotes") or [] if q)
         if quotes:
             blocks += _sections(quotes)
-        if item.get("date") and item.get("url"):
+        if item.get("date") and _safe_url(item.get("url")):
             # the date opens the MCS room; the rest is plain_text so * _ ~ ` stay literal
-            link = str(item["url"])
+            link = item["url"]
             text = f"<{escape(link, quote=False)}|{escape(str(item['date']), quote=False)}>"
             rest = _contexts(str(item.get("source_rest") or ""))
             elements = [{"type": "mrkdwn", "text": text[:_CONTEXT_MAX]}]
             blocks.append({"type": "context", "elements": elements + (rest[0]["elements"] if rest else [])})
             blocks += rest[1:]
-        elif item.get("source"):
-            blocks += _contexts(str(item["source"]))
+        elif item.get("source") or item.get("date"):
+            # no link for an unsafe URL: the date stays readable as plain text
+            blocks += _contexts(str(item.get("source") or item["date"]))
     if not items:
         blocks += _sections(str(view.get("empty") or "該当なし"))
     notes = "\n".join(str(x) for x in view.get("notes") or [] if x)
@@ -242,7 +256,7 @@ def _link_context(text):
     """A footer line carrying 「MCSで開く https://…」 (the urgent notice) as
     a mrkdwn context with a real link; None keeps the plain_text form."""
     found = re.search(r"MCSで開く (https://[^\s<>|]+)", text)
-    if not found or urlsplit(found[1]).scheme != "https" or not urlsplit(found[1]).hostname:
+    if not found or not _safe_url(found[1]):
         return None
     link = f"<{escape(found[1], quote=False)}|MCSで開く>"
     mrkdwn = (escape(text[:found.start()], quote=False) + link
@@ -295,9 +309,7 @@ def render(spec, names=None):
     for button in links:
         # a text link, not a button — it costs no row on mobile
         url = button["url"]
-        parsed = urlsplit(url)
-        if parsed.scheme != "https" or not parsed.netloc or not parsed.hostname \
-                or any(c.isspace() or ord(c) < 32 or c in "<>|" for c in url):
+        if not _safe_url(url):
             raise ValueError("slack_link_url")
         label = escape(button["label"].replace("|", "｜"), quote=False)
         link = f"<{escape(url, quote=False)}|{label}>"
