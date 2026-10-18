@@ -912,12 +912,14 @@ def _plan_attachments(db, shown) -> list:
     return out
 
 
-def _announced_ids(db, card) -> set:
+def _announced_ids(db, card, *, event_ids=None) -> set:
     """Message ids a still-pending intent announces on this card."""
     covered = set()
     for r in db.execute(
-            "SELECT coverage FROM notification_intent_cards "
+            "SELECT event_id,coverage FROM notification_intent_cards "
             "WHERE card_id=? AND state='pending'", (card["card_id"],)):
+        if event_ids is not None and r["event_id"] not in event_ids:
+            continue
         try:
             cov = json.loads(r["coverage"] or "[]")
         except (ValueError, TypeError, RecursionError):
@@ -1322,7 +1324,9 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     verified_body, verified_attachments = _same_thread_delivered_parts(db, card) if update else ({}, {})
     present = presenter(card["transport"])
     editable = present.EDITABLE
-    announced = _announced_ids(db, card) if update and face_mids else set()
+    slack_thread = card["transport"] == "slack" and card["kind"] == "thread"
+    announced = (_announced_ids(db, card, event_ids=set(spec["delivery"]["intent_event_ids"]))
+                 if update and slack_thread else set())
     if hasattr(present, "overflow"):
         keyed.extend(present.overflow(parts, _split_body_chunks))
     for key, mids in _body_groups(db, card, planned, posts):
@@ -1397,6 +1401,12 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 # another same-text post can never stand in for it.
                 entry["prior_remote_id"] = proven[0]
                 entry["edit_only"] = True
+        if slack_thread:
+            post = re.fullmatch(r"m:([1-9][0-9]*)(?::header)?#[1-9][0-9]*", key)
+            # An edit/page move can create a first thread part beside a new
+            # intent. Only that intent's source posts may notify the channel.
+            entry["broadcast"] = bool(post and int(post[1]) in announced
+                                      and not entry.get("prior_remote_id"))
         manifest.append(entry)
         idx += 1
     captions = _attachment_captions(db, card, attachments)

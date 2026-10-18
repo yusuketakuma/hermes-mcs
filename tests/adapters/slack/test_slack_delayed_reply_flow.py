@@ -63,3 +63,32 @@ def test_delayed_reply_is_new_in_original_thread_and_broadcast_once(led, monkeyp
     asyncio.run(_granted_card(world.worker, led, world.root))
     assert len(world.client.thread_posts) == before + expected
     assert sum(bool(p.get("reply_broadcast")) for p in world.client.thread_posts[before:]) == 1
+
+
+def test_new_reply_broadcast_excludes_old_face_posts_moving_to_thread(led, monkeypatch):
+    import present_slack
+    clock = [NOW]
+    monkeypatch.setattr(notify_cards.time, "time", lambda: clock[0])
+    monkeypatch.setattr(present_slack, "FACE_ORIGINAL_MAX", 20)
+    _seed_thread(led)
+    _dispatch(led, _intent(led), SLACK, now=clock[0])
+    world = _mkworld(led)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    assert not world.client.thread_posts
+
+    clock[0] += 3 * 86400
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text=?,content_hash=? WHERE message_id=100",
+                       ("GROWN_OLD_ORIGINAL" * 5, "c" * 64))
+    _msg(led, 202, parent=100, body="LATE_NEW_REPLY", ts=int(clock[0]))
+    _dispatch(led, _intent(led, payload={"message_ids": [202]}), SLACK, now=clock[0])
+    spec = json.loads(_latest_render(led)["spec_json"])
+    notify_cards.publish_flags(SLACK, str(world.root))
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    bodies = [p for p in spec["parts"]["manifest"] if p["kind"] == "body_part"]
+    text_by_name = {p["name"]: text for p, text in zip(bodies, spec["parts"]["thread_body_parts"], strict=True)}
+    assert len(world.client.thread_posts) == 6
+    broadcasts = [p for p in world.client.thread_posts if p.get("reply_broadcast")]
+    assert [p["text"] for p in broadcasts] == [text_by_name["m:202:header#1"]]
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    assert len(world.client.thread_posts) == 6
