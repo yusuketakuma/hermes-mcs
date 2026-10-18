@@ -1762,7 +1762,11 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
         AND NOT ({eligible}) AND {scope}
       ORDER BY {order} LIMIT ?
     """, (now, *kinds, JOB_KIND, share)).fetchall() if share else []
-    return list(arrivals), list(backfill), {"turn": turn_next}
+    mutation = {"turn": turn_next}
+    contested = arrivals or backfill
+    if turn_next and contested:
+        mutation["turn_job_id"] = contested[0]["job_id"]
+    return list(arrivals), list(backfill), mutation
 
 
 _BACKLOG_INVALIDATE_S = 300.0
@@ -1821,6 +1825,8 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
     """Select active patients first, retaining each cohort's bounded fairness."""
     active = _select_due_class(
         ledger, lane, kinds, qc_active, max_jobs, long_defers, False)
+    # shortcut: skipped active candidates may leave capacity unused;
+    # add bounded refill only if full utilization is required.
     remaining = max_jobs - len(active[0])
     if remaining <= 0:
         return active
@@ -1829,7 +1835,7 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
     due, qc_jobs, arrivals, backfill = [
         a + b for a, b in zip(active[:4], archived[:4])]
     return (due, qc_jobs, arrivals, backfill,
-            {"turn": active[4].get("turn") or archived[4].get("turn")})
+            active[4] if active[4].get("turn") else archived[4])
 
 
 def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
@@ -2032,7 +2038,7 @@ def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
             sched["backfill_last_served_at"] = time.time()
         if selected["qc"]:
             sched["qc_last_served_at"] = time.time()
-        if sched_mut.get("turn"):
+        if sched_mut.get("turn") and sched_mut.get("turn_consumed"):
             sched["turn"] = sched_mut["turn"]
         if long_seen or long_defers:
             _merge_long_defers(ledger, sched, long_seen or {})
@@ -2378,6 +2384,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 # fairness counters count jobs that were actually served, not
                 # selections lost to circuit/budget/pause breaks (T14)
                 selected[cohort_of[id(job)]] += 1
+                if job["job_id"] == sched_mut.get("turn_job_id"):
+                    sched_mut["turn_consumed"] = True
                 if lane == "backlog":
                     _BACKLOG_TURN["kind"] = job["kind"]
                 req0 = jev_client.requests_made if jev_client is not None else 0

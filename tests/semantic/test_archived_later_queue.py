@@ -1,4 +1,5 @@
 """Archived work follows active work without acquiring notification eligibility."""
+from contextlib import contextmanager
 import json
 import time
 
@@ -223,3 +224,42 @@ def test_archived_new_and_changed_posts_finish_enforce_analysis_without_a_notice
         assert not plan.get("enqueued")
     assert not led.db.execute("SELECT 1 FROM notify_outbox WHERE kind='semantic_notice'").fetchone()
     assert [dict(r) for r in led.db.execute("SELECT * FROM notify_outbox")] == outbox
+
+
+@pytest.mark.parametrize("mixed, archive_held, max_jobs, done, expected_turn", [
+    (False, False, 1, 0, None),
+    (True, False, 2, 1, None),
+    (True, True, 2, 2, "arrival"),
+], ids=["active-lock-denied", "archive-lock-denied", "archive-served"])
+def test_fairness_turn_changes_only_when_its_contested_job_is_served(
+        led, monkeypatch, mixed, archive_held, max_jobs, done, expected_turn):
+    _patient(led, 2)
+    led.save_messages([_message(mid=20, project_id=2, body=BODY, unread=True)],
+                      project_id=2, semantic=True, notify={"source": "unread"})
+    cohort_pid = 1 if mixed else 2
+    if mixed:
+        _patient(led, 1)
+        led.save_messages([_message(mid=10, project_id=1, body=BODY, unread=True)],
+                          project_id=1, semantic=True, notify={"source": "unread"})
+    led.save_messages([_message(mid=11, project_id=cohort_pid, body=BODY)],
+                      project_id=cohort_pid, semantic=True)
+    if mixed:
+        with led.db:
+            led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+
+    @contextmanager
+    def job_lock(store, job_id):
+        pid = store.db.execute("SELECT project_id FROM fetch_jobs WHERE job_id=?",
+                               (job_id,)).fetchone()[0]
+        yield mixed and (pid == 2 or archive_held)
+
+    monkeypatch.setattr(semantic_drain, "_job_lock", job_lock)
+    result = {"errors": []}
+    out = semantic.run_due(led, _cfg("shadow", budget=100000), result,
+                           time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm,
+                           max_jobs=max_jobs)
+    assert out["done"] == done and not out["failed"] and not result["errors"]
+    assert out["lock_skipped"].get(semantic_drain.JOB_KIND, 0) == (0 if archive_held else 1)
+    sched = semantic_drain._sched_state(led)
+    assert sched["arrival_selected"] == done and sched["backfill_selected"] == 0
+    assert sched.get("turn") == expected_turn
