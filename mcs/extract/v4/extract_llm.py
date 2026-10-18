@@ -5270,18 +5270,23 @@ def _nightly_memory_available() -> bool:
 
 
 def _settle_carry(ledger, carry: list, *, final: bool = True,
-                  write: bool = True) -> None:
+                  write: bool = True, fence=None) -> None:
     """Lock attempt for results carried across run_pending calls.
     ``final`` (resident exit) releases whatever is still lock-bound or
     no longer owned — it stays pending and re-extracts later, no attempt
     burned; a non-final pass (lane 3 before patient context) waits only
     the resident's short window and keeps lock-bound results carried.
     ``write=False`` (an updater ran) releases without committing so old
-    code never writes after the update fence."""
+    code never writes after the update fence; ``fence`` (the resident's
+    initial updater state) is re-read under the lock for the same
+    reason — an updater may finish while we wait for the lock."""
     if not carry:
         return
     keep = []
     with _write_lock(True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S) as held:
+        if held and fence is not None:
+            import mcs_util
+            write = write and mcs_util._updater_state() == fence
         for r, lease, commit in carry:
             if held and write and _owns_current_source(ledger, r, lease):
                 commit()
@@ -5497,7 +5502,7 @@ def _main() -> int:
                         # must not write the carried result either
                         _settle_carry(led, carry, write=False)
                         return 0
-                    _settle_carry(led, carry, final=False)
+                    _settle_carry(led, carry, final=False, fence=nightly_state)
                     nightly = _background_nightly(led, nightly_state, stop)
                     if nightly.get("status") != "off":
                         print(json.dumps({"nightly": nightly, "ts": time.time()},
@@ -5612,7 +5617,7 @@ def _main() -> int:
                     pause(min(300.0, max(5.0, nt - time.time())))
                 else:
                     pause(1)  # yield the write window between batches
-            _settle_carry(led, carry)
+            _settle_carry(led, carry, fence=nightly_state)
             print(json.dumps(total, ensure_ascii=False))
         else:
             # Bounded single batch: keep the whole-run lock so the batch

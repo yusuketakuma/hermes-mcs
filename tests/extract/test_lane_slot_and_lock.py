@@ -160,7 +160,7 @@ def test_resident_threads_carry_and_settles_on_exit(monkeypatch, capsys):
 
     monkeypatch.setattr(extract_llm, "run_pending", run)
     monkeypatch.setattr(extract_llm, "_settle_carry",
-                        lambda led, carry: settled.append(list(carry)))
+                        lambda led, carry, **kw: settled.append(list(carry)))
     assert extract_llm.main() == 0
     turn_lock = os.path.join(extract_llm.HOME, "data", "llm_turn.lock")
     wire = str(extract_llm.local_llm.LANES[2])
@@ -210,7 +210,8 @@ def test_real_carry_is_not_serialized_or_crashes_resident(monkeypatch):
         return {"done": 0, "failed": 0, "left": 1, "selected": 1,
                 "carry": [({"body_text": "完全合成の投稿"}, 123.0, lambda: None)]}
     monkeypatch.setattr(extract_llm, "run_pending", run)
-    monkeypatch.setattr(extract_llm, "_settle_carry", lambda led, carry: settled.append(len(carry)))
+    monkeypatch.setattr(extract_llm, "_settle_carry",
+                        lambda led, carry, **kw: settled.append(len(carry)))
     assert extract_llm.main() == 0
     assert settled == [1]
 
@@ -293,3 +294,52 @@ def test_context_lane_checks_update_fence_before_settling_carry(tmp_path, monkey
     assert db.artifacts("extract_llm", message_id=1) == []
     assert _claims(db) == []
     db.db.close()
+
+
+def test_lane3_rechecks_update_after_acquiring_settlement_lock(tmp_path, monkeypatch):
+    """An updater that completes while the pre-context settlement waits
+    for run.lock is seen under the lock: the carried result is released,
+    never written by old code (Codex cc61f4b6 race)."""
+    import mcs_util
+    db = _ledger(tmp_path)
+    _state, carry = _carry_one(db, monkeypatch, tmp_path)
+    monkeypatch.setattr(db, "close", lambda: None)
+    monkeypatch.setattr(extract_llm, "Ledger", lambda *args: db)
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    generation = [123]
+    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, generation[0]))
+    monkeypatch.setattr(extract_llm.sys, "argv", [
+        "extract_llm", "--all", "--lane", "3", "--stop-after", "10"])
+    armed = [False]
+    lock_attempts = []
+
+    def acquire():
+        if armed[0] and generation[0] == 123:
+            # the pre-context fence check just passed; the updater then
+            # holds run.lock, bumps the stamp and releases it before
+            # _write_lock's next attempt
+            lock_attempts.append("updater_completes_during_wait")
+            generation[0] = 124
+            return None
+        lock_attempts.append("acquired_after_update")
+        return os.open(tmp_path / "settle.lock", os.O_CREAT | os.O_RDWR)
+    monkeypatch.setattr(extract_llm, "acquire_run_lock", acquire)
+
+    def run(*args, **kwargs):
+        armed[0] = True
+        return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
+    monkeypatch.setattr(extract_llm, "run_pending", run)
+
+    def nightly(ledger, initial, stop):
+        return {"status": "off", "done": 0, **(
+            {"run_lock_lost": "updated"}
+            if mcs_util._updater_state() != initial else {})}
+    monkeypatch.setattr(extract_llm, "_background_nightly", nightly)
+    try:
+        assert extract_llm.main() == 0
+        assert lock_attempts[:2] == [
+            "updater_completes_during_wait", "acquired_after_update"]
+        assert db.artifacts("extract_llm", message_id=1) == []
+        assert _claims(db) == []
+    finally:
+        db.db.close()
