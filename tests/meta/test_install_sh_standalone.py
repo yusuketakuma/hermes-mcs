@@ -92,9 +92,15 @@ def test_interactive_install_asks_for_the_runtime(tmp_path, setup_answer, setup_
                 process.stdin.write(answer)
                 process.stdin.flush()
             # Keep BSD script's input open until the last answer has been consumed.
-            process.wait(timeout=120)
-            tail, _ = process.communicate(timeout=120)
-            output += tail
+            deadline = time.monotonic() + 120
+            while True:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0 and ready.select(remaining), output
+                chunk = os.read(process.stdout.fileno(), 4096)
+                if not chunk:
+                    break
+                output += chunk
+            process.wait(timeout=max(0, deadline - time.monotonic()))
         finally:
             if process.poll() is None:
                 process.kill()

@@ -110,5 +110,33 @@
     "csv_matches": true,
     "activation_changed": false
   },
-  "release_gates": "最終候補のCodeRabbit・CI・公開・本番結果は後続receiptで確認。準備時点では未完。"
+  "release_gates": "最終候補のCodeRabbit・CI・公開・本番結果は後続receiptで確認。準備時点では未完。",
+  "local_checks": {
+    "setup": 234,
+    "patient_concurrency": 89,
+    "transport_metrics": 221,
+    "benchmark_guards": 20,
+    "upgrade_origins": 456,
+    "release_and_regressions": 46,
+    "subtests": 41,
+    "note": "counts overlap; not a total; tests are fully synthetic"
+  },
+  "diagram": {
+    "llm-lanes.svg": "7e3a3635c354ee697ab577e65ff0538783c5f546fc6e422c435745adef2442d5",
+    "llm-lanes.png": "3b779ceb03ee789e03d768279f10551f4f421c50483d2f44ab41372b48ac23ef"
+  },
+  "coderabbit_round1": {
+    "base": "982c471b19a26ef790afb135c7d0c9d3d69c0702",
+    "head": "8326c53f08c4e9ab6d52c562cd4b9e4b141225b7",
+    "status": "review_completed",
+    "outcome": "completed",
+    "exit": 0,
+    "reviewed_files": 61,
+    "excluded_binary_files": [
+      "docs/releases/v1.0.27/llm-lanes.png"
+    ],
+    "unclassified_files": [],
+    "findings": 1,
+    "log_sha256": "8c1ed019b0cbf4626d96d782e0d33ac2c384c48abf6342d5681226dcaa34f958"
+  }
 }
