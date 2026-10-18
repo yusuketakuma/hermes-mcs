@@ -265,6 +265,13 @@ def test_released_schema_update_rollback_requires_bound_consent(
     db.close()
     live_hash = _sha(live)
     head, resets, restarts = ["b" * 40], [], []
+    tracked = "mcs/notify/notify_cards.py"
+    content = b"CARD_LAYOUT = 2\n"
+    blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content,
+                        usedforsecurity=False).hexdigest()
+    cards = Path(updater.REPO) / tracked
+    cards.parent.mkdir(parents=True)
+    cards.write_bytes(content)
 
     def git_out(args, **kwargs):
         assert args == ["reset", "--hard", "a" * 40]
@@ -273,10 +280,21 @@ def test_released_schema_update_rollback_requires_bound_consent(
         return ""
 
     def git(args, timeout=None):
-        # This fixture stubs Git, not the layout guard. Its synthetic target
-        # supports the historical layout-1/2 cards, but never layout 3.
-        assert args == ["show", "a" * 40 + ":mcs/notify/notify_cards.py"]
-        return subprocess.CompletedProcess(args, 0, "CARD_LAYOUT = 2\n", "")
+        # Both synthetic endpoints and the index contain the same layout-2
+        # source as the worktree; layout and content guards remain active.
+        if args == ["show", "a" * 40 + ":" + tracked]:
+            out = content.decode()
+        elif args in (["ls-tree", "-rz", "a" * 40], ["ls-tree", "-rz", "b" * 40]):
+            out = f"100644 blob {blob}\t{tracked}\0"
+        elif args == ["ls-files", "--stage", "-v", "-z"]:
+            out = f"H 100644 {blob} 0\t{tracked}\0"
+        else:
+            assert args in [
+                ["diff", "--cached", "--raw", "--no-renames", "--no-ext-diff",
+                 "--no-textconv", "--no-abbrev", "--no-relative", "-z", visibility, "b" * 40]
+                for visibility in ("--ita-visible-in-index", "--ita-invisible-in-index")]
+            out = ""  # No staged differences or intent-to-add entries.
+        return subprocess.CompletedProcess(args, 0, out, "")
 
     monkeypatch.setattr(updater, "_git", git)
     monkeypatch.setattr(updater, "_git_out", git_out)
