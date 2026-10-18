@@ -62,6 +62,26 @@ def test_scan_row_inserted_during_lock_wait_is_not_published(runtime, monkeypatc
     assert document(led) is None and len(calls) == 1
 
 
+def test_context_published_by_another_process_during_lock_wait_is_not_overwritten(
+        runtime, monkeypatch, other):
+    """A second lane-3 process that selected the same patient and saved
+    first moves the KIND/PROGRESS version; our stale inputs must not
+    overwrite its result even though source and scans are unchanged."""
+    led, clock, calls = runtime
+    seed(led)
+    def publish(n):
+        if n == 3:
+            other.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
+                          "VALUES (?,1,NULL,'{\"version\": 1}','','{}',0)", (nightly.KIND,))
+            other.commit()
+    contended_lock(monkeypatch, clock, grant_after=3, on_try=publish)
+    assert step(runtime)['status'] == 'source_changed'
+    assert len(calls) == 1
+    rows = led.db.execute('SELECT content FROM artifacts WHERE kind=? AND project_id=1',
+                          (nightly.KIND,)).fetchall()
+    assert [r[0] for r in rows] == ['{"version": 1}']
+
+
 def test_withdrawn_admission_stops_the_wait_immediately(runtime, monkeypatch):
     led, clock, _ = runtime
     seed(led)

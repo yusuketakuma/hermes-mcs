@@ -94,7 +94,9 @@ def test_caller_deadline_ends_the_poll(turn, monkeypatch):
     send, _state = _fake(turn, [True])
     err = {}
     started = time.monotonic()
-    assert _chat(send, err, deadline=time.monotonic() + 0.03) is None
+    # enough margin to reach the send before the deadline on a loaded
+    # machine; the poll itself still ends at the deadline, well under 5 s
+    assert _chat(send, err, deadline=time.monotonic() + 0.3) is None
     assert time.monotonic() - started < 1
     assert err["slot_wait_confirmed"] == 0 and err["slot_wait_ms"] < 5000
 

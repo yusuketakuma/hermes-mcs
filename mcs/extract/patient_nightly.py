@@ -66,6 +66,13 @@ def _latest(db, kind, pid, mid=None):
     return (loads_dict(row[0]) or {}, loads_dict(row[1]) or {}) if row else ({}, {})
 
 
+def _published_version(db, pid):
+    """Newest context/progress row of this patient: the selection-time
+    inputs are stale once it moves."""
+    return db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE project_id=? "
+                      "AND kind IN (?,?)", (pid, KIND, PROGRESS)).fetchone()[0]
+
+
 def _replace(ledger, kind, pid, content, meta, mid=None):
     # Linked summaries have no messages row; their checkpoint is patient-scoped.
     mid = None if kind == SCAN and mid == 0 else mid
@@ -528,6 +535,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
     frozen_scan_sig = _digest([tuple(r) for r in ledger.db.execute(
         "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
         (SCAN, pid))])
+    frozen_ver = _published_version(ledger.db, pid)
     meta = {"source_sig": snapshot["source_sig"], "contract": snapshot["contract"],
             "model": snapshot["contract"]["model"], "night_id": night_id}
     result = None
@@ -608,7 +616,11 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
                     "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
                     (SCAN, pid))])
             if (fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
+                    or _published_version(ledger.db, pid) != frozen_ver
                     or time.monotonic() >= deadline or time.time() >= end):
+                # another publisher (a second lane-3 process) wrote this
+                # patient's context or progress since selection: our
+                # inputs are stale, the next unit re-selects
                 ledger.db.rollback()
                 return {"status": "source_changed", "done": 0}
             prior = progress if lane == "A" else saved

@@ -137,7 +137,7 @@ def opt(v):
     return None if v in ("", "null") else v
 ub = None
 if opt(args):
-    m = re.search(r"(?:^|\s)-ub\s+(\d+)", args)
+    m = re.search(r"(?:^|\s)(?:-ub|--ubatch-size)\s+(\d+)", args)
     ub = int(m.group(1)) if m else 512   # llama.cpp default when the flag is absent
 env = {"phase": phase, "model": model, "hw_model": opt(hw),
        "hw_memsize": int(mem) if mem.isdigit() else None,
@@ -236,7 +236,7 @@ body = {"model": "local",
 json.dump(body, open(out, "w"), ensure_ascii=False)
 PYEOF
   busy=$(busy_slots)
-  started=$(date +%s.%N)
+  started=$("$PY" -c 'import time; print(time.time())')  # BSD date has no %N
   out=$("$CURL" --noproxy '*' -s -m "$TIMEOUT" -o "$resp" -w '%{http_code} %{time_total}' \
         -X POST -H 'Content-Type: application/json' --data-binary "@$body" \
         "$SERVER/v1/chat/completions")
@@ -293,7 +293,7 @@ run_e2e() {
     block=$((block + 1))
     wait_idle
     before=$(mem_sample)
-    started=$(date +%s.%N)
+    started=$("$PY" -c 'import time; print(time.time())')  # BSD date has no %N
     if [ "$mode" = serial ]; then
       series 1 serial "$block" 1
     else
