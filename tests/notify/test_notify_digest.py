@@ -137,8 +137,12 @@ def test_counts_ids_and_no_patient_content(led):
     cfg = {**ON, "notify_max_age_h": 48}
     notify_digest.maybe_enqueue(led, cfg, now=T)
     text = _text(led)
-    assert "新着 3件・緊急度高 1件・未完了タスク 0件\n" in text
-    assert "■ 新着（患者別 1人）\n・project 1 3件（看護師 1・医師 1・職種不明 1）" in text
+    # the archived room is listed last and marked, not counted as a patient
+    assert "対象: 全患者 1人・" in text
+    assert "新着 4件・緊急度高 1件・未完了タスク 0件\n" in text
+    assert ("■ 新着（患者別 2人）\n・project 1 3件（看護師 1・医師 1・職種不明 1）\n"
+            "・project 2（アーカイブ済み） 1件（看護師 1）\n") in text
+    assert "スタンプ未取得 3投稿" in text
     assert "■ 緊急度高 1件\n・project 1 09-24 08:40 🚨" in text
     for secret in ("秘密の本文", "本人が急変", "患者A", "患者B", "職員"):
         assert secret not in text

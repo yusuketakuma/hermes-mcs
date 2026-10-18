@@ -334,19 +334,25 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     """The summary display model for [since, until). ``flt`` is a
     parse_scope dict (None = all); ``names`` shows patient names next to
     project ids; ``allowed`` is the caller's project scope."""
+    import notify_views
     flt = flt or parse_scope("")
     keep = scope_projects(db, flt, name, allowed)
     live = {r[0] for r in db.execute(
         "SELECT project_id FROM patients WHERE COALESCE(is_archived,0)=0")}
+    # archived patients stay listed, after the active ones and marked;
+    # stamp-based sections keep them out (their stamps are never fetched)
+    archived = {r[0] for r in db.execute(
+        "SELECT project_id FROM patients WHERE is_archived=1")}
 
     def ok(pid) -> bool:
-        return pid in live and (keep is None or pid in keep)
+        return keep is None or pid in keep
 
     def room(pid) -> str:
         name_ = _plain(_patient_name(db, pid)) if names else ""
         # staff read names; the internal id only identifies a room when
         # names are off or missing
-        return name_ or f"project {pid}"
+        return (name_ or f"project {pid}") \
+            + (notify_views.ARCHIVED_MARK if pid in archived else "")
 
     start = datetime.fromtimestamp(since, JST)
     end = datetime.fromtimestamp(until, JST)
@@ -364,9 +370,9 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         """SELECT m.message_id, m.project_id, m.profession, m.posted_at_ts
            FROM messages m JOIN patients p ON p.project_id=m.project_id
            WHERE m.first_seen>=? AND m.first_seen<?
-             AND COALESCE(p.is_archived,0)=0
              AND COALESCE(m.body_state,'')!='deleted'
-           ORDER BY m.first_seen, m.message_id""", (since, until))
+           ORDER BY COALESCE(p.is_archived,0), m.first_seen, m.message_id""",
+        (since, until))
         # history imports land with first_seen now but an old post time
         if ok(r["project_id"])
         # an unknown post time cannot be proven old (Ledger._filter_notify_age)
@@ -417,7 +423,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     todo = []
     for label, pids in (("期限切れタスク", late), ("本日期限タスク", due)):
         if pids:
-            rooms_ = list(dict.fromkeys(pids))
+            rooms_ = sorted(dict.fromkeys(pids), key=lambda p: p in archived)
             todo.append(f"・{label} {len(pids)}件（{len(rooms_)}人）: "
                         + _ids(rooms_, room))
     if stale_by:
@@ -438,7 +444,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         prof = per.setdefault(r["project_id"], {})
         key = _plain(r["profession"]) or "職種不明"
         prof[key] = prof.get(key, 0) + 1
-    ranked = sorted(per.items(), key=lambda kv: (-sum(kv[1].values()), kv[0]))
+    ranked = sorted(per.items(), key=lambda kv: (kv[0] in archived,
+                                                 -sum(kv[1].values()), kv[0]))
     section(f"新着（患者別 {len(per)}人）", [
         f"・{room(pid)} {sum(p.values())}件（" + "・".join(
             f"{k} {n}" for k, n in sorted(p.items(), key=lambda x: -x[1]))
@@ -484,7 +491,6 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     cov = []
     incomplete = [r for r in gaps["incomplete_rooms"] if ok(r[0])]
     if incomplete:
-        import notify_views
         cov.append(f"・取得未完了のルーム {len(incomplete)}件: " + _ids(
             incomplete, lambda r: f"{room(r[0])}（{notify_views.fetch_reason_ja(r[1])}）"))
     else:
@@ -498,7 +504,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     if gaps["reply_gaps"]:
         cov.append(f"・返信の取得未完了スレッド{scoped}: {gaps['reply_gaps']}件")
     stamp_states = [get_message_metadata(db, r["message_id"])["reactions_status"]
-                    for r in rows]
+                    for r in rows if r["project_id"] not in archived]
     if "not_fetched" in stamp_states or "invalid" in stamp_states:
         cov.append("・" + _stamp_gaps(stamp_states.count("not_fetched"),
                                       stamp_states.count("invalid")))

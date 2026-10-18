@@ -91,12 +91,13 @@ def test_empty_and_long_scoped_summary_keeps_disclosures_on_every_renderer(
     assert "対応がなかったことを意味せず" not in empty
 
 
-def test_archived_patients_do_not_leak_tasks_signals_or_summary_updates(led):
-    # Given: an archived room with each non-message summary source.
+def test_archived_patients_are_listed_last_and_marked_in_every_source(led):
+    # Given: an active room and an archived room with each non-message source.
     _patient(led, 1)
     _patient(led, 2, name="ARCHIVED-NAME-CANARY", archived=1)
     _msg(led, 200, pid=2)
     _add_request(led, pid=2, src_mid=200, due="2000-01-01")
+    _add_request(led, pid=1, src_mid=200, due="2000-01-01")
     _signal_row(led, "archived", pid=2, mids=[200], stype="adherence_concern")
     for at in (NOW - 2 * 86400, NOW - 10):
         led.artifact_add("karte_summary", '{"empty":false}', project_id=2)
@@ -105,11 +106,15 @@ def test_archived_patients_do_not_leak_tasks_signals_or_summary_updates(led):
     led.db.commit()
     # When: building an unrestricted private summary.
     parts = notify_digest.view(led.db, {"signals": {"notify": True}}, "", now=NOW)["parts"]
-    # Then: archive filtering applies to every source, not only the new-message query.
+    # Then: archived rooms stay visible after active ones, marked, and are
+    # not counted as target patients (owner decision 2026-10-18).
     out = notify_render.parts_text(parts)
-    assert "ARCHIVED-NAME-CANARY" not in out and "project 2" not in out
-    assert "未完了タスク 0件" in out and "アラート 0件" in out
-    assert "連携サマリー更新" not in out
+    assert "対象: 全患者 1人・" in out
+    late = next(line for line in out.splitlines() if line.startswith("・期限切れタスク"))
+    assert late.startswith("・期限切れタスク 2件（2人）: ")
+    assert late.endswith(", ARCHIVED-NAME-CANARY（アーカイブ済み）")
+    assert "アラート 1件" in out
+    assert "■ 連携サマリー更新\n・1件: ARCHIVED-NAME-CANARY（アーカイブ済み）" in out
 
 
 def _metadata(led, reactions, *, error=None):
