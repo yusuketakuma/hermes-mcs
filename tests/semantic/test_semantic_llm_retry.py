@@ -197,7 +197,34 @@ def _refused_connection(monkeypatch, calls):
     monkeypatch.setattr(local_llm, "chat", refused)
 
 
-@pytest.mark.parametrize("not_sent", [_held_admission, _refused_connection])
+def _turn_busy(monkeypatch, calls):
+    import local_llm
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+
+    def busy(prompt, error_out=None, **kw):
+        calls.append(prompt)
+        if error_out is not None:
+            error_out["kind"] = "busy"
+        return None
+    monkeypatch.setattr(local_llm, "chat", busy)
+
+
+def test_turn_wait_expiry_is_not_an_outage(monkeypatch):
+    """The other backlog lane holding the GPU turn past the deadline is a
+    not-sent class outside the LLM-down reasons: no breaker, no hourly
+    backoff."""
+    import semantic_drain
+    import semantic_runtime
+    calls = []
+    _turn_busy(monkeypatch, calls)
+    with pytest.raises(semantic_runtime.LLMNotSent) as info:
+        semantic.llm_chat("synthetic prompt")
+    assert info.value.stage == "llm_turn_busy"
+    assert info.value.stage not in semantic_drain._LLM_DOWN_REASONS
+    assert calls == ["synthetic prompt"]
+
+
+@pytest.mark.parametrize("not_sent", [_held_admission, _refused_connection, _turn_busy])
 def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
                                                       not_sent):
     """U07-F01: an admission hold or a refused connection means the local

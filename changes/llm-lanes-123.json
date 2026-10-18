@@ -1,0 +1,20 @@
+{
+  "category": "changed",
+  "title": "ローカルLLMの枠をレーン1/2/3に改称し、過去分の処理と患者コンテキスト作成を効率化",
+  "summary": "ローカルLLMの3枠をレーン1/2/3と呼び、wire のid_slotはレーン−1です（レーン1=新着解析、レーン2/3=過去分）。従来の夜間の患者まとめは「患者コンテキスト作成」に改称し、レーン3が24時間、保存済みの投稿がすべて現行のLLM抽出世代9で解析済み（再試行上限に達した投稿は除く）の患者から順に作ります。レーン2/3は1つのロックでGPUを交互に使い、完了した解析結果は10分収集がロックを保持していても捨てず次の周回で保存します。ローカルLLMはMCS専用になり、Hermesの対話では使いません。",
+  "upgrade": "`mcs_setup.py services` で常駐plistを再同期してください（引数が `--slot` から `--lane 2|3` に変わります）。旧 `--slot` のままのworkerは引数エラーで起動しません。`mcs_check.sh` はレーン1（wire 0）を固定します。設定項目 `extract.patient_context_nightly` の名前・既定値、モデル、DB schemaは変わりません。処理日の区切りは引き続き03:30（日本時間）です。",
+  "details": [
+    "`local_llm.LANES` が規約の正本。`--lane 2|3` は `MCS_LLM_SLOT`（wire id）と `MCS_LLM_TURN_LOCK`（`data/llm_turn.lock`）を設定し、HTTP要求中だけflockを保持する。",
+    "旧可変枠（`_ELASTIC_*`、`elastic_hold`/`elastic_resume`）と夜間の時間帯判定を削除。レーン3は各周回の最初に `patient_nightly.run_due` を呼び、`patient_extraction_complete` が真の患者だけを対象にする。admissionは更新中・回路・設定変更・メモリ・ディスクで判定する。レーン2/3のターン待ちで期限が切れた呼出しは `busy` として送信なし扱いになり、患者の失敗回数・遮断器・LLM停止判定に数えない。",
+    "run.lock の再取得待ち（常駐は3秒）が切れた完了結果は `carry` に保持し、次の周回の終了時ロックで保存する。原文が変わった分と claim lease の残りが120秒を切った分は保存せず解放する。レーン3は患者コンテキスト作成の前に持ち越し分を先に保存する。",
+    "2026-10-18の所有者機の実測: 2枠同時のデコードが平均約10 t/s、単独で58 t/s。ロック待ち切れで捨てていた完了結果が1日約136件。いずれも保証値ではない。"
+  ],
+  "refs": [
+    "mcs/core/local_llm.py",
+    "mcs/extract/v4/extract_llm.py",
+    "mcs/extract/patient_nightly.py",
+    "deployment/launchagents/ai.mcs.extract-drainer.plist",
+    "deployment/launchagents/ai.mcs.extract-drainer-2.plist",
+    "deployment/scripts/mcs_check.sh"
+  ]
+}

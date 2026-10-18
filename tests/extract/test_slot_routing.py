@@ -1,5 +1,5 @@
-"""Slot routing: local_llm.request_slot env override and
-fixed extractor background slots."""
+"""Slot routing: local_llm.request_slot env override (wire ids,
+lane - 1) and the extractor's fixed backlog lanes."""
 import json
 
 import extract_llm
@@ -12,8 +12,10 @@ def test_request_slot_default(monkeypatch):
 
 
 def test_request_slot_env_override(monkeypatch):
-    monkeypatch.setenv("MCS_LLM_SLOT", "1")
-    assert local_llm.request_slot() == 1
+    """The env carries the wire id (lane - 1), not the lane name."""
+    for lane, wire in local_llm.LANES.items():
+        monkeypatch.setenv("MCS_LLM_SLOT", str(wire))
+        assert local_llm.request_slot() == wire == lane - 1
 
 
 def test_request_slot_env_invalid(monkeypatch):
@@ -33,8 +35,8 @@ def test_choose_slot_default(monkeypatch):
 
 
 def test_choose_slot_override_wins(monkeypatch):
-    _set_state(monkeypatch, slot=2)
-    assert extract_llm._choose_slot() == 2
+    _set_state(monkeypatch, slot=local_llm.LANES[3])
+    assert extract_llm._choose_slot() == local_llm.LANES[3]
 
 
 def _capture_bodies():
@@ -106,11 +108,12 @@ def test_extract_probe_format_uses_choose_slot(monkeypatch):
     same single point as the extraction calls it precedes."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
     monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
-    monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", 2)
+    monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", local_llm.LANES[3])
     bodies, send = _capture_bodies()
     monkeypatch.setattr(extract_llm, "_opener_request", send)
     assert extract_llm._probe_format() == "schema"
-    assert bodies and all(b.get("id_slot") == 2 for b in bodies)
+    assert bodies and all(b.get("id_slot") == local_llm.LANES[3]
+                          for b in bodies)
 
 
 def test_slot_override_out_of_range_falls_back(monkeypatch):

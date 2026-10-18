@@ -56,7 +56,7 @@
 | `mcs/extract/eval/extract_bench.py` | Field-level benchmark for extract_llm (message-level extraction). |
 | `mcs/extract/eval/pattern_cards.py` | Lint aggregate pattern cards against fixed vocabulary and local name denylisting. |
 | `mcs/extract/patient_context.py` | Extract and read source-bound patient context without inferring current clinical state. |
-| `mcs/extract/patient_nightly.py` | 夜間の患者背景を原文の根拠から作り、調査の続きと公開条件を保持する。 |
+| `mcs/extract/patient_nightly.py` | 患者コンテキストを原文の根拠から作り、調査の続きと公開条件を保持する。 |
 | `mcs/extract/patient_state_context.py` | Freeze bounded, source-grounded pharmacy references for one extraction attempt. |
 | `mcs/extract/pharmacy_cues.py` | Detect clause-local pharmacy cues and their lexical coverage in mapped extraction fields. |
 | `mcs/extract/rollup.py` | MCS patient rollup — one consolidated artifact per patient. |
@@ -229,7 +229,7 @@ import はモジュール先頭に置くのが原則。関数内に残すのは�
   起こす。アーカイブ患者はfrontier/backfill対象外・通知抑止。
   保存済み投稿のルール抽出・AI抽出・意味チェックはアクティブ患者を先に処理し、
   残り枠でアーカイブ患者を処理する。新規・変更投稿は通知なしで意味チェックへ
-  引き継ぐが、過去投稿を一括投入しない。夜間の患者まとめ・スタンプ取得は
+  引き継ぐが、過去投稿を一括投入しない。患者コンテキスト作成・スタンプ取得は
   従来どおりアクティブ患者のみ。実行中の処理は中断しない。
   既にアーカイブ済みで消化中ジョブも確定floorも無い患者には
   補修用 `history_head` を再予約する (失われた予約の修復)
@@ -291,7 +291,9 @@ $PY mcs/ingest/init_data.py --project <id>       # 患者個別
   loopback固定・proxy無効。run_check が残予算で差分処理、全量は
   `--all` で drain (中断安全)。
   `--all` は per-write lock のみで run.lock を長期保持しない
-  (tick を阻害しない)。`--slot N` は背景用 wire id_slot 0/2 に固定。
+  (tick を阻害しない)。`--lane 2|3` は背景用レーン（wire id_slot = レーン−1）に固定し、2レーンは
+  1つのflock（`MCS_LLM_TURN_LOCK`）でGPUを交互に使う。run.lock の再取得待ちが
+  切れた完了結果は捨てずに次の周回へ持ち越す。
   `--semantic` は抽出1件とsemantic/QC 1件を交互に処理し、2系統の常駐
   drainer が24時間、古い未処理分から進める。semantic も実際のモデル・
   監査通信中は run.lock を解放し、ジョブ別 flock と世代照合で重複・
@@ -808,9 +810,10 @@ README「人工知能（AI）の使用箇所と情報の行き先」の「技術
 
 - エンドポイント: `http://127.0.0.1:8080/v1/chat/completions`(OpenAI 互換)
   — loopback 固定・proxy 無効・API key なし。この推論経路はローカルで完結
-- サーバは `-c 49152 -np 3`（各枠16384 tokens）。wire `id_slot=1` は
-  新着解析・Hermesローカル対話、`id_slot=0,2` はバックログ専用。
-  RT貸与・夜間の稼働制限は無い。`local_llm.py` の `SLOT_COUNT`・
+- サーバは `-c 49152 -np 3`（各枠16384 tokens）。レーン1/2/3 = wire
+  `id_slot` 0/1/2（`local_llm.LANES`）。レーン1は新着解析、レーン2/3は
+  バックログ専用で、ローカルLLMはMCS専用（Hermes対話は使わない）。
+  RT貸与・時間帯の稼働制限は無い。`local_llm.py` の `LANES`・
   `BACKGROUND_SLOTS`・`REALTIME_SLOT` が規約の正本。
 - パラメータ: `temperature: 0`・`enable_thinking: false` で決定的出力。
   extract_llm は `max_tokens: 1600`・timeout 300s。長文は全文をチャンク

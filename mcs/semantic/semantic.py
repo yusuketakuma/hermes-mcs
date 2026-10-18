@@ -415,6 +415,11 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             if level == 1 and timeout >= _LONG_MIN_CALL_S:
                 continue  # one long-ceiling retry in what is left
         break
+    if response is None and err_out.get("kind") == "busy":
+        # the other backlog lane held the GPU turn past the deadline:
+        # nothing sent, endpoint healthy — a short defer, no backoff
+        _failed("busy")
+        raise runtime.LLMNotSent("llm_turn_busy")
     if response is None and err_out.get("kind") == "unreachable":
         _failed("unreachable")
         raise runtime.LLMNotSent("llm_unreachable")

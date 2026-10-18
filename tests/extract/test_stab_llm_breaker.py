@@ -329,3 +329,22 @@ def test_failed_repair_keeps_the_outage(tmp_path, monkeypatch):
         assert mcs_util.llm_down_since(db) is not None
     finally:
         db.close()
+
+
+def test_turn_wait_expiry_defers_without_breaker_or_attempts(tmp_path, monkeypatch):
+    """A backlog lane whose deadline passed while the other lane held the
+    GPU turn sent nothing: the rows stay pending, no attempt is charged
+    and the breaker/health marker see no outage."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
+        calls = _transport(monkeypatch, "busy")
+        for _ in range(mcs_util._CIRCUIT_TRIP):
+            res = extract_llm.run_pending(db, limit=10, budget_s=900)
+            assert res["done"] == 0 and res["deferred"] >= 1
+        assert calls
+        assert _attempt_rows(db) == 0
+        assert not mcs_util.circuit_state_path(db).exists()
+        assert mcs_util.llm_down_since(db) is None
+    finally:
+        db.close()

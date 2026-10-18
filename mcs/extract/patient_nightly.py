@@ -1,4 +1,4 @@
-"""夜間の患者背景を原文の根拠から作り、調査の続きと公開条件を保持する。"""
+"""患者コンテキストを原文の根拠から作り、調査の続きと公開条件を保持する。"""
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -45,12 +45,15 @@ def options(cfg):
 
 
 def night_window(now):
-    """Return the starting night's date and absolute end, including midnight."""
+    """Return the current work day's id and absolute end.
+
+    Patient context runs at any hour since 2026-10-18 (lane 3's first
+    priority); the day id still rolls at 03:30 JST so a night's work
+    keeps one id across midnight and progress keys stay comparable with
+    earlier night-only records."""
     stamp = datetime.fromtimestamp(now, JST)
     minute = stamp.hour * 60 + stamp.minute
-    if 210 <= minute < 1380:
-        return None
-    start = stamp.date() if minute >= 1380 else stamp.date() - timedelta(days=1)
+    start = stamp.date() if minute >= 210 else stamp.date() - timedelta(days=1)
     end = datetime.combine(start + timedelta(days=1), datetime.min.time(), JST)
     return start.isoformat(), (end + timedelta(hours=3, minutes=30)).timestamp()
 
@@ -376,13 +379,19 @@ def _ask(cfg, payload, deadline, admit, end):
     endpoint, model = local_llm.resolve(cfg)
     chat = (lambda prompt, **kw: local_llm.admitted_chat("mcs.extract", prompt, **kw)) \
         if local_llm.admission_enabled() else local_llm.chat
+    err: dict = {}
     response = chat(prompt,
                                      endpoint=endpoint, model=model, timeout=CALL_SECONDS,
                                      max_tokens=1600, deadline=min(deadline, time.monotonic() + CALL_SECONDS),
                                      response_format={"type": "json_object"},
-                                     extra_payload={"id_slot": local_llm.request_slot()})
+                                     extra_payload={"id_slot": local_llm.request_slot()},
+                                     error_out=err)
     if response and response.get("admission"):
         raise Deferred("nightly_admission_deferred")
+    if response is None and err.get("kind") == "busy":
+        # lane 2 held the GPU turn for the whole call window: nothing
+        # was sent, so the patient is not charged a failure
+        raise Deferred("nightly_turn_busy")
     if not response or response.get("finish_reason") != "stop" or response.get("status") != 200:
         raise ValueError("nightly_incomplete_response")
     answer = loads_dict(response.get("text"))
@@ -464,8 +473,12 @@ def _scan(cfg, source, saved, night_id, deadline, admit, end):
             "facts": list(facts.values()), "audited": False}
 
 
-def run_due(ledger, cfg, *, deadline, admit):
-    """Advance one fair idle-lane unit, freezing inputs across inference and commit."""
+def run_due(ledger, cfg, *, deadline, admit, complete=None):
+    """Advance one fair idle-lane unit, freezing inputs across inference and commit.
+
+    ``complete(project_id)`` limits the candidates to patients whose
+    stored posts are all extracted under the current LLM generation
+    (owner rule 2026-10-18); None admits every active patient."""
     now = time.time()
     window = night_window(now)
     if not options(cfg)["enabled"] or not window:
@@ -479,6 +492,8 @@ def run_due(ledger, cfg, *, deadline, admit):
         if time.monotonic() + COMMIT_MARGIN >= deadline:
             return {"status": "deferred", "done": 0}
         pid = row[0]
+        if complete is not None and not complete(pid):
+            continue
         snapshot, progress, pending = _pending(ledger.db, pid, cfg, now=now)
         if _out_of_scope(snapshot):
             continue
