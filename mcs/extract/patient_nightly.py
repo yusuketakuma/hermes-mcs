@@ -490,30 +490,41 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
     deadline = min(deadline, time.monotonic() + end - now)
     if time.monotonic() + COMMIT_MARGIN >= deadline or not admit():
         return {"status": "deferred", "done": 0}
-    candidates = {k: [] for k in "ABC"}
+    started = time.monotonic()
+    scanned = 0
+    best = {}   # lane -> (key, snapshot, progress) of the leading candidate
     for row in ledger.db.execute("SELECT project_id FROM patients WHERE is_archived=0 ORDER BY project_id"):
         if time.monotonic() + COMMIT_MARGIN >= deadline:
             return {"status": "deferred", "done": 0}
         pid = row[0]
         if complete is not None and not complete(pid):
             continue
+        scanned += 1
         snapshot, progress, pending = _pending(ledger.db, pid, cfg, now=now)
         if _out_of_scope(snapshot):
             continue
         for lane, due in pending.items():
-            if due:
-                candidates[lane].append((not snapshot["initial"] if lane == "A" else False,
-                                         progress.get("last_attempt", 0), pid))
+            # Only the leader's selection-time snapshot is kept, so the
+            # chosen patient is not re-read after selection.
+            key = (not snapshot["initial"] if lane == "A" else False, progress.get("last_attempt", 0), pid)
+            if due and (lane not in best or key < best[lane][0]):
+                best[lane] = (key, snapshot, progress)
+    stats = {"scanned": scanned, "scan_ms": int((time.monotonic() - started) * 1000)}
     rotation, _ = _latest(ledger.db, PROGRESS, 0)
     sequence = "AAAAAABBBC"
     index = rotation.get("cursor", 0) % len(sequence)
     lane = next((sequence[(index + i) % len(sequence)] for i in range(len(sequence))
-                 if candidates[sequence[(index + i) % len(sequence)]]), None)
+                 if sequence[(index + i) % len(sequence)] in best), None)
     if lane is None:
-        return {"status": "complete", "done": 0}
-    _, _, pid = min(candidates[lane])
-    snapshot = _snapshot(ledger.db, pid, cfg, hydrate=lane == "A")
-    _, progress, _ = _pending(ledger.db, pid, cfg)
+        return {"status": "complete", "done": 0, **stats}
+    (_, _, pid), snapshot, progress = best[lane]
+    if lane == "A":
+        # Facts need hydrated items; the hydrated read must still match the
+        # selection-time signature the reused progress reset came from.
+        hydrated = _snapshot(ledger.db, pid, cfg)
+        if hydrated["source_sig"] != snapshot["source_sig"]:
+            return {"status": "source_changed", "done": 0, **stats}
+        snapshot = hydrated
     frozen_scan_sig = _digest([tuple(r) for r in ledger.db.execute(
         "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
         (SCAN, pid))])
@@ -574,15 +585,15 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
     # A finished inference is worth a short wait: the tick and lane 2 hold
     # the run lock for minutes, and dropping the result would send the
     # same prompt again on the next iteration.
-    fd = None
-    for _ in range(60):
-        fd = acquire_run_lock()
-        if (fd is not None or time.monotonic() + COMMIT_MARGIN >= deadline
-                or time.time() + COMMIT_MARGIN >= end):
-            break
+    waited = 0
+    while (fd := acquire_run_lock()) is None:
+        # the cap, the unit deadline, the day end and a withdrawn
+        # admission (updater, config, breaker, disk) all end the wait
+        if (waited >= 60 or time.monotonic() + COMMIT_MARGIN >= deadline
+                or time.time() + COMMIT_MARGIN >= end or not admit()):
+            return {"status": "deferred", "done": 0, "reason": "run_lock", "lock_wait_s": waited}
         time.sleep(1)
-    if fd is None:
-        return {"status": "deferred", "done": 0}
+        waited += 1
     try:
         if not admit():
             return {"status": "deferred", "done": 0}
@@ -626,4 +637,5 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
             raise
     finally:
         os.close(fd)
-    return {"status": "failed" if failure else "progressed", "done": int(not failure), "lane": lane}
+    return {"status": "failed" if failure else "progressed", "done": int(not failure), "lane": lane,
+            "lock_wait_s": waited, **stats}

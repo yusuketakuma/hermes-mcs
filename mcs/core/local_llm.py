@@ -98,6 +98,13 @@ TURN_LOCK_POLL_S = 0.2
 # A probe turn won with less than this left is reported busy, not sent:
 # a reaped probe would be cached as "plain" for the whole cooldown.
 PROBE_TURN_MIN_S = 2.0
+# After a SENT request dies in transport (timeout/reset) llama.cpp may
+# keep decoding on our pinned slot until it notices the disconnect; the
+# turn is held while /slots is polled so the other lane does not start
+# into a still-busy GPU.
+SLOT_WAIT_MAX_S = 10.0
+SLOT_WAIT_POLL_S = 0.5
+SLOT_WAIT_IDLE_SAMPLES = 2
 
 
 @contextmanager
@@ -214,18 +221,52 @@ _IDLE_GAP_S = 1.0
 _RECONCILED_AT: dict = {}
 
 
-def _slots_idle(endpoint: str, deadline: float | None) -> bool:
+def _slots_idle(endpoint: str, deadline: float | None, request=None,
+                slot: int | None = None) -> bool:
+    # resolved per call: tests monkeypatch module-level bounded_request
+    request = request or bounded_request
     try:
-        status, _headers, raw = bounded_request(
+        status, _headers, raw = request(
             probe_urls(endpoint)[1], "GET", None, 2, deadline)
         if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
             return False
         slots = json.loads(raw.decode("utf-8"))
     except Exception:
         return False
-    return (isinstance(slots, list) and bool(slots)
-            and all(isinstance(s, dict) and s.get("is_processing") is False
-                    for s in slots))
+    if not isinstance(slots, list) or not slots:
+        return False
+    if slot is not None:
+        return any(isinstance(s, dict) and s.get("id") == slot
+                   and s.get("is_processing") is False for s in slots)
+    return all(isinstance(s, dict) and s.get("is_processing") is False
+               for s in slots)
+
+
+def _wait_slot_idle(request, endpoint: str, slot: int,
+                    deadline: float | None, error_out: dict | None) -> None:
+    """Hold the turn until the pinned slot reports idle in
+    SLOT_WAIT_IDLE_SAMPLES consecutive samples, or SLOT_WAIT_MAX_S / the
+    caller's deadline passes. A single idle sample, a missing slot, bad
+    JSON or a failed GET resets the run. Expiry is UNCONFIRMED but still
+    releases the turn — it is never held forever. Idle is a stop
+    observation, not a cancel receipt: a slot-pinned request the server
+    still queues may decode after the next send (that sender's own
+    transport path handles it)."""
+    start = time.monotonic()
+    until = start + SLOT_WAIT_MAX_S
+    if deadline is not None:
+        until = min(until, deadline)
+    idle = 0
+    while idle < SLOT_WAIT_IDLE_SAMPLES and time.monotonic() < until:
+        idle = idle + 1 if _slots_idle(endpoint, until, request=request,
+                                       slot=slot) else 0
+        if idle < SLOT_WAIT_IDLE_SAMPLES:
+            if time.monotonic() + SLOT_WAIT_POLL_S >= until:
+                break
+            time.sleep(SLOT_WAIT_POLL_S)
+    if error_out is not None:
+        error_out["slot_wait_ms"] = int((time.monotonic() - start) * 1000)
+        error_out["slot_wait_confirmed"] = int(idle >= SLOT_WAIT_IDLE_SAMPLES)
 
 
 def backend_idle_evidence(endpoint: str = ENDPOINT,
@@ -573,13 +614,20 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             # propagate so budget/circuit stops are never swallowed.
             if error.__class__.__name__ == "RuntimeGuardError":
                 raise
-            if error_out is not None:
-                reason = getattr(error, "reason", error)
-                error_out["kind"] = (
-                    "unreachable"
+            reason = getattr(error, "reason", error)
+            kind = ("unreachable"
                     if isinstance(reason, ConnectionRefusedError)
                     or isinstance(error, bounded_http.NotSentTimeout)
                     else "transport")
+            if error_out is not None:
+                error_out["kind"] = kind
+            # a sent request that died in transport may still be decoding
+            # on our slot: keep the turn until the slot reports idle
+            if kind == "transport" and isinstance(error, OSError) \
+                    and os.environ.get(TURN_LOCK_ENV) \
+                    and type(body.get("id_slot")) is int:
+                _wait_slot_idle(send, endpoint, body["id_slot"], deadline,
+                                error_out)
             return None
     if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
         return {"text": None, "finish_reason": None, "usage": None,

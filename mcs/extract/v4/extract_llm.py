@@ -505,15 +505,20 @@ _REPAIR_CLOSE = """
 
 
 def _repair_prompt(posted_at: str | None, issues: list[str],
-                   prior: dict, hints: dict | None = None) -> str:
+                   prior: dict, hints: dict | None = None,
+                   reference: str = "") -> str:
     """Feedback prompt for the bounded repair retry — ends with the
     OPEN target fence; the caller appends the body then _PROMPT_TAIL.
     `issues` are the concrete validation failures; `prior` is
     sanitized before fencing (model output is data, same trust class
-    as context)."""
+    as context). The fixed head leads so the slot's prefix cache shares
+    _REPAIR_HEAD across repair calls; `reference` (a finished
+    _CTX_HEAD/_CTX_TAIL block, or "") goes after the prior-output fence,
+    keeping the single-call order context -> hints -> target."""
     prompt = _REPAIR_HEAD + "\n".join(issues) + _REPAIR_MID
     prompt += _sanitize_ctx(json.dumps(prior, ensure_ascii=False))
     prompt += _REPAIR_CLOSE
+    prompt += reference
     hint = _hint_block(hints) if hints else ""
     if hint:
         prompt += _HINT_HEAD + hint + _HINT_TAIL
@@ -1410,26 +1415,49 @@ def _note_list() -> list:
     return notes
 
 
-def _integrity_note(response) -> None:
+def _integrity_note(response, kind: str = "first", probe: int = 0,
+                     downgrades: int = 0, err_out: dict | None = None) -> None:
     """Bounded per-call integrity record for the legacy path: counts and
     token usage only — never payload text."""
-    _note_list().append({
+    # probe/downgrade counts ride on the answered call's note so
+    # `calls == len(notes)` stays untouched
+    note = {
         "status": None if response is None else response.get("status"),
         "finish_reason": None if response is None
                          else response.get("finish_reason"),
         "usage": None if response is None else response.get("usage"),
         "timings": None if response is None else response.get("timings"),
-    })
+        "kind": kind, "probe": probe, "downgrades": downgrades,
+    }
+    if type((err_out or {}).get("slot_wait_ms")) is int:
+        note["slot_wait_ms"] = err_out["slot_wait_ms"]
+        note["slot_wait_confirmed"] = err_out.get("slot_wait_confirmed")
+    _note_list().append(note)
 
 
 def _integrity_summary(notes: list) -> dict:
     calls = len(notes)
-    usage, timings = {}, {}
+    usage, timings, repair_timings = {}, {}, {}
     finishes = {}
+    repair_calls = probe_calls = downgrades = 0
+    slot_wait_ms = slot_wait_unconfirmed = 0
+    slot_waits = False
     for note in notes:
         finish = note.get("finish_reason")
         if finish is not None:
             finishes[finish] = finishes.get(finish, 0) + 1
+        repair = note.get("kind") == "repair"
+        repair_calls += int(repair)
+        for key in ("probe", "downgrades"):
+            if type(note.get(key)) is int:
+                if key == "probe":
+                    probe_calls += note[key]
+                else:
+                    downgrades += note[key]
+        if type(note.get("slot_wait_ms")) is int:
+            slot_waits = True
+            slot_wait_ms += note["slot_wait_ms"]
+            slot_wait_unconfirmed += int(note.get("slot_wait_confirmed") == 0)
         for key, value in (note.get("usage") or {}).items():
             if key in ("prompt_tokens", "completion_tokens", "total_tokens") \
                     and type(value) is int and value >= 0:
@@ -1438,19 +1466,34 @@ def _integrity_summary(notes: list) -> dict:
             if key in ("prompt_n", "prompt_ms", "predicted_n", "predicted_ms", "cache_n") \
                     and type(value) in (int, float) and 0 <= value <= sys.float_info.max:
                 timings[key] = timings.get(key, 0) + value
+                if repair and key in ("prompt_n", "cache_n"):
+                    repair_timings[key] = repair_timings.get(key, 0) + value
     timings = {key: value for key, value in timings.items()
                if 0 <= value <= sys.float_info.max}
-    return {"calls": calls,
-            "length_stops": finishes.get("length", 0),
-            "finish_reasons": finishes,
-            "usage": usage or None,
-            "timings": timings or None}
+    repair_timings = {key: value for key, value in repair_timings.items()
+                      if 0 <= value <= sys.float_info.max}
+    summary = {"calls": calls,
+               "length_stops": finishes.get("length", 0),
+               "finish_reasons": finishes,
+               "usage": usage or None,
+               "timings": timings or None,
+               # legacy notes without a kind count as first calls, so
+               # calls == first_calls + repair_calls always holds
+               "first_calls": calls - repair_calls,
+               "repair_calls": repair_calls,
+               "probe_calls": probe_calls,
+               "format_downgrades": downgrades,
+               "repair_timings": repair_timings or None}
+    if slot_waits:
+        summary["slot_wait_ms"] = slot_wait_ms
+        summary["slot_wait_unconfirmed"] = slot_wait_unconfirmed
+    return summary
 
 
 def _llm_call(prompt: str, deadline: float | None = None,
               schema: dict | None = None,
               max_tokens: int = MAX_TOKENS,
-              need_s: float | None = None) -> dict | None:
+              need_s: float | None = None, kind: str = "first") -> dict | None:
     """One chat-completions round-trip -> the model's JSON object, or
     None on transport/parse failure. Applies the probed
     response_format; a format rejected mid-run (server restart/model
@@ -1464,15 +1507,23 @@ def _llm_call(prompt: str, deadline: float | None = None,
     request killed mid-decode by the deadline wastes the whole
     generation, while a deferred row just stays pending.  Response
     integrity metadata is appended to thread-local integrity notes
-    consumed by ``llm_extract``; the visible result is unchanged."""
+    consumed by ``llm_extract``; the visible result is unchanged.
+    `kind` labels the note ("first"/"repair"); the note also carries
+    whether this call's probe actually sent and how many format
+    downgrades preceded the answer. Known limit: a probe or downgrade
+    whose call then returns None/_DEFERRED without a note is uncounted
+    (the row re-runs)."""
     global _FMT_MODE
     if deadline is not None \
             and deadline - time.monotonic() < (need_s or 0):
         return _DEFERRED
+    probed_at = _FMT_TS
     fmt = _probe_format(deadline=deadline)
+    probe = int(_FMT_TS != probed_at)   # _FMT_TS moves only when the ladder actually sent
     if fmt is None:
         return _DEFERRED   # no idle slot to probe on — nothing sent
     endpoint, model = _resolved_llm()
+    downgrades = 0
     while True:
         # the same floor gates retries: a format degrade (4xx) loops
         # back here and would otherwise re-fire a full call that can
@@ -1543,8 +1594,9 @@ def _llm_call(prompt: str, deadline: float | None = None,
         # rejection is the message's own failure.
         if status in (400, 404, 422) and fmt != "plain":
             fmt = _FMT_MODE = _NEXT_FMT[fmt]
+            downgrades += 1
             continue
-        _integrity_note(response)
+        _integrity_note(response, kind, probe, downgrades, err_out)
         # a length stop is truncated JSON: json_object would salvage an
         # inner complete object (one med dict) that validates to {} and
         # gets saved as the message's extraction — reject it as failed
@@ -1761,6 +1813,12 @@ def _is_thin(v: dict | None, body: str | None) -> bool:
     return (v is not None and body is not None
             and len(body) >= _THIN_BODY_MIN
             and len(_facts(v)) < _THIN_FACTS_MIN)
+
+
+# closed set of repair-trigger codes for the meta histogram: the drops
+# buckets (incl. the legacy vitals key) plus the three non-drop triggers
+_ISSUE_KEYS = ("ev", "items", "reasons", "labs", "events", "vitals",
+               "structure", "completeness", "thin")
 
 
 def _repair_issues(drops: dict, v: dict | None) -> list[str]:
@@ -2737,6 +2795,10 @@ def llm_extract(body: str, *, context: str | None = None,
     thead = _target_head(posted_at)
     notes = _note_list()
     notes.clear()
+
+    def bump(key, n=1):
+        if meta_out is not None:
+            meta_out[key] = meta_out.get(key, 0) + n
     chunk_size = _CHUNK_SIZE if chunk_size is None else chunk_size
     if type(chunk_size) is not int or not 1 <= chunk_size <= _CHUNK_SIZE:
         raise ValueError("extract_chunk_size_invalid")
@@ -2777,6 +2839,7 @@ def llm_extract(body: str, *, context: str | None = None,
             return None
         smaller = max(1, len(piece) // 2)
         splits[key] = smaller
+        bump("length_resplits")
         if on_split is not None:
             on_split(key, smaller)
         return children(key, piece, start, remaining)
@@ -2785,6 +2848,8 @@ def llm_extract(body: str, *, context: str | None = None,
         if deadline is not None and time.monotonic() > deadline:
             return _DEFERRED
         cached = saved.get(key)
+        if key in saved:
+            bump("checkpoint_reuses")
         quality_status = cached.get("_quality_status") if isinstance(cached, dict) else None
         if key in saved and quality_status is None:
             sizes.append(len(piece))
@@ -2850,6 +2915,15 @@ def llm_extract(body: str, *, context: str | None = None,
             # the budget is already gone; a salvaged v stays usable
             # either way.
             issues = _repair_issues(drops, v)
+            if meta_out is not None:
+                # codes only, never issue text; counted before the budget
+                # check so it is the denominator of what failed validation
+                hist = meta_out.setdefault("repair_issues", dict.fromkeys(_ISSUE_KEYS, 0))
+                for code in _ISSUE_KEYS[:6]:
+                    hist[code] += len(drops.get(code) or [])
+                hist["structure"] += int(v is None)
+                hist["completeness"] += len(completeness)
+                hist["thin"] += int(thin)
             issues.extend(completeness)
             if thin:
                 issues.append(
@@ -2888,11 +2962,10 @@ def llm_extract(body: str, *, context: str | None = None,
                         return finish_piece(key, v, quality_record, pending=key in pending_quality)
                 repair_start = len(notes)
                 rd = _llm_call(
-                    reference + _repair_prompt(posted_at, issues, d, piece_hints)
+                    _repair_prompt(posted_at, issues, d, piece_hints, reference)
                     + piece + _PROMPT_TAIL,
-                    deadline=repair_deadline, need_s=_MIN_REPAIR_S)
-                if meta_out is not None:
-                    meta_out["repairs"] = meta_out.get("repairs", 0) + 1
+                    deadline=repair_deadline, need_s=_MIN_REPAIR_S, kind="repair")
+                bump("repairs")
                 if repair_deadline is not None and time.monotonic() > repair_deadline:
                     rd = _DEFERRED
                 if (rd is None and len(notes) > repair_start
@@ -2908,6 +2981,7 @@ def llm_extract(body: str, *, context: str | None = None,
                     if (_quality_improves(rv, v, body, piece_hints if piece == body else None)
                             if completeness else _improves(rv, v)):
                         v = rv
+                        bump("repair_wins")
                 if completeness:
                     quality_note("dispatch_unknown" if rd is _DEFERRED else
                                  "unresolved" if _completeness_issues(v, piece_hints, piece) else "hint_gaps_resolved")
@@ -3675,20 +3749,61 @@ def _qc_feedback(ledger, src_artifact_id):
             "notes": notes[:6]}
 
 
-def _next_retry(ledger) -> float | None:
+def _next_retry(ledger, *, after: float | None = None) -> float | None:
     """Earliest next_try among retriable error artifacts, or None when
-    nothing is retriable (all remaining are permanent failures)."""
+    nothing is retriable (all remaining are permanent failures). With
+    `after`, only next_try later than it count: a past-due row that stays
+    unselected (other shard, gate) must not hide a later due time."""
     safe_meta = json_or_null("meta")
     timestamp = f"json_extract({safe_meta},'$.next_try')"
-    row = ledger.db.execute(
-        f"SELECT MIN({timestamp}) FROM artifacts "
-        "WHERE kind=? AND json_valid(meta) "
-        "AND json_extract(meta,'$.error')=1 "
-        "AND COALESCE(json_extract(meta,'$.attempts'),0) < 5 "
-        f"AND json_type({safe_meta},'$.next_try') IN ('integer','real') "
-        f"AND {timestamp} BETWEEN -{sys.float_info.max!r} AND {sys.float_info.max!r}",
-        (KIND,)).fetchone()
+    sql = (f"SELECT MIN({timestamp}) FROM artifacts "
+           "WHERE kind=? AND json_valid(meta) "
+           "AND json_extract(meta,'$.error')=1 "
+           "AND COALESCE(json_extract(meta,'$.attempts'),0) < 5 "
+           f"AND json_type({safe_meta},'$.next_try') IN ('integer','real') "
+           f"AND {timestamp} BETWEEN -{sys.float_info.max!r} AND {sys.float_info.max!r}")
+    params: list = [KIND]
+    if after is not None:
+        sql += f" AND {timestamp} > ?"
+        params.append(after)
+    row = ledger.db.execute(sql, params).fetchone()
     return row[0] if row and row[0] is not None else None
+
+
+# a wake re-runs the selection scan, lane 3 a whole-patient scan — never
+# more often than this
+_IDLE_FLOOR_S = 5.0
+
+
+def _next_due_in(ledger, now: float, *, semantic: bool, context: bool) -> float | None:
+    """Seconds until the earliest FUTURE retry/due time this resident can
+    serve, or None. Past-due rows are excluded on purpose: a row that was
+    due and still not selected is gated (shard, admission, poison, lock)
+    and polling faster cannot serve it."""
+    try:
+        due = [t for t in (_next_retry(ledger, after=now),) if t is not None]
+        if semantic:
+            import semantic_policy
+            row = ledger.db.execute(
+                "SELECT MIN(next_try) FROM fetch_jobs WHERE state='pending' "
+                "AND next_try > ? AND kind IN (?,?)",
+                (now, semantic_policy.JOB_KIND, semantic_policy.QC_JOB_KIND)).fetchone()
+            if row and row[0] is not None:
+                due.append(row[0])
+        if context:
+            import patient_nightly
+            safe = json_or_null("content")
+            t = f"json_extract({safe},'$.next_try')"
+            row = ledger.db.execute(
+                f"SELECT MIN({t}) FROM artifacts WHERE kind IN (?,?) "
+                f"AND COALESCE(json_extract({safe},'$.attempts'),0) < 5 "
+                f"AND json_type({safe},'$.next_try') IN ('integer','real') AND {t} > ?",
+                (patient_nightly.PROGRESS, patient_nightly.SCAN, now)).fetchone()
+            if row and row[0] is not None:
+                due.append(row[0])
+    except Exception:
+        return None   # a locked/odd DB must not kill the resident; fall back to the fixed poll
+    return min(due) - now if due else None
 
 
 _SLOT_OVERRIDE = None  # --lane: this process's backlog wire id_slot
@@ -5021,13 +5136,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             return pool.submit(_extract,
                                (index, (r, ctx, saved, hints, qc)))
 
+        pre_probes = 0
         if parallel and units:
             # settle the probed output format before fanning out — the
             # workers would otherwise race to mutate the global mode.
             # Below the smallest floor every unit defers anyway, so the
             # probe would be a call nobody uses.
             if deadline - time.monotonic() >= _MIN_CALL_S:
+                probed_at = _FMT_TS
                 _probe_format(deadline=deadline)
+                pre_probes = int(_FMT_TS != probed_at)
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(
                     max_workers=min(workers, len(units))) as pool, contextlib.ExitStack() as cleanup:
@@ -5142,6 +5260,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     left, age_min, age_max, estimate = _backlog_report(
         ledger, len(rows), limit, done + skipped + held_prior)
     now_ts = time.time()
+    llm_calls = _llm_call_stats([*metas, *batch_metas])
+    if pre_probes:
+        # the resident's real probe site is the pre-fanout one
+        llm_calls = llm_calls or {"probe_calls": 0}
+        llm_calls["probe_calls"] = (llm_calls.get("probe_calls") or 0) + pre_probes
     return {"done": done, "failed": failed, "held_prior": held_prior, "left": left,
             "carried": carried, "carry": carry_out,
             # pending as of the last full count, minus what this process
@@ -5163,45 +5286,77 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                           else None,
                 "newest": (now_ts - age_max) if age_max is not None
                           else None},
-            "llm_calls": _llm_call_stats([*metas, *batch_metas])}
+            "llm_calls": llm_calls}
+
+
+_COUNT_KEYS = ("calls", "first_calls", "repair_calls", "repair_wins",
+               "length_stops", "length_resplits", "probe_calls",
+               "format_downgrades", "checkpoint_reuses")
 
 
 def _llm_call_stats(metas) -> dict | None:
-    """Sum calls/prompt_ms/predicted_ms/tokens over per-row metas (a
-    batch meta shared by several rows counts once); a field no meta
-    reported is None, and all-None collapses to None."""
-    llm_calls = {"calls": 0, "prompt_ms": 0.0, "predicted_ms": 0.0,
-                 "tokens": 0}
-    have_calls = have_toks = False
-    have_ms = set()
+    """Sum the fixed count keys, prompt_ms/predicted_ms/tokens, the
+    prompt_n/cache_n pairs (first and repair calls; only metas reporting
+    both) and the repair_issues histogram over per-row metas (a batch
+    meta shared by several rows counts once); a field no meta reported
+    is None, and all-None collapses to None. cache_hit_ratio =
+    Σcache_n/(Σcache_n+Σprompt_n) over the metas that reported both,
+    None otherwise."""
+    llm_calls = dict.fromkeys(_COUNT_KEYS, 0)
+    llm_calls.update({"prompt_ms": 0.0, "predicted_ms": 0.0, "tokens": 0,
+                      "prompt_n": 0, "cache_n": 0,
+                      "repair_prompt_n": 0, "repair_cache_n": 0,
+                      "cache_hit_ratio": None, "repair_issues": None})
+    have = set()
     seen_meta = set()
+
+    def finite(value):
+        return type(value) in (int, float) and 0 <= value <= sys.float_info.max
+
     for meta in metas:
         if not isinstance(meta, dict) or id(meta) in seen_meta:
             continue
         seen_meta.add(id(meta))
-        n = meta.get("calls")
-        if type(n) is int:
-            llm_calls["calls"] += n
-            have_calls = True
+        for key in _COUNT_KEYS:
+            if type(meta.get(key)) is int:
+                llm_calls[key] += meta[key]
+                have.add(key)
         timings = meta.get("timings")
         if isinstance(timings, dict):
             for key in ("prompt_ms", "predicted_ms"):
-                value = timings.get(key)
-                if type(value) in (int, float) and 0 <= value <= sys.float_info.max:
-                    llm_calls[key] += value
-                    have_ms.add(key)
+                if finite(timings.get(key)):
+                    llm_calls[key] += timings[key]
+                    have.add(key)
+        for source, prefix in (("timings", ""), ("repair_timings", "repair_")):
+            pair = meta.get(source)
+            if isinstance(pair, dict) and finite(pair.get("prompt_n")) \
+                    and finite(pair.get("cache_n")):
+                llm_calls[prefix + "prompt_n"] += pair["prompt_n"]
+                llm_calls[prefix + "cache_n"] += pair["cache_n"]
+                have.add(prefix + "prompt_n")
+        issues = meta.get("repair_issues")
+        if isinstance(issues, dict):
+            hist = llm_calls["repair_issues"] or dict.fromkeys(_ISSUE_KEYS, 0)
+            for key in _ISSUE_KEYS:
+                if type(issues.get(key)) is int:
+                    hist[key] += issues[key]
+            llm_calls["repair_issues"] = hist
         usage = meta.get("usage")
         if isinstance(usage, dict) \
                 and type(usage.get("total_tokens")) is int:
             llm_calls["tokens"] += usage["total_tokens"]
-            have_toks = True
-    if not have_calls:
-        llm_calls["calls"] = None
-    for key in ("prompt_ms", "predicted_ms"):
-        if key not in have_ms or not 0 <= llm_calls[key] <= sys.float_info.max:
+            have.add("tokens")
+    for key in (*_COUNT_KEYS, "prompt_ms", "predicted_ms", "tokens"):
+        if key not in have or not finite(llm_calls[key]):
             llm_calls[key] = None
-    if not have_toks:
-        llm_calls["tokens"] = None
+    for prefix in ("", "repair_"):
+        if prefix + "prompt_n" not in have or not finite(llm_calls[prefix + "prompt_n"]) \
+                or not finite(llm_calls[prefix + "cache_n"]):
+            llm_calls[prefix + "prompt_n"] = llm_calls[prefix + "cache_n"] = None
+    if llm_calls["prompt_n"] is not None:
+        total = llm_calls["prompt_n"] + llm_calls["cache_n"]
+        if 0 < total < sys.float_info.max:
+            llm_calls["cache_hit_ratio"] = round(llm_calls["cache_n"] / total, 3)
     return llm_calls if any(
         v is not None for v in llm_calls.values()) else None
 
@@ -5527,6 +5682,18 @@ def _main() -> int:
                 if remaining > 0:
                     time.sleep(remaining)
 
+            def idle(seconds):
+                # wake for the earliest future due job, or at the floor while
+                # a finished result is carried (保存待ち), instead of the fixed poll
+                due = 0.0 if carry else _next_due_in(
+                    led, time.time(), semantic=args.semantic, context=context_lane)
+                if due is not None:
+                    seconds = min(seconds, max(_IDLE_FLOOR_S, due))
+                print(json.dumps({"idle_s": round(seconds, 1),
+                                  "due_in_s": None if due is None else round(due, 1),
+                                  "carried": len(carry), "ts": time.time()}), flush=True)
+                pause(seconds)
+
             total = {"done": 0, "failed": 0, "left": 0}
             context_lane = _SLOT_OVERRIDE == local_llm.LANES[3]
             semantic_first_until = 0.0
@@ -5637,7 +5804,7 @@ def _main() -> int:
                     # under launchd KeepAlive an exit just means a respawn
                     # every 30 s re-running the full scan forever, and the
                     # poll interval still beats the 10-min tick for picking up newly fetched messages.
-                    pause(120)
+                    idle(120)
                     continue
                 if r["done"] == 0 and (r.get("circuit_open_s")
                                        or r.get("disk_low")):
@@ -5655,13 +5822,13 @@ def _main() -> int:
                 elif r["done"] == 0:
                     # Everything selectable failed or is backed off —
                     # wait for the earliest retry instead of quitting.
-                    nt = _next_retry(led)
+                    nt = _next_retry(led, after=time.time())
                     if nt is None:
                         # no retriable error row (e.g. endpoint-down
                         # failures write none): stay resident and poll
-                        pause(120)
+                        idle(120)
                         continue
-                    pause(min(300.0, max(5.0, nt - time.time())))
+                    idle(min(300.0, max(5.0, nt - time.time())))
                 else:
                     pause(1)  # yield the write window between batches
             _settle_carry(led, carry, fence=nightly_state)
