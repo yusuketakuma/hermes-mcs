@@ -117,6 +117,29 @@ def test_archived_patients_are_listed_last_and_marked_in_every_source(led):
     assert "■ 連携サマリー更新\n・1件: ARCHIVED-NAME-CANARY（アーカイブ済み）" in out
 
 
+def test_archived_rooms_follow_active_ones_regardless_of_insert_order(led):
+    # Given: archived rooms recorded BEFORE the active ones, in the
+    # summary-update and addressed-unanswered sections.
+    _patient(led, 1, name="合成在宅")
+    _patient(led, 2, name="合成退所", archived=1)
+    for pid, mid in ((2, 200), (1, 100)):
+        _msg(led, mid, pid=pid, ts=int(NOW) - 3600)
+        _signal_row(led, f"req-{pid}", pid=pid, mids=[mid],
+                    stype="pharmacist_request_unanswered")
+        for at in (NOW - 2 * 86400, NOW - 10):
+            led.artifact_add("karte_summary", '{"empty":false}', project_id=pid)
+            led.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id="
+                           "(SELECT max(artifact_id) FROM artifacts)", (at,))
+    led.db.commit()
+    # When: building the summary.
+    parts = notify_digest.view(led.db, {"signals": {"notify": True}}, "", now=NOW)["parts"]
+    out = notify_render.parts_text(parts)
+    # Then: active first in both sections; archived keeps its mark.
+    assert "・2件: 合成在宅, 合成退所（アーカイブ済み）" in out
+    asked = [line for line in out.splitlines() if "薬剤師宛の依頼に返信の記録なし" in line]
+    assert [line.split()[0] for line in asked] == ["・合成在宅", "・合成退所（アーカイブ済み）"]
+
+
 def _metadata(led, reactions, *, error=None):
     content = {"reactions": {"value": reactions, "observed_at": NOW - 10},
                "mentions": {"value": [{"type": "user", "id": 7}], "observed_at": NOW - 10}}

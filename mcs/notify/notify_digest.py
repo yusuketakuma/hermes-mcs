@@ -239,8 +239,10 @@ def _response_state(db, r, self_id, as_of) -> tuple:
     return replied, mine, f"自分の返信{reply}・{stamp}"
 
 
-def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
-    """自分宛で応答未観測: 既存シグナルと、本人userメンション後の返信・本人反応なし。"""
+def _addressed_unanswered(db, until, ok, room, self_id, signals_on,
+                          archived=frozenset()) -> list:
+    """自分宛で応答未観測: 既存シグナルと、本人userメンション後の返信・本人反応なし。
+    アーカイブ済み患者の行はアクティブ患者の後に並べる。"""
     rows, signal_mids = [], set()
     if signals_on:
         for c in mcs_signals._latest_signal_states(db).values():
@@ -259,8 +261,8 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
             signal_mids.add(msg["message_id"])
             state = (_response_state(db, msg, self_id, until)[2]
                      if self_id else "本人ID不明")
-            rows.append(f"・{room(c['project_id'])} "
-                        f"薬剤師宛の依頼に返信の記録なし・{state}")
+            rows.append((c["project_id"], f"・{room(c['project_id'])} "
+                         f"薬剤師宛の依頼に返信の記録なし・{state}"))
     unknown, station = 0, 0
     if self_id is not None:
         for r in _recent_posts(db, until, ok, ""):
@@ -276,8 +278,10 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
                 continue          # a signal row already lists this post
             replied, mine, state = _response_state(db, r, self_id, until)
             if not replied and not mine:
-                rows.append(f"・{room(r['project_id'])} "
-                            f"自分宛・{_ago(until - r['posted_at_ts'])}・{state}")
+                rows.append((r["project_id"], f"・{room(r['project_id'])} "
+                             f"自分宛・{_ago(until - r['posted_at_ts'])}・{state}"))
+    # stable: each class keeps its signal-then-mention order before MAX_LIST
+    rows = [t for _pid, t in sorted(rows, key=lambda r: r[0] in archived)]
     notes = [] if self_id is not None else [
         "本人の送信者IDが不明のためメンションは判定していません。"]
     if station:
@@ -437,7 +441,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             if u == "llm" else " 🚨")
         for p, m, u in urgent], fold=True)
     section(f"自分宛で返信の記録なし（直近{OWN_POST_DAYS}日）",
-            _addressed_unanswered(db, until, ok, room, self_id, signals_on), fold=True)
+            _addressed_unanswered(db, until, ok, room, self_id, signals_on,
+                                  archived), fold=True)
 
     per: dict = {}
     for r in rows:
@@ -483,7 +488,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
                 and ok(r["project_id"]):
             summaries.append(r["project_id"])
     # count rooms, not artifacts — one room refetched twice is one update
-    updated = list(dict.fromkeys(summaries))
+    updated = sorted(dict.fromkeys(summaries), key=lambda p: p in archived)
     section("連携サマリー更新", [f"・{len(updated)}件: " + _ids(updated, room)]
             if updated else [])
 
