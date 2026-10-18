@@ -120,6 +120,10 @@ _PERSON = re.compile(
 _DIRECT_OWNER = re.compile(rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})の{_OWNER_MODIFIER}[ \t　]*$")
 _CLINICAL_ACTOR = re.compile(r"(?:が|は)[、,\s]*[^。！？!?;；\n、,]*?を(?:開始|中止|増量|減量|変更|処方|投与|測定)")
 _CLINICAL_RECIPIENT = re.compile(rf"(?:{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:に対して|に対し|への)")
+_CARE_ACTOR = re.compile(
+    r"(?:が|は)[ \t　]*(?:(?:入浴|排泄|食事|更衣|移乗|歩行)?介助|訪問"
+    r"|(?:体温|血圧|脈拍|SpO2)(?:を)?(?:測定|測っ|測り|計測)|検温)"
+    r"(?:しました|した|しています|している|た|ました)?[ \t　]*(?=$|[。！？!?;；\n])", re.I)
 _SCOPE_HEADING = re.compile(
     rf"(?m)^[ \t　]*(?:[【［\[](.*?)[】］\]]|([^\n:：]{{1,24}})[:：]|"
     rf"({_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|過去|既往|現在|予定|目標|参考|基準)[ \t　]*$)[ \t　]*")
@@ -240,6 +244,8 @@ def _scope_events(body, patient_name, provider_fields):
             continue
         person = match["person"]
         tail = match.start() + len(person)
+        if person == "自分" and re.search(rf"(?:{CARE_WORKER})(?:が|は)[ \t　]*$", body[:match.start()]):
+            continue  # 「介護士が自分の…」 keeps the explicitly named staff owner.
         if _REPORTING.match(body, tail) and not re.fullmatch(_SELF_PERSON, person) and not re.fullmatch(_COMPOUND_PERSON, person):
             continue
         if (re.fullmatch(STAFF_PERSON, person)
@@ -250,13 +256,9 @@ def _scope_events(body, patient_name, provider_fields):
             after = body[tail:stops[k] if k < len(stops) else len(body)]
             if _CLINICAL_RECIPIENT.search(before) and not re.search(r"自身|自分", after):
                 continue  # A prescribing/measuring clinician is the actor, not the recipient.
-        # 「ヘルパーが入浴介助」: a care worker is the subject only as a value's owner (の体温/は体温).
-        # 「ヘルパーが体温測定」: the measurer is the actor, as with 本人に対し…を測定 above.
-        if re.fullmatch(CARE_WORKER, person) and (
-                (not match["link"].startswith("の")
-                 and not re.match(rf"[ \t　]*(?:{_CLINICAL_OWNER})", body[match.end():], re.I))
-                or (match["link"] == "が" and re.match(r"[^。！？!?;；\n]*?(?:測定|測っ|測り|計測|検温)", body[match.end():])
-                    and not re.match(r"[^。！？!?;；\n]*?(?:自身|自分)", body[match.end():]))):
+        # Only a complete care/measurement action names the actor rather than the owner.
+        # Self-measurement, illness and modified/ambiguous clauses keep the staff owner.
+        if re.fullmatch(CARE_WORKER, person) and _CARE_ACTOR.match(body, tail):
             continue
         subject = _person_scope(person, patient_name)
         events.append((match.start(), subject, None))
