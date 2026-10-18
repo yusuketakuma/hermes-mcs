@@ -968,3 +968,16 @@ def test_admitted_long_ceiling_retry_held_is_not_sent(monkeypatch, tmp_path):
                        match="llm_admission:held"):
         semantic.llm_chat("抽出 JSON:", timeout=900)
     assert len(calls) == 2
+
+
+def test_probe_blocked_by_turn_is_not_cached_as_plain(monkeypatch):
+    """A probe that never left (GPU turn busy) leaves the format mode
+    unprobed so the next call probes again instead of sending plain
+    for the whole cooldown."""
+    import local_llm
+    monkeypatch.setattr(semantic, "_FMT_MODE", None)
+    monkeypatch.setattr(semantic, "_FMT_TS", 0.0)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(local_llm, "probe_format", lambda *a, **k: None)
+    assert semantic._probe_format("http://127.0.0.1:8080", "synthetic", 4) is None
+    assert semantic._FMT_MODE is None and semantic._FMT_TS == 0.0

@@ -380,12 +380,15 @@ def _ask(cfg, payload, deadline, admit, end):
     chat = (lambda prompt, **kw: local_llm.admitted_chat("mcs.extract", prompt, **kw)) \
         if local_llm.admission_enabled() else local_llm.chat
     err: dict = {}
+    # the turn wait (lane 2's request) may precede the send: the call
+    # window applies from the send, and a turn won with less than a
+    # call left is reported busy rather than sent to time out
     response = chat(prompt,
                                      endpoint=endpoint, model=model, timeout=CALL_SECONDS,
-                                     max_tokens=1600, deadline=min(deadline, time.monotonic() + CALL_SECONDS),
+                                     max_tokens=1600, deadline=deadline,
                                      response_format={"type": "json_object"},
                                      extra_payload={"id_slot": local_llm.request_slot()},
-                                     error_out=err)
+                                     error_out=err, turn_min_s=CALL_SECONDS + COMMIT_MARGIN)
     if response and response.get("admission"):
         raise Deferred("nightly_admission_deferred")
     if response is None and err.get("kind") == "busy":

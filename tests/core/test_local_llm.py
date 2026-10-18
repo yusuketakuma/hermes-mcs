@@ -419,3 +419,25 @@ def test_turn_deadline_while_held_is_busy(tmp_path, monkeypatch):
     finally:
         os.close(holder)
     assert _lock_is_free(path)
+
+
+def test_turn_won_with_too_little_time_left_is_busy(tmp_path, monkeypatch):
+    """A turn acquired after the wait ate the time a send needs is not
+    sent (busy), so the request cannot time out mid-decode."""
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
+    err = {}
+    assert local_llm.chat(
+        "prompt", deadline=time.monotonic() + 1.0, turn_min_s=5.0,
+        request_fn=lambda *a, **k: pytest.fail("sent with too little time"),
+        error_out=err) is None
+    assert err == {"kind": "busy"}
+
+
+def test_retire_failed_send_treats_busy_as_never_sent():
+    calls = []
+    broker = type("B", (), {
+        "terminal": lambda self, pid, state, proof=None: calls.append(("terminal", pid, state, proof)),
+        "mark_unknown": lambda self, pid, proof: calls.append(("unknown", pid, proof))})()
+    local_llm._retire_failed_send(broker, 7, "busy", "")
+    local_llm._retire_failed_send(broker, 8, "transport", "")
+    assert calls == [("terminal", 7, "not_sent", "busy"), ("unknown", 8, "transport")]

@@ -98,9 +98,10 @@ TURN_LOCK_POLL_S = 0.2
 
 
 @contextmanager
-def _turn(deadline: float | None):
+def _turn(deadline: float | None, min_s: float = 0.0):
     """Hold the backlog GPU turn for one request; yields False when the
-    caller's deadline expires while waiting (nothing was sent)."""
+    caller's deadline expires while waiting, or fewer than ``min_s``
+    seconds remain once the turn is ours (nothing was sent either way)."""
     path = os.environ.get(TURN_LOCK_ENV)
     if not path:
         yield True
@@ -117,6 +118,9 @@ def _turn(deadline: float | None):
                     yield False
                     return
                 time.sleep(TURN_LOCK_POLL_S)
+        if deadline is not None and time.monotonic() + min_s > deadline:
+            yield False  # the wait ate the time a send needs
+            return
         yield True
     finally:
         os.close(fd)  # closing the descriptor drops the flock
@@ -442,8 +446,9 @@ def _retire_failed_send(broker, pid: int, kind: str | None,
     and only an HTTP 200 with an unusable body proves it finished; any
     other failure leaves the permit ``unknown`` so it keeps occupying
     its class (the module's fail-closed rule)."""
-    if kind == "unreachable":
-        broker.terminal(pid, "not_sent", proof="unreachable")
+    if kind in ("unreachable", "busy"):
+        # refused connection, or the GPU turn never came: never sent
+        broker.terminal(pid, "not_sent", proof=kind)
     elif kind == "protocol":
         broker.terminal(pid, "done", proof=f"{proof_prefix}malformed_200")
     else:
@@ -515,7 +520,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
          max_tokens: int = MAX_TOKENS, timeout: float = TIMEOUT,
          deadline: float | None = None, response_format=None,
          extra_payload: dict | None = None,
-         request_fn=None, error_out: dict | None = None) -> dict | None:
+         request_fn=None, error_out: dict | None = None,
+         turn_min_s: float = 0.0) -> dict | None:
     """One chat-completions round trip.
 
     Returns ``{"text", "finish_reason", "usage", "status"}`` on a parsed
@@ -546,7 +552,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
         body.update(extra_payload)
     # a reaped worker, so a slow response cannot extend the deadline
     send = request_fn or bounded_request
-    with _turn(deadline) as turn:
+    with _turn(deadline, turn_min_s) as turn:
         if not turn:
             # the deadline passed while another backlog lane held the
             # GPU: nothing was sent and the server is fine, so callers

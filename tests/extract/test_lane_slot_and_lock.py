@@ -190,3 +190,80 @@ def test_old_slot_option_is_gone(monkeypatch):
         extract_llm.main()
 
 
+
+
+def test_real_carry_is_not_serialized_or_crashes_resident(monkeypatch):
+    """A real carry holds rows and commit thunks; the resident must log
+    the pass without them instead of dying on json.dumps (Codex L1)."""
+    now = [0.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(extract_llm.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "2", "--stop-after", "10"])
+    monkeypatch.setattr(extract_llm, "Ledger", lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
+    monkeypatch.delenv(extract_llm.local_llm.TURN_LOCK_ENV, raising=False)
+    settled = []
+
+    def run(*args, **kwargs):
+        now[0] += 20
+        return {"done": 0, "failed": 0, "left": 1, "selected": 1,
+                "carry": [({"body_text": "完全合成の投稿"}, 123.0, lambda: None)]}
+    monkeypatch.setattr(extract_llm, "run_pending", run)
+    monkeypatch.setattr(extract_llm, "_settle_carry", lambda led, carry: settled.append(len(carry)))
+    assert extract_llm.main() == 0
+    assert settled == [1]
+
+
+def test_saved_carried_result_counts_as_current_progress(tmp_path, monkeypatch):
+    """The pass that finally writes a carried result reports it as its
+    own progress (done/pids), not only as carried (Codex L2)."""
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    state["blocked"] = 0
+    result = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
+                                     write_wait_s=1, carry=carry)
+    assert len(db.artifacts("extract_llm", message_id=1)) == 1
+    assert result["done"] == 1 and result["pids"] == [1] and result["carried"] == 1
+    db.close()
+
+
+def test_context_lane_normal_settlement_preserves_blocked_result(tmp_path, monkeypatch):
+    """Lane 3's pre-context settlement keeps a still lock-bound result
+    carried (and its claim) instead of discarding it (Codex L3)."""
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    extract_llm._settle_carry(db, carry, final=False)
+    assert carry, "ordinary lane-3 iteration discarded the completed result"
+    assert _claims(db) != []
+    assert db.artifacts("extract_llm", message_id=1) == []
+    state["blocked"] = 0
+    extract_llm._settle_carry(db, carry, final=False)
+    assert carry == [] and _claims(db) == []
+    assert len(db.artifacts("extract_llm", message_id=1)) == 1
+    db.close()
+
+
+def test_update_stop_does_not_commit_old_carried_result(tmp_path, monkeypatch):
+    """An updater fence seen mid-pass exits without writing the carried
+    result under old code; the claim is released for the new resident."""
+    import mcs_util
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    state["blocked"] = 0
+    monkeypatch.setattr(db, "close", lambda: None)
+    monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "2", "--semantic", "--stop-after", "10"])
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: {
+        "done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry})
+
+    def updated(*args):
+        monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 124))
+        return {"run_lock_lost": "updated"}
+    monkeypatch.setattr(extract_llm, "_background_semantic", updated)
+    assert extract_llm.main() == 0
+    assert db.artifacts("extract_llm", message_id=1) == []
+    assert _claims(db) == []
+    db.db.close()

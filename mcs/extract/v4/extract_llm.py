@@ -1492,7 +1492,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 "mcs.extract", prompt, endpoint=endpoint, model=model,
                 max_tokens=max_tokens, timeout=TIMEOUT,
                 deadline=deadline, response_format=rf,
-                request_fn=_opener_request, error_out=err_out)
+                request_fn=_opener_request, error_out=err_out,
+                turn_min_s=need_s or 0)
             if response is not None and response.get("admission"):
                 return _DEFERRED
         else:
@@ -1501,7 +1502,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
                 response_format=rf,
                 extra_payload={"id_slot": _choose_slot()},
-                request_fn=_opener_request, error_out=err_out)
+                request_fn=_opener_request, error_out=err_out,
+                turn_min_s=need_s or 0)
         # Endpoint health of this call for run_pending's breaker: refused /
         # not sent and 503 are outages, a pre-deadline transport failure
         # (timeout, reset) is a slow or stuck server, a 2xx answer (or a 200
@@ -4726,14 +4728,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            if parallel else
                            (lambda i, v: _checkpoint(index, i, v)))
 
-    def _commit(r, d, ctx, integrity, qc):
-        """Persist one validated result — the caller holds the lock."""
+    def _commit(r, d, ctx, integrity, qc) -> bool:
+        """Persist one validated result — the caller holds the lock.
+        True when the artifact was written (a carried commit from an
+        earlier pass counts it in the pass that finally wrote it)."""
         nonlocal done, deferred, held_prior
         # QC-flagged/thin/human-reported rows already hold a current
         # artifact — replacing it is the point of the feedback pass.
         if qc is None and not r["thin_src"] and not r["human_src"] \
                 and _current(ledger, r["message_id"], r["content_hash"]):
-            return
+            return False
         extra = {"thin_retried": True} if r["thin_src"] else {}
         if r["human_src"]:
             extra["human_fix"] = {"feedback_id": r["human_src"],
@@ -4754,7 +4758,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 held_prior += 1
             else:
                 deferred += 1
-            return
+            return False
         # the whole body is now covered — checkpoints for
         # it are dead weight (F14)
         ledger.db.execute(
@@ -4764,6 +4768,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         ledger.db.commit()
         done += 1
         done_pids.add(r["project_id"])
+        return True
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
         nonlocal done, failed, deferred, endpoint_down, lock_lost, slow_deferred
@@ -5062,7 +5067,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             with lock(per_write_lock) as held:
                 for r, lease, commit in carry or ():
                     if held and _owns_current_source(ledger, r, lease):
-                        commit()
+                        if commit():
+                            # the thunk counted it in the pass that
+                            # produced it; this pass is the one reporting
+                            done += 1
+                            done_pids.add(r["project_id"])
                         _release(ledger, r, lease)
                         carried += 1
                     elif held or lease <= time.time() + _CARRY_MARGIN_S:
@@ -5260,18 +5269,28 @@ def _nightly_memory_available() -> bool:
     return False
 
 
-def _settle_carry(ledger, carry: list) -> None:
-    """Last lock attempt for results carried across run_pending calls
-    before the resident exits; whatever is still lock-bound or no longer
-    owned stays pending and re-extracts later (no attempt burned)."""
+def _settle_carry(ledger, carry: list, *, final: bool = True,
+                  write: bool = True) -> None:
+    """Lock attempt for results carried across run_pending calls.
+    ``final`` (resident exit) releases whatever is still lock-bound or
+    no longer owned — it stays pending and re-extracts later, no attempt
+    burned; a non-final pass (lane 3 before patient context) waits only
+    the resident's short window and keeps lock-bound results carried.
+    ``write=False`` (an updater ran) releases without committing so old
+    code never writes after the update fence."""
     if not carry:
         return
-    with _write_lock(True) as held:
+    keep = []
+    with _write_lock(True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S) as held:
         for r, lease, commit in carry:
-            if held and _owns_current_source(ledger, r, lease):
+            if held and write and _owns_current_source(ledger, r, lease):
                 commit()
-            _release(ledger, r, lease)
-    carry.clear()
+                _release(ledger, r, lease)
+            elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
+                _release(ledger, r, lease)
+            else:
+                keep.append((r, lease, commit))
+    carry[:] = keep
 
 
 def _background_nightly(ledger, initial_state, stop=None):
@@ -5473,15 +5492,13 @@ def _main() -> int:
                     # semantic/extraction only when nothing is due. A
                     # carried result is written first so a long context
                     # run cannot outlive its claim lease.
-                    if carry:
-                        _settle_carry(led, carry)
-                        carry = []
+                    _settle_carry(led, carry, final=False)
                     nightly = _background_nightly(led, nightly_state, stop)
                     if nightly.get("status") != "off":
                         print(json.dumps({"nightly": nightly, "ts": time.time()},
                                          ensure_ascii=False), flush=True)
                     if nightly.get("run_lock_lost") == "updated":
-                        _settle_carry(led, carry)
+                        _settle_carry(led, carry, write=False)
                         return 0
                     if nightly.get("done"):
                         pause(1)
@@ -5512,7 +5529,7 @@ def _main() -> int:
                                     admitted_ids=adm,
                                     write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                     carry=carry)
-                    carry = r.get("carry") or []
+                    carry = r.pop("carry", None) or []  # internal; never logged
                     sem = None
                     ran_semantic = False
                     if args.semantic:
@@ -5533,7 +5550,7 @@ def _main() -> int:
                             # the new code instead of re-locking. A plain
                             # reacquire timeout under unchanged code left the
                             # job pending — stay resident.
-                            _settle_carry(led, carry)
+                            _settle_carry(led, carry, write=False)
                             return 0
                 except Exception as e:
                     # a transient failure ('database is locked') must not
