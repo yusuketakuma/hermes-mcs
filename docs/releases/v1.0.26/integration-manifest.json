@@ -726,6 +726,34 @@
       "requires_final_sha_ci": true,
       "independent_review_sha256": "e835fb116e1195080c79a8008761af28677021e0fbc993615491fad58f40adc9",
       "independent_review": "accepted; independently 41 passed, no skipped"
+    },
+    "first_candidate_ci": {
+      "head": "73fca9b8e964b6176c98db9d57068915dcb8ece7",
+      "run_id": 39122071195,
+      "conclusion": "failure",
+      "linux_passed": 14895,
+      "linux_failed": 2,
+      "linux_skipped": 18,
+      "subtests_passed": 41,
+      "macos_passed": 4389,
+      "macos_failed": 1,
+      "failures": [
+        "test_notification_cancel stale body_part fixture",
+        "test_mcs_recovery_narrative stale first-Slack body_part fixture"
+      ],
+      "not_accepted_as_final_ci": true,
+      "receipt_sha256": "7631a667247cae4fc62dbc85f6e795ce981866262a443958a2f11ea36b582cb6"
+    },
+    "ci_narrative_fixture_correction": {
+      "runtime_changes": false,
+      "test_mode": "explicit legacy thread-body delivery and restore",
+      "original_corpus_and_all_probes_retained": true,
+      "tests_passed": 6,
+      "skipped": 0,
+      "current_face_and_overflow": "Separate Slack/SDK tests and cancellation legacy/overflow cases; not claimed as current-face end-to-end narrative",
+      "manifest_sha256": "4ce7afce98396cb81e1ed4571b88aa01f9dff0aeb521e65dd08945226d2e5522",
+      "independent_review": "accepted, 6 passed/0skip; same-session narrative then current face tests 15 passed confirms patch restoration",
+      "independent_review_sha256": "78f07ab2ed104619988ceb11254830dfa50288d24c7af3de3b5a3279b54eb5d5"
     }
   },
   "not_performed": [

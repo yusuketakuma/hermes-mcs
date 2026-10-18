@@ -39,6 +39,7 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -355,8 +356,9 @@ class _Narrative:
             con.close()
 
 
+@patch("present_slack.BODY_ON_FACE", False)
 def _run_narrative(tmp_path):
-    """The ordered scenario — returns the probe list."""
+    """The ordered legacy thread-body delivery/restore scenario — returns its probes."""
     N = _Narrative(tmp_path)
     led = _ledger.Ledger(str(N.data / "ledger.db"))
     N.open_admission()
@@ -366,7 +368,7 @@ def _run_narrative(tmp_path):
         body_lines = [f"メド[{i:02d}]番を投与します。" for i in range(41)]
         body = ("\n".join(body_lines)
                 + "\nSYNTHETIC-NARRATIVE-BODY "
-                + "補足記載。" * 1400)          # ~10k chars -> >4 parts
+                + "補足記載。" * 1400)          # >4 legacy thread-body parts
         p.messages = [_message(1, body=body)]
         led.save_patient(p, notify={"source": "unread"}, semantic=True)
         _attach(led, N.tmp, mid=1)
