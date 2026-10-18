@@ -186,7 +186,7 @@ def test_same_command_is_idempotent_but_changed_payload_conflicts(case):
     with pytest.raises(ValueError, match="command_id_conflict"):
         cancel.apply(case.root, dict(request, reason="別の合成理由"))
     assert _snapshot(case.led.db) == before
-    assert len(list((case.data / "notification_cancellations").glob("*/before.db"))) == 1
+    assert len(list((case.data / "notification_cancellations").glob("*/before-*.db"))) == 1
 
 
 @pytest.mark.parametrize("field,value", [
@@ -268,6 +268,7 @@ def test_every_worker_witness_must_be_stopped(case, monkeypatch):
 def test_worker_restarting_before_commit_rolls_back_the_entire_cancellation(case, monkeypatch):
     request = _request(case)
     calls = []
+    stopped = cancel.os.kill
     def restarting(pid, signal):
         assert (pid, signal) == (FAKE_PID, 0)
         calls.append(pid)
@@ -279,6 +280,13 @@ def test_worker_restarting_before_commit_rolls_back_the_entire_cancellation(case
         cancel.apply(case.root, request)
     assert len(calls) == 2
     assert _snapshot(case.led.db) == before
+    earlier = set((case.data / "notification_cancellations").rglob("before-*.db"))
+    assert len(earlier) == 1
+    monkeypatch.setattr(cancel.os, "kill", stopped)
+    receipt = cancel.apply(case.root, request)
+    assert Path(receipt["backup"]) not in earlier
+    assert all(p.exists() for p in earlier)
+    _assert_cancelled(case)
 
 
 def test_unreleased_restore_hold_refuses_cancellation(case):

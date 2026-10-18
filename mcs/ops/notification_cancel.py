@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import sqlite3
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -157,10 +158,12 @@ def apply(root, request):
                 if db.execute("SELECT 1 FROM notification_restore_holds "
                               "WHERE released_at IS NULL LIMIT 1").fetchone():
                     raise ValueError("restore_delivery_held")
-                backup = data / "notification_cancellations" / request["command_id"] / "before.db"
-                backup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                archive.mkdir(mode=0o700, parents=True, exist_ok=True)
+                # A pre-commit failure leaves its evidence intact; a retry
+                # gets a fresh backup without overwriting that earlier copy.
+                fd, backup_name = tempfile.mkstemp(prefix="before-", suffix=".db", dir=archive)
                 os.close(fd)
+                backup = Path(backup_name)
                 with closing(sqlite3.connect(str(backup))) as dest:
                     db.backup(dest)
                     if dest.execute("PRAGMA quick_check").fetchone()[0] != "ok":
