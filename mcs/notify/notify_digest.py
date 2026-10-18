@@ -17,6 +17,7 @@ import json
 import os
 import sys
 import time
+import unicodedata
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -59,13 +60,20 @@ def settings(cfg) -> dict | None:
             "scope": scope if isinstance(scope, str) else "all"}
 
 
+_FULLWIDTH_NUM = str.maketrans("０１２３４５６７８９，", "0123456789,")
+
+
 def parse_scope(text) -> dict | str:
     """``all mine station:X project:1,2 days:3`` -> filter dict, or a JA
     error string. Kinds combine with AND; repeated station/project OR."""
     out = {"mine": False, "stations": [], "projects": [], "days": 1}
     for tok in str(text or "").split():
-        key, _, val = tok.partition(":")
-        key = key.lower()
+        # an IME's full-width colon/digits/comma read as the help text's ASCII forms
+        cut = min((i for i in (tok.find(":"), tok.find("：")) if i >= 0), default=len(tok))
+        key, val = tok[:cut], tok[cut + 1:]   # the station name after the first colon stays as typed
+        key = unicodedata.normalize("NFKC", key).lower()
+        # only full-width digits and comma: NFKC would also turn ² into 2
+        num = val.translate(_FULLWIDTH_NUM)
         if key in ("all", "全体") and not val:
             continue
         if key in ("mine", "担当") and not val:
@@ -74,16 +82,16 @@ def parse_scope(text) -> dict | str:
             out["stations"].append(val[:60])
         elif key in ("project", "患者") and val:
             try:
-                ids = [int(v) for v in val.split(",")
+                ids = [int(v) for v in num.split(",")
                        if v.isascii() and v.isdigit()]
             except ValueError:
                 return f"患者の指定が不正です（患者IDは数字で指定してください）: {tok[:40]}"
-            if not ids or len(ids) != len(val.split(",")):
+            if not ids or len(ids) != len(num.split(",")):
                 return f"患者の指定が不正です（患者IDは数字で指定してください）: {tok[:40]}"
             out["projects"] += ids
-        elif key in ("days", "日数") and val.isascii() and val.isdigit():
+        elif key in ("days", "日数") and num.isascii() and num.isdigit():
             try:
-                days = int(val)
+                days = int(num)
             except ValueError:
                 days = 0
             if not 1 <= days <= MAX_DAYS:

@@ -34,4 +34,5 @@ def test_empty_other_and_oversized_views():
 def test_source_date_is_a_link_to_the_room():
     blocks = context_list_blocks(VIEW, lambda pid: pid == 1)
     linked = [b for b in blocks if b["type"] == "context" and b["elements"][0]["type"] == "mrkdwn"]
-    assert linked[0]["elements"][0]["text"] == "<https://www.medical-care.net/projects/medical/1|10/01> 看護師 #1"
+    assert linked[0]["elements"][0]["text"] == "<https://www.medical-care.net/projects/medical/1|10/01>"
+    assert linked[0]["elements"][1] == {"type": "plain_text", "text": "看護師 #1"}

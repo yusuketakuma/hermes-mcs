@@ -47,7 +47,12 @@ def test_reported_states_are_not_collapsed_or_promoted(records, profession, cate
     rendered = notify_views.patient_context_list(
         records.db, 1, "background", cfg={}, since=0, now=1_800_000_000)
     for body in bodies:
-        assert any(row["text"].startswith(body + "\n") for row in rendered["items"])
+        # the row keeps the whole report; only a heading repeating the group
+        # heading is dropped, and the source follows at the end of the line
+        heading, _, rest = body.partition(": ")
+        shown = (body, rest) if rest else (body,)
+        assert any(row["text"].startswith(text + "\u3000（") for row in rendered["items"]
+                   for text in shown), body
     if profession == "歯科衛生士":
         assert all(i["sender"] == "sender" and i["profession"] == profession for i in items)
         assert "長女が" in items[1]["quote"] and "本人が" in items[0]["quote"]

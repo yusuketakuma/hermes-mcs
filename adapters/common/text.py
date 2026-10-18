@@ -425,9 +425,12 @@ def list_messages(result: dict, allowed, markdown: bool = True, *,
         shown = {i.get("group") for i in items[:LIST_SHOW]}
         hidden = [g for g in dict.fromkeys(i.get("group") for i in items[LIST_SHOW:])
                   if g and g not in shown]
-        lines.append(f"他{rest}件（ここでは{LIST_SHOW}件まで表示）"
+        lines.append(f"他{rest}件（ここでは{min(len(items), LIST_SHOW)}件まで表示）"
                      + (f": {lit('・'.join(hidden))}" if hidden else ""))
-    lines += [lit(x) for x in view.get("notes") or []]
+    notes = [lit(x) for x in view.get("notes") or []]
+    if notes and items:
+        lines.append("")   # status notes stand apart from the last group's rows
+    lines += notes
     return _answer_chunks("\n".join(lines))
 
 
