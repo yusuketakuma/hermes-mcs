@@ -397,20 +397,30 @@ def build(db, cfg, since: float, until: float, flt=None, *,
 
     sig = cfg.get("signals")
     signals_on = isinstance(sig, dict) and sig.get("notify") is True
-    by_type: dict = {}
-    stale_by: dict = {}
+    # per type, split active (False) / archived (True) so archived alerts
+    # are counted in the total but listed after active ones, marked
+    by_type: dict = {False: {}, True: {}}
+    stale_by: dict = {False: {}, True: {}}
     if signals_on:
         for c in mcs_signals._latest_signal_states(db).values():
             if c and c["state"] == "open" and ok(c["project_id"]) \
                     and c["type"] not in EXCLUDED_SIGNALS:
-                by_type[c["type"]] = by_type.get(c["type"], 0) + 1
+                part = by_type[c["project_id"] in archived]
+                part[c["type"]] = part.get(c["type"], 0) + 1
         for _key, c in _stale_open_unacked(db, until):
             if ok(c["project_id"]):
-                stale_by[c["type"]] = stale_by.get(c["type"], 0) + 1
+                part = stale_by[c["project_id"] in archived]
+                part[c["type"]] = part.get(c["type"], 0) + 1
+
+    def by_class(counts) -> list:
+        """[(suffix, {type: n})] — active first, then archived, non-empty."""
+        return [(notify_views.ARCHIVED_MARK if is_archived else "", counts[is_archived])
+                for is_archived in (False, True) if counts[is_archived]]
 
     patients = len(live if keep is None else live & keep)
     summary = (f"新着 {len(rows)}件・緊急度高 {len(urgent)}件"
-               + (f"・アラート {sum(by_type.values())}件" if signals_on else "")
+               + (f"・アラート {sum(n for d in by_type.values() for n in d.values())}件"
+                  if signals_on else "")
                + f"・未完了タスク {len(tasks)}件" + _nonzero(
                    (("期限切れ", len(late)), ("本日期限", len(due)))))
     containers = [
@@ -430,10 +440,10 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             rooms_ = sorted(dict.fromkeys(pids), key=lambda p: p in archived)
             todo.append(f"・{label} {len(pids)}件（{len(rooms_)}人）: "
                         + _ids(rooms_, room))
-    if stale_by:
-        todo.append(f"・滞留アラート（{STALE_ALERT_D}日超・未確認）"
-                    f"{sum(stale_by.values())}件: " + "・".join(
-                        f"{_signal_ja(k)} {n}" for k, n in sorted(stale_by.items())))
+    for mark, counts in by_class(stale_by):
+        todo.append(f"・滞留アラート（{STALE_ALERT_D}日超・未確認）{mark}"
+                    f"{sum(counts.values())}件: " + "・".join(
+                        f"{_signal_ja(k)} {n}" for k, n in sorted(counts.items())))
     section("要対応", todo)
     section(f"緊急度高 {len(urgent)}件", [
         f"・{room(p)} {_posted_hhmm(db, m)}" + (
@@ -456,9 +466,9 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             f"{k} {n}" for k, n in sorted(p.items(), key=lambda x: -x[1]))
         + "）" for pid, p in ranked], fold=True)
 
-    if by_type:
-        section("確認待ちのアラート", ["・" + "・".join(
-            f"{_signal_ja(k)} {n}" for k, n in sorted(by_type.items()))])
+    section("確認待ちのアラート", [
+        "・" + "・".join(f"{_signal_ja(k)} {n}" for k, n in sorted(counts.items())) + mark
+        for mark, counts in by_class(by_type)])
 
     reacted, reaction_counts = _self_reaction_count(db, since, until, keep)
     # an observed zero is omitted; unfetched stamps are counted in 取得状況

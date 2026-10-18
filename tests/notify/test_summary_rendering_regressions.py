@@ -140,6 +140,27 @@ def test_archived_rooms_follow_active_ones_regardless_of_insert_order(led):
     assert [line.split()[0] for line in asked] == ["・合成在宅", "・合成退所（アーカイブ済み）"]
 
 
+def test_archived_alert_counts_are_listed_after_active_ones_and_marked(led):
+    # Given: an archived-only open alert and a stale one, plus an active alert.
+    _patient(led, 1, name="合成在宅")
+    _patient(led, 2, name="合成退所", archived=1)
+    _signal_row(led, "arch", pid=2, stype="adherence_concern")
+    _signal_row(led, "act", pid=1, stype="med_followup")
+    led.db.execute("UPDATE artifacts SET created_at=? WHERE kind='signal_v1'",
+                   (NOW - 30 * 86400,))
+    led.db.commit()
+    # When: building the summary.
+    parts = notify_digest.view(led.db, {"signals": {"notify": True}}, "", now=NOW)["parts"]
+    out = notify_render.parts_text(parts)
+    # Then: totals keep both classes; per-type lines separate them, active first.
+    assert "アラート 2件" in out
+    pending = out.split("■ 確認待ちのアラート\n", 1)[1].split("\n■", 1)[0].splitlines()
+    assert len(pending) == 2 and pending[1].endswith("（アーカイブ済み）")
+    assert "（アーカイブ済み）" not in pending[0]
+    stale = [line for line in out.splitlines() if line.startswith("・滞留アラート")]
+    assert len(stale) == 2 and "（アーカイブ済み）" in stale[1] and "（アーカイブ済み）" not in stale[0]
+
+
 def _metadata(led, reactions, *, error=None):
     content = {"reactions": {"value": reactions, "observed_at": NOW - 10},
                "mentions": {"value": [{"type": "user", "id": 7}], "observed_at": NOW - 10}}
