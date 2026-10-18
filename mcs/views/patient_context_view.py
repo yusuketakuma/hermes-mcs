@@ -331,10 +331,14 @@ def discrepancies(ev, posters=None) -> dict:
         out.append({"category": category, "subject": subject, "key": key, "identity": list(identity),
                     "kind": kind, "records": rows})
     orgs = {s.strip() for w in posters or [] for s in (w.get("organization") or "").split(",") if s.strip()}
+    if orgs:
+        # Match complete known names before separators, including names with an internal slash.
+        names = "|".join(re.escape(o) for o in sorted(orgs, key=len, reverse=True))
+        provider_parts = re.compile(rf"(?:{names}|[^、,，／/\n])+")
     for item in ev["items"] if orgs else []:
         text = item.get("text") or ""
         # each written provider separately: one posting organization does not cover the others
-        written = [s for s in re.split(r"[、,，／/\n]", text) if _ORG_WORD.search(s)]
+        written = [s for s in provider_parts.findall(text) if _ORG_WORD.search(s)]
         if item["category"] == "care_team" and any(not any(o in s for o in orgs) for s in written):
             out.append({"category": "care_team", "subject": item["subject"], "key": "organization", "identity": [],
                         "kind": "provider_not_posting", "records": [{**item, "value": text}]})
