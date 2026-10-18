@@ -2,7 +2,7 @@
   "version": "1.0.26",
   "sections": {
     "features": {
-      "notes": "2026-10-18 1.0.26候補: 患者の記録まとめ全8画面のproject_id付きscope判定、読取り失敗時の基本まとめへの案内、関係者と出典表示を実装へ照合。アーカイブ患者は一覧末尾・通常解析の残り枠、夜間まとめとスタンプ取得はactiveのみ。Slackの新形式カード内原文と、新着案内・添付・収まらない投稿のスレッド表示へREADMEを訂正した。確定画面は対象と全文を表示し最後だけ確定ボタン。夜間生成・限定閲覧の省略時true、patient_state_context既定false、第2入力源未実装を維持。ルール世代24による通常再抽出とLLM世代9維持をCHANGELOGへ明記。",
+      "notes": "2026-10-18 1.0.26候補: 患者の記録まとめ全8画面のproject_id付きscope判定、読取り失敗時の基本まとめへの案内、関係者と出典表示を実装へ照合。アーカイブ患者は一覧末尾・通常解析の残り枠、夜間まとめとスタンプ取得はactiveのみ。Slackの新形式カード内原文と、新着案内・添付・収まらない投稿のスレッド表示へREADMEを訂正した。確定画面は対象と全文を表示し最後だけ確定ボタン。夜間生成・限定閲覧の省略時true、patient_state_context既定false、第2入力源未実装を維持。ルール世代24による通常再抽出とLLM世代9維持をCHANGELOGへ明記。 最終修正3d553260では患者区分別の交互順保存を照合し、アクティブ側の従来キー・処理枠・世代を維持。",
       "sources": [
         "README.md",
         "mcs/notify/notify_cards.py",
@@ -14,11 +14,12 @@
         "mcs/views/patient_context_view.py",
         "adapters/common/text.py",
         "adapters/slack/actions.py",
-        "adapters/discord/actions.py"
+        "adapters/discord/actions.py",
+        "mcs/semantic/semantic_drain.py"
       ]
     },
     "demos": {
-      "notes": "2026-10-18 1.0.26候補: Slack先頭と8枚の完全合成説明図を保持。01〜03の新形式カード内の要約→スタンプ→原文折りたたみを現行sourceへ照合し、既存画像監査を再利用。02をローカルで再び開き、行順・折りたたみ・下部操作と文字欠けを確認。版別SVG/PNGは02と同一bytesを保存し、由来とhashをREADMEへ記録。Discordの本文thread、LINE WORKSの投稿見出しと別本文、本人向け確認と人承認の配置は保持。390px相当、実Slack画面、GitHub Releaseの取得・表示は未確認。SDK52 lane passは実サービス配信や実画面検証へ昇格しない。",
+      "notes": "2026-10-18 1.0.26候補: Slack先頭と8枚の完全合成説明図を保持。01〜03の新形式カード内の要約→スタンプ→原文折りたたみを現行sourceへ照合し、既存画像監査を再利用。02をローカルで再び開き、行順・折りたたみ・下部操作と文字欠けを確認。版別SVG/PNGは02と同一bytesを保存し、由来とhashをREADMEへ記録。Discordの本文thread、LINE WORKSの投稿見出しと別本文、本人向け確認と人承認の配置は保持。読み順の説明図を新規SVGとPNGで追加し、390×610px原寸で主要ラベル・本文・欠けや重なりを確認。実Slack・実スマートフォン・GitHub Releaseの取得・表示は未確認。SDK52 lane passは実サービス配信や実画面検証へ昇格しない。",
       "sources": [
         "README.md",
         "scripts/development/generate_slack_gallery.py",
@@ -28,7 +29,9 @@
         "adapters/slack/cards.py",
         "adapters/discord/cards.py",
         "adapters/lineworks/cards.py",
-        "docs/guides/USER_GUIDE.md"
+        "docs/guides/USER_GUIDE.md",
+        "docs/releases/v1.0.26/slack-reading-order.svg",
+        "docs/releases/v1.0.26/slack-reading-order.png"
       ]
     },
     "quickstart": {
@@ -47,7 +50,7 @@
       ]
     },
     "safety": {
-      "notes": "2026-10-18 1.0.26候補: 外部通知に患者名・本文・対象添付が含まれる説明、端末プレビュー、未取得と0件・未返信記録と未対応の区別を維持。カード内原文・スタンプ表示先にREADMEを合わせた。確認内容の全文表示でもactor・権限・有効期限・人確定は維持し、Slack通知の取消は対象計画・未発行/未送信確定・worker停止・人承認と理由等が必要。送信結果不明や復元のholdは更新で解除しない。更新/復旧の手編集・未知checkout保護、医薬品masterの同梱と私有辞書採用承認を分離。実データ臨床精度・実機性能・実チャット配信は未実施と記録。",
+      "notes": "2026-10-18 1.0.26候補: 外部通知に患者名・本文・対象添付が含まれる説明、端末プレビュー、未取得と0件・未返信記録と未対応の区別を維持。カード内原文・スタンプ表示先にREADMEを合わせた。確認内容の全文表示でもactor・権限・有効期限・人確定は維持し、Slack通知の取消は対象計画・未発行/未送信確定・worker停止・人承認と理由等が必要。送信結果不明や復元のholdは更新で解除しない。更新/復旧の手編集・未知checkout保護、医薬品masterの同梱と私有辞書採用承認を分離。実データ臨床精度・実機性能・実チャット配信は未実施と記録。 SDK固定版検査は依存名を正規化してPyJWT/cryptography両方を必須にし、表記揺れ・欠落・version不一致と実SDKで検証。",
       "sources": [
         "README.md",
         "SECURITY.md",
@@ -58,11 +61,12 @@
         "deployment/recovery/mcs_recover.py",
         "docs/guides/NOTIFICATION_RECOVERY.md",
         "resources/drug-master/README.md",
-        "tests/adapters/common/test_confirmation_preview.py"
+        "tests/adapters/common/test_confirmation_preview.py",
+        "integration/test_pinned_sdk_versions.py"
       ]
     },
     "docs": {
-      "notes": "2026-10-18 1.0.26候補: docs/READMEを目的別主索引、developmentを現行開発手順、releases/v版を過去計画・受入・画像の置場として実ファイルへ照合。旧公開入口のguidesを保持し、27移動文書の参照追従の証拠を再利用。1.0.26の版別README・画像を追加し、受入票と更新ガイドへの導線を確認。25変更記録を同一bytesでarchiveし、本文は12目的別項目と世代変更、最大3比較へ集約。技術detailsとrefsは全件保持。版の正本はGit tagとCHANGELOGであり、plugin versionは独立契約として変更不要。生成blockは既存生成器で同期し、公開・配備の完了とは区別。",
+      "notes": "2026-10-18 1.0.26候補: docs/READMEを目的別主索引、developmentを現行開発手順、releases/v版を過去計画・受入・画像の置場として実ファイルへ照合。旧公開入口のguidesを保持し、27移動文書の参照追従の証拠を再利用。1.0.26の版別README・画像を追加し、受入票と更新ガイドへの導線を確認。当初25変更記録を同一bytesでarchiveし、最終修正1件を追加。本文は目的別項目と世代変更、最大3比較へ集約。技術detailsとrefsは全件保持。版の正本はGit tagとCHANGELOGであり、plugin versionは独立契約として変更不要。生成blockは既存生成器で同期し、公開・配備の完了とは区別。",
       "sources": [
         "README.md",
         "CHANGELOG.md",

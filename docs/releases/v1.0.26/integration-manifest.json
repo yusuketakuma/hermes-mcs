@@ -1,7 +1,7 @@
 {
   "version": "1.0.26",
   "integration_commit": "d318cdd5b6b3e5b3ff278922100b8464d9257729",
-  "runtime_reference": "c47b0a8e6e3200f56cc99ad843c1073e4c732b1d",
+  "runtime_reference": "3d55326074e14ec6d16c62d981e275937dc1f644",
   "production_baseline": "35b5a5531e04441391bfb43b8389a7ca43a5dc94",
   "previous_published_version": "1.0.25",
   "published_baseline": "5ecea075500cba976764b508cdaef5004ce8795f",
@@ -512,6 +512,16 @@
         "deployment/recovery/mcs_recover.py",
         "docs/guides/UPGRADE_AGENT.md"
       ]
+    },
+    {
+      "record": "changes/archive/1.0.26/cr-scheduler-isolation.json",
+      "title": "患者区分ごとに解析の処理順を保持",
+      "implementation_and_verification_refs": [
+        "mcs/semantic/semantic_drain.py",
+        "tests/semantic/test_archived_later_queue.py",
+        "integration/test_pinned_sdk_versions.py",
+        "tests/meta/test_sdk_ci_lanes.py"
+      ]
     }
   ],
   "legacy_dirty": {
@@ -615,6 +625,36 @@
       "metadata_receipt_sha256": "e4cf0547e2c709b23829d20d21f1750851250f43e00e56ac5a984a0d17c514bd",
       "root_links": 79,
       "missing_links": 0
+    },
+    "code_review_round1": {
+      "head": "f98b404cc4edd5cebb3e35b0794a912e11e8004f",
+      "exit_code": 0,
+      "outcome": "completed",
+      "reviewed_text": 287,
+      "excluded_binary": 6,
+      "missing": 0,
+      "minor_findings": 2,
+      "both_fixed_in": "3d55326074e14ec6d16c62d981e275937dc1f644",
+      "stream_sha256": "66eb375bec86ca7ddfb76d097b78e3de10dbd1c4494f0b2fa8e2cd2bfdbbf2de"
+    },
+    "post_review_fixes": {
+      "related_passed": 71,
+      "synthetic_full_pin_checker_cases": 12,
+      "hermes_sdk_passed": 26,
+      "standalone_sdk_passed": 12,
+      "sdk_skipped": 0,
+      "hermes_sdk_log_sha256": "5df9ecd4afe4eeb17d6ad3aa1cee099ff581da1faea5d4035857269817077899",
+      "standalone_sdk_log_sha256": "cbd284e21f5829c11a453189ba282c33c185303ee80f6ed5fa35d2393477134e",
+      "scheduler_independent_review_sha256": "9d88d925be6b43635268d2f0f33e24c1f237b916f55c2248bd17d2cfffc6980e",
+      "sdk_independent_review_sha256": "107dc32cdd53d2eca2be0552dd8fa33c76a12077022a3799246496b020ba39c5",
+      "runtime": "isolated uv CPython3.14.8, SQLite3.53.1, stdlib OpenSSL3.5.9; pinned SDK site-packages reused read-only; no production changes",
+      "release_document_tests": {
+        "passed": 31,
+        "subtests_passed": 41,
+        "skipped": 0,
+        "log_sha256": "087e77a760fd93192c85ecf8deab3abb9d00cf5a534544cd50017bb004e3e1de"
+      },
+      "static_checks_receipt_sha256": "be8c090564c5a2f9713654f65adb17282c46bdeece6505cdef35b4eb7e8c816d"
     }
   },
   "not_performed": [
@@ -622,8 +662,7 @@
     "native mobile and accessibility acceptance",
     "exact release SHA GitHub CI",
     "push/tag/publication/deployment",
-    "release-wide CodeRabbit: authenticated shared skill catalog empty; administrator restoration pending",
-    "390px image rendering: browser local-file protocol blocked"
+    "post-fix CodeRabbit round2 pending"
   ],
   "lifecycle_evidence_sha256": "ff190460c1aae35e21efed120702d7a7cf536a9b2860f359330cc9d5583c7924",
   "dependency_security": {
@@ -635,5 +674,23 @@
     "limitation": "cryptography 50.0.1 bundles OpenSSL 4.0.2; affected API reachability not established in inspected required MCS paths; optional plugins, other operating systems and source builds unverified",
     "optional_update": "cryptography 50.0.2 wheel bundles OpenSSL 4.0.3; requires coordinated Hermes pin/lock and MCS SDK validation"
   },
-  "integration_independent_review_sha256": "3aa880350286fcb72e4b0b811e75ec34a521a15b11728e437e5d070528fcc4ac"
+  "integration_independent_review_sha256": "3aa880350286fcb72e4b0b811e75ec34a521a15b11728e437e5d070528fcc4ac",
+  "previous_runtime_reference": "c47b0a8e6e3200f56cc99ad843c1073e4c732b1d",
+  "additional_fragments_after_build": 1,
+  "canonical_review_skill": {
+    "revision": "7f4f38eb-53a1-441b-a50f-43640278ddb9",
+    "file_sha256": "15ded76ecd0839dacf24435cacdf38104fde9fc7f2b6b9d420fcdf6dae3028c9",
+    "receipt_sha256": "f9c746dea54145cf3c3265ce5fc124b155b9e2c71e78f9be483e4c13b83d0b6c"
+  },
+  "local_release_visual": {
+    "width": 390,
+    "height": 610,
+    "svg_sha256": "12189434243b64a017a5251ea3d21ebae4cdf99f5ef328fdf585024c94a1bb9b",
+    "png_sha256": "54c3bf8f6dfac5b8373c2b8146d9c445f74e06a84c4fed85a2671bbc45c0de4c",
+    "local_original_size_visual_check": "passed: key labels and body readable, no clipping or overlapping; exact source-based explanatory diagram",
+    "renderer": "existing Quick Look and ImageMagick workflow; temporary square viewport only, no image upload",
+    "product_ui_changed": false,
+    "real_clients_verified": false,
+    "github_release_verified": false
+  }
 }
