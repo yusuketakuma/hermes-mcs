@@ -1,7 +1,7 @@
 {
   "version": "1.0.26",
   "integration_commit": "d318cdd5b6b3e5b3ff278922100b8464d9257729",
-  "runtime_reference": "3d55326074e14ec6d16c62d981e275937dc1f644",
+  "runtime_reference": "956a37a6d42f8b924cf3da9ecbab8c8ec278ebb7",
   "production_baseline": "35b5a5531e04441391bfb43b8389a7ca43a5dc94",
   "previous_published_version": "1.0.25",
   "published_baseline": "5ecea075500cba976764b508cdaef5004ce8795f",
@@ -522,6 +522,18 @@
         "integration/test_pinned_sdk_versions.py",
         "tests/meta/test_sdk_ci_lanes.py"
       ]
+    },
+    {
+      "record": "changes/archive/1.0.26/cr-final-findings.json",
+      "title": "集計期間と更新前確認の不一致を修正",
+      "implementation_and_verification_refs": [
+        "mcs/notify/notify_digest.py",
+        "mcs/ops/mcs_update.py",
+        "adapters/slack/cards.py",
+        "tests/notify/test_notify_digest.py",
+        "tests/ops/test_python314_runtime_migration.py",
+        "tests/adapters/slack/test_patient_context_blocks.py"
+      ]
     }
   ],
   "legacy_dirty": {
@@ -655,14 +667,52 @@
         "log_sha256": "087e77a760fd93192c85ecf8deab3abb9d00cf5a534544cd50017bb004e3e1de"
       },
       "static_checks_receipt_sha256": "be8c090564c5a2f9713654f65adb17282c46bdeece6505cdef35b4eb7e8c816d"
+    },
+    "code_review_round2": {
+      "head": "0554a509b3919de354ce2589a41a77fd6399ca3e",
+      "base": "35b5a5531e04441391bfb43b8389a7ca43a5dc94",
+      "exit_code": 0,
+      "outcome": "completed",
+      "reviewed_text": 289,
+      "excluded_binary": 7,
+      "missing": 0,
+      "findings": 8,
+      "fixed_or_clarified": 7,
+      "false_positive": 1,
+      "unresolved": 0,
+      "fix_commit": "956a37a6d42f8b924cf3da9ecbab8c8ec278ebb7",
+      "stream_sha256": "51ac524b9f665b56f2c95ee275dc29029be8949aab0be1541ba18c7e06d97832",
+      "disposition_sha256": "1c9f5455549fd7da82c111e4cc4eefec3541748b51270b8de7c738468a74f3f8",
+      "automatic_rounds": 2,
+      "third_run": false,
+      "final_code_not_submitted_for_third_review": true
+    },
+    "post_round2_fixes": {
+      "runtime_commit": "956a37a6d42f8b924cf3da9ecbab8c8ec278ebb7",
+      "digest_related_passed": 88,
+      "slack_and_role_passed": 333,
+      "runtime_related_passed": 240,
+      "runtime_counting": "239 unchanged passes reused plus one corrected command-audit test passed; not a full rerun",
+      "independent_runtime_review_passed": 120,
+      "independent_review_counting": "overlaps implementation tests; not additional unique cases",
+      "runtime_review_sha256": "355397075333cfe42e721cff3ce060580b140f834367d96fb7eda4a9fb48493f",
+      "slack_review_sha256": "381d4c27b4e8b3fdb4135fc15fb90b10620cb63209227967f757dbc8ded70224",
+      "hermes_sdk_passed": 26,
+      "standalone_sdk_passed": 12,
+      "sdk_skipped": 0,
+      "hermes_sdk_log_sha256": "68701cc465b7dc68abf5bea62397696b3f2d4e86bd113b165734cff4236aaee4",
+      "standalone_sdk_log_sha256": "1d7cdf5e001d5e1321c33dd5a459be202e7cf19d14495ff5acc291c98b5cf9e2",
+      "static_receipt_sha256": "27a29e87bed31287284b37321010533302daa84510eef5bed62fbc17d69afede",
+      "release_tests_passed": 31,
+      "release_subtests_passed": 41,
+      "release_test_log_sha256": "dae7108966db2830f6f63e32f090c66c708116e2e05bcf70adbb349e82bdd881",
+      "stamp_false_positive_evidence_sha256": "5624bcaffa8a977898b861bd0cee3e55072b0386bfb4a28b201d969e5b603fc2"
     }
   },
   "not_performed": [
     "live provider acceptance",
     "native mobile and accessibility acceptance",
-    "exact release SHA GitHub CI",
-    "push/tag/publication/deployment",
-    "post-fix CodeRabbit round2 pending"
+    "main merge/tag/Release publication/deployment"
   ],
   "lifecycle_evidence_sha256": "ff190460c1aae35e21efed120702d7a7cf536a9b2860f359330cc9d5583c7924",
   "dependency_security": {
@@ -675,8 +725,8 @@
     "optional_update": "cryptography 50.0.2 wheel bundles OpenSSL 4.0.3; requires coordinated Hermes pin/lock and MCS SDK validation"
   },
   "integration_independent_review_sha256": "3aa880350286fcb72e4b0b811e75ec34a521a15b11728e437e5d070528fcc4ac",
-  "previous_runtime_reference": "c47b0a8e6e3200f56cc99ad843c1073e4c732b1d",
-  "additional_fragments_after_build": 1,
+  "previous_runtime_reference": "3d55326074e14ec6d16c62d981e275937dc1f644",
+  "additional_fragments_after_build": 2,
   "canonical_review_skill": {
     "revision": "7f4f38eb-53a1-441b-a50f-43640278ddb9",
     "file_sha256": "15ded76ecd0839dacf24435cacdf38104fde9fc7f2b6b9d420fcdf6dae3028c9",
@@ -692,5 +742,23 @@
     "product_ui_changed": false,
     "real_clients_verified": false,
     "github_release_verified": false
+  },
+  "initial_runtime_reference": "c47b0a8e6e3200f56cc99ad843c1073e4c732b1d",
+  "required_external_ci": {
+    "workflow": "ci.yml",
+    "ref": "release/v1.0.26",
+    "exact_final_commit_required": true,
+    "required_jobs": [
+      "lint-test",
+      "hygiene",
+      "standalone-sdk",
+      "incident-gates",
+      "macos",
+      "hermes-integration"
+    ],
+    "expected_skipped_jobs": [
+      "readme-sync"
+    ],
+    "acceptance_receipt": "Recorded outside the candidate tree against its final SHA; local checks do not substitute."
   }
 }
