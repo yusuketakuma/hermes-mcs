@@ -1,7 +1,6 @@
 """MCSの導入・更新・初期設定・診断・医薬品マスター確認を行います。"""
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import plistlib
@@ -14,29 +13,10 @@ from xml.parsers.expat import ExpatError
 REPO: Final = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "mcs"))
 import _mcs_path  # noqa: E402, F401
+from cli_args import JapaneseArgumentParser as _JapaneseParser  # noqa: E402
 import mcs_runtime  # noqa: E402
 from mcs_requests import release_tag  # noqa: E402
 from mcs_util import load_config  # noqa: E402
-
-
-class _JapaneseParser(argparse.ArgumentParser):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._positionals.title = "操作"
-        self._optionals.title = "オプション"
-        for action in self._actions:
-            if isinstance(action, argparse._HelpAction):
-                action.help = "この説明を表示して終了する"
-
-    def format_help(self):
-        return super().format_help().replace("usage: ", "使い方: ", 1)
-
-    def format_usage(self):
-        return super().format_usage().replace("usage: ", "使い方: ", 1)
-
-    def error(self, message):
-        self.print_usage(sys.stderr)
-        self.exit(2, f"入力内容を確認してください。--help で指定方法を確認できます。\n詳細: {message}\n")
 
 
 def main(argv: list[str] | None = None) -> int:
