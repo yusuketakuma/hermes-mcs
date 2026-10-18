@@ -138,5 +138,31 @@
     "unclassified_files": [],
     "findings": 1,
     "log_sha256": "8c1ed019b0cbf4626d96d782e0d33ac2c384c48abf6342d5681226dcaa34f958"
+  },
+  "coderabbit_round2": {
+    "base": "982c471b19a26ef790afb135c7d0c9d3d69c0702",
+    "head": "422c0e114d31b75144bab5498d79afc532c3f1b9",
+    "exit": 0,
+    "status": "review_completed",
+    "outcome": "completed",
+    "reviewed_files": 61,
+    "excluded_binary_files": [
+      "docs/releases/v1.0.27/llm-lanes.png"
+    ],
+    "unclassified_files": [],
+    "findings": 4,
+    "log_sha256": "3f00a89b2d8b3068d41441456935336876c982a4fbfe2eabae64f300ef714319",
+    "disposition": {
+      "date": "not adopted: actual JST date is 2026-10-19",
+      "duplicate_sentence": "fixed",
+      "metric_types": "fixed: numbers, fixed state/reason codes and null",
+      "canonical_admission": "not adopted: current v4 PASS publication already clears pending; unparsed posts must keep blocking"
+    },
+    "canonical_counterexample": {
+      "cases": 2,
+      "related_tests_passed": 59,
+      "product_code_changed": false,
+      "test_sha256": "d0712f594a04a5bbc1f5d2f3b2ae3c17ba490552e4ff923080d423beab2564ad"
+    }
   }
 }

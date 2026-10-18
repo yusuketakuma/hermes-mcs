@@ -9,6 +9,7 @@ import extract_llm as worker
 import mcs_util
 import patient_nightly
 from extract_testkit import _hash, _ledger, _message, _v2_artifact
+from semantic_testkit import _canonical_cfg, _drain, _PassJev, _seeded_two
 
 LANES = worker.local_llm.LANES
 
@@ -86,6 +87,39 @@ def test_engine_gets_extraction_complete_rule(capacity):
     assert admit() and callable(complete)
     assert complete(1) is True    # every post extracted under EXTRACT_VERSION
     assert complete(2) is False   # one eligible post still pending
+
+
+@pytest.mark.parametrize("stale_field,stale_value", [
+    ("hash", "outdated-source-hash"), ("invalidated", 1),
+])
+def test_canonical_pass_completes_patient_without_legacy_admission(
+        tmp_path, stale_field, stale_value):
+    ledger = _seeded_two(tmp_path)
+    cfg = _canonical_cfg()
+    try:
+        assert worker.legacy_admissions(ledger, cfg) == set()
+        assert worker.patient_extraction_complete(ledger, 1) is False
+
+        # The normal canonical pipeline publishes the current v4 read model;
+        # an empty legacy admission set does not mean extraction is complete.
+        result = _drain(ledger, jev=_PassJev())
+        assert result["done"] == 1 and result["failed"] == 0
+        assert worker.legacy_admissions(ledger, cfg) == set()
+        assert ledger.db.execute(
+            "SELECT 1 FROM artifacts WHERE kind='extract_llm'").fetchone() is None
+        assert worker.patient_extraction_complete(ledger, 1) is True
+
+        # A stale projection of even one reply must hold the whole patient
+        # again; canonical admission cannot bypass the source/publication gate.
+        with ledger.db:
+            changed = ledger.db.execute(
+                "UPDATE artifacts SET meta=json_set(meta,?,?) "
+                "WHERE kind='semantic_facts_v4' AND message_id=2",
+                (f"$.{stale_field}", stale_value))
+        assert changed.rowcount == 1
+        assert worker.patient_extraction_complete(ledger, 1) is False
+    finally:
+        ledger.close()
 
 
 def test_failure_isolated_and_no_sensitive_error(capacity, monkeypatch):
