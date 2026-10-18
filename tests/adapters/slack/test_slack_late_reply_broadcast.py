@@ -3,10 +3,12 @@ channel (reply_broadcast) so a late reply still notifies; card creation,
 rewrites, re-posts of an uneditable reply, later chunks, captions and
 remote-matched retries stay thread-only. Synthetic world only."""
 import asyncio
+import pytest
 
 from slack_testkit import isolated_slack_ledger as led, _rewrite_world, ROOT_TS
 
 __all__ = ["led"]
+pytestmark = pytest.mark.thread_bodies
 
 
 def _post(w, spec, part, text="合成の遅延返信本文", history=None):

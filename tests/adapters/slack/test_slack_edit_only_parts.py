@@ -5,6 +5,7 @@ import pytest
 from slack_testkit import isolated_slack_ledger as led, _rewrite_world, _updates, ROOT_TS
 
 __all__ = ["led"]
+pytestmark = pytest.mark.thread_bodies
 
 
 def setup(led):

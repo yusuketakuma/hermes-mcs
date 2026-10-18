@@ -33,7 +33,7 @@ def _change(root, mode):
     flags_file.write_text(json.dumps(flags))
 
 
-@pytest.mark.parametrize("target", ["card", "body"])
+@pytest.mark.parametrize("target", ["card", pytest.param("body", marks=pytest.mark.thread_bodies)])
 @pytest.mark.parametrize("mode", ["none", "off", "epoch", "restore", "repeat429"])
 def test_rate_limit_retry_needs_current_authority(tmp_path, monkeypatch, target, mode):
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
