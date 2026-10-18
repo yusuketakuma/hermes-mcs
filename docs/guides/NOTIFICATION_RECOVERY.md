@@ -50,3 +50,26 @@ CLIは`version`・`cmd`・`human_confirmed`を付け、既存のcommand inboxへ
 適用時は最新のscope・hash・attempt・状態・journalを再照合します。`mark_not_sent`で計画を作り直す場合も、独立した復元保留や`update_failed`保留は解除しません。既存receiptのチャット向け表示も運用者限定のままです。
 
 `control card_resolve --confirm-human`も引き続きproject指定なしで使えます。どちらの復旧操作もprojectは保存済みrenderから確定し、入力で変更しません。
+
+## 4. 未発行のSlack通知を送らず取り消す
+
+送信しないことを運用者が決めた場合は、`mcs/ops/notification_cancel.py`で対象の通知IDを指定します。
+対象は、まだrenderへ発行していない更新通知（未発行の対応行が1件だけ）と、全送信試行が
+`not_sent`で再送上限に達した集計通知に限ります。既に発行した通知、本文の部分送信記録がある通知、
+配送結果不明の通知自体は拒否します。過去の別通知に結果不明の部品があっても、その記録は変更しません。
+
+```sh
+python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
+  plan --event-id EVENT_ID > /absolute/private/cancel-plan.json
+# 通知ワーカーを正規の手順で停止し、停止を確認してから実行する。
+python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
+  --plan /absolute/private/cancel-plan.json --command-id COMMAND_UUID \
+  --actor OPERATOR --reason '運用者の指示で今回の通知を送らず取消' --confirm-human
+```
+
+計画ファイルは0600で保存します。適用は停止証跡・更新/実行ロック・計画と現在状態の一致を確認し、
+変更前のDBを検証付きで退避してから、対象通知を取消状態（`suppressed`）へ変更します。
+配送済み・未送信という事実の認定は行いません。集計の終端specは削除せず退避し、
+DBと`data/notification_cancellations/COMMAND_UUID/receipt.json`に理由・結果を残します。
+同じ計画とcommand IDでの再実行は同じreceiptを返し、途中で止まったspec退避だけを再開します。
+退避完了を確認してからワーカーを戻します。原投稿・配送記録・設定は保持します。
