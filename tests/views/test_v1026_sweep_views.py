@@ -1,4 +1,8 @@
 """v1.0.26 sweep: patient-context view regressions (fully synthetic dict evidence)."""
+from copy import deepcopy
+
+import pytest
+
 import patient_context_view as pcv
 
 T0 = 1_790_000_000
@@ -38,3 +42,25 @@ def test_provider_not_posting_checks_each_written_provider():
     out = pcv.discrepancies(ev, posters=[{"organization": "架空クリニックA"}])["items"]
     flagged = [g for g in out if g["kind"] == "provider_not_posting"]
     assert [g["records"][0]["value"] for g in flagged] == ["主治医: 架空クリニックA、訪問看護: 架空ステーションB"]
+
+
+@pytest.mark.parametrize("slash", ["／", "/"])
+@pytest.mark.parametrize("second_posting", [None, False, True])
+def test_provider_name_keeps_internal_separator_without_hiding_other_provider(slash, second_posting):
+    organization = f"架空クリニック{slash}在宅部門"
+    text = f"主治医: {organization}"
+    posters = [{"organization": organization}]
+    if second_posting is not None:
+        # A shorter known prefix must not split the longer organization's name.
+        posters.append({"organization": "架空クリニック"})
+        second = f"架空ステーションB{slash}支援部門"
+        text += f"{slash}訪問看護: {second}"
+        if second_posting:
+            posters.append({"organization": second})
+    ev = {"items": [_item(1, "care_team", text)]}
+    before = deepcopy(ev)
+    flagged = [g for g in pcv.discrepancies(ev, posters)["items"] if g["kind"] == "provider_not_posting"]
+    assert bool(flagged) is (second_posting is False)
+    if flagged:
+        assert flagged[0]["records"] == [{**ev["items"][0], "value": text}]
+    assert ev == before
