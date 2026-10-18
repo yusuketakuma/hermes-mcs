@@ -1,6 +1,5 @@
 """Freeze bounded, source-grounded pharmacy references for one extraction attempt."""
 from datetime import datetime
-import hashlib
 import json
 import re
 
@@ -8,22 +7,16 @@ from clinical_values import patient_item_scope
 from mcs_queries import ELIGIBLE_MESSAGE, JST, current_fact_pred, current_v4_id, json_or_null
 from mcs_requests import valid_hash
 from mcs_util import loads_dict
+from mcs_util import payload_hash as _digest
 from patient_context import reference_item
 from rollup import pharmacy_state_items
+from stats_math import finite_number as _finite
 
 KIND = "extract_llm_context_v1"
 STATE_MAX = 600
 TOTAL_MAX = 1200
 _NONCURRENT = re.compile(
     r"未確認|未確定|不明|疑い|可能性|かもしれ|予定|計画|今後|以前|過去|前回|中止|否定|ありません|ではない|なし|なかった")
-
-
-def _digest(value):
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
-                                    separators=(",", ":"), allow_nan=False).encode()).hexdigest()
-
-
-from stats_math import finite_number as _finite  # noqa: E402 - one shared rule
 
 
 def _canonical_report(document, report):

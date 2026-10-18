@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "患者背景の整合性確認を共通化",
+  "summary": "抽出時に保存する患者背景の整合性確認を既存の共通処理へまとめました。保存済みの背景情報は引き続き同じ条件で確認・再利用します。",
+  "upgrade": "追加操作や再抽出は不要です。保存形式、抽出世代、通知・承認条件に変更はありません。",
+  "details": [
+    "patient_state_context._digestを既存のmcs_util.payload_hashの別名に置き換え、同じJSON直列化とSHA256計算の重複を削除する。",
+    "UTF-8、キー順の固定、空白の除去、非有限数の拒否、および既存のハッシュ値を保持する。"
+  ],
+  "refs": ["mcs/extract/patient_state_context.py", "mcs/core/mcs_util.py"]
+}
