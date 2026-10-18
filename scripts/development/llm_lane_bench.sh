@@ -441,7 +441,7 @@ PYEOF
 main() {
   while [ $# -gt 0 ]; do
     case "$1" in
-      --phase) PHASE=${2:-}; shift 2 ;;
+      --phase) [ $# -ge 2 ] || usage; PHASE=$2; shift 2 ;;
       --i-stopped-the-workers) STOPPED=1; shift ;;
       --dry-run) DRY_RUN=1; shift ;;
       --report) REPORT=1; shift ;;
