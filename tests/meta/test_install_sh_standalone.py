@@ -91,6 +91,8 @@ def test_interactive_install_asks_for_the_runtime(tmp_path, setup_answer, setup_
                     output += chunk
                 process.stdin.write(answer)
                 process.stdin.flush()
+            # Keep BSD script's input open until the last answer has been consumed.
+            process.wait(timeout=120)
             tail, _ = process.communicate(timeout=120)
             output += tail
         finally:
