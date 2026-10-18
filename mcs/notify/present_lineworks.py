@@ -12,11 +12,15 @@ MORE = "\n↓ 続き"
 
 def card_split(text: str) -> tuple[str, str]:
     """(card text, remainder) for the 1000-character card: cut at the
-    last line break that leaves room for the ``↓ 続き`` marker,
-    hard-cutting only a single overlong line."""
+    last post divider (else line break) that leaves room for the
+    ``↓ 続き`` marker, hard-cutting only a single overlong line."""
+    from notify_render import SECTION_RULE
     if len(text) <= CARD_LIMIT:
         return text, ""
     room = CARD_LIMIT - len(MORE)
+    rule = text.rfind("\n" + SECTION_RULE + "\n", 0, room + 1)
+    if rule > room // 2:     # whole posts, unless that leaves a near-empty card
+        return text[:rule] + MORE, text[rule + len(SECTION_RULE) + 2:]
     cut = text.rfind("\n", 0, room + 1)
     if cut <= 0:
         return text[:room] + MORE, text[room:]

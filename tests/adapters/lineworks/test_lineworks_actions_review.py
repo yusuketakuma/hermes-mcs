@@ -302,7 +302,7 @@ def test_unpublished_confirm_failure_replies_and_allows_retry(tmp_path, monkeypa
     w.reg.end_confirm(confirm_id)
     monkeypatch.setattr(w.actions, "_publish", publish)
     asyncio.run(w.actions._confirm(confirm_id, False, "operator", actor))
-    assert w.client.calls[-1][1]["text"] == "受け付けました。"
+    assert w.client.calls[-1][1]["text"] == "受け付けました。結果は反映後に表示されます。"
     assert command_files(w) == [payload]
     assert w.reg.followup(payload["command_id"]) is not None
 
@@ -343,3 +343,18 @@ def test_malformed_token_scope_is_denied(tmp_path, project_id, signals):
     w.reg.put_tokens({TOKEN: context})
     asyncio.run(w.actions.handle(event(postback="mcs:a:" + TOKEN)))
     assert command_files(w) == []
+
+
+def test_bad_due_date_reprompts_with_the_reason_and_keeps_the_dialogue(tmp_path):
+    w = world(tmp_path, action="request")
+    actor = "lineworks:40029600:operator"
+    modal_id = "lw-form-" + envelopes.actor_hash(actor)
+    w.reg.put_modal(modal_id, {
+        "actor": actor, "user": "operator", "action": "request", "token": TOKEN,
+        "origin": {**SCOPE, "message_id": "lw:" + "c" * 32}, "fields": {}, "index": 0,
+        "definitions": [{"id": "due_date", "label": "期限 YYYY-MM-DD（任意）",
+                         "required": False, "max": 10}]})
+    asyncio.run(w.actions._input("operator", actor, "2026/10/20"))
+    said = w.client.calls[-1][1]["text"]
+    assert said.startswith("入力を確認できませんでした（YYYY-MM-DD 形式）。\n期限")
+    assert w.reg.modal(modal_id)["index"] == 0 and command_files(w) == []

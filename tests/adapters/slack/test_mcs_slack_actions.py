@@ -1146,10 +1146,21 @@ def test_confirm_after_kill_switch_is_denied_but_cancellable(tmp_path, flags):
         Path(dirs["flags"], "notify.json").write_text(json.dumps(flags), encoding="utf-8")
         before = len(app.client.messages)
         await actions._confirm(ack, body, confirm_action)
-        assert [m["text"] for m in app.client.messages[before:]] == ["権限がありません。"]
+        assert [m["text"] for m in app.client.messages[before:]] == ["現在インタラクティブ通知は停止中です。"]
         assert not any(json.loads(p.read_text()).get("cmd") == "request.create"
                        for p in Path(dirs["cmd_int"]).glob("*.json"))
         await actions._confirm(ack, body, cancel_action)
         assert app.client.messages[-1]["text"] == "取り消しました。"
         assert reg.confirm(confirm_id) is None
+    asyncio.run(scenario())
+
+
+def test_lapsed_card_token_says_so_instead_of_permission(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path)
+        body, action = click()
+        lapsed = "c" * len(TOKEN)        # well-formed but never issued
+        action = {"action_id": "mcs:a:" + lapsed, "value": lapsed}
+        await actions._action(ack, body, action)
+        assert app.client.messages[-1]["text"] == common_text.ERR_JA["unknown_token"]
     asyncio.run(scenario())

@@ -774,7 +774,9 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
              OR EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind=? AND a.message_id=m.message_id
                           AND {_STALE}))
-      ORDER BY m.posted_at_ts DESC
+      ORDER BY EXISTS (SELECT 1 FROM patients p
+                       WHERE p.project_id=m.project_id AND p.is_archived),
+               m.posted_at_ts DESC
     """, (KIND, KIND, RULE_VERSION)).fetchall()
     done, pids = _extract_rows(ledger, rows, deadline=deadline)
     return {"done": done, "pids": sorted(pids)}

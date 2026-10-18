@@ -68,12 +68,31 @@ CRASH_TEXT = ("処理中にエラーが発生しました。最新のカード�
 UNKNOWN_ERROR_TEXT = "この操作は完了できませんでした。最新のカードからやり直してください。"
 
 
+RECEIPT_TEXT = "受け付けました。結果は反映後に表示されます。"
+
+
+def _applied_text(result: dict) -> str:
+    """Say what was applied, so several receipts in one DM stay matchable."""
+    rid, action = result.get("request_id"), result.get("action")
+    if action == "ack":
+        return "確認を取り消しました。" if result.get("withdrawn") else "確認済みにしました。"
+    if action == "assign":
+        return "担当を外しました。" if result.get("released") else "担当にしました。"
+    if result.get("field"):
+        return "誤りの報告を記録しました。"
+    if result.get("signal_key"):
+        return "候補を却下しました。"
+    if type(rid) is int:     # notification receipts carry a uuid request_id
+        return f"タスク #{rid} を{'作成' if result.get('before') is None else '更新'}しました。"
+    return "反映しました。"
+
+
 def ja(result: dict | None) -> str:
     if not result:
         return "結果を取得できませんでした（処理中の可能性があります）。"
     err = result.get("error")
     if result.get("outcome") == "applied" or result.get("applied"):
-        return "反映しました。"
+        return _applied_text(result)
     if str(err).startswith("crash:"):
         return CRASH_TEXT
     return ERR_JA.get(str(err), UNKNOWN_ERROR_TEXT)
@@ -462,27 +481,30 @@ def view_answer(result: dict | None, allowed,
 CONFIRM_TTL_NOTE = "\nこの確認は10分で無効になります。"
 
 
-def preview_text(action: str, payload: dict, markdown: bool) -> str:
+def preview_text(action: str, payload: dict, markdown: bool, target: str | None = None) -> str:
     """The human-confirm preview of a task/dismiss/report payload —
     Discord markdown (bold heading) or Slack plain
     text."""
     bold = "**" if markdown else ""
+    # the render-pinned patient/post, display only (the command is pinned separately)
+    about = (f"対象: {_literal(str(target)[:120], not markdown)}\n"
+             if isinstance(target, str) and target.strip() else "")
     if action == "dismiss":
         code = dict(DISMISS_REASONS).get(payload.get("reason_code"))
         reason = payload["reason"][:400]
-        return (f"{bold}確認 — 候補の却下{bold}\n"
+        return (f"{bold}確認 — 候補の却下{bold}\n" + about
                 + (f"区分: {code}\n" if code else "")
                 + (f"理由: {reason}\n" if reason != code else "")
                 + "確定すると、この候補を却下済みにし、あなたの名前と理由を記録します。"
                 + CONFIRM_TTL_NOTE)
     if action == "report":
-        return (f"{bold}確認 — 抽出の誤り報告{bold}\n"
+        return (f"{bold}確認 — 抽出の誤り報告{bold}\n" + about +
                 f"箇所: {dict(FEEDBACK_FIELDS).get(payload['field'], '?')}\n"
                 f"メモ: {payload['reason'][:400]}\n"
                 "確定すると、この投稿の要約の抽出を1回だけ再実行し、"
                 "あなたの名前と理由を記録します。" + CONFIRM_TTL_NOTE)
-    out = (f"{bold}確認 — タスク作成{bold}\n"
-           f"内容: {payload['title'][:200]}")
+    out = (f"{bold}確認 — タスク作成{bold}\n" + about
+           + f"内容: {payload['title'][:200]}")
     if payload.get("assignee"):
         out += f"\n担当: {payload['assignee'][:120]}"
     if payload.get("due_date"):

@@ -494,7 +494,8 @@ class Actions:
             "actor": actor, "origin": pending["origin"],
             "payload": preview})
         await self._send_preview(interaction, pending["action"],
-                                 preview, confirm_id)
+                                 preview, confirm_id,
+                                 (pending.get("context") or {}).get("target"))
 
     async def _search(self, interaction, modal_id: str,
                       pending: dict) -> None:
@@ -552,7 +553,7 @@ class Actions:
         return out
 
     async def _send_preview(self, interaction, action: str,
-                            payload: dict, confirm_id: str) -> None:
+                            payload: dict, confirm_id: str, target: str | None = None) -> None:
         import discord
 
         view = discord.ui.View(timeout=None)
@@ -565,7 +566,7 @@ class Actions:
         view.add_item(yes)
         view.add_item(no)
         await self._followup(interaction,
-                             text.preview_text(action, payload, True),
+                             text.preview_text(action, payload, True, target=target),
                              view=view)
 
     # -- confirm ------------------------------------------------------------
@@ -616,7 +617,9 @@ class Actions:
             return
         if taken == "denied":
             self._deny_reason(interaction, scope_denial)
-            await self._ephemeral(interaction, "権限がありません。")
+            await self._ephemeral(interaction, text.ERR_JA["interactive_off"]
+                                  if scope_denial == "interactive_off"
+                                  else "権限がありません。")
             return
         if taken == "busy":
             # a 確定 is queueing this command right now — neither a
@@ -666,7 +669,7 @@ class Actions:
                          command_id=cid)
         await self._followup(
             interaction,
-            f"受け付けました（`{cid[:8]}…`）。結果は反映後に表示されます。")
+            text.RECEIPT_TEXT)
         result = await self._wait_result(cid, HUMAN_WAIT_S)
         if result is None:
             return                        # supervisor sweeps followups

@@ -204,3 +204,14 @@ def test_lineworks_overflow_names_chunks_of_the_remainder():
 def test_lineworks_overflow_is_empty_for_a_short_card():
     parts = {"containers": [{"type": "text", "text": "短い"}], "footer": []}
     assert present_lineworks.overflow(parts, lambda rest: [rest] if rest else []) == []
+
+
+def test_lineworks_card_split_keeps_whole_posts():
+    from notify_render import SECTION_RULE
+    post = "09-24 08:4x 合成 職員（看護師）\n・" + "合成要約。" * 60
+    text = f"\n{SECTION_RULE}\n".join([post] * 4)
+    head, rest = present_lineworks.card_split(text)
+    assert head.endswith(present_lineworks.MORE) and len(head) <= present_lineworks.CARD_LIMIT
+    assert head[:-len(present_lineworks.MORE)].count("合成 職員") == \
+        head[:-len(present_lineworks.MORE)].count("・")       # no post cut in half
+    assert rest.startswith("09-24") and SECTION_RULE not in head[-30:]

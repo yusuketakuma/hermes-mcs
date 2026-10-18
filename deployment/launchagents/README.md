@@ -132,8 +132,11 @@ Hermes のローカル custom provider も `extra_body.id_slot=1` に固定す�
 - `ai.mcs.extract-drainer`: `--all --workers 1 --slot 0 --semantic`
 - `ai.mcs.extract-drainer-2`: `--all --workers 1 --slot 2 --semantic`
 
-両workerは24時間、抽出1件とsemantic/QC 1件を交互に、古い未処理分から
-処理する。slot 2 のworkerは可変枠: RT枠（slot 1）が処理中の間は新しい
+両workerは24時間、抽出1件とsemantic/QC 1件を交互に処理する。
+どちらもアクティブ患者を先にし、余った枠でアーカイブ済み患者を処理する。
+抽出は各区分内で未抽出を優先して新しい投稿から、semantic/QCは種類を
+交互にして各種類の古い待機分から処理する。
+slot 2 のworkerは可変枠: RT枠（slot 1）が処理中の間は新しい
 1件を始めず（バックログは slot 0 の1枠のみ）、RT枠の空きが2分続くと
 再開する（`extract_llm._ELASTIC_*`、5秒ごとに `/slots` を確認。処理中の
 1件は中断しない。log に `elastic_hold`/`elastic_resume`）。抽出は既存のclaim lease、semantic/QC はジョブ別flockで
