@@ -4,6 +4,7 @@ Loads deployment/recovery/mcs_recover.py by path (it is not on the
 mcs import roots — it must run standalone on a broken repo). Fully
 synthetic temp repos/state; no real services touched.
 """
+import restore_evidence
 import json
 import os
 import subprocess
@@ -789,11 +790,11 @@ def test_loss_report_matches_updater_and_binds_row_updates(rec, tmp_path, monkey
     monkeypatch.setattr(mcs_update, "RESTORE_REPORT_PATH",
                         str(tmp_path / "data" / "report.json"))
     approved = _consent(rec, live, back)
-    assert approved["report_id"] == mcs_update._restore_loss_report(str(back))["report_id"]
+    assert approved["report_id"] == restore_evidence.create_loss_report(live_path=mcs_update.LEDGER, backup_path=str(back), report_path=mcs_update.RESTORE_REPORT_PATH)["report_id"]
     with sqlite3.connect(live) as con:
         con.execute("UPDATE messages SET body_html='changed synthetic'")
     current = rec._loss_report(str(back))
-    assert current["report_id"] == mcs_update._restore_loss_report(str(back))["report_id"]
+    assert current["report_id"] == restore_evidence.create_loss_report(live_path=mcs_update.LEDGER, backup_path=str(back), report_path=mcs_update.RESTORE_REPORT_PATH)["report_id"]
     assert current["report_id"] != approved["report_id"]
     assert rec._consent_for(current) is None
 
@@ -1371,7 +1372,7 @@ def test_recovery_constants_and_journal_checks_match_updater(tmp_path):
     con.execute("PRAGMA user_version = 7")
     con.close()
     for path in (db, tmp_path / "missing.db"):
-        assert recovery._db_version(str(path)) == mcs_update._db_version(str(path))
+        assert recovery._db_version(str(path)) == restore_evidence.database_version(str(path))
     valid = _applying("p" * 40)
     states = [valid, {"v": 1}, {"v": 1, "applying": None, "restore_consent": {}},
               None, [], {"v": 2}, {"v": True}, {"v": 1, "stages": {}},

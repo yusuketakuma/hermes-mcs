@@ -1136,7 +1136,7 @@ def _file_sha256(path):
 
 
 def _loss_report(backup_path):
-    """Same deterministic loss report as mcs_update._restore_loss_report
+    """Same deterministic loss report as restore_evidence.create_loss_report
     — a drift between report and live state invalidates every consent
     receipt bound to the stale report_id."""
     try:
@@ -1191,7 +1191,7 @@ _MAX_RECEIPT_BYTES = 16384      # = mcs_requests.MAX_COMMAND_BYTES
 
 
 def _approval_receipt(raw, command_id):
-    """= mcs_update._approval_receipt, self-contained (this tool must run
+    """= mcs_requests.read_scheduled_receipt, self-contained (this tool must run
     without the checkout): a scheduled receipt without ambiguous JSON
     (duplicate keys, NaN/Infinity, oversized) or contradictory identity."""
     def pairs(items):
@@ -1247,7 +1247,7 @@ def _consent_for(report):
 
 
 def _bound_consent(raw, command_id, report):
-    """= mcs_update._bound_restore_consent."""
+    """= restore_evidence.bound_restore_consent."""
     rec = _approval_receipt(raw, command_id)
     return (rec is not None and rec.get("cmd") == "ops.restore_approve"
             and type(rec.get("backup_schema")) is int

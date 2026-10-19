@@ -3,6 +3,7 @@
 Fully synthetic: temp git repos + temp sqlite + stubbed subprocess/
 network. No real MCS, Discord, Keychain, or external repo access.
 """
+import restore_evidence
 import owned_process
 import update_discovery
 import runtime_inspection
@@ -1180,7 +1181,7 @@ def test_restore_uses_exact_backup_path_with_uri_delimiters(
 
     with pytest.raises(updater.RestoreConsentPending) as error:
         updater._restore_db(str(back))
-    assert updater._db_version(str(back)) == 7
+    assert restore_evidence.database_version(str(back)) == 7
     assert error.value.report["backup_schema"] == 7
     assert error.value.report["stored_since_backup"]["messages"] == 2
     assert live.read_bytes() == before
@@ -1188,7 +1189,7 @@ def test_restore_uses_exact_backup_path_with_uri_delimiters(
     _rollback_journal(updater, back)
     updater._restore_db(str(back))
     _journal_kept(updater)
-    assert updater._db_version(str(live)) == 7
+    assert restore_evidence.database_version(str(live)) == 7
 
 
 def test_restore_measures_and_approves_exact_live_uri_path(
@@ -1212,7 +1213,7 @@ def test_restore_measures_and_approves_exact_live_uri_path(
     _rollback_journal(updater, back)
     updater._restore_db(str(back))
     _journal_kept(updater)
-    assert updater._db_version(str(live)) == 7
+    assert restore_evidence.database_version(str(live)) == 7
     assert decoy.read_bytes() == decoy_before
 
 
@@ -1304,7 +1305,7 @@ def test_rollback_update_receipt_cannot_satisfy_consent(
     assert updater.rollback("cid-rb") == 2
     # seed an applied ops.update_apply receipt — same payload shape the
     # earlier approval produced, minus the restore binding
-    report = mcs_update._restore_loss_report(back)
+    report = restore_evidence.create_loss_report(live_path=mcs_update.LEDGER, backup_path=back, report_path=mcs_update.RESTORE_REPORT_PATH)
     con = _receipts_db(live)
     con.execute(
         "INSERT OR REPLACE INTO command_receipts VALUES(?,?,NULL,NULL,"
@@ -1365,8 +1366,8 @@ def test_loss_report_binds_live_state(updater, tmp_path, monkeypatch):
     changes the id and invalidates every stale consent (T13)."""
     _repo, live, back, _b, _a, _r = _schema_bump_world(
         updater, tmp_path, monkeypatch)
-    r1 = mcs_update._restore_loss_report(back)
-    r2 = mcs_update._restore_loss_report(back)
+    r1 = restore_evidence.create_loss_report(live_path=mcs_update.LEDGER, backup_path=back, report_path=mcs_update.RESTORE_REPORT_PATH)
+    r2 = restore_evidence.create_loss_report(live_path=mcs_update.LEDGER, backup_path=back, report_path=mcs_update.RESTORE_REPORT_PATH)
     assert r1["report_id"] == r2["report_id"]     # deterministic
     # a write that slips in invalidates the bound report
     con = sqlite3.connect(live)
@@ -1376,7 +1377,7 @@ def test_loss_report_binds_live_state(updater, tmp_path, monkeypatch):
         " VALUES(99,1,'2026-01-02',999,'<b>y</b>','full','h9',1)")
     con.commit()
     con.close()
-    r3 = mcs_update._restore_loss_report(back)
+    r3 = restore_evidence.create_loss_report(live_path=mcs_update.LEDGER, backup_path=back, report_path=mcs_update.RESTORE_REPORT_PATH)
     assert r3["report_id"] != r1["report_id"]
     assert r3["intervening_messages"] == 4
 
@@ -1388,10 +1389,10 @@ def test_restore_consent_expires_when_existing_message_changes(
     approved = _seed_consent(live, back)
     with sqlite3.connect(live) as con:
         con.execute("UPDATE messages SET body_html='changed synthetic text'")
-    current = updater._restore_loss_report(back)
+    current = restore_evidence.create_loss_report(live_path=updater.LEDGER, backup_path=back, report_path=updater.RESTORE_REPORT_PATH)
     assert current["stored_since_backup"] == approved["stored_since_backup"]
     assert current["report_id"] != approved["report_id"]
-    assert updater._restore_consent(current) is None
+    assert restore_evidence.find_restore_consent(current, live_path=updater.LEDGER) is None
 
 
 @pytest.mark.parametrize("independent", [False, True])
@@ -1481,7 +1482,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
             "post_merge_failed: postcheck_failed: new_env_error: x")
 
     if approved_swap_failure:
-        monkeypatch.setattr(mcs_update, "_restore_consent", lambda report: "synthetic-consent")
+        monkeypatch.setattr(restore_evidence, "find_restore_consent", lambda report, **_paths: "synthetic-consent")
 
         def fail_swap(path, expected_sha, before_replace):
             before_replace()
@@ -2487,7 +2488,7 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
     assert st["applying"] is not None          # still visible to humans
     assert (st.get("executed") or {}).get("cid", {}).get("result") \
         != "interrupted_recovered"
-    assert mcs_update._db_version(live) == 8
+    assert restore_evidence.database_version(live) == 8
 
 
 # Synthetic regressions for update rollback, delayed notices and restart scope.

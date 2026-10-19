@@ -1,6 +1,7 @@
 """run_check stage contracts — stage_unread / stage_backfill /
 stage_attachments / stage_derive / stage_self_probe, tick E2E, run
 lock, health, session-expired alerting."""
+import restore_evidence
 import collection_stages
 import update_launch
 import semantic_drain
@@ -1488,17 +1489,24 @@ def test_consent_hold_tick_freezes_all_but_approve(tmp_path, monkeypatch,
          "human_confirmed": True, "project_id": None,
          "report_id": rid, "backup_sha256": "b" * 64,
          "backup_schema": 7, "reason": "synthetic"}, str(cmd))
-    import mcs_update
     spawned = []
     monkeypatch.setattr(update_launch, 'spawn_detached',
                         lambda**_lif05_paths: spawned.append(1))
     # the respawn path recomputes the report — stub the backup read but
     # keep the REAL consent scan against the tick's own ledger
-    monkeypatch.setattr(mcs_update, "_restore_loss_report",
-                        lambda p: {"report_id": rid,
+    monkeypatch.setattr(restore_evidence, "create_loss_report",
+                        lambda **_paths: {"report_id": rid,
                                    "backup_sha256": "b" * 64,
                                    "backup_schema": 7})
-    monkeypatch.setattr(mcs_update, "LEDGER", str(data / "ledger.db"))
+    import builtins
+    original_import = builtins.__import__
+
+    def without_updater(name, *args, **kwargs):
+        if name == "mcs_update":
+            pytest.fail("consent-only tick must not import updater")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_updater)
     monkeypatch.setattr(sys, "argv", ["run_check"])
     assert run_check.main() == 0
     out = json.loads(capsys.readouterr().out)

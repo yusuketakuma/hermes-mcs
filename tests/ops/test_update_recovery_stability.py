@@ -1,4 +1,5 @@
 """Recovery retains interrupted state until workers actually restart."""
+import restore_evidence
 import update_discovery
 import json
 from pathlib import Path
@@ -58,8 +59,8 @@ def test_loss_report_wraps_delayed_sqlite_read_failure(updater, tmp_path, monkey
     _repo, live, back, _before, _after, _restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     Path(live).write_bytes(b"synthetic non-database")
-    with pytest.raises(updater.UpdateError):
-        updater._restore_loss_report(back)
+    with pytest.raises(restore_evidence.RestoreEvidenceError):
+        restore_evidence.create_loss_report(live_path=updater.LEDGER, backup_path=back, report_path=updater.RESTORE_REPORT_PATH)
 
 
 def test_loss_report_wraps_publication_io_failure(updater, tmp_path, monkeypatch):
@@ -69,9 +70,17 @@ def test_loss_report_wraps_publication_io_failure(updater, tmp_path, monkeypatch
     def fail(*args, **kwargs):
         raise OSError("synthetic report publish failed")
 
-    monkeypatch.setattr(updater, "atomic_write", fail)
+    monkeypatch.setattr(restore_evidence, "atomic_write", fail)
+    with pytest.raises(restore_evidence.RestoreEvidenceError,
+                       match="restore_report_publish_failed"):
+        restore_evidence.create_loss_report(
+            live_path=updater.LEDGER, backup_path=back,
+            report_path=updater.RESTORE_REPORT_PATH)
+    # The application entrance retains the original public updater error token.
+    import ledger
+    monkeypatch.setattr(ledger, "valid_mcs_db", lambda path: True)
     with pytest.raises(updater.UpdateError, match="restore_report_publish_failed"):
-        updater._restore_loss_report(back)
+        updater._restore_db(back)
 
 
 def test_failed_restart_remains_retryable(updater, monkeypatch):

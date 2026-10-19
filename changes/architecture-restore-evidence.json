@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "復元前の損失確認と同意の照合を整理",
+  "summary": "復元前に表示する損失レポートの作成と、人が確認した同意の照合を共通化しました。復元先・backup・レポートの結び付け、同意がない間の停止、保存と復元の順序は維持します。",
+  "upgrade": "追加の設定操作は不要です。通常の更新手順で反映されます。既存の同意receipt・更新journal・停止markerを引き継ぎ、承認や復元を自動で省略しません。",
+  "details": [
+    "定期処理が更新CLIの私有関数を読み込まず、明示したDB・backup・レポートのパスで照合できるよう整理しました。",
+    "レポートの観測接続を閉じてからbackupのhash・schemaを確認し、同じ形式でatomicに公開します。同意が見つかった後も全receiptを読み終え、後続の読取り失敗は未承認として扱います。",
+    "DB置換・停止marker・更新journal・復旧と再開の順序は更新処理の所有に維持します。"
+  ],
+  "refs": [
+    "mcs/ops/restore_evidence.py",
+    "mcs/ops/mcs_requests.py",
+    "mcs/ops/mcs_update.py",
+    "mcs/ingest/run_check.py"
+  ]
+}

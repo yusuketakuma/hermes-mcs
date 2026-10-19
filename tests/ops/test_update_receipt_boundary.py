@@ -1,4 +1,5 @@
 """A malformed approval row cannot block or supersede a valid update."""
+import restore_evidence
 import json
 import sqlite3
 
@@ -77,7 +78,7 @@ def test_ambiguous_restore_receipt_never_grants_consent(tmp_path, monkeypatch, k
         db.execute('INSERT INTO command_receipts VALUES(?,?,?,?)', ('bad', raw, 'applied', 1))
     db.close()
     monkeypatch.setattr(mcs_update, 'LEDGER', str(path))
-    assert mcs_update._restore_consent(report) is None
+    assert restore_evidence.find_restore_consent(report, live_path=mcs_update.LEDGER) is None
 
 
 @pytest.mark.parametrize('cid', [b'synthetic-binary-id', ''])

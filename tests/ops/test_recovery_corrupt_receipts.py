@@ -3,6 +3,8 @@ import json
 import sqlite3
 
 import mcs_update
+import restore_evidence
+from functools import partial
 import pytest
 from ops_testkit import _load, _receipts_db
 
@@ -27,9 +29,10 @@ def test_deep_corrupt_receipt_preserves_bound_consent(
         ("corrupt", "applied", "[" * 10000 + "0" + "]" * 10000, 2))
     con.commit()
     con.close()
-    module = mcs_update if scanner == "update" else _load()
-    monkeypatch.setattr(module, "LEDGER", str(path))
-    read_consent = (module._restore_consent if scanner == "update"
+    module = restore_evidence if scanner == "update" else _load()
+    if scanner != "update":
+        monkeypatch.setattr(module, "LEDGER", str(path))
+    read_consent = (partial(module.find_restore_consent, live_path=str(path)) if scanner == "update"
                     else module._consent_for)
     assert read_consent(report) == ("bound-consent" if has_bound_consent else None)
 
@@ -48,9 +51,10 @@ def _consent(tmp_path, monkeypatch, scanner, rows):
             "processed_at) VALUES(?,?,?,?)", (cid, "applied", raw, n))
     con.commit()
     con.close()
-    module = mcs_update if scanner == "update" else _load()
-    monkeypatch.setattr(module, "LEDGER", str(path))
-    read = module._restore_consent if scanner == "update" else module._consent_for
+    module = restore_evidence if scanner == "update" else _load()
+    if scanner != "update":
+        monkeypatch.setattr(module, "LEDGER", str(path))
+    read = partial(module.find_restore_consent, live_path=str(path)) if scanner == "update" else module._consent_for
     return read(_REPORT)
 
 
@@ -139,9 +143,9 @@ def test_consent_after_a_later_unreadable_row_stays_unapproved(
                 "processed_at) VALUES(?,?,?,?)", ("older", "applied", "{}", 1))
     con.commit()
     con.close()
-    module = mcs_update if scanner == "update" else _load()
+    module = restore_evidence if scanner == "update" else _load()
     closed = _fake_connect(monkeypatch, module, str(path), fail=fail)
-    read = module._restore_consent if scanner == "update" else module._consent_for
+    read = partial(module.find_restore_consent, live_path=str(path)) if scanner == "update" else module._consent_for
     assert read(_REPORT) == (None if fail else "bound")   # fail closed, as fetchall did
     assert closed == [True]
 
@@ -174,7 +178,7 @@ def test_large_receipt_tables_are_streamed_not_materialised(tmp_path, monkeypatc
     recover = _load()
     for module in (mcs_update, recover):
         monkeypatch.setattr(module, "LEDGER", str(path))
-    for scan, expected in ((lambda: mcs_update._restore_consent(_REPORT), "bound"),
+    for scan, expected in ((lambda: restore_evidence.find_restore_consent(_REPORT, live_path=str(path)), "bound"),
                            (lambda: recover._consent_for(_REPORT), "bound"),
                            (lambda: mcs_update.scan_pending_approvals({"executed": {}}),
                             ([], []))):

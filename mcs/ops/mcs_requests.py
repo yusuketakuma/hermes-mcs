@@ -39,6 +39,23 @@ def parse_command(raw):
     return command
 
 
+
+def read_scheduled_receipt(raw, command_id):
+    """Read a scheduled receipt without ambiguous JSON or contradictory identity."""
+    try:
+        receipt = parse_command(raw)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if (not isinstance(command_id, str) or not command_id.strip()
+            or not isinstance(receipt, dict) or receipt.get("scheduled") is not True
+            or receipt.get("command_id", command_id) != command_id
+            or receipt.get("outcome", "applied") != "applied"
+            or receipt.get("error") is not None):
+        return None
+    return receipt
+
+
+
 def read_command(path):
     return parse_command(read_regular_nofollow(
         path, MAX_COMMAND_BYTES,

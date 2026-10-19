@@ -4,6 +4,7 @@ message/extract_v1 row writers, the updater's temp git repos, schema
 DBs and restore-consent receipts, and the path loader for the
 repo-external recovery tool.  Not a test module (no ``test_`` prefix);
 sibling files import it via the tests/ sys.path bootstrap."""
+import restore_evidence
 import importlib.util
 import json
 import os
@@ -137,7 +138,7 @@ def _seed_consent(ledger_path, backup_path, cid="cid-consent",
     report into the live DB — the same row the human-approval path
     commits. Returns the report it was bound to."""
     if report is None:
-        report = mcs_update._restore_loss_report(backup_path)
+        report = restore_evidence.create_loss_report(live_path=mcs_update.LEDGER, backup_path=backup_path, report_path=mcs_update.RESTORE_REPORT_PATH)
     con = _receipts_db(ledger_path)
     con.execute(
         "INSERT OR REPLACE INTO command_receipts VALUES(?,?,NULL,NULL,"

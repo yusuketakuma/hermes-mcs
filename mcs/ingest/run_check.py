@@ -280,10 +280,11 @@ def _consent_only(lock_fd) -> int:
             os.path.join(HOME, "data"))
         if marker and marker.get("backup_path"):
             try:
-                import mcs_update
-                report = mcs_update._restore_loss_report(
-                    marker["backup_path"])
-                if mcs_update._restore_consent(report) is not None:
+                import restore_evidence
+                report = restore_evidence.create_loss_report(
+                    live_path=DB, backup_path=marker["backup_path"],
+                    report_path=os.path.join(HOME, "data", "restore_report.json"))
+                if restore_evidence.find_restore_consent(report, live_path=DB) is not None:
                     import update_launch
                     update_launch.spawn_detached(
                         root=HOME, data_dir=os.path.join(HOME, "data"),

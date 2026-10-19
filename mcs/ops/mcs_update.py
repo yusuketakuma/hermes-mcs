@@ -55,7 +55,8 @@ import update_policy  # noqa: E402
 import owned_process  # noqa: E402
 import update_discovery  # noqa: E402
 import update_launch  # noqa: E402
-from mcs_requests import parse_command, release_tag  # noqa: E402
+import restore_evidence  # noqa: E402
+from mcs_requests import read_scheduled_receipt, release_tag  # noqa: E402
 
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, hermes_exe, launchd_bootstrap, load_config)
@@ -205,11 +206,6 @@ def _acquire_run_lock_wait(tries: int = RUN_LOCK_TRIES) -> int | None:
 # ------------------------------------------------------------------ git
 
 
-
-
-
-
-
 def _git(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S
          ) -> subprocess.CompletedProcess:
     try:
@@ -339,12 +335,6 @@ def _local_changes_outside(prev, target) -> list[str]:
         return foreign
     except (OSError, ValueError) as exc:
         raise UpdateError("diff: content provenance unknown") from exc
-
-
-
-
-
-
 
 
 # ------------------------------------------------------------- detection
@@ -1111,20 +1101,6 @@ def _clean_stale_git_locks() -> list[str]:
 
 # ------------------------------------------------------------- approval
 
-def _approval_receipt(raw, command_id):
-    """Read a scheduled receipt without ambiguous JSON or contradictory identity."""
-    try:
-        receipt = parse_command(raw)
-    except (ValueError, TypeError, RecursionError):
-        return None
-    if (not isinstance(command_id, str) or not command_id.strip()
-            or not isinstance(receipt, dict) or receipt.get("scheduled") is not True
-            or receipt.get("command_id", command_id) != command_id
-            or receipt.get("outcome", "applied") != "applied"
-            or receipt.get("error") is not None):
-        return None
-    return receipt
-
 
 def _scan_receipt(executed, applies, rollbacks, consumed, cid, rj, at, rowid) -> None:
     """One receipt row of scan_pending_approvals, in processed_at order."""
@@ -1132,7 +1108,7 @@ def _scan_receipt(executed, applies, rollbacks, consumed, cid, rj, at, rowid) ->
         return
     if at is not None and (type(at) not in (int, float) or not 0 <= at < 1e12):
         return
-    rec = _approval_receipt(rj, cid)
+    rec = read_scheduled_receipt(rj, cid)
     if rec is None:
         return
     cmd = rec.get("cmd")
@@ -1212,10 +1188,6 @@ def scan_pending_approvals(state: dict
     candidates = ordered[:1] + rollbacks
     candidates.sort(key=lambda p: (p.get("at") or 0, p.get("rowid") or 0))
     return candidates, consumed
-
-
-
-
 
 
 # ------------------------------------------------------------- pipeline
@@ -2448,149 +2420,7 @@ def rollback(command_id: str | None = None) -> int:
                 os.close(fd)
 
 
-def _db_version(path: str) -> int | None:
-    try:
-        con = sqlite3.connect(
-            Path(path).resolve().as_uri() + "?mode=ro", uri=True)
-        try:
-            return con.execute("PRAGMA user_version").fetchone()[0]
-        finally:
-            con.close()
-    except sqlite3.Error:
-        return None
-
-
-# ----------------------------------------------------- restore consent
-
-# Records the swap would silently erase. Stored data = rows written
-# after the backup's watermark; external effects = per-table deltas of
-# every notification/send-tracking table (send evidence, queued work).
-_STORED_TABLES = ("messages", "attachments")
-_EFFECT_TABLES = ("notification_cards", "notification_renders",
-                  "notification_delivery_attempts",
-                  "notification_render_parts", "notification_restore_holds",
-                  "notification_view_manifests", "notify_outbox")
-
-
-def _table_count(con: sqlite3.Connection, table: str) -> int:
-    """COUNT(*) or 0 when the table is absent (older schema) — a missing
-    table can lose nothing."""
-    try:
-        return con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-    except sqlite3.Error:
-        return 0
-
-
-def _restore_content_digest(con):
-    """Bind consent to the contents of the stored-data and delivery tables."""
-    digest = hashlib.sha256()
-    for table in (*_STORED_TABLES, *_EFFECT_TABLES):
-        columns = con.execute(f"PRAGMA table_info({table})").fetchall()
-        digest.update(json.dumps([table, columns], separators=(",", ":")).encode())
-        if not columns:
-            continue
-        for row in con.execute(f"SELECT * FROM {table} ORDER BY rowid"):
-            encoded = json.dumps(
-                row, ensure_ascii=False, separators=(",", ":"),
-                default=lambda value: {"blob": value.hex()}).encode()
-            digest.update(len(encoded).to_bytes(8, "big"))
-            digest.update(encoded)
-    return digest.hexdigest()
-
-
-def _restore_loss_report(backup_path: str) -> dict:
-    """Loss report a human must approve before the live DB is replaced.
-    Binds backup bytes/schema, row deltas, and the contents of the stored-data
-    and delivery tables. Changes to an existing row invalidate stale consent."""
-    try:
-        live = sqlite3.connect(
-            Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
-    except sqlite3.Error as e:
-        raise UpdateError(f"restore_report_live_db: {e}") from e
-    try:
-        back = sqlite3.connect(
-            Path(backup_path).resolve().as_uri() + "?mode=ro", uri=True)
-    except sqlite3.Error as e:
-        live.close()
-        raise UpdateError(f"restore_report_backup_db: {e}") from e
-    try:
-        live.execute("BEGIN")
-        back.execute("BEGIN")
-        live_digest = _restore_content_digest(live)
-        try:
-            watermark = back.execute(
-                "SELECT MAX(posted_at_ts) FROM messages").fetchone()[0]
-        except sqlite3.Error:
-            watermark = None
-        stored = {t: _table_count(live, t) - _table_count(back, t)
-                  for t in _STORED_TABLES}
-        effects = {t: _table_count(live, t) - _table_count(back, t)
-                   for t in _EFFECT_TABLES}
-    except (sqlite3.Error, OSError) as e:
-        raise UpdateError("restore_report_read_failed") from e
-    finally:
-        live.close()
-        back.close()
-    try:
-        metrics = {"v": 1,
-                   "live_content_sha256": live_digest,
-                   "backup_sha256": _file_sha256(backup_path),
-                   "backup_schema": _db_version(backup_path),
-                   "watermark_ts": watermark,
-                   "stored_since_backup": stored,
-                   "external_effects": effects,
-                   "intervening_messages": sum(max(0, n)
-                                               for n in stored.values()),
-                   "external_effect_rows": sum(max(0, n)
-                                               for n in effects.values())}
-        metrics["report_id"] = hashlib.sha256(
-            json.dumps(metrics, sort_keys=True, separators=(",", ":"),
-                       ensure_ascii=False).encode("utf-8")).hexdigest()
-        report = dict(metrics, computed_at=time.time())
-        atomic_write(RESTORE_REPORT_PATH,
-                     lambda f: json.dump(report, f, ensure_ascii=False,
-                                         sort_keys=True),
-                     tmp_prefix=".rreport.")
-        return report
-    except OSError as e:
-        raise UpdateError("restore_report_publish_failed") from e
-
-
-def _restore_consent(report: dict) -> str | None:
-    """Scan command_receipts (read-only, same discipline as
-    scan_pending_approvals) for an ops.restore_approve approval bound
-    to THIS exact loss report — an earlier update/rollback approval
-    does not substitute (the human must see the loss numbers first)."""
-    try:
-        con = sqlite3.connect(
-            Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
-    except sqlite3.Error:
-        return None
-    found = None
-    try:
-        rows = con.execute(
-            "SELECT command_id, receipt_json FROM command_receipts"
-            " WHERE outcome='applied' ORDER BY processed_at DESC,"
-            " rowid DESC")
-        for cid, rj in rows:
-            if found is None and _bound_restore_consent(rj, cid, report):
-                found = cid   # newest bound receipt; keep reading (unparsed)
-        # so an unreadable later row still fails closed, as fetchall() did
-    except sqlite3.Error:
-        return None
-    finally:
-        con.close()
-    return found
-
-
-def _bound_restore_consent(raw, command_id, report: dict) -> bool:
-    rec = _approval_receipt(raw, command_id)
-    return (rec is not None and rec.get("cmd") == "ops.restore_approve"
-            and type(rec.get("backup_schema")) is int
-            and rec.get("report_id") == report["report_id"]
-            and rec.get("backup_sha256") == report["backup_sha256"]
-            and rec.get("backup_schema") == report["backup_schema"])
-
+# ----------------------------------------------------- restore application
 
 def _reconcile_restored() -> None:
     """Post-swap journal-vs-DB reconcile while writers stay quiesced —
@@ -2771,10 +2601,10 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
         raise UpdateError("restore_marker_unreadable")
     if not ledger.valid_mcs_db(backup_path):
         raise UpdateError("backup_invalid: " + backup_path)
-    live_ver = _db_version(LEDGER)
+    live_ver = restore_evidence.database_version(LEDGER)
     if live_ver is None:
         raise UpdateError("live_db_unreadable")
-    back_ver = _db_version(backup_path)
+    back_ver = restore_evidence.database_version(backup_path)
     if live_ver is not None and live_ver == back_ver:
         # Nothing to replace — but a crash between the post-swap marker
         # rewrite and the swap can leave an awaiting_consent marker
@@ -2796,7 +2626,11 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
                                    phase="awaiting_consent")
     except OSError as e:
         raise UpdateError(f"restore_marker_failed: {e}") from e
-    report = _restore_loss_report(backup_path)
+    try:
+        report = restore_evidence.create_loss_report(
+            live_path=LEDGER, backup_path=backup_path, report_path=RESTORE_REPORT_PATH)
+    except restore_evidence.RestoreEvidenceError as exc:
+        raise UpdateError(str(exc)) from exc
     try:
         # re-pin the hold with the report identity so operators and the
         # watchdog can correlate marker <-> restore_report.json
@@ -2808,7 +2642,7 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
         raise UpdateError(f"restore_marker_failed: {e}") from e
     if on_hold is not None:
         on_hold(report)  # Persist the freeze before even an approved swap can fail.
-    if _restore_consent(report) is None:
+    if restore_evidence.find_restore_consent(report, live_path=LEDGER) is None:
         raise RestoreConsentPending(report)
     # Mark BEFORE the file swap: a crash after the replace but before
     # the marker write must not leave senders running against a rewound
