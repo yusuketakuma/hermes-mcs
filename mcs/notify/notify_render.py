@@ -16,12 +16,14 @@ import time
 
 from message_observations import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
-from mcs_requests import payload_hash, positive, valid_hash
+from mcs_requests import payload_hash, positive
+from mcs_util import valid_hash
 from message_metadata import (get_message_metadata, is_self_sender,
                               mentions_self, self_stamps, stamp_counts,
                               thread_stamp_line, actor_line)
 import structured_view
 from notify_scope import latest_signals
+import clinical_urgency
 
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
 PAGE_THREAD = 8           # messages per page on a thread card (count cap)
@@ -81,7 +83,7 @@ def notification_preview(db, card, content, *, limit=600) -> str:
         # replies; otherwise the newest post (deleted or not) speaks
         mid, message = next(((m, row) for m, row in rows
                              if row["body_state"] != "deleted"
-                             and structured_view.message_urgency(db, m) == "llm"),
+                             and clinical_urgency.message_urgency(db, m) == "llm"),
                             rows[0])
         header = preview_header(db, card["project_id"], message)
         if message["body_state"] == "deleted":
@@ -105,7 +107,7 @@ def notification_preview(db, card, content, *, limit=600) -> str:
         else:
             state = "要約作成失敗" if extraction_failed(db, mid) else "要約処理待ち"
             main = f"原文・{state}: " + (_preview_post(message["body_text"]) or "本文なし")
-        urgency = structured_view.message_urgency(db, mid)
+        urgency = clinical_urgency.message_urgency(db, mid)
         badge = URGENCY_PLAIN.get(urgency, "")
         if urgency == "llm":
             badge += structured_view.urgency_qc_suffix(db, mid)
@@ -671,7 +673,7 @@ def _signal_compact(db, pid, contents: list, plain: bool = False) -> list:
     for s in contents:
         line = signal_label(s)
         mid, message = signal_evidence(db, s)
-        urgency = (structured_view.message_urgency(db, mid)
+        urgency = (clinical_urgency.message_urgency(db, mid)
                    if message is not None and mid is not None and s.get("project_id") == pid
                    else None)
         if urgency:
@@ -816,7 +818,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
             progress_by_mid = {m["message_id"]: progress_state(db, m["message_id"], cfg)
                                for m in msgs if m["body_state"] != "deleted"}
         first = msgs[0] if msgs else {}
-        urgency = {structured_view.message_urgency(db, m["message_id"])
+        urgency = {clinical_urgency.message_urgency(db, m["message_id"])
                    for m in msgs if m["body_state"] != "deleted"}
         tag = next((URGENCY_PLAIN[u] for u in ("llm", "rule") if u in urgency), "")
         urgent = bool(tag)

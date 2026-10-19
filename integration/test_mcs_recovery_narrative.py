@@ -26,6 +26,10 @@ only: no real MCS, no real Jev, no platform API, no Keychain, no
 launchctl, no patient DB, no deploy. This file collects without a
 hermes checkout — it never imports gateway.* (see ../conftest.py).
 """
+
+import export_contract
+import export_delivery
+import export_schema
 import update_discovery
 import asyncio
 import hashlib
@@ -55,7 +59,6 @@ for _d in ("adapters/discord", "adapters/slack", "notify", "semantic", "ops", "c
 sys.path.insert(0, str(ROOT))
 
 import brain_export  # noqa: E402
-import ext_contract as ext  # noqa: E402
 import ledger as _ledger  # noqa: E402
 import llm_admission as adm  # noqa: E402
 import local_llm  # noqa: E402
@@ -572,12 +575,12 @@ def _run_narrative(tmp_path):
                      encoding="utf-8").splitlines() if ln]
         gen_at = next(r["snapshot"]["generated_at"] for r in lines
                       if r["type"] == "meta")
-        auth = ext.load_authorization(
-            _auth(N.tmp, fields=list(ext.RECORD_TYPES)))
-        envelope = ext.build_envelope(lines, auth, gen_at)
-        sink = ext.LocalSink(N.tmp / "sink")
+        auth = export_delivery.load_authorization(
+            _auth(N.tmp, fields=list(export_schema.RECORD_TYPES)))
+        envelope = export_contract.build_envelope(lines, auth, gen_at)
+        sink = export_delivery.LocalSink(N.tmp / "sink")
         sink.drop_ack = True          # recoverable failure: lost ack
-        exporter = ext.GovernedExporter(N.tmp / "exp-state")
+        exporter = export_delivery.GovernedExporter(N.tmp / "exp-state")
         res_a = exporter.deliver(envelope, sink, auth_path=N.tmp
                                / "auth.json")
         res_b = exporter.deliver(envelope, sink, auth_path=N.tmp / "auth.json")
@@ -766,11 +769,11 @@ def _run_narrative(tmp_path):
 
 
 def _auth(tmp_path, **over):
-    auth = {"contract": ext.AUTH_CONTRACT, "auth_id": "auth-narr-1",
+    auth = {"contract": export_contract.AUTH_CONTRACT, "auth_id": "auth-narr-1",
             "purpose": "synthetic review mirror", "actor": "pharm-synth",
             "destination": "fake-knowledge-store",
             "scope": "aggregate", "patients": "all",
-            "fields": list(ext.RECORD_TYPES),
+            "fields": list(export_schema.RECORD_TYPES),
             "expires_at": time.time() + 3600, "max_snapshot_age_s": 600,
             "retention_days": 30, "revoked": False,
             "confirm_human": True, "reason": "synthetic narrative",

@@ -7,7 +7,6 @@ import pytest
 
 import notify_flush
 import notify_urgent
-import structured_view
 from ledger import Ledger
 from self_identity import record_station_staff
 from notify_testkit import (
@@ -16,6 +15,7 @@ from notify_testkit import (
 )
 from notify_urgent_testkit import _base, _events, _fact, world
 from test_artifact_json_guards import MALFORMED, PLANNERS, _skew
+import clinical_urgency
 
 __all__ = ["led", "world"]
 
@@ -206,7 +206,7 @@ def test_projection_urgency_selection_matches_display_and_real_send(
     expected_id = projection_id if isinstance(projection, str) else llm_id
     assert row["artifact_id"] == expected_id
     assert row["created_at"] == (NOW - 60 if expected_id == projection_id else NOW - 600)
-    assert structured_view.message_urgency(store.db, 100) == ("llm" if verdict == "high" else None)
+    assert clinical_urgency.message_urgency(store.db, 100) == ("llm" if verdict == "high" else None)
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == queued
     if queued:
         event = _events(store)[0]
@@ -262,7 +262,6 @@ def test_fallback_high_is_revalidated_before_send(world, fault):
 @pytest.mark.parametrize("artifact_project", [None, 1])
 def test_legacy_llm_project_scope_matches_the_current_urgency_display(
         world, artifact_project):
-    import structured_view
 
     store, cfg, _, calls = world
     _base(store)
@@ -272,7 +271,7 @@ def test_legacy_llm_project_scope_matches_the_current_urgency_display(
                          (artifact_project, aid))
     # Both legacy and scoped LLM artifacts stay bound by the unique
     # message and its current hash, just like the urgency display.
-    assert structured_view.message_urgency(store.db, 100) == "llm"
+    assert clinical_urgency.message_urgency(store.db, 100) == "llm"
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
     assert notify_urgent.check_delivery(store, cfg, _events(store)[0])["ok"]
     assert _flush_native(store, cfg, calls)["sent"] == 1 and len(calls) == 1

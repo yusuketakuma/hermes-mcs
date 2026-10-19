@@ -50,3 +50,25 @@ def test_c1_gates_flag_synthetic_violations(monkeypatch, tmp_path):
     assert sorted(tick) == ["job.sh:1 references C1 export module",
                             "jobs.py:1 references C1 export module",
                             "run_check.py:1 references C1 export module"]
+
+
+
+def test_extracted_export_owners_remain_offline_and_outside_tick(monkeypatch, tmp_path):
+    gates = _gates()
+    exports = tmp_path / "mcs" / "export"
+    exports.mkdir(parents=True)
+    (exports / "export_contract.py").write_text("import socket\n")
+    (exports / "export_delivery.py").write_text("import subprocess\n")
+    ingest = tmp_path / "mcs" / "ingest"
+    ingest.mkdir()
+    (ingest / "tick.py").write_text("import export_contract\nfrom export_delivery import health\n")
+    for root in ("notify",):
+        (tmp_path / "mcs" / root).mkdir()
+    (tmp_path / "mcs_standalone").mkdir()
+    (tmp_path / "deployment").mkdir()
+    monkeypatch.setattr(gates, "MCS", tmp_path / "mcs")
+    monkeypatch.setattr(gates, "ROOT", tmp_path)
+    assert gates.gate_ext_contract_offline() == [
+        "export_contract.py:1 imports socket", "export_delivery.py:1 imports subprocess"]
+    assert gates.gate_tick_no_ext() == [
+        "tick.py:1 references C1 export module", "tick.py:2 references C1 export module"]

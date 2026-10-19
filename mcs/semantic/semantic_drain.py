@@ -28,11 +28,11 @@ from contextlib import contextmanager
 import math
 import time
 
-from mcs_util import payload_hash
 from mcs_util import env_value, load_config, loads_dict
 import semantic_jev as jev
 import semantic_runtime as runtime
 import semantic_v4 as v4
+import semantic_v4_cohort as cohort
 from semantic_audit import audit_code, audit_status_for
 from semantic_llm import summarize
 from semantic_loops import update_loops
@@ -44,11 +44,9 @@ from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT,
                              KIND_PLAN, KIND_POLICY, KIND_REPAIR,
                              KIND_SHADOW_V2, KIND_SUMMARY,
                              KIND_SUMMARY_FORMAT_REPAIR, KIND_USAGE,
-                             POLICY_VERSION,
                              QC_JOB_KIND, SCHEMA_VERSION,
                              policy_fingerprint, semantic_config)
-from semantic_render import (_emit_degraded, _notify_src_event,
-                             _outbox_has_delivery, render_notice)
+import semantic_notice
 from semantic_store import current_artifact, jev_state, jev_usage_today
 
 import semantic_qc
@@ -87,21 +85,6 @@ def _why(diagnostics: dict, code: str) -> bool:
     return True
 
 
-def _plan_exists(ledger, message_id: int, fp: str,
-                 status: str, policy=None) -> bool:
-    """A notify_plan for THIS (generation, audit outcome) already
-    recorded — replay and crash-retry must not stack duplicate plan
-    rows. Keyed on status too: a plan left by a PENDING run does not
-    satisfy a later PASS on the same fingerprint."""
-    for r in ledger.db.execute(
-            "SELECT meta FROM artifacts WHERE kind=? AND message_id=?",
-            (KIND_PLAN, message_id)):
-        m = loads_dict(r["meta"])
-        if m is not None and m.get("fingerprint") == fp \
-                and m.get("audit_status") == status \
-                and (policy is None or m.get("policy_fingerprint") == policy):
-            return True
-    return False
 
 
 def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
@@ -755,65 +738,6 @@ def _promote_loops(ledger, scfg, pl, pid, bundle, facts_by_target,
     return loops_done, loops_short, resource, retryable, hard
 
 
-def _record_notice_plan_tx(ledger, scfg, pl, pid, root, mid, fp, policy,
-                           r: dict, final_status: str, bundle: dict,
-                           members: dict, all_targets: list) -> None:
-    """Notice outbox intent and plan row for one target — called INSIDE the
-    caller's ``with ledger.db`` with the analysis result."""
-    # notification plan + outbox intent commit in the SAME
-    # transaction as the analysis result — a crash can never
-    # leave a saved summary without its notification intent
-    # (§18.3). Reused results re-enter here so an intent lost
-    # by an older crash is recreated on the next run. The two
-    # dedupes are independent: the plan row keys on
-    # (fingerprint, audit_status), the outbox row on its
-    # delivery_key — a plan written by an earlier PENDING/shadow
-    # run must not block a now-PASS enforce enqueue.
-    summary_clean = {k: v for k, v in r["summary"].items()
-                     if not k.startswith("_")}
-    text = render_notice(ledger, pid, root, summary_clean,
-                         final_status, targets=all_targets,
-                         quality=bundle["content_quality"],
-                         focus_mid=mid)
-    enqueued = False
-    if (scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce"
-            and final_status == "PASS" and not pl.get("notification_free")):
-        # per-target delivery key — one generation emits one
-        # notice PER audited target; a shared (root, fp) key
-        # would dedup every later target's claims out of the
-        # notice while the header still claims them
-        dkey = payload_hash({"kind": "semantic_notice",
-                             "root": root, "fp": fp,
-                             "mid": mid, "policy": policy})
-        # per-target eligibility: THIS message must be covered
-        # by a stored new_messages intent — a target that only
-        # ever arrived via import/replay produces artifacts but
-        # no notice, even when a sibling target was notified
-        # (INV-20, AT-055)
-        src_mid = _notify_src_event(ledger, pid, [mid])
-        if src_mid is not None \
-                and not _outbox_has_delivery(ledger, dkey):
-            ledger.outbox_add_tx("semantic_notice", pid, {
-                "delivery_key": dkey, "root_id": root,
-                "target_message_id": mid,
-                "target_revision": members[mid]["revision"],
-                "src_event_id": src_mid, "text": text,
-                "fingerprint": fp,
-                "policy_version": POLICY_VERSION,
-                "policy_fingerprint": policy})
-            enqueued = True
-    if not _plan_exists(ledger, mid, fp, final_status, policy):
-        plan_meta = {"fingerprint": fp, "policy_fingerprint": policy,
-                     "audit_status": final_status, "publication_mode": scfg["summary_mode"],
-                     "mode": scfg["mode"],
-                     "origin": pl.get("origin")}
-        if enqueued:
-            plan_meta["enqueued"] = True
-        ledger.artifact_add_tx(KIND_PLAN, json.dumps(
-            {"root_id": root, "target_message_id": mid,
-             "text": text}, ensure_ascii=False),
-            project_id=pid, message_id=mid,
-            meta=plan_meta)
 
 
 def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
@@ -881,7 +805,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             raise
 
     guard("admission")
-    if v4.hold_unbounded_job(ledger, job):
+    if cohort.hold_unbounded_job(ledger, job):
         return "failed"
 
     # The adapters below make every actual Jev/local-model boundary pass
@@ -1281,9 +1205,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         r.get("findings") or [], fact_source)
             if stale:
                 continue
-            _record_notice_plan_tx(ledger, scfg, pl, pid, root, mid, fp,
-                                   policy, r, final_status, bundle,
-                                   members, all_targets)
+            semantic_notice.record_notice_plan_tx(
+                ledger, pid, root, mid, fp, policy, r["summary"], final_status,
+                members[mid], all_targets, mode=scfg["mode"],
+                summary_mode=scfg["summary_mode"],
+                notification_free=pl.get("notification_free"),
+                origin=pl.get("origin"), content_quality=bundle["content_quality"])
         if (not stale and not pending and loops_done
                 and not runtime.transition_tx(ledger, token, "done")):
             raise runtime.RuntimeStale("promote")
@@ -2325,7 +2252,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         out["long_mark_unsaved"] = unsaved
     if scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
         try:
-            out["degraded_notices"] = _emit_degraded(ledger, scfg)
+            out["degraded_notices"] = semantic_notice.emit_degraded(ledger, scfg)
         except Exception:
             out["degraded_notices"] = 0
             result["errors"].append("semantic: degraded_scan_failed")

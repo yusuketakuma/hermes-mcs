@@ -6,6 +6,7 @@ import extract_llm
 import notify_action_context
 import structured_view
 from extract_testkit import _ledger, _message, _hash
+import mcs_queries
 
 
 @pytest.fixture
@@ -134,8 +135,8 @@ def test_patient_negation_still_suppresses_rule_positive(store):
 
 def test_missing_message_does_not_publish_forged_vital_but_nullable_legacy_row_survives(store, monkeypatch):
     doc = {"vitals": {"spo2": 80}, "vital_flags": [{"key": "spo2", "value": 80}]}
-    monkeypatch.setattr(structured_view, "latest_fact_artifact", lambda *args: doc)
-    monkeypatch.setattr(structured_view, "latest_artifact", lambda *args: {})
+    monkeypatch.setattr(mcs_queries, 'current_message_facts', lambda *args: doc)
+    monkeypatch.setattr(mcs_queries, 'current_message_extract', lambda *args: {})
     assert not any("SpO2" in line for line in structured_view.structured_lines(store.db, 999))
     seed(store, "完全合成の旧形式記録", doc)
     with store.db:

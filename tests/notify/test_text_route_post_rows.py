@@ -5,6 +5,7 @@ import notify_flush
 import notify_render
 import structured_view
 from notify_testkit import NOW, _msg, _patient, led
+import clinical_urgency
 
 __all__ = ["led"]
 
@@ -27,7 +28,7 @@ def test_text_post_shows_urgency_once_and_omits_an_observed_zero(led, monkeypatc
     _msg(led, 100, body="合成の本文")
     monkeypatch.setattr(structured_view, "structured_lines",
                         lambda db, mid, plain=False: ["🚨 緊急度高", "合成の要約"])
-    monkeypatch.setattr(structured_view, "message_urgency", lambda db, mid: "llm")
+    monkeypatch.setattr(clinical_urgency, 'message_urgency', lambda db, mid: "llm")
     _reactions(led, 100, [])
     text = _text_row(led, 100)
     assert "⚠️" not in text and text.count("🚨") == 1

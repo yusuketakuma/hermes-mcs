@@ -1,4 +1,7 @@
 """Synthetic /2 wire, grouping and collection tests with independent hash vectors."""
+
+import export_contract
+import export_schema
 from collections import Counter
 from copy import deepcopy
 import hashlib
@@ -8,7 +11,6 @@ import pytest
 
 import c1_envelopes as envs
 from c1_contract import C1ContractError, C1_FIELDS
-import ext_contract as legacy
 
 GEN = "gen-envelope-synth"
 SHARED = {"meta", "coverage", "patient_coverage", "signals_truncated"}
@@ -253,7 +255,7 @@ def test_equal_projected_signals_keep_multiplicity_without_cross_part_duplicates
 
 
 @pytest.mark.parametrize("profile", [
-    _profile(fields=list(legacy.RECORD_TYPES)), _profile(patients=[1]),
+    _profile(fields=list(export_schema.RECORD_TYPES)), _profile(patients=[1]),
     _profile(retention_days=31), _profile(max_snapshot_age_s=None),
 ])
 def test_builder_checks_explicit_profile_without_changing_legacy_grants(profile):
@@ -457,11 +459,11 @@ def test_current_set_evidence_from_another_scope_cannot_select_current():
 
 
 def test_v1_remains_distinct_and_its_numeric_bytes_are_unchanged():
-    assert legacy._canonical({"x": 1800000000.0}) == '{"x":1800000000.0}'
+    assert export_contract.canonical_text({"x": 1800000000.0}) == '{"x":1800000000.0}'
     envelope = _build(_records())[0]
-    legacy._validate_envelope(envelope)
-    with pytest.raises(legacy.ContractError):
-        legacy._validate_envelope({**envelope, "contract": legacy.EXT_CONTRACT})
+    export_contract.validate_export_envelope(envelope)
+    with pytest.raises(export_contract.ContractError):
+        export_contract.validate_export_envelope({**envelope, "contract": export_contract.EXT_CONTRACT})
 
 
 # Regression: /2 envelopes must refuse an auth_id that withdraw/1 cannot carry.

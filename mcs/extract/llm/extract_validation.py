@@ -23,64 +23,6 @@ _VITAL_KEYS = {"bt", "hr", "rr", "sbp", "dbp", "spo2", "bs"}
 _VITAL_THRESHOLDS_DEFAULT = {"spo2_lte": 90.0, "sbp_lte": 90.0,
                              "sbp_gte": 180.0, "bs_lte": 70.0}
 
-_VITAL_CTX_WIN = 40
-
-_VITAL_CTX_EXCLUDE = re.compile(
-    r"父|母|義父|義母|(?<![丈工])夫|妻|主人|息子|娘|兄|姉|弟|妹|祖父|祖母|家族|親族"
-    r"|なら|たら|れば|の場合|の際|切ったら|超えたら|下回ったら"
-    r"|を切ると|を超えると|を下回ると"
-    r"|だった|でした|ありました|していた|になった|なりました"
-    r"|先月|先週|昨日|以前|過去に"
-    r"|測定不能|測れ(?:な|ませ|ず)|測定でき(?:な|ませ|ず)|未測定|不明")
-
-
-def vital_threshold_flags(vit: dict, body: str | None,
-                           thresholds: dict) -> list[dict]:
-    """Deterministic threshold crossings on validated vitals.
-
-    Returns [{key, value, rule, evidence}] — the reading's own body
-    span (±20 chars) as the verbatim quote. A crossing whose reading
-    cannot be anchored to its label, or whose context window shows a
-    family/conditional/past/unmeasurable marker, does not flag."""
-    if not body or not vit:
-        return []
-    toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
-            for m in re.finditer(r"\d+(?:[.．]\d+)?", body)]
-    rules = (("spo2", "lte", thresholds.get("spo2_lte")),
-             ("sbp", "lte", thresholds.get("sbp_lte")),
-             ("sbp", "gte", thresholds.get("sbp_gte")),
-             ("bs", "lte", thresholds.get("bs_lte")))
-    out = []
-    for key, op, limit in rules:
-        if limit is None or key not in vit:
-            continue
-        val = vit[key]
-        if not ((op == "lte" and val <= limit)
-                or (op == "gte" and val >= limit)):
-            continue
-        span = None
-        for s, e, num in toks:
-            if num != val:
-                continue
-            cls = clinical_values._nearest_vital_label(body, s, e)
-            if cls == "bp":
-                cls = clinical_values._bp_side(body, s, e) or cls
-            if cls == key:
-                span = (s, e)
-                break
-        if span is None:
-            continue
-        s, e = span
-        if _VITAL_CTX_EXCLUDE.search(
-                body, max(0, s - _VITAL_CTX_WIN), e + _VITAL_CTX_WIN):
-            continue
-        out.append({"key": key, "value": val,
-                    "rule": f"{key}_{op}_{limit:g}",
-                    "evidence": body[max(0, s - 20):min(len(body), e + 20)]
-                    .strip()})
-    return out
-
-
 def vital_threshold_policy(cfg) -> dict | None:
     """cfg['vital_urgency'] -> {"mode", "thresholds"} or None.
 
@@ -108,7 +50,7 @@ def apply_vital_policy(out: dict, body: str | None,
     applied post-merge/post-validate so single, chunked and batch
     paths agree. "flag" annotates only; "high" (explicit clinical
     policy) raises urgency with the flagged spans as its evidence."""
-    flags = vital_threshold_flags(out.get("vitals") or {}, body,
+    flags = clinical_values.vital_threshold_flags(out.get("vitals") or {}, body,
                                    vital_policy["thresholds"])
     if not flags:
         return
@@ -747,36 +689,16 @@ class Validator:
                 continue
             vit[k] = float(val)
         if vit and self.body is not None:
-            vit = clinical_values._vitals_guard(self.body, vit, self.drops)
+            vit = clinical_values.grounded_vitals(self.body, vit, self.drops)
         if vit:
             out["vitals"] = vit
 
     def current_prose(self, text: str, field: str) -> bool:
-        """Do not present a source's explicitly noncurrent reading without its qualifier."""
-        if not isinstance(self.body, str):
-            return True
-        # Only explicit measurement syntax is checked, never a nearby drug dose or body weight.
-        readings = [(m.start(group), m.end(group))
-                    for pattern in (*clinical_values.VITAL_PATTERNS.values(),
-                                    r"(?:収縮期|拡張期)(?:血圧)?[:：はが=\s]*(\d+(?:[.．]\d+)?)")
-                    for m in re.finditer(pattern, text) for group in range(1, (m.lastindex or 0) + 1)]
-        for start, end in readings:
-            cls = clinical_values._nearest_vital_label(text, start, end)
-            if cls is None or clinical_scope.patient_source_scope(text, start, end) != "patient":
-                continue
-            left = max(text.rfind(mark, 0, start) for mark in "。！？!?\n") + 1
-            if (re.search(clinical_values._OTHER_TIME, text[left:start])
-                    and not clinical_values._vital_current(text, start)):
-                continue
-            hits = [m.span() for m in re.finditer(r"\d+(?:[.．]\d+)?", self.body)
-                    if clinical_values._bp_number(m[0]) == clinical_values._bp_number(text[start:end])
-                    and clinical_values._nearest_vital_label(self.body, *m.span()) == cls]
-            if hits and (all(clinical_scope.patient_source_scope(self.body, s, e)
-                             in clinical_values._NOT_PATIENT_CURRENT for s, e in hits)
-                         or clinical_values._vital_superseded(self.body, cls, hits)):
-                self.drop_item(field, f"{field}の測定値は本文では本人の現在の値ではありません。"
-                               "要約・要点でも対象者・時点・条件を保持し、未測定の値を補わないでください。")
-                return False
+        """Account for prose rejected by the canonical source/current measurement guard."""
+        if not clinical_values.prose_preserves_current_readings(text, self.body):
+            self.drop_item(field, f"{field}の測定値は本文では本人の現在の値ではありません。"
+                           "要約・要点でも対象者・時点・条件を保持し、未測定の値を補わないでください。")
+            return False
         return True
 
     def scalars(self, d: dict, out: dict):

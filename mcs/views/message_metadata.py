@@ -12,7 +12,8 @@ REACTION_LABELS = {"viewed": "見ました", "accepted": "承知", "thanked": "�
                    "good": "いいね", "completed": "完了"}
 
 
-def _timestamp(value):
+def observation_timestamp(value):
+    """Return a valid stored observation time, otherwise unknown (None)."""
     return (value if type(value) in (int, float)
             and 0 < value < 253402214400 else None)
 
@@ -65,7 +66,7 @@ def decode_metadata(row) -> dict:
     if row is None:
         return result
     raw, checked, error = row
-    result["checked_at"] = _timestamp(checked)
+    result["checked_at"] = observation_timestamp(checked)
     errors = str(error).split(",") if error else []
     # 反応以外の項目の不正は各 <key>_status で示し、取得失敗とは扱わない。
     if any(e not in _FIELD_ONLY_ERRORS for e in errors):
@@ -87,7 +88,7 @@ def decode_metadata(row) -> dict:
         if field is None:
             continue
         value = field.get("value") if isinstance(field, dict) else None
-        observed = (_timestamp(field.get("observed_at"))
+        observed = (observation_timestamp(field.get("observed_at"))
                     if isinstance(field, dict) else None)
         if observed is None or not valid(value):
             result[status] = "invalid"
@@ -103,7 +104,7 @@ def decode_metadata(row) -> dict:
 def _observation_age(metadata, as_of):
     observed = metadata["reactions_observed_at"]
     return (max(0, as_of - observed) if observed is not None
-            and _timestamp(as_of) is not None else None)
+            and observation_timestamp(as_of) is not None else None)
 
 
 def get_message_metadata(db, mid, *, as_of=None) -> dict:
@@ -111,7 +112,7 @@ def get_message_metadata(db, mid, *, as_of=None) -> dict:
     result = _read_metadata(db, mid, "capture")
     if as_of is not None:
         result.update(
-            source="capture", age_as_of=_timestamp(as_of),
+            source="capture", age_as_of=observation_timestamp(as_of),
             reactions_age_s=_observation_age(result, as_of),
             freshness_note="通常収集時の観測です。古い投稿の反応更新には遅延があり、"
                            "shadowの再取得結果はこの表示に反映しません。")
@@ -132,7 +133,7 @@ def response_observation(
     reply_at = None
     time_context = "unknown"
     known = (self_id is not None and row is not None
-             and _timestamp(row[2]) is not None and _timestamp(as_of) is not None)
+             and observation_timestamp(row[2]) is not None and observation_timestamp(as_of) is not None)
     if known and row is not None:
         root = row[1] or mid
         time_context = "bounded"
@@ -142,7 +143,7 @@ def response_observation(
             "AND COALESCE(body_state,'')!='deleted' ORDER BY posted_at_ts,message_id",
             (row[0], root)):
             actor = self_identity.normalize_sender_id(reply[0])
-            at = _timestamp(reply[1])
+            at = observation_timestamp(reply[1])
             if actor is None:
                 if at is None or at > row[2]:
                     time_context = "unknown"
@@ -194,7 +195,7 @@ def get_metadata_shadow_status(db, mid, *, as_of=None) -> dict:
             "checked_at": metadata["checked_at"],
             "reactions_observed_at": metadata["reactions_observed_at"],
             "reactions_age_s": _observation_age(metadata, as_of),
-            "age_as_of": _timestamp(as_of), "last_error": metadata["last_error"]}
+            "age_as_of": observation_timestamp(as_of), "last_error": metadata["last_error"]}
 
 
 # MCS stamp -> chat emoji. Unicode stand-ins for the official stamp
@@ -259,7 +260,7 @@ def _actor_text(value, cap) -> str:
 def actor_line(summary) -> str:
     """投稿ごとのスタンプ氏名・取得状態・観測日時を上限付きの1行で示す。"""
     summary = summary or {}
-    observed_at = _timestamp(summary.get("complete_at"))
+    observed_at = observation_timestamp(summary.get("complete_at"))
     state = summary.get("state")
     if observed_at is None:
         return "押した人: 未取得" + ("（取得失敗）" if state == "failed" else "")
@@ -297,7 +298,7 @@ def thread_stamp_line(metadata, summary=None, *, observed_time=True) -> str:
         return "スタンプ 未取得" + failed
     summary = summary or {}
     names: dict = {}
-    if _timestamp(summary.get("complete_at")) is not None:
+    if observation_timestamp(summary.get("complete_at")) is not None:
         for a in summary.get("actors") or []:
             if a.get("self") and metadata.get("own_post"):
                 continue          # one's own post counts others only

@@ -33,12 +33,11 @@ from mcs_queries import (CHANGE_ACTIONS, DAY_S, EXTRACT_FEEDBACK_KIND,
                          med_is_patient_current, med_period_artifacts,
                          transition_cooccurrences, thread_reply_pairs)
 from project_metadata_view import get_project_metadata
-from drug_map import (current_refs, _current_refs_with_progress,
-                      _progress as drug_map_progress)
-import structured_view
+import drug_map
 import extraction_audit
 import stats_contract
-_DEFAULT_CURRENT_REFS = current_refs
+import clinical_urgency
+import mcs_queries
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
 # 100 max, time buckets 120 — row-count caps bound the response size
@@ -149,15 +148,15 @@ def _urgency_rule_outcomes(db, w, p) -> dict:
                      AND json_extract({json_or_null('h.content')},'$.field')
                          ='urgency'{w}""", p).fetchone()[0]}
     for mid in mids:
-        if (structured_view.latest_artifact(db, "extract_v1", mid) or {}).get(
+        if (mcs_queries.current_message_extract(db, "extract_v1", mid) or {}).get(
                 "urgency") != "high":
             continue                     # only the current rule generation
         out["rule_high"] += 1
-        details = structured_view.message_urgency_details(db, mid)
+        details = clinical_urgency.message_urgency_details(db, mid)
         shown = details["source"]
         if shown == "llm":
             out["llm_high"] += 1
-            if structured_view.urgency_qc_disagreement(db, mid):
+            if clinical_urgency.urgency_qc_disagreement(db, mid):
                 out["llm_high_qc_disagreed"] += 1
         elif shown == "rule":
             out["rule_only"] += 1
@@ -460,10 +459,9 @@ def _med_candidate_breakdown(db, msgs):
     kinds = {"ingredient": {}, "general_name": {}, "product": {}}
     review = {}
     total = 0
-    progress = drug_map_progress(db)
+    progress = drug_map.read_annotation_progress(db)
     for _pid, mid, _ts, meds in msgs:
-        rows = (_current_refs_with_progress(db, mid, progress)
-                if current_refs is _DEFAULT_CURRENT_REFS else current_refs(db, mid))
+        rows = drug_map.current_refs_with_progress(db, mid, progress)
         refs = {ref["i"]: ref for ref in rows}
         for i, med in enumerate(meds):
             if not med_is_patient_current(med):

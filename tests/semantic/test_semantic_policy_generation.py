@@ -1,8 +1,8 @@
 """Changing interpretation policy invalidates cached analysis and unsent text."""
+import semantic_notice
 import semantic_send_gate
 import semantic_drain
 import semantic_policy
-import semantic_render
 import json
 import time
 
@@ -26,11 +26,11 @@ def test_policy_change_rechecks_analysis_and_freezes_old_notification(tmp_path, 
         assert event is not None
         monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce", project_ids=[]))
         with pytest.raises(semantic_send_gate.DeferredSend):
-            semantic_send_gate.semantic_gate(db, event, json.loads(event['payload']), notify_flush._config())
+            semantic_send_gate.semantic_gate(db.db, event, json.loads(event['payload']), notify_flush._config())
         changed = _cfg("enforce", match_threshold=.8)
         monkeypatch.setattr(notify_flush, "_config", lambda: changed)
         with pytest.raises(semantic_send_gate.StaleSend):
-            semantic_send_gate.semantic_gate(db, event, json.loads(event['payload']), notify_flush._config())
+            semantic_send_gate.semantic_gate(db.db, event, json.loads(event['payload']), notify_flush._config())
         db.semantic_seed(1, [1], {"source": "replay"})
         fake = _FakeJev()
         semantic_drain.run_due(db, changed, {"errors": []}, time.monotonic() + 300,
@@ -73,23 +73,23 @@ def test_new_policy_does_not_renotify_an_attempted_delivery(tmp_path):
 def test_attempted_notice_does_not_hide_a_new_recorded_arrival(tmp_path):
     db = _seeded(tmp_path)
     try:
-        origin = semantic_render._notify_src_event(db, 1, [1])
+        origin = semantic_notice.origin_event_id(db.db, 1, [1])
         assert origin is not None
         db.outbox_add("semantic_notice", 1,
                       {"src_event_id": origin, "target_message_id": 1})
         with db.db:
             db.db.execute("UPDATE notify_outbox SET state='failed',attempts=1 "
                           "WHERE kind='semantic_notice'")
-        assert semantic_render._notify_src_event(db, 1, [1]) is None
+        assert semantic_notice.origin_event_id(db.db, 1, [1]) is None
         db.outbox_add("new_messages", 1, {"message_ids": [1], "source": "correction"})
-        replacement = semantic_render._notify_src_event(db, 1, [1])
+        replacement = semantic_notice.origin_event_id(db.db, 1, [1])
         assert replacement is not None and replacement != origin
         db.outbox_add("semantic_notice", 1,
                       {"src_event_id": replacement, "target_message_id": 1})
         with db.db:
             db.db.execute("UPDATE notify_outbox SET state='accepted' "
                           "WHERE kind='semantic_notice'")
-        assert semantic_render._notify_src_event(db, 1, [1]) is None
+        assert semantic_notice.origin_event_id(db.db, 1, [1]) is None
     finally:
         db.close()
 
@@ -122,7 +122,7 @@ def test_fact_source_switch_holds_old_notice_and_rechecks_receipts(
         changed = _cfg("enforce", loop_mode="off") if canonical else _canonical_cfg()
         monkeypatch.setattr(notify_flush, "_config", lambda: changed)
         with pytest.raises(semantic_send_gate.StaleSend):
-            semantic_send_gate.semantic_gate(db, event, json.loads(event['payload']), notify_flush._config())
+            semantic_send_gate.semantic_gate(db.db, event, json.loads(event['payload']), notify_flush._config())
 
         # Returning to legacy reevaluates coverage/summary, and the old
         # canonical mandatory layer cannot ride on the new legacy receipt.

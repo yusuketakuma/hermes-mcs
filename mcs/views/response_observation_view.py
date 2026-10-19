@@ -7,9 +7,10 @@ import math
 from typing import TypedDict
 
 import self_identity
-from mcs_requests import canonical, payload_hash, positive, valid_hash
+from mcs_requests import canonical, payload_hash, positive
+from mcs_util import valid_hash
 from message_metadata import (
-    REACTION_LABELS, _timestamp, get_message_metadata, mentions_self,
+    REACTION_LABELS, observation_timestamp, get_message_metadata, mentions_self,
 )
 from snapshot_access import snapshot_meta, table_exists
 
@@ -58,9 +59,9 @@ def _field_unknown(metadata, field, row, as_of, max_age_s):
         return field + "_unknown"
     if metadata["last_error"]:
         return "capture_incomplete"
-    at = _timestamp(metadata[field + "_observed_at"])
-    checked = _timestamp(metadata["checked_at"])
-    body_at = _timestamp(row["updated_seen"])
+    at = observation_timestamp(metadata[field + "_observed_at"])
+    checked = observation_timestamp(metadata["checked_at"])
+    body_at = observation_timestamp(row["updated_seen"])
     if not valid_hash(row["content_hash"]) or body_at is None:
         return "source_binding_unknown"
     # observed_at is the value's first-seen time and survives unchanged
@@ -70,7 +71,7 @@ def _field_unknown(metadata, field, row, as_of, max_age_s):
             or not body_at <= checked <= as_of):
         return "source_binding_unknown"
     if row["revision_hash"] is not None:
-        revision_at = _timestamp(row["revision_at"])
+        revision_at = observation_timestamp(row["revision_at"])
         if (row["revision_hash"] != row["content_hash"] or revision_at is None
                 or checked <= revision_at):
             return "source_binding_unknown"
@@ -91,7 +92,7 @@ def get_response_observation_list(
         raise ValueError("bad_project_scope")
     scope = None if projects is None else sorted(set(projects))
     meta = snapshot_meta(db)
-    as_of = _timestamp(meta["generated_at"])
+    as_of = observation_timestamp(meta["generated_at"])
     if not meta["published"] or not meta["generation_id"] or as_of is None:
         return _result("unavailable", "published_snapshot_required")
     result = _result("complete")

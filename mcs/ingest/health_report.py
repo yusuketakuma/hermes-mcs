@@ -8,7 +8,9 @@ import sqlite3
 import time
 from contextlib import suppress
 
-from health_watch import HEALTH_REL, _finite_number, _read_status_json
+from health_policy import HEALTH_REL, STATUS_MAX_BYTES
+from stats_math import finite_number
+import safe_io
 from mcs_queries import ELIGIBLE_MESSAGE
 from mcs_util import HOME, ATTACH_DIR
 from llm_availability import disk_floor_mb
@@ -20,7 +22,7 @@ ATTACH_DISK_MARGIN_MB = 2048
 def prev_health() -> dict:
     """The previously published health block ({} when unreadable)."""
     try:
-        prev = _read_status_json(HEALTH_FILE)
+        prev = safe_io.read_json_nofollow(HEALTH_FILE, STATUS_MAX_BYTES)
     except (OSError, ValueError, RecursionError):
         return {}
     return prev if isinstance(prev, dict) else {}
@@ -35,7 +37,7 @@ def unread_at(result: dict, status: str, now: float) -> float | None:
             and status not in ("failed", "session_expired"):
         return now
     prev = prev_health().get("unread_at")
-    return prev if _finite_number(prev) else None
+    return prev if finite_number(prev) else None
 
 
 def attachment_free_mb(path=None) -> float | None:
@@ -153,7 +155,7 @@ def carried_since(key: str, active: bool, now: float) -> float | None:
         return None
     marks = prev_health().get("stall_marks")
     at = marks.get(key) if isinstance(marks, dict) else None
-    return at if _finite_number(at) and 0 <= at <= now else now
+    return at if finite_number(at) and 0 <= at <= now else now
 
 
 def llm_failing(db) -> bool:
@@ -258,7 +260,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
         except Exception:
             seconds = None
         marks["llm_down_since"] = None
-        if (_finite_number(seconds) and seconds >= LOCAL_LLM_DOWN_S
+        if (finite_number(seconds) and seconds >= LOCAL_LLM_DOWN_S
                 and llm_due()):
             reasons.append("local_llm_down")
     else:
@@ -467,9 +469,8 @@ def build_health(db, result: dict, status: str,
     coll = collection(result)
     free_mb = attachment_free_mb()
     cards_health = notify_scope.health_cards(db, cfg)
-    # Itemized attention block (2026-09-30): 'degraded' alone did not
-    # say WHERE — 12 extract_qc rows sat at attempts=0 for ~8h and two
-    # unsettled deliveries aged ~31h while everything read "incomplete".
+    # Itemized attention separates synthetic job and delivery populations;
+    # an aggregate status alone cannot identify which saved work needs review.
     # Three separate signals: fresh failures (24h), due-but-never-
     # picked rows (updated_at==created_at — attempts alone cannot tell
     # starvation from healthy rotation jobs like reconcile, which
@@ -642,7 +643,7 @@ def cached_coverage(version, now: float, source: str) -> dict | None:
             or cov.get("source") != source):
         return None
     at = cov.get("counted_at")
-    if not _finite_number(at) or not 0 <= now - at < COVERAGE_COUNT_S:
+    if not finite_number(at) or not 0 <= now - at < COVERAGE_COUNT_S:
         return None
     if not all(type(cov.get(k)) is int and cov[k] >= 0
                for k in ("current", "eligible", "poison_gated")):

@@ -477,7 +477,7 @@ def active_dictionary(db: sqlite3.Connection, cfg) -> tuple["DrugMap | None", st
         return None, "invalid"
     if dictionary is None:
         return None, "unconfigured"
-    progress = _progress(db)
+    progress = read_annotation_progress(db)
     if (not progress or progress.get("invalid") or progress.get("dictionary")
             != [dictionary.dict_id, dictionary.sha256, False, RESOLVER_VERSION]):
         return None, "inactive"
@@ -507,10 +507,10 @@ def _source_meds(source) -> list[tuple[int, str]]:
 
 def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
     """Read only exact current-source annotations from the DB, never a dictionary."""
-    return _current_refs_with_progress(db, mid, _progress(db))
+    return current_refs_with_progress(db, mid, read_annotation_progress(db))
 
 
-def _current_refs_with_progress(db: sqlite3.Connection, mid: int, progress: dict | None) -> list[Annotation]:
+def current_refs_with_progress(db: sqlite3.Connection, mid: int, progress: dict | None) -> list[Annotation]:
     """Reuse dictionary progress only within the caller's fixed snapshot."""
     if progress is not None and progress.get("dictionary") is None:
         return []
@@ -578,7 +578,7 @@ def _current_refs_with_progress(db: sqlite3.Connection, mid: int, progress: dict
     return refs
 
 
-def _progress(db: sqlite3.Connection) -> dict | None:
+def read_annotation_progress(db: sqlite3.Connection) -> dict | None:
     row = db.execute("SELECT content FROM artifacts WHERE kind=? "
                      "ORDER BY artifact_id DESC LIMIT 1", (PROGRESS_KIND,)).fetchone()
     if row is None:
@@ -603,7 +603,7 @@ def _progress(db: sqlite3.Connection) -> dict | None:
 
 def generation_signature(db: sqlite3.Connection) -> str:
     """Stable active dictionary currency for rollup caches; cursor is excluded."""
-    progress = _progress(db)
+    progress = read_annotation_progress(db)
     generation = ("legacy" if progress is None else "invalid" if progress.get("invalid")
                   else progress["dictionary"])
     return hashlib.sha256(json.dumps(generation, sort_keys=True).encode()).hexdigest()
@@ -637,7 +637,7 @@ def derive(ledger, dictionary: DrugMap | None, *,
         # Preserve legacy annotation bytes and avoid a metadata-only rewrite.
         provenance.pop("as_of")
         provenance.pop("next_boundary_on")
-    progress = _progress(ledger.db)
+    progress = read_annotation_progress(ledger.db)
     if progress is None and not usable and not ledger.db.execute(
             "SELECT 1 FROM artifacts WHERE kind=? LIMIT 1", (KIND,)).fetchone():
         return {"status": "unavailable", "done": 0, "pids": []}

@@ -22,6 +22,7 @@ Coverage map (spec MCS-REFACTOR-FIRST-20260920 AT ids):
   INV-16  shadow artifact kinds   -> test_shadow_full_pipeline
   AT-065  snapshot readers intact -> test_snapshot_view_semantic
 """
+import semantic_notice
 import semantic_send_gate
 import mcs_contract
 import mcs_util
@@ -30,7 +31,6 @@ import semantic_drain
 import semantic_extraction
 import semantic_jev
 import semantic_policy
-import semantic_render
 import semantic_store
 import datetime
 import json
@@ -690,7 +690,7 @@ def test_degraded_skips_delivered_history(tmp_path):
     db.db.commit()
     scfg = semantic_policy.semantic_config(
         _cfg("enforce", delayed_notice_seconds=900))[0]
-    assert semantic_render._emit_degraded(db, scfg) == 1   # only the pending one
+    assert semantic_notice.emit_degraded(db, scfg) == 1   # only the pending one
     rows = db.db.execute(
         "SELECT payload FROM notify_outbox "
         "WHERE kind='semantic_notice'").fetchall()
@@ -699,7 +699,7 @@ def test_degraded_skips_delivered_history(tmp_path):
     assert pl["degraded"] is True
     assert pl["src_event_id"] != old   # not the delivered event
     # idempotent — a second scan adds nothing
-    assert semantic_render._emit_degraded(db, scfg) == 0
+    assert semantic_notice.emit_degraded(db, scfg) == 0
     db.close()
 
 

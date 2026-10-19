@@ -28,7 +28,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
 import clinical_scope
+import clinical_urgency
 import clinical_values
+import extract_schema
 from patient_context import extract_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import ELIGIBLE_MESSAGE
@@ -56,84 +58,12 @@ _SYMPTOM_NEGATION = re.compile(
 _ADHERENCE = ("残薬", "飲み忘れ", "飲み残し", "未使用", "服薬不良",
               "アドヒアランス", "一包化", "お薬カレンダー", "自己注射",
               "残あり", "残なし")
-_URGENT = re.compile(
-    r"至急|緊急(?!時|連絡(?:先|網|票|カード)|用|体制)(?:搬送|受診|対応)?|早急|すぐに|急ぎ|"
-    r"救急(?:搬送|受診)?|搬送(?!先|元|方法|手段|経路|用|体制|依頼書)")
-_URGENT_CLAUSES = re.compile(
-    r"[。！？!?;\n]|しかし|ただし|けれど(?:も)?|"
-    r"(?<=ない)が|(?<=ません)が|(?<=した)が|(?<=ました)が|(?<=です)が")
-# A past/future word negates only when it directly modifies the urgent
-# word (「来週、緊急受診」); 「明日の訪問前に至急」 or 「昨日の採血で…、至急」 stay current,
-# and 「昨日から/より」「明日までに」 bound a current need, so they never match here.
-_URGENT_NONCURRENT = re.compile(
-    r"(?:昨日|一昨日|先日|先週|先月|昨年|以前|過去|"
-    r"明日|明後日|来週|来月|来年|後日|今度|\d+日前|\d+日後)"
-    r"(?:には|にも|は|に|も)?[、,\s　]*$")
-# A contingency head directly before the urgent word (「悪化した場合は救急搬送」
-# 「続くようなら至急連絡」) describes a plan, not a current need; a clock time
-# (「10時に至急」) is not a contingency.
-_URGENT_CONDITIONAL = re.compile(
-    r"(?:(?<![0-9０-９])(?:場合|際|とき|時|折)(?:に|には|は|も|の)?|"
-    r"(?:なら|ようなら|たら|ましたら|れば|ければ|あれば|ようであれば|ようでしたら))"
-    r"[、,\s　]*$")
-_URGENT_HYPOTHETICAL = re.compile(r"もし|万一|万が一")
-# 「すぐに」 alone is a plain adverb (「すぐに眠れる」); it is urgent only with an
-# action or request in its scope.
-_URGENT_SOON_ACTION = re.compile(
-    r"ください|下さい|お願い|願います|ほしい|欲しい|必要|搬送|受診|往診|連絡|中止|"
-    r"対応|確認|報告|相談|救急|呼(?:ん|び)|来て|向か|駆けつけ")
-_URGENT_INACTIVE = re.compile(
-    r"^(?:性|度|(?:の|な|に)?(?:対応|連絡|確認|受診|処置|搬送|要請))?"
-    r"の?(?:は|も|が|を)?(?:で(?:は)?|じゃ|(?:し|され)(?:て(?:い|おり?)?)?|する)?"
-    r"(?:ありません|ません|なかった|ない|なく|なし|"
-    r"不要(?!では(?:ありません|ない))|必要(?:は|が)?(?:ありません|ない|なし)|"
-    r"低い|低く|低め|高くない|高くありません|"
-    r"済み|完了|(?:た|ました|された|されました)"
-    # A past ending closes the phrase; 「ただちに」「たすけて」 are not past tense.
-    r"(?=$|[、,]|ので|ため|から|けど|けれど|が|と))")
-
-_CLINICAL_REASON_CUE = re.compile(r"救急(?:搬送|受診)|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:Cr|eGFR|K|Na|血糖|BP|BS|Glu)\s*\d", re.I)
 
 
-def clinical_urgency_quote(quote, *, symptom=None):
-    """A medical report/event is separate from an urgent reply request; this is not a severity threshold."""
-    if not isinstance(quote, str):
-        return False
-    pattern = (_CLINICAL_REASON_CUE if not isinstance(symptom, str) or not symptom.strip() else
-               re.compile(_CLINICAL_REASON_CUE.pattern + "|" + re.escape(symptom), re.I))
-    for match in pattern.finditer(quote):
-        tail = quote[match.end():]
-        prefix = r"(?:障害|消失|低下)" if match[0] == "意識" else r"困難" if match[0] == "呼吸" else ""
-        if re.match(prefix + r"(?:は|も|が|を)?(?:して|認めて|認め|はして)?(?:では|で|じゃ)?"
-                    r"(?:いません|ありません|ません|ない|なかった|なし|なく)", tail):
-            continue
-        return True
-    return False
 
 
-def urgent_request_quote(quote):
-    """Recognize urgency of a requested action without asserting a patient's clinical state."""
-    return (isinstance(quote, str) and _URGENT.search(quote) is not None
-            and (clinical_scope.URGENT_REQUEST.search(quote) is not None or _URGENT_SOON_ACTION.search(quote) is not None))
 
 
-def patient_clinical_quotes(body, *, patient_name=None):
-    """Source-grounded acute-event clauses, for an already established urgent request."""
-    quotes = []
-    offset = 0
-    for clause in re.split(r"[。！？!?;；\n]", body):
-        start = body.find(clause, offset)
-        offset = start + len(clause)
-        # An unrelated routine measurement must not turn a paperwork request
-        # into a clinical emergency. Cross-sentence linkage requires an
-        # explicit acute event, not a new numeric severity heuristic.
-        if not re.search(r"急変|救急(?:搬送|受診)|意識(?:を失|がない|消失|障害|低下)|呼吸(?:がない|困難|停止)|心肺停止", clause):
-            continue
-        if not clinical_urgency_quote(clause):
-            continue
-        kept, _ = clinical_scope.patient_urgency_quotes(body, [clause], patient_name=patient_name)
-        quotes.extend(quote for quote in kept if clinical_urgency_quote(quote))
-    return list(dict.fromkeys(quotes))
 
 
 _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm"),
@@ -143,12 +73,6 @@ _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm
              (r"教えて(?:ください|いただけ|欲しい)", "ask"),
              (r"報告(?:いたします|します|をお願い)", "report"))
 
-# Bounded repeats keep findall linear in the body length: the lazy name
-# class shares digits with the dose, so unbounded runs backtrack cubically.
-_MED_TOKEN = re.compile(
-    r"([ァ-ヶー一-龥][ァ-ヶー一-龥A-Za-z0-9０-９・ー\-]{0,30}?)"
-    # (?<!\d): a dose never starts inside a longer number (7+ digits match nothing)
-    r"(?<!\d)(\d{1,6}(?:\.\d{1,4})?)\s{0,8}(mg|μg|mcg|g|mL|単位|錠|cap|カプセル|包|枚|本)")
 _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬|座薬|注射")
 # date range like 8/17-9/6 or 9/24-10/7 (med periods)
 _MED_PERIOD = re.compile(
@@ -258,36 +182,6 @@ def _period_dates(a, b, start_year, end_year, posted, context):
     return candidates[0]
 
 
-def patient_rule_urgency_quotes(body):
-    """Current patient-only lexical emergency scopes, shared by writers and cached readers."""
-    clause_start = 0
-    for clause in _URGENT_CLAUSES.split(body):
-        offset = body.find(clause, clause_start)
-        clause_start = offset + len(clause)
-        # Adjacent urgent words (「すぐに搬送」「緊急で搬送」) share one scope.
-        spans: list[list[int]] = []
-        for match in _URGENT.finditer(clause):
-            if spans and clause[spans[-1][1]:match.start()].strip() in ("", "で"):
-                spans[-1][1] = match.end()
-            else:
-                spans.append([match.start(), match.end()])
-        cursor = 0
-        for i, (start, end) in enumerate(spans):
-            before = clause[cursor:start]
-            cursor = end
-            stop = spans[i + 1][0] if i + 1 < len(spans) else len(clause)
-            if clinical_scope.patient_source_scope(body, offset + start, offset + end) != "patient":
-                continue
-            if ((_URGENT_NONCURRENT.search(before)
-                 and not clinical_scope.URGENT_REQUEST.search(clause[end:]))
-                    or _URGENT_CONDITIONAL.search(before)
-                    or _URGENT_HYPOTHETICAL.search(before)
-                    or _URGENT_INACTIVE.match(clause[end:stop].strip())
-                    or (clause[start:end] == "すぐに"
-                        and not _URGENT_SOON_ACTION.search(clause[end:stop]))):
-                continue
-            return [clause.strip()]
-    return []
 
 
 def extract_message(body: str, posted_at: str) -> dict:
@@ -374,7 +268,7 @@ def extract_message(body: str, posted_at: str) -> dict:
 
     # --- medications (name + dose) ---
     meds = []
-    for name, dose, unit in _MED_TOKEN.findall(body):
+    for name, dose, unit in extract_schema.MEDICATION_TOKEN.findall(body):
         if unit in ("mg", "μg", "mcg", "g", "mL", "%") and len(name) >= 2:
             meds.append({"name": name, "dose": dose + unit})
     if meds:
@@ -464,7 +358,7 @@ def extract_message(body: str, posted_at: str) -> dict:
         out["soap"] = soap
 
     # Recompute the same source scopes when reading an older cached rule row.
-    if patient_rule_urgency_quotes(body):
+    if clinical_urgency.patient_rule_urgency_quotes(body):
         out["urgency"] = "high"
     context = extract_context(body)
     if context:
@@ -527,8 +421,7 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
     return {"done": done, "pids": sorted(pids)}
 
 
-_CHUNK = 200   # rows per commit: a RULE_VERSION bump re-extracts ~17k rows,
-               # but the drainer's per-write lock must not wait long
+_CHUNK = 200   # rows per commit; keep each writer lock hold bounded
 
 
 def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, set[int]]:
@@ -576,58 +469,58 @@ def main() -> int:
             return 3
     try:
         led = LedgerReader(DB) if args.stats else Ledger(DB)
-    except Exception:
-        if lock_fd is not None:
-            os.close(lock_fd)
-        raise
-    q = f"""SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
+        try:
+            q = f"""SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
                   m.content_hash
            FROM messages m WHERE {ELIGIBLE_MESSAGE}"""
-    params: list = []
-    if args.project:
-        q += " AND m.project_id=?"
-        params.append(args.project)
-    rows = led.db.execute(q + " ORDER BY m.posted_at_ts", params).fetchall()
+            params: list = []
+            if args.project:
+                q += " AND m.project_id=?"
+                params.append(args.project)
+            rows = led.db.execute(q + " ORDER BY m.posted_at_ts", params).fetchall()
 
-    # Same stale handling as the tick path: a hash-drifted artifact
-    # (edited body, or a legacy row without a pinned hash) must not
-    # count as done — otherwise --all could never re-extract it.
-    stale = set() if args.stats else _delete_stale(led)
-    done = {r["message_id"] for r in led.db.execute(
-        "SELECT message_id FROM artifacts WHERE kind=? "
-        "AND message_id IS NOT NULL", (KIND,))} - stale
-    todo = [r for r in rows if r["message_id"] not in done]
-    if args.stats:
-        todo = []
-    if args.limit:
-        todo = todo[:args.limit]
+            # Same stale handling as the tick path: a hash-drifted artifact
+            # (edited body, or a legacy row without a pinned hash) must not
+            # count as done — otherwise --all could never re-extract it.
+            stale = set() if args.stats else _delete_stale(led)
+            done = {r["message_id"] for r in led.db.execute(
+                "SELECT message_id FROM artifacts WHERE kind=? "
+                "AND message_id IS NOT NULL", (KIND,))} - stale
+            todo = [r for r in rows if r["message_id"] not in done]
+            if args.stats:
+                todo = []
+            if args.limit:
+                todo = todo[:args.limit]
 
-    _extract_rows(led, todo)
-    n = len(todo)
-    print(json.dumps({"extracted": n, "skipped_existing": len(done),
-                      "total_msgs": len(rows)}, ensure_ascii=False))
+            _extract_rows(led, todo)
+            n = len(todo)
+            print(json.dumps({"extracted": n, "skipped_existing": len(done),
+                              "total_msgs": len(rows)}, ensure_ascii=False))
 
-    # aggregate stats over all extract_v1 artifacts
-    import collections
-    keys = collections.Counter()
-    events = collections.Counter()
-    for a in led.db.execute(
-            "SELECT content FROM artifacts WHERE kind=?", (KIND,)):
-        d = loads_dict(a["content"])
-        if not isinstance(d, dict):
-            continue
-        for k in d:
-            if k != "v":
-                keys[k] += 1
-        for e in d.get("events", []) if isinstance(d.get("events"), list) else []:
-            if isinstance(e, str):
-                events[e] += 1
-    print(json.dumps({"field_coverage": dict(keys),
-                      "events": dict(events)}, ensure_ascii=False, indent=1))
-    led.close()
-    if lock_fd is not None:
-        os.close(lock_fd)
-    return 0
+            # aggregate stats over all extract_v1 artifacts
+            import collections
+            keys = collections.Counter()
+            events = collections.Counter()
+            for a in led.db.execute(
+                    "SELECT content FROM artifacts WHERE kind=?", (KIND,)):
+                d = loads_dict(a["content"])
+                if not isinstance(d, dict):
+                    continue
+                for k in d:
+                    if k != "v":
+                        keys[k] += 1
+                for e in d.get("events", []) if isinstance(d.get("events"), list) else []:
+                    if isinstance(e, str):
+                        events[e] += 1
+            print(json.dumps({"field_coverage": dict(keys),
+                              "events": dict(events)}, ensure_ascii=False, indent=1))
+            return 0
+        finally:
+            led.close()
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
+
 
 
 if __name__ == "__main__":

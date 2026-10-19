@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "手動の外部搬出の契約と証跡管理を整理",
+  "summary": "外部搬出の承認・形式検証と、送受領・撤回の証跡管理を設定画面やコマンド処理から分離しました。人の確認、データ範囲、結果不明時の保留、受領確認と削除確認の条件は変わりません。",
+  "upgrade": "追加操作は不要です。外部搬出は引き続き既定で無効であり、新しい接続先・自動送信・再送は追加しません。保存形式とCLIのJSON・終了コードは変わりません。",
+  "details": [
+    "既存の世代別envelope/receiptと承認検証をexport_contract、ローカルjournal・audit・sink/healthの状態管理をexport_deliveryへ実体移管する。",
+    "外部搬出offline/tick除外gateの同じ禁止規則を新所有モジュールにも適用する。",
+    "外部出力の数値判定を統計の共有正本から直接使い、backup/restoreから出力schema経由で処理を読む依存を除きます。共有するrecord headerのvalidatorは公開契約名へ揃え、wire形式・許可field・拒否条件は変えません。"
+  ],
+  "refs": [
+    "mcs/ops/ext_contract.py",
+    "mcs/export/export_contract.py",
+    "mcs/export/export_delivery.py"
+  ]
+}

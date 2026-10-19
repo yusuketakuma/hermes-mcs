@@ -1,4 +1,5 @@
 """Unreadable stored JSON stays isolated at receipt, publication, send and reporting boundaries."""
+import semantic_notice
 import semantic_send_gate
 import semantic_transport
 import json
@@ -6,9 +7,9 @@ import pytest
 
 from ledger import Ledger
 import semantic_v4 as v4
+import semantic_v4_cohort as cohort
 import semantic_send_gate as send_gate
 import semantic_observe as observe
-import semantic_render as render
 import semantic_runtime as runtime
 from semantic_projection import PROJECTION_VERSION
 from semantic_testkit import _message
@@ -32,12 +33,12 @@ def test_stage_receipt_can_replace_unreadable_previous_receipt(ledger):
 
 
 def test_cohort_history_ignores_unreadable_siblings(ledger):
-    ledger.artifact_add(v4.KIND_V4_COHORT, '{"cohort":"SYNTH"}')
-    ledger.artifact_add(v4.KIND_V4_COHORT, poison_json(ledger))
-    assert v4._cohort(ledger, "SYNTH") == {"cohort": "SYNTH"}
-    ledger.artifact_add(v4.KIND_V4_ITEM, '{"cohort":"SYNTH","message_id":1,"action":"needs_review"}')
-    ledger.artifact_add(v4.KIND_V4_ITEM, poison_json(ledger))
-    assert v4.cohort_items_done(ledger, "SYNTH")[1]["action"] == "needs_review"
+    ledger.artifact_add(cohort.KIND_V4_COHORT, '{"cohort":"SYNTH"}')
+    ledger.artifact_add(cohort.KIND_V4_COHORT, poison_json(ledger))
+    assert cohort.cohort_document(ledger.db, "SYNTH") == {"cohort": "SYNTH"}
+    ledger.artifact_add(cohort.KIND_V4_ITEM, '{"cohort":"SYNTH","message_id":1,"action":"needs_review"}')
+    ledger.artifact_add(cohort.KIND_V4_ITEM, poison_json(ledger))
+    assert cohort.cohort_items_done(ledger.db, "SYNTH")[1]["action"] == "needs_review"
 
 
 def test_current_v4_unreadable_content_is_unavailable(ledger):
@@ -58,7 +59,7 @@ def test_send_summary_and_origin_readers_reject_unreadable_rows(ledger):
     eid = ledger.outbox_add("new_messages", 1, {})
     ledger.db.execute("UPDATE notify_outbox SET payload=? WHERE event_id=?", (poison_json(ledger), eid))
     ledger.db.commit()
-    row, payload = send_gate._source_event(ledger, 1, eid)
+    row, payload = send_gate._source_event(ledger.db, 1, eid)
     assert row is not None and payload is None
 
 
@@ -67,7 +68,7 @@ def test_poison_delivery_payload_does_not_hide_valid_delivery_key(ledger):
     ledger.db.execute("UPDATE notify_outbox SET payload=? WHERE event_id=?", (poison_json(ledger), eid))
     ledger.db.commit()
     ledger.outbox_add("semantic_notice", 1, {"delivery_key": "SYNTH-key"})
-    assert render._outbox_has_delivery(ledger, "SYNTH-key")
+    assert semantic_notice.outbox_has_delivery(ledger.db, "SYNTH-key")
 
 
 def test_observe_ignores_unreadable_metric_rows(ledger):

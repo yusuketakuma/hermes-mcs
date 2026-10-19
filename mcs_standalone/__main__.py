@@ -25,6 +25,7 @@ if __package__ in (None, ""):
 import mcs_standalone  # noqa: E402,F401  (path bootstrap)
 from adapters.common.paths import read_verified_attachment  # noqa: E402
 from mcs_util import HOME  # noqa: E402
+from safe_io import fdopen_owned  # noqa: E402
 
 from . import config  # noqa: E402
 from .host import NotSent, Refused, log  # noqa: E402
@@ -158,7 +159,7 @@ def initialize(root, transport, *, yes=False):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".standalone-init-", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        with fdopen_owned(fd, "w", encoding="utf-8") as stream:
             json.dump(value, stream)
             stream.flush()
             os.fsync(stream.fileno())

@@ -25,7 +25,7 @@ from decimal import Decimal
 from typing import TypeAlias
 
 from export_schema import (
-    FORBIDDEN_KEYS, TYPE_FORBIDDEN, _BASE, validate_record as _validate_aggregate)
+    FORBIDDEN_KEYS, TYPE_FORBIDDEN, RECORD_HEADER_SCHEMA, validate_record as _validate_aggregate)
 
 JSONValue: TypeAlias = (
     str | int | float | bool | None | Sequence["JSONValue"] | Mapping[str, "JSONValue"])
@@ -156,7 +156,7 @@ def validate_record(record: JSONValue, *,
             stack.extend(node.values())
         elif isinstance(node, list):
             stack.extend(node)
-    if any(not _BASE[key](record.get(key)) for key in _HEADER):
+    if any(not RECORD_HEADER_SCHEMA[key](record.get(key)) for key in _HEADER):
         raise C1ContractError("record_provenance_invalid")
     if "content_omitted" in record and type(record["content_omitted"]) is not bool:
         raise C1ContractError("record_content_omitted_invalid")

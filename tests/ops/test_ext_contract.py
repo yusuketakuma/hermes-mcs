@@ -2,24 +2,27 @@
 construction, idempotent/held delivery, withdrawal and audit over the
 local fake sink only. No network, no real consumer, synthetic records.
 """
+
+import export_contract
+import export_delivery
+import export_schema
 import json
 import time
 
 import pytest
 
-import ext_contract as ext
-from ext_contract import ContractError
+from export_contract import ContractError
 
 NOW = 1_800_000_000.0
 
 
 @pytest.fixture(autouse=True)
 def fixed_clock(monkeypatch):
-    monkeypatch.setattr(ext.time, "time", lambda: NOW)
+    monkeypatch.setattr(export_delivery.time, "time", lambda: NOW)
 
 
 def _auth(tmp_path, **over):
-    auth = {"contract": ext.AUTH_CONTRACT, "auth_id": "auth-synth-1",
+    auth = {"contract": export_contract.AUTH_CONTRACT, "auth_id": "auth-synth-1",
             "purpose": "synthetic review mirror", "actor": "pharm-synth",
             "destination": "fake-knowledge-store",
             "scope": "aggregate", "patients": "all",
@@ -53,25 +56,25 @@ def _records(gen="gen-1", pid=1, mids=(1,)):
 def test_auth_unknown_field_rejected(tmp_path):
     p = _auth(tmp_path, expires_in="soon")     # typo'd key sneaks in
     with pytest.raises(ContractError, match="auth_unknown_fields"):
-        ext.load_authorization(p, NOW)
+        export_delivery.load_authorization(p, NOW)
 
 
 def test_deep_authorization_is_a_contract_refusal(tmp_path, recursion_limited_json):
     path = tmp_path / "auth.json"
     path.write_text("[" * 10000 + "0" + "]" * 10000)
     with pytest.raises(ContractError, match="auth_unreadable:RecursionError"):
-        ext.load_authorization(path, NOW)
+        export_delivery.load_authorization(path, NOW)
 
 
 @pytest.mark.parametrize("corrupt", ["ack", "payload", "journal", "deletion"])
 def test_deep_json_preserves_unknown_delivery_or_deletion(
         tmp_path, corrupt, recursion_limited_json):
     auth_path = _auth(tmp_path)
-    auth = ext.load_authorization(auth_path, NOW)
-    envelope = ext.build_envelope(_records(), auth, NOW - 10, now=NOW)
+    auth = export_delivery.load_authorization(auth_path, NOW)
+    envelope = export_contract.build_envelope(_records(), auth, NOW - 10, now=NOW)
     eid = envelope["envelope_id"]
-    sink = ext.LocalSink(tmp_path / "sink")
-    exp = ext.GovernedExporter(tmp_path / "state")
+    sink = export_delivery.LocalSink(tmp_path / "sink")
+    exp = export_delivery.GovernedExporter(tmp_path / "state")
     sink.drop_ack = True
     assert exp.deliver(envelope, sink, auth_path=auth_path)["status"] == "held"
     journal = exp.dir / "journal" / f"{eid}.json"
@@ -81,7 +84,7 @@ def test_deep_json_preserves_unknown_delivery_or_deletion(
         path = sink.root / "deletions" / f"{eid}.json"
     elif corrupt == "payload":
         # Integrity must be checked even if a matching receipt is present.
-        ext._write_json(sink.root / "acks" / f"{eid}.json", {
+        export_delivery._write_json(sink.root / "acks" / f"{eid}.json", {
             "envelope_id": eid, "records_sha256": envelope["records_sha256"],
             "records": envelope["record_count"], "acked_at": NOW})
         path = sink.root / "envelopes" / f"{eid}.json"
@@ -112,35 +115,35 @@ def test_auth_expired_revoked_unconfirmed_rejected(tmp_path):
              "auth_field_not_exportable")):
         p = _auth(tmp_path, **over)
         with pytest.raises(ContractError, match=match):
-            ext.load_authorization(p, NOW)
+            export_delivery.load_authorization(p, NOW)
 
 
 def test_envelope_binds_generation_and_filters_patients(tmp_path):
-    auth = ext.load_authorization(_auth(tmp_path, patients=[1]), NOW)
+    auth = export_delivery.load_authorization(_auth(tmp_path, patients=[1]), NOW)
     recs = _records(gen="genA", pid=1, mids=(1,)) + \
         _records(gen="genA", pid=2, mids=(2,))[3:]
-    env = ext.build_envelope(recs, auth, NOW - 10, now=NOW)
-    assert env["contract"] == ext.EXT_CONTRACT
+    env = export_contract.build_envelope(recs, auth, NOW - 10, now=NOW)
+    assert env["contract"] == export_contract.EXT_CONTRACT
     assert env["snapshot_generation_id"] == "genA"
     mids = {r["message_id"] for r in env["records"]
             if r["type"] == "message"}
     assert mids == {1}                        # project 2 filtered out
     assert env["envelope_id"]
     # same inputs → same envelope id (idempotency key)
-    env2 = ext.build_envelope(recs, auth, NOW - 10, now=NOW + 5)
+    env2 = export_contract.build_envelope(recs, auth, NOW - 10, now=NOW + 5)
     assert env2["envelope_id"] == env["envelope_id"]
 
 
 def test_envelope_refuses_stale_snapshot_and_bad_records(tmp_path):
-    auth = ext.load_authorization(_auth(tmp_path), NOW)
+    auth = export_delivery.load_authorization(_auth(tmp_path), NOW)
     with pytest.raises(ContractError, match="snapshot_stale"):
-        ext.build_envelope(_records(), auth, NOW - 3600, now=NOW)
+        export_contract.build_envelope(_records(), auth, NOW - 3600, now=NOW)
     bad = [dict(r) for r in _records()]
     bad[3]["statement"] = "raw statement text"
     with pytest.raises(ContractError, match="forbidden_field"):
-        ext.build_envelope(bad, auth, NOW - 10, now=NOW)
+        export_contract.build_envelope(bad, auth, NOW - 10, now=NOW)
     with pytest.raises(ContractError, match="record_type_unauthorized"):
-        ext.build_envelope(
+        export_contract.build_envelope(
             _records() + [{"type": "attachment",
                            "contract": "mcs-read-model/1",
                            "snapshot_generation_id": "gen-1",
@@ -149,10 +152,10 @@ def test_envelope_refuses_stale_snapshot_and_bad_records(tmp_path):
 
 
 def test_deliver_acks_once_and_never_duplicates(tmp_path):
-    auth = ext.load_authorization(_auth(tmp_path), NOW)
-    env = ext.build_envelope(_records(), auth, NOW - 10, now=NOW)
-    sink, exp = ext.LocalSink(tmp_path / "sink"), \
-        ext.GovernedExporter(tmp_path / "state")
+    auth = export_delivery.load_authorization(_auth(tmp_path), NOW)
+    env = export_contract.build_envelope(_records(), auth, NOW - 10, now=NOW)
+    sink, exp = export_delivery.LocalSink(tmp_path / "sink"), \
+        export_delivery.GovernedExporter(tmp_path / "state")
     assert exp.deliver(env, sink, auth_path=tmp_path / "auth.json")["status"] == "acked"
     assert sink.has(env["envelope_id"])
     again = exp.deliver(env, sink, auth_path=tmp_path / "auth.json")
@@ -162,11 +165,11 @@ def test_deliver_acks_once_and_never_duplicates(tmp_path):
 
 
 def test_lost_ack_holds_never_blind_retries(tmp_path):
-    auth = ext.load_authorization(_auth(tmp_path), NOW)
-    env = ext.build_envelope(_records(), auth, NOW - 10, now=NOW)
-    sink = ext.LocalSink(tmp_path / "sink")
+    auth = export_delivery.load_authorization(_auth(tmp_path), NOW)
+    env = export_contract.build_envelope(_records(), auth, NOW - 10, now=NOW)
+    sink = export_delivery.LocalSink(tmp_path / "sink")
     sink.drop_ack = True                       # ack lost in transit
-    exp = ext.GovernedExporter(tmp_path / "state")
+    exp = export_delivery.GovernedExporter(tmp_path / "state")
     res = exp.deliver(env, sink, auth_path=tmp_path / "auth.json")
     assert res["status"] == "held" and res["reason"] == "ack_unknown"
     assert sink.has(env["envelope_id"])        # payload DID arrive
@@ -185,32 +188,32 @@ def _write_ack(sink, env):
 
 def test_revocation_between_build_and_deliver_refuses(tmp_path):
     auth_p = _auth(tmp_path)
-    auth = ext.load_authorization(auth_p, NOW)
-    env = ext.build_envelope(_records(), auth, NOW - 10, now=NOW)
+    auth = export_delivery.load_authorization(auth_p, NOW)
+    env = export_contract.build_envelope(_records(), auth, NOW - 10, now=NOW)
     raw = json.loads(auth_p.read_text())
     raw["revoked"] = True
     auth_p.write_text(json.dumps(raw))
-    exp = ext.GovernedExporter(tmp_path / "state")
-    res = exp.deliver(env, ext.LocalSink(tmp_path / "sink"),
+    exp = export_delivery.GovernedExporter(tmp_path / "state")
+    res = exp.deliver(env, export_delivery.LocalSink(tmp_path / "sink"),
                       auth_path=auth_p)
     assert res["status"] == "refused" and "auth_revoked" in res["reason"]
     assert not (tmp_path / "sink" / "envelopes").exists()
 
 
 def test_sink_rejects_detail_scope_smuggling(tmp_path):
-    env = {"contract": ext.EXT_CONTRACT, "envelope_id": "e1",
+    env = {"contract": export_contract.EXT_CONTRACT, "envelope_id": "e1",
            "scope": "aggregate", "records": [
                {"type": "message", "message_id": 1,
                 "body_text": "SYNTH RAW BODY"}]}
     with pytest.raises(ContractError, match="forbidden_field"):
-        ext.LocalSink(tmp_path / "sink").receive(env)
+        export_delivery.LocalSink(tmp_path / "sink").receive(env)
 
 
 def test_withdraw_propagates_and_holds_unacked_delete(tmp_path):
-    auth = ext.load_authorization(_auth(tmp_path), NOW)
-    env = ext.build_envelope(_records(), auth, NOW - 10, now=NOW)
-    sink = ext.LocalSink(tmp_path / "sink")
-    exp = ext.GovernedExporter(tmp_path / "state")
+    auth = export_delivery.load_authorization(_auth(tmp_path), NOW)
+    env = export_contract.build_envelope(_records(), auth, NOW - 10, now=NOW)
+    sink = export_delivery.LocalSink(tmp_path / "sink")
+    exp = export_delivery.GovernedExporter(tmp_path / "state")
     exp.deliver(env, sink, auth_path=tmp_path / "auth.json")
     sink.drop_delete_ack = True
     assert exp.withdraw(env["envelope_id"], sink)["status"] \
@@ -224,10 +227,10 @@ def test_withdraw_propagates_and_holds_unacked_delete(tmp_path):
 
 
 def test_audit_records_refusals_and_sends(tmp_path):
-    auth = ext.load_authorization(_auth(tmp_path), NOW)
-    env = ext.build_envelope(_records(), auth, NOW - 10, now=NOW)
-    exp = ext.GovernedExporter(tmp_path / "state")
-    sink = ext.LocalSink(tmp_path / "sink")
+    auth = export_delivery.load_authorization(_auth(tmp_path), NOW)
+    env = export_contract.build_envelope(_records(), auth, NOW - 10, now=NOW)
+    exp = export_delivery.GovernedExporter(tmp_path / "state")
+    sink = export_delivery.LocalSink(tmp_path / "sink")
     exp.deliver(env, sink, auth_path=tmp_path / "auth.json")
     env2 = dict(env)
     env2["envelope_id"] = "e-bad"
@@ -258,18 +261,18 @@ def test_envelope_over_real_export_jsonl(tmp_path):
              .read_text(encoding="utf-8").splitlines() if line]
     gen_at = next(r["snapshot"]["generated_at"] for r in lines
                   if r["type"] == "meta")
-    auth = ext.load_authorization(
-        _auth(tmp_path, fields=list(ext.RECORD_TYPES)), NOW)
-    env = ext.build_envelope(lines, auth, gen_at, now=time.time())
+    auth = export_delivery.load_authorization(
+        _auth(tmp_path, fields=list(export_schema.RECORD_TYPES)), NOW)
+    env = export_contract.build_envelope(lines, auth, gen_at, now=time.time())
     assert env["snapshot_generation_id"] == res[
         "snapshot_generation_id"]
-    sink = ext.LocalSink(tmp_path / "sink")
-    out = ext.GovernedExporter(tmp_path / "state").deliver(
+    sink = export_delivery.LocalSink(tmp_path / "sink")
+    out = export_delivery.GovernedExporter(tmp_path / "state").deliver(
         env, sink, auth_path=tmp_path / "auth.json")
     assert out["status"] == "acked"
     stored = json.loads(next(
         (tmp_path / "sink" / "envelopes").iterdir()).read_text())
-    assert stored["contract"] == ext.EXT_CONTRACT
+    assert stored["contract"] == export_contract.EXT_CONTRACT
     assert stored["retention_days"] == 30
     assert all("body_text" not in r for r in stored["records"])
 
@@ -282,15 +285,15 @@ def test_envelope_over_real_export_jsonl(tmp_path):
 ])
 def test_auth_rejects_malformed_limits_and_types(tmp_path, over):
     with pytest.raises(ContractError):
-        ext.load_authorization(_auth(tmp_path, **over), NOW)
+        export_delivery.load_authorization(_auth(tmp_path, **over), NOW)
 
 
 def test_delivery_requires_matching_current_authorization(tmp_path):
     path = _auth(tmp_path)
-    env = ext.build_envelope(_records(), ext.load_authorization(path),
+    env = export_contract.build_envelope(_records(), export_delivery.load_authorization(path),
                              NOW - 10)
-    sink = ext.LocalSink(tmp_path / "sink")
-    exp = ext.GovernedExporter(tmp_path / "state")
+    sink = export_delivery.LocalSink(tmp_path / "sink")
+    exp = export_delivery.GovernedExporter(tmp_path / "state")
     assert exp.deliver(env, sink)["status"] == "refused"
     raw = json.loads(path.read_text())
     raw["destination"] = "different-consumer"
@@ -301,10 +304,10 @@ def test_delivery_requires_matching_current_authorization(tmp_path):
 
 def test_unknown_send_survives_sink_exception_and_auth_refusal(tmp_path):
     path = _auth(tmp_path)
-    env = ext.build_envelope(_records(), ext.load_authorization(path),
+    env = export_contract.build_envelope(_records(), export_delivery.load_authorization(path),
                              NOW - 10)
 
-    class LostResponse(ext.LocalSink):
+    class LostResponse(export_delivery.LocalSink):
         calls = 0
 
         def receive(self, envelope):
@@ -313,7 +316,7 @@ def test_unknown_send_survives_sink_exception_and_auth_refusal(tmp_path):
             raise OSError("synthetic response lost")
 
     sink = LostResponse(tmp_path / "sink")
-    exp = ext.GovernedExporter(tmp_path / "state")
+    exp = export_delivery.GovernedExporter(tmp_path / "state")
     assert exp.deliver(env, sink, auth_path=path)["status"] == "held"
     _auth(tmp_path, revoked=True)
     assert exp.deliver(env, sink, auth_path=path)["status"] == "refused"
@@ -324,35 +327,35 @@ def test_unknown_send_survives_sink_exception_and_auth_refusal(tmp_path):
 
 
 def test_unknown_nested_fields_and_mixed_generations_refused(tmp_path):
-    auth = ext.load_authorization(_auth(tmp_path))
+    auth = export_delivery.load_authorization(_auth(tmp_path))
     records = _records()
     records[-1]["facts"] = [{"fact_id": "f1", "future_text": "SYNTH"}]
     with pytest.raises(ContractError):
-        ext.build_envelope(records, auth, NOW - 10)
+        export_contract.build_envelope(records, auth, NOW - 10)
     records = _records()
     records[-1]["snapshot_generation_id"] = "gen-other"
     with pytest.raises(ContractError):
-        ext.build_envelope(records, auth, NOW - 10)
+        export_contract.build_envelope(records, auth, NOW - 10)
 
 
 def test_patient_scope_omits_unscoped_aggregates_and_other_signals(tmp_path):
-    auth = ext.load_authorization(_auth(
-        tmp_path, patients=[1], fields=list(ext.RECORD_TYPES)))
+    auth = export_delivery.load_authorization(_auth(
+        tmp_path, patients=[1], fields=list(export_schema.RECORD_TYPES)))
     records = _records() + [
         {"type": "signal", "contract": "mcs-read-model/1",
          "snapshot_generation_id": "gen-1", "project_id": pid,
          "signal_type": "rx_period_expiry", "evidence": {"message_id": pid}}
         for pid in (1, 2)]
-    env = ext.build_envelope(records, auth, NOW - 10)
+    env = export_contract.build_envelope(records, auth, NOW - 10)
     assert {r["type"] for r in env["records"]} == {"meta", "message", "signal"}
     assert all(r.get("project_id") in (None, 1) for r in env["records"])
 
 
 def test_sink_rejects_payload_tampering_and_path_escape(tmp_path):
     path = _auth(tmp_path)
-    env = ext.build_envelope(_records(), ext.load_authorization(path),
+    env = export_contract.build_envelope(_records(), export_delivery.load_authorization(path),
                              NOW - 10)
-    sink = ext.LocalSink(tmp_path / "sink")
+    sink = export_delivery.LocalSink(tmp_path / "sink")
     env["records"][-1]["message_id"] = 99
     with pytest.raises(ContractError):
         sink.receive(env)
@@ -365,10 +368,10 @@ def test_sink_rejects_payload_tampering_and_path_escape(tmp_path):
 
 def test_reconciliation_never_revives_a_withdrawn_envelope(tmp_path):
     path = _auth(tmp_path)
-    env = ext.build_envelope(_records(), ext.load_authorization(path),
+    env = export_contract.build_envelope(_records(), export_delivery.load_authorization(path),
                              NOW - 10)
-    sink = ext.LocalSink(tmp_path / "sink")
-    exp = ext.GovernedExporter(tmp_path / "state")
+    sink = export_delivery.LocalSink(tmp_path / "sink")
+    exp = export_delivery.GovernedExporter(tmp_path / "state")
     exp.deliver(env, sink, auth_path=path)
     assert exp.withdraw(env["envelope_id"], sink)["status"] == "withdrawn"
     sink.receive(env)  # simulate a delayed duplicate arriving after deletion
@@ -381,10 +384,10 @@ def test_concurrent_exporters_reserve_before_effect_and_send_once(tmp_path, monk
     from threading import Barrier
 
     path = _auth(tmp_path)
-    env = ext.build_envelope(_records(), ext.load_authorization(path), NOW - 10)
+    env = export_contract.build_envelope(_records(), export_delivery.load_authorization(path), NOW - 10)
     state = tmp_path / "state"
     ready = Barrier(4)
-    locked = ext.GovernedExporter._locked
+    locked = export_delivery.GovernedExporter._locked
 
     @contextmanager
     def simultaneous_lock(exporter):
@@ -392,27 +395,27 @@ def test_concurrent_exporters_reserve_before_effect_and_send_once(tmp_path, monk
         with locked(exporter):
             yield
 
-    monkeypatch.setattr(ext.GovernedExporter, "_locked", simultaneous_lock)
+    monkeypatch.setattr(export_delivery.GovernedExporter, "_locked", simultaneous_lock)
 
-    class ObservingSink(ext.LocalSink):
+    class ObservingSink(export_delivery.LocalSink):
         calls = 0
 
         def receive(self, envelope):
             self.calls += 1
             journal = json.loads((state / "journal" / f'{env["envelope_id"]}.json').read_text())
             assert journal["status"] == "sent"
-            fd = ext.os.open(state / ".lock", ext.os.O_RDWR)
+            fd = export_delivery.os.open(state / ".lock", export_delivery.os.O_RDWR)
             try:
                 with pytest.raises(BlockingIOError):
-                    ext.fcntl.flock(fd, ext.fcntl.LOCK_EX | ext.fcntl.LOCK_NB)
+                    export_delivery.fcntl.flock(fd, export_delivery.fcntl.LOCK_EX | export_delivery.fcntl.LOCK_NB)
             finally:
-                ext.os.close(fd)
+                export_delivery.os.close(fd)
             return super().receive(envelope)
 
     sink = ObservingSink(tmp_path / "sink")
 
     def send(_):
-        return ext.GovernedExporter(state).deliver(env, sink, auth_path=path)["status"]
+        return export_delivery.GovernedExporter(state).deliver(env, sink, auth_path=path)["status"]
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(send, range(4)))
@@ -423,10 +426,10 @@ def test_concurrent_exporters_reserve_before_effect_and_send_once(tmp_path, monk
 
 def test_mismatched_ack_or_corrupt_received_payload_stays_held(tmp_path):
     path = _auth(tmp_path)
-    env = ext.build_envelope(_records(), ext.load_authorization(path), NOW - 10)
-    sink = ext.LocalSink(tmp_path / "sink")
+    env = export_contract.build_envelope(_records(), export_delivery.load_authorization(path), NOW - 10)
+    sink = export_delivery.LocalSink(tmp_path / "sink")
     sink.drop_ack = True
-    exporter = ext.GovernedExporter(tmp_path / "state")
+    exporter = export_delivery.GovernedExporter(tmp_path / "state")
     assert exporter.deliver(env, sink, auth_path=path)["status"] == "held"
     ack_path = sink.root / "acks" / f'{env["envelope_id"]}.json'
     ack_path.parent.mkdir()
@@ -448,31 +451,31 @@ def test_mismatched_ack_or_corrupt_received_payload_stays_held(tmp_path):
 def test_empty_grant_and_narrowed_grant_do_not_widen(tmp_path):
     path = _auth(tmp_path, fields=[])
     with pytest.raises(ContractError, match="record_type_unauthorized"):
-        ext.build_envelope(_records(), ext.load_authorization(path), NOW - 10)
+        export_contract.build_envelope(_records(), export_delivery.load_authorization(path), NOW - 10)
     path = _auth(tmp_path)
-    env = ext.build_envelope(_records(), ext.load_authorization(path), NOW - 10)
+    env = export_contract.build_envelope(_records(), export_delivery.load_authorization(path), NOW - 10)
     _auth(tmp_path, patients=[2])
-    sink = ext.LocalSink(tmp_path / "sink")
-    res = ext.GovernedExporter(tmp_path / "state").deliver(env, sink, auth_path=path)
+    sink = export_delivery.LocalSink(tmp_path / "sink")
+    res = export_delivery.GovernedExporter(tmp_path / "state").deliver(env, sink, auth_path=path)
     assert res["status"] == "refused"
     assert not sink.has(env["envelope_id"])
 
 
 def test_nested_stat_patient_scope_is_checked(tmp_path):
-    auth = ext.load_authorization(_auth(tmp_path, patients=[1]))
+    auth = export_delivery.load_authorization(_auth(tmp_path, patients=[1]))
     records = _records()
     records[2].update(name="med_mentions", value={
         "status": "ok", "scope": {"project_id": 1},
         "by_room": {"items": [{"project_id": 2, "distinct_med_names": 1}]}})
     with pytest.raises(ContractError, match="record_patient_scope_mixed"):
-        ext.build_envelope(records, auth, NOW - 10)
+        export_contract.build_envelope(records, auth, NOW - 10)
 
 
 def test_unknown_delete_is_not_repeated_and_late_ack_reconciles(tmp_path):
     path = _auth(tmp_path)
-    env = ext.build_envelope(_records(), ext.load_authorization(path), NOW - 10)
+    env = export_contract.build_envelope(_records(), export_delivery.load_authorization(path), NOW - 10)
 
-    class LostDeletion(ext.LocalSink):
+    class LostDeletion(export_delivery.LocalSink):
         calls = 0
 
         def delete(self, eid):
@@ -482,7 +485,7 @@ def test_unknown_delete_is_not_repeated_and_late_ack_reconciles(tmp_path):
 
     sink = LostDeletion(tmp_path / "sink")
     sink.drop_delete_ack = True
-    exporter = ext.GovernedExporter(tmp_path / "state")
+    exporter = export_delivery.GovernedExporter(tmp_path / "state")
     exporter.deliver(env, sink, auth_path=path)
     assert exporter.withdraw(env["envelope_id"], sink)["status"] == "delete_held"
     assert exporter.withdraw(env["envelope_id"], sink)["status"] == "delete_held"
@@ -496,11 +499,11 @@ def test_unknown_delete_is_not_repeated_and_late_ack_reconciles(tmp_path):
 @pytest.mark.parametrize("contents", ["{broken", '{"status":"invented"}'])
 def test_corrupt_journal_cannot_authorize_a_new_send(tmp_path, contents):
     path = _auth(tmp_path)
-    env = ext.build_envelope(_records(), ext.load_authorization(path), NOW - 10)
-    exporter = ext.GovernedExporter(tmp_path / "state")
+    env = export_contract.build_envelope(_records(), export_delivery.load_authorization(path), NOW - 10)
+    exporter = export_delivery.GovernedExporter(tmp_path / "state")
     journal = exporter.dir / "journal" / f'{env["envelope_id"]}.json'
     journal.write_text(contents)
-    sink = ext.LocalSink(tmp_path / "sink")
+    sink = export_delivery.LocalSink(tmp_path / "sink")
     res = exporter.deliver(env, sink, auth_path=path)
     assert res["status"] == "refused" and "journal_" in res["reason"]
     assert journal.read_text() == contents
@@ -509,13 +512,13 @@ def test_corrupt_journal_cannot_authorize_a_new_send(tmp_path, contents):
 
 def test_existing_identity_cannot_change_delivery_intent(tmp_path):
     path = _auth(tmp_path)
-    auth = ext.load_authorization(path)
-    env = ext.build_envelope(_records(), auth, NOW - 10)
-    sink = ext.LocalSink(tmp_path / "sink")
-    exporter = ext.GovernedExporter(tmp_path / "state")
+    auth = export_delivery.load_authorization(path)
+    env = export_contract.build_envelope(_records(), auth, NOW - 10)
+    sink = export_delivery.LocalSink(tmp_path / "sink")
+    exporter = export_delivery.GovernedExporter(tmp_path / "state")
     assert exporter.deliver(env, sink, auth_path=path)["status"] == "acked"
     _auth(tmp_path, retention_days=365)
-    changed = ext.build_envelope(_records(), ext.load_authorization(path), NOW - 10)
+    changed = export_contract.build_envelope(_records(), export_delivery.load_authorization(path), NOW - 10)
     assert changed["envelope_id"] == env["envelope_id"]  # existing /1 identity
     assert exporter.deliver(changed, sink, auth_path=path)["status"] == "refused"
     with pytest.raises(ContractError, match="sink_identity_conflict"):

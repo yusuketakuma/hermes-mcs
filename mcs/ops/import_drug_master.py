@@ -22,7 +22,7 @@ import zlib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import drug_map  # noqa: E402
-from safe_io import fsync_dir, read_regular_nofollow  # noqa: E402
+from safe_io import fsync_dir, read_regular_nofollow, fdopen_owned  # noqa: E402
 
 JSON: TypeAlias = None | bool | int | float | str | list["JSON"] | dict[str, "JSON"]
 MENU_URL = "https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/"
@@ -338,7 +338,7 @@ def write_private(result: Conversion, destination: Path) -> None:
     fd, temporary = tempfile.mkstemp(prefix=".drug-master-", dir=destination.parent)
     published = False
     try:
-        with os.fdopen(fd, "wb") as stream:
+        with fdopen_owned(fd, "wb") as stream:
             os.fchmod(stream.fileno(), 0o600)
             stream.write(result.payload)
             stream.flush()

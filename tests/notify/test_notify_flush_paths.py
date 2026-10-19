@@ -16,9 +16,9 @@ import pytest
 import notify_flush
 import notify_sender
 import mcs_util
-import structured_view
 from ingest_testkit import _ledger, _message, _unread_patient
 from ledger import Ledger
+import mcs_queries
 
 
 def test_attachment_collection_has_cumulative_real_size_limit(tmp_path, monkeypatch):
@@ -46,7 +46,7 @@ def test_notifier_ignores_artifact_for_old_body(tmp_path):
     db.artifact_add("extract_v1", '{"urgency":"high"}', project_id=1,
                     message_id=1, meta={"hash": "old"})
 
-    assert structured_view.latest_artifact(db.db, "extract_v1", 1) is None
+    assert mcs_queries.current_message_extract(db.db, "extract_v1", 1) is None
     db.close()
 
 

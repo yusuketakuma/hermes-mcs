@@ -14,6 +14,7 @@ from adapters.lineworks.delivery import Sender
 from adapters.lineworks import cards as lw_cards
 from notify_lineworks_testkit import LINEWORKS, MID, _deliver as deliver_lw
 from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _latest_render, _seed_thread, led as led
+import clinical_urgency
 
 
 def test_new_header_is_independent_from_long_original(led):
@@ -323,7 +324,7 @@ def test_lw_continuous_replies_keep_individual_deadlines_and_pending_coverage(
 def test_lw_wait_does_not_delay_urgent_thread(led, monkeypatch):
     _seed_thread(led, mids=(100, 101))
     led.db.execute("UPDATE messages SET first_seen=?", (NOW,))
-    monkeypatch.setattr(notify_render.structured_view, "message_urgency", lambda db, mid: "rule")
+    monkeypatch.setattr(clinical_urgency, 'message_urgency', lambda db, mid: "rule")
     _dispatch(led, _intent(led), LINEWORKS)
     spec = json.loads(_latest_render(led)["spec_json"])
     names = {p.get("name") for p in spec["parts"]["manifest"]}

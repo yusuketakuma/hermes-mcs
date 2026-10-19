@@ -254,9 +254,9 @@ def test_extract_admission_defaults_to_zero_under_v4(tmp_path, monkeypatch):
                             "SELECT content_hash FROM messages "
                             "WHERE message_id=1").fetchone()[0]}],
             {"items": 1}, NOW + 3600)
-        assert v4.active_legacy_admissions(db, NOW) == set()
+        assert cohort.active_legacy_admissions(db, NOW) == set()
         # an expired cohort admits nothing again
-        assert v4.active_legacy_admissions(db, NOW + 7200) == set()
+        assert cohort.active_legacy_admissions(db, NOW + 7200) == set()
     finally:
         db.close()
 
@@ -277,7 +277,7 @@ def test_cohort_schedules_bounded_and_restart_safe(tmp_path):
             {"items": 2}, NOW + 3600)
         assert tuple(db.db.execute(
             "SELECT project_id,message_id FROM artifacts WHERE kind=?",
-            (v4.KIND_V4_COHORT,)).fetchone()) == (None, None)
+            (cohort.KIND_V4_COHORT,)).fetchone()) == (None, None)
         res = cohort.run_cohort(db, "c2", now=NOW)
         assert res["scheduled"] == 2          # ceiling respected
         # item receipts bound the cursor — re-running doesn't re-seed
@@ -304,10 +304,10 @@ def test_gone_source_item_receipt_preserves_target_without_dangling_reference(tm
     db = _ledger(tmp_path)
     try:
         with db.db:
-            v4._item_receipt(db, "synthetic-cohort", 999, "source_changed")
+            cohort._item_receipt(db, "synthetic-cohort", 999, "source_changed")
         row = db.db.execute(
             "SELECT project_id,message_id,content FROM artifacts WHERE kind=?",
-            (v4.KIND_V4_ITEM,)).fetchone()
+            (cohort.KIND_V4_ITEM,)).fetchone()
         assert tuple(row)[:2] == (None, None)
         assert json.loads(row["content"])["message_id"] == 999
     finally:
@@ -495,13 +495,13 @@ def test_cohort_never_dispatches_without_enforceable_token_budget(tmp_path):
             time.monotonic() + 60, diagnostics=semantic_drain._job_diagnostics())
         assert result == "failed"
         assert calls == []
-        assert v4.cohort_items_done(db, "bounded")[1]["reason"] == \
+        assert cohort.cohort_items_done(db.db, "bounded")[1]["reason"] == \
             "token_budget_not_enforceable"
-        count = len(_rows(db, v4.KIND_V4_ITEM, 1))
+        count = len(_rows(db, cohort.KIND_V4_ITEM, 1))
         assert semantic_drain._process_job(
             db, cfg, job, _PassJev(), lambda prompt: calls.append(prompt),
             time.monotonic() + 60, diagnostics=semantic_drain._job_diagnostics()) == "failed"
-        assert len(_rows(db, v4.KIND_V4_ITEM, 1)) == count
+        assert len(_rows(db, cohort.KIND_V4_ITEM, 1)) == count
     finally:
         db.close()
 
@@ -518,7 +518,7 @@ def test_cohort_reservation_rolls_back_with_job_and_survives_reopen(tmp_path,
     original = db.artifact_add_tx
 
     def fail_receipt(kind, *args, **kwargs):
-        if kind == v4.KIND_V4_ITEM:
+        if kind == cohort.KIND_V4_ITEM:
             raise OSError("synthetic write failure")
         return original(kind, *args, **kwargs)
 
@@ -528,7 +528,7 @@ def test_cohort_reservation_rolls_back_with_job_and_survives_reopen(tmp_path,
             with pytest.raises(OSError):
                 cohort.run_cohort(db, "atomic", NOW)
         assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
-        assert v4.cohort_items_done(db, "atomic") == {}
+        assert cohort.cohort_items_done(db.db, "atomic") == {}
         assert cohort.run_cohort(db, "atomic", NOW)["scheduled"] == 1
     finally:
         db.close()
@@ -553,7 +553,7 @@ def test_cohort_binds_dependency_closure_and_rejects_duplicate_targets(tmp_path)
         db.save_messages([_message(2, parent=1, body="synthetic reply")], project_id=1)
         result = cohort.run_cohort(db, "context", NOW)
         assert result["scheduled"] == 0 and result["remaining"] == 0
-        assert v4.cohort_items_done(db, "context")[1]["reason"] == "source_changed"
+        assert cohort.cohort_items_done(db.db, "context")[1]["reason"] == "source_changed"
         before = [tuple(row) for row in db.db.execute("SELECT * FROM artifacts")]
         with pytest.raises(ValueError):
             cohort.retire_payloads(db, "context", float("nan"))
@@ -577,5 +577,26 @@ def test_v4_row_survives_into_read_model(tmp_path):
         assert rec["extraction"]["semantic_facts_v4"][
             "engine_version"] == 4
         assert rec["state"] == "current"
+    finally:
+        db.close()
+
+
+def test_cohort_read_helpers_borrow_connection_and_preserve_pending_transaction(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        db.db.execute("BEGIN")
+        db.artifact_add_tx(cohort.KIND_V4_COHORT, '{"cohort":"synthetic-borrowed"}')
+        db.artifact_add_tx(cohort.KIND_V4_ITEM,
+                           '{"cohort":"synthetic-borrowed","message_id":1,"action":"scheduled"}')
+        assert cohort.cohort_document(db.db, "synthetic-borrowed") == {"cohort": "synthetic-borrowed"}
+        assert cohort.cohort_items_done(db.db, "synthetic-borrowed")[1]["action"] == "scheduled"
+        assert db.db.in_transaction
+        with pytest.raises(ValueError, match="cohort_transaction_active"):
+            cohort.run_cohort(db, "synthetic-borrowed", NOW)
+        assert db.db.in_transaction
+        db.db.rollback()
+        assert cohort.cohort_document(db.db, "synthetic-borrowed") is None
+        assert cohort.cohort_items_done(db.db, "synthetic-borrowed") == {}
+        assert db.db.execute("SELECT 1").fetchone()[0] == 1
     finally:
         db.close()

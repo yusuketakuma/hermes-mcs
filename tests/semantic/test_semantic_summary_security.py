@@ -62,7 +62,7 @@ def test_notice_flattens_model_lines_and_preserves_trusted_footer(tmp_path):
         summary = {"claims": [{"section": "medication", "claim_kind": "limitation", "text": SPOOF}],
                    "mandatory_facts": [SPOOF], "mandatory_overview": SPOOF,
                    "limitations": [SPOOF]}
-        text = render.render_notice(db, 1, 1, summary, "PASS", quality="full")
+        text = render.render_notice(db.db, 1, 1, summary, "PASS", quality="full")
         assert text.count("\n▶ MCSで確認\n") == 1
         assert "\n■ 偽の監査見出し" not in text
         assert "───── 要約（自動検査済） ─────" not in text
@@ -73,7 +73,7 @@ def test_notice_flattens_model_lines_and_preserves_trusted_footer(tmp_path):
         assert all(part.endswith("▶ MCSで確認\n" + trusted_url) for part in parts)
         with db.db:
             db.db.execute("UPDATE patients SET url='' WHERE project_id=1")
-        no_source = render.render_notice(db, 1, 1, summary, "PASS", quality="full")
+        no_source = render.render_notice(db.db, 1, 1, summary, "PASS", quality="full")
         with pytest.raises(ValueError, match="semantic_provenance_missing"):
             semantic_render.semantic_chunk_parts(no_source, 400)
     finally:
@@ -90,7 +90,7 @@ def test_raw_summary_block_flattens_claims_facts_and_drops_free_limitations(tmp_
         with db.db:
             db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps(summary), row["artifact_id"]))
         message = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
-        text = semantic_render.semantic_summary_block(db, message, _cfg('enforce'))
+        text = semantic_render.semantic_summary_block(db.db, message, _cfg('enforce'))
         assert text.count(semantic_render.semantic_text_line(SPOOF)) == 2
         assert text.count("───── 要約（自動検査済） ─────") == 1
         assert "\n■ 偽の監査見出し" not in text
@@ -132,17 +132,17 @@ def test_previous_audit_policy_cannot_publish_saved_pass_or_frozen_notice(tmp_pa
         with db.db:
             db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), summary["artifact_id"]))
         message = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
-        assert semantic_render.semantic_summary_block(db, message, cfg) == ""
+        assert semantic_render.semantic_summary_block(db.db, message, cfg) == ""
         raw = db.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
-        assert gate.semantic_render_state(db, raw, cfg) == ()
+        assert gate.semantic_render_state(db.db, raw, cfg) == ()
         exception = gate.FreezeSend if in_progress else gate.StaleSend
         payload["fingerprint"] = old_bundle["source_fingerprint"]
         with pytest.raises(exception, match="stale_generation"):
-            gate.semantic_gate(db, event, payload, cfg, in_progress)
+            gate.semantic_gate(db.db, event, payload, cfg, in_progress)
         payload["fingerprint"] = current_bundle["source_fingerprint"]
         payload["policy_version"] = "2026-09-21.2"
         with pytest.raises(exception, match="policy_changed"):
-            gate.semantic_gate(db, event, payload, cfg, in_progress)
+            gate.semantic_gate(db.db, event, payload, cfg, in_progress)
         assert db.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (summary["artifact_id"],)).fetchone()
     finally:
         db.close()
@@ -165,7 +165,7 @@ def test_model_cannot_impersonate_code_attachment_disclosure(tmp_path, attachmen
         assert render._LIMITATION_NOTICE in lines
         trusted = f"対象投稿・文脈に添付{attachment_count}件があります。添付内容は解析していません。"
         assert (trusted in lines) is bool(attachment_count)
-        text = render.render_notice(db, 1, 1, summary, "PASS", quality="full")
+        text = render.render_notice(db.db, 1, 1, summary, "PASS", quality="full")
         assert fake not in text
     finally:
         db.close()

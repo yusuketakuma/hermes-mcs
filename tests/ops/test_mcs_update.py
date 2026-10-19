@@ -1497,7 +1497,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
     monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
 
-    def post_merge(_state):
+    def post_merge(_state, *, run_lock_fd):
         st = mcs_update.journal_store.load_state(mcs_update.STATE_PATH)
         mcs_update.journal(st, "services")
         restart()
@@ -1558,7 +1558,7 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
     monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
 
-    def post_merge(_s):
+    def post_merge(_s, *, run_lock_fd):
         raise mcs_update.UpdateError("post_merge_failed: synthetic")
 
     monkeypatch.setattr(mcs_update, "_run_post_merge", post_merge)

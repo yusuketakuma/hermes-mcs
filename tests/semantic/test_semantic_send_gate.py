@@ -19,21 +19,21 @@ def test_normal_gate_requires_source_target_revision_and_pass_summary(
     event = _semantic_event(db)
     payload = json.loads(event["payload"])
 
-    semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config())
+    semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
 
     missing_target = dict(payload)
     missing_target.pop("target_message_id")
     with pytest.raises(ValueError, match="payload_invalid"):
-        semantic_send_gate.semantic_gate(db, event, missing_target, notify_flush._config())
+        semantic_send_gate.semantic_gate(db.db, event, missing_target, notify_flush._config())
 
     wrong_revision = dict(payload, target_revision="old-revision")
     with pytest.raises(semantic_send_gate.StaleSend, match="stale_generation"):
-        semantic_send_gate.semantic_gate(db, event, wrong_revision, notify_flush._config())
+        semantic_send_gate.semantic_gate(db.db, event, wrong_revision, notify_flush._config())
 
     other_source = db.outbox_add("new_messages", 2, {"message_ids": [1]})
     wrong_project = dict(payload, src_event_id=other_source)
     with pytest.raises(semantic_send_gate.StaleSend, match="src_event_ineligible"):
-        semantic_send_gate.semantic_gate(db, event, wrong_project, notify_flush._config())
+        semantic_send_gate.semantic_gate(db.db, event, wrong_project, notify_flush._config())
 
     summary = db.db.execute(
         "SELECT artifact_id,meta FROM artifacts "
@@ -45,7 +45,7 @@ def test_normal_gate_requires_source_target_revision_and_pass_summary(
                   (json.dumps(meta), summary["artifact_id"]))
     db.db.commit()
     with pytest.raises(semantic_send_gate.StaleSend, match="summary_stale"):
-        semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config())
+        semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
     db.close()
 
 
@@ -108,19 +108,19 @@ def test_degraded_gate_requires_frozen_generation_and_unattempted_source(
         "SELECT * FROM notify_outbox WHERE event_id=?", (notice_id,)
     ).fetchone()
 
-    semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config())
+    semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
 
     missing_targets = dict(payload)
     missing_targets.pop("target_message_ids")
     with pytest.raises(ValueError, match="payload_invalid"):
-        semantic_send_gate.semantic_gate(db, event, missing_targets, notify_flush._config())
+        semantic_send_gate.semantic_gate(db.db, event, missing_targets, notify_flush._config())
 
     db.db.execute(
         "UPDATE notify_outbox SET state='failed',attempts=1,progress=? "
         "WHERE event_id=?", (json.dumps({}), source_id))
     db.db.commit()
     with pytest.raises(semantic_send_gate.StaleSend, match="base_delivered"):
-        semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config())
+        semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
 
     db.db.execute(
         "UPDATE notify_outbox SET state='pending',attempts=0,progress=? "
@@ -129,7 +129,7 @@ def test_degraded_gate_requires_frozen_generation_and_unattempted_source(
     db.save_patient(_delivery_patient([_message(body="訂正された本文", unread=False)]),
                     notify=None)
     with pytest.raises(semantic_send_gate.StaleSend, match="stale_generation"):
-        semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config())
+        semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
     db.close()
 
 
@@ -149,13 +149,13 @@ def test_raw_notice_ignores_shadow_publication(tmp_path, monkeypatch):
             "target_revision": bundle["members"][0]["revision"]}
     db.artifact_add("semantic_summary", json.dumps(content), project_id=1,
                     message_id=1, model="Qwen3.5-9B", meta=meta)
-    assert semantic_send_gate.semantic_render_state(db, event, notify_flush._config()) == ()
+    assert semantic_send_gate.semantic_render_state(db.db, event, notify_flush._config()) == ()
     assert "要約（自動検査済）" not in notify_flush._format_event(db, event)[0]
 
     meta["publication_mode"] = "enforce"
     db.artifact_add("semantic_summary", json.dumps(content), project_id=1,
                     message_id=1, model="Qwen3.5-9B", meta=meta)
-    assert semantic_send_gate.semantic_render_state(db, event, notify_flush._config())
+    assert semantic_send_gate.semantic_render_state(db.db, event, notify_flush._config())
     assert "要約（自動検査済）" in notify_flush._format_event(db, event)[0]
     db.close()
 
@@ -187,8 +187,8 @@ def test_stale_summary_rejected_by_gate_render_state_and_block(
     payload = json.loads(event["payload"])
     raw = db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
-    semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config())
-    assert semantic_send_gate.semantic_render_state(db, raw, notify_flush._config())
+    semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+    assert semantic_send_gate.semantic_render_state(db.db, raw, notify_flush._config())
     assert "要約（自動検査済）" in notify_flush._format_event(db, raw)[0]
 
     summary = db.db.execute(
@@ -200,8 +200,8 @@ def test_stale_summary_rejected_by_gate_render_state_and_block(
                   (json.dumps(meta), summary["artifact_id"]))
     db.db.commit()
     with pytest.raises(semantic_send_gate.StaleSend, match="summary_stale"):
-        semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config())
-    assert semantic_send_gate.semantic_render_state(db, raw, notify_flush._config()) == ()
+        semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+    assert semantic_send_gate.semantic_render_state(db.db, raw, notify_flush._config()) == ()
     assert "要約（自動検査済）" not in notify_flush._format_event(db, raw)[0]
 
     # Unpublishable meta short-circuits before the whole-thread bundle.
@@ -209,7 +209,7 @@ def test_stale_summary_rejected_by_gate_render_state_and_block(
     real = semantic_store.thread_bundle
     monkeypatch.setattr(semantic_store, 'thread_bundle',
                         lambda *a, **k: calls.append(a) or real(*a, **k))
-    assert semantic_send_gate.semantic_render_state(db, raw, notify_flush._config()) == ()
+    assert semantic_send_gate.semantic_render_state(db.db, raw, notify_flush._config()) == ()
     assert "要約（自動検査済）" not in notify_flush._format_event(db, raw)[0]
     assert calls == []
     db.close()
@@ -232,9 +232,9 @@ def test_deep_summary_is_unpublishable_without_changing_saved_data(
         with db.db:
             db.db.execute(f"UPDATE artifacts SET {column}=? WHERE kind='semantic_summary'", (deep,))
         before = list(db.db.iterdump())
-        assert semantic_send_gate.semantic_render_state(db, raw, notify_flush._config()) == ()
+        assert semantic_send_gate.semantic_render_state(db.db, raw, notify_flush._config()) == ()
         with pytest.raises(semantic_send_gate.StaleSend, match="summary_stale"):
-            semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config())
+            semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
         assert "要約（自動検査済）" not in notify_flush._format_event(db, raw)[0]
         assert list(db.db.iterdump()) == before
     finally:
@@ -257,7 +257,7 @@ def test_deep_source_payload_preserves_stale_or_freeze_verdict(
         before = list(db.db.iterdump())
         error = semantic_send_gate.FreezeSend if in_progress else semantic_send_gate.StaleSend
         with pytest.raises(error, match="src_event_ineligible"):
-            semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config(), in_progress=in_progress)
+            semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config(), in_progress=in_progress)
         assert list(db.db.iterdump()) == before
     finally:
         db.close()
@@ -280,7 +280,7 @@ def test_deep_source_progress_preserves_degraded_send_hold(
         before = list(db.db.iterdump())
         error = semantic_send_gate.FreezeSend if in_progress else semantic_send_gate.StaleSend
         with pytest.raises(error, match="base_delivered"):
-            semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config(), in_progress=in_progress)
+            semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config(), in_progress=in_progress)
         assert list(db.db.iterdump()) == before
     finally:
         db.close()

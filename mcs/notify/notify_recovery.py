@@ -384,7 +384,7 @@ def card_part_resolve_plan(ledger, delivery_id, part_id) -> dict:
 def validate_card_part_resolve(req) -> str | None:
     """Validate human approval of exactly one sealed unknown part."""
     from mcs_util import valid_text
-    from mcs_requests import valid_hash
+    from mcs_util import valid_hash
     if not isinstance(req, dict):
         return "bad_command"
     transport = req.get("transport")

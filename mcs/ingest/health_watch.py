@@ -32,14 +32,11 @@ import _mcs_path  # noqa: F401
 import safe_io  # noqa: E402
 
 from mcs_queries import JST
-from health_policy import RUN_GRACE_S, freshness_deadline
+from health_policy import HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S, freshness_deadline
 from mcs_util import HOME, load_config
-from safe_io import read_regular_nofollow
 
-HEALTH_REL = os.path.join("data", "health.json")
 STATE_REL = os.path.join("data", "health_watch.json")
 STATUS_REL = os.path.join("data", "health_watch_status.json")
-STATUS_MAX_BYTES = 1024 * 1024
 
 REALERT_S = 4 * 3600        # unchanged bad state re-alerts every 4h
 DELIVERY_RETRY_S = 60       # only provably unsent alerts may retry
@@ -60,7 +57,7 @@ STANDALONE_WATCHED_JOBS = ("extract-0", "extract-2", "lineworks", "cmd",
                            "cmd_int", "mcs_check", "mcs_deep")
 
 
-from stats_math import finite_number as _finite_number  # noqa: E402 - one shared rule
+from stats_math import finite_number  # noqa: E402 - one shared rule
 
 
 
@@ -112,35 +109,29 @@ def _optional_blocks(h: dict) -> dict:
             and local["state"] in _BACKUP_LOCAL_STATES):
         age = local.get("newest_age_s")
         backup_local = {"state": local["state"],
-                        "newest_age_s": age if _finite_number(age) and age >= 0 else None}
+                        "newest_age_s": age if finite_number(age) and age >= 0 else None}
     run = h.get("run") if isinstance(h.get("run"), dict) else {}
     last = run.get("last_interrupt")
     interrupt = None
     if (isinstance(last, dict) and _is_code(last.get("reason"))
-            and _finite_number(last.get("detected_at"))):
+            and finite_number(last.get("detected_at"))):
         interrupt = {"reason": last["reason"], "detected_at": last["detected_at"]}
     return {"notify_wait": wait, "backup_local": backup_local,
             "last_interrupt": interrupt}
 
 
-def _read_status_json(path: str):
-    """Read one complete bounded status document without links or FIFO waits."""
-    raw = read_regular_nofollow(path, STATUS_MAX_BYTES, ValueError)
-    if len(raw) > STATUS_MAX_BYTES:
-        raise ValueError("status_too_large")
-    return json.loads(raw.decode("utf-8"))
 
 
 def classify_health(path: str, now: float, deadline_s: int) -> dict:
     """File evidence -> status. Staleness is checked BEFORE the recorded
     payload: a dead producer leaves a fresh-looking 'ok' forever."""
     try:
-        h = _read_status_json(path)
+        h = safe_io.read_json_nofollow(path, STATUS_MAX_BYTES)
     except FileNotFoundError:
         return {"status": "corrupt" if os.path.lexists(path) else "missing"}
     except (OSError, ValueError, RecursionError):
         return {"status": "corrupt"}
-    if not isinstance(h, dict) or not _finite_number(h.get("at")):
+    if not isinstance(h, dict) or not finite_number(h.get("at")):
         return {"status": "corrupt"}
     overall = h.get("overall")
     if not isinstance(overall, str) or overall not in OVERALL_STATUS:
@@ -152,7 +143,7 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     # stopped unread check (older files lack the field: use 'at')
     unread_at = h.get("unread_at")
     # tie keeps unread_at (min returns its first minimal argument)
-    binding = (min(unread_at, h["at"]) if _finite_number(unread_at)
+    binding = (min(unread_at, h["at"]) if finite_number(unread_at)
                else h["at"])
     age = now - binding
     report = {"health_at": h["at"], "age_s": round(max(age, 0), 1),
@@ -160,10 +151,10 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
               "run_id": h.get("run_id"), "deadline_s": deadline_s,
               "disk_low": h.get("disk_low") is True,
               "disk_free_mb": h.get("disk_free_mb")
-              if _finite_number(h.get("disk_free_mb")) else None}
+              if finite_number(h.get("disk_free_mb")) else None}
     report["status"] = ("stale" if age > deadline_s
                         else OVERALL_STATUS[overall])
-    unread_unknown = "unread_at" in h and not _finite_number(unread_at)
+    unread_unknown = "unread_at" in h and not finite_number(unread_at)
     if report["status"] == "ok" and unread_unknown:
         report["status"] = "degraded"
     run = h.get("run")
@@ -171,7 +162,7 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         overshoot = run.get("overshoot_s")
         report["run"] = run
         if (report["status"] == "ok" and isinstance(overshoot, (int, float))
-                and _finite_number(overshoot)
+                and finite_number(overshoot)
                 and overshoot > 0):
             report["status"] = "degraded"
     # explain non-ok from the producer's own codes/counters (never text):
@@ -199,23 +190,23 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
                 and reasons is not None and "backup_not_verified" in reasons):
             report["backup_failure_code"] = cause
     last_ok = h.get("last_ok_at")
-    report["last_ok_at"] = (last_ok if _finite_number(last_ok)
+    report["last_ok_at"] = (last_ok if finite_number(last_ok)
                             and last_ok >= 0 else None)
     notify = h.get("notify") if isinstance(h.get("notify"), dict) else {}
     pending = notify.get("pending")
-    report["notify_pending"] = (pending if _finite_number(pending)
+    report["notify_pending"] = (pending if finite_number(pending)
                                 and pending >= 0 else None)
     held = notify.get("held_reasons")
     report["held_reasons"] = (
         held if isinstance(held, dict)
-        and all(_is_code(k) and _finite_number(v) and v >= 0
+        and all(_is_code(k) and finite_number(v) and v >= 0
                 for k, v in held.items())
         else None)
     # every queue key always present: missing block == malformed == None
     report["oldest_age_s"] = {
         q: (block.get("oldest_age_s")
             if isinstance(block, dict)
-            and _finite_number(block.get("oldest_age_s")) else None)
+            and finite_number(block.get("oldest_age_s")) else None)
         for q, block in (("notify", h.get("notify")),
                          ("semantic_jobs", h.get("semantic_jobs")),
                          ("extract_qc_jobs", h.get("extract_qc_jobs")))}
@@ -240,7 +231,7 @@ def _pid_alive(pid) -> bool:
 
 def _read_standalone_status(home: str):
     try:
-        value = _read_status_json(os.path.join(home, STANDALONE_STATUS_REL))
+        value = safe_io.read_json_nofollow(os.path.join(home, STANDALONE_STATUS_REL), STATUS_MAX_BYTES)
     except (OSError, ValueError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
@@ -254,9 +245,9 @@ def standalone_host_reasons(home: str, now: float, cfg: dict):
     from outside it. Details are job codes and numbers only."""
     status = _read_standalone_status(home)
     stamp = status.get("updated_at") if status else None
-    if status is None or not _finite_number(stamp) or not _pid_alive(status.get("pid")) \
+    if status is None or not finite_number(stamp) or not _pid_alive(status.get("pid")) \
             or now - stamp > STANDALONE_HOST_STALE_S:
-        age = now - stamp if _finite_number(stamp) else None
+        age = now - stamp if finite_number(stamp) else None
         return "failed", ["standalone_host_down"], (
             {"standalone_host_down": f"最終更新 {_hours(age)}前"} if age and age > 0 else {})
     reasons, details = [], {}
@@ -265,14 +256,14 @@ def standalone_host_reasons(home: str, now: float, cfg: dict):
     for job in STANDALONE_WATCHED_JOBS:
         row = exits.get(job)
         count = row.get("failures") if isinstance(row, dict) else None
-        if _finite_number(count) and count >= STANDALONE_CHILD_FAILURES:
+        if finite_number(count) and count >= STANDALONE_CHILD_FAILURES:
             failing.append(f"{job} {int(count)}回連続")
     if failing:
         reasons.append("standalone_child_failing")
         details["standalone_child_failing"] = "、".join(failing)
     connector = status.get("connector") if isinstance(status.get("connector"), dict) else {}
     since = connector.get("failing_since")
-    if connector.get("state") == "waiting" and _finite_number(since) \
+    if connector.get("state") == "waiting" and finite_number(since) \
             and now - since >= STANDALONE_CONNECTOR_DOWN_S:
         reasons.append("standalone_connector_down")
         error = connector.get("last_error")
@@ -280,7 +271,7 @@ def standalone_host_reasons(home: str, now: float, cfg: dict):
             f" {error}" if _is_code(error) else "")
     marker = status.get("update_marker") if isinstance(status.get("update_marker"), dict) else {}
     marked = marker.get("since")
-    if status.get("update_in_progress") is True and _finite_number(marked) \
+    if status.get("update_in_progress") is True and finite_number(marked) \
             and now - marked >= STANDALONE_UPDATE_STUCK_S:
         reasons.append("standalone_update_stuck")
         state = marker.get("state")
@@ -288,11 +279,11 @@ def standalone_host_reasons(home: str, now: float, cfg: dict):
             f" {state}" if _is_code(state) else "")
     check = exits.get("mcs_check") if isinstance(exits.get("mcs_check"), dict) else {}
     last_ok = check.get("last_ok_at")
-    reference = last_ok if _finite_number(last_ok) else status.get("started_at")
-    if _finite_number(reference) and now - reference > freshness_deadline(cfg):
+    reference = last_ok if finite_number(last_ok) else status.get("started_at")
+    if finite_number(reference) and now - reference > freshness_deadline(cfg):
         reasons.append("standalone_check_stalled")
         details["standalone_check_stalled"] = (f"最終成功 {_hours(now - last_ok)}前"
-                                               if _finite_number(last_ok) else "起動後の成功なし")
+                                               if finite_number(last_ok) else "起動後の成功なし")
     return ("degraded" if reasons else "ok"), reasons, details
 
 
@@ -347,7 +338,7 @@ def evaluate(home: str = HOME, now: float | None = None,
     file turns low; stale/missing/corrupt evidence keeps
     the last known value."""
     now = time.time() if now is None else now
-    if not _finite_number(now):
+    if not finite_number(now):
         raise ValueError("health_now_invalid")
     cfg = load_config() if cfg is None else cfg
     deadline = freshness_deadline(cfg)
@@ -389,7 +380,7 @@ def evaluate(home: str = HOME, now: float | None = None,
                   and (obs["status"] != "stale"
                        or any(r.startswith("standalone_") for r in gained)))
     alerted_at = state.get("detected_at", state.get("alerted_at"))
-    invalid_alert_at = not _finite_number(alerted_at) \
+    invalid_alert_at = not finite_number(alerted_at) \
         or alerted_at > now
     realert = (obs["status"] != "ok"
                and (invalid_alert_at
@@ -642,7 +633,7 @@ _AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_back
 
 
 def _jst(ts) -> str:
-    if not _finite_number(ts):
+    if not finite_number(ts):
         return "不明"
     try:
         return datetime.fromtimestamp(ts, JST).strftime("%m-%d %H:%M")
@@ -651,7 +642,7 @@ def _jst(ts) -> str:
 
 
 def _hours(seconds) -> str:
-    return f"{seconds / 3600:.1f}時間" if _finite_number(seconds) else ""
+    return f"{seconds / 3600:.1f}時間" if finite_number(seconds) else ""
 
 
 def _impact(report: dict, reasons) -> str:
@@ -772,7 +763,7 @@ def _reason_rows(report: dict, reasons) -> list[str]:
         if base == "notification_pending":
             n = report.get("notify_pending")
             age = _hours(oldest.get("notify"))
-            extra = ((f" {int(n)}件" if _finite_number(n) else "") + (f"（最古 {age}）" if age else "")
+            extra = ((f" {int(n)}件" if finite_number(n) else "") + (f"（最古 {age}）" if age else "")
                      + _wait_summary(report.get("notify_wait"), report.get("observations_recorded", False)))
         elif base in ("backup_not_verified", "backup_deferred_deadline"):
             extra = ("" if report.get("observations_recorded")
@@ -799,7 +790,7 @@ def _alert_lines(report: dict) -> list[str]:
         interrupt = report.get("last_interrupt")
         at = report.get("health_at")
         if (interrupt and not report.get("observations_recorded")
-                and _finite_number(at) and 0 <= at - interrupt["detected_at"] <= 86400):
+                and finite_number(at) and 0 <= at - interrupt["detected_at"] <= 86400):
             label = _INTERRUPT_JA.get(interrupt["reason"], _INTERRUPT_JA["unknown"])
             # the run's own end time is not known — only when it was found
             lines.append(f"直近の中断: {label}（{_jst(interrupt['detected_at'])} に検出）")
@@ -809,7 +800,7 @@ def _alert_lines(report: dict) -> list[str]:
                                             "none" if reasons is not None else "unknown"))
     if report["disk_alert"] and report["disk_low"]:
         free = report.get("disk_free_mb")
-        lines.append(f"空き容量不足: 残り {free} MB" if _finite_number(free)
+        lines.append(f"空き容量不足: 残り {free} MB" if finite_number(free)
                      else "空き容量不足: 残り 不明")
     return lines
 
@@ -824,7 +815,7 @@ def _watch(args, cfg) -> int:
     now = report["watched_at"]
     tried = delivery.get("attempted_at")
     if delivery.get("outcome") not in ("pending", "not_sent") \
-            or (_finite_number(tried) and now - tried < DELIVERY_RETRY_S):
+            or (finite_number(tried) and now - tried < DELIVERY_RETRY_S):
         return 0
     lines = _alert_lines({**report, "alert": delivery.get("alert"),
                           "disk_alert": delivery.get("disk_alert")})
@@ -877,7 +868,7 @@ def main(argv: list | None = None) -> int:
     ap.add_argument("--config", default=None,
                     help="config.json path (default ~/.mcs/config.json)")
     args = ap.parse_args(argv)
-    if args.now is not None and not _finite_number(args.now):
+    if args.now is not None and not finite_number(args.now):
         ap.error("now must be a finite number")
     cfg = load_config(args.config) if args.config else load_config()
     try:
@@ -885,7 +876,7 @@ def main(argv: list | None = None) -> int:
         os.makedirs(directory, mode=0o700, exist_ok=True)
         fd = os.open(os.path.join(directory, "health_watch.lock"),
                      os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w") as lock:
+        with safe_io.fdopen_owned(fd, "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return _watch(args, cfg)
     except BlockingIOError:

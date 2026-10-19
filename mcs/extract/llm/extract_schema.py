@@ -1,4 +1,6 @@
 """JSON output shapes and shared medication syntax for extraction validation."""
+import re
+
 from patient_context import CATEGORIES, DETAIL_KEYS
 
 SCHEMA = {
@@ -145,3 +147,11 @@ RX_DOSE_ONE = (r"\s*[0-9０-９.．]+\s*(?:mg|μg|mcg|g|mL|ml|錠|%|単位|包|�
 RX_DOSE = f"(?:{RX_DOSE_ONE})?"
 
 RX_PARTICLE = r"\s*(?:(?:を|は|も|の|が)\s*(?:[、，,]\s*)?)?\s*"
+
+
+# Bounded repeats keep findall linear in the body length: the lazy name
+# class shares digits with the dose, so unbounded runs backtrack cubically.
+MEDICATION_TOKEN = re.compile(
+    r"([ァ-ヶー一-龥][ァ-ヶー一-龥A-Za-z0-9０-９・ー\-]{0,30}?)"
+    # (?<!\d): a dose never starts inside a longer number (7+ digits match nothing)
+    r"(?<!\d)(\d{1,6}(?:\.\d{1,4})?)\s{0,8}(mg|μg|mcg|g|mL|単位|錠|cap|カプセル|包|枚|本)")

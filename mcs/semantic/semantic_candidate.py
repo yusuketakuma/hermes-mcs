@@ -15,11 +15,11 @@ from mcs_util import payload_hash
 
 # Capture loaded source once; an on-disk update cannot bless an old worker.
 _MODULES = ('semantic_extraction', 'semantic_facts', 'semantic_audit',
-            'semantic_relations', 'semantic_render', 'semantic_llm', 'semantic_jev',
+            'semantic_relations', 'semantic_render', 'semantic_notice', 'semantic_send_gate', 'semantic_llm', 'semantic_jev',
             'semantic', 'semantic_transport', 'semantic_assessment', 'semantic_loops', 'semantic_projection', 'semantic_policy',
             'semantic_acceptance', 'structured_view', 'clinical_display',
             'extract_schema', 'extract_validation', 'extract_quality',
-            'clinical_scope', 'clinical_chunking', 'semantic_quantities', 'clinical_values', 'patient_context', 'mcs_queries', 'semantic_assembly', 'writer_lock', 'semantic_store', 'semantic_v4', 'patient_nightly_plan', 'semantic_runtime', 'llm_availability', 'self_identity', 'safe_io')
+            'clinical_scope', 'clinical_urgency', 'clinical_chunking', 'semantic_quantities', 'clinical_values', 'patient_context', 'mcs_queries', 'semantic_assembly', 'writer_lock', 'semantic_store', 'semantic_v4', 'semantic_v4_cohort', 'patient_nightly_plan', 'semantic_runtime', 'llm_availability', 'self_identity', 'safe_io')
 
 
 # Process-local probe/counter state is not an interpretation constant.
@@ -252,6 +252,7 @@ def record_approval(cfg: dict, report: dict) -> str:
     import json
     import os
     import mcs_util
+    from safe_io import fdopen_owned
     binding = approval_binding(cfg, report)
     identity = payload_hash(binding)
     directory = Path(mcs_util.HOME) / 'data' / 'semantic_approvals'
@@ -265,7 +266,7 @@ def record_approval(cfg: dict, report: dict) -> str:
         if not approval_matches(cfg, report, identity):
             raise ValueError('approval_receipt_conflict') from None
     else:
-        with os.fdopen(fd, 'w') as handle:
+        with fdopen_owned(fd, 'w') as handle:
             json.dump(binding, handle, sort_keys=True)
             handle.flush()
             os.fsync(handle.fileno())

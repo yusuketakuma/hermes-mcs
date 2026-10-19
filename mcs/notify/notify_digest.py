@@ -33,6 +33,7 @@ from message_metadata import (get_message_metadata, mentions_self,  # noqa: E402
 from notify_render import (SIGNAL_TYPE_LABEL, patient_name, fit_parts, parts_text,  # noqa: E402
                            plain_notice)
 from notify_views import assignee_matches  # noqa: E402
+import clinical_urgency
 
 KIND = "daily_digest"
 MAX_LIST = 10
@@ -393,7 +394,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         # an unknown post time cannot be proven old (Ledger._filter_notify_age)
         and (floor is None or not r["posted_at_ts"] or r["posted_at_ts"] >= floor)]
     urgent = [(r["project_id"], r["message_id"], u) for r in rows
-              if (u := structured_view.message_urgency(db, r["message_id"]))]
+              if (u := clinical_urgency.message_urgency(db, r["message_id"]))]
 
     today = end.date().isoformat()
     tasks = [t for t in db.execute(

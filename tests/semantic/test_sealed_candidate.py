@@ -346,6 +346,8 @@ def test_disk_edit_does_not_replace_loaded_class_code(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('module_name,constant,kind', [
+    ('clinical_urgency', '_URGENT', 'regex'),
+    ('extract_schema', 'MEDICATION_TOKEN', 'regex'),
     ('semantic_jev', 'PROPOSITIONS', 'dict'),
     ('semantic_facts', 'FACT_KINDS', 'tuple'),
     ('semantic_relations', '_GENERIC_WORDS', 'set'),
@@ -582,7 +584,10 @@ def test_projection_lifecycle_definition_changes_only_new_worker_identity(monkey
     assert candidate.candidate_fingerprint({}) != before
 
 
-@pytest.mark.parametrize("module_name,name", [("clinical_values", "absolute_date"), ("semantic_facts", "entity_tokens")])
+@pytest.mark.parametrize("module_name,name", [("clinical_values", "absolute_date"), ("semantic_facts", "entity_tokens"),
+    *[("clinical_urgency", name) for name in ("clinical_urgency_quote", "urgent_request_quote",
+      "patient_clinical_quotes", "patient_rule_urgency_quotes", "_typed_urgency_reasons",
+      "message_urgency", "message_urgency_details", "urgency_qc_disagreement")]])
 def test_source_value_definition_changes_only_new_worker_identity(monkeypatch, module_name, name):
     import importlib
     module = importlib.import_module(module_name)
@@ -600,6 +605,10 @@ def test_source_value_definition_changes_only_new_worker_identity(monkeypatch, m
 @pytest.mark.parametrize("owner,name", [("semantic_facts", "cached_facts_plan"),
     ("semantic_audit", "cached_fact_audit"), ("semantic_audit", "canonical_audit_disposition"),
     ("semantic_audit", "fact_repair_plan"), ("semantic_audit", "fact_audit_verdict"),
+    ("semantic_v4_cohort", "hold_unbounded_job"), ("semantic_v4_cohort", "_valid_cohort"),
+    ("clinical_values", "vital_threshold_flags"), ("clinical_values", "prose_preserves_current_readings"),
+    ("semantic_notice", "origin_event_id"), ("semantic_notice", "record_notice_plan_tx"),
+    ("semantic_send_gate", "semantic_gate"),
     ("semantic_v4", "publish_fact_projection"), ("semantic_v4", "publish_target_tx"), ("semantic_runtime", "guard"),
     ("semantic_runtime", "job_matches"), ("semantic_runtime", "llm_request_was_dispatched"), ("semantic_runtime", "JobToken.from_row")])
 def test_canonical_reuse_and_publication_definition_pins_loaded_worker(monkeypatch, owner, name):
@@ -632,3 +641,62 @@ def test_jev_execution_definition_changes_only_new_worker_identity(monkeypatch, 
     assert candidate.candidate_fingerprint({}) == before
     monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
     assert candidate.candidate_fingerprint({}) != before
+
+
+@pytest.mark.parametrize("fault", ["adoption", "serialize", "fsync"])
+def test_approval_receipt_owns_descriptor_on_every_preparation_failure(
+        tmp_path, monkeypatch, fault):
+    import errno
+    import os
+    import stat
+    import mcs_util
+    import safe_io
+
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    cfg = {}
+    report = {"criteria_sha256": "a" * 64,
+              "run": {"snapshot_sha256": "b" * 64},
+              "evidence": {"holdout_manifest_sha256": "c" * 64}}
+    descriptors = []
+    opening = os.open
+
+    def track_open(path, flags, mode=0o777, **kwargs):
+        descriptor = opening(path, flags, mode, **kwargs)
+        if flags & os.O_EXCL:
+            descriptors.append(descriptor)
+        return descriptor
+
+    def fail(*args, **kwargs):
+        raise OSError("synthetic approval fault")
+
+    monkeypatch.setattr(os, "open", track_open)
+    if fault == "adoption":
+        monkeypatch.setattr(safe_io.os, "fdopen", fail)
+    elif fault == "serialize":
+        monkeypatch.setattr(candidate.json, "dump", fail)
+    else:
+        monkeypatch.setattr(os, "fsync", fail)
+    try:
+        with pytest.raises(OSError, match="synthetic approval fault"):
+            candidate.record_approval(cfg, report)
+        assert len(descriptors) == 1
+        with pytest.raises(OSError) as closed:
+            os.fstat(descriptors[0])
+        assert closed.value.errno == errno.EBADF
+        # Preserve exclusive receipt recovery: failures never delete/overwrite it.
+        receipts = list((tmp_path / "data" / "semantic_approvals").glob("*.json"))
+        assert len(receipts) == 1
+        assert stat.S_IMODE(receipts[0].stat().st_mode) == 0o600
+        assert candidate.approval_matches(cfg, report, receipts[0].stem) is (fault == "fsync")
+        if fault != "fsync":
+            with pytest.raises(ValueError, match="approval_receipt_conflict"):
+                candidate.record_approval(cfg, report)
+        else:
+            assert candidate.record_approval(cfg, report) == receipts[0].stem
+    finally:
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                if error.errno != errno.EBADF:
+                    raise

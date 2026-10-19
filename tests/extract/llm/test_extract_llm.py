@@ -9,6 +9,7 @@ out of "current" surfaces.
 import extract_quality
 import extract_schema
 import extract_validation
+import clinical_values
 import json
 import time
 import urllib.error
@@ -24,6 +25,7 @@ import rollup
 from semantic_projection import PROJECTION_VERSION
 from extract_testkit import (_extract_artifact, _hash, _ledger, _message,
                              _qc_artifact, _seed_qc_flagged)
+import mcs_queries
 
 
 def _request_from_opener(opener):
@@ -491,7 +493,7 @@ def test_v1_row_stays_current_for_readers_until_replaced(tmp_path):
     _v1_artifact(db, 1, {"summary": "v1"}, _hash(db))
 
     # readers keep the hash-only contract -> v1 is still visible
-    assert structured_view.latest_artifact(db.db, "extract_llm", 1)["summary"] == "v1"
+    assert mcs_queries.current_message_extract(db.db, "extract_llm", 1)["summary"] == "v1"
     # but the write side treats it as pending
     assert not extract_llm._current(db, 1, _hash(db))
     db.close()
@@ -742,7 +744,7 @@ def test_v1_success_plus_v2_error_backoff_suppresses(tmp_path, monkeypatch):
         lambda body, **_: pytest.fail("backoff must suppress"))
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["done"] == 0 and res["selected"] == 0
-    assert structured_view.latest_artifact(db.db, "extract_llm", 1)["summary"] == "v1"
+    assert mcs_queries.current_message_extract(db.db, "extract_llm", 1)["summary"] == "v1"
     db.close()
 
 
@@ -2715,29 +2717,29 @@ def test_request_free_text_fields_are_length_capped():
     ("not a dict", set()),
 ])
 def test_legacy_admissions_single_t18_boundary(monkeypatch, cfg, expect):
-    import semantic_v4
-    monkeypatch.setattr(semantic_v4, "active_legacy_admissions",
+    import semantic_v4_cohort
+    monkeypatch.setattr(semantic_v4_cohort, "active_legacy_admissions",
                         lambda ledger: {7})
     assert extract_llm.legacy_admissions(object(), cfg) == expect
 
 
 def test_legacy_admissions_accepts_independently_bound_evidence(monkeypatch):
-    import semantic_v4
+    import semantic_v4_cohort
     from candidate_testkit import approved_config
     cfg = approved_config({"semantic": {"fact_source": "canonical"}})
-    monkeypatch.setattr(semantic_v4, "active_legacy_admissions", lambda ledger: {7})
+    monkeypatch.setattr(semantic_v4_cohort, "active_legacy_admissions", lambda ledger: {7})
     assert extract_llm.legacy_admissions(object(), cfg) == {7}
 
 
 def test_legacy_admissions_manifest_error_fails_closed(monkeypatch):
-    import semantic_v4
+    import semantic_v4_cohort
     from candidate_testkit import approved_config
     called = []
 
     def boom(ledger):
         called.append(True)
         raise RuntimeError("manifest")
-    monkeypatch.setattr(semantic_v4, "active_legacy_admissions", boom)
+    monkeypatch.setattr(semantic_v4_cohort, "active_legacy_admissions", boom)
     cfg = approved_config({"semantic": {"fact_source": "canonical"}})
     assert extract_llm.legacy_admissions(object(), cfg) == set()
     assert called == [True]
@@ -2995,19 +2997,19 @@ def test_vital_threshold_policy_config():
 
 def test_vital_threshold_flags_anchor_and_context():
     th = extract_validation._VITAL_THRESHOLDS_DEFAULT
-    flags = extract_validation.vital_threshold_flags(
+    flags = clinical_values.vital_threshold_flags(
         {"spo2": 88.0}, "SpO2 88%まで低下しています。苦しそうです", th)
     assert [f["key"] for f in flags] == ["spo2"]
     assert "SpO2 88" in flags[0]["evidence"]
     # label mismatch — the number must anchor to the right vital
-    assert extract_validation.vital_threshold_flags(
+    assert clinical_values.vital_threshold_flags(
         {"spo2": 88.0}, "血糖値は88でした", th) == []
     # family / conditional / past / unmeasurable readings never fire
     for body in ("母のSpO2は88%でしたが本人は安定しています",
                  "SpO2が88%を切ったら連絡してください",
                  "先月はSpO2 88%まで低下したことがありました",
                  "SpO2 88%と出ましたが測定不能の可能性があります"):
-        assert extract_validation.vital_threshold_flags(
+        assert clinical_values.vital_threshold_flags(
             {"spo2": 88.0}, body, th) == [], body
 
 

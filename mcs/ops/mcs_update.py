@@ -60,14 +60,14 @@ import owned_process  # noqa: E402
 import update_discovery  # noqa: E402
 import update_launch  # noqa: E402
 import restore_evidence  # noqa: E402
-from mcs_requests import read_scheduled_receipt, release_tag  # noqa: E402
+from mcs_requests import read_scheduled_receipt  # noqa: E402
 
 from mcs_util import HOME, REPO
 from writer_lock import UPDATE_MARKER_NAME, acquire_run_lock
 from service_management import launchd_bootstrap
 from safe_io import atomic_write  # noqa: E402
 from mcs_util import file_sha256 as _file_sha256  # noqa: E402
-from safe_io import fsync_dir  # noqa: E402
+from safe_io import fsync_dir, fdopen_owned  # noqa: E402
 
 
 def _load_gateway_restart():
@@ -312,7 +312,7 @@ def _local_changes_outside(prev, target) -> list[str]:
             if not stat.S_ISREG(before.st_mode):
                 raise ValueError("non-file at tracked path")
             fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd, "rb") as stream:
+            with fdopen_owned(fd, "rb") as stream:
                 opened = os.fstat(stream.fileno())
                 if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
                     raise ValueError("file changed during inspection")
@@ -1676,7 +1676,7 @@ def _apply_validate_args(tag: str | None, sha: str | None,
                          command_id: str | None, reinstall: bool,
                          install_args: tuple) -> int | None:
     """Reject malformed apply arguments before any state is read."""
-    if not release_tag(tag):
+    if not update_policy.release_tag(tag):
         print("更新する版の指定が正しくありません（例: v1.0.23）:", tag)
         return 2
     if sha is not None and not update_discovery.COMMIT_SHA_RE.fullmatch(sha):
@@ -2455,7 +2455,7 @@ def _replace_database(backup_path, expected_sha, before_replace):
            "ino": created.st_ino, "uid": created.st_uid}
     journaled = False
     try:
-        with os.fdopen(fd, "wb") as dst:
+        with fdopen_owned(fd, "wb") as dst:
             state = journal_store.load_state(STATE_PATH)
             applying, _ = _staging_record(state)
             applying["restore_staging"] = own
@@ -3245,7 +3245,7 @@ def cmd_apply(args) -> int:
 
 
 def cmd_plan(args) -> int:
-    if not release_tag(args.tag):
+    if not update_policy.release_tag(args.tag):
         print("確認する版の指定が正しくありません（例: v1.0.23）:", args.tag)
         return 2
     print(json.dumps(plan(args.tag), ensure_ascii=False, indent=2))

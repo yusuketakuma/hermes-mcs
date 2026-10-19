@@ -29,7 +29,8 @@ import notify_action_tokens
 import notify_actions
 import notify_transport
 from mcs_util import valid_text
-from mcs_requests import canonical, positive, valid_hash, valid_uuid
+from mcs_requests import canonical, positive, valid_uuid
+from mcs_util import valid_hash
 
 _RECEIPT_OPS = ("transport_receipt", "thread_receipt", "part_receipt")
 TRANSPORT_OPS = ("transport_begin",) + _RECEIPT_OPS

@@ -15,7 +15,7 @@ sys.path.insert(0, str(REPO / "mcs"))
 import _mcs_path  # noqa: E402, F401
 from cli_args import JapaneseArgumentParser as _JapaneseParser  # noqa: E402
 import mcs_runtime  # noqa: E402
-from mcs_requests import release_tag  # noqa: E402
+from update_policy import release_tag  # noqa: E402
 from mcs_util import load_config  # noqa: E402
 
 

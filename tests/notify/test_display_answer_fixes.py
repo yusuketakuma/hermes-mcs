@@ -7,6 +7,7 @@ import notify_views
 import notify_render
 from notify_testkit import (CFG, NOW, _add_request, _at, _delivered_card,
                             _msg, _patient, led, pinned_clock)
+import clinical_urgency
 
 __all__ = ["led", "pinned_clock"]
 
@@ -60,7 +61,7 @@ def test_digest_counts_drop_zero_parts_and_repeated_headers(led, monkeypatch):
     led.db.commit()
     _add_request(led, "確認", due="2026-09-01")
     _add_request(led, "確認2", due="2026-09-02")
-    monkeypatch.setattr(structured_view, "message_urgency", lambda db, m: "llm")
+    monkeypatch.setattr(clinical_urgency, 'message_urgency', lambda db, m: "llm")
     monkeypatch.setattr(structured_view, "urgency_qc_suffix", lambda db, m: "")
     text = _digest(led)
     assert "未完了タスク 2件（期限切れ 2）" in text

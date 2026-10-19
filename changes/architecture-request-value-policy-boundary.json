@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "更新版と識別hashの検証を純粋な契約へ統一",
+  "summary": "更新対象の版名と識別hashを確認する処理を、状態を書き込まない既存の契約へ揃えました。人承認・依頼の記録や適用順序は変わりません。",
+  "upgrade": "追加操作は不要です。版名の文法、hashの形式、承認条件、更新・復旧の順序と既定値は変更しません。",
+  "details": [
+    "版名の実定義はupdate_policy、hashの実定義はmcs_utilへ移し、依頼のqueue/receipt処理へ戻る純粋な検証の依存を解消します。",
+    "互換が必要なcanonical/payload_hash/positiveの公開入口は保持し、古いupdaterが使うsetup公開入口や自己完結bootstrapの文法コピーも保持します。"
+  ],
+  "refs": [
+    "mcs/ops/update_policy.py",
+    "mcs/core/mcs_util.py",
+    "mcs/ops/operation_contract.py",
+    "mcs/ops/mcs_requests.py"
+  ]
+}

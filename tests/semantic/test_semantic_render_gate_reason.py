@@ -21,7 +21,7 @@ def _raw_notice(tmp_path, monkeypatch):
     _semantic_event(db)
     raw = db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
-    initial = semantic_send_gate.semantic_render_state(db, raw, notify_flush._config())
+    initial = semantic_send_gate.semantic_render_state(db.db, raw, notify_flush._config())
     assert initial
     return db, raw, initial
 
@@ -37,7 +37,7 @@ def test_render_gate_reports_not_enforce(tmp_path, monkeypatch, cfg,
     db, raw, initial = _raw_notice(tmp_path, monkeypatch)
     try:
         with pytest.raises(verdict, match="^semantic_not_enforce$"):
-            gate.semantic_render_gate(db, raw, initial, cfg,
+            gate.semantic_render_gate(db.db, raw, initial, cfg,
                                       in_progress=in_progress)
     finally:
         db.close()
@@ -52,7 +52,7 @@ def test_render_gate_reports_paused_project(tmp_path, monkeypatch):
             "project_id": raw["project_id"], "feature": "semantic"})
         assert result["outcome"] == "applied", result
         with pytest.raises(gate.DeferredSend, match="^semantic_paused$"):
-            gate.semantic_render_gate(db, raw, initial, _cfg("enforce"))
+            gate.semantic_render_gate(db.db, raw, initial, _cfg("enforce"))
     finally:
         db.close()
 
@@ -61,6 +61,6 @@ def test_render_gate_passes_an_unchanged_enforce_snapshot(tmp_path,
                                                           monkeypatch):
     db, raw, initial = _raw_notice(tmp_path, monkeypatch)
     try:
-        gate.semantic_render_gate(db, raw, initial, _cfg("enforce"))
+        gate.semantic_render_gate(db.db, raw, initial, _cfg("enforce"))
     finally:
         db.close()

@@ -37,6 +37,7 @@ from mcs_util import CONF_PATH, html_to_text, load_config
 from mcs_requests import positive
 from notify_render import (SECTION_RULE, extraction_failed, signal_evidence,
                            thread_stamp_row)
+import clinical_urgency
 TEXT_CHUNK_WIDTH = 1900
 # Per-notification file caps; oversized files stay local-only and are
 # noted in the text instead of failing the whole send.
@@ -177,7 +178,7 @@ def _signal_unit_text(ledger, sigs: list[dict]):
         sig_view)
     mid, message = signal_evidence(
         ledger.db, {**sig_view, "project_id": latest.get("project_id")})
-    urgency = (structured_view.message_urgency(ledger.db, mid)
+    urgency = (clinical_urgency.message_urgency(ledger.db, mid)
                if message is not None and mid is not None else None)
     if urgency:
         suffix = (structured_view.urgency_qc_suffix(ledger.db, mid)
@@ -323,7 +324,7 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         # notice's input fingerprint must still be live — a degraded
         # notice is instead suppressed if its base event has since
         # delivered.
-        semantic_send_gate.semantic_gate(ledger, ev, payload, _config())
+        semantic_send_gate.semantic_gate(ledger.db, ev, payload, _config())
         text = payload.get("text")
         if not isinstance(text, str) or not text:
             raise ValueError("payload_invalid")
@@ -432,7 +433,8 @@ def _message_notice(ledger, ev, payload: dict):
         summary_suffix = ""
         if not indent:
             try:
-                summary_suffix = semantic_render.semantic_summary_block(ledger, r, _config())
+                summary_cfg = _config()
+                summary_suffix = semantic_render.semantic_summary_block(ledger.db, r, summary_cfg)
             except Exception:
                 pass  # A config/summary failure cannot break the base notice.
         out.append(_fmt_row(ledger, ev, att_map, r, indent, skipped, stamps=stamps,
@@ -679,7 +681,7 @@ def _base_render_gate_ok(ledger, ev, render_state, in_progress,
     suppress or hour-park the arrival notice itself. Once a chunk is
     out, the gate's freeze/hold semantics apply unchanged."""
     try:
-        semantic_send_gate.semantic_render_gate(ledger, ev, render_state, _config(), in_progress=in_progress)
+        semantic_send_gate.semantic_render_gate(ledger.db, ev, render_state, _config(), in_progress=in_progress)
     except (semantic_send_gate.StaleSend, semantic_send_gate.DeferredSend):
         if in_progress:
             raise
@@ -731,7 +733,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
             if len(hashes) != 1 or not re.fullmatch(r"[0-9a-f]{64}", next(iter(hashes)) or ""):
                 raise notify_sender.SendFailed("attachment_unverified")
             attachment_pins[path] = next(iter(hashes))
-    render_state = (semantic_send_gate.semantic_render_state(ledger, ev, _config())
+    render_state = (semantic_send_gate.semantic_render_state(ledger.db, ev, _config())
                     if ev["kind"] == "new_messages" else ())
     chunks = (semantic_render.semantic_chunks(content, TEXT_CHUNK_WIDTH)
               if ev["kind"] == "semantic_notice" else
@@ -754,7 +756,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
     def gate(i, payload) -> bool:
         """Last-moment pre-chunk gate, re-evaluated before a retry."""
         if ev["kind"] == "semantic_notice":
-            semantic_send_gate.semantic_gate(ledger, ev, payload, _config(), in_progress=bool(start or i))
+            semantic_send_gate.semantic_gate(ledger.db, ev, payload, _config(), in_progress=bool(start or i))
             return True
         return not render_state or _base_render_gate_ok(
             ledger, ev, render_state, bool(start or i), res)

@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "LLM状態ロックの取得中断で専用FDを回収",
+  "summary": "LLMの稼働状態を共有するロックの取得中に処理が中断された場合も、所有するFDを回収します。ロックを開けない場合の従来の継続条件、状態ファイル、待機時間と再試行条件は変更しません。",
+  "upgrade": "設定変更は不要です。通常の更新・再起動でworkerへ反映してください。モデル・prompt・公開条件・承認条件やDB形式は変更しません。",
+  "details": [
+    "外側のfinallyが取得とyieldの全体を覆うようにし、KeyboardInterrupt/SystemExitでも所有FDを閉じます。OSErrorで処理を継続する既存契約とcloseによるunlockを維持します。例外detailsをログへ追加しません。"
+  ],
+  "refs": [
+    "mcs/llm/llm_availability.py",
+    "tests/core/test_circuit_lock_acquisition_cleanup.py"
+  ]
+}

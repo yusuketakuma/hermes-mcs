@@ -271,7 +271,7 @@ def test_prior_is_read_after_the_write_lock_including_a_concurrent_correction(tm
         db.close()
 
 
-@pytest.mark.parametrize("module_name", ["extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "mcs_queries", "semantic_assembly", "semantic_facts", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "clinical_values", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_nightly_plan", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_quantities", "clinical_chunking"])
+@pytest.mark.parametrize("module_name", ["clinical_urgency", "extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "mcs_queries", "semantic_assembly", "semantic_facts", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "semantic_v4_cohort", "clinical_values", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_nightly_plan", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_quantities", "clinical_chunking", "semantic_notice", "semantic_render", "semantic_send_gate"])
 def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(tmp_path, monkeypatch, module_name):
     import semantic_candidate
     db, aid, row = seed(tmp_path)
@@ -299,11 +299,22 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
 
 
 @pytest.mark.parametrize("module_name,member", [
+    ("semantic_notice", "origin_event_id"),
+    ("semantic_notice", "record_notice_plan_tx"),
+    ("semantic_notice", "emit_degraded"),
+    ("semantic_send_gate", "semantic_gate"),
+    ("semantic_render", "render_notice"),
     ("extract_schema", "SCHEMA"),
+    ("extract_schema", "MEDICATION_TOKEN"),
     ("extract_validation", "Validator"),
     ("extract_quality", "quality_improves"),
     ("clinical_scope", "patient_source_scope"),
     ("clinical_values", "patient_vitals"),
+    ("clinical_values", "vital_threshold_flags"),
+    ("clinical_values", "prose_preserves_current_readings"),
+    ("clinical_values", "grounded_vitals"),
+    ("clinical_values", "VITAL_NUMBER_TOKEN"),
+    ("clinical_values", "_VITAL_CTX_EXCLUDE"),
     ("patient_context", "pharmacy_state_items"),
     ("patient_context", "PHARMACY_STATE_KEYS"),
     ("mcs_queries", "karte_summary_current"),
@@ -318,6 +329,9 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     ("semantic_loops", "rejected_relation_pair"),
     ("semantic_jev", "finite_value"),
     ("semantic_transport", "LONG_MIN_CALL_S"),
+    ("semantic_v4_cohort", "hold_unbounded_job"),
+    ("semantic_v4_cohort", "cohort_document"),
+    ("semantic_v4_cohort", "_valid_cohort"),
     ("patient_nightly_plan", "select_facts"),
     ("patient_nightly_plan", "scan_items"),
     ("patient_nightly_plan", "summary_selection"),
@@ -348,10 +362,12 @@ def test_moved_definition_changes_new_candidate_identity(monkeypatch, module_nam
         monkeypatch.setattr(module, member, {**module.SCHEMA, "synthetic_marker": True})
     elif member == "MANIFEST_VERSION":
         monkeypatch.setattr(module, member, "synthetic-manifest-version")
-    elif member == "_AMOUNT_RE":
+    elif member in ("_AMOUNT_RE", "_VITAL_CTX_EXCLUDE", "MEDICATION_TOKEN"):
         import re
-        old = module._AMOUNT_RE
+        old = getattr(module, member)
         monkeypatch.setattr(module, member, re.compile(old.pattern + "(?:)", old.flags))
+    elif member == "VITAL_NUMBER_TOKEN":
+        monkeypatch.setattr(module, member, module.VITAL_NUMBER_TOKEN + "(?:)")
     elif member == "_OUTPUT_BUDGET":
         monkeypatch.setattr(module, member, module._OUTPUT_BUDGET + 1)
     elif member == "LONG_MIN_CALL_S":

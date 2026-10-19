@@ -11,8 +11,8 @@ def test_unchanged_rewalk_writes_only_progress_bookends(store, tmp_path):
     before = store.db.total_changes
     result = drug_map.derive(store, dictionary)
     assert result == {"status": "ok", "done": 0, "pids": []}
-    # start-of-call save + completion save; per-row commits were fsyncs
-    # under synchronous=FULL and cost ~90 s per production tick
+    # The synthetic unchanged rewalk writes only its start/end progress bookends;
+    # it must not add one durable progress write for every unchanged message.
     assert store.db.total_changes - before <= 2
 
 
@@ -24,5 +24,5 @@ def test_cut_walk_still_persists_its_resume_cursor(store, tmp_path, monkeypatch)
     clock = iter(range(1000))
     monkeypatch.setattr(drug_map.time, "monotonic", lambda: next(clock))
     assert drug_map.derive(store, dictionary, deadline=6)["status"] == "partial"
-    cursor = drug_map._progress(store.db)["cursor"]
+    cursor = drug_map.read_annotation_progress(store.db)["cursor"]
     assert 0 < cursor < 20

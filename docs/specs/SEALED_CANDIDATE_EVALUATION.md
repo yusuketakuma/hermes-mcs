@@ -109,7 +109,7 @@ testで人ラベル付きreal_authorizedを200件以上、患者20以上、threa
 | ai_priority_accuracy | 既存runtimeの実効AI緊急表示を正解labelのboolと比較、正解率 ≥ 0.95 |
 | patient_state_ab_noninferiority | 同一bundleでcontext onの人採点がoff以上となるcaseの割合 = 1.0 |
 
-AI優先は新しい順位付けclassifierではない。`structured_view.message_urgency_details(...).source == 'llm'` による「緊急度高」表示を対象とする。snapshot adapterは同じ生成artifactと本文をメモリSQLiteへ置き、その既存判定を実行する。生の `urgency=high` だけでは本人・臨床・根拠のgateを通ったことにしない。candidate/labelの `ai_priority` はbool限定、抽出失敗は欠測。group、他者、条件的な緊急連絡がAI優先へ昇格しないことを合成テストする。
+AI優先は新しい順位付けclassifierではない。`clinical_urgency.message_urgency_details(...).source == 'llm'` による「緊急度高」表示を対象とする。snapshot adapterは同じ生成artifactと本文をメモリSQLiteへ置き、その既存判定を実行する。生の `urgency=high` だけでは本人・臨床・根拠のgateを通ったことにしない。candidate/labelの `ai_priority` はbool限定、抽出失敗は欠測。group、他者、条件的な緊急連絡がAI優先へ昇格しないことを合成テストする。
 
 A/Bは同じbundleのhashと異なるoff/on候補指紋を保持する。labelの `patient_state_ab` に `off_sha256/on_sha256`（各arm全体のhash）、`off_score/on_score`（0〜1）を持たせる。armのhash不一致、欠測、劣化は成功件数へ加算しない。採点rubric自体は本実装で定義していないため、レビュー前に固定する必要がある。これは臨床的な非劣性マージンを用いた推測統計試験ではなく、同一caseの非劣化ゲートである。
 

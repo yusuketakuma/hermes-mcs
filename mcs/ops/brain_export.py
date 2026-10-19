@@ -28,7 +28,7 @@ from drug_map import candidate_note
 from rollup import current_cached_refs
 import mcs_util
 from mcs_util import loads_dict
-from safe_io import create_exclusive
+from safe_io import create_exclusive, fdopen_owned
 
 HOME = Path(mcs_util.HOME)
 SNAPSHOT = HOME / "data" / "snapshots" / "ledger-snapshot.db"
@@ -87,7 +87,7 @@ def _write(root: Path, rel: str, text: str) -> None:
         tmp = f".{dest.name}-{secrets.token_hex(12)}.tmp"
         fd = create_exclusive(tmp, 0o600, dir_fd=directory)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            with fdopen_owned(fd, "w", encoding="utf-8") as stream:
                 stream.write(text)
                 stream.flush()
                 os.fsync(stream.fileno())

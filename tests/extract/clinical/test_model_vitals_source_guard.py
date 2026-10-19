@@ -17,7 +17,7 @@ def _validated(body, vitals):
 
 def test_a_family_members_blood_pressure_is_not_the_patients():
     drops = {}
-    assert clinical_values._vitals_guard(FAMILY, {"hr": 72, "sbp": 180, "dbp": 110}, drops) == {"hr": 72}
+    assert clinical_values.grounded_vitals(FAMILY, {"hr": 72, "sbp": 180, "dbp": 110}, drops) == {"hr": 72}
     assert any("本人以外" in note for note in drops["vitals"])
     assert _validated(FAMILY, {"hr": 72, "sbp": 180, "dbp": 110}) == {"hr": 72.0}
 
@@ -28,7 +28,7 @@ def test_a_family_members_blood_pressure_is_not_the_patients():
     ({"sbp": 90}, {"sbp": 90}),
 ])
 def test_an_earlier_reading_does_not_pass_as_the_current_one(vitals, expected):
-    assert clinical_values._vitals_guard(SUPERSEDED, dict(vitals)) == expected
+    assert clinical_values.grounded_vitals(SUPERSEDED, dict(vitals)) == expected
 
 
 def test_a_missing_current_value_is_never_filled_in():
@@ -60,6 +60,7 @@ def test_current_vitals_cannot_leak_a_rejected_old_value_through_prose():
     (SUPERSEDED, "血圧は未測定、体重80kg"),
 ])
 def test_qualified_or_uncontradicted_vital_prose_survives(body, text):
+    assert clinical_values.prose_preserves_current_readings(text, body)
     out = extract_validation.validate({"summary": text, "points": [text]}, body)
     assert out["summary"] == text and out["points"] == [text]
     assert "_items_dropped" not in out
@@ -72,6 +73,7 @@ def test_qualified_or_uncontradicted_vital_prose_survives(body, text):
     ("過去の脈拍は110でした。現在の脈拍は70です。", "脈拍110"),
 ])
 def test_unqualified_prose_cannot_recast_another_person_or_noncurrent_value(body, text):
+    assert not clinical_values.prose_preserves_current_readings(text, body)
     out = extract_validation.validate({"summary": text, "points": [text], "urgency": "routine"}, body)
     assert "summary" not in out and out["points"] == []
 
@@ -105,7 +107,7 @@ def test_vital_prose_uses_at_most_one_repair_and_never_saves_the_rejected_value(
     ("本人の収縮期血圧は90でした。", {"sbp": 90}),
 ])
 def test_the_patients_own_or_unscoped_readings_are_kept(body, vitals):
-    assert clinical_values._vitals_guard(body, dict(vitals)) == vitals
+    assert clinical_values.grounded_vitals(body, dict(vitals)) == vitals
 
 
 @pytest.mark.parametrize("body,vitals", [
@@ -114,7 +116,7 @@ def test_the_patients_own_or_unscoped_readings_are_kept(body, vitals):
     ("もし体温が38.5を超えたら連絡してください。", {"bt": 38.5}),
 ])
 def test_another_persons_or_conditional_reading_is_dropped(body, vitals):
-    assert clinical_values._vitals_guard(body, dict(vitals)) == {}
+    assert clinical_values.grounded_vitals(body, dict(vitals)) == {}
 
 
 def test_cached_readers_agree_with_the_writer_on_family_and_superseded_readings():
@@ -128,7 +130,7 @@ def test_cached_readers_agree_with_the_writer_on_family_and_superseded_readings(
     "現在の脈拍64、午前の血圧120/80。現在の血圧は90/60です。",    # current mark of another clause
 ])
 def test_an_earlier_reading_cannot_borrow_another_current_mark(body):
-    assert clinical_values._vitals_guard(body, {"sbp": 120, "dbp": 80}) == {}
+    assert clinical_values.grounded_vitals(body, {"sbp": 120, "dbp": 80}) == {}
     assert clinical_values.patient_current_vitals({"sbp": 120, "dbp": 80}, body) == {}
 
 
@@ -146,25 +148,25 @@ def test_a_named_patients_current_reading_supersedes_the_earlier_one():
 def test_an_unknown_named_persons_equal_current_value_cannot_revive_the_patients_old_reading():
     body = "本人の午前の血圧120/80。現在の本人の血圧90/60。現在の田中さんの血圧120/80。"
     old = {"sbp": 120, "dbp": 80}
-    assert clinical_values._vitals_guard(body, old) == {}
+    assert clinical_values.grounded_vitals(body, old) == {}
     assert clinical_values.patient_current_vitals(old, body, patient_name="佐藤") == {}
 
 
 def test_an_unknown_named_patients_own_current_value_still_has_writer_compatibility():
     body = "現在の田中さんの血圧120/80です。"
-    assert clinical_values._vitals_guard(body, {"sbp": 120, "dbp": 80}) == {"sbp": 120, "dbp": 80}
+    assert clinical_values.grounded_vitals(body, {"sbp": 120, "dbp": 80}) == {"sbp": 120, "dbp": 80}
 
 
 def test_a_current_word_after_the_label_still_marks_the_current_reading():
     body = "午前の血圧120/80。血圧は現在90/60です。"
-    assert clinical_values._vitals_guard(body, {"sbp": 120, "dbp": 80}) == {}
+    assert clinical_values.grounded_vitals(body, {"sbp": 120, "dbp": 80}) == {}
     assert clinical_values.patient_current_vitals({"sbp": 120, "dbp": 80}, body) == {}
-    assert clinical_values._vitals_guard(body, {"sbp": 90, "dbp": 60}) == {"sbp": 90, "dbp": 60}
+    assert clinical_values.grounded_vitals(body, {"sbp": 90, "dbp": 60}) == {"sbp": 90, "dbp": 60}
 
 
 def test_a_family_members_current_equal_value_does_not_make_the_patients_old_one_current():
     body = "本人の午前の血圧120/80。現在の本人の血圧90/60。同居の娘さんの現在の血圧120/80。"
-    assert clinical_values._vitals_guard(body, {"sbp": 120, "dbp": 80}) == {}
+    assert clinical_values.grounded_vitals(body, {"sbp": 120, "dbp": 80}) == {}
     assert clinical_values.patient_current_vitals({"sbp": 120, "dbp": 80}, body) == {}
 
 

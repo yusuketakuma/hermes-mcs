@@ -64,7 +64,7 @@ def test_notice_includes_mandatory_section(tmp_path):
         db.db.commit()
         summary = {"claims": [], "limitations": ["既存の制約"],
                    "mandatory_facts": ["薬剤｜アムロジピン継続"]}
-        text = semantic_render.render_notice(db, 1, 1, summary, "PASS",
+        text = semantic_render.render_notice(db.db, 1, 1, summary, "PASS",
                                       quality="full")
         assert "抽出済み事実" in text
         assert "薬剤｜アムロジピン継続" in text

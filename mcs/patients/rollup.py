@@ -35,9 +35,9 @@ from ledger import Ledger
 from clinical_values import fold_surface, lab_analyte, lab_candidate, patient_item_scope, patient_current_vitals
 import patient_context
 from patient_context import context_items, extract_context, merged_context
-from mcs_queries import (JST, karte_summary_current, karte_summary_block, current_extract_pred, current_fact_pred,
+from mcs_queries import (current_extraction_blobs, decode_current_extractions, JST, karte_summary_current, karte_summary_block,
                          med_is_patient_current, item_unverified)
-from mcs_util import HOME, loads_dict
+from mcs_util import HOME
 from writer_lock import acquire_run_lock
 from semantic_projection import PROJECTION_VERSION
 from self_identity import normalize_sender_id
@@ -83,66 +83,6 @@ def _llm_reply_kind(blob):
     reply = lm.get("reply")
     kind = reply.get("kind") if isinstance(reply, dict) else None
     return kind if isinstance(kind, str) else None
-
-
-def _message_artifacts(db, project_id: int):
-    """(arts, ref_mids) — current extraction blobs per message, and the
-    message ids that carry a med_ref row.
-
-    current_refs needs a med_ref row on the exact message: look it up
-    only for those instead of two queries per message (superset filter;
-    current_refs keeps its own project/binding checks)."""
-    arts = {}
-    for a in db.execute(f"""
-      SELECT a.message_id, a.kind, a.content FROM artifacts a
-      JOIN messages m ON m.message_id=a.message_id
-      WHERE m.project_id=? AND a.kind IN
-          ('extract_v1','extract_llm','canonical_projection',
-           'semantic_facts_v4')
-        {current_extract_pred()}
-        AND (a.kind IN ('extract_v1','extract_llm')
-             OR (1=1 {current_fact_pred()}))
-      ORDER BY a.artifact_id
-    """, (project_id,)):
-        arts.setdefault(a["message_id"], {})[a["kind"]] = a["content"]
-    ref_mids = {r[0] for r in db.execute(
-        "SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m "
-        "ON m.message_id=a.message_id WHERE a.kind=? AND m.project_id=?",
-        (REF_KIND, project_id))}
-    return arts, ref_mids
-
-
-def _decode_blobs(blobs: dict):
-    """(v1, lm, llm, has_fact_source) for one message's current artifacts.
-
-    semantic_facts_v4 (T18) shadows canonical_projection, which shadows
-    extract_llm for the same message (a hash-current extract_llm row is
-    kept in blobs only so its reply can be read below)."""
-    llm_blob = blobs.get("extract_llm")
-    has_fact_source = False
-    llm = None
-    try:
-        v1 = json.loads(blobs["extract_v1"]) \
-            if "extract_v1" in blobs else {}
-        lm_blob = blobs.get("semantic_facts_v4") \
-            or blobs.get("canonical_projection") \
-            or llm_blob
-        lm = json.loads(lm_blob) if lm_blob else {}
-        has_fact_source = (lm_blob is not None and isinstance(lm, dict)
-                           and not lm.get("_error"))
-        if lm_blob is not None and lm_blob is llm_blob:
-            llm = lm    # one decode per unshadowed extract_llm row
-    except (ValueError, TypeError, RecursionError):
-        v1 = lm = {}
-    if not isinstance(v1, dict):
-        v1 = {}
-    if not isinstance(lm, dict):
-        lm = {}
-    if lm.get("_error"):
-        lm = {}
-    if not isinstance(llm, dict):
-        llm = loads_dict(llm_blob) or {}
-    return v1, lm, llm, has_fact_source
 
 
 def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, request_limit):
@@ -247,7 +187,11 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
     out["last_activity"] = newest["posted_at"]
     out["last_activity_ts"] = newest["posted_at_ts"]
 
-    arts, ref_mids = _message_artifacts(db, project_id)
+    arts = current_extraction_blobs(db, project_id)
+    ref_mids = {r[0] for r in db.execute(
+        "SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m "
+        "ON m.message_id=a.message_id WHERE a.kind=? AND m.project_id=?",
+        (REF_KIND, project_id))}
 
     latest_vitals = None
     latest_labs = {}
@@ -282,7 +226,7 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
         senders[m["sender_name"] or "?"] = \
             senders.get(m["sender_name"] or "?", 0) + 1
         blobs = arts.get(m["message_id"], {})
-        v1, lm, llm, has_fact_source = _decode_blobs(blobs)
+        v1, lm, llm, has_fact_source = decode_current_extractions(blobs)
         # Context is additive to canonical facts, never a diagnosis or a
         # confirmed current state. Keep every item from the newest report
         # per category; the detail read model retains all prior reports.

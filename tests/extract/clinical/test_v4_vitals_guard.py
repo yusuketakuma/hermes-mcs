@@ -29,11 +29,11 @@ def test_full_width_decimal_vital_kept(body):
     ('120/80mmHg', {'sbp': 120, 'dbp': 80}),
 ])
 def test_following_label_does_not_relabel(body, vit):
-    assert clinical_values._vitals_guard(body, dict(vit)) == vit
+    assert clinical_values.grounded_vitals(body, dict(vit)) == vit
 
 
 def test_unit_after_number_still_remaps():
-    assert clinical_values._vitals_guard('36.5℃', {'hr': 36.5}) == {'bt': 36.5}
+    assert clinical_values.grounded_vitals('36.5℃', {'hr': 36.5}) == {'bt': 36.5}
 
 
 # v4: bare 'P' pulse label and SQL thin check counting reply (synthetic).
@@ -44,11 +44,11 @@ def test_unit_after_number_still_remaps():
     ('BT 36.5 P 72 SpO2 97', {'bt': 36.5, 'hr': 72, 'spo2': 97}),
 ])
 def test_bare_p_is_pulse(body, vit):
-    assert clinical_values._vitals_guard(body, dict(vit)) == vit
+    assert clinical_values.grounded_vitals(body, dict(vit)) == vit
 
 
 def test_pulse_not_relabelled_as_temperature():
-    assert clinical_values._vitals_guard('BT36.5 P72', {'hr': 72}) == {'hr': 72}
+    assert clinical_values.grounded_vitals('BT36.5 P72', {'hr': 72}) == {'hr': 72}
 
 
 def test_reply_counts_as_fact_in_sql_thin_check(tmp_path, monkeypatch):

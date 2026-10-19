@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import health_watch
+import safe_io
 
 
 def _read_in_child(reader, path, root):
@@ -71,13 +72,13 @@ def test_unreadable_health_is_not_reported_as_missing(monkeypatch, failure):
     def unreadable(*args, **kwargs):
         raise failure("synthetic I/O failure")
 
-    monkeypatch.setattr(health_watch, "_read_status_json", unreadable)
+    monkeypatch.setattr(safe_io, "read_json_nofollow", unreadable)
     assert health_watch.classify_health("synthetic.json", 1000, 900) == {"status": "corrupt"}
 
 
 @pytest.mark.parametrize("reader", ["health", "standalone", "previous"])
 def test_health_evidence_rechecks_bound_after_read(tmp_path, monkeypatch, reader):
-    monkeypatch.setattr(health_watch, "read_regular_nofollow",
+    monkeypatch.setattr(safe_io, "read_regular_nofollow",
                         lambda *a, **kw: b"{}" + b" " * (1024 * 1024))
     if reader == "health":
         assert health_watch.classify_health("synthetic.json", 1000, 900)["status"] == "corrupt"

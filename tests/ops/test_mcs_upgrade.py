@@ -23,6 +23,7 @@ from test_mcs_update import _apply_env
 from ledger import Ledger
 import mcs_cli
 import mcs_requests
+import update_policy
 
 updater = test_mcs_update.updater   # shared fixture
 
@@ -612,7 +613,7 @@ def test_prerelease_approval_requires_the_opt_in(tmp_path, monkeypatch):
 def test_approval_grammar_equals_the_updater_ordering(tag):
     # anything approvable must be orderable, or the scan drops the receipt
     approvable = mcs_requests.validate(_apply_req(tag=tag)) is None
-    assert approvable == mcs_requests.release_tag(tag) \
+    assert approvable == update_policy.release_tag(tag) \
         == (mcs_update.update_policy.version_key(tag) is not None)
 
 
@@ -623,7 +624,7 @@ def test_apply_requires_a_single_well_formed_tag():
 
 
 def test_launcher_copy_matches_the_shared_grammar():
-    assert _grammar_launcher().SEMVER_RE.pattern == mcs_requests.RELEASE_TAG_RE.pattern
+    assert _grammar_launcher().SEMVER_RE.pattern == update_policy.RELEASE_TAG_RE.pattern
 
 
 def test_launcher_default_target_is_the_newest_release(monkeypatch):

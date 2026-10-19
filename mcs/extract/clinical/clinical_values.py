@@ -366,8 +366,8 @@ def _bp_side(body: str, s: int, e: int):
 # an unlabelled date such as 10/12 is not one) or an explicitly
 # side-labelled single value.
 # numbers follow the guard's own grammar (\d+ with an optional ./． decimal)
-_BP_NUM = r"\d+(?:[.．]\d+)?"
-_BP_PAIR = re.compile(rf"(?<![\d.．])({_BP_NUM})\s*[/／]\s*({_BP_NUM})(?![\d.．])")
+VITAL_NUMBER_TOKEN = r"\d+(?:[.．]\d+)?"
+_BP_PAIR = re.compile(rf"(?<![\d.．])({VITAL_NUMBER_TOKEN})\s*[/／]\s*({VITAL_NUMBER_TOKEN})(?![\d.．])")
 _BP_SIDE_WORD = re.compile(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$")
 
 
@@ -381,7 +381,7 @@ def _bp_readings(body: str, keep=None):
                 and accept(m.start(), m.end()):
             pairs.add((_bp_number(m[1]), _bp_number(m[2])))
     sides = {"sbp": set(), "dbp": set()}
-    for m in re.finditer(rf"(?<![\d.．/／]){_BP_NUM}(?![\d.．/／])", body):
+    for m in re.finditer(rf"(?<![\d.．/／]){VITAL_NUMBER_TOKEN}(?![\d.．/／])", body):
         word = _BP_SIDE_WORD.search(body[max(0, m.start() - _VITAL_WIN_BACK):m.start()])
         if word and accept(*m.span()):
             sides["sbp" if word[1] == "収縮期" else "dbp"].add(_bp_number(m[0]))
@@ -457,7 +457,7 @@ def _vital_numbers(body):
 _FLOW_AFTER = re.compile(r"[ \t　]*(?:[LＬlℓ](?![A-Za-z])|リットル)")
 
 
-def _vitals_guard(body: str | None, vit: dict,
+def grounded_vitals(body: str | None, vit: dict,
                   drops: dict | None = None) -> dict:
     """Anchor each vital to the label nearest its value in the body.
 
@@ -556,7 +556,7 @@ def patient_vitals(values, body, *, patient_name=None):
     # Partial LLM blood pressures still need their own label, side and patient span.
     partial = {key: values[key] for key in ("sbp", "dbp")
                if key not in kept and type(values.get(key)) in (int, float)}
-    grounded = _vitals_guard(body, partial)
+    grounded = grounded_vitals(body, partial)
     for match in re.finditer(r"\d+(?:[.．]\d+)?", body):
         start, end = match.span()
         if _nearest_vital_label(body, start, end) != "bp":
@@ -608,3 +608,89 @@ def absolute_date(text: str) -> str | None:
         return date(y, mo, d).isoformat()
     except ValueError:
         return None
+
+
+_VITAL_CTX_WIN = 40
+
+_VITAL_CTX_EXCLUDE = re.compile(
+    r"父|母|義父|義母|(?<![丈工])夫|妻|主人|息子|娘|兄|姉|弟|妹|祖父|祖母|家族|親族"
+    r"|なら|たら|れば|の場合|の際|切ったら|超えたら|下回ったら"
+    r"|を切ると|を超えると|を下回ると"
+    r"|だった|でした|ありました|していた|になった|なりました"
+    r"|先月|先週|昨日|以前|過去に"
+    r"|測定不能|測れ(?:な|ませ|ず)|測定でき(?:な|ませ|ず)|未測定|不明")
+
+
+def vital_threshold_flags(vit: dict, body: str | None,
+                           thresholds: dict) -> list[dict]:
+    """Deterministic threshold crossings on validated vitals.
+
+    Returns [{key, value, rule, evidence}] — the reading's own body
+    span (±20 chars) as the verbatim quote. A crossing whose reading
+    cannot be anchored to its label, or whose context window shows a
+    family/conditional/past/unmeasurable marker, does not flag."""
+    if not body or not vit:
+        return []
+    toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
+            for m in re.finditer(r"\d+(?:[.．]\d+)?", body)]
+    rules = (("spo2", "lte", thresholds.get("spo2_lte")),
+             ("sbp", "lte", thresholds.get("sbp_lte")),
+             ("sbp", "gte", thresholds.get("sbp_gte")),
+             ("bs", "lte", thresholds.get("bs_lte")))
+    out = []
+    for key, op, limit in rules:
+        if limit is None or key not in vit:
+            continue
+        val = vit[key]
+        if not ((op == "lte" and val <= limit)
+                or (op == "gte" and val >= limit)):
+            continue
+        span = None
+        for s, e, num in toks:
+            if num != val:
+                continue
+            cls = _nearest_vital_label(body, s, e)
+            if cls == "bp":
+                cls = _bp_side(body, s, e) or cls
+            if cls == key:
+                span = (s, e)
+                break
+        if span is None:
+            continue
+        s, e = span
+        if _VITAL_CTX_EXCLUDE.search(
+                body, max(0, s - _VITAL_CTX_WIN), e + _VITAL_CTX_WIN):
+            continue
+        out.append({"key": key, "value": val,
+                    "rule": f"{key}_{op}_{limit:g}",
+                    "evidence": body[max(0, s - 20):min(len(body), e + 20)]
+                    .strip()})
+    return out
+
+
+
+def prose_preserves_current_readings(text: str, body) -> bool:
+    """Do not present a source's explicitly noncurrent reading without its qualifier."""
+    if not isinstance(body, str):
+        return True
+    # Only explicit measurement syntax is checked, never a nearby drug dose or body weight.
+    readings = [(m.start(group), m.end(group))
+                for pattern in (*VITAL_PATTERNS.values(),
+                                r"(?:収縮期|拡張期)(?:血圧)?[:：はが=\s]*(\d+(?:[.．]\d+)?)")
+                for m in re.finditer(pattern, text) for group in range(1, (m.lastindex or 0) + 1)]
+    for start, end in readings:
+        cls = _nearest_vital_label(text, start, end)
+        if cls is None or clinical_scope.patient_source_scope(text, start, end) != "patient":
+            continue
+        left = max(text.rfind(mark, 0, start) for mark in "。！？!?\n") + 1
+        if (re.search(_OTHER_TIME, text[left:start])
+                and not _vital_current(text, start)):
+            continue
+        hits = [m.span() for m in re.finditer(r"\d+(?:[.．]\d+)?", body)
+                if _bp_number(m[0]) == _bp_number(text[start:end])
+                and _nearest_vital_label(body, *m.span()) == cls]
+        if hits and (all(clinical_scope.patient_source_scope(body, s, e)
+                         in _NOT_PATIENT_CURRENT for s, e in hits)
+                     or _vital_superseded(body, cls, hits)):
+            return False
+    return True

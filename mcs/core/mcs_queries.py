@@ -746,3 +746,158 @@ def source_patient_context(db, message, *, by_kind=None, art_rows=None):
                 items = merged_context({"patient_context": items}, json.loads(row["content"]), body)
             break
     return items
+
+
+def current_extraction_blobs(db, project_id: int) -> dict:
+    """Read all current per-message extraction blobs for one project on borrowed db.
+
+    No connection, transaction or display limit is owned here. Missing artifacts
+    remain absent; projection/current predicates preserve source binding.
+    """
+    arts = {}
+    for a in db.execute(f"""
+      SELECT a.message_id, a.kind, a.content FROM artifacts a
+      JOIN messages m ON m.message_id=a.message_id
+      WHERE m.project_id=? AND a.kind IN
+          ('extract_v1','extract_llm','canonical_projection',
+           'semantic_facts_v4')
+        {current_extract_pred()}
+        AND (a.kind IN ('extract_v1','extract_llm')
+             OR (1=1 {current_fact_pred()}))
+      ORDER BY a.artifact_id
+    """, (project_id,)):
+        arts.setdefault(a["message_id"], {})[a["kind"]] = a["content"]
+    return arts
+
+
+def decode_current_extractions(blobs: dict):
+    """(v1, lm, llm, has_fact_source) for one message's current artifacts.
+
+    semantic_facts_v4 (T18) shadows canonical_projection, which shadows
+    extract_llm for the same message (a hash-current extract_llm row is
+    kept in blobs only so its reply can be read below)."""
+    llm_blob = blobs.get("extract_llm")
+    has_fact_source = False
+    llm = None
+    try:
+        v1 = json.loads(blobs["extract_v1"]) \
+            if "extract_v1" in blobs else {}
+        lm_blob = blobs.get("semantic_facts_v4") \
+            or blobs.get("canonical_projection") \
+            or llm_blob
+        lm = json.loads(lm_blob) if lm_blob else {}
+        has_fact_source = (lm_blob is not None and isinstance(lm, dict)
+                           and not lm.get("_error"))
+        if lm_blob is not None and lm_blob is llm_blob:
+            llm = lm    # one decode per unshadowed extract_llm row
+    except (ValueError, TypeError, RecursionError):
+        v1 = lm = {}
+    if not isinstance(v1, dict):
+        v1 = {}
+    if not isinstance(lm, dict):
+        lm = {}
+    if lm.get("_error"):
+        lm = {}
+    if not isinstance(llm, dict):
+        llm = loads_dict(llm_blob) or {}
+    return v1, lm, llm, has_fact_source
+
+
+
+def source_patient_mentions(db, project_id: int) -> list[dict]:
+    """Read as-written medication/symptom mentions without display decoration.
+
+    Uses the caller's same snapshot/TX with no cap, writes or close. Rules only
+    supplement names absent from the chosen fact generation and stay unverified;
+    an empty result proves no clinical absence or acquisition completeness.
+    """
+    arts = current_extraction_blobs(db, project_id)
+    posts = {r[0]: (r[1], r[2], r[3]) for r in db.execute(
+        "SELECT message_id, posted_at_ts, content_hash, body_text FROM messages WHERE project_id=? AND body_state='full'",
+        (project_id,))}
+
+    def dicts(value):
+        return [item for item in value if isinstance(item, dict)] \
+            if isinstance(value, list) else []
+
+    out = []
+    for mid, blobs in arts.items():
+        if mid not in posts:
+            continue
+        v1, lm, _, _ = decode_current_extractions(blobs)
+        rows = [("medications", x.get("name"), x) for x in dicts(lm.get("meds"))]
+        rows += [("symptoms", x.get("text"), x) for x in dicts(lm.get("symptoms"))]
+        named = {text for _, text, _ in rows}
+        rows += [("medications", x.get("name"), {**x, "unverified": True})
+                 for x in dicts(v1.get("medications")) if x.get("name") not in named]
+        rows += [("symptoms", x, {"unverified": True}) for x in v1.get("symptoms") or []
+                 if isinstance(x, str) and x not in named]
+        out.extend({"category": category, "text": text, "quote": posts[mid][2],
+                    "subject": item.get("subject") or "unspecified",
+                    "mention": {k: item[k] for k in ("dose", "action", "status", "negated", "unverified")
+                                if k in item},
+                    "message_id": mid, "content_hash": posts[mid][1], "posted_at_ts": posts[mid][0]}
+                   for category, text, item in rows if isinstance(text, str) and text)
+    return out
+
+
+def current_message_artifact_query(*, facts=False, mid="?"):
+    """Build the shared per-message current extraction/fact content read."""
+    if facts:
+        where = (
+            f"a.message_id={mid} AND a.kind IN ({FACT_KINDS_SQL}) "
+            "AND m.body_state IS NOT 'deleted' "
+            "AND CASE WHEN json_valid(a.content) THEN "
+            "json_type(a.content)='object' ELSE 0 END "
+            f"{current_fact_pred('a', 'm')}")
+    else:
+        where = f"a.kind=? AND a.message_id={mid} {current_extract_pred()}"
+    return ("SELECT a.content FROM artifacts a JOIN messages m "
+            "ON m.message_id=a.message_id WHERE " + where +
+            " ORDER BY a.artifact_id DESC LIMIT 1")
+
+
+
+def current_message_extract(db, kind: str, mid: int) -> dict | None:
+    """Read one current message extraction document, distinct from global latest IDs."""
+    r = db.execute(current_message_artifact_query(), (kind, mid)).fetchone()
+    return loads_dict(r["content"]) if r else None
+
+
+
+def current_message_facts(db, mid: int) -> dict | None:
+    """Newest usable fact artifact for a message — a hash-current
+    ``canonical_projection`` shadows ``extract_llm`` (the same
+    ``current_fact_pred`` shadow rule every consumer shares); when the
+    projection is stale, invalidated, or absent the legacy extraction
+    is read instead — never the other way around."""
+    r = db.execute(current_message_artifact_query(facts=True), (mid,)).fetchone()
+    return loads_dict(r["content"]) if r else None
+
+
+
+def message_urgency_source(db, mid: int):
+    """Read body state and patient identity on the caller's same connection."""
+    columns = {column[1] for column in db.execute("PRAGMA table_info(patients)")}
+    name = "p.patient_name" if "patient_name" in columns else "NULL"
+    kind = "p.project_type" if "project_type" in columns else "NULL"
+    return db.execute(f"SELECT m.body_text,m.body_state,{name} patient_name,{kind} project_type FROM messages m "
+                     "LEFT JOIN patients p ON p.project_id=m.project_id WHERE m.message_id=?", (mid,)).fetchone()
+
+
+
+def current_message_urgency_qc(db, mid: int):
+    """Read newest source-bound urgency audit without owning a transaction."""
+    row = db.execute(
+        "SELECT q.content FROM artifacts q"
+        " JOIN messages m ON m.message_id=q.message_id"
+        " WHERE q.kind='extract_qc' AND q.message_id=?"
+        f" {current_extract_pred('q', 'm')}"
+        f" AND json_extract({json_or_null('q.meta')},"
+        "'$.source_artifact_id')="
+        "  (SELECT MAX(a.artifact_id) FROM artifacts a"
+        "   JOIN messages m2 ON m2.message_id=a.message_id"
+        "   WHERE a.kind='extract_llm' AND a.message_id=q.message_id"
+        f"   {current_extract_pred('a', 'm2')})"
+        " ORDER BY q.artifact_id DESC LIMIT 1", (mid,)).fetchone()
+    return loads_dict(row["content"]) if row else None

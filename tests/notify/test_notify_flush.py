@@ -20,6 +20,7 @@ import notify_sender
 import mcs_util
 import structured_view
 from ledger import Ledger
+import mcs_queries
 
 
 def test_defuse_media_tag_from_post_body():
@@ -80,9 +81,9 @@ def test_typed_exclusions_do_not_reappear_through_rule_fallback(monkeypatch,
             "symptoms": ["合成症状"],
         },
     }
-    monkeypatch.setattr(structured_view, "latest_artifact",
+    monkeypatch.setattr(mcs_queries, 'current_message_extract',
                        lambda db, kind, mid: artifacts[kind])
-    monkeypatch.setattr(structured_view, "latest_fact_artifact",
+    monkeypatch.setattr(mcs_queries, 'current_message_facts',
                        lambda db, mid: artifacts["extract_llm"])
     lines = structured_view.structured_lines(None, 1)
     assert not any(line.startswith(("薬剤", "症状:")) for line in lines)
@@ -96,9 +97,9 @@ def test_rule_only_medication_is_labeled_unverified(monkeypatch):
             "rx_actions": [{"action": "start", "ctx": "合成薬を開始"}],
         },
     }
-    monkeypatch.setattr(structured_view, "latest_artifact",
+    monkeypatch.setattr(mcs_queries, 'current_message_extract',
                        lambda db, kind, mid: artifacts[kind])
-    monkeypatch.setattr(structured_view, "latest_fact_artifact",
+    monkeypatch.setattr(mcs_queries, 'current_message_facts',
                        lambda db, mid: artifacts["extract_llm"])
     lines = structured_view.structured_lines(None, 1)
     assert not any(line.startswith("薬剤:") for line in lines)
@@ -109,8 +110,8 @@ def test_rule_only_medication_is_labeled_unverified(monkeypatch):
 def test_source_less_display_keeps_high_unconfirmed_and_suppresses_patient_values(monkeypatch):
     document = {"urgency": "high", "urgency_evidence": ["本人が急変"],
                 "vitals": {"spo2": 80}, "vital_flags": [{"key": "spo2", "value": 80}]}
-    monkeypatch.setattr(structured_view, "latest_artifact", lambda db, kind, mid: document if kind == "extract_llm" else {})
-    monkeypatch.setattr(structured_view, "latest_fact_artifact", lambda db, mid: document)
+    monkeypatch.setattr(mcs_queries, 'current_message_extract', lambda db, kind, mid: document if kind == "extract_llm" else {})
+    monkeypatch.setattr(mcs_queries, 'current_message_facts', lambda db, mid: document)
     lines = structured_view.structured_lines(None, 1)
     assert any("要確認" in line for line in lines)
     assert not any("緊急度: 高" in line or "SpO2" in line for line in lines)

@@ -26,7 +26,7 @@ from c1_envelopes import (
     CONTRACT, RECEIPT_CONTRACT, Record, _hash, encode_envelope, intent_hash, parse_envelope,
     parse_withdrawal, validate_collection, validate_envelope,
 )
-from safe_io import atomic_write
+from safe_io import atomic_write, fdopen_owned
 
 _ENTRY_FIELDS = {
     "status", "header", "records", "received_at", "expires_at", "wire_sha256",
@@ -332,7 +332,7 @@ class ReferenceReceiver:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except FileNotFoundError:
             return {"version": 1, "namespace": self.namespace, "envelopes": {}, "selected": {}}
-        with os.fdopen(fd, "rb") as stream:
+        with fdopen_owned(fd, "rb") as stream:
             info = os.fstat(stream.fileno())
             if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
                     or info.st_nlink != 1 or info.st_size > self.max_state_bytes):

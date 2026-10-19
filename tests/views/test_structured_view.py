@@ -6,6 +6,7 @@ import pytest
 import ledger
 import structured_view
 from semantic_projection import PROJECTION_VERSION
+import clinical_urgency
 
 
 @pytest.fixture
@@ -460,7 +461,7 @@ def test_malformed_qc_verdict_never_stops_display_or_vetoes_urgency(db, field, v
     db.artifact_add("extract_qc", json.dumps({"urgency": verdict}),
         project_id=1, message_id=1,
         meta={"hash": "synthetic-hash", "source_artifact_id": source})
-    assert structured_view.urgency_qc_disagreement(db.db, 1) is None
+    assert clinical_urgency.urgency_qc_disagreement(db.db, 1) is None
     assert structured_view.urgency_qc_suffix(db.db, 1) == ""
 
 

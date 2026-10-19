@@ -6,6 +6,7 @@ import pytest
 import ledger
 import mcs_view
 import read_model
+from semantic_projection import PROJECTION_VERSION
 from patient_context import extract_context
 from semantic_testkit import _message, _patient
 from test_read_model import _artifact, _db, _hash_of
@@ -179,7 +180,7 @@ def test_published_context_still_requires_explicit_project_binding(context_db, k
     db = context_db
     db.artifact_add(kind, json.dumps({"canonical_facts": [], "patient_context": extract_context(BODY)}),
                     message_id=1, meta={"hash": _hash_of(db, 1), "engine_version": 4,
-                                        "projection_version": read_model.PROJECTION_VERSION})
+                                        "projection_version": PROJECTION_VERSION})
     row = read_model.read_model(db.db, scope="detail", project_id=1)["records"][0]
     assert row["extraction"][kind]["state"] == "pending"
     assert row["patient_context"] == []
@@ -200,3 +201,59 @@ def test_source_reader_has_no_display_dependency_or_reference_refresh(context_db
     db.db.execute("UPDATE artifacts SET meta=? WHERE message_id=1", (json.dumps({"hash": message["content_hash"], "invalidated": True}),))
     db.db.commit()
     assert mcs_queries.source_patient_context(db.db, message) == []
+
+
+@pytest.mark.parametrize("generation", ["extract_llm", "canonical_projection", "semantic_facts_v4"])
+def test_patient_mentions_use_raw_current_owner_and_preserve_written_qualifiers(
+        context_db, monkeypatch, generation):
+    import sys
+    from types import SimpleNamespace
+    import mcs_queries
+    import patient_context_view as pcv
+
+    store = context_db
+    rule = {"medications": [{"name": "架空薬A"}, {"name": "架空規則薬"}],
+            "symptoms": ["架空症状", "架空規則症状"]}
+    fact = {"meds": [{"name": "架空薬A", "subject": "family", "dose": "5mg",
+                      "status": "planned", "negated": True}],
+            "symptoms": [{"text": "架空症状", "subject": "patient", "status": "past"}]}
+    _artifact(store, "extract_v1", 1, rule, {"hash": _hash_of(store, 1)})
+    _artifact(store, "extract_llm", 1, {"meds": [{"name": "旧世代薬"}]},
+              {"hash": _hash_of(store, 1)})
+    _artifact(store, generation, 1, fact, {"hash": _hash_of(store, 1), "engine_version": 4})
+    # The raw path and display decoration must not import a writer/CLI owner.
+    monkeypatch.setitem(sys.modules, "rollup", SimpleNamespace())
+    store.db.execute("BEGIN")
+    before = store.db.total_changes
+    try:
+        raw = mcs_queries.source_patient_mentions(store.db, 1)
+        assert [(r["category"], r["text"], r["subject"], r["mention"]) for r in raw] == [
+            ("medications", "架空薬A", "family", {"dose": "5mg", "status": "planned", "negated": True}),
+            ("symptoms", "架空症状", "patient", {"status": "past"}),
+            ("medications", "架空規則薬", "unspecified", {"unverified": True}),
+            ("symptoms", "架空規則症状", "unspecified", {"unverified": True})]
+        assert all(r["message_id"] == 1 and r["content_hash"] == _hash_of(store, 1)
+                   and r["quote"] == BODY and "source" not in r for r in raw)
+        decorated = pcv._mentions(store.db, 1, {1: ("架空投稿者", "架空職種")})
+        assert [r["text"] for r in decorated] == [r["text"] for r in raw]
+        assert all(r["sender"] == "架空投稿者" and r["profession"] == "架空職種"
+                   and r["source"] == "chat" and r["details"] == [] for r in decorated)
+        assert mcs_queries.source_patient_mentions(store.db, 2) == []
+        assert store.db.in_transaction and store.db.total_changes == before
+    finally:
+        store.db.rollback()
+
+
+def test_patient_mentions_read_failure_is_not_an_empty_observation():
+    import sqlite3
+    from mcs_queries import source_patient_mentions
+
+    fault = sqlite3.OperationalError("synthetic snapshot unavailable")
+
+    class RefusingDB:
+        def execute(self, *_args):
+            raise fault
+
+    with pytest.raises(sqlite3.OperationalError) as raised:
+        source_patient_mentions(RefusingDB(), 1)
+    assert raised.value is fault

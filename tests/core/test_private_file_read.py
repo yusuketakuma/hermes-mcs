@@ -31,7 +31,7 @@ def test_private_read_uses_exact_open_flags_and_closes_success(tmp_path, monkeyp
     assert error.value.errno == errno.EBADF
 
 
-@pytest.mark.parametrize("failure", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("failure", [KeyboardInterrupt, SystemExit, OSError])
 def test_fdopen_baseexception_closes_untransferred_fd(tmp_path, monkeypatch, failure):
     path = _private(tmp_path)
     real_open, opened = os.open, []
@@ -41,7 +41,8 @@ def test_fdopen_baseexception_closes_untransferred_fd(tmp_path, monkeypatch, fai
         opened.append(fd)
         return fd
 
-    def interrupted(fd, mode):
+    def interrupted(fd, mode, **kwargs):
+        assert kwargs == {"closefd": True}
         raise failure("synthetic stream transfer failure")
 
     monkeypatch.setattr(safe_io.os, "open", record)
@@ -58,8 +59,9 @@ def test_growth_after_fstat_is_still_rejected_and_closed(tmp_path, monkeypatch):
     real_fdopen, opened = os.fdopen, []
 
     class GrowingRead:
-        def __init__(self, fd, mode):
-            self.stream = real_fdopen(fd, mode)
+        def __init__(self, fd, mode, **kwargs):
+            assert kwargs == {"closefd": True}
+            self.stream = real_fdopen(fd, mode, **kwargs)
             opened.append(fd)
 
         def __enter__(self):

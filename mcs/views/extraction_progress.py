@@ -4,7 +4,7 @@ import semantic_transport
 
 import sqlite3
 
-from mcs_requests import valid_hash
+from mcs_util import valid_hash
 from semantic_policy import semantic_config, policy_fingerprint
 
 LATEST_POSTS = 20

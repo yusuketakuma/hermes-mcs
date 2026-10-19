@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "緊急度の読取を臨床判断の正本へ統一",
+  "summary": "シグナル・通知・画面・評価が同じ原文根拠と本人の状態に基づく緊急度を読みます。判定条件や通知の許可条件は変更しません。",
+  "upgrade": "追加操作は不要です。変更した抽出workerを次回起動した際に新しいコード識別が適用され、以前の候補・保留判定は既存の再評価経路で照合されます。",
+  "details": [
+    "臨床urgencyの語句・否定・subject・原文根拠の判断をclinical_urgencyへ集約し、表示moduleへの依存を除去する。",
+    "現行artifactとQCのSQL読取はmcs_queriesへ移し、同じ借用接続・世代・fallback順序を保持する。",
+    "移動先を定義moduleとloaded source digestの両方で識別し、held_prior保護と失効回帰を維持する。",
+    "共通fact表示の属性ラベルはsemantic_renderの公開契約名から共有します。臨床判断と表示を分け、同じ表示規則をprivate名や二重定義で持ちません。"
+  ],
+  "refs": [
+    "mcs/extract/clinical/clinical_urgency.py",
+    "mcs/core/mcs_queries.py",
+    "mcs/semantic/semantic_render.py",
+    "mcs/views/structured_view.py"
+  ]
+}

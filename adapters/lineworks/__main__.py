@@ -21,6 +21,7 @@ if __package__ in (None, ""):
 
 from adapters.common import eventlog, paths, registry
 from mcs_util import HOME
+from safe_io import fdopen_owned
 from .actions import Actions
 from .client import ClientError, Credentials, _sign, valid_protocol_text, valid_filename
 from .config import credentials_path, destination, load_credentials, settings
@@ -58,7 +59,7 @@ def initialize(root):
     path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".lineworks-init-", dir=path.parent)
     try:
-        with os.fdopen(fd, "wb") as stream:
+        with fdopen_owned(fd, "wb") as stream:
             stream.write(json.dumps(values, ensure_ascii=False).encode())
             stream.flush()
             os.fsync(stream.fileno())

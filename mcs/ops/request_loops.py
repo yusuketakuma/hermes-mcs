@@ -4,7 +4,7 @@ import semantic_store
 
 import json
 
-from mcs_requests import positive, valid_hash
+from mcs_util import positive, valid_hash
 
 def latest_policy(db):
     """Content of the newest semantic_policy artifact, or None."""

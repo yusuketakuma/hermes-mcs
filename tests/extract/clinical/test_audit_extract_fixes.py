@@ -24,7 +24,7 @@ def _scope(body, needle):
 def test_family_and_care_worker_values_are_not_the_patients(person):
     body = f"{person}の体温38.5℃、血圧160/90でした"
     assert _scope(body, "38.5") in ("family", "other")
-    assert clinical_values._vitals_guard(body, {"sbp": 160, "dbp": 90}) == {}
+    assert clinical_values.grounded_vitals(body, {"sbp": 160, "dbp": 90}) == {}
     assert clinical_values.patient_current_vitals({"bt": 38.5}, body, patient_name=NAME) == {}
     assert "vitals" not in extract.extract_message(body, POSTED)
     lab = clinical_values.lab_candidate("Cr", "1.8", "mg/dl", f"{person}のCr 1.8mg/dl")

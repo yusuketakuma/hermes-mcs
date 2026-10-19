@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "承認記録の準備失敗時にもファイルを閉じる",
+  "summary": "人が明示的に確認した承認記録を作る際、ファイル準備で失敗しても開いたファイルを閉じるようにしました。既存記録の競合や不完全な記録を拒否する条件は保持します。",
+  "upgrade": "追加操作は不要です。承認に必要な証拠、記録の識別子・権限、再承認・公開条件は変更しません。",
+  "details": [
+    "排他的に作成した承認ファイルの所有権を既存fdopen_ownedへ渡し、streamへの移管失敗時にもraw descriptorを閉じる。失敗した記録の削除や上書きは追加しない。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_candidate.py",
+    "tests/semantic/test_sealed_candidate.py"
+  ]
+}

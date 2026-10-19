@@ -1,4 +1,7 @@
 """Real private-file receiver lifecycle using only deterministic synthetic records."""
+
+import export_contract
+import export_delivery
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -77,13 +80,12 @@ def test_incomplete_ack_is_not_current_and_first_complete_survives_reopen(tmp_pa
 
 
 def test_sender_staging_cleanup_cannot_erase_receiver_index(tmp_path):
-    import ext_contract
     sink = _sink(tmp_path)
     envelope = _generation("g1", 1000)
-    staging = ext_contract.HandoffSink(tmp_path / "outbox")
+    staging = export_delivery.HandoffSink(tmp_path / "outbox")
     eid = staging.receive(envelope)
     sink.receive_wire((staging.root / "envelopes" / f"{eid}.json").read_bytes())
-    assert ext_contract.parse_receipt(sink.ack(eid))["status"] == "accepted"
+    assert export_contract.parse_receipt(sink.ack(eid))["status"] == "accepted"
     staging.discard(eid)
     assert not staging.has(eid)
     reopened = _sink(tmp_path)

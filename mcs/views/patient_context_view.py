@@ -62,37 +62,17 @@ _ORG_WORD = re.compile(r"事業所|ステーション|クリニック|薬局|病
 
 
 def _mentions(db, project_id, senders):
-    """Medication and symptom mentions of each post's current extraction (the rollup's own
-    per-message reader), kept as written: subject, negation and status are not resolved here."""
-    from rollup import _decode_blobs, _dicts, _message_artifacts
-    arts, _ = _message_artifacts(db, project_id)
-    posts = {r[0]: (r[1], r[2], r[3]) for r in db.execute(
-        "SELECT message_id, posted_at_ts, content_hash, body_text FROM messages WHERE project_id=? AND body_state='full'",
-        (project_id,))}
-    out = []
-    for mid, blobs in arts.items():
-        if mid not in posts:
-            continue
-        v1, lm, _, _ = _decode_blobs(blobs)
-        rows = [("medications", x.get("name"), x) for x in _dicts(lm.get("meds"))]
-        rows += [("symptoms", x.get("text"), x) for x in _dicts(lm.get("symptoms"))]
-        # rule-only names the LLM did not mention stay unverified candidates (rollup's rule)
-        named = {text for _, text, _ in rows}
-        rows += [("medications", x.get("name"), {**x, "unverified": True})
-                 for x in _dicts(v1.get("medications")) if x.get("name") not in named]
-        rows += [("symptoms", x, {"unverified": True}) for x in v1.get("symptoms") or []
-                 if isinstance(x, str) and x not in named]
-        # A name alone loses family, negation and planned/past qualifiers on chat surfaces.
-        out.extend({"category": category, "text": text, "quote": posts[mid][2],
-                    "subject": item.get("subject") or "unspecified", "details": [],
-                    "mention": {k: item[k] for k in ("dose", "action", "status", "negated", "unverified")
-                                if k in item},
-                    "message_id": mid, "content_hash": posts[mid][1], "posted_at_ts": posts[mid][0],
-                    "sender": senders.get(mid, (None, None))[0], "profession": senders.get(mid, (None, None))[1],
-                    "temporality": None, "discovery": None, "source": "chat"}
-                   for category, text, item in rows if isinstance(text, str) and text)
-    return out
+    """Decorate raw source mentions with the already-read sender display fields."""
+    from mcs_queries import source_patient_mentions
 
+    return [{"category": item["category"], "text": item["text"], "quote": item["quote"],
+             "subject": item["subject"], "details": [], "mention": item["mention"],
+             "message_id": item["message_id"], "content_hash": item["content_hash"],
+             "posted_at_ts": item["posted_at_ts"],
+             "sender": senders.get(item["message_id"], (None, None))[0],
+             "profession": senders.get(item["message_id"], (None, None))[1],
+             "temporality": None, "discovery": None, "source": "chat"}
+            for item in source_patient_mentions(db, project_id)]
 
 def evidence(db, project_id, *, cfg=None) -> dict:
     """The shared evidence list every view projects from.

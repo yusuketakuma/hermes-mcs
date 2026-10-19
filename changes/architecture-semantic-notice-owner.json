@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "意味要約の通知計画と配信判定を整理",
+  "summary": "要約の通知対象・重複確認・保存計画を一つの実装へ集約しました。原文の取得経路、監査結果、現在の設定に基づく通知条件と、未取得・判定不能の扱いは変わりません。",
+  "upgrade": "追加操作は不要です。通知先・既定値・モデル・抽出世代・承認条件は変更しません。実装の識別が変わるため候補承認と保留済み再抽出は既存の失効規則に従います。",
+  "details": [
+    "通知planとoutbox intentは従来どおり分析結果・ジョブ遷移と同じトランザクションで保存する。遅延通知の既存保存境界は維持する。",
+    "表示と送信前の確認は同じSQLite接続を借用し、接続の作成・commit・closeを行わない。",
+    "移動した実体と送信許可・表示のソースを候補指紋とロード済みソースに含め、旧ワーカーを新実装として承認しない。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_notice.py",
+    "mcs/semantic/semantic_render.py",
+    "mcs/semantic/semantic_send_gate.py",
+    "mcs/semantic/semantic_drain.py"
+  ]
+}

@@ -1,5 +1,10 @@
 """Share pure health freshness and collection-stall observation policy."""
+import os
+
 from stats_math import finite_number as _finite_number
+
+HEALTH_REL = os.path.join("data", "health.json")
+STATUS_MAX_BYTES = 1024 * 1024
 
 DEFAULT_TICK_S = 600        # deployed cron cadence: */10 * * * *
 DEFAULT_MAX_MISSED = 2      # miss two whole ticks before 'stale'

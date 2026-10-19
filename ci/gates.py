@@ -525,11 +525,11 @@ def gate_records_isolation() -> list[str]:
 # modules stay pure transforms, and the 10-minute tick never loads them.
 # Both gates check direct imports/references only: mcs_util (imported by
 # ext_contract/c1_receiver) loads urllib.request transitively.
-_EXT_REFERENCE = re.compile(r"\b(?:ext_contract|export_schema|c1_\w+)\b")
+_EXT_REFERENCE = re.compile(r"\b(?:ext_contract|export_contract|export_delivery|export_schema|c1_\w+)\b")
 
 
 def _is_ext_module(stem: str) -> bool:
-    return stem in {"ext_contract", "export_schema"} or stem.startswith("c1_")
+    return stem in {"ext_contract", "export_contract", "export_delivery", "export_schema"} or stem.startswith("c1_")
 
 
 def gate_ext_contract_offline() -> list[str]:

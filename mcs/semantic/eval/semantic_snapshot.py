@@ -21,6 +21,7 @@ from mcs_util import payload_hash
 from semantic_candidate import candidate_fingerprint, metrics_only, strict_json
 from semantic_evaluation import EvaluationError, evaluate_records
 from semantic_holdout import holdout_payload
+import clinical_urgency
 
 
 def _private(path: str, *, output=False) -> Path:
@@ -39,7 +40,6 @@ def _private(path: str, *, output=False) -> Path:
 
 def effective_ai_priority(bundle: dict, outputs: list) -> bool | None:
     """Read the production guarded AI badge from the exact generated artifacts in memory."""
-    import structured_view
     messages = bundle['messages']
     if len(outputs) != len(messages) or any(not isinstance(row, dict) for row in outputs):
         return None
@@ -61,7 +61,7 @@ def effective_ai_priority(bundle: dict, outputs: list) -> bool | None:
             db.execute('INSERT INTO artifacts(message_id,project_id,kind,content,meta) '
                        "VALUES(?,1,'extract_llm',?,?)",
                        (index, json.dumps(output), json.dumps({'hash': digest})))
-        return any(structured_view.message_urgency_details(db, index)['source'] == 'llm'
+        return any(clinical_urgency.message_urgency_details(db, index)['source'] == 'llm'
                    for index in range(1, len(messages) + 1))
 
 
@@ -255,7 +255,7 @@ def main(argv=None) -> int:
     parser.add_argument('--adjudications')
     args = parser.parse_args(argv)
     try:
-        from safe_io import read_regular_nofollow
+        from safe_io import fdopen_owned, read_regular_nofollow
         source = strict_json(read_regular_nofollow(_private(args.input), 64 * 1024 * 1024, ValueError))
         cfg = strict_json(read_regular_nofollow(_private(args.config), 1024 * 1024, ValueError))
         output = _private(args.output, output=True)
@@ -282,7 +282,7 @@ def main(argv=None) -> int:
             result = score(source, reviewed, cfg, criteria)
         # Exclusive creation prevents overwriting any private source or evidence.
         fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, 'w') as handle:
+        with fdopen_owned(fd, 'w') as handle:
             json.dump(result, handle, ensure_ascii=False, allow_nan=False)
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
         print('sealed snapshot evaluation failed', file=sys.stderr)

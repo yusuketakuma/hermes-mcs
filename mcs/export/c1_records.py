@@ -12,7 +12,8 @@ from typing import TypeAlias, TypedDict
 import mcs_signals
 import read_model
 from c1_contract import JSONValue, MAX_BODY_BYTES, validate_record
-from export_schema import finite_number, project_record
+from export_schema import project_record
+from stats_math import finite_number
 
 JSON: TypeAlias = JSONValue
 Record: TypeAlias = dict[str, JSON]

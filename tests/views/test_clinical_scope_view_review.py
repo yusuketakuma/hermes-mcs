@@ -10,6 +10,7 @@ import mcs_signals
 import rollup
 import structured_view
 from extract_testkit import _hash, _ledger, _message
+import clinical_urgency
 
 
 @pytest.fixture
@@ -44,10 +45,10 @@ def seed(store, body, doc, *, age_days=0):
 ])
 def test_accepted_high_is_readable_without_bypassing_scope_or_denial(store, body, high):
     seed(store, body, extract_validation.validate({"urgency": "high", "urgency_evidence": [body]}, body))
-    details = structured_view.message_urgency_details(store.db, 1)
+    details = clinical_urgency.message_urgency_details(store.db, 1)
     assert details["source"] == ("llm" if high else None)
     assert details["held"] is not high
-    assert (structured_view.message_urgency(store.db, 1) == "llm") is high
+    assert (clinical_urgency.message_urgency(store.db, 1) == "llm") is high
 
 
 @pytest.mark.parametrize("body,vitals", [
@@ -59,7 +60,7 @@ def test_enabled_vital_high_policy_remains_high_at_read_time(store, body, vitals
     doc = extract_validation.validate({"urgency": "routine", "vitals": vitals}, body)
     extract_validation.apply_vital_policy(doc, body, extract_validation.vital_threshold_policy({"vital_urgency": {"mode": "high"}}))
     seed(store, body, doc)
-    assert structured_view.message_urgency_details(store.db, 1)["source"] == "llm"
+    assert clinical_urgency.message_urgency_details(store.db, 1)["source"] == "llm"
 
 
 @pytest.mark.parametrize("body,text,fields,expected", [
@@ -88,7 +89,7 @@ def test_positive_typed_patient_symptom_is_not_limited_to_lexical_cues(store, bo
     if fields.get("unverified"):
         doc["symptoms"][0]["unverified"] = True
     seed(store, body, doc)
-    assert structured_view.message_urgency_details(store.db, 1)["source"] == expected
+    assert clinical_urgency.message_urgency_details(store.db, 1)["source"] == expected
 
 
 def test_symptom_elsewhere_does_not_turn_request_only_urgency_evidence_into_clinical_high(store):
@@ -97,7 +98,7 @@ def test_symptom_elsewhere_does_not_turn_request_only_urgency_evidence_into_clin
                "evidence": "本人は胸部圧迫感があります"}
     seed(store, body, extract_validation.validate({"urgency": "high", "urgency_evidence": ["本人の記録を至急確認してください"],
                                            "symptoms": [symptom]}, body))
-    details = structured_view.message_urgency_details(store.db, 1)
+    details = clinical_urgency.message_urgency_details(store.db, 1)
     assert details["source"] is None and details["kind"] == "request"
 
 
@@ -127,3 +128,18 @@ def test_partial_bp_keeps_measured_side_without_inventing_missing_side(store):
     line = next(line for line in structured_view.structured_lines(store.db, 1) if line.startswith("バイタル:"))
     assert "BP 90" in line and "/?" in line
     assert "dbp" not in rollup.build_rollup(store.db, 1)["latest_vitals"]
+
+
+def test_urgency_uses_borrowed_uncommitted_source_without_view_or_write(store, monkeypatch):
+    import sys
+    body = "本人の現在の強い胸痛があります。"
+    seed(store, body, {"urgency": "high", "urgency_evidence": [body]})
+    monkeypatch.setitem(sys.modules, "structured_view", None)
+    store.db.execute("UPDATE messages SET body_text=? WHERE message_id=1", ("本人の胸痛はありません。",))
+    changes = store.db.total_changes
+    assert store.db.in_transaction
+    detail = clinical_urgency.message_urgency_details(store.db, 1)
+    assert detail["source"] is None and detail["held"] is True
+    assert store.db.in_transaction and store.db.total_changes == changes
+    store.db.rollback()
+    assert clinical_urgency.message_urgency(store.db, 1) == "llm"

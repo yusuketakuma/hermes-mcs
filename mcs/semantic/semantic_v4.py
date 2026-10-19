@@ -43,8 +43,6 @@ ENGINE_VERSION = 4
 KIND_V4 = "semantic_facts_v4"
 KIND_V4_STAGE = "v4_stage"
 KIND_V4_DIAG = "v4_diagnostic"
-KIND_V4_COHORT = "v4_retire_cohort"
-KIND_V4_ITEM = "v4_retire_item"
 
 STAGES = ("s0_prep", "s1_extract", "s2_fact_audit", "s3_repair",
           "s4_reaudit", "s5_projection", "s6_summary",
@@ -727,116 +725,6 @@ def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
         meta={"fingerprint": fp, "policy_fingerprint": policy,
               "engine_version": ENGINE_VERSION, "audit_status": status,
               "diagnostic": True})
-
-
-# ---------- finite conversion manifests (legacy retirement) ----------
-
-from stats_math import finite_number as _time_value  # noqa: E402 - one shared rule
-
-
-def _valid_cohort(doc) -> bool:
-    if not isinstance(doc, dict) or doc.get("contract") != "mcs-v4-cohort/1":
-        return False
-    name, items, caps = (doc.get(k) for k in ("cohort", "items", "ceilings"))
-    if not isinstance(name, str) or not name.strip() or len(name) > 128:
-        return False
-    if not isinstance(items, list) or not isinstance(caps, dict):
-        return False
-    if any(type(caps.get(k)) is not int or not 0 <= caps[k] <= 2**63 - 1
-           for k in ("items", "calls", "tokens", "retries")):
-        return False
-    if not _time_value(doc.get("expires_at")):
-        return False
-    if doc.get("retire_after_at") is not None \
-            and not _time_value(doc["retire_after_at"]):
-        return False
-    mids = set()
-    for item in items:
-        if (not isinstance(item, dict)
-                or type(item.get("message_id")) is not int
-                or item["message_id"] <= 0
-                or item["message_id"] in mids
-                or not isinstance(item.get("content_hash"), str)
-                or not item["content_hash"]):
-            return False
-        mids.add(item["message_id"])
-    return True
-
-
-def _begin(ledger):
-    # Read decisions and reservations share a write transaction. Refuse a
-    # caller-owned transaction instead of accidentally committing it.
-    if ledger.db.in_transaction:
-        raise ValueError("cohort_transaction_active")
-    ledger.db.execute("BEGIN IMMEDIATE")
-
-
-def _cohort(ledger, cohort: str) -> dict | None:
-    for r in ledger.db.execute(
-            "SELECT content FROM artifacts WHERE kind=? "
-            "ORDER BY artifact_id DESC", (KIND_V4_COHORT,)):
-        doc = loads_dict(r["content"])
-        if isinstance(doc, dict) and doc.get("cohort") == cohort:
-            return doc
-    return None
-
-
-def cohort_items_done(ledger, cohort: str) -> dict:
-    """Latest item receipts, including durable scheduling reservations."""
-    done = {}
-    for r in ledger.db.execute(
-            "SELECT content FROM artifacts WHERE kind=? "
-            "ORDER BY artifact_id", (KIND_V4_ITEM,)):
-        doc = loads_dict(r["content"])
-        if isinstance(doc, dict) and doc.get("cohort") == cohort \
-                and type(doc.get("message_id")) is int:
-            done[doc["message_id"]] = doc
-    return done
-
-
-def active_legacy_admissions(ledger, now: float | None = None) -> set:
-    """Conversion cohorts schedule v4 work and never authorize v3 inference."""
-    return set()
-
-
-def _item_receipt(ledger, cohort, mid, action, **detail):
-    source = ledger.db.execute(
-        "SELECT project_id FROM messages WHERE message_id=?", (mid,)).fetchone()
-    ledger.artifact_add_tx(
-        KIND_V4_ITEM,
-        json.dumps({**detail, "cohort": cohort, "message_id": mid,
-                    "action": action}, ensure_ascii=False, allow_nan=False),
-        project_id=source["project_id"] if source is not None else None,
-        message_id=mid if source is not None else None, meta={"cohort": cohort})
-
-
-def hold_unbounded_job(ledger, job) -> bool:
-    """Fail closed before model work when total token use cannot be bounded.
-
-    The current Jev request contract has no pre-dispatch token cap. Stored
-    numbers alone cannot enforce a lifetime token budget. Preserve the item
-    and explicit reason until a bounded adapter can satisfy that contract.
-    Ordinary semantic jobs are outside this migration-only gate.
-    """
-    from semantic_runtime import parse_payload
-    payload = parse_payload(job)
-    origin = payload.get("origin")
-    if not isinstance(origin, dict) or origin.get("source") != "v4_cohort":
-        return False
-    _begin(ledger)
-    with ledger.db:
-        from semantic_runtime import JobToken, RuntimeStale, job_matches
-        if not job_matches(ledger, JobToken.from_row(job)):
-            raise RuntimeStale("cohort_admission")
-        cohort = origin.get("cohort")
-        doc = _cohort(ledger, cohort)
-        if _valid_cohort(doc) and any(
-                it["message_id"] == job["message_id"] for it in doc["items"]):
-            prev = cohort_items_done(ledger, cohort).get(job["message_id"], {})
-            if prev.get("reason") != "token_budget_not_enforceable":
-                _item_receipt(ledger, cohort, job["message_id"],
-                              "needs_review", reason="token_budget_not_enforceable")
-    return True
 
 
 def invalidate_projections(db, scfg: dict) -> int:

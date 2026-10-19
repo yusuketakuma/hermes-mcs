@@ -13,14 +13,15 @@ import stat
 
 import drug_map
 import safe_io
-from mcs_requests import canonical, payload_hash, valid_hash, valid_uuid
+from mcs_requests import canonical, payload_hash, valid_uuid
+from mcs_util import valid_hash
 from safe_io import atomic_write, fsync_dir
 
 
 def private_json(path, limit=drug_map.MAX_BYTES):
     """Read bounded, owner-only regular JSON without following symlinks."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
+    with safe_io.fdopen_owned(fd, "rb") as stream:
         info = os.fstat(stream.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                 or info.st_mode & 0o077 or info.st_size > limit):

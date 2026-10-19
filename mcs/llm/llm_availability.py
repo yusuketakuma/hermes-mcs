@@ -60,11 +60,11 @@ def _circuit_lock(path):
     never stops the lane it protects."""
     fd = None
     try:
-        fd = os.open(f"{path}.lock", os.O_RDWR | os.O_CREAT, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-    except OSError:
-        pass
-    try:
+        try:
+            fd = os.open(f"{path}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            pass
         yield
     finally:
         if fd is not None:

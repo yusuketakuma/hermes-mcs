@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "薬剤注記の読取り契約と状態の所有者を統一",
+  "summary": "薬剤の表示・集計が参照する辞書世代と注記を、既存の薬剤処理の公開入口へ揃えました。同じスナップショット内で一度読んだ辞書世代を集計中に再利用します。",
+  "upgrade": "追加操作は不要です。辞書の承認、候補の照合、保存形式、患者範囲と表示結果は変更しません。",
+  "details": [
+    "private参照を実体の公開名へ移し、集計moduleに残っていたテストの差し替え先による実行分岐を除去します。",
+    "原文hash・最新注記・辞書の版と承認条件の検証は同じ実体で維持し、借用DBを開き直したり閉じたりしません。"
+  ],
+  "refs": [
+    "mcs/medications/drug_map.py",
+    "mcs/views/mcs_stats.py",
+    "mcs/medications/drug_timeline.py",
+    "mcs/notify/notify_views.py"
+  ]
+}

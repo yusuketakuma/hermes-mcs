@@ -6,7 +6,7 @@ import re
 from pharmacy_cues import CUE_CLASSES
 
 
-from stats_math import finite_number  # noqa: E402,F401 - one shared rule, re-exported for callers
+from stats_math import finite_number
 
 
 # Explicit diagnostics for familiar raw-content keys. The exhaustive
@@ -161,7 +161,7 @@ _STATS.update({
     "request_loop_state": {"reason": _AUDIT_REASON, "rows": _items({**_AUDIT_CLASS,
         **_counts("open", "resolution_candidate", "closed", "stale", "evaluation_unavailable")})},
 })
-_BASE = {"type": _token, "contract": _enum("mcs-read-model/1"),
+RECORD_HEADER_SCHEMA = {"type": _token, "contract": _enum("mcs-read-model/1"),
          "snapshot_generation_id": _token, "content_omitted": _BOOL}
 _FACT = {"fact_id": _token, "kind": _enum(*FACT_KINDS),
          "validation_status": _enum("verified", "unverified", "rejected", "unknown"),
@@ -224,7 +224,7 @@ def project_record(record: dict) -> dict:
         schema = _SCHEMAS[kind]
     else:
         raise ValueError("record_type_unknown")
-    result = _select(record, {**_BASE, **schema})
+    result = _select(record, {**RECORD_HEADER_SCHEMA, **schema})
     for key in ("type", "contract", "snapshot_generation_id"):
         if result.get(key) is None:
             raise ValueError("record_provenance_missing")

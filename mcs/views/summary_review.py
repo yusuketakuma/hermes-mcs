@@ -12,7 +12,8 @@ import difflib
 import json
 import sqlite3
 
-from mcs_requests import parse_command, payload_hash, positive, valid_hash, validate
+from mcs_requests import parse_command, payload_hash, positive, validate
+from mcs_util import valid_hash
 
 
 def _json_object(value, code: str) -> dict:

@@ -38,7 +38,6 @@ from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S,
                          med_capability_evidence,
                          med_is_patient_current, med_period_artifacts,
                          item_unverified, transition_cooccurrences)
-from structured_view import message_urgency
 from clinical_values import patient_item_scope
 
 from mcs_util import loads_dict
@@ -48,6 +47,7 @@ from signal_policy import (
     approved_policy,
     resolved_thresholds,
 )
+import clinical_urgency
 
 ARTIFACT_KIND = "signal_v1"
 FEEDBACK_KIND = "signal_feedback_v1"
@@ -1274,7 +1274,7 @@ def _urgency_high(db, sig):
     """True when the signal's primary evidence message carries a
     high-urgency extraction — escalates a digest-tier signal to
     immediate delivery. Same reading as the cards and text notices
-    (structured_view.message_urgency): either extractor kind (rule
+    (clinical_urgency.message_urgency): either extractor kind (rule
     extract_v1 or extract_llm) can carry the flag."""
     ev = sig.get("evidence") or {}
     mids = ev.get("message_ids")
@@ -1282,7 +1282,7 @@ def _urgency_high(db, sig):
            or ev.get("message_id") or ev.get("discharge_message_id"))
     if type(mid) is not int:
         return False
-    return message_urgency(db, mid) is not None
+    return clinical_urgency.message_urgency(db, mid) is not None
 
 
 def _digest_text(n):

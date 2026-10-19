@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "測定値の原文・対象者・時点の確認を一元化",
+  "summary": "測定値や要約の対象者・時点を確認する処理を、原文に基づく臨床値の実装へ集約しました。本人以外の測定、過去・条件付きの値、未確認の根拠を扱う条件は変わりません。",
+  "upgrade": "追加操作は不要です。抽出世代、数値の丸め、閾値、機能の既定off、要約・修復・公開条件は変更しません。",
+  "details": [
+    "測定値の閾値判定に使う原文の適格性と、要約が現在値を偽らないための純粋な判断を既存clinical_valuesへ集約する。設定解釈と項目ごとの不採用理由・会計は検証側に保持する。",
+    "既存の測定値ガードと数値文法を実体の公開入口へ統一し、旧private転送入口は残さない。"
+  ],
+  "refs": [
+    "mcs/extract/clinical/clinical_values.py",
+    "mcs/extract/llm/extract_validation.py",
+    "mcs/extract/llm/extract_quality.py"
+  ]
+}

@@ -26,6 +26,8 @@ from notify_testkit import (
     CFG, NOW, ORIGIN, _add_request, _at, _click, _deliver, _delivered_card, _dispatch,
     _intent, _latest_render, _llm_extract, _msg, _patient, _seed_thread,
     _signal_row, _spec, led, pinned_clock)
+import clinical_urgency
+import mcs_queries
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
@@ -750,7 +752,6 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
 # ---------- urgency badge -------------------------------------------------
 
 def test_urgency_badge_names_its_source(led):
-    import structured_view
     _seed_thread(led, mids=(100, 101, 102))
     led.db.execute("UPDATE messages SET body_text='本人が急変につき至急ご連絡ください。' WHERE message_id IN (100,101)")
     _llm_extract(led, 100, {"urgency": "high", "summary": "至急",
@@ -761,9 +762,9 @@ def test_urgency_badge_names_its_source(led):
         "meta,created_at) VALUES('extract_v1',1,101,?,'rules',?,?)",
         (json.dumps({"urgency": "high"}), json.dumps({"hash": h}), NOW))
     led.db.commit()
-    assert structured_view.message_urgency(led.db, 100) == "llm"
-    assert structured_view.message_urgency(led.db, 101) == "rule"
-    assert structured_view.message_urgency(led.db, 102) is None
+    assert clinical_urgency.message_urgency(led.db, 100) == "llm"
+    assert clinical_urgency.message_urgency(led.db, 101) == "rule"
+    assert clinical_urgency.message_urgency(led.db, 102) is None
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101, 102]}))
     texts = [c["text"] for c in _spec(led)["parts"]["containers"]
              if c["type"] == "text"]
@@ -777,7 +778,6 @@ def test_urgency_reads_the_same_artifact_as_the_body(led):
     """A current v4 read-model row carries no urgency of its own — the
     badge then reads the hash-current extract_llm verdict behind it; an
     urgency recorded on the v4 row itself still wins."""
-    import structured_view
     _seed_thread(led, mids=(100,))
     led.db.execute("UPDATE messages SET body_text='本人が急変につき至急ご連絡ください。' WHERE message_id=100")
     _llm_extract(led, 100, {"urgency": "high", "summary": "旧",
@@ -789,13 +789,13 @@ def test_urgency_reads_the_same_artifact_as_the_body(led):
          json.dumps({"hash": f"{100:064x}", "engine_version": 4,
                      "projection_version": PROJECTION_VERSION}), NOW))
     led.db.commit()
-    assert structured_view.latest_fact_artifact(led.db, 100)["summary"] \
+    assert mcs_queries.current_message_facts(led.db, 100)["summary"] \
         == "新"
-    assert structured_view.message_urgency(led.db, 100) == "llm"
+    assert clinical_urgency.message_urgency(led.db, 100) == "llm"
     led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
                    (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変につき至急ご連絡ください。"]}), v4.lastrowid))
     led.db.commit()
-    assert structured_view.message_urgency(led.db, 100) == "llm"
+    assert clinical_urgency.message_urgency(led.db, 100) == "llm"
 
 
 def test_summary_karte_summary_line_without_rollup_reads_artifact(led):

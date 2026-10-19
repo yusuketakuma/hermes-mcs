@@ -4,7 +4,6 @@ import json
 import re
 
 import clinical_values
-import extract
 import extract_schema
 import extract_validation
 from mcs_queries import med_is_patient_current
@@ -148,7 +147,7 @@ def completeness_issues(v, hints, body):
     for key, value in clinical_values.patient_current_vitals(hints.get("vitals") or {}, body).items():
         if key not in (v.get("vitals") or {}) and any(
                 float(match[0].replace("．", ".")) == value and _current_cue(body, match[0])
-                for match in re.finditer(clinical_values._BP_NUM, body)):
+                for match in re.finditer(clinical_values.VITAL_NUMBER_TOKEN, body)):
             issues.append(f"本文の測定候補 {key}={value} が未収載です。原文で再確認してください")
     names = {med.get("name") for med in v.get("meds") or []
              if med_is_patient_current(med) and clinical_values.patient_item_scope(
@@ -924,7 +923,7 @@ def _neutral_med_grounded(med, body):
             not isinstance(med["dose"], str) or not any(
                 match[1] == med["name"] and match[2] + match[3] == med["dose"].replace(" ", "")
                 and not re.match(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９/／]", quote[match.end():])
-                for match in extract._MED_TOKEN.finditer(quote))):
+                for match in extract_schema.MEDICATION_TOKEN.finditer(quote))):
         return False
     return not (isinstance(med.get("freq"), str) and med["freq"] and not re.search(
         r"(?<![0-9])" + re.escape(med["freq"]) + r"(?![0-9])", quote))

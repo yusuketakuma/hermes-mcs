@@ -1,28 +1,31 @@
 """Synthetic receipt handoff, terminal outcomes and aggregate schema drift."""
+
+import c1_envelopes
+import export_contract
+import export_delivery
+import export_schema
 import json
 from pathlib import Path
 
 import pytest
 
-import export_schema
-import ext_contract as ext
 from test_ext_contract import NOW, _auth, _records
 
 
 @pytest.fixture(autouse=True)
 def fixed_clock(monkeypatch):
-    monkeypatch.setattr(ext.time, "time", lambda: NOW)
+    monkeypatch.setattr(export_delivery.time, "time", lambda: NOW)
 
 
-def _setup(tmp_path, sink_type=ext.HandoffSink):
+def _setup(tmp_path, sink_type=export_delivery.HandoffSink):
     auth_path = _auth(tmp_path)
-    envelope = ext.build_envelope(_records(), ext.load_authorization(auth_path), NOW - 10)
-    return (envelope, ext.GovernedExporter(tmp_path / "state"),
+    envelope = export_contract.build_envelope(_records(), export_delivery.load_authorization(auth_path), NOW - 10)
+    return (envelope, export_delivery.GovernedExporter(tmp_path / "state"),
             sink_type(tmp_path / "sink"), auth_path)
 
 
 def _rejected(envelope, **over):
-    receipt = {"contract": ext.RECEIPT_CONTRACT, "kind": "receive",
+    receipt = {"contract": c1_envelopes.RECEIPT_CONTRACT, "kind": "receive",
                "status": "rejected", "envelope_id": envelope["envelope_id"],
                "records_sha256": envelope["records_sha256"],
                "reasons": ["record_field_not_exportable"], "rejected_at": NOW}
@@ -36,14 +39,14 @@ def _receipt_file(tmp_path, receipt):
 
 
 def test_reference_receiver_emits_explicit_status_and_delete_receipt(tmp_path):
-    envelope, exporter, sink, auth_path = _setup(tmp_path, ext.LocalSink)
+    envelope, exporter, sink, auth_path = _setup(tmp_path, export_delivery.LocalSink)
     assert exporter.deliver(envelope, sink, auth_path=auth_path)["status"] == "acked"
-    ack = ext.parse_receipt(sink.ack(envelope["envelope_id"]))
+    ack = export_contract.parse_receipt(sink.ack(envelope["envelope_id"]))
     assert ack["contract"] == "mcs-ext-receipt/1"
     assert ack["status"] == "accepted"
     assert ack["accepted"] == {"meta": 1, "coverage": 1, "stat": 1, "message": 1}
     assert exporter.withdraw(envelope["envelope_id"], sink)["status"] == "withdrawn"
-    receipt = ext.parse_receipt(
+    receipt = export_contract.parse_receipt(
         (sink.root / "deletions" / f'{envelope["envelope_id"]}.json').read_bytes())
     assert receipt["kind"] == "delete" and receipt["deleted"] is True
 
@@ -58,11 +61,11 @@ def test_reference_receiver_emits_explicit_status_and_delete_receipt(tmp_path):
 def test_receipt_parser_fails_closed_and_never_acks_invalid_receipt(tmp_path, over):
     envelope, exporter, sink, auth_path = _setup(tmp_path)
     assert exporter.deliver(envelope, sink, auth_path=auth_path)["status"] == "held"
-    receiver = ext.LocalSink(tmp_path / "receiver")
+    receiver = export_delivery.LocalSink(tmp_path / "receiver")
     receiver.receive(envelope)
     bad = {**receiver.ack(envelope["envelope_id"]), **over}
-    with pytest.raises(ext.ContractError):
-        ext.parse_receipt(bad)
+    with pytest.raises(export_contract.ContractError):
+        export_contract.parse_receipt(bad)
     assert not exporter._valid_ack(bad, exporter._journal(envelope["envelope_id"]))
 
 
@@ -72,20 +75,20 @@ def test_receipt_parser_fails_closed_and_never_acks_invalid_receipt(tmp_path, ov
 ])
 def test_rejected_reason_codes_are_bounded_not_free_text(tmp_path, reasons):
     envelope, _, _, _ = _setup(tmp_path)
-    with pytest.raises(ext.ContractError, match="receipt_reasons_invalid"):
-        ext.parse_receipt(_rejected(envelope, reasons=reasons))
+    with pytest.raises(export_contract.ContractError, match="receipt_reasons_invalid"):
+        export_contract.parse_receipt(_rejected(envelope, reasons=reasons))
 
 
 def test_receipt_byte_limit_and_whole_bundle_validation(tmp_path):
     envelope, exporter, sink, auth_path = _setup(tmp_path)
     exporter.deliver(envelope, sink, auth_path=auth_path)
     raw = json.dumps(_rejected(envelope)).encode()
-    assert ext.parse_receipt(raw + b" " * (ext.RECEIPT_MAX_BYTES - len(raw)))
-    with pytest.raises(ext.ContractError, match="receipt_too_large"):
-        ext.parse_receipt(raw + b" " * (ext.RECEIPT_MAX_BYTES + 1 - len(raw)))
+    assert export_contract.parse_receipt(raw + b" " * (export_contract.RECEIPT_MAX_BYTES - len(raw)))
+    with pytest.raises(export_contract.ContractError, match="receipt_too_large"):
+        export_contract.parse_receipt(raw + b" " * (export_contract.RECEIPT_MAX_BYTES + 1 - len(raw)))
     bundle = tmp_path / "receipts.ndjson"
     bundle.write_text(json.dumps(_rejected(envelope)) + '\n{"future":true}\n')
-    with pytest.raises(ext.ContractError):
+    with pytest.raises(export_contract.ContractError):
         exporter.import_receipts(bundle, sink)
     assert not (sink.root / "acks").exists()
     assert exporter._journal(envelope["envelope_id"])["status"] == "sent"
@@ -93,12 +96,12 @@ def test_receipt_byte_limit_and_whole_bundle_validation(tmp_path):
 
 def test_versioned_accepted_receipt_requires_per_type_counts(tmp_path):
     envelope, _, _, _ = _setup(tmp_path)
-    receiver = ext.LocalSink(tmp_path / "receiver")
+    receiver = export_delivery.LocalSink(tmp_path / "receiver")
     receiver.receive(envelope)
     receipt = receiver.ack(envelope["envelope_id"])
     receipt.pop("accepted")
-    with pytest.raises(ext.ContractError, match="receipt_fields_invalid"):
-        ext.parse_receipt(receipt)
+    with pytest.raises(export_contract.ContractError, match="receipt_fields_invalid"):
+        export_contract.parse_receipt(receipt)
 
 
 @pytest.mark.parametrize("with_hash", [True, False])
@@ -112,7 +115,7 @@ def test_rejected_is_terminal_and_cannot_be_changed_to_accepted(tmp_path, with_h
         == "rejected"
     assert not sink.has(envelope["envelope_id"])
     assert exporter.deliver(envelope, sink, auth_path=auth_path)["status"] == "rejected"
-    receiver = ext.LocalSink(tmp_path / "receiver")
+    receiver = export_delivery.LocalSink(tmp_path / "receiver")
     receiver.receive(envelope)
     assert exporter.import_receipts(
         _receipt_file(tmp_path, receiver.ack(envelope["envelope_id"])), sink
@@ -123,13 +126,13 @@ def test_rejected_is_terminal_and_cannot_be_changed_to_accepted(tmp_path, with_h
 
 
 def test_receiver_rejection_at_dispatch_is_not_delivery_success(tmp_path):
-    class RejectingReceiver(ext.LocalSink):
+    class RejectingReceiver(export_delivery.LocalSink):
         calls = 0
 
         def receive(self, envelope):
             self.calls += 1
-            ext._validate_envelope(envelope)
-            ext._write_json(self.root / "acks" / f'{envelope["envelope_id"]}.json',
+            export_contract.validate_export_envelope(envelope)
+            export_delivery._write_json(self.root / "acks" / f'{envelope["envelope_id"]}.json',
                             _rejected(envelope))
             return envelope["envelope_id"]
 
@@ -149,14 +152,14 @@ def test_mismatched_receipt_or_sink_binding_stays_unresolved(tmp_path):
     result = exporter.import_receipts(_receipt_file(tmp_path, mismatch), sink)[0]
     assert result["status"] == "held" and result["reason"] == "receipt_mismatch"
     assert sink.has(envelope["envelope_id"])
-    with pytest.raises(ext.ContractError, match="receipt_journal_mismatch"):
+    with pytest.raises(export_contract.ContractError, match="receipt_journal_mismatch"):
         exporter.import_receipts(_receipt_file(tmp_path, _rejected(envelope)),
-                                 ext.HandoffSink(tmp_path / "other"))
+                                 export_delivery.HandoffSink(tmp_path / "other"))
     assert exporter._journal(envelope["envelope_id"])["status"] == "sent"
 
 
 def test_old_ack_and_bound_unversioned_journal_reconcile_without_upgrade(tmp_path):
-    envelope, exporter, sink, auth_path = _setup(tmp_path, ext.LocalSink)
+    envelope, exporter, sink, auth_path = _setup(tmp_path, export_delivery.LocalSink)
     sink.drop_ack = True
     exporter.deliver(envelope, sink, auth_path=auth_path)
     eid = envelope["envelope_id"]
@@ -174,8 +177,8 @@ def test_old_ack_and_bound_unversioned_journal_reconcile_without_upgrade(tmp_pat
     assert exporter.import_receipts(
         _receipt_file(tmp_path, {"envelope_id": eid, "deleted_at": NOW}), sink
     )[0]["status"] == "withdrawn"
-    with pytest.raises(ext.ContractError):
-        ext.parse_receipt({**ack, "status": "rejected"})
+    with pytest.raises(export_contract.ContractError):
+        export_contract.parse_receipt({**ack, "status": "rejected"})
 
 
 def test_old_unbound_journal_never_synthesizes_identity_or_resends(tmp_path):
@@ -185,7 +188,7 @@ def test_old_unbound_journal_never_synthesizes_identity_or_resends(tmp_path):
     journal_path = exporter.dir / "journal" / f"{eid}.json"
     journal_path.write_text(json.dumps(old))
     assert exporter.deliver(envelope, sink, auth_path=auth_path)["status"] == "refused"
-    with pytest.raises(ext.ContractError, match="sink_binding_mismatch"):
+    with pytest.raises(export_contract.ContractError, match="sink_binding_mismatch"):
         exporter.reconcile(eid, sink)
     assert json.loads(journal_path.read_text()) == old
     assert not sink.has(eid)
@@ -204,12 +207,12 @@ def test_real_synthetic_export_handoff_receive_delete_round_trip(tmp_path):
     brain_export.run(tmp_path / "export", Path(snapshot))
     records = [json.loads(line) for line in
                (tmp_path / "export" / "export.jsonl").read_text().splitlines()]
-    auth_path = _auth(tmp_path, fields=list(ext.RECORD_TYPES))
+    auth_path = _auth(tmp_path, fields=list(export_schema.RECORD_TYPES))
     generated_at = next(r["snapshot"]["generated_at"] for r in records if r["type"] == "meta")
-    envelope = ext.build_envelope(records, ext.load_authorization(auth_path), generated_at)
-    exporter = ext.GovernedExporter(tmp_path / "state")
-    outbox = ext.HandoffSink(tmp_path / "outbox")
-    receiver = ext.LocalSink(tmp_path / "receiver")
+    envelope = export_contract.build_envelope(records, export_delivery.load_authorization(auth_path), generated_at)
+    exporter = export_delivery.GovernedExporter(tmp_path / "state")
+    outbox = export_delivery.HandoffSink(tmp_path / "outbox")
+    receiver = export_delivery.LocalSink(tmp_path / "receiver")
     eid = envelope["envelope_id"]
     assert exporter.deliver(envelope, outbox, auth_path=auth_path)["status"] == "held"
     assert outbox.root.stat().st_mode & 0o777 == 0o700
@@ -226,7 +229,7 @@ def test_real_synthetic_export_handoff_receive_delete_round_trip(tmp_path):
     assert not outbox.has(eid) and receiver.has(eid)
     assert exporter.withdraw(eid, outbox)["status"] == "delete_held"
     assert exporter.withdraw(eid, outbox)["status"] == "delete_held"
-    failed = {"contract": ext.RECEIPT_CONTRACT, "kind": "delete",
+    failed = {"contract": c1_envelopes.RECEIPT_CONTRACT, "kind": "delete",
               "envelope_id": eid, "deleted": False, "deleted_at": NOW}
     assert exporter.import_receipts(_receipt_file(tmp_path, failed), outbox)[0]["status"] \
         == "delete_held"

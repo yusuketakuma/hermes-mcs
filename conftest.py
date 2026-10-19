@@ -11,6 +11,7 @@ narratives (mcs + hermes_plugin + fake clients only — e.g.
 `test_mcs_recovery_narrative.py`) run without the hermes checkout.
 New gateway-bound tests MUST keep the `test_hermes_*` prefix.
 """
+import errno
 import faulthandler
 import importlib.util
 import json
@@ -43,7 +44,16 @@ def _test_timeout():
 def pytest_configure(config):
     global _hang_stderr
     if _hang_stderr is None and _test_timeout():
-        _hang_stderr = os.fdopen(os.dup(2), "w")
+        duplicate = os.dup(2)
+        try:
+            _hang_stderr = os.fdopen(duplicate, "w")
+        except BaseException:
+            try:
+                os.close(duplicate)
+            except OSError as cleanup_error:
+                if cleanup_error.errno != errno.EBADF:
+                    raise
+            raise
 
 
 def pytest_unconfigure(config):

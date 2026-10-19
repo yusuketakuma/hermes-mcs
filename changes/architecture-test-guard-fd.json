@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "検証入口のエラー時に専用出力FDを回収",
+  "summary": "テストの停止監視で専用出力streamの作成に失敗した場合も、複製したFDを回収するよう整理しました。元の標準エラー出力は閉じず、テストの期限と監視条件を維持します。",
+  "upgrade": "利用者側の設定変更は不要です。収集・解析・通知・承認・更新の実行条件は変更しません。",
+  "details": [
+    "testbootstrapはruntime moduleを読み込まず、stdlibだけで所有する複製FDの受渡しを保護します。既存timer/hookの動作を維持し、constructor失敗・取消・ライブラリ側が先に閉じた場合を合成AST抽出試験で確認します。"
+  ],
+  "refs": [
+    "conftest.py",
+    "tests/meta/test_root_guard_fd_transfer.py"
+  ]
+}

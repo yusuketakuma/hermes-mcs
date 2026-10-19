@@ -11,6 +11,7 @@ import notify_digest
 import notify_flush
 from notify_testkit import _at, _msg, _patient, _signal_row, led
 from semantic_send_gate import StaleSend
+import clinical_urgency
 
 __all__ = ["led"]
 
@@ -195,7 +196,7 @@ def test_ai_urgency_row_is_marked_at_least_as_strongly_as_rule(led, monkeypatch)
     _patient(led, 1, name="患者A")
     _seen(led, 100, T - 3600)
     _seen(led, 101, T - 60)
-    monkeypatch.setattr(structured_view, "message_urgency",
+    monkeypatch.setattr(clinical_urgency, 'message_urgency',
                         lambda db, m: {100: "llm", 101: "rule"}.get(m))
     monkeypatch.setattr(structured_view, "urgency_qc_suffix", lambda db, m: "")
     notify_digest.maybe_enqueue(led, ON, now=T)

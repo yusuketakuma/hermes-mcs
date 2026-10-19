@@ -17,6 +17,7 @@
 定期監視では対応不要の場合は何も表示せず、終了コード 0 で終わります。
 問題を調べるときは、まず --status と復旧結果の記録を確認してください。
 """
+import errno
 import fcntl
 import glob
 import hashlib
@@ -242,7 +243,7 @@ def _local_changes_outside(prev, target):
             if not stat.S_ISREG(before.st_mode):
                 raise ValueError("non-file at tracked path")
             fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd, "rb") as stream:
+            with _fdopen_owned(fd, "rb") as stream:
                 opened = os.fstat(stream.fileno())
                 if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
                     raise ValueError("file changed during inspection")
@@ -325,6 +326,19 @@ def _read_local_json(path, maximum=None, private=False):
         os.close(fd)
 
 
+def _fdopen_owned(fd, mode, **stream_kwargs):
+    """Adopt an owned FD, closing it if stream construction fails."""
+    try:
+        return os.fdopen(fd, mode, closefd=True, **stream_kwargs)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            if cleanup_error.errno != errno.EBADF:
+                raise
+        raise
+
+
 def _atomic_json(path, value, prefix, suffix=".tmp", **dump_kw):
     """Publish JSON durably: private mkstemp, fsync, replace, dir fsync.
     Raises after removing the temporary file; callers keep their own error
@@ -332,7 +346,7 @@ def _atomic_json(path, value, prefix, suffix=".tmp", **dump_kw):
     directory = os.path.dirname(path)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=prefix, suffix=suffix)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with _fdopen_owned(fd, "w", encoding="utf-8") as handle:
             json.dump(value, handle, **dump_kw)
             handle.flush()
             os.fsync(handle.fileno())
@@ -784,8 +798,9 @@ def _gateway_restart_run(data, agents, uid):
 # Freeze the independent implementation before an updater changes checkout.
 # No repo imports are needed after the parent exits or rolls the tree back.
 _GATEWAY_RESTART_PROGRAM = (
-    "import os,sys,json,re,stat,tempfile,time,subprocess\nfrom pathlib import Path\n"
+    "import errno,os,sys,json,re,stat,tempfile,time,subprocess\nfrom pathlib import Path\n"
     "from contextlib import suppress\n" + inspect.getsource(_read_local_json)
+    + "\n" + inspect.getsource(_fdopen_owned)
     + "\n" + inspect.getsource(_atomic_json)
     + "\n" + inspect.getsource(_gateway_restart_report)
     + "\n" + inspect.getsource(_gateway_restart_run)
@@ -1351,7 +1366,7 @@ def _replace_database(backup_path, expected_sha, before_replace):
            "ino": created.st_ino, "uid": created.st_uid}
     journaled = False
     try:
-        with os.fdopen(fd, "wb") as dst:
+        with _fdopen_owned(fd, "wb") as dst:
             state = _load_state()
             applying, _ = _staging_record(state)
             applying["restore_staging"] = own

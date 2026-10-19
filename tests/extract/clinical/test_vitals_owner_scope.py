@@ -21,7 +21,7 @@ OTHER_PERSON = [
 
 @pytest.mark.parametrize("body,vitals", OTHER_PERSON)
 def test_another_persons_vital_is_dropped_by_writer_and_reader(body, vitals):
-    assert clinical_values._vitals_guard(body, dict(vitals)) == {}
+    assert clinical_values.grounded_vitals(body, dict(vitals)) == {}
     assert clinical_values.patient_vitals(dict(vitals), body) == {}
     assert clinical_values.patient_current_vitals(dict(vitals), body) == {}
 
@@ -34,13 +34,13 @@ def test_another_persons_vital_is_dropped_by_writer_and_reader(body, vitals):
     ("SpO2 95% 酸素2L", {"spo2": 95}),
 ])
 def test_the_patients_own_vital_is_kept_by_the_writer(body, vitals):
-    assert clinical_values._vitals_guard(body, dict(vitals)) == vitals
+    assert clinical_values.grounded_vitals(body, dict(vitals)) == vitals
 
 
 @pytest.mark.parametrize("body", ["酸素2L投与中", "酸素 3リットルで経過観察", "酸素2ℓ"])
 def test_an_oxygen_flow_is_not_a_saturation_reading(body):
     value = int(next(c for c in body if c.isdigit()))
-    assert clinical_values._vitals_guard(body, {"spo2": value}) == {}
+    assert clinical_values.grounded_vitals(body, {"spo2": value}) == {}
     assert clinical_values.patient_current_vitals({"spo2": value}, body) == {}
     assert clinical_values.patient_vitals({"spo2": value}, body) == {}
 
@@ -54,7 +54,7 @@ def test_an_oxygen_flow_is_not_a_saturation_reading(body):
     ("妻65歳、本人P72", {"hr": 72}),
 ])
 def test_words_containing_a_family_kanji_and_counts_keep_the_patients_value(body, vitals):
-    assert clinical_values._vitals_guard(body, dict(vitals)) == vitals
+    assert clinical_values.grounded_vitals(body, dict(vitals)) == vitals
 
 
 def test_a_family_value_saved_before_the_fix_leaves_existing_rollups(tmp_path):
@@ -95,20 +95,20 @@ def test_a_family_value_saved_before_the_fix_leaves_existing_rollups(tmp_path):
 
 @pytest.mark.parametrize("body", ["SpO2 95% 酸素2L", "spo2 95% 酸素2L", "SpO2 95%"])
 def test_the_digit_in_a_saturation_label_is_not_a_measurement(body):
-    assert clinical_values._vitals_guard(body, {"spo2": 2}) == {}
+    assert clinical_values.grounded_vitals(body, {"spo2": 2}) == {}
     assert clinical_values.patient_current_vitals({"spo2": 2}, body) == {}
-    assert clinical_values._vitals_guard(body, {"spo2": 95}) == {"spo2": 95}
+    assert clinical_values.grounded_vitals(body, {"spo2": 95}) == {"spo2": 95}
     assert clinical_values.patient_current_vitals({"spo2": 95}, body) == {"spo2": 95}
 
 
 def test_a_real_reading_equal_to_the_label_digit_is_preserved():
     body = "SpO2 2% 酸素2L"
-    assert clinical_values._vitals_guard(body, {"spo2": 2}) == {"spo2": 2}
+    assert clinical_values.grounded_vitals(body, {"spo2": 2}) == {"spo2": 2}
     assert clinical_values.patient_current_vitals({"spo2": 2}, body) == {"spo2": 2}
 
 
 @pytest.mark.parametrize("count", ["2名", "2人", "2回目", "2歳", "2日"])
 def test_non_measurement_counts_do_not_resurrect_an_oxygen_flow(count):
     body = "酸素2L投与中、" + count + "で訪問"
-    assert clinical_values._vitals_guard(body, {"spo2": 2}) == {}
+    assert clinical_values.grounded_vitals(body, {"spo2": 2}) == {}
     assert clinical_values.patient_current_vitals({"spo2": 2}, body) == {}

@@ -1,4 +1,7 @@
 """Synthetic withdraw directives, reference-receiver CLI and sender classification."""
+
+import export_contract
+import export_delivery
 import mcs_util
 
 import json
@@ -31,7 +34,7 @@ def _bundle(path):
 @pytest.fixture
 def staged(tmp_path, monkeypatch, capsys):
     """A split /2 handoff of synthetic records with a fixed clock."""
-    monkeypatch.setattr(ext.time, "time", lambda: 1030)
+    monkeypatch.setattr(export_delivery.time, "time", lambda: 1030)
     auth = _auth(tmp_path, fields=list(C1_FIELDS), expires_at=2000, created_at=1000,
                  max_snapshot_age_s=3600)
     source = tmp_path / "records.jsonl"
@@ -89,7 +92,7 @@ def test_receive_without_input_expires_payloads_and_keeps_receipts(
     receiver = ReferenceReceiver(root, source_label="s")
     before = receiver.ack(eids[0])
     entry = json.loads((receiver.root / "state.json").read_text())["envelopes"][eids[0]]
-    monkeypatch.setattr(ext.time, "time", lambda: entry["expires_at"])
+    monkeypatch.setattr(export_delivery.time, "time", lambda: entry["expires_at"])
     code, out = _cli(capsys, ["receive", "--receiver-root", str(root), "--source-label", "s"])
     assert code == 0 and out["expired"] == 3
     assert out["receiver"]["counts"]["payloads"] == 0
@@ -302,8 +305,8 @@ def test_generation_withdraw_and_reconcile_all_ignore_health_entry_cap(
     state, sink, eids = staged
     for i in range(1001):  # non-envelope names still count toward the health bound
         (state / "journal" / f"pad{i:04d}.tmp").write_text("{}")
-    with pytest.raises(ext.ContractError) as e:
-        list(ext._journal_paths(state, 1000))
+    with pytest.raises(export_contract.ContractError) as e:
+        list(export_delivery.journal_paths(state, 1000))
     assert str(e.value) == "journal_entry_limit"
     code, out = _cli(capsys, ["withdraw", "--state", str(state), "--sink", str(sink),
                               "--generation", "gen-envelope-synth"])
@@ -326,7 +329,7 @@ def test_generation_withdraw_and_health_under_symlinked_parent(staged, capsys): 
     _, out = _cli(capsys, ["reconcile", "--state", str(via_link), "--sink", str(sink),
                            "--all"])
     assert len(out["results"]) == 3
-    assert "journal_directory_invalid" not in ext.health(via_link)["reasons"]
+    assert "journal_directory_invalid" not in export_delivery.health(via_link)["reasons"]
 
 
 def test_symlinked_journal_directory_still_refused(tmp_path):
@@ -335,8 +338,8 @@ def test_symlinked_journal_directory_still_refused(tmp_path):
     state = tmp_path / "state"
     state.mkdir()
     (state / "journal").symlink_to(real, target_is_directory=True)
-    with pytest.raises(ext.ContractError) as e:
-        list(ext._journal_paths(state))
+    with pytest.raises(export_contract.ContractError) as e:
+        list(export_delivery.journal_paths(state))
     assert str(e.value) == "journal_directory_invalid"
 
 
@@ -344,8 +347,8 @@ def test_symlinked_journal_directory_still_refused(tmp_path):
 def test_reconcile_all_skips_refused_entry(tmp_path, authorization, capsys):  # noqa: F811
     a, = _build(_records((10,)), now=1030.0)
     b, = _build(_records((20,)), now=1030.0)
-    sink = ext.HandoffSink(tmp_path / "sink")
-    ex = ext.GovernedExporter(tmp_path / "state")
+    sink = export_delivery.HandoffSink(tmp_path / "sink")
+    ex = export_delivery.GovernedExporter(tmp_path / "state")
     assert ex.deliver(a, sink, auth_path=authorization)["status"] == "held"
     raw = json.loads(authorization.read_text())
     raw["revoked"] = True
@@ -379,7 +382,7 @@ def test_receive_skips_legacy_receipt_in_outbox(staged, tmp_path, capsys):  # no
 
 @pytest.mark.parametrize("line", ['{"type":"meta","snapshot":null}', '[]'])
 def test_malformed_records_refused(tmp_path, monkeypatch, capsys, line):
-    monkeypatch.setattr(ext.time, "time", lambda: NOW)
+    monkeypatch.setattr(export_delivery.time, "time", lambda: NOW)
     f = tmp_path / "f.jsonl"
     f.write_text(line + "\n")
     code = ext.main(["deliver", "--auth", str(_auth(tmp_path)), "--state", str(tmp_path / "s"),

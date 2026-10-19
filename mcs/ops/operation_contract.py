@@ -5,7 +5,8 @@ import os
 import re
 
 from mcs_util import valid_text
-from mcs_requests import positive, release_tag, valid_hash
+from mcs_util import positive, valid_hash
+from update_policy import release_tag
 
 REFSTAT_APPROVAL_KIND = "refstat_approval_v1"
 _NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")

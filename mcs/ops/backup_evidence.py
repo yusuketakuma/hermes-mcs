@@ -26,7 +26,7 @@ from ledger import SCHEMA_VERSION, valid_mcs_db
 from ledger_schema import static_contract_ok
 from maintenance import MaintenanceError
 from mcs_queries import REPLY_GAP
-from export_schema import finite_number
+from stats_math import finite_number
 from safe_io import atomic_write, fdopen_owned
 from mcs_util import has_sqlite_sidecars
 

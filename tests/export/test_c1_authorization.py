@@ -1,24 +1,26 @@
 """Synthetic explicit C1 grants preserve all legacy authorization boundaries."""
 
+import export_contract
+import export_delivery
+
 import json
 
 import pytest
 
 from c1_contract import C1_FIELDS, C1ContractError, validate_record as validate_c1_record
-import ext_contract as ext
 from test_c1_contract import _body, _message
 from test_ext_contract import NOW, _auth, _records
 
 
 def test_explicit_c1_grant_still_cannot_enter_legacy_envelope(tmp_path):
     path = _auth(tmp_path, fields=list(C1_FIELDS), max_snapshot_age_s=3600)
-    authorization = ext.load_authorization(path, NOW, c1=True)
+    authorization = export_delivery.load_authorization(path, NOW, c1=True)
     assert authorization["fields"] == list(C1_FIELDS)
     assert authorization["confirm_human"] is True
-    with pytest.raises(ext.ContractError, match="auth_field_not_exportable"):
-        ext.load_authorization(path, NOW)
-    with pytest.raises(ext.ContractError, match="auth_field_not_exportable"):
-        ext.build_envelope(_records(), authorization, NOW - 10, now=NOW)
+    with pytest.raises(export_contract.ContractError, match="auth_field_not_exportable"):
+        export_delivery.load_authorization(path, NOW)
+    with pytest.raises(export_contract.ContractError, match="auth_field_not_exportable"):
+        export_contract.build_envelope(_records(), authorization, NOW - 10, now=NOW)
 
 
 @pytest.mark.parametrize("field", ["fields", "patients", "max_snapshot_age_s"])
@@ -27,9 +29,9 @@ def test_c1_requires_explicit_profile_fields_but_legacy_keeps_defaults(tmp_path,
     raw = json.loads(path.read_text())
     del raw[field]
     path.write_text(json.dumps(raw))
-    assert ext.load_authorization(path, NOW) == raw
-    with pytest.raises(ext.ContractError):
-        ext.load_authorization(path, NOW, c1=True)
+    assert export_delivery.load_authorization(path, NOW) == raw
+    with pytest.raises(export_contract.ContractError):
+        export_delivery.load_authorization(path, NOW, c1=True)
 
 
 @pytest.mark.parametrize("override", [
@@ -48,16 +50,16 @@ def test_c1_requires_explicit_profile_fields_but_legacy_keeps_defaults(tmp_path,
 ])
 def test_c1_retains_consent_expiry_scope_and_profile_refusals(tmp_path, override):
     values = {"fields": list(C1_FIELDS), "max_snapshot_age_s": 3600, **override}
-    with pytest.raises(ext.ContractError):
-        ext.load_authorization(_auth(tmp_path, **values), NOW, c1=True)
+    with pytest.raises(export_contract.ContractError):
+        export_delivery.load_authorization(_auth(tmp_path, **values), NOW, c1=True)
 
 
 @pytest.mark.parametrize("text", ["", "SYNTHETIC BODY"])
 def test_c1_body_exception_is_only_for_paired_root_body_text(text):
     body, message = _body(text), _message()
     assert validate_c1_record(body, message=message) is None
-    with pytest.raises(ext.ContractError, match="forbidden_field:body_text"):
-        ext._check_record_keys(body)
+    with pytest.raises(export_contract.ContractError, match="forbidden_field:body_text"):
+        export_contract._check_record_keys(body)
     with pytest.raises(C1ContractError, match="forbidden_field:body_text"):
         validate_c1_record({**message, "body_text": text})
 

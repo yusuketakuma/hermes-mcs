@@ -156,7 +156,7 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
         raise ValueError("unknown_project")
     failed = view.db.execute("SELECT count(*) FROM fetch_jobs WHERE project_id=? AND state='failed'",
                              (project_id,)).fetchone()[0]
-    progress = drug_map._progress(view.db)
+    progress = drug_map.read_annotation_progress(view.db)
     dictionary = "invalid" if progress and progress.get("invalid") else (
         "unconfigured" if not progress or not progress.get("dictionary") else "derived")
     pin = (cfg or {}).get("drug_map")

@@ -24,10 +24,11 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import backup_evidence
-from export_schema import finite_number  # noqa: E402
+from stats_math import finite_number  # noqa: E402
 from mcs_util import valid_text  # noqa: E402
-from mcs_requests import MAX_COMMAND_BYTES, canonical, parse_command, payload_hash, valid_hash, valid_uuid  # noqa: E402
-from safe_io import create_exclusive  # noqa: E402
+from mcs_requests import MAX_COMMAND_BYTES, canonical, parse_command, payload_hash, valid_uuid  # noqa: E402
+from mcs_util import valid_hash  # noqa: E402
+from safe_io import create_exclusive, fdopen_owned  # noqa: E402
 
 PURPOSE = "ops.backup_restore_resume"
 APPROVAL = "backup_restore_approval.json"
@@ -114,7 +115,7 @@ def _private_file(st):
 def _read(fd, name, *, database=False):
     opened = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                      dir_fd=fd)
-    with os.fdopen(opened, "rb") as stream:
+    with fdopen_owned(opened, "rb") as stream:
         before = os.fstat(stream.fileno())
         _private_file(before)
         digest = hashlib.sha256()
@@ -208,7 +209,7 @@ def _publish(fd, name, value):
     temporary = ".backup-consent-" + uuid.uuid4().hex
     opened = create_exclusive(temporary, 0o600, dir_fd=fd)
     try:
-        with os.fdopen(opened, "wb") as stream:
+        with fdopen_owned(opened, "wb") as stream:
             stream.write(canonical(value))
             stream.flush()
             os.fsync(stream.fileno())

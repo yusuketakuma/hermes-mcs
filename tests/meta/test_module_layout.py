@@ -42,7 +42,7 @@ for name, relative in {MODULES!r}.items():
     module = importlib.import_module(name)
     assert Path(module.__file__).resolve() == Path({str(ROOT / 'mcs')!r}) / relative, name
 import clinical_values
-assert clinical_values._vitals_guard('本人P72 家族80', {{'hr':72}}) == {{'hr':72}}
+assert clinical_values.grounded_vitals('本人P72 家族80', {{'hr':72}}) == {{'hr':72}}
 assert clinical_values.patient_current_vitals({{'hr':80}}, '本日ご家族P80') == {{}}
 assert clinical_values.patient_current_vitals({{'spo2':2}}, 'SpO2 95% 酸素2L') == {{}}
 print(json.dumps({{'ok':True}}))

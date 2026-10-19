@@ -54,7 +54,11 @@ import semantic_runtime
 import semantic_projection
 import semantic_audit
 import semantic_v4
+import semantic_v4_cohort
 import semantic_store
+import semantic_notice
+import semantic_render
+import semantic_send_gate
 import semantic_policy
 import writer_lock
 import llm_availability  # noqa: E402
@@ -62,6 +66,7 @@ import self_identity  # noqa: E402
 import safe_io  # noqa: E402
 import bounded_http
 import clinical_values
+import clinical_urgency
 import clinical_scope
 import extract_schema
 import extract_validation
@@ -112,7 +117,11 @@ _LOADED_SOURCE_DIGESTS = {
     for name, path in (("extract_llm", __file__),
                        ("writer_lock", writer_lock.__file__),
                        ("semantic_store", semantic_store.__file__),
+                       ("semantic_notice", semantic_notice.__file__),
+                       ("semantic_render", semantic_render.__file__),
+                       ("semantic_send_gate", semantic_send_gate.__file__),
                        ("semantic_v4", semantic_v4.__file__),
+                       ("semantic_v4_cohort", semantic_v4_cohort.__file__),
                        ("semantic_audit", semantic_audit.__file__),
                        ("semantic_projection", semantic_projection.__file__),
                        ("semantic_runtime", semantic_runtime.__file__),
@@ -126,6 +135,7 @@ _LOADED_SOURCE_DIGESTS = {
                        ("safe_io", safe_io.__file__),
                        ("extract", extract.__file__),
                        ("clinical_values", clinical_values.__file__),
+                       ("clinical_urgency", clinical_urgency.__file__),
                        ("clinical_scope", clinical_scope.__file__),
                        ("clinical_chunking", clinical_chunking.__file__),
                        ("semantic_quantities", semantic_quantities.__file__),
@@ -3337,8 +3347,7 @@ def legacy_admissions(ledger, cfg) -> set | None:
             return set()
         if policy.get("fact_source") != "canonical":
             return None
-        import semantic_v4
-        return semantic_v4.active_legacy_admissions(ledger)
+        return semantic_v4_cohort.active_legacy_admissions(ledger)
     except Exception as e:
         _admission_closed([type(e).__name__])
         return set()

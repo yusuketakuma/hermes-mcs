@@ -1,4 +1,9 @@
 """Pure C1 boundary tests with fixed numeric and unchanged legacy byte goldens."""
+
+import c1_envelopes
+import export_contract
+import export_delivery
+import export_schema
 import copy
 import hashlib
 import math
@@ -10,7 +15,6 @@ from pathlib import Path
 import pytest
 
 import c1_contract as c1
-import ext_contract as legacy
 import c1_envelopes as envs
 import c1_receiver
 import ext_contract as ext
@@ -109,12 +113,12 @@ def test_canonical_rejects_cycles_with_a_fixed_code():
 
 def test_old_bytes_golden_and_default_grant_remain_separate():
     value = {"x": 1800000000.0, "small": 0.000001, "zero": -0.0}
-    assert legacy._canonical(value) == '{"small":1e-06,"x":1800000000.0,"zero":-0.0}'
+    assert export_contract.canonical_text(value) == '{"small":1e-06,"x":1800000000.0,"zero":-0.0}'
     assert c1.canonical_json(value) == '{"small":0.000001,"x":1800000000,"zero":0}'
-    assert set(legacy.RECORD_TYPES) == {
+    assert set(export_schema.RECORD_TYPES) == {
         "meta", "coverage", "stat", "signal", "signals_truncated", "attachment", "message"}
-    with pytest.raises(legacy.ContractError, match="forbidden_field:body_text"):
-        legacy._check_record_keys(_body())
+    with pytest.raises(export_contract.ContractError, match="forbidden_field:body_text"):
+        export_contract._check_record_keys(_body())
 
 
 @pytest.mark.parametrize("age,retention", [(0, 1), (1e-6, 30), (3600, 30)])
@@ -127,7 +131,7 @@ def test_explicit_profile_is_nonmutating(age, retention):
 
 
 @pytest.mark.parametrize("over", [
-    {"fields": None}, {"fields": []}, {"fields": list(legacy.RECORD_TYPES)},
+    {"fields": None}, {"fields": []}, {"fields": list(export_schema.RECORD_TYPES)},
     {"fields": ["meta"] * 7}, {"fields": list(c1.C1_FIELDS[:-1]) + [None]},
     {"patients": None}, {"patients": []}, {"patients": [1]},
     {"max_snapshot_age_s": None}, {"max_snapshot_age_s": True},
@@ -252,8 +256,8 @@ def test_collection_coverage_preserves_unknown_without_mutating_old_schema():
     before = copy.deepcopy(record)
     assert c1.validate_record(record) is None
     assert record == before
-    with pytest.raises(legacy.ContractError, match="record_field_not_exportable"):
-        legacy._check_record_keys(record)
+    with pytest.raises(export_contract.ContractError, match="record_field_not_exportable"):
+        export_contract._check_record_keys(record)
 
 
 @pytest.mark.parametrize("value", [True, -1, 0.5, 9007199254740992, "unknown"])
@@ -307,7 +311,7 @@ def test_required_states_and_nested_fields_do_not_gain_a_body_exemption(record):
 
 # The /1 CLI shares the C1 contract constants, and reconcile --all exit codes stay as documented.
 def test_receipt_contract_has_one_definition_and_receiver_does_not_import_ext():
-    assert ext.RECEIPT_CONTRACT is envs.RECEIPT_CONTRACT == "mcs-ext-receipt/1"
+    assert c1_envelopes.RECEIPT_CONTRACT is envs.RECEIPT_CONTRACT == "mcs-ext-receipt/1"
     assert c1_receiver.RECEIPT_CONTRACT is envs.RECEIPT_CONTRACT
     tree = ast.parse(Path(c1_receiver.__file__).read_text(encoding="utf-8"))
     imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
@@ -335,18 +339,18 @@ def test_withdraw_cli_choices_and_max_bytes_default_follow_c1_envelopes(tmp_path
 def test_auth_id_cap_is_the_withdraw_cap(tmp_path, length, ok):
     path = _auth(tmp_path, auth_id="a" * length)
     if ok:
-        assert ext.load_authorization(path, NOW)["auth_id"] == "a" * length
+        assert export_delivery.load_authorization(path, NOW)["auth_id"] == "a" * length
     else:
-        with pytest.raises(ext.ContractError, match="auth_invalid:auth_id"):
-            ext.load_authorization(path, NOW)
+        with pytest.raises(export_contract.ContractError, match="auth_invalid:auth_id"):
+            export_delivery.load_authorization(path, NOW)
 
 
 def test_reconcile_all_exits_1_with_a_refused_entry_and_still_lists_held(
         tmp_path, authorization, capsys):  # noqa: F811
     held, = _build(_records((10,)), now=1030.0)
     refused, = _build(_records((20,)), now=1030.0)
-    sink = ext.HandoffSink(tmp_path / "sink")
-    exporter = ext.GovernedExporter(tmp_path / "state")
+    sink = export_delivery.HandoffSink(tmp_path / "sink")
+    exporter = export_delivery.GovernedExporter(tmp_path / "state")
     assert exporter.deliver(held, sink, auth_path=authorization)["status"] == "held"
     raw = json.loads(authorization.read_text())
     authorization.write_text(json.dumps({**raw, "revoked": True}))

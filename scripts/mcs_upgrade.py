@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 
-# Self-contained copy of mcs_requests.RELEASE_TAG_RE (a test pins equality):
+# Self-contained copy of update_policy.RELEASE_TAG_RE (a test pins equality):
 # an explicit --to may name a prerelease; the default target never does.
 SEMVER_RE = re.compile(
     r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")

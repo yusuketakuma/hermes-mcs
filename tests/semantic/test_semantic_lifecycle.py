@@ -69,7 +69,7 @@ def _chain(tmp_path, facts, audit="PASS", notice=True):
                    target_revision=REV))
     event_id, chunks = None, []
     if notice:
-        text = render_notice(db, 1, 1, summary, "PASS", targets=[1],
+        text = render_notice(db.db, 1, 1, summary, "PASS", targets=[1],
                              quality="full", focus_mid=1)
         chunks = semantic_render.semantic_chunks(text, notify_flush.TEXT_CHUNK_WIDTH)
         event_id = db.outbox_add("semantic_notice", 1, {

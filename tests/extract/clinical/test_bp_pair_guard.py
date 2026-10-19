@@ -12,7 +12,7 @@ MORNING_EVENING = "本人の朝BP180/100、夕BP120/80"
 
 
 def _layers(body, values):
-    return (clinical_values._vitals_guard(body, dict(values)),
+    return (clinical_values.grounded_vitals(body, dict(values)),
             clinical_values.patient_vitals(dict(values), body),
             clinical_values.patient_current_vitals(dict(values), body))
 
@@ -88,7 +88,7 @@ def test_repeated_identical_reading_is_one_reading():
 
 def test_mixed_pair_is_noted_for_the_writer():
     drops = {}
-    clinical_values._vitals_guard(MORNING_EVENING, {"sbp": 180, "dbp": 80}, drops)
+    clinical_values.grounded_vitals(MORNING_EVENING, {"sbp": 180, "dbp": 80}, drops)
     assert any("同じ測定" in note for note in drops["vitals"])
 
 
@@ -96,7 +96,7 @@ def test_truncated_bp_label_is_not_a_bare_pulse_p():
     body = "本人の朝BP180/100、夕120/80"
     start = body.rindex("80")
     assert clinical_values._nearest_vital_label(body, start, start + 2) != "hr"
-    guarded = clinical_values._vitals_guard(body, {"sbp": 120, "dbp": 80})
+    guarded = clinical_values.grounded_vitals(body, {"sbp": 120, "dbp": 80})
     assert "hr" not in guarded and guarded == {"sbp": 120, "dbp": 80}
 
 
@@ -155,7 +155,7 @@ def test_decimal_values_from_different_readings_are_not_paired(body, values):
     assert not ({"sbp", "dbp"} & reader.keys()), reader
     assert not ({"sbp", "dbp"} & current.keys()), current
     if not body.startswith("母"):
-        writer = clinical_values._vitals_guard(body, dict(values))
+        writer = clinical_values.grounded_vitals(body, dict(values))
         assert not ({"sbp", "dbp"} & writer.keys()), writer
 
 

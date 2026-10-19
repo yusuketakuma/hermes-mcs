@@ -647,7 +647,7 @@ _DICTIONARY_STATE = {
 def drug_search_available(db) -> bool:
     """The 薬剤を検索 button is minted only while an approved dictionary
     generation is active — a button that can never answer is worse than none."""
-    progress = drug_map._progress(db)
+    progress = drug_map.read_annotation_progress(db)
     return bool(progress and not progress.get("invalid") and progress.get("dictionary"))
 
 

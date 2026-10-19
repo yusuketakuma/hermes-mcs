@@ -556,10 +556,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))
         return 0 if result["state"] in ("complete", "empty") else 1
     finally:
-        if store is not None:
-            store.close()
-        if lock_fd is not None:
-            os.close(lock_fd)
+        try:
+            if store is not None:
+                store.close()
+        finally:
+            if lock_fd is not None:
+                os.close(lock_fd)
 
 
 if __name__ == "__main__":

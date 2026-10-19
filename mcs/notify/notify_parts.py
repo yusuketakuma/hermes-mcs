@@ -7,7 +7,8 @@ import os
 import re
 from collections import deque
 
-from mcs_requests import canonical, positive, valid_hash
+from mcs_requests import canonical, positive
+from mcs_util import valid_hash
 from notify_render import card_body_text, preview_header, notification_preview, presenter
 from notify_scope import scope_matches, stored_scope
 

@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from mcs_queries import current_fact_pred
-from mcs_requests import positive, valid_hash
+from mcs_requests import positive
+from mcs_util import valid_hash
 from notify_render import anchor_keys, patient_name, signal_evidence
 from notify_scope import latest_signals
 

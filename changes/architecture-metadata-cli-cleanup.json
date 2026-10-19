@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "登録情報CLIの中断時に所有ロックを回収",
+  "summary": "登録情報の取得CLIでDBを閉じる処理が失敗・中断した場合も、所有するrun lockを解放します。取得範囲、公開条件と保存順序は維持します。",
+  "upgrade": "設定変更は不要です。通常の更新でCLIへ反映されます。",
+  "details": [
+    "借用resourceは閉じず、CLI自身が取得したロックだけをfinallyで回収します。完全合成のwriter終了失敗・取消で元の例外と再取得可能性を検証します。"
+  ],
+  "refs": [
+    "mcs/ingest/project_metadata.py",
+    "tests/ingest/test_project_metadata.py"
+  ]
+}

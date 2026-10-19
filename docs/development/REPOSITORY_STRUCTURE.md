@@ -17,16 +17,19 @@
 | `mcs/ingest/health_report.py` | healthの観測・集計・coverage | 借用connectionと過去health記録を読み、書込み失敗のincidentは`run_check`が記録 |
 | `mcs/llm/` | 推論通信、turn lock、admission、`llm_availability`の接続・回路状態 | 通信状態の読書きは明示された保存先/借用接続上で行う。抽出結果・claim・carryのDB保存と解放は担当workerが所有 |
 | `mcs/extract/rules/` | 投稿のルール抽出と実行統括 | 純粋な投稿判定と、run lockを伴う保存入口を区別 |
-| `mcs/extract/clinical/` | `clinical_scope`の本人/家族/時点、`clinical_values`の値と原文根拠、分割・薬局の共通判断 | scopeのbounded cacheは同moduleが所有。rule統括へ呼び戻さない |
-| `mcs/extract/llm/` | `extract_schema`、`extract_validation`、`extract_quality`、`extract_llm`の推論/再抽出/保存統括 | schemaと検証は推論I/Oから分離。claim/carry/checkpointと保存は統括側 |
+| `mcs/extract/clinical/` | `clinical_scope`の本人/家族/時点、`clinical_values`の値・原文根拠・バイタル適格性、分割・薬局の共通判断 | scopeのbounded cacheは同moduleが所有。rule統括へ呼び戻さない |
+| `mcs/extract/clinical/clinical_urgency.py` | 本人の根拠に基づく緊急度・QCの共通判断 | `mcs_queries`の現行原文/artifact読取を使い、通知・統計・rulesが表示moduleを経由せず利用。借用connectionを開閉・commitしない |
+| `mcs/extract/llm/` | `extract_schema`、`extract_validation`、`extract_quality`、`extract_llm`の推論/再抽出/保存統括 | schemaと検証は推論I/Oから分離。薬剤tokenの文法は`extract_schema`に一元化し、rules/qualityが直接利用。claim/carry/checkpointと保存は統括側 |
 | `mcs/patients/` | `patient_context`の患者背景/薬局参照項目、状態参照・一患者一件の集約、`patient_nightly_plan`の純粋な選択/予算計画 | `patient_nightly`が時刻・推論・再試行・保存と公開を所有。読取は同じconnectionを借用し、公開前に原文/世代/scanを再照合 |
 | `mcs/medications/` | 辞書照合・別名承認・薬剤履歴・登録情報との比較 | 公開master原本、私有辞書、患者の注記と人承認receiptを区別 |
 | `mcs/semantic/` | claim/QC/公開、`semantic_v4`の公開transaction処理、`semantic_store`の読取、`semantic_transport`の推論状態 | `semantic_drain`が実行順・予算・jobを所有。`semantic_runtime`が明示されたjob判定/送信hookを扱い、`semantic`のCLI facadeへ戻らない |
+| `mcs/semantic/semantic_v4_cohort.py` | 変換manifest・予約・receipt・実行前の適格性 | runtimeと操作CLIが同じ実体を利用し、評価専用領域を経由しない。読取は借用接続、予約/receipt/job更新は呼出元writerの同一transaction |
+| `mcs/semantic/semantic_notice.py` | 通知適格性・起源照合・配送重複確認・公開計画 | 通常の結果/計画/intent/状態遷移は呼出元writerの同一transaction。既存degraded通知はintentごとのcommitを維持し、描画と送信直前gateは借用読取に限定 |
 | `mcs/semantic/semantic_assembly.py` | fact・根拠・依頼属性・進捗の組立て | 入力のコピーと返値を所有し、DB・推論・時刻・保存状態を持たない。`semantic_extraction`がlive/cache/repairの実行と借用connectionの読取を所有 |
 | `mcs/notify/` | 対象選定、spec/part計画、描画、送信許可、journal照合、receipt | `notify_parts`がpart計画、`notify_scope`がscope、`notify_spool`が保存先と公開、`notify_sender`がDBを持たないCLI送信を所有。`notify_actions`と`notify_transport`が同一transactionの適用/配送事実を確定し、公開はcommit後に行う |
 | `mcs/views/` | snapshot読取・scope/projection・統計/詳細/CLI | `registered_data`は登録情報、`clinical_display`は臨床値、`stats_contract`は集計範囲/結果形式、`message_metadata`は保存済み観測の検証。呼出元のDBを再openしない |
 | `mcs/signals/` | 原文と抽出に基づく候補評価・根拠 | 候補artifact/通知状態の更新を持つ。表示や単なる未記録と臨床判断を混同しない |
-| `mcs/export/` | C1 schema・レコード選択・封筒・受信契約 | 純粋な変換、snapshot読取、専用保存先への受信を区別 |
+| `mcs/export/` | C1 schema・レコード選択、`export_contract`の承認/envelope/receipt検証、`export_delivery`のjournal/配送/撤回/health | 純粋な検証と専用保存先への配送を区別。`ext_contract`は操作CLI・参照受信入口に限定。viewは呼出元の同一snapshotを借用し、搬出処理のために再openしない |
 | `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`runtime_inspection`は読取観測、`service_contract`は管理対象・実行環境選択・cron計画、`service_management`は実際の照合・適用・管理記録、`update_policy`は判断、`update_journal`は更新記録。`owned_process`は所有する子プロセスの停止/回収、`update_discovery`は期限付きGit実行と版探索、`update_launch`はwrapper起動を所有 |
 | `mcs/ops/environment_diagnostics.py` | 接続・認証・プロセス源泉の診断 | 有限のpath/実行環境を受け、既存の期限付き観測を実行する。setupは対話・結果表示、updaterはbaseline比較を所有。旧setup診断入口は旧updater互換だけに残す |
 | `mcs/ops/backup_evidence.py`・`restore_evidence` | backup記録/inventory/復元準備と、損失report/一致する人承認receipt | 専用read-only接続の終了と、終了後のhash/atomic公開を所有。暗号化・操作を囲むロックはbackup統括、hold・journal・DB置換はupdaterが引き続き所有 |
@@ -52,6 +55,8 @@
 - 集計と抽出監査は`stats_contract`の同じ期間/患者範囲/上限を使います。表示上限と全体件数を分け、監査の定義識別子は実際の計算契約に結び付けます。
 - 通知のspec計画、同一TXのjournal記録、commit後のatomic publishの順序を保ちます。parts/scopeを分けてもtransactionの所有を分散しません。
 - 人承認の復旧は`notify_recovery`から`notify_transport`の借用transaction上の確定処理を使います。復旧receiptと状態を同時にcommitし、spec公開はその後に行います。読取側は`notify_scope`へ直接依存します。
+- 薬剤照合の進捗と現行参照の読取は`drug_map`の実体が正本です。統計/通知/薬剤履歴は同じsnapshotと一巡の進捗を共有し、テスト用の関数同一性で別経路へ分岐しません。
+- 共通hashの検証は`mcs_util`、版タグの文法は`update_policy`が正本です。操作契約や表示がqueue CLIを経由せず、queueの保存・ロック・順序は`mcs_requests`が所有します。hostの遅延bootstrap後に必要な処理を読む契約は維持します。
 - 薬局の参照項目は`patient_context`、保存済み履歴のSQLは`mcs_queries`が正本です。抽出・semantic・表示から集約writerを経由せずに利用し、解釈に影響する両moduleをsource digestとcandidate定義の変更検知に含めます。
 - 表示用のバイタルは`clinical_display`、登録情報のprojectionは`registered_data`が正本です。表示limitでcoverageや全体件数を変えません。
 - 更新の遠隔版探索はreceiptの書込transactionに入る前に行い、ローカルのwrapper/設定はreceipt確定の境界で再確認します。更新journal・復元同意・rollbackはupdater、切り離し起動はcommit後の呼出元が所有します。独立復旧ツールはcheckout破損時にも起動できる自己完結のprocess処理を保持します。
@@ -62,7 +67,7 @@
 
 配送workerはscope lock/claim/停止と再開を統括し、registryは永続slot、journalは配送履歴を所有します。存在を確認する全spec集合と、今回処理する集合を混同しません。standalone Runtimeは定期job・子process同一性・停止/回収を所有し、hostはSDK接続とtask終了を所有します。
 
-更新処理はlock・承認・journal・rollbackを保持し、探索・子process・診断・service適用を各正本へ渡します。旧版が新版の`mcs/`だけを配置して行う設定検証と、旧setup診断入口は互換契約です。独立復旧ツールはcheckout破損時にも起動するため、同じ値/判定を使う必要があっても開発treeからのimportには置き換えません。
+更新処理はlock・承認・journal・rollbackを保持し、探索・子process・診断・service適用を各正本へ渡します。旧版が新版の`mcs/`だけを配置して行う設定検証と、旧setup診断入口は互換契約です。独立復旧ツールはcheckout破損時にも起動するため、同じ値/判定を使う必要があっても開発treeからのimportには置き換えません。 所有するFDをstreamへ渡す短い処理も独立ツール内で完結させ、切り離し子processへ必要な実装を読み込み時に凍結します。借用FDの読取は元のownerが解放します。
 
 ## 移植・拡張時の境界
 

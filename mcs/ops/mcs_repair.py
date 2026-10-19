@@ -23,7 +23,8 @@ import _mcs_path  # noqa: F401
 from ledger import JOB_REASON_CODES, LedgerReader
 from ledger_audit import AuditReport, audit_db
 from mcs_queries import REPLY_GAP
-from mcs_requests import canonical, valid_hash, valid_uuid
+from mcs_requests import canonical, valid_uuid
+from mcs_util import valid_hash
 from mcs_util import has_sqlite_sidecars
 from safe_io import fsync_dir, read_regular_nofollow, fdopen_owned
 
@@ -82,7 +83,7 @@ def _hash_file(path: str | Path) -> str:
     if has_sqlite_sidecars(path):
         raise ValueError("static_snapshot_required")
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
+    with fdopen_owned(fd, "rb") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError("regular_file_required")
         digest = hashlib.sha256()

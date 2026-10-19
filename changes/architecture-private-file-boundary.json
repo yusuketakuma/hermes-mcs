@@ -5,7 +5,8 @@
   "upgrade": "追加の設定操作は不要です。通常の更新で反映されます。共有安全I/Oの実装識別子が変わるため、意味解析候補の評価・人承認が必要な構成では通常の再評価・承認手順を維持してください。既存の読取失敗を成功や認証情報の自動fallbackへ変更しません。",
   "details": [
     "safe_ioがnofollow・CLOEXEC・NONBLOCK、現在UID・private mode・regular file、読取前後の容量検査とFDの寿命を所有します。",
-    "credentialの固定エラーコードへの翻訳はconfig側へ、無効state/status/requestの扱いは各呼出元へ維持します。設定の私有helperや転送wrapperは残しません。"
+    "credentialの固定エラーコードへの翻訳はconfig側へ、無効state/status/requestの扱いは各呼出元へ維持します。設定の私有helperや転送wrapperは残しません。",
+    "私有ファイル読取りのFD引渡しも共通fdopen_ownedを直接利用し、同じ解放処理の重複を除去します。通常読取・容量上限・所有者/権限・例外の分類は維持します。"
   ],
   "refs": [
     "mcs/core/safe_io.py",

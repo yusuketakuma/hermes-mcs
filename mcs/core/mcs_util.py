@@ -129,6 +129,10 @@ def valid_text(value, size, nullable=False):
 
 
 
+def valid_hash(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
 def loads_dict(raw) -> dict | None:
     """``json.loads(raw)`` when it yields a dict, else None — for stored
     JSON TEXT columns (not LLM output; that is ``json_object``)."""

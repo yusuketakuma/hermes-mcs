@@ -1,8 +1,8 @@
 """Canonical ``semantic-facts/v2`` contract: enums, identity derivation,
 and validators.
 
-Leaf module for the canonical evidence-backed fact layer.  It imports the
-stdlib and ``mcs_util.payload_hash`` only; every canonical semantic
+Canonical evidence-backed fact primitives use stdlib and payload hashing;
+context conversion lazily reads patient_context.context_items. Every semantic
 stage shares these enums and stable atom/fact/relation IDs so a restart
 or a changed chunk layout never produces a different identity for the
 same source statement.  The source fingerprint itself comes from the

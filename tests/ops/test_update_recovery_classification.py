@@ -4,6 +4,7 @@ from itertools import product
 import pytest
 
 import update_policy
+import service_management
 from test_mcs_update import updater as updater
 
 
@@ -129,7 +130,8 @@ def _trace_world(updater, monkeypatch, *, applying=None, markers=(None,),
     monkeypatch.setattr(updater, "_restore_db", forbidden)
     monkeypatch.setattr(updater, "quiesce", lambda: trace.append("quiesce"))
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: trace.append("restore_runtime"))
-    monkeypatch.setattr(updater, "_reconcile_membership", lambda snapshot: trace.append("membership") or [])
+    monkeypatch.setattr(service_management, "retire_to_snapshot",
+                        lambda snapshot, *, cfg, paths: trace.append("membership") or [])
     monkeypatch.setattr(updater, "_use_migrated_runtime", lambda migration: trace.append("use_runtime"))
     monkeypatch.setattr(updater, "_services_reconcile", lambda: trace.append("services"))
     monkeypatch.setattr(updater, "_postcheck", lambda *a: trace.append("postcheck") or [])

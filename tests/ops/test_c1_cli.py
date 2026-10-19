@@ -1,5 +1,7 @@
 """Synthetic published snapshot -> actual C1 CLI -> manual local outbox."""
 
+import export_delivery
+
 import hashlib
 import json
 import sys
@@ -29,7 +31,7 @@ def world(tmp_path, monkeypatch):
     data = tmp_path / "root" / "data"
     data.mkdir(parents=True)
     live, snapshot = _snapshot(data, monkeypatch)
-    monkeypatch.setattr(ext.time, "time", lambda: SNAP_TS + 10)
+    monkeypatch.setattr(export_delivery.time, "time", lambda: SNAP_TS + 10)
     auth = _auth(tmp_path, fields=list(C1_FIELDS),
                  created_at=SNAP_TS, expires_at=SNAP_TS + 3600,
                  max_snapshot_age_s=3600)
@@ -114,7 +116,7 @@ def test_c1_does_not_chmod_shared_existing_destination(world, capsys):
 
 
 def test_c1_heartbeat_warns_without_claiming_missing_clinical_action(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(ext.time, "time", lambda: 1030)
+    monkeypatch.setattr(export_delivery.time, "time", lambda: 1030)
     auth = _auth(tmp_path, fields=list(C1_FIELDS), expires_at=2000, created_at=1000,
                  max_snapshot_age_s=3600)
     source = tmp_path / "records.jsonl"
@@ -184,7 +186,7 @@ def test_link_hints_cursor_cannot_cross_generation(world, monkeypatch, capsys):
 
 @pytest.mark.parametrize("command", [["handoff"], ["deliver", "--sink-kind", "local"]])
 def test_c1_state_and_new_sink_stay_private_across_runs(tmp_path, monkeypatch, capsys, command):
-    monkeypatch.setattr(ext.time, "time", lambda: 1030)
+    monkeypatch.setattr(export_delivery.time, "time", lambda: 1030)
     auth = _auth(tmp_path, fields=list(C1_FIELDS), expires_at=2000, created_at=1000,
                  max_snapshot_age_s=3600)
     source = tmp_path / "records.jsonl"

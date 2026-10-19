@@ -13,10 +13,11 @@ import mcs_signals
 import self_identity
 import notify_spool
 import notify_render
-import structured_view
 from mcs_queries import (FACT_KINDS_SQL, JST, current_extract_pred,
                          current_fact_pred, json_or_null)
-from mcs_requests import positive, valid_hash
+from mcs_requests import positive
+from mcs_util import valid_hash
+import clinical_urgency
 
 
 class _Settings(TypedDict):
@@ -115,7 +116,7 @@ def capture_initial(ledger, cfg, event, *, now=None):
             (mid, event["project_id"], event["project_id"])).fetchone()
         if row is None or not valid_hash(row["content_hash"]):
             continue
-        source = structured_view.message_urgency(ledger.db, mid)
+        source = clinical_urgency.message_urgency(ledger.db, mid)
         before = _initial(ledger.db, event["event_id"], mid)
         if before and before["hash"] == row["content_hash"] and before["urgency_source"] == source:
             continue
@@ -293,12 +294,12 @@ def _eligible(
     row = _current(ledger.db, mid)
     if row is None or row["kind"] == "extract_v1" or row["urgency"] != "high":
         return None, "current_llm_high_absent"
-    if structured_view.message_urgency(ledger.db, mid) != "llm":
+    if clinical_urgency.message_urgency(ledger.db, mid) != "llm":
         return None, "patient_urgency_unverified"
     # The newest QC audit pinned to THIS artifact may veto escalation:
     # a Jev 'routine'/'unclear' on the current extraction holds the
     # re-ask. A missing/stale QC row suppresses nothing (fail-open).
-    qc = structured_view.urgency_qc_disagreement(ledger.db, mid)
+    qc = clinical_urgency.urgency_qc_disagreement(ledger.db, mid)
     if qc and qc.get("jev") in ("routine", "unclear"):
         return None, "qc_overridden"
     if not valid_hash(row["content_hash"]) or not _time(row["posted_at_ts"]):
@@ -405,9 +406,8 @@ def check_delivery(ledger, cfg, event, *, now=None):
             or candidate["base"]["event_id"] != payload.get("base_event_id")
             or candidate["stage"] != payload.get("stage")):
         return {"ok": False, "reason": "urgent_source_changed"}
-    detail = structured_view.message_urgency_details(ledger.db, payload["message_id"])
+    detail = clinical_urgency.message_urgency_details(ledger.db, payload["message_id"])
     return {"ok": True, "message_id": payload["message_id"],
             "project_id": event["project_id"], "stage": payload["stage"],
             "observed_at": candidate["row"]["created_at"],
             "subject": detail["subject"], "reasons": detail["reasons"]}
-

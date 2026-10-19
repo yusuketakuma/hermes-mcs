@@ -12,7 +12,7 @@ from time import monotonic
 import uuid
 from contextlib import suppress
 
-from safe_io import publish_tmp
+from safe_io import fdopen_owned, publish_tmp
 
 
 SNAPSHOT_VERIFY_TIMEOUT_S = 30.0
@@ -45,7 +45,7 @@ def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
     try:
         fd = os.open(os.path.join(os.path.dirname(path), '.validation.lock'),
                      os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'w') as lock:
+        with fdopen_owned(fd, 'w') as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:

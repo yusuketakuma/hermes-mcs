@@ -8,6 +8,7 @@ import pytest
 import extract
 import structured_view
 from test_read_model import _artifact, _db, _hash_of
+import clinical_urgency
 
 
 @pytest.mark.parametrize("body,quote,scope", [
@@ -76,7 +77,7 @@ def test_request_and_patient_sign_across_sentences_keep_independent_source_scope
         from semantic_testkit import _message
         db.save_messages([_message(1, body=body)], project_id=1)
         _artifact(db, "extract_v1", 1, {"urgency": "high"}, {"hash": _hash_of(db, 1)})
-        details = structured_view.message_urgency_details(db.db, 1)
+        details = clinical_urgency.message_urgency_details(db.db, 1)
         assert details["source"] == source
         if source:
             assert details["reasons"] == ["本人が急変"]
@@ -99,7 +100,7 @@ def test_clinical_emergency_is_distinct_from_request_or_denied_sign(tmp_path, bo
         db.save_messages([_message(1, body=body)], project_id=1)
         _artifact(db, "extract_llm", 1, {"urgency": "high", "urgency_evidence": [body]},
                   {"hash": _hash_of(db, 1)})
-        details = structured_view.message_urgency_details(db.db, 1)
+        details = clinical_urgency.message_urgency_details(db.db, 1)
         assert details["source"] == source
         assert details["kind"] == expected_kind
         if source is None:
@@ -131,9 +132,9 @@ def test_cached_high_for_family_never_becomes_patient_high_across_read_surfaces(
         db.save_messages([_message(1, body=body)], project_id=1)
         _artifact(db, kind, 1, {"urgency": "high", "urgency_evidence": ["意識を失っています"]},
                   {"hash": _hash_of(db, 1), "engine_version": 4})
-        detail = structured_view.message_urgency_details(db.db, 1)
+        detail = clinical_urgency.message_urgency_details(db.db, 1)
         assert detail["held"] and detail["verdict"] == "unclear"
-        assert structured_view.message_urgency(db.db, 1) is None
+        assert clinical_urgency.message_urgency(db.db, 1) is None
         for plain in (False, True):
             lines = structured_view.structured_lines(db.db, 1, plain=plain)
             # no high-urgency head on either the legacy or the plain surface
@@ -153,7 +154,7 @@ def test_mixed_high_quotes_keep_only_current_patient_reason(tmp_path):
         db.save_messages([_message(1, body=body)], project_id=1)
         _artifact(db, "extract_llm", 1, {"urgency": "high", "urgency_evidence": ["母が急変", "意識を失っています"]},
                   {"hash": _hash_of(db, 1)})
-        details = structured_view.message_urgency_details(db.db, 1)
+        details = clinical_urgency.message_urgency_details(db.db, 1)
         assert details["source"] == "llm" and details["subject"] == "patient"
         assert details["reasons"] == ["意識を失っています"]
         assert "母" not in json.dumps(details["reasons"], ensure_ascii=False)

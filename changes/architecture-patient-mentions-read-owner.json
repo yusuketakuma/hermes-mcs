@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "患者表示の原文読取りと観測時刻の責務を整理",
+  "summary": "患者表示と集計で使う現行抽出の読取りを同じ正本へ統一しました。原文の主体・否定・予定の区別、患者範囲、未取得や履歴の表示は変わりません。",
+  "upgrade": "設定変更や再取得は不要です。公開入口・DB形式・承認条件・表示件数の既定は変更しません。",
+  "refs": [
+    "mcs/core/mcs_queries.py",
+    "mcs/patients/rollup.py",
+    "mcs/views/patient_context_view.py",
+    "mcs/views/message_metadata.py",
+    "mcs/views/response_observation_view.py"
+  ],
+  "details": [
+    "同じSQLite接続を借用する読取りへ集約し、患者表示から集計writer/CLIのprivate helper依存を除去する。",
+    "保存済み観測の時刻検証は既存実体を公開名へ統一し、別の時刻や数値の契約とは統合しない。"
+  ]
+}

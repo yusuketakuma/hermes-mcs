@@ -133,7 +133,7 @@
     },
     "FIX-SD1": {
       "status": "covered",
-      "summary": "semantic_drain._write_result appended a byte-identical summary+audit pair on every deferred/PENDING pass (3 identical rows in 13min during Jev outage); now dedups identical current outcome",
+      "summary": "semantic_drain._write_result appended a byte-identical summary+audit pair on deferred/PENDING passes observed during a Jev outage; now dedups identical current outcome",
       "tests": [
         "test_write_result_is_idempotent_for_identical_outcome",
         "test_write_result_records_status_transition"
@@ -141,7 +141,7 @@
     },
     "AUDIT-J03": {
       "status": "covered",
-      "summary": "job内停止・累積retry・修復予約・旧worker状態変更 — batch.error attempt不消費を修復済み。実運用観察(2026-09-23 snapshot): discovery日次再スケジュール健全・reply 19件全done(attempts<=6有界)・添付10件attempts=6打止め・outbox滞留0・QC backlogはmax_jobs=4/tick FIFOで消化中・中間state滞留なし",
+      "summary": "job内停止・累積retry・修復予約・旧worker状態変更 — batch.error attempt不消費を修復済み。当時の実運用観察ではdiscoveryの日次再スケジュール、replyの完了、attachmentのattempt上限停止、通知滞留の解消とQC backlogのFIFO消化を確認。retry上限・tick予算の設計を保持し、中間stateの滞留は観察されなかった。端末固有の件数・観測時点は一般化した",
       "tests": [
         "test_history_batch_error_consumes_attempts",
         "test_history_batch_session_expired_stays_attempt_free"
@@ -149,15 +149,15 @@
     },
     "AUDIT-J04": {
       "status": "open",
-      "summary": "原文→facts網羅性・低confidence・入力完全性・長文再開 — 抽出側は実測で設計内確認(v1網羅97.4%・欠落は空本文のみ、llm新着~100%・旧文はper-tick cap消化中、error attempts<=5有界+version reset)。facts(Jev)側の網羅性は本番件数が少なく未検証"
+      "summary": "原文→facts網羅性・低confidence・入力完全性・長文再開 — 当時の実運用観察で抽出側は設計内と確認（対象外の空本文、旧文のper-tick cap消化、errorのattempt上限とversion resetを含む）。facts(Jev)側の網羅性は運用実績不足のため未検証。端末固有の網羅率・件数は一般化した"
     },
     "AUDIT-J05": {
       "status": "open",
-      "summary": "Open Loop thread/対象/改訂一致・正式依頼関連 — loop機構はrevision/世代bindで静査健全、本番loop_candidate/loop_eventゼロで整合性は未検証。requests/receipts未使用"
+      "summary": "Open Loop thread/対象/改訂一致・正式依頼関連 — loop機構はrevision/世代bindで静査健全。当時のloop_candidate/loop_eventとrequests/receiptsの運用実績は評価に十分でなく、実運用での整合性は未検証"
     },
     "EVAL-J06": {
       "status": "open",
-      "summary": "人間ラベル評価・校正・段階別gate・CLI操作 — ツール類(semantic_blind等)存在・本番ラベル0件でワークフロー未実施"
+      "summary": "人間ラベル評価・校正・段階別gate・CLI操作 — ツール類(semantic_blind等)は存在するが、人間による本番ラベル評価のワークフローは未実施。端末固有のラベル件数は一般化した"
     },
     "TEST-01": {
       "status": "covered",

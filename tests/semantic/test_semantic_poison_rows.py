@@ -1,4 +1,5 @@
 """SQLite-valid unreadable JSON cannot block unrelated semantic work or replenish usage."""
+import semantic_notice
 import semantic_v4
 import semantic_assembly as assembly
 import json
@@ -106,7 +107,7 @@ def test_unreadable_plan_meta_does_not_hide_valid_sibling(ledger):
     ledger.db.commit()
     ledger.artifact_add(drain.KIND_PLAN, "{}", project_id=1, message_id=1,
                         meta={"fingerprint": "fp", "audit_status": "PASS"})
-    assert drain._plan_exists(ledger, 1, "fp", "PASS")
+    assert semantic_notice.plan_exists(ledger.db, 1, "fp", "PASS")
 
 
 def test_unreadable_failed_job_does_not_block_revival_of_valid_sibling(ledger):

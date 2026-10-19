@@ -64,7 +64,7 @@ _REFERENCE_OPS = frozenset({"ops.signal_dismiss", "ops.extract_feedback",
 _CONFIRM_FIELDS = frozenset({"op", "phase", "payload", "payload_hash", "origin"})
 
 
-def _source_row(view, requests, project_id: int, message_id: int):
+def _source_row(view, project_id: int, message_id: int):
     row = view.db.execute(
         "SELECT message_id,content_hash,body_state FROM messages "
         "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
@@ -72,12 +72,13 @@ def _source_row(view, requests, project_id: int, message_id: int):
         raise ValueError("source_missing")
     if row["body_state"] != "full":
         raise ValueError("source_incomplete")
-    if not requests.valid_hash(row["content_hash"]):
+    from mcs_util import valid_hash
+    if not valid_hash(row["content_hash"]):
         raise ValueError("source_hash_missing")
     return row
 
 
-def _current_request(view, requests, project_id: int, request_id: int):
+def _current_request(view, project_id: int, request_id: int):
     row = view.db.execute(
         "SELECT r.request_id,r.project_id,r.revision,r.source_message_id,"
         "r.source_hash,m.content_hash AS current_source_hash,m.body_state "
@@ -86,8 +87,9 @@ def _current_request(view, requests, project_id: int, request_id: int):
         "WHERE r.project_id=? AND r.request_id=?", (project_id, request_id)).fetchone()
     if row is None:
         raise ValueError("request_not_found")
+    from mcs_util import valid_hash
     if (row["body_state"] != "full"
-            or not requests.valid_hash(row["current_source_hash"])):
+            or not valid_hash(row["current_source_hash"])):
         raise ValueError("source_incomplete")
     return row
 
@@ -425,7 +427,7 @@ def build_preview(data: dict, settings: dict[str, Any],
             source_message_id = positive_id(data.get("source_message_id"))
             if source_message_id is None:
                 return deny("bad_source_message_id")
-            source = _source_row(view, requests, project_id, source_message_id)
+            source = _source_row(view, project_id, source_message_id)
             loop_ref, loop_candidate, error = _loop_ref(
                 data, view, project_id, source_message_id)
             if error:
@@ -437,7 +439,7 @@ def build_preview(data: dict, settings: dict[str, Any],
             request_id = positive_id(data.get("request_id"))
             if request_id is None:
                 return deny("bad_request_id")
-            current = _current_request(view, requests, project_id, request_id)
+            current = _current_request(view, project_id, request_id)
             if ("expected_revision" in data
                     and data["expected_revision"] != current["revision"]):
                 return deny("revision_conflict")
@@ -541,7 +543,8 @@ def build_control_preview(data: dict, settings: dict[str, Any],
                 return deny(error)
             supplied = data.get("expected_payload_hash")
             if supplied is not None:
-                if not requests.valid_hash(supplied):
+                from mcs_util import valid_hash
+                if not valid_hash(supplied):
                     return deny("bad_payload_hash")
                 if supplied != digest:
                     return deny("payload_changed")
@@ -604,7 +607,8 @@ def _confirmation_parts(data: dict, requests,
     current_origin = confirmation_origin(identity)
     if not isinstance(origin, dict) or origin != current_origin:
         return None, None, None, "origin_mismatch"
-    if (not requests.valid_hash(supplied_hash)
+    from mcs_util import valid_hash
+    if (not valid_hash(supplied_hash)
             or requests.payload_hash({"payload": payload, "origin": origin})
             != supplied_hash):
         return None, None, None, "payload_hash_mismatch"
@@ -648,7 +652,7 @@ def confirm(data: dict, settings: dict[str, Any],
         if not is_control:
             if command == "request.create":
                 source = _source_row(
-                    view, requests, project_id, payload["source_message_id"])
+                    view, project_id, payload["source_message_id"])
                 if source["content_hash"] != payload["source_hash"]:
                     return deny("source_changed")
                 loop_error = _verify_loop_ref(
@@ -657,7 +661,7 @@ def confirm(data: dict, settings: dict[str, Any],
                     return deny(loop_error)
             else:
                 current = _current_request(
-                    view, requests, project_id, payload["request_id"])
+                    view, project_id, payload["request_id"])
                 if (current["revision"] != payload["expected_revision"]
                         or current["current_source_hash"]
                         != payload["expected_source_hash"]):

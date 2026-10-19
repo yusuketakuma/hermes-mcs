@@ -8,6 +8,7 @@ import time
 
 from mcs_contract import SchemaError
 from project_metadata_contract import ARTIFACT_KIND, CLINICAL_DATASETS, JSON, MAX_ROWS, accepted_reasons, attempt_state, clinical_definition_fingerprint, metadata_target, normalize_rows
+import mcs_queries
 
 
 def _text(value) -> bool:
@@ -74,7 +75,7 @@ def _chat_item(item, *, medication: bool, rule: bool) -> dict[str, JSON] | None:
 def _chat_candidates(db, project_id: int, dataset: str, now: float,
                      max_age_s: float) -> dict[str, JSON]:
     """Bounded same-snapshot candidates with existing current-generation selection."""
-    from structured_view import fact_generations, latest_artifact, latest_fact_artifact
+    from structured_view import fact_generations
 
     messages = db.execute(
         "SELECT message_id,posted_at,posted_at_ts,content_hash FROM messages "
@@ -92,10 +93,10 @@ def _chat_candidates(db, project_id: int, dataset: str, now: float,
         kinds = generations.get(mid, {})
         kind = next((key for key in ("semantic_facts_v4", "canonical_projection", "extract_llm")
                      if key in kinds), None)
-        document = latest_fact_artifact(db, mid) if kind else None
+        document = mcs_queries.current_message_facts(db, mid) if kind else None
         if kind is None and "extract_v1" in kinds:
             kind = "extract_v1"
-            document = latest_artifact(db, kind, mid)
+            document = mcs_queries.current_message_extract(db, kind, mid)
         # Empty selected generations never resurrect older extraction rows.
         if kind is None or document is None or document.get("_error"):
             missing += 1

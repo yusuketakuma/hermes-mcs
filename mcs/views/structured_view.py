@@ -7,7 +7,7 @@ means the suppression rules (negated/resolved symptoms, other-person
 meds, unverified-medication labelling) and the freshness gate can never
 diverge between surfaces.
 
-Freshness/safety gate lives in latest_artifact's SQL: the artifact must
+Freshness/safety gate lives in mcs_queries.current_message_extract SQL: the artifact must
 be bound to the message's CURRENT content_hash and the message must not
 be deleted — a tombstoned message never contributes extracted data.
 
@@ -25,7 +25,6 @@ Merge contract (v1 rules ∪ llm ∪ v4 canonical facts), per field:
   canonical facts — appended last as the highest-authority layer.
 """
 from __future__ import annotations
-import clinical_scope
 
 import hashlib
 from itertools import islice
@@ -34,10 +33,12 @@ import sqlite3
 
 from drug_map import KIND as REF_KIND, candidate_note, current_refs, generation_signature
 from mcs_queries import (FACT_KINDS_SQL, current_extract_pred, current_fact_pred,
-                         json_or_null, med_is_patient_current, item_unverified)
+                         med_is_patient_current, item_unverified)
 from mcs_util import loads_dict
 from clinical_display import item_scope, scoped_vitals, vital_line
-from semantic_render import _LINE_ATTRS
+from semantic_render import FACT_ATTRIBUTE_LABELS
+import clinical_urgency
+import mcs_queries
 
 
 def _content_dict(r) -> dict | None:
@@ -46,24 +47,8 @@ def _content_dict(r) -> dict | None:
     return loads_dict(r["content"]) if r else None
 
 
-def _latest_artifact_query(*, facts=False, mid="?"):
-    if facts:
-        where = (
-            f"a.message_id={mid} AND a.kind IN ({FACT_KINDS_SQL}) "
-            "AND m.body_state IS NOT 'deleted' "
-            "AND CASE WHEN json_valid(a.content) THEN "
-            "json_type(a.content)='object' ELSE 0 END "
-            f"{current_fact_pred('a', 'm')}")
-    else:
-        where = f"a.kind=? AND a.message_id={mid} {current_extract_pred()}"
-    return ("SELECT a.content FROM artifacts a JOIN messages m "
-            "ON m.message_id=a.message_id WHERE " + where +
-            " ORDER BY a.artifact_id DESC LIMIT 1")
 
 
-def latest_artifact(db, kind: str, mid: int) -> dict | None:
-    r = db.execute(_latest_artifact_query(), (kind, mid)).fetchone()
-    return _content_dict(r)
 
 
 def _drug_refs(db, mid: int) -> list:
@@ -123,14 +108,6 @@ def fact_generations(db, mids: list) -> dict:
     return result
 
 
-def latest_fact_artifact(db, mid: int) -> dict | None:
-    """Newest usable fact artifact for a message — a hash-current
-    ``canonical_projection`` shadows ``extract_llm`` (the same
-    ``current_fact_pred`` shadow rule every consumer shares); when the
-    projection is stale, invalidated, or absent the legacy extraction
-    is read instead — never the other way around."""
-    r = db.execute(_latest_artifact_query(facts=True), (mid,)).fetchone()
-    return _content_dict(r)
 
 
 RX_LABEL = {"start": "開始", "stop": "中止", "change": "変更",
@@ -226,7 +203,7 @@ def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> l
         if scope in ("family", "other", "unknown"):
             f = {**f, "subject": _SUBJECT_JP[scope]}
         attrs = [f"{name}:{f[key]}" for key, name in
-                 (("subject", "対象"), *_LINE_ATTRS, ("event_time", "時点"))
+                 (("subject", "対象"), *FACT_ATTRIBUTE_LABELS, ("event_time", "時点"))
                  if isinstance(f.get(key), str) and f[key].strip()]
         if scope in ("past", "planned", "conditional"):
             attrs.append("原文:" + _TIME_SCOPE_JP[scope])
@@ -244,128 +221,12 @@ def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> l
 URGENCY_LABEL_PLAIN = {"llm": "🚨 緊急度高", "rule": "🚨"}   # one spelling on every surface
 
 
-def _typed_urgency_reasons(document, reasons, context):
-    from extract import clinical_urgency_quote
-    from mcs_util import locate_quote_span
-
-    body, _, _ = context
-    kept = []
-    for item in _items(document, "symptoms"):
-        if (not isinstance(item, dict) or item_unverified(item) or item.get("subject") != "patient"
-                or item.get("status") not in ("new", "ongoing") or item.get("negated") is not False):
-            continue
-        text, quote = item.get("text"), item.get("evidence")
-        if not isinstance(text, str) or not text.strip() or not isinstance(quote, str):
-            continue
-        span = locate_quote_span(body, quote)
-        inner = locate_quote_span(body[span[0]:span[1]], text) if span is not None else None
-        if span is None or inner is None or item_scope(item, context, text) != "patient":
-            continue
-        for reason in reasons:
-            reason_span = locate_quote_span(body, reason)
-            if (reason_span is not None and reason_span[0] <= span[0] + inner[0]
-                    and span[0] + inner[1] <= reason_span[1]
-                    and clinical_urgency_quote(reason, symptom=text) and reason not in kept):
-                kept.append(reason)
-    return kept
 
 
-def message_urgency(db, mid: int) -> str | None:
-    """'llm' when the current fact artifact says urgency high, None when it
-    says routine (the content-level verdict supersedes the lexical rule),
-    'rule' when only extract_v1 flags it and no LLM verdict exists — the one
-    urgency reading for cards, text notices and signal escalation.
-    canonical_projection / semantic_facts_v4 rows carry no urgency, so the
-    newest hash-current extract_llm row supplies the verdict behind them."""
-    return message_urgency_details(db, mid)["source"]
 
 
-def message_urgency_details(db, mid: int) -> dict:
-    """Report guarded urgency separately from the model's raw verdict and preserve review holds."""
-    from extract import clinical_urgency_quote, patient_clinical_quotes, patient_rule_urgency_quotes, urgent_request_quote
-
-    document = latest_fact_artifact(db, mid) or {}
-    verdict = document.get("urgency")
-    if verdict not in ("high", "routine", "unclear"):
-        document = latest_artifact(db, "extract_llm", mid) or {}
-        verdict = document.get("urgency")
-    result = {"source": None, "subject": "unknown", "reasons": [], "raw_verdict": verdict,
-              "verdict": verdict, "held": False, "kind": "clinical"}
-    rule = latest_artifact(db, "extract_v1", mid) or {}
-    if verdict not in ("high", "routine", "unclear") and rule.get("urgency") != "high":
-        return result
-    if db is None:
-        if verdict == "high":
-            result.update(verdict="unclear", held=True, scopes=["unknown"])
-        return result
-    columns = {column[1] for column in db.execute("PRAGMA table_info(patients)")}
-    name = "p.patient_name" if "patient_name" in columns else "NULL"
-    kind = "p.project_type" if "project_type" in columns else "NULL"
-    row = db.execute(f"SELECT m.body_text,m.body_state,{name} patient_name,{kind} project_type FROM messages m "
-                     "LEFT JOIN patients p ON p.project_id=m.project_id WHERE m.message_id=?", (mid,)).fetchone()
-    if row is None or row["body_state"] not in (None, "full") or not isinstance(row["body_text"], str):
-        return result
-    body = row["body_text"]
-    default = "unknown" if row["project_type"] == "group" else "patient"
-    if default == "unknown":
-        if verdict == "high":
-            result.update(verdict="unclear", held=True, scopes=["unknown"])
-        return result
-    if verdict == "high":
-        quotes = document.get("urgency_evidence")
-        reasons, scopes = clinical_scope.patient_urgency_quotes(
-            body, quotes if isinstance(quotes, list) else [], patient_name=row["patient_name"], default=default)
-        clinical = [quote for quote in reasons if clinical_urgency_quote(quote)]
-        clinical += [quote for quote in _typed_urgency_reasons(document, reasons, (body, row["patient_name"], default))
-                     if quote not in clinical]
-        if clinical:
-            return {**result, "source": "llm", "subject": "patient", "reasons": clinical[:2]}
-        if reasons and any(urgent_request_quote(quote) for quote in reasons):
-            result.update(kind="request", reasons=reasons[:2])
-        result.update(verdict="unclear", held=True, scopes=scopes or ["unknown"])
-    if verdict == "routine":
-        return result
-    # "unclear" is an abstention, not a clearance — it falls through to
-    # the lexical net exactly like a missing verdict does.
-    if rule.get("urgency") == "high":
-        reasons = patient_rule_urgency_quotes(body)
-        scoped, _ = clinical_scope.patient_urgency_quotes(body, reasons, patient_name=row["patient_name"], default=default)
-        clinical = [quote for quote in scoped if clinical_urgency_quote(quote)]
-        if not clinical and any(urgent_request_quote(quote) for quote in scoped):
-            clinical = patient_clinical_quotes(body, patient_name=row["patient_name"])
-        if clinical and default == "patient":
-            result.update(source="rule", subject="patient", reasons=clinical[:2])
-        elif reasons:
-            result.update(kind="request", reasons=reasons[:2])
-    return result
 
 
-def urgency_qc_disagreement(db, mid: int) -> dict | None:
-    """Newest current QC's urgency verdict when it disagrees with the
-    extraction it audited — {"extracted", "jev", "confidence"} or None.
-
-    The verdict must pin to the CURRENT extract_llm row (a verdict on a
-    superseded artifact is invisible here), and a missing QC row simply
-    returns None — absence can never suppress or annotate an alert."""
-    row = db.execute(
-        "SELECT q.content FROM artifacts q"
-        " JOIN messages m ON m.message_id=q.message_id"
-        " WHERE q.kind='extract_qc' AND q.message_id=?"
-        f" {current_extract_pred('q', 'm')}"
-        f" AND json_extract({json_or_null('q.meta')},"
-        "'$.source_artifact_id')="
-        "  (SELECT MAX(a.artifact_id) FROM artifacts a"
-        "   JOIN messages m2 ON m2.message_id=a.message_id"
-        "   WHERE a.kind='extract_llm' AND a.message_id=q.message_id"
-        f"   {current_extract_pred('a', 'm2')})"
-        " ORDER BY q.artifact_id DESC LIMIT 1", (mid,)).fetchone()
-    urg = (_content_dict(row) or {}).get("urgency")
-    if not isinstance(urg, dict) \
-            or urg.get("jev") not in ("high", "routine", "unclear") \
-            or urg.get("extracted") not in ("high", "routine", "unclear") \
-            or urg.get("jev") == urg.get("extracted"):
-        return None
-    return urg
 
 
 _QC_URGENCY_SUFFIX = {"routine": "（監査では通常判定）",
@@ -375,7 +236,7 @@ _QC_URGENCY_SUFFIX = {"routine": "（監査では通常判定）",
 def urgency_qc_suffix(db, mid: int) -> str:
     """Display suffix marking a displayed 'llm' high badge whose newest
     current QC disagreed — empty string when QC agrees or never ran."""
-    qc = urgency_qc_disagreement(db, mid)
+    qc = clinical_urgency.urgency_qc_disagreement(db, mid)
     if qc and qc.get("jev") in _QC_URGENCY_SUFFIX:
         return _QC_URGENCY_SUFFIX[qc["jev"]]
     return ""
@@ -613,8 +474,8 @@ def _med_lines(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"),
 def medication_entries(db, mid: int) -> tuple[list, list]:
     """The post's current (confirmed, unverified) medication entries with
     their dictionary annotations — the 💊 薬剤を確認 view's input."""
-    v1 = latest_artifact(db, "extract_v1", mid) or {}
-    return _med_entries(latest_fact_artifact(db, mid) or {}, v1, _drug_refs(db, mid),
+    v1 = mcs_queries.current_message_extract(db, "extract_v1", mid) or {}
+    return _med_entries(mcs_queries.current_message_facts(db, mid) or {}, v1, _drug_refs(db, mid),
                         context=_source_context(db, mid))
 
 
@@ -625,8 +486,8 @@ def medication_post_ids(db, mids):
     if not batch:
         return
     fields, join = _source_context_columns(db, "source")
-    rule = _latest_artifact_query(mid="source.message_id")
-    fact = _latest_artifact_query(facts=True, mid="source.message_id")
+    rule = mcs_queries.current_message_artifact_query(mid="source.message_id")
+    fact = mcs_queries.current_message_artifact_query(facts=True, mid="source.message_id")
     # Sort only the bounded ID driver, not the original body/artifact blobs.
     query = (f"SELECT requested.mid,({rule}),({fact}),{fields} "
              "FROM (SELECT value mid FROM json_each(?) ORDER BY key LIMIT -1) requested "
@@ -725,16 +586,16 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     """Compact structured summary from extract_v1 + the current fact
     artifact (canonical_projection shadows extract_llm).  Returns []
     when nothing usable exists (caller falls back to raw only)."""
-    v1 = latest_artifact(db, "extract_v1", mid) or {}
-    selected = latest_fact_artifact(db, mid)
+    v1 = mcs_queries.current_message_extract(db, "extract_v1", mid) or {}
+    selected = mcs_queries.current_message_facts(db, mid)
     llm = selected or {}
     if not v1 and not llm:
         return []
-    details = message_urgency_details(db, mid)
+    details = clinical_urgency.message_urgency_details(db, mid)
     urgency = details["source"]
     # Fact artifacts (canonical projections) carry no urgency fields —
     # the extract_llm row behind them holds evidence and vital_flags.
-    ext = (latest_artifact(db, "extract_llm", mid) or {}) \
+    ext = (mcs_queries.current_message_extract(db, "extract_llm", mid) or {}) \
         if urgency or llm else {}
     suffix = ""
     if urgency == "llm":

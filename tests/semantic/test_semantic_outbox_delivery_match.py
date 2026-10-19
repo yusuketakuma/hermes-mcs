@@ -1,8 +1,8 @@
 """The SQL delivery-key match keeps the old per-row Python semantics."""
+import semantic_notice
 import pytest
 
 from ledger import Ledger
-import semantic_render as render
 
 
 @pytest.fixture
@@ -32,7 +32,7 @@ def test_rows_that_never_matched_still_do_not_match(ledger, payload, state,
                                                     kind):
     _raw(ledger, payload, state, kind)
     key = "5" if '": 5' in payload else "SYNTH-k"
-    assert not render._outbox_has_delivery(ledger, key)
+    assert not semantic_notice.outbox_has_delivery(ledger.db, key)
 
 
 @pytest.mark.parametrize("state", ["pending", "failed", "accepted",
@@ -40,5 +40,5 @@ def test_rows_that_never_matched_still_do_not_match(ledger, payload, state,
 def test_every_counted_state_matches(ledger, state):
     _raw(ledger, "{broken", state)
     _raw(ledger, '{"delivery_key": "SYNTH-k", "root_id": 1}', state)
-    assert render._outbox_has_delivery(ledger, "SYNTH-k")
-    assert not render._outbox_has_delivery(ledger, "SYNTH-other")
+    assert semantic_notice.outbox_has_delivery(ledger.db, "SYNTH-k")
+    assert not semantic_notice.outbox_has_delivery(ledger.db, "SYNTH-other")

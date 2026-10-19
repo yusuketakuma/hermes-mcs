@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import mcs_setup
 import runtime_inspection
 
 
@@ -50,7 +49,6 @@ def test_installer_recovery_gate_uses_public_inspection_without_real_commands(
     config.write_text(json.dumps({"recovery_python": selected}))
     agents = tmp_path / "agents"
     agents.mkdir()
-    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
     if case == "deployed_drift":
         (agents / "org.mcs.recovery.plist").write_bytes(plistlib.dumps(
             {"ProgramArguments": [str(tmp_path / "different-python"), "recovery.py"]}))
@@ -65,7 +63,7 @@ def test_installer_recovery_gate_uses_public_inspection_without_real_commands(
                         lambda *a, **k: pytest.fail("installer attempted a real runtime command"))
     monkeypatch.setattr(sys, "path", list(sys.path))
     monkeypatch.setattr(sys, "argv", ["synthetic-probe", str(checkout), str(template),
-                                     str(config), "", "0"])
+                                     str(config), "", "0", str(agents)])
     script = compile(_installer_recovery_script(), "<synthetic-installer-recovery>", "exec")
     if case == "safe":
         exec(script, {})

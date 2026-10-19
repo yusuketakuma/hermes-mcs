@@ -202,8 +202,13 @@ class Registry:
                            sort_keys=True, separators=(",", ":"))
                 + "\n").encode("utf-8")
         created = not os.path.exists(self._delta_path)
+        # Resolve core only for a durable mutation, before acquiring its FD.
+        from . import mcs_api
+        mcs_api.bootstrap()
+        from safe_io import fdopen_owned
+
         fd = os.open(self._delta_path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
-        with os.fdopen(fd, "r+b") as handle:
+        with fdopen_owned(fd, "r+b") as handle:
             size = os.fstat(fd).st_size
             if size and os.pread(fd, 1, size - 1) != b"\n":
                 # drop a torn (never committed) tail so this row stays parsable

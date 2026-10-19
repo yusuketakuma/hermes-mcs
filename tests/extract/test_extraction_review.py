@@ -12,6 +12,7 @@ import extract_llm
 from ledger import Ledger
 from mcs_contract import Message
 import rollup
+import clinical_urgency
 
 
 def _message(mid=1, body="合成本文", day=20):
@@ -346,7 +347,6 @@ def test_urgency_requires_current_affirmative_evidence(body, high):
 
 
 def test_urgency_revision_replaces_old_rule_and_shared_display(db):
-    from structured_view import message_urgency
 
     db.save_messages([_message(body='急ぎではありません')])
     content_hash = db.db.execute('SELECT content_hash FROM messages').fetchone()[0]
@@ -355,10 +355,10 @@ def test_urgency_revision_replaces_old_rule_and_shared_display(db):
                     meta={'hash': content_hash,
                           'rule_version': extract.RULE_VERSION - 1})
     # Cached high is not displayed when the current original explicitly denies urgency.
-    assert message_urgency(db.db, 1) is None
+    assert clinical_urgency.message_urgency(db.db, 1) is None
     assert json.loads(db.artifacts('extract_v1')[0]['content'])['urgency'] == 'high'
     assert extract.run_pending(db)['done'] == 1
-    assert message_urgency(db.db, 1) is None
+    assert clinical_urgency.message_urgency(db.db, 1) is None
     artifacts = db.artifacts('extract_v1')
     assert len(artifacts) == 1
     assert json.loads(artifacts[0]['meta'])['rule_version'] == extract.RULE_VERSION
@@ -385,7 +385,6 @@ def _v1_urgent(db, mid=1):
     ('routine', {'error': 1}, 'rule'),
 ])
 def test_message_urgency_llm_verdict_supersedes_rule(db, llm, llm_meta, expect):
-    from structured_view import message_urgency
 
     body = '本人が急変、至急ご確認ください'
     db.save_messages([_message(body=body)])
@@ -395,7 +394,7 @@ def test_message_urgency_llm_verdict_supersedes_rule(db, llm, llm_meta, expect):
         meta.update(llm_meta)
         db.artifact_add('extract_llm', json.dumps({'urgency': llm, 'urgency_evidence': [body]}),
                         project_id=1, message_id=1, meta=meta)
-    assert message_urgency(db.db, 1) == expect
+    assert clinical_urgency.message_urgency(db.db, 1) == expect
 
 
 
@@ -422,7 +421,6 @@ def test_stats_count_rule_high_suppressed_by_llm_routine(db):
         'request_only': 0, 'scope_or_evidence_held': 0}
 
 def test_message_urgency_llm_verdict_under_v4_read_model(db):
-    from structured_view import message_urgency
 
     db.save_messages([_message(body='至急ご確認ください')])
     chash = _v1_urgent(db)
@@ -433,11 +431,11 @@ def test_message_urgency_llm_verdict_under_v4_read_model(db):
                     project_id=1, message_id=1,
                     meta={'hash': chash,
                           'extract_version': extract_llm.EXTRACT_VERSION})
-    assert message_urgency(db.db, 1) is None
+    assert clinical_urgency.message_urgency(db.db, 1) is None
 
 
 def test_urgency_qc_disagreement_flags_only_the_current_artifact(db):
-    from structured_view import urgency_qc_disagreement, urgency_qc_suffix
+    from structured_view import urgency_qc_suffix
 
     db.save_messages([_message(body='至急ご確認ください')])
     chash = _v1_urgent(db)
@@ -445,7 +443,7 @@ def test_urgency_qc_disagreement_flags_only_the_current_artifact(db):
                     project_id=1, message_id=1,
                     meta={'hash': chash,
                           'extract_version': extract_llm.EXTRACT_VERSION})
-    assert urgency_qc_disagreement(db.db, 1) is None
+    assert clinical_urgency.urgency_qc_disagreement(db.db, 1) is None
     src = db.db.execute("SELECT max(artifact_id) FROM artifacts"
                         " WHERE kind='extract_llm'").fetchone()[0]
     db.artifact_add('extract_qc', json.dumps(
@@ -454,7 +452,7 @@ def test_urgency_qc_disagreement_flags_only_the_current_artifact(db):
                      'confidence': 0.9}}),
         project_id=1, message_id=1,
         meta={'hash': chash, 'source_artifact_id': src})
-    d = urgency_qc_disagreement(db.db, 1)
+    d = clinical_urgency.urgency_qc_disagreement(db.db, 1)
     assert d['jev'] == 'routine' and d['extracted'] == 'high'
     assert urgency_qc_suffix(db.db, 1) == '（監査では通常判定）'
     # a QC verdict pinned to a superseded extraction must not annotate
@@ -462,7 +460,7 @@ def test_urgency_qc_disagreement_flags_only_the_current_artifact(db):
                     project_id=1, message_id=1,
                     meta={'hash': chash,
                           'extract_version': extract_llm.EXTRACT_VERSION})
-    assert urgency_qc_disagreement(db.db, 1) is None
+    assert clinical_urgency.urgency_qc_disagreement(db.db, 1) is None
 
 
 def test_rule_revision_cut_by_deadline_keeps_old_artifact(db, monkeypatch):

@@ -3,10 +3,11 @@
 Provider-neutral design for exporting the T15 machine read model
 (`mcs-read-model/1` records from `brain_export.py`) to an external
 knowledge store — **disabled by default**. No connector, endpoint,
-credential, auto-sync job or cloud dependency is shipped. The only
-implementation is `mcs/ops/ext_contract.py`, which demonstrates the
-contract against `LocalSink`, an in-process fake consumer backed by a
-directory, and `HandoffSink`, a local staging directory that never
+credential, auto-sync job or cloud dependency is shipped. The implementation separates authorization/envelope/receipt validation in
+`mcs/export/export_contract.py` from local journal, delivery, reconciliation
+and withdrawal in `mcs/export/export_delivery.py`. The operator CLI remains
+`mcs/ops/ext_contract.py`. `LocalSink` is an in-process fake consumer backed
+by a directory; `HandoffSink` is a local staging directory that never
 acknowledges its own delivery. Both are manual local paths, not connectors.
 
 ## Authorization (`mcs-ext-auth/1`)

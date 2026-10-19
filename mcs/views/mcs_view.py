@@ -23,7 +23,7 @@ from project_metadata_view import physician_viewed_status
 from mcs_contract import project_url
 from mcs_queries import incomplete_reply_roots
 from self_identity import is_own_station_message
-from mcs_util import HOME, loads_dict, search_fold, valid_text
+from mcs_util import HOME, loads_dict, search_fold, valid_text, valid_hash
 from mcs_queries import register_search_fold
 from snapshot_access import snapshot_meta
 from read_model import message_patient_context
@@ -91,6 +91,15 @@ class View:
 
     def close(self):
         self.reader.close()
+
+    def local_link_hints(self, *, limit=200, cursor=None):
+        """Page local patient link hints in this view's existing snapshot transaction."""
+        return self._page(
+            """SELECT p.project_id AS _key, p.project_id, p.patient_name,
+               (SELECT MAX(m.posted_at_ts) FROM messages m
+                WHERE m.project_id=p.project_id) AS last_message_at
+               FROM patients p WHERE 1=1""",
+            [], ("p.project_id",), ["link-hints"], limit, cursor)
 
     def _page(self, sql, params, columns, scope, limit, cursor):
         if type(limit) is not int or not 1 <= limit <= 200:
@@ -648,7 +657,7 @@ class View:
         return {"items": items, "scope": "loop_candidates"}
 
     def _receipt(self, project, command_id, payload_hash):
-        if not requests.valid_uuid(command_id) or not requests.valid_hash(payload_hash):
+        if not requests.valid_uuid(command_id) or not valid_hash(payload_hash):
             raise ValueError("bad_receipt_identity")
         identity = self.db.execute("SELECT payload_hash FROM command_receipts WHERE command_id=?",
                                    (command_id,)).fetchone()
@@ -676,7 +685,7 @@ class View:
                 or not (0 < len(command_id) <= 200):
             raise ValueError("bad_receipt_identity")
         if payload_hash is not None \
-                and not requests.valid_hash(payload_hash):
+                and not valid_hash(payload_hash):
             raise ValueError("bad_receipt_identity")
         row = self.db.execute(
             "SELECT payload_hash,receipt_json FROM command_receipts "

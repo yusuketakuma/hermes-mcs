@@ -10,6 +10,7 @@ Stdlib only and free of side effects at import, so any entry point can
 use it.
 """
 import errno
+import json
 import os
 import stat
 import tempfile
@@ -154,11 +155,7 @@ def atomic_publish_text(path: str, text: str) -> None:
 def read_private_bytes(path, limit: int = 16384) -> bytes:
     """Read a bounded regular current-UID private file without links or FIFO waits."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
-    try:
-        stream = os.fdopen(fd, "rb")
-    except BaseException:
-        os.close(fd)
-        raise
+    stream = fdopen_owned(fd, "rb")
     with stream:
         metadata = os.fstat(stream.fileno())
         if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
@@ -168,3 +165,10 @@ def read_private_bytes(path, limit: int = 16384) -> bytes:
         if len(raw) > limit:
             raise ValueError
         return raw
+
+def read_json_nofollow(path, limit: int):
+    """Decode one complete bounded regular JSON document without links or FIFO waits."""
+    raw = read_regular_nofollow(path, limit, ValueError)
+    if len(raw) > limit:
+        raise ValueError("status_too_large")
+    return json.loads(raw.decode("utf-8"))

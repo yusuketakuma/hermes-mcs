@@ -127,13 +127,13 @@ def test_official_identities_have_separate_blocks_with_one_ref_read_per_message(
     before = _stats(store)
     drug_map.derive(store, _dictionary(tmp_path, _source_document()))
     calls = []
-    original = mcs_stats.current_refs
+    original = drug_map.current_refs_with_progress
 
-    def counted(db, mid):
+    def counted(db, mid, progress):
         calls.append(mid)
-        return original(db, mid)
+        return original(db, mid, progress)
 
-    monkeypatch.setattr(mcs_stats, "current_refs", counted)
+    monkeypatch.setattr(drug_map, "current_refs_with_progress", counted)
     after = _stats(store)
     assert calls == [1]
     assert after["by_name_month"] == before["by_name_month"]
@@ -183,7 +183,7 @@ def test_medication_stats_read_dictionary_progress_once_per_fixed_snapshot(store
         snapshot.close()
 
 
-def test_snapshot_stats_keep_the_two_argument_ref_reader_patchpoint(store, tmp_path, monkeypatch):
+def test_snapshot_stats_use_the_borrowed_progress_reader(store, tmp_path, monkeypatch):
     for mid in (1, 2, 3):
         _seed(store, mid=mid)
     drug_map.derive(store, _dictionary(tmp_path))
@@ -191,14 +191,14 @@ def test_snapshot_stats_keep_the_two_argument_ref_reader_patchpoint(store, tmp_p
     store.db.backup(snapshot)
     snapshot.row_factory = sqlite3.Row
     snapshot.execute("PRAGMA query_only=ON")
-    original, calls = mcs_stats.current_refs, []
+    original, calls = drug_map.current_refs_with_progress, []
 
-    def counted(connection, mid):
+    def counted(connection, mid, progress):
         assert connection is snapshot
         calls.append(mid)
-        return original(connection, mid)
+        return original(connection, mid, progress)
 
-    monkeypatch.setattr(mcs_stats, "current_refs", counted)
+    monkeypatch.setattr(drug_map, "current_refs_with_progress", counted)
     try:
         result = mcs_stats.run_stats(snapshot, SNAP_TS, {"stat": "meds"})["stats"]["meds"]
         assert calls == [3, 2, 1]

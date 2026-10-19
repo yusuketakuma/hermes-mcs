@@ -322,3 +322,60 @@ def test_out_of_range_number_records_failure_without_losing_complete_artifact(
     payload = json.loads(failed["content"])
     assert payload["rows"] == [] and payload["definition"] is None
     assert not payload["complete"]
+
+
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt, SystemExit])
+def test_cli_writer_close_failure_still_releases_owned_run_lock(tmp_path, monkeypatch, failure):
+    import errno
+    import os
+    from types import SimpleNamespace
+    import ledger
+    import mcs_adapter
+    import project_metadata
+    import writer_lock
+
+    database = tmp_path / "synthetic.db"
+    database.write_bytes(b"synthetic, never opened")
+    lock_path = str(tmp_path / "run.lock")
+    acquire = writer_lock.acquire_run_lock
+    owned = probe = None
+    error = failure("synthetic close refusal")
+    class BrokenStore:
+        def close(self):
+            raise error
+    try:
+        owned = acquire(lock_path)
+        assert owned is not None
+        monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda path: owned)
+        monkeypatch.setattr(ledger, "Ledger", lambda path: BrokenStore())
+        monkeypatch.setattr(mcs_adapter, "MCSAdapter", lambda **kwargs: SimpleNamespace(
+            _read_cache=lambda: "synthetic", set_deadline=lambda deadline: None))
+        monkeypatch.setattr(project_metadata, "sync_metadata", lambda *args, **kwargs: {"state": "complete"})
+        with pytest.raises(failure) as caught:
+            project_metadata.main(["sync", "--database", str(database), "--project-id", "1",
+                                   "--dataset", "medication_periods", "--read-only-get",
+                                   "--token-cache", str(tmp_path / "synthetic-token.json")])
+        assert caught.value is error
+        with pytest.raises(OSError) as closed:
+            os.fstat(owned)
+        assert closed.value.errno == errno.EBADF
+        probe = acquire(lock_path)
+        assert probe is not None
+        os.close(probe)
+        probe = None
+        assert database.read_bytes() == b"synthetic, never opened"
+    finally:
+        try:
+            if probe is not None:
+                try:
+                    os.close(probe)
+                except OSError as cleanup:
+                    if cleanup.errno != errno.EBADF:
+                        raise
+        finally:
+            if owned is not None:
+                try:
+                    os.close(owned)
+                except OSError as cleanup:
+                    if cleanup.errno != errno.EBADF:
+                        raise

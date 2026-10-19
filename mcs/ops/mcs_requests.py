@@ -1,6 +1,7 @@
 """Human-confirmed local requests; no network or automatic task creation."""
 import fcntl
 import json
+import mcs_util
 import os
 import re
 import tempfile
@@ -12,7 +13,7 @@ from pathlib import Path
 
 # canonical/payload_hash/positive live in core; re-exported for callers
 from mcs_util import canonical, payload_hash, positive, valid_text  # noqa: F401
-from safe_io import fsync_dir, read_regular_nofollow
+from safe_io import fsync_dir, read_regular_nofollow, fdopen_owned
 
 MAX_COMMAND_BYTES = 16384
 STATUSES = ("open", "in_progress", "done", "cancelled")
@@ -60,22 +61,6 @@ def read_command(path):
     return parse_command(read_regular_nofollow(
         path, MAX_COMMAND_BYTES,
         lambda: ValueError("regular_command_file_required"), check_size=False))
-
-
-def valid_hash(value):
-    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
-
-
-# The one release-tag grammar: updater detection/notice, approval and the
-# CLI share it; scripts/mcs_upgrade.py keeps a self-contained copy.
-RELEASE_TAG_RE = re.compile(
-    r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
-
-
-def release_tag(value):
-    """Return whether value is a vX.Y.Z[-pre] release tag of at most 255 characters."""
-    return isinstance(value, str) and len(value) <= 255 \
-        and RELEASE_TAG_RE.fullmatch(value) is not None
 
 
 def valid_uuid(value):
@@ -163,7 +148,7 @@ def validate(req):
             return "unknown_field"
         if not positive(req.get("source_message_id")):
             return "bad_source_message_id"
-        if not valid_hash(req.get("source_hash")):
+        if not mcs_util.valid_hash(req.get("source_hash")):
             return "bad_source_hash"
         extra_error = _request_extras(req)
         if extra_error:
@@ -175,7 +160,7 @@ def validate(req):
             return "unknown_field"
         if not positive(req.get("request_id")) or not positive(req.get("expected_revision")):
             return "bad_revision_or_id"
-        if not valid_hash(req.get("expected_source_hash")):
+        if not mcs_util.valid_hash(req.get("expected_source_hash")):
             return "bad_source_hash"
         extra_error = _request_extras(req)
         if extra_error:
@@ -386,7 +371,7 @@ def enqueue(req, cmd_dir):
         fd, temp = tempfile.mkstemp(prefix=f"request-{seq:020d}-", suffix=".tmp", dir=cmd_dir)
         published = False
         try:
-            with os.fdopen(fd, "wb") as stream:
+            with fdopen_owned(fd, "wb") as stream:
                 stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -412,7 +397,7 @@ def candidates(db, message):
     extract_llm for the same message (T12) so canonical request_pending
     facts drive suggestions when canonical mode is the fact source."""
     if (message["body_state"] != "full" or not isinstance(message["body_text"], str)
-            or not message["body_text"].strip() or not valid_hash(message["content_hash"])):
+            or not message["body_text"].strip() or not mcs_util.valid_hash(message["content_hash"])):
         return []
     # Select the same artifact as stats/signals, including when a newer
     # malformed or expired projection follows a usable one.
