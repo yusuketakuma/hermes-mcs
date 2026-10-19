@@ -94,6 +94,7 @@ def test_lock_bound_result_is_carried_and_committed_next_call(tmp_path, monkeypa
     res = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
                                   write_wait_s=1, carry=carry)
     assert res["carried"] == 1 and res["carry"] == [] and res["deferred"] == 0
+    assert res["done"] == 1
     assert len(db.artifacts("extract_llm", message_id=1)) == 1
     db.close()
 
@@ -547,3 +548,47 @@ def test_lane3_survives_transient_settle_error(monkeypatch, capsys):
     assert extract_llm.main() == 0
     assert "extract_loop_error" in capsys.readouterr().err
     assert len(settles) >= 3   # raised, retried, exit settle
+
+
+def test_lane_three_settlement_reports_saved_result(tmp_path, monkeypatch, capsys):
+    db = _ledger(tmp_path)
+    try:
+        state, carry = _carry_one(db, monkeypatch, tmp_path)
+        state["blocked"] = 0
+        extract_llm._settle_carry(db, carry, final=False)
+        rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert rows[-1]["carry_settled"] == {"done": 1, "held_prior": 0, "deferred": 0}
+        assert len(db.artifacts("extract_llm", message_id=1)) == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("lane_three", [False, True])
+def test_carried_safety_hold_is_reported_in_the_settling_pass(tmp_path, monkeypatch, capsys, lane_three):
+    db = _ledger(tmp_path)
+    try:
+        body = "本人に咳はありません。" + "合成の経過報告です。" * 20
+        db.save_messages([_message(body=body)])
+        row = db.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()
+        prior = db.artifact_add("extract_llm", json.dumps({"symptoms": [{
+            "text": "咳", "negated": True, "subject": "patient",
+            "evidence": "本人に咳はありません。"}]}), project_id=1, message_id=1,
+            meta={"hash": row[0], "extract_version": extract_llm.EXTRACT_VERSION - 1})
+        state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=10 ** 6)
+        first = extract_llm.run_pending(db, limit=1, budget_s=30,
+            per_write_lock=True, write_wait_s=1, carry=[])
+        carry = first["carry"]
+        assert len(carry) == 1
+        state["blocked"] = 0
+        if lane_three:
+            extract_llm._settle_carry(db, carry, final=False)
+            rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+            result = rows[-1]["carry_settled"]
+        else:
+            result = extract_llm.run_pending(db, limit=1, budget_s=30,
+                per_write_lock=True, write_wait_s=1, carry=carry)
+        assert result["done"] == 0 and result["held_prior"] == 1
+        assert [a["artifact_id"] for a in db.artifacts("extract_llm", message_id=1)] == [prior]
+        assert _claims(db) == []
+    finally:
+        db.close()
