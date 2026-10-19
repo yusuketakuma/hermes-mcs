@@ -864,9 +864,7 @@ def test_404_on_update_marks_not_sent(world):
 def test_action_ack_round_trip(world):
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "ack")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -888,9 +886,7 @@ def test_action_body_ephemeral_full_text(world):
                       if k != "card_thread"},
            "signals": CFG["signals"]}
     world.dispatch(cfg=cfg)
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "body")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -913,9 +909,7 @@ def test_action_click_inside_companion_thread(world):
     to the channel the card is bound to."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "ack")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -935,9 +929,7 @@ def test_action_foreign_thread_denied(world):
     stays denied — thread normalization never widens scope."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "ack")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1048,9 +1040,7 @@ def test_request_modal_full_flow(world, title, reason):
     request.create lands as a human-confirmed command."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1101,9 +1091,7 @@ def test_request_modal_full_flow(world, title, reason):
 def test_modal_wrong_actor_and_origin(world):
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1286,9 +1274,7 @@ def test_action_denies_wrong_channel_and_project(world):
     is written, even though the adapter's own auth may allow-all."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "ack")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1334,9 +1320,7 @@ def test_delayed_discord_body_rechecks_current_access(world, monkeypatch, key, v
     world.seed()
     cfg = {"notify": {**CFG["notify"], "card_thread": False}}
     world.dispatch(cfg=cfg)
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     act = world.mkactions(reg, bot)
     token = world.token(spec, "body")
     ix = FakeInteraction(f"mcs:a:{token}", message_id=bot.channels[42].sent[0].id)
@@ -1360,9 +1344,7 @@ def test_ack_idempotent_per_actor(world):
     allowed actor's ack on the same card stands alongside it."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "ack")
     act = actions_mod.Actions(
         bot=bot, settings={**SETTINGS,
@@ -1408,9 +1390,7 @@ def test_confirm_wrong_actor_and_replay(world):
     confirm id is dead — a replayed click reports expiry."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1438,9 +1418,7 @@ def test_confirm_wrong_actor_and_replay(world):
 def test_confirm_cancel_drops_pending(world):
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1470,9 +1448,7 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(
     import threading
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1519,9 +1495,7 @@ def test_confirm_publish_failure_releases_in_flight(world, monkeypatch,
     """A failed command write keeps the confirm usable (and cancellable)."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1546,9 +1520,7 @@ def test_confirm_publish_error_after_the_file_landed_keeps_the_confirm(
     cancel reads as busy) and the followup still reports the receipt."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1585,9 +1557,7 @@ def test_malformed_token_scope_is_denied(world, project_id, signals):
     """A token context naming no valid positive int project is refused."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     context = {**reg.token(tok), "project_id": project_id,
                "context": {"source_message_id": 100, "source_hash": "a" * 64}}
@@ -1607,9 +1577,7 @@ def test_confirm_expiring_before_take_never_publishes(world):
     lookup (the old begin_confirm result was ignored)."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1633,9 +1601,7 @@ def test_send_modal_failure_releases_modal(world):
     a best-effort followup instead of silence."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -1770,9 +1736,7 @@ def test_mcs_notification_receipt_scoped(world):
 
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "ack")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
@@ -2583,9 +2547,7 @@ def test_body_reclick_waits_for_fresh_result_after_source_deletion(world):
                       if k != "card_thread"},
            "signals": CFG["signals"]}
     world.dispatch(cfg=cfg)
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     token = world.token(spec, "body")
     act = world.mkactions(reg, bot)
     mid = bot.channels[42].sent[0].id
@@ -2621,9 +2583,7 @@ def test_action_tasks_ephemeral_list_and_transition(world):
     world.seed()
     _request(world)
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
     ix = FakeInteraction(f"mcs:a:{world.token(spec, 'tasks')}",
@@ -2656,9 +2616,7 @@ def test_action_tasks_empty_list(world):
     world.seed()
     rid = _request(world)
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     world.led.db.execute("UPDATE requests SET status='cancelled' "
                          "WHERE request_id=?", (rid,))
     world.led.db.commit()
@@ -2677,9 +2635,7 @@ def test_action_task_stale_shows_latest_hint(world):
     world.seed()
     _request(world)
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
     ix = FakeInteraction(f"mcs:a:{world.token(spec, 'tasks')}",
@@ -2730,9 +2686,7 @@ def test_confirm_out_of_scope_after_preview_is_denied_but_cancellable(world):
     authorization can do neither."""
     world.seed()
     world.dispatch()
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec = _delivered(world)
     tok = world.token(spec, "request")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]

@@ -382,21 +382,14 @@ def test_rx_period_skips_archived_room_and_resolves(led, end, raw, stype):
 
 # --- lifecycle (append-only transitions) ---
 
-def test_signal_resolves_when_condition_clears(led):
+def test_lifecycle_is_append_only(led):
+    """open -> resolved -> open produces three rows, history intact."""
     _req(led.db, "open", due="2026-09-10")
     _ev(led)
     assert _states(led.db)["request_overdue:1:1"] == "open"
     led.db.execute("UPDATE requests SET status='done' WHERE request_id=1")
     _ev(led)
     assert _states(led.db)["request_overdue:1:1"] == "resolved"
-
-
-def test_lifecycle_is_append_only(led):
-    """open -> resolved -> open produces three rows, history intact."""
-    _req(led.db, "open", due="2026-09-10")
-    _ev(led)
-    led.db.execute("UPDATE requests SET status='done' WHERE request_id=1")
-    _ev(led)
     led.db.execute("UPDATE requests SET status='open' WHERE request_id=1")
     _ev(led)
     rows = [json.loads(r[0]) for r in led.db.execute(
