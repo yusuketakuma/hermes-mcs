@@ -6,6 +6,9 @@ import extract
 
 OTHER_PERSON = [
     ("ご家族P80", {"hr": 80}),
+    ("本日ご家族P80", {"hr": 80}),
+    ("訪問時ご家族P80", {"hr": 80}),
+    ("訪問時妻P80", {"hr": 80}),
     ("ご家族のP72", {"hr": 72}),
     ("ご家族のBT37.5", {"bt": 37.5}),
     ("ご家族のHR72", {"hr": 72}),
@@ -37,12 +40,15 @@ def test_the_patients_own_vital_is_kept_by_the_writer(body, vitals):
 def test_an_oxygen_flow_is_not_a_saturation_reading(body):
     value = int(next(c for c in body if c.isdigit()))
     assert clinical_values._vitals_guard(body, {"spo2": value}) == {}
+    assert clinical_values.patient_current_vitals({"spo2": value}, body) == {}
+    assert extract.patient_vitals({"spo2": value}, body) == {}
 
 
 @pytest.mark.parametrize("body,vitals", [
     ("大丈夫 SpO2 92%", {"spo2": 92}),
     ("体位を工夫しSpO2 87%", {"spo2": 87}),
     ("工夫72", {"hr": 72}),
+    ("分母P72", {"hr": 72}),
     ("娘さん3人来訪、P72", {"hr": 72}),
     ("妻65歳、本人P72", {"hr": 72}),
 ])

@@ -10,7 +10,7 @@ from mcs_util import locate_quote_span, fold_map
 
 # One person/time vocabulary for extract.py, patient_context.py and this module.
 FAMILY_PERSON = (r"ご家族|家族|ご主人|主人|旦那(?:さん|様)?|奥(?:さん|様)|お?嫁(?:さん)?|配偶者|"
-                 r"お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|母|父|"
+                 r"お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|(?<!分)母|父|"
                  r"(?:長男|長女|次男|次女)(?:さん|様)?|娘(?:さん|様)?|息子(?:さん|様)?|(?<![丈工])夫|妻|"
                  r"お?兄(?:さん|様)?|お?姉(?:さん|様)?|(?:弟|妹|孫)(?:さん|様)?|同居者")
 # care staff: another person, except when they are the one measuring/treating the patient
@@ -86,12 +86,13 @@ def patient_current_vitals(values, body, *, patient_name=None):
 
 
 def _current_only(vitals: dict, body: str, patient_name=None) -> dict:
-    """Leave out a vital whose every source reading is superseded by an explicitly current one."""
+    """Leave out oxygen-flow numbers and readings superseded by explicitly current ones."""
     def superseded(key, value):
         if key not in _VITAL_CLASS or type(value) not in (int, float):
             return False
         spans = [m.span() for m in re.finditer(r"\d+(?:[.．]\d+)?", body) if _bp_number(m[0]) == value]
-        return bool(spans) and _vital_superseded(body, _VITAL_CLASS[key], spans, patient_name)
+        return bool(spans) and (all(_FLOW_AFTER.match(body, end) for _, end in spans)
+                                or _vital_superseded(body, _VITAL_CLASS[key], spans, patient_name))
     return {key: value for key, value in vitals.items() if not superseded(key, value)}
 
 

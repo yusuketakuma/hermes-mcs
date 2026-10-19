@@ -123,10 +123,10 @@ _PERSON = re.compile(
     rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|私|自分|{_NAMED_PERSON})"
     rf"(?P<link>について|の{_OWNER_MODIFIER}(?:{_CLINICAL_OWNER}|{_VITAL_OWNER})|[ \t　]+(?={_CLINICAL_OWNER})"
     rf"|に対して|に対し|への|には|に(?={_CLINICAL_OWNER})|は|が|も|を|から|より|[:：])", re.I)
-# The same owner with no particle (ご家族P80, 本人72 家族80); a person word inside
-# another word (大丈夫, 工夫, 分母) is not a person, so it must start a word.
+# Japanese reports need no separator before the owner (本日ご家族P80).
+# The shared vocabulary excludes family kanji inside 大丈夫/工夫/分母.
 _BARE_OWNER = re.compile(
-    rf"(?<![ぁ-ゖァ-ヺー一-龥])(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})"
+    rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})"
     rf"[ \t　]*(?={_VITAL_OWNER}|{_READING_OWNER})")
 _DIRECT_OWNER = re.compile(rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})の{_OWNER_MODIFIER}[ \t　]*$")
 _CLINICAL_ACTOR = re.compile(r"(?:が|は)[、,\s]*[^。！？!?;；\n、,]*?を(?:開始|中止|増量|減量|変更|処方|投与|測定)")
