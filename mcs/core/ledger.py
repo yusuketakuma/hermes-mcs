@@ -274,7 +274,11 @@ class Ledger:
             "('canonical_projection','semantic_facts_v4') LIMIT 1"
         ).fetchone() is not None
 
-    def _invalidate_thread_projections(self, project_id: int, root: int):
+    def _invalidate_thread_projections(self, project_id: int, root: int,
+                                       *, invalidated_roots: set | None = None):
+        key = (project_id, root)
+        if invalidated_roots is not None and key in invalidated_roots:
+            return
         changed = self.db.execute("""
           UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'))
           WHERE kind IN ('canonical_projection','semantic_facts_v4')
@@ -288,10 +292,14 @@ class Ledger:
             self.db.execute(
                 "DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=?",
                 (project_id,))
+        if invalidated_roots is not None:
+            invalidated_roots.add(key)
 
-    def _semantic_changed_ids(self, before: dict) -> dict[int, list[int]]:
+    def _semantic_changed_ids(self, before: dict, *,
+                              invalidated_roots: set | None = None) -> dict[int, list[int]]:
         """Return touched message IDs whose thread input actually changed."""
         changed: dict[int, list[int]] = {}
+        invalidated_roots = set() if invalidated_roots is None else invalidated_roots
         generations = {}
         for (project_id, message_id), (root, previous, row_before) \
                 in before.items():
@@ -303,7 +311,8 @@ class Ledger:
             row_after = self._semantic_message_fingerprint(project_id, message_id)
             if current != previous and row_after != row_before:
                 changed.setdefault(project_id, []).append(message_id)
-                self._invalidate_thread_projections(project_id, root)
+                self._invalidate_thread_projections(
+                    project_id, root, invalidated_roots=invalidated_roots)
         for ids in changed.values():
             ids.sort()
         return changed
@@ -371,6 +380,7 @@ class Ledger:
         new_ids = []
         before_semantic = (self._semantic_generation_snapshot(p.messages)
                            if semantic or self._has_canonical_projections() else {})
+        invalidated_roots = set()
         with self.db:  # commit on success, rollback on exception
             self.db.execute("""
               INSERT INTO patients(project_id,project_type,patient_name,disease,
@@ -399,7 +409,8 @@ class Ledger:
                   now, now))
             for m in p.messages:
                 self._save_tree(m, new_ids, now, p.project_id)
-            changed_semantic = (self._semantic_changed_ids(before_semantic)
+            changed_semantic = (self._semantic_changed_ids(
+                before_semantic, invalidated_roots=invalidated_roots)
                                 if before_semantic else {})
             # The unread endpoint makes all newly stored posts eligible;
             # previously stored posts are eligible only when THIS fetch
@@ -413,12 +424,13 @@ class Ledger:
             self._queue_saved_messages_tx(
                 p.project_id, new_ids, changed_semantic.get(p.project_id, []),
                 notify_ids, notify=notify, semantic=semantic, now=now,
-                notify_max_age_s=notify_max_age_s)
+                notify_max_age_s=notify_max_age_s,
+                invalidated_roots=invalidated_roots)
         return new_ids
 
     def _queue_saved_messages_tx(self, project_id, new_ids, changed_ids,
                                   notify_ids, *, notify, semantic, now,
-                                  notify_max_age_s):
+                                  notify_max_age_s, invalidated_roots: set | None = None):
         """Keep notification eligibility and semantic coverage in the save
         transaction for unread, backfill and reply arrivals alike."""
         if not (notify or semantic):
@@ -427,7 +439,8 @@ class Ledger:
             seed_ids = sorted(set(new_ids) | set(changed_ids))
             if semantic and seed_ids:
                 self.semantic_seed_tx(project_id, seed_ids, {
-                    "source": "history_import", "notification_free": True})
+                    "source": "history_import", "notification_free": True},
+                    invalidated_roots=invalidated_roots)
             return
         origin = {"source": "history_import"}
         if notify:
@@ -469,7 +482,8 @@ class Ledger:
             # eligibility is separately derived from the origin event.
             seed_ids = sorted(set(new_ids) | set(notify_ids) | set(changed_ids))
             if seed_ids:
-                self.semantic_seed_tx(project_id, seed_ids, origin)
+                self.semantic_seed_tx(project_id, seed_ids, origin,
+                                      invalidated_roots=invalidated_roots)
 
     def _filter_notify_age(self, ids: list, now: float,
                            max_age_s: float | None) -> list:
@@ -715,10 +729,12 @@ class Ledger:
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(msgs)
                            if semantic or self._has_canonical_projections() else {})
+        invalidated_roots = set()
         with self.db:
             for m in msgs:
                 self._save_tree(m, new_ids, now, project_id)
-            changed_semantic = (self._semantic_changed_ids(before_semantic)
+            changed_semantic = (self._semantic_changed_ids(
+                before_semantic, invalidated_roots=invalidated_roots)
                                 if before_semantic else {})
             if project_id:
                 # Previously stored rows qualify when freshly unread;
@@ -741,7 +757,8 @@ class Ledger:
                 self._queue_saved_messages_tx(
                     project_id, new_ids, changed_semantic.get(project_id, []),
                     notify_ids, notify=notify, semantic=semantic, now=now,
-                    notify_max_age_s=notify_max_age_s)
+                    notify_max_age_s=notify_max_age_s,
+                    invalidated_roots=invalidated_roots)
         return new_ids
 
     def save_thread_replies(self, replies: list, project_id: int,
@@ -762,6 +779,7 @@ class Ledger:
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(replies)
                            if semantic or self._has_canonical_projections() else {})
+        invalidated_roots = set()
         with self.db:
             for m in replies:
                 self._save_tree(m, new_ids, now, project_id)
@@ -788,14 +806,16 @@ class Ledger:
                     self.job_add_tx("reply", project_id, m.message_id,
                                      parent_id=m.parent_id,
                                      revive_failed=False)
-            changed_semantic = (self._semantic_changed_ids(before_semantic)
+            changed_semantic = (self._semantic_changed_ids(
+                before_semantic, invalidated_roots=invalidated_roots)
                                 if before_semantic else {})
             notify_ids = (self._unnotified(
                 [m.message_id for m in replies if m.is_unread]) if notify else [])
             self._queue_saved_messages_tx(
                 project_id, new_ids, changed_semantic.get(project_id, []),
                 notify_ids, notify=notify, semantic=semantic, now=now,
-                notify_max_age_s=notify_max_age_s)
+                notify_max_age_s=notify_max_age_s,
+                invalidated_roots=invalidated_roots)
         return new_ids
 
     def _upsert_message(self, m) -> int:
@@ -1460,7 +1480,7 @@ class Ledger:
         return self._semantic_digest(self._semantic_member(row))
 
     def semantic_seed_tx(self, project_id: int, message_ids: list,
-                          origin: dict):
+                          origin: dict, *, invalidated_roots: set | None = None):
         """Durable semantic-eval seeding — caller holds `with self.db` so
         job creation commits (or rolls back) with the message and notify
         intent that triggered it (INV-06, spec §18.1). Keyed by thread
@@ -1538,7 +1558,8 @@ class Ledger:
                 attempts = (0 if input_changed
                              else int(existing["attempts"] or 0))
                 if input_changed:
-                    self._invalidate_thread_projections(project_id, root)
+                    self._invalidate_thread_projections(
+                        project_id, root, invalidated_roots=invalidated_roots)
                     # A source edit is a new budget and may not inherit a
                     # human retry extension or the command token that
                     # invalidated the prior worker.
