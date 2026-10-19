@@ -15,8 +15,10 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: F401,E402
 
-from mcs_requests import canonical, payload_hash, valid_uuid, _text  # noqa: E402
-from mcs_util import acquire_run_lock, atomic_write, fsync_dir  # noqa: E402
+from mcs_util import valid_text  # noqa: E402
+from mcs_requests import canonical, payload_hash, valid_uuid  # noqa: E402
+from writer_lock import acquire_run_lock
+from safe_io import atomic_write, fsync_dir  # noqa: E402  # noqa: E402
 from notify_cards import mark_snapshot_dirty  # noqa: E402
 from card_worker_status import REASONS, VERSION  # noqa: E402
 from safe_io import read_regular_nofollow  # noqa: E402
@@ -115,7 +117,7 @@ def apply(root, request):
     """Cancel eligible intents with approval, locks, backup and an idempotent receipt."""
     if (not isinstance(request, dict) or request.get("human_confirmed") is not True
             or not valid_uuid(request.get("command_id"))
-            or not _text(request.get("actor"), 120) or not _text(request.get("reason"), 2000)):
+            or not valid_text(request.get("actor"), 120) or not valid_text(request.get("reason"), 2000)):
         raise ValueError("human_confirmation_reason_and_identity_required")
     if request.keys() != {"command_id", "actor", "reason", "human_confirmed", "plan"}:
         raise ValueError("unknown_field")

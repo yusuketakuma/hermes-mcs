@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "原文の数量検証と分割計画の実装識別を補完",
+  "summary": "薬剤の量・単位・回数を原文と照合する処理と、入力を分割する計画の実体まで、候補承認の実装識別に含めました。同じ原文の数値は従来どおり扱い、換算や数量の補完は行いません。",
+  "upgrade": "追加設定や再取得は不要です。実装識別が変わるため、候補承認と保留済み再抽出は通常の再評価対象です。モデル、分割世代、抽出世代、上限、公開・通知・既読化・人承認条件は変更しません。",
+  "details": [
+    "数量の書式正規化は既存の一つの実体を直接共有し、有限数の判定や単位変換とは混同しません。",
+    "数量検証は各事実自身の引用だけを使用し、別薬剤・別時点や根拠外の値で救済しない従来条件を維持します。"
+  ],
+  "refs": [
+    "mcs/extract/clinical/semantic_quantities.py",
+    "mcs/extract/clinical/clinical_values.py",
+    "mcs/extract/llm/extract_llm.py",
+    "mcs/semantic/semantic_candidate.py"
+  ]
+}

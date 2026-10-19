@@ -140,7 +140,7 @@ def test_chunk_checkpoint_survives_next_night_without_repeating_prefix(runtime):
     led, clock, calls = runtime
     body = '合成記録の第一の区間。' * 240 + '\n' + '合成記録の第二の区間。' * 240
     seed(led, body=body)
-    assert len(nightly.plan_chunks(body)) > 1
+    assert len(nightly.nightly_plan.plan_chunks(body)) > 1
     assert step(runtime)['lane'] == 'A'
     assert step(runtime)['lane'] == 'B'
     saved = document(led, nightly.SCAN)
@@ -383,7 +383,7 @@ def test_view_reads_only_quoted_bodies_without_reextracting_history(runtime, mon
         seed(led, mid=mid, body=f'合成の未分類記録その{mid}。')
     assert step(runtime)['status'] == 'progressed'
     before = len(calls)
-    monkeypatch.setattr(nightly, 'message_patient_context',
+    monkeypatch.setattr(nightly, 'source_patient_context',
                         lambda *a: pytest.fail('view re-extracted saved history'))
     monkeypatch.setattr(nightly, 'extract_context',
                         lambda *a: pytest.fail('view parsed saved history'))
@@ -565,7 +565,7 @@ def test_new_backfill_evidence_rearms_exhausted_summary(runtime, monkeypatch):
 
 def test_summary_budget_preserves_complete_source_reports_in_detail(runtime, monkeypatch):
     led, _, _ = runtime
-    monkeypatch.setattr(nightly, 'MAX_FACTS', 2)
+    monkeypatch.setattr(nightly.nightly_plan, 'MAX_FACTS', 2)
     for mid in range(1, 5):
         seed(led, mid=mid, body=f'生活環境: 合成の独立した過去報告その{mid}。')
     finish(runtime)
@@ -693,12 +693,12 @@ def test_history_scan_hydrates_only_the_selected_post(runtime, monkeypatch):
     for mid in range(1, 9):
         seed(led, mid=mid)
     assert step(runtime)["lane"] == "A"
-    original = nightly.message_patient_context
+    original = nightly.source_patient_context
     hydrated = []
     def read(db, message, **kwargs):
         hydrated.append(message["message_id"])
         return original(db, message, **kwargs)
-    monkeypatch.setattr(nightly, "message_patient_context", read)
+    monkeypatch.setattr(nightly, "source_patient_context", read)
     assert step(runtime)["lane"] == "B"
     assert len(hydrated) == 1
 

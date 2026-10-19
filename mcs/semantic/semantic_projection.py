@@ -51,8 +51,8 @@ _V2_TO_V1_STATUS = {
 def _v2_drug_ref(statement: str) -> str | None:
     """Best-effort entity token for the legacy ``drug_ref`` slot —
     longest katakana/alphanumeric run, deterministic tie-break."""
-    import semantic_relations as sr
-    tokens = sr._entity_tokens(statement)
+    from semantic_facts import entity_tokens
+    tokens = entity_tokens(statement)
     if not tokens:
         return None
     return sorted(tokens, key=lambda t: (-len(t), t))[0]
@@ -67,7 +67,7 @@ def project_v2_facts(doc: dict, *, request_details: bool = False) -> list:
     ``request_details=True`` is staging-only: feeding its assignee/time
     values into persisted Loop identities requires an owner decision.
     """
-    from semantic_llm import _iso_date
+    from clinical_values import absolute_date
 
     def _mid(v):
         # v2 doc JSON carries message ids as strings; bundle members key
@@ -90,7 +90,7 @@ def project_v2_facts(doc: dict, *, request_details: bool = False) -> list:
                   if ref in evidence_by_id]
         ev = evidence_by_id[ev_ids[0]] if ev_ids else None
         event_time = fact.get("event_time", "unknown")
-        occurred = _iso_date(event_time)
+        occurred = absolute_date(event_time)
         kind = _V2_TO_V1_KIND.get(fact.get("kind"), "other")
         if fact.get("kind") == "care_event" and fact.get("workflow_status") not in (
                 "planned", "ordered", "pending", "considering", "on_hold", "in_progress"):
@@ -319,9 +319,9 @@ def project_v2_doc_legacy(doc: dict, *, request_details: bool = False) -> dict:
                         out["events"].append(event)
                     break
         elif kind == "request_pending":
-            from semantic_llm import _iso_date
+            from clinical_values import absolute_date
             event_time = fact.get("event_time")
-            due = _iso_date(event_time)
+            due = absolute_date(event_time)
             item = {"to": "不明", "from": None,
                     "action": fact.get("statement") or "",
                     "due": due, "unverified": uncertain or negated}
@@ -404,3 +404,21 @@ def _carry_canonical(doc: dict, out: dict, evidence_by_id: dict) -> None:
         "limitations": coverage.get("limitations") or [],
         "source_fingerprint":
             (doc.get("source") or {}).get("source_fingerprint")}
+
+
+def projection_transition(meta, *, off: bool, enabled: bool, policy: str,
+                          source_fingerprint: str | None, revivable: bool) -> tuple[str, str | None]:
+    """Plan expiry/revival after source and audited-document observations, without I/O."""
+    if meta is None:
+        return "expire", "off" if off else "metadata"
+    # OFF is permanent revocation; only fact_source-marked rows enter a
+    # prospective revival scan, and the I/O owner proves current PASS lineage.
+    reason = "off" if off else "fact_source" if not enabled else "policy"
+    if enabled and meta.get("policy_fingerprint") == policy:
+        reason = "source"
+        if source_fingerprint is not None and meta.get("fingerprint") == source_fingerprint:
+            if not meta.get("invalidated"):
+                return "keep", None
+            if revivable:
+                return "revive", None
+    return "expire", reason

@@ -18,6 +18,8 @@ import job_ops
 import ledger
 import mcs_adapter
 import notify_flush
+import notify_sender
+import mcs_util
 from ingest_testkit import _ledger, _message, _unread_patient
 
 
@@ -306,9 +308,9 @@ def test_outbox_event_suppressed_after_archival(tmp_path, monkeypatch):
     db.upsert_patient_info(_unread_patient(60), is_archived=True)
 
     sent = []
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
-    monkeypatch.setattr(notify_flush, "_target", lambda cfg, kind: "chan")
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, 'target', lambda cfg, kind: "chan")
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda *a, **k: sent.append(a) or None)
 
     res = notify_flush.flush(db)
@@ -1509,7 +1511,7 @@ def test_consent_hold_defers_everything_but_restore_approve(
     would be wiped by the pending DB swap, so they stay queued until
     the bound consent lands (T13)."""
     import uuid
-    import notify_cards
+    import notify_spool
     import mcs_requests
 
     with closing(_ledger(tmp_path)) as db:
@@ -1518,7 +1520,7 @@ def test_consent_hold_defers_everything_but_restore_approve(
         data.mkdir()
         cmd_dir = data / "cmd"
         cmd_dir.mkdir()
-        notify_cards.mark_restored(str(data), backup_path=str(data / "b.db"),
+        notify_spool.mark_restored(str(data), backup_path=str(data / "b.db"),
                                    phase="awaiting_consent")
         rid = "c" * 64
         for req in (

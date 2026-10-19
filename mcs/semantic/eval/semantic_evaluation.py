@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Offline evaluation for fixed semantic bundles and reviewed labels.
 
-The evaluator consumes JSONL records and never opens bundle attachment paths,
-calls a model, or emits source text.  A record is the unit of split isolation:
+The scoring CLI consumes supplied JSONL records without opening bundle
+attachment paths, calling a model, or emitting source text. Explicit injected
+pipeline drivers separately exercise synthetic extraction and audit callbacks.
+A record is the unit of split isolation:
 ``case_id``, ``account_id``, ``project_id`` and ``thread_id`` must not cross
 dev, calibration, and test.
 """
@@ -23,9 +25,9 @@ import _mcs_path  # noqa: F401
 
 from semantic_acceptance import METRICS, ADDITIONAL_METRICS, evaluate_gate as _gate
 from semantic_facts import RELATION_TYPES
-from mcs_util import atomic_write
+from safe_io import atomic_write
 from mcs_util import payload_hash
-from stats_math import percentile, wilson_interval  # noqa: F401  re-exported for callers
+import stats_math
 
 
 SCHEMA_VERSION = "semantic-evaluation/v3"
@@ -39,7 +41,7 @@ class EvaluationError(ValueError):
     """Input or acceptance criteria are not safe to evaluate."""
 
 
-def _id(value, field: str) -> str:
+def evaluation_id(value, field: str) -> str:
     if value is None:
         raise EvaluationError(f"{field}_missing")
     if isinstance(value, bool) or not isinstance(value, str | int):
@@ -50,7 +52,7 @@ def _id(value, field: str) -> str:
     return value
 
 
-def _dict(value, field: str) -> dict:
+def evaluation_object(value, field: str) -> dict:
     if not isinstance(value, dict):
         raise EvaluationError(f"{field}_object_required")
     return value
@@ -62,7 +64,7 @@ def _list(value, field: str) -> list:
     return value
 
 
-def _finite_number(value, field: str, integer: bool = False) -> float | int:
+def nonnegative_number(value, field: str, integer: bool = False) -> float | int:
     if type(value) not in (int, float) or (integer and type(value) is not int):
         raise EvaluationError(f"{field}_invalid")
     try:
@@ -74,14 +76,14 @@ def _finite_number(value, field: str, integer: bool = False) -> float | int:
     return value if integer else number
 
 
-def _success_metric(correct: int, denominator: int) -> dict:
+def success_metric(correct: int, denominator: int) -> dict:
     errors = max(0, denominator - correct)
     return {
         "correct": correct,
         "errors": errors,
         "denominator": denominator,
         "rate": correct / denominator if denominator else None,
-        "wilson95": wilson_interval(correct, denominator),
+        "wilson95": stats_math.wilson_interval(correct, denominator),
     }
 
 
@@ -93,16 +95,16 @@ def _error_metric(errors: int, denominator: int) -> dict:
         "errors": errors,
         "denominator": denominator,
         "rate": errors / denominator if denominator else None,
-        "wilson95": wilson_interval(errors, denominator),
+        "wilson95": stats_math.wilson_interval(errors, denominator),
     }
 
 
-def _percentile(values: list[float], p: float) -> float | None:
+def validated_percentile(values: list[float], p: float) -> float | None:
     if not values:
         return None
     for value in values:
-        _finite_number(value, "percentile_value")
-    return percentile(values, p)
+        nonnegative_number(value, "percentile_value")
+    return stats_math.percentile(values, p)
 
 
 def _eval_member(case: dict, msg: dict, cid: str) -> dict:
@@ -124,7 +126,7 @@ def _case_messages(case: dict, cid: str) -> list:
 
 
 def _item_id(item: dict, field: str) -> str:
-    return _id(item.get(field), field)
+    return evaluation_id(item.get(field), field)
 
 
 def _items(value, field: str) -> list[dict]:
@@ -135,7 +137,7 @@ def _items(value, field: str) -> list[dict]:
 
 
 def _validate_relative_path(value, field: str) -> str:
-    path = _id(value, field)
+    path = evaluation_id(value, field)
     if ("\x00" in path or path.startswith("/") or path.startswith("\\")
             or path.startswith("~") or PureWindowsPath(path).is_absolute()
             or PureWindowsPath(path).drive):
@@ -148,15 +150,15 @@ def _validate_relative_path(value, field: str) -> str:
 
 def validate_manifest(manifest: dict) -> dict:
     """Validate the fixed version manifest without echoing arbitrary fields."""
-    manifest = _dict(manifest, "manifest")
+    manifest = evaluation_object(manifest, "manifest")
     for field in ("version", "bundle_version", "candidate_version"):
-        _id(manifest.get(field), f"manifest_{field}")
+        evaluation_id(manifest.get(field), f"manifest_{field}")
     if manifest.get('data_origin', 'synthetic') not in ('synthetic', 'real_authorized'):
         raise EvaluationError('manifest_data_origin_invalid')
     if manifest.get('source') == 'fully_synthetic' and manifest.get('data_origin', 'synthetic') != 'synthetic':
         raise EvaluationError('manifest_data_origin_mismatch')
     if "label_version" in manifest:
-        _id(manifest["label_version"], "manifest_label_version")
+        evaluation_id(manifest["label_version"], "manifest_label_version")
     if "splits" in manifest:
         splits = _list(manifest["splits"], "manifest_splits")
         if any(split not in SPLITS for split in splits):
@@ -165,16 +167,16 @@ def validate_manifest(manifest: dict) -> dict:
 
 
 def validate_criteria(criteria: dict) -> dict:
-    criteria = _dict(criteria, "criteria")
-    _id(criteria.get("version"), "criteria_version")
+    criteria = evaluation_object(criteria, "criteria")
+    evaluation_id(criteria.get("version"), "criteria_version")
     required = criteria.get("required_metrics", list(METRICS))
     required = _list(required, "criteria_required_metrics")
     if not required or any(not isinstance(x, str) for x in required):
         raise EvaluationError("criteria_required_metrics_invalid")
     if any(name not in METRICS + ADDITIONAL_METRICS for name in required):
         raise EvaluationError("criteria_required_metrics_invalid")
-    minimums = _dict(criteria.get("minimums") or {}, "criteria_minimums")
-    maximums = _dict(criteria.get("maximums") or {}, "criteria_maximums")
+    minimums = evaluation_object(criteria.get("minimums") or {}, "criteria_minimums")
+    maximums = evaluation_object(criteria.get("maximums") or {}, "criteria_maximums")
     if any(name not in METRICS + ADDITIONAL_METRICS for name in minimums) \
             or any(name not in METRICS + ADDITIONAL_METRICS for name in maximums):
         raise EvaluationError("criteria_metric_invalid")
@@ -194,7 +196,7 @@ def validate_criteria(criteria: dict) -> dict:
     extras = {}
     for field in ('denominator_minimums', 'strata_minimums'):
         if field in criteria:
-            values = _dict(criteria[field], field)
+            values = evaluation_object(criteria[field], field)
             if any(type(v) is not int or v < 1 for v in values.values()):
                 raise EvaluationError(field + '_invalid')
             extras[field] = values
@@ -214,7 +216,7 @@ def validate_criteria(criteria: dict) -> dict:
         extras['wilson_metrics'] = values
     return {
         **extras,
-        "version": _id(criteria["version"], "criteria_version"),
+        "version": evaluation_id(criteria["version"], "criteria_version"),
         "required_metrics": required,
         "minimums": {k: float(v) for k, v in minimums.items()},
         "maximums": {k: float(v) for k, v in maximums.items()},
@@ -224,15 +226,15 @@ def validate_criteria(criteria: dict) -> dict:
 
 
 def _record_identity(record: dict, field: str) -> str:
-    return _id(record.get(field), field)
+    return evaluation_id(record.get(field), field)
 
 
 def _validate_bundle(bundle: dict, record: dict, manifest: dict) -> set:
-    _dict(bundle, "bundle")
-    if _id(bundle.get("version"), "bundle_version") != manifest["bundle_version"]:
+    evaluation_object(bundle, "bundle")
+    if evaluation_id(bundle.get("version"), "bundle_version") != manifest["bundle_version"]:
         raise EvaluationError("bundle_version_mismatch")
     for field in ("account_id", "project_id", "thread_id"):
-        if field in bundle and _id(bundle[field], field) != \
+        if field in bundle and evaluation_id(bundle[field], field) != \
                 _record_identity(record, field):
             raise EvaluationError(f"bundle_{field}_mismatch")
     messages = bundle.get("messages", [])
@@ -240,7 +242,7 @@ def _validate_bundle(bundle: dict, record: dict, manifest: dict) -> set:
         raise EvaluationError("bundle_messages_list_required")
     if any(not isinstance(message, dict) for message in messages):
         raise EvaluationError("bundle_message_object_required")
-    message_ids = [_id(m.get("message_id"), "message_id")
+    message_ids = [evaluation_id(m.get("message_id"), "message_id")
                    for m in messages if isinstance(m, dict)]
     if len(message_ids) != len(set(message_ids)):
         raise EvaluationError("message_id_duplicate")
@@ -256,13 +258,13 @@ def _validate_bundle(bundle: dict, record: dict, manifest: dict) -> set:
             raise EvaluationError("attachment_id_duplicate")
         attachment_ids.add(aid)
         _validate_relative_path(attachment.get("path"), "attachment_path")
-        mid = _id(attachment.get("message_id"), "attachment_message_id")
+        mid = evaluation_id(attachment.get("message_id"), "attachment_message_id")
         if message_set and mid not in message_set:
             raise EvaluationError("attachment_message_missing")
         before = attachment.get("context_before", [])
         if not isinstance(before, list):
             raise EvaluationError("attachment_context_before_list_required")
-        before_ids = [_id(value, "attachment_context_message_id")
+        before_ids = [evaluation_id(value, "attachment_context_message_id")
                       for value in before]
         if (message_set and any(value not in message_set for value in before_ids)):
             raise EvaluationError("attachment_context_message_missing")
@@ -274,12 +276,12 @@ def _validate_bundle(bundle: dict, record: dict, manifest: dict) -> set:
 
 
 def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) -> None:
-    _dict(candidate, "candidate")
+    evaluation_object(candidate, "candidate")
     if 'ai_priority' in candidate and type(candidate['ai_priority']) is not bool:
         raise EvaluationError('candidate_ai_priority_invalid')
     if 'urgency' in candidate and candidate['urgency'] not in ('high', 'routine', 'unclear'):
         raise EvaluationError('candidate_urgency_invalid')
-    if _id(candidate.get("version"), "candidate_version") != \
+    if evaluation_id(candidate.get("version"), "candidate_version") != \
             manifest["candidate_version"]:
         raise EvaluationError("candidate_version_mismatch")
     for field in ("facts", "claims", "loops"):
@@ -287,14 +289,14 @@ def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) ->
             _items(candidate[field], f"candidate_{field}")
     usage = candidate.get("usage")
     if usage is not None:
-        usage = _dict(usage, "candidate_usage")
+        usage = evaluation_object(usage, "candidate_usage")
         for key in ("requests", "input_tokens",
                     "output_tokens", "total_tokens"):
             if key in usage:
-                _finite_number(usage[key], f"candidate_usage_{key}", integer=True)
+                nonnegative_number(usage[key], f"candidate_usage_{key}", integer=True)
     latency = candidate.get("latency_ms")
     if latency is not None:
-        _finite_number(latency, "candidate_latency_ms")
+        nonnegative_number(latency, "candidate_latency_ms")
     status = candidate.get("status")
     if not isinstance(status, str) or not status.strip():
         raise EvaluationError("candidate_status_missing")
@@ -305,15 +307,15 @@ def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) ->
         raise EvaluationError("claim_id_duplicate")
     for row in facts + claims:
         for ref in _list(row.get("evidence_ids", []), "candidate_evidence_ids"):
-            _id(ref, "candidate_evidence_id")
+            evaluation_id(ref, "candidate_evidence_id")
         if "fact_refs" in row and not isinstance(row["fact_refs"], list):
             raise EvaluationError("candidate_fact_refs_list_required")
         refs = row.get("attachment_refs", [])
         if not isinstance(refs, list):
             raise EvaluationError("candidate_attachment_refs_list_required")
         for ref in row.get("fact_refs", []):
-            _id(ref, "fact_ref")
-        if any(_id(ref, "attachment_ref") not in attachment_ids
+            evaluation_id(ref, "fact_ref")
+        if any(evaluation_id(ref, "attachment_ref") not in attachment_ids
                for ref in refs):
             raise EvaluationError("candidate_attachment_ref_unknown")
     for row in _items(candidate.get("loops", []), "candidate_loops"):
@@ -333,21 +335,21 @@ def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) ->
         if len(ids) != len(set(ids)):
             raise EvaluationError(f"candidate_{stage}_fact_id_duplicate")
     for row in _items(candidate.get("relations", []), "candidate_relations"):
-        left = _id(row.get("left_fact_id"), "candidate_relation_left")
-        right = _id(row.get("right_fact_id"), "candidate_relation_right")
+        left = evaluation_id(row.get("left_fact_id"), "candidate_relation_left")
+        right = evaluation_id(row.get("right_fact_id"), "candidate_relation_right")
         if left == right:
             raise EvaluationError("candidate_relation_self_loop")
         if row.get("type") not in RELATION_TYPES:
             raise EvaluationError("candidate_relation_type_invalid")
     for row in _items(candidate.get("unresolved", []),
                       "candidate_unresolved"):
-        _id(row.get("fact_ref"), "candidate_unresolved_fact_ref")
+        evaluation_id(row.get("fact_ref"), "candidate_unresolved_fact_ref")
 
 
 def _validate_label(label, manifest: dict, candidate: dict) -> str:
     if label is None:
         return "missing"
-    label = _dict(label, "label")
+    label = evaluation_object(label, "label")
     if 'ai_priority' in label and type(label['ai_priority']) is not bool:
         raise EvaluationError('label_ai_priority_invalid')
     if 'urgency' in label and label['urgency'] not in ('high', 'routine', 'unclear'):
@@ -381,8 +383,8 @@ def _validate_label(label, manifest: dict, candidate: dict) -> str:
         raise EvaluationError("fact_id_duplicate")
     fact_id_set = set(fact_ids)
     for row in _items(label.get("relations", []), "label_relations"):
-        left = _id(row.get("left_fact_id"), "label_relation_left")
-        right = _id(row.get("right_fact_id"), "label_relation_right")
+        left = evaluation_id(row.get("left_fact_id"), "label_relation_left")
+        right = evaluation_id(row.get("right_fact_id"), "label_relation_right")
         if left not in fact_id_set or right not in fact_id_set:
             raise EvaluationError("label_relation_fact_unknown")
         if left == right:
@@ -408,7 +410,7 @@ def _validate_label(label, manifest: dict, candidate: dict) -> str:
         covered = row.get("covered_gold_fact_ids")
         if not isinstance(covered, list):
             raise EvaluationError("label_claim_covered_facts_list_required")
-        covered_ids = [_id(value, "covered_gold_fact_id") for value in covered]
+        covered_ids = [evaluation_id(value, "covered_gold_fact_id") for value in covered]
         if len(covered_ids) != len(set(covered_ids)):
             raise EvaluationError("label_claim_covered_facts_duplicate")
         if any(value not in fact_id_set for value in covered_ids):
@@ -434,7 +436,7 @@ def validate_records(records: list[dict], manifest: dict) -> dict:
     for index, record in enumerate(records, 1):
         if not isinstance(record, dict):
             raise EvaluationError(f"record_{index}_object_required")
-        case_id = _id(record.get("case_id"), "case_id")
+        case_id = evaluation_id(record.get("case_id"), "case_id")
         if case_id in seen_cases:
             raise EvaluationError("case_id_duplicate")
         seen_cases.add(case_id)
@@ -448,9 +450,9 @@ def validate_records(records: list[dict], manifest: dict) -> dict:
             if previous is not None and previous != split:
                 raise EvaluationError(f"{field}_cross_split")
             seen[field][value] = split
-        bundle = _dict(record.get("bundle"), "bundle")
+        bundle = evaluation_object(record.get("bundle"), "bundle")
         attachment_ids = _validate_bundle(bundle, record, manifest)
-        candidate = _dict(record.get("candidate"), "candidate")
+        candidate = evaluation_object(record.get("candidate"), "candidate")
         _validate_candidate(candidate, manifest, attachment_ids)
         source = _validate_label(record.get("label"), manifest, candidate)
         origin = record.get('data_origin', manifest.get('data_origin', 'synthetic'))
@@ -572,7 +574,7 @@ def _case_counts(record: dict) -> dict:
     mandatory_rendered = mandatory & rendered_ids
     delivered_ids = stage_ids["delivered"]
     mandatory_delivered = mandatory & delivered_ids
-    unresolved_refs = {_id(row.get("fact_ref"),
+    unresolved_refs = {evaluation_id(row.get("fact_ref"),
                            "candidate_unresolved_fact_ref")
                        for row in _items(candidate.get("unresolved", []),
                                          "candidate_unresolved")}
@@ -598,8 +600,8 @@ def _case_counts(record: dict) -> dict:
     pred_relations = _items(candidate.get("relations", []),
                             "candidate_relations")
     def _triple(row):
-        return (_id(row.get("left_fact_id"), "relation_left"),
-                _id(row.get("right_fact_id"), "relation_right"),
+        return (evaluation_id(row.get("left_fact_id"), "relation_left"),
+                evaluation_id(row.get("right_fact_id"), "relation_right"),
                 row.get("type"))
     pred_rel_triples = {_triple(row) for row in pred_relations}
     relation_hits = sum(_triple(row) in pred_rel_triples
@@ -673,26 +675,26 @@ def _scope_report(records: list[dict]) -> dict:
             for key, value in values["usage"].items():
                 usage[key].append(value)
     metrics = {
-        "important_fact_recall": _success_metric(*counts["important"]),
-        "final_recall": _success_metric(*counts["final"]),
+        "important_fact_recall": success_metric(*counts["important"]),
+        "final_recall": success_metric(*counts["final"]),
         "critical_overclaim": _error_metric(*counts["critical"]),
-        "loop_conformity": _success_metric(*counts["loops"]),
-        "loop_precision": _success_metric(*counts["loop_precision"]),
+        "loop_conformity": success_metric(*counts["loops"]),
+        "loop_precision": success_metric(*counts["loop_precision"]),
         "loop_unresolved_miss_rate": _error_metric(*counts["unresolved_missed"]),
         "loop_false_resolution": _error_metric(*counts["false_resolution"]),
         "defer_rate": _error_metric(*counts["deferred"]),
-        "mandatory_fact_recall": _success_metric(*counts["mandatory"]),
-        "rendered_fact_recall": _success_metric(*counts["rendered"]),
-        "delivered_fact_recall": _success_metric(*counts["delivered"]),
-        "relation_accuracy": _success_metric(*counts["relations"]),
-        "evidence_closure": _success_metric(*counts["evidenced"]),
+        "mandatory_fact_recall": success_metric(*counts["mandatory"]),
+        "rendered_fact_recall": success_metric(*counts["rendered"]),
+        "delivered_fact_recall": success_metric(*counts["delivered"]),
+        "relation_accuracy": success_metric(*counts["relations"]),
+        "evidence_closure": success_metric(*counts["evidenced"]),
         "silent_drop": _error_metric(*counts["silent_drop"]),
     }
     for field, name in (('urgency', 'urgency_recall'), ('ai_priority', 'ai_priority_accuracy')):
         eligible = [r for r in records if field in (r.get('label') or {})]
         if field == 'urgency':
             eligible = [r for r in eligible if r['label'][field] == 'high']
-        metrics[name] = _success_metric(sum(r['candidate'].get(field) == r['label'][field]
+        metrics[name] = success_metric(sum(r['candidate'].get(field) == r['label'][field]
                                              for r in eligible), len(eligible))
     paired = []
     for record in records:
@@ -706,26 +708,26 @@ def _scope_report(records: list[dict]) -> dict:
                         and type(scores.get(arm + '_score')) in (int, float)
                         and 0 <= scores[arm + '_score'] <= 1 for arm in ('off', 'on'))):
             paired.append(scores)
-    metrics['patient_state_ab_noninferiority'] = _success_metric(sum(
+    metrics['patient_state_ab_noninferiority'] = success_metric(sum(
         row['on_score'] >= row['off_score'] for row in paired), len(records))
     for name, values in attrs.items():
-        metrics[f"{name}_recall"] = _success_metric(*values)
+        metrics[f"{name}_recall"] = success_metric(*values)
     latency = {
         "denominator": len(latencies),
         "missing": len(records) - len(latencies),
-        "p50_ms": _percentile(latencies, 0.50),
-        "p95_ms": _percentile(latencies, 0.95),
+        "p50_ms": validated_percentile(latencies, 0.50),
+        "p95_ms": validated_percentile(latencies, 0.95),
     }
     usage_report = {"denominator": usage_cases,
                     "missing": len(records) - usage_cases}
     for key, values in usage.items():
-        total = _finite_number(sum(values), "usage_total_" + key, integer=True)
+        total = nonnegative_number(sum(values), "usage_total_" + key, integer=True)
         usage_report[key] = {
             "denominator": len(values),
             "total": total,
             "mean": total / len(values) if values else None,
-            "p50": _percentile([float(v) for v in values], 0.50),
-            "p95": _percentile([float(v) for v in values], 0.95),
+            "p50": validated_percentile([float(v) for v in values], 0.50),
+            "p95": validated_percentile([float(v) for v in values], 0.95),
         }
     return {"cases": len(records), "metrics": metrics,
             "latency": latency, "usage": usage_report,
@@ -788,11 +790,11 @@ def _token_report(groups: list[dict]) -> dict:
         "unreported_requests": sum(g["unreported_requests"] for g in groups),
         "missing_jobs": sum(g["missing_jobs"] for g in groups),
         "tokens": {key: {
-            "observed_total": _finite_number(
+            "observed_total": nonnegative_number(
                 sum(g[key] for g in groups), "token_total_" + key, integer=True),
             "complete_denominator": len(complete),
-            "complete_p50": _percentile([g[key] for g in complete], .50),
-            "complete_p95": _percentile([g[key] for g in complete], .95),
+            "complete_p50": validated_percentile([g[key] for g in complete], .50),
+            "complete_p95": validated_percentile([g[key] for g in complete], .95),
         } for key in ("input_tokens", "output_tokens")},
     }
 
@@ -810,10 +812,10 @@ def evaluate_runs(records: list[dict]) -> dict:
     seen = set()
     patient_usage, run_usage = [], []
     for row in records:
-        row = _dict(row, "run_record")
-        account = _id(row.get("account_id"), "run_account_id")
-        run = _dict(row.get("result"), "run_result")
-        identity = (account, _id(run.get("run_id"), "run_id"))
+        row = evaluation_object(row, "run_record")
+        account = evaluation_id(row.get("account_id"), "run_account_id")
+        run = evaluation_object(row.get("result"), "run_result")
+        identity = (account, evaluation_id(run.get("run_id"), "run_id"))
         if identity in seen:
             raise EvaluationError("duplicate_run")
         seen.add(identity)
@@ -821,9 +823,9 @@ def evaluate_runs(records: list[dict]) -> dict:
         if elapsed is None:
             missing["run_elapsed_s"] += 1
         else:
-            values["run_elapsed_s"].append(_finite_number(elapsed, "run_elapsed_s"))
+            values["run_elapsed_s"].append(nonnegative_number(elapsed, "run_elapsed_s"))
         semantic = run.get("semantic")
-        if semantic is None or _dict(semantic, "run_semantic").get("mode") == "off":
+        if semantic is None or evaluation_object(semantic, "run_semantic").get("mode") == "off":
             missing["semantic_elapsed_s"] += 1
             missing["run_jev_requests"] += 1
             missing["oldest_pending_job_age_s"] += 1
@@ -834,7 +836,7 @@ def evaluate_runs(records: list[dict]) -> dict:
             if value is None:
                 missing[metric] += 1
             else:
-                values[metric].append(_finite_number(value, metric))
+                values[metric].append(nonnegative_number(value, metric))
         if "job_metrics" not in semantic:
             missing["run_jev_requests"] += 1
             continue
@@ -842,15 +844,15 @@ def evaluate_runs(records: list[dict]) -> dict:
         usage_by_patient = {}
         jobs = set()
         for job in _list(semantic.get("job_metrics", []), "job_metrics"):
-            job = _dict(job, "job_metric")
-            job_id = _id(job.get("job_id"), "job_id")
+            job = evaluation_object(job, "job_metric")
+            job_id = evaluation_id(job.get("job_id"), "job_id")
             if job_id in jobs:
                 raise EvaluationError("duplicate_run_job")
             jobs.add(job_id)
-            patient = _id(job.get("project_id"), "job_project_id")
+            patient = evaluation_id(job.get("project_id"), "job_project_id")
             totals = patients.setdefault(patient, [0.0, 0])
-            totals[0] += _finite_number(job.get("elapsed_s"), "job_elapsed_s")
-            requests = _finite_number(job.get("jev_requests"), "job_requests", integer=True)
+            totals[0] += nonnegative_number(job.get("elapsed_s"), "job_elapsed_s")
+            requests = nonnegative_number(job.get("jev_requests"), "job_requests", integer=True)
             totals[1] += requests
             usage = usage_by_patient.setdefault(patient, dict.fromkeys(
                 ("input_tokens", "output_tokens", "reported_requests", "unreported_requests", "missing_jobs"), 0))
@@ -859,8 +861,8 @@ def evaluate_runs(records: list[dict]) -> dict:
                 usage["missing_jobs"] += 1
                 usage["unreported_requests"] += requests
             else:
-                raw = _dict(raw, "job_usage")
-                checked = {key: _finite_number(raw.get(key), "job_usage_" + key, integer=True)
+                raw = evaluation_object(raw, "job_usage")
+                checked = {key: nonnegative_number(raw.get(key), "job_usage_" + key, integer=True)
                            for key in ("input_tokens", "output_tokens", "reported_requests", "unreported_requests")}
                 if checked["reported_requests"] + checked["unreported_requests"] != requests:
                     raise EvaluationError("job_usage_request_mismatch")
@@ -880,10 +882,10 @@ def evaluate_runs(records: list[dict]) -> dict:
         total = sum(observations)
         metrics[key] = {"denominator": len(observations),
                         "missing": None if key.startswith("patient_") else missing[key],
-                        "total": _finite_number(total, key, integer=type(total) is int)
+                        "total": nonnegative_number(total, key, integer=type(total) is int)
                         if observations else None,
-                        "p50": _percentile(observations, .50),
-                        "p95": _percentile(observations, .95)}
+                        "p50": validated_percentile(observations, .50),
+                        "p95": validated_percentile(observations, .95)}
     return {"runs": len(records), "metrics": metrics,
             "jev_usage": {"patient": _token_report(patient_usage),
                           "run": _token_report(run_usage),

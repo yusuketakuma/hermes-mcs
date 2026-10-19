@@ -96,7 +96,7 @@ def test_v2_rejects_small_denominators_and_wilson_uncertainty():
     cfg = approved_config({'semantic': {'fact_source': 'canonical'}})
     report = cfg['semantic']['fact_source_evidence']
     metric = 'important_fact_recall'
-    report['splits']['test']['metrics'][metric] = evaluation._success_metric(3, 3)
+    report['splits']['test']['metrics'][metric] = evaluation.success_metric(3, 3)
     gate = evaluation._gate(report, report['criteria'], report['label_provenance'])
     assert 'denominator_insufficient:' + metric in gate['reasons']
     assert 'below_threshold:' + metric in gate['reasons']
@@ -106,7 +106,7 @@ def test_v2_rejects_small_denominators_and_wilson_uncertainty():
 def test_missing_new_safety_metrics_block_promotion(field):
     cfg = approved_config({'semantic': {'fact_source': 'canonical'}})
     report = cfg['semantic']['fact_source_evidence']
-    report['splits']['test']['metrics'][field] = evaluation._success_metric(0, 200)
+    report['splits']['test']['metrics'][field] = evaluation.success_metric(0, 200)
     assert candidate.promotion_problem(cfg, report) == 'gate_failed'
 
 
@@ -193,7 +193,7 @@ def test_nonfinite_or_duplicate_json_evidence_is_rejected(raw):
 def test_zero_denominator_new_safety_metrics_block_promotion(field):
     cfg = approved_config({'semantic': {'fact_source': 'canonical'}})
     report = cfg['semantic']['fact_source_evidence']
-    report['splits']['test']['metrics'][field] = evaluation._success_metric(0, 0)
+    report['splits']['test']['metrics'][field] = evaluation.success_metric(0, 0)
     gate = evaluation._gate(report, report['criteria'], report['label_provenance'])
     assert 'denominator_zero:' + field in gate['reasons']
     assert not gate['g6_eligible']
@@ -468,3 +468,167 @@ def test_loaded_code_identity_distinguishes_slice_from_similarly_named_tuple(mon
     before = candidate._sources()
     module.transform.__code__ = original.replace(co_consts=original.co_consts + (("slice", None, 3, None),))
     assert candidate._sources() != before
+
+
+@pytest.mark.parametrize("module_name,constant", [("llm_availability", "_CIRCUIT_TRIP"),
+    ("self_identity", "SELF_PROFILE_KIND")])
+def test_moved_core_constants_change_only_new_worker_identity(monkeypatch, module_name, constant):
+    import importlib
+    module = importlib.import_module(module_name)
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    before = candidate.candidate_fingerprint({})
+    value = getattr(module, constant)
+    monkeypatch.setattr(module, constant, value + 1 if type(value) is int else value + "_synthetic")
+    assert candidate.candidate_fingerprint({}) == before
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    assert candidate.candidate_fingerprint({}) != before
+
+
+def test_mutable_availability_files_do_not_change_loaded_source_identity(tmp_path):
+    import sqlite3
+    import llm_availability
+    db = sqlite3.connect(tmp_path / "ledger.db")
+    try:
+        before = candidate._sources()
+        llm_availability.circuit_failure(db)
+        assert candidate._sources() == before
+        llm_availability.circuit_success(db)
+        assert candidate._sources() == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("name", ["acquire_run_lock", "code_stamp", "updater_state", "unlocked_transport", "wait_run_lock", "RunLockLost.__init__"])
+def test_writer_definition_changes_only_new_worker_identity(monkeypatch, name):
+    import writer_lock
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    before = candidate.candidate_fingerprint({})
+    def changed(*args, **kwargs):
+        raise AssertionError("definition fingerprint must not execute lock operations")
+    changed.__module__ = writer_lock.__name__
+    owner, attr = (writer_lock.RunLockLost, "__init__") if "." in name else (writer_lock, name)
+    monkeypatch.setattr(owner, attr, changed)
+    assert candidate.candidate_fingerprint({}) == before
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    assert candidate.candidate_fingerprint({}) != before
+
+
+@pytest.mark.parametrize("constant", ["RUN_LOCK_REACQUIRE_S", "RUN_LOCK_POLL_S", "UPDATE_MARKER_NAME"])
+def test_writer_policy_constant_changes_only_new_worker_identity(monkeypatch, constant):
+    import writer_lock
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    before = candidate.candidate_fingerprint({})
+    old = getattr(writer_lock, constant)
+    monkeypatch.setattr(writer_lock, constant, old + 1 if isinstance(old, float) else old + "_synthetic")
+    assert candidate.candidate_fingerprint({}) == before
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    assert candidate.candidate_fingerprint({}) != before
+
+
+def test_live_writer_marker_and_descriptor_do_not_change_definition_identity(tmp_path, monkeypatch):
+    import writer_lock
+    monkeypatch.setattr(writer_lock, "HOME", str(tmp_path))
+    (tmp_path / "data").mkdir()
+    before = candidate._sources()
+    path = tmp_path / "run.lock"
+    fd = writer_lock.acquire_run_lock(str(path))
+    try:
+        (tmp_path / "data" / writer_lock.UPDATE_MARKER_NAME).write_text("synthetic update")
+        assert candidate._sources() == before
+    finally:
+        import os
+        os.close(fd)
+    assert candidate._sources() == before
+
+
+@pytest.mark.parametrize('name', [
+    'semantic_text_line', 'semantic_chunks', 'semantic_chunk_parts', 'semantic_summary_block',
+])
+def test_moved_semantic_presentation_invalidates_only_new_worker_approval(monkeypatch, name):
+    import semantic_render
+
+    monkeypatch.setattr(candidate, '_LOADED_SOURCES', None)
+    cfg = approved_config({'semantic': {'fact_source': 'canonical'}})
+    original = candidate.candidate_fingerprint(cfg)
+    assert not semantic_config(cfg)[1]
+
+    def changed(*args, **kwargs):
+        raise AssertionError('synthetic moved renderer is fingerprinted, never called')
+
+    changed.__module__ = semantic_render.__name__
+    monkeypatch.setattr(semantic_render, name, changed)
+    assert candidate.candidate_fingerprint(cfg) == original
+    assert not semantic_config(cfg)[1]
+    monkeypatch.setattr(candidate, '_LOADED_SOURCES', None)
+    assert candidate.candidate_fingerprint(cfg) != original
+    settings, errors = semantic_config(cfg)
+    assert errors and settings['fact_source'] == 'legacy'
+
+
+@pytest.mark.parametrize("owner,name", [("semantic_store", "current_artifact"),
+    ("semantic_v4", "invalidate_projections"), ("semantic_projection", "projection_transition"),
+    ("semantic_facts", "doc_hash"), ("semantic_audit", "published_quantity_findings")])
+def test_projection_lifecycle_definition_changes_only_new_worker_identity(monkeypatch, owner, name):
+    import importlib
+    module = importlib.import_module(owner)
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    before = candidate.candidate_fingerprint({})
+    def changed(*args, **kwargs):
+        raise AssertionError("identity checks must not execute publication or I/O")
+    changed.__module__ = owner
+    monkeypatch.setattr(module, name, changed)
+    assert candidate.candidate_fingerprint({}) == before
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    assert candidate.candidate_fingerprint({}) != before
+
+
+@pytest.mark.parametrize("module_name,name", [("clinical_values", "absolute_date"), ("semantic_facts", "entity_tokens")])
+def test_source_value_definition_changes_only_new_worker_identity(monkeypatch, module_name, name):
+    import importlib
+    module = importlib.import_module(module_name)
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    before = candidate.candidate_fingerprint({})
+    def changed(*args):
+        raise AssertionError("candidate identity never executes source parsers")
+    changed.__module__ = module_name
+    monkeypatch.setattr(module, name, changed)
+    assert candidate.candidate_fingerprint({}) == before
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    assert candidate.candidate_fingerprint({}) != before
+
+
+@pytest.mark.parametrize("owner,name", [("semantic_facts", "cached_facts_plan"),
+    ("semantic_audit", "cached_fact_audit"), ("semantic_audit", "canonical_audit_disposition"),
+    ("semantic_audit", "fact_repair_plan"), ("semantic_audit", "fact_audit_verdict"),
+    ("semantic_v4", "publish_fact_projection"), ("semantic_v4", "publish_target_tx"), ("semantic_runtime", "guard"),
+    ("semantic_runtime", "job_matches"), ("semantic_runtime", "llm_request_was_dispatched"), ("semantic_runtime", "JobToken.from_row")])
+def test_canonical_reuse_and_publication_definition_pins_loaded_worker(monkeypatch, owner, name):
+    import importlib
+    module = importlib.import_module(owner)
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    before = candidate.candidate_fingerprint({})
+    def changed(*args, **kwargs):
+        raise AssertionError("identity must not evaluate publication code")
+    changed.__module__ = owner
+    if name == "JobToken.from_row":
+        monkeypatch.setattr(module.JobToken, "from_row", classmethod(changed))
+    else:
+        monkeypatch.setattr(module, name, changed)
+    assert candidate.candidate_fingerprint({}) == before
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    assert candidate.candidate_fingerprint({}) != before
+
+
+@pytest.mark.parametrize("owner,cls,method", [("semantic_jev", "JevClient", "request"),
+    ("semantic_jev", "JevClient", "evaluate"), ("semantic_runtime", "JevEvaluation", "evaluate")])
+def test_jev_execution_definition_changes_only_new_worker_identity(monkeypatch, owner, cls, method):
+    import importlib
+    module = importlib.import_module(owner)
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    before = candidate.candidate_fingerprint({})
+    def changed(*args, **kwargs):
+        raise AssertionError("fingerprint must not dispatch transport")
+    monkeypatch.setattr(getattr(module, cls), method, changed)
+    assert candidate.candidate_fingerprint({}) == before
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    assert candidate.candidate_fingerprint({}) != before

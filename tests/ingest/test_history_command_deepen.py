@@ -7,7 +7,7 @@ import sys
 from contextlib import closing
 
 import job_ops
-import notify_cards
+import notify_spool
 from ledger import Ledger
 from mcs_contract import MessageBatch
 from extract_testkit import _message
@@ -16,7 +16,7 @@ import mcs_adapter
 
 def test_deeper_single_page_command_restarts_and_imports_old_cutoff_gap(tmp_path, monkeypatch):
     monkeypatch.setattr(job_ops.time, "time", lambda: 10_000_000)
-    monkeypatch.setattr(notify_cards, "restore_awaiting_consent", lambda path: None)
+    monkeypatch.setattr(notify_spool, "restore_awaiting_consent", lambda path: None)
     ledger = Ledger(str(tmp_path / "synthetic.db"))
     try:
         ledger.ensure_patient(1)

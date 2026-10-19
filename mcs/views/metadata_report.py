@@ -17,6 +17,7 @@ from itertools import groupby
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
+import message_observations
 
 NOTE = "不一致0は未読保持の証明ではありません（照合できた投稿の件数だけです）。"
 LAG_BUCKETS = ((3600, "lt_1h"), (6 * 3600, "1h_6h"), (86400, "6h_24h"),
@@ -33,10 +34,10 @@ def _lag_bucket(seconds):
     return next(name for limit, name in LAG_BUCKETS if seconds < limit)
 
 
-def _watch(reader, now, project_id, shadow_checks):
-    """Due watch-set targets via the ledger's own selector (read only)."""
+def _watch(db, now, project_id, shadow_checks):
+    """Due watch-set targets on the caller-owned snapshot connection."""
     try:
-        targets = reader.metadata_watch_targets(limit=-1, now=now)
+        targets = message_observations.metadata_watch_targets(db, limit=-1, now=now)
         if project_id is not None:
             targets = [r for r in targets if r["project_id"] == project_id]
     except sqlite3.Error:
@@ -51,7 +52,7 @@ def _watch(reader, now, project_id, shadow_checks):
 
 def build_report(reader, now=None, *, project_id=None) -> dict:
     """Count-only comparison of capture and shadow rows."""
-    from message_metadata import ERROR_CODE, REACTION_LABELS, _decode_metadata
+    from message_metadata import ERROR_CODE, REACTION_LABELS, decode_metadata
     from snapshot_access import table_exists
     now = time.time() if now is None else now
     db = reader.db
@@ -73,8 +74,8 @@ def build_report(reader, now=None, *, project_id=None) -> dict:
     for mid, records in groupby(rows, key=lambda row: row[0]):
         messages += 1
         sources = {row[1]: tuple(row[2:]) for row in records}
-        cap = _decode_metadata(sources.get("capture"))
-        sh = _decode_metadata(sources.get("shadow"))
+        cap = decode_metadata(sources.get("capture"))
+        sh = decode_metadata(sources.get("shadow"))
         if "shadow" in sources:
             shadow_checks[mid] = sh["checked_at"]
         cap_seen = cap["reactions"] is not None
@@ -121,7 +122,7 @@ def build_report(reader, now=None, *, project_id=None) -> dict:
             "shadow_failures_by_code": dict(sorted(failures.items())),
             "time_direction": dict(sorted(direction.items())),
             "capture_to_shadow_lag": dict(sorted(lag.items())),
-            "watch": _watch(reader, now, project_id, shadow_checks), "note": NOTE}
+            "watch": _watch(db, now, project_id, shadow_checks), "note": NOTE}
 
 
 def render_text(rep) -> str:

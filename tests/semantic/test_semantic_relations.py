@@ -51,13 +51,13 @@ def test_reconciliation_reuses_tokens_without_changing_pairs_or_fingerprint(monk
             expected[relation["relation_id"]] = relation
     expected = sorted(expected.values(), key=lambda relation: relation["relation_id"])
     calls = []
-    real = sr._entity_tokens
+    real = sf.entity_tokens
 
     def counted(statement):
         calls.append(statement)
         return real(statement)
 
-    monkeypatch.setattr(sr, "_entity_tokens", counted)
+    monkeypatch.setattr(sf, "entity_tokens", counted)
     compared = []
     real_classify = sr._classify_pair
 

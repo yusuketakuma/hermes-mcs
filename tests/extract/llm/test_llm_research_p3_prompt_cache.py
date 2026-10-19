@@ -143,3 +143,22 @@ def test_cache_ratio_pairs_measurements_before_per_row_aggregation():
     stats = extract_llm._llm_call_stats([summary])
     assert stats["cache_hit_ratio"] is None
     assert stats["prompt_n"] is None and stats["cache_n"] is None
+
+
+def test_model_target_scope_is_owned_once_and_restores_on_nested_failure(monkeypatch):
+    import pytest
+    outer = ("http://outer.invalid", "synthetic-outer")
+    first = ("http://first.invalid", "synthetic-first")
+    second = ("http://second.invalid", "synthetic-second")
+    notes = []
+    monkeypatch.setattr(extract_llm._CALL_NOTES, "target", outer, raising=False)
+    monkeypatch.setattr(extract_llm._CALL_NOTES, "items", notes, raising=False)
+    with extract_llm.pin_target(first):
+        assert extract_llm._resolved_llm() == first
+        with pytest.raises(RuntimeError, match="synthetic"):
+            with extract_llm.pin_target(second):
+                assert extract_llm._resolved_llm() == second
+                raise RuntimeError("synthetic")
+        assert extract_llm._resolved_llm() == first
+    assert extract_llm._resolved_llm() == outer
+    assert extract_llm._CALL_NOTES.items is notes and notes == []

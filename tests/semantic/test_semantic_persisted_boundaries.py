@@ -1,4 +1,5 @@
 """Unreadable stored JSON stays isolated at receipt, publication, send and reporting boundaries."""
+import semantic_send_gate
 import semantic_transport
 import json
 import pytest
@@ -53,7 +54,7 @@ def test_current_v4_unreadable_content_is_unavailable(ledger):
 def test_send_summary_and_origin_readers_reject_unreadable_rows(ledger):
     ledger.artifact_add("semantic_summary", poison_json(ledger), project_id=1, message_id=1,
                         meta={"audit_status": "PASS", "publication_mode": "enforce", "policy_fingerprint": "policy"})
-    assert send_gate._summary_current(ledger, 1, 1, {}, "policy") is None
+    assert semantic_send_gate.current_summary(ledger.db, 1, 1, {}, 'policy') is None
     eid = ledger.outbox_add("new_messages", 1, {})
     ledger.db.execute("UPDATE notify_outbox SET payload=? WHERE event_id=?", (poison_json(ledger), eid))
     ledger.db.commit()

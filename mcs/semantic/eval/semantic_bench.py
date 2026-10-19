@@ -25,6 +25,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from contextlib import closing
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every subdir holding .py files (any depth) as an import root
@@ -35,7 +36,8 @@ import semantic_extraction
 import semantic_transport
 from ledger import LedgerReader
 import mcs_util
-from mcs_util import atomic_write, env_value
+from safe_io import atomic_write
+from mcs_util import env_value
 import semantic_jev as jev
 from semantic_audit import audit_claims, audit_code
 from semantic_llm import summarize
@@ -242,11 +244,10 @@ def cmd_calibrate(args) -> int:
     """Confidence distribution of real Jev claim verdicts, persisted in
     semantic_audit meta.claim_audit by the drain. Shows a what-if sweep
     of match_threshold so calibration is data-driven, not guessed."""
-    db = LedgerReader(DB)
-    rows = db.db.execute(
-        "SELECT meta FROM artifacts WHERE kind='semantic_audit'"
-    ).fetchall()
-    db.close()
+    with closing(LedgerReader(DB)) as db:
+        rows = db.db.execute(
+            "SELECT meta FROM artifacts WHERE kind='semantic_audit'"
+        ).fetchall()
     confs = []
     for (meta,) in rows:
         parsed = mcs_util.loads_dict(meta or "{}")

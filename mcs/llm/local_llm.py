@@ -542,7 +542,7 @@ def _validate_chat_args(prompt, endpoint, timeout, max_tokens,
     — a request rejected here provably never reached the backend."""
     if not isinstance(prompt, str) or not prompt:
         raise ValueError("prompt_invalid")
-    if not bounded_http._loopback_endpoint_allowed(endpoint):
+    if not bounded_http.loopback_endpoint_allowed(endpoint):
         raise ValueError("local_endpoint_not_allowed")
     if isinstance(timeout, bool) or not isinstance(timeout, int | float) \
             or abs(timeout) > sys.float_info.max \

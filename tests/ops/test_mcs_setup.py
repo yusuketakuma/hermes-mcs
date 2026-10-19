@@ -1,4 +1,6 @@
 """mcs_setup.validate_config — the typesafe required-condition gate."""
+
+import environment_diagnostics
 import service_contract
 import service_management
 import runtime_inspection
@@ -203,33 +205,33 @@ def test_env_write_merges_and_preserves(tmp_path):
 
 def test_check_environment_resolves_hermes_binary(monkeypatch,
                                                   tmp_path):
-    """check must resolve the hermes CLI the way notify_flush._hermes_exe
+    """check must resolve the hermes CLI the way mcs_util.hermes_exe
     does: config hermes_bin wins, else PATH, else the user-local
     fallback — an unresolvable binary is an error because notifications
     cannot be sent."""
-    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
-    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "linux")
+    monkeypatch.setattr(environment_diagnostics.os.path, "exists", lambda p: True)
     monkeypatch.setattr(
         local_llm, "bounded_request",
         lambda *a, **k: (200, {}, b"{}"))
 
     # unresolvable on PATH and on disk -> error
     monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: None)
-    monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: False)
+    monkeypatch.setattr(environment_diagnostics.os.path, "isfile", lambda p: False)
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
     assert any("Hermesコマンドが見つかりません" in e for e in errors)
 
     # PATH hit -> clean
     monkeypatch.setattr(mcs_util.shutil, "which",
                         lambda *a: "/usr/bin/hermes")
-    monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
-    monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
+    monkeypatch.setattr(environment_diagnostics.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.os, "access", lambda p, m: True)
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
     assert not any("Hermesコマンド" in e for e in errors)
 
     # explicit hermes_bin is honored over PATH
     calls = []
-    monkeypatch.setattr(mcs_setup.os.path, "isfile",
+    monkeypatch.setattr(environment_diagnostics.os.path, "isfile",
                         lambda p: calls.append(p) or True)
     errors, _ = mcs_setup.check_environment(
         {"notify_target": "slack", "hermes_bin": "/opt/h/hermes"})
@@ -250,10 +252,10 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
     error — 'locked' (unlock to recover) vs 'not found' (re-register)."""
     from types import SimpleNamespace
 
-    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
-    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
-    monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
-    monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "darwin")
+    monkeypatch.setattr(environment_diagnostics.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.os, "access", lambda p, m: True)
     monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: "/x/hermes")
     monkeypatch.setattr(
         local_llm, "bounded_request",
@@ -262,7 +264,7 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
     def fake_run(argv, **kw):
         return SimpleNamespace(returncode=36 if "-w" in argv else 0,
                                stdout="", stderr="")
-    monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
+    monkeypatch.setattr(environment_diagnostics.subprocess, "run", fake_run)
 
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
     assert any("キーチェーンのロックや" in e.lower() for e in errors)
@@ -271,7 +273,7 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
     def missing(argv, **kw):
         return SimpleNamespace(returncode=44, stdout="",
                                stderr="could not be found")
-    monkeypatch.setattr(mcs_setup.subprocess, "run", missing)
+    monkeypatch.setattr(environment_diagnostics.subprocess, "run", missing)
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
     assert any(mcs_setup.KEYCHAIN_SERVICE in e and "見つかりません" in e for e in errors)
     assert not any("キーチェーンのロックや" in e for e in errors)
@@ -284,15 +286,15 @@ def test_check_environment_flags_installed_but_unloaded_agent(
     An installed-but-unloaded agent is an error; an unreachable GUI
     domain (headless session) is a warning, never a false error."""
     from types import SimpleNamespace
-    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
-    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
-    monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
-    monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "darwin")
+    monkeypatch.setattr(environment_diagnostics.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.os, "access", lambda p, m: True)
     monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: "/x/hermes")
     monkeypatch.setattr(
         local_llm, "bounded_request",
         lambda *a, **k: (200, {}, b"{}"))
-    monkeypatch.setattr(mcs_setup.subprocess, "run",
+    monkeypatch.setattr(environment_diagnostics.subprocess, "run",
                         lambda *a, **k: SimpleNamespace(
                             returncode=0, stdout="", stderr=""))
     monkeypatch.setattr(lifecycle_io, 'run_bounded',
@@ -444,15 +446,15 @@ def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path, source, needs_resta
     pyc.write_bytes(b"")
     os.utime(src, (started - 100, started - 100))     # loaded before start
     os.utime(pyc, (started + 100, started + 100))     # regenerated at load
-    assert not mcs_setup._plugin_newer_than_gateway("PID 123 running")
+    assert not environment_diagnostics.plugin_newer_than_gateway("PID 123 running", checkout=mcs_setup.REPO_ROOT)
     # a docs-only edit needs no restart
     doc = plugin / "README.md"
     doc.write_text("docs")
     os.utime(doc, (started + 100, started + 100))
-    assert not mcs_setup._plugin_newer_than_gateway("PID 123 running")
+    assert not environment_diagnostics.plugin_newer_than_gateway("PID 123 running", checkout=mcs_setup.REPO_ROOT)
     # Newer Hermes-owned source warns; the independent LINE worker does not.
     os.utime(src, (started + 100, started + 100))
-    assert mcs_setup._plugin_newer_than_gateway("PID 123 running") is needs_restart
+    assert environment_diagnostics.plugin_newer_than_gateway("PID 123 running", checkout=mcs_setup.REPO_ROOT) is needs_restart
 
 
 def test_process_start_is_parsed_in_the_c_locale(monkeypatch):
@@ -469,11 +471,11 @@ def test_process_start_is_parsed_in_the_c_locale(monkeypatch):
     monkeypatch.setenv("LC_ALL", "ja_JP.UTF-8")
     monkeypatch.setattr(lifecycle_io, 'run_bounded', ps)
     started = time.mktime(time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
-    monkeypatch.setattr(mcs_setup, "_gateway_sources_mtime", lambda: started + 60)
-    assert mcs_setup._plugin_newer_than_gateway("PID 123 running") is True
-    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
-    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout=""))
-    gateway = mcs_setup._doctor_source({}, probe=True)["gateway"]
+    monkeypatch.setattr(environment_diagnostics, "gateway_sources_mtime", lambda checkout: started + 60)
+    assert environment_diagnostics.plugin_newer_than_gateway("PID 123 running", checkout=mcs_setup.REPO_ROOT) is True
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "darwin")
+    monkeypatch.setattr(environment_diagnostics.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout=""))
+    gateway = environment_diagnostics.source_status({}, probe=True, paths=mcs_setup._service_paths())["gateway"]
     assert gateway["started_at"] == started and gateway["restart_required"] is True
 
 
@@ -628,18 +630,18 @@ def test_check_environment_locked_keychain_with_env_fallback(monkeypatch):
     hard error — the reboot-fallback keeps re-login unmanned."""
     from types import SimpleNamespace
 
-    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
-    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
-    monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
-    monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "darwin")
+    monkeypatch.setattr(environment_diagnostics.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.os, "access", lambda p, m: True)
     monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: "/x/hermes")
     monkeypatch.setattr(
         local_llm, "bounded_request",
         lambda *a, **k: (200, {}, b"{}"))
-    monkeypatch.setattr(mcs_setup, "env_value",
+    monkeypatch.setattr(environment_diagnostics, "env_value",
                         lambda *a, **k: "env_pw")
     monkeypatch.setattr(
-        mcs_setup.subprocess, "run",
+        environment_diagnostics.subprocess, "run",
         lambda argv, **kw: SimpleNamespace(
             returncode=36 if "-w" in argv else 0, stdout="", stderr=""))
 
@@ -1851,11 +1853,11 @@ def test_plugin_integration_token_check_reads_serving_profile(
 
 def test_check_warns_when_gateway_unsupervised(monkeypatch):
     from types import SimpleNamespace
-    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
-    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "linux")
+    monkeypatch.setattr(environment_diagnostics.os.path, "exists", lambda p: True)
     monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: "/x/h")
-    monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
-    monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
+    monkeypatch.setattr(environment_diagnostics.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.os, "access", lambda p, m: True)
 
     def fake_cli(exe, profile, *argv, **kw):
         return SimpleNamespace(returncode=1, stdout="", stderr="")
@@ -1916,7 +1918,6 @@ def test_agent_reconcile_retries_transient_bootstrap(
         monkeypatch, outcomes, late, ok, boots, loads):
     import subprocess
     from types import SimpleNamespace
-    import mcs_util
     state = {"loaded": True, "calls": [], "outcomes": list(outcomes)}
 
     def fake_run(argv, **kwargs):
@@ -1936,8 +1937,8 @@ def test_agent_reconcile_retries_transient_bootstrap(
 
     sleeps, notes = [], []
     monkeypatch.setattr(lifecycle_io, 'run_bounded', fake_run)
-    monkeypatch.setattr(mcs_util, "time",
-                        SimpleNamespace(time=mcs_util.time.time,
+    monkeypatch.setattr(service_management, "time",
+                        SimpleNamespace(time=service_management.time.time,
                                         sleep=sleeps.append))
     assert service_management.agent_reconcile('ai.mcs.x', '/p.plist', notes.append, False, paths=mcs_setup._service_paths()) is ok
     assert state["calls"][:2] == ["print", "bootout"]
@@ -2251,8 +2252,8 @@ def test_all_replies_config_requires_boolean():
 @pytest.mark.parametrize("raw", [b'{"a":0,"b":1,"c":2}', b'null', b'[' * 2000 + b']' * 2000], ids=["object", "null", "deep"])
 def test_check_rejects_unreadable_slots_and_uses_bounded_probe(monkeypatch, raw):
     import local_llm
-    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
-    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "linux")
+    monkeypatch.setattr(environment_diagnostics.os.path, "exists", lambda p: True)
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda e: True)
     calls = []
     def request(url, method, body, timeout):

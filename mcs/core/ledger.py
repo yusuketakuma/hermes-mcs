@@ -17,6 +17,7 @@ Schema v9 (reuse-oriented):
 Transactions: save_patient()/save_messages() run inside `with self.db` —
 a mid-write failure rolls back the whole block.
 """
+import attachment_followups
 import hashlib
 import json
 import os
@@ -79,18 +80,11 @@ HEAD_SYNC_OVERLAP_S = 120
 # selection this long, so one broken karte cannot burn every tick's cap
 KARTE_SUMMARY_BACKOFF_S = 6 * 3600
 KARTE_SUMMARY_REFRESH_S = 24 * 3600  # deep runs refresh source summaries daily
-METADATA_SHADOW_INTERVAL_S = 30 * 60
 # Stamp re-read interval follows the thread's newest post, on roots and
 # replies alike. Older threads are checked less often; after the final
 # tier no further re-read occurs and the last observation is retained.
-METADATA_REFRESH_TIERS = ((2 * 3600, 10 * 60), (24 * 3600, 30 * 60),
-                          (3 * 86400, 2 * 3600), (7 * 86400, 6 * 3600),
-                          (30 * 86400, 24 * 3600))
-METADATA_SHADOW_TICK_CAP = 8
-METADATA_SHADOW_BACKOFF_S = 6 * 3600
 # 第2層: a complete actor set older than this is refetched even when the
 # post's counts and self flag look unchanged — actors can swap silently
-REACTION_ACTORS_TTL_S = 24 * 3600
 
 # body_state values meaning "nothing more to fetch" — shared by the
 # ledger's job-reconciliation and the walk checkpoint logic
@@ -102,49 +96,8 @@ _ATTACH_PERMANENT = frozenset({
     "download_too_large", "url_not_allowed", "download_empty"})
 
 
-def _enqueue_attachment_followup_tx(db, attachment_id, project_id, message_id, now):
-    if db.execute("""
-        SELECT 1 FROM notify_outbox
-        WHERE kind='attachment_followup' AND state != 'suppressed'
-          AND json_valid(payload)
-          AND json_extract(payload,'$.attachment_id')=?
-        LIMIT 1""", (attachment_id,)).fetchone():
-        return False
-    db.execute("""
-        INSERT INTO notify_outbox(kind,project_id,payload,state,next_try,
-          route,created_at,updated_at)
-        VALUES('attachment_followup',?,?,'pending',?,'text',?,?)
-    """, (project_id, json.dumps({"attachment_id": attachment_id,
-                                 "message_id": message_id}), now, now, now))
-    return True
 
 
-def enqueue_ready_attachment_followups_tx(db, event_id, now) -> int:
-    """Queue downloaded files covered by accepted cards in this transaction."""
-    rows = db.execute("""
-        SELECT DISTINCT a.attachment_id,m.project_id,m.message_id
-        FROM notify_outbox o
-        JOIN notification_intent_batches b ON b.event_id=o.event_id
-        JOIN notification_intent_cards ic ON ic.event_id=o.event_id
-        JOIN json_each(b.frozen_payload,'$.message_ids') frozen
-        JOIN json_each(ic.coverage) covered ON covered.value=frozen.value
-        JOIN messages m ON m.message_id=frozen.value
-        JOIN attachments a ON a.message_id=m.message_id
-        WHERE o.event_id=? AND o.kind='new_messages' AND o.state='accepted'
-          AND ic.state='delivered' AND frozen.type='integer'
-          AND a.state='downloaded' AND COALESCE(a.local_path,'')!=''
-          AND m.body_state IS NOT 'deleted'
-          -- a file sealed into a card's durable part manifest is owned
-          -- by the part pipeline (T7); the text followup would be a
-          -- second send of the same file
-          AND NOT EXISTS(SELECT 1 FROM notification_render_parts rp
-                         WHERE rp.attachment_id=a.attachment_id
-                           AND rp.state IN ('pending','delivered',
-                                            'held','unknown'))
-    """, (event_id,)).fetchall()
-    return sum(_enqueue_attachment_followup_tx(
-        db, row["attachment_id"], row["project_id"], row["message_id"], now)
-        for row in rows)
 
 
 # WAL size a checkpoint truncates back to (bytes)
@@ -387,7 +340,7 @@ class Ledger:
         # eligible kinds are marked 'interactive' at insert; the
         # interactive flag itself is evaluated at delivery time, so a
         # kill switch never strands a sealed card pipeline
-        from notify_cards import INTERACTIVE_KINDS
+        from notify_scope import INTERACTIVE_KINDS
         if route not in ("interactive", "text"):
             route = "interactive" if kind in INTERACTIVE_KINDS else "text"
         cur = self.db.execute("""
@@ -473,7 +426,7 @@ class Ledger:
         if self.is_archived(project_id):
             seed_ids = sorted(set(new_ids) | set(changed_ids))
             if semantic and seed_ids:
-                self._semantic_seed_tx(project_id, seed_ids, {
+                self.semantic_seed_tx(project_id, seed_ids, {
                     "source": "history_import", "notification_free": True})
             return
         origin = {"source": "history_import"}
@@ -516,7 +469,7 @@ class Ledger:
             # eligibility is separately derived from the origin event.
             seed_ids = sorted(set(new_ids) | set(notify_ids) | set(changed_ids))
             if seed_ids:
-                self._semantic_seed_tx(project_id, seed_ids, origin)
+                self.semantic_seed_tx(project_id, seed_ids, origin)
 
     def _filter_notify_age(self, ids: list, now: float,
                            max_age_s: float | None) -> list:
@@ -618,7 +571,7 @@ class Ledger:
                 old = self.job_payload("history_head", p.project_id)
                 if old and type(old.get("since")) is int:
                     since = min(since, old["since"])
-                self._job_add_tx("history_head", p.project_id, payload={
+                self.job_add_tx("history_head", p.project_id, payload={
                     "since": since, "page": 1, "trickle": True},
                     reset_pending=True)
         return (row is None, bool(flag) and not prev)
@@ -832,7 +785,7 @@ class Ledger:
                     # thread API keeps returning as snippets would
                     # otherwise reset each other's attempts forever and
                     # pending_reply_jobs could never reach 0
-                    self._job_add_tx("reply", project_id, m.message_id,
+                    self.job_add_tx("reply", project_id, m.message_id,
                                      parent_id=m.parent_id,
                                      revive_failed=False)
             changed_semantic = (self._semantic_changed_ids(before_semantic)
@@ -991,42 +944,6 @@ class Ledger:
             if publish is True and error is None and not getattr(m, "metadata_errors", []):
                 self._save_message_metadata(m, source="capture", now=now)
 
-    def reaction_actor_targets(self, limit=4, *, now=None):
-        """Watched posts whose captured reactions changed since the last
-        complete actor fetch, or whose complete set expired; failures back off."""
-        now = time.time() if now is None else now
-        # w: roots and replies of threads active in the last 7 days in
-        # active rooms (第2層 watch set) — stamps are pressed on both.
-        return self.db.execute("""
-          SELECT m.message_id,m.project_id FROM messages m
-          JOIN (SELECT m.message_id FROM messages m
-            JOIN patients p ON p.project_id=m.project_id
-            WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
-              AND m.posted_at_ts<=?
-              AND (SELECT MAX(x.posted_at_ts) FROM messages x
-                   WHERE x.project_id=m.project_id
-                     AND x.body_state IS NOT 'deleted' AND x.posted_at_ts<=?
-                     AND COALESCE(x.parent_id,x.message_id)=COALESCE(m.parent_id,m.message_id))>=?
-          ) w ON w.message_id=m.message_id
-          JOIN message_metadata md ON md.message_id=m.message_id AND md.source=(
-            SELECT source FROM message_metadata latest
-            WHERE latest.message_id=m.message_id AND latest.last_error IS NULL
-              AND json_valid(latest.content)
-              AND json_type(latest.content,'$.reactions.value')='array'
-            ORDER BY latest.checked_at DESC,latest.source='capture' DESC LIMIT 1)
-          LEFT JOIN message_reaction_actor_fetch f ON f.message_id=m.message_id
-          WHERE json_valid(md.content)
-            AND json_type(md.content,'$.reactions.value')='array'
-            AND (f.last_error IS NULL OR f.checked_at<=?)
-            AND (CASE WHEN f.complete_at IS NULL THEN EXISTS(
-                   SELECT 1 FROM json_each(md.content,'$.reactions.value') r
-                   WHERE json_extract(CASE WHEN r.type='object' THEN r.value END,
-                                      '$.count')>0)
-                 ELSE json_extract(md.content,'$.reactions.observed_at')>f.complete_at
-                   OR f.complete_at<=? END)
-          ORDER BY COALESCE(f.complete_at,0),m.message_id LIMIT ?
-        """, (now, now, now - 7*86400, now - METADATA_SHADOW_BACKOFF_S,
-              now - REACTION_ACTORS_TTL_S, limit)).fetchall()
 
     def save_reaction_actors(self, message_id, rows, complete, *, error=None, now=None):
         """Merge a complete walk into the kept actor history.
@@ -1075,88 +992,6 @@ class Ledger:
             """, (message_id, now if complete is True else None, now,
                   None if complete is True else (error or "incomplete")))
 
-    def metadata_watch_targets(self, limit=METADATA_SHADOW_TICK_CAP, *, now=None):
-        """Every post — thread root and reply alike — due for a stamp
-        re-read, most overdue first. Stamps keep arriving after a post is
-        written, mostly while the thread is active, so the interval
-        follows the thread's newest post (METADATA_REFRESH_TIERS): a new
-        reply brings the whole thread back to short intervals. Unacked
-        delivered cards and open pharmacist requests are re-read at least
-        every 30 minutes whatever their age; failures back off."""
-        from mcs_signals import _thresholds
-        now = time.time() if now is None else now
-        tiers = " ".join(f"WHEN ?-act.last<{age} THEN {iv}"
-                         for age, iv in METADATA_REFRESH_TIERS)
-        return self.db.execute(f"""
-          WITH latest AS MATERIALIZED (
-            SELECT MAX(artifact_id) AS artifact_id FROM artifacts
-            WHERE kind='signal_v1' AND json_valid(meta)
-              AND json_extract(meta,'$.key') IS NOT NULL
-            GROUP BY json_extract(meta,'$.key')
-            UNION ALL
-            SELECT artifact_id FROM artifacts
-            WHERE kind='signal_v1' AND json_valid(meta)
-              AND json_extract(meta,'$.key') IS NULL),
-          sig AS MATERIALIZED (
-            SELECT a.project_id,e.value AS message_id,
-                   json_extract(a.content,'$.state') AS state
-            FROM latest l JOIN artifacts a ON a.artifact_id=l.artifact_id,
-                 json_each(CASE WHEN json_valid(a.content) THEN a.content ELSE '{{}}' END,
-                           '$.evidence.message_ids') e
-            WHERE json_valid(a.content)
-              AND json_extract(a.content,'$.type')='pharmacist_request_unanswered'
-              AND json_extract(a.content,'$.state') IN ('open','resolved')),
-          watched AS MATERIALIZED (
-            SELECT sm.message_id FROM sig s
-            JOIN messages sm ON sm.message_id=s.message_id AND sm.project_id=s.project_id
-            WHERE s.state='open'
-              OR (s.state='resolved' AND sm.posted_at_ts>=?
-                AND EXISTS(SELECT 1 FROM message_metadata cap,json_each(
-                  CASE WHEN json_valid(cap.content) THEN cap.content ELSE '{{}}' END,
-                  '$.reactions.value') r
-                  WHERE cap.message_id=sm.message_id AND cap.source='capture'
-                    AND json_extract(CASE WHEN r.type='object' THEN r.value END,
-                                     '$.self_reacted')=1
-                    AND json_extract(CASE WHEN r.type='object' THEN r.value END,
-                                     '$.type') IN ('accepted','completed')))),
-          act AS (
-            SELECT project_id, COALESCE(parent_id,message_id) AS root,
-                   MAX(posted_at_ts) AS last FROM messages
-            WHERE body_state IS NOT 'deleted' AND posted_at_ts<=? GROUP BY 1,2),
-          w AS (
-            SELECT m.message_id,m.project_id,m.parent_id,
-                   md.checked_at,md.last_error,
-                   CASE {tiers} END AS tier,
-                   (EXISTS(SELECT 1 FROM notification_cards c
-                     WHERE c.project_id=m.project_id AND c.root_message_id=COALESCE(m.parent_id,m.message_id)
-                       AND c.delivery_state='delivered'
-                       AND NOT EXISTS(SELECT 1 FROM notification_acknowledgements a
-                         JOIN notification_view_manifests vm ON vm.manifest_id=a.manifest_id
-                         WHERE a.card_id=c.card_id AND a.withdrawn_at IS NULL
-                           AND vm.source_generation=c.source_generation
-                           AND vm.shown=(SELECT shown FROM notification_view_manifests
-                             WHERE card_id=c.card_id ORDER BY manifest_id DESC LIMIT 1)))
-                    OR m.message_id IN (SELECT message_id FROM watched)) AS priority
-            FROM messages m
-            JOIN patients p ON p.project_id=m.project_id
-            JOIN act ON act.project_id=m.project_id
-              AND act.root=COALESCE(m.parent_id,m.message_id)
-            LEFT JOIN message_metadata md ON md.message_id=m.message_id AND md.source='shadow'
-            WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
-              AND (m.posted_at_ts IS NULL OR m.posted_at_ts<=?)),
-          due AS (
-            SELECT *, CASE WHEN priority THEN MIN(COALESCE(tier,?),?) ELSE tier END AS iv
-            FROM w)
-          SELECT message_id,project_id,parent_id,COUNT(*) OVER() AS due_total FROM due
-          WHERE iv IS NOT NULL
-            AND (checked_at IS NULL OR checked_at<=? -
-                 CASE WHEN last_error IS NULL THEN iv ELSE ? END)
-          ORDER BY checked_at IS NOT NULL, COALESCE(checked_at+iv,iv), message_id
-          LIMIT ?
-        """, (now - _thresholds(self.db)["fyi_max_age_d"] * 86400,
-              now, *[now] * len(METADATA_REFRESH_TIERS), now,
-              METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_INTERVAL_S,
-              now, METADATA_SHADOW_BACKOFF_S, limit)).fetchall()
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:
@@ -1357,7 +1192,7 @@ class Ledger:
 
     # ---------- fetch jobs (durable retry units) ----------
 
-    def _job_add_tx(self, kind: str, project_id: int, message_id: int = 0,
+    def job_add_tx(self, kind: str, project_id: int, message_id: int = 0,
                     parent_id: int | None = None, payload: dict | None = None,
                     next_try: float = 0, reset_pending: bool = False,
                     revive_failed: bool = True):
@@ -1391,7 +1226,7 @@ class Ledger:
         # request — plain INSERT OR IGNORE would silently drop re-import
         # requests forever. An in-flight job keeps its progress.
         # revive_failed=False is for periodic re-discovery (not a request).
-        cur = self._job_add_tx(kind, project_id, message_id, parent_id,
+        cur = self.job_add_tx(kind, project_id, message_id, parent_id,
                                payload, next_try,
                                revive_failed=revive_failed)
         self.db.commit()
@@ -1624,7 +1459,7 @@ class Ledger:
             return None
         return self._semantic_digest(self._semantic_member(row))
 
-    def _semantic_seed_tx(self, project_id: int, message_ids: list,
+    def semantic_seed_tx(self, project_id: int, message_ids: list,
                           origin: dict):
         """Durable semantic-eval seeding — caller holds `with self.db` so
         job creation commits (or rolls back) with the message and notify
@@ -1745,7 +1580,7 @@ class Ledger:
         """Standalone seed for explicit replay — same job shape as the
         ingest path, committed on its own (spec §18.5)."""
         with self.db:
-            self._semantic_seed_tx(project_id, message_ids, origin)
+            self.semantic_seed_tx(project_id, message_ids, origin)
 
     def pending_reply_jobs(self, project_id: int) -> int:
         """Live reply-fetch work only. 'failed' rows are terminal
@@ -1796,36 +1631,12 @@ class Ledger:
                     row["project_id"], row["message_id"]):
                 self._invalidate_thread_projections(row["project_id"], row["root"])
                 if semantic:
-                    self._semantic_seed_tx(row["project_id"], [row["message_id"]],
+                    self.semantic_seed_tx(row["project_id"], [row["message_id"]],
                                            {"source": "attachment"})
             if row:
-                self._attachment_followup_tx(row, attachment_id, now)
+                attachment_followups.enqueue_downloaded_attachment_followup_tx(
+                    self.db, attachment_id, row["project_id"], row["message_id"], now)
 
-    def _attachment_followup_tx(self, row, attachment_id: int, now: float):
-        """The body notice for this message was already ACCEPTED before
-        this file finished downloading — it provably went out without
-        the file, so queue an attachment-only follow-up receipt (F11).
-        Deduped on payload.attachment_id: one follow-up per file ever."""
-        sent = self.db.execute("""
-          SELECT 1 FROM notify_outbox o
-          WHERE o.kind='new_messages' AND o.state='accepted'
-            AND o.updated_at < ? AND CASE
-              WHEN EXISTS(SELECT 1 FROM notification_intent_batches b
-                          WHERE b.event_id=o.event_id) THEN
-                EXISTS(SELECT 1 FROM notification_intent_batches b
-                  JOIN notification_intent_cards ic ON ic.event_id=b.event_id
-                  JOIN json_each(b.frozen_payload,'$.message_ids') frozen
-                  JOIN json_each(ic.coverage) covered ON covered.value=frozen.value
-                  WHERE b.event_id=o.event_id AND ic.state='delivered'
-                    AND frozen.type='integer' AND frozen.value=?)
-              ELSE json_valid(o.payload) AND EXISTS(
-                SELECT 1 FROM json_each(json_extract(o.payload,'$.message_ids'))
-                WHERE value=?) END
-          LIMIT 1""", (now, row["message_id"], row["message_id"])).fetchone()
-        if not sent:
-            return
-        _enqueue_attachment_followup_tx(
-            self.db, attachment_id, row["project_id"], row["message_id"], now)
 
     def attachment_failed(self, attachment_id: int, kind: str,
                           retry_in: float = 900, max_attempts: int = 6,
@@ -1861,7 +1672,7 @@ class Ledger:
                 if state != source["state"]:
                     self._invalidate_thread_projections(source["project_id"], source["root"])
                     if semantic:
-                        self._semantic_seed_tx(source["project_id"], [source["message_id"]],
+                        self.semantic_seed_tx(source["project_id"], [source["message_id"]],
                                                {"source": "attachment"})
 
     def attachments_due(self, limit: int = 50,
@@ -2134,56 +1945,6 @@ class LedgerReader(Ledger):
             raise
 
 
-def reaction_actor_summary(db, message_id, *, now=None) -> dict:
-    """押下者の職種×種別件数・氏名・本人の有無・取得状態を返す（#22-D2で氏名表示）。
-
-    state: complete | stale (expired or reactions changed since) |
-    failed (last walk incomplete; counts are the last complete set) |
-    not_fetched. Counts outside 'complete' are past observations only."""
-    from self_identity import self_sender_id
-    now = time.time() if now is None else now
-    out = {"state": "not_fetched", "complete_at": None, "checked_at": None,
-           "counts": {}, "self_included": None, "actors": []}
-    with suppress(sqlite3.OperationalError):   # tables absent on a pre-22-F db
-        f = db.execute("SELECT complete_at,checked_at,last_error FROM "
-                       "message_reaction_actor_fetch WHERE message_id=?",
-                       (message_id,)).fetchone()
-        if f is None:
-            return out
-        out.update(complete_at=f[0], checked_at=f[1])
-        if f[0] is not None:
-            self_id = self_sender_id(db)
-            columns = {r[1] for r in db.execute(
-                "PRAGMA table_info(message_reaction_actors)")}
-            name_col = "actor_name" if "actor_name" in columns else "NULL"
-            org_col = "organization" if "organization" in columns else "NULL"
-            current = " AND removed_at IS NULL" if "removed_at" in columns else ""
-            for actor, kind, prof, name, org in db.execute(
-                    "SELECT actor_id,reaction_type,profession," + name_col + "," + org_col +
-                    " FROM message_reaction_actors WHERE message_id=?" + current +
-                    " ORDER BY observed_at,actor_id", (message_id,)):
-                by_kind = out["counts"].setdefault(prof or "", {})
-                by_kind[kind] = by_kind.get(kind, 0) + 1
-                out["actors"].append({"reaction_type": kind, "name": name,
-                                      "profession": prof, "organization": org,
-                                      "self": self_id is not None and actor == self_id})
-                if self_id is not None and actor == self_id:
-                    out["self_included"] = True
-            if self_id is not None and out["self_included"] is None:
-                out["self_included"] = False
-            seen = db.execute(
-                "SELECT json_extract(content,'$.reactions.observed_at') FROM message_metadata "
-                "WHERE message_id=? AND last_error IS NULL AND json_valid(content) "
-                "AND json_type(content,'$.reactions.value')='array' "
-                "ORDER BY checked_at DESC,source='capture' DESC LIMIT 1",
-                (message_id,)).fetchone()
-            changed = seen is not None and seen[0] is not None and seen[0] > f[0]
-        if f[2] is not None:
-            out["state"] = "failed"
-        elif f[0] is not None:
-            out["state"] = ("stale" if changed or f[0] <= now - REACTION_ACTORS_TTL_S
-                            else "complete")
-    return out
 
 
 def valid_mcs_db(path: str, *, deadline: float | None = None) -> bool:

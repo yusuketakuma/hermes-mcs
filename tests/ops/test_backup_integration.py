@@ -14,6 +14,7 @@ import sys
 import pytest
 
 import mcs_backup
+import backup_evidence
 from backup_config import validate_backup_config
 import mcs_setup
 import health_report
@@ -27,7 +28,7 @@ def backup_settings(tmp_path, monkeypatch):
     for directory in (root, destination, scratch, root / "data", root / "snapshots"):
         directory.mkdir(mode=0o700)
     identity = destination.stat()
-    policy = mcs_backup.BackupPolicy(
+    policy = backup_evidence.BackupPolicy(
         destination=str(destination), destination_device=identity.st_dev,
         destination_inode=identity.st_ino, scratch_dir=str(scratch),
         policy_id="fictional", key_custody_confirmed=True, allow_os_openssl=True,
@@ -47,7 +48,7 @@ def backup_settings(tmp_path, monkeypatch):
 def test_disabled_backup_never_reads_policy_or_keys(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("disabled backup must not inspect storage or keys")
-    monkeypatch.setattr(mcs_backup, "load_policy", forbidden)
+    monkeypatch.setattr(backup_evidence, "load_policy", forbidden)
     monkeypatch.setattr(mcs_backup, "_keychain_read", forbidden)
     assert health_report.backup_health({}, 100) == {"state": "disabled", "reasons": []}
     assert service_management.service_substitutions({}, paths=mcs_setup._service_paths())["BACKUP_ENABLED"] == "0"
@@ -243,11 +244,11 @@ def test_rendered_wrapper_consumes_only_explicit_static_generation(
     assert "--snapshot-dir" not in argv and "--scheduled" in argv
     assert (hashlib.sha256(source.read_bytes()).hexdigest(), source.stat().st_mtime_ns) == before
     assert policy.max_rpo_seconds == 86400
-    local = mcs_backup.status(str(root / "data"), policy)
+    local = backup_evidence.status(str(root / "data"), policy)
     if age == "fresh":
         assert result.returncode == 0 and result.stdout == "" and result.stderr == ""
         assert local["source_last_successful_run"] == NOW and local["within_rpo"] is True
-        state = mcs_backup._records(str(root / "data"), policy).load("backup_state.json")
+        state = backup_evidence.open_records(str(root / "data"), policy).load("backup_state.json")
         assert state["receipt"]["last_successful_run"] == NOW
     else:
         assert result.returncode == 1 and "backup failed (exit 1)" in result.stdout
@@ -255,8 +256,8 @@ def test_rendered_wrapper_consumes_only_explicit_static_generation(
         assert local["within_rpo"] is None
         assert not list(Path(policy.destination).glob("snapshot-*.mcsb"))
         assert health_report.backup_health(cfg, NOW)["state"] != "healthy"
-    with pytest.raises(mcs_backup.BackupError, match="backup_no_valid_daily_snapshot"):
-        mcs_backup._latest_snapshot(str(source.parent), policy)
+    with pytest.raises(backup_evidence.BackupError, match="backup_no_valid_daily_snapshot"):
+        backup_evidence.latest_snapshot(str(source.parent), policy)
 
 
 def test_standalone_host_owns_only_explicit_offsite_schedule(backup_settings):

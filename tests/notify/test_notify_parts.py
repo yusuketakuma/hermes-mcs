@@ -15,6 +15,7 @@ import uuid as _uuid_mod
 import pytest
 
 import notify_cards
+import notify_spool
 import notify_render
 from notify_testkit import (
     CFG, NOW, SCOPE, _attach, _begin, _card, _dispatch, _extract, _intent,
@@ -861,10 +862,10 @@ def test_part_receipt_cmd_validation(led, tmp_path):
            "part_id": "thread", "result": "delivered",
            "remote_id": "t-5"}
     assert notify_cmds.validate_int(env) is None
-    root = notify_cards.data_root(led)
-    notify_cards.ensure_dirs(root)
-    dirs = notify_cards.notify_dirs(root)
-    notify_cards.publish_file(
+    root = notify_spool.data_root(led)
+    notify_spool.ensure_dirs(root)
+    dirs = notify_spool.notify_dirs(root)
+    notify_spool.publish_file(
         dirs["cmd_int"], env["command_id"] + ".json",
         json.dumps(env).encode())
     notify_cmds.drain_int_commands(led, {}, CFG, root)
@@ -1032,9 +1033,9 @@ def test_surplus_cleanup_budget_holds_once_without_claiming_completion(led, monk
     assert _latest_render(led)["delivery_id"] == held["delivery_id"] and specs == []
     # Both startup recovery and the shared publisher must keep this
     # special resource hold private, even when watchdogs see it as live.
-    notify_cards.recover(led, CFG, {})
-    root = notify_cards.data_root(led)
-    assert notify_cards.publish_specs(led.db, notify_cards.notify_dirs(root), [_spec(held)], NOW + 3) == []
+    notify_spool.recover(led, CFG, {})
+    root = notify_spool.data_root(led)
+    assert notify_spool.publish_specs(led.db, notify_spool.notify_dirs(root), [_spec(held)], NOW + 3) == []
     from pathlib import Path
     assert not (Path(root) / "discord_render" / (held["delivery_id"] + ".json")).exists()
     assert _latest_render(led)["spec_published"] == 0
@@ -1127,7 +1128,7 @@ def test_publish_failure_on_a_later_spec_leaves_no_open_transaction(led, monkeyp
     with led.db:
         led.db.execute("UPDATE notification_renders SET spec_published=0 "
                        "WHERE delivery_id=?", (render["delivery_id"],))
-    real = notify_cards.publish_file
+    real = notify_spool.publish_file
     calls = []
 
     def flaky(directory, name, raw):
@@ -1136,12 +1137,12 @@ def test_publish_failure_on_a_later_spec_leaves_no_open_transaction(led, monkeyp
             raise OSError("synthetic ENOSPC")
         return real(directory, name, raw)
 
-    monkeypatch.setattr(notify_cards, "publish_file", flaky)
+    monkeypatch.setattr(notify_spool, "publish_file", flaky)
     first = _spec(render)
     second = {**first, "delivery_id": _uuid(9001)}
-    root = notify_cards.data_root(led)
+    root = notify_spool.data_root(led)
     with pytest.raises(OSError):
-        notify_cards.publish_specs(led.db, notify_cards.notify_dirs(root),
+        notify_spool.publish_specs(led.db, notify_spool.notify_dirs(root),
                                     [first, second], NOW + 1)
     assert not led.db.in_transaction
     other = sqlite3.connect(led.db.execute("PRAGMA database_list").fetchone()[2])

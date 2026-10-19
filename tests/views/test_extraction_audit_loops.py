@@ -8,7 +8,7 @@ import time
 import pytest
 
 import ledger
-import mcs_stats
+import stats_contract
 import mcs_view
 import semantic_loops
 from semantic_testkit import BODY, _cfg, _message, _pending_fact
@@ -56,7 +56,7 @@ def test_open_resolution_closed_and_stale_are_distinct_and_read_only(tmp_path):
             assert sum(item["effective_state"] == "RESOLUTION_CANDIDATE" for item in shown) == 1
             with pytest.raises(sqlite3.OperationalError, match="readonly"):
                 view.db.execute("CREATE TABLE forbidden_write(value)")
-            assert mcs_stats.DEFINITION_VERSION == result["definition_version"]
+            assert stats_contract.DEFINITION_VERSION == result["definition_version"]
         finally:
             view.close()
     finally:

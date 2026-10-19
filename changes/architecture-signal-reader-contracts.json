@@ -1,0 +1,19 @@
+{
+  "category": "changed",
+  "title": "通知が参照するシグナル状態の契約を整理",
+  "summary": "入力の確認と通知状態の読み取りを共有する実装の責務を整理しました。承認条件・表示・保存形式・既定値は変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "最新シグナルと登録済み依頼の読み取りを、既存所有モジュールの公開関数へ統一する。",
+    "最新の壊れたシグナル行を旧行へ戻さない規則と借用接続の所有権を維持する。"
+  ],
+  "refs": [
+    "mcs/notify/notify_digest.py",
+    "mcs/notify/notify_urgent.py",
+    "mcs/signals/mcs_signals.py",
+    "tests/notify/test_notify_render.py",
+    "tests/ops/test_mcs_signal_feedback.py",
+    "tests/ops/test_signal_history_perf.py",
+    "tests/signals/test_mcs_signals.py"
+  ]
+}

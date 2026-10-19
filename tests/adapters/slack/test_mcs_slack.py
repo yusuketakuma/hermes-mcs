@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import hermes_plugin
 import pytest
 from adapters.slack.actions import Actions
+from adapters.slack import actions as slack_actions
 from adapters.slack.delivery import DeliveryWorker, SlackCardAdapter
 from hermes_plugin.card_workers import make_slack_factory
 from adapters.common import envelopes, journal, registry
@@ -17,6 +18,7 @@ from adapters.common.spec import token_map
 from adapters.slack import paths as slack_paths
 from adapters.slack.cards import thread_part_blocks
 import notify_cards as runner_cards
+import notify_spool
 import notify_cmds as runner_cmds
 import notify_reconcile
 from notify_testkit import (
@@ -38,7 +40,7 @@ def _adapter(client):
         SimpleNamespace(client=client),
         team_id="T_SYNTHETIC", application_id="A_SYNTHETIC",
         channel_id="C_SYNTHETIC", profile="cco",
-        allowed_user_ids={"U_OPERATOR"},
+
     )
 
 
@@ -252,7 +254,9 @@ def test_ambiguous_post_is_unknown_and_not_retried():
 
 
 def test_action_origin_rejects_foreign_scope_and_user():
-    adapter = _adapter(FakeClient())
+    scope = dict(team_id="T_SYNTHETIC", application_id="A_SYNTHETIC",
+                 channel_id="C_SYNTHETIC", profile="cco",
+                 allowed_user_ids={"U_OPERATOR"})
     body = {
         "team": {"id": "T_SYNTHETIC"},
         "api_app_id": "A_SYNTHETIC",
@@ -261,16 +265,16 @@ def test_action_origin_rejects_foreign_scope_and_user():
         "message": {"ts": "1790000000.000001"},
     }
     action = {"action_id": "mcs:a:" + "b" * 32, "value": "b" * 32}
-    origin = adapter.action_origin(body, action)
+    origin = slack_actions.parse_action_origin(body, action, **scope)
     assert origin is not None
     assert origin["actor"] == "slack:T_SYNTHETIC:U_OPERATOR"
     assert origin["message_id"] == "1790000000.000001"
-    assert adapter.action_origin({**body, "team": {"id": "T_FOREIGN"}},
-                                 action) is None
-    assert adapter.action_origin(
-        {**body, "user": {"id": "U_FOREIGN"}}, action) is None
-    assert adapter.action_origin(
-        body, {**action, "value": "c" * 32}) is None
+    assert slack_actions.parse_action_origin({**body, "team": {"id": "T_FOREIGN"}},
+                                 action, **scope) is None
+    assert slack_actions.parse_action_origin(
+        {**body, "user": {"id": "U_FOREIGN"}}, action, **scope) is None
+    assert slack_actions.parse_action_origin(
+        body, {**action, "value": "c" * 32}, **scope) is None
 
 
 def test_hermes_factory_is_inert_without_active_slack_scope(tmp_path):
@@ -374,16 +378,15 @@ def test_receipt_survives_unflushed_registry_with_usable_buttons(led):
                    (private_body,))
     led.db.commit()
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
-    root = Path(runner_cards.data_root(led))
-    runner_cards.publish_flags(SLACK, str(root))
+    root = Path(notify_spool.data_root(led))
+    notify_spool.publish_flags(SLACK, str(root))
     dirs = slack_paths.ensure_dirs(str(root))
     reg = registry.Registry(dirs["state"], scope=SCOPE)
     client = FakeClient()
     sender = SlackCardAdapter(
         SimpleNamespace(client=client),
         team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
-        channel_id=SCOPE["channel_id"], profile=SCOPE["profile"],
-        allowed_user_ids={"U_SYNTHETIC"})
+        channel_id=SCOPE["channel_id"], profile=SCOPE["profile"])
     worker = DeliveryWorker(
         sender=sender, settings=SCOPE, root=str(root),
         reg=reg, worker_id=registry.new_worker_id(),
@@ -494,8 +497,8 @@ def test_runner_grant_posts_card_and_body_inside_card_thread(led):
                    (private_body,))
     led.db.commit()
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
-    root = Path(runner_cards.data_root(led))
-    runner_cards.publish_flags(SLACK, str(root))
+    root = Path(notify_spool.data_root(led))
+    notify_spool.publish_flags(SLACK, str(root))
     dirs = slack_paths.ensure_dirs(str(root))
     reg = registry.Registry(dirs["state"], scope=SCOPE)
     reg.reload()
@@ -503,8 +506,7 @@ def test_runner_grant_posts_card_and_body_inside_card_thread(led):
     sender = SlackCardAdapter(
         SimpleNamespace(client=client),
         team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
-        channel_id=SCOPE["channel_id"], profile=SCOPE["profile"],
-        allowed_user_ids={"U_SYNTHETIC"})
+        channel_id=SCOPE["channel_id"], profile=SCOPE["profile"])
     worker = DeliveryWorker(
         sender=sender, settings=SCOPE, root=str(root),
         reg=reg, worker_id=registry.new_worker_id(),

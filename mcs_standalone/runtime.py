@@ -6,6 +6,7 @@ from contextlib import suppress
 import errno
 import fcntl
 import json
+import safe_io
 import math
 import os
 from pathlib import Path
@@ -23,7 +24,8 @@ from xml.sax.saxutils import escape
 from mcs_runtime import python_executable
 from scheduled_jobs import (CRON_TIMEOUT_S, TIMEOUT_PERL, calendar_entries,
                             configured_cron_jobs, latest_calendar_slots, render_template)
-from mcs_util import UPDATE_MARKER_NAME, atomic_write
+from writer_lock import UPDATE_MARKER_NAME
+from safe_io import atomic_write
 
 from . import config, service
 from .host import log
@@ -207,10 +209,10 @@ class Runtime:
             return {job: stamp for job, stamp in rows.items()
                     if isinstance(job, str) and type(stamp) in (int, float) and math.isfinite(stamp)}
         try:
-            raw = config._private_bytes(self.data / SCHEDULE_FILE, "missing", "invalid", 65536)
+            raw = safe_io.read_private_bytes(self.data / SCHEDULE_FILE, 65536)
             value = json.loads(raw)
             fired = stamps(value["fired"])
-        except (config.ConfigError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
             return {}, {}
         try:
             return fired, stamps(value.get("inflight") or {})
@@ -285,13 +287,13 @@ class Runtime:
         for so it never runs twice."""
         now = time.time() if now is None else now
         try:
-            raw = config._private_bytes(self.data / service.STATUS_FILE, "missing", "invalid",
+            raw = safe_io.read_private_bytes(self.data / service.STATUS_FILE,
                                         1024 * 1024)
             previous = json.loads(raw)
             rows = previous["children"]
             if previous.get("pid") == os.getpid() or not isinstance(rows, dict):
                 return
-        except (config.ConfigError, ValueError, KeyError, TypeError, RecursionError):
+        except (OSError, ValueError, KeyError, TypeError, RecursionError):
             return
         for job, row in rows.items():
             pid = row.get("pid") if isinstance(row, dict) else None
@@ -515,7 +517,7 @@ class Runtime:
     def _restart_requested(self, now):
         path = self.data / service.RESTART_FILE
         try:
-            raw = config._private_bytes(path, "request_missing", "request_invalid")
+            raw = safe_io.read_private_bytes(path)
             value = json.loads(raw)
             stamp = value["requested_at"]
             return (value["generation"] == self.generation

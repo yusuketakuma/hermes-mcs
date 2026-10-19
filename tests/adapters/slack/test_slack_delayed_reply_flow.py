@@ -4,6 +4,7 @@ import json
 import pytest
 
 import notify_cards
+import notify_spool
 from notify_testkit import NOW, _card, _dispatch, _intent, _latest_render, _msg, _seed_thread
 from slack_testkit import SLACK, _granted_card, _mkworld
 from slack_testkit import isolated_slack_ledger as led
@@ -28,7 +29,7 @@ def test_delayed_reply_is_new_in_original_thread_and_broadcast_once(led, monkeyp
     _msg(led, 202, parent=100, body="合成の遅れて届いた返信", ts=int(clock[0]))
     intent = _intent(led, payload={"message_ids": [202]})
     assert _dispatch(led, intent, SLACK, now=clock[0])["dispatched"]
-    notify_cards.publish_flags(SLACK, str(world.root))
+    notify_spool.publish_flags(SLACK, str(world.root))
     asyncio.run(_granted_card(world.worker, led, world.root))
 
     # The new layout keeps the original on the card, with one short broadcast
@@ -59,7 +60,7 @@ def test_delayed_reply_is_new_in_original_thread_and_broadcast_once(led, monkeyp
     with led.db:
         led.db.execute("UPDATE messages SET body_text='合成の編集後返信',content_hash=? WHERE message_id=202", ("e" * 64,))
         notify_cards.issue_render(led.db, 1, SLACK, clock[0] + 1, issued, force=True)
-    notify_cards.publish_specs(led.db, notify_cards.notify_dirs(str(world.root)), issued, clock[0] + 1)
+    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(world.root)), issued, clock[0] + 1)
     asyncio.run(_granted_card(world.worker, led, world.root))
     assert len(world.client.thread_posts) == before + expected
     assert sum(bool(p.get("reply_broadcast")) for p in world.client.thread_posts[before:]) == 1
@@ -83,7 +84,7 @@ def test_new_reply_broadcast_excludes_old_face_posts_moving_to_thread(led, monke
     _msg(led, 202, parent=100, body="LATE_NEW_REPLY", ts=int(clock[0]))
     _dispatch(led, _intent(led, payload={"message_ids": [202]}), SLACK, now=clock[0])
     spec = json.loads(_latest_render(led)["spec_json"])
-    notify_cards.publish_flags(SLACK, str(world.root))
+    notify_spool.publish_flags(SLACK, str(world.root))
     asyncio.run(_granted_card(world.worker, led, world.root))
     bodies = [p for p in spec["parts"]["manifest"] if p["kind"] == "body_part"]
     text_by_name = {p["name"]: text for p, text in zip(bodies, spec["parts"]["thread_body_parts"], strict=True)}

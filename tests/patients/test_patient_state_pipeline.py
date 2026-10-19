@@ -220,7 +220,7 @@ def test_context_lines_count_their_joining_newlines_within_the_budget(total):
     sizes = [400, 400, total - 800]
     rows = [{"message_id": i + 1, "posted_at_ts": i, "who": None, "body_text": "合" * (size - head)}
             for i, size in enumerate(sizes)]
-    lines = llm._ctx_lines(rows, 1, 1200)
+    lines = llm.thread_context_lines(rows, 1, 1200)
     assert len("\n".join(lines)) <= 1200
     assert len(lines) == (3 if total + 2 <= 1200 else 2)
 

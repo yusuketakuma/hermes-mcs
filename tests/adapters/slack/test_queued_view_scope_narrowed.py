@@ -48,8 +48,7 @@ async def _scenario(tmp_path, scope, expired):
             settings = {**SCOPE, "allowed_user_ids": {"U_OPERATOR"}, "project_ids": set(ids)}
             sender = SlackCardAdapter(app, team_id=SCOPE["team_id"],
                                       application_id=SCOPE["application_id"],
-                                      channel_id=SCOPE["channel_id"], profile=SCOPE["profile"],
-                                      allowed_user_ids=settings["allowed_user_ids"])
+                                      channel_id=SCOPE["channel_id"], profile=SCOPE["profile"])
             actions = Actions(app, settings, dirs, reg, sender, lambda *a, **kw: None)
             actions.register()
             return actions

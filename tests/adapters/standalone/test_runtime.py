@@ -7,7 +7,7 @@ import pytest
 from types import SimpleNamespace
 
 from mcs_standalone import runtime, service
-from mcs_util import UPDATE_MARKER_NAME
+from writer_lock import UPDATE_MARKER_NAME
 
 
 def test_jobs_quiesce_and_restart_after_the_updater_finishes(tmp_path, monkeypatch):

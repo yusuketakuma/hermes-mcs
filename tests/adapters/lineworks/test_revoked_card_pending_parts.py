@@ -5,6 +5,7 @@ from pathlib import Path
 
 import ledger
 import notify_cards
+import notify_spool
 import notify_cmds
 import pytest
 from adapters.lineworks import delivery
@@ -69,7 +70,7 @@ def test_revoked_card_never_resumes_pending_body_parts(tmp_path, monkeypatch, ar
                 # withdrawn by the revoking sweep itself, not only by a later gc
                 assert spec_file.exists() is not archive
                 notify_cards.gc(led, CONFIG, now=NOW + 2)
-                recovered = notify_cards.recover(led, CONFIG, {})
+                recovered = notify_spool.recover(led, CONFIG, {})
                 worker._perform_part = perform
                 worker._stopping = False
                 start = len(w.client.calls)

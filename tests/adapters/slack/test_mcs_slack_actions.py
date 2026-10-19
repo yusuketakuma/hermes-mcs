@@ -103,8 +103,7 @@ def test_pending_body_is_not_sent_after_user_loses_access(tmp_path):
         sender = SlackCardAdapter(
             app, team_id=SCOPE["team_id"],
             application_id=SCOPE["application_id"],
-            channel_id=SCOPE["channel_id"], profile=SCOPE["profile"],
-            allowed_user_ids=settings["allowed_user_ids"])
+            channel_id=SCOPE["channel_id"], profile=SCOPE["profile"])
         current = Actions(app, settings, dirs, reg, sender,
                           lambda *_a, **_k: None)
         current.register()
@@ -544,9 +543,13 @@ def test_denied_member_click_is_answered(tmp_path):
         assert len(app.client.messages) == 1
         assert list(Path(dirs["cmd_int"]).glob("*.json")) == []
         # several allowed members all work
-        actions._settings["allowed_user_ids"] = {"U_OPERATOR", "U_STAFF2"}
-        actions._sender._allowed_user_ids = frozenset(
-            actions._settings["allowed_user_ids"])
+        previous = actions
+        previous.unload()
+        actions = Actions(app, {**previous._settings,
+                               "allowed_user_ids": {"U_OPERATOR", "U_STAFF2"}},
+                          dirs, previous._reg, previous._sender,
+                          lambda *_args, **_kwargs: None)
+        actions.register()
         await actions._action(ack, *click(user="U_STAFF2"))
         assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
     asyncio.run(scenario())

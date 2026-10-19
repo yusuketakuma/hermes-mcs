@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-import notify_cards as runner_cards
+import notify_spool
 import notify_cmds as runner_cmds
 from adapters.common import registry
 from adapters.slack import paths as slack_paths
@@ -130,16 +130,15 @@ class FakeClient:
 def _mkworld(led, team=SCOPE["team_id"], channel=SCOPE["channel_id"],
              uploads=True):
     """Dispatch a slack render and wire the worker boundary."""
-    root = Path(runner_cards.data_root(led))
-    runner_cards.publish_flags(SLACK, str(root))
+    root = Path(notify_spool.data_root(led))
+    notify_spool.publish_flags(SLACK, str(root))
     dirs = slack_paths.ensure_dirs(str(root))
     reg = registry.Registry(dirs["state"], scope=SCOPE)
     client = FakeClient(team=team, uploads=uploads)
     sender = SlackCardAdapter(
         SimpleNamespace(client=client),
         team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
-        channel_id=SCOPE["channel_id"], profile=SCOPE["profile"],
-        allowed_user_ids={"U_SYNTHETIC"})
+        channel_id=SCOPE["channel_id"], profile=SCOPE["profile"])
     worker = DeliveryWorker(
         sender=sender, settings=SCOPE, root=str(root),
         reg=reg, worker_id=registry.new_worker_id(),

@@ -6,7 +6,6 @@ requests and retry state, and semantic_extraction owns durable fact chunks."""
 from __future__ import annotations
 
 import json
-import re
 import time
 
 import semantic_jev as jev
@@ -117,23 +116,6 @@ _FACT_V2_REPAIR_SUFFIX = """
 JSON:"""
 
 
-def _iso_date(text: str) -> str | None:
-    """occurred_at only when the original expression already carries an
-    absolute date — relative/ambiguous text stays null and the raw
-    time_text preserves it (spec §15.2)."""
-    if not isinstance(text, str):
-        return None
-    m = re.match(r"^\s*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", text)
-    if not m:
-        return None
-    y, mo, d = int(m[1]), int(m[2]), int(m[3])
-    if not (2000 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31):
-        return None
-    from datetime import date
-    try:
-        return date(y, mo, d).isoformat()
-    except ValueError:
-        return None
 
 
 _SUMMARY_PROMPT = """あなたは在宅医療チャット記録の要約器です。対象投稿と同一スレッド文脈、

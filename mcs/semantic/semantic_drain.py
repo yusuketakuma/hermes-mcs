@@ -12,6 +12,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401  registers every subdir as import root
+import semantic_facts
+import writer_lock
+import llm_availability  # noqa: E402
 import mcs_util
 import semantic_audit
 import semantic_render
@@ -46,7 +49,7 @@ from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT,
                              policy_fingerprint, semantic_config)
 from semantic_render import (_emit_degraded, _notify_src_event,
                              _outbox_has_delivery, render_notice)
-from semantic_store import _current, jev_state, jev_usage_today
+from semantic_store import current_artifact, jev_state, jev_usage_today
 
 import semantic_qc
 
@@ -55,7 +58,7 @@ def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
     """This source + policy already ran the current v2 extraction in shadow
     and it stayed incomplete — a receipt, never a completed document."""
     from semantic_extraction import v2_generation
-    row = _current(ledger.db, KIND_SHADOW_V2, mid, fp, policy)
+    row = current_artifact(ledger.db, KIND_SHADOW_V2, mid, fp, policy)
     return (row is not None and row["content"].get("status") == "incomplete"
             and row["meta"].get("generation") == v2_generation())
 
@@ -113,8 +116,8 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     # Without this guard, unreachable Jev can produce byte-identical
     # summary+audit pairs repeatedly. The durable store records an outcome
     # once, not once per attempt (FIX-SD1).
-    prev_sum = _current(ledger.db, KIND_SUMMARY, mid, fp, policy)
-    prev_aud = _current(ledger.db, KIND_AUDIT, mid, fp, policy)
+    prev_sum = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
+    prev_aud = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
     if (prev_sum is not None and prev_aud is not None
             and prev_sum["content"] == summary
             and prev_sum["meta"].get("audit_status") == final_status
@@ -203,7 +206,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
             return early
         from semantic_projection import project_v2_facts
         facts = project_v2_facts(v2_doc)
-        _fact_canonical_projection(ledger, member, pid, mid, fp, policy,
+        v4.publish_fact_projection(ledger, member, pid, mid, fp, policy,
                                    v2_doc, doc_hash)
     else:
         early, facts = _fact_legacy(ledger, member, pid, mid, fp, policy,
@@ -223,50 +226,9 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
     from semantic_extraction import extract_facts_v2, v2_generation
     import semantic_projection  # noqa: F401  loaded before any stage write
     v2_doc = None
-    prev_v2 = _current(ledger.db, KIND_FACTS_V2, mid, fp)
-    if prev_v2 is not None:
-        cached = prev_v2["content"]
-        from hashlib import sha256
-        from semantic_facts import ContractError, validate_facts_doc
-        try:
-            cached = {**cached, **validate_facts_doc(cached)}
-        except ContractError:
-            # Preserve malformed history and rebuild through extraction.
-            prev_v2 = None
-        else:
-            source = cached["source"]
-            body = member["body_original"]
-            if (source["message_id"] != str(mid)
-                    or source["revision"] != str(member.get("revision", ""))
-                    or source["content_hash"] != sha256(body.encode("utf-8")).hexdigest()
-                    or source["body_codepoints"] != len(body)
-                    or source["source_fingerprint"] != fp
-                    or source["content_quality"] != (
-                        "full" if member.get("body_state") == "full" else "partial")
-                    or source["attachments_complete"] != bool(
-                        member.get("attachments_complete", True))):
-                # Artifact metadata alone cannot bind facts to this source.
-                prev_v2 = None
-            else:
-                # The contract normalizes supported IDs/text before use.
-                # Keep the original stored row and any document extensions.
-                prev_v2["content"] = cached
-    # A stored document the hint rebuild did not confirm (skipped, or a
-    # past generation) is never reused, but the retry it already spent
-    # still binds this run.
-    spent = False
-    if prev_v2 is not None and prev_v2["meta"].get("hint_rebuild") \
-            not in (None, "same"):
-        spent, prev_v2 = bool(prev_v2["meta"].get("coverage_retry")), None
-    # C03: an adjudicated-but-incomplete stored doc must not be
-    # reused forever — one bounded re-extraction resumes from the
-    # missing chunks; if it still cannot complete, the generation
-    # parks as needs_review instead of silently deferring forever.
-    coverage_retry = (
-        fact_source == "canonical" and prev_v2 is not None
-        and prev_v2["meta"].get("coverage_status") not in
-            (None, "complete")
-        and not prev_v2["meta"].get("coverage_retry"))
+    prev_v2 = current_artifact(ledger.db, KIND_FACTS_V2, mid, fp)
+    prev_v2, spent, coverage_retry = semantic_facts.cached_facts_plan(
+        prev_v2, member, mid, fp, fact_source)
     if fact_source == "canonical":
         # S0: deterministic prep (extract_v1 hints + atom/chunk
         # boundaries inside extract_facts_v2) — no model call
@@ -403,18 +365,14 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
     # never promoted or silently dropped.
     audited = False
     for _attempt in range(2):
-        doc_hash = v4._doc_hash(v2_doc)
-        prev_fa = _current(ledger.db, KIND_FACT_AUDIT, mid, fp, policy)
+        doc_hash = semantic_facts.doc_hash(v2_doc)
+        prev_fa = current_artifact(ledger.db, KIND_FACT_AUDIT, mid, fp, policy)
         # C04: only a COMPLETED evaluation is a reusable audit — a
         # stored evaluated:false row (mid-audit outage) must be
         # re-run, otherwise a transient failure pins the generation
         # on a failed verdict forever and manual retry cannot clear it
-        from semantic_audit import _published_quantity_findings
-        previous_verdict = v4.fact_audit_verdict(prev_fa, doc_hash)
-        if (previous_verdict is not None and (previous_verdict != "PASS"
-                or not _published_quantity_findings(v2_doc))):
-            fact_audit = prev_fa["content"]
-        else:
+        fact_audit = semantic_audit.cached_fact_audit(prev_fa, v2_doc, doc_hash)
+        if fact_audit is None:
             if time.monotonic() > deadline - 5:
                 break
             from semantic_audit import audit_facts_v2
@@ -449,7 +407,8 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
             fact_audit["status"] if fact_audit["evaluated"]
             else "unevaluated",
             doc_hash=doc_hash)
-        if not fact_audit["evaluated"]:
+        disposition = semantic_audit.canonical_audit_disposition(fact_audit, v2_doc)
+        if disposition == "wait":
             error = getattr(jev_client, "last_error", None)
             if error is not None \
                     and jev.failure_class(error) == "failed":
@@ -458,8 +417,8 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                     or jev.failure_class(error) != "resource":
                 fail_kind = "retryable"
             break
-        if fact_audit["status"] == "PASS":
-            if v2_doc["coverage"]["status"] != "complete":
+        if disposition in ("pass", "coverage_incomplete"):
+            if disposition == "coverage_incomplete":
                 # defense in depth: never mint PASS over open
                 # obligations, whatever the audit said
                 return _park_needs_review(
@@ -468,13 +427,10 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
             break
         # NEEDS_REVIEW: one targeted repair dispatch per
         # generation (receipt-persisted), then re-audit.
-        rejected = {f["fact"]: f["code"]
-                    for f in fact_audit["findings"]
-                    if f.get("fact")}
-        coverage_missing = any(f.get("code") == "source_fact_coverage_missing"
-                               for f in fact_audit["findings"])
-        if _attempt == 0 and (rejected or coverage_missing) \
-                and _current(ledger.db, KIND_FACT_REPAIR,
+        rejected, coverage_missing, repair_candidate = semantic_audit.fact_repair_plan(
+            fact_audit["findings"], _attempt)
+        if repair_candidate \
+                and current_artifact(ledger.db, KIND_FACT_REPAIR,
                              mid, fp) is None:
             if time.monotonic() > deadline - 5:
                 break      # repair still possible next pass
@@ -503,8 +459,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                 try:
                     value = llm_fn(prompt)
                 except runtime.RuntimeGuardError as e:
-                    if not (isinstance(e, runtime.LLMNotSent)
-                            or e.stage in _PRE_DISPATCH_STAGES):
+                    if runtime.llm_request_was_dispatched(e):
                         sent.append(True)
                     raise
                 except Exception:
@@ -589,43 +544,6 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
     return None, v2_doc, doc_hash
 
 
-def _fact_canonical_projection(ledger, member, pid, mid, fp, policy,
-                               v2_doc, doc_hash) -> None:
-    """Publish (or reuse) the legacy-shaped projection of an audited doc."""
-    # T12: audited canonical docs also publish a legacy-shaped
-    # projection so the read side (stats/queries/rollup/signals)
-    # keeps working during migration — the artifact carries the
-    # message hash so "current" predicates bind it like an
-    # extract_llm row.
-    # audited is only set by a break right after doc_hash was taken
-    # for this v2_doc, so doc_hash is the audited document's hash
-    from semantic_projection import (PROJECTION_VERSION,
-                                     project_v2_doc_legacy,
-                                     projection_current)
-    prev_proj = _current(ledger.db, KIND_FACT_PROJ, mid, fp, policy)
-    # a row minted by an older projection version (or from another
-    # audited document) is stale — supersede it with a fresh row
-    if prev_proj is None \
-            or not projection_current(prev_proj["meta"], doc_hash):
-        v4.record_stage(ledger, pid, mid, fp, policy,
-                        "s5_projection", "done",
-                        doc_hash=doc_hash)
-        ledger.artifact_add(
-            KIND_FACT_PROJ,
-            json.dumps(project_v2_doc_legacy(v2_doc),
-                       ensure_ascii=False, allow_nan=False),
-            project_id=pid, message_id=mid,
-            model=semantic_transport.llm_model(),
-            meta={"fingerprint": fp,
-                  "policy_fingerprint": policy,
-                  "schema": SCHEMA_VERSION,
-                  "hash": member["revision"],
-                  "doc_hash": doc_hash,
-                  "projection_version": PROJECTION_VERSION})
-    else:
-        v4.record_stage(ledger, pid, mid, fp, policy,
-                        "s5_projection", "reused",
-                        doc_hash=doc_hash)
 
 
 def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
@@ -633,7 +551,7 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
 
     Returns (early, facts): early is the _fact_stage result to return
     as-is, else None with the facts."""
-    prev_f = _current(ledger.db, KIND_FACTS, mid, fp)
+    prev_f = current_artifact(ledger.db, KIND_FACTS, mid, fp)
     if prev_f is not None:
         facts = prev_f["content"].get("facts", [])
     else:
@@ -660,35 +578,6 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
     return None, facts
 
 
-def _publish_v4(ledger, pid: int, mid: int, fp: str, policy: str,
-                members: dict, v2_docs_by_target: dict,
-                final_status: str, findings: list,
-                fact_source: str) -> None:
-    """T18 S8 — called INSIDE the caller's ``with ledger.db`` so the
-    read-model switch (or its diagnostic) commits atomically with the
-    status receipt. Only an all-PASS chain mints the ``semantic_facts_v4``
-    read model; anything else leaves a ``v4_diagnostic`` receipt that no
-    extraction reader can select."""
-    if fact_source != "canonical":
-        return
-    doc = v2_docs_by_target.get(mid)
-    if doc is None:
-        prev_v2 = _current(ledger.db, KIND_FACTS_V2, mid, fp)
-        # never publish from a document the hint rebuild could not re-derive
-        doc = prev_v2["content"] if prev_v2 and prev_v2["meta"].get(
-            "hint_rebuild") in (None, "same") else None
-    doc_hash = v4._doc_hash(doc) if doc else None
-    if final_status == "PASS" and doc is not None:
-        vid = v4.publish(ledger, pid, mid, fp, policy,
-                         members[mid], doc)
-        v4.record_stage(ledger, pid, mid, fp, policy, "s8_publish",
-                        "PASS", tx=True, artifact_id=vid,
-                        doc_hash=doc_hash)
-    else:
-        v4.diagnostic(ledger, pid, mid, fp, policy, final_status,
-                      findings, doc_hash=doc_hash, tx=True)
-        v4.record_stage(ledger, pid, mid, fp, policy, "s8_publish",
-                        final_status, tx=True, doc_hash=doc_hash)
 
 
 def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
@@ -775,7 +664,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
         if existing["meta"].get("input_oversize"):
             summary["_input_oversize"] = True
     else:
-        candidate = _current(ledger.db, KIND_CANDIDATE, mid, fp, policy)
+        candidate = current_artifact(ledger.db, KIND_CANDIDATE, mid, fp, policy)
         if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
             summary = candidate["content"]
         else:
@@ -788,7 +677,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                 if summary is None and summary_reason == "model" \
                         and summary_error.get("code") \
                         and semantic_transport.last_llm_failure() != "length_stop" \
-                        and _current(ledger.db, KIND_SUMMARY_FORMAT_REPAIR,
+                        and current_artifact(ledger.db, KIND_SUMMARY_FORMAT_REPAIR,
                                      mid, fp, policy) is None:
                     if diagnostics.get("summary_validation_error") is None:
                         diagnostics["summary_validation_error"] = summary_error["code"]
@@ -806,9 +695,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                         deadline=deadline, return_reason=True,
                         error_out=summary_error)
             except runtime.RuntimeGuardError as e:
-                if format_repair_id is not None and (
-                        isinstance(e, runtime.LLMNotSent)
-                        or e.stage in _PRE_DISPATCH_STAGES):
+                if format_repair_id is not None and not runtime.llm_request_was_dispatched(e):
                     with ledger.db:
                         ledger.db.execute(
                             "DELETE FROM artifacts WHERE artifact_id=?",
@@ -933,6 +820,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                        cfg_path: str | None = None,
                        config_generation: str | None = None,
                        reserve_fn=None, lane: str | None = None, *,
+                       jev_transport=None, jev_timing=None,
                        diagnostics: dict, shadow_stats: dict | None = None) -> str:
     """One semantic job -> durable artifacts + job state transition.
     Returns 'done'|'deferred'|'retry'|'failed'."""
@@ -1002,7 +890,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     # immediately before the POST.
     jev_client = runtime.bind_jev(
         jev_client, guard, reserve_fn,
-        cutoff=transport_deadline if lane == "backlog" else None)
+        cutoff=transport_deadline if lane == "backlog" else None,
+        transport=jev_transport, timing=jev_timing)
     llm_fn = runtime.guarded_llm(
         # a backlog worker owns its slot: one long-output call may use the
         # transport deadline instead of burning 600 s per attempt (2026-10-10)
@@ -1019,7 +908,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         else {}
     bundle["origin_event_id"] = origin.get("event_id")
     bundle["capture_origin"] = origin.get("source")
-    if _current(ledger.db, KIND_BUNDLE, root, fp, policy) is None:
+    if current_artifact(ledger.db, KIND_BUNDLE, root, fp, policy) is None:
         ledger.artifact_add(
             KIND_BUNDLE, json.dumps(bundle, ensure_ascii=False),
             project_id=pid, message_id=root, model=jev.JEV_MODEL,
@@ -1043,7 +932,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         member = members[mid]
         # restart-safe: a complete assessment for THIS fingerprint is
         # reused; retry_wait/error/pending ones are re-attempted
-        prev = _current(ledger.db, KIND_ASSESS, mid, fp, policy)
+        prev = current_artifact(ledger.db, KIND_ASSESS, mid, fp, policy)
         if prev and prev["meta"].get("technical_status") == "complete":
             verdicts[mid] = prev["content"].get("verdicts", {})
         else:
@@ -1075,7 +964,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     else "PENDING",
                     [{"code": f"fact_stage_{stage['outcome']}"}]
                     + list(stage.get("findings") or []),
-                    doc_hash=(v4._doc_hash(doc) if doc else None))
+                    doc_hash=(semantic_facts.doc_hash(doc) if doc else None))
             _why(diagnostics, f"fact_stage_{stage['outcome']}")
             if stage["outcome"] == "retryable":
                 retryable_failure = True
@@ -1106,7 +995,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             guard("loop_candidates")
             update_loops(ledger, pid, bundle, {mid: facts}, None, scfg, deadline)
         if scfg["summary_mode"] != "off":
-            previous = _current(ledger.db, KIND_COVERAGE, mid, fp, policy)
+            previous = current_artifact(ledger.db, KIND_COVERAGE, mid, fp, policy)
             coverage = previous["content"] if previous else None
             if not coverage or not coverage.get("evaluated"):
                 from semantic_audit import evaluate_source_fact_coverage
@@ -1152,8 +1041,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     for mid, facts in facts_by_target.items():
         if scfg["summary_mode"] == "off":
             continue
-        existing = _current(ledger.db, KIND_SUMMARY, mid, fp, policy)
-        prev_audit = _current(ledger.db, KIND_AUDIT, mid, fp, policy)
+        existing = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
+        prev_audit = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
         if existing and existing["meta"].get("publication_mode") != scfg["summary_mode"]:
             existing = None
             prev_audit = None
@@ -1186,7 +1075,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             # PENDING rows on every drain
             if summary_reason == "model":
                 retryable_failure = True
-            prev_a = _current(ledger.db, KIND_AUDIT, mid, fp, policy)
+            prev_a = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
             if not (prev_a
                     and prev_a["meta"].get("technical_status")
                     == "pending"
@@ -1211,7 +1100,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             else "done")
         # Preserve the pre-audit output for the fixed-bundle comparison (§24.1).
         # It is never eligible for publication or automatic adoption.
-        if existing is None and _current(ledger.db, KIND_CANDIDATE, mid, fp, policy) is None:
+        if existing is None and current_artifact(ledger.db, KIND_CANDIDATE, mid, fp, policy) is None:
             guard("candidate_snapshot")
             ledger.artifact_add(
                 KIND_CANDIDATE, json.dumps(summary, ensure_ascii=False),
@@ -1221,7 +1110,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                       "publication_mode": scfg["summary_mode"],
                       "target_revision": members[mid]["revision"]})
         # Reserve before dispatch: a crash cannot refund the repair (INV-10).
-        repaired = bool(_current(ledger.db, KIND_REPAIR, mid, fp)
+        repaired = bool(current_artifact(ledger.db, KIND_REPAIR, mid, fp)
                         or (prev_audit
                             and prev_audit["meta"].get("repair_count", 0) >= 1))
         summary["_facts"] = facts   # evidence context for the Jev audit
@@ -1275,8 +1164,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                   f.get("statement", f.get("claim", ""))
                                   for f in code_f + jev_f])
                 except runtime.RuntimeGuardError as error:
-                    if (isinstance(error, runtime.LLMNotSent)
-                            or error.stage in _PRE_DISPATCH_STAGES):
+                    if not runtime.llm_request_was_dispatched(error):
                         # A proven pre-dispatch stop did not spend the one
                         # repair. A crash or post-dispatch stop still does.
                         with ledger.db:
@@ -1335,7 +1223,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     if r["fresh"]:
                         _write_result(ledger, pid, mid, r, fp, members,
                                       r["status"], policy, scfg["summary_mode"])
-                    _publish_v4(ledger, pid, mid, fp, policy, members,
+                    v4.publish_target_tx(ledger, pid, mid, fp, policy, members,
                                 v2_docs_by_target, r["status"],
                                 r.get("findings") or [],
                                 fact_source)
@@ -1388,7 +1276,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             # a PASS result without its read-model row, nor a non-PASS
             # without its diagnostic. STALE is a status too: the
             # generation receipt persists even when the source moved
-            _publish_v4(ledger, pid, mid, fp, policy, members,
+            v4.publish_target_tx(ledger, pid, mid, fp, policy, members,
                         v2_docs_by_target, final_status,
                         r.get("findings") or [], fact_source)
             if stale:
@@ -1435,6 +1323,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                  cfg_path: str | None = None,
                  config_generation: str | None = None,
                  reserve_fn=None, lane: str | None = None, *,
+                       jev_transport=None, jev_timing=None,
                  diagnostics: dict, shadow_stats: dict | None = None) -> str:
     """Preserve stale workers while bounding timeouts after dispatched work."""
     requests_before = jev_client.requests_made if jev_client is not None else 0
@@ -1454,7 +1343,8 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         status = _process_job_inner(
             ledger, scfg, job, jev_client, tracked_llm, deadline,
             cfg_path=cfg_path, config_generation=config_generation,
-            reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats)
+            reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats,
+            jev_transport=jev_transport, jev_timing=jev_timing)
         from extraction_refresh import refresh_extraction_cards
         refresh_extraction_cards(ledger, job["project_id"], job["message_id"])
         return status
@@ -1485,33 +1375,6 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         return "retry" if jev_sent() or llm_started else "deferred"
 
 
-class _TimedClient:
-    """Per-job wall-time accounting proxy for the Jev client: every
-    attribute (including hookable markers and mutable budget fields)
-    forwards to the real client, while each method call's seconds
-    accumulate for the drain's per-job phase metrics (T14)."""
-
-    def __init__(self, client):
-        object.__setattr__(self, "_client", client)
-        object.__setattr__(self, "elapsed_s", 0.0)
-
-    def __getattr__(self, name):
-        value = getattr(self._client, name)
-        if not callable(value):
-            return value
-
-        def timed(*args, **kwargs):
-            started = time.perf_counter()
-            try:
-                return value(*args, **kwargs)
-            finally:
-                object.__setattr__(
-                    self, "elapsed_s",
-                    self.elapsed_s + time.perf_counter() - started)
-        return timed
-
-    def __setattr__(self, name, value):
-        setattr(self._client, name, value)
 
 
 def _jev_error_brief(error) -> dict | None:
@@ -1527,7 +1390,6 @@ def _jev_error_brief(error) -> dict | None:
 
 
 # guard stages raised before a local-model request leaves (runtime)
-_PRE_DISPATCH_STAGES = ("llm_attempt", "llm_next_call", "llm")
 
 # Artifact kinds a semantic pass persists as durable stage results.
 # Scoped (kind + project) so a concurrent drainer's extract_llm rows or
@@ -1604,7 +1466,7 @@ def _sched_write(ledger, state: dict) -> None:
 
 _REALTIME_ORDER = ("CASE WHEN next_try<=updated_at THEN updated_at "
                    "ELSE created_at END DESC, job_id DESC")
-# Free long-output defers (the call needs _LONG_MIN_CALL_S and the pass
+# Free long-output defers (the call needs LONG_MIN_CALL_S and the pass
 # had less) are tracked per job generation in the sched row: such a job
 # leaves the realtime lane, and after this many free defers of the same
 # generation the next one charges a normal attempt so a budget that can
@@ -1748,7 +1610,7 @@ def _backlog_commit_reserve(scfg: dict) -> float:
     (220 s at 900 s), never squeezing the long call out."""
     budget = float(scfg["job_budget_seconds"])
     return min(BACKLOG_COMMIT_RESERVE_S,
-               max(0.0, budget - semantic_transport._LONG_MIN_CALL_S - _LONG_START_S))
+               max(0.0, budget - semantic_transport.LONG_MIN_CALL_S - _LONG_START_S))
 # kind this resident backlog worker served last (in-process; a restart
 # simply starts with semantic again)
 _BACKLOG_TURN = {"kind": None}
@@ -1759,7 +1621,7 @@ _invalidated_at: float | None = None
 @contextmanager
 def _job_lock(ledger, job_id):
     """Exclude duplicate inference for a job while ingestion keeps writing."""
-    from mcs_util import acquire_run_lock
+    from writer_lock import acquire_run_lock
     db_path = ledger.db.execute("PRAGMA database_list").fetchone()[2]
     # Bucketed so the directory stays bounded (inodes are never unlinked,
     # see below). A bucket collision only makes the other job skip this
@@ -2059,8 +1921,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     now_m = time.monotonic()
     if lane != "backlog" or _invalidated_at is None \
             or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S:
-        from semantic_store import invalidate_projections
-        invalidate_projections(ledger, scfg)
+        from semantic_v4 import invalidate_projections
+        invalidate_projections(ledger.db, scfg)
         _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
         return out
@@ -2068,10 +1930,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # volume turns per-job artifact writes into an I/O error storm, and
     # an open endpoint breaker means every llm_fn call pays a dead
     # timeout — defer the whole window instead of churning jobs.
-    import mcs_util
-    free_mb = mcs_util.disk_free_mb(ledger)
+    free_mb = llm_availability.disk_free_mb(ledger.db)
     if free_mb is not None \
-            and free_mb < mcs_util.disk_floor_mb():
+            and free_mb < llm_availability.disk_floor_mb():
         out["disk_free_mb"] = round(free_mb)
         return out
     # Deterministic maintenance (no model, no Jev — not gated by the
@@ -2082,7 +1943,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         out["reproject"] = v4.reproject_stale(ledger, scfg)
     except Exception as e:
         result["errors"].append(f"semantic_reproject: {type(e).__name__}")
-    circuit_s = mcs_util.circuit_open_s(ledger)
+    circuit_s = llm_availability.circuit_open_s(ledger.db)
     if circuit_s:
         out["circuit_open_s"] = round(circuit_s)
         return out
@@ -2119,7 +1980,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             attempt_timeout=scfg["attempt_timeout_seconds"],
             job_budget=scfg["job_budget_seconds"],
             max_attempts=scfg["max_attempts_per_try"])
-    from mcs_util import unlocked_transport
+    from writer_lock import unlocked_transport
     original_llm = llm_fn
     # the tick keeps the shared default: it never has a tick to outwait
     reacquire_s = RUN_LOCK_REACQUIRE_S if lane == "backlog" else None
@@ -2136,15 +1997,15 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     def _unlocked(kind, call, *args, **kwargs):
         started, ended = time.monotonic(), None
         try:
-            with unlocked_transport(ledger, run_lock_fd, wait_s=reacquire_s,
+            with unlocked_transport(ledger.db, run_lock_fd, wait_s=reacquire_s,
                                     deadline=deadline):
                 try:
                     return call(*args, **kwargs)
                 finally:
                     ended = time.monotonic()
-        except mcs_util.RunLockLost:
+        except writer_lock.RunLockLost:
             if ended is not None:
-                wait = mcs_util.RUN_LOCK_REACQUIRE_S if reacquire_s is None \
+                wait = writer_lock.RUN_LOCK_REACQUIRE_S if reacquire_s is None \
                     else reacquire_s
                 out["run_lock_lost_detail"] = {
                     "kind": kind, "transport_s": round(ended - started, 1),
@@ -2174,327 +2035,316 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         except runtime.LLMNotSent as e:
             if getattr(e, "stage", "") in _LLM_DOWN_REASONS:
                 if not llm_health["fed"]:
-                    mcs_util.circuit_failure(ledger)
+                    llm_availability.circuit_failure(ledger.db)
                 llm_health["down"] = llm_health["fed"] = True
             raise
         if isinstance(text, str):
-            mcs_util.circuit_success(ledger)
+            llm_availability.circuit_success(ledger.db)
             llm_health["down"] = False
         return text
 
     llm_fn = unlocked_llm
-    original_http = None
-    if (run_lock_fd is not None and jev_client is not None
-            and getattr(jev_client, "_mcs_jev_hookable", False)):
-        original_http = jev_client._http_request
+    def unlocked_jev_request(call, *args, **kwargs):
+        return _unlocked("jev", call, *args, **kwargs)
 
-        def unlocked_http(*args, **kwargs):
-            return _unlocked("jev", original_http, *args, **kwargs)
-
-        jev_client._http_request = unlocked_http
-    try:
-        # extract_qc jobs derive from extract_llm artifacts — seeded lazily
-        # here so the drain remains the single queue and enabling the
-        # feature also backfills artifacts written before it existed.
-        if scfg["mode"] != "off" and scfg["extract_qc"] == "annotate" \
-                and jev_client is not None:
-            try:
-                semantic_qc._qc_seed(ledger, time.time())
-            except Exception:
-                result["errors"].append("semantic: qc_seed_failed")
-        qc_active = (scfg["extract_qc"] == "annotate"
-                     and jev_client is not None)
-        kinds = (JOB_KIND, QC_JOB_KIND) if qc_active else (JOB_KIND,)
-        # arrival-descended seeds outrank import/replay seeds: a deep
-        # backfill must never starve a fresh notification's evaluation
-        # (§19.1's existing-work-first ordering applied inside the queue
-        # too). 'eligible' is set at seed time and survives payload merges,
-        # so a merged arrival+history job keeps its priority.
-        # T14: the backfill cohort additionally gets a guaranteed share of
-        # every window — a continuous arrival stream cannot starve runnable
-        # backlog (persisted accounting row keeps it restart-safe).
-        # These shares apply within each patient class; archived patients
-        # receive only capacity left by active patients.
-        # QC dedicated frame: kind ordering puts semantic rows ahead of QC
-        # in both cohorts. Long generations can consume the whole window
-        # and starve QC without attempting it. QC gets a bounded share,
-        # served FIRST
-        # (each pass is one bounded chunked eval), expanding into whatever
-        # the semantic lanes leave unused. A 1-job window cannot be split —
-        # QC falls back to the persisted cohort alternation inside the
-        # non-eligible lane.
-        due, qc_jobs, arrivals, backfill, sched_mut = _select_due(
-            ledger, lane, kinds, qc_active, max_jobs, long_defers)
-        cohort_of = {id(job): "qc" for job in qc_jobs}
-        cohort_of.update({id(job): "arrival" for job in arrivals})
-        cohort_of.update({id(job): "backfill" for job in backfill})
-        out["lanes"] = {"arrival": len(arrivals), "backfill": len(backfill)}
-        if qc_active:
-            out["lanes"]["qc"] = len(qc_jobs)
-        selected = {"qc": 0, "arrival": 0, "backfill": 0}
-        for job in due:
-            if sum(selected.values()) >= max_jobs:
-                break
-            if llm_health["down"] and job["kind"] == JOB_KIND:
-                # the endpoint refused this pass: the remaining model jobs
-                # would each only re-defer (and rewrite updated_at); they
-                # stay due for the next pass. QC rows need no model.
+    jev_transport = unlocked_jev_request if run_lock_fd is not None else None
+    if scfg["mode"] != "off" and scfg["extract_qc"] == "annotate" \
+            and jev_client is not None:
+        try:
+            semantic_qc._qc_seed(ledger, time.time())
+        except Exception:
+            result["errors"].append("semantic: qc_seed_failed")
+    qc_active = (scfg["extract_qc"] == "annotate"
+                 and jev_client is not None)
+    kinds = (JOB_KIND, QC_JOB_KIND) if qc_active else (JOB_KIND,)
+    # arrival-descended seeds outrank import/replay seeds: a deep
+    # backfill must never starve a fresh notification's evaluation
+    # (§19.1's existing-work-first ordering applied inside the queue
+    # too). 'eligible' is set at seed time and survives payload merges,
+    # so a merged arrival+history job keeps its priority.
+    # T14: the backfill cohort additionally gets a guaranteed share of
+    # every window — a continuous arrival stream cannot starve runnable
+    # backlog (persisted accounting row keeps it restart-safe).
+    # These shares apply within each patient class; archived patients
+    # receive only capacity left by active patients.
+    # QC dedicated frame: kind ordering puts semantic rows ahead of QC
+    # in both cohorts. Long generations can consume the whole window
+    # and starve QC without attempting it. QC gets a bounded share,
+    # served FIRST
+    # (each pass is one bounded chunked eval), expanding into whatever
+    # the semantic lanes leave unused. A 1-job window cannot be split —
+    # QC falls back to the persisted cohort alternation inside the
+    # non-eligible lane.
+    due, qc_jobs, arrivals, backfill, sched_mut = _select_due(
+        ledger, lane, kinds, qc_active, max_jobs, long_defers)
+    cohort_of = {id(job): "qc" for job in qc_jobs}
+    cohort_of.update({id(job): "arrival" for job in arrivals})
+    cohort_of.update({id(job): "backfill" for job in backfill})
+    out["lanes"] = {"arrival": len(arrivals), "backfill": len(backfill)}
+    if qc_active:
+        out["lanes"]["qc"] = len(qc_jobs)
+    selected = {"qc": 0, "arrival": 0, "backfill": 0}
+    for job in due:
+        if sum(selected.values()) >= max_jobs:
+            break
+        if llm_health["down"] and job["kind"] == JOB_KIND:
+            # the endpoint refused this pass: the remaining model jobs
+            # would each only re-defer (and rewrite updated_at); they
+            # stay due for the next pass. QC rows need no model.
+            continue
+        with _job_lock(ledger, job["job_id"]) as held:
+            if not held:
+                out["lock_skipped"][job["kind"]] = \
+                    out["lock_skipped"].get(job["kind"], 0) + 1
                 continue
-            with _job_lock(ledger, job["job_id"]) as held:
-                if not held:
-                    out["lock_skipped"][job["kind"]] = \
-                        out["lock_skipped"].get(job["kind"], 0) + 1
-                    continue
-                token = runtime.JobToken.from_row(job)
-                payload = runtime.parse_payload(job)
-                limit = runtime.attempt_limit(payload)
-                if runtime.circuit_open(ledger):
-                    out["circuit_open"] = True
+            token = runtime.JobToken.from_row(job)
+            payload = runtime.parse_payload(job)
+            limit = runtime.attempt_limit(payload)
+            if runtime.circuit_open(ledger):
+                out["circuit_open"] = True
+                break
+            from mcs_queries import paused
+            if paused(ledger.db, job["project_id"]):
+                runtime.transition(ledger, token, "defer", retry_in=300)
+                out["deferred"] += 1
+                continue
+            if cfg_path is not None:
+                current_cfg = load_config(cfg_path)
+                scfg, errs = semantic_config(current_cfg)
+                current_generation = runtime.config_generation(current_cfg)
+                observation_config_changed |= current_generation != cfg_generation
+                cfg_generation = current_generation
+                for e in errs:
+                    if e not in result["errors"]:
+                        result["errors"].append(e)
+                if scfg["mode"] == "off":
+                    runtime.transition(ledger, token, "defer", retry_in=300)
+                    out["deferred"] += 1
+                    out["mode"] = "off"
                     break
-                from mcs_queries import paused
-                if paused(ledger.db, job["project_id"]):
-                    runtime.transition(ledger, token, "defer", retry_in=300)
+            # A semantic job's first call is exempt from the in-call reserve
+            # gate. Starting below that reserve can burn a doomed
+            # generation and a retry attempt before any useful progress.
+            # Only start one when a call can plausibly fit, using the same
+            # reserve applied to follow-up calls. Further stages defer
+            # via BudgetShort without charging an attempt. Trailing QC
+            # rows use their separate start floor.
+            floor = deadline - (15.0 if job["kind"] == QC_JOB_KIND else
+                                min(runtime.LLM_CALL_RESERVE_S,
+                                    float(scfg["job_budget_seconds"]) * 2 / 3))
+            if lane == "backlog":
+                floor -= _backlog_commit_reserve(scfg)
+            if time.monotonic() > floor:
+                out["floor_skipped"][job["kind"]] = \
+                    out["floor_skipped"].get(job["kind"], 0) + 1
+                if job["kind"] == QC_JOB_KIND:
                     out["deferred"] += 1
-                    continue
-                if cfg_path is not None:
-                    current_cfg = load_config(cfg_path)
-                    scfg, errs = semantic_config(current_cfg)
-                    current_generation = runtime.config_generation(current_cfg)
-                    observation_config_changed |= current_generation != cfg_generation
-                    cfg_generation = current_generation
-                    for e in errs:
-                        if e not in result["errors"]:
-                            result["errors"].append(e)
-                    if scfg["mode"] == "off":
-                        runtime.transition(ledger, token, "defer", retry_in=300)
-                        out["deferred"] += 1
-                        out["mode"] = "off"
-                        break
-                # A semantic job's first call is exempt from the in-call reserve
-                # gate. Starting below that reserve can burn a doomed
-                # generation and a retry attempt before any useful progress.
-                # Only start one when a call can plausibly fit, using the same
-                # reserve applied to follow-up calls. Further stages defer
-                # via BudgetShort without charging an attempt. Trailing QC
-                # rows use their separate start floor.
-                floor = deadline - (15.0 if job["kind"] == QC_JOB_KIND else
-                                    min(runtime.LLM_CALL_RESERVE_S,
-                                        float(scfg["job_budget_seconds"]) * 2 / 3))
-                if lane == "backlog":
-                    floor -= _backlog_commit_reserve(scfg)
-                if time.monotonic() > floor:
-                    out["floor_skipped"][job["kind"]] = \
-                        out["floor_skipped"].get(job["kind"], 0) + 1
-                    if job["kind"] == QC_JOB_KIND:
-                        out["deferred"] += 1
-                        break
-                    continue
-                if scfg["project_ids"] is not None \
-                        and job["project_id"] not in scfg["project_ids"]:
-                    # outside the rollout scope — defer instead of leaving it
-                    # due-now, so a backlog of out-of-scope rows cannot fill
-                    # the whole max_jobs window and starve in-scope work. The
-                    # row stays pending: a later project_ids change resumes it.
-                    runtime.transition(ledger, token, "defer", retry_in=300)
-                    out["deferred"] += 1
-                    continue
-                if token.attempts < 0 or token.attempts >= limit:
-                    # A row can be re-seeded or manually edited while it is waiting
-                    # in this due-list snapshot.  Close an exhausted row with the
-                    # complete token CAS before any client, budget, or network path.
-                    # Keep OFF/paused/out-of-scope rows untouched; they retain the
-                    # existing queue hold contract until the feature can run again.
-                    if runtime.transition(ledger, token, "failed"):
-                        out["failed"] += 1
-                    else:
-                        out["deferred"] += 1
-                    continue
-                if jev_client is not None:
-                    # the daily cap binds at REQUEST granularity, not just job
-                    # granularity — one job's claim-audit + loop-relation calls
-                    # must not overshoot it mid-flight (§13.5)
-                    remaining = (scfg["daily_request_budget"]
-                                 - jev_usage_today(ledger))
-                    if remaining <= 0:
-                        result["errors"].append(
-                            "semantic: daily_budget_exhausted")
-                        out["budget_exhausted"] = True
-                        break
-                    jev_client.request_cap = (jev_client.requests_made
-                                              + remaining)
-                    if hasattr(jev_client, "attempt_timeout"):
-                        jev_client.attempt_timeout = scfg["attempt_timeout_seconds"]
-                    if hasattr(jev_client, "job_budget"):
-                        jev_client.job_budget = scfg["job_budget_seconds"]
-                reserve_fn = None
-                if (jev_client is not None
-                        and getattr(jev_client, "_mcs_jev_hookable", False)):
-                    reserve_fn = runtime.usage_reserver(
-                        ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
-                        project_id=job["project_id"], message_id=job["message_id"],
-                        daily_request_budget=scfg["daily_request_budget"])
-                # only now has the job cleared every gate — the persisted
-                # fairness counters count jobs that were actually served, not
-                # selections lost to circuit/budget/pause breaks (T14)
-                selected[cohort_of[id(job)]] += 1
-                if job["job_id"] == sched_mut.get("turn_job_id"):
-                    sched_mut["turn_consumed"] = True
-                if lane == "backlog":
-                    _BACKLOG_TURN["kind"] = job["kind"]
-                req0 = jev_client.requests_made if jev_client is not None else 0
-                usage_before = dict(getattr(jev_client, "usage_totals", {}))
-                job_started = time.perf_counter()
-                job_age = max(0.0, time.time() - job["created_at"])
-                # T14 phase split: queue wait (job_age_s) | model calls | Jev
-                # evaluation | post-processing (validate→facts→render). The
-                # wrappers only time calls — all attribution stays honest, and
-                # the residual post_s covers the work between them.
-                timed_jev = _TimedClient(jev_client) \
-                    if jev_client is not None else None
-                timed_llm, llm_acc = _timed_llm(llm_fn)
-                art0 = _last_stage_artifact(ledger, job["project_id"])
-                diagnostics = _job_diagnostics()
-                try:
-                    if job["kind"] == QC_JOB_KIND:
-                        status = semantic_qc._process_qc_job(
-                            ledger, scfg, job, timed_jev, deadline,
-                            reserve_fn=reserve_fn, cfg_path=cfg_path,
-                            config_generation=cfg_generation)
-                    else:
-                        status = _process_job(
-                            ledger, scfg, job, timed_jev, timed_llm, deadline,
-                            cfg_path=cfg_path,
-                            config_generation=cfg_generation,
-                            reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats)
-                except mcs_util.RunLockLost as e:
-                    # An updater won the lock in a transport window (or the
-                    # bounded reacquire expired). Write nothing: the job
-                    # stays pending with its attempts untouched (its only
-                    # claim is the _job_lock flock released on return),
-                    # later jobs are not started, and the caller ends the
-                    # tick/batch on out["run_lock_lost"].
-                    out["run_lock_lost"] = ("held" if e.held
-                                            else "updated" if e.updated
-                                            else "timeout")
-                    result["errors"].append("semantic: run_lock_lost")
-                    return out
-                except Exception as e:
-                    _why(diagnostics, f"exception_{type(e).__name__}")
-                    runtime.transition(ledger, token, "retry", retry_in=300,
-                                       max_attempts=limit)
-                    result["errors"].append(
-                        f"semantic {job['message_id']}: {type(e).__name__}")
+                    break
+                continue
+            if scfg["project_ids"] is not None \
+                    and job["project_id"] not in scfg["project_ids"]:
+                # outside the rollout scope — defer instead of leaving it
+                # due-now, so a backlog of out-of-scope rows cannot fill
+                # the whole max_jobs window and starve in-scope work. The
+                # row stays pending: a later project_ids change resumes it.
+                runtime.transition(ledger, token, "defer", retry_in=300)
+                out["deferred"] += 1
+                continue
+            if token.attempts < 0 or token.attempts >= limit:
+                # A row can be re-seeded or manually edited while it is waiting
+                # in this due-list snapshot.  Close an exhausted row with the
+                # complete token CAS before any client, budget, or network path.
+                # Keep OFF/paused/out-of-scope rows untouched; they retain the
+                # existing queue hold contract until the feature can run again.
+                if runtime.transition(ledger, token, "failed"):
                     out["failed"] += 1
-                    status = None
-                job_elapsed = time.perf_counter() - job_started
-                job_progressed = _last_stage_artifact(ledger, job["project_id"]) > art0
-                if job_progressed:
-                    out["progressed"] += 1
-                budget_short = status == "deferred_short"
-                if budget_short and not job_progressed:
-                    # nothing persisted this pass: a free defer would loop
-                    # forever (and re-spend Jev every minute) — charge a bounded
-                    # attempt like any other overrun
-                    status = "retry"
-                if status in ("deferred", "deferred_backoff") \
-                        and diagnostics.get("not_sent") == "long_output_needs_budget":
-                    key = str(job["job_id"])
-                    prior = long_seen.get(key) or long_defers.get(key)
-                    n = (prior["n"] if prior and prior["g"] == token.generation
-                         else 0) + 1
-                    long_seen[key] = {"g": token.generation, "n": n}
-                    if n > LONG_FREE_DEFER_CAP:
-                        # this generation keeps meeting passes too short for
-                        # its long-output call — stop the free loop: charge
-                        # the attempt (ends 'failed' at the ceiling, where
-                        # revive_failed and the operator can see it)
-                        _why(diagnostics, "long_output_defer_capped")
-                        out["long_output_capped"] = \
-                            out.get("long_output_capped", 0) + 1
-                        status = "retry"
-                # durable per-attempt request delta — the daily budget ledger
-                # (jev_usage_today) is exact and covers claim-audit and loop
-                # calls, not just the primary assessment
-                used = (jev_client.requests_made - req0) \
-                    if jev_client is not None else 0
-                usage_after = getattr(jev_client, "usage_totals", {})
-                usage = {key: usage_after.get(key, 0) - usage_before.get(key, 0)
-                         for key in ("input_tokens", "output_tokens", "reported_requests")}
-                usage["unreported_requests"] = used - usage["reported_requests"]
-                llm_s = llm_acc["s"]
-                jev_s = timed_jev.elapsed_s if timed_jev is not None else 0.0
-                metric = _job_metric(
-                    job, token, cohort_of.get(id(job), "backfill"), status,
-                    job_age, job_elapsed, llm_s, jev_s, used, usage,
-                    jev_client, diagnostics=diagnostics)
-                if status == "done":
-                    # every "done" return has already passed the
-                    # generation-fenced transition
-                    metric["completed_at"] = time.time()
-                out["job_metrics"].append(metric)
-                if status == "done":
-                    out["done_by_kind"][job["kind"]] = \
-                        out["done_by_kind"].get(job["kind"], 0) + 1
-                if used:
-                    runtime.record_circuit_result(ledger, getattr(jev_client, "last_error", None))
-                # Real Jev calls reserve one usage row before POST.  A crash after
-                # that commit therefore still spends the daily cap; adding the old
-                # post-job delta would double count it.  Injected fake clients keep
-                # the delta row for compatibility with offline tests.
-                if used and reserve_fn is None:
-                    ledger.artifact_add(
-                        KIND_USAGE, json.dumps({"job_id": job["job_id"]}),
-                        project_id=job["project_id"],
-                        message_id=job["message_id"], model=jev.JEV_MODEL,
-                        meta={"jev_requests": used})
-                if status is None:
-                    continue
-                if _apply_job_status(ledger, token, limit, status,
-                                     budget_short, out):
+                else:
+                    out["deferred"] += 1
+                continue
+            if jev_client is not None:
+                # the daily cap binds at REQUEST granularity, not just job
+                # granularity — one job's claim-audit + loop-relation calls
+                # must not overshoot it mid-flight (§13.5)
+                remaining = (scfg["daily_request_budget"]
+                             - jev_usage_today(ledger))
+                if remaining <= 0:
+                    result["errors"].append(
+                        "semantic: daily_budget_exhausted")
+                    out["budget_exhausted"] = True
                     break
-                if getattr(getattr(jev_client, "last_error", None),
-                           "kind", "") == "payment_required":
-                    # the service refuses every call until the account is
-                    # settled — stop this pass here rather than spend one
-                    # more 402 per remaining job (2026-10-08)
-                    result["errors"].append("semantic: jev_payment_required")
-                    out["jev_blocked"] = "payment_required"
-                    break
-        if llm_health["fed"]:
-            out["llm_down"] = True
-        unsaved = {cause: n - marks_unsaved0.get(cause, 0)
-                   for cause, n in semantic_transport.long_mark_failures().items()
-                   if n > marks_unsaved0.get(cause, 0)}
-        if unsaved:
-            # long-output marks this pass could not persist (T8): the
-            # suppression still holds in-process, but a restart repeats
-            # the base-ceiling call — surfaced instead of swallowed
-            out["long_mark_unsaved"] = unsaved
-        if scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
+                jev_client.request_cap = (jev_client.requests_made
+                                          + remaining)
+                if hasattr(jev_client, "attempt_timeout"):
+                    jev_client.attempt_timeout = scfg["attempt_timeout_seconds"]
+                if hasattr(jev_client, "job_budget"):
+                    jev_client.job_budget = scfg["job_budget_seconds"]
+            reserve_fn = None
+            if (jev_client is not None
+                    and getattr(jev_client, "supports_attempt_hooks", False)):
+                reserve_fn = runtime.usage_reserver(
+                    ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
+                    project_id=job["project_id"], message_id=job["message_id"],
+                    daily_request_budget=scfg["daily_request_budget"])
+            # only now has the job cleared every gate — the persisted
+            # fairness counters count jobs that were actually served, not
+            # selections lost to circuit/budget/pause breaks (T14)
+            selected[cohort_of[id(job)]] += 1
+            if job["job_id"] == sched_mut.get("turn_job_id"):
+                sched_mut["turn_consumed"] = True
+            if lane == "backlog":
+                _BACKLOG_TURN["kind"] = job["kind"]
+            req0 = jev_client.requests_made if jev_client is not None else 0
+            usage_before = dict(getattr(jev_client, "usage_totals", {}))
+            job_started = time.perf_counter()
+            job_age = max(0.0, time.time() - job["created_at"])
+            # T14 phase split: queue wait (job_age_s) | model calls | Jev
+            # evaluation | post-processing (validate→facts→render). The
+            # wrappers only time calls — all attribution stays honest, and
+            # the residual post_s covers the work between them.
+            jev_timing = {"s": 0.0}
+            timed_llm, llm_acc = _timed_llm(llm_fn)
+            art0 = _last_stage_artifact(ledger, job["project_id"])
+            diagnostics = _job_diagnostics()
             try:
-                out["degraded_notices"] = _emit_degraded(ledger, scfg)
-            except Exception:
-                out["degraded_notices"] = 0
-                result["errors"].append("semantic: degraded_scan_failed")
-        kind_ph = ",".join("?" * len(kinds))
-        out["left"] = ledger.db.execute(
-            f"SELECT COUNT(*) FROM fetch_jobs WHERE kind IN ({kind_ph}) "
-            "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
-        out["elapsed_s"] = time.perf_counter() - drain_started
-        out["observation"] = _observation(
-            started_wall, time.time(), cfg_generation, lane, out["job_metrics"])
-        if observation_config_changed:
-            # One run must not attribute earlier jobs to its final config,
-            # even if settings changed and later returned to the initial value.
-            out["observation"]["complete"] = False
-        if due:
-            _persist_drain_accounting(ledger, scfg, out, result, selected,
-                                      qc_active, sched_mut, long_seen,
-                                      long_defers)
-        return out
-    finally:
-        if original_http is not None:
-            jev_client._http_request = original_http
+                if job["kind"] == QC_JOB_KIND:
+                    status = semantic_qc._process_qc_job(
+                        ledger, scfg, job, jev_client, deadline,
+                        reserve_fn=reserve_fn, cfg_path=cfg_path,
+                        config_generation=cfg_generation,
+                        jev_transport=jev_transport, jev_timing=jev_timing)
+                else:
+                    status = _process_job(
+                        ledger, scfg, job, jev_client, timed_llm, deadline,
+                        cfg_path=cfg_path,
+                        config_generation=cfg_generation,
+                        reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats,
+                        jev_transport=jev_transport, jev_timing=jev_timing)
+            except writer_lock.RunLockLost as e:
+                # An updater won the lock in a transport window (or the
+                # bounded reacquire expired). Write nothing: the job
+                # stays pending with its attempts untouched (its only
+                # claim is the _job_lock flock released on return),
+                # later jobs are not started, and the caller ends the
+                # tick/batch on out["run_lock_lost"].
+                out["run_lock_lost"] = ("held" if e.held
+                                        else "updated" if e.updated
+                                        else "timeout")
+                result["errors"].append("semantic: run_lock_lost")
+                return out
+            except Exception as e:
+                _why(diagnostics, f"exception_{type(e).__name__}")
+                runtime.transition(ledger, token, "retry", retry_in=300,
+                                   max_attempts=limit)
+                result["errors"].append(
+                    f"semantic {job['message_id']}: {type(e).__name__}")
+                out["failed"] += 1
+                status = None
+            job_elapsed = time.perf_counter() - job_started
+            job_progressed = _last_stage_artifact(ledger, job["project_id"]) > art0
+            if job_progressed:
+                out["progressed"] += 1
+            budget_short = status == "deferred_short"
+            if budget_short and not job_progressed:
+                # nothing persisted this pass: a free defer would loop
+                # forever (and re-spend Jev every minute) — charge a bounded
+                # attempt like any other overrun
+                status = "retry"
+            if status in ("deferred", "deferred_backoff") \
+                    and diagnostics.get("not_sent") == "long_output_needs_budget":
+                key = str(job["job_id"])
+                prior = long_seen.get(key) or long_defers.get(key)
+                n = (prior["n"] if prior and prior["g"] == token.generation
+                     else 0) + 1
+                long_seen[key] = {"g": token.generation, "n": n}
+                if n > LONG_FREE_DEFER_CAP:
+                    # this generation keeps meeting passes too short for
+                    # its long-output call — stop the free loop: charge
+                    # the attempt (ends 'failed' at the ceiling, where
+                    # revive_failed and the operator can see it)
+                    _why(diagnostics, "long_output_defer_capped")
+                    out["long_output_capped"] = \
+                        out.get("long_output_capped", 0) + 1
+                    status = "retry"
+            # durable per-attempt request delta — the daily budget ledger
+            # (jev_usage_today) is exact and covers claim-audit and loop
+            # calls, not just the primary assessment
+            used = (jev_client.requests_made - req0) \
+                if jev_client is not None else 0
+            usage_after = getattr(jev_client, "usage_totals", {})
+            usage = {key: usage_after.get(key, 0) - usage_before.get(key, 0)
+                     for key in ("input_tokens", "output_tokens", "reported_requests")}
+            usage["unreported_requests"] = used - usage["reported_requests"]
+            llm_s = llm_acc["s"]
+            jev_s = jev_timing["s"]
+            metric = _job_metric(
+                job, token, cohort_of.get(id(job), "backfill"), status,
+                job_age, job_elapsed, llm_s, jev_s, used, usage,
+                jev_client, diagnostics=diagnostics)
+            if status == "done":
+                # every "done" return has already passed the
+                # generation-fenced transition
+                metric["completed_at"] = time.time()
+            out["job_metrics"].append(metric)
+            if status == "done":
+                out["done_by_kind"][job["kind"]] = \
+                    out["done_by_kind"].get(job["kind"], 0) + 1
+            if used:
+                runtime.record_circuit_result(ledger, getattr(jev_client, "last_error", None))
+            # Real Jev calls reserve one usage row before POST.  A crash after
+            # that commit therefore still spends the daily cap; adding the old
+            # post-job delta would double count it.  Injected fake clients keep
+            # the delta row for compatibility with offline tests.
+            if used and reserve_fn is None:
+                ledger.artifact_add(
+                    KIND_USAGE, json.dumps({"job_id": job["job_id"]}),
+                    project_id=job["project_id"],
+                    message_id=job["message_id"], model=jev.JEV_MODEL,
+                    meta={"jev_requests": used})
+            if status is None:
+                continue
+            if _apply_job_status(ledger, token, limit, status,
+                                 budget_short, out):
+                break
+            if getattr(getattr(jev_client, "last_error", None),
+                       "kind", "") == "payment_required":
+                # the service refuses every call until the account is
+                # settled — stop this pass here rather than spend one
+                # more 402 per remaining job (2026-10-08)
+                result["errors"].append("semantic: jev_payment_required")
+                out["jev_blocked"] = "payment_required"
+                break
+    if llm_health["fed"]:
+        out["llm_down"] = True
+    unsaved = {cause: n - marks_unsaved0.get(cause, 0)
+               for cause, n in semantic_transport.long_mark_failures().items()
+               if n > marks_unsaved0.get(cause, 0)}
+    if unsaved:
+        # long-output marks this pass could not persist (T8): the
+        # suppression still holds in-process, but a restart repeats
+        # the base-ceiling call — surfaced instead of swallowed
+        out["long_mark_unsaved"] = unsaved
+    if scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
+        try:
+            out["degraded_notices"] = _emit_degraded(ledger, scfg)
+        except Exception:
+            out["degraded_notices"] = 0
+            result["errors"].append("semantic: degraded_scan_failed")
+    kind_ph = ",".join("?" * len(kinds))
+    out["left"] = ledger.db.execute(
+        f"SELECT COUNT(*) FROM fetch_jobs WHERE kind IN ({kind_ph}) "
+        "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
+    out["elapsed_s"] = time.perf_counter() - drain_started
+    out["observation"] = _observation(
+        started_wall, time.time(), cfg_generation, lane, out["job_metrics"])
+    if observation_config_changed:
+        # One run must not attribute earlier jobs to its final config,
+        # even if settings changed and later returned to the initial value.
+        out["observation"]["complete"] = False
+    if due:
+        _persist_drain_accounting(ledger, scfg, out, result, selected,
+                                  qc_active, sched_mut, long_seen,
+                                  long_defers)
+    return out
 
 
 # Bounded automatic retry of exhausted semantic jobs (owner request
@@ -2595,7 +2445,8 @@ def main() -> int:
     if not math.isfinite(args.stop_after) or args.stop_after < 0:
         ap.error("stop-after must be a finite nonnegative number")
     from ledger import Ledger
-    from mcs_util import acquire_run_lock, CONF_PATH, DB
+    from mcs_util import CONF_PATH, DB
+    from writer_lock import acquire_run_lock
     led = None
     stop = time.monotonic() + args.stop_after
     totals = {"done": 0, "deferred": 0, "failed": 0, "batches": 0}

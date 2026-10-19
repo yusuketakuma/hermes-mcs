@@ -205,10 +205,10 @@ def test_body_chunks_never_end_blank():
 
 def test_lineworks_card_split_breaks_at_a_line():
     text = "\n".join(["行" * 30] * 40)
-    head, rest = notify_render.lineworks_card_split(text)
+    head, rest = present_lineworks.card_split(text)
     assert len(head) <= 1000 and head.endswith("\n↓ 続き")
     assert head.removesuffix("\n↓ 続き") + "\n" + rest == text
-    assert notify_render.lineworks_card_split("短い") == ("短い", "")
+    assert present_lineworks.card_split("短い") == ("短い", "")
 
 
 @pytest.mark.parametrize("off_page", [False, True])

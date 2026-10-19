@@ -163,7 +163,7 @@ def assignee_choices(db, limit=STAFF_CHOICES, project_id=None) -> list:
     swap point for another roster source. With project_id, roster members
     who have posted in that patient's room come first."""
     from mcs_queries import staff_directory
-    from self_identity import _latest_self_profile, latest_station_staff
+    from self_identity import latest_self_profile, latest_station_staff
     out, seen, keys = [], set(), {}
 
     def add(name, station, sid=None):
@@ -179,7 +179,7 @@ def assignee_choices(db, limit=STAFF_CHOICES, project_id=None) -> list:
     if out:
         # the room's own posters first, then the cap: a long roster must not hide them
         return _room_first(db, out, keys, project_id)[:limit]
-    prof = _latest_self_profile(db)
+    prof = latest_self_profile(db)
     own = [" ".join(o.split()) for o in prof.get("organizations") or []
            if isinstance(o, str) and o.strip()]
     if not own:

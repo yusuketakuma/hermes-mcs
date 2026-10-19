@@ -5,6 +5,8 @@ import json
 import pytest
 
 import notify_cards
+import notify_scope
+import notify_spool
 import notify_transport
 from adapters.common.spec import validate
 from adapters.slack.cards import validate as validate_slack
@@ -17,8 +19,8 @@ SERIAL = itertools.count(45000)
 
 
 def _identity(render, cfg):
-    return {"version": notify_cards.TRANSPORT_VERSIONS[notify_cards.active_transport(cfg)],
-            **notify_cards.delivery_scope(cfg), "delivery_id": render["delivery_id"],
+    return {"version": notify_scope.TRANSPORT_VERSIONS[notify_scope.active_transport(cfg)],
+            **notify_scope.delivery_scope(cfg), "delivery_id": render["delivery_id"],
             "render_rev": render["render_rev"], "payload_hash": render["payload_hash"],
             "route_epoch": render["route_epoch"], "correlation": render["correlation"]}
 
@@ -212,7 +214,7 @@ def test_gc_route_witness_contains_no_content_and_is_not_replayed(led):
     witness = json.loads(_latest_render(led)["spec_json"])
     with pytest.raises(ValueError, match="bad_schema"):
         validate(witness)
-    assert notify_cards.recover(led, CFG, {"errors": []})["republished"] == 0
+    assert notify_spool.recover(led, CFG, {"errors": []})["republished"] == 0
     assert notify_cards.gc(led, CFG, now=LATE + 2)["spec_json_cleared"] == 0
     with led.db:
         led.db.execute("UPDATE notification_renders SET spec_json=? WHERE card_id=1",

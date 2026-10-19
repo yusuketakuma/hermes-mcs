@@ -28,7 +28,7 @@ def test_slack_server_side_error_after_post_is_unknown(error):
         adapter = SlackCardAdapter(
             SimpleNamespace(client=client), team_id="T_SYNTHETIC",
             application_id="A_SYNTHETIC", channel_id="C_SYNTHETIC",
-            profile="cco", allowed_user_ids={"U_OPERATOR"})
+            profile="cco")
         assert await adapter.bind()
         client.failure = SlackServerError(error)
         outcome = await adapter.perform(_spec())

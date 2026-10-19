@@ -1,6 +1,7 @@
 """An urgent alert whose send is already granted/unknown must never be closed
 as suppressed by the thread-hold expiry (unknown != never sent). Synthetic."""
 import notify_cards
+import notify_scope
 import notify_transport
 from notify_testkit import _begin, _uuid
 from notify_urgent_testkit import _alert, _events, led, world
@@ -23,6 +24,6 @@ def test_in_flight_alert_is_not_suppressed_when_thread_binding_lapses(world):
            "attempt_id": f"{1100:016x}", "delivery_id": render["delivery_id"],
            "render_rev": render["render_rev"], "payload_hash": render["payload_hash"],
            "route_epoch": 1, "correlation": render["correlation"],
-           **notify_cards.delivery_scope(cfg), "result": "delivered", "message_id": "alert-reply"}
+           **notify_scope.delivery_scope(cfg), "result": "delivered", "message_id": "alert-reply"}
     assert notify_transport.apply_transport_receipt(store, req, cfg)["applied"]
     assert _events(store)[0]["state"] == "accepted"

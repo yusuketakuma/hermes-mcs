@@ -7,6 +7,7 @@ import pytest
 
 import message_metadata
 import metadata_report
+import message_observations
 
 NOW = 1_800_000_000
 
@@ -30,12 +31,13 @@ def _row(db, mid, source, *, raw=None, error=None, checked=NOW - 60):
                (mid, source, raw, checked, error))
 
 
-def _reader(db, targets=()):
-    return SimpleNamespace(
-        db=db, metadata_watch_targets=lambda **kwargs: list(targets))
+def _reader(db, targets=(), *, monkeypatch):
+    monkeypatch.setattr(message_observations, "metadata_watch_targets",
+                        lambda connection, **kwargs: list(targets))
+    return SimpleNamespace(db=db)
 
 
-def test_report_reads_metadata_once_including_watch_set(db):
+def test_report_reads_metadata_once_including_watch_set(db, monkeypatch):
     for mid in range(1000):
         for source in ("capture", "shadow"):
             _row(db, mid, source)
@@ -43,7 +45,7 @@ def test_report_reads_metadata_once_including_watch_set(db):
     queries = []
     db.set_trace_callback(queries.append)
     try:
-        report = metadata_report.build_report(_reader(db, targets), now=NOW)
+        report = metadata_report.build_report(_reader(db, targets, monkeypatch=monkeypatch), now=NOW)
     finally:
         db.set_trace_callback(None)
     assert report["messages"] == 1000
@@ -71,7 +73,7 @@ def test_report_uses_same_decoder_for_corrupt_rows_and_sanitizes_errors(db, monk
         for mid, source, raw, checked, error in db.execute(
             "SELECT message_id,source,content,checked_at,last_error FROM message_metadata")
     }
-    original = message_metadata._decode_metadata
+    original = message_metadata.decode_metadata
     decoded = []
 
     def checked_decode(row):
@@ -81,8 +83,8 @@ def test_report_uses_same_decoder_for_corrupt_rows_and_sanitizes_errors(db, monk
             decoded.append(tuple(row))
         return result
 
-    monkeypatch.setattr(message_metadata, "_decode_metadata", checked_decode)
-    report = metadata_report.build_report(_reader(db), now=NOW)
+    monkeypatch.setattr(message_metadata, "decode_metadata", checked_decode)
+    report = metadata_report.build_report(_reader(db, monkeypatch=monkeypatch), now=NOW)
     assert len(decoded) == 5
     assert report["outcomes"] == {
         "shadow_invalid": 1, "shadow_failed": 2,
@@ -94,14 +96,14 @@ def test_report_uses_same_decoder_for_corrupt_rows_and_sanitizes_errors(db, monk
     assert "synthetic-private-canary" not in json.dumps(report)
 
 
-def test_project_filter_retains_orphan_and_unknown_source_semantics(db):
+def test_project_filter_retains_orphan_and_unknown_source_semantics(db, monkeypatch):
     db.executemany("INSERT INTO messages VALUES(?,?)", [(1, 1), (2, 2), (3, 1)])
     _row(db, 1, "capture")
     _row(db, 2, "shadow")
     _row(db, 3, "legacy")
     _row(db, 4, "shadow")  # Orphan rows were included in the unscoped report.
     targets = [{"message_id": 1, "project_id": 1}, {"message_id": 2, "project_id": 2}]
-    reader = _reader(db, targets)
+    reader = _reader(db, targets, monkeypatch=monkeypatch)
     scoped = metadata_report.build_report(reader, now=NOW, project_id=1)
     assert scoped["messages"] == 2
     assert scoped["outcomes"] == {
@@ -111,14 +113,14 @@ def test_project_filter_retains_orphan_and_unknown_source_semantics(db):
     assert metadata_report.build_report(reader, now=NOW)["messages"] == 4
 
 
-def test_snapshot_without_metadata_table_stays_unavailable(db):
+def test_snapshot_without_metadata_table_stays_unavailable(db, monkeypatch):
     db.execute("DROP TABLE message_metadata")
 
-    def unavailable(**kwargs):
+    def unavailable(connection, **kwargs):
         raise sqlite3.OperationalError("synthetic missing table")
 
-    report = metadata_report.build_report(
-        SimpleNamespace(db=db, metadata_watch_targets=unavailable), now=NOW)
+    monkeypatch.setattr(message_observations, "metadata_watch_targets", unavailable)
+    report = metadata_report.build_report(SimpleNamespace(db=db), now=NOW)
     assert report["messages"] == 0
     assert report["outcomes"] == {}
     assert report["watch"] == {"available": False}
@@ -126,14 +128,14 @@ def test_snapshot_without_metadata_table_stays_unavailable(db):
 
 @pytest.mark.parametrize("source", ["capture", "shadow"])
 @pytest.mark.parametrize("checked", [None, 0, -1, "SYNTHETIC_INVALID_TIME", 253402214400])
-def test_unknown_check_time_preserves_observation_and_does_not_crash_report(db, source, checked):
+def test_unknown_check_time_preserves_observation_and_does_not_crash_report(db, source, checked, monkeypatch):
     raw = json.dumps({"reactions": {"value": [{"type": "viewed", "count": 2, "self_reacted": False}],
                                      "observed_at": NOW - 120}})
     for name in ("capture", "shadow"):
         _row(db, 1, name, raw=raw, checked=checked if name == source else NOW - 60)
     db.execute("PRAGMA query_only=ON")
     changes = db.total_changes
-    report = metadata_report.build_report(_reader(db, [{"message_id": 1, "project_id": 1}]), now=NOW)
+    report = metadata_report.build_report(_reader(db, [{"message_id": 1, "project_id": 1}], monkeypatch=monkeypatch), now=NOW)
     assert db.total_changes == changes
     assert report["outcomes"] == {"match": 1}
     assert report["time_direction"] == {"match_check_time_unknown": 1}
@@ -147,10 +149,10 @@ def test_unknown_check_time_preserves_observation_and_does_not_crash_report(db, 
     assert "SYNTHETIC_INVALID_TIME" not in json.dumps(report)
 
 
-def test_existing_shadow_with_unknown_time_and_no_observation_is_not_missing(db):
+def test_existing_shadow_with_unknown_time_and_no_observation_is_not_missing(db, monkeypatch):
     _row(db, 1, "capture")
     _row(db, 1, "shadow", raw="{}", checked=0)
-    report = metadata_report.build_report(_reader(db, [{"message_id": 1, "project_id": 1}]), now=NOW)
+    report = metadata_report.build_report(_reader(db, [{"message_id": 1, "project_id": 1}], monkeypatch=monkeypatch), now=NOW)
     assert report["outcomes"] == {"shadow_check_time_unknown": 1}
     assert report["watch"]["due_never_attempted"] == 0
     assert report["watch"]["oldest_shadow_check_age_s"] is None
@@ -158,12 +160,12 @@ def test_existing_shadow_with_unknown_time_and_no_observation_is_not_missing(db)
 
 @pytest.mark.parametrize("error,code", [("network_error", "network_error"),
                                        ("synthetic-private-canary", "metadata_error")])
-def test_unknown_shadow_check_time_preserves_known_failure(db, error, code):
+def test_unknown_shadow_check_time_preserves_known_failure(db, error, code, monkeypatch):
     _row(db, 1, "capture")
     _row(db, 1, "shadow", raw="{}", checked=0, error=error)
     db.execute("PRAGMA query_only=ON")
     changes = db.total_changes
-    report = metadata_report.build_report(_reader(db, [{"message_id": 1, "project_id": 1}]), now=NOW)
+    report = metadata_report.build_report(_reader(db, [{"message_id": 1, "project_id": 1}], monkeypatch=monkeypatch), now=NOW)
     assert report["outcomes"] == {"shadow_failed": 1}
     assert report["shadow_failures_by_code"] == {code: 1}
     assert report["watch"]["due_never_attempted"] == 0

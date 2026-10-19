@@ -38,7 +38,7 @@ def owner_label(owner: str, member_names) -> str:
     the bare Slack user id replaces it, so different owners stay distinct
     (``member_names`` is LINE WORKS-only and never holds Slack ids)."""
     import notify_render
-    return notify_render._MENTION.sub(r"\1", owner)
+    return notify_render.MENTION_TOKEN_PATTERN.sub(r"\1", owner)
 
 POST_ACTIONS = True           # 💊 button beside each medication post
 ACCENT_URGENT = False

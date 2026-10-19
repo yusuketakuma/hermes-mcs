@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 import notify_cards
+import notify_spool
 import notify_reconcile
 from notify_reconcile_testkit import CFG, NOW, _journal_claim, _journal_result, world
 
@@ -21,7 +22,7 @@ def _lost_render_hold(world):
     spec = world.spec(render["delivery_id"])
     aid = _journal_claim(str(world.data / "discord_state"), "w1", spec)
     _journal_result(str(world.data / "discord_state"), "w1", aid, render["delivery_id"], "unknown")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
     with world.led.db:
         notify_cards.revoke_card(world.led.db, render["card_id"], NOW)
@@ -75,7 +76,7 @@ def test_a_live_card_still_rebinds_as_before(world):
     spec = world.spec(render["delivery_id"])
     aid = _journal_claim(str(world.data / "discord_state"), "w1", spec)
     _journal_result(str(world.data / "discord_state"), "w1", aid, render["delivery_id"], "unknown")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
     db = world.led.db
     db.execute("PRAGMA foreign_keys=OFF")

@@ -14,10 +14,11 @@ from ledger import Ledger, valid_mcs_db
 from mcs_adapter import MCSAdapter
 from mcs_contract import MCSError, SchemaError
 from mcs_payload import normalize_message as _norm_message
-from mcs_signals import record_station_staff
+from self_identity import record_station_staff
 from message_metadata import get_message_metadata
 from collection_stages import stage_metadata_shadow
 import run_check
+import message_observations
 
 
 def message(mid=1, **extra):
@@ -281,7 +282,7 @@ def test_watch_set_is_bounded_fair_and_failure_backs_off(tmp_path):
     now = time.time()
     with db.db:
         db.db.execute("UPDATE messages SET posted_at_ts=?", (now,))
-    assert len(db.metadata_watch_targets()) == 8
+    assert len(message_observations.metadata_watch_targets(db.db)) == 8
     calls = []
 
     def fetch(pid, mid):
@@ -301,7 +302,7 @@ def test_watch_set_is_bounded_fair_and_failure_backs_off(tmp_path):
     assert result["metadata_shadow"]["errors"] == [
         {"message_id": 1, "kind": "network_error"}
     ]
-    assert [r["message_id"] for r in db.metadata_watch_targets()] == [9, 10]
+    assert [r["message_id"] for r in message_observations.metadata_watch_targets(db.db)] == [9, 10]
     calls.clear()
     stage_metadata_shadow(
         shadow_adapter(fetch), db, {}, time.monotonic() + 10
@@ -324,7 +325,7 @@ def test_missing_shadow_fields_do_not_starve_later_targets(tmp_path):
         {},
         time.monotonic() + 60,
     )
-    assert [r["message_id"] for r in db.metadata_watch_targets()] == [9, 10]
+    assert [r["message_id"] for r in message_observations.metadata_watch_targets(db.db)] == [9, 10]
     assert get_message_metadata(db.db, 1)["reactions"] is None
     db.close()
 
@@ -433,7 +434,7 @@ def test_watch_signal_latest_state_and_patient_message_boundaries(tmp_path):
     # 7: open request (30-min floor) first; then the active thread (1, 3);
     # 2 resolved, 4 too old, 5 deleted, 6 archived
     assert [(row["message_id"], row["parent_id"])
-            for row in db.metadata_watch_targets(now=now)] == [(7, None), (1, 3), (3, None)]
+            for row in message_observations.metadata_watch_targets(db.db, now=now)] == [(7, None), (1, 3), (3, None)]
     db.close()
 
 
@@ -449,12 +450,12 @@ def test_refresh_interval_follows_thread_activity(tmp_path):
         db.db.executemany(
             "INSERT INTO message_metadata(message_id,source,content,checked_at,last_error) "
             "VALUES(?,'shadow','{}',?,NULL)", [(1, now), (2, now)])
-    assert db.metadata_watch_targets(now=now + 6 * 3600 - 1) == []
-    assert len(db.metadata_watch_targets(now=now + 6 * 3600)) == 2   # 3-7 days: 6h
+    assert message_observations.metadata_watch_targets(db.db, now=now + 6 * 3600 - 1) == []
+    assert len(message_observations.metadata_watch_targets(db.db, now=now + 6 * 3600)) == 2   # 3-7 days: 6h
     with db.db:
         db.db.execute("UPDATE messages SET parent_id=1,posted_at_ts=? WHERE message_id=2",
                       (now,))                                       # a reply arrives
-    assert [r["message_id"] for r in db.metadata_watch_targets(now=now + 600)] == [1, 2]
+    assert [r["message_id"] for r in message_observations.metadata_watch_targets(db.db, now=now + 600)] == [1, 2]
     db.close()
 
 
@@ -470,12 +471,12 @@ def test_refresh_thread_activity_excludes_future_and_deleted_replies(tmp_path, r
         db.db.execute("UPDATE messages SET parent_id=1,posted_at_ts=?,body_state=? WHERE message_id=2",
                       (now + 1 if reply_state == "future" else now,
                        "deleted" if reply_state == "deleted" else "full"))
-    assert db.metadata_watch_targets(now=now) == []
+    assert message_observations.metadata_watch_targets(db.db, now=now) == []
     if reply_state == "future":
         with db.db:
             db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=1", (now,))
-        assert [r["message_id"] for r in db.metadata_watch_targets(now=now)] == [1]
-        assert [r["message_id"] for r in db.metadata_watch_targets(now=now + 1)] == [1, 2]
+        assert [r["message_id"] for r in message_observations.metadata_watch_targets(db.db, now=now)] == [1]
+        assert [r["message_id"] for r in message_observations.metadata_watch_targets(db.db, now=now + 1)] == [1, 2]
     db.close()
 
 def test_shadow_routes_root_and_signal_reply_by_parent_id(tmp_path):
@@ -520,10 +521,10 @@ def test_shadow_success_poll_and_failure_backoff_are_distinct(tmp_path):
             "INSERT INTO message_metadata(message_id,source,content,checked_at,last_error) "
             "VALUES(?,'shadow','{}',?,?)",
             [(1, now, None), (2, now, "network_error")])
-    assert db.metadata_watch_targets(now=now + 599) == []
-    assert [row["message_id"] for row in db.metadata_watch_targets(now=now + 600)] == [1]
-    assert [row["message_id"] for row in db.metadata_watch_targets(now=now + 21599)] == [1]
-    assert [row["message_id"] for row in db.metadata_watch_targets(now=now + 21600)] == [1, 2]
+    assert message_observations.metadata_watch_targets(db.db, now=now + 599) == []
+    assert [row["message_id"] for row in message_observations.metadata_watch_targets(db.db, now=now + 600)] == [1]
+    assert [row["message_id"] for row in message_observations.metadata_watch_targets(db.db, now=now + 21599)] == [1]
+    assert [row["message_id"] for row in message_observations.metadata_watch_targets(db.db, now=now + 21600)] == [1, 2]
     db.close()
 
 

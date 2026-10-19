@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import semantic_bench as bench
+import semantic_extraction as extraction
 
 
 def test_corpus_cli_freezes_only_checked_in_synthetic_sources(tmp_path, monkeypatch):
@@ -62,7 +63,7 @@ def test_run_accepts_frozen_synthetic_corpus_with_injected_pipeline(tmp_path, mo
 @pytest.mark.parametrize("reason", ["deadline", "model"])
 def test_summary_failure_is_deferred_with_extraction_metadata(monkeypatch, reason):
     case = bench._synthetic_cases()[0]
-    monkeypatch.setattr(bench, "extract_facts", lambda *_a, **_k: ([{}], True, 2, None))
+    monkeypatch.setattr(extraction, "extract_facts", lambda *_a, **_k: ([{}], True, 2, None))
     monkeypatch.setattr(bench, "summarize", lambda *_a, **_k: (None, reason))
     monkeypatch.setattr(bench, "audit_code", lambda *_: pytest.fail("missing summary audited"))
     monkeypatch.setattr(bench, "audit_claims", lambda *_: pytest.fail("missing summary sent"))
@@ -79,7 +80,7 @@ def test_summary_failure_is_deferred_with_extraction_metadata(monkeypatch, reaso
 
 def test_valid_empty_summary_is_evaluated_not_deferred(monkeypatch):
     case = bench._synthetic_cases()[0]
-    monkeypatch.setattr(bench, "extract_facts", lambda *_a, **_k: ([], True, 0, None))
+    monkeypatch.setattr(extraction, "extract_facts", lambda *_a, **_k: ([], True, 0, None))
     monkeypatch.setattr(bench, "summarize", lambda *_a, **_k: ({"claims": []}, None))
     audited = []
     monkeypatch.setattr(bench, "audit_code", lambda *_: audited.append(True) or [])
@@ -94,7 +95,7 @@ def test_valid_empty_summary_is_evaluated_not_deferred(monkeypatch):
 
 def test_aggregate_counts_missing_summaries_among_mixed_results(monkeypatch):
     case = bench._synthetic_cases()[0]
-    monkeypatch.setattr(bench, "extract_facts", lambda *_a, **_k: ([], True, 0, None))
+    monkeypatch.setattr(extraction, "extract_facts", lambda *_a, **_k: ([], True, 0, None))
     summaries = iter([(None, "deadline"), (None, "model"), ({"claims": []}, None),
                       ({"claims": [{"text": "合成の主張"}]}, None)])
     monkeypatch.setattr(bench, "summarize", lambda *_a, **_k: next(summaries))
@@ -276,7 +277,7 @@ def test_run_case_passes_fact_evidence_to_jev(monkeypatch):
                            "claim_kind": "reported_fact", "fact_refs": [0],
                            "evidence_refs": ["e1"], "status": "execution_reported",
                            "polarity": "affirmed"}], "limitations": []}
-    monkeypatch.setattr(bench, "extract_facts",
+    monkeypatch.setattr(extraction, "extract_facts",
                         lambda *a, **k: ([fact], True, 0, None))
     monkeypatch.setattr(bench, "summarize", lambda *a, **k: (summary, None))
     monkeypatch.setattr(bench, "audit_code", lambda *a: [])
@@ -292,3 +293,33 @@ def test_run_case_passes_fact_evidence_to_jev(monkeypatch):
     quotes = [c["text"] for ctx in jev.contexts for c in ctx
               if c.get("role") == "evidence_quote"]
     assert quotes and all(q == QUOTE for q in quotes)
+
+
+@pytest.mark.parametrize("stage", ["query", "fetch"])
+def test_calibration_reader_closes_when_sql_or_row_fetch_fails(monkeypatch, stage):
+    import sqlite3
+    connection = sqlite3.connect(":memory:")
+    closed = []
+    try:
+        if stage == "fetch":
+            connection.execute("CREATE TABLE artifacts(kind TEXT, meta TEXT)")
+            connection.execute("INSERT INTO artifacts VALUES('semantic_audit','{}')")
+            def bad_row(cursor, row):
+                raise ValueError("synthetic fetch failure")
+            connection.row_factory = bad_row
+
+        class Reader:
+            db = connection
+            def close(self):
+                closed.append(True)
+                connection.close()
+
+        monkeypatch.setattr(bench, "LedgerReader", lambda _: Reader())
+        error = sqlite3.OperationalError if stage == "query" else ValueError
+        with pytest.raises(error):
+            bench.cmd_calibrate(SimpleNamespace())
+        assert closed == [True]
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+    finally:
+        connection.close()

@@ -455,70 +455,8 @@ class _GuardedLLM:
         return value
 
 
-class _GuardedJev:
-    def __init__(self, client, guard, cutoff=None):
-        self._client = client
-        self._guard = guard
-        self._cutoff = cutoff
-
-    def evaluate(self, state, questions, deadline):
-        self._guard("jev_attempt")
-        _jev_cutoff(self._cutoff)
-        try:
-            value = self._client.evaluate(state, questions, deadline)
-        except Exception as error:
-            if hasattr(error, "kind") and hasattr(error, "retryable"):
-                with suppress(Exception):
-                    self._client.last_error = error
-            raise
-        self._guard("jev_result")
-        return value
-
-    def __getattr__(self, name):
-        return getattr(self._client, name)
 
 
-class _HookedJev:
-    """Temporarily bind hooks around one real adapter evaluation.
-
-    Keeping hooks scoped to the call avoids leaking one job's identity into a
-    client reused for the next job in the same drain.
-    """
-    def __init__(self, client, guard, reserve, cutoff=None):
-        self._client = client
-        self._guard = guard
-        self._reserve = reserve
-        self._cutoff = cutoff
-
-    def evaluate(self, state, questions, deadline):
-        old_before = getattr(self._client, "before_attempt", None)
-        old_after = getattr(self._client, "after_result", None)
-        old_reserve = getattr(self._client, "reserve_fn", None)
-        attempt_s = float(getattr(self._client, "attempt_timeout", 0) or 0)
-
-        def before_attempt():
-            self._guard("jev_attempt")
-            _jev_cutoff(self._cutoff, attempt_s)
-
-        self._client.before_attempt = before_attempt
-        self._client.after_result = \
-            lambda: self._guard("jev_result")
-        self._client.reserve_fn = self._reserve
-        try:
-            try:
-                return self._client.evaluate(state, questions, deadline)
-            except Exception as error:
-                if hasattr(error, "kind") and hasattr(error, "retryable"):
-                    with suppress(Exception):
-                        self._client.last_error = error
-                raise
-        finally:
-            self._client.before_attempt = old_before
-            self._client.after_result = old_after
-            self._client.reserve_fn = old_reserve
-
-    def __getattr__(self, name):
-        return getattr(self._client, name)
 
 
 def guarded_llm(fn, guard, deadline, timeout_cap=None, call_reserve=None):
@@ -536,18 +474,6 @@ def _jev_cutoff(cutoff, attempt_s: float = 0.0) -> None:
         raise RuntimeBudgetShort("jev_next_call")
 
 
-def bind_jev(client, guard, reserve=None, cutoff=None):
-    """Guard injected clients and hook real Jev retries at each POST.
-
-    The Jev adapter marks itself hookable.  Other clients are wrapped at the
-    evaluate boundary, preserving their public counters through __getattr__.
-    Hooks are restored by ``_HookedJev`` itself, so no cleanup is returned.
-    """
-    if client is None:
-        return None
-    if not getattr(client, "_mcs_jev_hookable", False):
-        return _GuardedJev(client, guard, cutoff)
-    return _HookedJev(client, guard, reserve, cutoff)
 
 
 def usage_reserver(ledger, token: JobToken, *, kind: str,
@@ -624,10 +550,81 @@ __all__ = [
     "RuntimeBudgetShort",
     "RuntimeGuardError",
     "RuntimeOff",
-    "RuntimeStale", "bind_jev", "config_generation",
+    "RuntimeStale", "JevEvaluation", "bind_jev", "config_generation",
     "circuit_open", "record_circuit_result",
     "guard", "guarded_llm", "job_deadline", "job_matches", "llm_call",
     "parse_payload", "attempt_limit", "payload_generation", "transition",
     "transition_tx",
-    "usage_reserver",
+    "usage_reserver", "llm_request_was_dispatched",
 ]
+
+
+PRE_DISPATCH_STAGES = ("llm_attempt", "llm_next_call", "llm")
+
+
+def llm_request_was_dispatched(error: RuntimeGuardError) -> bool:
+    """A pre-dispatch refusal must not spend the one-shot repair reservation."""
+    return not (isinstance(error, LLMNotSent) or error.stage in PRE_DISPATCH_STAGES)
+
+
+class JevEvaluation:
+    """Bind one job's evaluation guards, reservation and timing without client mutation."""
+    def __init__(self, client, guard, reserve, cutoff, transport, timing):
+        self._client = client
+        self._guard = guard
+        self._reserve = reserve
+        self._cutoff = cutoff
+        self._transport = transport
+        self._timing = timing
+
+    @property
+    def requests_made(self):
+        return self._client.requests_made
+
+    @property
+    def usage_totals(self):
+        return getattr(self._client, "usage_totals", {})
+
+    @property
+    def last_error(self):
+        return getattr(self._client, "last_error", None)
+
+    @last_error.setter
+    def last_error(self, error):
+        self._client.last_error = error
+
+    def _evaluate(self, state, questions, deadline, **hooks):
+        started = time.perf_counter()
+        try:
+            return self._client.evaluate(state, questions, deadline, **hooks)
+        finally:
+            if self._timing is not None:
+                self._timing["s"] += time.perf_counter() - started
+
+    def evaluate(self, state, questions, deadline):
+        try:
+            if not getattr(self._client, "supports_attempt_hooks", False):
+                self._guard("jev_attempt")
+                _jev_cutoff(self._cutoff)
+                value = self._evaluate(state, questions, deadline)
+                self._guard("jev_result")
+                return value
+            attempt_s = float(getattr(self._client, "attempt_timeout", 0) or 0)
+            def before_attempt():
+                self._guard("jev_attempt")
+                _jev_cutoff(self._cutoff, attempt_s)
+            return self._evaluate(state, questions, deadline,
+                before_attempt=before_attempt, after_result=lambda: self._guard("jev_result"),
+                reserve_fn=self._reserve, transport=self._transport)
+        except Exception as error:
+            if hasattr(error, "kind") and hasattr(error, "retryable"):
+                with suppress(Exception):
+                    self._client.last_error = error
+            raise
+
+
+def bind_jev(client, guard, reserve=None, cutoff=None, *, transport=None, timing=None):
+    """Bind the finite per-call Jev execution protocol; own no client-global hooks."""
+    if client is None:
+        return None
+    return JevEvaluation(client, guard, reserve, cutoff, transport, timing)

@@ -16,13 +16,11 @@ body availability and optional metadata, not bodies, names or attachment URLs.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import math
 import os
 import sys
 import time
-import urllib.parse
 from dataclasses import dataclass, field
 from typing import TypedDict
 
@@ -30,8 +28,7 @@ if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import _mcs_path  # noqa: F401
 
-from mcs_contract import API
-from mcs_contract import MCSError, Message, SchemaError, SessionExpired, valid_id as _valid_id
+from mcs_contract import Message, SchemaError, valid_id as _valid_id
 from mcs_payload import message_metadata as _message_metadata, normalize_message as _norm_message
 
 ARTIFACT_KIND = "cross_list_v1"
@@ -79,14 +76,14 @@ class CrossListFetch:
     timestamp: int | None = None
 
 
-def _options(dataset: str, unread_only: bool) -> None:
+def validate_options(dataset: str, unread_only: bool) -> None:
     if dataset not in DATASETS or type(unread_only) is not bool:
         raise ValueError("invalid cross list options")
     if dataset == "bookmarked" and unread_only:
         raise ValueError("bookmarked has no grounded unread filter")
 
 
-def _normalize(row) -> CrossListEntry:
+def normalize_entry(row, seen_ids: set[tuple[int, int]]) -> CrossListEntry:
     """Resolve project/parent from public nested fields; reject conflicting IDs."""
     if not isinstance(row, dict) or not _valid_id(row.get("id")):
         raise SchemaError("cross list: message id invalid")
@@ -119,140 +116,101 @@ def _normalize(row) -> CrossListEntry:
     unread = row.get("is_unread")
     if "is_unread" in row and type(unread) is not bool:
         raise SchemaError("cross list: unread invalid")
-    return CrossListEntry(_norm_message(row, pid, parent_id=parent_id), unread)
+    entry = CrossListEntry(_norm_message(row, pid, parent_id=parent_id), unread)
+    identity = (entry.message.project_id, entry.message.message_id)
+    if identity in seen_ids:
+        raise SchemaError("cross list: duplicate identity")
+    return entry
 
 
-def fetch_cross_list(adapter, dataset: str, *, unread_only: bool = False,
-                     max_pages: int = 5, per_page: int = 20,
-                     max_rows: int = 100, deadline_s: float = 25) -> CrossListFetch:
-    """Return normalized entries only after a complete, bounded snapshot walk.
+@dataclass(frozen=True)
+class CrossListPage:
+    """Validated page header facts; raw rows stay unmodified until scope checks."""
+    rows: list[JSON]
+    has_next: bool
+    timestamp: int | None
+    total_pages: int | None
+    total_present: bool
+    total_entries: JSON
 
-    Bounds: 1..10 pages, 1..20 rows/page, 1..200 total rows, 0<deadline<=120s.
-    No retries/backoff. Missing timestamp is accepted only for a terminal first
-    page; continuation requires the same positive server timestamp throughout.
-    Missing is_unread remains None on entries, never evidence of a read post.
-    """
-    _options(dataset, unread_only)
+
+def validate_fetch_options(dataset: str, unread_only: bool, *, max_pages: int,
+                           per_page: int, max_rows: int, deadline_s: float) -> None:
+    """Validate the existing finite cross-list bounds without I/O."""
+    validate_options(dataset, unread_only)
     if (type(max_pages) is not int or not 1 <= max_pages <= 10
             or type(per_page) is not int or not 1 <= per_page <= 20
             or type(max_rows) is not int or not 1 <= max_rows <= 200
             or type(deadline_s) not in (int, float)
             or not math.isfinite(deadline_s) or not 0 < deadline_s <= 120):
         raise ValueError("invalid cross list bounds")
-    result = CrossListFetch()
-    if not adapter._token:
-        result.reason = "cached_session_required"
-        return result
-    previous_deadline = adapter._deadline
-    end = time.monotonic() + deadline_s
-    adapter.set_deadline(min(end, previous_deadline) if previous_deadline is not None else end)
-    entries, seen = [], set()
-    total, total_pages = None, None
-    try:
-        for page in range(1, max_pages + 1):
-            params = {"page": page, "per_page": per_page, "include_paginate_totals": 0}
-            if dataset == "mentioned":
-                params["unread"] = int(unread_only)
-                if page == 1:
-                    params["include_meta"] = 1
-            if result.timestamp is not None:
-                params["timestamp"] = result.timestamp
-            # Ordinary _request can probe/retry/sleep when classifying 403.
-            # Use its existing bounded worker: no login, retry or extra probe.
-            params["no_extend_session"] = 1
-            response = adapter._io(
-                "api", adapter.timeout,
-                url=f"{API}/messages/{dataset}?{urllib.parse.urlencode(params)}",
-                method="GET", data=None,
-                headers={"Authorization": f"Bearer {adapter._token}",
-                         "Accept": "application/json"})
-            status = response["status"]
-            if status == 401:
-                raise SessionExpired(status=status)
-            if status >= 300:
-                raise MCSError("http_error", status=status)
-            body = base64.b64decode(response["body"], validate=True)
-            adapter._remaining_timeout(adapter.timeout)
-            try:
-                raw = json.loads(body)
-            except (ValueError, RecursionError):
-                raise SchemaError("cross list: json invalid") from None
-            result.pages += 1
-            if not isinstance(raw, dict):
-                raise SchemaError("cross list: object invalid")
-            rows, pag = raw.get("messages"), raw.get("paginate")
-            if (not isinstance(rows, list) or not isinstance(pag, dict)
-                    or len(rows) > per_page):
-                raise SchemaError("cross list: collection invalid")
-            for key, wanted in (("current_page", page), ("per_page", per_page)):
-                if key in pag and (type(pag[key]) is not int or pag[key] != wanted):
-                    raise SchemaError("cross list: page invalid")
-            has_next = pag.get("has_next")
-            if "has_next" in pag and type(has_next) is not bool:
-                raise SchemaError("cross list: has_next invalid")
-            if type(has_next) is not bool:
-                pages = pag.get("total_pages")
-                if (type(pages) is not int or pages < page
-                        or pag.get("current_page") != page):
-                    raise SchemaError("cross list: terminal state missing")
-                has_next = page < pages
-            if "total_pages" in pag:
-                value = pag["total_pages"]
-                if (type(value) is not int or value < 0
-                        or (total_pages is not None and value != total_pages)):
-                    raise SchemaError("cross list: page total invalid")
-                total_pages = value
-            if total_pages is not None and (
-                    (has_next and total_pages <= page)
-                    or (not has_next and total_pages != page
-                        and not (page == 1 and total_pages == 0 and not rows))):
-                raise SchemaError("cross list: page total mismatch")
-            stamp = pag.get("timestamp")
-            if stamp is not None and not _valid_id(stamp):
-                raise SchemaError("cross list: timestamp invalid")
-            if page == 1:
-                result.timestamp = stamp
-            elif stamp != result.timestamp:
-                raise SchemaError("cross list: timestamp changed")
-            if has_next and result.timestamp is None:
-                result.reason = "snapshot_missing"
-                break
-            if has_next and not rows:
-                raise SchemaError("cross list: no progress")
-            if len(entries) + len(rows) > max_rows:
-                result.reason = "row_limit"
-                break
-            if "total_entries" in pag:
-                value = pag["total_entries"]
-                if (type(value) is not int or value < 0
-                        or (total is not None and value != total)):
-                    raise SchemaError("cross list: total invalid")
-                total = value
-            for row in rows:
-                adapter._remaining_timeout(adapter.timeout)
-                entry = _normalize(row)
-                identity = (entry.message.project_id, entry.message.message_id)
-                if identity in seen:
-                    raise SchemaError("cross list: duplicate identity")
-                seen.add(identity)
-                entries.append(entry)
-            if total is not None and (
-                    (has_next and len(entries) >= total)
-                    or (not has_next and len(entries) != total)):
-                raise SchemaError("cross list: total mismatch")
-            adapter._remaining_timeout(adapter.timeout)
-            if not has_next:
-                result.complete = True
-                result.entries = entries
-                break
-        else:
-            result.reason = "page_limit"
-    except MCSError as error:
-        result.reason = error.kind
-        result.http_status = error.status
-    finally:
-        adapter.set_deadline(previous_deadline)
-    return result
+
+
+def parse_page(raw, *, page: int, per_page: int,
+               previous_timestamp: int | None, total_pages: int | None) -> CrossListPage:
+    """Validate header/continuation evidence without acquiring resources or mutating input."""
+    if not isinstance(raw, dict):
+        raise SchemaError("cross list: object invalid")
+    rows, pag = raw.get("messages"), raw.get("paginate")
+    if (not isinstance(rows, list) or not isinstance(pag, dict)
+            or len(rows) > per_page):
+        raise SchemaError("cross list: collection invalid")
+    for key, wanted in (("current_page", page), ("per_page", per_page)):
+        if key in pag and (type(pag[key]) is not int or pag[key] != wanted):
+            raise SchemaError("cross list: page invalid")
+    has_next = pag.get("has_next")
+    if "has_next" in pag and type(has_next) is not bool:
+        raise SchemaError("cross list: has_next invalid")
+    if type(has_next) is not bool:
+        pages = pag.get("total_pages")
+        if (type(pages) is not int or pages < page
+                or pag.get("current_page") != page):
+            raise SchemaError("cross list: terminal state missing")
+        has_next = page < pages
+    if "total_pages" in pag:
+        value = pag["total_pages"]
+        if (type(value) is not int or value < 0
+                or (total_pages is not None and value != total_pages)):
+            raise SchemaError("cross list: page total invalid")
+        total_pages = value
+    if total_pages is not None and (
+            (has_next and total_pages <= page)
+            or (not has_next and total_pages != page
+                and not (page == 1 and total_pages == 0 and not rows))):
+        raise SchemaError("cross list: page total mismatch")
+    stamp = pag.get("timestamp")
+    if stamp is not None and not _valid_id(stamp):
+        raise SchemaError("cross list: timestamp invalid")
+    if page != 1 and stamp != previous_timestamp:
+        raise SchemaError("cross list: timestamp changed")
+    return CrossListPage(rows, has_next, stamp, total_pages,
+                         "total_entries" in pag, pag.get("total_entries"))
+
+
+def validate_page_rows(page: CrossListPage, *, entry_count: int,
+                       max_rows: int, total: int | None) -> tuple[str | None, int | None]:
+    """Return an early bounded stop reason and the validated collection total."""
+    if page.has_next and page.timestamp is None:
+        return "snapshot_missing", total
+    if page.has_next and not page.rows:
+        raise SchemaError("cross list: no progress")
+    if entry_count + len(page.rows) > max_rows:
+        return "row_limit", total
+    if page.total_present:
+        value = page.total_entries
+        if (type(value) is not int or value < 0
+                or (total is not None and value != total)):
+            raise SchemaError("cross list: total invalid")
+        total = value
+    return None, total
+
+
+def validate_page_total(*, has_next: bool, entry_count: int, total: int | None) -> None:
+    """Reject a completed or continuing collection whose observed count contradicts its total."""
+    if total is not None and (
+            (has_next and entry_count >= total)
+            or (not has_next and entry_count != total)):
+        raise SchemaError("cross list: total mismatch")
 
 
 def capture_rows(result: CrossListFetch) -> list[CapturedRow]:
@@ -313,7 +271,7 @@ def sync_cross_list(ledger, adapter, dataset: str, *, enabled: bool = False,
     prior complete artifacts survive. Current chat/semantic/metadata are untouched.
     An existing local message with a conflicting project/parent fails the whole set.
     """
-    _options(dataset, unread_only)
+    validate_options(dataset, unread_only)
     if type(enabled) is not bool or (now is not None and (
             type(now) not in (int, float) or not math.isfinite(now) or now < 0)):
         raise ValueError("invalid cross list capture options")
@@ -348,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     """Explicit storage-only GET under the existing writer lock; no publication."""
     from ledger import Ledger
     from mcs_adapter import MCSAdapter
-    from mcs_util import acquire_run_lock
+    from writer_lock import acquire_run_lock
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", required=True)
@@ -372,16 +330,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         store = Ledger(args.database)
         adapter = MCSAdapter(token_cache=args.token_cache)
-        adapter._token = adapter._read_cache()
+        adapter.load_cached_session()
         adapter.set_deadline(time.monotonic() + 25)
         result = sync_cross_list(store, adapter, args.dataset,
                                  enabled=True, unread_only=args.unread_only)
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))
         return 0 if result["state"] == "complete" else 1
     finally:
-        if store is not None:
-            store.close()
-        os.close(lock_fd)
+        try:
+            if store is not None:
+                store.close()
+        finally:
+            os.close(lock_fd)
 
 
 if __name__ == "__main__":

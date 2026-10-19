@@ -58,7 +58,7 @@ def test_download_revision_requeues_only_enabled_changed_generation(tmp_path, mo
                                       (attachment_id,)).fetchone())
         def fail_seed(*args):
             raise RuntimeError("synthetic seed interruption")
-        monkeypatch.setattr(db, "_semantic_seed_tx", fail_seed)
+        monkeypatch.setattr(db, "semantic_seed_tx", fail_seed)
         with pytest.raises(RuntimeError, match="synthetic seed interruption"):
             db.attachment_saved(attachment_id, '/synthetic/new', 30, 'third', semantic=True)
         assert dict(db.db.execute("SELECT * FROM attachments WHERE attachment_id=?",

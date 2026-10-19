@@ -1,4 +1,5 @@
 """E1/E2 and real sender regressions using only a synthetic ledger and send stubs."""
+import notify_spool
 import json
 import sqlite3
 
@@ -8,7 +9,7 @@ import notify_flush
 import notify_urgent
 import structured_view
 from ledger import Ledger
-from mcs_signals import record_station_staff
+from self_identity import record_station_staff
 from notify_testkit import (
     NOW, _add_request, _click, _deliver, _dispatch, _intent,
     _msg, _patient, _signal_row, _spec, led,
@@ -24,7 +25,7 @@ _NATIVE_SEQ = iter(range(500000, 600000, 2))
 
 def _flush_native(store, cfg, calls, *, outcome="delivered", **kwargs):
     """Flush then simulate one native wire attempt through real grants/receipts."""
-    import notify_cards
+    import notify_scope
     import notify_render
     import notify_transport
     from notify_testkit import _begin, _uuid
@@ -39,7 +40,7 @@ def _flush_native(store, cfg, calls, *, outcome="delivered", **kwargs):
                    "attempt_id": f"{serial:016x}", "delivery_id": render["delivery_id"],
                    "render_rev": render["render_rev"], "payload_hash": render["payload_hash"],
                    "route_epoch": 1, "correlation": render["correlation"],
-                   **notify_cards.delivery_scope(cfg), "result": outcome}
+                   **notify_scope.delivery_scope(cfg), "result": outcome}
         if outcome == "delivered":
             receipt["message_id"] = "alert-reply-" + str(serial)
         assert notify_transport.apply_transport_receipt(store, receipt, cfg)["applied"]
@@ -439,10 +440,10 @@ def test_tick_reads_history_and_restore_marker_once(world, monkeypatch, tmp_path
     _fact(store, mid=101)
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1  # 101 is room_cooldown
     loads, marker_reads = [], []
-    real_history, real_restore = notify_urgent._history, notify_urgent.notify_cards.restore_pending
+    real_history, real_restore = notify_urgent._history, notify_spool.restore_pending
     monkeypatch.setattr(notify_urgent, "_history",
                         lambda *a: loads.append(1) or real_history(*a))
-    monkeypatch.setattr(notify_urgent.notify_cards, "restore_pending",
+    monkeypatch.setattr(notify_spool, "restore_pending",
                         lambda root: marker_reads.append(1) or real_restore(root))
     result = notify_urgent.maybe_enqueue(store, cfg)
     assert result["queued"] == 0 and sum(result["deferred"].values()) == 2

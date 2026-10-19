@@ -294,7 +294,7 @@ def _fact_audit_target(fact: dict) -> str:
     return f"{fact.get('statement')} [{' '.join(fields)}]"
 
 
-def _published_quantity_findings(doc: dict) -> list:
+def published_quantity_findings(doc: dict) -> list:
     """Check known medication quantities against only their own evidence quotes."""
     evidence = {item["evidence_id"]: item for item in doc.get("evidence", [])
                 if isinstance(item, dict) and item.get("evidence_id")}
@@ -345,7 +345,7 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
     if unverified:
         findings.append({"code": "unverified_facts",
                           "count": len(unverified)})
-    findings.extend(_published_quantity_findings(doc))
+    findings.extend(published_quantity_findings(doc))
     coverage_doc = doc.get("coverage")
     if not isinstance(coverage_doc, dict) \
             or coverage_doc.get("status") != "complete":
@@ -469,3 +469,49 @@ def audit_status_for(code_findings: list, jev_findings: list,
                                        "claim_low_confidence")]:
         return "NEEDS_REVIEW"
     return "PASS"
+
+
+def fact_audit_verdict(audit, doc_hash: str) -> str | None:
+    """Completed fact-audit status for the v2 document ``doc_hash``, or
+    None when it has none. ``audit`` is the generation's NEWEST
+    ``semantic_facts_audit`` row for the policy (``semantic_store.
+    current_artifact(..., KIND_FACT_AUDIT, mid, fp, policy)``), exactly the row
+    the drain reuses (C04) — never an older one: a newer row bound to
+    another document or recording an unevaluated run (``evaluated``
+    not ``True``) means the document is not audited as it stands, and
+    the drain re-audits it rather than resurrecting an earlier verdict.
+    The drain never appends an audit after a completed one for the same
+    document, so in its own ledger the newest row is the only verdict.
+    ``content.status`` is the verdict the drain acted on
+    (``meta.audit_status`` is its denormalized copy for status reads).
+    Shared by the drain's reuse check, the re-projection gate and the
+    evaluation lifecycle's ``verified`` stage."""
+    if audit is None or audit["meta"].get("doc_hash") != doc_hash \
+            or audit["content"].get("evaluated") is not True:
+        return None
+    return audit["content"].get("status")
+
+
+
+def cached_fact_audit(audit, doc: dict, doc_hash: str):
+    """Reuse only a completed document-bound audit whose PASS still verifies quantities."""
+    verdict = fact_audit_verdict(audit, doc_hash)
+    if verdict is not None and (verdict != "PASS" or not published_quantity_findings(doc)):
+        return audit["content"]
+    return None
+
+
+def canonical_audit_disposition(audit: dict, doc: dict) -> str:
+    """Keep incomplete coverage non-PASS even when the evaluated audit says PASS."""
+    if not audit["evaluated"]:
+        return "wait"
+    if audit["status"] == "PASS":
+        return "pass" if doc["coverage"]["status"] == "complete" else "coverage_incomplete"
+    return "review"
+
+
+def fact_repair_plan(findings: list, attempt: int) -> tuple[dict, bool, bool]:
+    """Select targeted rejection/coverage repair only on the original first audit."""
+    rejected = {f["fact"]: f["code"] for f in findings if f.get("fact")}
+    coverage_missing = any(f.get("code") == "source_fact_coverage_missing" for f in findings)
+    return rejected, coverage_missing, bool(attempt == 0 and (rejected or coverage_missing))

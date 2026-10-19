@@ -1,31 +1,14 @@
-"""Shared micro-utilities for the MCS adapter — no network, no DB access.
-
-Centralizes the small pieces several modules used to keep private copies
-of: config loading, HTML-to-text, the no-redirect HTTP guard, the
-single-writer run lock, shared path constants, and the text utilities
-(chunking / evidence-quote location) used by the extract and semantic
-layers, and the LLM-lane stability gates (circuit breaker / disk floor)
-shared by extract_llm and semantic_drain, and the verified launchd
-bootstrap shared by mcs_setup and mcs_update. Keep this module
-dependency-free so every entry point
-(run_check, init_data, the extract CLIs, notify_flush, mcs_adapter)
-can import it without side effects.
-"""
-import fcntl
+"""Share dependency-light bootstrap, text, JSON and guarded-opener contracts."""
 import hashlib
 import html
 import json
-import math
 import os
 import re
 import shutil
-import sqlite3
-import time
 import unicodedata
 import urllib.request
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 
-from safe_io import atomic_write, fsync_dir  # noqa: F401  (re-exported)
 
 HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
 # checkout root; scripts/mcs_upgrade.py runs a target tag's code from a
@@ -33,11 +16,9 @@ HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
 REPO = os.path.abspath(os.environ.get("MCS_UPDATE_REPO") or os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 CONF_PATH = os.path.join(HOME, "config.json")
-RUN_LOCK = os.path.join(HOME, "data", "run.lock")
 DB = os.path.join(HOME, "data", "ledger.db")
 ATTACH_DIR = os.path.join(HOME, "data", "attachments")
 # written under <HOME>/data by mcs_update while an update is applied
-UPDATE_MARKER_NAME = "update_in_progress.marker"
 CACHE = os.path.join(HOME, "token_cache.json")   # outside data/ (sandbox-mounted)
 CHROME_PROFILE = os.path.join(HOME, "chrome-profile")
 CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -73,7 +54,7 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
             for line in f:
                 if line.startswith(key + "="):
                     v = line.split("=", 1)[1].strip()
-                    # decodes mcs_setup._env_write's quoting; the standalone
+                    # decodes lifecycle_io.write_env's quoting; the standalone
                     # credential loader (mcs_standalone.config._env_tokens)
                     # keeps a stricter copy that fails closed on bad JSON
                     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
@@ -108,217 +89,6 @@ def hermes_exe(cfg: dict, path: str | None = None) -> str:
         or os.path.expanduser("~/.local/bin/hermes")
 
 
-def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
-    """[chmod] -> fsync tmp -> os.replace -> dir fsync for a finished tmp
-    file: readers see the whole old ``dest`` or the whole new one."""
-    if mode is not None:
-        os.chmod(tmp, mode)
-    fd = os.open(tmp, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(tmp, dest)
-    fsync_dir(os.path.dirname(dest) or ".")
-
-
-# ---------- LLM lane stability gates ----------
-# Shared by extract_llm and semantic_drain so both lanes defer under the
-# same conditions instead of each inventing a gate.  The breaker state is
-# a JSON file beside the ledger (independent of the DB's own health — a
-# corrupted ledger must not hide an outage); once the failure streak hits
-# _CIRCUIT_TRIP the lane stays closed for a cooldown that doubles per
-# streak (cap 30min), so an outage degrades to one file read per drain.
-# The disk floor guards the artifact writers: a nearly-full volume turns
-# every guarded INSERT into an I/O error storm — rows stay pending and
-# the drain reports disk_free_mb instead of burning attempts.
-_CIRCUIT_TRIP = 3
-_CIRCUIT_BASE_S = 120.0
-_CIRCUIT_MAX_S = 1800.0
-_CIRCUIT_MAX_STREAK = math.ceil(math.log2(_CIRCUIT_MAX_S / _CIRCUIT_BASE_S))
-
-
-def _db_file(ledger) -> str:
-    return getattr(ledger, "db", ledger).execute("PRAGMA database_list").fetchone()[2]
-
-
-def circuit_state_path(ledger):
-    from pathlib import Path
-    return Path(_db_file(ledger)).with_name("llm_circuit.json")
-
-
-def _circuit_state(ledger) -> dict:
-    return load_config(circuit_state_path(ledger))
-
-
-def circuit_open_s(ledger) -> float:
-    """Seconds the breaker stays open; 0 when closed. An unreadable or
-    corrupt state file fails closed-open — it never blocks the lane."""
-    import time as _time
-    until = _circuit_state(ledger).get("open_until")
-    if type(until) not in (int, float):
-        return 0.0
-    try:
-        until = float(until)
-    except OverflowError:
-        return 0.0
-    return max(0.0, until - _time.time()) if math.isfinite(until) else 0.0
-
-
-@contextmanager
-def _circuit_lock(path):
-    """Serialize the breaker/health read-modify-write across the extract
-    workers, the semantic lanes and the tick. Blocking but brief (one
-    small JSON rewrite); an unopenable lock file fails open so the guard
-    never stops the lane it protects."""
-    fd = None
-    try:
-        fd = os.open(f"{path}.lock", os.O_RDWR | os.O_CREAT, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-    except OSError:
-        pass
-    try:
-        yield
-    finally:
-        if fd is not None:
-            with suppress(OSError):
-                os.close(fd)   # closing releases the flock; keep the inode
-
-
-# Health marker beside the breaker file: when the endpoint last answered
-# and since when it has been observed down. The breaker file is deleted
-# on success (absence = closed), so the marker lives apart. Stall checks
-# read it: an outage keeps the job queues' updated_at fresh (every free
-# defer rewrites it), so queue age alone never fires.
-_HEALTH_SUCCESS_REFRESH_S = 60.0
-
-
-def llm_health_path(ledger):
-    return circuit_state_path(ledger).with_name("llm_health.json")
-
-
-def _finite_ts(value) -> float | None:
-    if type(value) not in (int, float):
-        return None
-    try:
-        value = float(value)
-    except OverflowError:
-        return None
-    return value if math.isfinite(value) and value >= 0 else None
-
-
-def llm_health(ledger) -> dict:
-    """{"last_success": ts|None, "down_since": ts|None} in wall-clock
-    seconds. Missing/corrupt state reads as unknown, never as an outage."""
-    state = load_config(llm_health_path(ledger))
-    return {"last_success": _finite_ts(state.get("last_success")),
-            "down_since": _finite_ts(state.get("down_since"))}
-
-
-def llm_last_success(ledger) -> float | None:
-    """Wall-clock time the local LLM last answered a lane call, or None."""
-    return llm_health(ledger)["last_success"]
-
-
-def llm_down_since(ledger) -> float | None:
-    """Start of the current endpoint-down/timeout streak, or None."""
-    return llm_health(ledger)["down_since"]
-
-
-def llm_down_for_s(ledger, now: float | None = None) -> float | None:
-    """Seconds the endpoint has been observed down with no answered call
-    since; None when it is not currently observed down."""
-    since = llm_down_since(ledger)
-    if since is None:
-        return None
-    return max(0.0, (time.time() if now is None else now) - since)
-
-
-def _health_write(path, state: dict) -> None:
-    payload = json.dumps(state)
-    with suppress(OSError):
-        atomic_write(str(path), lambda f: f.write(payload))
-
-
-def _mark_llm_success(ledger) -> None:
-    now = time.time()
-    current = llm_health(ledger)
-    if current["down_since"] is None and current["last_success"] is not None \
-            and 0 <= now - current["last_success"] < _HEALTH_SUCCESS_REFRESH_S:
-        return   # one rewrite per minute on a busy healthy lane
-    _health_write(llm_health_path(ledger), {"last_success": now})
-
-
-def _mark_llm_down(ledger) -> None:
-    current = llm_health(ledger)
-    if current["down_since"] is not None:
-        return
-    state = {"down_since": time.time()}
-    if current["last_success"] is not None:
-        state["last_success"] = current["last_success"]
-    _health_write(llm_health_path(ledger), state)
-
-
-def circuit_success(ledger) -> None:
-    """Any answered call proves the endpoint is alive — reset state."""
-    path = circuit_state_path(ledger)
-    with _circuit_lock(path):
-        with suppress(OSError):
-            path.unlink(missing_ok=True)
-        _mark_llm_success(ledger)
-
-
-def circuit_streak(ledger) -> int:
-    """Trips of the current outage (0 = not tripped since the last
-    answered call). Corrupt state reads as 0."""
-    streak = _circuit_state(ledger).get("streak")
-    return streak if type(streak) is int and streak >= 0 else 0
-
-
-def circuit_failure(ledger) -> None:
-    """Endpoint-down observation: count consecutive probes and open the
-    breaker on a doubling cooldown once the streak trips. The read-
-    modify-write holds a flock so concurrent lanes never lose a count."""
-    path = circuit_state_path(ledger)
-    with _circuit_lock(path):
-        state = _circuit_state(ledger)
-        fails, streak = state.get("failures"), state.get("streak")
-        fails = min(fails, _CIRCUIT_TRIP - 1) \
-            if type(fails) is int and fails >= 0 else 0
-        streak = min(streak, _CIRCUIT_MAX_STREAK) \
-            if type(streak) is int and streak >= 0 else 0
-        fails += 1
-        out = {"failures": fails, "streak": streak}
-        if fails >= _CIRCUIT_TRIP:
-            out["streak"] = min(streak + 1, _CIRCUIT_MAX_STREAK)
-            out["open_until"] = time.time() + min(
-                _CIRCUIT_MAX_S, _CIRCUIT_BASE_S * 2 ** out["streak"])
-            out["failures"] = 0
-        payload = json.dumps(out)
-        with suppress(OSError):
-            atomic_write(str(path), lambda f: f.write(payload))
-        _mark_llm_down(ledger)
-
-
-def disk_free_mb(ledger) -> float | None:
-    """Free space (MiB) on the volume holding the ledger; None when
-    unmeasurable — an unreadable fs must not gate the lane."""
-    try:
-        import shutil
-        return shutil.disk_usage(_db_file(ledger)).free / (1024 * 1024)
-    except (OSError, TypeError, IndexError):
-        return None
-
-
-def disk_floor_mb() -> float:
-    """MiB floor under which the LLM lane defers; 0 disables the guard."""
-    try:
-        value = float(os.environ.get("MCS_DISK_GUARD_MB", "512"))
-        return value if math.isfinite(value) and value >= 0 else 512.0
-    except ValueError:
-        return 512.0
-
-
 def has_sqlite_sidecars(path) -> bool:
     """True when a -wal, -shm or -journal entry (even a dangling symlink)
     sits next to ``path`` — the file is then not a static snapshot."""
@@ -350,6 +120,13 @@ def payload_hash(value) -> str:
 def positive(value) -> bool:
     """A positive SQLite rowid-range int (bool excluded)."""
     return type(value) is int and 0 < value < 2**63
+
+
+def valid_text(value, size, nullable=False):
+    return (nullable and value is None) or (
+        isinstance(value, str) and 0 < len(value) <= size
+        and bool(value.strip()) and "\x00" not in value)
+
 
 
 def loads_dict(raw) -> dict | None:
@@ -456,15 +233,6 @@ def search_fold(text):
     return "".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-def register_search_fold(db) -> None:
-    """Make ``mcs_fold(text)`` (``search_fold``) callable in SQL on this
-    connection — read-only connections included; registered once."""
-    try:
-        db.execute("SELECT mcs_fold('')").fetchone()
-    except sqlite3.OperationalError:
-        db.create_function("mcs_fold", 1, search_fold, deterministic=True)
-
-
 def text_chunks(text: str, size: int = 3000) -> list:
     """Split into <=size chunks at line/sentence boundaries, hard-
     splitting only as a last resort. The concatenation of all chunks is
@@ -510,136 +278,3 @@ def no_proxy_opener(*handlers):
     must not silently route through a configured HTTP proxy."""
     return urllib.request.build_opener(
         urllib.request.ProxyHandler({}), *handlers)
-
-
-def acquire_run_lock(path: str | None = None) -> int | None:
-    """Non-blocking exclusive flock on the run lockfile.
-
-    Returns the open fd — the lock lives as long as the fd stays open
-    (hold it in main() scope; process exit releases it). Returns None
-    when another writer holds it. Every entry point that writes the
-    ledger must hold this lock so a manual CLI can never interleave
-    writes with a scheduled tick. The one documented exception is the
-    resident extract_llm drainer, which takes it per result write and
-    leaves its fenced bookkeeping writes lockless (see
-    ``extract_llm._write_lock``)."""
-    path = path or RUN_LOCK
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(fd)
-        return None
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
-
-
-_MCS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def code_stamp() -> int:
-    """Newest mtime of the mcs/ sources — changes when an update merges."""
-    newest = 0
-    for base, _dirs, files in os.walk(_MCS_ROOT):
-        for name in files:
-            if name.endswith(".py"):
-                with suppress(OSError):
-                    newest = max(newest, os.stat(
-                        os.path.join(base, name)).st_mtime_ns)
-    return newest
-
-
-class RunLockLost(BaseException):
-    """The run lock could not be safely retaken after unlocked transport.
-
-    ``held`` tells whether the fd holds the lock again (an updater ran in
-    the window: old code must not keep writing) or not (bounded wait
-    expired: no DB write is allowed at all). BaseException on purpose:
-    the generic ``except Exception`` retry paths must not charge an
-    attempt for it — the drain catches it explicitly."""
-
-    def __init__(self, held: bool, updated: bool = False):
-        super().__init__("run_lock_held" if held
-                         else "run_lock_timeout_updated" if updated
-                         else "run_lock_timeout")
-        self.held = held
-        # an updater ran while the bounded wait was expiring: the lock
-        # is not held, but this code is stale and must not stay resident
-        self.updated = updated
-
-
-RUN_LOCK_REACQUIRE_S = 150.0
-RUN_LOCK_POLL_S = 0.2
-
-
-def _updater_state() -> tuple:
-    return (os.path.exists(os.path.join(HOME, "data", UPDATE_MARKER_NAME)),
-            code_stamp())
-
-
-@contextmanager
-def unlocked_transport(ledger, lock_fd, wait_s: float | None = None,
-                       deadline: float | None = None):
-    """Release the run lock during transport and reacquire before DB work.
-
-    The reacquire is bounded (``wait_s``, default RUN_LOCK_REACQUIRE_S,
-    never past the caller's absolute ``deadline``) and refuses a lock won
-    right after an updater — same rule as run_check._wait_run_lock: an
-    update marker that appeared or a code stamp that moved during the
-    window raises RunLockLost(held=True); an expired wait raises
-    RunLockLost(held=False), with ``updated`` set when the same check
-    fails during the expiry."""
-    if lock_fd is None:
-        yield
-        return
-    if ledger.db.in_transaction:
-        raise RuntimeError("transport_inside_db_transaction")
-    before = _updater_state()
-    fcntl.flock(lock_fd, fcntl.LOCK_UN)
-    try:
-        yield
-    finally:
-        until = time.monotonic() + (
-            RUN_LOCK_REACQUIRE_S if wait_s is None else wait_s)
-        if deadline is not None:
-            until = min(until, deadline)
-        while True:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= until:
-                    raise RunLockLost(
-                        held=False, updated=_updater_state() != before) from None
-                time.sleep(RUN_LOCK_POLL_S)
-        if _updater_state() != before:
-            raise RunLockLost(held=True)
-
-
-def launchd_bootstrap(label: str, plist: str, run) -> str | None:
-    """Bootstrap a LaunchAgent and verify it is loaded — the canonical
-    success criterion for mcs_setup/mcs_update (mcs_recover.py and
-    install.sh keep standalone copies of the same semantics).
-
-    launchd may still be tearing down a just-booted-out job and answer
-    any nonzero code (typically "5: Input/output error") — any failure
-    is retried up to 3 times, 1s apart. An exit 0 is not proof: success
-    is only a `launchctl print` of the label answering 0 afterwards (a
-    late load after failed attempts also counts). `run(argv)` returns an
-    object with .returncode/.stderr (text). Returns None on success, else a
-    failure detail."""
-    uid = os.getuid()
-    err = ""
-    for _ in range(3):
-        r = run(["launchctl", "bootstrap", f"gui/{uid}", plist])
-        if r.returncode == 0:
-            err = ""
-            break
-        err = (r.stderr or "").strip()
-        time.sleep(1)
-    if run(["launchctl", "print", f"gui/{uid}/{label}"]).returncode == 0:
-        return None
-    return err or "bootstrap exited 0 but the label is not loaded"

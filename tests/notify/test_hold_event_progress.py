@@ -20,7 +20,7 @@ def test_hold_keeps_the_receipt_and_records_the_reason(store, progress, expected
     eid = store.outbox_add("new_messages", 1, {"message_ids": [1]})
     store.db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?", (progress, eid))
     store.db.commit()
-    notify_flush._hold_event(store, _row(store, eid), {}, reason="synthetic_reason")
+    notify_flush.hold_event(store, _row(store, eid), {}, reason="synthetic_reason")
     row = _row(store, eid)
     assert row["state"] == "failed" and row["next_try"] is None
     assert json.loads(row["progress"]) == {**expected, "hold_reason": "synthetic_reason"}
@@ -29,7 +29,7 @@ def test_hold_keeps_the_receipt_and_records_the_reason(store, progress, expected
 
 def test_rescue_and_hold_land_together(store):
     eid = store.outbox_add("new_messages", 1, {"message_ids": [1, 2]})
-    notify_flush._hold_event(store, _row(store, eid), {}, reason="synthetic_reason")
+    notify_flush.hold_event(store, _row(store, eid), {}, reason="synthetic_reason")
     row = _row(store, eid)
     assert row["state"] == "failed" and row["next_try"] is None
     assert json.loads(row["progress"]) == {"hold_reason": "synthetic_reason"}

@@ -4,6 +4,7 @@ every derived row; a changed or unrebuildable one stops its projection,
 summary, audits, coverage and Loop candidates from being current and is
 re-queued at most once without a new notification or retry budget.
 Synthetic ledger, stub model and stub Jev only."""
+import semantic_facts
 import semantic_drain
 import semantic_policy
 import semantic_store
@@ -126,8 +127,8 @@ def test_old_documents_are_marked_and_only_the_changed_one_is_held(world):
     # the send gate holds message 2's summary and still publishes message 1's
     policy = semantic_policy.policy_fingerprint(_scfg())
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
-    assert semantic_send_gate._summary_current(db, 1, 1, bundle, policy) is not None
-    assert semantic_send_gate._summary_current(db, 1, 2, bundle, policy) is None
+    assert semantic_send_gate.current_summary(db.db, 1, 1, bundle, policy) is not None
+    assert semantic_send_gate.current_summary(db.db, 1, 2, bundle, policy) is None
 
 
 def test_second_pass_does_nothing(world):
@@ -149,7 +150,7 @@ def test_requeued_thread_republishes_from_the_rebuilt_document_without_a_notice(
     [new_doc] = _kind_rows(db, "semantic_facts_v2", 2)[-1:]
     current = [m for m in _meta(db, v4.KIND_V4, 2) if not m.get("invalidated")]
     assert len(current) == 1
-    assert current[0]["doc_hash"] == v4._doc_hash(json.loads(new_doc["content"]))
+    assert current[0]["doc_hash"] == semantic_facts.doc_hash(json.loads(new_doc["content"]))
     assert [m for m in _meta(db, "semantic_summary", 2) if not m.get("invalidated")]
     assert _outbox(db) == outbox                        # notification-free
     assert _job(db)[0] == "done"
@@ -350,7 +351,7 @@ def test_failed_requeue_rolls_the_row_back_and_still_holds(world, monkeypatch):
 
     def broken(*args, **kwargs):
         raise RuntimeError("synthetic seed failure")
-    monkeypatch.setattr(db, "_semantic_seed_tx", broken)
+    monkeypatch.setattr(db, "semantic_seed_tx", broken)
     out = v4.reproject_stale(db, _scfg())
     assert out["skip_reasons"]["hint_rebuild:write_failed"] == 1
     assert out["skip_reasons"]["hint_rebuild_seed:write_failed"] == 1

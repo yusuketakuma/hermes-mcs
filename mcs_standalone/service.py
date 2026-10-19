@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import safe_io
 import math
 import os
 from pathlib import Path
@@ -12,7 +13,7 @@ import uuid
 
 from mcs_runtime import python_executable
 import service_contract
-from mcs_util import atomic_write
+from safe_io import atomic_write
 
 # Watches the host from outside it: the same label as Hermes mode's agent.
 HEALTH_INTERVAL_S = 300
@@ -36,8 +37,7 @@ def pid_exists(pid):
 def status(root, *, now=None):
     path = Path(root).expanduser().resolve() / "data" / STATUS_FILE
     try:
-        from .config import _private_bytes
-        value = json.loads(_private_bytes(path, "status_missing", "status_invalid", 1024 * 1024))
+        value = json.loads(safe_io.read_private_bytes(path, 1024 * 1024))
         if not isinstance(value, dict) or type(value.get("updated_at")) not in (int, float) \
                 or not math.isfinite(value["updated_at"]):
             raise ValueError

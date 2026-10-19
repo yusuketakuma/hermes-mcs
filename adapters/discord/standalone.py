@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from adapters.common import eventlog, paths, text as display_text, worker
 from adapters.common.access import CONTEXT_FLAGS
 from adapters.common.dispatch import make_handler
-from . import cards
+from . import cards, delivery
 from .actions import _authorizing_channel
 from .tasks import Supervisor
 
@@ -118,7 +118,7 @@ def _verify_identity(bot, settings, *, gateway=False):
         raise ValueError("discord_bot_identity_mismatch")
     if gateway and getattr(application, "interactions_endpoint_url", None) is not None:
         raise ValueError("discord_http_interactions_configured")
-    if not cards.single_post_ready(bot):
+    if not delivery.single_post_ready(bot):
         raise ValueError("discord_retry_policy_unknown")
 
 
@@ -256,7 +256,7 @@ class _Commands:
         # the human's own DM. Never fall back to a public channel on failure.
         target = await message.author.create_dm()
         for chunk in display_text.split_body(answer, max_chunks=None):
-            await cards.single_post(self.bot, functools.partial(
+            await delivery.single_post(self.bot, functools.partial(
                 target.send, chunk, allowed_mentions=cards.no_pings()))
 
     async def error(self, interaction, error):
@@ -419,7 +419,7 @@ async def send(root, target, payload):
             if not current():
                 raise ValueError("discord_scope_changed")
             attempted = True
-            sent = await cards.single_post(bot, functools.partial(
+            sent = await delivery.single_post(bot, functools.partial(
                 channel.send, chunk, allowed_mentions=cards.no_pings()))
             if not getattr(sent, "id", None):
                 return {"result": "unknown", "error_code": "missing_remote_id"}
@@ -429,7 +429,7 @@ async def send(root, target, payload):
                 raise ValueError("discord_scope_changed")
             with io.BytesIO(blob) as source:
                 attempted = True
-                sent = await cards.single_post(bot, functools.partial(
+                sent = await delivery.single_post(bot, functools.partial(
                     cards.send_attachment, channel, source, name))
             if not getattr(sent, "id", None):
                 return {"result": "unknown", "error_code": "missing_remote_id"}

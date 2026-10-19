@@ -25,7 +25,7 @@ from ledger_audit import AuditReport, audit_db
 from mcs_queries import REPLY_GAP
 from mcs_requests import canonical, valid_hash, valid_uuid
 from mcs_util import has_sqlite_sidecars
-from safe_io import fsync_dir, read_regular_nofollow
+from safe_io import fsync_dir, read_regular_nofollow, fdopen_owned
 
 FORMAT = "mcs-repair/1"
 STAGES = ("backup", "audit", "coverage", "reconcile", "supplement", "artifacts", "rollup")
@@ -351,7 +351,7 @@ def save_new(path: str | Path, value) -> None:
     fd, temporary = tempfile.mkstemp(prefix=".repair-", dir=path.parent)
     published = False
     try:
-        with os.fdopen(fd, "wb") as stream:
+        with fdopen_owned(fd, "wb") as stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())

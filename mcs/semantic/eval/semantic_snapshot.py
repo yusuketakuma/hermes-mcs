@@ -1,6 +1,5 @@
 """Run sealed private snapshot inputs locally and export only aggregate evaluation reports."""
 from __future__ import annotations
-import extract_validation
 
 import argparse
 import copy
@@ -16,6 +15,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import _mcs_path  # noqa: F401
+import extract_validation
 
 from mcs_util import payload_hash
 from semantic_candidate import candidate_fingerprint, metrics_only, strict_json
@@ -146,9 +146,7 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
             return response.get('text')
         facts, documents = [], []
         arms = {}
-        prior_target = getattr(extract_llm._CALL_NOTES, 'target', None)
-        try:
-            extract_llm._CALL_NOTES.target = (endpoint, model)
+        with extract_llm.pin_target((endpoint, model)):
             for enabled in (False, True):
                 arm_cfg = copy.deepcopy(cfg)
                 arm_cfg.setdefault('extract', {})['patient_state_context'] = enabled
@@ -164,8 +162,6 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
                     outputs.append(result if isinstance(result, dict) else None)
                 arms['on' if enabled else 'off'] = {
                     'fingerprint': candidate_fingerprint(arm_cfg), 'outputs': outputs}
-        finally:
-            extract_llm._CALL_NOTES.target = prior_target
         started = time.monotonic()
         for message_index, msg in enumerate(selected_messages):
             member = {'project_id': record['project_id'], 'message_id': msg['message_id'],

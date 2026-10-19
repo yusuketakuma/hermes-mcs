@@ -352,7 +352,6 @@ def _hold_projects(db, hold, card, events) -> list:
 
 def _card_resolution(view, settings, identity, payload):
     """Derive recovery scope from the stored render/hold, never native input."""
-    import notify_cards
     import notify_recovery
     import notify_scope
     db = view.db
@@ -366,7 +365,7 @@ def _card_resolution(view, settings, identity, payload):
     if render is None and hold is None:
         return "delivery_not_found"
     if render:
-        scope = notify_cards.stored_scope(render)
+        scope = notify_scope.stored_scope(render)
     else:
         try:
             scope = json.loads(hold["scope_json"] or "{}")
@@ -403,7 +402,7 @@ def _card_resolution(view, settings, identity, payload):
         if key in payload and payload[key] != value:
             return "scope_mismatch"
         payload[key] = value
-    payload["version"] = notify_cards.TRANSPORT_VERSIONS[transport]
+    payload["version"] = notify_scope.TRANSPORT_VERSIONS[transport]
     return None
 
 

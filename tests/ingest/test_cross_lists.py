@@ -1,4 +1,5 @@
 """Completely synthetic cross-list replies at the real worker HTTP opening boundary."""
+import writer_lock
 import mcs_payload
 import io
 import json
@@ -214,7 +215,7 @@ def test_optional_metadata_errors_do_not_destroy_body_or_invent_absence(replay):
 
 def test_deadline_is_absolute_and_restored_without_sleep(replay, monkeypatch):
     clock = {"now": 100.0}
-    monkeypatch.setattr("cross_lists.time.monotonic", lambda: clock["now"])
+    monkeypatch.setattr("mcs_adapter.time.monotonic", lambda: clock["now"])
     client, pending, calls = replay(
         [page([message()], has_next=True)], on_open=lambda: clock.update(now=103.0))
     client.set_deadline(110.0)
@@ -311,7 +312,7 @@ def test_cli_busy_lock_never_opens_writer_or_adapter(store, tmp_path, monkeypatc
     import cross_lists
     import ledger
 
-    lock_fd = mcs_util.acquire_run_lock(str(tmp_path / "run.lock"))
+    lock_fd = writer_lock.acquire_run_lock(str(tmp_path / "run.lock"))
     assert lock_fd is not None
     def forbidden(*args, **kwargs):
         pytest.fail("writer and adapter must not be opened while lock is busy")

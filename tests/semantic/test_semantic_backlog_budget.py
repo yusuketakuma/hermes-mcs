@@ -4,6 +4,7 @@ and leave a diagnosable run record (2026-10-09: run_lock_lost timeouts
 left jobs untouched and restarted the resident while nothing completed).
 
 Synthetic only: temp ledger, stub model, no services."""
+import writer_lock
 import semantic_policy
 import semantic_runtime
 import semantic_transport
@@ -15,7 +16,6 @@ import pytest
 
 import extract_llm
 import local_llm
-import mcs_util
 import run_check
 import semantic
 import semantic_drain
@@ -27,7 +27,7 @@ def test_backlog_reacquire_outwaits_a_whole_tick():
     RUN_DEADLINE_S; a shorter reacquire bound discards finished work."""
     assert semantic_drain.RUN_LOCK_REACQUIRE_S >= (
         run_check.RUN_DEADLINE_S + run_check.LOCK_WAIT_S)
-    assert semantic_drain.RUN_LOCK_REACQUIRE_S > mcs_util.RUN_LOCK_REACQUIRE_S
+    assert semantic_drain.RUN_LOCK_REACQUIRE_S > writer_lock.RUN_LOCK_REACQUIRE_S
 
 
 @pytest.mark.parametrize("lane,expected", [("backlog", "tick"), ("realtime", None)])
@@ -42,7 +42,7 @@ def test_only_the_backlog_lane_passes_the_long_reacquire_bound(
         calls.append((wait_s, deadline))
         yield
 
-    monkeypatch.setattr(mcs_util, "unlocked_transport", recorder)
+    monkeypatch.setattr(writer_lock, "unlocked_transport", recorder)
     db = _seeded(tmp_path)
     deadline = time.monotonic() + 300
     try:
@@ -67,44 +67,49 @@ def test_only_the_backlog_lane_passes_the_long_reacquire_bound(
 @pytest.fixture
 def held_lock(tmp_path, monkeypatch):
     """Our fd plus a second holder, as when the tick owns the run lock."""
-    monkeypatch.setattr(mcs_util, "code_stamp", lambda: 1)
-    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: 1)
+    monkeypatch.setattr(writer_lock, "HOME", str(tmp_path))
     (tmp_path / "data").mkdir(exist_ok=True)
-    monkeypatch.setattr(mcs_util, "RUN_LOCK_POLL_S", 0.0)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_POLL_S", 0.0)
     path = str(tmp_path / "run.lock")
-    ours = mcs_util.acquire_run_lock(path)
+    ours = writer_lock.acquire_run_lock(path)
     yield ours, path
     os.close(ours)
 
 
-class _Ledger:
-    class db:
-        in_transaction = False
+@pytest.fixture
+def connection():
+    import sqlite3
+    db = sqlite3.connect(":memory:")
+    try:
+        yield db
+    finally:
+        db.close()
 
 
-def test_reacquire_never_waits_past_the_caller_deadline(held_lock, monkeypatch):
+def test_reacquire_never_waits_past_the_caller_deadline(held_lock, monkeypatch, connection):
     ours, path = held_lock
     clock = [1000.0]
-    monkeypatch.setattr(mcs_util.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(mcs_util.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + 1))
+    monkeypatch.setattr(writer_lock.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(writer_lock.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + 1))
     other = []
-    with pytest.raises(mcs_util.RunLockLost) as lost:
-        with mcs_util.unlocked_transport(_Ledger(), ours, wait_s=600, deadline=1005.0):
-            other.append(mcs_util.acquire_run_lock(path))   # the tick takes it
+    with pytest.raises(writer_lock.RunLockLost) as lost:
+        with writer_lock.unlocked_transport(connection, ours, wait_s=600, deadline=1005.0):
+            other.append(writer_lock.acquire_run_lock(path))   # the tick takes it
     os.close(other[0])
     assert lost.value.held is False and lost.value.updated is False
     assert clock[0] == pytest.approx(1005.0, abs=1.0)   # the deadline, not wait_s
 
 
-def test_updater_during_an_expiring_wait_is_reported(held_lock, monkeypatch):
+def test_updater_during_an_expiring_wait_is_reported(held_lock, monkeypatch, connection):
     ours, path = held_lock
-    monkeypatch.setattr(mcs_util, "RUN_LOCK_REACQUIRE_S", 0.0)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_REACQUIRE_S", 0.0)
     other = []
     stamps = iter([1, 2, 2])
-    monkeypatch.setattr(mcs_util, "code_stamp", lambda: next(stamps))
-    with pytest.raises(mcs_util.RunLockLost) as lost:
-        with mcs_util.unlocked_transport(_Ledger(), ours):
-            other.append(mcs_util.acquire_run_lock(path))
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: next(stamps))
+    with pytest.raises(writer_lock.RunLockLost) as lost:
+        with writer_lock.unlocked_transport(connection, ours):
+            other.append(writer_lock.acquire_run_lock(path))
     os.close(other[0])
     assert lost.value.held is False and lost.value.updated is True
     assert str(lost.value) == "run_lock_timeout_updated"
@@ -156,7 +161,7 @@ def test_second_worker_runs_semantic_on_its_own_slot(monkeypatch, tmp_path, lane
     seen = []
     lock = str(tmp_path / "run.lock")
     monkeypatch.setattr(extract_llm, "acquire_run_lock",
-                        lambda *a, **k: mcs_util.acquire_run_lock(lock))
+                        lambda *a, **k: writer_lock.acquire_run_lock(lock))
 
     def run_due(*a, **k):
         seen.append(local_llm.request_slot())
@@ -177,7 +182,7 @@ def test_direct_background_pass_keeps_the_default_lane(monkeypatch, tmp_path):
     seen = []
     lock = str(tmp_path / "run.lock")
     monkeypatch.setattr(extract_llm, "acquire_run_lock",
-                        lambda *a, **k: mcs_util.acquire_run_lock(lock))
+                        lambda *a, **k: writer_lock.acquire_run_lock(lock))
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.setattr(drain, "run_due", lambda *a, **k: seen.append(
@@ -353,9 +358,9 @@ def test_a_lifted_call_whose_lock_is_not_retaken_keeps_its_attempt(tmp_path, mon
     @contextmanager
     def lost(ledger, lock_fd, wait_s=None, deadline=None):
         yield
-        raise mcs_util.RunLockLost(held=False)
+        raise writer_lock.RunLockLost(held=False)
 
-    monkeypatch.setattr(mcs_util, "unlocked_transport", lost)
+    monkeypatch.setattr(writer_lock, "unlocked_transport", lost)
     db = _seeded(tmp_path)
     try:
         before = _result_rows(db)

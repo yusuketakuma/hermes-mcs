@@ -16,7 +16,7 @@ def test_native_alert_only_posts_in_verified_original_thread(fault, kind):
         client = FakeClient()
         sender = SlackCardAdapter(SimpleNamespace(client=client),
             team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
-            channel_id=SCOPE["channel_id"], profile="cco", allowed_user_ids={"U_SYNTHETIC"})
+            channel_id=SCOPE["channel_id"], profile="cco")
         assert await sender.bind()
         spec = _spec(text="[MCS] 完全合成のアラート")
         spec["op"] = "notice" if kind == "notice" else "create"
@@ -63,7 +63,7 @@ def test_slack_thread_root_is_verified_with_bounded_channel_history():
         client.conversations_history = history
         sender = SlackCardAdapter(SimpleNamespace(client=client),
             team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
-            channel_id=SCOPE["channel_id"], profile="cco", allowed_user_ids={"U_SYNTHETIC"})
+            channel_id=SCOPE["channel_id"], profile="cco")
         assert await sender.bind()
         spec = _spec()
         spec["op"] = "notice"
@@ -82,7 +82,7 @@ def test_signal_revoke_deletes_only_sealed_reply_without_reading_or_resending_so
         client = FakeClient()
         sender = SlackCardAdapter(SimpleNamespace(client=client),
             team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
-            channel_id=SCOPE["channel_id"], profile="cco", allowed_user_ids={"U_SYNTHETIC"})
+            channel_id=SCOPE["channel_id"], profile="cco")
         assert await sender.bind()
         calls = []
         async def denied_read(**kwargs):
@@ -110,7 +110,7 @@ def test_signal_revoke_rejects_bad_spec_before_delete(fault):
         client = FakeClient()
         sender = SlackCardAdapter(SimpleNamespace(client=client),
             team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
-            channel_id=SCOPE["channel_id"], profile="cco", allowed_user_ids={"U_SYNTHETIC"})
+            channel_id=SCOPE["channel_id"], profile="cco")
         assert await sender.bind()
         spec = _spec()
         spec.update(op="revoke", kind="signal")

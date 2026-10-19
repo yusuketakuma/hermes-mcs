@@ -33,7 +33,7 @@ def _real_client(calls):
                                      "合成 患者: 合成本文\x07ベル / 合成さん"], ids=["clean", "bel"])
 def test_card_with_control_char_in_preview_is_still_delivered(tmp_path, PREVIEW):
     # A staff post body containing a non-whitespace C0 control (BEL) survives
-    # notify_render._inline / text.notification_preview (" ".join(split()))
+    # notify_render.inline_text / text.notification_preview (" ".join(split()))
     # and becomes the flex altText, which client._validate_content rejects.
     w = world(tmp_path)
     calls = []

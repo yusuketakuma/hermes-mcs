@@ -174,9 +174,9 @@ def test_pair_ids_must_be_positive_ints_not_bools(ids):
                "trigger_message_id": ids[1], "trigger_revision": "rev", "code": CODE}
     meta = {"policy_fingerprint": "p", "retry_scope": "s",
             "registry": jev.REGISTRY_VERSION}
-    assert semantic_loops._rejected_pair(receipt, meta, "p", "s") is None
+    assert semantic_loops.rejected_relation_pair(receipt, meta, "p", "s") is None
     receipt.update(loop_artifact_id=1, trigger_message_id=2)
-    assert semantic_loops._rejected_pair(receipt, meta, "p", "s") == ((1, 2, "rev"), CODE)
+    assert semantic_loops.rejected_relation_pair(receipt, meta, "p", "s") == ((1, 2, "rev"), CODE)
 
 
 

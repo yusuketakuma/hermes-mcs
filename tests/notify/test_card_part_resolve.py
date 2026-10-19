@@ -5,7 +5,7 @@ import json
 import pytest
 
 import mcs_requests
-import notify_cards as cards
+import notify_spool
 import notify_transport as transport
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _latest_render,
                             _part_receipt, _receipt, _seed_thread, _uuid, led as led)
@@ -54,7 +54,7 @@ def test_stale_plan_never_settles_a_part(led, field, value):
 
 def journal(led, req, result, remote_id=None):
     from pathlib import Path
-    root = Path(cards.notify_dirs(cards.data_root(led))["discord_state"])
+    root = Path(notify_spool.notify_dirs(notify_spool.data_root(led))["discord_state"])
     (root / "journal-synthetic.jsonl").write_text(json.dumps({
         "attempt_id": req["attempt_id"], "delivery_id": req["delivery_id"],
         "part_id": req["part_id"], "phase": "result", "result": result,
@@ -113,7 +113,7 @@ def test_command_intake_and_operator_receipt_scope(led, monkeypatch):
     import mcs_view
     req = prepare(led)
     monkeypatch.setattr(mcs_util, "load_config", lambda path: CFG)
-    command_dir = Path(cards.data_root(led)) / "cmd"
+    command_dir = Path(notify_spool.data_root(led)) / "cmd"
     command_dir.mkdir()
     command = command_dir / "synthetic-resolution.json"
     command.write_text(json.dumps(req))
@@ -168,7 +168,7 @@ def test_lineworks_part_evidence_limit_matches_proof(led, proof):
         req["evidence"]["duplicate_risk_accepted"] = True
     else:
         from pathlib import Path
-        root = Path(cards.notify_dirs(cards.data_root(led))["lineworks_state"])
+        root = Path(notify_spool.notify_dirs(notify_spool.data_root(led))["lineworks_state"])
         (root / "journal-synthetic.jsonl").write_text(json.dumps({
             "attempt_id": req["attempt_id"], "delivery_id": req["delivery_id"],
             "part_id": req["part_id"], "phase": "result", "result": "not_sent"}) + "\n")
@@ -194,7 +194,7 @@ def test_settlement_rejection_rolls_back_partial_changes_and_consumes_command(le
 
     monkeypatch.setattr(transport, "settle_part_receipt", reject)
     monkeypatch.setattr(mcs_util, "load_config", lambda path: CFG)
-    command_dir = Path(cards.data_root(led)) / "cmd"
+    command_dir = Path(notify_spool.data_root(led)) / "cmd"
     command_dir.mkdir()
     command = command_dir / "synthetic-resolution.json"
     command.write_text(json.dumps(req))

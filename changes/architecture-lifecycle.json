@@ -12,7 +12,8 @@
     "独立動作でログ用FDからstreamへの受渡しに失敗してもFDを閉じてから再起動を要求します。更新journalの読取りも共通のnofollow検証に揃えました。",
     "処理状況の観測から評価専用moduleへの依存を除き、既存の統計計算を共有します。",
     "導入・更新・復旧監視のPython診断をruntime_inspectionに集約し、明示した実行ファイルと配備先を毎回調べるよう整理しました。installerの復旧診断も共有する公開実装へ揃え、設定変更・サービス適用・更新journalの所有者と安全条件を維持します。",
-    "更新に必要なGit探索、所有する子プロセスの停止・回収、承認receipt確定後の切り離し起動をCLIから分離しました。環境変数の除去規則を共有し、同一transactionのreceipt・復元同意・更新journalと旧Pythonでの移行経路を維持します。"
+    "更新に必要なGit探索、所有する子プロセスの停止・回収、承認receipt確定後の切り離し起動をCLIから分離しました。環境変数の除去規則を共有し、同一transactionのreceipt・復元同意・更新journalと旧Pythonでの移行経路を維持します。",
+    "中断復旧のjournal・HEAD位置と再開経路の有限判断をupdate_policyに集約しました。停止markerの再読、GitとDBの確認、同意・復元・サービス再開とjournal保存は従来の時点と順序を維持します。"
   ],
   "refs": [
     "mcs/core/mcs_config.py",

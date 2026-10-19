@@ -183,3 +183,20 @@ def test_published_context_still_requires_explicit_project_binding(context_db, k
     row = read_model.read_model(db.db, scope="detail", project_id=1)["records"][0]
     assert row["extraction"][kind]["state"] == "pending"
     assert row["patient_context"] == []
+
+
+def test_source_reader_has_no_display_dependency_or_reference_refresh(context_db, monkeypatch):
+    import mcs_queries
+    db = context_db
+    expected = _seed_context(db)
+    message = dict(db.db.execute("SELECT * FROM messages WHERE project_id=1 AND message_id=1").fetchone())
+    monkeypatch.setattr(read_model, "_context_references", lambda *args: pytest.fail("raw read decorated UI"))
+    monkeypatch.setattr(read_model, "message_patient_context", lambda *args: pytest.fail("raw read used view"))
+    actual = mcs_queries.source_patient_context(db.db, message)
+    assert actual == expected
+    assert all("source" not in item for item in actual)
+    assert not db.db.in_transaction
+    # Explicit source invalidation still rejects the same original artifacts.
+    db.db.execute("UPDATE artifacts SET meta=? WHERE message_id=1", (json.dumps({"hash": message["content_hash"], "invalidated": True}),))
+    db.db.commit()
+    assert mcs_queries.source_patient_context(db.db, message) == []

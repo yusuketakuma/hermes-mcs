@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import notify_cards
+import notify_spool
 import notify_cmds
 
 from adapters.common import envelopes, registry, worker
@@ -50,14 +50,14 @@ def _receipt_req(render, n, *, attempt=9000, result="not_sent"):
 
 def _put(queue, name, req):
     assert notify_cmds.validate_int(req) is None
-    notify_cards.publish_file(str(queue), name, json.dumps(req).encode())
+    notify_spool.publish_file(str(queue), name, json.dumps(req).encode())
 
 
 def test_recovery_receipt_does_not_orphan_a_begin_outside_the_512_name_window(
         led, tmp_path, monkeypatch):
     root = str(tmp_path / "data")
-    notify_cards.ensure_dirs(root)
-    notify_cards.publish_flags(CFG, root)
+    notify_spool.ensure_dirs(root)
+    notify_spool.publish_flags(CFG, root)
     _seed_thread(led)
     assert _dispatch(led, _intent(led))["dispatched"]
     state = str(Path(root) / "discord_state")
@@ -179,7 +179,7 @@ def test_result_publication_failure_keeps_dispatch_bounded_and_retry_idempotent(
         calls.append(args[1]["command_id"])
         return dispatch(*args, **kwargs)
 
-    publish = notify_cards.publish_file
+    publish = notify_spool.publish_file
 
     def fail_result(directory, name, raw):
         if Path(directory).name == "cmd_results":
@@ -187,7 +187,7 @@ def test_result_publication_failure_keeps_dispatch_bounded_and_retry_idempotent(
         return publish(directory, name, raw)
 
     monkeypatch.setattr(notify_cmds, "dispatch", record_dispatch)
-    monkeypatch.setattr(notify_cards, "publish_file", fail_result)
+    monkeypatch.setattr(notify_spool, "publish_file", fail_result)
     result = {"errors": []}
     assert notify_cmds.drain_int_commands(led, result, CFG, str(root)) == 0
     assert len(calls) == 32
@@ -199,7 +199,7 @@ def test_result_publication_failure_keeps_dispatch_bounded_and_retry_idempotent(
         "SELECT command_id FROM command_receipts WHERE json_extract(receipt_json,'$.kind')='refresh'"
     )} == {_uuid(20000 + n) for n in range(1, 33)}
     render_count = led.db.execute("SELECT count(*) FROM notification_renders").fetchone()[0]
-    monkeypatch.setattr(notify_cards, "publish_file", publish)
+    monkeypatch.setattr(notify_spool, "publish_file", publish)
     calls.clear()
     assert notify_cmds.drain_int_commands(led, {}, CFG, str(root)) == 32
     assert len(calls) == 32
@@ -249,14 +249,14 @@ def test_cursor_publication_failure_is_reported_without_changing_receipts(
     root = tmp_path / "data"
     queue = root / "cmd_int"
     _put(queue, "a.json", _begin_req(render))
-    publish = notify_cards.publish_file
+    publish = notify_spool.publish_file
 
     def fail_cursor(directory, name, raw):
         if name == notify_cmds._DRAIN_CURSOR:
             raise OSError("synthetic-cursor-write")
         return publish(directory, name, raw)
 
-    monkeypatch.setattr(notify_cards, "publish_file", fail_cursor)
+    monkeypatch.setattr(notify_spool, "publish_file", fail_cursor)
     result = {"errors": []}
     assert notify_cmds.drain_int_commands(led, result, CFG, str(root)) == 1
     assert result["errors"] == ["cmd_int_cursor_publish_failed:OSError"]

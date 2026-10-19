@@ -261,7 +261,7 @@ def _rates(db, cfg, projects, now, checkpoint):
 
 def collection_progress(db, *, now, checkpoint=lambda: None):
     """Count recorded coverage gaps; no gap does not prove complete history."""
-    from collection_stages import COVERAGE_STALL_S
+    from health_policy import COVERAGE_STALL_S
     if _time(now) is None:
         raise ValueError("observation_time_invalid")
     counts = {}

@@ -460,7 +460,7 @@ def test_quality_finishing_past_the_deadline_is_not_complete(tmp_path, monkeypat
         db.close()
     import semantic_metrics
     clock = [0]
-    real = semantic_metrics._current
+    real = semantic_metrics.current_artifact
     looked_up = []
 
     def last_lookup(*a, **kw):
@@ -471,7 +471,7 @@ def test_quality_finishing_past_the_deadline_is_not_complete(tmp_path, monkeypat
         return result
 
     monkeypatch.setattr(semantic_observe.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(semantic_metrics, "_current", last_lookup)
+    monkeypatch.setattr(semantic_metrics, "current_artifact", last_lookup)
     out = semantic_observe.observe(path, cfg=_cfg())
     assert looked_up
     assert out["observation"]["status"] == "partial"

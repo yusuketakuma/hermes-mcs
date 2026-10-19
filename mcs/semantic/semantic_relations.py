@@ -43,7 +43,6 @@ _ACTION_SUPERSESSION = {
     ("planned", "start"), ("ordered", "start"), ("stop", "restart"),
 }
 
-_ENTITY_TOKEN = re.compile(r"[ァ-ヶー]{2,}|[A-Za-z0-9]{2,}|[一-龥々]{2,}")
 
 # Generic action/administration words are CJK runs too, but they name
 # what happened, not which entity — "アムロジピンを投与" and
@@ -78,19 +77,15 @@ def _norm(text) -> str:
     return sf.normalize_name(text or "")
 
 
-def _entity_tokens(statement: str) -> set:
-    """Significant tokens standing in for entity identity without NLP —
-    katakana runs (drug names), alphanumerics, and CJK compounds."""
-    return {_norm(m.group(0)) for m in _ENTITY_TOKEN.finditer(statement or "")}
 
 
 def _entity_overlap(left: dict, right: dict, token_cache=None) -> set:
     def tokens(fact):
         statement = fact.get("statement")
         if token_cache is None:
-            return _entity_tokens(statement)
+            return sf.entity_tokens(statement)
         if statement not in token_cache:
-            token_cache[statement] = _entity_tokens(statement)
+            token_cache[statement] = sf.entity_tokens(statement)
         return token_cache[statement]
 
     shared = tokens(left) & tokens(right)

@@ -6,7 +6,8 @@ import re
 
 from adapters.common.spec import PRIMARY_ACTIONS, validate as validate_display
 from adapters.common.text import notification_preview
-from notify_render import display_text, lineworks_card_split
+from notify_render import display_text
+from present_lineworks import card_split
 from notify_parts import split_body_chunks
 
 SCHEMA = "mcs-card-render/v3"
@@ -34,7 +35,7 @@ def validate(spec):
         return spec
     groups = {part.get("name") for part in entries
               if part.get("kind") == "body_part"}
-    rest = lineworks_card_split(display_text(spec["parts"]))[1]
+    rest = card_split(display_text(spec["parts"]))[1]
     if rest and "display#1" not in groups:
         raise ValueError("lineworks_display_overflow_missing")
     expected = split_body_chunks(rest)
@@ -111,5 +112,5 @@ def action_buttons(spec):
 def render(spec):
     validate(spec)
     # The runner seals the remaining display into durable display#k parts.
-    return buttons(lineworks_card_split(display_text(spec["parts"]))[0],
+    return buttons(card_split(display_text(spec["parts"]))[0],
                    action_buttons(spec)[:10], preview=notification_preview(spec["parts"], 400))

@@ -1,6 +1,7 @@
 """Extraction retries a result whose per-write lock wait timed out,
 carries it across resident run_pending calls, and the --lane CLI maps
 lanes to wire slots."""
+import writer_lock
 import json
 import os
 import time
@@ -399,20 +400,19 @@ def test_context_lane_normal_settlement_preserves_blocked_result(tmp_path, monke
 def test_update_stop_does_not_commit_old_carried_result(tmp_path, monkeypatch):
     """An updater fence seen mid-pass exits without writing the carried
     result under old code; the claim is released for the new resident."""
-    import mcs_util
     db = _ledger(tmp_path)
     state, carry = _carry_one(db, monkeypatch, tmp_path)
     state["blocked"] = 0
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "2", "--semantic", "--stop-after", "10"])
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: {
         "done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry})
 
     def updated(*args):
-        monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 124))
+        monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
         return {"run_lock_lost": "updated"}
     monkeypatch.setattr(extract_llm, "_background_semantic", updated)
     assert extract_llm.main() == 0
@@ -425,18 +425,17 @@ def test_context_lane_checks_update_fence_before_settling_carry(tmp_path, monkey
     """Lane 3 compares the updater fence before its pre-context settle, so
     an update between passes never lets old code write the carried
     result (Codex L4 follow-up)."""
-    import mcs_util
     db = _ledger(tmp_path)
     state, carry = _carry_one(db, monkeypatch, tmp_path)
     state["blocked"] = 0
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "10"])
 
     def run(*a, **kw):
-        monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 124))
+        monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
         return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
     monkeypatch.setattr(extract_llm, "run_pending", run)
     monkeypatch.setattr(extract_llm, "_background_nightly",
@@ -451,14 +450,13 @@ def test_lane3_rechecks_update_after_acquiring_settlement_lock(tmp_path, monkeyp
     """An updater that completes while the pre-context settlement waits
     for run.lock is seen under the lock: the carried result is released,
     never written by old code (Codex cc61f4b6 race)."""
-    import mcs_util
     db = _ledger(tmp_path)
     _state, carry = _carry_one(db, monkeypatch, tmp_path)
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *args: db)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
     generation = [123]
-    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, generation[0]))
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, generation[0]))
     monkeypatch.setattr(extract_llm.sys, "argv", [
         "extract_llm", "--all", "--lane", "3", "--stop-after", "10"])
     armed = [False]
@@ -484,7 +482,7 @@ def test_lane3_rechecks_update_after_acquiring_settlement_lock(tmp_path, monkeyp
     def nightly(ledger, initial, stop):
         return {"status": "off", "done": 0, **(
             {"run_lock_lost": "updated"}
-            if mcs_util._updater_state() != initial else {})}
+            if writer_lock.updater_state() != initial else {})}
     monkeypatch.setattr(extract_llm, "_background_nightly", nightly)
     try:
         assert extract_llm.main() == 0
@@ -523,13 +521,12 @@ def test_lane3_survives_transient_settle_error(monkeypatch, capsys):
     """A sqlite error from the pre-context settle is logged as
     extract_loop_error and the resident keeps running."""
     import sqlite3
-    import mcs_util
     now = [0.0]
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", [
         "extract_llm", "--all", "--lane", "3", "--stop-after", "100"])
     monkeypatch.setattr(extract_llm, "Ledger",

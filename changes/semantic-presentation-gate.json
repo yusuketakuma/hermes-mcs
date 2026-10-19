@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "要約表示と送信直前の安全確認の責務を整理",
+  "summary": "通知の表示・分割処理と、現在の設定・元投稿・要約世代を確認する処理の正本を分離しました。通知内容、分割上限、送信前と各分割送信時の再確認、結果不明時の保留条件は変わりません。",
+  "upgrade": "設定変更は不要です。候補の定義に含まれる要約表示処理の正本が変わるため、以前の候補に結び付いた評価・承認は新しい候補へ引き継ぎません。必要な合成検証・通常の承認手順を維持してください。",
+  "refs": [
+    "mcs/semantic/semantic_render.py",
+    "mcs/semantic/semantic_send_gate.py",
+    "mcs/notify/notify_flush.py"
+  ],
+  "details": [
+    "要約表示と根拠付き分割はsemantic_renderへ、各送信前の現行性・権限判定はsemantic_send_gateへ揃え、配送統括は現在の設定を都度渡す。"
+  ]
+}

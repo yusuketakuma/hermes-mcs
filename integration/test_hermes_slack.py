@@ -248,7 +248,7 @@ def test_connected_secondary_sdk_client_posts_card_without_retrying(tmp_path, mo
         native_adapter._app, native_adapter=native_adapter,
         team_id="T_SYNTHETIC", application_id="A_SYNTHETIC",
         channel_id="C_SYNTHETIC", profile="cco",
-        allowed_user_ids={"U_OPERATOR"},
+
     )
 
     async def send():
@@ -334,8 +334,7 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
     adapter = SlackCardAdapter(
         native_adapter._app, native_adapter=native_adapter,
         team_id="T_SYNTHETIC", application_id="A_SYNTHETIC",
-        channel_id="C_SYNTHETIC", profile="cco",
-        allowed_user_ids={"U_OPERATOR"})
+        channel_id="C_SYNTHETIC", profile="cco")
 
     scope = {"transport": "slack", "profile": "cco",
              "application_id": "A_SYNTHETIC", "team_id": "T_SYNTHETIC",
@@ -478,8 +477,7 @@ def test_real_sdk_broadcasts_a_new_post_on_an_existing_card(tmp_path, monkeypatc
     adapter = SlackCardAdapter(
         native_adapter._app, native_adapter=native_adapter,
         team_id="T_SYNTHETIC", application_id="A_SYNTHETIC",
-        channel_id="C_SYNTHETIC", profile="cco",
-        allowed_user_ids={"U_OPERATOR"})
+        channel_id="C_SYNTHETIC", profile="cco")
     scope = {"transport": "slack", "profile": "cco",
              "application_id": "A_SYNTHETIC", "team_id": "T_SYNTHETIC",
              "channel_id": "C_SYNTHETIC"}

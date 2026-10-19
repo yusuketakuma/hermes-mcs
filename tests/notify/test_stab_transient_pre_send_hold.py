@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import notify_flush
+import notify_sender
 from ledger import Ledger
 
 STANDALONE = [sys.executable, "/synthetic/mcs_standalone/__main__.py", "send", "--to", "slack:C1"]
@@ -14,10 +15,10 @@ LINEWORKS = [sys.executable, "/synthetic/lineworks_adapter/__main__.py", "send"]
 
 def _flush_once(tmp_path, monkeypatch, argv, stderr, attempts, returncode=75):
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
-    monkeypatch.setattr(notify_flush, "_target", lambda *a: "slack:C1")
-    monkeypatch.setattr(notify_flush, "_send_argv", lambda *a: list(argv))
+    monkeypatch.setattr(notify_sender, 'target', lambda *a: "slack:C1")
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *a: list(argv))
     monkeypatch.setattr(notify_flush, "_format_event", lambda *a: ("合成通知", []))
-    monkeypatch.setattr(notify_flush.subprocess, "run", lambda *a, **k: SimpleNamespace(
+    monkeypatch.setattr(notify_sender.subprocess, "run", lambda *a, **k: SimpleNamespace(
         returncode=returncode, stdout="", stderr=stderr))
     (tmp_path / "data").mkdir(exist_ok=True)
     led = Ledger(str(tmp_path / "data" / "ledger.db"))
@@ -34,14 +35,14 @@ def _flush_once(tmp_path, monkeypatch, argv, stderr, attempts, returncode=75):
 
 
 def test_sender_code_is_last_stderr_token(monkeypatch):
-    monkeypatch.setattr(notify_flush.subprocess, "run", lambda *a, **k: SimpleNamespace(
+    monkeypatch.setattr(notify_sender.subprocess, "run", lambda *a, **k: SimpleNamespace(
         returncode=75, stdout="", stderr="log line\nnot_sent delivery_not_accepted\n"))
-    with pytest.raises(notify_flush._SendFailed) as caught:
-        notify_flush._send(STANDALONE, "合成通知")
+    with pytest.raises(notify_sender.SendFailed) as caught:
+        notify_sender.send(STANDALONE, "合成通知")
     assert caught.value.code == "delivery_not_accepted"
     assert notify_flush._transient_pre_send(caught.value)
-    assert not notify_flush._transient_pre_send(notify_flush._SendFailed("attachment_unavailable"))
-    assert not notify_flush._transient_pre_send(notify_flush._SendBudget("send_budget_insufficient"))
+    assert not notify_flush._transient_pre_send(notify_sender.SendFailed("attachment_unavailable"))
+    assert not notify_flush._transient_pre_send(notify_sender.SendBudget("send_budget_insufficient"))
 
 
 def test_failing_for_is_a_lower_bound_of_the_backoff_schedule():

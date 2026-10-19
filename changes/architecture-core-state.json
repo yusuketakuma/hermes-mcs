@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "AIの稼働状態と本人判定の共有処理を整理",
+  "summary": "AIの利用可否・障害記録、ファイルの安全な公開、本人情報の参照をそれぞれ一つの実装へ整理しました。障害時の待機時間、空き容量の基準、本人判定、通知・承認条件は維持します。",
+  "upgrade": "稼働状態ファイルの移動や追加設定は不要です。候補を識別するコード情報が更新されるため、既存の候補承認を新コードへ流用しません。canonical抽出を使う場合は、通常の合成評価と人承認を新候補について再確認してください。実機への適用や再起動は通常の更新手順で行います。",
+  "details": [
+    "LLMの障害記録・circuit・disk guardはllm_availability、ファイル公開はsafe_io、検索SQL関数の接続登録はmcs_queriesを正本とします。DB接続は呼出元から借用し、接続の終了やtransactionの確定を行いません。",
+    "本人情報の公開参照APIをself_identityへ揃え、signals経由の不要な再exportを除去します。ID不明・曖昧な本人情報、明示した空リストと未設定の区別は維持します。",
+    "候補identityは移動した定義moduleとloaded sourceの両方を含みます。古いworkerの識別子を最新のdisk内容へ置換せず、held_priorによる原文の否定・主体等の保護も維持します。",
+    "writer lockと更新世代fenceは今回の可用性ownerへ混ぜず、既存の処理・例外境界を維持します。"
+  ],
+  "refs": [
+    "mcs/llm/llm_availability.py",
+    "mcs/core/safe_io.py",
+    "mcs/core/self_identity.py"
+  ]
+}

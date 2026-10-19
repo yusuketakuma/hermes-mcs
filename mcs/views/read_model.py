@@ -32,95 +32,23 @@ from __future__ import annotations
 import json
 import math
 from datetime import datetime
-from mcs_queries import ELIGIBLE_MESSAGE, JST
-from semantic_projection import PROJECTION_VERSION
+from mcs_queries import ELIGIBLE_MESSAGE, JST, EXTRACTION_KINDS
+from mcs_queries import extraction_kind_map, source_patient_context
 from snapshot_access import snapshot_meta, table_exists
 from registered_data import registered_data
 
-from patient_context import context_items, extract_context, merged_context, reference_item
+from patient_context import context_items, extract_context, reference_item
 
 CONTRACT = "mcs-read-model/1"
 SCOPES = ("aggregate", "detail")
-EXTRACTION_KINDS = ("extract_v1", "extract_llm", "canonical_projection",
-                    "semantic_facts_v4")
 # legacy rows with no project_id bind through the globally unique message ID
 _LEGACY_UNSCOPED_KINDS = ("extract_v1", "extract_llm")
 _KINDS_IN = ",".join("?" * len(EXTRACTION_KINDS))
 _LEGACY_IN = ",".join("?" * len(_LEGACY_UNSCOPED_KINDS))
 
 
-def _canonical_shape(content: dict) -> bool:
-    for key, fields in (
-            ("canonical_facts", ("fact_id", "kind", "validation_status",
-                                 "workflow_status", "statement", "evidence_quote")),
-            ("canonical_relations", ("left_fact_id", "right_fact_id", "type", "kind"))):
-        items = content.get(key, [])
-        if not isinstance(items, list):
-            return False
-        for item in items:
-            if not isinstance(item, dict) or any(
-                    item.get(field) is not None and not isinstance(item[field], str)
-                    for field in fields):
-                return False
-            if key == "canonical_facts":
-                ids = item.get("evidence_ids", [])
-                if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
-                    return False
-    return True
 
 
-def _kind_state(rows, content_hash: str, *, engine_version=None,
-                canonical=False) -> dict:
-    """Classify one message's artifacts of one extraction kind.
-    `rows` = artifact rows (newest-first) as mappings; the first valid
-    hash-current non-invalidated row wins — an older row matching the
-    current hash legitimately becomes current again on an A→B→A edit.
-    Returns {"state", "artifact_id", "last_error"}."""
-    saw_rows = saw_stale = saw_error = False
-    current_id = None
-    current_meta = None
-    for r in rows:
-        saw_rows = True
-        try:
-            meta = json.loads(r["meta"]) if isinstance(
-                r["meta"], str) else r["meta"]
-            content = json.loads(r["content"]) if isinstance(
-                r["content"], str) else r["content"]
-        except (ValueError, TypeError, RecursionError):
-            continue
-        if not isinstance(meta, dict) or not isinstance(content, dict):
-            continue
-        if canonical and not _canonical_shape(content):
-            continue
-        if (meta.get("error") not in (None, False, 0)
-                or content.get("_error") not in (None, False, 0)):
-            saw_error = True
-            continue
-        if engine_version is not None and meta.get("engine_version") != engine_version:
-            continue
-        if canonical and meta.get("projection_version") != PROJECTION_VERSION:
-            saw_stale = True
-            continue
-        if content_hash is not None \
-                and meta.get("hash") == content_hash \
-                and meta.get("invalidated") in (None, False, 0):
-            current_id = r["artifact_id"]
-            current_meta = meta
-            break
-        saw_stale = True
-    if current_id is not None:
-        state = "current"
-    elif saw_stale:
-        state = "stale"
-    elif not saw_rows:
-        state = "pending"
-    else:
-        # rows exist but nothing classified — parse failures or
-        # error-only results are reported as unknown, never as a
-        # pretend-current read
-        state = "unknown"
-    return {"state": state, "artifact_id": current_id,
-            "last_error": saw_error, "current_meta": current_meta}
 
 
 def _message_records(db, project_id):
@@ -158,7 +86,7 @@ def _message_records(db, project_id):
         for msg in rows:
             mid = msg["message_id"]
             art_rows = arts_by_mid.get(mid, [])
-            by_kind = _kind_map(art_rows, msg["content_hash"])
+            by_kind = extraction_kind_map(art_rows, msg["content_hash"])
             if msg["body_state"] == "deleted":
                 for entry in by_kind.values():
                     if entry["state"] == "current":
@@ -174,24 +102,6 @@ def _message_records(db, project_id):
             yield rec, by_kind, art_rows
 
 
-def _kind_map(art_rows, content_hash) -> dict:
-    by_kind: dict = {}
-    for kind in EXTRACTION_KINDS:
-        kind_rows = [r for r in art_rows if r["kind"] == kind]
-        st = _kind_state(kind_rows, content_hash,
-                         engine_version=4 if kind == "semantic_facts_v4" else None,
-                         canonical=kind in ("canonical_projection", "semantic_facts_v4"))
-        entry = {"state": st["state"],
-                 "artifact_id": st["artifact_id"]}
-        if st["last_error"]:
-            entry["last_error"] = True
-        cm = st.get("current_meta") or {}
-        if cm.get("engine_version") is not None:
-            # T18: version-pinned readers can tell a v4 PASS row
-            # from a legacy current without parsing content
-            entry["engine_version"] = cm["engine_version"]
-        by_kind[kind] = entry
-    return by_kind
 
 
 def _record_state(msg, by_kind: dict) -> str:
@@ -251,49 +161,6 @@ def _fact_relations(by_kind: dict, art_rows, scope: str):
     return facts, relations
 
 
-def message_patient_context(db, message, scope="detail", *, by_kind=None, art_rows=None):
-    """Read source-bound context independently of canonical extraction precedence."""
-    if message.get("body_state") not in (None, "full"):
-        return []
-    if art_rows is None:
-        art_rows = db.execute(
-            "SELECT artifact_id,kind,content,meta FROM artifacts "
-            "WHERE (project_id=? OR (project_id IS NULL AND kind IN (" + _LEGACY_IN + ")))"
-            " AND message_id=? AND kind IN (" + _KINDS_IN + ") "
-            "ORDER BY artifact_id DESC",
-            (message["project_id"], *_LEGACY_UNSCOPED_KINDS, message["message_id"],
-             *EXTRACTION_KINDS)).fetchall()
-    if by_kind is None:
-        by_kind = _kind_map(art_rows, message["content_hash"])
-    body = message.get("body_text")
-    if body is None:
-        row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?",
-                         (message["project_id"], message["message_id"])).fetchone()
-        body = row[0] if row else None
-    if not isinstance(body, str) or not body:
-        return []
-    documents = []
-    for kind in ("extract_v1", "extract_llm"):
-        artifact_id = by_kind[kind]["artifact_id"]
-        row = next((r for r in art_rows if r["artifact_id"] == artifact_id), None)
-        documents.append(json.loads(row["content"]) if row is not None else None)
-    items = merged_context(*documents, body)
-    # A v4 worker fences legacy LLM writes; read its audited additive context.
-    for kind in ("semantic_facts_v4", "canonical_projection"):
-        entry = by_kind.get(kind, {})
-        if entry.get("state") == "current":
-            row = next((r for r in art_rows if r["artifact_id"] == entry["artifact_id"]), None)
-            if row is not None:
-                items = merged_context({"patient_context": items}, json.loads(row["content"]), body)
-            break
-    source = {key: message.get(key) for key in
-              ("project_id", "message_id", "content_hash", "posted_at_ts")}
-    if scope == "detail":
-        selected = next((row for row in art_rows
-                         if row["artifact_id"] == by_kind["extract_llm"]["artifact_id"]), None)
-        meta = selected["meta"] if selected is not None else None
-        _context_references(db, message, items, json.loads(meta) if isinstance(meta, str) else meta)
-    return _context_projection(items, scope, source)
 
 
 def _context_references(db, message, items, meta):
@@ -502,3 +369,35 @@ def read_model(db, scope: str = "aggregate", project_id=None,
         "total": total,
         "truncated": limit is not None and total > limit,
     }
+
+
+def message_patient_context(db, message, scope="detail", *, by_kind=None, art_rows=None):
+    """Decorate source-bound context for a detail or aggregate display."""
+    if message.get("body_state") not in (None, "full"):
+        return []
+    if art_rows is None:
+        art_rows = db.execute(
+            "SELECT artifact_id,kind,content,meta FROM artifacts "
+            "WHERE (project_id=? OR (project_id IS NULL AND kind IN (" + _LEGACY_IN + ")))"
+            " AND message_id=? AND kind IN (" + _KINDS_IN + ") "
+            "ORDER BY artifact_id DESC",
+            (message["project_id"], *_LEGACY_UNSCOPED_KINDS, message["message_id"],
+             *EXTRACTION_KINDS)).fetchall()
+    if by_kind is None:
+        by_kind = extraction_kind_map(art_rows, message["content_hash"])
+    body = message.get("body_text")
+    if body is None:
+        row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?",
+                         (message["project_id"], message["message_id"])).fetchone()
+        body = row[0] if row else None
+    if not isinstance(body, str) or not body:
+        return []
+    items = source_patient_context(db, {**message, "body_text": body}, by_kind=by_kind, art_rows=art_rows)
+    source = {key: message.get(key) for key in
+              ("project_id", "message_id", "content_hash", "posted_at_ts")}
+    if scope == "detail":
+        selected = next((row for row in art_rows
+                         if row["artifact_id"] == by_kind["extract_llm"]["artifact_id"]), None)
+        meta = selected["meta"] if selected is not None else None
+        _context_references(db, message, items, json.loads(meta) if isinstance(meta, str) else meta)
+    return _context_projection(items, scope, source)

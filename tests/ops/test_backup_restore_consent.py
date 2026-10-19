@@ -12,9 +12,10 @@ import pytest
 
 import ledger
 import mcs_backup as backup
+import backup_evidence
 import mcs_restore as restore
 import mcs_requests
-import notify_cards
+import notify_spool
 import notify_reconcile
 import notify_transport
 from test_mcs_backup import KEY, _create, world as world
@@ -30,13 +31,13 @@ def restored(tmp_path, monkeypatch):
         db.db.execute("UPDATE notify_outbox SET state='failed',next_try=NULL")
     db.close()
     source.chmod(0o600)
-    inventory = backup.inventory_snapshot(source)
+    inventory = backup_evidence.inventory_snapshot(source)
     digest = backup.file_sha256(source)
     medium, scratch = tmp_path / "medium", tmp_path / "scratch"
     medium.mkdir(mode=0o700)
     scratch.mkdir(mode=0o700)
     st = medium.stat()
-    policy = backup.BackupPolicy(
+    policy = backup_evidence.BackupPolicy(
         str(medium), st.st_dev, st.st_ino, str(scratch), "synthetic",
         True, True, 4, "manual", 86400, 8 * 1024 * 1024)
 
@@ -71,8 +72,8 @@ def resumed(destination, receipt):
 
 
 def held(destination):
-    assert notify_cards.restore_awaiting_consent(str(destination)) is not None
-    assert notify_cards.restore_pending(str(destination)) is not None
+    assert notify_spool.restore_awaiting_consent(str(destination)) is not None
+    assert notify_spool.restore_pending(str(destination)) is not None
     assert not restore.writers_resumed(str(destination))
 
 
@@ -85,7 +86,7 @@ def test_dedicated_consent_preserves_bytes_and_delivery_holds(restored):
     result = resumed(restored, receipt)
 
     assert result["writers_resumed"] is True
-    assert notify_cards.restore_awaiting_consent(str(restored)) is None
+    assert notify_spool.restore_awaiting_consent(str(restored)) is None
     assert backup.file_sha256(restored / "ledger.db") == original
     assert (restored / restore.MARKER).read_bytes() == marker
     with closing(sqlite3.connect(
@@ -98,7 +99,7 @@ def test_dedicated_consent_preserves_bytes_and_delivery_holds(restored):
         assert result["error"] == "denied_restore_pending"
         assert db.execute("SELECT * FROM notify_outbox").fetchall() == before
     with pytest.raises(ValueError, match="backup_restore_delivery_remains_held"):
-        notify_cards.clear_restore_pending(str(restored))
+        notify_spool.clear_restore_pending(str(restored))
 
 
 @pytest.mark.parametrize("field,value", [
@@ -171,7 +172,7 @@ def test_backup_receipt_never_authorizes_old_restore(restored, monkeypatch):
              json.dumps(approval)))
     db.close()
     monkeypatch.setattr(mcs_update, "LEDGER", str(restored / "ledger.db"))
-    assert restore_evidence.find_restore_consent({'report_id': approval['plan_sha256'], 'backup_sha256': approval['binding']['plain_sha256'], 'backup_schema': backup.inventory_snapshot(restored / 'ledger.db')['schema']}, live_path=mcs_update.LEDGER) is None
+    assert restore_evidence.find_restore_consent({'report_id': approval['plan_sha256'], 'backup_sha256': approval['binding']['plain_sha256'], 'backup_schema': backup_evidence.inventory_snapshot(restored / 'ledger.db')['schema']}, live_path=mcs_update.LEDGER) is None
     held(restored)
 
 
@@ -268,7 +269,7 @@ def test_directory_replacement_does_not_write_into_replacement(restored, monkeyp
         publish(fd, name, value)
 
     monkeypatch.setattr(restore, "_publish", replaced)
-    with pytest.raises((restore.RestoreConsentError, backup.BackupError)):
+    with pytest.raises((restore.RestoreConsentError, backup_evidence.BackupError)):
         resumed(restored, receipt)
     assert (restored / "ledger.db").read_bytes() == b"synthetic unrelated"
     assert not (restored / restore.RESUMED).exists()
@@ -401,7 +402,7 @@ def test_runner_begin_run_requires_actual_backup_consent(restored, monkeypatch,
     assert len(began) == int(consented)
     output = json.loads(capsys.readouterr().out)
     assert output.get("restore_consent_hold", False) is (not consented)
-    assert notify_cards.restore_pending(str(restored)) is not None
+    assert notify_spool.restore_pending(str(restored)) is not None
     if consented:
         assert restore.writers_resumed(str(restored))
 
@@ -446,7 +447,7 @@ def test_encrypted_restore_cli_consent_across_processes(world, tmp_path):
     assert result["writers_resumed"] is True
     assert restore.writers_resumed(str(destination))
     assert backup.file_sha256(world[1]) == original
-    assert notify_cards.restore_pending(str(destination)) is not None
+    assert notify_spool.restore_pending(str(destination)) is not None
 
 
 def test_oversized_receipt_is_refused_before_publication(restored):

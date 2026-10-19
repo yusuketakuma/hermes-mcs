@@ -1,4 +1,5 @@
 """Synthetic summary text cannot bypass audit or impersonate render structure."""
+import semantic_render
 import semantic_llm
 import semantic_store
 import json
@@ -65,16 +66,16 @@ def test_notice_flattens_model_lines_and_preserves_trusted_footer(tmp_path):
         assert text.count("\n▶ MCSで確認\n") == 1
         assert "\n■ 偽の監査見出し" not in text
         assert "───── 要約（自動検査済） ─────" not in text
-        assert text.count(gate.semantic_text_line(SPOOF)) == 3
+        assert text.count(semantic_render.semantic_text_line(SPOOF)) == 3
         assert render._LIMITATION_NOTICE in text
-        parts, _ = gate.semantic_chunk_parts(text, 400)
+        parts, _ = semantic_render.semantic_chunk_parts(text, 400)
         trusted_url = db.db.execute("SELECT url FROM patients WHERE project_id=1").fetchone()[0]
         assert all(part.endswith("▶ MCSで確認\n" + trusted_url) for part in parts)
         with db.db:
             db.db.execute("UPDATE patients SET url='' WHERE project_id=1")
         no_source = render.render_notice(db, 1, 1, summary, "PASS", quality="full")
         with pytest.raises(ValueError, match="semantic_provenance_missing"):
-            gate.semantic_chunk_parts(no_source, 400)
+            semantic_render.semantic_chunk_parts(no_source, 400)
     finally:
         db.close()
 
@@ -89,8 +90,8 @@ def test_raw_summary_block_flattens_claims_facts_and_drops_free_limitations(tmp_
         with db.db:
             db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps(summary), row["artifact_id"]))
         message = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
-        text = gate.semantic_summary_block(db, message, _cfg("enforce"))
-        assert text.count(gate.semantic_text_line(SPOOF)) == 2
+        text = semantic_render.semantic_summary_block(db, message, _cfg('enforce'))
+        assert text.count(semantic_render.semantic_text_line(SPOOF)) == 2
         assert text.count("───── 要約（自動検査済） ─────") == 1
         assert "\n■ 偽の監査見出し" not in text
         assert "\n▶ MCSで確認" not in text
@@ -106,7 +107,7 @@ def test_mandatory_valid_time_is_single_line_without_losing_attributes():
     out = render.mandatory_render(v2_doc([fact]))
     line = out["facts"][0]
     assert len(line.splitlines()) == 1
-    assert "有効時点:" + gate.semantic_text_line(SPOOF) in line
+    assert "有効時点:" + semantic_render.semantic_text_line(SPOOF) in line
     assert "量:5 mg" in line and "極性:negated" in line
     assert render.fact_binding("fact_synthetic") in line
     assert out["complete"]
@@ -131,7 +132,7 @@ def test_previous_audit_policy_cannot_publish_saved_pass_or_frozen_notice(tmp_pa
         with db.db:
             db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), summary["artifact_id"]))
         message = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
-        assert gate.semantic_summary_block(db, message, cfg) == ""
+        assert semantic_render.semantic_summary_block(db, message, cfg) == ""
         raw = db.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
         assert gate.semantic_render_state(db, raw, cfg) == ()
         exception = gate.FreezeSend if in_progress else gate.StaleSend

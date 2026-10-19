@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "Discordの送信ガードを配送側へ集約",
+  "summary": "Discordのカード描画から、同じPOSTを繰り返さないためのリクエストガードを配送側へ移しました。確実な429拒否だけ再試行し、送信後の結果不明を保持する条件は変わりません。",
+  "upgrade": "追加設定は不要です。SDK固定版、通知表示、患者範囲、承認条件は変わりません。",
+  "details": [
+    "配送と独立接続は同じ実体のガードを直接使い、描画側への転送aliasは残しません。",
+    "既存sessionごとの一回設置とtask単位の状態リセット、Hermes自身の別task送信を隔離する条件を維持します。"
+  ],
+  "refs": [
+    "adapters/discord/cards.py",
+    "adapters/discord/delivery.py",
+    "adapters/discord/standalone.py"
+  ]
+}

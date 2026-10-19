@@ -22,6 +22,7 @@ Coverage map (spec MCS-REFACTOR-FIRST-20260920 AT ids):
   INV-16  shadow artifact kinds   -> test_shadow_full_pipeline
   AT-065  snapshot readers intact -> test_snapshot_view_semantic
 """
+import semantic_send_gate
 import mcs_contract
 import mcs_util
 import semantic_audit
@@ -947,13 +948,15 @@ def test_off_mode_parks_queued_notice(tmp_path, monkeypatch):
                       "WHERE kind='semantic_notice'").fetchone()["c"]
     assert n == 2          # one queued intent per audited target
     import notify_flush
+    import notify_sender
+    import mcs_util
     monkeypatch.setattr(
         notify_flush, "_config",
         lambda: {"semantic": {"mode": "off"},
                  "notify_target": "slack"})
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
     calls = []
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda *a, **k: calls.append(a) or None)
     base = db.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
     expected, files = notify_flush._format_event(db, base)
@@ -963,7 +966,7 @@ def test_off_mode_parks_queued_notice(tmp_path, monkeypatch):
     notify_flush.flush(db)
     # Exactly the current base notification is emitted; the ordinary 📋
     # summary heading does not imply an audited semantic notice was sent.
-    assert [call[1] for call in calls] == [notify_flush._compose_body(expected, files)]
+    assert [call[1] for call in calls] == [notify_sender._compose_body(expected, files)]
     assert calls[0][1].startswith("[MCS unread] 新着 2 件")
     assert all(text not in calls[0][1] for text in frozen)
     assert "要約：自動検査完了" not in calls[0][1]
@@ -987,13 +990,15 @@ def test_stale_generation_notice_suppressed(tmp_path, monkeypatch):
     p.messages = [_message(1, body=BODY + "（編集）", unread=False)]
     db.save_patient(p)                 # fingerprint moves
     import notify_flush
+    import notify_sender
+    import mcs_util
     monkeypatch.setattr(
         notify_flush, "_config",
         lambda: {**_cfg("enforce"),
                  "notify_target": "slack"})
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
     calls = []
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda *a, **k: calls.append(a) or None)
     base = db.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
     expected, files = notify_flush._format_event(db, base)
@@ -1001,7 +1006,7 @@ def test_stale_generation_notice_suppressed(tmp_path, monkeypatch):
         "SELECT payload FROM notify_outbox WHERE kind='semantic_notice'").fetchall()]
     assert len(frozen) == 2 and all("要約：自動検査完了" in text for text in frozen)
     notify_flush.flush(db)
-    assert [call[1] for call in calls] == [notify_flush._compose_body(expected, files)]
+    assert [call[1] for call in calls] == [notify_sender._compose_body(expected, files)]
     assert calls[0][1].startswith("[MCS unread] 新着 2 件")
     assert all(text not in calls[0][1] for text in frozen)
     assert "要約：自動検査完了" not in calls[0][1]
@@ -1130,7 +1135,7 @@ def test_notice_suppressed_when_src_event_suppressed(tmp_path,
     import notify_flush
     monkeypatch.setattr(notify_flush, "_config",
                         lambda: _cfg("enforce"))
-    with pytest.raises(notify_flush._StaleSend):
+    with pytest.raises(semantic_send_gate.StaleSend):
         notify_flush._format_event(db, ev)
     db.close()
 
@@ -1605,12 +1610,14 @@ def test_parked_notice_not_counted_skipped(tmp_path, monkeypatch):
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     import notify_flush
+    import notify_sender
+    import mcs_util
     monkeypatch.setattr(
         notify_flush, "_config",
         lambda: {"semantic": {"mode": "shadow"},
                  "notify_target": "slack"})
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
-    monkeypatch.setattr(notify_flush, "_send", lambda *a, **k: None)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, 'send', lambda *a, **k: None)
     res = notify_flush.flush(db)
     assert res["parked"] == 2 and res["skipped"] == 0
     db.close()
@@ -1650,7 +1657,7 @@ def test_models_transport_wrapped():
     """models() must surface transport failure as JevError like
     evaluate() does — the smoke harness only catches JevError."""
     c = jev.JevClient(api_key="k")
-    c._http_request = lambda *a, **k: (_ for _ in ()).throw(
+    c.request = lambda *a, **k: (_ for _ in ()).throw(
         urllib.error.URLError("down"))
     with pytest.raises(jev.JevError, match="transport"):
         c.models()

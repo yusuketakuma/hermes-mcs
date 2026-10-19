@@ -1,4 +1,6 @@
 """Doctor is local by default and shares only bounded diagnostic facts."""
+
+import environment_diagnostics
 import lifecycle_io
 import mcs_util
 import service_management
@@ -24,7 +26,7 @@ def local_config(monkeypatch):
         "packages": {"discord.py": None, "slack-bolt": None, "slack-sdk": None}})
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 3))
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version", "3.51.3")
-    monkeypatch.setattr(mcs_setup, "env_value",
+    monkeypatch.setattr(environment_diagnostics, "env_value",
                         lambda *a, **k: pytest.fail("secret access"))
     monkeypatch.setattr(mcs_setup, "_queue_warnings",
                         lambda *a: pytest.fail("DB access"))
@@ -145,17 +147,17 @@ def test_service_runtime_sqlite_is_checked_not_path_python(monkeypatch, tmp_path
 @pytest.mark.parametrize("started,modified,expected", [(100, 101, True), (102, 101, False),
                                                        (None, 101, None), (100, None, None)])
 def test_doctor_does_not_invent_loaded_revision(monkeypatch, started, modified, expected):
-    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
-    monkeypatch.setattr(mcs_setup, "_gateway_sources_mtime", lambda: modified)
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "darwin")
+    monkeypatch.setattr(environment_diagnostics, "gateway_sources_mtime", lambda checkout: modified)
     def git(argv, **kw):
         return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n")
-    monkeypatch.setattr(mcs_setup.subprocess, "run", git)
+    monkeypatch.setattr(environment_diagnostics.subprocess, "run", git)
     def probe(argv, **kw):
         return SimpleNamespace(returncode=0, stdout="pid = 123\n" if argv[0] == "launchctl" else "invalid")
     monkeypatch.setattr(lifecycle_io, 'run_bounded', probe)
-    monkeypatch.setattr(mcs_setup.time, "mktime", lambda value: started)
-    monkeypatch.setattr(mcs_setup.time, "strptime", lambda value, fmt: ())
-    source = mcs_setup._doctor_source({}, probe=True)
+    monkeypatch.setattr(environment_diagnostics.time, "mktime", lambda value: started)
+    monkeypatch.setattr(environment_diagnostics.time, "strptime", lambda value, fmt: ())
+    source = environment_diagnostics.source_status({}, probe=True, paths=mcs_setup._service_paths())
     assert source["disk"]["revision"] == "a" * 40
     running = source["gateway"]
     assert running["pid"] == 123 and running["source_revision"] is None
@@ -166,9 +168,9 @@ def test_doctor_does_not_invent_loaded_revision(monkeypatch, started, modified, 
 
 def test_doctor_source_default_does_not_probe_services(monkeypatch):
     monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *args, **kw: pytest.fail("service access"))
-    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *args, **kw:
+    monkeypatch.setattr(environment_diagnostics.subprocess, "run", lambda *args, **kw:
                         SimpleNamespace(returncode=1, stdout="synthetic-secret-not-a-sha"))
-    source = mcs_setup._doctor_source({}, probe=False)
+    source = environment_diagnostics.source_status({}, probe=False, paths=mcs_setup._service_paths())
     assert source["disk"]["revision"] is None
     assert source["gateway"]["status"] == "not_checked"
     assert source["gateway"]["source_revision"] is None
@@ -182,13 +184,13 @@ def test_doctor_restart_receipt_is_supervisor_evidence_only(tmp_path, monkeypatc
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / "gateway_restart.json").write_text(json.dumps(
-        {"status": status, "pid": pid, "at": mcs_setup.time.time(), "extra": "synthetic-secret"}))
-    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
-    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k:
+        {"status": status, "pid": pid, "at": environment_diagnostics.time.time(), "extra": "synthetic-secret"}))
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "darwin")
+    monkeypatch.setattr(environment_diagnostics.subprocess, "run", lambda *a, **k:
                         SimpleNamespace(returncode=0, stdout="a" * 40))
     monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda argv, **kw:
                         SimpleNamespace(returncode=0, stdout="pid = 123\n" if argv[0] == "launchctl" else "invalid"))
-    source = mcs_setup._doctor_source({}, probe=True)
+    source = environment_diagnostics.source_status({}, probe=True, paths=mcs_setup._service_paths())
     assert source["restart_request"]["status"] == expected
     assert source["gateway"]["source_revision"] is None
     assert "synthetic-secret" not in json.dumps(source)
@@ -208,8 +210,8 @@ def test_doctor_dirty_comes_from_a_refreshing_status(monkeypatch, rc, out, expec
         if "diff-index" in argv:
             return SimpleNamespace(returncode=1, stdout="")   # stale stat data
         return SimpleNamespace(returncode=rc, stdout=out)
-    monkeypatch.setattr(mcs_setup.subprocess, "run", git)
-    assert mcs_setup._doctor_source({}, probe=False)["disk"]["dirty"] is expected
+    monkeypatch.setattr(environment_diagnostics.subprocess, "run", git)
+    assert environment_diagnostics.source_status({}, probe=False, paths=mcs_setup._service_paths())["disk"]["dirty"] is expected
     assert not any("diff-index" in argv for argv in seen)
 
 
@@ -218,7 +220,7 @@ def test_doctor_restart_receipt_refuses_unsafe_file(tmp_path, monkeypatch, kind)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     (tmp_path / "data").mkdir()
     target = tmp_path / "outside.json"
-    target.write_text(json.dumps({"status": "failed", "at": mcs_setup.time.time()}))
+    target.write_text(json.dumps({"status": "failed", "at": environment_diagnostics.time.time()}))
     receipt = tmp_path / "data" / "gateway_restart.json"
     if kind == "symlink":
         receipt.symlink_to(target)
@@ -227,10 +229,11 @@ def test_doctor_restart_receipt_refuses_unsafe_file(tmp_path, monkeypatch, kind)
         bounded_python(tmp_path, """
 from types import SimpleNamespace
 import mcs_setup
+import environment_diagnostics
 mcs_setup.HOME = sys.argv[1]
-mcs_setup.subprocess.run = lambda *a, **k: SimpleNamespace(returncode=1, stdout='')
-mcs_setup._gateway_sources_mtime = lambda: None
-source = mcs_setup._doctor_source({'runtime_mode': 'standalone'}, probe=True)
+environment_diagnostics.subprocess.run = lambda *a, **k: SimpleNamespace(returncode=1, stdout='')
+environment_diagnostics.gateway_sources_mtime = lambda checkout: None
+source = environment_diagnostics.source_status({'runtime_mode': 'standalone'}, probe=True, paths=mcs_setup._service_paths())
 assert source['restart_request'] == {'status': 'unknown'}
 """, tmp_path)
         return
@@ -238,10 +241,10 @@ assert source['restart_request'] == {'status': 'unknown'}
         receipt.mkdir()
     else:
         receipt.write_bytes(b" " * 8193)
-    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k:
+    monkeypatch.setattr(environment_diagnostics.subprocess, "run", lambda *a, **k:
                         SimpleNamespace(returncode=1, stdout=""))
-    monkeypatch.setattr(mcs_setup, "_gateway_sources_mtime", lambda: None)
-    source = mcs_setup._doctor_source({"runtime_mode": "standalone"}, probe=True)
+    monkeypatch.setattr(environment_diagnostics, "gateway_sources_mtime", lambda checkout: None)
+    source = environment_diagnostics.source_status({"runtime_mode": "standalone"}, probe=True, paths=mcs_setup._service_paths())
     assert source["restart_request"] == {"status": "unknown"}
 
 

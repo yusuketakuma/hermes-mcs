@@ -725,6 +725,7 @@ def test_setup_gate_blocks_broker_missing_mcs_routes(
     otherwise fail closed forever with no surface."""
     import local_llm
     import mcs_setup
+    import environment_diagnostics
     path = str(tmp_path / "adm.db")
     b = adm.Broker(path)
     b.open_epoch(lambda: True)
@@ -743,7 +744,7 @@ def test_setup_gate_blocks_broker_missing_mcs_routes(
         stdout = stderr = ""
     # never let the environment probe touch real keychain/hermes —
     # only the admission audit is under test
-    monkeypatch.setattr(mcs_setup.subprocess, "run",
+    monkeypatch.setattr(environment_diagnostics.lifecycle_io, "run_bounded",
                         lambda *a, **k: _Done())
     try:
         errors, _warnings = mcs_setup.check_environment({})

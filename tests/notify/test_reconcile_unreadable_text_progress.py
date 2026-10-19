@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-import notify_cards
+import notify_spool
 import notify_reconcile
 from notify_reconcile_testkit import CFG, world, _journal_claim, _journal_result
 
@@ -30,9 +30,9 @@ def test_unreadable_text_progress_never_wedges_the_reconcile(world, progress):
     bad = _text_row(db, progress)
     held = _text_row(db, json.dumps({"hold_reason": "restore_text_unverified"}))
     db.commit()
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     receipt = notify_reconcile.reconcile_after_restore(world.led, CFG)
-    assert notify_cards.restore_pending(str(world.data)) is None
+    assert notify_spool.restore_pending(str(world.data)) is None
     assert [h["event_id"] for h in receipt["text_held"]] == [held]
     row = db.execute("SELECT state,next_try,progress FROM notify_outbox "
                      "WHERE event_id=?", (bad,)).fetchone()
@@ -51,10 +51,10 @@ def test_rerun_keeps_post_restore_interactive_event_pending(world):  # noqa: F81
                     message_id="999001")
     (world.data / "discord_render" / (render["delivery_id"] + ".json")).unlink()
     (world.data / "discord_state" / "journal-w2.jsonl").write_text("{broken\n")
-    notify_cards.mark_restored(str(world.data))
-    marker = notify_cards.restore_pending(str(world.data))
+    notify_spool.mark_restored(str(world.data))
+    marker = notify_spool.restore_pending(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
-    assert notify_cards.restore_pending(str(world.data)) is not None
+    assert notify_spool.restore_pending(str(world.data)) is not None
     eid = world.led.outbox_add("new_messages", 1, {"message_ids": [101]})
     world.led.db.execute("UPDATE notify_outbox SET created_at=? WHERE event_id=?",
                          (marker["restored_at"] + 100, eid))

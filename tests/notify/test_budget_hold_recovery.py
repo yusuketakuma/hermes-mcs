@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import notify_cards as cards
+import notify_spool
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _latest_render,
                             _seed_thread, led as led)
 
@@ -25,11 +25,11 @@ def test_resource_hold_is_never_published_or_granted(led, monkeypatch, error_cod
         with led.db:
             led.db.execute("UPDATE notification_render_parts SET error_code=? WHERE delivery_id=?",
                            (error_code, held["delivery_id"]))
-    dirs = cards.notify_dirs(cards.data_root(led))
+    dirs = notify_spool.notify_dirs(notify_spool.data_root(led))
     path = Path(dirs["discord_render"]) / (held["delivery_id"] + ".json")
     assert not path.exists()
-    assert cards.recover(led, CFG, {})["republished"] == 0
-    assert cards.publish_specs(led.db, dirs, [json.loads(held["spec_json"])], NOW + 1) == []
+    assert notify_spool.recover(led, CFG, {})["republished"] == 0
+    assert notify_spool.publish_specs(led.db, dirs, [json.loads(held["spec_json"])], NOW + 1) == []
     assert not path.exists()
     assert _latest_render(led)["spec_published"] == 0
     assert not _begin(led, held, n=1600)["granted"]

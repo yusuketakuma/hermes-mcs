@@ -2,6 +2,7 @@
 torn cmd files are quarantined, and housekeeping runs past the deadline
 once the daily backup is overdue. Synthetic stubs only — no real MCS."""
 import collection_stages
+import notify_spool
 import health_report
 import json
 import os
@@ -122,7 +123,7 @@ def test_overdue_backup_makes_housekeeping_run_past_the_deadline(
     monkeypatch.setattr(maintenance, "backup_overdue", lambda: True)
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
     for name in ("publish_flags", "clear_snapshot_dirty"):
-        monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
+        monkeypatch.setattr((notify_spool if name in {'publish_flags'} else notify_cards), name, lambda *a, **k: None)
     monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
     assert run_check._main() == 0

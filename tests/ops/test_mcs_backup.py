@@ -16,8 +16,9 @@ import pytest
 import ledger
 import maintenance
 import mcs_backup as backup
+import backup_evidence
 import mcs_view
-import notify_cards
+import notify_spool
 import notify_transport
 from test_ledger_recovery_contract import _build_fixture
 
@@ -57,7 +58,7 @@ def world(tmp_path, monkeypatch):
     destination.mkdir(mode=0o700)
     scratch.mkdir(mode=0o700)
     st = destination.stat()
-    policy = backup.BackupPolicy(
+    policy = backup_evidence.BackupPolicy(
         destination=str(destination), destination_device=st.st_dev,
         destination_inode=st.st_ino, scratch_dir=str(scratch),
         policy_id="synthetic-policy", key_custody_confirmed=True,
@@ -94,7 +95,7 @@ def test_round_trip_drill_preserves_db_and_holds_delivery(world):
     assert report["inventory"]["metrics"]["incomplete_reply_roots"] == 0
     assert report["inventory"]["last_successful_run"] == NOW
     assert not report["attachment_payloads_included"]
-    assert notify_cards.restore_awaiting_consent(str(target))
+    assert notify_spool.restore_awaiting_consent(str(target))
     with closing(sqlite3.connect(
             (target / "ledger.db").as_uri() + "?mode=ro&immutable=1",
             uri=True)) as db:
@@ -171,7 +172,7 @@ def test_tampering_is_rejected_before_decryption(world, monkeypatch, change):
 
     monkeypatch.setattr(backup, "_openssl", forbidden_decrypt)
     # Even with an attacker-replaced checksum, actual HMAC must reject.
-    with pytest.raises(backup.BackupError):
+    with pytest.raises(backup_evidence.BackupError):
         backup.verify(str(path), backup.file_sha256(path), world[3], lambda: KEY)
     assert list(Path(world[3].scratch_dir).iterdir()) == []
 
@@ -183,20 +184,20 @@ def test_wrong_key_fails_real_authentication_before_decryption(world, monkeypatc
         pytest.fail("wrong key reached decryption")
 
     monkeypatch.setattr(backup, "_openssl", forbidden_decrypt)
-    with pytest.raises(backup.BackupError, match="authentication"):
+    with pytest.raises(backup_evidence.BackupError, match="authentication"):
         backup.verify(receipt["bundle"], receipt["sha256"], world[3],
                       lambda: b"x" * 32)
 
 
 def test_old_valid_bundle_cannot_replace_pinned_generation(world):
     old, new = _create(world), _create(world)
-    with pytest.raises(backup.BackupError, match="receipt_mismatch"):
+    with pytest.raises(backup_evidence.BackupError, match="receipt_mismatch"):
         backup.verify(old["bundle"], new["sha256"], world[3], lambda: KEY)
 
 
 @pytest.mark.parametrize("value", ["", "not-a-digest"])
 def test_missing_trusted_receipt_fails_closed(world, value):
-    with pytest.raises(backup.BackupError, match="trusted_receipt"):
+    with pytest.raises(backup_evidence.BackupError, match="trusted_receipt"):
         backup.verify("never-opened", value, world[3], lambda: KEY)
 
 
@@ -208,14 +209,14 @@ def test_missing_trusted_receipt_fails_closed(world, value):
 ])
 def test_absent_owner_decisions_or_replaced_mount_fail_closed(world, changes):
     snapshot, _, _, policy = world
-    with pytest.raises(backup.BackupError):
+    with pytest.raises(backup_evidence.BackupError):
         backup.offsite(str(snapshot), replace(policy, **changes), lambda: KEY)
     assert list(Path(policy.destination).iterdir()) == []
 
 
 @pytest.mark.parametrize("key", [b"", b"short", b"x" * 33, None])
 def test_absent_or_invalid_key_fails_closed(world, key):
-    with pytest.raises(backup.BackupError, match="key_required"):
+    with pytest.raises(backup_evidence.BackupError, match="key_required"):
         backup.offsite(str(world[0]), world[3], lambda: key)
 
 
@@ -223,7 +224,7 @@ def test_missing_or_public_destination_is_not_created_or_chmodded(world):
     snapshot, _, _, policy = world
     dest = Path(policy.destination)
     dest.chmod(0o755)
-    with pytest.raises(backup.BackupError, match="directory_not_private"):
+    with pytest.raises(backup_evidence.BackupError, match="directory_not_private"):
         backup.offsite(str(snapshot), policy, lambda: KEY)
     assert dest.stat().st_mode & 0o777 == 0o755
     dest.rmdir()
@@ -235,7 +236,7 @@ def test_missing_or_public_destination_is_not_created_or_chmodded(world):
 def test_retention_capacity_never_deletes_existing_generation(world):
     snapshot, _, _, policy = world
     receipt = _create(world)
-    with pytest.raises(backup.BackupError, match="retention_capacity"):
+    with pytest.raises(backup_evidence.BackupError, match="retention_capacity"):
         backup.offsite(str(snapshot), replace(policy, max_snapshots=1), lambda: KEY)
     assert backup.file_sha256(receipt["bundle"]) == receipt["sha256"]
 
@@ -259,7 +260,7 @@ def test_failed_atomic_publication_preserves_previous_generation(world, monkeypa
         publish(tmp, dest, mode)
 
     monkeypatch.setattr(backup, "publish_tmp", fail)
-    with pytest.raises((OSError, backup.BackupError)):
+    with pytest.raises((OSError, backup_evidence.BackupError)):
         _create(world)
     assert [p.name for p in Path(world[3].destination).iterdir()] == [
         Path(receipt["bundle"]).name]
@@ -269,7 +270,7 @@ def test_failed_atomic_publication_preserves_previous_generation(world, monkeypa
 
 def test_openssl_unavailable_leaves_no_artifact(world, monkeypatch):
     monkeypatch.setattr(backup, "OPENSSL", "/nonexistent/synthetic-openssl")
-    with pytest.raises(backup.BackupError, match="cipher_unavailable"):
+    with pytest.raises(backup_evidence.BackupError, match="cipher_unavailable"):
         _create(world)
     assert list(Path(world[3].destination).iterdir()) == []
     assert list(Path(world[3].scratch_dir).iterdir()) == []
@@ -301,7 +302,7 @@ def test_drill_never_overwrites_existing_directory(world):
     target = Path(world[3].scratch_dir) / "existing"
     target.mkdir()
     (target / "ledger.db").write_bytes(b"synthetic original")
-    with pytest.raises(backup.BackupError, match="new_local_directory"):
+    with pytest.raises(backup_evidence.BackupError, match="new_local_directory"):
         backup.verify(receipt["bundle"], receipt["sha256"], world[3], lambda: KEY,
                       drill_destination=str(target))
     assert (target / "ledger.db").read_bytes() == b"synthetic original"
@@ -309,7 +310,7 @@ def test_drill_never_overwrites_existing_directory(world):
 
 def test_drill_cannot_publish_plaintext_to_backup_medium(world):
     receipt = _create(world)
-    with pytest.raises(backup.BackupError, match="new_local_directory"):
+    with pytest.raises(backup_evidence.BackupError, match="new_local_directory"):
         backup.verify(receipt["bundle"], receipt["sha256"], world[3], lambda: KEY,
                       drill_destination=str(Path(world[3].destination) / "drill"))
 
@@ -319,7 +320,7 @@ def test_drill_failure_leaves_no_partial_destination(world, monkeypatch):
     target = Path(world[3].scratch_dir) / "drill"
 
     def fail(*args, **kwargs):
-        assert notify_cards.restore_pending(str(target))
+        assert notify_spool.restore_pending(str(target))
         raise OSError("synthetic publication failure")
 
     monkeypatch.setattr(backup.os, "link", fail)
@@ -332,9 +333,9 @@ def test_drill_failure_leaves_no_partial_destination(world, monkeypatch):
 def test_stale_snapshot_and_stale_receipt_fail_rpo(world, monkeypatch):
     receipt = _create(world)
     monkeypatch.setattr(backup.time, "time", lambda: NOW + 86401)
-    with pytest.raises(backup.BackupError, match="rpo"):
+    with pytest.raises(backup_evidence.BackupError, match="rpo"):
         _create(world)
-    with pytest.raises(backup.BackupError, match="rpo"):
+    with pytest.raises(backup_evidence.BackupError, match="rpo"):
         backup.verify(receipt["bundle"], receipt["sha256"], world[3], lambda: KEY)
 
 
@@ -342,13 +343,13 @@ def test_missing_successful_run_cannot_claim_rpo(world):
     with closing(sqlite3.connect(world[0])) as db:
         db.execute("DELETE FROM runs")
         db.commit()
-    with pytest.raises(backup.BackupError, match="rpo"):
+    with pytest.raises(backup_evidence.BackupError, match="rpo"):
         _create(world)
 
 
 def test_nonfunctional_cipher_is_not_published(world, monkeypatch):
     monkeypatch.setattr(backup, "OPENSSL", "/usr/bin/true")
-    with pytest.raises(backup.BackupError, match="format_invalid"):
+    with pytest.raises(backup_evidence.BackupError, match="format_invalid"):
         _create(world)
     assert list(Path(world[3].destination).iterdir()) == []
 
@@ -365,7 +366,7 @@ def test_authenticated_wrong_plain_checksum_still_fails_closed(world):
         600000, dklen=32)
     path.write_bytes(payload + hmac.digest(mac_key, payload, "sha256"))
     target = Path(world[3].scratch_dir) / "drill"
-    with pytest.raises(backup.BackupError, match="plain_checksum"):
+    with pytest.raises(backup_evidence.BackupError, match="plain_checksum"):
         backup.verify(str(path), backup.file_sha256(path), world[3], lambda: KEY,
                       drill_destination=str(target))
     assert not target.exists()
@@ -383,9 +384,9 @@ def test_untrusted_enum_text_is_not_exposed_by_inventory(world):
 
 def test_snapshot_and_copy_limits_leave_no_published_output(world, tmp_path):
     snapshot, _, _, policy = world
-    with pytest.raises(backup.BackupError):
+    with pytest.raises(backup_evidence.BackupError):
         backup.offsite(str(snapshot), replace(policy, max_snapshot_bytes=1), lambda: KEY)
-    with pytest.raises(backup.BackupError, match="copy_size"):
+    with pytest.raises(backup_evidence.BackupError, match="copy_size"):
         backup._copy_private(snapshot, tmp_path / "copy", 1)
     assert list(Path(policy.destination).iterdir()) == []
     assert not (tmp_path / "copy").exists()
@@ -394,7 +395,7 @@ def test_snapshot_and_copy_limits_leave_no_published_output(world, tmp_path):
 def test_symlinked_snapshot_is_rejected(world, tmp_path):
     link = tmp_path / "symlink.db"
     link.symlink_to(world[0])
-    with pytest.raises(backup.BackupError, match="static_snapshot"):
+    with pytest.raises(backup_evidence.BackupError, match="static_snapshot"):
         backup.offsite(str(link), world[3], lambda: KEY)
 
 
@@ -411,7 +412,7 @@ def test_invalid_static_source_fails_before_encryption(world, invalid):
         snapshot.write_bytes(b"not sqlite")
     else:
         Path(str(snapshot) + "-wal").write_bytes(b"synthetic WAL")
-    with pytest.raises(backup.BackupError):
+    with pytest.raises(backup_evidence.BackupError):
         _create(world)
     assert list(Path(world[3].destination).iterdir()) == []
 
@@ -486,7 +487,7 @@ def test_cli_explicit_policy_fd_receipt_and_drill(world, tmp_path):
     assert proof["key_source"] == "key_fd"
     assert proof["outbound_attempts"] == 0
     assert proof["recovery_scope"] == "collect_only"
-    assert notify_cards.restore_awaiting_consent(str(target))
+    assert notify_spool.restore_awaiting_consent(str(target))
     assert (target / "ledger.db").stat().st_mode & 0o777 == 0o600
     assert all(p.stat().st_mode & 0o777 == 0o600 for p in target.iterdir())
 
@@ -566,7 +567,7 @@ def test_keygen_never_replaces_existing_service_key(tmp_path):
         calls.append(args)
         return True
 
-    with pytest.raises(backup.BackupError, match="key_already_exists"):
+    with pytest.raises(backup_evidence.BackupError, match="key_already_exists"):
         backup.keygen(str(tmp_path), show_escrow=True, confirm_human=True,
                       reason="synthetic", keychain_reader=lambda: KEY,
                       keychain_store=store)
@@ -575,13 +576,13 @@ def test_keygen_never_replaces_existing_service_key(tmp_path):
 
 def test_keygen_racing_service_key_is_preserved_with_pending_witness(tmp_path, monkeypatch):
     entries, _, reader = _fake_keychain(monkeypatch, collision=True)
-    with pytest.raises(backup.BackupError, match="keychain_store_failed"):
+    with pytest.raises(backup_evidence.BackupError, match="keychain_store_failed"):
         backup.keygen(str(tmp_path), show_escrow=True, confirm_human=True,
                       reason="synthetic", keychain_reader=reader)
     assert entries == {("mcs-backup", "other-owner"): "ff" * 32}
     witness = json.loads((tmp_path / "key_escrow.json").read_text())
     assert witness["status"] == "pending" and not witness["escrow_displayed"]
-    with pytest.raises(backup.BackupError, match="escrow_already_exists"):
+    with pytest.raises(backup_evidence.BackupError, match="escrow_already_exists"):
         backup.keygen(str(tmp_path), show_escrow=True, confirm_human=True,
                       reason="synthetic", keychain_reader=reader)
 
@@ -589,7 +590,7 @@ def test_keygen_racing_service_key_is_preserved_with_pending_witness(tmp_path, m
 def test_keygen_failed_readback_never_returns_or_records_key(tmp_path, monkeypatch):
     monkeypatch.setattr(backup.os, "urandom", lambda size: bytes(range(size)))
     reads = iter([None, b"x" * 32])
-    with pytest.raises(backup.BackupError, match="readback_failed"):
+    with pytest.raises(backup_evidence.BackupError, match="readback_failed"):
         backup.keygen(str(tmp_path), show_escrow=True, confirm_human=True,
                       reason="synthetic", keychain_reader=lambda: next(reads),
                       keychain_store=lambda *args, **kwargs: True)
@@ -601,7 +602,7 @@ def test_keygen_failed_readback_never_returns_or_records_key(tmp_path, monkeypat
 
 def test_keygen_records_bounded_human_reason_in_witness(tmp_path, monkeypatch):
     entries, _, reader = _fake_keychain(monkeypatch)
-    with pytest.raises(backup.BackupError, match="human_escrow_required"):
+    with pytest.raises(backup_evidence.BackupError, match="human_escrow_required"):
         backup.keygen(str(tmp_path), show_escrow=True, confirm_human=True,
                       reason="r" * 2001, keychain_reader=reader)
     assert not entries and not (tmp_path / "key_escrow.json").exists()
@@ -610,7 +611,7 @@ def test_keygen_records_bounded_human_reason_in_witness(tmp_path, monkeypatch):
                   reason=reason, keychain_reader=reader)
     witness = json.loads((tmp_path / "key_escrow.json").read_text())
     assert witness["reason"] == reason and witness["status"] == "stored"
-    assert backup._records(str(tmp_path)).load("key_escrow.json")["reason"] == reason
+    assert backup_evidence.open_records(str(tmp_path)).load("key_escrow.json")["reason"] == reason
 
 @pytest.mark.parametrize("rc,stdout,expected", [
     (44, b"", None), (0, KEY.hex().encode() + b"\n", KEY),
@@ -626,7 +627,7 @@ def test_dedicated_keychain_reader_has_exact_key_and_failure_boundaries(monkeypa
 
     monkeypatch.setattr(backup.subprocess, "run", run)
     if isinstance(expected, str):
-        with pytest.raises(backup.BackupError, match=expected):
+        with pytest.raises(backup_evidence.BackupError, match=expected):
             backup._keychain_read()
     else:
         assert backup._keychain_read() == expected
@@ -643,7 +644,7 @@ def test_new_terminal_restore_holds_before_db_publication_and_keeps_original(wor
     seen = []
 
     def publish(source, destination):
-        assert notify_cards.restore_awaiting_consent(str(target))
+        assert notify_spool.restore_awaiting_consent(str(target))
         assert not Path(destination).exists()
         seen.append("held")
         return link(source, destination)
@@ -656,7 +657,7 @@ def test_new_terminal_restore_holds_before_db_publication_and_keeps_original(wor
     assert backup.file_sha256(target / "ledger.db") == backup.file_sha256(world[0])
     assert target.stat().st_mode & 0o777 == 0o700
     assert all(p.stat().st_mode & 0o777 == 0o600 for p in target.iterdir())
-    assert notify_cards.restore_awaiting_consent(str(target))["phase"] == "awaiting_consent"
+    assert notify_spool.restore_awaiting_consent(str(target))["phase"] == "awaiting_consent"
 
 
 @pytest.mark.parametrize("invalid", ["existing", "medium", "public_parent", "symlink_parent"])
@@ -676,7 +677,7 @@ def test_restore_rejects_non_new_or_non_private_destinations_without_changes(wor
         link = tmp_path / "link-parent"
         link.symlink_to(parent)
         target = link / "data"
-    with pytest.raises(backup.BackupError):
+    with pytest.raises(backup_evidence.BackupError):
         backup.restore("not opened", "0" * 64, world[3],
                        lambda: KEY, destination=str(target))
     if invalid == "existing":
@@ -699,7 +700,7 @@ def test_restore_racing_ledger_is_not_overwritten_or_deleted(world, tmp_path, mo
         backup.restore(receipt["bundle"], receipt["sha256"], world[3],
                        lambda: KEY, destination=str(target))
     assert (target / "ledger.db").read_bytes() == b"synthetic concurrent ledger"
-    assert notify_cards.restore_awaiting_consent(str(target))
+    assert notify_spool.restore_awaiting_consent(str(target))
 
 
 def test_restore_copy_failure_cleans_only_its_new_destination(world, tmp_path, monkeypatch):
@@ -709,7 +710,7 @@ def test_restore_copy_failure_cleans_only_its_new_destination(world, tmp_path, m
 
     def fail(source, destination, limit):
         if destination.parent == target:
-            assert notify_cards.restore_awaiting_consent(str(target))
+            assert notify_spool.restore_awaiting_consent(str(target))
             raise OSError("synthetic copy failure")
         return copy(source, destination, limit)
 
@@ -765,13 +766,13 @@ def test_cli_failure_keeps_last_successful_receipt_and_verification(world, tmp_p
     state = json.loads((tmp_path / "records" / "backup_state.json").read_text())
     assert state["receipt"]["sha256"] == receipt["sha256"]
     assert "last_verify_at" not in state and state["last_action_status"] == "failed"
-    assert backup.status(str(tmp_path / "records"), world[3])["last_attempt_failed"] is True
+    assert backup_evidence.status(str(tmp_path / "records"), world[3])["last_attempt_failed"] is True
 
 
 def test_status_without_records_is_unknown_and_read_only(world, tmp_path):
     state_dir = tmp_path / "records"
     state_dir.mkdir(mode=0o700)
-    result = backup.status(str(state_dir), world[3])
+    result = backup_evidence.status(str(state_dir), world[3])
     assert result["within_rpo"] is None and result["rpo_seconds"] is None
     assert list(state_dir.iterdir()) == []
 
@@ -785,8 +786,8 @@ def test_state_policy_mismatch_or_untrusted_location_fails_before_cipher(world, 
                        keychain_reader=lambda: pytest.fail("policy mismatch read key")) == 1
     assert "policy_mismatch" in capsys.readouterr().out
     assert list(Path(world[3].destination).iterdir()) == []
-    with pytest.raises(backup.BackupError, match="separate_trusted"):
-        backup.status(world[3].destination, world[3])
+    with pytest.raises(backup_evidence.BackupError, match="separate_trusted"):
+        backup_evidence.status(world[3].destination, world[3])
 
 
 def test_scheduled_offsite_uses_latest_static_daily_snapshot_with_explicit_policy(world,
@@ -815,18 +816,18 @@ def test_later_verify_success_does_not_hide_offsite_failure(world, tmp_path, cap
     assert backup.main(["verify", *args, "--keychain", "--bundle", receipt["bundle"],
                         "--sha256", receipt["sha256"]], keychain_reader=lambda: KEY) == 0
     capsys.readouterr()
-    result = backup.status(str(tmp_path / "records"), world[3])
+    result = backup_evidence.status(str(tmp_path / "records"), world[3])
     assert result["last_action"] == "verify" and result["last_attempt_failed"] is True
     assert result["last_offsite_attempt_at"] == NOW
     assert backup.main(["offsite", *args, "--keychain", "--snapshot", str(world[0])],
                        keychain_reader=lambda: KEY) == 0
-    assert backup.status(str(tmp_path / "records"), world[3])["last_attempt_failed"] is False
+    assert backup_evidence.status(str(tmp_path / "records"), world[3])["last_attempt_failed"] is False
 
 
 # ---------- failure cause: only finite known codes are recorded ----------
 
 def _failure(tmp_path, world):
-    status = backup.status(str(tmp_path / "records"), world[3])
+    status = backup_evidence.status(str(tmp_path / "records"), world[3])
     state = json.loads((tmp_path / "records" / "backup_state.json").read_text())
     return status, state
 
@@ -874,8 +875,8 @@ def test_cipher_unavailable_is_recorded_and_survives_a_later_verify(world, tmp_p
 
 
 @pytest.mark.parametrize("raised", [
-    backup.BackupError("backup_/private/PRIVATE_PATH_CANARY"),
-    backup.BackupError("PRIVATE_PATH_CANARY"),
+    backup_evidence.BackupError("backup_/private/PRIVATE_PATH_CANARY"),
+    backup_evidence.BackupError("PRIVATE_PATH_CANARY"),
     OSError("/private/PRIVATE_PATH_CANARY"),
     ValueError("PRIVATE_PATH_CANARY"),
 ])
@@ -904,7 +905,7 @@ def test_tampered_recorded_code_is_not_published(world, tmp_path):
                                  "last_offsite_error": "PRIVATE_PATH_CANARY",
                                  "last_error": "backup_not_a_known_code"}))
     state.chmod(0o600)
-    status = backup.status(str(records), world[3])
+    status = backup_evidence.status(str(records), world[3])
     assert status["last_attempt_failed"] is True and status["last_failure_code"] is None
 
 
@@ -927,20 +928,24 @@ def test_recorded_cause_of_any_shape_never_crashes_status(world, tmp_path, field
     state[field] = value
     (records / "backup_state.json").write_text(json.dumps(state))
     (records / "backup_state.json").chmod(0o600)
-    status = backup.status(str(records), world[3])
+    status = backup_evidence.status(str(records), world[3])
     assert status["last_attempt_failed"] is True
     assert status["last_failure_code"] == expected
 
 
 def test_every_raised_backup_code_is_in_the_known_set():
     import ast
-    source = Path(backup.__file__).read_text(encoding="utf-8")
-    raised = {node.args[0].value for node in ast.walk(ast.parse(source))
-              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-              and node.func.id in ("BackupError", "_InspectionBudgetExhausted")
+    sources = [Path(module.__file__).read_text(encoding="utf-8")
+               for module in (backup, backup_evidence)]
+    raised = {node.args[0].value for source in sources for node in ast.walk(ast.parse(source))
+              if isinstance(node, ast.Call)
+              and ((isinstance(node.func, ast.Name)
+                    and node.func.id in ("BackupError", "_InspectionBudgetExhausted"))
+                   or (isinstance(node.func, ast.Attribute)
+                       and node.func.attr == "BackupError"))
               and node.args and isinstance(node.args[0], ast.Constant)}
-    assert raised and raised <= backup.FAILURE_CODES
-    assert "backup_io_or_policy_failed" in backup.FAILURE_CODES
+    assert raised and raised <= backup_evidence.FAILURE_CODES
+    assert "backup_io_or_policy_failed" in backup_evidence.FAILURE_CODES
 
 
 @pytest.mark.parametrize("count_error", [None, sqlite3.OperationalError, OSError, ValueError])
@@ -954,7 +959,7 @@ def test_offsite_verify_and_escrow_proofs_are_distinct(world, tmp_path, capsys, 
     target = str(Path(world[3].scratch_dir) / 'keychain-drill')
     if count_error:
         from contextlib import contextmanager
-        original_connection = backup._inventory_connection
+        original_connection = backup_evidence._inventory_connection
 
         @contextmanager
         def connection(path, *args):
@@ -963,7 +968,7 @@ def test_offsite_verify_and_escrow_proofs_are_distinct(world, tmp_path, capsys, 
             with original_connection(path, *args) as db:
                 yield db
 
-        monkeypatch.setattr(backup, '_inventory_connection', connection)
+        monkeypatch.setattr(backup_evidence, '_inventory_connection', connection)
     assert backup.main(['drill', *args, '--keychain', '--bundle', receipt['bundle'],
                         '--sha256', receipt['sha256'], '--destination', target],
                        keychain_reader=lambda: KEY) == 0
@@ -977,13 +982,13 @@ def test_offsite_verify_and_escrow_proofs_are_distinct(world, tmp_path, capsys, 
     assert state['last_action_status'] == 'ok'
     assert 'last_escrow_drill_at' not in state
     # Verifying an older snapshot must not roll back offsite freshness.
-    records = backup._records(str(tmp_path / 'records'), world[3])
+    records = backup_evidence.open_records(str(tmp_path / 'records'), world[3])
     older = {'verified_at': NOW, 'inventory': {'last_successful_run': NOW - 60}}
-    backup._record_success(records, state, 'verify', older, key_source='key_fd')
+    backup_evidence.record_success(records, state, 'verify', older, key_source='key_fd')
     latest = json.loads(state_path.read_text())
     assert latest['source_last_successful_run'] == NOW
     assert latest['last_verified_source_at'] == NOW - 60
-    result = backup.status(str(tmp_path / 'records'), world[3])
+    result = backup_evidence.status(str(tmp_path / 'records'), world[3])
     assert result['recovery_scope'] == 'collect_only'
     assert result['expired_bundle_override_available'] is False
     assert result['bundle_age_seconds'] == result['snapshot_data_lag_seconds'] == 0
@@ -997,14 +1002,14 @@ def test_restore_count_includes_pending_parts_of_delivered_cards(tmp_path):
                        [('a','delivered'), ('b','delivered'), ('c','cancelled'), ('d','queued')])
         db.executemany('INSERT INTO notification_render_parts VALUES (?,?)',
                        [('a','pending'), ('a','unknown'), ('b','delivered'), ('c','held')])
-    assert backup._held_render_count(str(tmp_path)) == 2
+    assert backup_evidence.held_render_count(str(tmp_path)) == 2
 
 
 def test_restore_count_old_schema_is_unknown(tmp_path):
     with sqlite3.connect(tmp_path / 'ledger.db') as db:
         db.execute('CREATE TABLE notification_renders(state TEXT)')
         db.execute('CREATE TABLE notification_render_parts(delivery_id TEXT,state TEXT)')
-    assert backup._held_render_count(str(tmp_path)) is None
+    assert backup_evidence.held_render_count(str(tmp_path)) is None
 
 
 def test_held_render_count_accepts_relative_restore_destination(tmp_path, monkeypatch):
@@ -1014,4 +1019,4 @@ def test_held_render_count_accepts_relative_restore_destination(tmp_path, monkey
         db.execute('CREATE TABLE notification_renders(delivery_id TEXT, state TEXT)')
         db.execute("INSERT INTO notification_renders VALUES('synthetic-delivery','held')")
     monkeypatch.chdir(tmp_path)
-    assert backup._held_render_count('relative-restored') == 1
+    assert backup_evidence.held_render_count('relative-restored') == 1

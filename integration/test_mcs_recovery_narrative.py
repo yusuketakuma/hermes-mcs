@@ -63,6 +63,7 @@ import mcs_update  # noqa: E402
 import service_management  # noqa: E402
 import mcs_util  # noqa: E402
 import notify_cards  # noqa: E402
+import notify_spool  # noqa: E402
 import notify_cmds  # noqa: E402
 import notify_reconcile  # noqa: E402
 import notify_transport  # noqa: E402
@@ -233,7 +234,7 @@ def _attach(led, tmp_path, mid=1, fid="file-att-1", name="att-01.bin",
             blob=b"synthetic-attachment-bytes"):
     # the collector stores files in <data root>/attachments — delivery
     # workers refuse sealed paths outside it
-    f = Path(notify_cards.data_root(led)) / "attachments" / name
+    f = Path(notify_spool.data_root(led)) / "attachments" / name
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_bytes(blob)
     cur = led.db.execute(
@@ -502,7 +503,7 @@ def _run_narrative(tmp_path):
             "uploads": len(sw.client.upload_calls)})
 
         # ---- 6. Discord: same content on the second platform --------
-        ddata = Path(notify_cards.data_root(led))
+        ddata = Path(notify_spool.data_root(led))
         eid = led.outbox_add("new_messages", 1,
                              {"message_ids": [1, 2]})
         ev2 = dict(led.db.execute(
@@ -512,7 +513,7 @@ def _run_narrative(tmp_path):
                                             now=TD.NOW)["dispatched"]
         # the runner-published flag names the live transport — the
         # discord adapter claims its spec only when ITS transport is up
-        notify_cards.publish_flags(TD.CFG, str(ddata))
+        notify_spool.publish_flags(TD.CFG, str(ddata))
         from adapters.common import registry as _reg_mod
         from adapters.discord import delivery as _discord_delivery
         reg = _reg_mod.Registry(str(ddata / "discord_state"))
@@ -695,7 +696,7 @@ def _run_narrative(tmp_path):
         N.check("restore_held_without_receipt",
                 rc == 2
                 and (N.data / "ledger.db").read_bytes() == live_bytes
-                and notify_cards.restore_pending(str(N.data)) is
+                and notify_spool.restore_pending(str(N.data)) is
                 not None
                 and grant_denied.get("granted") is False
                 and grant_denied.get("error")
@@ -710,7 +711,7 @@ def _run_narrative(tmp_path):
         led = _ledger.Ledger(str(N.data / "ledger.db"))
         rec = notify_reconcile.reconcile_after_restore(led, SLACK)
         N.check("reconcile_after_restore_settles_journal",
-                notify_cards.restore_pending(str(N.data)) is None
+                notify_spool.restore_pending(str(N.data)) is None
                 and rec.get("verdicts") is not None,
                 {"verdicts": [v.get("verdict") for v in
                               rec.get("verdicts") or []],
@@ -878,7 +879,7 @@ def test_failure_lost_journal_holds_not_completes(tmp_path):
             "attempt_id,delivery_id,begin_command_id,state,"
             "created_at) VALUES('a1','d1','c1','unknown',1)")
         led.db.commit()
-        notify_cards.mark_restored(str(data), backup_path="b")
+        notify_spool.mark_restored(str(data), backup_path="b")
         res = notify_reconcile.reconcile_after_restore(led, SLACK)
         verdicts = [v["verdict"] for v in res.get("verdicts") or []]
         assert res.get("held") or "held" in verdicts \
@@ -916,7 +917,7 @@ def test_failure_missing_consent_receipt_stays_held(tmp_path):
     assert mcs_update.rollback("cid-rb") == 2
     # no receipt seeded — recover must stay held
     mcs_update.recover_interrupted()
-    marker = notify_cards.restore_pending(str(data))
+    marker = notify_spool.restore_pending(str(data))
     assert live.read_bytes() == live_bytes      # never swapped
     assert marker is not None
     assert marker.get("phase") == "awaiting_consent"

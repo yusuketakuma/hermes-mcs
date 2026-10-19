@@ -11,7 +11,7 @@ import pytest
 
 import metadata_report
 from ledger import Ledger, LedgerReader
-from mcs_signals import record_station_staff
+from self_identity import record_station_staff
 
 NOW = 1_800_000_000.0
 SCRIPT = Path(metadata_report.__file__)

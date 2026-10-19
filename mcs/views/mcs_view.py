@@ -16,13 +16,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 import semantic_store
 
-from ledger import LedgerReader, reaction_actor_summary
+from ledger import LedgerReader
+from message_observations import reaction_actor_summary
 from project_metadata_contract import CLINICAL_DATASETS
 from project_metadata_view import physician_viewed_status
 from mcs_contract import project_url
 from mcs_queries import incomplete_reply_roots
 from self_identity import is_own_station_message
-from mcs_util import HOME, loads_dict, register_search_fold, search_fold
+from mcs_util import HOME, loads_dict, search_fold, valid_text
+from mcs_queries import register_search_fold
 from snapshot_access import snapshot_meta
 from read_model import message_patient_context
 from message_metadata import (
@@ -979,7 +981,7 @@ def main(argv=None):
         view = View(snapshot)  # Gate commands on an upgraded, published snapshot; never open the live writer DB.
         if args["kind"] == "card_part_plan":
             if (not requests.valid_uuid(args["delivery_id"])
-                    or not requests._text(args["part_id"], 64)):
+                    or not valid_text(args["part_id"], 64)):
                 raise ValueError("bad_part_identity")
             from notify_recovery import card_part_resolve_plan
             result = card_part_resolve_plan(view.db, args["delivery_id"], args["part_id"])

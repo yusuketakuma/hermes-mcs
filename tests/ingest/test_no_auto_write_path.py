@@ -177,9 +177,10 @@ def test_no_mcs_write_route_is_named_in_code():
     assert not hits, hits
 
 
-# Who may hold the MCS endpoint constants: cross_lists hands API to the
-# pinned _io("api", method="GET") call; the worker only prefix-checks it.
-ENDPOINT_IMPORTERS = {Path("mcs/ingest/cross_lists.py"), ADAPTER, WORKER}
+# Cross-list acquisition now uses only the adapter's bounded wire owner.
+# The current worker still prefix-checks the endpoint; its existing exact
+# holder permission remains, without granting it to pure cross-list parsing.
+ENDPOINT_IMPORTERS = {ADAPTER, WORKER}
 ENDPOINT_ATTRIBUTE_READERS = set()
 MCS_ENDPOINT_NAMES = {"API", "BASE"}
 MCS_ENDPOINT_MODULES = {"mcs_adapter", "mcs_contract"}

@@ -7,6 +7,8 @@ import math
 import time
 
 import notify_cards as cards
+import notify_scope
+import notify_spool
 import notify_action_context as action_context
 import notify_action_tokens as tokens
 from mcs_requests import canonical, payload_hash, positive
@@ -66,9 +68,9 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
                  None, receipt["outcome"], canonical(kept).decode(), now))
         cards.mark_snapshot_dirty(db)
     if specs:
-        root = cards.data_root(ledger)
-        cards.ensure_dirs(root)
-        cards.publish_specs(db, cards.notify_dirs(root), specs, now)
+        root = notify_spool.data_root(ledger)
+        notify_spool.ensure_dirs(root)
+        notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
     return receipt
 
 
@@ -129,7 +131,7 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         # message that carried the click.
         return {**base, "outcome": "rejected", "error": "origin_mismatch"}
     if action in tokens.WRITE_ACTIONS and (
-            not cards.interactive_enabled(cfg) or card["transport"] != cards.active_transport(cfg)):
+            not notify_scope.interactive_enabled(cfg) or card["transport"] != notify_scope.active_transport(cfg)):
         return {**base, "outcome": "rejected", "error": "interactive_off"}
     if card["delivery_state"] == "revoked":
         return {**base, "outcome": "rejected", "error": "card_revoked"}
@@ -250,7 +252,7 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
     elif action == "unacked":
         view = unacked_view(
             db, card["transport"], now, inputs.get("projects"),
-            member_names=(cards.notify_cfg(cfg).get("lineworks") or {}).get(
+            member_names=(notify_scope.notify_cfg(cfg).get("lineworks") or {}).get(
                 "user_names"))
     elif action == "meds":
         params = params or {}
@@ -688,7 +690,7 @@ def apply_refresh(ledger, req, cfg, now=None) -> dict:
             (command_id, payload_hash(req), receipt.get("project_id"),
              None, receipt["outcome"], canonical(receipt).decode(), now))
         cards.mark_snapshot_dirty(db)
-    root = cards.data_root(ledger)
-    cards.ensure_dirs(root)
-    cards.publish_specs(db, cards.notify_dirs(root), specs, now)
+    root = notify_spool.data_root(ledger)
+    notify_spool.ensure_dirs(root)
+    notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
     return receipt

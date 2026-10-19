@@ -8,6 +8,7 @@ import os
 import pytest
 
 import notify_cards
+import notify_spool
 import notify_urgent
 from notify_testkit import NOW, _begin
 from notify_urgent_testkit import _alert, led, world
@@ -24,7 +25,7 @@ def _dispatched(world):
 
 
 def _spec_path(store, render):
-    dirs = notify_cards.notify_dirs(notify_cards.data_root(store))
+    dirs = notify_spool.notify_dirs(notify_spool.data_root(store))
     return os.path.join(dirs[render["transport"] + "_render"], f"{render['delivery_id']}.json")
 
 

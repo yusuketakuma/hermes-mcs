@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "収集監視と表示の状態判定を共通化",
+  "summary": "監視記録の鮮度と履歴取得の停滞を判定する共通条件を、通信・通知を行わない処理へ集約しました。表示側は監視の実行入口や収集stageを読み込まずに同じ条件を使います。",
+  "upgrade": "追加設定は不要です。収集間隔、監視の猶予、停滞の条件、警報と表示内容は変更しません。",
+  "details": [
+    "health_policyが設定値の有限数検証・既定値・鮮度期限と停滞閾値を所有します。",
+    "監視側は状態ファイル・配送記録・通知、収集側は取得とcursor、表示側は借用snapshotの読取りを引き続き所有します。"
+  ],
+  "refs": [
+    "mcs/core/health_policy.py",
+    "mcs/ingest/health_watch.py",
+    "mcs/ingest/collection_stages.py",
+    "mcs/views/operational_status.py",
+    "mcs/views/operational_progress.py"
+  ]
+}

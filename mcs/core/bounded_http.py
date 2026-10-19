@@ -44,7 +44,7 @@ _WORKER_HEADER_NAMES = frozenset({
 })
 
 
-def _loopback_endpoint_allowed(endpoint: str) -> bool:
+def loopback_endpoint_allowed(endpoint: str) -> bool:
     """Allow only an unauthenticated HTTP endpoint on loopback."""
     try:
         parts = urlsplit(endpoint)
@@ -60,7 +60,7 @@ def _loopback_endpoint_allowed(endpoint: str) -> bool:
 def _worker_endpoint_allowed(endpoint: str, allowed) -> bool:
     """Worker-side check: the caller-declared allowlist (already
     enforced parent-side) plus unauthenticated loopback."""
-    return endpoint in allowed or _loopback_endpoint_allowed(endpoint)
+    return endpoint in allowed or loopback_endpoint_allowed(endpoint)
 
 
 def _worker_headers(headers) -> dict:
@@ -96,7 +96,7 @@ def _http_worker_main() -> int:
                 or timeout <= 0
                 or (api_key is not None and not isinstance(api_key, str))
                 or (api_key is None
-                    and not _loopback_endpoint_allowed(endpoint))):
+                    and not loopback_endpoint_allowed(endpoint))):
             raise ValueError("request_invalid")
         raw = None if body is None else json.dumps(
             body, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -188,7 +188,7 @@ def bounded_http_request(endpoint: str, method: str, body,
         raise ValueError("request_invalid")
     allowed = {e for e in allowed_endpoints if isinstance(e, str)}
     if api_key is None:
-        if not _loopback_endpoint_allowed(endpoint):
+        if not loopback_endpoint_allowed(endpoint):
             raise ValueError("local_endpoint_not_allowed")
     elif not isinstance(api_key, str) or endpoint not in allowed:
         raise ValueError("endpoint_not_allowed")

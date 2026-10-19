@@ -1,0 +1,21 @@
+{
+  "category": "changed",
+  "title": "操作入力の共通検証を整理",
+  "summary": "入力の確認と通知状態の読み取りを共有する実装の責務を整理しました。承認条件・表示・保存形式・既定値は変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "文字列検証の実体をmcs_util.valid_textへ集約し、依頼の発行・実行でqueue名の正規表現を共有する。",
+    "canonical・payload_hash・positiveの既存公開互換入口は維持する。"
+  ],
+  "refs": [
+    "mcs/core/mcs_util.py",
+    "mcs/ingest/job_ops.py",
+    "mcs/notify/notify_cmds.py",
+    "mcs/notify/notify_recovery.py",
+    "mcs/ops/mcs_operations.py",
+    "mcs/ops/mcs_requests.py",
+    "mcs/ops/mcs_restore.py",
+    "mcs/ops/notification_cancel.py",
+    "mcs/ops/operation_contract.py"
+  ]
+}

@@ -1,6 +1,7 @@
 """Card attachment delivery, live views, health alerts and transport gate — synthetic temp ledger only."""
 from __future__ import annotations
 
+import semantic_send_gate
 import notify_parts
 import hashlib
 import json
@@ -10,11 +11,14 @@ import sys
 import pytest
 
 import notify_cards
+import notify_spool
 import notify_action_context
 import notify_action_tokens
 import notify_actions
 import notify_cmds
 import notify_flush
+import notify_sender
+import mcs_util
 import notify_render
 import notify_transport
 from mcs_requests import payload_hash
@@ -130,7 +134,7 @@ def test_followup_aborts_while_a_card_part_owns_the_file(led, tmp_path, state):
     _dispatch(led, _intent(led))
     led.db.execute("UPDATE notification_render_parts SET state=? "
                    "WHERE kind='attachment_part'", (state,))
-    with pytest.raises(notify_flush._StaleSend):
+    with pytest.raises(semantic_send_gate.StaleSend):
         notify_flush._followup_files(
             led, {"attachment_id": aid, "message_id": 100}, 1)
 
@@ -230,12 +234,12 @@ def test_long_attachment_name_keeps_its_extension(led, tmp_path):
 # 8 ---------------------------------------------------------------------
 
 def test_health_write_failed_alert_is_sent(led, monkeypatch):
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: sys.executable)
-    monkeypatch.setattr(notify_flush, "_target", lambda *a: "synthetic")
-    monkeypatch.setattr(notify_flush, "_send_argv", lambda *a: ["hermes"])
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: sys.executable)
+    monkeypatch.setattr(notify_sender, 'target', lambda *a: "synthetic")
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *a: ["hermes"])
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     sent = []
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda argv, content, *a, **k: sent.append(content))
     led.outbox_add("health_write_failed", None,
                    {"detail": "OSError", "run_id": 7})
@@ -264,14 +268,14 @@ def test_human_command_from_another_transport_is_refused(led, tmp_path, actor):
 
 def test_view_results_expire_after_an_hour(led):
     _delivered_card(led)
-    root = notify_cards.data_root(led)
-    dirs = notify_cards.notify_dirs(root)
+    root = notify_spool.data_root(led)
+    dirs = notify_spool.notify_dirs(root)
     spec = _spec(led)
     tok = _token_for(spec, "summary")
     env = {"version": 1, "op": "notification", "command_id": f"{tok}:{'cd' * 8}",
            "actor": CLICKER, "token": tok, "origin": dict(ORIGIN, message_id="m-9"),
            "request_id": _uuid(91)}
-    notify_cards.publish_file(dirs["cmd_int"], "a.json", json.dumps(env).encode())
+    notify_spool.publish_file(dirs["cmd_int"], "a.json", json.dumps(env).encode())
     notify_cmds.drain_int_commands(led, {}, CFG, root)
     path = os.path.join(dirs["cmd_results"], _uuid(91) + ".json")
     assert "body" in json.loads(open(path, encoding="utf-8").read())

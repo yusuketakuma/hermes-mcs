@@ -16,100 +16,36 @@ same way.
 Events carry message_ids; message content is looked up in the local
 ledger at send time so the outbox payload itself stays tiny.
 
-The send-time semantic policy gates (mode/generation re-checks, the
-audited-summary block, provenance-preserving semantic chunking) live in
-semantic_send_gate; this module keeps thin delegates so flush() stays
-the single delivery driver.
+Send-time mode/generation checks live in semantic_send_gate.
+Audited summary presentation and provenance-preserving chunks live in
+semantic_render; this module owns delivery and resolves current config.
 """
 import hashlib
 import json
 import os
 import re
-import shutil
-import subprocess
-import sys
-import tempfile
 import time
-from pathlib import Path
 
-import mcs_runtime
+import mcs_util
+import notify_sender
 import mcs_signals
 import semantic_send_gate
+import semantic_render
 import structured_view
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import CONF_PATH, html_to_text, load_config
-from mcs_util import hermes_exe as _hermes_exe
 from mcs_requests import positive
 from notify_render import (SECTION_RULE, extraction_failed, signal_evidence,
                            thread_stamp_row)
-# Re-exported send-gate verdicts — the canonical definitions live in
-# semantic_send_gate (the send-time semantic policy layer); the legacy
-# private names stay so existing tests and flush() catches are stable.
-# Some private names are also cross-module API, so renames must reach:
-# health_watch (_target, _send_argv, _send, _SendFailed, _SendUsage),
-# semantic_lifecycle (_MAX_LEN, _target, _delivery_fingerprint) and
-# notify_reconcile (_ALERT_KINDS, _hold_event).
-from semantic_send_gate import (
-    DeferredSend as _DeferredSend,
-    FreezeSend as _FreezeSend,
-    StaleSend as _StaleSend,
-)
-
-_MAX_LEN = 1900
+TEXT_CHUNK_WIDTH = 1900
 # Per-notification file caps; oversized files stay local-only and are
 # noted in the text instead of failing the whole send.
 _MAX_FILES = 10
-_MAX_FILE_BYTES = 24 * 1024 * 1024
 _MAX_FILES_BYTES = 23 * 1024 * 1024
-SEND_MIN_BUDGET_S = 30
-_ALERT_KINDS = frozenset({
-    "session_expired", "session_recovered", "run_failed", "update_notice",
-    "health_write_failed",
-})
 
 
 def _config() -> dict:
     return load_config(CONF_PATH)
-
-
-def _target(cfg: dict, kind: str) -> str | None:
-    """Delivery target in `hermes send --to` syntax. Patient-content
-    events ONLY go to the explicitly configured target — a missing
-    config must never spill bodies into a fallback destination
-    (Oracle B15). System alerts may override via notify_system_target."""
-    t = cfg.get("notify_target")
-    if kind in _ALERT_KINDS:
-        st = cfg.get("notify_system_target")
-        if isinstance(st, str) and st.strip():
-            t = st
-    return t.strip() if isinstance(t, str) and t.strip() else None
-
-
-def _hermes_free(cfg: dict, target: str | None) -> bool:
-    """Targets delivered by MCS's own sender instead of `hermes send`."""
-    return mcs_runtime.standalone(cfg) or (target or "").startswith("lineworks:")
-
-
-def _send_argv(cfg: dict, target: str) -> list[str]:
-    """`hermes [-p profile] send --to <target> --quiet` argv, or the
-    independent sender's equivalent (same sealed stdin contract)."""
-    if _hermes_free(cfg, target):
-        lineworks = target.startswith("lineworks:")
-        package = "lineworks_adapter" if lineworks else "mcs_standalone"
-        entry = Path(__file__).resolve().parents[2] / package / "__main__.py"
-        # the Slack/Discord SDKs exist only in the standalone venv — a
-        # manual run on another Python must still send through it
-        python = mcs_runtime.python_executable(cfg, root=Path(CONF_PATH).parent)
-        if lineworks or not os.access(python, os.X_OK):
-            python = sys.executable
-        return [python, str(entry), "send", "--root",
-                str(Path(CONF_PATH).parent), "--to", target, "--quiet"]
-    argv = [_hermes_exe(cfg)]
-    profile = cfg.get("notify_bot_profile")
-    if isinstance(profile, str) and re.fullmatch(r"[a-z0-9_-]+", profile):
-        argv += ["-p", profile]
-    argv += ["send", "--to", target, "--quiet"]
-    return argv
 
 
 def _attachments_map(ledger, mids: list[int]) -> dict:
@@ -129,7 +65,7 @@ def _attachments_map(ledger, mids: list[int]) -> dict:
 def _collect_files(att_map: dict, order: list[int],
                    skipped: dict | None = None) -> list[tuple[str, str]]:
     """Downloaded attachment (filename, local_path) pairs for upload —
-    message order, max _MAX_FILES, each <= _MAX_FILE_BYTES. A downloaded
+    message order, max _MAX_FILES, each <= notify_sender.MAX_FILE_BYTES. A downloaded
     file left out (caps, missing, unverifiable) is recorded in
     ``skipped`` as attachment_id -> text marker so the notice can say
     it was not sent instead of listing it as attached."""
@@ -155,7 +91,7 @@ def _collect_files(att_map: dict, order: list[int],
             except OSError:
                 skip(a, "未送信")
                 continue
-            if size > _MAX_FILE_BYTES:
+            if size > notify_sender.MAX_FILE_BYTES:
                 skip(a, "25MB超·未送信")
                 continue
             if total + size > _MAX_FILES_BYTES:
@@ -257,9 +193,9 @@ def _signal_notice_text(ledger, payload: dict) -> str:
     Last-moment gates like semantic_notice: the flag may have been
     turned off, or the signal may have resolved while queued —
     both are terminal drops, not retries."""
-    import notify_cards
-    if not notify_cards.signals_notify(_config()):
-        raise _StaleSend("signals_notify_disabled")
+    import notify_scope
+    if not notify_scope.signals_notify(_config()):
+        raise semantic_send_gate.StaleSend("signals_notify_disabled")
     # Member keys: a merged same-post med intent carries
     # signal_keys[]; a legacy/single intent carries signal_key.
     skeys = payload.get("signal_keys")
@@ -278,7 +214,7 @@ def _signal_notice_text(ledger, payload: dict) -> str:
         if not (s.get("project_id")
                 and ledger.is_archived(s["project_id"]))]
     if not open_sigs:
-        raise _StaleSend("signal_not_open")
+        raise semantic_send_gate.StaleSend("signal_not_open")
     # Rebuild text at send time: notes can change while evidence
     # IDs stay the same, a digest re-groups its live members, and a
     # merged med notice shrinks to whoever is still open.
@@ -309,7 +245,7 @@ def _followup_files(ledger, payload: dict, project_id):
         " AND (? IS NULL OR m.project_id=?)",
         (aid, project_id, project_id)).fetchone()
     if not a or a["state"] != "downloaded" or not a["local_path"]:
-        raise _StaleSend("attachment_not_ready")
+        raise semantic_send_gate.StaleSend("attachment_not_ready")
     # a card's part journal already owns this file (planned, sent or
     # uncertain) — a second send would duplicate it. Held parts never
     # send; their thread failure re-queues this followup instead.
@@ -318,10 +254,10 @@ def _followup_files(ledger, payload: dict, project_id):
             " AND kind='attachment_part'"
             " AND state IN ('pending','delivered','unknown') LIMIT 1",
             (aid,)).fetchone():
-        raise _StaleSend("attachment_in_card_parts")
+        raise semantic_send_gate.StaleSend("attachment_in_card_parts")
     files = _collect_files({a["message_id"]: [a]}, [a["message_id"]])
     if not files:
-        raise _StaleSend("attachment_unsendable")
+        raise semantic_send_gate.StaleSend("attachment_unsendable")
     import notify_render
     preview = notify_render.notification_preview(
         ledger.db, {"kind": "thread", "project_id": a["project_id"]},
@@ -356,12 +292,12 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         # off drops a still-queued one instead of sending it late
         import notify_digest
         if notify_digest.settings(_config()) is None:
-            raise _StaleSend("daily_digest_disabled")
+            raise semantic_send_gate.StaleSend("daily_digest_disabled")
         if ledger.db.execute(
                 "SELECT 1 FROM notify_outbox WHERE kind='daily_digest' "
                 "AND event_id>?", (ev["event_id"],)).fetchone():
             # a newer day exists — an old summary is never sent late
-            raise _StaleSend("daily_digest_superseded")
+            raise semantic_send_gate.StaleSend("daily_digest_superseded")
     if ev["kind"] == "task_reminder":
         # the text is frozen at enqueue; the task, card or switch may
         # have changed while it waited
@@ -369,9 +305,9 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         stale = notify_cards.task_reminder_stale(
             ledger, _config(), ev["event_id"])
         if stale == "outside_hours":
-            raise _DeferredSend(stale)
+            raise semantic_send_gate.DeferredSend(stale)
         if stale:
-            raise _StaleSend(stale)
+            raise semantic_send_gate.StaleSend(stale)
     if ev["kind"] in ("update_notice", "task_reminder", "daily_digest"):
         # Frozen text like semantic_notice — sanitized at enqueue time
         # (mentions defused), the sender just relays it.
@@ -387,7 +323,7 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         # notice's input fingerprint must still be live — a degraded
         # notice is instead suppressed if its base event has since
         # delivered.
-        _semantic_gate(ledger, ev, payload)
+        semantic_send_gate.semantic_gate(ledger, ev, payload, _config())
         text = payload.get("text")
         if not isinstance(text, str) or not text:
             raise ValueError("payload_invalid")
@@ -419,7 +355,7 @@ def _msg_rows(ledger, payload: dict, project_id) -> list:
         if r:
             rows.append(r)
     if not rows:
-        raise _StaleSend("messages_unavailable")
+        raise semantic_send_gate.StaleSend("messages_unavailable")
     return rows
 
 
@@ -464,14 +400,6 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
             + indent + (body or "(本文なし)") + att_line)
 
 
-def _sem_block(ledger, r) -> str:
-    """Audited summary section — the enforce-mode policy lives in
-    semantic_send_gate.semantic_summary_block."""
-    try:
-        return semantic_send_gate.semantic_summary_block(
-            ledger, r, _config())
-    except Exception:
-        return ""   # never let a summary render break delivery
 
 
 def _message_notice(ledger, ev, payload: dict):
@@ -498,43 +426,19 @@ def _message_notice(ledger, ev, payload: dict):
     skipped: dict = {}
     files = _collect_files(att_map, [r["message_id"] for r, _ in seq],
                            skipped)
-    stamps = not (_target(_config(), ev["kind"]) or "").startswith("lineworks:")
-    out = [_fmt_row(ledger, ev, att_map, r, indent, skipped, stamps=stamps,
-                    summary_suffix="" if indent else _sem_block(ledger, r))
-           for r, indent in seq]
+    stamps = not (notify_sender.target(_config(), ev["kind"]) or "").startswith("lineworks:")
+    out = []
+    for r, indent in seq:
+        summary_suffix = ""
+        if not indent:
+            try:
+                summary_suffix = semantic_render.semantic_summary_block(ledger, r, _config())
+            except Exception:
+                pass  # A config/summary failure cannot break the base notice.
+        out.append(_fmt_row(ledger, ev, att_map, r, indent, skipped, stamps=stamps,
+                            summary_suffix=summary_suffix))
     head = f"[MCS {src}] 新着 {len(rows)} 件"
     return (head + "\n\n" + "\n\n".join(out), files)
-
-
-# --- send-time semantic gates ------------------------------------------
-# The policy layer lives in semantic_send_gate. These thin delegates keep
-# the historic private names that tests monkeypatch and that flush()/
-# _format_event() call; each delegate resolves this module's _config() so
-# a patched config still reaches the gate (semantic_send_gate never
-# imports back into this module — values come in as arguments).
-
-
-def _semantic_gate(ledger, ev, payload: dict, in_progress: bool = False):
-    """Re-export — implementation: semantic_send_gate.semantic_gate."""
-    return semantic_send_gate.semantic_gate(
-        ledger, ev, payload, _config(), in_progress=in_progress)
-
-
-def _semantic_render_state(ledger, ev) -> tuple:
-    """Re-export — implementation: semantic_send_gate.semantic_render_state."""
-    return semantic_send_gate.semantic_render_state(ledger, ev, _config())
-
-
-def _semantic_render_gate(ledger, ev, initial: tuple,
-                          in_progress: bool = False):
-    """Re-export — implementation: semantic_send_gate.semantic_render_gate."""
-    return semantic_send_gate.semantic_render_gate(
-        ledger, ev, initial, _config(), in_progress=in_progress)
-
-
-def _semantic_chunks(content: str) -> list[str]:
-    """Re-export — implementation: semantic_send_gate.semantic_chunks."""
-    return semantic_send_gate.semantic_chunks(content, _MAX_LEN)
 
 
 def _has_sent_progress(ev) -> bool:
@@ -567,7 +471,7 @@ def _send_never_began(ev) -> bool:
             and not progress.get("sent"))
 
 
-def _hold_event(ledger, ev, cfg, proven_undelivered=False,
+def hold_event(ledger, ev, cfg, proven_undelivered=False,
                 reason="delivery_held", rescue=True):
     """Quarantine an event; for an unsent digest payload, first move
     its still-open member keys into a fresh scheduled digest — a held
@@ -575,7 +479,8 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
     re-enqueue them (signals notify only at the open transition), so
     without this the members would go permanently silent. Salvage runs
     only when non-delivery is provable: an empty/no-send receipt, or a
-    send path that refused before posting (proven_undelivered)."""
+    send path that refused before posting (proven_undelivered).
+    Borrows ledger without closing it; existing hold/rescue commit boundaries apply."""
     # flush's row predates this attempt. Its current receipt may now
     # contain accepted chunks or an unresolved in-flight send.
     ev = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
@@ -633,16 +538,6 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
     ledger.outbox_hold(ev["event_id"], reason)
 
 
-class _SendFailed(OSError):
-    """Delivery did not begin; the outbox may safely retry.
-
-    ``code`` is the direct sender's final stderr token (empty when the
-    failure was local); it only selects the hold policy, never whether
-    delivery may have begun."""
-
-    code = ""
-
-
 # Direct-sender codes (exit 75) that prove nothing was accepted AND name a
 # condition that heals on its own: connectivity/DNS/timeout before any post,
 # a busy local sender lock, or a platform rate limit. The standalone
@@ -672,163 +567,8 @@ def _transient_failing_for(attempts: int) -> int:
 
 
 def _transient_pre_send(exc) -> bool:
-    return (isinstance(exc, _SendFailed) and not isinstance(exc, _SendBudget)
+    return (isinstance(exc, notify_sender.SendFailed) and not isinstance(exc, notify_sender.SendBudget)
             and exc.code in _TRANSIENT_SEND_CODES)
-
-
-class _SendBudget(_SendFailed):
-    """Insufficient send time; defer without consuming an attempt."""
-
-
-def _send_budget(deadline: float | None) -> float:
-    """Check before reserving in-flight and again before starting transport."""
-    remain = 180 if deadline is None else deadline - time.monotonic()
-    if remain < SEND_MIN_BUDGET_S:
-        raise _SendBudget("send_budget_insufficient")
-    return min(180, remain)
-
-
-class _SendUncertain(OSError):
-    """Delivery began but acceptance is unknown; never retry automatically."""
-
-
-class _SendUsage(Exception):
-    """`hermes send` refused the invocation itself (exit 2) — a CLI/
-    config contract problem that retrying cannot fix → outbox_hold."""
-
-
-def _media_path(name: str, path: str) -> str:
-    """MEDIA: delivery path for a stored attachment. Downloaded files are
-    saved extensionless (attachments/<id>); platforms derive the upload
-    filename from the path basename, so a bare id posts as an
-    extensionless blob Discord won't render inline. Alias the file to
-    `<path><ext>` (hardlink, copy fallback) carrying the original
-    extension so the upload keeps a renderable filename."""
-    ext = os.path.splitext(name)[1].lower() if name else ""
-    if (not ext or not re.fullmatch(r"\.[a-z0-9]{1,8}", ext)
-            or os.path.splitext(path)[1]):
-        return path
-    alias = path + ext
-    try:
-        if (not os.path.islink(alias) and os.path.exists(alias)
-                and os.path.samefile(path, alias)):
-            return alias
-        # A re-download atomically replaces the source inode. Reusing its
-        # old alias would bypass the source's hash check and upload stale
-        # bytes; replacing the alias also avoids following a planted link.
-        with tempfile.TemporaryDirectory(
-                prefix=".media-", dir=os.path.dirname(os.path.abspath(path))) as work:
-            prepared = os.path.join(work, "attachment")
-            try:
-                os.link(path, prepared)
-            except OSError:
-                shutil.copy2(path, prepared)
-            os.replace(prepared, alias)
-    except OSError:
-        return path
-    return alias
-
-
-# `hermes send` parses MEDIA:/voice/document directives from the WHOLE
-# stdin stream — untrusted content (post bodies, sender names, LLM
-# output) must never form one, or a crafted post could attach any
-# readable local file to the notification. The keyword is defused to a
-# fullwidth form (visible, non-parsing); the [[...]] directives get
-# single brackets. Verified attachments are appended afterwards as
-# genuine directives — see _compose_body.
-_CONTROL_TAG_RE = re.compile(r"(?i)([`\"'*_]{0,3})MEDIA:")
-_DOUBLE_BRACKET_RE = re.compile(
-    r"\[\[(as_document|audio_as_voice)\]\]", re.IGNORECASE)
-
-
-def _defuse_control_syntax(text: str) -> str:
-    text = _CONTROL_TAG_RE.sub(r"\1MEDIA：", text)
-    return _DOUBLE_BRACKET_RE.sub(r"[\1]", text)
-
-
-def _compose_body(content: str,
-                  files: list[tuple[str, str]] | None) -> str:
-    # Hermes parses mentions/links in every field, including file followups.
-    body = (_defuse_control_syntax(content).replace("<", "＜").replace(">", "＞")
-            .replace("@", "＠").replace("](", "］("))
-    if files:
-        body += "".join(f"\nMEDIA:{_media_path(fn, path)}"
-                        for fn, path in files)
-    return body
-
-
-def _send(argv: list[str], content: str,
-          files: list[tuple[str, str]] | None = None,
-          deadline: float | None = None,
-          attachment_pins: dict[str, str] | None = None) -> None:
-    """One chunk via `hermes send` (body on stdin; attachments as MEDIA:
-    references — the adapter owns upload limits and mention policy)."""
-    if len(argv) > 1 and argv[1].endswith(
-            ("/lineworks_adapter/__main__.py", "/mcs_standalone/__main__.py")):
-        sealed = []
-        for name, path in files or []:
-            size = 0
-            hashed = hashlib.sha256()
-            try:
-                with open(path, "rb") as handle:
-                    while size <= _MAX_FILE_BYTES:
-                        block = handle.read(min(1 << 20, _MAX_FILE_BYTES + 1 - size))
-                        if not block:
-                            break
-                        size += len(block)
-                        hashed.update(block)
-            except OSError:
-                raise _SendFailed("attachment_unavailable") from None
-            if size > _MAX_FILE_BYTES:
-                raise _SendFailed("attachment_too_large")
-            digest = hashed.hexdigest()
-            if attachment_pins is not None and attachment_pins.get(path) != digest:
-                raise _SendFailed("attachment_mismatch")
-            sealed.append({"name": name, "path": path, "bytes": size,
-                           "sha256": digest})
-        body = json.dumps({"text": content, "files": sealed}, ensure_ascii=False)
-    else:
-        body = _compose_body(content, files)
-    timeout = _send_budget(deadline)
-    try:
-        r = subprocess.run(argv, input=body, text=True,
-                           capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        raise _SendUncertain("hermes send timed out") from e
-    except OSError as e:
-        raise _SendFailed("hermes send could not start") from e
-    detail = (r.stderr or r.stdout or "").strip()[:400]
-    if r.returncode == 2:
-        raise _SendUsage(detail or "hermes send usage error")
-    if r.returncode == 75 and argv[1:2] and argv[1].endswith(
-            ("/mcs_standalone/__main__.py", "/lineworks_adapter/__main__.py")):
-        # EX_TEMPFAIL from a direct sender: the platform provably
-        # accepted nothing (failed before the post, or a definitive reject).
-        exc = _SendFailed(detail or "send not accepted")
-        # The sender prints its fixed code last; earlier lines may be logs.
-        lines = (r.stderr or "").strip().splitlines()
-        words = lines[-1].split() if lines else []
-        exc.code = words[-1] if words and len(words[-1]) <= 64 else ""
-        raise exc
-    if r.returncode != 0:
-        # A failed child can have delivered text or some attachments
-        # before losing its response. Its exit status is not a negative ACK.
-        raise _SendUncertain(detail or f"hermes send exit {r.returncode}")
-
-
-def _delivery_fingerprint(target: str, chunks: list[str],
-                          files: list[tuple[str, str]]) -> str:
-    h = hashlib.sha256(target.encode())
-    for chunk in chunks:
-        h.update(b"\0text\0")
-        h.update(chunk.encode())
-    for name, path in files:
-        h.update(b"\0file\0")
-        h.update(name.encode())
-        with open(path, "rb") as f:
-            for block in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(block)
-    return h.hexdigest()
 
 
 def _send_marked(ledger, ev, i: int, sent_ids: list[str],
@@ -837,13 +577,13 @@ def _send_marked(ledger, ev, i: int, sent_ids: list[str],
                  deadline: float | None,
                  attachment_pins: dict[str, str] | None = None) -> None:
     """Retain the in-flight marker unless non-delivery is established."""
-    _send_budget(deadline)
+    notify_sender.send_budget(deadline)
     ledger.outbox_progress(ev["event_id"], i, list(sent_ids),
                            fingerprint, i + 1)
     try:
         kwargs = {"attachment_pins": attachment_pins} if attachment_pins is not None else {}
-        _send(argv, chunk, files, deadline=deadline, **kwargs)
-    except (_SendFailed, _SendUsage):
+        notify_sender.send(argv, chunk, files, deadline=deadline, **kwargs)
+    except (notify_sender.SendFailed, notify_sender.SendUsage):
         ledger.outbox_progress(ev["event_id"], len(sent_ids),
                                list(sent_ids), fingerprint)
         raise
@@ -887,10 +627,11 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
     UNSEALED intent once (provably unsent) so it can flush as plain
     text; returns False in that case so the caller falls through."""
     import notify_cards
+    import notify_scope
     sealed = ledger.db.execute(
         "SELECT 1 FROM notification_intent_batches "
         "WHERE event_id=?", (ev["event_id"],)).fetchone()
-    if not sealed and ev["kind"] not in ("urgent_notice", "signal") and not notify_cards.interactive_enabled(cfg):
+    if not sealed and ev["kind"] not in ("urgent_notice", "signal") and not notify_scope.interactive_enabled(cfg):
         notify_cards.revert_to_text(ledger, ev["event_id"])
         return False
     try:
@@ -938,9 +679,8 @@ def _base_render_gate_ok(ledger, ev, render_state, in_progress,
     suppress or hour-park the arrival notice itself. Once a chunk is
     out, the gate's freeze/hold semantics apply unchanged."""
     try:
-        _semantic_render_gate(ledger, ev, render_state,
-                              in_progress=in_progress)
-    except (_StaleSend, _DeferredSend):
+        semantic_send_gate.semantic_render_gate(ledger, ev, render_state, _config(), in_progress=in_progress)
+    except (semantic_send_gate.StaleSend, semantic_send_gate.DeferredSend):
         if in_progress:
             raise
         # a re-render is not a failed delivery — keep attempts intact so
@@ -955,8 +695,8 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
     """Format, chunk and send one text event — per-chunk progress is
     journaled so a crash mid-event resumes at the first unacknowledged
     chunk rather than duplicating accepted posts. Insufficient time raises
-    _SendBudget without consuming an attempt or reserving a new send."""
-    _send_budget(deadline)
+    notify_sender.SendBudget without consuming an attempt or reserving a new send."""
+    notify_sender.send_budget(deadline)
     # An unknown send outcome is held before formatting: a stale/closed
     # source would otherwise suppress the event and lose the receipt.
     if ev["progress"]:
@@ -967,7 +707,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
         if not isinstance(early_progress, dict):
             raise ValueError("progress_invalid")
         if early_progress.get("sending") is not None:
-            _hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
+            hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
             res["uncertain"] = res.get("uncertain", 0) + 1
             return
     import notify_urgent
@@ -983,28 +723,28 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
     else:
         content, files = _format_event(ledger, ev)
     attachment_pins = None
-    if _hermes_free(cfg, target):
+    if notify_sender.hermes_free(cfg, target):
         attachment_pins = {}
         for _, path in files:
             hashes = {r[0] for r in ledger.db.execute(
                 "SELECT sha256 FROM attachments WHERE local_path=? AND state='downloaded'", (path,))}
             if len(hashes) != 1 or not re.fullmatch(r"[0-9a-f]{64}", next(iter(hashes)) or ""):
-                raise _SendFailed("attachment_unverified")
+                raise notify_sender.SendFailed("attachment_unverified")
             attachment_pins[path] = next(iter(hashes))
-    render_state = (_semantic_render_state(ledger, ev)
+    render_state = (semantic_send_gate.semantic_render_state(ledger, ev, _config())
                     if ev["kind"] == "new_messages" else ())
-    chunks = (_semantic_chunks(content)
+    chunks = (semantic_render.semantic_chunks(content, TEXT_CHUNK_WIDTH)
               if ev["kind"] == "semantic_notice" else
-              [content[i:i + _MAX_LEN]
-               for i in range(0, len(content), _MAX_LEN)])
+              [content[i:i + TEXT_CHUNK_WIDTH]
+               for i in range(0, len(content), TEXT_CHUNK_WIDTH)])
     # resume at the first unacknowledged chunk — a crash after a
     # partial send must not duplicate accepted chunks (B25)
     # an unacknowledged `sending` chunk was already held above (F19)
     start, sent_ids, previous, _ = _progress(
         ev["progress"], len(chunks))
-    fingerprint = _delivery_fingerprint(target, chunks, files)
+    fingerprint = notify_sender.delivery_fingerprint(target, chunks, files)
     if start and previous != fingerprint:
-        _hold_event(ledger, ev, cfg, reason="delivery_changed")
+        hold_event(ledger, ev, cfg, reason="delivery_changed")
         res["failed"] += 1
         return
     if not start:
@@ -1014,14 +754,13 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
     def gate(i, payload) -> bool:
         """Last-moment pre-chunk gate, re-evaluated before a retry."""
         if ev["kind"] == "semantic_notice":
-            _semantic_gate(ledger, ev, payload,
-                           in_progress=bool(start or i))
+            semantic_send_gate.semantic_gate(ledger, ev, payload, _config(), in_progress=bool(start or i))
             return True
         return not render_state or _base_render_gate_ok(
             ledger, ev, render_state, bool(start or i), res)
 
     for i in range(start, len(chunks)):
-        _send_budget(deadline)
+        notify_sender.send_budget(deadline)
         payload = None
         if ev["kind"] == "semantic_notice":
             try:
@@ -1041,7 +780,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
                          argv, chunks[i],
                          post_files if i == 0 else None,
                          deadline, attachment_pins=attachment_pins)
-        except _SendUsage:
+        except notify_sender.SendUsage:
             if i != 0 or not post_files:
                 raise
             post_files = None
@@ -1059,47 +798,47 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
 
 def _fail_event(ledger, ev, cfg, res, exc):
     """Per-event failure accounting — quarantine, park, suppress or
-    backoff according to the exception class (_SendUncertain must be
+    backoff according to the exception class (notify_sender.SendUncertain must be
     checked before OSError, which it subclasses)."""
-    if isinstance(exc, _SendBudget):
+    if isinstance(exc, notify_sender.SendBudget):
         res["skipped"] += 1
         res["send_budget_insufficient"] = res.get("send_budget_insufficient", 0) + 1
-    elif isinstance(exc, _DeferredSend):
+    elif isinstance(exc, semantic_send_gate.DeferredSend):
         # stays pending but re-checks hourly, not every flush. A
         # parked enforce intent is policy-blocked, not incomplete —
         # count it separately so run_check's notify_incomplete signal
         # doesn't flag every other tick while the mode gate is down
         if _has_sent_progress(ev):
-            _hold_event(ledger, ev, cfg, reason="deferred_after_partial")
+            hold_event(ledger, ev, cfg, reason="deferred_after_partial")
             res["failed"] += 1
         else:
             ledger.outbox_defer(ev["event_id"], 3600)
             res["parked"] += 1
-    elif isinstance(exc, _FreezeSend):
+    elif isinstance(exc, semantic_send_gate.FreezeSend):
         # An accepted chunk is immutable. Keep its receipt/progress and
         # freeze the remaining chunks until an explicit retry decision.
-        _hold_event(ledger, ev, cfg, reason="policy_changed")
+        hold_event(ledger, ev, cfg, reason="policy_changed")
         res["failed"] += 1
-    elif isinstance(exc, _StaleSend):
+    elif isinstance(exc, semantic_send_gate.StaleSend):
         if _has_sent_progress(ev):
-            _hold_event(ledger, ev, cfg, reason="stale_after_partial")
+            hold_event(ledger, ev, cfg, reason="stale_after_partial")
             res["failed"] += 1
         else:
             ledger.outbox_suppress(ev["event_id"])
             res["suppressed"] += 1
-    elif isinstance(exc, _SendUsage):
+    elif isinstance(exc, notify_sender.SendUsage):
         # invocation itself refused (exit 2) — a CLI/config contract
         # problem; retrying cannot fix it, quarantine the event.
         # The refusal is provably pre-delivery, so held digest
         # members may be salvaged.
-        _hold_event(ledger, ev, cfg, proven_undelivered=True, reason="send_usage")
+        hold_event(ledger, ev, cfg, proven_undelivered=True, reason="send_usage")
         res["failed"] += 1
-    elif isinstance(exc, _SendUncertain):
-        _hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
+    elif isinstance(exc, notify_sender.SendUncertain):
+        hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
         res["uncertain"] = res.get("uncertain", 0) + 1
         res["failed"] += 1
     elif isinstance(exc, ValueError):
-        _hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid")
+        hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid")
         res["failed"] += 1
     elif isinstance(exc, OSError | TimeoutError | KeyError):
         # A permanent pre-send failure (revoked token, deleted channel,
@@ -1113,7 +852,7 @@ def _fail_event(ledger, ev, cfg, res, exc):
         else:
             exhausted = ev["attempts"] >= PRE_SEND_MAX_ATTEMPTS
         if exhausted:
-            _hold_event(ledger, ev, cfg, reason="pre_send_failure")
+            hold_event(ledger, ev, cfg, reason="pre_send_failure")
         else:
             ledger.outbox_mark(ev["event_id"], "failed",
                                retry_in=_retry_backoff(ev["attempts"]))
@@ -1126,7 +865,7 @@ def _fail_event(ledger, ev, cfg, res, exc):
         # deterministic bug quarantines after 5 attempts instead of
         # looping forever.
         if ev["attempts"] >= 4:
-            _hold_event(ledger, ev, cfg, reason="internal_failure")
+            hold_event(ledger, ev, cfg, reason="internal_failure")
         else:
             ledger.outbox_mark(ev["event_id"], "failed",
                                retry_in=3600)
@@ -1138,11 +877,11 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
            "parked": 0}
     due = ledger.outbox_due(limit)
-    exe = _hermes_exe(cfg)
+    exe = mcs_util.hermes_exe(cfg)
     exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(
             _route(e) == "interactive" or e["kind"] in ("urgent_notice", "signal")
-            or _hermes_free(cfg, _target(cfg, e["kind"])) for e in due):
+            or notify_sender.hermes_free(cfg, notify_sender.target(cfg, e["kind"])) for e in due):
         res["skipped"] = len(due)
         return res
     for event_index, ev in enumerate(due):
@@ -1161,11 +900,11 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                     raise ValueError("progress_invalid")
                 began = progress.get("sending")
             except (ValueError, TypeError, RecursionError):
-                _hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid", rescue=False)
+                hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid", rescue=False)
                 res["failed"] += 1
                 continue
             if began is not None:
-                _hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
+                hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
                 res["uncertain"] = res.get("uncertain", 0) + 1
                 continue
             ledger.outbox_suppress(ev["event_id"])
@@ -1175,13 +914,13 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         # no SQLite/restore lookup or native delivery can be attempted here.
         if (exe_ok and _route(ev) == "text"
                 and ev["kind"] not in ("urgent_notice", "signal")
-                and not _target(cfg, ev["kind"])):
+                and not notify_sender.target(cfg, ev["kind"])):
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
             continue
-        if ev["kind"] not in _ALERT_KINDS:
-            import notify_cards
-            if notify_cards.restore_pending(notify_cards.data_root(ledger)) is not None:
+        if ev["kind"] not in notify_sender.SYSTEM_ALERT_KINDS:
+            import notify_spool
+            if notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None:
                 # move it out of the ORDER BY event_id window so held
                 # content can never starve a later alert (no attempt used)
                 ledger.outbox_defer(ev["event_id"], RERENDER_RETRY_S)
@@ -1190,7 +929,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                 continue
         if ev["kind"] in ("urgent_notice", "signal") and _route(ev) != "interactive":
             if not _send_never_began(ev):
-                _hold_event(ledger, ev, cfg, reason=("send_outcome_unknown" if ev["kind"] == "signal" else "thread_route_after_partial"), rescue=False)
+                hold_event(ledger, ev, cfg, reason=("send_outcome_unknown" if ev["kind"] == "signal" else "thread_route_after_partial"), rescue=False)
                 res["failed"] += 1
                 continue
             ledger.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (ev["event_id"],))
@@ -1198,18 +937,18 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         if (_route(ev) == "interactive" or ev["kind"] in ("urgent_notice", "signal")) \
                 and _dispatch_interactive(ledger, ev, cfg, res):
             continue
-        if not exe_ok and not _hermes_free(cfg, _target(cfg, ev["kind"])):
+        if not exe_ok and not notify_sender.hermes_free(cfg, notify_sender.target(cfg, ev["kind"])):
             # no hermes exe — text events can't send, but an interactive
             # event later in the queue still dispatches (cards don't
             # need the exe), so skip per-event rather than break
             res["skipped"] += 1
             continue
-        target = _target(cfg, ev["kind"])
+        target = notify_sender.target(cfg, ev["kind"])
         if not target:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
             continue
-        argv = _send_argv(cfg, target)
+        argv = notify_sender.send_argv(cfg, target, CONF_PATH)
         try:
             _send_text(ledger, ev, cfg, argv, target, res, deadline)
         except Exception as exc:

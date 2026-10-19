@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "スタンプ照合レポートの読取契約を整理",
+  "summary": "保存済みスタンプの検証を共通の公開関数へ統一し、照合レポートの内部処理には同じ読取り接続だけを渡す構成にしました。未取得・不正・観測済みの区別や、レポートの件数は変わりません。",
+  "upgrade": "設定変更や再取得は不要です。CLIとレポートの公開入口、DB形式、取得範囲は変更しません。",
+  "refs": [
+    "mcs/views/message_metadata.py",
+    "mcs/views/metadata_report.py"
+  ],
+  "details": [
+    "保存済み観測のdecode_metadataを正本とし、レポート内部は呼出元の同じSQLite接続を借用する。"
+  ]
+}

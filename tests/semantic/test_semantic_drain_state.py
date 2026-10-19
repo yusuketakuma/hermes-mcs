@@ -1,8 +1,8 @@
 """Nested jobs and later passes own independent diagnostics and shadow accounting."""
+import llm_availability
 import json
 import time
 
-import mcs_util
 import semantic_drain as drain
 import semantic_runtime as runtime
 from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
@@ -18,7 +18,7 @@ def test_nested_jobs_and_next_pass_cannot_replace_outer_reason_or_shadow_totals(
     outer_path.mkdir()
     inner_path.mkdir()
     outer, inner = _seeded(outer_path), _seeded(inner_path)
-    monkeypatch.setattr(mcs_util, "disk_free_mb", lambda *args: 100_000.0)
+    monkeypatch.setattr(llm_availability, 'disk_free_mb', lambda *args: 100_000.0)
     payload = json.loads(outer.db.execute(
         "SELECT payload FROM fetch_jobs WHERE kind='semantic'").fetchone()[0])
     outer.job_add("semantic", 1, 2, payload=payload)
@@ -84,7 +84,7 @@ def test_nested_jobs_and_next_pass_cannot_replace_outer_reason_or_shadow_totals(
 
 def test_exception_first_cause_is_job_local_and_qc_gets_empty_diagnostics(tmp_path, monkeypatch):
     db = _seeded(tmp_path)
-    monkeypatch.setattr(mcs_util, "disk_free_mb", lambda *args: 100_000.0)
+    monkeypatch.setattr(llm_availability, 'disk_free_mb', lambda *args: 100_000.0)
     db.job_add(drain.QC_JOB_KIND, 1, 1, payload={"generation": "synthetic-qc"})
     db.db.commit()
     semantic = db.db.execute("SELECT * FROM fetch_jobs WHERE kind=?", (drain.JOB_KIND,)).fetchone()

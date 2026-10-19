@@ -9,7 +9,7 @@ import pytest
 
 import ledger
 import ledger_audit
-import mcs_backup
+import backup_evidence
 
 SOURCE_DDL = """
 CREATE TABLE runs(run_id, started_at, finished_at, snapshot_ts, status, error);
@@ -49,8 +49,8 @@ def _current(tmp_path):
 def _backup_accepts(path):
     with closing(sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)) as db:
         try:
-            mcs_backup._bounded_inventory_schema(db)
-        except mcs_backup.BackupError:
+            backup_evidence._bounded_inventory_schema(db)
+        except backup_evidence.BackupError:
             return False
     return True
 

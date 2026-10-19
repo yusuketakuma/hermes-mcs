@@ -517,14 +517,14 @@ def test_restore_approve_drains_during_consent_hold(tmp_path, monkeypatch):
     still accept ops.restore_approve (it is the only way out) and spawn
     the updater after the commit — while every other command stays
     queued (T13)."""
-    import notify_cards
+    import notify_spool
     data = tmp_path / "data"
     data.mkdir()
     db = Ledger(str(data / "ledger.db"))
     db.ensure_patient(1)
     cmd_dir = data / "cmd"
     cmd_dir.mkdir()
-    notify_cards.mark_restored(
+    notify_spool.mark_restored(
         str(tmp_path / "data"), backup_path="/b.db",
         phase="awaiting_consent")
     mcs_requests.enqueue(_update_command(

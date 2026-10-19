@@ -13,8 +13,9 @@ def refresh_extraction_cards(ledger, project_id, message_id, *, cfg=None):
         return []
     try:
         import notify_cards
+        import notify_scope
         cfg = load_config() if cfg is None else cfg
-        if not notify_cards.interactive_enabled(cfg):
+        if not notify_scope.interactive_enabled(cfg):
             return []
         return notify_cards.rerender_message_cards(ledger, cfg, project_id, message_id)
     except Exception as error:

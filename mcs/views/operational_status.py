@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 import sqlite3
 import time
 
-from health_watch import RUN_GRACE_S, freshness_deadline
+from health_policy import RUN_GRACE_S, freshness_deadline
 from safe_io import read_regular_nofollow
+from stats_math import finite_number
 
 HEALTH_BYTES = 1024 * 1024
 COVERAGE_FRESH_S = 3600
@@ -16,12 +16,7 @@ INTERRUPT_REASONS = ("watchdog_exit", "update_preempted", "host_restart", "unkno
 
 
 def _number(value):
-    if type(value) not in (int, float):
-        return None
-    try:
-        return value if math.isfinite(value) and value >= 0 else None
-    except OverflowError:
-        return None
+    return value if finite_number(value) and value >= 0 else None
 
 
 def _count(value):

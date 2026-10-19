@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "ファイル引渡し失敗時の記述子回収を共通化",
+  "summary": "バックアップ・修復結果・参照統計の承認・サービス証拠の読取りで、取得したファイル記述子をストリームへ渡せない場合も共通処理で回収します。呼出元から借用したバックアップ鍵の記述子は保持します。",
+  "upgrade": "設定変更は不要です。検証・人承認・暗号・保存形式・transactionと公開順序は変わりません。",
+  "refs": [
+    "mcs/core/safe_io.py",
+    "mcs/ops/service_management.py",
+    "mcs/ops/mcs_backup.py",
+    "mcs/ops/mcs_operations.py",
+    "mcs/ops/mcs_repair.py"
+  ],
+  "details": [
+    "標準ライブラリへのFD所有権移管に失敗したときも元のFDを閉じ、既に閉じられたEBADF以外の終了エラーは隠さない。"
+  ]
+}

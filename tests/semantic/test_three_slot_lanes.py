@@ -1,10 +1,10 @@
 """Fixed lanes let ingestion run during inference without duplicate jobs."""
+import writer_lock
 import semantic_qc
 import os
 import time
 
 import local_llm
-import mcs_util
 import semantic_drain
 from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
 
@@ -12,13 +12,13 @@ from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
 def test_transport_releases_ingest_lock_but_keeps_job_claim(tmp_path, monkeypatch):
     db = _seeded(tmp_path)
     path = str(tmp_path / 'run.lock')
-    fd = mcs_util.acquire_run_lock(path)
+    fd = writer_lock.acquire_run_lock(path)
     seen = []
 
     def model(prompt):
         # A second collector can write while inference runs. A second
         # semantic worker cannot run the same job, even on another slot.
-        other = mcs_util.acquire_run_lock(path)
+        other = writer_lock.acquire_run_lock(path)
         assert other is not None
         os.close(other)
         job = db.db.execute("SELECT job_id FROM fetch_jobs WHERE kind='semantic'").fetchone()
@@ -33,7 +33,7 @@ def test_transport_releases_ingest_lock_but_keeps_job_claim(tmp_path, monkeypatc
                                llm_fn=model, jev_client=_FakeJev(),
                                run_lock_fd=fd)
         assert out['done'] == 1 and seen and not result['errors']
-        assert mcs_util.acquire_run_lock(path) is None
+        assert writer_lock.acquire_run_lock(path) is None
     finally:
         os.close(fd)
         db.close()
@@ -98,26 +98,26 @@ def test_jev_receipt_is_committed_before_unlocked_transport(tmp_path, monkeypatc
     import semantic_jev
     db = _seeded(tmp_path)
     path = str(tmp_path / 'run.lock')
-    fd = mcs_util.acquire_run_lock(path)
+    fd = writer_lock.acquire_run_lock(path)
     calls = []
     client = semantic_jev.JevClient(api_key='synthetic')
 
     def http(*args, **kwargs):
         assert not db.db.in_transaction
-        other = mcs_util.acquire_run_lock(path)
+        other = writer_lock.acquire_run_lock(path)
         assert other is not None
         os.close(other)
         assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='semantic_usage'").fetchone()[0] > 0
         calls.append(args)
         return 400, {}, b'{}'
 
-    monkeypatch.setattr(client, '_http_request', http)
+    monkeypatch.setattr(client, 'request', http)
     try:
         semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
                          llm_fn=_llm, jev_client=client, run_lock_fd=fd)
         assert calls
-        assert client._http_request is http
-        assert mcs_util.acquire_run_lock(path) is None
+        assert client.request is http
+        assert writer_lock.acquire_run_lock(path) is None
     finally:
         os.close(fd)
         db.close()

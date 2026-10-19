@@ -493,15 +493,15 @@ def test_gateway_restart_oserror_keeps_bookkeeping(rec, tmp_path,
     b'{"phase": "restored"}', b'{"restored_at": 1}', b'{"phase": "other"}'])
 def test_awaiting_consent_matches_notify_cards(tmp_path, monkeypatch,
                                                content):
-    """The standalone hold-marker check keeps notify_cards' fail-closed
+    """The standalone hold-marker check keeps notify_spool's fail-closed
     verdict — the writer freeze depends on both agreeing."""
-    import notify_cards
+    import notify_spool
     mod = _load()
     monkeypatch.setattr(mod, "DATA", str(tmp_path))
     if content is not None:
         (tmp_path / "restore_pending.json").write_bytes(content)
     assert (mod._awaiting_consent() is None) \
-        == (notify_cards.restore_awaiting_consent(str(tmp_path)) is None)
+        == (notify_spool.restore_awaiting_consent(str(tmp_path)) is None)
 
 
 def test_membership_reconcile_removes_undesired_agents(rec, tmp_path,

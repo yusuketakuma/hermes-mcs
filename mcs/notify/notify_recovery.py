@@ -11,6 +11,7 @@ import time
 
 from mcs_requests import canonical, payload_hash, positive, valid_uuid
 import notify_cards as cards
+import notify_spool
 import notify_journal
 import notify_transport
 from notify_scope import (card_projects, card_row, render_row, stored_scope,
@@ -44,29 +45,29 @@ def validate_card_resolve(req) -> str | None:
         return "bad_command_id"
     if req.get("human_confirmed") is not True:
         return "human_confirmation_required"
-    from mcs_requests import _text
-    if not _text(req.get("actor"), 120):
+    from mcs_util import valid_text
+    if not valid_text(req.get("actor"), 120):
         return "bad_actor"
-    if not _text(req.get("reason"), 2000):
+    if not valid_text(req.get("reason"), 2000):
         return "bad_reason"
     if not valid_uuid(req.get("delivery_id")):
         return "bad_delivery_id"
-    if not _text(req.get("attempt_id"), 120):
+    if not valid_text(req.get("attempt_id"), 120):
         return "bad_attempt_id"
     if req.get("result") not in _RESOLVE_RESULTS:
         return "bad_result"
     for k in scope_fields(req["transport"] if tenant else "discord"):
-        if not _text(req.get(k), 200):
+        if not valid_text(req.get(k), 200):
             return f"bad_{k}"
     if req["result"] == "mark_delivered" \
-            and not _text(req.get("message_id"), 64):
+            and not valid_text(req.get("message_id"), 64):
         return "bad_message_id"
     ev = req.get("evidence")
     if not isinstance(ev, dict) or not ev:
         return "bad_evidence"
-    if not _text(ev.get("method"), 200):
+    if not valid_text(ev.get("method"), 200):
         return "bad_evidence_method"
-    if not _text(ev.get("ref"), 500):
+    if not valid_text(ev.get("ref"), 500):
         return "bad_evidence_ref"
     if req["result"] == "mark_not_sent":
         if ev.get("worker_stopped") is not True:
@@ -192,9 +193,9 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
              receipt["outcome"], canonical(receipt).decode(), now))
         cards.mark_snapshot_dirty(db)
     if specs:
-        root = cards.data_root(ledger)
-        cards.ensure_dirs(root)
-        cards.publish_specs(db, cards.notify_dirs(root), specs, now)
+        root = notify_spool.data_root(ledger)
+        notify_spool.ensure_dirs(root)
+        notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
     return receipt
 
 
@@ -324,11 +325,11 @@ def _journal_contradiction(ledger, req) -> str | None:
     ``started`` row or a tainted journal (a corrupt line could hide
     one) refutes the ``no_journal_started`` proof. An unreadable
     journal proves nothing — fail closed."""
-    root = cards.data_root(ledger)
+    root = notify_spool.data_root(ledger)
     try:
-        cards.ensure_dirs(root)
+        notify_spool.ensure_dirs(root)
         attempts, incomplete = notify_journal.scan_journals(
-            cards.notify_dirs(root))
+            notify_spool.notify_dirs(root))
     except OSError:
         return "journal_unverifiable"
     rec = attempts.get(req["attempt_id"]) or {"rows": [], "tainted": False}
@@ -382,7 +383,8 @@ def card_part_resolve_plan(ledger, delivery_id, part_id) -> dict:
 
 def validate_card_part_resolve(req) -> str | None:
     """Validate human approval of exactly one sealed unknown part."""
-    from mcs_requests import _text, valid_hash
+    from mcs_util import valid_text
+    from mcs_requests import valid_hash
     if not isinstance(req, dict):
         return "bad_command"
     transport = req.get("transport")
@@ -400,10 +402,10 @@ def validate_card_part_resolve(req) -> str | None:
     if req.get("human_confirmed") is not True:
         return "human_confirmation_required"
     for key, limit in (("actor", 120), ("reason", 2000), ("attempt_id", 120), ("part_id", 64)):
-        if not _text(req.get(key), limit):
+        if not valid_text(req.get(key), limit):
             return "bad_" + key
     for key in scope_fields(transport):
-        if not _text(req.get(key), 200):
+        if not valid_text(req.get(key), 200):
             return "bad_" + key
     if any(not valid_hash(req.get(key)) for key in ("manifest_sha256", "payload_sha256")):
         return "bad_hash"
@@ -412,12 +414,12 @@ def validate_card_part_resolve(req) -> str | None:
     evidence = req.get("evidence")
     if not isinstance(evidence, dict) or evidence.keys() - {"method", "ref", "worker_stopped", "proof", "duplicate_risk_accepted"}:
         return "bad_evidence"
-    if not _text(evidence.get("method"), 200) or not _text(evidence.get("ref"), 500):
+    if not valid_text(evidence.get("method"), 200) or not valid_text(evidence.get("ref"), 500):
         return "bad_evidence"
     if evidence.get("worker_stopped") is not True:
         return "worker_not_proven_stopped"
     if req["result"] == "mark_delivered":
-        if not _text(req.get("remote_id"), 64):
+        if not valid_text(req.get("remote_id"), 64):
             return "remote_id_required"
     elif evidence.get("proof") not in ("no_journal_started", "api_rejected", "remote_absent"):
         return "bad_proof"
@@ -428,7 +430,7 @@ def validate_card_part_resolve(req) -> str | None:
 
 def _part_resolution_journal_error(ledger, req):
     try:
-        attempts, incomplete = notify_journal.scan_journals(cards.notify_dirs(cards.data_root(ledger)))
+        attempts, incomplete = notify_journal.scan_journals(notify_spool.notify_dirs(notify_spool.data_root(ledger)))
     except OSError:
         return "journal_unverifiable"
     rows = [row for record in attempts.values() for row in record["rows"]
@@ -497,7 +499,7 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                 if req["transport"] == "lineworks" and req["evidence"].get("proof") == "remote_absent":
                     receipt["evidence_limit"] = "操作者の申告。未送信の確定ではなく、重複送信のリスクが残ります。"
                 if (card is not None and card["delivery_state"] != "update_failed"
-                        and cards.restore_pending(cards.data_root(ledger)) is None
+                        and notify_spool.restore_pending(notify_spool.data_root(ledger)) is None
                         and not cards.resend_exhausted(db, card["card_id"])):
                     cards.issue_render(db, card["card_id"], cfg, now, specs, force=req["result"] == "mark_not_sent")
         if error is not None:
@@ -506,5 +508,5 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                    (req["command_id"], digest, None, None, receipt["outcome"], canonical(receipt).decode(), now))
         cards.mark_snapshot_dirty(db)
     if specs:
-        cards.publish_specs(db, cards.notify_dirs(cards.data_root(ledger)), specs, now)
+        notify_spool.publish_specs(db, notify_spool.notify_dirs(notify_spool.data_root(ledger)), specs, now)
     return receipt

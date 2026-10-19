@@ -164,11 +164,11 @@ def test_failure_after_seed_rolls_back_raw_notice_and_job_in_every_writer(tmp_pa
     tables = ("patients", "messages", "notify_outbox", "fetch_jobs")
     before = {table: [tuple(row) for row in db.db.execute(f"SELECT * FROM {table} ORDER BY rowid")]
               for table in tables}
-    seed = db._semantic_seed_tx
+    seed = db.semantic_seed_tx
     def fail_after_seed(*args, **kwargs):
         seed(*args, **kwargs)
         raise RuntimeError("synthetic failure after raw, outbox and job writes")
-    monkeypatch.setattr(db, "_semantic_seed_tx", fail_after_seed)
+    monkeypatch.setattr(db, "semantic_seed_tx", fail_after_seed)
     try:
         with pytest.raises(RuntimeError, match="synthetic failure"):
             _write(db, path, _message(mid=2, unread=True, parent_id=1),

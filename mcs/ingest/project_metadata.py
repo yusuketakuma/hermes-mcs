@@ -503,7 +503,7 @@ def main(argv: list[str] | None = None) -> int:
     """Executable opt-in sync or read-only local view; never print API responses."""
     from ledger import Ledger, LedgerReader
     from mcs_adapter import MCSAdapter
-    from mcs_util import acquire_run_lock
+    from writer_lock import acquire_run_lock
     from project_metadata_view import get_project_metadata
 
     parser = argparse.ArgumentParser(description=__doc__)

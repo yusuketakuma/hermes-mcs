@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 
-import notify_cards as cards
+import notify_spool
 import notify_cmds as cmds
 from adapters.common import envelopes
 from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
@@ -36,7 +36,7 @@ def _claim(render, attempt="a" * 16):
 
 def _apply(led, req, cfg=LINEWORKS):
     assert cmds.validate_int(req) is None
-    return cmds.dispatch(led, req, cfg, cards.data_root(led), now=NOW)
+    return cmds.dispatch(led, req, cfg, notify_spool.data_root(led), now=NOW)
 
 
 def _deliver(led, render):

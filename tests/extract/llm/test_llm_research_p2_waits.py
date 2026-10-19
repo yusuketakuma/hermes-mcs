@@ -1,5 +1,6 @@
 """Resident idle waits follow the earliest future due job (synthetic ledger,
 fake clock, every LLM POST path fail-stubbed)."""
+import writer_lock
 import json
 import sqlite3
 
@@ -30,7 +31,6 @@ WALL0 = 1_000_000.0
 
 def _loop(db, monkeypatch, flags, result=None, *, carry=None, settle=None):
     """Run the resident loop on a fake clock and return the recorded sleeps."""
-    import mcs_util
     mono = [0.0]
     sleeps = []
 
@@ -41,7 +41,7 @@ def _loop(db, monkeypatch, flags, result=None, *, carry=None, settle=None):
     monkeypatch.setattr(extract_llm.time, "time", lambda: WALL0 + mono[0])
     monkeypatch.setattr(extract_llm.time, "sleep", sleep)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
     monkeypatch.setattr(extract_llm, "_background_semantic",

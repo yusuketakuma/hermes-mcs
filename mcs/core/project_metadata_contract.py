@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
+from stats_math import finite_number
 from typing import TypeAlias, TypedDict
 
 from mcs_contract import SchemaError, valid_id
@@ -101,14 +101,9 @@ def _string(value) -> str | None:
 def _number(value) -> int | float | None:
     if value is None:
         return None
-    try:
-        valid = type(value) in (int, float) and math.isfinite(value)
-    except OverflowError:
-        valid = False
-    if not valid:
+    if not finite_number(value):
         raise SchemaError("project metadata: number invalid")
     return value
-
 
 
 def _boolean(value) -> bool | None:

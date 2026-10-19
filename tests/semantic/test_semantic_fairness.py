@@ -9,6 +9,7 @@ All synthetic: stub LLM/Jev, temp SQLite. Covers:
   - observe() exposes queue ages / cohort split / scheduler / rates,
     with None (unknown) instead of fake zeros where unmeasured
 """
+import writer_lock
 import json
 import time
 
@@ -156,7 +157,6 @@ def test_due_backlog_count_is_not_silently_capped_at_fifty(tmp_path):
 
 def test_drain_cli_does_not_initialize_writer_before_lock(tmp_path, monkeypatch):
     import ledger
-    import mcs_util
     clock = [0.0]
     monkeypatch.setattr(semantic_drain.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(semantic_drain.time, 'sleep', lambda seconds: None)
@@ -165,7 +165,7 @@ def test_drain_cli_does_not_initialize_writer_before_lock(tmp_path, monkeypatch)
     def no_lock():
         clock[0] = 2.0
         return None
-    monkeypatch.setattr(mcs_util, 'acquire_run_lock', no_lock)
+    monkeypatch.setattr(writer_lock, 'acquire_run_lock', no_lock)
     def no_writer(*args, **kwargs):
         raise AssertionError('writer opened without lock')
     monkeypatch.setattr(ledger, 'Ledger', no_writer)
@@ -179,11 +179,10 @@ def test_drain_cli_output_lines_carry_ts_and_pid(tmp_path, monkeypatch, capsys):
     import types
 
     import ledger
-    import mcs_util
     monkeypatch.setattr(semantic_drain.time, 'sleep', lambda seconds: None)
     monkeypatch.setattr(semantic_drain, 'load_config', lambda: {})
     monkeypatch.setattr(semantic_drain.sys, 'argv', ['semantic_drain', '--drain', '--stop-after', '60'])
-    monkeypatch.setattr(mcs_util, 'acquire_run_lock',
+    monkeypatch.setattr(writer_lock, 'acquire_run_lock',
                         lambda: os.open(tmp_path / 'lock', os.O_CREAT | os.O_RDWR))
     monkeypatch.setattr(ledger, 'Ledger', lambda path: types.SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(semantic_drain, 'run_due',

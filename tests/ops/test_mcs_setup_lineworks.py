@@ -1,4 +1,6 @@
 """LINE WORKS setup accepts explicit scopes and rejects incomplete authority."""
+
+import environment_diagnostics
 import lifecycle_io
 import service_management
 import setup_wizard
@@ -75,9 +77,9 @@ def test_local_diagnostic_has_no_hermes_gateway_or_secret_output(monkeypatch, tm
     chrome.write_text("synthetic")
     monkeypatch.setattr(mcs_setup, "CHROME_BIN", str(chrome))
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path / ".mcs"))
-    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "linux")
     monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: None)
-    monkeypatch.setattr(mcs_setup, "env_value", lambda *a, **kw: None)
+    monkeypatch.setattr(environment_diagnostics, "env_value", lambda *a, **kw: None)
     monkeypatch.setattr(local_llm, "bounded_request", lambda *a: (503, {}, b""))
     calls = []
 
@@ -110,9 +112,9 @@ def test_off_lineworks_text_target_still_uses_the_independent_local_diagnostic(m
     chrome.write_text("synthetic")
     monkeypatch.setattr(mcs_setup, "CHROME_BIN", str(chrome))
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
-    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "linux")
     monkeypatch.setattr(mcs_util.shutil, "which", lambda *args: None)
-    monkeypatch.setattr(mcs_setup, "env_value", lambda *args, **kwargs: None)
+    monkeypatch.setattr(environment_diagnostics, "env_value", lambda *args, **kwargs: None)
     monkeypatch.setattr(local_llm, "bounded_request", lambda *args: (503, {}, b""))
     monkeypatch.setattr(adapter_cli, "load_credentials", lambda *_: (
         SimpleNamespace(credentials=SimpleNamespace(private_key_path="synthetic-key-path")), "synthetic"))

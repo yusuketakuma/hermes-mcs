@@ -113,7 +113,7 @@ def _task_blocks(items):
     return blocks
 
 
-def origin(body, action, *, team_id, application_id, channel_id,
+def parse_action_origin(body, action, *, team_id, application_id, channel_id,
            profile, allowed_user_ids):
     """Require a native pinned card message and explicit workspace user."""
     if not isinstance(body, dict) or not isinstance(action, dict):
@@ -197,6 +197,9 @@ class Actions:
     def __init__(self, app, settings, dirs, reg, sender, log):
         self._app = app
         self._settings = settings
+        self._origin_scope = {key: settings[key] for key in (
+            "team_id", "application_id", "channel_id", "profile")}
+        self._origin_scope["allowed_user_ids"] = frozenset(settings["allowed_user_ids"])
         self._dirs = dirs
         self._reg = reg
         self._sender = sender
@@ -313,7 +316,7 @@ class Actions:
         if not ctx:
             return None
         # task_status tokens ride an ephemeral task list — the ctx pins
-        # only the card/project scope; origin() already bound the click
+        # only the card/project scope; parse_action_origin() already bound the click
         # to this app/team/channel and an allowed user.
         if not projects.context_allowed(self._settings, ctx):
             return None
@@ -321,7 +324,7 @@ class Actions:
 
     async def _say(self, channel, user, text, *, blocks=None, thread_ts=None,
                    navigation=None) -> bool:
-        from .delivery import RETRY_ALLOWED, _call   # one Retry-After resend, as for cards
+        from .delivery import call_native  # same single Retry-After resend as cards
         client = self._client()
         if client is None:
             self._log("followup_failed", error="retry_policy_unknown")
@@ -330,7 +333,6 @@ class Actions:
         async def still_active():
             return self._active
 
-        token = RETRY_ALLOWED.set(still_active)
         try:
             for index, chunk in enumerate(_ephemeral_chunks(text)):
                 if not self._active:
@@ -345,15 +347,13 @@ class Actions:
                 elif navigation and index == 0:
                     kwargs["blocks"] = _sections(unescape(chunk)) + [
                         {"type": "actions", "elements": navigation}]
-                await _call(client.chat_postEphemeral, **kwargs)
+                await call_native(client.chat_postEphemeral, retry_allowed=still_active, **kwargs)
                 if blocks:
                     break  # the blocks carry the content; later chunks would repeat it
             return True
         except Exception as exc:
             self._log("followup_failed", error=type(exc).__name__)
             return False
-        finally:
-            RETRY_ALLOWED.reset(token)
 
     async def _clicker_name(self, user) -> str:
         """The clicker's Slack display/real name (users.info, cached by
@@ -404,7 +404,7 @@ class Actions:
         await ack()
         if not self._active:
             return
-        origin = self._sender.action_origin(body, action)
+        origin = parse_action_origin(body, action, **self._origin_scope)
         if origin is None:
             if self._denied_member(body):
                 await self._say(self._settings["channel_id"],

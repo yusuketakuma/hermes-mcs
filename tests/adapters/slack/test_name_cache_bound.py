@@ -23,7 +23,7 @@ def test_member_cache_is_bounded_and_keeps_recent_hits(monkeypatch, known):
     adapter = delivery.SlackCardAdapter(
         SimpleNamespace(client=SimpleNamespace(users_info=users_info)),
         team_id="T_SYNTHETIC", application_id="A_SYNTHETIC",
-        channel_id="C_SYNTHETIC", profile=None, allowed_user_ids=set())
+        channel_id="C_SYNTHETIC", profile=None)
 
     async def scenario():
         hot = await adapter.display_name("U_HOT")

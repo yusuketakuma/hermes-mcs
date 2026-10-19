@@ -2,6 +2,7 @@
 whose drainer only defers, a dead local LLM, cached coverage counts,
 backup deadline skips and the change-gated snapshot. Temp ledger,
 temp health file and stubs only."""
+import llm_availability
 import health_report
 import json
 import time
@@ -63,9 +64,8 @@ def test_due_episode_ends_when_no_job_is_due(tmp_path, health_file):
 
 def test_llm_endpoint_down_needs_failing_breaker_and_due_work(
         tmp_path, health_file, monkeypatch):
-    import mcs_util
     # the breaker fallback applies only without the LLM health record
-    monkeypatch.delattr(mcs_util, "llm_down_for_s", raising=False)
+    monkeypatch.delattr(llm_availability, 'llm_down_for_s', raising=False)
     db = _ledger(tmp_path)
     now = time.time()
     circuit = tmp_path / "llm_circuit.json"
@@ -107,10 +107,9 @@ def _legacy_extract(db, mid, *, exhausted):
 ])
 def test_local_llm_down_uses_the_llm_health_record(
         tmp_path, health_file, monkeypatch, down_for, due, alerted):
-    import mcs_util
     db = _ledger(tmp_path)
     now = time.time()
-    monkeypatch.setattr(mcs_util, "llm_down_for_s",
+    monkeypatch.setattr(llm_availability, 'llm_down_for_s',
                         lambda _ledger, now=None: down_for, raising=False)
     cfg = {}
     if due == "semantic":
@@ -197,12 +196,13 @@ def test_disarm_clears_the_hard_deadline(monkeypatch):
 def test_finish_run_publishes_by_change_and_clears_dirty_only_on_publish(
         tmp_path, monkeypatch, dirty, state, cleared, errors):
     import notify_cards
+    import notify_spool
     import notify_cmds
     db = _ledger(tmp_path)
     run_id = db.begin_run(None)
     calls = {}
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
-    monkeypatch.setattr(notify_cards, "publish_flags", lambda *a, **k: None)
+    monkeypatch.setattr(notify_spool, "publish_flags", lambda *a, **k: None)
     monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda _l: dirty)
     monkeypatch.setattr(notify_cards, "clear_snapshot_dirty",
                         lambda _l: calls.setdefault("cleared", True))

@@ -4,7 +4,8 @@ from __future__ import annotations
 import os
 import re
 
-from mcs_requests import _text, positive, release_tag, valid_hash
+from mcs_util import valid_text
+from mcs_requests import positive, release_tag, valid_hash
 
 REFSTAT_APPROVAL_KIND = "refstat_approval_v1"
 _NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
@@ -85,9 +86,9 @@ def _v_retry(req: dict, base: set) -> str | None:
         if not bounded_integer(req["additional_attempts"],
                             1, _MAX_ADDITIONAL_ATTEMPTS):
             return "bad_additional_attempts"
-        if not _text(req.get("reason"), 2000):
+        if not valid_text(req.get("reason"), 2000):
             return "bad_reason"
-    elif "reason" in req and not _text(req["reason"], 2000):
+    elif "reason" in req and not valid_text(req["reason"], 2000):
         return "bad_reason"
     return None
 
@@ -111,7 +112,7 @@ def _v_adopt_summary(req: dict, base: set) -> str | None:
         return "bad_summary_artifact_id"
     if not valid_hash(req.get("comparison_hash")):
         return "bad_comparison_hash"
-    if not _text(req.get("reason"), 2000):
+    if not valid_text(req.get("reason"), 2000):
         return "bad_reason"
     return None
 
@@ -127,9 +128,9 @@ def _v_signal_dismiss(req: dict, base: set) -> str | None:
                       "expected_signal_artifact_id"}
     if req.keys() - allowed:
         return "unknown_field"
-    if not _text(req.get("signal_key"), 300):
+    if not valid_text(req.get("signal_key"), 300):
         return "bad_signal_key"
-    if not _text(req.get("reason"), 2000):
+    if not valid_text(req.get("reason"), 2000):
         return "bad_reason"
     if "reason_code" in req and req["reason_code"] not in DISMISS_REASON_CODES:
         return "bad_reason_code"
@@ -154,7 +155,7 @@ def _v_extract_feedback(req: dict, base: set) -> str | None:
         return "bad_extract_ref"
     if req.get("field") not in EXTRACT_FEEDBACK_FIELDS:
         return "bad_field"
-    if not _text(req.get("reason"), 2000):
+    if not valid_text(req.get("reason"), 2000):
         return "bad_reason"
     return None
 
@@ -166,7 +167,7 @@ def _v_signal_policy(req: dict, base: set) -> str | None:
             or not req["policy"]
             or not all(isinstance(k, str) for k in req["policy"])):
         return "bad_policy"
-    if not _text(req.get("reason"), 2000):
+    if not valid_text(req.get("reason"), 2000):
         return "bad_reason"
     return None
 
@@ -178,7 +179,7 @@ def _v_refstat_approve(req: dict, base: set) -> str | None:
         return "bad_refstat_name"
     if not valid_hash(req.get("file_hash")):
         return "bad_file_hash"
-    if not _text(req.get("reason"), 2000):
+    if not valid_text(req.get("reason"), 2000):
         return "bad_reason"
     return None
 
@@ -201,7 +202,7 @@ def _v_restore_approve(req: dict, base: set) -> str | None:
     if type(req.get("backup_schema")) is not int \
             or req["backup_schema"] < 0:
         return "bad_backup_schema"
-    if not _text(req.get("reason"), 2000):
+    if not valid_text(req.get("reason"), 2000):
         return "bad_reason"
     return None
 
@@ -221,7 +222,7 @@ def _v_update(req: dict, base: set) -> str | None:
         allowed = base | {"tag", "reason"}
     if req.keys() - allowed:
         return "unknown_field"
-    if not _text(req.get("reason"), 2000):
+    if not valid_text(req.get("reason"), 2000):
         return "bad_reason"
     if req.get("cmd") == "ops.update_apply" and "tag" not in req:
         return "bad_tag"

@@ -32,7 +32,8 @@ import clinical_values
 from patient_context import extract_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import ELIGIBLE_MESSAGE
-from mcs_util import HOME, acquire_run_lock, loads_dict
+from mcs_util import HOME, loads_dict
+from writer_lock import acquire_run_lock
 
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "extract_v1"

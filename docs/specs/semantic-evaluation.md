@@ -118,7 +118,7 @@ below). For a record naming its `semantic_summary` artifact in
   source fingerprint), only when the newest `semantic_facts_audit` for
   the summary's policy fingerprint is an evaluated PASS on that
   document's hash and the document's coverage is complete. This is the
-  drain's own reuse rule (`semantic_v4.fact_audit_verdict`, shared with
+  drain's own reuse rule (`semantic_audit.fact_audit_verdict`, shared with
   the re-projection gate): a newer unevaluated audit or one bound to
   another document hash leaves `verified` out, never an older PASS.
 - `rendered`: the IDs bound (`、ID:<id>、証拠:`) in the summary's stored

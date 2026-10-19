@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 import _mcs_path  # noqa: F401
 
 import notify_cards
+import notify_spool
 import notify_cmds
 from notify_testkit import (
     CFG, ORIGIN, SCOPE, _begin, _dispatch, _intent, _latest_render,
@@ -39,7 +40,7 @@ def _ready_receipt(led):
 
 def _drain(led, tmp_path, monkeypatch, reqs):
     root = tmp_path / "data"
-    notify_cards.ensure_dirs(str(root))
+    notify_spool.ensure_dirs(str(root))
     for i, req in enumerate(reqs):
         (root / "cmd_int" / f"{i}.json").write_text(json.dumps(req))
     calls = []

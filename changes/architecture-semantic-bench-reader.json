@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "評価用の読取り接続を異常終了時にも閉じる",
+  "summary": "保存済み監査の集計中にSQLや行の読取りで失敗した場合も、評価用DB接続を閉じるようにしました。評価コードの移動後に残っていたテストの参照先も実体へ揃えています。",
+  "upgrade": "追加設定や再取得は不要です。集計式、評価入力、モデル、外部送信や公開の条件は変更しません。",
+  "refs": [
+    "mcs/semantic/eval/semantic_bench.py",
+    "tests/semantic/test_semantic_bench.py"
+  ],
+  "details": [
+    "校正用の一時readerは取得した側がcontextlib.closingで解放し、query/fetch失敗時もcloseします。",
+    "テストの差し替え先を実際の意味抽出処理へ移し、既存の期待値と失敗条件を保ちます。"
+  ]
+}

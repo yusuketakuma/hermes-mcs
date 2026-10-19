@@ -1,4 +1,5 @@
 """Synthetic input-generation and audit completeness contracts (AT-003/035)."""
+import clinical_values
 import semantic_audit
 import semantic_extraction
 import semantic_llm
@@ -96,6 +97,6 @@ def test_evidence_span_cannot_extend_past_original(tmp_path):
 
 
 def test_impossible_calendar_date_stays_unresolved():
-    assert semantic_llm._iso_date("2026-02-31") is None
-    assert semantic_llm._iso_date("2024-02-29") == "2024-02-29"
-    assert semantic_llm._iso_date("次回1月") is None
+    assert clinical_values.absolute_date("2026-02-31") is None
+    assert clinical_values.absolute_date("2024-02-29") == "2024-02-29"
+    assert clinical_values.absolute_date("次回1月") is None

@@ -23,11 +23,10 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
-import mcs_backup  # noqa: E402
+import backup_evidence
 from export_schema import finite_number  # noqa: E402
-from mcs_requests import (  # noqa: E402
-    MAX_COMMAND_BYTES, _text, canonical, parse_command, payload_hash, valid_hash, valid_uuid,
-)
+from mcs_util import valid_text  # noqa: E402
+from mcs_requests import MAX_COMMAND_BYTES, canonical, parse_command, payload_hash, valid_hash, valid_uuid  # noqa: E402
 from safe_io import create_exclusive  # noqa: E402
 
 PURPOSE = "ops.backup_restore_resume"
@@ -81,7 +80,7 @@ def _stamp(st):
 @contextmanager
 def _directory(destination: str, *, lock=False):
     path = Path(destination)
-    mcs_backup.require_private_directory(path)
+    backup_evidence.require_private_directory(path)
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     lock_fd = None
     try:
@@ -101,7 +100,7 @@ def _directory(destination: str, *, lock=False):
 
 
 def _same_directory(path, fd):
-    mcs_backup.require_private_directory(path)
+    backup_evidence.require_private_directory(path)
     if _identity(path.stat()) != _identity(os.fstat(fd)):
         raise RestoreConsentError("restore_destination_replaced")
 
@@ -171,7 +170,7 @@ def _binding(path, fd, source_sha256, *, static=True) -> Binding:
         _, digest, db_identity = _read(fd, "ledger.db", database=True)
         if digest != report["plain_sha256"]:
             raise RestoreConsentError("restore_database_hash_mismatch")
-        if mcs_backup.inventory_snapshot(path / "ledger.db") != report["inventory"]:
+        if backup_evidence.inventory_snapshot(path / "ledger.db") != report["inventory"]:
             raise RestoreConsentError("restore_inventory_mismatch")
     else:
         st = os.stat("ledger.db", dir_fd=fd, follow_symlinks=False)
@@ -197,8 +196,8 @@ def plan(destination: str, *, source_sha256: str) -> Plan:
 
 
 def _human(confirm_human, actor, reason, custody_ref, delivery_policy):
-    if (confirm_human is not True or not _text(actor, 120)
-            or not _text(reason, 2000) or not _text(custody_ref, 1000)
+    if (confirm_human is not True or not valid_text(actor, 120)
+            or not valid_text(reason, 2000) or not valid_text(custody_ref, 1000)
             or delivery_policy != "hold_all"):
         raise RestoreConsentError("restore_explicit_human_policy_required")
 
@@ -326,7 +325,7 @@ def writers_resumed(destination: str) -> bool:
                     and _binding(path, fd, receipt["binding"]["source_sha256"],
                                  static=False) == receipt["binding"])
     except (OSError, ValueError, KeyError, TypeError, RecursionError, OverflowError,
-            mcs_backup.BackupError, sqlite3.Error):
+            backup_evidence.BackupError, sqlite3.Error):
         return False
 
 
@@ -354,7 +353,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = {"plan": plan, "approve": approve, "resume": resume}[action](**args)
     except (OSError, ValueError, KeyError, TypeError, RecursionError, OverflowError,
-            mcs_backup.BackupError, sqlite3.Error) as exc:
+            backup_evidence.BackupError, sqlite3.Error) as exc:
         token = str(exc) if isinstance(exc, RestoreConsentError) else "restore_validation_failed"
         print(json.dumps({"ok": False, "error": token}))
         return 1

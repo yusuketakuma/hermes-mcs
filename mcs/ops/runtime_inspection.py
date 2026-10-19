@@ -124,3 +124,11 @@ def recovery_runtime(plist_path: str | Path, *, checkout: str | Path) -> mcs_run
     except (OSError, ValueError, TypeError, AttributeError, plistlib.InvalidFileException):
         return None
     return probe_python(exe)
+
+
+def configured_recovery_problem(cfg, update_repo=None, *, checkout: str) -> str | None:
+    """Why the configured recovery interpreter is unusable, or None (install.sh shares it)."""
+    if "recovery_python" not in cfg:
+        return None
+    return recovery_python_problem(cfg["recovery_python"], update_repo, checkout=checkout) or mcs_runtime.runtime_problem(
+        probe_python(cfg["recovery_python"]), recovery=True)

@@ -41,6 +41,8 @@ import time
 import uuid
 
 import notify_cards as cards
+import notify_scope
+import notify_spool
 from notify_scope import card_row
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import loads_dict
@@ -59,7 +61,7 @@ def _read_spec(dirs: dict, delivery_id) -> dict | None:
         return None
     safe = "".join(c if c.isalnum() or c in "._-" else "_"
                    for c in delivery_id)
-    for t in cards.SUPPORTED_TRANSPORTS:
+    for t in notify_scope.SUPPORTED_TRANSPORTS:
         try:
             with open(os.path.join(dirs[t + "_render"], safe + ".json"),
                       "rb") as fh:
@@ -89,7 +91,7 @@ def _apply_hold(db, aid, delivery_id, reason, dirs, now,
     card = card_row(db, render["card_id"]) \
         if render is not None and render["card_id"] is not None else None
     if scope is None:
-        scope = (dict(cards.stored_scope(render)) if render is not None
+        scope = (dict(notify_scope.stored_scope(render)) if render is not None
                  else {})
     spec = _read_spec(dirs, delivery_id)
     events = _spec_events(spec)
@@ -259,7 +261,7 @@ def _reconcile_part(ledger, db, cfg, aid, info, dirs, now) -> dict:
         if render["guild_id"]:
             env["guild_id"] = render["guild_id"]
         if render["transport"] in ("slack", "lineworks"):
-            env.update(version=cards.TRANSPORT_VERSIONS[render["transport"]],
+            env.update(version=notify_scope.TRANSPORT_VERSIONS[render["transport"]],
                        transport=render["transport"],
                        team_id=render["team_id"])
     receipt = dict(env)
@@ -376,10 +378,10 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     reconcile receipt is durable. Idempotent."""
     db = cards.connection(ledger)
     now = time.time() if now is None else now
-    root = cards.data_root(ledger)
-    dirs = cards.notify_dirs(root)
-    cards.ensure_dirs(root)
-    marker = cards.restore_pending(root) or {}
+    root = notify_spool.data_root(ledger)
+    dirs = notify_spool.notify_dirs(root)
+    notify_spool.ensure_dirs(root)
+    marker = notify_spool.restore_pending(root) or {}
     if marker.get("unreadable"):
         raise ValueError("restore_marker_unreadable")
     if marker.get("phase") == "awaiting_consent":
@@ -443,15 +445,16 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     text_held = []
     new_text_holds = 0
     import notify_flush
+    import notify_sender
     for ev in db.execute(
             "SELECT * FROM notify_outbox WHERE COALESCE(route,'text')='text' "
             "AND state IN ('pending','failed')").fetchall():
-        if ev["kind"] in notify_flush._ALERT_KINDS:
+        if ev["kind"] in notify_sender.SYSTEM_ALERT_KINDS:
             continue
         if marker and ev["next_try"] is not None and (
                 restored_at is None or ev["created_at"] is None
                 or ev["created_at"] <= restored_at):
-            notify_flush._hold_event(
+            notify_flush.hold_event(
                 ledger, ev, cfg, reason="restore_text_unverified", rescue=False)
             new_text_holds += 1
         else:
@@ -480,12 +483,12 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         "text_held": text_held,
         "journal_incomplete": journal_incomplete,
     }
-    cards.publish_file(root, cards.RESTORE_RECEIPT,
+    notify_spool.publish_file(root, notify_spool.RESTORE_RECEIPT,
                        cards.canonical(receipt))
     if journal_incomplete and not marker:
-        cards.mark_restored(root, by="reconcile_incomplete", now=now)
+        notify_spool.mark_restored(root, by="reconcile_incomplete", now=now)
     elif not journal_incomplete:
-        cards.clear_restore_pending(root)
+        notify_spool.clear_restore_pending(root)
     # a tainted journal keeps the marker, so reconcile re-runs every
     # tick — alert only when this run recorded a new hold, never repeat
     # the same notice for holds already announced

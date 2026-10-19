@@ -1,5 +1,6 @@
 """Inspect and apply owned services while preserving verified partial membership and restart debt."""
 from __future__ import annotations
+import safe_io
 
 from contextlib import suppress
 from dataclasses import dataclass
@@ -98,7 +99,7 @@ def recovery_owned(*, paths: ServicePaths) -> bool:
         contents = {}
         for name, path, mode in (('tool', root / 'mcs_recover.py', 448), ('pointer', root / 'repo_path', 384), ('plist', Path(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist'), 384)):
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd, 'rb') as stream:
+            with safe_io.fdopen_owned(fd, 'rb') as stream:
                 st = os.fstat(stream.fileno())
                 if not stat.S_ISREG(st.st_mode) or st.st_uid != paths.uid or stat.S_IMODE(st.st_mode) != mode or (st.st_size > 1048576):
                     return False
@@ -338,7 +339,7 @@ def write_service_file(path: str, body: str, mode: int | None=None) -> None:
     crash never leaves a truncated script/plist behind, and the file
     never exists at the destination with the wrong mode (S: atomic
     render)."""
-    mcs_util.atomic_write(path, lambda f: f.write(body), mode, tmp_prefix='.svc.')
+    safe_io.atomic_write(path, lambda f: f.write(body), mode, tmp_prefix='.svc.')
 
 def inspect_cron(hermes: str) -> list[dict] | None:
     """Observe one bounded Hermes listing; unknown remains different from an empty list."""
@@ -384,7 +385,6 @@ def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePath
         note(f'常駐処理{label}: 起動します')
     if dry:
         return True
-    from mcs_util import launchd_bootstrap
     err = launchd_bootstrap(label, dst, lifecycle_io.run_bounded)
     if err:
         note(f'  起動に失敗しました。常駐処理の状態を確認してください: {err}')
@@ -897,9 +897,9 @@ def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
     flags_failed = False
     if not dry and isinstance(cfg.get('notify'), dict) and (not validate_notify(cfg['notify'])):
         try:
-            import notify_cards
-            notify_cards.ensure_dirs(os.path.join(paths.root, 'data'))
-            notify_cards.publish_flags(cfg, os.path.join(paths.root, 'data'))
+            import notify_spool
+            notify_spool.ensure_dirs(os.path.join(paths.root, 'data'))
+            notify_spool.publish_flags(cfg, os.path.join(paths.root, 'data'))
         except Exception as e:
             note(f'通知設定を保存できません（{type(e).__name__}: {e}）。servicesを再実行してください')
             flags_failed = True
@@ -962,7 +962,7 @@ def retire_to_snapshot(desired: dict, *, cfg, paths: ServicePaths) -> list[str]:
     current = {}
     try:
         fd = os.open(paths.manifest_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as manifest:
+        with safe_io.fdopen_owned(fd, 'rb') as manifest:
             st = os.fstat(manifest.fileno())
             if stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and (stat.S_IMODE(st.st_mode) == 384) and (st.st_size <= 262144):
                 current = json.loads(manifest.read(262145))
@@ -1006,3 +1006,29 @@ def retire_to_snapshot(desired: dict, *, cfg, paths: ServicePaths) -> list[str]:
             with suppress(OSError):
                 os.unlink(path)
     return problems
+
+
+def launchd_bootstrap(label: str, plist: str, run) -> str | None:
+    """Bootstrap a LaunchAgent and verify it is loaded — the canonical
+    success criterion for mcs_setup/mcs_update (mcs_recover.py and
+    install.sh keep standalone copies of the same semantics).
+
+    launchd may still be tearing down a just-booted-out job and answer
+    any nonzero code (typically "5: Input/output error") — any failure
+    is retried up to 3 times, 1s apart. An exit 0 is not proof: success
+    is only a `launchctl print` of the label answering 0 afterwards (a
+    late load after failed attempts also counts). `run(argv)` returns an
+    object with .returncode/.stderr (text). Returns None on success, else a
+    failure detail."""
+    uid = os.getuid()
+    err = ""
+    for _ in range(3):
+        r = run(["launchctl", "bootstrap", f"gui/{uid}", plist])
+        if r.returncode == 0:
+            err = ""
+            break
+        err = (r.stderr or "").strip()
+        time.sleep(1)
+    if run(["launchctl", "print", f"gui/{uid}/{label}"]).returncode == 0:
+        return None
+    return err or "bootstrap exited 0 but the label is not loaded"

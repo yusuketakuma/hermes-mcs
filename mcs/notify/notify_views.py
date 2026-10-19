@@ -22,11 +22,12 @@ from mcs_queries import karte_summary_block
 from patient_context import DETAIL_LABELS, LABELS, context_items, extract_context, pharmacy_state_items
 from mcs_contract import project_url
 from mcs_queries import JST, incomplete_reply_roots
-from mcs_util import fold_map, register_search_fold, search_fold
+from mcs_util import fold_map, search_fold
+from mcs_queries import register_search_fold
 from message_metadata import stamp_counts
 import notify_render
 from notify_render import (
-    _current_generation, _hhmm, _inline, mmdd, patient_name, source_fingerprint,
+    render_source_generation, posted_hhmm, inline_text, mmdd, patient_name, source_fingerprint,
     actor_label, card_reaction_lines,
     card_reactions, today_jst)
 
@@ -98,8 +99,8 @@ def _open_task_lines(db, project_id) -> list[str]:
         (project_id,)).fetchall()
     today = today_jst()
     lines = ["■ 未完了タスク" + ("" if tasks else ": なし")]
-    lines.extend(f"・#{t['request_id']} {_inline(t['title'], 60)}"
-                 + (f" — 担当 {_inline(t['assignee'], 40)}"
+    lines.extend(f"・#{t['request_id']} {inline_text(t['title'], 60)}"
+                 + (f" — 担当 {inline_text(t['assignee'], 40)}"
                     if t["assignee"] else "")
                  + (f" — 期限 {t['due_date']}"
                     + (" ⚠期限切れ" if t["due_date"] < today else "")
@@ -125,7 +126,7 @@ def _patient_context_lines(db, project_id, roll) -> list[str]:
         if category in ("demographics", "contacts"):
             continue
         for item in memo.get(category, [])[:1]:
-            lines.append(f"・{labels[0]}（連携サマリー）: {_inline(item['text'], 80)}")
+            lines.append(f"・{labels[0]}（連携サマリー）: {inline_text(item['text'], 80)}")
         if len(memo.get(category, [])) > 1:
             lines.append(f"  この分類は他{len(memo[category]) - 1}項目（原記録で全文確認）")
         items = chat.get(category)
@@ -150,7 +151,7 @@ def _patient_context_lines(db, project_id, roll) -> list[str]:
             mid = item["message_id"]
             subject = "・家族の記載" if item.get("subject") == "family" else \
                 "・他者の記載" if item.get("subject") == "other" else ""
-            lines.append(f"・{labels[0]}（投稿#{mid}{subject}）: {_inline(item['text'], 80)}")
+            lines.append(f"・{labels[0]}（投稿#{mid}{subject}）: {inline_text(item['text'], 80)}")
         if len(valid) > 1:
             lines.append(f"  この分類は他{len(valid) - 1}項目（原記録で全文確認）")
     if len(lines) == 1:
@@ -199,7 +200,7 @@ def _pharmacy_state_lines(db, project_id, roll) -> list[str]:
         text = f"{names}: " if names else ""
         # The whole parent wording, rather than a scalar alone, retains denial and plans.
         text += report["parent"]["text"]
-        lines.append(f"・{title}: {_inline(report['value'], 80)} — {_inline(text, 200)}"
+        lines.append(f"・{title}: {inline_text(report['value'], 80)} — {inline_text(text, 200)}"
                      + reference_text(report.get("_reference")))
     if not valid:
         lines.append("・現在の原文と照合できる報告なし")
@@ -247,9 +248,9 @@ def _registered_clinical_lines(db, project_id) -> list[str]:
                                     if row.get(key) is not None)
                 if values:
                     previous = "・以前取得した情報" if record.get("historical") else ""
-                    lines.append(f"  {_inline(lab.get('name'), 35) or '観測項目'}: {values} "
-                                 f"{_inline(lab.get('unit'), 20)}（記録日 "
-                                 f"{_inline(row.get('observation_issued_at'), 35) or '不明'}{previous}）")
+                    lines.append(f"  {inline_text(lab.get('name'), 35) or '観測項目'}: {values} "
+                                 f"{inline_text(lab.get('unit'), 20)}（記録日 "
+                                 f"{inline_text(row.get('observation_issued_at'), 35) or '不明'}{previous}）")
     return lines
 
 
@@ -264,7 +265,7 @@ def _request_reply_lines(db, project_id, roll) -> list:
     for r in reqs:
         state = REPLY_LABELS.get(r.get("reply_state"))
         line = (f"・{mmdd(r.get('at'))} "
-                f"{_inline(r.get('ctx'), 40) or '内容不明'} — 返信: "
+                f"{inline_text(r.get('ctx'), 40) or '内容不明'} — 返信: "
                 + (state or "記録なし"))
         if r.get("reply_conflict") is True:
             line += "（完了後に取消の記録あり）"
@@ -311,9 +312,9 @@ def _karte_summary_line(ks) -> str:
     if ks.get("empty") or not ks.get("comment"):
         return "連携サマリー（MCS）: 空"
     when = mmdd(ks.get("updated_at")).replace("-", "/")
-    prof = _inline(ks.get("updater_profession"), 20) or "職種不明"
+    prof = inline_text(ks.get("updater_profession"), 20) or "職種不明"
     return (f"連携サマリー（MCS・更新 {when}・{prof}）: "
-            f"{_inline(ks['comment'], 80)}")
+            f"{inline_text(ks['comment'], 80)}")
 
 
 def _coverage_line(db, project_id) -> str:
@@ -411,7 +412,7 @@ def my_tasks_view(db, name, now=None, projects=None) -> dict:
     ``projects`` limits rows (and counts) to the plugin's scope."""
     today = today_jst(now)
     notes = ["※ 担当者欄が表示名（またはスタッフ一覧の「氏名（事業所）」）と一致するタスク"]
-    out = {"title": f"自分のタスク（担当: {_inline(name, 40) or '不明'}）",
+    out = {"title": f"自分のタスク（担当: {inline_text(name, 40) or '不明'}）",
            "head": [], "items": [], "more": 0, "notes": notes,
            "empty": "該当するタスクはありません。"}
     if not _norm_name(name):
@@ -438,11 +439,11 @@ def my_tasks_view(db, name, now=None, projects=None) -> dict:
     for r in rows[:LIST_FETCH]:
         pid = r["project_id"]
         if pid not in names:
-            names[pid] = ((_inline(patient_name(db, pid), 30)
+            names[pid] = ((inline_text(patient_name(db, pid), 30)
                            or f"project {pid}")
                           + (ARCHIVED_MARK if pid in archived else ""))
         # who it is for, what to do, when — the id last for the CLI
-        line = f"・{names[pid]}: {_inline(r['title'], 60)}"
+        line = f"・{names[pid]}: {inline_text(r['title'], 60)}"
         if r["due_date"]:
             line += f" — 期限 {r['due_date']}" + (" ⚠期限切れ" if overdue(r) else "")
         if r["status"] == "in_progress":
@@ -495,7 +496,7 @@ def unacked_view(db, transport, now=None, projects=None,
     # A click on another card can observe new source material before sweep
     # persists this card's generation. Its older acknowledgement is stale.
     rows = [r for r in rows if not r["acknowledged"]
-            or _current_generation(r, source_fingerprint(db, r)) != r["source_generation"]]
+            or render_source_generation(r, source_fingerprint(db, r)) != r["source_generation"]]
     groups: dict = {}
     for r in rows:
         groups.setdefault(r["project_id"], []).append(r)
@@ -503,7 +504,7 @@ def unacked_view(db, transport, now=None, projects=None,
     items = []
     self_reacted = unfetched = 0
     for pid, cards in sorted(groups.items(), key=lambda g: g[0] in archived):
-        group = ((_inline(patient_name(db, pid), 30) or f"project {pid}")
+        group = ((inline_text(patient_name(db, pid), 30) or f"project {pid}")
                  + (ARCHIVED_MARK if pid in archived else ""))
         with_reactions = [(c, card_reactions(db, c)) for c in cards]
         # Stable partition: acknowledgement remains independent of MCS stamps.
@@ -554,7 +555,7 @@ def _snippet(text, term, width=40) -> str:
                   if hit >= 0 else (0, len(term)))
     start = max(0, at - width // 2)
     end = start + width + length
-    return (("…" if start else "") + _inline(flat[start:end], end - start + 1)
+    return (("…" if start else "") + inline_text(flat[start:end], end - start + 1)
             + ("…" if end < len(flat) else ""))
 
 
@@ -598,7 +599,7 @@ def patient_search_view(db, project_id, query) -> dict:
     question = _question_term(query)
     terms = ([question[0]] if question and question[0] else
              [t for t in str(query or "").split() if search_fold(t)][:5])
-    name = _inline(patient_name(db, project_id), 30) or f"project {project_id}"
+    name = inline_text(patient_name(db, project_id), 30) or f"project {project_id}"
     sql = ("SELECT message_id,posted_at,profession,body_text FROM messages "
            "WHERE project_id=? AND body_state='full'")
     args: list = [project_id]
@@ -614,17 +615,17 @@ def patient_search_view(db, project_id, query) -> dict:
             if len(rows) < SEARCH_HITS:
                 rows.append(row)
     items = [{"project_id": project_id,
-              "text": f"・{mmdd(r['posted_at'])} {_hhmm(r['posted_at'])} 投稿#{r['message_id']} "
-                      f"{_inline(r['profession'], 20) or '職種不明'}: "
+              "text": f"・{mmdd(r['posted_at'])} {posted_hhmm(r['posted_at'])} 投稿#{r['message_id']} "
+                      f"{inline_text(r['profession'], 20) or '職種不明'}: "
                       f"{_snippet(r['body_text'], terms[0])}"}
              for r in rows]
     head = [f"{total}件（取得済み投稿・新しい順）— MCS: {project_url(project_id)}"]
     if question and question[0]:
-        head.insert(0, f"「{_inline(question[0], 40)}」を含む投稿を検索しました"
+        head.insert(0, f"「{inline_text(question[0], 40)}」を含む投稿を検索しました"
                     + ("（先頭が最も新しい記録）" if question[1] else ""))
     elif question:
         head.insert(0, "質問を検索語に置き換えられませんでした。調べたい語（例: 残薬）を入力してください")
-    return {"title": f"🔎 {name} — 「{_inline(query, 40)}」の検索結果",
+    return {"title": f"🔎 {name} — 「{inline_text(query, 40)}」の検索結果",
             "head": head,
             "items": items, "more": max(0, total - SEARCH_HITS),
             "empty": "取得済みの投稿に一致するものはありません。",
@@ -661,8 +662,8 @@ def _candidate_line(ref, dictionary_active: bool) -> str:
     status, cands = ref.get("status"), ref.get("cands") or []
     if status == "resolved" and candidate_note(ref):
         c = cands[0]
-        return (f"\n　→ 候補: {_inline(c['display'], 60)}"
-                f"（{DRUG_KIND_JA.get(c['kind'], c['kind'])}・{_inline(c['code'], 20)}）")
+        return (f"\n　→ 候補: {inline_text(c['display'], 60)}"
+                f"（{DRUG_KIND_JA.get(c['kind'], c['kind'])}・{inline_text(c['code'], 20)}）")
     if status == "ambiguous":
         return f"\n　→ 複数の候補（{len(cands)}件）: 用量・剤形を原文で確認してください"
     if status == "generic":
@@ -675,7 +676,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     """💊 one post's medication mentions — the card's own 薬剤 selection
     (structured_view) with each mention's current dictionary candidate.
     Read-only: nothing here confirms a prescription."""
-    name = _inline(patient_name(db, project_id), 30) or f"project {project_id}"
+    name = inline_text(patient_name(db, project_id), 30) or f"project {project_id}"
     title = f"💊 {name} — 選択した投稿の薬剤"
     row = db.execute("SELECT project_id,posted_at,profession FROM messages "
                      "WHERE message_id=?", (message_id,)).fetchone()
@@ -686,9 +687,9 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     meds, unverified = structured_view.medication_entries(db, message_id)
     refs = [ref for _, ref in meds + unverified if ref]
     active = drug_search_available(db)
-    when = f"{mmdd(row['posted_at'])} {_hhmm(row['posted_at'])}"
+    when = f"{mmdd(row['posted_at'])} {posted_hhmm(row['posted_at'])}"
     head = [f"{'日時不明' if '?' in when else when} "
-            f"{_inline(row['profession'], 20) or '職種不明'}の投稿 — "
+            f"{inline_text(row['profession'], 20) or '職種不明'}の投稿 — "
             f"{len(meds) + len(unverified)}件"]
     if refs:
         head.append("辞書の候補はすべて未確認です")
@@ -697,7 +698,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
         head.append(_DICTIONARY_STATE[
             drug_map.active_dictionary(db, cfg)[1] if cfg is not None else "inactive"])
     items = [{"project_id": project_id,
-              "text": f"・{_inline(text, 120)}{label}"
+              "text": f"・{inline_text(text, 120)}{label}"
                       f"{_candidate_line(ref, active)}"}
              for entries, label in ((meds, ""), (unverified, "（未確認）"))
              for text, ref in entries]
@@ -721,7 +722,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
 def drug_search_view(db, cfg, project_id, query) -> dict:
     """💊 reference search over the active approved dictionary (names,
     aliases, codes). Never resolves, annotates or changes anything."""
-    shown_query = _inline(query, 40)
+    shown_query = inline_text(query, 40)
     title = f"💊 薬剤の検索 — 「{shown_query}」"
     base = {"title": title, "head": [], "items": [], "more": 0,
             "notes": []}
@@ -734,14 +735,14 @@ def drug_search_view(db, cfg, project_id, query) -> dict:
         return {**base, "empty": "検索する薬名を入力してください。"}
     items = []
     for item in found["items"]:
-        text = (f"・{_inline(item['display'], 60)}"
+        text = (f"・{inline_text(item['display'], 60)}"
                 f"（{DRUG_KIND_JA.get(item['kind'], item['kind'])}・"
-                f"{_inline(item['id'], 20)}）")
+                f"{inline_text(item['id'], 20)}）")
         aliases = [a for a in item["matching_aliases"] if a != item["display"]]
         if aliases:
             rest = item["matching_alias_count"] - min(3, len(aliases)) \
                 - (item["display"] in item["matching_aliases"])
-            text += ("\n　一致した別名: " + "、".join(_inline(a, 40) for a in aliases[:3])
+            text += ("\n　一致した別名: " + "、".join(inline_text(a, 40) for a in aliases[:3])
                      + (f" 他{rest}件" if rest > 0 else ""))
         items.append({"project_id": project_id, "text": text})
     return {**base,
@@ -944,7 +945,7 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             status.append(f"添付 {nightly['attachments']['count']}件（内容は未解析）")
     pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
-    name = _inline(patient_name(db, project_id), 30) or f"project {project_id}"
+    name = inline_text(patient_name(db, project_id), 30) or f"project {project_id}"
     title = f"{name} — {CONTEXT_SECTIONS[section]}"
     start = page * CONTEXT_PAGE_SIZE
     shown = rows[start:start + CONTEXT_PAGE_SIZE]

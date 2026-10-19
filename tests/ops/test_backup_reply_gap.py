@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import ledger
-import mcs_backup
+import backup_evidence
 import mcs_repair
 from ingest_testkit import _ledger, _message
 
@@ -23,12 +23,12 @@ def test_backup_and_repair_agree_on_tombstoned_reply(tmp_path):
     path = Path(ledger.publish_snapshot(str(tmp_path / "ledger.db"),
                                        str(tmp_path / "snapshots")))
 
-    backup_count = mcs_backup.inventory_snapshot(path)["metrics"]["incomplete_reply_roots"]
+    backup_count = backup_evidence.inventory_snapshot(path)["metrics"]["incomplete_reply_roots"]
     repair_count = mcs_repair.plan(path)["counts"]["incomplete_reply_roots"]
     assert backup_count == repair_count == 0
 
 
 def test_backup_and_repair_share_the_query_module_criterion():
     import mcs_queries
-    assert mcs_backup.REPLY_GAP is mcs_queries.REPLY_GAP
+    assert backup_evidence.REPLY_GAP is mcs_queries.REPLY_GAP
     assert mcs_repair.REPLY_GAP is mcs_queries.REPLY_GAP

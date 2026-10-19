@@ -11,6 +11,7 @@ import mcs_requests
 import mcs_signals
 import mcs_stats
 from ops_testkit import DAY, NOW, _msg
+import signal_policy
 
 
 @pytest.fixture
@@ -49,7 +50,7 @@ def test_real_detector_lifecycle_suppression_and_stats_do_not_interfere(led):
     _msg(led.db, 1, ts=NOW - 20 * DAY, chash="h1")
     fact(led.db, 1, meds=[{"name": "synthetic-med", "action": "stop"}])
     cfg = {"signals": {"notify": True}}
-    thresholds = mcs_signals._thresholds(led.db)
+    thresholds = signal_policy.resolved_thresholds(led.db)
     key = "med_change_no_followup:1:synthetic-med"
     # When: observe the full lifecycle, reading stats between each detector run.
     first = mcs_signals.evaluate(led, cfg, now=NOW)
@@ -82,14 +83,14 @@ def test_real_detector_lifecycle_suppression_and_stats_do_not_interfere(led):
     resolved = mcs_signals.evaluate(led, cfg, now=NOW + 5)
     assert counts(resolved) == dict(open=0, opened=0, superseded=0, resolved=1,
                                     notify_enqueued=0, notify_digest_merged=0)
-    row = mcs_signals._latest_signal_states(led.db)[key]
+    row = mcs_signals.latest_signal_states(led.db)[key]
     assert row["resolution"]["cause"] == "request_registered"
     assert row["resolution"]["observed_causes"] == ["request_registered"]
     before = led.db.total_changes
     measured = feedback(led.db, NOW + 5)
     # Then: thresholds, candidates, counts, notification/coalescing remain exact.
     assert led.db.total_changes == before
-    assert mcs_signals._thresholds(led.db) == thresholds
+    assert signal_policy.resolved_thresholds(led.db) == thresholds
     assert set(first["detectors_ran"]) == {t for t, _ in mcs_signals.DETECTORS}
     assert first["errors"] == suppressed["errors"] == reopened["errors"] == resolved["errors"] == []
     assert counts(mcs_signals.evaluate(led, cfg, now=NOW + 5)) == dict(
@@ -140,7 +141,7 @@ def test_resolution_cause_is_grounded_without_changing_detection(led, change, ca
     # Then: this always resolves once, but only a grounded cause is attributed.
     assert result["resolved"] == 1
     assert result["errors"] == []
-    row = next(c for c in mcs_signals._latest_signal_states(led.db).values()
+    row = next(c for c in mcs_signals.latest_signal_states(led.db).values()
                if c["type"] == "pharmacist_request_unanswered")
     assert row["resolution"]["cause"] == cause
     assert feedback(led.db, at)["by_type"]["pharmacist_request_unanswered"]["resolution_causes"] == {cause: 1}
@@ -162,7 +163,7 @@ def test_resolved_dismissal_recurrence_and_supersession_are_separate(led):
     key = "comm_concentration:1:current"
     assert dismiss(led, key, NOW + 3)["outcome"] == "applied"
     assert mcs_signals.evaluate(led, {}, now=NOW + 4 * DAY)["resolved"] == 1
-    row = mcs_signals._latest_signal_states(led.db)[key]
+    row = mcs_signals.latest_signal_states(led.db)[key]
     assert row["resolution"]["cause"] == "volume_below_threshold"
     assert row["resolution"]["prior_state"] == "dismissed"
     for mid in range(30, 40):
@@ -189,7 +190,7 @@ def test_missing_measurement_evidence_never_changes_resolution_decision(led):
     assert counts(result) == dict(open=0, opened=0, superseded=0, resolved=1,
                                   notify_enqueued=0, notify_digest_merged=0)
     assert result["errors"] == []
-    signal = next(iter(mcs_signals._latest_signal_states(led.db).values()))
+    signal = next(iter(mcs_signals.latest_signal_states(led.db).values()))
     assert signal["resolution"]["cause"] == "evidence_missing"
 
 

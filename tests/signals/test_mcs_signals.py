@@ -2,6 +2,8 @@
 tmp_path (same pattern as test_mcs_ingestion): detector correctness,
 open/resolved lifecycle, append-only history, notify gating, honest
 wording. No network or live data."""
+import self_identity
+import semantic_send_gate
 import json
 import time
 
@@ -11,6 +13,8 @@ import mcs_signals
 from semantic_projection import PROJECTION_VERSION
 from ops_testkit import DAY, NOW, _extract_v1, _msg
 from common_testkit import ledger_fixture
+import message_observations
+import signal_policy
 
 
 @pytest.mark.parametrize("raw", ["{broken", "[" * 1500 + "0" + "]" * 1500,
@@ -18,11 +22,11 @@ from common_testkit import ledger_fixture
 def test_corrupt_latest_policy_never_revives_prior_approval(led, raw):
     assert _policy(led, {"req_age_days": 7})["outcome"] == "applied"
     _req(led.db, "open", created=NOW - 20 * DAY)
-    led.artifact_add(mcs_signals.POLICY_KIND, raw)
+    led.artifact_add(signal_policy.POLICY_KIND, raw)
     before = led.db.total_changes
     current = mcs_signals.current_open(led.db)
     assert current["policy"] is None
-    assert current["thresholds"]["req_age_days"] == mcs_signals.REQ_AGE_DAYS
+    assert current["thresholds"]["req_age_days"] == signal_policy.REQ_AGE_DAYS
     assert led.db.total_changes == before
     assert _ev(led)["open"] == 0
     assert led.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 0
@@ -31,29 +35,29 @@ def test_corrupt_latest_policy_never_revives_prior_approval(led, raw):
 @pytest.mark.parametrize("raw", ["{broken", "[" * 1500 + "0" + "]" * 1500,
                                  "[]", "null"], ids=["malformed", "deep", "array", "null"])
 def test_corrupt_latest_profile_never_revives_prior_identity(led, raw):
-    mcs_signals.record_self_profile(led.db, {
+    self_identity.record_self_profile(led.db, {
         "sender_id": 42, "organizations": ["synthetic-org"], "professions": ["看護師"]})
-    led.artifact_add(mcs_signals.SELF_PROFILE_KIND, raw)
+    led.artifact_add(self_identity.SELF_PROFILE_KIND, raw)
     before = led.db.total_changes
-    assert mcs_signals._latest_self_profile(led.db) == {}
-    assert mcs_signals.self_sender_id(led.db) is None
-    assert not mcs_signals.is_self_message(led.db, 42)
-    assert mcs_signals._self_sets({}, led.db) == ([], ["薬剤師"], [])
+    assert self_identity.latest_self_profile(led.db) == {}
+    assert self_identity.self_sender_id(led.db) is None
+    assert not self_identity.is_self_message(led.db, 42)
+    assert self_identity.self_sets({}, led.db) == ([], ["薬剤師"], [])
     explicit = {"self_organizations": ["synthetic-explicit"], "self_professions": []}
-    assert mcs_signals._self_sets(explicit, led.db) == (["synthetic-explicit"], [], [])
+    assert self_identity.self_sets(explicit, led.db) == (["synthetic-explicit"], [], [])
     assert led.db.total_changes == before
 
 
 @pytest.mark.parametrize("raw", ["{broken", "[" * 1500 + "0" + "]" * 1500,
                                  "[]", "null"], ids=["malformed", "deep", "array", "null"])
 def test_corrupt_latest_roster_never_revives_prior_membership(led, raw):
-    mcs_signals.record_station_staff(led.db, [{"staff_id": 42, "is_self": True}])
-    led.artifact_add(mcs_signals.STATION_STAFF_KIND, raw)
+    self_identity.record_station_staff(led.db, [{"staff_id": 42, "is_self": True}])
+    led.artifact_add(self_identity.STATION_STAFF_KIND, raw)
     before = led.db.total_changes
-    assert mcs_signals.latest_station_staff(led.db) == []
-    assert mcs_signals.own_sender_ids(led.db) == frozenset()
-    assert mcs_signals.is_own_station_message(led.db, 42) is None
-    assert mcs_signals.self_sender_id(led.db) is None
+    assert self_identity.latest_station_staff(led.db) == []
+    assert self_identity.own_sender_ids(led.db) == frozenset()
+    assert self_identity.is_own_station_message(led.db, 42) is None
+    assert self_identity.self_sender_id(led.db) is None
     assert led.db.total_changes == before
 
 
@@ -180,7 +184,7 @@ def test_med_none_action_not_flagged(led):
 
 
 def test_comm_concentration(led):
-    for i in range(mcs_signals.CONC_MIN_POSTS):
+    for i in range(signal_policy.CONC_MIN_POSTS):
         _msg(led.db, 100 + i, ts=NOW - 3600)
     assert _ev(led)["open"] == 1
     sig = mcs_signals.current_open(led.db)["items"][0]
@@ -371,7 +375,7 @@ def test_rx_period_skips_archived_room_and_resolves(led, end, raw, stype):
     res = _ev(led, now=NOW + 1)
     assert (res["open"], res["resolved"]) == (0, 1)
     assert mcs_signals.current_open(led.db)["items"] == []
-    row = next(c for c in mcs_signals._latest_signal_states(led.db).values()
+    row = next(c for c in mcs_signals.latest_signal_states(led.db).values()
                if c["type"] == stype)
     assert row["resolution"]["cause"] == "project_archived"
 
@@ -553,7 +557,7 @@ def test_send_gate_flag_turned_off(led, monkeypatch):
     _req(led.db, "open", due="2026-09-10")
     _ev(led, cfg={"signals": {"notify": True}})
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
-    with pytest.raises(notify_flush._StaleSend,
+    with pytest.raises(semantic_send_gate.StaleSend,
                        match="signals_notify_disabled"):
         notify_flush._format_event(led, _sig_ev(led))
 
@@ -567,7 +571,7 @@ def test_send_gate_signal_resolved_while_queued(led, monkeypatch):
     _ev(led, cfg=cfg)              # resolves; intent still pending
     monkeypatch.setattr(notify_flush, "_config",
                         lambda: {"signals": {"notify": True}})
-    with pytest.raises(notify_flush._StaleSend, match="signal_not_open"):
+    with pytest.raises(semantic_send_gate.StaleSend, match="signal_not_open"):
         notify_flush._format_event(led, _sig_ev(led))
 
 
@@ -683,9 +687,9 @@ def test_dismiss_reason_code_is_optional_and_counted(led):
 def test_station_staff_roster_replaced_only_on_change(led):
     staff = [{"staff_id": 1, "name": "山田 花子", "station": "みどり薬局"}]
     with led.db:
-        assert mcs_signals.record_station_staff(led.db, staff) is True
-        assert mcs_signals.record_station_staff(led.db, staff) is False
-    assert mcs_signals.latest_station_staff(led.db) == staff
+        assert self_identity.record_station_staff(led.db, staff) is True
+        assert self_identity.record_station_staff(led.db, staff) is False
+    assert self_identity.latest_station_staff(led.db) == staff
 
 
 # --- human-approved threshold policy (ops.signal_policy) ---
@@ -806,9 +810,9 @@ def test_policy_view_requires_str_provenance(led):
                      "policy": {"req_age_days": 9}}), "{}"))
     view = mcs_signals.current_open(led.db)
     assert view["policy"] is None
-    assert view["thresholds"] == mcs_signals._thresholds(led.db)
+    assert view["thresholds"] == signal_policy.resolved_thresholds(led.db)
     assert view["thresholds"]["req_age_days"] == \
-        mcs_signals.THRESHOLDS["req_age_days"][0]
+        signal_policy.THRESHOLDS["req_age_days"][0]
 
 
 def test_dismiss_corrupt_signal_row(led):
@@ -1043,7 +1047,7 @@ def test_send_gate_group_all_resolved(led, monkeypatch):
     import notify_flush
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
-    with pytest.raises(notify_flush._StaleSend, match="signal_not_open"):
+    with pytest.raises(semantic_send_gate.StaleSend, match="signal_not_open"):
         notify_flush._format_event(led, ev)
 
 
@@ -1502,7 +1506,7 @@ def test_self_org_request_responder(led):
 def test_self_profile_artifact_supplies_defaults(led):
     """Without config, the fetched MCS self profile (recorded as an
     artifact by run_check) supplies self organizations/professions."""
-    mcs_signals.record_self_profile(led.db, {
+    self_identity.record_self_profile(led.db, {
         "sender_id": 42, "name": "山田 薬剤",
         "professions": ["薬剤師"], "organizations": ["みどり薬局"]})
     _msg(led.db, 1, ts=NOW - 30 * DAY, org="みどり薬局")
@@ -1518,7 +1522,7 @@ def test_self_profile_artifact_supplies_defaults(led):
 def test_config_overrides_self_profile_artifact(led):
     """An explicit signals.self_organizations wins over the fetched
     profile — manual override beats derivation."""
-    mcs_signals.record_self_profile(led.db, {
+    self_identity.record_self_profile(led.db, {
         "sender_id": 42, "name": "山田 薬剤",
         "professions": [], "organizations": ["みどり薬局"]})
     _msg(led.db, 1, ts=NOW - 30 * DAY, org="みどり薬局")
@@ -1534,14 +1538,14 @@ def test_record_self_profile_dedupes(led):
     clean across ticks."""
     prof = {"sender_id": 42, "name": "山田 薬剤",
             "professions": ["薬剤師"], "organizations": ["みどり薬局"]}
-    assert mcs_signals.record_self_profile(led.db, prof) is True
-    assert mcs_signals.record_self_profile(led.db, prof) is False
+    assert self_identity.record_self_profile(led.db, prof) is True
+    assert self_identity.record_self_profile(led.db, prof) is False
     changed = dict(prof, organizations=["みどり薬局", "そら薬局"])
-    assert mcs_signals.record_self_profile(led.db, changed) is True
+    assert self_identity.record_self_profile(led.db, changed) is True
     n = led.db.execute("SELECT COUNT(*) FROM artifacts "
                        "WHERE kind='self_profile_v1'").fetchone()[0]
     assert n == 2
-    latest = mcs_signals._latest_self_profile(led.db)
+    latest = self_identity.latest_self_profile(led.db)
     assert latest["organizations"] == ["みどり薬局", "そら薬局"]
     assert latest["name"] == "山田 薬剤"
 
@@ -1553,61 +1557,61 @@ def test_record_self_profile_dedupes(led):
     ("4.2", None), ("４２", None), ({"id": 42}, None),
 ])
 def test_normalize_sender_id(value, expected):
-    assert mcs_signals.normalize_sender_id(value) == expected
+    assert self_identity.normalize_sender_id(value) == expected
 
 
 def test_station_self_id_repairs_profile_and_does_not_match_names(led):
     prof = {"sender_id": None, "name": "SYNTH-A",
             "professions": [], "organizations": ["SYNTH-薬局"]}
-    mcs_signals.record_self_profile(led.db, prof)
-    assert mcs_signals.is_own_station_message(led.db, 42) is None
+    self_identity.record_self_profile(led.db, prof)
+    assert self_identity.is_own_station_message(led.db, 42) is None
     staff = [{"staff_id": "42", "name": "SYNTH-A", "is_self": True},
              {"staff_id": 43, "name": "SYNTH-A", "is_self": False},
              {"staff_id": 42, "name": "SYNTH-改名", "is_self": True}]
-    assert mcs_signals.record_station_staff(led.db, staff) is True
-    assert mcs_signals.self_sender_id(led.db) == 42
-    assert mcs_signals.own_sender_ids(led.db) == frozenset({42, 43})
-    assert mcs_signals.is_own_station_message(led.db, "0042") is True
-    assert mcs_signals.is_own_station_message(led.db, 43) is True
-    assert mcs_signals.is_own_station_message(led.db, 44) is False
-    assert mcs_signals.is_own_station_message(led.db, None) is None
-    assert mcs_signals.is_own_station_message(led.db, True) is None
-    assert mcs_signals.is_self_message(led.db, "0042") is True
-    assert mcs_signals.is_self_message(led.db, 43) is False
-    assert mcs_signals.is_self_message(led.db, None) is False
-    current = mcs_signals._latest_self_profile(led.db)
+    assert self_identity.record_station_staff(led.db, staff) is True
+    assert self_identity.self_sender_id(led.db) == 42
+    assert self_identity.own_sender_ids(led.db) == frozenset({42, 43})
+    assert self_identity.is_own_station_message(led.db, "0042") is True
+    assert self_identity.is_own_station_message(led.db, 43) is True
+    assert self_identity.is_own_station_message(led.db, 44) is False
+    assert self_identity.is_own_station_message(led.db, None) is None
+    assert self_identity.is_own_station_message(led.db, True) is None
+    assert self_identity.is_self_message(led.db, "0042") is True
+    assert self_identity.is_self_message(led.db, 43) is False
+    assert self_identity.is_self_message(led.db, None) is False
+    current = self_identity.latest_self_profile(led.db)
     assert current["sender_id"] == 42
     assert all(current[k] == prof[k] for k in ("name", "professions", "organizations"))
-    assert mcs_signals._self_sets({}, led.db) == (["SYNTH-薬局"], [], [])
+    assert self_identity.self_sets({}, led.db) == (["SYNTH-薬局"], [], [])
     # A subsequent /users/self response missing its ID cannot erase it.
-    assert mcs_signals.record_self_profile(led.db, prof) is False
-    assert mcs_signals.record_station_staff(led.db, staff) is False
+    assert self_identity.record_self_profile(led.db, prof) is False
+    assert self_identity.record_station_staff(led.db, staff) is False
     # Repair also runs if an old missing-ID profile follows an unchanged roster.
-    led.artifact_add(mcs_signals.SELF_PROFILE_KIND, json.dumps(prof))
-    assert mcs_signals.record_station_staff(led.db, staff) is True
-    assert mcs_signals._latest_self_profile(led.db)["sender_id"] == 42
+    led.artifact_add(self_identity.SELF_PROFILE_KIND, json.dumps(prof))
+    assert self_identity.record_station_staff(led.db, staff) is True
+    assert self_identity.latest_self_profile(led.db)["sender_id"] == 42
 
 
 @pytest.mark.parametrize("self_ids", [[42, 43], [42, None], [True], [None]])
 def test_ambiguous_station_self_id_is_unknown(led, self_ids):
-    mcs_signals.record_self_profile(led.db, {"sender_id": 42})
-    mcs_signals.record_station_staff(led.db, [
+    self_identity.record_self_profile(led.db, {"sender_id": 42})
+    self_identity.record_station_staff(led.db, [
         {"staff_id": sid, "is_self": True} for sid in self_ids])
-    assert mcs_signals.self_sender_id(led.db) is None
-    assert mcs_signals.is_self_message(led.db, 42) is False
+    assert self_identity.self_sender_id(led.db) is None
+    assert self_identity.is_self_message(led.db, 42) is False
 
 
 def test_station_self_id_works_without_profile_and_falls_back_when_absent(led):
-    assert mcs_signals.self_sender_id(led.db) is None
-    mcs_signals.record_station_staff(led.db, [{"staff_id": 42, "is_self": True}])
-    assert mcs_signals.self_sender_id(led.db) == 42
-    assert mcs_signals._latest_self_profile(led.db) == {}
-    mcs_signals.record_self_profile(led.db, {"sender_id": "44"})
-    assert mcs_signals.self_sender_id(led.db) == 42  # roster takes precedence
-    mcs_signals.record_station_staff(led.db, [{"staff_id": 42, "is_self": False}])
-    assert mcs_signals.self_sender_id(led.db) == 44
-    mcs_signals.record_station_staff(led.db, [{"name": "SYNTH-A"}])
-    assert mcs_signals.is_own_station_message(led.db, 44) is None
+    assert self_identity.self_sender_id(led.db) is None
+    self_identity.record_station_staff(led.db, [{"staff_id": 42, "is_self": True}])
+    assert self_identity.self_sender_id(led.db) == 42
+    assert self_identity.latest_self_profile(led.db) == {}
+    self_identity.record_self_profile(led.db, {"sender_id": "44"})
+    assert self_identity.self_sender_id(led.db) == 42  # roster takes precedence
+    self_identity.record_station_staff(led.db, [{"staff_id": 42, "is_self": False}])
+    assert self_identity.self_sender_id(led.db) == 44
+    self_identity.record_station_staff(led.db, [{"name": "SYNTH-A"}])
+    assert self_identity.is_own_station_message(led.db, 44) is None
 
 
 # --- review fixes: negation handling, v1 urgency, salvage, archived ---
@@ -1730,10 +1734,10 @@ def test_stale_high_urgency_does_not_escalate_current_signal(led, kind):
 def test_self_sets_explicit_empty_is_not_unset(led):
     """signals.self_organizations=[] means 'no self org' — distinct
     from unset, which would fall back to the fetched profile."""
-    mcs_signals.record_self_profile(
+    self_identity.record_self_profile(
         led.db, {"sender_id": 1, "name": "n",
                  "professions": ["薬剤師"], "organizations": ["orgX"]})
-    orgs, profs, _ = mcs_signals._self_sets(
+    orgs, profs, _ = self_identity.self_sets(
         {"self_organizations": []}, led.db)
     assert orgs == [] and profs == ["薬剤師"]
 
@@ -1742,10 +1746,10 @@ def test_self_sets_empty_profile_professions_authoritative(led):
     """A fetched profile with no specialist categories means 'no
     listed profession' — the 薬剤師 default only applies when NO
     profile exists."""
-    mcs_signals.record_self_profile(
+    self_identity.record_self_profile(
         led.db, {"sender_id": 1, "name": "n",
                  "professions": [], "organizations": ["orgX"]})
-    orgs, profs, _ = mcs_signals._self_sets({}, led.db)
+    orgs, profs, _ = self_identity.self_sets({}, led.db)
     assert orgs == ["orgX"] and profs == []
 
 
@@ -1759,7 +1763,7 @@ def test_held_digest_members_salvaged(led):
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     assert json.loads(ev["payload"])["digest"] is True
     # quarantine with NO send receipt — nothing was ever delivered
-    notify_flush._hold_event(
+    notify_flush.hold_event(
         led, {"event_id": ev["event_id"], "kind": "signal",
               "payload": ev["payload"],
               "progress": ev["progress"]}, {"signals": {}})
@@ -1785,7 +1789,7 @@ def test_held_digest_with_send_progress_not_salvaged(led):
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     led.outbox_progress(ev["event_id"], 0, [], "fp", sending=1)
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
-    notify_flush._hold_event(
+    notify_flush.hold_event(
         led, {"event_id": ev["event_id"], "kind": "signal",
               "payload": ev["payload"],
               "progress": ev["progress"]}, {"signals": {}})
@@ -1842,7 +1846,7 @@ def test_held_merged_intent_members_salvaged(led):
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     pl = json.loads(ev["payload"])
     assert len(pl["signal_keys"]) == 2 and "digest" not in pl
-    notify_flush._hold_event(
+    notify_flush.hold_event(
         led, {"event_id": ev["event_id"], "kind": "signal",
               "payload": ev["payload"],
               "progress": ev["progress"]}, {"signals": {}})
@@ -1868,7 +1872,7 @@ def test_held_single_signal_key_salvaged(led):
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     pl = json.loads(ev["payload"])
     assert "signal_key" in pl
-    notify_flush._hold_event(
+    notify_flush.hold_event(
         led, {"event_id": ev["event_id"], "kind": "signal",
               "payload": ev["payload"],
               "progress": ev["progress"]}, {"signals": {}})
@@ -1937,14 +1941,14 @@ def test_dismissed_signal_resolves_when_clear_and_reopens_on_recurrence(led):
     """A dismissal covers one episode: once the condition clears the key
     resolves, and a later burst in the same room opens again."""
     key = "comm_concentration:1:current"
-    for i in range(mcs_signals.CONC_MIN_POSTS):
+    for i in range(signal_policy.CONC_MIN_POSTS):
         _msg(led.db, 100 + i, ts=NOW - 3600)
     _ev(led)
     assert _dismiss(led, key)["outcome"] == "applied"
     later = NOW + 30 * DAY
     r = _ev(led, now=later)
     assert _states(led.db)[key] == "resolved" and r["resolved"] == 1
-    for i in range(mcs_signals.CONC_MIN_POSTS):
+    for i in range(signal_policy.CONC_MIN_POSTS):
         _msg(led.db, 500 + i, ts=later - 3600)
     r = _ev(led, now=later)
     assert _states(led.db)[key] == "open" and r["opened"] == 1
@@ -2088,7 +2092,7 @@ def test_stamp_resolved_request_stays_watched_until_cancellation(led):
     _capture(led.db, 1, [_stamp("accepted", True)])
     _ev(led, SELF_REACT_CFG)
     assert not _ph_open(led.db)
-    assert 1 in {r["message_id"] for r in led.metadata_watch_targets(now=NOW)}
+    assert 1 in {r["message_id"] for r in message_observations.metadata_watch_targets(led.db, now=NOW)}
     # Simulate the actual refresh publication, not a direct replacement
     # of the capture row used by the existing lifecycle test.
     led.save_metadata_shadow(SimpleNamespace(

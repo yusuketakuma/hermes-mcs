@@ -1,4 +1,5 @@
 """Changing interpretation policy invalidates cached analysis and unsent text."""
+import semantic_send_gate
 import semantic_drain
 import semantic_policy
 import semantic_render
@@ -24,12 +25,12 @@ def test_policy_change_rechecks_analysis_and_freezes_old_notification(tmp_path, 
         event = db.db.execute("SELECT * FROM notify_outbox WHERE kind='semantic_notice' LIMIT 1").fetchone()
         assert event is not None
         monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce", project_ids=[]))
-        with pytest.raises(notify_flush._DeferredSend):
-            notify_flush._semantic_gate(db, event, json.loads(event["payload"]))
+        with pytest.raises(semantic_send_gate.DeferredSend):
+            semantic_send_gate.semantic_gate(db, event, json.loads(event['payload']), notify_flush._config())
         changed = _cfg("enforce", match_threshold=.8)
         monkeypatch.setattr(notify_flush, "_config", lambda: changed)
-        with pytest.raises(notify_flush._StaleSend):
-            notify_flush._semantic_gate(db, event, json.loads(event["payload"]))
+        with pytest.raises(semantic_send_gate.StaleSend):
+            semantic_send_gate.semantic_gate(db, event, json.loads(event['payload']), notify_flush._config())
         db.semantic_seed(1, [1], {"source": "replay"})
         fake = _FakeJev()
         semantic_drain.run_due(db, changed, {"errors": []}, time.monotonic() + 300,
@@ -120,8 +121,8 @@ def test_fact_source_switch_holds_old_notice_and_rechecks_receipts(
         assert event is not None
         changed = _cfg("enforce", loop_mode="off") if canonical else _canonical_cfg()
         monkeypatch.setattr(notify_flush, "_config", lambda: changed)
-        with pytest.raises(notify_flush._StaleSend):
-            notify_flush._semantic_gate(db, event, json.loads(event["payload"]))
+        with pytest.raises(semantic_send_gate.StaleSend):
+            semantic_send_gate.semantic_gate(db, event, json.loads(event['payload']), notify_flush._config())
 
         # Returning to legacy reevaluates coverage/summary, and the old
         # canonical mandatory layer cannot ride on the new legacy receipt.

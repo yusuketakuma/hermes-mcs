@@ -62,8 +62,10 @@ import update_launch  # noqa: E402
 import restore_evidence  # noqa: E402
 from mcs_requests import read_scheduled_receipt, release_tag  # noqa: E402
 
-from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
-                      atomic_write, launchd_bootstrap)
+from mcs_util import HOME, REPO
+from writer_lock import UPDATE_MARKER_NAME, acquire_run_lock
+from service_management import launchd_bootstrap
+from safe_io import atomic_write  # noqa: E402
 from mcs_util import file_sha256 as _file_sha256  # noqa: E402
 from safe_io import fsync_dir  # noqa: E402
 
@@ -160,7 +162,6 @@ HERMES_PREVIOUS_PINS = frozenset({"b7758d8555931846f4b8f798d4ea9715f65077ca",
                                   "1e8fbfe6b41399a46e232f6cde5618cfdfa2729a",
                                   "16390dc80d248b7b49554c0cde52caf22e1fc3d8"})
 _SERVICES_PYTHON: str | None = None   # rebuilt runtime after a migration
-_HELD_RUN_LOCK_FD: int | None = None  # apply's run.lock, inherited by post-merge
 # bail reasons that mean "we never attempted" — do NOT consume the
 # receipt or poison attempts[]; the next check may legitimately retry
 _TRANSIENT_BAIL = frozenset({"run_lock_timeout"})
@@ -833,7 +834,7 @@ def _write_marker() -> None:
 
 
 def _awaiting_consent_marker() -> dict | None:
-    """notify_cards.restore_awaiting_consent, kept local: recover runs on
+    """notify_spool.restore_awaiting_consent, kept local: recover runs on
     whatever tree HEAD is (a rolled-back prev may predate that helper),
     and a failed import there would leave drainers down. Same fail-closed
     reading: an awaiting_consent phase, or a marker present but
@@ -950,7 +951,7 @@ def quiesce() -> list[str]:
 
 
 def _bootstrap_agent(label: str, plist: str) -> bool:
-    """Verified bootstrap (mcs_util.launchd_bootstrap — imported at
+    """Verified bootstrap (service_management.launchd_bootstrap — imported at
     process start, so a rolled-back tree never mixes generations)."""
     return launchd_bootstrap(label, plist, _run) is None
 
@@ -1272,9 +1273,13 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
     except Exception:
         errors.append("ledger_open_failed")
     try:
-        import mcs_setup
+        import environment_diagnostics
         cfg = mcs_util.load_config()
-        errs, _ = mcs_setup.check_environment(cfg)
+        errs, _ = environment_diagnostics.check_environment(
+            cfg, paths=_service_paths(), chrome_bin=mcs_util.CHROME_BIN,
+            credential_paths=(os.path.join(mcs_util.HOME, ".env"),
+                              os.path.expanduser("~/.hermes/.env")),
+            agents_dir=os.path.expanduser("~/Library/LaunchAgents"))
         baseline = {update_policy.environment_error_identity(e)
                     for e in (state.get("baseline_check") or [])}
         new = [e for e in errs if update_policy.environment_error_identity(e) not in baseline]
@@ -1625,7 +1630,7 @@ def _hold_rollback_for_consent(state, e, tag, command_id,
     return 2
 
 
-def _run_post_merge(sha: str) -> None:
+def _run_post_merge(sha: str, *, run_lock_fd: int | None) -> None:
     """Spawn the post-merge child under the NEW code while the parent
     keeps both locks held — start_new_session so a timeout can killpg()
     grandchildren too. Raises UpdateError unless the child either exits
@@ -1633,7 +1638,7 @@ def _run_post_merge(sha: str) -> None:
     env = update_launch.launch_environment(os.environ, detached=False)
     env[_UPDATE_PM_ENV] = sha       # child handshake token (L17)
     env.pop(RUN_LOCK_FD_ENV, None)
-    run_fd = _HELD_RUN_LOCK_FD
+    run_fd = run_lock_fd
     if run_fd is not None:
         env[RUN_LOCK_FD_ENV] = str(run_fd)
     # the merged checkout's updater, not __file__: scripts/mcs_upgrade.py
@@ -1755,7 +1760,6 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     reliably means the writer died. run.lock is taken second (after
     the long pre-checks) — run.lock holders (drainer ticks) never
     block on update.lock, so no lock-order inversion exists."""
-    global _HELD_RUN_LOCK_FD
     rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args)
     if rc is not None:
         return rc
@@ -1986,8 +1990,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         # post-merge under NEW code; parent keeps both locks held.
         _plan_runtime_migration(state, run_fd)
         journal(state, "post_merge")
-        _HELD_RUN_LOCK_FD = run_fd
-        _run_post_merge(sha)
+        _run_post_merge(sha, run_lock_fd=run_fd)
 
         state = _apply_record_success(tag, command_id)
         quiesced = False
@@ -2004,7 +2007,6 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             return bail(str(e))
         return bail(f"unexpected:{type(e).__name__}")
     finally:
-        _HELD_RUN_LOCK_FD = None
         if quiesced and not consent_hold and not rollback_failed:
             _remove_marker()
         for fd in (run_fd, upd_fd):
@@ -2014,8 +2016,12 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
 
 def _baseline_check(cfg: dict) -> list[str]:
     try:
-        import mcs_setup
-        errs, _ = mcs_setup.check_environment(cfg)
+        import environment_diagnostics
+        errs, _ = environment_diagnostics.check_environment(
+            cfg, paths=_service_paths(), chrome_bin=mcs_util.CHROME_BIN,
+            credential_paths=(os.path.join(mcs_util.HOME, ".env"),
+                              os.path.expanduser("~/.hermes/.env")),
+            agents_dir=os.path.expanduser("~/Library/LaunchAgents"))
         return errs
     except Exception:
         return []
@@ -2508,8 +2514,8 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
     Loses records written between apply and restore; Discord posts
     already sent cannot be retracted (design R2)."""
     import ledger
-    import notify_cards
-    marker = notify_cards.restore_pending(DATA)
+    import notify_spool
+    marker = notify_spool.restore_pending(DATA)
     if marker and marker.get("unreadable"):
         raise UpdateError("restore_marker_unreadable")
     if not ledger.valid_mcs_db(backup_path):
@@ -2522,9 +2528,9 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
         # Nothing to replace — but a crash between the post-swap marker
         # rewrite and the swap can leave an awaiting_consent marker
         # pinning every send; promote it and reconcile normally.
-        if notify_cards.restore_awaiting_consent(DATA) is not None:
+        if notify_spool.restore_awaiting_consent(DATA) is not None:
             try:
-                notify_cards.mark_restored(DATA, backup_path=backup_path,
+                notify_spool.mark_restored(DATA, backup_path=backup_path,
                                            by="mcs_update")
             except OSError as e:
                 raise UpdateError(
@@ -2534,7 +2540,7 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
     # Sender hold BEFORE measuring the loss — a grant slipping between
     # the count and the swap would lose its record silently.
     try:
-        notify_cards.mark_restored(DATA, backup_path=backup_path,
+        notify_spool.mark_restored(DATA, backup_path=backup_path,
                                    by="mcs_update",
                                    phase="awaiting_consent")
     except OSError as e:
@@ -2547,7 +2553,7 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
     try:
         # re-pin the hold with the report identity so operators and the
         # watchdog can correlate marker <-> restore_report.json
-        notify_cards.mark_restored(DATA, backup_path=backup_path,
+        notify_spool.mark_restored(DATA, backup_path=backup_path,
                                    by="mcs_update",
                                    phase="awaiting_consent",
                                    report_id=report["report_id"])
@@ -2563,14 +2569,14 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
     # nothing to hold and clears it.
     try:
         _replace_database(backup_path, report["backup_sha256"],
-                          lambda: notify_cards.mark_restored(
+                          lambda: notify_spool.mark_restored(
                               DATA, backup_path=backup_path, by="mcs_update",
                               report_id=report["report_id"]))
     except OSError as e:
         # A failed swap after the restored marker was written must still
         # hold writers on the live newer schema. Callers honor this marker.
         try:
-            notify_cards.mark_restored(
+            notify_spool.mark_restored(
                 DATA, backup_path=backup_path, by="mcs_update",
                 phase="awaiting_consent", report_id=report["report_id"])
         except OSError as marker_error:
@@ -2831,23 +2837,28 @@ def recover_interrupted(if_stale: bool = False) -> int:
             if r.returncode != 0 or _head_sha() != prev:
                 return escalate("merge --abort failed")
             return _finish_recovery(state, "merge_aborted", removed)
-        if "done" in stages and not applying:
+        journal_route = update_policy.classify_recovery_journal_position(
+            has_applying=bool(applying), has_done="done" in stages)
+        if journal_route == "complete_done_bookkeeping":
             # child wrote 'done' then died before the parent finished
             # bookkeeping — complete it
             return _complete_done_bookkeeping(state)
-        if not applying:
+        if journal_route == "finish_pre_merge":
             # pre-'applying' remnant: nothing was ever mutated — safe
             # to clean (previously wedged all updates, F10)
             return _finish_recovery(state, "interrupted_pre_merge", removed)
 
         head = _head_sha()
-        if applying.get("restore_incomplete") and head != target:
+        head_route = update_policy.classify_recovery_head_position(
+            head=head, previous_sha=prev, target_sha=target,
+            restore_incomplete=bool(applying.get("restore_incomplete")))
+        if head_route == "restore_incomplete_wrong_head":
             # A pre-reset rollback failure may leave HEAD at prev. It is
             # not an interrupted forward merge and must keep writers frozen.
             return escalate("restore_incomplete has not reached rollback "
                             "target — refusing to classify")
         clean = _tree_clean()
-        if head == target:
+        if head_route == "target":
             if not clean:
                 # crash during the target checkout — converge to target
                 foreign = _local_changes_outside(prev, target)
@@ -2878,21 +2889,25 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 if applying.pop("restore_incomplete", None) or held_before:
                     journal_store.save_state(STATE_PATH, state)
             try:
-                if applying.get("rollback"):
-                    if applying.get("runtime_migration"):
+                continuation = update_policy.classify_recovery_target_continuation(
+                    rollback=bool(applying.get("rollback")),
+                    runtime_migration=bool(applying.get("runtime_migration")),
+                    reinstall=bool(applying.get("reinstall")),
+                    reinstall_done=bool(applying.get("reinstall_done")))
+                if continuation in ("rollback", "rollback_runtime"):
+                    if continuation == "rollback_runtime":
                         quiesce()       # drainers may have been restarted since
                     _restore_runtime(applying)
                     problems = service_management.retire_to_snapshot(applying.get('manifest_snapshot'), cfg=mcs_util.load_config(), paths=_service_paths())
                     if problems:
                         return escalate("membership: " + ",".join(problems))
-                elif applying.get("reinstall") \
-                        and not applying.get("reinstall_done"):
-                    if applying.get("runtime_migration"):
-                        return _undo_interrupted_migration(state, applying, drainers, escalate)
+                elif continuation == "undo_interrupted_migration":
+                    return _undo_interrupted_migration(state, applying, drainers, escalate)
+                elif continuation == "manual_reinstall_required":
                     # an interrupted install.sh is never re-run unattended
                     # (operator-only) — a human finishes the upgrade
                     return escalate("reinstall_incomplete")
-                if applying.get("runtime_migration") and not applying.get("rollback"):
+                if continuation == "forward_runtime":
                     try:
                         _use_migrated_runtime(applying["runtime_migration"])
                     except UpdateError as e:
@@ -2906,17 +2921,20 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 return _finish_resumed(state, applying)
             except UpdateError as e:
                 return escalate("resume failed: " + str(e))
-        if prev and head == prev:
-            if held():
+        if head_route == "previous":
+            continuation = update_policy.classify_recovery_previous_continuation(
+                held=held(), rollback=bool(applying.get("rollback")),
+                runtime_migration=bool(applying.get("runtime_migration")), clean=clean)
+            if continuation == "held_lost_rollback_target":
                 # a held restore resolves ONLY through the head==target
                 # rollback branch; landing here means the journal
                 # drifted — escalate, never 'finish' into a wedge
                 return escalate("restore_consent hold lost its "
                                 "rollback target — refusing to classify")
-            if applying.get("rollback") and applying.get("runtime_migration"):
+            if continuation == "undo_interrupted_migration":
                 # journaled the migration undo, then died before the reset
                 return _undo_interrupted_migration(state, applying, drainers, escalate)
-            if not clean:
+            if continuation == "reset_previous_tree":
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach (F1)
                 foreign = _local_changes_outside(target, prev)

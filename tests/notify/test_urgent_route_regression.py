@@ -4,6 +4,7 @@ import json
 import pytest
 
 import notify_cards
+import notify_scope
 import notify_transport
 from notify_testkit import _uuid
 from notify_urgent_testkit import _alert, led, world
@@ -12,7 +13,7 @@ __all__ = ["led", "world"]
 
 
 def _begin(store, render, cfg, serial):
-    identity = {"version": 1, **notify_cards.delivery_scope(cfg),
+    identity = {"version": 1, **notify_scope.delivery_scope(cfg),
                 "delivery_id": render["delivery_id"], "render_rev": render["render_rev"],
                 "payload_hash": render["payload_hash"], "route_epoch": render["route_epoch"],
                 "correlation": render["correlation"]}

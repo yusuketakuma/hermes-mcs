@@ -72,8 +72,8 @@ def test_current_artifact_skips_non_object_metadata(tmp_path, malformed_meta):
                 'INSERT INTO artifacts(kind,project_id,message_id,content,meta) '
                 'VALUES(?,1,1,?,?)',
                 (semantic_policy.KIND_SUMMARY, '{}', malformed_meta))
-        assert semantic_store._current(db.db, semantic_policy.KIND_SUMMARY, 1, 'current')['content'] == valid
-        assert semantic_store._current(db.db, semantic_policy.KIND_SUMMARY, 1, 'changed') is None
+        assert semantic_store.current_artifact(db.db, semantic_policy.KIND_SUMMARY, 1, 'current')['content'] == valid
+        assert semantic_store.current_artifact(db.db, semantic_policy.KIND_SUMMARY, 1, 'changed') is None
     finally:
         db.close()
 
@@ -84,7 +84,7 @@ def test_current_artifact_rejects_non_object_payload(tmp_path, payload):
     try:
         db.artifact_add(semantic_policy.KIND_SUMMARY, payload, message_id=1,
                         meta={'fingerprint': 'current'})
-        assert semantic_store._current(db.db, semantic_policy.KIND_SUMMARY, 1, 'current') is None
+        assert semantic_store.current_artifact(db.db, semantic_policy.KIND_SUMMARY, 1, 'current') is None
     finally:
         db.close()
 

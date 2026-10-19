@@ -28,7 +28,7 @@ def approved_config(cfg):
     for field in ('requests', 'input_tokens', 'output_tokens'):
         heldout['usage'][field]['denominator'] = 200
     for name in criteria['required_metrics']:
-        metric = evaluation._success_metric(1000, 1000)
+        metric = evaluation.success_metric(1000, 1000)
         if name in criteria['maximums']:
             metric = evaluation._error_metric(0, 1000)
         heldout['metrics'][name] = metric

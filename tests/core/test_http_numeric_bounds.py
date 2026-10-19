@@ -23,9 +23,9 @@ def test_unrepresentable_budget_is_a_validation_error(monkeypatch, entry, field,
 @pytest.mark.parametrize('url', ['http://localhost:abc/v1', 'http://127.0.0.1:99999/',
                                  'http://[::1]:-1/'])
 def test_loopback_endpoint_rejects_malformed_port(url):
-    assert bounded_http._loopback_endpoint_allowed(url) is False
+    assert bounded_http.loopback_endpoint_allowed(url) is False
 
 
 def test_loopback_endpoint_keeps_valid_ports():
     for url in ('http://127.0.0.1:8080/v1', 'http://localhost/v1', 'http://[::1]:65535/'):
-        assert bounded_http._loopback_endpoint_allowed(url) is True
+        assert bounded_http.loopback_endpoint_allowed(url) is True

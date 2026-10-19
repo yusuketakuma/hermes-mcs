@@ -198,3 +198,42 @@ def environment_error_identity(message: str):
             if match:
                 return original, match.groups()
     return message, ()
+
+
+def classify_recovery_journal_position(*, has_applying: bool, has_done: bool) -> str:
+    """Select bookkeeping or HEAD observation after the caller's live merge guard."""
+    if not has_applying:
+        return "complete_done_bookkeeping" if has_done else "finish_pre_merge"
+    return "observe_head"
+
+
+def classify_recovery_head_position(*, head, previous_sha, target_sha,
+                                    restore_incomplete: bool) -> str:
+    """Classify observed HEAD before the caller measures tree cleanliness."""
+    if restore_incomplete and head != target_sha:
+        return "restore_incomplete_wrong_head"
+    if head == target_sha:
+        return "target"
+    if previous_sha and head == previous_sha:
+        return "previous"
+    return "unknown"
+
+
+def classify_recovery_target_continuation(*, rollback: bool, runtime_migration: bool,
+                                         reinstall: bool, reinstall_done: bool) -> str:
+    """Select continuation only after target convergence and any database restore."""
+    if rollback:
+        return "rollback_runtime" if runtime_migration else "rollback"
+    if reinstall and not reinstall_done:
+        return "undo_interrupted_migration" if runtime_migration else "manual_reinstall_required"
+    return "forward_runtime" if runtime_migration else "forward"
+
+
+def classify_recovery_previous_continuation(*, held: bool, rollback: bool,
+                                           runtime_migration: bool, clean: bool) -> str:
+    """Select previous-HEAD continuation from the caller's freshly reread hold."""
+    if held:
+        return "held_lost_rollback_target"
+    if rollback and runtime_migration:
+        return "undo_interrupted_migration"
+    return "finish_pre_merge" if clean else "reset_previous_tree"

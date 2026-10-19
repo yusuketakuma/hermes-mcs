@@ -1,4 +1,5 @@
 """Synthetic imported receipts are bound before predictions are sealed."""
+import semantic_facts
 import semantic_transport
 import copy
 import json
@@ -38,7 +39,6 @@ def fixture(tmp_path, cfg=None, full=False, multi=False):
         doc['source'].update(source_fingerprint=fp, message_id='1', revision=bundle['members'][0]['revision'])
         if full:
             doc['relations'] = [{'left_fact_id': 'f1', 'right_fact_id': 'f2', 'type': 'COMPLEMENTS'}]
-        from semantic_v4 import _doc_hash
         summary['claims'] = [{'claim_id': 'c1', 'text': '合成事実', 'fact_refs': [f['fact_id'] for f in facts]}]
         for row in ledger.db.execute('SELECT * FROM artifacts').fetchall():
             meta = json.loads(row['meta'])
@@ -47,7 +47,7 @@ def fixture(tmp_path, cfg=None, full=False, multi=False):
             if row['kind'] == 'semantic_facts_v2':
                 content = doc
             elif row['kind'] == 'semantic_facts_audit':
-                meta['doc_hash'] = _doc_hash(doc)
+                meta['doc_hash'] = semantic_facts.doc_hash(doc)
             elif row['kind'] == 'semantic_summary':
                 content = summary
                 meta['target_revision'] = bundle['members'][0]['revision']

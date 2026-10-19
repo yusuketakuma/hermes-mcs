@@ -84,8 +84,7 @@ def fixture(tmp_path, *, kind="body", project_ids=frozenset({123})):
                 "project_ids": project_ids}
     sender = SlackCardAdapter(
         app, team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
-        channel_id=SCOPE["channel_id"], profile=SCOPE["profile"],
-        allowed_user_ids=settings["allowed_user_ids"])
+        channel_id=SCOPE["channel_id"], profile=SCOPE["profile"])
     actions = Actions(app, settings, dirs, reg, sender, lambda *_a, **_k: None)
     actions.register()
     return actions, app, reg, dirs

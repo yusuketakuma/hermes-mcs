@@ -15,7 +15,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import drug_map  # noqa: E402
-from mcs_util import HOME, fsync_dir, load_config, loads_dict  # noqa: E402
+from mcs_util import HOME, load_config, loads_dict  # noqa: E402
+from safe_io import fsync_dir  # noqa: E402  # noqa: E402
 from safe_io import publish_new_bytes  # noqa: E402
 
 SNAPSHOT = Path(HOME) / "data" / "snapshots" / "ledger-snapshot.db"

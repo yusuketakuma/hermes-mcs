@@ -1,11 +1,11 @@
 """Run-lock acquisition errors release the descriptor opened for the attempt."""
+import writer_lock
 import errno
 import os
 from contextlib import suppress
 
 import pytest
 
-import mcs_util
 import mcs_update
 
 
@@ -24,11 +24,11 @@ def test_failed_run_lock_acquisition_closes_descriptor(tmp_path, monkeypatch, fa
     def fail_lock(*args, **kwargs):
         raise failure
 
-    monkeypatch.setattr(mcs_util.os, 'open', capture_open)
-    monkeypatch.setattr(mcs_util.fcntl, 'flock', fail_lock)
+    monkeypatch.setattr(writer_lock.os, 'open', capture_open)
+    monkeypatch.setattr(writer_lock.fcntl, 'flock', fail_lock)
     try:
         with pytest.raises(type(failure)):
-            (mcs_util.acquire_run_lock(str(tmp_path / 'synthetic.lock')) if kind == 'run'
+            (writer_lock.acquire_run_lock(str(tmp_path / 'synthetic.lock')) if kind == 'run'
              else mcs_update.acquire_update_lock())
         with pytest.raises(OSError) as error:
             os.fstat(opened[0])

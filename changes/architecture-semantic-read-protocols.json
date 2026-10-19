@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "意味抽出の保存結果と再開条件の読取契約を統一",
+  "summary": "薬剤ごとの評価履歴は同じDB接続から読み取り、依頼候補の関係評価と画面表示では同じ検証関数を使用する構成に整理しました。未取得・評価不能・再試行中の区別と、人が確認して依頼へ採用する条件は維持します。",
+  "upgrade": "追加設定や再取得は不要です。モデル・取得範囲・日次予算・期限・通知・既読化・人承認条件は変更しません。実装識別が変わるため、候補承認と保留済み再抽出は通常の失効規則に従います。",
+  "details": [
+    "保存済み評価の新しい有効世代を順次読む処理に統一し、whole Ledgerの旧読取fallbackを除きます。",
+    "未完了の関係評価、修復・予約・lock再取得の境界と保存順は変更しません。",
+    "長文呼出しに必要な時間はtransportの一つの定義を共有し、閾値や時間配分は変えません。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_assessment.py",
+    "mcs/semantic/semantic_loops.py",
+    "mcs/semantic/semantic_transport.py",
+    "mcs/ops/request_loops.py"
+  ]
+}

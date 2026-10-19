@@ -146,14 +146,68 @@ def test_usage_counts_returned_response_before_stale_hook_but_not_unknown_failur
     client.evaluate({}, _choice(), time.monotonic() + 5)
     def stale():
         raise RuntimeError("stale")
-    client.after_result = stale
     with pytest.raises(RuntimeError, match="stale"):
-        client.evaluate({}, _choice(), time.monotonic() + 5)
+        client.evaluate({}, _choice(), time.monotonic() + 5, after_result=stale)
     assert client.usage_totals == {
         "input_tokens": 6, "output_tokens": 4, "reported_requests": 2}
-    client.after_result = None
     client._post_fn = lambda body, timeout: (503, {}, b"")
     with pytest.raises(jev.JevError):
         client.evaluate({}, _choice(), time.monotonic() + 5)
     assert client.requests_made == 3
     assert client.usage_totals["reported_requests"] == 2
+
+
+@pytest.mark.parametrize("post_kind", ["none", "falsy_callable", "function"])
+def test_constructor_preserves_truthiness_selection_with_stubbed_default(monkeypatch, post_kind):
+    sent = []
+    false_checks = []
+    response = json.dumps({
+        "model": jev.JEV_MODEL, "answers": {"q": _choice_answer()},
+        "usage": {"input_tokens": 3, "output_tokens": 2},
+    }).encode()
+
+    def request(self, method, body, timeout, endpoint=None, *, deadline=None):
+        sent.append(("default", method, body, timeout, deadline))
+        return 200, {}, response
+
+    def post(body, timeout):
+        sent.append(("custom", "POST", body, timeout, None))
+        return 200, {}, response
+
+    class FalsyPost:
+        def __bool__(self):
+            false_checks.append("selected")
+            return False
+
+        def __call__(self, body, timeout):
+            pytest.fail("a falsy callable must retain the original default selection")
+
+    monkeypatch.setattr(jev.JevClient, "request", request)
+    supplied = None if post_kind == "none" else FalsyPost() if post_kind == "falsy_callable" else post
+    client = jev.JevClient(api_key="synthetic", post_fn=supplied, max_attempts=1)
+    assert false_checks == (["selected"] if post_kind == "falsy_callable" else [])
+    deadline = time.monotonic() + 5
+    result = client.evaluate({}, _choice(), deadline)
+    assert len(sent) == 1
+    assert sent[0][0] == ("custom" if post_kind == "function" else "default")
+    assert sent[0][1] == "POST" and sent[0][2]["questions"] == _choice()
+    assert sent[0][3] > 0
+    assert sent[0][4] == (None if post_kind == "function" else deadline)
+    assert result["answers"]["q"]["choice"] == "yes"
+    assert client.requests_made == 1
+    assert client.usage_totals == {"input_tokens": 3, "output_tokens": 2, "reported_requests": 1}
+    assert false_checks == (["selected"] if post_kind == "falsy_callable" else [])
+
+
+@pytest.mark.parametrize("value,expected", [(None, None), (True, None), (False, None),
+    ("0.5", None), (10**1000, None), (float("nan"), None), (float("inf"), None),
+    (0, 0.0), (1, 1.0), (0.5, 0.5), (-1, -1.0)])
+def test_shared_wire_finite_value_parser_retains_original_type_contract(value, expected):
+    assert jev.finite_value(value) == expected
+
+
+def test_shared_wire_numeric_subclasses_retain_float_result():
+    class NumericInt(int):
+        pass
+    result = jev.finite_value(NumericInt(1))
+    assert result == 1.0 and type(result) is float

@@ -1,4 +1,5 @@
 """Real local request-following pipeline; all sources and databases are fictional."""
+import semantic_facts
 import semantic_assembly as assembly
 import semantic_policy
 import semantic_store
@@ -63,7 +64,7 @@ def test_old_document_shape_ids_hashes_and_request_projection_remain_compatible(
     assert facts.validate_facts_doc(old) == old
     enriched = facts.validate_facts_doc(_with_details(doc))
     assert enriched["facts"][0]["fact_id"] == old["facts"][0]["fact_id"]
-    assert v4._doc_hash(enriched) != v4._doc_hash(old)
+    assert semantic_facts.doc_hash(enriched) != semantic_facts.doc_hash(old)
     assert projection.project_v2_doc_legacy(old) == projection.project_v2_doc_legacy(enriched)
     assert projection.project_v2_facts(old) == projection.project_v2_facts(enriched)
     assert extraction.SCHEMA_VERSION_V2 == "semantic-extraction/v2"
@@ -197,8 +198,8 @@ def test_staging_is_callable_durable_idempotent_and_not_a_promotion(runtime):
     candidate = v4.stage_request_following(db, bundle, _with_details(doc), policy="fixture-policy")
     assert candidate["projection"]["requests"][0]["to"] == "薬剤師"
     assert candidate["source"]["revision"] == bundle["members"][0]["revision"]
-    assert candidate["source_doc_hash"] == v4._doc_hash(_with_details(doc))
-    assert candidate["doc_hash"] == v4._doc_hash(facts.validate_facts_doc(_with_details(doc)))
+    assert candidate["source_doc_hash"] == semantic_facts.doc_hash(_with_details(doc))
+    assert candidate["doc_hash"] == semantic_facts.doc_hash(facts.validate_facts_doc(_with_details(doc)))
     assert candidate["promotion_ready"] is False
     assert "human_200_g6" in candidate["required_promotion_gates"]
     assert "calibration" in candidate["required_promotion_gates"]

@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 
 # canonical/payload_hash/positive live in core; re-exported for callers
-from mcs_util import canonical, payload_hash, positive  # noqa: F401
+from mcs_util import canonical, payload_hash, positive, valid_text  # noqa: F401
 from safe_io import fsync_dir, read_regular_nofollow
 
 MAX_COMMAND_BYTES = 16384
@@ -85,19 +85,13 @@ def valid_uuid(value):
         return False
 
 
-def _text(value, size, nullable=False):
-    return (nullable and value is None) or (
-        isinstance(value, str) and 0 < len(value) <= size
-        and bool(value.strip()) and "\x00" not in value)
-
-
 def _fields(fields):
     if not isinstance(fields, dict) or not fields or fields.keys() - {
             "title", "assignee", "due_date", "status"}:
         return "bad_patch"
-    if "title" in fields and not _text(fields["title"], 1000):
+    if "title" in fields and not valid_text(fields["title"], 1000):
         return "bad_title"
-    if "assignee" in fields and not _text(fields["assignee"], 120, True):
+    if "assignee" in fields and not valid_text(fields["assignee"], 120, True):
         return "bad_assignee"
     if "status" in fields and fields["status"] not in STATUSES:
         return "bad_status"
@@ -118,7 +112,7 @@ def _request_extras(req):
     if "reason" not in req:
         return ("loop_reason_required" if "loop_ref" in req
                 else "reason_required")
-    if not _text(req["reason"], 2000):
+    if not valid_text(req["reason"], 2000):
         return "bad_reason"
     if "loop_ref" not in req:
         return None
@@ -146,7 +140,7 @@ def validate(req):
         return "bad_command_id"
     if req.get("human_confirmed") is not True:
         return "human_confirmation_required"
-    if not _text(req.get("actor"), 120):
+    if not valid_text(req.get("actor"), 120):
         return "bad_actor"
     if req.get("cmd") in ("ops.update_apply", "ops.update_rollback",
                           "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback"):
@@ -246,10 +240,10 @@ def apply_command(ledger, req):
         receipt = {"command_id": req["command_id"], "payload_hash": digest,
                    "project_id": pid, "request_id": rid,
                    "outcome": "rejected" if error else "applied", "error": error,
-                   "actor": req.get("actor") if _text(req.get("actor"), 120) else None,
+                   "actor": req.get("actor") if valid_text(req.get("actor"), 120) else None,
                    "reason": (req.get("reason")
                               if (req.get("cmd") in ("request.create", "request.update")
-                                  and _text(req.get("reason"), 2000))
+                                  and valid_text(req.get("reason"), 2000))
                               else None),
                    "loop_ref": receipt_loop_ref,
                    "revision": after["revision"] if after else None,
@@ -354,7 +348,7 @@ def _apply_request_tx(db, req, pid, now):
     return error, rid, before, after
 
 
-_QUEUED = re.compile(r"request-([0-9]{20})-")
+QUEUED_REQUEST_RE = re.compile(r"request-([0-9]{20})-")
 
 
 @contextmanager
@@ -387,7 +381,7 @@ def enqueue(req, cmd_dir):
     with queue_lock(cmd_dir):
         # drain_commands applies files in name order: number after every queued command,
         # even if the clock stepped back, so the lock order is the apply order.
-        queued = [int(m[1]) for name in os.listdir(cmd_dir) if (m := _QUEUED.match(name))]
+        queued = [int(m[1]) for name in os.listdir(cmd_dir) if (m := QUEUED_REQUEST_RE.match(name))]
         seq = max([time.time_ns(), *(n + 1 for n in queued)])
         fd, temp = tempfile.mkstemp(prefix=f"request-{seq:020d}-", suffix=".tmp", dir=cmd_dir)
         published = False
@@ -466,7 +460,7 @@ def candidates(db, message):
             if not isinstance(item, dict):
                 continue
             text_key, to_key = ("ctx", "kind") if row["kind"] == "extract_v1" else ("action", "to")
-            if not _text(item.get(text_key), 1000) or not _text(
+            if not valid_text(item.get(text_key), 1000) or not valid_text(
                     item.get(to_key), 120,
                     nullable=row["kind"] in ("extract_llm",
                                              "canonical_projection",

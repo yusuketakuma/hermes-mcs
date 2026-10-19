@@ -25,7 +25,7 @@ _ANSWER_REJECT_CODES = frozenset((
     "unknown_type"))
 
 
-def _rejected_pair(receipt: dict, meta: dict, policy: str, scope: str):
+def rejected_relation_pair(receipt: dict, meta: dict, policy: str, scope: str):
     """(pair, code) of a well-formed receipt for this policy + retry scope,
     else None — a damaged row is kept as history but never trusted."""
     ids = (receipt.get("loop_artifact_id"), receipt.get("trigger_message_id"))
@@ -274,7 +274,7 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
             "AND CASE WHEN json_valid(meta) AND json_type(meta)='object' "
             "THEN json_extract(meta,'$.fingerprint') END=?",
             (KIND_LOOP_REJECTED, project_id, fp)):
-        found = _rejected_pair(_object(row["content"]), _object(row["meta"]),
+        found = rejected_relation_pair(_object(row["content"]), _object(row["meta"]),
                                policy, retry_scope)
         if found is not None:
             rejected[found[0]] = found[1]

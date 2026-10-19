@@ -51,10 +51,10 @@ def _read_metadata(db, mid, source) -> dict:
                   "AND name='message_metadata'").fetchone():
         row = db.execute("SELECT content,checked_at,last_error FROM message_metadata "
                          "WHERE message_id=? AND source=?", (mid, source)).fetchone()
-    return _decode_metadata(row)
+    return decode_metadata(row)
 
 
-def _decode_metadata(row) -> dict:
+def decode_metadata(row) -> dict:
     """Validate one stored metadata row using the shared observation rules."""
     result = {"reactions": None, "reactions_status": "not_fetched",
               "reactions_observed_at": None, "checked_at": None,

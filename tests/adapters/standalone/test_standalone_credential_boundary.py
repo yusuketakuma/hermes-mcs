@@ -1,5 +1,6 @@
 """Standalone credential file and proxy gates with synthetic secrets in temp dirs only."""
 import json
+import safe_io
 import os
 
 import pytest
@@ -10,7 +11,7 @@ from mcs_standalone import config
 from standalone_testkit import write_root
 
 JSON_TOKEN = "discord-synthetic-json"
-LIMIT = 16384                       # _private_bytes default for <transport>-credentials.json
+LIMIT = 16384                       # read_private_bytes default for <transport>-credentials.json
 
 
 def _credentials(tmp_path, *, pad=0, mode=0o600):
@@ -59,7 +60,7 @@ def test_unsafe_json_credentials_fail_closed_without_env_fallback(tmp_path, monk
     else:
         _credentials(tmp_path)
         real = os.getuid()
-        monkeypatch.setattr(config.os, "getuid", lambda: real + 1)
+        monkeypatch.setattr(safe_io.os, "getuid", lambda: real + 1)
     with pytest.raises(config.ConfigError, match="^standalone_credentials_invalid$"):
         config.tokens(tmp_path, "discord")
     with pytest.raises(config.ConfigError, match="^standalone_credentials_invalid$"):

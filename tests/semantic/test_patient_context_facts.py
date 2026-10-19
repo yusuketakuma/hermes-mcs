@@ -1,4 +1,5 @@
 """Semantic detail attributes remain quote-bound and subject-bound behind existing fences."""
+import semantic_facts
 import semantic_assembly as assembly
 import copy
 import json
@@ -117,7 +118,6 @@ def test_duplicate_fact_contexts_union_grounded_attributes():
 
 
 def test_detail_values_enter_the_same_audit_target_and_document_hash():
-    from semantic_v4 import _doc_hash
     from test_semantic_facts_audit import _Jev
 
     doc = _extract()["doc"]
@@ -134,7 +134,7 @@ def test_detail_values_enter_the_same_audit_target_and_document_hash():
     assert len(calls) == sum(f["validation_status"] == "verified" for f in doc["facts"]) + 1
     changed = copy.deepcopy(doc)
     changed["facts"][0]["patient_context"]["details"] = CONTEXT["details"][:1]
-    assert _doc_hash(changed) != _doc_hash(doc)
+    assert semantic_facts.doc_hash(changed) != semantic_facts.doc_hash(doc)
     raw = copy.deepcopy(doc)
     raw["facts"][0]["patient_context"]["subject"] = "patient"
     rejected = semantic_audit.audit_facts_v2(Capture(), raw, BODY, deadline=10 ** 9)

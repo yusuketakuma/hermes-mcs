@@ -116,3 +116,53 @@ def test_ephemeral_rate_limit_retry_needs_an_active_adapter(tmp_path, monkeypatc
     monkeypatch.setattr(delivery.asyncio, "sleep", sleep)
     asyncio.run(actions._say("C_SYNTHETIC", "U_OPERATOR", "synthetic answer"))
     assert waits == [2.0] and len(sent) == (1 if unload else 2)
+
+
+def test_action_origin_uses_construction_pinned_scope(tmp_path, monkeypatch):
+    from adapters.slack import actions as module
+    actions, _app, _reg, _dirs = fixture(tmp_path)
+    original = dict(actions._origin_scope)
+    observed = []
+    def inspect(body, action, **scope):
+        observed.append(scope)
+        return None
+    monkeypatch.setattr(module, "parse_action_origin", inspect)
+    actions._settings["team_id"] = "T_FOREIGN"
+    actions._settings["channel_id"] = "C_FOREIGN"
+    actions._settings["allowed_user_ids"].add("U_FOREIGN")
+    async def ack():
+        pass
+    asyncio.run(actions._action(ack, {"user": {}}, {}))
+    assert observed == [original]
+    assert "U_FOREIGN" not in observed[0]["allowed_user_ids"]
+
+
+@pytest.mark.parametrize("allowed", [False, True])
+def test_explicit_native_retry_authority_is_per_call(monkeypatch, allowed):
+    attempts, checks = [], []
+    async def post(**kwargs):
+        attempts.append(kwargs)
+        if len(attempts) == 1:
+            raise RateLimited()
+        return "sent"
+    async def permit():
+        checks.append("explicit")
+        return allowed
+    async def ambient():
+        pytest.fail("explicit authority must not borrow another send's gate")
+    async def sleep(_seconds):
+        pass
+    monkeypatch.setattr(delivery.asyncio, "sleep", sleep)
+    async def run():
+        token = delivery.RETRY_ALLOWED.set(ambient)
+        try:
+            if allowed:
+                assert await delivery.call_native(post, retry_allowed=permit, text="synthetic") == "sent"
+            else:
+                with pytest.raises(RateLimited):
+                    await delivery.call_native(post, retry_allowed=permit, text="synthetic")
+            assert delivery.RETRY_ALLOWED.get() is ambient
+        finally:
+            delivery.RETRY_ALLOWED.reset(token)
+    asyncio.run(run())
+    assert checks == ["explicit"] and len(attempts) == (2 if allowed else 1)

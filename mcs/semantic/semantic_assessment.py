@@ -14,6 +14,7 @@ import json
 import time
 
 from mcs_util import loads_dict
+from mcs_queries import iter_artifacts
 from semantic_policy import KIND_ASSESS
 
 # per-fact detail rows; distinct from semantic_policy.SCHEMA_VERSION
@@ -39,15 +40,12 @@ def _policy_fingerprint(scfg: dict) -> str | None:
     return semantic_policy.policy_fingerprint(scfg)
 
 
-def _cached_detail(ledger, project_id, target_id, source_fp, policy_fp,
+def _cached_detail(db, project_id, target_id, source_fp, policy_fp,
                    fact_id, dimension, options: dict) -> dict | None:
-    if ledger is None:
+    if db is None:
         return None
-    stream = getattr(ledger, "iter_artifacts", None)
-    rows = (stream(KIND_ASSESS, project_id=project_id, message_id=target_id,
-                   descending=True) if callable(stream) else
-            reversed(ledger.artifacts(KIND_ASSESS, project_id=project_id,
-                                      message_id=target_id)))
+    rows = iter_artifacts(db, KIND_ASSESS, project_id=project_id,
+                          message_id=target_id, descending=True)
     for row in rows:
         meta = loads_dict(row["meta"])
         if meta is None:
@@ -271,7 +269,8 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
         for dimension, (instructions, options) in \
                 jev.MED_DETAIL_QUESTIONS.items():
             cached = _cached_detail(
-                ledger, project_id, target_id, source_fp, policy_fp,
+                ledger.db if ledger is not None else None,
+                project_id, target_id, source_fp, policy_fp,
                 fact_id, dimension, options)
             if cached is not None:
                 choice = cached["choice"]

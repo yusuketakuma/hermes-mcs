@@ -32,7 +32,7 @@ def _artifact(row, kind: str) -> dict:
             "meta": meta, "current": False}
 
 
-def _validate_baseline(content: dict) -> bool:
+def validate_comparison_baseline(content: dict) -> bool:
     if content.get("_error"):
         return False
     summary = content.get("summary")
@@ -46,7 +46,7 @@ def _validate_baseline(content: dict) -> bool:
     return True
 
 
-def _validate_candidate(content: dict) -> bool:
+def validate_comparison_candidate(content: dict) -> bool:
     claims = content.get("claims")
     if not isinstance(claims, list):
         raise ValueError("candidate_malformed")
@@ -227,7 +227,7 @@ def _load_baseline(db, project_id: int, message_id: int,
         reasons.append("baseline_missing")
         return None
     baseline = _artifact(row, "baseline")
-    baseline_ok = _validate_baseline(baseline["content"])
+    baseline_ok = validate_comparison_baseline(baseline["content"])
     baseline_has_text = bool(_baseline_lines(baseline["content"]))
     baseline_error = bool(baseline["meta"].get("error")
                           or baseline["content"].get("_error"))
@@ -271,7 +271,7 @@ def _load_candidate(db, project_id: int, message_id: int,
         reasons.append("candidate_missing")
         return None
     candidate = _artifact(row, "candidate")
-    candidate_has_text = _validate_candidate(candidate["content"])
+    candidate_has_text = validate_comparison_candidate(candidate["content"])
     if not candidate_has_text:
         reasons.append("candidate_empty")
     target_id = candidate["content"].get("target_message_id")

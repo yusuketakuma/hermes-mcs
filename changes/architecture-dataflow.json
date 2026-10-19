@@ -11,7 +11,9 @@
     "連携サマリーとartifact履歴の読取はmcs_queriesを正本とし、既存台帳APIと患者集約が同じ借用connectionで読む。接続の作成・終了やtransactionの確定は行わない。",
     "収集用の子プロセスで共通契約を読む前にbootstrapし、リポジトリ外からの通常起動・隔離起動を回帰検証。通信・秘密値・応答とdeadlineの検査は維持。",
     "MCSのWebSocketと添付streamを子processの通信責務へまとめ、workerから親adapterを生成・呼戻しする依存を解消。認証・再試行・全体期限と最終ファイル置換は親が保持し、URL制限・hash・HTTP分類は維持。",
-    "添付取得で利用しないHTTPエラー応答を確実に閉じ、リダイレクト成功・拒否・再取得失敗でも本文を読み込まず解放。送信先とBearerの制約、エラー分類と再試行条件は維持。"
+    "添付取得で利用しないHTTPエラー応答を確実に閉じ、リダイレクト成功・拒否・再取得失敗でも本文を読み込まず解放。送信先とBearerの制約、エラー分類と再試行条件は維持。",
+    "スタンプ監視対象と押下者の読取を借用connectionの正本へ分離し、承認済みシグナルpolicyの最新状態・厳密な承認由来・値域の扱いを共有しました。台帳の同一transaction・未取得と失敗の区別・通知経路と定期件数は維持します。",
+    "通知kindの振分けでカード描画処理を読み込む依存を解消し、job・意味解析seedのtransaction内APIを公開正本へ揃えました。メッセージ・通知・無効化・再試行の同時確定と既存返値を維持します。"
   ],
   "refs": [
     "mcs/core/mcs_contract.py",
@@ -22,6 +24,10 @@
     "mcs/core/ledger_schema.py",
     "mcs/ingest/mcs_worker.py",
     "mcs/ingest/mcs_cdp.py",
-    "mcs/ingest/mcs_download.py"
+    "mcs/ingest/mcs_download.py",
+    "mcs/core/message_observations.py",
+    "mcs/signals/signal_policy.py",
+    "mcs/notify/notify_scope.py",
+    "mcs/core/ledger.py"
   ]
 }

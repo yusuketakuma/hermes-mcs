@@ -51,3 +51,16 @@ print(json.dumps({{'ok':True}}))
                             env={**os.environ, 'MCS_ROOT': str(tmp_path / 'data-root')},
                             capture_output=True, text=True, timeout=30, check=True)
     assert json.loads(result.stdout) == {'ok': True}
+
+
+@pytest.mark.parametrize("isolated", [False, True], ids=["normal", "isolated"])
+def test_snapshot_cli_bootstraps_before_extraction_imports_from_other_cwd(tmp_path, isolated):
+    args = [sys.executable, "-B", *(["-I"] if isolated else []),
+            str(ROOT / "mcs/semantic/eval/semantic_snapshot.py"), "--help"]
+    result = subprocess.run(args, cwd=tmp_path,
+                            env={**os.environ, "HOME": str(tmp_path / "home"),
+                                 "MCS_ROOT": str(tmp_path / "data-root")},
+                            capture_output=True, text=True, timeout=30, check=True)
+    assert "blind-prepare" in result.stdout and "generate" in result.stdout
+    assert "ModuleNotFoundError" not in result.stderr
+    assert not (tmp_path / "data-root").exists()

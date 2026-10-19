@@ -3,6 +3,8 @@
 Fully synthetic: temp git repos + temp sqlite + stubbed subprocess/
 network. No real MCS, Discord, Keychain, or external repo access.
 """
+
+import environment_diagnostics
 from ops_testkit import select_updater_service_python
 import restore_evidence
 import scheduled_jobs
@@ -702,7 +704,7 @@ def test_apply_persists_adapter_restart_decision_before_restarting_gateway(
     sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
-                        lambda expected: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
     restarts = []
 
     def restart(cfg):
@@ -947,7 +949,22 @@ def test_recover_mixed_tree_after_merge_stage_crash(updater, tmp_path,
                          "at": time.time() - 4000}
     state["stages"] = [{"stage": "merge", "at": time.time() - 3000}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
+    trace = []
+    real_changes, real_git_out = updater._local_changes_outside, updater._git_out
+
+    def observed_changes(old_sha, new_sha):
+        trace.append(("changes", old_sha, new_sha))
+        return real_changes(old_sha, new_sha)
+
+    def observed_git_out(argv, *args, **kwargs):
+        if argv[:2] == ["reset", "--hard"]:
+            trace.append(("reset", argv[2]))
+        return real_git_out(argv, *args, **kwargs)
+
+    monkeypatch.setattr(updater, "_local_changes_outside", observed_changes)
+    monkeypatch.setattr(updater, "_git_out", observed_git_out)
     assert updater.recover_interrupted() == 0
+    assert trace == [("changes", target, prev), ("reset", prev)]
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
     assert _git(repo, "status", "--porcelain", "-uno").stdout.strip() == ""
     assert (repo / "introduced.txt").read_text() == "new"
@@ -1273,8 +1290,8 @@ def test_rollback_consent_converges_via_recover(updater, tmp_path,
         "SELECT COUNT(*) FROM messages").fetchone()[0] == 2
     con.close()
     # reconcile consumed the marker — no stale hold pinning senders
-    import notify_cards
-    assert notify_cards.restore_pending(str(tmp_path / "data")) is None
+    import notify_spool
+    assert notify_spool.restore_pending(str(tmp_path / "data")) is None
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["applying"] is None
     assert "restore_consent" not in state
@@ -1295,8 +1312,8 @@ def test_rollback_wrong_report_consent_stays_held(updater, tmp_path,
                           "backup_schema": 7})
     assert updater.recover_interrupted() == 0
     assert _live_version(live) == 8        # still untouched
-    import notify_cards
-    marker = notify_cards.restore_awaiting_consent(
+    import notify_spool
+    marker = notify_spool.restore_awaiting_consent(
         str(tmp_path / "data"))
     assert marker is not None              # hold stands
     assert restarts == []
@@ -1328,8 +1345,8 @@ def test_rollback_update_receipt_cannot_satisfy_consent(
     con.close()
     assert updater.recover_interrupted() == 0
     assert _live_version(live) == 8        # never swapped
-    import notify_cards
-    assert notify_cards.restore_awaiting_consent(
+    import notify_spool
+    assert notify_spool.restore_awaiting_consent(
         str(tmp_path / "data")) is not None
 
 
@@ -1618,7 +1635,7 @@ def test_restart_agents_retries_transient_bootstrap(
     fake = _FakeLaunchd(outcomes, late_load=late, loads=loads)
     sleeps = []
     monkeypatch.setattr(mcs_update.subprocess, "run", fake)
-    monkeypatch.setattr(mcs_util, "time",
+    monkeypatch.setattr(service_management, "time",
                         SimpleNamespace(time=time.time, sleep=sleeps.append))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ("ai.mcs.x",))
@@ -1645,7 +1662,7 @@ def test_restart_agents_watcher_uses_verified_bootstrap(
     from types import SimpleNamespace
     fake = _FakeLaunchd(outcomes, late_load=late, loads=loads)
     monkeypatch.setattr(mcs_update.subprocess, "run", fake)
-    monkeypatch.setattr(mcs_util, "time",
+    monkeypatch.setattr(service_management, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
@@ -1705,7 +1722,7 @@ def test_restart_agents_survives_hung_launchctl(
     from types import SimpleNamespace
     fake = _HungLaunchd(label, verb, exc)
     monkeypatch.setattr(mcs_update.subprocess, "run", fake)
-    monkeypatch.setattr(mcs_util, "time",
+    monkeypatch.setattr(service_management, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
@@ -1791,7 +1808,7 @@ def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
     monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
         time=time.time, monotonic=lambda: clock[0],
         sleep=lambda s: clock.__setitem__(0, clock[0] + s)))
-    monkeypatch.setattr(mcs_util, "time",
+    monkeypatch.setattr(service_management, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
@@ -1900,7 +1917,7 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     """Inside a restore-consent hold an unmeasurable tree keeps the
     freeze (drainers down, both markers, receipt pending, no outbox
     write that would void the loss report) and the next pass converges."""
-    import notify_cards
+    import notify_spool
     repo, live, back, _b, _a, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     assert updater.rollback("cid-rb") == 2
@@ -1912,7 +1929,7 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     assert updater.recover_interrupted() == 1
     assert restarts == [] and notices == []
     assert Path(mcs_update.MARKER_PATH).exists()
-    assert notify_cards.restore_awaiting_consent(
+    assert notify_spool.restore_awaiting_consent(
         str(tmp_path / "data")) is not None
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["restore_consent"] and state["applying"]["rollback"]
@@ -2021,7 +2038,7 @@ def test_restart_agents_all_hung_stays_within_budget(
                                 monotonic=lambda: clock[0], sleep=advance)
     monkeypatch.setattr(mcs_update.subprocess, "run", run)
     monkeypatch.setattr(mcs_update, "time", fake_time)
-    monkeypatch.setattr(mcs_util, "time", fake_time)
+    monkeypatch.setattr(service_management, "time", fake_time)
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
                         ("ai.mcs.a", "ai.mcs.b"))
@@ -2219,7 +2236,7 @@ def test_restart_agents_ensure_mode_never_bounces_a_running_drainer(
     fake = _EnsureLaunchd(loaded={"ai.mcs.run", "ai.mcs.stopped"},
                           running={"ai.mcs.run"}, hung={"ai.mcs.hung"})
     monkeypatch.setattr(mcs_update.subprocess, "run", fake)
-    monkeypatch.setattr(mcs_util, "time",
+    monkeypatch.setattr(service_management, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
@@ -2250,7 +2267,7 @@ def test_restart_agents_slow_drainer_does_not_starve_the_next(
     monkeypatch.setattr(mcs_update.subprocess, "run", fake)
     monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
         time=time.time, monotonic=lambda: next(clock), sleep=lambda s: None))
-    monkeypatch.setattr(mcs_util, "time",
+    monkeypatch.setattr(service_management, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
@@ -2288,7 +2305,7 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
     receipt consumed and an outbox notice that voids the consent. Now
     the freeze holds, and once the condition clears the documented
     consent receipt still converges to rolled_back."""
-    import notify_cards
+    import notify_spool
     repo, live, back, before, after, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     assert updater.rollback("cid-rb") == 2
@@ -2302,7 +2319,7 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
     assert restarts == [] and notices == []
     assert Path(live).read_bytes() == live_before
     assert Path(mcs_update.MARKER_PATH).exists()
-    assert notify_cards.restore_awaiting_consent(
+    assert notify_spool.restore_awaiting_consent(
         str(tmp_path / "data")) is not None
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["restore_consent"] and state["applying"]["rollback"]
@@ -2368,14 +2385,14 @@ def test_marker_only_hold_survives_git_failure(
     b'{"phase": "restored"}', b'{"restored_at": 1}', b'{"phase": "other"}'])
 def test_awaiting_consent_marker_matches_notify_cards(tmp_path, monkeypatch,
                                                      content):
-    """recover reads the hold marker without importing notify_cards (a
+    """recover reads the hold marker without importing notify_spool (a
     rolled-back tree may predate it) — same fail-closed verdict."""
-    import notify_cards
+    import notify_spool
     monkeypatch.setattr(mcs_update, "DATA", str(tmp_path))
     if content is not None:
         (tmp_path / "restore_pending.json").write_bytes(content)
     assert (mcs_update._awaiting_consent_marker() is None) \
-        == (notify_cards.restore_awaiting_consent(str(tmp_path)) is None)
+        == (notify_spool.restore_awaiting_consent(str(tmp_path)) is None)
 
 
 def test_rollback_applying_journal_shape():
@@ -2466,7 +2483,7 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
                         lambda *a, **k: notices.append(a[0]) or True)
     monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
 
-    def post_merge(_sha):
+    def post_merge(_sha, *, run_lock_fd):
         back.write_bytes(b"garbage")          # restore will fail
         raise mcs_update.UpdateError("post_merge_failed: synthetic")
     monkeypatch.setattr(mcs_update, "_run_post_merge", post_merge)
@@ -2516,7 +2533,7 @@ def test_post_merge_bail_stops_restarted_writers_before_rollback(updater, monkey
             raise updater.UpdateError("drainer_stop_failed: synthetic")
         return []
 
-    def restarted_child(expected):
+    def restarted_child(expected, *, run_lock_fd):
         events.append("child_restart")
         updater._remove_marker()
         raise updater.UpdateError("post_merge_failed: synthetic")
@@ -2751,7 +2768,6 @@ def test_updater_subcommand_parser_keeps_japanese_help(capsys):
 def test_postcheck_accepts_only_same_legacy_diagnostic(
         updater, monkeypatch, original, translated):
     import ledger
-    import mcs_setup
     from types import SimpleNamespace
 
     values = tuple(f"synthetic-{i}" for i in range(original.count("{}")))
@@ -2763,7 +2779,7 @@ def test_postcheck_accepts_only_same_legacy_diagnostic(
     monkeypatch.setattr(mcs_update, "_agent_pid", lambda label: 123)
     monkeypatch.setattr(ledger, "Ledger", lambda path:
                         SimpleNamespace(db=SimpleNamespace(close=lambda: None)))
-    monkeypatch.setattr(mcs_setup, "check_environment", lambda cfg: ([after], []))
+    monkeypatch.setattr(environment_diagnostics, "check_environment", lambda cfg, **facts: ([after], []))
     # An old English journal must tolerate exactly the same Japanese finding.
     state = {"baseline_check": [before]}
     assert mcs_update._postcheck(state, "synthetic-sha") == []
@@ -2774,24 +2790,24 @@ def test_postcheck_accepts_only_same_legacy_diagnostic(
         changed = list(values)
         changed[i] += "-changed"
         new_error = translated.format(*changed)
-        monkeypatch.setattr(mcs_setup, "check_environment",
-                            lambda cfg, error=new_error: ([error], []))
+        monkeypatch.setattr(environment_diagnostics, "check_environment",
+                            lambda cfg, error=new_error, **facts: ([error], []))
         assert mcs_update._postcheck(state, "synthetic-sha") == ["new_env_error: " + new_error]
     unexpected = "synthetic-new-environment-failure"
-    monkeypatch.setattr(mcs_setup, "check_environment", lambda cfg: ([after, unexpected], []))
+    monkeypatch.setattr(environment_diagnostics, "check_environment", lambda cfg, **facts: ([after, unexpected], []))
     assert mcs_update._postcheck(state, "synthetic-sha") == ["new_env_error: " + unexpected]
 
 
 def test_legacy_baseline_matches_current_environment_probe(updater, monkeypatch):
     import mcs_setup
 
-    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "linux")
     monkeypatch.setattr(mcs_setup, "CHROME_BIN", "/synthetic-missing-chrome")
-    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda path: False)
-    monkeypatch.setattr(mcs_setup, "_check_llm", lambda cfg: ([], []))
+    monkeypatch.setattr(environment_diagnostics.os.path, "exists", lambda path: False)
+    monkeypatch.setattr(environment_diagnostics, "check_llm", lambda cfg: ([], []))
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
-    monkeypatch.setattr(mcs_setup, "env_value", lambda *args, **kwargs: None)
+    monkeypatch.setattr(environment_diagnostics, "env_value", lambda *args, **kwargs: None)
     monkeypatch.delenv("MCS_LLM_ADMISSION", raising=False)
     errors, _ = mcs_setup.check_environment({})
     assert len(errors) == 1
@@ -2801,14 +2817,13 @@ def test_legacy_baseline_matches_current_environment_probe(updater, monkeypatch)
 
 def test_legacy_baseline_matches_current_slot_probe(monkeypatch):
     import local_llm
-    import mcs_setup
 
     monkeypatch.setattr(local_llm, "resolve", lambda cfg: ("synthetic-endpoint", "model"))
     monkeypatch.setattr(local_llm, "probe_urls", lambda endpoint: ("models", "slots"))
     monkeypatch.setattr(local_llm, "SLOT_COUNT", 3)
     monkeypatch.setattr(local_llm, "bounded_request",
                         lambda url, *args: (200, {}, b"[{}]" if url == "slots" else b"{}"))
-    errors, _ = mcs_setup._check_llm({})
+    errors, _ = environment_diagnostics.check_llm({})
     assert len(errors) == 1
     original = "llama-server advertises 1 slots but the selected count is 3 — fix -np or lower SLOT_COUNT"
     assert mcs_update.update_policy.environment_error_identity(errors[0]) == mcs_update.update_policy.environment_error_identity(original)

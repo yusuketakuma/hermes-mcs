@@ -16,10 +16,10 @@ from mcs_util import payload_hash
 # Capture loaded source once; an on-disk update cannot bless an old worker.
 _MODULES = ('semantic_extraction', 'semantic_facts', 'semantic_audit',
             'semantic_relations', 'semantic_render', 'semantic_llm', 'semantic_jev',
-            'semantic', 'semantic_transport', 'semantic_assessment', 'semantic_projection', 'semantic_policy',
+            'semantic', 'semantic_transport', 'semantic_assessment', 'semantic_loops', 'semantic_projection', 'semantic_policy',
             'semantic_acceptance', 'structured_view', 'clinical_display',
             'extract_schema', 'extract_validation', 'extract_quality',
-            'clinical_scope', 'clinical_values', 'patient_context', 'mcs_queries', 'semantic_assembly')
+            'clinical_scope', 'clinical_chunking', 'semantic_quantities', 'clinical_values', 'patient_context', 'mcs_queries', 'semantic_assembly', 'writer_lock', 'semantic_store', 'semantic_v4', 'patient_nightly_plan', 'semantic_runtime', 'llm_availability', 'self_identity', 'safe_io')
 
 
 # Process-local probe/counter state is not an interpretation constant.

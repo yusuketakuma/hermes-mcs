@@ -256,7 +256,7 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on,
     アーカイブ済み患者の行はアクティブ患者の後に並べる。"""
     rows, signal_mids = [], set()
     if signals_on:
-        for c in mcs_signals._latest_signal_states(db).values():
+        for c in mcs_signals.latest_signal_states(db).values():
             mids = ((c.get("evidence") or {}).get("message_ids") or []) if c else []
             if not (c and c["state"] == "open" and ok(c["project_id"])
                     and c["type"] == "pharmacist_request_unanswered" and mids):
@@ -315,7 +315,7 @@ def _stale_open_unacked(db, now: float) -> list:
     has ever covered. The open-since clock starts at the key's first
     signal_v1 row: a resolve+reopen keeps the original timestamp, which
     reads as 'this condition persists' rather than 'new alert'."""
-    latest = mcs_signals._latest_signal_states(db)
+    latest = mcs_signals.latest_signal_states(db)
     open_by_key = {k: c for k, c in latest.items()
                    if c and c["state"] == "open"}
     if not open_by_key:
@@ -413,7 +413,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     by_type: dict = {False: {}, True: {}}
     stale_by: dict = {False: {}, True: {}}
     if signals_on:
-        for c in mcs_signals._latest_signal_states(db).values():
+        for c in mcs_signals.latest_signal_states(db).values():
             if c and c["state"] == "open" and ok(c["project_id"]) \
                     and c["type"] not in EXCLUDED_SIGNALS:
                 part = by_type[c["project_id"] in archived]
@@ -619,11 +619,11 @@ def view(db, cfg, scope_text, *, name=None, allowed=None, now=None,
 def maybe_enqueue(ledger, cfg, now=None) -> int:
     """Queue today's digest once, at or after hour_jst. The window
     starts where the previous digest ended (24h back the first time)."""
-    import notify_cards
+    import notify_scope
     s = settings(cfg)
     target = (cfg or {}).get("notify_target")
-    cards_on = notify_cards.interactive_enabled(cfg or {}) \
-        and notify_cards.delivery_scope(cfg or {}) is not None
+    cards_on = notify_scope.interactive_enabled(cfg or {}) \
+        and notify_scope.delivery_scope(cfg or {}) is not None
     if s is None or not (cards_on or (isinstance(target, str)
                                       and target.strip())):
         return 0

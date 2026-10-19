@@ -5,6 +5,8 @@ need neither Git history nor a live database. Service/Git boundaries in public
 rollback are stubbed; SQLite migration, backup, consent, replacement,
 reconciliation, locks and updater bookkeeping remain real.
 """
+
+import environment_diagnostics
 from ops_testkit import select_updater_service_python
 import mcs_util
 import service_management
@@ -25,7 +27,7 @@ import maintenance
 import mcs_setup
 import mcs_update
 import mcs_view
-import notify_cards
+import notify_spool
 import notify_transport
 from ops_testkit import _seed_consent
 
@@ -245,7 +247,7 @@ def updater(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **kw: True)
     monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
     monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda manifest, **_service_kwargs: [])
-    monkeypatch.setattr(mcs_setup, "check_environment", lambda cfg: ([], []))
+    monkeypatch.setattr(environment_diagnostics, "check_environment", lambda cfg, **facts: ([], []))
     monkeypatch.setattr(mcs_update, "_agent_pid", lambda label: 12345)
     return mcs_update
 
@@ -330,7 +332,7 @@ def test_released_schema_update_rollback_requires_bound_consent(
     assert _sha(backup) == backup_hash
     assert restarts == []
     assert Path(updater.MARKER_PATH).exists()
-    marker = notify_cards.restore_awaiting_consent(str(live.parent))
+    marker = notify_spool.restore_awaiting_consent(str(live.parent))
     report = json.loads(Path(updater.RESTORE_REPORT_PATH).read_text())
     assert marker["report_id"] == report["report_id"]
     assert report["backup_schema"] == origin["schema_version"]
@@ -349,7 +351,7 @@ def test_released_schema_update_rollback_requires_bound_consent(
     assert len(resets) >= 1
     assert restarts == [True]
     assert not Path(updater.MARKER_PATH).exists()
-    assert notify_cards.restore_pending(str(live.parent)) is None
+    assert notify_spool.restore_pending(str(live.parent)) is None
     after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["applying"] is None
     assert after["stages"] == []
@@ -400,7 +402,7 @@ def test_invalid_recovery_candidate_is_refused_without_replacing_live(
         updater._restore_db(str(candidate))
     assert _sha(live) == original_hash
     assert _sha(candidate) == candidate_hash
-    assert notify_cards.restore_pending(str(live.parent)) is None
+    assert notify_spool.restore_pending(str(live.parent)) is None
     if invalid != "incompatible":
         with pytest.raises((ledger.MigrationError, sqlite3.DatabaseError)):
             ledger.Ledger(str(candidate))

@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 import semantic_store
 
-from semantic_evaluation import EvaluationError, _dict, _id, load_jsonl
+from semantic_evaluation import EvaluationError, evaluation_object, evaluation_id, load_jsonl
 from mcs_util import canonical, payload_hash
 
 METHODS = ("baseline", "assisted", "audited")
@@ -33,13 +33,13 @@ def prepare(records: list[dict]) -> tuple[list[dict], list[dict]]:
     worksheets, keys = [], []
     cases, scopes = set(), {}
     for record in records:
-        record = _dict(record, "blind_record")
-        case = _id(record.get("case_id"), "case_id")
+        record = evaluation_object(record, "blind_record")
+        case = evaluation_id(record.get("case_id"), "case_id")
         if case in cases:
             raise EvaluationError("duplicate_case")
         cases.add(case)
-        account = _id(record.get("account_id"), "account_id")
-        project = _id(record.get("project_id"), "project_id")
+        account = evaluation_id(record.get("account_id"), "account_id")
+        project = evaluation_id(record.get("project_id"), "project_id")
         split = record.get("split")
         if split not in ("dev", "calibration", "test"):
             raise EvaluationError("split_invalid")
@@ -47,16 +47,16 @@ def prepare(records: list[dict]) -> tuple[list[dict], list[dict]]:
         if scope in scopes and scopes[scope] != split:
             raise EvaluationError("patient_split_leak")
         scopes[scope] = split
-        fingerprint = _id(record.get("bundle_fingerprint"), "bundle_fingerprint")
+        fingerprint = evaluation_id(record.get("bundle_fingerprint"), "bundle_fingerprint")
         source = record.get("source_text")
         if not isinstance(source, str) or not source.strip():
             raise EvaluationError("source_text_missing")
-        outputs = _dict(record.get("outputs"), "outputs")
+        outputs = evaluation_object(record.get("outputs"), "outputs")
         if set(outputs) != set(METHODS):
             raise EvaluationError("three_methods_required")
         # predictions show only where a candidate is frozen — a subset
         # would tell reviewers which label is which method family
-        carried = {"evaluation_candidate" in _dict(outputs[m], "output")
+        carried = {"evaluation_candidate" in evaluation_object(outputs[m], "output")
                    for m in METHODS}
         if len(carried) > 1:
             raise EvaluationError("evaluation_candidate_partial")
@@ -65,7 +65,7 @@ def prepare(records: list[dict]) -> tuple[list[dict], list[dict]]:
         review_id = uuid.uuid4().hex
         choices, mapping, candidate_hashes = [], {}, {}
         for label, method in zip(("A", "B", "C"), methods, strict=False):
-            output = _dict(outputs[method], "output")
+            output = evaluation_object(outputs[method], "output")
             if output.get("bundle_fingerprint") != fingerprint:
                 raise EvaluationError("output_bundle_mismatch")
             text = output.get("text")
@@ -83,7 +83,7 @@ def prepare(records: list[dict]) -> tuple[list[dict], list[dict]]:
                                        for i, item in enumerate(claim_texts)],
                             "limitations": limitations})
             if "evaluation_candidate" in output:
-                candidate = _dict(output["evaluation_candidate"], "evaluation_candidate")
+                candidate = evaluation_object(output["evaluation_candidate"], "evaluation_candidate")
                 claims = candidate.get("claims")
                 if not isinstance(claims, list) or any(not isinstance(c, dict) for c in claims) or [
                         {"claim_id": c.get("claim_id"), "text": c.get("text")}
@@ -106,7 +106,7 @@ def prepare(records: list[dict]) -> tuple[list[dict], list[dict]]:
                          worksheets[-1], ensure_ascii=False, sort_keys=True,
                          separators=(",", ":")).encode()).hexdigest()})
         if "artifact_ids" in record:
-            ids = _dict(record["artifact_ids"], "artifact_ids")
+            ids = evaluation_object(record["artifact_ids"], "artifact_ids")
             if set(ids) != {"bundle_id", "candidate_id", "final_id"} or any(
                     type(value) is not int or value <= 0 for value in ids.values()):
                 raise EvaluationError("artifact_ids_invalid")
@@ -126,8 +126,8 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
     thread context.  It does not get the extractor's 連携サマリー block:
     the semantic methods it is compared with never see it either.
     """
-    from summary_review import _validate_candidate, _validate_baseline
-    bundle = _dict(bundle, "bundle")
+    from summary_review import validate_comparison_candidate, validate_comparison_baseline
+    bundle = evaluation_object(bundle, "bundle")
     members = bundle.get("members")
     if not isinstance(members, list) or not members:
         raise EvaluationError("bundle_members_missing")
@@ -136,7 +136,7 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
         raise EvaluationError("bundle_scope_invalid")
     ids = set()
     for member in members:
-        member = _dict(member, "bundle_member")
+        member = evaluation_object(member, "bundle_member")
         mid = member.get("message_id")
         if (type(mid) is not int or mid <= 0 or mid in ids
                 or type(member.get("project_id")) is not int
@@ -156,19 +156,19 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
         raise EvaluationError("target_not_full")
     target = targets[0]
     for artifact in (candidate, final):
-        meta = _dict(artifact.get("meta"), "artifact_meta")
+        meta = evaluation_object(artifact.get("meta"), "artifact_meta")
         if (artifact.get("message_id") != target_id
                 or artifact.get("project_id") != target["project_id"]
                 or meta.get("fingerprint") != fingerprint
                 or meta.get("target_revision") != target["revision"]):
             raise EvaluationError("artifact_source_mismatch")
-        content = _dict(artifact.get("content"), "artifact_content")
+        content = evaluation_object(artifact.get("content"), "artifact_content")
         if (type(content.get("target_message_id")) is not int
                 or content["target_message_id"] != target_id
                 or not bundle.get("bundle_id")
                 or content.get("input_bundle_id") != bundle["bundle_id"]):
             raise EvaluationError("artifact_content_source_mismatch")
-        if not _validate_candidate(content):
+        if not validate_comparison_candidate(content):
             raise EvaluationError("candidate_empty")
     if (candidate["meta"].get("stage") != "pre_audit"
             or final["meta"].get("audit_status") not in ("PASS", "NEEDS_REVIEW")
@@ -181,8 +181,8 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
     # Row selection follows extract_llm._thread_context: epoch timestamps,
     # root always, replies strictly earlier (same second -> lower id), NULL
     # excluded.  Its 連携サマリー block and the budget it takes are left
-    # out, as for the semantic methods, so _ctx_lines keeps its full budget.
-    from extract_llm import _ctx_lines
+    # out, as for the semantic methods, so thread_context_lines keeps its full budget.
+    from extract_llm import thread_context_lines
     from mcs_queries import posted_epoch
     t_ts = posted_epoch(target.get("posted_at")) or 0
     ctx_rows = []
@@ -197,9 +197,9 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
         ctx_rows.append({"message_id": m["message_id"], "body_text": m["body_original"],
                          "posted_at_ts": ts,
                          "who": sender.get("profession") or sender.get("type") or "投稿者"})
-    ctx = "\n".join(_ctx_lines(ctx_rows, root)) or None
+    ctx = "\n".join(thread_context_lines(ctx_rows, root)) or None
     baseline = baseline_fn(target["body_original"], context=ctx)
-    if not isinstance(baseline, dict) or not _validate_baseline(baseline):
+    if not isinstance(baseline, dict) or not validate_comparison_baseline(baseline):
         raise EvaluationError("baseline_failed")
     claims = {"baseline": [text for text in
               [baseline.get("summary") or ""] + (baseline.get("points") or [])
@@ -225,7 +225,7 @@ def snapshot_records(path: str, selections: list[dict], baseline_fn) -> list[dic
         db.row_factory = sqlite3.Row
         db.execute("BEGIN")
         for selection in selections:
-            selection = _dict(selection, "selection")
+            selection = evaluation_object(selection, "selection")
             artifacts = []
             for field, kind in (("bundle_id", "semantic_bundle"),
                                 ("candidate_id", "semantic_candidate"),
@@ -239,7 +239,7 @@ def snapshot_records(path: str, selections: list[dict], baseline_fn) -> list[dic
                     raise EvaluationError("artifact_missing")
                 artifact = dict(row)
                 for key in ("content", "meta"):
-                    artifact[key] = _dict(json.loads(artifact[key]), "artifact_" + key)
+                    artifact[key] = evaluation_object(json.loads(artifact[key]), "artifact_" + key)
                 artifacts.append(artifact)
             bundle_row, candidate, final = artifacts
             bundle = bundle_row["content"]
@@ -279,18 +279,18 @@ def unblind(worksheets: list[dict], keys: list[dict]) -> list[dict]:
     """Restore method names without inferring or approving human judgments."""
     index = {}
     for key in keys:
-        key = _dict(key, "coordinator_key")
-        rid = _id(key.get("review_id"), "review_id")
+        key = evaluation_object(key, "coordinator_key")
+        rid = evaluation_id(key.get("review_id"), "review_id")
         if rid in index:
             raise EvaluationError("duplicate_review_key")
-        mapping = _dict(key.get("methods"), "methods")
+        mapping = evaluation_object(key.get("methods"), "methods")
         if set(mapping) != {"A", "B", "C"} or set(mapping.values()) != set(METHODS):
             raise EvaluationError("method_mapping_invalid")
         index[rid] = key
     restored, seen = [], set()
     for worksheet in worksheets:
-        worksheet = _dict(worksheet, "worksheet")
-        rid = _id(worksheet.get("review_id"), "review_id")
+        worksheet = evaluation_object(worksheet, "worksheet")
+        rid = evaluation_id(worksheet.get("review_id"), "review_id")
         if rid not in index or rid in seen:
             raise EvaluationError("review_identity_mismatch")
         seen.add(rid)
@@ -300,7 +300,7 @@ def unblind(worksheets: list[dict], keys: list[dict]) -> list[dict]:
                                            separators=(",", ":")).encode()).hexdigest()
         if digest != key.get("worksheet_sha256"):
             raise EvaluationError("worksheet_changed")
-        labels = _dict(worksheet.get("human_labels"), "human_labels")
+        labels = evaluation_object(worksheet.get("human_labels"), "human_labels")
         if set(labels) != {"A", "B", "C"} or any(
                 not isinstance(value, dict) or not value for value in labels.values()):
             raise EvaluationError("human_labels_incomplete")
@@ -331,21 +331,21 @@ def merge_labels(records, worksheets, keys, method, manifest):
     key_index = {row["review_id"]: row for row in keys}
     merged, seen = [], set()
     for record in records:
-        record = _dict(record, "evaluation_record")
-        case = _id(record.get("case_id"), "case_id")
+        record = evaluation_object(record, "evaluation_record")
+        case = evaluation_id(record.get("case_id"), "case_id")
         if case not in by_case or case in seen:
             raise EvaluationError("evaluation_case_mismatch")
         seen.add(case)
         review = by_case[case]
         for field in ("account_id", "project_id", "split"):
-            if _id(record.get(field), field) != _id(review.get(field), field):
+            if evaluation_id(record.get(field), field) != evaluation_id(review.get(field), field):
                 raise EvaluationError("evaluation_identity_mismatch")
-        bundle = _dict(record.get("bundle"), "bundle")
+        bundle = evaluation_object(record.get("bundle"), "bundle")
         if bundle.get("fingerprint") != review["bundle_fingerprint"]:
             raise EvaluationError("evaluation_bundle_mismatch")
         label = next(k for k, v in key_index[review["review_id"]]["methods"].items() if v == method)
         choice = next(c for c in sheets[review["review_id"]]["choices"] if c["label"] == label)
-        candidate = _dict(record.get("candidate"), "candidate")
+        candidate = evaluation_object(record.get("candidate"), "candidate")
         claims = candidate.get("claims")
         if not isinstance(claims, list) or [
                 {"claim_id": c.get("claim_id"), "text": c.get("text")}

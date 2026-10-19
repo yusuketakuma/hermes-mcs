@@ -16,7 +16,6 @@ from adapters.common import envelopes
 from adapters.common.spec import token_map
 from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
-from .actions import origin as parse_action_origin
 from .cards import mention_ids, render, thread_part_blocks, validate
 from .paths import notify_dirs
 
@@ -90,7 +89,7 @@ def _rate_wait(exc) -> float | None:
 RETRY_ALLOWED = contextvars.ContextVar("slack_retry_allowed", default=None)
 
 
-async def _call(fn, **kwargs):
+async def call_native(fn, *, retry_allowed=None, **kwargs):
     """One Slack write; a 429 waits out Retry-After and resends once,
     only if RETRY_ALLOWED still allows it — otherwise the 429 stands as
     the not_sent outcome. A second failure propagates for _failed() to
@@ -105,7 +104,7 @@ async def _call(fn, **kwargs):
             raise
         rejected = exc
     await asyncio.sleep(wait)
-    allowed = RETRY_ALLOWED.get()
+    allowed = retry_allowed if retry_allowed is not None else RETRY_ALLOWED.get()
     if allowed is not None and not await allowed():
         raise rejected
     return await fn(**kwargs)
@@ -157,7 +156,7 @@ class SlackCardAdapter:
     """An inert native-client adapter until explicitly bound and called."""
 
     def __init__(self, app, *, team_id, application_id, channel_id,
-                 profile, allowed_user_ids, native_adapter=None, root=None):
+                 profile, native_adapter=None, root=None):
         # Hermes keeps one native client per workspace; app.client is only
         # the first workspace's client when several bot tokens are connected.
         self._client = (native_adapter._get_client(channel_id, team_id=team_id)
@@ -167,7 +166,6 @@ class SlackCardAdapter:
         self._application_id = application_id
         self._channel_id = channel_id
         self._profile = profile
-        self._allowed_user_ids = frozenset(allowed_user_ids)
         self._bound = False
         self._bot_id = ""
         self._names: OrderedDict = OrderedDict()
@@ -258,7 +256,7 @@ class SlackCardAdapter:
             if sender is None:
                 return {"result": "not_sent", "error_code": "retry_policy_unknown"}
             try:
-                response = await _call(sender.chat_delete, channel=self._channel_id, ts=message_id)
+                response = await call_native(sender.chat_delete, channel=self._channel_id, ts=message_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -305,18 +303,18 @@ class SlackCardAdapter:
                         or roots[0].get("ts") != thread_ts or not self.authored(roots[0])):
                     return {"result": "not_sent", "error_code": "thread_root_unverified"}
                 if op == "update":
-                    response = await _call(sender.chat_update, channel=self._channel_id, ts=message_id,
+                    response = await call_native(sender.chat_update, channel=self._channel_id, ts=message_id,
                         text=text, blocks=blocks, parse="none", link_names=False)
                 else:
-                    response = await _call(sender.chat_postMessage, channel=self._channel_id,
+                    response = await call_native(sender.chat_postMessage, channel=self._channel_id,
                         thread_ts=thread_ts, text=text, blocks=blocks, parse="none", link_names=False,
                         unfurl_links=False, unfurl_media=False)
             elif op == "update":
-                response = await _call(
+                response = await call_native(
                     sender.chat_update, channel=self._channel_id, ts=message_id,
                     text=text, blocks=blocks, parse="none", link_names=False)
             else:
-                response = await _call(
+                response = await call_native(
                     sender.chat_postMessage, channel=self._channel_id, text=text, blocks=blocks,
                     parse="none", link_names=False,
                     unfurl_links=False, unfurl_media=False)
@@ -335,12 +333,6 @@ class SlackCardAdapter:
             return {"result": "unknown", "error_code": "message_mismatch"}
         return {"result": "delivered", "message_id": ts}
 
-    def action_origin(self, body, action):
-        return parse_action_origin(
-            body, action, team_id=self._team_id,
-            application_id=self._application_id,
-            channel_id=self._channel_id, profile=self._profile,
-            allowed_user_ids=self._allowed_user_ids)
 
 
 class DeliveryWorker(_BaseWorker):
@@ -538,16 +530,16 @@ class DeliveryWorker(_BaseWorker):
         nothing was written) resends the same text once without blocks,
         so a new block never costs a part its send."""
         if not blocks:
-            return await _call(fn, **kwargs)
+            return await call_native(fn, **kwargs)
         try:
-            return await _call(fn, blocks=blocks, **kwargs)
+            return await call_native(fn, blocks=blocks, **kwargs)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             if _payload(getattr(exc, "response", None)).get("error") != "invalid_blocks":
                 raise
         self._log("blocks_rejected", reason="slack_container_unsupported")
-        return await _call(fn, **kwargs)
+        return await call_native(fn, **kwargs)
 
     async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False, blocks=None):
         """Edit one exact owned reply; no text dedupe, upload or fresh-post fallback."""
@@ -704,7 +696,7 @@ class DeliveryWorker(_BaseWorker):
             # the file's visible line: 📎 name — patient/post
             extra["initial_comment"] = escape(part["caption"], quote=False)
         try:
-            response = await _call(
+            response = await call_native(
                 upload,
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, file=blob,

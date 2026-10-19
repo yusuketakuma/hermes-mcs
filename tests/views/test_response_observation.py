@@ -5,7 +5,7 @@ import pytest
 
 from ledger import Ledger, publish_snapshot
 from mcs_payload import normalize_message as _norm_message
-from mcs_signals import record_station_staff
+from self_identity import record_station_staff
 from mcs_view import View
 from message_metadata import get_message_metadata
 from notify_render import card_reaction_lines

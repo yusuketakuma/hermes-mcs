@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401,E402
+from safe_io import fdopen_owned  # noqa: E402
 
 SCHEMA = "mcs-audit-cohort/v1"
 # The plan migrates generation 7 to 8 once; no general version setting.
@@ -329,8 +330,8 @@ def write_pin(path: Path, pin: dict) -> None:
     real = _private_path(path, write=True)
     fd, tmp = tempfile.mkstemp(dir=real.parent, prefix=".audit-cohort-")
     try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with fdopen_owned(fd, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
             for record in [pin["header"], *pin["rows"]]:
                 handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
             handle.flush()
@@ -372,12 +373,12 @@ def _pinned_scope(header: dict) -> dict:
 
 def _audit_rows(snapshot: Path, args: argparse.Namespace, scope: dict | None = None):
     import extraction_audit
-    import mcs_stats
+    import stats_contract
     import mcs_view
     view = mcs_view.View(snapshot)
     try:
         if scope is None:
-            scope = mcs_stats._scope({"since": getattr(args, "since", None),
+            scope = stats_contract.resolve_scope({"since": getattr(args, "since", None),
                                       "until": getattr(args, "until", None),
                                       "project": getattr(args, "project", None)},
                                      view.meta["generated_at"])

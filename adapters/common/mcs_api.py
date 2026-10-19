@@ -23,11 +23,16 @@ def deny(error: str) -> str:
     return encode_reply({"ok": False, "error": error})
 
 
-def modules():
-    """Load MCS modules lazily from this checkout; no SDK or live I/O."""
+def bootstrap() -> None:
+    """Register this checkout's flat MCS imports without loading its APIs."""
     if str(_MCS_DIR) not in sys.path:
         sys.path.insert(0, str(_MCS_DIR))
     import _mcs_path  # noqa: F401  registers every subdir as import root
+
+
+def modules():
+    """Load MCS modules lazily from this checkout; no SDK or live I/O."""
+    bootstrap()
     import mcs_requests
     import mcs_view
     return mcs_requests, mcs_view

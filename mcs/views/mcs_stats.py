@@ -37,100 +37,13 @@ from drug_map import (current_refs, _current_refs_with_progress,
                       _progress as drug_map_progress)
 import structured_view
 import extraction_audit
-DEFINITION_VERSION = "2026-10-17"
+import stats_contract
 _DEFAULT_CURRENT_REFS = current_refs
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
 # 100 max, time buckets 120 — row-count caps bound the response size
-DETAIL_LIMIT = 100
 CATEGORY_LIMIT = 100
 BUCKET_LIMIT = 120
-
-
-def _ratio(num: int, den: int, unit: str) -> dict:
-    """Ratio with explicit denominator — 0 denominator is null, not 0%."""
-    return {"numerator": num, "denominator": den, "unit": unit,
-            "value": (num / den) if den else None,
-            "reason": None if den else "denominator_zero"}
-
-
-def _parse_when(text: str) -> int:
-    """YYYY-MM-DD -> JST midnight; datetime requires an explicit offset.
-    A bare `until` date is that day's 0:00 — to include a whole day the
-    caller passes the next date (A-6: since <= t < until)."""
-    if not isinstance(text, str):
-        raise ValueError("bad_time_arg")
-    try:
-        if "T" not in text and " " not in text:
-            d = datetime.strptime(text, "%Y-%m-%d")
-            return int(d.replace(tzinfo=JST).timestamp())
-        dt = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
-        if dt.tzinfo is None:
-            raise ValueError("bad_time_arg")
-        return int(dt.timestamp())
-    except (ValueError, OverflowError):
-        raise ValueError("bad_time_arg") from None
-
-
-def _scope(args: dict, snapshot_ts: int) -> dict:
-    """Resolve since/until/as_of once. Half-open [since, until) —
-    including a whole day needs the next date as `until`. as_of defaults
-    to the snapshot's generated_at and may not exceed it (A-6)."""
-    since = _parse_when(args["since"]) if args.get("since") else None
-    until = _parse_when(args["until"]) if args.get("until") else None
-    if since is not None and until is not None and until <= since:
-        raise ValueError("bad_period")
-    as_of = _parse_when(args["as_of"]) if args.get("as_of") else snapshot_ts
-    if as_of > snapshot_ts:
-        raise ValueError("as_of_after_snapshot")
-    if until is not None and until > as_of:
-        until = as_of
-        # clamping may invert the range — surface it, don't silently
-        # return an empty success
-        if since is not None and until <= since:
-            raise ValueError("bad_period")
-    try:
-        limit = min(max(int(args.get("limit") or 20), 1), DETAIL_LIMIT)
-    except (TypeError, ValueError, OverflowError):
-        raise ValueError("bad_limit") from None
-    return {"since": since, "until": until, "as_of": as_of,
-            "project_id": args.get("project"), "limit": limit}
-
-
-def _where(scope: dict, col: str = "m.posted_at_ts") -> tuple[str, list]:
-    sql, params = "", []
-    if scope["since"] is not None:
-        sql += f" AND {col} >= ?"
-        params.append(scope["since"])
-    if scope["until"] is not None:
-        sql += f" AND {col} < ?"
-        params.append(scope["until"])
-    elif scope.get("as_of") is not None:
-        # as_of freezes the window even without --until (refstats pins
-        # it): nothing posted after it counts; undated rows keep their
-        # pre-existing treatment
-        sql += f" AND ({col} IS NULL OR {col} <= ?)"
-        params.append(scope["as_of"])
-    if scope["project_id"] is not None:
-        sql += " AND m.project_id = ?"
-        params.append(scope["project_id"])
-    return sql, params
-
-
-def _items(rows: list, limit: int) -> dict:
-    return {"total": len(rows), "returned": min(len(rows), limit),
-            "truncated": len(rows) > limit, "items": rows[:limit]}
-
-
-def _result(status: str, scope: dict, data: dict, reason=None) -> dict:
-    out = {"status": status, "definition_version": DEFINITION_VERSION,
-           "scope": {"since": scope["since"], "until": scope["until"],
-                     "as_of": scope["as_of"],
-                     "project_id": scope["project_id"]}}
-    if reason:
-        out["reason"] = reason
-    out.update(data)
-    return out
 
 
 def _as_of_day(scope):
@@ -145,7 +58,7 @@ def _as_of_day(scope):
 
 def st_data_quality(db, scope):
     """ST-002: three-stage coverage — fetched / parsed / stat-ready."""
-    w, p = _where(scope)
+    w, p = stats_contract.message_scope_sql(scope)
     total = db.execute(
         f"SELECT COUNT(*) FROM messages m WHERE 1=1{w}", p).fetchone()[0]
     fetched = db.execute(
@@ -193,12 +106,12 @@ def st_data_quality(db, scope):
             WHERE a.kind='extract_llm' AND json_valid(a.meta)
               AND json_extract(a.meta,'$.prefilter') IS NOT NULL{w}""",
         p).fetchone()[0]
-    return _result("ok", scope, {
+    return stats_contract.stat_result("ok", scope, {
         "urgency_rule_outcomes": _urgency_rule_outcomes(db, w, p),
         "stages": {
-            "fetched": _ratio(fetched, total, "messages"),
-            "parsed_current_revision": _ratio(parsed, total, "messages"),
-            "stat_ready_timestamped": _ratio(timed, total, "messages")},
+            "fetched": stats_contract.ratio(fetched, total, "messages"),
+            "parsed_current_revision": stats_contract.ratio(parsed, total, "messages"),
+            "stat_ready_timestamped": stats_contract.ratio(timed, total, "messages")},
         "body_states": dict(body_states),
         "stale_parsed": stale,
         "extract_meta_unparseable": meta_bad,
@@ -261,7 +174,7 @@ def _urgency_rule_outcomes(db, w, p) -> dict:
 
 def st_overview(db, scope):
     """ST-001: rooms / patients / posts / senders / orgs / period."""
-    w, p = _where(scope)
+    w, p = stats_contract.message_scope_sql(scope)
     # a project-scoped caller sees only its own room, never deployment totals
     pw, pp = ((" WHERE project_id = ?", [scope["project_id"]])
               if scope["project_id"] is not None else ("", []))
@@ -286,7 +199,7 @@ def st_overview(db, scope):
     rng = db.execute(
         f"SELECT MIN(posted_at_ts), MAX(posted_at_ts) FROM messages{pw}", pp
     ).fetchone()
-    return _result("ok", scope, {
+    return stats_contract.stat_result("ok", scope, {
         "rooms_total": rooms,
         "rooms_by_state": dict(state_rows),
         # rooms ≠ confirmed patients — never reported as patient count
@@ -318,11 +231,11 @@ def st_patient_activity(db, scope):
                 FROM messages m WHERE 1=1{w}
                 GROUP BY m.project_id ORDER BY posts DESC""",
             params).fetchall()
-        out[f"last_{days}d"] = _items(
+        out[f"last_{days}d"] = stats_contract.limited_items(
             [{"project_id": r[0], "posts": r[1], "active_days": r[2],
               "senders": r[3], "professions": r[4], "orgs": r[5]}
              for r in rows], scope["limit"])
-    return _result("ok", scope, {
+    return stats_contract.stat_result("ok", scope, {
         "windows": out,
         "notes": ["post volume is not severity",
                   "active_days = days with at least one post, JST",
@@ -332,15 +245,15 @@ def st_patient_activity(db, scope):
 
 def st_professions(db, scope):
     """ST-004: posts / senders / rooms by recorded profession."""
-    w, p = _where(scope)
+    w, p = stats_contract.message_scope_sql(scope)
     rows = db.execute(
         f"""SELECT COALESCE(NULLIF(m.profession,''),'unknown') prof,
                    COUNT(*) posts, COUNT(DISTINCT m.sender_id) senders,
                    COUNT(DISTINCT m.project_id) rooms
             FROM messages m WHERE 1=1{w}
             GROUP BY prof ORDER BY posts DESC""", p).fetchall()
-    return _result("ok", scope, {
-        "by_profession": _items(
+    return stats_contract.stat_result("ok", scope, {
+        "by_profession": stats_contract.limited_items(
             [{"profession": r[0], "posts": r[1], "senders": r[2],
               "rooms": r[3]} for r in rows], CATEGORY_LIMIT),
         "notes": ["raw recorded profession values — no profession_map "
@@ -360,8 +273,8 @@ def st_poster_gaps(db, scope):
             FROM messages m WHERE m.posted_at_ts <= ? AND NULLIF(m.organization,'') IS NOT NULL
                   AND m.body_state IS NOT 'deleted'{w}
             GROUP BY m.project_id, m.organization ORDER BY last_ts ASC, m.project_id""", params).fetchall()
-    return _result("ok", scope, {
-        "by_organization": _items(
+    return stats_contract.stat_result("ok", scope, {
+        "by_organization": stats_contract.limited_items(
             [{"project_id": r[0], "organization": r[1], "last_posted_at_ts": r[2],
               "days_since_last": int((scope["as_of"] - r[2]) // DAY_S), "posts": r[3], "senders": r[4]}
              for r in rows], scope["limit"]),
@@ -372,7 +285,7 @@ def st_poster_gaps(db, scope):
 
 def st_workload(db, scope):
     """ST-005: JST weekday x time-band distribution."""
-    w, p = _where(scope)
+    w, p = stats_contract.message_scope_sql(scope)
     rows = db.execute(
         f"SELECT m.posted_at_ts, m.project_id FROM messages m"
         f" WHERE m.posted_at_ts NOT NULL{w}", p).fetchall()
@@ -385,7 +298,7 @@ def st_workload(db, scope):
         try:
             dt = datetime.fromtimestamp(ts, JST)
         except (ValueError, OverflowError, OSError) as error:
-            return _result("unavailable", scope, {},
+            return stats_contract.stat_result("unavailable", scope, {},
                            reason=f"data_error:{type(error).__name__}")
         weekend = dt.weekday() >= 5
         day = 8 <= dt.hour < 18
@@ -397,8 +310,8 @@ def st_workload(db, scope):
     by_day_band = [{"weekday": k[1], "band": k[2], "posts": n,
                     "rooms": len(room_seen[k])}
                    for k, n in sorted(bands.items())]
-    return _result("ok", scope, {
-        "by_weekday_band": _items(by_day_band, BUCKET_LIMIT),
+    return stats_contract.stat_result("ok", scope, {
+        "by_weekday_band": stats_contract.limited_items(by_day_band, BUCKET_LIMIT),
         "untimed_posts_excluded": untimed,
         "band_definition": "weekday_day=Mon-Fri 08:00-18:00 JST; "
                            "weekday_night=other weekday hours; "
@@ -410,7 +323,7 @@ def st_workload(db, scope):
 
 def st_doc_burden(db, scope):
     """ST-006: sender concentration — top1/5/10 share + HHI."""
-    w, p = _where(scope)
+    w, p = stats_contract.message_scope_sql(scope)
     # group by sender_id — same display name ≠ same sender
     rows = db.execute(
         f"""SELECT COALESCE(m.sender_id,-1) sid, COUNT(*) n,
@@ -419,9 +332,9 @@ def st_doc_burden(db, scope):
             GROUP BY sid ORDER BY n DESC""", p).fetchall()
     total = sum(n for _, n, _ in rows)
     def share(k):
-        return _ratio(sum(n for _, n, _ in rows[:k]), total, "posts")
+        return stats_contract.ratio(sum(n for _, n, _ in rows[:k]), total, "posts")
     hhi = sum((n / total) ** 2 for _, n, _ in rows) if total else None
-    return _result("ok", scope, {
+    return stats_contract.stat_result("ok", scope, {
         "top1_share": share(1), "top5_share": share(5),
         "top10_share": share(10),
         "hhi": round(hhi, 4) if hhi is not None else None,
@@ -447,7 +360,7 @@ def _med_messages(db, scope, extra_sql="", extra_params=()):
     no UNIQUE(kind, message_id), so duplicate current-hash rows are
     deduplicated per message_id here rather than double-counted — the
     NEWEST row wins, as in every display reader (structured_view)."""
-    w, p = _where(scope)
+    w, p = stats_contract.message_scope_sql(scope)
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
@@ -500,10 +413,10 @@ def st_meds(db, scope):
         key = (name, month)
         per_month[key] = per_month.get(key, 0) + 1
     top = sorted(per_month.items(), key=lambda kv: -kv[1])
-    return _result("ok", scope, {
+    return stats_contract.stat_result("ok", scope, {
         "action_totals": action_counts,
         "distinct_names": len(names),
-        "by_name_month": _items(
+        "by_name_month": stats_contract.limited_items(
             [{"name": k[0], "month": k[1], "mentions": n}
              for k, n in top], CATEGORY_LIMIT),
         **_med_candidate_breakdown(db, msgs),
@@ -575,7 +488,7 @@ def _med_candidate_breakdown(db, msgs):
                 target = kinds[cand["kind"]]
                 target[key] = target.get(key, 0) + 1
     status = "ok" if total > counts["unavailable"] else "unavailable"
-    resolution = {key: _ratio(value, total, "mention_share")
+    resolution = {key: stats_contract.ratio(value, total, "mention_share")
                   for key, value in counts.items()}
     output = {}
     for kind, identities in kinds.items():
@@ -583,10 +496,10 @@ def _med_candidate_breakdown(db, msgs):
             {"dict_id": key[0], "dict_sha256": key[1], "resolver_version": key[2],
              "system": key[3], "code": key[4], "display": key[5],
              "candidate": True, "mentions": n,
-             "share": _ratio(n, total, "mention_share")}
+             "share": stats_contract.ratio(n, total, "mention_share")}
             for key, n in sorted(identities.items(), key=lambda kv: (-kv[1], kv[0]))]
         block: DrugCandidateBreakdown = {"status": status, "mentions": total,
-            "by_resolution": resolution, "items": _items(items, CATEGORY_LIMIT)}
+            "by_resolution": resolution, "items": stats_contract.limited_items(items, CATEGORY_LIMIT)}
         output["by_" + kind + "_candidate"] = block
     reason = None
     review_status = "ok"
@@ -603,13 +516,13 @@ def _med_candidate_breakdown(db, msgs):
     review_items: list[DrugReviewItem] = [
         {"name": key[0], "status": key[1], "reason":
          "no_exact_dictionary_match" if key[1] == "unresolved" else "multiple_identity_candidates",
-         "mentions": n, "share": _ratio(n, total, "mention_share")}
+         "mentions": n, "share": stats_contract.ratio(n, total, "mention_share")}
         for key, n in sorted(review.items(), key=lambda kv: (-kv[1], kv[0]))]
     output["drug_map_review"] = {"status": review_status, "reason": reason,
         "mentions": total,
         "review_mentions": counts["unresolved"] + counts["ambiguous"],
         "unavailable_mentions": counts["unavailable"],
-        "items": _items(review_items, CATEGORY_LIMIT),
+        "items": stats_contract.limited_items(review_items, CATEGORY_LIMIT),
         "notes": ["raw names are not merged; candidate review is not clinical approval",
                   "missing current annotations are excluded from the curation queue"]}
     return output
@@ -625,9 +538,9 @@ def st_med_mentions(db, scope):
     rows = sorted(({"project_id": pid, "distinct_med_names": len(s)}
                    for pid, s in per_room.items()),
                   key=lambda r: -r["distinct_med_names"])
-    return _result("ok", scope, {
+    return stats_contract.stat_result("ok", scope, {
         "rooms_with_mentions": len(rows),
-        "by_room": _items(rows, scope["limit"]),
+        "by_room": stats_contract.limited_items(rows, scope["limit"]),
         "notes": ["distinct names in period ≠ currently used drugs",
                   "negated / other-person / historical mentions are "
                   "excluded by med_is_patient_current"]})
@@ -660,16 +573,16 @@ def st_med_change_burden(db, scope):
                     and (scope["project_id"] is None
                          or pid == scope["project_id"])):
                 per_room[pid] = per_room.get(pid, 0) + n
-        out[f"last_{days}d"] = _items(
+        out[f"last_{days}d"] = stats_contract.limited_items(
             [{"project_id": pid, "change_mentions": n}
              for pid, n in sorted(per_room.items(), key=lambda x: -x[1])],
             scope["limit"])
     busiest = sorted((({"project_id": pid, "day": day, "changes": n}
                        for (pid, day), n in changes.items())),
                      key=lambda r: -r["changes"])
-    return _result("ok", scope, {
+    return stats_contract.stat_result("ok", scope, {
         "windows": out,
-        "busiest_days": _items(busiest, scope["limit"]),
+        "busiest_days": stats_contract.limited_items(busiest, scope["limit"]),
         "notes": ["mention-level dedup only — the same change reported "
                   "by three professions counts three times",
                   "change count is not clinical instability",
@@ -681,7 +594,7 @@ def st_med_change_burden(db, scope):
 def st_adherence_events(db, scope):
     """ST-010: adherence problem mentions (残薬/飲み忘れ etc.) need
     valid_facts polarity; extract_llm events don't carry them."""
-    return _result("unavailable", scope, {},
+    return stats_contract.stat_result("unavailable", scope, {},
                    reason="needs valid_facts (fact-level polarity); "
                           "extract_llm events cannot distinguish "
                           "present/absent/improved adherence problems")
@@ -694,11 +607,11 @@ def st_rx_expiry(db, scope):
     drug names."""
     today = _as_of_day(scope)
     if today is None:
-        return _result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
+        return stats_contract.stat_result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
     try:
         horizon = today + timedelta(days=14)
     except OverflowError:
-        return _result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
+        return stats_contract.stat_result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
     per_room = {}
     items = []
     seen = set()
@@ -716,7 +629,7 @@ def st_rx_expiry(db, scope):
                 continue
             if mid not in posted_ok:
                 # as_of freeze: a period posted after as_of did not
-                # exist yet; undated rows keep their treatment (_where)
+                # exist yet; undated rows keep their treatment (stats_contract.message_scope_sql)
                 posted_ok[mid] = db.execute(
                     "SELECT 1 FROM messages WHERE message_id=? AND "
                     "(posted_at_ts IS NULL OR posted_at_ts <= ?)",
@@ -729,8 +642,8 @@ def st_rx_expiry(db, scope):
                           "end": p["end"],
                           "days_left": (end_d - today).days})
     items.sort(key=lambda r: r["days_left"])
-    return _result("ok", scope, {
-        "expiring_periods": _items(items, scope["limit"]),
+    return stats_contract.stat_result("ok", scope, {
+        "expiring_periods": stats_contract.limited_items(items, scope["limit"]),
         "rooms_with_expiring": len(per_room),
         "horizon_days": 14,
         "notes": ["surface-form period expressions from extract_v1 — "
@@ -769,11 +682,11 @@ def st_med_change_followup(db, scope):
             (pid, ts, ts + 7 * DAY_S)).fetchone()
         if not follow:
             no_follow.append({"project_id": pid, "message_id": mid})
-    return _result("ok", scope, {
+    return stats_contract.stat_result("ok", scope, {
         # a count kept in the export's ratio shape (value is 1.0 whenever
         # counted); never derive a no-follow-up rate from it
-        "change_mentions_7d_plus": _ratio(total, total, "messages"),
-        "no_followup_record": _items(
+        "change_mentions_7d_plus": stats_contract.ratio(total, total, "messages"),
+        "no_followup_record": stats_contract.limited_items(
             sorted(no_follow, key=lambda r: r["message_id"]),
             scope["limit"]),
         "notes": ["'follow-up record' = any later room post OR a "
@@ -791,7 +704,7 @@ def st_transition_reconciliation(db, scope):
     co-occurring with med change-action mentions within ±14 days in
     the same room. Co-occurrence count only — reconciliation need is
     a human decision."""
-    w, p = _where(scope, "d.posted_at_ts")
+    w, p = stats_contract.message_scope_sql(scope, "d.posted_at_ts")
     # the ±14d window must not reach past the frozen window end either:
     # a med change posted after until/as_of did not exist yet
     if scope["until"] is not None:
@@ -803,8 +716,8 @@ def st_transition_reconciliation(db, scope):
     items = [{"project_id": pid, "discharge_message_id": dmid,
               "med_change_message_ids": sorted(mids)}
              for dmid, (pid, mids) in grouped.items()]
-    return _result("ok", scope, {
-        "cooccurrences": _items(items, scope["limit"]),
+    return stats_contract.stat_result("ok", scope, {
+        "cooccurrences": stats_contract.limited_items(items, scope["limit"]),
         "notes": ["co-occurrence of typed LLM events + med mentions — "
                   "not proof that reconciliation is needed or missing",
                   "discharge/transfer detected via extract_llm events; "
@@ -831,7 +744,7 @@ def st_open_loop_aging(db, scope):
                "over_90d": 0, "no_due": 0}
     as_of_day = _as_of_day(scope)
     if as_of_day is None:
-        return _result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
+        return stats_contract.stat_result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
     items = []
     for rid, pid, status, due in rows:
         age_d = None
@@ -841,7 +754,7 @@ def st_open_loop_aging(db, scope):
                 # whole JST calendar days past the due date — a request
                 # is not overdue on its own due day
                 due_day = datetime.fromtimestamp(
-                    _parse_when(str(due)), JST).date()
+                    stats_contract.parse_timestamp(str(due)), JST).date()
                 age_d = (as_of_day - due_day).days
             except (ValueError, TypeError, OverflowError, OSError):
                 unparseable = True
@@ -861,8 +774,8 @@ def st_open_loop_aging(db, scope):
                       "days_since_due": age_d})
     items.sort(key=lambda r: (r["days_since_due"] is None,
                               -(r["days_since_due"] or 0)))
-    return _result("partial", scope, {
-        "formal_open_requests": _items(items, scope["limit"]),
+    return stats_contract.stat_result("partial", scope, {
+        "formal_open_requests": stats_contract.limited_items(items, scope["limit"]),
         "age_buckets": buckets,
         "oldest_open_due": min((i["due_date"] for i in items
                                 if i["due_date"] is not None
@@ -882,7 +795,7 @@ def st_canonical_facts(db, scope):
     read. Counting never re-derives claims: facts are enumerated once
     per fact_id on the newest current projection; a stale projection
     (hash drift / invalidated) contributes nothing."""
-    w, p = _where(scope)
+    w, p = stats_contract.message_scope_sql(scope)
     rows = db.execute(
         f"""SELECT a.content FROM artifacts a
             JOIN messages m ON m.message_id=a.message_id
@@ -908,7 +821,7 @@ def st_canonical_facts(db, scope):
             by_kind[kind] = by_kind.get(kind, 0) + 1
             if f.get("evidence_quote"):
                 evidenced += 1
-    return _result("ok", scope, {
+    return stats_contract.stat_result("ok", scope, {
         "total": total, "evidenced": evidenced, "by_kind": by_kind,
         "notes": ["facts counted once per fact_id on the newest "
                   "current projection — stale/invalidated generations "
@@ -932,7 +845,7 @@ def st_card_parts(db, scope):
         "GROUP BY parts_state").fetchall()
     by_render = {r["parts_state"]: r["c"] for r in renders}
     incomplete = by_render.get("pending", 0) + by_render.get("incomplete", 0)
-    return _result("ok", scope, {
+    return stats_contract.stat_result("ok", scope, {
         "total_parts": sum(by_state.values()),
         "by_state": by_state,
         "renders_complete": by_render.get("complete", 0),
@@ -981,7 +894,7 @@ class _FeedbackLatest(TypedDict):
 def _feedback_ratio(num, den, unit):
     """Small samples expose counts, not a rate or confidence interval."""
     from stats_math import wilson_interval
-    ratio = _ratio(num, den, unit)
+    ratio = stats_contract.ratio(num, den, unit)
     ratio["wilson95"] = {"low": None, "high": None}
     if den < SIGNAL_FEEDBACK_MIN_N:
         ratio.update(value=None, reason="insufficient_n")
@@ -1244,7 +1157,7 @@ def st_signal_feedback(db, scope):
         _feedback_suppression(db, scope, types)
     by_type = _feedback_by_type(scope, types, selected, dismissals,
                                 suppression, suppression_since, straddled)
-    return _result("partial" if invalid or straddled else "ok", scope, {
+    return stats_contract.stat_result("partial" if invalid or straddled else "ok", scope, {
         "by_type": by_type, "invalid_or_orphan_rows": invalid, "legacy_rows": legacy,
         "minimum_rate_samples": SIGNAL_FEEDBACK_MIN_N,
         "privacy_minimum": {"status": "owner_decision_required",
@@ -1401,9 +1314,9 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
             or min(len(residual_roots), len(residual_replies)) < privacy_policy["min_actors"]
             or len(residual_projects) < privacy_policy["min_projects"]):
         cells = []
-    result = _result("partial", scope, {
+    result = stats_contract.stat_result("partial", scope, {
         "coverage": counts, "role_sources": sources,
-        "valid_time_share": _ratio(counts["valid_time_pairs"], counts["roots"], "roots"),
+        "valid_time_share": stats_contract.ratio(counts["valid_time_pairs"], counts["roots"], "roots"),
         "role_cells": cells,
         "role_cells_reason": ("owner_policy_required" if privacy_policy is None else
                               "small_cell" if suppressed else None),
@@ -1421,7 +1334,6 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
     result["scope"].pop("project_id")
     result["scope"]["project_filter_applied"] = scope["project_id"] is not None
     return result
-
 
 
 def st_validation_drops(db, scope):
@@ -1524,7 +1436,7 @@ def run_stats(db, snapshot_ts: int, args: dict) -> dict:
         names = PRESETS[args["preset"]]
     else:
         raise ValueError("stat_or_preset_required")
-    scope = _scope(args, snapshot_ts)
+    scope = stats_contract.resolve_scope(args, snapshot_ts)
     stats = {}
     audit_results = None
     for name in names:
@@ -1544,7 +1456,7 @@ def run_stats(db, snapshot_ts: int, args: dict) -> dict:
                 stats[name] = REGISTRY[name]["fn"](db, scope)
         except (ValueError, RecursionError, TypeError, KeyError,
                 AttributeError, OverflowError, OSError, sqlite3.Error) as e:
-            stats[name] = _result("unavailable", scope, {},
+            stats[name] = stats_contract.stat_result("unavailable", scope, {},
                                   reason=f"data_error:{type(e).__name__}")
             if name in extraction_audit.STAT_NAMES:
                 audit_results = {key: stats[name] for key in extraction_audit.STAT_NAMES}

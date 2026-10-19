@@ -20,7 +20,9 @@ from time import monotonic
 
 from snapshots import publish_snapshot as _publish_snapshot
 from ledger import valid_mcs_db
-from mcs_util import HOME, atomic_write, disk_floor_mb, publish_tmp
+from mcs_util import HOME
+from safe_io import atomic_write, publish_tmp, fdopen_owned
+from llm_availability import disk_floor_mb
 from safe_io import read_regular_nofollow
 
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
@@ -75,11 +77,6 @@ class MaintenanceError(RuntimeError):
     — core must not depend on the ingest layer for an error type."""
 
 
-def atomic_publish_text(path: str, text: str) -> None:
-    """tmp -> fsync -> os.replace -> dir fsync: consumers either see the
-    whole previous file or the whole new one — a mid-write crash never
-    leaves a torn JSON behind (same contract as the backup chain)."""
-    atomic_write(path, lambda f: f.write(text), tmp_prefix=".pub.")
 
 
 def _stat_sig(path: str) -> str | None:
@@ -363,7 +360,7 @@ def rotate_log(paths=None):
                     # owner-only regardless of umask, also for an older loose .1
                     fd = os.open(path + ".1", os.O_WRONLY | os.O_CREAT
                                  | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-                    with open(fd, "wb") as dst:
+                    with fdopen_owned(fd, "wb") as dst:
                         os.fchmod(fd, 0o600)
                         shutil.copyfileobj(src, dst)
                 with open(path, "w"):

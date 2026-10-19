@@ -6,6 +6,7 @@ import json
 import pytest
 
 import notify_cards
+import notify_spool
 from adapters.common import envelopes, registry
 from adapters.common.spec import token_map
 from adapters.slack.delivery import DeliveryWorker
@@ -77,7 +78,7 @@ def test_signal_worker_grants_parts_resume_and_update_original_thread(led, tmp_p
     with led.db:
         specs = []
         notify_cards.issue_render(led.db, card_id, SLACK, notify_cards.time.time(), specs, force=True)
-    notify_cards.publish_specs(led.db, notify_cards.notify_dirs(str(world.root)), specs, notify_cards.time.time())
+    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(world.root)), specs, notify_cards.time.time())
     update = json.loads(_latest_render(led, card_id)["spec_json"])
     assert update["op"] == "update"
     assert update["delivery"]["message_id"] == card["message_id"]

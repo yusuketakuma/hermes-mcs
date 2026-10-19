@@ -14,6 +14,8 @@ import sqlite3
 import pytest
 
 import notify_cards
+import notify_scope
+import notify_spool
 import notify_action_tokens
 import notify_actions
 import notify_reconcile
@@ -1041,7 +1043,7 @@ def test_cmd_int_rejects_card_resolve(led, tmp_path):
     """The resolve path is operator-only — a plugin-origin cmd_int file
     carrying it must be refused, never applied."""
     root = tmp_path / "data"
-    notify_cards.ensure_dirs(str(root))
+    notify_spool.ensure_dirs(str(root))
     req = {"version": 1, "op": "card_resolve", "command_id": _uuid(1),
            "delivery_id": _uuid(2), "attempt_id": "x" * 16}
     path = root / "cmd_int" / "r.json"
@@ -1175,7 +1177,7 @@ def test_drain_int_backlog_never_orphans_a_begin_past_the_window(
 
 def test_drain_int_validation_quarantine(led, tmp_path):
     root = tmp_path / "data"
-    notify_cards.ensure_dirs(str(root))
+    notify_spool.ensure_dirs(str(root))
     bad = root / "cmd_int" / "bad.json"
     bad.write_text(json.dumps({"version": 1, "op": "bogus"}))
     notify_cmds.drain_int_commands(led, {"errors": []}, CFG, str(root))
@@ -2057,7 +2059,7 @@ def test_failed_revoke_stays_revoked_after_retry_exhaustion(led, tmp_path):
 @pytest.mark.parametrize('bad_op', [[], {}])
 def test_drain_quarantines_non_string_op_and_continues(led, tmp_path, bad_op):
     root = tmp_path / 'data'
-    notify_cards.ensure_dirs(str(root))
+    notify_spool.ensure_dirs(str(root))
     bad = root / 'cmd_int' / '00-invalid.json'
     bad.write_text(json.dumps({'version': 1, 'op': bad_op, 'command_id': _uuid(990)}))
     result = {}
@@ -2726,26 +2728,26 @@ def test_switched_away_transport_leaves_live_health(led, tmp_path,
                    (ev["event_id"], "{}", "h", 1, NOW, "discord", "{}"))
     led.db.commit()
     slack = {"notify": {**CFG["notify"], "interactive": "slack"}}
-    assert notify_cards.health_cards(led, CFG)["attempts_unsettled"] == 1
-    h = notify_cards.health_cards(led, slack)
+    assert notify_scope.health_cards(led.db, CFG)["attempts_unsettled"] == 1
+    h = notify_scope.health_cards(led.db, slack)
     assert (h["attempts_unsettled"], h["retired_unsettled"]) == (0, 1)
     assert h["unsettled"] == []
     assert [i["transport"] for i in h["retired_items"]] == ["discord"]
     assert h["retired_items"][0]["resolve_scope"]["channel_id"]
     # a claim left on the retired transport is disclosed, not an error
-    root = notify_cards.data_root(led)
-    notify_cards.ensure_dirs(root)
-    claim = os.path.join(notify_cards.notify_dirs(root)["discord_render"],
+    root = notify_spool.data_root(led)
+    notify_spool.ensure_dirs(root)
+    claim = os.path.join(notify_spool.notify_dirs(root)["discord_render"],
                          "x.json.claimed")
     open(claim, "w").close()
     os.utime(claim, (NOW - 3600, NOW - 3600))
     for cfg, live in ((slack, 0), (CFG, 1)):
         result = {"errors": []}
-        fixed = notify_cards.recover(led, cfg, result)
+        fixed = notify_spool.recover(led, cfg, result)
         assert fixed["missing_claimed"] == live
         assert bool(result["errors"]) == bool(live)
     os.remove(claim)
-    assert notify_cards.health_cards(led)["attempts_unsettled"] == 1
+    assert notify_scope.health_cards(led.db)["attempts_unsettled"] == 1
     monkeypatch.setattr(health_report, "HEALTH_FILE", str(tmp_path / "h.json"))
     for cfg, held, retired in ((CFG, 1, 0), (slack, 0, 1)):
         health = health_report.build_health(led.db, {"errors": [], "notify": {}}, "ok", cfg=cfg)
@@ -2764,7 +2766,7 @@ def test_health_cards_lists_unsettled_attempts_for_resolve(led, tmp_path):
     _dispatch(led, _intent(led))
     r = _latest_render(led)
     _begin(led, r, n=1)
-    health = notify_cards.health_cards(led)
+    health = notify_scope.health_cards(led.db)
     assert health["attempts_unsettled"] == 1
     assert health["oldest_unsettled_age_s"] == 0.0   # pinned NOW clock
     w = health["unsettled"][0]
@@ -2772,7 +2774,7 @@ def test_health_cards_lists_unsettled_attempts_for_resolve(led, tmp_path):
     assert w["delivery_id"] == r["delivery_id"]
     assert w["state"] == "granted"
     assert w["channel_id"] == r["channel_id"]
-    assert w["resolve_scope"] == notify_cards.stored_scope(r)
+    assert w["resolve_scope"] == notify_scope.stored_scope(r)
 
 
 @pytest.mark.parametrize("phase,result", [("started", None), ("result", "delivered")])

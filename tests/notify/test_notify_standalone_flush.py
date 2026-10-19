@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import pytest
 
 import notify_flush
+import notify_sender
+import mcs_util
 from ledger import Ledger
 from notify_testkit import stored_attachment
 
@@ -31,11 +33,11 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
 import _mcs_path
-import mcs_util, notify_flush
+import mcs_util, notify_flush, notify_sender
 cfg = notify_flush._config()
 assert cfg["notify_target"] == "slack:C0SELECTED"
 assert notify_flush.CONF_PATH == mcs_util.CONF_PATH
-argv = notify_flush._send_argv(cfg, cfg["notify_target"])
+argv = notify_sender.send_argv(cfg, cfg["notify_target"], notify_flush.CONF_PATH)
 assert argv[argv.index("--root") + 1] == sys.argv[2]
 '''
     result = subprocess.run([sys.executable, "-c", script, str(repository), str(root)],
@@ -47,7 +49,7 @@ assert argv[argv.index("--root") + 1] == sys.argv[2]
 def _flush(tmp_path, monkeypatch, cfg, returncode):
     monkeypatch.setattr(notify_flush, "CONF_PATH", str(tmp_path / "config.json"))
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda _: "/nonexistent/hermes")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _: "/nonexistent/hermes")
     attachment = tmp_path / "data" / "attachments" / "fixture.txt"
     attachment.parent.mkdir(parents=True)
     attachment.write_bytes(b"synthetic")
@@ -59,7 +61,7 @@ def _flush(tmp_path, monkeypatch, cfg, returncode):
         calls.append((argv, kwargs["input"]))
         return SimpleNamespace(returncode=returncode, stdout="", stderr="")
 
-    monkeypatch.setattr(notify_flush.subprocess, "run", child)
+    monkeypatch.setattr(notify_sender.subprocess, "run", child)
     led = Ledger(str(tmp_path / "data" / "ledger.db"))
     stored_attachment(led, attachment)
     eid = led.outbox_add("run_failed", None, {})
@@ -93,9 +95,9 @@ def test_standalone_never_reseals_replaced_or_untracked_attachment(
     cfg = {"runtime_mode": "standalone", "notify_target": target}
     monkeypatch.setattr(notify_flush, "CONF_PATH", str(tmp_path / "config.json"))
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda _: "/nonexistent/hermes")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _: "/nonexistent/hermes")
     calls = []
-    monkeypatch.setattr(notify_flush.subprocess, "run",
+    monkeypatch.setattr(notify_sender.subprocess, "run",
                         lambda *a, **kw: calls.append(kw["input"])
                         or SimpleNamespace(returncode=0, stdout="", stderr=""))
 
@@ -105,7 +107,7 @@ def test_standalone_never_reseals_replaced_or_untracked_attachment(
         return "合成通知", [("fixture.txt", str(attachment))]
 
     monkeypatch.setattr(notify_flush, "_format_event", render)
-    fingerprint = notify_flush._delivery_fingerprint
+    fingerprint = notify_sender.delivery_fingerprint
 
     def replace_after_fingerprint(*args):
         value = fingerprint(*args)
@@ -113,7 +115,7 @@ def test_standalone_never_reseals_replaced_or_untracked_attachment(
         return value
 
     if change == "after_fingerprint":
-        monkeypatch.setattr(notify_flush, "_delivery_fingerprint", replace_after_fingerprint)
+        monkeypatch.setattr(notify_sender, 'delivery_fingerprint', replace_after_fingerprint)
     led = Ledger(str(tmp_path / "data" / "ledger.db"))
     try:
         if change != "untracked":
@@ -151,7 +153,7 @@ def test_standalone_permanent_failure_quarantines_after_five_attempts(
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     monkeypatch.setattr(notify_flush, "_format_event",
                         lambda *a: ("合成通知", []))
-    monkeypatch.setattr(notify_flush.subprocess, "run",
+    monkeypatch.setattr(notify_sender.subprocess, "run",
                         lambda *a, **k: SimpleNamespace(
                             returncode=75, stdout="", stderr=""))
     (tmp_path / "data").mkdir(parents=True)
@@ -178,7 +180,7 @@ def test_standalone_permanent_failure_quarantines_after_five_attempts(
 def test_hermes_mode_is_unchanged(tmp_path, monkeypatch):
     cfg = {"notify_target": "discord:1000000000000000001", "hermes_bin": "/opt/hermes"}
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
-    assert notify_flush._send_argv(cfg, cfg["notify_target"]) == [
+    assert notify_sender.send_argv(cfg, cfg["notify_target"], notify_flush.CONF_PATH) == [
         "/opt/hermes", "send", "--to", cfg["notify_target"], "--quiet"]
 
 
@@ -186,7 +188,7 @@ def test_hermes_mode_is_unchanged(tmp_path, monkeypatch):
 @pytest.mark.parametrize("size", [0, 6, 7, 8, 13, (1 << 20) + 7])
 def test_direct_sender_seal_bounds_reads_and_preserves_contract(monkeypatch, sender, size):
     limit = 7 if size < (1 << 20) else size
-    monkeypatch.setattr(notify_flush, "_MAX_FILE_BYTES", limit)
+    monkeypatch.setattr(notify_sender, 'MAX_FILE_BYTES', limit)
     data = b"s" * size
     digest = hashlib.sha256(data).hexdigest()
     reads = []
@@ -200,21 +202,21 @@ def test_direct_sender_seal_bounds_reads_and_preserves_contract(monkeypatch, sen
             reads.append(len(block))
             return block
 
-    monkeypatch.setattr(notify_flush, "open", lambda *a: BoundedFile(data), raising=False)
+    monkeypatch.setattr(notify_sender, 'open', lambda *a: BoundedFile(data), raising=False)
 
     def child(*args, **kwargs):
         calls.append(json.loads(kwargs["input"]))
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(notify_flush.subprocess, "run", child)
+    monkeypatch.setattr(notify_sender.subprocess, "run", child)
     args = ([sys.executable, f"/synthetic/{sender}/__main__.py"],
             "synthetic notice", [("synthetic.bin", "/synthetic/file")])
     if size > limit:
-        with pytest.raises(notify_flush._SendFailed, match="attachment_too_large"):
-            notify_flush._send(*args, attachment_pins={"/synthetic/file": digest})
+        with pytest.raises(notify_sender.SendFailed, match="attachment_too_large"):
+            notify_sender.send(*args, attachment_pins={"/synthetic/file": digest})
         assert calls == []
     else:
-        notify_flush._send(*args, attachment_pins={"/synthetic/file": digest})
+        notify_sender.send(*args, attachment_pins={"/synthetic/file": digest})
         assert calls == [{"text": "synthetic notice", "files": [{
             "name": "synthetic.bin", "path": "/synthetic/file",
             "bytes": size, "sha256": digest}]}]

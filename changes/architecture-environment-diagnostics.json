@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "設定・更新時の環境診断の責務を整理",
+  "summary": "設定と更新が同じ環境診断を直接参照するよう整理しました。診断の文言・エラー区分・承認条件・接続先・時間制限・既定値は変わりません。",
+  "upgrade": "追加操作は不要です。旧更新ツールが利用する設定診断の入口も維持します。",
+  "details": [
+    "環境観測とその補助処理をenvironment_diagnosticsへ移し、設定CLIの対話・表示・適用処理から分離する。",
+    "旧updater向けcheck_environmentとvalidate_configの公開互換入口を保持し、新updaterは環境診断を直接利用する。"
+  ],
+  "refs": [
+    "mcs/ops/environment_diagnostics.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/mcs_update.py"
+  ]
+}

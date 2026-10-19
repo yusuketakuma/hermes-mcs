@@ -9,7 +9,7 @@ import pytest
 from types import SimpleNamespace
 
 from mcs_standalone import runtime, service
-from mcs_util import UPDATE_MARKER_NAME
+from writer_lock import UPDATE_MARKER_NAME
 
 # 05:11 UTC: no calendar slot of the default jobs falls on this minute
 QUIET = datetime(2026, 10, 2, 5, 11, tzinfo=timezone.utc).timestamp()

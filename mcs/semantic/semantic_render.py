@@ -18,7 +18,8 @@ from mcs_queries import JST
 from mcs_util import payload_hash, positive
 from mcs_util import loads_dict
 import semantic_facts as sf
-from semantic_send_gate import enforce_block_reason, semantic_text_line
+import semantic_send_gate
+from semantic_send_gate import enforce_block_reason
 
 _SECTION_LABEL = {"medication": "薬剤・処方に関する情報",
                   "status": "現在の状況（対象投稿時点）",
@@ -400,7 +401,7 @@ def _emit_degraded(ledger, scfg: dict) -> int:
             fp = bundle["source_fingerprint"]
             arrivals = [m["message_id"] for m in bundle["members"]
                         if m["message_id"] in ids]
-            audits = [semantic_store._current(ledger.db, semantic_policy.KIND_AUDIT, mid,
+            audits = [semantic_store.current_artifact(ledger.db, semantic_policy.KIND_AUDIT, mid,
                                         fp, semantic_policy.policy_fingerprint(scfg))
                       for mid in arrivals]
             if arrivals and all(a and a["meta"].get("audit_status") == "PASS"
@@ -446,3 +447,134 @@ def apply_mandatory_render(summary: dict, findings: list, status: str,
         findings.append({"code": "mandatory_render_incomplete"})
         status = "NEEDS_REVIEW"
     return status
+
+
+def semantic_text_line(text: str) -> str:
+    """Keep summary values on one content line, without structural markers."""
+    return " ".join(text.split()).replace("■", "□").replace(
+        "▶", "▷").replace("─────", "—")
+
+
+def semantic_chunks(content: str, max_len: int) -> list[str]:
+    """Split a frozen semantic notice while repeating its provenance."""
+    return semantic_chunk_parts(content, max_len)[0]
+
+
+def semantic_chunk_parts(content: str,
+                         max_len: int) -> tuple[list[str], list[str]]:
+    """``(parts, bodies)``: the sent parts plus the body slice each part
+    carries between its repeated header/marker and footer — the bodies
+    concatenate back to the notice body, so readers attribute lines to
+    parts without re-parsing the rendered text.
+
+    ``semantic_render.render_notice`` already puts the patient, coverage/audit
+    labels, and stored MCS URL in the frozen payload. A raw character slice
+    would leave those lines only in part 1, so each part gets the same frozen
+    header and link. The payload is never rebuilt from the ledger here.
+    """
+    lines = content.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    # Only the renderer's terminal footer is structural. An evidence quote
+    # or model claim may contain the same marker/link inside the body.
+    if len(lines) < 2 or lines[-2] != "▶ MCSで確認":
+        raise ValueError("semantic_provenance_missing")
+    footer_index = len(lines) - 2
+    link = lines[-1].strip()
+    if not link.startswith("https://"):
+        raise ValueError("semantic_provenance_missing")
+
+    # The renderer's leading block is stable and ends at the first blank line
+    # or section. Keep every line in that block so target time and any
+    # degraded-notice explanation remain visible on every part.
+    header_end = len(lines)
+    for index, line in enumerate(lines[:footer_index]):
+        if not line.strip() or line.startswith("■"):
+            header_end = index
+            break
+    header = [line for line in lines[:header_end] if line.strip()]
+    if not any(line.startswith("取得：") for line in header):
+        raise ValueError("semantic_coverage_missing")
+    if not any(line.startswith("要約：") for line in header):
+        raise ValueError("semantic_audit_missing")
+
+    # Remove the original header/footer before reattaching them to every
+    # chunk. This keeps the frozen claims intact without duplicating the
+    # first block inside part 1.
+    body_start = header_end
+    while body_start < footer_index and not lines[body_start].strip():
+        body_start += 1
+    body_lines = lines[body_start:footer_index]
+    body = "\n".join(body_lines).strip()
+
+    footer = ["▶ MCSで確認", link]
+    static = "\n".join(header + footer)
+    count = 1
+    chunks = []
+    for _ in range(20):
+        marker = f"part {count}/{count}"
+        overhead = len(static) + len(marker) + 3
+        capacity = max_len - overhead
+        if capacity < 1:
+            raise ValueError("semantic_provenance_too_long")
+        chunks = [body[i:i + capacity] for i in range(0, len(body), capacity)]
+        if not chunks:
+            chunks = [""]
+        next_count = len(chunks)
+        if next_count == count:
+            break
+        count = next_count
+    else:
+        raise ValueError("semantic_chunking_failed")
+
+    out = []
+    for index, chunk in enumerate(chunks, 1):
+        marker = f"part {index}/{count}"
+        part = "\n".join(header + [marker, chunk, *footer])
+        if len(part) > max_len:
+            raise ValueError("semantic_chunk_limit")
+        out.append(part)
+    return out, chunks
+
+
+def semantic_summary_block(ledger, r, cfg: dict) -> str:
+    """Enforce-mode: audited summary section appended to this post.
+    Only the newest semantic_summary with audit_status PASS on the
+    CURRENT generation qualifies — stale/failed/unaudited ones are
+    silently absent, and in shadow/assist/off the notification stays
+    byte-identical to pre-Phase-J (INV-16, spec §20.2)."""
+    try:
+        scfg, _ = semantic_policy.semantic_config(cfg)
+        if enforce_block_reason(ledger, scfg, r["project_id"]) is not None:
+            return ""
+        root = r["parent_id"] or r["message_id"]
+        # The audited summary must describe the current whole-thread
+        # generation, not only the target's body revision (INV-15).
+        cur = semantic_send_gate.current_summary(
+            ledger.db, r["project_id"], r["message_id"],
+            lambda: semantic_store.thread_bundle(ledger.db, r["project_id"], root,
+                                       [r["message_id"]]),
+            semantic_policy.policy_fingerprint(scfg))
+        if cur is None:
+            return ""
+        summ = cur["content"]
+        # Keep every audited claim; the send path's chunker is the one
+        # place that splits a notification.
+        lines = [semantic_text_line(str(c.get("text", "")))
+                 for c in summ.get("claims", [])
+                 if isinstance(c, dict) and c.get("text")]
+        mfacts = [semantic_text_line(x) for x in (summ.get("mandatory_facts") or [])
+                  if isinstance(x, str) and x]
+        if not lines and not mfacts:
+            return ""
+        body = "\n".join(f"・{x}" for x in lines)
+        if mfacts:
+            if body:
+                body += "\n"
+            body += "■ 抽出済み事実（監査済み）\n" + "\n".join(f"・{x}" for x in mfacts)
+        lims = summary_limitations(summ)
+        if lims:
+            body += "\n・（原文確認）" + "；".join(lims)
+        return f"\n───── 要約（自動検査済） ─────\n{body}"
+    except Exception:
+        return ""

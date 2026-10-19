@@ -1,4 +1,5 @@
 """Corrupt progress stays quarantined without blocking later notifications."""
+import semantic_send_gate
 import json
 import sys
 
@@ -8,6 +9,8 @@ from ledger import Ledger
 import notify_flush
 
 
+import notify_sender
+import mcs_util
 @pytest.mark.parametrize("archived,progress", [(False, "[" * 20000 + "]" * 20000),
                                                (True, "[" * 20000 + "]" * 20000),
                                                (True, "[]")],
@@ -16,12 +19,12 @@ def test_corrupt_progress_holds_and_later_event_delivers(tmp_path, monkeypatch, 
     ledger = Ledger(str(tmp_path / "ledger.db"))
     sent = []
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda _cfg: sys.executable)
-    monkeypatch.setattr(notify_flush, "_target", lambda *_args: "synthetic")
-    monkeypatch.setattr(notify_flush, "_send_argv", lambda *_args: ["synthetic"])
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _cfg: sys.executable)
+    monkeypatch.setattr(notify_sender, 'target', lambda *_args: "synthetic")
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *_args: ["synthetic"])
     monkeypatch.setattr(notify_flush, "_format_event", lambda *_args: ("synthetic", []))
-    monkeypatch.setattr(notify_flush, "_semantic_render_state", lambda *_args: ())
-    monkeypatch.setattr(notify_flush, "_send", lambda *_args, **_kwargs: sent.append(1))
+    monkeypatch.setattr(semantic_send_gate, 'semantic_render_state', lambda *_args: ())
+    monkeypatch.setattr(notify_sender, 'send', lambda *_args, **_kwargs: sent.append(1))
     try:
         ledger.db.execute("INSERT INTO patients(project_id,patient_name,is_archived) VALUES(1,?,?)",
                           ("Synthetic", int(archived)))
@@ -48,11 +51,11 @@ def test_invalid_id_shape_can_be_held_without_stopping_later_notice(tmp_path, mo
     ledger = Ledger(str(tmp_path / "ledger.db"))
     sent = []
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda _cfg: sys.executable)
-    monkeypatch.setattr(notify_flush, "_target", lambda *_args: "synthetic")
-    monkeypatch.setattr(notify_flush, "_send_argv", lambda *_args: ["synthetic"])
-    monkeypatch.setattr(notify_flush, "_semantic_render_state", lambda *_args: ())
-    monkeypatch.setattr(notify_flush, "_send", lambda *_args, **_kwargs: sent.append(1))
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _cfg: sys.executable)
+    monkeypatch.setattr(notify_sender, 'target', lambda *_args: "synthetic")
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *_args: ["synthetic"])
+    monkeypatch.setattr(semantic_send_gate, 'semantic_render_state', lambda *_args: ())
+    monkeypatch.setattr(notify_sender, 'send', lambda *_args, **_kwargs: sent.append(1))
     try:
         bad = ledger.outbox_add("new_messages", 1, {"message_ids": message_ids})
         good = ledger.outbox_add("new_messages", None, {"message_ids": [2]})
@@ -79,11 +82,11 @@ def test_rescue_only_uses_valid_ids_and_keeps_single_rescue_lineage(tmp_path):
     try:
         bad = ledger.outbox_add("new_messages", 1, {"message_ids": [1, 2**63, False, "1"]})
         row = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (bad,)).fetchone()
-        notify_flush._hold_event(ledger, row, {})
+        notify_flush.hold_event(ledger, row, {})
         rescue = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id!=?", (bad,)).fetchone()
         assert json.loads(rescue["payload"])["message_ids"] == [1]
         assert json.loads(rescue["payload"])["rescue_of"] == bad
-        notify_flush._hold_event(ledger, rescue, {})
+        notify_flush.hold_event(ledger, rescue, {})
         assert ledger.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 2
     finally:
         ledger.close()

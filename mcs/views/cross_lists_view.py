@@ -5,7 +5,7 @@ import json
 import math
 import time
 
-from cross_lists import ARTIFACT_KIND, JSON, CapturedList, _options, validate_capture
+from cross_lists import ARTIFACT_KIND, JSON, CapturedList, validate_options, validate_capture
 from mcs_contract import SchemaError, valid_id as _valid_id
 
 
@@ -28,7 +28,7 @@ def _payload(content: str) -> CapturedList:
                 "session_expired", "http_error", "network_error", "deadline_exceeded",
                 "scope_mismatch", "response_too_large", "url_not_allowed"}):
         raise SchemaError("cross list view: contract invalid")
-    _options(payload["dataset"], payload["unread_only"])
+    validate_options(payload["dataset"], payload["unread_only"])
     payload["rows"] = validate_capture(payload.get("rows"))
     if (payload["complete"] and (payload["reason"] is not None
                                 or payload["pages"] < 1 or payload["http_status"] is not None)
@@ -48,7 +48,7 @@ def get_cross_list(db, dataset: str, *, enabled: bool = False,
     aged complete response. Freshness never proves real-API unread preservation,
     recipient identity, response, or request completion.
     """
-    _options(dataset, unread_only)
+    validate_options(dataset, unread_only)
     try:
         invalid = (type(enabled) is not bool or type(max_age_s) not in (int, float)
             or not math.isfinite(max_age_s) or max_age_s < 0

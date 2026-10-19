@@ -13,6 +13,7 @@ from datetime import datetime
 import pytest
 
 import notify_cards
+import notify_scope
 import notify_actions
 import notify_cmds
 import notify_transport
@@ -273,7 +274,7 @@ def delivered_source(led, *, card_id=1, mids=(100, 101), cfg=CFG):
     source = _intent(led, pid=pid, payload={"message_ids": list(mids)})
     _dispatch(led, source, cfg)
     render = _latest_render(led, card_id)
-    scope = notify_cards.delivery_scope(cfg)
+    scope = notify_scope.delivery_scope(cfg)
     version = 2 if scope.get("transport") == "slack" else 1
     root = "1790000000.000001" if version == 2 else "original-root"
     thread = root if version == 2 else "original-thread"

@@ -37,6 +37,7 @@ generation (INV-10), Open Loop candidates never mutate formal requests
 publishing them (INV-15/21).
 """
 import argparse
+from contextlib import closing
 import json
 import os
 import sys
@@ -51,7 +52,8 @@ import semantic_drain
 import semantic_policy
 import semantic_store
 from ledger import Ledger, LedgerReader
-from mcs_util import HOME, acquire_run_lock, load_config, loads_dict
+from mcs_util import HOME, load_config, loads_dict
+from writer_lock import acquire_run_lock
 import semantic_runtime as runtime
 
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -188,9 +190,9 @@ def main() -> int:
             print(json.dumps({"ok": False,
                               "error": type(e).__name__}))
             return 1
-        print(json.dumps(status_report(reader, load_config(CONF_PATH)),
-                         ensure_ascii=False))
-        reader.close()
+        with closing(reader):
+            print(json.dumps(status_report(reader, load_config(CONF_PATH)),
+                             ensure_ascii=False))
         return 0
     lock_fd = acquire_run_lock()
     if lock_fd is None:
@@ -215,8 +217,10 @@ def main() -> int:
         print(json.dumps(out, ensure_ascii=False))
         return 0 if not result["errors"] else 1
     finally:
-        ledger.close()
-        os.close(lock_fd)
+        try:
+            ledger.close()
+        finally:
+            os.close(lock_fd)
 
 
 if __name__ == "__main__":

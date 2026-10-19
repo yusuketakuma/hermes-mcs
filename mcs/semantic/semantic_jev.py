@@ -90,7 +90,8 @@ def _decode_response(raw: bytes, *, retryable: bool = False):
         raise JevError("protocol_error", "not_json", retryable=retryable) from None
 
 
-def _finite(value) -> float | None:
+def finite_value(value) -> float | None:
+    """Read a finite wire number without accepting bool or numeric strings."""
     if type(value) is bool or not isinstance(value, int | float):
         return None
     try:
@@ -137,7 +138,7 @@ def _validate_answer(qid: str, q: dict, a) -> dict:
     if a.get("type") != qtype:
         raise JevError("protocol_error", f"{qid}:type_invalid")
     if qtype == "noul":
-        noul = _finite(a.get("noul"))
+        noul = finite_value(a.get("noul"))
         if noul is None or not 0.0 <= noul <= 1.0:
             raise JevError("protocol_error", f"{qid}:noul_invalid")
         return {"type": "noul", "noul": noul}
@@ -146,7 +147,7 @@ def _validate_answer(qid: str, q: dict, a) -> dict:
         choice = a.get("choice")
         if not isinstance(choice, str) or choice not in options:
             raise JevError("protocol_error", f"{qid}:choice_invalid")
-        conf = _finite(a.get("confidence"))
+        conf = finite_value(a.get("confidence"))
         if conf is None or not 0.0 <= conf <= 1.0:
             raise JevError("protocol_error", f"{qid}:confidence_invalid")
         dist = a.get("probabilities")
@@ -156,7 +157,7 @@ def _validate_answer(qid: str, q: dict, a) -> dict:
         # not tell a Jev defect from a too-strict check); same rules
         probs = {}
         for k, v in dist.items():
-            p = _finite(v)
+            p = finite_value(v)
             if k not in options:
                 reason = "probabilities_option_unknown"
             elif p is None or not 0.0 <= p <= 1.0:
@@ -302,7 +303,7 @@ class JevClient:
         self.attempt_timeout = attempt_timeout
         self.job_budget = job_budget
         self.max_attempts = max_attempts
-        self._post_fn = post_fn or self._post
+        self._post_fn = post_fn or None
         # per-process usage counters — durable rollup lives on the
         # assessment artifacts' meta.usage
         self.requests_made = 0
@@ -314,30 +315,20 @@ class JevClient:
         # reaches it, so claim-audit/detail/loop calls cannot overshoot
         # the daily cap mid-job (§13.5)
         self.request_cap: int | None = None
-        # semantic_runtime binds these hooks for durable per-attempt guards
-        # and usage reservations.  They are deliberately optional so the
-        # adapter remains usable by its isolated contract tests.
-        self._mcs_jev_hookable = True
-        self.before_attempt = None
-        self.after_result = None
-        self.reserve_fn = None
         self.last_error: JevError | None = None
-        # Set only for the duration of an evaluate() transport call.  The
-        # injectable post_fn path remains unchanged; the default transport
-        # uses this to combine the attempt timeout with the job deadline.
-        self._active_deadline: float | None = None
 
-    def _post(self, body: dict, timeout: float):
-        return self._http_request("POST", body, timeout)
+    # Per-call protocol: execution hooks never live as mutable client attributes.
+    @property
+    def supports_attempt_hooks(self):
+        return True
 
-    def _http_request(self, method: str, body, timeout: float,
-                      endpoint: str | None = None):
+    def request(self, method: str, body, timeout: float,
+                endpoint: str | None = None, *, deadline: float | None = None):
         return bounded_http.bounded_http_request(
             endpoint or self.endpoint, method, body, timeout,
             api_key=self.api_key if isinstance(self.api_key, str) else "",
-            deadline=self._active_deadline,
-            allowed_endpoints=(JEV_ALLOWED_ENDPOINTS
-                               | {JEV_ENDPOINT, JEV_MODELS_URL}))
+            deadline=deadline,
+            allowed_endpoints=(JEV_ALLOWED_ENDPOINTS | {JEV_ENDPOINT, JEV_MODELS_URL}))
 
     def _retry_after(self, headers: dict) -> float | None:
         try:
@@ -353,7 +344,8 @@ class JevClient:
             return None
 
     def evaluate(self, state: dict, questions: dict,
-                 deadline: float) -> dict:
+                 deadline: float, *, before_attempt=None, after_result=None,
+                 reserve_fn=None, transport=None) -> dict:
         """One bounded evaluation. Raises JevError; returns
         validate_answers() output on success."""
         self.last_error = None
@@ -375,18 +367,19 @@ class JevClient:
             if remaining <= 0:
                 break
             timeout = min(self.attempt_timeout, remaining)
-            if self.before_attempt is not None:
-                self.before_attempt()
-            if self.reserve_fn is not None:
-                self.reserve_fn(body, timeout)
+            if before_attempt is not None:
+                before_attempt()
+            if reserve_fn is not None:
+                reserve_fn(body, timeout)
             self.requests_made += 1
-            previous_deadline = self._active_deadline
-            self._active_deadline = deadline
             try:
-                try:
+                if self._post_fn is not None:
+                    # Original isolated post_fn contract is still body+timeout.
                     status, headers, raw = self._post_fn(body, timeout)
-                finally:
-                    self._active_deadline = previous_deadline
+                elif transport is None:
+                    status, headers, raw = self.request("POST", body, timeout, deadline=deadline)
+                else:
+                    status, headers, raw = transport(self.request, "POST", body, timeout, deadline=deadline)
             except OSError as e:     # URLError and TimeoutError included
                 kind = "timeout" if isinstance(e, TimeoutError) else "transport"
                 last = JevError(kind, type(e).__name__,
@@ -441,8 +434,8 @@ class JevClient:
                         for key in ("input_tokens", "output_tokens"):
                             self.usage_totals[key] += result["usage"][key]
                         self.usage_totals["reported_requests"] += 1
-                        if self.after_result is not None:
-                            self.after_result()
+                        if after_result is not None:
+                            after_result()
                         self.last_error = None
                         return result
             if last is not None and not last.retryable:
@@ -469,7 +462,7 @@ class JevClient:
         explicitly approved synthetic-input smoke call and the response's
         model field instead of auto-switching to latest (AT-064)."""
         try:
-            status, _headers, raw = self._http_request(
+            status, _headers, raw = self.request(
                 "GET", None, timeout, endpoint=JEV_MODELS_URL)
         except OSError as e:     # URLError and TimeoutError included
             # surface transport failure as JevError like evaluate() does —

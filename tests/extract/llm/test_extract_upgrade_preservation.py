@@ -271,7 +271,7 @@ def test_prior_is_read_after_the_write_lock_including_a_concurrent_correction(tm
         db.close()
 
 
-@pytest.mark.parametrize("module_name", ["extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "mcs_queries", "semantic_assembly", "semantic_facts"])
+@pytest.mark.parametrize("module_name", ["extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "mcs_queries", "semantic_assembly", "semantic_facts", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "clinical_values", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_nightly_plan", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_quantities", "clinical_chunking"])
 def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(tmp_path, monkeypatch, module_name):
     import semantic_candidate
     db, aid, row = seed(tmp_path)
@@ -309,10 +309,33 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     ("mcs_queries", "karte_summary_current"),
     ("mcs_queries", "karte_summary_block"),
     ("mcs_queries", "iter_artifacts"),
+    ("semantic_quantities", "normalized_quantity_number"),
+    ("semantic_quantities", "claim_quantity_findings"),
+    ("semantic_quantities", "_AMOUNT_RE"),
+    ("clinical_chunking", "plan_chunks"),
+    ("clinical_chunking", "_OUTPUT_BUDGET"),
+    ("semantic_assessment", "_cached_detail"),
+    ("semantic_loops", "rejected_relation_pair"),
+    ("semantic_jev", "finite_value"),
+    ("semantic_transport", "LONG_MIN_CALL_S"),
+    ("patient_nightly_plan", "select_facts"),
+    ("patient_nightly_plan", "scan_items"),
+    ("patient_nightly_plan", "summary_selection"),
+    ("mcs_queries", "source_patient_context"),
+    ("mcs_queries", "extraction_kind_map"),
+    ("mcs_queries", "_kind_state"),
+    ("mcs_queries", "_canonical_shape"),
     ("semantic_assembly", "assemble_document"),
     ("semantic_assembly", "normalise_facts_v2"),
     ("semantic_assembly", "MANIFEST_VERSION"),
     ("semantic_facts", "text_sha256"),
+    ("llm_availability", "circuit_failure"),
+    ("llm_availability", "llm_health"),
+    ("self_identity", "latest_self_profile"),
+    ("self_identity", "self_sets"),
+    ("safe_io", "publish_tmp"),
+    ("safe_io", "atomic_publish_text"),
+    ("mcs_queries", "register_search_fold"),
 ])
 def test_moved_definition_changes_new_candidate_identity(monkeypatch, module_name, member):
     import importlib
@@ -325,6 +348,14 @@ def test_moved_definition_changes_new_candidate_identity(monkeypatch, module_nam
         monkeypatch.setattr(module, member, {**module.SCHEMA, "synthetic_marker": True})
     elif member == "MANIFEST_VERSION":
         monkeypatch.setattr(module, member, "synthetic-manifest-version")
+    elif member == "_AMOUNT_RE":
+        import re
+        old = module._AMOUNT_RE
+        monkeypatch.setattr(module, member, re.compile(old.pattern + "(?:)", old.flags))
+    elif member == "_OUTPUT_BUDGET":
+        monkeypatch.setattr(module, member, module._OUTPUT_BUDGET + 1)
+    elif member == "LONG_MIN_CALL_S":
+        monkeypatch.setattr(module, member, module.LONG_MIN_CALL_S + 1)
     elif member == "PHARMACY_STATE_KEYS":
         monkeypatch.setattr(module, member, module.PHARMACY_STATE_KEYS | {"synthetic_marker"})
     else:

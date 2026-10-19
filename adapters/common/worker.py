@@ -10,7 +10,7 @@ classified honestly on the next start — pre-HTTP grants settle as
 silences stay ``unknown`` for an operator to resolve, and an in-flight
 send is never retried by a new worker. (Inside one ``_perform`` call
 discord.py would re-POST on 5xx/ECONNRESET, so every Discord create POST
-runs under ``cards.single_post``, which stops a second POST unless the
+runs under ``discord.delivery.single_post``, which stops a second POST unless the
 previous answer was a 429 — verified for discord.py 2.7.1 only, other
 versions fail closed as ``retry_policy_unknown``; edits and deletes are
 not guarded. Slack strips its retry handlers. See hermes_plugin/README.md.)

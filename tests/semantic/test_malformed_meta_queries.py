@@ -9,7 +9,7 @@ import semantic
 import semantic_drain
 import semantic_v4 as v4
 from semantic_policy import semantic_config
-from semantic_store import invalidate_projections
+from semantic_v4 import invalidate_projections
 
 MALFORMED = ["{not json", "[1,2]", '"s"', "5", None]
 
@@ -65,7 +65,7 @@ def test_invalidate_projections_skips_malformed_meta(tmp_path, mode):
         bad = [i for kind in ("canonical_projection", v4.KIND_V4)
                for i in _add_malformed(db, kind)]
         before = _metas(db, bad)
-        assert invalidate_projections(db, scfg) == (4 if mode == "off" else 0)
+        assert invalidate_projections(db.db, scfg) == (4 if mode == "off" else 0)
         assert _metas(db, bad) == before
     finally:
         db.close()

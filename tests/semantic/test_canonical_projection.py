@@ -437,7 +437,7 @@ def test_current_fact_pred_resolves_one_generation(tmp_path):
 @pytest.mark.parametrize("change", ["context", "policy", "off", "legacy", "prompt"])
 def test_projection_expiry_releases_legacy_and_invalidates_rollup(tmp_path, monkeypatch, change):
     import semantic_llm
-    from semantic_store import invalidate_projections
+    from semantic_v4 import invalidate_projections
     from semantic_testkit import _cfg
     db = _seeded(tmp_path)
     try:
@@ -453,7 +453,7 @@ def test_projection_expiry_releases_legacy_and_invalidates_rollup(tmp_path, monk
             meta={"hash": source_hash, "fingerprint": bundle["source_fingerprint"],
                   "policy_fingerprint": semantic_policy.policy_fingerprint(scfg)})
         db.artifact_add("patient_rollup", "{}", project_id=1)
-        assert invalidate_projections(db, scfg) == 0
+        assert invalidate_projections(db.db, scfg) == 0
         if change == "context":
             db.db.execute("UPDATE messages SET body_text='別の合成文脈' WHERE message_id=2")
             db.db.commit()
@@ -466,7 +466,7 @@ def test_projection_expiry_releases_legacy_and_invalidates_rollup(tmp_path, monk
         else:
             monkeypatch.setattr(semantic_llm, "_FACT_V2_PROMPT",
                                 semantic_llm._FACT_V2_PROMPT + "\nnew contract")
-        assert invalidate_projections(db, scfg) == 1
+        assert invalidate_projections(db.db, scfg) == 1
         meta = json.loads(db.db.execute(
             "SELECT meta FROM artifacts WHERE artifact_id=?", (projection_id,)).fetchone()[0])
         assert meta["invalidated"] is True and meta["hash"] == source_hash
@@ -832,7 +832,7 @@ def test_run_due_switch_hides_then_revives_only_current_projections(
 @pytest.mark.parametrize("fact_source", ["canonical", "legacy", "shadow"])
 def test_invalidation_reads_model_config_once_per_active_scan(
         tmp_path, monkeypatch, mode, fact_source):
-    from semantic_store import invalidate_projections
+    from semantic_v4 import invalidate_projections
     from semantic_testkit import _canonical_cfg
 
     db = _seeded(tmp_path)
@@ -862,7 +862,7 @@ def test_invalidation_reads_model_config_once_per_active_scan(
 
         monkeypatch.setattr(semantic_transport, 'llm_model', model)
         enabled = mode != "off" and fact_source == "canonical"
-        assert invalidate_projections(db, scfg) == (0 if enabled else 4)
+        assert invalidate_projections(db.db, scfg) == (0 if enabled else 4)
         assert len(reads) == (1 if enabled else 0)
     finally:
         db.close()

@@ -9,7 +9,7 @@ import sqlite3
 from pathlib import Path
 import time
 
-from mcs_util import atomic_write
+from safe_io import atomic_write
 
 VERSION = '2026-10-17.1'
 REASONS = frozenset({'worker_started', 'profile_mismatch', 'owner_unverified',

@@ -7,6 +7,7 @@ import pytest
 from ledger import Ledger, publish_snapshot
 from mcs_view import View
 import mcs_stats
+import stats_contract
 import extract_llm
 from response_observation_view import get_response_observation_list
 from views_testkit import SCHEMA, SNAP_TS, _extract, _message, _msg
@@ -150,7 +151,7 @@ def test_stats_newest_empty_legacy_extraction_suppresses_old_meds(content):
 
 
 def test_stats_explicit_utc_suffix_matches_offset():
-    assert mcs_stats._parse_when("2026-09-01T00:00:00Z") == mcs_stats._parse_when(
+    assert stats_contract.parse_timestamp("2026-09-01T00:00:00Z") == stats_contract.parse_timestamp(
         "2026-09-01T09:00:00+09:00")
 
 

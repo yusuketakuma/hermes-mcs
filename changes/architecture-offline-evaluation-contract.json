@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "比較評価の読取り契約を正本へ統一",
+  "summary": "固定入力の比較評価で使う検証・集計・文脈整形を、それぞれの実装元の公開入口へ揃えました。評価結果や人の確認を必要とする条件は変わりません。",
+  "upgrade": "追加操作は不要です。モデル、文脈予算、評価閾値、保存形式、公開・承認条件は変更しません。",
+  "details": [
+    "別領域のprivate入口への参照を、同じ実体を持つ公開名へ全呼出元とテストを含めて移行する。旧名の転送関数や新しい共通コンテナは作成しない。",
+    "通常の記録採点と、明示的に渡された合成パイプラインの実行補助を説明上で区別する。"
+  ],
+  "refs": [
+    "mcs/semantic/eval/semantic_evaluation.py",
+    "mcs/semantic/eval/semantic_blind.py",
+    "mcs/views/summary_review.py",
+    "mcs/extract/llm/extract_llm.py"
+  ]
+}

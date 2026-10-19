@@ -1,12 +1,12 @@
 """Log-only run-lock timing: transport vs. reacquire seconds and the window
 a lost reacquire had — never persisted, never carrying a job identity."""
+import writer_lock
 import json
 import os
 import time
 
 import pytest
 
-import mcs_util
 import semantic
 import semantic_drain
 import semantic_policy
@@ -19,29 +19,40 @@ KEYS = {"llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_
 
 @pytest.fixture
 def lock_env(tmp_path, monkeypatch):
-    monkeypatch.setattr(mcs_util, "code_stamp", lambda: 1)
-    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: 1)
+    monkeypatch.setattr(writer_lock, "HOME", str(tmp_path))
     (tmp_path / "data").mkdir(exist_ok=True)
     path = str(tmp_path / "run.lock")
-    fd = mcs_util.acquire_run_lock(path)
+    fd = writer_lock.acquire_run_lock(path)
     yield tmp_path, path, fd
     os.close(fd)
 
 
 class _HookableJev(_FakeJev):
-    """Routes evaluate() through _http_request so run_due can unlock it."""
-    _mcs_jev_hookable = True
+    """Routes evaluate() through request so run_due can unlock it."""
+    supports_attempt_hooks = True
 
     def __init__(self):
         super().__init__()
         self.http = 0
 
-    def _http_request(self, *args, **kwargs):
+    def request(self, *args, **kwargs):
         self.http += 1
 
-    def evaluate(self, state, questions, deadline):
-        self._http_request()
-        return super().evaluate(state, questions, deadline)
+    def evaluate(self, state, questions, deadline, *, before_attempt=None,
+                 after_result=None, reserve_fn=None, transport=None):
+        if before_attempt is not None:
+            before_attempt()
+        if reserve_fn is not None:
+            reserve_fn({}, 0.0)
+        if transport is None:
+            self.request()
+        else:
+            transport(self.request)
+        value = super().evaluate(state, questions, deadline)
+        if after_result is not None:
+            after_result()
+        return value
 
 
 def _direct_shadow_stage(db, deadline):
@@ -83,16 +94,15 @@ def test_a_normal_pass_reports_transport_seconds_only_in_its_output(lock_env):
 
 
 def test_a_lost_reacquire_reports_its_window_without_job_identity(lock_env, monkeypatch):
-    """2026-10-10: two losses fell inside one tick's 347 s hold. The lost
-    pass writes nothing, so its output is the only place the window shows."""
+    """A bounded reacquire loss retains wait diagnostics without changing jobs."""
     tmp_path, path, fd = lock_env
-    monkeypatch.setattr(mcs_util, "RUN_LOCK_REACQUIRE_S", 0.3)
-    monkeypatch.setattr(mcs_util, "RUN_LOCK_POLL_S", 0.01)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_REACQUIRE_S", 0.3)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_POLL_S", 0.01)
     db = _seeded(tmp_path)
     other = []
 
     def model(prompt):
-        other.append(mcs_util.acquire_run_lock(path))   # the tick holds it
+        other.append(writer_lock.acquire_run_lock(path))   # the tick holds it
         return _llm(prompt)
 
     try:

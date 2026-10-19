@@ -37,7 +37,8 @@ import patient_context
 from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (JST, karte_summary_current, karte_summary_block, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
-from mcs_util import HOME, acquire_run_lock, loads_dict
+from mcs_util import HOME, loads_dict
+from writer_lock import acquire_run_lock
 from semantic_projection import PROJECTION_VERSION
 from self_identity import normalize_sender_id
 from drug_map import (KIND as REF_KIND, PROGRESS_KIND, candidate_note, current_refs,

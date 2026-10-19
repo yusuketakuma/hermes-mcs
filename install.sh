@@ -388,14 +388,14 @@ import os, plistlib, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/mcs")
 import _mcs_path
-import mcs_setup
+import lifecycle_io
 import service_contract
 import mcs_config
 import mcs_runtime
 import runtime_inspection
 from scheduled_jobs import render_template
 try:
-    cfg = mcs_setup._owner_config(sys.argv[3])
+    cfg = lifecycle_io.read_owner_config(sys.argv[3])
 except ValueError as exc:
     raise SystemExit("復旧設定を読み取れません: " + str(exc)) from None
 if sys.argv[4]:
@@ -407,8 +407,8 @@ problem = mcs_config.recovery_python_problem(desired, sys.argv[1])
 if problem:
     raise SystemExit("復旧用 Python に問題があります: " + problem)
 if "recovery_python" in cfg and os.path.lexists(
-        Path(mcs_setup.AGENTS_DIR, service_contract.RECOVERY_LABEL + ".plist")):
-    with open(Path(mcs_setup.AGENTS_DIR, service_contract.RECOVERY_LABEL + ".plist"), "rb") as stream:
+        Path(sys.argv[6], service_contract.RECOVERY_LABEL + ".plist")):
+    with open(Path(sys.argv[6], service_contract.RECOVERY_LABEL + ".plist"), "rb") as stream:
         deployed = runtime_inspection.recovery_executable(plistlib.load(stream))
     if deployed != desired:
         raise SystemExit("復旧用 Python の設定と稼働設定が一致しません。処理が動いていないことを確認し、mcs setup init --yes、mcs setup services の順に修復してください")
@@ -427,12 +427,12 @@ if problem:
     print("復旧用 Python に問題があります: " + problem, file=sys.stderr)
     sys.exit(1)
 print(desired)
-' "$REPO" "$RECOVERY_TEMPLATE" "$HOME/.mcs/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY"
+' "$REPO" "$RECOVERY_TEMPLATE" "$HOME/.mcs/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY" "$AGENTS_DIR"
 }
 loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; }
 # launchd may still be tearing down a just-booted-out job ("5: Input/
 # output error") — retry briefly; success is the label being loaded, not
-# a zero exit (same semantics as mcs_util.launchd_bootstrap).
+# a zero exit (same semantics as service_management.launchd_bootstrap).
 bootstrap_agent() {  # <label> <plist>
     _n=0
     while [ "$_n" -lt 3 ]; do
@@ -1006,16 +1006,18 @@ import json, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
 import _mcs_path
-import mcs_setup
-from mcs_util import CONF_PATH, atomic_write
+import lifecycle_io
+import runtime_inspection
+from mcs_util import CONF_PATH, REPO
+from safe_io import atomic_write
 try:
-    cfg = mcs_setup._owner_config(CONF_PATH)
+    cfg = lifecycle_io.read_owner_config(CONF_PATH)
 except ValueError as exc:
     raise SystemExit(f"config.json を読み取れません（{exc}）。接続方法を選ぶ前に修復してください") from None
 cfg["runtime_mode"] = sys.argv[2]
 if sys.argv[3]:
     cfg["recovery_python"] = sys.argv[3]
-why = mcs_setup._init_recovery_problem(cfg, sys.argv[1])
+why = runtime_inspection.configured_recovery_problem(cfg, sys.argv[1], checkout=REPO)
 if why:
     raise SystemExit("復旧用 Python の設定に問題があります: " + why + "。設定は保存していません")
 atomic_write(CONF_PATH, lambda handle: json.dump(cfg, handle, ensure_ascii=False, indent=2), 0o600)

@@ -9,8 +9,9 @@ import json
 import pytest
 
 import notify_flush
+import notify_sender
 import notify_urgent
-from mcs_signals import record_station_staff
+from self_identity import record_station_staff
 from notify_testkit import (
     CFG, NOW, _begin, _dispatch, _extract, _latest_render, _msg, _part_receipt,
     _patient, _receipt, _settle_bodies, led,
@@ -29,7 +30,7 @@ def world(led, monkeypatch):
         "mode": "on", "source": "llm", "room_cooldown_min": 1}}
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     calls = []
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda *args, **kwargs: calls.append((args, kwargs)))
     _patient(led)
     _msg(led, 100, ts=int(NOW - 7200), body="本人が急変し至急確認が必要です。PRIVATE-BODY-CANARY")

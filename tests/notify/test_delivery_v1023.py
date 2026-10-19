@@ -7,6 +7,7 @@ import json
 import pytest
 
 import notify_cards as cards
+import notify_scope
 import notify_render
 from adapters.common import spec as spec_module
 from adapters.lineworks.delivery import Sender
@@ -86,7 +87,7 @@ def test_layout_inventory_is_read_only_and_counts_unknown(led):
     _dispatch(led, _intent(led))
     led.db.execute("UPDATE notification_render_parts SET state='unknown' WHERE kind='body_part'")
     before = led.db.total_changes
-    rows = cards.layout_migration_counts(led.db)
+    rows = notify_scope.layout_migration_counts(led.db)
     assert rows[0]["cards"] == rows[0]["unknown_parts"] == 1
     assert led.db.total_changes == before
 

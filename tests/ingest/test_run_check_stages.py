@@ -1,8 +1,12 @@
 """run_check stage contracts — stage_unread / stage_backfill /
 stage_attachments / stage_derive / stage_self_probe, tick E2E, run
 lock, health, session-expired alerting."""
+import writer_lock
 import restore_evidence
 import collection_stages
+import health_policy
+import self_identity
+import safe_io
 import update_launch
 import semantic_drain
 import health_report
@@ -224,14 +228,13 @@ def test_notify_pending_attachments_jump_download_queue(tmp_path,
 def test_run_lock_excludes_second_writer(tmp_path):
     """FIX-R00-01: one flock per run — a second writer must be refused,
     and closing the fd must release it for the next holder."""
-    import mcs_util
     lock = tmp_path / "run.lock"
-    fd = mcs_util.acquire_run_lock(str(lock))
+    fd = writer_lock.acquire_run_lock(str(lock))
     assert fd is not None
-    second = mcs_util.acquire_run_lock(str(lock))
+    second = writer_lock.acquire_run_lock(str(lock))
     assert second is None
     os.close(fd)
-    third = mcs_util.acquire_run_lock(str(lock))
+    third = writer_lock.acquire_run_lock(str(lock))
     assert third is not None
     os.close(third)
 
@@ -239,11 +242,10 @@ def test_run_lock_excludes_second_writer(tmp_path):
 def test_cli_writer_holds_run_lock(tmp_path, monkeypatch):
     """A manual write CLI must refuse to run while a tick holds the lock —
     the shared queue is drained by exactly one writer at a time."""
-    import mcs_util
     lock = tmp_path / "run.lock"
-    held = mcs_util.acquire_run_lock(str(lock))
+    held = writer_lock.acquire_run_lock(str(lock))
     assert held is not None
-    monkeypatch.setattr(mcs_util, "RUN_LOCK", str(lock))
+    monkeypatch.setattr(writer_lock, "RUN_LOCK", str(lock))
     monkeypatch.setattr(extract_llm, "DB", str(tmp_path / "ledger.db"))
     monkeypatch.setattr(sys, "argv", ["extract_llm", "--limit", "1"])
     assert extract_llm.main() == 3
@@ -279,7 +281,7 @@ def test_unread_commit_boundary_preserves_work_before_ack(tmp_path, monkeypatch,
         if stop == "before_commit":
             def fail_seed(*args, **kwargs):
                 raise OSError("synthetic persistence interruption")
-            patch.setattr(db, "_semantic_seed_tx", fail_seed)
+            patch.setattr(db, "semantic_seed_tx", fail_seed)
             run()
         else:
             save = db.save_patient
@@ -1005,7 +1007,7 @@ def test_health_write_binds_run_and_survives_failure(tmp_path, monkeypatch):
     # 'ok', and exactly one incident lands in the durable outbox
     def boom(path, text):
         raise OSError("synthetic full disk")
-    monkeypatch.setattr(run_check.maintenance, "atomic_publish_text", boom)
+    monkeypatch.setattr(safe_io, 'atomic_publish_text', boom)
     run_id = db.begin_run(None, "tick")
     db.finish_run(run_id, "ok", "")
     run_check._write_health(db, result, "ok", run_id=run_id)
@@ -1373,6 +1375,7 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
     import maintenance
     import self_identity
     import notify_cards
+    import notify_spool
     import notify_cmds
 
     class Adapter:
@@ -1416,7 +1419,7 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
     for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
                  "gc", "clear_snapshot_dirty"):
-        monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
+        monkeypatch.setattr((notify_spool if name in {'recover', 'publish_flags', 'ensure_dirs'} else notify_cards), name, lambda *a, **k: None)
     monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
     monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
@@ -1450,7 +1453,7 @@ def test_consent_hold_tick_freezes_all_but_approve(tmp_path, monkeypatch,
     consent-only: no adapter, no ingest, no reconcile — only the
     ops.restore_approve drain runs so the approved loss report cannot
     drift (T13)."""
-    import notify_cards
+    import notify_spool
     import mcs_requests
     import uuid
 
@@ -1469,7 +1472,7 @@ def test_consent_hold_tick_freezes_all_but_approve(tmp_path, monkeypatch,
     monkeypatch.setattr(run_check, "MCSAdapter",
                         lambda *a, **k: pytest.fail(
                             "adapter must not be built during the hold"))
-    notify_cards.mark_restored(str(data), backup_path=str(data / "b.db"),
+    notify_spool.mark_restored(str(data), backup_path=str(data / "b.db"),
                                phase="awaiting_consent")
     cmd = data / "cmd"
     cmd.mkdir()
@@ -1811,6 +1814,7 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
     import maintenance
     import self_identity
     import notify_cards
+    import notify_spool
     import notify_cmds
 
     class Adapter:
@@ -1861,7 +1865,7 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
         monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
     for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
                  "gc", "clear_snapshot_dirty"):
-        monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
+        monkeypatch.setattr((notify_spool if name in {'recover', 'publish_flags', 'ensure_dirs'} else notify_cards), name, lambda *a, **k: None)
     monkeypatch.setattr(notify_cmds, "drain_int_commands",
                         lambda *a, **k: None)
     monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
@@ -1936,6 +1940,7 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
     import maintenance
     import self_identity
     import notify_cards
+    import notify_spool
     import notify_cmds
 
     class Adapter:
@@ -1982,7 +1987,7 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
         monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
     for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
                  "gc", "clear_snapshot_dirty"):
-        monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
+        monkeypatch.setattr((notify_spool if name in {'recover', 'publish_flags', 'ensure_dirs'} else notify_cards), name, lambda *a, **k: None)
     monkeypatch.setattr(notify_cmds, "drain_int_commands",
                         lambda *a, **k: None)
     monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
@@ -2062,10 +2067,11 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
     # the real _finish_run decides the stored status; only its I/O tail is stubbed
     import maintenance
     import notify_cards
+    import notify_spool
     import notify_cmds
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
     for name in ("publish_flags", "clear_snapshot_dirty"):
-        monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
+        monkeypatch.setattr((notify_spool if name in {'publish_flags'} else notify_cards), name, lambda *a, **k: None)
     monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
     assert run_check._main() == 0
@@ -2095,15 +2101,15 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
 
 def test_backup_health_database_failure_remains_machine_readable(monkeypatch):
     import sqlite3
-    import mcs_backup
+    import backup_evidence
     import backup_config
     monkeypatch.setattr(backup_config, "validate_backup_config", lambda setting: [])
-    monkeypatch.setattr(mcs_backup, "load_policy", lambda path: (object(), True))
+    monkeypatch.setattr(backup_evidence, "load_policy", lambda path: (object(), True))
 
     def fail(*args):
         raise sqlite3.DatabaseError("synthetic database failure")
 
-    monkeypatch.setattr(mcs_backup, "status", fail)
+    monkeypatch.setattr(backup_evidence, "status", fail)
     assert health_report.backup_health(
         {"backup": {"enabled": True, "policy": "synthetic-unused"}}, 1000) == {
             "state": "failed", "reasons": ["backup_io_or_policy_failed"]}
@@ -2153,10 +2159,11 @@ def test_tick_waits_for_a_run_lock_released_between_batches(
         nonlocal clock
         clock += seconds
 
-    monkeypatch.setattr(run_check, "acquire_run_lock", acquire_after_retries)
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire_after_retries)
     monkeypatch.setattr(run_check.time, "monotonic", lambda: clock)
     monkeypatch.setattr(run_check.time, "sleep", advance_clock)
-    fd = run_check._wait_run_lock(5)
+    fd = writer_lock.wait_run_lock(run_check.LOCKFILE, wait_s=5, expected_code_stamp=run_check._CODE_STAMP,
+                                    marker_path=os.path.join(run_check.HOME, "data", writer_lock.UPDATE_MARKER_NAME))
     assert fd is not None
     assert fd == fake_fd
     assert attempts == 4
@@ -2171,8 +2178,8 @@ def test_lock_held_exit_waits_only_for_scheduled_runs(
     data = _point_run_check_at(tmp_path, monkeypatch)
     held = run_check.acquire_run_lock(str(data / "run.lock"))
     waited = []
-    monkeypatch.setattr(run_check, "_wait_run_lock",
-                        lambda s: waited.append(s))
+    monkeypatch.setattr(writer_lock, "wait_run_lock",
+                        lambda path, *, wait_s, expected_code_stamp, marker_path: waited.append(wait_s))
     monkeypatch.setattr(sys, "argv", argv)
     try:
         assert run_check.main() == 3
@@ -2225,8 +2232,9 @@ def test_waited_lock_is_given_back_after_an_update(tmp_path, monkeypatch,
         (data / "update_in_progress.marker").write_text("x")
     else:
         monkeypatch.setattr(run_check, "_CODE_STAMP", -1)
-    monkeypatch.setattr(run_check, "LOCK_POLL_S", 0.01)
-    assert run_check._wait_run_lock(0.2) is None
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_POLL_S", 0.01)
+    assert writer_lock.wait_run_lock(run_check.LOCKFILE, wait_s=0.2, expected_code_stamp=run_check._CODE_STAMP,
+                                    marker_path=os.path.join(run_check.HOME, "data", writer_lock.UPDATE_MARKER_NAME)) is None
     fd = run_check.acquire_run_lock(str(data / "run.lock"))
     assert fd is not None      # the lock was released, not leaked
     os.close(fd)
@@ -2286,7 +2294,7 @@ def test_stalled_history_head_escalates_collection(tmp_path, monkeypatch,
     else:
         db.db.execute("UPDATE fetch_jobs SET updated_at=? "
                       "WHERE kind='history_head'",
-                      (time.time() - collection_stages.COVERAGE_STALL_S - 60,))
+                      (time.time() - health_policy.COVERAGE_STALL_S - 60,))
     db.db.commit()
     result = {"errors": [], "backfilled": 0, "incomplete": [], "notify": {}}
     collection_stages.stage_backfill(adapter, db, result, time.monotonic() + 300, 1)
@@ -2405,15 +2413,14 @@ def test_backup_skip_is_recorded(monkeypatch):
 ])
 def test_self_profile_fetch_gate(tmp_path, monkeypatch, jobs_only,
                                  has_profile, fetched):
-    import mcs_signals
-    import notify_cards
+    import notify_spool
     import notify_cmds
     db = _ledger(tmp_path)
     prof = {"sender_id": 1, "name": "synthetic", "professions": [],
             "organizations": []}
     if has_profile:
         with db.db:
-            mcs_signals.record_self_profile(db.db, prof)
+            self_identity.record_self_profile(db.db, prof)
     calls = []
 
     class Adapter:
@@ -2429,8 +2436,8 @@ def test_self_profile_fetch_gate(tmp_path, monkeypatch, jobs_only,
                  "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
                  "seed_trickle"):
         monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
-    monkeypatch.setattr(notify_cards, "ensure_dirs", lambda *a: None)
-    monkeypatch.setattr(notify_cards, "restore_pending", lambda *a: None)
+    monkeypatch.setattr(notify_spool, "ensure_dirs", lambda *a: None)
+    monkeypatch.setattr(notify_spool, "restore_pending", lambda *a: None)
     monkeypatch.setattr(notify_cmds, "drain_int_commands",
                         lambda *a, **k: None)
     result = {"errors": []}
@@ -2439,7 +2446,7 @@ def test_self_profile_fetch_gate(tmp_path, monkeypatch, jobs_only,
                         time.monotonic() + 300, False, None)
     assert result["errors"] == []
     assert bool(calls) is fetched
-    assert mcs_signals._latest_self_profile(db.db)["name"] == "synthetic"
+    assert self_identity.latest_self_profile(db.db)["name"] == "synthetic"
     db.close()
 
 
@@ -2447,8 +2454,7 @@ def test_station_roster_follows_profile_cadence(tmp_path, monkeypatch):
     """The own-station roster is fetched right after the self profile
     and stored replace-on-change; a failure keeps the stored roster and
     is reported outside errors."""
-    import mcs_signals
-    import notify_cards
+    import notify_spool
     import notify_cmds
     db = _ledger(tmp_path)
     prof = {"sender_id": 1, "name": "synthetic", "professions": [],
@@ -2475,8 +2481,8 @@ def test_station_roster_follows_profile_cadence(tmp_path, monkeypatch):
                  "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
                  "seed_trickle"):
         monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
-    monkeypatch.setattr(notify_cards, "ensure_dirs", lambda *a: None)
-    monkeypatch.setattr(notify_cards, "restore_pending", lambda *a: None)
+    monkeypatch.setattr(notify_spool, "ensure_dirs", lambda *a: None)
+    monkeypatch.setattr(notify_spool, "restore_pending", lambda *a: None)
     monkeypatch.setattr(notify_cmds, "drain_int_commands",
                         lambda *a, **k: None)
     args = SimpleNamespace(jobs_only=True, download_files=False)
@@ -2485,7 +2491,7 @@ def test_station_roster_follows_profile_cadence(tmp_path, monkeypatch):
                         time.monotonic() + 300, False, None)
     assert seen == [prof["stations"]]
     assert result["station_staff"] == "updated" and result["errors"] == []
-    assert mcs_signals.latest_station_staff(db.db) == roster
+    assert self_identity.latest_station_staff(db.db) == roster
     failing = Adapter()
     failing.fail = True
     result = {"errors": []}
@@ -2494,7 +2500,7 @@ def test_station_roster_follows_profile_cadence(tmp_path, monkeypatch):
     # optional roster data: reported, never a health-degrading error
     assert result["errors"] == []
     assert result["station_staff"] == "failed: RuntimeError"
-    assert mcs_signals.latest_station_staff(db.db) == roster
+    assert self_identity.latest_station_staff(db.db) == roster
     db.close()
 
 
@@ -3139,10 +3145,11 @@ def test_health_attention_splits_failures_unstarted_and_unsettled(tmp_path):
 
 def test_card_route_holds_record_reason_for_health(tmp_path, monkeypatch):
     import notify_cards
+    import notify_scope
     db = _ledger(tmp_path)
     monkeypatch.setattr(health_report, 'prev_health', lambda: {})
     monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
-    monkeypatch.setattr(notify_cards, "interactive_enabled", lambda cfg: True)
+    monkeypatch.setattr(notify_scope, "interactive_enabled", lambda cfg: True)
 
     def boom(*_a, **_k):
         raise RuntimeError("synthetic")
@@ -3184,7 +3191,7 @@ def test_card_route_holds_record_reason_for_health(tmp_path, monkeypatch):
 
 
 def test_semantic_run_lock_lost_is_raised_to_end_the_tick(tmp_path, monkeypatch):
-    from mcs_util import RunLockLost
+    from writer_lock import RunLockLost
     _sem_setup(monkeypatch, tmp_path)
     monkeypatch.setattr(semantic_drain, 'run_due', lambda *a, **k: {
         "done": 0, "deferred": 0, "failed": 0, "run_lock_lost": "timeout"})
@@ -3204,7 +3211,7 @@ def test_run_lock_lost_ends_tick_without_later_stages(
     the next begin_run closes the row as crashed."""
     import sqlite3
     from unittest.mock import Mock
-    from mcs_util import RunLockLost
+    from writer_lock import RunLockLost
 
     data = _point_run_check_at(tmp_path, monkeypatch)
     monkeypatch.setattr(run_check, "_config", lambda: {})

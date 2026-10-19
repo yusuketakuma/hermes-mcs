@@ -5,28 +5,22 @@ import sqlite3
 import pytest
 
 import extract_llm
-from ledger import Ledger
 import semantic_assessment as assessment
 import semantic_extraction as extraction
 
 
 @pytest.fixture
 def ledger():
-    class StreamingLedger(Ledger):
-        def artifacts(self, *args, **kwargs):
-            raise AssertionError("cache histories must be streamed")
-
-    result = object.__new__(StreamingLedger)
-    result.db = sqlite3.connect(":memory:")
-    result.db.row_factory = sqlite3.Row
-    result.db.execute("CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,"
+    result = sqlite3.connect(":memory:")
+    result.row_factory = sqlite3.Row
+    result.execute("CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,"
                       "kind TEXT,project_id INTEGER,message_id INTEGER,content TEXT,meta TEXT)")
     yield result
-    result.db.close()
+    result.close()
 
 
 def add(ledger, kind, content, meta):
-    ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+    ledger.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
                       "VALUES(?,1,1,?,?)", (kind, json.dumps(content), json.dumps(meta)))
 
 
@@ -39,10 +33,10 @@ def test_detail_uses_newest_valid_matching_generation(ledger, project_id):
         add(ledger, assessment.KIND_ASSESS, {"choice": "yes", "confidence": confidence}, meta)
     add(ledger, assessment.KIND_ASSESS, {"choice": "yes", "confidence": 0.7},
         {**meta, "source_fingerprint": "old"})
-    before = ledger.db.total_changes
+    before = ledger.total_changes
     assert assessment._cached_detail(ledger, project_id, 1, "fp", "policy", "fact1", "dim",
                                       {"yes": "SYNTH"}) == {"choice": "yes", "confidence": 0.9}
-    assert ledger.db.total_changes == before
+    assert ledger.total_changes == before
 
 
 @pytest.mark.parametrize("project_id", [1, None])
@@ -56,7 +50,7 @@ def test_fact_chunk_uses_latest_valid_chunk_despite_newer_malformed_row(ledger, 
         add(ledger, extraction.KIND_CHUNK, {"chunk_index": 0, "start_codepoint": 0,
                                           "end_codepoint": 1, "facts": [], "dropped": dropped}, meta)
     add(ledger, extraction.KIND_CHUNK, {}, {**meta, "generation": "old"})
-    assert extraction._cached_chunks(ledger.db, project_id, 1, "fp", "body-hash", "r", specs, "x",
+    assert extraction._cached_chunks(ledger, project_id, 1, "fp", "body-hash", "r", specs, "x",
                                      generation="gen") == {0: {"facts": [], "dropped": 2, "extra": {}}}
 
 
@@ -67,19 +61,15 @@ def test_legacy_chunk_malformed_latest_owner_still_invalidates_old_checkpoint(le
             "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0}
     add(ledger, "extract_llm_chunk", {"summary": "SYNTH"}, meta)
-    assert extract_llm._saved_chunk_state(ledger.db, row)[1] == {0: {"summary": "SYNTH"}}
+    assert extract_llm._saved_chunk_state(ledger, row)[1] == {0: {"summary": "SYNTH"}}
     add(ledger, "extract_llm_chunk", [], meta)
-    assert extract_llm._saved_chunk_state(ledger.db, row)[1] == {}
+    assert extract_llm._saved_chunk_state(ledger, row)[1] == {}
     add(ledger, "extract_llm_chunk", {"summary": "SYNTH-old"}, {**meta, "hash": "old"})
-    assert extract_llm._saved_chunk_state(ledger.db, row)[1] == {}
+    assert extract_llm._saved_chunk_state(ledger, row)[1] == {}
 
 
 def test_legacy_detail_protocol_and_borrowed_chunk_reads_preserve_selection(ledger):
-    class LegacyLedger:
-        def artifacts(self, kind, project_id=None, message_id=None):
-            return list(ledger.iter_artifacts(kind, project_id, message_id))
-
-    legacy = LegacyLedger()
+    legacy = ledger
     assert not hasattr(legacy, "db") and not hasattr(legacy, "iter_artifacts")
     detail_meta = {"schema": assessment.ASSESSMENT_SCHEMA_VERSION, "source_fingerprint": "fp",
                    "policy_fingerprint": "policy", "fact_id": "fact1", "dimension": "dim",
@@ -88,11 +78,16 @@ def test_legacy_detail_protocol_and_borrowed_chunk_reads_preserve_selection(ledg
         add(ledger, assessment.KIND_ASSESS, {"choice": "yes", "confidence": confidence}, detail_meta)
     assert assessment._cached_detail(legacy, 1, 1, "fp", "policy", "fact1", "dim",
                                       {"yes": "SYNTH"}) == {"choice": "yes", "confidence": 0.9}
-    assert extraction._cached_chunks(ledger.db, 1, 1, "fp", "hash", "r", [], "") == {}
+    assert extraction._cached_chunks(ledger, 1, 1, "fp", "hash", "r", [], "") == {}
     row = {"message_id": 1, "project_id": 1, "body_text": "SYNTH", "content_hash": "hash",
            "posted_at": "2026-01-01T00:00:00+09:00"}
     meta = {"hash": "hash", "ver": extract_llm.EXTRACT_VERSION,
             "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0}
     add(ledger, "extract_llm_chunk", {"summary": "SYNTH"}, meta)
-    assert extract_llm._saved_chunk_state(ledger.db, row)[1] == {0: {"summary": "SYNTH"}}
+    assert extract_llm._saved_chunk_state(ledger, row)[1] == {0: {"summary": "SYNTH"}}
+
+
+def test_no_ledger_detail_assessment_keeps_no_cache_mode():
+    assert assessment._cached_detail(None, 1, 1, "fp", "policy", "fact1", "dim",
+                                     {"yes": "SYNTH"}) is None

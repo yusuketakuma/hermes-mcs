@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import ledger as _ledger
 import notify_cards
+import notify_spool
 import notify_cmds
 import pytest
 
@@ -394,8 +395,8 @@ def discord_world(tmp_path, monkeypatch):
     data = tmp_path / "data"
     data.mkdir()
     led = _ledger.Ledger(str(data / "ledger.db"))
-    notify_cards.ensure_dirs(str(data))
-    notify_cards.publish_flags(CFG, str(data))
+    notify_spool.ensure_dirs(str(data))
+    notify_spool.publish_flags(CFG, str(data))
     logs = []
 
     def _seed(mids=(100, 101), pid=1):

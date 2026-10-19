@@ -48,7 +48,7 @@ _DAY_AMOUNT_SCOPE_RE = re.compile(
 )
 
 
-def _number(value: object) -> str | None:
+def normalized_quantity_number(value: object) -> str | None:
     """Return a stable decimal spelling without performing unit conversion."""
     try:
         number = Decimal(str(value))
@@ -81,7 +81,7 @@ def _unit(value: str) -> str:
 
 
 def _amount(value: object, unit: object, *, raw: str | None = None) -> dict | None:
-    number = _number(value)
+    number = normalized_quantity_number(value)
     if number is None or not isinstance(unit, str) or not unit.strip():
         return None
     return {"kind": "amount", "value": number, "unit": _unit(unit),
@@ -90,7 +90,7 @@ def _amount(value: object, unit: object, *, raw: str | None = None) -> dict | No
 
 def _unknown_amount(value: object, unit: object, *,
                     raw: str | None = None) -> dict | None:
-    number = _number(value)
+    number = normalized_quantity_number(value)
     if number is None:
         # Keep malformed sign/thousands forms as an unverified quantity so a
         # suffix such as ``-300mg`` cannot be shortened to a safe ``300mg``.
@@ -107,13 +107,13 @@ def _unknown_amount(value: object, unit: object, *,
 
 def _frequency(count: object, unit: str = "count", *, raw: str | None = None,
                period_days: object | None = None) -> dict | None:
-    number = _number(count)
+    number = normalized_quantity_number(count)
     if number is None:
         return None
     item = {"kind": "frequency", "value": number, "unit": unit,
             **({"raw": raw} if raw is not None else {})}
     if period_days is not None:
-        day_number = _number(period_days)
+        day_number = normalized_quantity_number(period_days)
         if day_number is not None:
             item["period_days"] = day_number
     return item
@@ -377,4 +377,4 @@ def claim_quantity_findings(claim: dict, facts: list) -> list[dict]:
     return findings
 
 
-__all__ = ["claim_quantity_findings", "extract_quantities"]
+__all__ = ["claim_quantity_findings", "extract_quantities", "normalized_quantity_number"]

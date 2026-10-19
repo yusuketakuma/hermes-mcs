@@ -1,4 +1,5 @@
 """Synthetic consent, collision, malformed-evidence and finite-budget regressions."""
+import notify_spool
 import json
 from pathlib import Path
 import sqlite3
@@ -9,6 +10,7 @@ import pytest
 
 import import_drug_master as drug_master
 import mcs_backup as backup
+import backup_evidence
 import mcs_repair as repair
 import mcs_requests as requests
 import mcs_restore as restore
@@ -64,7 +66,7 @@ def test_repeat_resume_preserves_normal_writes_after_adoption(restored):
 def test_drill_publication_never_replaces_a_concurrent_ledger(backup_world, monkeypatch):
     receipt = _create(backup_world)
     target = Path(backup_world[3].scratch_dir) / "drill-race"
-    mark = backup.notify_cards.mark_restored
+    mark = notify_spool.mark_restored
     crossed = []
 
     def marker_then_collision(*args, **kwargs):
@@ -74,13 +76,13 @@ def test_drill_publication_never_replaces_a_concurrent_ledger(backup_world, monk
         crossed.append(True)
         return result
 
-    monkeypatch.setattr(backup.notify_cards, "mark_restored", marker_then_collision)
+    monkeypatch.setattr(notify_spool, "mark_restored", marker_then_collision)
     with pytest.raises(FileExistsError):
         backup.verify(receipt["bundle"], receipt["sha256"], backup_world[3],
                       lambda: KEY, drill_destination=str(target))
     assert crossed == [True]
     assert (target / "ledger.db").read_bytes() == b"synthetic concurrent ledger"
-    assert backup.notify_cards.restore_awaiting_consent(str(target)) is not None
+    assert notify_spool.restore_awaiting_consent(str(target)) is not None
     assert not list(target.glob(".restore-*"))
 
 
@@ -93,14 +95,14 @@ def test_oversized_integer_history_is_a_stable_refusal(backup_world, tmp_path, f
                                  field: 10**1000}))
     state.chmod(0o600)
     before = state.read_bytes()
-    with pytest.raises(backup.BackupError, match="backup_record_invalid"):
-        backup.status(str(records), backup_world[3])
+    with pytest.raises(backup_evidence.BackupError, match="backup_record_invalid"):
+        backup_evidence.status(str(records), backup_world[3])
     assert state.read_bytes() == before
 
 
 def test_oversized_integer_deadline_is_refused_before_policy_access(tmp_path, monkeypatch):
-    monkeypatch.setattr(backup, "load_policy", lambda *a, **kw: pytest.fail("invalid budget read policy"))
-    report = backup.plan(tmp_path / "never-read.json", max_seconds=10**1000)
+    monkeypatch.setattr(backup_evidence, "load_policy", lambda *a, **kw: pytest.fail("invalid budget read policy"))
+    report = backup_evidence.plan(tmp_path / "never-read.json", max_seconds=10**1000)
     assert report["blockers"] == ["backup_inspection_budget_invalid"]
     assert report["exit_code"] == 1 and report["facts"] == {}
     assert not list(tmp_path.iterdir())

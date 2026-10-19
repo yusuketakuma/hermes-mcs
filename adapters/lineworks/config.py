@@ -6,7 +6,7 @@ from pathlib import Path
 
 from mcs_config import validate_notify
 
-from .client import ClientError, Credentials, LineWorksClient, _text
+from .client import ClientError, Credentials, LineWorksClient, valid_protocol_text
 
 
 def settings(root, *, require_interactive=True):
@@ -48,7 +48,7 @@ def load_credentials(root, scope):
         if not isinstance(obj, dict) or obj.get("bot_id") != scope["application_id"]:
             raise ValueError("bot")
         secret = obj.get("bot_secret")
-        if not _text(secret, 4096):
+        if not valid_protocol_text(secret, 4096):
             raise ValueError("secret")
         values = {k: obj[k] for k in ("client_id", "client_secret", "service_account",
                                      "private_key_path", "bot_id")}

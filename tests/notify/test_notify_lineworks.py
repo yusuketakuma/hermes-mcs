@@ -10,10 +10,12 @@ import pytest
 
 import mcs_requests
 import notify_cards as cards
+import notify_spool
 import notify_cmds as cmds
 from adapters.common import envelopes, registry
 from adapters.common.spec import validate as validate_v1
-from notify_render import display_text, lineworks_card_split
+from notify_render import display_text
+from present_lineworks import card_split
 from notify_lineworks_testkit import (
     LINEWORKS, MID, SCOPE, _apply, _claim, _deliver, _render,
 )
@@ -45,7 +47,7 @@ def test_lineworks_render_full_body_and_durable_scope_without_thread_api(led, tm
     assert path.exists() and not list((tmp_path / "data" / "slack_render").iterdir())
     raw = path.read_bytes()
     path.unlink()
-    assert cards.recover(led, LINEWORKS, {})["republished"] == 1
+    assert notify_spool.recover(led, LINEWORKS, {})["republished"] == 1
     assert path.read_bytes() == raw
     flags = json.loads((tmp_path / "data" / "flags" / "notify.json").read_text())
     assert flags["transport"] == "lineworks" and flags["interactive"]
@@ -66,7 +68,7 @@ def test_lineworks_visible_text_overflow_is_lossless_durable_content(led, monkey
         [p for p in spec["parts"]["manifest"] if p["kind"] == "body_part"],
         spec["parts"]["thread_body_parts"], strict=True)
         if p["name"].startswith("display#")]
-    head, rest = lineworks_card_split(text)
+    head, rest = card_split(text)
     # the card breaks at a line end with ↓ 続き; the rest rides as parts
     assert len(text) > 1000 and display and len(head) <= 1000
     assert head.endswith("\n↓ 続き") and "".join(c for _, c in display) == rest
@@ -148,7 +150,7 @@ def test_lineworks_scope_switch_does_not_retarget_old_card_or_grant(led):
 
 def test_lineworks_registry_namespace_and_restore_journals_are_isolated(led, tmp_path):
     _render(led)
-    dirs = cards.notify_dirs(cards.data_root(led))
+    dirs = notify_spool.notify_dirs(notify_spool.data_root(led))
     assert registry.scope_key(SCOPE) != registry.scope_key({**SCOPE, "transport": "slack"})
     assert registry.scope_key(SCOPE) != registry.scope_key({**SCOPE, "team_id": "99999999"})
     journal = tmp_path / "data" / "lineworks_state" / "journal-synthetic.jsonl"

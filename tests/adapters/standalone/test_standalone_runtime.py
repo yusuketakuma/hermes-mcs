@@ -7,6 +7,7 @@ import asyncio
 import errno
 import io
 import json
+import safe_io
 import os
 from types import SimpleNamespace
 
@@ -229,7 +230,7 @@ def test_unrepresentable_restart_timestamp_is_ignored(monkeypatch, tmp_path):
     instance = object.__new__(runtime.Runtime)
     instance.data = tmp_path
     instance.generation = "a" * 32
-    monkeypatch.setattr(runtime.config, "_private_bytes", lambda *_args: (
+    monkeypatch.setattr(runtime.safe_io, "read_private_bytes", lambda *_args: (
         '{"generation":"' + "a" * 32 + '","request_id":"' + "b" * 32
         + '","requested_at":' + str(10 ** 400) + '}').encode())
     assert instance._restart_requested(1) is False
@@ -308,7 +309,7 @@ def test_releasing_a_fifo_whose_reader_already_left_is_not_an_error(tmp_path):
 
 
 def test_nonregular_private_input_is_rejected_without_waiting_for_a_writer(tmp_path):
-    path = tmp_path / "synthetic-private-input"
+    path = tmp_path / ".env"
     os.mkfifo(path, mode=0o600)
     entered = threading.Event()
     finished = threading.Event()
@@ -317,7 +318,7 @@ def test_nonregular_private_input_is_rejected_without_waiting_for_a_writer(tmp_p
     def read():
         entered.set()
         try:
-            config._private_bytes(path, "missing", "invalid")
+            config.tokens(tmp_path, "discord")
         except config.ConfigError as exc:
             errors.append(str(exc))
         finally:
@@ -333,7 +334,7 @@ def test_nonregular_private_input_is_rejected_without_waiting_for_a_writer(tmp_p
             _release_fifo_reader(path)
         worker.join(timeout=1)
         assert not worker.is_alive()
-        assert errors == ["invalid"]
+        assert errors == ["env_file_permissions"]
         assert refused_without_writer
     finally:
         if worker.is_alive():
@@ -342,7 +343,7 @@ def test_nonregular_private_input_is_rejected_without_waiting_for_a_writer(tmp_p
 
 
 def test_private_directory_failure_closes_the_open_descriptor(tmp_path, monkeypatch):
-    path = tmp_path / "synthetic-status.json"
+    path = tmp_path / ".env"
     path.mkdir()
     opened = []
     real_open = os.open
@@ -352,11 +353,11 @@ def test_private_directory_failure_closes_the_open_descriptor(tmp_path, monkeypa
         opened.append(fd)
         return fd
 
-    monkeypatch.setattr(config.os, "open", record_open)
+    monkeypatch.setattr(safe_io.os, "open", record_open)
     try:
         for _ in range(3):
-            with pytest.raises(config.ConfigError, match="^invalid$"):
-                config._private_bytes(path, "missing", "invalid")
+            with pytest.raises(config.ConfigError, match="^env_file_permissions$"):
+                config.tokens(tmp_path, "discord")
         assert len(opened) == 3
         for fd in opened:
             with pytest.raises(OSError) as error:

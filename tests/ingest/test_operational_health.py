@@ -8,6 +8,7 @@ import pytest
 
 import health_watch
 import notify_cards
+import notify_scope
 import operational_status
 import run_check
 from ingest_testkit import _ledger
@@ -86,7 +87,7 @@ def test_optional_failure_keeps_original_counts_verdict_and_connection(stored, m
     if failure == "raise":
         def fail(*args, **kwargs):
             raise ValueError("synthetic-private-error")
-        monkeypatch.setattr(notify_cards, "pending_breakdown", fail)
+        monkeypatch.setattr(notify_scope, "pending_breakdown", fail)
     elif failure == "deadline":
         monkeypatch.setattr(health_report, 'HEALTH_OBSERVATION_S', 0)
     elif failure == "items":

@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "収集CLI中断時のロック解放を確実化",
+  "summary": "初期取込の準備失敗や中断、一覧取込のDB終了処理の失敗でも、所有するロックを解放するようにしました。取込済みデータ、取得順序、認証や制限時間の条件は変わりません。",
+  "upgrade": "設定変更は不要です。失敗後も従来の再開手順を使います。",
+  "refs": [
+    "mcs/ingest/init_data.py",
+    "mcs/ingest/cross_lists.py"
+  ],
+  "details": [
+    "初期取込はExitStackで取得直後から資源を管理し、一覧取込はDB終了処理が例外になってもfinallyで所有ロックを閉じる。"
+  ]
+}

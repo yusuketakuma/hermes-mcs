@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 import _mcs_path  # noqa: F401
 
 import notify_cards
+import notify_spool
 import notify_cmds
 import pytest
 from notify_testkit import (CFG, CLICKER, ORIGIN, _delivered_card, _token_for, led,
@@ -29,7 +30,7 @@ def _notification(n):
 
 
 def _write(root, reqs):
-    notify_cards.ensure_dirs(str(root))
+    notify_spool.ensure_dirs(str(root))
     for i, req in enumerate(reqs):
         (root / "cmd_int" / f"{i}.json").write_text(json.dumps(req))
 
@@ -93,8 +94,8 @@ def test_an_applied_click_still_refreshes_cards_when_its_file_stays(
     else:
         def no_publish(directory, name, payload):
             raise PermissionError("synthetic publish failure")
-        real_publish = notify_cards.publish_file
-        monkeypatch.setattr(notify_cards, "publish_file",
+        real_publish = notify_spool.publish_file
+        monkeypatch.setattr(notify_spool, "publish_file",
                             lambda d, n, p: no_publish(d, n, p) if "cmd_results" in str(d)
                             else real_publish(d, n, p))
     applied = "SELECT count(*) FROM command_receipts WHERE outcome='applied'"

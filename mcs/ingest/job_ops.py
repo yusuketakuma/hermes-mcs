@@ -31,6 +31,7 @@ from mcs_adapter import thread_page_budget
 from ledger import TERMINAL_BODY_STATES
 from mcs_util import HOME, loads_dict
 import mcs_requests
+from mcs_requests import QUEUED_REQUEST_RE
 
 CMD_DIR = os.path.join(HOME, "data", "cmd")
 CMD_TORN_S = 3600
@@ -107,8 +108,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
     left in place for the next drain, never consumed."""
     consent_only = False
     try:
-        import notify_cards
-        consent_only = notify_cards.restore_awaiting_consent(
+        import notify_spool
+        consent_only = notify_spool.restore_awaiting_consent(
             os.path.dirname(cmd_dir)) is not None
     except Exception:
         # Preserve queued writes when the restore guard cannot be read.
@@ -120,7 +121,7 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             if not locked:
                 return
             # Legacy queued input predates numbered requests; keep each group's lexical order.
-            names = sorted(os.listdir(cmd_dir), key=lambda name: (bool(mcs_requests._QUEUED.match(name)), name))
+            names = sorted(os.listdir(cmd_dir), key=lambda name: (bool(QUEUED_REQUEST_RE.match(name)), name))
     except OSError:
         return
     for name in names:

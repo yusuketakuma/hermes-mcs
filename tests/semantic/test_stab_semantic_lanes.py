@@ -5,13 +5,13 @@ output defers are capped per generation, and an unsaved long-output mark
 is logged and counted instead of silently dropped.
 
 Synthetic fixtures, temp DB and stubbed model/Jev clients only."""
+import llm_availability
 import semantic_transport
 import json
 import time
 
 import pytest
 
-import mcs_util
 import semantic_drain
 import semantic_runtime as runtime
 from semantic_testkit import _FakeJev, _cfg, _ledger, _patient, _seeded
@@ -40,9 +40,9 @@ def test_refused_semantic_call_feeds_breaker_once(tmp_path):
             raise runtime.LLMNotSent("llm_unreachable")
         out = _run(db, refused)
         assert out["deferred"] == 1 and out["llm_down"] is True
-        state = json.loads(mcs_util.circuit_state_path(db).read_text())
+        state = json.loads(llm_availability.circuit_state_path(db.db).read_text())
         assert state["failures"] == 1
-        assert mcs_util.llm_down_since(db) is not None
+        assert llm_availability.llm_down_since(db.db) is not None
         row = db.db.execute("SELECT attempts FROM fetch_jobs "
                             "WHERE kind='semantic'").fetchone()
         assert row["attempts"] == 0
@@ -57,8 +57,8 @@ def test_admission_hold_is_not_an_outage(tmp_path):
             raise runtime.LLMNotSent("llm_admission:class_full")
         out = _run(db, held)
         assert "llm_down" not in out
-        assert not mcs_util.circuit_state_path(db).exists()
-        assert mcs_util.llm_down_since(db) is None
+        assert not llm_availability.circuit_state_path(db.db).exists()
+        assert llm_availability.llm_down_since(db.db) is None
     finally:
         db.close()
 
@@ -66,11 +66,11 @@ def test_admission_hold_is_not_an_outage(tmp_path):
 def test_answered_semantic_call_clears_outage(tmp_path):
     db = _seeded(tmp_path)
     try:
-        mcs_util.circuit_failure(db)
+        llm_availability.circuit_failure(db.db)
         _run(db, lambda *_a, **_k: "{}")
-        assert not mcs_util.circuit_state_path(db).exists()
-        assert mcs_util.llm_down_since(db) is None
-        assert mcs_util.llm_last_success(db) is not None
+        assert not llm_availability.circuit_state_path(db.db).exists()
+        assert llm_availability.llm_down_since(db.db) is None
+        assert llm_availability.llm_last_success(db.db) is not None
     finally:
         db.close()
 

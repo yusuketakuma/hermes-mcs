@@ -3,6 +3,7 @@ breaker and the health marker without charging attempts, and a server
 that answers /v1/models but times out every call stops charging
 attempts once the breaker has tripped. Synthetic fixtures, temp DB and
 transport stubs only — no LLM is contacted."""
+import llm_availability
 import json
 import time
 
@@ -10,7 +11,6 @@ import pytest
 
 import extract_llm
 import local_llm
-import mcs_util
 from extract_testkit import _ledger, _message
 
 
@@ -66,8 +66,8 @@ def test_sent_timeout_at_deadline_charges_attempts_without_outage(
         rows = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm'").fetchall()
         assert len(rows) == expected
         assert all(json.loads(row["meta"])["attempts"] == 1 for row in rows)
-        assert not mcs_util.circuit_state_path(db).exists()
-        assert mcs_util.llm_down_since(db) is None
+        assert not llm_availability.circuit_state_path(db.db).exists()
+        assert llm_availability.llm_down_since(db.db) is None
     finally:
         db.close()
 
@@ -79,15 +79,15 @@ def test_refused_or_loading_endpoint_feeds_breaker_without_attempts(
     try:
         db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
         calls = _transport(monkeypatch, kind, status)
-        for _ in range(mcs_util._CIRCUIT_TRIP):
+        for _ in range(llm_availability._CIRCUIT_TRIP):
             res = extract_llm.run_pending(db, limit=10, budget_s=900)
             assert res["done"] == 0 and res["deferred"] >= 1
         assert calls
         assert _attempt_rows(db) == 0                 # nothing charged
-        assert mcs_util.circuit_open_s(db) > 0        # breaker tripped
-        health = mcs_util.llm_health(db)
+        assert llm_availability.circuit_open_s(db.db) > 0        # breaker tripped
+        health = llm_availability.llm_health(db.db)
         assert health["down_since"] is not None
-        assert mcs_util.llm_down_for_s(db) >= 0
+        assert llm_availability.llm_down_for_s(db.db) >= 0
         calls.clear()
         res = extract_llm.run_pending(db, limit=10, budget_s=900)
         assert calls == [] and res["circuit_open_s"]  # lane closed
@@ -101,7 +101,7 @@ def test_breaker_counts_once_per_run(tmp_path, monkeypatch):
         db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in range(1, 6)])
         _transport(monkeypatch, "unreachable")
         extract_llm.run_pending(db, limit=10, budget_s=900)
-        state = json.loads(mcs_util.circuit_state_path(db).read_text())
+        state = json.loads(llm_availability.circuit_state_path(db.db).read_text())
         assert state["failures"] == 1
     finally:
         db.close()
@@ -126,25 +126,25 @@ def test_slow_endpoint_stops_charging_attempts_after_trip(tmp_path, monkeypatch)
             with db.db:
                 db.db.execute(
                     "UPDATE artifacts SET meta=json_set(meta,'$.next_try',0)")
-            mcs_util.circuit_state_path(db).write_text(json.dumps({
-                **json.loads(mcs_util.circuit_state_path(db).read_text()),
+            llm_availability.circuit_state_path(db.db).write_text(json.dumps({
+                **json.loads(llm_availability.circuit_state_path(db.db).read_text()),
                 "open_until": 0}))
 
         extract_llm.run_pending(db, limit=10, budget_s=900)
         assert attempts() == 1
-        for _ in range(mcs_util._CIRCUIT_TRIP - 1):
+        for _ in range(llm_availability._CIRCUIT_TRIP - 1):
             due_now()
             res = extract_llm.run_pending(db, limit=10, budget_s=900)
         # the run that tripped the breaker already stops charging
-        assert mcs_util.circuit_streak(db) >= 1
+        assert llm_availability.circuit_streak(db.db) >= 1
         assert res["slow_deferred"] == 1
         charged = attempts()
-        assert charged < mcs_util._CIRCUIT_TRIP
+        assert charged < llm_availability._CIRCUIT_TRIP
         for _ in range(4):
             due_now()
             extract_llm.run_pending(db, limit=10, budget_s=900)
         assert attempts() == charged < 5               # never permanent
-        assert mcs_util.llm_down_since(db) is not None
+        assert llm_availability.llm_down_since(db.db) is not None
     finally:
         db.close()
 
@@ -153,14 +153,14 @@ def test_answered_call_resets_breaker_and_marks_success(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     try:
         db.save_messages([_message(mid=1, body="体温38度")])
-        mcs_util.circuit_failure(db)
-        assert mcs_util.llm_down_since(db) is not None
+        llm_availability.circuit_failure(db.db)
+        assert llm_availability.llm_down_since(db.db) is not None
         monkeypatch.setattr(extract_llm, "llm_extract",
                             lambda body, **_: {"summary": "ok"})
         res = extract_llm.run_pending(db, limit=10, budget_s=900)
         assert res["done"] == 1
-        assert not mcs_util.circuit_state_path(db).exists()
-        health = mcs_util.llm_health(db)
+        assert not llm_availability.circuit_state_path(db.db).exists()
+        health = llm_availability.llm_health(db.db)
         assert health["down_since"] is None
         assert health["last_success"] == pytest.approx(time.time(), abs=60)
     finally:
@@ -173,16 +173,16 @@ def test_answered_unparseable_call_clears_outage(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     try:
         db.save_messages([_message(mid=1, body="体温38度")])
-        mcs_util.circuit_failure(db)
-        assert mcs_util.llm_down_since(db) is not None
+        llm_availability.circuit_failure(db.db)
+        assert llm_availability.llm_down_since(db.db) is not None
         monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
         monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: {
             "text": "not-json", "finish_reason": "stop", "usage": None,
             "status": 200})
         res = extract_llm.run_pending(db, limit=1, budget_s=900)
         assert res["failed"] == 1 and res["done"] == 0
-        assert not mcs_util.circuit_state_path(db).exists()
-        health = mcs_util.llm_health(db)
+        assert not llm_availability.circuit_state_path(db.db).exists()
+        health = llm_availability.llm_health(db.db)
         assert health["down_since"] is None
         assert health["last_success"] == pytest.approx(time.time(), abs=60)
     finally:
@@ -203,7 +203,7 @@ def test_answer_after_same_run_outage_clears_marker(tmp_path, monkeypatch):
         monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: next(replies))
         res = extract_llm.run_pending(db, limit=2, budget_s=900, workers=1)
         assert res["deferred"] == 1 and res["failed"] == 1
-        health = mcs_util.llm_health(db)
+        health = llm_availability.llm_health(db.db)
         assert health["down_since"] is None
         assert health["last_success"] == pytest.approx(time.time(), abs=60)
         assert _attempt_rows(db) == 1
@@ -225,7 +225,7 @@ def test_outage_after_same_run_recovery_is_recorded(tmp_path, monkeypatch):
         monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: next(replies))
         res = extract_llm.run_pending(db, limit=3, budget_s=900, workers=1)
         assert res["deferred"] == 2 and res["failed"] == 1
-        assert mcs_util.llm_down_since(db) is not None
+        assert llm_availability.llm_down_since(db.db) is not None
     finally:
         db.close()
 
@@ -236,12 +236,12 @@ def test_unusable_200_body_clears_outage(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     try:
         db.save_messages([_message(mid=1, body="体温38度")])
-        mcs_util.circuit_failure(db)
+        llm_availability.circuit_failure(db.db)
         monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
         _transport(monkeypatch, "protocol")
         res = extract_llm.run_pending(db, limit=1, budget_s=900)
         assert res["failed"] == 1
-        assert mcs_util.llm_down_since(db) is None
+        assert llm_availability.llm_down_since(db.db) is None
     finally:
         db.close()
 
@@ -252,7 +252,7 @@ def test_answer_then_deferral_still_clears_outage(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     try:
         db.save_messages([_message(mid=1, body="体温38度")])
-        mcs_util.circuit_failure(db)
+        llm_availability.circuit_failure(db.db)
 
         def answered_then_deferred(body, **kw):
             extract_llm._CALL_NOTES.transport = "answered"
@@ -260,7 +260,7 @@ def test_answer_then_deferral_still_clears_outage(tmp_path, monkeypatch):
         monkeypatch.setattr(extract_llm, "llm_extract", answered_then_deferred)
         res = extract_llm.run_pending(db, limit=1, budget_s=900)
         assert res["deferred"] == 1 and _attempt_rows(db) == 0
-        assert mcs_util.llm_down_since(db) is None
+        assert llm_availability.llm_down_since(db.db) is None
     finally:
         db.close()
 
@@ -289,7 +289,7 @@ def test_older_answer_does_not_clear_a_newer_outage(tmp_path, monkeypatch):
             return _noted(kind, at, result)(body)
         monkeypatch.setattr(extract_llm, "llm_extract", call)
         extract_llm.run_pending(db, limit=2, budget_s=900, workers=1)
-        assert mcs_util.llm_down_since(db) is not None
+        assert llm_availability.llm_down_since(db.db) is not None
     finally:
         db.close()
 
@@ -300,7 +300,7 @@ def test_answered_batch_then_deferred_residue_clears_outage(tmp_path, monkeypatc
     db = _ledger(tmp_path)
     try:
         db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
-        mcs_util.circuit_failure(db)
+        llm_availability.circuit_failure(db.db)
 
         def batch(tups, *a, **kw):
             extract_llm._CALL_NOTES.transport = "answered"
@@ -311,7 +311,7 @@ def test_answered_batch_then_deferred_residue_clears_outage(tmp_path, monkeypatc
                             _noted(None, None, extract_llm._DEFERRED))
         res = extract_llm.run_pending(db, limit=2, budget_s=900, batch_k=2)
         assert res["deferred"] == 2
-        assert mcs_util.llm_down_since(db) is None
+        assert llm_availability.llm_down_since(db.db) is None
     finally:
         db.close()
 
@@ -326,7 +326,7 @@ def test_failed_repair_keeps_the_outage(tmp_path, monkeypatch):
                             _noted("unavailable", time.monotonic(), {"summary": "ok"}))
         res = extract_llm.run_pending(db, limit=1, budget_s=900)
         assert res["done"] == 1
-        assert mcs_util.llm_down_since(db) is not None
+        assert llm_availability.llm_down_since(db.db) is not None
     finally:
         db.close()
 
@@ -339,12 +339,12 @@ def test_turn_wait_expiry_defers_without_breaker_or_attempts(tmp_path, monkeypat
     try:
         db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
         calls = _transport(monkeypatch, "busy")
-        for _ in range(mcs_util._CIRCUIT_TRIP):
+        for _ in range(llm_availability._CIRCUIT_TRIP):
             res = extract_llm.run_pending(db, limit=10, budget_s=900)
             assert res["done"] == 0 and res["deferred"] >= 1
         assert calls
         assert _attempt_rows(db) == 0
-        assert not mcs_util.circuit_state_path(db).exists()
-        assert mcs_util.llm_down_since(db) is None
+        assert not llm_availability.circuit_state_path(db.db).exists()
+        assert llm_availability.llm_down_since(db.db) is None
     finally:
         db.close()

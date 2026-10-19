@@ -10,7 +10,8 @@ and maintenance in the interactive notification pipeline (plan: .omo/plans/disco
 - notify_actions owns commands/checkpoints, notify_action_tokens owns tokens,
   and notify_action_context owns read-only source pins and task prefill.
 - notify_parts owns sealed part planning/state on the borrowed transaction;
-  notify_scope owns stored patient/scope reads; notify_render owns display.
+  notify_scope owns config/scope and health reads; notify_render owns display.
+- notify_spool owns file publication and restore gates after committed issuance.
 - notify_transport owns delivery grants and factual receipt settlement;
   notify_recovery owns human-confirmed operator recovery.
   Discord HTTP and the DB commit are never one transaction: attempts hold
@@ -35,23 +36,22 @@ Config (config.json):
   }
 """
 from __future__ import annotations
+import notify_scope
+import notify_spool
 
 import hashlib
 import json
 import re
-import math
 import os
 import secrets
 import time
 import uuid
 from contextlib import suppress
 
-import mcs_runtime
 from mcs_contract import project_url
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_requests import canonical, payload_hash, positive
 from mcs_util import loads_dict
-from safe_io import atomic_write
 from notify_render import (
     anchor_keys, card_content, content_fingerprint,
     mmdd, patient_name, preview_header, preview_line, signal_evidence,
@@ -60,8 +60,6 @@ from notify_render import (
 import notify_parts
 import notify_action_context as action_context
 import notify_action_tokens as action_tokens
-from notify_scope import (TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS, scope_fields,
-                          stored_scope, scope_matches, card_row, latest_signals)
 from notify_views import drug_search_available
 
 RENDER_SCHEMA = "mcs-card-render/v1"
@@ -70,7 +68,6 @@ LINEWORKS_RENDER_SCHEMA = "mcs-card-render/v3"
 
 # outbox kinds that become interactive cards when notify.interactive is
 # on; everything else (ops alerts, semantic notices) stays legacy text.
-INTERACTIVE_KINDS = frozenset({"new_messages", "signal", "daily_digest", "urgent_notice"})
 # kinds delivered as one card-less ``op=notice`` render (no card row,
 # manifest, tokens or thread) — see _dispatch_notice
 NOTICE_KINDS = frozenset({"daily_digest"})
@@ -81,8 +78,6 @@ LIVE_RENDER = ("queued", "sending", "unknown", "held")
 RESEAT_S = 3600           # re-examine a dispatched pending intent hourly
 MAX_RESEND = 3            # consecutive not_sent attempts before a card
                           # suspends auto-retry (update_failed)
-RESTORE_MARKER = "restore_pending.json"
-RESTORE_RECEIPT = "restore_reconcile.json"
 
 LINEWORKS_SUMMARY_WAIT_S = 120
 
@@ -97,142 +92,13 @@ MAX_POST_ACTIONS = 5          # spec.MAX_POST_ACTIONS
 CARD_LAYOUT = 3
 
 
-# ---------- config / dirs ----------
+# ---------- borrowed card connection ----------
 
 def connection(ledger):
     """Borrow the caller-owned SQLite connection without opening or closing it."""
     return getattr(ledger, "db", ledger)
 
 
-def data_root(ledger) -> str:
-    """The ledger's own data dir (…/.mcs/data) — derived, never assumed."""
-    main = connection(ledger).execute(
-        "PRAGMA database_list").fetchone()["file"]
-    return os.path.dirname(os.path.abspath(main))
-
-
-def notify_dirs(root: str) -> dict:
-    return {name: os.path.join(root, name) for name in
-            ("discord_render", "discord_state", "slack_render", "slack_state",
-             "lineworks_render", "lineworks_state", "flags",
-             "cmd_int", "cmd_results")}
-
-
-def ensure_dirs(root: str) -> None:
-    for path in notify_dirs(root).values():
-        os.makedirs(path, mode=0o700, exist_ok=True)
-
-
-def notify_cfg(cfg: dict) -> dict:
-    n = (cfg or {}).get("notify")
-    return n if isinstance(n, dict) else {}
-
-
-def interactive_enabled(cfg: dict) -> bool:
-    return notify_cfg(cfg).get("interactive") in SUPPORTED_TRANSPORTS
-
-
-def signals_notify(cfg: dict) -> bool:
-    signals = (cfg or {}).get("signals")
-    return isinstance(signals, dict) and signals.get("notify") is True
-
-
-def active_transport(cfg) -> str:
-    transport = notify_cfg(cfg).get("interactive")
-    return transport if transport in SUPPORTED_TRANSPORTS else "discord"
-
-
-def route_epoch(cfg: dict) -> int:
-    v = notify_cfg(cfg).get("route_epoch", 1)
-    return v if type(v) is int and v > 0 else 1
-
-
-def delivery_scope(cfg: dict) -> dict | None:
-    """The Discord destination the runner addresses — all four fields
-    required; a partial scope is a config error, never a fallback."""
-    transport = active_transport(cfg)
-    d = notify_cfg(cfg).get(transport)
-    if not isinstance(d, dict):
-        return None
-    out = {}
-    for k in scope_fields(transport):
-        v = d.get(k)
-        if not isinstance(v, str) or not v.strip():
-            return None
-        out[k] = v.strip()
-    if transport in ("slack", "lineworks"):
-        if "guild_id" in d:
-            return None
-        out["transport"] = transport
-    return out
-
-
-def restore_pending(root: str) -> dict | None:
-    """A restore marker blocks every send grant until reconcile runs.
-    A corrupt or unreadable marker still blocks — fail closed."""
-    path = os.path.join(root, RESTORE_MARKER)
-    backup_restore = any(os.path.lexists(os.path.join(root, name)) for name in (
-        "restore.json", "backup_restore_approval.json",
-        "backup_restore_resume.json", "backup_restore_blocked.json"))
-    try:
-        with open(path, "rb") as handle:
-            data = json.loads(handle.read().decode("utf-8"))
-    except FileNotFoundError:
-        return {"unreadable": True} if backup_restore or os.path.lexists(path) else None
-    except (OSError, ValueError, RecursionError):
-        return {"unreadable": True}
-    if (backup_restore or isinstance(data, dict)
-            and data.get("by") == "mcs_backup_restore") and (
-            not isinstance(data, dict)
-            or data.get("by") != "mcs_backup_restore"
-            or data.get("phase") != "awaiting_consent"):
-        return {"unreadable": True}
-    if isinstance(data, dict) and (
-            data.get("phase") in ("restored", "awaiting_consent")
-            or ("phase" not in data and "restored_at" in data)):
-        return data
-    return {"unreadable": True}
-
-
-def mark_restored(root: str, backup_path=None, by="manual",
-                  now=None, phase="restored", report_id=None) -> str:
-    """Durable 'a restore happened' witness — written by every restore
-    path so the runner can hold sends until reconcile completes.
-    phase='awaiting_consent' holds sends while a schema-bump rollback
-    waits on its per-restore human approval; nothing was swapped yet,
-    so restored_at stays unset and reconcile must NOT clear it."""
-    marker = {"v": 1, "phase": phase, "backup_path": backup_path,
-              "by": by, "at": now if now is not None else time.time()}
-    if phase == "restored":
-        marker["restored_at"] = marker["at"]
-    if report_id is not None:
-        marker["report_id"] = report_id
-    return publish_file(root, RESTORE_MARKER, canonical(marker))
-
-
-def restore_awaiting_consent(root: str) -> dict | None:
-    """Hold writers for pending consent or an unreadable restore phase."""
-    marker = restore_pending(root)
-    if isinstance(marker, dict) and marker.get("by") == "mcs_backup_restore":
-        from mcs_restore import writers_resumed
-        if writers_resumed(root):
-            # Adoption does not authorize delivery or reconciliation. Keep the
-            # awaiting_consent marker intact for both of those independent gates.
-            return None
-    if isinstance(marker, dict) \
-            and (marker.get("phase") == "awaiting_consent"
-                 or marker.get("unreadable")):
-        return marker
-    return None
-
-
-def clear_restore_pending(root: str) -> None:
-    marker = restore_pending(root)
-    if ((marker or {}).get("by") == "mcs_backup_restore"
-            or os.path.lexists(os.path.join(root, "restore.json"))):
-        raise ValueError("backup_restore_delivery_remains_held")
-    with suppress(FileNotFoundError):
-        os.unlink(os.path.join(root, RESTORE_MARKER))
 def _restore_hold_active(db, *, card_id=None, delivery_id=None) -> bool:
     """An unreleased restore hold on this card/delivery freezes it."""
     if card_id is not None and db.execute(
@@ -289,52 +155,6 @@ def clear_snapshot_dirty(ledger) -> None:
     connection(ledger).commit()
 
 
-def publish_file(directory: str, name: str, raw: bytes) -> str:
-    """mkstemp -> fsync -> os.replace -> dir fsync. Never a partial file."""
-    path = os.path.join(directory, name)
-    atomic_write(path, lambda stream: stream.write(raw), binary=True,
-                 tmp_prefix=".pub-", tmp_suffix="", makedirs=False,
-                 require_dir=False)
-    return path
-
-
-def publish_flags(cfg: dict, root: str) -> bool:
-    """flags/notify.json — the plugin's DB-free view of the effective
-    interactive/kill-switch state. Published only when it changes."""
-    n = notify_cfg(cfg)
-    flags = {
-        "interactive": interactive_enabled(cfg),
-        "kill_switch": not interactive_enabled(cfg),
-        "transport": active_transport(cfg),
-        "route_epoch": route_epoch(cfg),
-        "card_thread": n.get("card_thread") is True,
-        "restore_pending": restore_pending(root) is not None,
-        # the Hermes plugin stands down when MCS runs its own connector
-        "runtime_mode": mcs_runtime.mode(cfg),
-        "at": time.time(),
-    }
-    raw = canonical(flags)
-    path = os.path.join(notify_dirs(root)["flags"], "notify.json")
-    try:
-        with open(path, "rb") as f:
-            old = f.read()
-    except OSError:
-        old = None
-    if old is not None:
-        try:
-            prior = json.loads(old)
-            if isinstance(prior, dict):
-                prior.pop("at", None)
-                cur = dict(flags)
-                cur.pop("at", None)
-                if canonical(prior) == canonical(cur):
-                    return False
-        except (ValueError, RecursionError):
-            pass
-    publish_file(os.path.dirname(path), "notify.json", raw)
-    return True
-
-
 # ---------- cards / renders ----------
 
 def unsettled_attempt(db, card_id: int):
@@ -355,7 +175,7 @@ def _find_signal_card(db, pid, keys, scope):
             (pid,)).fetchall():
         if r["transport"] != scope.get("transport", "discord"):
             continue
-        if r["transport"] in ("slack", "lineworks") and not scope_matches(r, scope):
+        if r["transport"] in ("slack", "lineworks") and not notify_scope.scope_matches(r, scope):
             continue
         if keyset & set(anchor_keys(r)):
             return r["card_id"]
@@ -382,7 +202,7 @@ def _card_for(db, target, scope, now) -> int:
     key = target["card_key"]
     if scope.get("transport") in ("slack", "lineworks"):
         transport = scope["transport"]
-        version = TRANSPORT_VERSIONS[transport]
+        version = notify_scope.TRANSPORT_VERSIONS[transport]
         key = f"v{version}|{transport}|{payload_hash(scope)}|{key.removeprefix('v1|')}"
     row = db.execute("SELECT card_id,project_id,delivery_state "
                      "FROM notification_cards WHERE card_key=?",
@@ -527,13 +347,13 @@ def _render_gates(db, card_id, cfg):
     transport (and for Slack, still matches the configured scope), has
     no unsettled attempt owning send rights, and is not frozen after a
     DB restore."""
-    card = card_row(db, card_id)
+    card = notify_scope.card_row(db, card_id)
     if card is None:
         return None
-    if card["transport"] != active_transport(cfg):
+    if card["transport"] != notify_scope.active_transport(cfg):
         return None
     if card["transport"] in ("slack", "lineworks") \
-            and not scope_matches(card, delivery_scope(cfg) or {}):
+            and not notify_scope.scope_matches(card, notify_scope.delivery_scope(cfg) or {}):
         return None
     if unsettled_attempt(db, card_id):
         return None
@@ -609,7 +429,7 @@ def _render_needed(db, card, latest, gens, cfg, now, force, waiting=frozenset())
     revoked owes Discord a delete (without this, archive-revoke left
     the message up forever), while an already-delivered revoke render
     must not re-issue."""
-    epoch_changed = latest is not None and latest["route_epoch"] != route_epoch(cfg)
+    epoch_changed = latest is not None and latest["route_epoch"] != notify_scope.route_epoch(cfg)
     live = latest is not None and latest["state"] in LIVE_RENDER
     if live and latest["state"] in ("queued", "held") and (gens or epoch_changed):
         # a not-yet-sent render whose content is already stale is
@@ -623,7 +443,7 @@ def _render_needed(db, card, latest, gens, cfg, now, force, waiting=frozenset())
     # route_epoch bump (config changed) or fresh drift re-opens it
     suspended = (card["delivery_state"] == "update_failed"
                  and latest is not None
-                 and latest["route_epoch"] == route_epoch(cfg))
+                 and latest["route_epoch"] == notify_scope.route_epoch(cfg))
     unbound_intent = bool(_ready_intent_ids(db, card, unbound=True, waiting=waiting))
     needed = force or bool(gens) or latest is None \
         or (not suspended and (unbound_intent or epoch_changed
@@ -684,14 +504,14 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
          card["presentation_generation"], 1 if card["kind"] == "digest" else 0,
          json.dumps(content["shown"], ensure_ascii=False), now))
     content = {**content, "manifest_id": cur.lastrowid}
-    scope = (stored_scope(card)
+    scope = (notify_scope.stored_scope(card)
              if card["transport"] in ("slack", "lineworks")
              or (card["message_id"] and card["channel_id"])
-             else (delivery_scope(cfg) or {}))
+             else (notify_scope.delivery_scope(cfg) or {}))
     event_ids = _ready_intent_ids(db, card, waiting=waiting)
     correlation = secrets.token_hex(16)
     spec = {
-        "schema": f"mcs-card-render/v{TRANSPORT_VERSIONS[card['transport']]}",
+        "schema": f"mcs-card-render/v{notify_scope.TRANSPORT_VERSIONS[card['transport']]}",
         "delivery_id": str(uuid.uuid4()),
         "logical_intent_id": card["card_key"],
         "card_key": card["card_key"], "kind": card["kind"], "op": op,
@@ -700,7 +520,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         "presentation_generation": card["presentation_generation"],
         "ui_revision": card["ui_revision"],
         "delivery": {**scope, "intent_event_ids": event_ids,
-                     "route_epoch": route_epoch(cfg),
+                     "route_epoch": notify_scope.route_epoch(cfg),
                      "correlation": correlation},
     }
     # update/revoke target the bound Discord message — self-contained so
@@ -715,7 +535,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     # the body lands as channel-visible replies (T9), not an ephemeral
     # answer only the clicker can see.
     present = presenter(card["transport"])
-    thread_on = (notify_cfg(cfg).get("card_thread") is True
+    thread_on = (notify_scope.notify_cfg(cfg).get("card_thread") is True
                  or present.ALWAYS_THREAD)
     # a logical-grouping "thread" (LINE WORKS) has no failed state, so
     # a failed thread part never stops its body/overflow parts
@@ -749,7 +569,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     }
     if card["kind"] == "signal" and present.SOURCE_THREAD and card["thread_id"]:
         target = signal_thread_target(db, card, cfg)
-        if target is not None and card["thread_id"] == target["thread_id"] and scope_matches(card, target):
+        if target is not None and card["thread_id"] == target["thread_id"] and notify_scope.scope_matches(card, target):
             spec["parts"]["source_thread"] = True
     if any("<@" in (f.get("text") or "") for f in footer):
         # the footer names members as <@id> mentions — a worker must
@@ -870,7 +690,7 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
     card = _render_gates(db, card_id, cfg)
     if card is None:
         return None
-    if card["kind"] in ("signal", "digest") and not signals_notify(cfg):
+    if card["kind"] in ("signal", "digest") and not notify_scope.signals_notify(cfg):
         # begin denies these anyway (signal_notify_off, not final), so a
         # queued render would sit live forever and block re-issue once
         # notify is back on — cancel it so re-enabling issues a fresh
@@ -978,35 +798,6 @@ def _digest_thread_name(now) -> str:
     return f"💬 アラート — {datetime.fromtimestamp(now, JST):%m-%d}"
 
 
-def _cleanup_budget_held(db, delivery_id):
-    return db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND state='held' "
-                      "AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded') "
-                      "LIMIT 1", (delivery_id,)).fetchone() is not None
-
-
-def publish_specs(db, dirs, specs, now) -> list:
-    """Atomic file publication AFTER the render commit. A crash between
-    leaves spec_published=0; recovery republishes identical bytes."""
-    published = []
-    for spec in specs:
-        if _cleanup_budget_held(db, spec["delivery_id"]):
-            continue
-        transport = spec["delivery"].get("transport", "discord")
-        path = publish_file(dirs[transport + "_render"],
-                            spec["delivery_id"] + ".json",
-                            canonical(spec))
-        # per spec: a later publish error must not leave this UPDATE in
-        # an open implicit transaction (callers' next BEGIN would fail)
-        with db:
-            db.execute(
-                "UPDATE notification_renders SET spec_published=1,"
-                "first_published_at=COALESCE(first_published_at,?),"
-                "updated_at=? WHERE delivery_id=?",
-                (now, now, spec["delivery_id"]))
-        published.append(path)
-    return published
-
-
 # A not_sent that is a begin denial (denied_*) or a rate-limit rejection
 # (Slack ratelimited, LINE WORKS rate_limited, HTTP 429) proves the
 # transport is healthy and nothing was written — it never spends the
@@ -1053,7 +844,7 @@ def complete_intent(db, event_id, now) -> str | None:
             (f"cards:{len(rows)}", now, event_id))
         # Cards carry text, while attachments retain the existing file
         # transport. Include files downloaded before card acceptance too.
-        from ledger import enqueue_ready_attachment_followups_tx
+        from attachment_followups import enqueue_ready_attachment_followups_tx
         enqueue_ready_attachment_followups_tx(db, event_id, now)
         return "accepted"
     db.execute(
@@ -1141,139 +932,6 @@ _WAIT_PROGRESS_SET = (
     "'$.wait',json_object('reason',?,'at',?))")
 
 
-RESEAT_REASONS = frozenset({
-    "notice_render_live", "notice_interactive_off", "notice_digest_unset",
-    "notice_superseded", "notice_render_issued", "alert_outcome_pending",
-    "alert_render_live", "alert_render_issued", "signals_off_sealed",
-    "intent_cards_unsettled", "intent_cards_issued"})
-# waits an operator should look at; any reason that outlasts
-# PENDING_ATTENTION_S is treated the same way
-_ATTENTION_REASONS = frozenset({
-    "alert_outcome_pending", "intent_card_delivery_unknown",
-    "card_parts_unknown", "unknown"})
-PENDING_ATTENTION_S = 6 * 3600
-# health's pending-delivery population (one ? = now): a signal digest
-# scheduled ahead and never attempted waits by design and is excluded
-OUTBOX_PENDING_WHERE = (
-    "state IN ('pending','failed') AND next_try IS NOT NULL "
-    # IS keeps the exclusion two-valued: a signal without digest:1 (missing,
-    # null, false, malformed) is counted, never dropped by NOT(NULL)
-    "AND NOT (kind='signal' AND attempts IS 0 AND next_try>? AND CASE WHEN "
-    "json_valid(payload) THEN json_extract(payload,'$.digest') END IS 1)")
-_CODE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
-
-
-def _code(value) -> str | None:
-    return value if (isinstance(value, str) and 0 < len(value) <= 64
-                     and set(value) <= _CODE_CHARS) else None
-
-
-def _pending_reason(progress_raw, updated_at, delivery_unknown: bool,
-                    parts: int = 0) -> str:
-    """Why one pending row waits. Current card state first: an intent card
-    whose delivery is unknown, or a delivered render with an unknown part
-    (``parts`` 2; 1 = parts still in flight, see _parts_in_flight). Then a
-    structured hold (a thread hold is cleared once its thread is bound),
-    then pending parts, then the row's last recorded wait.
-    A wait written before the row's latest update is stale; no record is
-    unrecorded; an unreadable progress is unknown."""
-    try:
-        progress = json.loads(progress_raw) if progress_raw else {}
-    except (ValueError, TypeError, RecursionError):
-        return "unknown"
-    if not isinstance(progress, dict) or "invalid_progress" in progress:
-        return "unknown"
-    if delivery_unknown:
-        return "intent_card_delivery_unknown"
-    if parts >= 2:
-        return "card_parts_unknown"
-    wait = _wait_reason(progress.get("wait"), updated_at)
-    if "hold_reason" in progress:
-        code = _code(progress["hold_reason"])
-        return f"hold_reason:{code}" if code else "unknown"
-    # a resolved hold is removed where the thread is bound (_clear_thread_hold)
-    if "thread_hold" in progress:
-        code = _code(progress["thread_hold"])
-        return f"thread_hold:{code}" if code else "unknown"
-    if parts:
-        return "card_parts_pending"
-    return wait
-
-
-def _wait_reason(wait, updated_at) -> str:
-    if wait is None:
-        return "unrecorded"
-    reason = wait.get("reason") if isinstance(wait, dict) else None
-    if not isinstance(reason, str) or reason not in RESEAT_REASONS:
-        return "unknown"
-    at, row_at = _finite(wait.get("at")), _finite(updated_at)
-    if at is None or row_at is None:
-        return "unknown"
-    # json renders the double with 15 significant digits
-    return reason if abs(at - row_at) < 1e-3 else "stale"
-
-
-def _finite(value) -> float | None:
-    """A real, finite timestamp as float, else None (bool, NaN, inf and
-    integers too large for a double are not timestamps)."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    try:
-        number = float(value)
-    except OverflowError:
-        return None
-    return number if math.isfinite(number) else None
-
-
-def pending_breakdown(db, now: float, *, checkpoint=lambda: None) -> dict:
-    """Pending deliveries in health's population, by why each waits.
-    ``total`` always equals the population count; every row lands in
-    exactly one reason, so the reasons add up to it."""
-    # one statement: the population and each row's unknown-delivery flag
-    # come from the same read, streamed rather than loaded whole
-    checkpoint()
-    rows = db.execute(
-        "SELECT o.created_at,o.updated_at,o.progress,EXISTS("
-        "  SELECT 1 FROM notification_intent_cards ic "
-        "  JOIN notification_cards c ON c.card_id=ic.card_id "
-        "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
-        "    AND c.delivery_state='delivery_unknown'),"
-        # the parts gate of the card's latest render, as _parts_in_flight
-        " (SELECT MAX(CASE WHEN p.state='unknown' THEN 2 ELSE 1 END) "
-        "  FROM notification_intent_cards ic "
-        "  JOIN notification_renders r ON r.card_id=ic.card_id "
-        "  JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
-        "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
-        "    AND r.state='delivered' AND r.render_rev=(SELECT MAX(render_rev) "
-        "      FROM notification_renders WHERE card_id=ic.card_id) "
-        "    AND ((p.kind IN ('body_part','attachment_part') "
-        "          AND p.state IN ('pending','unknown')) "
-        "      OR (p.kind='thread' AND p.state='unknown'))) "
-        f"FROM notify_outbox o WHERE {OUTBOX_PENDING_WHERE}", (now,))
-    total = 0
-    by_reason: dict = {}
-    oldest = None
-    attention = 0
-    for created_at, updated_at, progress, delivery_unknown, parts in rows:
-        checkpoint()
-        total += 1
-        reason = _pending_reason(progress, updated_at, bool(delivery_unknown),
-                                 parts if isinstance(parts, int) else 0)
-        created = _finite(created_at)
-        age = max(0.0, now - created) if created is not None else None
-        slot = by_reason.setdefault(reason, {"count": 0, "oldest_age_s": None})
-        slot["count"] += 1
-        if age is not None:
-            slot["oldest_age_s"] = max(slot["oldest_age_s"] or 0.0, age)
-            oldest = max(oldest or 0.0, age)
-        if (reason in _ATTENTION_REASONS or reason.startswith("hold_reason:")
-                or (age is not None and age >= PENDING_ATTENTION_S)):
-            attention += 1
-    checkpoint()
-    return {"total": total, "oldest_age_s": oldest,
-            "by_reason": by_reason, "attention": attention}
-
-
 def _reseat(db, event_id, now, reason: str) -> None:
     """Push a still-pending card-owned intent's next re-examination out
     by RESEAT_S so it does not stay due (and hog flush slots) forever,
@@ -1300,13 +958,13 @@ def _notice_spec(event_id, parts, cfg, scope, rev, transport) -> dict:
                  if c.get("type") == "text"), "日次集計")
     body["preview_text"] = parts.get("preview_text") or " ".join(main.split())[:600] or "MCS 日次集計"
     spec = {
-        "schema": f"mcs-card-render/v{TRANSPORT_VERSIONS[transport]}",
+        "schema": f"mcs-card-render/v{notify_scope.TRANSPORT_VERSIONS[transport]}",
         "delivery_id": str(uuid.uuid4()),
         "logical_intent_id": key, "card_key": key, "op": "notice",
         "render_rev": rev, "source_generation": 0,
         "presentation_generation": 0, "ui_revision": 0,
         "delivery": {**scope, "intent_event_ids": [event_id],
-                     "route_epoch": route_epoch(cfg),
+                     "route_epoch": notify_scope.route_epoch(cfg),
                      "correlation": correlation},
         "parts": body}
     payload = canonical({k: body[k] for k in
@@ -1371,15 +1029,15 @@ def _close_notice(db, event_id, renders, now, state="suppressed") -> None:
 def _notice_route_moved(render, cfg) -> bool:
     """A queued notice aimed at a route the config no longer has (epoch,
     transport or destination changed) — begin would deny it forever."""
-    scope = delivery_scope(cfg) or {}
-    return (render["route_epoch"] != route_epoch(cfg)
-            or render["transport"] != active_transport(cfg)
+    scope = notify_scope.delivery_scope(cfg) or {}
+    return (render["route_epoch"] != notify_scope.route_epoch(cfg)
+            or render["transport"] != notify_scope.active_transport(cfg)
             or any(render[k] != scope.get(k) for k in
                    ("application_id", "channel_id", "team_id", "guild_id")
                    if k in scope)
             # begin checks the full scope (profile included) for these
             or (render["transport"] in ("slack", "lineworks")
-                and not scope_matches(render, scope)))
+                and not notify_scope.scope_matches(render, scope)))
 
 
 def _dispatch_notice(ledger, ev, cfg, now) -> dict:
@@ -1390,7 +1048,7 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
     provably unsent fall back to the frozen text exactly once."""
     import notify_digest
     db = connection(ledger)
-    root = data_root(ledger)
+    root = notify_spool.data_root(ledger)
     specs: list = []
     event_id = ev["event_id"]
     with db:
@@ -1402,7 +1060,7 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
                 or row["state"] not in ("pending", "failed"):
             return {"skipped": True}
         renders = _notice_renders(db, event_id)
-        if interactive_enabled(cfg):
+        if notify_scope.interactive_enabled(cfg):
             # never sent (queued, no attempt) to a route the config left:
             # cancel and let a fresh render aim at the current one
             moved = [r for r in renders if r["state"] == "queued"
@@ -1427,7 +1085,7 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
                 _close_notice(db, event_id, renders, now)
                 mark_snapshot_dirty(db)
                 return {"suppressed": True}
-        elif not interactive_enabled(cfg) and _notice_unsent(db, renders):
+        elif not notify_scope.interactive_enabled(cfg) and _notice_unsent(db, renders):
             target = cfg.get("notify_target")
             if not (isinstance(target, str) and target.strip()):
                 # no text destination to fall back to — never send late
@@ -1443,7 +1101,7 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
             mark_snapshot_dirty(db)
             return {"reverted": True}
         live = [r for r in renders if r["state"] in LIVE_RENDER]
-        if live or not interactive_enabled(cfg) \
+        if live or not notify_scope.interactive_enabled(cfg) \
                 or notify_digest.settings(cfg) is None or newer:
             specs.extend(json.loads(r["spec_json"]) for r in live
                          if r["state"] == "queued" and r["spec_json"]
@@ -1451,7 +1109,7 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
             _reseat(db, event_id, now,
                     "notice_render_live" if live
                     else "notice_interactive_off"
-                    if not interactive_enabled(cfg)
+                    if not notify_scope.interactive_enabled(cfg)
                     else "notice_digest_unset"
                     if notify_digest.settings(cfg) is None
                     else "notice_superseded")
@@ -1463,7 +1121,7 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
             mark_snapshot_dirty(db)
             return {"error": "resend_exhausted"}
         else:
-            scope = delivery_scope(cfg)
+            scope = notify_scope.delivery_scope(cfg)
             if scope is None:
                 return {"error": "delivery_scope_missing"}
             try:
@@ -1479,13 +1137,13 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
                            "WHERE event_id=?",
                            ("payload_invalid", now, event_id))
                 return {"error": "payload_invalid"}
-            transport = active_transport(cfg)
+            transport = notify_scope.active_transport(cfg)
             db.execute(
                 "INSERT OR IGNORE INTO notification_intent_batches("
                 "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,"
                 "transport,scope_json) VALUES(?,?,?,?,?,?,?)",
                 (event_id, canonical(frozen).decode(), payload_hash(frozen),
-                 route_epoch(cfg), now, transport,
+                 notify_scope.route_epoch(cfg), now, transport,
                  canonical(scope).decode()
                  if transport in ("slack", "lineworks") else None))
             spec = _notice_spec(event_id, parts, cfg, scope,
@@ -1513,15 +1171,15 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
             _reseat(db, event_id, now, "notice_render_issued")
         mark_snapshot_dirty(db)
     if specs:
-        ensure_dirs(root)
-        publish_specs(db, notify_dirs(root), specs, now)
+        notify_spool.ensure_dirs(root)
+        notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
     return {"dispatched": bool(specs)}
 
 
 def urgent_thread_target(ledger, ev, cfg):
     """Return only this source's delivered companion-thread binding in the current scope."""
-    scope = delivery_scope(cfg)
-    if not interactive_enabled(cfg) or scope is None or active_transport(cfg) not in ("slack", "discord"):
+    scope = notify_scope.delivery_scope(cfg)
+    if not notify_scope.interactive_enabled(cfg) or scope is None or notify_scope.active_transport(cfg) not in ("slack", "discord"):
         return None
     try:
         payload = json.loads(ev["payload"])
@@ -1532,8 +1190,8 @@ def urgent_thread_target(ledger, ev, cfg):
 
 
 def _source_thread_target(db, project_id, mid, cfg, *, base=None):
-    scope = delivery_scope(cfg)
-    if not interactive_enabled(cfg) or scope is None or active_transport(cfg) not in ("slack", "discord"):
+    scope = notify_scope.delivery_scope(cfg)
+    if not notify_scope.interactive_enabled(cfg) or scope is None or notify_scope.active_transport(cfg) not in ("slack", "discord"):
         return None
     if action_context.source_hash(db, mid, project_id) is None:
         return None
@@ -1547,7 +1205,7 @@ def _source_thread_target(db, project_id, mid, cfg, *, base=None):
           AND c.delivery_state IN ('delivered','update_failed') AND c.message_id IS NOT NULL
           AND c.thread_state='created' AND c.thread_id IS NOT NULL""",
         (base, base, mid, project_id, root)).fetchall()
-    bound = [dict(row) for row in rows if scope_matches(row, scope)
+    bound = [dict(row) for row in rows if notify_scope.scope_matches(row, scope)
              and (row["delivery_state"] == "delivered" or _thread_binding_creates(db, row))]
     if len(bound) != 1:
         return None
@@ -1560,7 +1218,7 @@ def _source_thread_target(db, project_id, mid, cfg, *, base=None):
 def _signal_evidence_mid(db, card):
     """The latest full evidence message of the card's signals, or None
     when any signal's evidence is missing or unverifiable."""
-    signals = latest_signals(db, anchor_keys(card), card["project_id"])
+    signals = notify_scope.latest_signals(db, anchor_keys(card), card["project_id"])
     candidates = []
     for signal in signals.values():
         mid, message = signal_evidence(db, signal["content"])
@@ -1592,7 +1250,7 @@ def _thread_binding_creates(db, card):
         WHERE r.card_id=? AND r.op='create' AND r.state='delivered'
           AND c.state='delivered' AND c.remote_id=? AND t.state='delivered' AND t.remote_id=?
         ORDER BY r.render_rev DESC""", (card["card_id"], card["message_id"], card["thread_id"]))
-        if scope_matches(row, stored_scope(card))]
+        if notify_scope.scope_matches(row, notify_scope.stored_scope(card))]
 
 
 def _signal_route_witness(raw):
@@ -1626,7 +1284,7 @@ def _signal_thread_route(db, card):
         row = db.execute("SELECT * FROM notification_renders WHERE card_id=? AND op='create' "
                          "AND state IN ('queued','held') ORDER BY render_rev DESC LIMIT 1",
                          (card["card_id"],)).fetchone()
-        rows = [row] if row is not None and scope_matches(row, stored_scope(card)) else []
+        rows = [row] if row is not None and notify_scope.scope_matches(row, notify_scope.stored_scope(card)) else []
     for row in rows:
         witness = _signal_route_witness(row["spec_json"])
         if witness is not None and (witness["signal_thread_route"] == "card"
@@ -1652,7 +1310,7 @@ def _bind_signal_thread(db, card, cfg, now) -> tuple[dict, bool, bool]:
     target = signal_thread_target(db, card, cfg)
     if target is None:
         waited = now - (card["created_at"] or now)
-        if notify_cfg(cfg).get("card_thread") is not True:
+        if notify_scope.notify_cfg(cfg).get("card_thread") is not True:
             # no new thread will open here (a thread created while the
             # switch was on is still used above): nothing to wait for
             waited = SIGNAL_SOURCE_HOLD_MAX_S + 1
@@ -1726,7 +1384,7 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
         if scope is not None:
             _clear_thread_hold(db, "event_id=?", event_id)
         if scope is None:
-            reason = "lineworks_thread_unsupported" if active_transport(cfg) == "lineworks" else "source_thread_not_ready"
+            reason = "lineworks_thread_unsupported" if notify_scope.active_transport(cfg) == "lineworks" else "source_thread_not_ready"
             if reason == "lineworks_thread_unsupported":
                 db.execute("UPDATE notify_outbox SET state='failed',next_try=NULL," + HOLD_PROGRESS_SET +
                            ",updated_at=? WHERE event_id=?", (reason, now, event_id))
@@ -1759,20 +1417,20 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
             return {"error": "resend_exhausted"}
         else:
             parts = alert_view.render_parts(checked, db)
-            spec = _notice_spec(event_id, parts, cfg, scope, len(renders) + 1, active_transport(cfg))
+            spec = _notice_spec(event_id, parts, cfg, scope, len(renders) + 1, notify_scope.active_transport(cfg))
             spec["parts"]["thread_notice"] = True
             payload = json.loads(row["payload"])
             db.execute("INSERT OR IGNORE INTO notification_intent_batches("
                        "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,transport,scope_json) "
                        "VALUES(?,?,?,?,?,?,?)", (event_id, canonical(payload).decode(), payload_hash(payload),
-                       route_epoch(cfg), now, active_transport(cfg), canonical(delivery_scope(cfg)).decode()))
+                       notify_scope.route_epoch(cfg), now, notify_scope.active_transport(cfg), canonical(notify_scope.delivery_scope(cfg)).decode()))
             db.execute("""INSERT INTO notification_renders(
                 delivery_id,card_id,op,render_rev,manifest_id,route_epoch,profile,application_id,guild_id,
                 channel_id,transport,team_id,spec_json,payload_hash,correlation,state,parts_state,
                 intent_event_id,created_at,updated_at)
                 VALUES(?,NULL,'notice',?,NULL,?,?,?,?,?,?,?,?,?,?,'queued','pending',?,?,?)""",
-                (spec["delivery_id"], spec["render_rev"], route_epoch(cfg), scope.get("profile"),
-                 scope["application_id"], scope.get("guild_id"), scope["channel_id"], active_transport(cfg),
+                (spec["delivery_id"], spec["render_rev"], notify_scope.route_epoch(cfg), scope.get("profile"),
+                 scope["application_id"], scope.get("guild_id"), scope["channel_id"], notify_scope.active_transport(cfg),
                  scope.get("team_id"), canonical(spec).decode(), payload_hash(spec),
                  spec["delivery"]["correlation"], event_id, now, now))
             notify_parts.seed_parts(db, spec, now)
@@ -1781,9 +1439,9 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
             _reseat(db, event_id, now, "alert_render_issued")
         mark_snapshot_dirty(db)
     if specs:
-        root = data_root(ledger)
-        ensure_dirs(root)
-        publish_specs(db, notify_dirs(root), specs, now)
+        root = notify_spool.data_root(ledger)
+        notify_spool.ensure_dirs(root)
+        notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
     return {"dispatched": bool(specs)}
 
 
@@ -1797,11 +1455,11 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
     if ev["kind"] in NOTICE_KINDS:
         return _dispatch_notice(ledger, ev, cfg, now)
     db = connection(ledger)
-    root = data_root(ledger)
-    dirs = notify_dirs(root)
-    ensure_dirs(root)
-    scope = delivery_scope(cfg)
-    epoch = route_epoch(cfg)
+    root = notify_spool.data_root(ledger)
+    dirs = notify_spool.notify_dirs(root)
+    notify_spool.ensure_dirs(root)
+    scope = notify_scope.delivery_scope(cfg)
+    epoch = notify_scope.route_epoch(cfg)
     specs = []
     outcome = {"dispatched": False, "cards": 0}
     event_id = ev["event_id"]
@@ -1816,7 +1474,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
         batch = db.execute(
             "SELECT * FROM notification_intent_batches "
             "WHERE event_id=?", (event_id,)).fetchone()
-        if row["kind"] == "signal" and not signals_notify(cfg):
+        if row["kind"] == "signal" and not notify_scope.signals_notify(cfg):
             if batch is None:
                 db.execute(
                     "UPDATE notify_outbox SET state='suppressed',"
@@ -1829,11 +1487,11 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
             _reseat(db, event_id, now, "signals_off_sealed")
             return {"skipped": True}
         if batch is not None:
-            if interactive_enabled(cfg) and batch["transport"] != active_transport(cfg):
+            if notify_scope.interactive_enabled(cfg) and batch["transport"] != notify_scope.active_transport(cfg):
                 return {"error": "transport_mismatch"}
             # off: active_transport() falls back to discord, so the
             # stored scope can't match — fall through to reseat instead
-            if interactive_enabled(cfg) \
+            if notify_scope.interactive_enabled(cfg) \
                     and batch["transport"] in ("slack", "lineworks") \
                     and batch["scope_json"] != canonical(scope).decode():
                 return {"error": "scope_mismatch"}
@@ -1877,8 +1535,8 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,"
                 "transport,scope_json) VALUES(?,?,?,?,?,?,?)",
                 (event_id, canonical(frozen).decode(),
-                 payload_hash(frozen), epoch, now, active_transport(cfg),
-                 canonical(scope).decode() if active_transport(cfg) in ("slack", "lineworks") else None))
+                 payload_hash(frozen), epoch, now, notify_scope.active_transport(cfg),
+                 canonical(scope).decode() if notify_scope.active_transport(cfg) in ("slack", "lineworks") else None))
             card_ids = []
             covered = set()
             for target in _resolve_targets(db, row, frozen):
@@ -1920,7 +1578,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 outcome["suppressed"] = True
             complete_intent(db, event_id, now)
         mark_snapshot_dirty(db)
-    publish_specs(db, dirs, specs, now)
+    notify_spool.publish_specs(db, dirs, specs, now)
     return outcome
 
 
@@ -1965,9 +1623,9 @@ def rerender_message_cards(ledger, cfg, project_id, message_id,
         if specs:
             mark_snapshot_dirty(db)
     if specs:
-        root_dir = data_root(ledger)
-        ensure_dirs(root_dir)
-        publish_specs(db, notify_dirs(root_dir), specs, now)
+        root_dir = notify_spool.data_root(ledger)
+        notify_spool.ensure_dirs(root_dir)
+        notify_spool.publish_specs(db, notify_spool.notify_dirs(root_dir), specs, now)
     return [s["delivery_id"] for s in specs]
 
 
@@ -1989,7 +1647,7 @@ def task_reminders(ledger, cfg, now=None, limit=REMINDER_LIMIT) -> int:
     already-overdue task without sending (baseline) — only tasks that
     fall due afterwards are announced. Off with the interactive switch
     and outside REMINDER_HOURS; at most ``limit`` per call."""
-    if not interactive_enabled(cfg):
+    if not notify_scope.interactive_enabled(cfg):
         return 0
     from datetime import datetime
     from mcs_queries import JST
@@ -2012,7 +1670,7 @@ def task_reminders(ledger, cfg, now=None, limit=REMINDER_LIMIT) -> int:
                        AND t.due_date=r.due_date
                        AND t.stage=CASE WHEN r.due_date=? THEN 'due'
                                         ELSE 'overdue' END)"""
-    args = (today, active_transport(cfg), today)
+    args = (today, notify_scope.active_transport(cfg), today)
     with db:
         db.execute("BEGIN IMMEDIATE")
         if db.execute("SELECT 1 FROM notification_task_reminders"
@@ -2057,7 +1715,7 @@ def task_reminders(ledger, cfg, now=None, limit=REMINDER_LIMIT) -> int:
 def task_reminder_stale(ledger, cfg, event_id, now=None) -> str | None:
     """Send-time recheck of a queued task reminder: None while it is still
     true, otherwise the stale reason, or 'outside_hours' to wait."""
-    if not interactive_enabled(cfg):
+    if not notify_scope.interactive_enabled(cfg):
         return "interactive_off"
     from datetime import datetime
     from mcs_queries import JST
@@ -2085,7 +1743,7 @@ def task_reminder_stale(ledger, cfg, event_id, now=None) -> str | None:
                    AND c.transport=? AND c.delivery_state!='revoked'
                    AND c.root_message_id IN (m.message_id, m.parent_id))""",
         (mark["request_id"], mark["due_date"],
-         active_transport(cfg))).fetchone()
+         notify_scope.active_transport(cfg))).fetchone()
     if live is None:
         return "task_not_pending"
     if not REMINDER_HOURS[0] <= local.hour < REMINDER_HOURS[1]:
@@ -2147,9 +1805,9 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
     call; cards with an unsettled attempt are left to the settle path."""
     db = connection(ledger)
     now = time.time() if now is None else now
-    root = data_root(ledger)
-    dirs = notify_dirs(root)
-    ensure_dirs(root)
+    root = notify_spool.data_root(ledger)
+    dirs = notify_spool.notify_dirs(root)
+    notify_spool.ensure_dirs(root)
     specs = []
     withdrawn = []
     scanned = updated = 0
@@ -2164,7 +1822,7 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
                ORDER BY updated_at,card_id LIMIT ?""", (limit,)).fetchall()
         scanned = len(cards)
         for row in cards:
-            card = card_row(db, row["card_id"])
+            card = notify_scope.card_row(db, row["card_id"])
             if card is None:
                 continue
             if positive(card["project_id"]) and db.execute(
@@ -2185,7 +1843,7 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
                       card["presentation_generation"],
                       card["desired_render_rev"])
             issue_render(db, card["card_id"], cfg, now, specs)
-            after = card_row(db, card["card_id"])
+            after = notify_scope.card_row(db, card["card_id"])
             if (after["source_generation"], after["presentation_generation"],
                     after["desired_render_rev"]) != before:
                 updated += 1
@@ -2211,7 +1869,7 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
         with suppress(OSError):
             os.unlink(os.path.join(dirs[transport + "_render"],
                                    delivery_id + ".json"))
-    publish_specs(db, dirs, specs, now)
+    notify_spool.publish_specs(db, dirs, specs, now)
     return {"scanned": scanned, "updated": updated,
             "republished": len(specs)}
 
@@ -2288,8 +1946,8 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
         # its restart-resume can replay — removing it would strand
         # parts the journal could still finish.
         removed = 0
-        root = data_root(ledger)
-        dirs = notify_dirs(root)
+        root = notify_spool.data_root(ledger)
+        dirs = notify_spool.notify_dirs(root)
         for r in db.execute(
                 "SELECT delivery_id,transport FROM notification_renders r "
                 "WHERE state IN ('delivered','not_sent','cancelled') "
@@ -2335,186 +1993,3 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                 results += 1
         return {"tokens": tokens, "spec_json_cleared": cleared,
                 "spec_files": removed, "result_files": results}
-
-
-def recover(ledger, cfg, result) -> dict:
-    """Startup/periodic recovery for the file-published plane: republish
-    queued/held renders and delivered plans with pending parts whose
-    spec file is missing, repair the flags file, and surface stale
-    claims for the health layer. Never consumes
-    .claimed work — a claim is not proof the worker is dead."""
-    db = connection(ledger)
-    root = data_root(ledger)
-    dirs = notify_dirs(root)
-    ensure_dirs(root)
-    now = time.time()
-    fixed = {"republished": 0, "missing_claimed": 0}
-    with db:
-        db.execute("BEGIN IMMEDIATE")
-        for r in db.execute(
-                "SELECT delivery_id,spec_json,transport FROM notification_renders r "
-                "WHERE state IN ('queued','held') OR (state='delivered' "
-                "AND EXISTS (SELECT 1 FROM notification_render_parts p "
-                "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))").fetchall():
-            if _cleanup_budget_held(db, r["delivery_id"]):
-                continue
-            path = os.path.join(dirs[r["transport"] + "_render"],
-                                r["delivery_id"] + ".json")
-            if os.path.isfile(path):
-                db.execute(
-                    "UPDATE notification_renders SET spec_published=1 "
-                    "WHERE delivery_id=?", (r["delivery_id"],))
-            elif r["spec_json"]:
-                publish_file(dirs[r["transport"] + "_render"],
-                             r["delivery_id"] + ".json",
-                             r["spec_json"].encode("utf-8"))
-                db.execute(
-                    "UPDATE notification_renders SET spec_published=1,"
-                    "first_published_at=COALESCE(first_published_at,?),"
-                    "updated_at=? WHERE delivery_id=?",
-                    (now, now, r["delivery_id"]))
-                fixed["republished"] += 1
-        retired = retired_transports(cfg)
-        stale = {"live": 0, "retired": 0}
-        for t in SUPPORTED_TRANSPORTS:
-            try:
-                names = [os.path.join(dirs[t + "_render"], n)
-                         for n in os.listdir(dirs[t + "_render"])
-                         if n.endswith(".json.claimed")]
-            except OSError:
-                continue
-            for n in names:
-                with suppress(OSError):
-                    if now - os.stat(n).st_mtime > 60:
-                        stale["retired" if t in retired else "live"] += 1
-        # a claim left on a transport switched away from is disclosed,
-        # never live delivery trouble (the claim itself is kept)
-        fixed["missing_claimed"] = stale["live"]
-        fixed["retired_claimed"] = stale["retired"]
-        if stale["live"]:
-            result.setdefault("errors", []).append(
-                f"claimed_specs_stale:{stale['live']}")
-    publish_flags(cfg, root)
-    return fixed
-
-
-def retired_transports(cfg) -> tuple[str, ...]:
-    """Transports no longer selected by notify.interactive: their
-    unsettled rows stay recorded (never auto-settled — a granted send
-    may be remote) but no longer count as live delivery work. Without a
-    config (None) nothing is treated as retired."""
-    if cfg is None or not interactive_enabled(cfg):
-        return ()
-    active = active_transport(cfg)
-    return tuple(t for t in SUPPORTED_TRANSPORTS if t != active)
-
-
-def layout_migration_counts(db) -> list:
-    """Read-only counts of retained layouts and cards blocked by unknown parts."""
-    return [dict(row) for row in db.execute("""
-        SELECT c.transport,c.layout,c.delivery_state,COUNT(*) AS cards,
-               SUM(EXISTS(SELECT 1 FROM notification_render_parts p
-                   JOIN notification_renders r USING(delivery_id)
-                   WHERE r.card_id=c.card_id AND p.state='unknown')) AS unknown_parts
-        FROM notification_cards c GROUP BY c.transport,c.layout,c.delivery_state
-        ORDER BY c.transport,c.layout,c.delivery_state""")]
-
-
-def health_cards(ledger, cfg=None) -> dict:
-    """The health.json 'cards' section — counts and ages plus the
-    bounded unsettled-attempt worklist an operator resolves via
-    ops.card_resolve (ids only, no patient data). Attempts on a retired
-    transport (after a notify.interactive switch) are reported only as
-    ``retired_unsettled`` and leave the live counts."""
-    db = connection(ledger)
-    now = time.time()
-    retired = retired_transports(cfg)
-    marks = ",".join("?" * len(retired))
-    live = f" AND r.transport NOT IN ({marks})" if retired else ""
-    states = {r["delivery_state"]: r["c"] for r in db.execute(
-        "SELECT delivery_state,COUNT(*) c FROM notification_cards "
-        "GROUP BY delivery_state")}
-    oldest = db.execute(
-        "SELECT MIN(created_at) FROM notification_cards "
-        "WHERE delivery_state='pending'").fetchone()[0]
-    queued = db.execute(
-        "SELECT COUNT(*) FROM notification_renders WHERE state='queued'"
-    ).fetchone()[0]
-    unsettled = db.execute(
-        "SELECT COUNT(*) c,MIN(a.created_at) o FROM "
-        "notification_delivery_attempts a "
-        "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
-        "WHERE a.state IN ('granted','unknown')" + live, retired
-    ).fetchone()
-    retired_unsettled = db.execute(
-        "SELECT COUNT(*) FROM notification_delivery_attempts a "
-        "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
-        f"WHERE a.state IN ('granted','unknown') AND r.transport IN ({marks})",
-        retired).fetchone()[0] if retired else 0
-    last = db.execute(
-        "SELECT MAX(updated_at) FROM notification_renders "
-        "WHERE state='delivered'").fetchone()[0]
-    unknown = db.execute(
-        "SELECT COUNT(*) FROM notification_renders WHERE state='unknown'"
-    ).fetchone()[0]
-    # Unsettled attempts as an actionable list, oldest first — each row
-    # carries the exact scope ops.card_resolve validates against, so
-    # resolving is: check the remote channel -> submit the approval
-    # flow. Never auto-resend: a granted attempt may already be remote.
-    worklist = db.execute(
-        "SELECT a.attempt_id,a.delivery_id,a.state,a.message_id,"
-        "a.error_code,a.created_at,r.card_id,r.transport,r.profile,"
-        "r.application_id,r.guild_id,r.channel_id,r.team_id "
-        "FROM notification_delivery_attempts a "
-        "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
-        "WHERE a.state IN ('granted','unknown')" + live +
-        " ORDER BY a.created_at LIMIT 20", retired).fetchall()
-    retired_items = [
-        {"attempt_id": w["attempt_id"], "delivery_id": w["delivery_id"],
-         "state": w["state"], "transport": w["transport"],
-         "age_s": round(now - w["created_at"], 1),
-         "resolve_scope": stored_scope(w)}
-        for w in db.execute(
-            "SELECT a.attempt_id,a.delivery_id,a.state,a.created_at,"
-            "r.transport,r.profile,r.application_id,r.guild_id,"
-            "r.channel_id,r.team_id FROM notification_delivery_attempts a "
-            "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
-            f"WHERE a.state IN ('granted','unknown') AND r.transport IN ({marks}) "
-            "ORDER BY a.created_at LIMIT 20", retired)] if retired else []
-    return {
-        "pending": states.get("pending", 0),
-        "delivered": states.get("delivered", 0),
-        "update_failed": states.get("update_failed", 0),
-        "delivery_unknown": states.get("delivery_unknown", 0),
-        "message_deleted": states.get("message_deleted", 0),
-        "revoked": states.get("revoked", 0),
-        "oldest_pending_age_s": round(now - oldest, 1) if oldest else 0,
-        "layout_inventory": layout_migration_counts(db),
-        "unknown_parts": [dict(row) for row in db.execute(
-            "SELECT r.delivery_id,r.card_id,r.transport,r.payload_hash AS manifest_sha256,"
-            "p.part_id,p.payload_sha256 FROM notification_render_parts p "
-            "JOIN notification_renders r USING(delivery_id) WHERE p.state='unknown' "
-            "ORDER BY p.updated_at LIMIT 20")],
-        "unknown_part_resolution": "card_part_resolve_planで部品を確認し、人承認付きops.card_part_resolveで解除してください。",
-        "renders_queued": queued,
-        "renders_unknown": unknown,
-        "attempts_unsettled": unsettled["c"],
-        "retired_unsettled": retired_unsettled,
-        # ids + scope only: still resolvable via ops.card_resolve
-        "retired_items": retired_items,
-        "oldest_unsettled_age_s": (round(now - unsettled["o"], 1)
-                                 if unsettled["o"] else 0),
-        "unsettled": [
-            {"attempt_id": w["attempt_id"],
-             "delivery_id": w["delivery_id"],
-             "state": w["state"],
-             "card_id": w["card_id"],
-             "transport": w["transport"],
-             "channel_id": w["channel_id"],
-             "message_id": w["message_id"],
-             "error_code": w["error_code"],
-             "age_s": round(now - w["created_at"], 1),
-             "resolve_scope": stored_scope(w)}
-            for w in worklist],
-        "last_delivered_at": last or 0,
-    }

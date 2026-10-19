@@ -1,5 +1,5 @@
 """Posters recorded on a patient's room put that room's own staff first among task assignees."""
-import mcs_signals
+import self_identity
 import notify_cards
 import notify_action_context
 from notify_testkit import _msg, _patient, led, pinned_clock  # noqa: F401 - shared fixtures
@@ -14,7 +14,7 @@ def test_task_assignees_who_posted_in_this_room_come_first(led):
     _msg(led, 101, pid=1, sender="鈴木 二郎", org="みどり薬局")
     _msg(led, 102, pid=1, sender="訪問 看護", org="あおば訪問看護")   # not our station: never an assignee
     with led.db:
-        mcs_signals.record_self_profile(led.db, {
+        self_identity.record_self_profile(led.db, {
             "sender_id": 9, "name": "薬局 太郎", "professions": [], "organizations": ["みどり薬局"]})
     base = notify_action_context.assignee_choices(led.db)
     scoped = notify_action_context.assignee_choices(led.db, project_id=1)
@@ -28,7 +28,7 @@ def test_a_namesake_elsewhere_never_jumps_ahead(led):
     # review F6: the roster id must match the poster's sender_id; a name alone proves nothing
     _patient(led, 1)
     with led.db:
-        mcs_signals.record_station_staff(led.db, [
+        self_identity.record_station_staff(led.db, [
             {"staff_id": 201, "name": "合成A", "station": "合成薬局"},
             {"staff_id": 202, "name": "同名職員", "station": "合成薬局"},
             {"staff_id": 203, "name": "合成C", "station": "合成薬局"}])
@@ -46,7 +46,7 @@ def test_a_room_poster_beyond_the_cap_still_comes_first(led):
     _patient(led, 1)
     roster = [{"staff_id": 300 + i, "name": f"合成職員{i:02d}", "station": "合成薬局"} for i in range(30)]
     with led.db:
-        mcs_signals.record_station_staff(led.db, roster)
+        self_identity.record_station_staff(led.db, roster)
     led.db.execute("INSERT INTO messages(message_id,project_id,sender_id,sender_name,profession,organization,"
                    "posted_at,posted_at_ts,body_text,content_hash,body_state) VALUES"
                    "(400,1,329,'合成職員29','薬剤師','合成薬局','2026-09-24T08:00',1,'本文',?,'full')", (f"{400:064x}",))

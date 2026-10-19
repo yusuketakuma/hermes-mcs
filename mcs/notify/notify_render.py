@@ -14,7 +14,7 @@ import re
 import sqlite3
 import time
 
-from ledger import reaction_actor_summary
+from message_observations import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive, valid_hash
 from message_metadata import (get_message_metadata, is_self_sender,
@@ -22,9 +22,6 @@ from message_metadata import (get_message_metadata, is_self_sender,
                               thread_stamp_line, actor_line)
 import structured_view
 from notify_scope import latest_signals
-# LINE WORKS' card split lives with its presenter; re-exported for the
-# worker (adapters/lineworks/cards.py) and notify_cards
-from present_lineworks import card_split as lineworks_card_split  # noqa: F401
 
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
 PAGE_THREAD = 8           # messages per page on a thread card (count cap)
@@ -46,21 +43,21 @@ def _preview_post(text) -> str:
         ends = [at for mark in ("\n", "。", "！", "？", "?")
                 if (at := raw.find(mark, hit.start())) >= 0]
         raw = raw[start:min(ends) + 1 if ends else len(raw)]
-    return _inline(raw, 220)
+    return inline_text(raw, 220)
 
 
 def preview_header(db, pid, message) -> str:
     """保存済み投稿だけから短い5項目表示のヘッダーを作り、欠測を明示する。"""
-    patient = _inline(patient_name(db, pid), 30) or f"project {pid}"
-    sender = (_inline(message["sender_name"], 24) if message else "") or "発信者未取得"
-    organization = (_inline(message["organization"], 24) if message else "") or "所属未取得"
+    patient = inline_text(patient_name(db, pid), 30) or f"project {pid}"
+    sender = (inline_text(message["sender_name"], 24) if message else "") or "発信者未取得"
+    organization = (inline_text(message["organization"], 24) if message else "") or "所属未取得"
     posted = message["posted_at"] if message else None
-    return f"{patient} / {sender}（{organization}） / {_when_posted(posted)}"
+    return f"{patient} / {sender}（{organization}） / {posted_time_label(posted)}"
 
 
 def preview_line(header, summary, limit=600):
     patient, _separator, source = header.partition(" / ")
-    summary = _inline(summary, limit - len(header) - 2)
+    summary = inline_text(summary, limit - len(header) - 2)
     return f"{patient}: {summary} / {source}"
 
 
@@ -78,7 +75,7 @@ def notification_preview(db, card, content, *, limit=600) -> str:
             if message:
                 rows.append((mid, message))
         if not rows:
-            patient = _inline(patient_name(db, card["project_id"]), 30) or f"project {card['project_id']}"
+            patient = inline_text(patient_name(db, card["project_id"]), 30) or f"project {card['project_id']}"
             return f"{patient}: 投稿本文を確認できません。"
         # the urgent post is what the push must carry, even under newer
         # replies; otherwise the newest post (deleted or not) speaks
@@ -114,16 +111,16 @@ def notification_preview(db, card, content, *, limit=600) -> str:
             badge += structured_view.urgency_qc_suffix(db, mid)
         if badge:
             badge += " · "
-        return preview_line(header, badge + _inline(main, 260), limit)
+        return preview_line(header, badge + inline_text(main, 260), limit)
     signals = latest_signals(db, content["shown"], card["project_id"])
     items = []
     for entry in signals.values():
         signal = entry["content"]
         mid, message = signal_evidence(db, signal)
-        summary = f"{signal_label(signal)}{_inline(signal.get('note'), 120)}{signal_state_suffix(signal)}"
+        summary = f"{signal_label(signal)}{inline_text(signal.get('note'), 120)}{signal_state_suffix(signal)}"
         if mid is None:
             # a register alert has no post by design: no sender/time to be 未取得
-            patient = _inline(patient_name(db, signal.get("project_id")), 30) \
+            patient = inline_text(patient_name(db, signal.get("project_id")), 30) \
                 or f"project {signal.get('project_id')}"
             items.append(f"{patient}: {summary}")
             continue
@@ -251,22 +248,22 @@ def mmdd(posted_at) -> str:
 def _deleted_line(posted_at, sender: str) -> str:
     """A deleted post's line: its time and sender when known, never a
     row of ??-?? placeholders."""
-    when = f"{mmdd(posted_at)} {_hhmm(posted_at)}"
+    when = f"{mmdd(posted_at)} {posted_hhmm(posted_at)}"
     known = [x for x in (when if "?" not in when else "",
                          sender if sender not in ("", "?") else "") if x]
     return " ".join(known + ["（削除された投稿）"])
 
 
-def _hhmm(posted_at) -> str:
+def posted_hhmm(posted_at) -> str:
     if isinstance(posted_at, str) and len(posted_at) >= 16:
         return posted_at[11:16]
     return "??:??"
 
 
-def _when_posted(posted_at) -> str:
+def posted_time_label(posted_at) -> str:
     """MM-DD HH:MM of a post, or a plain word when no time is stored —
     never a row of question marks on a notification."""
-    return f"{mmdd(posted_at)} {_hhmm(posted_at)}" if posted_at else "日時未取得"
+    return f"{mmdd(posted_at)} {posted_hhmm(posted_at)}" if posted_at else "日時未取得"
 
 
 def thread_stamp_row(db, mid, sender_id, *, observed_time=True) -> str:
@@ -704,7 +701,7 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
     callers that explicitly request only the original text."""
     if m["body_state"] == "deleted":
         return head + _deleted_line(m["posted_at"], sender)
-    title = f"{head}{_when_posted(m['posted_at'])} {sender}"
+    title = f"{head}{posted_time_label(m['posted_at'])} {sender}"
     out = [title]
     if include_summary:
         # the same plain wording and item rows as the card face
@@ -854,7 +851,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
         for m in msgs:
             line = (_deleted_line(m["posted_at"], _sender_tag(m, db))
                     if m["body_state"] == "deleted" else
-                    f"{_when_posted(m['posted_at'])} {_sender_tag(m, db)}")
+                    f"{posted_time_label(m['posted_at'])} {_sender_tag(m, db)}")
             blocks = [{"type": "text", "rule": True, "text": line}]
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
@@ -897,7 +894,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
         max_count = PAGE_DIGEST if kind == "digest" else PAGE_THREAD
         shown_kind = "signal_keys"
     source_fp = source_fingerprint(db, card)
-    generation = _current_generation(card, source_fp)
+    generation = render_source_generation(card, source_fp)
     # A long heading shares the old 800-character reserve with the footer.
     # Any physical truncation retains the existing explicit original/body link.
     containers = _fit_item(containers, CARD_TEXT_BUDGET - PAGE_TEXT_BUDGET)
@@ -963,7 +960,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     return content
 
 
-def _current_generation(card, source_fp) -> int:
+def render_source_generation(card, source_fp) -> int:
     """The source generation this content will render under — the
     drift bump ``_generation_drift`` applies right after this model is
     built (the first observation only seeds the baseline)."""
@@ -975,7 +972,7 @@ def _current_generation(card, source_fp) -> int:
 
 _DISCORD_UID = re.compile(r"[0-9]{1,20}")
 _LINEWORKS_UID = re.compile(r"[A-Za-z0-9._@-]{1,128}")
-_MENTION = re.compile(r"<@([^>\n]+)>")
+MENTION_TOKEN_PATTERN = re.compile(r"<@([^>\n]+)>")
 
 
 def lineworks_member_names(text: str, names) -> str:
@@ -987,7 +984,7 @@ def lineworks_member_names(text: str, names) -> str:
         value = names.get(m.group(1))
         return value.strip()[:40] if isinstance(value, str) and value.strip() \
             else "メンバー"
-    return _MENTION.sub(name, text)
+    return MENTION_TOKEN_PATTERN.sub(name, text)
 _SLACK_UID = re.compile(r"[UW][A-Z0-9]{1,30}")
 UNKNOWN_ACTOR = "不明なユーザー"
 
@@ -1140,7 +1137,7 @@ def plain_notice(text, cap) -> str:
     return t.replace("<", "＜").replace(">", "＞").replace("@", "＠")
 
 
-def _inline(text, cap) -> str:
+def inline_text(text, cap) -> str:
     """Free text (typed by staff) shown on one footer line — no line
     breaks and no ``<``/``>`` so it can never form a mention/broadcast."""
     t = " ".join(str(text or "").split())

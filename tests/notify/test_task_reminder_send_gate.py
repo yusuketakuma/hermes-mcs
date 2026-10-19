@@ -10,6 +10,7 @@ import pytest
 import mcs_requests
 import notify_cards
 import notify_flush
+import notify_sender
 from notify_testkit import CFG, _add_request, _at, _delivered_card, _uuid, led
 
 __all__ = ["led"]
@@ -29,7 +30,7 @@ def _flush_one(led, monkeypatch, ev, cfg, send_at):
     monkeypatch.setattr(notify_cards.time, "time", lambda: send_at)
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     captures = []
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda argv, content, *a, **kw: captures.append(content))
     res = {"sent": 0, "failed": 0, "suppressed": 0, "parked": 0}
     try:

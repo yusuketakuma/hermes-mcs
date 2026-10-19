@@ -8,6 +8,7 @@ import json
 import pytest
 
 import notify_cards
+import notify_scope
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _latest_render, _msg, _patient,
                             _receipt, _row, _seed_thread, _settle_bodies, _signal, _signal_row,
                             delivered_source, led,
@@ -23,7 +24,7 @@ def _wait(led, event_id):
 def _population_count(led, now):
     return led.db.execute(
         "SELECT COUNT(*) FROM notify_outbox "
-        f"WHERE {notify_cards.OUTBOX_PENDING_WHERE}", (now,)).fetchone()[0]
+        f"WHERE {notify_scope.OUTBOX_PENDING_WHERE}", (now,)).fetchone()[0]
 
 
 def test_dispatch_records_issued_then_unsettled_with_the_row_update(led):
@@ -36,7 +37,7 @@ def test_dispatch_records_issued_then_unsettled_with_the_row_update(led):
     later = NOW + notify_cards.RESEAT_S + 5
     _dispatch(led, ev, now=later)
     assert _wait(led, ev["event_id"])["reason"] == "intent_cards_unsettled"
-    breakdown = notify_cards.pending_breakdown(led.db, later)
+    breakdown = notify_scope.pending_breakdown(led.db, later)
     assert breakdown["by_reason"]["intent_cards_unsettled"]["count"] == 1
 
 
@@ -90,7 +91,7 @@ def test_breakdown_reasons_add_up_to_the_population(led):
     _pending(led, progress=json.dumps({"hold_reason": "delivery_held"}))
     # a scheduled signal digest waits by design and is not in the population
     _pending(led, kind="signal", payload={"digest": True}, next_try=now + 3600)
-    breakdown = notify_cards.pending_breakdown(led.db, now)
+    breakdown = notify_scope.pending_breakdown(led.db, now)
     reasons = {k: v["count"] for k, v in breakdown["by_reason"].items()}
     assert reasons == {"unrecorded": 1, "alert_render_live": 1, "stale": 1,
                        "unknown": 1, "hold_reason:delivery_held": 1}
@@ -107,23 +108,23 @@ def test_unknown_card_delivery_outranks_the_recorded_wait(led):
         "UPDATE notification_cards SET delivery_state='delivery_unknown' "
         "WHERE card_id IN (SELECT card_id FROM notification_intent_cards WHERE event_id=?)",
         (ev["event_id"],))
-    breakdown = notify_cards.pending_breakdown(led.db, NOW + 1)
+    breakdown = notify_scope.pending_breakdown(led.db, NOW + 1)
     assert {k: v["count"] for k, v in breakdown["by_reason"].items()} == {
         "intent_card_delivery_unknown": 1}
     assert breakdown["attention"] == 1
 
 
 def test_a_long_wait_needs_attention_even_by_design(led):
-    eid = _pending(led, created_at=NOW - notify_cards.PENDING_ATTENTION_S)
+    eid = _pending(led, created_at=NOW - notify_scope.PENDING_ATTENTION_S)
     notify_cards._reseat(led.db, eid, NOW, "notice_render_issued")
-    breakdown = notify_cards.pending_breakdown(led.db, NOW)
+    breakdown = notify_scope.pending_breakdown(led.db, NOW)
     assert breakdown["by_reason"]["notice_render_issued"]["count"] == 1
     assert breakdown["attention"] == 1
-    assert breakdown["oldest_age_s"] == pytest.approx(notify_cards.PENDING_ATTENTION_S)
+    assert breakdown["oldest_age_s"] == pytest.approx(notify_scope.PENDING_ATTENTION_S)
 
 
 def test_empty_population(led):
-    assert notify_cards.pending_breakdown(led.db, NOW) == {
+    assert notify_scope.pending_breakdown(led.db, NOW) == {
         "total": 0, "oldest_age_s": None, "by_reason": {}, "attention": 0}
 
 
@@ -137,14 +138,14 @@ def test_empty_population(led):
 ])
 def test_malformed_wait_records_are_unknown(led, progress, updated_at):
     _pending(led, progress=progress, updated_at=updated_at)
-    breakdown = notify_cards.pending_breakdown(led.db, NOW + 1)
+    breakdown = notify_scope.pending_breakdown(led.db, NOW + 1)
     assert {k: v["count"] for k, v in breakdown["by_reason"].items()} == {"unknown": 1}
 
 
 def test_non_numeric_row_timestamps_do_not_raise(led):
     eid = _pending(led, progress=json.dumps({"wait": {"reason": "intent_cards_issued", "at": NOW}}))
     led.db.execute("UPDATE notify_outbox SET updated_at='x', created_at=NULL WHERE event_id=?", (eid,))
-    breakdown = notify_cards.pending_breakdown(led.db, NOW + 1)
+    breakdown = notify_scope.pending_breakdown(led.db, NOW + 1)
     assert breakdown["total"] == 1 and breakdown["by_reason"] == {
         "unknown": {"count": 1, "oldest_age_s": None}}
 
@@ -168,7 +169,7 @@ def test_reply_during_create_waits_on_parts_then_completes(led):
     ev1, ev2, r1 = _second_intent_while_first_card_sends(led)
     assert _row(led, ev1["event_id"])["state"] == "accepted"
     later = NOW + notify_cards.RESEAT_S + 5
-    breakdown = notify_cards.pending_breakdown(led.db, later)
+    breakdown = notify_scope.pending_breakdown(led.db, later)
     assert {k: v["count"] for k, v in breakdown["by_reason"].items()} == {"card_parts_pending": 1}
     # parts settle → the next sweep issues the update that carries the reply
     _settle_bodies(led, r1)
@@ -178,14 +179,14 @@ def test_reply_during_create_waits_on_parts_then_completes(led):
     _begin(led, r2, n=2)
     _receipt(led, r2, f"{2:016x}", n=10)
     assert _row(led, ev2["event_id"])["state"] == "accepted"
-    assert notify_cards.pending_breakdown(led.db, later)["total"] == 0
+    assert notify_scope.pending_breakdown(led.db, later)["total"] == 0
 
 
 def test_an_unknown_part_is_an_attention_wait(led):
     ev1, ev2, r1 = _second_intent_while_first_card_sends(led)
     led.db.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? "
                    "AND kind='body_part'", (r1["delivery_id"],))
-    breakdown = notify_cards.pending_breakdown(led.db, NOW + 2)
+    breakdown = notify_scope.pending_breakdown(led.db, NOW + 2)
     assert {k: v["count"] for k, v in breakdown["by_reason"].items()} == {"card_parts_unknown": 1}
     assert breakdown["attention"] == 1
 
@@ -197,18 +198,18 @@ def test_a_thread_hold_lasts_until_its_thread_is_bound_then_unknown_delivery_sho
     event, card = _signal(led)
     progress = json.loads(_row(led, event["event_id"])["progress"])
     assert progress["thread_hold"] == "source_thread_not_ready" and "wait" in progress
-    held = notify_cards.pending_breakdown(led.db, NOW + 1)
+    held = notify_scope.pending_breakdown(led.db, NOW + 1)
     assert {k: v["count"] for k, v in held["by_reason"].items()} == {
         "thread_hold:source_thread_not_ready": 1}
     delivered_source(led, card_id=2)
     assert _dispatch(led, event)["dispatched"]
     assert "thread_hold" not in json.loads(_row(led, event["event_id"])["progress"])
-    moving = notify_cards.pending_breakdown(led.db, NOW + 1)
+    moving = notify_scope.pending_breakdown(led.db, NOW + 1)
     assert "thread_hold:source_thread_not_ready" not in moving["by_reason"]
     render = _latest_render(led, card["card_id"])
     assert _begin(led, render, n=8800)["granted"]
     assert _receipt(led, render, f"{8800:016x}", result="unknown", message_id=None, n=8801)["applied"]
-    unknown = notify_cards.pending_breakdown(led.db, NOW + notify_cards.RESEAT_S + 2)
+    unknown = notify_scope.pending_breakdown(led.db, NOW + notify_cards.RESEAT_S + 2)
     assert {k: v["count"] for k, v in unknown["by_reason"].items()} == {
         "intent_card_delivery_unknown": 1}
     assert unknown["attention"] == 1
@@ -235,17 +236,17 @@ def test_clearing_a_hold_keeps_other_progress_and_skips_bad_json(led):
 ], ids=["hold_only", "current_wait", "stale_wait"])
 def test_a_thread_hold_without_a_newer_wait_still_reports_the_hold(led, progress):
     _pending(led, progress=json.dumps(progress))
-    breakdown = notify_cards.pending_breakdown(led.db, NOW + 1)
+    breakdown = notify_scope.pending_breakdown(led.db, NOW + 1)
     assert {k: v["count"] for k, v in breakdown["by_reason"].items()} == {
         "thread_hold:source_thread_not_ready": 1}
 
 
 def test_an_unknown_part_outranks_a_hold_but_pending_parts_do_not(led):
-    assert notify_cards._pending_reason(
+    assert notify_scope._pending_reason(
         json.dumps({"hold_reason": "delivery_held"}), NOW, False, 2) == "card_parts_unknown"
-    assert notify_cards._pending_reason(
+    assert notify_scope._pending_reason(
         json.dumps({"hold_reason": "delivery_held"}), NOW, False, 1) == "hold_reason:delivery_held"
-    assert notify_cards._pending_reason("{bad", NOW, True, 2) == "unknown"
+    assert notify_scope._pending_reason("{bad", NOW, True, 2) == "unknown"
 
 
 @pytest.mark.parametrize("payload, counted", [
@@ -259,7 +260,7 @@ def test_only_a_scheduled_digest_leaves_the_pending_population(led, payload, cou
     led.db.execute("UPDATE notify_outbox SET payload=? WHERE event_id=?", (raw, eid))
     expected = 1 if counted else 0
     assert _population_count(led, NOW) == expected
-    assert notify_cards.pending_breakdown(led.db, NOW)["total"] == expected
+    assert notify_scope.pending_breakdown(led.db, NOW)["total"] == expected
 
 
 class _RecordingDb:
@@ -277,7 +278,7 @@ def test_breakdown_checkpoints_before_the_query_per_row_and_at_the_end(led):
     for _ in range(3):
         _pending(led)
     log = []
-    breakdown = notify_cards.pending_breakdown(
+    breakdown = notify_scope.pending_breakdown(
         _RecordingDb(led.db, log), NOW, checkpoint=lambda: log.append("check"))
     assert breakdown["total"] == 3
     assert log == ["check", "query", "check", "check", "check", "check"]
@@ -295,5 +296,5 @@ def test_breakdown_checkpoint_error_propagates_without_a_partial_result(led, fai
             raise TimeoutError("synthetic budget spent")
 
     with pytest.raises(TimeoutError):
-        notify_cards.pending_breakdown(led.db, NOW, checkpoint=checkpoint)
+        notify_scope.pending_breakdown(led.db, NOW, checkpoint=checkpoint)
     assert len(calls) == fail_at

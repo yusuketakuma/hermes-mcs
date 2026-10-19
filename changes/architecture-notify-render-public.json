@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "通知の共通表示処理の公開境界を整理",
+  "summary": "通知文の一行表示、保存済み投稿時刻、表示世代とメンション記法の共通処理を、通知描画の公開APIへ揃えました。通知の内容・時刻表記・患者範囲・承認条件は変更しません。",
+  "upgrade": "追加設定や操作は不要です。表示世代、保存形式、配送順序と既存workerの適用条件は変わりません。",
+  "details": [
+    "通知描画・閲覧・緊急候補表示・Slackの担当表示が同じ実体を直接参照し、旧private名のaliasは残しません。",
+    "一行表示と固定通知文、接続先別の文字検証は異なる契約として保持します。"
+  ],
+  "refs": [
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_views.py",
+    "mcs/notify/alert_view.py",
+    "mcs/notify/presentation/present_slack.py"
+  ]
+}

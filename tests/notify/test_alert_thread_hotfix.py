@@ -4,6 +4,7 @@ import json
 import pytest
 
 import notify_cards
+import notify_scope
 import notify_flush
 import notify_transport
 from adapters.common import spec as display_spec
@@ -27,7 +28,7 @@ def test_alert_seals_only_delivered_original_thread_and_receipt_is_idempotent(wo
            "attempt_id": f"{1100:016x}", "delivery_id": render["delivery_id"],
            "render_rev": render["render_rev"], "payload_hash": render["payload_hash"],
            "route_epoch": 1, "correlation": render["correlation"],
-           **notify_cards.delivery_scope(cfg), "result": "delivered", "message_id": "alert-reply"}
+           **notify_scope.delivery_scope(cfg), "result": "delivered", "message_id": "alert-reply"}
     first = notify_transport.apply_transport_receipt(store, req, cfg)
     assert first["applied"]
     replay = notify_transport.apply_transport_receipt(store, req, cfg)

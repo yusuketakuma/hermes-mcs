@@ -7,7 +7,7 @@ missing observation, so an unprovable stage is left out):
 - verified: fact IDs of the current ``semantic_facts_v2`` document of the
   summary's generation (message, source fingerprint) when the newest fact
   audit for the summary's policy is a completed PASS on that document's
-  hash (``semantic_v4.fact_audit_verdict``, the drain's own reuse rule),
+  hash (``semantic_audit.fact_audit_verdict``, the drain's own reuse rule),
   with complete coverage. Only facts marked ``verified`` count.
 - rendered: fact IDs bound (``、ID:<id>、証拠:``) in the summary artifact's
   stored ``mandatory_pages``, only when ``verify_mandatory_pages`` finds
@@ -25,34 +25,35 @@ The snapshot is opened ``mode=ro`` inside one read transaction; nothing
 is written to the ledger and no source text is emitted.
 """
 from __future__ import annotations
+import semantic_facts
 
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 
 from mcs_util import loads_dict
-from semantic_evaluation import LIFECYCLE_STAGES, EvaluationError, _dict
+from semantic_evaluation import LIFECYCLE_STAGES, EvaluationError, evaluation_object
 from semantic_policy import KIND_FACT_AUDIT, KIND_FACTS_V2, KIND_SUMMARY
 
 
-def _verified(db, mid: int, fp: str, policy: str) -> tuple[list | None, str]:
+def observed_verified_fact_ids(db, mid: int, fp: str, policy: str) -> tuple[list | None, str]:
     """Current v2 doc (newest for the generation) bound to a PASS fact
     audit — selected and judged exactly as the drain and the
-    re-projection gate do (``semantic_store._current`` +
-    ``semantic_v4.fact_audit_verdict``), so ``verified`` is observed only
+    re-projection gate do (``semantic_store.current_artifact`` +
+    ``semantic_audit.fact_audit_verdict``), so ``verified`` is observed only
     when the publication gate would accept the document as it stands."""
-    from semantic_store import _current
-    from semantic_v4 import _doc_hash, fact_audit_verdict
-    current = _current(db, KIND_FACTS_V2, mid, fp)
+    from semantic_store import current_artifact
+    from semantic_audit import fact_audit_verdict
+    current = current_artifact(db, KIND_FACTS_V2, mid, fp)
     if current is None:
         return None, "facts_doc_missing"
     doc = current["content"]
     try:
-        doc_hash = _doc_hash(doc)
+        doc_hash = semantic_facts.doc_hash(doc)
     except (KeyError, TypeError, ValueError):
         return None, "facts_doc_invalid"
     status = fact_audit_verdict(
-        _current(db, KIND_FACT_AUDIT, mid, fp, policy), doc_hash)
+        current_artifact(db, KIND_FACT_AUDIT, mid, fp, policy), doc_hash)
     if status is None:
         return None, "fact_audit_missing"
     if status != "PASS":
@@ -122,7 +123,8 @@ def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
                rendered: list | None, lines: dict,
                cfg: dict[str, str] | None = None) -> tuple[list | None, str]:
     import notify_flush
-    from semantic_send_gate import semantic_chunk_parts
+    import notify_sender
+    from semantic_render import semantic_chunk_parts
     if rendered is None:
         # nothing observed as rendered: a delivered fact ID could only be
         # read from the notice text itself, which is not the rendered stage
@@ -149,8 +151,8 @@ def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
     for row, text in rows:
         try:
             # the send path's chunker at its current width
-            # (notify_flush._semantic_chunks), with each part's body
-            chunks, bodies = semantic_chunk_parts(text, notify_flush._MAX_LEN)
+            # (semantic_render.semantic_chunks), with each part's body
+            chunks, bodies = semantic_chunk_parts(text, notify_flush.TEXT_CHUNK_WIDTH)
         except ValueError:
             return None, "notice_unchunkable"
         prefix, fingerprint = _accepted_prefix(row, len(chunks))
@@ -160,9 +162,9 @@ def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
             continue              # provably nothing accepted: delivers no fact
         partial = row["state"] != "accepted" or prefix < len(chunks)
         if partial:
-            target = notify_flush._target(cfg or {}, "semantic_notice")
+            target = notify_sender.target(cfg or {}, "semantic_notice")
             if (not isinstance(fingerprint, str) or target is None
-                    or fingerprint != notify_flush._delivery_fingerprint(
+                    or fingerprint != notify_sender.delivery_fingerprint(
                         target, chunks, [])):
                 return None, "notice_receipt_unprovable"
         joined = "".join(bodies)
@@ -218,7 +220,7 @@ def fact_lifecycle(db, final_id: int, artifact_ids: dict | None = None,
                 kind == "semantic_candidate" and other["message_id"] != mid):
             raise EvaluationError("artifact_source_mismatch")
     out, observations = {}, {}
-    verified, observations["verified"] = _verified(db, mid, fp, policy)
+    verified, observations["verified"] = observed_verified_fact_ids(db, mid, fp, policy)
     rendered, lines, observations["rendered"] = _rendered(summary)
     delivered, observations["delivered"] = _delivered(
         db, pid, mid, fp, policy, meta.get("target_revision"), rendered, lines,
@@ -244,12 +246,12 @@ def attach_lifecycle(path: str, records: list[dict],
         db.row_factory = sqlite3.Row
         db.execute("BEGIN")
         for record in records:
-            record = _dict(record, "evaluation_record")
-            ids = _dict(record.get("artifact_ids"), "artifact_ids")
+            record = evaluation_object(record, "evaluation_record")
+            ids = evaluation_object(record.get("artifact_ids"), "artifact_ids")
             if not set(ids) <= {"bundle_id", "candidate_id", "final_id"} or any(
                     type(value) is not int or value <= 0 for value in ids.values()):
                 raise EvaluationError("artifact_ids_invalid")
-            candidate = _dict(record.get("candidate"), "candidate")
+            candidate = evaluation_object(record.get("candidate"), "candidate")
             if any(f"{stage}_fact_ids" in candidate for stage in LIFECYCLE_STAGES) \
                     or "fact_lifecycle_observations" in record:
                 raise EvaluationError("lifecycle_already_present")

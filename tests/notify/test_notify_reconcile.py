@@ -20,6 +20,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import notify_cards
+import notify_spool
 import notify_reconcile
 import notify_transport
 
@@ -47,7 +48,7 @@ def test_restore_pending_marker_blocks_begins(world):
     world.seed()
     world.dispatch()
     spec = world.spec(world.render()["delivery_id"])
-    notify_cards.mark_restored(str(world.data), backup_path="b.db",
+    notify_spool.mark_restored(str(world.data), backup_path="b.db",
                                by="test")
     req = envelopes.transport_begin(
         {"attempt_id": registry.new_attempt_id(), "worker_id": "w" + "0" * 15,
@@ -65,13 +66,13 @@ def test_restore_pending_marker_blocks_begins(world):
 
 
 def test_flags_publish_restore_pending(world):
-    notify_cards.mark_restored(str(world.data), by="test")
-    notify_cards.publish_flags(CFG, str(world.data))
+    notify_spool.mark_restored(str(world.data), by="test")
+    notify_spool.publish_flags(CFG, str(world.data))
     flags = json.loads(
         (world.data / "flags" / "notify.json").read_text())
     assert flags["restore_pending"] is True
     notify_reconcile.reconcile_after_restore(world.led, CFG)
-    notify_cards.publish_flags(CFG, str(world.data))
+    notify_spool.publish_flags(CFG, str(world.data))
     flags = json.loads(
         (world.data / "flags" / "notify.json").read_text())
     assert flags["restore_pending"] is False
@@ -80,20 +81,20 @@ def test_flags_publish_restore_pending(world):
 @pytest.mark.parametrize("raw", [b"{broken", b"[]", b"{}", b'[{"x":' * 1200],
                          ids=["syntax", "array", "empty", "recursive"])
 def test_invalid_restore_marker_keeps_writers_and_senders_held(world, raw):
-    path = world.data / notify_cards.RESTORE_MARKER
+    path = world.data / notify_spool.RESTORE_MARKER
     path.write_bytes(raw)
-    assert notify_cards.restore_pending(str(world.data)) is not None
-    assert notify_cards.restore_awaiting_consent(str(world.data)) is not None
+    assert notify_spool.restore_pending(str(world.data)) is not None
+    assert notify_spool.restore_awaiting_consent(str(world.data)) is not None
     with pytest.raises(ValueError, match="restore_marker_unreadable"):
         notify_reconcile.reconcile_after_restore(world.led, CFG)
     assert path.read_bytes() == raw
 
 
 def test_unreadable_restore_marker_is_not_absent(world):
-    path = world.data / notify_cards.RESTORE_MARKER
+    path = world.data / notify_spool.RESTORE_MARKER
     path.mkdir()
-    assert notify_cards.restore_pending(str(world.data)) is not None
-    assert notify_cards.restore_awaiting_consent(str(world.data)) is not None
+    assert notify_spool.restore_pending(str(world.data)) is not None
+    assert notify_spool.restore_awaiting_consent(str(world.data)) is not None
 
 
 @pytest.mark.parametrize("raw", [b"[]", b"null", b"1", b"[" * 1200, b"\xff"],
@@ -101,26 +102,26 @@ def test_unreadable_restore_marker_is_not_absent(world):
 def test_flags_repaired_after_invalid_json_shape(world, raw):
     path = world.data / "flags" / "notify.json"
     path.write_bytes(raw)
-    assert notify_cards.publish_flags(CFG, str(world.data)) is True
+    assert notify_spool.publish_flags(CFG, str(world.data)) is True
     flags = json.loads(path.read_bytes())
     assert flags["interactive"] is True
-    assert notify_cards.publish_flags(CFG, str(world.data)) is False
+    assert notify_spool.publish_flags(CFG, str(world.data)) is False
 
 
 def test_unreadable_journal_keeps_restore_hold(world):
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     (world.data / "discord_state" / "journal-w1.jsonl").mkdir()
     with pytest.raises(OSError):
         notify_reconcile.reconcile_after_restore(world.led, CFG)
-    assert notify_cards.restore_pending(str(world.data)) is not None
+    assert notify_spool.restore_pending(str(world.data)) is not None
 
 
 def test_unattributed_corrupt_journal_cannot_release_restore(world):
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     (world.data / "discord_state" / "journal-w1.jsonl").write_text("{broken\n")
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     assert rep["journal_incomplete"] is True
-    assert notify_cards.restore_pending(str(world.data)) is not None
+    assert notify_spool.restore_pending(str(world.data)) is not None
 
 
 def test_corrupt_part_journal_does_not_prove_non_delivery(world):
@@ -134,11 +135,11 @@ def test_corrupt_part_journal_does_not_prove_non_delivery(world):
         "delivery_id": render["delivery_id"]})
     with (state / "journal-w1.jsonl").open("a") as stream:
         stream.write("{broken\n")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     row = next(v for v in rep["verdicts"] if v["attempt_id"] == aid)
     assert row["verdict"] == "held"
-    assert notify_cards.restore_pending(str(world.data)) is not None
+    assert notify_spool.restore_pending(str(world.data)) is not None
 
 
 def test_unknown_part_catches_up_from_a_journaled_factual_result(world):
@@ -160,7 +161,7 @@ def test_unknown_part_catches_up_from_a_journaled_factual_result(world):
         "attempt_id": envelope["attempt_id"], "delivery_id": render["delivery_id"],
         "part_id": part["part_id"], "phase": "result", "result": "delivered",
         "remote_id": "synthetic-known-body", "receipt_envelope": envelope})
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     report = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = next(v for v in report["verdicts"]
                    if v["attempt_id"] == envelope["attempt_id"])
@@ -187,11 +188,11 @@ def test_tainted_journal_rerun_alerts_once(world):
         "delivery_id": render["delivery_id"]})
     with (state / "journal-w1.jsonl").open("a") as stream:
         stream.write("{broken\n")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     for _ in range(3):
         rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
         assert rep["held"]
-        assert notify_cards.restore_pending(str(world.data)) is not None
+        assert notify_spool.restore_pending(str(world.data)) is not None
     assert world.led.db.execute(
         "SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'"
     ).fetchone()[0] == 1
@@ -214,7 +215,7 @@ def test_lost_delivered_attempt_holds_scope(world):
     world.led.db.execute("UPDATE notify_outbox SET progress='{\"next\":1}'"
                          " WHERE event_id=?", (eid,))
     world.led.db.commit()
-    notify_cards.mark_restored(str(world.data), backup_path="b.db")
+    notify_spool.mark_restored(str(world.data), backup_path="b.db")
 
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
@@ -232,7 +233,7 @@ def test_lost_delivered_attempt_holds_scope(world):
     assert st["state"] == "failed" and st["next_try"] is None
     assert world.holds()
     # marker cleared only after the receipt was written
-    assert notify_cards.restore_pending(str(world.data)) is None
+    assert notify_spool.restore_pending(str(world.data)) is None
     receipt = json.loads(
         (world.data / "restore_reconcile.json").read_text())
     assert receipt["held"]
@@ -259,7 +260,7 @@ def test_unlinked_lost_delivery_holds_pending_interactive_with_reason(world):
     world.led.db.execute("UPDATE notify_outbox SET progress='{\"next\":1}'"
                          " WHERE event_id=?", (eid,))
     world.led.db.commit()
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
     row = world.led.db.execute(
         "SELECT state,progress FROM notify_outbox WHERE event_id=?",
@@ -280,7 +281,7 @@ def test_rebind_delivered_releases_hold(world):
     aid = _journal_claim(state, "w1", spec)
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "delivered", message_id="999001")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
 
     req = {"version": 1, "cmd": "ops.card_resolve",
@@ -310,7 +311,7 @@ def test_rebind_delivered_completes_only_its_coverage_and_waits_for_siblings(wor
     aid = _journal_claim(state, "w1", spec)
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "delivered", message_id="synthetic-rebound")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
     req = {"version": 1, "cmd": "ops.card_resolve",
            "command_id": str(__import__("uuid").uuid4()),
@@ -358,7 +359,7 @@ def test_rebind_never_revives_a_revoked_card(world, result):
     aid = _journal_claim(str(world.data / "discord_state"), "w1", spec)
     _journal_result(str(world.data / "discord_state"), "w1", aid,
                     render["delivery_id"], "unknown")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
     with world.led.db:
         notify_cards.revoke_card(world.led.db, render["card_id"], NOW)
@@ -388,7 +389,7 @@ def test_rebind_checks_the_held_attempt_and_its_journal_witness(world, mutation,
     aid = _journal_claim(state, "w1", spec)
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "delivered", message_id="synthetic-known-message")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
     req = {"version": 1, "cmd": "ops.card_resolve",
            "command_id": str(__import__("uuid").uuid4()),
@@ -420,7 +421,7 @@ def test_rebind_rejects_corrupt_scope_with_a_durable_receipt(world, scope_json, 
                          world.spec(render["delivery_id"]))
     _journal_result(str(world.data / "discord_state"), "w1", aid,
                     render["delivery_id"], "unknown")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
     assert world.holds()
     with world.led.db:
@@ -466,7 +467,7 @@ def test_rebind_rejects_corrupt_hold_events_with_a_durable_receipt(
                          world.spec(render["delivery_id"]))
     _journal_result(str(world.data / "discord_state"), "w1", aid,
                     render["delivery_id"], "unknown")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
     assert world.holds()
     with world.led.db:
@@ -503,7 +504,7 @@ def test_lost_not_sent_attempt_resumes(world):
     aid = _journal_claim(state, "w1", spec)
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "not_sent", error_code="http_403")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "not_sent"
@@ -526,7 +527,7 @@ def test_lost_unknown_attempt_holds(world):
     journal.append(state, "w1", {
         "phase": "started", "attempt_id": aid,
         "delivery_id": render["delivery_id"]})
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "held"
@@ -547,7 +548,7 @@ def test_present_attempt_catches_up_from_journal(world):
     _attempt_row(world.led, aid, render["delivery_id"])
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "delivered", message_id="999001")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "settled"
@@ -570,7 +571,7 @@ def test_present_attempt_settles_unknown_from_started(world):
     journal.append(state, "w1", {
         "phase": "started", "attempt_id": aid,
         "delivery_id": render["delivery_id"]})
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "settled"
@@ -589,7 +590,7 @@ def test_present_attempt_pre_http_settles_not_sent(world):
     state = str(world.data / "discord_state")
     aid = _journal_claim(state, "w1", spec)
     _attempt_row(world.led, aid, render["delivery_id"])
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "settled"
@@ -614,7 +615,7 @@ def test_present_attempt_terminal_consistent(world):
     world.led.db.commit()
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "delivered", message_id="999001")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "consistent"
@@ -638,7 +639,7 @@ def test_present_attempt_terminal_conflict_holds(world):
     world.led.db.commit()
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "delivered", message_id="888002")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "held"
@@ -653,7 +654,7 @@ def test_journal_less_attempt_is_held(world):
     render = world.render()
     aid = registry.new_attempt_id()
     _attempt_row(world.led, aid, render["delivery_id"])
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "held"
@@ -676,7 +677,7 @@ def test_tainted_journal_upgrades_pre_http(world):
     journal.append(state, "w1", {
         "phase": "claimed", "attempt_id": "other",
         "delivery_id": "x"})
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "held"
@@ -700,7 +701,7 @@ def test_scope_mismatch_receipt_is_held(world):
     world.led.db.commit()
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "delivered", message_id="999001")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "held"
@@ -718,7 +719,7 @@ def test_held_card_blocks_reissue(world):
     aid = _journal_claim(state, "w1", spec)
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "delivered", message_id="999001")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     notify_reconcile.reconcile_after_restore(world.led, CFG)
     # drift the card — without the hold a new render would issue
     notify_cards.sweep(world.led, CFG)
@@ -734,7 +735,7 @@ def test_reconcile_idempotent(world):
     aid = _journal_claim(state, "w1", spec)
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "delivered", message_id="999001")
-    notify_cards.mark_restored(str(world.data))
+    notify_spool.mark_restored(str(world.data))
     rep1 = notify_reconcile.reconcile_after_restore(world.led, CFG)
     rep2 = notify_reconcile.reconcile_after_restore(world.led, CFG)
     assert rep1["verdicts"] == rep2["verdicts"]

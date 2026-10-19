@@ -5,7 +5,7 @@ import semantic_transport
 from mcs_util import loads_dict
 from semantic_policy import (KIND_AUDIT, KIND_SUMMARY, policy_fingerprint,
                              semantic_config)
-from semantic_store import _current, thread_bundle
+from semantic_store import current_artifact, thread_bundle
 
 
 def _object(raw) -> dict:
@@ -95,9 +95,9 @@ def current_quality(ledger, cfg: dict | None, *, checkpoint=lambda: None) -> dic
         reason = "thread_missing"
         if bundle is not None:
             mid, fp = row["message_id"], bundle["source_fingerprint"]
-            audit = _current(ledger.db, KIND_AUDIT, mid, fp,
+            audit = current_artifact(ledger.db, KIND_AUDIT, mid, fp,
                              out["policy_fingerprint"])
-            summary = _current(ledger.db, KIND_SUMMARY, mid, fp,
+            summary = current_artifact(ledger.db, KIND_SUMMARY, mid, fp,
                                out["policy_fingerprint"])
             reason = "current_pair_missing"
             if audit is not None and summary is not None:

@@ -46,7 +46,7 @@ def test_deep_response_stops_at_attempt_ceiling(monkeypatch, recursion_limited_j
 
 def test_deep_models_response_is_fixed_protocol_error(monkeypatch, recursion_limited_json):
     client = jev.JevClient(api_key="synthetic")
-    monkeypatch.setattr(client, "_http_request", lambda *a, **k: (200, {}, _deep_json()))
+    monkeypatch.setattr(client, "request", lambda *a, **k: (200, {}, _deep_json()))
     with pytest.raises(jev.JevError) as raised:
         client.models()
     assert (raised.value.kind, raised.value.detail) == ("protocol_error", "not_json")

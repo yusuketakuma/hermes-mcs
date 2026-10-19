@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import ledger as _ledger
 import notify_cards
+import notify_spool
 import notify_cmds
 
 from adapters.common import envelopes, registry
@@ -217,7 +218,7 @@ def _measure_pipeline(world, n):
     t_dispatch = time.perf_counter() - t0
     # the worker only claims once the runner publishes interactive=on
     # (as the runner does, after dispatch created the flags dir)
-    notify_cards.publish_flags(CFG, str(data))
+    notify_spool.publish_flags(CFG, str(data))
     for f in (data / "discord_render").glob("*.json"):
         starts[f.stem] = time.time()    # publish observation point
     cpu0 = time.process_time()
@@ -317,7 +318,7 @@ def test_perf_operation_apply(tmp_path, monkeypatch):
     notify_cards.dispatch_intent(led, ev, CFG, now=NOW)
     # the worker only claims once the runner publishes interactive=on,
     # and only sends through a verified-SDK client
-    notify_cards.publish_flags(CFG, str(data))
+    notify_spool.publish_flags(CFG, str(data))
     bot = FakeBot(http=FakeHTTPClient())
     reg = registry.Registry(str(data / "discord_state"))
     worker = delivery.DeliveryWorker(
@@ -432,7 +433,7 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
     gc_out = notify_cards.gc(led, CFG, now=NOW)
     t_gc = time.perf_counter() - t
     t = time.perf_counter()
-    notify_cards.recover(led, CFG, res)
+    notify_spool.recover(led, CFG, res)
     t_recover = time.perf_counter() - t
     snap = tmp_path / "snap"
     snap.mkdir()

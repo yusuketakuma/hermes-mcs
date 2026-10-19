@@ -12,7 +12,7 @@ from time import monotonic
 import uuid
 from contextlib import suppress
 
-from mcs_util import publish_tmp
+from safe_io import publish_tmp
 
 
 SNAPSHOT_VERIFY_TIMEOUT_S = 30.0

@@ -10,6 +10,7 @@ from collections import namedtuple
 import pytest
 
 import mcs_backup as backup
+import backup_evidence
 from test_mcs_backup import NOW, world as world
 
 
@@ -38,18 +39,19 @@ def inspection(world, tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("readonly inspection attempted a write, key or external action")
 
-    for name in ("_keychain_read", "store_keychain", "_openssl", "_record_lock",
-                 "_record_success", "atomic_write", "publish_tmp", "_copy_private"):
+    for name in ("_keychain_read", "store_keychain", "_openssl", "atomic_write", "publish_tmp", "_copy_private"):
         monkeypatch.setattr(backup, name, forbidden)
+    for name in ("record_lock", "record_success", "record_failure", "atomic_write"):
+        monkeypatch.setattr(backup_evidence, name, forbidden)
     monkeypatch.setattr(backup.subprocess, "run", forbidden)
     monkeypatch.setattr(backup.tempfile, "TemporaryDirectory", forbidden)
-    monkeypatch.setattr(backup.notify_cards, "mark_restored", forbidden)
+    monkeypatch.setattr(backup.notify_spool, "mark_restored", forbidden)
     return snapshot, policy, policy_path, state
 
 
 def _inspect_unchanged(tmp_path, policy_path, **kwargs):
     before = _tree(tmp_path)
-    report = backup.plan(policy_path, **kwargs)
+    report = backup_evidence.plan(policy_path, **kwargs)
     assert _tree(tmp_path) == before
     serialized = json.dumps(report)
     for secret in (str(tmp_path), "synthetic-policy", "synthetic patient",
@@ -115,7 +117,7 @@ def test_cli_drives_real_readonly_plan(inspection, tmp_path, capsys, action):
     assert report["actions_applied"] is False
     assert str(tmp_path) not in json.dumps(report)
     assert _tree(tmp_path) == before
-    assert backup.preflight is backup.plan
+    assert backup_evidence.preflight is backup_evidence.plan
 
 
 @pytest.mark.parametrize("case", [
@@ -137,7 +139,7 @@ def test_negative_plans_are_redacted_blocked_and_unchanged(
     elif case == "policy_invalid":
         policy_path.write_text('{"private-patient-secret":')
     elif case == "policy_oversized":
-        policy_path.write_bytes(b" " * (backup.MAX_HEADER + 1))
+        policy_path.write_bytes(b" " * (backup_evidence.MAX_RECORD_BYTES + 1))
     elif case == "scheduled_not_bool":
         document["scheduled"] = "true"
     elif case == "custody_false":
@@ -282,10 +284,10 @@ def test_scheduled_literal_true_gate_is_unchanged(inspection, tmp_path, schedule
     policy_path.write_text(json.dumps({"scheduled": scheduled, "invalid-policy": True}))
     before = _tree(tmp_path)
     if scheduled is False:
-        assert backup.load_policy(policy_path, require_scheduled=True) == (None, False)
+        assert backup_evidence.load_policy(policy_path, require_scheduled=True) == (None, False)
     else:
-        with pytest.raises(backup.BackupError, match="backup_policy_required"):
-            backup.load_policy(policy_path, require_scheduled=True)
+        with pytest.raises(backup_evidence.BackupError, match="backup_policy_required"):
+            backup_evidence.load_policy(policy_path, require_scheduled=True)
     assert _tree(tmp_path) == before
 
 
@@ -300,7 +302,7 @@ def test_missing_explicit_inputs_are_unknown_without_path_defaults(inspection, t
 def test_changed_hash_between_inventory_reads_is_blocked_without_any_write(
         inspection, tmp_path, monkeypatch):
     snapshot, _, policy_path, state = inspection
-    original = backup._inspection_hash
+    original = backup_evidence._inspection_hash
     calls = 0
 
     def changing_read(path, limit):
@@ -309,7 +311,7 @@ def test_changed_hash_between_inventory_reads_is_blocked_without_any_write(
         calls += 1
         return ("0" * 64 if calls == 2 else digest), st
 
-    monkeypatch.setattr(backup, "_inspection_hash", changing_read)
+    monkeypatch.setattr(backup_evidence, "_inspection_hash", changing_read)
     report = _inspect_unchanged(
         tmp_path, policy_path, snapshot=str(snapshot), state_dir=str(state))
     assert report["blockers"] == ["backup_source_changed"]
@@ -345,7 +347,7 @@ def test_vm_budget_exhaustion_is_unknown_without_partial_counts_or_writes(
     snapshot, _, policy_path, state = inspection
     before = _tree(tmp_path)
     if action == "api":
-        report = backup.plan(
+        report = backup_evidence.plan(
             policy_path, snapshot=str(snapshot), state_dir=str(state), max_steps=100)
         code = report["exit_code"]
     else:
@@ -388,7 +390,7 @@ def test_budgeted_connection_is_immutable_query_only_memory_temp_and_no_lock_wai
         inspection, tmp_path):
     snapshot, _, _, _ = inspection
     before = _tree(tmp_path)
-    with backup._inventory_connection(snapshot, 10_000_000, None) as db:
+    with backup_evidence._inventory_connection(snapshot, 10_000_000, None) as db:
         assert db.execute("PRAGMA temp_store").fetchone()[0] == 2
         assert db.execute("PRAGMA query_only").fetchone()[0] == 1
         assert db.execute("PRAGMA busy_timeout").fetchone()[0] == 0
@@ -403,14 +405,14 @@ def test_budgeted_connection_is_immutable_query_only_memory_temp_and_no_lock_wai
 def test_bounded_inventory_matches_existing_validation_without_unbounded_reader(
         inspection, tmp_path, monkeypatch):
     snapshot, _, _, _ = inspection
-    expected = backup.inventory_snapshot(snapshot)
+    expected = backup_evidence.inventory_snapshot(snapshot)
     before = _tree(tmp_path)
 
     def forbidden(*args, **kwargs):
         pytest.fail("bounded inspection used the unbudgeted validator connection")
 
-    monkeypatch.setattr(backup, "valid_mcs_db", forbidden)
-    actual = backup.inventory_snapshot(snapshot, max_steps=10_000_000)
+    monkeypatch.setattr(backup_evidence, "valid_mcs_db", forbidden)
+    actual = backup_evidence.inventory_snapshot(snapshot, max_steps=10_000_000)
     assert actual == expected
     assert _tree(tmp_path) == before
 
@@ -429,7 +431,7 @@ def test_bounded_source_validation_rejects_invalid_schema_without_writes(
             db.execute("DROP TABLE read_marks")
         else:
             db.execute("CREATE TABLE attachments_v1(x)")
-    assert backup.valid_mcs_db(str(snapshot)) is False
+    assert backup_evidence.valid_mcs_db(str(snapshot)) is False
     report = _inspect_unchanged(
         tmp_path, policy_path, snapshot=str(snapshot), state_dir=str(state))
     assert report["exit_code"] == 1 and report["status"] == "blocked"
@@ -456,7 +458,7 @@ def test_invalid_budget_is_redacted_blocked_before_inspection(
 def test_deadline_after_inventory_queries_does_not_publish_completed_counts(
         inspection, tmp_path, monkeypatch):
     snapshot, _, policy_path, state = inspection
-    original = backup._inventory_connection
+    original = backup_evidence._inventory_connection
     counted = False
 
     def trace(statement):
@@ -472,7 +474,7 @@ def test_deadline_after_inventory_queries_does_not_publish_completed_counts(
             db.set_trace_callback(trace)
             yield db
 
-    monkeypatch.setattr(backup, "_inventory_connection", observed_connection)
+    monkeypatch.setattr(backup_evidence, "_inventory_connection", observed_connection)
     monkeypatch.setattr(backup.time, "monotonic", lambda: 106.0 if counted else 100.0)
     report = _inspect_unchanged(
         tmp_path, policy_path, snapshot=str(snapshot), state_dir=str(state))

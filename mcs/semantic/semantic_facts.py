@@ -16,6 +16,7 @@ evidence or the generation is explicitly non-PASS — no silent omission.
 from __future__ import annotations
 
 import hashlib
+import re
 import unicodedata
 
 from mcs_util import payload_hash
@@ -620,3 +621,64 @@ def validate_facts_doc(doc: dict) -> dict:
         "facts": facts, "relations": relations,
         "coverage": coverage,
     }
+
+
+def doc_hash(v2_doc: dict) -> str:
+    return payload_hash({"f": v2_doc["facts"], "e": v2_doc["evidence"]})
+
+
+_ENTITY_TOKEN = re.compile(r"[ァ-ヶー]{2,}|[A-Za-z0-9]{2,}|[一-龥々]{2,}")
+
+
+def entity_tokens(statement: str) -> set:
+    """Significant tokens standing in for entity identity without NLP —
+    katakana runs (drug names), alphanumerics, and CJK compounds."""
+    return {normalize_name(m.group(0) or "") for m in _ENTITY_TOKEN.finditer(statement or "")}
+
+
+def cached_facts_plan(prev_v2, member, mid: int, fp: str, fact_source: str):
+    """Normalize source-bound cached facts and plan the existing single coverage retry."""
+    if prev_v2 is not None:
+        prev_v2 = dict(prev_v2)
+        cached = prev_v2["content"]
+        from hashlib import sha256
+        try:
+            cached = {**cached, **validate_facts_doc(cached)}
+        except ContractError:
+            # Preserve malformed history and rebuild through extraction.
+            prev_v2 = None
+        else:
+            source = cached["source"]
+            body = member["body_original"]
+            if (source["message_id"] != str(mid)
+                    or source["revision"] != str(member.get("revision", ""))
+                    or source["content_hash"] != sha256(body.encode("utf-8")).hexdigest()
+                    or source["body_codepoints"] != len(body)
+                    or source["source_fingerprint"] != fp
+                    or source["content_quality"] != (
+                        "full" if member.get("body_state") == "full" else "partial")
+                    or source["attachments_complete"] != bool(
+                        member.get("attachments_complete", True))):
+                # Artifact metadata alone cannot bind facts to this source.
+                prev_v2 = None
+            else:
+                # The contract normalizes supported IDs/text before use.
+                # Keep the original stored row and any document extensions.
+                prev_v2["content"] = cached
+    # A stored document the hint rebuild did not confirm (skipped, or a
+    # past generation) is never reused, but the retry it already spent
+    # still binds this run.
+    spent = False
+    if prev_v2 is not None and prev_v2["meta"].get("hint_rebuild") \
+            not in (None, "same"):
+        spent, prev_v2 = bool(prev_v2["meta"].get("coverage_retry")), None
+    # C03: an adjudicated-but-incomplete stored doc must not be
+    # reused forever — one bounded re-extraction resumes from the
+    # missing chunks; if it still cannot complete, the generation
+    # parks as needs_review instead of silently deferring forever.
+    coverage_retry = (
+        fact_source == "canonical" and prev_v2 is not None
+        and prev_v2["meta"].get("coverage_status") not in
+            (None, "complete")
+        and not prev_v2["meta"].get("coverage_retry"))
+    return prev_v2, spent, coverage_retry

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-import notify_cards
+import notify_spool
 from adapters.common import envelopes, registry
 from adapters.lineworks import actions, delivery, server
 from notify_testkit import NOW
@@ -73,8 +73,8 @@ class FakeClient:
 
 def world(tmp_path, *, action="request"):
     data = tmp_path / "data"
-    notify_cards.ensure_dirs(str(data))
-    notify_cards.publish_flags(CONFIG, str(data))
+    notify_spool.ensure_dirs(str(data))
+    notify_spool.publish_flags(CONFIG, str(data))
     settings = {**SCOPE, "route_epoch": 1, "data_root": str(data), "allowed_user_ids": {"operator", "other"},
                 "project_ids": {1}, "project_ids_auto": False}
     dirs = delivery.notify_dirs(str(data))

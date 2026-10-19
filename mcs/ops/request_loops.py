@@ -172,7 +172,7 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None):
     """Derive a candidate's current display state with the view's exact source and policy guards."""
 
     import semantic_jev as jev
-    from semantic_loops import _rejected_pair
+    from semantic_loops import rejected_relation_pair
     from mcs_util import loads_dict
 
     r = candidate_row
@@ -243,7 +243,7 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None):
             and meta.get("policy_fingerprint") == policy
             and ev.get("origin_revision") == origin.get("revision")
             and ev.get("trigger_revision") == trigger["revision"])
-        confidence = jev._finite(ev.get("confidence"))
+        confidence = jev.finite_value(ev.get("confidence"))
         if (not ev["stale"] and confidence is not None
                 and 0 <= confidence <= 1
                 and isinstance(ev.get("relation"), str)
@@ -271,7 +271,7 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None):
             receipt, meta = loads_dict(rejection["content"]), loads_dict(rejection["meta"])
             if not receipt or not meta or not isinstance(meta.get("retry_scope"), str):
                 continue
-            parsed = _rejected_pair(receipt, meta, policy, meta["retry_scope"])
+            parsed = rejected_relation_pair(receipt, meta, policy, meta["retry_scope"])
             if not parsed or meta.get("fingerprint") != bundle["source_fingerprint"]:
                 continue
             (loop_id, trigger_id, revision), _ = parsed

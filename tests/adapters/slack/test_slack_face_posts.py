@@ -31,6 +31,7 @@ def test_card_face_carries_the_fold_and_the_thread_stays_empty(led):
 @pytest.mark.parametrize("initial_state", ["full", "deleted"])
 def test_face_post_growing_past_limit_keeps_its_full_thread_body(led, monkeypatch, initial_state):
     import notify_cards
+    import notify_spool
     import present_slack
     from notify_testkit import NOW, _latest_render
     monkeypatch.setattr(present_slack, "FACE_ORIGINAL_MAX", 20)
@@ -54,7 +55,7 @@ def test_face_post_growing_past_limit_keeps_its_full_thread_body(led, monkeypatc
                    if p["kind"] == "body_part" and p["name"].startswith("m:100#"))
     assert body == original
     assert not current["delivery"]["intent_event_ids"]
-    notify_cards.publish_specs(led.db, notify_cards.notify_dirs(str(w.root)), issued, NOW + 1)
+    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(w.root)), issued, NOW + 1)
     asyncio.run(_granted_card(w.worker, led, w.root))
     added = w.client.thread_posts[before:]
     assert any(p["text"] == original for p in added)

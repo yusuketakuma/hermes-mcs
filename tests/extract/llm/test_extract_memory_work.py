@@ -53,7 +53,7 @@ def test_thread_context_fetches_only_existing_selection(target_is_root):
         "SELECT message_id,body_text,posted_at_ts,sender_type AS who FROM messages "
         "WHERE project_id=1 AND (message_id=1 OR (parent_id=1 AND posted_at_ts<400)) "
         "AND body_state='full' AND message_id!=?", (target["message_id"],)).fetchall()
-    expected = "\n".join(extract_llm._ctx_lines(candidates, 1))
+    expected = "\n".join(extract_llm.thread_context_lines(candidates, 1))
     try:
         assert extract_llm._thread_context(borrowed, target) == expected
         assert len(fetched) <= 4

@@ -139,7 +139,7 @@ def test_session_boundary_prevents_redirect_proxy_and_keeps_single_post_guard():
                     allow_redirects=True, proxy="http://foreign.invalid", proxy_auth="secret")
     assert calls[0][1] == {"allow_redirects": False, "proxy": None, "proxy_auth": None}
     original = session.request
-    session.request = runtime.cards._guarded(session.request)
+    session.request = runtime.delivery._guarded(session.request)
     guard = session.request
     runtime._session_boundary(session)
     assert session.request is guard and session.request is not original

@@ -291,7 +291,7 @@ def _install_tag(updater, monkeypatch, tmp_path):
                    "v1.2.0", {"install.sh": "#!/bin/sh\n"})
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
-                        lambda expected: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
     return repo, sha
 
 

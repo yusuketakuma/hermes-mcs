@@ -108,7 +108,7 @@ def run_cohort(ledger, cohort: str, now: float | None = None) -> dict:
             if existing is not None:
                 pending += 1
                 continue
-            ledger._job_add_tx(
+            ledger.job_add_tx(
                 JOB_KIND, item["project_id"], mid,
                 payload={"targets": [mid], "notification_free": True,
                          "source_generation": item["source_fingerprint"],

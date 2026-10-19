@@ -141,7 +141,7 @@ def validate_standalone(cfg: dict) -> list[str]:
 
 def _validate_llm(ll: dict) -> list[str]:
     """local_llm subkeys — url must stay an unauthenticated loopback
-    http endpoint (mirrors bounded_http._loopback_endpoint_allowed):
+    http endpoint (mirrors bounded_http.loopback_endpoint_allowed):
     message bodies are PHI and must not leave the machine."""
     errors = []
     for key in ("url", "model"):
@@ -151,7 +151,7 @@ def _validate_llm(ll: dict) -> list[str]:
     url = ll.get("url")
     if isinstance(url, str) and url.strip():
         try:
-            allowed = bounded_http._loopback_endpoint_allowed(url)
+            allowed = bounded_http.loopback_endpoint_allowed(url)
         except Exception:
             allowed = False
         if not allowed:

@@ -136,16 +136,16 @@ def _quality(cases, outputs, completed):
                     unknowns[0] += int(correct)
                     unknowns[1] += 1
     return {
-        "request_precision": evaluation._success_metric(true_positive, predicted_total),
-        "request_recall": evaluation._success_metric(true_positive, gold_total),
+        "request_precision": evaluation.success_metric(true_positive, predicted_total),
+        "request_recall": evaluation.success_metric(true_positive, gold_total),
         "false_positive_requests": predicted_total - true_positive,
         "missing_requests": gold_total - true_positive,
         "request_kinds": {
-            key: {"precision": evaluation._success_metric(correct, predicted),
-                  "recall": evaluation._success_metric(correct, gold)}
+            key: {"precision": evaluation.success_metric(correct, predicted),
+                  "recall": evaluation.success_metric(correct, gold)}
             for key, (correct, predicted, gold) in by_kind.items()},
-        "fields": {key: evaluation._success_metric(*value) for key, value in fields.items()},
-        "unknown_preservation": evaluation._success_metric(*unknowns),
+        "fields": {key: evaluation.success_metric(*value) for key, value in fields.items()},
+        "unknown_preservation": evaluation.success_metric(*unknowns),
         "false_done": {"errors": false_done, "denominator": len(cases)},
         "reply_confusion": reply_matrix, "request_reply_confusion": type_matrix}
 
@@ -266,7 +266,7 @@ def shadow_compare(db):
         counts["unmatched_candidate"] += len(predicted)
     return {"schema_version": VERSION, "scope": "shadow_requests_vs_extract_llm",
             "reference": "extract_llm", "pairing": "evidence_overlap", **counts,
-            "fields": {key: evaluation._success_metric(*value)
+            "fields": {key: evaluation.success_metric(*value)
                        for key, value in fields.items()},
             "model_calls": 0, "production_ready": False}
 
@@ -285,20 +285,20 @@ def capacity_report(days):
         if not isinstance(day, dict) or set(day) != {"day", "llm_s", "job_llm_s", "slot_busy"}:
             raise ValueError("capacity_fields_invalid")
         dates.append(date.fromisoformat(day["day"]))
-        totals.append(evaluation._finite_number(day["llm_s"], "daily_llm_s"))
+        totals.append(evaluation.nonnegative_number(day["llm_s"], "daily_llm_s"))
         if not isinstance(day["job_llm_s"], list):
             raise ValueError("capacity_jobs_invalid")
-        day_jobs = [evaluation._finite_number(value, "job_llm_s")
+        day_jobs = [evaluation.nonnegative_number(value, "job_llm_s")
                     for value in day["job_llm_s"]]
         jobs_complete = jobs_complete and math.isclose(
             sum(day_jobs), totals[-1], rel_tol=0, abs_tol=1e-9)
         jobs.extend(day_jobs)
-        skips.append(evaluation._finite_number(day["slot_busy"], "slot_busy", integer=True))
+        skips.append(evaluation.nonnegative_number(day["slot_busy"], "slot_busy", integer=True))
     if len(set(dates)) != len(dates) or dates != sorted(dates):
         raise ValueError("capacity_dates_invalid")
     complete = len(dates) == 14 and dates[-1] - dates[0] == timedelta(days=13)
     mean = sum(totals) / len(totals)
-    p90 = evaluation._percentile(jobs, .9) if jobs_complete else None
+    p90 = evaluation.validated_percentile(jobs, .9) if jobs_complete else None
     weeks = [sum(skips[:7]), sum(skips[7:])] if complete else None
     return {"observed_days": len(dates), "daily_mean_llm_s": mean, "job_llm_s_p90": p90,
             "job_telemetry_complete": jobs_complete,
@@ -372,7 +372,7 @@ def evaluate(corpus, criteria):
     return {"schema_version": VERSION, "cases": len(cases), "source": "synthetic",
             "quality": quality,
             "canonical_compatibility": {
-                **evaluation._success_metric(compatible, len(cases)),
+                **evaluation.success_metric(compatible, len(cases)),
                 "scope": "legacy_projection_shape_only",
                 "false_done_nonregression":
                     completion_errors["canonical_new"] <= completion_errors["canonical_old"]},

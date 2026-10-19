@@ -581,7 +581,7 @@ def cmd_run(args) -> int:
         context, references = _case_context(c, mode)
         meta = {}
         started = time.monotonic()
-        with extract_llm._pin_target(target):
+        with extract_llm.pin_target(target):
             out = extract_llm.llm_extract(
                 c["body"], meta_out=meta, context=context,
                 **({"references": references} if references else {}),

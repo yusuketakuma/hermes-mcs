@@ -7,7 +7,9 @@ import pytest
 
 import ledger
 import notify_flush
+import mcs_util
 import notify_cards as cards
+import notify_spool
 import notify_cmds as cmds
 import notify_transport as transport
 from adapters.slack import cards as slack_cards
@@ -84,9 +86,9 @@ def _settle_parts(led, render, n=11):
 
 
 def _drain(led, req, cfg=SLACK):
-    root = cards.data_root(led)
-    dirs = cards.notify_dirs(root)
-    cards.publish_file(dirs["cmd_int"], req["command_id"] + ".json", canonical(req))
+    root = notify_spool.data_root(led)
+    dirs = notify_spool.notify_dirs(root)
+    notify_spool.publish_file(dirs["cmd_int"], req["command_id"] + ".json", canonical(req))
     result = {"errors": []}
     assert cmds.drain_int_commands(led, result, cfg, root) == 1
     assert not result["errors"]
@@ -210,7 +212,7 @@ def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatc
     _seed_thread(led)
     ev = _intent(led)
     monkeypatch.setattr(notify_flush, "_config", lambda: SLACK)
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: "/nonexistent/synthetic")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "/nonexistent/synthetic")
     assert notify_flush.flush(led)["dispatched"] == 1
     render = _latest_render(led)
     root = tmp_path / "data"
@@ -227,7 +229,7 @@ def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatc
     assert render["team_id"] == SCOPE["team_id"]
     assert cards.card_content(led.db, _card(led), cfg=SLACK)["containers"] == spec["parts"]["containers"]
     path.unlink()
-    assert cards.recover(led, SLACK, {})["republished"] == 1
+    assert notify_spool.recover(led, SLACK, {})["republished"] == 1
     assert path.read_bytes() == raw
     flags = json.loads((root / "flags" / "notify.json").read_text())
     assert flags["transport"] == "slack" and flags["interactive"]
@@ -456,7 +458,7 @@ def test_sealed_discord_intent_under_slack_config_holds_instead_of_hourly_foreve
     ev = _intent(led)
     _dispatch(led, ev)
     monkeypatch.setattr(notify_flush, "_config", lambda: SLACK)
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: "/nonexistent/synthetic")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "/nonexistent/synthetic")
 
     def row():
         return led.db.execute(

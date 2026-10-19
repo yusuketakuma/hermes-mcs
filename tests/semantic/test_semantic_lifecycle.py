@@ -2,6 +2,8 @@
 ledger snapshot (semantic_lifecycle). Every fixture is synthetic: the
 stored artifacts and the frozen notice are built with the production
 renderer/chunker on a temp ledger."""
+import semantic_render
+import semantic_facts
 import copy
 import json
 import sqlite3
@@ -9,6 +11,7 @@ import sqlite3
 import pytest
 
 import notify_flush
+import notify_sender
 import semantic_blind as blind
 import semantic_evaluation as evaluation
 import semantic_lifecycle as lifecycle
@@ -35,7 +38,7 @@ def _audit(db, doc, status="PASS", evaluated=True):
     db.artifact_add("semantic_facts_audit", json.dumps(
         {"status": status, "evaluated": evaluated, "findings": [],
          "fact_verdicts": {}}), project_id=1, message_id=1,
-        meta=_meta(doc_hash=semantic_v4._doc_hash(doc), audit_status=status))
+        meta=_meta(doc_hash=semantic_facts.doc_hash(doc), audit_status=status))
 
 
 def _chain(tmp_path, facts, audit="PASS", notice=True):
@@ -68,7 +71,7 @@ def _chain(tmp_path, facts, audit="PASS", notice=True):
     if notice:
         text = render_notice(db, 1, 1, summary, "PASS", targets=[1],
                              quality="full", focus_mid=1)
-        chunks = notify_flush._semantic_chunks(text)
+        chunks = semantic_render.semantic_chunks(text, notify_flush.TEXT_CHUNK_WIDTH)
         event_id = db.outbox_add("semantic_notice", 1, {
             "delivery_key": "dk", "root_id": 1, "target_message_id": 1,
             "target_revision": REV, "src_event_id": 1, "text": text,
@@ -147,7 +150,7 @@ def test_undelivered_chunk_drops_every_fact_it_carries(tmp_path):
     db, final_id, event_id, chunks, summary = _chain(tmp_path, facts)
     try:
         assert len(chunks) >= 3
-        fingerprint = notify_flush._delivery_fingerprint(
+        fingerprint = notify_sender.delivery_fingerprint(
             TARGET, chunks, [])
         _receipt(db, event_id, "failed", 1, fingerprint)
         got = _read(tmp_path, final_id,
@@ -204,7 +207,7 @@ def test_cli_credits_a_matching_partial_receipt_from_supplied_config(
     try:
         assert len(chunks) >= 3
         _receipt(db, event_id, "failed", 1,
-                 notify_flush._delivery_fingerprint(TARGET, chunks, []))
+                 notify_sender.delivery_fingerprint(TARGET, chunks, []))
         # the sender strips the target; the reader must resolve it alike
         out, report = _cli(tmp_path, final_id,
                            {"notify_target": f"  {TARGET}  ",
@@ -232,8 +235,8 @@ def test_cli_partial_receipt_with_changed_chunk_width_is_unprovable(
     try:
         assert len(chunks) >= 3
         _receipt(db, event_id, "failed", 1,
-                 notify_flush._delivery_fingerprint(TARGET, chunks, []))
-        monkeypatch.setattr(notify_flush, "_MAX_LEN", 1000)
+                 notify_sender.delivery_fingerprint(TARGET, chunks, []))
+        monkeypatch.setattr(notify_flush, 'TEXT_CHUNK_WIDTH', 1000)
         out, report = _cli(tmp_path, final_id, config)
         assert "delivered_fact_ids" not in out["candidate"]
         assert out["fact_lifecycle_observations"]["delivered"] == \
@@ -333,7 +336,7 @@ def test_non_pass_fact_audit_leaves_verified_unobserved(tmp_path, audit):
                                    "later_unevaluated", "later_other_doc"])
 def test_verified_stage_matches_the_publication_gate(tmp_path, audit):
     """The evaluation's verified stage and the re-projection gate judge
-    the same stored audit (semantic_v4.fact_audit_verdict): one never
+    the same stored audit (semantic_audit.fact_audit_verdict): one never
     accepts a document the other rejects."""
     facts = [v2_fact("f1", statement="薬剤A継続")]
     db, final_id, _, _, _ = _chain(
@@ -341,7 +344,7 @@ def test_verified_stage_matches_the_publication_gate(tmp_path, audit):
         notice=False)
     try:
         _later_audit(db, facts, audit)
-        doc_hash = semantic_v4._doc_hash(_doc(facts))
+        doc_hash = semantic_facts.doc_hash(_doc(facts))
         gate_doc, reason = semantic_v4.reproject_doc(
             db.db, 1, _meta(doc_hash=doc_hash))
         got = _read(tmp_path, final_id)

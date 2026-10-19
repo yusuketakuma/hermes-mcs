@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "LINE WORKSの入力検証を公開契約へ統一",
+  "summary": "認証設定とLINE WORKSの送信処理で共用する文字列検証を、client側の同じ公開関数へ揃えました。秘密値の読取、許可する文字・長さと送信先の条件は変更しません。",
+  "upgrade": "追加設定は不要です。認証方式、患者範囲、通知内容と既定値は変わりません。",
+  "details": [
+    "clientの実体を直接使い、認証設定やCLIからprivate名を参照する依存を解消します。",
+    "改行を含む表示本文、添付名、秘密鍵などの異なる検証条件は統合しません。"
+  ],
+  "refs": [
+    "adapters/lineworks/client.py",
+    "adapters/lineworks/config.py",
+    "adapters/lineworks/__main__.py"
+  ]
+}

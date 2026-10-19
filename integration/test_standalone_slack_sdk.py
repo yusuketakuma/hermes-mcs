@@ -176,8 +176,7 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
         reg = registry.Registry(dirs["state"], scope=settings)
         sender = SlackCardAdapter(app, team_id=settings["team_id"],
                                   application_id=settings["application_id"],
-                                  channel_id=settings["channel_id"], profile=settings["profile"],
-                                  allowed_user_ids=settings["allowed_user_ids"])
+                                  channel_id=settings["channel_id"], profile=settings["profile"])
         actions = Actions(app, settings, dirs, reg, sender, lambda *_a, **_k: None)
         actions.register()
         monkeypatch.setattr("adapters.slack.actions.MODAL_OPEN_WAIT_S", 0)

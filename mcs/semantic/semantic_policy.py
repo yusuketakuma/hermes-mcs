@@ -1,7 +1,7 @@
 """Semantic policy + config layer (spec §22.1): mode names, artifact
 kind constants, schema/policy versions, config validation, and the
-policy fingerprint. Leaf module — every other semantic_* module may
-import it; it imports none of them."""
+policy fingerprint. Fixed Jev registry defaults and conditional candidate
+approval checks share this policy boundary with runtime and offline callers."""
 from __future__ import annotations
 
 from mcs_util import payload_hash

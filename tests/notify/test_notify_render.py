@@ -57,7 +57,7 @@ def test_latest_invalid_signal_never_revives_old_display_or_actions(
     with led.db:
         led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
                        (raw, latest["artifact_id"]))
-    assert mcs_signals._latest_signal_states(led.db)[key] is None
+    assert mcs_signals.latest_signal_states(led.db)[key] is None
     assert notify_scope.latest_signals(led.db, [key], 1) == {}
     assert notify_render.source_fingerprint(led.db, card) != old_fp
     model = notify_render.card_content(led.db, card)

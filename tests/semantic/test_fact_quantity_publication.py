@@ -1,4 +1,5 @@
 """Published medication quantities must trace to the fact's own evidence."""
+import semantic_facts
 import semantic_policy
 import semantic_store
 import json
@@ -59,7 +60,7 @@ def test_model_support_cannot_override_quantity_guard(quote, quantity, statement
 def test_unknown_hint_and_nonmedication_quantity_keep_the_existing_contract():
     for doc in (_doc("アムロジピン", "unknown", statement="アムロジピン5mg"),
                 _doc("収縮期血圧120", "120mmHg", kind="vital_lab")):
-        assert audit._published_quantity_findings(doc) == []
+        assert audit.published_quantity_findings(doc) == []
     assert "quantity:5mg" in audit._fact_audit_target(_doc("5mg", "5mg")["facts"][0])
 
 
@@ -69,10 +70,10 @@ def test_other_fact_evidence_cannot_rescue_wrong_quantity():
                             "quote": "別薬剤50mg"})
     doc["facts"].append(v2_fact("fact_other", statement="別薬剤50mg", quantity="unknown",
                                evidence_ids=["ev_other"]))
-    findings = audit._published_quantity_findings(doc)
+    findings = audit.published_quantity_findings(doc)
     assert findings and all(finding["fact"] == "fact_a" for finding in findings)
     doc["facts"][0]["evidence_ids"].append("ev_other")
-    assert {item["code"] for item in audit._published_quantity_findings(doc)} == {
+    assert {item["code"] for item in audit.published_quantity_findings(doc)} == {
         "fact_quantity_relation_unverified"}
 
 
@@ -80,7 +81,7 @@ def test_multiple_own_quotes_with_the_same_amount_stay_unverified():
     doc = _doc("アムロジピン5mgを継続", "5mg")
     doc["evidence"].append({**doc["evidence"][0], "evidence_id": "ev_second"})
     doc["facts"][0]["evidence_ids"].append("ev_second")
-    assert audit._published_quantity_findings(doc) == [
+    assert audit.published_quantity_findings(doc) == [
         {"code": "fact_quantity_relation_unverified", "fact": "fact_a"}]
 
 
@@ -132,7 +133,7 @@ def test_cached_pass_cannot_authorize_wrong_quantity_or_reprojection(tmp_path):
             if fact["provenance"] == "local_llm":
                 fact["quantity"] = "50mg"
         fingerprint = bundle["source_fingerprint"]
-        doc_hash = v4._doc_hash(doc)
+        doc_hash = semantic_facts.doc_hash(doc)
         db.artifact_add("semantic_facts_v2", json.dumps(doc), project_id=1, message_id=1,
                         meta={"fingerprint": fingerprint, "policy_fingerprint": policy,
                               "coverage_status": "complete"})
@@ -170,7 +171,7 @@ def test_existing_wrong_publication_is_held_before_and_after_reprojection(tmp_pa
         for fact in doc["facts"]:
             if fact["provenance"] == "local_llm":
                 fact["quantity"] = "50mg"
-        fingerprint, doc_hash = bundle["source_fingerprint"], v4._doc_hash(doc)
+        fingerprint, doc_hash = bundle["source_fingerprint"], semantic_facts.doc_hash(doc)
         meta = {"fingerprint": fingerprint, "policy_fingerprint": policy,
                 "doc_hash": doc_hash, "hash": member["revision"], "projection_version": 3}
         payload = json.dumps(projection.project_v2_doc_legacy(doc))

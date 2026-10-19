@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "Slack操作と配送の境界を整理",
+  "summary": "クリックの接続先と利用者の検証を操作側へ集約し、配送側が操作画面へ依存する循環を除きました。返信・カードの再送は従来どおり確実な429拒否時だけで、待機後の権限も確認します。",
+  "upgrade": "追加設定は不要です。通知・患者範囲・承認・既定値とSDK接続方式は変わりません。",
+  "details": [
+    "構築時のworkspace/channel/profileと許可利用者を保持し、画面操作が実体parserへ直接渡します。",
+    "配送のnative callは既存の一回再送分類を所有し、private返信は明示した有効性だけを借用します。"
+  ],
+  "refs": [
+    "adapters/slack/actions.py",
+    "adapters/slack/delivery.py"
+  ]
+}

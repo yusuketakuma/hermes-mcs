@@ -17,11 +17,12 @@ import stat
 import tempfile
 import time
 
-from mcs_requests import RELEASE_TAG_RE, _text, canonical, payload_hash
+from mcs_util import valid_text
+from mcs_requests import RELEASE_TAG_RE, canonical, payload_hash
 from operation_contract import bounded_integer, retry_error
 # paused() is a core read (mcs_queries); re-exported for callers
 from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT, paused
-from safe_io import fsync_dir
+from safe_io import fsync_dir, fdopen_owned
 
 
 _SEMANTIC_JOB = "semantic"
@@ -376,7 +377,8 @@ def _apply_signal_policy_tx(db, req: dict, now: float) -> tuple[str | None, dict
     per-key bounds are enforced here so a confirmed command cannot push
     a detector into an absurd range. The policy is global — project_id
     on the envelope is only the acting context, stored as NULL."""
-    from mcs_signals import POLICY_KIND, THRESHOLDS
+    from signal_policy import POLICY_KIND
+    from signal_policy import THRESHOLDS
     policy = req["policy"]
     unknown = sorted(k for k in policy if k not in THRESHOLDS)
     if unknown:
@@ -429,9 +431,9 @@ def _refstat_promotion(pending: str, approved: str, expected_hash: str):
         os.makedirs(os.path.dirname(approved), exist_ok=True)
         fd, staged = tempfile.mkstemp(prefix=".refstat-", suffix=".staged",
                                      dir=os.path.dirname(approved))
-        with os.fdopen(fd, "wb") as dest:
+        with fdopen_owned(fd, "wb") as dest:
             source_fd = os.open(claimed, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(source_fd, "rb") as source:
+            with fdopen_owned(source_fd, "rb") as source:
                 source_info = os.fstat(source.fileno())
                 if not stat.S_ISREG(source_info.st_mode):
                     raise _RefstatRejected("refstat_not_pending")
@@ -613,7 +615,7 @@ def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
     extra = {"cmd": req["cmd"], "scheduled": True}
     if "tag" in req:
         extra["tag"] = req["tag"]
-    if _text(req.get("reason"), 2000):
+    if valid_text(req.get("reason"), 2000):
         extra["reason"] = req["reason"]
     if req["cmd"] == "ops.update_apply":
         sha = req.get("target_sha")
@@ -642,7 +644,7 @@ def _apply_restore_op_tx(db, req, current) -> tuple[str | None, dict]:
              "report_id": req["report_id"],
              "backup_sha256": req["backup_sha256"],
              "backup_schema": req["backup_schema"]}
-    if _text(req.get("reason"), 2000):
+    if valid_text(req.get("reason"), 2000):
         extra["reason"] = req["reason"]
     return None, extra
 

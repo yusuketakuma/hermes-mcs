@@ -23,10 +23,13 @@ from contextlib import suppress
 
 import mcs_requests
 import notify_cards
+import notify_scope
+import notify_spool
 import notify_action_tokens
 import notify_actions
 import notify_transport
-from mcs_requests import _text, canonical, positive, valid_hash, valid_uuid
+from mcs_util import valid_text
+from mcs_requests import canonical, positive, valid_hash, valid_uuid
 
 _RECEIPT_OPS = ("transport_receipt", "thread_receipt", "part_receipt")
 TRANSPORT_OPS = ("transport_begin",) + _RECEIPT_OPS
@@ -43,7 +46,7 @@ _CORRELATION = re.compile(r"^[0-9a-f]{32}$")
 
 
 def _opt_text(v, n) -> bool:
-    return _text(v, n, nullable=True)
+    return valid_text(v, n, nullable=True)
 
 
 def _id_str(v, n=64) -> bool:
@@ -87,7 +90,7 @@ def _delivery_integrity(req) -> str | None:
 
 def _route_identity(req) -> str | None:
     for k in ("profile", "application_id", "channel_id"):
-        if not _text(req.get(k), 200 if k == "profile" else 64):
+        if not valid_text(req.get(k), 200 if k == "profile" else 64):
             return f"bad_{k}"
     return None
 
@@ -139,13 +142,13 @@ def _origin(v, transport="discord") -> bool:
         return v.keys() <= {"transport", "profile", "application_id", "team_id",
                             "channel_id", "message_id"} \
             and v.get("transport") == transport \
-            and all(_text(v.get(k), 200 if k == "profile" else 64)
+            and all(valid_text(v.get(k), 200 if k == "profile" else 64)
                     for k in ("profile", "application_id", "team_id",
                               "channel_id", "message_id"))
     if v.keys() - {"profile", "application_id", "guild_id",
                    "channel_id", "message_id", "thread_id"}:
         return False
-    return all(_text(v.get(k), 64) for k in
+    return all(valid_text(v.get(k), 64) for k in
                ("application_id", "channel_id", "message_id")) \
         and _opt_text(v.get("guild_id"), 64) \
         and _opt_text(v.get("thread_id"), 64) \
@@ -175,7 +178,7 @@ def _input(v) -> bool:
             isinstance(scope, list) and 0 < len(scope) <= SCOPE_MAX
             and all(type(p) is int and 0 < p < 2 ** 63 for p in scope)):
         return False
-    return all(_text(x, 120) for k, x in v.items() if k != "projects")
+    return all(valid_text(x, 120) for k, x in v.items() if k != "projects")
 
 
 def validate_int(req) -> str | None:
@@ -195,7 +198,7 @@ def validate_int(req) -> str | None:
             return "unknown_op"
         if "guild_id" in req:
             return "unknown_field"
-        if op in TRANSPORT_OPS and not _text(req.get("team_id"), 64):
+        if op in TRANSPORT_OPS and not valid_text(req.get("team_id"), 64):
             return "bad_team_id"
     elif "transport" in req or "team_id" in req:
         return "unknown_field"
@@ -228,7 +231,7 @@ def _val_notification(req, cid, transport: str) -> str | None:
         return "bad_input"
     if not isinstance(cid, str) or not _TOKEN_COMMAND_ID.fullmatch(cid):
         return "bad_command_id"
-    if not _text(req.get("actor"), 120):
+    if not valid_text(req.get("actor"), 120):
         return "bad_actor"
     if not (isinstance(req.get("token"), str)
             and len(req["token"]) == 32):
@@ -251,7 +254,7 @@ def _val_refresh(req, cid, transport: str) -> str | None:
         return "unknown_field"
     if not valid_uuid(cid):
         return "bad_command_id"
-    if not _text(req.get("actor"), 120):
+    if not valid_text(req.get("actor"), 120):
         return "bad_actor"
     if not _origin(req.get("origin"), transport):
         return "bad_origin"
@@ -348,11 +351,11 @@ def dispatch(ledger, req, cfg, root, now=None):
         # human envelopes are version 1 without 'transport' — the
         # adapter-stamped actor prefix (discord:/slack:/lineworks:) names
         # the transport the confirm came from
-        active = notify_cards.active_transport(cfg)
+        active = notify_scope.active_transport(cfg)
         actor = req.get("actor")
         origin = actor.split(":", 1)[0] if isinstance(actor, str) else None
-        if (not notify_cards.interactive_enabled(cfg)
-                or notify_cards.restore_pending(root) is not None
+        if (not notify_scope.interactive_enabled(cfg)
+                or notify_spool.restore_pending(root) is not None
                 or origin != active
                 or ("transport" in req and req["transport"] != active)):
             return {"outcome": "rejected", "error": "interactive_off",
@@ -384,12 +387,12 @@ def _human_cmd_check(req) -> str | None:
     """Card-UX human commands tighten the existing gate: a reason is
     mandatory and a dismissal must pin the artifact it acted on."""
     if req.get("cmd") == "ops.signal_dismiss":
-        if not _text(req.get("reason"), 2000):
+        if not valid_text(req.get("reason"), 2000):
             return "reason_required"
         if not positive(req.get("expected_signal_artifact_id")):
             return "expected_signal_artifact_id_required"
     if req.get("cmd") == "request.create" \
-            and not _text(req.get("reason"), 2000):
+            and not valid_text(req.get("reason"), 2000):
         return "reason_required"
     return None
 
@@ -431,7 +434,7 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
     file is consumed; permanently unparsable files are quarantined
     (publication is atomic, so a parse failure is never mid-write), and
     invalid ones are quarantined like data/cmd."""
-    dirs = notify_cards.notify_dirs(root)
+    dirs = notify_spool.notify_dirs(root)
     int_dir, res_dir = dirs["cmd_int"], dirs["cmd_results"]
     try:
         names = sorted(n for n in os.listdir(int_dir)
@@ -462,7 +465,7 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         pending.append((path, req))
     if window:
         try:
-            notify_cards.publish_file(int_dir, _DRAIN_CURSOR,
+            notify_spool.publish_file(int_dir, _DRAIN_CURSOR,
                                       canonical({"after": window[-1]}))
         except OSError as e:
             result.setdefault("errors", []).append(
@@ -524,7 +527,7 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         safe = "".join(c if c.isalnum() or c in "._-" else "_"
                        for c in str(result_id))[:120] or "unknown"
         try:
-            published = notify_cards.publish_file(res_dir, safe + ".json",
+            published = notify_spool.publish_file(res_dir, safe + ".json",
                                                   canonical(out))
             if notify_actions.LIVE_RESULT_KEYS & out.keys():
                 # age it so gc's TOKEN_WRITE_S sweep drops it after

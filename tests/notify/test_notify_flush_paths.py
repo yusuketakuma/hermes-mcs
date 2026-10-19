@@ -2,6 +2,7 @@
 quarantine, media file gates, send fallback rules.  ``hermes send`` is
 never invoked; delivery is stubbed."""
 
+import semantic_send_gate
 import hashlib
 import json
 import os
@@ -13,13 +14,15 @@ from types import SimpleNamespace
 import pytest
 
 import notify_flush
+import notify_sender
+import mcs_util
 import structured_view
 from ingest_testkit import _ledger, _message, _unread_patient
 from ledger import Ledger
 
 
 def test_attachment_collection_has_cumulative_real_size_limit(tmp_path, monkeypatch):
-    monkeypatch.setattr(notify_flush, "_MAX_FILE_BYTES", 10)
+    monkeypatch.setattr(notify_sender, 'MAX_FILE_BYTES', 10)
     monkeypatch.setattr(notify_flush, "_MAX_FILES_BYTES", 10)
     paths = []
     for i in range(2):
@@ -52,11 +55,11 @@ def test_changed_partial_notification_is_quarantined(monkeypatch, tmp_path):
     eid = db.outbox_add("new", 1, {})
     db.outbox_progress(eid, 1, ["1"], "old")
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
-    monkeypatch.setattr(notify_flush, "_target", lambda cfg, kind: "chan")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, 'target', lambda cfg, kind: "chan")
     monkeypatch.setattr(notify_flush, "_format_event",
                         lambda ledger, event: ("changed", []))
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda *args: pytest.fail("must not send"))
     try:
         assert notify_flush.flush(db)["failed"] == 1
@@ -85,8 +88,8 @@ def test_missing_notification_channel_stays_retryable(monkeypatch):
             pytest.fail("a recoverable config error must not discard retries")
 
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
-    monkeypatch.setattr(notify_flush, "_target", lambda cfg, kind: None)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, 'target', lambda cfg, kind: None)
 
     assert notify_flush.flush(Outbox()) == {"sent": 0, "failed": 1,
                                         "skipped": 0, "suppressed": 0,
@@ -103,8 +106,8 @@ def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
     f = tmp_path / "f.txt"
     f.write_bytes(b"x")
     db.outbox_add("new_messages", 70, {"message_ids": [1]})
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
-    monkeypatch.setattr(notify_flush, "_target", lambda cfg, kind: "chan")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, 'target', lambda cfg, kind: "chan")
     monkeypatch.setattr(notify_flush, "_format_event",
                         lambda led, ev: ("body text", [("f.txt", str(f))]))
     calls = []
@@ -112,9 +115,9 @@ def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
     def fake_send(argv, content, files=None, **kw):
         calls.append(bool(files))
         if files:
-            raise notify_flush._SendUsage("media rejected")
+            raise notify_sender.SendUsage("media rejected")
 
-    monkeypatch.setattr(notify_flush, "_send", fake_send)
+    monkeypatch.setattr(notify_sender, 'send', fake_send)
     res = notify_flush.flush(db)
     assert res["sent"] == 1
     assert calls == [True, False]
@@ -130,14 +133,14 @@ def test_media_path_aliases_extensionless_files(tmp_path):
     generic blob instead of an image."""
     src = tmp_path / "18156"
     src.write_bytes(b"jpg-bytes")
-    p = notify_flush._media_path("IMG_1.JPG", str(src))
+    p = notify_sender._media_path("IMG_1.JPG", str(src))
     assert p == str(src) + ".jpg"
     assert os.path.exists(p)                 # alias created
     assert Path(p).read_bytes() == b"jpg-bytes"
-    assert notify_flush._media_path("IMG_1.JPG", str(src)) == p  # idempotent
+    assert notify_sender._media_path("IMG_1.JPG", str(src)) == p  # idempotent
     # name without a sane extension, or path already carrying one -> unchanged
-    assert notify_flush._media_path("noext", str(src)) == str(src)
-    assert notify_flush._media_path("x.png", str(src) + ".jpg") == str(src) + ".jpg"
+    assert notify_sender._media_path("noext", str(src)) == str(src)
+    assert notify_sender._media_path("x.png", str(src) + ".jpg") == str(src) + ".jpg"
 
 
 @pytest.mark.parametrize("alias_kind", ["old_hardlink", "copy", "symlink", "copy_fallback"])
@@ -165,7 +168,7 @@ def test_upload_alias_uses_verified_payload_after_replacement(tmp_path, monkeypa
         "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
     }]}, [1])
 
-    body = notify_flush._compose_body("synthetic", files)
+    body = notify_sender._compose_body("synthetic", files)
     upload = Path(body.split("\nMEDIA:", 1)[1])
     assert upload.read_bytes() == source.read_bytes()
     assert not upload.is_symlink()
@@ -179,10 +182,10 @@ def test_send_writes_media_tags_with_extension(tmp_path, monkeypatch):
     src.write_bytes(b"x")
     sent = {}
     monkeypatch.setattr(
-        notify_flush.subprocess, "run",
+        notify_sender.subprocess, "run",
         lambda argv, **kw: sent.update(argv=argv, body=kw["input"])
         or SimpleNamespace(returncode=0, stdout="", stderr=""))
-    notify_flush._send(["hermes", "send"], "text",
+    notify_sender.send(["hermes", "send"], "text",
                    [("photo.jpg", str(src))])
     assert f"MEDIA:{src}.jpg" in sent["body"]
     assert "text" in sent["body"]
@@ -197,17 +200,17 @@ def test_notify_no_fallback_on_ambiguous_errors(tmp_path, monkeypatch):
     f.write_bytes(b"x")
     db.outbox_add("new_messages", 71, {"message_ids": [1]})
     db.outbox_add("new_messages", 71, {"message_ids": [2]})
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
-    monkeypatch.setattr(notify_flush, "_target", lambda cfg, kind: "chan")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, 'target', lambda cfg, kind: "chan")
     monkeypatch.setattr(notify_flush, "_format_event",
                         lambda led, ev: ("body text", [("f.txt", str(f))]))
     calls = []
 
     def fake_send(argv, content, files=None, **kw):
         calls.append(bool(files))
-        raise notify_flush._SendFailed("delivery failed")
+        raise notify_sender.SendFailed("delivery failed")
 
-    monkeypatch.setattr(notify_flush, "_send", fake_send)
+    monkeypatch.setattr(notify_sender, 'send', fake_send)
     res = notify_flush.flush(db)
     assert res["sent"] == 0 and res["failed"] == 2
     assert calls == [True, True]  # never retried without files
@@ -228,11 +231,11 @@ def test_flush_unexpected_event_error_does_not_starve_queue(monkeypatch, tmp_pat
         return ("text", [])
 
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
-    monkeypatch.setattr(notify_flush, "_target", lambda cfg, kind: "chan")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, 'target', lambda cfg, kind: "chan")
     monkeypatch.setattr(notify_flush, "_format_event", boom)
-    monkeypatch.setattr(notify_flush, "_semantic_render_state", lambda *a: ())
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(semantic_send_gate, 'semantic_render_state', lambda *a: ())
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda *a, **k: sent.append(a) or None)
     try:
         res = notify_flush.flush(db)
@@ -281,7 +284,7 @@ def test_attachment_followup_format_and_stale(tmp_path):
         "UPDATE attachments SET state='pruned',local_path=NULL "
         "WHERE attachment_id=9")
     db.db.commit()
-    with pytest.raises(notify_flush._StaleSend):
+    with pytest.raises(semantic_send_gate.StaleSend):
         notify_flush._format_event(db, ev)
     db.close()
 
@@ -343,9 +346,9 @@ def test_flush_holds_uncertain_inflight_send(tmp_path, monkeypatch):
     fp = "x" * 64
     db.outbox_progress(eid, 0, [], fp, sending=1)
     calls = []
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
-    monkeypatch.setattr(notify_flush, "_target", lambda cfg, kind: "chan")
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, 'target', lambda cfg, kind: "chan")
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda *a, **k: calls.append(a) or None)
     res = notify_flush.flush(db)
     assert calls == [] and res.get("uncertain") == 1
@@ -363,15 +366,15 @@ def test_send_marked_clears_marker_on_reported_failure(tmp_path):
     eid = db.outbox_add("new_messages", 1, {"message_ids": [5]})
     ev = {"event_id": eid}
     def boom(*a, **k):
-        raise notify_flush._SendFailed("down")
-    old = notify_flush._send
-    notify_flush._send = boom
+        raise notify_sender.SendFailed("down")
+    old = notify_sender.send
+    notify_sender.send = boom
     try:
-        with pytest.raises(notify_flush._SendFailed):
+        with pytest.raises(notify_sender.SendFailed):
             notify_flush._send_marked(db, ev, 0, [], "fp",
                                   ["hermes", "send"], "chunk", None, None)
     finally:
-        notify_flush._send = old
+        notify_sender.send = old
     progress = json.loads(db.db.execute(
         "SELECT progress FROM notify_outbox WHERE event_id=?",
         (eid,)).fetchone()[0])
@@ -406,7 +409,7 @@ def test_unsent_attachments_are_marked_in_text(tmp_path, monkeypatch):
     mismatch must be marked 未送信, not listed as if attached; more than
     five files show a remainder count."""
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
-    monkeypatch.setattr(notify_flush, "_MAX_FILE_BYTES", 10)
+    monkeypatch.setattr(notify_sender, 'MAX_FILE_BYTES', 10)
     monkeypatch.setattr(notify_flush, "_MAX_FILES_BYTES", 12)
     db = _synthetic_msg_ledger(tmp_path, [(1, "2026-09-24T08:00", None)])
     try:
@@ -473,15 +476,15 @@ def test_resealed_pending_intents_do_not_starve_text_events(tmp_path,
     must be re-seated on re-entry, not stay due forever and fill every
     outbox_due slot ahead of a later text event."""
     db = Ledger(str(tmp_path / "ledger.db"))
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: sys.executable)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: sys.executable)
     monkeypatch.setattr(notify_flush, "_config", lambda: _CARD_CFG)
-    monkeypatch.setattr(notify_flush, "_target", lambda *args: "synthetic")
-    monkeypatch.setattr(notify_flush, "_send_argv", lambda *args: ["hermes"])
+    monkeypatch.setattr(notify_sender, 'target', lambda *args: "synthetic")
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *args: ["hermes"])
     monkeypatch.setattr(notify_flush, "_format_event",
                         lambda *args: ("synthetic", []))
-    monkeypatch.setattr(notify_flush, "_semantic_render_state", lambda *args: ())
+    monkeypatch.setattr(semantic_send_gate, 'semantic_render_state', lambda *args: ())
     sent = []
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda *args, **kwargs: sent.append(1))
     try:
         _seed_card_patients(db, 10)
@@ -512,7 +515,7 @@ def test_invalid_interactive_payload_is_held_not_retried(tmp_path,
     """U03-F07: a non-dict frozen payload is quarantined by dispatch; the
     flush must not re-arm it with an hourly retry forever."""
     db = Ledger(str(tmp_path / "ledger.db"))
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: sys.executable)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: sys.executable)
     monkeypatch.setattr(notify_flush, "_config", lambda: _CARD_CFG)
     try:
         _seed_card_patients(db, 1)

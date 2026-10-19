@@ -13,7 +13,8 @@ import sqlite3
 import time
 
 from mcs_requests import read_scheduled_receipt
-from mcs_util import atomic_write, file_sha256
+from mcs_util import file_sha256
+from safe_io import atomic_write
 
 
 class RestoreEvidenceError(Exception):

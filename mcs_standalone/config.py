@@ -5,7 +5,8 @@ import json
 import os
 from pathlib import Path
 import re
-import stat
+
+import safe_io
 
 from mcs_runtime import mode
 from mcs_config import validate_notify, validate_standalone_scope
@@ -147,32 +148,15 @@ def validate_credentials(value, transport):
     return value
 
 
-def _private_bytes(path, missing, invalid, limit=16384):
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
-        try:
-            stream = os.fdopen(fd, "rb")
-        except BaseException:
-            os.close(fd)
-            raise
-        with stream:
-            metadata = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
-                    or metadata.st_uid != os.getuid() or metadata.st_size > limit):
-                raise ValueError
-            raw = stream.read(limit + 1)
-            if len(raw) > limit:
-                raise ValueError
-            return raw
-    except FileNotFoundError:
-        raise ConfigError(missing) from None
-    except (OSError, ValueError):
-        raise ConfigError(invalid) from None
 
 
 def _env_tokens(root, transport, *, socket=False):
-    raw = _private_bytes(Path(root).expanduser().resolve() / ".env",
-                         "credentials_missing", "env_file_permissions", 65536)
+    try:
+        raw = safe_io.read_private_bytes(Path(root).expanduser().resolve() / ".env", 65536)
+    except FileNotFoundError:
+        raise ConfigError("credentials_missing") from None
+    except (OSError, ValueError):
+        raise ConfigError("env_file_permissions") from None
     try:
         values = {}
         for line in raw.decode("utf-8").splitlines():
@@ -220,7 +204,7 @@ def load_credentials(root, transport):
             mapped["app_token"] = values[SOCKET_TOKEN]
         return validate_credentials(mapped, transport)
     try:
-        raw = _private_bytes(path, "standalone_credentials_missing", "standalone_credentials_invalid")
+        raw = safe_io.read_private_bytes(path)
         return validate_credentials(json.loads(raw.decode("utf-8")), transport)
     except (OSError, ValueError, TypeError, RecursionError, UnicodeError):
         raise ConfigError("standalone_credentials_invalid") from None

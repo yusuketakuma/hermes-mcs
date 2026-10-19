@@ -5,7 +5,7 @@ import json
 import os
 import stat
 
-from mcs_util import atomic_write
+from safe_io import atomic_write
 
 def default_state() -> dict:
     return {"v": 1, "stages": [], "applied": [], "attempts": {},

@@ -8,6 +8,7 @@ publishes specs and ``drain_int_commands`` answers cmd_int envelopes,
 so every test is an honest A->B->A round trip.
 """
 from __future__ import annotations
+import self_identity
 
 import notify_recovery
 
@@ -27,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import ledger as _ledger
 import notify_cards
+import notify_spool
 import notify_render
 import notify_action_tokens
 import notify_actions
@@ -76,7 +78,7 @@ def test_publish_and_result_roundtrip(tmp_path):
     path = envelopes.publish_command(str(d), env)
     raw = json.loads(Path(path).read_text())
     assert notify_cmds.validate_int(raw) is None
-    notify_cards.publish_file(str(r), paths.safe_name(
+    notify_spool.publish_file(str(r), paths.safe_name(
         env["command_id"]) + ".json", envelopes.canonical(
         {"outcome": "applied"}))
     assert paths.read_result(str(r), env["command_id"])["outcome"] \
@@ -347,9 +349,9 @@ def test_restore_after_send_holds_until_reconcile(world):
     world.led.close()
     os.replace(backup, world.data / "ledger.db")
     world.led = _ledger.Ledger(str(world.data / "ledger.db"))
-    notify_cards.mark_restored(str(world.data), backup_path=str(backup),
+    notify_spool.mark_restored(str(world.data), backup_path=str(backup),
                                by="test")
-    notify_cards.publish_flags(CFG, str(world.data))
+    notify_spool.publish_flags(CFG, str(world.data))
 
     # a restarted worker sees restore_pending and never even claims
     worker2, reg2, _ = world.mkworker(bot=bot)
@@ -368,8 +370,8 @@ def test_restore_after_send_holds_until_reconcile(world):
 
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     assert rep["counts"].get("held") == 1
-    assert notify_cards.restore_pending(str(world.data)) is None
-    notify_cards.publish_flags(CFG, str(world.data))
+    assert notify_spool.restore_pending(str(world.data)) is None
+    notify_spool.publish_flags(CFG, str(world.data))
 
     # reconcile done but the lost delivery stays held — a re-claim is
     # denied by the held render, so still no resend
@@ -438,7 +440,7 @@ def test_unmarked_restore_after_tombstone_expiry_never_resends(world):
     # rewind with no marker; the queued render's spec is live again
     backup.backup(world.led.db)
     backup.close()
-    assert notify_cards.restore_pending(str(world.data)) is None
+    assert notify_spool.restore_pending(str(world.data)) is None
     spec_path.write_bytes(raw)
 
     worker2, reg2, _ = world.mkworker(bot=bot)
@@ -2845,12 +2847,11 @@ def test_role_member_can_click_and_others_are_told(world):
 
 
 def test_task_modal_roster_prefill_confirm_and_footer(world):
-    import mcs_signals
     world.seed()
     _llm_extract(world.led, 100,
                  {"requests": [{"action": "残薬を確認", "to": None}]})
     with world.led.db:
-        mcs_signals.record_station_staff(world.led.db, [
+        self_identity.record_station_staff(world.led.db, [
             {"staff_id": 1, "name": "山田 花子", "station": "みどり薬局"},
             {"staff_id": 2, "name": "佐藤 一郎", "station": "みどり薬局"}])
     world.dispatch()

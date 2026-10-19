@@ -1,5 +1,6 @@
 """Bind private ledger observations to the exact locally generated documents."""
 from __future__ import annotations
+import semantic_facts
 
 import copy
 import json
@@ -100,9 +101,8 @@ def _rows(db, table, rows, columns, json_fields=()):
 
 def attach(record, documents, candidate, cfg):
     """Read exact-generation receipts; never infer a missing stage or audit."""
-    from semantic_lifecycle import fact_lifecycle, _verified
-    from semantic_store import _current
-    from semantic_v4 import _doc_hash
+    from semantic_lifecycle import fact_lifecycle, observed_verified_fact_ids
+    from semantic_store import current_artifact
     from request_loops import effective_loop_state
     bundle = source_bundle(record, cfg)
     if bundle is None:
@@ -166,10 +166,10 @@ def attach(record, documents, candidate, cfg):
                     or source.get('revision') != member['revision']
                     or source.get('source_fingerprint') != fp):
                 raise EvaluationError('observation_document_source_mismatch')
-            stored = _current(db, 'semantic_facts_v2', member['message_id'], fp, policy)
-            if stored is None or _doc_hash(stored['content']) != _doc_hash(doc):
+            stored = current_artifact(db, 'semantic_facts_v2', member['message_id'], fp, policy)
+            if stored is None or semantic_facts.doc_hash(stored['content']) != semantic_facts.doc_hash(doc):
                 raise EvaluationError('observation_document_mismatch')
-            ids, reason = _verified(db, member['message_id'], fp, policy)
+            ids, reason = observed_verified_fact_ids(db, member['message_id'], fp, policy)
             if ids is None:
                 raise EvaluationError('observation_' + reason)
             verified.extend(ids)

@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "抽出結果の失効管理を集約",
+  "summary": "更新された原文や設定に対して古い抽出結果を再利用しない判断と、結果の失効・復活を管理する処理を整理しました。",
+  "upgrade": "追加設定は不要です。通常のworker更新で反映します。候補の実装識別が変わるため、既存の候補承認と保留済み再抽出には通常の再評価が必要です。",
+  "details": [
+    "OFFの恒久失効、fact_source変更からの限定復活、現在原文とPASS監査の検査、rollup削除と同一トランザクションを維持します。",
+    "モデル、抽出世代、既定値、臨床判断、承認・公開条件は変更しません。保護済み原文根拠とheld_priorを維持します。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_v4.py",
+    "mcs/semantic/semantic_projection.py",
+    "mcs/semantic/semantic_store.py"
+  ]
+}

@@ -15,6 +15,7 @@ from mcs_util import loads_dict
 from pharmacy_cues import CUE_CLASSES
 from semantic_facts import KIND_CATEGORY
 from stats_math import wilson_interval
+import stats_contract
 
 CUE_CODES = tuple(sorted(CUE_CLASSES))
 PHARMACY_CODES = (
@@ -33,7 +34,6 @@ _BATCH = 200
 def definition_fingerprint() -> str:
     """Pin the cue, audit, scope and reader contracts used on both sides of a cohort."""
     import mcs_queries
-    import mcs_stats
     import pharmacy_cues
     from semantic_projection import PROJECTION_VERSION
     files = [Path(__file__), Path(mcs_queries.__file__),
@@ -41,8 +41,9 @@ def definition_fingerprint() -> str:
     contracts = [
         (file.name, hashlib.sha256(file.read_bytes()).hexdigest()) for file in files
     ] + [(function.__name__, inspect.getsource(function))
-         for function in (mcs_stats._where, mcs_stats._scope, mcs_stats._parse_when)]
-    contracts.extend((("semantic_categories", KIND_CATEGORY), ("projection_version", PROJECTION_VERSION)))
+         for function in (stats_contract.message_scope_sql, stats_contract.resolve_scope, stats_contract.parse_timestamp)]
+    contracts.extend((("stats_detail_limit", stats_contract.DETAIL_LIMIT),
+                      ("semantic_categories", KIND_CATEGORY), ("projection_version", PROJECTION_VERSION)))
     return hashlib.sha256(json.dumps(contracts, sort_keys=True,
         separators=(",", ":")).encode()).hexdigest()
 
@@ -104,8 +105,7 @@ def _projection_captured(cue, document, body, spans):
 
 def iter_audit_rows(db, scope: dict):
     """Yield private source identities and lexical coverage; never serialize body or documents."""
-    import mcs_stats
-    where, params = mcs_stats._where(scope)
+    where, params = stats_contract.message_scope_sql(scope)
     cursor = db.execute(
         "SELECT m.message_id,m.project_id,m.content_hash,m.body_text,m.posted_at_ts,"
         "m.profession,m.sender_type FROM messages m WHERE " + ELIGIBLE_MESSAGE
@@ -208,7 +208,6 @@ def _drops(document, meta):
 
 def collect(db, scope):
     """Compute the full audit preset in one source pass, exposing only typed aggregates."""
-    import mcs_stats
     from operation_contract import EXTRACT_FEEDBACK_FIELDS
     from request_loops import effective_loop_state, latest_policy
 
@@ -219,7 +218,7 @@ def collect(db, scope):
     loops = defaultdict(Counter)
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
     attachment_ids = set()
-    where, params = mcs_stats._where(scope)
+    where, params = stats_contract.message_scope_sql(scope)
     if "attachments" in tables:
         attachment_ids = {row[0] for row in db.execute(
             "SELECT DISTINCT t.message_id FROM attachments t JOIN messages m "
@@ -298,9 +297,9 @@ def collect(db, scope):
         item["missed_rate"] = item["missed_posts"] / item["cue_posts"]
         item["interval"] = wilson_interval(item["missed_posts"], item["cue_posts"])
     def result(data, *, status="ok", reason=None):
-        return mcs_stats._result(status, scope, data, reason)
+        return stats_contract.stat_result(status, scope, data, reason)
     def packed(items, *, summary=False):
-        return mcs_stats._items(items, len(items) if summary else scope["limit"])
+        return stats_contract.limited_items(items, len(items) if summary else scope["limit"])
     def by_class(groups):
         result = defaultdict(Counter)
         for key, value in groups.items():

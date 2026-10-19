@@ -1,4 +1,5 @@
 """Human pause commands hold semantic work without erasing source or delivery state."""
+import semantic_send_gate
 import semantic_drain
 import json
 import time
@@ -51,10 +52,10 @@ def test_pause_preserves_source_jobs_and_receipts_and_resume_is_explicit(tmp_pat
         payload = json.loads(event['payload'])
         monkeypatch.setattr(notify_flush, '_config', lambda: _cfg('enforce'))
         _control(db, 'pause')
-        with pytest.raises(notify_flush._DeferredSend, match='semantic_paused'):
-            notify_flush._semantic_gate(db, event, payload)
-        with pytest.raises(notify_flush._FreezeSend, match='semantic_paused'):
-            notify_flush._semantic_gate(db, event, payload, in_progress=True)
+        with pytest.raises(semantic_send_gate.DeferredSend, match='semantic_paused'):
+            semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config())
+        with pytest.raises(semantic_send_gate.FreezeSend, match='semantic_paused'):
+            semantic_send_gate.semantic_gate(db, event, payload, notify_flush._config(), in_progress=True)
         assert db.db.execute('SELECT count(*) FROM messages').fetchone()[0] == 3
         assert db.db.execute('SELECT count(*) FROM command_receipts').fetchone()[0] == 3
     finally:

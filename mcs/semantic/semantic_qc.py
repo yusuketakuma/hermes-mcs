@@ -169,7 +169,8 @@ def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
 def _process_qc_job(ledger, scfg: dict, job, jev_client,
                     deadline: float, reserve_fn=None,
                     cfg_path: str | None = None,
-                    config_generation: str | None = None) -> str:
+                    config_generation: str | None = None, *,
+                    jev_transport=None, jev_timing=None) -> str:
     """One extract_qc job -> extract_qc artifact (annotate only).
     The job row transitions to 'done' inside the artifact commit tx —
     a claimed row must never be left re-claimable after its result
@@ -240,7 +241,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             stage=stage)
 
     req0 = jev_client.requests_made
-    client = runtime.bind_jev(jev_client, guard, reserve_fn)
+    client = runtime.bind_jev(jev_client, guard, reserve_fn, transport=jev_transport, timing=jev_timing)
     try:
         out = (semantic_jev.evaluate_chunked(client, state, questions, deadline,
                              scfg["max_questions_per_request"])

@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 import time
 from pathlib import Path
 
-_MCS = Path(__file__).resolve().parents[2] / "mcs"
+from . import mcs_api
 # the only config keys the summary reads (notify_digest.build)
 _CFG_KEYS = ("notify_max_age_h", "signals", "metadata_refresh_publish")
 SNAPSHOT_MISSING = "サマリーの元データ（スナップショット）がまだありません。しばらく待ってから再度お試しください。"
@@ -33,9 +32,7 @@ def split_name(text: str) -> tuple[str, str]:
 
 
 def _modules():
-    if str(_MCS) not in sys.path:
-        sys.path.insert(0, str(_MCS))
-    import _mcs_path  # noqa: F401  registers every subdir as import root
+    mcs_api.bootstrap()
     import notify_digest
     import notify_render
     return notify_digest, notify_render

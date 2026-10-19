@@ -1,4 +1,7 @@
 """自分の投稿への反応・自分宛メンション・しおり等の表示（読取り専用・完全合成）。"""
+import self_identity
+import semantic_render
+import semantic_send_gate
 import notify_actions
 import notify_parts
 import json
@@ -9,7 +12,6 @@ from types import SimpleNamespace
 import pytest
 
 import ledger
-import mcs_signals
 import mcs_view
 import notify_digest
 import notify_render
@@ -17,6 +19,7 @@ import notify_views
 from message_metadata import (
     actor_line, flag_lines, get_message_metadata, mentions_self, stamp_line)
 from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _msg, _patient, _signal_row, led
+import message_observations
 
 __all__ = ["led"]
 
@@ -38,7 +41,7 @@ def _r(kind="viewed", count=1, mine=False):
 
 
 def _self_known(led):
-    mcs_signals.record_station_staff(led.db, [{"staff_id": SELF, "is_self": True},
+    self_identity.record_station_staff(led.db, [{"staff_id": SELF, "is_self": True},
                                             {"staff_id": OTHER, "is_self": False}])
 
 
@@ -229,7 +232,7 @@ def test_addressed_header_marks_mentions_undetermined_without_self_id(led):
 
 def test_self_mentioned_and_evidence_flags(led, tmp_path):
     def self_mentioned(db, mid):
-        return mentions_self(get_message_metadata(db, mid), mcs_signals.self_sender_id(db))
+        return mentions_self(get_message_metadata(db, mid), self_identity.self_sender_id(db))
 
     _patient(led)
     _post(led, 100, OTHER, ts=NOW - 100)
@@ -554,7 +557,7 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
 
 
 def _stamp_settle(led, render, result="delivered"):
-    import notify_cards
+    import notify_spool
     import notify_cmds
     from adapters.common import envelopes
 
@@ -564,7 +567,7 @@ def _stamp_settle(led, render, result="delivered"):
 
     def apply(req):
         assert notify_cmds.validate_int(req) is None
-        return notify_cmds.dispatch(led, req, CFG, notify_cards.data_root(led), now=NOW)
+        return notify_cmds.dispatch(led, req, CFG, notify_spool.data_root(led), now=NOW)
 
     assert apply(envelopes.transport_begin(claim))["granted"]
     assert apply(envelopes.transport_receipt(
@@ -652,12 +655,12 @@ def test_stamp_actor_partial_walk_is_unknown_and_preserves_the_last_complete_set
     _post(led, 100, OTHER, ts=NOW - 100)
     rows = [{"actor_id": OTHER, "reaction_type": "viewed", "name": "合成部分氏名"}]
     led.save_reaction_actors(100, rows, False, error="incomplete", now=NOW - 10)
-    assert actor_line(ledger.reaction_actor_summary(led.db, 100)) == "押した人: 未取得（取得失敗）"
+    assert actor_line(message_observations.reaction_actor_summary(led.db, 100)) == "押した人: 未取得（取得失敗）"
     rows[0]["name"] = "合成完全氏名"
     led.save_reaction_actors(100, rows, True, now=NOW - 10)
     rows[0]["name"] = "合成失敗氏名"
     led.save_reaction_actors(100, rows, False, error="incomplete", now=NOW)
-    assert actor_line(ledger.reaction_actor_summary(led.db, 100)) == (
+    assert actor_line(message_observations.reaction_actor_summary(led.db, 100)) == (
         "押した人（再取得失敗）: 👀 合成完全氏名 · 観測 09-21 23:13")
 
 
@@ -721,7 +724,7 @@ def test_legacy_text_audited_supplement_stays_in_summary_section(led, monkeypatc
     with led.db:
         led.db.execute("UPDATE messages SET body_html='<p>完全合成の本文です。</p>' WHERE message_id=100")
     monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
-    monkeypatch.setattr(notify_flush, "_sem_block", lambda *_args: "\n監査済みの合成要約")
+    monkeypatch.setattr(semantic_render, 'semantic_summary_block', lambda *_args: "\n監査済みの合成要約")
     text, _files = notify_flush._format_event(led, {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'})
     front, body = text.split(notify_render.SECTION_RULE, 1)
     assert "監査済みの合成要約" in front and "監査済み" not in body
@@ -743,5 +746,5 @@ def test_legacy_text_empty_summary_keeps_current_failure_state(led, monkeypatch)
     assert body == "\n📄 本文\n完全合成の本文です。"
     with led.db:
         led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=100")
-    with pytest.raises(notify_flush._StaleSend, match="messages_unavailable"):
+    with pytest.raises(semantic_send_gate.StaleSend, match="messages_unavailable"):
         notify_flush._format_event(led, {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'})

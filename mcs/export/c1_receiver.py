@@ -26,7 +26,7 @@ from c1_envelopes import (
     CONTRACT, RECEIPT_CONTRACT, Record, _hash, encode_envelope, intent_hash, parse_envelope,
     parse_withdrawal, validate_collection, validate_envelope,
 )
-from mcs_util import atomic_write
+from safe_io import atomic_write
 
 _ENTRY_FIELDS = {
     "status", "header", "records", "received_at", "expires_at", "wire_sha256",

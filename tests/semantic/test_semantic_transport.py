@@ -92,14 +92,14 @@ def test_slow_trickle_cannot_extend_real_attempt_deadline(local_http,
     events = []
     client = jev.JevClient(api_key="synthetic", endpoint=endpoint,
                            attempt_timeout=1.0, max_attempts=1)
-    client.before_attempt = lambda: events.append("before")
-    client.reserve_fn = lambda _body, _timeout: events.append("reserve")
-    client.after_result = lambda: events.append("after")
+    hooks = {"before_attempt": lambda: events.append("before"),
+             "reserve_fn": lambda _body, _timeout: events.append("reserve"),
+             "after_result": lambda: events.append("after")}
 
     started_at = time.monotonic()
     with pytest.raises(jev.JevError) as exc_info:
         client.evaluate({"target": {"text": "x"}, "context": []},
-                        _questions(), time.monotonic() + 0.35)
+                        _questions(), time.monotonic() + 0.35, **hooks)
     elapsed = time.monotonic() - started_at
 
     assert exc_info.value.kind == "timeout"
@@ -141,12 +141,12 @@ def test_real_transport_keeps_hooks_and_fixed_wire_contract(local_http,
     events = []
     client = jev.JevClient(api_key="synthetic", endpoint=endpoint,
                            attempt_timeout=1.0, max_attempts=1)
-    client.before_attempt = lambda: events.append("before")
-    client.reserve_fn = lambda _body, _timeout: events.append("reserve")
-    client.after_result = lambda: events.append("after")
+    hooks = {"before_attempt": lambda: events.append("before"),
+             "reserve_fn": lambda _body, _timeout: events.append("reserve"),
+             "after_result": lambda: events.append("after")}
 
     result = client.evaluate({"target": {"text": "x"}, "context": []},
-                             _questions(), time.monotonic() + 2.0)
+                             _questions(), time.monotonic() + 2.0, **hooks)
 
     assert result["answers"]["q"]["noul"] == 0.9
     assert result["usage"] == {"input_tokens": 2, "output_tokens": 1}

@@ -12,6 +12,8 @@ import time
 from contextlib import suppress
 
 import notify_cards as cards
+import notify_scope
+import notify_spool
 import notify_parts
 from notify_render import source_fingerprint
 from notify_scope import card_row, render_row, scope_matches, stored_scope
@@ -203,7 +205,7 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
     db = cards.connection(ledger)
     now = time.time() if now is None else now
     cid = req["command_id"]
-    if cards.restore_pending(cards.data_root(ledger)) is not None:
+    if notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None:
         # A DB restore is unreconciled — grant nothing until the
         # journal-vs-DB comparison finishes. No attempt row: a restore
         # denial is not a send attempt and must not count toward the
@@ -272,7 +274,7 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
             "SELECT * FROM notification_delivery_attempts "
             "WHERE begin_command_id=?", (cid,)).fetchone())
     if reissued:
-        cards.publish_specs(db, cards.notify_dirs(cards.data_root(ledger)),
+        notify_spool.publish_specs(db, notify_spool.notify_dirs(notify_spool.data_root(ledger)),
                              reissued, now)
     if reason is not None and (reissued or _denial_is_final(
             db, req["delivery_id"], reason)):
@@ -311,15 +313,15 @@ def _unlink_spec(ledger, delivery_id, transport) -> None:
     the watchdog republishes a live render's spec_json if needed."""
     with suppress(OSError):
         os.unlink(os.path.join(
-            cards.notify_dirs(cards.data_root(ledger))[transport + "_render"],
+            notify_spool.notify_dirs(notify_spool.data_root(ledger))[transport + "_render"],
             str(delivery_id) + ".json"))
 def _begin_check(db, req, cfg) -> str | None:
-    if not cards.interactive_enabled(cfg):
+    if not notify_scope.interactive_enabled(cfg):
         return "interactive_off"
     render = render_row(db, req["delivery_id"])
     if render is None:
         return "unknown_delivery"
-    if render["transport"] != cards.active_transport(cfg) \
+    if render["transport"] != notify_scope.active_transport(cfg) \
             or render["transport"] != req.get("transport", "discord"):
         return "transport_mismatch"
     if render["payload_hash"] != req["payload_hash"]:
@@ -327,12 +329,12 @@ def _begin_check(db, req, cfg) -> str | None:
     if render["render_rev"] != req["render_rev"]:
         return "rev_mismatch"
     if render["route_epoch"] != req["route_epoch"] \
-            or render["route_epoch"] != cards.route_epoch(cfg):
+            or render["route_epoch"] != notify_scope.route_epoch(cfg):
         return "epoch_mismatch"
     if not scope_matches(render, req):
         return "scope_mismatch"
     if render["transport"] in ("slack", "lineworks") \
-            and not scope_matches(render, cards.delivery_scope(cfg)):
+            and not scope_matches(render, notify_scope.delivery_scope(cfg)):
         return "scope_mismatch"
     if render["state"] == "cancelled":
         return "render_cancelled"
@@ -355,7 +357,7 @@ def _begin_check(db, req, cfg) -> str | None:
                 # thread must be re-rendered into it
                 return "source_thread_changed"
         if card["kind"] in ("signal", "digest") \
-                and not cards.signals_notify(cfg):
+                and not notify_scope.signals_notify(cfg):
             return "signal_notify_off"
         if card["delivery_state"] == "revoked" \
                 and render["op"] != "revoke":
@@ -466,9 +468,9 @@ def apply_transport_receipt(ledger, req, cfg, now=None) -> dict:
                     cards.issue_render(db, render["card_id"], cfg, now, specs)
         cards.mark_snapshot_dirty(db)
     if specs:
-        root = cards.data_root(ledger)
-        cards.ensure_dirs(root)
-        cards.publish_specs(db, cards.notify_dirs(root), specs, now)
+        root = notify_spool.data_root(ledger)
+        notify_spool.ensure_dirs(root)
+        notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
     return receipt
 
 
@@ -585,7 +587,7 @@ def settle_part_receipt(db, req, now) -> dict:
                 # a failed thread never carries these files and the
                 # next render is card-only — hand each held file to
                 # the text followup (deduped per attachment)
-                from ledger import _enqueue_attachment_followup_tx
+                from attachment_followups import enqueue_attachment_followup_tx
                 for row in db.execute(
                         "SELECT p.attachment_id,m.project_id,m.message_id "
                         "FROM notification_render_parts p "
@@ -597,7 +599,7 @@ def settle_part_receipt(db, req, now) -> dict:
                         "WHERE d.attachment_id=p.attachment_id "
                         "AND d.kind='attachment_part' AND d.state='delivered')",
                         (render["delivery_id"],)).fetchall():
-                    _enqueue_attachment_followup_tx(
+                    enqueue_attachment_followup_tx(
                         db, row["attachment_id"], row["project_id"],
                         row["message_id"], now)
         receipt = {"applied": True,

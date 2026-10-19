@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "バックアップの復旧証拠と読取り専用検査を共通化",
+  "summary": "バックアップの記録・状態確認・復旧前の検査を専用の正本へまとめました。健康状態の確認は暗号処理や鍵取得の入口を経由せず、保存済みの証拠を直接読みます。",
+  "upgrade": "設定変更は不要です。暗号形式、人承認、復元後の配送hold、記録の公開順序と検査予算は変わりません。",
+  "refs": [
+    "mcs/ops/backup_evidence.py",
+    "mcs/ops/mcs_backup.py",
+    "mcs/ingest/health_report.py"
+  ],
+  "details": [
+    "バックアップ記録・読取り専用inventory・復旧準備の判定をbackup_evidenceへ移し、暗号処理と操作を囲む記録ロックは従来の所有者が保持する。"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "評価リクエストの実行状態を呼出し単位に分離",
+  "summary": "評価clientを再利用しても、別ジョブの実行条件やHTTP期限が混ざらないよう、送信前後の確認と予約・ロック解放を呼出し単位へ揃えました。",
+  "upgrade": "追加設定は不要です。通常のworker更新で反映します。実装識別が変わるため、候補承認と保留済み再抽出は通常の再評価対象です。",
+  "details": [
+    "送信前の世代確認、日次予算予約のcommit、POST、ロック再取得、応答検証と使用量記録、送信後の確認の順序を維持します。",
+    "モデル・接続先・取得範囲・再試行・予算・既定値・承認条件は変更しません。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_jev.py",
+    "mcs/semantic/semantic_runtime.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_qc.py"
+  ]
+}

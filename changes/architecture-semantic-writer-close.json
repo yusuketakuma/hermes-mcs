@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "意味解析終了時のロック解放を確実にする",
+  "summary": "意味解析の書込み接続を閉じる処理が失敗した場合にも、取得済みの実行ロックを解放します。",
+  "upgrade": "追加操作は不要です。CLI、正常時の出力、例外の分類、抽出・承認・公開条件は変更しません。",
+  "details": [
+    "接続クローズと実行ロック解放を入れ子のfinallyで管理し、接続クローズの例外がロック解放を飛ばさないようにする。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic.py",
+    "tests/semantic/test_semantic_cli_contract.py"
+  ]
+}

@@ -1,4 +1,5 @@
 """Synthetic lane-3 patient-context tests: no real LLM, host probes or production DB."""
+import writer_lock
 import os
 import sys
 from types import SimpleNamespace
@@ -6,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 import extract_llm as worker
-import mcs_util
 import patient_nightly
 from extract_testkit import _hash, _ledger, _message, _v2_artifact
 from semantic_testkit import _canonical_cfg, _drain, _PassJev, _seeded_two
@@ -20,7 +20,7 @@ def capacity(tmp_path, monkeypatch):
     cfg = {"extract": {"patient_context_nightly": {"enabled": True}}}
     monkeypatch.setattr(worker, "_SLOT_OVERRIDE", LANES[3])
     monkeypatch.setattr(worker, "load_config", lambda: cfg)
-    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(worker, "circuit_open_s", lambda led: 0)
     monkeypatch.setattr(worker, "disk_free_mb", lambda led: 100000)
     monkeypatch.setattr(worker, "_nightly_memory_available", lambda: True)
@@ -70,10 +70,10 @@ def test_capacity_gates(capacity, monkeypatch, gate):
     elif gate == "circuit":
         monkeypatch.setattr(worker, "circuit_open_s", lambda led: 60)
     elif gate == "update":
-        monkeypatch.setattr(mcs_util, "_updater_state", lambda: (True, 124))
+        monkeypatch.setattr(writer_lock, "updater_state", lambda: (True, 124))
     elif gate == "mid_update":
         state = (True, 123)
-        monkeypatch.setattr(mcs_util, "_updater_state", lambda: state)
+        monkeypatch.setattr(writer_lock, "updater_state", lambda: state)
     assert run(capacity, stop, state)["status"] == "deferred"
     assert not capacity[2]
 
@@ -155,7 +155,7 @@ def test_linux_memory(monkeypatch, text, expected):
 @pytest.mark.parametrize("lane,nightly_first", [("3", True), ("2", False)])
 def test_resident_integration(monkeypatch, idle, lane, nightly_first):
     now, events = [0.0], []
-    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setenv("MCS_LLM_SLOT", "1")
     monkeypatch.setenv(worker.local_llm.TURN_LOCK_ENV, "/synthetic/turn.lock")
     previous_slot = worker._SLOT_OVERRIDE
@@ -188,7 +188,7 @@ def test_resident_integration(monkeypatch, idle, lane, nightly_first):
 
 
 def test_resident_exits_when_nightly_sees_update(monkeypatch):
-    monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 123))
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.delenv(worker.local_llm.TURN_LOCK_ENV, raising=False)
     monkeypatch.setattr(worker, "load_config", lambda: {})
@@ -217,7 +217,7 @@ def test_memory_probe_failure_defers(monkeypatch):
 
 def test_update_during_engine_signals_resident_exit(capacity, monkeypatch):
     def engine(led, cfg, *, deadline, admit, complete):
-        monkeypatch.setattr(mcs_util, "_updater_state", lambda: (False, 124))
+        monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
         assert not admit()
         return {"status": "deferred", "done": 0}
     monkeypatch.setitem(sys.modules, "patient_nightly", SimpleNamespace(run_due=engine, options=patient_nightly.options))

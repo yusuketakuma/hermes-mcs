@@ -38,7 +38,7 @@ def _run(fails, monkeypatch, retry_after="2"):
     adapter = delivery.SlackCardAdapter(
         SimpleNamespace(client=client), team_id="T_SYNTHETIC",
         application_id="A_SYNTHETIC", channel_id="C_SYNTHETIC",
-        profile="cco", allowed_user_ids={"U_OPERATOR"})
+        profile="cco")
 
     async def scenario():
         assert await adapter.bind()

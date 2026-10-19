@@ -13,18 +13,16 @@ import time
 from types import SimpleNamespace
 
 from mcs_contract import MCSError, SessionExpired, describe_error
-from ledger import METADATA_SHADOW_BACKOFF_S
+from message_observations import METADATA_SHADOW_BACKOFF_S
+from health_policy import COVERAGE_STALL_S
 from mcs_util import ATTACH_DIR, CHROME_BIN, CHROME_PROFILE, loads_dict
 import health_report
 from stats_math import finite_number
 import job_ops
+import message_observations
 
 BACKFILL_MAX_PAGES = 3        # per patient, per run — newest-first walk
 BACKFILL_OVERLAP_S = 120      # re-scan window; dedup handles repeats
-# coverage lag is normal for large active patients (a pinned timeline
-# certifies only on a full rescan); only a history_head that failed or
-# sat untouched this long is a collection stall
-COVERAGE_STALL_S = 24 * 3600
 KARTE_SUMMARY_TICK_CAP = 12   # 連携サマリー GETs per run; the rest carry over
 KARTE_SUMMARY_FILL = 10       # missing/stale summaries filled per deep run
 KARTE_SUMMARY_MARGIN_S = 60   # keep the tail of the deadline for semantic/finish
@@ -877,7 +875,7 @@ def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
              "interval_s": "tiered",
              "backoff_s": METADATA_SHADOW_BACKOFF_S}
     result["metadata_shadow"] = stats
-    targets = ledger.metadata_watch_targets()
+    targets = message_observations.metadata_watch_targets(ledger.db)
     stats["due"] = targets[0]["due_total"] if targets else 0
     stats["deferred"] = max(0, stats["due"] - len(targets))
     if stats["deferred"]:
@@ -927,7 +925,7 @@ def _stage_reaction_actors(adapter, ledger, until, *, skip, cfg=None):
     A complete walk re-renders the live thread card holding the message
     (with cfg), so new names reach Slack/Discord without waiting for the
     bounded card sweep to rotate back to that card."""
-    targets = ledger.reaction_actor_targets(limit=REACTION_ACTORS_TICK_CAP)
+    targets = message_observations.reaction_actor_targets(ledger.db, limit=REACTION_ACTORS_TICK_CAP)
     stats = {"due": len(targets), "fetched": 0, "complete": 0,
              "deferred": len(targets) if skip else 0, "errors": []}
     for index, target in enumerate([] if skip else targets):

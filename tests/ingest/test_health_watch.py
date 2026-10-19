@@ -7,6 +7,7 @@ stale / corrupt — all distinguishable. Alert dedup: an unchanged
 observation never re-alerts; recovery requires a FRESH post-failure
 health write, never the watcher's own assumption.
 """
+import safe_io
 import json
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 import health_watch
+import health_policy
 
 
 def _health_file(home, obj):
@@ -239,14 +241,14 @@ def test_out_of_range_counts_and_last_ok_stay_unknown(tmp_path):
 
 def test_deadline_derives_from_config_not_hardcode():
     cfg = {"health": {"tick_interval_s": 300, "max_missed_runs": 2}}
-    assert health_watch.freshness_deadline(cfg) == 300 * 3
+    assert health_policy.freshness_deadline(cfg) == 300 * 3
     cfg = {"health": {"tick_interval_s": 60, "max_missed_runs": 4}}
-    assert health_watch.freshness_deadline(cfg) == 60 * 5
+    assert health_policy.freshness_deadline(cfg) == 60 * 5
     # malformed/absent config -> documented defaults (600*3)
-    assert health_watch.freshness_deadline({}) == 1800
-    assert health_watch.freshness_deadline(
+    assert health_policy.freshness_deadline({}) == 1800
+    assert health_policy.freshness_deadline(
         {"health": {"tick_interval_s": "x", "max_missed_runs": -1}}) == 1800
-    assert health_watch.freshness_deadline(
+    assert health_policy.freshness_deadline(
         {"health": {"tick_interval_s": float("inf"),
                     "max_missed_runs": 2}}) == 1800
 
@@ -578,9 +580,9 @@ def test_state_without_alerted_reasons_does_not_realert(tmp_path):
 
 
 def test_main_delivers_alert_to_system_target(tmp_path, monkeypatch):
-    import notify_flush
+    import notify_sender
     sent = []
-    monkeypatch.setattr(notify_flush, "_send",
+    monkeypatch.setattr(notify_sender, 'send',
                         lambda argv, text, **kw: sent.append((argv, text)))
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"notify_target": "slack:#patients",
@@ -598,11 +600,11 @@ def test_main_delivers_alert_to_system_target(tmp_path, monkeypatch):
 
 def test_alert_delivery_without_target_or_with_failing_sender_is_silent(
         tmp_path, monkeypatch):
-    import notify_flush
 
+    import notify_sender
     def boom(*a, **k):
-        raise notify_flush._SendFailed("sender down")
-    monkeypatch.setattr(notify_flush, "_send", boom)
+        raise notify_sender.SendFailed("sender down")
+    monkeypatch.setattr(notify_sender, 'send', boom)
     assert health_watch.deliver_alert({}, "x") is False
     assert health_watch.deliver_alert(
         {"notify_target": "slack:#ops"}, "x") is False
@@ -610,7 +612,7 @@ def test_alert_delivery_without_target_or_with_failing_sender_is_silent(
 
 @pytest.mark.parametrize("disk_only", [False, True])
 def test_known_unsent_alert_retries_without_waiting_for_hour(tmp_path, monkeypatch, disk_only):
-    import notify_flush
+    import notify_sender
     sent = []
 
     def send(argv, text, **kwargs):
@@ -618,9 +620,9 @@ def test_known_unsent_alert_retries_without_waiting_for_hour(tmp_path, monkeypat
         assert state["delivery"]["outcome"] == "unknown"  # before crossing the wire
         sent.append(text)
         if len(sent) == 1:
-            raise notify_flush._SendFailed("synthetic unavailable sender")
+            raise notify_sender.SendFailed("synthetic unavailable sender")
 
-    monkeypatch.setattr(notify_flush, "_send", send)
+    monkeypatch.setattr(notify_sender, 'send', send)
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"notify_system_target": "slack:#ops"}))
     _health_file(tmp_path, {"overall": "ok" if disk_only else "failed", "at": 990,
@@ -638,15 +640,15 @@ def test_known_unsent_alert_retries_without_waiting_for_hour(tmp_path, monkeypat
 
 @pytest.mark.parametrize("error", ["uncertain", "unclassified"])
 def test_unknown_alert_is_held_until_a_different_verdict(tmp_path, monkeypatch, error):
-    import notify_flush
+    import notify_sender
     sent = []
 
     def send(*args, **kwargs):
         sent.append(args)
-        raise (notify_flush._SendUncertain("synthetic timeout")
+        raise (notify_sender.SendUncertain("synthetic timeout")
                if error == "uncertain" else RuntimeError("synthetic unknown"))
 
-    monkeypatch.setattr(notify_flush, "_send", send)
+    monkeypatch.setattr(notify_sender, 'send', send)
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"notify_target": "slack:#ops"}))
     args = ["--home", str(tmp_path), "--config", str(cfg)]
@@ -670,14 +672,14 @@ def test_unknown_alert_is_held_until_a_different_verdict(tmp_path, monkeypatch, 
 
 
 def test_unknown_alert_realerts_after_interval(tmp_path, monkeypatch):
-    import notify_flush
+    import notify_sender
     sent = []
 
     def send(*args, **kwargs):
         sent.append(args)
-        raise notify_flush._SendUncertain("synthetic timeout")
+        raise notify_sender.SendUncertain("synthetic timeout")
 
-    monkeypatch.setattr(notify_flush, "_send", send)
+    monkeypatch.setattr(notify_sender, 'send', send)
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"notify_target": "slack:#ops"}))
     args = ["--home", str(tmp_path), "--config", str(cfg)]
@@ -693,12 +695,12 @@ def test_unknown_alert_realerts_after_interval(tmp_path, monkeypatch):
 
 
 def test_unknown_delivery_history_is_bounded(tmp_path, monkeypatch):
-    import notify_flush
 
+    import notify_sender
     def send(*args, **kwargs):
-        raise notify_flush._SendUncertain("synthetic timeout")
+        raise notify_sender.SendUncertain("synthetic timeout")
 
-    monkeypatch.setattr(notify_flush, "_send", send)
+    monkeypatch.setattr(notify_sender, 'send', send)
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"notify_target": "slack:#ops"}))
     args = ["--home", str(tmp_path), "--config", str(cfg)]
@@ -806,7 +808,7 @@ def test_unknown_combined_alert_is_not_retried_when_only_disk_recovers(tmp_path,
 def test_alert_witness_write_failure_prevents_send(tmp_path, monkeypatch):
     sent = []
     monkeypatch.setattr(health_watch, "deliver_alert", lambda *args: sent.append(args))
-    real_publish = health_watch.maintenance.atomic_publish_text
+    real_publish = safe_io.atomic_publish_text
     state_writes = []
 
     def publish(path, text):
@@ -816,7 +818,7 @@ def test_alert_witness_write_failure_prevents_send(tmp_path, monkeypatch):
                 raise OSError("synthetic disk full")
         real_publish(path, text)
 
-    monkeypatch.setattr(health_watch.maintenance, "atomic_publish_text", publish)
+    monkeypatch.setattr(safe_io, 'atomic_publish_text', publish)
     _health_file(tmp_path, {"overall": "failed", "at": 990})
     args = ["--home", str(tmp_path), "--config", str(tmp_path / "none.json")]
     assert health_watch.main(args + ["--now", "1000"]) == 1
@@ -857,7 +859,7 @@ def test_watcher_crash_after_send_keeps_unknown_witness(tmp_path, monkeypatch):
 def test_delivery_result_write_failure_reports_error_and_holds_next_send(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(health_watch, "deliver_alert", lambda *args: calls.append(args) or True)
-    real_publish = health_watch.maintenance.atomic_publish_text
+    real_publish = safe_io.atomic_publish_text
     writes = []
 
     def publish(path, text):
@@ -867,7 +869,7 @@ def test_delivery_result_write_failure_reports_error_and_holds_next_send(tmp_pat
                 raise OSError("synthetic unavailable result store")
         real_publish(path, text)
 
-    monkeypatch.setattr(health_watch.maintenance, "atomic_publish_text", publish)
+    monkeypatch.setattr(safe_io, 'atomic_publish_text', publish)
     _health_file(tmp_path, {"overall": "failed", "at": 990})
     args = ["--home", str(tmp_path), "--config", str(tmp_path / "none.json")]
     assert health_watch.main(args + ["--now", "1000"]) == 1
@@ -882,14 +884,14 @@ def test_delivery_result_write_failure_reports_error_and_holds_next_send(tmp_pat
 def test_detection_state_write_failure_still_reports_delivery_error(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(health_watch, "deliver_alert", lambda *args: calls.append(args))
-    publish = health_watch.maintenance.atomic_publish_text
+    publish = safe_io.atomic_publish_text
 
     def fail_state(path, text):
         if path == str(tmp_path / health_watch.STATE_REL):
             raise PermissionError("synthetic unreadable state file")
         publish(path, text)
 
-    monkeypatch.setattr(health_watch.maintenance, "atomic_publish_text", fail_state)
+    monkeypatch.setattr(safe_io, 'atomic_publish_text', fail_state)
     _health_file(tmp_path, {"overall": "failed", "at": 990})
     assert health_watch.main(["--home", str(tmp_path), "--now", "1000",
                               "--config", str(tmp_path / "none.json")]) == 1

@@ -11,6 +11,7 @@ import pytest
 
 import ledger as _ledger
 import notify_cards
+import notify_spool
 from adapters.common import envelopes, journal, registry
 
 NOW = 1_790_000_000.0
@@ -25,7 +26,7 @@ CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
 def world(tmp_path):
     data = tmp_path / "data"
     data.mkdir()
-    notify_cards.ensure_dirs(str(data))
+    notify_spool.ensure_dirs(str(data))
     led = _ledger.Ledger(str(data / "ledger.db"))
 
     def _seed(pid=1):

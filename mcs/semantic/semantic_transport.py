@@ -1,4 +1,5 @@
 """Local semantic inference transport and its process-local/durable retry state."""
+import safe_io
 import json
 import os
 import sys
@@ -77,7 +78,6 @@ def _remember_plain(endpoint: str, model: str) -> None:
     # Serialize the read/merge/publish across workers; atomic replacement
     # alone would lose another endpoint's cooldown on a concurrent write.
     import fcntl
-    import maintenance
     try:
         os.makedirs(os.path.dirname(_FMT_PATH), exist_ok=True)
         with open(_FMT_PATH + ".lock", "a", encoding="utf-8") as lock:
@@ -88,7 +88,7 @@ def _remember_plain(endpoint: str, model: str) -> None:
             marks[key] = time.time()
             while len(marks) > 500:
                 marks.pop(next(iter(marks)))
-            maintenance.atomic_publish_text(_FMT_PATH, json.dumps(marks))
+            safe_io.atomic_publish_text(_FMT_PATH, json.dumps(marks))
     except OSError:
         # Persistence is an optimization; the same-call retry and the
         # existing in-memory cooldown still work on read-only/full disks.
@@ -138,7 +138,7 @@ _LONG_MAX = 500
 # A long-ceiling call is deferred when its remaining budget is too
 # short to complete. Deferral consumes no attempt; background lanes
 # with sufficient time may take it, while a short tick lane cannot.
-_LONG_MIN_CALL_S = 620.0
+LONG_MIN_CALL_S = 620.0
 # Least time a send may have left after the backlog GPU turn is won;
 # capped at half the live window so a short job budget never reports
 # busy uncontended, and a turn won with scraps is deferred, not sent.
@@ -185,7 +185,6 @@ def _long_mark(key: str, level: int) -> None:
     in-process."""
     import fcntl
     try:
-        import maintenance
         os.makedirs(os.path.dirname(_LONG_PATH), exist_ok=True)
         with open(_LONG_PATH + ".lock", "a", encoding="utf-8") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -194,7 +193,7 @@ def _long_mark(key: str, level: int) -> None:
             marks[key] = level
             while len(marks) > _LONG_MAX:
                 marks.pop(next(iter(marks)))
-            maintenance.atomic_publish_text(_LONG_PATH, json.dumps(marks))
+            safe_io.atomic_publish_text(_LONG_PATH, json.dumps(marks))
         _LONG_UNSAVED.clear()   # the merged write persisted them all
     except Exception as e:
         cause = "busy" if isinstance(e, BlockingIOError) else "error"
@@ -255,7 +254,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     timeout = call_deadline - time.monotonic()
     if timeout <= 0:
         return _failed("deadline")
-    if level and timeout < _LONG_MIN_CALL_S:
+    if level and timeout < LONG_MIN_CALL_S:
         _failed("long_output_needs_budget")
         raise runtime.LLMNotSent("long_output_needs_budget")
     while True:
@@ -270,7 +269,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             response_format=rf,
             extra_payload={"id_slot": local_llm.request_slot()},
             request_fn=local_llm.bounded_request, error_out=err_out,
-            turn_min_s=_LONG_MIN_CALL_S if level
+            turn_min_s=LONG_MIN_CALL_S if level
             else min(_TURN_MIN_CALL_S, timeout / 2))
         if response is not None and response.get("admission"):
             # a denial/deferral never left — the verdict, never model text
@@ -290,7 +289,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
                 # A format refusal is not a plain-prompt rejection.
                 # Exhausted work stays retryable without another send.
                 return _failed("format_rejected")
-            if level and timeout < _LONG_MIN_CALL_S:
+            if level and timeout < LONG_MIN_CALL_S:
                 # The rejected request already left: do not report a
                 # free not-sent defer, or send a long call that cannot
                 # fit. A format refusal says nothing about the prompt,
@@ -304,7 +303,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             level += 1
             _long_mark(key, level)
             timeout = call_deadline - time.monotonic()
-            if level == 1 and timeout >= _LONG_MIN_CALL_S:
+            if level == 1 and timeout >= LONG_MIN_CALL_S:
                 continue  # one long-ceiling retry in what is left
         break
     if response is None and err_out.get("kind") == "busy":

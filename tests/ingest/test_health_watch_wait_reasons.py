@@ -106,8 +106,8 @@ def test_a_stale_file_shows_its_observations_as_recorded(tmp_path):
 
 
 def test_every_wait_code_has_a_label():
-    import notify_cards
-    for code in notify_cards.RESEAT_REASONS | {"intent_card_delivery_unknown", "card_parts_pending",
+    import notify_scope
+    for code in notify_scope.RESEAT_REASONS | {"intent_card_delivery_unknown", "card_parts_pending",
                                                "card_parts_unknown", "unknown", "stale", "unrecorded"}:
         assert code in health_watch._WAIT_JA
 

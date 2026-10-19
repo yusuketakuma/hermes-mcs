@@ -1,9 +1,9 @@
 """Backlog transports end a commit reserve before the job deadline, so a
 result can wait out a tick's hold on the run lock and still be written.
 
-2026-10-10: after the backlog lane lost its 600 s per-call cap, a call could
-run to the job deadline and leave ~30 s to retake the run lock; ticks held
-it 265-518 s, so 9 of 140 passes lost their results (1 of 422 before)."""
+A long-output call must leave enough time to reacquire the run lock
+and preserve its completed work before the job deadline."""
+import writer_lock
 import semantic_audit
 import semantic_policy
 import semantic_transport
@@ -12,7 +12,6 @@ import json
 
 import pytest
 
-import mcs_util
 import semantic
 import semantic_drain
 import semantic_jev as jev
@@ -33,7 +32,7 @@ def test_the_reserve_never_squeezes_out_a_long_output_call(budget, reserve):
     assert semantic_drain._backlog_commit_reserve(_scfg(budget)) == reserve
     if reserve:
         window = budget - reserve
-        assert window >= semantic_transport._LONG_MIN_CALL_S + semantic_drain._LONG_START_S
+        assert window >= semantic_transport.LONG_MIN_CALL_S + semantic_drain._LONG_START_S
 
 
 def _first_timeout(tmp_path, monkeypatch, budget, lane):
@@ -86,7 +85,7 @@ def test_a_long_result_waiting_out_a_tick_is_saved_and_not_generated_again(
         yield
         clock[0] += waits.pop(0) if waits else 0.0
 
-    monkeypatch.setattr(mcs_util, "unlocked_transport", tick_hold)
+    monkeypatch.setattr(writer_lock, "unlocked_transport", tick_hold)
     prompts = []
 
     def llm(prompt, timeout=None):

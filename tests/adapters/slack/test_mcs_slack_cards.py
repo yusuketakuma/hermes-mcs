@@ -83,14 +83,14 @@ def test_select_click_resolves_the_same_token_as_a_button():
               profile="p", allowed_user_ids={"U1"})
     select = {"type": "static_select", "action_id": "mcs:menu",
               "selected_option": {"value": "d" * 32}}
-    got = slack_actions.origin(body, select, **kw)
+    got = slack_actions.parse_action_origin(body, select, **kw)
     assert got and got["token"] == "d" * 32 and got["actor"] == "slack:T:U1"
-    assert slack_actions.origin(
+    assert slack_actions.parse_action_origin(
         body, {**select, "action_id": "mcs:a:" + "d" * 32}, **kw) is None
-    assert slack_actions.origin(
+    assert slack_actions.parse_action_origin(
         body, {**select, "selected_option": {"value": "x"}}, **kw) is None
     outsider = {**body, "user": {"id": "U9"}}
-    assert slack_actions.origin(outsider, select, **kw) is None
+    assert slack_actions.parse_action_origin(outsider, select, **kw) is None
 
 
 def test_full_card_is_one_compact_row():

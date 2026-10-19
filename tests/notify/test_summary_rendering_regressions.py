@@ -15,7 +15,7 @@ from adapters.lineworks import cards as lineworks_cards
 from adapters.slack import cards as slack_cards
 from discord_testkit import _fake_discord
 from ledger import publish_snapshot
-from mcs_signals import record_station_staff
+from self_identity import record_station_staff
 from notify_testkit import (
     CFG, CLINICAL_BODY, NOW, _add_request, _card, _click, _deliver, _dispatch_with_source, _extract, _intent,
     _latest_render, _msg, _patient, _seed_thread, _signal_row, _spec, led, pinned_clock,

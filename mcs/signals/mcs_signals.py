@@ -37,96 +37,20 @@ from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S,
                          iter_period_ends, json_or_null,
                          med_capability_evidence,
                          med_is_patient_current, med_period_artifacts,
-                         item_unverified, latest_artifact as _latest_artifact,
-                         transition_cooccurrences)
+                         item_unverified, transition_cooccurrences)
 from structured_view import message_urgency
 from clinical_values import patient_item_scope
 
 from mcs_util import loads_dict
-# self identity lives in core/self_identity; re-exported for callers
-from self_identity import (  # noqa: F401
-    SELF_PROFILE_KIND, STATION_STAFF_KIND, _latest_self_profile, _self_sets,
-    _station_self_id, is_own_station_message, is_self_message,
-    latest_station_staff, normalize_sender_id, own_sender_ids,
-    record_self_profile, record_station_staff, self_sender_id)
+from self_identity import self_sets
+
+from signal_policy import (
+    approved_policy,
+    resolved_thresholds,
+)
 
 ARTIFACT_KIND = "signal_v1"
 FEEDBACK_KIND = "signal_feedback_v1"
-
-FOLLOWUP_DAYS = 7          # med_change_no_followup window
-FOLLOWUP_MAX_AGE_D = 90    # only mentions within this horizon — older
-                           # ones are historical, not prospective
-CONC_WINDOW_H = 72         # comm_concentration window
-CONC_MIN_POSTS = 10        # comm_concentration threshold
-EXPIRY_AHEAD_DAYS = 3      # rx_period_expiry horizon
-RX_LAPSED_MAX_D = 14       # rx_period_lapsed: how many days past a
-                           # period end the "no renewal mention" alert
-                           # stays live — past that the silence is a
-                           # record style, not a lapsed prescription
-REQ_AGE_DAYS = 30          # request_aging: open register items older than this
-REQ_RESPONSE_DAYS = 3      # pharmacist_request_unanswered response window
-FYI_MAX_AGE_D = 30         # horizon for FYI-type signals (request
-                           # visibility / adherence / symptom coupling)
-NOTIFY_COOLDOWN_S = 7 * DAY_S  # no second notify for the same key inside this
-TRANSITION_LOOKBACK_D = 60   # 退院 mentions within the last N days
-TRANSITION_MED_WINDOW_D = 14 # med change mentions within ±N days of it
-
-# Human-approved threshold policy: ops.signal_policy writes
-# signal_policy_v1 artifacts; the latest one overrides these defaults.
-# Statistics viewing has no path into this — detection thresholds move
-# only via an explicit human-confirmed command (receipted).
-POLICY_KIND = "signal_policy_v1"
-#            name                default               low  high
-THRESHOLDS = {
-    "followup_days":            (FOLLOWUP_DAYS,            1,  90),
-    "followup_max_age_d":       (FOLLOWUP_MAX_AGE_D,       7, 365),
-    "conc_window_h":            (CONC_WINDOW_H,            6, 336),
-    "conc_min_posts":           (CONC_MIN_POSTS,           2, 200),
-    "expiry_ahead_days":        (EXPIRY_AHEAD_DAYS,        1,  90),
-    "rx_lapsed_days":           (RX_LAPSED_MAX_D,          1,  60),
-    "req_age_days":             (REQ_AGE_DAYS,             7, 365),
-    "transition_lookback_d":    (TRANSITION_LOOKBACK_D,    7, 365),
-    "transition_med_window_d":  (TRANSITION_MED_WINDOW_D,  1,  60),
-    "notify_cooldown_d":        (NOTIFY_COOLDOWN_S // DAY_S, 1, 90),
-    "request_response_days":    (REQ_RESPONSE_DAYS,        1,  30),
-    "fyi_max_age_d":            (FYI_MAX_AGE_D,            7, 180),
-}
-
-
-def _approved_policy(db):
-    """Latest signal_policy_v1 artifact as (artifact_id, content), or
-    None when absent or lacking provenance. Provenance required: a policy
-    only counts when it arrived through the human-confirmed command path
-    (non-empty str command_id + actor recorded by _apply_signal_policy_tx).
-    A bare artifact insert cannot move thresholds — same identity
-    boundary as the command envelope."""
-    artifact_id, content = _latest_artifact(db, POLICY_KIND)
-    # Never revive a prior approval past an unreadable latest row.
-    if not (content is not None
-            and isinstance(content.get("command_id"), str)
-            and content["command_id"]
-            and isinstance(content.get("actor"), str)
-            and content["actor"]):
-        return None
-    return artifact_id, content
-
-
-def _thresholds(db):
-    """Resolved thresholds: defaults overlaid by the latest approved
-    signal_policy_v1 artifact. Malformed/out-of-range values in the
-    artifact are ignored per key rather than failing the whole run."""
-    th = {name: default for name, (default, lo, hi)
-          in THRESHOLDS.items()}
-    approved = _approved_policy(db)
-    if approved is None:
-        return th
-    policy = approved[1].get("policy")
-    if isinstance(policy, dict):
-        for name, (_default, lo, hi) in THRESHOLDS.items():
-            v = policy.get(name)
-            if type(v) is int and lo <= v <= hi:
-                th[name] = v
-    return th
 
 
 def _key(type_, pid, anchor):
@@ -188,7 +112,7 @@ def _self_post_exists(db, pid, ts, professions, organizations):
         (pid, ts, *params)).fetchone() is not None
 
 
-def _request_registered(db, mid):
+def request_registered(db, mid):
     """A registered request on the mention message is visible
     engagement — someone already turned it into a tracked item."""
     return db.execute(
@@ -213,7 +137,7 @@ def _engagement_checker(db, candidates, professions, organizations):
             batch = {row[1]: tuple(row) for row in islice(candidates, 256)}
             changes = -1
             if not batch:
-                return (_request_registered(db, mid)
+                return (request_registered(db, mid)
                         or _self_post_exists(db, pid, ts, professions, organizations))
         if changes != db.total_changes:
             try:
@@ -228,7 +152,7 @@ def _engagement_checker(db, candidates, professions, organizations):
                 matched = None
             changes = db.total_changes
         if matched is None:
-            return (_request_registered(db, mid)
+            return (request_registered(db, mid)
                     or _self_post_exists(db, pid, ts, professions, organizations))
         return mid in matched
 
@@ -296,7 +220,7 @@ def _med_followup(db, now, th, sig_cfg):
     review candidates for us), capability-evidence spans like
     「〜は出来ない」 (those are adherence_concern, not changes), and
     configured med_exclude_names (non-dispensed therapies)."""
-    orgs, _, _ = _self_sets(sig_cfg, db)
+    orgs, _, _ = self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs)
     excludes = _med_excludes(sig_cfg)
     rows = db.execute(
@@ -551,7 +475,7 @@ def _transition_reconciliation(db, now, th, sig_cfg):
     reports are not review candidates for us."""
     lookback = now - th["transition_lookback_d"] * DAY_S
     win = th["transition_med_window_d"] * DAY_S
-    orgs, _, _ = _self_sets(sig_cfg, db)
+    orgs, _, _ = self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs, "d")
     grouped = transition_cooccurrences(
         db, win_s=win,
@@ -595,7 +519,7 @@ def _pharmacist_request(db, now, th, sig_cfg):
     self_professions/self_organizations or a registered request, plus —
     only with signals.self_reaction_response === true — the user's own
     承知/完了 stamp on the request post."""
-    orgs, profs, targets = _self_sets(sig_cfg, db)
+    orgs, profs, targets = self_sets(sig_cfg, db)
     self_reaction = (isinstance(sig_cfg, dict)
                      and sig_cfg.get("self_reaction_response") is True)
     # request_targets adds exact spellings like 「〇〇薬局さま」.
@@ -650,7 +574,7 @@ def _rx_request_visibility(db, now, th, sig_cfg):
     visibility into the prescription pipeline (a nurse asking the
     doctor for a drug is tomorrow's dispense). FYI only; pharmacist-
     addressed requests belong to pharmacist_request_unanswered."""
-    orgs, profs, targets = _self_sets(sig_cfg, db)
+    orgs, profs, targets = self_sets(sig_cfg, db)
     extra = "".join(",?" for _ in targets)
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
@@ -745,7 +669,7 @@ def _adherence_concern(db, now, th, sig_cfg):
     carrying capability evidence (「〜は出来ない」 — the same spans
     med_change_no_followup now excludes), and body phrases that never
     become meds items. Self-authored mentions are excluded."""
-    orgs, profs, _ = _self_sets(sig_cfg, db)
+    orgs, profs, _ = self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs)
     horizon = now - th["fyi_max_age_d"] * DAY_S
     groups = {}
@@ -820,7 +744,7 @@ def _discharge_notice(db, now, th, sig_cfg):
     takes over), when a responder posts, or at the lookback edge."""
     lookback = now - th["transition_lookback_d"] * DAY_S
     win = th["transition_med_window_d"] * DAY_S
-    orgs, profs, _ = _self_sets(sig_cfg, db)
+    orgs, profs, _ = self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs, "d")
     grouped = transition_cooccurrences(
         db, win_s=win,
@@ -863,7 +787,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
     ongoing non-negated patient symptom in ONE message — an ADR-triage
     prompt. Coupling is deliberately strict (same extraction): a loose
     room-level window paired almost everything and meant nothing."""
-    orgs, profs, _ = _self_sets(sig_cfg, db)
+    orgs, profs, _ = self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs)
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content,
@@ -965,7 +889,7 @@ def signal_content(content_s, stored_pid):
     return content
 
 
-def _latest_signal_states(db):
+def latest_signal_states(db):
     # Keep a tombstone for an unreadable latest row. Falling back to an
     # older open row could revive a dismissed signal or duplicate a notice.
     latest = {}
@@ -1061,9 +985,9 @@ def _resolution(db, old, now, th, sig_cfg):
                 "adherence_concern", "symptom_after_med_change", "discharge_notice")
             if stype in engagement_types and len(mids) == 1:
                 mid, message = mids[0], messages[0]
-                if _request_registered(db, mid):
+                if request_registered(db, mid):
                     causes.append("request_registered")
-                orgs, profs, _ = _self_sets(sig_cfg, db)
+                orgs, profs, _ = self_sets(sig_cfg, db)
                 if (message is not None and message["posted_at_ts"] is not None
                         and _self_post_exists(db, pid, message["posted_at_ts"], profs, orgs)):
                     causes.append("responder_post")
@@ -1073,7 +997,7 @@ def _resolution(db, old, now, th, sig_cfg):
                         and _self_reaction_response(db, mid)):
                     causes.append("self_reaction_observed")
             elif stype == "med_change_no_followup" and mids and complete:
-                if all(_request_registered(db, mid) for mid in mids):
+                if all(request_registered(db, mid) for mid in mids):
                     causes.append("request_registered")
                 if all(m is not None and m["posted_at_ts"] is not None
                        and db.execute(
@@ -1111,7 +1035,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
     notify intents for newly opened signals only when
     signals.notify===true. Returns counts for the run log."""
     now = now if now is not None else time.time()
-    th = _thresholds(ledger.db)
+    th = resolved_thresholds(ledger.db)
     sig_cfg = cfg.get("signals")
     notify = isinstance(sig_cfg, dict) and sig_cfg.get("notify") is True
 
@@ -1131,7 +1055,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
         current.update(found)
         ran_types.add(stype)
 
-    existing = _latest_signal_states(ledger.db)
+    existing = latest_signal_states(ledger.db)
     if any(value is None for value in existing.values()):
         errors.append("signal_state_corrupt")
 
@@ -1623,7 +1547,7 @@ def current_open(db, project_id=None, limit=50):
     """Read-side listing used by mcs_view — open signals with evidence
     ids. Runs on the snapshot connection; no state is touched. The
     latest row per meta.key is the signal's current state."""
-    latest = _latest_signal_states(db)
+    latest = latest_signal_states(db)
     items = [{"key": k, "type": c.get("type"),
               "project_id": c.get("project_id"),
               "detected_at": c.get("detected_at"),
@@ -1637,7 +1561,7 @@ def current_open(db, project_id=None, limit=50):
     last_run = db.execute(
         "SELECT MAX(finished_at) FROM runs WHERE status != 'failed'"
     ).fetchone()[0]
-    approved = _approved_policy(db)
+    approved = approved_policy(db)
     policy = None
     if approved is not None:
         aid, pc = approved
@@ -1649,4 +1573,4 @@ def current_open(db, project_id=None, limit=50):
             "errors": ["signal_state_corrupt"] if any(
                 state is None for state in latest.values()) else [],
             "pipeline_last_run_at": last_run,
-            "thresholds": _thresholds(db), "policy": policy}
+            "thresholds": resolved_thresholds(db), "policy": policy}

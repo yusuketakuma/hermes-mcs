@@ -4,7 +4,7 @@ import notify_journal
 
 import pytest
 
-import notify_cards
+import notify_spool
 import notify_reconcile
 from notify_reconcile_testkit import CFG, NOW, _journal_claim, world as world
 from adapters.common import journal
@@ -19,7 +19,7 @@ def test_parseable_damage_keeps_restore_hold(world, damage):
     world.seed()
     world.dispatch()
     spec = world.spec(world.render()["delivery_id"])
-    dirs = notify_cards.notify_dirs(str(world.data))
+    dirs = notify_spool.notify_dirs(str(world.data))
     aid = _journal_claim(dirs["discord_state"], "synthetic", spec)
     phase = {"unknown": "start-corrupt", "array": [], "object": {},
              "unterminated": "claimed"}[damage]
@@ -27,18 +27,18 @@ def test_parseable_damage_keeps_restore_hold(world, damage):
     path = world.data / "discord_state" / "journal-synthetic.jsonl"
     with path.open("ab") as handle:
         handle.write(json.dumps(row).encode() + (b"" if damage == "unterminated" else b"\n"))
-    notify_cards.mark_restored(str(world.data), now=NOW)
+    notify_spool.mark_restored(str(world.data), now=NOW)
     attempts, incomplete = notify_journal.scan_journals(dirs)
     assert incomplete and attempts[aid]["tainted"]
     assert attempts[aid]["rows"][-1] == row
     result = notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
     assert result["journal_incomplete"] and result["counts"].get("not_sent", 0) == 0
     assert world.holds() and world.card()["delivery_state"] == "delivery_unknown"
-    assert notify_cards.restore_pending(str(world.data)) is not None
+    assert notify_spool.restore_pending(str(world.data)) is not None
 
 
 def test_unreadable_deep_spec_is_not_a_reconcile_crash(world):
-    dirs = notify_cards.notify_dirs(str(world.data))
+    dirs = notify_spool.notify_dirs(str(world.data))
     did = "a" * 32
     path = world.data / "discord_render" / (did + ".json")
     path.write_bytes(b"[" * 20000 + b"]" * 20000)

@@ -15,7 +15,7 @@ import pytest
 from adapters.common import worker as worker_mod
 from adapters.common.registry import Registry
 from adapters.common import paths
-from adapters.discord import cards
+from adapters.discord import cards, delivery
 from adapters.discord.delivery import DeliveryWorker
 from discord_delivery_testkit import (BOT_USER, SETTINGS, FakeHTTP,
                                       FakeHTTPClient, _chunks, _claim,
@@ -264,7 +264,7 @@ def test_unguarded_hermes_send_keeps_retry_during_guarded_post():
             release.set()
 
     async def run():
-        return await asyncio.gather(cards.single_post(bot, guarded), hermes())
+        return await asyncio.gather(delivery.single_post(bot, guarded), hermes())
 
     card, reply = asyncio.run(run())
     assert card == "card" and reply == {"id": 5003}
@@ -279,16 +279,16 @@ def test_guard_state_resets_after_exceptions():
         await bot.http.request("POST", "/x")
 
     async def run():
-        with pytest.raises(cards.DiscordRetrySuppressed):
-            await cards.single_post(bot, boom)
-        assert cards._POSTS.get() is None
+        with pytest.raises(delivery.DiscordRetrySuppressed):
+            await delivery.single_post(bot, boom)
+        assert delivery._POSTS.get() is None
         with pytest.raises(ValueError):
-            await cards.single_post(bot, _raise_value)
-        assert cards._POSTS.get() is None
+            await delivery.single_post(bot, _raise_value)
+        assert delivery._POSTS.get() is None
         bot.wire.faults = [500]                 # unguarded again: retries
         await bot.http.request("POST", "/y")
         # each guarded call gets its own single POST budget
-        assert await cards.single_post(
+        assert await delivery.single_post(
             bot, lambda: bot.http.request("POST", "/z")) == {"id": 5004}
 
     asyncio.run(run())
@@ -301,7 +301,7 @@ async def _raise_value():
 
 def test_replaced_session_gets_guard_reinstalled_once():
     bot = WireBot()
-    assert cards.single_post_ready(bot) and cards.single_post_ready(bot)
+    assert delivery.single_post_ready(bot) and delivery.single_post_ready(bot)
     first = bot.http._HTTPClient__session.request
     assert first.__wrapped__ == Wire.request.__get__(bot.wire)  # not stacked
     fresh = Wire(faults=[500])                  # discord recreated it
@@ -310,8 +310,8 @@ def test_replaced_session_gets_guard_reinstalled_once():
     async def post():
         await bot.http.request("POST", "/x")
 
-    with pytest.raises(cards.DiscordRetrySuppressed):
-        asyncio.run(cards.single_post(bot, post))
+    with pytest.raises(delivery.DiscordRetrySuppressed):
+        asyncio.run(delivery.single_post(bot, post))
     assert len(fresh.posts()) == 1
 
 
@@ -374,11 +374,11 @@ def test_foreign_429_does_not_open_guarded_retry():
             hermes_done.set()
 
     async def run():
-        return await asyncio.gather(cards.single_post(bot, guarded),
+        return await asyncio.gather(delivery.single_post(bot, guarded),
                                     hermes(), return_exceptions=True)
 
     card, reply = asyncio.run(run())
-    assert isinstance(card, cards.DiscordRetrySuppressed)
+    assert isinstance(card, delivery.DiscordRetrySuppressed)
     assert reply == {"id": 5002}
     assert bot.wire.posts() == [("POST", "/channels/42/messages")] + \
         [("POST", "/channels/1/messages")] * 2
@@ -393,13 +393,13 @@ def test_cancel_during_429_backoff_leaves_no_state():
     async def run():
         bot.http.rate_limit_backoff = cancelled_backoff
         with pytest.raises(asyncio.CancelledError):
-            await cards.single_post(
+            await delivery.single_post(
                 bot, lambda: bot.http.request("POST", "/x"))
-        assert cards._POSTS.get() is None
+        assert delivery._POSTS.get() is None
         del bot.http.rate_limit_backoff
         await bot.http.request("POST", "/y")    # unguarded: 500 retried
         # a fresh call: its own 429 opens exactly its own retry
-        return await cards.single_post(
+        return await delivery.single_post(
             bot, lambda: bot.http.request("POST", "/z"))
 
     assert asyncio.run(run()) == {"id": 5003}

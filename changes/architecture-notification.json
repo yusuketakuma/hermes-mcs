@@ -12,7 +12,10 @@
     "signalの配送先変更は更新後card・変更有無・待機状態を返値で明示し、入力辞書を変更せず同じtransaction内のtoken失効と再発行順序を維持する。",
     "notify_actions がカード操作・private閲覧のcheckpoint・command receiptのtransactionを所有し、notify_action_tokensの発行契約とnotify_action_contextの読取り専用source pinをカード発行側と共有する。",
     "カード操作とrefreshの呼出元・テストpatch先は新正本へ直接移行し、旧moduleへのprivate再exportや操作側へ戻るcallbackを残さない。",
-    "notify_recovery が人承認によるカード・部品の復旧、保存済みscopeとjournal証拠の検証、rebindと承認receiptを所有する。機械配送のsettle_attempt_txとsettle_part_receiptは借用transaction内で状態だけを確定し、承認条件・失効・SAVEPOINT rollback・commit後publishの順序を維持する。"
+    "notify_recovery が人承認によるカード・部品の復旧、保存済みscopeとjournal証拠の検証、rebindと承認receiptを所有する。機械配送のsettle_attempt_txとsettle_part_receiptは借用transaction内で状態だけを確定し、承認条件・失効・SAVEPOINT rollback・commit後publishの順序を維持する。",
+    "notify_spoolが保存済みspec・flags・復元markerのファイル公開と修復を所有し、新規renderのcommit後公開・specごとの公開記録commit・部品予算holdとworker claim保持を維持する。",
+    "notify_scopeへ通知先設定とhealthの待機理由・配置世代・未確定配送の読取りを集約し、health_reportがカード更新moduleへ依存せず同じ借用DBと有界checkpointで観測する。",
+    "attachment_followupsが添付の通知intent重複防止とaccepted coverage判定を所有し、投稿保存・カード受付・thread失敗の各呼出元から同じtransactionを借用する。新しいBEGIN・commit・DB接続・送信を追加しない。"
   ],
   "refs": [
     "mcs/notify/notify_parts.py",
@@ -24,6 +27,9 @@
     "mcs/notify/notify_action_tokens.py",
     "mcs/notify/notify_action_context.py",
     "mcs/notify/notify_cmds.py",
-    "mcs/notify/notify_recovery.py"
+    "mcs/notify/notify_recovery.py",
+    "mcs/notify/notify_spool.py",
+    "mcs/core/attachment_followups.py",
+    "mcs/ingest/health_report.py"
   ]
 }

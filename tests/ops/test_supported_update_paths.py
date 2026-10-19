@@ -167,7 +167,7 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: [])
     monkeypatch.setattr(updater, "restart_gateway", lambda cfg: None)
     monkeypatch.setattr(updater, "_services_reconcile", lambda: calls.append("services"))
-    monkeypatch.setattr(updater, "_run_post_merge", lambda sha: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+    monkeypatch.setattr(updater, "_run_post_merge", lambda sha, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
     monkeypatch.delenv("MCS_UPDATE_REPO", raising=False)
     real_run = subprocess.run
 

@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "LINE WORKSのカード分割の正本参照を統一",
+  "summary": "LINE WORKSのカード本文と続きの分割を、既存の接続先表示処理へ直接参照する構成に揃えました。本文、改行、続きのマーカーと表示上限は変更しません。",
+  "upgrade": "追加設定は不要です。保存形式、表示世代、配送順序、患者範囲と承認条件は変わりません。",
+  "details": [
+    "汎用描画moduleを経由する転送aliasを除き、adapterとテストを既存の分割実体へ直接移行します。"
+  ],
+  "refs": [
+    "mcs/notify/presentation/present_lineworks.py",
+    "mcs/notify/notify_render.py",
+    "adapters/lineworks/cards.py"
+  ]
+}

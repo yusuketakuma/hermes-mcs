@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "評価CLIの単独起動とモデル選択の寿命を修正",
+  "summary": "保存済みの評価入力を扱うCLIが別の作業ディレクトリからも起動できるよう、抽出moduleを読む前に既存bootstrapを通します。評価と抽出workerのモデル選択は同じ一つのcontextmanagerを使用し、失敗時も以前の選択へ戻します。",
+  "upgrade": "追加設定や再取得は不要です。実モデルの実行には従来どおり明示した評価入力と設定が必要です。モデル既定、評価の封印・人によるレビュー・公開条件は変更しません。",
+  "refs": [
+    "mcs/extract/llm/extract_llm.py",
+    "mcs/extract/eval/extract_bench.py",
+    "mcs/semantic/eval/semantic_snapshot.py"
+  ],
+  "details": [
+    "CLIのbootstrap後に検証処理を読み込み、リポジトリ外からの通常起動と隔離起動に対応します。",
+    "推論対象の一時切替を既存の単一context managerへ集約し、例外や入れ子でも元の対象を復元します。"
+  ]
+}

@@ -11,7 +11,7 @@ from typing import TypedDict
 
 import mcs_signals
 import self_identity
-import notify_cards
+import notify_spool
 import notify_render
 import structured_view
 from mcs_queries import (FACT_KINDS_SQL, JST, current_extract_pred,
@@ -197,10 +197,10 @@ def _engagement(db, row, cfg, now):
                    OR (t.state='deferred' AND t.defer_until>?))
             LIMIT 1""", (mid, now)).fetchone():
         return "triage_claimed"
-    if mcs_signals._request_registered(db, mid):
+    if mcs_signals.request_registered(db, mid):
         return "request_registered"
     self_id = self_identity.self_sender_id(db)
-    own_orgs = self_identity._self_sets(cfg.get("signals"), db)[0]
+    own_orgs = self_identity.self_sets(cfg.get("signals"), db)[0]
     if self_id is None and not own_orgs:
         return "identity_unknown"
     for post in db.execute(
@@ -288,7 +288,7 @@ def _eligible(
         restore_checked=False) -> tuple[_Candidate | None, str | None]:
     # maybe_enqueueはrestore_pendingとhistoryをループ前に1回だけ評価して渡す
     if (not restore_checked
-            and notify_cards.restore_pending(notify_cards.data_root(ledger)) is not None):
+            and notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None):
         return None, "restore_pending"
     row = _current(ledger.db, mid)
     if row is None or row["kind"] == "extract_v1" or row["urgency"] != "high":
@@ -341,8 +341,8 @@ def maybe_enqueue(ledger, cfg, *, now=None) -> _EnqueueResult:
             WHERE a.kind IN ({FACT_KINDS_SQL}) {current_extract_pred("a", "m")}
               AND (a.kind='extract_llm' OR (1=1 {current_fact_pred("a", "m")}))
               AND json_extract({json_or_null('a.content')},'$.urgency')='high' ORDER BY m.message_id""").fetchall()
-        restoring = mids and notify_cards.restore_pending(
-            notify_cards.data_root(ledger)) is not None
+        restoring = mids and notify_spool.restore_pending(
+            notify_spool.data_root(ledger)) is not None
         history = None if restoring else _history(ledger.db, opts["mode"] == "shadow")
         for (mid,) in mids:
             if restoring:

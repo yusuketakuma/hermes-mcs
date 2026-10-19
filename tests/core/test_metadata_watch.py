@@ -3,8 +3,9 @@ import json
 
 import pytest
 
-from mcs_signals import _thresholds
 from common_testkit import ledger_fixture
+import message_observations
+from signal_policy import resolved_thresholds
 
 NOW = 1_800_000_000.0
 DAY = 86400
@@ -100,9 +101,9 @@ def test_signal_branch_matches_correlated_reference(led):
     _sig(db, "archived", "open", [23], pid=3)
     db.commit()
 
-    cutoff = NOW - _thresholds(db)["fyi_max_age_d"] * DAY
+    cutoff = NOW - resolved_thresholds(db)["fyi_max_age_d"] * DAY
     expected = [r[0] for r in db.execute(OLD_SIGNAL_BRANCH, (NOW, cutoff,))]
-    got = [r["message_id"] for r in led.metadata_watch_targets(limit=-1, now=NOW)]
+    got = [r["message_id"] for r in message_observations.metadata_watch_targets(led.db, limit=-1, now=NOW)]
     assert got == expected
     assert got == [1, 2, 3, 7, 8, 9, 11, 12, 13]
 
@@ -125,6 +126,6 @@ def test_invalid_reaction_element_does_not_abort_metadata_selectors(led, element
     db.commit()
     # This is only a fetch selector; malformed metadata stays invalid in display.
     assert get_message_metadata(db, 1)["reactions_status"] == "invalid"
-    targets = (led.metadata_watch_targets(now=NOW) if selector == "watch"
-               else led.reaction_actor_targets(now=NOW))
+    targets = (message_observations.metadata_watch_targets(led.db, now=NOW) if selector == "watch"
+               else message_observations.reaction_actor_targets(led.db, now=NOW))
     assert [r["message_id"] for r in targets] == [1]

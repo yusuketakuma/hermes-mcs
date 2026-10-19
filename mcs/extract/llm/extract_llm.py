@@ -44,6 +44,22 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
+import semantic_quantities
+import semantic_transport
+import semantic_loops
+import semantic_assessment
+import patient_nightly_plan
+import semantic_jev
+import semantic_runtime
+import semantic_projection
+import semantic_audit
+import semantic_v4
+import semantic_store
+import semantic_policy
+import writer_lock
+import llm_availability  # noqa: E402
+import self_identity  # noqa: E402
+import safe_io  # noqa: E402
 import bounded_http
 import clinical_values
 import clinical_scope
@@ -65,11 +81,9 @@ from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_
                          current_extract_pred,
                          current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
-from mcs_util import (CONF_PATH, HOME, acquire_run_lock, circuit_failure, circuit_open_s,
-                      circuit_streak,
-                      circuit_success, disk_floor_mb, disk_free_mb,
-                      json_object, load_config, loads_dict,
-                      text_chunks)  # noqa: F401 — historical helper re-export
+from mcs_util import CONF_PATH, HOME, json_object, load_config, loads_dict, text_chunks  # noqa: F401
+from writer_lock import acquire_run_lock
+from llm_availability import circuit_failure, circuit_open_s, circuit_streak, circuit_success, disk_floor_mb, disk_free_mb  # noqa: F401 — historical helper re-export  # noqa: F401 — historical helper re-export
 
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "extract_llm"
@@ -96,10 +110,25 @@ PATIENT_CONTEXT_VERSION = 4
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in (("extract_llm", __file__),
+                       ("writer_lock", writer_lock.__file__),
+                       ("semantic_store", semantic_store.__file__),
+                       ("semantic_v4", semantic_v4.__file__),
+                       ("semantic_audit", semantic_audit.__file__),
+                       ("semantic_projection", semantic_projection.__file__),
+                       ("semantic_runtime", semantic_runtime.__file__),
+                       ("semantic_jev", semantic_jev.__file__),
+                       ("patient_nightly_plan", patient_nightly_plan.__file__),
+                       ("semantic_transport", semantic_transport.__file__),
+                       ("semantic_loops", semantic_loops.__file__),
+                       ("semantic_assessment", semantic_assessment.__file__),
+                       ("llm_availability", llm_availability.__file__),
+                       ("self_identity", self_identity.__file__),
+                       ("safe_io", safe_io.__file__),
                        ("extract", extract.__file__),
                        ("clinical_values", clinical_values.__file__),
                        ("clinical_scope", clinical_scope.__file__),
                        ("clinical_chunking", clinical_chunking.__file__),
+                       ("semantic_quantities", semantic_quantities.__file__),
                        ("extraction_refresh", extraction_refresh.__file__),
                        ("patient_context", patient_context.__file__),
                        ("mcs_queries", mcs_queries.__file__),
@@ -458,7 +487,7 @@ _CALL_NOTES = threading.local()
 
 
 @contextlib.contextmanager
-def _pin_target(target):
+def pin_target(target):
     """One job's actual endpoint/model tuple, never a global overwrite or log payload."""
     previous = getattr(_CALL_NOTES, "target", None)
     _CALL_NOTES.target = target
@@ -967,7 +996,7 @@ def llm_extract(body: str, *, context: str | None = None,
             on_chunk(key, checkpoint)
         return [v]
 
-    with _pin_target(_resolved_llm()):
+    with pin_target(_resolved_llm()):
         outs = []
         chunks = plan_chunks(body, chunk_size)
         offset = 0
@@ -1039,7 +1068,7 @@ def _hint_block(hints: dict) -> str:
     return _sanitize_ctx(raw)
 
 
-def _ctx_lines(rows, root_id: int, budget: int = _CTX_TOTAL_MAX) -> list[str]:
+def thread_context_lines(rows, root_id: int, budget: int = _CTX_TOTAL_MAX) -> list[str]:
     """Select + format context lines from earlier-than-target thread
     member mappings (keys: message_id, body_text, posted_at_ts, who).
 
@@ -1100,7 +1129,7 @@ def _karte_block(db, project_id: int, posted_at: str | None) -> str:
 def _thread_context(db, r, *, budget=_CTX_TOTAL_MAX) -> str | None:
     """Reference-only context: the patient's 連携サマリー block (if any)
     followed by earlier members of the message's thread, selected and
-    formatted by _ctx_lines within the remaining _CTX_TOTAL_MAX budget.
+    formatted by thread_context_lines within the remaining _CTX_TOTAL_MAX budget.
 
     A per-message snapshot: replies that arrive AFTER this message's
     extraction are not retro-fitted into it (the artifact stays a
@@ -1125,7 +1154,7 @@ def _thread_context(db, r, *, budget=_CTX_TOTAL_MAX) -> str | None:
                     COALESCE(posted_at_ts,0) DESC, message_id DESC LIMIT 4""",
         (r["project_id"], root, r["message_id"], root, ts, ts,
          r["message_id"], root)).fetchall()
-    thread = "\n".join(_ctx_lines(rows, root, budget - len(karte)))
+    thread = "\n".join(thread_context_lines(rows, root, budget - len(karte)))
     return (karte + thread) or None
 
 
@@ -1138,9 +1167,9 @@ def _llm_up(deadline: float | None = None) -> bool:
         return False
 
 
-# ---------- stability guards live in mcs_util ----------
+# ---------- stability guards live in llm_availability ----------
 # circuit_* / disk_* keep the extract and semantic lanes on one gate; see
-# mcs_util's "LLM lane stability gates" section.  Without the breaker a
+# llm_availability's shared lane gates.  Without the breaker a
 # dead llama-server costs every drain a full socket timeout plus
 # lease/fail bookkeeping per claimed row.
 
@@ -2565,7 +2594,7 @@ def _run_batch_call(tups, target, deadline: float,
     notes.clear()   # batch-only runs never enter llm_extract's
                     # clear — unbounded in a resident worker
     start = len(notes)
-    with _pin_target(target):
+    with pin_target(target):
         d = _llm_call(
             _batch_prompt([(r["body_text"], r["posted_at"], hints)
                            for _, r, _c, _s, hints, _q, _l in tups]),
@@ -2665,7 +2694,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         nonlocal breaker_fed
         if not breaker_fed:
             breaker_fed = True
-            circuit_failure(ledger)
+            circuit_failure(ledger.db)
 
     last_seen = [float("-inf")]
 
@@ -2679,7 +2708,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             return
         last_seen[0] = at
         if kind == "answered":
-            circuit_success(ledger)
+            circuit_success(ledger.db)
             # a later outage in this run is a new streak to feed
             endpoint_down = breaker_fed = False
         elif kind in ("unreachable", "unavailable"):
@@ -2770,7 +2799,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             r["_transport_at"] = getattr(_CALL_NOTES, "transport_at", None)
 
     def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
-        with _pin_target(r["_target"]):
+        with pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            **({"references": _frame_refs(r)} if _frame_refs(r) else {}),
                            deadline=deadline, meta_out=meta,
@@ -2880,7 +2909,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # resets the streak, so a message that times out on
                     # a healthy server still reaches the ceiling.
                     _observe(transport, at)
-                    if circuit_streak(ledger) > 0:
+                    if circuit_streak(ledger.db) > 0:
                         slow_deferred += 1
                         return
                 if qc is not None:
@@ -2979,8 +3008,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # rows stay pending for the next drain instead of churning leases
     # and timeouts. Prefilter markers above still settled no-signal
     # rows, since they never needed the endpoint.
-    circuit_s = circuit_open_s(ledger)
-    free_mb = disk_free_mb(ledger)
+    circuit_s = circuit_open_s(ledger.db)
+    free_mb = disk_free_mb(ledger.db)
     disk_low = free_mb is not None and free_mb < disk_floor_mb()
     # claim each row before inference — a live lease held by another
     # drainer/tick makes the conflict-update a no-op, so two workers
@@ -3356,7 +3385,7 @@ def _background_semantic(ledger, stop=None):
         return {"skipped": "lock_busy"}
     try:
         cfg = load_config()
-        budget = semantic_drain.semantic_config(cfg)[0]["job_budget_seconds"] + 30
+        budget = semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30
         deadline = time.monotonic() + budget
         if stop is not None:
             deadline = min(deadline, stop)
@@ -3408,8 +3437,7 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
     settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
     with _write_lock(True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S) as held:
         if held and fence is not None:
-            import mcs_util
-            write = write and mcs_util._updater_state() == fence
+            write = write and writer_lock.updater_state() == fence
         for i, (r, lease, commit) in enumerate(carry):
             if held and write and _owns_current_source(ledger, r, lease):
                 commit(settled=settled)
@@ -3435,7 +3463,6 @@ def _background_nightly(ledger, initial_state, stop=None):
     """Lane 3's first priority: one patient-context unit (up to 15 min)
     per call, any hour. ``admit`` is re-checked at every unit boundary;
     the per-patient extraction-complete rule lives in run_due."""
-    import mcs_util
 
     if _SLOT_OVERRIDE != local_llm.LANES[3]:
         return {"status": "off", "done": 0}
@@ -3454,14 +3481,14 @@ def _background_nightly(ledger, initial_state, stop=None):
         # Unknown capacity is not idle: memory, disk, breaker, updater
         # and an unchanged config all have to be proven.
         if (time.monotonic() >= deadline
-                or mcs_util._updater_state() != initial_state
-                or initial_state[0] or circuit_open_s(ledger)):
+                or writer_lock.updater_state() != initial_state
+                or initial_state[0] or circuit_open_s(ledger.db)):
             return False
         if load_config() != cfg:
             return False
         if not _nightly_memory_available():
             return False
-        free = disk_free_mb(ledger)
+        free = disk_free_mb(ledger.db)
         return free is not None and free >= disk_floor_mb()
 
     try:
@@ -3475,7 +3502,7 @@ def _background_nightly(ledger, initial_state, stop=None):
     except Exception as exc:
         # Nightly failures must not interrupt collection or normal extraction.
         result = {"status": "error", "done": 0, "error": type(exc).__name__}
-    if mcs_util._updater_state() != initial_state:
+    if writer_lock.updater_state() != initial_state:
         result["run_lock_lost"] = "updated"
     return result
 
@@ -3629,8 +3656,7 @@ def _main() -> int:
             total = {"done": 0, "failed": 0, "left": 0}
             context_lane = _SLOT_OVERRIDE == local_llm.LANES[3]
             semantic_first_until = 0.0
-            import mcs_util
-            nightly_state = mcs_util._updater_state()
+            nightly_state = writer_lock.updater_state()
             carry: list = []   # finished results waiting for the run lock
 
             while True:
@@ -3644,7 +3670,7 @@ def _main() -> int:
                         # carried result gets its lock attempt first and its
                         # claim lease renewed, so the context units it waits
                         # through cannot outlive the claim.
-                        if mcs_util._updater_state() != nightly_state:
+                        if writer_lock.updater_state() != nightly_state:
                             # an updater ran since the last pass: old code
                             # must not write the carried result either
                             _settle_carry(led, carry, write=False)

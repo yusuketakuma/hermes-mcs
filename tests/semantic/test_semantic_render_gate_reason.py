@@ -4,6 +4,7 @@ It validates config the same way as the other send gates, so a raw
 ``mode: enforce`` with ``summary_mode`` off enforce, an invalid config,
 or a paused project defers with that reason instead of looking like a
 changed generation."""
+import semantic_send_gate
 import uuid
 
 import pytest
@@ -20,7 +21,7 @@ def _raw_notice(tmp_path, monkeypatch):
     _semantic_event(db)
     raw = db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
-    initial = notify_flush._semantic_render_state(db, raw)
+    initial = semantic_send_gate.semantic_render_state(db, raw, notify_flush._config())
     assert initial
     return db, raw, initial
 

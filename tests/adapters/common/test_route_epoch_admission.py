@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 import notify_cards
+import notify_scope
+import notify_spool
 import present_slack
 import notify_cmds
 import pytest
@@ -29,7 +31,7 @@ def _config(transport, epoch=1):
 
 def _worker(root, cfg, reg=None):
     platform = cfg["notify"]["interactive"]
-    scope = notify_cards.delivery_scope(cfg)
+    scope = notify_scope.delivery_scope(cfg)
 
     def directories(data):
         dirs = paths.notify_dirs(data)
@@ -106,8 +108,8 @@ def _setup(led, tmp_path, monkeypatch, transport):
     monkeypatch.setattr(present_slack, "BODY_ON_FACE", False)
     root = str(tmp_path / "data")
     cfg = _config(transport)
-    notify_cards.ensure_dirs(root)
-    notify_cards.publish_flags(cfg, root)
+    notify_spool.ensure_dirs(root)
+    notify_spool.publish_flags(cfg, root)
     _seed_thread(led)
     assert _dispatch(led, _intent(led), cfg)["dispatched"]
     sender, reg = _worker(root, cfg)
@@ -139,7 +141,7 @@ def test_granted_send_stays_held_until_its_exact_epoch_returns(
         assert claim["phase"] == "granted" and claim["attempt_id"] == attempt
         rows = led.db.execute("SELECT attempt_id,state FROM notification_delivery_attempts").fetchall()
         assert [(row["attempt_id"], row["state"]) for row in rows] == [(attempt, "granted")]
-        notify_cards.publish_flags(cfg, root)
+        notify_spool.publish_flags(cfg, root)
         await sender.tick()
         _drain(led, root, cfg)
         await sender.tick()
@@ -163,7 +165,7 @@ def test_epoch_change_after_wire_preserves_the_factual_result(
 
     async def past_wire(claim):
         sender.writes.append(("card", claim["spec"]["delivery_id"]))
-        notify_cards.publish_flags(newer, root)
+        notify_spool.publish_flags(newer, root)
         return ({"result": "delivered", "message_id": "1000.000001"}
                 if result == "delivered" else {"result": "unknown", "error_code": "synthetic_timeout"})
 
@@ -195,7 +197,7 @@ def test_clean_unsent_grant_restart_can_recover_into_the_new_epoch(
 
     async def scenario():
         await _grant(led, root, cfg, sender, reg)
-        notify_cards.publish_flags(newer, root)
+        notify_spool.publish_flags(newer, root)
         await sender.tick()
         assert sender.writes == []
         reg.save()
@@ -232,7 +234,7 @@ def test_epoch_change_between_parts_holds_only_the_unsent_remainder(
     async def stop_after_thread(claim, part, ctx):
         await attempt_part(claim, part, ctx)
         if part["kind"] == "thread":
-            notify_cards.publish_flags(_config(transport, 2), root)
+            notify_spool.publish_flags(_config(transport, 2), root)
 
     monkeypatch.setattr(sender, "_attempt_part", stop_after_thread)
 
@@ -248,7 +250,7 @@ def test_epoch_change_between_parts_holds_only_the_unsent_remainder(
         assert latest["state"] == "delivered" and not reg.parts_done(latest["delivery_id"])
         assert led.db.execute("SELECT state FROM notification_render_parts WHERE delivery_id=? "
                               "AND kind='body_part' LIMIT 1", (latest["delivery_id"],)).fetchone()[0] == "pending"
-        notify_cards.publish_flags(cfg, root)
+        notify_spool.publish_flags(cfg, root)
         await sender.tick()
         _drain(led, root, cfg)
         await sender.tick()
@@ -268,42 +270,42 @@ def test_epoch_change_between_parts_holds_only_the_unsent_remainder(
 def test_publisher_repairs_raw_epoch_types_before_releasing_a_hold(tmp_path, value):
     root = str(tmp_path)
     cfg = _config("discord")
-    notify_cards.ensure_dirs(root)
-    assert notify_cards.publish_flags(cfg, root)
+    notify_spool.ensure_dirs(root)
+    assert notify_spool.publish_flags(cfg, root)
     flag_path = tmp_path / "flags/notify.json"
     flags = json.loads(flag_path.read_text())
     flags["route_epoch"] = value
     flag_path.write_text(json.dumps(flags))
-    assert notify_cards.publish_flags(cfg, root)
+    assert notify_spool.publish_flags(cfg, root)
     restored = json.loads(flag_path.read_text())
     assert type(restored["route_epoch"]) is int and restored["route_epoch"] == 1
-    assert not notify_cards.publish_flags(cfg, root)
+    assert not notify_spool.publish_flags(cfg, root)
 
 
 def test_publisher_keeps_normal_flags_unchanged_for_at_only_drift(tmp_path, monkeypatch):
     cfg = _config("discord")
-    notify_cards.ensure_dirs(str(tmp_path))
+    notify_spool.ensure_dirs(str(tmp_path))
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
-    assert notify_cards.publish_flags(cfg, str(tmp_path))
+    assert notify_spool.publish_flags(cfg, str(tmp_path))
     flag_path = tmp_path / "flags/notify.json"
     before = flag_path.read_bytes()
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW + 60)
-    assert not notify_cards.publish_flags(cfg, str(tmp_path))
+    assert not notify_spool.publish_flags(cfg, str(tmp_path))
     assert flag_path.read_bytes() == before
 
 
 @pytest.mark.parametrize("raw", ["{\"route_epoch\":NaN}", "[" * 20000 + "]" * 20000])
 def test_publisher_replaces_unserializable_or_deep_raw_flags(tmp_path, raw):
     cfg = _config("discord")
-    notify_cards.ensure_dirs(str(tmp_path))
+    notify_spool.ensure_dirs(str(tmp_path))
     (tmp_path / "flags/notify.json").write_text(raw)
-    assert notify_cards.publish_flags(cfg, str(tmp_path))
+    assert notify_spool.publish_flags(cfg, str(tmp_path))
     assert json.loads((tmp_path / "flags/notify.json").read_text())["route_epoch"] == 1
 
 
 def test_bad_config_boolean_keeps_the_existing_epoch_normalization(tmp_path):
     cfg = _config("discord", True)
-    notify_cards.ensure_dirs(str(tmp_path))
-    assert notify_cards.publish_flags(cfg, str(tmp_path))
+    notify_spool.ensure_dirs(str(tmp_path))
+    assert notify_spool.publish_flags(cfg, str(tmp_path))
     flags = json.loads((tmp_path / "flags/notify.json").read_text())
     assert type(flags["route_epoch"]) is int and flags["route_epoch"] == 1

@@ -159,7 +159,7 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     monkeypatch.setattr(ledger, "valid_mcs_db", lambda path, *a, **k: not (
         backup_broken and str(path) == back) and real_valid(path, *a, **k))
 
-    def child_restarted_then_failed(sha):
+    def child_restarted_then_failed(sha, *, run_lock_fd):
         restarts.append("child")
         updater._remove_marker()
         backup_broken.append(True)       # unreadable before any consent hold
@@ -210,14 +210,13 @@ def test_incomplete_restore_never_finishes_without_restoring_target(
         git_dir.mkdir(parents=True)
         (git_dir / "MERGE_HEAD").write_text("c" * 40)
     monkeypatch.setattr(updater, "_head_sha", lambda: "c" * 40 if shape == "unknown_head" else "b" * 40)
-    monkeypatch.setattr(updater, "_tree_clean", lambda: shape != "previous_dirty")
     monkeypatch.setattr(updater, "_clean_stale_git_locks", lambda: [])
 
     def forbidden(*args, **kwargs):
         pytest.fail("incomplete restore must not reset, finish, restore an unbound DB, or restart writers")
 
     for name in ("_git", "_git_out", "_restore_db", "restart_agents", "_enqueue_notice",
-                 "_finish_recovery", "_undo_interrupted_migration"):
+                 "_finish_recovery", "_undo_interrupted_migration", "_tree_clean"):
         monkeypatch.setattr(updater, name, forbidden)
     for _ in range(2):
         assert updater.recover_interrupted() == 1
@@ -254,7 +253,7 @@ def test_apply_pre_reset_rollback_failure_survives_recovery(
     def runtime_failure(*args):
         raise updater.UpdateError("synthetic runtime restore failure")
 
-    def child_failed(sha):
+    def child_failed(sha, *, run_lock_fd):
         updater._remove_marker()
         if failure_stage == "layout_floor":
             monkeypatch.setattr(updater, "_rollback_layout_error",

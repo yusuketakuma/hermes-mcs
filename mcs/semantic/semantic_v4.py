@@ -24,6 +24,7 @@ mints that single self-correcting pipeline as engine v4:
   manifest; a conversion receipt never authorizes payload deletion.
 """
 from __future__ import annotations
+import semantic_facts
 import semantic_store
 import semantic_transport
 
@@ -33,7 +34,7 @@ import time
 from mcs_util import loads_dict
 from mcs_queries import (current_projection_id, current_v4_id, current_v4_pred,
                          json_object_or_null)
-from semantic_policy import (JOB_KIND, KIND_AUDIT, KIND_COVERAGE,
+from semantic_policy import (SCHEMA_VERSION, JOB_KIND, KIND_AUDIT, KIND_COVERAGE,
                              KIND_FACTS_V2, KIND_FACT_AUDIT, KIND_FACT_PROJ,
                              KIND_FACT_REPAIR, KIND_LOOP, KIND_SUMMARY,
                              policy_fingerprint)
@@ -152,8 +153,8 @@ def stage_request_following(ledger, bundle, doc, *, policy):
     if not isinstance(policy, str) or not policy.strip():
         raise sf.ContractError("request_following_policy_required")
     candidate = {
-        "source": clean["source"], "source_doc_hash": _doc_hash(doc),
-        "doc_hash": _doc_hash(clean),
+        "source": clean["source"], "source_doc_hash": semantic_facts.doc_hash(doc),
+        "doc_hash": semantic_facts.doc_hash(clean),
         "projection": project_v2_doc_legacy(clean, request_details=True),
         "loop_facts": project_v2_facts(clean, request_details=True),
         "promotion_ready": False,
@@ -190,7 +191,7 @@ def extract_request_following(llm_fn, ledger, bundle, message_id, *, policy,
         ledger, current["project_id"], member["message_id"], current["source_fingerprint"],
         policy, "request_following_extraction", "PENDING",
         generation=result["generation"], extraction_complete=result["extraction_complete"],
-        doc_hash=_doc_hash(result["doc"]))
+        doc_hash=semantic_facts.doc_hash(result["doc"]))
     return {"extraction": result, "candidate": candidate}
 
 
@@ -205,10 +206,10 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
     from semantic_projection import (PROJECTION_VERSION,
                                       project_v2_doc_legacy,
                                       projection_current)
-    from semantic_audit import _published_quantity_findings
-    if _published_quantity_findings(v2_doc):
+    from semantic_audit import published_quantity_findings
+    if published_quantity_findings(v2_doc):
         return None
-    doc_hash = _doc_hash(v2_doc)
+    doc_hash = semantic_facts.doc_hash(v2_doc)
     existing = current_v4(ledger, mid, member["revision"])
     if existing is not None and projection_current(existing["meta"], doc_hash):
         return existing["artifact_id"]
@@ -239,16 +240,17 @@ def reproject_doc(db, mid: int, meta: dict):
     fingerprint) and accepted only when it is still the document the row
     binds (``doc_hash``), its coverage is complete, and the stored fact
     audit of that generation PASSed it (``fact_audit_verdict``)."""
-    from semantic_store import _current
+    from semantic_audit import fact_audit_verdict
+    from semantic_store import current_artifact
     fp, policy = meta.get("fingerprint"), meta.get("policy_fingerprint")
     doc_hash = meta.get("doc_hash")
     if not (isinstance(fp, str) and isinstance(policy, str)
             and isinstance(doc_hash, str)):
         return None, "unbound_meta"
-    prev_v2 = _current(db, KIND_FACTS_V2, mid, fp)
+    prev_v2 = current_artifact(db, KIND_FACTS_V2, mid, fp)
     doc = prev_v2["content"] if prev_v2 else None
     try:
-        ok = doc is not None and _doc_hash(doc) == doc_hash
+        ok = doc is not None and semantic_facts.doc_hash(doc) == doc_hash
     except (KeyError, TypeError, ValueError):
         ok = False
     if not ok:
@@ -256,10 +258,10 @@ def reproject_doc(db, mid: int, meta: dict):
     if not isinstance(doc.get("coverage"), dict) \
             or doc["coverage"].get("status") != "complete":
         return None, "coverage_incomplete"
-    from semantic_audit import _published_quantity_findings
-    if _published_quantity_findings(doc):
+    from semantic_audit import published_quantity_findings
+    if published_quantity_findings(doc):
         return None, "quantity_unverified"
-    if fact_audit_verdict(_current(db, KIND_FACT_AUDIT, mid, fp, policy),
+    if fact_audit_verdict(current_artifact(db, KIND_FACT_AUDIT, mid, fp, policy),
                           doc_hash) != "PASS":
         return None, "audit_not_pass"
     return doc, None
@@ -460,7 +462,7 @@ def _seed_rebuild(ledger, scfg, pid: int, mid: int, meta: dict):
     state = ledger.job_state(JOB_KIND, pid, row["r"]) if row else None
     if state in ("failed", "pending"):
         return f"job_{state}"
-    ledger._semantic_seed_tx(pid, [mid], {"source": "hint_rebuild",
+    ledger.semantic_seed_tx(pid, [mid], {"source": "hint_rebuild",
                                           "notification_free": True})
     return None
 
@@ -631,7 +633,7 @@ def _upgraded_obligations(ledger, row, meta, doc) -> tuple[str, list]:
         if not bmeta or bmeta.get("fingerprint") != fp or bmeta.get("repaired"):
             continue
         try:
-            if _doc_hash(base) != base_hash:
+            if semantic_facts.doc_hash(base) != base_hash:
                 continue
         except (KeyError, TypeError):
             continue
@@ -696,30 +698,8 @@ def _hold_upgraded_repairs(ledger, scfg: dict, limit: int, out: dict) -> None:
         _count(out, f"repair_absence:{verdict}")
 
 
-def _doc_hash(v2_doc: dict) -> str:
-    from mcs_util import payload_hash
-    return payload_hash({"f": v2_doc["facts"], "e": v2_doc["evidence"]})
 
 
-def fact_audit_verdict(audit, doc_hash: str) -> str | None:
-    """Completed fact-audit status for the v2 document ``doc_hash``, or
-    None when it has none. ``audit`` is the generation's NEWEST
-    ``semantic_facts_audit`` row for the policy (``semantic_store.
-    _current(..., KIND_FACT_AUDIT, mid, fp, policy)``), exactly the row
-    the drain reuses (C04) — never an older one: a newer row bound to
-    another document or recording an unevaluated run (``evaluated``
-    not ``True``) means the document is not audited as it stands, and
-    the drain re-audits it rather than resurrecting an earlier verdict.
-    The drain never appends an audit after a completed one for the same
-    document, so in its own ledger the newest row is the only verdict.
-    ``content.status`` is the verdict the drain acted on
-    (``meta.audit_status`` is its denormalized copy for status reads).
-    Shared by the drain's reuse check, the re-projection gate and the
-    evaluation lifecycle's ``verified`` stage."""
-    if audit is None or audit["meta"].get("doc_hash") != doc_hash \
-            or audit["content"].get("evaluated") is not True:
-        return None
-    return audit["content"].get("status")
 
 
 def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
@@ -730,8 +710,8 @@ def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
     as current content. Idempotent per (fp, status, doc_hash): a
     retried drain must not stack identical rows. ``tx=True`` inside a
     caller-held ``with ledger.db`` block."""
-    from semantic_store import _current
-    prev = _current(ledger.db, KIND_V4_DIAG, mid, fp, policy)
+    from semantic_store import current_artifact
+    prev = current_artifact(ledger.db, KIND_V4_DIAG, mid, fp, policy)
     if prev is not None \
             and prev["content"].get("status") == status \
             and prev["content"].get("doc_hash") == doc_hash \
@@ -857,3 +837,162 @@ def hold_unbounded_job(ledger, job) -> bool:
                 _item_receipt(ledger, cohort, job["message_id"],
                               "needs_review", reason="token_budget_not_enforceable")
     return True
+
+
+def invalidate_projections(db, scfg: dict) -> int:
+    """Persist source/policy expiry for readers of the published snapshot."""
+    from semantic_projection import projection_transition
+    policy = policy_fingerprint(scfg)
+    off = scfg.get("mode") == "off"
+    enabled = not off and scfg.get("fact_source") == "canonical"
+    rows = db.execute("""
+      SELECT a.artifact_id,a.project_id,a.meta,m.parent_id,a.message_id
+      FROM artifacts a LEFT JOIN messages m ON m.message_id=a.message_id
+      WHERE a.kind IN ('canonical_projection','semantic_facts_v4')
+        AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object' THEN
+             COALESCE(json_extract(a.meta,'$.invalidated'),0)=0
+             OR (? AND json_extract(a.meta,'$.invalidated')=1
+                 AND json_extract(a.meta,'$.invalidated_reason')='fact_source')
+             END
+    """, (enabled or off,)).fetchall()
+    metas = [loads_dict(r["meta"]) for r in rows]
+    current_ids = set()
+    if enabled and any(meta and meta.get("invalidated") for meta in metas):
+        from mcs_queries import current_projection_id, current_v4_id
+        # Evaluate the normal reader predicates against a prospective snapshot,
+        # without exposing any row before source/policy and PASS checks succeed.
+        current_ids = {r[0] for r in db.execute(f"""
+          WITH artifacts AS (
+            SELECT artifact_id,kind,project_id,message_id,content,
+                   CASE WHEN json_valid(meta) THEN
+                     CASE WHEN json_extract(meta,'$.invalidated')=1
+                           AND json_extract(meta,'$.invalidated_reason')='fact_source'
+                          THEN json_remove(meta,'$.invalidated')
+                          ELSE meta END
+                     ELSE meta END AS meta
+            FROM main.artifacts
+            WHERE kind IN ('canonical_projection','semantic_facts_v4')
+          )
+          SELECT a.artifact_id FROM artifacts a JOIN messages m
+            ON m.message_id=a.message_id AND m.project_id=a.project_id
+          WHERE m.body_state IS NOT 'deleted'
+            AND a.artifact_id=CASE WHEN a.kind='canonical_projection'
+                THEN {current_projection_id(require_version=False)} ELSE {current_v4_id(require_version=False)} END
+        """)}
+    bundles, expired, revived, projects = {}, [], [], set()
+    local_model = None
+    for row, meta in zip(rows, metas):
+        key = (row["project_id"], row["parent_id"] or row["message_id"])
+        source_fingerprint = None
+        revivable = False
+        # These predicates bound source/document I/O only; the pure projection
+        # contract below owns the actual keep/expire/revive decision.
+        if enabled and meta is not None and meta.get("policy_fingerprint") == policy:
+            if key not in bundles:
+                if local_model is None:
+                    # one config read per scan, not one per thread
+                    local_model = semantic_transport.llm_model()
+                bundle = semantic_store.thread_bundle(db, *key, local_model=local_model)
+                bundles[key] = bundle["source_fingerprint"] if bundle else None
+            source_fingerprint = bundles[key]
+            if (source_fingerprint is not None
+                    and meta.get("fingerprint") == source_fingerprint
+                    and meta.get("invalidated")
+                    and row["artifact_id"] in current_ids):
+                doc, _ = reproject_doc(db, row["message_id"], meta)
+                revivable = doc is not None
+        action, reason = projection_transition(meta, off=off, enabled=enabled,
+            policy=policy, source_fingerprint=source_fingerprint, revivable=revivable)
+        if action == "keep":
+            continue
+        if action == "revive":
+            revived.append((row["artifact_id"],))
+        else:
+            expired.append((reason, row["artifact_id"]))
+        projects.add(row["project_id"])
+    if expired or revived:
+        with db:
+            db.executemany(
+                "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'),"
+                "'$.invalidated_reason',?) "
+                "WHERE artifact_id=?", expired)
+            db.executemany(
+                "UPDATE artifacts SET meta=json_remove(meta,'$.invalidated',"
+                "'$.invalidated_reason') WHERE artifact_id=?", revived)
+            db.executemany(
+                "DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=?",
+                [(pid,) for pid in projects])
+    return len(expired)
+
+
+def publish_fact_projection(ledger, member, pid, mid, fp, policy,
+                               v2_doc, doc_hash) -> None:
+    """Publish (or reuse) the legacy-shaped projection of an audited doc."""
+    # T12: audited canonical docs also publish a legacy-shaped
+    # projection so the read side (stats/queries/rollup/signals)
+    # keeps working during migration — the artifact carries the
+    # message hash so "current" predicates bind it like an
+    # extract_llm row.
+    # audited is only set by a break right after doc_hash was taken
+    # for this v2_doc, so doc_hash is the audited document's hash
+    from semantic_store import current_artifact
+    from semantic_projection import (PROJECTION_VERSION,
+                                     project_v2_doc_legacy,
+                                     projection_current)
+    prev_proj = current_artifact(ledger.db, KIND_FACT_PROJ, mid, fp, policy)
+    # a row minted by an older projection version (or from another
+    # audited document) is stale — supersede it with a fresh row
+    if prev_proj is None \
+            or not projection_current(prev_proj["meta"], doc_hash):
+        record_stage(ledger, pid, mid, fp, policy,
+                        "s5_projection", "done",
+                        doc_hash=doc_hash)
+        ledger.artifact_add(
+            KIND_FACT_PROJ,
+            json.dumps(project_v2_doc_legacy(v2_doc),
+                       ensure_ascii=False, allow_nan=False),
+            project_id=pid, message_id=mid,
+            model=semantic_transport.llm_model(),
+            meta={"fingerprint": fp,
+                  "policy_fingerprint": policy,
+                  "schema": SCHEMA_VERSION,
+                  "hash": member["revision"],
+                  "doc_hash": doc_hash,
+                  "projection_version": PROJECTION_VERSION})
+    else:
+        record_stage(ledger, pid, mid, fp, policy,
+                        "s5_projection", "reused",
+                        doc_hash=doc_hash)
+
+
+
+def publish_target_tx(ledger, pid: int, mid: int, fp: str, policy: str,
+                members: dict, v2_docs_by_target: dict,
+                final_status: str, findings: list,
+                fact_source: str) -> None:
+    """T18 S8 — called INSIDE the caller's ``with ledger.db`` so the
+    read-model switch (or its diagnostic) commits atomically with the
+    status receipt. Only an all-PASS chain mints the ``semantic_facts_v4``
+    read model; anything else leaves a ``v4_diagnostic`` receipt that no
+    extraction reader can select."""
+    from semantic_store import current_artifact
+    if fact_source != "canonical":
+        return
+    doc = v2_docs_by_target.get(mid)
+    if doc is None:
+        prev_v2 = current_artifact(ledger.db, KIND_FACTS_V2, mid, fp)
+        # never publish from a document the hint rebuild could not re-derive
+        doc = prev_v2["content"] if prev_v2 and prev_v2["meta"].get(
+            "hint_rebuild") in (None, "same") else None
+    doc_hash = semantic_facts.doc_hash(doc) if doc else None
+    if final_status == "PASS" and doc is not None:
+        vid = publish(ledger, pid, mid, fp, policy,
+                         members[mid], doc)
+        record_stage(ledger, pid, mid, fp, policy, "s8_publish",
+                        "PASS", tx=True, artifact_id=vid,
+                        doc_hash=doc_hash)
+    else:
+        diagnostic(ledger, pid, mid, fp, policy, final_status,
+                      findings, doc_hash=doc_hash, tx=True)
+        record_stage(ledger, pid, mid, fp, policy, "s8_publish",
+                        final_status, tx=True, doc_hash=doc_hash)

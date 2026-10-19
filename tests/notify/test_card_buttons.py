@@ -1,6 +1,7 @@
 """Card buttons as state toggles, member names, tasks, summary, ⚠
 report and ⏰ reminders — runner side. Synthetic temp ledger only."""
 from __future__ import annotations
+import self_identity
 
 import notify_scope
 import json
@@ -10,8 +11,8 @@ import pytest
 
 import extract_llm
 import ledger as _ledger
-import mcs_signals
 import notify_cards
+import notify_spool
 import notify_action_context
 import notify_action_tokens
 import notify_actions
@@ -395,7 +396,7 @@ def test_request_click_returns_prefill_and_roster_never_persisted(
     _llm_extract(led, 100, {"requests": [
         {"action": "残薬を  確認して\n報告", "to": "薬剤師"}]})
     with led.db:
-        mcs_signals.record_station_staff(led.db, [
+        self_identity.record_station_staff(led.db, [
             {"staff_id": 1, "name": "山田 花子", "station": "みどり薬局"},
             {"staff_id": 2, "name": "佐藤 一郎", "station": "みどり薬局"},
             {"staff_id": 3, "name": "山田 花子", "station": "みどり薬局"}])
@@ -422,7 +423,7 @@ def test_roster_falls_back_to_own_station_senders(led):
     _msg(led, 102, sender="佐藤 一郎", org="みどり薬局, 別の薬局")
     assert notify_action_context.assignee_choices(led.db) == []    # no identity
     with led.db:
-        mcs_signals.record_self_profile(led.db, {
+        self_identity.record_self_profile(led.db, {
             "sender_id": 9, "name": "薬局 太郎", "professions": [],
             "organizations": ["みどり薬局"]})
     assert notify_action_context.assignee_choices(led.db) == [
@@ -834,7 +835,7 @@ def test_human_command_is_rejected_when_interactivity_is_withdrawn(led, tmp_path
     if state == "interactive_off":
         cfg = {**CFG, "notify": {**CFG["notify"], "interactive": "off"}}
     elif state == "restore_pending":
-        (root / notify_cards.RESTORE_MARKER).write_text(json.dumps({"at": NOW}))
+        (root / notify_spool.RESTORE_MARKER).write_text(json.dumps({"at": NOW}))
     else:
         req["transport"] = "slack"
     out = notify_cmds.dispatch(led, req, cfg, str(root))

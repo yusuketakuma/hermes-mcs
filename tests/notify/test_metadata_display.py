@@ -1,4 +1,5 @@
 """スタンプ表示はcaptureの観測だけを使い、業務状態と本文配送を維持する。"""
+import self_identity
 import json
 import sqlite3
 from contextlib import closing
@@ -6,7 +7,6 @@ from contextlib import closing
 import pytest
 
 import ledger
-import mcs_signals
 import mcs_view
 import notify_digest
 import notify_render
@@ -17,6 +17,7 @@ from notify_testkit import (
     CFG, NOW, _add_request, _card, _delivered_card, _dispatch, _intent, _msg, _patient,
     led, pinned_clock,
 )
+import message_observations
 
 __all__ = ["led", "pinned_clock"]
 
@@ -98,7 +99,7 @@ def test_same_name_sender_uses_id_on_card_and_snapshot(led, tmp_path):
     _msg(led, 103, sender="合成同名", parent=100)
     led.db.execute("UPDATE messages SET sender_id=message_id-93")
     led.db.execute("UPDATE messages SET sender_id=NULL WHERE message_id=103")
-    mcs_signals.record_station_staff(led.db, [{"staff_id": 7, "is_self": True},
+    self_identity.record_station_staff(led.db, [{"staff_id": 7, "is_self": True},
                                             {"staff_id": 8, "is_self": False}])
     _metadata(led, 100, [_react()])
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
@@ -276,7 +277,7 @@ def test_shadow_watch_uses_current_ack_generation(led, pinned_clock):
             "(card_id,manifest_id,actor,command_id,created_at) VALUES(1,?,'synthetic','old-ack',?)",
             (manifest["manifest_id"], NOW),
         )
-    assert led.metadata_watch_targets(now=NOW) == []
+    assert message_observations.metadata_watch_targets(led.db, now=NOW) == []
     with led.db:
         led.db.execute("UPDATE notification_cards SET source_generation=source_generation+1")
         new_manifest_id = led.db.execute(
@@ -287,14 +288,14 @@ def test_shadow_watch_uses_current_ack_generation(led, pinned_clock):
              manifest["presentation_generation"], manifest["shown"], NOW),
         ).lastrowid
     assert len(notify_views.unacked_view(led.db, "discord", now=NOW)["items"]) == 1
-    assert [row["message_id"] for row in led.metadata_watch_targets(now=NOW)] == [100, 101]
+    assert [row["message_id"] for row in message_observations.metadata_watch_targets(led.db, now=NOW)] == [100, 101]
     with led.db:
         led.db.execute(
             "INSERT INTO notification_acknowledgements"
             "(card_id,manifest_id,actor,command_id,created_at) VALUES(1,?,'synthetic','new-ack',?)",
             (new_manifest_id, NOW),
         )
-    assert led.metadata_watch_targets(now=NOW) == []
+    assert message_observations.metadata_watch_targets(led.db, now=NOW) == []
 
 
 def test_digest_counts_observation_window_not_post_time_or_shadow(led):

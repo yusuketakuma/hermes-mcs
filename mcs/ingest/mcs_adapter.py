@@ -44,7 +44,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from project_metadata_contract import MetadataFetch
 
-from mcs_util import (HOME, atomic_write, env_value, load_config)
+from mcs_util import HOME, env_value, load_config
+from safe_io import atomic_write
 from mcs_worker import WorkerError, bounded_call
 
 from mcs_download import disk_error_kind, validate_download_url
@@ -340,6 +341,11 @@ class MCSAdapter:
                            retryable=error.retryable) from None
 
     # ---------- session ----------
+
+    def load_cached_session(self) -> bool:
+        """Explicitly load only the configured token cache; never log in or contact CDP."""
+        self._token = self._read_cache()
+        return bool(self._token)
 
     def bootstrap_token(self) -> str:
         self._remaining_timeout(5)
@@ -1120,11 +1126,82 @@ class MCSAdapter:
     def fetch_cross_list(self, dataset: str, *, unread_only: bool = False,
                          max_pages: int = 5, per_page: int = 20,
                          max_rows: int = 100, deadline_s: float = 25):
-        """Explicit bounded mentioned/bookmarked GET; no login or read-mark writes."""
-        from cross_lists import fetch_cross_list
-        return fetch_cross_list(self, dataset, unread_only=unread_only,
-                                max_pages=max_pages, per_page=per_page,
-                                max_rows=max_rows, deadline_s=deadline_s)
+        """Read one bounded cached-session cross-list snapshot without login, probe or retries."""
+        from cross_lists import (CrossListFetch, normalize_entry, parse_page,
+                                 validate_fetch_options, validate_page_rows,
+                                 validate_page_total)
+        validate_fetch_options(dataset, unread_only, max_pages=max_pages,
+                               per_page=per_page, max_rows=max_rows, deadline_s=deadline_s)
+        result = CrossListFetch()
+        if not self._token:
+            result.reason = "cached_session_required"
+            return result
+        previous_deadline = self._deadline
+        end = time.monotonic() + deadline_s
+        self.set_deadline(min(end, previous_deadline) if previous_deadline is not None else end)
+        entries, seen = [], set()
+        total, total_pages = None, None
+        try:
+            for page in range(1, max_pages + 1):
+                params = {"page": page, "per_page": per_page, "include_paginate_totals": 0}
+                if dataset == "mentioned":
+                    params["unread"] = int(unread_only)
+                    if page == 1:
+                        params["include_meta"] = 1
+                if result.timestamp is not None:
+                    params["timestamp"] = result.timestamp
+                # Ordinary _request can probe/retry/sleep when classifying 403.
+                # Use its existing bounded worker: no login, retry or extra probe.
+                params["no_extend_session"] = 1
+                response = self._io(
+                    "api", self.timeout,
+                    url=f"{API}/messages/{dataset}?{urllib.parse.urlencode(params)}",
+                    method="GET", data=None,
+                    headers={"Authorization": f"Bearer {self._token}",
+                             "Accept": "application/json"})
+                status = response["status"]
+                if status == 401:
+                    raise SessionExpired(status=status)
+                if status >= 300:
+                    raise MCSError("http_error", status=status)
+                body = base64.b64decode(response["body"], validate=True)
+                self._remaining_timeout(self.timeout)
+                try:
+                    raw = json.loads(body)
+                except (ValueError, RecursionError):
+                    raise SchemaError("cross list: json invalid") from None
+                result.pages += 1
+                parsed = parse_page(raw, page=page, per_page=per_page,
+                                    previous_timestamp=result.timestamp, total_pages=total_pages)
+                total_pages = parsed.total_pages
+                if page == 1:
+                    result.timestamp = parsed.timestamp
+                reason, total = validate_page_rows(
+                    parsed, entry_count=len(entries), max_rows=max_rows, total=total)
+                if reason:
+                    result.reason = reason
+                    break
+                rows, has_next = parsed.rows, parsed.has_next
+                for row in rows:
+                    self._remaining_timeout(self.timeout)
+                    entry = normalize_entry(row, seen)
+                    identity = (entry.message.project_id, entry.message.message_id)
+                    seen.add(identity)
+                    entries.append(entry)
+                validate_page_total(has_next=has_next, entry_count=len(entries), total=total)
+                self._remaining_timeout(self.timeout)
+                if not has_next:
+                    result.complete = True
+                    result.entries = entries
+                    break
+            else:
+                result.reason = "page_limit"
+        except MCSError as error:
+            result.reason = error.kind
+            result.http_status = error.status
+        finally:
+            self.set_deadline(previous_deadline)
+        return result
 
     def fetch_project_members(self, project_id: int, *, max_pages: int = 5,
                               per_page: int = 50, retain_names: bool = False) -> MetadataFetch:

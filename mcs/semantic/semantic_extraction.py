@@ -7,6 +7,7 @@ source text is used only to build model input and verify codepoint spans; no
 network client is created here.
 """
 from __future__ import annotations
+import clinical_values
 from mcs_queries import iter_artifacts
 import mcs_util
 import semantic_llm
@@ -272,7 +273,7 @@ def _normalise_facts(items: list, member: dict, source: str,
                         and span and item["drug_ref"] in quote else None,
             "status": status if status in semantic_llm.FACT_STATUSES else "not_stated",
             "polarity": polarity if polarity in semantic_llm.POLARITIES else "uncertain",
-            "occurred_at": semantic_llm._iso_date(time_text),
+            "occurred_at": clinical_values.absolute_date(time_text),
             "time_text": time_text if isinstance(time_text, str) else None,
             "quantity": item.get("quantity")
                         if isinstance(item.get("quantity"), str) else None,

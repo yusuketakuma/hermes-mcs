@@ -12,13 +12,15 @@ import pytest
 
 import ledger as ledger_mod
 import run_check
-from ledger import SCHEMA_VERSION, Ledger, LedgerReader, reaction_actor_summary
+from ledger import SCHEMA_VERSION, Ledger, LedgerReader
+from message_observations import reaction_actor_summary
 from mcs_adapter import MCSAdapter
 from mcs_contract import MCSError, SessionExpired
 from mcs_payload import normalize_message as _norm_message
-from mcs_signals import record_station_staff
+from self_identity import record_station_staff
 from message_metadata import get_message_metadata
 from collection_stages import stage_metadata_shadow
+import message_observations
 
 SELF_ID = 11
 TS = 987654321
@@ -251,16 +253,16 @@ def test_targets_change_expiry_backoff_and_retention(db, monkeypatch):
     for mid in (1, 2, 3):
         save(db, message(mid, reactions=reactions(viewed=1) if mid != 3 else []))
     now = time.time() + 10
-    assert [r["message_id"] for r in db.reaction_actor_targets(now=now)] == [1, 2]
+    assert [r["message_id"] for r in message_observations.reaction_actor_targets(db.db, now=now)] == [1, 2]
     db.save_reaction_actors(1, [], True, now=now)
     db.save_reaction_actors(2, [], False, error="http_error", now=now)
-    assert db.reaction_actor_targets(now=now + 1) == []
+    assert message_observations.reaction_actor_targets(db.db, now=now + 1) == []
     # unchanged counts still refetch after 24h; failures after the backoff
-    assert [r["message_id"] for r in db.reaction_actor_targets(now=now + 6 * 3600)] == [2]
-    assert [r["message_id"] for r in db.reaction_actor_targets(now=now + 86400)] == [2, 1]
+    assert [r["message_id"] for r in message_observations.reaction_actor_targets(db.db, now=now + 6 * 3600)] == [2]
+    assert [r["message_id"] for r in message_observations.reaction_actor_targets(db.db, now=now + 86400)] == [2, 1]
     monkeypatch.setattr(ledger_mod.time, "time", lambda: now + 2)   # a later capture change
     save(db, message(1, reactions=reactions(viewed=1, good=1)))
-    assert [r["message_id"] for r in db.reaction_actor_targets(now=now + 3)] == [1]
+    assert [r["message_id"] for r in message_observations.reaction_actor_targets(db.db, now=now + 3)] == [1]
     with db.db:
         db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=1")
     # retention is unlimited (#22-D3): leaving the watch set never deletes
@@ -278,12 +280,12 @@ def test_actor_watch_activity_excludes_future_and_deleted_replies(db, reply_stat
         db.db.execute("UPDATE messages SET parent_id=1,posted_at_ts=?,body_state=? WHERE message_id=2",
                       (now + 1 if reply_state == "future" else now,
                        "deleted" if reply_state == "deleted" else "full"))
-    assert db.reaction_actor_targets(now=now) == []
+    assert message_observations.reaction_actor_targets(db.db, now=now) == []
     if reply_state == "future":
         with db.db:
             db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=1", (now,))
-        assert [r["message_id"] for r in db.reaction_actor_targets(now=now)] == [1]
-        assert [r["message_id"] for r in db.reaction_actor_targets(now=now + 1)] == [1, 2]
+        assert [r["message_id"] for r in message_observations.reaction_actor_targets(db.db, now=now)] == [1]
+        assert [r["message_id"] for r in message_observations.reaction_actor_targets(db.db, now=now + 1)] == [1, 2]
 
 
 def test_thread_activity_index_is_added_on_reopen_without_changing_targets(db):
@@ -293,13 +295,13 @@ def test_thread_activity_index_is_added_on_reopen_without_changing_targets(db):
     with db.db:
         db.db.execute("UPDATE messages SET parent_id=message_id-1 WHERE message_id%2=0")
         db.db.execute("DROP INDEX idx_messages_thread_time")
-    before = [tuple(r) for r in db.reaction_actor_targets(now=now)]
+    before = [tuple(r) for r in message_observations.reaction_actor_targets(db.db, now=now)]
     path = db.db.execute("PRAGMA database_list").fetchone()[2]
     reopened = Ledger(path)
     try:
         statements = []
         reopened.db.set_trace_callback(statements.append)
-        after = [tuple(r) for r in reopened.reaction_actor_targets(now=now)]
+        after = [tuple(r) for r in message_observations.reaction_actor_targets(reopened.db, now=now)]
         reopened.db.set_trace_callback(None)
         assert after == before
         assert len(after) == 4
@@ -337,16 +339,16 @@ def test_actor_history_keeps_names_and_marks_cancellations(db):
 
 def test_shadow_detects_first_actor_and_changes_without_publishing(db, monkeypatch):
     save(db, message(reactions=[]))
-    assert not db.reaction_actor_targets()
+    assert not message_observations.reaction_actor_targets(db.db)
     now = time.time() + 10
     monkeypatch.setattr(ledger_mod.time, "time", lambda: now)
     db.save_metadata_shadow(message(reactions=reactions(viewed=1)), publish=False)
     assert get_message_metadata(db.db, 1)["reactions"] == []
-    assert [r["message_id"] for r in db.reaction_actor_targets()] == [1]
+    assert [r["message_id"] for r in message_observations.reaction_actor_targets(db.db)] == [1]
     db.save_reaction_actors(1, ok(5)["actors"], True)
     now += 1
     db.save_metadata_shadow(message(reactions=reactions(viewed=2)), publish=False)
-    assert [r["message_id"] for r in db.reaction_actor_targets()] == [1]
+    assert [r["message_id"] for r in message_observations.reaction_actor_targets(db.db)] == [1]
     assert reaction_actor_summary(db.db, 1)["state"] == "stale"
 
 

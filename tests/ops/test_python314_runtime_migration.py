@@ -193,12 +193,10 @@ def test_post_merge_child_inherits_the_held_run_lock(updater, monkeypatch, tmp_p
         return Child()
 
     monkeypatch.setattr(updater.subprocess, "Popen", popen)
-    monkeypatch.setattr(updater, "_HELD_RUN_LOCK_FD", 11)
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "99")   # a stale value never leaks
-    updater._run_post_merge("b" * 40)
+    updater._run_post_merge("b" * 40, run_lock_fd=11)
     assert seen["pass_fds"] == (11,) and seen["env"][updater.RUN_LOCK_FD_ENV] == "11"
-    monkeypatch.setattr(updater, "_HELD_RUN_LOCK_FD", None)
-    updater._run_post_merge("b" * 40)
+    updater._run_post_merge("b" * 40, run_lock_fd=None)
     assert seen["pass_fds"] == () and updater.RUN_LOCK_FD_ENV not in seen["env"]
 
 

@@ -6,7 +6,7 @@ import unicodedata
 import clinical_scope
 from typing import Literal, TypedDict
 
-from semantic_quantities import _number
+from semantic_quantities import normalized_quantity_number
 from mcs_util import locate_quote_span, fold_map
 
 def patient_item_scope(item, body, *, patient_name=None, surface=None, default="patient"):
@@ -207,7 +207,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     numeric = ((type(value) in (int, float) and 0 <= value <= 1e20)
                or (bool(re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", raw_value))
                    and sum(c.isdigit() for c in raw_value) <= 20))
-    number = _number(raw_value) if numeric else None
+    number = normalized_quantity_number(raw_value) if numeric else None
     if number is not None and sum(c.isdigit() for c in number) > 20:
         number = None
     normalized_value = number if number is not None else raw_value
@@ -223,7 +223,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         if number is not None:
             result = re.match(r"([+-]?[0-9]+(?:\.[0-9]+)?)(?![0-9.])"
                               r"([a-zμ%/0-9.^²]*)", tail)
-            if result and _number(result[1]) == number:
+            if result and normalized_quantity_number(result[1]) == number:
                 if unit_key is None or result[2] == unit_key:
                     readings.append(match)
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
@@ -589,3 +589,22 @@ VITAL_PATTERNS = {
             r"(?!\s*(?:[LＬlℓ]|リットル))\s*[%％]?",
     "bs":   r"(?:血糖|BS|Glu)[:：は]?\s*(\d{2,3})(?![\d.．])",
 }
+
+
+def absolute_date(text: str) -> str | None:
+    """occurred_at only when the original expression already carries an
+    absolute date — relative/ambiguous text stays null and the raw
+    time_text preserves it (spec §15.2)."""
+    if not isinstance(text, str):
+        return None
+    m = re.match(r"^\s*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", text)
+    if not m:
+        return None
+    y, mo, d = int(m[1]), int(m[2]), int(m[3])
+    if not (2000 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31):
+        return None
+    from datetime import date
+    try:
+        return date(y, mo, d).isoformat()
+    except ValueError:
+        return None

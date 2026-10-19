@@ -2,6 +2,7 @@
 
 
 import notify_flush
+import mcs_util
 from notify_testkit import (
     CFG, NOW, _begin, _dispatch, _intent, _latest_render, _msg, _patient,
     _signal_row,
@@ -70,7 +71,7 @@ def test_flush_suppresses_review_without_muting_chat(led, tmp_path,
     chat = _intent(led, payload={"message_ids": [100]})
     monkeypatch.setattr(notify_flush, "_config", lambda: OFF)
     monkeypatch.setattr(
-        notify_flush, "_hermes_exe",
+        mcs_util, 'hermes_exe',
         lambda cfg: str(tmp_path / "missing-hermes"))
 
     outcome = notify_flush.flush(led)

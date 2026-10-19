@@ -3,6 +3,7 @@ import json
 import pytest
 from extract_testkit import _ledger, _message, _hash
 import mcs_signals
+import signal_policy
 
 NOW = 1791000000
 
@@ -31,7 +32,7 @@ def doc(med="合成薬A", symptom="発熱", *, negated=False):
 
 
 def detect(store, detector):
-    return list(detector(store.db, NOW, mcs_signals._thresholds(store.db), {}))
+    return list(detector(store.db, NOW, signal_policy.resolved_thresholds(store.db), {}))
 
 
 def test_family_mislabeled_medication_symptoms_and_adherence_do_not_alert(store):

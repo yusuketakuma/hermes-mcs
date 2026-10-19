@@ -9,6 +9,8 @@ import sys
 import pytest
 
 import notify_flush
+import notify_sender
+import mcs_util
 from ledger import Ledger
 from notify_testkit import stored_attachment
 
@@ -19,7 +21,7 @@ def test_lineworks_without_hermes_uses_json_sealed_attachments_and_no_ambiguous_
     cfg = {"notify_target": "lineworks:room-synthetic"}
     monkeypatch.setattr(notify_flush, "CONF_PATH", str(tmp_path / "config.json"))
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda _: "/nonexistent/hermes")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _: "/nonexistent/hermes")
     attachment = tmp_path / "data" / "attachments" / "fixture.txt"
     attachment.parent.mkdir(parents=True)
     attachment.write_bytes(b"synthetic")
@@ -33,7 +35,7 @@ def test_lineworks_without_hermes_uses_json_sealed_attachments_and_no_ambiguous_
             raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
         return SimpleNamespace(returncode=0 if outcome == "delivered" else 1, stdout="", stderr="")
 
-    monkeypatch.setattr(notify_flush.subprocess, "run", child)
+    monkeypatch.setattr(notify_sender.subprocess, "run", child)
     led = Ledger(str(tmp_path / "data" / "ledger.db"))
     try:
         stored_attachment(led, attachment)
@@ -66,8 +68,8 @@ def test_lineworks_never_reseals_replaced_or_untracked_attachment(tmp_path, monk
     cfg = {"notify_target": "lineworks:room-synthetic"}
     monkeypatch.setattr(notify_flush, "CONF_PATH", str(tmp_path / "config.json"))
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
-    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda _: "/nonexistent/hermes")
-    monkeypatch.setattr(notify_flush.subprocess, "run", lambda *a, **kw: pytest.fail("must reject before child"))
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _: "/nonexistent/hermes")
+    monkeypatch.setattr(notify_sender.subprocess, "run", lambda *a, **kw: pytest.fail("must reject before child"))
     files = [("fixture.txt", str(attachment))]
 
     def render(*args):
@@ -76,7 +78,7 @@ def test_lineworks_never_reseals_replaced_or_untracked_attachment(tmp_path, monk
         return "合成通知", files
 
     monkeypatch.setattr(notify_flush, "_format_event", render)
-    fingerprint = notify_flush._delivery_fingerprint
+    fingerprint = notify_sender.delivery_fingerprint
 
     def replace_after_fingerprint(*args):
         value = fingerprint(*args)
@@ -84,7 +86,7 @@ def test_lineworks_never_reseals_replaced_or_untracked_attachment(tmp_path, monk
         return value
 
     if change == "after_fingerprint":
-        monkeypatch.setattr(notify_flush, "_delivery_fingerprint", replace_after_fingerprint)
+        monkeypatch.setattr(notify_sender, 'delivery_fingerprint', replace_after_fingerprint)
     led = Ledger(str(tmp_path / "data" / "ledger.db"))
     try:
         if change != "untracked":
@@ -105,14 +107,14 @@ ARGV = [sys.executable, "/synthetic/lineworks_adapter/__main__.py", "send"]
 @pytest.mark.parametrize("returncode", [75, 1])
 def test_lineworks_tempfail_is_retried_and_unknown_is_held(tmp_path, monkeypatch, returncode):
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
-    monkeypatch.setattr(notify_flush, "_target", lambda *a: "lineworks:synthetic")
-    monkeypatch.setattr(notify_flush, "_send_argv", lambda *a: list(ARGV))
+    monkeypatch.setattr(notify_sender, 'target', lambda *a: "lineworks:synthetic")
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *a: list(ARGV))
     monkeypatch.setattr(notify_flush, "_format_event", lambda *a: ("合成通知", []))
-    monkeypatch.setattr(notify_flush.subprocess, "run", lambda *a, **k: SimpleNamespace(
+    monkeypatch.setattr(notify_sender.subprocess, "run", lambda *a, **k: SimpleNamespace(
         returncode=returncode, stdout="", stderr=""))
-    with pytest.raises(notify_flush._SendFailed if returncode == 75
-                       else notify_flush._SendUncertain):
-        notify_flush._send(ARGV, "合成通知")
+    with pytest.raises(notify_sender.SendFailed if returncode == 75
+                       else notify_sender.SendUncertain):
+        notify_sender.send(ARGV, "合成通知")
     (tmp_path / "data").mkdir()
     led = Ledger(str(tmp_path / "data" / "ledger.db"))
     try:

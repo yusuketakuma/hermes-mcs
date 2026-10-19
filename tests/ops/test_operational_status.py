@@ -1,4 +1,6 @@
 """Operational diagnostics only read bounded synthetic evidence."""
+
+import environment_diagnostics
 import lifecycle_io
 import mcs_util
 import service_management
@@ -267,19 +269,19 @@ def test_doctor_includes_stored_operations_without_probes_or_exit_change(
         pytest.fail("doctor operation display must not probe services, secrets or DB")
 
     monkeypatch.setattr(lifecycle_io, 'run_bounded', forbidden)
-    monkeypatch.setattr(mcs_setup, "_check_llm", forbidden)
+    monkeypatch.setattr(environment_diagnostics, "check_llm", forbidden)
     monkeypatch.setattr(service_management, 'check_runtime', forbidden)
-    monkeypatch.setattr(mcs_setup, "env_value", forbidden)
+    monkeypatch.setattr(environment_diagnostics, "env_value", forbidden)
     monkeypatch.setattr(sqlite3, "connect", forbidden)
 
-    def source(cfg, *, probe):
+    def source(cfg, *, probe, paths):
         assert probe is False
         return {"disk": {"revision": None, "dirty": False},
                 "gateway": {"status": "not_checked", "pid": None,
                             "started_at": None, "source_revision": None},
                 "restart_request": {"status": "missing"}}
 
-    monkeypatch.setattr(mcs_setup, "_doctor_source", source)
+    monkeypatch.setattr(environment_diagnostics, "source_status", source)
     assert mcs_setup.cmd_doctor(SimpleNamespace(json=as_json)) == (0 if sqlite_safe else 1)
     output = capsys.readouterr().out
     assert "synthetic-private-id" not in output

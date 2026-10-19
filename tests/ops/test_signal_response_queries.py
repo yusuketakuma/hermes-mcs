@@ -7,6 +7,7 @@ import pytest
 import ledger
 import mcs_signals
 from ops_testkit import DAY, NOW, _msg
+import signal_policy
 
 
 DETECTORS = (
@@ -82,7 +83,7 @@ def test_response_witness_identity_and_order(store, name, configured):
     cfg = {"self_professions": ["薬剤師"] if configured else [],
            "self_organizations": ["synthetic-org"] if configured else []}
     found = list(getattr(mcs_signals, name)(
-        store.db, NOW, mcs_signals._thresholds(store.db), cfg))
+        store.db, NOW, signal_policy.resolved_thresholds(store.db), cfg))
     # An exact timestamp, deleted reply, similar organization and other room
     # remain eligible. A cancelled registration still counts as engagement.
     suppressed = (1, 2, 3) if configured else (1,)
@@ -95,7 +96,7 @@ def test_response_witness_queries_are_bounded(store, name, configured):
     _mixed_sources(store.db, name)
     cfg = {"self_professions": ["薬剤師"] if configured else [],
            "self_organizations": ["synthetic-org"] if configured else []}
-    th = mcs_signals._thresholds(store.db)
+    th = signal_policy.resolved_thresholds(store.db)
     queries = []
     store.db.set_trace_callback(lambda sql: queries.append(sql)
         if sql.lstrip().upper().startswith(("SELECT", "WITH")) else None)
@@ -118,7 +119,7 @@ def test_discharge_late_source_error_keeps_generator_order(store, registered):
         _registered(store.db, 2)
     store.db.commit()
     found = mcs_signals._discharge_notice(
-        store.db, NOW, mcs_signals._thresholds(store.db),
+        store.db, NOW, signal_policy.resolved_thresholds(store.db),
         {"self_professions": [], "self_organizations": []})
     assert _ids([next(found)]) == [1]
     with pytest.raises(TypeError):
@@ -152,7 +153,7 @@ def test_suppressed_prefix_never_hides_a_later_eligible_source(store, name):
             _registered(store.db, mid)
     store.db.commit()
     found = list(getattr(mcs_signals, name)(store.db, NOW,
-        mcs_signals._thresholds(store.db),
+        signal_policy.resolved_thresholds(store.db),
         {"self_professions": [], "self_organizations": []}))
     assert _ids(found) == [258]
 
@@ -162,7 +163,7 @@ def test_same_connection_write_between_yields_rechecks_engagement(store):
         _mention(store.db, "_pharmacist_request", mid)
     store.db.commit()
     found = mcs_signals._pharmacist_request(store.db, NOW,
-        mcs_signals._thresholds(store.db),
+        signal_policy.resolved_thresholds(store.db),
         {"self_professions": [], "self_organizations": []})
     assert _ids([next(found)]) == [1]
     _registered(store.db, 2)
@@ -188,7 +189,7 @@ def test_bulk_read_failure_preserves_original_per_source_error_order(store):
             return store.db.execute(sql, parameters)
 
     found = mcs_signals._pharmacist_request(FailedWitness(), NOW,
-        mcs_signals._thresholds(store.db),
+        signal_policy.resolved_thresholds(store.db),
         {"self_professions": [], "self_organizations": []})
     assert _ids([next(found)]) == [1]
     with pytest.raises(sqlite3.OperationalError, match="synthetic source witness failure"):

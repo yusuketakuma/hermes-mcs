@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "意味解析の状態表示で読取り接続を確実に閉じる",
+  "summary": "状態表示の設定読取りや集計、出力準備で失敗した場合も、開いた読取り専用DB接続を閉じるようにしました。",
+  "upgrade": "追加操作は不要です。CLI引数、JSON形式、正常時の終了コード、書込みロックやモデル処理の条件は変更しません。",
+  "details": [
+    "既存のcontextlib.closingで状態表示専用の読取り接続を囲み、集計やJSON準備の例外が伝播する前に閉じる。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic.py",
+    "tests/semantic/test_semantic_cli_contract.py"
+  ]
+}

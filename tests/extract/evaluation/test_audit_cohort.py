@@ -397,3 +397,55 @@ def test_a_duplicated_pin_row_is_refused_and_a_valid_pin_still_compares():
     pinned["rows"].append(dict(pinned["rows"][0]))
     with pytest.raises(ac.CohortError, match="pin_schema"):
         compare(pinned, [row(1, version=8), row(2, version=8)])
+
+
+@pytest.mark.parametrize("failure", ["adoption", "fchmod", "fsync"])
+def test_pin_descriptor_is_closed_before_failed_staging_is_removed(
+        data_root, monkeypatch, failure):
+    import errno
+    import safe_io
+
+    path = data_root / "cohort.jsonl"
+    ac.write_pin(path, pin_of([row(1)]))
+    original = path.read_bytes()
+    descriptors, removed = [], []
+    mkstemp, unlink = ac.tempfile.mkstemp, ac.os.unlink
+
+    def owned_temp(*args, **kwargs):
+        descriptor, name = mkstemp(*args, **kwargs)
+        descriptors.append(descriptor)
+        return descriptor, name
+
+    def fail(*args, **kwargs):
+        raise OSError("synthetic pin fault")
+
+    def remove_after_close(name):
+        with pytest.raises(OSError) as closed:
+            os.fstat(descriptors[-1])
+        assert closed.value.errno == errno.EBADF
+        removed.append(name)
+        return unlink(name)
+
+    monkeypatch.setattr(ac.tempfile, "mkstemp", owned_temp)
+    monkeypatch.setattr(ac.os, "unlink", remove_after_close)
+    if failure == "adoption":
+        monkeypatch.setattr(safe_io.os, "fdopen", fail)
+    else:
+        monkeypatch.setattr(ac.os, failure, fail)
+    try:
+        with pytest.raises(OSError, match="synthetic pin fault"):
+            ac.write_pin(path, pin_of([row(2)]))
+        assert len(descriptors) == len(removed) == 1
+        with pytest.raises(OSError) as closed:
+            os.fstat(descriptors[0])
+        assert closed.value.errno == errno.EBADF
+        assert path.read_bytes() == original
+        assert sorted(os.listdir(data_root)) == ["cohort.jsonl"]
+    finally:
+        # The test must reclaim a leaked descriptor even if its oracle fails.
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                if error.errno != errno.EBADF:
+                    raise

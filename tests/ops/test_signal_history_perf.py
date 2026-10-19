@@ -41,7 +41,7 @@ def test_history_validates_once_per_key_and_preserves_latest_tombstones(monkeypa
 
     monkeypatch.setattr(mcs_signals, "signal_content", counted)
     try:
-        actual = mcs_signals._latest_signal_states(db)
+        actual = mcs_signals.latest_signal_states(db)
     finally:
         db.close()
     assert actual == expected

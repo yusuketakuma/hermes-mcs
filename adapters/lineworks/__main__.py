@@ -22,7 +22,7 @@ if __package__ in (None, ""):
 from adapters.common import eventlog, paths, registry
 from mcs_util import HOME
 from .actions import Actions
-from .client import ClientError, Credentials, _sign, _text, valid_filename
+from .client import ClientError, Credentials, _sign, valid_protocol_text, valid_filename
 from .config import credentials_path, destination, load_credentials, settings
 from .delivery import (SENDER_BUSY_TRIES, SENDER_BUSY_WAIT, DeliveryWorker, Sender, api_lock,
                        failure, notify_dirs)
@@ -53,7 +53,7 @@ def initialize(root):
     # Validate local signing before persisting; no token/API request is made.
     _sign(b"mcs-local-key-check", str(key), 10)
     Credentials(**{k: v for k, v in values.items() if k != "bot_secret"})
-    if not _text(values["bot_secret"], 4096):
+    if not valid_protocol_text(values["bot_secret"], 4096):
         raise ClientError("credentials_invalid")
     path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".lineworks-init-", dir=path.parent)

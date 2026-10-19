@@ -35,24 +35,25 @@ class ClientError(RuntimeError):
         super().__init__(error_code)
 
 
-def _text(value, limit=512):
+def valid_protocol_text(value, limit=512):
+    """Accept bounded nonempty protocol text without controls or surrogate code points."""
     return (isinstance(value, str) and 0 < len(value) <= limit
             and not any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF
                         for c in value))
 
 
 def valid_filename(filename):
-    return _text(filename, 255) and not any(c in filename for c in '/\\"')
+    return valid_protocol_text(filename, 255) and not any(c in filename for c in '/\\"')
 
 
 def _valid_action(action):
-    if not isinstance(action, dict) or not _text(action.get("label"), 20):
+    if not isinstance(action, dict) or not valid_protocol_text(action.get("label"), 20):
         return False
     if action.get("type") == "message":
-        return (_text(action.get("postback"), 1000)
-                and ("text" not in action or _text(action["text"], 300)))
+        return (valid_protocol_text(action.get("postback"), 1000)
+                and ("text" not in action or valid_protocol_text(action["text"], 300)))
     if action.get("type") == "uri":
-        return _text(action.get("uri"), 1000) and action["uri"].startswith(("https://", "http://"))
+        return valid_protocol_text(action.get("uri"), 1000) and action["uri"].startswith(("https://", "http://"))
     return False
 
 
@@ -64,7 +65,7 @@ def _validate_content(content):
         value = content.get("text")
         valid = isinstance(value, str) and 0 < len(value) <= 2000
     elif kind == "file":
-        valid = _text(content.get("fileId"), 1024)
+        valid = valid_protocol_text(content.get("fileId"), 1024)
     elif kind == "button_template":
         value, actions = content.get("contentText"), content.get("actions")
         valid = (isinstance(value, str) and 0 < len(value) <= 1000
@@ -77,7 +78,7 @@ def _validate_content(content):
         footer = bubble.get("footer") if isinstance(bubble, dict) else None
         texts = body.get("contents") if isinstance(body, dict) else None
         actions = footer.get("contents") if isinstance(footer, dict) else None
-        valid = (_text(content.get("altText"), 400)
+        valid = (valid_protocol_text(content.get("altText"), 400)
                  and isinstance(bubble, dict) and bubble.get("type") == "bubble"
                  and isinstance(body, dict) and body.get("type") == "box"
                  and body.get("layout") == "vertical" and isinstance(texts, list) and len(texts) == 1
@@ -138,7 +139,7 @@ class Credentials:
     bot_id: str = field(repr=False)
 
     def __post_init__(self):
-        if (not all(_text(v) for v in (self.client_id, self.client_secret,
+        if (not all(valid_protocol_text(v) for v in (self.client_id, self.client_secret,
                                       self.service_account, self.private_key_path))
                 or not isinstance(self.bot_id, str) or not 0 < len(self.bot_id) <= 19
                 or not self.bot_id.isascii()
@@ -149,7 +150,7 @@ class Credentials:
 def verify_signature(body: bytes, signature: str, bot_secret: str) -> bool:
     """Verify X-WORKS-Signature over the untouched HTTP request bytes."""
     if (not isinstance(body, bytes) or not isinstance(signature, str)
-            or len(signature) != 44 or not _text(bot_secret, 4096)):
+            or len(signature) != 44 or not valid_protocol_text(bot_secret, 4096)):
         return False
     try:
         supplied = base64.b64decode(signature, validate=True)
@@ -189,7 +190,7 @@ def _allowed_url(url: str) -> bool:
         parts = urllib.parse.urlsplit(url)
         if (parts.scheme != "https" or parts.port not in (None, 443)
                 or parts.username is not None or parts.password is not None
-                or parts.fragment or not _text(url, 8192)):
+                or parts.fragment or not valid_protocol_text(url, 8192)):
             return False
         return (url == AUTH_URL
                 or (parts.netloc == "www.worksapis.com"
@@ -221,7 +222,7 @@ def _http_worker():
         headers = data["headers"]
         if (not isinstance(headers, dict)
                 or set(headers) - {"Authorization", "Content-Type"}
-                or not all(_text(value, 8192) for value in headers.values())):
+                or not all(valid_protocol_text(value, 8192) for value in headers.values())):
             raise ValueError
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
@@ -371,7 +372,7 @@ class LineWorksClient:
                     and lifetime.isascii() and lifetime.isdigit():
                 lifetime = int(lifetime)
             token_type = response.get("token_type")
-            if (not _text(token, 8192) or not isinstance(token_type, str)
+            if (not valid_protocol_text(token, 8192) or not isinstance(token_type, str)
                     or token_type.casefold() != "bearer"
                     or isinstance(lifetime, bool) or not isinstance(lifetime, int)
                     or not 60 <= lifetime <= 86400):
@@ -384,11 +385,11 @@ class LineWorksClient:
     def send_message(self, content: dict, *, channel_id=None, user_id=None):
         """Send content once; HTTP 201 is the official receipt, without message IDs."""
         if ((channel_id is None) == (user_id is None) or not isinstance(content, dict)
-                or not _text(content.get("type"))):
+                or not valid_protocol_text(content.get("type"))):
             raise ClientError("validation_invalid")
         _validate_content(content)
         target = channel_id if channel_id is not None else user_id
-        if not _text(target) or user_id == "me":
+        if not valid_protocol_text(target) or user_id == "me":
             raise ClientError("validation_invalid")
         kind = "channels" if channel_id is not None else "users"
         url = (f"{API_BASE}/bots/{self.credentials.bot_id}/{kind}/"
@@ -419,7 +420,7 @@ class LineWorksClient:
         if (not isinstance(upload_url, str) or not _allowed_url(upload_url)
                 or urllib.parse.urlsplit(upload_url).hostname not in UPLOAD_HOSTS):
             raise ClientError("upload_url_invalid")
-        if not _text(file_id, 1024):
+        if not valid_protocol_text(file_id, 1024):
             raise ClientError("response_invalid")
         boundary = "mcs-" + secrets.token_hex(24)
         body = (f'--{boundary}\r\nContent-Disposition: form-data; name="resourceName"\r\n\r\n'
@@ -430,7 +431,7 @@ class LineWorksClient:
         _, raw = self._request(upload_url, body, "multipart/form-data; boundary=" + boundary, token)
         uploaded = _json(raw)
         uploaded_id = uploaded.get("fileId")
-        if not _text(uploaded_id, 1024):
+        if not valid_protocol_text(uploaded_id, 1024):
             raise ClientError("response_invalid")
         return uploaded_id
 

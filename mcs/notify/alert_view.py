@@ -43,10 +43,10 @@ def render_parts(checked, db=None):
                 break
     if not seen:
         parts["containers"].append({"type": "text", "text": "緊急理由の引用は未取得"})
-    sender = (notify_render._inline(message["sender_name"], 24) if message else "") or "発信者未取得"
-    organization = (notify_render._inline(message["organization"], 24) if message else "") or "所属未取得"
+    sender = (notify_render.inline_text(message["sender_name"], 24) if message else "") or "発信者未取得"
+    organization = (notify_render.inline_text(message["organization"], 24) if message else "") or "所属未取得"
     # the same stored post time (and missing-time word) the preview header shows
-    posted = notify_render._when_posted(message["posted_at"] if message else None)
+    posted = notify_render.posted_time_label(message["posted_at"] if message else None)
     parts["containers"].append({"type": "text", "text":
         f"{sender}（{organization}） · 投稿 {posted} · 判定 {_when(checked.get('observed_at'))}"})
     if message is not None and message["body_state"] == "full" and notify_render.structured_block(db, mid) is None:

@@ -7,6 +7,7 @@ import pytest
 import export_schema
 import extraction_audit as audit
 import mcs_stats
+import stats_contract
 from semantic_projection import PROJECTION_VERSION
 from views_testkit import SCHEMA, SNAP_TS, _msg
 
@@ -49,7 +50,7 @@ def test_source_population_reader_priority_and_no_output_reasons(db):
     artifact(db, 9)
     artifact(db, 9, kind="extract_upgrade_v1", content={"state": "held_prior", "hash": "h9",
         "prior_artifact_id": db.execute("SELECT MAX(artifact_id) FROM artifacts").fetchone()[0], "target_version": 8})
-    rows = list(audit.iter_audit_rows(db, mcs_stats._scope({"limit": 1}, SNAP_TS)))
+    rows = list(audit.iter_audit_rows(db, stats_contract.resolve_scope({"limit": 1}, SNAP_TS)))
     assert len(rows) == 7
     assert [row["reader"] for row in rows] == ["reader_extract", "reader_projection", *["no_output"] * 4, "reader_extract"]
     assert [row["reason"] for row in rows[2:6]] == ["missing", "stale", "failed", "missing"]
@@ -86,7 +87,7 @@ def test_validation_unknown_is_not_zero_and_retry_conflict_counts_are_scoped(db)
         "observed_posts": 2, "unknown_posts": 1, "items_dropped": 2, "evidence_dropped": 1}
     assert result["prefilter_cue_conflict"]["by_class"]["items"] == [{"class": "storage", "posts": 1}]
     assert result["thin_residual"]["by_class"]["items"] == [{"class": "storage", "posts": 1}]
-    assert list(audit.iter_audit_rows(db, mcs_stats._scope({}, SNAP_TS)))[2]["quality"] == "attention"
+    assert list(audit.iter_audit_rows(db, stats_contract.resolve_scope({}, SNAP_TS)))[2]["quality"] == "attention"
 
 
 def test_projection_category_and_verified_guard(db):
@@ -96,7 +97,7 @@ def test_projection_category_and_verified_guard(db):
             "kind": "adherence_administration" if mid != 3 else "symptom_state",
             "statement": "合成ボックスで保管", "validation_status": "verified" if mid != 2 else "unverified"}]},
             meta={"hash": f"h{mid}", "projection_version": PROJECTION_VERSION})
-    rows = list(audit.iter_audit_rows(db, mcs_stats._scope({}, SNAP_TS)))
+    rows = list(audit.iter_audit_rows(db, stats_contract.resolve_scope({}, SNAP_TS)))
     assert [row["classes"]["storage"] for row in rows] == [True, False, False]
 
 
@@ -105,7 +106,7 @@ def test_projection_category_and_verified_guard(db):
 def test_corrupt_or_unresolved_completeness_is_attention(db, completeness):
     message(db, 1)
     artifact(db, 1, meta={"hash": "h1", "integrity": {"completeness": completeness}})
-    assert next(audit.iter_audit_rows(db, mcs_stats._scope({}, SNAP_TS)))["quality"] == "attention"
+    assert next(audit.iter_audit_rows(db, stats_contract.resolve_scope({}, SNAP_TS)))["quality"] == "attention"
 
 
 def test_aggregate_export_and_read_only_single_source_scan(db, monkeypatch):
@@ -168,7 +169,7 @@ def test_audit_failure_is_reported_once_without_repeating_the_full_scan(db, monk
 def test_rule_display_context_cannot_hide_a_raw_llm_omission_or_change_its_digest(db):
     message(db, 1)
     artifact(db, 1, content={"summary": "合成の要約"})
-    scope = mcs_stats._scope({}, SNAP_TS)
+    scope = stats_contract.resolve_scope({}, SNAP_TS)
     before = next(audit.iter_audit_rows(db, scope))
     artifact(db, 1, kind="extract_v1", content={"patient_context": [{
         "category": "medication_management", "text": "合成ボックスで保管しています",
@@ -193,7 +194,7 @@ def test_cohort_definition_binds_the_actual_scope_implementation(monkeypatch):
     before = audit.definition_fingerprint()
     def different_scope(scope, col="m.posted_at_ts"):
         return " AND 0", []
-    monkeypatch.setattr(mcs_stats, "_where", different_scope)
+    monkeypatch.setattr(stats_contract, "message_scope_sql", different_scope)
     assert audit.definition_fingerprint() != before
 
 
@@ -204,4 +205,10 @@ def test_cohort_definition_binds_semantic_category_and_projection_version(monkey
     assert audit.definition_fingerprint() != before
     monkeypatch.undo()
     monkeypatch.setattr(semantic_projection, "PROJECTION_VERSION", semantic_projection.PROJECTION_VERSION + 1)
+    assert audit.definition_fingerprint() != before
+
+
+def test_cohort_definition_binds_the_canonical_scope_limit(monkeypatch):
+    before = audit.definition_fingerprint()
+    monkeypatch.setattr(stats_contract, "DETAIL_LIMIT", stats_contract.DETAIL_LIMIT + 1)
     assert audit.definition_fingerprint() != before

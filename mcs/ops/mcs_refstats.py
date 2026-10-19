@@ -43,7 +43,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from mcs_util import HOME, atomic_write, file_sha256
+from mcs_util import HOME, file_sha256
+from safe_io import atomic_write
 from operation_contract import (REFSTAT_APPROVAL_KIND, reference_path,
                                 refstats_dir, valid_reference_name)
 

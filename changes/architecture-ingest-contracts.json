@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "限定一覧取得の通信と解析の責務を整理",
+  "summary": "限定一覧の通信・認証・制限時間の管理を既存の接続モジュールへ集約し、一覧の検証と取得結果の整理を分離しました。取得範囲、再ログインの条件、期限切れや未取得の扱いは変わりません。",
+  "upgrade": "設定変更は不要です。既存のCLIと取得上限を維持し、自動取得や再試行は追加しません。",
+  "refs": [
+    "mcs/ingest/mcs_adapter.py",
+    "mcs/ingest/cross_lists.py",
+    "mcs/views/cross_lists_view.py"
+  ],
+  "details": [
+    "通信側が認証・残時間・応答分類とdeadline復元を所有し、一覧側は上限付きのページ検証と取得記録を扱う。"
+  ]
+}

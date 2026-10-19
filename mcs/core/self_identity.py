@@ -3,7 +3,7 @@
 Resolves self identity from the fetched self_profile_v1 and
 station_staff_v1 artifacts (plus config signals.* overrides). Used from
 every layer — ledger, ingest, notify, views and the signal engine — so it
-lives in core; mcs_signals re-exports these names.
+lives in core and callers import this owner directly.
 """
 import json
 import re
@@ -22,7 +22,7 @@ def normalize_sender_id(value) -> int | None:
     return value if type(value) is int and 0 < value < 2**63 else None
 
 
-def _latest_self_profile(db):
+def latest_self_profile(db):
     """Most recent self_profile artifact (written from the MCS
     /users/self response by record_self_profile) — the fetched default
     for self identity. Returns {} when absent or unparsable."""
@@ -45,7 +45,7 @@ def record_self_profile(db, prof) -> bool:
            "fetched_at": int(time.time())}
     base = {k: doc[k] for k in
             ("sender_id", "name", "professions", "organizations")}
-    cur = _latest_self_profile(db)
+    cur = latest_self_profile(db)
     if cur and all(cur.get(k) == v for k, v in base.items()):
         return False
     db.execute(
@@ -86,7 +86,7 @@ def record_station_staff(db, staff: list) -> bool:
     # /users/self can omit its ID. Repair the existing profile even
     # when this roster is unchanged; preserve its org/profession defaults.
     sid = _station_self_id(staff)
-    prof = _latest_self_profile(db)
+    prof = latest_self_profile(db)
     if sid is not None and prof \
             and normalize_sender_id(prof.get("sender_id")) is None:
         changed = record_self_profile(db, {**prof, "sender_id": sid}) or changed
@@ -120,7 +120,7 @@ def self_sender_id(db) -> int | None:
         # Ambiguous/invalid roster identities fail closed, even if the
         # profile has an ID. Display names never resolve an identity.
         return _station_self_id(staff)
-    return normalize_sender_id(_latest_self_profile(db).get("sender_id"))
+    return normalize_sender_id(latest_self_profile(db).get("sender_id"))
 
 
 def is_self_message(db, sender_id) -> bool:
@@ -129,7 +129,7 @@ def is_self_message(db, sender_id) -> bool:
     return sid is not None and sid == self_sender_id(db)
 
 
-def _self_sets(sig_cfg, db=None):
+def self_sets(sig_cfg, db=None):
     """Resolved 'us' identities — config signals.* first, then the
     fetched MCS self profile (self_profile_v1 artifact) as defaults:
     - self_organizations: org names whose posts are OUR actions —
@@ -149,7 +149,7 @@ def _self_sets(sig_cfg, db=None):
         return [x for x in v if isinstance(x, str) and x]
     orgs, profs = _lst("self_organizations"), _lst("self_professions")
     if (orgs is None or profs is None) and db is not None:
-        art = _latest_self_profile(db)
+        art = latest_self_profile(db)
         if orgs is None:
             orgs = [x for x in (art.get("organizations") or [])
                     if isinstance(x, str) and x]

@@ -21,7 +21,8 @@ from adapters.lineworks import __main__ as cli
 from adapters.lineworks import cards, config, delivery, server
 from adapters.lineworks.client import ClientError, valid_filename
 from adapters.common import envelopes, paths, registry
-from notify_render import display_text, lineworks_card_split
+from notify_render import display_text
+from present_lineworks import card_split
 from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
 from slack_card_testkit import _spec
 from lineworks_testkit import (CONFIG, SCOPE, SECONDARY, SECRET, TOKEN, FakeClient,
@@ -366,7 +367,7 @@ def _display_overflow_spec():
     spec = overflow_spec()
     parts = spec["parts"]
     parts["containers"][1]["text"] = "\n".join(["合成行" + "x" * 95] * 16)
-    head, rest = lineworks_card_split(display_text(parts))
+    head, rest = card_split(display_text(parts))
     tails = notify_parts.split_body_chunks(rest)
     _seal(spec, tails, [f"display#{i}" for i in range(1, len(tails) + 1)])
     parts["manifest"].append(_THREAD_PART)

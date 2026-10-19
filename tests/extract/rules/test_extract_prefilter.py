@@ -5,6 +5,7 @@ is settled with a durable meta.prefilter='no_signal' marker instead of
 an LLM call — recorded, out of pending, and re-evaluated on edit.
 Synthetic fixtures + temp DB only.
 """
+import llm_availability
 import extract_validation
 import json
 import time
@@ -12,7 +13,6 @@ import time
 import pytest
 
 import extract_llm
-import mcs_util
 from extract_testkit import _hash, _ledger, _message
 
 
@@ -147,9 +147,9 @@ def test_circuit_trips_after_repeated_endpoint_down(tmp_path, monkeypatch):
     db.save_messages([_message(mid=1, body="体温38度です")])
     _endpoint_dead(monkeypatch)
 
-    for _ in range(mcs_util._CIRCUIT_TRIP):
+    for _ in range(llm_availability._CIRCUIT_TRIP):
         extract_llm.run_pending(db, limit=10, budget_s=30)
-    assert mcs_util.circuit_open_s(db) > 0
+    assert llm_availability.circuit_open_s(db.db) > 0
 
     calls = []
     monkeypatch.setattr(extract_llm, "llm_extract",
@@ -168,18 +168,18 @@ def test_circuit_resets_on_answered_call(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([_message(mid=1, body="体温38度です")])
     _endpoint_dead(monkeypatch)
-    for _ in range(mcs_util._CIRCUIT_TRIP):
+    for _ in range(llm_availability._CIRCUIT_TRIP):
         extract_llm.run_pending(db, limit=10, budget_s=30)
-    assert mcs_util.circuit_open_s(db) > 0
+    assert llm_availability.circuit_open_s(db.db) > 0
 
     # server recovers before the cooldown ends: force-close the file
     # to simulate time passing, then a successful call clears state
-    mcs_util.circuit_state_path(db).unlink()
+    llm_availability.circuit_state_path(db.db).unlink()
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "ok"})
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["done"] == 1
-    assert not mcs_util.circuit_state_path(db).exists()
+    assert not llm_availability.circuit_state_path(db.db).exists()
     db.close()
 
 
@@ -203,7 +203,7 @@ def test_prefilter_still_settles_when_circuit_open(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([_message(mid=1, body="こんにちは。"),
                       _message(mid=2, body="体温38度です")])
-    mcs_util.circuit_state_path(db).write_text(
+    llm_availability.circuit_state_path(db.db).write_text(
         json.dumps({"open_until": time.time() + 3600}))
     calls = []
     monkeypatch.setattr(extract_llm, "llm_extract",

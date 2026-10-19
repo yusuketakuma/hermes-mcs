@@ -44,23 +44,23 @@ from contextlib import suppress
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
+import safe_io  # noqa: E402
 import extract_validation
 import semantic_drain
 import semantic_policy
 from mcs_adapter import MCSAdapter
 from mcs_contract import MCSError, SessionExpired, describe_error
 from ledger import Ledger
-from mcs_util import (CACHE, CONF_PATH, DB,
-                      HOME, RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost,
-                      acquire_run_lock, code_stamp as _code_stamp,
-                      load_config)
+from mcs_util import CACHE, CONF_PATH, DB, HOME, load_config
+import writer_lock
+from writer_lock import RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost, acquire_run_lock
 import job_ops
 import collection_stages
 import health_report
 import maintenance
 import notify_flush
 
-# canonical path constants live in mcs_util; the local aliases keep the
+# canonical run-lock path lives in writer_lock; the local alias keeps the
 # module attribute names (monkeypatch surface for tests) unchanged
 LOCKFILE = RUN_LOCK
 RUN_DEADLINE_S = 480          # whole-run cap; per-request timeouts are not enough
@@ -89,7 +89,7 @@ def _write_health(ledger, result: dict, status: str,
     try:
         health = health_report.build_health(ledger.db, result, status, run_id=run_id, cfg=cfg)
         result["health"] = health
-        maintenance.atomic_publish_text(
+        safe_io.atomic_publish_text(
             health_report.HEALTH_FILE, json.dumps(health, ensure_ascii=False))
     except Exception as e:
         result["errors"].append(
@@ -99,10 +99,9 @@ def _write_health(ledger, result: dict, status: str,
                               {"detail": type(e).__name__,
                                "run_id": run_id})
 LOCK_WAIT_S = 150
-LOCK_POLL_S = 0.2
 
 
-_CODE_STAMP = _code_stamp()
+_CODE_STAMP = writer_lock.code_stamp()
 
 
 def _code_changed(result: dict) -> bool:
@@ -112,29 +111,12 @@ def _code_changed(result: dict) -> bool:
     then on, so a tick overlapping a deploy never mixes code generations."""
     if "code_changed" in result["errors"]:
         return True
-    if _code_stamp() == _CODE_STAMP:
+    if writer_lock.code_stamp() == _CODE_STAMP:
         return False
     result["errors"].append("code_changed")
     return True
 
 
-def _wait_run_lock(wait_s: float) -> int | None:
-    """Poll the run lock until ``wait_s`` elapses — short polls so a
-    holder that releases between batches is won, not missed. A lock won
-    right after an updater released it is given back: this process
-    loaded the OLD code before waiting, and running it (with modules
-    imported later from the new tree) would mix generations."""
-    until = time.monotonic() + wait_s
-    while time.monotonic() < until:
-        time.sleep(LOCK_POLL_S)
-        fd = acquire_run_lock(LOCKFILE)
-        if fd is not None:
-            marker = os.path.join(HOME, "data", UPDATE_MARKER_NAME)
-            if os.path.exists(marker) or _code_stamp() != _CODE_STAMP:
-                os.close(fd)
-                return None
-            return fd
-    return None
 
 
 # ---------- metadata orchestration ----------
@@ -275,8 +257,8 @@ def _consent_only(lock_fd) -> int:
         # run.lock race). Re-check the bound consent directly — when a
         # matching receipt exists, relaunch the updater so the held
         # restore converges without waiting for the periodic check.
-        import notify_cards
-        marker = notify_cards.restore_awaiting_consent(
+        import notify_spool
+        marker = notify_spool.restore_awaiting_consent(
             os.path.join(HOME, "data"))
         if marker and marker.get("backup_path"):
             try:
@@ -311,6 +293,7 @@ def _commands_only(lock_fd, deadline) -> int:
     ingest, no derive, no notify_flush run, no health write — it exists so
     a card interaction never waits a whole tick (RC05/RC20)."""
     import notify_cards
+    import notify_spool
     import notify_cmds
     try:
         ledger = Ledger(DB)
@@ -322,8 +305,8 @@ def _commands_only(lock_fd, deadline) -> int:
     cfg = _config()
     root = os.path.join(HOME, "data")
     try:
-        notify_cards.ensure_dirs(root)
-        if notify_cards.restore_awaiting_consent(root) is not None:
+        notify_spool.ensure_dirs(root)
+        if notify_spool.restore_awaiting_consent(root) is not None:
             # schema-bump DB replace held for human consent — freeze
             # every writer except the consent drain so the approved
             # loss report cannot drift (drain_commands itself is
@@ -334,10 +317,10 @@ def _commands_only(lock_fd, deadline) -> int:
             return 0 if result["ok"] else 1
         # startup/periodic recovery: missing spec files, flags,
         # stale-claim visibility — before any command is applied
-        notify_cards.recover(ledger, cfg, result)
+        notify_spool.recover(ledger, cfg, result)
         # a DB restore holds all send grants until the journal-vs-DB
         # reconcile finishes — run it before draining new commands
-        if notify_cards.restore_pending(root) is not None:
+        if notify_spool.restore_pending(root) is not None:
             try:
                 import notify_reconcile
                 rep = notify_reconcile.reconcile_after_restore(
@@ -365,7 +348,7 @@ def _commands_only(lock_fd, deadline) -> int:
         # a second drain: commands queued by the first pass's receipts
         notify_cmds.drain_int_commands(
             ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30))
-        notify_cards.publish_flags(cfg, root)
+        notify_spool.publish_flags(cfg, root)
         notify_cards.gc(ledger, cfg)
         if notify_cards.snapshot_dirty(ledger):
             result["snapshot"] = maintenance.publish_snapshot(
@@ -396,14 +379,14 @@ def _semantic_enabled(ledger, cfg, result) -> bool:
     an enforced pipeline silently disabled is a missed evaluation, not
     a clean "no work" tick."""
     try:
-        from semantic_store import invalidate_projections
+        from semantic_v4 import invalidate_projections
         scfg, errors = semantic_policy.semantic_config(cfg)
         # an invalid block also closes legacy extraction admission
         # (extract_llm.legacy_admissions) — surface it every tick
         for e in errors:
             if e not in result["errors"]:
                 result["errors"].append(e)
-        invalidate_projections(ledger, scfg)
+        invalidate_projections(ledger.db, scfg)
         return scfg["mode"] != "off"
     except Exception as e:
         result["errors"].append(f"semantic_init: {type(e).__name__}")
@@ -462,12 +445,12 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     try:
         # interactive-notification command channel: plugin receipts
         # and card actions apply mid-tick, not just via the watcher
-        import notify_cards
+        import notify_spool
         import notify_cmds
-        notify_cards.ensure_dirs(os.path.join(HOME, "data"))
+        notify_spool.ensure_dirs(os.path.join(HOME, "data"))
         # a DB restore holds send grants until the journal-vs-DB
         # reconcile lands — run it before draining cmd_int traffic
-        if notify_cards.restore_pending(
+        if notify_spool.restore_pending(
                 os.path.join(HOME, "data")) is not None:
             import notify_reconcile
             rep = notify_reconcile.reconcile_after_restore(
@@ -544,7 +527,7 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     try:
         import self_identity
         if args.jobs_only \
-                or not self_identity._latest_self_profile(ledger.db):
+                or not self_identity.latest_self_profile(ledger.db):
             prof = adapter.self_profile()
             with ledger.db:
                 if self_identity.record_self_profile(ledger.db, prof):
@@ -737,13 +720,14 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
 
     result["ok"] = True
     import notify_cards
+    import notify_spool
     import notify_cmds
     try:
         # last-chance drain: interactions queued while this tick ran
         notify_cmds.drain_int_commands(
             ledger, result, cfg, os.path.join(HOME, "data"),
             deadline=deadline, limit=16)
-        notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
+        notify_spool.publish_flags(cfg, os.path.join(HOME, "data"))
     except Exception as e:
         result["errors"].append(f"cmd_int_tail: {type(e).__name__}")
     # Tail command failures must be included in the recorded run
@@ -879,7 +863,9 @@ def _main() -> int:
     # releases this lock; command watchers stay non-blocking.
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None and not args.commands_only:
-        lock_fd = _wait_run_lock(LOCK_WAIT_S)
+        lock_fd = writer_lock.wait_run_lock(LOCKFILE, wait_s=LOCK_WAIT_S,
+                                                expected_code_stamp=_CODE_STAMP,
+                                                marker_path=os.path.join(HOME, "data", UPDATE_MARKER_NAME))
     if lock_fd is None:
         print(json.dumps({"ok": False, "error": "lock_held"}))
         return 3
@@ -887,8 +873,8 @@ def _main() -> int:
     deadline = time.monotonic() + RUN_DEADLINE_S
     if args.commands_only:
         return _commands_only(lock_fd, deadline)
-    import notify_cards as _notify_cards
-    if _notify_cards.restore_awaiting_consent(
+    import notify_spool
+    if notify_spool.restore_awaiting_consent(
             os.path.join(HOME, "data")) is not None:
         # schema-bump DB replace held for human consent — ingest,
         # derive, reconcile and sends all stay frozen so the approved

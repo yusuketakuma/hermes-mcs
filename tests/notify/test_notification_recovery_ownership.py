@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-import notify_cards as cards
+import notify_spool
 import notify_recovery
 import notify_scope
 import notify_transport
@@ -66,7 +66,7 @@ def test_operator_recovery_publishes_only_after_its_receipt_commit(led, monkeypa
            "attempt_id": f"{1:016x}", "result": "mark_not_sent", **SCOPE,
            "evidence": {"method": "synthetic_lookup", "ref": "synthetic-proof",
                         "worker_stopped": True, "proof": "remote_absent"}}
-    publish = cards.publish_specs
+    publish = notify_spool.publish_specs
     observed = []
 
     def after_commit(db, dirs, specs, now):
@@ -80,7 +80,7 @@ def test_operator_recovery_publishes_only_after_its_receipt_commit(led, monkeypa
         observed.append(receipt)
         return publish(db, dirs, specs, now)
 
-    monkeypatch.setattr(cards, "publish_specs", after_commit)
+    monkeypatch.setattr(notify_spool, "publish_specs", after_commit)
     receipt = notify_recovery.apply_card_resolve(led, req, CFG, NOW + 1)
     assert observed == [receipt]
     assert notify_recovery.apply_card_resolve(led, req, CFG, NOW + 2) == receipt

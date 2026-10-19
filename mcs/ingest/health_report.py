@@ -1,5 +1,6 @@
 """Observe subsystem health from a borrowed connection and previously published reports."""
 from __future__ import annotations
+import llm_availability
 
 import os
 import shutil
@@ -9,7 +10,8 @@ from contextlib import suppress
 
 from health_watch import HEALTH_REL, _finite_number, _read_status_json
 from mcs_queries import ELIGIBLE_MESSAGE
-from mcs_util import HOME, ATTACH_DIR, disk_floor_mb
+from mcs_util import HOME, ATTACH_DIR
+from llm_availability import disk_floor_mb
 import maintenance
 
 HEALTH_FILE = os.path.join(HOME, HEALTH_REL)
@@ -80,7 +82,7 @@ CONFIG_NOT_LOADED: dict = {}
 
 def backup_health(cfg: dict, now: float) -> dict:
     """Read only configured backup evidence; missing proof is never success."""
-    from mcs_backup import BackupError, load_policy, status
+    from backup_evidence import BackupError, load_policy, status
     from backup_config import validate_backup_config
 
     setting = cfg.get("backup", {"enabled": False})
@@ -157,7 +159,7 @@ def carried_since(key: str, active: bool, now: float) -> float | None:
 def llm_failing(db) -> bool:
     """The local LLM circuit breaker is open or holds unreset failures
     (the state file disappears on the first answered call). Read-only."""
-    from mcs_util import circuit_open_s, circuit_state_path
+    from llm_availability import circuit_open_s, circuit_state_path
     try:
         return circuit_open_s(db) > 0 or circuit_state_path(db).exists()
     except (OSError, sqlite3.Error, IndexError, TypeError, ValueError):
@@ -187,32 +189,33 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
       extract_llm artifact written since. Any attempt (errored, poison,
       older body) counts as started, so permanent failures surfaced
       elsewhere never pin this on."""
-    import notify_cards
+    import notify_scope
+    import notify_spool
     import semantic_policy
     from mcs_queries import current_v4_id
     reasons = []
     db = db
-    if notify_cards.interactive_enabled(cfg):
+    if notify_scope.interactive_enabled(cfg):
         oldest = db.execute(
             "SELECT MIN(created_at) FROM notification_renders "
             "WHERE state='queued' AND transport=?",
-            (notify_cards.active_transport(cfg),)).fetchone()[0]
+            (notify_scope.active_transport(cfg),)).fetchone()[0]
         progress = db.execute(
             "SELECT MAX(updated_at) FROM notification_renders "
             "WHERE state='delivered' AND transport=?",
-            (notify_cards.active_transport(cfg),)).fetchone()[0]
+            (notify_scope.active_transport(cfg),)).fetchone()[0]
         part_progress = db.execute(
             "SELECT MAX(p.updated_at) FROM notification_render_parts p "
             "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
             "WHERE p.state='delivered' AND r.transport=?",
-            (notify_cards.active_transport(cfg),)).fetchone()[0]
+            (notify_scope.active_transport(cfg),)).fetchone()[0]
         latest_progress = max((v for v in (progress, part_progress)
                                if v is not None and v <= now), default=None)
         if (oldest is not None and now - oldest > CARD_STALL_S
                 and (latest_progress is None or now - latest_progress > CARD_STALL_S)):
             reasons.append("card_delivery_stalled")
             import card_worker_status
-            worker = card_worker_status.diagnose(notify_cards.data_root(db), cfg)
+            worker = card_worker_status.diagnose(notify_spool.data_root(db), cfg)
             if worker["state"] in ("unknown", "disabled"):
                 reasons.append(worker["reason"])
         if db.execute("SELECT 1 FROM notification_restore_holds "
@@ -246,8 +249,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
             "LIMIT 1", (extract_llm.KIND, extract_llm.EXTRACT_VERSION)
         ).fetchone() is not None
 
-    import mcs_util
-    down_for = getattr(mcs_util, "llm_down_for_s", None)
+    down_for = getattr(llm_availability, 'llm_down_for_s', None)
     if callable(down_for):
         # the LLM lane's own health record (llm_health.json): None means
         # unknown or healthy and never alerts
@@ -350,16 +352,16 @@ def bounded_health_read(db, read):
 
 def pending_health(db, now):
     """Use the same streamed population for counts and reasons, or keep the old count."""
-    import notify_cards
+    import notify_scope
     try:
         breakdown = bounded_health_read(
-            db, lambda check: notify_cards.pending_breakdown(db, now, checkpoint=check))
+            db, lambda check: notify_scope.pending_breakdown(db, now, checkpoint=check))
     except Exception:
         # Optional diagnostics must not hide a real count failure: the original
         # count still propagates SQLite errors through the existing health path.
         row = db.execute(
             "SELECT COUNT(*) c,MIN(created_at) o FROM notify_outbox WHERE "
-            + notify_cards.OUTBOX_PENDING_WHERE, (now,)).fetchone()
+            + notify_scope.OUTBOX_PENDING_WHERE, (now,)).fetchone()
         return {"pending": row["c"],
                 "oldest_age_s": round(now - row["o"], 1) if row["o"] else 0,
                 "pending_by_reason": {"status": "unavailable", "observed_at": now,
@@ -379,7 +381,7 @@ def build_health(db, result: dict, status: str,
     fixed reasons and timestamps; message bodies are never queried here.
     `run_id` binds this evidence to the source run that produced it."""
     import extract_llm
-    import notify_cards
+    import notify_scope
     from mcs_queries import current_extract_pred, json_or_null
     now = time.time()
     notify_res = result.get("notify") or {}
@@ -390,7 +392,7 @@ def build_health(db, result: dict, status: str,
     # waiting by design, not pending delivery — everything else counts
     # from its creation, including retries with a future next_try
     outbox = pending_health(db, now)
-    retired = notify_cards.retired_transports(cfg)
+    retired = notify_scope.retired_transports(cfg)
     marks = ",".join("?" * len(retired))
     # Preserve retired receipts while excluding only events whose sealed
     # batches all belong to retired transports from live held work.
@@ -464,7 +466,7 @@ def build_health(db, result: dict, status: str,
             "counted_at": now, "source": source}
     coll = collection(result)
     free_mb = attachment_free_mb()
-    cards_health = notify_cards.health_cards(db, cfg)
+    cards_health = notify_scope.health_cards(db, cfg)
     # Itemized attention block (2026-09-30): 'degraded' alone did not
     # say WHERE — 12 extract_qc rows sat at attempts=0 for ~8h and two
     # unsettled deliveries aged ~31h while everything read "incomplete".

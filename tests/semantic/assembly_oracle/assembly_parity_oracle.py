@@ -1,4 +1,5 @@
 """Compare fixed synthetic meaning after independent assertions, never bless a new owner."""
+import llm_availability
 import copy
 import hashlib
 import inspect
@@ -8,7 +9,6 @@ from pathlib import Path
 import time
 
 import extract_llm
-import mcs_util
 import semantic_extraction as extraction
 import semantic_facts
 import semantic_relations
@@ -64,7 +64,7 @@ def test_fixed_synthetic_assembly_meaning(request, tmp_path, monkeypatch, pytest
     monkeypatch.setattr(time, "monotonic", lambda: MONOTONIC)
     monkeypatch.setattr(time, "perf_counter", lambda: MONOTONIC)
     # Sufficient synthetic disk capacity, no actual machine measurement.
-    monkeypatch.setattr(mcs_util, "disk_free_mb", lambda *args: 100_000.0)
+    monkeypatch.setattr(llm_availability, 'disk_free_mb', lambda *args: 100_000.0)
 
     trace, observations, excluded_code_hashes = [], {}, []
     current_case = [None]

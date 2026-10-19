@@ -68,10 +68,16 @@ def atomic_write(path: str, raw: bytes, tmp_prefix: str = ".atomic-",
     the whole old file or the whole new one, and a mid-write crash
     leaves no torn file (the tmp file is unlinked on failure).
     Returns ``path``."""
+    # Core stays unloaded during adapter/plugin import. Resolve its stdlib-only
+    # owned-FD handoff before acquiring a temporary descriptor.
+    from . import mcs_api
+    mcs_api.bootstrap()
+    from safe_io import fdopen_owned
+
     fd, tmp = tempfile.mkstemp(prefix=tmp_prefix, suffix=".tmp",
                                dir=os.path.dirname(path))
     try:
-        with os.fdopen(fd, "wb") as stream:
+        with fdopen_owned(fd, "wb") as stream:
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())

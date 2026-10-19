@@ -502,7 +502,7 @@ def test_partial_switch_back_keeps_the_gateway_restart_for_the_next_run(monkeypa
 
 
 def test_flags_publish_failure_fails_services_and_defers_the_switch_restart(monkeypatch, tmp_path):
-    import notify_cards
+    import notify_spool
     calls, args, manifest = _switch_back_env(monkeypatch, tmp_path)
     fixture_run = mcs_setup.subprocess.run
 
@@ -513,16 +513,16 @@ def test_flags_publish_failure_fails_services_and_defers_the_switch_restart(monk
         return fixture_run(argv, **kw)
     monkeypatch.setattr(mcs_setup.subprocess, "run", run)
 
-    publish = notify_cards.publish_flags
+    publish = notify_spool.publish_flags
 
     def broken(cfg, data):
         raise OSError("synthetic flags write failure")
-    monkeypatch.setattr(notify_cards, "publish_flags", broken)
+    monkeypatch.setattr(notify_spool, "publish_flags", broken)
     assert mcs_setup.cmd_services(args) == 1
     assert _restarts(calls) == 0
     saved = json.loads(manifest.read_text())   # the verified jobs are still recorded
     assert saved["runtime_mode"] == "hermes" and saved["gateway_restart_pending"] is True
-    monkeypatch.setattr(notify_cards, "publish_flags", publish)
+    monkeypatch.setattr(notify_spool, "publish_flags", publish)
     split = len(calls)
     assert mcs_setup.cmd_services(args) == 0
     assert _restarts(calls[split:]) == 1

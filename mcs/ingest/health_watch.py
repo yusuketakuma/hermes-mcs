@@ -29,9 +29,10 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
+import safe_io  # noqa: E402
 
-import maintenance
 from mcs_queries import JST
+from health_policy import RUN_GRACE_S, freshness_deadline
 from mcs_util import HOME, load_config
 from safe_io import read_regular_nofollow
 
@@ -40,9 +41,6 @@ STATE_REL = os.path.join("data", "health_watch.json")
 STATUS_REL = os.path.join("data", "health_watch_status.json")
 STATUS_MAX_BYTES = 1024 * 1024
 
-DEFAULT_TICK_S = 600        # deployed cron cadence: */10 * * * *
-DEFAULT_MAX_MISSED = 2      # miss two whole ticks before 'stale'
-RUN_GRACE_S = 480           # run_check's whole-run deadline
 REALERT_S = 4 * 3600        # unchanged bad state re-alerts every 4h
 DELIVERY_RETRY_S = 60       # only provably unsent alerts may retry
 UNKNOWN_HISTORY = 50        # retained uncertain-delivery records
@@ -65,28 +63,8 @@ STANDALONE_WATCHED_JOBS = ("extract-0", "extract-2", "lineworks", "cmd",
 from stats_math import finite_number as _finite_number  # noqa: E402 - one shared rule
 
 
-def _tick_settings(cfg: dict) -> tuple[dict, float, float]:
-    """(health block, tick_interval_s, max_missed_runs) with defaults
-    applied to missing or invalid values."""
-    h = cfg.get("health") if isinstance(cfg, dict) else None
-    h = h if isinstance(h, dict) else {}
-    tick = h.get("tick_interval_s", DEFAULT_TICK_S)
-    missed = h.get("max_missed_runs", DEFAULT_MAX_MISSED)
-    if not (_finite_number(tick) and tick > 0):
-        tick = DEFAULT_TICK_S
-    if not (_finite_number(missed) and missed >= 0):
-        missed = DEFAULT_MAX_MISSED
-    return h, tick, missed
 
 
-def freshness_deadline(cfg: dict) -> int:
-    """tick_interval_s * (max_missed_runs + 1) from config — a reader
-    must not assume 'healthy' while the producer could legitimately be
-    inside its allowed missed-run window."""
-    h, tick, missed = _tick_settings(cfg)
-    deadline = tick * (int(missed) + 1)
-    return max(1, int(deadline)) if _finite_number(deadline) \
-        else DEFAULT_TICK_S * (DEFAULT_MAX_MISSED + 1)
 
 
 def _is_code(value) -> bool:
@@ -460,12 +438,12 @@ def evaluate(home: str = HOME, now: float | None = None,
         state["delivery"] = delivery
         report["delivery"] = dict(delivery)
     try:
-        maintenance.atomic_publish_text(
+        safe_io.atomic_publish_text(
             state_path, json.dumps(state, ensure_ascii=False))
     except OSError:
         report["delivery_error"] = "state_persist_failed"
     try:
-        maintenance.atomic_publish_text(
+        safe_io.atomic_publish_text(
             status_path, json.dumps(report, ensure_ascii=False))
     except OSError:
         report["delivery_error"] = "status_persist_failed"
@@ -532,19 +510,20 @@ def deliver_alert(cfg: dict, text: str) -> bool | None:
     Return True for delivered, False for provably unsent, None for an
     uncertain outcome which must not be blindly repeated."""
     try:
-        import notify_flush
-        target = notify_flush._target(cfg, "run_failed")
+        import notify_sender
+        import mcs_util
+        target = notify_sender.target(cfg, "run_failed")
         if not target:
             return False
-        argv = notify_flush._send_argv(cfg, target)
+        argv = notify_sender.send_argv(cfg, target, mcs_util.CONF_PATH)
     except Exception:
         return False                   # transport has not been called
     try:
-        notify_flush._send(argv,
+        notify_sender.send(argv,
                            "[MCS] 監視警報\n" + text,
                            deadline=time.monotonic() + 60)
         return True
-    except (notify_flush._SendFailed, notify_flush._SendUsage):
+    except (notify_sender.SendFailed, notify_sender.SendUsage):
         return False
     except Exception:
         return None                    # includes _SendUncertain
@@ -860,12 +839,12 @@ def _watch(args, cfg) -> int:
     try:
         # Durable before crossing the wire: a killed watcher never
         # turns a possibly delivered message into a retryable send.
-        maintenance.atomic_publish_text(state_path, json.dumps(state, ensure_ascii=False))
+        safe_io.atomic_publish_text(state_path, json.dumps(state, ensure_ascii=False))
     except OSError:
         report["delivery_error"] = "state_persist_failed"
         report["delivery"] = {**delivery, "outcome": "not_sent"}
         try:
-            maintenance.atomic_publish_text(os.path.join(args.home, STATUS_REL),
+            safe_io.atomic_publish_text(os.path.join(args.home, STATUS_REL),
                                             json.dumps(report, ensure_ascii=False))
         except OSError:
             pass
@@ -877,11 +856,11 @@ def _watch(args, cfg) -> int:
         state["alerted_at"] = now
     report["delivery"] = dict(delivery)
     try:
-        maintenance.atomic_publish_text(state_path, json.dumps(state, ensure_ascii=False))
+        safe_io.atomic_publish_text(state_path, json.dumps(state, ensure_ascii=False))
     except OSError:
         report["delivery_error"] = "state_persist_failed"
     try:
-        maintenance.atomic_publish_text(os.path.join(args.home, STATUS_REL),
+        safe_io.atomic_publish_text(os.path.join(args.home, STATUS_REL),
                                         json.dumps(report, ensure_ascii=False))
     except OSError:
         return 1

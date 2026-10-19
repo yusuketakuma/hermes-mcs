@@ -1,5 +1,6 @@
 """The backup verification report keeps the exact key set restore fences on."""
 import mcs_backup
+import backup_evidence
 
 
 def test_report_matches_the_verification_contract():
@@ -15,4 +16,4 @@ def test_report_matches_the_verification_contract():
 def test_bundle_ceiling_adds_framing_and_one_mib():
     class Policy:
         max_snapshot_bytes = 100 * 1048576
-    assert mcs_backup._bundle_ceiling(Policy) == 101 * 1048576 + 1048576
+    assert backup_evidence.bundle_ceiling(Policy) == 101 * 1048576 + 1048576

@@ -1,5 +1,6 @@
 """An updater winning the run lock during semantic transport stops the
 drain cleanly: no attempt is charged, no later job starts, no DB write."""
+import writer_lock
 import semantic_drain
 import json
 import os
@@ -7,18 +8,17 @@ import time
 
 import pytest
 
-import mcs_util
 from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
 
 
 @pytest.fixture
 def lock_env(tmp_path, monkeypatch):
     # stable stamp: concurrent edits of the real tree must not leak in
-    monkeypatch.setattr(mcs_util, "code_stamp", lambda: 1)
-    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: 1)
+    monkeypatch.setattr(writer_lock, "HOME", str(tmp_path))
     (tmp_path / "data").mkdir(exist_ok=True)
     path = str(tmp_path / "run.lock")
-    fd = mcs_util.acquire_run_lock(path)
+    fd = writer_lock.acquire_run_lock(path)
     yield tmp_path, path, fd
     os.close(fd)
 
@@ -48,7 +48,7 @@ def test_updater_in_window_stops_drain_without_charging(lock_env):
     def model(prompt):
         calls.append(prompt)
         # the updater takes the lock, applies, and leaves its marker up
-        (tmp_path / "data" / mcs_util.UPDATE_MARKER_NAME).write_text("x")
+        (tmp_path / "data" / writer_lock.UPDATE_MARKER_NAME).write_text("x")
         return _llm(prompt)
 
     try:
@@ -62,21 +62,21 @@ def test_updater_in_window_stops_drain_without_charging(lock_env):
         assert _jobs(db) == before             # no attempt, no defer
         assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE "
                              "kind='semantic_drain_run'").fetchone()[0] == 0
-        assert mcs_util.acquire_run_lock(path) is None   # held for finally
+        assert writer_lock.acquire_run_lock(path) is None   # held for finally
     finally:
         db.close()
 
 
 def test_reacquire_timeout_stops_drain_without_writes(lock_env, monkeypatch):
     tmp_path, path, fd = lock_env
-    monkeypatch.setattr(mcs_util, "RUN_LOCK_REACQUIRE_S", 0.05)
-    monkeypatch.setattr(mcs_util, "RUN_LOCK_POLL_S", 0.01)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_REACQUIRE_S", 0.05)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_POLL_S", 0.01)
     db = _two_jobs(tmp_path)
     before = _jobs(db)
     other = []
 
     def model(prompt):
-        other.append(mcs_util.acquire_run_lock(path))  # updater keeps it
+        other.append(writer_lock.acquire_run_lock(path))  # updater keeps it
         return _llm(prompt)
 
     try:
@@ -104,7 +104,7 @@ def test_normal_transport_is_unchanged(lock_env):
                                run_lock_fd=fd)
         assert out["done"] == 1 and not result["errors"]
         assert "run_lock_lost" not in out
-        assert mcs_util.acquire_run_lock(path) is None
+        assert writer_lock.acquire_run_lock(path) is None
     finally:
         db.close()
 
@@ -116,24 +116,24 @@ class _Db:
 def test_unlocked_transport_bounded_wait_and_code_stamp(lock_env, monkeypatch):
     tmp_path, path, fd = lock_env
     ledger = type("L", (), {"db": _Db()})()
-    monkeypatch.setattr(mcs_util, "RUN_LOCK_POLL_S", 0.01)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_POLL_S", 0.01)
     holder = []
     started = time.monotonic()
-    with pytest.raises(mcs_util.RunLockLost) as e:
-        with mcs_util.unlocked_transport(ledger, fd, wait_s=0.05):
-            holder.append(mcs_util.acquire_run_lock(path))
+    with pytest.raises(writer_lock.RunLockLost) as e:
+        with writer_lock.unlocked_transport(ledger.db, fd, wait_s=0.05):
+            holder.append(writer_lock.acquire_run_lock(path))
     # far below the 150 s default reacquire wait: wait_s bounded it
     assert e.value.held is False and time.monotonic() - started < 15
     os.close(holder[0])
     # lock released by the holder: fd is unlocked (no stray hold)
-    probe = mcs_util.acquire_run_lock(path)
+    probe = writer_lock.acquire_run_lock(path)
     assert probe is not None
     os.close(probe)
     # a code stamp that moves during the window is refused, lock retaken
     stamps = iter([1, 2])
-    monkeypatch.setattr(mcs_util, "code_stamp", lambda: next(stamps))
-    with pytest.raises(mcs_util.RunLockLost) as e:
-        with mcs_util.unlocked_transport(ledger, fd):
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: next(stamps))
+    with pytest.raises(writer_lock.RunLockLost) as e:
+        with writer_lock.unlocked_transport(ledger.db, fd):
             pass
     assert e.value.held is True
-    assert mcs_util.acquire_run_lock(path) is None
+    assert writer_lock.acquire_run_lock(path) is None

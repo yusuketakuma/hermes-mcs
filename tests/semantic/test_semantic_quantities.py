@@ -161,3 +161,11 @@ def test_frequency_with_kanji_suffix_is_single_frequency():
 def test_other_kanji_units_still_held():
     assert any(item.get("unit") == "unknown:錠"
                for item in extract_quantities("3錠内服") + extract_quantities("3錠"))
+
+
+@pytest.mark.parametrize("value,expected", [("1.20", "1.2"), (0, "0"), (".5", "0.5"),
+    ("1e2", "100"), ("-0.000", "-0"), (-1, None), (True, None), (None, None),
+    ("NaN", None), ("Infinity", None), ("1,000", None)])
+def test_shared_quantity_number_spelling_preserves_nonnegative_decimal_contract(value, expected):
+    from semantic_quantities import normalized_quantity_number
+    assert normalized_quantity_number(value) == expected

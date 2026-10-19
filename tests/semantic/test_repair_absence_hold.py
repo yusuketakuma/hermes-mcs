@@ -3,6 +3,7 @@ adjudicated absence into coverage is held once that upgrade is proven by
 the generation's repair receipt and its stored pre-repair document. A plain
 repaired document, or one without a sound proof, is left as it is. No model,
 Jev, re-queue or new repair. Synthetic ledger only."""
+import semantic_facts
 import semantic_drain
 import semantic_policy
 import semantic_store
@@ -69,7 +70,7 @@ class World:
             repaired["coverage"] = dict(repaired["coverage"], status="complete",
                                         open_obligation_ids=[])
         sf.validate_facts_doc(repaired)
-        self.base_hash, self.repaired_hash = v4._doc_hash(base), v4._doc_hash(repaired)
+        self.base_hash, self.repaired_hash = semantic_facts.doc_hash(base), semantic_facts.doc_hash(repaired)
         meta = {"fingerprint": self.fp, "policy_fingerprint": self.policy}
         self.base_id = self._add("semantic_facts_v2", base, meta)
         if conflicting_base:
@@ -166,7 +167,7 @@ def test_proven_upgrade_holds_the_generation_once(world):
         assert all(m.get("invalidated") is True for _, m in world.rows(kind)
                    if m.get("fingerprint") == world.fp), kind
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
-    assert semantic_send_gate._summary_current(db, 1, 1, bundle, world.policy) is None
+    assert semantic_send_gate.current_summary(db.db, 1, 1, bundle, world.policy) is None
     with pytest.raises(ValueError, match="loop_candidate_stale"):
         request_loops.current_candidate(db.db, 1, loop_id, 1)
     assert world.protected() == before          # receipts, base doc, bystanders, body

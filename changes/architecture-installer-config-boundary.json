@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "導入時の設定読取りと復旧診断の責務を整理",
+  "summary": "導入ツールが設定CLIの内部実装へ依存しないよう整理し、設定ファイルを読み取る際にファイルの引渡しが失敗しても、この操作で開いたファイルを閉じるようにしました。読取りの所有者・容量・形式条件と復旧用Pythonの安全条件は変わりません。",
+  "upgrade": "追加操作は不要です。既定値・保存形式・導入順序は変わりません。",
+  "details": [
+    "所有者を確認する設定読取りの実体をlifecycle_ioへ、選択済み復旧Pythonの検査をruntime_inspectionへ集約する。",
+    "既存fdopen_ownedで所有FDの引渡し失敗時の回収を担い、設定エラーへの翻訳は読取関数で維持する。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/lifecycle_io.py",
+    "mcs/ops/runtime_inspection.py",
+    "install.sh"
+  ]
+}
