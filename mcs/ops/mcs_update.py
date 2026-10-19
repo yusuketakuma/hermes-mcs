@@ -3074,6 +3074,22 @@ def _drainers_key(state: dict, head: str | None) -> str:
 
 # -------------------------------------------------------------------- CLI
 
+def _drug_info_notices(cfg: dict) -> None:
+    """Public drug-master listing and adopted package-insert revisions (opt-out:
+    ``drug_info_watch: false``). Never blocks or fails the update check."""
+    if cfg.get("drug_info_watch") is False:
+        return
+    try:
+        import drug_info
+        import mcs_drug
+        manifest, _archive = mcs_drug.load_bundled_master()
+        for key, value, text in drug_info.daily_notices((manifest["edition"], manifest["rows"])):
+            if _enqueue_notice(text, use_run_lock=True):
+                drug_info.mark_notified(key, value)
+    except Exception:  # noqa: BLE001 -- best effort; the outcome stays in data/drug-info
+        return
+
+
 def cmd_check() -> int:
     """Daily driver: detect -> notify -> pending approvals -> auto.
 
@@ -3171,6 +3187,9 @@ def cmd_check() -> int:
     finally:
         if upd_fd is not None:
             os.close(upd_fd)
+    # public look-ups take minutes; never delay a recovery or an approved apply/rollback
+    if not (held or (mode != "off" and (picked or auto))):
+        _drug_info_notices(cfg)
     if held:
         return recover_interrupted()
     # --- execution (apply/rollback re-acquire their own locks) --------
