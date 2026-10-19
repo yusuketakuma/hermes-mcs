@@ -127,7 +127,7 @@ _PERSON = re.compile(
 # The shared vocabulary excludes family kanji inside 大丈夫/工夫/分母.
 _BARE_OWNER = re.compile(
     rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})"
-    rf"[ \t　]*(?={_VITAL_OWNER}|{_READING_OWNER})")
+    rf"[ \t　]*(?={_VITAL_OWNER}|{_READING_OWNER})", re.I)
 _DIRECT_OWNER = re.compile(rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})の{_OWNER_MODIFIER}[ \t　]*$")
 _CLINICAL_ACTOR = re.compile(r"(?:が|は)[、,\s]*[^。！？!?;；\n、,]*?を(?:開始|中止|増量|減量|変更|処方|投与|測定)")
 _CLINICAL_RECIPIENT = re.compile(rf"(?:{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:に対して|に対し|への)")

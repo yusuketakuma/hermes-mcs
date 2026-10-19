@@ -64,7 +64,7 @@ def patient_current_vitals(values, body, *, patient_name=None):
         # A source-labelled measurement overrides unscoped parsed compatibility.
         # Unmentioned/legacy fields keep their existing trusted-output contract.
         observed, grounded = set(), {}
-        for match in re.finditer(r"\d+(?:[.．]\d+)?", body):
+        for match in _vital_numbers(body):
             label = _nearest_vital_label(body, *match.span())
             if label == "bp":
                 side = _bp_side(body, *match.span())
@@ -76,6 +76,7 @@ def patient_current_vitals(values, body, *, patient_name=None):
                 starts = [m.start() for m in _VITAL_LABELS[label].finditer(
                     body, max(0, match.start() - _VITAL_WIN_BACK), match.start())]
                 if (type(values.get(label)) in (int, float) and values[label] == _bp_number(match[0])
+                        and not _FLOW_AFTER.match(body, match.end())
                         and extract.patient_source_scope(body, starts[-1] if starts else match.start(),
                                                          match.end(), patient_name=patient_name,
                                                          measurement=True) == "patient"):
@@ -90,7 +91,7 @@ def _current_only(vitals: dict, body: str, patient_name=None) -> dict:
     def superseded(key, value):
         if key not in _VITAL_CLASS or type(value) not in (int, float):
             return False
-        spans = [m.span() for m in re.finditer(r"\d+(?:[.．]\d+)?", body) if _bp_number(m[0]) == value]
+        spans = [m.span() for m in _vital_numbers(body) if _bp_number(m[0]) == value]
         return bool(spans) and (all(_FLOW_AFTER.match(body, end) for _, end in spans)
                                 or _vital_superseded(body, _VITAL_CLASS[key], spans, patient_name))
     return {key: value for key, value in vitals.items() if not superseded(key, value)}
@@ -457,9 +458,15 @@ def _vital_superseded(body: str, cls: str, spans, patient_name=None) -> bool:
     # The patient's current report: a current reading (血圧は現在90/60), or a current
     # mention without one (現在の血圧は測定できませんでした).
     return (any(_nearest_vital_label(body, *m.span()) == cls and _vital_current(body, m.start()) and patient(*m.span())
-                for m in re.finditer(r"\d+(?:[.．]\d+)?", body))
+                for m in _vital_numbers(body))
             or any(_vital_current(body, m.start()) and patient(*m.span())
                    for m in _VITAL_LABELS[cls].finditer(body)))
+
+
+def _vital_numbers(body):
+    # The 2 in SpO2 is part of the label, not a measurement.
+    return (m for m in re.finditer(r"SpO2|(?P<number>\d+(?:[.．]\d+)?)", body, re.I)
+            if m["number"] is not None)
 
 
 _FLOW_AFTER = re.compile(r"[ \t　]*(?:[LＬlℓ](?![A-Za-z])|リットル)")
@@ -479,7 +486,7 @@ def _vitals_guard(body: str | None, vit: dict,
         return vit
     import extract
     toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
-            for m in re.finditer(r"\d+(?:[.．]\d+)?", body)]
+            for m in _vital_numbers(body)]
     issues = drops.setdefault("vitals", []) if drops is not None else []
 
     def note(s):

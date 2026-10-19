@@ -645,7 +645,7 @@ def _vital_threshold_flags(vit: dict, body: str | None,
             continue
         s, e = span
         if _VITAL_CTX_EXCLUDE.search(
-                body[max(0, s - _VITAL_CTX_WIN):e + _VITAL_CTX_WIN]):
+                body, max(0, s - _VITAL_CTX_WIN), e + _VITAL_CTX_WIN):
             continue
         out.append({"key": key, "value": val,
                     "rule": f"{key}_{op}_{limit:g}",

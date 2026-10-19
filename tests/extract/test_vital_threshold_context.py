@@ -52,3 +52,9 @@ def test_family_and_unmeasurable_markers_still_exclude_flags():
     for body in ("夫のSpO2 86%です", "妻のSpO2 86%です", "SpO2 86%と測れない",
                  "SpO2 86%と測れません", "SpO2 86%と測れず", "SpO2 86%と測定できない"):
         assert extract_llm._vital_threshold_flags({"spo2": 86}, body, TH) == []
+
+
+def test_family_kanji_inside_a_word_at_the_context_boundary_is_not_excluded():
+    for word in ("大丈夫", "工夫"):
+        body = word + "あ" * 34 + "SpO2 88%"
+        assert extract_llm._vital_threshold_flags({"spo2": 88}, body, TH)

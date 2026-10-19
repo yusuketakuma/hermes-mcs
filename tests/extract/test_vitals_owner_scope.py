@@ -6,6 +6,8 @@ import extract
 
 OTHER_PERSON = [
     ("ご家族P80", {"hr": 80}),
+    ("ご家族Hr72", {"hr": 72}),
+    ("妻hr72", {"hr": 72}),
     ("本日ご家族P80", {"hr": 80}),
     ("訪問時ご家族P80", {"hr": 80}),
     ("訪問時妻P80", {"hr": 80}),
@@ -90,3 +92,17 @@ def test_a_family_value_saved_before_the_fix_leaves_existing_rollups(tmp_path):
         assert "hr" not in rebuilt["latest_vitals"]
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("body", ["SpO2 95% 酸素2L", "spo2 95% 酸素2L", "SpO2 95%"])
+def test_the_digit_in_a_saturation_label_is_not_a_measurement(body):
+    assert clinical_values._vitals_guard(body, {"spo2": 2}) == {}
+    assert clinical_values.patient_current_vitals({"spo2": 2}, body) == {}
+    assert clinical_values._vitals_guard(body, {"spo2": 95}) == {"spo2": 95}
+    assert clinical_values.patient_current_vitals({"spo2": 95}, body) == {"spo2": 95}
+
+
+def test_a_real_reading_equal_to_the_label_digit_is_preserved():
+    body = "SpO2 2% 酸素2L"
+    assert clinical_values._vitals_guard(body, {"spo2": 2}) == {"spo2": 2}
+    assert clinical_values.patient_current_vitals({"spo2": 2}, body) == {"spo2": 2}

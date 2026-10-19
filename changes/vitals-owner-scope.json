@@ -7,7 +7,8 @@
     "共有の本人判定に、人物の直後へバイタルのラベル・数値が続く所有者表現を追加（人数・年齢・期間の数値は除外）。「本日ご家族P80」のような前置きや「の」＋ラベルにも対応。",
     "家族語の「夫」は「丈夫」「工夫」の一部では一致させない。書込みガードは数値の直後に L・リットルがある値をバイタルとして通さない。",
     "読取り側は書込みガードと同じラベル文法・同じ値・本人範囲の値を保持。rollup の判定版数を 11 に上げ、旧版のキャッシュは読取り時に再計算し、作り直し対象にする。",
-    "回帰: tests/extract/test_vitals_owner_scope.py、tests/extract/test_rollup_bare_label_vitals.py"
+    "回帰: tests/extract/test_vitals_owner_scope.py、tests/extract/test_rollup_bare_label_vitals.py",
+    "レビュー追補: Hr/hr の家族表記を共有判定へ統一し、SpO2 のラベル内の 2 を測定値から除外。流量は読取りの再照合でも候補にしない。"
   ],
   "refs": [
     "mcs/extract/v1/extract.py",
