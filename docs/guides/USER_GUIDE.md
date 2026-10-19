@@ -359,8 +359,8 @@ MCSサーバーの負荷対策として、自動取得を5分から10分間隔�
 
 情報の行き先（AI の使用箇所・外部送信の有無）の詳細と現在の機能・運用上の制約は
 [SECURITY.md](../../SECURITY.md)「人工知能（AI）の使用箇所と情報の行き先」「復旧と解析の限界」、
-技術的な構成（システム構成図・ローカルLLM と TypeSafe Jev の技術詳細）は
-[DEVELOPMENT.md](../development/DEVELOPMENT.md) の「付録: README から移設した技術詳細」を参照。
+技術的な構成は[責務と依存](../development/REPOSITORY_STRUCTURE.md)、推論の処理経路は
+[推論経路と処理結果の所有者](../development/LLM_RUNTIME.md)を参照。
 
 ## MCS データで何が追えるのか
 

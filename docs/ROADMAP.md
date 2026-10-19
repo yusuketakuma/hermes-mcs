@@ -1,5 +1,35 @@
 # hermes-mcs ロードマップ
 
+## 現行コードの確認先と残る受入
+
+確認日: **2026-10-19**。この冒頭は開発候補のコードとリポジトリ内の受入記録を照合した案内です。
+実装・合成検証・公開・本番適用を区別します。リモートのRelease、実機のreceiptや稼働状態は
+この文書整理では再確認していないため、現在の公開・配備状況は未確認です。
+収録された[1.0.27受入票](releases/v1.0.27/ACCEPTANCE_1.0.27.md)も、実機適用の完了証拠とは別です。
+
+| 領域 | 現行の実装と確認先 | 合成検証の記録 | 残る受入・次の判断 |
+|---|---|---|---|
+| 通知の個別復旧 | plan・人承認・receiptの[通知復旧手順](guides/NOTIFICATION_RECOVERY.md)、[notify_transport](../mcs/notify/notify_transport.py) | [1.0.23受入](releases/v1.0.23/ACCEPTANCE_1.0.23.md) | 実配送の証拠照合と人判断。送信結果不明を自動再送せず、管理CLIをチャットへ無断公開しない |
+| 薬剤の言及履歴・別名承認 | [薬剤ワークフロー](specs/DRUG_MASTER_WORKFLOWS.md)、[drug_timeline](../mcs/medications/drug_timeline.py)、[drug_alias](../mcs/medications/drug_alias.py) | [1.0.23受入](releases/v1.0.23/ACCEPTANCE_1.0.23.md) | 公開masterの配布と、私有辞書の利用条件確認・採用・有効化は別の操作 |
+| 患者コンテキスト | [構造化契約](specs/patient-context.md)、[patient_nightly](../mcs/patients/patient_nightly.py) | [1.0.25受入](releases/v1.0.25/ACCEPTANCE_1.0.25.md)・[1.0.27受入](releases/v1.0.27/ACCEPTANCE_1.0.27.md) | 作成・公開の既定有効と、下段の患者状態参照の品質昇格を混同しない。終日処理、JST 03:30が作業日の境界 |
+| 患者状態参照・意味解析の昇格 | [封印候補の評価](specs/SEALED_CANDIDATE_EVALUATION.md)、[patient_state_context](../mcs/patients/patient_state_context.py) | 合成資産とvalidatorの検証。人手評価は[review manifest](../evaluation/request_following_review_manifest.json)でpending | sealed holdout・人手評価・候補指紋・独立承認が必要。合成220件を人手ラベルや臨床品質合格にしない |
+| 更新・復旧 | [更新手順](guides/UPGRADE_AGENT.md)、[互換matrix](../tests/fixtures/schema_upgrade/update-paths.json) | 対象版の受入票と完全合成matrix | 旧updater・独立復旧・rollbackの検証と、実機update receiptを分ける。過去のCI省略を恒久免除にしない |
+| 責務分離・依存整理 | [責務・状態所有](development/REPOSITORY_STRUCTURE.md)、[開発リファレンス](development/DEVELOPMENT.md)、[推論経路](development/LLM_RUNTIME.md) | 開発中。最終統合検証・全領域の精読・独立レビューは未完 | 外部契約、候補hash、同一TX、旧版からの更新経路を保って完了させる。公開・本番適用は含めない |
+
+既存機能を過去の「未実装」という記述だけで再開発しません。現在の操作・安全条件は
+[文書索引](README.md)からguides/specsへ、過去の根拠は[リリース記録](releases/README.md)と
+[開発記録](dev-records/README.md)へ進んでください。
+
+接続追加、外部送付、人手評価、モデル変更、実機操作の承認は計画の記載から推定しません。
+C0〜C4・CD・Q・F各契約と、actor opt-in・人承認・no-redirect/no-proxy・原文根拠の境界を維持します。
+1.0.23時点の優先順位と完了条件、およびそれ以前の計画は以下に当時の判断として保持します。
+
+## 2026-10-17時点の計画判断
+
+<details>
+<summary>1.0.23候補を基準とした実施順・旧32項目の対応を開く</summary>
+
+
 改訂日: **2026-10-17**。基準: **1.0.23候補 `5d71c1a0`**（前版 `v1.0.22 / f8c6c20d`）。
 本節から「過去の計画記録」までを現在の優先順位・実施順の正本とする。旧版への割当は履歴であり、未完了項目の完了根拠にはしない。
 [今回の調査・指摘・検証](releases/v1.0.23/AUDIT_1.0.23.md)と[1.0.22受入票](releases/v1.0.22/ACCEPTANCE_1.0.22.md)を参照。
@@ -96,6 +126,8 @@ F-2/F-3等の旧不具合表は当時の記録であり、現在も未修正と�
 
 1.0.xで新しいMCS投稿/押下は追加しない。新しいWeb UI、LLMの臨床/返信ドラフト、自動督促、自動投稿/取消、個人評価、外部送付の自動化、押下履歴や既読率の推定は必須成果にしない。
 コアstdlib、既存adapter、snapshot、承認/receipt、no-redirect/no-proxy、実データをfixtureにしない条件を維持する。詳細計画の旧flat pathは現在の `mcs/` サブディレクトリに照合してから使う。
+
+</details>
 
 ## 過去の計画記録
 
