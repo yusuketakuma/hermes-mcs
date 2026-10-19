@@ -61,9 +61,11 @@ def status(root, transport, profile):
 
 def diagnose(root, cfg, *, probe_data=False):
     """Report the configured Hermes owner and restore hold without changing either."""
-    notify = cfg.get('notify') or {}
+    notify = cfg.get('notify')
+    notify = {} if notify is None else notify
     transport = notify.get('interactive') if isinstance(notify, dict) else None
-    scope = (notify.get(transport) or {}) if transport in ('slack', 'discord') else {}
+    scope = notify.get(transport) if transport in ('slack', 'discord') else None
+    scope = {} if scope is None else scope
     if not isinstance(notify, dict) or not isinstance(scope, dict):
         # a malformed block cannot name the owner: unverified, never "not ours"
         result = {'state': 'unknown', 'reason': 'worker_start_unverified'}

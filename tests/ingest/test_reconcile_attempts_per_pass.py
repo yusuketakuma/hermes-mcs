@@ -77,5 +77,5 @@ def test_reconcile_deadline_cuts_between_passes_do_not_burn_the_job(tmp_path):
     row = db.db.execute(
         "SELECT state,attempts,payload FROM fetch_jobs "
         "WHERE kind='reconcile' AND project_id=2").fetchone()
-    assert row["state"] == "pending", (row["state"], row["attempts"])
+    assert (row["state"], row["attempts"]) == ("pending", 0)
     db.close()

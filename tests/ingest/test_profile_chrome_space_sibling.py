@@ -39,3 +39,11 @@ def test_stop_never_signals_space_suffixed_sibling(monkeypatch):
     monkeypatch.setattr(adapter, "_sleep_bounded", lambda *_: None)
     adapter._stop_profile_chrome("/p/chrome-profile", "/Apps/Chrome")
     assert (202, signal.SIGTERM) not in sent
+
+
+def test_profile_chrome_started_with_about_blank_still_matches(monkeypatch):
+    import subprocess as sp
+    lines = ("201 /Apps/Chrome --user-data-dir=/p/chrome-profile about:blank\n"
+             "202 /Apps/Chrome --user-data-dir=/p/chrome-profile copy --no-first-run\n")
+    monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(a, 0, lines, ""))
+    assert mcs_adapter.MCSAdapter._profile_chrome_pids("/p/chrome-profile", "/Apps/Chrome") == [201]

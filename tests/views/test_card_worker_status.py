@@ -75,3 +75,11 @@ def test_malformed_notify_block_is_unverified_not_a_crash(tmp_path):
                 {'notify': {'interactive': 'slack', 'slack': 'default'}}):
         result = workers.diagnose(tmp_path, cfg)
         assert (result['state'], result['reason']) == ('unknown', 'worker_start_unverified')
+
+
+def test_empty_malformed_notify_values_are_unverified(tmp_path):
+    workers.record(tmp_path, 'slack', 'default', 'worker_started')
+    for cfg in ({'notify': []}, {'notify': ''},
+                {'notify': {'interactive': 'slack', 'slack': []}}):
+        result = workers.diagnose(tmp_path, cfg)
+        assert (result['state'], result['reason']) == ('unknown', 'worker_start_unverified'), cfg

@@ -24,6 +24,8 @@ def test_related_limit_zero_does_not_blame_a_valid_dictionary(tmp_path, capsys):
     except SystemExit as exit_:   # an argparse range refusal is an acceptable fix
         code = exit_.code
     err = capsys.readouterr().err
+    assert code == 2, (code, err)
+    assert "limit は1〜200の整数です" in err
     assert "辞書の設定・所有者権限・SHA256を確認してください" not in err, (code, err)
 
 
