@@ -982,8 +982,8 @@ release自身の作業中ファイルは親の実装台帳で追跡する。以�
 | ワークツリー | 処置 |
 |---|---|
 | `LIVE` | 全dirty/untrackedパス処置済み（詳細JSON）。元WT・所有印を保持 |
-| `/private/tmp/claude-501/-Users-yusuke--mcs/c618caa7-929f-4a8a-afcb-e31daaa53e00/scratchpad/wt-3213` | 履歴照合済み・prunable登録保持（削除なし） |
-| `/private/tmp/claude-501/-Users-yusuke--mcs/c618caa7-929f-4a8a-afcb-e31daaa53e00/scratchpad/wt-combined2` | 履歴照合済み・prunable登録保持（削除なし） |
+| `LOCAL_TEMP/review-worktree-1` | 履歴照合済み・prunable登録保持（削除なし） |
+| `LOCAL_TEMP/review-worktree-2` | 履歴照合済み・prunable登録保持（削除なし） |
 | `STATE/mcs-hotfix-summary-20261009/baseline` | 全dirty/untrackedパス処置済み（詳細JSON）。元WT・所有印を保持 |
 | `STATE/mcs-quality/v1.0.21/blockers-20261014/mcs-review` | レビューsnapshot・変更blob照合済み、基準履歴は統合対象外 |
 | `STATE/mcs-quality/v1.0.21/post-merge-fix-review-20261014/coderabbit-review` | 全独自パッチ同等・再適用不要 |
