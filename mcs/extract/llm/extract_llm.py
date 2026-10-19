@@ -57,6 +57,8 @@ from clinical_chunking import PLAN_VERSION, plan_chunks
 import local_llm
 import patient_context
 import mcs_queries
+import semantic_assembly
+import semantic_facts
 import patient_state_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_KIND,
@@ -101,6 +103,8 @@ _LOADED_SOURCE_DIGESTS = {
                        ("extraction_refresh", extraction_refresh.__file__),
                        ("patient_context", patient_context.__file__),
                        ("mcs_queries", mcs_queries.__file__),
+                       ("semantic_assembly", semantic_assembly.__file__),
+                       ("semantic_facts", semantic_facts.__file__),
                        ("patient_state_context", patient_state_context.__file__),
                        ("local_llm", local_llm.__file__),
                        ("extract_schema", extract_schema.__file__),

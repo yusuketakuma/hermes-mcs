@@ -350,7 +350,7 @@ def test_disk_edit_does_not_replace_loaded_class_code(tmp_path, monkeypatch):
     ('semantic_facts', 'FACT_KINDS', 'tuple'),
     ('semantic_relations', '_GENERIC_WORDS', 'set'),
     ('semantic_jev', 'JEV_ALLOWED_ENDPOINTS', 'frozenset'),
-    ('semantic_extraction', '_SENTENCE_BREAK', 'regex'),
+    ('semantic_assembly', '_SENTENCE_BREAK', 'regex'),
     ('semantic_projection', '_CARE_EVENT_KEYWORDS', 'list'),
 ])
 def test_loaded_interpretation_collections_change_new_worker_identity(monkeypatch, module_name, constant, kind):

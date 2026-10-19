@@ -19,7 +19,7 @@ _MODULES = ('semantic_extraction', 'semantic_facts', 'semantic_audit',
             'semantic', 'semantic_transport', 'semantic_assessment', 'semantic_projection', 'semantic_policy',
             'semantic_acceptance', 'structured_view', 'clinical_display',
             'extract_schema', 'extract_validation', 'extract_quality',
-            'clinical_scope', 'clinical_values', 'patient_context', 'mcs_queries')
+            'clinical_scope', 'clinical_values', 'patient_context', 'mcs_queries', 'semantic_assembly')
 
 
 # Process-local probe/counter state is not an interpretation constant.

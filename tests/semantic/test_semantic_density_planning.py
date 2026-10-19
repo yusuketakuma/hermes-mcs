@@ -1,4 +1,5 @@
 """Source-only density plans retain atom ownership, scoped evidence and honest progress."""
+import semantic_assembly as assembly
 import semantic_policy
 import semantic_store
 import semantic_transport
@@ -29,7 +30,7 @@ def _core(prompt):
 def test_dense_229_character_case_is_planned_before_inference_with_all_obligations(monkeypatch):
     case = _case()
     body, expected = case["messages"][0]["body"], case["expect"]["facts"]
-    manifest = extraction.build_manifest(body, FP)
+    manifest = assembly.build_manifest(body, FP)
     pieces = [chunk["text"] for chunk in manifest["chunks"]]
     assert len(body) == 229 and len(pieces) > 1
     assert pieces == clinical_chunking.plan_chunks(body)
@@ -88,13 +89,13 @@ def test_prn_reference_filter_keeps_reports_mixed_negation_and_uncertain_conditi
 
 def test_heading_reference_preserves_scope_but_cannot_supply_evidence():
     body = "家族\n" + "・架空薬A1mgは使用せず中止予定。\n" * 6 + "本人\n・架空薬B2mgを朝に服用。"
-    manifest = extraction.build_manifest(body, FP, chunk_size=50)
-    specs = extraction._manifest_specs(manifest)
+    manifest = assembly.build_manifest(body, FP, chunk_size=50)
+    specs = assembly.manifest_specs(manifest)
     target = next(spec for spec in specs if spec["dependency_atom_ids"] and "家族" not in spec["text"])
     prompt = extraction._chunk_prompt(semantic_llm._FACT_V2_PROMPT, target, manifest, body, 50)
     assert "家族" in prompt.split("参考文脈", 1)[1]
     assert "家族" not in _core(prompt)
-    assert extraction._resolve_evidence("家族", target["text"], target["start"], body) is None
+    assert assembly.resolve_evidence("家族", target["text"], target["start"], body) is None
     assert "使用せず" in _core(prompt) and "中止予定" in _core(prompt)
     assert "patient_context" in semantic_llm._FACT_V2_PROMPT
     assert "任意欄のnull/空配列は省略" in semantic_llm._FACT_V2_PROMPT
@@ -103,15 +104,15 @@ def test_heading_reference_preserves_scope_but_cannot_supply_evidence():
 
 def test_same_line_fragments_keep_mothers_past_scope_and_stop_action_as_references():
     body = "母の過去の処方：" + "、".join(f"架空薬{chr(65 + i)}{10 + i}mg" for i in range(14)) + "を中止。"
-    manifest = extraction.build_manifest(body, FP, chunk_size=50)
+    manifest = assembly.build_manifest(body, FP, chunk_size=50)
     assert len(manifest["chunks"]) >= 3
-    specs = extraction._manifest_specs(manifest)
+    specs = assembly.manifest_specs(manifest)
     central = next(spec for spec in specs if "母" not in spec["text"] and "中止" not in spec["text"])
     prompt = extraction._chunk_prompt(semantic_llm._FACT_V2_PROMPT, central, manifest, body, 50)
     reference = prompt.split("参考文脈", 1)[1]
     assert "母の過去の処方" in reference and "を中止" in reference
-    assert extraction._resolve_evidence("母の過去の処方", central["text"], central["start"], body) is None
-    assert extraction._resolve_evidence("を中止", central["text"], central["start"], body) is None
+    assert assembly.resolve_evidence("母の過去の処方", central["text"], central["start"], body) is None
+    assert assembly.resolve_evidence("を中止", central["text"], central["start"], body) is None
     assert [spec["text"] for spec in specs] == clinical_chunking.plan_chunks(body, 50)
 
 

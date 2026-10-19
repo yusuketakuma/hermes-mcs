@@ -4,6 +4,7 @@ The manifest must cover every codepoint exactly once, keep stable source
 order, disambiguate duplicate quotes by owning chunk, preserve heading
 dependencies, and support durable prefix reuse after interruption.
 """
+import semantic_assembly as assembly
 import json
 
 import pytest
@@ -28,7 +29,7 @@ def test_atoms_cover_source_exactly_once_in_order():
     body = ("【バイタル】\n体温 38.2度\nSpO2 93%\n\n"
             "・アムロジピン5mg朝食後\n・メトホルミン中止\n\n"
             "膝の痛みが継続。湿布を希望。\n")
-    manifest = extraction.build_manifest(body, FP, chunk_size=60)
+    manifest = assembly.build_manifest(body, FP, chunk_size=60)
     atoms = manifest["atoms"]
     assert atoms
     cursor = 0
@@ -47,7 +48,7 @@ def test_leading_whitespace_is_owned_by_first_atom():
     # the whitespace range and crashed atom_coverage_incomplete.
     for body in ("\n先頭に空行", "\n\n連続する空行の後に本文",
                  " \n \n 空白混在", "\t\n　\nテキスト"):
-        manifest = extraction.build_manifest(body, FP, chunk_size=30)
+        manifest = assembly.build_manifest(body, FP, chunk_size=30)
         atoms = manifest["atoms"]
         assert atoms[0]["start"] == 0
         cursor = 0
@@ -59,7 +60,7 @@ def test_leading_whitespace_is_owned_by_first_atom():
 
 def test_core_chunks_own_each_atom_exactly_once():
     body = "行" * 20 + "\n" + ("・項目あ\n・項目い\n・項目う\n" * 30)
-    manifest = extraction.build_manifest(body, FP, chunk_size=50)
+    manifest = assembly.build_manifest(body, FP, chunk_size=50)
     owned = [aid for c in manifest["chunks"] for aid in c["core_atom_ids"]]
     assert sorted(owned) == sorted(a["atom_id"] for a in manifest["atoms"])
     assert len(owned) == len(set(owned))
@@ -78,7 +79,7 @@ def test_core_chunks_own_each_atom_exactly_once():
 
 def test_heading_dependency_and_context_atoms():
     body = "【処方】\n・アムロジピン開始\n【症状】\n・咳悪化\n"
-    manifest = extraction.build_manifest(body, FP, chunk_size=200)
+    manifest = assembly.build_manifest(body, FP, chunk_size=200)
     by_id = {a["atom_id"]: a for a in manifest["atoms"]}
     start_item = next(a for a in manifest["atoms"]
                       if "アムロジピン" in body[a["start"]:a["end"]])
@@ -86,7 +87,7 @@ def test_heading_dependency_and_context_atoms():
     assert start_item["dependency_atom_ids"] == [heading["atom_id"]]
     assert start_item["section_path"] == ["【処方】"]
     # Small chunk boundary exposes neighbour atoms as context only.
-    small = extraction.build_manifest(body, FP, chunk_size=24)
+    small = assembly.build_manifest(body, FP, chunk_size=24)
     for chunk in small["chunks"]:
         for ref in chunk["context_atom_ids"]:
             assert ref not in chunk["core_atom_ids"]
@@ -95,7 +96,7 @@ def test_heading_dependency_and_context_atoms():
 
 def test_oversized_atom_splits_safely():
     sentence = "これは文です。" * 200      # ~1400 codepoints, no newline
-    manifest = extraction.build_manifest(sentence, FP, chunk_size=100)
+    manifest = assembly.build_manifest(sentence, FP, chunk_size=100)
     atoms = manifest["atoms"]
     assert len(atoms) > 1
     assert all(a["end"] - a["start"] <= 100 for a in atoms)
@@ -106,15 +107,15 @@ def test_oversized_atom_splits_safely():
 
 def test_evidence_atom_resolves_inside_owning_chunk():
     body = "A" * 30 + "クオートX" + "B" * 30 + "\n" + "クオートX" + "C" * 30
-    manifest = extraction.build_manifest(body, FP, chunk_size=40)
+    manifest = assembly.build_manifest(body, FP, chunk_size=40)
     target = body.index("クオートX")
-    atom = extraction._evidence_atom(manifest, target, target + 5)
+    atom = assembly.evidence_atom(manifest, target, target + 5)
     assert atom is not None
     by_id = {a["atom_id"]: a for a in manifest["atoms"]}
     assert by_id[atom]["start"] <= target < by_id[atom]["end"]
     # A duplicate quote in a later chunk resolves to a different atom.
     dup = body.index("クオートX", target + 1)
-    assert extraction._evidence_atom(manifest, dup, dup + 5) != atom
+    assert assembly.evidence_atom(manifest, dup, dup + 5) != atom
 
 
 def _llm_echo(facts):
@@ -202,9 +203,9 @@ def test_durable_prefix_reuse_after_interruption(request):
 def test_malformed_chunker_or_unresolved_dependency_fails_closed():
     body = "本文です。"
     with pytest.raises(ValueError, match="chunk_size_invalid"):
-        extraction.build_manifest(body, FP, chunk_size=0)
+        assembly.build_manifest(body, FP, chunk_size=0)
     # A manifest with a gap must not validate as a facts doc.
-    manifest = extraction.build_manifest(body, FP, chunk_size=10)
+    manifest = assembly.build_manifest(body, FP, chunk_size=10)
     doc = {
         "version": sf.CONTRACT_VERSION,
         "source": {

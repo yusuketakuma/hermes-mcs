@@ -1,4 +1,5 @@
 """Semantic detail attributes remain quote-bound and subject-bound behind existing fences."""
+import semantic_assembly as assembly
 import copy
 import json
 
@@ -111,7 +112,7 @@ def test_duplicate_fact_contexts_union_grounded_attributes():
     left, right = copy.deepcopy(fact), copy.deepcopy(fact)
     left["patient_context"]["details"] = CONTEXT["details"][:1]
     right["patient_context"]["details"] = CONTEXT["details"][1:]
-    merged = extraction._merge_dupe_facts([left, right])
+    merged = assembly.merge_dupe_facts([left, right])
     assert len(merged) == 1 and merged[0]["patient_context"]["details"] == CONTEXT["details"]
 
 

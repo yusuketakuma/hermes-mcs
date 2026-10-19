@@ -1,4 +1,5 @@
 """Committed progress queues updates without sending or breaking source ownership."""
+import semantic_assembly as assembly
 import sqlite3
 from types import SimpleNamespace
 
@@ -57,11 +58,11 @@ def test_semantic_manifest_and_checkpoint_share_after_commit_refresh(tmp_path, m
             calls.append((pid, mid))
 
         monkeypatch.setattr(extraction_refresh, "refresh_extraction_cards", queued)
-        manifest = semantic_extraction.build_manifest("合成本文", "synthetic-source")
+        manifest = assembly.build_manifest("合成本文", "synthetic-source")
         semantic_extraction._persist_manifest(db, 1, 1, "synthetic-model", "synthetic-source", manifest, 4)
         semantic_extraction._persist_chunk(db, 1, 1, "synthetic-model", "synthetic-source",
                                           "a" * 64, "synthetic-revision",
-                                          semantic_extraction._manifest_specs(manifest)[0], [], 0, 1)
+                                          assembly.manifest_specs(manifest)[0], [], 0, 1)
         assert calls == [(1, 1), (1, 1)]
     finally:
         db.close()

@@ -1,4 +1,5 @@
 """Synthetic clinical meaning and source coverage agree across extraction engines."""
+import semantic_assembly as assembly
 import json
 from pathlib import Path
 
@@ -6,7 +7,6 @@ import pytest
 
 import clinical_chunking
 import extract_llm
-import semantic_extraction
 
 
 @pytest.mark.parametrize("case_id", ["dense-multi-drug-16plus", "family-medication-no-link",
@@ -20,7 +20,7 @@ def test_source_plan_and_fact_quotes_agree_across_engines(case_id):
         pieces = clinical_chunking.plan_chunks(body)
         legacy = [extract_llm._chunk_piece(body, 3000, index, {})
                   for index in range(len(pieces))]
-        manifest = semantic_extraction.build_manifest(body, "synthetic-source")
+        manifest = assembly.build_manifest(body, "synthetic-source")
         assert legacy == pieces == [chunk["text"] for chunk in manifest["chunks"]]
         assert "".join(pieces) == body
         for fact in case["expect"]["facts"]:

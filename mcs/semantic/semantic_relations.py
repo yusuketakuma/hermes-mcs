@@ -75,7 +75,7 @@ def relation_set_fingerprint(relations: list) -> str:
 
 
 def _norm(text) -> str:
-    return sf._normalize_name(text or "")
+    return sf.normalize_name(text or "")
 
 
 def _entity_tokens(statement: str) -> set:

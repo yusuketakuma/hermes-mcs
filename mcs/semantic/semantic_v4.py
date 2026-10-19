@@ -520,7 +520,7 @@ def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> int:
                 reason = "repaired"  # cannot be re-derived from cached chunks
             else:
                 old = json.dumps(validate_facts_doc(doc), sort_keys=True)
-                new, reason = rebuild_facts_v2_cached(member, ledger, fp, pid,
+                new, reason = rebuild_facts_v2_cached(member, ledger.db, fp, pid,
                                                       doc, meta)
                 if new is not None and old == json.dumps(
                         validate_facts_doc(new), sort_keys=True):

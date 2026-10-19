@@ -1,4 +1,5 @@
 """SQLite-valid unreadable JSON cannot block unrelated semantic work or replenish usage."""
+import semantic_assembly as assembly
 import json
 import time
 
@@ -71,9 +72,9 @@ def test_unreadable_chunk_is_ignored_and_manifest_can_be_rebuilt(ledger):
     specs = [{"index": 0, "hash": "h", "start": 0, "end": 1, "text": "x"}]
     assert extraction._cached_chunks(ledger.db, 1, 1, "fp", "hash", "r", specs, "x",
                                      generation="gen") == {}
-    manifest = extraction.build_manifest("x", "fp")
+    manifest = assembly.build_manifest("x", "fp")
     ledger.artifact_add(extraction.KIND_MANIFEST, raw, project_id=1, message_id=1,
-                        meta={"source_fingerprint": "fp", "version": extraction.MANIFEST_VERSION})
+                        meta={"source_fingerprint": "fp", "version": assembly.MANIFEST_VERSION})
     extraction._persist_manifest(ledger, 1, 1, "synthetic-model", "fp", manifest, 1)
     assert loads_dict(ledger.artifacts(extraction.KIND_MANIFEST)[-1]["content"])
 

@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+import semantic_assembly as assembly
 import semantic_extraction as se
 import semantic_loops
 import semantic_send_gate
@@ -70,7 +71,7 @@ def world(tmp_path, monkeypatch):
     patient.messages[0].replies = [_message(2, parent=1, body="メトホルミン500mgが出ています。")]
     db.save_patient(patient, notify={"source": "unread"}, semantic=True)
     with monkeypatch.context() as old_rule:
-        old_rule.setattr(se, "_hint_target", lambda candidates, hint:
+        old_rule.setattr(assembly, "_hint_target", lambda candidates, hint:
                          candidates[-1] if candidates else None)
         _drain(db)
     db.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.build') "

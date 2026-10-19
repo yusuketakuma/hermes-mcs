@@ -1,5 +1,6 @@
 """Prompt layouts keep their fixed head first so llama.cpp's per-slot
 prefix cache is reusable; cache_hit_ratio aggregates Σcache_n/(Σcache_n+Σprompt_n)."""
+import semantic_assembly as assembly
 import json
 import os
 import sys
@@ -93,8 +94,8 @@ def test_nightly_prompts_lead_with_the_fixed_instruction(monkeypatch):
 
 def test_semantic_chunk_prompt_leads_with_fixed_template():
     body = "家族\n" + "・架空薬A1mgは使用せず中止予定。\n" * 6 + "本人\n・架空薬B2mgを朝に服用。"
-    manifest = extraction.build_manifest(body, FP, chunk_size=50)
-    target = next(spec for spec in extraction._manifest_specs(manifest)
+    manifest = assembly.build_manifest(body, FP, chunk_size=50)
+    target = next(spec for spec in assembly.manifest_specs(manifest)
                   if spec["dependency_atom_ids"] and "家族" not in spec["text"])
     prompt = extraction._chunk_prompt(semantic_llm._FACT_V2_PROMPT, target, manifest, body, 50)
     assert prompt.startswith(semantic_llm._FACT_V2_PROMPT.split("<<<", 1)[0])

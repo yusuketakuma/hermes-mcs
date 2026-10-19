@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "保存済み抽出からの再構成と推論・保存の責務を整理",
+  "summary": "保存済みの原文根拠から結果を再構成するとき、通常抽出と共通の組み立て処理を使い、モデルやJevへの呼出し、DB書込みを行わない経路に整理しました。否定・本人以外・未完了の比較や必須項目を保留する条件は維持します。",
+  "upgrade": "設定変更は不要です。更新時は通常の手順で抽出workerを再起動してください。実体の判断コードを候補hashへ含めるため旧candidate承認と旧保留receiptは新契約には一致せず再判定します。同世代の抽出済み結果をコードhashだけで全件再抽出しません。",
+  "details": [
+    "semantic_assemblyがfact・原文証拠・必須項目・進捗・文書の組み立てを所有し、semantic_extractionが推論・checkpoint・再試行を所有します。",
+    "原文と世代の一致、欠けたcheckpointやpreflightを保留する条件、比較未完了時の公開拒否と保存済み結果の保護は変更していません。",
+    "原文のUTF-8 hashをsemantic_facts.text_sha256へ一元化し、複製と領域を跨ぐprivate参照を解消。定義moduleを候補・保留receiptの変更検知に含め、旧候補と保留判断の再評価境界を維持。",
+    "同一原文の組立結果と保留理由を合成入力で比較。関係照合が未完了ならキャッシュ再構築を拒否し、投稿分割ごとの状態コピーは該当分割だけに限定して全体状態の反復複製を避ける。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_assembly.py",
+    "mcs/semantic/semantic_extraction.py",
+    "mcs/semantic/semantic_v4.py"
+  ]
+}

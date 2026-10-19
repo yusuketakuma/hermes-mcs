@@ -21,6 +21,7 @@
 | `mcs/patients/` | `patient_context`の患者背景/薬局参照項目、状態参照・一患者一件の集約・コンテキスト作成 | 集約の読取はconnectionを借用し、artifact置換はwriterが所有。公開前に原文/世代/scanを再照合 |
 | `mcs/medications/` | 辞書照合・別名承認・薬剤履歴・登録情報との比較 | 公開master原本、私有辞書、患者の注記と人承認receiptを区別 |
 | `mcs/semantic/` | 計画/claim/QC/公開と保存、`semantic_transport`の推論状態 | `semantic`はCLI。処理側はCLI facadeへ戻らず担当moduleへ直接依存 |
+| `mcs/semantic/semantic_assembly.py` | fact・根拠・依頼属性・進捗の組立て | 入力のコピーと返値を所有し、DB・推論・時刻・保存状態を持たない。`semantic_extraction`がlive/cache/repairの実行と借用connectionの読取を所有 |
 | `mcs/notify/` | 対象選定、spec/part計画、描画、送信許可、journal照合、receipt | `notify_parts`がpart計画、`notify_scope`がscope読取、`notify_actions`が操作適用、`notify_action_tokens`がtoken、`notify_recovery`が人承認復旧を所有。機械の配送事実は`notify_transport`で同一transactionに確定 |
 | `mcs/views/` | snapshot読取・scope/projection・統計/詳細/CLI | `registered_data`は登録情報の読取、`clinical_display`は臨床値の表示。DBを再openしない |
 | `mcs/signals/` | 原文と抽出に基づく候補評価・根拠 | 候補artifact/通知状態の更新を持つ。表示や単なる未記録と臨床判断を混同しない |
@@ -39,6 +40,7 @@
 - ルールとLLMは共通の臨床scope/値を利用します。臨床scopeが抽出統括へ戻る循環は作りません。
 - LLM統括はschema/検証/品質を呼びます。純粋な検証moduleは`extract_llm`のglobals、endpoint、call notesを操作しません。
 - semanticの処理はtransport/store/QC/renderの正本を呼び、CLI moduleへの遅延importやmodule全体の引数注入を使いません。
+- semanticのlive/cache/repairは同じ純粋な組立てを利用します。cache再構築は呼出元のconnectionを借用し、擬似writerやLLMの代用品を作りません。chunk・preflight・関係判定が未完了なら再構築成功として返しません。
 - 通知のspec計画、同一TXのjournal記録、commit後のatomic publishの順序を保ちます。parts/scopeを分けてもtransactionの所有を分散しません。
 - 人承認の復旧は`notify_recovery`から`notify_transport`の借用transaction上の確定処理を使います。復旧receiptと状態を同時にcommitし、spec公開はその後に行います。読取側は`notify_scope`へ直接依存します。
 - 薬局の参照項目は`patient_context`、保存済み履歴のSQLは`mcs_queries`が正本です。抽出・semantic・表示から集約writerを経由せずに利用し、解釈に影響する両moduleをsource digestとcandidate定義の変更検知に含めます。
@@ -54,6 +56,7 @@
 | 定期ジョブ/設定検証 | `scheduled_jobs`, `mcs_config` | CLI互換、service生成、standalone catchup/停止、旧updaterのimport閉包 |
 | 抽出の検証/品質判断 | `extract_validation`, `extract_quality`, `clinical_scope` | evidence/context、否定/他者/時点、held_prior、candidate定義とsource digest |
 | 推論通信 | `local_llm`, `semantic_transport` | wire slot/turn/deadline、送信不明、carryと保存、回路状態 |
+| fact・根拠・依頼属性の組立て | `semantic_assembly`, `semantic_facts` | 同一入力の順序と根拠、原文revision、未完了の保持、source digestとcandidate定義 |
 | 患者の読取表示 | `read_model`, `registered_data`, `clinical_display` | 同一snapshot、患者scope、未取得/0件、limitと全体coverage |
 | 通知のpart/再開 | `notify_parts`, `notify_journal`, `notify_transport` | 同一TX、receipt/冪等性、送信結果不明、commit後publish |
 | 通知操作・人承認復旧 | `notify_actions`, `notify_action_tokens`, `notify_action_context`, `notify_recovery` | token/source/scopeの再照合、保存と公開の順序、worker証跡、結果不明の保持 |

@@ -95,7 +95,7 @@ def _fail(reason: str) -> None:
     raise ContractError(f"contract:{reason}")
 
 
-def _sha256(text: str) -> str:
+def text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
@@ -126,7 +126,7 @@ def _str_list(value, field: str) -> list:
     return [_id_value(item, field) for item in value]
 
 
-def _normalize_name(value: str) -> str:
+def normalize_name(value: str) -> str:
     return unicodedata.normalize("NFKC", str(value)).casefold().strip()
 
 
@@ -160,7 +160,7 @@ def evidence_id(message_id, revision, start: int, end: int,
         _fail("evidence_range_invalid")
     return "ev_" + payload_hash({
         "m": str(message_id), "r": str(revision),
-        "s": start, "e": end, "q": _sha256(str(quote)),
+        "s": start, "e": end, "q": text_sha256(str(quote)),
     })[:16]
 
 
@@ -212,11 +212,11 @@ def subject_identity(project_id, *, sender_id=None, role=None,
     if sender_id is not None:
         return f"sender:{_id_value(sender_id, 'sender_id')}"
     if role is not None and name is not None:
-        digest = _sha256(
-            f"{project_id}:{_normalize_name(role)}:{_normalize_name(name)}")
+        digest = text_sha256(
+            f"{project_id}:{normalize_name(role)}:{normalize_name(name)}")
         return f"person:{digest[:16]}"
     if role is not None:
-        return f"role:{_normalize_name(role)}"
+        return f"role:{normalize_name(role)}"
     return UNKNOWN
 
 

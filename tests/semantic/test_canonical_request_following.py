@@ -1,4 +1,5 @@
 """Real local request-following pipeline; all sources and databases are fictional."""
+import semantic_assembly as assembly
 import semantic_policy
 import semantic_store
 import copy
@@ -26,7 +27,7 @@ def runtime(tmp_path):
     db.save_messages([_message(1, body=TEXT)], project_id=1)
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
     member = bundle["members"][0]
-    manifest = extraction.build_manifest(TEXT, bundle["source_fingerprint"], 3000)
+    manifest = assembly.build_manifest(TEXT, bundle["source_fingerprint"], 3000)
     ev = {"evidence_id": facts.evidence_id(1, member["revision"], 0, len(TEXT), TEXT),
           "message_id": "1", "revision": member["revision"], "start": 0,
           "end": len(TEXT), "quote": TEXT, "atom_id": manifest["atoms"][0]["atom_id"]}
@@ -106,19 +107,19 @@ def test_ungrounded_or_malformed_detail_degrades_only_that_field(runtime, over):
 
 def test_real_normalizer_binds_fields_to_the_owning_fact_quote(runtime):
     _, _, member, manifest, _ = runtime
-    spec = extraction._manifest_specs(manifest)[0]
+    spec = assembly.manifest_specs(manifest)[0]
     owners = {atom: chunk["chunk_id"] for chunk in manifest["chunks"]
               for atom in chunk["core_atom_ids"]}
     item = {"kind": "request_pending", "statement": "架空資料Xを確認",
             "evidence_quote": TEXT, "polarity": "affirmed", "epistemic": "asserted",
             "workflow_status": "pending", **DETAILS}
-    normalized, dropped = extraction._normalise_facts_v2(
+    normalized, dropped, _, _, _ = assembly.normalise_facts_v2(
         [item], member, TEXT, spec=spec, manifest=manifest,
         atom_owner=owners, obligations={})
     assert dropped == 0
     assert {key: normalized[0][key] for key in DETAILS} == DETAILS
     item["evidence_quote"] = "架空資料X"
-    normalized, dropped = extraction._normalise_facts_v2(
+    normalized, dropped, _, _, _ = assembly.normalise_facts_v2(
         [item], member, TEXT, spec=spec, manifest=manifest,
         atom_owner=owners, obligations={})
     assert dropped == 0 and normalized[0]["validation_status"] == "verified"
@@ -131,25 +132,25 @@ def test_duplicate_chunk_metadata_is_retained_and_conflicts_stay_unknown(runtime
     old = facts.validate_facts_doc(doc)["facts"][0]
     new = facts.validate_facts_doc(_with_details(doc))["facts"][0]
     for ordered in ([old, new], [new, old]):
-        merged = extraction._merge_dupe_facts(copy.deepcopy(ordered))
+        merged = assembly.merge_dupe_facts(copy.deepcopy(ordered))
         assert len(merged) == 1 and merged[0]["fact_id"] == old["fact_id"]
         assert {key: merged[0][key] for key in DETAILS} == DETAILS
         assert merged[0]["workflow_status"] == "pending"
     conflicting = copy.deepcopy(new)
     conflicting["request_to"] = "架空担当A"  # also quoted, but attribution conflicts
     for ordered in ([new, conflicting], [conflicting, new]):
-        merged = extraction._merge_dupe_facts(copy.deepcopy(ordered))
+        merged = assembly.merge_dupe_facts(copy.deepcopy(ordered))
         assert merged[0]["request_to"] == "unknown"
         assert merged[0]["request_from"] == "架空担当A"
     # A collapsed conflict stays unknown whatever order a third duplicate takes.
     for ordered in ([new, conflicting, new], [conflicting, new, new],
                     [new, new, conflicting]):
-        merged = extraction._merge_dupe_facts(copy.deepcopy(ordered))
+        merged = assembly.merge_dupe_facts(copy.deepcopy(ordered))
         assert merged[0]["request_to"] == "unknown"
     blanked = copy.deepcopy(new)
     blanked["request_to"] = "unknown"  # chunk context lacked the recipient
     for ordered in ([new, blanked], [blanked, new]):
-        merged = extraction._merge_dupe_facts(copy.deepcopy(ordered))
+        merged = assembly.merge_dupe_facts(copy.deepcopy(ordered))
         assert {key: merged[0][key] for key in DETAILS} == DETAILS
 
 
