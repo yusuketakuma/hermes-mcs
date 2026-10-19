@@ -129,4 +129,3 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
     finally:
         with suppress(OSError):
             os.unlink(tmp)
-

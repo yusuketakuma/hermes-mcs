@@ -125,4 +125,3 @@ class ReplyBatch:
 
 def valid_id(v) -> bool:
     return type(v) is int and 0 < v < 2**63
-

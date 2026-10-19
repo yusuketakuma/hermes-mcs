@@ -197,5 +197,3 @@ def environment_error_identity(message: str):
             if match:
                 return original, match.groups()
     return message, ()
-
-

@@ -216,4 +216,3 @@ def normalize_threads(items, project_id: int, parent_id: int) -> list[Message]:
            for m in items):
         raise SchemaError(f"thread[{parent_id}]: invalid id")
     return [normalize_message(m, project_id, parent_id=parent_id) for m in items]
-

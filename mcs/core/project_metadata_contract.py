@@ -213,4 +213,3 @@ def clinical_definition_fingerprint(karte_id, items):
     return hashlib.sha256(json.dumps(["karte", karte_id, sorted(
         rows, key=lambda row: row["lab_test_item"]["id"])],
         sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
-

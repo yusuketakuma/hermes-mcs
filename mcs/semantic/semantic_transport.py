@@ -334,4 +334,3 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     if acceptance is not None:
         return _failed(acceptance)
     return response["text"]
-

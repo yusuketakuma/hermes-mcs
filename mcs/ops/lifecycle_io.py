@@ -115,5 +115,3 @@ def store_keychain(account: str, pw: str, *, service: str = KEYCHAIN_SERVICE) ->
         run_bounded(["security", "delete-generic-password", "-s",
               service, "-a", account])
     return False
-
-

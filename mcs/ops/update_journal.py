@@ -73,5 +73,3 @@ def save_state(path, state: dict) -> None:
                  lambda f: json.dump(state, f, ensure_ascii=False,
                                      sort_keys=True),
                  tmp_prefix=".update_state.")
-
-

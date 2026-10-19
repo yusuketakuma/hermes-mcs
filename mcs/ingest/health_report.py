@@ -646,5 +646,3 @@ def cached_coverage(version, now: float, source: str) -> dict | None:
                for k in ("current", "eligible", "poison_gated")):
         return None
     return cov
-
-

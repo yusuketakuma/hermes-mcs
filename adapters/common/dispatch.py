@@ -211,5 +211,3 @@ def make_handler(get_config):
             # command response or Hermes logs through an exception string.
             return deny("operation_failed")
     return handler
-
-

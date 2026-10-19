@@ -11,7 +11,7 @@ def item_scope(item, context, surface=None):
 
 
 def scoped_vitals(values, context):
-    
+
     body, name, default = context
     if body is None:
         return values

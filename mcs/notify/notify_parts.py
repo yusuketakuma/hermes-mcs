@@ -709,5 +709,3 @@ def update_state(db, delivery_id, now) -> str:
         "UPDATE notification_renders SET parts_state=?,updated_at=? "
         "WHERE delivery_id=?", (state, now, delivery_id))
     return state
-
-

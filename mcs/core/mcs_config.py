@@ -456,5 +456,3 @@ def transport_enabled(cfg, transport):
         cfg.get("runtime_mode") == "standalone" and any(
             isinstance(cfg.get(key), str) and cfg[key].startswith(transport + ":")
             for key in ("notify_target", "notify_system_target")))
-
-

@@ -100,5 +100,3 @@ def card_projects(db, render, card) -> list:
                 projects.update(
                     s["content"].get("project_id") for s in sigs.values())
     return sorted(p for p in projects if positive(p))
-
-

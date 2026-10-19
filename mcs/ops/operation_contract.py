@@ -265,5 +265,3 @@ def validate_ops(req: dict, common: set[str]) -> str | None:
     base = set(common)
     handler = _OPS_VALIDATORS.get(req.get("cmd"))
     return handler(req, base) if handler else "unknown_ops_cmd"
-
-

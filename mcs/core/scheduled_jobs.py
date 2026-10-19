@@ -81,4 +81,3 @@ def latest_calendar_slots(schedules, minute, catchup_window_min, localtime):
                 due[job] = stamp
                 del pending[job]
     return due
-
