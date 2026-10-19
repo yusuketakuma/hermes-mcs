@@ -8,7 +8,8 @@
 
 | 所有先 | 責務・主要入口 | 状態と副作用 |
 |---|---|---|
-| `mcs/core/` | `ledger`のschema・台帳writer、`mcs_contract`のMCS値/例外、`mcs_config`の設定検証、`scheduled_jobs`の定期ジョブ契約 | `Ledger`が接続とtransactionを所有。設定検証と値の正規化は実機へ接続しない |
+| `mcs/core/` | `ledger`の台帳writer、`ledger_schema`のschema/migration/構造検証、`mcs_contract`のMCS値/例外、`mcs_config`の設定検証、`scheduled_jobs`の定期ジョブ契約 | `Ledger`が接続とwriterのtransactionを所有。schema初期化は借用した接続上で行い、接続を開閉しない |
+| `mcs/core/mcs_queries.py` | 連携サマリー・artifact履歴・原文参照の共通読取 | 呼出元の同一connectionとtransactionを借用し、open/close/commitしない。表示用の架空Ledgerを作らない |
 | `mcs/core/snapshots.py` | snapshotのコピー・候補検証・atomic publish | 一時接続・一時ファイル・検証用子プロセスを生成し、成功/失敗時の終了と破棄を所有 |
 | `mcs/core/snapshot_access.py` | 借用snapshotの世代・時刻とtable存在確認 | 呼出元の同一connectionを借用し、open/close/commitしない |
 | `mcs/ingest/` | `mcs_adapter`の認証/通信/取得、`mcs_payload`の応答正規化、収集stageと再開 | HTTP/session/取得deadlineはadapter。取得状態とstageの実行順は`run_check` |
@@ -17,14 +18,14 @@
 | `mcs/extract/rules/` | 投稿のルール抽出と実行統括 | 純粋な投稿判定と、run lockを伴う保存入口を区別 |
 | `mcs/extract/clinical/` | `clinical_scope`の本人/家族/時点、`clinical_values`の値と原文根拠、分割・薬局の共通判断 | scopeのbounded cacheは同moduleが所有。rule統括へ呼び戻さない |
 | `mcs/extract/llm/` | `extract_schema`、`extract_validation`、`extract_quality`、`extract_llm`の推論/再抽出/保存統括 | schemaと検証は推論I/Oから分離。claim/carry/checkpointと保存は統括側 |
-| `mcs/patients/` | 患者背景・状態参照・一患者一件の集約・コンテキスト作成 | 読取とartifact置換を区別。公開前に原文/世代/scanを再照合 |
+| `mcs/patients/` | `patient_context`の患者背景/薬局参照項目、状態参照・一患者一件の集約・コンテキスト作成 | 集約の読取はconnectionを借用し、artifact置換はwriterが所有。公開前に原文/世代/scanを再照合 |
 | `mcs/medications/` | 辞書照合・別名承認・薬剤履歴・登録情報との比較 | 公開master原本、私有辞書、患者の注記と人承認receiptを区別 |
 | `mcs/semantic/` | 計画/claim/QC/公開と保存、`semantic_transport`の推論状態 | `semantic`はCLI。処理側はCLI facadeへ戻らず担当moduleへ直接依存 |
-| `mcs/notify/` | 対象選定、spec/part計画、描画、送信許可、journal照合、receipt | `notify_parts`がpart計画、`notify_scope`がscope読取、`notify_journal`が配送証拠読取 |
+| `mcs/notify/` | 対象選定、spec/part計画、描画、送信許可、journal照合、receipt | `notify_parts`がpart計画、`notify_scope`がscope読取、`notify_actions`が操作適用、`notify_action_tokens`がtoken、`notify_recovery`が人承認復旧を所有。機械の配送事実は`notify_transport`で同一transactionに確定 |
 | `mcs/views/` | snapshot読取・scope/projection・統計/詳細/CLI | `registered_data`は登録情報の読取、`clinical_display`は臨床値の表示。DBを再openしない |
 | `mcs/signals/` | 原文と抽出に基づく候補評価・根拠 | 候補artifact/通知状態の更新を持つ。表示や単なる未記録と臨床判断を混同しない |
 | `mcs/export/` | C1 schema・レコード選択・封筒・受信契約 | 純粋な変換、snapshot読取、専用保存先への受信を区別 |
-| `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`update_policy`は判断、`update_journal`は更新記録 |
+| `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`runtime_inspection`は読取観測、`update_policy`は判断、`update_journal`は更新記録。実機操作は各ライフサイクル入口が所有 |
 | `adapters/common/` | 接続先共通の認可・患者scope・command/preview/confirm・配送worker | workerがscope lock/claim/再試行、registryが永続slot記録、journalが配送事実を所有 |
 | `adapters/{slack,discord,lineworks}/` | 接続先固有のUI・SDK・送信/受信 | 承認と共通scope検証を通し、SDKの許可ファイルと遅延importを維持 |
 | `hermes_plugin/` | plugin登録・遅延bootstrap・host設定/identity変換・worker接続 | import時点ではadapterを読込まず、正しいcheckoutを解決して接続 |
@@ -38,6 +39,8 @@
 - LLM統括はschema/検証/品質を呼びます。純粋な検証moduleは`extract_llm`のglobals、endpoint、call notesを操作しません。
 - semanticの処理はtransport/store/QC/renderの正本を呼び、CLI moduleへの遅延importやmodule全体の引数注入を使いません。
 - 通知のspec計画、同一TXのjournal記録、commit後のatomic publishの順序を保ちます。parts/scopeを分けてもtransactionの所有を分散しません。
+- 人承認の復旧は`notify_recovery`から`notify_transport`の借用transaction上の確定処理を使います。復旧receiptと状態を同時にcommitし、spec公開はその後に行います。読取側は`notify_scope`へ直接依存します。
+- 薬局の参照項目は`patient_context`、保存済み履歴のSQLは`mcs_queries`が正本です。抽出・semantic・表示から集約writerを経由せずに利用し、解釈に影響する両moduleをsource digestとcandidate定義の変更検知に含めます。
 - 表示用のバイタルは`clinical_display`、登録情報のprojectionは`registered_data`が正本です。表示limitでcoverageや全体件数を変えません。
 
 ## 移植・拡張時の境界
@@ -52,6 +55,8 @@
 | 推論通信 | `local_llm`, `semantic_transport` | wire slot/turn/deadline、送信不明、carryと保存、回路状態 |
 | 患者の読取表示 | `read_model`, `registered_data`, `clinical_display` | 同一snapshot、患者scope、未取得/0件、limitと全体coverage |
 | 通知のpart/再開 | `notify_parts`, `notify_journal`, `notify_transport` | 同一TX、receipt/冪等性、送信結果不明、commit後publish |
+| 通知操作・人承認復旧 | `notify_actions`, `notify_action_tokens`, `notify_action_context`, `notify_recovery` | token/source/scopeの再照合、保存と公開の順序、worker証跡、結果不明の保持 |
+| schema・台帳構造 | `ledger_schema`, `ledger`, `mcs_queries` | 接続の所有、同一TX、旧updaterの数値literal読取、既存DBのmigration/backup/rollback |
 | 更新/復旧 | `mcs_update`, `update_policy`, `update_journal`, `mcs_recover` | 旧版が新treeを読むこと、journal/lock/rollback、独立復旧入口 |
 
 ## 残す互換契約
@@ -68,4 +73,4 @@
 
 責務移動でもsource digestとcandidate fingerprintは変わります。新しい定義moduleを変更検知から外さず、古い候補/保留receiptの再判定と原文根拠の保持を合成テストで確認します。これを抽出世代・モデル・臨床判断の変更とは扱いません。
 
-全体の本文調査、統合テスト、独立レビューが未完の段階では、この文書だけを受入証跡や本番適用の許可として使用しないでください。確定した過去の受入票、変更archive、公式master原本は現在の候補に合わせて書き換えません。
+全体の本文調査、統合テスト、独立レビューが未完の段階では、この文書だけを受入証跡や本番適用の許可として使用しないでください。確定した過去の受入票、変更archive、公式master原本は現在の候補に合わせて書き換えません。今回明示された端末固有値の除去は例外として一般化し、版・事故識別子・当時の判断と検証の意味を保持します。Git履歴や外部のRelease本文は変更していません。
