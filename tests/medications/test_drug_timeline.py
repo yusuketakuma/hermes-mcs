@@ -15,7 +15,7 @@ from test_drug_map import _seed
 def current(store, mid, meds):
     _seed(store, mid=mid)
     message = dict(store.db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
-    context = extract_llm._thread_context(store, message)
+    context = extract_llm._thread_context(store.db, message)
     meta = {"hash": message["content_hash"], "extract_version": extract_llm.EXTRACT_VERSION,
             "plan_version": extract_llm.PLAN_VERSION,
             "patient_context_version": extract_llm.PATIENT_CONTEXT_VERSION,

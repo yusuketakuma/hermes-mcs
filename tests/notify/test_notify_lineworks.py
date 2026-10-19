@@ -1,4 +1,5 @@
 """Synthetic LINE WORKS render, grant, receipt, action and restore isolation."""
+import notify_recovery
 import copy
 import hashlib
 import json
@@ -10,7 +11,6 @@ import pytest
 import mcs_requests
 import notify_cards as cards
 import notify_cmds as cmds
-import notify_transport as transport
 from adapters.common import envelopes, registry
 from adapters.common.spec import validate as validate_v1
 from notify_render import display_text, lineworks_card_split
@@ -169,7 +169,7 @@ def test_operator_resolve_delegates_exact_version_to_scope_validator(transport_n
            **{k: v for k, v in SCOPE.items() if k != "transport"},
            "evidence": {"method": "synthetic", "ref": "synthetic-receipt",
                         "worker_stopped": True, "proof": "api_rejected"}}
-    assert transport.validate_card_resolve(req) is None
+    assert notify_recovery.validate_card_resolve(req) is None
     assert mcs_requests.validate(req) is None
     assert mcs_requests.validate({**req, "human_confirmed": False}) == "human_confirmation_required"
     assert mcs_requests.validate({**req, "guild_id": "40029600"}) == "unknown_field"

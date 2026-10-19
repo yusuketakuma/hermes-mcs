@@ -19,7 +19,7 @@ def test_malformed_newest_lab_blocks_the_slot_without_crashing(tmp_path, bad):
         store.artifact_add("extract_llm", json.dumps({"labs": [lab]}), project_id=1, message_id=mid,
                            meta={"hash": _hash(store, mid)})
     try:
-        labs = rollup.build_rollup(store, 1).get("recent_labs")
+        labs = rollup.build_rollup(store.db, 1).get("recent_labs")
     finally:
         store.close()
     assert not labs   # the older 2.1 is not revived as the current value

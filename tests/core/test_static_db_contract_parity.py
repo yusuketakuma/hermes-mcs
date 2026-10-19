@@ -1,6 +1,8 @@
 """The recovery gate, the bounded backup inventory and the audit apply one
 static-DB schema contract. Synthetic temp databases only."""
 import sqlite3
+
+import ledger_schema
 from contextlib import closing
 
 import pytest
@@ -94,8 +96,8 @@ def test_current_schema_passes_every_consumer(tmp_path):
     assert ledger.valid_mcs_db(path)
     assert _backup_accepts(path)
     assert _audit_accepts_schema(path)
-    assert ledger.static_required_tables(ledger.SCHEMA_VERSION) <= {
-        *ledger.STATIC_SOURCE_COLUMNS, *ledger.STATIC_BASE_COLUMNS}
+    assert ledger_schema.static_required_tables(ledger.SCHEMA_VERSION) <= {
+        *ledger_schema.STATIC_SOURCE_COLUMNS, *ledger_schema.STATIC_BASE_COLUMNS}
 
 
 @pytest.mark.parametrize("ddl, fenced", [

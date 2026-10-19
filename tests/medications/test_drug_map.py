@@ -482,20 +482,20 @@ def test_rule_only_source_is_annotated_as_unverified_rollup(store, tmp_path):
     _seed(store, kind="extract_v1")
     drug_map.derive(store, _dictionary(tmp_path))
     assert drug_map.current_refs(store.db, 1)[0]["source_kind"] == "extract_v1"
-    assert rollup.build_rollup(store, 1)["unverified_medications"][0]["ref"]["status"] == "resolved"
+    assert rollup.build_rollup(store.db, 1)["unverified_medications"][0]["ref"]["status"] == "resolved"
 
 
 def test_aliases_stay_separate_and_stop_never_suppresses_sibling(store, tmp_path):
     _seed(store, names=("キラナ", "別キラナ"))
     dictionary = _dictionary(tmp_path)
     drug_map.derive(store, dictionary)
-    rows = rollup.build_rollup(store, 1)["medications"]
+    rows = rollup.build_rollup(store.db, 1)["medications"]
     assert [row["name"] for row in rows] == ["別キラナ", "キラナ"]
     assert all(row["ref"]["cands"][0]["code"] == "fiction-i1" for row in rows)
     _seed(store, mid=2, names=("キラナ",), action="stop",
           posted="2026-09-20T00:00:00+09:00")
     drug_map.derive(store, dictionary)
-    assert [row["name"] for row in rollup.build_rollup(store, 1)["medications"]] == ["別キラナ"]
+    assert [row["name"] for row in rollup.build_rollup(store.db, 1)["medications"]] == ["別キラナ"]
 
 
 def test_deadline_commits_prefix_and_resumes_without_sleep(store, tmp_path, monkeypatch):

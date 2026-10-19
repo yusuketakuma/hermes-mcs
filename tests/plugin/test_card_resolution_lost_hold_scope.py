@@ -2,6 +2,7 @@
 only for the projects the stored hold proves — its card (signal/digest
 cards through their coverage) and its held events' outbox rows — never
 for an empty or request-supplied project set. Synthetic ledger only."""
+import notify_recovery
 from adapters.common import human_commands
 import json
 from types import SimpleNamespace
@@ -96,7 +97,6 @@ def test_held_events_must_be_positive_ids_for_authorization(world, events):
 @pytest.mark.parametrize("events", BAD_EVENTS)
 def test_a_corrupt_hold_is_rejected_before_any_write(world, events):
     import uuid
-    import notify_transport
     render, aid = _lost_render_hold(world)
     other = _event(world, 2)
     with world.led.db:
@@ -106,7 +106,7 @@ def test_a_corrupt_hold_is_rejected_before_any_write(world, events):
     before = world.led.db.execute("SELECT event_id,state,next_try FROM notify_outbox "
                                   "ORDER BY event_id").fetchall()
     card = dict(world.card(render["card_id"]))
-    out = notify_transport.apply_card_resolve(world.led, {
+    out = notify_recovery.apply_card_resolve(world.led, {
         "version": 1, "cmd": "ops.card_resolve", "command_id": str(uuid.uuid4()),
         "actor": "op-user", "human_confirmed": True, "reason": "合成の配送結果確認",
         "delivery_id": render["delivery_id"], "attempt_id": aid, "result": "mark_not_sent",

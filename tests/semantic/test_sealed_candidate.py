@@ -407,3 +407,64 @@ def test_runtime_counters_do_not_change_candidate_sources(monkeypatch):
     monkeypatch.setattr(semantic_transport, '_FMT_TS', 1234.5)
     monkeypatch.setattr(semantic_transport, '_LLM_FAILURE', 'synthetic-failure')
     assert candidate._sources() == original
+
+
+@pytest.mark.parametrize("surface", ["function", "class_method"])
+def test_loaded_code_identity_ignores_sharing_and_interning_but_binds_nested_code(monkeypatch, surface):
+    import sys
+    import types
+    module = types.ModuleType("synthetic_code_sharing_contract")
+    exec('''def transform(values):
+    def inner(): return "synthetic function text !"
+    return inner, values[:3], values in {"synthetic alpha !", "synthetic beta !"}
+class Surface:
+    @classmethod
+    def transform(cls, values):
+        def inner(): return "synthetic method text ?"
+        return inner, values[:3], values in {"synthetic gamma ?", "synthetic delta ?"}
+''', module.__dict__)
+    function = module.transform if surface == "function" else module.Surface.transform.__func__
+    # Exercise slice constants even on interpreters predating literal-slice constant folding.
+    function.__code__ = function.__code__.replace(co_consts=function.__code__.co_consts + (
+        slice(None, 3, None), frozenset({"synthetic retained text !", "synthetic retained text ?"})))
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(candidate, "_MODULES", (module.__name__,))
+    before = candidate._sources()
+    original = function.__code__
+    shared = []
+
+    def retain(value):
+        shared.append(value)
+        if isinstance(value, str):
+            shared.append(sys.intern(value))
+        elif isinstance(value, types.CodeType):
+            retain(value.co_consts)
+        elif isinstance(value, (tuple, frozenset)):
+            for item in value:
+                retain(item)
+        elif isinstance(value, slice):
+            for item in (value.start, value.stop, value.step):
+                retain(item)
+    retain(original)
+    assert shared and function.__code__ is original
+    assert candidate._sources() == before
+    # An actual nested definition change must still invalidate the same outer definition.
+    nested = next(value for value in original.co_consts if isinstance(value, types.CodeType))
+    changed = nested.replace(co_consts=nested.co_consts + ("synthetic definition changed",))
+    function.__code__ = original.replace(co_consts=tuple(
+        changed if value is nested else value for value in original.co_consts))
+    assert candidate._sources() != before
+
+
+def test_loaded_code_identity_distinguishes_slice_from_similarly_named_tuple(monkeypatch):
+    import sys
+    import types
+    module = types.ModuleType("synthetic_code_constant_types")
+    exec("def transform(value): return value", module.__dict__)
+    original = module.transform.__code__
+    module.transform.__code__ = original.replace(co_consts=original.co_consts + (slice(None, 3, None),))
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(candidate, "_MODULES", (module.__name__,))
+    before = candidate._sources()
+    module.transform.__code__ = original.replace(co_consts=original.co_consts + (("slice", None, 3, None),))
+    assert candidate._sources() != before

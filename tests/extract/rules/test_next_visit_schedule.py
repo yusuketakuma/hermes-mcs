@@ -122,7 +122,7 @@ def test_rule_version_refresh_updates_old_schedule_artifact_and_current_consumer
                            meta={"hash": _hash(store), "rule_version": extract.RULE_VERSION - 1})
         assert extract.run_pending(store) == {"done": 1, "pids": [1]}
         assert extract.run_pending(store) == {"done": 0, "pids": []}
-        assert rollup.build_rollup(store, 1)["next_planned"] == "2032-06-07"
+        assert rollup.build_rollup(store.db, 1)["next_planned"] == "2032-06-07"
         assert "次回予定: 2032-06-07" in structured_view.structured_lines(store.db, 1)
         row = store.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
         assert extract_llm._rule_hints(row)["next_planned"] == "2032-06-07"

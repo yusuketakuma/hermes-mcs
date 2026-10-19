@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "薬局状態の原文参照と候補失効の確認対象を統一",
+  "summary": "薬局状態の原文参照を患者情報の共通処理へ集約し、その判断コードや属性一覧が変わったときに旧候補承認を引き継がないようにしました。本人・家族、過去・予定・否定の原文と保存済み結果の保護条件は維持します。",
+  "upgrade": "設定変更は不要です。更新時は通常の手順で抽出workerを再起動してください。旧candidate承認・旧保留receiptは新しい契約には一致せず再判定します。同世代の抽出済み結果をコードhashだけで全件再抽出しません。",
+  "details": ["薬局状態の属性・原文参照・hash形式の検証をpatient_contextが所有し、集計処理への逆依存を除去しました。", "patient_contextは既存の読み込み済みsource digestに加え、candidateの実体定義moduleと定数の検査対象にも含めました。抽出世代・prompt・QC・公開条件・JST03:30切替は変更していません。"],
+  "refs": ["mcs/patients/patient_context.py", "mcs/patients/patient_state_context.py", "mcs/semantic/semantic_candidate.py"]
+}

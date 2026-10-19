@@ -537,7 +537,7 @@ class View:
             (mid,)).fetchone()
         keys = [mid] + ([row["parent_id"]] if row and row["parent_id"]
                         else [])
-        bundle = semantic_store.thread_bundle(self, pid, row["parent_id"] or mid)
+        bundle = semantic_store.thread_bundle(self.db, pid, row["parent_id"] or mid)
         fingerprint = bundle["source_fingerprint"] if bundle else None
         policy = self._current_policy()
         out = {}
@@ -981,7 +981,7 @@ def main(argv=None):
             if (not requests.valid_uuid(args["delivery_id"])
                     or not requests._text(args["part_id"], 64)):
                 raise ValueError("bad_part_identity")
-            from notify_transport import card_part_resolve_plan
+            from notify_recovery import card_part_resolve_plan
             result = card_part_resolve_plan(view.db, args["delivery_id"], args["part_id"])
         elif action in ("create", "update") or args["kind"] == "control":
             req = requests.parse_command(sys.stdin.buffer.read(requests.MAX_COMMAND_BYTES + 1))

@@ -15,7 +15,7 @@ import pytest
 
 import mcs_repair as repair
 from extract import RULE_VERSION
-from mcs_requests import SCHEMA
+from ledger_schema import REQUEST_SCHEMA as SCHEMA
 from rollup import PERIOD_CHECK_VERSION
 from test_ledger_audit import _database
 import drug_map

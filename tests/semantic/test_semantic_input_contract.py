@@ -12,7 +12,7 @@ from semantic_testkit import _FakeJev, _llm, _seeded
 def test_fingerprint_changes_with_every_interpretation_input(tmp_path):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         members = bundle["members"]
         baseline = semantic_store.bundle_fingerprint(members)
         for field, value in (
@@ -28,11 +28,11 @@ def test_fingerprint_changes_with_every_interpretation_input(tmp_path):
         assert semantic_store.bundle_fingerprint(list(reversed(members))) == baseline
         for column, value in (("sender_name", "別名"), ("sender_id", 42),
                               ("organization", "別組織")):
-            before = semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"]
+            before = semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"]
             with db.db:
                 db.db.execute(f"UPDATE messages SET {column}=? WHERE message_id=1", (value,))
-            assert semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"] != before
-        state = semantic_store.jev_state(semantic_store.thread_bundle(db, 1, 1), 1)
+            assert semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"] != before
+        state = semantic_store.jev_state(semantic_store.thread_bundle(db.db, 1, 1), 1)
         assert "source_metadata" not in state["target"]
     finally:
         db.close()
@@ -43,7 +43,7 @@ def test_missing_reply_cannot_receive_complete_audit(tmp_path):
     try:
         with db.db:
             db.db.execute("UPDATE messages SET reply_count=2 WHERE message_id=1")
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         assert bundle["content_quality"] == "partial"
         facts, complete, _ = semantic_extraction.extract_facts(_llm, bundle["members"][0])
         assert complete
@@ -58,7 +58,7 @@ def test_missing_reply_cannot_receive_complete_audit(tmp_path):
 def test_low_confidence_support_is_not_a_pass(tmp_path):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         facts, _, _ = semantic_extraction.extract_facts(_llm, bundle["members"][0])
         summary = semantic_llm.summarize(_llm, bundle, 1, facts, {})
         summary["_facts"] = facts
@@ -81,7 +81,7 @@ def test_low_confidence_support_is_not_a_pass(tmp_path):
 def test_evidence_span_cannot_extend_past_original(tmp_path):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         member = bundle["members"][0]
         facts, _, _ = semantic_extraction.extract_facts(_llm, member)
         evidence = facts[0]["_evidence"]

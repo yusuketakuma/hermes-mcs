@@ -12,7 +12,7 @@ import pytest
 from ledger import LedgerReader, SCHEMA_VERSION
 from ledger_audit import audit_db
 import ledger_audit
-from notify_cards import SCHEMA as NOTIFY_SCHEMA
+from ledger_schema import NOTIFICATION_SCHEMA as NOTIFY_SCHEMA
 
 
 def _database(tmp_path):

@@ -13,7 +13,7 @@ def test_relation_rechecks_edited_trigger_and_excludes_other_thread(tmp_path):
     db = _seeded(tmp_path)
     try:
         cfg, _ = semantic_policy.semantic_config(_cfg())
-        bundle = semantic_store.thread_bundle(db, 1, 1, [2])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [2])
         facts = {1: _pending_fact(bundle["members"][0])}
         fake = _FakeJev(choice_map={"relation": "completion_report"})
         semantic_loops.update_loops(db, 1, bundle, facts, fake, cfg,
@@ -29,7 +29,7 @@ def test_relation_rechecks_edited_trigger_and_excludes_other_thread(tmp_path):
                                    time.monotonic() + 30)
         assert fake.requests_made == 1  # same generation is idempotent
         db.save_messages([_message(2, parent=1, body="まだ実施していません。")])
-        edited = semantic_store.thread_bundle(db, 1, 1, [2])
+        edited = semantic_store.thread_bundle(db.db, 1, 1, [2])
         semantic_loops.update_loops(db, 1, edited, {}, fake, cfg,
                                    time.monotonic() + 30)
         assert fake.requests_made == 2
@@ -38,7 +38,7 @@ def test_relation_rechecks_edited_trigger_and_excludes_other_thread(tmp_path):
         assert len({json.loads(e["content"])["trigger_revision"] for e in events}) == 2
         assert next(e for e in events if e["artifact_id"] == original["artifact_id"]) == original
         db.save_messages([_message(3, body="別の依頼が完了しました。")])
-        other = semantic_store.thread_bundle(db, 1, 3, [3])
+        other = semantic_store.thread_bundle(db.db, 1, 3, [3])
         semantic_loops.update_loops(db, 1, other, {}, fake, cfg,
                                    time.monotonic() + 30)
         assert fake.requests_made == 2
@@ -46,7 +46,7 @@ def test_relation_rechecks_edited_trigger_and_excludes_other_thread(tmp_path):
         with db.db:
             db.db.execute("UPDATE messages SET posted_at=? WHERE message_id=2",
                           ("2026-09-18T00:00:00+09:00",))
-        older = semantic_store.thread_bundle(db, 1, 1, [2])
+        older = semantic_store.thread_bundle(db.db, 1, 1, [2])
         semantic_loops.update_loops(db, 1, older, {}, fake, cfg,
                                    time.monotonic() + 30)
         event = json.loads(db.artifacts("loop_event", project_id=1)[-1]["content"])
@@ -59,13 +59,13 @@ def test_candidate_revision_changes_without_reusing_old_confirmation(tmp_path):
     db = _seeded(tmp_path)
     try:
         cfg, _ = semantic_policy.semantic_config(_cfg())
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         facts = _pending_fact(bundle["members"][0])
         semantic_loops.update_loops(db, 1, bundle, {1: facts}, None, cfg,
                                    time.monotonic() + 30)
         db.save_messages([_message(1, body=semantic_store.jev_state(bundle, 1)["target"]["text"]
                                   + "ただし次回訪問まで保留してください。")])
-        changed = semantic_store.thread_bundle(db, 1, 1, [1])
+        changed = semantic_store.thread_bundle(db.db, 1, 1, [1])
         new_facts = _pending_fact(changed["members"][0])
         semantic_loops.update_loops(db, 1, changed, {1: new_facts}, None, cfg,
                                    time.monotonic() + 30)

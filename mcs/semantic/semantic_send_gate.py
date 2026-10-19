@@ -182,7 +182,7 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
                 or not isinstance(progress, dict)
                 or bool(progress.get("sent"))):
             _stale("base_delivered", in_progress)
-        bundle = semantic_store.thread_bundle(ledger, project_id, root)
+        bundle = semantic_store.thread_bundle(ledger.db, project_id, root)
         if bundle is None or bundle["source_fingerprint"] != fp:
             _stale("stale_generation", in_progress)
         member_ids = {m["message_id"] for m in bundle["members"]}
@@ -195,7 +195,7 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
                 or not isinstance(target_revision, str) or not target_revision
                 or target not in source_ids):
             raise ValueError("payload_invalid")
-        bundle = semantic_store.thread_bundle(ledger, project_id, root)
+        bundle = semantic_store.thread_bundle(ledger.db, project_id, root)
         if bundle is None or bundle["source_fingerprint"] != fp:
             _stale("stale_generation", in_progress)
         member = next((m for m in bundle["members"]
@@ -232,7 +232,7 @@ def semantic_render_state(ledger, ev, cfg: dict) -> tuple:
         cur = _summary_current(
             ledger, project_id, mid,
             lambda r=root, m=mid: semantic_store.thread_bundle(
-                ledger, project_id, r, [m]),
+                ledger.db, project_id, r, [m]),
             semantic_policy.policy_fingerprint(scfg))
         if cur is None:
             continue
@@ -353,7 +353,7 @@ def semantic_summary_block(ledger, r, cfg: dict) -> str:
         # generation, not only the target's body revision (INV-15).
         cur = _summary_current(
             ledger, r["project_id"], r["message_id"],
-            lambda: semantic_store.thread_bundle(ledger, r["project_id"], root,
+            lambda: semantic_store.thread_bundle(ledger.db, r["project_id"], root,
                                        [r["message_id"]]),
             semantic_policy.policy_fingerprint(scfg))
         if cur is None:

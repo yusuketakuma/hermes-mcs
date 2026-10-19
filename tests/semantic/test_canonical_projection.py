@@ -443,7 +443,7 @@ def test_projection_expiry_releases_legacy_and_invalidates_rollup(tmp_path, monk
     try:
         scfg, _ = semantic_policy.semantic_config(_cfg(
             "shadow", fact_source="canonical", fact_source_gate="synthetic"))
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         source_hash = db.db.execute(
             "SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
         db.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
@@ -522,7 +522,7 @@ def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
         assert current(current_projection_id()) is None
         assert current(current_projection_id(require_version=False)) == old_proj
         scfg = semantic_config(_canonical_cfg())[0]
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         member = next(m for m in bundle["members"] if m["message_id"] == 1)
         fp, policy = bundle["source_fingerprint"], policy_fingerprint(scfg)
 
@@ -844,7 +844,7 @@ def test_invalidation_reads_model_config_once_per_active_scan(
         db.db.commit()
         for mid in (1, 2):
             bundle = semantic_store.thread_bundle(
-                db, 1, mid, local_model="synthetic-model")
+                db.db, 1, mid, local_model="synthetic-model")
             source_hash = db.db.execute(
                 "SELECT content_hash FROM messages WHERE message_id=?",
                 (mid,)).fetchone()[0]

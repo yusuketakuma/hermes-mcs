@@ -48,7 +48,7 @@ def test_unreadable_current_artifact_is_unavailable(ledger, column):
     ledger.db.execute(f"UPDATE artifacts SET {column}=? WHERE artifact_id=?",
                       (poison_json(ledger), artifact_id))
     ledger.db.commit()
-    assert store._current(ledger, "synthetic_kind", 1, "fp") is None
+    assert store._current(ledger.db, "synthetic_kind", 1, "fp") is None
 
 
 def test_unreadable_usage_fails_closed(ledger):
@@ -69,7 +69,7 @@ def test_unreadable_chunk_is_ignored_and_manifest_can_be_rebuilt(ledger):
                               "revision": "r", "chunks_total": 1, "chunk_hash": "h",
                               "start_codepoint": 0, "end_codepoint": 1})
     specs = [{"index": 0, "hash": "h", "start": 0, "end": 1, "text": "x"}]
-    assert extraction._cached_chunks(ledger, 1, 1, "fp", "hash", "r", specs, "x",
+    assert extraction._cached_chunks(ledger.db, 1, 1, "fp", "hash", "r", specs, "x",
                                      generation="gen") == {}
     manifest = extraction.build_manifest("x", "fp")
     ledger.artifact_add(extraction.KIND_MANIFEST, raw, project_id=1, message_id=1,

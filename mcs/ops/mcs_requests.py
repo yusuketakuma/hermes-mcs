@@ -16,26 +16,6 @@ from safe_io import fsync_dir, read_regular_nofollow
 
 MAX_COMMAND_BYTES = 16384
 STATUSES = ("open", "in_progress", "done", "cancelled")
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS requests(
-  request_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id INTEGER NOT NULL, source_message_id INTEGER NOT NULL,
-  source_hash TEXT NOT NULL, title TEXT NOT NULL,
-  assignee TEXT, due_date TEXT,
-  status TEXT NOT NULL CHECK(status IN ('open','in_progress','done','cancelled')),
-  revision INTEGER NOT NULL CHECK(revision > 0),
-  created_at REAL NOT NULL, updated_at REAL NOT NULL);
-CREATE INDEX IF NOT EXISTS idx_requests_project ON requests(project_id,request_id);
-CREATE TABLE IF NOT EXISTS command_receipts(
-  command_id TEXT PRIMARY KEY NOT NULL, payload_hash TEXT NOT NULL,
-  project_id INTEGER, request_id INTEGER,
-  outcome TEXT NOT NULL CHECK(outcome IN ('applied','rejected')),
-  receipt_json TEXT NOT NULL, processed_at REAL NOT NULL);
-CREATE INDEX IF NOT EXISTS idx_receipts_request ON command_receipts(request_id);
-CREATE TABLE IF NOT EXISTS snapshot_meta(
-  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-  generation_id TEXT NOT NULL, generated_at REAL NOT NULL);
-"""
 
 
 def parse_command(raw):
@@ -133,14 +113,14 @@ def validate(req):
     if not isinstance(req, dict):
         return "bad_command"
     if req.get("cmd") == "ops.card_part_resolve":
-        from notify_transport import validate_card_part_resolve
+        from notify_recovery import validate_card_part_resolve
         return validate_card_part_resolve(req)
     if req.get("cmd") == "ops.card_resolve":
         # Scope is derived from the stored render/coverage, not the
         # envelope — the positive project_id rule does not apply and a
         # supplied one is rejected as an unknown field by the dedicated
         # validator.
-        from notify_transport import validate_card_resolve
+        from notify_recovery import validate_card_resolve
         return validate_card_resolve(req)
     common = {"version", "cmd", "command_id", "actor", "human_confirmed", "project_id"}
     if type(req.get("version")) is not int or req["version"] != 1:

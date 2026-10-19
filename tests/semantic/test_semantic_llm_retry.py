@@ -577,7 +577,7 @@ def test_summarize_maps_llm_rejection_to_input_oversize(tmp_path):
     import semantic_runtime as runtime
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         calls = []
 
         def rejected(_prompt):
@@ -722,7 +722,7 @@ def test_constrained_long_rejection_is_a_retryable_summary_failure(monkeypatch, 
     monkeypatch.setattr(local_llm, "chat", chat)
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         summary, reason = semantic_llm.summarize(
             lambda prompt: semantic_transport.llm_chat(prompt, timeout=670),
             bundle, 1, [], {}, return_reason=True)
@@ -883,7 +883,7 @@ def test_format_rejection_cannot_retry_after_budget_expires(monkeypatch, status,
 def test_summarize_rejects_malformed_limitations(tmp_path, limitations):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         response = json.dumps({"claims": [], "limitations": limitations})
         assert semantic_llm.summarize(lambda _prompt: response, bundle, 1, [], {},
                                   return_reason=True) == (None, "model")
@@ -895,7 +895,7 @@ def test_summarize_rejects_malformed_limitations(tmp_path, limitations):
 def test_summarize_preserves_a_single_limitation_string_and_claims(tmp_path, limitation):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         claim = {"section": "other", "text": "完全合成の確認事項",
                  "claim_kind": "limitation", "fact_refs": [],
                  "status": "not_stated", "polarity": "uncertain"}
@@ -915,7 +915,7 @@ def test_summarize_preserves_a_single_limitation_string_and_claims(tmp_path, lim
 def test_summarize_rejects_malformed_claims_without_silent_drop(tmp_path, claim):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         response = json.dumps({"claims": [claim], "limitations": []})
         assert semantic_llm.summarize(lambda _prompt: response, bundle, 1, [], {},
                                   return_reason=True) == (None, "model")

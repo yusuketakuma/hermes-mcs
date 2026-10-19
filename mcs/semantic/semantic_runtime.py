@@ -46,10 +46,10 @@ class RuntimeBudget(RuntimeGuardError):
 
 class RuntimeBudgetShort(RuntimeBudget):
     """Earlier model calls in this pass completed, but too little budget
-    is left to START the next one (2026-09-30: a v2 fact document is one
-    ~300 s generation, and a pass needs several). The work already
-    persisted stands; the job is deferred, not charged an attempt — an
-    executed call that overran its deadline still raises RuntimeBudget."""
+    is left to START the next one. A pass may need several generations.
+    The work already persisted stands; the job is deferred, not charged
+    an attempt — an executed call that overran its deadline still raises
+    RuntimeBudget."""
 
 
 class LLMNotSent(RuntimeGuardError):
@@ -426,10 +426,9 @@ def llm_call(fn, prompt: str, deadline: float,
             else fn(prompt))
 
 
-# Budget a follow-up local-model call must see before it is dispatched
-# — one long canonical generation measured 322 s (2026-09-27); a call
-# started with less would overrun the pass and burn a retry attempt on
-# work that was progressing.
+# Budget a follow-up local-model call must see before it is dispatched.
+# Starting with too little remaining time can overrun the pass and burn
+# a retry attempt on work that was progressing.
 LLM_CALL_RESERVE_S = 300.0
 
 

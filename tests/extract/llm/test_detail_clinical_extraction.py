@@ -56,7 +56,7 @@ def test_unrecoverable_length_stops_shrink_input_and_keep_retry_cap(db, monkeypa
     assert extract_llm.run_pending(db, limit=1, budget_s=200)["selected"] == 0
     assert seen[0] == body and len(set(seen)) > 1
     row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
-    splits, saved = extract_llm._saved_chunk_state(db, row)
+    splits, saved = extract_llm._saved_chunk_state(db.db, row)
     assert 1 in splits.values() and saved == {}
 
 
@@ -217,8 +217,8 @@ def test_adaptive_layout_and_complete_chunks_survive_later_interruption(db, monk
     with pytest.raises(RuntimeError, match="synthetic interrupted"):
         extract_llm.run_pending(db, limit=1, budget_s=200)
     row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
-    size = extract_llm._saved_chunk_size(db, row)
-    splits, saved = extract_llm._saved_chunk_state(db, row, chunk_size=size)
+    size = extract_llm._saved_chunk_size(db.db, row)
+    splits, saved = extract_llm._saved_chunk_state(db.db, row, chunk_size=size)
     assert size == extract_llm._CHUNK_SIZE and splits and saved
     assert not db.artifacts("extract_llm")
     assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0] == 0
@@ -326,7 +326,7 @@ def test_adaptive_layout_cannot_cross_generation_context_or_shape(db, bad):
     meta = {"hash": row["content_hash"], "ver": extract_llm.EXTRACT_VERSION, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": -1, "chunk_size": 10, **bad}
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
-    assert extract_llm._saved_chunk_size(db, row) == extract_llm._CHUNK_SIZE
+    assert extract_llm._saved_chunk_size(db.db, row) == extract_llm._CHUNK_SIZE
 
 
 @pytest.mark.parametrize("cached_empty", [False, True])
@@ -339,7 +339,7 @@ def test_late_nested_split_does_not_repeat_completed_original_chunk(db, monkeypa
     if cached_empty:
         row = _framed_source(db, row)
         extract_llm._persist_chunks(db, row, {0: {}})
-        assert extract_llm._saved_chunk_state(db, row)[1][0] == {}
+        assert extract_llm._saved_chunk_state(db.db, row)[1][0] == {}
     seen = []
     target = roots[1]
     def reply(piece):
@@ -453,7 +453,7 @@ def test_newest_broken_leaf_suppresses_older_completion(db):
     extract_llm._persist_chunks(db, row, {0: {}})
     old = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
     db.artifact_add("extract_llm_chunk", '{broken', project_id=1, message_id=1, meta=json.loads(old))
-    assert extract_llm._saved_chunk_state(db, row)[1] == {}
+    assert extract_llm._saved_chunk_state(db.db, row)[1] == {}
 
 
 @pytest.mark.parametrize("fault", [{"split_size": True}, {"split_size": 0}, {"split_size": 99999},
@@ -470,7 +470,7 @@ def test_adversarial_local_split_records_cannot_authorize_cached_children(db, fa
     meta = json.loads(db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' ORDER BY artifact_id LIMIT 1").fetchone()[0])
     meta.update(fault)
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
-    loaded_splits, saved = extract_llm._saved_chunk_state(db, row)
+    loaded_splits, saved = extract_llm._saved_chunk_state(db.db, row)
     if isinstance(fault.get("chunk"), (str, list)):
         # A different malformed node cannot replace a valid root's record.
         assert 0 in loaded_splits
@@ -494,7 +494,7 @@ def test_processing_revision_invalidates_old_global_hints_checkpoint(db, revisio
                     meta={"hash": row["content_hash"], "ver": 6, "chunk": 0,
                           "chunk_size": 3000, "context": old_context})
     assert old_context != extract_llm._chunk_context(row, None, checkpoint=True)
-    assert extract_llm._saved_chunk_state(db, row)[1] == {}
+    assert extract_llm._saved_chunk_state(db.db, row)[1] == {}
 
 
 
@@ -506,11 +506,11 @@ def test_root_split_requires_explicit_piece_hash_but_legacy_empty_root_remains_v
     meta = {"hash": row["content_hash"], "ver": extract_llm.EXTRACT_VERSION, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0, "chunk_size": 3000}
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
-    assert extract_llm._saved_chunk_state(db, row)[1] == {0: {}}
+    assert extract_llm._saved_chunk_state(db.db, row)[1] == {0: {}}
     # A newer split with no hash supersedes the root, but cannot prove a child plan.
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1,
                     meta={**meta, "split_size": 50})
-    splits, saved = extract_llm._saved_chunk_state(db, row)
+    splits, saved = extract_llm._saved_chunk_state(db.db, row)
     assert splits == {} and saved == {}
 
 
@@ -526,7 +526,7 @@ def test_verified_completed_results_survive_local_hint_checkpoint_revision(db, m
     row = _framed_source(db, db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     final = db.db.execute("SELECT content,meta,model FROM artifacts WHERE kind='extract_llm'").fetchone()
     meta = json.loads(final["meta"])
-    context = extract_llm._thread_context(db, row)
+    context = extract_llm._thread_context(db.db, row)
     old_binding = hashlib.sha256(json.dumps([
         row["posted_at"], context, final["model"], extract_llm._PROMPT_HEAD,
         extract_schema.SCHEMA, "clinical-plan/v3", extract_llm.PLAN_VERSION, row["_frame"]["digest"]],
@@ -535,7 +535,7 @@ def test_verified_completed_results_survive_local_hint_checkpoint_revision(db, m
     db.artifact_add("extract_llm_chunk", final["content"], project_id=1, message_id=1,
                     model=final["model"], meta={"hash": row["content_hash"], "ver": 6,
                         "chunk": 0, "chunk_size": 3000, "context": old_binding})
-    assert extract_llm._saved_chunk_state(db, row, context)[1] == {}
+    assert extract_llm._saved_chunk_state(db.db, row, context)[1] == {}
     assert extract_llm.progress_for_message(db.db, row, model=final["model"])["state"] == "complete"
     assert extract_llm.run_pending(db, limit=1, budget_s=200)["selected"] == 0
 

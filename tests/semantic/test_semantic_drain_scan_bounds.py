@@ -114,7 +114,7 @@ def test_slow_backlog_throttle_does_not_skip_realtime_off_revocation(tmp_path, m
 def test_loop_rereads_ignore_other_generations_and_bad_meta(tmp_path):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1, [2])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [2])
         config, _ = semantic_policy.semantic_config(_cfg())
         fake = _FakeJev(choice_map={"relation": "completion_report"})
         facts = {1: _pending_fact(bundle["members"][0])}

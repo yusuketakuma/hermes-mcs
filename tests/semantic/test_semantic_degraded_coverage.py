@@ -34,7 +34,7 @@ def test_degraded_notice_requires_all_arrival_targets_to_pass(tmp_path):
         cfg, _ = semantic_policy.semantic_config(_cfg("enforce"))
         with db.db:
             db.db.execute("UPDATE notify_outbox SET created_at=0")
-        fp = semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"]
+        fp = semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"]
         db.artifact_add("semantic_audit", json.dumps({"status": "PASS"}),
                         project_id=1, message_id=1,
                         meta={"fingerprint": fp, "audit_status": "PASS"})

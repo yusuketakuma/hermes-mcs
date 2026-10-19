@@ -54,7 +54,7 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
                              'full', False, 0)])
     config, _ = semantic_policy.semantic_config({'semantic': {'mode': 'shadow', 'project_ids': [1]}})
     db.artifact_add('semantic_policy', semantic_policy.policy_fingerprint(config))
-    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
     member = bundle['members'][0]
     body = member['body_original']
     fact = {'kind': 'explicit_request', 'polarity': 'affirmed',

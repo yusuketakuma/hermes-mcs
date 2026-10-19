@@ -44,7 +44,7 @@ def test_fixed_bundle_outputs_bind_artifacts_before_baseline_call(tmp_path):
     from semantic_testkit import _seeded
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         target = bundle["members"][0]
         meta = {"fingerprint": bundle["source_fingerprint"],
                 "target_revision": target["revision"], "policy_fingerprint": "policy",
@@ -252,7 +252,7 @@ def test_baseline_context_matches_production_selection_and_labels(tmp_path):
     from semantic_testkit import _seeded
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
     finally:
         db.close()
     root, reply = bundle["members"][:2]

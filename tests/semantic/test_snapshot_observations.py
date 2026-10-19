@@ -31,7 +31,7 @@ def fixture(tmp_path, cfg=None, full=False, multi=False):
             root.reply_count = 1
             patient.messages = [root, _message(2, parent=1, body='合成の返信文脈')]
             ledger.save_patient(patient)
-        bundle = thread_bundle(ledger, 1, 1, target_ids=[1] if multi else None, local_model=resolve(cfg)[1])
+        bundle = thread_bundle(ledger.db, 1, 1, target_ids=[1] if multi else None, local_model=resolve(cfg)[1])
         fp, policy = bundle['source_fingerprint'], observations.policy_identity(cfg)
         _receipt(ledger, event_id, 'accepted', len(chunks))
         doc = json.loads(ledger.db.execute("SELECT content FROM artifacts WHERE kind='semantic_facts_v2'").fetchone()[0])

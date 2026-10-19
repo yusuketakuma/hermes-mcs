@@ -58,7 +58,6 @@ than a case labels — but a forbid match is. Per-category counts are
 reported as patient_context.<category>.
 """
 from __future__ import annotations
-import extract_validation
 
 import argparse
 from datetime import datetime
@@ -76,6 +75,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
+import extract_validation
 
 DEFAULT_CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "..", "..", "..", "evaluation",
@@ -439,7 +439,7 @@ def _case_context(case, mode):
     if mode == "off" or not case.get("patient_state"):
         return base, {}
     import patient_state_context
-    from rollup import pharmacy_state_items
+    from patient_context import pharmacy_state_items
     history = case["patient_state"]
     if not isinstance(history, list) or len(history) > 200:
         raise ValueError("invalid_patient_state_history")

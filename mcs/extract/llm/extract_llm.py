@@ -56,6 +56,7 @@ import extract
 from clinical_chunking import PLAN_VERSION, plan_chunks
 import local_llm
 import patient_context
+import mcs_queries
 import patient_state_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_KIND,
@@ -76,10 +77,9 @@ KIND = "extract_llm"
 ENDPOINT = local_llm.ENDPOINT
 MODEL = local_llm.MODEL
 _ENDPOINT_PIN, _MODEL_PIN = ENDPOINT, MODEL
-# 300s, not the previous 90: under dual-slot load decode runs ~3-5 t/s,
-# so a legitimate ~1K-token output needs ~250s — a 90s client timeout
-# disconnected mid-generation, the server cancelled the task, and the
-# whole decode was thrown away (mass failure observed 2026-09-23).
+# A client timeout must allow a complete bounded extraction under shared
+# load. Disconnecting mid-generation cancels server work and discards its
+# output, so short per-call budgets defer instead of starting doomed calls.
 TIMEOUT = 300
 # Output remains schema v2; a new extraction generation reapplies the
 # evidence/subject contract to bodies already processed by generation 2.
@@ -100,6 +100,7 @@ _LOADED_SOURCE_DIGESTS = {
                        ("clinical_chunking", clinical_chunking.__file__),
                        ("extraction_refresh", extraction_refresh.__file__),
                        ("patient_context", patient_context.__file__),
+                       ("mcs_queries", mcs_queries.__file__),
                        ("patient_state_context", patient_state_context.__file__),
                        ("local_llm", local_llm.__file__),
                        ("extract_schema", extract_schema.__file__),
@@ -1065,7 +1066,7 @@ def _ctx_lines(rows, root_id: int, budget: int = _CTX_TOTAL_MAX) -> list[str]:
     return [p[2] for p in parts]
 
 
-def _karte_block(ledger, project_id: int, posted_at: str | None) -> str:
+def _karte_block(db, project_id: int, posted_at: str | None) -> str:
     """Fenced 患者連携サマリー block for the prompt, "" when the project
     has no stored summary or its comment is empty. The comment is
     untrusted text of the same class as thread posts: sanitized and
@@ -1074,7 +1075,7 @@ def _karte_block(ledger, project_id: int, posted_at: str | None) -> str:
     Injected only when the summary's updated_at is at or before the
     target's posted_at — a later summary may describe what the post
     did not know. Missing/unparseable timestamps inject nothing."""
-    ks = ledger.karte_summary_current(project_id) or {}
+    ks = mcs_queries.karte_summary_current(db, project_id) or {}
     comment = ks.get("comment")
     if not isinstance(comment, str) or not comment.strip():
         return ""
@@ -1092,7 +1093,7 @@ def _karte_block(ledger, project_id: int, posted_at: str | None) -> str:
     return _KARTE_HEAD + _sanitize_ctx(comment[:_KARTE_MAX]) + _KARTE_TAIL
 
 
-def _thread_context(ledger, r, *, budget=_CTX_TOTAL_MAX) -> str | None:
+def _thread_context(db, r, *, budget=_CTX_TOTAL_MAX) -> str | None:
     """Reference-only context: the patient's 連携サマリー block (if any)
     followed by earlier members of the message's thread, selected and
     formatted by _ctx_lines within the remaining _CTX_TOTAL_MAX budget.
@@ -1102,10 +1103,10 @@ def _thread_context(ledger, r, *, budget=_CTX_TOTAL_MAX) -> str | None:
     point-in-time read of what the extractor could see; meta.ctx on the
     artifact records that context existed). Returns None when neither
     a summary nor earlier thread material exists."""
-    karte = _karte_block(ledger, r["project_id"], r["posted_at"])
+    karte = _karte_block(db, r["project_id"], r["posted_at"])
     root = r["parent_id"] or r["message_id"]
     ts = r["posted_at_ts"] or 0
-    rows = ledger.db.execute(
+    rows = db.execute(
         """SELECT message_id, body_text, posted_at_ts,
                   COALESCE(NULLIF(profession,''), sender_type) AS who
            FROM messages
@@ -1156,7 +1157,7 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
             r = {**dict(source), **dict(r)}
     actual_model = _actual_model(r)
     can_bind = all(key in r.keys() for key in ("parent_id", "posted_at", "posted_at_ts"))
-    context = (r["_context"] if "_context" in r.keys() else _thread_context(ledger, r)) if can_bind else None
+    context = (r["_context"] if "_context" in r.keys() else _thread_context(ledger.db, r)) if can_bind else None
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
                 context_binding=_chunk_context(r, context) if can_bind else None)
     meta.update(_frame_meta(r))
@@ -1406,7 +1407,7 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
             return False                # fence before any missing-row context read
         r = {**dict(source), **dict(r)}
     actual_model = _actual_model(r)
-    bound_context = r["_context"] if "_context" in r.keys() else _thread_context(ledger, r)
+    bound_context = r["_context"] if "_context" in r.keys() else _thread_context(ledger.db, r)
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
                 context_binding=_chunk_context(r, bound_context))
     meta.update(_frame_meta(r))
@@ -1788,21 +1789,13 @@ _CARRY_MARGIN_S = 120    # a carried result is dropped this close to its
                          # claim another worker may already hold
 _RESIDENT_WRITE_WAIT_S = 3   # residents carry commits instead of waiting out the tick
 
-_BATCH_K = 0                     # --batch default: off. Measured net
-                                 # negative (Sep 2026): K=4 accepted 46%,
-                                 # rejects re-run single — 50s per
-                                 # accepted item vs 27.7s single. K=8
-                                 # needs ~500s, over TIMEOUT=300
+_BATCH_K = 0                     # --batch defaults off; rejected batches retry as singles.
 _BATCH_MAX_TOKENS = MAX_TOKENS * 3   # K outputs share one envelope;
                                      # v4 fields raise per-item output
 
-# Doomed-call floors from measured artifact timings (Sep 2026):
-# singles p50 ~23s / p90 ~45s / max 69s; batch calls p50 ~102s /
-# p90 ~228s / max 278s for K=4 (~55s per item at the tail). A call
-# fired below its floor is likely killed mid-decode — server-side
-# generation cancelled, every produced token wasted. Deferring costs
-# nothing: the row stays pending and a drainer with a real budget
-# picks it up next cycle.
+# Calls below these budget floors defer rather than cancel mid-decode.
+# The row stays pending so a drainer with sufficient time can pick it up
+# on a later cycle without consuming an unsuccessful model attempt.
 _MIN_CALL_S = 75.0      # one full extraction call (eval + decode)
 _MIN_REPAIR_S = 75.0    # repair re-ask — same shape as a single call
 _BATCH_PER_ITEM_S = 55.0  # decode share per item inside a batch call
@@ -1810,8 +1803,7 @@ _BATCH_PER_ITEM_S = 55.0  # decode share per item inside a batch call
 # Stale-artifact/leaked-claim sweep cadence. Housekeeping only — the
 # current_*_pred hash gate already hides old-body artifacts from
 # selection, so a bounded lag is harmless; without it every run_pending
-# call re-scanned the whole kind= table (~10k rows, ~0.5s) inside the
-# write lock — the resident drainer paid it per 8-row batch.
+# call re-scanned the entire artifact kind while holding the write lock.
 _STALE_GC_S = 300.0
 _stale_gc_at = 0.0
 
@@ -1913,9 +1905,9 @@ def _context_contract():
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-def _saved_chunk_size(ledger, r, context: str | None = None) -> int:
+def _saved_chunk_size(db, r, context: str | None = None) -> int:
     """An actual length stop's source-bound layout, reused after interruption."""
-    rows = ledger.db.execute(
+    rows = db.execute(
         "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=? "
         "AND (project_id IS NULL OR project_id=?) ORDER BY artifact_id DESC",
         (r["message_id"], r["project_id"]))
@@ -1959,14 +1951,12 @@ def _chunk_piece(body, chunk_size, key, splits):
     return piece
 
 
-def _saved_chunk_state(ledger, r, context=None, *, chunk_size=None):
+def _saved_chunk_state(db, r, context=None, *, chunk_size=None):
     """Newest bound node records; invalid parents cannot authorize child coverage."""
     chunk_size = _CHUNK_SIZE if chunk_size is None else chunk_size
     binding = _chunk_context(r, context, checkpoint=True)
     records = {}
-    stream = getattr(ledger, "iter_artifacts", None)
-    rows = (stream("extract_llm_chunk", message_id=r["message_id"]) if callable(stream)
-            else ledger.artifacts("extract_llm_chunk", message_id=r["message_id"]))
+    rows = mcs_queries.iter_artifacts(db, "extract_llm_chunk", message_id=r["message_id"])
     for a in rows:
         try:
             meta = json.loads(a["meta"] or "{}")
@@ -2054,8 +2044,6 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
     r = dict(row)
     if not isinstance(r.get("body_text"), str) or not r["body_text"]:
         return out
-    reader = object.__new__(LedgerReader)      # borrow read methods; never open/write another DB
-    reader.db = db
     r["_target"] = ("", model)
     final = db.execute("SELECT content,meta,model FROM artifacts WHERE kind=? AND message_id=? "
                        "AND (project_id IS NULL OR project_id=?) ORDER BY artifact_id DESC LIMIT 1",
@@ -2080,9 +2068,9 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
         r["_frame"] = frame
         context = frame["text"]
     else:
-        context = _thread_context(reader, r)
-    size = _saved_chunk_size(reader, r, context)
-    splits, saved = _saved_chunk_state(reader, r, context, chunk_size=size)
+        context = _thread_context(db, r)
+    size = _saved_chunk_size(db, r, context)
+    splits, saved = _saved_chunk_state(db, r, context, chunk_size=size)
     roots = plan_chunks(r["body_text"], size)
 
     def count(key, piece):
@@ -2484,7 +2472,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int, int
             if _mark_prefiltered(ledger, r):
                 skipped += 1
             continue
-        base = _thread_context(ledger, r, budget=600) if enabled else _thread_context(ledger, r)
+        base = _thread_context(ledger.db, r, budget=600) if enabled else _thread_context(ledger.db, r)
         retry = ledger.db.execute("SELECT meta FROM artifacts WHERE kind=? AND message_id=? "
             "AND json_extract(" + json_or_null("meta") + ",'$.error')=1 "
             "AND json_extract(" + json_or_null("meta") + ",'$.hash')=? ORDER BY artifact_id DESC LIMIT 1",
@@ -2501,8 +2489,8 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int, int
             blocked += 1
             continue
         context = r["_context"] = r["_frame"]["text"]
-        r["_chunk_size"] = _saved_chunk_size(ledger, r, context)
-        r["_splits"], saved = _saved_chunk_state(ledger, r, context, chunk_size=r["_chunk_size"])
+        r["_chunk_size"] = _saved_chunk_size(ledger.db, r, context)
+        r["_splits"], saved = _saved_chunk_state(ledger.db, r, context, chunk_size=r["_chunk_size"])
         jobs.append((r, context, saved, hints, qc))
     return jobs, skipped, blocked
 

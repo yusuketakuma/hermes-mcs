@@ -126,7 +126,7 @@ def test_real_legacy_checkpoint_reaches_private_summary_read_only(led, change):
     row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     model = "synthetic-progress-model"
     row["_target"] = ("", model)
-    context = extract_llm._thread_context(led, row)
+    context = extract_llm._thread_context(led.db, row)
     pieces = extract_llm.plan_chunks(body, extract_llm._CHUNK_SIZE)
     assert len(pieces) > 1
     extract_llm._persist_chunks(led, row, {0: {}}, context)

@@ -41,12 +41,9 @@ def _verified(db, mid: int, fp: str, policy: str) -> tuple[list | None, str]:
     re-projection gate do (``semantic_store._current`` +
     ``semantic_v4.fact_audit_verdict``), so ``verified`` is observed only
     when the publication gate would accept the document as it stands."""
-    from types import SimpleNamespace
-
     from semantic_store import _current
     from semantic_v4 import _doc_hash, fact_audit_verdict
-    ledger = SimpleNamespace(db=db)       # _current reads only .db
-    current = _current(ledger, KIND_FACTS_V2, mid, fp)
+    current = _current(db, KIND_FACTS_V2, mid, fp)
     if current is None:
         return None, "facts_doc_missing"
     doc = current["content"]
@@ -55,7 +52,7 @@ def _verified(db, mid: int, fp: str, policy: str) -> tuple[list | None, str]:
     except (KeyError, TypeError, ValueError):
         return None, "facts_doc_invalid"
     status = fact_audit_verdict(
-        _current(ledger, KIND_FACT_AUDIT, mid, fp, policy), doc_hash)
+        _current(db, KIND_FACT_AUDIT, mid, fp, policy), doc_hash)
     if status is None:
         return None, "fact_audit_missing"
     if status != "PASS":

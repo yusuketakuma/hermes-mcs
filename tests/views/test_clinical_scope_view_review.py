@@ -106,7 +106,7 @@ def test_family_weight_never_enters_current_patient_rollup(store):
     seed(store, body, extract_validation.validate({"labs": [
         {"name": "体重", "value": value, "unit": "kg", "subject": "patient", "evidence": body}
         for value in (45, 60)]}, body))
-    recent = rollup.build_rollup(store, 1)["recent_labs"]
+    recent = rollup.build_rollup(store.db, 1)["recent_labs"]
     assert [item["value"] for item in recent] == [60]
 
 
@@ -126,4 +126,4 @@ def test_partial_bp_keeps_measured_side_without_inventing_missing_side(store):
     seed(store, body, extract_validation.validate({"vitals": {"sbp": 90}}, body))
     line = next(line for line in structured_view.structured_lines(store.db, 1) if line.startswith("バイタル:"))
     assert "BP 90" in line and "/?" in line
-    assert "dbp" not in rollup.build_rollup(store, 1)["latest_vitals"]
+    assert "dbp" not in rollup.build_rollup(store.db, 1)["latest_vitals"]

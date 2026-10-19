@@ -183,11 +183,11 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
     # excluded.  Its 連携サマリー block and the budget it takes are left
     # out, as for the semantic methods, so _ctx_lines keeps its full budget.
     from extract_llm import _ctx_lines
-    from ledger import _posted_epoch
-    t_ts = _posted_epoch(target.get("posted_at")) or 0
+    from mcs_queries import posted_epoch
+    t_ts = posted_epoch(target.get("posted_at")) or 0
     ctx_rows = []
     for m in members:
-        ts = _posted_epoch(m.get("posted_at"))
+        ts = posted_epoch(m.get("posted_at"))
         if (m.get("body_state") != "full" or not m.get("body_original")
                 or m["message_id"] == target_id):
             continue

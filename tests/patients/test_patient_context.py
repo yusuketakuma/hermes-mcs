@@ -47,7 +47,7 @@ def test_rule_backfill_and_edit_replace_saved_context(tmp_path):
         assert extract.run_pending(led)["done"] == 0
         led.save_messages([_message(body="既往歴：合成疾患B。")])
         extract.run_pending(led)
-        current = rollup.build_rollup(led, 1)["patient_context"]["chat"]["history"]
+        current = rollup.build_rollup(led.db, 1)["patient_context"]["chat"]["history"]
         assert len(current) == 1 and current[0]["text"] == "合成疾患B。"
         assert current[0]["message_id"] == 1
     finally:
@@ -66,13 +66,13 @@ def test_rollup_keeps_memo_separate_and_uses_newest_report_per_category(tmp_path
         led.artifact_add("canonical_projection", json.dumps({"v": 1}),
                          project_id=1, message_id=2, meta={"hash": _hash(led, 2)})
         led.karte_summary_store(1, 100, {"comment": "アレルギー：合成薬の記載。", "updated_at": "2026-10-04"})
-        context = rollup.build_rollup(led, 1)["patient_context"]
+        context = rollup.build_rollup(led.db, 1)["patient_context"]
         assert context["chat"]["allergies"][0]["text"] == "なし"
         assert context["chat"]["history"][0]["message_id"] == 1
         assert context["memo"]["allergies"][0]["text"] == "合成薬の記載。"
         assert context["chat"]["allergies"][0]["state"] == "reported"
         led.save_messages([_message(2, "", state="deleted")])
-        context = rollup.build_rollup(led, 1)["patient_context"]
+        context = rollup.build_rollup(led.db, 1)["patient_context"]
         assert context["chat"]["allergies"][0]["text"] == "未確認"
     finally:
         led.close()

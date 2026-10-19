@@ -6,6 +6,8 @@ import json
 import os
 import signal
 import sqlite3
+
+import ledger_schema
 import subprocess
 import sys
 import time
@@ -59,7 +61,7 @@ def test_old_unconditional_trigger_is_replaced_on_open(tmp_path):
     with closing(ledger.Ledger(str(path))) as db:
         sql = db.db.execute("SELECT sql FROM sqlite_master WHERE type='trigger' "
                             "AND name='messages_au'").fetchone()[0]
-        assert ledger._FTS_AU_MARK in sql and "WHEN" in sql
+        assert ledger_schema._FTS_AU_MARK in sql and "WHEN" in sql
         # still exactly one trigger of that name, and the version is unchanged
         assert db.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
 
@@ -87,7 +89,7 @@ def test_relation_recount_is_skipped_while_fresh(tmp_path):
     with closing(ledger.Ledger(str(path))) as db:
         statements = []
         db.db.set_trace_callback(statements.append)
-        assert db._relation_guards_current() is True
+        assert ledger_schema.relation_guards_current(db.db) is True
         assert not any("COUNT(*) FROM attachments" in s for s in statements)
 
 
@@ -95,10 +97,10 @@ def test_relation_recount_is_skipped_while_fresh(tmp_path):
 def test_relation_marker_moves_on_a_backfilled_lower_id_parent(tmp_path):
     with closing(ledger.Ledger(str(tmp_path / "ledger.db"))) as db, db.db:
         db.db.execute("INSERT INTO messages(message_id) VALUES(500)")
-        before = db._relation_marker()
+        before = ledger_schema._relation_marker(db.db)
         # an older parent backfilled below MAX(message_id) can resolve an orphan
         db.db.execute("INSERT INTO messages(message_id) VALUES(100)")
-        assert db._relation_marker() != before
+        assert ledger_schema._relation_marker(db.db) != before
 
 # ---------- H4: snapshot only when changed / stale ----------
 

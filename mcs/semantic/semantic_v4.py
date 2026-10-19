@@ -131,7 +131,7 @@ def stage_request_following(ledger, bundle, doc, *, policy):
     from semantic_projection import project_v2_doc_legacy, project_v2_facts
 
     clean = sf.validate_facts_doc(doc)
-    current = semantic_store.thread_bundle(ledger, bundle["project_id"], bundle["root_id"])
+    current = semantic_store.thread_bundle(ledger.db, bundle["project_id"], bundle["root_id"])
     if current is None or current["source_fingerprint"] != bundle["source_fingerprint"]:
         raise sf.ContractError("request_following_source_stale")
     source = clean["source"]
@@ -174,7 +174,7 @@ def extract_request_following(llm_fn, ledger, bundle, message_id, *, policy,
 
     if not isinstance(policy, str) or not policy.strip():
         raise sf.ContractError("request_following_policy_required")
-    current = semantic_store.thread_bundle(ledger, bundle["project_id"], bundle["root_id"])
+    current = semantic_store.thread_bundle(ledger.db, bundle["project_id"], bundle["root_id"])
     if current is None or current["source_fingerprint"] != bundle["source_fingerprint"]:
         raise sf.ContractError("request_following_source_stale")
     member = next((m for m in current["members"] if m["message_id"] == message_id), None)
@@ -232,7 +232,7 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
 REPROJECT_LIMIT = 25
 
 
-def reproject_doc(ledger, mid: int, meta: dict):
+def reproject_doc(db, mid: int, meta: dict):
     """The audited v2 document a current projection/v4 row was rendered
     from, or ``(None, reason)``. Selected exactly the way the drain
     selects it (the newest ``semantic_facts_v2`` row of the generation's
@@ -245,7 +245,7 @@ def reproject_doc(ledger, mid: int, meta: dict):
     if not (isinstance(fp, str) and isinstance(policy, str)
             and isinstance(doc_hash, str)):
         return None, "unbound_meta"
-    prev_v2 = _current(ledger, KIND_FACTS_V2, mid, fp)
+    prev_v2 = _current(db, KIND_FACTS_V2, mid, fp)
     doc = prev_v2["content"] if prev_v2 else None
     try:
         ok = doc is not None and _doc_hash(doc) == doc_hash
@@ -259,7 +259,7 @@ def reproject_doc(ledger, mid: int, meta: dict):
     from semantic_audit import _published_quantity_findings
     if _published_quantity_findings(doc):
         return None, "quantity_unverified"
-    if fact_audit_verdict(_current(ledger, KIND_FACT_AUDIT, mid, fp, policy),
+    if fact_audit_verdict(_current(db, KIND_FACT_AUDIT, mid, fp, policy),
                           doc_hash) != "PASS":
         return None, "audit_not_pass"
     return doc, None
@@ -314,7 +314,7 @@ def reproject_stale(ledger, scfg: dict,
         meta = loads_dict(row["meta"])
         content, doc = None, None
         try:
-            doc, reason = (reproject_doc(ledger, row["message_id"], meta)
+            doc, reason = (reproject_doc(ledger.db, row["message_id"], meta)
                            if meta is not None
                            else (None, "metadata_unreadable"))
             if doc is not None:
@@ -381,7 +381,7 @@ def _member_bundle(ledger, pid: int, mid: int, fp):
     row = ledger.db.execute(
         "SELECT COALESCE(parent_id,message_id) r FROM messages "
         "WHERE project_id=? AND message_id=?", (pid, mid)).fetchone()
-    bundle = thread_bundle(ledger, pid, row["r"]) if row else None
+    bundle = thread_bundle(ledger.db, pid, row["r"]) if row else None
     if bundle is None or bundle["source_fingerprint"] != fp:
         return None, None
     member = next((m for m in bundle["members"] if m["message_id"] == mid), None)
@@ -731,7 +731,7 @@ def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
     retried drain must not stack identical rows. ``tx=True`` inside a
     caller-held ``with ledger.db`` block."""
     from semantic_store import _current
-    prev = _current(ledger, KIND_V4_DIAG, mid, fp, policy)
+    prev = _current(ledger.db, KIND_V4_DIAG, mid, fp, policy)
     if prev is not None \
             and prev["content"].get("status") == status \
             and prev["content"].get("doc_hash") == doc_hash \

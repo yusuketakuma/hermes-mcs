@@ -9,10 +9,10 @@ from semantic_testkit import _llm, _seeded
 def test_attachment_revision_is_bound_and_unparsed_content_is_explicit(tmp_path):
     db = _seeded(tmp_path)
     try:
-        before = semantic_store.thread_bundle(db, 1, 1)
+        before = semantic_store.thread_bundle(db.db, 1, 1)
         with db.db:
             db.db.execute("INSERT INTO attachments(message_id,file_id,name,url,local_path,sha256,state) VALUES(1,'file','scan.pdf','https://invalid.example/signed?token=synthetic','/private/file','old','done')")
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         assert bundle["source_fingerprint"] != before["source_fingerprint"]
         attachment = bundle["members"][0]["attachments"][0]
         assert attachment["sha256"] == "old"
@@ -22,7 +22,7 @@ def test_attachment_revision_is_bound_and_unparsed_content_is_explicit(tmp_path)
         assert any("添付内容は解析していません" in item for item in summary["limitations"])
         with db.db:
             db.db.execute("UPDATE attachments SET sha256='new'")
-        assert semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"] != bundle["source_fingerprint"]
+        assert semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"] != bundle["source_fingerprint"]
         assert attachment["sha256"] == "old"
     finally:
         db.close()
@@ -90,7 +90,7 @@ def test_attachment_only_post_remains_full_and_explicitly_unparsed(tmp_path):
     db.close()
     db = ledger.Ledger(path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         member = bundle["members"][0]
         assert bundle["content_quality"] == "full"
         assert member["body_original"] == ""

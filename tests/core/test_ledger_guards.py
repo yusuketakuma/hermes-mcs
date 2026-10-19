@@ -1,6 +1,8 @@
 """Synthetic relation guards, activation audits and legacy compatibility."""
 import health_report
 import sqlite3
+
+import ledger_schema
 from contextlib import closing
 
 import pytest
@@ -213,7 +215,7 @@ def test_unrelated_updates_of_old_rows_are_not_rejected(ledger):
         for suffix in ("ins", "upd"):
             ledger.db.execute(f"DROP TRIGGER g1_artifacts_msg_{suffix}")
         ledger.db.execute("INSERT INTO artifacts(message_id) VALUES(999)")
-    ledger._install_relation_guards()
+    ledger_schema.install_relation_guards(ledger.db)
     # When.
     with ledger.db:
         ledger.db.execute("UPDATE artifacts SET content='synthetic update'")

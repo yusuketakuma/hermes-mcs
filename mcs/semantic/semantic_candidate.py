@@ -19,7 +19,7 @@ _MODULES = ('semantic_extraction', 'semantic_facts', 'semantic_audit',
             'semantic', 'semantic_transport', 'semantic_assessment', 'semantic_projection', 'semantic_policy',
             'semantic_acceptance', 'structured_view', 'clinical_display',
             'extract_schema', 'extract_validation', 'extract_quality',
-            'clinical_scope', 'clinical_values')
+            'clinical_scope', 'clinical_values', 'patient_context', 'mcs_queries')
 
 
 # Process-local probe/counter state is not an interpretation constant.
@@ -54,6 +54,26 @@ def _constant(value):
     raise TypeError('unsupported_candidate_constant')
 
 
+def _code_constant(value):
+    if isinstance(value, types.CodeType):
+        return ('code', _code_bytes(value))
+    if type(value) is slice:
+        return ('slice', tuple(_code_constant(part) for part in
+                               (value.start, value.stop, value.step)))
+    if type(value) in (tuple, frozenset):
+        items = [_code_constant(part) for part in value]
+        if type(value) is frozenset:
+            items.sort(key=lambda part: marshal.dumps(part, 2))
+        return (type(value).__name__, tuple(items))
+    return ('value', marshal.dumps(value, 2))
+
+
+def _code_bytes(code):
+    # Format 2 ignores runtime reference counts; tag slices without executing this copy.
+    constants = tuple(_code_constant(value) for value in code.co_consts)
+    return marshal.dumps(code.replace(co_consts=constants), 2)
+
+
 def _sources():
     sources = {}
     for name in _MODULES:
@@ -64,7 +84,7 @@ def _sources():
                 continue
             function = inspect.unwrap(value)
             if isinstance(function, types.FunctionType):
-                code[key] = hashlib.sha256(marshal.dumps(function.__code__)).hexdigest()
+                code[key] = hashlib.sha256(_code_bytes(function.__code__)).hexdigest()
         for class_name, cls in vars(module).items():
             if not isinstance(cls, type) or cls.__module__ != name:
                 continue
@@ -80,7 +100,7 @@ def _sources():
                 for accessor, function in methods.items():
                     if isinstance(function, types.FunctionType):
                         key = f'{class_name}.{method_name}.{accessor}'
-                        code[key] = hashlib.sha256(marshal.dumps(function.__code__)).hexdigest()
+                        code[key] = hashlib.sha256(_code_bytes(function.__code__)).hexdigest()
         constants = {key: _constant(value) for key, value in vars(module).items()
                      if key.isupper() and key not in _RUNTIME_STATE.get(name, ())}
         sources[name] = payload_hash({'code': code, 'constants': constants})

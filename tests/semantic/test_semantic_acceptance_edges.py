@@ -103,7 +103,7 @@ def test_existing_done_request_survives_reply_import_and_loop_replay(tmp_path):
 
         baseline = request_state()
         config, _ = semantic_policy.semantic_config(_cfg("shadow"))
-        initial = semantic_store.thread_bundle(db, 1, 1, [2])
+        initial = semantic_store.thread_bundle(db.db, 1, 1, [2])
         fake = _FakeJev(choice_map={"relation": "completion_report"})
         semantic_loops.update_loops(
             db, 1, initial, {1: _pending_fact(initial["members"][0])},
@@ -114,7 +114,7 @@ def test_existing_done_request_survives_reply_import_and_loop_replay(tmp_path):
         db.save_messages(
             [_message(3, parent=1, body="完了しました。", unread=False)],
             project_id=1, semantic=True)
-        current = semantic_store.thread_bundle(db, 1, 1, [3])
+        current = semantic_store.thread_bundle(db.db, 1, 1, [3])
         semantic_loops.update_loops(
             db, 1, current, {}, fake, config, time.monotonic() + 30)
         # Replay of the same generation must be idempotent as well.

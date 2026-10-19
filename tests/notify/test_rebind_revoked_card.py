@@ -2,13 +2,13 @@
 erased never revives a revoked card: it stays revoked for both results,
 a proven delivery only binds the message id the revoke must delete, and
 returned events never post the card again. Synthetic ledger and journal."""
+import notify_recovery
 import uuid
 
 import pytest
 
 import notify_cards
 import notify_reconcile
-import notify_transport
 from notify_reconcile_testkit import CFG, NOW, _journal_claim, _journal_result, world
 
 __all__ = ["world"]
@@ -36,7 +36,7 @@ def _lost_render_hold(world):
 
 
 def _resolve(world, render, aid, result):
-    return notify_transport.apply_card_resolve(world.led, {
+    return notify_recovery.apply_card_resolve(world.led, {
         "version": 1, "cmd": "ops.card_resolve", "command_id": str(uuid.uuid4()),
         "actor": "op-user", "human_confirmed": True, "reason": "合成の配送結果確認",
         "delivery_id": render["delivery_id"], "attempt_id": aid, "result": result,

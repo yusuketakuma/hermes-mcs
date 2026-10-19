@@ -9,6 +9,8 @@ held fail-closed. All fixtures are synthetic; no real services.
 """
 from __future__ import annotations
 
+import notify_recovery
+
 import json
 import sys
 from pathlib import Path
@@ -291,7 +293,7 @@ def test_rebind_delivered_releases_hold(world):
            "profile": "mcs", "application_id": "1", "guild_id": "7",
            "channel_id": "42", "message_id": "999001",
            "evidence": {"method": "remote_receipt", "ref": "msg:999001"}}
-    out = notify_transport.apply_card_resolve(world.led, req, CFG)
+    out = notify_recovery.apply_card_resolve(world.led, req, CFG)
     assert out["outcome"] == "applied"
     card = world.card()
     assert card["delivery_state"] == "delivered"
@@ -318,7 +320,7 @@ def test_rebind_delivered_completes_only_its_coverage_and_waits_for_siblings(wor
            "result": "mark_delivered", **CFG["notify"]["discord"],
            "message_id": "synthetic-rebound",
            "evidence": {"method": "synthetic", "ref": "synthetic-card"}}
-    assert notify_transport.apply_card_resolve(world.led, req, CFG)["outcome"] == "applied"
+    assert notify_recovery.apply_card_resolve(world.led, req, CFG)["outcome"] == "applied"
     coverage = world.led.db.execute(
         "SELECT card_id,state FROM notification_intent_cards WHERE event_id=?",
         (eid,)).fetchall()
@@ -368,7 +370,7 @@ def test_rebind_never_revives_a_revoked_card(world, result):
            "message_id": "synthetic-rebound",
            "evidence": {"method": "synthetic", "ref": "synthetic-card",
                         "worker_stopped": True, "proof": "remote_absent"}}
-    assert notify_transport.apply_card_resolve(world.led, req, CFG)["outcome"] == "applied"
+    assert notify_recovery.apply_card_resolve(world.led, req, CFG)["outcome"] == "applied"
     assert world.card(render["card_id"])["delivery_state"] == "revoked"
 
 
@@ -397,7 +399,7 @@ def test_rebind_checks_the_held_attempt_and_its_journal_witness(world, mutation,
            "evidence": {"method": "synthetic", "ref": "synthetic-card",
                         "worker_stopped": True, "proof": "remote_absent"},
            **mutation}
-    out = notify_transport.apply_card_resolve(world.led, req, CFG)
+    out = notify_recovery.apply_card_resolve(world.led, req, CFG)
     assert out["outcome"] == "rejected" and out["error"] == error
     assert world.card(render["card_id"])["message_id"] is None
     assert all(h["released_at"] is None for h in world.holds())
@@ -433,13 +435,13 @@ def test_rebind_rejects_corrupt_scope_with_a_durable_receipt(world, scope_json, 
            "result": "mark_delivered", **CFG["notify"]["discord"],
            "message_id": "synthetic-known-message",
            "evidence": {"method": "synthetic", "ref": "synthetic-card"}}
-    receipt = notify_transport.apply_card_resolve(world.led, req, CFG)
+    receipt = notify_recovery.apply_card_resolve(world.led, req, CFG)
     assert (receipt["outcome"], receipt["error"]) == ("rejected", "hold_scope_corrupt")
     stored = world.led.db.execute(
         "SELECT receipt_json FROM command_receipts WHERE command_id=?",
         (req["command_id"],)).fetchone()
     assert json.loads(stored[0]) == receipt
-    assert notify_transport.apply_card_resolve(world.led, req, CFG) == receipt
+    assert notify_recovery.apply_card_resolve(world.led, req, CFG) == receipt
     assert all(h["released_at"] is None for h in world.holds())
     assert world.card(render["card_id"])["message_id"] is None
 
@@ -479,13 +481,13 @@ def test_rebind_rejects_corrupt_hold_events_with_a_durable_receipt(
            "result": "mark_delivered", **CFG["notify"]["discord"],
            "message_id": "synthetic-known-message",
            "evidence": {"method": "synthetic", "ref": "synthetic-card"}}
-    receipt = notify_transport.apply_card_resolve(world.led, req, CFG)
+    receipt = notify_recovery.apply_card_resolve(world.led, req, CFG)
     assert (receipt["outcome"], receipt["error"]) == ("rejected", "hold_events_corrupt")
     stored = world.led.db.execute(
         "SELECT receipt_json FROM command_receipts WHERE command_id=?",
         (req["command_id"],)).fetchone()
     assert json.loads(stored[0]) == receipt
-    assert notify_transport.apply_card_resolve(world.led, req, CFG) == receipt
+    assert notify_recovery.apply_card_resolve(world.led, req, CFG) == receipt
     assert all(h["released_at"] is None for h in world.holds())
     assert world.card(render["card_id"])["message_id"] is None
 

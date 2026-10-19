@@ -11,7 +11,6 @@ import semantic_store
 import difflib
 import json
 import sqlite3
-from types import SimpleNamespace
 
 from mcs_requests import parse_command, payload_hash, positive, valid_hash, validate
 
@@ -107,7 +106,7 @@ def _current_candidate(db, project_id: int, message_id: int,
         reasons.append("source_incomplete")
 
     root_id = source["parent_id"] or message_id
-    bundle = semantic_store.thread_bundle(SimpleNamespace(db=db), project_id, root_id)
+    bundle = semantic_store.thread_bundle(db, project_id, root_id)
     if bundle is None:
         reasons.append("thread_missing")
         return False, None, None

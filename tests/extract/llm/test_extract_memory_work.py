@@ -12,6 +12,7 @@ import extract_llm
 def test_thread_context_fetches_only_existing_selection(target_is_root):
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
+    db.execute("CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,kind TEXT,project_id INTEGER,content TEXT,meta TEXT)")
     db.execute("CREATE TABLE messages(message_id INTEGER,project_id INTEGER,"
                "parent_id INTEGER,posted_at_ts REAL,body_text TEXT,"
                "profession TEXT,sender_type TEXT,body_state TEXT)")
@@ -32,6 +33,9 @@ def test_thread_context_fetches_only_existing_selection(target_is_root):
         def __init__(self, cursor):
             self.cursor = cursor
 
+        def fetchone(self):
+            return self.cursor.fetchone()
+
         def fetchall(self):
             rows = self.cursor.fetchall()
             fetched.extend(rows)
@@ -41,12 +45,7 @@ def test_thread_context_fetches_only_existing_selection(target_is_root):
         def execute(self, sql, args):
             return Cursor(db.execute(sql, args))
 
-    class Ledger:
-        def karte_summary_current(self, project_id):
-            return None
-
-    ledger = Ledger()
-    ledger.db = DB()
+    borrowed = DB()
     target = {"project_id": 1, "message_id": 1 if target_is_root else 400,
               "parent_id": None if target_is_root else 1,
               "posted_at_ts": 400, "posted_at": "2026-01-01T00:00:00+09:00"}
@@ -56,7 +55,7 @@ def test_thread_context_fetches_only_existing_selection(target_is_root):
         "AND body_state='full' AND message_id!=?", (target["message_id"],)).fetchall()
     expected = "\n".join(extract_llm._ctx_lines(candidates, 1))
     try:
-        assert extract_llm._thread_context(ledger, target) == expected
+        assert extract_llm._thread_context(borrowed, target) == expected
         assert len(fetched) <= 4
     finally:
         db.close()

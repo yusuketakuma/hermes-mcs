@@ -86,9 +86,9 @@ def test_projection_keeps_legacy_quote_but_never_unverified_context():
     assert "patient_context" not in projection.project_v2_doc_legacy(old)
 
 
-def test_new_prompt_changes_bundle_identity_and_never_reuses_old_chunks(monkeypatch):
+def test_new_prompt_changes_bundle_identity_and_never_reuses_old_chunks(request, monkeypatch):
     prompt = semantic_llm._FACT_V2_PROMPT
-    ledger = _FakeLedger()
+    ledger = _FakeLedger(request)
     member = _member(BODY)
     new_fingerprint = bundle_fingerprint([member], local_model="synthetic-model")
     monkeypatch.setattr(semantic_llm, "_FACT_V2_PROMPT", "synthetic legacy fact prompt: %s")

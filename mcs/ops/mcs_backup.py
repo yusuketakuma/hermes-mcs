@@ -53,7 +53,8 @@ import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
-from ledger import static_contract_ok, valid_mcs_db  # noqa: E402
+from ledger import SCHEMA_VERSION, valid_mcs_db  # noqa: E402
+from ledger_schema import static_contract_ok  # noqa: E402
 from maintenance import MaintenanceError  # noqa: E402
 from mcs_queries import REPLY_GAP  # noqa: E402
 from export_schema import finite_number  # noqa: E402
@@ -521,7 +522,7 @@ class _InspectionBudgetExhausted(BackupError):
 
 def _bounded_inventory_schema(db: sqlite3.Connection) -> None:
     """Check the shared static recovery contract on the budgeted connection."""
-    if not static_contract_ok(db):
+    if not static_contract_ok(db, schema_version=SCHEMA_VERSION):
         raise BackupError("backup_invalid_database")
 
 

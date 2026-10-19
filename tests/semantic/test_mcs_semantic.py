@@ -267,7 +267,7 @@ def test_no_semantic_flag_no_job(tmp_path):
 
 def test_bundle_fixed_shape(tmp_path):
     db = _seeded(tmp_path)
-    b = semantic_store.thread_bundle(db, 1, 1)
+    b = semantic_store.thread_bundle(db.db, 1, 1)
     assert b["bundle_id"].startswith("bundle_1_1_")
     assert {m["message_id"] for m in b["members"]} == {1, 2}
     assert b["content_quality"] == "full"
@@ -282,11 +282,11 @@ def test_bundle_fixed_shape(tmp_path):
 
 def test_fingerprint_covers_revisions(tmp_path):
     db = _seeded(tmp_path)
-    b1 = semantic_store.thread_bundle(db, 1, 1)
+    b1 = semantic_store.thread_bundle(db.db, 1, 1)
     fp1 = b1["source_fingerprint"]
-    assert semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"] == fp1
+    assert semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"] == fp1
     db.save_messages([_message(2, parent=1, body="返信を編集した本文")])
-    b2 = semantic_store.thread_bundle(db, 1, 1)
+    b2 = semantic_store.thread_bundle(db.db, 1, 1)
     assert b2["source_fingerprint"] != fp1       # context edit -> new gen
     assert semantic_store.bundle_fingerprint(
         b2["members"], model="jev-x") != b2["source_fingerprint"]
@@ -823,7 +823,7 @@ def test_claim_audit_sees_surrounding_context(tmp_path):
     win = next(c["text"] for c in ctx if c["role"] == "evidence_context")
     assert "確認お願いします" in win    # outside the bare quote
     source = json.loads(next(c["text"] for c in ctx if c["role"] == "evidence_metadata"))
-    member = semantic_store.thread_bundle(db, 1, 1)["members"][0]
+    member = semantic_store.thread_bundle(db.db, 1, 1)["members"][0]
     assert source == {key: member[key] for key in
                       ("message_id", "parent_id", "revision", "posted_at", "sender")}
     db.close()
@@ -836,7 +836,7 @@ def test_loop_scan_not_capped(tmp_path):
     db.save_messages([_message(i, parent=1, body=f"確認事項{i}", unread=False)
                       for i in range(20, 32)])
     members = {m["message_id"]: m for m in
-               semantic_store.thread_bundle(db, 1, 1)["members"]}
+               semantic_store.thread_bundle(db.db, 1, 1)["members"]}
     for i in range(20, 32):          # 12 sourced same-thread open candidates
         db.artifact_add("loop_candidate", json.dumps({
             "loop_id": f"loop_{i}", "project_id": 1,
@@ -849,7 +849,7 @@ def test_loop_scan_not_capped(tmp_path):
             "assignee_text": None, "due_text": None,
             "state": "PROPOSED", "history": []}),
             project_id=1, message_id=i, meta={"candidate_fp": f"fp{i}",
-                "fingerprint": semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"],
+                "fingerprint": semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"],
                 "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg())[0])})
     res = {"errors": []}
     out = semantic_drain.run_due(db, _cfg("shadow"), res,
@@ -1439,10 +1439,10 @@ def test_loop_candidate_records_history(tmp_path):
         "trigger_message_id": 2,
         "origin_revision": cand["origin"]["revision"],
         "trigger_revision": next(m["revision"] for m in
-            semantic_store.thread_bundle(db, 1, 1)["members"] if m["message_id"] == 2),
+            semantic_store.thread_bundle(db.db, 1, 1)["members"] if m["message_id"] == 2),
         "root_id": 1,
         "relation": "completion_report"}), project_id=1, message_id=2,
-        meta={"fingerprint": semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"],
+        meta={"fingerprint": semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"],
               "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg())[0])})
     snap = ledger.publish_snapshot(str(tmp_path / "ledger.db"),
                                    str(tmp_path / "snaps"))
@@ -1513,7 +1513,7 @@ def test_empty_targets_root_is_target(tmp_path):
     p = _patient(db)
     p.messages = [_message(1), _message(9, parent=1)]
     db.save_patient(p)
-    source = next(m for m in semantic_store.thread_bundle(db, 1, 1)["members"]
+    source = next(m for m in semantic_store.thread_bundle(db.db, 1, 1)["members"]
                   if m["message_id"] == 9)
     db.artifact_add("loop_candidate", json.dumps({
         "loop_id": "loop_x", "project_id": 1, "kind": "pending_item",
@@ -1525,7 +1525,7 @@ def test_empty_targets_root_is_target(tmp_path):
         "assignee_text": None,
         "due_text": None, "state": "PROPOSED", "history": []}),
         project_id=1, message_id=9, meta={
-            "fingerprint": semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"],
+            "fingerprint": semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"],
             "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg())[0])})
     db.job_add("semantic", 1, 1, payload={})   # no "targets" key
     out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},

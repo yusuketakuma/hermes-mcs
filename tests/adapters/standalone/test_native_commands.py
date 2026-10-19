@@ -51,7 +51,7 @@ def route(tmp_path, request):
     eid = db.artifact_add("extract_llm", json.dumps({"summary": "完全合成の要約"}),
                           project_id=1, message_id=1, meta={"hash": chash})
     db.artifact_add("semantic_policy", "c" * 64)
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     member = next(m for m in bundle["members"] if m["message_id"] == 1)
     sid = db.artifact_add("semantic_summary", json.dumps({"target_message_id": 1,
         "claims": [{"section": "plan", "text": "完全合成の確認"}]}), project_id=1,

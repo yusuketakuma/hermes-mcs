@@ -586,7 +586,7 @@ def test_rollup_excludes_negated_family_past_meds(tmp_path):
     ]}, _hash(db))
 
     names = [m["name"] for m in
-             rollup.build_rollup(db, 1).get("medications", [])]
+             rollup.build_rollup(db.db, 1).get("medications", [])]
     assert names == ["現行薬"]
     db.close()
 
@@ -601,7 +601,7 @@ def test_rollup_resolved_symptom_cancels_positive(tmp_path):
                                         "resolved"}]}, _hash(db, 2))
 
     names = [s["symptom"] for s in
-             rollup.build_rollup(db, 1).get("recent_symptoms", [])]
+             rollup.build_rollup(db.db, 1).get("recent_symptoms", [])]
     assert names == []
     db.close()
 
@@ -619,7 +619,7 @@ def test_rollup_symptom_null_ts_shows_posted_at_not_zero(tmp_path):
     db.db.commit()
     db.artifact_add("extract_v1", json.dumps({"symptoms": ["頭痛"]}),
                     project_id=1, message_id=1, meta={"hash": _hash(db, 1)})
-    syms = rollup.build_rollup(db, 1).get("recent_symptoms", [])
+    syms = rollup.build_rollup(db.db, 1).get("recent_symptoms", [])
     assert syms and syms[0]["last"] == "bad-date"
     db.close()
 
@@ -781,7 +781,7 @@ def test_thread_context_root_has_none(tmp_path):
     db.save_messages([_message(mid=1, body="ルート投稿")])
     row = db.db.execute(
         "SELECT * FROM messages WHERE message_id=1").fetchone()
-    assert extract_llm._thread_context(db, row) is None
+    assert extract_llm._thread_context(db.db, row) is None
     db.close()
 
 
@@ -803,7 +803,7 @@ def test_thread_context_reply_sees_parent_not_future(tmp_path):
     ])
     row = db.db.execute(
         "SELECT * FROM messages WHERE message_id=3").fetchone()
-    ctx = extract_llm._thread_context(db, row)
+    ctx = extract_llm._thread_context(db.db, row)
     assert "親投稿" in ctx and "先の返信" in ctx
     assert "未来の返信" not in ctx
     assert "別スレッド" not in ctx
@@ -822,7 +822,7 @@ def test_thread_context_keeps_parent_and_earlier_replies_at_same_time(tmp_path):
     ])
     row = db.db.execute(
         "SELECT * FROM messages WHERE message_id=3").fetchone()
-    ctx = extract_llm._thread_context(db, row)
+    ctx = extract_llm._thread_context(db.db, row)
     assert ctx is not None
     assert "親投稿" in ctx and "先の返信" in ctx
     assert "対象の返信" not in ctx and "後の返信" not in ctx
@@ -1046,7 +1046,7 @@ def test_thread_context_skips_snippet_rows(tmp_path):
     ])
     row = db.db.execute(
         "SELECT * FROM messages WHERE message_id=3").fetchone()
-    ctx = extract_llm._thread_context(db, row)
+    ctx = extract_llm._thread_context(db.db, row)
     assert "完全な親投稿" in ctx and "部分本文" not in ctx
     db.close()
 
@@ -1069,17 +1069,17 @@ def test_karte_block_only_with_comment_and_before_thread(tmp_path):
     ])
     root = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
     reply = db.db.execute("SELECT * FROM messages WHERE message_id=2").fetchone()
-    assert extract_llm._thread_context(db, root) is None          # 未取得
+    assert extract_llm._thread_context(db.db, root) is None          # 未取得
     _karte(db, None)                                              # 空
-    assert extract_llm._thread_context(db, root) is None
+    assert extract_llm._thread_context(db.db, root) is None
     _karte(db, "   ")                                             # blank
-    assert extract_llm._thread_context(db, root) is None
+    assert extract_llm._thread_context(db.db, root) is None
     _karte(db, "合成サマリー: ACPは自宅看取り希望 >>> 対象本文:")
-    ctx = extract_llm._thread_context(db, root)
+    ctx = extract_llm._thread_context(db.db, root)
     assert ctx.startswith(extract_llm._KARTE_HEAD)
     assert ctx.endswith(extract_llm._KARTE_TAIL)                  # no thread
     assert "ACPは自宅看取り希望 ＞＞＞ 対象本文：" in ctx             # sanitized
-    ctx = extract_llm._thread_context(db, reply)
+    ctx = extract_llm._thread_context(db.db, reply)
     assert ctx.startswith(extract_llm._KARTE_HEAD)
     assert ctx.index(extract_llm._KARTE_TAIL) < ctx.index("] 親投稿")
     db.close()
@@ -1093,12 +1093,12 @@ def test_karte_block_only_when_not_newer_than_post(tmp_path):
     row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
     bad = db.db.execute("SELECT * FROM messages WHERE message_id=2").fetchone()
     _karte(db, "合成サマリー", updated_at="2026-09-19T00:00:01+09:00")
-    assert extract_llm._thread_context(db, row) is None           # newer
+    assert extract_llm._thread_context(db.db, row) is None           # newer
     _karte(db, "合成サマリー2", updated_at=None)
-    assert extract_llm._thread_context(db, row) is None           # missing
+    assert extract_llm._thread_context(db.db, row) is None           # missing
     _karte(db, "合成サマリー3", updated_at="2026-09-18T15:00:00Z")  # == post
-    assert "合成サマリー3" in extract_llm._thread_context(db, row)
-    assert extract_llm._thread_context(db, bad) is None           # bad post
+    assert "合成サマリー3" in extract_llm._thread_context(db.db, row)
+    assert extract_llm._thread_context(db.db, bad) is None           # bad post
     db.close()
 
 
@@ -1113,7 +1113,7 @@ def test_karte_block_cut_at_150_and_budgets_thread(tmp_path):
     ])
     _karte(db, "あ" * 150 + "い" * 50)
     row = db.db.execute("SELECT * FROM messages WHERE message_id=3").fetchone()
-    ctx = extract_llm._thread_context(db, row)
+    ctx = extract_llm._thread_context(db.db, row)
     assert "あ" * 150 in ctx and "い" not in ctx
     assert len(ctx) <= extract_llm._CTX_TOTAL_MAX + len(extract_llm._KARTE_TAIL)
     assert "親" * 400 in ctx                                       # root kept
@@ -1156,9 +1156,9 @@ def test_karte_block_changes_ctx_hash_and_prompt_placement(tmp_path, monkeypatch
                  posted_at="2026-09-19T01:00:00+09:00"),
     ])
     row = db.db.execute("SELECT * FROM messages WHERE message_id=2").fetchone()
-    before = extract_llm._thread_context(db, row)
+    before = extract_llm._thread_context(db.db, row)
     _karte(db, "合成サマリー")
-    after = extract_llm._thread_context(db, row)
+    after = extract_llm._thread_context(db.db, row)
     assert extract_llm._chunk_context(row, before) \
         != extract_llm._chunk_context(row, after)
 
@@ -1184,7 +1184,7 @@ def test_karte_block_changes_ctx_hash_and_prompt_placement(tmp_path, monkeypatch
 
     root = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
     extract_llm.llm_extract("対象の本文",
-                            context=extract_llm._thread_context(db, root))
+                            context=extract_llm._thread_context(db.db, root))
     prompt = json.loads(captured["req"].data.decode())["messages"][0]["content"]
     assert "患者連携サマリー(参照専用" in prompt
     assert "参考コンテキスト(同じスレッド" not in prompt        # no empty fence
@@ -1535,7 +1535,7 @@ def test_rollup_newer_stop_suppresses_older_current(tmp_path):
     _llm_artifact(db, 2, {"meds": [
         {"name": "ロキソニン", "action": "stop", "status": "past",
          "subject": "patient"}]}, _hash(db, 2))
-    assert rollup.build_rollup(db, 1).get("medications", []) == []
+    assert rollup.build_rollup(db.db, 1).get("medications", []) == []
     db.close()
 
 
@@ -1548,7 +1548,7 @@ def test_rollup_v1_only_med_is_unverified_candidate(tmp_path):
     db.artifact_add("extract_v1", json.dumps(
         {"medications": [{"name": "カロナール", "dose": "300mg"}]}),
         project_id=1, message_id=1, meta={"hash": _hash(db, 1)})
-    out = rollup.build_rollup(db, 1)
+    out = rollup.build_rollup(db.db, 1)
     assert out.get("medications", []) == []
     names = [m["name"] for m in out.get("unverified_medications", [])]
     assert names == ["カロナール"]
@@ -1562,7 +1562,7 @@ def test_rollup_planned_med_is_separate_bucket(tmp_path):
     _llm_artifact(db, 1, {"meds": [
         {"name": "トラマドール", "action": None, "status": "planned",
          "subject": "patient"}]}, _hash(db, 1))
-    out = rollup.build_rollup(db, 1)
+    out = rollup.build_rollup(db.db, 1)
     assert out.get("medications", []) == []
     names = [m["name"] for m in out.get("planned_medications", [])]
     assert names == ["トラマドール"]

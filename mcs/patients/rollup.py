@@ -20,7 +20,6 @@ import argparse
 from datetime import date, datetime, timedelta
 import hashlib
 import json
-import math
 import os
 import re
 import sqlite3
@@ -32,13 +31,13 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
-from ledger import Ledger, LedgerReader, karte_summary_block
+from ledger import Ledger
 from clinical_values import fold_surface, lab_analyte, lab_candidate, patient_item_scope, patient_current_vitals
+import patient_context
 from patient_context import context_items, extract_context, merged_context
-from mcs_queries import (JST, current_extract_pred, current_fact_pred,
+from mcs_queries import (JST, karte_summary_current, karte_summary_block, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
 from mcs_util import HOME, acquire_run_lock, loads_dict
-from mcs_requests import valid_hash
 from semantic_projection import PROJECTION_VERSION
 from self_identity import normalize_sender_id
 from drug_map import (KIND as REF_KIND, PROGRESS_KIND, candidate_note, current_refs,
@@ -62,41 +61,7 @@ _LEGACY_KEYS = {"current_med_period": "med_period_candidate",
 _REPLY_STAGE = {k: i for i, k in enumerate(
     ("ack", "intent", "progress", "answer", "done", "cancel"))}
 
-PHARMACY_STATE_KEYS = frozenset({"inquiry_result", "storage_status", "storage_place",
-    "medication_manager", "interaction_check", "support_method", "residual_quantity",
-    "missed_doses", "followup"})
 PHARMACY_STATE_LIMIT = 100
-
-
-def pharmacy_state_items(artifact, message) -> list[dict]:
-    """Source-grounded pharmacy reports from one decoded current extraction, preserving each parent."""
-    message = dict(message)
-    if (message.get("body_state") not in (None, "full")
-            or type(message.get("project_id")) is not int or message["project_id"] <= 0
-            or type(message.get("message_id")) is not int or message["message_id"] <= 0
-            or not valid_hash(message.get("content_hash"))):
-        return []
-    result = []
-    for item in context_items(artifact, message.get("body_text")):
-        parent = {key: item[key] for key in ("category", "text", "evidence", "subject")}
-        parent["details"] = item.get("details", [])
-        identity = {key: parent[key] for key in ("category", "text", "evidence", "subject")}
-        parent_fp = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-        names = sorted({detail["value"] for detail in parent["details"] if detail["key"] == "drug_name"})
-        for detail in parent["details"]:
-            if detail["key"] not in PHARMACY_STATE_KEYS:
-                continue
-            own_detail = {key: detail[key] for key in ("key", "value", "evidence")}
-            fingerprint = hashlib.sha256(json.dumps([parent_fp, own_detail, names],
-                sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-            stamp = message.get("posted_at_ts")
-            result.append({**detail, "parent": parent, "parent_fingerprint": parent_fp,
-                "fingerprint": fingerprint, "drug_names": names, "subject": parent["subject"],
-                "project_id": message["project_id"], "message_id": message["message_id"],
-                "content_hash": message["content_hash"], "posted_at": message.get("posted_at"),
-                "posted_at_ts": stamp if type(stamp) in (int, float) and math.isfinite(stamp) else None,
-                "source": "chat"})
-    return result
 
 
 def _dicts(value) -> list[dict]:
@@ -247,8 +212,7 @@ def _match_request_replies(req_thread, replies):
                 row["reply_conflict"] = True
 
 
-def build_rollup(ledger, project_id: int, *, request_limit: int | None = 15) -> dict:
-    db = ledger.db
+def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict:
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
     patient_name = patient[0] if patient else None
     msgs = db.execute("""
@@ -261,7 +225,7 @@ def build_rollup(ledger, project_id: int, *, request_limit: int | None = 15) -> 
                  "reply_count": sum(1 for m in msgs if m["parent_id"])}
     # 連携サマリー (#21): the newest karte_summary artifact, or None when
     # never fetched — 空 (fetched, nothing registered) stays distinct.
-    ks = ledger.karte_summary_current(project_id)
+    ks = karte_summary_current(db, project_id)
     out["karte_summary"] = None if ks is None else {
         **karte_summary_block(ks), "fetched_at": ks.get("fetched_at")}
     context = {}
@@ -332,7 +296,7 @@ def build_rollup(ledger, project_id: int, *, request_limit: int | None = 15) -> 
         for category, items in message_context.items():
             out["patient_context"]["chat"].setdefault(category, items)
         state = out["pharmacy_state"]
-        for report in pharmacy_state_items({"patient_context": reported_context}, m):
+        for report in patient_context.pharmacy_state_items({"patient_context": reported_context}, m):
             state["total"] += 1
             if len(state["items"]) < PHARMACY_STATE_LIMIT:
                 state["items"].append(report)
@@ -697,10 +661,8 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
                       and "period_check_version" in meta
                       and meta["period_check_version"] != PERIOD_CHECK_VERSION)
     if scoped or projection_stale or clinical_stale:
-        reader = object.__new__(LedgerReader)
-        reader.db = db
         try:
-            current = build_rollup(reader, project_id)
+            current = build_rollup(db, project_id)
         except sqlite3.OperationalError:
             current = {}  # a legacy snapshot cannot prove scoped current fields
         clinical_keys = (("latest_vitals", "recent_labs", "med_period_candidate", "medications",
@@ -756,7 +718,7 @@ def rebuild(ledger, project_id: int) -> int:
     has_projection = _has_projection(ledger.db, project_id)
     ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
                                 (REF_KIND, project_id)).fetchone()[0]
-    d = build_rollup(ledger, project_id)
+    d = build_rollup(ledger.db, project_id)
     # compare in JSON space (tuples→lists, int keys→str) like the stored row
     new = json.loads(json.dumps(d, ensure_ascii=False))
     new.pop("generated_at", None)

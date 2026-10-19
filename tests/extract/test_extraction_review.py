@@ -45,7 +45,7 @@ def test_family_mention_does_not_cancel_patient_medication(db):
                                "status": "current", "action": "start"}]})
     artifact(db, 2, {"meds": [{"name": "合成薬A", "subject": "family",
                                "status": "past", "action": "stop"}]})
-    assert [m["name"] for m in rollup.build_rollup(db, 1)["medications"]] == ["合成薬A"]
+    assert [m["name"] for m in rollup.build_rollup(db.db, 1)["medications"]] == ["合成薬A"]
 
 
 def test_same_message_stop_supersedes_start_and_rule_candidate(db):
@@ -53,14 +53,14 @@ def test_same_message_stop_supersedes_start_and_rule_candidate(db):
     artifact(db, 1, {"meds": [
         {"name": "合成薬A", "subject": "patient", "status": "current", "action": "start"},
         {"name": "合成薬A", "subject": "patient", "status": "current", "action": "stop"}]})
-    assert not rollup.build_rollup(db, 1).get("medications")
+    assert not rollup.build_rollup(db.db, 1).get("medications")
 
 
 def test_family_symptom_does_not_become_patient_state(db):
     db.save_messages([_message()])
     artifact(db, 1, {"symptoms": [{"text": "合成症状", "subject": "family",
                                    "status": "ongoing", "negated": False}]})
-    assert not rollup.build_rollup(db, 1).get("recent_symptoms")
+    assert not rollup.build_rollup(db.db, 1).get("recent_symptoms")
 
 
 def test_schema_allows_subject_and_raw_relative_deadline():
@@ -229,8 +229,8 @@ def test_chunk_checkpoint_requires_same_interpretation_context(db):
     db.save_messages([_message()])
     row = db.db.execute("SELECT * FROM messages").fetchone()
     extract_llm._persist_chunks(db, row, {0: {"summary": "合成"}}, "元の文脈")
-    assert extract_llm._saved_chunk_state(db, row, "元の文脈")[1]
-    assert not extract_llm._saved_chunk_state(db, row, "変更後の文脈")[1]
+    assert extract_llm._saved_chunk_state(db.db, row, "元の文脈")[1]
+    assert not extract_llm._saved_chunk_state(db.db, row, "変更後の文脈")[1]
 
 
 def test_chunk_merge_preserves_restart_and_separate_subjects():
@@ -540,7 +540,7 @@ def test_rollup_vitals_do_not_fall_back_to_v1_over_llm_row(db):
                     project_id=1, message_id=1,
                     meta={'hash': h,
                           'extract_version': extract_llm.EXTRACT_VERSION})
-    assert rollup.build_rollup(db, 1).get('latest_vitals') is None
+    assert rollup.build_rollup(db.db, 1).get('latest_vitals') is None
 
 
 # U05-F04: a planned visit is not a past visit_date.

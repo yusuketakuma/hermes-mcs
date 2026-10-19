@@ -87,7 +87,7 @@ def current_quality(ledger, cfg: dict | None, *, checkpoint=lambda: None) -> dic
         out["denominator"] += 1
         key = row["project_id"], row["root_id"]
         if key != last_key:
-            bundle = thread_bundle(ledger, *key, local_model=local_model)
+            bundle = thread_bundle(ledger.db, *key, local_model=local_model)
             checkpoint()
             members = ({m["message_id"]: m for m in bundle["members"]}
                        if bundle else {})
@@ -95,9 +95,9 @@ def current_quality(ledger, cfg: dict | None, *, checkpoint=lambda: None) -> dic
         reason = "thread_missing"
         if bundle is not None:
             mid, fp = row["message_id"], bundle["source_fingerprint"]
-            audit = _current(ledger, KIND_AUDIT, mid, fp,
+            audit = _current(ledger.db, KIND_AUDIT, mid, fp,
                              out["policy_fingerprint"])
-            summary = _current(ledger, KIND_SUMMARY, mid, fp,
+            summary = _current(ledger.db, KIND_SUMMARY, mid, fp,
                                out["policy_fingerprint"])
             reason = "current_pair_missing"
             if audit is not None and summary is not None:

@@ -19,7 +19,7 @@ def _setup(tmp_path):
     db = _seeded(tmp_path)
     cfg, _ = semantic_policy.semantic_config(_cfg())
     db.artifact_add("semantic_policy", semantic_policy.policy_fingerprint(cfg))
-    bundle = semantic_store.thread_bundle(db, 1, 1, [1, 2])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1, 2])
     return db, cfg, bundle
 
 
@@ -130,7 +130,7 @@ def test_new_reply_fork_survives_and_invalidated_rows_are_never_forked(tmp_path)
         _update(db, cfg, bundle, {1: kept + dropped})
         _update(db, cfg, bundle, {1: kept})       # the second item is reinterpreted away
         db.save_messages([_message(3, parent=1, body="承知しました。")])
-        newer = semantic_store.thread_bundle(db, 1, 1, [3])
+        newer = semantic_store.thread_bundle(db.db, 1, 1, [3])
         _update(db, cfg, newer, {})                # a new reply: fork current items only
         forks = [content["description"] for aid, content, meta in _rows(db, 1)
                  if meta["fingerprint"] == newer["source_fingerprint"]]

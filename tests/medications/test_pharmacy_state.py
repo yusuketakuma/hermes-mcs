@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import patient_context
 import rollup
 from extract_testkit import _hash, _ledger, _message
 
@@ -31,7 +32,7 @@ def test_multiple_drugs_subjects_values_and_parents_are_never_collapsed(tmp_path
         save(led, 1, "\n".join(quotes), parents)
         row = led.db.execute("SELECT * FROM messages").fetchone()
         original = copy.deepcopy(parents)
-        reports = rollup.pharmacy_state_items({"patient_context": parents}, row)
+        reports = patient_context.pharmacy_state_items({"patient_context": parents}, row)
         assert parents == original
         assert [(r["drug_names"], r["subject"], r["value"]) for r in reports] == [
             (["合成薬A"], "patient", "3錠"), (["合成薬A"], "patient", "8錠"),
@@ -52,7 +53,7 @@ def test_multi_drug_parent_is_one_group_not_a_value_distributed_to_each_drug(tmp
     quote = "合成薬Aと合成薬Bを合わせた残薬は3錠。"
     try:
         save(led, 1, quote, [context(quote, names=("合成薬A", "合成薬B"))])
-        reports = rollup.build_rollup(led, 1)["pharmacy_state"]["items"]
+        reports = rollup.build_rollup(led.db, 1)["pharmacy_state"]["items"]
         assert len(reports) == 1 and reports[0]["drug_names"] == ["合成薬A", "合成薬B"]
         assert reports[0]["value"] == "3錠"
     finally:
@@ -65,7 +66,7 @@ def test_aggregation_keeps_history_plans_negation_and_uncertainty_as_reported(tm
     quote = f"{wording}合成薬Aの残薬3錠と記載。"
     try:
         save(led, 1, quote, [context(quote)])
-        report = rollup.build_rollup(led, 1)["pharmacy_state"]["items"][0]
+        report = rollup.build_rollup(led.db, 1)["pharmacy_state"]["items"][0]
         assert report["parent"]["text"] == report["parent"]["evidence"] == quote
         assert "current" not in report and "status" not in report
     finally:
@@ -79,7 +80,7 @@ def test_latest_order_cap_total_and_earlier_artifacts_remain_intact(tmp_path):
             quote = f"合成報告{mid}、合成薬Aの残薬3錠。"
             save(led, mid, quote, [context(quote)])
         before = led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm'").fetchone()[0]
-        result = rollup.build_rollup(led, 1)["pharmacy_state"]
+        result = rollup.build_rollup(led.db, 1)["pharmacy_state"]
         assert (result["total"], len(result["items"]), result["truncated"]) == (105, 100, True)
         assert [r["message_id"] for r in result["items"]] == list(range(105, 5, -1))
         assert led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm'").fetchone()[0] == before
@@ -98,7 +99,7 @@ def test_stale_deleted_or_foreign_sources_do_not_supply_reports(tmp_path, change
         elif change == "delete":
             with led.db:
                 led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=1")
-        result = rollup.build_rollup(led, 1)["pharmacy_state"]
+        result = rollup.build_rollup(led.db, 1)["pharmacy_state"]
         assert result == {"items": [], "total": 0, "truncated": False, "source": "chat"}
         assert led.artifacts("extract_llm")  # aggregation never deletes source history
     finally:
@@ -109,7 +110,7 @@ def test_old_results_and_unfetched_context_do_not_invent_pharmacy_values(tmp_pat
     led = _ledger(tmp_path)
     try:
         save(led, 1, "合成の経過です。", [])
-        result = rollup.build_rollup(led, 1)
+        result = rollup.build_rollup(led.db, 1)
         assert result["patient_context"] == {"memo": {}, "chat": {}}
         assert result["pharmacy_state"]["items"] == []
         assert rollup.PERIOD_CHECK_VERSION == 11
@@ -133,7 +134,7 @@ def test_each_requested_pharmacy_attribute_reaches_the_report(tmp_path, key, val
     quote = f"合成薬Aについて{value}と記載。"
     try:
         save(led, 1, quote, [context(quote, key=key, values=(value,))])
-        reports = rollup.build_rollup(led, 1)["pharmacy_state"]["items"]
+        reports = rollup.build_rollup(led.db, 1)["pharmacy_state"]["items"]
         assert len(reports) == 1 and reports[0]["key"] == key and reports[0]["value"] == value
     finally:
         led.close()
@@ -145,7 +146,7 @@ def test_identical_values_on_distinct_posts_keep_both_source_bindings(tmp_path):
     try:
         for mid in (1, 2):
             save(led, mid, quote, [context(quote)])
-        reports = rollup.build_rollup(led, 1)["pharmacy_state"]["items"]
+        reports = rollup.build_rollup(led.db, 1)["pharmacy_state"]["items"]
         assert len(reports) == 2 and [r["message_id"] for r in reports] == [2, 1]
         assert reports[0]["value"] == reports[1]["value"] == "3錠"
     finally:
@@ -173,7 +174,7 @@ def test_disputed_canonical_medications_stay_reported_and_never_become_current(t
         assert len(projection["meds"]) == 2
         led.artifact_add("canonical_projection", json.dumps(projection), project_id=1, message_id=1,
                          meta={"hash": _hash(led), "projection_version": PROJECTION_VERSION})
-        out = rollup.build_rollup(led, 1)
+        out = rollup.build_rollup(led.db, 1)
         assert not out.get("medications")
         assert {m["name"] for m in out["unverified_medications"]} == set(drugs)
         assert {f["fact_id"] for f in out["canonical_facts"]} == {"f0", "f1"}

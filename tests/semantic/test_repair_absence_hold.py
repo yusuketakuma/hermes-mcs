@@ -53,7 +53,7 @@ class World:
         db.save_patient(patient)
         self.policy = semantic_policy.policy_fingerprint(_scfg())
         db.artifact_add("semantic_policy", self.policy)
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         self.fp = bundle["source_fingerprint"]
         member = next(m for m in bundle["members"] if m["message_id"] == 1)
         base = extraction.extract_facts_v2(_model([MED], {"medication": "one"}), member,
@@ -165,7 +165,7 @@ def test_proven_upgrade_holds_the_generation_once(world):
     for kind in (v4.KIND_V4, "canonical_projection", "semantic_summary", "loop_candidate"):
         assert all(m.get("invalidated") is True for _, m in world.rows(kind)
                    if m.get("fingerprint") == world.fp), kind
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     assert semantic_send_gate._summary_current(db, 1, 1, bundle, world.policy) is None
     with pytest.raises(ValueError, match="loop_candidate_stale"):
         request_loops.current_candidate(db.db, 1, loop_id, 1)

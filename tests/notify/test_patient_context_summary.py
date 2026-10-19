@@ -11,7 +11,7 @@ def test_background_summary_is_private_excerpt_and_rejects_edited_source(tmp_pat
         led.ensure_patient(1)
         led.save_messages([_message(body="住所：合成町\n連絡先：合成窓口\n既往歴：合成疾患。\nアレルギー：なし")])
         extract.run_pending(led)
-        roll = rollup.build_rollup(led, 1)
+        roll = rollup.build_rollup(led.db, 1)
         lines = "\n".join(notify_views._patient_context_lines(led.db, 1, roll))
         assert "合成疾患。" in lines and "アレルギー" in lines
         assert "合成町" not in lines and "合成窓口" not in lines
@@ -28,7 +28,7 @@ def test_background_summary_reads_updated_memo_without_waiting_for_rollup(tmp_pa
     try:
         led.ensure_patient(1)
         led.karte_summary_store(1, 100, {"comment": "方針：合成の旧方針。", "updated_at": "2026-10-05"})
-        roll = rollup.build_rollup(led, 1)
+        roll = rollup.build_rollup(led.db, 1)
         led.karte_summary_store(1, 100, {"comment": "方針：合成の訂正方針。", "updated_at": "2026-10-06"})
         text = "\n".join(notify_views._patient_context_lines(led.db, 1, roll))
         assert "訂正方針" in text and "旧方針" not in text

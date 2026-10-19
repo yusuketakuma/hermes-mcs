@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "台帳の保存構造と実行処理の責務を分離",
+  "summary": "台帳のschema、移行、検索索引と関係整合性ガードの実装を保存構造の正本へまとめました。保存内容や収集・通知の条件は維持します。",
+  "upgrade": "開発候補の内部整理です。DB schema番号と保存形式は変わらず、本作業で既存DBの変更や本番適用は行いません。旧更新ツールが読むschema番号とカード世代の定数は従来のファイルに保持します。",
+  "details": [
+    "接続・接続設定・接続失敗時の終了はLedgerが所有し、ledger_schemaは渡された接続で初期化・移行・整合性ガードのtransactionを所有。",
+    "依頼と通知のDDLを同じschema正本へ移し、DB初期化から実行CLIを読み込む依存を解消。",
+    "移行前の重複・版・中断チェック、FTSバックフィルとversion更新の同一transaction、relation auditの再検査順序を維持。",
+    "読取だけの静的DB契約は接続を作らず、呼出元が指定する対応schema番号を使う。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "mcs/core/ledger_schema.py",
+    "mcs/core/mcs_queries.py"
+  ]
+}

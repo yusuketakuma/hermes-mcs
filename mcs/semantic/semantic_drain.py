@@ -55,7 +55,7 @@ def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
     """This source + policy already ran the current v2 extraction in shadow
     and it stayed incomplete — a receipt, never a completed document."""
     from semantic_extraction import v2_generation
-    row = _current(ledger, KIND_SHADOW_V2, mid, fp, policy)
+    row = _current(ledger.db, KIND_SHADOW_V2, mid, fp, policy)
     return (row is not None and row["content"].get("status") == "incomplete"
             and row["meta"].get("generation") == v2_generation())
 
@@ -71,8 +71,8 @@ def _jev_fail_flag(error) -> str | None:
 
 
 # First cause that stopped the current job pass short of done — a code,
-# never content. A ~600 s pass ended "retry" with neither llm_error nor
-# jev_error, so the run record could not say why (2026-10-10).
+# never content. A pass can end "retry" with neither llm_error nor
+# jev_error; the run record must still explain why.
 _PASS_REASON: dict = {"code": None}
 # Log-only (never in the drain_run artifact): what the shadow v2 comparison
 # cost this run_due pass. It is evaluation only, so its share decides
@@ -113,13 +113,12 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     because it lives on this artifact, not in process memory."""
     summary = {k: v for k, v in r["summary"].items()
                if not k.startswith("_")}
-    # a deferred/pending job re-derives the same outcome on every pass —
-    # without this guard each drain appends a byte-identical
-    # summary+audit pair (observed: 3 identical PENDING rows in 13 min
-    # while Jev was unreachable). The durable store records an outcome
+    # A deferred/pending job re-derives the same outcome on every pass.
+    # Without this guard, unreachable Jev can produce byte-identical
+    # summary+audit pairs repeatedly. The durable store records an outcome
     # once, not once per attempt (FIX-SD1).
-    prev_sum = _current(ledger, KIND_SUMMARY, mid, fp, policy)
-    prev_aud = _current(ledger, KIND_AUDIT, mid, fp, policy)
+    prev_sum = _current(ledger.db, KIND_SUMMARY, mid, fp, policy)
+    prev_aud = _current(ledger.db, KIND_AUDIT, mid, fp, policy)
     if (prev_sum is not None and prev_aud is not None
             and prev_sum["content"] == summary
             and prev_sum["meta"].get("audit_status") == final_status
@@ -228,7 +227,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
     from semantic_extraction import extract_facts_v2, v2_generation
     import semantic_projection  # noqa: F401  loaded before any stage write
     v2_doc = None
-    prev_v2 = _current(ledger, KIND_FACTS_V2, mid, fp)
+    prev_v2 = _current(ledger.db, KIND_FACTS_V2, mid, fp)
     if prev_v2 is not None:
         cached = prev_v2["content"]
         from hashlib import sha256
@@ -409,7 +408,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
     audited = False
     for _attempt in range(2):
         doc_hash = v4._doc_hash(v2_doc)
-        prev_fa = _current(ledger, KIND_FACT_AUDIT, mid, fp, policy)
+        prev_fa = _current(ledger.db, KIND_FACT_AUDIT, mid, fp, policy)
         # C04: only a COMPLETED evaluation is a reusable audit — a
         # stored evaluated:false row (mid-audit outage) must be
         # re-run, otherwise a transient failure pins the generation
@@ -479,7 +478,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
         coverage_missing = any(f.get("code") == "source_fact_coverage_missing"
                                for f in fact_audit["findings"])
         if _attempt == 0 and (rejected or coverage_missing) \
-                and _current(ledger, KIND_FACT_REPAIR,
+                and _current(ledger.db, KIND_FACT_REPAIR,
                              mid, fp) is None:
             if time.monotonic() > deadline - 5:
                 break      # repair still possible next pass
@@ -607,7 +606,7 @@ def _fact_canonical_projection(ledger, member, pid, mid, fp, policy,
     from semantic_projection import (PROJECTION_VERSION,
                                      project_v2_doc_legacy,
                                      projection_current)
-    prev_proj = _current(ledger, KIND_FACT_PROJ, mid, fp, policy)
+    prev_proj = _current(ledger.db, KIND_FACT_PROJ, mid, fp, policy)
     # a row minted by an older projection version (or from another
     # audited document) is stale — supersede it with a fresh row
     if prev_proj is None \
@@ -638,7 +637,7 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
 
     Returns (early, facts): early is the _fact_stage result to return
     as-is, else None with the facts."""
-    prev_f = _current(ledger, KIND_FACTS, mid, fp)
+    prev_f = _current(ledger.db, KIND_FACTS, mid, fp)
     if prev_f is not None:
         facts = prev_f["content"].get("facts", [])
     else:
@@ -678,7 +677,7 @@ def _publish_v4(ledger, pid: int, mid: int, fp: str, policy: str,
         return
     doc = v2_docs_by_target.get(mid)
     if doc is None:
-        prev_v2 = _current(ledger, KIND_FACTS_V2, mid, fp)
+        prev_v2 = _current(ledger.db, KIND_FACTS_V2, mid, fp)
         # never publish from a document the hint rebuild could not re-derive
         doc = prev_v2["content"] if prev_v2 and prev_v2["meta"].get(
             "hint_rebuild") in (None, "same") else None
@@ -780,7 +779,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
         if existing["meta"].get("input_oversize"):
             summary["_input_oversize"] = True
     else:
-        candidate = _current(ledger, KIND_CANDIDATE, mid, fp, policy)
+        candidate = _current(ledger.db, KIND_CANDIDATE, mid, fp, policy)
         if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
             summary = candidate["content"]
         else:
@@ -793,7 +792,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                 if summary is None and summary_reason == "model" \
                         and summary_error.get("code") \
                         and semantic_transport.last_llm_failure() != "length_stop" \
-                        and _current(ledger, KIND_SUMMARY_FORMAT_REPAIR,
+                        and _current(ledger.db, KIND_SUMMARY_FORMAT_REPAIR,
                                      mid, fp, policy) is None:
                     if _PASS_REASON.get("summary_validation_error") is None:
                         _PASS_REASON["summary_validation_error"] = summary_error["code"]
@@ -956,7 +955,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     if targets is None:
         return "failed"
     try:
-        bundle = semantic_store.thread_bundle(ledger, pid, root, targets)
+        bundle = semantic_store.thread_bundle(ledger.db, pid, root, targets)
     except ValueError:
         return "failed"
     if bundle is None:
@@ -968,7 +967,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     policy = policy_fingerprint(scfg)
 
     def current_source_fp():
-        fresh = semantic_store.thread_bundle(ledger, pid, root, targets or [root])
+        fresh = semantic_store.thread_bundle(ledger.db, pid, root, targets or [root])
         return fresh["source_fingerprint"] if fresh else None
 
     def guard(stage):
@@ -1012,9 +1011,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         # transport deadline instead of burning 600 s per attempt (2026-10-10)
         llm_fn, guard, transport_deadline,
         timeout_cap=None if lane == "backlog" else semantic_transport.LLM_TIMEOUT,
-        # one long canonical generation (~300 s) or two thirds of the
-        # per-job budget, whichever is smaller — a follow-up call that
-        # cannot fit defers the pass instead of overrunning it
+        # the shared follow-up reserve or two thirds of the per-job budget,
+        # whichever is smaller — a call that cannot fit defers the pass
+        # instead of overrunning it
         call_reserve=min(runtime.LLM_CALL_RESERVE_S,
                          float(scfg["job_budget_seconds"]) * 2 / 3))
     # provenance on the recorded bundle (spec §12.1): which stored
@@ -1023,7 +1022,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         else {}
     bundle["origin_event_id"] = origin.get("event_id")
     bundle["capture_origin"] = origin.get("source")
-    if _current(ledger, KIND_BUNDLE, root, fp, policy) is None:
+    if _current(ledger.db, KIND_BUNDLE, root, fp, policy) is None:
         ledger.artifact_add(
             KIND_BUNDLE, json.dumps(bundle, ensure_ascii=False),
             project_id=pid, message_id=root, model=jev.JEV_MODEL,
@@ -1047,7 +1046,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         member = members[mid]
         # restart-safe: a complete assessment for THIS fingerprint is
         # reused; retry_wait/error/pending ones are re-attempted
-        prev = _current(ledger, KIND_ASSESS, mid, fp, policy)
+        prev = _current(ledger.db, KIND_ASSESS, mid, fp, policy)
         if prev and prev["meta"].get("technical_status") == "complete":
             verdicts[mid] = prev["content"].get("verdicts", {})
         else:
@@ -1110,7 +1109,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             guard("loop_candidates")
             update_loops(ledger, pid, bundle, {mid: facts}, None, scfg, deadline)
         if scfg["summary_mode"] != "off":
-            previous = _current(ledger, KIND_COVERAGE, mid, fp, policy)
+            previous = _current(ledger.db, KIND_COVERAGE, mid, fp, policy)
             coverage = previous["content"] if previous else None
             if not coverage or not coverage.get("evaluated"):
                 from semantic_audit import evaluate_source_fact_coverage
@@ -1156,8 +1155,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     for mid, facts in facts_by_target.items():
         if scfg["summary_mode"] == "off":
             continue
-        existing = _current(ledger, KIND_SUMMARY, mid, fp, policy)
-        prev_audit = _current(ledger, KIND_AUDIT, mid, fp, policy)
+        existing = _current(ledger.db, KIND_SUMMARY, mid, fp, policy)
+        prev_audit = _current(ledger.db, KIND_AUDIT, mid, fp, policy)
         if existing and existing["meta"].get("publication_mode") != scfg["summary_mode"]:
             existing = None
             prev_audit = None
@@ -1190,7 +1189,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             # PENDING rows on every drain
             if summary_reason == "model":
                 retryable_failure = True
-            prev_a = _current(ledger, KIND_AUDIT, mid, fp, policy)
+            prev_a = _current(ledger.db, KIND_AUDIT, mid, fp, policy)
             if not (prev_a
                     and prev_a["meta"].get("technical_status")
                     == "pending"
@@ -1215,7 +1214,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             else "done")
         # Preserve the pre-audit output for the fixed-bundle comparison (§24.1).
         # It is never eligible for publication or automatic adoption.
-        if existing is None and _current(ledger, KIND_CANDIDATE, mid, fp, policy) is None:
+        if existing is None and _current(ledger.db, KIND_CANDIDATE, mid, fp, policy) is None:
             guard("candidate_snapshot")
             ledger.artifact_add(
                 KIND_CANDIDATE, json.dumps(summary, ensure_ascii=False),
@@ -1225,7 +1224,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                       "publication_mode": scfg["summary_mode"],
                       "target_revision": members[mid]["revision"]})
         # Reserve before dispatch: a crash cannot refund the repair (INV-10).
-        repaired = bool(_current(ledger, KIND_REPAIR, mid, fp)
+        repaired = bool(_current(ledger.db, KIND_REPAIR, mid, fp)
                         or (prev_audit
                             and prev_audit["meta"].get("repair_count", 0) >= 1))
         summary["_facts"] = facts   # evidence context for the Jev audit
@@ -1737,9 +1736,9 @@ _BACKLOG_INVALIDATE_S = 300.0
 # job untouched and exiting the resident (2026-10-09). Outwait a full
 # tick instead — never past the pass deadline run_due was given.
 RUN_LOCK_REACQUIRE_S = 660.0
-# A tick holds the run lock for up to ~520 s (2026-10-10: run 4380 held it
-# 518 s). Backlog work stops this long before the job deadline, so a
-# result can wait out a tick and still be written in time — never after.
+# A tick can hold the run lock across its work window. Backlog work
+# stops early enough for a result to wait out a tick and still be
+# written before the job deadline.
 BACKLOG_COMMIT_RESERVE_S = 540.0
 # what a resumed pass may spend before its first (long-output) call
 _LONG_START_S = 60.0
@@ -2217,10 +2216,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         # backlog (persisted accounting row keeps it restart-safe).
         # These shares apply within each patient class; archived patients
         # receive only capacity left by active patients.
-        # QC dedicated frame (observed 2026-09-30): kind ordering puts every
-        # semantic row ahead of QC in both cohorts, and a ~240 s generation
-        # consumes the whole window — QC rows sat pending for hours at
-        # attempts=0. QC gets a bounded share of the window, served FIRST
+        # QC dedicated frame: kind ordering puts semantic rows ahead of QC
+        # in both cohorts. Long generations can consume the whole window
+        # and starve QC without attempting it. QC gets a bounded share,
+        # served FIRST
         # (each pass is one bounded chunked eval), expanding into whatever
         # the semantic lanes leave unused. A 1-job window cannot be split —
         # QC falls back to the persisted cohort alternation inside the
@@ -2273,13 +2272,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         out["mode"] = "off"
                         break
                 # A semantic job's first call is exempt from the in-call reserve
-                # gate — dispatching one under the call reserve burns a doomed
-                # generation and a retry attempt (2026-10-01: revived jobs
-                # failed at the attempt ceiling doing exactly this in 120 s
-                # batches). Only start one when a call can plausibly fit — the
-                # same reserve the gate applies to follow-up calls; further
-                # stages then defer via BudgetShort for free. Trailing QC rows
-                # need only ~15 s.
+                # gate. Starting below that reserve can burn a doomed
+                # generation and a retry attempt before any useful progress.
+                # Only start one when a call can plausibly fit, using the same
+                # reserve applied to follow-up calls. Further stages defer
+                # via BudgetShort without charging an attempt. Trailing QC
+                # rows use their separate start floor.
                 floor = deadline - (15.0 if job["kind"] == QC_JOB_KIND else
                                     min(runtime.LLM_CALL_RESERVE_S,
                                         float(scfg["job_budget_seconds"]) * 2 / 3))
@@ -2618,11 +2616,10 @@ def main() -> int:
                     if args.revive_failed:
                         totals["revive"] = revive_failed(led)
                 cfg = load_config()
-                # the batch must fit one full job budget or a ~300 s
-                # canonical generation can never complete inside it —
-                # 120 s batches burned a doomed call + an attempt on
-                # every revived job (2026-10-01: 11 jobs failed at the
-                # attempt ceiling with llm_s≈118 each pass). Still
+                # The batch must fit one full job budget so a canonical
+                # generation can complete. A shorter batch can repeatedly
+                # abandon useful work and exhaust the retry allowance of
+                # revived jobs without letting the generation finish. Still
                 # bounded: the tick waits at most job_budget+30 s.
                 try:
                     batch_s = max(

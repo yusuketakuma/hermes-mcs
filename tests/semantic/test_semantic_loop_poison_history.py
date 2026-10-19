@@ -15,7 +15,7 @@ def test_poison_loop_history_does_not_block_valid_relation(tmp_path, poison):
     ledger = _seeded(tmp_path)
     try:
         cfg, _ = semantic_policy.semantic_config(_cfg())
-        bundle = semantic_store.thread_bundle(ledger, 1, 1, [2])
+        bundle = semantic_store.thread_bundle(ledger.db, 1, 1, [2])
         facts = {1: _pending_fact(bundle["members"][0])}
         loops.update_loops(ledger, 1, bundle, facts, None, cfg, time.monotonic() + 30)
         candidate = ledger.artifacts(loops.KIND_LOOP, project_id=1)[0]

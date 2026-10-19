@@ -9,6 +9,8 @@ so every test is an honest A->B->A round trip.
 """
 from __future__ import annotations
 
+import notify_recovery
+
 import asyncio
 import json
 import os
@@ -28,7 +30,6 @@ import notify_cards
 import notify_render
 import notify_action_tokens
 import notify_actions
-import notify_transport
 import notify_cmds
 
 from adapters.common import (envelopes, journal, paths,
@@ -395,7 +396,7 @@ def test_restore_after_send_holds_until_reconcile(world):
            "channel_id": "42", "message_id": str(msg.id),
            "evidence": {"method": "remote_receipt",
                         "ref": f"msg:{msg.id}"}}
-    out = notify_transport.apply_card_resolve(world.led, req, CFG)
+    out = notify_recovery.apply_card_resolve(world.led, req, CFG)
     assert out["outcome"] == "applied"
     card = dict(world.led.db.execute(
         "SELECT * FROM notification_cards WHERE card_id=1"
@@ -2455,7 +2456,7 @@ def test_unknown_never_resends_late_success_binds_update(world):
     attempt = world.led.db.execute(
         "SELECT attempt_id,delivery_id FROM notification_delivery_attempts"
     ).fetchone()
-    res = notify_transport.apply_card_resolve(world.led, {
+    res = notify_recovery.apply_card_resolve(world.led, {
         "version": 1, "cmd": "ops.card_resolve",
         "command_id": "00000000-0000-4000-8000-0000000000aa",
         "actor": "op-user", "human_confirmed": True,

@@ -1,4 +1,5 @@
 """Human-bound recovery of unknown parts, with synthetic ledger and journals."""
+import notify_recovery
 import json
 
 import pytest
@@ -22,7 +23,7 @@ def prepare(led, kind="body_part"):
         assert _part_receipt(led, render, part["part_id"],
                              result="unknown" if part == target else "delivered",
                              remote_id=None if part == target else "synthetic-" + part["part_id"])["applied"]
-    plan = transport.card_part_resolve_plan(led, render["delivery_id"], target["part_id"])
+    plan = notify_recovery.card_part_resolve_plan(led, render["delivery_id"], target["part_id"])
     assert "error" not in plan
     return {**plan, "command_id": _uuid(910), "actor": "synthetic-operator",
             "human_confirmed": True, "reason": "合成の配送確認",
@@ -33,22 +34,22 @@ def prepare(led, kind="body_part"):
 def test_plan_is_read_only_and_resolution_replay_is_idempotent(led):
     req = prepare(led)
     before = led.db.total_changes
-    assert transport.card_part_resolve_plan(led, req["delivery_id"], req["part_id"])["expected_state"] == "unknown"
+    assert notify_recovery.card_part_resolve_plan(led, req["delivery_id"], req["part_id"])["expected_state"] == "unknown"
     assert led.db.total_changes == before
     assert mcs_requests.validate(req) is None
-    receipt = transport.apply_card_part_resolve(led, req, CFG, NOW + 1)
+    receipt = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 1)
     assert receipt["outcome"] == "applied" and receipt["part_state"] == "delivered"
-    assert transport.apply_card_part_resolve(led, req, CFG, NOW + 2) == receipt
-    assert transport.apply_card_part_resolve(led, {**req, "reason": "changed"}, CFG, NOW + 2)["error"] == "command_id_conflict"
+    assert notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 2) == receipt
+    assert notify_recovery.apply_card_part_resolve(led, {**req, "reason": "changed"}, CFG, NOW + 2)["error"] == "command_id_conflict"
 
 
 @pytest.mark.parametrize("field,value", [("manifest_sha256", "a" * 64), ("payload_sha256", "b" * 64),
                                          ("attempt_id", "wrong-attempt"), ("channel_id", "wrong-channel")])
 def test_stale_plan_never_settles_a_part(led, field, value):
     req = prepare(led)
-    result = transport.apply_card_part_resolve(led, {**req, field: value}, CFG, NOW + 1)
+    result = notify_recovery.apply_card_part_resolve(led, {**req, field: value}, CFG, NOW + 1)
     assert result["error"] == "stale_part_plan"
-    assert transport.card_part_resolve_plan(led, req["delivery_id"], req["part_id"])["expected_state"] == "unknown"
+    assert notify_recovery.card_part_resolve_plan(led, req["delivery_id"], req["part_id"])["expected_state"] == "unknown"
 
 
 def journal(led, req, result, remote_id=None):
@@ -63,16 +64,16 @@ def journal(led, req, result, remote_id=None):
 def test_part_journal_delivered_cannot_be_overruled(led):
     req = prepare(led)
     journal(led, req, "delivered", "actual-post")
-    assert transport.apply_card_part_resolve(led, req, CFG, NOW)["error"] == "remote_id_mismatch"
+    assert notify_recovery.apply_card_part_resolve(led, req, CFG, NOW)["error"] == "remote_id_mismatch"
     req.update(command_id=_uuid(911), result="mark_not_sent",
                evidence={**req["evidence"], "proof": "remote_absent"})
-    assert transport.apply_card_part_resolve(led, req, CFG, NOW)["error"] == "journal_contradicts_proof"
+    assert notify_recovery.apply_card_part_resolve(led, req, CFG, NOW)["error"] == "journal_contradicts_proof"
 
 
 def test_part_not_sent_replans_only_missing_parts(led):
     req = prepare(led)
     req.update(result="mark_not_sent", evidence={**req["evidence"], "proof": "remote_absent"})
-    receipt = transport.apply_card_part_resolve(led, req, CFG, NOW + 1)
+    receipt = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 1)
     assert receipt["outcome"] == "applied"
     latest = _latest_render(led)
     assert latest["delivery_id"] != req["delivery_id"]
@@ -85,9 +86,9 @@ def test_lineworks_remote_absence_needs_risk_acceptance(led):
     req.update(transport="lineworks", team_id="synthetic-team", result="mark_not_sent",
                evidence={**req["evidence"], "proof": "remote_absent"})
     del req["guild_id"]
-    assert transport.validate_card_part_resolve(req) == "duplicate_risk_acknowledgement_required"
+    assert notify_recovery.validate_card_part_resolve(req) == "duplicate_risk_acknowledgement_required"
     req["evidence"]["duplicate_risk_accepted"] = True
-    assert transport.validate_card_part_resolve(req) is None
+    assert notify_recovery.validate_card_part_resolve(req) is None
 
 
 @pytest.mark.parametrize("blocked", ["restore", "update_failed"])
@@ -100,7 +101,7 @@ def test_part_resolution_does_not_release_independent_holds(led, blocked):
         with led.db:
             led.db.execute("UPDATE notification_cards SET delivery_state='update_failed'")
     req.update(result="mark_not_sent", evidence={**req["evidence"], "proof": "remote_absent"})
-    receipt = transport.apply_card_part_resolve(led, req, CFG, NOW + 1)
+    receipt = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 1)
     assert receipt["outcome"] == "applied"
     assert _latest_render(led)["delivery_id"] == req["delivery_id"]
 
@@ -140,7 +141,7 @@ def test_unknown_card_remote_absent_can_be_human_resolved(led):
          'delivery_id':render['delivery_id'],'attempt_id':f'{1:016x}',
          'result':'mark_not_sent',**SCOPE,
          'evidence':{'method':'synthetic_lookup','ref':'synthetic-only','worker_stopped':True,'proof':'remote_absent'}}
-    result=transport.apply_card_resolve(led,req,CFG,NOW+1)
+    result=notify_recovery.apply_card_resolve(led,req,CFG,NOW+1)
     assert result['outcome']=='applied', result
 
 
@@ -158,7 +159,7 @@ def test_lineworks_part_evidence_limit_matches_proof(led, proof):
         assert _apply(led, envelopes.part_receipt(
             claim, part, "unknown" if unknown else "delivered",
             remote_id=None if unknown else "lw:synthetic:" + part["part_id"]))["applied"]
-    req = {**transport.card_part_resolve_plan(led, render["delivery_id"], target["part_id"]),
+    req = {**notify_recovery.card_part_resolve_plan(led, render["delivery_id"], target["part_id"]),
            "command_id": _uuid(915), "actor": "synthetic-operator",
            "human_confirmed": True, "reason": "合成の配送確認", "result": "mark_not_sent",
            "evidence": {"method": "synthetic_lookup", "ref": "synthetic-proof",
@@ -171,10 +172,10 @@ def test_lineworks_part_evidence_limit_matches_proof(led, proof):
         (root / "journal-synthetic.jsonl").write_text(json.dumps({
             "attempt_id": req["attempt_id"], "delivery_id": req["delivery_id"],
             "part_id": req["part_id"], "phase": "result", "result": "not_sent"}) + "\n")
-    receipt = transport.apply_card_part_resolve(led, req, LINEWORKS, NOW + 1)
+    receipt = notify_recovery.apply_card_part_resolve(led, req, LINEWORKS, NOW + 1)
     assert receipt["outcome"] == "applied"
     assert ("evidence_limit" in receipt) == (proof == "remote_absent")
-    assert transport.apply_card_part_resolve(led, req, LINEWORKS, NOW + 2) == receipt
+    assert notify_recovery.apply_card_part_resolve(led, req, LINEWORKS, NOW + 2) == receipt
 
 
 def test_settlement_rejection_rolls_back_partial_changes_and_consumes_command(led, monkeypatch):
@@ -201,7 +202,7 @@ def test_settlement_rejection_rolls_back_partial_changes_and_consumes_command(le
     job_ops.drain_commands(led, result, str(command_dir))
     assert not command.exists()
     assert result["errors"] == ["cmd_invalid: part_settle_rejected"]
-    receipt = transport.apply_card_part_resolve(led, req, CFG, NOW + 2)
+    receipt = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 2)
     assert receipt["outcome"] == "rejected" and receipt["error"] == "part_settle_rejected"
     assert calls == [True]
     assert [tuple(row) for row in led.db.execute("SELECT * FROM notification_render_parts")] == before
@@ -219,6 +220,6 @@ def test_settlement_storage_failure_still_propagates_and_rolls_back(led, monkeyp
 
     monkeypatch.setattr(transport, "settle_part_receipt", fail)
     with pytest.raises(sqlite3.OperationalError, match="synthetic storage failure"):
-        transport.apply_card_part_resolve(led, req, CFG, NOW + 1)
+        notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 1)
     assert [tuple(row) for row in led.db.execute("SELECT * FROM notification_render_parts")] == before
     assert led.db.execute("SELECT 1 FROM command_receipts WHERE command_id=?", (req["command_id"],)).fetchone() is None

@@ -1,4 +1,5 @@
 """Synthetic Slack runner contract and Discord isolation, without network I/O."""
+import notify_recovery
 import json
 import uuid
 
@@ -437,10 +438,10 @@ def test_slack_unknown_never_retries_and_operator_resolution_is_scoped(led):
                "delivery_id": render["delivery_id"], "attempt_id": "a" * 16,
                **SCOPE, "result": "mark_delivered", "message_id": "1790000000.000123",
                "evidence": {"method": "synthetic", "ref": "fake-journal"}}
-    assert transport.validate_card_resolve(resolve) is None
+    assert notify_recovery.validate_card_resolve(resolve) is None
     bad = {**resolve, "command_id": str(uuid.uuid4()), "team_id": "T_OTHER"}
-    assert transport.apply_card_resolve(led, bad, SLACK)["error"] == "scope_mismatch"
-    assert transport.apply_card_resolve(led, resolve, SLACK)["outcome"] == "applied"
+    assert notify_recovery.apply_card_resolve(led, bad, SLACK)["error"] == "scope_mismatch"
+    assert notify_recovery.apply_card_resolve(led, resolve, SLACK)["outcome"] == "applied"
     assert _card(led)["delivery_state"] == "delivered"
     thread = {"version": 2, "op": "thread_receipt", "command_id": str(uuid.uuid4()),
               "delivery_id": render["delivery_id"], **SCOPE,

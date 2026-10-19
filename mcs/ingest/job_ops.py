@@ -161,11 +161,11 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             # before the common apply_command validation would reject it.
             try:
                 if req["cmd"] == "ops.card_part_resolve":
-                    import notify_transport
-                    receipt = notify_transport.apply_card_part_resolve(ledger, req)
+                    import notify_recovery
+                    receipt = notify_recovery.apply_card_part_resolve(ledger, req)
                 elif req["cmd"] == "ops.card_resolve":
-                    import notify_transport
-                    receipt = notify_transport.apply_card_resolve(ledger, req)
+                    import notify_recovery
+                    receipt = notify_recovery.apply_card_resolve(ledger, req)
                 else:
                     receipt = mcs_requests.apply_command(ledger, req)
             except (ValueError, TypeError, KeyError, UnicodeError,

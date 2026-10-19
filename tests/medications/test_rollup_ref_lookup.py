@@ -15,10 +15,10 @@ def test_current_refs_called_only_for_med_ref_messages(tmp_path, monkeypatch):
     real = rollup.current_refs
     monkeypatch.setattr(rollup, "current_refs",
                         lambda db, mid: calls.append(mid) or real(db, mid))
-    rollup.build_rollup(store, 1)
+    rollup.build_rollup(store.db, 1)
     assert calls == []   # no med_ref rows: no per-message lookups
     drug_map.derive(store, _dictionary(tmp_path))
     ref_mids = {a["message_id"] for a in store.artifacts(drug_map.KIND)}
-    rows = rollup.build_rollup(store, 1)["medications"]
+    rows = rollup.build_rollup(store.db, 1)["medications"]
     assert set(calls) == ref_mids and 1 in ref_mids
     assert {r["name"]: r["ref"]["status"] for r in rows if "ref" in r}["キラナ"] == "resolved"

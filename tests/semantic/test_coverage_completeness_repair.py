@@ -41,7 +41,7 @@ def test_coverage_only_finding_can_dispatch_once_then_requires_a_fresh_pass(tmp_
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body=FIRST + SECOND)])
-    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
     member = bundle["members"][0]
     scfg, errors = semantic_policy.semantic_config(_canonical_cfg())
     assert not errors
@@ -77,7 +77,7 @@ def test_coverage_repair_cannot_promote_a_fact_in_a_category_adjudicated_absent(
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body=FIRST + SECOND)])
-    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
     scfg, _ = semantic_policy.semantic_config(_canonical_cfg())
     calls = []
 
@@ -107,7 +107,7 @@ def test_a_repair_that_returns_a_kept_fact_again_links_it_once(tmp_path):
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body=FIRST + SECOND)])
-    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
     scfg, _ = semantic_policy.semantic_config(_canonical_cfg())
     calls = []
 

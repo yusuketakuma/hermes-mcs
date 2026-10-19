@@ -28,20 +28,14 @@ def llm_conf(cfg: dict | None = None) -> tuple[str, str]:
 
 def llm_model(cfg: dict | None = None) -> str:
     return llm_conf(cfg)[1]
-# 600s: the v2 fact document can emit ~2-4K tokens, and under dual-slot
-# load decode runs ~3-5 t/s — a single call was measured at 322s
-# (2026-09-27), so anything below ~450 still turns legitimate v2
-# documents into retrying "model" failures.  The drain also uses this
-# constant as its per-call timeout_cap, except in the backlog lane, where
-# a call is bounded by the job deadline instead.
+# The per-call timeout allows bounded fact documents to finish under
+# shared load. The drain also uses this as timeout_cap, except in the
+# backlog lane, where the job deadline bounds the call instead.
 LLM_TIMEOUT = 600
 
-# v2 fact documents (facts + evidence + category_presence) and v4
-# summaries routinely exceed the shared 1400-token default — a real
-# clinical message hit finish_reason:"length" at exactly 1400 tokens
-# mid-document (measured 2026-09-27), which the acceptance check then
-# rejects as an eternal "model" failure.  The ceiling only bounds the
-# worst case; the timeout still bounds wall time.
+# Fact documents and summaries can exceed the shared output default.
+# A length-truncated document fails acceptance and must not become an
+# endless model retry. The ceiling bounds output; timeout bounds wall time.
 LLM_MAX_TOKENS = 4096
 
 
@@ -49,9 +43,8 @@ LLM_MAX_TOKENS = 4096
 
 # Constrained JSON output for every semantic prompt (facts v2, legacy
 # facts, summary, repairs all end in "JSON:"): the server's json_object
-# grammar removes prose-wrapped/unterminated replies that parsed as
-# nothing (11 of 104 shadow audits in the week to 2026-09-30 had no
-# parseable summary). Same probe/cooldown/degrade ladder as
+# grammar removes prose-wrapped/unterminated replies that have no
+# parseable summary. Same probe/cooldown/degrade ladder as
 # extract_llm, minus the schema rung; a rejected format degrades to
 # plain for one retry and re-probes after the cooldown.
 _FMT_MODE = None      # None=unprobed | "object" | "plain"
@@ -132,21 +125,19 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
     return _FMT_MODE
 
 
-# Long outputs (2026-10-01): a fact-rich message can need more than
-# max_tokens — one 879-char post emits a 40-fact v2 doc of ~5.7k tokens.
-# With temperature 0 every retry stopped at the same ceiling, spending
-# ~5 min of a slot per attempt until the job failed. A length stop is
-# retried ONCE with LLM_LONG_MAX_TOKENS in the remaining budget, and the
-# prompt is remembered (1 = start at the long ceiling, 2 = even that
-# stopped on length: fail fast without a model call) so later attempts
-# spend the long call only once. Prompt + long ceiling fit one slot.
+# Fact-rich messages may exceed the normal output ceiling. Repeating
+# the same request can reproduce the same length stop and waste a slot.
+# A length stop retries ONCE with LLM_LONG_MAX_TOKENS in the remaining
+# budget. The prompt is remembered (1 = start at the long ceiling,
+# 2 = even that stopped on length: fail fast without a model call), so
+# later attempts spend the long call only once. Prompt and ceiling fit
+# one slot.
 LLM_LONG_MAX_TOKENS = 8192
 _LONG_PATH = os.path.join(HOME, "data", "semantic_long_output.json")
 _LONG_MAX = 500
-# a long-ceiling call measured ~320 s alone (2026-10-01) and 587 s on
-# 2026-10-10: with less budget it would only time out and burn an
-# attempt, so it is not sent (free defer — the background lanes take it;
-# a tick lane never can)
+# A long-ceiling call is deferred when its remaining budget is too
+# short to complete. Deferral consumes no attempt; background lanes
+# with sufficient time may take it, while a short tick lane cannot.
 _LONG_MIN_CALL_S = 620.0
 # Least time a send may have left after the backlog GPU turn is won;
 # capped at half the live window so a short job budget never reports

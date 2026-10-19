@@ -3,7 +3,6 @@ from __future__ import annotations
 import semantic_store
 
 import json
-from types import SimpleNamespace
 
 from mcs_requests import positive, valid_hash
 
@@ -112,7 +111,7 @@ def current_candidate(db, project_id: int, artifact_id: int,
     # Importing semantic here avoids a module cycle through mcs_requests and
     # keeps this read-only selector usable by the receipt path.
 
-    bundle = semantic_store.thread_bundle(SimpleNamespace(db=db), project_id, root_id)
+    bundle = semantic_store.thread_bundle(db, project_id, root_id)
     if bundle is None:
         raise ValueError("loop_thread_missing")
     member = next((m for m in bundle["members"]
@@ -203,7 +202,7 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None):
         (pid, r["message_id"])).fetchone()
     root = source["root"] if source else None
     if root not in bundles:
-        bundles[root] = semantic_store.thread_bundle(SimpleNamespace(db=db), pid, root) if root else None
+        bundles[root] = semantic_store.thread_bundle(db, pid, root) if root else None
     bundle = bundles[root]
     candidate_fp = candidate_meta.get(
         "source_fingerprint", candidate_meta.get("fingerprint"))

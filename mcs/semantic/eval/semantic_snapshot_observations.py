@@ -103,7 +103,6 @@ def attach(record, documents, candidate, cfg):
     from semantic_lifecycle import fact_lifecycle, _verified
     from semantic_store import _current
     from semantic_v4 import _doc_hash
-    from types import SimpleNamespace
     from request_loops import effective_loop_state
     bundle = source_bundle(record, cfg)
     if bundle is None:
@@ -167,7 +166,7 @@ def attach(record, documents, candidate, cfg):
                     or source.get('revision') != member['revision']
                     or source.get('source_fingerprint') != fp):
                 raise EvaluationError('observation_document_source_mismatch')
-            stored = _current(SimpleNamespace(db=db), 'semantic_facts_v2', member['message_id'], fp, policy)
+            stored = _current(db, 'semantic_facts_v2', member['message_id'], fp, policy)
             if stored is None or _doc_hash(stored['content']) != _doc_hash(doc):
                 raise EvaluationError('observation_document_mismatch')
             ids, reason = _verified(db, member['message_id'], fp, policy)

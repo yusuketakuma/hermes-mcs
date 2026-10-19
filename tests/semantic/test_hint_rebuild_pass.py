@@ -124,7 +124,7 @@ def test_old_documents_are_marked_and_only_the_changed_one_is_held(world):
     assert state == "pending" and payload["notification_free"] is True
     # the send gate holds message 2's summary and still publishes message 1's
     policy = semantic_policy.policy_fingerprint(_scfg())
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     assert semantic_send_gate._summary_current(db, 1, 1, bundle, policy) is not None
     assert semantic_send_gate._summary_current(db, 1, 2, bundle, policy) is None
 
@@ -298,7 +298,7 @@ def test_reprojected_document_drops_loop_candidates_it_no_longer_yields(world):
     _drain(db)
     scfg = semantic_policy.semantic_config(_cfg("enforce", fact_source="canonical",
                                          fact_source_gate="g6-v1:test"))[0]
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     stray = {"fact_id": "fact_stray", "kind": "schedule", "statement": "退院した",
              "polarity": "affirmed", "evidence_refs": [], "_evidence": None,
              "validation_status": "verified"}

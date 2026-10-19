@@ -405,7 +405,7 @@ def test_source_digest_change_does_not_requeue_completed_legacy_checkpoints_or_f
         monkeypatch.setattr(extract_llm, "_LOADED_SOURCE_DIGESTS", {
             **extract_llm._LOADED_SOURCE_DIGESTS, "clinical_values": "0" * 64})
         assert extract_llm._chunk_context(source, None, checkpoint=True) == before_binding
-        assert extract_llm._saved_chunk_state(db, source)[1] == {0: {}}
+        assert extract_llm._saved_chunk_state(db.db, source)[1] == {0: {}}
         monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
                             pytest.fail("old completed checkpoint was re-inferred"))
         assert extract_llm.run_pending(db, budget_s=200)["done"] == 1

@@ -5,11 +5,10 @@ import re
 
 from clinical_values import patient_item_scope
 from mcs_queries import ELIGIBLE_MESSAGE, JST, current_fact_pred, current_v4_id, json_or_null
-from mcs_requests import valid_hash
 from mcs_util import loads_dict
 from mcs_util import payload_hash as _digest
 from patient_context import reference_item
-from rollup import pharmacy_state_items
+import patient_context
 from stats_math import finite_number as _finite
 
 KIND = "extract_llm_context_v1"
@@ -114,7 +113,7 @@ def _reports(row, version):
     document, meta = loads_dict(row["content"]) or {}, loads_dict(row["meta"]) or {}
     if row["kind"] not in ("extract_llm", "canonical_projection", "semantic_facts_v4"):
         return []
-    reports = pharmacy_state_items(document, row)
+    reports = patient_context.pharmacy_state_items(document, row)
     for report in reports:
         report["reference_eligible"] = (not row.get("held") and not document.get("_error")
             and ((_clean_legacy(meta, version) and isinstance(meta.get("actual_model"), str)
@@ -212,7 +211,7 @@ def load(db, artifact_id, target):
     if not isinstance(doc, dict) or not isinstance(meta, dict):
         return None
     payload = {key: doc.get(key) for key in ("binding", "source", "text", "refs", "enabled")}
-    if (meta.get("hash") != target["content_hash"] or not valid_hash(doc.get("binding"))
+    if (meta.get("hash") != target["content_hash"] or not patient_context.valid_reference_hash(doc.get("binding"))
             or not isinstance(doc.get("text"), (str, type(None))) or type(doc.get("enabled")) is not bool
             or not isinstance(doc.get("refs"), dict) or doc.get("source") != _source(target)
             or (doc["text"] is not None and len(doc["text"]) > TOTAL_MAX)):
@@ -235,7 +234,7 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
     target = dict(target)
     if (type(enabled) is not bool or not isinstance(base_context, (str, type(None)))
             or not isinstance(model, str) or not model or not isinstance(contract, str) or not contract
-            or not isinstance(attempt, dict) or not valid_hash(target.get("content_hash"))
+            or not isinstance(attempt, dict) or not patient_context.valid_reference_hash(target.get("content_hash"))
             or any(type(target.get(key)) is not int or target[key] <= 0
                    for key in ("project_id", "message_id"))):
         raise ValueError("invalid_context_options")
@@ -260,7 +259,7 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
             if old is not None and old["binding"] == binding:
                 return old
             doc, meta = loads_dict(row["content"]), loads_dict(row["meta"])
-            if isinstance(meta, dict) and valid_hash(meta.get("hash")) and meta["hash"] != target["content_hash"]:
+            if isinstance(meta, dict) and patient_context.valid_reference_hash(meta.get("hash")) and meta["hash"] != target["content_hash"]:
                 continue
             if not isinstance(doc, dict) or not isinstance(meta, dict) or doc.get("binding") == binding:
                 raise ValueError("context_snapshot_invalid")

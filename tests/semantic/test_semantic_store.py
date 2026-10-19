@@ -13,9 +13,9 @@ def test_chunk_plan_change_invalidates_completed_bundle(tmp_path, monkeypatch):
     import clinical_chunking
     db = _seeded(tmp_path)
     try:
-        first = semantic_store.thread_bundle(db, 1, 1, local_model="synthetic-model")
+        first = semantic_store.thread_bundle(db.db, 1, 1, local_model="synthetic-model")
         monkeypatch.setattr(clinical_chunking, "PLAN_VERSION", "synthetic-next-plan")
-        changed = semantic_store.thread_bundle(db, 1, 1, local_model="synthetic-model")
+        changed = semantic_store.thread_bundle(db.db, 1, 1, local_model="synthetic-model")
         assert changed["source_fingerprint"] != first["source_fingerprint"]
     finally:
         db.close()
@@ -37,7 +37,7 @@ def test_thread_attachment_scope_order_and_generation(tmp_path):
                 db.db.execute(
                     'INSERT INTO attachments(message_id,file_id,name,state) '
                     'VALUES(?,?,?,?)', (mid, file_id, file_id + '.txt', state))
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         attachments = {m['message_id']: m['attachments']
                        for m in bundle['members']}
         assert {mid: [a['file_id'] for a in values]
@@ -46,15 +46,15 @@ def test_thread_attachment_scope_order_and_generation(tmp_path):
         assert all(set(a) == {'attachment_id', 'file_id', 'name',
                               'bytes', 'sha256', 'state'}
                    for values in attachments.values() for a in values)
-        assert semantic_store.thread_bundle(db, 1, 1, [2])['source_fingerprint'] == bundle['source_fingerprint']
+        assert semantic_store.thread_bundle(db.db, 1, 1, [2])['source_fingerprint'] == bundle['source_fingerprint']
         with db.db:
             db.db.execute("UPDATE attachments SET sha256='changed' "
                           "WHERE file_id='other-project'")
-        assert semantic_store.thread_bundle(db, 1, 1)['source_fingerprint'] == bundle['source_fingerprint']
+        assert semantic_store.thread_bundle(db.db, 1, 1)['source_fingerprint'] == bundle['source_fingerprint']
         with db.db:
             db.db.execute("UPDATE attachments SET sha256='changed' "
                           "WHERE file_id='reply-second'")
-        assert semantic_store.thread_bundle(db, 1, 1)['source_fingerprint'] != bundle['source_fingerprint']
+        assert semantic_store.thread_bundle(db.db, 1, 1)['source_fingerprint'] != bundle['source_fingerprint']
     finally:
         db.close()
 
@@ -72,8 +72,8 @@ def test_current_artifact_skips_non_object_metadata(tmp_path, malformed_meta):
                 'INSERT INTO artifacts(kind,project_id,message_id,content,meta) '
                 'VALUES(?,1,1,?,?)',
                 (semantic_policy.KIND_SUMMARY, '{}', malformed_meta))
-        assert semantic_store._current(db, semantic_policy.KIND_SUMMARY, 1, 'current')['content'] == valid
-        assert semantic_store._current(db, semantic_policy.KIND_SUMMARY, 1, 'changed') is None
+        assert semantic_store._current(db.db, semantic_policy.KIND_SUMMARY, 1, 'current')['content'] == valid
+        assert semantic_store._current(db.db, semantic_policy.KIND_SUMMARY, 1, 'changed') is None
     finally:
         db.close()
 
@@ -84,7 +84,7 @@ def test_current_artifact_rejects_non_object_payload(tmp_path, payload):
     try:
         db.artifact_add(semantic_policy.KIND_SUMMARY, payload, message_id=1,
                         meta={'fingerprint': 'current'})
-        assert semantic_store._current(db, semantic_policy.KIND_SUMMARY, 1, 'current') is None
+        assert semantic_store._current(db.db, semantic_policy.KIND_SUMMARY, 1, 'current') is None
     finally:
         db.close()
 

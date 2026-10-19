@@ -340,7 +340,7 @@ def test_request_loop_ref_binds_candidate_and_rejects_stale_preview(tmp_path):
     db = _source(tmp_path)
     inbox = tmp_path / "cmd"
     inbox.mkdir()
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     policy = "a" * 64
     db.artifact_add("semantic_policy", policy)
     member = next(item for item in bundle["members"]
@@ -492,7 +492,7 @@ def test_summary_comparison_adoption_preview_confirm_and_stale_guard(tmp_path):
     ).fetchone()[0]
     policy = "c" * 64
     db.artifact_add("semantic_policy", policy)
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     member = next(item for item in bundle["members"]
                    if item["message_id"] == 1)
     baseline = {"summary": "抽出された基準", "points": ["確認依頼"]}

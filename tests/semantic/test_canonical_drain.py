@@ -81,7 +81,7 @@ def test_incomplete_coverage_resumes_once_then_stops(tmp_path):
     parked for review — never re-extracted again."""
     db = _seeded_two(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         fp = bundle["source_fingerprint"]
         member = next(m for m in bundle["members"] if m["message_id"] == 1)
 
@@ -134,7 +134,7 @@ def test_unevaluated_fact_audit_is_re_run(tmp_path):
     verdict — the drain re-audits and records a completed artifact."""
     db = _seeded_two(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         fp = bundle["source_fingerprint"]
         member = next(m for m in bundle["members"]
                       if m["message_id"] == 1)

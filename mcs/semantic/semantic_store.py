@@ -63,13 +63,13 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
     })
 
 
-def thread_bundle(ledger, project_id: int, root_id: int,
+def thread_bundle(db, project_id: int, root_id: int,
                   target_ids: list | None = None,
                   local_model: str | None = None) -> dict | None:
     """One post + its same-thread stored replies — the atomic analysis
     unit (§12.3). A message whose row vanished makes the bundle
     unbuildable (None), never silently re-scoped (AT-019)."""
-    rows = ledger.db.execute("""
+    rows = db.execute("""
       SELECT project_id,message_id,parent_id,sender_id,sender_name,organization,
              sender_type,profession,posted_at,
              body_text,body_state,content_hash,reply_count
@@ -87,7 +87,7 @@ def thread_bundle(ledger, project_id: int, root_id: int,
         raise ValueError("semantic_target_scope")
     members = [_member(r) for r in rows]
     attachments = {mid: [] for mid in member_ids}
-    for row in ledger.db.execute("""
+    for row in db.execute("""
       SELECT a.message_id,a.attachment_id,a.file_id,a.name,a.bytes,a.sha256,a.state
       FROM attachments a JOIN messages m ON m.message_id=a.message_id
       WHERE m.project_id=? AND (m.message_id=? OR m.parent_id=?)
@@ -142,11 +142,11 @@ def jev_state(bundle: dict, target_id: int) -> dict | None:
             "context": ctx}
 
 
-def _current(ledger, kind: str, message_id: int, fp: str, policy=None):
+def _current(db, kind: str, message_id: int, fp: str, policy=None):
     """Latest artifact of `kind` for `message_id` whose meta fingerprint
     still matches the live input — older generations stay recorded as
     history but are never 'current' (AT-035/056)."""
-    for r in ledger.db.execute(
+    for r in db.execute(
             "SELECT content,meta FROM artifacts WHERE kind=? "
             "AND message_id=? ORDER BY artifact_id DESC",
             (kind, message_id)):
@@ -225,7 +225,7 @@ def invalidate_projections(ledger, scfg: dict) -> int:
                 if local_model is None:
                     # one config read per scan, not one per thread
                     local_model = semantic_transport.llm_model()
-                bundle = thread_bundle(ledger, *key,
+                bundle = thread_bundle(ledger.db, *key,
                                        local_model=local_model)
                 bundles[key] = bundle["source_fingerprint"] if bundle else None
             if bundles[key] is not None and meta.get("fingerprint") == bundles[key]:
@@ -233,7 +233,7 @@ def invalidate_projections(ledger, scfg: dict) -> int:
                     continue
                 if row["artifact_id"] in current_ids:
                     from semantic_v4 import reproject_doc
-                    doc, _ = reproject_doc(ledger, row["message_id"], meta)
+                    doc, _ = reproject_doc(ledger.db, row["message_id"], meta)
                     if doc is not None:
                         revived.append((row["artifact_id"],))
                         projects.add(row["project_id"])

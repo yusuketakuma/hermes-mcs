@@ -20,7 +20,7 @@ def test_comparison_cli_and_confirmed_adoption(tmp_path, monkeypatch, capsys):
         config, _ = semantic_policy.semantic_config(_cfg("assist"))
         policy = semantic_policy.policy_fingerprint(config)
         db.artifact_add("semantic_policy", policy)
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         member = next(item for item in bundle["members"] if item["message_id"] == 1)
         db.artifact_add("extract_llm", json.dumps({"summary": "Old summary", "points": []}),
                         project_id=1, message_id=1, meta={"hash": member["revision"]})

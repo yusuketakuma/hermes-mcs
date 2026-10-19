@@ -271,7 +271,7 @@ def test_prior_is_read_after_the_write_lock_including_a_concurrent_correction(tm
         db.close()
 
 
-@pytest.mark.parametrize("module_name", ["extract_schema", "extract_validation", "extract_quality", "clinical_scope"])
+@pytest.mark.parametrize("module_name", ["extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "mcs_queries"])
 def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(tmp_path, monkeypatch, module_name):
     import semantic_candidate
     db, aid, row = seed(tmp_path)
@@ -304,6 +304,11 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     ("extract_quality", "quality_improves"),
     ("clinical_scope", "patient_source_scope"),
     ("clinical_values", "patient_vitals"),
+    ("patient_context", "pharmacy_state_items"),
+    ("patient_context", "PHARMACY_STATE_KEYS"),
+    ("mcs_queries", "karte_summary_current"),
+    ("mcs_queries", "karte_summary_block"),
+    ("mcs_queries", "iter_artifacts"),
 ])
 def test_moved_definition_changes_new_candidate_identity(monkeypatch, module_name, member):
     import importlib
@@ -314,6 +319,8 @@ def test_moved_definition_changes_new_candidate_identity(monkeypatch, module_nam
     assert module_name in semantic_candidate._LOADED_SOURCES
     if member == "SCHEMA":
         monkeypatch.setattr(module, member, {**module.SCHEMA, "synthetic_marker": True})
+    elif member == "PHARMACY_STATE_KEYS":
+        monkeypatch.setattr(module, member, module.PHARMACY_STATE_KEYS | {"synthetic_marker"})
     else:
         def changed(*args, **kwargs):
             return None

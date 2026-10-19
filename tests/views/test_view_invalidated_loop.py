@@ -15,7 +15,7 @@ def test_invalidated_loop_is_stale_even_with_matching_source_and_policy(tmp_path
     try:
         config, _ = semantic_policy.semantic_config(_cfg())
         db.artifact_add("semantic_policy", semantic_policy.policy_fingerprint(config))
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         semantic_loops.update_loops(db, 1, bundle,
                                    {1: _pending_fact(bundle["members"][0])},
                                    None, config, time.monotonic() + 30)

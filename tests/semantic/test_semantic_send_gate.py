@@ -93,7 +93,7 @@ def test_degraded_gate_requires_frozen_generation_and_unattempted_source(
     db = _delivery_db(tmp_path, [_message()])
     monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
     source_id = db.outbox_add("new_messages", 1, {"message_ids": [1]})
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     policy = semantic_policy.policy_fingerprint(
         semantic_policy.semantic_config(_cfg("enforce"))[0])
     payload = {
@@ -139,7 +139,7 @@ def test_raw_notice_ignores_shadow_publication(tmp_path, monkeypatch):
     event = db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'"
     ).fetchone()
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     policy = semantic_policy.policy_fingerprint(
         semantic_policy.semantic_config(_cfg("enforce"))[0])
     content = {"claims": [{"text": "shadow claim"}], "limitations": []}

@@ -84,7 +84,7 @@ def test_revive_counts_only_unchanged_error_snapshots(db, change):
 ])
 def test_karte_context_uses_explicit_instants_without_rounding(db, updated, posted, expected):
     db.karte_summary_store(1, 1, {"comment": "架空の参考情報", "updated_at": updated})
-    block = extract_llm._karte_block(db, 1, posted)
+    block = extract_llm._karte_block(db.db, 1, posted)
     assert bool(block) is expected
     if expected:
         assert "架空の参考情報" in block
@@ -98,7 +98,7 @@ def test_karte_context_uses_explicit_instants_without_rounding(db, updated, post
 def test_karte_utc_suffix_is_an_explicit_instant(db, updated, posted):
     # the runtime floor is Python 3.14, whose fromisoformat reads "Z"
     db.karte_summary_store(1, 1, {"comment": "架空のUTC参考情報", "updated_at": updated})
-    assert "架空のUTC参考情報" in extract_llm._karte_block(db, 1, posted)
+    assert "架空のUTC参考情報" in extract_llm._karte_block(db.db, 1, posted)
 
 
 @pytest.mark.parametrize("kind", ["extract_llm", "canonical_projection", "semantic_facts_v4"])
@@ -110,7 +110,7 @@ def test_empty_current_fact_source_never_revives_rule_vitals(db, kind):
     db.artifact_add(kind, "{}", project_id=1, message_id=1,
                     meta={"hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION,
                           "engine_version": 4, "projection_version": PROJECTION_VERSION})
-    assert rollup.build_rollup(db, 1).get("latest_vitals") is None
+    assert rollup.build_rollup(db.db, 1).get("latest_vitals") is None
 
 
 def test_rule_vitals_remain_available_without_a_current_fact_source(db):
@@ -119,7 +119,7 @@ def test_rule_vitals_remain_available_without_a_current_fact_source(db):
                     project_id=1, message_id=1, meta={"hash": _hash(db)})
     db.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
                     meta={"hash": "stale-body"})
-    assert rollup.build_rollup(db, 1)["latest_vitals"]["spo2"] == 96
+    assert rollup.build_rollup(db.db, 1)["latest_vitals"]["spo2"] == 96
 
 
 @pytest.mark.parametrize("suffix", ["ではありません", "疑い", "かもしれません", "extra"])

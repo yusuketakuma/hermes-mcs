@@ -99,10 +99,10 @@ def test_resolved_reference_survives_piece_merge_and_durable_checkpoint(tmp_path
         merged = extract_validation.merge([out])
         assert merged["patient_context"][0]["details"][-1]["refers_to"]["token"] == "S1"
         llm._persist_chunks(led, row, {0: out}, frame["text"])
-        _, saved = llm._saved_chunk_state(led, row, frame["text"])
+        _, saved = llm._saved_chunk_state(led.db, row, frame["text"])
         assert saved[0]["patient_context"][0]["details"][-1]["refers_to"]["token"] == "S1"
         changed = {**row, "_frame": {**frame, "digest": "f" * 64}}
-        assert llm._saved_chunk_state(led, changed, frame["text"])[1] == {}
+        assert llm._saved_chunk_state(led.db, changed, frame["text"])[1] == {}
     finally:
         led.close()
 

@@ -77,7 +77,7 @@ def test_semantic_view_lists_canonical_artifacts(tmp_path):
                 "INSERT INTO messages(message_id,project_id,body_state,"
                 "body_text,content_hash) "
                 "VALUES(1,1,'full','synthetic message',?)", ("a" * 64,))
-        fp = semantic_store.thread_bundle(store, 1, 1)["source_fingerprint"]
+        fp = semantic_store.thread_bundle(store.db, 1, 1)["source_fingerprint"]
         with store.db:
             store.db.execute(
                 "INSERT INTO artifacts(kind,project_id,message_id,"
@@ -123,7 +123,7 @@ def test_matching_fingerprint_does_not_revive_invalidated_artifact(tmp_path, fla
             store.db.execute(
                 "INSERT INTO messages(message_id,project_id,body_state,body_text,content_hash) "
                 "VALUES(1,1,'full','synthetic message',?)", ("a" * 64,))
-        fingerprint = semantic_store.thread_bundle(store, 1, 1)["source_fingerprint"]
+        fingerprint = semantic_store.thread_bundle(store.db, 1, 1)["source_fingerprint"]
         store.artifact_add("semantic_policy", "polx")
         store.artifact_add("canonical_projection", "{}", project_id=1, message_id=1,
                            meta={"fingerprint": fingerprint,

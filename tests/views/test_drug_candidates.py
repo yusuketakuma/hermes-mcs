@@ -59,7 +59,7 @@ def test_empty_and_missing_dictionary_are_unavailable_not_resolved(store):
 def test_export_candidate_notes_and_machine_contract_remain_separate(store, tmp_path):
     _seed(store, names=("キラナ", "共通架空"))
     drug_map.derive(store, _dictionary(tmp_path))
-    roll = rollup.build_rollup(store, 1)
+    roll = rollup.build_rollup(store.db, 1)
     text = brain_export._patient_md(1, "fictional", {}, roll)
     assert "架空成分甲" in text
     assert "架空成分乙" not in text
@@ -82,7 +82,7 @@ def test_stats_do_not_read_dictionary_and_ignore_stale_source_refs(store, tmp_pa
     assert _stats(store)["by_ingredient_candidate"]["status"] == "ok"
     _seed(store, names=("別キラナ",))
     assert _stats(store)["by_ingredient_candidate"]["status"] == "unavailable"
-    assert not rollup.build_rollup(store, 1)["medications"][0].get("ref")
+    assert not rollup.build_rollup(store.db, 1)["medications"][0].get("ref")
 
 
 @pytest.mark.parametrize("field", ["content", "meta"])
@@ -102,7 +102,7 @@ def test_deep_annotation_keeps_stats_and_rollup_available_without_writes(
     assert stats["by_name_month"] == valid["by_name_month"]
     assert stats["by_ingredient_candidate"]["status"] == "unavailable"
     assert stats["by_ingredient_candidate"]["by_resolution"]["unavailable"]["numerator"] == 1
-    roll = rollup.build_rollup(store, 1)
+    roll = rollup.build_rollup(store.db, 1)
     assert len(roll["medications"]) == 1 and not roll["medications"][0].get("ref")
     text = brain_export._patient_md(1, "fictional", {}, roll)
     assert "架空成分甲" not in text and "fictional-v1@" not in text

@@ -13,9 +13,9 @@ from typing import Literal, TypedDict
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from ledger import (LedgerReader, SCHEMA_VERSION, STATIC_BASE_COLUMNS,
-                    STATIC_SOURCE_COLUMNS, static_required_columns,
-                    static_required_tables)
+from ledger import LedgerReader, SCHEMA_VERSION
+from ledger_schema import (STATIC_BASE_COLUMNS, STATIC_SOURCE_COLUMNS,
+                           static_required_columns, static_required_tables)
 
 
 class AuditCheck(TypedDict):

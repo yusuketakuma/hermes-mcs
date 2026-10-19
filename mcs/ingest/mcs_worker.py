@@ -1,6 +1,5 @@
 """Workers with absolute deadlines for MCS API, attachments, and local Chrome I/O."""
 from __future__ import annotations
-import mcs_contract
 
 import base64
 import json
@@ -12,6 +11,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+if __name__ == "__main__":
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import _mcs_path  # noqa: F401
+
+import mcs_contract
 
 MAX_JSON_BYTES = 8 * 1024 * 1024
 
@@ -213,6 +218,4 @@ def worker_main() -> int:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    import _mcs_path  # noqa: F401
     raise SystemExit(worker_main())

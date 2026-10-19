@@ -24,7 +24,7 @@ def runtime(tmp_path):
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body=TEXT)], project_id=1)
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     member = bundle["members"][0]
     manifest = extraction.build_manifest(TEXT, bundle["source_fingerprint"], 3000)
     ev = {"evidence_id": facts.evidence_id(1, member["revision"], 0, len(TEXT), TEXT),

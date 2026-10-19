@@ -8,6 +8,7 @@ import extract_llm as llm
 import notify_views
 import patient_state_context as state
 import read_model
+import patient_context
 import rollup
 import structured_view
 from extract_testkit import _hash, _ledger, _message
@@ -32,7 +33,7 @@ def seed(led):
     r = {**row, "_frame": frame, "_context": frame["text"], "_target": ("", llm.MODEL)}
     assert llm._replace_current(led, r, json.dumps(doc), ctx=True,
                               integrity={"validation": {"items_dropped": 0, "evidence_dropped": 0}})
-    return aid, row, rollup.build_rollup(led, 1)
+    return aid, row, rollup.build_rollup(led.db, 1)
 
 
 def test_shared_and_private_lines_annotate_the_exact_frozen_reference(tmp_path):
@@ -88,8 +89,8 @@ def test_reference_metadata_does_not_change_the_target_body_fingerprint(tmp_path
     try:
         _, row, _ = seed(led)
         raw = json.loads(led.artifacts(llm.KIND, message_id=2)[0]["content"])
-        before = rollup.pharmacy_state_items(raw, row)[0]["fingerprint"]
+        before = patient_context.pharmacy_state_items(raw, row)[0]["fingerprint"]
         raw["patient_context"][0]["details"][-1].pop("refers_to")
-        assert rollup.pharmacy_state_items(raw, row)[0]["fingerprint"] == before
+        assert patient_context.pharmacy_state_items(raw, row)[0]["fingerprint"] == before
     finally:
         led.close()

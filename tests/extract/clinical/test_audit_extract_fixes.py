@@ -91,7 +91,7 @@ def test_latest_labs_are_keyed_by_analyte(tmp_path):
              "evidence": f"{crp} {crp_value}mg/dL"}]}),
             project_id=1, message_id=mid, meta={"hash": _hash(store, mid)})
     try:
-        labs = rollup.build_rollup(store, 1)["recent_labs"]
+        labs = rollup.build_rollup(store.db, 1)["recent_labs"]
     finally:
         store.close()
     assert [(x["name"], x["value"]) for x in labs] == [("Cr", "1.2"), ("crp", "0.5")]
@@ -115,7 +115,7 @@ def _labs_of_one_post(tmp_path, labs, body):
     store.artifact_add("extract_llm", json.dumps({"labs": labs}), project_id=1, message_id=1,
                        meta={"hash": _hash(store, 1)})
     try:
-        return rollup.build_rollup(store, 1).get("recent_labs")
+        return rollup.build_rollup(store.db, 1).get("recent_labs")
     finally:
         store.close()
 

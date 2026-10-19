@@ -343,7 +343,7 @@ def test_verified_stage_matches_the_publication_gate(tmp_path, audit):
         _later_audit(db, facts, audit)
         doc_hash = semantic_v4._doc_hash(_doc(facts))
         gate_doc, reason = semantic_v4.reproject_doc(
-            db, 1, _meta(doc_hash=doc_hash))
+            db.db, 1, _meta(doc_hash=doc_hash))
         got = _read(tmp_path, final_id)
         if audit == "PASS":
             assert gate_doc == _doc(facts) and reason is None

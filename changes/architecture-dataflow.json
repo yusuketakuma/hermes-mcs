@@ -6,13 +6,18 @@
   "details": [
     "MCSの値・例外と応答の正規化を通信クライアントから分離し、登録情報の読取が収集処理をimportする依存を解消。",
     "読取は呼出元が検証した同一snapshot connectionを借用し、scope・全体件数・表示limitの意味を保持。",
-    "snapshot公開処理が一時接続・検証用子プロセス・一時ファイルの寿命を所有し、ledgerのschemaとwriterは元の所有先に保持。",
-    "health集計は借用connectionのみを受け取り、収集統括が失敗時のincident記録を所有。"
+    "snapshot公開処理が一時接続・検証用子プロセス・一時ファイルの寿命を所有。台帳は接続とwriterを所有し、schema・migration・構造検証はledger_schemaへ集約。",
+    "health集計は借用connectionのみを受け取り、収集統括が失敗時のincident記録を所有。",
+    "連携サマリーとartifact履歴の読取はmcs_queriesを正本とし、既存台帳APIと患者集約が同じ借用connectionで読む。接続の作成・終了やtransactionの確定は行わない。",
+    "収集用の子プロセスで共通契約を読む前にbootstrapし、リポジトリ外からの通常起動・隔離起動を回帰検証。通信・秘密値・応答とdeadlineの検査は維持。"
   ],
   "refs": [
     "mcs/core/mcs_contract.py",
     "mcs/core/snapshots.py",
     "mcs/ingest/health_report.py",
-    "mcs/views/registered_data.py"
+    "mcs/views/registered_data.py",
+    "mcs/core/mcs_queries.py",
+    "mcs/core/ledger_schema.py",
+    "mcs/ingest/mcs_worker.py"
   ]
 }

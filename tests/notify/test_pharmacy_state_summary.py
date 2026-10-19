@@ -15,7 +15,7 @@ def test_private_summary_shows_report_wording_with_group_and_subject(tmp_path):
     quote = "以前、家族の合成薬Aと合成薬Bは残薬3錠、今後の支援は未確認。"
     try:
         save(led, 1, quote, [context(quote, names=("合成薬A", "合成薬B"), subject="family")])
-        state = rollup.build_rollup(led, 1)
+        state = rollup.build_rollup(led.db, 1)
         led.db.execute("PRAGMA query_only=ON")
         lines = notify_views._pharmacy_state_lines(led.db, 1, state)
         text = "\n".join(lines)
@@ -33,7 +33,7 @@ def test_changed_or_forged_cache_report_is_not_displayed(tmp_path, change):
     quote = "合成薬Aの残薬3錠。"
     try:
         save(led, 1, quote, [context(quote)])
-        cached = rollup.build_rollup(led, 1)
+        cached = rollup.build_rollup(led.db, 1)
         report = cached["pharmacy_state"]["items"][0]
         if change == "edit":
             led.save_messages([_message(body="合成薬Aの残薬は不明。")])
@@ -64,7 +64,7 @@ def test_legacy_cache_has_no_new_state_and_display_cap_is_honest(tmp_path):
         assert notify_views._pharmacy_state_lines(led.db, 1, {}) == []
         quotes = [f"合成薬Aの合成報告{n}は残薬3錠。" for n in range(10)]
         save(led, 1, "\n".join(quotes), [context(quote) for quote in quotes])
-        cached = rollup.build_rollup(led, 1)
+        cached = rollup.build_rollup(led.db, 1)
         original = copy.deepcopy(cached)
         text = "\n".join(notify_views._pharmacy_state_lines(led.db, 1, cached))
         assert "他2報告" in text and "原記録で全文確認" in text

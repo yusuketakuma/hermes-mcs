@@ -83,7 +83,7 @@ def test_real_current_checkpoint_updates_shared_summary_without_partial_facts(le
     row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=100").fetchone())
     model = "synthetic-shared-progress"
     row["_target"] = ("", model)
-    context = extract_llm._thread_context(led, row)
+    context = extract_llm._thread_context(led.db, row)
     roots = extract_llm.plan_chunks(body, extract_llm._CHUNK_SIZE)
     assert len(roots) > 1
     extract_llm._persist_chunks(led, row, {0: {}}, context)

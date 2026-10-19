@@ -414,7 +414,7 @@ def _delivery_db(tmp_path, messages=()):
 
 
 def _summary(db, claims=1):
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     content = {"claims": [
         {"text": f"claim-{i}-" + "x" * 220, "section": "status",
          "claim_kind": "reported_fact"}
@@ -448,7 +448,7 @@ def _semantic_event(db, text="notice"):
     for row in db.db.execute(
             "SELECT event_id FROM notify_outbox WHERE kind='new_messages'"):
         db.outbox_mark(row["event_id"], "accepted")
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     _summary(db, claims=1)
     payload = {
         "root_id": 1, "target_message_id": 1, "src_event_id": src,
@@ -501,7 +501,7 @@ def _audit_pair(db, mid, cfg, status="PASS"):
     """Write a synthetic current summary/audit pair for coverage tests."""
     row = db.db.execute("SELECT project_id,parent_id FROM messages WHERE message_id=?",
                         (mid,)).fetchone()
-    bundle = semantic_store.thread_bundle(db, row["project_id"], row["parent_id"] or mid)
+    bundle = semantic_store.thread_bundle(db.db, row["project_id"], row["parent_id"] or mid)
     scfg, errors = semantic_policy.semantic_config(cfg)
     assert not errors
     result = {"summary": {"target_message_id": mid, "claims": [],

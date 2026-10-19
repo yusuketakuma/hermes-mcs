@@ -34,7 +34,7 @@ def test_rollup_and_cached_reader_do_not_resurrect_contradictory_vitals(db):
                                posted_at="2026-10-09T00:00:00+09:00")])
     db.artifact_add("extract_llm", json.dumps({"vitals": {"sbp": 180, "dbp": 80}}),
                     project_id=1, message_id=1, meta={"hash": _hash(db, 1)})
-    current = rollup.build_rollup(db, 1)
+    current = rollup.build_rollup(db.db, 1)
     assert current["latest_vitals"] == {"at": "2026-10-09T00:00:00+09:00", "dbp": 80}
     old = {**current, "latest_vitals": {"at": "2026-10-09T00:00:00+09:00",
                                       "sbp": 180, "dbp": 80},
@@ -70,7 +70,7 @@ def test_rollup_collects_canonical_facts_newest_first(db):
              _fact("f_same", "vital_lab", "BP 130/85", quote="130/85"),
              _fact("f_new", "adverse_drug_event", "嘔気", quote="嘔気")]},
          "2026-09-19T00:00:00+09:00")
-    out = rollup.build_rollup(db, 1)
+    out = rollup.build_rollup(db.db, 1)
     facts = out["canonical_facts"]
     by_id = {f["fact_id"]: f for f in facts}
     assert set(by_id) == {"f_old", "f_same", "f_new"}
@@ -90,7 +90,7 @@ def test_symptom_dates_reuse_first_timestamp_row(db):
     db.db.execute("UPDATE messages SET posted_at_ts=42 WHERE message_id IN (2,3)")
     db.db.execute("UPDATE messages SET posted_at_ts=NULL,posted_at='' "
                   "WHERE message_id IN (1,4)")
-    assert rollup.build_rollup(db, 1)["recent_symptoms"] == [
+    assert rollup.build_rollup(db.db, 1)["recent_symptoms"] == [
         {"symptom": "合成症状3", "last": "2026-09-03T00:00:00+09:00"},
         {"symptom": "合成症状2", "last": "2026-09-03T00:00:00+09:00"},
         {"symptom": "合成症状4", "last": "msg:4"},
@@ -108,14 +108,14 @@ def test_rollup_canonical_shadows_and_stale_falls_back(db):
          {"meds": [{"name": "新薬", "action": "stop"}],
           "canonical_facts": [_fact("f1", "preference", "午前希望")]},
          "2026-09-19T00:00:00+09:00")
-    out = rollup.build_rollup(db, 1)
+    out = rollup.build_rollup(db.db, 1)
     assert [f["fact_id"] for f in out["canonical_facts"]] == ["f1"]
 
     # body revision -> every stored artifact hash goes stale
     db.db.execute("UPDATE messages SET body_text='改訂本文',"
                   " content_hash='newhash' WHERE message_id=2")
     db.db.commit()
-    out = rollup.build_rollup(db, 1)
+    out = rollup.build_rollup(db.db, 1)
     assert out.get("canonical_facts", []) == []
 
 
@@ -127,7 +127,7 @@ def test_rollup_skips_unlisted_canonical_entries(db):
              "not-a-dict",
              _fact("f1", "vital_lab", "BP 120/80")]},
          "2026-09-18T00:00:00+09:00")
-    out = rollup.build_rollup(db, 1)
+    out = rollup.build_rollup(db.db, 1)
     assert [f["fact_id"] for f in out["canonical_facts"]] == ["f1"]
 
 
@@ -141,19 +141,19 @@ def test_rule_rollup_requires_current_patient_source(db, invalid):
         db.db.execute("UPDATE artifacts SET project_id=2")
     else:
         db.db.execute("UPDATE messages SET body_state='deleted'")
-    assert "latest_vitals" not in rollup.build_rollup(db, 1)
+    assert "latest_vitals" not in rollup.build_rollup(db.db, 1)
 
 
 def test_malformed_lab_container_keeps_other_facts(db):
     _add(db, 1, "extract_llm", {"labs": 7, "summary": "合成要約"},
          "2026-09-18T00:00:00+09:00")
-    assert rollup.build_rollup(db, 1)["summary"]["text"] == "合成要約"
+    assert rollup.build_rollup(db.db, 1)["summary"]["text"] == "合成要約"
 
 
 @pytest.mark.parametrize("kind", ["extract_v1", "extract_llm", "canonical_projection"])
 def test_rollup_sql_valid_source_at_python_depth_limit_is_safe(db, kind):
     _add(db, 1, kind, {"vitals": {"temp": 37.1}}, "2026-09-18T00:00:00+09:00")
-    assert rollup.build_rollup(db, 1)["latest_vitals"]["temp"] == 37.1
+    assert rollup.build_rollup(db.db, 1)["latest_vitals"]["temp"] == 37.1
     source_id, original = db.db.execute("SELECT artifact_id,content FROM artifacts").fetchone()
     deep = original[:-1] + ',"synthetic_unused":' + "[" * 999 + "0" + "]" * 999 + "}"
     assert db.db.execute("SELECT json_valid(?)", (deep,)).fetchone()[0] == 1
@@ -167,7 +167,7 @@ def test_rollup_sql_valid_source_at_python_depth_limit_is_safe(db, kind):
     db.db.commit()
     before = tuple(db.db.iterdump())
     changes = db.db.total_changes
-    out = rollup.build_rollup(db, 1)
+    out = rollup.build_rollup(db.db, 1)
     assert out["msg_count"] == 1
     if readable:
         assert out["latest_vitals"]["temp"] == 37.1
@@ -205,7 +205,7 @@ def test_rollup_keeps_item_unverified_flag(db, flag):
               "unverified": flag},
              {"to": "SYNTH-訪看", "action": "フラグ無し依頼"}]},
          "2026-09-19T00:00:00+09:00")
-    out = rollup.build_rollup(db, 1)
+    out = rollup.build_rollup(db.db, 1)
     assert [(r["ctx"], r["unverified"]) for r in out["recent_requests"]] \
         == [("確認済み依頼", False), ("未確認依頼", True),
             ("フラグ無し依頼", False)]
@@ -218,7 +218,7 @@ def test_rollup_keeps_lab_verification_markers(db, kind, flag):
             {"name": "合成候補検査", "value": 2, "unverified": flag},
             {"name": "合成旧形式検査", "value": 3}]
     _add(db, 1, kind, {"labs": labs}, "2026-10-01T00:00:00+09:00")
-    out = rollup.build_rollup(db, 1)
+    out = rollup.build_rollup(db.db, 1)
     assert out["recent_labs"] == [
         {"at": "2026-10-01T00:00:00+09:00", **lab} for lab in labs]
 
@@ -235,7 +235,7 @@ def test_rollup_carries_request_kind_condition_due_text(db):
               "due_text": "明日まで"},
              {"to": "SYNTH-医師", "action": "素の依頼"}]},
          "2026-09-19T00:00:00+09:00")
-    out = rollup.build_rollup(db, 1)
+    out = rollup.build_rollup(db.db, 1)
     typed, plain = out["recent_requests"]
     assert (typed["kind"], typed["ctx"]) == ("SYNTH-看護師", "医師へ連絡")
     assert (typed["req_kind"], typed["condition"], typed["due_text"]) \
@@ -292,7 +292,7 @@ def test_rollup_thread_reply_state(db, replies, state, conflict):
     _thread(db, [(1, None, "SYNTH-A", f"{day}T00:30:00+09:00", _REQ)] + [
         (mid, parent, sender, f"{day}{hm}:00+09:00", content)
         for mid, parent, sender, hm, content in replies])
-    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    rows = rollup.build_rollup(db.db, 1)["recent_requests"]
     assert len(rows) == 1 and rows[0]["mid"] == 1
     assert rows[0].get("reply_state") == state
     assert rows[0].get("reply_conflict", False) is conflict
@@ -309,7 +309,7 @@ def test_rollup_reply_survives_canonical_projection_shadowing(db):
     db.artifact_add("canonical_projection", json.dumps({"canonical_facts": []}),
                     project_id=1, message_id=2,
                     meta={"hash": _hash(db, 2), "projection_version": PROJECTION_VERSION})
-    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    rows = rollup.build_rollup(db.db, 1)["recent_requests"]
     assert rows[0]["reply_state"] == "done"
 
 
@@ -330,7 +330,7 @@ def test_rollup_reply_work_is_bounded_by_returned_requests(db, monkeypatch):
             return super().get(key, default)
 
     monkeypatch.setattr(rollup, "_REPLY_STAGE", Stages(rollup._REPLY_STAGE))
-    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    rows = rollup.build_rollup(db.db, 1)["recent_requests"]
     assert [row["ctx"] for row in rows] == (
         [f"合成ルール{i}" for i in range(4)] + [f"合成依頼{i}" for i in range(11)])
     assert all(row["reply_state"] == "done" for row in rows[4:])
@@ -358,7 +358,7 @@ def test_rollup_sql_valid_shadowed_reply_at_python_depth_limit_is_safe(db):
     db.db.commit()
     before = tuple(db.db.iterdump())
     changes = db.db.total_changes
-    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    rows = rollup.build_rollup(db.db, 1)["recent_requests"]
     assert rows[0].get("reply_state") == ("done" if readable else None)
     assert tuple(db.db.iterdump()) == before
     assert db.db.total_changes == changes
@@ -370,7 +370,7 @@ def test_rollup_ignores_non_string_reply_kind(db):
     _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
                  (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00",
                   {"reply": {"kind": ["done"], "evidence": "x"}})])
-    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    rows = rollup.build_rollup(db.db, 1)["recent_requests"]
     assert rows[0].get("reply_state") is None
 
 
@@ -379,7 +379,7 @@ def test_rollup_reply_with_unparseable_posted_at_is_never_later(db):
     request, so a reply with an unparseable date sets nothing."""
     _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
                  (2, 1, "SYNTH-B", "not-a-date", _reply("done"))])
-    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    rows = rollup.build_rollup(db.db, 1)["recent_requests"]
     assert "reply_state" not in rows[0]
 
 
@@ -401,7 +401,7 @@ def test_rollup_reply_uses_sender_ids(db, request_id, reply_id, same_name, state
                   (reply_id,))
     if same_name:
         db.db.execute("UPDATE messages SET sender_name='SYNTH-A'")
-    assert rollup.build_rollup(db, 1)["recent_requests"][0].get("reply_state") \
+    assert rollup.build_rollup(db.db, 1)["recent_requests"][0].get("reply_state") \
         == state
 
 
@@ -470,7 +470,7 @@ def test_rollup_decodes_each_llm_blob_once(db, monkeypatch, shadow, decodes):
     real = json.loads
     monkeypatch.setattr(rollup.json, "loads",
                         lambda s, *a, **k: calls.append(s) or real(s, *a, **k))
-    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    rows = rollup.build_rollup(db.db, 1)["recent_requests"]
     assert rows[0]["reply_state"] == "done"
     assert len(calls) == decodes
 
@@ -486,13 +486,13 @@ def _summary(comment="合成サマリー"):
 def test_rollup_carries_karte_summary_or_none(db):
     db.save_messages([_message(mid=1, body="合成本文",
                                posted_at="2026-09-01T09:00:00+09:00")])
-    assert rollup.build_rollup(db, 1)["karte_summary"] is None
+    assert rollup.build_rollup(db.db, 1)["karte_summary"] is None
     db.karte_summary_store(1, 10, None)                    # unregistered
-    ks = rollup.build_rollup(db, 1)["karte_summary"]
+    ks = rollup.build_rollup(db.db, 1)["karte_summary"]
     assert ks["empty"] is True and ks["comment"] is None
     assert isinstance(ks["fetched_at"], float)
     db.karte_summary_store(1, 10, _summary())
-    ks = rollup.build_rollup(db, 1)["karte_summary"]
+    ks = rollup.build_rollup(db.db, 1)["karte_summary"]
     assert ks == {"comment": "合成サマリー",
                   "updated_at": "2026-09-30T10:00:00+09:00",
                   "updater_profession": "看護師", "empty": False,

@@ -15,7 +15,7 @@ from semantic_testkit import _cfg, _pending_fact, _seeded
 
 def _setup(tmp_path):
     db = _seeded(tmp_path)
-    bundle = semantic_store.thread_bundle(db, 1, 1, [2])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [2])
     config, _ = semantic_policy.semantic_config(_cfg())
     policy = semantic_policy.policy_fingerprint(config)
     db.artifact_add('semantic_policy', policy)

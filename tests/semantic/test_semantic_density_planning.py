@@ -115,9 +115,9 @@ def test_same_line_fragments_keep_mothers_past_scope_and_stop_action_as_referenc
     assert [spec["text"] for spec in specs] == clinical_chunking.plan_chunks(body, 50)
 
 
-def test_current_plan_reuses_completed_prefix_but_plan_version_change_rejects_it(monkeypatch):
+def test_current_plan_reuses_completed_prefix_but_plan_version_change_rejects_it(request, monkeypatch):
     body = "宇宙の架空説明。" * 25
-    ledger, calls = _FakeLedger(), []
+    ledger, calls = _FakeLedger(request), []
 
     def interrupted(prompt):
         calls.append(_core(prompt))
@@ -195,7 +195,7 @@ def test_progress_counts_current_paid_prefix_without_mixing_staging_generation(t
         _patient(db)
         body = "宇宙の架空説明。" * 400
         db.save_messages([_message(1, body=body)], project_id=1)
-        bundle = semantic_store.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
         calls = []
 
         def interrupted(prompt):

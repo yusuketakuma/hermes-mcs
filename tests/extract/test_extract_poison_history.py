@@ -86,7 +86,7 @@ def test_rollup_unreadable_source_does_not_stop_patient_aggregation(tmp_path):
         ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
                           (poison('"summary":"SYNTH",'), source))
         ledger.db.commit()
-        assert rollup.build_rollup(ledger, 1)["msg_count"] == 1
+        assert rollup.build_rollup(ledger.db, 1)["msg_count"] == 1
         rollup.rebuild(ledger, 1)
         ledger.db.execute("UPDATE artifacts SET content=? WHERE kind=?",
                           ('[' * 2000 + '0' + ']' * 2000, rollup.KIND))

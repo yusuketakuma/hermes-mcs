@@ -51,5 +51,5 @@ def test_rollup_latest_vitals_keeps_bare_p_pulse(db):
     db.artifact_add("extract_llm", json.dumps({"vitals": {"bt": 36.5, "hr": 72}}),
                     project_id=1, message_id=1,
                     meta={"hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION})
-    latest = rollup.build_rollup(db, 1)["latest_vitals"]
+    latest = rollup.build_rollup(db.db, 1)["latest_vitals"]
     assert latest.get("hr") == 72

@@ -39,7 +39,7 @@ def _setup(tmp_path, *, publication_mode="assist", audit_status="PASS"):
     source_hash = db.db.execute(
         "SELECT content_hash FROM messages WHERE message_id=1"
     ).fetchone()[0]
-    bundle = semantic_store.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
     policy = "a" * 64
     db.artifact_add("semantic_policy", policy)
     db.artifact_add(
@@ -170,7 +170,7 @@ def test_partial_context_cannot_be_adopted_even_with_matching_pass_artifact(tmp_
             db.db.execute("UPDATE messages SET reply_count=1 WHERE message_id=1")
             meta = json.loads(db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?",
                                           (candidate_id,)).fetchone()[0])
-            meta["fingerprint"] = semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"]
+            meta["fingerprint"] = semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"]
             db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
                           (json.dumps(meta), candidate_id))
         reviewed = summary_review.comparison(db.db, 1, 1, candidate_id)

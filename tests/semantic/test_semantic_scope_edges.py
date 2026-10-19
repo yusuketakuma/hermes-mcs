@@ -46,7 +46,7 @@ def test_thread_bundle_rejects_unrelated_targets_instead_of_dropping_them(
         ])
         for target_ids in ([3], [4], [2, 3], [2, 4], [True], [1.0], "1"):
             with pytest.raises(ValueError, match="semantic_target_scope"):
-                semantic_store.thread_bundle(db, 1, 1, target_ids)
+                semantic_store.thread_bundle(db.db, 1, 1, target_ids)
         row = db.db.execute("SELECT payload FROM fetch_jobs WHERE kind='semantic'").fetchone()
         payload = json.loads(row['payload'])
         payload['targets'] = [2, 4]

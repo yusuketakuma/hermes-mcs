@@ -353,7 +353,7 @@ def _hold_projects(db, hold, card, events) -> list:
 def _card_resolution(view, settings, identity, payload):
     """Derive recovery scope from the stored render/hold, never native input."""
     import notify_cards
-    import notify_transport
+    import notify_recovery
     import notify_scope
     db = view.db
     render = db.execute("SELECT * FROM notification_renders WHERE delivery_id=?",
@@ -389,7 +389,7 @@ def _card_resolution(view, settings, identity, payload):
     else:
         # the same strict reading the rebind writes use: never authorize a
         # subset of a list the writer would read differently
-        events = notify_transport.hold_events(hold)
+        events = notify_recovery.hold_events(hold)
         if events is None:
             return "hold_events_corrupt"
         pids = _hold_projects(db, hold, card, events)

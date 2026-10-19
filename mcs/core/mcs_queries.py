@@ -1,4 +1,4 @@
-"""Shared extraction-scan contract for the read side.
+"""Shared ledger and extraction read contracts on borrowed connections.
 
 mcs_stats (read-only statistics) and mcs_signals (prospective review
 candidates) must agree on which artifact counts as the *current*
@@ -306,8 +306,8 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
     discharge/transfer extract_llm events co-occurring with a med
     change-action mention within ±win_s seconds in the same room.
 
-    CROSS JOIN pins messages-first order: letting SQLite start from the
-    unbounded artifacts side made this scan ~12s on the real ledger.
+    CROSS JOIN pins messages-first order, preventing the planner from
+    starting with the unbounded artifacts side.
     `extra_where` appends caller-specific filters (signal lookback vs
     stats scope) — both reference the d/m aliases below."""
     join_p = ("CROSS JOIN patients p ON p.project_id=d.project_id "
@@ -344,6 +344,58 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
     for pid, dmid, mid in rows:
         grouped.setdefault(dmid, (pid, set()))[1].add(mid)
     return grouped
+
+
+def karte_summary_row(db, project_id: int):
+    """Newest summary row in the borrowed connection, including its metadata."""
+    return db.execute(
+        "SELECT artifact_id,content,meta FROM artifacts "
+        "WHERE kind='karte_summary' AND project_id=? "
+        "ORDER BY artifact_id DESC LIMIT 1", (project_id,)).fetchone()
+
+
+def karte_summary_current(db, project_id: int) -> dict | None:
+    """Newest stored 連携サマリー content plus fetched_at; None if never fetched."""
+    row = karte_summary_row(db, project_id)
+    if not row:
+        return None
+    try:
+        content = json.loads(row["content"])
+        meta = json.loads(row["meta"] or "{}")
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(content, dict):
+        return None
+    content["fetched_at"] = (meta.get("fetched_at")
+                             if isinstance(meta, dict) else None)
+    return content
+
+
+def karte_summary_block(content: dict) -> dict:
+    """The read-model shape one stored 連携サマリー content maps to —
+    shared by the patient rollup and the 🧾 summary line so the two
+    never drift on the same artifact."""
+    updater = content.get("updater") \
+        if isinstance(content.get("updater"), dict) else {}
+    return {"comment": content.get("comment"),
+            "updated_at": content.get("updated_at"),
+            "updater_profession": updater.get("profession"),
+            "empty": bool(content.get("empty"))}
+
+
+def iter_artifacts(db, kind: str, project_id: int = None,
+                   message_id: int = None, *, descending: bool = False):
+    """Read artifact history incrementally in the requested ID order."""
+    q = "SELECT * FROM artifacts WHERE kind=?"
+    params: list = [kind]
+    if project_id is not None:
+        q += " AND project_id=?"
+        params.append(project_id)
+    if message_id is not None:
+        q += " AND message_id=?"
+        params.append(message_id)
+    order = " DESC" if descending else ""
+    return db.execute(q + " ORDER BY artifact_id" + order, params)
 
 
 def latest_artifact(db, kind):
@@ -530,3 +582,14 @@ def resolve_staff(db, name, project_id=None):
     if len(orgs) == 1:
         return f"{base}（{next(iter(orgs))}）"
     return base
+
+
+def posted_epoch(posted_at: str) -> int | None:
+    """Epoch seconds of a source timestamp, or None when it is unparseable."""
+    if not posted_at:
+        return None
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(posted_at).timestamp())
+    except (ValueError, TypeError, OverflowError):
+        return None

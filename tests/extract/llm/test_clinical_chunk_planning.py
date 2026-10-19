@@ -112,7 +112,7 @@ def test_progress_reads_only_bound_empty_checkpoints_and_final_binding(db, monke
     db.save_messages([_message(body=body)])
     row = dict(db.db.execute("SELECT * FROM messages").fetchone())
     row["_target"] = ("", "synthetic")
-    row["_context"] = extract_llm._thread_context(db, row)
+    row["_context"] = extract_llm._thread_context(db.db, row)
     parts = clinical_chunking.plan_chunks(body, 100)
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 100)
     extract_llm._persist_chunks(db, row, {0: {}}, row["_context"], chunk_size=100)
@@ -194,7 +194,7 @@ def test_pending_thin_confirmation_is_attention_even_with_bound_final(db):
     db.save_messages([_message(body=body)])
     row = dict(db.db.execute("SELECT * FROM messages").fetchone())
     row["_target"] = ("", "synthetic")
-    row["_context"] = extract_llm._thread_context(db, row)
+    row["_context"] = extract_llm._thread_context(db.db, row)
     assert extract_llm._replace_current(db, row, '{"summary":"合成概要"}', integrity={"thin": True})
     result = extract_llm.progress_for_message(db.db, row, model="synthetic")
     assert result["state"] == "attention"
@@ -227,9 +227,9 @@ def test_previous_plan_checkpoints_are_retained_but_not_reused(db, monkeypatch):
     with monkeypatch.context() as old:
         old.setattr(extract_llm, "PLAN_VERSION", 1)
         extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
-        assert extract_llm._saved_chunk_state(db, row, chunk_size=100) == ({}, {0: {}})
+        assert extract_llm._saved_chunk_state(db.db, row, chunk_size=100) == ({}, {0: {}})
     assert extract_llm.PLAN_VERSION == clinical_chunking.PLAN_VERSION == 2
-    assert extract_llm._saved_chunk_state(db, row, chunk_size=100) == ({}, {})
+    assert extract_llm._saved_chunk_state(db.db, row, chunk_size=100) == ({}, {})
     assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == 1
     extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
-    assert extract_llm._saved_chunk_state(db, row, chunk_size=100) == ({}, {0: {}})
+    assert extract_llm._saved_chunk_state(db.db, row, chunk_size=100) == ({}, {0: {}})

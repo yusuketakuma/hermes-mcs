@@ -49,7 +49,7 @@ def declare_cohort(ledger, cohort: str, items: list[dict],
                 (mid,)).fetchone()
             if row is None or row["content_hash"] != item["content_hash"]:
                 raise ValueError("cohort_source_changed")
-            bundle = thread_bundle(ledger, row["project_id"], mid, [mid])
+            bundle = thread_bundle(ledger.db, row["project_id"], mid, [mid])
             fixed.append({"message_id": mid, "project_id": row["project_id"],
                           "content_hash": row["content_hash"],
                           "source_fingerprint": bundle["source_fingerprint"]})
@@ -69,7 +69,7 @@ def _source_current(ledger, item: dict) -> bool:
     if (row is None or row["content_hash"] != item["content_hash"]
             or row["project_id"] != item.get("project_id")):
         return False
-    bundle = thread_bundle(ledger, row["project_id"], item["message_id"],
+    bundle = thread_bundle(ledger.db, row["project_id"], item["message_id"],
                            [item["message_id"]])
     return bundle is not None and bundle["source_fingerprint"] == \
         item.get("source_fingerprint")

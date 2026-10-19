@@ -85,7 +85,7 @@ def test_multiple_own_quotes_with_the_same_amount_stay_unverified():
 
 
 def _stage(db, quantity):
-    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
     member = bundle["members"][0]
     scfg = semantic_policy.semantic_config(_canonical_cfg())[0]
     policy = semantic_policy.policy_fingerprint(scfg)
@@ -140,7 +140,7 @@ def test_cached_pass_cannot_authorize_wrong_quantity_or_reprojection(tmp_path):
                         "findings": [], "fact_verdicts": {}}), project_id=1, message_id=1,
                         meta={"fingerprint": fingerprint, "policy_fingerprint": policy,
                               "doc_hash": doc_hash})
-        assert v4.reproject_doc(db, 1, {"fingerprint": fingerprint, "policy_fingerprint": policy,
+        assert v4.reproject_doc(db.db, 1, {"fingerprint": fingerprint, "policy_fingerprint": policy,
                                        "doc_hash": doc_hash}) == (None, "quantity_unverified")
         # The synthetic old PASS is present, but cannot mint another projection.
         count = len(db.artifacts("canonical_projection", message_id=1))

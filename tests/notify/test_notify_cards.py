@@ -4,6 +4,8 @@ only; no Discord, no network, no real MCS data (plan RC02-09,13,21,
 23-25)."""
 from __future__ import annotations
 
+import notify_recovery
+
 import notify_parts
 import json
 import os
@@ -926,7 +928,7 @@ def test_queued_render_cancelled_when_stale(led):
 
 def _resolve(led, render, attempt_id, result="mark_not_sent",
              n=30, evidence=None, scope=None):
-    return notify_transport.apply_card_resolve(led, {
+    return notify_recovery.apply_card_resolve(led, {
         "version": 1, "cmd": "ops.card_resolve", "command_id": _uuid(n),
         "actor": "op-user", "human_confirmed": True,
         "reason": "operator verified",
@@ -988,11 +990,11 @@ def test_card_resolve_requires_evidence_and_scope(led, tmp_path):
            "evidence": {"method": "channel_lookup",
                         "worker_stopped": True, "proof": "n/a",
                         "ref": "msg m-found visible"}}
-    r = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
+    r = notify_recovery.apply_card_resolve(led, req, CFG, now=NOW)
     assert r["outcome"] == "applied" and r["attempt_state"] == "delivered"
     assert _card(led)["message_id"] == "m-found"
     # replay is idempotent
-    r2 = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
+    r2 = notify_recovery.apply_card_resolve(led, req, CFG, now=NOW)
     assert r2["outcome"] == "applied"
 
 
@@ -1029,7 +1031,7 @@ def test_card_resolve_human_gate_and_validation(led):
            "result": "mark_not_sent", **SCOPE,
            "evidence": {"method": "m", "worker_stopped": True,
                         "proof": "no_journal_started", "ref": "r"}}
-    r = notify_transport.apply_card_resolve(led, dict(bad, reason="ok"), CFG,
+    r = notify_recovery.apply_card_resolve(led, dict(bad, reason="ok"), CFG,
                                         now=NOW)
     assert r["outcome"] == "rejected" \
         and r["error"] == "human_confirmation_required"
@@ -1938,12 +1940,12 @@ def test_card_resolve_reapply_is_idempotent(led):
            "delivery_id": r0["delivery_id"], "attempt_id": f"{1:016x}",
            "result": "mark_delivered", "message_id": "m-9", **SCOPE,
            "evidence": {"method": "journal_review", "ref": "w1.jsonl"}}
-    first = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
+    first = notify_recovery.apply_card_resolve(led, req, CFG, now=NOW)
     assert first["outcome"] == "applied"
-    again = notify_transport.apply_card_resolve(led, dict(req), CFG,
+    again = notify_recovery.apply_card_resolve(led, dict(req), CFG,
                                             now=NOW + 1)
     assert again == first                     # stored receipt replay
-    conflict = notify_transport.apply_card_resolve(
+    conflict = notify_recovery.apply_card_resolve(
         led, {**req, "result": "mark_not_sent",
               "evidence": {"method": "journal_review", "ref": "w1.jsonl",
                            "worker_stopped": True,
@@ -2076,7 +2078,7 @@ def test_resolve_delivered_conflict_rejects_another_message(led, tmp_path):
            'delivery_id': render['delivery_id'], 'attempt_id': f'{1:016x}',
            'result': 'mark_delivered', **SCOPE, 'message_id': 'another-message',
            'evidence': {'method': 'channel_lookup', 'ref': 'synthetic-proof'}}
-    result = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
+    result = notify_recovery.apply_card_resolve(led, req, CFG, now=NOW)
     assert result['outcome'] == 'rejected'
     assert result['error'] == 'attempt_conflict'
     assert _card(led)['message_id'] == 'original-message'
@@ -2155,9 +2157,9 @@ def test_card_resolve_delivered_must_match_journal_message(led, tmp_path):
            "delivery_id": render["delivery_id"], "attempt_id": aid,
            "result": "mark_delivered", **SCOPE, "message_id": "m-other",
            "evidence": {"method": "channel_lookup", "ref": "synthetic"}}
-    r = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
+    r = notify_recovery.apply_card_resolve(led, req, CFG, now=NOW)
     _rejected_no_reissue(led, r, "message_id_mismatch")
-    r = notify_transport.apply_card_resolve(
+    r = notify_recovery.apply_card_resolve(
         led, dict(req, command_id=_uuid(61), message_id="m-7"), CFG,
         now=NOW)
     assert r["outcome"] == "applied"
@@ -2186,7 +2188,7 @@ def test_card_resolve_delivered_accepts_idless_journal_result(led, tmp_path):
            "delivery_id": render["delivery_id"], "attempt_id": aid,
            "result": "mark_delivered", **SCOPE, "message_id": "m-7",
            "evidence": {"method": "channel_lookup", "ref": "synthetic"}}
-    r = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
+    r = notify_recovery.apply_card_resolve(led, req, CFG, now=NOW)
     assert r["outcome"] == "applied"
     assert _card(led)["message_id"] == "m-7"
 

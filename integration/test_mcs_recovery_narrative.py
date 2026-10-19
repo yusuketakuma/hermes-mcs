@@ -394,7 +394,7 @@ def _run_narrative(tmp_path):
         #         -> re-audit PASS -> v4 published (late reply too)
         _repend_semantic(led)
         out2 = _drain(led, _RepairThenPassJev(), llm=semantic_transport.llm_chat)
-        fp1 = semantic_store.thread_bundle(led, 1, 1)["source_fingerprint"]
+        fp1 = semantic_store.thread_bundle(led.db, 1, 1)["source_fingerprint"]
         stages = {s["stage"]: s["status"]
                   for s in v4.stage_ledger(led, 1, fp1)}
         v4row = led.db.execute(

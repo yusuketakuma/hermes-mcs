@@ -31,7 +31,7 @@ def _rows(db, kind, mid):
 
 
 def _fp(db, mid=1):
-    return semantic_store.thread_bundle(db, 1, mid)["source_fingerprint"]
+    return semantic_store.thread_bundle(db.db, 1, mid)["source_fingerprint"]
 
 
 def test_v4_pass_publishes_read_model_and_stage_ledger(tmp_path):

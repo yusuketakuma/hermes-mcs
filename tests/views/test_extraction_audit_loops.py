@@ -23,7 +23,7 @@ def test_open_resolution_closed_and_stale_are_distinct_and_read_only(tmp_path):
         policy = semantic_policy.policy_fingerprint(cfg)
         db.artifact_add("semantic_policy", policy)
         for mid in range(1, 5):
-            bundle = semantic_store.thread_bundle(db, 1, mid, [mid])
+            bundle = semantic_store.thread_bundle(db.db, 1, mid, [mid])
             semantic_loops.update_loops(db, 1, bundle, {mid: _pending_fact(bundle["members"][0])},
                 None, cfg, time.monotonic() + 30)
             candidate = db.artifacts("loop_candidate", message_id=mid)[0]

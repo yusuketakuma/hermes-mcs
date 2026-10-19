@@ -7,6 +7,7 @@ source text is used only to build model input and verify codepoint spans; no
 network client is created here.
 """
 from __future__ import annotations
+from mcs_queries import iter_artifacts
 import mcs_util
 import semantic_llm
 import semantic_transport
@@ -423,18 +424,15 @@ def _category_counts(clean_facts: list) -> dict:
             for category in sf.MANDATORY_CATEGORIES}
 
 
-def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
+def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                    revision, specs, source: str, *,
                    kind: str = KIND_CHUNK,
                    schema: str = SCHEMA_VERSION,
                    extra=None, generation: str | None = None) -> dict[int, dict]:
-    if ledger is None:
+    if db is None:
         return {}
     cached = {}
-    stream = getattr(ledger, "iter_artifacts", None)
-    rows = (stream(kind, project_id=project_id, message_id=message_id)
-            if callable(stream) else
-            ledger.artifacts(kind, project_id=project_id, message_id=message_id))
+    rows = iter_artifacts(db, kind, project_id=project_id, message_id=message_id)
     wanted = {spec["index"]: spec for spec in specs}
     for row in rows:
         try:
@@ -590,7 +588,6 @@ def _chunk_progress(specs, completed, reused, failed, failure_reason,
 
 def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000):
     """Count only current-plan checkpoints; completion requires the existing audited publication gate."""
-    from types import SimpleNamespace
     import semantic_llm
     from semantic_store import thread_bundle
     from semantic_v4 import reproject_doc
@@ -601,10 +598,7 @@ def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000)
             or not isinstance(model, str) or not model or not isinstance(policy_fingerprint, str)):
         return None
     pid, mid = row["project_id"], row["message_id"]
-    ledger = SimpleNamespace(db=db, iter_artifacts=lambda kind, project_id, message_id: db.execute(
-        "SELECT * FROM artifacts WHERE kind=? AND project_id=? AND message_id=? ORDER BY artifact_id",
-        (kind, project_id, message_id)))
-    bundle = thread_bundle(ledger, pid, row.get("parent_id") or mid, local_model=model)
+    bundle = thread_bundle(db, pid, row.get("parent_id") or mid, local_model=model)
     if bundle is None:
         return None
     fp = bundle["source_fingerprint"]
@@ -633,7 +627,7 @@ def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000)
         publication_blocked = True
         if meta.get("invalidated") or meta.get("projection_version") != PROJECTION_VERSION:
             break
-        doc, _ = reproject_doc(ledger, mid, meta)
+        doc, _ = reproject_doc(db, mid, meta)
         try:
             clean = sf.validate_facts_doc(doc)
         except sf.ContractError:
@@ -652,7 +646,7 @@ def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000)
             return {**out, "state": "complete", "completed": len(specs)}
         break
     generation = _chunk_generation(model, semantic_llm._FACT_V2_PROMPT, chunk_size=chunk_size)
-    cached = _cached_chunks(ledger, pid, mid, fp, _sha256(source), row["content_hash"], specs, source,
+    cached = _cached_chunks(db, pid, mid, fp, _sha256(source), row["content_hash"], specs, source,
                             kind=KIND_CHUNK_V2, schema=SCHEMA_VERSION_V2,
                             extra=_v2_chunk_ok, generation=generation)
     completed = len(cached)
@@ -722,7 +716,7 @@ def extract_facts_resumable(llm_fn, member: dict,
     _persist_manifest(ledger, project_id, message_id, semantic_transport.llm_model(),
                       source_fp, manifest, len(source))
     generation = _chunk_generation(semantic_transport.llm_model(), semantic_llm._FACT_PROMPT, chunk_size=chunk_size)
-    cached = _cached_chunks(ledger, project_id, message_id, source_fp,
+    cached = _cached_chunks((ledger.db if ledger is not None else None), project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             generation=generation)
 
@@ -1133,7 +1127,7 @@ def extract_facts_v2(llm_fn, member: dict,
                       source_fp, manifest, len(source))
     cache_schema = SCHEMA_VERSION_V2 + ("/coverage-retry" if retry_coverage else "")
     generation = _chunk_generation(semantic_transport.llm_model(), prompt_template, chunk_size=chunk_size)
-    cached = _cached_chunks(ledger, project_id, message_id, source_fp,
+    cached = _cached_chunks((ledger.db if ledger is not None else None), project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             kind=KIND_CHUNK_V2, schema=cache_schema,
                             extra=_v2_chunk_ok, generation=generation)

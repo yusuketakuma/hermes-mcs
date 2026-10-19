@@ -1,5 +1,7 @@
 """Extract and read source-bound patient context without inferring current clinical state."""
 import clinical_scope
+import hashlib
+import json
 import math
 import re
 
@@ -148,6 +150,47 @@ _DRUG_OWNER = re.compile(
     r"(?:さん|様)?の(?:お)?(?:内服薬|処方薬|残薬|薬)")
 
 
+PHARMACY_STATE_KEYS = frozenset({"inquiry_result", "storage_status", "storage_place",
+    "medication_manager", "interaction_check", "support_method", "residual_quantity",
+    "missed_doses", "followup"})
+
+
+def valid_reference_hash(value):
+    """Validate a source or reference identity as a lowercase SHA-256 digest."""
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def pharmacy_state_items(artifact, message) -> list[dict]:
+    """Source-grounded pharmacy reports from one decoded current extraction, preserving each parent."""
+    message = dict(message)
+    if (message.get("body_state") not in (None, "full")
+            or type(message.get("project_id")) is not int or message["project_id"] <= 0
+            or type(message.get("message_id")) is not int or message["message_id"] <= 0
+            or not valid_reference_hash(message.get("content_hash"))):
+        return []
+    result = []
+    for item in context_items(artifact, message.get("body_text")):
+        parent = {key: item[key] for key in ("category", "text", "evidence", "subject")}
+        parent["details"] = item.get("details", [])
+        identity = {key: parent[key] for key in ("category", "text", "evidence", "subject")}
+        parent_fp = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        names = sorted({detail["value"] for detail in parent["details"] if detail["key"] == "drug_name"})
+        for detail in parent["details"]:
+            if detail["key"] not in PHARMACY_STATE_KEYS:
+                continue
+            own_detail = {key: detail[key] for key in ("key", "value", "evidence")}
+            fingerprint = hashlib.sha256(json.dumps([parent_fp, own_detail, names],
+                sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            stamp = message.get("posted_at_ts")
+            result.append({**detail, "parent": parent, "parent_fingerprint": parent_fp,
+                "fingerprint": fingerprint, "drug_names": names, "subject": parent["subject"],
+                "project_id": message["project_id"], "message_id": message["message_id"],
+                "content_hash": message["content_hash"], "posted_at": message.get("posted_at"),
+                "posted_at_ts": stamp if type(stamp) in (int, float) and math.isfinite(stamp) else None,
+                "source": "chat"})
+    return result
+
+
 def reference_item(value):
     """Read a resolved reference identity without fetching or substituting its value."""
     fields = {"token", "key", "value", "drug_names", "project_id", "message_id", "content_hash",
@@ -159,7 +202,7 @@ def reference_item(value):
             or not isinstance(value.get("drug_names"), list) or len(value["drug_names"]) > 1
             or any(not isinstance(name, str) or not name.strip() for name in value["drug_names"])
             or any(type(value.get(key)) is not int or value[key] <= 0 for key in ("project_id", "message_id"))
-            or any(not isinstance(value.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", value[key])
+            or any(not valid_reference_hash(value.get(key))
                    for key in ("content_hash", "fingerprint", "parent_fingerprint"))
             or type(value.get("posted_at_ts")) not in (int, float)):
         return None

@@ -21,7 +21,7 @@ def _candidate_setup(tmp_path):
     cfg, _ = semantic_policy.semantic_config(_cfg())
     policy = semantic_policy.policy_fingerprint(cfg)
     db.artifact_add("semantic_policy", policy)
-    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
     semantic_loops.update_loops(
         db, 1, bundle, {1: _pending_fact(bundle["members"][0])},
         None, cfg, time.monotonic() + 30)
@@ -104,7 +104,7 @@ def test_stale_loop_rejected_and_link_failure_rolls_back(tmp_path):
 
     # Rebuild a current candidate, then deny only the link artifact INSERT.
     cfg, _ = semantic_policy.semantic_config(_cfg())
-    current = semantic_store.thread_bundle(db, 1, 1, [1])
+    current = semantic_store.thread_bundle(db.db, 1, 1, [1])
     semantic_loops.update_loops(
         db, 1, current, {1: _pending_fact(current["members"][0])},
         None, cfg, time.monotonic() + 30)

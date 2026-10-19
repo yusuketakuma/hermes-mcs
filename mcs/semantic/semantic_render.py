@@ -394,13 +394,13 @@ def _emit_degraded(ledger, scfg: dict) -> int:
             f"SELECT COALESCE(parent_id,message_id) r FROM messages "
             f"WHERE project_id=? AND message_id IN ({marks})", (pid, *ids))}
         for root in roots:
-            bundle = semantic_store.thread_bundle(ledger, pid, root)
+            bundle = semantic_store.thread_bundle(ledger.db, pid, root)
             if bundle is None:
                 continue
             fp = bundle["source_fingerprint"]
             arrivals = [m["message_id"] for m in bundle["members"]
                         if m["message_id"] in ids]
-            audits = [semantic_store._current(ledger, semantic_policy.KIND_AUDIT, mid,
+            audits = [semantic_store._current(ledger.db, semantic_policy.KIND_AUDIT, mid,
                                         fp, semantic_policy.policy_fingerprint(scfg))
                       for mid in arrivals]
             if arrivals and all(a and a["meta"].get("audit_status") == "PASS"

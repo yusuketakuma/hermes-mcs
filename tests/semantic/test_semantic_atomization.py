@@ -10,6 +10,7 @@ import pytest
 
 import semantic_extraction as extraction
 import semantic_facts as sf
+from test_semantic_facts_v2 import _FakeLedger
 
 
 FP = "sf_test"
@@ -154,7 +155,7 @@ def test_extraction_uses_manifest_chunks_and_maps_atom():
                for f in unverified)
 
 
-def test_durable_prefix_reuse_after_interruption():
+def test_durable_prefix_reuse_after_interruption(request):
     body = "一段落目です。" + "あ" * 50 + "\n" + "二段落目です。" + "い" * 50
     completed = []
 
@@ -164,19 +165,7 @@ def test_durable_prefix_reuse_after_interruption():
             raise RuntimeError("model down")
         return json.dumps({"facts": []}, ensure_ascii=False)
 
-    class FakeLedger:
-        def __init__(self):
-            self.rows = []
-
-        def artifacts(self, kind, project_id=None, message_id=None):
-            return [r for r in self.rows if r["kind"] == kind]
-
-        def artifact_add(self, kind, content, project_id=None,
-                         message_id=None, model=None, meta=None):
-            self.rows.append({"kind": kind, "content": content,
-                              "meta": json.dumps(meta or {})})
-
-    ledger = FakeLedger()
+    ledger = _FakeLedger(request)
     member = _member(body)
     first = extraction.extract_facts_resumable(
         llm_first, member, ledger=ledger,

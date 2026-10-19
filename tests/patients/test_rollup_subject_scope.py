@@ -34,7 +34,7 @@ def test_mislabeled_family_values_never_become_patient_current(store):
                   "status": "current", "evidence": "合成薬Aを開始"}],
         "symptoms": [{"text": "発熱", "subject": "patient", "status": "ongoing",
                       "evidence": "発熱あり"}]})
-    out = rollup.build_rollup(store, 1)
+    out = rollup.build_rollup(store.db, 1)
     for key in ("latest_vitals", "recent_labs", "medications", "recent_symptoms"):
         assert not out.get(key), key
 
@@ -48,7 +48,7 @@ def test_mixed_source_keeps_patient_readings_medication_and_symptom(store):
                   "evidence": f"合成薬{c}を開始"} for c in "AB"],
         "symptoms": [{"text": s, "subject": "patient", "status": "ongoing", "evidence": s + "あり"}
                      for s in ("発熱", "咳")]})
-    out = rollup.build_rollup(store, 1)
+    out = rollup.build_rollup(store.db, 1)
     assert out["latest_vitals"]["bt"] == 36.5
     assert [x["value"] for x in out["recent_labs"]] == ["0.9"]
     assert [x["name"] for x in out["medications"]] == ["合成薬B"]
@@ -78,7 +78,7 @@ def test_full_sentence_evidence_inherits_subject_at_item_surface(store):
                       "evidence": "母は合成薬Aを開始し発熱あり。"},
                      {"text": "咳", "subject": "patient", "status": "ongoing",
                       "evidence": "本人は合成薬Bを開始し咳あり。"}]})
-    out = rollup.build_rollup(store, 1)
+    out = rollup.build_rollup(store.db, 1)
     assert [x["name"] for x in out["medications"]] == ["合成薬B"]
     assert [x["symptom"] for x in out["recent_symptoms"]] == ["咳"]
 
@@ -86,7 +86,7 @@ def test_full_sentence_evidence_inherits_subject_at_item_surface(store):
 def test_older_unscoped_trusted_output_contract_is_preserved(store):
     seed(store, "合成本文", {"vitals": {"bt": 36.5},
                             "meds": [{"name": "合成薬A", "subject": "patient", "status": "current"}]})
-    out = rollup.build_rollup(store, 1)
+    out = rollup.build_rollup(store.db, 1)
     assert out["latest_vitals"]["bt"] == 36.5
     assert out["medications"][0]["name"] == "合成薬A"
 
@@ -99,7 +99,7 @@ def test_recent_family_stop_does_not_suppress_older_patient_medication(store):
     store.artifact_add("extract_llm", json.dumps({"meds": [{"name": "合成薬A", "subject": "patient",
         "status": "past", "action": "stop", "evidence": "以前、合成薬Aを中止。"}]}),
         project_id=1, message_id=2, meta={"hash": _hash(store, 2)})
-    assert rollup.build_rollup(store, 1)["medications"][0]["name"] == "合成薬A"
+    assert rollup.build_rollup(store.db, 1)["medications"][0]["name"] == "合成薬A"
 
 
 # Same scope output without repeated whole-body scans or per-read rebuilds.

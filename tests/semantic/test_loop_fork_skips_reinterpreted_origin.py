@@ -30,13 +30,13 @@ def test_new_generation_reinterpretation_does_not_fork_dropped_item(tmp_path):
     db = _seeded(tmp_path)
     try:
         cfg, _ = semantic_policy.semantic_config(_cfg())
-        old = semantic_store.thread_bundle(db, 1, 1, [1, 2])
+        old = semantic_store.thread_bundle(db.db, 1, 1, [1, 2])
         member = next(m for m in old["members"] if m["message_id"] == 1)
         item_a = _pending_fact(member)
         _update(db, cfg, old, {1: item_a})            # generation 1 yields A
 
         db.save_messages([_message(3, parent=1, body="承知しました。")])
-        new = semantic_store.thread_bundle(db, 1, 1, [1])   # generation 2
+        new = semantic_store.thread_bundle(db.db, 1, 1, [1])   # generation 2
         assert new["source_fingerprint"] != old["source_fingerprint"]
         item_b = copy.deepcopy(item_a)
         item_b[0]["statement"] = "別の未完了事項"      # gen 2 reinterprets: only B

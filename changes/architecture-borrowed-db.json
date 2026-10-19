@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "集計と抽出進捗の読み取り責務を整理",
+  "summary": "患者集計、抽出の参照文脈、保存済み進捗の読取りを、呼出元が開いたDB接続で行う共通契約へ揃えました。原文の適格性、履歴の選択順、保留結果や公開結果の判定は維持します。",
+  "upgrade": "設定変更は不要です。更新時は通常の手順で抽出workerを再起動してください。参照文脈と履歴入力の共通処理も候補hashに含めるため、旧candidate承認・旧保留receiptは新しい契約には一致せず再判定します。同世代の抽出済み結果をコードhashだけで全件再抽出しません。",
+  "details": ["読取り関数は接続の開閉やtransactionの確定を行わず、書込みとその所有者は従来のままです。", "原文参照と履歴読取りの正本mcs_queriesを、読み込み済みsource digestとcandidate実体定義moduleの双方で検査します。"],
+  "refs": ["mcs/core/mcs_queries.py", "mcs/patients/rollup.py", "mcs/extract/llm/extract_llm.py", "mcs/semantic/semantic_extraction.py", "mcs/semantic/semantic_store.py", "mcs/semantic/semantic_v4.py"]
+}

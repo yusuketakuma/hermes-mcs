@@ -41,7 +41,7 @@ def mentions(reader, mid, *, cfg=None):
         elif meta.get("patient_state_context"):
             return None
         else:
-            context = _thread_context(reader, message)
+            context = _thread_context(reader.db, message)
         if meta.get("context_binding") != _chunk_context(message, context):
             return None
         integrity = meta.get("integrity", {})
@@ -62,11 +62,11 @@ def mentions(reader, mid, *, cfg=None):
     from semantic_policy import semantic_config, policy_fingerprint
     message = db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone()
     scfg, errors = semantic_config(cfg or {})
-    bundle = thread_bundle(reader, message["project_id"], message["parent_id"] or mid,
+    bundle = thread_bundle(reader.db, message["project_id"], message["parent_id"] or mid,
                            local_model=semantic_transport.llm_model(cfg or {}))
     if errors or bundle is None or bundle["source_fingerprint"] != meta.get("fingerprint") or policy_fingerprint(scfg) != meta.get("policy_fingerprint"):
         return None
-    doc, error = reproject_doc(reader, mid, meta)
+    doc, error = reproject_doc(reader.db, mid, meta)
     if error:
         return None
     return source, [_canonical_mention(fact, doc) for fact in doc.get("facts", [])

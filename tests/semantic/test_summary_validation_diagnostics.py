@@ -29,7 +29,7 @@ from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
 def test_summary_validation_codes_keep_the_existing_failure_contract(tmp_path, response, expected):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         errors = {}
         assert semantic_llm.summarize(lambda _: response, bundle, 1, [], {},
                                   return_reason=True, error_out=errors) == (None, "model")
@@ -42,7 +42,7 @@ def test_summary_validation_codes_keep_the_existing_failure_contract(tmp_path, r
 def test_valid_summary_clears_a_reused_error_dict(tmp_path):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         errors = {"code": "stale"}
         summary = semantic_llm.summarize(lambda _: '{"claims":[]}', bundle, 1, [], {},
                                      error_out=errors)

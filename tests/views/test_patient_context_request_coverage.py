@@ -27,8 +27,8 @@ def test_explicit_full_request_read_keeps_old_request_and_its_reply(tmp_path, ol
             if mid > 1 or old_reply:
                 _reply(SimpleNamespace(db=store), mid + 100, mid, old_reply if mid == 1 else "done")
         before = store.db.total_changes
-        ordinary = rollup.build_rollup(store, 1)["recent_requests"]
-        full = rollup.build_rollup(store, 1, request_limit=None)["recent_requests"]
+        ordinary = rollup.build_rollup(store.db, 1)["recent_requests"]
+        full = rollup.build_rollup(store.db, 1, request_limit=None)["recent_requests"]
         assert [r["mid"] for r in ordinary] == list(range(16, 1, -1))
         assert [r["mid"] for r in full] == list(range(16, 0, -1))
         assert all(r["reply_state"] == "done" for r in full[:-1])

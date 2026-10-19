@@ -42,6 +42,15 @@ def card_row(db, card_id: int):
     return dict(r) if r is not None else None
 
 
+def render_row(db, delivery_id):
+    """Read the sealed render row on borrowed db; None means unknown delivery.
+
+    Never mutate db or own its transaction/connection lifetime."""
+    return db.execute(
+        "SELECT * FROM notification_renders WHERE delivery_id=?",
+        (delivery_id,)).fetchone()
+
+
 def latest_signals(db, keys: list, project_id=None) -> dict:
     """Read key -> artifact/content from the newest signal row on borrowed db.
 

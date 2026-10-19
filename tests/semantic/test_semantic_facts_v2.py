@@ -7,6 +7,7 @@ verdicts keep the document incomplete — never a silent pass.
 """
 import semantic_transport
 import json
+import sqlite3
 
 import pytest
 
@@ -38,16 +39,25 @@ def _llm(facts, presence=None):
 
 
 class _FakeLedger:
-    def __init__(self):
-        self.rows = []
+    def __init__(self, request):
+        self.db = sqlite3.connect(":memory:")
+        request.addfinalizer(self.db.close)
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,kind TEXT,"
+                        "project_id INTEGER,message_id TEXT,model TEXT,content TEXT,meta TEXT)")
+
+    @property
+    def rows(self):
+        return [dict(row) for row in self.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
 
     def artifacts(self, kind, project_id=None, message_id=None):
         return [r for r in self.rows if r["kind"] == kind]
 
     def artifact_add(self, kind, content, project_id=None,
                      message_id=None, model=None, meta=None):
-        self.rows.append({"kind": kind, "content": content,
-                          "meta": json.dumps(meta or {})})
+        self.db.execute("INSERT INTO artifacts(kind,project_id,message_id,model,content,meta) "
+                        "VALUES(?,?,?,?,?,?)", (kind, project_id, message_id, model,
+                                                content, json.dumps(meta or {})))
 
 
 def _obligations(doc, status=None):
@@ -208,10 +218,10 @@ def test_out_of_chunk_quote_not_borrowed():
     assert "unverified_facts" in doc["coverage"]["limitations"]
 
 
-def test_durable_prefix_reuse_v2():
+def test_durable_prefix_reuse_v2(request):
     body = "一段落目です。" + "あ" * 50 + "\n" + "二段落目です。" + "い" * 50
 
-    ledger = _FakeLedger()
+    ledger = _FakeLedger(request)
     member = _member(body)
     calls = []
 
@@ -249,13 +259,13 @@ def test_durable_prefix_reuse_v2():
     assert meta["schema"] == extraction.SCHEMA_VERSION_V2
 
 
-def test_v2_cache_reuses_evidence_bearing_chunks():
+def test_v2_cache_reuses_evidence_bearing_chunks(request):
     # FIX-SE2: cached v2 rows were validated with the v1 key spelling
     # (start_codepoint), so every evidence-bearing chunk missed the
     # cache and re-extracted on each restart.
     body = "アムロジピン5mgを継続します。"
 
-    ledger = _FakeLedger()
+    ledger = _FakeLedger(request)
     fact = {"statement": "アムロジピン5mg継続", "kind": "medication_event",
             "action": "continue", "subject_role": "patient",
             "evidence_quote": "アムロジピン5mgを継続"}
@@ -488,10 +498,10 @@ def test_no_jev_client_means_no_jev_pre_obligations():
                for o in doc["obligations"])
 
 
-def test_preflight_verdicts_cached_with_chunk():
+def test_preflight_verdicts_cached_with_chunk(request):
     body = "一段落目です。" + "あ" * 50
 
-    ledger = _FakeLedger()
+    ledger = _FakeLedger(request)
     member = _member(body)
     jev = _FakeJev()
     extraction.extract_facts_v2(
@@ -548,22 +558,22 @@ def test_ambiguous_chunk_quote_keeps_canonical_fact_unverified():
     ("meta", []), ("content", []),
     ("meta", {"chunk_index": float("inf")}),
 ])
-def test_malformed_cache_rows_are_ignored_and_reextracted(field, bad):
-    ledger = _FakeLedger()
+def test_malformed_cache_rows_are_ignored_and_reextracted(request, field, bad):
+    ledger = _FakeLedger(request)
     member = _member("合成観察文です。")
     extraction.extract_facts_v2(_llm([]), member, ledger=ledger)
-    for row in ledger.rows:
-        if row["kind"] == extraction.KIND_CHUNK_V2:
-            row[field] = json.dumps(bad)
+    # Only these two parameterized columns are permitted; the malformed value is bound data.
+    ledger.db.execute(f"UPDATE artifacts SET {field}=? WHERE kind=?",
+                      (json.dumps(bad), extraction.KIND_CHUNK_V2))
     result = extraction.extract_facts_v2(_llm([]), member, ledger=ledger)
     assert result["complete"]
     assert result["reused_chunks"] == []
 
 
 @pytest.mark.parametrize("change", [None, "model", "prompt"])
-def test_cached_chunks_require_same_model_and_prompt(monkeypatch, change):
+def test_cached_chunks_require_same_model_and_prompt(request, monkeypatch, change):
     import semantic_llm
-    ledger = _FakeLedger()
+    ledger = _FakeLedger(request)
     member = _member("合成観察文です。")
     extraction.extract_facts_v2(_llm([]), member, ledger=ledger)
     if change == "model":
@@ -577,8 +587,8 @@ def test_cached_chunks_require_same_model_and_prompt(monkeypatch, change):
     assert bool(result["reused_chunks"]) is (change is None)
 
 
-def test_new_chunk_layout_is_persisted_for_same_source():
-    ledger = _FakeLedger()
+def test_new_chunk_layout_is_persisted_for_same_source(request):
+    ledger = _FakeLedger(request)
     member = _member("合成観察文です。" * 10)
     for size in (40, 30, 40):
         result = extraction.extract_facts_v2(_llm([]), member, ledger=ledger, chunk_size=size)

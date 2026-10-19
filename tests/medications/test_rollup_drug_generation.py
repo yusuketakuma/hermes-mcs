@@ -42,7 +42,7 @@ def test_generation_change_before_build_stays_dirty_then_settles(store, tmp_path
     before = drug_map.generation_signature(store.db)
     build = rollup.build_rollup
     def changed_before_build(ledger, pid):
-        drug_map.derive(ledger, replacement, deadline=0)
+        drug_map.derive(store, replacement, deadline=0)
         return build(ledger, pid)
     monkeypatch.setattr(rollup, 'build_rollup', changed_before_build)
     rollup.rebuild(store, 1)

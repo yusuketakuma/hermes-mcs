@@ -37,7 +37,7 @@ def _two_pairs(tmp_path):
     db.save_messages([_message(3, parent=1, body="別件の返信です。")])
     config, _ = semantic_policy.semantic_config(_cfg())
     db.artifact_add("semantic_policy", semantic_policy.policy_fingerprint(config))
-    bundle = semantic_store.thread_bundle(db, 1, 1, [2, 3])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [2, 3])
     facts = {1: _pending_fact(bundle["members"][0])}
     return db, config, bundle, facts
 

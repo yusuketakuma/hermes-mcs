@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_ROOTS = ("mcs", "adapters", "hermes_plugin", "mcs_standalone",
                     "lineworks_adapter", "deployment", "scripts")
 ADAPTER = Path("mcs/ingest/mcs_adapter.py")
+CONTRACT = Path("mcs/core/mcs_contract.py")
 # Unrelated HTTP clients that define their own ``_request`` (LINE WORKS
 # Bot REST, Slack SDK shim). Neither can reach the MCS API origin.
 OWN_REQUEST_CLIENTS = {Path("adapters/lineworks/client.py"),
@@ -175,9 +176,10 @@ def test_no_mcs_write_route_is_named_in_code():
 
 # Who may hold the MCS endpoint constants: cross_lists hands API to the
 # pinned _io("api", method="GET") call; the worker only prefix-checks it.
-ENDPOINT_IMPORTERS = {Path("mcs/ingest/cross_lists.py")}
+ENDPOINT_IMPORTERS = {Path("mcs/ingest/cross_lists.py"), ADAPTER}
 ENDPOINT_ATTRIBUTE_READERS = {Path("mcs/ingest/mcs_worker.py")}
 MCS_ENDPOINT_NAMES = {"API", "BASE"}
+MCS_ENDPOINT_MODULES = {"mcs_adapter", "mcs_contract"}
 
 
 def test_mcs_endpoint_constants_are_confined():
@@ -186,7 +188,7 @@ def test_mcs_endpoint_constants_are_confined():
     imports, attributes = set(), set()
     for rel in _production_files():
         for node in ast.walk(_parse(rel)):
-            if isinstance(node, ast.ImportFrom) and node.module == "mcs_adapter" \
+            if isinstance(node, ast.ImportFrom) and node.module in MCS_ENDPOINT_MODULES \
                     and {a.name for a in node.names} & (MCS_ENDPOINT_NAMES | {"*"}):
                 imports.add(rel)
             elif isinstance(node, ast.Attribute) and node.attr in MCS_ENDPOINT_NAMES \
@@ -199,7 +201,7 @@ def test_mcs_endpoint_constants_are_confined():
 def test_endpoint_holders_open_no_connection_of_their_own():
     """The endpoint holders reach MCS only via the adapter's worker; the
     worker's api branch is the single urllib Request for MCS."""
-    for rel in ENDPOINT_IMPORTERS:
+    for rel in ENDPOINT_IMPORTERS - {ADAPTER} | {CONTRACT}:
         names = {node.attr if isinstance(node, ast.Attribute) else node.id
                  for node in ast.walk(_parse(rel))
                  if isinstance(node, (ast.Attribute, ast.Name))}
@@ -222,14 +224,14 @@ def test_adapter_builds_no_writing_request():
 
 
 def test_mcs_origin_literal_is_confined():
-    """Only the adapter (network) and the view (link/provenance check)
-    name the MCS origin, so no other module can build its own client."""
+    """Only the shared value contract and the adapter's login guard name
+    the MCS origin; the contract opens no connection of its own."""
     found = set()
     for rel in _production_files():
         for _node, text in _string_constants(_parse(rel)):
             if "medical-care.net" in text:
                 found.add(rel)
-    assert found <= {ADAPTER, Path("mcs/views/mcs_view.py")}, sorted(map(str, found))
+    assert found <= {ADAPTER, CONTRACT}, sorted(map(str, found))
 
 
 def test_delivery_and_action_surfaces_hold_no_mcs_client():

@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import sqlite3
+
+import ledger_schema
 import stat
 import sys
 import time
@@ -1129,8 +1131,8 @@ def test_upgrade_open_backfills_v3_columns_and_fts(tmp_path):
 def test_current_version_open_skips_v3_backfill(tmp_path, monkeypatch):
     _ledger(tmp_path).close()
     calls = []
-    monkeypatch.setattr(ledger.Ledger, "_backfill_v3",
-                        lambda self: calls.append(1))
+    monkeypatch.setattr(ledger_schema, "backfill_v3",
+                        lambda db, *, fts: calls.append(1))
     _ledger(tmp_path).close()
     assert calls == []
 
@@ -1150,12 +1152,12 @@ def test_interrupted_derived_backfill_retries_without_advancing_version(
     _pre_v3_rows(tmp_path, version, drop_fts=drop_fts)
     path = str(tmp_path / "ledger.db")
 
-    def interrupted(db):
-        db.db.execute("UPDATE messages SET body_text='synthetic partial' WHERE message_id=1")
+    def interrupted(db, *, fts):
+        db.execute("UPDATE messages SET body_text='synthetic partial' WHERE message_id=1")
         raise sqlite3.OperationalError("synthetic backfill interruption")
 
     with monkeypatch.context() as patch:
-        patch.setattr(ledger.Ledger, "_backfill_v3", interrupted)
+        patch.setattr(ledger_schema, "backfill_v3", interrupted)
         with pytest.raises(sqlite3.OperationalError, match="synthetic backfill interruption"):
             ledger.Ledger(path)
     with closing(sqlite3.connect(path)) as failed, failed:
@@ -1179,13 +1181,13 @@ def test_backfill_exception_after_all_updates_rolls_back_the_batch(
         tmp_path, monkeypatch, version, drop_fts):
     _pre_v3_rows(tmp_path, version, drop_fts=drop_fts)
     path = str(tmp_path / "ledger.db")
-    original = ledger.Ledger._backfill_v3
+    original = ledger_schema.backfill_v3
 
-    def interrupted(db):
-        original(db)
+    def interrupted(db, *, fts):
+        original(db, fts=fts)
         raise sqlite3.OperationalError("synthetic post-backfill interruption")
 
-    monkeypatch.setattr(ledger.Ledger, "_backfill_v3", interrupted)
+    monkeypatch.setattr(ledger_schema, "backfill_v3", interrupted)
     with pytest.raises(sqlite3.OperationalError, match="synthetic post-backfill interruption"):
         ledger.Ledger(path)
     with closing(sqlite3.connect(path)) as failed, failed:

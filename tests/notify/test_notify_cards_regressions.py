@@ -6,6 +6,8 @@ ledger only.
 """
 from __future__ import annotations
 
+import notify_recovery
+
 import notify_parts
 import notify_scope
 import json
@@ -18,7 +20,6 @@ import pytest
 import mcs_util
 import notify_cards
 import notify_digest
-import notify_transport
 from adapters.lineworks import cards as lwcards
 from mcs_queries import JST
 from notify_testkit import (
@@ -234,14 +235,14 @@ def test_card_resolve_default_cfg_uses_conf_path(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_util, "CONF_PATH", conf)
     monkeypatch.setattr(mcs_util, "load_config",
                         lambda path=None: seen.append(path) or {})
-    monkeypatch.setattr(notify_transport.cards, "_db", lambda ledger: None)
+    monkeypatch.setattr(notify_cards, "connection", lambda ledger: None)
 
     def stop(_req):
         raise _Stop
 
-    monkeypatch.setattr(notify_transport, "payload_hash", stop)
+    monkeypatch.setattr(notify_recovery, "payload_hash", stop)
     with pytest.raises(_Stop):
-        notify_transport.apply_card_resolve(object(), {"command_id": "c"})
+        notify_recovery.apply_card_resolve(object(), {"command_id": "c"})
     assert seen == [conf]
 
 
