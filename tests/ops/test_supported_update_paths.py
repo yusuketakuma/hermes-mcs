@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import time
 
@@ -17,6 +18,8 @@ import pytest
 
 import ledger
 import maintenance
+import notify_spool
+import notify_transport
 import mcs_setup
 from ops_testkit import _seed_consent
 from test_mcs_upgrade import _launcher
@@ -265,6 +268,10 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
         tmp_path, monkeypatch, updater, path, install):
     objects, source, config, calls, _ = _world(tmp_path, monkeypatch, updater, path, install=install)
     original, config_bytes = _records(source), config.read_bytes()
+    source_hash = _sha(source)
+    restarts = []
+    monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: restarts.append(("agents", bounce)) or [])
+    monkeypatch.setattr(updater, "restart_gateway", lambda cfg: restarts.append(("gateway", None)))
     assert updater.apply(objects.target, objects.after, None, reinstall=install,
                          install_args=("--no-llm",) if install else ()) == 0
     applied = updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]
@@ -286,16 +293,49 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
                           "'synthetic later','full',?)",
                           (hashlib.sha256(b"synthetic later").hexdigest(),))
     after_insert = _records(Path(updater.LEDGER))
+    backup_hash = _sha(backup)
+    restarts.clear()  # The following observations concern rollback, not completed apply.
     assert updater.rollback("synthetic-path-rollback") == (2 if bump else 0)
     if bump:
         report = json.loads(Path(updater.RESTORE_REPORT_PATH).read_text())
         assert report["stored_since_backup"]["messages"] == 1
+        assert restarts == [] and Path(updater.MARKER_PATH).exists()
+        live = Path(updater.LEDGER)
+        with closing(sqlite3.connect(live.resolve().as_uri() + "?mode=ro", uri=True)) as con:
+            con.row_factory = sqlite3.Row
+            denied = notify_transport.apply_transport_begin(con, {"command_id": "synthetic-path-before-consent"}, {})
+            assert denied["granted"] is False and denied["error"] == "denied_restore_pending"
         _seed_consent(updater.LEDGER, str(backup), report=report)
-        assert updater.recover_interrupted() == 0
+        # Loaded schema9 must not open/migrate the restored historical DB.
+        assert updater.recover_interrupted() == 1
+        marker = notify_spool.restore_pending(str(live.parent))
+        assert marker is not None and marker["phase"] == "restored"
+        assert marker["report_id"] == report["report_id"] and marker["backup_path"] == str(backup)
+        held = updater.journal_store.load_state(updater.STATE_PATH)
+        assert held["applying"]["rollback"] is True and held["applying"]["restore_incomplete"] is True
+        assert held["restore_consent"]["report_id"] == report["report_id"]
+        assert "synthetic-path-rollback" not in held["executed"]
+        assert restarts == [] and Path(updater.MARKER_PATH).exists()
+        assert _sha(live) == backup_hash and _sha(backup) == backup_hash and _sha(source) == source_hash
+        _preserved(live, original)  # Even disputed notification rows stay byte-preserved while held.
+        with closing(sqlite3.connect(live.resolve().as_uri() + "?mode=ro", uri=True)) as con:
+            con.row_factory = sqlite3.Row
+            assert con.execute("PRAGMA user_version").fetchone()[0] == ORIGINS[path["source"]]["schema_version"]
+            denied = notify_transport.apply_transport_begin(con, {"command_id": "synthetic-path-after-held-copy"}, {})
+            assert denied["granted"] is False and denied["error"] == "denied_restore_pending"
+        assert all(not Path(str(live) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))
+        stable = (_sha(live), Path(updater.STATE_PATH).read_bytes(),
+                  Path(updater.RESTORE_REPORT_PATH).read_bytes(), marker)
+        assert updater.recover_interrupted() == 1
+        assert (_sha(live), Path(updater.STATE_PATH).read_bytes(),
+                Path(updater.RESTORE_REPORT_PATH).read_bytes(), notify_spool.restore_pending(str(live.parent))) == stable
+        assert restarts == [] and Path(updater.MARKER_PATH).exists()
     else:
         assert not Path(updater.RESTORE_REPORT_PATH).exists()
     assert objects.head == objects.before
-    assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["synthetic-path-rollback"]["result"] == "rolled_back"
+    if not bump:
+        # Existing supported-schema no-copy rollback keeps its success oracle.
+        assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["synthetic-path-rollback"]["result"] == "rolled_back"
     assert config.read_bytes() == config_bytes
     durable = {table: rows for table, rows in (original if bump else after_insert).items()
                if table != "notify_outbox" and not table.startswith("notification_")}
@@ -322,7 +362,12 @@ def test_legacy_manual_reinstall_migration_and_restore(
     objects, source, config, calls, _ = _world(tmp_path, monkeypatch, updater, path, install=True)
     assert "legacy_source_manual" in updater.plan(objects.target)["blockers"]
     expected, config_bytes = _records(source), config.read_bytes()
+    source_hash = _sha(source)
+    restarts = []
+    monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: restarts.append(("agents", bounce)) or [])
+    monkeypatch.setattr(updater, "restart_gateway", lambda cfg: restarts.append(("gateway", None)))
     backup = maintenance.preupdate_backup(updater.LEDGER)
+    backup_hash = _sha(Path(backup))
     # The documented operator route has no automatic apply/rollback promise.
     objects.run(["merge", "--ff-only", f"refs/tags/{objects.target}"])
     applying = {"reinstall": True, "install_args": ["--no-llm"]}
@@ -340,8 +385,31 @@ def test_legacy_manual_reinstall_migration_and_restore(
                          "prev_sha": objects.before, "rollback": True,
                          "backup_path": backup, "at": time.time()}
     updater.journal_store.save_state(updater.STATE_PATH, state)
-    updater._restore_db(backup)
+    # This manual journal simulates the existing copy boundary, not an old writer binary.
+    assert ORIGINS[path["source"]]["schema_version"] < ledger.SCHEMA_VERSION
+    with pytest.raises(updater.UpdateError, match="^restore_reconcile_schema_blocked$"):
+        updater._restore_db(backup)
     applying = updater.journal_store.load_state(updater.STATE_PATH)["applying"]
+    assert applying["restore_incomplete"] is True and restarts == []
+    live = Path(updater.LEDGER)
+    marker = notify_spool.restore_pending(str(live.parent))
+    assert marker is not None and marker["phase"] == "restored"
+    assert marker["report_id"] == held.value.report["report_id"] and marker["backup_path"] == backup
+    assert _sha(live) == backup_hash and _sha(Path(backup)) == backup_hash and _sha(source) == source_hash
+    _preserved(live, expected)
+    with closing(sqlite3.connect(live.resolve().as_uri() + "?mode=ro", uri=True)) as con:
+        con.row_factory = sqlite3.Row
+        assert con.execute("PRAGMA user_version").fetchone()[0] == ORIGINS[path["source"]]["schema_version"]
+        denied = notify_transport.apply_transport_begin(con, {"command_id": "synthetic-manual-held-copy"}, {})
+        assert denied["granted"] is False and denied["error"] == "denied_restore_pending"
+    assert all(not Path(str(live) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))
+    stable = (_sha(live), Path(updater.STATE_PATH).read_bytes(),
+              Path(updater.RESTORE_REPORT_PATH).read_bytes(), marker)
+    with pytest.raises(updater.UpdateError, match="^restore_reconcile_schema_blocked$"):
+        updater._restore_db(backup)
+    assert (_sha(live), Path(updater.STATE_PATH).read_bytes(),
+            Path(updater.RESTORE_REPORT_PATH).read_bytes(), notify_spool.restore_pending(str(live.parent))) == stable
+    assert restarts == []
     assert applying["backup_path"] == backup and "restore_staging" not in applying
     durable = {table: rows for table, rows in expected.items()
                if table != "notify_outbox" and not table.startswith("notification_")}
