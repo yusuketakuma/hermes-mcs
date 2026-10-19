@@ -106,3 +106,10 @@ def test_a_real_reading_equal_to_the_label_digit_is_preserved():
     body = "SpO2 2% 酸素2L"
     assert clinical_values._vitals_guard(body, {"spo2": 2}) == {"spo2": 2}
     assert clinical_values.patient_current_vitals({"spo2": 2}, body) == {"spo2": 2}
+
+
+@pytest.mark.parametrize("count", ["2名", "2人", "2回目", "2歳", "2日"])
+def test_non_measurement_counts_do_not_resurrect_an_oxygen_flow(count):
+    body = "酸素2L投与中、" + count + "で訪問"
+    assert clinical_values._vitals_guard(body, {"spo2": 2}) == {}
+    assert clinical_values.patient_current_vitals({"spo2": 2}, body) == {}

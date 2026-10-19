@@ -463,10 +463,13 @@ def _vital_superseded(body: str, cls: str, spans, patient_name=None) -> bool:
                    for m in _VITAL_LABELS[cls].finditer(body)))
 
 
+_NON_VITAL_AFTER = re.compile(r"[ \t　]*(?:名|人|歳|才|か?月|ヶ月|年|日|時|分|回目|件|階|号|番|代)")
+
+
 def _vital_numbers(body):
     # The 2 in SpO2 is part of the label, not a measurement.
     return (m for m in re.finditer(r"SpO2|(?P<number>\d+(?:[.．]\d+)?)", body, re.I)
-            if m["number"] is not None)
+            if m["number"] is not None and not _NON_VITAL_AFTER.match(body, m.end()))
 
 
 _FLOW_AFTER = re.compile(r"[ \t　]*(?:[LＬlℓ](?![A-Za-z])|リットル)")
