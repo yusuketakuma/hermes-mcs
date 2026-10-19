@@ -43,7 +43,7 @@ REVISION = re.compile(r"([0-9]{4})年\s*([0-9]{1,2})月改訂\s*[（(]\s*第\s*(
 # Any medicine-master table row (name, optional size, cell boundary); header notes are not rows.
 ANY_ROW = re.compile(r"医薬品マスター[ \t　]*(?:（[^）\n|]{0,20}）)?[ \t　]*\|")
 ROW = re.compile(r"医薬品マスター[^|\n]{0,40}\|\s*([0-9][0-9,]*)件\s*\|\s*令和\s*([0-9]{1,2})年\s*([0-9]{1,2})月\s*([0-9]{1,2})日")
-STOP = ("quota", "cooldown", "api_key", "http_4", "gateway", "keychain")
+STOP = ("quota", "cooldown", "api_key", "http_4", "gateway", "keychain", "unauthorized")  # same for every item
 TOKEN_SHAPE = re.compile(r"[A-Za-z0-9_-]{32,256}")  # secrets.token_urlsafe(48) from the gateway installer
 # Codes the local gateway can return; any other text is replaced by a generic code and never kept.
 KNOWN_ERRORS = frozenset({

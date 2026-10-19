@@ -355,6 +355,29 @@ def test_quota_code_still_stops_the_formulary_run(tmp_path, monkeypatch):
     assert report[0]["reason"] == "shared_free_quota_exhausted" and len(wire.calls) == 1
 
 
+def test_unauthorized_gateway_stops_the_run_and_keeps_state(tmp_path, monkeypatch):
+    _token_file(tmp_path, monkeypatch)
+    wire = Wire([(401, {"error": "unauthorized"})])
+    monkeypatch.setattr(drug_info, "_request", wire)
+    report = drug_info.formulary_add(["架空アオ錠１０ｍｇ「架空」", "架空アオ錠２０ｍｇ「架空」"], ROWS,
+                                     root=tmp_path)
+    assert [(r["status"], r.get("reason")) for r in report] == [("error", "unauthorized"), ("deferred", "stopped")]
+    assert len(wire.calls) == 1
+    items = [dict(GOOD_ITEM, url=PDF.format(c), gen=c, last_checked=i) for i, c in enumerate("AB")]
+    (tmp_path / "watch.json").write_text(json.dumps({"inserts": items}, ensure_ascii=False))
+    wire = Wire([(401, {"error": "unauthorized"}), (401, {"error": "unauthorized"})])
+    monkeypatch.setattr(drug_info, "_request", wire)
+    results = drug_info.formulary_check(limit=2, root=tmp_path)
+    assert [(item["url"], state) for item, state, _r in results] == [(PDF.format("A"), "error")]
+    assert len(wire.calls) == 1  # the second item is not tried with the same rejected token
+    saved = json.loads((tmp_path / "watch.json").read_text())["inserts"]
+    assert [x["sha256"] for x in saved] == ["a" * 64, "a" * 64] and saved[1]["last_checked"] == 1
+    wire = Wire([(401, {"error": "unauthorized"}), (401, {"error": "unauthorized"})])
+    monkeypatch.setattr(drug_info, "_request", wire)
+    assert drug_info.daily_notices(("20261013", 200), tmp_path) == []  # nothing owed, nothing marked
+    assert drug_info.status(tmp_path)["listing"]["status"] == "unknown"
+
+
 def _open_fds():
     return set(os.listdir("/dev/fd"))
 
