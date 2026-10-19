@@ -24,6 +24,8 @@ import pytest
 
 import ledger
 import maintenance
+import restore_evidence
+import os
 import mcs_setup
 import mcs_update
 import mcs_view
@@ -347,8 +349,112 @@ def test_released_schema_update_rollback_requires_bound_consent(
         assert denied["error"] == "denied_restore_pending"
     _seed_consent(str(live), str(backup), report=report)
 
-    assert updater.recover_interrupted() == 0
+    assert updater.recover_interrupted() == 1
     assert len(resets) >= 1
+    assert restarts == []
+    assert Path(updater.MARKER_PATH).exists()
+    restored_marker = notify_spool.restore_pending(str(live.parent))
+    assert restored_marker is not None
+    assert restored_marker["phase"] == "restored"
+    assert restored_marker["report_id"] == report["report_id"]
+    assert restored_marker["backup_path"] == str(backup)
+    after = updater.journal_store.load_state(updater.STATE_PATH)
+    assert after["applying"]["rollback"] is True
+    assert after["applying"]["restore_incomplete"] is True
+    assert after["restore_consent"]["report_id"] == report["report_id"]
+    assert "synthetic-rollback" not in after["executed"]
+    with closing(_connect(live)) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == origin["schema_version"]
+        assert con.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
+    # No incompatible writer was opened: original tables, FTS, metadata,
+    # attachment records and files survive the copy without reconciliation edits.
+    _preserved(live, expected)
+    assert _sha(live) == backup_hash
+    assert _sha(backup) == backup_hash and _sha(source) == original_hash
+    assert all(not Path(str(live) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))
+    with closing(sqlite3.connect(live)) as con:
+        con.row_factory = sqlite3.Row
+        denied = notify_transport.apply_transport_begin(
+            con, {"command_id": "synthetic-begin-after-held-copy"}, {})
+        assert denied["granted"] is False
+        assert denied["error"] == "denied_restore_pending"
+    stable = (_sha(live), Path(updater.STATE_PATH).read_bytes(),
+              Path(updater.RESTORE_REPORT_PATH).read_bytes(), restored_marker)
+    assert updater.recover_interrupted() == 1
+    assert (_sha(live), Path(updater.STATE_PATH).read_bytes(),
+            Path(updater.RESTORE_REPORT_PATH).read_bytes(),
+            notify_spool.restore_pending(str(live.parent))) == stable
+    assert restarts == [] and Path(updater.MARKER_PATH).exists()
+    _preserved(live, expected)
+    assert _sha(backup) == backup_hash and _sha(source) == original_hash
+
+
+def test_same_schema_restored_witness_reconciles_then_resumes(
+        tmp_path, monkeypatch, updater):
+    """A compatible schema9 post-swap witness can finish actual reconciliation.
+
+    Build the approved post-swap state with the real staging primitive under
+    both updater locks. No schema number/guard/reconcile stub or forced old-DB
+    writer open is used; old-writer binary compatibility is not asserted.
+    """
+    origin = RELEASES[-1]
+    assert origin["schema_version"] == ledger.SCHEMA_VERSION
+    source = _historical(tmp_path / "source", origin)
+    expected, original_hash = _records(source), _sha(source)
+    live = Path(updater.LEDGER)
+    shutil.copy2(source, live)
+    shutil.copytree(source.parent / "attachments", live.parent / "attachments")
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", updater.BACKUP_DIR)
+    backup = Path(maintenance.preupdate_backup(str(live)))
+    backup_hash = _sha(backup)
+    db = ledger.Ledger(str(live))
+    try:
+        with db.db:
+            db.db.execute(
+                "INSERT INTO messages(message_id,project_id,body_html,body_text,"
+                "body_state,content_hash,posted_at_ts,first_seen) "
+                "VALUES(203,101,'<p>synthetic later</p>','synthetic later','full',?,"
+                "1788220920,200)", (hashlib.sha256(b"<p>synthetic later</p>").hexdigest(),))
+    finally:
+        db.close()
+    report = _seed_consent(str(live), str(backup))
+    assert restore_evidence.find_restore_consent(report, live_path=str(live)) is not None
+    assert report["backup_schema"] == ledger.SCHEMA_VERSION
+    restarts = []
+    monkeypatch.setattr(updater, "_head_sha", lambda: "a" * 40)
+    monkeypatch.setattr(updater, "_tree_clean", lambda: True)
+    monkeypatch.setattr(updater, "restart_agents",
+                        lambda bounce=True: restarts.append(bounce) or [])
+    state = updater.journal_store.default_state()
+    entry = {"tag": origin["release"], "sha": "b" * 40, "prev_sha": "a" * 40,
+             "schema_bump": False, "backup_path": str(backup), "at": 100}
+    state["applied"] = [entry]
+    state["applying"] = updater._rollback_applying(entry, "b" * 40, "synthetic-rollback")
+    state["applying"]["restore_incomplete"] = True
+    state["stages"] = [{"stage": "rollback", "at": 100}]
+    update_fd = updater.acquire_update_lock()
+    assert update_fd is not None
+    run_fd = None
+    try:
+        run_fd = updater._acquire_run_lock_wait()
+        assert run_fd is not None
+        updater._consent_hold(state, updater.RestoreConsentPending(report), str(backup))
+        updater._write_marker()
+        updater._replace_database(
+            str(backup), report["backup_sha256"],
+            lambda: notify_spool.mark_restored(
+                updater.DATA, backup_path=str(backup), by="mcs_update",
+                report_id=report["report_id"]))
+    finally:
+        try:
+            if run_fd is not None:
+                os.close(run_fd)
+        finally:
+            os.close(update_fd)
+    with closing(_connect(live)) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
+    _preserved(live, expected)
+    assert updater.recover_interrupted() == 0
     assert restarts == [True]
     assert not Path(updater.MARKER_PATH).exists()
     assert notify_spool.restore_pending(str(live.parent)) is None
