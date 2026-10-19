@@ -570,7 +570,7 @@ G2のbounded_http_request→stdin worker→HTTP構築とJevClient.evaluateを再
 
 既存test_busy_session_ack.pyの4失敗はparents[3]/plugins/bot-conversation参照先の不足。実pluginの対象hookはconfigをmockしたbot入力のroute attestationのみで、送信関数を呼ばないことを確認。テストファイルとplugin __init__.pyだけを一時領域へbyte同一コピーし、socket.connect拒否fixtureを追加。候補Hermesのscripts/run_tests.shから実行し **39 passed、runner wall 6.3s**。原本/候補ソース・稼働plugin配置は変更なし。
 
-一時root：/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-hermes-plugin-check-tquhgmsb
+一時root：/path/to/mcs-temporary-root
 テストSHA256：4811aaa28e9cac1c7c8b13df633ae52fcef688176884b7b9e47fece547468f5c
 外部plugin SHA256：2202101e5f9674e65ce794fe6cbf7baf179ca52466261cba8f1c5ce746691444
 

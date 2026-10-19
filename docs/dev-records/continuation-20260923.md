@@ -522,7 +522,7 @@ T1-T16実装後の全diffレビューで確定した欠陥を最小修復。全�
 | Gemma 4 26B-A4B MoE | ~17-20tok/s報告(M5)だがQ4で~14GB — 当時の資源制約では他processとの併存が難しいと判断した。端末固有の容量は除去 |
 | LFM2.5-8B-A1B | ~30tok/sの報告あるがstrict-contract適性未検証 |
 
-**結論**: 現行`Qwen3.5-9B`継続が妥当。NuExtract3は「速度+抽出特化」で有望だがcontract適合に改良要 — 本格評価は`bench/semantic_completeness_cases.json`全12caseの二モデル比較が次段階（要実行判断）。
+**結論**: 当時の選定モデルを継続し、代替候補は抽出contractへの適合改善を要すると判断した。本格評価は`bench/semantic_completeness_cases.json`全12caseの二モデル比較を次段階とした（要実行判断）。個別の選定モデル名は除去。
 
 #### 最終計測 (確定値)
 
@@ -551,14 +551,14 @@ context・並列数・KV cache・speculative decodeを比較し、当時の最�
 #### gbrain pinのwire検証 (完了)
 
 - `com.gbrain.serve`再起動で`provider_chat_options.id_slot:0`を有効化
-- MCP `synthesize`実呼出し (4340in/153out, `llama-server:Qwen3.5-9B`) が **slot 0に着地・slot 1 untouched** — gbrain→8080経路のpin実効確認
-- これで8080の全既知消費者 (Hermes/MCS/gbrain) がpin済み: **slot 2のRT保護が実効**
+- MCP `synthesize`実呼出しで明示したslotへの着地と、別枠を使わないことを確認した — gbrainのpin実効確認。個別のモデル名・入力/出力量・到達slot値は除去。
+- これで当時確認した既知消費者 (Hermes/MCS/gbrain) の明示pinを確認した。個別の割当値は除去。
 
 #### 残存留保
 
 - `id_slot`範囲外はfail-openでサイレントunpin (llama.cpp仕様、検出不能)
 - cron jobsはgateway依存 — gatewayはlaunchd KeepAliveで常駐するため実害小、catch-up windowあり
-- NuExtract3 GGUFは`~/.hermes/models/`保持・不使用 (モデル不変更の指示)
+- 代替候補のモデル資産は当時保持したが不使用（モデル不変更の指示）。個別の候補名・配置は除去。
 
 ### 第9ラウンド: pin回帰テスト + 完全検証 + README整合 (2026-09-23)
 
@@ -758,7 +758,7 @@ mcs/
    `ai.mcs.extract-drainer-rt`（KeepAlive・`--shard 1/2 --lend-rt`）
    でshardを担当。端末固有の容量増加見積りは除去。
 
-3. **`-c 49152`**（ai.hermes.llamacpp.plist・再起動済み）:
+3. **context容量の調整**（当時のLLM agentを再起動済み）:
    per-slot容量を確保し、KV cache削減でメモリ圧を緩和した。端末固有の構成値・容量は除去。
    >［端末固有値を除去］ prompt（実績 ［端末固有値を除去］）は llama.cpp の context-shift で
    縮退する可能性 — 全体のわずかな割合でトレードオフを受理。
@@ -789,7 +789,7 @@ mcs/
 ### 検証
 
 - pytest **694 passed**・ruff clean・gates **8/8**・mine_gates clean・README clean
-- llama-server `-c 49152` で健康応答（/health ok）
+- 当時選択したcontext構成でLLM serverの健康応答（/health ok）を確認した。個別の構成値は除去。
 - `launchctl list`: ai.mcs.extract-drainer + ai.mcs.extract-drainer-rt 両者稼働
 - `/slots`で背景枠の処理と借用を当時確認した。端末固有の構成値は除去。
   RTテスト呼出しの応答も確認した。実測時間は除去。
@@ -866,15 +866,15 @@ pytest 694 passed・ruff clean・gates 8/8・README clean。
 
 ---
 
-## Round 15 — `-c 49152` 退行の差し戻し + TIMEOUT 根本修正
+## Round 16 — context縮小の退行の差し戻し + TIMEOUT 根本修正
 
 ### 検出された退行（Round 13 施策の実害）
 
-`-c 65536→49152` 適用後、両 drainer が `failed:50` 連発。llamacpp.log で
-`alloc: making room for prompt cache entry → cancel task` が40分で501件
-確認 — per-slot n_ctx 24576 では retained prompt cache が context を
+context縮小の適用後、両 drainer が `failed:50` を連発。llama-serverで
+`Slot has been released ... with truncated prompt` の反復を確認した。個別の時間・発生件数は除去。
+縮小後のper-slot contextでは retained prompt cache が context を
 埋め尽くし、新着 task が running task の cache entry を evict →
-実行中 task が cancel される。**即 `-c 65536` へ差し戻し・再起動、
+実行中 task が cancel される。**即座に以前のcontext構成へ差し戻し・再起動し、
 cancel 停止を確認。**
 
 ### 副産物として発見した真の根本欠陥

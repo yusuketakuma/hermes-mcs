@@ -200,7 +200,7 @@ remains tied to 46cffb0.
 ## Re-executed historical baseline and REF regression
 
 On 2026-09-21 extracted all adapter files from a8896ec and 9d2c6d1 into
-`/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-ref-comparison-9cuhynlk/`.
+`/path/to/mcs-temporary-root`.
 Added only the current isolated runner and conftest network/credential guard
 to each temporary tree. Ran the same command in each root:
 
