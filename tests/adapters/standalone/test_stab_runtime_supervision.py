@@ -571,3 +571,50 @@ def test_initial_unreadable_identity_is_not_adopted_or_signalled(tmp_path, monke
     monkeypatch.setattr(runtime.os, "kill", no_signal)
     host.adopt_orphans(100)
     assert host.children == {}
+
+
+@pytest.mark.parametrize("identity", [True, None, False], ids=["same", "unreadable", "reused"])
+def test_adopted_eperm_rechecks_identity_without_releasing_unknown_slot(
+        tmp_path, monkeypatch, identity):
+    host = _host(tmp_path, monkeypatch)
+    clock = [0.0]
+    argv = host.argv["mcs_check"]
+    found: list[tuple[int, str] | None] = [(1, " ".join(argv))]
+    probes, identities = [], []
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+
+    def process_args(pid):
+        identities.append(pid)
+        return found[0]
+
+    def denied_probe(pid, sig):
+        probes.append((pid, sig))
+        assert sig == 0  # no TERM/KILL or real process operation
+        raise PermissionError(errno.EPERM, "synthetic liveness denial")
+
+    monkeypatch.setattr(runtime, "_process_args", process_args)
+    monkeypatch.setattr(runtime.os, "kill", denied_probe)
+    status = tmp_path / "data" / service.STATUS_FILE
+    status.write_text(json.dumps({"pid": 3999, "children": {"mcs_check": {"pid": 4005}}}))
+    status.chmod(0o600)
+    host.fired, host.inflight = {"mcs_check": 1200}, {"mcs_check": 600}
+    host.adopt_orphans(1200)
+    adopted = host.children["mcs_check"]["process"]
+    assert identities == [4005]
+    found[0] = ((1, " ".join(argv)) if identity is True else None
+                if identity is None else (1, "synthetic-unrelated-process"))
+    clock[0] = 31.0
+    host.tick(1231, draining=True)
+    assert identities == [4005, 4005]
+    assert probes == [(4005, 0)]
+    assert host.fired == {"mcs_check": 1200}
+    if identity is False:
+        assert adopted.ended and "mcs_check" not in host.children
+        assert host.inflight == {}
+        assert host.exits["mcs_check"]["last_exit"] is None
+        assert host.retry_at["mcs_check"] == 1231
+    else:
+        assert not adopted.ended
+        assert host.children["mcs_check"]["process"] is adopted
+        assert host.inflight == {"mcs_check": 600}
+        assert host.exits == {}

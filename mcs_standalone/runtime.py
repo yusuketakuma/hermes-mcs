@@ -118,11 +118,11 @@ class _Adopted:
                 self.ended = True
             except OSError:
                 pass  # An unreadable live process is not proof of exit.
-            else:
-                # A reaped orphan's pid can be reused: re-verify its identity.
-                if time.monotonic() - self.checked >= 30:
-                    self.checked = time.monotonic()
-                    self.ended = _is_orphan(self.pid, self.argv) is False
+            # A failed liveness probe is not exit proof, but a readable
+            # different identity still proves this adopted process is gone.
+            if not self.ended and time.monotonic() - self.checked >= 30:
+                self.checked = time.monotonic()
+                self.ended = _is_orphan(self.pid, self.argv) is False
         return 0 if self.ended else None
 
     def _signal(self, sig):
