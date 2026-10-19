@@ -1,25 +1,28 @@
 """Fixed bundles retain attachment identity without exposing signed URLs."""
-import semantic
+import mcs_contract
+import semantic_extraction
+import semantic_llm
+import semantic_store
 from semantic_testkit import _llm, _seeded
 
 
 def test_attachment_revision_is_bound_and_unparsed_content_is_explicit(tmp_path):
     db = _seeded(tmp_path)
     try:
-        before = semantic.thread_bundle(db, 1, 1)
+        before = semantic_store.thread_bundle(db, 1, 1)
         with db.db:
             db.db.execute("INSERT INTO attachments(message_id,file_id,name,url,local_path,sha256,state) VALUES(1,'file','scan.pdf','https://invalid.example/signed?token=synthetic','/private/file','old','done')")
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
         assert bundle["source_fingerprint"] != before["source_fingerprint"]
         attachment = bundle["members"][0]["attachments"][0]
         assert attachment["sha256"] == "old"
         assert "url" not in attachment and "local_path" not in attachment
-        facts, _, _ = semantic.extract_facts(_llm, bundle["members"][0])
-        summary = semantic.summarize(_llm, bundle, 1, facts, {})
+        facts, _, _ = semantic_extraction.extract_facts(_llm, bundle["members"][0])
+        summary = semantic_llm.summarize(_llm, bundle, 1, facts, {})
         assert any("添付内容は解析していません" in item for item in summary["limitations"])
         with db.db:
             db.db.execute("UPDATE attachments SET sha256='new'")
-        assert semantic.thread_bundle(db, 1, 1)["source_fingerprint"] != bundle["source_fingerprint"]
+        assert semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"] != bundle["source_fingerprint"]
         assert attachment["sha256"] == "old"
     finally:
         db.close()
@@ -80,19 +83,19 @@ def test_attachment_only_post_remains_full_and_explicitly_unparsed(tmp_path):
     assert batch.reached and batch.error is None
     path = str(tmp_path / "attachment-only.db")
     db = ledger.Ledger(path)
-    patient = mcs_adapter.UnreadPatient(1, "medical", "synthetic", "", "", "",
+    patient = mcs_contract.UnreadPatient(1, "medical", "synthetic", "", "", "",
                                         messages=batch.messages,
                                         fetch_state="complete")
     assert db.save_patient(patient, semantic=True) == [1]
     db.close()
     db = ledger.Ledger(path)
     try:
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
         member = bundle["members"][0]
         assert bundle["content_quality"] == "full"
         assert member["body_original"] == ""
         assert member["attachments"][0]["name"] == "scan.pdf"
-        summary = semantic.summarize(
+        summary = semantic_llm.summarize(
             lambda _: '{"claims":[],"limitations":[]}', bundle, 1, [], {})
         assert summary["claims"] == []
         assert any("添付内容は解析していません" in text

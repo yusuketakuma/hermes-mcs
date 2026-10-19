@@ -1,10 +1,10 @@
 """Fixed lanes let ingestion run during inference without duplicate jobs."""
+import semantic_qc
 import os
 import time
 
 import local_llm
 import mcs_util
-import semantic
 import semantic_drain
 from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
 
@@ -29,7 +29,7 @@ def test_transport_releases_ingest_lock_but_keeps_job_claim(tmp_path, monkeypatc
 
     try:
         result = {'errors': []}
-        out = semantic.run_due(db, _cfg(), result, time.monotonic() + 480,
+        out = semantic_drain.run_due(db, _cfg(), result, time.monotonic() + 480,
                                llm_fn=model, jev_client=_FakeJev(),
                                run_lock_fd=fd)
         assert out['done'] == 1 and seen and not result['errors']
@@ -53,7 +53,7 @@ def test_realtime_selects_newest_arrival_background_selects_oldest(tmp_path, mon
         db.job_add('semantic', 1, mid, payload=arrival)
     db.db.commit()
     seen = []
-    monkeypatch.setattr(semantic, '_process_job',
+    monkeypatch.setattr(semantic_drain, '_process_job',
                         lambda ledger, cfg, job, *a, **k: seen.append(job['message_id']) or 'stale')
 
     def no_fairness(*a, **k):
@@ -62,7 +62,7 @@ def test_realtime_selects_newest_arrival_background_selects_oldest(tmp_path, mon
     # computation would be discarded, so it must not run at all
     monkeypatch.setattr(semantic_drain, '_due_lanes', no_fairness)
     try:
-        semantic.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
+        semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
                          jev_client=_FakeJev(), llm_fn=_llm, max_jobs=1,
                          lane='realtime')
         assert seen == [3]
@@ -74,7 +74,7 @@ def test_realtime_selects_newest_arrival_background_selects_oldest(tmp_path, mon
                       (json.dumps(root), time.time() + 1, original['job_id']))
         db.db.commit()
         seen.clear()
-        semantic.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
+        semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
                          jev_client=_FakeJev(), llm_fn=_llm, max_jobs=1,
                          lane='realtime')
         assert seen == [original['message_id']]
@@ -83,7 +83,7 @@ def test_realtime_selects_newest_arrival_background_selects_oldest(tmp_path, mon
                       (json.dumps(root), original['job_id']))
         db.db.commit()
         seen.clear()
-        out = semantic.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
+        out = semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
                                jev_client=_FakeJev(), llm_fn=_llm, max_jobs=1,
                                lane='backlog')
         assert seen == [original['message_id']]
@@ -113,7 +113,7 @@ def test_jev_receipt_is_committed_before_unlocked_transport(tmp_path, monkeypatc
 
     monkeypatch.setattr(client, '_http_request', http)
     try:
-        semantic.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
+        semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
                          llm_fn=_llm, jev_client=client, run_lock_fd=fd)
         assert calls
         assert client._http_request is http
@@ -136,15 +136,15 @@ def test_backlog_alternates_so_reseeded_qc_cannot_starve_semantic(tmp_path, monk
     db.db.commit()
     seen = []
     monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': None})
-    monkeypatch.setattr(semantic_drain, '_qc_seed', lambda *a, **k: 0)
+    monkeypatch.setattr(semantic_qc, '_qc_seed', lambda *a, **k: 0)
     # 'stale' leaves both rows pending, as a QC re-pend does
-    monkeypatch.setattr(semantic, '_process_job',
+    monkeypatch.setattr(semantic_drain, '_process_job',
                         lambda *a, **k: seen.append('semantic') or 'stale')
-    monkeypatch.setattr(semantic_drain, '_process_qc_job',
+    monkeypatch.setattr(semantic_qc, '_process_qc_job',
                         lambda *a, **k: seen.append('extract_qc') or 'stale')
     try:
         for _ in range(3):
-            semantic.run_due(db, _cfg(extract_qc='annotate'), {'errors': []},
+            semantic_drain.run_due(db, _cfg(extract_qc='annotate'), {'errors': []},
                              time.monotonic() + 480, jev_client=_FakeJev(),
                              llm_fn=_llm, max_jobs=1, lane='backlog')
         assert seen == ['semantic', 'extract_qc', 'semantic']
@@ -183,11 +183,11 @@ def test_reseeded_old_qc_cannot_overtake_a_waiting_qc(tmp_path, monkeypatch):
                               (job['job_id'],))
         return 'done'
 
-    monkeypatch.setattr(semantic_drain, '_qc_seed', reseed)
-    monkeypatch.setattr(semantic_drain, '_process_qc_job', process)
+    monkeypatch.setattr(semantic_qc, '_qc_seed', reseed)
+    monkeypatch.setattr(semantic_qc, '_process_qc_job', process)
     try:
         for _ in range(3):
-            semantic.run_due(db, _cfg(extract_qc='annotate'), {'errors': []},
+            semantic_drain.run_due(db, _cfg(extract_qc='annotate'), {'errors': []},
                              time.monotonic() + 480, jev_client=_FakeJev(),
                              llm_fn=_llm, max_jobs=1, lane='backlog')
             clock[0] += 1

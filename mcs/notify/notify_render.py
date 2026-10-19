@@ -21,6 +21,7 @@ from message_metadata import (get_message_metadata, is_self_sender,
                               mentions_self, self_stamps, stamp_counts,
                               thread_stamp_line, actor_line)
 import structured_view
+from notify_scope import latest_signals
 # LINE WORKS' card split lives with its presenter; re-exported for the
 # worker (adapters/lineworks/cards.py) and notify_cards
 from present_lineworks import card_split as lineworks_card_split  # noqa: F401
@@ -48,16 +49,16 @@ def _preview_post(text) -> str:
     return _inline(raw, 220)
 
 
-def _preview_header(db, pid, message) -> str:
+def preview_header(db, pid, message) -> str:
     """保存済み投稿だけから短い5項目表示のヘッダーを作り、欠測を明示する。"""
-    patient = _inline(_patient_name(db, pid), 30) or f"project {pid}"
+    patient = _inline(patient_name(db, pid), 30) or f"project {pid}"
     sender = (_inline(message["sender_name"], 24) if message else "") or "発信者未取得"
     organization = (_inline(message["organization"], 24) if message else "") or "所属未取得"
     posted = message["posted_at"] if message else None
     return f"{patient} / {sender}（{organization}） / {_when_posted(posted)}"
 
 
-def _preview_line(header, summary, limit=600):
+def preview_line(header, summary, limit=600):
     patient, _separator, source = header.partition(" / ")
     summary = _inline(summary, limit - len(header) - 2)
     return f"{patient}: {summary} / {source}"
@@ -77,7 +78,7 @@ def notification_preview(db, card, content, *, limit=600) -> str:
             if message:
                 rows.append((mid, message))
         if not rows:
-            patient = _inline(_patient_name(db, card["project_id"]), 30) or f"project {card['project_id']}"
+            patient = _inline(patient_name(db, card["project_id"]), 30) or f"project {card['project_id']}"
             return f"{patient}: 投稿本文を確認できません。"
         # the urgent post is what the push must carry, even under newer
         # replies; otherwise the newest post (deleted or not) speaks
@@ -85,12 +86,12 @@ def notification_preview(db, card, content, *, limit=600) -> str:
                              if row["body_state"] != "deleted"
                              and structured_view.message_urgency(db, m) == "llm"),
                             rows[0])
-        header = _preview_header(db, card["project_id"], message)
+        header = preview_header(db, card["project_id"], message)
         if message["body_state"] == "deleted":
-            return _preview_line(header, "表示対象の投稿は削除済みです。", limit)
+            return preview_line(header, "表示対象の投稿は削除済みです。", limit)
         if message["body_state"] != "full" or not valid_hash(message["content_hash"]):
-            return _preview_line(header, "投稿本文が未取得か確認できない状態です。", limit)
-        block = _structured_block(db, mid, plain=True)
+            return preview_line(header, "投稿本文が未取得か確認できない状態です。", limit)
+        block = structured_block(db, mid, plain=True)
         if block:
             facts: list[str] = []
             for line in block["text"].splitlines()[1:]:
@@ -105,7 +106,7 @@ def notification_preview(db, card, content, *, limit=600) -> str:
                 word in line for word in ("依頼", "予定", "症状", "注意"))),
                 facts[0] if facts else _preview_post(message["body_text"]) or "要約内容を確認できません")
         else:
-            state = "要約作成失敗" if _extraction_failed(db, mid) else "要約処理待ち"
+            state = "要約作成失敗" if extraction_failed(db, mid) else "要約処理待ち"
             main = f"原文・{state}: " + (_preview_post(message["body_text"]) or "本文なし")
         urgency = structured_view.message_urgency(db, mid)
         badge = URGENCY_PLAIN.get(urgency, "")
@@ -113,21 +114,21 @@ def notification_preview(db, card, content, *, limit=600) -> str:
             badge += structured_view.urgency_qc_suffix(db, mid)
         if badge:
             badge += " · "
-        return _preview_line(header, badge + _inline(main, 260), limit)
-    signals = _latest_signals(db, content["shown"], card["project_id"])
+        return preview_line(header, badge + _inline(main, 260), limit)
+    signals = latest_signals(db, content["shown"], card["project_id"])
     items = []
     for entry in signals.values():
         signal = entry["content"]
-        mid, message = _signal_evidence(db, signal)
+        mid, message = signal_evidence(db, signal)
         summary = f"{signal_label(signal)}{_inline(signal.get('note'), 120)}{signal_state_suffix(signal)}"
         if mid is None:
             # a register alert has no post by design: no sender/time to be 未取得
-            patient = _inline(_patient_name(db, signal.get("project_id")), 30) \
+            patient = _inline(patient_name(db, signal.get("project_id")), 30) \
                 or f"project {signal.get('project_id')}"
             items.append(f"{patient}: {summary}")
             continue
-        header = _preview_header(db, signal.get("project_id"), message)
-        items.append(_preview_line(header, summary))
+        header = preview_header(db, signal.get("project_id"), message)
+        items.append(preview_line(header, summary))
     if not items:
         return "確認候補: 現在の表示対象を確認できません。"
     prefix = f"確認候補 {len(signals)}件: " if card["kind"] == "digest" else "確認候補（記録上）: "
@@ -232,31 +233,7 @@ def parts_text(parts: dict, dialect: str = "plain") -> str:
     return render_text(parts)
 
 
-def _latest_signals(db, keys: list, project_id=None) -> dict:
-    """key -> {'artifact_id','content'} of the newest signal_v1 row."""
-    from mcs_signals import _signal_content
-    out = {}
-    for k in keys:
-        if not isinstance(k, str) or not k:
-            continue
-        row = db.execute(
-            """SELECT artifact_id, project_id, content FROM artifacts
-               WHERE kind='signal_v1' AND json_valid(meta)
-                 AND json_extract(meta,'$.key')=?
-               ORDER BY artifact_id DESC LIMIT 1""", (k,)).fetchone()
-        if row is None:
-            continue
-        # The newest row is authoritative even when unreadable: do not
-        # revive an older open signal after a malformed terminal transition.
-        content = _signal_content(row["content"], row["project_id"])
-        if (content is not None
-                and (project_id is None or content["project_id"] == project_id)):
-            out[k] = {"artifact_id": row["artifact_id"],
-                      "content": content}
-    return out
-
-
-def _patient_name(db, pid) -> str:
+def patient_name(db, pid) -> str:
     if not positive(pid):
         return ""
     r = db.execute("SELECT patient_name FROM patients "
@@ -264,7 +241,7 @@ def _patient_name(db, pid) -> str:
     return (r["patient_name"] or "").strip() if r else ""
 
 
-def _mmdd(posted_at) -> str:
+def mmdd(posted_at) -> str:
     # posted_at is ISO local text; keep its MM-DD without re-parsing zones
     if isinstance(posted_at, str) and len(posted_at) >= 10:
         return posted_at[5:10]
@@ -274,7 +251,7 @@ def _mmdd(posted_at) -> str:
 def _deleted_line(posted_at, sender: str) -> str:
     """A deleted post's line: its time and sender when known, never a
     row of ??-?? placeholders."""
-    when = f"{_mmdd(posted_at)} {_hhmm(posted_at)}"
+    when = f"{mmdd(posted_at)} {_hhmm(posted_at)}"
     known = [x for x in (when if "?" not in when else "",
                          sender if sender not in ("", "?") else "") if x]
     return " ".join(known + ["（削除された投稿）"])
@@ -289,7 +266,7 @@ def _hhmm(posted_at) -> str:
 def _when_posted(posted_at) -> str:
     """MM-DD HH:MM of a post, or a plain word when no time is stored —
     never a row of question marks on a notification."""
-    return f"{_mmdd(posted_at)} {_hhmm(posted_at)}" if posted_at else "日時未取得"
+    return f"{mmdd(posted_at)} {_hhmm(posted_at)}" if posted_at else "日時未取得"
 
 
 def thread_stamp_row(db, mid, sender_id, *, observed_time=True) -> str:
@@ -420,13 +397,12 @@ def _signal_tier(sig) -> str | None:
     return mcs_signals.SIGNAL_TIERS.get(sig.get("type"))
 
 
-def _thread_context(db, card, msgs) -> str:
+def _thread_context(db, card, msgs, waiting=frozenset()) -> str:
     """② 投稿数 · 未取得の返信 · 添付件数 · 自分宛て — only facts that
     are present; '' when there is nothing to say beyond the posts."""
     live = [m for m in msgs if m["body_state"] != "deleted"]
     parts = [f"{len(msgs)}投稿"] if msgs else []
     replies = (msgs[0].get("reply_count") or 0) if msgs else 0
-    waiting = card.get("_summary_wait_ids", set())
     if waiting:
         root = db.execute("SELECT reply_count FROM messages WHERE message_id=? AND project_id=?",
                           (card["root_message_id"], card["project_id"])).fetchone()
@@ -450,7 +426,7 @@ def _thread_context(db, card, msgs) -> str:
     return " · ".join(parts)
 
 
-def _structured_block(db, mid, plain=False) -> dict | None:
+def structured_block(db, mid, plain=False) -> dict | None:
     """Per-message 📋 要約 block with dictionary details kept on demand.
 
     Raw medication facts use the shared extractor view. Artifact freshness and the
@@ -467,7 +443,7 @@ def _structured_block(db, mid, plain=False) -> dict | None:
             "text": "📋 要約\n" + "\n".join("・" + ln for ln in lines)}
 
 
-def _progress_state(db, mid, cfg):
+def progress_state(db, mid, cfg):
     if not isinstance(cfg, dict):
         return None
     import extraction_progress
@@ -500,14 +476,14 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True) -> di
     """📋 要約 of one post, or its visible empty state — a post with no
     usable extraction says whether it is still queued or exhausted its
     retries instead of silently showing nothing."""
-    block = _structured_block(db, mid, plain=not label)
+    block = structured_block(db, mid, plain=not label)
     if block and not label:
         # layout 2: the post line above already heads the summary
         block = dict(block, text=block["text"].removeprefix("📋 要約\n"))
     state = (progress_by_mid.get(mid) if progress_by_mid is not None
-             else _progress_state(db, mid, cfg))
+             else progress_state(db, mid, cfg))
     if not block:
-        empty = ("作成失敗" if _extraction_failed(db, mid) else
+        empty = ("作成失敗" if extraction_failed(db, mid) else
                  "要確認" if state and state["state"] == "attention" else "処理待ち")
         block = {"type": "text", "text": ("📋 要約 " if label else "要約 ") + empty}
     # layout 2 (label=False) reports extraction progress once on the
@@ -518,7 +494,7 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True) -> di
     return block
 
 
-def _extraction_failed(db, mid) -> bool:
+def extraction_failed(db, mid) -> bool:
     """The LLM extraction of the post's current body ran out of retries."""
     return db.execute(
         """SELECT 1 FROM artifacts a JOIN messages m
@@ -588,7 +564,7 @@ def patient_heading(db, pid) -> str:
     return out
 
 
-def _source_fp(db, card) -> str:
+def source_fingerprint(db, card) -> str:
     """Fingerprint of the source material a card renders — a change here
     bumps source_generation."""
     card = dict(card)
@@ -607,13 +583,13 @@ def _source_fp(db, card) -> str:
             (m["message_id"], m["content_hash"], m["body_state"],
              ready.get(m["message_id"], {}))
             for m in msgs],
-            "name": _patient_name(db, card["project_id"]),
+            "name": patient_name(db, card["project_id"]),
             "drug_dictionary": structured_view.generation_signature(db), "drug_view_version": 2,
             "drug_thread_unavailable": card.get("transport") == "slack"
             and card.get("thread_state") in ("failed", "deleted")})
-    keys = _anchor_keys(card)
-    sigs = _latest_signals(db, keys, card["project_id"])
-    names = sorted({_patient_name(db, s["content"].get("project_id"))
+    keys = anchor_keys(card)
+    sigs = latest_signals(db, keys, card["project_id"])
+    names = sorted({patient_name(db, s["content"].get("project_id"))
                     for s in sigs.values()})
     evidence_ids = set()
     for signal in sigs.values():
@@ -646,7 +622,7 @@ def _source_fp(db, card) -> str:
         and card.get("thread_state") in ("failed", "deleted")})
 
 
-def _anchor_keys(card) -> list:
+def anchor_keys(card) -> list:
     try:
         anchor = json.loads(card["anchor_key"] or "{}")
     except (ValueError, TypeError, RecursionError):
@@ -670,7 +646,7 @@ def _page(ui_state, pages: int, default: int = 0) -> int:
 
 # ---------- card content ----------
 
-def _signal_evidence(db, sig) -> tuple[int | None, sqlite3.Row | None]:
+def signal_evidence(db, sig) -> tuple[int | None, sqlite3.Row | None]:
     """Select and fetch the message cited by a signal's latest evidence."""
     ev = sig.get("evidence") or {}
     if not isinstance(ev, dict) or not positive(sig.get("project_id")):
@@ -697,7 +673,7 @@ def _signal_compact(db, pid, contents: list, plain: bool = False) -> list:
     lines = []
     for s in contents:
         line = signal_label(s)
-        mid, message = _signal_evidence(db, s)
+        mid, message = signal_evidence(db, s)
         urgency = (structured_view.message_urgency(db, mid)
                    if message is not None and mid is not None and s.get("project_id") == pid
                    else None)
@@ -757,7 +733,7 @@ def _signal_body(db, sig: dict, stamps=True, *, cfg=None, include_summary=True,
     """Full-text view of one signal — the thread post and 'body'
     action surface: 【種別】note / state, then the evidence post."""
     lines = [f"{signal_label(sig)}{sig.get('note') or ''}{signal_state_suffix(sig)}"]
-    mid, m = _signal_evidence(db, sig)
+    mid, m = signal_evidence(db, sig)
     if mid is None:
         # no evidence post (register alerts): the patient must still be named
         lines[0] = f"{patient_heading(db, sig.get('project_id'))} · {lines[0]}"
@@ -770,7 +746,7 @@ def _signal_body(db, sig: dict, stamps=True, *, cfg=None, include_summary=True,
     return "\n".join(lines)
 
 
-def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
+def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
                     stamps=True, *, cfg=None, include_summary=True) -> tuple:
     """Full text of the shown set frozen into the click's manifest —
     'body' answers what the button rendered, never the card's *current*
@@ -808,7 +784,7 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
         text = "\n\n".join(lines)
     else:
         shown = [k for k in shown if isinstance(k, str)]
-        sigs = _latest_signals(db, shown, card["project_id"])
+        sigs = latest_signals(db, shown, card["project_id"])
         text = "\n\n— — —\n\n".join(
             _signal_body(db, sigs[k]["content"], stamps, cfg=cfg,
                          include_summary=include_summary, layout=layout, stamp_time=stamp_time) for k in shown
@@ -820,7 +796,7 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
     return title, text or "（表示できる本文がありません）"
 
 
-def _card_content(db, card, *, cfg=None) -> dict:
+def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     """The deterministic display model for a card at its current page:
     containers + footer + shown-set + pages. Tokens/buttons are added
     per-render and are NOT part of the content fingerprint."""
@@ -838,25 +814,24 @@ def _card_content(db, card, *, cfg=None) -> dict:
                ORDER BY message_id<>?, posted_at_ts, message_id""",
             (card["root_message_id"], card["root_message_id"],
              card["project_id"], card["root_message_id"]))]
-        waiting = card.get("_summary_wait_ids", set())
         msgs = [m for m in msgs if m["message_id"] not in waiting]
         if isinstance(cfg, dict):
-            progress_by_mid = {m["message_id"]: _progress_state(db, m["message_id"], cfg)
+            progress_by_mid = {m["message_id"]: progress_state(db, m["message_id"], cfg)
                                for m in msgs if m["body_state"] != "deleted"}
         first = msgs[0] if msgs else {}
         urgency = {structured_view.message_urgency(db, m["message_id"])
                    for m in msgs if m["body_state"] != "deleted"}
         tag = next((URGENCY_PLAIN[u] for u in ("llm", "rule") if u in urgency), "")
         urgent = bool(tag)
-        context = _thread_context(db, card, msgs)
+        context = _thread_context(db, card, msgs, waiting)
         if layout >= 2:
             # the title is the patient alone (never cut on a phone); the
             # urgency leads the line under it, then start date and counts
             containers = [{"type": "heading", "text":
                            f"💬 {patient_heading(db, card['project_id'])}"}]
             meta = [URGENCY_PLAIN[u] for u in ("llm", "rule") if u in urgency][:1]
-            if "?" not in _mmdd(first.get("posted_at")):
-                meta.append(f"{_mmdd(first.get('posted_at'))}〜")
+            if "?" not in mmdd(first.get("posted_at")):
+                meta.append(f"{mmdd(first.get('posted_at'))}〜")
             if context:
                 meta.append(context)
             meta.extend(_progress_summary(progress_by_mid))
@@ -865,8 +840,8 @@ def _card_content(db, card, *, cfg=None) -> dict:
         else:
             containers = [{"type": "heading", "text":
                            f"💬 {patient_heading(db, card['project_id'])}"
-                           + ("" if "?" in _mmdd(first.get("posted_at"))
-                              else f" · 起点 {_mmdd(first.get('posted_at'))}")
+                           + ("" if "?" in mmdd(first.get("posted_at"))
+                              else f" · 起点 {mmdd(first.get('posted_at'))}")
                            + (f" {tag}" if tag else "")}]
             if context:
                 containers.append({"type": "text", "text": context})
@@ -890,13 +865,13 @@ def _card_content(db, card, *, cfg=None) -> dict:
         max_count = PAGE_THREAD
         shown_kind = "message_ids"
     else:
-        keys = _anchor_keys(card)
-        sigs = _latest_signals(db, keys, card["project_id"])
+        keys = anchor_keys(card)
+        sigs = latest_signals(db, keys, card["project_id"])
         ordered = [k for k in keys if k in sigs]
         if isinstance(cfg, dict):
             progress_ids = {mid for k in ordered for mid, message in [
-                _signal_evidence(db, sigs[k]["content"])] if message is not None}
-            progress_by_mid = {mid: _progress_state(db, mid, cfg) for mid in sorted(progress_ids)}
+                signal_evidence(db, sigs[k]["content"])] if message is not None}
+            progress_by_mid = {mid: progress_state(db, mid, cfg) for mid in sorted(progress_ids)}
         # one face item per patient — the card stays at key points;
         # the evidence quote and 📋要約 ride the companion thread
         # (or the 本文表示 action when no thread carries them)
@@ -921,7 +896,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
         item_shown = [ks for _, ks in groups]
         max_count = PAGE_DIGEST if kind == "digest" else PAGE_THREAD
         shown_kind = "signal_keys"
-    source_fp = _source_fp(db, card)
+    source_fp = source_fingerprint(db, card)
     generation = _current_generation(card, source_fp)
     # A long heading shares the old 800-character reserve with the footer.
     # Any physical truncation retains the existing explicit original/body link.
@@ -955,7 +930,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
     reactions = []
     stamp_time = "transport" not in card.keys() or card["transport"] != "lineworks"
     for mid, meta in card_reactions(db, card, None if kind == "thread" else shown):
-        if mid in card.get("_summary_wait_ids", set()):
+        if mid in waiting:
             continue
         actors = reaction_actor_summary(db, mid)
         if layout < 3:
@@ -971,7 +946,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
             "page": page, "pages": pages,
             "source_fp": source_fp, "toggles": toggles,
             "actor_fp": actor_fp,
-            # outside _content_fp: a presentation hint (accent colour),
+            # outside content_fingerprint: a presentation hint (accent colour),
             # from the computed urgency verdict — never from text, which
             # may quote a staff-typed 🚨
             "urgent": urgent}
@@ -1088,11 +1063,11 @@ def card_reactions(db, card, shown=None) -> list:
             "AND (message_id=? OR parent_id=?) AND body_state IS NOT 'deleted' "
             + selected + " ORDER BY posted_at_ts,message_id", params)]
     else:
-        keys = shown if shown is not None else _anchor_keys(card)
-        sigs = _latest_signals(db, keys, card["project_id"])
+        keys = shown if shown is not None else anchor_keys(card)
+        sigs = latest_signals(db, keys, card["project_id"])
         posts, seen = [], set()
         for signal in sigs.values():
-            mid, message = _signal_evidence(db, signal["content"])
+            mid, message = signal_evidence(db, signal["content"])
             if message and message["body_state"] != "deleted" and mid not in seen:
                 seen.add(mid)
                 posts.append((mid, message["sender_id"]))
@@ -1223,7 +1198,7 @@ def _footer(db, card, shown, generation) -> tuple:
                                   and tri["owner"])}
 
 
-def _content_fp(content: dict) -> str:
+def content_fingerprint(content: dict) -> str:
     # preview_text is derived from shown/containers; keeping it out keeps
     # fingerprints stored by earlier versions stable (no mass re-render).
     value = {"c": content["containers"], "f": content["footer"],

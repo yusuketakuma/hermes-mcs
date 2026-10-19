@@ -25,6 +25,10 @@ Slack・Discord の接続先固有処理の正本は `adapters/slack/` と
 `adapters/discord/` にあります。共通の配送・承認・receipt 基盤は
 `adapters/common/` にあります。`card_workers.py` は Hermes が別のパッケージ名で
 plugin を読み込んでもリポジトリのルートを `sys.path` に加え、`adapters.*` を直接 import します。
+`__init__.py` は登録とコマンド呼出し時の遅延読込み、`bridge.py` は checkout の解決、
+`card_workers.py` は host の設定・接続・所有者情報から Supervisor を結び付ける責務を持ちます。
+plugin の import・登録だけでは共通アダプターや SDK を読み込みません。
+コマンド検証・患者権限・preview/confirm の実装は `adapters/common/` が所有します。
 LINE WORKS を含む構成は [接続アダプター](../adapters/README.md)を参照してください。
 
 ## 配置と設定

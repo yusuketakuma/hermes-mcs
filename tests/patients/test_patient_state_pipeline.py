@@ -1,4 +1,5 @@
 """Synthetic reference validation, frozen checkpoints and worker progress."""
+import extract_validation
 import copy
 import json
 
@@ -30,11 +31,11 @@ def test_known_reference_resolves_but_never_replaces_body_only_values(tmp_path):
         seed(led)
         row = target(led)
         frame = refs(led, row)
-        out = llm._validate(document(), BODY, ctx=True, references=frame["refs"])
+        out = extract_validation.validate(document(), BODY, ctx=True, references=frame["refs"])
         detail = out["patient_context"][0]["details"][-1]
         assert detail["value"] == "2錠" and detail["refers_to"]["value"] == "3錠"
         assert detail["refers_to"]["message_id"] == 1
-        lifted = llm._validate(document(value="3錠"), BODY, ctx=True, references=frame["refs"])
+        lifted = extract_validation.validate(document(value="3錠"), BODY, ctx=True, references=frame["refs"])
         assert all(d["key"] != "residual_quantity" for d in lifted["patient_context"][0]["details"])
         assert lifted["_items_dropped"] >= 1
     finally:
@@ -47,7 +48,7 @@ def test_unknown_or_malformed_reference_is_counted_without_losing_its_grounded_v
     try:
         seed(led)
         row = target(led)
-        out = llm._validate(document(reference=bad), BODY, references=refs(led, row)["refs"])
+        out = extract_validation.validate(document(reference=bad), BODY, references=refs(led, row)["refs"])
         detail = out["patient_context"][0]["details"][-1]
         assert detail["value"] == "2錠" and "refers_to" not in detail
         assert out["_items_dropped"] == 1
@@ -63,7 +64,7 @@ def test_other_drug_or_subject_cannot_borrow_a_known_reference(tmp_path):
         mapping = refs(led, row)["refs"]
         for body, names, subject in [(BODY.replace("合成薬A", "合成薬B"), ("合成薬B",), "patient"),
                                      (BODY, ("合成薬A",), "family")]:
-            out = llm._validate(document(body, names=names, subject=subject), body, references=mapping)
+            out = extract_validation.validate(document(body, names=names, subject=subject), body, references=mapping)
             assert "refers_to" not in out["patient_context"][0]["details"][-1]
             assert out["_items_dropped"] == 1
     finally:
@@ -78,7 +79,7 @@ def test_forged_resolved_object_and_unsupplied_reference_are_rejected(tmp_path):
         mapping = refs(led, row)["refs"]
         forged = {**mapping["S1"], "token": "S1", "project_id": 2}
         for doc, supplied in [(document(reference=forged), mapping), (document(), None)]:
-            out = llm._validate(doc, BODY, references=supplied)
+            out = extract_validation.validate(doc, BODY, references=supplied)
             assert out["_items_dropped"] == 1
             assert "refers_to" not in out["patient_context"][0]["details"][-1]
     finally:
@@ -94,8 +95,8 @@ def test_resolved_reference_survives_piece_merge_and_durable_checkpoint(tmp_path
         row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=999").fetchone())
         frame = refs(led, row)
         row.update(_frame=frame, _target=("", llm.MODEL))
-        out = llm._piece_validate(document(), BODY, BODY, references=frame["refs"])
-        merged = llm._merge([out])
+        out = extract_validation.validate_piece(document(), BODY, BODY, references=frame["refs"])
+        merged = extract_validation.merge([out])
         assert merged["patient_context"][0]["details"][-1]["refers_to"]["token"] == "S1"
         llm._persist_chunks(led, row, {0: out}, frame["text"])
         _, saved = llm._saved_chunk_state(led, row, frame["text"])
@@ -120,7 +121,7 @@ def test_worker_saves_frame_before_call_and_completed_progress_ignores_backgroun
             frames = led.artifacts(state.KIND, message_id=999)
             assert len(frames) == 1 and kwargs["references"]["S1"]["value"] == "3錠"
             seen.append(copy.deepcopy(kwargs["references"]))
-            return llm._validate(document(), body, references=kwargs["references"])
+            return extract_validation.validate(document(), body, references=kwargs["references"])
 
         monkeypatch.setattr(llm, "llm_extract", infer)
         result = llm.run_pending(led, admitted_ids={999}, limit=1, budget_s=10)
@@ -166,7 +167,7 @@ def test_interrupted_worker_resumes_the_first_snapshot_after_history_changes(tmp
 
         def infer(body, **kwargs):
             calls.append(copy.deepcopy(kwargs["references"]))
-            return llm._DEFERRED if len(calls) == 1 else llm._validate(
+            return llm._DEFERRED if len(calls) == 1 else extract_validation.validate(
                 document(), body, references=kwargs["references"])
 
         monkeypatch.setattr(llm, "llm_extract", infer)

@@ -1,4 +1,5 @@
 """Synthetic imported receipts are bound before predictions are sealed."""
+import semantic_transport
 import copy
 import json
 
@@ -334,10 +335,9 @@ def test_cli_database_error_is_private_and_does_not_write_output(tmp_path, monke
 
 
 def test_multi_member_runtime_target_receipts_do_not_require_context_finals(tmp_path, monkeypatch):
-    import semantic
     import extract_llm
     import semantic_extraction
-    monkeypatch.setattr(semantic, 'llm_model', lambda: 'synthetic-local')
+    monkeypatch.setattr(semantic_transport, 'llm_model', lambda: 'synthetic-local')
     record, docs, cfg = fixture(tmp_path, multi=True)
     obs = record['sealed_observations']
     assert len(obs['bundle']['members']) == 2

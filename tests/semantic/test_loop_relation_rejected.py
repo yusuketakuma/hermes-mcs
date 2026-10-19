@@ -1,10 +1,11 @@
 """A malformed relation answer is an INCOMPLETE receipt, never a relation."""
+import semantic_policy
+import semantic_store
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_drain
 import semantic_jev as jev
 import semantic_loops
@@ -34,9 +35,9 @@ def _two_pairs(tmp_path):
     """One open item (message 1) and two later replies -> two pairs."""
     db = _seeded(tmp_path)
     db.save_messages([_message(3, parent=1, body="別件の返信です。")])
-    config, _ = semantic.semantic_config(_cfg())
-    db.artifact_add("semantic_policy", semantic.policy_fingerprint(config))
-    bundle = semantic.thread_bundle(db, 1, 1, [2, 3])
+    config, _ = semantic_policy.semantic_config(_cfg())
+    db.artifact_add("semantic_policy", semantic_policy.policy_fingerprint(config))
+    bundle = semantic_store.thread_bundle(db, 1, 1, [2, 3])
     facts = {1: _pending_fact(bundle["members"][0])}
     return db, config, bundle, facts
 
@@ -217,7 +218,7 @@ def test_a_known_rejection_retries_only_when_nothing_else_failed(
             "SELECT attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()[0]
         client = _FakeJev()
         client.last_error = None
-        out = semantic.run_due(db, _cfg(), {"errors": []},
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []},
                                time.monotonic() + 300, jev_client=client,
                                llm_fn=_llm)
         [metric] = [m for m in out["job_metrics"] if m["kind"] == "semantic"]

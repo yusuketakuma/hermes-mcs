@@ -22,10 +22,10 @@ def _cards(path, *layouts):
 def _state(updater, repo, **entry):  # noqa: F811
     before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
     after = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0", "sha": after, "prev_sha": before,
                          **entry}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     return before, after
 
 
@@ -42,7 +42,7 @@ def test_rollback_refuses_before_journal_when_target_lacks_the_layout(
                         lambda text, **k: notices.append(text) or True)
     assert updater.rollback("rb-1") == 1
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == after
-    st = updater.load_state()
+    st = updater.journal_store.load_state(updater.STATE_PATH)
     assert st["applying"] is None and st["applied"][-1]["sha"] == after
     assert st["executed"]["rb-1"]["result"] == "rollback_failed"
     assert "rollback_blocked_layout_floor" in st["executed"]["rb-1"]["detail"]
@@ -66,7 +66,7 @@ def test_rollback_layout_floor_passes_when_nothing_can_be_misread(
     elif ledger == "layout_ok":
         _cards(updater.LEDGER, 1, 1)
     assert updater._rollback_layout_error(
-        updater.load_state()["applied"][-1]) is None
+        updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]) is None
 
 
 def test_rollback_layout_floor_treats_an_unreadable_ledger_as_unverified(
@@ -77,7 +77,7 @@ def test_rollback_layout_floor_treats_an_unreadable_ledger_as_unverified(
     _state(updater, repo)
     with open(updater.LEDGER, "wb") as f:
         f.write(b"not a sqlite file" * 64)
-    err = updater._rollback_layout_error(updater.load_state()["applied"][-1])
+    err = updater._rollback_layout_error(updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1])
     assert err and err.startswith("rollback_layout_unverified:")
 
 
@@ -92,7 +92,7 @@ def test_rollback_layout_floor_defers_an_unreadable_backup_to_the_restore(
     _state(updater, repo, schema_bump=True, backup_path=str(backup))
     _cards(updater.LEDGER, 3)
     assert updater._rollback_layout_error(
-        updater.load_state()["applied"][-1]) is None
+        updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]) is None
 
 
 def test_rollback_layout_floor_reads_the_backup_a_schema_bump_restores(
@@ -104,7 +104,7 @@ def test_rollback_layout_floor_reads_the_backup_a_schema_bump_restores(
     _state(updater, repo, schema_bump=True, backup_path=str(backup))
     _cards(updater.LEDGER, 3)
     assert updater._rollback_layout_error(
-        updater.load_state()["applied"][-1]) is None
+        updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]) is None
 
 
 def test_target_card_layout_parses_the_constant(updater, monkeypatch):  # noqa: F811

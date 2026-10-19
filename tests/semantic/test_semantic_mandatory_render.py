@@ -4,9 +4,9 @@ The canonical contract drives a code-generated layer: every verified
 fact is listed and every non-terminal obligation is disclosed, so an
 omitting model summary can never make adjudicated content invisible.
 """
+import semantic_render
 import json
 
-import semantic
 import semantic_render as render
 from semantic_testkit import SOURCE, _seeded, v2_doc, v2_fact
 
@@ -64,7 +64,7 @@ def test_notice_includes_mandatory_section(tmp_path):
         db.db.commit()
         summary = {"claims": [], "limitations": ["既存の制約"],
                    "mandatory_facts": ["薬剤｜アムロジピン継続"]}
-        text = semantic.render_notice(db, 1, 1, summary, "PASS",
+        text = semantic_render.render_notice(db, 1, 1, summary, "PASS",
                                       quality="full")
         assert "抽出済み事実" in text
         assert "薬剤｜アムロジピン継続" in text

@@ -179,7 +179,7 @@ def _confirmed(db, mid):
         WHERE a.withdrawn_at IS NULL AND c.kind='thread'
           AND m.source_generation=c.source_generation
           AND j.type='integer' AND j.value=?""", (mid,)).fetchall()
-    return any(c["source_fp"] == notify_render._source_fp(db, c) for c in cards)
+    return any(c["source_fp"] == notify_render.source_fingerprint(db, c) for c in cards)
 
 
 def _engagement(db, row, cfg, now):

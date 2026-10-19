@@ -14,20 +14,22 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
+import semantic_store
 
 from ledger import LedgerReader, reaction_actor_summary
-from project_metadata import CLINICAL_DATASETS
+from project_metadata_contract import CLINICAL_DATASETS
 from project_metadata_view import physician_viewed_status
-from mcs_adapter import project_url
+from mcs_contract import project_url
 from mcs_queries import incomplete_reply_roots
 from self_identity import is_own_station_message
 from mcs_util import HOME, loads_dict, register_search_fold, search_fold
-from read_model import _snapshot_meta, message_patient_context
+from snapshot_access import snapshot_meta
+from read_model import message_patient_context
 from message_metadata import (
     flag_lines, get_message_metadata, get_metadata_shadow_status, is_self_sender)
 import mcs_requests as requests
 
-UNKNOWN_TIME = -(2**63)
+from mcs_queries import UNKNOWN_TIME
 WARNINGS = ["history_completeness_unverified", "snapshot_may_lag_live_state"]
 REASONS = frozenset({
     "schema_error", "network_error", "http_error", "session_expired", "no_token",
@@ -72,7 +74,7 @@ class View:
                 raise ValueError("snapshot_upgrade_required")
             if self.db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
                 raise ValueError("published_snapshot_required")
-            meta = _snapshot_meta(self.db)
+            meta = snapshot_meta(self.db)
             if not meta["published"]:
                 raise ValueError("published_snapshot_required")
             self.meta = {key: meta[key] for key in ("generation_id", "generated_at")}
@@ -527,7 +529,7 @@ class View:
         verdicts, verified fact candidates, audited summary, notify
         plan. Preserve history but label its validity against the source
         generation in this snapshot, including same-thread context."""
-        from semantic import thread_bundle
+
 
         self._message(pid, mid)
         row = self.db.execute(
@@ -535,7 +537,7 @@ class View:
             (mid,)).fetchone()
         keys = [mid] + ([row["parent_id"]] if row and row["parent_id"]
                         else [])
-        bundle = thread_bundle(self, pid, row["parent_id"] or mid)
+        bundle = semantic_store.thread_bundle(self, pid, row["parent_id"] or mid)
         fingerprint = bundle["source_fingerprint"] if bundle else None
         policy = self._current_policy()
         out = {}
@@ -809,7 +811,7 @@ class View:
             elif kind == "project_metadata":
                 if not isinstance(project, int):
                     raise ValueError("project_required")
-                from project_metadata import DATASETS
+                from project_metadata_contract import DATASETS
                 from project_metadata_view import get_project_metadata
                 if dataset not in DATASETS:
                     raise ValueError("bad_dataset")
@@ -927,7 +929,7 @@ def _parser():
             sub.add_argument("--publication", action="store_true")
             sub.add_argument("--max-age-s", type=float)
         if kind in ("project_metadata", "cross_lists"):
-            from project_metadata import DATASETS
+            from project_metadata_contract import DATASETS
             sub.add_argument("--dataset", required=True, choices=(
                 DATASETS if kind == "project_metadata" else ("mentioned", "bookmarked")))
             sub.add_argument("--publication", action="store_true",

@@ -1,6 +1,8 @@
 """Card layout zones (2026-10-05): heading identity, context/change lines,
 per-post 要約 states, state footer, primary buttons, thread posts, and the
 LINE WORKS planning rules. Synthetic ledger only."""
+import notify_parts
+import present_lineworks
 import json
 
 import pytest
@@ -86,7 +88,7 @@ def test_footer_is_one_state_item_and_revoked_card_has_no_buttons(led):
     assert footer[0]["text"].splitlines()[0].startswith("📝 タスク 1件（期限切れ 1） · ")
     assert "⚠ 履歴取得未完了" in footer[0]["text"]
     card = _card(led) | {"delivery_state": "revoked"}
-    content = notify_render._card_content(led.db, card)
+    content = notify_render.card_content(led.db, card)
     assert "⛔ 取り下げ済み" in content["footer"][0]["text"]
     assert notify_cards._action_rows(led.db, card, content, NOW) == []
 
@@ -158,7 +160,7 @@ def test_lineworks_card_member_names_repost_marker_and_more(led):
     assert out == "✅ 確認: 田中・メンバー"
     assert notify_render.actor_label("lineworks:40029600:u-1") == "<@u-1>"
     assert card["transport"] == "lineworks"
-    marked = notify_cards._mark_reposted(spec["parts"]["containers"])
+    marked = present_lineworks.mark_reposted(spec["parts"]["containers"])
     assert "🔄 更新版" in [c.get("text") for c in marked]
 
 
@@ -176,7 +178,7 @@ def _lw_reissue(led, change=False):
                        "payload_sha256='changed' WHERE kind='body_part'")
     led.db.commit()
     with led.db:
-        assert notify_cards._issue_render(led.db, 1, LINEWORKS, NOW + 1, [],
+        assert notify_cards.issue_render(led.db, 1, LINEWORKS, NOW + 1, [],
                                           force=True)
     again = json.loads(_latest_render(led)["spec_json"])
     assert again["op"] == "update"
@@ -195,10 +197,10 @@ def test_lineworks_changed_post_is_posted_anew(led):
 
 def test_body_chunks_never_end_blank():
     for text in ("a" * 1898 + "\n\n\n", "x" * 1899 + "\n" + " " * 30):
-        chunks = notify_cards._split_body_chunks(text)
+        chunks = notify_parts.split_body_chunks(text)
         assert "".join(chunks) == text
         assert all(c.strip() for c in chunks)
-        assert all(len(c) <= notify_cards.THREAD_PART_LIMIT for c in chunks)
+        assert all(len(c) <= notify_parts.THREAD_PART_LIMIT for c in chunks)
 
 
 def test_lineworks_card_split_breaks_at_a_line():
@@ -216,7 +218,7 @@ def test_lineworks_stamp_change_revises_only_changed_post(led, off_page, changed
     _dispatch(led, _intent(led), LINEWORKS)
     render = _latest_render(led)
     if off_page:
-        assert 100 not in notify_cards._card_content(led.db, _card(led), cfg=LINEWORKS)["shown"]
+        assert 100 not in notify_cards.card_content(led.db, _card(led), cfg=LINEWORKS)["shown"]
     _lw_deliver(led, render)
     observed = {"reactions": {"value": [{"type": "viewed", "count": 2,
                                          "self_reacted": False}], "observed_at": NOW}}

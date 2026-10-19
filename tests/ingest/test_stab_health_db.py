@@ -2,6 +2,7 @@
 whose drainer only defers, a dead local LLM, cached coverage counts,
 backup deadline skips and the change-gated snapshot. Temp ledger,
 temp health file and stubs only."""
+import health_report
 import json
 import time
 
@@ -18,7 +19,7 @@ H = 3600
 @pytest.fixture
 def health_file(tmp_path, monkeypatch):
     path = tmp_path / "health.json"
-    monkeypatch.setattr(run_check, "HEALTH_FILE", str(path))
+    monkeypatch.setattr(health_report, 'HEALTH_FILE', str(path))
 
     def write(**block):
         path.write_text(json.dumps(block))
@@ -39,13 +40,13 @@ def test_deferring_drainer_no_longer_hides_a_semantic_stall(tmp_path, health_fil
     # the drainer keeps deferring: updated_at fresh, next_try a minute out
     _sem_job(db, 1, next_try=now + 60, updated_at=now - 30)
     marks = {}
-    assert run_check._backlog_stalls(db, ON, now, marks=marks) == []
+    assert health_report.backlog_stalls(db.db, ON, now, marks=marks) == []
     assert marks["semantic_due_since"] == now          # episode starts now
     health_file(stall_marks={"semantic_due_since": now - 7 * H})
-    assert run_check._backlog_stalls(db, ON, now) == ["semantic_backlog_stalled"]
+    assert health_report.backlog_stalls(db.db, ON, now) == ["semantic_backlog_stalled"]
     # a job finished inside the window: the backlog moves
     _sem_job(db, 2, next_try=now, updated_at=now - H, state="done")
-    assert run_check._backlog_stalls(db, ON, now) == []
+    assert health_report.backlog_stalls(db.db, ON, now) == []
     db.close()
 
 
@@ -55,7 +56,7 @@ def test_due_episode_ends_when_no_job_is_due(tmp_path, health_file):
     health_file(stall_marks={"semantic_due_since": now - 7 * H})
     _sem_job(db, 1, next_try=now + 6 * H, updated_at=now)   # scheduled later
     marks = {}
-    assert run_check._backlog_stalls(db, ON, now, marks=marks) == []
+    assert health_report.backlog_stalls(db.db, ON, now, marks=marks) == []
     assert marks["semantic_due_since"] is None
     db.close()
 
@@ -71,12 +72,12 @@ def test_llm_endpoint_down_needs_failing_breaker_and_due_work(
     _sem_job(db, 1, next_try=now, updated_at=now)
     health_file(stall_marks={"llm_down_since": now - 7 * H})
     marks = {}
-    assert "llm_endpoint_down" not in run_check._backlog_stalls(db, ON, now, marks=marks)
+    assert "llm_endpoint_down" not in health_report.backlog_stalls(db.db, ON, now, marks=marks)
     assert marks["llm_down_since"] is None              # breaker healthy
     circuit.write_text(json.dumps({"failures": 1, "streak": 0}))
-    assert "llm_endpoint_down" in run_check._backlog_stalls(db, ON, now)
+    assert "llm_endpoint_down" in health_report.backlog_stalls(db.db, ON, now)
     health_file(stall_marks={"llm_down_since": now - H})
-    assert "llm_endpoint_down" not in run_check._backlog_stalls(db, ON, now)
+    assert "llm_endpoint_down" not in health_report.backlog_stalls(db.db, ON, now)
     db.close()
 
 
@@ -121,7 +122,7 @@ def test_local_llm_down_uses_the_llm_health_record(
         db.save_messages([_message(1, body="synthetic note")], project_id=1)
         if due != "legacy":
             _legacy_extract(db, 1, exhausted=due == "legacy_exhausted")
-    reasons = run_check._backlog_stalls(db, cfg, now)
+    reasons = health_report.backlog_stalls(db.db, cfg, now)
     assert ("local_llm_down" in reasons) is alerted
     assert "llm_endpoint_down" not in reasons   # fallback only without the record
     db.close()
@@ -131,19 +132,19 @@ def test_health_carries_stall_marks_and_caches_coverage(tmp_path, health_file, m
     import extract_llm
     db = _ledger(tmp_path)
     now = time.time()
-    source = run_check._ledger_key(db)
+    source = health_report.ledger_key(db.db)
     health_file(stall_marks={"semantic_due_since": now - H},
                 extract_v2_coverage={
                     "extract_version": extract_llm.EXTRACT_VERSION,
                     "current": 5, "eligible": 9, "poison_gated": 0,
                     "ratio": 0.5556, "counted_at": now - 60, "source": source})
     _sem_job(db, 1, next_try=now, updated_at=now)
-    health = run_check._health(db, {"errors": [], "notify": {}}, "ok", cfg=ON)
+    health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok", cfg=ON)
     assert health["stall_marks"]["semantic_due_since"] == pytest.approx(now - H)
     assert health["extract_v2_coverage"]["eligible"] == 9      # cached
     # another ledger, an old count or a new extract version is recounted
-    monkeypatch.setattr(run_check, "COVERAGE_COUNT_S", 30)
-    health = run_check._health(db, {"errors": [], "notify": {}}, "ok", cfg=ON)
+    monkeypatch.setattr(health_report, 'COVERAGE_COUNT_S', 30)
+    health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok", cfg=ON)
     assert health["extract_v2_coverage"]["eligible"] == 0
     assert health["extract_v2_coverage"]["source"] == source
     db.close()
@@ -169,12 +170,12 @@ def test_housekeeping_passes_the_watchdog_deadline_and_records_a_skip(
         run_check._WATCHDOG_EXIT_AT - run_check.HARD_DEADLINE_MARGIN_S)
     db = _ledger(tmp_path)
     monkeypatch.setattr(maintenance, "newest_backup_age_s", lambda: None)
-    health = run_check._health(db, dict(result, notify={}), "ok", cfg={})
+    health = health_report.build_health(db.db, dict(result, notify={}), "ok", cfg={})
     assert "backup_deferred_deadline" in health["state_reasons"]
     assert health["disk_low"] is False and health["overall"] == "degraded"
     # a same-day backup exists: one late tick is not an incident
     monkeypatch.setattr(maintenance, "newest_backup_age_s", lambda: 3 * H)
-    health = run_check._health(db, dict(result, notify={}), "ok", cfg={})
+    health = health_report.build_health(db.db, dict(result, notify={}), "ok", cfg={})
     assert "backup_deferred_deadline" not in health["state_reasons"]
     db.close()
 

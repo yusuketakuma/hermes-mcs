@@ -3,11 +3,11 @@
 Fully synthetic strings only. The bounds are generous: the old patterns took
 minutes on these inputs, the bounded ones take milliseconds.
 """
+import extract_validation
 import time
 
 import clinical_chunking
 import extract
-import extract_llm
 
 
 def _fast(fn, budget=1.0):
@@ -22,7 +22,7 @@ def test_med_token_is_linear_on_name_then_digits_without_unit():
 
 def test_dose_and_inquiry_cues_are_bounded_on_long_runs():
     _fast(lambda: clinical_chunking._DOSE.search("1" * 20000))
-    _fast(lambda: extract_llm._EVENT_CUES["prescription_inquiry"].search("処方" * 5000))
+    _fast(lambda: extract_validation.EVENT_CUES["prescription_inquiry"].search("処方" * 5000))
 
 
 def test_bounded_patterns_keep_realistic_matches():
@@ -33,4 +33,4 @@ def test_bounded_patterns_keep_realistic_matches():
     # over-long numbers are not split into a smaller "dose"
     assert clinical_chunking._DOSE.search("0.1234567mg") is None
     assert extract._MED_TOKEN.findall("ロキソニン1234567mg") == []
-    assert extract_llm._EVENT_CUES["prescription_inquiry"].search("処方について先生へ照会しました")
+    assert extract_validation.EVENT_CUES["prescription_inquiry"].search("処方について先生へ照会しました")

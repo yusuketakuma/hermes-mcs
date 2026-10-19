@@ -1,4 +1,5 @@
 """Wholly fictional requests and administrative notices retain their meaning."""
+import extract_validation
 import hashlib
 import json
 from contextlib import closing
@@ -6,7 +7,6 @@ from contextlib import closing
 import pytest
 
 import extract
-import extract_llm
 import ledger
 import structured_view
 
@@ -44,7 +44,7 @@ def test_one_sentence_matching_confirm_and_request_is_not_duplicated():
 ])
 def test_administrative_encounter_words_do_not_become_exams(body):
     assert "exam" not in extract.extract_message(body, POSTED).get("events", [])
-    assert extract_llm._validate({"events": ["exam"]}, body) is None
+    assert extract_validation.validate({"events": ["exam"]}, body) is None
 
 
 @pytest.mark.parametrize("body", [
@@ -57,7 +57,7 @@ def test_administrative_encounter_words_do_not_become_exams(body):
 ])
 def test_actual_and_planned_encounters_remain_mentions(body):
     assert "exam" in extract.extract_message(body, POSTED)["events"]
-    assert extract_llm._validate({"events": ["exam"]}, body)["events"] == ["exam"]
+    assert extract_validation.validate({"events": ["exam"]}, body)["events"] == ["exam"]
 
 
 def test_stale_rules_rebuild_and_render_without_unrelated_sentences(tmp_path):

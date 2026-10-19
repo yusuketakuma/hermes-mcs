@@ -1,10 +1,11 @@
 """Malformed advisory history cannot block valid candidates in the same generation."""
+import semantic_policy
+import semantic_store
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_loops as loops
 from semantic_testkit import _cfg, _FakeJev, _pending_fact, _seeded
 
@@ -13,8 +14,8 @@ from semantic_testkit import _cfg, _FakeJev, _pending_fact, _seeded
 def test_poison_loop_history_does_not_block_valid_relation(tmp_path, poison):
     ledger = _seeded(tmp_path)
     try:
-        cfg, _ = semantic.semantic_config(_cfg())
-        bundle = semantic.thread_bundle(ledger, 1, 1, [2])
+        cfg, _ = semantic_policy.semantic_config(_cfg())
+        bundle = semantic_store.thread_bundle(ledger, 1, 1, [2])
         facts = {1: _pending_fact(bundle["members"][0])}
         loops.update_loops(ledger, 1, bundle, facts, None, cfg, time.monotonic() + 30)
         candidate = ledger.artifacts(loops.KIND_LOOP, project_id=1)[0]

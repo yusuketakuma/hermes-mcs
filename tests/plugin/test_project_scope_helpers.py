@@ -2,7 +2,7 @@
 import pytest
 
 import notify_cmds
-from hermes_plugin import projects
+from adapters.common import projects
 
 SETTINGS = {"project_ids": {1, 2}}
 

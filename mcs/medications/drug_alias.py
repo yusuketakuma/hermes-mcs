@@ -10,9 +10,9 @@ import os
 from pathlib import Path
 import re
 import stat
-import tempfile
 
 import drug_map
+import safe_io
 from mcs_requests import canonical, payload_hash, valid_hash, valid_uuid
 from safe_io import atomic_write, fsync_dir
 
@@ -142,29 +142,13 @@ def validate_operation(req, common):
     return None if valid_uuid(req.get("approval_id")) else "bad_alias_approval_id"
 
 
-def _write_new(path, raw):
-    """Publish a fully synced private file without replacing an existing destination."""
-    path = Path(path)
-    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=".alias-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        # link is an atomic, exclusive publication. A crash before it leaves
-        # only staging; a later failure leaves complete, recoverable JSON.
-        os.link(staging, path)
-        fsync_dir(path.parent)
-    finally:
-        with suppress(OSError):
-            os.unlink(staging)
 
 
 @contextmanager
 def _switch(config_path, cfg, raw, before, after, journal, record, *, recovery=False):
     """Keep compensation armed until the surrounding receipt COMMIT completes."""
     if not recovery:
-        _write_new(journal, canonical(record))
+        safe_io.publish_new_bytes(journal, canonical(record))
     switched = False
     try:
         if private_json(config_path)[1] != raw:
@@ -230,7 +214,7 @@ def apply_tx(db, req, filesystem_changes):
                 return "alias_stale_dictionary", {}
             destination = folder / ("alias-" + sha + ".json")
             if not destination.exists():
-                _write_new(destination, payload)
+                safe_io.publish_new_bytes(destination, payload)
             if drug_map.load(destination, expected_sha256=sha) is None:
                 return "alias_dictionary_unavailable", {}
             after = {"path": str(destination), "sha256": sha}

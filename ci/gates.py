@@ -353,8 +353,9 @@ def gate_snapshot_readonly() -> list[str]:
         # Only the locked apply function may write; the cancellation plan
         # remains subject to the same read-only checks as every other view.
         operator_writes = {node for fn in tree.body
-                           if path == MCS / "ops/notification_cancel.py"
-                           and isinstance(fn, ast.FunctionDef) and fn.name == "apply"
+                           if isinstance(fn, ast.FunctionDef) and (
+                               (path == MCS / "ops/notification_cancel.py" and fn.name == "apply")
+                               or (path == MCS / "core/snapshots.py" and fn.name == "publish_snapshot"))
                            for node in ast.walk(fn)}
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call)

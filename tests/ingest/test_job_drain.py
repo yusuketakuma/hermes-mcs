@@ -1,6 +1,7 @@
 """job_ops drain coverage — history/reply/discovery/trickle/reconcile
 jobs, archived-patient handling (Oracle F1-F10, F01-F07), history
 floors, drain fairness."""
+import mcs_contract
 
 import json
 import os
@@ -61,7 +62,7 @@ def test_reply_merge_result_is_per_call():
 
         def fetch_thread(self, *_):
             if self.fail:
-                raise mcs_adapter.MCSError("broken")
+                raise mcs_contract.MCSError("broken")
             return [_message(mid=20, parent_id=10)]
 
     adapter = Adapter()
@@ -121,7 +122,7 @@ def test_deep_job_payload_does_not_starve_the_next_patient(tmp_path, kind, recur
 
             def fetch_history(self, pid, since, **kwargs):
                 calls.append(pid)
-                return mcs_adapter.MessageBatch(
+                return mcs_contract.MessageBatch(
                     [_message(mid=21, project_id=pid)], pages=1, reached=True)
 
         result = {"errors": []}
@@ -177,7 +178,7 @@ def test_one_page_history_job_advances_cursor(tmp_path):
 
     class Adapter:
         def fetch_history(self, *args, **kwargs):
-            return mcs_adapter.MessageBatch([], pages=1, reached=False)
+            return mcs_contract.MessageBatch([], pages=1, reached=False)
 
     result = {"errors": []}
     job_ops.run_history_jobs(
@@ -245,12 +246,12 @@ def test_archived_kartes_malformed_and_page_cap():
     bad = _KartesAdapter([
         {"kartes": [{"medical_project": {"id": "x"}}],
          "paginate": {"has_next": False}}])
-    with pytest.raises(mcs_adapter.SchemaError):
+    with pytest.raises(mcs_contract.SchemaError):
         bad.list_archived_kartes()
 
     capped = _KartesAdapter([
         {"kartes": [], "paginate": {"has_next": True}}])
-    with pytest.raises(mcs_adapter.MCSError) as e:
+    with pytest.raises(mcs_contract.MCSError) as e:
         capped.list_archived_kartes(max_pages=1)
     assert e.value.kind == "pages_exceeded"
 
@@ -356,7 +357,7 @@ def test_history_floor_withheld_for_nonterminal_parent(tmp_path):
 
     class Adapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 messages=[_message(mid=5, project_id=70,
                                    state="snippet")],
                 pages=1, reached=True)
@@ -384,7 +385,7 @@ def test_history_stalled_window_fails_visibly(tmp_path):
 
     class Adapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 messages=[_message(mid=5, project_id=72,
                                    state="snippet")],
                 pages=1, reached=True)
@@ -416,9 +417,9 @@ def test_history_batch_error_consumes_attempts(tmp_path):
 
     class Adapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 [], pages=1, reached=False,
-                error=mcs_adapter.MCSError("gone", retryable=False))
+                error=mcs_contract.MCSError("gone", retryable=False))
 
         def fetch_thread(self, *a):
             return []
@@ -445,15 +446,15 @@ def test_history_batch_session_expired_stays_attempt_free(tmp_path):
 
     class Adapter:
         def fetch_history(self, *a, **k):
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 [], pages=0, reached=False,
-                error=mcs_adapter.SessionExpired(status=401))
+                error=mcs_contract.SessionExpired(status=401))
 
         def fetch_thread(self, *a):
             return []
 
     result = {"errors": []}
-    with pytest.raises(mcs_adapter.SessionExpired):
+    with pytest.raises(mcs_contract.SessionExpired):
         job_ops.run_history_jobs(Adapter(), db, result,
                                  time.monotonic() + 300, trickle=True)
     row = db.db.execute(
@@ -473,10 +474,10 @@ def test_history_partial_failure_resumes_from_committed_pages(tmp_path):
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             starts.append(start_page)
             if len(starts) == 1:
-                return mcs_adapter.MessageBatch(
+                return mcs_contract.MessageBatch(
                     [_message(mid=740, project_id=pid)], pages=3,
-                    error=mcs_adapter.MCSError("network_error", retryable=True))
-            return mcs_adapter.MessageBatch([], pages=1, reached=True)
+                    error=mcs_contract.MCSError("network_error", retryable=True))
+            return mcs_contract.MessageBatch([], pages=1, reached=True)
 
     adapter = Adapter()
     result = {"errors": []}
@@ -507,7 +508,7 @@ def test_history_stall_counter_resets_on_progress(tmp_path):
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             calls["n"] += 1
             state = "snippet" if calls["n"] == 1 else "full"
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 messages=[_message(mid=calls["n"], project_id=73,
                                    state=state)],
                 pages=1, reached=calls["n"] > 1)
@@ -536,7 +537,7 @@ def test_history_floor_set_when_all_parents_terminal(tmp_path):
 
     class Adapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 messages=[_message(mid=7, project_id=71)],
                 pages=1, reached=True)
 
@@ -556,7 +557,7 @@ def test_failed_thread_with_partial_replies_not_checkpoint_safe():
     # the walk must not advance coverage over an unverified thread (F3)
     class Adapter:
         def fetch_thread(self, *_):
-            raise mcs_adapter.MCSError("broken")
+            raise mcs_contract.MCSError("broken")
 
     m = _message(mid=10)
     m.reply_count = 2
@@ -695,7 +696,7 @@ def test_snippet_parent_blocks_cursor_advance(tmp_path):
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             calls.append(start_page)
             state = "snippet" if start_page == 1 else "full"
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 messages=[_message(mid=start_page, project_id=85,
                                    state=state)],
                 pages=1, reached=start_page == 1)
@@ -722,7 +723,7 @@ def test_history_drain_rotates_fairly(tmp_path):
 
     class Adapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 messages=[_message(mid=pid, project_id=pid)],
                 pages=1, reached=False)
 
@@ -771,12 +772,12 @@ class _DiscoveryAdapter(mcs_adapter.MCSAdapter):
 
     def list_projects(self):
         if self.fail:
-            raise mcs_adapter.MCSError("broken")
+            raise mcs_contract.MCSError("broken")
         return list(self._projects)
 
     def list_archived_kartes(self):
         if self.fail:
-            raise mcs_adapter.MCSError("broken")
+            raise mcs_contract.MCSError("broken")
         return list(self._kartes)
 
 
@@ -871,7 +872,7 @@ def test_head_job_done_preserves_floor(tmp_path):
 
     class Adapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 messages=[_message(mid=50, project_id=96)],
                 pages=1, reached=True)
 
@@ -932,7 +933,7 @@ def test_discovery_kartes_failure_preserves_active(tmp_path):
 
     class Adapter(_DiscoveryAdapter):
         def list_archived_kartes(self):
-            raise mcs_adapter.MCSError("broken")
+            raise mcs_contract.MCSError("broken")
 
     adapter = Adapter(projects=[_unread_patient(97), _unread_patient(98)])
     result = {"errors": []}
@@ -970,7 +971,7 @@ def test_discovery_archived_off_skips_kartes(tmp_path):
 
     class HAdapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 messages=[_message(mid=pid, project_id=pid)],
                 pages=1, reached=True)
 
@@ -1059,7 +1060,7 @@ def test_head_job_blocked_only_by_live_reply_work(tmp_path):
 
     class HAdapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 messages=[_message(mid=10, project_id=1)], pages=1,
                 reached=True)
 
@@ -1133,16 +1134,16 @@ def test_fetch_thread_paginates_to_completion():
 
     # a thread that never terminates raises rather than certify
     b = _PagedThreadAdapter({p: ([p], True) for p in range(1, 12)})
-    with pytest.raises(mcs_adapter.MCSError) as e:
+    with pytest.raises(mcs_contract.MCSError) as e:
         b.fetch_thread(1, 10, max_pages=5)
     assert e.value.kind == "thread_incomplete"
     assert b.calls == [1, 2, 3, 4, 5]
 
 
 @pytest.mark.parametrize("error", [
-    mcs_adapter.SchemaError("synthetic malformed page"),
-    mcs_adapter.SessionExpired("synthetic expired session"),
-    mcs_adapter.MCSError("synthetic_transport", retryable=True),
+    mcs_contract.SchemaError("synthetic malformed page"),
+    mcs_contract.SessionExpired("synthetic expired session"),
+    mcs_contract.MCSError("synthetic_transport", retryable=True),
 ])
 def test_full_thread_propagates_later_page_error_without_returning_partial_rows(error):
     class Adapter(_PagedThreadAdapter):
@@ -1319,9 +1320,9 @@ def test_reply_job_window_resumes_across_pages(tmp_path):
                                 max_pages=10):
             calls.append(start_page)
             if start_page == 1:
-                return mcs_adapter.MessageBatch(
+                return mcs_contract.MessageBatch(
                     [_message(mid=20, parent_id=10)], pages=10)
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 [_message(mid=30, parent_id=10)], pages=1, reached=True)
 
     result = {"errors": []}
@@ -1356,7 +1357,7 @@ def test_reconcile_job_rewalks_history_without_since(tmp_path):
         def fetch_history(self, pid, since, max_pages=1,
                           start_page=None):
             calls.append((pid, since, start_page))
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 [_message(mid=50)], pages=2, reached=False)
 
     result = {"errors": []}
@@ -1385,7 +1386,7 @@ def test_reconcile_full_pass_parks_then_rotates(tmp_path, monkeypatch):
         reached = True
 
         def fetch_history(self, *a, **k):
-            return mcs_adapter.MessageBatch([], pages=1, reached=self.reached)
+            return mcs_contract.MessageBatch([], pages=1, reached=self.reached)
 
     adapter = Adapter()
     job_ops.run_reconcile_jobs(adapter, db, {"errors": []},
@@ -1438,11 +1439,11 @@ def test_reconcile_hydrates_changed_reply_and_rotates_patients(tmp_path):
         def fetch_history(self, pid, since, **kwargs):
             calls.append(pid)
             if pid != 1:
-                return mcs_adapter.MessageBatch([], pages=2, reached=False)
+                return mcs_contract.MessageBatch([], pages=2, reached=False)
             post = _message(mid=10)
             post.reply_count = 1
             post.replies = [_message(mid=11, parent_id=10, state="snippet")]
-            return mcs_adapter.MessageBatch([post], pages=2, reached=False)
+            return mcs_contract.MessageBatch([post], pages=2, reached=False)
 
         def fetch_thread(self, *args):
             return [_message(mid=11, parent_id=10, body="corrected")]
@@ -1463,10 +1464,10 @@ def test_reply_target_found_early_keeps_thread_tail_work(tmp_path):
     class Adapter:
         def fetch_thread_window(self, pid, root, start_page=1):
             if start_page == 1:
-                return mcs_adapter.MessageBatch(
+                return mcs_contract.MessageBatch(
                     [_message(mid=11, parent_id=10)], pages=10)
             assert start_page == 11
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 [_message(mid=111, parent_id=10)], pages=1, reached=True)
 
     adapter = Adapter()
@@ -1487,11 +1488,11 @@ def test_thread_partial_pages_survive_session_loss(tmp_path):
     class Adapter(mcs_adapter.MCSAdapter):
         def _get(self, path, params=None, **kwargs):
             if params["page"] == 2:
-                raise mcs_adapter.SessionExpired(status=401)
+                raise mcs_contract.SessionExpired(status=401)
             return {"messages": [{"id": 11, "comment": "synthetic"}],
                     "paginate": {"has_next": True}}
 
-    with pytest.raises(mcs_adapter.SessionExpired):
+    with pytest.raises(mcs_contract.SessionExpired):
         job_ops.run_reply_jobs(Adapter(), db, {"errors": []}, time.monotonic() + 300)
     assert db.db.execute("SELECT body_state FROM messages WHERE message_id=11").fetchone()[0] == "full"
     pending = db.job_pending("thread", 1, 10)

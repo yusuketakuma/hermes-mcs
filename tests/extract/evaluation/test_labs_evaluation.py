@@ -1,10 +1,10 @@
 """Frozen, fully synthetic #15 labs corpus: P/R through _validate and forbid=0."""
+import extract_validation
 
 import json
 from pathlib import Path
 
 import extract_bench
-import extract_llm
 
 CORPUS = Path(__file__).resolve().parents[3] / "evaluation" / "extract_cases_labs.json"
 
@@ -33,7 +33,7 @@ def test_labs_corpus_precision_recall_and_no_confirmed_forbidden_value():
             {"labs": [{"name": "Cr", "value": 1.2} | bad]})
     # When: the production validator and bench scorer run on each case.
     scores = [extract_bench._score_case(
-        c, extract_llm._validate({"labs": _claims(c)}, c["body"])) for c in cases]
+        c, extract_validation.validate({"labs": _claims(c)}, c["body"])) for c in cases]
     by_category = {}
     for case, score in zip(cases, scores):
         tp, fp, fn = by_category.get(case["category"], (0, 0, 0))

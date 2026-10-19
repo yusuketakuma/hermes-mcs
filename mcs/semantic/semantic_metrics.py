@@ -1,5 +1,6 @@
 """Semantic audit history and coverage for the current generation."""
 from __future__ import annotations
+import semantic_transport
 
 from mcs_util import loads_dict
 from semantic_policy import (KIND_AUDIT, KIND_SUMMARY, policy_fingerprint,
@@ -69,8 +70,7 @@ def current_quality(ledger, cfg: dict | None, *, checkpoint=lambda: None) -> dic
         return out
     # the fingerprint binds the local model; resolve it from the
     # supplied config, never from the host's config file
-    import semantic
-    local_model = semantic.llm_model(cfg)
+    local_model = semantic_transport.llm_model(cfg)
     last_key, bundle, members = None, None, {}
     rows = ledger.db.execute(
         "SELECT project_id,message_id,COALESCE(parent_id,message_id) root_id "

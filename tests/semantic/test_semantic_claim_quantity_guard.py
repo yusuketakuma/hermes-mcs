@@ -1,10 +1,10 @@
 """A model support score cannot approve an unverified quantity conversion."""
+import semantic_drain
 import json
 import time
 
 import pytest
 
-import semantic
 from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
 
 
@@ -17,7 +17,7 @@ def test_summary_quantity_change_cannot_pass_on_model_support(tmp_path, replacem
             return response.replace('300mg', replacement)
         return response
     try:
-        semantic.run_due(db, _cfg('shadow'), {'errors': []},
+        semantic_drain.run_due(db, _cfg('shadow'), {'errors': []},
                          time.monotonic() + 300,
                          jev_client=_FakeJev(), llm_fn=llm)
         audits = db.artifacts('semantic_audit')
@@ -48,7 +48,7 @@ def test_repaired_quantity_preserves_normal_summary_path(tmp_path, omit_quantity
                 return json.dumps(value)
         return response
     try:
-        semantic.run_due(db, _cfg('shadow'), {'errors': []},
+        semantic_drain.run_due(db, _cfg('shadow'), {'errors': []},
                          time.monotonic() + 300,
                          jev_client=_FakeJev(), llm_fn=llm)
         audits = [json.loads(row['meta']) for row in db.artifacts('semantic_audit')]

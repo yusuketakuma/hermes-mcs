@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mcs_setup import _validate_notify
+from mcs_config import validate_notify
 
 from .client import ClientError, Credentials, LineWorksClient, _text
 
@@ -17,8 +17,8 @@ def settings(root, *, require_interactive=True):
         # Text targets remain independent of the interactive mode; both scopes stay validated.
         if not isinstance(ntf, dict) \
                 or (require_interactive and ntf.get("interactive") != "lineworks") \
-                or _validate_notify(ntf) \
-                or _validate_notify({**ntf, "interactive": "lineworks"}):
+                or validate_notify(ntf) \
+                or validate_notify({**ntf, "interactive": "lineworks"}):
             raise ValueError("scope")
         scope = ntf["lineworks"]
         out = {**scope, "transport": "lineworks", "data_root": str(root / "data"),

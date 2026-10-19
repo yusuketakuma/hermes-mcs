@@ -724,3 +724,17 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def evaluate_chunked(jev_client, state: dict, questions: dict,
+                  deadline: float, limit: int) -> dict:
+    """evaluate() with the question set split into
+    max_questions_per_request-sized chunks — the configured bound is
+    enforced, not just validated (§13.4)."""
+    keys = list(questions)
+    merged = {"answers": {}}
+    for i in range(0, len(keys), max(1, limit)):
+        part = {k: questions[k] for k in keys[i:i + limit]}
+        out = evaluate_once_more(jev_client, state, part, deadline)
+        merged["answers"].update(out["answers"])
+    return merged

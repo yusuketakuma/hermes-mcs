@@ -61,7 +61,7 @@ def test_failed_report_publication_preserves_previous_file_and_removes_temporary
 def test_keychain_failure_is_bounded_and_never_writes_secret(monkeypatch, capsys, failure):
     module = _module("synthetic_keychain_cleanup", "scripts/keychain_to_env.py")
     writes = []
-    monkeypatch.setattr(module, "_env_write", lambda *args: writes.append(args))
+    monkeypatch.setattr(module, "write_env", lambda *args: writes.append(args))
     seen = []
 
     def failed_run(command, **kwargs):

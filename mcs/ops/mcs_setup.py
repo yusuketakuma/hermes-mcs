@@ -65,10 +65,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
+import semantic_transport
 
 from backup_config import validate_backup_config as _backup_config
+import setup_wizard
+import lifecycle_io
+from lifecycle_io import KEYCHAIN_SERVICE, run_bounded as _run
+from mcs_config import (recovery_python_problem,
+                        transport_enabled, validate_config, validate_notify)
 import bounded_http
 import mcs_runtime
+from scheduled_jobs import CRON_JOBS, configured_cron_jobs, render_template
 
 from mcs_util import (CONF_PATH, HOME, REPO, atomic_write, env_value,
                       load_config)
@@ -76,7 +83,6 @@ from mcs_util import hermes_exe as _hermes_exe
 from safe_io import read_regular_nofollow
 
 ENV_PATH = os.path.join(HOME, ".env")
-KEYCHAIN_SERVICE = "mcs-adapter"
 CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 EVALUATION_INPUT_BYTES = 8 * 1024 * 1024
@@ -90,469 +96,8 @@ def _evaluation_input(path) -> bytes:
     return raw
 
 
-# ---- typesafe config rules ------------------------------------------
-# name -> (required, check) — check(v) -> error string | None
-def _nonempty_str(v):
-    return None if isinstance(v, str) and v.strip() else "空でない文字列を指定してください"
-
-
-def _bool(v):
-    return None if type(v) is bool else "true（有効）かfalse（無効）を指定してください"
-
-
-def _int_range(lo, hi):
-    def f(v):
-        if type(v) is not int or not (lo <= v <= hi):
-            return f"{lo}から{hi}までの整数を指定してください"
-        return None
-    return f
-
-
-def _num(v):
-    return (None if type(v) in (int, float) and 0 < v <= 1e9
-            else "0より大きく10億以下の数値を指定してください")
-
-
-def _bot_profile(v):
-    ok = isinstance(v, str) and re.fullmatch(r"[a-z0-9_-]+", v)
-    return None if ok else "半角英小文字・数字・ハイフン・アンダースコアだけで指定してください"
-
-
-def _dict(v):
-    return None if isinstance(v, dict) else "JSONオブジェクト（キーと値の組）を指定してください"
-
-
-def _drug_map_config(value):
-    import drug_map
-    problem = drug_map.config_error(value)
-    return f"薬剤辞書の設定を確認してください（詳細: {problem}）" if problem else None
-
-
-def _recovery_python_problem(path, update_repo=None):
-    """An independent runtime cannot live in either mutable checkout."""
-    if not isinstance(path, str) or not os.path.isabs(path):
-        return "Python実行ファイルの絶対パスを指定してください"
-    try:
-        for root in (REPO_ROOT, update_repo):
-            if root is not None and Path(path).resolve().is_relative_to(Path(root).resolve()):
-                return "復旧用Pythonは更新対象フォルダーの外に置いてください"
-    except (OSError, RuntimeError):
-        return "復旧用Pythonの保存場所を確認できません"
-    return None
-
-
-def _urgency_escalation(v):
-    """Reuse notify_urgent.settings(): on/shadow with a policy it would
-    silently drop (no explicit room_cooldown_min, bad type) is an error."""
-    if not isinstance(v, dict):
-        return "JSONオブジェクト（キーと値の組）を指定してください"
-    mode = v.get("mode", "off")
-    if mode not in ("off", "on", "shadow"):
-        return 'mode: "off"（無効）、"on"（有効）、"shadow"（比較のみ）から選んでください'
-    if mode == "off":
-        return None
-    import notify_urgent
-    if notify_urgent.settings({"urgency_escalation": v}) is None:
-        return ("通知条件が不足しています。sourceは\"llm\"とし、room_cooldown_minを"
-                "指定してください。after_min/repeat_min/room_cooldown_minは"
-                "正の数、max_repeats/max_per_dayは0以上の整数で指定してください")
-    return None
-
-
-CONFIG_RULES = {
-    "runtime_mode":          (False, lambda v: None if v in ("hermes", "standalone")
-                             else '"hermes"（Hermes経由）か"standalone"（独立動作）を選んでください'),
-    "recovery_python":       (False, _recovery_python_problem),
-    "mcs_login_id":          (True,  _nonempty_str),
-    "notify_target":         (True,  _nonempty_str),
-    "notify_bot_profile":    (False, _bot_profile),
-    "notify_system_target":  (False, _nonempty_str),
-    "hermes_bin":            (False, _nonempty_str),
-    "discover_archived":     (False, _bool),
-    "deep_history":          (False, _bool),
-    "trickle_pages":         (False, _int_range(1, 40)),
-    "notify_max_age_h":      (False, _num),
-    "notify_all_replies":    (False, _bool),
-    "job_budget_seconds":    (False, _num),
-    "self_posts":            (False, _bool),
-    "metadata_shadow":       (False, _bool),
-    "metadata_refresh_publish": (False, _bool),
-    "metadata_actors":       (False, _bool),
-    "clinical_metadata":     (False, _bool),
-    "notify":                (False, _dict),
-    "signals":               (False, _dict),
-    "semantic":              (False, _dict),
-    "extract":               (False, _dict),
-    "update":                (False, _dict),
-    "local_llm":             (False, _dict),
-    "health":                (False, _dict),
-    "daily_digest":          (False, _dict),
-    "drug_map":              (False, _drug_map_config),
-    "backup":                (False, _backup_config),
-    "urgency_escalation":    (False, _urgency_escalation),
-    "watchdog_grace_s":      (False, lambda v: None if type(v) is int and 0 <= v <= 3600
-                             else "0から3600までの整数を指定してください"),
-}
-
-
-def _validate_standalone(cfg: dict) -> list[str]:
-    """runtime_mode=standalone: the grants Hermes plugin settings carry
-    (allowed users, projects, Discord chats/roles) live in notify.<t>,
-    and Slack/Discord targets must name a concrete channel."""
-    if cfg.get("runtime_mode") != "standalone":
-        return []
-    errors = []
-    for key in ("notify_target", "notify_system_target"):
-        target = cfg.get(key)
-        if not isinstance(target, str):
-            continue
-        if target == "local":  # Existing placeholder for an installation without notifications.
-            continue
-        transport, _, channel = target.strip().partition(":")
-        if transport not in ("discord", "slack", "lineworks"):
-            errors.append(f"{key}: 独立動作の通知先はdiscord:、slack:、"
-                          "lineworks:のいずれかで指定してください")
-        elif transport == "discord" and not channel.isdecimal():
-            errors.append(f"{key}: 独立動作ではdiscord:<チャンネルID>を指定してください")
-        elif transport == "slack" and not re.fullmatch(r"[CGD][A-Z0-9]{8,}", channel):
-            errors.append(f"{key}: 独立動作ではslack:<C/G/Dで始まる会話ID>を指定してください "
-                          "（スレッド・ユーザー宛ての指定はHermes経由のみ対応）")
-    return errors
-
-
-def _validate_llm(ll: dict) -> list[str]:
-    """local_llm subkeys — url must stay an unauthenticated loopback
-    http endpoint (mirrors bounded_http._loopback_endpoint_allowed):
-    message bodies are PHI and must not leave the machine."""
-    errors = []
-    for key in ("url", "model"):
-        if key in ll and (not isinstance(ll[key], str)
-                          or not ll[key].strip()):
-            errors.append(f"local_llm.{key}: 空でない文字列を指定してください")
-    url = ll.get("url")
-    if isinstance(url, str) and url.strip():
-        try:
-            allowed = bounded_http._loopback_endpoint_allowed(url)
-        except Exception:
-            allowed = False
-        if not allowed:
-            errors.append(
-                "local_llm.url: この端末内のhttp://接続先を指定してください "
-                "（127.0.0.1/localhost/::1）。認証情報や#以降の指定は使えません。"
-                "投稿本文を端末の外へ送信しないための制限です")
-    return errors
-
-
-# = notify_cmds.SCOPE_MAX: the runner rejects, and the plugin truncates to,
-# a static project scope longer than this
-PROJECT_SCOPE_MAX = 1000
-
-
-def _validate_notify(ntf: dict) -> list[str]:
-    """Subkey checks for the notify block — mirrors notify_cards'
-    contracts: interactive is a closed enum, discord delivery scope is
-    all-or-nothing, and scope is required when cards are on."""
-    errors = []
-    if "interactive" in ntf \
-            and ntf["interactive"] not in ("discord", "slack", "lineworks", "off"):
-        errors.append('notify.interactive: "discord"、'
-                      '"slack"、"lineworks"、"off"（無効）から選んでください')
-    if "card_thread" in ntf and type(ntf["card_thread"]) is not bool:
-        errors.append("notify.card_thread: true（有効）かfalse（無効）を指定してください")
-    for key in ("route_epoch", "card_thread_archive_min"):
-        if key in ntf:
-            err = _int_range(1, 10 ** 9)(ntf[key])
-            if err:
-                errors.append(f"notify.{key}: {err}")
-    if "operator" in ntf:
-        err = _nonempty_str(ntf["operator"])
-        if err:
-            errors.append(f"notify.operator: {err}")
-    for transport, tenant in (("discord", "guild_id"),
-                              ("slack", "team_id"),
-                              ("lineworks", "team_id")):
-        d = ntf.get(transport)
-        if d is None:
-            if ntf.get("interactive") == transport:
-                errors.append(f'notify.{transport}: 通知カードの接続設定が必要です。'
-                              f'現在の接続先は"{transport}"です')
-        elif not isinstance(d, dict):
-            errors.append(f"notify.{transport}: JSONオブジェクト（キーと値の組）を指定してください")
-        else:
-            errors.extend(
-                f"notify.{transport}.{k}: 空でない文字列を指定してください"
-                for k in ("profile", "application_id", tenant,
-                          "channel_id")
-                if not isinstance(d.get(k), str) or not d[k].strip())
-            # delivery_scope() rejects a slack block carrying
-            # guild_id outright — flag it at config time too
-            if transport in ("slack", "lineworks") and "guild_id" in d:
-                errors.append(f"notify.{transport}.guild_id: この項目は使えません "
-                              f"（{transport}ではteam_idを指定してください）")
-            if transport == "lineworks":
-                for key in ("application_id", "team_id"):
-                    v = d.get(key)
-                    if not (isinstance(v, str) and re.fullmatch(r"[1-9][0-9]{0,18}", v)
-                            and 0 < int(v) < 2**63):
-                        errors.append(f"notify.lineworks.{key}: 0より大きい整数を文字列で指定してください")
-                for key in ("channel_id", "profile"):
-                    v = d.get(key)
-                    pattern = r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}" if key == "channel_id" else r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"
-                    if not isinstance(v, str) or not re.fullmatch(pattern, v):
-                        errors.append(f"notify.lineworks.{key}: IDの形式を確認してください")
-                users = d.get("allowed_user_ids")
-                if not (isinstance(users, list) and users
-                        and all(isinstance(v, str) and re.fullmatch(
-                            r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}", v) for v in users)):
-                    errors.append("notify.lineworks.allowed_user_ids: IDを1件以上のリストで指定してください")
-                names = d.get("user_names", {})
-                if not (isinstance(names, dict) and all(
-                        isinstance(k, str) and re.fullmatch(r"[A-Za-z0-9._@-]{1,128}", k)
-                        and isinstance(v, str) and 0 < len(v.strip()) <= 40
-                        for k, v in names.items())):
-                    errors.append("notify.lineworks.user_names: {userId: 表示名(40字以内)}の形式で指定してください")
-                automatic = d.get("project_ids_auto", False)
-                if type(automatic) is not bool:
-                    errors.append("notify.lineworks.project_ids_auto: true（有効）かfalse（無効）を指定してください")
-                projects = d.get("project_ids", [])
-                if not (isinstance(projects, list)
-                        and all(type(v) is int and 0 < v < 2**63 for v in projects)
-                        and (projects or automatic is True)):
-                    errors.append("notify.lineworks.project_ids: 0より大きい整数のリスト、またはproject_ids_auto=trueを指定してください")
-    return errors
-
-
-def _validate_update(upd: dict) -> list[str]:
-    """Subkey checks for the update block — the self-updater's policy.
-    mode is a killswitch/opt-in gate; auto_delay_h==0 means 'apply as
-    soon as detected' (explicit opt-in, default is delayed)."""
-    errors = []
-    if "mode" in upd and upd["mode"] not in ("off", "notify", "auto"):
-        errors.append('update.mode: "off"（無効）、"notify"（通知のみ）、"auto"（自動更新）から選んでください')
-    if "auto_delay_h" in upd:
-        v = upd["auto_delay_h"]
-        if type(v) not in (int, float) or not 0 <= v <= 1e9:
-            errors.append("update.auto_delay_h: 0以上10億以下の数値を指定してください")
-    if "include_prerelease" in upd \
-            and type(upd["include_prerelease"]) is not bool:
-        errors.append("update.include_prerelease: true（有効）かfalse（無効）を指定してください")
-    return errors
-
-
-def _validate_health(h: dict) -> list[str]:
-    """Subkey checks for the health block consumed by health_watch:
-    tick_interval_s is the producer's check cadence, max_missed_runs
-    the missed-tick grace window before staleness is declared (the
-    schedule settings require an int in [0,100])."""
-    errors = []
-    if "tick_interval_s" in h:
-        v = h["tick_interval_s"]
-        if type(v) not in (int, float) or not 0 < v <= 86400:
-            errors.append("health.tick_interval_s: "
-                          "0より大きく86400以下の数値を指定してください")
-    if "max_missed_runs" in h:
-        err = _int_range(0, 100)(h["max_missed_runs"])
-        if err:
-            errors.append(f"health.max_missed_runs: {err}")
-    return errors
-
-
-def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
-    """(errors, warnings) for config.json — typesafe required
-    conditions. Unknown keys warn (forward-compat) but never fail."""
-    errors, warnings = [], []
-    if not isinstance(cfg, dict):
-        return ["config.jsonはJSONオブジェクト（キーと値の組）で保存してください"], []
-    warnings.extend(f"未対応の設定項目: {key}（この版では使いません）"
-                    for key in sorted(set(cfg) - set(CONFIG_RULES)))
-    for key, (required, check) in CONFIG_RULES.items():
-        if key not in cfg:
-            if required:
-                errors.append(f"必須の設定項目がありません: {key}")
-            continue
-        err = check(cfg[key])
-        if err:
-            errors.append(f"{key}: {err}")
-    sig = cfg.get("signals")
-    ext = cfg.get("extract")
-    if isinstance(ext, dict) and "patient_state_context" in ext and type(ext["patient_state_context"]) is not bool:
-        errors.append("extract.patient_state_context: true（有効）かfalse（無効）を指定してください")
-    if isinstance(ext, dict) and "patient_context_nightly" in ext:
-        nightly = ext["patient_context_nightly"]
-        prefix = "extract.patient_context_nightly"
-        if not isinstance(nightly, dict):
-            errors.append(f"{prefix}: JSONオブジェクト（キーと値の組）を指定してください")
-        else:
-            if set(nightly) - {"enabled", "publication"}:
-                errors.append(f"{prefix}: enabledとpublication以外の設定項目は使えません")
-            for key in ("enabled", "publication"):
-                if key in nightly and type(nightly[key]) is not bool:
-                    errors.append(f"{prefix}.{key}: true（有効）かfalse（無効）を指定してください")
-    if isinstance(sig, dict) and "notify" in sig and type(sig["notify"]) is not bool:
-        errors.append("signals.notify: true（有効）かfalse（無効）を指定してください")
-    ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
-    if isinstance(sig, dict) and sig.get("notify") is True \
-            and ntf.get("interactive", "off") == "off":
-        # alerts are delivered as cards only: with cards off every alert
-        # is held and nothing says so
-        errors.append('signals.notify: アラートは通知カードで届くため、notify.interactiveを'
-                      '"slack"、"discord"、"lineworks"のいずれかに設定してください')
-    esc = cfg.get("urgency_escalation")
-    if isinstance(esc, dict) and esc.get("mode") == "on" and (
-            ntf.get("card_thread") is not True
-            or ntf.get("interactive") not in ("slack", "discord")):
-        # the re-check notice posts only in the source thread, which
-        # needs card threads on Slack/Discord; anywhere else it waits
-        # out its hold and is dropped
-        errors.append('urgency_escalation.mode "on": 再確認通知にはnotify.card_threadを'
-                      'true、notify.interactiveを"slack"か"discord"に設定してください')
-    if isinstance(sig, dict):
-        for key in ("self_organizations", "self_professions",
-                    "request_targets", "med_exclude_names"):
-            if key in sig:
-                v = sig[key]
-                if not (isinstance(v, list)
-                        and all(isinstance(x, str) and x.strip()
-                                for x in v)):
-                    errors.append(f"signals.{key}: 空でない文字列を並べたリストを指定してください")
-        for key in ("digest", "self_reaction_response"):
-            if key in sig and type(sig[key]) is not bool:
-                errors.append(f"signals.{key}: true（有効）かfalse（無効）を指定してください")
-        if "digest_interval_h" in sig:
-            err = _num(sig["digest_interval_h"])
-            if err:
-                errors.append(f"signals.digest_interval_h: {err}")
-        if "tiers" in sig and not isinstance(sig["tiers"], dict):
-            errors.append("signals.tiers: JSONオブジェクト（キーと値の組）を指定してください")
-    dd = cfg.get("daily_digest")
-    if isinstance(dd, dict):
-        if "enabled" in dd and type(dd["enabled"]) is not bool:
-            errors.append("daily_digest.enabled: true（有効）かfalse（無効）を指定してください")
-        if "hour_jst" in dd:
-            err = _int_range(0, 23)(dd["hour_jst"])
-            if err:
-                errors.append(f"daily_digest.hour_jst: {err}")
-        if "include_names" in dd and type(dd["include_names"]) is not bool:
-            errors.append("daily_digest.include_names: true（有効）かfalse（無効）を指定してください")
-        if "scope" in dd:
-            import notify_digest
-            flt = (notify_digest.parse_scope(dd["scope"])
-                   if isinstance(dd["scope"], str) and len(dd["scope"]) <= 200
-                   else "文字列で指定してください")
-            if isinstance(flt, str) or flt["mine"]:
-                errors.append("daily_digest.scope: 通知する範囲の指定を確認してください。" + (
-                    flt if isinstance(flt, str) else
-                    "mineは操作したユーザーの指定が必要です。station:/project:/days:を使ってください"))
-    if isinstance(cfg.get("notify"), dict):
-        errors.extend(_validate_notify(cfg["notify"]))
-        # a scope block for the transport that is NOT active is stale —
-        # keep it as a warning so a discord->slack switch leaves a
-        # visible note instead of a silently ignored config
-        act = cfg["notify"].get("interactive")
-        # standalone sends to notify_target/notify_system_target through
-        # their own scope block (_validate_standalone_scope requires it)
-        used = {t.split(":", 1)[0] for t in (
-            cfg.get("notify_target"), cfg.get("notify_system_target"))
-            if isinstance(t, str)} if cfg.get("runtime_mode") == "standalone" else set()
-        for other in ("discord", "slack", "lineworks"):
-            if other != act and other not in used and isinstance(cfg["notify"].get(other),
-                                           dict):
-                warnings.append(
-                    f"notify.{other}: 接続設定がありますが、現在の通知先は"
-                    f"{act!r}です。切り替えるまでこの設定は使いません")
-        for transport in ("discord", "slack", "lineworks"):
-            scope = cfg["notify"].get(transport)
-            projects = scope.get("project_ids") if isinstance(scope, dict) else None
-            if isinstance(projects, list) and len(projects) > PROJECT_SCOPE_MAX \
-                    and scope.get("project_ids_auto") is not True:
-                warnings.append(
-                    f"notify.{transport}.project_ids: {len(projects)}件は"
-                    f"カード・要約の上限{PROJECT_SCOPE_MAX}件を超えています。"
-                    "IDの小さい順に集計します。project_ids_auto=trueの利用を検討してください")
-    if isinstance(cfg.get("local_llm"), dict):
-        errors.extend(_validate_llm(cfg["local_llm"]))
-    if isinstance(cfg.get("semantic"), dict):
-        try:
-            from semantic_policy import semantic_config
-            errors.extend(f"semantic: 意味解析の設定を確認してください（詳細: {error}）"
-                          for error in semantic_config(cfg)[1])
-        except Exception as e:  # validator itself must not crash check
-            errors.append(f"semantic: 設定の検証に失敗しました（{type(e).__name__}）")
-    if isinstance(cfg.get("update"), dict):
-        errors.extend(_validate_update(cfg["update"]))
-    if isinstance(cfg.get("health"), dict):
-        errors.extend(_validate_health(cfg["health"]))
-    if cfg.get("runtime_mode") == "standalone":
-        errors.extend(_validate_standalone(cfg))
-        errors.extend(_validate_standalone_scope(cfg))
-    return errors, warnings
-
-
-def _validate_standalone_scope(cfg: dict) -> list[str]:
-    """Require explicit actor and project scopes for independent connectors."""
-    errors = []
-    ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
-    targets = [cfg.get("notify_target"), cfg.get("notify_system_target")]
-    active = {ntf.get("interactive")} if isinstance(ntf.get("interactive"), str) else set()
-    active |= {
-        value.split(":", 1)[0] for value in targets if isinstance(value, str)}
-    for transport in ("slack", "discord"):
-        if transport not in active:
-            continue
-        scope = ntf.get(transport)
-        if not isinstance(scope, dict):
-            errors.append(f"notify.{transport}: 独立動作では操作を許可する範囲を明示してください")
-            continue
-        users = scope.get("allowed_user_ids")
-        if not (isinstance(users, list) and users and all(
-                isinstance(uid, str) and uid.strip() for uid in users)):
-            errors.append(f"notify.{transport}.allowed_user_ids: IDを1件以上のリストで指定してください")
-        automatic = scope.get("project_ids_auto", False)
-        if type(automatic) is not bool:
-            errors.append(f"notify.{transport}.project_ids_auto: true（有効）かfalse（無効）を指定してください")
-        projects = scope.get("project_ids", [])
-        if not (isinstance(projects, list) and all(
-                type(pid) is int and 0 < pid < 2**63 for pid in projects)
-                and (projects or automatic is True)):
-            errors.append(f"notify.{transport}.project_ids: 0より大きい整数のリスト、またはproject_ids_auto=trueを指定してください")
-        if transport == "discord" and "allowed_chat_ids" in scope:
-            chats = scope["allowed_chat_ids"]
-            try:
-                valid_chats = isinstance(chats, list) and chats and all(
-                    isinstance(chat, str) and chat.isdecimal() and int(chat) > 0 for chat in chats)
-            except ValueError:
-                valid_chats = False
-            if not valid_chats:
-                errors.append("notify.discord.allowed_chat_ids: チャンネルIDを1件以上のリストで指定してください")
-        if transport == "discord" and "allowed_role_ids" in scope:
-            roles = scope["allowed_role_ids"]
-            if not (isinstance(roles, list) and all(isinstance(role, str)
-                    and role.strip() and role != scope.get("guild_id") for role in roles)):
-                errors.append("notify.discord.allowed_role_ids: IDをリストで指定してください。@everyoneは許可できません")
-    return errors
-
-
 def _hermes_ok(exe: str) -> bool:
     return os.path.isfile(exe) and os.access(exe, os.X_OK)
-
-
-def _run(argv: list, *, timeout: int = 60, input_text: str | None = None,
-         cwd: str | None = None, env: dict | None = None):
-    """subprocess.run bounded by `timeout` — a wedged launchd, a keychain
-    prompt this context cannot show, or a stuck gateway must fail the
-    check, not hang the session. Timeout yields a returncode=124 result
-    (mirroring timeout(1)); a binary that cannot start yields 127. Both
-    degrade through the caller's normal failure handling instead of
-    raising."""
-    try:
-        return subprocess.run(argv, input=input_text, capture_output=True,
-                              text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}),
-                              **({"env": env} if env is not None else {}))
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(
-            argv, 124, "", f"timed out after {timeout}s")
-    except OSError as e:
-        return subprocess.CompletedProcess(argv, 127, "", str(e))
 
 
 _GATEWAY_LIFECYCLE_VERBS = frozenset({"install", "uninstall", "restart", "start", "stop"})
@@ -812,93 +357,6 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-# ---- .env merge ------------------------------------------------------
-
-def _env_write(path: str, updates: dict[str, str]):
-    """Merge KEY=value lines — existing keys preserved unless updated."""
-    encoded = {}
-    for key, value in updates.items():
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) \
-                or not isinstance(value, str) or any(c in value for c in "\r\n\x00"):
-            raise ValueError("invalid_env_update")
-        encoded[key] = (json.dumps(value, ensure_ascii=False)
-                        if value != value.strip() or any(c in value for c in "\"'\\")
-                        else value)
-    updates = encoded
-    lines, seen = [], set()
-    with suppress(FileNotFoundError), open(path, encoding="utf-8") as stream:
-        lines = stream.read().splitlines()
-    out = []
-    for line in lines:
-        key = line.split("=", 1)[0]
-        if key in updates:
-            out.append(f"{key}={updates[key]}")
-            seen.add(key)
-        else:
-            out.append(line)
-    for key, val in updates.items():
-        if key not in seen:
-            out.append(f"{key}={val}")
-    _write_atomic(path, "\n".join(out) + "\n", 0o600)
-
-
-def _keychain_store(account: str, pw: str, *, service: str = KEYCHAIN_SERVICE) -> bool:
-    """Store the MCS password in the login keychain without exposing it
-    in child-process argv (`ps` shows argv to every local user).
-
-    `security -i` reads commands from stdin, so the credential travels
-    over the pipe instead of `-w` on the command line. The value is
-    double-quoted with backslash escapes; a read-back verify turns any
-    quoting deviation into a loud failure — a silently wrong password is
-    worse than no write. The verify uses the adapter's exact argv —
-    service-only, no ``-a`` filter — so it proves what auto_login will
-    actually read (a stale second entry under the same service would
-    shadow the fresh write and must surface as failure here, not as a
-    mysterious wrong-password rejection at login)."""
-    def _q(v: str) -> str:
-        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-    if (not service.strip()
-            or any(c in value for value in (account, pw, service) for c in "\r\n\x00")):
-        return False
-    # Update the item the adapter's service-only read resolves to, under
-    # its own account: a first interactive init stores under "mcs" before
-    # mcs_login_id is known, and a write under another account would add
-    # a shadowed second item instead of replacing the password.
-    existing = _run(["security", "find-generic-password", "-s", service])
-    if existing.returncode == 0:
-        m = re.search(r'^\s*"acct"<blob>="(.*)"\s*$', existing.stdout or "",
-                      re.MULTILINE)
-        if m:
-            account = m.group(1)
-    previous = _run(
-        ["security", "find-generic-password", "-s", service,
-         "-a", account, "-w"])
-    if previous.returncode not in (0, 44):  # 44: no existing item
-        return False
-    old_password = previous.stdout.rstrip("\n") if previous.returncode == 0 else None
-    if old_password is not None and any(c in old_password for c in "\r\n\x00"):
-        return False
-    cmd = (f"add-generic-password -s {_q(service)} "
-           f"-a {_q(account)} -U -w {_q(pw)}\n")
-    written = _run(["security", "-i"], input_text=cmd)
-    chk = _run(
-        ["security", "find-generic-password", "-s", service,
-         "-w"])
-    if chk.returncode == 0 and chk.stdout.rstrip("\n") == pw:
-        return True
-    # Preserve a credential that existed before this attempt. Only a
-    # successfully created item with verified prior absence may be deleted.
-    if old_password is not None:
-        rollback = (f"add-generic-password -s {_q(service)} "
-                    f"-a {_q(account)} -U -w {_q(old_password)}\n")
-        _run(["security", "-i"], input_text=rollback)
-    elif written.returncode == 0:
-        _run(["security", "delete-generic-password", "-s",
-              service, "-a", account])
-    return False
-
-
 def _csv_list(values):
     """A repeated flag or a comma-separated string -> list[str] | None."""
     if not values:
@@ -911,486 +369,6 @@ def _csv_list(values):
 
 # ---- guided wizard ---------------------------------------------------
 # Every settable config key, grouped for a beginner walkthrough.
-# Item = (dotted key, kind, default, description, gate).
-#   kind: req | opt | bool | int | num | csv | intlist | choice:a,b,...
-#   req* kinds loop until a value is given; everything else accepts an
-#   empty answer meaning "keep current, else the shown default".
-#   gate(cfg) hides keys whose feature is off — discord.* only exists
-#   when interactive delivery is on, digest knobs only when signals
-#   notify, semantic details only when a mode is enabled.
-_UNSET = object()
-
-def _discord_on(cfg):
-    return _transport_on(cfg, "discord")
-
-
-def _slack_on(cfg):
-    return _transport_on(cfg, "slack")
-
-
-def _transport_on(cfg, transport):
-    return (cfg.get("notify") or {}).get("interactive") == transport or (
-        cfg.get("runtime_mode") == "standalone" and any(
-            isinstance(cfg.get(key), str) and cfg[key].startswith(transport + ":")
-            for key in ("notify_target", "notify_system_target")))
-
-
-def _lineworks_on(cfg):
-    return (cfg.get("notify") or {}).get("interactive") == "lineworks"
-
-
-def _cards_on(cfg):
-    return (cfg.get("notify") or {}).get("interactive") \
-        in ("discord", "slack", "lineworks")
-
-
-def _signals_on(cfg):
-    return (cfg.get("signals") or {}).get("notify") is True
-
-
-def _digest_on(cfg):
-    return (cfg.get("daily_digest") or {}).get("enabled") is True
-
-
-def _semantic_on(cfg):
-    m = (cfg.get("semantic") or {}).get("mode", "off")
-    return m != "off"
-
-
-WIZARD = [
-    ("使い方とMCSのアカウント", [
-        ("runtime_mode", "choice:hermes,standalone", "hermes",
-         "どの方法で使いますか？ hermes=Hermesと連携 / standalone=MCSだけで動かす", None),
-        ("mcs_login_id", "req", None,
-         "MCS のログインID", None),
-    ]),
-    ("通知の送り先", [
-        ("notify_target", "req", None,
-         "通知の送り先（例: slack:<チャンネルID>、"
-         "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
-        ("notify_system_target", "opt", None,
-         "エラーや動作状況の通知先（空欄なら通常の通知と同じ場所）", None),
-    ]),
-    ("通知の形式を選ぶ", [
-        ("notify.interactive", "choice:off,slack,discord,lineworks", "off",
-         "どの形式で通知しますか？ slack/discord/lineworks=ボタン付き通知 / off=文章のみ", None),
-    ]),
-    ("LINE WORKSの接続先と操作できる人", [
-        ("notify.lineworks.profile", "req", "default",
-         "このLINE WORKS接続を区別する名前（通常はdefault）", _lineworks_on),
-        ("notify.lineworks.application_id", "req", None,
-         "LINE WORKS Bot ID", _lineworks_on),
-        ("notify.lineworks.team_id", "req", None,
-         "LINE WORKS ドメインID", _lineworks_on),
-        ("notify.lineworks.channel_id", "req", None,
-         "配信先トークルームのチャンネルID", _lineworks_on),
-        ("notify.lineworks.allowed_user_ids", "reqcsv", None,
-         "操作を許可するユーザーID・カンマ区切り（必須）", _lineworks_on),
-        ("notify.lineworks.project_ids", "reqintlist", None,
-         "配信・操作を許可するMCSプロジェクトID・カンマ区切り（必須）", _lineworks_on),
-        ("notify.lineworks.project_ids_auto", "bool", False,
-         "公開済みscope snapshotからプロジェクトを解決（通常はオフ）", _lineworks_on),
-    ]),
-    ("Slackの接続先と操作できる人", [
-        ("notify.slack.profile", "req", None,
-         "この接続先を区別する名前（プロファイル名。例: mcs）", _slack_on),
-        ("notify.slack.application_id", "req", None,
-         "Slack アプリID", _slack_on),
-        ("notify.slack.team_id", "req", None,
-         "Slack ワークスペース（team）ID", _slack_on),
-        ("notify.slack.channel_id", "req", None,
-         "カードの投稿先チャンネルID", _slack_on),
-        ("notify.slack.allowed_user_ids", "reqcsv", None,
-         "操作を許可するSlackユーザーID・カンマ区切り", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
-        ("notify.slack.project_ids_auto", "bool", False,
-         "公開済みscope snapshotからプロジェクトを解決", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
-        ("notify.slack.project_ids", "intlist", [],
-         "閲覧・操作を許可するMCSプロジェクトID・カンマ区切り（自動解決がオフなら必須）", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
-    ]),
-    ("Discordの接続先と操作できる人", [
-        ("notify.discord.profile", "req", None,
-         "この接続先を区別する名前（プロファイル名。例: mcs）", _discord_on),
-        ("notify.discord.application_id", "req", None,
-         "Discord アプリケーションID", _discord_on),
-        ("notify.discord.guild_id", "req", None,
-         "Discord サーバーID", _discord_on),
-        ("notify.discord.channel_id", "req", None,
-         "カードの投稿先チャンネルID", _discord_on),
-        ("notify.discord.allowed_user_ids", "reqcsv", None,
-         "操作を許可するDiscordユーザーID・カンマ区切り", lambda cfg: cfg.get("runtime_mode") == "standalone" and _discord_on(cfg)),
-        ("notify.discord.allowed_role_ids", "csv", None,
-         "操作を許可するDiscordロールID（@everyone不可・空欄可）", lambda cfg: cfg.get("runtime_mode") == "standalone" and _discord_on(cfg)),
-        ("notify.discord.project_ids_auto", "bool", False,
-         "公開済みscope snapshotからプロジェクトを解決", lambda cfg: cfg.get("runtime_mode") == "standalone" and _discord_on(cfg)),
-        ("notify.discord.project_ids", "intlist", [],
-         "閲覧・操作を許可するMCSプロジェクトID・カンマ区切り（自動解決がオフなら必須）", lambda cfg: cfg.get("runtime_mode") == "standalone" and _discord_on(cfg)),
-        ("notify.operator", "opt", None,
-         "運用者の Discord ユーザーID（空欄可）", _discord_on),
-    ]),
-    ("通知のまとめ方と対象期間", [
-        ("notify.card_thread", "bool", True,
-         "同じ患者の通知を1つのスレッドにまとめますか？", lambda cfg: _slack_on(cfg) or _discord_on(cfg)),
-        ("notify.card_thread_archive_min", "int", 10080,
-         "スレッドをアーカイブするまでの時間（分。10080分=7日）", lambda cfg: _slack_on(cfg) or _discord_on(cfg)),
-        ("notify.route_epoch", "int", 1,
-         "通知先の変更を区別する番号（通常はそのまま。通知先を変更する場合のみ1増やす）", _cards_on),
-        ("notify_bot_profile", "opt", None,
-         "通知に使うHermesの設定名（複数の接続設定がある場合のみ入力）", lambda cfg: cfg.get("runtime_mode") != "standalone"),
-        ("notify_max_age_h", "num", None,
-         "何時間前までの投稿を通知しますか？（空欄=制限なし。期間内に新しく取り込んだ投稿は既読でも通知）", None),
-        ("notify_all_replies", "bool", False,
-         "リアルタイムで新規取得した返信は既読・投稿時刻によらず全件通知（履歴一括取込みは対象外）", None),
-        ("hermes_bin", "opt", None,
-         "hermes コマンドのパス（空欄=自動検出）", lambda cfg: cfg.get("runtime_mode") != "standalone"),
-    ]),
-    ("朝のまとめ通知", [
-        ("daily_digest.enabled", "bool", False,
-         "朝に1日分のまとめを通知先へ送りますか？（件数とID。患者名は次の項目で選びます）", None),
-        ("daily_digest.hour_jst", "int", 8,
-         "日次ダイジェストを送る時刻（JST・0-23時）", _digest_on),
-        ("daily_digest.include_names", "bool", False,
-         "日次ダイジェストの一覧に患者名を添える（送信先は notify_target）",
-         _digest_on),
-        ("daily_digest.scope", "opt", None,
-         "日次ダイジェストの対象患者（例: station:○○ / project:1,2 / days:3。空欄=全患者）",
-         _digest_on),
-    ]),
-    ("取り込む投稿と履歴", [
-        ("self_posts", "bool", False,
-         "自分がMCSに投稿した内容も取り込んで通知しますか？（未読一覧には自分の投稿が含まれない"
-         "ため、最新の投稿を別途確認します）", None),
-        ("metadata_shadow", "bool", False,
-         "未読保持の実証・運用合意後のみスタンプを再取得（shadow・反応値は非公開）",
-         None),
-        ("metadata_refresh_publish", "bool", False,
-         "shadow再取得の成功結果を表示用の観測へ反映（未読保持と照合の確認後のみ）",
-         None),
-        ("metadata_actors", "bool", False,
-         "スタンプを押した人の氏名・所属・職種を取得してスレッドに表示（無期限保持）",
-         None),
-        ("clinical_metadata", "bool", False,
-         "deep runで登録薬剤・検査項目・観測値をGET取得（既読化操作は行わない）",
-         None),
-        ("deep_history", "bool", True,
-         "初回に過去の投稿もすべて取り込みますか？（件数によって時間がかかります）", None),
-        ("discover_archived", "bool", False,
-         "MCSでアーカイブ済みの患者も取り込みますか？", None),
-        ("trickle_pages", "int", 3,
-         "1回の実行で履歴を遡るページ数（1-40）", None),
-        ("job_budget_seconds", "num", None,
-         "内部処理の時間予算・秒（空欄=既定）", None),
-    ]),
-    ("このMacで動くAI（通常はEnterで進めます）", [
-        ("local_llm.url", "opt", None,
-         "AIの接続先URL（通常は空欄。既定は http://127.0.0.1:8080/v1/chat/completions。指定する場合は /v1/chat/completions まで入力してください。外部URLは指定できません）",
-         None),
-        ("local_llm.model", "opt", None,
-         "AIモデル名（通常は空欄でQwen3.5-9B。別のモデルを導入した場合のみ指定）", None),
-    ]),
-    ("確認が必要な内容の通知", [
-        ("signals.notify", "bool", False,
-         "確認が必要な内容の候補を通知カードに表示しますか？", None),
-        ("signals.digest", "bool", False,
-         "複数候補をダイジェストにまとめて送る", _signals_on),
-        ("signals.digest_interval_h", "num", None,
-         "ダイジェストの間隔・時間（空欄=既定）", _signals_on),
-        ("signals.self_organizations", "csv", None,
-         "自施設名・カンマ区切り（空欄=MCSプロフィールから自動検出）",
-         None),
-        ("signals.self_professions", "csv", None,
-         "自職種・カンマ区切り（同上）", None),
-        ("signals.request_targets", "csv", None,
-         "依頼先として数える宛名（空欄可）", None),
-        ("signals.med_exclude_names", "csv", None,
-         "薬剤判定から除外する語・カンマ区切り（空欄可）", None),
-    ]),
-    ("外部サービスによる追加解析（通常は使いません）", [
-        ("semantic.mode", "choice:off,shadow,enforce", "off",
-         "追加解析を使いますか？ off=使わない（推奨）。off以外は投稿本文を外部のJev APIへ送信します。"
-         "shadow=結果を記録するだけ / enforce=結果を判定に使用", None),
-        ("semantic.project_ids", "reqintlist", None,
-         "対象プロジェクトID・カンマ区切り（modeがoff以外では必須）",
-         _semantic_on),
-        ("semantic.extract_qc", "choice:off,annotate", "off",
-         "抽出結果への Jev 監査注記", _semantic_on),
-        ("semantic.daily_request_budget", "int", None,
-         "Jev 呼出の1日上限（空欄=既定）", _semantic_on),
-    ]),
-]
-
-
-def _get_key(cfg: dict, dotted: str):
-    cur = cfg
-    for part in dotted.split("."):
-        if not isinstance(cur, dict):
-            return None
-        cur = cur.get(part)
-    return cur
-
-
-def _has_key(cfg: dict, dotted: str) -> bool:
-    cur = cfg
-    for part in dotted.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return False
-        cur = cur[part]
-    return True
-
-
-def _set_key(cfg: dict, dotted: str, val):
-    parts = dotted.split(".")
-    if val is _UNSET:
-        cur = cfg
-        for p in parts[:-1]:
-            cur = cur.get(p)
-            if not isinstance(cur, dict):
-                return
-        cur.pop(parts[-1], None)
-        return
-    cur = cfg
-    for p in parts[:-1]:
-        nxt = cur.get(p)
-        if not isinstance(nxt, dict):
-            nxt = cur[p] = {}
-        cur = nxt
-    cur[parts[-1]] = val
-
-
-def _fmt(v) -> str:
-    if type(v) is bool:
-        return "オン" if v else "オフ"
-    if isinstance(v, list):
-        return ",".join(str(x) for x in v)
-    return str(v)
-
-
-def _parse_answer(kind: str, raw: str):
-    """Typed answer -> (ok, value|error message)."""
-    if kind in ("req", "opt"):
-        return True, raw
-    if kind == "bool":
-        v = raw.lower()
-        if v in ("y", "yes", "1", "true", "on", "はい", "オン"):
-            return True, True
-        if v in ("n", "no", "0", "2", "false", "off", "いいえ", "オフ"):
-            return True, False
-        return False, "1（はい）か 2（いいえ）で答えてください（y / n も使えます）"
-    if kind == "int":
-        try:
-            return True, int(raw)
-        except ValueError:
-            return False, "整数で入力してください"
-    if kind == "num":
-        try:
-            v = float(raw)
-        except ValueError:
-            return False, "数値で入力してください"
-        if _num(v) is not None:
-            return False, "0より大きく10億以下の有限の数値で入力してください"
-        return True, int(v) if v == int(v) else v
-    if kind in ("csv", "reqcsv", "intlist", "reqintlist"):
-        parts = [x.strip() for x in raw.split(",") if x.strip()]
-        if kind.startswith("req") and not parts:
-            return False, "1件以上の値をカンマ区切りで入力してください"
-        if "intlist" in kind:
-            try:
-                return True, [int(x) for x in parts]
-            except ValueError:
-                return False, "整数をカンマ区切りで入力してください"
-        return True, parts
-    if kind.startswith("choice:"):
-        opts = kind.split(":", 1)[1].split(",")
-        if raw in {str(i) for i in range(1, len(opts) + 1)}:
-            raw = opts[int(raw) - 1]
-        return ((True, raw) if raw in opts
-                else (False, "表示された番号、または次の値で入力: " + ", ".join(opts)))
-    return True, raw
-
-
-_CHOICE_LABELS = {
-    "recommended": "必要な項目だけ設定する（わからない場合はこちら）",
-    "detailed": "すべての設定を一つずつ確認する",
-    "hermes": "Hermes と連携する（Hermes を導入済みの方）",
-    "standalone": "MCS だけで動かす（Hermes が不要）",
-    "off": "使わない", "slack": "Slack のカード通知（通知を使う場合の推奨）",
-    "discord": "Discord のカード通知", "lineworks": "LINE WORKS のカード通知",
-    "shadow": "外部サービスへ送信して結果を記録する",
-    "enforce": "外部サービスへ送信して判定に使う",
-    "annotate": "外部サービスの検査結果を付ける",
-}
-
-
-def _ask(key: str, kind: str, default, desc: str, cur, present=False):
-    """One wizard item. Returns the value to store, or _UNSET.
-    `present`: the key exists in cfg (so cur=None is an explicit null)."""
-    eff = cur if cur is not None else default
-    # explicit null on a required item is a valid stored value (e.g.
-    # semantic.project_ids: null = all projects) — Enter keeps it
-    keep_null = present and cur is None and key == "semantic.project_ids"
-    marks = []
-    default_label = "初期値" if key == "notify.interactive" else "推奨"
-    value_label = _fmt(eff)
-    if kind == "bool" and isinstance(eff, bool):
-        value_label = "はい" if eff else "いいえ"
-    if keep_null:
-        marks.append("現在: null（全対象）")
-    if cur is not None:
-        marks.append(f"現在: {value_label}")
-    elif eff is not None:
-        marks.append(f"{default_label}: {value_label}（Enter で選択）")
-    if kind == "bool":
-        marks.append("1=はい / 2=いいえ")
-    elif kind.startswith("choice:"):
-        print(f"\n  {desc}")
-        for number, option in enumerate(kind.split(":", 1)[1].split(","), 1):
-            label = ("カードを使わない（文字だけの通知）"
-                     if key == "notify.interactive" and option == "off"
-                     else _CHOICE_LABELS.get(option, option))
-            suffix = "（現在の設定・Enter で保持）" if option == cur else (
-                f"（{default_label}・Enter で選択）" if cur is None and option == default else "")
-            print(f"    {number}. {label}{suffix}")
-        marks.append("番号または設定名")
-    if cur is not None and kind in ("opt", "num", "csv", "intlist"):
-        marks.append("`-` で削除")
-    question = "番号を選んでください" if kind.startswith("choice:") else desc
-    prompt = (f"  {question}\n    設定項目: {key}"
-              + (f" [{' / '.join(marks)}]" if marks else "") + ": ")
-    while True:
-        raw = input(prompt).strip()
-        if raw.lower() in ("q", "quit", "中止"):
-            raise KeyboardInterrupt
-        if raw in ("?", "わからない"):
-            if key in ("notify_target", "notify_system_target"):
-                print("    Slack は投稿先チャンネルを開き、チャンネル名 → 詳細の最下部でIDを確認します。"
-                      "\n    slack: に続けてそのIDを入力します（入力形式の例: slack:C0123456789）。"
-                      "\n    Discord / LINE WORKS は担当者に通知先のIDを確認してください。"
-                      "\n    手順: docs/guides/EASY_SETUP.md、詳しいIDの調べ方: docs/guides/INSTALLATION.md")
-            if kind.startswith("req") and eff is None:
-                print("    この項目は施設ごとに異なるため、自動で決められません。"
-                      "管理者に確認してください。q で保存せず中止できます。")
-                continue
-            print("    Enter で現在の設定を保持します。未設定なら表示された推奨設定を使います。")
-            continue
-        if not raw:
-            if keep_null:
-                return None
-            if kind.startswith("req") and eff is None:
-                print("    必須項目です — 値を入力してください。わからない場合は ?、中止は q。")
-                continue
-            return eff if eff is not None else _UNSET
-        if raw == "-" and cur is not None and not kind.startswith("req"):
-            return _UNSET
-        ok, val = _parse_answer(kind, raw)
-        if ok:
-            return val
-        print(f"    {val}")
-
-
-def _wizard(cfg: dict):
-    """Walk every config key in sections — Enter accepts the shown
-    current/default value, so a beginner can step through safely.
-    Recommended setup skips advanced items while retaining existing values.
-    Items whose feature is off are skipped via their gate."""
-    print("\nMCS の設定を順番にご案内します。番号を入力して Enter を押してください。"
-          "\n空欄で Enter を押すと、現在の設定を保持します。未設定なら推奨設定を使います。"
-          "\n必須のIDは施設の管理者に確認してください。? で説明、q または Ctrl+C で中止できます。")
-    detailed = _ask("setup_detail", "choice:recommended,detailed", "recommended",
-                    "設定の進め方", None) == "detailed"
-    basic = {"runtime_mode", "mcs_login_id", "notify_target", "notify_system_target",
-             "notify.interactive", "self_posts", "deep_history"}
-    step = 0
-    for title, items in WIZARD:
-        if not any(when is None or when(cfg) for *_, when in items):
-            continue
-        step += 1
-        print(f"\n【手順 {step}】{title}")
-        if not detailed:
-            print("  詳細設定は現在の値を保持し、未設定の項目は推奨設定を使います。")
-        for key, kind, default, desc, when in items:
-            if when is not None and not when(cfg):
-                continue
-            if not detailed and key not in basic and not kind.startswith("req") \
-                    and not key.endswith(("project_ids", "project_ids_auto", "allowed_role_ids")):
-                if not _has_key(cfg, key) and default is not None:
-                    _set_key(cfg, key, default)
-                continue
-            if key in ("notify.slack.channel_id", "notify.discord.channel_id") \
-                    and _get_key(cfg, key) is None:
-                transport = key.split(".")[1]
-                for target in (cfg.get("notify_target"), cfg.get("notify_system_target")):
-                    if isinstance(target, str) and target.startswith(transport + ":"):
-                        channel = target.partition(":")[2]
-                        if ((transport == "slack" and re.fullmatch(r"[CGD][A-Z0-9]+", channel))
-                                or (transport == "discord" and channel.isdecimal()
-                                    and any(c != "0" for c in channel))):
-                            default = channel
-                            break
-            _set_key(cfg, key,
-                     _ask(key, kind, default, desc, _get_key(cfg, key),
-                          _has_key(cfg, key)))
-    _wizard_drug_map(cfg, step + 1)
-
-
-def _wizard_drug_map(cfg: dict, step: int) -> None:
-    """Offer the bundled official medicine master as the matching dictionary
-    (default: yes). Every operator input is shown and taken only from a real
-    answer; EOF/Ctrl+C abort init like any other item. An existing `drug_map`
-    pin is never touched, and a held or failed conversion leaves cfg as is."""
-    if cfg.get("drug_map") is not None:
-        return
-    from datetime import date
-    from types import SimpleNamespace
-    import mcs_drug
-    try:
-        manifest, _ = mcs_drug._bundle(mcs_drug.BUNDLE)
-    except (ValueError, OSError):
-        print(f"\n【手順 {step}】医薬品辞書\n  同梱の公式医薬品マスターを読めないため、辞書の設定は省略します。")
-        return
-    print(f"\n【手順 {step}】医薬品辞書（同梱の公式医薬品マスターで薬剤名を照合）"
-          f"\n  同梱の公式医薬品マスター（版 {manifest['edition']}）から私有辞書を作成し、"
-          "投稿に書かれた薬剤名を辞書と照合して候補を表示します。"
-          "\n  利用条件の確認と採用の承認は運用者の入力として記録します。自動では埋めません。"
-          f"\n  利用条件: {manifest['terms']['url']}")
-    if not _ask("drug_map.bundled", "bool", True,
-                "同梱の公式医薬品マスターで薬剤名を照合する", None):
-        print("  辞書は設定しません。後から mcs_drug.py install-bundled と init --set drug_map=... で設定できます。")
-        return
-    today = date.today()
-    while True:
-        checked = _ask("drug_map.terms_checked_on", "req", today.isoformat(),
-                       "利用条件を確認した日（YYYY-MM-DD・Enter で今日）", None)
-        try:
-            if date.fromisoformat(checked) <= today:
-                break
-        except ValueError:
-            pass
-        print("    YYYY-MM-DD 形式で、今日以前の日付を入力してください")
-    print("  採用方針（install-bundled と同じ）: 変更区分 0/3/5 の行だけを候補にし、抹消 1・廃止 9 と"
-          "\n    収載日・変更日が今日より後の行は除外します。終了日 0・廃止日 99999999 は期限なしです。"
-          "\n    辞書は薬剤名の照合候補を示すだけで、成分や治療上の同等性は確定しません。")
-    confirmed = _ask("drug_map.confirmed_by", "req", cfg.get("mcs_login_id"),
-                     "利用条件と採用方針を確認した人（氏名またはID・表示の値は Enter で採用）", None)
-    approve = _ask("drug_map.approve", "bool", True,
-                   f"辞書の照合を有効にする（承認者として「{confirmed}」を記録。いいえなら参照のみで照合しない）",
-                   None)
-    args = SimpleNamespace(terms_checked_on=checked, confirmed_by=confirmed,
-                           approved_by=confirmed if approve else None, terms_record=None)
-    try:
-        out = mcs_drug.install_bundled(args, directory=mcs_drug.BUNDLE, home=HOME)
-    except (ValueError, OSError) as error:
-        print(f"  辞書を作成できませんでした（{error}）。照合は有効になっていません。"
-              "\n  設定は変更せず続行します。原因を確認してから mcs_drug.py install-bundled で再作成してください。")
-        return
-    if out["path"] is None:
-        print(f"  辞書の作成を保留しました（{out['held']}）。照合は有効になっていません。"
-              "\n  設定は変更せず続行します。保留理由を解消してから mcs_drug.py install-bundled で再作成してください。")
-        return
-    cfg["drug_map"] = {"path": out["path"], "sha256": out["sha256"]}
-    print(f"  辞書を{'作成' if out['state'] == 'written' else '再利用'}しました: {out['path']}（{out['entries']}件）"
-          + ("。照合は設定を保存した後の定期処理で有効になります。" if approve
-             else "。承認者なしのため参照のみで、照合は行いません。"))
-
-
 PLUGIN_SETTINGS = "plugins.entries.mcs-discord-commands.settings"
 
 
@@ -1438,7 +416,7 @@ def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
         hermes_tok = None if tok or args.yes else env_value(
             env_key, paths=[os.path.expanduser("~/.hermes/.env")], check_env=False)
         # switching from Hermes: reuse its token only on explicit consent
-        if hermes_tok and _ask(
+        if hermes_tok and setup_wizard.ask(
                 env_key, "bool", False,
                 "Hermesに保存済みの認証情報を使いますか？（~/.hermes/.envから読み込みます）",
                 None):
@@ -1451,7 +429,7 @@ def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
             missing.append(env_key)
     if updates:
         try:
-            _env_write(ENV_PATH, updates)
+            lifecycle_io.write_env(ENV_PATH, updates)
         except ValueError:
             print("  .env: トークンの形式が正しくありません。既存のファイルを保持しました")
             return False
@@ -1729,7 +707,7 @@ def _init_recovery_problem(cfg, update_repo=None) -> str | None:
     """Why the configured recovery interpreter is unusable, or None (install.sh shares it)."""
     if "recovery_python" not in cfg:
         return None
-    return _recovery_python_problem(cfg["recovery_python"], update_repo) or _runtime_problem(
+    return recovery_python_problem(cfg["recovery_python"], update_repo, checkout=REPO_ROOT) or mcs_runtime.runtime_problem(
         _runtime_probe(cfg["recovery_python"]), recovery=True)
 
 
@@ -1737,8 +715,8 @@ def _init_apply_set_overrides(cfg: dict, set_args) -> int | None:
     """Apply `--set KEY=JSON` overrides to cfg; return 1 when init must stop."""
     # --set KEY=JSON gives non-interactive coverage of every config
     # key (dotted paths nest); the trailing cmd_check validates them.
-    fact_selection = (_get_key(cfg, "semantic.fact_source"),
-                      _get_key(cfg, "semantic.fact_source_gate"))
+    fact_selection = (setup_wizard.get_key(cfg, "semantic.fact_source"),
+                      setup_wizard.get_key(cfg, "semantic.fact_source_gate"))
     for kv in set_args or []:
         k, sep, v = kv.partition("=")
         if not sep or not k.strip():
@@ -1751,12 +729,12 @@ def _init_apply_set_overrides(cfg: dict, set_args) -> int | None:
             return 1
         except ValueError:
             val = v
-        _set_key(cfg, k.strip(), val)
+        setup_wizard.set_key(cfg, k.strip(), val)
     # canonical promotion is gated by `fact-source` (evidence check +
     # pinned token) — --set, including a whole `semantic` object, must
     # not mint or re-pin it. An unchanged existing pin passes through.
-    selection = (_get_key(cfg, "semantic.fact_source"),
-                 _get_key(cfg, "semantic.fact_source_gate"))
+    selection = (setup_wizard.get_key(cfg, "semantic.fact_source"),
+                 setup_wizard.get_key(cfg, "semantic.fact_source_gate"))
     if selection[0] == "canonical" and selection != fact_selection:
         print("--setでは検証済み解析結果の採用（semantic.fact_source=canonical）と承認情報を変更できません。"
               "専用の`mcs_setup.py fact-source canonical "
@@ -1864,7 +842,7 @@ def _init_store_secrets(args, login_id) -> int | None:
         # restart the login keychain is locked until first unlock, and
         # auto_login reads MCS_PASSWORD when the keychain can't answer.
         updates["MCS_PASSWORD"] = pw
-        if not _keychain_store(login_id or "mcs", pw):
+        if not lifecycle_io.store_keychain(login_id or "mcs", pw):
             print("Keychainへの保存を確認できません。既存の登録内容を確認してください。"
                   "再起動時に使う.envへの保存結果は続けて表示します")
             keychain_failed = True
@@ -1876,7 +854,7 @@ def _init_store_secrets(args, login_id) -> int | None:
         updates["TYPESAFE_API_KEY"] = ts_key
     if updates:
         try:
-            _env_write(ENV_PATH, updates)
+            lifecycle_io.write_env(ENV_PATH, updates)
         except ValueError:
             print(".env: 認証情報の形式が正しくありません。既存のファイルを保持しました")
             return 1
@@ -1889,7 +867,7 @@ def _init_store_secrets(args, login_id) -> int | None:
 def _init_standalone_connectors(cfg: dict, args, integration_ok: bool) -> bool:
     """Run the native standalone initializer for each enabled transport."""
     for transport in ("slack", "discord"):
-        if _transport_on(cfg, transport):
+        if transport_enabled(cfg, transport):
             argv = [sys.executable, "-m", "mcs_standalone", "init", "--root", HOME,
                     "--transport", transport] + (["--yes"] if args.yes else [])
             # Terminal-bound getpass owns credentials; no secret ever travels in argv.
@@ -1962,7 +940,7 @@ def cmd_init(args) -> int:
 
     if not args.yes:
         try:
-            _wizard(cfg)
+            setup_wizard.wizard(cfg, home=HOME)
         except (KeyboardInterrupt, EOFError):
             print("\n設定を中止しました。設定ファイルやパスワードは保存していません。"
                   "同じ操作で最初からやり直せます。")
@@ -2031,7 +1009,7 @@ def cmd_init(args) -> int:
     if isinstance(ntf, dict) and (ntf.get("interactive") == "lineworks" or (
             mcs_runtime.standalone(cfg)
             and ntf.get("interactive") in ("discord", "slack"))) \
-            and not _validate_notify(ntf):
+            and not validate_notify(ntf):
         # Provision runner-owned directories/flags before the independent worker starts.
         import notify_cards
         notify_cards.ensure_dirs(os.path.join(HOME, "data"))
@@ -2192,7 +1170,6 @@ def cmd_jev_value(args) -> int:
     client when TYPESAFE_API_KEY is set; without it the audit cannot be
     evaluated and the report honestly records evaluated=False — never a
     synthetic pass."""
-    import semantic
     import semantic_jev as jev
     import semantic_evaluation
     if not math.isfinite(args.deadline) or args.deadline <= 0:
@@ -2231,7 +1208,7 @@ def cmd_jev_value(args) -> int:
             api_key=api_key,
             model=scfg.get("model") or jev.JEV_MODEL)
     report = semantic_evaluation.evaluate_jev_incremental(
-        cases, semantic.llm_chat, jev_client,
+        cases, semantic_transport.llm_chat, jev_client,
         deadline_s=args.deadline)
     report["cases_source"] = os.path.basename(args.cases)
     report["label_provenance"] = {"human": 0,
@@ -2417,20 +1394,7 @@ def _check_llm(cfg: dict) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-def sqlite_wal_safe(version: tuple[int, ...]) -> bool:
-    """Official WAL-reset fixes, including the two maintained backports."""
-    return version >= (3, 51, 3) or (
-        version[:2] == (3, 50) and version >= (3, 50, 7)) or (
-        version[:2] == (3, 44) and version >= (3, 44, 6))
-
-
-class RuntimeFacts(TypedDict):
-    python: str
-    sqlite: str
-    packages: dict[str, str | None]
-
-
-def _runtime_probe(exe: str) -> RuntimeFacts | None:
+def _runtime_probe(exe: str) -> mcs_runtime.RuntimeFacts | None:
     # Only stdlib and distribution metadata: never import SDK clients or MCS.
     if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
         return None
@@ -2470,18 +1434,6 @@ print(json.dumps({'python': '.'.join(map(str, sys.version_info[:3])),
             "packages": packages}
 
 
-def _runtime_problem(facts: RuntimeFacts | None, *, recovery: bool = False,
-                     allow_runtime_migration: bool = False) -> str | None:
-    if facts is None:
-        return "実行環境の情報を取得できません"
-    minimum = (3, 10) if allow_runtime_migration and not recovery else (3, 14)
-    if tuple(map(int, facts["python"].split("."))) < minimum:
-        return "実行環境のPythonの版が対応範囲外です"
-    if not sqlite_wal_safe(tuple(map(int, facts["sqlite"].split(".")))):
-        return "実行環境のSQLiteに、データ保存の安全性に必要な修正がありません"
-    return None
-
-
 def _recovery_python(cfg) -> str:
     if "recovery_python" in cfg:
         return cfg["recovery_python"]
@@ -2504,14 +1456,14 @@ def _recovery_executable(plist) -> str | None:
     return exe if isinstance(exe, str) and os.path.isabs(exe) else None
 
 
-def _recovery_runtime(plist_path: str | Path | None = None) -> RuntimeFacts | None:
+def _recovery_runtime(plist_path: str | Path | None = None) -> mcs_runtime.RuntimeFacts | None:
     # Inspect the deployed watchdog's command, not ambient /usr/bin/python3.
     try:
         with open(plist_path if plist_path is not None else
                   os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), "rb") as f:
             plist = plistlib.load(f)
         exe = _recovery_executable(plist)
-        if exe is None or _recovery_python_problem(exe):
+        if exe is None or recovery_python_problem(exe, checkout=REPO_ROOT):
             return None
     except (OSError, ValueError, TypeError, AttributeError, plistlib.InvalidFileException):
         return None
@@ -2560,7 +1512,7 @@ def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None,
     except ValueError as e:     # backup / watchdog_grace_s invalid
         errors.append(f"config: {e}")
     else:
-        why = _runtime_problem(_runtime_probe(python),
+        why = mcs_runtime.runtime_problem(_runtime_probe(python),
                                allow_runtime_migration=allow_runtime_migration)
         if why:
             errors.append("selected_runtime: " + why)
@@ -2570,19 +1522,19 @@ def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None,
     desired = _recovery_python(cfg)
     desired_problem = None
     if explicit:
-        desired_problem = _recovery_python_problem(desired, update_repo) or _runtime_problem(
+        desired_problem = recovery_python_problem(desired, update_repo, checkout=REPO_ROOT) or mcs_runtime.runtime_problem(
             _runtime_probe(desired), recovery=True)
         if desired_problem:
             errors.append("desired_recovery_runtime: " + desired_problem)
     if os.path.lexists(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
-        why = _runtime_problem(_recovery_runtime(), recovery=True)
+        why = mcs_runtime.runtime_problem(_recovery_runtime(), recovery=True)
         try:
             with open(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), "rb") as stream:
                 actual = _recovery_executable(plistlib.load(stream))
         except (OSError, ValueError, TypeError):
             actual = None
         if actual is not None:
-            why = _recovery_python_problem(actual, update_repo) or why
+            why = recovery_python_problem(actual, update_repo, checkout=REPO_ROOT) or why
         repair = (repair_recovery and explicit and actual != desired
                   and not desired_problem and _recovery_owned())
         if explicit and actual != desired and not repair:
@@ -2633,7 +1585,7 @@ def _sync_recovery(cfg, note, dry) -> int:
     try:
         text = Path(REPO_ROOT, "deployment/launchagents",
                     f"{RECOVERY_LABEL}.plist").read_text()
-        body = _render_template(text, {key: xml_escape(value, quote=False) for key, value in {
+        body = render_template(text, {key: xml_escape(value, quote=False) for key, value in {
             "RECOVERY_PYTHON": desired, "RECOVERY": RECOVERY_DIR,
             "DATA": str(Path(HOME, "data"))}.items()})
         if _recovery_executable(plistlib.loads(body.encode())) != desired:
@@ -2809,7 +1761,7 @@ def cmd_doctor(args) -> int:
     checks: dict[str, DoctorCheck] = {
         "configuration": _doctor_check(config_errors, config_warnings),
         "interpreter": _doctor_check(
-            [] if sqlite_wal_safe(sqlite3.sqlite_version_info)
+            [] if mcs_runtime.sqlite_wal_safe(sqlite3.sqlite_version_info)
             else ["SQLite WAL-reset fix missing"], []),
     }
     selected = None
@@ -2823,12 +1775,12 @@ def cmd_doctor(args) -> int:
     else:
         mode = mcs_runtime.mode(cfg)
         selected = _runtime_probe(_services_py(cfg))
-        why = _runtime_problem(selected)
+        why = mcs_runtime.runtime_problem(selected)
         checks["runtime"] = _doctor_check([why] if why else [], [])
         if sys.platform == "darwin" and os.path.isfile(
                 os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
             recovery = _recovery_runtime()
-            why = _runtime_problem(recovery, recovery=True)
+            why = mcs_runtime.runtime_problem(recovery, recovery=True)
             checks["recovery_runtime"] = _doctor_check([why] if why else [], [])
     probes = frozenset(getattr(args, "probe", None) or [])
     for scope in ("llm", "services", "credentials", "data"):
@@ -2854,7 +1806,7 @@ def cmd_doctor(args) -> int:
     matches = None
     if not config_errors and "recovery_python" in cfg:
         desired = _runtime_probe(_recovery_python(cfg))
-        why = _runtime_problem(desired, recovery=True)
+        why = mcs_runtime.runtime_problem(desired, recovery=True)
         checks["desired_recovery_runtime"] = _doctor_check([why] if why else [], [])
         if os.path.lexists(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
             try:
@@ -2864,7 +1816,7 @@ def cmd_doctor(args) -> int:
                 matches = False
             checks["recovery_selection"] = _doctor_check(
                 ["desired/deployed recovery selection drift"] if not matches else [], [])
-    runtimes: dict[str, RuntimeFacts | None] = {
+    runtimes: dict[str, mcs_runtime.RuntimeFacts | None] = {
         "selected": selected, "recovery": recovery, "desired_recovery": desired}
     from operational_status import stored_status, status_lines
     operations = stored_status(HOME, cfg)
@@ -2969,27 +1921,6 @@ REPO_ROOT = REPO
 G6_CRITERIA_PATH = os.path.join(REPO_ROOT, "evaluation",
                                 "g6-criteria-v2.json")
 
-CRON_JOBS = [
-    ("MCS unread check", "*/10 * * * *", "mcs_check.sh"),
-    ("MCS health watch", "*/5 * * * *", "mcs_health.sh"),
-    ("MCS durable drain", "10,40 * * * *", "mcs_deep.sh"),
-    ("MCS retry maintenance", "0 */6 * * *", "mcs_llm_catchup.sh"),
-    ("llamacpp daily restart", "0 4 * * *", "llamacpp_restart_if_idle.sh"),
-    ("MCS update check", "10 5 * * *", "mcs_update.sh"),
-]
-
-
-def configured_cron_jobs(cfg: dict) -> list[tuple[str, str, str]]:
-    """Keep default jobs and append only an explicitly configured offsite schedule."""
-    jobs = list(CRON_JOBS)
-    backup = cfg.get("backup", {"enabled": False})
-    if _backup_config(backup):
-        raise ValueError("backup_config_invalid")
-    if backup["enabled"]:
-        jobs.append(("MCS offsite backup", backup["schedule"], "mcs_offsite.sh"))
-    return jobs
-
-
 # RESIDENT = KeepAlive drainers the updater quiesces/restarts itself;
 # WATCHER = WatchPaths/StartInterval jobs — verified loaded, never keep-alive.
 # local.mcs-health repeats the hermes cron health watch (CRON_JOBS, shared
@@ -3057,40 +1988,6 @@ def _py_problem(exe: str) -> str | None:
 
 def _cron_label(script: str) -> str:
     return CRON_LABEL_PREFIX + script.removesuffix(".sh").replace("_", "-")
-
-
-def _calendar(schedule: str) -> list[dict]:
-    """Expand a CRON_JOBS schedule into calendar entries for the standalone scheduler.
-
-    Each entry is a {"Hour", "Minute"} dict (the launchd StartCalendarInterval
-    shape); `*/n` and comma lists are expanded, other fields must be `*`."""
-    minute, hour, *rest = schedule.split()
-    if rest != ["*", "*", "*"]:
-        raise ValueError(f"unsupported schedule {schedule!r}")
-
-    def expand(field, size):
-        if field == "*":
-            return [None]
-        if field.startswith("*/"):
-            return list(range(0, size, int(field[2:])))
-        return [int(v) for v in field.split(",")]
-    return [{k: v for k, v in (("Hour", h), ("Minute", m)) if v is not None}
-            for h in expand(hour, 24) for m in expand(minute, 60)]
-
-
-# The standalone host's scheduler (mcs_standalone.runtime) wraps each job in
-# this cap: hermes cron killed a script after 3600s, and a host that never
-# starts a job still running would otherwise stop it for good after one
-# wedged tick. The wrapper kills the job's process group.
-CRON_TIMEOUT_S = 3600      # = hermes cron's script timeout
-_TIMEOUT_PL = ("my $t = shift; my $p = 0;"
-               # launchd's SIGTERM (bootout, logout) must reach the job too
-               " $SIG{$_} = sub { kill 'TERM', -$p if $p; exit 143 } for qw(TERM INT HUP);"
-               " $p = fork; die unless defined $p;"
-               " if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }"
-               " $SIG{ALRM} = sub { kill 'TERM', -$p; sleep 5; kill 'KILL', -$p; exit 124 };"
-               " alarm $t; waitpid($p, 0); my $s = $?;"
-               " exit(($s & 127) ? 128 + ($s & 127) : ($s >> 8))")
 
 
 def _agent_labels(cfg: dict) -> list[str]:
@@ -3175,7 +2072,7 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
                         f"未導入です。更新が中断しても自動復旧できません。"
                         + fix)
     else:
-        why = _runtime_problem(_recovery_runtime(), recovery=True)
+        why = mcs_runtime.runtime_problem(_recovery_runtime(), recovery=True)
         if why:
             errors.append(f"復旧監視: {why}。復元時のデータ保存を"
                           "安全に行えるか確認できません。" + fix)
@@ -3210,11 +2107,6 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
                 + "）。local_llm.urlの接続先で独自に管理している場合は問題ありません。"
                 "それ以外は" + _install_fix("手順4"))
     return errors, warnings
-
-
-def _render_template(text: str, subs: dict) -> str:
-    return re.sub(r"__([A-Z_]+)__",
-                  lambda match: subs.get(match.group(1), match.group(0)), text)
 
 
 def _write_atomic(path: str, body: str, mode: int | None = None) -> None:
@@ -3352,7 +2244,7 @@ def _service_subs(cfg=None) -> dict:
                 BACKUP_SNAPSHOT=backup.get("snapshot", "") if backup["enabled"] else "",
                 BACKUP_SNAPSHOT_DIR=backup.get("snapshot_dir", "") if backup["enabled"] else "")
     grace = cfg.get("watchdog_grace_s", 60)
-    if CONFIG_RULES["watchdog_grace_s"][1](grace):
+    if type(grace) is not int or not 0 <= grace <= 3600:
         raise ValueError("watchdog_grace_config_invalid")
     subs["WATCHDOG_GRACE"] = str(grace)
     return subs
@@ -3370,7 +2262,7 @@ def _rendered_scripts(subs):
     for name in sorted(os.listdir(src)):
         if not name.endswith(".sh"):
             continue
-        yield name, _render_template(
+        yield name, render_template(
             Path(os.path.join(src, name)).read_text(encoding="utf-8"),
             {key: shlex.quote(value) for key, value in subs.items()})
 
@@ -3431,7 +2323,7 @@ def _desired_agents(subs, cfg) -> dict[str, str]:
     pdir = os.path.join(REPO_ROOT, "deployment", "launchagents")
     out = {}
     for label in _agent_labels(cfg):
-        out[label] = _render_template(
+        out[label] = render_template(
             Path(pdir, label + ".plist").read_text(encoding="utf-8"),
             {key: xml_escape(value, quote=False) for key, value in subs.items()})
     return out
@@ -4036,7 +2928,7 @@ def cmd_services(args) -> int:
     # a failed publish fails the run but never blocks the manifest below
     flags_failed = False
     if not dry and isinstance(cfg.get("notify"), dict) \
-            and not _validate_notify(cfg["notify"]):
+            and not validate_notify(cfg["notify"]):
         try:
             import notify_cards
             notify_cards.ensure_dirs(os.path.join(HOME, "data"))

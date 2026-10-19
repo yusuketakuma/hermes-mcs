@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from project_metadata import ARTIFACT_KIND
+from project_metadata_contract import ARTIFACT_KIND
 from project_metadata_view import get_project_metadata
 import message_metadata as mm
 

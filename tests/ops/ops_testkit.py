@@ -19,7 +19,7 @@ import extract
 import ledger
 import mcs_update
 import mcs_view
-from mcs_adapter import Attachment, Message
+from mcs_contract import Attachment, Message
 
 
 def _source(tmp_path):

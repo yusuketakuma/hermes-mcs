@@ -282,7 +282,7 @@ def _complete_total(values, *, reducer=sum, integer=False, checkpoint=lambda: No
 def _recent_runs(c, days: int = 14, *, now=None, checkpoint=lambda: None) -> dict:
     """Aggregate measured phases over the semantic drain runs of the last
     `days` days (capacity gate: llm_s per window + per-job llm_s p90)."""
-    from semantic_evaluation import _percentile
+    from stats_math import percentile
     rows = c.execute(
         "SELECT content FROM artifacts WHERE kind=? "
         "AND created_at >= ? ORDER BY artifact_id DESC",
@@ -322,7 +322,7 @@ def _recent_runs(c, days: int = 14, *, now=None, checkpoint=lambda: None) -> dic
     # same completeness rule as the total: any job without a valid llm_s
     # leaves both gate inputs unknown instead of a p90 over a subset
     recent["llm_s_p90"] = (None if recent["llm_s"] is None
-                           else _percentile(phases["llm_s"], 0.90))
+                           else percentile(phases["llm_s"], 0.90))
     checkpoint()
     recent["usage_tokens"] = _complete_total(tokens, integer=True, checkpoint=checkpoint)
     return recent

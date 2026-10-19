@@ -257,7 +257,7 @@ def test_slack_without_a_usable_thread_hides_drug_actions(led, tmp_path, state):
     if state != "off":
         with led.db:
             led.db.execute("UPDATE notification_cards SET thread_state=?", (state,))
-            notify_cards._issue_render(led.db, 1, cfg, NOW, [], force=True)
+            notify_cards.issue_render(led.db, 1, cfg, NOW, [], force=True)
     ids = _ids(_spec(led))
     assert "meds" not in ids and "drugsearch" not in ids and "body" in ids
 

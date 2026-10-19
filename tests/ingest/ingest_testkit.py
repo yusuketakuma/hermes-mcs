@@ -1,25 +1,25 @@
 """Shared fixtures for the split ingestion suite — ledger handle and
 ``mcs_adapter`` record factories.  Not a test module (no ``test_``
 prefix); sibling files import it via the tests/ sys.path bootstrap."""
+import mcs_contract
 import time
 from datetime import datetime
 
-import mcs_adapter
 from extract_testkit import _ledger, _message  # noqa: F401
 
 
 def _unread_patient(pid, name="test patient"):
-    return mcs_adapter.UnreadPatient(
+    return mcs_contract.UnreadPatient(
         project_id=pid, project_type="medical", patient_name=name,
         disease="d", station_name="s", url="u")
 
 
 def _att(file_id, name="f", url="https://www.medical-care.net/f"):
-    return mcs_adapter.Attachment(file_id=file_id, name=name, url=url)
+    return mcs_contract.Attachment(file_id=file_id, name=name, url=url)
 
 
 def _msg_at(mid, project_id, posted_at, unread=True):
-    return mcs_adapter.Message(
+    return mcs_contract.Message(
         message_id=mid, project_id=project_id, parent_id=None,
         sender_id=1, sender_name="sender", sender_type="user",
         profession="", organization="", posted_at=posted_at,

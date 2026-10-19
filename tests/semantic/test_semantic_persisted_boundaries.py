@@ -1,4 +1,5 @@
 """Unreadable stored JSON stays isolated at receipt, publication, send and reporting boundaries."""
+import semantic_transport
 import json
 import pytest
 
@@ -7,7 +8,6 @@ import semantic_v4 as v4
 import semantic_send_gate as send_gate
 import semantic_observe as observe
 import semantic_render as render
-import semantic
 import semantic_runtime as runtime
 from semantic_projection import PROJECTION_VERSION
 from semantic_testkit import _message
@@ -89,12 +89,12 @@ def test_deep_circuit_content_preserves_bounded_fail_closed_cooldown(ledger, rec
     assert not runtime.circuit_open(ledger, created_at + runtime._CIRCUIT_COOLDOWN_SECONDS + 1)
 
 
-@pytest.mark.parametrize("path_attr,reader", [("_FMT_PATH", semantic._format_marks), ("_LONG_PATH", semantic._long_marks)])
+@pytest.mark.parametrize("path_attr,reader", [("_FMT_PATH", semantic_transport._format_marks), ("_LONG_PATH", semantic_transport._long_marks)])
 def test_deep_private_marker_cache_does_not_stop_model_preparation(tmp_path, monkeypatch, path_attr, reader, recursion_limited_json):
     path = tmp_path / "synthetic-markers.json"
     raw = '[' * 20000 + '0' + ']' * 20000
     with pytest.raises(RecursionError):
         json.loads(raw)
     path.write_text(raw)
-    monkeypatch.setattr(semantic, path_attr, str(path))
+    monkeypatch.setattr(semantic_transport, path_attr, str(path))
     assert reader() == {}

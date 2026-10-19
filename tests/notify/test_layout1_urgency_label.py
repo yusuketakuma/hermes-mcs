@@ -23,7 +23,7 @@ def _layout1_face(led, kind, level, source):
     _dispatch_with_source(led, event)
     with led.db:
         led.db.execute("UPDATE notification_cards SET layout=1")
-    return notify_render.display_text(notify_render._card_content(led.db, _card(led)))
+    return notify_render.display_text(notify_render.card_content(led.db, _card(led)))
 
 
 @pytest.mark.parametrize("kind", ["thread", "signal"])

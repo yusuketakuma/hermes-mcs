@@ -1,4 +1,5 @@
 """Health evidence is a bounded regular file, never a blocking pipe or link."""
+import health_report
 import json
 import os
 import subprocess
@@ -8,7 +9,6 @@ from pathlib import Path
 import pytest
 
 import health_watch
-import run_check
 
 
 def _read_in_child(reader, path, root):
@@ -16,15 +16,15 @@ def _read_in_child(reader, path, root):
 import json, sys
 sys.path.insert(0, sys.argv[1])
 import _mcs_path
-import health_watch, run_check
+import health_watch, health_report
 reader, path, root = sys.argv[2:]
 if reader == 'health':
     result = health_watch.classify_health(path, 1000, 900)
 elif reader == 'standalone':
     result = health_watch._read_standalone_status(root)
 else:
-    run_check.HEALTH_FILE = path
-    result = run_check._prev_health()
+    health_report.HEALTH_FILE = path
+    result = health_report.prev_health()
 print(json.dumps(result))
 """
     result = subprocess.run(
@@ -62,8 +62,8 @@ def test_health_evidence_refuses_non_regular_or_oversize_files(tmp_path, monkeyp
     elif reader == "standalone":
         assert health_watch._read_standalone_status(str(tmp_path)) is None
     else:
-        monkeypatch.setattr(run_check, "HEALTH_FILE", str(path))
-        assert run_check._prev_health() == {}
+        monkeypatch.setattr(health_report, 'HEALTH_FILE', str(path))
+        assert health_report.prev_health() == {}
 
 
 @pytest.mark.parametrize("failure", [PermissionError, OSError])
@@ -84,5 +84,5 @@ def test_health_evidence_rechecks_bound_after_read(tmp_path, monkeypatch, reader
     elif reader == "standalone":
         assert health_watch._read_standalone_status(str(tmp_path)) is None
     else:
-        monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "synthetic.json"))
-        assert run_check._prev_health() == {}
+        monkeypatch.setattr(health_report, 'HEALTH_FILE', str(tmp_path / "synthetic.json"))
+        assert health_report.prev_health() == {}

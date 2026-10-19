@@ -55,7 +55,7 @@ def test_one_post_in_one_group_shares_a_single_source_line(ctx):
 
 def test_the_source_date_links_to_the_patients_mcs_room(ctx):
     from adapters.common.text import list_messages as render
-    from mcs_adapter import project_url
+    from mcs_contract import project_url
     rows = [r for r in _view(ctx, "timeline")["items"] if r.get("url")]
     assert rows and all(r["url"] == project_url(1) for r in rows)
     discord = "\n".join(render({"outcome": "applied", "action": "list", "list": _view(ctx, "timeline")},

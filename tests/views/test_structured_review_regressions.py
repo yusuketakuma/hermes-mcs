@@ -1,6 +1,7 @@
+import clinical_display
+import extract_validation
 import pytest
 import extract
-import extract_llm
 import structured_view
 
 
@@ -10,7 +11,7 @@ import structured_view
     ('看護師が家に来てくださいました。', 'visit'),
 ])
 def test_event_synonyms_survive(body, event):
-    assert extract_llm._validate({'events': [event]}, body)['events'] == [event]
+    assert extract_validation.validate({'events': [event]}, body)['events'] == [event]
 
 
 @pytest.mark.parametrize(('body', 'event', 'forbidden'), [
@@ -18,7 +19,7 @@ def test_event_synonyms_survive(body, event):
     ('本日退院して自宅に戻りました。', 'discharge', '入院'),
 ])
 def test_rules_cannot_restore_excluded_event(body, event, forbidden):
-    llm = extract_llm._validate({'events': [event]}, body)
+    llm = extract_validation.validate({'events': [event]}, body)
     rules = extract.extract_message(body, '2026-09-28')
     assert forbidden not in '\n'.join(structured_view._head_lines(llm, rules))
 
@@ -28,9 +29,9 @@ def test_rules_cannot_restore_excluded_event(body, event, forbidden):
     ('午前の血圧120/80。現在の収縮期血圧は90、拡張期は測定不可。', {'sbp': 90}, '/80'),
 ])
 def test_readings_never_mix_subject_or_time(body, vitals, forbidden):
-    llm = extract_llm._validate({'vitals': vitals}, body)
+    llm = extract_validation.validate({'vitals': vitals}, body)
     rules = extract.extract_message(body, '2026-09-28')
-    assert forbidden not in structured_view._vital_line(llm, rules)
+    assert forbidden not in clinical_display.vital_line(llm, rules)
 
 
 @pytest.mark.parametrize(('vitals', 'expected'), [
@@ -39,5 +40,5 @@ def test_readings_never_mix_subject_or_time(body, vitals, forbidden):
     ({'sbp': 120, 'dbp': 70}, 'BP 120/70'),
 ])
 def test_half_extracted_bp_never_renders_none(vitals, expected):
-    line = structured_view._vital_line({'vitals': vitals}, {})
+    line = clinical_display.vital_line({'vitals': vitals}, {})
     assert expected in line and 'None' not in line

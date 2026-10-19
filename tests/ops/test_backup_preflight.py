@@ -38,7 +38,7 @@ def inspection(world, tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("readonly inspection attempted a write, key or external action")
 
-    for name in ("_keychain_read", "_keychain_store", "_openssl", "_record_lock",
+    for name in ("_keychain_read", "store_keychain", "_openssl", "_record_lock",
                  "_record_success", "atomic_write", "publish_tmp", "_copy_private"):
         monkeypatch.setattr(backup, name, forbidden)
     monkeypatch.setattr(backup.subprocess, "run", forbidden)
@@ -403,14 +403,14 @@ def test_budgeted_connection_is_immutable_query_only_memory_temp_and_no_lock_wai
 def test_bounded_inventory_matches_existing_validation_without_unbounded_reader(
         inspection, tmp_path, monkeypatch):
     snapshot, _, _, _ = inspection
-    expected = backup._inventory(snapshot)
+    expected = backup.inventory_snapshot(snapshot)
     before = _tree(tmp_path)
 
     def forbidden(*args, **kwargs):
         pytest.fail("bounded inspection used the unbudgeted validator connection")
 
     monkeypatch.setattr(backup, "valid_mcs_db", forbidden)
-    actual = backup._inventory(snapshot, max_steps=10_000_000)
+    actual = backup.inventory_snapshot(snapshot, max_steps=10_000_000)
     assert actual == expected
     assert _tree(tmp_path) == before
 

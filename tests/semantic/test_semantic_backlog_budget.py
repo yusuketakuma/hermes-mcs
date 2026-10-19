@@ -4,6 +4,9 @@ and leave a diagnosable run record (2026-10-09: run_lock_lost timeouts
 left jobs untouched and restarted the resident while nothing completed).
 
 Synthetic only: temp ledger, stub model, no services."""
+import semantic_policy
+import semantic_runtime
+import semantic_transport
 import os
 import time
 from contextlib import contextmanager
@@ -49,7 +52,7 @@ def test_only_the_backlog_lane_passes_the_long_reacquire_bound(
                 db.db.execute(
                     "UPDATE fetch_jobs SET payload=json_set(payload,'$.eligible',1) "
                     "WHERE kind='semantic'")
-        out = semantic.run_due(db, _cfg("shadow"), {"errors": []}, deadline,
+        out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []}, deadline,
                                jev_client=_FakeJev(), llm_fn=_llm,
                                lane=lane, max_jobs=1)
         assert out["done"] == 1
@@ -189,7 +192,7 @@ def test_run_record_names_silent_skips_and_the_preamble(tmp_path):
     try:
         # a deadline already inside the first-call floor: the semantic row
         # is skipped without a transition — now counted, not invisible
-        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                                time.monotonic() + 5, jev_client=_FakeJev(),
                                llm_fn=_llm, lane="backlog", max_jobs=1)
         assert out["done"] == 0 and out["floor_skipped"] == {"semantic": 1}
@@ -210,11 +213,11 @@ def test_llm_error_is_reported_only_for_passes_that_called_the_model(
             llm_fn("完全合成の呼出し")
         return "retry"
 
-    monkeypatch.setattr(semantic, "_process_job", process)
-    monkeypatch.setattr(semantic, "_LLM_FAILURE", "length_stop")   # left by an earlier job
+    monkeypatch.setattr(semantic_drain, '_process_job', process)
+    monkeypatch.setattr(semantic_transport, '_LLM_FAILURE', "length_stop")   # left by an earlier job
     db = _seeded(tmp_path)
     try:
-        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                                time.monotonic() + 300, jev_client=_FakeJev(),
                                llm_fn=lambda prompt: None, lane="backlog", max_jobs=1)
         assert [m["llm_error"] for m in out["job_metrics"]] == [expected]
@@ -228,18 +231,18 @@ def test_llm_error_is_reported_only_for_passes_that_called_the_model(
     (None, "transport"),
 ])
 def test_llm_chat_records_its_failure_code(monkeypatch, tmp_path, response, code):
-    monkeypatch.setattr(semantic, "llm_conf", lambda: ("http://127.0.0.1:8080/v1/chat/completions", "m"))
-    monkeypatch.setattr(semantic, "_probe_format", lambda *a, **k: "plain")
-    monkeypatch.setattr(semantic, "_LONG_PATH", str(tmp_path / "long.json"))
+    monkeypatch.setattr(semantic_transport, 'llm_conf', lambda: ("http://127.0.0.1:8080/v1/chat/completions", "m"))
+    monkeypatch.setattr(semantic_transport, '_probe_format', lambda *a, **k: "plain")
+    monkeypatch.setattr(semantic_transport, '_LONG_PATH', str(tmp_path / "long.json"))
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(local_llm, "chat", lambda *a, **k: response)
-    assert semantic.llm_chat("完全合成の本文", timeout=30) is None
-    assert semantic.last_llm_failure() == code
+    assert semantic_transport.llm_chat("完全合成の本文", timeout=30) is None
+    assert semantic_transport.last_llm_failure() == code
     monkeypatch.setattr(local_llm, "chat", lambda *a, **k: {
         "text": "{\"ok\":1}", "finish_reason": "stop", "status": 200})
     # a different prompt: the length mark above binds to the first one
-    assert semantic.llm_chat("完全合成の別の本文", timeout=30) == "{\"ok\":1}"
-    assert semantic.last_llm_failure() is None
+    assert semantic_transport.llm_chat("完全合成の別の本文", timeout=30) == "{\"ok\":1}"
+    assert semantic_transport.last_llm_failure() is None
 
 
 @pytest.mark.parametrize("status,code", [(503, "unavailable"), (500, "http_status")])
@@ -247,18 +250,18 @@ def test_a_loading_server_defers_without_an_attempt(monkeypatch, tmp_path, statu
     """2026-10-10 04:03: the daily llama-server restart answered 503
     (Loading model) and the pass was charged an attempt. A 503 did no
     work, like a refused connection; other HTTP errors stay failures."""
-    monkeypatch.setattr(semantic, "llm_conf", lambda: ("http://127.0.0.1:8080/v1/chat/completions", "m"))
-    monkeypatch.setattr(semantic, "_probe_format", lambda *a, **k: "plain")
-    monkeypatch.setattr(semantic, "_LONG_PATH", str(tmp_path / "long.json"))
+    monkeypatch.setattr(semantic_transport, 'llm_conf', lambda: ("http://127.0.0.1:8080/v1/chat/completions", "m"))
+    monkeypatch.setattr(semantic_transport, '_probe_format', lambda *a, **k: "plain")
+    monkeypatch.setattr(semantic_transport, '_LONG_PATH', str(tmp_path / "long.json"))
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(local_llm, "chat", lambda *a, **k: {
         "text": None, "finish_reason": None, "usage": None, "status": status})
     if status == 503:
-        with pytest.raises(semantic.runtime.LLMNotSent):
-            semantic.llm_chat("完全合成の本文", timeout=30)
+        with pytest.raises(semantic_runtime.LLMNotSent):
+            semantic_transport.llm_chat("完全合成の本文", timeout=30)
     else:
-        assert semantic.llm_chat("完全合成の本文", timeout=30) is None
-    assert semantic.last_llm_failure() == code
+        assert semantic_transport.llm_chat("完全合成の本文", timeout=30) is None
+    assert semantic_transport.last_llm_failure() == code
 
 
 @pytest.mark.parametrize("lane,lifted", [("backlog", True), ("realtime", False),
@@ -283,11 +286,11 @@ def test_only_the_backlog_lane_lifts_the_per_call_cap(tmp_path, monkeypatch, lan
                 db.db.execute(
                     "UPDATE fetch_jobs SET payload=json_set(payload,'$.eligible',1) "
                     "WHERE kind='semantic'")
-        semantic.run_due(db, _cfg("shadow", job_budget_seconds=900), {"errors": []},
+        semantic_drain.run_due(db, _cfg("shadow", job_budget_seconds=900), {"errors": []},
                          clock[0] + 930, jev_client=_FakeJev(), llm_fn=llm,
                          lane=lane, max_jobs=1)
         assert timeouts and timeouts[0] <= 900
-        assert (timeouts[0] > semantic.LLM_TIMEOUT) is lifted
+        assert (timeouts[0] > semantic_transport.LLM_TIMEOUT) is lifted
     finally:
         db.close()
 
@@ -318,7 +321,7 @@ def test_a_lifted_call_ending_past_the_job_deadline_is_not_saved(tmp_path, monke
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
     cfg = _cfg("shadow", job_budget_seconds=900)
     reserve = semantic_drain._backlog_commit_reserve(
-        semantic.semantic_config(cfg)[0])
+        semantic_policy.semantic_config(cfg)[0])
 
     def llm(prompt, timeout=None):
         clock[0] += timeout + reserve + 5 if late else 10
@@ -327,7 +330,7 @@ def test_a_lifted_call_ending_past_the_job_deadline_is_not_saved(tmp_path, monke
     db = _seeded(tmp_path)
     try:
         before = _result_rows(db)
-        out = semantic.run_due(db, cfg, {"errors": []}, clock[0] + 930,
+        out = semantic_drain.run_due(db, cfg, {"errors": []}, clock[0] + 930,
                                jev_client=_FakeJev(), llm_fn=llm,
                                lane="backlog", max_jobs=1)
         row = db.db.execute(
@@ -356,7 +359,7 @@ def test_a_lifted_call_whose_lock_is_not_retaken_keeps_its_attempt(tmp_path, mon
     db = _seeded(tmp_path)
     try:
         before = _result_rows(db)
-        out = semantic.run_due(db, _cfg("shadow", job_budget_seconds=900),
+        out = semantic_drain.run_due(db, _cfg("shadow", job_budget_seconds=900),
                                {"errors": []}, time.monotonic() + 930,
                                jev_client=_FakeJev(), llm_fn=_llm,
                                lane="backlog", max_jobs=1)
@@ -382,7 +385,7 @@ def test_run_record_names_why_a_pass_will_retry(tmp_path, llm, expected):
     never content); a pass that completed carries none."""
     db = _seeded(tmp_path)
     try:
-        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                                time.monotonic() + 300, jev_client=_FakeJev(),
                                llm_fn=llm, lane="backlog", max_jobs=1)
         metrics = out["job_metrics"][0]
@@ -411,9 +414,9 @@ def test_retry_reason_is_per_job_and_keeps_the_first_cause(tmp_path, monkeypatch
             semantic_drain._why(second)
         return status
 
-    monkeypatch.setattr(semantic, "_process_job", process)
+    monkeypatch.setattr(semantic_drain, '_process_job', process)
     try:
-        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                                time.monotonic() + 300, jev_client=_FakeJev(),
                                llm_fn=_llm, lane="backlog", max_jobs=2)
         assert [m["retry_reason"] for m in out["job_metrics"]] == ["first", None]

@@ -32,7 +32,7 @@ def test_signal_reuses_origin_thread_and_keeps_controls(led):
     # A later presentation update edits this reply, without creating a nested thread.
     specs = []
     with led.db:
-        notify_cards._issue_render(led.db, card["card_id"], CFG, NOW + 1, specs, force=True)
+        notify_cards.issue_render(led.db, card["card_id"], CFG, NOW + 1, specs, force=True)
     assert specs[0]["op"] == "update"
     assert specs[0]["delivery"]["message_id"] == "signal-reply"
     assert specs[0]["delivery"]["thread_id"] == "original-thread"
@@ -89,7 +89,7 @@ def test_changed_thread_denies_already_sealed_signal(led, op):
         assert _receipt(led, render, f"{8210:016x}", message_id="signal-reply", n=8211)["applied"]
         _settle_bodies(led, render)
         with led.db:
-            notify_cards._issue_render(led.db, card["card_id"], CFG, NOW + 1, [], force=True)
+            notify_cards.issue_render(led.db, card["card_id"], CFG, NOW + 1, [], force=True)
         render = _latest_render(led, card["card_id"])
         assert render["op"] == "update"
     with led.db:
@@ -146,7 +146,7 @@ def test_delivered_signal_revoke_uses_sealed_remote_binding_after_source_changes
         elif fault == "evidence_unknown":
             led.db.execute("UPDATE artifacts SET content='{}' WHERE kind='signal_v1'")
         notify_cards.revoke_card(led.db, card["card_id"], NOW + 1)
-        notify_cards._issue_render(led.db, card["card_id"], CFG, NOW + 1, specs, force=True)
+        notify_cards.issue_render(led.db, card["card_id"], CFG, NOW + 1, specs, force=True)
     assert specs[0]["op"] == "revoke"
     assert specs[0]["delivery"]["message_id"] == "signal-reply"
     assert specs[0]["delivery"]["thread_id"] == "original-thread"
@@ -170,7 +170,7 @@ def test_signal_revoke_keeps_sealed_identity_and_scope_gates(led, fault, error):
     specs = []
     with led.db:
         notify_cards.revoke_card(led.db, card["card_id"], NOW + 1)
-        notify_cards._issue_render(led.db, card["card_id"], CFG, NOW + 1, specs, force=True)
+        notify_cards.issue_render(led.db, card["card_id"], CFG, NOW + 1, specs, force=True)
     render = _latest_render(led, card["card_id"])
     request = {"version": 1, "op": "transport_begin", "command_id": _uuid(9400),
                "attempt_id": f"{9400:016x}", "worker_id": "bb" * 8,
@@ -209,7 +209,7 @@ def test_bound_signal_whose_thread_vanished_moves_to_the_channel(led):
         led.db.execute("UPDATE notification_cards SET thread_state='deleted' WHERE kind='thread'")
     late = NOW + notify_cards.SIGNAL_SOURCE_HOLD_MAX_S + 60
     with led.db:
-        notify_cards._issue_render(led.db, card["card_id"], CFG, late, [], force=True)
+        notify_cards.issue_render(led.db, card["card_id"], CFG, late, [], force=True)
     moved = _latest_render(led, card["card_id"])
     assert moved["delivery_id"] != render["delivery_id"]
     spec = json.loads(moved["spec_json"])

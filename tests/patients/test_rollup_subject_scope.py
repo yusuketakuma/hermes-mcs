@@ -1,4 +1,5 @@
 """旧抽出と混在原文の主体を完全合成データで集約時に検証する。"""
+import clinical_scope
 import json
 import re
 
@@ -142,8 +143,8 @@ def heading_scans(monkeypatch):
             getattr(getattr(extract, name, None), "cache_clear", lambda: None)()
 
     clear()
-    counter = _CountingPattern(extract._SCOPE_HEADING)
-    monkeypatch.setattr(extract, "_SCOPE_HEADING", counter)
+    counter = _CountingPattern(clinical_scope._SCOPE_HEADING)
+    monkeypatch.setattr(clinical_scope, '_SCOPE_HEADING', counter)
     yield counter
     clear()
 
@@ -152,7 +153,7 @@ def heading_scans(monkeypatch):
 def test_per_span_scope_output_is_pinned(provider_fields):
     ends = [m.start() for m in re.finditer(r"[。！？!?;；、,\n]|$", SCOPE_BODY) if m.start() > 0]
     for name, expected in ((None, "fffppppouuuu"), ("山田", "fffppppoppcc")):
-        got = "".join(extract.patient_source_scope(SCOPE_BODY, end - 1, end, patient_name=name,
+        got = "".join(clinical_scope.patient_source_scope(SCOPE_BODY, end - 1, end, patient_name=name,
                                                    provider_fields=provider_fields)[0] for end in ends)
         assert got == expected
     assert clinical_values.patient_item_scope({}, SCOPE_BODY) == "unknown"
@@ -160,10 +161,10 @@ def test_per_span_scope_output_is_pinned(provider_fields):
     assert clinical_values.patient_item_scope({}, "") == "unknown"
     # A break word straddling the span start and an owner before a trailing newline.
     body = "以前は便秘けれども発熱あり。"
-    assert extract.patient_source_scope(body, body.index("も"), body.index("も") + 3) == "patient"
+    assert clinical_scope.patient_source_scope(body, body.index("も"), body.index("も") + 3) == "patient"
     body = "山田さんの\n体温38.5℃。"
-    assert extract.patient_source_scope(body, 6, 10) == "unknown"
-    assert extract.patient_source_scope(body, 6, 10, patient_name="山田") == "patient"
+    assert clinical_scope.patient_source_scope(body, 6, 10) == "unknown"
+    assert clinical_scope.patient_source_scope(body, 6, 10, patient_name="山田") == "patient"
 
 
 def test_unlocated_item_scans_a_long_body_once(heading_scans):
@@ -175,9 +176,9 @@ def test_unlocated_item_scans_a_long_body_once(heading_scans):
 
 
 def test_scope_prefix_scans_stay_within_the_clause(heading_scans, monkeypatch):
-    owner, breaks = _WindowPattern(extract._DIRECT_OWNER), _WindowPattern(extract._SCOPE_BREAK)
-    monkeypatch.setattr(extract, "_DIRECT_OWNER", owner)
-    monkeypatch.setattr(extract, "_SCOPE_BREAK", breaks)
+    owner, breaks = _WindowPattern(clinical_scope._DIRECT_OWNER), _WindowPattern(clinical_scope._SCOPE_BREAK)
+    monkeypatch.setattr(clinical_scope, '_DIRECT_OWNER', owner)
+    monkeypatch.setattr(clinical_scope, '_SCOPE_BREAK', breaks)
     body = "体温36.5℃、咳あり。" * 200
     assert clinical_values.patient_item_scope({}, body) == "patient"
     assert owner.windows and breaks.windows
@@ -186,13 +187,13 @@ def test_scope_prefix_scans_stay_within_the_clause(heading_scans, monkeypatch):
 
 
 def test_unlocated_item_stops_at_first_non_patient_clause(monkeypatch):
-    original, calls = extract.patient_source_scope, []
+    original, calls = clinical_scope.patient_source_scope, []
 
     def counted(*args, **kwargs):
         calls.append(1)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(extract, "patient_source_scope", counted)
+    monkeypatch.setattr(clinical_scope, 'patient_source_scope', counted)
     assert clinical_values.patient_item_scope({}, "母の状態：\n" + "体温36.5℃。" * 50) == "unknown"
     assert calls == [1]
 
@@ -241,12 +242,12 @@ class _InPlacePattern:
 
 def test_person_tail_checks_read_the_body_in_place(heading_scans, monkeypatch):
     body = "息子さんに対し看護師が合成薬Aを処方。娘さんより報告あり、" * 100 + "血圧120/80"
-    reporting = _InPlacePattern(extract._REPORTING, body)
-    actor = _InPlacePattern(extract._CLINICAL_ACTOR, body)
-    monkeypatch.setattr(extract, "_REPORTING", reporting)
-    monkeypatch.setattr(extract, "_CLINICAL_ACTOR", actor)
+    reporting = _InPlacePattern(clinical_scope._REPORTING, body)
+    actor = _InPlacePattern(clinical_scope._CLINICAL_ACTOR, body)
+    monkeypatch.setattr(clinical_scope, '_REPORTING', reporting)
+    monkeypatch.setattr(clinical_scope, '_CLINICAL_ACTOR', actor)
     end = len(body)
-    extract.patient_source_scope(body, end - 10, end)
+    clinical_scope.patient_source_scope(body, end - 10, end)
     assert reporting.in_place and actor.in_place
     # was body[match.start() + len(person):] per person mention, O(persons * body)
     assert all(reporting.in_place + actor.in_place)

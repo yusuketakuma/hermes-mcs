@@ -1,10 +1,11 @@
 """Loop candidates are current only for their source and policy generation."""
+import semantic_policy
+import semantic_store
 import json
 import time
 
 import ledger
 import mcs_view
-import semantic
 import semantic_loops
 from semantic_testkit import _cfg, _FakeJev, _message, _pending_fact, _seeded
 
@@ -12,9 +13,9 @@ from semantic_testkit import _cfg, _FakeJev, _message, _pending_fact, _seeded
 def test_edited_reply_marks_resolution_event_stale(tmp_path):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic.thread_bundle(db, 1, 1, [2])
-        config, _ = semantic.semantic_config(_cfg())
-        db.artifact_add("semantic_policy", semantic.policy_fingerprint(config))
+        bundle = semantic_store.thread_bundle(db, 1, 1, [2])
+        config, _ = semantic_policy.semantic_config(_cfg())
+        db.artifact_add("semantic_policy", semantic_policy.policy_fingerprint(config))
         semantic_loops.update_loops(
             db, 1, bundle, {1: _pending_fact(bundle["members"][0])},
             _FakeJev(choice_map={"relation": "completion_report"}), config,
@@ -43,9 +44,9 @@ def test_edited_reply_marks_resolution_event_stale(tmp_path):
 def test_policy_revision_marks_loop_candidate_stale(tmp_path):
     db = _seeded(tmp_path)
     try:
-        config, _ = semantic.semantic_config(_cfg())
-        db.artifact_add("semantic_policy", semantic.policy_fingerprint(config))
-        bundle = semantic.thread_bundle(db, 1, 1, [1])
+        config, _ = semantic_policy.semantic_config(_cfg())
+        db.artifact_add("semantic_policy", semantic_policy.policy_fingerprint(config))
+        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
         semantic_loops.update_loops(
             db, 1, bundle, {1: _pending_fact(bundle["members"][0])},
             None, config, time.monotonic() + 30)
@@ -66,10 +67,10 @@ def test_policy_revision_marks_loop_candidate_stale(tmp_path):
 def test_same_source_and_policy_generation_reuses_candidate(tmp_path):
     db = _seeded(tmp_path)
     try:
-        config, _ = semantic.semantic_config(_cfg())
-        policy = semantic.policy_fingerprint(config)
+        config, _ = semantic_policy.semantic_config(_cfg())
+        policy = semantic_policy.policy_fingerprint(config)
         db.artifact_add("semantic_policy", policy)
-        bundle = semantic.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
         facts = {1: _pending_fact(bundle["members"][0])}
         semantic_loops.update_loops(
             db, 1, bundle, facts, None, config, time.monotonic() + 30)
@@ -87,17 +88,17 @@ def test_same_source_and_policy_generation_reuses_candidate(tmp_path):
 def test_new_reply_promotes_current_candidate_generation(tmp_path):
     db = _seeded(tmp_path)
     try:
-        config, _ = semantic.semantic_config(_cfg())
-        policy = semantic.policy_fingerprint(config)
+        config, _ = semantic_policy.semantic_config(_cfg())
+        policy = semantic_policy.policy_fingerprint(config)
         db.artifact_add("semantic_policy", policy)
-        initial = semantic.thread_bundle(db, 1, 1, [1])
+        initial = semantic_store.thread_bundle(db, 1, 1, [1])
         semantic_loops.update_loops(
             db, 1, initial, {1: _pending_fact(initial["members"][0])},
             None, config, time.monotonic() + 30)
         old = db.artifacts("loop_candidate", project_id=1)[0]
 
         db.save_messages([_message(3, parent=1, body="完了しました。")])
-        current = semantic.thread_bundle(db, 1, 1, [3])
+        current = semantic_store.thread_bundle(db, 1, 1, [3])
         fake = _FakeJev(choice_map={"relation": "completion_report"})
         semantic_loops.update_loops(
             db, 1, current, {}, fake, config, time.monotonic() + 30)

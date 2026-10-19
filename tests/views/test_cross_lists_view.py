@@ -106,7 +106,7 @@ def test_snapshot_read_and_scope_recheck(store, replay, tmp_path):
             reader.db.execute("DELETE FROM artifacts")
     finally:
         reader.close()
-    from mcs_adapter import _norm_message
+    from mcs_payload import normalize_message as _norm_message
     store.save_messages([_norm_message(message(), PID + 1)], project_id=PID + 1)
     view = get_cross_list(store.db, "mentioned", enabled=True, now=100)
     assert view["state"] == "unknown" and view["rows"] == []
@@ -116,7 +116,7 @@ def test_snapshot_read_and_scope_recheck(store, replay, tmp_path):
 @pytest.mark.parametrize("conflict", [None, "project", "parent"])
 def test_batched_identity_read_keeps_missing_and_conflicting_scope(store, replay, count, conflict):
     from copy import deepcopy
-    from mcs_adapter import _norm_message
+    from mcs_payload import normalize_message as _norm_message
     capture(store, replay)
     payload = json.loads(store.artifacts(ARTIFACT_KIND)[0]["content"])
     prototype = payload["rows"][0]

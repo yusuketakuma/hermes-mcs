@@ -6,7 +6,7 @@ import math
 import time
 
 from cross_lists import ARTIFACT_KIND, JSON, CapturedList, _options, validate_capture
-from mcs_adapter import SchemaError, _valid_id
+from mcs_contract import SchemaError, valid_id as _valid_id
 
 
 def _payload(content: str) -> CapturedList:

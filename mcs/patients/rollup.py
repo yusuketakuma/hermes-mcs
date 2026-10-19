@@ -272,8 +272,8 @@ def build_rollup(ledger, project_id: int, *, request_limit: int | None = 15) -> 
                 "fetched_at": ks.get("fetched_at")})
     out["patient_context"] = {"memo": context, "chat": {}}
     out["pharmacy_state"] = {"items": [], "total": 0, "truncated": False, "source": "chat"}
-    from read_model import _registered_data
-    registered = _registered_data(db, "aggregate", project_id, None)
+    from registered_data import registered_data
+    registered = registered_data(db, "aggregate", project_id, None)
     if registered is not None and registered["total"]:
         out["registered_data"] = registered
     if not msgs:
@@ -726,7 +726,7 @@ def _newest_source_ts(ledger, project_id: int) -> float:
 
 def _message_source_signature(db, project_id, now):
     """Rollup inputs and deletion heuristic, excluding mere message observation time."""
-    from read_model import _registered_data
+    from registered_data import registered_data
     patient = db.execute("SELECT patient_name,karte_id,project_type FROM patients WHERE project_id=?",
                          (project_id,)).fetchone()
     context = db.execute("SELECT artifact_id,kind,meta FROM artifacts WHERE project_id=? "
@@ -739,7 +739,7 @@ def _message_source_signature(db, project_id, now):
       FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
     """, (project_id,)).fetchall()
     payload = (tuple(patient) if patient else None, [tuple(a) for a in context],
-               _registered_data(db, "aggregate", project_id, None),
+               registered_data(db, "aggregate", project_id, None),
                [tuple(r[:-1]) for r in rows],
                _unrefreshed_ids([(r[0], r[-1]) for r in rows], now))
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()

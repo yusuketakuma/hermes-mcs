@@ -1,4 +1,6 @@
 """Source-only planning and current-bound private progress; synthetic inputs only."""
+import extract_schema
+import extract_validation
 import json
 from pathlib import Path
 
@@ -127,7 +129,7 @@ def test_progress_reads_only_bound_empty_checkpoints_and_final_binding(db, monke
 
 def test_planner_source_digest_and_schema_preserve_safety_fields():
     assert len(extract_llm._LOADED_SOURCE_DIGESTS["clinical_chunking"]) == 64
-    props = extract_llm._SCHEMA["schema"]["properties"]
+    props = extract_schema.SCHEMA["schema"]["properties"]
     assert props["meds"]["items"]["properties"]["negated"]["type"] == "boolean"
     assert set(props["patient_context"]["items"]["properties"]["category"]["enum"]) == CATEGORIES
     assert extract_llm.MAX_TOKENS == 1600 and extract_llm.TIMEOUT == 300
@@ -137,8 +139,8 @@ def test_diagnostic_scoped_revalidation():
     body = "\n".join(f"独居の完全合成詳細{i:02d}です。" + "合成補足" * 5 for i in range(12))
     piece = extract_llm.text_chunks(body, 160)[0]
     doc = {"patient_context": [{"category": "living", "text": piece, "evidence": piece, "subject": "patient"}]}
-    scoped = extract_llm._validate(doc, piece)
-    global_result = extract_llm._validate(scoped, body)
+    scoped = extract_validation.validate(doc, piece)
+    global_result = extract_validation.validate(scoped, body)
     assert global_result is not None, (len(piece), scoped)
 
 
@@ -207,7 +209,7 @@ def test_shared_predicate_and_family_intro_survive_as_reference_only():
     assert "母の過去の処方" in reference and "を中止" in reference
     doc = {"patient_context": [{"category": "medication_management", "subject": "family",
                                "text": "母の過去の処方", "evidence": source}]}
-    assert extract_llm._piece_validate(doc, parts[1], source, ctx=True) is None
+    assert extract_validation.validate_piece(doc, parts[1], source, ctx=True) is None
 
 
 def test_compact_hints_omit_empty_optional_keys_but_keep_false_semantics():

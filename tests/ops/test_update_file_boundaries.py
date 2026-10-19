@@ -41,14 +41,14 @@ def test_nonregular_control_files_are_unreadable(
 import json
 import mcs_update as updater
 setattr(updater, sys.argv[1], sys.argv[2])
-print(json.dumps(getattr(updater, sys.argv[3])()))
+print(json.dumps((updater.journal_store.load_state(updater.STATE_PATH) if sys.argv[3] == "load_state" else getattr(updater, sys.argv[3])())))
 """, setting, getattr(updater, setting), reader)
         assert json.loads(result.stdout) == refused
         assert os.path.lexists(path)
         return
     else:
         path.mkdir()
-    assert getattr(updater, reader)() == refused
+    assert (updater.journal_store.load_state(updater.STATE_PATH) if reader == "load_state" else getattr(updater, reader)()) == refused
     assert os.path.lexists(path)
 
 
@@ -57,18 +57,18 @@ def test_regular_control_files_keep_their_existing_shape(
         tmp_path, monkeypatch, setting, reader, valid, refused):
     path = reader_path(tmp_path, monkeypatch, setting)
     path.write_text(json.dumps(valid))
-    expected = {**updater._default_state(), **valid} if reader == "load_state" else (
+    expected = {**updater.journal_store.default_state(), **valid} if reader == "load_state" else (
         None if reader == "_awaiting_consent_marker" else valid)
-    assert getattr(updater, reader)() == expected
+    assert (updater.journal_store.load_state(updater.STATE_PATH) if reader == "load_state" else getattr(updater, reader)()) == expected
 
 
 def test_missing_state_remains_initial_state(tmp_path, monkeypatch):
     reader_path(tmp_path, monkeypatch, "STATE_PATH")
-    assert updater.load_state() == updater._default_state()
+    assert updater.journal_store.load_state(updater.STATE_PATH) == updater.journal_store.default_state()
 
 
 def test_old_journal_fields_are_retained_without_a_new_size_limit(tmp_path, monkeypatch):
     path = reader_path(tmp_path, monkeypatch, "STATE_PATH")
-    old = {**updater._default_state(), "legacy_extension": "x" * 1_048_577}
+    old = {**updater.journal_store.default_state(), "legacy_extension": "x" * 1_048_577}
     path.write_text(json.dumps(old))
-    assert updater.load_state() == old
+    assert updater.journal_store.load_state(updater.STATE_PATH) == old

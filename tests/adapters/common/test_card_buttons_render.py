@@ -255,16 +255,16 @@ def test_feedback_attrs():
 # ---------- 🚫 reason codes / 🔎 / list views ------------------------------
 
 def test_feedback_fields_match_the_runner_vocabulary():
-    import mcs_operations
+    import operation_contract
     assert tuple(v for v, _ in text.FEEDBACK_FIELDS) \
-        == mcs_operations.EXTRACT_FEEDBACK_FIELDS
+        == operation_contract.EXTRACT_FEEDBACK_FIELDS
     assert dict(text.FEEDBACK_FIELDS)["urgency"] == "緊急度"
 
 
 def test_dismiss_reasons_match_the_runner_vocabulary():
-    import mcs_operations
+    import operation_contract
     assert tuple(v for v, _ in text.DISMISS_REASONS) \
-        == mcs_operations.DISMISS_REASON_CODES
+        == operation_contract.DISMISS_REASON_CODES
     fields = text.modal_fields("dismiss")
     assert [f["id"] for f in fields] == ["reason_code", "note"]
     assert fields[0]["required"] and fields[0]["options"]

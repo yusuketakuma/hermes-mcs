@@ -1,8 +1,9 @@
 """Extract and read source-bound patient context without inferring current clinical state."""
+import clinical_scope
 import math
 import re
 
-from clinical_values import FAMILY_PERSON
+
 from mcs_util import locate_quote_span
 
 
@@ -143,7 +144,7 @@ _DRUG_ONLY_KEYS = frozenset({"storage_status", "storage_place", "medication_mana
                              "interaction_check"})
 _PATIENT_OWNERS = ("ご本人", "本人", "患者", "利用者")
 _DRUG_OWNER = re.compile(
-    rf"(?P<who>ご本人|本人|患者|利用者|{FAMILY_PERSON})"
+    rf"(?P<who>ご本人|本人|患者|利用者|{clinical_scope.FAMILY_PERSON})"
     r"(?:さん|様)?の(?:お)?(?:内服薬|処方薬|残薬|薬)")
 
 

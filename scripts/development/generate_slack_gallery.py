@@ -310,7 +310,7 @@ def urgent_notice():
     import _mcs_path  # noqa: F401
     import alert_view
     from ledger import Ledger
-    from mcs_adapter import Message
+    from mcs_contract import Message
     with tempfile.TemporaryDirectory(prefix="mcs-fictional-gallery-") as temporary:
         ledger = Ledger(str(Path(temporary) / "ledger.db"))
         try:

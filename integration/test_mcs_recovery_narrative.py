@@ -46,6 +46,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "mcs"))
 import _mcs_path  # noqa: E402,F401  registers mcs/* subdirs as roots
+import semantic_drain  # noqa: E402 - runtime bootstrap above
+import semantic_store  # noqa: E402 - runtime bootstrap above
+import semantic_transport  # noqa: E402 - runtime bootstrap above
 for _d in ("adapters/discord", "adapters/slack", "notify", "semantic", "ops", "core"):
     sys.path.insert(0, str(ROOT / "tests" / _d))
 sys.path.insert(0, str(ROOT))
@@ -61,7 +64,6 @@ import notify_cmds  # noqa: E402
 import notify_reconcile  # noqa: E402
 import notify_transport  # noqa: E402
 import read_model  # noqa: E402
-import semantic  # noqa: E402
 import semantic_facts as sf  # noqa: E402
 import semantic_v4 as v4  # noqa: E402
 
@@ -209,7 +211,7 @@ def _drain(db, jev, llm=None):
     # daily budget — the narrative's Jev is a fake, so scale the cap
     # to the corpus instead of truncating coverage mid-drain
     cfg["semantic"]["daily_request_budget"] = 100_000
-    return semantic.run_due(
+    return semantic_drain.run_due(
         db, cfg, {"errors": []},
         time.monotonic() + 300,
         jev_client=jev, llm_fn=llm or _narrative_llm())
@@ -380,7 +382,7 @@ def _run_narrative(tmp_path):
 
         # ---- 2. drain 1 — recoverable failure at the Jev boundary ----
         out1 = _drain(led, _PassJev(error=TimeoutError("synthetic")),
-                      llm=semantic.llm_chat)
+                      llm=semantic_transport.llm_chat)
         v4rows1 = led.db.execute(
             "SELECT COUNT(*) FROM artifacts WHERE kind=?",
             (v4.KIND_V4,)).fetchone()[0]
@@ -391,8 +393,8 @@ def _run_narrative(tmp_path):
         # ---- 3. drain 2 — primary -> audit FAIL -> bounded repair
         #         -> re-audit PASS -> v4 published (late reply too)
         _repend_semantic(led)
-        out2 = _drain(led, _RepairThenPassJev(), llm=semantic.llm_chat)
-        fp1 = semantic.thread_bundle(led, 1, 1)["source_fingerprint"]
+        out2 = _drain(led, _RepairThenPassJev(), llm=semantic_transport.llm_chat)
+        fp1 = semantic_store.thread_bundle(led, 1, 1)["source_fingerprint"]
         stages = {s["stage"]: s["status"]
                   for s in v4.stage_ledger(led, 1, fp1)}
         v4row = led.db.execute(
@@ -456,7 +458,7 @@ def _run_narrative(tmp_path):
         p2.messages = [_message(2, parent=1,
                                 body="メド[41]番の効果を確認しました。")]
         led.save_patient(p2, semantic=True)
-        out3 = _drain(led, _NarrativeJev(), llm=semantic.llm_chat)
+        out3 = _drain(led, _NarrativeJev(), llm=semantic_transport.llm_chat)
         v4r2 = led.db.execute(
             "SELECT 1 FROM artifacts WHERE kind=? AND message_id=2 "
             "LIMIT 1", (v4.KIND_V4,)).fetchone()

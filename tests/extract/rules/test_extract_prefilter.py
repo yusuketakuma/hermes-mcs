@@ -5,6 +5,7 @@ is settled with a durable meta.prefilter='no_signal' marker instead of
 an LLM call — recorded, out of pending, and re-evaluated on edit.
 Synthetic fixtures + temp DB only.
 """
+import extract_validation
 import json
 import time
 
@@ -233,7 +234,7 @@ def test_event_cue_bodies_never_low_signal(body):
 
 def test_every_event_cue_match_is_not_low_signal():
     # invariant: the prefilter is a superset of the validator's cues
-    for kind, cue in extract_llm._EVENT_CUES.items():
+    for kind, cue in extract_validation.EVENT_CUES.items():
         for token in cue.pattern.replace("(?:", "").replace(")", "") \
                 .split("|"):
             body = f"本日{token}の件"

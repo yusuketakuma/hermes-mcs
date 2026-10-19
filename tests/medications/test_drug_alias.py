@@ -7,6 +7,7 @@ import uuid
 import pytest
 
 import drug_alias
+import safe_io
 import drug_map
 import ledger
 import mcs_requests
@@ -110,7 +111,7 @@ def test_crash_journal_blocks_retry_and_allows_explicit_rollback(corpus):
     req = request(proposed)
     receipt = mcs_requests.apply_command(store, req)
     journal = config.parent / "data/drug-map/alias-switch.pending.json"
-    drug_alias._write_new(journal, mcs_requests.canonical(receipt))
+    safe_io.publish_new_bytes(journal, mcs_requests.canonical(receipt))
     fresh = drug_alias.proposal(store.db, json.loads(config.read_text()), "キラノーン", "fiction-i1")
     assert mcs_requests.apply_command(store, request(fresh))["error"] == "alias_recovery_required"
     assert mcs_requests.apply_command(store, rollback(req["command_id"]))["outcome"] == "applied"
@@ -159,7 +160,7 @@ def test_journal_publication_failure_is_retryable_or_rollbackable(corpus, monkey
     folder.mkdir(mode=0o700)
     # Finish the candidate file so the injected failure concerns only the journal.
     candidate = drug_alias._candidate_payload(cfg["drug_map"], proposed["alias"], proposed["target_entry"])
-    drug_alias._write_new(folder / ("alias-" + proposed["after_dict_sha"] + ".json"), candidate)
+    safe_io.publish_new_bytes(folder / ("alias-" + proposed["after_dict_sha"] + ".json"), candidate)
     journal = folder / "alias-switch.pending.json"
     fdopen, sync = os.fdopen, os.fsync
 
@@ -204,9 +205,9 @@ def test_journal_publication_failure_is_retryable_or_rollbackable(corpus, monkey
 
 def test_new_file_publication_never_overwrites_existing_destination(tmp_path):
     path = tmp_path / "synthetic.json"
-    drug_alias._write_new(path, b'{"original":true}')
+    safe_io.publish_new_bytes(path, b'{"original":true}')
     with pytest.raises(FileExistsError):
-        drug_alias._write_new(path, b'{"replacement":true}')
+        safe_io.publish_new_bytes(path, b'{"replacement":true}')
     assert path.read_bytes() == b'{"original":true}'
     assert not list(tmp_path.glob(".alias-*.tmp"))
 
@@ -225,6 +226,7 @@ from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import _mcs_path
 import drug_alias
+import safe_io
 original = os.fdopen
 class Interrupted:
     def __init__(self, stream): self.stream = stream
@@ -235,7 +237,7 @@ class Interrupted:
         self.stream.flush()
         os._exit(73)
 os.fdopen = lambda fd, mode: Interrupted(original(fd, mode))
-drug_alias._write_new(Path(sys.argv[2]), b'{"approval_id":"synthetic"}')
+safe_io.publish_new_bytes(Path(sys.argv[2]), b'{"approval_id":"synthetic"}')
 '''
     result = subprocess.run([sys.executable, "-B", "-c", code,
         str(Path(drug_alias.__file__).parents[1]), str(journal)],

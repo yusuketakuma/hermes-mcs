@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "収集・読取・保存の内部責務を整理",
+  "summary": "収集データの検証、患者情報の読取、状態監視、snapshot公開の実装を責務ごとにまとめました。収集範囲、表示内容、通知の承認条件と既定値は維持します。",
+  "upgrade": "本変更は開発候補です。この作業では版の公開や本番適用は行いません。DB schemaの変更はありません。",
+  "details": [
+    "MCSの値・例外と応答の正規化を通信クライアントから分離し、登録情報の読取が収集処理をimportする依存を解消。",
+    "読取は呼出元が検証した同一snapshot connectionを借用し、scope・全体件数・表示limitの意味を保持。",
+    "snapshot公開処理が一時接続・検証用子プロセス・一時ファイルの寿命を所有し、ledgerのschemaとwriterは元の所有先に保持。",
+    "health集計は借用connectionのみを受け取り、収集統括が失敗時のincident記録を所有。"
+  ],
+  "refs": [
+    "mcs/core/mcs_contract.py",
+    "mcs/core/snapshots.py",
+    "mcs/ingest/health_report.py",
+    "mcs/views/registered_data.py"
+  ]
+}

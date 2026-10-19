@@ -224,7 +224,7 @@ def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatc
     assert (root / "slack_state").is_dir()
     assert render["guild_id"] is None
     assert render["team_id"] == SCOPE["team_id"]
-    assert cards._card_content(led.db, _card(led), cfg=SLACK)["containers"] == spec["parts"]["containers"]
+    assert cards.card_content(led.db, _card(led), cfg=SLACK)["containers"] == spec["parts"]["containers"]
     path.unlink()
     assert cards.recover(led, SLACK, {})["republished"] == 1
     assert path.read_bytes() == raw

@@ -13,6 +13,7 @@ HTTP consumes, verified separately in D5.
 """
 from __future__ import annotations
 
+import notify_scope
 import asyncio
 import json
 import sys
@@ -415,12 +416,12 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
     with led.db:
         for (cid,) in led.db.execute(
                 "SELECT card_id FROM notification_cards").fetchall():
-            content = notify_cards._card_content(
-                led.db, notify_cards._card_row(led.db, cid), cfg=CFG)
+            content = notify_cards.card_content(
+                led.db, notify_scope.card_row(led.db, cid), cfg=CFG)
             led.db.execute(
                 "UPDATE notification_cards SET source_fp=?,content_fp=?"
                 " WHERE card_id=?",
-                (content["source_fp"], notify_cards._content_fp(content),
+                (content["source_fp"], notify_cards.content_fingerprint(content),
                  cid))
 
     res = {}

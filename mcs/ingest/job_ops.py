@@ -26,7 +26,8 @@ import time
 from dataclasses import dataclass
 from contextlib import suppress
 
-from mcs_adapter import MCSError, SessionExpired, thread_page_budget
+from mcs_contract import MCSError, SessionExpired
+from mcs_adapter import thread_page_budget
 from ledger import TERMINAL_BODY_STATES
 from mcs_util import HOME, loads_dict
 import mcs_requests

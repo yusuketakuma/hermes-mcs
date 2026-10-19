@@ -2,7 +2,7 @@
 
 Shared formatter for the extract_v1/extract_llm artifacts — used by the
 text notify_flush (_fmt_row's 📋 要約 section) and the interactive card
-renderer (notify_render._structured_block). Keeping one implementation
+renderer (notify_render.structured_block). Keeping one implementation
 means the suppression rules (negated/resolved symptoms, other-person
 meds, unverified-medication labelling) and the freshness gate can never
 diverge between surfaces.
@@ -25,6 +25,7 @@ Merge contract (v1 rules ∪ llm ∪ v4 canonical facts), per field:
   canonical facts — appended last as the highest-authority layer.
 """
 from __future__ import annotations
+import clinical_scope
 
 import hashlib
 from itertools import islice
@@ -35,6 +36,7 @@ from drug_map import KIND as REF_KIND, candidate_note, current_refs, generation_
 from mcs_queries import (FACT_KINDS_SQL, current_extract_pred, current_fact_pred,
                          json_or_null, med_is_patient_current, item_unverified)
 from mcs_util import loads_dict
+from clinical_display import item_scope, scoped_vitals, vital_line
 from semantic_render import _LINE_ATTRS
 
 
@@ -201,26 +203,6 @@ def _source_context(db, mid):
     return _source_context_row(row)
 
 
-def _item_scope(item, context, surface=None):
-    from clinical_values import patient_item_scope
-    body, name, default = context
-    if body is None:
-        return default  # retained parsed-only callers have no original body
-    return patient_item_scope(item, body, patient_name=name, surface=surface, default=default)
-
-
-def _scoped_vitals(values, context):
-    from extract import patient_vitals
-    body, name, default = context
-    if body is None:
-        return values
-    values = patient_vitals(values, body, patient_name=name)
-    if default != "patient":
-        values = {key: value for key, value in values.items()
-                  if _item_scope({}, context, str(value)) == "patient"}
-    return values
-
-
 def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> list[str]:
     """Structured lines for verified facts that no legacy slot can
     carry. Interpretation qualifiers precede the shortened statement."""
@@ -240,7 +222,7 @@ def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> l
                 or not fid.strip() or fid in seen:
             continue
         seen.add(fid)
-        scope = _item_scope({"evidence": f.get("evidence_quote")}, context, statement)
+        scope = item_scope({"evidence": f.get("evidence_quote")}, context, statement)
         if scope in ("family", "other", "unknown"):
             f = {**f, "subject": _SUBJECT_JP[scope]}
         attrs = [f"{name}:{f[key]}" for key, name in
@@ -277,7 +259,7 @@ def _typed_urgency_reasons(document, reasons, context):
             continue
         span = locate_quote_span(body, quote)
         inner = locate_quote_span(body[span[0]:span[1]], text) if span is not None else None
-        if span is None or inner is None or _item_scope(item, context, text) != "patient":
+        if span is None or inner is None or item_scope(item, context, text) != "patient":
             continue
         for reason in reasons:
             reason_span = locate_quote_span(body, reason)
@@ -300,8 +282,7 @@ def message_urgency(db, mid: int) -> str | None:
 
 def message_urgency_details(db, mid: int) -> dict:
     """Report guarded urgency separately from the model's raw verdict and preserve review holds."""
-    from extract import (clinical_urgency_quote, patient_clinical_quotes, patient_rule_urgency_quotes,
-                         patient_urgency_quotes, urgent_request_quote)
+    from extract import clinical_urgency_quote, patient_clinical_quotes, patient_rule_urgency_quotes, urgent_request_quote
 
     document = latest_fact_artifact(db, mid) or {}
     verdict = document.get("urgency")
@@ -332,7 +313,7 @@ def message_urgency_details(db, mid: int) -> dict:
         return result
     if verdict == "high":
         quotes = document.get("urgency_evidence")
-        reasons, scopes = patient_urgency_quotes(
+        reasons, scopes = clinical_scope.patient_urgency_quotes(
             body, quotes if isinstance(quotes, list) else [], patient_name=row["patient_name"], default=default)
         clinical = [quote for quote in reasons if clinical_urgency_quote(quote)]
         clinical += [quote for quote in _typed_urgency_reasons(document, reasons, (body, row["patient_name"], default))
@@ -348,7 +329,7 @@ def message_urgency_details(db, mid: int) -> dict:
     # the lexical net exactly like a missing verdict does.
     if rule.get("urgency") == "high":
         reasons = patient_rule_urgency_quotes(body)
-        scoped, _ = patient_urgency_quotes(body, reasons, patient_name=row["patient_name"], default=default)
+        scoped, _ = clinical_scope.patient_urgency_quotes(body, reasons, patient_name=row["patient_name"], default=default)
         clinical = [quote for quote in scoped if clinical_urgency_quote(quote)]
         if not clinical and any(urgent_request_quote(quote) for quote in scoped):
             clinical = patient_clinical_quotes(body, patient_name=row["patient_name"])
@@ -438,31 +419,6 @@ def _head_ranked(llm: dict | None, v1: dict, urgency: str | None = None,
     return lines
 
 
-def _vital_line(llm: dict | None, v1: dict, body=None, *, patient_name=None, default="patient"):
-    selected = llm is not None
-    llm = llm or {}
-    lv = llm.get("vitals") if isinstance(llm.get("vitals"), dict) else {}
-    vv = v1.get("vitals") if isinstance(v1.get("vitals"), dict) else {}
-    # A missing LLM key may be an intentional subject/time exclusion.
-    # Keep a reading intact; never construct a BP pair across sources.
-    vit = lv if selected else vv
-    vit = _scoped_vitals(vit, (body, patient_name, default))
-    if not vit:
-        return None
-    parts = []
-    if vit.get("sbp") is not None or vit.get("dbp") is not None:
-        # a half-extracted pair renders its known side only — never
-        # the literal "None" in a clinical line
-        sbp, dbp = vit.get("sbp"), vit.get("dbp")
-        parts.append(f"BP {'?' if sbp is None else sbp}"
-                     f"/{'?' if dbp is None else dbp}")
-    for k, lab in (("bt", "BT"), ("hr", "HR"), ("rr", "RR"),
-                   ("spo2", "SpO2"), ("bs", "BS")):
-        if vit.get(k) is not None:
-            parts.append(f"{lab} {vit[k]}")
-    return "バイタル: " + "  ".join(parts) if parts else None
-
-
 def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default="patient",
                multiline: bool = False) -> list[str]:
     """Reported lab values (v4) — name+value+unit plus the body's own
@@ -482,7 +438,7 @@ def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default
                    and locate_quote_span(body, evidence) is not None)
         contextual = (lb.get("subject") in ("family", "other")
                       or lb.get("status") == "planned" or bool(lb.get("condition")))
-        scope = _item_scope(lb, (body, patient_name, default), lb["name"])
+        scope = item_scope(lb, (body, patient_name, default), lb["name"])
         contextual = contextual or scope not in ("patient", "past")
         normalized = lab_candidate(
             lb["name"], lb["value"],
@@ -532,7 +488,7 @@ def _symptom_line(llm: dict, v1: dict, *, context=(None, None, "patient")):
         if s.get("subject") in ("family", "other") \
                 or item_unverified(s):
             continue
-        if _item_scope(s, context, s["text"]) != "patient":
+        if item_scope(s, context, s["text"]) != "patient":
             continue
         if s.get("negated") or s.get("status") in ("resolved", "past"):
             if s["text"] not in neg_seen:
@@ -556,7 +512,7 @@ def _symptom_line(llm: dict, v1: dict, *, context=(None, None, "patient")):
     for s in rule_symptoms:
         if not isinstance(s, str):
             continue
-        if _item_scope({}, context, s) != "patient":
+        if item_scope({}, context, s) != "patient":
             continue
         if any(x["text"] in s or s in x["text"] for x in llm_symptoms):
             continue  # Typed polarity/subject must not reappear through rules.
@@ -590,7 +546,7 @@ def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"
         # patient's own medication (planned survives — shown as [予定])
         if not med_is_patient_current(m):
             continue
-        scope = _item_scope(m, context, str(m["name"]))
+        scope = item_scope(m, context, str(m["name"]))
         if scope != "patient" and not (scope == "planned" and m.get("status") == "planned"):
             continue
         d = str(m["name"]) + (f" {m['dose']}" if m.get("dose") else "")
@@ -618,13 +574,13 @@ def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"
              ref_of(True, i, m))
             for i, m in enumerate(_items(v1, "medications"))
             if isinstance(m, dict) and m.get("name")
-            and _item_scope(m, context, str(m["name"])) == "patient")
+            and item_scope(m, context, str(m["name"])) == "patient")
         unverified.extend(
             (f"{RX_LABEL[a['action']]}:{a['ctx']}", None)
             for a in _items(v1, "rx_actions")
             if isinstance(a, dict) and _label(RX_LABEL, a.get("action"))
             and isinstance(a.get("ctx"), str) and a["ctx"]
-            and _item_scope({}, context, a["ctx"]) == "patient")
+            and item_scope({}, context, a["ctx"]) == "patient")
     return meds, unverified
 
 
@@ -799,14 +755,14 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     # Public source-less views cannot prove a measurement. Direct helpers and
     # nullable-body legacy rows retain their parsed-only compatibility.
     vital_context = ("", patient_name, default) if db is None else context
-    if (line := _vital_line(selected, v1, vital_context[0], patient_name=patient_name, default=default)) is not None:
+    if (line := vital_line(selected, v1, vital_context[0], patient_name=patient_name, default=default)) is not None:
         lines.append(line)
     vital_flags = llm.get("vital_flags") or ext.get("vital_flags") or []
     flags = [_VFLAG_LABEL.get(f["key"], f["key"]) + f" {f['value']:g}"
              for f in (vital_flags if isinstance(vital_flags, list) else [])
              if isinstance(f, dict) and _label(_VFLAG_LABEL, f.get("key"))
              and type(f.get("value")) in (int, float)
-             and _scoped_vitals({f["key"]: f["value"]}, vital_context).get(f["key"]) == f["value"]]
+             and scoped_vitals({f["key"]: f["value"]}, vital_context).get(f["key"]) == f["value"]]
     if flags and body:
         lines.append("閾値超過の測定値: " + "、".join(flags))
     if _items(llm, "labs"):
@@ -820,7 +776,7 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
         lines.extend(_pharmacy_detail_lines(db, mid))
     lines.extend(_request_lines(llm, v1, multiline=plain))
     for mp in _items(v1, "med_periods"):
-        if isinstance(mp, dict) and mp.get("start") and _item_scope(mp, context, mp.get("raw")) == "patient":
+        if isinstance(mp, dict) and mp.get("start") and item_scope(mp, context, mp.get("raw")) == "patient":
             lines.append(f"服薬期間: {mp['start']}〜{mp.get('end') or '?'}")
             break
     if v1.get("next_planned"):

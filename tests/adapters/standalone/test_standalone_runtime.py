@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_plugin import _validate_context
+from adapters.common.access import validate_context
 from hermes_plugin.card_workers import _interactive_settings, _slack_adapter_settings
 from mcs_standalone import __main__ as cli
 from mcs_standalone import config
@@ -59,7 +59,7 @@ def test_mcs_command_context_is_accepted_by_the_plugin():
                                   application_id=2000000000000000002,
                                   channel=SimpleNamespace(parent_id=None),
                                   channel_id=1000000000000000001, guild_id=3000000000000000003)
-    identity, error = _validate_context(_native_context(interaction, settings, slash=True))
+    identity, error = validate_context(_native_context(interaction, settings, slash=True))
     assert error is None and identity["user_id"] == "4000000000000000004"
     interaction.user.bot = True
     assert _native_context(interaction, settings, slash=True) is None

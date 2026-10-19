@@ -6,6 +6,7 @@ reservation, mid-run config recheck) apply verbatim — the job never
 mutates the extraction artifact and never suppresses an item.
 """
 from __future__ import annotations
+import semantic_jev
 
 import json
 import time
@@ -174,7 +175,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
     a claimed row must never be left re-claimable after its result
     landed. Returns 'done'|'deferred'|'retry'|'stale'|'failed'."""
     import extract_llm
-    from semantic_drain import _eval_chunked
+
     if jev_client is None or scfg.get("extract_qc") != "annotate":
         return "deferred"
     token = runtime.JobToken.from_row(job)
@@ -241,7 +242,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
     req0 = jev_client.requests_made
     client = runtime.bind_jev(jev_client, guard, reserve_fn)
     try:
-        out = (_eval_chunked(client, state, questions, deadline,
+        out = (semantic_jev.evaluate_chunked(client, state, questions, deadline,
                              scfg["max_questions_per_request"])
                if questions else {"answers": {}})
     except jev.JevError as error:

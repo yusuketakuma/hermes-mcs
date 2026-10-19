@@ -1,4 +1,5 @@
 """An out-of-range stored timestamp is unavailable, not a broken stats request."""
+import snapshot_access
 import sqlite3
 import json
 from datetime import datetime
@@ -8,7 +9,6 @@ import pytest
 import mcs_stats
 from views_testkit import SCHEMA, SNAP_TS, _msg
 import mcs_refstats
-import read_model
 
 
 def test_unrepresentable_stored_timestamp_marks_workload_unavailable():
@@ -47,7 +47,7 @@ def test_future_supported_calendar_time_and_finite_publication_contract_are_pres
     db.execute("INSERT INTO snapshot_meta VALUES(1,'synthetic',?)", (1e300,))
     future = datetime(2030, 1, 1, tzinfo=mcs_stats.JST).timestamp()
     try:
-        assert read_model._snapshot_meta(db)["published"] is True
+        assert snapshot_access.snapshot_meta(db)["published"] is True
         for stat, expected in (("rx_expiry", "ok"), ("open_loop_aging", "partial")):
             assert mcs_stats.run_stats(db, future, {"stat": stat})["stats"][stat]["status"] == expected
     finally:

@@ -9,7 +9,7 @@ import pytest
 from extract_testkit import _hash, _message
 from ledger import Ledger, publish_snapshot
 from mcs_view import View
-from project_metadata import ARTIFACT_KIND, normalize_rows
+from project_metadata_contract import ARTIFACT_KIND, normalize_rows
 import project_metadata_view as metadata
 from semantic_projection import PROJECTION_VERSION
 

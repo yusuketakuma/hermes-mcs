@@ -8,7 +8,7 @@ import os
 import re
 import time
 
-from hermes_plugin import projects
+from adapters.common import projects
 from adapters.common import confirm, envelopes, paths, registry
 from adapters.common.text import (ERR_JA, MODAL_ACTIONS, RECEIPT_TEXT, MODAL_TITLES, SEARCH_EMPTY,
                                  VIEW_FORMS, digest_inputs,

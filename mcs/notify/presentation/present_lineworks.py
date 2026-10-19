@@ -47,13 +47,13 @@ CAPTION = "preview"            # attachment caption: post preview text
 def face(containers, footer, op, cfg):
     """No silent mentions on LINE WORKS: configured names go in now; an
     update is a new post, so it is marked 🔄 更新版."""
-    import notify_cards
     import notify_render
-    names = (notify_cards.notify_cfg(cfg).get("lineworks") or {}).get("user_names")
+    notify = (cfg or {}).get("notify")
+    names = ((notify if isinstance(notify, dict) else {}).get("lineworks") or {}).get("user_names")
     footer = [dict(f, text=notify_render.lineworks_member_names(f["text"], names))
               if f.get("type") == "text" else f for f in footer]
     if op == "update":
-        containers = notify_cards._mark_reposted(containers)
+        containers = mark_reposted(containers)
     return containers, footer
 
 
@@ -81,3 +81,16 @@ def owner_label(owner: str, member_names) -> str:
 
 POST_ACTIONS = False          # one text bubble: no per-post controls
 ACCENT_URGENT = False
+
+
+def mark_reposted(containers) -> list:
+    """③ gains 🔄 更新版 — on the change line if there is one, else as
+    its own line right under the heading/context lines."""
+    out = [dict(c) for c in containers]
+    for c in out:
+        if c.get("type") == "text" and c["text"].startswith("🆕"):
+            c["text"] += " · 🔄 更新版"
+            return out
+    at = next((i for i, c in enumerate(out) if c.get("rule")), len(out))
+    out.insert(at, {"type": "text", "text": "🔄 更新版"})
+    return out

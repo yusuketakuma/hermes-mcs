@@ -20,6 +20,7 @@ Honesty rules carried from the spec:
   frozen at detection so it can never disagree with its own row.
 """
 from __future__ import annotations
+import clinical_scope
 
 import hashlib
 from itertools import islice
@@ -40,7 +41,7 @@ from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S,
                          transition_cooccurrences)
 from structured_view import message_urgency
 from clinical_values import patient_item_scope
-from extract import patient_source_scope
+
 from mcs_util import loads_dict
 # self identity lives in core/self_identity; re-exported for callers
 from self_identity import (  # noqa: F401
@@ -520,7 +521,7 @@ def _patient_transition(db, pid, mid):
     if source is None:
         return False
     matches = list(re.finditer(r"退院|転院|退所", source[0] or ""))
-    return any(patient_source_scope(source[0], m.start(), m.end(), patient_name=source[1]) == "patient"
+    return any(clinical_scope.patient_source_scope(source[0], m.start(), m.end(), patient_name=source[1]) == "patient"
                for m in matches) if matches else patient_item_scope({}, source[0], patient_name=source[1]) == "patient"
 
 
@@ -722,14 +723,14 @@ def _adherence_phrases(text, *, patient_name=None):
     hits = []
     for pat in ADHERENCE_TERMINAL:
         for match in re.finditer(re.escape(pat), text):
-            if patient_source_scope(text, match.start(), match.end(), patient_name=patient_name) == "patient":
+            if clinical_scope.patient_source_scope(text, match.start(), match.end(), patient_name=patient_name) == "patient":
                 hits.append(pat)
                 break
     for pat in ADHERENCE_PATTERNS:
         i = text.find(pat)
         while i >= 0:
             tail = text[i + len(pat): i + len(pat) + 10]
-            if not _NEGATE_RE.match(tail) and patient_source_scope(
+            if not _NEGATE_RE.match(tail) and clinical_scope.patient_source_scope(
                     text, i, i + len(pat), patient_name=patient_name) == "patient":
                 hits.append(pat)
                 break
@@ -944,7 +945,7 @@ def _insert(db, key, sig):
          json.dumps({"key": key, "type": sig["type"]}), time.time()))
 
 
-def _signal_content(content_s, stored_pid):
+def signal_content(content_s, stored_pid):
     """Validate a stored lifecycle row before reading or extending it."""
     try:
         content = json.loads(content_s)
@@ -978,7 +979,7 @@ def _latest_signal_states(db):
         key = meta.get("key") if isinstance(meta, dict) else None
         if isinstance(key, str) and key:
             latest[key] = (content_s, pid)
-    return {key: _signal_content(*row) for key, row in latest.items()}
+    return {key: signal_content(*row) for key, row in latest.items()}
 
 
 def signal_message_ids(sig):
@@ -1379,7 +1380,7 @@ def open_signal_rows(db, keys):
                  AND CASE WHEN json_valid(meta) THEN
                      json_extract(meta,'$.key')=? ELSE 0 END
                ORDER BY artifact_id DESC LIMIT 1""", (k,)).fetchone()
-        s = _signal_content(row["content"], row["project_id"]) if row else None
+        s = signal_content(row["content"], row["project_id"]) if row else None
         if isinstance(s, dict) and s.get("state") == "open":
             out.append((k, s))
     return out
@@ -1588,7 +1589,7 @@ def dismiss_reason_counts(db, project_id=None, *, since=None, until=None,
     'dismissed' transition counts once; rows from before reason codes
     existed count as 'unclassified'. Read-only; no actor or free text.
     A dismissal is a label, not proof the signal was wrong."""
-    from mcs_operations import DISMISS_REASON_CODES
+    from operation_contract import DISMISS_REASON_CODES
     out: dict = {}
     known_types = {name for name, _ in DETECTORS}
     where, params = (" AND project_id=?", (ARTIFACT_KIND, project_id)) if project_id is not None else (

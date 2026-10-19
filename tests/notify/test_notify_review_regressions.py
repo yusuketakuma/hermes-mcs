@@ -16,7 +16,7 @@ def test_changed_extraction_refreshes_display_and_source(led):
     _settle_bodies(led, render)
     before = _card(led)
     _extract(led, 100, {"summary": "合成の訂正済み要約"}, kind="extract_llm")
-    assert notify_render._source_fp(led.db, before) != before["source_fp"]
+    assert notify_render.source_fingerprint(led.db, before) != before["source_fp"]
     notify_cards.sweep(led, CFG, now=NOW+1)
     after = _card(led)
     assert after["presentation_generation"] > before["presentation_generation"]

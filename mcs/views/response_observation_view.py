@@ -11,7 +11,7 @@ from mcs_requests import canonical, payload_hash, positive, valid_hash
 from message_metadata import (
     REACTION_LABELS, _timestamp, get_message_metadata, mentions_self,
 )
-from read_model import _snapshot_meta, _table_exists
+from snapshot_access import snapshot_meta, table_exists
 
 SCHEMA = "mcs-response-observation-list/1"
 
@@ -90,7 +90,7 @@ def get_response_observation_list(
                                  or any(not positive(pid) for pid in projects)):
         raise ValueError("bad_project_scope")
     scope = None if projects is None else sorted(set(projects))
-    meta = _snapshot_meta(db)
+    meta = snapshot_meta(db)
     as_of = _timestamp(meta["generated_at"])
     if not meta["published"] or not meta["generation_id"] or as_of is None:
         return _result("unavailable", "published_snapshot_required")
@@ -127,7 +127,7 @@ def get_response_observation_list(
     if self_id is None:
         result.update(state="unknown", reason="self_identity_unknown")
         return result
-    if not _table_exists(db, "message_revisions"):
+    if not table_exists(db, "message_revisions"):
         result.update(state="unknown", reason="source_history_unknown")
         return result
     sql = (

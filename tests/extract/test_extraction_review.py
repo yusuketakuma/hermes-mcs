@@ -1,4 +1,6 @@
 """Synthetic regressions for extraction review: state, leases and recovery."""
+import extract_schema
+import extract_validation
 import json
 import time
 
@@ -8,7 +10,7 @@ import extract
 import extract_bench
 import extract_llm
 from ledger import Ledger
-from mcs_adapter import Message
+from mcs_contract import Message
 import rollup
 
 
@@ -62,14 +64,14 @@ def test_family_symptom_does_not_become_patient_state(db):
 
 
 def test_schema_allows_subject_and_raw_relative_deadline():
-    props = extract_llm._SCHEMA["schema"]["properties"]
+    props = extract_schema.SCHEMA["schema"]["properties"]
     assert "subject" in props["symptoms"]["items"]["properties"]
     assert "due_text" in props["requests"]["items"]["properties"]
 
 
 @pytest.mark.parametrize("schema", [
-    extract_llm._SCHEMA["schema"],
-    extract_llm._SCHEMA_BATCH["schema"]["properties"]["items"]["items"],
+    extract_schema.SCHEMA["schema"],
+    extract_schema.SCHEMA_BATCH["schema"]["properties"]["items"]["items"],
 ])
 def test_generation_contract_keeps_symptoms_and_request_metadata(schema):
     assert "symptoms" in schema.get("required", [])
@@ -84,7 +86,7 @@ def test_generation_contract_keeps_symptoms_and_request_metadata(schema):
 
 def test_explicit_unknown_request_metadata_does_not_invent_roles_or_kind():
     body = "次回までに確認をお願いします。"
-    out = extract_llm._validate({
+    out = extract_validation.validate({
         "symptoms": [], "requests": [{"to": None, "from": None,
             "kind": None, "action": "確認", "evidence": body}],
         "summary": body, "urgency": "routine"}, body)
@@ -96,10 +98,10 @@ def test_negative_symptom_and_legacy_sparse_output_remain_valid():
     body = "発熱はありません。"
     old = {"symptoms": [{"text": "発熱", "negated": True, "evidence": body}],
            "summary": body, "urgency": "routine"}
-    out = extract_llm._validate(old, body)
+    out = extract_validation.validate(old, body)
     assert out["symptoms"][0]["negated"] is True
     assert "requests" not in out
-    assert extract_llm._validate({"summary": body, "urgency": "routine"}, body)
+    assert extract_validation.validate({"summary": body, "urgency": "routine"}, body)
 
 
 def test_claimed_head_does_not_starve_other_pending_messages(db, monkeypatch):
@@ -234,7 +236,7 @@ def test_chunk_checkpoint_requires_same_interpretation_context(db):
 def test_chunk_merge_preserves_restart_and_separate_subjects():
     def med(action, dose):
         return {"name": "合成薬", "subject": "patient", "action": action, "dose": dose}
-    merged = extract_llm._merge([
+    merged = extract_validation.merge([
         {"meds": [med("start", "1mg")],
          "symptoms": [{"text": "合成症状", "subject": "patient"}]},
         {"meds": [med("stop", None)]},

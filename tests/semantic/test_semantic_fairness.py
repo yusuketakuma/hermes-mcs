@@ -50,7 +50,7 @@ def _due(db, **kw):
     args.update(kw)
     # a generous Jev budget keeps these tests on scheduling/metrics —
     # the daily cap has its own dedicated tests elsewhere
-    return semantic.run_due(db, _cfg("shadow", budget=100000),
+    return semantic_drain.run_due(db, _cfg("shadow", budget=100000),
                             {"errors": []}, time.monotonic() + 300,
                             **args)
 
@@ -252,7 +252,7 @@ def test_sched_persist_failure_never_breaks_drain(tmp_path, monkeypatch):
     monkeypatch.setattr(semantic_drain, "_sched_write",
                         lambda *a, **k: 1 / 0)
     errors = {"errors": []}
-    out = semantic.run_due(db, _cfg("shadow"), errors,
+    out = semantic_drain.run_due(db, _cfg("shadow"), errors,
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm, max_jobs=1)
     assert out["done"] == 1
@@ -330,7 +330,7 @@ def test_short_window_skips_semantic_but_serves_qc(tmp_path):
     db = _world(tmp_path, [10])
     _job(db, 10)
     _v2_artifact(db, 10, _hash(db, 10))   # source row for _qc_seed
-    out = semantic.run_due(db, _cfg("shadow", extract_qc="annotate"),
+    out = semantic_drain.run_due(db, _cfg("shadow", extract_qc="annotate"),
                            {"errors": []}, time.monotonic() + 20,
                            jev_client=_FakeJev(choice="routine"),
                            llm_fn=_llm)
@@ -390,7 +390,7 @@ def test_single_job_unbound_lane_records_qc_cohort(tmp_path):
     cfg = _cfg("shadow", budget=100000, extract_qc="annotate")
     try:
         _v2_artifact(db, 10, _hash(db, 10))
-        out = semantic.run_due(db, cfg, {"errors": []}, time.monotonic() + 60,
+        out = semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 60,
                                jev_client=_FakeJev(), llm_fn=_llm, max_jobs=1)
         assert out["done_by_kind"].get("extract_qc") == 1
         assert out["job_metrics"][0]["cohort"] == "qc"
@@ -435,7 +435,7 @@ def test_config_changes_and_reverts_within_a_pass_do_not_mix_rates(tmp_path, mon
     cfg_path.write_text(json.dumps(cfg))
     for mid in (10, 11, 12):
         _job(db, mid, eligible=True)
-    original = semantic._process_job
+    original = semantic_drain._process_job
     completed = 0
 
     def change_after_completion(*args, **kwargs):
@@ -446,7 +446,7 @@ def test_config_changes_and_reverts_within_a_pass_do_not_mix_rates(tmp_path, mon
         cfg_path.write_text(json.dumps(_cfg("shadow", budget=99999 if completed == 1 else 100000)))
         return status
 
-    monkeypatch.setattr(semantic, "_process_job", change_after_completion)
+    monkeypatch.setattr(semantic_drain, '_process_job', change_after_completion)
     try:
         out = _due(db, cfg_path=str(cfg_path), max_jobs=3)
         assert out["done"] == completed == 3

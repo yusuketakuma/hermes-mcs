@@ -1,6 +1,7 @@
 """Slack thread cards carry each post's stamps and folded original on the card face;
 attachments stay in the thread, old thread chunks are rewritten on update, and an
 oversized post falls back to the thread (synthetic fixtures only)."""
+import notify_parts
 import json
 
 import pytest
@@ -66,14 +67,14 @@ def test_update_rewrites_old_thread_chunks_and_moves_body_to_face(led, monkeypat
     monkeypatch.setattr(present_slack, "BODY_ON_FACE", True)
     with led.db:
         led.db.execute("UPDATE messages SET body_text='更新後の合成本文',content_hash=? WHERE message_id=100", ("b" * 64,))
-        notify_cards._issue_render(led.db, 1, SLACK, NOW + 1, [], force=True)
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 1, [], force=True)
     spec = _spec(led)
     validate(spec)
     assert spec["parts"]["slack"]["face_posts"][0]["original"] == "更新後の合成本文"
     cleanup = [p for p in spec["parts"]["manifest"] if p.get("edit_only")]
     assert cleanup and {p["prior_remote_id"] for p in cleanup} == {"r-" + p for p in old}
     assert all(spec["parts"]["thread_body_parts"][int(p["part_id"].split(":")[1]) - 1]
-               == notify_cards._THREAD_BODY_COLLECTED for p in cleanup)
+               == notify_parts._THREAD_BODY_COLLECTED for p in cleanup)
 
 
 def test_oversized_post_falls_back_to_the_thread(led, monkeypatch):

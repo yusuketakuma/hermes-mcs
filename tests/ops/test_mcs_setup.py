@@ -1,4 +1,8 @@
 """mcs_setup.validate_config — the typesafe required-condition gate."""
+import lifecycle_io
+import setup_wizard
+import mcs_config
+import scheduled_jobs
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,7 +35,7 @@ def test_standalone_scope_is_required_for_text_and_card_delivery():
              "allowed_user_ids": ["U1234567890"], "project_ids": [101]}
     cfg = {**base, "notify": {"interactive": "off", "slack": scope}}
     assert not mcs_setup.validate_config(cfg)[0]
-    assert mcs_setup._validate_standalone_scope({**cfg, "notify": {"interactive": []}})
+    assert mcs_config.validate_standalone_scope({**cfg, "notify": {"interactive": []}})
     for key, value in (("allowed_user_ids", []), ("project_ids", []), ("project_ids_auto", 1)):
         bad = {**cfg, "notify": {"slack": {**scope, key: value}}}
         assert any(key in error for error in mcs_setup.validate_config(bad)[0])
@@ -102,7 +106,7 @@ def test_unbounded_numeric_config_is_rejected(value):
 
 @pytest.mark.parametrize("value", ["inf", "nan", "1e999"])
 def test_numeric_wizard_rejects_nonfinite_without_crashing(value):
-    assert mcs_setup._parse_answer("num", value)[0] is False
+    assert setup_wizard.parse_answer("num", value)[0] is False
 
 
 def test_plugin_csv_list_escapes_literal_values():
@@ -185,7 +189,7 @@ def test_health_block_validates_types_and_ranges():
 def test_env_write_merges_and_preserves(tmp_path):
     p = tmp_path / ".env"
     p.write_text("KEEP=1\nSAMPLE_TOKEN=old\n", encoding="utf-8")
-    mcs_setup._env_write(str(p), {"SAMPLE_TOKEN": "new",
+    lifecycle_io.write_env(str(p), {"SAMPLE_TOKEN": "new",
                                  "TYPESAFE_API_KEY": "k2"})
     text = p.read_text(encoding="utf-8")
     assert "KEEP=1" in text
@@ -489,7 +493,7 @@ def test_keychain_store_sends_password_via_stdin_not_argv(monkeypatch, service):
         return R()
 
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
-    assert mcs_setup._keychain_store("mcs", "s3cret pw", service=service) is True
+    assert lifecycle_io.store_keychain("mcs", "s3cret pw", service=service) is True
     assert not any("s3cret pw" in a for argv, _ in calls for a in argv)
     write = next(call for call in calls if call[0] == ["security", "-i"])
     assert "s3cret pw" in write[1]["input"]
@@ -514,7 +518,7 @@ def test_keychain_store_readback_mismatch_preserves_previous_entry(monkeypatch):
         return R()
 
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
-    assert mcs_setup._keychain_store("mcs", "s3cret pw") is False
+    assert lifecycle_io.store_keychain("mcs", "s3cret pw") is False
     assert not any("delete-generic-password" in argv for argv, _ in calls)
     assert calls[-1][0] == ["security", "-i"]
     assert '"different"' in calls[-1][1]["input"]
@@ -541,7 +545,7 @@ def test_keychain_store_verifies_adapter_read_path(monkeypatch):
         return R()
 
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
-    assert mcs_setup._keychain_store("mcs", "s3cret pw") is False
+    assert lifecycle_io.store_keychain("mcs", "s3cret pw") is False
     assert not any("delete-generic-password" in argv for argv in calls)
     assert any(a[:2] == ["security", "find-generic-password"]
                and "-w" in a and "-a" not in a for a in calls)
@@ -551,7 +555,7 @@ def test_keychain_store_verifies_adapter_read_path(monkeypatch):
 def test_env_credentials_roundtrip_exactly(tmp_path, secret):
     from mcs_util import env_value
     path = tmp_path / ".env"
-    mcs_setup._env_write(str(path), {"SYNTHETIC_CREDENTIAL": secret})
+    lifecycle_io.write_env(str(path), {"SYNTHETIC_CREDENTIAL": secret})
     assert env_value("SYNTHETIC_CREDENTIAL", paths=[path], check_env=False) == secret
 
 
@@ -560,11 +564,11 @@ def test_control_characters_never_reach_credential_writers(tmp_path, monkeypatch
     path = tmp_path / ".env"
     path.write_text("KEEP=synthetic\n")
     with pytest.raises(ValueError, match="invalid_env_update"):
-        mcs_setup._env_write(str(path), {"SYNTHETIC_CREDENTIAL": secret})
+        lifecycle_io.write_env(str(path), {"SYNTHETIC_CREDENTIAL": secret})
     assert path.read_text() == "KEEP=synthetic\n"
     monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k:
                         pytest.fail("credential command must not run"))
-    assert mcs_setup._keychain_store("synthetic", secret) is False
+    assert lifecycle_io.store_keychain("synthetic", secret) is False
 
 
 def test_init_heals_nondict_semantic(monkeypatch, tmp_path):
@@ -593,7 +597,7 @@ def test_init_secrets_from_env_not_argv(monkeypatch, tmp_path):
     monkeypatch.setenv("MCS_SETUP_PASSWORD", "env-pw")
     monkeypatch.setenv("TYPESAFE_API_KEY", "env-key")
     stored = []
-    monkeypatch.setattr(mcs_setup, "_keychain_store",
+    monkeypatch.setattr(lifecycle_io, "store_keychain",
                         lambda acct, pw: stored.append(pw) or True)
     monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: 0)
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(tmp_path / "c.json"))
@@ -977,7 +981,7 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
     calls = []
     loaded = set(loaded)
     entries = list(cron_entries or [])
-    sched_by_script = {s: sched for _, sched, s in mcs_setup.CRON_JOBS}
+    sched_by_script = {s: sched for _, sched, s in scheduled_jobs.CRON_JOBS}
     for i, name in enumerate(cron_names):
         entries.append({"id": f"9{i:05d}", "name": name,
                         "schedule": sched_by_script.get(name,
@@ -1073,13 +1077,13 @@ def test_services_skips_loaded_agents_and_existing_cron(
         monkeypatch, tmp_path, loaded=loaded,
         cron_entries=[{"id": f"{i:06d}", "name": n, "schedule": s,
                        "script": sc}
-                      for i, (n, s, sc) in enumerate(mcs_setup.CRON_JOBS)])
+                      for i, (n, s, sc) in enumerate(scheduled_jobs.CRON_JOBS)])
     # pre-render identical plists so 'loaded + unchanged' is exercised
     subs = {"PYTHON": mcs_setup.HERMES_PY, "REPO": mcs_setup.REPO_ROOT,
             "DATA": str(tmp_path / "data")}
     (tmp_path / "agents").mkdir(parents=True)
     for label in mcs_setup.AGENT_LABELS:
-        body = mcs_setup._render_template(
+        body = scheduled_jobs.render_template(
             (Path(mcs_setup.REPO_ROOT) / "deployment/launchagents"
              / f"{label}.plist").read_text(), subs)
         (tmp_path / "agents" / f"{label}.plist").write_text(body)
@@ -1166,9 +1170,9 @@ def test_services_rerun_keeps_one_cron_per_script(monkeypatch, tmp_path):
     assert mcs_setup.cmd_services(args) == 0
     entries = mcs_setup._cron_list("/x/hermes")
     scripts = [e["script"] for e in entries]
-    assert sorted(scripts) == sorted(s for _, _, s in mcs_setup.CRON_JOBS)
+    assert sorted(scripts) == sorted(s for _, _, s in scheduled_jobs.CRON_JOBS)
     # the second run found every job and created nothing
-    assert len(_cron_creates(calls)) == len(mcs_setup.CRON_JOBS)
+    assert len(_cron_creates(calls)) == len(scheduled_jobs.CRON_JOBS)
 
 
 def _seed_manifest(tmp_path):
@@ -1225,7 +1229,7 @@ def test_services_noop_create_is_a_problem_not_a_manifest_entry(
 
 def _desired_cron_entries():
     return [{"id": f"{i:06d}", "name": n, "schedule": s, "script": sc}
-            for i, (n, s, sc) in enumerate(mcs_setup.CRON_JOBS)]
+            for i, (n, s, sc) in enumerate(scheduled_jobs.CRON_JOBS)]
 
 
 def _stale_owned_cron():
@@ -1274,7 +1278,7 @@ def test_services_removed_undesired_cron_leaves_manifest(
     kept = json.loads(path.read_text())
     scripts = [c.get("script") for c in kept["cron"]]
     assert stale["script"] not in scripts
-    assert scripts == [s for _, _, s in mcs_setup.CRON_JOBS]
+    assert scripts == [s for _, _, s in scheduled_jobs.CRON_JOBS]
 
 
 def test_services_noop_remove_keeps_created_job_owned(
@@ -1323,8 +1327,8 @@ def test_services_noop_remove_keeps_created_job_owned(
     hold["remove"] = False
     calls.clear()
     monkeypatch.setattr(
-        mcs_setup, "CRON_JOBS",
-        [job for job in mcs_setup.CRON_JOBS
+        scheduled_jobs, "CRON_JOBS",
+        [job for job in scheduled_jobs.CRON_JOBS
          if job[2] != created["script"]])
     assert mcs_setup.cmd_services(args) == 0
     assert ["/x/hermes", "cron", "remove", new_id] in calls
@@ -1376,8 +1380,8 @@ def test_services_failed_run_keeps_created_job_owned(
     fail["on"] = False
     calls.clear()
     monkeypatch.setattr(
-        mcs_setup, "CRON_JOBS",
-        [job for job in mcs_setup.CRON_JOBS if job[2] != created["script"]])
+        scheduled_jobs, "CRON_JOBS",
+        [job for job in scheduled_jobs.CRON_JOBS if job[2] != created["script"]])
     assert mcs_setup.cmd_services(args) == 0
     assert ["/x/hermes", "cron", "remove", new_id] in calls
     assert all(e["script"] != created["script"]
@@ -1391,7 +1395,7 @@ def test_services_unparseable_script_identity_is_a_problem(
     """A job whose name matches but whose Script field is missing is
     unverifiable: no duplicate create, no 'exists' manifest record."""
     entries = [{"id": f"{i:06d}", "name": n, "schedule": s, "script": sc}
-               for i, (n, s, sc) in enumerate(mcs_setup.CRON_JOBS)]
+               for i, (n, s, sc) in enumerate(scheduled_jobs.CRON_JOBS)]
     del entries[0]["script"]
     calls, args = _services_env(monkeypatch, tmp_path,
                                 cron_entries=entries)
@@ -1407,7 +1411,7 @@ def test_services_post_verify_tolerates_undecodable_schedule(
     whose displayed schedule does not parse is not drift, so a create
     elsewhere still converges and the manifest is written."""
     entries = [{"id": f"{i:06d}", "name": n, "schedule": s, "script": sc}
-               for i, (n, s, sc) in enumerate(mcs_setup.CRON_JOBS)]
+               for i, (n, s, sc) in enumerate(scheduled_jobs.CRON_JOBS)]
     entries[0]["schedule"] = "every 5m"
     del entries[-1]                                  # forces one create
     calls, args = _services_env(monkeypatch, tmp_path,
@@ -1423,7 +1427,7 @@ def test_services_installs_gateway_when_interactive(
     calls, args = _services_env(
         monkeypatch, tmp_path,
         loaded=set(mcs_setup.AGENT_LABELS),
-        cron_names={s for _, _, s in mcs_setup.CRON_JOBS})
+        cron_names={s for _, _, s in scheduled_jobs.CRON_JOBS})
     monkeypatch.setattr(
         mcs_setup, "load_config",
         lambda path=None: mcs_util.load_config(path) if path else
@@ -1441,7 +1445,7 @@ def test_services_gateway_supervised_is_noop(monkeypatch, tmp_path):
     calls, args = _services_env(
         monkeypatch, tmp_path,
         loaded=set(mcs_setup.AGENT_LABELS),
-        cron_names={s for _, _, s in mcs_setup.CRON_JOBS})
+        cron_names={s for _, _, s in scheduled_jobs.CRON_JOBS})
     monkeypatch.setattr(
         mcs_setup, "load_config",
         lambda path=None: mcs_util.load_config(path) if path else
@@ -1464,7 +1468,7 @@ def test_services_gateway_skipped_when_off(monkeypatch, tmp_path):
     calls, args = _services_env(
         monkeypatch, tmp_path,
         loaded=set(mcs_setup.AGENT_LABELS),
-        cron_names={s for _, _, s in mcs_setup.CRON_JOBS})
+        cron_names={s for _, _, s in scheduled_jobs.CRON_JOBS})
     calls.clear()
     assert mcs_setup.cmd_services(args) == 0
     assert not any("gateway" in a for a in calls)
@@ -1780,7 +1784,7 @@ def test_env_merge_failure_preserves_existing_credentials(tmp_path, monkeypatch)
 
     monkeypatch.setattr(mcs_setup.os, "replace", fail_replace)
     with pytest.raises(OSError, match="synthetic publication failure"):
-        mcs_setup._env_write(str(path), {"SAMPLE_TOKEN": "synthetic-new"})
+        lifecycle_io.write_env(str(path), {"SAMPLE_TOKEN": "synthetic-new"})
     assert path.read_bytes() == original
     assert sorted(p.name for p in tmp_path.iterdir()) == [".env"]
 
@@ -2323,8 +2327,8 @@ def test_fact_source_refuses_when_the_semantic_validator_crashes(monkeypatch, tm
 @pytest.mark.parametrize("transport", ["slack", "discord", "lineworks"])
 def test_check_warns_on_a_static_project_scope_over_the_runner_cap(transport):
     import notify_cmds
-    assert mcs_setup.PROJECT_SCOPE_MAX == notify_cmds.SCOPE_MAX
-    ids = list(range(1, mcs_setup.PROJECT_SCOPE_MAX + 2))
+    assert mcs_config.PROJECT_SCOPE_MAX == notify_cmds.SCOPE_MAX
+    ids = list(range(1, mcs_config.PROJECT_SCOPE_MAX + 2))
     cfg = {"notify": {transport: {"project_ids": ids}}}
     warnings = [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
     assert len(warnings) == 1 and f"notify.{transport}.project_ids" in warnings[0]
@@ -2376,21 +2380,21 @@ def test_wizard_keeps_explicit_null_project_ids(monkeypatch):
     # must keep it instead of looping on the required-item prompt.
     answers = iter([""] * 3)
     monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
-    cur = mcs_setup._get_key(
+    cur = setup_wizard.get_key(
         {"semantic": {"project_ids": None}}, "semantic.project_ids")
-    assert mcs_setup._ask("semantic.project_ids", "reqintlist", None, "d",
+    assert setup_wizard.ask("semantic.project_ids", "reqintlist", None, "d",
                           cur, True) is None
     cfg = {"semantic": {"mode": "shadow", "project_ids": None}}
-    assert mcs_setup._has_key(cfg, "semantic.project_ids")
-    assert not mcs_setup._has_key(cfg, "semantic.extract_qc")
-    mcs_setup._set_key(cfg, "semantic.project_ids", None)
+    assert setup_wizard.has_key(cfg, "semantic.project_ids")
+    assert not setup_wizard.has_key(cfg, "semantic.extract_qc")
+    setup_wizard.set_key(cfg, "semantic.project_ids", None)
     assert "project_ids" in cfg["semantic"]
 
 
 def test_wizard_missing_project_ids_still_required(monkeypatch):
     answers = iter(["", "3"])
     monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
-    assert mcs_setup._ask("semantic.project_ids", "reqintlist", None, "d",
+    assert setup_wizard.ask("semantic.project_ids", "reqintlist", None, "d",
                           None, False) == [3]
 
 

@@ -1,5 +1,6 @@
 """公開snapshotから世代と取得範囲を示す薬剤言及履歴を読む。"""
 from __future__ import annotations
+import semantic_transport
 
 
 import drug_map
@@ -59,11 +60,10 @@ def mentions(reader, mid, *, cfg=None):
     from semantic_v4 import reproject_doc
     from semantic_store import thread_bundle
     from semantic_policy import semantic_config, policy_fingerprint
-    import semantic
     message = db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone()
     scfg, errors = semantic_config(cfg or {})
     bundle = thread_bundle(reader, message["project_id"], message["parent_id"] or mid,
-                           local_model=semantic.llm_model(cfg or {}))
+                           local_model=semantic_transport.llm_model(cfg or {}))
     if errors or bundle is None or bundle["source_fingerprint"] != meta.get("fingerprint") or policy_fingerprint(scfg) != meta.get("policy_fingerprint"):
         return None
     doc, error = reproject_doc(reader, mid, meta)
@@ -171,7 +171,7 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
         related = active.related_names(name)
         if related["status"] == "resolved" and related["official_identity"]:
             query_codes = set(related["identities"])
-    from mcs_view import UNKNOWN_TIME
+    from mcs_queries import UNKNOWN_TIME
     page = view._page(sql, params, [f"COALESCE(m.posted_at_ts,{UNKNOWN_TIME})", "m.message_id"],
                       ["drug_timeline", project_id, name, since, until], limit, cursor)
     items = []

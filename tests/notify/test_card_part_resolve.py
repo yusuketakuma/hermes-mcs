@@ -191,7 +191,7 @@ def test_settlement_rejection_rolls_back_partial_changes_and_consumes_command(le
         db.execute("UPDATE notification_render_parts SET state='delivered'")
         return {"applied": False, "error": "part_conflict"}
 
-    monkeypatch.setattr(transport, "apply_part_receipt", reject)
+    monkeypatch.setattr(transport, "settle_part_receipt", reject)
     monkeypatch.setattr(mcs_util, "load_config", lambda path: CFG)
     command_dir = Path(cards.data_root(led)) / "cmd"
     command_dir.mkdir()
@@ -217,7 +217,7 @@ def test_settlement_storage_failure_still_propagates_and_rolls_back(led, monkeyp
         db.execute("UPDATE notification_render_parts SET state='delivered'")
         raise sqlite3.OperationalError("synthetic storage failure")
 
-    monkeypatch.setattr(transport, "apply_part_receipt", fail)
+    monkeypatch.setattr(transport, "settle_part_receipt", fail)
     with pytest.raises(sqlite3.OperationalError, match="synthetic storage failure"):
         transport.apply_card_part_resolve(led, req, CFG, NOW + 1)
     assert [tuple(row) for row in led.db.execute("SELECT * FROM notification_render_parts")] == before

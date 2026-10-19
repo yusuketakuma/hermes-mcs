@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
+import semantic_store
 
 from semantic_evaluation import EvaluationError, _dict, _id, load_jsonl
 from mcs_util import canonical, payload_hash
@@ -125,7 +126,6 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
     thread context.  It does not get the extractor's 連携サマリー block:
     the semantic methods it is compared with never see it either.
     """
-    import semantic
     from summary_review import _validate_candidate, _validate_baseline
     bundle = _dict(bundle, "bundle")
     members = bundle.get("members")
@@ -148,7 +148,7 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
         ids.add(mid)
     if root not in ids or target_id not in ids:
         raise EvaluationError("bundle_scope_invalid")
-    fingerprint = semantic.bundle_fingerprint(members)
+    fingerprint = semantic_store.bundle_fingerprint(members)
     if bundle.get("source_fingerprint") != fingerprint:
         raise EvaluationError("bundle_fingerprint_invalid")
     targets = [m for m in members if m["message_id"] == target_id]

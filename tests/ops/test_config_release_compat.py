@@ -1,4 +1,7 @@
 """Configuration input failures preserve settings and avoid credential writes."""
+import mcs_runtime
+import lifecycle_io
+import setup_wizard
 import json
 import sys
 import pytest
@@ -17,7 +20,7 @@ def test_init_rejects_json_depth_before_any_secret_or_config_write(tmp_path, mon
     def forbidden(*args, **kwargs):
         raise AssertionError('configuration parse must precede credential writes')
 
-    monkeypatch.setattr(mcs_setup, '_keychain_store', forbidden)
+    monkeypatch.setattr(lifecycle_io, 'store_keychain', forbidden)
     monkeypatch.setenv('MCS_SETUP_PASSWORD', 'SYNTHETIC_SECRET_CANARY')
     raw = '[' * 5000 + '0' + ']' * 5000
     decode = json.loads
@@ -48,7 +51,7 @@ def test_invalid_initial_settings_do_not_rewrite_config_or_credentials(
     path.write_text(json.dumps(cfg))
     before = path.read_bytes()
     seen = []
-    monkeypatch.setattr(mcs_setup, '_keychain_store', lambda *a, **k: seen.append(1) or True)
+    monkeypatch.setattr(lifecycle_io, 'store_keychain', lambda *a, **k: seen.append(1) or True)
     monkeypatch.setenv('MCS_SETUP_PASSWORD', 'SYNTHETIC_SECRET_CANARY')
     monkeypatch.setattr(mcs_setup.sys, 'argv', ['mcs_setup', 'init', '--yes', '--set', setting])
     assert mcs_setup.main() == 1
@@ -60,7 +63,7 @@ def test_invalid_initial_settings_do_not_rewrite_config_or_credentials(
 def test_null_required_channel_still_requires_an_explicit_value(monkeypatch, capsys):
     replies = iter(['', 'C1234567890'])
     monkeypatch.setattr('builtins.input', lambda *a: next(replies))
-    assert mcs_setup._ask('notify.slack.channel_id', 'req', None,
+    assert setup_wizard.ask('notify.slack.channel_id', 'req', None,
                          'fictional channel', None, True) == 'C1234567890'
     assert '必須項目です' in capsys.readouterr().out
 
@@ -68,14 +71,14 @@ def test_null_required_channel_still_requires_an_explicit_value(monkeypatch, cap
 @pytest.mark.parametrize('transport,channel', [('slack', 'C1234567890'), ('discord', '1234567890')])
 def test_fresh_channel_default_reuses_the_operators_notification_target(monkeypatch, transport, channel):
     key = f'notify.{transport}.channel_id'
-    monkeypatch.setattr(mcs_setup, 'WIZARD', [('synthetic', [(key, 'req', None, 'channel', None)])])
+    monkeypatch.setattr(setup_wizard, 'WIZARD', [('synthetic', [(key, 'req', None, 'channel', None)])])
     replies = iter(['', '', 'いいえ'] * 2)
     monkeypatch.setattr('builtins.input', lambda *a: next(replies))
     cfg = {'notify_target': transport + ':' + channel}
-    mcs_setup._wizard(cfg)
+    setup_wizard.wizard(cfg, home=mcs_setup.HOME)
     assert cfg['notify'][transport]['channel_id'] == channel
     cfg['notify'][transport]['channel_id'] = 'keep-existing'
-    mcs_setup._wizard(cfg)
+    setup_wizard.wizard(cfg, home=mcs_setup.HOME)
     assert cfg['notify'][transport]['channel_id'] == 'keep-existing'
 
 
@@ -89,7 +92,7 @@ def test_secondary_system_transport_is_selected_before_its_scope_prompts(monkeyp
                'notify.discord.application_id': '1234567891', 'notify.discord.guild_id': '1234567892',
                'notify.discord.allowed_user_ids': '1234567893', 'notify.discord.project_ids': '101'}
     seen = []
-    kinds = {key: kind for _, items in mcs_setup.WIZARD
+    kinds = {key: kind for _, items in setup_wizard.WIZARD
              for key, kind, *_ in items}
     kinds['setup_detail'] = 'choice:recommended,detailed'
     kinds['drug_map.bundled'] = 'bool'
@@ -104,7 +107,7 @@ def test_secondary_system_transport_is_selected_before_its_scope_prompts(monkeyp
         return answers.get(key, '')
 
     monkeypatch.setattr('builtins.input', answer)
-    mcs_setup._wizard(cfg)
+    setup_wizard.wizard(cfg, home=mcs_setup.HOME)
     assert seen.index('notify_system_target') < seen.index('notify.slack.profile')
     assert cfg['notify']['slack']['channel_id'] == 'C1234567890'
     assert cfg['notify']['discord']['channel_id'] == '1234567890'
@@ -118,7 +121,8 @@ def test_legacy_updater_can_import_setup_but_cannot_run_commands(monkeypatch, ca
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setattr(sys, 'version_info', (3, minor, 0))
     spec.loader.exec_module(module)
-    assert callable(module._runtime_problem)
+    errors, warnings = module.validate_config({})
+    assert isinstance(errors, list) and isinstance(warnings, list)
     assert module.main(['services']) == 1
     assert 'Python 3.14以上が必要です' in capsys.readouterr().err
 
@@ -140,7 +144,7 @@ def test_migration_preflight_preserves_sqlite_and_metadata_gates(
     errors = mcs_setup.runtime_gate_errors({}, allow_runtime_migration=allowed)
     assert bool(errors) is blocked
     if tuple(map(int, python.split('.'))) < (3, 14):
-        assert mcs_setup._runtime_problem(facts, recovery=True, allow_runtime_migration=True)
+        assert mcs_runtime.runtime_problem(facts, recovery=True, allow_runtime_migration=True)
     monkeypatch.setattr(mcs_setup, '_runtime_probe', lambda exe: None)
     assert mcs_setup.runtime_gate_errors({}, allow_runtime_migration=True) == [
         'selected_runtime: 実行環境の情報を取得できません']

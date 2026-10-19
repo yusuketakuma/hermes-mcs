@@ -2,12 +2,12 @@
 reply merges keep the unread flag, post-ack-gap walks notify read
 arrivals, and replies acknowledged by thread-read before storage keep
 unread evidence on their reply job. Synthetic stubs only — no real MCS."""
+import mcs_contract
 import json
 import time
 from types import SimpleNamespace
 
 import job_ops
-import mcs_adapter
 import run_check
 import pytest
 from ingest_testkit import _ledger, _message
@@ -59,7 +59,7 @@ def test_post_ack_gap_walk_notifies_already_read_rows(db):
         db, 1, result)
     assert result["errors"] == ["mark 1: post_ack_gap"]
     assert db.job_pending("history_head", 1)["payload"].count('"notify": true')
-    adapter = SimpleNamespace(fetch_history=lambda *a, **k: mcs_adapter.MessageBatch(
+    adapter = SimpleNamespace(fetch_history=lambda *a, **k: mcs_contract.MessageBatch(
         [_message(mid=200, unread=False)], pages=1, reached=True))
     job_ops.run_history_jobs(adapter, db, {"errors": []},
                              time.monotonic() + 300)
@@ -69,7 +69,7 @@ def test_post_ack_gap_walk_notifies_already_read_rows(db):
 def test_plain_history_job_stays_quiet(db):
     db.ensure_patient(1)
     db.job_add("history", 1, payload={"since": 0, "page": 1, "pages": 2})
-    adapter = SimpleNamespace(fetch_history=lambda *a, **k: mcs_adapter.MessageBatch(
+    adapter = SimpleNamespace(fetch_history=lambda *a, **k: mcs_contract.MessageBatch(
         [_message(mid=200, unread=False)], pages=1, reached=True))
     job_ops.run_history_jobs(adapter, db, {"errors": []},
                              time.monotonic() + 300)

@@ -1,8 +1,8 @@
 """A crash must not refund the one repair allowed for an input revision."""
+import semantic_drain
 import json
 import time
 
-import semantic
 from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
 
 
@@ -28,7 +28,7 @@ def test_repair_attempt_is_reserved_before_model_call(tmp_path):
         for _ in range(2):
             with db.db:
                 db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-            semantic.run_due(db, _cfg("shadow"), {"errors": []},
+            semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                              time.monotonic() + 300,
                              jev_client=_FakeJev(), llm_fn=llm)
         assert len(calls) == 1

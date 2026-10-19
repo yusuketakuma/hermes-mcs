@@ -4,6 +4,8 @@ Fake loopback only — no real service is touched.  Canonical acceptance
 rejects truncation/empty/malformed output; legacy callers keep their
 existing ``{}`` result while recording bounded integrity metadata.
 """
+import semantic_transport
+import extract_schema
 import fcntl
 import json
 import os
@@ -14,7 +16,6 @@ import pytest
 
 import extract_llm
 import local_llm
-import semantic
 
 
 def _fake_request(payload, *, status=200):
@@ -84,8 +85,8 @@ def test_semantic_llm_chat_uses_shared_adapter(monkeypatch):
         return 200, {}, json.dumps(_response("text-out")).encode()
 
     monkeypatch.setattr(local_llm, "bounded_request", send)
-    assert semantic.llm_chat("hello") == "text-out"
-    assert captured["endpoint"] == semantic.LLM_ENDPOINT
+    assert semantic_transport.llm_chat("hello") == "text-out"
+    assert captured["endpoint"] == semantic_transport.LLM_ENDPOINT
 
 
 def test_extract_llm_keeps_empty_object_contract_and_records_integrity(
@@ -122,7 +123,7 @@ def test_extract_llm_format_degrade_still_walks_ladder(monkeypatch):
     monkeypatch.setattr(extract_llm, "_opener_request", reject)
     assert extract_llm._llm_call("prompt") is None
     assert calls == [{"type": "json_schema",
-                      "json_schema": extract_llm._SCHEMA},
+                      "json_schema": extract_schema.SCHEMA},
                      {"type": "json_object"}, None]
     assert extract_llm._FMT_MODE == "plain"
 
@@ -195,7 +196,7 @@ def test_llm_chat_pins_background_slot(monkeypatch):
         return {"status": 200, "text": "ok", "finish_reason": "stop"}
 
     monkeypatch.setattr(local_llm, "chat", fake_chat)
-    assert semantic.llm_chat("hi") == "ok"
+    assert semantic_transport.llm_chat("hi") == "ok"
     assert seen["extra_payload"] == {"id_slot": local_llm.BACKGROUND_SLOT}
     assert local_llm.BACKGROUND_SLOT == local_llm.LANES[2] == 1
 
@@ -297,7 +298,7 @@ def test_semantic_llm_chat_rejects_parseable_length_truncation(
     monkeypatch.setattr(
         local_llm, "bounded_request",
         _fake_request(_response('{"facts": []}', finish="length")))
-    assert semantic.llm_chat("hello") is None
+    assert semantic_transport.llm_chat("hello") is None
 
 
 def test_resolve_defaults_and_config_override():

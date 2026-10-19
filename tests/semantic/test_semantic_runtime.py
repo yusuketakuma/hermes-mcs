@@ -1,4 +1,8 @@
 """Durable execution-boundary contracts for the semantic worker."""
+import semantic_audit
+import semantic_drain
+import semantic_policy
+import semantic_store
 import json
 import time
 from pathlib import Path
@@ -51,7 +55,7 @@ def test_guard_rechecks_config_generation_and_off(tmp_path):
         "ledger": db, "token": token, "deadline": time.monotonic() + 10,
         "expected_config_generation": expected, "expected_mode": "shadow",
         "cfg_path": str(cfg_path), "load_cfg": semantic.load_config,
-        "parse_cfg": semantic.semantic_config}
+        "parse_cfg": semantic_policy.semantic_config}
     runtime.guard(**common)
 
     cfg_path.write_text(json.dumps({"semantic": {"mode": "off"}}))
@@ -84,7 +88,7 @@ def test_usage_reservation_survives_unknown_post_failure(tmp_path):
         guarded.evaluate({}, {"q": jev.noul_question("i", "t", "f")},
                          time.monotonic() + 10)
     assert error.value.kind == "transport"
-    assert calls and semantic.jev_usage_today(db) == 1
+    assert calls and semantic_store.jev_usage_today(db) == 1
     db.close()
 
 
@@ -112,7 +116,7 @@ def test_retryable_http_failures_reach_terminal_attempt_bound(tmp_path, monkeypa
         db.db.execute("UPDATE fetch_jobs SET next_try=0 "
                       "WHERE kind='semantic'")
         db.db.commit()
-        semantic.run_due(db, _cfg("shadow"), result,
+        semantic_drain.run_due(db, _cfg("shadow"), result,
                          # the window must host the whole job budget
                          # (default 45 s) — a shorter one is skipped at
                          # the pick-time floor, never attempted
@@ -121,7 +125,7 @@ def test_retryable_http_failures_reach_terminal_attempt_bound(tmp_path, monkeypa
     row = db.db.execute(
         "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
     assert row["state"] == "failed" and row["attempts"] == 6
-    assert len(calls) == semantic.jev_usage_today(db)
+    assert len(calls) == semantic_store.jev_usage_today(db)
     db.close()
 
 
@@ -194,7 +198,7 @@ def test_drain_reports_measured_job_work_and_preserves_off(tmp_path, monkeypatch
         def broken(*args, **kwargs):
             client.requests_made += 1
             raise OSError("synthetic")
-        monkeypatch.setattr(semantic, "_process_job", broken)
+        monkeypatch.setattr(semantic_drain, '_process_job', broken)
         llm_fn = _llm
     else:
         def llm_fn(prompt):
@@ -202,10 +206,10 @@ def test_drain_reports_measured_job_work_and_preserves_off(tmp_path, monkeypatch
             return _llm(prompt)
     try:
         before = db.db.total_changes
-        off = semantic.run_due(db, _cfg("off"), {"errors": []},
+        off = semantic_drain.run_due(db, _cfg("off"), {"errors": []},
                                time.monotonic() + 60, jev_client=client)
         assert "job_metrics" not in off and db.db.total_changes == before
-        result = semantic.run_due(db, _cfg(), {"errors": []},
+        result = semantic_drain.run_due(db, _cfg(), {"errors": []},
                                   time.monotonic() + 60,
                                   jev_client=client, llm_fn=llm_fn)
         metric, = result["job_metrics"]
@@ -218,7 +222,7 @@ def test_drain_reports_measured_job_work_and_preserves_off(tmp_path, monkeypatch
                 == pytest.approx(metric["llm_s"] + metric["jev_s"]
                                  + metric["post_s"]))
         assert result["elapsed_s"] == pytest.approx(now[0] - 10.0)
-        assert metric["jev_requests"] == semantic.jev_usage_today(db) > 0
+        assert metric["jev_requests"] == semantic_store.jev_usage_today(db) > 0
         assert metric["usage"]["reported_requests"] == 0
         assert metric["usage"]["unreported_requests"] == metric["jev_requests"]
         assert metric["project_id"] == 1 and metric["generation"]
@@ -252,14 +256,14 @@ def test_real_client_usage_reaches_offline_report_through_worker(tmp_path):
 
     try:
         client = jev.JevClient(api_key="synthetic", post_fn=post, max_attempts=1)
-        result = semantic.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 60,
+        result = semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 60,
                                   jev_client=client, llm_fn=_llm)
         assert result["done"] == 1 and len(calls) > 1
         metric, = result["job_metrics"]
         assert metric["usage"] == {"input_tokens": 7 * len(calls),
                                     "output_tokens": 2 * len(calls),
                                     "reported_requests": len(calls), "unreported_requests": 0}
-        assert semantic.jev_usage_today(db) == len(calls)
+        assert semantic_store.jev_usage_today(db) == len(calls)
         paths = {name: tmp_path / name for name in ("cases", "manifest", "criteria", "runs", "report")}
         paths["cases"].write_text(json.dumps(_record("human")) + "\n")
         paths["manifest"].write_text(json.dumps(MANIFEST))
@@ -280,21 +284,21 @@ def test_real_client_usage_reaches_offline_report_through_worker(tmp_path):
 def test_pre_audit_candidate_survives_interruption_and_is_not_replaced(tmp_path, monkeypatch):
     from semantic_testkit import _FakeJev
     db = _seeded(tmp_path)
-    original_audit = semantic.audit_claims
+    original_audit = semantic_audit.audit_claims
 
     def interrupt(*args, **kwargs):
         raise KeyboardInterrupt("synthetic interruption after candidate save")
 
-    monkeypatch.setattr(semantic, "audit_claims", interrupt)
+    monkeypatch.setattr(semantic_audit, 'audit_claims', interrupt)
     try:
         with pytest.raises(KeyboardInterrupt):
-            semantic.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 60,
+            semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 60,
                              jev_client=_FakeJev(), llm_fn=_llm)
         initial = [dict(r) for r in db.artifacts("semantic_candidate", message_id=1)]
         assert len(initial) == 1
     finally:
         db.close()
-    monkeypatch.setattr(semantic, "audit_claims", original_audit)
+    monkeypatch.setattr(semantic_audit, 'audit_claims', original_audit)
     db = Ledger(str(tmp_path / "ledger.db"))
     generated = []
     def no_regeneration(prompt):
@@ -303,7 +307,7 @@ def test_pre_audit_candidate_survives_interruption_and_is_not_replaced(tmp_path,
         return _llm(prompt)
 
     try:
-        result = semantic.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 60,
+        result = semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 60,
                                   jev_client=_FakeJev(), llm_fn=no_regeneration)
         assert result["done"] == 1
         assert len(generated) == 1  # only the not-yet-processed reply
@@ -338,17 +342,17 @@ def test_budget_short_on_second_target_commits_first(tmp_path, monkeypatch):
                 raise runtime.RuntimeBudgetShort("llm_next_call")
         return _llm(prompt)
 
-    real = semantic.audit_claims
+    real = semantic_audit.audit_claims
 
     def audit(*a):
         state["aud"] += 1
         return real(*a)
 
-    monkeypatch.setattr(semantic, "audit_claims", audit)
+    monkeypatch.setattr(semantic_audit, 'audit_claims', audit)
     db = _seeded_two(tmp_path)
     cfg = _cfg("shadow", loop_mode="off")
     jev = _FakeJev()
-    r1 = semantic.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
+    r1 = semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
                           jev_client=jev, llm_fn=llm)
     assert r1["job_metrics"][0]["status"] == "deferred_short"
     rows = db.artifacts("semantic_summary", message_id=1)
@@ -359,7 +363,7 @@ def test_budget_short_on_second_target_commits_first(tmp_path, monkeypatch):
 
     db.db.execute("update fetch_jobs set next_try=0")
     db.db.commit()
-    semantic.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
+    semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
                      jev_client=jev, llm_fn=llm)
     # only target 2 is audited on the resumed pass
     assert state["aud"] == audits_run1 + 1

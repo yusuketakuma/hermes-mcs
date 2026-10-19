@@ -31,12 +31,14 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
+import semantic_extraction
+import semantic_transport
 from ledger import LedgerReader
 import mcs_util
 from mcs_util import atomic_write, env_value
 import semantic_jev as jev
 from semantic_audit import audit_claims, audit_code
-from semantic_llm import extract_facts, summarize
+from semantic_llm import summarize
 from semantic_runtime import LLMNotSent
 from semantic_store import bundle_fingerprint
 
@@ -103,7 +105,7 @@ def _run_case(case: dict, llm_fn, jev_client=None,
         return {"case_id": case["case_id"], "error": "target_missing"}
     # mirror the drain: an incomplete extraction defers the case — the
     # summary stage never runs on partial facts
-    facts, complete, dropped, f_reason = extract_facts(
+    facts, complete, dropped, f_reason = semantic_extraction.extract_facts(
         llm_fn, member, deadline, return_reason=True)
     if not complete:
         return {"case_id": case["case_id"], "n_facts": len(facts),
@@ -182,7 +184,6 @@ def cmd_run(args) -> int:
     except (OSError, ValueError, KeyError, TypeError):
         print("synthetic_corpus_required", file=sys.stderr)
         return 2
-    import semantic
     jev_client = None
     if args.jev:
         jev_client = jev.JevClient(api_key=env_value("TYPESAFE_API_KEY"),
@@ -193,7 +194,7 @@ def cmd_run(args) -> int:
         # the whole run (drain parity)
         deadline = time.monotonic() + args.job_budget
         try:
-            r = _run_case(case, semantic.llm_chat, jev_client, deadline)
+            r = _run_case(case, semantic_transport.llm_chat, jev_client, deadline)
         except LLMNotSent:
             # the local model never received the request — a deferred
             # case, not a model failure

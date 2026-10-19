@@ -1,4 +1,5 @@
 """Rendered tick wrappers forward explicit grace without starting MCS."""
+import scheduled_jobs
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,7 @@ def test_rendered_wrapper_uses_configured_watchdog_grace(tmp_path, script, grace
             "WATCHDOG_GRACE": mcs_setup._service_subs({"watchdog_grace_s": grace})["WATCHDOG_GRACE"]}
     source = Path(__file__).resolve().parents[2] / "deployment" / "scripts" / script
     target = tmp_path / script
-    target.write_text(mcs_setup._render_template(
+    target.write_text(scheduled_jobs.render_template(
         source.read_text(), {key: shlex.quote(value) for key, value in subs.items()}))
     process = subprocess.run(["/bin/bash", str(target)], capture_output=True, text=True,
                              env={**os.environ, "ARGV_RECORD": str(record)}, timeout=5)

@@ -1,4 +1,7 @@
 """Patient context stays verbatim, source-bound and preserved through local extraction."""
+import extract_quality
+import extract_schema
+import extract_validation
 import json
 
 import pytest
@@ -19,11 +22,11 @@ def item(category="living", text="独居です", subject="patient", evidence=Non
 def test_all_categories_require_verbatim_source_value(category):
     raw = item(category, text=f"合成記載{category}")
     body = f"対象本文に{raw['text']}と明記されています。"
-    out = extract_llm._validate({"patient_context": [raw]}, body)
+    out = extract_validation.validate({"patient_context": [raw]}, body)
     assert out["patient_context"] == [raw]
     assert ("patient_context", json.dumps({key: value for key, value in raw.items()
                                          if key != "evidence"}, sort_keys=True,
-                                        ensure_ascii=False)) in extract_llm._facts(out)
+                                        ensure_ascii=False)) in extract_quality.facts(out)
 
 
 @pytest.mark.parametrize("bad", [
@@ -36,10 +39,10 @@ def test_invalid_patient_context_drops_only_its_item(bad):
     valid = item()
     invalid = {**valid, **bad}
     drops = {}
-    out = extract_llm._validate({"patient_context": [valid, invalid]}, "独居です。", drops)
+    out = extract_validation.validate({"patient_context": [valid, invalid]}, "独居です。", drops)
     assert out["patient_context"] == [valid]
     assert out["_items_dropped"] == 1 and "patient_context" in drops["items"]
-    assert "patient_context" in " ".join(extract_llm._repair_issues(drops, out))
+    assert "patient_context" in " ".join(extract_quality.repair_issues(drops, out))
 
 
 @pytest.mark.parametrize(("body", "raw"), [
@@ -48,27 +51,27 @@ def test_invalid_patient_context_drops_only_its_item(bad):
     (None, item()),
 ])
 def test_missing_ambiguous_or_uncontained_source_never_survives(body, raw):
-    out = extract_llm._validate({"patient_context": [raw], "summary": "合成概要"}, body)
+    out = extract_validation.validate({"patient_context": [raw], "summary": "合成概要"}, body)
     assert out["patient_context"] == []
     assert out["_items_dropped"] == 1 and out["_evidence_dropped"] == 1
 
 
 def test_patient_context_schema_and_batch_grammar_share_contract():
-    schema = extract_llm._SCHEMA["schema"]["properties"]["patient_context"]["items"]
+    schema = extract_schema.SCHEMA["schema"]["properties"]["patient_context"]["items"]
     assert set(schema["required"]) == {"category", "text", "evidence", "subject"}
     assert set(schema["properties"]["category"]["enum"]) == CATEGORIES
-    assert schema == extract_llm._BATCH_ITEM["properties"]["patient_context"]["items"]
+    assert schema == extract_schema.BATCH_ITEM["properties"]["patient_context"]["items"]
     assert extract_llm._BATCH_HEAD.startswith(extract_llm._PROMPT_SPEC)
     assert "patient_context" in extract_llm._PROMPT_SPEC
 
 
 def test_patient_context_chunk_merge_keeps_distinct_subjects_and_reports():
     first, changed, family = item(), item(text="同居です"), item(subject="family")
-    merged = extract_llm._merge([{"patient_context": [first]},
+    merged = extract_validation.merge([{"patient_context": [first]},
                                 {"patient_context": [first, changed, family]}])
     assert merged["patient_context"] == [first, changed, family]
-    assert not extract_llm._improves({"summary": "合成概要"}, merged)
-    assert extract_llm._improves(merged, {"patient_context": [first]})
+    assert not extract_quality.improves({"summary": "合成概要"}, merged)
+    assert extract_quality.improves(merged, {"patient_context": [first]})
 
 
 def test_patient_context_llm_single_and_chunks_remain_source_bound(monkeypatch):
@@ -120,7 +123,7 @@ def test_patient_context_narrative_cannot_be_prefiltered_as_no_signal(body):
 
 
 def test_incomplete_chunk_urgency_cannot_silence_lexical_net():
-    absent = extract_llm._validate({"summary": "至急連絡の合成記載"}, "至急連絡")
-    merged = extract_llm._merge([{"urgency": "routine"}, absent])
+    absent = extract_validation.validate({"summary": "至急連絡の合成記載"}, "至急連絡")
+    merged = extract_validation.merge([{"urgency": "routine"}, absent])
     assert merged.get("urgency") != "routine"
-    assert extract_llm._merge([{"urgency": "routine"}, {"urgency": "routine"}])["urgency"] == "routine"
+    assert extract_validation.merge([{"urgency": "routine"}, {"urgency": "routine"}])["urgency"] == "routine"

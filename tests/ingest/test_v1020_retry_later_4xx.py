@@ -1,4 +1,5 @@
 """Synthetic regressions: HTTP 425 is a try-again-later status in every ingest path."""
+import mcs_contract
 import io
 import json
 import urllib.error
@@ -16,7 +17,7 @@ def test_download_classifies_4xx_like_the_job_ledger(tmp_path, monkeypatch, stat
         raise urllib.error.HTTPError(url, status, "synthetic", {}, None)
     adapter = mcs_adapter.MCSAdapter()
     monkeypatch.setattr(adapter, "_open_download", refuse)
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         adapter._download_to_part("https://www.medical-care.net/f",
                                   str(tmp_path / "f.part"))
     assert error.value.status == status

@@ -85,6 +85,13 @@ class Ctx:
     def get_config(self, key, default=None):
         return self.config.get(key, default)
 
+# Command invocation also bootstraps the shared implementation, with no SDK.
+assert json.loads(mod._make_handler(Ctx({}))("{}")) == {
+    "ok": False, "error": "native_context_required"}
+assert Path(sys.modules['adapters.common.dispatch'].__file__).resolve() == (
+    repo / 'adapters' / 'common' / 'dispatch.py')
+assert 'hermes_plugin' not in sys.modules
+
 flags = data_root / 'flags' / 'notify.json'
 flags.parent.mkdir(parents=True)
 flags.write_text(json.dumps({'interactive': False}))

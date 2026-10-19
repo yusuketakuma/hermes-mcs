@@ -97,11 +97,11 @@ def test_deletion_possibility_changes_are_immediate(db, monkeypatch):
 
 
 def test_registered_data_state_change_is_immediately_dirty(db, monkeypatch):
-    import read_model
+    import registered_data
     now = [1_790_000_000.0]
     monkeypatch.setattr(rollup.time, 'time', lambda: now[0])
     registered = {'total': 1, 'records': [{'state': 'complete'}]}
-    monkeypatch.setattr(read_model, '_registered_data', lambda *a: registered)
+    monkeypatch.setattr(registered_data, 'registered_data', lambda *a: registered)
     _setup(db, now)
     registered['records'][0]['state'] = 'stale'
     assert rollup.dirty_projects(db) == [1]

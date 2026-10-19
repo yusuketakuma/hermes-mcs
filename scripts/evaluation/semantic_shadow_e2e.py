@@ -40,8 +40,8 @@ def main() -> int:
     if not math.isfinite(args.deadline) or args.deadline <= 0:
         parser.error("--deadline must be finite and greater than zero")
 
-    import semantic
     import semantic_evaluation
+    import semantic_transport
 
     try:
         payload = json.loads(Path(args.cases).read_text(encoding="utf-8"))
@@ -73,7 +73,7 @@ def main() -> int:
                   "be INCOMPLETE", file=sys.stderr)
 
     report = semantic_evaluation.run_shadow_e2e(
-        cases, semantic.llm_chat, jev_client, source=payload["source"],
+        cases, semantic_transport.llm_chat, jev_client, source=payload["source"],
         deadline_s=args.deadline)
     Path(args.out).write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",

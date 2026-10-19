@@ -40,7 +40,7 @@ from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import CONF_PATH, html_to_text, load_config
 from mcs_util import hermes_exe as _hermes_exe
 from mcs_requests import positive
-from notify_render import (SECTION_RULE, _extraction_failed, _signal_evidence,
+from notify_render import (SECTION_RULE, extraction_failed, signal_evidence,
                            thread_stamp_row)
 # Re-exported send-gate verdicts — the canonical definitions live in
 # semantic_send_gate (the send-time semantic policy layer); the legacy
@@ -205,7 +205,7 @@ def _signal_text(ledger, payload: dict, latest: dict):
         name = r["patient_name"].strip() if r and r["patient_name"] else ""
         if name:
             lines[1] = f"{name}（{lines[1]}）"
-        _, m = _signal_evidence(ledger.db, {**latest, "project_id": pid})
+        _, m = signal_evidence(ledger.db, {**latest, "project_id": pid})
         if m and m["body_state"] != "deleted" and m["body_text"]:
             snippet = " ".join(str(m["body_text"]).split())[:120]
             lines.append(
@@ -239,7 +239,7 @@ def _signal_unit_text(ledger, sigs: list[dict]):
         {"text": merged or mcs_signals.signal_notice_text(latest),
          "project_id": latest.get("project_id")},
         sig_view)
-    mid, message = _signal_evidence(
+    mid, message = signal_evidence(
         ledger.db, {**sig_view, "project_id": latest.get("project_id")})
     urgency = (structured_view.message_urgency(ledger.db, mid)
                if message is not None and mid is not None else None)
@@ -453,7 +453,7 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
             marks.append(nm)
         more = f"、他{len(marks) - 5}件" if len(marks) > 5 else ""
         att_line = f"\n{indent}📎 {'、'.join(marks[:5])}{more}"
-    empty = "作成失敗" if not s_lines and _extraction_failed(ledger.db, r["message_id"]) else "処理待ち"
+    empty = "作成失敗" if not s_lines and extraction_failed(ledger.db, r["message_id"]) else "処理待ち"
     summary = ([f"{indent}📋 要約"] + [f"{indent}・" + ln.replace("\n", f"\n{indent}") for ln in s_lines]
                if s_lines else [f"{indent}📋 要約 {empty}"])
     line = thread_stamp_row(ledger.db, r["message_id"], r["sender_id"]) if stamps else ""

@@ -1,4 +1,5 @@
 """Additive health observations preserve collection state and durable writes."""
+import health_report
 import json
 import os
 import sqlite3
@@ -20,9 +21,9 @@ def stored(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     health = tmp_path / "data" / "health.json"
     health.parent.mkdir(exist_ok=True)
-    monkeypatch.setattr(run_check, "HEALTH_FILE", str(health))
+    monkeypatch.setattr(health_report, 'HEALTH_FILE', str(health))
     monkeypatch.setattr(run_check.time, "time", lambda: NOW)
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10_000)
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10_000)
     monkeypatch.setattr(run_check.maintenance, "local_backup_status",
                         lambda **_: {"state": "verified", "newest_age_s": 50,
                                      "observed_at": NOW})
@@ -79,7 +80,7 @@ def test_optional_failure_keeps_original_counts_verdict_and_connection(stored, m
     db, _ = stored
     pending(db)
     pending(db)
-    baseline = run_check._health(db, {"errors": [], "notify": {}}, "ok", cfg={})
+    baseline = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok", cfg={})
     original_limit = db.db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
     original_wait = db.db.execute("PRAGMA busy_timeout").fetchone()[0]
     if failure == "raise":
@@ -87,9 +88,9 @@ def test_optional_failure_keeps_original_counts_verdict_and_connection(stored, m
             raise ValueError("synthetic-private-error")
         monkeypatch.setattr(notify_cards, "pending_breakdown", fail)
     elif failure == "deadline":
-        monkeypatch.setattr(run_check, "HEALTH_OBSERVATION_S", 0)
+        monkeypatch.setattr(health_report, 'HEALTH_OBSERVATION_S', 0)
     elif failure == "items":
-        monkeypatch.setattr(run_check, "HEALTH_OBSERVATION_ITEMS", 2)
+        monkeypatch.setattr(health_report, 'HEALTH_OBSERVATION_ITEMS', 2)
     else:
         db.db.execute("UPDATE notify_outbox SET progress=?",
                       ('{"large":"' + "x" * (2 * 1024 * 1024) + '"}',))
@@ -98,7 +99,7 @@ def test_optional_failure_keeps_original_counts_verdict_and_connection(stored, m
     db.db.execute("INSERT INTO runs(started_at,status,error) VALUES(?,'ok','')", (NOW,))
     assert db.db.in_transaction
     result = {"errors": [], "notify": {}}
-    observed = run_check._health(db, result, "ok", cfg={})
+    observed = health_report.build_health(db.db, result, "ok", cfg={})
     assert observed["notify"]["pending"] == baseline["notify"]["pending"] == 2
     assert observed["notify"]["pending_by_reason"]["status"] == "unavailable"
     assert observed["overall"] == baseline["overall"] == "ok"
@@ -120,7 +121,7 @@ def test_pending_success_has_one_population_read(stored):
     statements = []
     db.db.set_trace_callback(statements.append)
     try:
-        report = run_check._pending_health(db.db, NOW)
+        report = health_report.pending_health(db.db, NOW)
     finally:
         db.db.set_trace_callback(None)
     queries = [sql for sql in statements if "FROM notify_outbox" in sql]
@@ -132,13 +133,13 @@ def test_missing_real_count_still_fails_the_original_health_path(stored):
     db, _ = stored
     db.db.execute("DROP TABLE notify_outbox")
     with pytest.raises(sqlite3.Error):
-        run_check._pending_health(db.db, NOW)
+        health_report.pending_health(db.db, NOW)
 
 
 def test_local_observation_remains_available_without_loaded_config(stored):
     db, _ = stored
-    result = run_check._health(db, {"errors": [], "notify": {}}, "failed",
-                              cfg=run_check.CONFIG_NOT_LOADED)
+    result = health_report.build_health(db.db, {"errors": [], "notify": {}}, "failed",
+                              cfg=health_report.CONFIG_NOT_LOADED)
     assert result["backup"]["state"] == "unknown"
     assert result["backup"]["local"]["state"] == "verified"
     assert result["overall"] == "failed"
@@ -150,7 +151,7 @@ def test_local_observation_failure_does_not_relabel_collection(stored, monkeypat
     def fail(**_):
         raise OSError("synthetic-private-path")
     monkeypatch.setattr(run_check.maintenance, "local_backup_status", fail)
-    result = run_check._health(db, {"errors": [], "notify": {}}, "failed", cfg={})
+    result = health_report.build_health(db.db, {"errors": [], "notify": {}}, "failed", cfg={})
     assert result["backup"]["local"]["state"] == "unknown"
     assert result["overall"] == "failed"
     assert "synthetic-private-path" not in json.dumps(result)

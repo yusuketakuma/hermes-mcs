@@ -1,9 +1,9 @@
 """Malformed current extraction is terminal for QC without model calls or reseed loops."""
+import semantic_policy
 import time
 
 import pytest
 
-import semantic
 import semantic_qc as qc
 import semantic_runtime as runtime
 from semantic_testkit import _cfg, _FakeJev
@@ -22,7 +22,7 @@ def test_bad_qc_source_fails_without_calls_or_reseed(tmp_path, source):
             ledger.db.commit()
         assert qc._qc_seed(ledger, time.time()) == 1
         job = ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind=?", (qc.QC_JOB_KIND,)).fetchone()
-        cfg, _ = semantic.semantic_config(_cfg(extract_qc="annotate"))
+        cfg, _ = semantic_policy.semantic_config(_cfg(extract_qc="annotate"))
         jev = _FakeJev()
         assert qc._process_qc_job(ledger, cfg, job, jev, time.monotonic() + 60) == "failed"
         assert jev.requests_made == 0

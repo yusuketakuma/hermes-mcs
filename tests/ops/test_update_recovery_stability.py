@@ -34,18 +34,18 @@ def test_corrupt_live_db_recovery_escalates_without_empty_consent_hold(
         updater, tmp_path, monkeypatch)
     damaged = b"synthetic damaged sqlite header"
     Path(live).write_bytes(damaged)
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     state["applying"] = {"tag": "v1.1.0", "sha": before, "prev_sha": after,
                          "rollback": True, "backup_path": back,
                          "command_id": "synthetic-unreadable"}
     state["stages"] = [{"stage": "rollback", "at": 1}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     monkeypatch.setattr(updater, "_head_sha", lambda: before)
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
     notices = []
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text: notices.append(text) or True)
     assert updater.recover_interrupted() == 1
-    assert "live_db_unreadable" in updater.load_state()["executed"][
+    assert "live_db_unreadable" in updater.journal_store.load_state(updater.STATE_PATH)["executed"][
         "synthetic-unreadable"]["detail"]
     assert notices and restarts == [1]
     assert Path(live).read_bytes() == damaged
@@ -68,17 +68,17 @@ def test_loss_report_wraps_publication_io_failure(updater, tmp_path, monkeypatch
     def fail(*args, **kwargs):
         raise OSError("synthetic report publish failed")
 
-    monkeypatch.setattr(updater, "atomic_write", fail)
+    monkeypatch.setattr(updater.journal_store, "atomic_write", fail)
     with pytest.raises(updater.UpdateError):
         updater._restore_loss_report(back)
 
 
 def test_failed_restart_remains_retryable(updater, monkeypatch):
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
                          "prev_sha": "b" * 40, "command_id": "synthetic"}
     state["stages"] = [{"stage": "merge", "at": 1}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     monkeypatch.setattr(updater, "_head_sha", lambda: "b" * 40)
     calls, notices = [], []
 
@@ -89,11 +89,11 @@ def test_failed_restart_remains_retryable(updater, monkeypatch):
     monkeypatch.setattr(updater, "restart_agents", restart)
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text: notices.append(text))
     assert updater._finish_recovery(state, "interrupted_pre_merge", []) == 1
-    held = updater.load_state()
+    held = updater.journal_store.load_state(updater.STATE_PATH)
     assert held["applying"] and held["stages"] and not held["executed"]
     assert not notices
     assert updater._finish_recovery(held, "interrupted_pre_merge", []) == 0
-    done = updater.load_state()
+    done = updater.journal_store.load_state(updater.STATE_PATH)
     assert done["applying"] is None and done["stages"] == []
     assert done["executed"]["synthetic"]["result"] == "interrupted_recovered"
     assert calls == [True, False] and len(notices) == 1
@@ -114,12 +114,12 @@ def test_approved_swap_failure_keeps_restore_hold(updater, tmp_path, monkeypatch
     assert restarts == [] and Path(updater.MARKER_PATH).exists()
     marker = json.loads(Path(updater.DATA, "restore_pending.json").read_text())
     assert marker["phase"] == "awaiting_consent"
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["restore_consent"] and state["applying"]["rollback"]
     assert "synthetic" not in state["executed"]
     monkeypatch.setattr(updater, "_replace_database", replace)
     assert updater.recover_interrupted() == 0
-    assert updater.load_state()["applying"] is None and restarts == [1]
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None and restarts == [1]
 
 
 @pytest.mark.parametrize("runtime_mode", ["hermes", "standalone"])
@@ -132,7 +132,7 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     repo, live, back, before, after, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     _git(repo, "reset", "-q", "--hard", "v1.0.0")
-    updater.save_state(updater._default_state())
+    updater.journal_store.save_state(updater.STATE_PATH, updater.journal_store.default_state())
     cfg = {"runtime_mode": runtime_mode, "update": {"mode": "notify"}}
     monkeypatch.setattr(updater, "load_config", lambda: cfg)
     monkeypatch.setattr(mcs_setup, "runtime_gate_errors", lambda *a, **k: [])
@@ -169,7 +169,7 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     report = json.loads(Path(updater.REPORT_PATH).read_text())
     assert report["result"] == "escalate" and report["writers_stopped"] is True
     assert "drainers_key" not in report
-    assert updater.load_state()["applying"]["restore_incomplete"] is True
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["restore_incomplete"] is True
     assert Path(live).read_bytes() == damaged
     assert not Path(updater.DATA, "restore_pending.json").exists()
 
@@ -178,21 +178,21 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     _seed_consent(live, back)
     assert updater.recover_interrupted() == 0
     assert restarts == [1] and not Path(updater.MARKER_PATH).exists()
-    assert updater.load_state()["applying"] is None
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None
 
 
 @pytest.mark.parametrize("shape", ["previous_clean", "previous_dirty", "merge_head",
                                    "missing_backup", "unknown_head"])
 def test_incomplete_restore_never_finishes_without_restoring_target(
         updater, tmp_path, monkeypatch, shape):
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     applying = {"sha": "a" * 40, "prev_sha": "b" * 40, "rollback": True,
                 "backup_path": str(tmp_path / "synthetic-backup.db"),
                 "restore_incomplete": True, "command_id": "synthetic-held"}
     if shape == "missing_backup":
         applying.pop("backup_path")
     state.update(applying=applying, stages=[{"stage": "rollback", "at": 1}])
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
     if shape == "merge_head":
         git_dir = Path(updater.REPO, ".git")
@@ -210,7 +210,7 @@ def test_incomplete_restore_never_finishes_without_restoring_target(
         monkeypatch.setattr(updater, name, forbidden)
     for _ in range(2):
         assert updater.recover_interrupted() == 1
-        after = updater.load_state()
+        after = updater.journal_store.load_state(updater.STATE_PATH)
         assert after["applying"] == applying and after["stages"] == state["stages"]
         assert after["executed"]["synthetic-held"]["result"] == "escalated"
         assert Path(updater.MARKER_PATH).read_text() == "synthetic writer freeze"
@@ -229,7 +229,7 @@ def test_apply_pre_reset_rollback_failure_survives_recovery(
     repo, live, back, _before, after, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     _git(repo, "reset", "-q", "--hard", "v1.0.0")
-    updater.save_state(updater._default_state())
+    updater.journal_store.save_state(updater.STATE_PATH, updater.journal_store.default_state())
     cfg = {"runtime_mode": "standalone", "update": {"mode": "notify"}}
     monkeypatch.setattr(updater, "load_config", lambda: cfg)
     monkeypatch.setattr(mcs_setup, "runtime_gate_errors", lambda *a, **k: [])
@@ -259,12 +259,12 @@ def test_apply_pre_reset_rollback_failure_survives_recovery(
     original_db = Path(live).read_bytes()
     assert updater.apply("v1.1.0", after, "synthetic-apply") == 1
     assert updater._head_sha() == after
-    applying = updater.load_state()["applying"]
+    applying = updater.journal_store.load_state(updater.STATE_PATH)["applying"]
     assert applying["restore_incomplete"] is True
     assert applying["prev_sha"] == after
     for _ in range(2):
         assert updater.recover_interrupted() == 1
-        assert updater.load_state()["applying"] == applying
+        assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == applying
         assert Path(updater.MARKER_PATH).exists()
         assert updater._head_sha() == after
         assert Path(live).read_bytes() == original_db
@@ -297,7 +297,7 @@ def test_python314_pin_refresh_crashes_restore_original_dependencies(
     checkout = tmp_path / "hermes-source"
     old_head, new_head = _checkout(checkout)
     _git(checkout, "checkout", "-q", "--detach", new_head)
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     applying = state["applying"]
     applying["runtime_migration"].update(checkout=str(checkout), checkout_head=old_head,
                                          checkout_target=new_head)
@@ -306,7 +306,7 @@ def test_python314_pin_refresh_crashes_restore_original_dependencies(
         monkeypatch.setattr(updater, "HERMES_PIN", new_head)
     applying.update(schema_bump=consent_pending,
                     backup_path=str(tmp_path / "synthetic-schema-backup.db"))
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
     held = []
     if consent_pending:
@@ -328,7 +328,7 @@ def test_python314_pin_refresh_crashes_restore_original_dependencies(
             == "new-installed-dependencies"
         assert (runtime / "venv.python314-aside/.mcs-pip-incomplete").exists() \
             == (phase == "venv_partial")
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     if consent_pending:
         assert held and "restart" not in order and not notices
         assert after["applying"]["rollback"] is True
@@ -372,7 +372,7 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         _git(checkout, "checkout", "-q", "-b", "local/org-build")
     else:
         (checkout / "f").write_text("synthetic manual edit")
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     applying = state["applying"]
     applying["runtime_migration"].update(checkout=str(checkout), checkout_head=old_head,
                                          checkout_target=target)
@@ -380,7 +380,7 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         state["applied"] = [applying]
         state["applying"] = None
         state["stages"] = []
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
     journal = Path(updater.STATE_PATH).read_bytes()
     source = (checkout / "f").read_bytes()
@@ -424,15 +424,15 @@ def test_pin_refresh_restore_keeps_explicitly_confirmed_clean_branch(
     checkout = tmp_path / "hermes-source"
     head, _target = _checkout(checkout)
     _git(checkout, "checkout", "-q", "-b", "local/org-build")
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     state["applying"]["runtime_migration"].update(
         checkout=str(checkout), checkout_head=head, checkout_target=head, kept_checkout=True)
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.recover_interrupted() == 0
     assert (venv / "bin/python3").read_text().endswith("echo 3 13\n")
     assert _git(checkout, "symbolic-ref", "--short", "HEAD").stdout.strip() == "local/org-build"
     assert _git(checkout, "rev-parse", "HEAD").stdout.strip() == head
-    assert updater.load_state()["applying"] is None
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None
 
 
 @pytest.mark.parametrize("case", ["null", "false", "zero", "empty_string", "empty_list",
@@ -458,11 +458,11 @@ def test_invalid_runtime_migration_is_preserved_before_any_action(
                "head_type": {**source, "checkout_head": []},
                "target_type": {**source, "checkout_target": None},
                "keep_type": {**source, "kept_checkout": "yes"}}[case]
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     applying = {"sha": "a" * 40, "prev_sha": "b" * 40, "tag": "v1.0.25",
                 "runtime_migration": invalid, "reinstall": True}
     state.update(applying=applying, stages=[{"stage": "runtime_migration", "at": 1}])
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
     journal = Path(updater.STATE_PATH).read_bytes()
 
@@ -491,9 +491,9 @@ def test_invalid_runtime_migration_is_preserved_before_any_action(
 def test_existing_standalone_migration_is_verified_without_replanning(updater, tmp_path, monkeypatch):
     migration = {"venv": str(tmp_path / "venv"),
                  "backup_path": str(tmp_path / "venv.pre-python314")}
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"runtime_migration": migration}
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     journal = Path(updater.STATE_PATH).read_bytes()
 
     def forbidden(*args, **kwargs):

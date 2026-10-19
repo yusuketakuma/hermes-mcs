@@ -2383,7 +2383,7 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         assert "📋 要約" not in body and "解析更新中" not in body
         _, current_spec = world.spec()
         assert current_spec["delivery"]["thread_id"] == str(original_thread_id)
-        assert "要約 処理待ち" in notify_cards._card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
+        assert "要約 処理待ち" in notify_cards.card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
         assert "要約 処理待ち" in "\n".join(item.get("text", "") for item in current_spec["parts"]["containers"])
 
         n = len(thread.sent)
@@ -2699,7 +2699,7 @@ def test_project_auto_authorizes_snapshot_projects(tmp_path):
     allowlist — a new patient works without a config edit, and a
     project that is not a patient still fails closed."""
     import sqlite3
-    from hermes_plugin import projects as projects_mod
+    from adapters.common import projects as projects_mod
     snap = tmp_path / "snap.db"
     db = sqlite3.connect(str(snap))
     db.execute("CREATE TABLE patients(project_id INTEGER)")

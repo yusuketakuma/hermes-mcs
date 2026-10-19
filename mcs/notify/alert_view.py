@@ -2,7 +2,7 @@
 from datetime import datetime
 import math
 
-from mcs_adapter import project_url
+from mcs_contract import project_url
 from mcs_queries import JST
 from mcs_requests import positive
 import notify_render
@@ -49,17 +49,17 @@ def render_parts(checked, db=None):
     posted = notify_render._when_posted(message["posted_at"] if message else None)
     parts["containers"].append({"type": "text", "text":
         f"{sender}（{organization}） · 投稿 {posted} · 判定 {_when(checked.get('observed_at'))}"})
-    if message is not None and message["body_state"] == "full" and notify_render._structured_block(db, mid) is None:
-        pending = "要約作成失敗" if notify_render._extraction_failed(db, mid) else "要約処理待ち"
+    if message is not None and message["body_state"] == "full" and notify_render.structured_block(db, mid) is None:
+        pending = "要約作成失敗" if notify_render.extraction_failed(db, mid) else "要約処理待ち"
         parts["containers"].append({"type": "text", "text": pending})
     if positive(pid):
         parts["footer"].append({"type": "text", "text":
             f"原本確認: MCSで開く {project_url(pid)} · 投稿 #{mid}"})
-    header = (notify_render._preview_header(db, pid, message) if db is not None and positive(pid)
+    header = (notify_render.preview_header(db, pid, message) if db is not None and positive(pid)
               else f"患者記録 / {sender}（{organization}） / {posted}")
     main = next((part["text"] for part in parts["containers"] if part["type"] == "quote"), "緊急理由の引用は未取得")
     # the push/notification line: urgency first, so a lock screen tells
     # it apart from a routine request
-    parts["preview_text"] = "🚨 緊急度高 " + notify_render._preview_line(
+    parts["preview_text"] = "🚨 緊急度高 " + notify_render.preview_line(
         header, f"再確認候補（{subject}）: {main}", limit=393)
     return parts

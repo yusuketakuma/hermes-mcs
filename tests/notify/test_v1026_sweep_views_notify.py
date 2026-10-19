@@ -4,7 +4,7 @@ import re
 import notify_digest
 import notify_views
 import patient_context_view as pcv
-from mcs_adapter import project_url
+from mcs_contract import project_url
 from notify_testkit import NOW as CARD_NOW, _delivered_card, led, pinned_clock  # noqa: F401
 from notify_views import CONTEXT_PAGE_SIZE, patient_context_list
 from patient_context import extract_context

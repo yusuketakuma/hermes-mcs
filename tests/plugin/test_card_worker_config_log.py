@@ -128,7 +128,7 @@ def test_dispatch_type_error_is_an_operation_failure_not_bad_command(
     def broken(*_args):
         raise TypeError("synthetic handler bug")
 
-    monkeypatch.setattr(commands, "_dispatch", broken)
+    monkeypatch.setattr(commands, "dispatch", broken)
     result = commands.answer(settings, '{"op":"summary"}', user="U1",
                              channel="C1")
     assert json.loads(result)["error"] == "operation_failed"

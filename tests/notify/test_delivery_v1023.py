@@ -1,4 +1,5 @@
 """Layout-3 safety and immutable delivery limits, using only synthetic ledgers."""
+import notify_parts
 import asyncio
 import copy
 import json
@@ -53,7 +54,7 @@ def test_lw_reuses_card_and_tokens_on_stamp_only_update(led):
     with led.db:
         led.db.execute("UPDATE message_metadata SET last_error='synthetic_failure' WHERE message_id=100")
         specs = []
-        cards._issue_render(led.db, 1, LINEWORKS, NOW + 1, specs, force=True)
+        cards.issue_render(led.db, 1, LINEWORKS, NOW + 1, specs, force=True)
     latest = specs[0]
     assert latest["parts"]["manifest"][0]["prior_remote_id"] == MID
     assert latest["parts"]["action_rows"] == original["parts"]["action_rows"]
@@ -99,7 +100,7 @@ def test_lw_post_budget_preserves_original_and_emits_limit_notice(led, monkeypat
     import itertools
     attempts = itertools.count(100)
     monkeypatch.setattr(kit, "_claim", lambda render: claim(render, f"{next(attempts):016x}"))
-    monkeypatch.setattr(cards, "_card_body_text", lambda *a, **k: (
+    monkeypatch.setattr(notify_parts, "card_body_text", lambda *a, **k: (
         "合成", f"↳ 合成投稿\n要約 {revision[0]}\n────────────\n合成原文"))
     _dispatch(led, _intent(led, payload={"message_ids": [100]}), LINEWORKS)
     first = deliver_lw(led, _latest_render(led))
@@ -112,12 +113,12 @@ def test_lw_post_budget_preserves_original_and_emits_limit_notice(led, monkeypat
         revision[0] = n
         with led.db:
             specs = []
-            cards._issue_render(led.db, 1, LINEWORKS, NOW + n, specs, force=True)
+            cards.issue_render(led.db, 1, LINEWORKS, NOW + n, specs, force=True)
         spec = specs[0]
         count += sum(p["kind"] == "body_part" and not p.get("prior_remote_id")
                      for p in spec["parts"]["manifest"])
         deliver_lw(led, _latest_render(led))
-    assert count == initial + cards.LINEWORKS_POST_UPDATES
+    assert count == initial + notify_parts.LINEWORKS_POST_UPDATES
     assert "合成原文" in spec["parts"]["thread_body_parts"]
     assert any("更新上限" in text for text in spec["parts"]["thread_body_parts"])
 
@@ -150,8 +151,8 @@ def test_legacy_fingerprints_match_v1022_fixed_vectors(led):
         (2, "lineworks"): "0b01389d53ffea83b21cd44373c9e8fab9e97c88c0e656888621046a0b46f513",
     }
     for (layout, transport), fingerprint in expected.items():
-        content = notify_render._card_content(led.db, {**_card(led), "layout": layout, "transport": transport}, cfg=CFG)
-        assert notify_render._content_fp(content) == fingerprint
+        content = notify_render.card_content(led.db, {**_card(led), "layout": layout, "transport": transport}, cfg=CFG)
+        assert notify_render.content_fingerprint(content) == fingerprint
 
 
 def test_lw_original_write_token_cannot_revive_after_source_aba(led):
@@ -166,7 +167,7 @@ def test_lw_original_write_token_cannot_revive_after_source_aba(led):
     for index, content_hash in enumerate(("b" * 64, f"{100:064x}"), 1):
         with led.db:
             led.db.execute("UPDATE messages SET content_hash=? WHERE message_id=100", (content_hash,))
-            cards._issue_render(led.db, 1, LINEWORKS, NOW + index, [], force=True)
+            cards.issue_render(led.db, 1, LINEWORKS, NOW + index, [], force=True)
         assert _card(led)["source_generation"] == initial + index
         request = envelopes.notification(old_token, "lineworks:40029600:synthetic-operator", {**SCOPE, "message_id": MID})
         assert _apply(led, request)["error"] == "stale_source"
@@ -176,7 +177,7 @@ def test_growing_and_shrinking_header_keeps_original_chunks_and_cleans_old_heade
     from notify_testkit import _deliver, _part_receipt
     _seed_thread(led, mids=(100,))
     header = ["要約"]
-    monkeypatch.setattr(cards, "_card_body_text", lambda *a, **k: (
+    monkeypatch.setattr(notify_parts, "card_body_text", lambda *a, **k: (
         "合成", "↳ 合成\n" + header[0] + "\n────────────\n" + "原文" * 2100))
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     _deliver(led)
@@ -187,7 +188,7 @@ def test_growing_and_shrinking_header_keeps_original_chunks_and_cleans_old_heade
         header[0] = value
         with led.db:
             specs = []
-            cards._issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
+            cards.issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
         manifest = specs[0]["parts"]["manifest"]
         for part in manifest:
             if part.get("name") in hashes:
@@ -202,7 +203,7 @@ def test_growing_and_shrinking_header_keeps_original_chunks_and_cleans_old_heade
 
 def test_nonlegacy_extraction_attention_is_not_perpetual_pending(led, monkeypatch):
     _seed_thread(led, mids=(100,))
-    monkeypatch.setattr(notify_render, "_progress_state", lambda *a: {"state": "attention", "completed": 0, "total": 1})
+    monkeypatch.setattr(notify_render, "progress_state", lambda *a: {"state": "attention", "completed": 0, "total": 1})
     assert notify_render._summary_block(led.db, 100, cfg=CFG, label=False)["text"] == "要約 要確認"
     led.db.execute("UPDATE messages SET first_seen=?", (NOW,))
     _dispatch(led, _intent(led, payload={"message_ids": [100]}), LINEWORKS)
@@ -235,7 +236,7 @@ def test_lineworks_new_source_keeps_a_usable_write_button(led):
     with led.db:
         led.db.execute("UPDATE messages SET body_text='changed synthetic body',content_hash=? WHERE message_id=100", ('b'*64,))
         specs=[]
-        cards._issue_render(led.db,1,LINEWORKS,NOW+1,specs,force=True)
+        cards.issue_render(led.db,1,LINEWORKS,NOW+1,specs,force=True)
     assert 'prior_remote_id' not in specs[0]['parts']['manifest'][0]
     claim = _claim(_latest_render(led), attempt="c" * 16)
     result = _apply(led, envelopes.transport_begin(claim))
@@ -262,7 +263,7 @@ def test_lw_gc_missing_spec_does_not_reuse_unproven_card_tokens(led):
     with led.db:
         led.db.execute("UPDATE message_metadata SET last_error='synthetic_failure' WHERE message_id=100")
         specs = []
-        cards._issue_render(led.db, 1, LINEWORKS, NOW + 2, specs, force=True)
+        cards.issue_render(led.db, 1, LINEWORKS, NOW + 2, specs, force=True)
     latest = specs[0]
     assert "prior_remote_id" not in latest["parts"]["manifest"][0]
     assert latest["parts"]["action_rows"] != original["parts"]["action_rows"]
@@ -308,7 +309,7 @@ def test_lw_continuous_replies_keep_individual_deadlines_and_pending_coverage(
         assert f"m:{eligible}:header#1" in names
         assert all(f"m:{mid}:header#1" not in names for mid in range(eligible + 1, 103))
         # Source guards still bind the full current thread; ack uses only shown.
-        assert _card(led)["source_fp"] == notify_render._source_fp(led.db, _card(led))
+        assert _card(led)["source_fp"] == notify_render.source_fingerprint(led.db, _card(led))
         deliver_lw(led, render)
         for intent in led.db.execute("SELECT coverage,state,delivery_id FROM notification_intent_cards"):
             if any(mid > eligible for mid in json.loads(intent["coverage"])):

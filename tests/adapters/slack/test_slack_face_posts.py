@@ -47,14 +47,14 @@ def test_face_post_growing_past_limit_keeps_its_full_thread_body(led, monkeypatc
     original = "GROWN_ORIGINAL" * 5
     with led.db:
         led.db.execute("UPDATE messages SET body_text=?,content_hash=?,body_state='full' WHERE message_id=100", (original, "c" * 64))
-        notify_cards._issue_render(led.db, 1, SLACK, NOW + 1, issued, force=True)
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 1, issued, force=True)
     current = json.loads(_latest_render(led)["spec_json"])
     body = "".join(current["parts"]["thread_body_parts"][int(p["part_id"].split(":")[1]) - 1]
                    for p in current["parts"]["manifest"]
                    if p["kind"] == "body_part" and p["name"].startswith("m:100#"))
     assert body == original
     assert not current["delivery"]["intent_event_ids"]
-    notify_cards._publish_specs(led.db, notify_cards.notify_dirs(str(w.root)), issued, NOW + 1)
+    notify_cards.publish_specs(led.db, notify_cards.notify_dirs(str(w.root)), issued, NOW + 1)
     asyncio.run(_granted_card(w.worker, led, w.root))
     added = w.client.thread_posts[before:]
     assert any(p["text"] == original for p in added)

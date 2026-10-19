@@ -260,7 +260,7 @@ def test_projected_findings_keep_qualifiers_before_full_text(db, kind, attrs, ma
     assert marker in text and text.index(marker) < text.index(statement[:60])
     # owner rule 2026-10-05: the statement and its evidence are never cut
     assert statement in text and "末尾に限定条件" in text
-    assert text in notify_render._structured_block(db.db, 1)["text"]
+    assert text in notify_render.structured_block(db.db, 1)["text"]
 
 
 def test_legacy_canonical_finding_without_qualifiers_keeps_display(db):

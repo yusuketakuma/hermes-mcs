@@ -1,9 +1,9 @@
 """A failed savepoint release still restores the tick connection's settings. Synthetic DB only."""
+import health_report
 import sqlite3
 
 import pytest
 
-import run_check
 
 
 class _ReleaseFails:
@@ -27,7 +27,7 @@ def test_busy_timeout_and_limits_are_restored_when_release_fails(tmp_path):
         db.execute("PRAGMA busy_timeout=7000")
         limit = db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
         with pytest.raises(sqlite3.OperationalError, match="synthetic release failure"):
-            run_check._bounded_health_read(_ReleaseFails(db), lambda check: 1)
+            health_report.bounded_health_read(_ReleaseFails(db), lambda check: 1)
         assert db.execute("PRAGMA busy_timeout").fetchone()[0] == 7000
         assert db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == limit
         # The restored connection still writes with its own settings.
@@ -45,7 +45,7 @@ def test_a_successful_read_still_returns_and_restores(tmp_path):
     db = sqlite3.connect(tmp_path / "ledger.db")
     try:
         db.execute("PRAGMA busy_timeout=7000")
-        assert run_check._bounded_health_read(db, lambda check: "ok") == "ok"
+        assert health_report.bounded_health_read(db, lambda check: "ok") == "ok"
         assert db.execute("PRAGMA busy_timeout").fetchone()[0] == 7000
         assert not db.in_transaction
     finally:

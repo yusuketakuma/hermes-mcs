@@ -1,4 +1,6 @@
 """Synthetic regressions: a recovered stage replay records each walk entry once."""
+import health_report
+import mcs_contract
 import time
 
 import mcs_adapter
@@ -28,8 +30,8 @@ def test_backfill_replay_records_each_coverage_gap_once(tmp_path):
             if pid == 2:
                 if not expired:
                     expired.append(1)
-                    raise mcs_adapter.SessionExpired(status=403)
-                return mcs_adapter.MessageBatch([], pages=1, reached=True)
+                    raise mcs_contract.SessionExpired(status=403)
+                return mcs_contract.MessageBatch([], pages=1, reached=True)
             return super().fetch_history(pid, since, **kw)
 
         def auto_login(self, **kw):
@@ -42,7 +44,7 @@ def test_backfill_replay_records_each_coverage_gap_once(tmp_path):
                             time.monotonic() + 300, 1)
     assert expired == [1]
     assert [g["pid"] for g in result["coverage_gaps"]] == [1]
-    assert run_check._collection(result)["coverage_lagging"]["count"] == 1
+    assert health_report.collection(result)["coverage_lagging"]["count"] == 1
     db.close()
 
 
@@ -57,12 +59,12 @@ def test_self_probe_replay_lists_each_fetched_patient_once(tmp_path):
         def fetch_latest(self, pid):
             if pid == 91 and not expired:
                 expired.append(1)
-                raise mcs_adapter.SessionExpired(status=403)
+                raise mcs_contract.SessionExpired(status=403)
             return {"message_id": pid * 10 + 5, "is_self_only": False}
 
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             # page-limited walk that has not reached the probed id yet
-            return mcs_adapter.MessageBatch([], pages=1, reached=False)
+            return mcs_contract.MessageBatch([], pages=1, reached=False)
 
         def auto_login(self, **kw):
             return "ok"
@@ -93,20 +95,20 @@ def test_unread_replay_keeps_records_of_patients_acked_before_expiry(tmp_path):
 
     def fetch(pid, ts):
         if pid == 1:              # capped: plain-list acknowledgement
-            return mcs_adapter.MessageBatch(messages=[], error=mcs_adapter.MCSError(
+            return mcs_contract.MessageBatch(messages=[], error=mcs_contract.MCSError(
                 "http_error", "GET", status=400))
-        return mcs_adapter.MessageBatch(
+        return mcs_contract.MessageBatch(
             messages=[_message(mid=pid * 100, project_id=pid, unread=True)],
             reached=True)
 
     def replies(m):
         if m.project_id == 2 and not expired:
             expired.append(1)
-            raise mcs_adapter.SessionExpired(status=403)
-        return mcs_adapter.ReplyBatch([], [])
+            raise mcs_contract.SessionExpired(status=403)
+        return mcs_contract.ReplyBatch([], [])
     adapter = SimpleNamespace(
         auto_login=lambda **kw: "ok",
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(p) for p in (3, 1, 2)
                                      if p not in marked]),
         fetch_unread_messages=fetch, fetch_unread_replies=replies,
@@ -140,19 +142,19 @@ def test_unread_replay_keeps_a_mark_failure_of_a_patient_no_longer_unread(tmp_pa
     def mark(pid, *a, **k):
         read_on_server.add(pid)
         if pid == 1:
-            raise mcs_adapter.MCSError("network_error", retryable=True)
+            raise mcs_contract.MCSError("network_error", retryable=True)
 
     def replies(m):
         if m.project_id == 2 and not expired:
             expired.append(1)
-            raise mcs_adapter.SessionExpired(status=403)
-        return mcs_adapter.ReplyBatch([], [])
+            raise mcs_contract.SessionExpired(status=403)
+        return mcs_contract.ReplyBatch([], [])
     adapter = SimpleNamespace(
         auto_login=lambda **kw: "ok",
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(p) for p in (1, 2)
                                      if p not in read_on_server]),
-        fetch_unread_messages=lambda pid, ts: mcs_adapter.MessageBatch(
+        fetch_unread_messages=lambda pid, ts: mcs_contract.MessageBatch(
             messages=[_message(mid=pid, project_id=pid, unread=True)],
             reached=True),
         fetch_unread_replies=replies, mark_patient_read=mark,
@@ -187,8 +189,8 @@ def test_backfill_replay_keeps_a_stalled_head_walk(tmp_path):
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             if pid == 2 and not expired:
                 expired.append(1)
-                raise mcs_adapter.SessionExpired(status=403)
-            return mcs_adapter.MessageBatch([], pages=1, reached=False)
+                raise mcs_contract.SessionExpired(status=403)
+            return mcs_contract.MessageBatch([], pages=1, reached=False)
 
         def auto_login(self, **kw):
             return "ok"
@@ -201,5 +203,5 @@ def test_backfill_replay_keeps_a_stalled_head_walk(tmp_path):
     assert expired == [1]
     assert result["errors"] == ["backfill 1: coverage_stalled_failed"]
     assert [g["pid"] for g in result["coverage_stalled"]] == [1]
-    assert run_check._collection(result)["collection"] != "ok"
+    assert health_report.collection(result)["collection"] != "ok"
     db.close()

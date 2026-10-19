@@ -30,7 +30,7 @@ from mcs_queries import JST, coverage_gaps  # noqa: E402
 from message_metadata import (get_message_metadata, mentions_self,  # noqa: E402
                               others_reaction_count, reaction_label,
                               STAMP_EMOJI)
-from notify_render import (SIGNAL_TYPE_LABEL, _patient_name, fit_parts, parts_text,  # noqa: E402
+from notify_render import (SIGNAL_TYPE_LABEL, patient_name, fit_parts, parts_text,  # noqa: E402
                            plain_notice)
 from notify_views import assignee_matches  # noqa: E402
 
@@ -363,7 +363,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         return keep is None or pid in keep
 
     def room(pid) -> str:
-        name_ = _plain(_patient_name(db, pid)) if names else ""
+        name_ = _plain(patient_name(db, pid)) if names else ""
         # staff read names; the internal id only identifies a room when
         # names are off or missing
         return (name_ or f"project {pid}") \

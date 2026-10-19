@@ -1,4 +1,5 @@
 """Synthetic chunk merges keep a BP reading intact, including a known single side."""
+import extract_validation
 import pytest
 
 import extract_llm
@@ -6,7 +7,7 @@ import extract_llm
 
 @pytest.mark.parametrize("later", [{"sbp": 120}, {"dbp": 80}])
 def test_latest_partial_bp_does_not_borrow_the_previous_readings_other_side(later):
-    out = extract_llm._merge([
+    out = extract_validation.merge([
         {"vitals": {"sbp": 150, "dbp": 90}}, {"vitals": later}])
     assert out["vitals"] == later
 
@@ -29,13 +30,13 @@ def test_real_chunk_extraction_preserves_latest_single_bp_side(monkeypatch, side
 
 
 def test_later_complete_reading_replaces_both_sides():
-    out = extract_llm._merge([
+    out = extract_validation.merge([
         {"vitals": {"sbp": 150}}, {"vitals": {"sbp": 120, "dbp": 80}}])
     assert out["vitals"] == {"sbp": 120, "dbp": 80}
 
 
 def test_unrelated_measurement_keeps_the_complete_prior_bp_reading():
-    out = extract_llm._merge([
+    out = extract_validation.merge([
         {"vitals": {"sbp": 120, "dbp": 80}}, {"vitals": {"hr": 70}}])
     assert out["vitals"] == {"sbp": 120, "dbp": 80, "hr": 70}
 

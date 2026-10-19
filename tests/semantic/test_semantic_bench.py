@@ -1,4 +1,5 @@
 """Offline contracts for the live detection command's reported outcome."""
+import semantic_transport
 from types import SimpleNamespace
 import json
 from pathlib import Path
@@ -28,7 +29,6 @@ def test_corpus_cli_freezes_only_checked_in_synthetic_sources(tmp_path, monkeypa
 @pytest.mark.parametrize("live_jev", [False, True])
 def test_run_refuses_unbound_corpus_before_model_or_credentials(
         tmp_path, monkeypatch, damage, live_jev):
-    import semantic
     member = {"message_id": 1, "body_original": "合成の未登録本文", "revision": "r1"}
     corpus = {"corpus_version": 1, "cases": [{"case_id": "old", "project_id": 1,
               "root_id": 1, "target_id": 1, "members": [member]}]}
@@ -36,7 +36,7 @@ def test_run_refuses_unbound_corpus_before_model_or_credentials(
         corpus["source"] = "fully_synthetic"
     source, output = tmp_path / "input.json", tmp_path / "result.json"
     source.write_text(json.dumps(corpus))
-    monkeypatch.setattr(semantic, "llm_chat", lambda *_: pytest.fail("model dispatched"))
+    monkeypatch.setattr(semantic_transport, 'llm_chat', lambda *_: pytest.fail("model dispatched"))
     monkeypatch.setattr(bench, "env_value", lambda *_: pytest.fail("credentials read"))
     assert bench.cmd_run(SimpleNamespace(corpus=source, out=str(output), tag="synthetic",
                                         job_budget=1, jev=live_jev)) == 2
@@ -47,12 +47,11 @@ def test_run_accepts_frozen_synthetic_corpus_with_injected_pipeline(tmp_path, mo
     source, output = tmp_path / "input.json", tmp_path / "result.json"
     monkeypatch.setattr(bench, "LedgerReader", lambda *_: pytest.fail("ledger accessed"))
     assert bench.cmd_corpus(SimpleNamespace(n=2, out=str(source))) == 0
-    import semantic
     calls = []
     def llm(prompt, **_):
         calls.append(prompt)
         return json.dumps({"facts": [], "claims": [], "limitations": []})
-    monkeypatch.setattr(semantic, "llm_chat", llm)
+    monkeypatch.setattr(semantic_transport, 'llm_chat', llm)
     assert bench.cmd_run(SimpleNamespace(corpus=source, out=str(output), tag="synthetic",
                                         job_budget=1, jev=False)) == 0
     result = json.loads(output.read_text())

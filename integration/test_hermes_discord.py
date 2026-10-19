@@ -16,11 +16,13 @@ import discord
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'mcs'))
 import _mcs_path  # noqa: F401  registers every subdir as import root
+import semantic_drain
+import semantic_policy
+import semantic_store
 
 from ledger import Ledger, publish_snapshot
-from mcs_adapter import Message
+from mcs_contract import Message
 import job_ops
-import semantic
 import semantic_loops
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.run import GatewayRunner
@@ -50,9 +52,9 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
     db.save_messages([Message(1, 1, None, 1, 'synthetic', 'user', '', '',
                              '2026-09-20T00:00:00+09:00', '<p>Confirm synthetic task.</p>',
                              'full', False, 0)])
-    config, _ = semantic.semantic_config({'semantic': {'mode': 'shadow', 'project_ids': [1]}})
-    db.artifact_add('semantic_policy', semantic.policy_fingerprint(config))
-    bundle = semantic.thread_bundle(db, 1, 1, [1])
+    config, _ = semantic_policy.semantic_config({'semantic': {'mode': 'shadow', 'project_ids': [1]}})
+    db.artifact_add('semantic_policy', semantic_policy.policy_fingerprint(config))
+    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
     member = bundle['members'][0]
     body = member['body_original']
     fact = {'kind': 'explicit_request', 'polarity': 'affirmed',
@@ -226,15 +228,15 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
         operations = await invoke({'op': 'read', 'kind': 'operations', 'project_id': 1})
         retried = next(item for item in operations['result']['items'] if item['job_id'] == job_id)
         assert retried['attempts'] == 6 and retried['attempt_limit'] == 8
-        assist, errors = semantic.semantic_config({'semantic': {
+        assist, errors = semantic_policy.semantic_config({'semantic': {
             'mode': 'assist', 'summary_mode': 'assist', 'project_ids': [1]}})
         assert not errors
-        policy = semantic.policy_fingerprint(assist)
+        policy = semantic_policy.policy_fingerprint(assist)
         db.artifact_add('semantic_policy', policy)
         db.artifact_add('extract_llm', json.dumps({'summary': 'Old synthetic summary', 'points': []}),
                         project_id=1, message_id=1, meta={'hash': member['revision']})
         with db.db:
-            semantic._write_result(db, 1, 1, {
+            semantic_drain._write_result(db, 1, 1, {
                 'summary': {'target_message_id': 1, 'claims': [{'section': 'requests', 'text': body,
                                        'claim_kind': 'reported_fact', 'fact_refs': [0],
                                        'status': 'planned', 'polarity': 'affirmed'}],

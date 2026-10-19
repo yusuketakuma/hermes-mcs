@@ -1,4 +1,5 @@
 """自分の投稿への反応・自分宛メンション・しおり等の表示（読取り専用・完全合成）。"""
+import notify_parts
 import json
 import asyncio
 import sys
@@ -80,10 +81,10 @@ def test_card_footer_uses_sender_id_not_same_name(led):
         _meta(led, mid, reactions=[_r("viewed", 2, True)])
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
     footer = "\n".join(i["text"] for i in
-                       notify_render._card_content(led.db, _card(led))["footer"])
+                       notify_render.card_content(led.db, _card(led))["footer"])
     # own post counts others only (1), the other's post counts both (2)
     assert "スタンプ 👀3 · 自分 2投稿" in footer
-    body = notify_render._card_body_text(
+    body = notify_render.card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
     own, other = body.split("\n\n")
     assert "スタンプ 👀1 · 自分 👀 · " in own and "スタンプ 👀2 · 自分 👀 · " in other
@@ -335,10 +336,10 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
     _post(led, 100, OTHER, ts=NOW - 100)
     _post(led, 101, SELF, ts=NOW - 50, parent=100)
     _meta(led, 100, reactions=[_r("accepted", 2, True), _r("good", 1)])
-    monkeypatch.setattr(notify_render, "_structured_block", lambda db, mid, **_kw: {
+    monkeypatch.setattr(notify_render, "structured_block", lambda db, mid, **_kw: {
         "type": "text", "text": f"📋 要約\n・要約{mid}"})
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
-    body = notify_render._card_body_text(
+    body = notify_render.card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
     for post, mid, stamps in zip(body.split("\n\n"), (100, 101),
                                  ("スタンプ 🙆2 👍1 · 自分 🙆 · ",
@@ -355,12 +356,11 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
 def test_long_post_keeps_summary_and_stamps_with_its_body():
     """Regression: a long body started its own chunk, leaving the
     header / summary / stamp lines as a post of their own."""
-    import notify_cards
     head = "10-03 08:00 職員\n📋 要約\n・要約\nスタンプ 👀9 🙏1 · 観測 10-03 08:05\n" + notify_render.SECTION_RULE + "\n📄 本文\n"
     for body in ("本" * 1852, "本" * 3000, ("行\n" * 1200)):
-        chunks = notify_cards._split_body_chunks(head + body)
+        chunks = notify_parts.split_body_chunks(head + body)
         assert "".join(chunks) == head + body
-        assert all(len(c) <= notify_cards.THREAD_PART_LIMIT for c in chunks)
+        assert all(len(c) <= notify_parts.THREAD_PART_LIMIT for c in chunks)
         assert chunks[0].startswith(head) and len(chunks[0]) > len(head)
 
 
@@ -372,7 +372,7 @@ def test_thread_post_names_who_pressed(led, monkeypatch):
     _post(led, 100, SELF, ts=NOW - 100)
     _meta(led, 100, reactions=[_r("viewed", 2), _r("accepted", 1, True)])
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
-    body = lambda: notify_render._card_body_text(  # noqa: E731
+    body = lambda: notify_render.card_body_text(  # noqa: E731
         led.db, _card(led), {"shown": "[100]"}, max_chars=None)[1]
     def stamp():
         return next(ln for ln in body().split("\n") if ln.startswith("スタンプ "))
@@ -387,7 +387,7 @@ def test_thread_post_names_who_pressed(led, monkeypatch):
                        " · 09-21 23:12時点")       # pinned clock: 24h past
     monkeypatch.setattr(ledger.time, "time", lambda: NOW)
     assert stamp() == "スタンプ 👀2 合成 一郎・合成 花子 · 自分 🙆 · 09-21 23:12時点"
-    footer = "\n".join(x["text"] for x in notify_render._card_content(led.db, _card(led))["footer"])
+    footer = "\n".join(x["text"] for x in notify_render.card_content(led.db, _card(led))["footer"])
     assert "合成 一郎" not in footer
 
 
@@ -594,7 +594,7 @@ def test_stamp_actor_late_names_and_fetch_state_refresh_existing_parts(led, monk
                              True, now=NOW - 10)
     specs = []
     with led.db:
-        issued = notify_cards._issue_render(led.db, 1, CFG, NOW, specs)
+        issued = notify_cards.issue_render(led.db, 1, CFG, NOW, specs)
     if state == "unknown":
         assert issued is None and specs == []
         assert _latest_render(led)["delivery_id"] == first["delivery_id"]
@@ -610,7 +610,7 @@ def test_stamp_actor_late_names_and_fetch_state_refresh_existing_parts(led, monk
     led.save_reaction_actors(100, [], False, error="synthetic_failure", now=NOW)
     specs = []
     with led.db:
-        assert notify_cards._issue_render(led.db, 1, CFG, NOW, specs) is not None
+        assert notify_cards.issue_render(led.db, 1, CFG, NOW, specs) is not None
     body = "".join(specs[0]["parts"]["thread_body_parts"])
     assert "スタンプ 👀2 合成後着 · 押した人 取得失敗 · " in body
 
@@ -636,7 +636,7 @@ def test_stamp_actor_late_name_updates_an_existing_post_outside_the_card_page(le
                              True, now=NOW - 10)
     fresh = []
     with led.db:
-        assert notify_cards._issue_render(led.db, 1, CFG, NOW, fresh) is not None
+        assert notify_cards.issue_render(led.db, 1, CFG, NOW, fresh) is not None
     assert "合成前ページ" in "".join(fresh[0]["parts"]["thread_body_parts"])
     old_body = [p for p in initial["parts"]["manifest"] if p["kind"] == "body_part"]
     new_body = [p for p in fresh[0]["parts"]["manifest"] if p["kind"] == "body_part"]
@@ -682,7 +682,7 @@ def test_stamp_actor_refresh_keeps_human_confirmation_and_source_identity(led, m
                              True, now=NOW - 10)
     specs = []
     with led.db:
-        assert notify_cards._issue_render(led.db, 1, CFG, NOW, specs) is not None
+        assert notify_cards.issue_render(led.db, 1, CFG, NOW, specs) is not None
     after = _card(led)
     assert (after["source_generation"], after["source_fp"]) == (before["source_generation"], before["source_fp"])
     assert after["presentation_generation"] == before["presentation_generation"] + 1

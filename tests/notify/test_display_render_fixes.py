@@ -1,6 +1,7 @@
 """v1.0.26 display audit: signal state wording, evidence-less alerts,
 photo-only evidence, unknown dates, the urgency badge in previews and the
 Slack urgent-notice link. Synthetic ledger only."""
+import notify_scope
 import json
 
 import alert_view
@@ -13,7 +14,7 @@ __all__ = ["led"]
 
 
 def _sig(led, key):
-    return notify_render._latest_signals(led.db, [key], 1)[key]["content"]
+    return notify_scope.latest_signals(led.db, [key], 1)[key]["content"]
 
 
 def _preview(led, keys, kind="signal"):

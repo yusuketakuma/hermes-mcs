@@ -18,7 +18,8 @@ sys.path.insert(0, str(SCRIPTS))
 
 
 def _load(name):
-    spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
+    directory = ROOT / "scripts/evaluation" if name == "semantic_shadow_e2e" else SCRIPTS
+    spec = importlib.util.spec_from_file_location(name, directory / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -206,7 +207,7 @@ def test_shadow_cli_preserves_valid_operator_fixture_and_budget(monkeypatch, tmp
         calls.append((actual, model, client, kwargs))
         return {"cases": 1, "complete": 0}
     model = object()
-    monkeypatch.setitem(sys.modules, "semantic", SimpleNamespace(llm_chat=model))
+    monkeypatch.setitem(sys.modules, "semantic_transport", SimpleNamespace(llm_chat=model))
     monkeypatch.setitem(sys.modules, "semantic_evaluation", SimpleNamespace(run_shadow_e2e=run))
     monkeypatch.setattr(sys, "argv", ["shadow", "--cases", str(cases), "--out", str(output),
                                       f"--deadline={budget}"])

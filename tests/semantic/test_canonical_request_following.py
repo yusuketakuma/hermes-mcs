@@ -1,11 +1,12 @@
 """Real local request-following pipeline; all sources and databases are fictional."""
+import semantic_policy
+import semantic_store
 import copy
 import hashlib
 import json
 
 import pytest
 
-import semantic
 import semantic_extraction as extraction
 import semantic_facts as facts
 import semantic_loops as loops
@@ -23,7 +24,7 @@ def runtime(tmp_path):
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body=TEXT)], project_id=1)
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     member = bundle["members"][0]
     manifest = extraction.build_manifest(TEXT, bundle["source_fingerprint"], 3000)
     ev = {"evidence_id": facts.evidence_id(1, member["revision"], 0, len(TEXT), TEXT),
@@ -112,13 +113,13 @@ def test_real_normalizer_binds_fields_to_the_owning_fact_quote(runtime):
             "evidence_quote": TEXT, "polarity": "affirmed", "epistemic": "asserted",
             "workflow_status": "pending", **DETAILS}
     normalized, dropped = extraction._normalise_facts_v2(
-        [item], member, TEXT, semantic, spec=spec, manifest=manifest,
+        [item], member, TEXT, spec=spec, manifest=manifest,
         atom_owner=owners, obligations={})
     assert dropped == 0
     assert {key: normalized[0][key] for key in DETAILS} == DETAILS
     item["evidence_quote"] = "架空資料X"
     normalized, dropped = extraction._normalise_facts_v2(
-        [item], member, TEXT, semantic, spec=spec, manifest=manifest,
+        [item], member, TEXT, spec=spec, manifest=manifest,
         atom_owner=owners, obligations={})
     assert dropped == 0 and normalized[0]["validation_status"] == "verified"
     for key in ("request_to", "request_from", "due_text", "condition"):
@@ -252,7 +253,7 @@ def test_staging_holds_old_thread_generation_after_edit_or_reply(runtime):
 
 def test_default_loop_inputs_do_not_change_stored_identity_or_merge_reply(runtime):
     db, bundle, _, _, doc = runtime
-    scfg, errors = semantic.semantic_config(_cfg("shadow"))
+    scfg, errors = semantic_policy.semantic_config(_cfg("shadow"))
     assert not errors
     old = facts.validate_facts_doc(doc)
     new = facts.validate_facts_doc(_with_details(doc))
@@ -262,7 +263,7 @@ def test_default_loop_inputs_do_not_change_stored_identity_or_merge_reply(runtim
                               None, scfg, None) == (0, True)
     row = db.db.execute("SELECT content FROM artifacts WHERE kind='loop_candidate'").fetchone()
     original = json.loads(row[0])
-    v4.stage_request_following(db, bundle, new, policy=semantic.policy_fingerprint(scfg))
+    v4.stage_request_following(db, bundle, new, policy=semantic_policy.policy_fingerprint(scfg))
     assert json.loads(db.db.execute(
         "SELECT content FROM artifacts WHERE kind='loop_candidate'").fetchone()[0]) == original
     assert original["state"] == "PROPOSED" and original["assignee_text"] is None

@@ -7,6 +7,9 @@ source text is used only to build model input and verify codepoint spans; no
 network client is created here.
 """
 from __future__ import annotations
+import mcs_util
+import semantic_llm
+import semantic_transport
 
 import bisect
 import copy
@@ -47,9 +50,8 @@ def _chunk_generation(model: str, prompt_template: str, *, chunk_size: int = 300
 def v2_generation() -> str:
     """Identity of the default v2 extraction (model + prompt + chunk plan);
     a change means an earlier attempt says nothing about a new one."""
-    import semantic
     import semantic_llm
-    return _chunk_generation(semantic.llm_model(), semantic_llm._FACT_V2_PROMPT)
+    return _chunk_generation(semantic_transport.llm_model(), semantic_llm._FACT_V2_PROMPT)
 
 
 def _chunk_specs(source: str, chunk_size: int, chunker) -> list[dict]:
@@ -349,9 +351,9 @@ def _persist_manifest(ledger, project_id, message_id, model, source_fp,
     refresh_extraction_cards(ledger, project_id, message_id)
 
 
-def _json_object(response, semantic):
+def _json_object(response):
     try:
-        parsed = semantic._json_block(response or "")
+        parsed = mcs_util.json_object(response or "")
     except Exception:
         return None
     return parsed if isinstance(parsed, dict) else None
@@ -378,7 +380,6 @@ def _chunk_llm(llm_fn, prompt: str, deadline):
     """One chunk extraction call -> (parsed_doc, reason).  reason is
     "model" or "deadline" on failure; RuntimeGuardError propagates so
     the runtime boundary still aborts the job."""
-    import semantic
     from semantic_runtime import RuntimeGuardError
     try:
         response = llm_fn(prompt)
@@ -388,7 +389,7 @@ def _chunk_llm(llm_fn, prompt: str, deadline):
         return None, "model"
     if deadline is not None and time.monotonic() > deadline:
         return None, "deadline"
-    return _json_object(response, semantic), None
+    return _json_object(response), None
 
 
 def _preflight_verdict(jev_client, text: str, deadline, chunk_id):
@@ -500,7 +501,7 @@ def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
 
 
 def _normalise_facts(items: list, member: dict, source: str,
-                     fact_offset: int, semantic, *,
+                     fact_offset: int, *,
                      piece: str | None = None, piece_start: int = 0,
                      manifest: dict | None = None) -> tuple[list, int]:
     facts = []
@@ -522,9 +523,9 @@ def _normalise_facts(items: list, member: dict, source: str,
         if isinstance(quote, str):
             if piece is not None:
                 span = _resolve_evidence(quote, piece, piece_start,
-                                         source, semantic)
+                                         source)
             else:
-                span = semantic._locate_quote(source, quote)
+                span = mcs_util.locate_quote_span(source, quote)
         if span:
             # _locate_quote may have matched after whitespace
             # normalization — store the verbatim original so
@@ -539,7 +540,7 @@ def _normalise_facts(items: list, member: dict, source: str,
         time_text = item.get("time_text")
         fact = {
             "fact_id": f"fact_{message_id}_{index}",
-            "kind": item.get("kind") if item.get("kind") in semantic.FACT_KINDS
+            "kind": item.get("kind") if item.get("kind") in semantic_llm.FACT_KINDS
                     else "other",
             # Deliberately do not apply semantic.py's historical 200-char cap.
             "statement": statement,
@@ -547,9 +548,9 @@ def _normalise_facts(items: list, member: dict, source: str,
             "drug_ref": item.get("drug_ref")
                         if isinstance(item.get("drug_ref"), str)
                         and span and item["drug_ref"] in quote else None,
-            "status": status if status in semantic.FACT_STATUSES else "not_stated",
-            "polarity": polarity if polarity in semantic.POLARITIES else "uncertain",
-            "occurred_at": semantic._iso_date(time_text),
+            "status": status if status in semantic_llm.FACT_STATUSES else "not_stated",
+            "polarity": polarity if polarity in semantic_llm.POLARITIES else "uncertain",
+            "occurred_at": semantic_llm._iso_date(time_text),
             "time_text": time_text if isinstance(time_text, str) else None,
             "quantity": item.get("quantity")
                         if isinstance(item.get("quantity"), str) else None,
@@ -704,12 +705,11 @@ def extract_facts_resumable(llm_fn, member: dict,
     """Extract all source chunks with durable prefix reuse.
 
     ``failure_reason`` is ``"deadline"`` or ``"model"`` when incomplete,
-    matching the optional reason returned by ``semantic.extract_facts``. A
+    matching the optional reason returned by ``extract_facts``. A
     completed chunk is persisted before the next model call.  The returned
     facts are partial only when ``complete`` is false, and callers must keep
     them out of a terminal/pass artifact until the pending chunks succeed.
     """
-    import semantic
 
     source, message_id, project_id, revision, source_fp, body_hash = \
         _member_prelude(member, llm_fn, project_id, source_fingerprint)
@@ -719,9 +719,9 @@ def extract_facts_resumable(llm_fn, member: dict,
         specs = _manifest_specs(manifest)
     else:
         specs = _chunk_specs(source, chunk_size, chunker)
-    _persist_manifest(ledger, project_id, message_id, semantic.llm_model(),
+    _persist_manifest(ledger, project_id, message_id, semantic_transport.llm_model(),
                       source_fp, manifest, len(source))
-    generation = _chunk_generation(semantic.llm_model(), semantic._FACT_PROMPT, chunk_size=chunk_size)
+    generation = _chunk_generation(semantic_transport.llm_model(), semantic_llm._FACT_PROMPT, chunk_size=chunk_size)
     cached = _cached_chunks(ledger, project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             generation=generation)
@@ -745,7 +745,7 @@ def extract_facts_resumable(llm_fn, member: dict,
             failure_reason = "deadline"
             break
         parsed, reason = _chunk_llm(
-            llm_fn, _chunk_prompt(semantic._FACT_PROMPT, spec, manifest, source, chunk_size), deadline)
+            llm_fn, _chunk_prompt(semantic_llm._FACT_PROMPT, spec, manifest, source, chunk_size), deadline)
         if reason is not None:
             failed.append(index)
             failure_reason = reason
@@ -756,7 +756,7 @@ def extract_facts_resumable(llm_fn, member: dict,
             failure_reason = "model"
             break
         chunk_facts, chunk_dropped = _normalise_facts(
-            items, member, source, len(facts), semantic,
+            items, member, source, len(facts),
             piece=spec["text"], piece_start=spec["start"],
             manifest=manifest)
         if chunk_dropped:
@@ -765,7 +765,7 @@ def extract_facts_resumable(llm_fn, member: dict,
             failure_reason = "model"
             break
         # This is deliberately before the next loop iteration/model call.
-        _persist_chunk(ledger, project_id, message_id, semantic.llm_model(),
+        _persist_chunk(ledger, project_id, message_id, semantic_transport.llm_model(),
                        source_fp,
                        body_hash, revision, spec, chunk_facts, chunk_dropped,
                        len(specs), generation=generation)
@@ -836,19 +836,19 @@ def _member_actor(member: dict) -> str:
         return sf.UNKNOWN
 
 
-def _resolve_evidence(quote, piece, piece_start, source, semantic):
+def _resolve_evidence(quote, piece, piece_start, source):
     """Locate ``quote`` inside the owning chunk, then map to absolute
     codepoints.  A quote that only exists elsewhere in the source does
     not count — ownership prevents duplicate-quote shadowing."""
     if not isinstance(quote, str) or not quote:
         return None
-    local_span = semantic._locate_quote(piece, quote)
+    local_span = mcs_util.locate_quote_span(piece, quote)
     if local_span:
         return (piece_start + local_span[0], piece_start + local_span[1])
     return None
 
 
-def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
+def _normalise_facts_v2(items: list, member: dict, source: str,
                         *, spec: dict, manifest: dict,
                         atom_owner: dict, obligations: dict,
                         provenance: str = "local_llm",
@@ -897,7 +897,7 @@ def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
         name = name if isinstance(name, str) and name else None
         subject = sf.subject_identity(project_id, role=role, name=name)
         span = _resolve_evidence(item.get("evidence_quote"), piece,
-                                 piece_start, source, semantic)
+                                 piece_start, source)
         evidence_ids = []
         ev_rec = None
         if span is not None:
@@ -1118,7 +1118,6 @@ def extract_facts_v2(llm_fn, member: dict,
     no obligation remains open/ambiguous/failed.  Completed chunks are
     persisted before the next model call so a restart reuses the prefix.
     """
-    import semantic
     import semantic_llm
 
     if type(request_following) is not bool:
@@ -1130,10 +1129,10 @@ def extract_facts_v2(llm_fn, member: dict,
     posted_at = member.get("posted_at") or ""
     manifest = build_manifest(source, source_fp, chunk_size)
     specs = _manifest_specs(manifest)
-    _persist_manifest(ledger, project_id, message_id, semantic.llm_model(),
+    _persist_manifest(ledger, project_id, message_id, semantic_transport.llm_model(),
                       source_fp, manifest, len(source))
     cache_schema = SCHEMA_VERSION_V2 + ("/coverage-retry" if retry_coverage else "")
-    generation = _chunk_generation(semantic.llm_model(), prompt_template, chunk_size=chunk_size)
+    generation = _chunk_generation(semantic_transport.llm_model(), prompt_template, chunk_size=chunk_size)
     cached = _cached_chunks(ledger, project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             kind=KIND_CHUNK_V2, schema=cache_schema,
@@ -1157,7 +1156,7 @@ def extract_facts_v2(llm_fn, member: dict,
     failure_reason = None
     drop_reasons: dict = {}
     omitted: dict = {}
-    model = semantic.llm_model()
+    model = semantic_transport.llm_model()
 
     for spec in specs:
         index = spec["index"]
@@ -1210,7 +1209,7 @@ def extract_facts_v2(llm_fn, member: dict,
                       for oid, ob in obligations.items()
                       if ob["owner_id"] == cid}
         chunk_facts, chunk_dropped = _normalise_facts_v2(
-            items, member, source, semantic, spec=spec,
+            items, member, source, spec=spec,
             manifest=manifest, atom_owner=atom_owner,
             obligations=obligations, drop_reasons=drop_reasons,
             omitted=omitted)
@@ -1246,7 +1245,7 @@ def extract_facts_v2(llm_fn, member: dict,
 
     # Union deterministic extract_v1 hints (whole-message candidates).
     hint_facts, _ = _normalise_facts_v2(
-        _v1_hint_items(source, posted_at), member, source, semantic,
+        _v1_hint_items(source, posted_at), member, source,
         spec={"chunk_id": manifest["chunks"][0]["chunk_id"]
               if manifest["chunks"] else "chk_unknown",
               "text": source, "start": 0},
@@ -1619,7 +1618,6 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     unusable input) — the caller then keeps the prior doc and holds the
     generation rather than degrading it.
     """
-    import semantic
     import semantic_llm
 
     if type(request_following) is not bool:
@@ -1629,7 +1627,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     generation_detail = {}
     if request_following:
         generation_detail["generation"] = _chunk_generation(
-            semantic.llm_model(), semantic_llm._FACT_V2_REQUEST_FOLLOWING_PROMPT, chunk_size=chunk_size)
+            semantic_transport.llm_model(), semantic_llm._FACT_V2_REQUEST_FOLLOWING_PROMPT, chunk_size=chunk_size)
     # Only one return runs per call, so the early exits share this dict.
     unchanged = {"doc": doc, "repaired": False, "repaired_fact_ids": [],
                  "owner_chunk_ids": [], **generation_detail}
@@ -1740,7 +1738,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
                       for oid, ob in obligations.items()
                       if ob["owner_id"] == cid}
         new_facts, dropped_n = _normalise_facts_v2(
-            items, member, source, semantic, spec=spec,
+            items, member, source, spec=spec,
             manifest=manifest, atom_owner=atom_owner,
             obligations=obligations)
         if dropped_n:
@@ -1832,3 +1830,15 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     return {"doc": new_doc, "repaired": True,
             "repaired_fact_ids": repaired_fact_ids,
              "owner_chunk_ids": dispatched, **generation_detail}
+
+
+def extract_facts(llm_fn, member: dict,
+                  deadline: float | None = None,
+                  return_reason: bool = False, *, ledger=None,
+                  source_fingerprint=None, project_id=None) -> tuple:
+    """Whole-source extraction; durable chunks when called by the worker."""
+    result = extract_facts_resumable(
+        llm_fn, member, deadline, ledger=ledger,
+        source_fingerprint=source_fingerprint, project_id=project_id)
+    values = (result["facts"], result["complete"], result["dropped"])
+    return (*values, result["failure_reason"]) if return_reason else values

@@ -142,14 +142,14 @@ def updater(tmp_path, monkeypatch):
 # ---------------------------------------------------------------- state
 
 def test_state_roundtrip_and_corrupt(updater, tmp_path):
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["stages"].append({"stage": "local_checks", "at": 1.0})
-    updater.save_state(state)
-    loaded = updater.load_state()
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    loaded = updater.journal_store.load_state(updater.STATE_PATH)
     assert loaded["stages"][0]["stage"] == "local_checks"
     assert loaded["v"] == 1
     (tmp_path / "data" / "update_state.json").write_text("{not json")
-    assert updater.load_state().get("_corrupt") is True
+    assert updater.journal_store.load_state(updater.STATE_PATH).get("_corrupt") is True
 
 
 @pytest.mark.parametrize("field,value", [
@@ -163,10 +163,10 @@ def test_corrupt_journal_shapes_are_rejected_by_both_readers(
     from ops_testkit import _load
     recovery = _load()
     monkeypatch.setattr(recovery, "STATE_PATH", updater.STATE_PATH)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state[field] = value
-    updater.save_state(state)
-    assert updater.load_state() == {"_corrupt": True}
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    assert updater.journal_store.load_state(updater.STATE_PATH) == {"_corrupt": True}
     assert recovery._load_state() == {"_corrupt": True}
 
 
@@ -196,7 +196,7 @@ def test_rollback_keeps_manifest_and_restarts_changed_plugin(
     before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
     after = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
     desired = {"scripts": [], "agents": [{"label": "local.mcs-cmd"}], "cron": []}
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": after,
                          "prev_sha": before, "plugin_changed": True,
                          "manifest_snapshot": desired, "command_id": "apply-id"}
@@ -206,7 +206,7 @@ def test_rollback_keeps_manifest_and_restarts_changed_plugin(
     monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: True)
     monkeypatch.setattr(updater, "load_config", lambda: {})
     assert updater._post_merge(state) == 0
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["applied"][-1]["manifest_snapshot"] == desired
     state["stages"] = []
     restarts, memberships = [], []
@@ -214,7 +214,7 @@ def test_rollback_keeps_manifest_and_restarts_changed_plugin(
     def restart(cfg):
         # The decision survives popping the entry, and durable bookkeeping
         # must precede a restart that could terminate this caller.
-        persisted = updater.load_state()
+        persisted = updater.journal_store.load_state(updater.STATE_PATH)
         assert persisted["applied"] == []
         assert persisted["executed"]["rollback-id"]["result"] == "rolled_back"
         restarts.append(True)
@@ -230,10 +230,10 @@ def test_rollback_keeps_manifest_and_restarts_changed_plugin(
                              "command_id": "rollback-id", "at": time.time()}
         state["stages"] = [{"stage": "rollback", "at": time.time()}]
         _git(repo, "reset", "--hard", before)
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert (updater.recover_interrupted() if interrupted
             else updater.rollback("rollback-id")) == 0
-    assert updater.load_state()["applied"] == []
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applied"] == []
     assert restarts == [True]
     assert memberships == [desired]
 
@@ -282,8 +282,8 @@ def test_detect_latest_prerelease_excluded(updater, monkeypatch):
 
 def test_prerelease_numeric_components_follow_semver_order():
     names = ["v1.2.0-rc.2", "v1.2.0-rc.10", "v1.2.0"]
-    assert sorted(reversed(names), key=mcs_update._ver_key) == names
-    assert mcs_update._ver_key(["invalid"]) is None
+    assert sorted(reversed(names), key=mcs_update.update_policy.version_key) == names
+    assert mcs_update.update_policy.version_key(["invalid"]) is None
 
 
 def test_malformed_approval_cannot_break_queue_or_veto_valid_apply(updater, tmp_path):
@@ -300,13 +300,13 @@ def test_malformed_approval_cannot_break_queue_or_veto_valid_apply(updater, tmp_
                     (cid, "h" * 64, json.dumps(receipt), timestamp))
     con.commit()
     con.close()
-    candidates, consumed = updater.scan_pending_approvals(updater._default_state())
+    candidates, consumed = updater.scan_pending_approvals(updater.journal_store.default_state())
     assert [candidate["command_id"] for candidate in candidates] == ["valid"]
     assert consumed == []
 
 
 def test_defuse_mentions():
-    out = mcs_update.defuse_mentions(
+    out = mcs_update.update_policy.defuse_mentions(
         "ping @everyone <@123> <@&456> <#789> @here")
     assert "@everyone" not in out and "@here" not in out
     assert "<@123>" not in out and "<#789>" not in out
@@ -550,7 +550,7 @@ def test_scan_pending_newest_tag_and_veto(updater, tmp_path):
     con.close()
     updater.LEDGER = str(db)
     cand, consumed = updater.scan_pending_approvals(
-        updater._default_state())
+        updater.journal_store.default_state())
     # the rollback vetoed both applies; only it remains as a candidate
     assert [c["command_id"] for c in cand] == ["cid-rb"]
     assert cand[0]["rollback"] is True
@@ -573,7 +573,7 @@ def test_scan_pending_supersede(updater, tmp_path):
     con.close()
     updater.LEDGER = str(db)
     cand, consumed = updater.scan_pending_approvals(
-        updater._default_state())
+        updater.journal_store.default_state())
     # numeric semver: v1.10.0 > v1.2.0 (string compare would pick v1.2.0)
     assert [c["tag"] for c in cand] == ["v1.10.0"]
     assert sorted(dict(consumed).values()) == ["superseded"] * 2
@@ -590,7 +590,7 @@ def test_scan_skips_executed(updater, tmp_path):
     con.commit()
     con.close()
     updater.LEDGER = str(db)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["executed"] = {"c1": {"result": "applied", "at": 1}}
     cand, consumed = updater.scan_pending_approvals(state)
     assert cand == [] and consumed == []
@@ -599,7 +599,7 @@ def test_scan_skips_executed(updater, tmp_path):
 def test_scan_missing_ledger(updater, tmp_path):
     updater.LEDGER = str(tmp_path / "nonexistent.db")
     cand, consumed = updater.scan_pending_approvals(
-        updater._default_state())
+        updater.journal_store.default_state())
     assert cand == [] and consumed == []
 
 
@@ -614,7 +614,7 @@ def test_scan_approvals_uses_exact_live_uri_path(updater, tmp_path, monkeypatch)
         con.close()
     monkeypatch.setattr(updater, "LEDGER", str(live))
 
-    candidates, consumed = updater.scan_pending_approvals(updater._default_state())
+    candidates, consumed = updater.scan_pending_approvals(updater.journal_store.default_state())
     assert [candidate["command_id"] for candidate in candidates] == ["actual"]
     assert consumed == []
 
@@ -635,7 +635,7 @@ def test_scan_same_tag_newest_receipt_wins(updater, tmp_path):
     con.close()
     updater.LEDGER = str(db)
     cand, consumed = updater.scan_pending_approvals(
-        updater._default_state())
+        updater.journal_store.default_state())
     assert [c["command_id"] for c in cand] == ["c-new"]
     assert cand[0]["target_sha"] == sha_new
     assert dict(consumed) == {"c-old": "superseded"}
@@ -692,11 +692,11 @@ def test_apply_persists_adapter_restart_decision_before_restarting_gateway(
     sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(updater, "remote_tag_sha", lambda tag: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
-                        lambda expected: updater._post_merge(updater.load_state()))
+                        lambda expected: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
     restarts = []
 
     def restart(cfg):
-        saved = updater.load_state()
+        saved = updater.journal_store.load_state(updater.STATE_PATH)
         assert saved["applying"] is None
         assert saved["applied"][-1]["plugin_changed"] is True
         assert saved["executed"]["cid-adapter"]["result"] == "applied"
@@ -704,7 +704,7 @@ def test_apply_persists_adapter_restart_decision_before_restarting_gateway(
 
     monkeypatch.setattr(updater, "restart_gateway", restart)
     assert updater.apply("v1.2.0", sha, "cid-adapter") == 0
-    saved = updater.load_state()
+    saved = updater.journal_store.load_state(updater.STATE_PATH)
     assert saved["applied"][-1]["plugin_changed"] is needs_restart
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == sha
     assert restarts == ([True] if needs_restart else [])
@@ -728,7 +728,7 @@ def test_bail_consumes_failed_receipt(updater, tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
     rc = updater.apply("v9.9.9", sha, "cid-fail")
     assert rc == 1
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["executed"]["cid-fail"]["result"] == "failed"
     assert after["attempts"]["v9.9.9"]["result"] == "failed"
 
@@ -744,7 +744,7 @@ def test_apply_transient_lock_failure_keeps_receipt(updater, tmp_path,
                         lambda **kw: None)
     rc = updater.apply("v1.1.0", sha, "cid-wait")
     assert rc == 2
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert "cid-wait" not in after.get("executed", {})
     assert after["stages"] == []       # journal cleaned, not wedged
 
@@ -771,7 +771,7 @@ def test_schema_bump_never_auto_applies(updater, tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
     rc = updater.apply("v1.1.0", sha, None)   # auto path: no receipt
     assert rc == 1
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["attempts"]["v1.1.0"]["result"] == "failed"
     assert "schema_bump_auto_blocked" in \
         after["attempts"]["v1.1.0"]["detail"]
@@ -805,16 +805,16 @@ def test_recover_interrupted_pre_merge(updater, tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v9.9.9",
                          "sha": "f" * 40,        # != HEAD → pre-merge
                          "prev_sha": head,
                          "at": time.time() - 4000}
     state["stages"] = [{"stage": "quiesce", "at": time.time() - 3000}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     rc = updater.recover_interrupted()
     assert rc == 0
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["applying"] is None and after["stages"] == []
 
 
@@ -827,11 +827,11 @@ def test_recover_merge_head_abort(updater, tmp_path, monkeypatch):
                         lambda *a, **k: True)
     prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
     (repo / ".git" / "MERGE_HEAD").write_text(prev + "\n")
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "t" * 40,
                          "prev_sha": prev, "at": time.time() - 4000}
     state["stages"] = [{"stage": "merge", "at": time.time() - 3000}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     rc = updater.recover_interrupted()
     assert rc == 0
     assert not (repo / ".git" / "MERGE_HEAD").exists()
@@ -846,12 +846,12 @@ def test_recover_escalates_unclassifiable(updater, tmp_path,
     monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     # HEAD moved somewhere unknown mid-merge
     state["applying"] = {"tag": "v1.1.0", "sha": "t" * 40,
                          "prev_sha": "0" * 40, "at": time.time() - 4000}
     state["stages"] = [{"stage": "merge", "at": time.time() - 3000}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     rc = updater.recover_interrupted()
     assert rc == 1
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
@@ -871,12 +871,12 @@ def test_recover_pre_applying_remnant_is_cleaned(updater, tmp_path,
     monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["stages"] = [{"stage": "local_checks", "at": time.time() - 4000},
                        {"stage": "fetch", "at": time.time() - 3900}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.recover_interrupted() == 0
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["stages"] == [] and after["applying"] is None
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] == "interrupted_pre_merge"
@@ -890,14 +890,14 @@ def test_recover_completes_done_bookkeeping(updater, tmp_path,
     mcs_update.REPO = str(repo)
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["stages"] = [{"stage": "done", "at": time.time() - 100}]
     state["applied"] = [{"tag": "v1.1.0", "sha": "b" * 40,
                          "prev_sha": "a" * 40, "command_id": "cid-9",
                          "at": time.time()}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.recover_interrupted() == 0
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["stages"] == []
     assert after["executed"]["cid-9"]["result"] == "applied"
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
@@ -931,17 +931,17 @@ def test_recover_mixed_tree_after_merge_stage_crash(updater, tmp_path,
          "main", "v1.2.0")
     _git(repo, "fetch", "-q", "--tags")
     target = _git(repo, "rev-list", "-n1", "v1.2.0").stdout.strip()
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.2.0", "sha": target,
                          "prev_sha": prev, "command_id": "cid-mix",
                          "at": time.time() - 4000}
     state["stages"] = [{"stage": "merge", "at": time.time() - 3000}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.recover_interrupted() == 0
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
     assert _git(repo, "status", "--porcelain", "-uno").stdout.strip() == ""
     assert (repo / "introduced.txt").read_text() == "new"
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     # the failed apply's receipt is consumed — no crash/apply loop
     assert after["executed"]["cid-mix"]["result"] == \
         "interrupted_recovered"
@@ -958,15 +958,15 @@ def test_recover_defers_when_run_lock_busy(updater, tmp_path,
                         lambda: removed.append(1) or [])
     monkeypatch.setattr(mcs_update, "_acquire_run_lock_wait",
                         lambda **kw: None)      # busy — defer
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "t" * 40,
                          "prev_sha": "0" * 40, "at": time.time() - 4000}
     state["stages"] = [{"stage": "merge", "at": time.time() - 3000}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.recover_interrupted() == 0
     assert removed == []
     # journal untouched — still waiting for a quiet moment
-    assert updater.load_state()["applying"]["tag"] == "v1.1.0"
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["tag"] == "v1.1.0"
 
 
 def test_recover_removes_orphan_marker(updater, tmp_path, monkeypatch):
@@ -985,14 +985,14 @@ def test_recover_removes_orphan_marker(updater, tmp_path, monkeypatch):
 def _rollback_journal(updater, backup):
     """The production precondition of a DB replace: a rollback-shaped
     applying journal (apply bail / rollback() / recover all write one)."""
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     state["applying"] = {"tag": "v1.1.0", "sha": "b" * 40, "prev_sha": "a" * 40,
                          "rollback": True, "backup_path": str(backup), "at": time.time()}
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
 
 
 def _journal_kept(updater):
-    applying = updater.load_state()["applying"]
+    applying = updater.journal_store.load_state(updater.STATE_PATH)["applying"]
     assert applying["rollback"] is True and "restore_staging" not in applying
 
 
@@ -1100,16 +1100,16 @@ def test_rollback_restarts_agents_on_unexpected_error(
                         lambda *a, **k: True)
     monkeypatch.setattr(mcs_update, "_gateway_restart_if_needed",
                         lambda s: None)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0",
                          "sha": _git(repo, "rev-parse", "HEAD").stdout.strip(),
                          "prev_sha": _git(repo, "rev-list", "-n1", "v1.0.0").stdout.strip(),
                          "at": time.time()}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     rc = updater.rollback("cid-rb")
     assert rc == 1
     assert restarted == [1]                  # drainers brought back up
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["executed"]["cid-rb"]["result"] == "rollback_failed"
 
 
@@ -1146,11 +1146,11 @@ def _schema_bump_world(updater, tmp_path, monkeypatch):
     restarts = []
     monkeypatch.setattr(mcs_update, "restart_agents",
                         lambda: restarts.append(1) or [])
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0", "sha": after,
                          "prev_sha": before, "schema_bump": True,
                          "backup_path": str(back), "at": time.time()}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     return repo, live, str(back), before, after, restarts
 
 
@@ -1239,7 +1239,7 @@ def test_rollback_schema_bump_holds_for_consent(updater, tmp_path,
     assert report["stored_since_backup"]["messages"] == 3
     assert report["intervening_messages"] == 3
     assert report["backup_sha256"] == mcs_update._file_sha256(back)
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["applying"]["rollback"] is True
     assert state["restore_consent"]["report_id"] == report["report_id"]
     # the hold must NOT consume the rollback receipt — it stays pending
@@ -1265,7 +1265,7 @@ def test_rollback_consent_converges_via_recover(updater, tmp_path,
     # reconcile consumed the marker — no stale hold pinning senders
     import notify_cards
     assert notify_cards.restore_pending(str(tmp_path / "data")) is None
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["applying"] is None
     assert "restore_consent" not in state
     assert state["executed"]["cid-rb"]["result"] == "rolled_back"
@@ -1340,12 +1340,12 @@ def test_recover_holds_on_orphaned_restore_consent(updater, tmp_path,
                         lambda *a, **k: pytest.fail("no outbox write"))
     Path(mcs_update.MARKER_PATH).write_text("1")
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "t" * 40,
                          "prev_sha": head, "at": time.time() - 4000}
     state["stages"] = [{"stage": "merge", "at": time.time() - 3000}]
     state["restore_consent"] = {"report_id": "a" * 64}
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     rc = updater.recover_interrupted()
     assert rc == 1
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
@@ -1353,7 +1353,7 @@ def test_recover_holds_on_orphaned_restore_consent(updater, tmp_path,
     assert "restore_consent" in report["detail"]
     assert Path(mcs_update.MARKER_PATH).exists()
     # journal preserved for a human — nothing classified away
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["applying"] is not None and after["restore_consent"]
 
 
@@ -1471,7 +1471,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
     monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
 
     def post_merge(_state):
-        st = mcs_update.load_state()
+        st = mcs_update.journal_store.load_state(mcs_update.STATE_PATH)
         mcs_update.journal(st, "services")
         restart()
         mcs_update.journal(st, "restart")
@@ -1488,7 +1488,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
         monkeypatch.setattr(mcs_update, "_replace_database", fail_swap)
     monkeypatch.setattr(mcs_update, "_run_post_merge", post_merge)
     assert mcs_update.apply("v1.1.0", sha, "cid-apply") == 2
-    st = mcs_update.load_state()
+    st = mcs_update.journal_store.load_state(mcs_update.STATE_PATH)
     assert st.get("restore_consent")
     assert events[-1] == "quiesce" and "restart" in events
     assert Path(mcs_update.MARKER_PATH).exists()
@@ -1519,7 +1519,7 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
     monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
     def quiesce():
         mcs_update._write_marker()
-        if mcs_update.load_state().get("restore_consent"):
+        if mcs_update.journal_store.load_state(mcs_update.STATE_PATH).get("restore_consent"):
             raise mcs_update.UpdateError("drainer_stop_failed: synthetic")
         return []
 
@@ -1536,7 +1536,7 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
 
     monkeypatch.setattr(mcs_update, "_run_post_merge", post_merge)
     assert mcs_update.apply("v1.1.0", sha, "cid-apply") == 2
-    st = mcs_update.load_state()
+    st = mcs_update.journal_store.load_state(mcs_update.STATE_PATH)
     assert st.get("restore_consent")
     assert (st.get("applying") or {}).get("rollback") is True
     assert Path(mcs_update.MARKER_PATH).exists()
@@ -1552,7 +1552,7 @@ def test_manual_rollback_defers_to_recovery_of_interrupted_apply(
                           "prev_sha": "a" * 40, "at": time.time()},
              "stages": [{"stage": "merge", "at": time.time()}],
              "attempts": {}, "executed": {}}
-    mcs_update.save_state(state)
+    mcs_update.journal_store.save_state(mcs_update.STATE_PATH, state)
     calls = []
     monkeypatch.setattr(mcs_update, "recover_interrupted",
                         lambda *a, **k: calls.append(1) or 0)
@@ -1560,7 +1560,7 @@ def test_manual_rollback_defers_to_recovery_of_interrupted_apply(
                         lambda: pytest.fail("rollback must not quiesce"))
     assert mcs_update.rollback() == 0
     assert calls == [1]
-    assert mcs_update.load_state()["applying"]["tag"] == "v1.0.6"
+    assert mcs_update.journal_store.load_state(mcs_update.STATE_PATH)["applying"]["tag"] == "v1.0.6"
 
 
 class _FakeLaunchd:
@@ -1792,16 +1792,16 @@ def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
                         lambda e: pytest.fail("must not reset"))
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0",
                          "sha": _git(repo, "rev-parse", "HEAD").stdout.strip(),
                          "prev_sha": _git(repo, "rev-list", "-n1", "v1.0.0").stdout.strip(),
                          "at": time.time()}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.rollback("cid-rb") == 1
     assert ("bootstrap", "ai.mcs.a") in fake.calls   # a brought back
     assert "ai.mcs.a" in fake.loaded
-    detail = updater.load_state()["executed"]["cid-rb"]["detail"]
+    detail = updater.journal_store.load_state(updater.STATE_PATH)["executed"]["cid-rb"]["detail"]
     assert "drainer_stop_failed: ai.mcs.b" in detail
     assert "bootstrap_failed:ai.mcs.b" in detail
     assert not os.path.exists(mcs_update.MARKER_PATH)
@@ -1829,15 +1829,15 @@ def test_recover_escalates_when_services_reconcile_hangs(
         return real_run(argv, timeout, env, stdin)
     monkeypatch.setattr(mcs_update, "_run_owned", run)
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": head,
                          "prev_sha": "0" * 40, "command_id": "cid-a",
                          "at": time.time() - 4000}
     state["stages"] = [{"stage": "post_merge", "at": time.time() - 3000}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(mcs_update.MARKER_PATH).write_text("1")
     assert updater.recover_interrupted() == 1
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["executed"]["cid-a"]["result"] == "escalated"
     assert "services_failed" in after["executed"]["cid-a"]["detail"]
     assert not os.path.exists(mcs_update.MARKER_PATH)
@@ -1867,16 +1867,16 @@ def test_recover_git_failure_escalates_outside_consent_hold(
                         lambda: restarts.append(1) or [])
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
                          "prev_sha": "b" * 40, "command_id": "cid-a",
                          "at": time.time()}
     state["stages"] = [{"stage": "merge", "at": time.time()}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(mcs_update.MARKER_PATH).write_text("1")
     _hang_git(monkeypatch)
     assert updater.recover_interrupted() == 1
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["executed"]["cid-a"]["result"] == "escalated"
     assert "git_timeout" in after["executed"]["cid-a"]["detail"]
     assert after["applying"]["sha"] == "a" * 40   # journal kept: retry
@@ -1904,7 +1904,7 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     assert Path(mcs_update.MARKER_PATH).exists()
     assert notify_cards.restore_awaiting_consent(
         str(tmp_path / "data")) is not None
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["restore_consent"] and state["applying"]["rollback"]
     assert "cid-rb" not in state.get("executed", {})
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
@@ -1912,7 +1912,7 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     monkeypatch.setattr(mcs_update, "_run_owned", real_owned)
     _seed_consent(live, back)
     assert updater.recover_interrupted() == 0
-    assert updater.load_state()["executed"]["cid-rb"]["result"] \
+    assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["cid-rb"]["result"] \
         == "rolled_back"
     assert restarts == [1]
 
@@ -2037,21 +2037,21 @@ def test_apply_never_bails_a_foreign_journal_when_recover_raises(
     OSError from save_state) must propagate like in rollback(), never
     reach bail(): the old code _rollback_tree'd that journal unlocked
     and overwrote it with this apply's failure."""
-    foreign = updater._default_state()
+    foreign = updater.journal_store.default_state()
     foreign["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
                            "prev_sha": "b" * 40, "command_id": "other",
                            "at": time.time()}
     foreign["stages"] = [{"stage": "merge", "at": time.time()}]
-    real_load = updater.load_state
+    real_load = updater.journal_store.load_state
     reads = []
 
-    def load_state():
+    def load_state(path):
         reads.append(1)
-        return updater._default_state() if len(reads) == 1 \
-            else real_load()
-    updater.save_state(foreign)
+        return updater.journal_store.default_state() if len(reads) == 1 \
+            else real_load(path)
+    updater.journal_store.save_state(updater.STATE_PATH, foreign)
     before = Path(updater.STATE_PATH).read_bytes()
-    monkeypatch.setattr(mcs_update, "load_state", load_state)
+    monkeypatch.setattr(mcs_update.journal_store, "load_state", load_state)
     monkeypatch.setattr(mcs_update, "load_config", lambda: {})
     rolled, notices = [], []
     monkeypatch.setattr(mcs_update, "_rollback_tree", rolled.append)
@@ -2083,11 +2083,11 @@ def test_recover_escalation_notifies_once_per_condition(
     notices, ok = [], [False]
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or ok[0])
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
                          "prev_sha": "b" * 40, "at": time.time()}
     state["stages"] = [{"stage": "merge", "at": time.time()}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     _hang_git(monkeypatch)
     assert updater.recover_interrupted() == 1       # enqueue failed
     ok[0] = True
@@ -2095,7 +2095,7 @@ def test_recover_escalation_notifies_once_per_condition(
         assert updater.recover_interrupted() == 1
     assert len(notices) == 2                        # retry, then quiet
     state["stages"].append({"stage": "post_merge", "at": time.time()})
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.recover_interrupted() == 1
     assert len(notices) == 3                        # new condition
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
@@ -2121,17 +2121,17 @@ def test_repeated_escalation_ensures_drainers_instead_of_bouncing(
                         or [])
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
                          "prev_sha": "b" * 40, "at": time.time()}
     state["stages"] = [{"stage": "merge", "at": time.time()}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     for _ in range(3):
         assert updater.recover_interrupted() == 1   # unclassifiable
     assert calls == [True, False, False]
     assert not os.path.exists(mcs_update.MARKER_PATH)
     state["stages"].append({"stage": "post_merge", "at": time.time()})
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.recover_interrupted() == 1
     assert calls[-1] is True                        # new condition
 
@@ -2156,11 +2156,11 @@ def test_resume_retry_bounces_once_then_only_ensures(
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
     # a real prev: the dirty-tree reset checks the path is one the update touches
     prev = _git(repo, "rev-list", "-n1", "v1.0.0").stdout.strip()
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": head,
                          "prev_sha": prev, "at": time.time()}
     state["stages"] = [{"stage": "post_merge", "at": time.time()}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.recover_interrupted() == 1
     assert calls == [True, False]
     assert updater.recover_interrupted() == 1
@@ -2294,7 +2294,7 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
     assert Path(mcs_update.MARKER_PATH).exists()
     assert notify_cards.restore_awaiting_consent(
         str(tmp_path / "data")) is not None
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["restore_consent"] and state["applying"]["rollback"]
     assert "cid-rb" not in state.get("executed", {})
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
@@ -2302,7 +2302,7 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
     undo()
     _seed_consent(live, back)
     assert updater.recover_interrupted() == 0
-    assert updater.load_state()["executed"]["cid-rb"]["result"] \
+    assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["cid-rb"]["result"] \
         == "rolled_back"
     from ledger import SCHEMA_VERSION
     # Consuming the consent receipt reopens the restored DB with the current writer.
@@ -2326,9 +2326,9 @@ def test_marker_only_hold_survives_git_failure(
     rid = json.loads(marker.read_text())["report_id"]
     if unreadable:
         marker.write_text("{broken")
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     del state["restore_consent"]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     notices = []
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
@@ -2337,7 +2337,7 @@ def test_marker_only_hold_survives_git_failure(
     assert updater.recover_interrupted() == 1
     assert restarts == [] and notices == []
     assert Path(mcs_update.MARKER_PATH).exists()
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     hold = state["restore_consent"]
     assert hold["from_marker"] is True
     assert hold["report_id"] == (None if unreadable else rid)
@@ -2349,7 +2349,7 @@ def test_marker_only_hold_survives_git_failure(
     monkeypatch.setattr(mcs_update, "_run_owned", real_owned)
     _seed_consent(live, back)
     assert updater.recover_interrupted() == 0
-    assert updater.load_state()["executed"]["cid-rb"]["result"] \
+    assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["cid-rb"]["result"] \
         == "rolled_back"
 
 
@@ -2467,7 +2467,7 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] == "escalate" and report["writers_stopped"]
     assert Path(mcs_update.MARKER_PATH).exists()
-    st = mcs_update.load_state()
+    st = mcs_update.journal_store.load_state(mcs_update.STATE_PATH)
     assert st["applying"]["restore_incomplete"] is True
     assert st["executed"]["cid"]["result"] == "failed"
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
@@ -2477,7 +2477,7 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
 
     mcs_update.recover_interrupted()
     assert notices == []
-    st = mcs_update.load_state()
+    st = mcs_update.journal_store.load_state(mcs_update.STATE_PATH)
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] != "interrupted_pre_merge"
     assert report["result"] == "escalate"
@@ -2524,7 +2524,7 @@ def test_post_merge_bail_stops_restarted_writers_before_rollback(updater, monkey
     monkeypatch.setattr(updater, "restart_agents", lambda: events.append("restart") or [])
     assert updater.apply("v1.1.0", target, "synthetic-command") == 1
     assert events[:3] == ["quiesce", "child_restart", "quiesce"]
-    state = updater.load_state()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
     if stop_fails:
         assert "rollback" not in events and "restart" not in events
         assert updater._head_sha() == target
@@ -2550,13 +2550,13 @@ def test_deferred_update_notice_refetches_release_context(updater, monkeypatch):
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **kw:
                         notices.append(text) or len(notices) > 1)
     assert updater.cmd_check() == 0
-    assert updater.load_state()["latest_tag"] == "v1.1.0"
-    assert updater.load_state().get("notified_at") != "v1.1.0"
+    assert updater.journal_store.load_state(updater.STATE_PATH)["latest_tag"] == "v1.1.0"
+    assert updater.journal_store.load_state(updater.STATE_PATH).get("notified_at") != "v1.1.0"
     assert updater.cmd_check() == 0
     assert fetched == ["v1.1.0", "v1.1.0"]
     assert "synthetic release notes" in notices[1]
     assert "synthetic restart required" in notices[1]
-    assert updater.load_state()["notified_at"] == "v1.1.0"
+    assert updater.journal_store.load_state(updater.STATE_PATH)["notified_at"] == "v1.1.0"
     assert updater.cmd_check() == 0
     assert len(fetched) == 2 and len(notices) == 2
 
@@ -2602,7 +2602,7 @@ def test_checkout_ahead_of_latest_tag_does_not_refetch_daily(updater, monkeypatc
     for _ in range(2):
         assert updater.cmd_check() == 0
     assert fetched == ["v1.1.0"] and calls.count("fetch") == 1
-    assert updater.load_state().get("notified_at") is None
+    assert updater.journal_store.load_state(updater.STATE_PATH).get("notified_at") is None
 
 
 def test_invalid_runtime_mode_is_reported_not_raised(updater, tmp_path, monkeypatch):
@@ -2674,7 +2674,7 @@ def test_restore_staging_closes_its_fd_when_fstat_fails(updater, tmp_path, monke
     data = tmp_path / "data"
     data.mkdir(exist_ok=True)
     monkeypatch.setattr(updater, "LEDGER", str(data / "ledger.db"))
-    monkeypatch.setattr(updater, "load_state", lambda: {"applying": {}})   # journaled, no prior copy
+    monkeypatch.setattr(updater.journal_store, "load_state", lambda path: {"applying": {}})   # journaled, no prior copy
     made = []
     real_mkstemp, real_fstat = updater.tempfile.mkstemp, os.fstat
 
@@ -2721,7 +2721,7 @@ def test_recorded_install_args_ignores_a_symlinked_record(tmp_path, monkeypatch)
 
 def test_empty_rollback_keeps_receipt_code_and_japanese_display(updater, capsys):
     assert mcs_update.rollback(command_id="synthetic-empty-rollback") == 0
-    state = mcs_update.load_state()
+    state = mcs_update.journal_store.load_state(mcs_update.STATE_PATH)
     assert state["executed"]["synthetic-empty-rollback"]["result"] == "nothing_to_rollback"
     assert "元に戻す更新はありません" in capsys.readouterr().out
 
@@ -2736,7 +2736,7 @@ def test_updater_subcommand_parser_keeps_japanese_help(capsys):
     assert "この説明を表示して終了する" in output
 
 
-@pytest.mark.parametrize("original,translated", mcs_update._ENV_DIAGNOSTIC_TRANSLATIONS)
+@pytest.mark.parametrize("original,translated", mcs_update.update_policy.ENV_DIAGNOSTIC_TRANSLATIONS)
 def test_postcheck_accepts_only_same_legacy_diagnostic(
         updater, monkeypatch, original, translated):
     import ledger
@@ -2784,8 +2784,8 @@ def test_legacy_baseline_matches_current_environment_probe(updater, monkeypatch)
     monkeypatch.delenv("MCS_LLM_ADMISSION", raising=False)
     errors, _ = mcs_setup.check_environment({})
     assert len(errors) == 1
-    assert mcs_update._environment_error_identity(errors[0]) == (
-        mcs_update._environment_error_identity("Chrome binary missing: /synthetic-missing-chrome"))
+    assert mcs_update.update_policy.environment_error_identity(errors[0]) == (
+        mcs_update.update_policy.environment_error_identity("Chrome binary missing: /synthetic-missing-chrome"))
 
 
 def test_legacy_baseline_matches_current_slot_probe(monkeypatch):
@@ -2800,6 +2800,6 @@ def test_legacy_baseline_matches_current_slot_probe(monkeypatch):
     errors, _ = mcs_setup._check_llm({})
     assert len(errors) == 1
     original = "llama-server advertises 1 slots but the selected count is 3 — fix -np or lower SLOT_COUNT"
-    assert mcs_update._environment_error_identity(errors[0]) == mcs_update._environment_error_identity(original)
+    assert mcs_update.update_policy.environment_error_identity(errors[0]) == mcs_update.update_policy.environment_error_identity(original)
     changed = original.replace("1 slots", "2 slots")
-    assert mcs_update._environment_error_identity(errors[0]) != mcs_update._environment_error_identity(changed)
+    assert mcs_update.update_policy.environment_error_identity(errors[0]) != mcs_update.update_policy.environment_error_identity(changed)

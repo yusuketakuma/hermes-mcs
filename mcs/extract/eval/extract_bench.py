@@ -58,6 +58,7 @@ than a case labels — but a forbid match is. Per-category counts are
 reported as patient_context.<category>.
 """
 from __future__ import annotations
+import extract_validation
 
 import argparse
 from datetime import datetime
@@ -479,7 +480,6 @@ def _section_valid(section) -> bool:
     and reply kind are checked here explicitly: _validate only omits a
     bad kind KEY, and the bench's reply shapes (null / list) are not
     extractor output."""
-    import extract_llm
     import patient_context
     if not isinstance(section, dict):
         return False
@@ -499,12 +499,12 @@ def _section_valid(section) -> bool:
         return False
     replies = section.pop("reply", None)
     for r in (replies if isinstance(replies, list) else [replies]):
-        if r is not None and _reply_kind(r) not in extract_llm._REPLY_KINDS:
+        if r is not None and _reply_kind(r) not in extract_validation._REPLY_KINDS:
             return False
     for r in section.get("requests") or []:
         # an explicit null is the documented 'must be absent' pin
         if isinstance(r, dict) and r.get("kind") is not None \
-                and r["kind"] not in extract_llm._REQ_KINDS:
+                and r["kind"] not in extract_validation._REQ_KINDS:
             return False
     # bench-only lab keys _validate ignores: a typo ("false", 2026/10/01)
     # would make a forbid label match nothing and pass vacuously
@@ -520,7 +520,7 @@ def _section_valid(section) -> bool:
         # The gold-label date pins normalized output, rather than an input quote.
         section["labs"] = [{key: value for key, value in lab.items() if key != "measured_on"}
                            if isinstance(lab, dict) else lab for lab in section["labs"]]
-    v = extract_llm._validate(section)
+    v = extract_validation.validate(section)
     return isinstance(v, dict) and not v.get("_items_dropped")
 
 

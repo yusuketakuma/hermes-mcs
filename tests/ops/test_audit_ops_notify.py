@@ -124,11 +124,11 @@ def test_updater_recovery_resets_only_update_paths(updater, tmp_path, monkeypatc
         _git(repo, "add", path)
     if dirty in ("index_only", "third_index_only"):
         (repo / path).write_text(original)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.2.0", "sha": target, "prev_sha": prev,
                          "at": time.time() - 4000}
     state["stages"] = [{"stage": "merge", "at": time.time() - 3000}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     journal = Path(updater.STATE_PATH).read_bytes()
     worktree = (repo / path).read_bytes()
     index = _git(repo, "show", f":{path}").stdout
@@ -395,20 +395,20 @@ def test_rollback_untracked_collision_refuses_before_journal_and_recovery_is_noo
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: events.append("runtime"))
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **k: notices.append(text) or True)
     entry = {"tag": "v1.0.26", "sha": target, "prev_sha": prev, "at": time.time() - 4000}
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applied"] = [entry]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater._tree_clean()
     before = _provenance_snapshot(repo)
     cid = "synthetic-untracked-rollback"
 
     assert updater.rollback(cid) == 1
-    refused = updater.load_state()
+    refused = updater.journal_store.load_state(updater.STATE_PATH)
     events_after_refusal = list(events)
     notice_count = len(notices)
     journal = Path(updater.STATE_PATH).read_bytes()
     assert updater.recover_interrupted() == 0
-    recovered = updater.load_state()
+    recovered = updater.journal_store.load_state(updater.STATE_PATH)
 
     assert refused["applied"] == recovered["applied"] == [entry]
     assert _provenance_snapshot(repo) == before

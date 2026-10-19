@@ -1,5 +1,6 @@
 """Malformed but parseable journal rows never prove that a restored send did not happen."""
 import json
+import notify_journal
 
 import pytest
 
@@ -10,7 +11,7 @@ from adapters.common import journal
 
 
 def test_restore_and_worker_share_journal_phase_contract():
-    assert notify_reconcile._JOURNAL_PHASES == journal.PHASES
+    assert notify_journal.PHASES == journal.PHASES
 
 
 @pytest.mark.parametrize("damage", ["unknown", "array", "object", "unterminated"])
@@ -27,7 +28,7 @@ def test_parseable_damage_keeps_restore_hold(world, damage):
     with path.open("ab") as handle:
         handle.write(json.dumps(row).encode() + (b"" if damage == "unterminated" else b"\n"))
     notify_cards.mark_restored(str(world.data), now=NOW)
-    attempts, incomplete = notify_reconcile.scan_journals(dirs)
+    attempts, incomplete = notify_journal.scan_journals(dirs)
     assert incomplete and attempts[aid]["tainted"]
     assert attempts[aid]["rows"][-1] == row
     result = notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)

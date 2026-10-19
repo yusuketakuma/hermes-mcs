@@ -1,6 +1,7 @@
 """A durable Jev resource wait at the coverage stage must not
 append an identical pending semantic_coverage row on every drain pass
 (the FIX-SD1 contract the assess/fact-audit/summary stages already keep)."""
+import semantic_drain
 import json
 
 import semantic
@@ -34,7 +35,7 @@ def test_coverage_resource_wait_records_outcome_once(tmp_path):
             with db.db:
                 db.db.execute(
                     "UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-            out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+            out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                                    semantic.time.monotonic() + 300,
                                    jev_client=client, llm_fn=_llm)
             progressed.append(out.get("progressed"))

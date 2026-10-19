@@ -2,12 +2,12 @@
 only for the projects the stored hold proves — its card (signal/digest
 cards through their coverage) and its held events' outbox rows — never
 for an empty or request-supplied project set. Synthetic ledger only."""
+from adapters.common import human_commands
 import json
 from types import SimpleNamespace
 
 import pytest
 
-import hermes_plugin
 from notify_testkit import _signal_row
 from test_notify_reconcile import CFG, world
 from test_rebind_revoked_card import _lost_render_hold
@@ -22,7 +22,7 @@ IDENTITY = {"transport": "discord", "chat_id": SCOPE["channel_id"],
 def _check(world, render, *, allowed=(1,)):
     settings = {"project_ids": set(allowed), "application_id": SCOPE["application_id"]}
     payload = {"delivery_id": render["delivery_id"]}
-    return hermes_plugin._card_resolution(SimpleNamespace(db=world.led.db), settings,
+    return human_commands._card_resolution(SimpleNamespace(db=world.led.db), settings,
                                           dict(IDENTITY), payload)
 
 

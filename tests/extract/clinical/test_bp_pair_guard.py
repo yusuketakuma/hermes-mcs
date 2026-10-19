@@ -7,19 +7,17 @@ import builtins
 import pytest
 
 import clinical_values
-import extract
-import extract_llm
 
 MORNING_EVENING = "本人の朝BP180/100、夕BP120/80"
 
 
 def _layers(body, values):
-    return (extract_llm._vitals_guard(body, dict(values)),
-            extract.patient_vitals(dict(values), body),
+    return (clinical_values._vitals_guard(body, dict(values)),
+            clinical_values.patient_vitals(dict(values), body),
             clinical_values.patient_current_vitals(dict(values), body))
 
 
-@pytest.mark.parametrize("reader", [extract.patient_vitals, clinical_values.patient_current_vitals])
+@pytest.mark.parametrize("reader", [clinical_values.patient_vitals, clinical_values.patient_current_vitals])
 def test_patient_vital_readers_do_not_load_llm_runtime(monkeypatch, reader):
     original_import = builtins.__import__
 
@@ -90,22 +88,22 @@ def test_repeated_identical_reading_is_one_reading():
 
 def test_mixed_pair_is_noted_for_the_writer():
     drops = {}
-    extract_llm._vitals_guard(MORNING_EVENING, {"sbp": 180, "dbp": 80}, drops)
+    clinical_values._vitals_guard(MORNING_EVENING, {"sbp": 180, "dbp": 80}, drops)
     assert any("同じ測定" in note for note in drops["vitals"])
 
 
 def test_truncated_bp_label_is_not_a_bare_pulse_p():
     body = "本人の朝BP180/100、夕120/80"
     start = body.rindex("80")
-    assert extract_llm._nearest_vital_label(body, start, start + 2) != "hr"
-    guarded = extract_llm._vitals_guard(body, {"sbp": 120, "dbp": 80})
+    assert clinical_values._nearest_vital_label(body, start, start + 2) != "hr"
+    guarded = clinical_values._vitals_guard(body, {"sbp": 120, "dbp": 80})
     assert "hr" not in guarded and guarded == {"sbp": 120, "dbp": 80}
 
 
 @pytest.mark.parametrize("body,value", [("BT36.5 P72", 72), ("体温36.5 P 72", 72)])
 def test_a_real_bare_p_pulse_is_still_found(body, value):
     start = body.rindex(str(value))
-    assert extract_llm._nearest_vital_label(body, start, start + len(str(value))) == "hr"
+    assert clinical_values._nearest_vital_label(body, start, start + len(str(value))) == "hr"
 
 
 # ---------- evidence comes from the written label, never from the values ----------
@@ -157,7 +155,7 @@ def test_decimal_values_from_different_readings_are_not_paired(body, values):
     assert not ({"sbp", "dbp"} & reader.keys()), reader
     assert not ({"sbp", "dbp"} & current.keys()), current
     if not body.startswith("母"):
-        writer = extract_llm._vitals_guard(body, dict(values))
+        writer = clinical_values._vitals_guard(body, dict(values))
         assert not ({"sbp", "dbp"} & writer.keys()), writer
 
 

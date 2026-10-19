@@ -1,10 +1,11 @@
 """Malformed summaries get one durable format repair, with clinical checks intact."""
+import semantic_audit
+import semantic_transport
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_drain
 import semantic_runtime as runtime
 from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
@@ -24,7 +25,7 @@ def _db(tmp_path):
 def _run(db, model):
     with db.db:
         db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-    return semantic.run_due(db, _cfg('shadow'), {'errors': []},
+    return semantic_drain.run_due(db, _cfg('shadow'), {'errors': []},
                             time.monotonic() + 900, jev_client=_FakeJev(),
                             llm_fn=model, max_jobs=1)
 
@@ -123,7 +124,7 @@ def test_format_repair_leaves_one_clinical_repair_and_never_bypasses_audit(tmp_p
                 return None
         return _llm(prompt)
 
-    monkeypatch.setattr(semantic, 'audit_claims', lambda *a, **k:
+    monkeypatch.setattr(semantic_audit, 'audit_claims', lambda *a, **k:
                         ([{'code': 'claim_not_supported', 'claim': 'synthetic'}], True))
     try:
         out = _run(db, model)
@@ -151,14 +152,14 @@ def test_a_valid_first_summary_needs_no_format_repair(tmp_path):
 @pytest.mark.parametrize('failure', ['length_stop', None])
 def test_truncated_output_preserves_format_repair_for_a_real_format_error(
         tmp_path, monkeypatch, failure):
-    monkeypatch.setattr(semantic, '_LLM_FAILURE', None)
+    monkeypatch.setattr(semantic_transport, '_LLM_FAILURE', None)
     db = _db(tmp_path)
     calls = []
 
     def model(prompt):
         if '要約器' in prompt:
             calls.append(prompt)
-            semantic._failed(failure if len(calls) == 1 else None)
+            semantic_transport._failed(failure if len(calls) == 1 else None)
             if len(calls) == 1:
                 return None
         return _llm(prompt)

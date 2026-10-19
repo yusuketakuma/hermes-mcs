@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "接続先共通のコマンドと患者権限を一元化",
+  "summary": "Slack・Discord・LINE WORKS の閲覧・人承認操作は従来の検証と患者境界を保ち、Hermes 接続の有無に依存しない共通実装を使います。コマンド名・設定・既定値は変更しません。",
+  "upgrade": "追加の設定操作は不要です。稼働中の Hermes gateway・独立アダプターへの反映には従来どおり再起動が必要です。この変更自体は再起動や配備を行いません。",
+  "details": [
+    "認可・患者 scope・preview/confirm・dispatch の正本を adapters/common に移し、host 接続・登録・遅延 bootstrap を Hermes plugin に残した。",
+    "配送 journal の確定カード結果の照会を journal の公開 API に集約し、送信状態・lock・task の所有者は維持した。",
+    "LINE WORKS の設定検証は setup CLI ではなく共有設定モジュールを使用する。"
+  ],
+  "refs": [
+    "adapters/common/",
+    "hermes_plugin/",
+    "adapters/lineworks/config.py"
+  ]
+}

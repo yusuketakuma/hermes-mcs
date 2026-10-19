@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from mcs_adapter import MCSError, SessionExpired
+from mcs_contract import MCSError, SessionExpired
 
 
 PROJECT_ID = 700001

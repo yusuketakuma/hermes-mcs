@@ -1,3 +1,4 @@
+import extract_quality
 import json
 
 import pytest
@@ -85,12 +86,12 @@ def test_thin_repend_does_not_prefilter_away_existing_fact(db, monkeypatch):
 
 def test_repair_cannot_trade_symptom_for_prose():
     prior = {'symptoms': [{'text': '発熱', 'negated': False}], 'urgency': 'high'}
-    assert not extract_llm._improves(
+    assert not extract_quality.improves(
         {'summary': '合成要約', 'points': ['合成要点'], 'urgency': 'routine'}, prior)
 
 
 def test_long_multi_item_field_does_not_trigger_retry():
-    assert not extract_llm._is_thin(
+    assert not extract_quality.is_thin(
         {'symptoms': [{'text': '発熱'}, {'text': '咳'}]}, '合成' * 200)
 
 
@@ -117,7 +118,7 @@ def test_single_call_fits_tick_budget_after_preparation(monkeypatch):
 
 def test_prose_only_change_is_not_quality_improvement():
     prior = {'events': ['visit'], 'urgency': 'routine'}
-    assert not extract_llm._improves({**prior, 'summary': '合成要約', 'points': ['要点']}, prior)
+    assert not extract_quality.improves({**prior, 'summary': '合成要約', 'points': ['要点']}, prior)
 
 
 @pytest.mark.parametrize("result", [None, {}], ids=["failed", "unenriched"])

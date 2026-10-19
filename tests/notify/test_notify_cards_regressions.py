@@ -6,6 +6,8 @@ ledger only.
 """
 from __future__ import annotations
 
+import notify_parts
+import notify_scope
 import json
 import sqlite3
 import time
@@ -91,13 +93,13 @@ def test_still_archived_unit_suppresses_new_intent(led, monkeypatch):
 
 def test_lineworks_failed_thread_keeps_display_overflow(led, monkeypatch):
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
-    original = notify_cards._card_content
+    original = notify_cards.card_content
 
     def long_display(*a, **k):
         c = original(*a, **k)
         c["containers"] = [{"type": "text", "text": "合成内容" * 400}]
         return c
-    monkeypatch.setattr(notify_cards, "_card_content", long_display)
+    monkeypatch.setattr(notify_cards, "card_content", long_display)
     claim = _claim(_render(led))
     lwcards.validate(claim["spec"])
     assert _apply(led, envelopes.transport_begin(claim))["granted"]
@@ -107,13 +109,16 @@ def test_lineworks_failed_thread_keeps_display_overflow(led, monkeypatch):
                   if p["kind"] == "thread")
     assert _apply(led, envelopes.part_receipt(
         claim, thread, "not_sent", error_code="scope_mismatch"))["applied"]
-    db = notify_cards._db(led)
-    card = notify_cards._card_row(db, 1)
+    db = notify_cards.connection(led)
+    card = notify_scope.card_row(db, 1)
     assert card["thread_state"] == "failed"
-    content = notify_cards._card_content(db, card)
-    spec = notify_cards._build_spec(
-        db, card, content, notify_cards._generation_drift(card, content),
-        "update", 99, LINEWORKS, NOW)
+    content = notify_cards.card_content(db, card)
+    card = {**card, **notify_cards._generation_drift(card, content)}
+    before_card, before_content = dict(card), dict(content)
+    spec, budget_hold = notify_cards._build_spec(
+        db, card, content, "update", 99, LINEWORKS, NOW)
+    assert budget_hold is None
+    assert card == before_card and content == before_content
     lwcards.validate(spec)
 
 
@@ -126,9 +131,9 @@ def test_lineworks_failed_thread_keeps_display_overflow(led, monkeypatch):
     "　" * 2500 + "本文",
 ])
 def test_body_chunks_have_no_blank_post(text):
-    chunks = notify_cards._split_body_chunks(text)
+    chunks = notify_parts.split_body_chunks(text)
     assert all(c.strip() for c in chunks)
-    assert all(len(c) <= notify_cards.THREAD_PART_LIMIT for c in chunks)
+    assert all(len(c) <= notify_parts.THREAD_PART_LIMIT for c in chunks)
     joined = "".join(chunks)
     assert joined.split() == text.split()      # only whitespace may drop
 
@@ -136,7 +141,7 @@ def test_body_chunks_have_no_blank_post(text):
 def test_body_chunks_mid_blank_run_stays_lossless():
     for text in ("a\n" + (" " * 1000 + "\n") * 3 + "b",
                  "x" * 1000 + "\n" + "\n" * 3000 + "b"):
-        assert "".join(notify_cards._split_body_chunks(text)) == text
+        assert "".join(notify_parts.split_body_chunks(text)) == text
 
 
 def test_digest_thread_name_uses_jst_day(monkeypatch):
@@ -210,12 +215,12 @@ def test_thread_plan_puts_root_before_null_timestamp_reply(monkeypatch):
     db.executemany("INSERT INTO messages VALUES (?,?,?,?)",
                    [(100, None, 1, 1000), (101, 100, 1, None),
                     (102, 100, 1, 2000)])
-    monkeypatch.setattr(notify_cards, "_announced_ids",
+    monkeypatch.setattr(notify_parts, "_announced_ids",
                         lambda db, card: {100, 101, 102})
-    monkeypatch.setattr(notify_cards, "_delivered_members",
+    monkeypatch.setattr(notify_parts, "delivered_members",
                         lambda db, card, legacy: set())
     card = {"kind": "thread", "root_message_id": 100, "project_id": 1}
-    assert notify_cards._thread_plan_ids(db, card, [102]) == [100, 101, 102]
+    assert notify_parts._thread_plan_ids(db, card, [102]) == [100, 101, 102]
 
 
 # apply_card_resolve without cfg must read MCS_ROOT's config, not ~/.mcs.
@@ -256,7 +261,7 @@ def test_long_single_line_keeps_boundaries_without_repeated_suffix_copies():
             return result
 
     text = "head\n" + "x" * 100_007 + "\nend"
-    chunks = notify_cards._split_body_chunks(Segment(text))
+    chunks = notify_parts.split_body_chunks(Segment(text))
     assert chunks == [text[i:i + 1900] for i in range(0, len(text), 1900)]
     assert sum(copied) <= 2 * len(text), "repeated suffix copies exceed linear budget"
 
@@ -271,4 +276,4 @@ def test_long_single_line_keeps_boundaries_without_repeated_suffix_copies():
     (" " * 8, 4, [" " * 4, " " * 4]),
 ])
 def test_body_chunks_preserve_exact_text_and_boundaries(text, limit, expected):
-    assert notify_cards._split_body_chunks(text, limit) == expected
+    assert notify_parts.split_body_chunks(text, limit) == expected

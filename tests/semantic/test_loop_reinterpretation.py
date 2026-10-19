@@ -2,6 +2,8 @@
 the Loop candidates its current facts still produce: dropped ones are
 marked invalidated (kept as history), never current, forked or adopted;
 other messages' candidates and forks stay. Synthetic ledger only."""
+import semantic_policy
+import semantic_store
 import copy
 import json
 import time
@@ -9,16 +11,15 @@ import time
 import pytest
 
 import request_loops
-import semantic
 import semantic_loops
 from semantic_testkit import _cfg, _message, _pending_fact, _seeded
 
 
 def _setup(tmp_path):
     db = _seeded(tmp_path)
-    cfg, _ = semantic.semantic_config(_cfg())
-    db.artifact_add("semantic_policy", semantic.policy_fingerprint(cfg))
-    bundle = semantic.thread_bundle(db, 1, 1, [1, 2])
+    cfg, _ = semantic_policy.semantic_config(_cfg())
+    db.artifact_add("semantic_policy", semantic_policy.policy_fingerprint(cfg))
+    bundle = semantic_store.thread_bundle(db, 1, 1, [1, 2])
     return db, cfg, bundle
 
 
@@ -34,7 +35,7 @@ def _rows(db, mid=None):
 
 
 def _current(db, bundle, cfg, mid=None):
-    fp, policy = bundle["source_fingerprint"], semantic.policy_fingerprint(cfg)
+    fp, policy = bundle["source_fingerprint"], semantic_policy.policy_fingerprint(cfg)
     return [aid for aid, _, meta in _rows(db, mid)
             if semantic_loops._current_meta(meta, fp, policy)]
 
@@ -129,7 +130,7 @@ def test_new_reply_fork_survives_and_invalidated_rows_are_never_forked(tmp_path)
         _update(db, cfg, bundle, {1: kept + dropped})
         _update(db, cfg, bundle, {1: kept})       # the second item is reinterpreted away
         db.save_messages([_message(3, parent=1, body="承知しました。")])
-        newer = semantic.thread_bundle(db, 1, 1, [3])
+        newer = semantic_store.thread_bundle(db, 1, 1, [3])
         _update(db, cfg, newer, {})                # a new reply: fork current items only
         forks = [content["description"] for aid, content, meta in _rows(db, 1)
                  if meta["fingerprint"] == newer["source_fingerprint"]]

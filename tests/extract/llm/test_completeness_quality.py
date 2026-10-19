@@ -1,4 +1,7 @@
 """Invented completeness candidates reuse one repair and the absolute caller budget."""
+import extract_quality
+import extract_schema
+import extract_validation
 import copy
 import json
 import sqlite3
@@ -41,7 +44,7 @@ def test_clean_first_candidate_recovers_a_supported_missing_hint(monkeypatch, ta
     monkeypatch.setattr(extract_llm, "_llm_call", model)
     result = extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 2
-    assert extract_llm._facts(extract_llm._validate(OBSERVATIONS, body)) <= extract_llm._facts(result)
+    assert extract_quality.facts(extract_validation.validate(OBSERVATIONS, body)) <= extract_quality.facts(result)
     assert set(addition) <= result.keys()
     assert extract_llm.EXTRACT_VERSION == 9
 
@@ -76,7 +79,7 @@ def test_optional_repair_cannot_erase_prior_facts_or_win_with_an_ungrounded_gain
     monkeypatch.setattr(extract_llm, "_llm_call", model)
     result = extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 2
-    assert result == extract_llm._validate(OBSERVATIONS, body)
+    assert result == extract_validation.validate(OBSERVATIONS, body)
 
 
 def test_optional_piece_repair_reserves_the_later_initial_call(monkeypatch):
@@ -138,7 +141,7 @@ def test_clean_batch_candidate_is_repaired_without_repeating_first_inference(tmp
 
     def model(prompt, **kwargs):
         calls.append(kwargs.get("schema"))
-        if kwargs.get("schema") is extract_llm._SCHEMA_BATCH:
+        if kwargs.get("schema") is extract_schema.SCHEMA_BATCH:
             return {"items": [{"i": i, **copy.deepcopy(OBSERVATIONS)} for i in range(2)]}
         return {**copy.deepcopy(OBSERVATIONS), "vitals": {"sbp": 120, "dbp": 80}}
 
@@ -146,7 +149,7 @@ def test_clean_batch_candidate_is_repaired_without_repeating_first_inference(tmp
     try:
         result = extract_llm.run_pending(db, budget_s=300, batch_k=2)
         assert result["done"] == 2
-        assert len(calls) == 3 and calls[0] is extract_llm._SCHEMA_BATCH
+        assert len(calls) == 3 and calls[0] is extract_schema.SCHEMA_BATCH
         assert all(json.loads(row["content"])["vitals"] == {"sbp": 120.0, "dbp": 80.0}
                    for row in db.artifacts("extract_llm"))
     finally:
@@ -319,10 +322,10 @@ def test_same_name_other_person_or_past_fact_cannot_hide_a_current_patient_omiss
     monkeypatch.setattr(extract_llm, "_llm_call", model)
     result = extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 2
-    assert extract_llm._facts(extract_llm._validate(first, body)) <= extract_llm._facts(result)
+    assert extract_quality.facts(extract_validation.validate(first, body)) <= extract_quality.facts(result)
     if subject == "patient" and status == "current":
         # The invalid family-as-patient prior is rejected before the repair.
-        assert not extract_llm._validate(first, body).get("meds")
+        assert not extract_validation.validate(first, body).get("meds")
         assert len(result["meds"]) == 1
     else:
         assert len(result["meds"]) == 2
@@ -344,10 +347,10 @@ def test_equal_predicate_cannot_gain_patient_evidence_from_a_different_drug_dose
     candidate = {**previous, "evidence": current}
     # Exercise the repair guard on legacy stored output too; the current
     # validator already rejects the mislabeled family quote.
-    prior = {**extract_llm._validate(OBSERVATIONS, body), "meds": [previous]}
+    prior = {**extract_validation.validate(OBSERVATIONS, body), "meds": [previous]}
     repaired = {**prior, "meds": [previous, candidate]}
-    assert extract_llm._facts(prior) == extract_llm._facts(repaired)
-    assert not extract_llm._quality_improves(repaired, prior, body)
+    assert extract_quality.facts(prior) == extract_quality.facts(repaired)
+    assert not extract_quality.quality_improves(repaired, prior, body)
 
 
 def test_same_budget_resumes_optional_work_without_repeating_or_blocking_later_initials(tmp_path, monkeypatch):
@@ -421,11 +424,11 @@ def test_completeness_repair_can_raise_urgency_only_with_current_patient_source_
         first = {**OBSERVATIONS, "urgency": initial_urgency}
         repair = {**first, "vitals": {"sbp": 120, "dbp": 80},
                   "urgency": "high", "urgency_evidence": [quote]}
-        prior = extract_llm._validate(copy.deepcopy(first), body)
-        candidate = extract_llm._validate(copy.deepcopy(repair), body)
+        prior = extract_validation.validate(copy.deepcopy(first), body)
+        candidate = extract_validation.validate(copy.deepcopy(repair), body)
         assert prior["urgency"] == initial_urgency
         assert candidate["urgency"] == "high" and candidate["urgency_evidence"] == [quote]
-        assert extract_llm._quality_improves(candidate, prior, body)
+        assert extract_quality.quality_improves(candidate, prior, body)
         calls = []
         monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
                             calls.append(args) or copy.deepcopy(first if len(calls) == 1 else repair))
@@ -433,7 +436,7 @@ def test_completeness_repair_can_raise_urgency_only_with_current_patient_source_
         assert len(calls) == 2
         assert result["urgency"] == "high" and result["urgency_evidence"] == [quote]
         assert result["vitals"] == {"sbp": 120.0, "dbp": 80.0}
-        assert extract_llm._facts(prior) < extract_llm._facts(result)
+        assert extract_quality.facts(prior) < extract_quality.facts(result)
 
 
 def test_completeness_repair_cannot_raise_urgency_from_a_hint_without_source_evidence(monkeypatch):
@@ -445,11 +448,11 @@ def test_completeness_repair_cannot_raise_urgency_from_a_hint_without_source_evi
         first = {**OBSERVATIONS, "urgency": initial_urgency}
         repair = {**first, "vitals": {"sbp": 120, "dbp": 80},
                   "urgency": "high", "urgency_evidence": [quote]}
-        prior = extract_llm._validate(copy.deepcopy(first), body)
-        candidate = extract_llm._validate(copy.deepcopy(repair), body)
+        prior = extract_validation.validate(copy.deepcopy(first), body)
+        candidate = extract_validation.validate(copy.deepcopy(repair), body)
         assert candidate["urgency"] == "unclear" and "urgency_evidence" not in candidate
         assert candidate["_evidence_dropped"] == 1
-        assert not extract_llm._quality_improves(candidate, prior, body)
+        assert not extract_quality.quality_improves(candidate, prior, body)
         calls = []
         monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
                             calls.append(args) or copy.deepcopy(first if len(calls) == 1 else repair))
@@ -883,7 +886,7 @@ def test_a_rule_change_word_needs_a_matching_med_action_not_just_the_name(monkey
     monkeypatch.setattr(extract_llm, "_llm_call", model)
     result = extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 2
-    assert extract_llm._facts(extract_llm._validate({**OBSERVATIONS, "meds": first}, body)) <= extract_llm._facts(result)
+    assert extract_quality.facts(extract_validation.validate({**OBSERVATIONS, "meds": first}, body)) <= extract_quality.facts(result)
     assert any(med["action"] == "stop" and med["evidence"] == STOP for med in result["meds"])
 
 
@@ -970,8 +973,8 @@ def test_present_malformed_completeness_is_never_complete(tmp_path, monkeypatch,
 def test_one_drugs_action_does_not_cover_another_drug_with_the_same_action(first, covered, sentence):
     body = PREFIX + sentence + "。"
     first = [{**med, "evidence": sentence} if sentence != TWO_STARTS else med for med in first]
-    v = extract_llm._validate({**OBSERVATIONS, "meds": first}, body)
-    assert bool(extract_llm._completeness_issues(v, hints(body), body)) is not covered
+    v = extract_validation.validate({**OBSERVATIONS, "meds": first}, body)
+    assert bool(extract_quality.completeness_issues(v, hints(body), body)) is not covered
 
 
 @pytest.mark.parametrize("a_word,a_action,aa_action,covered", [
@@ -982,14 +985,14 @@ def test_a_shorter_drug_name_does_not_cover_a_longer_one_containing_it(a_word, a
     body = PREFIX + sentence + "。"
     meds = [{**STOPPED, "action": a_action, "status": "past" if a_action == "stop" else "current", "evidence": sentence},
             {**STOPPED, "name": "架空薬AA", "action": aa_action, "status": "current", "evidence": sentence}]
-    v = extract_llm._validate({**OBSERVATIONS, "meds": meds}, body)
+    v = extract_validation.validate({**OBSERVATIONS, "meds": meds}, body)
     assert len(v["meds"]) == 2
-    assert bool(extract_llm._completeness_issues(v, hints(body), body)) is not covered
+    assert bool(extract_quality.completeness_issues(v, hints(body), body)) is not covered
 
 
 def _rx_gap(text, meds):
     # Legacy output can reach this guard without the new validator's scope rejection.
-    return extract_llm._rx_action_gaps({"meds": meds}, hints(text), text)
+    return extract_quality._rx_action_gaps({"meds": meds}, hints(text), text)
 
 
 def _med(name, text, action="start", status="current", dose=None):
@@ -1058,7 +1061,7 @@ def test_a_repair_may_replace_the_action_the_source_contradicts(monkeypatch, tex
                             [_med("架空薬A", text, action=new[0], status=new[1])])
     assert len(calls) == 2
     assert [(m["action"], m["status"]) for m in result["meds"]] == [new]
-    assert not extract_llm._completeness_issues(result, hints(PREFIX + text), PREFIX + text)
+    assert not extract_quality.completeness_issues(result, hints(PREFIX + text), PREFIX + text)
 
 
 @pytest.mark.parametrize("text,repaired", [
@@ -1074,7 +1077,7 @@ def test_a_repair_cannot_drop_other_facts_or_ambiguous_actions(monkeypatch, text
     first = [_med("架空薬A", text)]
     calls, result = _repair(monkeypatch, text, first, repaired)
     assert len(calls) == 2
-    assert extract_llm._facts(extract_llm._validate({**OBSERVATIONS, "meds": first}, PREFIX + text)) <= extract_llm._facts(result)
+    assert extract_quality.facts(extract_validation.validate({**OBSERVATIONS, "meds": first}, PREFIX + text)) <= extract_quality.facts(result)
 
 
 def test_starting_then_stopping_one_drug_under_a_shared_quote_is_no_contradiction():
@@ -1103,10 +1106,10 @@ def test_a_full_rule_action_list_cannot_prove_a_single_change():
             + "本人の架空薬Aを開始しました。")
     body = PREFIX + text
     assert len(hints(body)["rx_actions"]) == 10
-    prior = extract_llm._validate({**OBSERVATIONS, "meds": [_med("架空薬A", "本人の架空薬Aを開始しました")]}, body)
-    candidate = extract_llm._validate({**OBSERVATIONS, "meds": [
+    prior = extract_validation.validate({**OBSERVATIONS, "meds": [_med("架空薬A", "本人の架空薬Aを開始しました")]}, body)
+    candidate = extract_validation.validate({**OBSERVATIONS, "meds": [
         _med("架空薬A", "本人の架空薬Aを開始しました", action="stop", status="past")]}, body)
-    assert not extract_llm._quality_improves(candidate, prior, body, hints(body))
+    assert not extract_quality.quality_improves(candidate, prior, body, hints(body))
 
 
 @pytest.mark.parametrize("word", ["と共に", "と一緒に", "と同時に"])
@@ -1157,11 +1160,11 @@ def test_both_substitution_forms_accept_the_source_stop_and_destination_start(te
 def test_a_repair_cannot_erase_a_historical_action_of_the_same_drug():
     text = "本人は以前に架空薬Aを開始しました。本人の架空薬Aを中止しました。"
     body = PREFIX + text
-    prior = extract_llm._validate({**OBSERVATIONS, "meds": [
+    prior = extract_validation.validate({**OBSERVATIONS, "meds": [
         _med("架空薬A", "本人は以前に架空薬Aを開始しました", status="past")]}, body)
-    candidate = extract_llm._validate({**OBSERVATIONS, "meds": [
+    candidate = extract_validation.validate({**OBSERVATIONS, "meds": [
         _med("架空薬A", "本人の架空薬Aを中止しました", action="stop", status="past")]}, body)
-    assert not extract_llm._quality_improves(candidate, prior, body, hints(body))
+    assert not extract_quality.quality_improves(candidate, prior, body, hints(body))
 
 
 @pytest.mark.parametrize("text", ["本人は架空薬Aと架空薬Bと架空薬Cを開始しました。",
@@ -1204,9 +1207,9 @@ def test_future_requested_or_consulted_changes_are_checked_as_planned(text, acti
     assert bool(_rx_gap(text, [{**planned, "action": "none"}])) is ("相談" not in text)
     assert _rx_gap(text, [_med("架空薬A", text, action=action)])          # not done yet
     body = PREFIX + text
-    prior = extract_llm._validate({**OBSERVATIONS, "meds": [{**planned, "action": "none"}]}, body)
-    done = extract_llm._validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, action=action)]}, body)
-    assert not extract_llm._quality_improves(done, prior, body, hints(body))
+    prior = extract_validation.validate({**OBSERVATIONS, "meds": [{**planned, "action": "none"}]}, body)
+    done = extract_validation.validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, action=action)]}, body)
+    assert not extract_quality.quality_improves(done, prior, body, hints(body))
 
 
 @pytest.mark.parametrize("text", ["本人は明日通院予定ですが、架空薬Aを中止しました。",
@@ -1230,9 +1233,9 @@ def test_a_regimen_range_keeps_the_drug_as_the_object(text, action):
 ])
 def test_a_planned_instruction_may_correct_its_planned_action_but_a_consultation_may_not(text, action, repairable):
     body = PREFIX + text
-    prior = extract_llm._validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, action="none", status="planned")]}, body)
-    fixed = extract_llm._validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, action=action, status="planned")]}, body)
-    assert extract_llm._quality_improves(fixed, prior, body, hints(body)) is repairable
+    prior = extract_validation.validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, action="none", status="planned")]}, body)
+    fixed = extract_validation.validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, action=action, status="planned")]}, body)
+    assert extract_quality.quality_improves(fixed, prior, body, hints(body)) is repairable
 
 
 def test_a_requested_stop_does_not_excuse_a_recorded_done_stop():
@@ -1265,9 +1268,9 @@ def test_a_question_asks_for_no_action_and_allows_no_replacement():
     assert not _rx_gap(text, [neutral])
     body = PREFIX + text
     for status in ("current", "planned"):
-        prior = extract_llm._validate({**OBSERVATIONS, "meds": [{**neutral, "status": status}]}, body)
-        made = extract_llm._validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, status=status)]}, body)
-        assert not extract_llm._quality_improves(made, prior, body, hints(body))
+        prior = extract_validation.validate({**OBSERVATIONS, "meds": [{**neutral, "status": status}]}, body)
+        made = extract_validation.validate({**OBSERVATIONS, "meds": [_med("架空薬A", text, status=status)]}, body)
+        assert not extract_quality.quality_improves(made, prior, body, hints(body))
 
 
 @pytest.mark.parametrize("text", ["本人は架空薬A1包と架空薬Bを開始しました。", "本人は架空薬A2カプセルと架空薬Bを開始しました。"])
@@ -1603,7 +1606,7 @@ def test_a_model_name_alone_cannot_gain_a_medication_action(monkeypatch, name, k
     calls, result = _repair(monkeypatch, text, [neutral], repaired)
     assert len(calls) == 2
     assert [(m["name"], m["action"]) for m in result["meds"]] == [(name, "none")]
-    assert extract_llm._completeness_issues(result, hints(PREFIX + text), PREFIX + text)
+    assert extract_quality.completeness_issues(result, hints(PREFIX + text), PREFIX + text)
 
 
 def test_an_unrelated_drug_does_not_support_a_model_only_name(monkeypatch):
@@ -1624,7 +1627,7 @@ def test_independent_medication_context_still_allows_a_proven_action_repair(monk
                             [_med(name, text, action="stop", status="past", dose=dose)])
     assert len(calls) == 2
     assert [(m["action"], m["status"]) for m in result["meds"]] == [("stop", "past")]
-    assert not extract_llm._completeness_issues(result, hints(PREFIX + text), PREFIX + text)
+    assert not extract_quality.completeness_issues(result, hints(PREFIX + text), PREFIX + text)
 
 
 def test_a_doseless_brand_keeps_its_gap_without_an_unsupported_action_repair(monkeypatch):
@@ -1636,7 +1639,7 @@ def test_a_doseless_brand_keeps_its_gap_without_an_unsupported_action_repair(mon
     calls, result = _repair(monkeypatch, text, [neutral], [stopped])
     assert len(calls) == 2
     assert [(m["action"], m["status"]) for m in result["meds"]] == [("none", "current")]
-    assert extract_llm._completeness_issues(result, hints(PREFIX + text), PREFIX + text)
+    assert extract_quality.completeness_issues(result, hints(PREFIX + text), PREFIX + text)
 
 
 @pytest.mark.parametrize("text", ["本人の架空薬Aを、中止しました。", "本人の架空薬Aは、本日中止しました。",
@@ -1663,9 +1666,9 @@ def test_a_withdrawn_change_grounds_no_action(text):
     stopped = _med("架空薬A", text, action="stop", status="past")
     assert not _rx_gap(text, [neutral])
     assert _rx_gap(text, [stopped])
-    prior = extract_llm._validate({**OBSERVATIONS, "meds": [neutral]}, body)
-    added = extract_llm._validate({**OBSERVATIONS, "meds": [neutral, stopped]}, body)
-    assert not extract_llm._quality_improves(added, prior, body, hints(body))
+    prior = extract_validation.validate({**OBSERVATIONS, "meds": [neutral]}, body)
+    added = extract_validation.validate({**OBSERVATIONS, "meds": [neutral, stopped]}, body)
+    assert not extract_quality.quality_improves(added, prior, body, hints(body))
 
 
 @pytest.mark.parametrize("text,action,status", [("本人は来週架空薬Aを開始します。", "start", "planned"),
@@ -1688,5 +1691,20 @@ def test_superseded_vital_hints_do_not_force_a_false_unresolved_repair(monkeypat
     result = extract_llm.llm_extract(body, hints=hints(body), meta_out=meta)
     assert result == answer
     assert len(calls) == 1
-    assert not extract_llm._completeness_issues(result, hints(body), body)
+    assert not extract_quality.completeness_issues(result, hints(body), body)
     assert not meta.get("completeness")
+
+
+def test_constrained_batch_can_return_the_required_routing_index():
+    item = extract_schema.SCHEMA_BATCH["schema"]["properties"]["items"]["items"]
+    assert item["properties"]["i"] == {"type": "integer"}
+    assert "i" in item["required"]
+    assert item["additionalProperties"] is False
+    assert "i" not in extract_schema.SCHEMA["schema"]["properties"]
+
+
+def test_question_request_survives_quality_module_move():
+    cues = extract_quality._request_cues("次の訪問予定を教えてください。")
+    assert len(cues) == 1
+    assert cues[0]["kind"] == "ask"
+    assert "訪問予定" in cues[0]["ctx"]

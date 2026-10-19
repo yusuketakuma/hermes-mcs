@@ -15,6 +15,7 @@ import pytest
 
 import bounded_http
 import ledger
+import snapshots
 import maintenance
 from extract_testkit import _ledger, _message
 
@@ -146,7 +147,7 @@ def test_snapshot_stops_at_the_callers_hard_deadline(tmp_path, snapdir, monkeypa
     def verify(_tmp, *, deadline):
         seen["deadline"] = deadline
         return False
-    monkeypatch.setattr(ledger, "_valid_snapshot_candidate", verify)
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", verify)
     hard = time.monotonic() + 5
     assert maintenance.refresh_snapshot(path, deadline=hard) is None
     assert seen["deadline"] == hard          # never past the watchdog
@@ -164,16 +165,16 @@ def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
         con.execute("CREATE TABLE snapshot_meta(singleton INTEGER PRIMARY "
                     "KEY, generation_id TEXT, generated_at REAL)")
     writer = sqlite3.connect(path, isolation_level=None)
-    real = ledger.monotonic
+    real = snapshots.monotonic
 
     def clock():   # another connection commits between every backup step
         writer.execute("INSERT INTO t VALUES(1)")
         return real()
-    monkeypatch.setattr(ledger, "monotonic", clock)
-    monkeypatch.setattr(ledger, "_valid_snapshot_candidate",
+    monkeypatch.setattr(snapshots, "monotonic", clock)
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate",
                         lambda _p, *, deadline: True)
     try:
-        out = ledger.publish_snapshot(path, str(tmp_path / "snap"),
+        out = snapshots.publish_snapshot(path, str(tmp_path / "snap"),
                                       deadline=real() + 10)
     finally:
         writer.close()
@@ -185,12 +186,12 @@ def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
 def test_snapshot_verify_budget_grows_with_size(tmp_path, monkeypatch):
     small = tmp_path / "small.db"
     small.write_bytes(b"x")
-    assert ledger.snapshot_verify_timeout_s(str(small)) == pytest.approx(
-        ledger.SNAPSHOT_VERIFY_TIMEOUT_S, abs=0.01)
+    assert snapshots.snapshot_verify_timeout_s(str(small)) == pytest.approx(
+        snapshots.SNAPSHOT_VERIFY_TIMEOUT_S, abs=0.01)
     monkeypatch.setattr(ledger.os.path, "getsize", lambda _p: 4 * 1024 ** 3)
-    big = ledger.snapshot_verify_timeout_s(str(small))
-    assert ledger.SNAPSHOT_VERIFY_TIMEOUT_S < big <= (
-        ledger.SNAPSHOT_VERIFY_TIMEOUT_S + ledger.SNAPSHOT_VERIFY_EXTRA_MAX_S)
+    big = snapshots.snapshot_verify_timeout_s(str(small))
+    assert snapshots.SNAPSHOT_VERIFY_TIMEOUT_S < big <= (
+        snapshots.SNAPSHOT_VERIFY_TIMEOUT_S + snapshots.SNAPSHOT_VERIFY_EXTRA_MAX_S)
 
 
 # ---------- M7: backup respects the hard deadline ----------

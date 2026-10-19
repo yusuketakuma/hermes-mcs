@@ -1,4 +1,5 @@
 """Synthetic 22-E publish and 22-F reaction-actor contracts (no real MCS)."""
+import health_report
 
 import copy
 import json
@@ -11,7 +12,9 @@ import pytest
 import ledger as ledger_mod
 import run_check
 from ledger import SCHEMA_VERSION, Ledger, LedgerReader, reaction_actor_summary
-from mcs_adapter import MCSAdapter, MCSError, SessionExpired, _norm_message
+from mcs_adapter import MCSAdapter
+from mcs_contract import MCSError, SessionExpired
+from mcs_payload import normalize_message as _norm_message
 from mcs_signals import record_station_staff
 from message_metadata import get_message_metadata
 from run_check import stage_metadata_shadow
@@ -402,7 +405,7 @@ def test_publish_stage_stats_and_health(db):
     assert result["metadata_shadow"]["mode"] == "publish"
     assert result["metadata_shadow"]["published"] == 1
     assert get_message_metadata(db.db, 1)["reactions"][0]["count"] == 1
-    health = run_check._health(db, result, "ok")["metadata_shadow"]
+    health = health_report.build_health(db.db, result, "ok")["metadata_shadow"]
     assert health["published"] == 1 and health["mode"] == "publish"
 
 

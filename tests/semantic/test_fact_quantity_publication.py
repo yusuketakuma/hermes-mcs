@@ -1,10 +1,11 @@
 """Published medication quantities must trace to the fact's own evidence."""
+import semantic_policy
+import semantic_store
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_audit as audit
 import semantic_drain as drain
 import semantic_v4 as v4
@@ -84,10 +85,10 @@ def test_multiple_own_quotes_with_the_same_amount_stay_unverified():
 
 
 def _stage(db, quantity):
-    bundle = semantic.thread_bundle(db, 1, 1, [1])
+    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
     member = bundle["members"][0]
-    scfg = semantic.semantic_config(_canonical_cfg())[0]
-    policy = semantic.policy_fingerprint(scfg)
+    scfg = semantic_policy.semantic_config(_canonical_cfg())[0]
+    policy = semantic_policy.policy_fingerprint(scfg)
 
     def model(prompt):
         response = json.loads(_llm_v2(prompt))

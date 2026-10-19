@@ -156,15 +156,15 @@ def validate(req):
         # System-wide lifecycle ops are projectless — they govern the
         # whole install, not one patient. The shared identity fields
         # (human_confirmed/actor/command_id) were already checked above;
-        # operation rules run in mcs_operations like every other ops.*.
-        from mcs_operations import validate_ops
+        # operation rules run in operation_contract like every other ops.*.
+        from operation_contract import validate_ops
         return validate_ops(req, common)
     if not positive(req.get("project_id")):
         return "bad_project_id"
     if isinstance(req.get("cmd"), str) and req["cmd"].startswith("ops."):
         # Keep the identity boundary in this module; operation payload rules
         # must not be able to bypass the shared human-confirmed envelope.
-        from mcs_operations import validate_ops
+        from operation_contract import validate_ops
         return validate_ops(req, common)
     if req.get("cmd") == "request.create":
         allowed = common | {"source_message_id", "source_hash", "title", "assignee", "due_date", "reason", "loop_ref"}

@@ -129,7 +129,7 @@ class DrugMap:
 
     def related_names(self, name: str, *, limit: int = 200) -> dict:
         """Expand exact official identities without erasing product strength or form."""
-        if not _text(name) or type(limit) is not int or not 1 <= limit <= 200:
+        if not valid_text(name) or type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("drug_map_related_argument")
         ref = self.resolve(name)
         codes = {c["code"] for c in ref["cands"]}
@@ -149,7 +149,7 @@ class DrugMap:
 
     def lookup(self, name: str) -> dict:
         """Explain an offline candidate lookup; approval never confirms a medication."""
-        if not _text(name):
+        if not valid_text(name):
             raise ValueError("drug_map_lookup_name")
         ref = self.resolve(name)
         codes = {c["code"] for c in ref["cands"]}
@@ -170,7 +170,7 @@ class DrugMap:
 
     def search(self, query: str, *, limit: int = 20) -> dict:
         """Search reference names/IDs by normalized substring, without resolution."""
-        if (not _text(query) or not fold(query) or type(limit) is not int
+        if (not valid_text(query) or not fold(query) or type(limit) is not int
                 or not 0 <= limit <= 200):
             raise ValueError("drug_map_search_argument")
         needle = fold(query)
@@ -272,7 +272,8 @@ class DrugMap:
         return {"i": i, "name": name, "status": status, "cands": cands}
 
 
-def _text(value) -> bool:
+def valid_text(value) -> bool:
+    """A bounded, nonempty dictionary-manifest text value."""
     return isinstance(value, str) and bool(value.strip()) and len(value) <= 512
 
 
@@ -348,10 +349,10 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
         raise ValueError("drug_map_schema")
     source = document.get("source")
     entries = document.get("entries")
-    if (not _text(document.get("dict_id")) or not isinstance(source, dict)
-            or not all(_text(source.get(k)) for k in
+    if (not valid_text(document.get("dict_id")) or not isinstance(source, dict)
+            or not all(valid_text(source.get(k)) for k in
                        ("name", "url", "terms_checked_on"))
-            or ("approved_by" in source and not _text(source["approved_by"]))
+            or ("approved_by" in source and not valid_text(source["approved_by"]))
             or not isinstance(entries, list) or len(entries) > MAX_ENTRIES):
         raise ValueError("drug_map_provenance_or_entries")
     try:
@@ -376,19 +377,19 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
     ids = set()
     for entry in entries:
         if (not isinstance(entry, dict)
-                or not _text(entry.get("id")) or entry["id"] in ids
+                or not valid_text(entry.get("id")) or entry["id"] in ids
                 or entry.get("kind") not in (("ingredient", "class") if document["schema"] == SCHEMA
                                             else ("general_name", "product"))
-                or not _text(entry.get("display"))
+                or not valid_text(entry.get("display"))
                 or not isinstance(entry.get("aliases"), list)
                 or len(entry["aliases"]) > MAX_ALIASES
-                or not all(_text(a) for a in entry["aliases"])
+                or not all(valid_text(a) for a in entry["aliases"])
                 or not isinstance(entry.get("codes"), dict)
                 or not all(k in (("yj", "ssk") if document["schema"] == SCHEMA
-                                 else ("medicine", "general_name")) and _text(v)
+                                 else ("medicine", "general_name")) and valid_text(v)
                            for k, v in entry["codes"].items())
                 or not isinstance(entry.get("forms"), list)
-                or not all(_text(f) for f in entry["forms"])
+                or not all(valid_text(f) for f in entry["forms"])
                 or len(entry["forms"]) > MAX_ALIASES):
             raise ValueError("drug_map_entry")
         if document["schema"] == SOURCE_SCHEMA and not _source_identity(entry):
@@ -399,7 +400,7 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
                        or not all(isinstance(v, str) and len(v) <= 200
                                   and not any(ord(c) < 32 for c in v) for v in p.values())
                        or not re.fullmatch(r"[0-9]{1,9}", p["medicine"])
-                       or not _text(p["name"]) or not re.fullmatch(r"[0-9]", p["form_code"])
+                       or not valid_text(p["name"]) or not re.fullmatch(r"[0-9]", p["form_code"])
                        for p in products)
                 or len({p["medicine"] for p in products}) != len(products)
                 or (products and (document["schema"] != SOURCE_SCHEMA
@@ -501,7 +502,7 @@ def _source_meds(source) -> list[tuple[int, str]]:
     if not isinstance(meds, list):
         raise ValueError("medications_shape")
     return [(i, med["name"]) for i, med in enumerate(meds)
-            if isinstance(med, dict) and _text(med.get("name"))]
+            if isinstance(med, dict) and valid_text(med.get("name"))]
 
 
 def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
@@ -530,14 +531,14 @@ def _current_refs_with_progress(db: sqlite3.Connection, mid: int, progress: dict
     if (not isinstance(content, dict) or not isinstance(meta, dict)
             or any(meta.get(k) != v for k, v in binding.items())
             or meta.get("resolver_version") != RESOLVER_VERSION
-            or not _text(meta.get("dict_id"))
+            or not valid_text(meta.get("dict_id"))
             or not isinstance(meta.get("dict_sha256"), str)
             or not re.fullmatch(r"[0-9a-f]{64}", meta["dict_sha256"])
             or (progress is not None and progress.get("dictionary") !=
                 [meta.get("dict_id"), meta.get("dict_sha256"), False, RESOLVER_VERSION])
             or meta.get("synthetic") is not False
             or not isinstance(meta.get("source"), dict)
-            or not _text(meta["source"].get("approved_by"))
+            or not valid_text(meta["source"].get("approved_by"))
             or not isinstance(content.get("refs"), list)):
         return []
     try:
@@ -557,7 +558,7 @@ def _current_refs_with_progress(db: sqlite3.Connection, mid: int, progress: dict
             continue
         cands = ref["cands"]
         if not all(isinstance(c, dict) and c.get("system") == "local"
-                   and _text(c.get("code")) and _text(c.get("display"))
+                   and valid_text(c.get("code")) and valid_text(c.get("display"))
                    and c.get("kind") in ("ingredient", "class", "general_name", "product")
                    and c.get("method") in ("alias", "stem")
                    and c.get("candidate") is True for c in cands):
@@ -593,7 +594,7 @@ def _progress(db: sqlite3.Connection) -> dict | None:
         return {"invalid": True}
     if generation is not None and (
             not isinstance(generation, list) or len(generation) != 4
-            or not _text(generation[0]) or not isinstance(generation[1], str)
+            or not valid_text(generation[0]) or not isinstance(generation[1], str)
             or not re.fullmatch(r"[0-9a-f]{64}", generation[1])
             or type(generation[2]) is not bool or generation[3] != RESOLVER_VERSION):
         return {"invalid": True}
@@ -819,8 +820,8 @@ def impact(db: sqlite3.Connection, before: DrugMap, after: DrugMap, *,
 def compare_surfaces(observed: str, reference: str, *, observed_unit=None,
                      reference_unit=None) -> dict:
     """Flag explicit spelling-level differences, never dose or ingredient equivalence."""
-    if (not _text(observed) or not _text(reference)
-            or any(v is not None and not _text(v) for v in (observed_unit, reference_unit))):
+    if (not valid_text(observed) or not valid_text(reference)
+            or any(v is not None and not valid_text(v) for v in (observed_unit, reference_unit))):
         raise ValueError("drug_surface_argument")
     left, right = split_surface(observed), split_surface(reference)
     differences, missing = [], []

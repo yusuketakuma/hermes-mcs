@@ -1,7 +1,11 @@
 """Synthetic Hermes/MCS plugin contracts; no live DB, network, or gateway."""
 
 from __future__ import annotations
+import semantic_store
 
+from hermes_plugin import card_workers
+from adapters.common import dispatch as command_dispatch
+from adapters.common.access import resolve_settings
 import hashlib
 import json
 import os
@@ -12,11 +16,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import hermes_plugin
-from hermes_plugin import projects
+from adapters.common import projects
 import job_ops
 import ledger
 import mcs_requests
-import semantic
 from ops_testkit import _source
 
 
@@ -328,8 +331,8 @@ def test_preview_denial_codes_are_specific_not_operation_failed(tmp_path):
 def test_dispatch_hides_non_code_value_errors(monkeypatch):
     def boom(*args, **kwargs):
         raise ValueError("/private/path value=42")
-    monkeypatch.setattr(hermes_plugin, "_dispatch_op", boom)
-    assert json.loads(hermes_plugin._dispatch({}, {}, {})) == {
+    monkeypatch.setattr(command_dispatch, "dispatch_operation", boom)
+    assert json.loads(command_dispatch.dispatch({}, {}, {})) == {
         "ok": False, "error": "operation_failed"}
 
 
@@ -337,7 +340,7 @@ def test_request_loop_ref_binds_candidate_and_rejects_stale_preview(tmp_path):
     db = _source(tmp_path)
     inbox = tmp_path / "cmd"
     inbox.mkdir()
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     policy = "a" * 64
     db.artifact_add("semantic_policy", policy)
     member = next(item for item in bundle["members"]
@@ -489,7 +492,7 @@ def test_summary_comparison_adoption_preview_confirm_and_stale_guard(tmp_path):
     ).fetchone()[0]
     policy = "c" * 64
     db.artifact_add("semantic_policy", policy)
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     member = next(item for item in bundle["members"]
                    if item["message_id"] == 1)
     baseline = {"summary": "抽出された基準", "points": ["確認依頼"]}
@@ -739,19 +742,19 @@ def test_interactive_settings_derives_application_id(tmp_path):
     })
     ctx = _Context(settings)
     bot = SimpleNamespace(user=SimpleNamespace(id=123456789))
-    resolved = hermes_plugin._interactive_settings(ctx, bot)
+    resolved = card_workers._interactive_settings(ctx, bot)
     assert resolved["application_id"] == "123456789"
     assert resolved["channel_id"] == "42"
 
     settings["application_id"] = "999"
-    resolved = hermes_plugin._interactive_settings(ctx, bot)
+    resolved = card_workers._interactive_settings(ctx, bot)
     assert resolved["application_id"] == "999"
 
     settings.pop("application_id")
-    assert hermes_plugin._interactive_settings(
+    assert card_workers._interactive_settings(
         ctx, SimpleNamespace(user=None)) is None
     settings["interactive"] = False
-    assert hermes_plugin._interactive_settings(ctx, bot) is None
+    assert card_workers._interactive_settings(ctx, bot) is None
 
 
 def test_interactive_settings_accepts_int_ids(tmp_path):
@@ -765,12 +768,12 @@ def test_interactive_settings_accepts_int_ids(tmp_path):
         "allowed_role_ids": ["7", "8"],
     })
     ctx = _Context(settings)
-    resolved = hermes_plugin._interactive_settings(ctx, None)
+    resolved = card_workers._interactive_settings(ctx, None)
     assert resolved is not None
     assert (resolved["channel_id"], resolved["guild_id"],
             resolved["application_id"]) == ("42", "7", "999")
     assert {str(r) for r in resolved["allowed_role_ids"]} == {"8"}
-    scope = hermes_plugin._settings(ctx)
+    scope = resolve_settings(ctx.get_config)
     assert (scope["application_id"], scope["guild_id"]) == ("999", "7")
 
 
@@ -787,7 +790,7 @@ def test_adapter_modules_adds_repo_root_when_loaded_by_file_location():
         "mod = importlib.util.module_from_spec(spec)\n"
         "sys.modules[spec.name] = mod\n"
         "spec.loader.exec_module(mod)\n"
-        "mod._adapter_modules()\n"
+        "from hermes_plugins.mcs import bridge\nbridge._adapter_modules()\n"
         "from adapters.common import summary\n"
         "print(callable(summary.answer))\n"
     )
@@ -813,17 +816,32 @@ def _config(**extra):
 
 
 def test_empty_projects_allowed_with_auto():
-    settings = hermes_plugin._settings(_Ctx(_config(project_ids_auto=True)))
+    settings = resolve_settings(_Ctx(_config(project_ids_auto=True)).get_config)
     assert settings is not None
     assert settings["project_ids"] == frozenset()
     assert settings["project_ids_auto"] is True
 
 
 def test_empty_projects_rejected_without_auto():
-    assert hermes_plugin._settings(_Ctx(_config())) is None
-    assert hermes_plugin._settings(_Ctx(_config(project_ids_auto="true"))) is None
+    assert resolve_settings(_Ctx(_config()).get_config) is None
+    assert resolve_settings(_Ctx(_config(project_ids_auto="true")).get_config) is None
 
 
 def test_invalid_projects_still_rejected_with_auto():
-    assert hermes_plugin._settings(
-        _Ctx(_config(project_ids=[0], project_ids_auto=True))) is None
+    assert resolve_settings(
+        _Ctx(_config(project_ids=[0], project_ids_auto=True)).get_config) is None
+
+
+def test_lazy_command_import_failure_hides_host_details(monkeypatch):
+    import builtins
+    original_import = builtins.__import__
+
+    def load(name, *args, **kwargs):
+        if name == "adapters.common.dispatch":
+            raise ImportError("/private/host/path sensitive-value")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", load)
+    handler = hermes_plugin._make_handler(_Context({}))
+    assert json.loads(handler("{}", _context())) == {
+        "ok": False, "error": "operation_failed"}

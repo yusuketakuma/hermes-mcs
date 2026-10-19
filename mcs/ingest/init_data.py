@@ -26,7 +26,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
-from mcs_adapter import MCSAdapter, MCSError, SessionExpired
+from mcs_adapter import MCSAdapter
+from mcs_contract import MCSError, SessionExpired
 from ledger import Ledger
 from job_ops import merge_full_replies
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, DB, RUN_LOCK,

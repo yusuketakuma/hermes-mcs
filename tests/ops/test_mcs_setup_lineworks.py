@@ -1,4 +1,5 @@
 """LINE WORKS setup accepts explicit scopes and rejects incomplete authority."""
+import setup_wizard
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,14 +56,14 @@ def test_missing_scope_and_explicit_auto_scope():
 
 def test_wizard_collects_authority_and_keeps_thread_settings_hidden():
     cfg = config()
-    fields = {key: (kind, gate) for _, rows in mcs_setup.WIZARD
+    fields = {key: (kind, gate) for _, rows in setup_wizard.WIZARD
               for key, kind, _, _, gate in rows}
     assert "lineworks" in fields["notify.interactive"][0]
     assert fields["notify.lineworks.allowed_user_ids"][0] == "reqcsv"
     assert fields["notify.lineworks.project_ids"][1](cfg)
     assert not fields["notify.card_thread"][1](cfg)
-    assert mcs_setup._parse_answer("reqcsv", ",,")[0] is False
-    assert mcs_setup._parse_answer("reqcsv", "u1,u2") == (True, ["u1", "u2"])
+    assert setup_wizard.parse_answer("reqcsv", ",,")[0] is False
+    assert setup_wizard.parse_answer("reqcsv", "u1,u2") == (True, ["u1", "u2"])
 
 
 @pytest.mark.parametrize("result", [0, 1, 124])

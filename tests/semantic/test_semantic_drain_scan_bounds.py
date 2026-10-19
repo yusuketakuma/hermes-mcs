@@ -1,10 +1,11 @@
 """Regressions for the semantic drain (synthetic only)."""
+import semantic_policy
+import semantic_runtime
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_drain
 import semantic_loops
 import semantic_projection
@@ -57,12 +58,12 @@ def test_slow_invalidation_yields_next_window_with_the_same_budget(tmp_path, mon
     def process(ledger, scfg, job, _jev, _llm, deadline, **_kwargs):
         served.append(deadline)
         assert scfg["job_budget_seconds"] == 450
-        assert semantic.runtime.job_deadline(scfg, deadline) == min(deadline, clock[0] + 450)
-        assert semantic.runtime.transition(ledger, semantic.runtime.JobToken.from_row(job), "done")
+        assert semantic_runtime.job_deadline(scfg, deadline) == min(deadline, clock[0] + 450)
+        assert semantic_runtime.transition(ledger, semantic_runtime.JobToken.from_row(job), "done")
         return "done"
 
     monkeypatch.setattr(semantic_store, "invalidate_projections", invalidate)
-    monkeypatch.setattr(semantic, "_process_job", process)
+    monkeypatch.setattr(semantic_drain, '_process_job', process)
     cfg = _cfg("shadow", job_budget_seconds=450)
     try:
         first = semantic_drain.run_due(db, cfg, {"errors": []}, 580,
@@ -113,8 +114,8 @@ def test_slow_backlog_throttle_does_not_skip_realtime_off_revocation(tmp_path, m
 def test_loop_rereads_ignore_other_generations_and_bad_meta(tmp_path):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic.thread_bundle(db, 1, 1, [2])
-        config, _ = semantic.semantic_config(_cfg())
+        bundle = semantic_store.thread_bundle(db, 1, 1, [2])
+        config, _ = semantic_policy.semantic_config(_cfg())
         fake = _FakeJev(choice_map={"relation": "completion_report"})
         facts = {1: _pending_fact(bundle["members"][0])}
         assert semantic_loops.update_loops(

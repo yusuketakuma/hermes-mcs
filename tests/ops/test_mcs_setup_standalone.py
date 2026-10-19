@@ -1,5 +1,8 @@
 """runtime_mode=standalone: config grants, launchd schedules and services
 without Hermes; Hermes mode keeps its existing surface."""
+import lifecycle_io
+import mcs_config
+import scheduled_jobs
 import json
 import os
 import plistlib
@@ -67,14 +70,14 @@ def config(interactive="discord"):
     ("10 5 * * *", [{"Hour": 5, "Minute": 10}]),
 ])
 def test_cron_schedules_become_launchd_calendars(schedule, want):
-    assert mcs_setup._calendar(schedule) == want
+    assert scheduled_jobs.calendar_entries(schedule) == want
 
 
 def test_every_cron_job_has_a_calendar_and_unsupported_fields_fail():
     for _, schedule, _ in mcs_setup.CRON_JOBS:
-        assert mcs_setup._calendar(schedule)
+        assert scheduled_jobs.calendar_entries(schedule)
     with pytest.raises(ValueError):
-        mcs_setup._calendar("0 0 1 * *")
+        scheduled_jobs.calendar_entries("0 0 1 * *")
 
 
 def test_agent_labels_and_ownership_follow_the_runtime():
@@ -305,12 +308,12 @@ def test_cron_timeout_wrapper_kills_the_whole_job(tmp_path):
     # the job's own child must die too (it would hold run.lock otherwise)
     script.write_text(f"sleep 300 & echo $! > {marker}; wait\n")
     started = time.monotonic()
-    proc = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "1",
+    proc = subprocess.run(["/usr/bin/perl", "-e", scheduled_jobs.TIMEOUT_PERL, "1",
                            "/bin/bash", str(script)], timeout=60)
     assert proc.returncode == 124 and time.monotonic() - started < 30
     child = int(marker.read_text())
     assert _process_gone(child)
-    ok = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
+    ok = subprocess.run(["/usr/bin/perl", "-e", scheduled_jobs.TIMEOUT_PERL, "30",
                          "/bin/sh", "-c", "exit 3"], timeout=60)
     assert ok.returncode == 3                     # normal exits pass through
 
@@ -322,7 +325,7 @@ def test_cron_timeout_wrapper_preserves_child_signal_failure(signal_name):
     import sys
 
     child = "import os, signal, sys; os.kill(os.getpid(), getattr(signal, sys.argv[1]))"
-    proc = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
+    proc = subprocess.run(["/usr/bin/perl", "-e", scheduled_jobs.TIMEOUT_PERL, "30",
                            sys.executable, "-c", child, signal_name], timeout=10)
     assert proc.returncode == 128 + getattr(signal, signal_name)
 
@@ -330,7 +333,7 @@ def test_cron_timeout_wrapper_preserves_child_signal_failure(signal_name):
 def test_cron_timeout_wrapper_preserves_success():
     import subprocess
 
-    proc = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
+    proc = subprocess.run(["/usr/bin/perl", "-e", scheduled_jobs.TIMEOUT_PERL, "30",
                            "/bin/sh", "-c", "exit 0"], timeout=10)
     assert proc.returncode == 0
 
@@ -343,8 +346,8 @@ def test_cron_timeout_wrapper_preserves_success():
     ("lineworks:room-synthetic", True)])
 def test_standalone_targets(target, ok):
     cfg = {"runtime_mode": "standalone", "notify_target": target}
-    assert (mcs_setup._validate_standalone(cfg) == []) is ok
-    assert mcs_setup._validate_standalone({**cfg, "runtime_mode": "hermes"}) == []
+    assert (mcs_config.validate_standalone(cfg) == []) is ok
+    assert mcs_config.validate_standalone({**cfg, "runtime_mode": "hermes"}) == []
 
 
 def test_failed_hermes_cron_keeps_the_launchd_schedule(monkeypatch, tmp_path):
@@ -374,7 +377,7 @@ def test_cron_timeout_wrapper_forwards_sigterm(tmp_path):
     marker = tmp_path / "child.pid"
     script = tmp_path / "job.sh"
     script.write_text(f"sleep 300 & echo $! > {marker}; wait\n")
-    proc = subprocess.Popen(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "3600",
+    proc = subprocess.Popen(["/usr/bin/perl", "-e", scheduled_jobs.TIMEOUT_PERL, "3600",
                              "/bin/bash", str(script)])
     deadline = time.monotonic() + 30
     while not (marker.exists() and marker.read_text().strip()):
@@ -596,8 +599,8 @@ def test_keychain_store_updates_existing_item_under_its_account(monkeypatch):
             return ok()
         raise AssertionError(argv)
 
-    monkeypatch.setattr(mcs_setup, "_run", run)
-    assert mcs_setup._keychain_store("user1", "newpw") is True
+    monkeypatch.setattr(lifecycle_io, "run_bounded", run)
+    assert lifecycle_io.store_keychain("user1", "newpw") is True
     assert items == [("mcs", "newpw")]
 
 

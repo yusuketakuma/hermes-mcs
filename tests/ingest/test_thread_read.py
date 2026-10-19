@@ -1,6 +1,7 @@
 """Per-thread read acknowledgement (owner report 2026-10-06): stored
 replies stayed unread on MCS because a reply's unread state lives on
 its thread. Synthetic stubs only — no real MCS."""
+import mcs_contract
 import json
 import time
 from types import SimpleNamespace
@@ -52,7 +53,7 @@ def test_thread_unread_reads_the_root_marker_without_keep_read_status():
     assert path == "/messages" and params == {
         "message_ids": 10, "include_oldest_unread_thread_message_id": 1}
     assert _Wire(lambda p, q: {"messages": [{"id": 10}]}).thread_unread(1, 10) is False
-    with pytest.raises(mcs_adapter.SchemaError):
+    with pytest.raises(mcs_contract.SchemaError):
         _Wire(lambda p, q: {"messages": []}).thread_unread(1, 10)
 
 
@@ -75,7 +76,7 @@ def test_read_thread_walks_every_page_without_keep_read_status():
 ])
 def test_read_thread_does_not_certify_invalid_or_incomplete_pages(paginate, kind):
     wire = _Wire(lambda p, q: {"messages": [], "paginate": paginate})
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         wire.read_thread(1, 10, max_pages=1)
     assert error.value.kind == kind
 
@@ -246,7 +247,7 @@ def test_failed_clear_keeps_durable_unknown_intent(db):
 
     def fail(pid, parent):
         assert db.db.execute("SELECT status FROM thread_read_marks").fetchone()[0] == "unknown"
-        raise mcs_adapter.MCSError("network_error", retryable=True)
+        raise mcs_contract.MCSError("network_error", retryable=True)
 
     adapter.read_thread = fail
     result = _result()
@@ -257,9 +258,9 @@ def test_failed_clear_keeps_durable_unknown_intent(db):
 
 
 def _partial_read_failure(failure):
-    error = (mcs_adapter.SessionExpired("synthetic expiry", status=401)
+    error = (mcs_contract.SessionExpired("synthetic expiry", status=401)
              if failure == "session" else
-             mcs_adapter.MCSError("network_error", "synthetic failure", retryable=True))
+             mcs_contract.MCSError("network_error", "synthetic failure", retryable=True))
 
     def routes(path, params):
         page = params["page"]
@@ -278,7 +279,7 @@ def _partial_read_failure(failure):
 @pytest.mark.parametrize("failure", ["network", "session", "schema", "page_cap"])
 def test_partial_thread_read_preserves_only_validated_page_ids(failure):
     wire, original = _partial_read_failure(failure)
-    with pytest.raises(mcs_adapter.MCSError) as caught:
+    with pytest.raises(mcs_contract.MCSError) as caught:
         wire.read_thread(1, 10, max_pages=2)
     error = caught.value
     assert error.observed_reply_ids == frozenset({11, 13})
@@ -300,7 +301,7 @@ def test_failed_thread_read_keeps_racing_reply_job_and_unread_evidence(db, failu
     wire.fetch_thread = lambda pid, parent: [SimpleNamespace(message_id=11)]
     result = _result()
     if failure == "session":
-        with pytest.raises(mcs_adapter.SessionExpired) as caught:
+        with pytest.raises(mcs_contract.SessionExpired) as caught:
             run_check.stage_thread_read(wire, db, result, time.monotonic() + 120)
         assert caught.value is original
     else:
@@ -326,7 +327,7 @@ def test_old_replies_and_mcs_errors_stay_bounded(db):
     _store(db, 21, parent=20)
 
     def boom(pid, parent):
-        raise mcs_adapter.MCSError("http_error", "x", status=500)
+        raise mcs_contract.MCSError("http_error", "x", status=500)
     adapter = SimpleNamespace(thread_unread=boom)
     result = _result()
     run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)

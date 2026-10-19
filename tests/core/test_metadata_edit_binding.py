@@ -2,7 +2,7 @@
 import pytest
 
 from ledger import Ledger, publish_snapshot
-from mcs_adapter import _norm_message
+from mcs_payload import normalize_message as _norm_message
 from mcs_signals import record_station_staff
 from mcs_view import View
 from response_observation_view import get_response_observation_list

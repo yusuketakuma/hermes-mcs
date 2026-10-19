@@ -1,4 +1,5 @@
 """Explicit backup settings render safely and health reads only synthetic records."""
+import scheduled_jobs
 import json
 from dataclasses import asdict
 import hashlib
@@ -12,7 +13,7 @@ import pytest
 
 import mcs_backup
 import mcs_setup
-import run_check
+import health_report
 from ledger import Ledger
 from test_mcs_backup import NOW, world as world
 
@@ -32,8 +33,8 @@ def backup_settings(tmp_path, monkeypatch):
     path = root / "policy.json"
     path.write_text(json.dumps({**asdict(policy), "scheduled": True}))
     path.chmod(0o600)
-    monkeypatch.setattr(run_check, "HOME", str(root))
-    monkeypatch.setattr(run_check.time, "time", lambda: 100)
+    monkeypatch.setattr(health_report, "HOME", str(root))
+    monkeypatch.setattr(health_report.time, "time", lambda: 100)
     config = {"backup": {
         "enabled": True, "policy": str(path), "snapshot_dir": str(root / "snapshots"),
         "schedule": "17 3 * * *", "verify_interval_s": 60, "drill_interval_s": 120}}
@@ -45,7 +46,7 @@ def test_disabled_backup_never_reads_policy_or_keys(monkeypatch):
         pytest.fail("disabled backup must not inspect storage or keys")
     monkeypatch.setattr(mcs_backup, "load_policy", forbidden)
     monkeypatch.setattr(mcs_backup, "_keychain_read", forbidden)
-    assert run_check._backup_health({}, 100) == {"state": "disabled", "reasons": []}
+    assert health_report.backup_health({}, 100) == {"state": "disabled", "reasons": []}
     assert mcs_setup._service_subs({})["BACKUP_ENABLED"] == "0"
 
 
@@ -76,28 +77,28 @@ def test_backup_health_requires_drill_and_keeps_records_out_of_output(
     def forbidden(*args, **kwargs):
         pytest.fail("health must not read keys")
     monkeypatch.setattr(mcs_backup, "_keychain_read", forbidden)
-    assert run_check._backup_health(config, 100)["reasons"] == ["backup_drill_at_unknown"]
+    assert health_report.backup_health(config, 100)["reasons"] == ["backup_drill_at_unknown"]
     state["last_drill_at"] = 100
     state_path.write_text(json.dumps(state))
-    health = run_check._backup_health(config, 100)
+    health = health_report.backup_health(config, 100)
     assert health["state"] == "ok"
     assert "PRIVATE_PATH_CANARY" not in json.dumps(health)
     assert "policy_id" not in health
-    assert "backup_verify_at_stale" in run_check._backup_health(config, 161)["reasons"]
-    assert "backup_rpo_exceeded" in run_check._backup_health(config, 301)["reasons"]
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
+    assert "backup_verify_at_stale" in health_report.backup_health(config, 161)["reasons"]
+    assert "backup_rpo_exceeded" in health_report.backup_health(config, 301)["reasons"]
+    monkeypatch.setattr(health_report, "attachment_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, "prev_health", lambda: {})
     with_db = Ledger(str(root / "data" / "synthetic.db"))
     try:
         state["last_action_status"] = "failed"
         state_path.write_text(json.dumps(state))
-        report = run_check._health(with_db, {"errors": []}, "ok", cfg=config)
+        report = health_report.build_health(with_db.db, {"errors": []}, "ok", cfg=config)
         assert report["overall"] == "degraded"
         assert report["backup"]["reasons"] == ["backup_failed"]
         assert report["backup"]["failure_code"] is None       # cause not recorded
         state.update(last_error="backup_retention_capacity")
         state_path.write_text(json.dumps(state))
-        detail = run_check._backup_health(config, 100)
+        detail = health_report.backup_health(config, 100)
         assert detail["reasons"] == ["backup_failed"]
         assert detail["failure_code"] == "backup_retention_capacity"
         assert "backup_not_verified" in report["state_reasons"]
@@ -108,7 +109,7 @@ def test_backup_health_requires_drill_and_keeps_records_out_of_output(
 def test_invalid_private_policy_is_a_safe_failed_health_state(backup_settings):
     root, config = backup_settings
     (root / "policy.json").chmod(0o644)
-    assert run_check._backup_health(config, 100) == {
+    assert health_report.backup_health(config, 100) == {
         "state": "failed", "reasons": ["backup_io_or_policy_failed"]}
 
 
@@ -125,7 +126,7 @@ def test_explicit_static_path_and_two_hours_are_shared_by_both_schedulers(
     assert jobs[:-1] == mcs_setup.CRON_JOBS
     assert jobs[-1][1:] == ("17 3,15 * * *", "mcs_offsite.sh")
     calendars = [{"Hour": 3, "Minute": 17}, {"Hour": 15, "Minute": 17}]
-    assert mcs_setup._calendar(backup["schedule"]) == calendars
+    assert scheduled_jobs.calendar_entries(backup["schedule"]) == calendars
     independent = Runtime(root, {**cfg, "runtime_mode": "standalone"})
     assert dict(independent.schedules)["mcs_offsite"] == calendars
     assert len(independent.schedules) == len(mcs_setup.CRON_JOBS) + 1
@@ -163,7 +164,7 @@ def test_bounded_explicit_hour_lists_are_representable(backup_settings, schedule
     _, cfg = backup_settings
     cfg["backup"]["schedule"] = schedule
     assert mcs_setup._backup_config(cfg["backup"]) is None
-    assert len(mcs_setup._calendar(schedule)) == len(schedule.split()[1].split(","))
+    assert len(scheduled_jobs.calendar_entries(schedule)) == len(schedule.split()[1].split(","))
 
 
 @pytest.mark.parametrize("schedule", [
@@ -251,7 +252,7 @@ def test_rendered_wrapper_consumes_only_explicit_static_generation(
         assert local["last_attempt_failed"] is True and local["last_offsite_at"] is None
         assert local["within_rpo"] is None
         assert not list(Path(policy.destination).glob("snapshot-*.mcsb"))
-        assert run_check._backup_health(cfg, NOW)["state"] != "healthy"
+        assert health_report.backup_health(cfg, NOW)["state"] != "healthy"
     with pytest.raises(mcs_backup.BackupError, match="backup_no_valid_daily_snapshot"):
         mcs_backup._latest_snapshot(str(source.parent), policy)
 

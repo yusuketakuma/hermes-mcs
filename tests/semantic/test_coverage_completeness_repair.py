@@ -1,10 +1,11 @@
 """Fictional coverage-only omissions share the existing repair reservation and audit gates."""
+import semantic_policy
+import semantic_store
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_drain as drain
 import semantic_facts as facts
 from semantic_policy import KIND_FACT_REPAIR
@@ -40,9 +41,9 @@ def test_coverage_only_finding_can_dispatch_once_then_requires_a_fresh_pass(tmp_
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body=FIRST + SECOND)])
-    bundle = semantic.thread_bundle(db, 1, 1, [1])
+    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
     member = bundle["members"][0]
-    scfg, errors = semantic.semantic_config(_canonical_cfg())
+    scfg, errors = semantic_policy.semantic_config(_canonical_cfg())
     assert not errors
     calls = []
 
@@ -56,7 +57,7 @@ def test_coverage_only_finding_can_dispatch_once_then_requires_a_fresh_pass(tmp_
     client = CoverageJev(terminal)
     try:
         stage = drain._fact_stage(db, scfg, member, 1, 1, bundle["source_fingerprint"],
-                                  semantic.policy_fingerprint(scfg), client, model,
+                                  semantic_policy.policy_fingerprint(scfg), client, model,
                                   time.monotonic() + 600)
         assert len(calls) == (1 if terminal == "ambiguous" else 2)
         assert (stage["outcome"] is None) is (terminal is None)
@@ -76,8 +77,8 @@ def test_coverage_repair_cannot_promote_a_fact_in_a_category_adjudicated_absent(
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body=FIRST + SECOND)])
-    bundle = semantic.thread_bundle(db, 1, 1, [1])
-    scfg, _ = semantic.semantic_config(_canonical_cfg())
+    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+    scfg, _ = semantic_policy.semantic_config(_canonical_cfg())
     calls = []
 
     def model(prompt):
@@ -90,7 +91,7 @@ def test_coverage_repair_cannot_promote_a_fact_in_a_category_adjudicated_absent(
 
     try:
         result = drain._fact_stage(db, scfg, bundle["members"][0], 1, 1,
-                                   bundle["source_fingerprint"], semantic.policy_fingerprint(scfg),
+                                   bundle["source_fingerprint"], semantic_policy.policy_fingerprint(scfg),
                                    CoverageJev(), model, time.monotonic() + 600)
         assert len(calls) == 2 and result["outcome"] == "hard_fail"
         doc = result["v2_doc"]
@@ -106,8 +107,8 @@ def test_a_repair_that_returns_a_kept_fact_again_links_it_once(tmp_path):
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body=FIRST + SECOND)])
-    bundle = semantic.thread_bundle(db, 1, 1, [1])
-    scfg, _ = semantic.semantic_config(_canonical_cfg())
+    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
+    scfg, _ = semantic_policy.semantic_config(_canonical_cfg())
     calls = []
 
     def model(prompt):
@@ -120,7 +121,7 @@ def test_a_repair_that_returns_a_kept_fact_again_links_it_once(tmp_path):
 
     try:
         stage = drain._fact_stage(db, scfg, bundle["members"][0], 1, 1, bundle["source_fingerprint"],
-                                  semantic.policy_fingerprint(scfg), CoverageJev(), model,
+                                  semantic_policy.policy_fingerprint(scfg), CoverageJev(), model,
                                   time.monotonic() + 600)
         assert len(calls) == 2 and stage["outcome"] is None
         doc = stage["v2_doc"]

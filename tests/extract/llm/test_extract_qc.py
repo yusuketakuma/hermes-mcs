@@ -4,11 +4,11 @@ Covers: lazy seeding (including re-extraction re-pend), guarded claim
 through the shared run_due path, annotate-only verdict artifacts, and
 fail-open behavior for every Jev failure class.
 """
+import semantic_qc
 import json
 import time
 
 import extract_llm
-import semantic
 import semantic_drain
 import semantic_jev as jev
 from extract_testkit import _hash, _ledger, _message, _qc_job, _v2_artifact
@@ -37,7 +37,7 @@ def test_seed_queues_current_v2_artifact(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
-    assert semantic_drain._qc_seed(db, time.time()) == 1
+    assert semantic_qc._qc_seed(db, time.time()) == 1
     job = _qc_job(db)
     assert job is not None and job["state"] == "pending"
     assert json.loads(job["payload"])["hash"] == _hash(db)
@@ -53,7 +53,7 @@ def test_seed_skips_when_qc_artifact_exists_for_same_hash(tmp_path):
         meta={"hash": h,
                           "extract_version": extract_llm.EXTRACT_VERSION,
                           "source_artifact_id": source_id})
-    assert semantic_drain._qc_seed(db, time.time()) == 0
+    assert semantic_qc._qc_seed(db, time.time()) == 0
     assert _qc_job(db) is None
     db.close()
 
@@ -71,7 +71,7 @@ def test_seed_skips_stale_v1_and_error_artifacts(tmp_path):
                     meta={"hash": "old-hash",
                           "extract_version":
                           extract_llm.EXTRACT_VERSION})      # stale
-    assert semantic_drain._qc_seed(db, time.time()) == 0
+    assert semantic_qc._qc_seed(db, time.time()) == 0
     db.close()
 
 
@@ -79,7 +79,7 @@ def test_seed_repends_done_job_when_hash_changes(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
-    semantic_drain._qc_seed(db, time.time())
+    semantic_qc._qc_seed(db, time.time())
     db.db.execute("UPDATE fetch_jobs SET state='done' "
                   "WHERE kind='extract_qc'")
     db.db.commit()
@@ -87,7 +87,7 @@ def test_seed_repends_done_job_when_hash_changes(tmp_path):
     db.db.execute("UPDATE messages SET content_hash='h2' WHERE message_id=1")
     db.db.commit()
     _v2_artifact(db, 1, "h2")
-    assert semantic_drain._qc_seed(db, time.time()) == 1
+    assert semantic_qc._qc_seed(db, time.time()) == 1
     job = _qc_job(db)
     assert job["state"] == "pending" and job["attempts"] == 0
     assert json.loads(job["payload"])["hash"] == "h2"
@@ -98,11 +98,11 @@ def test_seed_keeps_failed_job_for_same_hash(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
-    semantic_drain._qc_seed(db, time.time())
+    semantic_qc._qc_seed(db, time.time())
     db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=3 "
                   "WHERE kind='extract_qc'")
     db.db.commit()
-    semantic_drain._qc_seed(db, time.time())
+    semantic_qc._qc_seed(db, time.time())
     job = _qc_job(db)
     assert job["state"] == "failed" and job["attempts"] == 3
     db.close()
@@ -118,7 +118,7 @@ def test_seed_skips_archive_posts(tmp_path):
     db.save_messages([_message(1, posted_at=old), _message(2, posted_at=recent)])
     _v2_artifact(db, 1, _hash(db, 1))
     _v2_artifact(db, 2, _hash(db, 2))
-    assert semantic_drain._qc_seed(db, time.time()) == 1
+    assert semantic_qc._qc_seed(db, time.time()) == 1
     assert _qc_job(db, 1) is None
     assert _qc_job(db, 2) is not None
     db.close()
@@ -136,7 +136,7 @@ def test_seed_reaps_stale_archive_jobs(tmp_path):
         "state,next_try,created_at,updated_at) "
         "VALUES('extract_qc',1,1,'{}','pending',0,0,0)")
     db.db.commit()
-    semantic_drain._qc_seed(db, time.time())
+    semantic_qc._qc_seed(db, time.time())
     assert _qc_job(db, 1) is None
     db.close()
 
@@ -148,10 +148,10 @@ def test_seed_window_does_not_consume_pending_rows(tmp_path):
     db.save_messages([_message(1), _message(2)])
     _v2_artifact(db, 1, _hash(db, 1))
     _v2_artifact(db, 2, _hash(db, 2))
-    assert semantic_drain._qc_seed(db, time.time(), limit=1) == 1
+    assert semantic_qc._qc_seed(db, time.time(), limit=1) == 1
     assert _qc_job(db, 2) is not None        # newest artifact first
     # pending job for m2 is excluded from the window -> m1 seeds now
-    assert semantic_drain._qc_seed(db, time.time(), limit=1) == 1
+    assert semantic_qc._qc_seed(db, time.time(), limit=1) == 1
     assert _qc_job(db, 1) is not None
     db.close()
 
@@ -162,10 +162,10 @@ def test_failed_seed_does_not_starve_older_work(tmp_path):
         db.save_messages([_message(1), _message(2)])
         _v2_artifact(db, 1, _hash(db, 1))
         _v2_artifact(db, 2, _hash(db, 2))
-        semantic_drain._qc_seed(db, time.time(), limit=1)
+        semantic_qc._qc_seed(db, time.time(), limit=1)
         db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=6")
         db.db.commit()
-        assert semantic_drain._qc_seed(db, time.time(), limit=1) == 1
+        assert semantic_qc._qc_seed(db, time.time(), limit=1) == 1
         assert _qc_job(db, 1)["state"] == "pending"
         assert _qc_job(db, 2)["state"] == "failed"
     finally:
@@ -177,12 +177,12 @@ def test_qc_requeues_changed_extraction_with_same_hash_and_version(tmp_path):
     try:
         db.save_messages([_message()])
         _v2_artifact(db, 1, _hash(db))
-        semantic.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
+        semantic_drain.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
                          time.monotonic() + 60, jev_client=_FakeJev(choice="routine"))
         old_id = json.loads(_qc_artifact(db)["meta"])["source_artifact_id"]
         new_id = _v2_artifact(db, 1, _hash(db), content={"symptoms": []})
         assert new_id != old_id
-        assert semantic_drain._qc_seed(db, time.time()) == 1
+        assert semantic_qc._qc_seed(db, time.time()) == 1
         payload = json.loads(_qc_job(db)["payload"])
         assert payload["source_artifact_id"] == new_id
     finally:
@@ -198,11 +198,11 @@ def test_qc_seed_and_drain_use_same_valid_source(tmp_path):
             db.artifact_add("extract_llm", content, project_id=1, message_id=1,
                             meta={"hash": _hash(db),
                                   "extract_version": extract_llm.EXTRACT_VERSION})
-        out = semantic.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
+        out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
                                time.monotonic() + 60, jev_client=_FakeJev(choice="routine"))
         assert out["done"] == 1
         assert json.loads(_qc_artifact(db)["meta"])["source_artifact_id"] == source_id
-        assert semantic_drain._qc_seed(db, time.time()) == 0
+        assert semantic_qc._qc_seed(db, time.time()) == 0
     finally:
         db.close()
 
@@ -214,14 +214,14 @@ def test_seed_repends_done_job_on_version_bump_same_hash(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
-    semantic_drain._qc_seed(db, time.time())
+    semantic_qc._qc_seed(db, time.time())
     # simulate a job row written before 'ver' existed + done state
     db.db.execute("UPDATE fetch_jobs SET state='done',"
                   " payload=json_object('hash',"
                   " json_extract(payload,'$.hash'))"
                   " WHERE kind='extract_qc'")
     db.db.commit()
-    assert semantic_drain._qc_seed(db, time.time()) == 1
+    assert semantic_qc._qc_seed(db, time.time()) == 1
     job = _qc_job(db)
     assert job["state"] == "pending" and job["attempts"] == 0
     assert json.loads(job["payload"])["ver"] == \
@@ -240,7 +240,7 @@ def test_seed_skips_when_qc_exists_for_same_hash_and_version(tmp_path):
                     meta={"hash": h,
                           "extract_version": extract_llm.EXTRACT_VERSION
                           - 1})
-    assert semantic_drain._qc_seed(db, time.time()) == 1
+    assert semantic_qc._qc_seed(db, time.time()) == 1
     db.close()
 
 
@@ -253,7 +253,7 @@ def test_drain_writes_annotate_only_qc_artifact(tmp_path):
     _v2_artifact(db, 1, h)
     client = _FakeJev(noul=0.9, choice="routine")
     result = {"errors": []}
-    out = semantic.run_due(db, _cfg(extract_qc="annotate"), result,
+    out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"), result,
                            time.monotonic() + 60, jev_client=client)
     assert out["done"] == 1
     row = _qc_artifact(db)
@@ -281,7 +281,7 @@ def test_done_qc_job_is_not_reclaimed(tmp_path):
     _v2_artifact(db, 1, _hash(db))
     client = _FakeJev(choice="routine")
     for _ in range(2):
-        semantic.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
+        semantic_drain.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
                          time.monotonic() + 60, jev_client=client)
     job = _qc_job(db)
     assert job["state"] == "done"
@@ -298,7 +298,7 @@ def test_drain_skips_qc_when_not_annotate(tmp_path):
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
     client = _FakeJev(choice="routine")
-    out = semantic.run_due(db, _cfg(), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg(), {"errors": []},
                            time.monotonic() + 60, jev_client=client)
     assert out["done"] == 0 and client.requests_made == 0
     assert _qc_job(db) is None
@@ -323,7 +323,7 @@ def test_process_qc_job_skips_aged_post(tmp_path):
         "SELECT * FROM fetch_jobs WHERE kind='extract_qc'").fetchone()
     scfg, _ = semantic_config(_cfg(extract_qc="annotate"))
     client = _FakeJev(choice="routine")
-    out = semantic_drain._process_qc_job(
+    out = semantic_qc._process_qc_job(
         db, scfg, job, client, time.monotonic() + 60)
     assert out == "done" and client.requests_made == 0
     assert _qc_artifact(db) is None
@@ -340,15 +340,15 @@ def test_qc_artifact_reports_item_coverage(tmp_path):
                                    for i in range(20)],
                           "urgency": "routine"})
     client = _FakeJev(noul=0.9, choice="routine")
-    out = semantic.run_due(db, _cfg(extract_qc="annotate"),
+    out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
                            {"errors": []}, time.monotonic() + 60,
                            jev_client=client)
     assert out["done"] == 1
     content = json.loads(_qc_artifact(db)["content"])
     cov = content["coverage"]
-    assert cov["checked"] == semantic_drain.QC_MAX_ITEMS + 1
+    assert cov["checked"] == semantic_qc.QC_MAX_ITEMS + 1
     assert cov["total"] == 21
-    assert cov["unchecked"] == 20 - semantic_drain.QC_MAX_ITEMS
+    assert cov["unchecked"] == 20 - semantic_qc.QC_MAX_ITEMS
     assert cov["capped"] is True
     assert cov["by_field"]["urgency"]["checked"] == 1
     db.close()
@@ -358,7 +358,7 @@ def test_drain_no_jev_client_leaves_job_pending(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
-    out = semantic.run_due(db, _cfg(extract_qc="annotate", budget=0),
+    out = semantic_drain.run_due(db, _cfg(extract_qc="annotate", budget=0),
                            {"errors": []}, time.monotonic() + 60)
     assert out["done"] == 0
     # budget=0 -> no client -> not claimed; stays pending for a later
@@ -371,7 +371,7 @@ def test_qc_respects_project_scope(tmp_path):
     db.save_messages([_message(project_id=9)])
     _v2_artifact(db, 1, _hash(db), project_id=9)
     client = _FakeJev(choice="routine")
-    out = semantic.run_due(
+    out = semantic_drain.run_due(
         db, _cfg(extract_qc="annotate", project_ids=[1]),
         {"errors": []}, time.monotonic() + 60, jev_client=client)
     assert out["done"] == 0 and client.requests_made == 0
@@ -388,7 +388,7 @@ def test_jev_retryable_error_retries_job(tmp_path):
     _v2_artifact(db, 1, _hash(db))
     client = _FakeJev(error=jev.JevError("transport", "x",
                                          retryable=True))
-    out = semantic.run_due(db, _cfg(extract_qc="annotate"),
+    out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
                            {"errors": []}, time.monotonic() + 60,
                            jev_client=client)
     assert out["done"] == 0
@@ -403,7 +403,7 @@ def test_jev_resource_error_defers_without_artifact(tmp_path):
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
     client = _FakeJev(error=jev.JevError("no_api_key", "x"))
-    semantic.run_due(db, _cfg(extract_qc="annotate"),
+    semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
                      {"errors": []}, time.monotonic() + 60,
                      jev_client=client)
     job = _qc_job(db)
@@ -417,7 +417,7 @@ def test_jev_permanent_error_writes_unevaluated_marker(tmp_path):
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
     client = _FakeJev(error=jev.JevError("contract_error", "x"))
-    out = semantic.run_due(db, _cfg(extract_qc="annotate"),
+    out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
                            {"errors": []}, time.monotonic() + 60,
                            jev_client=client)
     assert out["done"] == 1
@@ -440,7 +440,7 @@ def test_qc_job_done_when_no_current_artifact(tmp_path):
         "VALUES('extract_qc',1,1,'{}','pending',0,0,0)")
     db.db.commit()
     client = _FakeJev(choice="routine")
-    out = semantic.run_due(db, _cfg(extract_qc="annotate"),
+    out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
                            {"errors": []}, time.monotonic() + 60,
                            jev_client=client)
     assert out["done"] == 1 and client.requests_made == 0
@@ -453,18 +453,18 @@ def test_qc_questions_cap_and_layout():
     ex = {"meds": [{"name": f"med{i}"} for i in range(20)],
           "symptoms": [{"text": "s"}], "events": ["visit"],
           "urgency": "high"}
-    questions, layout, ctx = semantic_drain._qc_questions(ex)
-    assert len(questions) == semantic_drain.QC_MAX_ITEMS + 1  # +urgency
+    questions, layout, ctx = semantic_qc._qc_questions(ex)
+    assert len(questions) == semantic_qc.QC_MAX_ITEMS + 1  # +urgency
     assert questions["urg"]["type"] == "choice"
     noul_qs = [q for qid, q in questions.items()
                if q["type"] == "noul"]
-    assert len(noul_qs) == semantic_drain.QC_MAX_ITEMS
+    assert len(noul_qs) == semantic_qc.QC_MAX_ITEMS
     assert all("quoted message data" in q["instructions"]
                for q in questions.values())
 
 
 def test_qc_questions_empty_extraction():
-    questions, layout, ctx = semantic_drain._qc_questions({})
+    questions, layout, ctx = semantic_qc._qc_questions({})
     assert questions == {} and layout == [] and ctx == {}
 
 
@@ -529,18 +529,18 @@ def test_semantic_jobs_outrank_qc_backfill(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
-    semantic_drain._qc_seed(db, time.time())          # QC job first (job_id smaller)
+    semantic_qc._qc_seed(db, time.time())          # QC job first (job_id smaller)
     db.job_add("semantic", 1, 1, payload={
         "targets": [1], "origin": {"source": "history_import"}})
     client = _FakeJev(choice="routine")
-    out = semantic.run_due(db, _cfg(extract_qc="annotate"),
+    out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
                            {"errors": []}, time.monotonic() + 300,
                            jev_client=client, llm_fn=_llm, max_jobs=1)
     assert out["job_metrics"][0]["kind"] == "semantic"
     assert "extract_qc" not in out["done_by_kind"]
     assert _qc_job(db)["state"] == "pending"
     # Second pass: the QC backfill runs once semantic work is done.
-    out2 = semantic.run_due(db, _cfg(extract_qc="annotate"),
+    out2 = semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
                             {"errors": []}, time.monotonic() + 300,
                             jev_client=client, llm_fn=_llm, max_jobs=1)
     assert out2["job_metrics"][0]["kind"] == "extract_qc"
@@ -552,7 +552,7 @@ def test_qc_questions_cover_vitals():
     """Vitals join the audit keyed by vital name — a mislabel
     (脈は48 -> bs:48) asks whether the contextual value is a blood glucose."""
     ex = {"vitals": {"bs": 48, "hr": 72}}
-    questions, layout, ctx = semantic_drain._qc_questions(ex)
+    questions, layout, ctx = semantic_qc._qc_questions(ex)
     v_layout = [e for e in layout if e[1] == "vitals"]
     assert sorted(e[2] for e in v_layout) == ["bs", "hr"]
     blob = json.dumps(questions, ensure_ascii=False)
@@ -562,7 +562,7 @@ def test_qc_questions_cover_vitals():
 
 def test_qc_vital_text_stays_out_of_instructions():
     marker = 'SYNTHETIC_UNTRUSTED_VITAL'
-    questions, _, context = semantic_drain._qc_questions({
+    questions, _, context = semantic_qc._qc_questions({
         'vitals': {marker: marker, 'hr': marker}})
     assert marker not in json.dumps(questions)
     assert marker in json.dumps(context)
@@ -575,14 +575,14 @@ def test_qc_coverage_cap_includes_vitals(tmp_path):
         "meds": [{"name": f"synthetic-{i}"} for i in range(10)],
         "vitals": {"bt": 36.5, "hr": 72, "rr": 16, "sbp": 120,
                    "dbp": 80, "spo2": 98, "bs": 100}})
-    out = semantic.run_due(
+    out = semantic_drain.run_due(
         db, _cfg(extract_qc="annotate"), {"errors": []},
         time.monotonic() + 60, jev_client=_FakeJev(noul=0.9))
     assert out["done"] == 1
     coverage = json.loads(_qc_artifact(db)["content"])["coverage"]
     assert coverage["capped"] is True
     assert coverage["total"] == 17
-    assert coverage["checked"] == semantic_drain.QC_MAX_ITEMS
+    assert coverage["checked"] == semantic_qc.QC_MAX_ITEMS
     assert coverage["unchecked"] == 1
     # vitals audit before meds now (highest-NO_MATCH order) — the
     # overflow lands on a med, every vital is still checked.
@@ -592,7 +592,7 @@ def test_qc_coverage_cap_includes_vitals(tmp_path):
 
 
 def test_qc_reserves_clinical_sections_and_deduplicates_events():
-    _, layout, _ = semantic_drain._qc_questions({
+    _, layout, _ = semantic_qc._qc_questions({
         'events': ['visit'] * 30,
         'vitals': {'hr': 72, 'sbp': 120},
         'meds': [{'name': f'合成薬{i}'} for i in range(30)],
@@ -605,7 +605,7 @@ def test_qc_reserves_clinical_sections_and_deduplicates_events():
 
 
 def test_qc_dedup_keeps_original_item_indices():
-    _, layout, context = semantic_drain._qc_questions({
+    _, layout, context = semantic_qc._qc_questions({
         "events": ["visit", "visit", "exam"],
         "vitals": {"hr": 72},
     })
@@ -645,7 +645,7 @@ def test_qc_frame_survives_semantic_load(tmp_path):
     for mid in range(1, 6):
         _v2_artifact(db, mid, _hash(db, mid))
         _sem_job(db, mid, eligible=True)
-    out = semantic.run_due(
+    out = semantic_drain.run_due(
         db, _cfg(extract_qc="annotate"), {"errors": []},
         time.monotonic() + 60, jev_client=_FakeJev(choice="routine"),
         llm_fn=_llm, max_jobs=4)
@@ -666,7 +666,7 @@ def test_qc_frame_expands_into_idle_semantic_lanes(tmp_path):
     db.save_messages([_message(i) for i in range(1, 7)])
     for mid in range(1, 7):
         _v2_artifact(db, mid, _hash(db, mid))
-    out = semantic.run_due(
+    out = semantic_drain.run_due(
         db, _cfg(extract_qc="annotate"), {"errors": []},
         time.monotonic() + 60, jev_client=_FakeJev(choice="routine"),
         max_jobs=4)

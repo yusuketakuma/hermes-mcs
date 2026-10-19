@@ -1,4 +1,6 @@
 """Fully synthetic clinical normalization regressions through real extraction."""
+import extract_quality
+import extract_validation
 
 import json
 
@@ -38,9 +40,9 @@ def test_medication_surface_when_width_or_kana_varies(name, monkeypatch):
 ])
 def test_medication_identity_when_similar_or_ambiguous(names):
     # Given: two names whose equivalence has not been established.
-    chunks = [extract_llm._validate({"meds": [{"name": n}]}, n) for n in names]
+    chunks = [extract_validation.validate({"meds": [{"name": n}]}, n) for n in names]
     # When: validated chunks merge in the real extraction path.
-    meds = extract_llm._merge(chunks)["meds"]
+    meds = extract_validation.merge(chunks)["meds"]
     # Then: no name, manufacturer, class or LASA pair is merged.
     assert [m["name"] for m in meds] == list(names)
     assert all(m["normalized"]["resolution"] == "unresolved" for m in meds)
@@ -53,7 +55,7 @@ def test_lab_candidate_when_explicit_sampling_date_and_fullwidth_units():
     raw = {"name": "クレアチニン", "value": "1.20",
            "unit": "ｍｇ／ｄＬ", "evidence": body}
     # When: shared extraction validation runs.
-    lab = extract_llm._validate({"labs": [raw]}, body)["labs"][0]
+    lab = extract_validation.validate({"labs": [raw]}, body)["labs"][0]
     # Then: typed values are additive; no dose/unit conversion or human approval.
     assert lab["value"] == "1.20" and lab["unit"] == "ｍｇ／ｄＬ"
     assert lab["normalized"] == {
@@ -94,13 +96,13 @@ def test_lab_candidate_when_quote_does_not_establish_measurement(name, value, un
         raw["evidence"] = quote
     drops = {}
     # When: production quote verification and normalization run together.
-    lab = extract_llm._validate({"labs": [raw]}, quote or "合成本文", drops)["labs"][0]
+    lab = extract_validation.validate({"labs": [raw]}, quote or "合成本文", drops)["labs"][0]
     # Then: the original assertion survives only as a repairable candidate.
     assert lab["unverified"] is True
     assert lab["normalized"]["confirmation"] == "unverified"
     assert lab["normalized"]["measured_on"] is None
     assert drops["labs"]
-    assert extract_llm._repair_issues(drops, {"labs": [lab]})
+    assert extract_quality.repair_issues(drops, {"labs": [lab]})
 
 
 @pytest.mark.parametrize("quote", [
@@ -114,7 +116,7 @@ def test_lab_time_when_date_is_not_unambiguous_sampling_date(quote):
     # Given: a quote with no unambiguous valid sampling date.
     raw = {"name": "Cr", "value": 1.2, "unit": "mg/dL", "evidence": quote}
     # When: extraction validation runs.
-    lab = extract_llm._validate({"labs": [raw]}, quote)["labs"][0]
+    lab = extract_validation.validate({"labs": [raw]}, quote)["labs"][0]
     # Then: no posting date, relative date or invalid date is substituted.
     assert lab["normalized"]["measured_on"] is None
 
@@ -134,7 +136,7 @@ def test_lab_value_when_supported_without_conversion(quote, value, unit):
     raw = {"name": quote.split()[0] if " " in quote else "BNP",
            "value": value, "unit": unit, "evidence": quote}
     # When: extraction normalizes the value.
-    lab = extract_llm._validate({"labs": [raw]}, quote)["labs"][0]
+    lab = extract_validation.validate({"labs": [raw]}, quote)["labs"][0]
     # Then: numeric values are not converted; text does not become a number.
     expected = "0.00001" if value == 0.00001 else str(value)
     assert lab["normalized"]["value"] == expected
@@ -165,13 +167,13 @@ def test_lab_display_when_old_artifact_has_unsupported_values(tmp_path):
 
 def test_lab_merge_when_dates_or_confirmation_differ():
     # Given: two dated samples, then a mismatched candidate.
-    chunks = [extract_llm._validate({"labs": [{
+    chunks = [extract_validation.validate({"labs": [{
         "name": "Cr", "value": v, "unit": "mg/dL", "evidence": q}]}, q)
         for v, q in [(1.2, "2026-10-01採血Cr 1.2mg/dL"),
                      (1.3, "2026-10-02採血Cr 1.3mg/dL"),
                      (9, "Cr 1.2mg/dL")]]
     # When: the real chunk merger combines the normalized outputs.
-    labs = extract_llm._merge(chunks)["labs"]
+    labs = extract_validation.merge(chunks)["labs"]
     # Then: an unverified candidate cannot overwrite supported measurements.
     assert [lb["value"] for lb in labs] == [1.2, 1.3, 9]
     assert [lb["normalized"]["measured_on"] for lb in labs] == [
@@ -197,7 +199,7 @@ def test_lab_confirmation_when_source_marks_unverified(flag):
     # Given: a source confirmation flag that is not literally False.
     body = "Cr 1.2mg/dL"
     # When: persisted/returned assertions are revalidated.
-    lab = extract_llm._validate({"labs": [{
+    lab = extract_validation.validate({"labs": [{
         "name": "Cr", "value": 1.2, "unit": "mg/dL", "evidence": body,
         "unverified": flag}]}, body)["labs"][0]
     # Then: normalization cannot promote the original candidate.
@@ -208,7 +210,7 @@ def test_lab_flag_when_not_stated_in_quote():
     # Given: an invented high flag on an otherwise supported number.
     body = "HbA1c 7.2%"
     # When: local extraction checks the assertion.
-    lab = extract_llm._validate({"labs": [{
+    lab = extract_validation.validate({"labs": [{
         "name": "HbA1c", "value": 7.2, "unit": "%", "flag": "high",
         "evidence": body}]}, body)["labs"][0]
     # Then: no clinical out-of-range assertion becomes a verified AI fact.

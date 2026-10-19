@@ -28,7 +28,7 @@ def restored(tmp_path, monkeypatch):
         db.db.execute("UPDATE notify_outbox SET state='failed',next_try=NULL")
     db.close()
     source.chmod(0o600)
-    inventory = backup._inventory(source)
+    inventory = backup.inventory_snapshot(source)
     digest = backup.file_sha256(source)
     medium, scratch = tmp_path / "medium", tmp_path / "scratch"
     medium.mkdir(mode=0o700)
@@ -172,7 +172,7 @@ def test_backup_receipt_never_authorizes_old_restore(restored, monkeypatch):
     assert mcs_update._restore_consent({
         "report_id": approval["plan_sha256"],
         "backup_sha256": approval["binding"]["plain_sha256"],
-        "backup_schema": backup._inventory(restored / "ledger.db")["schema"],
+        "backup_schema": backup.inventory_snapshot(restored / "ledger.db")["schema"],
     }) is None
     held(restored)
 

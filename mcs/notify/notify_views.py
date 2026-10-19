@@ -14,18 +14,19 @@ import time
 from datetime import datetime
 
 import structured_view
+from clinical_display import vital_line
 import drug_map
 from drug_map import candidate_note
 from rollup import current_cached_refs, pharmacy_state_items
 from ledger import karte_summary_block
 from patient_context import DETAIL_LABELS, LABELS, context_items, extract_context
-from mcs_adapter import project_url
+from mcs_contract import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from mcs_util import fold_map, register_search_fold, search_fold
 from message_metadata import stamp_counts
 import notify_render
 from notify_render import (
-    _current_generation, _hhmm, _inline, _mmdd, _patient_name, _source_fp,
+    _current_generation, _hhmm, _inline, mmdd, patient_name, source_fingerprint,
     actor_label, card_reaction_lines,
     card_reactions, today_jst)
 
@@ -34,7 +35,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
     next planned item from the stored patient_rollup, plus the open
     tasks from the requests ledger. Missing material is said plainly —
     the text never implies completeness."""
-    name = _patient_name(db, project_id) or f"project {project_id}"
+    name = patient_name(db, project_id) or f"project {project_id}"
     title = f"{name} — 患者の記録まとめ"
     lines = [_coverage_line(db, project_id)]
     from extraction_progress import summary_lines
@@ -69,7 +70,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
         if not meds:
             lines.append("・抽出された薬なし")
         vit = roll.get("latest_vitals")
-        vline = (structured_view._vital_line({"vitals": vit}, {})
+        vline = (vital_line({"vitals": vit}, {})
                  if isinstance(vit, dict) else None)
         lines.append("■ " + (f"{vline}（{vit.get('at')}）" if vline
                              else "バイタル: 未確認"))
@@ -194,7 +195,7 @@ def _pharmacy_state_lines(db, project_id, roll) -> list[str]:
         label = DETAIL_LABELS[report["key"]][0]
         subject = {"patient": "本人", "family": "家族", "other": "他者", "unspecified": "主体未確認"}[report["subject"]]
         names = "・".join(report["drug_names"])
-        title = f"{label}（{_mmdd(report['posted_at'])}・{subject}・投稿#{report['message_id']}）"
+        title = f"{label}（{mmdd(report['posted_at'])}・{subject}・投稿#{report['message_id']}）"
         text = f"{names}: " if names else ""
         # The whole parent wording, rather than a scalar alone, retains denial and plans.
         text += report["parent"]["text"]
@@ -211,8 +212,8 @@ def _pharmacy_state_lines(db, project_id, roll) -> list[str]:
 
 def _registered_clinical_lines(db, project_id) -> list[str]:
     """Private fetch-state summary, kept separate from reported chat facts."""
-    from read_model import _registered_data
-    registered = _registered_data(db, "detail", project_id, 8)
+    from registered_data import registered_data
+    registered = registered_data(db, "detail", project_id, 8)
     if registered is None or not registered["total"]:
         return []
     names = {"medication_periods": "薬剤登録", "observation_items": "観測項目", "observation_values": "観測値"}
@@ -262,7 +263,7 @@ def _request_reply_lines(db, project_id, roll) -> list:
     lines = ["■ 依頼候補の返信状況" + ("" if reqs else ": なし")]
     for r in reqs:
         state = REPLY_LABELS.get(r.get("reply_state"))
-        line = (f"・{_mmdd(r.get('at'))} "
+        line = (f"・{mmdd(r.get('at'))} "
                 f"{_inline(r.get('ctx'), 40) or '内容不明'} — 返信: "
                 + (state or "記録なし"))
         if r.get("reply_conflict") is True:
@@ -309,7 +310,7 @@ def _karte_summary_line(ks) -> str:
         return "連携サマリー（MCS）: 未取得"
     if ks.get("empty") or not ks.get("comment"):
         return "連携サマリー（MCS）: 空"
-    when = _mmdd(ks.get("updated_at")).replace("-", "/")
+    when = mmdd(ks.get("updated_at")).replace("-", "/")
     prof = _inline(ks.get("updater_profession"), 20) or "職種不明"
     return (f"連携サマリー（MCS・更新 {when}・{prof}）: "
             f"{_inline(ks['comment'], 80)}")
@@ -437,7 +438,7 @@ def my_tasks_view(db, name, now=None, projects=None) -> dict:
     for r in rows[:LIST_FETCH]:
         pid = r["project_id"]
         if pid not in names:
-            names[pid] = ((_inline(_patient_name(db, pid), 30)
+            names[pid] = ((_inline(patient_name(db, pid), 30)
                            or f"project {pid}")
                           + (ARCHIVED_MARK if pid in archived else ""))
         # who it is for, what to do, when — the id last for the CLI
@@ -494,7 +495,7 @@ def unacked_view(db, transport, now=None, projects=None,
     # A click on another card can observe new source material before sweep
     # persists this card's generation. Its older acknowledgement is stale.
     rows = [r for r in rows if not r["acknowledged"]
-            or _current_generation(r, _source_fp(db, r)) != r["source_generation"]]
+            or _current_generation(r, source_fingerprint(db, r)) != r["source_generation"]]
     groups: dict = {}
     for r in rows:
         groups.setdefault(r["project_id"], []).append(r)
@@ -502,7 +503,7 @@ def unacked_view(db, transport, now=None, projects=None,
     items = []
     self_reacted = unfetched = 0
     for pid, cards in sorted(groups.items(), key=lambda g: g[0] in archived):
-        group = ((_inline(_patient_name(db, pid), 30) or f"project {pid}")
+        group = ((_inline(patient_name(db, pid), 30) or f"project {pid}")
                  + (ARCHIVED_MARK if pid in archived else ""))
         with_reactions = [(c, card_reactions(db, c)) for c in cards]
         # Stable partition: acknowledgement remains independent of MCS stamps.
@@ -597,7 +598,7 @@ def patient_search_view(db, project_id, query) -> dict:
     question = _question_term(query)
     terms = ([question[0]] if question and question[0] else
              [t for t in str(query or "").split() if search_fold(t)][:5])
-    name = _inline(_patient_name(db, project_id), 30) or f"project {project_id}"
+    name = _inline(patient_name(db, project_id), 30) or f"project {project_id}"
     sql = ("SELECT message_id,posted_at,profession,body_text FROM messages "
            "WHERE project_id=? AND body_state='full'")
     args: list = [project_id]
@@ -613,7 +614,7 @@ def patient_search_view(db, project_id, query) -> dict:
             if len(rows) < SEARCH_HITS:
                 rows.append(row)
     items = [{"project_id": project_id,
-              "text": f"・{_mmdd(r['posted_at'])} {_hhmm(r['posted_at'])} 投稿#{r['message_id']} "
+              "text": f"・{mmdd(r['posted_at'])} {_hhmm(r['posted_at'])} 投稿#{r['message_id']} "
                       f"{_inline(r['profession'], 20) or '職種不明'}: "
                       f"{_snippet(r['body_text'], terms[0])}"}
              for r in rows]
@@ -674,7 +675,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     """💊 one post's medication mentions — the card's own 薬剤 selection
     (structured_view) with each mention's current dictionary candidate.
     Read-only: nothing here confirms a prescription."""
-    name = _inline(_patient_name(db, project_id), 30) or f"project {project_id}"
+    name = _inline(patient_name(db, project_id), 30) or f"project {project_id}"
     title = f"💊 {name} — 選択した投稿の薬剤"
     row = db.execute("SELECT project_id,posted_at,profession FROM messages "
                      "WHERE message_id=?", (message_id,)).fetchone()
@@ -685,7 +686,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     meds, unverified = structured_view.medication_entries(db, message_id)
     refs = [ref for _, ref in meds + unverified if ref]
     active = drug_search_available(db)
-    when = f"{_mmdd(row['posted_at'])} {_hhmm(row['posted_at'])}"
+    when = f"{mmdd(row['posted_at'])} {_hhmm(row['posted_at'])}"
     head = [f"{'日時不明' if '?' in when else when} "
             f"{_inline(row['profession'], 20) or '職種不明'}の投稿 — "
             f"{len(meds) + len(unverified)}件"]
@@ -943,7 +944,7 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             status.append(f"添付 {nightly['attachments']['count']}件（内容は未解析）")
     pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
-    name = _inline(_patient_name(db, project_id), 30) or f"project {project_id}"
+    name = _inline(patient_name(db, project_id), 30) or f"project {project_id}"
     title = f"{name} — {CONTEXT_SECTIONS[section]}"
     start = page * CONTEXT_PAGE_SIZE
     shown = rows[start:start + CONTEXT_PAGE_SIZE]

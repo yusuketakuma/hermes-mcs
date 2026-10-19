@@ -1,5 +1,6 @@
 """Regression: once a re-login fails during the initial import, the run
 stops instead of re-submitting the login for every remaining patient."""
+import mcs_contract
 
 import json
 import sys
@@ -8,7 +9,6 @@ import datetime
 import sqlite3
 from contextlib import closing
 
-import mcs_adapter
 
 
 class _ExpiredAdapter:
@@ -18,7 +18,7 @@ class _ExpiredAdapter:
     def list_projects(self):
         out = []
         for pid in (11, 12):
-            p = mcs_adapter.UnreadPatient(
+            p = mcs_contract.UnreadPatient(
                 project_id=pid, project_type="medical",
                 patient_name="synthetic patient", disease="d",
                 station_name="s", url="u")
@@ -35,9 +35,9 @@ class _ExpiredAdapter:
 
     def fetch_history(self, pid, since, max_pages=1, start_page=1):
         self.fetches += 1
-        return mcs_adapter.MessageBatch(
+        return mcs_contract.MessageBatch(
             [], pages=0, reached=False,
-            error=mcs_adapter.SessionExpired("expired"))
+            error=mcs_contract.SessionExpired("expired"))
 
 
 def test_failed_relogin_is_not_retried_per_patient(
@@ -61,7 +61,7 @@ def test_failed_relogin_is_not_retried_per_patient(
 def _msg(mid, parent_id=None, reply_count=0):
     ts = (datetime.datetime.now() - datetime.timedelta(hours=1)).strftime(
         "%Y-%m-%dT%H:%M:%S+09:00")
-    return mcs_adapter.Message(
+    return mcs_contract.Message(
         message_id=mid, project_id=7, parent_id=parent_id, sender_id=1,
         sender_name="u", sender_type="x", profession="", organization="",
         posted_at=ts, body_html="body", body_state="full", is_unread=False,
@@ -73,7 +73,7 @@ class _Adapter:
         self.fetches = self.threads = self.logins = 0
 
     def list_projects(self):
-        p = mcs_adapter.UnreadPatient(
+        p = mcs_contract.UnreadPatient(
             project_id=7, project_type="medical", patient_name="S T",
             disease="d", station_name="s", url="u")
         p.last_activity = int(time.time())
@@ -88,13 +88,13 @@ class _Adapter:
 
     def fetch_history(self, pid, since, max_pages=1, start_page=1):
         self.fetches += 1
-        return mcs_adapter.MessageBatch(
+        return mcs_contract.MessageBatch(
             [_msg(100, reply_count=1)], pages=1, reached=True)
 
     def fetch_thread(self, pid, mid, **kw):
         self.threads += 1
         if self.threads == 1:
-            raise mcs_adapter.SessionExpired("expired")
+            raise mcs_contract.SessionExpired("expired")
         return [_msg(101, parent_id=100)]
 
 

@@ -6,6 +6,7 @@ comparison identity; the CCO operation writes the adoption record in its
 receipt transaction.
 """
 from __future__ import annotations
+import semantic_store
 
 import difflib
 import json
@@ -98,7 +99,7 @@ def _diff(baseline: dict, candidate: dict) -> str:
 def _current_candidate(db, project_id: int, message_id: int,
                        source, candidate: dict, reasons: list[str]):
     """Bind a summary to the current source, policy, and target revision."""
-    from semantic import thread_bundle
+
 
     source_full = source["body_state"] == "full" \
         and isinstance(source["body_text"], str)
@@ -106,7 +107,7 @@ def _current_candidate(db, project_id: int, message_id: int,
         reasons.append("source_incomplete")
 
     root_id = source["parent_id"] or message_id
-    bundle = thread_bundle(SimpleNamespace(db=db), project_id, root_id)
+    bundle = semantic_store.thread_bundle(SimpleNamespace(db=db), project_id, root_id)
     if bundle is None:
         reasons.append("thread_missing")
         return False, None, None

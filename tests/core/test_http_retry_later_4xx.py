@@ -1,9 +1,9 @@
 """408/425/429 are retry-later for jobs and attachments alike; synthetic only."""
+import mcs_contract
 import time
 
 import pytest
 
-import mcs_adapter
 from ingest_testkit import _ledger, _message
 from ledger import job_reason_class
 
@@ -24,7 +24,7 @@ def test_attachment_failure_class_matches_jobs(tmp_path, kind, state):
     try:
         db.ensure_patient(1)
         m = _message(mid=5)
-        m.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/1")]
+        m.attachments = [mcs_contract.Attachment("f1", "a.pdf", "https://x/1")]
         db.save_messages([m])
         aid = db.db.execute("SELECT attachment_id FROM attachments").fetchone()[0]
         db.attachment_failed(aid, kind)

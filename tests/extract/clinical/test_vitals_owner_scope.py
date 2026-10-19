@@ -2,7 +2,6 @@
 import pytest
 
 import clinical_values
-import extract
 
 OTHER_PERSON = [
     ("ご家族P80", {"hr": 80}),
@@ -23,7 +22,7 @@ OTHER_PERSON = [
 @pytest.mark.parametrize("body,vitals", OTHER_PERSON)
 def test_another_persons_vital_is_dropped_by_writer_and_reader(body, vitals):
     assert clinical_values._vitals_guard(body, dict(vitals)) == {}
-    assert extract.patient_vitals(dict(vitals), body) == {}
+    assert clinical_values.patient_vitals(dict(vitals), body) == {}
     assert clinical_values.patient_current_vitals(dict(vitals), body) == {}
 
 
@@ -43,7 +42,7 @@ def test_an_oxygen_flow_is_not_a_saturation_reading(body):
     value = int(next(c for c in body if c.isdigit()))
     assert clinical_values._vitals_guard(body, {"spo2": value}) == {}
     assert clinical_values.patient_current_vitals({"spo2": value}, body) == {}
-    assert extract.patient_vitals({"spo2": value}, body) == {}
+    assert clinical_values.patient_vitals({"spo2": value}, body) == {}
 
 
 @pytest.mark.parametrize("body,vitals", [

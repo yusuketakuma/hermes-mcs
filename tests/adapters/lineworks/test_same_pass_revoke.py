@@ -47,7 +47,7 @@ def test_revoke_after_thread_part_stops_same_pass_bodies(tmp_path, monkeypatch, 
                         # the revocation must still withdraw the old spec
                         def full(*a, **kw):
                             raise OSError(errno.ENOSPC, "synthetic disk full")
-                        monkeypatch.setattr(notify_cards, "_publish_specs", full)
+                        monkeypatch.setattr(notify_cards, "publish_specs", full)
                         with pytest.raises(OSError):
                             notify_cards.sweep(led, CONFIG, now=NOW + 1)
                         monkeypatch.undo()

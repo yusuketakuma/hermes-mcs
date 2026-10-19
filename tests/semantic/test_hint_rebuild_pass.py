@@ -4,12 +4,14 @@ every derived row; a changed or unrebuildable one stops its projection,
 summary, audits, coverage and Loop candidates from being current and is
 re-queued at most once without a new notification or retry budget.
 Synthetic ledger, stub model and stub Jev only."""
+import semantic_drain
+import semantic_policy
+import semantic_store
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_extraction as se
 import semantic_loops
 import semantic_send_gate
@@ -54,7 +56,7 @@ def _config():
 
 
 def _drain(db, llm=None, jev=None):
-    return semantic.run_due(db, _config(), {"errors": []}, time.monotonic() + 300,
+    return semantic_drain.run_due(db, _config(), {"errors": []}, time.monotonic() + 300,
                             jev_client=jev or _PassJev(), llm_fn=llm or _Llm())
 
 
@@ -79,7 +81,7 @@ def world(tmp_path, monkeypatch):
 
 
 def _scfg():
-    return semantic.semantic_config(_config())[0]
+    return semantic_policy.semantic_config(_config())[0]
 
 
 def _meta(db, kind, mid):
@@ -121,8 +123,8 @@ def test_old_documents_are_marked_and_only_the_changed_one_is_held(world):
     state, payload = _job(db)
     assert state == "pending" and payload["notification_free"] is True
     # the send gate holds message 2's summary and still publishes message 1's
-    policy = semantic.policy_fingerprint(_scfg())
-    bundle = semantic.thread_bundle(db, 1, 1)
+    policy = semantic_policy.policy_fingerprint(_scfg())
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     assert semantic_send_gate._summary_current(db, 1, 1, bundle, policy) is not None
     assert semantic_send_gate._summary_current(db, 1, 2, bundle, policy) is None
 
@@ -294,9 +296,9 @@ def test_reprojected_document_drops_loop_candidates_it_no_longer_yields(world):
     db = world
     v4.reproject_stale(db, _scfg())
     _drain(db)
-    scfg = semantic.semantic_config(_cfg("enforce", fact_source="canonical",
+    scfg = semantic_policy.semantic_config(_cfg("enforce", fact_source="canonical",
                                          fact_source_gate="g6-v1:test"))[0]
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     stray = {"fact_id": "fact_stray", "kind": "schedule", "statement": "退院した",
              "polarity": "affirmed", "evidence_refs": [], "_evidence": None,
              "validation_status": "verified"}
@@ -362,7 +364,7 @@ def test_failed_requeue_rolls_the_row_back_and_still_holds(world, monkeypatch):
 @pytest.mark.parametrize("fact_source", ["shadow", "legacy"])
 def test_non_canonical_fact_source_changes_nothing(world, fact_source):
     db = world
-    scfg = semantic.semantic_config(_cfg("enforce", loop_mode="off",
+    scfg = semantic_policy.semantic_config(_cfg("enforce", loop_mode="off",
                                          fact_source=fact_source))[0]
     rows = db.db.execute("SELECT artifact_id,meta FROM artifacts ORDER BY artifact_id").fetchall()
     assert "hint_rebuild" not in v4.reproject_stale(db, scfg)

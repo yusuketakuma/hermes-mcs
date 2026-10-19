@@ -51,7 +51,7 @@ class Ctx:
                 "slack_channel_id": "CTEST", "slack_allowed_user_ids": ["UTEST"],
                 "project_ids": [1]}.get(key, default)
 assert "adapters" not in sys.modules
-assert mod._make_slack_factory(Ctx())(object(), None) is None
+assert importlib.import_module("hermes_plugins.mcs.card_workers").make_slack_factory(Ctx())(object(), None) is None
 print("factory_ok")
 '''
     (tmp_path / "flags").mkdir()

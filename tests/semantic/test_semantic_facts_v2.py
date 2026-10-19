@@ -5,6 +5,7 @@ obligations close only through facts or explicit adjudicated absence.
 Dropped items, failed chunks, unverified facts, or contradicted "none"
 verdicts keep the document incomplete — never a silent pass.
 """
+import semantic_transport
 import json
 
 import pytest
@@ -561,13 +562,12 @@ def test_malformed_cache_rows_are_ignored_and_reextracted(field, bad):
 
 @pytest.mark.parametrize("change", [None, "model", "prompt"])
 def test_cached_chunks_require_same_model_and_prompt(monkeypatch, change):
-    import semantic
     import semantic_llm
     ledger = _FakeLedger()
     member = _member("合成観察文です。")
     extraction.extract_facts_v2(_llm([]), member, ledger=ledger)
     if change == "model":
-        monkeypatch.setattr(semantic, "llm_model",
+        monkeypatch.setattr(semantic_transport, 'llm_model',
                             lambda cfg=None: "synthetic-other-model")
     elif change == "prompt":
         monkeypatch.setattr(semantic_llm, "_FACT_V2_PROMPT",

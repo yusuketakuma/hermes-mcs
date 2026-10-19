@@ -1,4 +1,5 @@
 """AT054: the real tick preserves ordinary work when semantic budget waits."""
+import semantic_jev
 import json
 import sys
 
@@ -11,7 +12,6 @@ import mcs_adapter
 import maintenance
 import notify_flush
 import run_check
-import semantic
 
 
 class _BudgetJev:
@@ -28,7 +28,7 @@ class _BudgetJev:
     def evaluate(self, state, questions, deadline):
         type(self).events.append("semantic")
         self.calls += 1
-        self.last_error = semantic.jev.JevError(
+        self.last_error = semantic_jev.JevError(
             "budget_exceeded", "synthetic", retryable=True)
         raise self.last_error
 
@@ -91,7 +91,7 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
     monkeypatch.setattr(run_check, "_code_changed", lambda result: False)
     monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: False)
-    monkeypatch.setattr(semantic.jev, "JevClient", _BudgetJev)
+    monkeypatch.setattr(semantic_jev, "JevClient", _BudgetJev)
     def flush(ledger, *args, **kwargs):
         _BudgetJev.events.append("notify")
         assert ledger.db.execute(

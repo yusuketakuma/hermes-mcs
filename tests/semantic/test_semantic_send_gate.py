@@ -1,10 +1,11 @@
 """Semantic outbox gates bind source, target, policy, and publication stage."""
+import semantic_policy
+import semantic_store
 import json
 
 import pytest
 
 import notify_flush
-import semantic
 from semantic_testkit import (_cfg, _delivery_db, _delivery_patient, _message,
                               _semantic_event)
 
@@ -92,15 +93,15 @@ def test_degraded_gate_requires_frozen_generation_and_unattempted_source(
     db = _delivery_db(tmp_path, [_message()])
     monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
     source_id = db.outbox_add("new_messages", 1, {"message_ids": [1]})
-    bundle = semantic.thread_bundle(db, 1, 1)
-    policy = semantic.policy_fingerprint(
-        semantic.semantic_config(_cfg("enforce"))[0])
+    bundle = semantic_store.thread_bundle(db, 1, 1)
+    policy = semantic_policy.policy_fingerprint(
+        semantic_policy.semantic_config(_cfg("enforce"))[0])
     payload = {
         "root_id": 1, "src_event_id": source_id,
         "fingerprint": bundle["source_fingerprint"],
         "policy_fingerprint": policy,
         "target_message_ids": [1], "degraded": True,
-        "policy_version": semantic.POLICY_VERSION, "text": "保留通知",
+        "policy_version": semantic_policy.POLICY_VERSION, "text": "保留通知",
     }
     notice_id = db.outbox_add("semantic_notice", 1, payload)
     event = db.db.execute(
@@ -138,9 +139,9 @@ def test_raw_notice_ignores_shadow_publication(tmp_path, monkeypatch):
     event = db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'"
     ).fetchone()
-    bundle = semantic.thread_bundle(db, 1, 1)
-    policy = semantic.policy_fingerprint(
-        semantic.semantic_config(_cfg("enforce"))[0])
+    bundle = semantic_store.thread_bundle(db, 1, 1)
+    policy = semantic_policy.policy_fingerprint(
+        semantic_policy.semantic_config(_cfg("enforce"))[0])
     content = {"claims": [{"text": "shadow claim"}], "limitations": []}
     meta = {"fingerprint": bundle["source_fingerprint"],
             "policy_fingerprint": policy, "audit_status": "PASS",
@@ -206,8 +207,8 @@ def test_stale_summary_rejected_by_gate_render_state_and_block(
 
     # Unpublishable meta short-circuits before the whole-thread bundle.
     calls = []
-    real = semantic.thread_bundle
-    monkeypatch.setattr(semantic, "thread_bundle",
+    real = semantic_store.thread_bundle
+    monkeypatch.setattr(semantic_store, 'thread_bundle',
                         lambda *a, **k: calls.append(a) or real(*a, **k))
     assert notify_flush._semantic_render_state(db, raw) == ()
     assert "要約（自動検査済）" not in notify_flush._format_event(db, raw)[0]

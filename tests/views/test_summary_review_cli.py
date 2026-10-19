@@ -1,4 +1,7 @@
 """Assist comparison and adoption use the snapshot CLI and existing inbox."""
+import semantic_drain
+import semantic_policy
+import semantic_store
 import io
 import json
 import uuid
@@ -6,7 +9,6 @@ import uuid
 import job_ops
 import ledger
 import mcs_view
-import semantic
 from semantic_testkit import _cfg, _seeded
 
 
@@ -15,15 +17,15 @@ def test_comparison_cli_and_confirmed_adoption(tmp_path, monkeypatch, capsys):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     try:
-        config, _ = semantic.semantic_config(_cfg("assist"))
-        policy = semantic.policy_fingerprint(config)
+        config, _ = semantic_policy.semantic_config(_cfg("assist"))
+        policy = semantic_policy.policy_fingerprint(config)
         db.artifact_add("semantic_policy", policy)
-        bundle = semantic.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
         member = next(item for item in bundle["members"] if item["message_id"] == 1)
         db.artifact_add("extract_llm", json.dumps({"summary": "Old summary", "points": []}),
                         project_id=1, message_id=1, meta={"hash": member["revision"]})
         with db.db:
-            semantic._write_result(db, 1, 1, {
+            semantic_drain._write_result(db, 1, 1, {
                 "summary": {"target_message_id": 1, "claims": [{"section": "medication", "text": member["body_original"],
                             "claim_kind": "reported_fact", "fact_refs": [0],
                             "status": "planned", "polarity": "affirmed"}], "limitations": []},

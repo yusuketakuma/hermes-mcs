@@ -12,7 +12,7 @@ from c1_contract import C1_FIELDS
 import c1_envelopes
 import ext_contract as ext
 import ledger
-import mcs_setup
+import mcs_util
 import mcs_view
 from test_c1_envelopes import _records
 from test_c1_records import SNAP_TS, _snapshot
@@ -73,8 +73,8 @@ def test_actual_snapshot_handoff_stages_v2_without_self_ack(world, capsys):
 @pytest.mark.parametrize("dry", [False, True])
 def test_argumentless_handoff_uses_explicit_profile(world, monkeypatch, capsys, dry):
     _, snapshot, auth, state, sink = world
-    monkeypatch.setattr(mcs_setup, "HOME", str(snapshot.parent.parent.parent))
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {"ext_export": {
+    monkeypatch.setattr(mcs_util, "HOME", str(snapshot.parent.parent.parent))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"ext_export": {
         "auth": str(auth), "state_dir": str(state), "outbox": str(sink), "since_days": 30}})
     code, result = _cli(capsys, ["handoff", *(["--dry-run"] if dry else [])])
     assert code == 0
@@ -94,7 +94,7 @@ def test_argumentless_handoff_uses_explicit_profile(world, monkeypatch, capsys, 
      "since_days": True},
 ])
 def test_argumentless_handoff_rejects_missing_or_invalid_profile(profile, monkeypatch, capsys):
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {"ext_export": profile})
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"ext_export": profile})
     code, result = _cli(capsys, ["handoff", "--dry-run"])
     assert code == 1 and result["status"] == "refused"
     assert result["reason"].startswith("handoff_profile_")
@@ -133,7 +133,7 @@ def test_link_hints_real_local_terminal_paging_does_not_write(world, monkeypatch
         db.db.execute("UPDATE patients SET patient_name='SYNTHETIC_PERSON_'||project_id")
         db.db.commit()
     assert ledger.publish_snapshot(str(live), str(snapshot.parent)) is not None
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {"runtime_mode": "hermes"})
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": "hermes"})
     before = [(p.read_bytes(), p.stat().st_mtime_ns) for p in (live, snapshot)]
     seen = []
     cursor = None
@@ -157,7 +157,7 @@ def test_link_hints_real_local_terminal_paging_does_not_write(world, monkeypatch
 
 @pytest.mark.parametrize(("mode", "tty"), [("standalone", True), ("hermes", False)])
 def test_link_hints_refuses_nonlocal_surface_before_read(monkeypatch, capsys, mode, tty):
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {"runtime_mode": mode})
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": mode})
     monkeypatch.setattr(sys.stdout, "isatty", lambda: tty)
 
     def forbidden(_path):
@@ -170,7 +170,7 @@ def test_link_hints_refuses_nonlocal_surface_before_read(monkeypatch, capsys, mo
 
 def test_link_hints_cursor_cannot_cross_generation(world, monkeypatch, capsys):
     live, snapshot, _, _, _ = world
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {"runtime_mode": "hermes"})
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": "hermes"})
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     code, first = _cli(capsys, ["link-hints", "--snapshot", str(snapshot), "--limit", "1"])
     assert code == 0 and first["next_cursor"] is not None

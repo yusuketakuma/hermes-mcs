@@ -42,18 +42,20 @@ import time
 import urllib.request
 import urllib.error
 import urllib.parse
-from dataclasses import dataclass, field
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from project_metadata import MetadataFetch
+    from project_metadata_contract import MetadataFetch
 
 from mcs_util import (HOME, RETRY_LATER_4XX, atomic_write, env_value, load_config,
                       no_proxy_opener)
 from mcs_worker import WorkerError, bounded_call
 
-BASE = "https://www.medical-care.net"
+from mcs_contract import (BASE, MCSError as MCSError, SessionExpired as SessionExpired, SchemaError as SchemaError, Attachment as Attachment, Message as Message,
+                          UnreadPatient as UnreadPatient, UnreadSnapshot as UnreadSnapshot, MessageBatch as MessageBatch, ReplyBatch as ReplyBatch, project_url as project_url, valid_id)
+from mcs_payload import (text_field, sender_name, profession, organization, page_has_next, unread_patient,
+                         reaction_kind_ok, message_metadata, normalize_message, normalize_threads)
 # The MCS unread screen (and its unread=1 route) lists at most this many
 # messages per project — owner-confirmed 2026-09-30. Reaching it means
 # older unread rows may be invisible to the unread walk.
@@ -61,9 +63,6 @@ UNREAD_SCREEN_CAP = 80
 API = f"{BASE}/api/v2t"
 
 
-def project_url(project_id: int) -> str:
-    """The MCS web page of a patient project (medical room)."""
-    return f"{BASE}/projects/medical/{project_id}"
 # cheap authenticated read used to tell an expired session from a
 # route-level 403 (see _request)
 SESSION_PROBE_PATH = "/users/self/count"
@@ -89,24 +88,8 @@ LOGIN_BACKOFF_BASE_S = 3600
 LOGIN_BACKOFF_MAX_S = 86400
 
 
-class MCSError(Exception):
-    """Structured, log-safe error: kind/status/retryable only — never bodies."""
-    def __init__(self, kind: str, detail: str = "", status: int | None = None,
-                 retryable: bool = False):
-        super().__init__(f"{kind}: {detail}")
-        self.kind = kind
-        self.detail = detail
-        self.status = status
-        self.retryable = retryable
-        # read_thread attaches IDs from validated read responses before a
-        # later failure; callers must persist their acquisition intent even
-        # when this exception (including SessionExpired) aborts the walk.
-        self.observed_reply_ids: frozenset[int] = frozenset()
 
 
-class SessionExpired(MCSError):
-    def __init__(self, detail: str = "", status: int | None = None):
-        super().__init__("session_expired", detail, status, retryable=False)
 
 
 class KeychainLocked(Exception):
@@ -116,9 +99,6 @@ class KeychainLocked(Exception):
     re-provisioning."""
 
 
-class SchemaError(MCSError):
-    def __init__(self, detail: str):
-        super().__init__("schema_error", detail)
 
 
 class BootstrapError(MCSError):
@@ -344,223 +324,38 @@ def _assert_allowed_url(url: str):
         raise MCSError("url_not_allowed", "download origin invalid")
 
 
-@dataclass
-class Attachment:
-    file_id: str
-    name: str
-    url: str
 
 
-@dataclass
-class Message:
-    message_id: int
-    project_id: int
-    parent_id: int | None
-    sender_id: int | None
-    sender_name: str
-    sender_type: str
-    profession: str
-    organization: str
-    posted_at: str
-    body_html: str
-    body_state: str            # unknown | snippet | full | deleted
-    is_unread: bool
-    reply_count: int
-    replies: list[Message] = field(default_factory=list)
-    attachments: list[Attachment] = field(default_factory=list)
-    # whether the response enumerated `files` at all — only a complete
-    # list (possibly empty) may reconcile the stored attachment set;
-    # an absent key means "not returned this call", never "no files"
-    files_present: bool = False
-    metadata: dict = field(default_factory=dict)
-    metadata_errors: list[str] = field(default_factory=list)
 
 
-@dataclass
-class UnreadPatient:
-    project_id: int
-    project_type: str
-    patient_name: str
-    disease: str
-    station_name: str
-    url: str
-    messages: list[Message] = field(default_factory=list)
-    fetch_state: str = "pending"   # pending | complete | incomplete
-    fetch_reason: str = ""
-    # F-5: the unread route itself failed (server-side cap) but the
-    # history walk certified every unread row — acknowledge through the
-    # plain list read instead of the unread-filtered one
-    ack_fallback: bool = False
-    # MCS karte id (patient record) — the 連携サマリー route is keyed by it
-    karte_id: int | None = None
-    # epoch of the last message; only list_projects fills it (0 = unknown)
-    last_activity: int = 0
 
 
-@dataclass
-class UnreadSnapshot:
-    timestamp: int
-    patients: list[UnreadPatient]
 
 
-@dataclass
-class MessageBatch:
-    messages: list[Message]
-    pages: int = 0
-    reached: bool = False
-    error: MCSError | None = None
-    # the unread route showed its screen cap (UNREAD_SCREEN_CAP) or fewer
-    # rows than paginate.total_entries — older unread rows exist that this
-    # walk could not see, so the patient must not be acknowledged yet
-    capped: bool = False
 
 
-@dataclass
-class ReplyBatch:
-    messages: list[Message]
-    missing: list[int]
 
 
-def _text(value, label: str) -> str:
-    if value is None:
-        return ""
-    if not isinstance(value, str):
-        raise SchemaError(f"{label} invalid")
-    return value
 
 
-def _sender_name(u: dict | None) -> str:
-    if not u:
-        return ""
-    if not isinstance(u, dict):
-        raise SchemaError("message: user invalid")
-    return f"{_text(u.get('last_name'), 'message: last_name')} " \
-           f"{_text(u.get('first_name'), 'message: first_name')}".strip()
 
 
-def _profession(u: dict | None) -> str:
-    cats = (u or {}).get("specialist_categories") or []
-    if not isinstance(cats, list) or any(not isinstance(c, dict) for c in cats):
-        raise SchemaError("message: specialist_categories invalid")
-    names = [_text(c.get("name"), "message: specialist name") for c in cats]
-    return ", ".join(name for name in names if name)
 
 
-def _organization(u: dict | None) -> str:
-    sts = (u or {}).get("stations") or []
-    if not isinstance(sts, list) or any(not isinstance(s, dict) for s in sts):
-        raise SchemaError("message: stations invalid")
-    names = [_text(s.get("name"), "message: station name") for s in sts]
-    return ", ".join(name for name in names if name)
 
 
-def _valid_id(v) -> bool:
-    return type(v) is int and 0 < v < 2**63
 
 
-def _has_next(pag: dict, label: str) -> bool:
-    value = pag.get("has_next")
-    if type(value) is not bool:
-        raise SchemaError(f"{label}: has_next invalid")
-    return value
 
 
-def _unread_patient(p, src: str) -> UnreadPatient:
-    """Project row -> UnreadPatient — shape shared by the /projects
-    readers (unread list and full inventory)."""
-    if not isinstance(p, dict) or not _valid_id(p.get("id")):
-        raise SchemaError(f"{src}: invalid project id")
-    k = p.get("karte") or {}
-    if not isinstance(k, dict):
-        raise SchemaError(f"{src}: karte invalid")
-    # a row without a usable karte.id (null/absent/legacy shape) must not
-    # take the whole /projects snapshot down — it just gets no 連携サマリー
-    karte_id = k.get("id") if _valid_id(k.get("id")) else None
-    st = k.get("station") or {}
-    if not isinstance(st, dict):
-        raise SchemaError(f"{src}: station invalid")
-    return UnreadPatient(
-        project_id=p["id"],
-        project_type=_text(p.get("type"), f"{src}: project type"),
-        patient_name=(
-            f"{_text(k.get('last_name'), f'{src}: last_name')} "
-            f"{_text(k.get('first_name'), f'{src}: first_name')}"
-        ).strip(),
-        disease=_text(k.get("disease"), f"{src}: disease"),
-        station_name=_text(st.get("name"), f"{src}: station name"),
-        url=project_url(p['id']), karte_id=karte_id)
 
 
-def _attachments(files: list | None) -> list[Attachment]:
-    if files is not None and not isinstance(files, list):
-        raise SchemaError("message: files invalid")
-    out = []
-    for f in files or []:
-        if not isinstance(f, dict):
-            raise SchemaError("message: file invalid")
-        url = _text(f.get("url"), "message: file url")
-        fid = url.rstrip("/").rsplit("/", 1)[-1] if url else ""
-        out.append(Attachment(
-            file_id=str(fid), name=_text(f.get("name"), "message: file name"),
-            url=url))
-    return out
 
 
-_REACTION_KIND = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 
 
-def _reaction_kind_ok(kind) -> bool:
-    """A concrete reaction kind: a short token, never the 'all' aggregate."""
-    return isinstance(kind, str) and bool(_REACTION_KIND.fullmatch(kind)) \
-        and kind != "all"
 
 
-def _message_metadata(m: dict, project_id: int) -> tuple[dict, list[str]]:
-    """Normalize optional metadata independently of the required chat body."""
-    out, errors = {}, []
-    for key in ("reactions", "mentions", "is_bookmarked", "is_pinned"):
-        if key not in m:
-            continue
-        value = m[key]
-        try:
-            if key in ("is_bookmarked", "is_pinned"):
-                if type(value) is not bool:
-                    raise ValueError
-            elif not isinstance(value, list):
-                raise ValueError
-            elif key == "reactions":
-                normalized, seen = [], set()
-                for r in value:
-                    if (not isinstance(r, dict)
-                            or not _reaction_kind_ok(r.get("type"))
-                            or r["type"] in seen
-                            or type(r.get("count")) is not int
-                            or not 0 <= r["count"] <= 2**63 - 1
-                            or type(r.get("self_reacted")) is not bool
-                            or (r["self_reacted"] and r["count"] == 0)):
-                        raise ValueError
-                    seen.add(r["type"])
-                    normalized.append({k: r[k] for k in
-                                       ("type", "count", "self_reacted")})
-                value = normalized
-            else:
-                normalized = []
-                for item in value:
-                    if not isinstance(item, dict):
-                        raise ValueError
-                    kind = item.get("type")
-                    target = item.get(kind) if kind in ("user", "station", "project") else None
-                    if kind == "project" and target is None:
-                        target = {"id": project_id}
-                    if (not isinstance(target, dict) or not _valid_id(target.get("id"))
-                            or (kind == "project" and target["id"] != project_id)):
-                        raise ValueError
-                    normalized.append({"type": kind, "id": target["id"]})
-                value = normalized
-            out[key] = value
-        except ValueError:
-            errors.append(key + "_invalid")
-    return out, errors
 
 
 def walk_reaction_actors(get, project_id: int, message_id: int, *,
@@ -573,11 +368,11 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
     never a proof of absence. Rows keep only actor id, kind and
     profession, name and facility — the icon is dropped here.
     """
-    if (not _valid_id(project_id) or not _valid_id(message_id)
+    if (not valid_id(project_id) or not valid_id(message_id)
             or type(max_pages) is not int or not 1 <= max_pages <= 10
             or type(per_page) is not int or not 1 <= per_page <= 50
             or (reaction_type is not None
-                and not _reaction_kind_ok(reaction_type))):
+                and not reaction_kind_ok(reaction_type))):
         raise ValueError("invalid actor arguments")
     suffix, key = (("user_reactions", "reactions") if reaction_type is None
                    else ("reactions", "users"))
@@ -602,10 +397,10 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
                 if not isinstance(meta, dict):
                     raise SchemaError("actors: message invalid")
                 for name, wanted in (("id", message_id), ("project_id", project_id)):
-                    if name in meta and (not _valid_id(meta[name]) or meta[name] != wanted):
+                    if name in meta and (not valid_id(meta[name]) or meta[name] != wanted):
                         raise SchemaError("actors: target mismatch")
             if page == 1:
-                normalized, errors = _message_metadata(meta or {}, project_id)
+                normalized, errors = message_metadata(meta or {}, project_id)
                 if "reactions_invalid" in errors:
                     raise SchemaError("actors: summary invalid")
                 if "reactions" in normalized:
@@ -622,7 +417,7 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
                     type(paginate["per_page"]) is not int or paginate["per_page"] != per_page):
                 raise SchemaError("actors: page size invalid")
             server_ts = paginate.get("timestamp")
-            if not _valid_id(server_ts):
+            if not valid_id(server_ts):
                 raise SchemaError("actors: timestamp invalid")
             if timestamp is None:
                 timestamp = server_ts
@@ -631,7 +426,7 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
                 result["timestamp_stable"] = False
                 raise SchemaError("actors: timestamp changed")
             if "has_next" in paginate:
-                has_next = _has_next(paginate, "actors")
+                has_next = page_has_next(paginate, "actors")
             else:
                 total_pages = paginate.get("total_pages")
                 if (type(total_pages) is not int or total_pages < page
@@ -645,8 +440,8 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
                     raise SchemaError("actors: row invalid")
                 user = row.get("user") if reaction_type is None else row
                 kind = row.get("reaction_type") if reaction_type is None else reaction_type
-                if (not isinstance(user, dict) or not _valid_id(user.get("id"))
-                        or not _reaction_kind_ok(kind)):
+                if (not isinstance(user, dict) or not valid_id(user.get("id"))
+                        or not reaction_kind_ok(kind)):
                     raise SchemaError("actors: identity invalid")
                 identity = (user["id"], kind)
                 if identity in actors:
@@ -654,9 +449,9 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
                 # optional display fields, never identity (#22-D2 2026-10-03:
                 # names are kept and shown; the icon is never taken)
                 extra = {}
-                for field, read in (("profession", _profession),
-                                    ("name", _sender_name),
-                                    ("organization", _organization)):
+                for field, read in (("profession", profession),
+                                    ("name", sender_name),
+                                    ("organization", organization)):
                     try:
                         extra[field] = read(user) or None
                     except SchemaError:
@@ -693,68 +488,8 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
     return result
 
 
-def _norm_message(m: dict, project_id: int, parent_id: int | None = None,
-                  is_unread: bool | None = None) -> Message:
-    if not isinstance(m, dict):
-        raise SchemaError("message: object invalid")
-    if "project_id" in m and (
-            not _valid_id(m["project_id"]) or m["project_id"] != project_id):
-        raise SchemaError("message: project mismatch")
-    u = m.get("user") or {}
-    if not isinstance(u, dict):
-        raise SchemaError("message: user invalid")
-    comment = m.get("comment")
-    snippet = m.get("comment_snippet")
-    created = _text(m.get("created_at"), "message: created_at")
-    count = m.get("count") or {}
-    if ((comment is not None and not isinstance(comment, str))
-            or (snippet is not None and not isinstance(snippet, str))
-            or not isinstance(created, str) or not isinstance(count, dict)):
-        raise SchemaError("message: fields invalid")
-    reply_count = count.get("thread_messages", 0)
-    if type(reply_count) is not int or not 0 <= reply_count < 2**63:
-        raise SchemaError("message: reply count invalid")
-    if "delete_user" in m:
-        # tombstone: the reply was deleted on the MCS side — no body will
-        # ever arrive, so this is a terminal state, not a retryable gap.
-        body, state = "", "deleted"
-    elif comment is not None:
-        # comment key present (even "") means the full body was returned —
-        # file-only posts carry an empty string, which is still complete.
-        body, state = comment, "full"
-    elif snippet:
-        body, state = snippet, "snippet"
-    else:
-        body, state = "", "unknown"
-    metadata, metadata_errors = _message_metadata(m, project_id)
-    return Message(
-        message_id=m.get("id"),
-        project_id=project_id,
-        parent_id=parent_id,
-        sender_id=u.get("id"),
-        sender_name=_sender_name(u),
-        sender_type=_text(u.get("type"), "message: user type"),
-        profession=_profession(u),
-        organization=_organization(u),
-        posted_at=created,
-        body_html=body,
-        body_state=state,
-        is_unread=bool(m.get("is_unread")) if is_unread is None else is_unread,
-        reply_count=reply_count,
-        attachments=_attachments(m.get("files")),
-        files_present="files" in m,
-        metadata=metadata,
-        metadata_errors=metadata_errors,
-    )
 
 
-def _norm_threads(items, project_id: int, parent_id: int) -> list[Message]:
-    if not isinstance(items, list):
-        raise SchemaError(f"thread[{parent_id}]: messages invalid")
-    if any(not isinstance(m, dict) or not _valid_id(m.get("id"))
-           for m in items):
-        raise SchemaError(f"thread[{parent_id}]: invalid id")
-    return [_norm_message(m, project_id, parent_id=parent_id) for m in items]
 
 
 def thread_page_budget(reply_count: int) -> dict:
@@ -918,21 +653,21 @@ class MCSAdapter:
                 or any(not isinstance(c, dict) for c in cats)
                 or any(not isinstance(s, dict) for s in sts)):
             raise SchemaError("self_profile: profile fields invalid")
-        profs = [n for n in (_text(c.get("name"),
+        profs = [n for n in (text_field(c.get("name"),
                                    "self_profile: specialist name")
                            for c in cats) if n]
-        orgs = [n for n in (_text(s.get("name"),
+        orgs = [n for n in (text_field(s.get("name"),
                                   "self_profile: station name")
                           for s in sts) if n]
-        name = _sender_name(u)
+        name = sender_name(u)
         if not (name or profs or orgs):
             raise SchemaError("self_profile: empty profile")
         sid = u.get("id")
         # station ids feed station_staffs(); record_self_profile keeps
         # only the identity fields, so the stored artifact is unchanged
-        stations = [{"id": s["id"], "name": _text(s.get("name"),
+        stations = [{"id": s["id"], "name": text_field(s.get("name"),
                                                   "self_profile: station name")}
-                    for s in sts if _valid_id(s.get("id"))]
+                    for s in sts if valid_id(s.get("id"))]
         return {"sender_id": sid if type(sid) in (int, str) else None,
                 "name": name,
                 "professions": profs, "organizations": orgs,
@@ -941,9 +676,9 @@ class MCSAdapter:
     def fetch_message_metadata(self, project_id: int, message_id: int, *,
                                parent_id: int | None = None) -> Message:
         """Read one exact post with read/session preservation for shadow refresh."""
-        if not _valid_id(project_id) or not _valid_id(message_id):
+        if not valid_id(project_id) or not valid_id(message_id):
             raise SchemaError("metadata: invalid id")
-        if parent_id is not None and (not _valid_id(parent_id) or parent_id == message_id):
+        if parent_id is not None and (not valid_id(parent_id) or parent_id == message_id):
             raise SchemaError("metadata: invalid parent id")
         path = f"/projects/{project_id}/messages"
         if parent_id is not None:
@@ -953,12 +688,12 @@ class MCSAdapter:
             extend_session=False)
         items = r.get("messages")
         if (not isinstance(items, list) or len(items) != 1
-                or not isinstance(items[0], dict) or not _valid_id(items[0].get("id"))
-                or not _valid_id(items[0].get("project_id", project_id))
+                or not isinstance(items[0], dict) or not valid_id(items[0].get("id"))
+                or not valid_id(items[0].get("project_id", project_id))
                 or items[0].get("id") != message_id
                 or items[0].get("project_id", project_id) != project_id):
             raise SchemaError("metadata: target mismatch")
-        return _norm_message(items[0], project_id, parent_id=parent_id)
+        return normalize_message(items[0], project_id, parent_id=parent_id)
 
     def fetch_reaction_actors(self, project_id: int, message_id: int, *,
                               max_pages: int = 10, per_page: int = 50) -> dict:
@@ -977,7 +712,7 @@ class MCSAdapter:
         out = []
         for st in stations:
             sid, sname = st.get("id"), st.get("name") or ""
-            if not _valid_id(sid):
+            if not valid_id(sid):
                 continue
             for page in range(1, max_pages + 1):
                 try:
@@ -996,17 +731,17 @@ class MCSAdapter:
                     raise SchemaError("staffs: page invalid")
                 for u in users:
                     if u.get("is_station_account") is True \
-                            or not _valid_id(u.get("id")):
+                            or not valid_id(u.get("id")):
                         continue
-                    name = _sender_name(u)
+                    name = sender_name(u)
                     if not name:
                         continue
                     out.append({"staff_id": u["id"], "name": name,
-                                "professions": [p for p in _profession(u)
+                                "professions": [p for p in profession(u)
                                                 .split(", ") if p],
                                 "station": sname,
                                 "is_self": u.get("is_self") is True})
-                if not _has_next(pag, "staffs"):
+                if not page_has_next(pag, "staffs"):
                     break
             else:
                 raise MCSError("pages_exceeded", "station staffs",
@@ -1664,13 +1399,13 @@ class MCSAdapter:
             raise SchemaError("memo_summary: user invalid")
         return {
             "comment": comment[:KARTE_SUMMARY_MAX_CHARS],
-            "updated_at": _text(ms.get("updated_at"),
+            "updated_at": text_field(ms.get("updated_at"),
                                 "memo_summary: updated_at"),
             "is_editable": ms["is_editable"],
             "user": {
-                "profession": _text(user.get("profession"),
+                "profession": text_field(user.get("profession"),
                                     "memo_summary: user profession"),
-                "name": _text(user.get("name"), "memo_summary: user name")},
+                "name": text_field(user.get("name"), "memo_summary: user name")},
         }
 
     def list_unread(self, per_page: int = 100,
@@ -1700,23 +1435,23 @@ class MCSAdapter:
             if not isinstance(projs, list):
                 raise SchemaError("unread: projects missing")
             page_ts = pag.get("timestamp")
-            if not _valid_id(page_ts):
+            if not valid_id(page_ts):
                 raise SchemaError("unread: paginate.timestamp invalid")
             ts = page_ts if ts is None else min(ts, page_ts)
             ids = set()
             for p in projs:
-                if not isinstance(p, dict) or not _valid_id(p.get("id")):
+                if not isinstance(p, dict) or not valid_id(p.get("id")):
                     raise SchemaError("unread: invalid project id")
                 ids.add(p["id"])
                 if type(p.get("is_unread")) is not bool:
                     raise SchemaError("unread: is_unread missing/invalid")
                 if not p["is_unread"]:
                     continue
-                patients.append(_unread_patient(p, "unread"))
+                patients.append(unread_patient(p, "unread"))
             if prev_page_ids is not None and ids and ids <= prev_page_ids:
                 raise SchemaError("unread: pagination not advancing")
             prev_page_ids = ids
-            if not _has_next(pag, "unread"):
+            if not page_has_next(pag, "unread"):
                 break
         else:
             raise MCSError("pages_exceeded", "unread list > 50 pages",
@@ -1754,16 +1489,16 @@ class MCSAdapter:
                 if not isinstance(items, list) or not isinstance(pag, dict):
                     raise SchemaError(
                         f"messages[{project_id}]: page schema invalid")
-                has_next = _has_next(pag, f"messages[{project_id}]")
+                has_next = page_has_next(pag, f"messages[{project_id}]")
                 if type(pag.get("total_entries")) is int:
                     total = pag["total_entries"]
                 page_messages = []
                 for m in items:
-                    if not isinstance(m, dict) or not _valid_id(m.get("id")):
+                    if not isinstance(m, dict) or not valid_id(m.get("id")):
                         raise SchemaError(
                             f"messages[{project_id}]: invalid id")
-                    nm = _norm_message(m, project_id)
-                    nm.replies = _norm_threads(
+                    nm = normalize_message(m, project_id)
+                    nm.replies = normalize_threads(
                         m.get("thread_messages") or [], project_id,
                         nm.message_id)
                     page_messages.append(nm)
@@ -1808,7 +1543,7 @@ class MCSAdapter:
         oldest = proj.get("oldest_unread_message")
         if oldest is None:
             return None
-        if not isinstance(oldest, dict) or not _valid_id(oldest.get("id")):
+        if not isinstance(oldest, dict) or not valid_id(oldest.get("id")):
             raise SchemaError(f"project[{project_id}]: oldest_unread invalid")
         return oldest["id"]
 
@@ -1821,10 +1556,10 @@ class MCSAdapter:
             pag = r["paginate"]
             if not isinstance(pag, dict):
                 raise SchemaError("thread: paginate invalid")
-            has_next = _has_next(pag, "thread")
+            has_next = page_has_next(pag, "thread")
         else:
             has_next = False
-        return (_norm_threads(r.get("messages"), project_id,
+        return (normalize_threads(r.get("messages"), project_id,
                               message_id), has_next)
 
     def fetch_thread(self, project_id: int, message_id: int,
@@ -1901,11 +1636,11 @@ class MCSAdapter:
             if not isinstance(projs, list) or not isinstance(pag, dict):
                 raise SchemaError("projects: page invalid")
             for p in projs:
-                up = _unread_patient(p, "projects")
+                up = unread_patient(p, "projects")
                 lm = p.get("last_message") or {}
                 if not isinstance(lm, dict):
                     raise SchemaError("projects: nested object invalid")
-                ca = _text(lm.get("created_at"),
+                ca = text_field(lm.get("created_at"),
                            "projects: last_message.created_at")
                 try:
                     up.last_activity = int(
@@ -1917,7 +1652,7 @@ class MCSAdapter:
                     raise SchemaError(
                         "projects: last_message.created_at invalid") from e
                 out.append(up)
-            if not _has_next(pag, "projects"):
+            if not page_has_next(pag, "projects"):
                 break
         else:
             raise MCSError("pages_exceeded", "projects inventory",
@@ -1951,7 +1686,7 @@ class MCSAdapter:
                 if proj is None:
                     continue
                 if not isinstance(proj, dict) \
-                        or not _valid_id(proj.get("id")):
+                        or not valid_id(proj.get("id")):
                     raise SchemaError("kartes: medical_project invalid")
                 pid = proj["id"]
                 if pid in seen:
@@ -1966,14 +1701,14 @@ class MCSAdapter:
                     project_id=pid,
                     project_type="medical",
                     patient_name=(
-                        f"{_text(k.get('last_name'), 'kartes: last_name')} "
-                        f"{_text(k.get('first_name'), 'kartes: first_name')}"
+                        f"{text_field(k.get('last_name'), 'kartes: last_name')} "
+                        f"{text_field(k.get('first_name'), 'kartes: first_name')}"
                     ).strip(),
-                    disease=_text(k.get("disease"), "kartes: disease"),
-                    station_name=_text(station.get("name"),
+                    disease=text_field(k.get("disease"), "kartes: disease"),
+                    station_name=text_field(station.get("name"),
                                        "kartes: station name"),
                     url=project_url(pid)))
-            if not _has_next(pag, "kartes"):
+            if not page_has_next(pag, "kartes"):
                 break
         else:
             raise MCSError("pages_exceeded", "archived kartes inventory",
@@ -2004,13 +1739,13 @@ class MCSAdapter:
                 pag = r.get("paginate")
                 if not isinstance(items, list) or not isinstance(pag, dict):
                     raise SchemaError(f"history[{project_id}]: page invalid")
-                has_next = _has_next(pag, f"history[{project_id}]")
+                has_next = page_has_next(pag, f"history[{project_id}]")
                 page_messages = []
                 for m in items:
-                    if not isinstance(m, dict) or not _valid_id(m.get("id")):
+                    if not isinstance(m, dict) or not valid_id(m.get("id")):
                         raise SchemaError(f"history[{project_id}]: invalid id")
-                    nm = _norm_message(m, project_id)
-                    nm.replies = _norm_threads(
+                    nm = normalize_message(m, project_id)
+                    nm.replies = normalize_threads(
                         m.get("thread_messages") or [], project_id,
                         nm.message_id)
                     if since_ts and nm.posted_at:
@@ -2072,7 +1807,7 @@ class MCSAdapter:
         if msg is None or msg == {}:
             # null/empty message object = no messages on the project
             return {"message_id": None, "is_self_only": bool(self_only)}
-        if not isinstance(msg, dict) or not _valid_id(msg.get("id")):
+        if not isinstance(msg, dict) or not valid_id(msg.get("id")):
             raise SchemaError(f"latest[{project_id}]: message invalid")
         return {"message_id": msg["id"],
                 "is_self_only": bool(self_only)}
@@ -2203,14 +1938,14 @@ class MCSAdapter:
                 r = self._get(
                     f"/projects/{project_id}/messages/{parent_id}/messages",
                     {"page": page})
-                seen.update(m.message_id for m in _norm_threads(
+                seen.update(m.message_id for m in normalize_threads(
                     r.get("messages"), project_id, parent_id))
                 if "paginate" not in r:
                     return seen
                 pag = r["paginate"]
                 if not isinstance(pag, dict):
                     raise SchemaError("thread: paginate invalid")
-                if not _has_next(pag, "thread"):
+                if not page_has_next(pag, "thread"):
                     return seen
             raise MCSError("thread_incomplete", retryable=True)
         except MCSError as error:
@@ -2237,7 +1972,7 @@ class MCSAdapter:
         oldest_unread_message; anything else (missing project, the key
         still present, odd shapes) is mark_result_unknown — never
         confirmed (Oracle B02)."""
-        if not _valid_id(snapshot_ts):
+        if not valid_id(snapshot_ts):
             raise MCSError("bad_snapshot_ts")
         try:
             self._get(f"/projects/{project_id}/messages", {

@@ -1,4 +1,5 @@
 """Synthetic extraction regressions for bounded context and linear medication merging."""
+import extract_validation
 import copy
 import sqlite3
 
@@ -83,7 +84,7 @@ def test_medication_merge_preserves_last_occurrence_with_linear_work():
             old["name"], old.get("subject"), old.get("action")) != key]
         expected.append(med)
     reads.clear()
-    result = extract_llm._merge([{"meds": meds[:80]}, {"meds": meds[80:]}])
+    result = extract_validation.merge([{"meds": meds[:80]}, {"meds": meds[80:]}])
     assert result["meds"] == expected
     assert meds == original
     assert len(reads) == len(meds)

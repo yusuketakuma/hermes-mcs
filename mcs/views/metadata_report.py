@@ -52,13 +52,13 @@ def _watch(reader, now, project_id, shadow_checks):
 def build_report(reader, now=None, *, project_id=None) -> dict:
     """Count-only comparison of capture and shadow rows."""
     from message_metadata import ERROR_CODE, REACTION_LABELS, _decode_metadata
-    from read_model import _table_exists
+    from snapshot_access import table_exists
     now = time.time() if now is None else now
     db = reader.db
     counts = Counter()
     count_diff, self_diff = Counter(), Counter()
     failures, lag, direction = Counter(), Counter(), Counter()
-    has_table = _table_exists(db, "message_metadata")
+    has_table = table_exists(db, "message_metadata")
     rows = []
     if has_table:
         sql = ("SELECT md.message_id,md.source,md.content,md.checked_at,md.last_error "

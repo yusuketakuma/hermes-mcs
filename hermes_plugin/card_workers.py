@@ -5,13 +5,14 @@ import json
 import os
 from typing import Any
 
-from .access import _config_ids, _id_text, _settings
 from .bridge import _ensure_repo_root
 
 
 def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
     """Card-worker config — absent/incomplete means the plugin still
     serves /mcs but never binds the Discord interaction surface."""
+    _ensure_repo_root()
+    from adapters.common.access import config_ids as _config_ids, id_text as _id_text, resolve_settings
     if ctx.get_config("interactive", False) is not True:
         return None
     data_root = ctx.get_config("data_root", None)
@@ -30,7 +31,7 @@ def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
         return None
     if application_id is None or not str(application_id).strip():
         return None
-    settings = _settings(ctx)
+    settings = resolve_settings(ctx.get_config)
     if settings is None:
         return None
     # optional: members holding any of these guild roles may operate
@@ -135,6 +136,7 @@ def make_discord_factory(ctx):
             return None
         if not _owner_allowed(ctx, adapter, settings, "discord"):
             return None
+        from adapters.common.access import id_text as _id_text
         user_id = _id_text(getattr(getattr(native, "user", None), "id", None))
         app_id = _id_text(getattr(native, "application_id", None))
         if (user_id is None or user_id != settings["application_id"]
@@ -158,6 +160,8 @@ def make_discord_factory(ctx):
 
 def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
     """Only a complete opt-in can start Slack card delivery."""
+    _ensure_repo_root()
+    from adapters.common.access import config_ids as _config_ids
     if ctx.get_config("slack_adapter_enabled", False) is not True:
         return None
     keys = ("slack_team_id", "slack_application_id", "slack_channel_id")
@@ -169,7 +173,7 @@ def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
                         projects=False)
     auto = ctx.get_config("project_ids_auto", None) is True
     raw_projects = ctx.get_config("project_ids", None)
-    # same rule as _settings: auto allows an empty static list
+    # Same shared settings rule: auto allows an empty static list
     projects = (frozenset() if auto and raw_projects == []
                 else _config_ids(raw_projects, projects=True))
     if users is None or projects is None:

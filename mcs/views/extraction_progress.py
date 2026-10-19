@@ -1,5 +1,6 @@
 """Read-only, bounded extraction progress counts for private patient summaries."""
 from __future__ import annotations
+import semantic_transport
 
 import sqlite3
 
@@ -20,10 +21,9 @@ def message_progress(db, row, *, cfg=None):
             and valid_hash(row["content_hash"])):
         try:
             if canonical:
-                import semantic
                 import semantic_extraction
                 progress = semantic_extraction.progress_for_message(
-                    db, row, model=semantic.llm_model(cfg),
+                    db, row, model=semantic_transport.llm_model(cfg),
                     policy_fingerprint=policy_fingerprint(scfg))
             else:
                 import extract_llm

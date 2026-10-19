@@ -1,9 +1,9 @@
 """Semantic drain engine: the durable-job worker (spec §14, §18).
 
 Claims jobs, runs staged extraction/summary/audit, wires the Jev budget
-and circuit, records plans, and emits notices. Functions reach facade
-patch points (semantic.llm_chat / audit_claims / _process_job) through
-the module object so monkeypatching keeps working."""
+and circuit, records plans, and emits notices. Transport, source bundles
+and audit decisions are consumed from their defining modules. This worker
+owns claims, guarded stage commits and job outcomes."""
 from __future__ import annotations
 
 import os
@@ -12,6 +12,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401  registers every subdir as import root
+import mcs_util
+import semantic_audit
+import semantic_render
+import semantic_extraction
+import semantic_store
+import semantic_transport
 
 from functools import wraps
 import json
@@ -25,7 +31,7 @@ import semantic_jev as jev
 import semantic_runtime as runtime
 import semantic_v4 as v4
 from semantic_audit import audit_code, audit_status_for
-from semantic_llm import _chunks, extract_facts, summarize
+from semantic_llm import summarize
 from semantic_loops import update_loops
 from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT,
                              KIND_BUNDLE, KIND_CANDIDATE, KIND_COVERAGE,
@@ -42,24 +48,7 @@ from semantic_render import (_emit_degraded, _notify_src_event,
                              _outbox_has_delivery, render_notice)
 from semantic_store import _current, jev_state, jev_usage_today
 
-# extract_qc subsystem lives in semantic_qc.py; names stay re-exported
-# here so drain callers and tests keep one patch surface.
-from semantic_qc import (QC_MAX_ITEMS,  # noqa: F401
-                         _process_qc_job, _qc_questions,  # noqa: F401
-                         _qc_seed)  # noqa: F401
-
-def _eval_chunked(jev_client, state: dict, questions: dict,
-                  deadline: float, limit: int) -> dict:
-    """evaluate() with the question set split into
-    max_questions_per_request-sized chunks — the configured bound is
-    enforced, not just validated (§13.4)."""
-    keys = list(questions)
-    merged = {"answers": {}}
-    for i in range(0, len(keys), max(1, limit)):
-        part = {k: questions[k] for k in keys[i:i + limit]}
-        out = jev.evaluate_once_more(jev_client, state, part, deadline)
-        merged["answers"].update(out["answers"])
-    return merged
+import semantic_qc
 
 
 def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
@@ -71,10 +60,6 @@ def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
             and row["meta"].get("generation") == v2_generation())
 
 
-# kept under the drain's name for semantic.py, semantic_qc and tests
-_jev_failure_class = jev.failure_class
-
-
 def _jev_fail_flag(error) -> str | None:
     """Map a Jev failure onto this pass's accounting flags —
     'resource' waits (never counted against the input), 'retryable'
@@ -82,7 +67,7 @@ def _jev_fail_flag(error) -> str | None:
     if error is None:
         return None
     return {"resource": "resource",
-            "retry": "retryable"}.get(_jev_failure_class(error), "hard")
+            "retry": "retryable"}.get(jev.failure_class(error), "hard")
 
 
 # First cause that stopped the current job pass short of done — a code,
@@ -126,7 +111,6 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     durable record of this generation's outcome. The repair_count meta
     is the INV-10 budget: it survives restarts AND mid-job deferrals
     because it lives on this artifact, not in process memory."""
-    import semantic
     summary = {k: v for k, v in r["summary"].items()
                if not k.startswith("_")}
     # a deferred/pending job re-derives the same outcome on every pass —
@@ -147,7 +131,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     ledger.artifact_add_tx(
         KIND_SUMMARY,
         json.dumps(summary, ensure_ascii=False),
-        project_id=pid, message_id=mid, model=semantic.llm_model(),
+        project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
         meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
               "audit_status": final_status, "publication_mode": publication_mode,
               "stale": final_status == "STALE",
@@ -241,7 +225,6 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
     Returns (early, v2_doc, doc_build): early is the _fact_stage result to
     return as-is, else None with the document (None when not stored) and
     the hint-merge build it carries."""
-    import semantic
     from semantic_extraction import extract_facts_v2, v2_generation
     import semantic_projection  # noqa: F401  loaded before any stage write
     v2_doc = None
@@ -347,7 +330,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                                 # codes/counts only: which "model" stop
                                 # it was (LLM failure code, or facts
                                 # dropped by the chunk's validation)
-                                "llm_failure": semantic.last_llm_failure(),
+                                "llm_failure": semantic_transport.last_llm_failure(),
                                 "dropped_in_failed_chunk":
                                     v2_result.get("dropped_in_failed_chunk"),
                                 "dropped_reasons":
@@ -359,7 +342,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                                 "chunks_total":
                                     v2_result["chunks_total"]}),
                     project_id=pid, message_id=mid,
-                    model=semantic.llm_model(),
+                    model=semantic_transport.llm_model(),
                     meta={"fingerprint": fp,
                           "policy_fingerprint": policy,
                           "generation": v2_generation()})
@@ -397,7 +380,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                 json.dumps(v2_doc, ensure_ascii=False,
                            allow_nan=False),
                 project_id=pid, message_id=mid,
-                model=semantic.llm_model(),
+                model=semantic_transport.llm_model(),
                 meta=meta)
     if fact_source == "canonical" and v2_doc is not None \
             and v2_doc["coverage"]["status"] != "complete":
@@ -416,7 +399,6 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
 
     Returns (early, v2_doc, doc_hash): early is the _fact_stage result to
     return as-is, else None with the audited document and its hash."""
-    import semantic
     fail_kind = "incomplete"
     # POST_JEV: bidirectional audit must pass before the
     # canonical fact set feeds any consumer.  The audit artifact
@@ -475,10 +457,10 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
         if not fact_audit["evaluated"]:
             error = getattr(jev_client, "last_error", None)
             if error is not None \
-                    and _jev_failure_class(error) == "failed":
+                    and jev.failure_class(error) == "failed":
                 fail_kind = "hard_fail"
             elif error is None \
-                    or _jev_failure_class(error) != "resource":
+                    or jev.failure_class(error) != "resource":
                 fail_kind = "retryable"
             break
         if fact_audit["status"] == "PASS":
@@ -511,7 +493,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                             "rejected": rejected},
                            ensure_ascii=False),
                 project_id=pid, message_id=mid,
-                model=semantic.llm_model(),
+                model=semantic_transport.llm_model(),
                 meta={"fingerprint": fp,
                       "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION,
@@ -568,7 +550,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                                else {})},
                            ensure_ascii=False, allow_nan=False),
                 project_id=pid, message_id=mid,
-                model=semantic.llm_model(),
+                model=semantic_transport.llm_model(),
                 meta={"fingerprint": fp,
                       "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION,
@@ -581,7 +563,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                     json.dumps(v2_doc, ensure_ascii=False,
                                allow_nan=False),
                     project_id=pid, message_id=mid,
-                    model=semantic.llm_model(),
+                    model=semantic_transport.llm_model(),
                     meta={"fingerprint": fp,
                           "policy_fingerprint": policy,
                           "schema": SCHEMA_VERSION,
@@ -615,7 +597,6 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
 def _fact_canonical_projection(ledger, member, pid, mid, fp, policy,
                                v2_doc, doc_hash) -> None:
     """Publish (or reuse) the legacy-shaped projection of an audited doc."""
-    import semantic
     # T12: audited canonical docs also publish a legacy-shaped
     # projection so the read side (stats/queries/rollup/signals)
     # keeps working during migration — the artifact carries the
@@ -639,7 +620,7 @@ def _fact_canonical_projection(ledger, member, pid, mid, fp, policy,
             json.dumps(project_v2_doc_legacy(v2_doc),
                        ensure_ascii=False, allow_nan=False),
             project_id=pid, message_id=mid,
-            model=semantic.llm_model(),
+            model=semantic_transport.llm_model(),
             meta={"fingerprint": fp,
                   "policy_fingerprint": policy,
                   "schema": SCHEMA_VERSION,
@@ -657,14 +638,13 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
 
     Returns (early, facts): early is the _fact_stage result to return
     as-is, else None with the facts."""
-    import semantic
     prev_f = _current(ledger, KIND_FACTS, mid, fp)
     if prev_f is not None:
         facts = prev_f["content"].get("facts", [])
     else:
         if time.monotonic() > deadline - 5:
             return {"outcome": "incomplete", "v2_doc": None}, None
-        facts, f_complete, f_dropped, f_reason = extract_facts(
+        facts, f_complete, f_dropped, f_reason = semantic_extraction.extract_facts(
             llm_fn, member, deadline - 5, return_reason=True,
             ledger=ledger, source_fingerprint=fp, project_id=pid)
         if not f_complete:
@@ -677,9 +657,9 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
                                      f["_evidence"] for f in facts
                                      if f.get("_evidence")}},
                        ensure_ascii=False),
-            project_id=pid, message_id=mid, model=semantic.llm_model(),
+            project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
             meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
-                  "chunks_total": len(_chunks(
+                  "chunks_total": len(mcs_util.text_chunks(
                       member["body_original"])),
                   "dropped_by_cap": f_dropped})
     return None, facts
@@ -735,7 +715,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                                    p["false"])
               for k, p in jev.PROPOSITIONS.items()}
         try:
-            out = _eval_chunked(
+            out = jev.evaluate_chunked(
                 jev_client, state, qs, deadline,
                 scfg["max_questions_per_request"])
             answers = out["answers"]
@@ -792,7 +772,6 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
     Returns (summary, summary_reason, summary_error, sent_error): sent_error
     is the LLMNotSent/RuntimeBudget stop that left no summary, else None;
     any other runtime guard error propagates."""
-    import semantic
     sent_error = None
     summary_reason = None
     summary_error = {}
@@ -813,7 +792,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                     error_out=summary_error)
                 if summary is None and summary_reason == "model" \
                         and summary_error.get("code") \
-                        and semantic.last_llm_failure() != "length_stop" \
+                        and semantic_transport.last_llm_failure() != "length_stop" \
                         and _current(ledger, KIND_SUMMARY_FORMAT_REPAIR,
                                      mid, fp, policy) is None:
                     if _PASS_REASON.get("summary_validation_error") is None:
@@ -823,7 +802,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                         KIND_SUMMARY_FORMAT_REPAIR,
                         json.dumps({"target_message_id": mid}),
                         project_id=pid, message_id=mid,
-                        model=semantic.llm_model(),
+                        model=semantic_transport.llm_model(),
                         meta={"fingerprint": fp, "policy_fingerprint": policy,
                               "repair_count": 1})
                     summary, summary_reason = summarize(
@@ -848,33 +827,6 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                 sent_error = e
                 summary, summary_reason = None, "not_sent"
     return summary, summary_reason, summary_error, sent_error
-
-
-def _apply_mandatory_render(summary: dict, findings: list, status: str,
-                            v2_doc: dict) -> str:
-    """Merge the adjudicated mandatory render layer into ``summary`` and
-    ``findings`` in place; returns the (possibly downgraded) status."""
-    from semantic_render import mandatory_render
-    mandatory = mandatory_render(v2_doc)
-    if mandatory["facts"]:
-        summary["mandatory_facts"] = mandatory["facts"]
-        summary["mandatory_fact_ids"] = mandatory["fact_ids"]
-        summary["mandatory_pages"] = mandatory["pages"]
-        summary["mandatory_overview"] = mandatory["overview"]
-    if mandatory["limitations"]:
-        code_lims = summary.setdefault("code_limitations", [])
-        code_lims.extend(x for x in mandatory["limitations"] if x not in code_lims)
-        existing_lims = summary.get("limitations") or []
-        summary["limitations"] = existing_lims + [
-            x for x in mandatory["limitations"]
-            if x not in existing_lims]
-    # A verified fact that cannot reach any page (oversized
-    # single line, or a packing gap) is publication-incomplete —
-    # flag it instead of letting a partial list pass as done.
-    if not mandatory["complete"]:
-        findings.append({"code": "mandatory_render_incomplete"})
-        status = "NEEDS_REVIEW"
-    return status
 
 
 def _promote_loops(ledger, scfg, pl, pid, bundle, facts_by_target,
@@ -988,7 +940,6 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                        reserve_fn=None, lane: str | None = None) -> str:
     """One semantic job -> durable artifacts + job state transition.
     Returns 'done'|'deferred'|'retry'|'failed'."""
-    import semantic
     pid, root = job["project_id"], job["message_id"]
     token = runtime.JobToken.from_row(job)
     deadline = runtime.job_deadline(scfg, deadline)
@@ -1005,7 +956,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     if targets is None:
         return "failed"
     try:
-        bundle = semantic.thread_bundle(ledger, pid, root, targets)
+        bundle = semantic_store.thread_bundle(ledger, pid, root, targets)
     except ValueError:
         return "failed"
     if bundle is None:
@@ -1017,7 +968,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     policy = policy_fingerprint(scfg)
 
     def current_source_fp():
-        fresh = semantic.thread_bundle(ledger, pid, root, targets or [root])
+        fresh = semantic_store.thread_bundle(ledger, pid, root, targets or [root])
         return fresh["source_fingerprint"] if fresh else None
 
     def guard(stage):
@@ -1060,7 +1011,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         # a backlog worker owns its slot: one long-output call may use the
         # transport deadline instead of burning 600 s per attempt (2026-10-10)
         llm_fn, guard, transport_deadline,
-        timeout_cap=None if lane == "backlog" else semantic.LLM_TIMEOUT,
+        timeout_cap=None if lane == "backlog" else semantic_transport.LLM_TIMEOUT,
         # one long canonical generation (~300 s) or two thirds of the
         # per-job budget, whichever is smaller — a follow-up call that
         # cannot fit defers the pass instead of overrunning it
@@ -1149,10 +1100,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             incomplete = _why(
                 f"medication_detail_{event_details['failure_reason']}")
             error = getattr(jev_client, "last_error", None)
-            if error is not None and _jev_failure_class(error) == "failed":
+            if error is not None and jev.failure_class(error) == "failed":
                 hard_fail = True
             elif event_details["failure_reason"] != "deadline" and (
-                    error is None or _jev_failure_class(error) != "resource"):
+                    error is None or jev.failure_class(error) != "resource"):
                 retryable_failure = True
             break
         if scfg["loop_mode"] != "off":
@@ -1179,9 +1130,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if not coverage["evaluated"]:
                 incomplete = _why(f"coverage_{coverage.get('failure_reason')}")
                 error = getattr(jev_client, "last_error", None)
-                if error is not None and _jev_failure_class(error) == "failed":
+                if error is not None and jev.failure_class(error) == "failed":
                     hard_fail = True
-                elif (error is not None and _jev_failure_class(error) == "retry"
+                elif (error is not None and jev.failure_class(error) == "retry"
                       or coverage.get("failure_reason") in ("model", "retry")):
                     retryable_failure = True
                 break
@@ -1251,7 +1202,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                     [{"code": "summary_unavailable"}],
                                 "target_message_id": mid},
                                ensure_ascii=False),
-                    project_id=pid, message_id=mid, model=semantic.llm_model(),
+                    project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
                     meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                           "technical_status": "pending"})
             incomplete = True
@@ -1268,7 +1219,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             guard("candidate_snapshot")
             ledger.artifact_add(
                 KIND_CANDIDATE, json.dumps(summary, ensure_ascii=False),
-                project_id=pid, message_id=mid, model=semantic.llm_model(),
+                project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
                 meta={"fingerprint": fp, "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION, "stage": "pre_audit",
                       "publication_mode": scfg["summary_mode"],
@@ -1285,7 +1236,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             code_f = (audit_code(bundle, facts, summary) + coverage_by_target.get(mid, [])
                       + detail_findings.get(mid, []))
             try:
-                jev_f, evaluated = semantic.audit_claims(
+                jev_f, evaluated = semantic_audit.audit_claims(
                     jev_client, bundle, summary, deadline,
                     scfg["match_threshold"], scfg["max_questions_per_request"])
             except (runtime.LLMNotSent, runtime.RuntimeBudget) as error:
@@ -1318,7 +1269,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 guard("repair_reservation")
                 repair_id = ledger.artifact_add(
                     KIND_REPAIR, json.dumps({"target_message_id": mid}),
-                    project_id=pid, message_id=mid, model=semantic.llm_model(),
+                    project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
                     meta={"fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
                 repaired = True
                 try:
@@ -1359,7 +1310,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             # model summary dropped them. Per-target doc: the LAST
             # member's doc must never leak into another target's
             # summary (C02).
-            status = _apply_mandatory_render(summary, findings, status,
+            status = semantic_render.apply_mandatory_render(summary, findings, status,
                                              v2_doc)
         summary["audit_status"] = status
         if fact_source == "canonical":
@@ -1575,7 +1526,7 @@ def _jev_error_brief(error) -> dict | None:
             # protocol_error variant is only diagnosable from it
             "detail": str(getattr(error, "detail", "") or "")[:60],
             "status": getattr(error, "status", 0) or 0,
-            "class": _jev_failure_class(error)}
+            "class": jev.failure_class(error)}
 
 
 # guard stages raised before a local-model request leaves (runtime)
@@ -1798,10 +1749,9 @@ def _backlog_commit_reserve(scfg: dict) -> float:
     """The commit reserve the job budget affords while a long-output call
     still fits the work window: full from a ~1220 s budget, partial below
     (220 s at 900 s), never squeezing the long call out."""
-    import semantic
     budget = float(scfg["job_budget_seconds"])
     return min(BACKLOG_COMMIT_RESERVE_S,
-               max(0.0, budget - semantic._LONG_MIN_CALL_S - _LONG_START_S))
+               max(0.0, budget - semantic_transport._LONG_MIN_CALL_S - _LONG_START_S))
 # kind this resident backlog worker served last (in-process; a restart
 # simply starts with semantic again)
 _BACKLOG_TURN = {"kind": None}
@@ -1938,7 +1888,6 @@ def _job_metric(job, token, cohort: str, status, job_age: float,
                 job_elapsed: float, llm_s: float, jev_s: float, used: int,
                 usage: dict, jev_client) -> dict:
     """The bounded per-job metrics row of one drain pass."""
-    import semantic
     return {
         "job_id": job["job_id"], "project_id": job["project_id"],
         "kind": job["kind"],
@@ -1965,7 +1914,7 @@ def _job_metric(job, token, cohort: str, status, job_age: float,
         # latest-wins: only a pass that actually called the
         # model may report it, or a cached/QC pass would wear
         # the previous job's code.
-        "llm_error": semantic.last_llm_failure()
+        "llm_error": semantic_transport.last_llm_failure()
         if status not in (None, "done") and llm_s > 0 else None,
         "retry_reason": _PASS_REASON["code"]
         if status != "done" else None,
@@ -2087,7 +2036,6 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     run_check; a standalone CLI takes acquire_run_lock itself.
     cfg_path, when given, re-validates config between jobs so an OFF
     flip mid-run takes effect at the next job boundary (AT-060)."""
-    import semantic
     started_at = time.perf_counter()
     started_wall = time.time()
     if lane not in (None, "realtime", "backlog"):
@@ -2167,7 +2115,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if previous_policy is None or previous_policy["content"] != policy:
         ledger.artifact_add(KIND_POLICY, policy)
     if llm_fn is None:
-        llm_fn = semantic.llm_chat
+        llm_fn = semantic_transport.llm_chat
     if jev_client is None and scfg["daily_request_budget"] > 0:
         jev_client = jev.JevClient(
             api_key=env_value("TYPESAFE_API_KEY"), model=scfg["model"],
@@ -2217,7 +2165,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # outage of any length stayed invisible to the breaker and the stall
     # alert. Counted once per pass; an answered call resets the streak.
     llm_health = {"down": False, "fed": False}
-    marks_unsaved0 = semantic.long_mark_failures()
+    marks_unsaved0 = semantic_transport.long_mark_failures()
     long_defers = _long_defers(ledger)
     long_seen: dict = {}
 
@@ -2253,7 +2201,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         if scfg["mode"] != "off" and scfg["extract_qc"] == "annotate" \
                 and jev_client is not None:
             try:
-                _qc_seed(ledger, time.time())
+                semantic_qc._qc_seed(ledger, time.time())
             except Exception:
                 result["errors"].append("semantic: qc_seed_failed")
         qc_active = (scfg["extract_qc"] == "annotate"
@@ -2414,12 +2362,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 _PASS_REASON["not_sent"] = None
                 try:
                     if job["kind"] == QC_JOB_KIND:
-                        status = _process_qc_job(
+                        status = semantic_qc._process_qc_job(
                             ledger, scfg, job, timed_jev, deadline,
                             reserve_fn=reserve_fn, cfg_path=cfg_path,
                             config_generation=cfg_generation)
                     else:
-                        status = semantic._process_job(
+                        status = _process_job(
                             ledger, scfg, job, timed_jev, timed_llm, deadline,
                             cfg_path=cfg_path,
                             config_generation=cfg_generation,
@@ -2521,7 +2469,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         if llm_health["fed"]:
             out["llm_down"] = True
         unsaved = {cause: n - marks_unsaved0.get(cause, 0)
-                   for cause, n in semantic.long_mark_failures().items()
+                   for cause, n in semantic_transport.long_mark_failures().items()
                    if n > marks_unsaved0.get(cause, 0)}
         if unsaved:
             # long-output marks this pass could not persist (T8): the
@@ -2554,9 +2502,6 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         _SHADOW_V2["pass"] = None
         if original_http is not None:
             jev_client._http_request = original_http
-
-
-
 
 
 # Bounded automatic retry of exhausted semantic jobs (owner request

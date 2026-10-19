@@ -13,7 +13,6 @@ from adapters.slack.actions import Actions
 from adapters.slack.delivery import DeliveryWorker, SlackCardAdapter
 from hermes_plugin.card_workers import make_slack_factory
 from adapters.common import envelopes, journal, registry
-from adapters.common import worker as worker_mod
 from adapters.common.spec import token_map
 from adapters.slack import paths as slack_paths
 from adapters.slack.cards import thread_part_blocks
@@ -629,7 +628,7 @@ def test_slack_thread_parts_post_under_bound_root_only(led, monkeypatch):
         sender=w.sender, settings=SCOPE, root=str(w.root),
         reg=restored, worker_id=registry.new_worker_id(),
         log=lambda *_args, **_kw: None)
-    assert worker_mod._card_message_id(
+    assert journal.card_message_id(
         replacement._jview.refresh(), spec["delivery_id"]) \
         == "1790000000.000001"
     asyncio.run(replacement._resume_parts(spec))

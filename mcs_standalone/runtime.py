@@ -16,10 +16,13 @@ import stat
 import subprocess
 import time
 import uuid
+
+import update_journal
 from xml.sax.saxutils import escape
 
 from mcs_runtime import python_executable
-from mcs_setup import CRON_TIMEOUT_S, _TIMEOUT_PL, _calendar, _render_template, configured_cron_jobs
+from scheduled_jobs import (CRON_TIMEOUT_S, TIMEOUT_PERL, calendar_entries,
+                            configured_cron_jobs, latest_calendar_slots, render_template)
 from mcs_util import UPDATE_MARKER_NAME, atomic_write
 
 from . import config, service
@@ -73,22 +76,6 @@ def _try_lock(path):
     except OSError:
         os.close(fd)
         return None
-
-
-def _journal_empty(path):
-    """mcs_update's journal: True when it records no apply, False when it does,
-    None when unreadable (fail closed like the updater and recovery)."""
-    try:
-        with open(path, encoding="utf-8") as stream:
-            state = json.load(stream)
-    except FileNotFoundError:
-        return True
-    except (OSError, ValueError, RecursionError, UnicodeError):
-        return None
-    from mcs_update import _valid_state   # the updater's own shape check
-    if not _valid_state(state):
-        return None
-    return not state.get("applying") and not state.get("stages")
 
 
 def _process_args(pid):
@@ -175,7 +162,7 @@ class Runtime:
         self.argv = {}
         for job, label in {**BACKGROUND, **COMMANDS}.items():
             text = (REPO / "deployment/launchagents" / (label + ".plist")).read_text()
-            self.argv[job] = plistlib.loads(_render_template(
+            self.argv[job] = plistlib.loads(render_template(
                 text, {k: escape(v) for k, v in subs.items()}).encode())["ProgramArguments"]
         if (cfg.get("notify") or {}).get("interactive") == "lineworks":
             self.argv["lineworks"] = [subs["PYTHON"], "-m", "lineworks_adapter", "run",
@@ -183,9 +170,9 @@ class Runtime:
         self.schedules = []
         for _, schedule, script in configured_cron_jobs(cfg):
             job = "update" if script == "mcs_update.sh" else script.removesuffix(".sh")
-            self.argv[job] = ["/usr/bin/perl", "-e", _TIMEOUT_PL, str(CRON_TIMEOUT_S),
+            self.argv[job] = ["/usr/bin/perl", "-e", TIMEOUT_PERL, str(CRON_TIMEOUT_S),
                               "/bin/bash", str(self.root / "scripts" / script)]
-            self.schedules.append((job, _calendar(schedule)))
+            self.schedules.append((job, calendar_entries(schedule)))
 
     # ---------------------------------------------------------------- files
 
@@ -262,7 +249,12 @@ class Runtime:
         path = self.data / (job + ".log")
         try:
             fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, "ab") as output:
+            try:
+                output = os.fdopen(fd, "ab")
+            except BaseException:
+                os.close(fd)
+                raise
+            with output:
                 os.fchmod(output.fileno(), 0o600)
                 child = subprocess.Popen(self.argv[job], cwd=REPO,
                     env={**os.environ, "MCS_ROOT": str(self.root)}, stdin=subprocess.DEVNULL,
@@ -403,10 +395,10 @@ class Runtime:
             if run_fd is None:
                 return "run_busy"
             try:
-                empty = _journal_empty(self.data / "update_state.json")
-                if empty is None:
+                state = update_journal.load_state(self.data / "update_state.json")
+                if state.get("_corrupt"):
                     return "journal_unreadable"
-                if not empty:
+                if state.get("applying") or state.get("stages"):
                     return "journal_pending"
                 try:
                     os.unlink(path)
@@ -422,26 +414,12 @@ class Runtime:
 
     # ------------------------------------------------------------- schedule
 
-    def _due_slots(self, minute):
-        """job -> start of its newest calendar slot within the catch-up window."""
-        due, pending = {}, dict(self.schedules)
-        for back in range(CATCHUP_WINDOW_MIN + 1):
-            if not pending:
-                break
-            stamp = (minute - back) * 60
-            local = time.localtime(stamp)
-            for job, entries in list(pending.items()):
-                if any(entry.get("Hour", local.tm_hour) == local.tm_hour
-                       and entry.get("Minute", local.tm_min) == local.tm_min for entry in entries):
-                    due[job] = stamp
-                    del pending[job]
-        return due
-
     def _schedule(self, now):
         minute = int(now // 60)
         if minute != self.last_minute:
             self.last_minute = minute
-            self.due = self._due_slots(minute)
+            self.due = latest_calendar_slots(
+                self.schedules, minute, CATCHUP_WINDOW_MIN, time.localtime)
         changed = False
         for job, slot in self.due.items():
             fired = self.fired.get(job)

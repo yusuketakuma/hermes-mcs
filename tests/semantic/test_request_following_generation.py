@@ -1,9 +1,10 @@
 """Fictional callback, real validation/cache/staging; no model or API acceptance."""
+import semantic_store
+import semantic_transport
 import json
 
 import pytest
 
-import semantic
 import semantic_extraction as extraction
 import semantic_facts as facts
 import semantic_llm as prompts
@@ -29,8 +30,8 @@ def source(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body=TEXT)], project_id=1)
-    monkeypatch.setattr(semantic, "llm_model", lambda: "fictional-model")
-    bundle = semantic.thread_bundle(db, 1, 1)
+    monkeypatch.setattr(semantic_transport, 'llm_model', lambda: "fictional-model")
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     yield db, bundle, bundle["members"][0]
     db.close()
 
@@ -109,7 +110,7 @@ def test_candidate_prefix_failure_retry_preserves_generation_and_fields(source, 
     db, _, _ = source
     second = TEXT.replace("担当A", "担当B").replace("資料X", "資料Y").replace("明日まで", "翌週まで")
     db.save_messages([_message(1, body=TEXT + "\n" + second)], project_id=1)
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     current = (db, bundle, bundle["members"][0])
     calls = []
     def interrupted(_prompt):
@@ -153,7 +154,7 @@ def test_candidate_repair_uses_selected_machine_route_and_keeps_generation(sourc
     monkeypatch.setattr(prompts, "_FACT_V2_REQUEST_FOLLOWING_PROMPT",
                         "CANDIDATE_ROUTE\n<<<\n%s\n>>>\nJSON:")
     db = source[0]
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     source = (db, bundle, bundle["members"][0])
     result = extract(source, lambda _: reply(details=DETAILS), request_following=True)
     doc = result["doc"]
@@ -289,7 +290,7 @@ def test_shadow_compare_reads_staged_candidates_without_writes(tmp_path, source,
     spec.loader.exec_module(report_module)
     db, _, member = source
     db.save_messages([_message(i, parent=1, body=TEXT) for i in range(2, 8)], project_id=1)
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     for mid in range(1, 8):
         v4.extract_request_following(lambda _: reply(details=DETAILS), db, bundle, mid,
                                      policy="fixture")

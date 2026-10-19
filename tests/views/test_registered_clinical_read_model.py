@@ -4,9 +4,10 @@ import json
 import pytest
 
 import read_model
+import registered_data
 import structured_view
-from project_metadata import ARTIFACT_KIND, normalize_rows
-from project_metadata import clinical_definition_fingerprint
+from project_metadata_contract import ARTIFACT_KIND, normalize_rows
+from project_metadata_contract import clinical_definition_fingerprint
 from project_metadata_view import get_project_metadata
 from test_patient_context_view import context_db
 from test_read_model import _artifact, _hash_of
@@ -98,8 +99,11 @@ def _clinical(db, monkeypatch):
     db.db.execute("UPDATE patients SET project_type='medical',karte_id=10 WHERE project_id=1")
     db.db.execute("UPDATE patients SET project_type='group',karte_id=10 WHERE project_id=2")
     db.db.commit()
-    monkeypatch.setattr(read_model, "_snapshot_meta", lambda _: {
-        "generation_id": "synthetic-generation", "generated_at": 110, "published": True})
+    def snapshot(_):
+        return {"generation_id": "synthetic-generation",
+                "generated_at": 110, "published": True}
+    monkeypatch.setattr(read_model, "snapshot_meta", snapshot)
+    monkeypatch.setattr(registered_data, "snapshot_meta", snapshot)
 
 
 def test_registered_sources_keep_measurement_definition_and_independent_fetch_state(context_db, monkeypatch):

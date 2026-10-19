@@ -1,6 +1,7 @@
 """Burnt-out reply jobs stay failed under thread read,
 torn cmd files are quarantined, and housekeeping runs past the deadline
 once the daily backup is overdue. Synthetic stubs only — no real MCS."""
+import health_report
 import json
 import os
 import sys
@@ -96,14 +97,14 @@ def test_overdue_backup_makes_housekeeping_run_past_the_deadline(
                         "ATTACH_DIR": data / "attachments",
                         "LOCKFILE": data / "run.lock",
                         "HEALTH_FILE": data / "health.json"}.items():
-        monkeypatch.setattr(run_check, name, str(value))
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
     data.mkdir()
     clock = [100.0]
     monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(run_check, "_config", lambda: {})
     monkeypatch.setattr(run_check, "_semantic_enabled", lambda *a: False)
     monkeypatch.setattr(run_check, "_code_changed", lambda *a: False)
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     monkeypatch.setattr(run_check, "MCSAdapter",
                         lambda **kw: SimpleNamespace(set_deadline=lambda d: None))
     monkeypatch.setattr(run_check, "_stage_fetch", lambda *a: clock.__setitem__(
@@ -111,7 +112,7 @@ def test_overdue_backup_makes_housekeeping_run_past_the_deadline(
     later, housekeeping = Mock(), Mock()
     for name in ("_run_jobs", "stage_derive", "_deliver", "_with_relogin",
                  "_run_semantic", "_run_metadata_shadow"):
-        monkeypatch.setattr(run_check, name, later)
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, later)
     monkeypatch.setattr(run_check, "_housekeeping", housekeeping)
     monkeypatch.setattr(maintenance, "backup_overdue", lambda: True)
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)

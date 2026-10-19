@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mcs_adapter import SchemaError
+from mcs_contract import SchemaError
 
 
 @pytest.fixture

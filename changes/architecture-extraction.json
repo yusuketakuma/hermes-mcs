@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "抽出結果の検証と品質判断の責務を整理",
+  "summary": "抽出内容・臨床判断・モデル・世代は維持し、原文の検証、抽出結果の統合、補完候補の品質判断を推論通信・保存処理から分離しました。患者と家族、現在と過去の区別は共通の原文スコープ判定を使います。",
+  "upgrade": "設定変更は不要です。コード更新時は通常の手順で抽出workerを再起動してください。実装のコードhashが変わるため、旧candidate承認・旧保留receiptは新しい契約には一致しません。保留対象は再判定し、原文に裏付けられた否定・本人以外の情報を失う候補は従来どおり保留します。コードhashだけでは同世代の抽出済み結果を全件再抽出しません。",
+  "details": [
+    "extract_schemaが出力形、extract_validationが原文検証・chunk統合、extract_qualityが補完・修復・保護判定を所有し、MODEL・ENDPOINT・呼出記録・DB transaction・resident状態はextract_llmが所有します。",
+    "clinical_scopeが人・時点の判定と上限付き解析cache、clinical_valuesが測定値の検証を所有し、臨床値からルール実行moduleへの逆依存を除去しました。",
+    "読み込み済みsource digestとcandidate定義moduleの対象を移動先へ拡張し、旧承認・保留・再抽出境界の確認対象に含めました。",
+    "抽出世代9、ルール世代24、schema、prompt、QC閾値、公開条件、終日処理とJST03:30の作業日切替は変更していません。"
+  ],
+  "refs": ["mcs/extract/llm/", "mcs/extract/clinical/clinical_scope.py", "mcs/extract/clinical/clinical_values.py", "mcs/semantic/semantic_candidate.py"]
+}

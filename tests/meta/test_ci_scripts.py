@@ -37,10 +37,10 @@ def test_shadow_driver_bootstraps_its_runtime_outside_repository(tmp_path):
     result = subprocess.run(
         [sys.executable, "-I", "-c",
          "import runpy, sys; runpy.run_path(sys.argv[1]); "
-         "from semantic import llm_chat; "
+         "from semantic_transport import llm_chat; "
          "from semantic_evaluation import run_shadow_e2e; "
          "assert callable(llm_chat) and callable(run_shadow_e2e)",
-         str(ROOT / "scripts" / "development" / "semantic_shadow_e2e.py")],
+         str(ROOT / "scripts" / "evaluation" / "semantic_shadow_e2e.py")],
         cwd=tmp_path, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
 

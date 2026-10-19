@@ -1,4 +1,5 @@
 """完全合成の訪問診療予定日を、既存の日付解決・更新・表示経路で確認する。"""
+import clinical_scope
 import json
 
 import pytest
@@ -107,8 +108,8 @@ def test_cancelled_explicit_visit_is_neither_next_plan_nor_past_visit():
 def test_provider_signature_override_is_limited_to_schedule_reading():
     body = "架空太郎医師：\n次回訪問診療予定日：2032/6/7"
     start = body.index("2032")
-    assert extract.patient_source_scope(body, start, len(body)) == "other"
-    assert extract.patient_source_scope(body, start, len(body), provider_fields=True) == "planned"
+    assert clinical_scope.patient_source_scope(body, start, len(body)) == "other"
+    assert clinical_scope.patient_source_scope(body, start, len(body), provider_fields=True) == "planned"
 
 
 def test_rule_version_refresh_updates_old_schedule_artifact_and_current_consumers(tmp_path):

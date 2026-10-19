@@ -5,7 +5,8 @@ import pytest
 
 from ledger import LedgerReader, publish_snapshot
 from mcs_view import View
-from project_metadata import ARTIFACT_KIND, sync_metadata
+from project_metadata_contract import ARTIFACT_KIND
+from project_metadata import sync_metadata
 from project_metadata_view import get_project_metadata
 from tests.ingest.test_group_consultations import (
     GROUP_ID, MEDICAL_ID, ROW, consultation_page,

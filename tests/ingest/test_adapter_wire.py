@@ -2,6 +2,7 @@
 list_projects / fetch_* pagination / fetch_latest / self_profile,
 websocket framing, Keychain + auto_login, request/worker deadlines,
 assert_allowed_url.  In-memory fakes only — conftest blocks sockets."""
+import mcs_contract
 
 import base64
 import hashlib
@@ -38,7 +39,7 @@ def test_bad_api_json_is_a_local_failure_and_the_next_patient_can_be_fetched(bod
     replies = iter([body, b'{"messages":[],"paginate":{"has_next":false}}'])
     adapter._request = lambda *args, **kwargs: (200, next(replies), {})
     bad = adapter.fetch_unread_messages(1, 123)
-    assert isinstance(bad.error, mcs_adapter.SchemaError)
+    assert isinstance(bad.error, mcs_contract.SchemaError)
     assert bad.error.detail == "invalid json payload" and bad.messages == []
     good = adapter.fetch_unread_messages(2, 123)
     assert good.error is None and good.reached and good.messages == []
@@ -47,12 +48,12 @@ def test_bad_api_json_is_a_local_failure_and_the_next_patient_can_be_fetched(bod
 def test_login_html_response_keeps_the_session_recovery_contract():
     adapter = mcs_adapter.MCSAdapter()
     adapter._request = lambda *args, **kwargs: (200, b"<html>synthetic login</html>", {})
-    with pytest.raises(mcs_adapter.SessionExpired):
+    with pytest.raises(mcs_contract.SessionExpired):
         adapter._get("/synthetic")
 
 
 def test_project_inventory_fails_when_page_cap_is_incomplete():
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         _ProjectsAdapter(True).list_projects(max_pages=1)
     assert error.value.kind == "pages_exceeded"
 
@@ -80,7 +81,7 @@ def test_contradictory_mark_read_response_is_unknown(monkeypatch):
         "project": {"is_archived": False,
                     "oldest_unread_message": {"id": 7}},
     }
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         adapter.mark_patient_read(1, 123)
     assert error.value.kind == "mark_result_unknown"
 
@@ -98,7 +99,7 @@ def test_mark_read_empty_project_is_unknown():
     adapter._get = lambda path, params=None, **k: (
         {"project": {}}                        # no is_archived — not real
         if path == "/projects/1" else {"messages": [], "paginate": {}})
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         adapter.mark_patient_read(1, 123)
     assert error.value.kind == "mark_result_unknown"
 
@@ -147,7 +148,7 @@ def test_list_unread_fails_when_pagination_sticks():
         (100, True, [_unread_project(11)]),  # same ids again
     ])
 
-    with pytest.raises(mcs_adapter.SchemaError) as error:
+    with pytest.raises(mcs_contract.SchemaError) as error:
         adapter.list_unread()
     assert "not advancing" in error.value.detail
 
@@ -157,7 +158,7 @@ def test_list_unread_rejects_missing_is_unread():
         (100, False, [{"id": 11, "type": "medical", "karte": {}}]),
     ])
 
-    with pytest.raises(mcs_adapter.SchemaError) as error:
+    with pytest.raises(mcs_contract.SchemaError) as error:
         adapter.list_unread()
     assert "is_unread" in error.value.detail
 
@@ -172,7 +173,7 @@ def test_list_unread_fails_on_schema_error():
             return {"projects": []}  # paginate missing
 
     adapter = Adapter()
-    with pytest.raises(mcs_adapter.SchemaError):
+    with pytest.raises(mcs_contract.SchemaError):
         adapter.list_unread()
     assert adapter.calls == 1
 
@@ -189,7 +190,7 @@ def test_history_returns_saved_pages_and_error():
     assert [m.message_id for m in batch.messages] == [1]
     assert batch.pages == 1
     assert batch.reached is False
-    assert isinstance(batch.error, mcs_adapter.SchemaError)
+    assert isinstance(batch.error, mcs_contract.SchemaError)
 
 
 def test_invalid_nested_text_is_reported_as_schema_error():
@@ -204,7 +205,7 @@ def test_invalid_nested_text_is_reported_as_schema_error():
                 "paginate": {"has_next": False},
             }
 
-    with pytest.raises(mcs_adapter.SchemaError):
+    with pytest.raises(mcs_contract.SchemaError):
         Adapter().list_projects()
 
 
@@ -221,7 +222,7 @@ def test_pagination_schema_failure_retains_completed_pages(kind):
              if kind == "unread" else adapter.fetch_history(1, 0, max_pages=2))
     assert [m.message_id for m in batch.messages] == [1]
     assert batch.pages == 1 and not batch.reached
-    assert isinstance(batch.error, mcs_adapter.SchemaError)
+    assert isinstance(batch.error, mcs_contract.SchemaError)
 
 
 def test_invalid_history_date_does_not_certify_cutoff():
@@ -233,7 +234,7 @@ def test_invalid_history_date_does_not_certify_cutoff():
 
     batch = Adapter().fetch_history(1, 123, max_pages=1)
     assert not batch.reached
-    assert isinstance(batch.error, mcs_adapter.SchemaError)
+    assert isinstance(batch.error, mcs_contract.SchemaError)
 
 
 _CUTOFF = int(datetime.fromisoformat(
@@ -327,7 +328,7 @@ def test_paginated_thread_is_not_reported_complete():
     adapter._get = lambda *a, **k: {
         "messages": [{"id": 2, "comment": "body"}],
         "paginate": {"has_next": True}}
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         adapter.fetch_thread(1, 1)
     assert error.value.kind == "thread_incomplete"
 
@@ -337,7 +338,7 @@ def test_malformed_mark_response_stays_unknown():
     adapter._get = lambda path, params=None, **k: (
         {"data": [1]}                        # no project object at all
         if path == "/projects/1" else {"messages": [], "paginate": {}})
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         adapter.mark_patient_read(1, 123)
     assert error.value.kind == "mark_result_unknown"
 
@@ -352,7 +353,7 @@ def test_assert_allowed_url_bad_port_is_mcserror():
                 "https://synthetic@www.medical-care.net/f",
                 "https://www.medical-care.net/f#fragment",
                 "https://[::1/x"):
-        with pytest.raises(mcs_adapter.MCSError) as e:
+        with pytest.raises(mcs_contract.MCSError) as e:
             mcs_adapter._assert_allowed_url(bad)
         assert e.value.kind == "url_not_allowed"
     # allowed still passes
@@ -789,7 +790,7 @@ def test_projects_malformed_last_message_timestamp_is_schema_error():
                 "paginate": {"has_next": False},
             }
 
-    with pytest.raises(mcs_adapter.SchemaError,
+    with pytest.raises(mcs_contract.SchemaError,
                        match="last_message.created_at"):
         Adapter().list_projects()
 
@@ -818,7 +819,7 @@ def test_adapter_request_raises_deadline_exceeded():
     a = mcs_adapter.MCSAdapter()
     a._token = "t"
     a.set_deadline(time.monotonic() - 1)
-    with pytest.raises(mcs_adapter.MCSError) as e:
+    with pytest.raises(mcs_contract.MCSError) as e:
         a._request("GET", "/projects")
     assert e.value.kind == "deadline_exceeded"
 
@@ -896,7 +897,7 @@ def test_adapter_worker_deadline_reaps_slow_reader(tmp_path, monkeypatch, operat
     else:
         def call():
             adapter._request("GET", "/projects", retries=0)
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         call()
     assert error.value.kind == "deadline_exceeded"
     assert time.monotonic() - started < 20
@@ -959,7 +960,7 @@ def test_adapter_worker_preserves_api_form_and_http_status(monkeypatch):
 
     monkeypatch.setattr(mcs_util, "no_proxy_opener",
                         lambda *handlers: SimpleNamespace(open=denied))
-    with pytest.raises(mcs_adapter.SessionExpired) as error:
+    with pytest.raises(mcs_contract.SessionExpired) as error:
         adapter._request("GET", "/projects", retries=0)
     assert error.value.status == 401
 
@@ -1009,12 +1010,12 @@ def test_attachment_worker_keeps_redirect_and_atomic_file_contract(tmp_path, mon
     assert not Path(str(destination) + ".part").exists()
 
     monkeypatch.setattr(mcs_adapter, "_MAX_DOWNLOAD_BYTES", 2)
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         adapter.download("https://www.medical-care.net/f", str(destination))
     assert error.value.kind == "download_too_large"
     assert not Path(str(destination) + ".part").exists()
     assert destination.read_bytes() == b"synthetic-attachment"
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         adapter.download("https://outside.invalid/f", str(destination))
     assert error.value.kind == "url_not_allowed"
 
@@ -1042,7 +1043,7 @@ def test_bootstrap_and_keychain_use_remaining_budget(monkeypatch):
     monkeypatch.setattr(subprocess, "run", keychain)
     assert adapter._keychain_password() == "synthetic-password"
     adapter.set_deadline(time.monotonic() - 1)
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         adapter.bootstrap_token()
     assert error.value.kind == "deadline_exceeded"
     assert len(observed) == 2
@@ -1059,7 +1060,7 @@ def test_keychain_timeout_preserves_fallback_only_with_run_budget(monkeypatch):
     adapter.set_deadline(time.monotonic() + 60)
     assert adapter._login_password() == ("synthetic-fallback", True)
     adapter.set_deadline(time.monotonic() - 1)
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         adapter._login_password()
     assert error.value.kind == "deadline_exceeded"
 
@@ -1102,10 +1103,10 @@ def test_self_profile_endpoint_unavailable_maps_kind():
     caller can log-and-continue instead of failing the run."""
     class Adapter(mcs_adapter.MCSAdapter):
         def _get(self, path, params=None, extend_session=True):
-            raise mcs_adapter.MCSError("http_error", "404", status=404)
+            raise mcs_contract.MCSError("http_error", "404", status=404)
 
     import pytest
-    with pytest.raises(mcs_adapter.MCSError) as e:
+    with pytest.raises(mcs_contract.MCSError) as e:
         Adapter().self_profile()
     assert e.value.kind == "self_profile_unavailable"
 
@@ -1116,7 +1117,7 @@ def test_self_profile_empty_is_schema_error():
             return {"user": {"id": 9}}
 
     import pytest
-    with pytest.raises(mcs_adapter.SchemaError):
+    with pytest.raises(mcs_contract.SchemaError):
         Adapter().self_profile()
 
 
@@ -1125,10 +1126,10 @@ def test_self_profile_session_expired_passthrough():
     relabeled as a missing/unsupported endpoint."""
     class Adapter(mcs_adapter.MCSAdapter):
         def _get(self, path, params=None, extend_session=True):
-            raise mcs_adapter.SessionExpired("token rejected")
+            raise mcs_contract.SessionExpired("token rejected")
 
     import pytest
-    with pytest.raises(mcs_adapter.SessionExpired):
+    with pytest.raises(mcs_contract.SessionExpired):
         Adapter().self_profile()
 
 
@@ -1194,7 +1195,7 @@ def test_fetch_latest_no_newer_message():
 ])
 def test_fetch_latest_rejects_malformed(response):
     adapter = _LatestAdapter(response)
-    with pytest.raises(mcs_adapter.SchemaError):
+    with pytest.raises(mcs_contract.SchemaError):
         adapter.fetch_latest(7)
 
 
@@ -1221,9 +1222,9 @@ def test_route_level_403_under_valid_session_is_not_expiry(monkeypatch):
     that aborts the whole run."""
     adapter, calls = _status_adapter(
         monkeypatch, {"/users/self/count": 200, "/projects/2/messages": 403})
-    with pytest.raises(mcs_adapter.MCSError) as error:
+    with pytest.raises(mcs_contract.MCSError) as error:
         adapter._request("GET", "/projects/2/messages", retries=0)
-    assert not isinstance(error.value, mcs_adapter.SessionExpired)
+    assert not isinstance(error.value, mcs_contract.SessionExpired)
     assert error.value.kind == "forbidden" and error.value.status == 403
     assert calls[-1].endswith("/users/self/count")
 
@@ -1231,7 +1232,7 @@ def test_route_level_403_under_valid_session_is_not_expiry(monkeypatch):
 def test_403_with_failing_session_probe_stays_expiry(monkeypatch):
     adapter, calls = _status_adapter(
         monkeypatch, {"/users/self/count": 403, "/projects/2/messages": 403})
-    with pytest.raises(mcs_adapter.SessionExpired) as error:
+    with pytest.raises(mcs_contract.SessionExpired) as error:
         adapter._request("GET", "/projects/2/messages", retries=0)
     assert error.value.status == 403
     # the probe itself never recurses into another probe
@@ -1243,7 +1244,7 @@ def test_403_with_unreachable_session_probe_stays_expiry(monkeypatch):
     classification with its own network error."""
     adapter, calls = _status_adapter(
         monkeypatch, {"/users/self/count": 503, "/projects/2/messages": 403})
-    with pytest.raises(mcs_adapter.SessionExpired):
+    with pytest.raises(mcs_contract.SessionExpired):
         adapter._request("GET", "/projects/2/messages", retries=0)
 
 
@@ -1294,23 +1295,23 @@ def test_station_staffs_failure_kinds():
 
     class Down(mcs_adapter.MCSAdapter):
         def _get(self, path, params=None, extend_session=True):
-            raise mcs_adapter.MCSError("http_error", "500", status=500)
+            raise mcs_contract.MCSError("http_error", "500", status=500)
 
     class Expired(mcs_adapter.MCSAdapter):
         def _get(self, path, params=None, extend_session=True):
-            raise mcs_adapter.SessionExpired("token rejected")
+            raise mcs_contract.SessionExpired("token rejected")
 
     class Bad(mcs_adapter.MCSAdapter):
         def _get(self, path, params=None, extend_session=True):
             return {"users": "nope"}
 
     st = [{"id": 7, "name": "みどり薬局"}]
-    with pytest.raises(mcs_adapter.MCSError) as e:
+    with pytest.raises(mcs_contract.MCSError) as e:
         Down().station_staffs(st)
     assert e.value.kind == "station_staffs_unavailable"
-    with pytest.raises(mcs_adapter.SessionExpired):
+    with pytest.raises(mcs_contract.SessionExpired):
         Expired().station_staffs(st)
-    with pytest.raises(mcs_adapter.SchemaError):
+    with pytest.raises(mcs_contract.SchemaError):
         Bad().station_staffs(st)
 
 
@@ -1375,7 +1376,7 @@ def test_oldest_unread_id_reads_project_detail(detail, expect):
 def test_oldest_unread_id_rejects_malformed_detail(detail):
     adapter = mcs_adapter.MCSAdapter()
     adapter._get = lambda path, params=None, **k: detail
-    with pytest.raises(mcs_adapter.SchemaError):
+    with pytest.raises(mcs_contract.SchemaError):
         adapter.oldest_unread_id(1)
 
 
@@ -1387,7 +1388,7 @@ def _mark_adapter(unread_kind, calls):
     def get(path, params=None, **k):
         calls.append((path, dict(params or {})))
         if path.endswith("/messages") and params and params.get("unread") == 1:
-            raise mcs_adapter.MCSError(unread_kind, "GET messages", status=400)
+            raise mcs_contract.MCSError(unread_kind, "GET messages", status=400)
         if path.endswith("/messages"):
             return {"messages": [], "paginate": {"has_next": False}}
         return {"project": {"is_archived": False, "oldest_unread_message": None}}
@@ -1407,11 +1408,11 @@ def test_mark_read_fallback_uses_plain_list_only_when_allowed():
 
 def test_mark_read_without_fallback_or_other_kinds_raises():
     calls = []
-    with pytest.raises(mcs_adapter.MCSError) as e:
+    with pytest.raises(mcs_contract.MCSError) as e:
         _mark_adapter("http_error", calls).mark_patient_read(1, 123)
     assert e.value.kind == "http_error" and len(calls) == 1
     calls.clear()
-    with pytest.raises(mcs_adapter.MCSError) as e:
+    with pytest.raises(mcs_contract.MCSError) as e:
         _mark_adapter("network_error", calls).mark_patient_read(1, 123, fallback_plain=True)
     assert e.value.kind == "network_error" and len(calls) == 1
 
@@ -1474,7 +1475,7 @@ def test_fetch_memo_summary_truncates_oversize_comment():
      "comment": "x", "updated_at": 7},
 ])
 def test_fetch_memo_summary_rejects_bad_shapes(memo):
-    with pytest.raises(mcs_adapter.SchemaError):
+    with pytest.raises(mcs_contract.SchemaError):
         _memo_adapter(memo).fetch_memo_summary(1)
 
 
@@ -1493,7 +1494,7 @@ def test_project_row_without_usable_karte_id_is_tolerated(karte_id):
     snap = _UnreadListAdapter([(100, False, [row])]).list_unread()
     assert snap.patients[0].karte_id is None
     row["karte"] = "x"
-    with pytest.raises(mcs_adapter.SchemaError, match="karte invalid"):
+    with pytest.raises(mcs_contract.SchemaError, match="karte invalid"):
         _UnreadListAdapter([(100, False, [row])]).list_unread()
 
 
@@ -1522,13 +1523,13 @@ def test_hung_mcs_tab_is_closed_and_verified(monkeypatch, kind, closed):
         calls.append(path)
         if path.startswith("/json/close/"):
             tabs[:] = [t for t in tabs if t["id"] != path.rsplit("/", 1)[1]]
-            raise mcs_adapter.MCSError("network_error")   # plain-text reply
+            raise mcs_contract.MCSError("network_error")   # plain-text reply
         return list(tabs)
 
     def cdp_eval(ws, expr, timeout=15):
         assert expr == "1" and timeout == mcs_adapter.HUNG_PROBE_S
         if ws.endswith(hung):
-            raise mcs_adapter.MCSError(kind, retryable=True)
+            raise mcs_contract.MCSError(kind, retryable=True)
         return 1
 
     monkeypatch.setattr(a, "_cdp_json", cdp_json)
@@ -1552,7 +1553,7 @@ def test_heal_never_raises_when_cdp_listing_fails(monkeypatch):
     a = mcs_adapter.MCSAdapter()
 
     def down(*args, **kwargs):
-        raise mcs_adapter.MCSError("network_error")
+        raise mcs_contract.MCSError("network_error")
     monkeypatch.setattr(a, "_cdp_json", down)
     assert a._heal_hung_pages() == 0
 
@@ -1636,7 +1637,7 @@ def test_auto_login_resets_per_attempt_journal_facts(monkeypatch, tmp_path):
 
 # Synthetic regressions: auto_login returns a state, download bootstraps.
 def _net_down(payload, timeout, deadline):
-    raise mcs_adapter.MCSError("network_error", retryable=True)
+    raise mcs_contract.MCSError("network_error", retryable=True)
 
 
 def test_auto_login_expired_deadline_returns_failed():
@@ -1657,7 +1658,7 @@ def test_auto_login_poll_check_session_error_returns_failed(monkeypatch):
     monkeypatch.setattr(a, "_token_via_cdp", lambda: "t" * 32)
 
     def boom():
-        raise mcs_adapter.MCSError("network_error", retryable=True)
+        raise mcs_contract.MCSError("network_error", retryable=True)
     monkeypatch.setattr(a, "check_session", boom)
     assert a.auto_login("/x", "/x", wait_s=5) == "failed"
 

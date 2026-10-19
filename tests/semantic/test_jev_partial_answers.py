@@ -4,12 +4,12 @@ validate_answers stopped at the first defect, so a re-ask sent every
 question of the request again. The first defect is still the error (same
 code, same order); the valid answers ride on it and only the failed
 questions are asked again."""
+import semantic_jev
 import json
 import time
 
 import pytest
 
-import semantic_drain
 import semantic_jev as jev
 import semantic_runtime as runtime
 
@@ -102,7 +102,7 @@ def test_a_chunked_assessment_keeps_its_valid_answers():
     first = {q: GOOD for q in questions} | {"p3": BAD}
     post = _Post(first, {"p3": GOOD})
     client, guarded = _client(post)
-    out = semantic_drain._eval_chunked(guarded, {}, questions,
+    out = semantic_jev.evaluate_chunked(guarded, {}, questions,
                                        time.monotonic() + 60, 12)
     assert sorted(out["answers"]) == sorted(questions)
     assert post.asked == [sorted(questions), ["p3"]]

@@ -3,12 +3,14 @@ adjudicated absence into coverage is held once that upgrade is proven by
 the generation's repair receipt and its stored pre-repair document. A plain
 repaired document, or one without a sound proof, is left as it is. No model,
 Jev, re-queue or new repair. Synthetic ledger only."""
+import semantic_drain
+import semantic_policy
+import semantic_store
 import json
 
 import pytest
 
 import request_loops
-import semantic
 import semantic_extraction as extraction
 import semantic_facts as sf
 import semantic_loops
@@ -39,7 +41,7 @@ def _config():
 
 
 def _scfg():
-    return semantic.semantic_config(_config())[0]
+    return semantic_policy.semantic_config(_config())[0]
 
 
 class World:
@@ -49,9 +51,9 @@ class World:
         patient.messages = [_message(1, body=BODY)]
         patient.messages[0].replies = [_message(2, parent=1, body="承知しました。")]
         db.save_patient(patient)
-        self.policy = semantic.policy_fingerprint(_scfg())
+        self.policy = semantic_policy.policy_fingerprint(_scfg())
         db.artifact_add("semantic_policy", self.policy)
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
         self.fp = bundle["source_fingerprint"]
         member = next(m for m in bundle["members"] if m["message_id"] == 1)
         base = extraction.extract_facts_v2(_model([MED], {"medication": "one"}), member,
@@ -163,7 +165,7 @@ def test_proven_upgrade_holds_the_generation_once(world):
     for kind in (v4.KIND_V4, "canonical_projection", "semantic_summary", "loop_candidate"):
         assert all(m.get("invalidated") is True for _, m in world.rows(kind)
                    if m.get("fingerprint") == world.fp), kind
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     assert semantic_send_gate._summary_current(db, 1, 1, bundle, world.policy) is None
     with pytest.raises(ValueError, match="loop_candidate_stale"):
         request_loops.current_candidate(db.db, 1, loop_id, 1)
@@ -190,7 +192,7 @@ def test_manual_retry_never_reuses_the_held_document_or_repairs_again(world):
         return _model([MED, SYMPTOM], {"medication": "one",
                                        "symptom_state": "one"})(prompt)
     db.semantic_seed(1, [1], {"source": "manual_retry", "notification_free": True})
-    semantic.run_due(db, _config(), {"errors": []}, 1e18, jev_client=_PassJev(), llm_fn=llm)
+    semantic_drain.run_due(db, _config(), {"errors": []}, 1e18, jev_client=_PassJev(), llm_fn=llm)
     assert extractions                                    # re-extracted, not reused
     newest = world.rows("semantic_facts_v2")[-1]
     assert newest[0] != world.repaired_id
@@ -239,7 +241,7 @@ def test_contradicting_pre_repair_documents_are_not_chosen_from(tmp_path):
 def test_non_canonical_fact_source_changes_nothing(world, fact_source):
     db = world.db
     rows = db.db.execute("SELECT artifact_id,meta FROM artifacts ORDER BY artifact_id").fetchall()
-    scfg = semantic.semantic_config(_cfg("enforce", fact_source=fact_source))[0]
+    scfg = semantic_policy.semantic_config(_cfg("enforce", fact_source=fact_source))[0]
     v4.reproject_stale(db, scfg)
     assert db.db.execute("SELECT artifact_id,meta FROM artifacts "
                          "ORDER BY artifact_id").fetchall() == rows

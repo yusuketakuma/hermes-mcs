@@ -211,7 +211,7 @@ def main(argv=None):
     cancel.add_argument("--reason", required=True)
     cancel.add_argument("--confirm-human", action="store_true")
     args = parser.parse_args(argv)
-    from mcs_setup import sqlite_wal_safe
+    from mcs_runtime import sqlite_wal_safe
     try:
         if not sqlite_wal_safe(sqlite3.sqlite_version_info):
             raise ValueError("sqlite_runtime_unsafe")

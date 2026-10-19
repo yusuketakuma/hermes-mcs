@@ -1,4 +1,6 @@
 """Source-scoped alerts retain patient emergencies without inheriting another person's report."""
+import clinical_scope
+import clinical_values
 import json
 
 import pytest
@@ -32,15 +34,15 @@ from test_read_model import _artifact, _db, _hash_of
 ])
 def test_span_scope_inherits_person_and_qualifiers_without_reporter_mask(body, quote, scope):
     start = body.index(quote)
-    assert extract.patient_source_scope(body, start, start + len(quote)) == scope
+    assert clinical_scope.patient_source_scope(body, start, start + len(quote)) == scope
 
 
 def test_known_patient_name_resolves_named_compound_but_unknown_name_does_not():
     body = "架空花子さんご本人が意識を失っています。"
     start, end = body.index("意識"), len(body)
-    assert extract.patient_source_scope(body, start, end) == "unknown"
-    assert extract.patient_source_scope(body, start, end, patient_name="架空花子") == "patient"
-    assert extract.patient_source_scope("職員本人が意識低下", 5, 9, patient_name="職員") == "other"
+    assert clinical_scope.patient_source_scope(body, start, end) == "unknown"
+    assert clinical_scope.patient_source_scope(body, start, end, patient_name="架空花子") == "patient"
+    assert clinical_scope.patient_source_scope("職員本人が意識低下", 5, 9, patient_name="職員") == "other"
 
 
 def test_rule_vitals_do_not_promote_family_values_and_keep_original_mentions():
@@ -49,8 +51,8 @@ def test_rule_vitals_do_not_promote_family_values_and_keep_original_mentions():
     assert document["vitals"] == {"sbp": 120, "dbp": 80, "spo2": 97}
     assert any(mention["scope"] == "family" and mention["values"].get("sbp") == 180
                for mention in document["vital_mentions"])
-    assert extract.patient_vitals({"sbp": 180, "dbp": 100, "spo2": 80}, body) == {}
-    assert extract.patient_vitals(document["vitals"], body) == document["vitals"]
+    assert clinical_values.patient_vitals({"sbp": 180, "dbp": 100, "spo2": 80}, body) == {}
+    assert clinical_values.patient_vitals(document["vitals"], body) == document["vitals"]
 
 
 def test_family_events_remain_mentions_without_becoming_patient_events():

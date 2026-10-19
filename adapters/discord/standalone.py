@@ -10,7 +10,8 @@ import re
 from urllib.parse import urlsplit
 
 from adapters.common import eventlog, paths, text as display_text, worker
-from hermes_plugin import _CONTEXT_FLAGS, _make_handler
+from adapters.common.access import CONTEXT_FLAGS
+from adapters.common.dispatch import make_handler
 from . import cards
 from .actions import _authorizing_channel
 from .tasks import Supervisor
@@ -148,7 +149,7 @@ def _native_context(source, settings, *, slash):
     if str(user.id) not in {str(uid) for uid in settings["allowed_user_ids"]} \
             or channel not in {str(cid) for cid in settings["allowed_chat_ids"]}:
         return None
-    return {**_CONTEXT_FLAGS, "user_id": str(user.id), "chat_id": channel,
+    return {**CONTEXT_FLAGS, "user_id": str(user.id), "chat_id": channel,
             "scope_id": str(guild) if guild is not None else None,
             "profile": settings.get("profile"),
             "message_id": None if slash else str(source.id)}
@@ -220,7 +221,7 @@ class _Commands:
         self.bot = bot
         self.settings = settings
         self.scope = scope
-        self.handler = _make_handler(_CheckedHost(host, scope))
+        self.handler = make_handler(_CheckedHost(host, scope).get_config)
 
     async def slash(self, interaction, text: str):
         if not await self.scope.invoke(self._slash, interaction, text):

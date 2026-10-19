@@ -1,3 +1,5 @@
+import semantic_drain
+import semantic_store
 import copy
 import json
 import stat
@@ -39,11 +41,10 @@ def test_blind_packet_separates_key_and_refuses_mixed_inputs(tmp_path):
 
 
 def test_fixed_bundle_outputs_bind_artifacts_before_baseline_call(tmp_path):
-    import semantic
     from semantic_testkit import _seeded
     db = _seeded(tmp_path)
     try:
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
         target = bundle["members"][0]
         meta = {"fingerprint": bundle["source_fingerprint"],
                 "target_revision": target["revision"], "policy_fingerprint": "policy",
@@ -70,7 +71,7 @@ def test_fixed_bundle_outputs_bind_artifacts_before_baseline_call(tmp_path):
         assert len(calls) == 1
         mixed = copy.deepcopy(bundle)
         mixed["members"][1]["project_id"] = 99
-        mixed["source_fingerprint"] = semantic.bundle_fingerprint(mixed["members"])
+        mixed["source_fingerprint"] = semantic_store.bundle_fingerprint(mixed["members"])
         mixed_candidate, mixed_final = copy.deepcopy(candidate), copy.deepcopy(final)
         for artifact in (mixed_candidate, mixed_final):
             artifact["meta"]["fingerprint"] = mixed["source_fingerprint"]
@@ -87,7 +88,6 @@ def test_fixed_bundle_outputs_bind_artifacts_before_baseline_call(tmp_path):
 
 def test_snapshot_cli_uses_explicit_artifacts_without_database_writes(tmp_path, monkeypatch):
     import time
-    import semantic
     import extract_llm
     from semantic_testkit import _seeded, _cfg, _FakeJev, _llm
     db = _seeded(tmp_path)
@@ -96,7 +96,7 @@ def test_snapshot_cli_uses_explicit_artifacts_without_database_writes(tmp_path, 
             db.db.execute("INSERT INTO attachments(message_id,file_id,name,url,local_path,state) "
                           "VALUES(1,'f','scan.pdf','https://invalid.example/secret','/private/secret','pending')")
         db.semantic_seed(1, [1, 2], {"source": "replay"})
-        result = semantic.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 60,
+        result = semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 60,
                                   jev_client=_FakeJev(), llm_fn=_llm)
         assert result["done"] == 1
         selection = {"case_id": "c", "account_id": "synthetic", "project_id": 1, "split": "test"}
@@ -249,11 +249,10 @@ def test_candidate_on_a_subset_of_methods_is_refused():
 
 
 def test_baseline_context_matches_production_selection_and_labels(tmp_path):
-    import semantic
     from semantic_testkit import _seeded
     db = _seeded(tmp_path)
     try:
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
     finally:
         db.close()
     root, reply = bundle["members"][:2]
@@ -269,7 +268,7 @@ def test_baseline_context_matches_production_selection_and_labels(tmp_path):
                           member(4, "2026-10-01T11:00:00+09:00", "earlier"),
                           member(5, "2026-10-01T12:00:00+09:00", "same second later id"),
                           member(6, "2026-10-01T13:00:00+09:00", "later")]
-    bundle["source_fingerprint"] = semantic.bundle_fingerprint(bundle["members"])
+    bundle["source_fingerprint"] = semantic_store.bundle_fingerprint(bundle["members"])
     meta = {"fingerprint": bundle["source_fingerprint"],
             "target_revision": reply["revision"], "policy_fingerprint": "policy",
             "publication_mode": "shadow"}

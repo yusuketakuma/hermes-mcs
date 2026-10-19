@@ -24,7 +24,7 @@ def test_post_merge_timeout_reaps_child_before_reading_done(monkeypatch, durable
     monkeypatch.setattr(mcs_update.os, "killpg", lambda pid, signal: killed.append((pid, signal)))
     monkeypatch.setattr(mcs_update, "load_config", lambda: {})
     state = {"stages": [{"stage": "done"}] if durable_done else [], "applying": None}
-    monkeypatch.setattr(mcs_update, "load_state", lambda: state)
+    monkeypatch.setattr(mcs_update.journal_store, "load_state", lambda path: state)
     if durable_done:
         mcs_update._run_post_merge("a" * 40)
     else:
@@ -77,7 +77,7 @@ def test_interrupted_update_reaps_before_propagating_original_failure(
 
     monkeypatch.setattr(mcs_update.subprocess, "Popen", start)
     monkeypatch.setattr(mcs_update.os, "killpg", stop)
-    monkeypatch.setattr(mcs_update, "load_state", lambda: {"applying": {}})
+    monkeypatch.setattr(mcs_update.journal_store, "load_state", lambda path: {"applying": {}})
     applying = {"reinstall": True}
     with pytest.raises(failure_type) as caught:
         if operation == "post_merge":

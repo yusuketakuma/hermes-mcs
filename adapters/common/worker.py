@@ -26,7 +26,6 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
-import math
 import os
 import time
 from typing import Any
@@ -102,41 +101,6 @@ async def retry_startup(step, stopping, log) -> bool:
         await asyncio.sleep(wait)
         wait = min(wait * 2, STARTUP_RETRY_MAX_S)
     return False
-
-
-def _card_message_id(records: dict, delivery_id: str) -> str | None:
-    """Latest factual card result for a delivery — dependent parts may
-    only attach to a card the journal proves was posted."""
-    invalid = set()
-    message_ids = _card_message_ids(records, invalid)
-    if delivery_id in invalid:
-        raise ValueError("card_result_timestamp_invalid")
-    return message_ids.get(delivery_id)
-
-
-def _card_message_ids(records: dict, invalid: set | None = None) -> dict[str, str | None]:
-    """Latest primary outcome per delivery, in scan order for equal timestamps."""
-    latest, keys = {}, {}
-    invalid = set() if invalid is None else invalid
-    # _View.values() probes every file per attempt. Walk rows once;
-    # equal timestamps still follow the old attempt-first scan order.
-    order = {aid: i for i, aid in enumerate(records)}
-    for row in journal.all_rows(records):
-        did = row.get("delivery_id")
-        if (row.get("phase") != "result" or row.get("part_id")
-                or not isinstance(did, str)):
-            continue
-        ts = row.get("ts", 0)
-        if type(ts) not in (int, float) or (type(ts) is float and not math.isfinite(ts)):
-            invalid.add(did)  # never attach parts to an unorderable outcome
-            continue
-        key = (ts, order.get(row.get("attempt_id"), 0))
-        if did not in latest or key >= keys[did]:
-            latest[did], keys[did] = row, key
-    return {did: str(row["message_id"])
-            if did not in invalid and row.get("result") == "delivered"
-            and row.get("message_id") else None
-            for did, row in latest.items()} | dict.fromkeys(invalid)
 
 
 class DeliveryWorker:
@@ -229,7 +193,7 @@ class DeliveryWorker:
 
     def _journal_path(self) -> str:
         """The live segment this worker appends to."""
-        return journal._path(self._dirs["state"], self._worker_id,
+        return journal.segment_path(self._dirs["state"], self._worker_id,
                              self._segment)
 
     # -- journal growth bound ------------------------------------------
@@ -583,7 +547,7 @@ class DeliveryWorker:
             records = await asyncio.to_thread(self._jview.refresh)
         mid = (card_message_ids.get(spec["delivery_id"])
                if card_message_ids is not None
-               else _card_message_id(records, spec["delivery_id"]))
+               else journal.card_message_id(records, spec["delivery_id"]))
         if not mid:
             # card unproven. A dead, unclaimed delivery_id never gets
             # another card attempt, so no delivered result can appear
@@ -962,8 +926,7 @@ class DeliveryWorker:
         if not resume:
             return
         records = await asyncio.to_thread(self._jview.refresh)
-        invalid = set()
-        card_message_ids = await asyncio.to_thread(_card_message_ids, records, invalid)
+        card_message_ids, invalid = await asyncio.to_thread(journal.primary_results, records)
         for spec in resume:
             try:
                 if spec["delivery_id"] in invalid:

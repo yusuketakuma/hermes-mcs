@@ -1,10 +1,10 @@
 """Invalid injected clocks cannot make stale health evidence appear healthy."""
+import health_report
 import json
 
 import pytest
 
 import health_watch
-import run_check
 
 
 @pytest.mark.parametrize("now", [float("nan"), float("inf"), float("-inf"), True, 10**400])
@@ -25,8 +25,8 @@ def test_cli_invalid_clock_is_rejected_before_configuration_read(tmp_path, monke
 
 
 def test_first_jobs_only_health_cannot_claim_unread_freshness(tmp_path, monkeypatch):
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
-    unread_at = run_check._unread_at({"jobs_only": True}, "ok", 2000)
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {})
+    unread_at = health_report.unread_at({"jobs_only": True}, "ok", 2000)
     assert unread_at is None
     path = tmp_path / "synthetic-health.json"
     path.write_text(json.dumps({"at": 2000, "unread_at": unread_at,

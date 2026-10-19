@@ -3,10 +3,11 @@
 Builds the human-readable summary text and the code-only degraded
 notice, and owns outbox delivery dedupe and origin-event eligibility.
 
-_emit_degraded resolves pipeline names through the semantic module so
-facade monkeypatch points (thread_bundle/_current/policy_fingerprint)
-keep working."""
+_emit_degraded reads source bundles and current artifacts from semantic_store
+and policy identity from semantic_policy."""
 from __future__ import annotations
+import semantic_policy
+import semantic_store
 
 from collections import Counter
 from datetime import datetime
@@ -366,7 +367,6 @@ def _emit_degraded(ledger, scfg: dict) -> int:
     code-generated degraded notice through the existing outbox — no
     clinical claims, original-check instruction only (spec §19.3).
     Each (root, fingerprint) pair dedupes via delivery_key."""
-    import semantic
     cutoff = time.time() - scfg["delayed_notice_seconds"]
     enqueued = 0
     # Only events still undelivered qualify — a base notification that
@@ -394,14 +394,14 @@ def _emit_degraded(ledger, scfg: dict) -> int:
             f"SELECT COALESCE(parent_id,message_id) r FROM messages "
             f"WHERE project_id=? AND message_id IN ({marks})", (pid, *ids))}
         for root in roots:
-            bundle = semantic.thread_bundle(ledger, pid, root)
+            bundle = semantic_store.thread_bundle(ledger, pid, root)
             if bundle is None:
                 continue
             fp = bundle["source_fingerprint"]
             arrivals = [m["message_id"] for m in bundle["members"]
                         if m["message_id"] in ids]
-            audits = [semantic._current(ledger, semantic.KIND_AUDIT, mid,
-                                        fp, semantic.policy_fingerprint(scfg))
+            audits = [semantic_store._current(ledger, semantic_policy.KIND_AUDIT, mid,
+                                        fp, semantic_policy.policy_fingerprint(scfg))
                       for mid in arrivals]
             if arrivals and all(a and a["meta"].get("audit_status") == "PASS"
                                 for a in audits):
@@ -414,9 +414,35 @@ def _emit_degraded(ledger, scfg: dict) -> int:
                 "delivery_key": dkey, "root_id": root,
                 "degraded": True, "src_event_id": ev["event_id"],
                 "fingerprint": fp,
-                "policy_fingerprint": semantic.policy_fingerprint(scfg),
+                "policy_fingerprint": semantic_policy.policy_fingerprint(scfg),
                 "target_message_ids": arrivals,
                 "text": render_degraded(ledger, pid),
-                "policy_version": semantic.POLICY_VERSION})
+                "policy_version": semantic_policy.POLICY_VERSION})
             enqueued += 1
     return enqueued
+
+
+def apply_mandatory_render(summary: dict, findings: list, status: str,
+                            v2_doc: dict) -> str:
+    """Merge the adjudicated mandatory render layer into ``summary`` and
+    ``findings`` in place; returns the (possibly downgraded) status."""
+    mandatory = mandatory_render(v2_doc)
+    if mandatory["facts"]:
+        summary["mandatory_facts"] = mandatory["facts"]
+        summary["mandatory_fact_ids"] = mandatory["fact_ids"]
+        summary["mandatory_pages"] = mandatory["pages"]
+        summary["mandatory_overview"] = mandatory["overview"]
+    if mandatory["limitations"]:
+        code_lims = summary.setdefault("code_limitations", [])
+        code_lims.extend(x for x in mandatory["limitations"] if x not in code_lims)
+        existing_lims = summary.get("limitations") or []
+        summary["limitations"] = existing_lims + [
+            x for x in mandatory["limitations"]
+            if x not in existing_lims]
+    # A verified fact that cannot reach any page (oversized
+    # single line, or a packing gap) is publication-incomplete —
+    # flag it instead of letting a partial list pass as done.
+    if not mandatory["complete"]:
+        findings.append({"code": "mandatory_render_incomplete"})
+        status = "NEEDS_REVIEW"
+    return status

@@ -1,4 +1,5 @@
 """Event-level medication detail contracts."""
+import semantic_audit
 import time
 
 import pytest
@@ -156,7 +157,6 @@ def test_failed_dimension_resumes_without_repeating_completed_detail(tmp_path):
 
 
 def test_confident_detail_disagreement_blocks_audit_without_rewriting_fact(tmp_path):
-    import semantic
     db = _ledger(tmp_path)
     bundle, facts, _ = _bundle_and_facts(db)
     facts[0]["status"] = "execution_reported"
@@ -167,7 +167,7 @@ def test_confident_detail_disagreement_blocks_audit_without_rewriting_fact(tmp_p
         assert facts[0]["status"] == "execution_reported"
         assert any(f["code"] == "medication_detail_mismatch"
                    and f["dimension"] == "status" for f in result["findings"])
-        assert semantic.audit_status_for(result["findings"], [], True, False) == "NEEDS_REVIEW"
+        assert semantic_audit.audit_status_for(result["findings"], [], True, False) == "NEEDS_REVIEW"
     finally:
         db.close()
 

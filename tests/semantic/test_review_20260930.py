@@ -1,15 +1,16 @@
 """Regressions for the 2026-09-30 adversarial review: each test pins the
 corrected behavior of a reproduced defect. Synthetic data only."""
+import mcs_contract
+import semantic_drain
+import extract_validation
 import json
 import time
 from types import SimpleNamespace
 
 import extract_llm
-import mcs_adapter
 import notify_views
 import rollup
 import run_check
-import semantic
 import semantic_runtime as runtime
 from semantic_testkit import (
     _AuditFailJev, _canonical_cfg, _ledger,
@@ -39,10 +40,10 @@ def test_cap_gate_rejects_failed_unstored_reply(tmp_path):
 
         class Adapter:
             def list_unread(self):
-                return mcs_adapter.UnreadSnapshot(1790000000, [p])
+                return mcs_contract.UnreadSnapshot(1790000000, [p])
 
             def fetch_unread_messages(self, *args):
-                return mcs_adapter.MessageBatch([], error=mcs_adapter.MCSError("http_error", status=400))
+                return mcs_contract.MessageBatch([], error=mcs_contract.MCSError("http_error", status=400))
 
             def oldest_unread_id(self, pid):
                 return 1
@@ -79,7 +80,7 @@ def test_budget_defer_keeps_fact_repair_until_dispatch(tmp_path, monkeypatch):
         return _llm_v2(prompt)
 
     try:
-        first = semantic.run_due(db, cfg, {"errors": []}, clock[0] + 450,
+        first = semantic_drain.run_due(db, cfg, {"errors": []}, clock[0] + 450,
                                   jev_client=_AuditFailJev(choice_map=choices), llm_fn=llm)
         assert first["deferred"] == 1
         repairs = db.artifacts("semantic_fact_repair", message_id=1)
@@ -91,7 +92,7 @@ def test_budget_defer_keeps_fact_repair_until_dispatch(tmp_path, monkeypatch):
         assert not repairs
         with db.db:
             db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-        second = semantic.run_due(db, cfg, {"errors": []}, clock[0] + 450,
+        second = semantic_drain.run_due(db, cfg, {"errors": []}, clock[0] + 450,
                                    jev_client=_AuditFailJev(choice_map=choices), llm_fn=llm)
         assert len(calls) == 2          # the repair is dispatched now
         assert second["job_metrics"]
@@ -137,6 +138,6 @@ def test_chunk_merge_keeps_requests_with_different_condition_and_due():
                             "condition": "血圧が160を超えたら", "due_text": "明日"}]}
     second = {"requests": [{"to": "医師", "action": "連絡", "kind": "request",
                              "condition": "SpO2が90未満なら", "due_text": "今夜"}]}
-    result = extract_llm._merge([first, second])
+    result = extract_validation.merge([first, second])
     assert [r["condition"] for r in result["requests"]] == [
         "血圧が160を超えたら", "SpO2が90未満なら"]

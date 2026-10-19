@@ -21,7 +21,7 @@ import functools
 import time
 from typing import Any
 
-from hermes_plugin import projects
+from adapters.common import projects
 from adapters.common import confirm, envelopes, paths, registry, text
 from .cards import ACTION_PREFIX, MENU_ID, no_pings, thread_drug_view
 

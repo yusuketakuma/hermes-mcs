@@ -1,10 +1,10 @@
 """Durable daily reservations fence interleaved clients before POST."""
+import semantic_jev
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_drain
 import semantic_jev as jev
 import semantic_runtime as runtime
@@ -69,12 +69,12 @@ def test_interleaved_clients_stop_at_the_durable_cap_without_charging_an_attempt
                 hooked.evaluate({"target": {"id": "opaque", "text": "synthetic token"}}, question, end)
         except jev.JevError as error:
             # Same resource classification used by the real per-stage handlers.
-            assert semantic_drain._jev_failure_class(error) == "resource"
+            assert semantic_jev.failure_class(error) == "resource"
             return "deferred"
         assert runtime.transition(ledger, token, "done")
         return "done"
 
-    monkeypatch.setattr(semantic, "_process_job", process)
+    monkeypatch.setattr(semantic_drain, '_process_job', process)
     try:
         out = semantic_drain.run_due(db, config, {"errors": []}, deadline, lane="backlog", max_jobs=1,
                                      jev_client=client_a, llm_fn=lambda *_: None)

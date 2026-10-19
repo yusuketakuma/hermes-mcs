@@ -1,6 +1,7 @@
 """Core miscellany — ledger save/migration/snapshot semantics,
 notify-intent creation, init_data re-authentication, maintenance
 (prune/rotate_log), mcs_util helpers."""
+import mcs_contract
 
 import hashlib
 import json
@@ -17,6 +18,7 @@ import pytest
 
 import job_ops
 import ledger
+import snapshots
 import mcs_adapter
 from ingest_testkit import _ledger, _message, _unread_patient, _att, _msg_at, _iso
 
@@ -196,7 +198,7 @@ def test_published_snapshot_is_non_wal_and_readable(tmp_path):
     db.ensure_patient(1)
     db.close()
     out_dir = tmp_path / "snapshots"
-    published = ledger.publish_snapshot(str(source), str(out_dir))
+    published = snapshots.publish_snapshot(str(source), str(out_dir))
 
     check = sqlite3.connect(f"file:{published}?mode=ro", uri=True)
     assert check.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -223,8 +225,8 @@ def test_snapshot_uses_private_independent_temporary_file(tmp_path, monkeypatch,
         assert validate(path, deadline=deadline)
         return valid
 
-    monkeypatch.setattr(ledger, "_valid_snapshot_candidate", inspect)
-    result = ledger.publish_snapshot(str(source), str(output))
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", inspect)
+    result = snapshots.publish_snapshot(str(source), str(output))
     assert result == (str(published) if valid else None)
     assert concurrent.read_bytes() == b"another publisher"
     if not valid:
@@ -252,8 +254,8 @@ def test_snapshot_validation_expiry_keeps_previous_snapshot(tmp_path, monkeypatc
         assert deadline > ledger.time.monotonic()
         return validate(path, deadline=ledger.time.monotonic() - 1)
 
-    monkeypatch.setattr(ledger, '_valid_snapshot_candidate', expired)
-    assert ledger.publish_snapshot(str(source), str(output)) is None
+    monkeypatch.setattr(snapshots, '_valid_snapshot_candidate', expired)
+    assert snapshots.publish_snapshot(str(source), str(output)) is None
     assert published.read_bytes() == b'synthetic prior snapshot'
     assert sorted(p.name for p in output.iterdir()) == ['ledger-snapshot.db']
 
@@ -276,10 +278,10 @@ def test_message_refetch_repairs_missing_posted_at(tmp_path):
 def test_attachment_refetch_refreshes_existing_url(tmp_path):
     db = _ledger(tmp_path)
     message = _message()
-    message.attachments = [mcs_adapter.Attachment(
+    message.attachments = [mcs_contract.Attachment(
         file_id="file-1", name="old", url="https://www.medical-care.net/old")]
     db.save_messages([message])
-    message.attachments = [mcs_adapter.Attachment(
+    message.attachments = [mcs_contract.Attachment(
         file_id="file-1", name="new", url="https://www.medical-care.net/new")]
     db.save_messages([message])
 
@@ -471,7 +473,7 @@ class _InitAdapter:
         self.logins = 0
 
     def list_projects(self):
-        p = mcs_adapter.UnreadPatient(
+        p = mcs_contract.UnreadPatient(
             project_id=7, project_type="medical", patient_name="S T",
             disease="d", station_name="s", url="u")
         p.last_activity = int(time.time())
@@ -518,9 +520,9 @@ def test_init_data_reauths_embedded_session_expired(
     """An embedded (non-raised) SessionExpired must trigger one re-login
     and the walk must resume from the cursor (FIX-ID1)."""
     adapter = _InitAdapter([
-        mcs_adapter.MessageBatch(
-            [], pages=0, error=mcs_adapter.SessionExpired("expired")),
-        mcs_adapter.MessageBatch([], pages=1, reached=True),
+        mcs_contract.MessageBatch(
+            [], pages=0, error=mcs_contract.SessionExpired("expired")),
+        mcs_contract.MessageBatch([], pages=1, reached=True),
     ])
     assert _run_init_data(monkeypatch, tmp_path, adapter) == 0
     out = capsys.readouterr().out.strip().splitlines()
@@ -534,8 +536,8 @@ def test_init_data_reauth_failure_aborts_patient(
     """A failed re-auth records the failure in the JSON contract instead
     of looping or crashing."""
     adapter = _InitAdapter(
-        [mcs_adapter.MessageBatch(
-            [], error=mcs_adapter.SessionExpired("expired"))],
+        [mcs_contract.MessageBatch(
+            [], error=mcs_contract.SessionExpired("expired"))],
         login_result="manual_required")
     assert _run_init_data(monkeypatch, tmp_path, adapter) == 1
     out = capsys.readouterr().out.strip().splitlines()
@@ -558,8 +560,8 @@ def test_init_data_second_list_projects_failure_is_json(
         def list_projects(self):
             self.calls += 1
             if self.calls == 1:
-                raise mcs_adapter.SessionExpired("first")
-            raise mcs_adapter.MCSError("boom")
+                raise mcs_contract.SessionExpired("first")
+            raise mcs_contract.MCSError("boom")
 
     adapter = Adapter()
     assert _run_init_data(monkeypatch, tmp_path, adapter) == 1
@@ -657,7 +659,7 @@ def test_attachment_permanent_failure_quarantines_immediately(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
     m = _message(mid=5)
-    m.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/1")]
+    m.attachments = [mcs_contract.Attachment("f1", "a.pdf", "https://x/1")]
     db.save_messages([m])
     aid = db.db.execute("SELECT attachment_id FROM attachments").fetchone()[0]
     db.attachment_failed(aid, "http_404")
@@ -667,7 +669,7 @@ def test_attachment_permanent_failure_quarantines_immediately(tmp_path):
     assert row["state"] == "failed" and row["error"] == "http_404"
     # transient kinds still back off instead of quarantining
     m2 = _message(mid=6)
-    m2.attachments = [mcs_adapter.Attachment("f2", "b.pdf", "https://x/9")]
+    m2.attachments = [mcs_contract.Attachment("f2", "b.pdf", "https://x/9")]
     db.save_messages([m2])
     aid2 = db.db.execute(
         "SELECT attachment_id FROM attachments WHERE message_id=6"
@@ -687,7 +689,7 @@ def test_attachment_fresh_url_revives_failed_row(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
     m = _message(mid=5)
-    m.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/1")]
+    m.attachments = [mcs_contract.Attachment("f1", "a.pdf", "https://x/1")]
     db.save_messages([m])
     aid = db.db.execute("SELECT attachment_id FROM attachments").fetchone()[0]
     db.attachment_failed(aid, "http_404")
@@ -698,7 +700,7 @@ def test_attachment_fresh_url_revives_failed_row(tmp_path):
         (aid,)).fetchone()[0] == "failed"
     # fresh url -> pending again, attempts reset
     m2 = _message(mid=5)
-    m2.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/2")]
+    m2.attachments = [mcs_contract.Attachment("f1", "a.pdf", "https://x/2")]
     db.save_messages([m2])
     row = db.db.execute(
         "SELECT state,attempts,url,error FROM attachments "
@@ -714,7 +716,7 @@ def test_attachment_followup_after_accepted_notice(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
     m = _message(mid=5)
-    m.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/1")]
+    m.attachments = [mcs_contract.Attachment("f1", "a.pdf", "https://x/1")]
     db.save_messages([m])
     aid = db.db.execute("SELECT attachment_id FROM attachments").fetchone()[0]
     # accepted notice for mid 5 in the PAST
@@ -746,7 +748,7 @@ def test_no_followup_when_notice_still_pending(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
     m = _message(mid=5)
-    m.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/1")]
+    m.attachments = [mcs_contract.Attachment("f1", "a.pdf", "https://x/1")]
     db.save_messages([m])
     aid = db.db.execute("SELECT attachment_id FROM attachments").fetchone()[0]
     db.outbox_add("new_messages", 1, {"message_ids": [5]})   # pending

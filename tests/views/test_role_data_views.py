@@ -1,4 +1,5 @@
 """Role surfaces share one source: order tables, chat labels and CLI choices never drift apart."""
+import mcs_contract
 import pytest
 
 from patient_context import CATEGORIES
@@ -35,8 +36,7 @@ def test_role_order_only_reorders_sections():
 
 
 def _poster(mid, name, profession, organization, pid=1, parent=None, sender=None):
-    import mcs_adapter
-    return mcs_adapter.Message(
+    return mcs_contract.Message(
         message_id=mid, project_id=pid, parent_id=parent, sender_id=sender, sender_name=name,
         sender_type="user", profession=profession, organization=organization,
         posted_at=f"2026-10-{mid:02d}T09:00:00+09:00", body_html="<p>合成</p>", body_state="full",

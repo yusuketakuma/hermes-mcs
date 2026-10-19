@@ -1,4 +1,5 @@
 """Synthetic Slack signal replies retain their source root through delivery and private views."""
+import notify_parts
 import asyncio
 import json
 
@@ -26,8 +27,8 @@ def test_signal_worker_grants_parts_resume_and_update_original_thread(led, tmp_p
     source = dict(led.db.execute("SELECT * FROM notification_cards WHERE kind='thread'").fetchone())
     root = source["thread_id"]
     # Signal producers normally plan keys only; seal a file here to exercise the worker's existing part contract.
-    plan_attachments = notify_cards._plan_attachments
-    monkeypatch.setattr(notify_cards, "_plan_attachments", lambda db, shown:
+    plan_attachments = notify_parts._plan_attachments
+    monkeypatch.setattr(notify_parts, "_plan_attachments", lambda db, shown:
                         plan_attachments(db, [101] if "synthetic-med-followup" in shown else shown))
     _signal_row(led, "synthetic-med-followup", mids=[101])
     event = _intent(led, "signal", payload={"signal_keys": ["synthetic-med-followup"], "project_id": 1})
@@ -75,8 +76,8 @@ def test_signal_worker_grants_parts_resume_and_update_original_thread(led, tmp_p
     # A presentation refresh retains the card reply and source root.
     with led.db:
         specs = []
-        notify_cards._issue_render(led.db, card_id, SLACK, notify_cards.time.time(), specs, force=True)
-    notify_cards._publish_specs(led.db, notify_cards.notify_dirs(str(world.root)), specs, notify_cards.time.time())
+        notify_cards.issue_render(led.db, card_id, SLACK, notify_cards.time.time(), specs, force=True)
+    notify_cards.publish_specs(led.db, notify_cards.notify_dirs(str(world.root)), specs, notify_cards.time.time())
     update = json.loads(_latest_render(led, card_id)["spec_json"])
     assert update["op"] == "update"
     assert update["delivery"]["message_id"] == card["message_id"]

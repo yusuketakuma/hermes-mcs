@@ -1,10 +1,11 @@
 """Scope and question-correlation contracts for AT-011/AT-019."""
+import semantic_drain
+import semantic_store
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_jev as jev
 from semantic_testkit import _message, _patient, _seeded, _cfg, _FakeJev, _llm
 
@@ -45,7 +46,7 @@ def test_thread_bundle_rejects_unrelated_targets_instead_of_dropping_them(
         ])
         for target_ids in ([3], [4], [2, 3], [2, 4], [True], [1.0], "1"):
             with pytest.raises(ValueError, match="semantic_target_scope"):
-                semantic.thread_bundle(db, 1, 1, target_ids)
+                semantic_store.thread_bundle(db, 1, 1, target_ids)
         row = db.db.execute("SELECT payload FROM fetch_jobs WHERE kind='semantic'").fetchone()
         payload = json.loads(row['payload'])
         payload['targets'] = [2, 4]
@@ -53,7 +54,7 @@ def test_thread_bundle_rejects_unrelated_targets_instead_of_dropping_them(
             db.db.execute("UPDATE fetch_jobs SET payload=? WHERE kind='semantic'",
                           (json.dumps(payload),))
         client = _FakeJev()
-        semantic.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 300,
+        semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 300,
                          jev_client=client, llm_fn=_llm)
         assert not client.calls
         assert db.db.execute("SELECT state FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 'failed'
@@ -68,7 +69,7 @@ def test_invalid_job_payload_is_quarantined_before_dispatch(tmp_path, raw):
         with db.db:
             db.db.execute("UPDATE fetch_jobs SET payload=? WHERE kind='semantic'", (raw,))
         client = _FakeJev()
-        semantic.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 300,
+        semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 300,
                          jev_client=client, llm_fn=_llm)
         assert not client.calls
         assert db.db.execute("SELECT state FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 'failed'

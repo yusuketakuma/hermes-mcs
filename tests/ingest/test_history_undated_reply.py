@@ -1,4 +1,5 @@
 """Synthetic regressions: an undated reply keeps its parent in a since-bounded history walk."""
+import mcs_contract
 from datetime import datetime
 
 import mcs_adapter
@@ -28,7 +29,7 @@ def test_undated_reply_keeps_parent_instead_of_failing_the_walk():
 
 def test_malformed_reply_date_still_fails_closed():
     batch = _adapter("not-a-date").fetch_history(700, SINCE)
-    assert isinstance(batch.error, mcs_adapter.SchemaError)
+    assert isinstance(batch.error, mcs_contract.SchemaError)
     assert batch.messages == []
 
 

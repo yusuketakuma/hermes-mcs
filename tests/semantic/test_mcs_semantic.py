@@ -22,6 +22,15 @@ Coverage map (spec MCS-REFACTOR-FIRST-20260920 AT ids):
   INV-16  shadow artifact kinds   -> test_shadow_full_pipeline
   AT-065  snapshot readers intact -> test_snapshot_view_semantic
 """
+import mcs_contract
+import mcs_util
+import semantic_audit
+import semantic_drain
+import semantic_extraction
+import semantic_jev
+import semantic_policy
+import semantic_render
+import semantic_store
 import datetime
 import json
 import time
@@ -34,7 +43,6 @@ import sys
 import pytest
 
 import ledger
-import mcs_adapter
 import mcs_view
 import semantic
 import semantic_jev as jev
@@ -142,7 +150,6 @@ def test_retryable_status_backoff():
 
 
 def test_payment_required_is_a_resource_wait_not_a_contract_error():
-    import semantic_drain
     import semantic_runtime
     calls = []
 
@@ -157,7 +164,7 @@ def test_payment_required_is_a_resource_wait_not_a_contract_error():
     err = caught.value
     assert (err.kind, err.status, err.retryable) == ("payment_required", 402, False)
     assert len(calls) == 1                       # never blind-retried
-    assert semantic_drain._jev_failure_class(err) == "resource"   # jobs wait
+    assert semantic_jev.failure_class(err) == "resource"   # jobs wait
     assert semantic_runtime._circuit_failure_class(err) == "http_402"
 
 
@@ -200,18 +207,18 @@ def test_verdict_thresholds():
 # ---------- config gate ----------
 
 def test_config_fail_closed():
-    scfg, errs = semantic.semantic_config({})
+    scfg, errs = semantic_policy.semantic_config({})
     assert scfg["mode"] == "off" and errs == []
-    scfg, errs = semantic.semantic_config({"semantic": "yes"})
+    scfg, errs = semantic_policy.semantic_config({"semantic": "yes"})
     assert scfg["mode"] == "off" and errs
-    scfg, errs = semantic.semantic_config(
+    scfg, errs = semantic_policy.semantic_config(
         {"semantic": {"mode": "on", "daily_request_budget": -5,
                       "project_ids": "all"}})
     assert scfg["mode"] == "off"
     assert "config: semantic_mode_invalid" in errs
     assert "config: semantic_daily_request_budget_invalid" in errs
     assert "config: semantic_project_ids_invalid" in errs
-    scfg, _ = semantic.semantic_config(
+    scfg, _ = semantic_policy.semantic_config(
         {"semantic": {"mode": "enforce", "model": "jev-latest"}})
     assert scfg["mode"] == "off"    # non-fixed model -> refuses stage
     for field, value in (("match_threshold", float("nan")),
@@ -219,10 +226,10 @@ def test_config_fail_closed():
                          ("job_budget_seconds", True),
                          ("daily_request_budget", -1),
                          ("match_threhsold", .8)):
-        scfg, errors = semantic.semantic_config(
+        scfg, errors = semantic_policy.semantic_config(
             {"semantic": {"mode": "enforce", field: value}})
         assert errors and scfg["mode"] == "off"
-    scfg, errors = semantic.semantic_config({"semantic": {
+    scfg, errors = semantic_policy.semantic_config({"semantic": {
         "mode": "enforce", "match_threshold": .2, "nomatch_threshold": .8}})
     assert errors and scfg["mode"] == "off"
 
@@ -260,12 +267,12 @@ def test_no_semantic_flag_no_job(tmp_path):
 
 def test_bundle_fixed_shape(tmp_path):
     db = _seeded(tmp_path)
-    b = semantic.thread_bundle(db, 1, 1)
+    b = semantic_store.thread_bundle(db, 1, 1)
     assert b["bundle_id"].startswith("bundle_1_1_")
     assert {m["message_id"] for m in b["members"]} == {1, 2}
     assert b["content_quality"] == "full"
     assert b["registry_version"] == jev.REGISTRY_VERSION
-    st = semantic.jev_state(b, 1)
+    st = semantic_store.jev_state(b, 1)
     assert st["target"]["id"] == "m1" and BODY in st["target"]["text"]
     assert st["context"][0]["id"] == "m2"
     # sender minimization: profession/type only, no display names (INV-05)
@@ -275,13 +282,13 @@ def test_bundle_fixed_shape(tmp_path):
 
 def test_fingerprint_covers_revisions(tmp_path):
     db = _seeded(tmp_path)
-    b1 = semantic.thread_bundle(db, 1, 1)
+    b1 = semantic_store.thread_bundle(db, 1, 1)
     fp1 = b1["source_fingerprint"]
-    assert semantic.thread_bundle(db, 1, 1)["source_fingerprint"] == fp1
+    assert semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"] == fp1
     db.save_messages([_message(2, parent=1, body="返信を編集した本文")])
-    b2 = semantic.thread_bundle(db, 1, 1)
+    b2 = semantic_store.thread_bundle(db, 1, 1)
     assert b2["source_fingerprint"] != fp1       # context edit -> new gen
-    assert semantic.bundle_fingerprint(
+    assert semantic_store.bundle_fingerprint(
         b2["members"], model="jev-x") != b2["source_fingerprint"]
     db.close()
 
@@ -292,7 +299,7 @@ def test_off_no_seed_no_drain(tmp_path):
     db = _seeded(tmp_path)
     assert semantic.seed(db, 1, cfg_path="/nonexistent.json") is None
     res = {"errors": []}
-    out = semantic.run_due(db, {"semantic": {"mode": "off"}}, res,
+    out = semantic_drain.run_due(db, {"semantic": {"mode": "off"}}, res,
                            time.monotonic() + 60)
     assert out == {"mode": "off", "done": 0, "deferred": 0,
                    "failed": 0, "left": None, "budget_exhausted": False,
@@ -305,7 +312,7 @@ def test_shadow_full_pipeline(tmp_path):
     db = _seeded(tmp_path)
     res = {"errors": []}
     fake = _FakeJev(choice_map={})   # claim-support default = 'supports'
-    out = semantic.run_due(db, _cfg("shadow"), res,
+    out = semantic_drain.run_due(db, _cfg("shadow"), res,
                            time.monotonic() + 300,
                            jev_client=fake, llm_fn=_llm)
     assert out["done"] == 1 and res["errors"] == []
@@ -325,7 +332,7 @@ def test_shadow_full_pipeline(tmp_path):
     # open loop created from the explicit_request fact (kind comes from
     # the llm mock — medication_event here, so none expected) — verify
     # no crash and idempotent re-run skips everything
-    out2 = semantic.run_due(db, _cfg("shadow"), res,
+    out2 = semantic_drain.run_due(db, _cfg("shadow"), res,
                             time.monotonic() + 300,
                             jev_client=_FakeJev(), llm_fn=_llm)
     assert out2["done"] == 0
@@ -339,7 +346,7 @@ def test_enforce_enqueues_notice_per_target(tmp_path):
     header still claimed them."""
     db = _seeded(tmp_path)
     res = {"errors": []}
-    out = semantic.run_due(db, _cfg("enforce"), res,
+    out = semantic_drain.run_due(db, _cfg("enforce"), res,
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 1
@@ -355,7 +362,7 @@ def test_enforce_enqueues_notice_per_target(tmp_path):
         assert "要約" in p["text"] and "medical-care.net" in p["text"]
     # replay same generation -> deduped delivery keys, no second intents
     db.semantic_seed(1, [1], {"origin": "replay"})
-    semantic.run_due(db, _cfg("enforce"), res, time.monotonic() + 300,
+    semantic_drain.run_due(db, _cfg("enforce"), res, time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     assert db.db.execute("SELECT count(*) FROM notify_outbox "
                          "WHERE kind='semantic_notice'").fetchone()[0] == 2
@@ -364,7 +371,7 @@ def test_enforce_enqueues_notice_per_target(tmp_path):
 
 def test_shadow_no_outbox(tmp_path):
     db = _seeded(tmp_path)
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     kinds = {r[0] for r in db.db.execute(
@@ -389,7 +396,7 @@ def test_claim_without_evidence_audit(tmp_path):
                 "limitations": []})
         return _llm(prompt)
 
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=llm)
     audit = json.loads(db.artifacts("semantic_audit",
@@ -415,7 +422,7 @@ def test_repair_once_then_needs_review(tmp_path):
             "claim_kind": "reported_fact", "fact_refs": []}],
             "limitations": []})
 
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=llm)
     meta = json.loads(db.artifacts("semantic_audit",
@@ -434,7 +441,7 @@ def test_repair_once_then_needs_review(tmp_path):
 def test_jev_unavailable_leaves_pending(tmp_path):
     db = _seeded(tmp_path)
     res = {"errors": []}
-    semantic.run_due(db, _cfg("shadow", budget=0), res,
+    semantic_drain.run_due(db, _cfg("shadow", budget=0), res,
                      time.monotonic() + 60,
                      jev_client=None, llm_fn=_llm)
     job = db.job_pending("semantic", 1, 1)
@@ -446,7 +453,7 @@ def test_jev_unavailable_leaves_pending(tmp_path):
 
 def test_stale_generation_not_promoted(tmp_path):
     db = _seeded(tmp_path)
-    real_bundle = semantic.thread_bundle
+    real_bundle = semantic_store.thread_bundle
 
     def drifting_bundle(ledg, pid, root, targets=None):
         # second call (the generation guard) sees a 'newer' bundle
@@ -457,14 +464,14 @@ def test_stale_generation_not_promoted(tmp_path):
         return b
 
     drifting_bundle.calls = 0
-    orig = semantic.thread_bundle
-    semantic.thread_bundle = drifting_bundle
+    orig = semantic_store.thread_bundle
+    semantic_store.thread_bundle = drifting_bundle
     try:
-        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                                time.monotonic() + 300,
                                jev_client=_FakeJev(), llm_fn=_llm)
     finally:
-        semantic.thread_bundle = orig
+        semantic_store.thread_bundle = orig
     assert out["deferred"] == 1
     metas = [json.loads(a["meta"]) for a in
              db.artifacts("semantic_audit", message_id=1)]
@@ -478,12 +485,12 @@ def test_replay_dedup_current_fp(tmp_path):
     db = _seeded(tmp_path)
     res = {"errors": []}
     fake = _FakeJev()
-    semantic.run_due(db, _cfg("shadow"), res, time.monotonic() + 300,
+    semantic_drain.run_due(db, _cfg("shadow"), res, time.monotonic() + 300,
                      jev_client=fake, llm_fn=_llm)
     n = fake.requests_made
     (tmp_path / "cfg.json").write_text(json.dumps(_cfg("shadow")))
     semantic.seed(db, 1, cfg_path=str(tmp_path / "cfg.json"))
-    semantic.run_due(db, _cfg("shadow"), res, time.monotonic() + 300,
+    semantic_drain.run_due(db, _cfg("shadow"), res, time.monotonic() + 300,
                      jev_client=fake, llm_fn=_llm)
     # same fingerprint -> current artifacts satisfy the job; Jev is not
     # re-queried for already-assessed targets (AT-059)
@@ -504,7 +511,7 @@ def test_loop_candidate_no_request_write(tmp_path):
                 "evidence_quote": "確認お願いします"}]})
         return _llm(prompt)
 
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=llm)
     cands = db.artifacts("loop_candidate", message_id=1)
@@ -519,15 +526,15 @@ def test_loop_candidate_no_request_write(tmp_path):
 
 
 def test_evidence_span_locate():
-    assert semantic._locate_quote(BODY, "カロナール300mg") == (4, 14)
-    assert semantic._locate_quote(BODY, "存在しない文") is None
-    assert semantic._locate_quote("aa aa", "aa") is None   # ambiguous
+    assert mcs_util.locate_quote_span(BODY, "カロナール300mg") == (4, 14)
+    assert mcs_util.locate_quote_span(BODY, "存在しない文") is None
+    assert mcs_util.locate_quote_span("aa aa", "aa") is None   # ambiguous
     # whitespace-normalized fallback resolves to the verbatim unique span
     src = "投与を\n  開始した。翌日に再評価。"
-    s, e = semantic._locate_quote(src, "投与を 開始した。")
+    s, e = mcs_util.locate_quote_span(src, "投与を 開始した。")
     assert src[s:e] == "投与を\n  開始した。"
-    assert semantic._locate_quote("aa\naa aa aa", "aa aa") is None
-    f, ok, dropped = semantic.extract_facts(
+    assert mcs_util.locate_quote_span("aa\naa aa aa", "aa aa") is None
+    f, ok, dropped = semantic_extraction.extract_facts(
         lambda p: json.dumps({"facts": [{
             "statement": "x", "kind": "other", "status": "not_stated",
             "polarity": "affirmed", "time_text": None, "quantity": None,
@@ -543,7 +550,7 @@ def test_daily_budget_exhausted(tmp_path):
     db.artifact_add("semantic_usage", "{}", project_id=1, message_id=1,
                     meta={"jev_requests": 5})
     res = {"errors": []}
-    out = semantic.run_due(db, _cfg("shadow", budget=5), res,
+    out = semantic_drain.run_due(db, _cfg("shadow", budget=5), res,
                            time.monotonic() + 60,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 0
@@ -559,7 +566,7 @@ def test_degraded_notice_enforce_only(tmp_path):
                   (time.time() - 3600,))
     db.db.commit()
     res = {"errors": []}
-    semantic.run_due(db, _cfg("enforce", delayed_notice_seconds=900,
+    semantic_drain.run_due(db, _cfg("enforce", delayed_notice_seconds=900,
                             budget=0),
                            res, time.monotonic() + 60,
                            jev_client=None, llm_fn=_llm)
@@ -569,7 +576,7 @@ def test_degraded_notice_enforce_only(tmp_path):
     pl = json.loads(rows[0]["payload"])
     assert pl["degraded"] is True and "原文" in pl["text"]
     # second drain -> same delivery_key -> no duplicate
-    semantic.run_due(db, _cfg("enforce", delayed_notice_seconds=900,
+    semantic_drain.run_due(db, _cfg("enforce", delayed_notice_seconds=900,
                             budget=0),
                      res, time.monotonic() + 60, jev_client=None,
                      llm_fn=_llm)
@@ -587,7 +594,7 @@ def test_degraded_notice_enforce_only(tmp_path):
     db2.db.execute("UPDATE notify_outbox SET created_at=?",
                    (time.time() - 3600,))
     db2.db.commit()
-    semantic.run_due(db2, _cfg("shadow", delayed_notice_seconds=60),
+    semantic_drain.run_due(db2, _cfg("shadow", delayed_notice_seconds=60),
                      {"errors": []}, time.monotonic() + 60,
                      jev_client=_FakeJev(), llm_fn=_llm)
     assert db2.db.execute("SELECT count(*) FROM notify_outbox "
@@ -616,7 +623,7 @@ def test_off_flip_mid_drain(tmp_path):
 
     fake = _FakeJev()
     res = {"errors": []}
-    semantic.run_due(db, json.loads(cfgf.read_text()), res,
+    semantic_drain.run_due(db, json.loads(cfgf.read_text()), res,
                      time.monotonic() + 300, jev_client=fake,
                      llm_fn=flipping, cfg_path=str(cfgf))
     pending = db.db.execute("SELECT count(*) FROM fetch_jobs "
@@ -631,7 +638,7 @@ def test_notifier_semantic_notice_render(tmp_path, monkeypatch):
     no patient lookups at send time (INV-14). The send-time gates
     (enforce mode + live fingerprint) pass on the live generation."""
     db = _seeded(tmp_path)
-    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     ev = db.db.execute("SELECT * FROM notify_outbox "
@@ -650,7 +657,7 @@ def test_snapshot_view_semantic(tmp_path):
     """Artifacts land in the published snapshot and mcs_view exposes
     them read-only — same reader gate as every other table (AT-065)."""
     db = _seeded(tmp_path)
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     snap = ledger.publish_snapshot(str(tmp_path / "ledger.db"),
@@ -680,9 +687,9 @@ def test_degraded_skips_delivered_history(tmp_path):
     db.db.execute("UPDATE notify_outbox SET created_at=?",
                   (time.time() - 7200,))
     db.db.commit()
-    scfg = semantic.semantic_config(
+    scfg = semantic_policy.semantic_config(
         _cfg("enforce", delayed_notice_seconds=900))[0]
-    assert semantic._emit_degraded(db, scfg) == 1   # only the pending one
+    assert semantic_render._emit_degraded(db, scfg) == 1   # only the pending one
     rows = db.db.execute(
         "SELECT payload FROM notify_outbox "
         "WHERE kind='semantic_notice'").fetchall()
@@ -691,7 +698,7 @@ def test_degraded_skips_delivered_history(tmp_path):
     assert pl["degraded"] is True
     assert pl["src_event_id"] != old   # not the delivered event
     # idempotent — a second scan adds nothing
-    assert semantic._emit_degraded(db, scfg) == 0
+    assert semantic_render._emit_degraded(db, scfg) == 0
     db.close()
 
 
@@ -701,7 +708,7 @@ def test_replay_heals_missing_notify_intent(tmp_path):
     the next run instead of marking done with the intent gone."""
     db = _seeded(tmp_path)
     res = {"errors": []}
-    out = semantic.run_due(db, _cfg("enforce"), res,
+    out = semantic_drain.run_due(db, _cfg("enforce"), res,
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 1
@@ -711,7 +718,7 @@ def test_replay_heals_missing_notify_intent(tmp_path):
                   "WHERE kind='semantic_notice'")
     db.db.commit()
     db.semantic_seed(1, [1], {"origin": "replay"})
-    out2 = semantic.run_due(db, _cfg("enforce"), res,
+    out2 = semantic_drain.run_due(db, _cfg("enforce"), res,
                             time.monotonic() + 300,
                             jev_client=_FakeJev(), llm_fn=_llm)
     assert out2["done"] == 1
@@ -735,7 +742,7 @@ def test_pending_audit_retries_then_passes(tmp_path):
             return super().evaluate(state, questions, deadline)
 
     res = {"errors": []}
-    out = semantic.run_due(db, _cfg("enforce"), res,
+    out = semantic_drain.run_due(db, _cfg("enforce"), res,
                            time.monotonic() + 300,
                            jev_client=AuditDown(), llm_fn=_llm)
     assert out["done"] == 0 and out["deferred"] == 1
@@ -749,7 +756,7 @@ def test_pending_audit_retries_then_passes(tmp_path):
     db.db.execute("UPDATE fetch_jobs SET next_try=0 "
                   "WHERE kind='semantic'")
     db.db.commit()
-    out2 = semantic.run_due(db, _cfg("enforce"), res,
+    out2 = semantic_drain.run_due(db, _cfg("enforce"), res,
                             time.monotonic() + 300,
                             jev_client=_FakeJev(), llm_fn=_llm)
     assert out2["done"] == 1
@@ -779,7 +786,7 @@ def test_long_body_chunked_fully(tmp_path):
         seen.append(prompt)
         return _llm(prompt)
 
-    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=llm)
     assert out["done"] == 1
@@ -806,7 +813,7 @@ def test_claim_audit_sees_surrounding_context(tmp_path):
                 captured.append(state)
             return super().evaluate(state, questions, deadline)
 
-    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=Cap(), llm_fn=_llm)
     assert out["done"] == 1 and captured
@@ -816,7 +823,7 @@ def test_claim_audit_sees_surrounding_context(tmp_path):
     win = next(c["text"] for c in ctx if c["role"] == "evidence_context")
     assert "確認お願いします" in win    # outside the bare quote
     source = json.loads(next(c["text"] for c in ctx if c["role"] == "evidence_metadata"))
-    member = semantic.thread_bundle(db, 1, 1)["members"][0]
+    member = semantic_store.thread_bundle(db, 1, 1)["members"][0]
     assert source == {key: member[key] for key in
                       ("message_id", "parent_id", "revision", "posted_at", "sender")}
     db.close()
@@ -829,7 +836,7 @@ def test_loop_scan_not_capped(tmp_path):
     db.save_messages([_message(i, parent=1, body=f"確認事項{i}", unread=False)
                       for i in range(20, 32)])
     members = {m["message_id"]: m for m in
-               semantic.thread_bundle(db, 1, 1)["members"]}
+               semantic_store.thread_bundle(db, 1, 1)["members"]}
     for i in range(20, 32):          # 12 sourced same-thread open candidates
         db.artifact_add("loop_candidate", json.dumps({
             "loop_id": f"loop_{i}", "project_id": 1,
@@ -842,10 +849,10 @@ def test_loop_scan_not_capped(tmp_path):
             "assignee_text": None, "due_text": None,
             "state": "PROPOSED", "history": []}),
             project_id=1, message_id=i, meta={"candidate_fp": f"fp{i}",
-                "fingerprint": semantic.thread_bundle(db, 1, 1)["source_fingerprint"],
-                "policy_fingerprint": semantic.policy_fingerprint(semantic.semantic_config(_cfg())[0])})
+                "fingerprint": semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"],
+                "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg())[0])})
     res = {"errors": []}
-    out = semantic.run_due(db, _cfg("shadow"), res,
+    out = semantic_drain.run_due(db, _cfg("shadow"), res,
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 1
@@ -857,7 +864,7 @@ def test_loop_scan_not_capped(tmp_path):
     n0 = len(evs)
     # replay on the same generation: pair dedup -> zero new events
     db.semantic_seed(1, [1], {"origin": "replay"})
-    semantic.run_due(db, _cfg("shadow"), res,
+    semantic_drain.run_due(db, _cfg("shadow"), res,
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     assert db.db.execute(
@@ -876,7 +883,7 @@ def test_nonretryable_jev_error_fails_bounded(tmp_path):
         db.db.execute("UPDATE fetch_jobs SET next_try=0 "
                       "WHERE kind='semantic'")
         db.db.commit()
-        semantic.run_due(db, _cfg("shadow"), res,
+        semantic_drain.run_due(db, _cfg("shadow"), res,
                          time.monotonic() + 300,
                          jev_client=fake, llm_fn=_llm)
     job = db.db.execute(
@@ -893,11 +900,11 @@ def test_jev_usage_deltas_exact(tmp_path):
     calls, not a cumulative counter snapshotted per artifact."""
     db = _seeded(tmp_path)
     fake = _FakeJev()
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=fake, llm_fn=_llm)
     assert fake.requests_made > 0
-    assert semantic.jev_usage_today(db) == fake.requests_made
+    assert semantic_store.jev_usage_today(db) == fake.requests_made
     db.close()
 
 
@@ -905,7 +912,7 @@ def test_sem_block_drops_stale_revision(tmp_path, monkeypatch):
     """INV-15: a PASS summary describes one revision — after a body
     edit the audited block must not attach to the new revision."""
     db = _seeded(tmp_path)
-    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     import notify_flush
@@ -933,7 +940,7 @@ def test_off_mode_parks_queued_notice(tmp_path, monkeypatch):
     """§22.1: an enforce notice committed before an OFF flip must never
     send — the intent stays queued for a later enforce flush."""
     db = _seeded(tmp_path)
-    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     n = db.db.execute("SELECT COUNT(*) c FROM notify_outbox "
@@ -973,7 +980,7 @@ def test_stale_generation_notice_suppressed(tmp_path, monkeypatch):
     """§18.4: a PASS notice enqueued for fingerprint fp must suppress
     terminally once the thread's live fingerprint has moved on."""
     db = _seeded(tmp_path)
-    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     p = _patient(db)
@@ -1018,7 +1025,7 @@ def test_history_import_seeds_semantic(tmp_path):
 
     class Adapter:
         def fetch_history(self, *a, **k):
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 [_message(5)], pages=1, reached=True)
 
         def fetch_thread(self, *a, **k):
@@ -1052,7 +1059,7 @@ def test_history_import_never_notifies(tmp_path):
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(50)], project_id=1, semantic=True)
-    out = semantic.run_due(db, _cfg("enforce"), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 1
@@ -1071,7 +1078,7 @@ def test_replay_of_imported_message_no_notice(tmp_path):
     _patient(db)
     db.save_messages([_message(50)], project_id=1, semantic=False)
     semantic.seed(db, 50, cfg_path=_cfg_path(tmp_path, "enforce"))
-    out = semantic.run_due(db, _cfg("enforce"), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 1
@@ -1092,7 +1099,7 @@ def test_arrival_merge_keeps_eligibility(tmp_path):
         "SELECT payload FROM fetch_jobs WHERE kind='semantic'"
     ).fetchone()["payload"])
     assert pl.get("eligible") is True
-    out = semantic.run_due(db, _cfg("enforce"), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 1
@@ -1113,7 +1120,7 @@ def test_notice_suppressed_when_src_event_suppressed(tmp_path,
     """Send-time gate: if the origin arrival intent was suppressed
     (e.g. archive), the semantic follow-up must not deliver."""
     db = _seeded(tmp_path)
-    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     ev = db.db.execute("SELECT * FROM notify_outbox "
@@ -1146,7 +1153,7 @@ def test_chunk_failure_defers_without_partial_facts(tmp_path):
                 return None           # chunk 2 fails
         return _llm(prompt)
 
-    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=flaky)
     assert out["deferred"] == 1
@@ -1155,7 +1162,7 @@ def test_chunk_failure_defers_without_partial_facts(tmp_path):
     db.db.execute("UPDATE fetch_jobs SET next_try=0 "
                   "WHERE kind='semantic'")
     db.db.commit()
-    out2 = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    out2 = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                             time.monotonic() + 300,
                             jev_client=_FakeJev(), llm_fn=_llm)
     assert out2["done"] == 1
@@ -1171,7 +1178,7 @@ def test_pending_assess_artifact_dedup(tmp_path):
     db = _seeded(tmp_path)
     res = {"errors": []}
     for _ in range(3):
-        semantic.run_due(db, _cfg("shadow", budget=0), res,
+        semantic_drain.run_due(db, _cfg("shadow", budget=0), res,
                          time.monotonic() + 300,
                          jev_client=None, llm_fn=_llm)
         db.db.execute("UPDATE fetch_jobs SET next_try=0 "
@@ -1202,7 +1209,7 @@ def test_daily_budget_binds_inside_job(tmp_path):
 
     db = _seeded(tmp_path)
     client = jev.JevClient(api_key="k", post_fn=post)
-    semantic.run_due(db, _cfg("enforce", budget=3),
+    semantic_drain.run_due(db, _cfg("enforce", budget=3),
                      {"errors": []}, time.monotonic() + 300,
                      jev_client=client, llm_fn=_llm)
     assert client.requests_made == 3        # capped mid-job, not after
@@ -1249,7 +1256,7 @@ def test_backfill_seeds_read_arrivals(tmp_path):
             "SELECT payload FROM fetch_jobs WHERE kind='semantic'"):
         covered.update(json.loads(r["payload"])["targets"])
     assert covered == {60, 61}
-    out = semantic.run_due(db, _cfg("enforce"), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 2
@@ -1298,7 +1305,7 @@ def test_quantity_untraced_needs_quote():
                       "revision_id": "r1", "start_codepoint": s,
                       "end_codepoint": s + len(quote),
                       "quote": quote}}]
-    findings = semantic.audit_code(
+    findings = semantic_audit.audit_code(
         {"members": [member]}, facts, {"claims": [], "limitations": []})
     assert any(f["code"] == "quantity_untraced" for f in findings)
     # a quantity inside its own quote still traces fine
@@ -1307,7 +1314,7 @@ def test_quantity_untraced_needs_quote():
     facts[0]["_evidence"]["quote"] = quote2
     facts[0]["_evidence"]["start_codepoint"] = s
     facts[0]["_evidence"]["end_codepoint"] = s + len(quote2)
-    findings = semantic.audit_code(
+    findings = semantic_audit.audit_code(
         {"members": [member]}, facts, {"claims": [], "limitations": []})
     assert not any(f["code"] == "quantity_untraced" for f in findings)
 
@@ -1342,7 +1349,7 @@ def test_deferred_run_preserves_completed_results(tmp_path):
         return _llm(prompt)
 
     res = {"errors": []}
-    out = semantic.run_due(db, _cfg("enforce"), res,
+    out = semantic_drain.run_due(db, _cfg("enforce"), res,
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=llm)
     assert out["deferred"] == 1
@@ -1356,7 +1363,7 @@ def test_deferred_run_preserves_completed_results(tmp_path):
     db.db.execute("UPDATE fetch_jobs SET next_try=0 "
                   "WHERE kind='semantic'")
     db.db.commit()
-    out2 = semantic.run_due(db, _cfg("enforce"), res,
+    out2 = semantic_drain.run_due(db, _cfg("enforce"), res,
                             time.monotonic() + 300,
                             jev_client=_FakeJev(), llm_fn=llm)
     assert out2["done"] == 1
@@ -1381,9 +1388,9 @@ def test_project_filter_defers_not_starves(tmp_path):
     cfg = _cfg("shadow", project_ids=[1])
     res = {"errors": []}
     # first window: the 4 lowest-id jobs are out of scope -> deferred
-    semantic.run_due(db, cfg, res, time.monotonic() + 300,
+    semantic_drain.run_due(db, cfg, res, time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm, max_jobs=4)
-    out = semantic.run_due(db, cfg, res, time.monotonic() + 300,
+    out = semantic_drain.run_due(db, cfg, res, time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm,
                            max_jobs=4)
     assert out["done"] == 1
@@ -1413,7 +1420,7 @@ def test_loop_candidate_records_history(tmp_path):
                 "evidence_quote": "確認お願いします"}]})
         return _llm(prompt)
 
-    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=llm)
     assert out["done"] == 1
@@ -1432,11 +1439,11 @@ def test_loop_candidate_records_history(tmp_path):
         "trigger_message_id": 2,
         "origin_revision": cand["origin"]["revision"],
         "trigger_revision": next(m["revision"] for m in
-            semantic.thread_bundle(db, 1, 1)["members"] if m["message_id"] == 2),
+            semantic_store.thread_bundle(db, 1, 1)["members"] if m["message_id"] == 2),
         "root_id": 1,
         "relation": "completion_report"}), project_id=1, message_id=2,
-        meta={"fingerprint": semantic.thread_bundle(db, 1, 1)["source_fingerprint"],
-              "policy_fingerprint": semantic.policy_fingerprint(semantic.semantic_config(_cfg())[0])})
+        meta={"fingerprint": semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"],
+              "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg())[0])})
     snap = ledger.publish_snapshot(str(tmp_path / "ledger.db"),
                                    str(tmp_path / "snaps"))
     view = mcs_view.View(snap)
@@ -1487,7 +1494,7 @@ def test_eligible_priority_survives_compact_payload(tmp_path):
                      "eligible": True}, separators=(",", ":")),
          now, now))
     db.db.commit()
-    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm,
                            max_jobs=1)
@@ -1506,7 +1513,7 @@ def test_empty_targets_root_is_target(tmp_path):
     p = _patient(db)
     p.messages = [_message(1), _message(9, parent=1)]
     db.save_patient(p)
-    source = next(m for m in semantic.thread_bundle(db, 1, 1)["members"]
+    source = next(m for m in semantic_store.thread_bundle(db, 1, 1)["members"]
                   if m["message_id"] == 9)
     db.artifact_add("loop_candidate", json.dumps({
         "loop_id": "loop_x", "project_id": 1, "kind": "pending_item",
@@ -1518,10 +1525,10 @@ def test_empty_targets_root_is_target(tmp_path):
         "assignee_text": None,
         "due_text": None, "state": "PROPOSED", "history": []}),
         project_id=1, message_id=9, meta={
-            "fingerprint": semantic.thread_bundle(db, 1, 1)["source_fingerprint"],
-            "policy_fingerprint": semantic.policy_fingerprint(semantic.semantic_config(_cfg())[0])})
+            "fingerprint": semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"],
+            "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg())[0])})
     db.job_add("semantic", 1, 1, payload={})   # no "targets" key
-    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 1
@@ -1536,7 +1543,7 @@ def test_config_threshold_order_fail_closed():
     """match <= nomatch would silently collapse the UNDETERMINED band
     (verdict_for checks MATCH first) — the inversion is reported and
     the whole feature fails closed to off."""
-    scfg, errs = semantic.semantic_config(
+    scfg, errs = semantic_policy.semantic_config(
         {"semantic": {"mode": "shadow", "match_threshold": 0.3,
                       "nomatch_threshold": 0.7}})
     assert "config: semantic_threshold_order_invalid" in errs
@@ -1548,7 +1555,7 @@ def test_edit_reseeds_semantic(tmp_path):
     winning content_hash changes, the fingerprint moves, and a semantic
     job must be re-seeded instead of leaving stale artifacts forever."""
     db = _seeded(tmp_path)
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     assert db.job_state("semantic", 1, 1) == "done"
@@ -1565,7 +1572,7 @@ def test_identical_resave_does_not_reseed(tmp_path):
     """An unchanged re-save must not burn a re-evaluation — only a real
     revision change re-seeds."""
     db = _seeded(tmp_path)
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     assert db.job_state("semantic", 1, 1) == "done"
@@ -1594,7 +1601,7 @@ def test_parked_notice_not_counted_skipped(tmp_path, monkeypatch):
     notify_incomplete fires on every hourly re-check while the mode
     gate is down."""
     db = _seeded(tmp_path)
-    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     import notify_flush
@@ -1619,7 +1626,7 @@ def test_summary_prompt_carries_verdicts(tmp_path):
         seen.append(prompt)
         return _llm(prompt)
 
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=capture)
     summ = next(p for p in seen if "要約器" in p)
@@ -1632,7 +1639,7 @@ def test_jst_day_boundary():
     actual day — not UTC midnight (09:00 JST)."""
     t = datetime.datetime(2026, 9, 20, 16, 0,
                           tzinfo=datetime.timezone.utc).timestamp()
-    start = semantic._jst_day_start(t)
+    start = semantic_store._jst_day_start(t)
     jst = datetime.timezone(datetime.timedelta(hours=9))
     got = datetime.datetime.fromtimestamp(start, tz=jst)
     assert (got.year, got.month, got.day,
@@ -1658,7 +1665,7 @@ def test_oversize_marker_survives_storage(tmp_path):
     p = _patient(db)
     p.messages = [_message(1, body=big)]
     db.save_patient(p, notify={"source": "unread"}, semantic=True)
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     meta = json.loads(db.db.execute(
@@ -1745,7 +1752,7 @@ def test_malformed_detail_answer_retries_bounded_instead_of_failing(tmp_path,
 
     db = _seeded(tmp_path)
     fake = DetailFlaky()
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300, jev_client=fake, llm_fn=_llm)
     job = db.db.execute(
         "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
@@ -1753,7 +1760,7 @@ def test_malformed_detail_answer_retries_bounded_instead_of_failing(tmp_path,
     for _ in range(8):
         db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
         db.db.commit()
-        semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                          time.monotonic() + 300, jev_client=fake, llm_fn=_llm)
     job = db.db.execute(
         "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
@@ -1774,9 +1781,8 @@ def test_per_answer_defect_retries_at_every_jev_site(code, expected):
     medication-detail and coverage sites. The shared classifier now
     applies it to fact/claim audit, propositions, loops and QC alike;
     whole-envelope protocol errors stay terminal."""
-    import semantic_drain
     error = jev.JevError("protocol_error", code)
-    assert semantic_drain._jev_failure_class(error) == expected
+    assert semantic_jev.failure_class(error) == expected
 
 
 def test_malformed_claim_audit_answer_retries_bounded(tmp_path):
@@ -1792,7 +1798,7 @@ def test_malformed_claim_audit_answer_retries_bounded(tmp_path):
 
     db = _seeded(tmp_path)
     fake = ClaimFlaky()
-    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300, jev_client=fake, llm_fn=_llm)
     job = db.db.execute(
         "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
@@ -1880,7 +1886,7 @@ class _ClaimCapture(_FakeJev):
 def test_claims_share_requests_up_to_the_configured_size():
     bundle, summary = _claim_case(13)
     client = _ClaimCapture(choice_map={"claim_1_12": "not_supported"})
-    findings, evaluated = semantic.audit_claims(client, bundle, summary,
+    findings, evaluated = semantic_audit.audit_claims(client, bundle, summary,
                                              time.monotonic() + 60, 0.7, 12)
     assert evaluated
     assert [len(q) for _, q in client.sent] == [12, 1]
@@ -1892,7 +1898,7 @@ def test_claims_share_requests_up_to_the_configured_size():
 def test_each_question_names_only_its_own_claim_and_evidence():
     bundle, summary = _claim_case(2)
     client = _ClaimCapture()
-    semantic.audit_claims(client, bundle, summary, time.monotonic() + 60)
+    semantic_audit.audit_claims(client, bundle, summary, time.monotonic() + 60)
     [(state, questions)] = client.sent
     assert state["target"]["claims"] == [{"id": "claim_1_0", "text": "合成の主張0"},
                                          {"id": "claim_1_1", "text": "合成の主張1"}]
@@ -1907,7 +1913,7 @@ def test_each_question_names_only_its_own_claim_and_evidence():
 def test_a_shared_source_is_sent_once():
     bundle, summary = _claim_case(3, shared=True)
     client = _ClaimCapture()
-    semantic.audit_claims(client, bundle, summary, time.monotonic() + 60)
+    semantic_audit.audit_claims(client, bundle, summary, time.monotonic() + 60)
     [(state, questions)] = client.sent
     assert [e["id"] for e in state["context"]] == [
         "ev_shared", "ev_shared_ctx", "ev_shared_meta"]
@@ -1919,7 +1925,7 @@ def test_a_claim_without_evidence_cites_none():
     bundle, summary = _claim_case(1)
     summary["claims"][0]["evidence_refs"] = []
     client = _ClaimCapture()
-    semantic.audit_claims(client, bundle, summary, time.monotonic() + 60)
+    semantic_audit.audit_claims(client, bundle, summary, time.monotonic() + 60)
     [(state, questions)] = client.sent
     assert state["context"] == []
     assert "(state.context entries: none)" in questions["claim_1_0"]["instructions"]
@@ -1928,7 +1934,7 @@ def test_a_claim_without_evidence_cites_none():
 def test_a_failed_request_leaves_the_audit_unevaluated():
     bundle, summary = _claim_case(3)
     client = _ClaimCapture(fail_on=2, choice_map={"claim_1_1": "contradicts"})
-    findings, evaluated = semantic.audit_claims(client, bundle, summary,
+    findings, evaluated = semantic_audit.audit_claims(client, bundle, summary,
                                              time.monotonic() + 60, 0.7, 2)
     assert not evaluated
     assert findings == [{"code": "claim_contradicts", "claim": "claim_1_1",
@@ -1941,7 +1947,7 @@ def test_a_failed_request_leaves_the_audit_unevaluated():
 def test_an_invalid_request_size_leaves_the_audit_unevaluated(size):
     bundle, summary = _claim_case(2)
     client = _ClaimCapture()
-    findings, evaluated = semantic.audit_claims(client, bundle, summary,
+    findings, evaluated = semantic_audit.audit_claims(client, bundle, summary,
                                                 time.monotonic() + 60, 0.7, size)
     assert (findings, evaluated) == ([{"code": "support_unevaluated"}], False)
     assert client.sent == []
@@ -1949,16 +1955,16 @@ def test_an_invalid_request_size_leaves_the_audit_unevaluated(size):
 
 def test_the_drain_passes_the_configured_request_size(tmp_path, monkeypatch):
     seen = []
-    real = semantic.audit_claims
+    real = semantic_audit.audit_claims
 
     def audit_spy(*args):
         seen.append(args[5])
         return real(*args)
 
-    monkeypatch.setattr(semantic, "audit_claims", audit_spy)
+    monkeypatch.setattr(semantic_audit, 'audit_claims', audit_spy)
     db = _seeded(tmp_path)
     try:
-        out = semantic.run_due(db, _cfg("shadow", max_questions_per_request=5),
+        out = semantic_drain.run_due(db, _cfg("shadow", max_questions_per_request=5),
                                {"errors": []}, time.monotonic() + 300,
                                jev_client=_FakeJev(), llm_fn=_llm)
         assert out["done"] == 1 and seen and set(seen) == {5}
@@ -1974,9 +1980,9 @@ def test_semantic_paths_follow_mcs_root(tmp_path):
     root = tmp_path / "root"
     code = (
         "import sys; sys.path.insert(0, %r); sys.path.insert(0, %r);"
-        "import _mcs_path, semantic;"
+        "import _mcs_path, semantic, semantic_transport;"
         "print(semantic.DB); print(semantic.CONF_PATH);"
-        "print(semantic._FMT_PATH); print(semantic._LONG_PATH)"
+        "print(semantic_transport._FMT_PATH); print(semantic_transport._LONG_PATH)"
         % (os.path.join(ROOT, "mcs"), os.path.join(ROOT, "mcs", "semantic")))
     env = {**os.environ, "MCS_ROOT": str(root),
            "HOME": str(tmp_path / "fakehome")}

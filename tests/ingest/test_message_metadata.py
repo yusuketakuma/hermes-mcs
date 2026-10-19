@@ -1,4 +1,5 @@
 """Synthetic metadata capture and shadow isolation contracts."""
+import health_report
 
 import json
 import sqlite3
@@ -9,7 +10,9 @@ from types import SimpleNamespace
 import pytest
 
 from ledger import Ledger, valid_mcs_db
-from mcs_adapter import MCSAdapter, MCSError, SchemaError, _norm_message
+from mcs_adapter import MCSAdapter
+from mcs_contract import MCSError, SchemaError
+from mcs_payload import normalize_message as _norm_message
 from mcs_signals import record_station_staff
 from message_metadata import get_message_metadata
 from run_check import stage_metadata_shadow
@@ -326,7 +329,7 @@ def test_missing_shadow_fields_do_not_starve_later_targets(tmp_path):
 
 
 def test_shadow_expiry_stops_further_optional_gets(tmp_path):
-    from mcs_adapter import SessionExpired
+    from mcs_contract import SessionExpired
 
     db = Ledger(str(tmp_path / "ledger.db"))
     with db.db:
@@ -351,7 +354,7 @@ def test_shadow_expiry_stops_further_optional_gets(tmp_path):
 
 
 def test_shadow_schema_error_then_expiry_counts_remaining_targets(tmp_path):
-    from mcs_adapter import SessionExpired
+    from mcs_contract import SessionExpired
 
     db = Ledger(str(tmp_path / "ledger.db"))
     with db.db:
@@ -628,12 +631,12 @@ def test_scheduled_tick_and_deep_share_shadow_after_semantic(
 
 def test_health_shadow_contains_safe_counts_without_message_ids(tmp_path, monkeypatch):
     db = Ledger(str(tmp_path / "ledger.db"))
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     shadow = {"mode": "shadow", "due": 5, "fetched": 1, "deferred": 3,
               "budget_s": 25, "elapsed_s": 5, "deferred_reasons": {"session_expired": 3},
               "errors": [{"message_id": 123, "kind": "session_expired"}],
               "message_ids": [123], "project_id": 1}
-    health = run_check._health(db, {"errors": [], "metadata_shadow": shadow}, "ok")
+    health = health_report.build_health(db.db, {"errors": [], "metadata_shadow": shadow}, "ok")
     summary = health["metadata_shadow"]
     assert summary["error_count"] == 1
     assert summary["budget_s"] == 25 and summary["elapsed_s"] == 5

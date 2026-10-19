@@ -2,6 +2,7 @@
 optional button row's component budget. Synthetic temp ledger only."""
 from __future__ import annotations
 
+import notify_scope
 import json
 
 import pytest
@@ -36,8 +37,8 @@ def test_extra_row_is_budgeted(led):
     spec = _delivered_digest(led)
     assert [b["id"] for b in spec["parts"]["action_rows"][-1]] == [
         "digest", "mytasks", "unacked"]
-    card = notify_cards._card_row(led.db, 1)
-    content = notify_render._card_content(led.db, card)
+    card = notify_scope.card_row(led.db, 1)
+    content = notify_render.card_content(led.db, card)
     content["manifest_id"] = 1
     base = sum(c["type"] != "meta" for c in content["containers"]) \
         + sum(f["type"] == "text" for f in content["footer"])
@@ -56,8 +57,8 @@ def test_extra_row_is_budgeted(led):
 
 def test_patient_search_survives_an_exhausted_optional_button_budget(led):
     _delivered_card(led)
-    card = notify_cards._card_row(led.db, 1)
-    content = notify_render._card_content(led.db, card)
+    card = notify_scope.card_row(led.db, 1)
+    content = notify_render.card_content(led.db, card)
     content["manifest_id"] = 1
     rows = notify_cards._action_rows(
         led.db, card, content, NOW, reserve=notify_cards.MAX_COMPONENTS)

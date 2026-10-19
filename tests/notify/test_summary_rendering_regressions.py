@@ -236,7 +236,7 @@ def test_signal_card_and_message_notice_follow_same_current_urgency_source(
     monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
     # When: both actual notification surfaces render the same evidence.
     _dispatch_with_source(led, event)
-    face = notify_render.display_text(notify_render._card_content(led.db, _card(led)))
+    face = notify_render.display_text(notify_render.card_content(led.db, _card(led)))
     text, _ = notify_flush._format_event(
         led, _intent(led, payload={"message_ids": [100]}))
     # Then: stale/routine artifacts don't produce a high badge; sources remain distinct.

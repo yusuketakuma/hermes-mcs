@@ -1,4 +1,5 @@
 """A shadow v2 comparison runs once per source + policy, not once per retry."""
+import semantic_transport
 import json
 import time
 
@@ -30,7 +31,7 @@ def _passes(db, llm, configs=({}, {}), budget=300):
     for extra in configs:
         with db.db:
             db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-        semantic.run_due(db, _cfg("shadow", fact_source="shadow", **extra),
+        semantic_drain.run_due(db, _cfg("shadow", fact_source="shadow", **extra),
                          {"errors": []}, time.monotonic() + budget,
                          jev_client=_FakeJev(), llm_fn=counted)
         per_pass.append(len(calls))
@@ -167,7 +168,7 @@ def test_canonical_never_writes_a_shadow_receipt(tmp_path):
         for _ in range(2):
             with db.db:
                 db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-            semantic.run_due(db, _cfg("shadow", fact_source="canonical"),
+            semantic_drain.run_due(db, _cfg("shadow", fact_source="canonical"),
                              {"errors": []}, time.monotonic() + 300,
                              jev_client=_FakeJev(), llm_fn=_incomplete_v2)
         assert _receipts(db) == []
@@ -196,7 +197,7 @@ def test_a_malformed_receipt_does_not_skip_the_comparison(tmp_path, content):
 
 def _length_stop(prompt):
     if "原子事実抽出器" in prompt:
-        return semantic._failed("length_stop")
+        return semantic_transport._failed("length_stop")
     return _llm(prompt)
 
 
@@ -223,7 +224,7 @@ def _two_invalid_facts(prompt):
 ])
 def test_the_receipt_says_which_model_stop_it_was(tmp_path, monkeypatch, llm, failure,
                                                   dropped, reasons):
-    monkeypatch.setattr(semantic, "_LLM_FAILURE", None)   # llm_chat resets it per call
+    monkeypatch.setattr(semantic_transport, '_LLM_FAILURE', None)   # llm_chat resets it per call
     db = _seeded(tmp_path)
     try:
         _passes(db, llm, configs=({},))

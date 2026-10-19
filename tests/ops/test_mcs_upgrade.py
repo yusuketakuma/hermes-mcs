@@ -273,9 +273,9 @@ def test_plan_blocks(updater, monkeypatch, tmp_path, kw, errors, blocker):
 
 def test_plan_reports_interrupted_update(updater, monkeypatch, tmp_path):
     _plan_env(updater, monkeypatch, tmp_path, [])
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["stages"].append({"stage": "merge", "at": 1.0})
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert "update_in_progress_or_interrupted" in updater.plan("v1.2.0")["blockers"]
 
 
@@ -286,7 +286,7 @@ def _install_tag(updater, monkeypatch, tmp_path):
                    "v1.2.0", {"install.sh": "#!/bin/sh\n"})
     monkeypatch.setattr(updater, "remote_tag_sha", lambda t: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
-                        lambda expected: updater._post_merge(updater.load_state()))
+                        lambda expected: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
     return repo, sha
 
 
@@ -294,7 +294,7 @@ def test_install_change_still_blocks_without_reinstall(updater, monkeypatch,
                                                        tmp_path):
     _install_tag(updater, monkeypatch, tmp_path)
     assert updater.apply("v1.2.0", None, None) == 1
-    assert "install_sh_changed" in updater.load_state()["attempts"]["v1.2.0"]["detail"]
+    assert "install_sh_changed" in updater.journal_store.load_state(updater.STATE_PATH)["attempts"]["v1.2.0"]["detail"]
 
 
 class _Install:
@@ -333,10 +333,10 @@ def test_reinstall_runs_install_before_services(updater, monkeypatch, tmp_path):
                         lambda: calls.append("services"))
     rc = updater.apply("v1.2.0", None, None, reinstall=True,
                        install_args=("--no-llm",))
-    assert rc == 0, updater.load_state()["attempts"]
+    assert rc == 0, updater.journal_store.load_state(updater.STATE_PATH)["attempts"]
     assert calls == [["/bin/sh", str(repo / "install.sh"), "--no-llm",
                       "--no-services"], "services"]
-    applied = updater.load_state()["applied"][-1]
+    applied = updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]
     assert applied["reinstall_done"] is True and applied["sha"] == sha
 
 
@@ -348,7 +348,7 @@ def test_failed_reinstall_rolls_the_tree_back(updater, monkeypatch, tmp_path):
     monkeypatch.setattr(updater, "_rollback_tree", lambda e, on_hold=None: rolled.append(e))
     assert updater.apply("v1.2.0", None, None, reinstall=True) == 1
     assert rolled and rolled[0]["prev_sha"] == before
-    assert "install_failed" in updater.load_state()["attempts"]["v1.2.0"]["detail"]
+    assert "install_failed" in updater.journal_store.load_state(updater.STATE_PATH)["attempts"]["v1.2.0"]["detail"]
 
 
 @pytest.mark.parametrize("cid,kw", [
@@ -400,9 +400,9 @@ def test_interrupted_reinstall_is_never_rerun_unattended(updater, monkeypatch):
 
 def test_plan_flags_an_unfinished_reinstall(updater, monkeypatch, tmp_path):
     _plan_env(updater, monkeypatch, tmp_path, [])
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0", "reinstall": True}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert "reinstall_incomplete" in updater.plan("v1.2.0")["blockers"]
 
 
@@ -412,12 +412,12 @@ def test_reinstall_done_clears_a_promoted_unfinished_reinstall(
     operator finished install.sh by hand."""
     _plan_env(updater, monkeypatch, tmp_path, [])
     monkeypatch.setattr(updater, "_head_sha", lambda: "a" * 40)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0", "sha": "b" * 40, "reinstall": True}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.reinstall_done() == 2            # HEAD is elsewhere
     state["applied"][0]["sha"] = "a" * 40
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.reinstall_done() == 0
     assert "reinstall_incomplete" not in updater.plan("v1.2.0")["blockers"]
     assert updater.reinstall_done() == 2            # nothing left to clear
@@ -427,10 +427,10 @@ def test_reinstall_done_lets_recover_finish_the_journal(updater, monkeypatch):
     monkeypatch.setattr(updater, "_head_sha", lambda: "a" * 40)
     calls = []
     monkeypatch.setattr(updater, "recover_interrupted",
-                        lambda: calls.append(updater.load_state()) or 0)
-    state = updater._default_state()
+                        lambda: calls.append(updater.journal_store.load_state(updater.STATE_PATH)) or 0)
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40, "reinstall": True}
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.reinstall_done() == 0
     assert calls[0]["applying"]["reinstall_done"] is True
 
@@ -589,7 +589,7 @@ def test_opted_in_prerelease_approval_is_scheduled(tmp_path, monkeypatch):
     assert receipt["outcome"] == "applied"
     assert receipt["tag"] == PRERELEASE and receipt["target_sha"] == "b" * 40
     # the scheduled updater picks the same receipt up
-    assert mcs_update._ver_key(receipt["tag"]) is not None
+    assert mcs_update.update_policy.version_key(receipt["tag"]) is not None
 
 
 def test_prerelease_approval_requires_the_opt_in(tmp_path, monkeypatch):
@@ -608,7 +608,7 @@ def test_approval_grammar_equals_the_updater_ordering(tag):
     # anything approvable must be orderable, or the scan drops the receipt
     approvable = mcs_requests.validate(_apply_req(tag=tag)) is None
     assert approvable == mcs_requests.release_tag(tag) \
-        == (mcs_update._ver_key(tag) is not None)
+        == (mcs_update.update_policy.version_key(tag) is not None)
 
 
 def test_apply_requires_a_single_well_formed_tag():

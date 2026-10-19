@@ -1,5 +1,6 @@
 """H5: a submitted login that never validates is not re-sent with the
 same credential every tick. Stubs only — no Chrome, Keychain or MCS."""
+import mcs_contract
 import json
 import os
 import time
@@ -104,8 +105,8 @@ def test_backoff_detail_still_raises_the_manual_login_alert(tmp_path, monkeypatc
             return "manual_required:backoff"
 
     result = {"errors": []}
-    err = mcs_adapter.SessionExpired("synthetic")
-    with pytest.raises(mcs_adapter.SessionExpired) as raised:
+    err = mcs_contract.SessionExpired("synthetic")
+    with pytest.raises(mcs_contract.SessionExpired) as raised:
         run_check._with_relogin(Stub(), db, result, "unread",
                                 lambda: (_ for _ in ()).throw(err))
     assert "auto_login=manual_required:backoff" in raised.value.detail

@@ -8,10 +8,11 @@ from pathlib import Path
 import pytest
 
 from ledger import Ledger, LedgerReader, publish_snapshot
-from mcs_adapter import MCSError
+from mcs_contract import MCSError
 from mcs_view import View, main as view_main
 from mcs_util import acquire_run_lock
-from project_metadata import ARTIFACT_KIND, main, sync_metadata
+from project_metadata_contract import ARTIFACT_KIND
+from project_metadata import main, sync_metadata
 from project_metadata_view import get_project_metadata
 from test_project_metadata import LAB, MEMBER, MEDICATION, adapter, page
 

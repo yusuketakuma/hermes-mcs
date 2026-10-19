@@ -24,3 +24,15 @@ def wilson_interval(successes: int, denominator: int,
         p * (1 - p) / denominator + z2 / (4 * denominator ** 2))
     return {"low": max(0.0, center - half),
             "high": min(1.0, center + half)}
+
+
+def percentile(values: list[float], p: float) -> float | None:
+    """Interpolate a percentile over numeric observations validated by the caller."""
+    if not values:
+        return None
+    values = sorted(values)
+    position = (len(values) - 1) * p
+    low, high = math.floor(position), math.ceil(position)
+    if low == high:
+        return values[low]
+    return values[low] + (values[high] - values[low]) * (position - low)

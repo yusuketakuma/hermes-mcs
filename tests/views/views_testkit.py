@@ -2,12 +2,12 @@
 snapshot schema/row writers and the qc view's seeded ledger.  Not a
 test module (no ``test_`` prefix); sibling files import it via the
 tests/ sys.path bootstrap."""
+import mcs_contract
 import json
 from datetime import datetime, timezone
 
 import extract_llm
 import ledger
-import mcs_adapter
 import mcs_view
 from extract_testkit import _hash, _ledger
 
@@ -54,7 +54,7 @@ def _extract(db, mid, chash, meds, events=None):
 
 
 def _message(mid, project_id=1):
-    return mcs_adapter.Message(
+    return mcs_contract.Message(
         message_id=mid, project_id=project_id, parent_id=None,
         sender_id=1, sender_name="sender", sender_type="user",
         profession="", organization="",

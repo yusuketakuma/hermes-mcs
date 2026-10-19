@@ -50,7 +50,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 from cli_args import JapaneseArgumentParser as _JapaneseParser  # noqa: E402
 import mcs_runtime  # noqa: E402
-from mcs_requests import RELEASE_TAG_RE, parse_command, release_tag  # noqa: E402
+import update_journal as journal_store  # noqa: E402
+import update_policy  # noqa: E402
+from mcs_requests import parse_command, release_tag  # noqa: E402
 
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
@@ -94,14 +96,13 @@ LEGACY_LABELS = ("ai.mcs.extract-drainer-rt",)
 # stays out (install.sh derives it from config.json)
 INSTALL_ARGS = frozenset({"--no-llm", "--no-brew", "--no-plugin",
                           "--no-recovery"})
-REINSTALL_ERRORS = ("install_sh_changed", "standalone_requirements_changed")
+from update_policy import REINSTALL_ERRORS  # noqa: E402
 T_INSTALL = 3600
 WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int", "local.mcs-health")
 # S5: only the labels listed above are touched; install.sh-owned
 # ai.mcs.llamaserver / org.mcs.recovery must never be.
 PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "models/")
 HEX_RE = re.compile(r"^[0-9a-f]{40}$")
-_MENTION_RE = re.compile(r"<@[!&]?\d+>|<#\d+>|@everyone|@here")
 # drainer stray sweep: interpreter argv0 + script path — never matches
 # `vim extract_llm.py` or `pytest ...` (H7/F13)
 # pgrep uses POSIX ERE; BSD pgrep does not recognize Python's \S.
@@ -190,77 +191,9 @@ class RestoreConsentPending(UpdateError):
 
 # ---------------------------------------------------------------- state
 
-def _default_state() -> dict:
-    return {"v": 1, "stages": [], "applied": [], "attempts": {},
-            "executed": {}, "applying": None}
-
-
-def _valid_state(state):
-    """Check journal shapes before any recovery decision or mutation."""
-    if not isinstance(state, dict) or type(state.get("v")) is not int \
-            or state["v"] != 1:
-        return False
-    for key in ("stages", "applied"):
-        if not isinstance(state.get(key, []), list) \
-                or any(not isinstance(row, dict) for row in state.get(key, [])):
-            return False
-    if state.get("applying") is not None and not isinstance(state["applying"], dict):
-        return False
-    for key in ("attempts", "executed", "restore_consent"):
-        if key in state and not isinstance(state[key], dict):
-            return False
-    records = [*state.get("stages", []), *state.get("applied", []),
-               state.get("applying") or {}]
-    for row in records:
-        stamp = row.get("at", 0)
-        if type(stamp) not in (int, float) or not 0 <= stamp < 1e12:
-            return False
-    return all(isinstance(row.get("stage"), str)
-               for row in state.get("stages", []))
-
-
-def _read_control_json(path):
-    """Read a regular local control file without following links or waiting on FIFOs."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        # fdopen raises (e.g. IsADirectoryError) without closing ``fd``
-        handle = os.fdopen(fd, "r", encoding="utf-8")
-    except BaseException:
-        os.close(fd)
-        raise
-    with handle:
-        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            raise ValueError("control_file_not_regular")
-        return json.load(handle)
-
-
-def load_state() -> dict:
-    """Lock-free read — writers publish atomically so a torn read never
-    happens. Unparsable state is 'corrupt': callers must escalate and
-    touch nothing (S17/S24)."""
-    try:
-        state = _read_control_json(STATE_PATH)
-    except FileNotFoundError:
-        return {"_corrupt": True} if os.path.lexists(STATE_PATH) else _default_state()
-    except (OSError, ValueError, RecursionError):
-        return {"_corrupt": True}
-    if not _valid_state(state):
-        return {"_corrupt": True}
-    return {**_default_state(), **state}
-
-
-def save_state(state: dict) -> None:
-    """tmp -> fsync -> os.replace -> dir fsync (R13). Caller holds
-    update.lock (or is the --locks-held post-merge child)."""
-    atomic_write(STATE_PATH,
-                 lambda f: json.dump(state, f, ensure_ascii=False,
-                                     sort_keys=True),
-                 tmp_prefix=".update_state.")
-
-
 def journal(state: dict, stage: str) -> None:
     state["stages"].append({"stage": stage, "at": time.time()})
-    save_state(state)
+    journal_store.save_state(STATE_PATH, state)
 
 
 def acquire_update_lock() -> int | None:
@@ -480,19 +413,6 @@ def remote_tag_sha(tag: str) -> str | None:
     return sha if sha and HEX_RE.fullmatch(sha) else None
 
 
-def _ver_key(name: str) -> tuple | None:
-    """Semver ordering key: (major, minor, patch, release-flag, pre).
-    A prerelease sorts BELOW the same release; None when not semver."""
-    if not release_tag(name):
-        return None
-    m = RELEASE_TAG_RE.fullmatch(name)
-    pre = m.group(4)
-    identifiers = tuple((0, int(part)) if part.isdigit() else (1, part)
-                        for part in pre.split(".")) if pre else ()
-    return (int(m.group(1)), int(m.group(2)), int(m.group(3)),
-            0 if pre else 1, identifiers)
-
-
 def detect_latest(include_prerelease: bool = False
                   ) -> tuple[str | None, str | None]:
     """(tag, peeled commit sha) of the semver-max tag at origin.
@@ -515,7 +435,7 @@ def detect_latest(include_prerelease: bool = False
             direct[name] = sha
     best: tuple[tuple, str] | None = None
     for name in direct:
-        key = _ver_key(name)
+        key = update_policy.version_key(name)
         if key is None:
             continue
         if not include_prerelease and key[3] == 0:
@@ -540,14 +460,6 @@ def current_version() -> tuple[str | None, str | None]:
 
 
 # ------------------------------------------------------------- detection
-
-def defuse_mentions(text: str) -> str:
-    """Neutralise Discord mention syntax in release notes (F4) —
-    fullwidth the @ AND the <> wrappers: <#id> carries no @."""
-    return _MENTION_RE.sub(
-        lambda m: m.group(0).replace("@", "＠")
-                  .replace("<", "＜").replace(">", "＞"), text)
-
 
 def fetch_notes(tag: str) -> str | None:
     """Release notes via the public GitHub API — no auth needed for a
@@ -578,31 +490,10 @@ def fetch_notes(tag: str) -> str | None:
 
 
 def impact_summary(cur_sha: str, tag: str) -> list[str]:
-    """Environment-impact lines derived from the diff fileset."""
+    """Read changed paths and explain their operational impact."""
     out = _git_out(["diff", "--name-status", f"{cur_sha}..{tag}"])
     names = [line.split("\t")[-1] for line in out.splitlines() if line]
-    notes = []
-    if any(n in ("mcs/ops/mcs_setup.py", "config.json") or
-           n.endswith("/config.json") for n in names):
-        notes.append("新しい必須設定の可能性があります")
-    if any(n.startswith("deployment/") for n in names):
-        notes.append("定期実行の設定し直し（services）が必要な変更を含みます")
-    if "install.sh" in names:
-        notes.append("導入手順（install.sh）が変わっています。必要なソフトが増える可能性があるため、"
-                     "自動更新（auto）では適用を中止します")
-    cfg = load_config()
-    # mcs_standalone/ is loaded only by the standalone connector
-    connector = ("mcs_standalone/",) if mcs_runtime.standalone(cfg) else ()
-    if any(n.startswith(tuple(path + "/" for path in mcs_runtime.GATEWAY_SOURCE_DIRS)
-                        + connector) for n in names):
-        notes.append("通知機能が変わっています。適用後に通知接続（gateway）の再起動が必要です。独立動作では ai.mcs.standalone を再起動してください")
-    # same condition as plan()'s lineworks_adapter restart
-    interactive = (cfg.get("notify") or {}).get("interactive") \
-        if isinstance(cfg.get("notify"), dict) else None
-    if interactive == "lineworks" and any(n.startswith((
-            "mcs/", "adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
-        notes.append("LINE WORKSの接続機能が変わっています。適用後に接続診断（check）と独立アダプターの再起動が必要です")
-    return notes
+    return update_policy.environment_impact(names, load_config())
 
 
 def _tag_is_newer(tag, sha, cur_sha) -> bool:
@@ -906,41 +797,13 @@ def _plugin_changed(tag: str, cfg: dict) -> bool:
          *(["mcs_standalone"] if mcs_runtime.standalone(cfg) else [])]).strip("\0"))
 
 
-_CHANGELOG_VER_RE = re.compile(r"^## \[?v?([0-9]+\.[0-9]+\.[0-9]+[^\]\s]*)\]?")
-
-
 def upgrade_notes(tag: str, cur_tag: str | None) -> list[dict]:
-    """[{version, notes}] — the target's CHANGELOG '### 更新時の注意'
-    sections for versions in (cur_tag, tag], oldest first."""
+    """Read the target changelog and return upgrade notes for skipped versions."""
     try:
         text = _git_out(["show", f"{tag}:CHANGELOG.md"])
     except UpdateError:
         return []
-    lo, hi = _ver_key(cur_tag or "v0.0.0"), _ver_key(tag)
-    out, ver, section, buf = [], None, None, []
-
-    def flush():
-        if ver and buf and "".join(buf).strip():
-            out.append({"version": ver, "notes": "".join(buf).strip()})
-
-    for line in text.splitlines(keepends=True):
-        m = _CHANGELOG_VER_RE.match(line)
-        if m or line.startswith("## "):
-            if section == "notes":
-                flush()
-            key = _ver_key(m.group(1)) if m else None
-            ver = m.group(1) if key and lo and hi and lo < key <= hi else None
-            section, buf = None, []
-        elif line.startswith("### "):
-            if section == "notes":
-                flush()
-            section = "notes" if line.strip() == "### 更新時の注意" else None
-            buf = []
-        elif section == "notes":
-            buf.append(line)
-    if section == "notes":
-        flush()
-    return sorted(out, key=lambda n: _ver_key(n["version"]))
+    return update_policy.parse_upgrade_notes(text, tag, cur_tag)
 
 
 def plan(tag: str) -> dict:
@@ -949,7 +812,7 @@ def plan(tag: str) -> dict:
     never mutates the tree, state or services."""
     cfg = load_config()
     cur_tag, cur_sha = current_version()
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     try:
         con = sqlite3.connect(Path(LEDGER).resolve().as_uri() + "?mode=ro",
                               uri=True)
@@ -978,30 +841,16 @@ def plan(tag: str) -> dict:
 def _plan(tag, cfg, state, current, target_sha) -> dict:
     import mcs_setup
     cur_tag, cur_sha = current["tag"], current["sha"]
-    blockers = precheck_local(cfg)
+    local_errors = precheck_local(cfg)
     tag_errors = precheck_tag(tag)
-    reinstall = [e for e in tag_errors if e in REINSTALL_ERRORS]
-    bump = [e for e in tag_errors if e.startswith("schema_bump:")]
-    blockers += [e for e in tag_errors
-                 if e not in REINSTALL_ERRORS and e not in bump]
-    if state.get("_corrupt"):
-        blockers.append("update_state_corrupt")
-    elif state.get("applying") or state.get("stages"):
-        blockers.append("update_in_progress_or_interrupted")
-    if state.get("restore_consent") or _awaiting_consent_marker():
-        blockers.append("restore_consent_pending")
-    last = (state.get("applied") or [{}])[-1]
-    if last.get("reinstall") and not last.get("reinstall_done"):
-        blockers.append("reinstall_incomplete")
-    if _git(["cat-file", "-e", "HEAD:mcs/ops/mcs_update.py"]).returncode != 0:
-        blockers.append("legacy_source_manual")
-    if mcs_runtime.standalone(cfg):
-        blockers.append("standalone_external_apply")
-    if bump and _update_mode(cfg) == "auto":
-        blockers.append("schema_bump_auto_blocked")
+    decision = update_policy.preflight_decision(
+        local_errors, tag_errors, state,
+        restore_pending=bool(_awaiting_consent_marker()),
+        legacy_source=_git(["cat-file", "-e", "HEAD:mcs/ops/mcs_update.py"]).returncode != 0,
+        standalone=mcs_runtime.standalone(cfg),
+        automatic=_update_mode(cfg) == "auto", noop=cur_sha == target_sha)
+    blockers, reinstall = decision["blockers"], decision["reinstall"]
     noop = cur_sha == target_sha
-    route = ("noop" if noop else "blocked" if blockers
-             else "reinstall" if reinstall else "apply")
     interactive = (cfg.get("notify") or {}).get("interactive") \
         if isinstance(cfg.get("notify"), dict) else None
     restarts = []
@@ -1013,11 +862,11 @@ def _plan(tag, cfg, state, current, target_sha) -> dict:
         ["diff", "--quiet", "HEAD", tag, "--", "deployment/recovery"]
     ).returncode != 0
     return {
-        "route": route, "current": current,
+        "route": decision["route"], "current": current,
         "target": {"tag": tag, "sha": target_sha},
         "runtime_mode": cfg.get("runtime_mode") or "hermes",
         "blockers": sorted(set(blockers)), "reinstall": reinstall,
-        "schema_bump": bump[0] if bump else None,
+        "schema_bump": decision["schema_bump"],
         "restarts": restarts,
         "recovery_tool_changed": recovery_changed,
         "install_args": recorded_install_args(),
@@ -1030,7 +879,7 @@ def recorded_install_args() -> list[str] | None:
     """The opt-outs of the last successful install.sh run, or None when
     no valid record exists (installs before 1.0.22 wrote none)."""
     try:
-        args = _read_control_json(os.path.join(DATA, "install_options.json"))["install_args"]
+        args = journal_store.read_control_json(os.path.join(DATA, "install_options.json"))["install_args"]
         if isinstance(args, list) and set(args) <= INSTALL_ARGS:
             return sorted(set(args))
     except (OSError, ValueError, TypeError, KeyError):
@@ -1107,7 +956,7 @@ def _awaiting_consent_marker() -> dict | None:
     unreadable/unknown, holds."""
     path = os.path.join(DATA, "restore_pending.json")
     try:
-        data = _read_control_json(path)
+        data = journal_store.read_control_json(path)
     except FileNotFoundError:
         return {"unreadable": True} if os.path.lexists(path) else None
     except (OSError, ValueError, RecursionError):
@@ -1226,7 +1075,7 @@ def _restart_runtime_mode():
     """Keep an absent config's legacy default distinct from an unreadable config."""
     path = Path(DATA).parent / "config.json"
     try:
-        cfg = _read_control_json(path)
+        cfg = journal_store.read_control_json(path)
     except FileNotFoundError:
         return None if os.path.lexists(path) else "hermes"
     except (OSError, ValueError, RecursionError):
@@ -1398,7 +1247,7 @@ def _scan_receipt(executed, applies, rollbacks, consumed, cid, rj, at, rowid) ->
     cmd = rec.get("cmd")
     if cmd == "ops.update_apply":
         base = rec.get("base_sha")
-        if _ver_key(rec.get("tag")) is None \
+        if update_policy.version_key(rec.get("tag")) is None \
                 or not isinstance(rec.get("target_sha"), str) \
                 or not HEX_RE.fullmatch(rec["target_sha"]) \
                 or (base is not None and (not isinstance(base, str)
@@ -1465,7 +1314,7 @@ def scan_pending_approvals(state: dict
     # superseded and must not fire later
     ordered = sorted(
         by_tag.values(),
-        key=lambda p: _ver_key(p["tag"]),   # _scan_receipt kept valid tags only
+        key=lambda p: update_policy.version_key(p["tag"]),   # _scan_receipt kept valid tags only
         reverse=True)
     consumed.extend((p["command_id"], "superseded")
                     for p in ordered[1:])
@@ -1519,7 +1368,7 @@ def _enqueue_notice(text: str, use_run_lock: bool = False) -> bool:
         if fd is None:
             return False
     try:
-        text = defuse_mentions(text)
+        text = update_policy.defuse_mentions(text)
         live = os.path.join(REPO, "mcs")
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if os.path.realpath(here) != os.path.realpath(live):
@@ -1562,87 +1411,6 @@ def _services_reconcile() -> None:
         raise UpdateError(f"services_failed: exit_{r.returncode}")
 
 
-# Old update journals contain English diagnostics. Match only these translated
-# templates, retaining every dynamic value so new failures still block updates.
-_ENV_DIAGNOSTIC_TRANSLATIONS = (
-    (
-        'runtime_mode is invalid — select hermes or standalone before checking runtime '
-        'services',
-        '実行方法が不正です。hermes（Hermes経由）かstandalone（独立動作）を設定してから再確認してください',
-    ),
-    (
-        "Keychain entry '{}' not found — re-login cannot inject the MCS password",
-        "キーチェーンに'{}'が見つかりません — MCSパスワードを取得できず、再ログインできません。初期設定でパスワードを登録してください",
-    ),
-    (
-        "Keychain entry '{}' is present but unreadable — the keychain may be locked or access "
-        'may require an interactive permission prompt. Check the login keychain lock and this '
-        "process's access permission in an interactive session, then re-run check; or use the "
-        'existing init password input to configure the .env fallback.',
-        "キーチェーンに'{}'はありますが、読み取れません。キーチェーンのロックや、画面でのアクセス許可が必要な可能性があります。ログインキーチェーンのロックと、"
-        'このプログラムのアクセス権限を画面で確認し、checkを再実行してください。または初期設定のパスワード入力で.envにも予備の認証情報を保存してください。',
-    ),
-    (
-        "Keychain entry '{}' exists but its password cannot be read (rc={}) — re-register via "
-        '`mcs_setup init`',
-        "キーチェーンに'{}'はありますが、パスワードを読み取れません（終了コード={}）。`mcs_setup.py init`で再登録してください",
-    ),
-    (
-        'Chrome binary missing: {}',
-        'Chromeが見つかりません。インストール先を確認してください: {}',
-    ),
-    (
-        'standalone check failed — see docs/guides/STANDALONE.md',
-        '独立動作の診断に失敗しました。次の手順を確認してください: docs/guides/STANDALONE.md',
-    ),
-    (
-        'LINE WORKS adapter local check failed — run `python -m lineworks_adapter check` and '
-        'follow docs/guides/LINEWORKS.md to repair the existing credentials',
-        'LINE WORKS接続の診断に失敗しました。`python -m lineworks_adapter check`を実行し、'
-        'docs/guides/LINEWORKS.mdに従って認証情報を確認してください',
-    ),
-    (
-        'hermes CLI not resolvable ({}) — notifications cannot be sent',
-        'Hermesコマンドが見つかりません（{}）。通知を送信できません。install.shでHermesの導入状態を確認してください',
-    ),
-    (
-        'semantic.mode is enabled but TYPESAFE_API_KEY is not resolvable — Jev verdicts fail '
-        'as no_api_key',
-        '意味解析は有効ですが、TYPESAFE_API_KEYを取得できません。外部解析の認証情報を設定してください。エラーコード: no_api_key',
-    ),
-    (
-        'LaunchAgent {} installed but not loaded — run `mcs_setup.py services` or `launchctl '
-        'bootstrap gui/{} {}`',
-        '常駐処理{}は導入済みですが読み込まれていません。`mcs_setup.py services`を実行してください。個別の起動方法: `launchctl '
-        'bootstrap gui/{} {}`',
-    ),
-    (
-        'admission broker route table lacks {} — those callers are rejected permanently while '
-        'MCS_LLM_ADMISSION is set',
-        'AIの実行枠の登録に不足があります: {} — MCS_LLM_ADMISSIONが有効な間、これらの処理は受け付けられません。実行枠の登録を確認してください',
-    ),
-    (
-        'admission broker unusable: {}',
-        'AIの実行枠を管理できません。設定と稼働状態を確認してください（詳細: {}）',
-    ),
-    (
-        'llama-server advertises {} slots but the selected count is {} — fix -np or lower '
-        'SLOT_COUNT',
-        'AIサーバーの同時処理枠は{}ですが、設定では{}です。サーバーの-npを修正するか、SLOT_COUNTを減らしてください',
-    ),
-)
-
-
-def _environment_error_identity(message: str):
-    for original, translated in _ENV_DIAGNOSTIC_TRANSLATIONS:
-        for template in (original, translated):
-            pattern = "(.*?)".join(re.escape(part) for part in template.split("{}"))
-            match = re.fullmatch(pattern, message, flags=re.DOTALL)
-            if match:
-                return original, match.groups()
-    return message, ()
-
-
 def _postcheck(state: dict, expect_sha: str) -> list[str]:
     """Positive verification — 'no new error' alone is never success."""
     errors = []
@@ -1660,9 +1428,9 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
         import mcs_setup
         cfg = load_config()
         errs, _ = mcs_setup.check_environment(cfg)
-        baseline = {_environment_error_identity(e)
+        baseline = {update_policy.environment_error_identity(e)
                     for e in (state.get("baseline_check") or [])}
-        new = [e for e in errs if _environment_error_identity(e) not in baseline]
+        new = [e for e in errs if update_policy.environment_error_identity(e) not in baseline]
         errors.extend("new_env_error: " + e for e in new)
     except Exception:
         errors.append("postcheck_unverifiable")
@@ -1933,7 +1701,7 @@ def _post_merge(state: dict) -> int:
         "command_id": applying.get("command_id"), "at": time.time()})
     state["stages"].append({"stage": "done", "at": time.time()})
     state["applying"] = None
-    save_state(state)
+    journal_store.save_state(STATE_PATH, state)
     _enqueue_notice(
         f"[MCS] 更新を適用しました: {applying['tag']}\n"
         f"prev: {applying['prev_sha'][:12]} → {applying['sha'][:12]}")
@@ -1963,7 +1731,7 @@ def _consent_hold(state, e, backup_path) -> str:
     pending report). Returns the binding report_id."""
     rid = e.report["report_id"]
     state["restore_consent"] = _consent_hold_record(e, backup_path)
-    save_state(state)
+    journal_store.save_state(STATE_PATH, state)
     _report("restore_consent_pending",
             rid + " — restore_report.json を確認し "
             "ops.restore_approve で承認")
@@ -2033,7 +1801,7 @@ def _run_post_merge(sha: str) -> None:
         start_new_session=True)
     try:
         cout, cerr = child.communicate(
-            timeout=T_POST_MERGE + (T_INSTALL if (load_state().get(
+            timeout=T_POST_MERGE + (T_INSTALL if (journal_store.load_state(STATE_PATH).get(
                 "applying") or {}).get("reinstall") else 0))
     except subprocess.TimeoutExpired:
         _stop_update_child(child)
@@ -2043,7 +1811,7 @@ def _run_post_merge(sha: str) -> None:
         _stop_update_child(child)
         raise
     if child.returncode != 0:
-        state = load_state()
+        state = journal_store.load_state(STATE_PATH)
         stages = [s.get("stage") for s in state.get("stages", [])]
         if not ("done" in stages
                 and state.get("applying") is None):
@@ -2114,7 +1882,7 @@ def _read_manifest_snapshot():
     """Read the pre-update manifest snapshot, or None when unreadable."""
     snap = None
     try:
-        snap = _read_control_json(MANIFEST_PATH)
+        snap = journal_store.read_control_json(MANIFEST_PATH)
     except (OSError, ValueError, RecursionError):
         pass
     return snap
@@ -2122,14 +1890,14 @@ def _read_manifest_snapshot():
 
 def _apply_record_success(tag: str, command_id: str | None) -> dict:
     """Durably record a successful apply in a fresh state view and return it."""
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     state.setdefault("executed", {})
     if command_id:
         state["executed"][command_id] = {"result": "applied",
                                          "at": time.time()}
     _record_attempt(state, tag, "applied")
     state["stages"] = []
-    save_state(state)
+    journal_store.save_state(STATE_PATH, state)
     return state
 
 
@@ -2155,7 +1923,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         # Keep an existing interrupted journal untouched for safe recovery.
         print("更新を開始できません。実行環境の問題を解消してください（変更はありません）: " + "; ".join(runtime_errors))
         return 1
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     if state.get("_corrupt"):
         print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
         return 2
@@ -2219,7 +1987,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                           f"{type(qe).__name__}: {qe}"[:200])
                 return rc
             except Exception as e:
-                if _awaiting_consent_marker() or load_state().get("restore_consent"):
+                if _awaiting_consent_marker() or journal_store.load_state(STATE_PATH).get("restore_consent"):
                     consent_hold = True
                     _report("restore_consent_blocked", str(e))
                     try:
@@ -2245,14 +2013,14 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             # pending, no attempt record, no notification — the next
             # check retries
             state["stages"] = []
-            save_state(state)
+            journal_store.save_state(STATE_PATH, state)
             return 2
         if command_id:
             state.setdefault("executed", {})[command_id] = {
                 "result": "failed", "detail": reason[:200],
                 "at": time.time()}
         _record_attempt(state, tag, "failed", reason)
-        save_state(state)
+        journal_store.save_state(STATE_PATH, state)
         if rollback_failed and state["applying"].get("restore_incomplete"):
             # same report-only freeze as recover_interrupted's escalate: an
             # outbox notice would write the newer-schema DB under the old
@@ -2275,7 +2043,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         upd_fd = acquire_update_lock()
         if upd_fd is None:
             return 0                    # another updater is alive
-        state = load_state()            # fresh view under the lock
+        state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
         if state.get("_corrupt"):
             return 2
         if state.get("applying") or state.get("stages"):
@@ -2320,7 +2088,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             return bail(str(e))
         snap = _read_manifest_snapshot()
         state["baseline_check"] = _baseline_check(cfg)
-        save_state(state)
+        journal_store.save_state(STATE_PATH, state)
 
         journal(state, "lock")
         run_fd = _acquire_run_lock_wait()
@@ -2338,11 +2106,11 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             if command_id:
                 state.setdefault("executed", {})[command_id] = {
                     "result": "already_applied", "at": time.time()}
-            save_state(state)
+            journal_store.save_state(STATE_PATH, state)
             return 0
         if command_id and state.get("executed", {}).get(command_id):
             state["stages"] = []
-            save_state(state)
+            journal_store.save_state(STATE_PATH, state)
             return 0
 
         state["applying"] = {
@@ -2609,7 +2377,7 @@ def _rollback_tree(entry: dict, on_hold=None) -> None:
     problems = _reconcile_membership(
         entry.get("manifest_snapshot")
         if "manifest_snapshot" in entry
-        else load_state().get("manifest_snapshot"))
+        else journal_store.load_state(STATE_PATH).get("manifest_snapshot"))
     _services_reconcile()
     if problems:
         raise UpdateError("membership: " + ",".join(problems))
@@ -2665,7 +2433,7 @@ def rollback(command_id: str | None = None) -> int:
     Journaled exactly like apply(): a crash after quiesce must still be
     recoverable, so a rollback-shaped `applying` record is written
     before anything is stopped."""
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     if state.get("_corrupt"):
         print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
         return 2
@@ -2681,7 +2449,7 @@ def rollback(command_id: str | None = None) -> int:
     quiesced = False
     consent_hold = False
     try:
-        state = load_state()            # fresh view under the lock
+        state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
         if state.get("_corrupt"):
             return 2
         if state.get("applying") or state.get("stages"):
@@ -2694,7 +2462,7 @@ def rollback(command_id: str | None = None) -> int:
             if command_id:
                 state.setdefault("executed", {})[command_id] = {
                     "result": "nothing_to_rollback", "at": time.time()}
-                save_state(state)
+                journal_store.save_state(STATE_PATH, state)
             print("元に戻す更新はありません（nothing_to_rollback）")
             return 0
         run_fd = _acquire_run_lock_wait()
@@ -2735,13 +2503,13 @@ def rollback(command_id: str | None = None) -> int:
                 # the rollback receipt stays pending, and every later
                 # check/watchdog pass re-evaluates the same report until
                 # a bound ops.restore_approve receipt lands.
-                state = load_state()
+                state = journal_store.load_state(STATE_PATH)
                 rid = _consent_hold(state, e, entry.get("backup_path"))
                 print("復元は承認待ちです。restore_report.jsonで影響を確認してください。確認番号:", rid)
                 consent_hold = True
                 return 2
             except Exception as e:
-                if _awaiting_consent_marker() or load_state().get("restore_consent"):
+                if _awaiting_consent_marker() or journal_store.load_state(STATE_PATH).get("restore_consent"):
                     consent_hold = True
                     _report("restore_consent_blocked", str(e))
                     return 2
@@ -2759,7 +2527,7 @@ def rollback(command_id: str | None = None) -> int:
                     + ",".join(filter(None,
                                       [str(rb_error) if rb_error else None,
                                        ",".join(problems)])))
-            state = load_state()
+            state = journal_store.load_state(STATE_PATH)
             state["applied"] = applied[:-1]
             state["applying"] = None
             state["stages"] = []
@@ -2770,7 +2538,7 @@ def rollback(command_id: str | None = None) -> int:
             if command_id:
                 state.setdefault("executed", {})[command_id] = {
                     "result": "rolled_back", "at": time.time()}
-            save_state(state)
+            journal_store.save_state(STATE_PATH, state)
             # gateway restart AFTER the durable save (self-deadlock)
             restart_services(load_config(), entry.get("plugin_changed"))
             _enqueue_notice(f"[MCS] ロールバックしました: "
@@ -2791,7 +2559,7 @@ def rollback(command_id: str | None = None) -> int:
                 state.setdefault("executed", {})[command_id] = {
                     "result": "rollback_failed", "detail": str(e)[:200],
                     "at": time.time()}
-                save_state(state)
+                journal_store.save_state(STATE_PATH, state)
             _enqueue_notice(f"[MCS] ロールバックに失敗しました: {e}",
                             use_run_lock=run_fd is None)
             print("元の版に戻せませんでした。管理者に確認してください。詳細:", e)
@@ -3006,7 +2774,7 @@ def _settle_staging(directory) -> None:
     """Under both locks, before a new copy: remove the recorded copy of an
     interrupted restore, or keep everything and refuse when it cannot be
     proven to be that copy."""
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     applying, record = _staging_record(state)
     if record is None:
         return
@@ -3021,7 +2789,7 @@ def _settle_staging(directory) -> None:
     finally:
         os.close(dfd)
     applying.pop("restore_staging")
-    save_state(state)
+    journal_store.save_state(STATE_PATH, state)
 
 
 def _release_staging(directory, record, journaled=True) -> None:
@@ -3039,11 +2807,11 @@ def _release_staging(directory, record, journaled=True) -> None:
         os.close(dfd)
     if not journaled:
         return
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     applying, current = _staging_record(state)
     if current == record:
         applying.pop("restore_staging")
-        save_state(state)
+        journal_store.save_state(STATE_PATH, state)
 
 
 def _replace_database(backup_path, expected_sha, before_replace):
@@ -3065,10 +2833,10 @@ def _replace_database(backup_path, expected_sha, before_replace):
     journaled = False
     try:
         with os.fdopen(fd, "wb") as dst:
-            state = load_state()
+            state = journal_store.load_state(STATE_PATH)
             applying, _ = _staging_record(state)
             applying["restore_staging"] = own
-            save_state(state)
+            journal_store.save_state(STATE_PATH, state)
             journaled = True
             with open(backup_path, "rb") as src:
                 shutil.copyfileobj(src, dst)
@@ -3185,7 +2953,7 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
                 DATA, backup_path=backup_path, by="mcs_update",
                 phase="awaiting_consent", report_id=report["report_id"])
         except OSError as marker_error:
-            _consent_hold(load_state(), RestoreConsentPending(report), backup_path)
+            _consent_hold(journal_store.load_state(STATE_PATH), RestoreConsentPending(report), backup_path)
             raise UpdateError(f"restore_marker_failed: {marker_error}") from e
         raise UpdateError(f"restore_failed: {e}") from e
     if not ledger.valid_mcs_db(LEDGER):
@@ -3211,7 +2979,7 @@ def reinstall_done() -> int:
         print("別の更新処理が終わるまで、再導入の完了を記録できません")
         return 1
     try:
-        state = load_state()
+        state = journal_store.load_state(STATE_PATH)
         if state.get("_corrupt"):
             return 2
         applying = state.get("applying")
@@ -3223,7 +2991,7 @@ def reinstall_done() -> int:
             print("現在の版が再導入した版と一致しないため、完了を記録できません")
             return 2
         rec["reinstall_done"] = True
-        save_state(state)
+        journal_store.save_state(STATE_PATH, state)
     finally:
         os.close(fd)
     return recover_interrupted() if applying else 0
@@ -3251,7 +3019,7 @@ def _journal_consent_from_marker(state: dict, applying: dict) -> None:
             "report_id": marker.get("report_id"),
             "backup_path": applying["backup_path"],
             "from_marker": True, "at": time.time()}
-        save_state(state)
+        journal_store.save_state(STATE_PATH, state)
 
 
 def _complete_done_bookkeeping(state: dict) -> int:
@@ -3262,7 +3030,7 @@ def _complete_done_bookkeeping(state: dict) -> int:
         state.setdefault("executed", {})[cid] = {
             "result": "applied", "at": time.time()}
     state["stages"] = []
-    save_state(state)
+    journal_store.save_state(STATE_PATH, state)
     _remove_marker()
     _report("resumed_done", "completed bookkeeping after crash")
     _enqueue_notice("[MCS] 中断された更新の後処理を完了しました")
@@ -3290,7 +3058,7 @@ def _finish_resumed(state: dict, applying: dict) -> int:
     if cid:
         state.setdefault("executed", {})[cid] = {
             "result": result, "at": time.time()}
-    save_state(state)
+    journal_store.save_state(STATE_PATH, state)
     _remove_marker()
     _report("resumed", "post-merge completed after crash")
     _enqueue_notice(
@@ -3308,7 +3076,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
     crashes. Lock discipline: update.lock first (a free lock proves no
     updater is alive), run.lock second; if run.lock stays busy we
     defer and touch NOTHING (H1/F7)."""
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     if state.get("_corrupt"):
         _report("corrupt_state", "update_state.json unreadable — escalate")
         return 2
@@ -3320,7 +3088,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
         run_fd = _acquire_run_lock_wait(tries=2)
         if run_fd is None:
             return 0                   # a tick is running — retry next
-        state = load_state()           # fresh view under both locks
+        state = journal_store.load_state(STATE_PATH)           # fresh view under both locks
         if state.get("_corrupt"):
             _report("corrupt_state", "update_state.json unreadable under lock")
             return 2
@@ -3391,7 +3159,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 state.setdefault("executed", {})[cid] = {
                     "result": "escalated", "detail": detail[:200],
                     "at": time.time()}
-                save_state(state)
+                journal_store.save_state(STATE_PATH, state)
             key = _alert_key(state, detail)
             if (applying or {}).get("restore_incomplete"):
                 # apply's schema rollback failed before the DB restore
@@ -3487,7 +3255,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 # escalate normally (drainers up on a consistent DB)
                 held_before = state.pop("restore_consent", None) is not None
                 if applying.pop("restore_incomplete", None) or held_before:
-                    save_state(state)
+                    journal_store.save_state(STATE_PATH, state)
             try:
                 if applying.get("rollback"):
                     if applying.get("runtime_migration"):
@@ -3571,12 +3339,12 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
         _rollback_tree(entry, lambda report: _consent_hold(
             state, RestoreConsentPending(report), entry.get("backup_path")))
     except RestoreConsentPending as e:
-        _consent_hold(load_state(), e, entry.get("backup_path"))
+        _consent_hold(journal_store.load_state(STATE_PATH), e, entry.get("backup_path"))
         return 0
     problems = drainers(_drainers_key(state, _head_sha()))
     if problems:
         return escalate("runtime migration rollback: " + ",".join(problems))
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     state.setdefault("attempts", {})[applying.get("tag") or "?"] = {
         "result": "rolled_back", "at": time.time()}
     cid = record.get("command_id")
@@ -3585,7 +3353,7 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
     state["applying"] = None
     state["stages"] = []
     state.pop("restore_consent", None)
-    save_state(state)
+    journal_store.save_state(STATE_PATH, state)
     _remove_marker()
     _report("rolled_back", "interrupted runtime migration undone")
     _enqueue_notice("[MCS] 中断されたPython 3.14への移行を元に戻しました。"
@@ -3619,7 +3387,7 @@ def _finish_recovery(state: dict, result: str, removed: list) -> int:
     state["applying"] = None
     state["stages"] = []
     state.pop("restore_consent", None)
-    save_state(state)
+    journal_store.save_state(STATE_PATH, state)
     _report(result, "removed locks: " + ",".join(removed))
     _enqueue_notice(f"[MCS] 更新が中断され復旧しました: {result}")
     return 0
@@ -3666,7 +3434,7 @@ def _alert_due(result: str, key: str, now: float) -> tuple[bool, float]:
 def _last_report() -> dict:
     """recovery_report.json as a dict — {} when missing or unreadable."""
     try:
-        last = _read_control_json(REPORT_PATH)
+        last = journal_store.read_control_json(REPORT_PATH)
     except (OSError, ValueError, RecursionError):
         return {}
     return last if isinstance(last, dict) else {}
@@ -3693,7 +3461,7 @@ def cmd_check() -> int:
     can never clobber a live journal (F5). Receipt scanning runs even
     when remote detection failed, so a committed human approval never
     waits on a flaky network (P16)."""
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     if state.get("_corrupt"):
         print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
         return 2
@@ -3731,7 +3499,7 @@ def cmd_check() -> int:
     if upd_fd is None:
         return 0                        # another updater is alive
     try:
-        state = load_state()            # fresh view under the lock
+        state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
         if state.get("_corrupt"):
             return 2
         if state.get("applying") or state.get("stages"):
@@ -3772,7 +3540,7 @@ def cmd_check() -> int:
                 if time.time() - first_seen >= delay * 3600 \
                         and not state.get("attempts", {}).get(tag):
                     auto = (tag, sha)
-            save_state(state)
+            journal_store.save_state(STATE_PATH, state)
     finally:
         if upd_fd is not None:
             os.close(upd_fd)
@@ -3792,7 +3560,7 @@ def cmd_check() -> int:
 
 
 def cmd_status() -> int:
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     if state.get("_corrupt"):
         print("update_state.jsonを読み取れず、更新状況を確認できません。削除せず管理者に確認してください")
         return 2
@@ -3818,7 +3586,7 @@ def cmd_plan(args) -> int:
 
 
 def cmd_post_merge() -> int:
-    state = load_state()
+    state = journal_store.load_state(STATE_PATH)
     applying = state.get("applying") or {}
     # the post-merge stage is only reachable from the parent apply
     # — the env token proves we were spawned by it, not invoked

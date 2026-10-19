@@ -160,7 +160,7 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: [])
     monkeypatch.setattr(updater, "restart_gateway", lambda cfg: None)
     monkeypatch.setattr(updater, "_services_reconcile", lambda: calls.append("services"))
-    monkeypatch.setattr(updater, "_run_post_merge", lambda sha: updater._post_merge(updater.load_state()))
+    monkeypatch.setattr(updater, "_run_post_merge", lambda sha: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
     monkeypatch.delenv("MCS_UPDATE_REPO", raising=False)
     real_run = subprocess.run
 
@@ -260,7 +260,7 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
     original, config_bytes = _records(source), config.read_bytes()
     assert updater.apply(objects.target, objects.after, None, reinstall=install,
                          install_args=("--no-llm",) if install else ()) == 0
-    applied = updater.load_state()["applied"][-1]
+    applied = updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]
     assert applied["sha"] == objects.after and applied["prev_sha"] == objects.before
     bump = ORIGINS[path["source"]]["schema_version"] < ledger.SCHEMA_VERSION
     assert applied["schema_bump"] is bump
@@ -269,7 +269,7 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
     assert _records(backup) == original
     _preserved(Path(updater.LEDGER), original)
     assert updater.apply(objects.target, objects.after, None, reinstall=install) == 0
-    assert len(updater.load_state()["applied"]) == 1
+    assert len(updater.journal_store.load_state(updater.STATE_PATH)["applied"]) == 1
     assert calls == ([["/bin/sh", str(objects.root / "install.sh"), "--no-llm", "--no-services"],
                       "services"] if install else ["services"])
     with closing(ledger.Ledger(updater.LEDGER)) as db:
@@ -288,7 +288,7 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
     else:
         assert not Path(updater.RESTORE_REPORT_PATH).exists()
     assert objects.head == objects.before
-    assert updater.load_state()["executed"]["synthetic-path-rollback"]["result"] == "rolled_back"
+    assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["synthetic-path-rollback"]["result"] == "rolled_back"
     assert config.read_bytes() == config_bytes
     durable = {table: rows for table, rows in (original if bump else after_insert).items()
                if table != "notify_outbox" and not table.startswith("notification_")}
@@ -306,7 +306,7 @@ def test_failed_reinstall_rolls_back_before_schema_migration(
     assert calls == [["/bin/sh", str(objects.root / "install.sh"), "--no-services"], "services"]
     assert objects.head == objects.before
     assert before == (_sha(source), _records(Path(updater.LEDGER)), config.read_bytes())
-    assert updater.load_state()["applying"] is None
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None
 
 
 @pytest.mark.parametrize("path", MANUAL, ids=_id)
@@ -328,13 +328,13 @@ def test_legacy_manual_reinstall_migration_and_restore(
     with pytest.raises(updater.RestoreConsentPending) as held:
         updater._restore_db(backup)
     _seed_consent(updater.LEDGER, backup, report=held.value.report)
-    state = updater.load_state()       # the rollback journal a real replace runs under
+    state = updater.journal_store.load_state(updater.STATE_PATH)       # the rollback journal a real replace runs under
     state["applying"] = {"tag": objects.target, "sha": objects.after,
                          "prev_sha": objects.before, "rollback": True,
                          "backup_path": backup, "at": time.time()}
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     updater._restore_db(backup)
-    applying = updater.load_state()["applying"]
+    applying = updater.journal_store.load_state(updater.STATE_PATH)["applying"]
     assert applying["backup_path"] == backup and "restore_staging" not in applying
     durable = {table: rows for table, rows in expected.items()
                if table != "notify_outbox" and not table.startswith("notification_")}
@@ -414,7 +414,7 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
     def services():
         # what _run_post_merge hands the NEW-code child; the parent apply
         # still holds update.lock and run.lock
-        monkeypatch.setenv(updater._UPDATE_PM_ENV, updater.load_state()["applying"]["sha"])
+        monkeypatch.setenv(updater._UPDATE_PM_ENV, updater.journal_store.load_state(updater.STATE_PATH)["applying"]["sha"])
         assert mcs_setup.runtime_gate_errors(cfg, repair_recovery=True) == []
         if mcs_setup._sync_recovery(cfg, notes.append, False):
             raise updater.UpdateError("services_failed: " + notes[-1])
@@ -445,6 +445,6 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
     assert updater.apply(objects.target, objects.after, None, reinstall=install,
                          install_args=("--no-recovery",) if install else ()) == 0
     assert len(merged()) == 1 and objects.head == objects.after
-    assert updater.load_state()["applied"][-1]["sha"] == objects.after
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]["sha"] == objects.after
     assert plistlib.loads(plist.read_bytes())["ProgramArguments"][0] == desired
     assert mcs_setup.runtime_gate_errors(cfg) == []

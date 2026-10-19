@@ -27,6 +27,7 @@ by the oldest restorable backup.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from bisect import bisect_left
@@ -39,7 +40,45 @@ PHASES = ("claimed", "begin", "granted", "denied",
           "started", "result", "receipt")
 
 
-def _path(state_dir: str, worker_id: str, segment: int = 0) -> str:
+def card_message_id(records: dict, delivery_id: str) -> str | None:
+    """Latest factual card result for a delivery — dependent parts may
+    only attach to a card the journal proves was posted."""
+    message_ids, invalid = primary_results(records)
+    if delivery_id in invalid:
+        raise ValueError("card_result_timestamp_invalid")
+    return message_ids.get(delivery_id)
+
+
+def primary_results(records: Mapping) -> tuple[dict[str, str | None], set[str]]:
+    """Return primary message IDs and deliveries with invalid timestamps.
+
+    Equal timestamps keep scan order; inputs and journal state are not changed.
+    """
+    latest, keys = {}, {}
+    invalid = set()
+    # _View.values() probes every file per attempt. Walk rows once;
+    # equal timestamps still follow the old attempt-first scan order.
+    order = {aid: i for i, aid in enumerate(records)}
+    for row in all_rows(records):
+        did = row.get("delivery_id")
+        if (row.get("phase") != "result" or row.get("part_id")
+                or not isinstance(did, str)):
+            continue
+        ts = row.get("ts", 0)
+        if type(ts) not in (int, float) or (type(ts) is float and not math.isfinite(ts)):
+            invalid.add(did)  # never attach parts to an unorderable outcome
+            continue
+        key = (ts, order.get(row.get("attempt_id"), 0))
+        if did not in latest or key >= keys[did]:
+            latest[did], keys[did] = row, key
+    return {did: str(row["message_id"])
+            if did not in invalid and row.get("result") == "delivered"
+            and row.get("message_id") else None
+            for did, row in latest.items()} | dict.fromkeys(invalid), invalid
+
+
+def segment_path(state_dir: str, worker_id: str, segment: int = 0) -> str:
+    """Resolve one worker segment without opening or creating the journal."""
     # "~" sorts after ".", so every reader's sorted() listing keeps a
     # worker's segments in write order after its first file
     name = worker_id if not segment else f"{worker_id}~{segment:06d}"
@@ -49,7 +88,7 @@ def _path(state_dir: str, worker_id: str, segment: int = 0) -> str:
 def append(state_dir: str, worker_id: str, record: dict, *,
            segment: int = 0) -> str:
     """Append one fsync'd record. Returns the journal path."""
-    path = _path(state_dir, worker_id, segment)
+    path = segment_path(state_dir, worker_id, segment)
     row = {"v": 1, "worker_id": worker_id, "ts": time.time(), **record}
     if row.get("phase") not in PHASES:
         raise ValueError("bad_phase")

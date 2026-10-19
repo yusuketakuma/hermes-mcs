@@ -218,7 +218,7 @@ def test_channel_metadata_must_match_configured_scope(tmp_path, change):
 def test_slash_preview_confirmation_and_receipt_use_existing_core(tmp_path):
     import job_ops
     from ledger import Ledger, publish_snapshot
-    from mcs_adapter import Message
+    from mcs_contract import Message
 
     root_config(tmp_path)
     data = tmp_path / "data"

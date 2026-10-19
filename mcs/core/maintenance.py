@@ -18,7 +18,8 @@ from pathlib import Path
 from contextlib import closing, suppress
 from time import monotonic
 
-from ledger import publish_snapshot as _publish_snapshot, valid_mcs_db
+from snapshots import publish_snapshot as _publish_snapshot
+from ledger import valid_mcs_db
 from mcs_util import HOME, atomic_write, disk_floor_mb, publish_tmp
 from safe_io import read_regular_nofollow
 

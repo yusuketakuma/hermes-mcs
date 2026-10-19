@@ -1,8 +1,8 @@
 """Local-LLM extraction and summarization (spec §13.1, §15).
 
 Prompts, response parsing, the fact extraction wrapper, and the
-summary/repair pass. llm_fn is injected — transport stays on the
-facade (semantic.llm_chat) so endpoint/timeout patch points hold."""
+summary/repair pass. llm_fn is injected; semantic_transport owns network
+requests and retry state, and semantic_extraction owns durable fact chunks."""
 from __future__ import annotations
 
 import json
@@ -11,11 +11,7 @@ import time
 
 import semantic_jev as jev
 import semantic_runtime as runtime
-from mcs_util import json_object as _json_block
-# generic text utilities live in core/mcs_util.py; the private aliases
-# keep the semantic_llm/semantic facade patch surface stable
-from mcs_util import locate_quote_span as _locate_quote  # noqa: F401
-from mcs_util import text_chunks as _chunks  # noqa: F401
+from mcs_util import json_object
 from semantic_policy import SCHEMA_VERSION
 
 FACT_KINDS = ("medication_event", "symptom", "explicit_request",
@@ -138,19 +134,6 @@ def _iso_date(text: str) -> str | None:
         return date(y, mo, d).isoformat()
     except ValueError:
         return None
-
-
-def extract_facts(llm_fn, member: dict,
-                  deadline: float | None = None,
-                  return_reason: bool = False, *, ledger=None,
-                  source_fingerprint=None, project_id=None) -> tuple:
-    """Whole-source extraction; durable chunks when called by the worker."""
-    from semantic_extraction import extract_facts_resumable
-    result = extract_facts_resumable(
-        llm_fn, member, deadline, ledger=ledger,
-        source_fingerprint=source_fingerprint, project_id=project_id)
-    values = (result["facts"], result["complete"], result["dropped"])
-    return (*values, result["failure_reason"]) if return_reason else values
 
 
 _SUMMARY_PROMPT = """あなたは在宅医療チャット記録の要約器です。対象投稿と同一スレッド文脈、
@@ -304,7 +287,7 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
         return result(_oversize_stub(bundle, target_id))
     if deadline is not None and time.monotonic() > deadline:
         return result(None, "deadline")
-    raw = _json_block(response or "")
+    raw = json_object(response or "")
     if raw is None:
         return result(None, "model", "json_object_invalid")
     claims_in = raw.get("claims")

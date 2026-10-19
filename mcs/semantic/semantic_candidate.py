@@ -1,8 +1,8 @@
 """Bind promotion evidence to the loaded extraction and interpretation contract."""
 from __future__ import annotations
-
 import hashlib
 import importlib
+import inspect
 import json
 import marshal
 import math
@@ -16,12 +16,14 @@ from mcs_util import payload_hash
 # Capture loaded source once; an on-disk update cannot bless an old worker.
 _MODULES = ('semantic_extraction', 'semantic_facts', 'semantic_audit',
             'semantic_relations', 'semantic_render', 'semantic_llm', 'semantic_jev',
-            'semantic', 'semantic_assessment', 'semantic_projection', 'semantic_policy',
-            'semantic_acceptance', 'structured_view')
+            'semantic', 'semantic_transport', 'semantic_assessment', 'semantic_projection', 'semantic_policy',
+            'semantic_acceptance', 'structured_view',
+            'extract_schema', 'extract_validation', 'extract_quality',
+            'clinical_scope', 'clinical_values')
 
 
 # Process-local probe/counter state is not an interpretation constant.
-_RUNTIME_STATE = {'semantic': frozenset({'_FMT_MODE', '_FMT_TS', '_LONG_UNSAVED',
+_RUNTIME_STATE = {'semantic_transport': frozenset({'_FMT_MODE', '_FMT_TS', '_LONG_UNSAVED',
                                        '_LONG_MARK_FAILURES', '_LLM_FAILURE'})}
 
 
@@ -56,9 +58,13 @@ def _sources():
     sources = {}
     for name in _MODULES:
         module = importlib.import_module(name)
-        code = {key: hashlib.sha256(marshal.dumps(value.__code__)).hexdigest()
-                for key, value in vars(module).items()
-                if isinstance(value, types.FunctionType) and value.__module__ == name}
+        code = {}
+        for key, value in vars(module).items():
+            if not callable(value) or getattr(value, '__module__', None) != name:
+                continue
+            function = inspect.unwrap(value)
+            if isinstance(function, types.FunctionType):
+                code[key] = hashlib.sha256(marshal.dumps(function.__code__)).hexdigest()
         for class_name, cls in vars(module).items():
             if not isinstance(cls, type) or cls.__module__ != name:
                 continue
@@ -87,6 +93,8 @@ _LOADED_SOURCES = None
 def candidate_fingerprint(cfg: dict) -> str:
     """Hash versions, prompts, schemas, models and all interpretation settings."""
     import extract_llm
+    import extract_schema
+    import extract_validation
     import local_llm
     import semantic_policy
     global _LOADED_SOURCES
@@ -110,14 +118,14 @@ def candidate_fingerprint(cfg: dict) -> str:
         'extract_version': extract_llm.EXTRACT_VERSION,
         'plan_version': extract_llm.PLAN_VERSION,
         'patient_context_version': extract_llm.PATIENT_CONTEXT_VERSION,
-        'prompt_schema': payload_hash([extract_llm._PROMPT_HEAD, extract_llm._SCHEMA]),
+        'prompt_schema': payload_hash([extract_llm._PROMPT_HEAD, extract_schema.SCHEMA]),
         'loaded_extract': extract_llm._LOADED_SOURCE_DIGESTS,
         'loaded_semantic': _LOADED_SOURCES,
         'local_model': local_llm.resolve(cfg),
         'policy_version': semantic_policy.POLICY_VERSION,
         'semantic': defaults,
         'extract': extraction,
-        'vital_urgency': extract_llm.vital_threshold_policy(cfg),
+        'vital_urgency': extract_validation.vital_threshold_policy(cfg),
         'local_llm': cfg.get('local_llm', {}),
     })
 

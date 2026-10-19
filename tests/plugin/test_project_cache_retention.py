@@ -1,7 +1,7 @@
 """Synthetic snapshot-path churn must not retain an unbounded project cache."""
 from types import SimpleNamespace
 
-from hermes_plugin import projects
+from adapters.common import projects
 
 
 def test_snapshot_path_churn_has_bounded_cache_and_closes_connections(monkeypatch):

@@ -1,5 +1,6 @@
 """Workers with absolute deadlines for MCS API, attachments, and local Chrome I/O."""
 from __future__ import annotations
+import mcs_contract
 
 import base64
 import json
@@ -192,12 +193,11 @@ def _execute(envelope: dict) -> dict:
 
 def worker_main() -> int:
     # No exception text, request URL, response body, or credential reaches stderr.
-    import mcs_adapter as adapter_module
     from mcs_util import RETRY_LATER_4XX
     try:
         envelope = json.loads(sys.stdin.buffer.read())
         result = {"ok": True, "value": _execute(envelope)}
-    except (WorkerError, adapter_module.MCSError) as error:
+    except (WorkerError, mcs_contract.MCSError) as error:
         result = {"ok": False, "kind": error.kind, "status": error.status,
                   "retryable": error.retryable}
     except urllib.error.HTTPError as error:

@@ -5,7 +5,7 @@ import asyncio
 import functools
 import re
 
-from hermes_plugin import projects
+from adapters.common import projects
 from adapters.common import confirm, envelopes, paths, text
 
 from .cards import buttons

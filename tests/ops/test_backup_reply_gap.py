@@ -23,7 +23,7 @@ def test_backup_and_repair_agree_on_tombstoned_reply(tmp_path):
     path = Path(ledger.publish_snapshot(str(tmp_path / "ledger.db"),
                                        str(tmp_path / "snapshots")))
 
-    backup_count = mcs_backup._inventory(path)["metrics"]["incomplete_reply_roots"]
+    backup_count = mcs_backup.inventory_snapshot(path)["metrics"]["incomplete_reply_roots"]
     repair_count = mcs_repair.plan(path)["counts"]["incomplete_reply_roots"]
     assert backup_count == repair_count == 0
 

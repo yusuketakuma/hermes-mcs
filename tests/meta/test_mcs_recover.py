@@ -1380,7 +1380,7 @@ def test_recovery_constants_and_journal_checks_match_updater(tmp_path):
               {"v": 1, "applied": [{"at": -1}]}, {"v": 1, "applied": [{"at": "1"}]},
               {"v": 1, "stages": [{"stage": "x", "at": 1e12}]}]
     for state in states:
-        assert recovery._valid_state(state) == mcs_update._valid_state(state), state
+        assert recovery._valid_state(state) == mcs_update.journal_store.valid_state(state), state
     assert recovery._valid_state(valid) and not recovery._valid_state({"v": 2})
 
 

@@ -24,6 +24,8 @@ mints that single self-correcting pipeline as engine v4:
   manifest; a conversion receipt never authorizes payload deletion.
 """
 from __future__ import annotations
+import semantic_store
+import semantic_transport
 
 import hashlib
 import json
@@ -125,12 +127,11 @@ def current_v4(ledger, mid: int, content_hash: str):
 
 def stage_request_following(ledger, bundle, doc, *, policy):
     """Persist a current-source candidate; never publish, change Loop IDs or mint grants."""
-    import semantic
     import semantic_facts as sf
     from semantic_projection import project_v2_doc_legacy, project_v2_facts
 
     clean = sf.validate_facts_doc(doc)
-    current = semantic.thread_bundle(ledger, bundle["project_id"], bundle["root_id"])
+    current = semantic_store.thread_bundle(ledger, bundle["project_id"], bundle["root_id"])
     if current is None or current["source_fingerprint"] != bundle["source_fingerprint"]:
         raise sf.ContractError("request_following_source_stale")
     source = clean["source"]
@@ -168,13 +169,12 @@ def stage_request_following(ledger, bundle, doc, *, policy):
 def extract_request_following(llm_fn, ledger, bundle, message_id, *, policy,
                               deadline=None, chunk_size=3000, retry_coverage=False):
     """Extract into a separate candidate generation and source-bound PENDING staging."""
-    import semantic
     import semantic_facts as sf
     from semantic_extraction import extract_facts_v2
 
     if not isinstance(policy, str) or not policy.strip():
         raise sf.ContractError("request_following_policy_required")
-    current = semantic.thread_bundle(ledger, bundle["project_id"], bundle["root_id"])
+    current = semantic_store.thread_bundle(ledger, bundle["project_id"], bundle["root_id"])
     if current is None or current["source_fingerprint"] != bundle["source_fingerprint"]:
         raise sf.ContractError("request_following_source_stale")
     member = next((m for m in current["members"] if m["message_id"] == message_id), None)
@@ -212,12 +212,11 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
     existing = current_v4(ledger, mid, member["revision"])
     if existing is not None and projection_current(existing["meta"], doc_hash):
         return existing["artifact_id"]
-    import semantic
     content = project_v2_doc_legacy(v2_doc)
     return ledger.artifact_add_tx(
         KIND_V4, json.dumps(content, ensure_ascii=False,
                             allow_nan=False),
-        project_id=pid, message_id=mid, model=semantic.llm_model(),
+        project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
         meta={"fingerprint": fp, "policy_fingerprint": policy,
               "schema": 2, "hash": member["revision"],
               "extract_version": ENGINE_VERSION,

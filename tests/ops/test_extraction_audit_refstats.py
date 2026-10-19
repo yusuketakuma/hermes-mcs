@@ -1,4 +1,5 @@
 """Audit capture validates typed aggregates before private publication and human approval."""
+import operation_contract
 import json
 import stat
 from pathlib import Path
@@ -25,14 +26,14 @@ def test_actual_snapshot_capture_stays_pending_private_and_ascii(tmp_path, capsy
     try:
         assert capture(tmp_path) == 0
         capsys.readouterr()
-        pending = Path(mcs_refstats._ref_path(tmp_path, "audit", "pending"))
+        pending = Path(operation_contract.reference_path(tmp_path, "audit", "pending"))
         content = pending.read_text()
         report = json.loads(content)
         assert content.isascii() and "保管" not in content
         assert report["stats"]["omission_proxy"]["population"]["no_output"] == 1
         assert report["stats"]["attachment_share"]["status"] == "ok"
         assert stat.S_IMODE(pending.stat().st_mode) == 0o600
-        assert not Path(mcs_refstats._ref_path(tmp_path, "audit", "approved")).exists()
+        assert not Path(operation_contract.reference_path(tmp_path, "audit", "approved")).exists()
         assert not db.artifacts("refstat_approval_v1")
     finally:
         db.close()
@@ -45,7 +46,7 @@ def test_capture_rejects_content_or_types_before_replacing_pending(tmp_path, mon
     db.close()
     assert capture(tmp_path) == 0
     capsys.readouterr()
-    path = Path(mcs_refstats._ref_path(tmp_path, "audit", "pending"))
+    path = Path(operation_contract.reference_path(tmp_path, "audit", "pending"))
     original = path.read_bytes()
     import mcs_view
     real_stats = mcs_view.View.stats

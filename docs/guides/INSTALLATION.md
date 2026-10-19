@@ -557,8 +557,8 @@ cronに追加され7件になる。別に LLM サーバ常駐の
 
 ジョブ・スケジュール・実行スクリプトの一覧表は
 [deployment/launchagents/README.md](../../deployment/launchagents/README.md)
-に一本化している。正本はコードの `mcs/ops/mcs_setup.py` の `CRON_JOBS`
-（hermes cron）と `AGENT_LABELS`（launchd）で、`services` はこれを
+に一本化している。正本は `mcs/core/scheduled_jobs.py` の `CRON_JOBS`
+（hermes cron）と `mcs/ops/mcs_setup.py` の `AGENT_LABELS`（launchd）で、`services` はこれを
 登録する。MCSサーバーの負荷対策として、未読収集を5分間隔から、24時間を通じて10分間隔へ変更した。
 `mcs_check.sh` に夜間の間引きはない。
 既存環境では更新後に `mcs setup services` で取得ジョブを再設定する。

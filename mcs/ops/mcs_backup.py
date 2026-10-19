@@ -56,12 +56,12 @@ import _mcs_path  # noqa: E402,F401
 from ledger import static_contract_ok, valid_mcs_db  # noqa: E402
 from maintenance import MaintenanceError  # noqa: E402
 from mcs_queries import REPLY_GAP  # noqa: E402
-# _finite_number stays a module name: mcs_restore reads it from here
-from export_schema import finite_number as _finite_number  # noqa: E402
+from export_schema import finite_number  # noqa: E402
 from mcs_util import (  # noqa: E402
     atomic_write, file_sha256, fsync_dir, has_sqlite_sidecars, publish_tmp)
 from safe_io import create_exclusive  # noqa: E402
 import notify_cards  # noqa: E402
+from lifecycle_io import store_keychain  # noqa: E402
 
 MAGIC = b"MCSBKP1\n"
 ITERATIONS = 600000
@@ -189,7 +189,7 @@ class _Records:
     inode: int
 
     def check(self) -> None:
-        _private_directory(self.root)
+        require_private_directory(self.root)
         st = self.root.stat()
         if (st.st_dev, st.st_ino) != (self.device, self.inode):
             raise BackupError("backup_state_identity_changed")
@@ -225,7 +225,7 @@ class _Records:
 
 def _records(state_dir: str, policy: BackupPolicy | None = None) -> _Records:
     root = Path(state_dir)
-    _private_directory(root)
+    require_private_directory(root)
     if policy is not None:
         medium = Path(policy.destination)
         if root.is_relative_to(medium) or medium.is_relative_to(root):
@@ -270,15 +270,9 @@ def _keychain_read() -> bytes | None:
     return bytes.fromhex(value.decode("ascii"))
 
 
-def _keychain_store(account: str, pw: str, *, service: str) -> bool:
-    """Reuse setup's stdin-only writer and its matching read-back/rollback."""
-    from mcs_setup import _keychain_store as store
-    return store(account, pw, service=service)
-
-
 def keygen(state_dir: str, *, show_escrow: bool, confirm_human: bool,
            reason: str, keychain_reader: Callable[[], bytes | None] = _keychain_read,
-           keychain_store: KeychainStore = _keychain_store) -> KeygenResult:
+           keychain_store: KeychainStore = store_keychain) -> KeygenResult:
     """Generate once, with an exclusive redacted witness and explicit human escrow.
 
     An interrupted/failed attempt retains its pending witness for human review;
@@ -295,7 +289,7 @@ def keygen(state_dir: str, *, show_escrow: bool, confirm_human: bool,
         if keychain_reader() is not None:
             raise BackupError("backup_key_already_exists")
         key = os.urandom(32)
-        # A new random account cannot update a prior account through setup's
+        # A new random account cannot update a prior account through the shared
         # credential-update API. The service-only probe refuses any old key.
         account = "key-" + os.urandom(16).hex()
         witness = {"v": 1, "service": KEYCHAIN_SERVICE, "account": account,
@@ -341,7 +335,7 @@ def status(state_dir: str, policy: BackupPolicy
                   "source_last_successful_run", "last_verified_source_at", "last_bundle_created_at"):
         value = state.get(field)
         if value is not None and (
-                not _finite_number(value) or value < 0):
+                not finite_number(value) or value < 0):
             raise BackupError("backup_record_invalid")
         out[field] = value
     source_at = out["source_last_successful_run"]
@@ -399,7 +393,7 @@ def _record_success(records: _Records, state, action: str, result, *,
         if action in ("drill", "restore"):
             folder = records.root / "drills"
             folder.mkdir(mode=0o700, exist_ok=True)
-            _private_directory(folder)
+            require_private_directory(folder)
             name = "drills/" + os.urandom(16).hex() + ".json"
             records.write(name, {"v": 1, "action": action,
                                 "policy_id": state["policy_id"], "key_source": key_source,
@@ -434,7 +428,7 @@ def _held_render_count(destination: str | None) -> int | None:
         return None
 
 
-def _private_directory(path: Path) -> None:
+def require_private_directory(path: Path) -> None:
     st = path.lstat()
     if (not path.is_absolute() or path.resolve() != path
             or not stat.S_ISDIR(st.st_mode)
@@ -473,7 +467,7 @@ class BackupPolicy:
             raise BackupError("backup_policy_required")
         dest, scratch = Path(self.destination), Path(self.scratch_dir)
         for path in (dest, scratch):
-            _private_directory(path)
+            require_private_directory(path)
         if dest.is_relative_to(scratch) or scratch.is_relative_to(dest):
             raise BackupError("backup_scratch_must_be_separate")
         st = dest.stat()
@@ -485,7 +479,7 @@ class BackupPolicy:
 def load_policy(path: str | Path, *, require_scheduled: bool = False) -> tuple[BackupPolicy | None, bool]:
     """Read a bounded private owner policy; callers separately validate the medium."""
     path = Path(path)
-    _private_directory(path.parent)
+    require_private_directory(path.parent)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as handle:
         st = os.fstat(handle.fileno())
@@ -516,7 +510,7 @@ def _key(provider: Callable[[], bytes | None]) -> bytes:
 
 def _fresh(timestamp: float | None, policy: BackupPolicy) -> None:
     now = time.time()
-    if (not _finite_number(timestamp)
+    if (not finite_number(timestamp)
             or not 0 <= now - timestamp <= policy.max_rpo_seconds):
         raise BackupError("backup_rpo_exceeded_or_unknown")
 
@@ -568,7 +562,7 @@ def _inventory_connection(path: Path, max_steps: int | None, deadline: float | N
                 db.set_progress_handler(None, 0)
 
 
-def _inventory(path: Path, *, max_steps: int | None = None,
+def inventory_snapshot(path: Path, *, max_steps: int | None = None,
                deadline: float | None = None) -> Inventory:
     """Validate static SQLite and report only allowlisted counts/timestamps."""
     if max_steps is None and not valid_mcs_db(str(path)):
@@ -629,7 +623,7 @@ def _inventory(path: Path, *, max_steps: int | None = None,
         ):
             columns = {r[1] for r in db.execute(f'PRAGMA table_info("{table}")')}
             value = db.execute(query).fetchone()[0] if required <= columns else None
-            if value is not None and not _finite_number(value):
+            if value is not None and not finite_number(value):
                 raise BackupError("backup_invalid_metric")
             metrics[name] = value
         jobs: dict[str, dict[str, int]] | None = None
@@ -715,7 +709,7 @@ def offsite(snapshot: str, policy: BackupPolicy,
         _copy_private(source, plain, policy.max_snapshot_bytes)
         if file_sha256(source) != file_sha256(plain):
             raise BackupError("backup_source_changed")
-        inventory = _inventory(plain)
+        inventory = inventory_snapshot(plain)
         _fresh(inventory["last_successful_run"], policy)
         compressed, encrypted = work / "ledger.gz", work / "cipher"
         with plain.open("rb") as src, compressed.open("xb") as dst:
@@ -840,7 +834,7 @@ def _decode(bundle: Path, expected_sha256: str, key: bytes,
                 raise BackupError("backup_plain_size_mismatch")
         if file_sha256(plain) != manifest["plain_sha256"]:
             raise BackupError("backup_plain_checksum_failed")
-        if _inventory(plain) != manifest["inventory"]:
+        if inventory_snapshot(plain) != manifest["inventory"]:
             raise BackupError("backup_inventory_mismatch")
     except (ValueError, TypeError, KeyError, EOFError, gzip.BadGzipFile, zlib.error):
         raise BackupError("backup_payload_invalid") from None
@@ -900,13 +894,13 @@ def restore(bundle: str, expected_sha256: str, policy: BackupPolicy,
             or os.path.lexists(target) or target.name in ("", ".", "..")
             or target.is_relative_to(Path(policy.destination))):
         raise BackupError("backup_restore_requires_new_local_directory")
-    _private_directory(parent)
+    require_private_directory(parent)
     pinned = parent.stat()
     key = _key(passphrase_provider)
     with tempfile.TemporaryDirectory(prefix="mcs-restore-", dir=policy.scratch_dir) as work:
         plain, manifest = _decode(
             Path(bundle), expected_sha256, key, policy, Path(work))
-        _private_directory(parent)
+        require_private_directory(parent)
         current = parent.stat()
         if (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino):
             raise BackupError("backup_restore_parent_changed")
@@ -943,7 +937,7 @@ def restore(bundle: str, expected_sha256: str, policy: BackupPolicy,
 
 def _latest_snapshot(directory: str, policy: BackupPolicy) -> str:
     root = Path(directory)
-    _private_directory(root)
+    require_private_directory(root)
     for path in sorted(root.iterdir(), reverse=True):
         if (re.fullmatch(r"ledger-[0-9]{8}\.db", path.name)
                 and not path.is_symlink()
@@ -999,7 +993,7 @@ def _snapshot_info(snapshot: str, policy: BackupPolicy, *,
                    ) -> tuple[int, Inventory]:
     """Inspect one private static candidate using the existing SQLite inventory."""
     source = Path(snapshot)
-    _private_directory(source.parent)
+    require_private_directory(source.parent)
     st = source.lstat()
     if (source.resolve() != source or not source.is_absolute()
             or not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
@@ -1007,7 +1001,7 @@ def _snapshot_info(snapshot: str, policy: BackupPolicy, *,
             or has_sqlite_sidecars(source)):
         raise BackupError("backup_static_snapshot_required")
     before_hash, before = _inspection_hash(source, policy.max_snapshot_bytes)
-    inventory = _inventory(
+    inventory = inventory_snapshot(
         source, max_steps=max_steps, deadline=time.monotonic() + max_seconds)
     after_hash, after = _inspection_hash(source, policy.max_snapshot_bytes)
     if (before_hash != after_hash
@@ -1041,7 +1035,7 @@ def plan(policy_path: str | Path, *, snapshot: str | None = None,
     facts = report["facts"]
     try:
         if (type(max_steps) is not int or not 100 <= max_steps <= 1_000_000_000
-                or not _finite_number(max_seconds) or max_seconds <= 0):
+                or not finite_number(max_seconds) or max_seconds <= 0):
             raise BackupError("backup_inspection_budget_invalid")
         facts.update(sqlite_max_steps=max_steps, sqlite_max_seconds=max_seconds,
                      sqlite_progress_granularity=100,
@@ -1132,7 +1126,7 @@ def plan(policy_path: str | Path, *, snapshot: str | None = None,
             if (not target.is_absolute() or target.resolve() != target
                     or os.path.lexists(target) or target.name in ("", ".", "..")):
                 raise BackupError("backup_restore_requires_new_local_directory")
-            _private_directory(target.parent)
+            require_private_directory(target.parent)
             for root in roots + ([Path(snapshot).parent] if snapshot is not None else []):
                 if target.is_relative_to(root) or root.is_relative_to(target):
                     raise BackupError("backup_restore_destination_collision")
@@ -1174,7 +1168,7 @@ preflight = plan
 
 def main(argv: list[str] | None = None, *,
          keychain_reader: Callable[[], bytes | None] = _keychain_read,
-         keychain_store: KeychainStore = _keychain_store) -> int:
+         keychain_store: KeychainStore = store_keychain) -> int:
     """Local CLI: explicit policy/records, exact raw key-fd or dedicated Keychain."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("keygen", "offsite", "verify",

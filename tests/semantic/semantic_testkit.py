@@ -3,14 +3,17 @@ thread seeding, config builders, deterministic Jev/LLM stubs, canonical
 drain drivers, evaluation records and semantic-facts/v2 ``fact``/``doc``
 builders.  Not a test module (no ``test_`` prefix); sibling files import
 it via the tests/ sys.path bootstrap."""
+import mcs_contract
+import semantic_drain
+import semantic_extraction
+import semantic_policy
+import semantic_store
 import json
 import re
 import time
 from types import SimpleNamespace
 
 import ledger
-import mcs_adapter
-import semantic
 import semantic_evaluation as evaluation
 import semantic_facts as sf
 import semantic_jev as jev
@@ -24,7 +27,7 @@ _ledger = make_ledger
 
 
 def _message(mid=1, pid=1, parent=None, body=BODY, unread=True):
-    return mcs_adapter.Message(
+    return mcs_contract.Message(
         message_id=mid, project_id=pid, parent_id=parent,
         sender_id=1, sender_name="sender", sender_type="user",
         profession="", organization="",
@@ -187,7 +190,7 @@ def _preflight_jev():
 
 
 def _drain(db, llm=None, jev=None):
-    return semantic.run_due(
+    return semantic_drain.run_due(
         db, _canonical_cfg(), {"errors": []},
         time.monotonic() + 300,
         jev_client=jev or _preflight_jev(), llm_fn=llm or _llm_v2)
@@ -253,7 +256,7 @@ def _drained_old_version(tmp_path):
     older (sentinel) content."""
     import semantic_v4 as v4
     db = _seeded_two(tmp_path)
-    semantic.run_due(db, _canonical_cfg(), {"errors": []},
+    semantic_drain.run_due(db, _canonical_cfg(), {"errors": []},
                      time.monotonic() + 300, jev_client=_PassJev(),
                      llm_fn=_llm_v2)
     for kind in ("canonical_projection", v4.KIND_V4):
@@ -279,7 +282,7 @@ def _kind_rows(db, kind, mid=None):
 
 
 def _pending_fact(member):
-    facts, complete, _ = semantic.extract_facts(_llm, member)
+    facts, complete, _ = semantic_extraction.extract_facts(_llm, member)
     assert complete
     facts[0]["kind"] = "pending_item"
     return facts
@@ -411,7 +414,7 @@ def _delivery_db(tmp_path, messages=()):
 
 
 def _summary(db, claims=1):
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     content = {"claims": [
         {"text": f"claim-{i}-" + "x" * 220, "section": "status",
          "claim_kind": "reported_fact"}
@@ -421,7 +424,7 @@ def _summary(db, claims=1):
         "semantic_summary", json.dumps(content, ensure_ascii=False),
         project_id=1, message_id=1, model="Qwen3.5-9B",
         meta={"fingerprint": bundle["source_fingerprint"],
-              "policy_fingerprint": semantic.policy_fingerprint(semantic.semantic_config(_cfg("enforce"))[0]),
+              "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg("enforce"))[0]),
               "audit_status": "PASS",
               "publication_mode": "enforce",
               "target_revision": bundle["members"][0]["revision"]})
@@ -445,14 +448,14 @@ def _semantic_event(db, text="notice"):
     for row in db.db.execute(
             "SELECT event_id FROM notify_outbox WHERE kind='new_messages'"):
         db.outbox_mark(row["event_id"], "accepted")
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     _summary(db, claims=1)
     payload = {
         "root_id": 1, "target_message_id": 1, "src_event_id": src,
         "target_revision": bundle["members"][0]["revision"],
         "fingerprint": bundle["source_fingerprint"],
-        "policy_version": semantic.POLICY_VERSION,
-        "policy_fingerprint": semantic.policy_fingerprint(semantic.semantic_config(_cfg("enforce"))[0]), "text": _notice_text(text),
+        "policy_version": semantic_policy.POLICY_VERSION,
+        "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg("enforce"))[0]), "text": _notice_text(text),
     }
     db.outbox_add("semantic_notice", 1, payload)
     return db.db.execute(
@@ -498,14 +501,14 @@ def _audit_pair(db, mid, cfg, status="PASS"):
     """Write a synthetic current summary/audit pair for coverage tests."""
     row = db.db.execute("SELECT project_id,parent_id FROM messages WHERE message_id=?",
                         (mid,)).fetchone()
-    bundle = semantic.thread_bundle(db, row["project_id"], row["parent_id"] or mid)
-    scfg, errors = semantic.semantic_config(cfg)
+    bundle = semantic_store.thread_bundle(db, row["project_id"], row["parent_id"] or mid)
+    scfg, errors = semantic_policy.semantic_config(cfg)
     assert not errors
     result = {"summary": {"target_message_id": mid, "claims": [],
                           "audit_status": status},
               "findings": [], "repaired": False}
     with db.db:
-        semantic._write_result(
+        semantic_drain._write_result(
             db, row["project_id"], mid, result, bundle["source_fingerprint"],
             {member["message_id"]: member for member in bundle["members"]},
-            status, semantic.policy_fingerprint(scfg), scfg["summary_mode"])
+            status, semantic_policy.policy_fingerprint(scfg), scfg["summary_mode"])

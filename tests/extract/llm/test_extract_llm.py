@@ -6,6 +6,9 @@ context, schema probing, chunked/batch/parallel extraction, and the
 consumer filters that keep negated / other-person / historical mentions
 out of "current" surfaces.
 """
+import extract_quality
+import extract_schema
+import extract_validation
 import json
 import time
 import urllib.error
@@ -47,7 +50,7 @@ def _v1_artifact(db, mid, content, chash):
 
 def test_validate_med_status_subject_negated():
     body = "プレドニンを中止しました"
-    out = extract_llm._validate({"meds": [{
+    out = extract_validation.validate({"meds": [{
         "name": "プレドニン", "dose": None, "action": "stop",
         "status": "past", "subject": "patient", "negated": False,
         "evidence": "プレドニンを中止しました"}]}, body)
@@ -58,7 +61,7 @@ def test_validate_med_status_subject_negated():
 
 
 def test_validate_defaults_and_invalid_values():
-    out = extract_llm._validate({"meds": [
+    out = extract_validation.validate({"meds": [
         {"name": "薬A", "action": "none"},                      # defaults
         {"name": "薬B", "action": "start", "status": "bogus"},   # bad enum
         {"name": "薬C", "action": "start", "negated": "false"},  # bad type
@@ -77,11 +80,11 @@ def test_validate_defaults_and_invalid_values():
 
 
 def test_validate_all_corrupt_is_failure_not_empty():
-    assert extract_llm._validate(
+    assert extract_validation.validate(
         {"symptoms": [{"text": "pain", "negated": "false"}]}) is None
-    assert extract_llm._validate({"vitals": {"hr": True}}) is None
+    assert extract_validation.validate({"vitals": {"hr": True}}) is None
     # but a corrupt sibling doesn't sink the valid fields
-    out = extract_llm._validate({"summary": "ok",
+    out = extract_validation.validate({"summary": "ok",
                                  "vitals": {"hr": True}})
     assert out["summary"] == "ok" and "vitals" not in out
     assert out["_items_dropped"] == 1
@@ -93,13 +96,13 @@ def test_validate_rejects_blank_clinical_identifiers(section, field, value):
     item = {field: value, "action": "none", "subject": "patient",
             "status": "current" if section == "meds" else "ongoing",
             "negated": False, "evidence": "確認した"}
-    out = extract_llm._validate({section: [item], "summary": "確認した"}, "確認した")
+    out = extract_validation.validate({section: [item], "summary": "確認した"}, "確認した")
     assert out[section] == []
     assert out["_items_dropped"] == 1
 
 
 def test_validate_symptom_status_preserved():
-    out = extract_llm._validate({"symptoms": [
+    out = extract_validation.validate({"symptoms": [
         {"text": "発熱", "negated": False, "status": "resolved"},
         {"text": "咳嗽", "negated": False, "status": "bogus"},
     ]})
@@ -110,7 +113,7 @@ def test_validate_symptom_status_preserved():
 
 
 def test_validate_request_from_due():
-    out = extract_llm._validate({"requests": [
+    out = extract_validation.validate({"requests": [
         {"to": "医師", "from": "家族", "action": "状態確認",
          "due": "2026-10-01"},
         {"to": "薬剤師", "action": "薬確認", "due": "明日"},  # not ISO
@@ -125,7 +128,7 @@ def test_validate_request_from_due():
 def test_validate_request_kind_is_descriptive():
     """#20 order 1: kind is descriptive — a valid value is kept, an
     invalid one omits the KEY and the item survives (never dropped)."""
-    out = extract_llm._validate({"requests": [
+    out = extract_validation.validate({"requests": [
         {"to": "医師", "action": "状態確認", "kind": "question"},
         {"to": "医師", "action": "訪問予定", "kind": "Self_Plan "},
         {"to": "医師", "action": "薬確認", "kind": "explicit"},
@@ -142,7 +145,7 @@ def test_validate_request_condition_must_locate_in_body():
     the key (never the item) when it does not locate, capped at 60."""
     long = "".join(chr(0x3042 + i) for i in range(80))   # unique 80-char run
     body = "血圧が 160を超えるようなら医師へ連絡をお願いします。" + long + "なら。"
-    out = extract_llm._validate({"requests": [
+    out = extract_validation.validate({"requests": [
         {"to": "看護師", "action": "医師へ連絡",
          "condition": "血圧が160を超えるようなら"},     # whitespace-tolerant
         {"to": "看護師", "action": "報告", "condition": "熱が出たら"},
@@ -160,12 +163,12 @@ def test_validate_request_condition_must_locate_in_body():
     assert reqs[1]["unverified"] is True
     assert out["_evidence_dropped"] == 1
     # no condition key: a located request stays verified
-    plain = extract_llm._validate({"requests": [
+    plain = extract_validation.validate({"requests": [
         {"to": "看護師", "action": "医師へ連絡",
          "evidence": "医師へ連絡をお願いします"}]}, body)
     assert "unverified" not in plain["requests"][0]
     # no body at all -> nothing to locate against -> key absent
-    nobody = extract_llm._validate({"requests": [
+    nobody = extract_validation.validate({"requests": [
         {"to": "看護師", "action": "連絡", "condition": "熱が出たら"}]})
     assert "condition" not in nobody["requests"][0]
 
@@ -207,12 +210,12 @@ def test_repair_losing_located_condition_is_rejected():
              "_evidence_dropped": 1}
     lost = {"requests": [{"to": "看護師", "action": "連絡",
                           "unverified": True}]}
-    assert not extract_llm._improves(lost, prior)
+    assert not extract_quality.improves(lost, prior)
 
 
 def test_request_from_and_due_text_must_be_in_body():
     body = "ケアマネより: 明日までに医師へ連絡をお願いします。"
-    reqs = extract_llm._validate({"requests": [
+    reqs = extract_validation.validate({"requests": [
         {"to": "看護師", "from": "ケアマネ", "action": "連絡",
          "due_text": "明日 までに"},                         # both located
         {"to": "看護師", "from": "家族", "action": "連絡",
@@ -251,35 +254,35 @@ def test_lift_guard_drops_context_detail_keeps_body_detail(monkeypatch):
 
 def test_validate_reply_requires_kind_and_located_evidence():
     body = "承知しました。明日の往診で確認します。"
-    ok = extract_llm._validate(
+    ok = extract_validation.validate(
         {"reply": {"kind": "ack", "evidence": "承知しました"}}, body)
     assert ok["reply"] == {"kind": "ack", "evidence": "承知しました"}
-    done = extract_llm._validate(
+    done = extract_validation.validate(
         {"reply": {"kind": "done", "evidence": "明日の往診で確認します"},
          "summary": "s"}, body)
     assert done["reply"]["kind"] == "done"
     # unlocated evidence: the typed reply is dropped whole (counted as
     # an evidence drop); a missing quote is a counted item drop so the
     # repair asks for it instead of losing it silently
-    out = extract_llm._validate(
+    out = extract_validation.validate(
         {"reply": {"kind": "ack", "evidence": "本文にない"}, "summary": "s"},
         body)
     assert "reply" not in out and out["_evidence_dropped"] == 1
-    out = extract_llm._validate({"reply": {"kind": "ack"}, "summary": "s"},
+    out = extract_validation.validate({"reply": {"kind": "ack"}, "summary": "s"},
                                 body)
     assert "reply" not in out and out["_items_dropped"] == 1
     # null = no reply: nothing dropped, nothing counted
-    out = extract_llm._validate({"reply": None, "summary": "s"}, body)
+    out = extract_validation.validate({"reply": None, "summary": "s"}, body)
     assert "reply" not in out and "_items_dropped" not in out
     # invalid or missing kind: dropped and counted
     for r in ({"kind": "maybe", "evidence": "承知しました"},
               {"evidence": "承知しました"}, "ack"):
-        out = extract_llm._validate({"reply": r, "summary": "s"}, body)
+        out = extract_validation.validate({"reply": r, "summary": "s"}, body)
         assert "reply" not in out and out["_items_dropped"] == 1
 
 
 def test_schema_batch_item_inherits_kind_condition_reply():
-    props = extract_llm._SCHEMA_BATCH["schema"]["properties"]["items"][
+    props = extract_schema.SCHEMA_BATCH["schema"]["properties"]["items"][
         "items"]["properties"]
     req = props["requests"]["items"]["properties"]
     assert "kind" in req and "condition" in req
@@ -290,7 +293,7 @@ def test_schema_batch_item_inherits_kind_condition_reply():
 
 def test_validate_evidence_must_locate_uniquely_in_body():
     body = "発熱あり。発熱あり。"  # duplicated -> ambiguous span
-    out = extract_llm._validate({"symptoms": [
+    out = extract_validation.validate({"symptoms": [
         {"text": "発熱", "evidence": "発熱あり"},   # non-unique -> dropped
         {"text": "咳嗽", "evidence": "本文にない"},  # absent -> dropped
         {"text": "疼痛"},                            # absent key -> ok
@@ -301,14 +304,14 @@ def test_validate_evidence_must_locate_uniquely_in_body():
 
 
 def test_validate_evidence_without_body_is_dropped():
-    out = extract_llm._validate({"meds": [
+    out = extract_validation.validate({"meds": [
         {"name": "薬A", "action": "start", "evidence": "薬Aを開始"}]})
     assert "evidence" not in out["meds"][0]
     assert out["_evidence_dropped"] == 1
 
 
 def test_validate_events_still_string_only():
-    out = extract_llm._validate({"events": ["visit", {"e": "fall"}]})
+    out = extract_validation.validate({"events": ["visit", {"e": "fall"}]})
     assert out["events"] == ["visit"]
 
 
@@ -317,12 +320,12 @@ def test_validate_events_grounded_in_body():
     event lifted from thread context (or invented) is dropped and
     reported for the repair pass, never silently published."""
     drops = {}
-    out = extract_llm._validate(
+    out = extract_validation.validate(
         {"events": ["visit", "eol", "fall"], "summary": "訪問確認"},
         "本日訪問しました。状態は安定しています。", drops)
     assert out["events"] == ["visit"]
     assert set(drops["events"]) == {"eol", "fall"}
-    out = extract_llm._validate(
+    out = extract_validation.validate(
         {"events": ["eol"], "summary": "連絡"},
         "本日ご本人がお亡くなりになりました")
     assert out["events"] == ["eol"]
@@ -330,14 +333,14 @@ def test_validate_events_grounded_in_body():
 
 def test_is_thin():
     body = "あ" * 400
-    assert extract_llm._is_thin({"urgency": "routine"}, body)
-    assert extract_llm._is_thin({"events": ["visit"], "urgency": "high"},
+    assert extract_quality.is_thin({"urgency": "routine"}, body)
+    assert extract_quality.is_thin({"events": ["visit"], "urgency": "high"},
                                 body)
-    assert extract_llm._is_thin(
+    assert extract_quality.is_thin(
         {"events": ["visit"], "urgency": "high", "summary": "a"}, body)
-    assert not extract_llm._is_thin({"events": ["visit", "exam"]}, body)
-    assert not extract_llm._is_thin({"urgency": "routine"}, "短い")
-    assert not extract_llm._is_thin(None, body)
+    assert not extract_quality.is_thin({"events": ["visit", "exam"]}, body)
+    assert not extract_quality.is_thin({"urgency": "routine"}, "短い")
+    assert not extract_quality.is_thin(None, body)
 
 
 def test_thin_output_gets_one_repair_nudge(monkeypatch):
@@ -897,20 +900,20 @@ def test_merge_keeps_first_reply_and_dedupes_requests():
     b = {"requests": [{"to": "医師", "action": "確認", "kind": "question"},
                       {"to": "家族", "action": "連絡"}],
          "reply": {"kind": "done", "evidence": "完了"}}
-    out = extract_llm._merge([{"summary": "x"}, a, b])
+    out = extract_validation.merge([{"summary": "x"}, a, b])
     assert out["reply"] == {"kind": "ack", "evidence": "承知"}
     # dedupe key is (to, from, action, due, condition, due_text) —
     # kind is not part of it
     assert out["requests"] == [
         {"to": "医師", "action": "確認", "kind": "request"},
         {"to": "家族", "action": "連絡"}]
-    assert "reply" not in extract_llm._merge([{"summary": "x"}])
+    assert "reply" not in extract_validation.merge([{"summary": "x"}])
 
 
 def test_repair_cannot_drop_reply():
     prior = {"reply": {"kind": "ack", "evidence": "承知"}, "summary": "s"}
-    assert not extract_llm._improves({"summary": "s"}, prior)
-    assert extract_llm._improves(
+    assert not extract_quality.improves({"summary": "s"}, prior)
+    assert extract_quality.improves(
         {"reply": {"kind": "ack", "evidence": "承知"},
          "meds": [{"name": "薬A"}], "summary": "s"}, prior)
 
@@ -956,7 +959,7 @@ def test_rule_hints_ride_the_prompt_as_candidates(monkeypatch):
 def test_context_text_cannot_become_evidence(tmp_path):
     """A quote that only appears in the context block must be dropped —
     evidence binds to the target body, enforced by _validate."""
-    out = extract_llm._validate(
+    out = extract_validation.validate(
         {"meds": [{"name": "薬A", "action": "start",
                    "evidence": "コンテキストにだけある文言"}]},
         body="対象本文には別のことが書かれている")
@@ -1138,7 +1141,7 @@ def test_karte_quote_rejected_by_body_only_evidence_check():
     """A quote lifted from the 連携サマリー is not in the target body,
     so the body-only evidence check drops it."""
     summary = "合成薬は先月中止"
-    out = extract_llm._validate(
+    out = extract_validation.validate(
         {"meds": [{"name": "合成薬", "action": "stop", "evidence": summary}]},
         body="対象本文は別の内容")
     assert "evidence" not in out["meds"][0]
@@ -1265,7 +1268,7 @@ def test_extract_sends_response_format_when_supported(monkeypatch):
     extract_req = op.calls[-1]
     assert extract_req["response_format"]["type"] == "json_schema"
     assert extract_req["response_format"]["json_schema"] \
-        == extract_llm._SCHEMA
+        == extract_schema.SCHEMA
 
 
 def test_extract_degrades_mid_run_on_format_reject(monkeypatch):
@@ -1655,7 +1658,7 @@ def test_posted_at_reaches_prompt(monkeypatch):
 def test_validate_request_due_text_preserved():
     """F09: relative phrasing is kept verbatim — never coerced into a
     guessed ISO date."""
-    out = extract_llm._validate({"requests": [
+    out = extract_validation.validate({"requests": [
         {"to": "看護師", "action": "確認", "due_text": "明日までに"}]})
     assert out["requests"][0]["due_text"] == "明日までに"
     assert "due" not in out["requests"][0]
@@ -2083,7 +2086,7 @@ def test_deferred_batch_rows_fall_back_to_singles(tmp_path, monkeypatch):
     calls = {"batch": 0, "single": 0}
 
     def _call(prompt, **kw):
-        if kw.get("schema") is extract_llm._SCHEMA_BATCH:
+        if kw.get("schema") is extract_schema.SCHEMA_BATCH:
             calls["batch"] += 1
             return extract_llm._DEFERRED
         calls["single"] += 1
@@ -2102,7 +2105,7 @@ def test_deferred_batch_fall_back_parallel(tmp_path, monkeypatch):
     calls = {"batch": 0, "single": 0}
 
     def _call(prompt, **kw):
-        if kw.get("schema") is extract_llm._SCHEMA_BATCH:
+        if kw.get("schema") is extract_schema.SCHEMA_BATCH:
             calls["batch"] += 1
             return extract_llm._DEFERRED
         calls["single"] += 1
@@ -2152,29 +2155,29 @@ def test_cli_batch_default_and_pass_through(monkeypatch):
 def test_vitals_guard_relabels_mislabelled_key():
     """Regression: '脈は48回／分' extracted as bs:48 must relabel to
     hr — a pulse shown as blood sugar reads as severe hypoglycemia."""
-    out = extract_llm._validate({"vitals": {"bs": 48}},
+    out = extract_validation.validate({"vitals": {"bs": 48}},
                                 "SpO2は98。脈は48回／分です。")
     assert out["vitals"] == {"hr": 48.0}
 
 
 def test_vitals_guard_keeps_labelled_and_unlabelled():
-    out = extract_llm._validate({"vitals": {"bs": 48, "hr": 72}},
+    out = extract_validation.validate({"vitals": {"bs": 48, "hr": 72}},
                                 "血糖値48。脈拍は72。")
     assert out["vitals"] == {"bs": 48.0, "hr": 72.0}
     # a verbatim number with no nearby label is unverifiable, kept
-    out = extract_llm._validate({"vitals": {"rr": 20}},
+    out = extract_validation.validate({"vitals": {"rr": 20}},
                                 "バイタルメモ 20 と記録")
     assert out["vitals"] == {"rr": 20.0}
 
 
 def test_vitals_guard_drops_absent_and_ambiguous():
     drops = {}
-    out = extract_llm._validate({"vitals": {"bs": 99, "hr": 48}},
+    out = extract_validation.validate({"vitals": {"bs": 99, "hr": 48}},
                                 "脈は48回／分です", drops)
     assert out["vitals"] == {"hr": 48.0}
     assert any("vitals.bs" in s for s in drops["vitals"])
     drops = {}
-    out = extract_llm._validate({"vitals": {"rr": 48}},
+    out = extract_validation.validate({"vitals": {"rr": 48}},
                                 "脈拍48、血糖48", drops)
     assert "rr" not in out.get("vitals", {})
     assert drops["vitals"]
@@ -2183,7 +2186,7 @@ def test_vitals_guard_drops_absent_and_ambiguous():
 def test_vitals_guard_relabel_conflict_drops():
     """bs->hr remap must not overwrite a real hr reading."""
     drops = {}
-    out = extract_llm._validate({"vitals": {"hr": 80, "bs": 48}},
+    out = extract_validation.validate({"vitals": {"hr": 80, "bs": 48}},
                                 "脈拍80。脈は48回／分です", drops)
     assert out["vitals"]["hr"] == 80.0
     assert "bs" not in out["vitals"]
@@ -2191,7 +2194,7 @@ def test_vitals_guard_relabel_conflict_drops():
 
 
 def test_repair_issues_include_vitals_notes():
-    issues = extract_llm._repair_issues(
+    issues = extract_quality.repair_issues(
         {"vitals": ["vitals.bs=48 は本文に数値がありません"]},
         {"vitals": {}})
     assert any("vitals.bs" in i for i in issues)
@@ -2217,7 +2220,7 @@ def test_llm_extract_injects_qc_feedback(monkeypatch):
 def test_validate_drops_json_fragment_summary():
     """Model sometimes parrots JSON into free text ('…回复{') — a
     summary containing structural characters is dropped, not stored."""
-    d = extract_llm._validate(
+    d = extract_validation.validate(
         {"summary": "デイ帰宅前再试一次，回复{",
          "points": ["ok要点", "悪い{断片"],
          "vitals": {"hr": 48}},
@@ -2366,10 +2369,10 @@ def test_qc_stale_source_artifact_does_not_flag(tmp_path, monkeypatch):
 
 
 def test_llm_validation_rejects_string_boolean_and_bool_vital():
-    assert extract_llm._validate({"symptoms": [
+    assert extract_validation.validate({"symptoms": [
         {"text": "pain", "negated": "false"}
     ]}) is None
-    assert extract_llm._validate({"vitals": {"hr": True}}) is None
+    assert extract_validation.validate({"vitals": {"hr": True}}) is None
 
 
 def test_llm_error_retry_resets_after_body_change(tmp_path, monkeypatch):
@@ -2494,7 +2497,7 @@ def test_v3_pass_folds_v1v2_inline(tmp_path, monkeypatch):
 
 def test_validate_v4_med_route_freq_prn():
     body = "カロナール500mgを頓服で、1日3回まで内服可能です"
-    out = extract_llm._validate({"meds": [{
+    out = extract_validation.validate({"meds": [{
         "name": "カロナール", "dose": "500mg", "action": "none",
         "status": "current", "subject": "patient", "negated": False,
         "route": "oral", "freq": "1日3回まで", "prn": True,
@@ -2506,7 +2509,7 @@ def test_validate_v4_med_route_freq_prn():
 
 def test_validate_v4_invalid_route_drops_item_not_field():
     body = "プレドニンを中止しました"
-    out = extract_llm._validate({"meds": [
+    out = extract_validation.validate({"meds": [
         {"name": "プレドニン", "action": "stop", "route": "bogus"},
         {"name": "ロキソプロフェン", "action": "none"}]}, body)
     assert [m["name"] for m in out["meds"]] == ["ロキソプロフェン"]
@@ -2514,7 +2517,7 @@ def test_validate_v4_invalid_route_drops_item_not_field():
 
 def test_validate_v4_symptom_severity_onset_duration():
     body = "昨日から強い頭痛が3日間続いています"
-    out = extract_llm._validate({"symptoms": [{
+    out = extract_validation.validate({"symptoms": [{
         "text": "頭痛", "severity": "severe", "onset": "昨日から",
         "duration": "3日間", "evidence": "強い頭痛"}]}, body)
     s = out["symptoms"][0]
@@ -2524,7 +2527,7 @@ def test_validate_v4_symptom_severity_onset_duration():
 
 def test_validate_v4_labs():
     body = "採血結果: HbA1c 7.2%と高め、BNPは正常でした"
-    out = extract_llm._validate({"labs": [
+    out = extract_validation.validate({"labs": [
         {"name": "HbA1c", "value": 7.2, "unit": "%", "flag": "high",
          "evidence": "HbA1c 7.2%と高め"},
         {"name": "BNP", "value": "正常", "evidence": "BNPは正常"},
@@ -2562,7 +2565,7 @@ def test_structured_view_shows_v4_detail(tmp_path):
 
 
 def test_blood_pressure_at_body_end_keeps_diastolic_side():
-    out = extract_llm._validate({"vitals": {"dbp": 80}}, "血圧120/80")
+    out = extract_validation.validate({"vitals": {"dbp": 80}}, "血圧120/80")
     assert out["vitals"] == {"dbp": 80.0}
 
 
@@ -2585,7 +2588,7 @@ def test_multichunk_labs_survive_and_latest_reading_wins(monkeypatch):
     {"vitals": {"hr": 10**400}},
 ])
 def test_invalid_item_never_discards_valid_sibling(bad):
-    out = extract_llm._validate({**bad, "summary": "合成要約"}, "合成本文")
+    out = extract_validation.validate({**bad, "summary": "合成要約"}, "合成本文")
     assert out["summary"] == "合成要約"
     assert out["_items_dropped"] == 1
 
@@ -2689,14 +2692,14 @@ def test_resident_reloads_and_holds_invalid_admission_config(monkeypatch, second
 
 def test_request_free_text_fields_are_length_capped():
     """U05-F08 hardening: ungrounded request text is bounded."""
-    d = extract_llm._validate({"requests": [
+    d = extract_validation.validate({"requests": [
         {"to": "医" * 100, "from": "看" * 100, "action": "合" * 500}]})
     rq = d["requests"][0]
     assert len(rq["to"]) == 30 and len(rq["from"]) == 30
     # the prompt now asks for 30字 (#20 order 1) but the stored cap
     # stays 60 so existing expected actions keep substring-matching
     assert len(rq["action"]) == 60
-    short = extract_llm._validate({"requests": [
+    short = extract_validation.validate({"requests": [
         {"to": "医師", "action": "合成確認"}]})["requests"][0]
     assert short["to"] == "医師" and short["action"] == "合成確認"
 
@@ -2933,13 +2936,13 @@ def test_refail_ignores_older_version_auto_retry(tmp_path):
 # ---------- v5: urgency evidence / unclear / vital thresholds ----------
 
 def test_validate_urgency_unclear_accepted():
-    assert extract_llm._validate(
+    assert extract_validation.validate(
         {"urgency": "unclear"}, "様子を見ます")["urgency"] == "unclear"
 
 
 def test_validate_urgency_high_requires_locatable_evidence():
     body = "意識がはっきりしません。早急な往診をお願いします。"
-    ok = extract_llm._validate(
+    ok = extract_validation.validate(
         {"urgency": "high",
          "urgency_evidence": ["意識がはっきりしません",
                               "本文に無い引用は捨てられる"]}, body)
@@ -2947,18 +2950,18 @@ def test_validate_urgency_high_requires_locatable_evidence():
     assert ok["urgency_evidence"] == ["意識がはっきりしません"]
     assert ok["_evidence_dropped"] == 1
     # an unquotable high degrades to unclear — never silently routine
-    miss = extract_llm._validate(
+    miss = extract_validation.validate(
         {"urgency": "high", "urgency_evidence": ["存在しない引用"]}, body)
     assert miss["urgency"] == "unclear" and "urgency_evidence" not in miss
-    none = extract_llm._validate({"urgency": "high"}, body)
+    none = extract_validation.validate({"urgency": "high"}, body)
     assert none["urgency"] == "unclear"
     # routine needs no evidence — absence of urgency cannot be quoted
-    assert extract_llm._validate({"urgency": "routine"}, body)["urgency"] \
+    assert extract_validation.validate({"urgency": "routine"}, body)["urgency"] \
         == "routine"
 
 
 def test_merge_urgency_precedence_high_unclear_routine():
-    merge = extract_llm._merge
+    merge = extract_validation.merge
     assert merge([{"urgency": "routine"},
                   {"urgency": "unclear"}])["urgency"] == "unclear"
     out = merge([{"urgency": "unclear", "urgency_evidence": ["曖昧な記述"]},
@@ -2974,15 +2977,15 @@ def test_merge_urgency_precedence_high_unclear_routine():
 
 
 def test_vital_threshold_policy_config():
-    assert extract_llm.vital_threshold_policy(None) is None
-    assert extract_llm.vital_threshold_policy({}) is None
-    assert extract_llm.vital_threshold_policy(
+    assert extract_validation.vital_threshold_policy(None) is None
+    assert extract_validation.vital_threshold_policy({}) is None
+    assert extract_validation.vital_threshold_policy(
         {"vital_urgency": {"mode": "off"}}) is None
-    pol = extract_llm.vital_threshold_policy(
+    pol = extract_validation.vital_threshold_policy(
         {"vital_urgency": {"mode": "flag"}})
     assert pol["mode"] == "flag"
     assert pol["thresholds"]["spo2_lte"] == 90.0
-    pol = extract_llm.vital_threshold_policy(
+    pol = extract_validation.vital_threshold_policy(
         {"vital_urgency": {"mode": "high",
                            "thresholds": {"spo2_lte": 92,
                                           "sbp_lte": "bad"}}})
@@ -2991,20 +2994,20 @@ def test_vital_threshold_policy_config():
 
 
 def test_vital_threshold_flags_anchor_and_context():
-    th = extract_llm._VITAL_THRESHOLDS_DEFAULT
-    flags = extract_llm._vital_threshold_flags(
+    th = extract_validation._VITAL_THRESHOLDS_DEFAULT
+    flags = extract_validation.vital_threshold_flags(
         {"spo2": 88.0}, "SpO2 88%まで低下しています。苦しそうです", th)
     assert [f["key"] for f in flags] == ["spo2"]
     assert "SpO2 88" in flags[0]["evidence"]
     # label mismatch — the number must anchor to the right vital
-    assert extract_llm._vital_threshold_flags(
+    assert extract_validation.vital_threshold_flags(
         {"spo2": 88.0}, "血糖値は88でした", th) == []
     # family / conditional / past / unmeasurable readings never fire
     for body in ("母のSpO2は88%でしたが本人は安定しています",
                  "SpO2が88%を切ったら連絡してください",
                  "先月はSpO2 88%まで低下したことがありました",
                  "SpO2 88%と出ましたが測定不能の可能性があります"):
-        assert extract_llm._vital_threshold_flags(
+        assert extract_validation.vital_threshold_flags(
             {"spo2": 88.0}, body, th) == [], body
 
 
@@ -3016,11 +3019,11 @@ def test_vital_policy_off_flag_high_modes(monkeypatch):
                                          "summary": "SpO2低下"})
     out = extract_llm.llm_extract(body)
     assert out["urgency"] == "routine" and "vital_flags" not in out
-    flag = extract_llm.vital_threshold_policy(
+    flag = extract_validation.vital_threshold_policy(
         {"vital_urgency": {"mode": "flag"}})
     out = extract_llm.llm_extract(body, vital_policy=flag)
     assert out["urgency"] == "routine" and out["vital_flags"]
-    high = extract_llm.vital_threshold_policy(
+    high = extract_validation.vital_threshold_policy(
         {"vital_urgency": {"mode": "high"}})
     out = extract_llm.llm_extract(body, vital_policy=high)
     assert out["urgency"] == "high"
@@ -3043,6 +3046,6 @@ def test_vital_policy_applies_after_chunk_merge(monkeypatch):
     out = extract_llm.llm_extract(
         body, vital_policy={"mode": "high",
                             "thresholds": dict(
-                                extract_llm._VITAL_THRESHOLDS_DEFAULT)})
+                                extract_validation._VITAL_THRESHOLDS_DEFAULT)})
     assert out["_chunks_total"] == 2
     assert out["urgency"] == "high" and out["vital_flags"]

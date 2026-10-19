@@ -18,6 +18,7 @@ from mcs_util import loads_dict
 
 JST = ZoneInfo("Asia/Tokyo")
 DAY_S = 86400
+UNKNOWN_TIME = -(2**63)
 
 # extract_llm med `action` values meaning "the prescription changed"
 # ('none' = mentioned without a change — counted in stats, never a

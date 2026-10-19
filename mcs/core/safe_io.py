@@ -12,6 +12,7 @@ use it.
 import os
 import stat
 import tempfile
+from pathlib import Path
 from contextlib import suppress
 
 
@@ -94,3 +95,21 @@ def read_regular_nofollow(path, limit: int, error, *,
         if not stat.S_ISREG(st.st_mode) or (check_size and st.st_size > limit):
             raise error()
         return stream.read(limit + 1)
+
+
+def publish_new_bytes(path, raw):
+    """Publish a fully synced private file without replacing an existing destination."""
+    path = Path(path)
+    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=".alias-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # link is an atomic, exclusive publication. A crash before it leaves
+        # only staging; a later failure leaves complete, recoverable JSON.
+        os.link(staging, path)
+        fsync_dir(path.parent)
+    finally:
+        with suppress(OSError):
+            os.unlink(staging)

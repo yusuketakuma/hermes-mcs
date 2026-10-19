@@ -38,7 +38,7 @@ def test_card_attachment_scope_uses_frozen_delivered_coverage(
                 "VALUES(?,?,?,?)", (mid, f"file-{mid}",
                                    "pending" if download_after else "downloaded",
                                    str(tmp_path / f"synthetic-{mid}.txt")))
-        assert notify_cards._complete_intent(led.db, event["event_id"], NOW) == "accepted"
+        assert notify_cards.complete_intent(led.db, event["event_id"], NOW) == "accepted"
     if download_after:
         monkeypatch.setattr(ledger.time, "time", lambda: NOW + 1)
         for row in led.db.execute("SELECT * FROM attachments").fetchall():

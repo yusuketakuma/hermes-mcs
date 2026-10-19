@@ -1,4 +1,5 @@
 """Completed primary classification cannot finish a job whose later stages time out."""
+import semantic_drain
 import json
 
 import semantic
@@ -18,7 +19,7 @@ def test_detail_deadline_preserves_pending_assessment(tmp_path, monkeypatch):
 
     try:
         fake = SlowPrimary()
-        out = semantic.run_due(db, _cfg(), {"errors": []}, 300,
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, 300,
                                jev_client=fake, llm_fn=_llm)
         assert fake.requests_made == 1
         assessment = db.artifacts("semantic_assess", message_id=1)[-1]

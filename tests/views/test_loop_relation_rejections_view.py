@@ -1,4 +1,6 @@
 """Relation retrieval failures remain explicit without becoming clinical relations."""
+import semantic_policy
+import semantic_store
 import json
 import time
 
@@ -6,7 +8,6 @@ import pytest
 
 import ledger
 import mcs_view
-import semantic
 import semantic_jev as jev
 import semantic_loops
 from semantic_testkit import _cfg, _pending_fact, _seeded
@@ -14,9 +15,9 @@ from semantic_testkit import _cfg, _pending_fact, _seeded
 
 def _setup(tmp_path):
     db = _seeded(tmp_path)
-    bundle = semantic.thread_bundle(db, 1, 1, [2])
-    config, _ = semantic.semantic_config(_cfg())
-    policy = semantic.policy_fingerprint(config)
+    bundle = semantic_store.thread_bundle(db, 1, 1, [2])
+    config, _ = semantic_policy.semantic_config(_cfg())
+    policy = semantic_policy.policy_fingerprint(config)
     db.artifact_add('semantic_policy', policy)
     semantic_loops.update_loops(db, 1, bundle,
                                {1: _pending_fact(bundle['members'][0])},

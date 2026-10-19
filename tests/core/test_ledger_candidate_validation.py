@@ -3,6 +3,7 @@
 import sqlite3
 import time
 import ledger
+import snapshots
 
 import pytest
 
@@ -40,9 +41,9 @@ def test_candidate_validation_interrupts_at_sqlite_progress(tmp_path, monkeypatc
 def test_snapshot_validator_stall_is_killed_and_reaped(tmp_path, monkeypatch):
     path = tmp_path / 'candidate.db'
     Ledger(str(path)).close()
-    monkeypatch.setattr(ledger, '_SNAPSHOT_VALIDATION_CODE',
+    monkeypatch.setattr(snapshots, '_SNAPSHOT_VALIDATION_CODE',
                         'import time; time.sleep(30)')
-    spawn = ledger.subprocess.Popen
+    spawn = snapshots.subprocess.Popen
     children = []
 
     def record(*args, **kwargs):
@@ -50,9 +51,9 @@ def test_snapshot_validator_stall_is_killed_and_reaped(tmp_path, monkeypatch):
         children.append(child)
         return child
 
-    monkeypatch.setattr(ledger.subprocess, 'Popen', record)
+    monkeypatch.setattr(snapshots.subprocess, 'Popen', record)
     start = time.monotonic()
-    assert not ledger._valid_snapshot_candidate(
+    assert not snapshots._valid_snapshot_candidate(
         str(path), deadline=start + 0.3)
     # well under the child's 30 s sleep: the stall was killed, not waited out
     assert time.monotonic() - start < 15
@@ -62,7 +63,7 @@ def test_snapshot_validator_stall_is_killed_and_reaped(tmp_path, monkeypatch):
 def test_snapshot_validator_rejects_corruption_and_keeps_source(tmp_path):
     path = tmp_path / 'candidate.db'
     path.write_bytes(b'synthetic invalid database')
-    assert not ledger._valid_snapshot_candidate(
+    assert not snapshots._valid_snapshot_candidate(
         str(path), deadline=time.monotonic() + 10)
     assert path.read_bytes() == b'synthetic invalid database'
 
@@ -70,9 +71,9 @@ def test_snapshot_validator_rejects_corruption_and_keeps_source(tmp_path):
 def test_uninterruptible_validator_fences_the_next_publisher(tmp_path, monkeypatch):
     path = tmp_path / 'candidate.db'
     Ledger(str(path)).close()
-    monkeypatch.setattr(ledger, '_SNAPSHOT_VALIDATION_CODE',
+    monkeypatch.setattr(snapshots, '_SNAPSHOT_VALIDATION_CODE',
                         'import time; time.sleep(30)')
-    spawn = ledger.subprocess.Popen
+    spawn = snapshots.subprocess.Popen
     children = []
     kills = []
 
@@ -84,12 +85,12 @@ def test_uninterruptible_validator_fences_the_next_publisher(tmp_path, monkeypat
         monkeypatch.setattr(child, 'kill', lambda: None)
         return child
 
-    monkeypatch.setattr(ledger.subprocess, 'Popen', record)
+    monkeypatch.setattr(snapshots.subprocess, 'Popen', record)
     try:
-        assert not ledger._valid_snapshot_candidate(
+        assert not snapshots._valid_snapshot_candidate(
             str(path), deadline=time.monotonic() + 0.1)
         assert children[0].poll() is None
-        assert not ledger._valid_snapshot_candidate(
+        assert not snapshots._valid_snapshot_candidate(
             str(path), deadline=time.monotonic() + 10)
         assert len(children) == 1
     finally:
@@ -105,10 +106,10 @@ def test_stalled_validation_preserves_published_snapshot(tmp_path, monkeypatch):
     output.mkdir()
     published = output / 'ledger-snapshot.db'
     published.write_bytes(b'synthetic previous snapshot')
-    monkeypatch.setattr(ledger, '_SNAPSHOT_VALIDATION_CODE',
+    monkeypatch.setattr(snapshots, '_SNAPSHOT_VALIDATION_CODE',
                         'import time; time.sleep(30)')
-    monkeypatch.setattr(ledger, 'SNAPSHOT_VERIFY_TIMEOUT_S', 0.2)
-    assert ledger.publish_snapshot(str(source), str(output)) is None
+    monkeypatch.setattr(snapshots, 'SNAPSHOT_VERIFY_TIMEOUT_S', 0.2)
+    assert snapshots.publish_snapshot(str(source), str(output)) is None
     assert published.read_bytes() == b'synthetic previous snapshot'
     assert not list(output.glob('.snapshot.*'))
     assert (output / '.validation.lock').stat().st_mode & 0o777 == 0o600

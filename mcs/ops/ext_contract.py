@@ -1258,7 +1258,7 @@ def _print_json(res) -> None:
 def _cmd_link_hints(args, ap, legacy) -> int:
     """Local Hermes terminal only: paged patient ids/names, no export."""
     from mcs_runtime import mode
-    from mcs_setup import HOME, load_config
+    from mcs_util import HOME, load_config
     from mcs_view import View
     if mode(load_config()) != "hermes" or not sys.stdout.isatty():
         raise ContractError("link_hints_local_terminal_required")
@@ -1301,7 +1301,7 @@ def _cmd_health(args, ap, legacy) -> int:
 def _cmd_handoff(args, ap, legacy) -> int:
     """handoff with no explicit inputs fills them from config ext_export."""
     if not any((args.auth, args.state, args.sink, args.records, args.snapshot)):
-        from mcs_setup import HOME, load_config
+        from mcs_util import HOME, load_config
         profile = load_config().get("ext_export")
         if not isinstance(profile, dict) or set(profile) != {
                 "auth", "state_dir", "outbox", "since_days"}:
@@ -1340,7 +1340,7 @@ def _c1_envelopes(args, auth):
             try:
                 policy = None
                 if args.classify_senders:
-                    from mcs_setup import load_config
+                    from mcs_util import load_config
                     from self_identity import self_sender_id
                     orgs = (load_config().get("signals") or {}).get(
                         "self_organizations")

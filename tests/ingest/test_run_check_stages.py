@@ -1,6 +1,9 @@
 """run_check stage contracts — stage_unread / stage_backfill /
 stage_attachments / stage_derive / stage_self_probe, tick E2E, run
 lock, health, session-expired alerting."""
+import semantic_drain
+import health_report
+import mcs_contract
 
 import json
 import os
@@ -56,7 +59,7 @@ def test_backfill_does_not_advance_past_missing_reply():
 
     class Adapter:
         def fetch_history(self, *args, **kwargs):
-            return mcs_adapter.MessageBatch([parent], pages=1, reached=True)
+            return mcs_contract.MessageBatch([parent], pages=1, reached=True)
 
         def fetch_thread(self, *args):
             return []
@@ -119,7 +122,7 @@ def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
         "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
         "CONF_PATH": config, "CACHE": tmp_path / "absent-token.json",
     }.items():
-        monkeypatch.setattr(run_check, name, str(value))
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
     for name, value in {
         "BACKUP_DIR": data / "backups", "SNAPSHOT_DIR": data / "snapshots",
         "LOGFILE": data / "run.log",
@@ -250,11 +253,11 @@ def test_unread_commit_boundary_preserves_work_before_ack(tmp_path, monkeypatch,
     db = ledger.Ledger(path)
     marks = []
     adapter = SimpleNamespace(
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
-        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+        fetch_unread_messages=lambda *_: mcs_contract.MessageBatch(
             messages=[_message(unread=True)], reached=True),
-        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
         fetch_latest=lambda pid: {"message_id": 1, "is_self_only": False},
         mark_patient_read=lambda *a, **k: marks.append(a),
     )
@@ -315,10 +318,10 @@ def test_incomplete_fetch_or_ack_never_becomes_confirmed(tmp_path, failure):
 
     class Adapter(mcs_adapter.MCSAdapter):
         def list_unread(self):
-            return mcs_adapter.UnreadSnapshot(123, [_unread_patient(1)])
+            return mcs_contract.UnreadSnapshot(123, [_unread_patient(1)])
 
         def fetch_unread_messages(self, *args):
-            return mcs_adapter.MessageBatch([parent], reached=True)
+            return mcs_contract.MessageBatch([parent], reached=True)
 
         def fetch_thread(self, *args):
             return parent.replies
@@ -326,7 +329,7 @@ def test_incomplete_fetch_or_ack_never_becomes_confirmed(tmp_path, failure):
         def _request(self, *args, **kwargs):
             calls.append(args)
             if failure == "lost_ack":
-                raise mcs_adapter.MCSError("network_error", retryable=True)
+                raise mcs_contract.MCSError("network_error", retryable=True)
             return 200, b'{}', {}
 
     result = {"errors": [], "incomplete": [], "messages": 0,
@@ -359,8 +362,8 @@ def test_incomplete_fetch_or_ack_never_becomes_confirmed(tmp_path, failure):
     db.close()
 
 
-@pytest.mark.parametrize("error", [mcs_adapter.SessionExpired(status=401),
-                                   mcs_adapter.MCSError("timeout", retryable=True)])
+@pytest.mark.parametrize("error", [mcs_contract.SessionExpired(status=401),
+                                   mcs_contract.MCSError("timeout", retryable=True)])
 def test_backfill_page_failure_keeps_saved_page_without_coverage(tmp_path, error):
     """AT005: real pagination and storage preserve partial work on 401/timeout."""
     path = str(tmp_path / "partial-history.db")
@@ -385,8 +388,8 @@ def test_backfill_page_failure_keeps_saved_page_without_coverage(tmp_path, error
         run_check.stage_backfill(Adapter(), db, result,
                                  time.monotonic() + 60, db.begin_run(None),
                                  semantic=True)
-    if isinstance(error, mcs_adapter.SessionExpired):
-        with pytest.raises(mcs_adapter.SessionExpired):
+    if isinstance(error, mcs_contract.SessionExpired):
+        with pytest.raises(mcs_contract.SessionExpired):
             run()
     else:
         run()
@@ -463,10 +466,10 @@ def test_session_expired_alert_throttled(tmp_path):
 
 
 def test_err_str_includes_structured_detail():
-    e = mcs_adapter.SessionExpired("auto_login=keychain_locked")
+    e = mcs_contract.SessionExpired("auto_login=keychain_locked")
     assert run_check._err_str(e) == \
         "session_expired: auto_login=keychain_locked"
-    e2 = mcs_adapter.MCSError("http_error", "GET /x", status=500)
+    e2 = mcs_contract.MCSError("http_error", "GET /x", status=500)
     assert run_check._err_str(e2) == "http_error(status=500): GET /x"
     assert run_check._err_str(ValueError("v")) == "ValueError"
 
@@ -477,12 +480,12 @@ def test_snippet_parent_blocks_mark_read(tmp_path):
     db = _ledger(tmp_path)
     marks = []
     adapter = SimpleNamespace(
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
-        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+        fetch_unread_messages=lambda *_: mcs_contract.MessageBatch(
             messages=[_message(mid=10, unread=True, state="snippet")],
             reached=True),
-        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
         mark_patient_read=lambda *a, **k: marks.append(a),
     )
     result = {"errors": [], "incomplete": [], "messages": 0,
@@ -708,7 +711,7 @@ def test_download_failure_status_reaches_retry_policy(tmp_path, monkeypatch, sta
     assert tuple(row) == (expected, f"http_{status}")
     assert not (tmp_path / "1.part").exists()
     adapter.set_deadline(time.monotonic() - 1)
-    with pytest.raises(mcs_adapter.MCSError) as exc:
+    with pytest.raises(mcs_contract.MCSError) as exc:
         adapter.download("https://www.medical-care.net/f", str(tmp_path / "later"))
     assert exc.value.kind == "deadline_exceeded"
     db.close()
@@ -731,7 +734,7 @@ def test_health_counts_held_sends_and_age_from_creation(tmp_path):
     db.db.execute("UPDATE fetch_jobs SET created_at=?,next_try=? WHERE kind='extract_qc'",
                   (now - 1000, now + 500))
     db.db.commit()
-    health = run_check._health(db, {"notify": {}, "errors": [], "coverage_gaps": [{}]}, "partial")
+    health = health_report.build_health(db.db, {"notify": {}, "errors": [], "coverage_gaps": [{}]}, "partial")
     # coverage lag alone is information; the held send still degrades
     assert health["overall"] == "degraded" and health["collection"] == "ok"
     assert health["coverage_lagging"] == {"count": 1, "max_lag_s": 0}
@@ -758,8 +761,8 @@ def test_health_counts_held_sends_and_age_from_creation(tmp_path):
 ])
 def test_health_groups_only_safe_held_reason_codes(tmp_path, monkeypatch, progress, reason):
     db = _ledger(tmp_path)
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {})
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
     try:
         for _ in range(2):
@@ -772,7 +775,7 @@ def test_health_groups_only_safe_held_reason_codes(tmp_path, monkeypatch, progre
         db.db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?",
                       (progress, pending))
         db.db.commit()
-        health = run_check._health(db, {"errors": [], "notify": {}}, "ok")
+        health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok")
         assert health["overall"] == "degraded"
         assert health["notify"]["held"] == 2
         assert health["notify"]["held_reasons"] == {reason: 2}
@@ -791,8 +794,8 @@ def test_health_groups_only_safe_held_reason_codes(tmp_path, monkeypatch, progre
 def test_health_retired_holds_preserve_live_reason_evidence(
         tmp_path, monkeypatch, cfg, expected_held, expected_retired):
     db = _ledger(tmp_path)
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {})
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     monkeypatch.setattr(run_check, "_config", lambda: pytest.fail("health must use supplied config"))
     try:
         for route, transport in (("interactive", "discord"),
@@ -807,7 +810,7 @@ def test_health_retired_holds_preserve_live_reason_evidence(
                     "event_id,frozen_payload,payload_hash,route_epoch,transport,sealed_at) "
                     "VALUES(?,'{}','synthetic',1,?,1000)", (eid, transport))
         db.db.commit()
-        health = run_check._health(db, {"errors": [], "notify": {}}, "ok", cfg=cfg)
+        health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok", cfg=cfg)
         assert health["notify"]["held"] == expected_held
         assert health["notify"]["retired_held"] == expected_retired
         assert health["notify"]["held_reasons"] == {"send_outcome_unknown": expected_held}
@@ -819,8 +822,8 @@ def test_health_retired_holds_preserve_live_reason_evidence(
 
 def test_health_retired_only_hold_no_longer_degrades_live_delivery(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {})
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     try:
         eid = db.outbox_add("new_messages", None, {})
         db.outbox_hold(eid, "send_outcome_unknown")
@@ -830,7 +833,7 @@ def test_health_retired_only_hold_no_longer_degrades_live_delivery(tmp_path, mon
             "event_id,frozen_payload,payload_hash,route_epoch,transport,sealed_at) "
             "VALUES(?,'{}','synthetic',1,'discord',1000)", (eid,))
         db.db.commit()
-        health = run_check._health(db, {"errors": [], "notify": {}}, "ok",
+        health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok",
                                    cfg={"notify": {"interactive": "slack"}})
         assert health["notify"]["held"] == 0
         assert health["notify"]["held_reasons"] == {}
@@ -858,11 +861,11 @@ def test_health_retired_only_hold_no_longer_degrades_live_delivery(tmp_path, mon
 def test_health_preserves_known_success_without_fabricating_it(
         tmp_path, monkeypatch, previous, last_ok):
     db = _ledger(tmp_path)
-    monkeypatch.setattr(run_check, "_prev_health", lambda: previous)
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'prev_health', lambda: previous)
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
     try:
-        health = run_check._health(db, {"errors": [], "notify": {}}, "failed")
+        health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "failed")
         assert health["overall"] == "failed"
         assert health["last_ok_at"] == last_ok
         assert health["state_reasons"] == ["run_failed"]
@@ -872,15 +875,15 @@ def test_health_preserves_known_success_without_fabricating_it(
 
 def test_health_explains_failures_without_changing_overall(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {"last_ok_at": 100.0})
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {"last_ok_at": 100.0})
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
     try:
         db.outbox_hold(db.outbox_add("new_messages", 1, {"message_ids": [1]}))
         result = {"errors": ["synthetic stage error"], "incomplete": [1],
                   "notify": {"failed": 1, "skipped": 1, "parked": 1},
                   "backup_skipped": "disk_low"}
-        health = run_check._health(db, result, "partial")
+        health = health_report.build_health(db.db, result, "partial")
         assert health["overall"] == "degraded"
         assert health["last_ok_at"] == 100.0
         assert health["state_reasons"] == [
@@ -888,11 +891,11 @@ def test_health_explains_failures_without_changing_overall(tmp_path, monkeypatch
             "notification_deferred", "notification_parked", "notification_held",
             "disk_low"]
         assert health["notify"]["held"] == 1
-        healthy = run_check._health(db, {"errors": [], "notify": {}}, "ok")
+        healthy = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok")
         assert healthy["overall"] == "degraded"
         db.db.execute("UPDATE notify_outbox SET state='sent'")
         db.db.commit()
-        healthy = run_check._health(db, {"errors": [], "notify": {}}, "ok")
+        healthy = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok")
         assert healthy["overall"] == "ok"
         assert healthy["last_ok_at"] == 1000.0
         assert healthy["state_reasons"] == []
@@ -905,17 +908,17 @@ def test_health_code_changed_does_not_degrade(tmp_path, monkeypatch):
     run row still records it, but health stays ok and only reports the
     informational reason."""
     db = _ledger(tmp_path)
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {"last_ok_at": 100.0})
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {"last_ok_at": 100.0})
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
     try:
-        health = run_check._health(db, {"errors": ["code_changed"],
+        health = health_report.build_health(db.db, {"errors": ["code_changed"],
                                         "notify": {}}, "partial")
         assert health["overall"] == "ok"
         assert health["last_ok_at"] == 1000.0
         assert health["state_reasons"] == ["code_changed"]
-        real = run_check._health(
-            db, {"errors": ["code_changed", "synthetic stage error"],
+        real = health_report.build_health(
+            db.db, {"errors": ["code_changed", "synthetic stage error"],
                  "notify": {}}, "partial")
         assert real["overall"] == "degraded"
         assert real["state_reasons"][:2] == ["stage_errors", "code_changed"]
@@ -940,7 +943,7 @@ def test_health_coverage_requires_usable_scoped_extraction(tmp_path, content, pr
         db.artifact_add("extract_llm", content, project_id=project, message_id=1,
                         meta={"hash": source_hash, "extract_version": extract_llm.EXTRACT_VERSION,
                               **extra})
-        health = run_check._health(db, {"errors": []}, "ok")
+        health = health_report.build_health(db.db, {"errors": []}, "ok")
         assert health["extract_v2_coverage"]["current"] == 0
     finally:
         db.close()
@@ -959,7 +962,7 @@ def test_begin_run_failure_closes_writer_and_reports_safe_error(tmp_path, monkey
     for name, value in {"HOME": tmp_path, "DB": data / "ledger.db",
                         "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
                         "HEALTH_FILE": data / "health.json"}.items():
-        monkeypatch.setattr(run_check, name, str(value))
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
 
     def fail_begin(*args, **kwargs):
         raise RuntimeError("SYNTHETIC_PRIVATE_CANARY")
@@ -982,7 +985,7 @@ def test_health_write_binds_run_and_survives_failure(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     result = {"errors": [], "notify": {}}
-    monkeypatch.setattr(run_check, "HEALTH_FILE",
+    monkeypatch.setattr(health_report, 'HEALTH_FILE',
                         str(tmp_path / "health.json"))
 
     # happy path first — fresh present evidence bound to its source run
@@ -1014,9 +1017,9 @@ def test_deeply_nested_previous_health_does_not_block_fresh_publication(tmp_path
 
     path = tmp_path / "health.json"
     path.write_bytes(b'{"nested":' + b'[' * 10000 + b'0' + b']' * 10000 + b'}')
-    monkeypatch.setattr(run_check, "HEALTH_FILE", str(path))
+    monkeypatch.setattr(health_report, 'HEALTH_FILE', str(path))
     monkeypatch.setattr(run_check.time, "time", lambda: 2000.0)
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     db = _ledger(tmp_path)
     try:
         db.save_messages([_message()])
@@ -1059,7 +1062,7 @@ def test_self_probe_fetches_and_notifies_own_post(tmp_path):
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             assert since == wm - run_check.BACKFILL_OVERLAP_S
             self.history_calls += 1
-            return mcs_adapter.MessageBatch([own], pages=1, reached=True)
+            return mcs_contract.MessageBatch([own], pages=1, reached=True)
 
     adapter = Adapter()
     result = {"errors": [], "new_messages": 0}
@@ -1094,7 +1097,7 @@ def test_stage_fetch_probe_notifies_own_post_backfill_would_absorb(
             return {"message_id": 101, "is_self_only": True}
 
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch([own], pages=1, reached=True)
+            return mcs_contract.MessageBatch([own], pages=1, reached=True)
 
     monkeypatch.setattr(run_check, "stage_unread", lambda *a, **k: None)
     result = {"errors": [], "new_messages": 0, "backfilled": 0}
@@ -1242,7 +1245,7 @@ def test_self_probe_missed_post_uses_probe_source(tmp_path):
             return {"message_id": 101, "is_self_only": False}
 
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch([missed], pages=1,
+            return mcs_contract.MessageBatch([missed], pages=1,
                                             reached=True)
 
     result = {"errors": [], "new_messages": 0}
@@ -1272,7 +1275,7 @@ def test_self_probe_unfetchable_id_not_retried(tmp_path):
 
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             self.history_calls += 1
-            return mcs_adapter.MessageBatch([], pages=1, reached=True)
+            return mcs_contract.MessageBatch([], pages=1, reached=True)
 
     adapter = Adapter()
     for _ in range(2):
@@ -1299,8 +1302,8 @@ def test_self_probe_incomplete_walk_retries_latest_id(tmp_path):
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             self.history_calls += 1
             if self.history_calls == 1:
-                return mcs_adapter.MessageBatch([], pages=2, reached=False)
-            return mcs_adapter.MessageBatch(
+                return mcs_contract.MessageBatch([], pages=2, reached=False)
+            return mcs_contract.MessageBatch(
                 [_msg_at(555, 97, _iso(1), unread=False)],
                 pages=1, reached=True)
 
@@ -1337,9 +1340,9 @@ def test_self_probe_incomplete_body_does_not_mark_latest(tmp_path):
             if self.history_calls == 1:
                 partial = _msg_at(101, 98, _iso(0), unread=False)
                 partial.body_state = "snippet"
-                return mcs_adapter.MessageBatch(
+                return mcs_contract.MessageBatch(
                     [partial], pages=1, reached=True)
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 [_msg_at(555, 98, _iso(0), unread=False)],
                 pages=1, reached=True)
 
@@ -1372,7 +1375,7 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
             pass
 
         def list_unread(self):
-            return mcs_adapter.UnreadSnapshot(timestamp=123, patients=[])
+            return mcs_contract.UnreadSnapshot(timestamp=123, patients=[])
 
         def list_projects(self):
             return []
@@ -1395,7 +1398,7 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
         "HEALTH_FILE": data / "health.json", "CONF_PATH": config,
         "MCSAdapter": Adapter, "stage_derive": lambda *a, **k: None,
     }.items():
-        monkeypatch.setattr(run_check, name, str(value)
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value)
                             if isinstance(value, Path) else value)
     for name in ("drain_commands", "seed_discovery", "run_discovery",
                  "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
@@ -1450,7 +1453,7 @@ def test_consent_hold_tick_freezes_all_but_approve(tmp_path, monkeypatch,
         "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
         "CONF_PATH": config, "CACHE": tmp_path / "absent-token.json",
     }.items():
-        monkeypatch.setattr(run_check, name, str(value))
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
     monkeypatch.setattr(run_check, "MCSAdapter",
                         lambda *a, **k: pytest.fail(
                             "adapter must not be built during the hold"))
@@ -1507,7 +1510,7 @@ def test_with_relogin_recovers_and_replays_stage(tmp_path):
     def stage():
         calls.append(1)
         if len(calls) == 1:
-            raise mcs_adapter.SessionExpired(status=403)
+            raise mcs_contract.SessionExpired(status=403)
         return "done"
 
     adapter = SimpleNamespace(auto_login=lambda **kw: "ok")
@@ -1530,7 +1533,7 @@ def test_with_relogin_recovers_and_replays_stage(tmp_path):
 def _health_unread_at(tmp_path, monkeypatch, unread_at):
     path = tmp_path / "health.json"
     path.write_text(json.dumps({"overall": "failed", "unread_at": unread_at}))
-    monkeypatch.setattr(run_check, "HEALTH_FILE", str(path))
+    monkeypatch.setattr(health_report, 'HEALTH_FILE', str(path))
 
 
 def test_relogin_replay_drops_the_aborted_attempts_records(tmp_path):
@@ -1542,13 +1545,13 @@ def test_relogin_replay_drops_the_aborted_attempts_records(tmp_path):
     def replies(m):
         if m.project_id == 2 and not expired:
             expired.append(1)
-            raise mcs_adapter.SessionExpired(status=403)
-        return mcs_adapter.ReplyBatch([], [])
+            raise mcs_contract.SessionExpired(status=403)
+        return mcs_contract.ReplyBatch([], [])
     adapter = SimpleNamespace(
         auto_login=lambda **kw: "ok",
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1), _unread_patient(2)]),
-        fetch_unread_messages=lambda pid, ts: mcs_adapter.MessageBatch(
+        fetch_unread_messages=lambda pid, ts: mcs_contract.MessageBatch(
             messages=[_message(mid=pid, project_id=pid, unread=True)], reached=True),
         fetch_unread_replies=replies,
         mark_patient_read=lambda *a, **k: None)
@@ -1563,7 +1566,7 @@ def test_relogin_replay_drops_the_aborted_attempts_records(tmp_path):
     assert result["messages"] == 2                 # not double-counted
     assert result["new_messages"] == 2
     assert [a["state"] for a in result["relogin_attempts"]] == ["ok"]
-    assert run_check._collection(result)["collection"] == "ok"
+    assert health_report.collection(result)["collection"] == "ok"
     db.close()
 
 
@@ -1578,10 +1581,10 @@ def test_relogin_replay_keeps_job_drain_failures(tmp_path):
 
     def fetch_thread(pid, parent):
         if parent == 10:
-            raise mcs_adapter.MCSError("network_error", retryable=True)
+            raise mcs_contract.MCSError("network_error", retryable=True)
         if not expired:
             expired.append(1)
-            raise mcs_adapter.SessionExpired(status=403)
+            raise mcs_contract.SessionExpired(status=403)
         return []
     adapter = SimpleNamespace(auto_login=lambda **kw: "ok",
                               fetch_thread=fetch_thread)
@@ -1601,7 +1604,7 @@ def test_relogin_journals_heal_facts_without_seeding(tmp_path, monkeypatch):
                               chrome_restarted=True)
     result = {"errors": [], "run_id": 9}
     assert run_check._attempt_relogin(
-        adapter, db, result, "unread", mcs_adapter.SessionExpired(status=403)) == "ok"
+        adapter, db, result, "unread", mcs_contract.SessionExpired(status=403)) == "ok"
     assert result["relogin_attempts"][0]["healed_tabs"] == 1
     assert result["relogin_attempts"][0]["chrome_restarted"] is True
     assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
@@ -1662,9 +1665,9 @@ def test_with_relogin_failed_login_escalates_with_state(tmp_path):
     result = {"errors": [], "run_id": 1}
 
     def stage():
-        raise mcs_adapter.SessionExpired(status=403)
+        raise mcs_contract.SessionExpired(status=403)
 
-    with pytest.raises(mcs_adapter.SessionExpired) as exc:
+    with pytest.raises(mcs_contract.SessionExpired) as exc:
         run_check._with_relogin(adapter, db, result, "discovery", stage)
     assert exc.value.detail == "auto_login=keychain_locked"
     assert db.db.execute("SELECT COUNT(*) FROM notify_outbox"
@@ -1683,9 +1686,9 @@ def test_with_relogin_no_double_attempt_for_stage_owned_login(tmp_path):
     result = {"errors": [], "run_id": 1}
 
     def stage():
-        raise mcs_adapter.SessionExpired("auto_login=manual_required")
+        raise mcs_contract.SessionExpired("auto_login=manual_required")
 
-    with pytest.raises(mcs_adapter.SessionExpired) as exc:
+    with pytest.raises(mcs_contract.SessionExpired) as exc:
         run_check._with_relogin(adapter, db, result, "unread", stage)
     assert exc.value.detail == "auto_login=manual_required"
     assert calls == []
@@ -1702,9 +1705,9 @@ def test_with_relogin_reexpiry_after_recovery_aborts(tmp_path):
 
     def stage():
         calls.append(1)
-        raise mcs_adapter.SessionExpired(status=403)
+        raise mcs_contract.SessionExpired(status=403)
 
-    with pytest.raises(mcs_adapter.SessionExpired) as exc:
+    with pytest.raises(mcs_contract.SessionExpired) as exc:
         run_check._with_relogin(adapter, db, result, "unread", stage)
     assert exc.value.detail == "auto_login=ok_then_expired"
     assert len(calls) == 2
@@ -1726,7 +1729,7 @@ def test_with_relogin_budget_caps_attempts_per_run(tmp_path):
         def stage():
             state["n"] += 1
             if state["n"] == 1:
-                raise mcs_adapter.SessionExpired(status=403)
+                raise mcs_contract.SessionExpired(status=403)
             return "done"
         return stage
 
@@ -1736,9 +1739,9 @@ def test_with_relogin_budget_caps_attempts_per_run(tmp_path):
     assert len(logins) == run_check.RELOGIN_MAX_PER_RUN
 
     def expired():
-        raise mcs_adapter.SessionExpired(status=403)
+        raise mcs_contract.SessionExpired(status=403)
 
-    with pytest.raises(mcs_adapter.SessionExpired) as exc:
+    with pytest.raises(mcs_contract.SessionExpired) as exc:
         run_check._with_relogin(adapter, db, result, "unread", expired)
     assert exc.value.detail == ""      # raw — no further attempt made
     assert len(logins) == run_check.RELOGIN_MAX_PER_RUN
@@ -1773,7 +1776,7 @@ def test_attempt_relogin_journals_exception_type_without_private_detail(tmp_path
     result = {"errors": [], "run_id": 1}
     state = run_check._attempt_relogin(
         adapter, db, result, "unread",
-        mcs_adapter.SessionExpired(status=403))
+        mcs_contract.SessionExpired(status=403))
     assert state == "failed"
     assert result["relogin_attempts"][-1]["detail"] == \
         "RuntimeError"
@@ -1802,8 +1805,8 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
         def list_unread(self):
             self.list_calls += 1
             if self.list_calls == 1:
-                raise mcs_adapter.SessionExpired(status=403)
-            return mcs_adapter.UnreadSnapshot(timestamp=123, patients=[])
+                raise mcs_contract.SessionExpired(status=403)
+            return mcs_contract.UnreadSnapshot(timestamp=123, patients=[])
 
         def auto_login(self, **kw):
             self.logins += 1
@@ -1829,7 +1832,7 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
         "MCSAdapter": lambda *a, **k: adapter,
         "stage_derive": lambda *a, **k: None,
     }.items():
-        monkeypatch.setattr(run_check, name, str(value)
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value)
                             if isinstance(value, Path) else value)
     for name in ("drain_commands", "seed_discovery", "run_discovery",
                  "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
@@ -1877,7 +1880,7 @@ def test_attempt_relogin_owns_run_budget(tmp_path):
                   for _ in range(run_check.RELOGIN_MAX_PER_RUN)]}
     assert run_check._attempt_relogin(
         adapter, db, result, "run",
-        mcs_adapter.SessionExpired(status=403)) == "budget_exhausted"
+        mcs_contract.SessionExpired(status=403)) == "budget_exhausted"
     assert logins == []
     assert len(result["relogin_attempts"]) == run_check.RELOGIN_MAX_PER_RUN
     assert db.db.execute("SELECT COUNT(*) FROM notify_outbox"
@@ -1893,13 +1896,13 @@ def _expire_once():
     def stage(*a, **k):
         state["n"] += 1
         if state["n"] == 1:
-            raise mcs_adapter.SessionExpired(status=403)
+            raise mcs_contract.SessionExpired(status=403)
         return None
     return stage
 
 
 def _always_expired(*a, **k):
-    raise mcs_adapter.SessionExpired(status=403)
+    raise mcs_contract.SessionExpired(status=403)
 
 
 def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
@@ -1922,7 +1925,7 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
             pass
 
         def list_unread(self):
-            return mcs_adapter.UnreadSnapshot(timestamp=123, patients=[])
+            return mcs_contract.UnreadSnapshot(timestamp=123, patients=[])
 
         def auto_login(self, **kw):
             self.logins += 1
@@ -1948,7 +1951,7 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
         "MCSAdapter": lambda *a, **k: adapter,
         "stage_derive": lambda *a, **k: None,
     }.items():
-        monkeypatch.setattr(run_check, name, str(value)
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value)
                             if isinstance(value, Path) else value)
     for name in ("drain_commands", "seed_discovery", "run_discovery",
                  "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
@@ -2002,7 +2005,7 @@ def _point_run_check_at(tmp_path, monkeypatch):
                         "ATTACH_DIR": data / "attachments",
                         "LOCKFILE": data / "run.lock",
                         "HEALTH_FILE": data / "health.json"}.items():
-        monkeypatch.setattr(run_check, name, str(value))
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
     data.mkdir(exist_ok=True)
     return data
 
@@ -2018,7 +2021,7 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
     monkeypatch.setattr(run_check, "_config", lambda: {})
     monkeypatch.setattr(run_check, "_semantic_enabled", lambda *args: False)
     monkeypatch.setattr(run_check, "_code_changed", lambda *args: False)
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     monkeypatch.setattr(run_check, "MCSAdapter",
                         lambda **kwargs: SimpleNamespace(set_deadline=lambda deadline: None))
     def slow_fetch(*args):
@@ -2028,7 +2031,7 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
     later = Mock()
     for name in ("_run_jobs", "stage_derive", "_deliver", "_with_relogin",
                  "_run_semantic", "_run_metadata_shadow", "_housekeeping"):
-        monkeypatch.setattr(run_check, name, later)
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, later)
     # the real _finish_run decides the stored status; only its I/O tail is stubbed
     import maintenance
     import notify_cards
@@ -2074,7 +2077,7 @@ def test_backup_health_database_failure_remains_machine_readable(monkeypatch):
         raise sqlite3.DatabaseError("synthetic database failure")
 
     monkeypatch.setattr(mcs_backup, "status", fail)
-    assert run_check._backup_health(
+    assert health_report.backup_health(
         {"backup": {"enabled": True, "policy": "synthetic-unused"}}, 1000) == {
             "state": "failed", "reasons": ["backup_io_or_policy_failed"]}
 
@@ -2157,7 +2160,7 @@ def test_jobs_only_health_keeps_last_unread_time(tmp_path, monkeypatch):
     health watcher still sees a stopped unread check as stale."""
     import health_watch
     db = _ledger(tmp_path)
-    monkeypatch.setattr(run_check, "HEALTH_FILE",
+    monkeypatch.setattr(health_report, 'HEALTH_FILE',
                         str(tmp_path / "health.json"))
     run_check._write_health(db, {"errors": [], "notify": {}}, "ok")
     first = json.loads((tmp_path / "health.json").read_text())
@@ -2180,9 +2183,9 @@ def test_unread_at_ignores_huge_integer_in_previous_health(tmp_path,
     """An oversized integer literal in the previous health.json must
     read as no value, not raise OverflowError out of health writing."""
     (tmp_path / "health.json").write_text('{"unread_at": 1' + "0" * 400 + "}")
-    monkeypatch.setattr(run_check, "HEALTH_FILE",
+    monkeypatch.setattr(health_report, 'HEALTH_FILE',
                         str(tmp_path / "health.json"))
-    assert run_check._unread_at({"jobs_only": True}, "ok", 1.0) is None
+    assert health_report.unread_at({"jobs_only": True}, "ok", 1.0) is None
 
 
 @pytest.mark.parametrize("cause", ["marker", "code_changed"])
@@ -2234,8 +2237,8 @@ def test_coverage_lag_is_information_not_an_error(tmp_path, monkeypatch):
     assert result["coverage_gaps"] and result["coverage_gaps"][0]["lag_s"] > 0
     assert result["errors"] == []
     assert not result.get("coverage_stalled")
-    monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "h.json"))
-    health = run_check._health(db, result, "ok")
+    monkeypatch.setattr(health_report, 'HEALTH_FILE', str(tmp_path / "h.json"))
+    health = health_report.build_health(db.db, result, "ok")
     assert health["collection"] == "ok" and health["overall"] == "ok"
     assert health["coverage_lagging"]["count"] == 1
     assert health["coverage_lagging"]["max_lag_s"] > 0
@@ -2265,8 +2268,8 @@ def test_stalled_history_head_escalates_collection(tmp_path, monkeypatch,
     assert result["errors"] == [f"backfill 1: coverage_stalled_{reason}"]
     # a failed head is still revived so the walk keeps retrying
     assert db.job_state("history_head", 1) == "pending"
-    monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "h.json"))
-    health = run_check._health(db, result, "partial")
+    monkeypatch.setattr(health_report, 'HEALTH_FILE', str(tmp_path / "h.json"))
+    health = health_report.build_health(db.db, result, "partial")
     assert health["collection"] == "incomplete"
     assert health["overall"] == "degraded"
     assert health["coverage_stalled"] == [1]
@@ -2276,7 +2279,7 @@ def test_stalled_history_head_escalates_collection(tmp_path, monkeypatch,
 def test_jobs_only_health_carries_last_collection_verdict(tmp_path,
                                                          monkeypatch):
     db = _ledger(tmp_path)
-    monkeypatch.setattr(run_check, "HEALTH_FILE",
+    monkeypatch.setattr(health_report, 'HEALTH_FILE',
                         str(tmp_path / "health.json"))
     run_check._write_health(db, {"errors": ["project 7: x"], "notify": {},
                                  "incomplete": [7]}, "partial")
@@ -2295,16 +2298,16 @@ def test_jobs_only_health_carries_last_collection_verdict(tmp_path,
 
 def test_health_reports_disk_state(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
-    monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "h.json"))
+    monkeypatch.setattr(health_report, 'HEALTH_FILE', str(tmp_path / "h.json"))
     monkeypatch.setenv("MCS_DISK_GUARD_MB", "512")
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 1000.0)
-    health = run_check._health(db, {"errors": [], "notify": {}}, "ok")
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 1000.0)
+    health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok")
     assert health["disk_free_mb"] == 1000 and health["disk_low"] is True
     assert health["overall"] == "ok"      # disk has its own alert path
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 1e6)
-    assert not run_check._health(db, {"errors": [], "notify": {}},
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 1e6)
+    assert not health_report.build_health(db.db, {"errors": [], "notify": {}},
                                  "ok")["disk_low"]
-    assert run_check._health(db, {"errors": [], "notify": {},
+    assert health_report.build_health(db.db, {"errors": [], "notify": {},
                                   "backup_skipped": "disk_low"},
                              "ok")["disk_low"] is True
     db.close()
@@ -2321,7 +2324,7 @@ def _pending_attachments(tmp_path, n=2):
 def test_attachments_defer_under_disk_pressure(tmp_path, monkeypatch):
     db = _pending_attachments(tmp_path)
     monkeypatch.setenv("MCS_DISK_GUARD_MB", "512")
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 1024.0)
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 1024.0)
     monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
     adapter = SimpleNamespace(download=lambda *a: pytest.fail("downloaded"))
     result = {"errors": []}
@@ -2477,7 +2480,7 @@ def _sem_args():
 
 def _sem_setup(monkeypatch, tmp_path, busy=False):
     """busy: False, True, or a list consumed one probe at a time."""
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {})
     samples = list(busy) if isinstance(busy, list) else None
     monkeypatch.setattr(extract_llm, "pinned_slot_busy",
                         lambda deadline: samples.pop(0) if samples else bool(busy) if samples is None else False)
@@ -2485,10 +2488,9 @@ def _sem_setup(monkeypatch, tmp_path, busy=False):
 
 
 def test_semantic_run_leaves_tail_reserve(tmp_path, monkeypatch):
-    import semantic
     seen = {}
     _sem_setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(semantic, "run_due", lambda ledger, cfg, result, deadline, **kw: (
+    monkeypatch.setattr(semantic_drain, 'run_due', lambda ledger, cfg, result, deadline, **kw: (
         seen.__setitem__("deadline", deadline) or {"done": 1, "deferred": 0, "failed": 0}))
     db = _ledger(tmp_path)
     result = {"errors": []}
@@ -2502,13 +2504,12 @@ def test_semantic_run_leaves_tail_reserve(tmp_path, monkeypatch):
 
 def test_semantic_run_skips_when_slot_never_frees(tmp_path, monkeypatch):
     """A busy realtime slot skips analysis without pausing background."""
-    import semantic
     clock = [1000.0]
     monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
     _sem_setup(monkeypatch, tmp_path, busy=True)
     monkeypatch.setattr(run_check.time, "sleep",
                         lambda s: clock.__setitem__(0, clock[0] + s))
-    monkeypatch.setattr(semantic, "run_due",
+    monkeypatch.setattr(semantic_drain, 'run_due',
                         lambda *a, **k: pytest.fail("busy slot must not run"))
     db = _ledger(tmp_path)
     result = {"errors": []}
@@ -2527,14 +2528,13 @@ def test_semantic_run_off_keeps_overall_ok(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     result = {"errors": []}
     run_check._run_semantic(db, _sem_args(), {}, result, time.monotonic() + 480, False)
-    assert run_check._health(db, result, "ok")["overall"] == "ok"
+    assert health_report.build_health(db.db, result, "ok")["overall"] == "ok"
     db.close()
 
 
 @pytest.mark.parametrize("outcome", ["done", "exception"])
 def test_semantic_run_records_outcome_or_error(tmp_path, monkeypatch, outcome):
     """A crashing semantic lane surfaces through errors, not a state flag."""
-    import semantic
     clock = [1000.0]
     monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
     _sem_setup(monkeypatch, tmp_path)
@@ -2544,7 +2544,7 @@ def test_semantic_run_records_outcome_or_error(tmp_path, monkeypatch, outcome):
         if outcome == "exception":
             raise RuntimeError("boom")
         return {"done": 1, "deferred": 0, "failed": 0}
-    monkeypatch.setattr(semantic, "run_due", run_due)
+    monkeypatch.setattr(semantic_drain, 'run_due', run_due)
     db = _ledger(tmp_path)
     result = {"errors": []}
     run_check._run_semantic(db, _sem_args(), {}, result, clock[0] + 480, True)
@@ -2570,11 +2570,11 @@ def test_unread_capped_patient_waits_for_history_then_acks(tmp_path):
     marks = []
     oldest = {"id": 5}
     adapter = SimpleNamespace(
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
-        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+        fetch_unread_messages=lambda *_: mcs_contract.MessageBatch(
             messages=[_message(mid=90, unread=True)], reached=True, capped=True),
-        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
         oldest_unread_id=lambda pid: oldest["id"],
         fetch_latest=lambda pid: {"message_id": 90, "is_self_only": False},
         mark_patient_read=lambda *a, **k: marks.append(a),
@@ -2624,11 +2624,11 @@ def test_unread_cap_stuck_after_full_walk_is_reported_not_rewalked(tmp_path):
     db.job_done(job)
     marks = []
     adapter = SimpleNamespace(      # coverage never certified -> not cleared
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
-        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+        fetch_unread_messages=lambda *_: mcs_contract.MessageBatch(
             messages=[_message(mid=90, unread=True)], reached=True, capped=True),
-        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
         oldest_unread_id=lambda pid: 5,
         mark_patient_read=lambda *a, **k: marks.append(a),
     )
@@ -2687,11 +2687,11 @@ def test_unread_route_error_acks_via_fallback_only_after_certification(tmp_path)
     marks = []
     latest = {"id": 5}
     adapter = SimpleNamespace(
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
-        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
-            messages=[], error=mcs_adapter.MCSError("http_error", "GET", status=400)),
-        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_unread_messages=lambda *_: mcs_contract.MessageBatch(
+            messages=[], error=mcs_contract.MCSError("http_error", "GET", status=400)),
+        fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
         oldest_unread_id=lambda pid: 5,
         fetch_latest=lambda pid: {"message_id": latest["id"],
                                   "is_self_only": False},
@@ -2748,15 +2748,15 @@ def test_fallback_ack_seeds_head_walk_on_post_ack_gap(tmp_path, probe):
     def latest(pid):
         mid = next(seen)
         if mid == 8 and probe == "probe_fails":
-            raise mcs_adapter.MCSError("http_error", status=502)
+            raise mcs_contract.MCSError("http_error", status=502)
         return {"message_id": mid, "is_self_only": False}
     marks = []
     adapter = SimpleNamespace(
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
-        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
-            messages=[], error=mcs_adapter.MCSError("http_error", "GET", status=400)),
-        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_unread_messages=lambda *_: mcs_contract.MessageBatch(
+            messages=[], error=mcs_contract.MCSError("http_error", "GET", status=400)),
+        fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
         oldest_unread_id=lambda pid: 5,
         fetch_latest=latest,
         mark_patient_read=lambda *a, **k: marks.append(a),
@@ -2781,11 +2781,11 @@ def test_unread_route_5xx_keeps_http_error_without_fallback(tmp_path):
     def forbidden(*_):
         raise AssertionError("cap gate must not run for a 5xx")
     adapter = SimpleNamespace(
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
-        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
-            messages=[], error=mcs_adapter.MCSError("http_error", "GET", status=503)),
-        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_unread_messages=lambda *_: mcs_contract.MessageBatch(
+            messages=[], error=mcs_contract.MCSError("http_error", "GET", status=503)),
+        fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
         oldest_unread_id=forbidden, fetch_latest=forbidden,
         mark_patient_read=lambda *a, **k: marks.append(a),
     )
@@ -2820,10 +2820,10 @@ class _MemoAdapter:
     def fetch_memo_summary(self, karte_id):
         self.calls.append(karte_id)
         if karte_id in self.fail:
-            raise mcs_adapter.MCSError("http_error", status=500,
+            raise mcs_contract.MCSError("http_error", status=500,
                                        retryable=True)
         if karte_id in self.gone:
-            raise mcs_adapter.MCSError("http_error", status=404)
+            raise mcs_contract.MCSError("http_error", status=404)
         if karte_id in self.empty:
             return None
         return {"comment": f"合成 {karte_id}", "updated_at": "", "is_editable": True,
@@ -2995,12 +2995,12 @@ def test_karte_summary_session_expired_propagates(tmp_path):
 
     class Adapter(_MemoAdapter):
         def fetch_memo_summary(self, karte_id):
-            raise mcs_adapter.SessionExpired("gone")
+            raise mcs_contract.SessionExpired("gone")
 
         def _probe_session_ok(self):
             return False
 
-    with pytest.raises(mcs_adapter.SessionExpired):
+    with pytest.raises(mcs_contract.SessionExpired):
         _run_stage(Adapter(), db, targets=[1])
     assert db.karte_summary_due() == [1]                         # still due after relogin
     db.close()
@@ -3013,7 +3013,7 @@ def test_karte_summary_expiry_on_one_karte_with_live_session_is_a_karte_failure(
         def fetch_memo_summary(self, karte_id):
             if karte_id == 20:
                 self.calls.append(karte_id)
-                raise mcs_adapter.SessionExpired("403")
+                raise mcs_contract.SessionExpired("403")
             return super().fetch_memo_summary(karte_id)
 
         def _probe_session_ok(self):
@@ -3057,7 +3057,7 @@ def test_new_message_paths_mark_karte_summary_due(tmp_path):
                     "is_self_only": True}
 
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch([own], pages=1, reached=True)
+            return mcs_contract.MessageBatch([own], pages=1, reached=True)
 
     result = {"errors": [], "new_messages": 0}
     run_check.stage_self_probe(Adapter(), db, result,
@@ -3083,7 +3083,7 @@ def test_health_attention_splits_failures_unstarted_and_unsettled(tmp_path):
         "UPDATE fetch_jobs SET created_at=?,updated_at=?,next_try=? "
         "WHERE kind='extract_qc'", (now - 1000, now - 1000, now - 10))
     db.db.commit()
-    att = run_check._health(db, {"notify": {}, "errors": []}, "ok")["attention"]
+    att = health_report.build_health(db.db, {"notify": {}, "errors": []}, "ok")["attention"]
     assert att["failed_jobs_24h"] == {"semantic": 1}
     assert att["failed_jobs_latest_at"] == now - 60
     qc = att["pending_unstarted"]["extract_qc"]
@@ -3106,7 +3106,7 @@ def test_health_attention_splits_failures_unstarted_and_unsettled(tmp_path):
         "next_try,created_at,updated_at) VALUES('extract_claim',1,3,"
         "'pending',0,?,?,?)", (now - 100, now - 1000, now - 1000))
     db.db.commit()
-    att = run_check._health(db, {"notify": {}, "errors": []}, "ok")["attention"]
+    att = health_report.build_health(db.db, {"notify": {}, "errors": []}, "ok")["attention"]
     assert att["pending_unstarted"] == {}
     db.close()
 
@@ -3114,8 +3114,8 @@ def test_health_attention_splits_failures_unstarted_and_unsettled(tmp_path):
 def test_card_route_holds_record_reason_for_health(tmp_path, monkeypatch):
     import notify_cards
     db = _ledger(tmp_path)
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {})
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     monkeypatch.setattr(notify_cards, "interactive_enabled", lambda cfg: True)
 
     def boom(*_a, **_k):
@@ -3150,7 +3150,7 @@ def test_card_route_holds_record_reason_for_health(tmp_path, monkeypatch):
                              "hold_reason": "internal_failure"}
         assert rows[receipt] == {"next": 1, "hold_reason": "payload_invalid"}
         assert rows[stuck] == {"hold_reason": "dispatch_failed"}
-        health = run_check._health(db, {"errors": [], "notify": {}}, "ok")
+        health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok")
         assert health["notify"]["held_reasons"] == {
             "internal_failure": 1, "payload_invalid": 1, "dispatch_failed": 1}
     finally:
@@ -3158,10 +3158,9 @@ def test_card_route_holds_record_reason_for_health(tmp_path, monkeypatch):
 
 
 def test_semantic_run_lock_lost_is_raised_to_end_the_tick(tmp_path, monkeypatch):
-    import semantic
     from mcs_util import RunLockLost
     _sem_setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(semantic, "run_due", lambda *a, **k: {
+    monkeypatch.setattr(semantic_drain, 'run_due', lambda *a, **k: {
         "done": 0, "deferred": 0, "failed": 0, "run_lock_lost": "timeout"})
     db = _ledger(tmp_path)
     with pytest.raises(RunLockLost) as e:
@@ -3189,7 +3188,7 @@ def test_run_lock_lost_ends_tick_without_later_stages(
                         lambda **kwargs: SimpleNamespace(set_deadline=lambda deadline: None))
     for name in ("_stage_fetch", "_run_jobs", "stage_derive", "_deliver",
                  "_with_relogin"):
-        monkeypatch.setattr(run_check, name, lambda *a, **k: None)
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, lambda *a, **k: None)
 
     def lost(*a, **k):
         raise RunLockLost(held=held)
@@ -3197,7 +3196,7 @@ def test_run_lock_lost_ends_tick_without_later_stages(
     monkeypatch.setattr(run_check, "_run_semantic", lost)
     later = Mock()
     for name in ("_run_metadata_shadow", "_housekeeping", "_finish_run"):
-        monkeypatch.setattr(run_check, name, later)
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, later)
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
     assert run_check._main() == 1
     later.assert_not_called()

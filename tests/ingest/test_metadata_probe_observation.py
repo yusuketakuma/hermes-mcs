@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mcs_adapter import MCSError, SchemaError, SessionExpired
+from mcs_contract import MCSError, SchemaError, SessionExpired
 
 
 PROJECT_ID = 700001

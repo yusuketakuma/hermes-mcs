@@ -25,7 +25,7 @@ from semantic_acceptance import METRICS, ADDITIONAL_METRICS, evaluate_gate as _g
 from semantic_facts import RELATION_TYPES
 from mcs_util import atomic_write
 from mcs_util import payload_hash
-from stats_math import wilson_interval  # noqa: F401  re-exported for callers
+from stats_math import percentile, wilson_interval  # noqa: F401  re-exported for callers
 
 
 SCHEMA_VERSION = "semantic-evaluation/v3"
@@ -102,13 +102,7 @@ def _percentile(values: list[float], p: float) -> float | None:
         return None
     for value in values:
         _finite_number(value, "percentile_value")
-    values = sorted(values)
-    pos = (len(values) - 1) * p
-    low = math.floor(pos)
-    high = math.ceil(pos)
-    if low == high:
-        return values[low]
-    return values[low] + (values[high] - values[low]) * (pos - low)
+    return percentile(values, p)
 
 
 def _eval_member(case: dict, msg: dict, cid: str) -> dict:

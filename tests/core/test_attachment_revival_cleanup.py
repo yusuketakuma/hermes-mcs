@@ -4,7 +4,7 @@ import hashlib
 import pytest
 
 from ingest_testkit import _ledger, _message
-from mcs_adapter import Attachment
+from mcs_contract import Attachment
 
 
 def _stored_attachment(tmp_path, *, reply=False):

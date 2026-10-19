@@ -67,21 +67,21 @@ def test_footer_is_read_only_and_unknown_labels_cannot_mention(led):
     _msg(led, 100)
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     card = _card(led)
-    before_content = notify_render._card_content(led.db, card)
-    before_source = notify_render._source_fp(led.db, card)
-    _, before_body = notify_render._card_body_text(led.db, card, {"shown": "[100]"})
+    before_content = notify_render.card_content(led.db, card)
+    before_source = notify_render.source_fingerprint(led.db, card)
+    _, before_body = notify_render.card_body_text(led.db, card, {"shown": "[100]"})
     _metadata(led, 100, [_react("completed"), _react("<@UFAKE>\n@everyone")],
               error="reaction_error")
-    content = notify_render._card_content(led.db, card)
+    content = notify_render.card_content(led.db, card)
     footer = "\n".join(item["text"] for item in content["footer"])
     assert "スタンプ ✅1 ❔1 · 自分 1投稿" in footer
     assert "再取得失敗" in footer and "@" not in footer
     assert content["toggles"] == {"acked": False, "has_tasks": False, "assigned": False}
     assert (content["pages"], content["shown"]) == (
         before_content["pages"], before_content["shown"])
-    assert notify_render._source_fp(led.db, card) == before_source
+    assert notify_render.source_fingerprint(led.db, card) == before_source
     # stamps change only each post's own MCS line, never the rest
-    after_body = notify_render._card_body_text(led.db, card, {"shown": "[100]"})[1]
+    after_body = notify_render.card_body_text(led.db, card, {"shown": "[100]"})[1]
 
     def strip(t):
         return [ln for ln in t.split("\n") if not ln.startswith("スタンプ ")]
@@ -102,7 +102,7 @@ def test_same_name_sender_uses_id_on_card_and_snapshot(led, tmp_path):
                                             {"staff_id": 8, "is_self": False}])
     _metadata(led, 100, [_react()])
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
-    content = notify_render._card_content(led.db, _card(led))
+    content = notify_render.card_content(led.db, _card(led))
     text = notify_render.display_text(content)
     assert text.count("合成同名（自分）") == 1
     snap = ledger.publish_snapshot(str(tmp_path / "data" / "ledger.db"),
@@ -215,15 +215,15 @@ def test_stamps_and_busy_footer_fit_card_budget(
     led.db.execute("INSERT INTO notification_triage"
                    "(card_id,owner,state,last_actor,updated_at) "
                    "VALUES(1,'discord:1000000000000000000','assigned','a',?)", (NOW,))
-    monkeypatch.setattr(notify_render, "_structured_block", lambda *args, **_kw: {
+    monkeypatch.setattr(notify_render, "structured_block", lambda *args, **_kw: {
         "type": "text", "text": "合" * structured_length})
     card = _card(led)
-    source_fp = notify_render._source_fp(led.db, card)
-    first = notify_render._card_content(led.db, card)
+    source_fp = notify_render.source_fingerprint(led.db, card)
+    first = notify_render.card_content(led.db, card)
     assert first["pages"] > 1
     shown = []
     for page in range(first["pages"]):
-        content = notify_render._card_content(
+        content = notify_render.card_content(
             led.db, card | {"ui_state": json.dumps({"page": page})})
         assert content["pages"] == first["pages"]
         cost = spec_mod._containers_cost(content["containers"])[1]
@@ -237,14 +237,14 @@ def test_stamps_and_busy_footer_fit_card_budget(
         assert "スタンプ 👀" in footer and "自分 " in footer and "再取得失敗" in footer
         # the page marker sits on the context line under the heading
         assert f"{page + 1}/{first['pages']}ページ" in content["containers"][1]["text"]
-        _, body = notify_render._card_body_text(
+        _, body = notify_render.card_body_text(
             led.db, card, {"shown": json.dumps(content["shown"])}, max_chars=None)
         assert "合" * structured_length in body
         for mid in content["shown"]:
             assert f"合成本文{mid}" in body
         shown.extend(content["shown"])
     assert shown == mids
-    assert notify_render._source_fp(led.db, card) == source_fp
+    assert notify_render.source_fingerprint(led.db, card) == source_fp
 
 
 def test_unacked_remains_unacked_and_partitions_within_patient(led, pinned_clock):

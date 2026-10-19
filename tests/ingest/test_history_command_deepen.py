@@ -9,7 +9,7 @@ from contextlib import closing
 import job_ops
 import notify_cards
 from ledger import Ledger
-from mcs_adapter import MessageBatch
+from mcs_contract import MessageBatch
 from extract_testkit import _message
 import mcs_adapter
 

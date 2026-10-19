@@ -13,6 +13,7 @@ import mcs_adapter
 import mcs_view
 import notify_flush
 import run_check
+import health_report
 from test_supported_schema_upgrade import (
     FIXTURES, RELEASES, _historical, _preserved, _records,
 )
@@ -86,9 +87,10 @@ def test_origin_migration_tick_extract_snapshot_view(tmp_path, monkeypatch, caps
     for name, value in {
         "HOME": root, "DB": db_path, "ATTACH_DIR": data / "attachments",
         "LOCKFILE": data / "run.lock", "CONF_PATH": config,
-        "CACHE": root / "absent-token.json", "HEALTH_FILE": root / run_check.HEALTH_REL,
+        "CACHE": root / "absent-token.json",
     }.items():
         monkeypatch.setattr(run_check, name, str(value))
+    monkeypatch.setattr(health_report, "HEALTH_FILE", str(root / health_report.HEALTH_REL))
     for name, value in {
         "HOME": root, "DB_MAINT_STATE": data / "db_maintenance.json",
         "BACKUP_DIR": data / "backups", "SNAPSHOT_DIR": data / "snapshots",

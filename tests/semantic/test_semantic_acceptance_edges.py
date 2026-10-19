@@ -1,11 +1,14 @@
 """Small acceptance-edge contracts for Unicode evidence and closed requests."""
+import semantic_audit
+import semantic_extraction
+import semantic_policy
+import semantic_store
 import copy
 import json
 import time
 import uuid
 
 import mcs_requests
-import semantic
 import semantic_loops
 from semantic_testkit import _cfg, _FakeJev, _message, _pending_fact, _seeded
 
@@ -32,7 +35,7 @@ def test_unicode_evidence_uses_codepoints_and_rejects_utf16_offsets():
             }],
         }, ensure_ascii=False)
 
-    facts, complete, dropped = semantic.extract_facts(llm, member)
+    facts, complete, dropped = semantic_extraction.extract_facts(llm, member)
     assert complete and dropped == 0
     evidence = facts[0]["_evidence"]
     assert evidence["start_codepoint"] == 0
@@ -47,12 +50,12 @@ def test_unicode_evidence_uses_codepoints_and_rejects_utf16_offsets():
         "fact_refs": [0],
         "evidence_refs": [evidence["evidence_id"]],
     }]}
-    assert not semantic.audit_code(bundle, facts, summary)
+    assert not semantic_audit.audit_code(bundle, facts, summary)
 
     utf16 = copy.deepcopy(facts)
     utf16[0]["_evidence"]["end_codepoint"] = (
         len(quote.encode("utf-16-le")) // 2)
-    findings = semantic.audit_code(bundle, utf16, summary)
+    findings = semantic_audit.audit_code(bundle, utf16, summary)
     assert any(f["code"] == "evidence_span_mismatch" for f in findings)
 
 
@@ -99,8 +102,8 @@ def test_existing_done_request_survives_reply_import_and_loop_replay(tmp_path):
             return (row["status"], row["revision"], receipts)
 
         baseline = request_state()
-        config, _ = semantic.semantic_config(_cfg("shadow"))
-        initial = semantic.thread_bundle(db, 1, 1, [2])
+        config, _ = semantic_policy.semantic_config(_cfg("shadow"))
+        initial = semantic_store.thread_bundle(db, 1, 1, [2])
         fake = _FakeJev(choice_map={"relation": "completion_report"})
         semantic_loops.update_loops(
             db, 1, initial, {1: _pending_fact(initial["members"][0])},
@@ -111,7 +114,7 @@ def test_existing_done_request_survives_reply_import_and_loop_replay(tmp_path):
         db.save_messages(
             [_message(3, parent=1, body="完了しました。", unread=False)],
             project_id=1, semantic=True)
-        current = semantic.thread_bundle(db, 1, 1, [3])
+        current = semantic_store.thread_bundle(db, 1, 1, [3])
         semantic_loops.update_loops(
             db, 1, current, {}, fake, config, time.monotonic() + 30)
         # Replay of the same generation must be idempotent as well.

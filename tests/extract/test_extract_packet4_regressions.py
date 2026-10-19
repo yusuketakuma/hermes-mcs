@@ -1,4 +1,5 @@
 """Synthetic regressions for extraction snapshots, evidence and input budgets."""
+import extract_validation
 
 import json
 import os
@@ -125,7 +126,7 @@ def test_rule_vitals_remain_available_without_a_current_fact_source(db):
 def test_qualitative_lab_prefix_does_not_confirm_a_different_result(db, suffix):
     body = "合成検査Q 陰性" + suffix
     raw = {"name": "合成検査Q", "value": "陰性", "evidence": body}
-    lab = extract_llm._validate({"labs": [raw]}, body)["labs"][0]
+    lab = extract_validation.validate({"labs": [raw]}, body)["labs"][0]
     assert lab["value"] == "陰性"
     assert lab["unverified"] is True
     assert lab["normalized"]["confirmation"] == "unverified"
@@ -143,7 +144,7 @@ def test_qualitative_lab_prefix_does_not_confirm_a_different_result(db, suffix):
 @pytest.mark.parametrize("ending", ["", "。", "です。", "でした。", "、再確認します"])
 def test_complete_qualitative_lab_statement_stays_quote_supported(ending):
     body = "合成検査Q 陰性" + ending
-    lab = extract_llm._validate({"labs": [{
+    lab = extract_validation.validate({"labs": [{
         "name": "合成検査Q", "value": "陰性", "evidence": body}]}, body)["labs"][0]
     assert lab["normalized"]["confirmation"] == "quote_supported"
 
@@ -151,7 +152,7 @@ def test_complete_qualitative_lab_statement_stays_quote_supported(ending):
 def test_complete_negated_lab_result_is_preserved_without_reinterpretation():
     body = "合成検査Q 陰性ではありません"
     raw = {"name": "合成検査Q", "value": "陰性ではありません", "evidence": body}
-    lab = extract_llm._validate({"labs": [raw]}, body)["labs"][0]
+    lab = extract_validation.validate({"labs": [raw]}, body)["labs"][0]
     assert lab["value"] == raw["value"]
     assert lab["normalized"]["confirmation"] == "quote_supported"
 

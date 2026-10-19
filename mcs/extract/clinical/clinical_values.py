@@ -3,28 +3,14 @@
 from datetime import date
 import re
 import unicodedata
+import clinical_scope
 from typing import Literal, TypedDict
 
 from semantic_quantities import _number
 from mcs_util import locate_quote_span, fold_map
 
-# One person/time vocabulary for extract.py, patient_context.py and this module.
-FAMILY_PERSON = (r"ご家族|家族|ご主人|主人|旦那(?:さん|様)?|奥(?:さん|様)|お?嫁(?:さん)?|配偶者|"
-                 r"お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|(?<!分)母|父|"
-                 r"(?:長男|長女|次男|次女)(?:さん|様)?|娘(?:さん|様)?|息子(?:さん|様)?|(?<![丈工])夫|妻|"
-                 r"お?兄(?:さん|様)?|お?姉(?:さん|様)?|(?:弟|妹|孫)(?:さん|様)?|同居者")
-# care staff: another person, except when they are the one measuring/treating the patient
-# care workers usually write the visit report, so they own a value only when written as its owner
-CARE_WORKER = r"(?:ヘルパー|介護士|介護職員?)(?:さん|様)?"
-STAFF_PERSON = r"(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ|ヘルパー|介護士|介護職員?)(?:さん|様)?"
-OTHER_PERSON = rf"本人以外|他者|他人|第三者|他の(?:患者|利用者)|他患者|別の(?:患者|利用者)|別患者|{STAFF_PERSON}"
-# A reading written at one of these times is not the current one.
-PAST_MARK = r"昨日|前回|先日|入院中|入院時"
-
-
 def patient_item_scope(item, body, *, patient_name=None, surface=None, default="patient"):
     """Resolve one stored item's original span before using it as patient current data."""
-    import extract
     if not isinstance(item, dict) or not isinstance(body, str):
         return "unknown"
     quote = item.get("evidence")
@@ -37,7 +23,7 @@ def patient_item_scope(item, body, *, patient_name=None, surface=None, default="
         # or noncurrent scope; a mixed source cannot prove an unlocated item.
         if not body:
             return "unknown"  # no clause end to check (a non-empty body always has `$`)
-        scopes = (extract.patient_source_scope(body, max(0, m.start() - 1), m.start(),
+        scopes = (clinical_scope.patient_source_scope(body, max(0, m.start() - 1), m.start(),
                                                patient_name=patient_name, default=default)
                   for m in re.finditer(r"[。！？!?;；、,\n]|$", body) if m.start() > 0)
         return "patient" if all(scope == "patient" for scope in scopes) else "unknown"
@@ -53,13 +39,12 @@ def patient_item_scope(item, body, *, patient_name=None, surface=None, default="
         if inner is not None:
             span = (span[0] + inner[0], span[0] + inner[1])
             break
-    return extract.patient_source_scope(body, *span, patient_name=patient_name, default=default)
+    return clinical_scope.patient_source_scope(body, *span, patient_name=patient_name, default=default)
 
 
 def patient_current_vitals(values, body, *, patient_name=None):
     """Keep source-consistent vitals and the trusted unscoped legacy contract."""
-    import extract
-    kept = extract.patient_vitals(values, body, patient_name=patient_name)
+    kept = patient_vitals(values, body, patient_name=patient_name)
     if isinstance(values, dict) and patient_item_scope({}, body, patient_name=patient_name) == "patient":
         # A source-labelled measurement overrides unscoped parsed compatibility.
         # Unmentioned/legacy fields keep their existing trusted-output contract.
@@ -77,7 +62,7 @@ def patient_current_vitals(values, body, *, patient_name=None):
                     body, max(0, match.start() - _VITAL_WIN_BACK), match.start())]
                 if (type(values.get(label)) in (int, float) and values[label] == _bp_number(match[0])
                         and not _FLOW_AFTER.match(body, match.end())
-                        and extract.patient_source_scope(body, starts[-1] if starts else match.start(),
+                        and clinical_scope.patient_source_scope(body, starts[-1] if starts else match.start(),
                                                          match.end(), patient_name=patient_name,
                                                          measurement=True) == "patient"):
                     grounded[label] = values[label]
@@ -262,10 +247,9 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     if re.search(r"予定|検査依頼|目標|基準|参考", quote):
         supported = False
     if readings and isinstance(evidence, str):
-        import extract
         _, starts, ends = fold_map(evidence, casefold=True)
         reading = readings[0]
-        if extract.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1],
+        if clinical_scope.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1],
                                         patient_name=patient_name) \
                 not in ("patient", "past"):
             supported = False
@@ -430,25 +414,23 @@ _NOT_PATIENT_CURRENT = ("family", "other", "conditional", "planned", "past")
 
 
 # Other times a reading can be written at; the nearest mark before it decides.
-_OTHER_TIME = rf"午前|午後|朝|昼|夕方?|夜|{PAST_MARK}|以前|過去|先週|先月|昨年"
+_OTHER_TIME = rf"午前|午後|朝|昼|夕方?|夜|{clinical_scope.PAST_MARK}|以前|過去|先週|先月|昨年"
 
 
 def _vital_current(body: str, pos: int) -> bool:
     """Whether the nearest time mark before pos in its sentence is an explicitly current one."""
-    import extract
     left = max(body.rfind(mark, 0, pos) for mark in "。！？!?\n") + 1
     last = None
-    for last in re.finditer(rf"{extract._CURRENT_MARK.pattern}|{_OTHER_TIME}", body[left:pos]):
+    for last in re.finditer(rf"{clinical_scope.CURRENT_MARK.pattern}|{_OTHER_TIME}", body[left:pos]):
         pass
-    return last is not None and extract._CURRENT_MARK.fullmatch(last[0]) is not None
+    return last is not None and clinical_scope.CURRENT_MARK.fullmatch(last[0]) is not None
 
 
 def _vital_superseded(body: str, cls: str, spans, patient_name=None) -> bool:
     """True when the patient's same vital is explicitly reported as current and none of spans is that report."""
-    import extract
 
     def patient(start, end):
-        return extract.patient_source_scope(body, start, end, patient_name=patient_name) == "patient"
+        return clinical_scope.patient_source_scope(body, start, end, patient_name=patient_name) == "patient"
 
     # Only the value's own same-vital readings of the patient count, never another person's equal value.
     own = [(s, e) for s, e in spans if _nearest_vital_label(body, s, e) == cls
@@ -487,7 +469,6 @@ def _vitals_guard(body: str | None, vit: dict,
     (same policy as evidence)."""
     if not body or not vit:
         return vit
-    import extract
     toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
             for m in _vital_numbers(body)]
     issues = drops.setdefault("vitals", []) if drops is not None else []
@@ -505,7 +486,7 @@ def _vitals_guard(body: str | None, vit: dict,
         # 酸素2L: a number followed by a flow unit is oxygen delivery, never a vital
         hits = [(s, e) for s, e in hits if not _FLOW_AFTER.match(body, e)]
         hits = [(s, e) for s, e in hits
-                if extract.patient_source_scope(body, s, e) not in _NOT_PATIENT_CURRENT]
+                if clinical_scope.patient_source_scope(body, s, e) not in _NOT_PATIENT_CURRENT]
         if not hits:
             note(f"vitals.{k}={val:g} は本文では本人以外・条件付き・予定・過去の記述です")
             continue
@@ -551,3 +532,60 @@ def _vitals_guard(body: str | None, vit: dict,
              "本文で同じ測定ではありません")
         del out["sbp"], out["dbp"]
     return out
+
+
+def patient_vitals(values, body, *, patient_name=None):
+    """Filter flat cached vital values against original patient spans without reinterpreting other-person measurements."""
+    if not isinstance(values, dict) or not isinstance(body, str):
+        return {}
+    kept = {}
+    for key, pattern in VITAL_PATTERNS.items():
+        for match in re.finditer(pattern, body):
+            if clinical_scope.patient_source_scope(body, match.start(), match.end(), patient_name=patient_name,
+                                    measurement=True) != "patient":
+                continue
+            actual = ({"sbp": int(match[1]), "dbp": int(match[2])} if key == "sbp" else
+                      {key: float(match[1].replace("．", ".")) if "." in match[1].replace("．", ".")
+                       else int(match[1])})
+            present = [field for field in actual if type(values.get(field)) in (int, float)]
+            if len(present) == 2 and any(values[field] != actual[field] for field in present):
+                continue            # both sides cached: only this whole reading may match
+            for field in present:
+                if values[field] == actual[field]:
+                    kept[field] = actual[field]
+    # Partial LLM blood pressures still need their own label, side and patient span.
+    partial = {key: values[key] for key in ("sbp", "dbp")
+               if key not in kept and type(values.get(key)) in (int, float)}
+    grounded = _vitals_guard(body, partial)
+    for match in re.finditer(r"\d+(?:[.．]\d+)?", body):
+        start, end = match.span()
+        if _nearest_vital_label(body, start, end) != "bp":
+            continue
+        side = _bp_side(body, start, end)
+        label = re.search(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$", body[max(0, start - 14):start])
+        if side is None and label is not None:
+            side = "sbp" if label[1] == "収縮期" else "dbp"
+        if side is None or clinical_scope.patient_source_scope(body, start, end, patient_name=patient_name,
+                                                measurement=True) != "patient":
+            continue
+        if side in partial and grounded.get(side) == partial[side] == float(match[0].replace("．", ".")):
+            kept[side] = partial[side]
+    if "sbp" in kept and "dbp" in kept and _bp_pair_unproven(
+            body, kept["sbp"], kept["dbp"],
+            keep=lambda s, e: clinical_scope.patient_source_scope(
+                body, s, e, patient_name=patient_name) == "patient"):
+        del kept["sbp"], kept["dbp"]  # two readings never make one pair
+    return _current_only(kept, body, patient_name)  # an earlier reading is not the current one
+
+VITAL_PATTERNS = {
+    "bt":   r"(?:体温|BT)[:：は]?\s*(\d{2}(?:[.．]\d)?)(?![\d.．])\s*[℃度]?",
+    # 不整脈 is a finding, not a pulse label ("不整脈は20回" ≠ HR 20)
+    "hr":   r"(?:脈拍|(?<!静)(?<!動)(?<!整)脈|HR|心拍数?)[:：は]?\s*(\d{2,3})(?![\d.．])",
+    "rr":   r"(?:呼吸(?:数)?|RR)[:：は]?\s*(\d{1,2})(?![\d.．])",
+    "sbp":  r"(?:血圧|BP)[:：は]?\s*(\d{2,3})\s*[/／]\s*(\d{2,3})(?![\d.．])",
+    # a number followed by a flow unit is oxygen delivery (酸素10L),
+    # never a saturation reading
+    "spo2": r"(?:SpO2|Spo2|SPO2|spo2|酸素)[:：は]?\s*(\d{2,3})(?![\d.．])"
+            r"(?!\s*(?:[LＬlℓ]|リットル))\s*[%％]?",
+    "bs":   r"(?:血糖|BS|Glu)[:：は]?\s*(\d{2,3})(?![\d.．])",
+}

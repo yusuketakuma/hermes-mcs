@@ -19,22 +19,22 @@ def test_processing_complete_attention_updates_both_face_and_body(led, monkeypat
     progress = {"state": "processing", "completed": 1, "total": 3}
     monkeypatch.setattr(extraction_progress, "message_progress", lambda *a, **k: dict(progress))
     led.db.execute("PRAGMA query_only=ON")
-    original = notify_render._card_content(led.db, card)
+    original = notify_render.card_content(led.db, card)
     assert "解析更新中" not in notify_render.display_text(original)
-    processing = notify_render._card_content(led.db, card, cfg={})
+    processing = notify_render.card_content(led.db, card, cfg={})
     assert "解析中 2" in notify_render.display_text(processing)   # once, on the meta line
-    body = notify_render._card_body_text(led.db, card, {"shown": json.dumps([100])}, cfg={})[1]
+    body = notify_render.card_body_text(led.db, card, {"shown": json.dumps([100])}, cfg={})[1]
     assert "解析更新中" not in body    # layout 2: progress sits on the meta line only
     assert processing["source_fp"] == original["source_fp"]
     assert processing["source_fp"] == card["source_fp"]
     drift = notify_cards._generation_drift(card, processing)
     assert "source_generation" not in drift and "presentation_generation" in drift
     progress.update(state="complete", completed=3)
-    complete = notify_render._card_content(led.db, card, cfg={})
+    complete = notify_render.card_content(led.db, card, cfg={})
     assert "解析中" not in notify_render.display_text(complete)
-    assert notify_render._content_fp(complete) != notify_render._content_fp(processing)
+    assert notify_render.content_fingerprint(complete) != notify_render.content_fingerprint(processing)
     progress.update(state="attention", completed=1)
-    attention = notify_render._card_content(led.db, card, cfg={})
+    attention = notify_render.card_content(led.db, card, cfg={})
     assert "解析要確認 2" in notify_render.display_text(attention)
     assert "解析中" not in notify_render.display_text(attention)
 
@@ -65,13 +65,13 @@ def test_progress_off_visible_page_still_changes_presentation_fp(led, monkeypatc
     counts = {mid: 0 for mid in range(100, 113)}
     monkeypatch.setattr(extraction_progress, "message_progress", lambda db, row, **k: {
         "state": "processing", "completed": counts[row["message_id"]], "total": 3})
-    before = notify_render._card_content(led.db, card, cfg={})
+    before = notify_render.card_content(led.db, card, cfg={})
     hidden = next(mid for mid in counts if mid not in before["shown"])
     counts[hidden] = 1
-    after = notify_render._card_content(led.db, card, cfg={})
+    after = notify_render.card_content(led.db, card, cfg={})
     assert before["containers"] == after["containers"]
     assert before["source_fp"] == after["source_fp"]
-    assert notify_render._content_fp(before) != notify_render._content_fp(after)
+    assert notify_render.content_fingerprint(before) != notify_render.content_fingerprint(after)
 
 
 def test_real_current_checkpoint_updates_shared_summary_without_partial_facts(led):
@@ -109,13 +109,13 @@ def test_card_reads_each_current_message_once_and_reuses_even_unknown_progress(l
 
     monkeypatch.setattr(extraction_progress, "message_progress", read)
     led.db.execute("PRAGMA query_only=ON")
-    content = notify_render._card_content(led.db, card, cfg={})
+    content = notify_render.card_content(led.db, card, cfg={})
     assert calls == [100, 101]
     assert "解析中 1" in notify_render.display_text(content)
     assert content["progress_fp"] == notify_render.payload_hash([
         (100, {"state": "processing", "completed": 1, "total": 3}), (101, None)])
     calls.clear()
-    notify_render._card_content(led.db, card)
+    notify_render.card_content(led.db, card)
     assert calls == []  # cfg-unknown path keeps its prior display and reader boundary
 
 
@@ -130,9 +130,9 @@ def test_thread_body_includes_summary_and_attachment_caption_keeps_source(led, t
     raw = "原文の要約という単語を削除しません。"
     with led.db:
         led.db.execute("UPDATE messages SET body_text=?,organization='合成所属' WHERE message_id=100", (raw,))
-    monkeypatch.setattr(notify_render, "_structured_block", lambda *_args, **_kw: {
+    monkeypatch.setattr(notify_render, "structured_block", lambda *_args, **_kw: {
         "type": "text", "text": "📋 要約\nGENERATED-SUMMARY-CANARY"})
-    monkeypatch.setattr(notify_render, "_progress_state", lambda *_args: {
+    monkeypatch.setattr(notify_render, "progress_state", lambda *_args: {
         "state": "processing", "completed": 1, "total": 3})
     file = tmp_path / "synthetic.pdf"
     file.write_bytes(b"synthetic attachment")
@@ -164,5 +164,5 @@ def test_thread_body_includes_summary_and_attachment_caption_keeps_source(led, t
         assert "スタンプ 未取得" in body
         assert "GENERATED-SUMMARY-CANARY" not in caption and "解析更新中" not in caption
         assert raw not in caption
-    private = notify_render._card_body_text(led.db, _card(led), {"shown": "[100]"}, cfg=cfg)[1]
+    private = notify_render.card_body_text(led.db, _card(led), {"shown": "[100]"}, cfg=cfg)[1]
     assert "GENERATED-SUMMARY-CANARY" in private and "解析更新中" not in private

@@ -1,4 +1,5 @@
 """Synthetic adversarial cases for candidate-bound sealed evaluation."""
+import semantic_transport
 import copy
 import json
 from pathlib import Path
@@ -382,11 +383,10 @@ def test_unknown_or_nonfinite_constant_fails_instead_of_silently_disappearing(mo
 
 
 def test_runtime_counters_do_not_change_candidate_sources(monkeypatch):
-    import semantic
     original = candidate._sources()
-    monkeypatch.setattr(semantic, '_LONG_UNSAVED', {'synthetic-message': 2})
-    monkeypatch.setattr(semantic, '_LONG_MARK_FAILURES', {'busy': 10, 'error': 3})
-    monkeypatch.setattr(semantic, '_FMT_MODE', 'plain')
-    monkeypatch.setattr(semantic, '_FMT_TS', 1234.5)
-    monkeypatch.setattr(semantic, '_LLM_FAILURE', 'synthetic-failure')
+    monkeypatch.setattr(semantic_transport, '_LONG_UNSAVED', {'synthetic-message': 2})
+    monkeypatch.setattr(semantic_transport, '_LONG_MARK_FAILURES', {'busy': 10, 'error': 3})
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', 'plain')
+    monkeypatch.setattr(semantic_transport, '_FMT_TS', 1234.5)
+    monkeypatch.setattr(semantic_transport, '_LLM_FAILURE', 'synthetic-failure')
     assert candidate._sources() == original

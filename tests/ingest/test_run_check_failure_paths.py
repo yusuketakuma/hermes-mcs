@@ -1,6 +1,8 @@
 """A failed tick still keeps the local daily backup, and an unread walk
 cut by the deadline records the patients it never fetched. Synthetic
 ledger and adapter stubs only; no MCS request, Keychain or send."""
+import health_report
+import mcs_contract
 import os
 import sys
 import time
@@ -40,7 +42,7 @@ def _tick_world(tmp_path, monkeypatch, failure, *, overdue):
         "CONF_PATH": config, "CACHE": tmp_path / "absent-token.json",
         "HEALTH_FILE": data / "health.json",
     }.items():
-        monkeypatch.setattr(run_check, name, str(value))
+        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
     for name, value in {
         "BACKUP_DIR": data / "backups", "SNAPSHOT_DIR": data / "snapshots",
         "LOGFILE": data / "run.log",
@@ -67,8 +69,8 @@ def _tick_world(tmp_path, monkeypatch, failure, *, overdue):
 
 
 FAILURES = {
-    "mcs_error": (mcs_adapter.MCSError("network_error", retryable=True), 1),
-    "session": (mcs_adapter.SessionExpired("session_expired"), 2),
+    "mcs_error": (mcs_contract.MCSError("network_error", retryable=True), 1),
+    "session": (mcs_contract.SessionExpired("session_expired"), 2),
     "crash": (RuntimeError("synthetic crash"), 1),
 }
 
@@ -118,13 +120,13 @@ def test_patients_never_fetched_before_the_deadline_are_incomplete(tmp_path, mon
     def fetch(pid, ts):
         fetched.append(pid)
         clock["now"] = 10.0                          # the deadline passes here
-        return mcs_adapter.MessageBatch(messages=[], reached=True)
+        return mcs_contract.MessageBatch(messages=[], reached=True)
     adapter = SimpleNamespace(
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1), _unread_patient(2),
                                      _unread_patient(3)]),
         fetch_unread_messages=fetch,
-        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
         mark_patient_read=lambda *a, **k: pytest.fail("no ack"))
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": []}
@@ -133,7 +135,7 @@ def test_patients_never_fetched_before_the_deadline_are_incomplete(tmp_path, mon
     assert fetched == [1]
     assert result["incomplete"] == [2, 3]
     assert "deadline_exceeded" in result["errors"]
-    assert run_check._collection(result)["collection"] == "incomplete"
+    assert health_report.collection(result)["collection"] == "incomplete"
     # nothing is recorded about them: never fetched is not 'no messages'
     assert db.db.execute("SELECT count(*) FROM messages").fetchone()[0] == 0
     db.close()
@@ -142,18 +144,18 @@ def test_patients_never_fetched_before_the_deadline_are_incomplete(tmp_path, mon
 def test_an_unread_walk_within_the_deadline_stays_complete(tmp_path):
     db = ledger.Ledger(str(tmp_path / "ledger.db"))
     adapter = SimpleNamespace(
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
-        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+        fetch_unread_messages=lambda *_: mcs_contract.MessageBatch(
             messages=[_message(unread=True)], reached=True),
-        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
         mark_patient_read=lambda *a, **k: None)
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": []}
     run_check.stage_unread(adapter, db, SimpleNamespace(mark_read=False), result,
                            time.monotonic() + 30, db.begin_run(None))
     assert result["incomplete"] == [] and result["errors"] == []
-    assert run_check._collection(result)["collection"] == "ok"
+    assert health_report.collection(result)["collection"] == "ok"
     db.close()
 
 
@@ -175,7 +177,7 @@ def test_run_row_write_failure_still_writes_health_and_keeps_exit_code(
     assert run_check.main() == code
     out = capsys.readouterr().out
     assert "run_record_failed" in out
-    assert os.path.exists(run_check.HEALTH_FILE)
+    assert os.path.exists(health_report.HEALTH_FILE)
 
 
 @pytest.mark.parametrize("held", [True, False])
@@ -203,9 +205,9 @@ def test_run_lock_lost_keeps_its_write_contract_when_the_record_fails(
     assert backups == []                               # never housekeeping on lock loss
     if held:
         assert writes == ["partial"] and "run_record_failed" in out
-        assert os.path.exists(run_check.HEALTH_FILE)    # health only
+        assert os.path.exists(health_report.HEALTH_FILE)    # health only
     else:
-        assert writes == [] and not os.path.exists(run_check.HEALTH_FILE)
+        assert writes == [] and not os.path.exists(health_report.HEALTH_FILE)
 
 
 # Regressions: attachment 401 on an expired session, and the self-probe
@@ -216,7 +218,7 @@ def _states(db):
 
 
 def _raise_401(*a):
-    raise mcs_adapter.MCSError("http_error", status=401)
+    raise mcs_contract.MCSError("http_error", status=401)
 
 
 def test_expired_session_401_keeps_attachment_pending(tmp_path, monkeypatch):
@@ -225,10 +227,10 @@ def test_expired_session_401_keeps_attachment_pending(tmp_path, monkeypatch):
     m.attachments = [_att("file0")]
     db.save_messages([m])
     monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)  # independent of the host's free disk
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)  # independent of the host's free disk
     adapter = SimpleNamespace(download=_raise_401,
                               _probe_session_ok=lambda: False)
-    with pytest.raises(mcs_adapter.SessionExpired):
+    with pytest.raises(mcs_contract.SessionExpired):
         run_check.stage_attachments(adapter, db, {"errors": []},
                                     time.monotonic() + 100)
     assert _states(db) == [("pending", 0)]
@@ -241,7 +243,7 @@ def test_401_with_live_session_is_recorded(tmp_path, monkeypatch):
     m.attachments = [_att("file0")]
     db.save_messages([m])
     monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)  # independent of the host's free disk
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)  # independent of the host's free disk
     adapter = SimpleNamespace(download=_raise_401,
                               _probe_session_ok=lambda: True)
     result = {"errors": []}
@@ -264,7 +266,7 @@ def test_self_probe_stores_same_second_latest_post(tmp_path):
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             # mirror MCSAdapter.fetch_history: items with ts <= since drop
             keep = [x for x in [own] if datetime.fromisoformat(x.posted_at).timestamp() > since]
-            return mcs_adapter.MessageBatch(keep, pages=1, reached=True)
+            return mcs_contract.MessageBatch(keep, pages=1, reached=True)
 
     result = {"errors": [], "new_messages": 0}
     run_check.stage_self_probe(Adapter(), db, result,

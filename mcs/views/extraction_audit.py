@@ -209,7 +209,7 @@ def _drops(document, meta):
 def collect(db, scope):
     """Compute the full audit preset in one source pass, exposing only typed aggregates."""
     import mcs_stats
-    from mcs_operations import EXTRACT_FEEDBACK_FIELDS
+    from operation_contract import EXTRACT_FEEDBACK_FIELDS
     from request_loops import effective_loop_state, latest_policy
 
     omission, validation, prefilter, thin = {}, {}, {}, {}

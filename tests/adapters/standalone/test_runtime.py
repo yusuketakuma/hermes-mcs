@@ -1,6 +1,9 @@
 """Native job ownership with synthetic queues and stubbed child processes."""
 from datetime import datetime, timezone
 import json
+import os
+
+import pytest
 from types import SimpleNamespace
 
 from mcs_standalone import runtime, service
@@ -328,3 +331,21 @@ def test_crash_loop_is_visible_in_log_and_status(tmp_path, monkeypatch):
         assert status["failures"] == (i + 1 if code else 0)
     ended = [f for e, f in events if e == "child_ended" and f["job"] == "extract-0"]
     assert [f["code"] for f in ended] == [1, 1, 0]
+
+
+def test_log_stream_failure_closes_descriptor_before_requesting_restart(tmp_path, monkeypatch):
+    (tmp_path / "data").mkdir()
+    host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    opened = []
+
+    def unavailable_stream(fd, mode):
+        opened.append(fd)
+        raise OSError("synthetic stream handoff failure")
+
+    monkeypatch.setattr(runtime.os, "fdopen", unavailable_stream)
+    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *a, **k: pytest.fail("child started"))
+    host.start("extract-0", "background", 1)
+    assert host.restarting and host.children == {}
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened[0])

@@ -15,8 +15,8 @@ def test_card_without_thread_seals_patient_sender_and_primary_request(led, monke
     with led.db:
         led.db.execute("UPDATE patients SET patient_name='合成患者' WHERE project_id=1")
         led.db.execute("UPDATE messages SET body_text=?,sender_name='合成看護師',organization='合成事業所',posted_at='2026-10-06T08:30:00+09:00' WHERE message_id=101", (raw,))
-    monkeypatch.setattr(notify_render, "_extraction_failed", lambda *_args: state == "failed")
-    monkeypatch.setattr(notify_render, "_structured_block", lambda *_args, **_kw: {
+    monkeypatch.setattr(notify_render, "extraction_failed", lambda *_args: state == "failed")
+    monkeypatch.setattr(notify_render, "structured_block", lambda *_args, **_kw: {
         "type": "text", "text": "📋 要約\n・薬剤候補（未確認）: 合成薬\n・依頼候補（未確認）: 朝の薬の変更確認"}
         if state == "ready" else None)
     cfg = {**CFG, "notify": {**CFG["notify"], "card_thread": False}}
@@ -81,7 +81,7 @@ def test_long_source_fields_still_put_primary_fact_before_sender_and_time(led, m
     with led.db:
         led.db.execute("UPDATE patients SET patient_name=? WHERE project_id=1", ("患" * 30,))
         led.db.execute("UPDATE messages SET sender_name=?,organization=?,posted_at='2026-10-06T08:30:00+09:00' WHERE message_id=101", ("発" * 24, "所" * 24))
-    monkeypatch.setattr(notify_render, "_structured_block", lambda *_args, **_kw: {
+    monkeypatch.setattr(notify_render, "structured_block", lambda *_args, **_kw: {
         "type": "text", "text": "📋 要約\n・依頼候補（未確認）: 朝の薬の変更確認"})
     _dispatch(led, _intent(led))
     preview = json.loads(_latest_render(led)["spec_json"])["parts"]["preview_text"]
@@ -98,7 +98,7 @@ def test_long_attachment_caption_keeps_five_fields_within_wire_limit(led, monkey
         led.db.execute("UPDATE patients SET patient_name=? WHERE project_id=1", ("患" * 30,))
         led.db.execute("UPDATE messages SET sender_name=?,organization=?,posted_at='2026-10-06T08:30:00+09:00' WHERE message_id=101", ("発" * 24, "所" * 24))
         led.db.execute("INSERT INTO attachments(message_id,name,state,local_path,sha256,bytes) VALUES(101,?,'downloaded','/synthetic/unused',?,1)", (filename, "ab" * 32))
-    monkeypatch.setattr(notify_render, "_structured_block", lambda *_args, **_kw: {
+    monkeypatch.setattr(notify_render, "structured_block", lambda *_args, **_kw: {
         "type": "text", "text": "📋 要約\n・依頼候補（未確認）: 主要確認事項" + "要" * 500})
     _dispatch(led, _intent(led))
     spec = json.loads(_latest_render(led)["spec_json"])

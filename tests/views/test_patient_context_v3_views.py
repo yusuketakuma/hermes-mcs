@@ -1,4 +1,5 @@
 """Patient context v3 views: one evidence list, thin projections, clinical distinctions kept."""
+import mcs_contract
 import json
 import sys
 from types import SimpleNamespace
@@ -119,8 +120,7 @@ def _requests(ctx, rows, planned=None):
 
 
 def _reply(ctx, mid, parent, kind):
-    import mcs_adapter
-    ctx.db.save_messages([mcs_adapter.Message(
+    ctx.db.save_messages([mcs_contract.Message(
         message_id=mid, project_id=1, parent_id=parent, sender_id=2, sender_name="返信者", sender_type="user",
         profession="", organization="", posted_at="2026-09-19T00:00:00+09:00", body_html="<p>架空の返信</p>",
         body_state="full", is_unread=False, reply_count=0)], project_id=1)

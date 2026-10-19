@@ -1,8 +1,10 @@
 """One completed target must not hide its unassessed sibling arrival."""
+import semantic_policy
+import semantic_render
+import semantic_store
 import json
 import pytest
 
-import semantic
 from semantic_render import _arrival_ids
 from semantic_testkit import _cfg, _seeded
 
@@ -29,15 +31,15 @@ def unreadable_json(monkeypatch):
 def test_degraded_notice_requires_all_arrival_targets_to_pass(tmp_path):
     db = _seeded(tmp_path)
     try:
-        cfg, _ = semantic.semantic_config(_cfg("enforce"))
+        cfg, _ = semantic_policy.semantic_config(_cfg("enforce"))
         with db.db:
             db.db.execute("UPDATE notify_outbox SET created_at=0")
-        fp = semantic.thread_bundle(db, 1, 1)["source_fingerprint"]
+        fp = semantic_store.thread_bundle(db, 1, 1)["source_fingerprint"]
         db.artifact_add("semantic_audit", json.dumps({"status": "PASS"}),
                         project_id=1, message_id=1,
                         meta={"fingerprint": fp, "audit_status": "PASS"})
-        assert semantic._emit_degraded(db, cfg) == 1
-        assert semantic._emit_degraded(db, cfg) == 0
+        assert semantic_render._emit_degraded(db, cfg) == 1
+        assert semantic_render._emit_degraded(db, cfg) == 0
         assert db.db.execute("SELECT count(*) FROM requests").fetchone()[0] == 0
     finally:
         db.close()
@@ -46,14 +48,14 @@ def test_degraded_notice_requires_all_arrival_targets_to_pass(tmp_path):
 def test_attempted_base_delivery_never_creates_degraded_duplicate(tmp_path):
     db = _seeded(tmp_path)
     try:
-        cfg, _ = semantic.semantic_config(_cfg("enforce"))
+        cfg, _ = semantic_policy.semantic_config(_cfg("enforce"))
         with db.db:
             db.db.execute("UPDATE notify_outbox SET created_at=0,state='failed',attempts=1")
-        assert semantic._emit_degraded(db, cfg) == 0
+        assert semantic_render._emit_degraded(db, cfg) == 0
         with db.db:
             db.db.execute("UPDATE notify_outbox SET attempts=0,progress=?",
                           (json.dumps({"sent": ["unknown-receipt"]}),))
-        assert semantic._emit_degraded(db, cfg) == 0
+        assert semantic_render._emit_degraded(db, cfg) == 0
     finally:
         db.close()
 
@@ -66,12 +68,12 @@ def test_attempted_base_delivery_never_creates_degraded_duplicate(tmp_path):
 def test_malformed_arrival_never_authorizes_notice(tmp_path, payload):
     db = _seeded(tmp_path)
     try:
-        cfg, _ = semantic.semantic_config(_cfg("enforce"))
+        cfg, _ = semantic_policy.semantic_config(_cfg("enforce"))
         with db.db:
             db.db.execute("UPDATE notify_outbox SET created_at=0,payload=?",
                           (json.dumps(payload),))
-        assert semantic._notify_src_event(db, 1, [1]) is None
-        assert semantic._emit_degraded(db, cfg) == 0
+        assert semantic_render._notify_src_event(db, 1, [1]) is None
+        assert semantic_render._emit_degraded(db, cfg) == 0
     finally:
         db.close()
 
@@ -83,12 +85,12 @@ def test_arrival_ids_retains_sqlite_integer_maximum():
 def test_unreadable_arrival_never_authorizes_notice(tmp_path, unreadable_json):
     db = _seeded(tmp_path)
     try:
-        cfg, _ = semantic.semantic_config(_cfg("enforce"))
+        cfg, _ = semantic_policy.semantic_config(_cfg("enforce"))
         with db.db:
             db.db.execute("UPDATE notify_outbox SET created_at=0,payload=?",
                           (unreadable_json,))
-        assert semantic._notify_src_event(db, 1, [1]) is None
-        assert semantic._emit_degraded(db, cfg) == 0
+        assert semantic_render._notify_src_event(db, 1, [1]) is None
+        assert semantic_render._emit_degraded(db, cfg) == 0
         assert db.db.execute("SELECT payload FROM notify_outbox").fetchone()[0] == unreadable_json
         assert db.db.execute("SELECT count(*) FROM requests").fetchone()[0] == 0
     finally:
@@ -99,13 +101,13 @@ def test_unreadable_arrival_never_authorizes_notice(tmp_path, unreadable_json):
 def test_unreadable_attempt_keeps_notice_origin_unknown(tmp_path, unreadable_json, column):
     db = _seeded(tmp_path)
     try:
-        origin = semantic._notify_src_event(db, 1, [1])
+        origin = semantic_render._notify_src_event(db, 1, [1])
         notice = db.outbox_add("semantic_notice", 1,
                               {"src_event_id": origin, "target_message_id": 1})
         with db.db:
             db.db.execute(f"UPDATE notify_outbox SET state='failed',attempts=1,{column}=? "
                           "WHERE event_id=?", (unreadable_json, notice))
-        assert semantic._notify_src_event(db, 1, [1]) is None
+        assert semantic_render._notify_src_event(db, 1, [1]) is None
         row = db.db.execute(f"SELECT state,attempts,{column} FROM notify_outbox WHERE event_id=?",
                             (notice,)).fetchone()
         assert tuple(row) == ("failed", 1, unreadable_json)
@@ -118,7 +120,7 @@ def test_unreadable_attempt_keeps_notice_origin_unknown(tmp_path, unreadable_jso
 def test_unreadable_arrival_does_not_block_later_degraded_notice(tmp_path, unreadable_json, column):
     db = _seeded(tmp_path)
     try:
-        cfg, _ = semantic.semantic_config(_cfg("enforce"))
+        cfg, _ = semantic_policy.semantic_config(_cfg("enforce"))
         with db.db:
             db.db.execute(f"UPDATE notify_outbox SET created_at=0,{column}=?",
                           (unreadable_json,))
@@ -126,7 +128,7 @@ def test_unreadable_arrival_does_not_block_later_degraded_notice(tmp_path, unrea
         with db.db:
             db.db.execute("UPDATE notify_outbox SET created_at=0 WHERE event_id=?", (valid,))
         jobs = [tuple(row) for row in db.db.execute("SELECT job_id,state,attempts FROM fetch_jobs")]
-        assert semantic._emit_degraded(db, cfg) == 1
+        assert semantic_render._emit_degraded(db, cfg) == 1
         notices = db.db.execute("SELECT payload FROM notify_outbox WHERE kind='semantic_notice'").fetchall()
         assert len(notices) == 1
         payload = json.loads(notices[0][0])

@@ -5,13 +5,14 @@ stage receipts S1–S8, the PASS-only read model boundary, generation
 fencing, diagnostic (non-PASS) separation, pre-reserved repair, and
 the finite retirement manifest.
 """
+import semantic_drain
+import semantic_store
 import json
 import time
 
 import pytest
 
 import extract_llm
-import semantic
 import semantic_v4 as v4
 import semantic_v4_cohort as cohort
 from mcs_queries import current_fact_pred
@@ -30,7 +31,7 @@ def _rows(db, kind, mid):
 
 
 def _fp(db, mid=1):
-    return semantic.thread_bundle(db, 1, mid)["source_fingerprint"]
+    return semantic_store.thread_bundle(db, 1, mid)["source_fingerprint"]
 
 
 def test_v4_pass_publishes_read_model_and_stage_ledger(tmp_path):
@@ -489,7 +490,7 @@ def test_cohort_never_dispatches_without_enforceable_token_budget(tmp_path):
         cfg = semantic_config({"semantic": {"mode": "shadow",
                                              "project_ids": [1]}})[0]
         calls = []
-        result = semantic._process_job(
+        result = semantic_drain._process_job(
             db, cfg, job, _PassJev(), lambda prompt: calls.append(prompt),
             time.monotonic() + 60)
         assert result == "failed"
@@ -497,7 +498,7 @@ def test_cohort_never_dispatches_without_enforceable_token_budget(tmp_path):
         assert v4.cohort_items_done(db, "bounded")[1]["reason"] == \
             "token_budget_not_enforceable"
         count = len(_rows(db, v4.KIND_V4_ITEM, 1))
-        assert semantic._process_job(
+        assert semantic_drain._process_job(
             db, cfg, job, _PassJev(), lambda prompt: calls.append(prompt),
             time.monotonic() + 60) == "failed"
         assert len(_rows(db, v4.KIND_V4_ITEM, 1)) == count

@@ -1,13 +1,13 @@
 """Direct contracts of semantic_metrics: audit history counting tolerates
 malformed rows, and current_quality classifies every scoped message.
 Synthetic ledger only."""
+import semantic_policy
 import json
 import sqlite3
 from types import SimpleNamespace
 
 from ledger import Ledger
 import pytest
-import semantic
 import semantic_metrics
 from semantic_policy import KIND_AUDIT, KIND_SUMMARY
 from semantic_testkit import _cfg, _message, _audit_pair as _pair
@@ -106,9 +106,9 @@ def test_empty_store_has_no_rates(db):
     assert out["completion_rate"] is None and out["pass_rate"] is None
     assert out["scope"] == "stored_messages_in_configured_projects"
     assert out["completion_basis"] == "terminal_summary_audit_pair"
-    scfg, errors = semantic.semantic_config(_cfg())
+    scfg, errors = semantic_policy.semantic_config(_cfg())
     assert not errors
-    assert out["policy_fingerprint"] == semantic.policy_fingerprint(scfg)
+    assert out["policy_fingerprint"] == semantic_policy.policy_fingerprint(scfg)
     assert (out["mode"], out["summary_mode"]) == ("shadow", "shadow")
 
 

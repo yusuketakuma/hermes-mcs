@@ -26,66 +26,32 @@ import math
 import os
 import sys
 import time
-from typing import TypeAlias, TypedDict
 
 if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import _mcs_path  # noqa: F401
 
-from mcs_adapter import MCSError, SchemaError, _valid_id
+from mcs_contract import MCSError, SchemaError, valid_id as _valid_id
+from project_metadata_contract import (collection_rows, ARTIFACT_KIND, CLINICAL_DATASETS, DATASETS, FETCH_ERROR_KINDS, JSON, MAX_ROWS, MAX_VALUE_ROWS, MetadataFetch, SCOPED_DATASETS, attempt_state, clinical_definition_fingerprint, metadata_target, normalize_rows)
 from mcs_util import loads_dict
 
-DATASETS = ("care_team", "medication_periods", "observation_items",
-            "observation_values", "consultations")
-CLINICAL_DATASETS = ("medication_periods", "observation_items", "observation_values")
 # datasets whose bound scope can move under a fetch (reason scope_changed)
-SCOPED_DATASETS = ("consultations", *CLINICAL_DATASETS)
 # MCSError kinds an attempt keeps verbatim; any other kind becomes fetch_error
-FETCH_ERROR_KINDS = frozenset({"schema_error", "http_error", "forbidden", "session_expired",
-                               "network_error", "deadline_exceeded", "capacity_limit"})
 # a consultations walk stopped by these still stored complete pages
-PARTIAL_REASONS = ("snapshot_missing", "page_limit")
-ARTIFACT_KIND = "project_metadata_v1"
-MAX_ROWS = 250
-MAX_VALUE_ROWS = 10000
 CLINICAL_PROGRESS_KIND = "clinical_metadata_progress_v1"
 CLINICAL_REFRESH_S = 24 * 3600
 CLINICAL_BACKOFF_S = 6 * 3600
 CLINICAL_GET_CAP = 12
 
 
-def accepted_reasons(dataset: str) -> frozenset:
-    """Every failure reason an attempt artifact of `dataset` may carry; readers reject the rest.
-
-    Stored artifacts outlive the writer, so a reason is only ever added
-    here — removing one would make already-written attempts unreadable."""
-    return FETCH_ERROR_KINDS | {"fetch_error", *PARTIAL_REASONS} | (
-        {"scope_changed"} if dataset in SCOPED_DATASETS else set())
 
 
-def attempt_state(dataset: str, complete: bool, reason) -> str:
-    """complete | partial | failed for one fetch attempt."""
-    if complete:
-        return "complete"
-    return "partial" if dataset == "consultations" and reason in PARTIAL_REASONS else "failed"
 
 
-JSON: TypeAlias = None | bool | int | float | str | list["JSON"] | dict[str, "JSON"]
 
 
-class MetadataFetch(TypedDict):
-    complete: bool
-    rows: list[dict[str, JSON]]
-    pages: int
-    timestamp: int | None
-    reason: str | None
-    http_status: int | None
-    definition: dict[str, JSON] | None
 
 
-class MetadataTarget(TypedDict):
-    scope: str
-    entity_id: int
 
 
 class _ClinicalHold(Exception):
@@ -124,100 +90,18 @@ def _staged_resume(dataset: str, resume: dict, per_page: int,
         raise _ClinicalHold("staging_invalid") from None
 
 
-REFERENCE_FIELDS = tuple(
-    f"{edge}_reference_limit_{component}"
-    for edge in ("upper", "lower")
-    for component in ("scalar", "max", "min", "left", "right"))
 
 
-def _string(value) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or len(value) > 600:
-        raise SchemaError("project metadata: text invalid")
-    return value
 
 
-def _number(value) -> int | float | None:
-    if value is None:
-        return None
-    try:
-        valid = type(value) in (int, float) and math.isfinite(value)
-    except OverflowError:
-        valid = False
-    if not valid:
-        raise SchemaError("project metadata: number invalid")
-    return value
 
 
-def _boolean(value) -> bool | None:
-    if value is not None and type(value) is not bool:
-        raise SchemaError("project metadata: boolean invalid")
-    return value
 
 
-def _rows(value, cap: int = MAX_ROWS) -> list[dict[str, JSON]]:
-    if (not isinstance(value, list) or len(value) > cap
-            or any(not isinstance(row, dict) for row in value)):
-        raise SchemaError("project metadata: collection invalid")
-    return value
 
 
-def _item(row) -> dict[str, JSON]:
-    """Keep only the public client's lab-test definition fields."""
-    if not isinstance(row, dict) or not _valid_id(row.get("id")):
-        raise SchemaError("project metadata: lab item invalid")
-    return {"id": row["id"], **{key: _string(row.get(key)) for key in
-            ("name", "analyte_tag", "input_type", "unit")}}
 
 
-def normalize_rows(dataset: str, rows, *, retain_names: bool = False) -> list[dict[str, JSON]]:
-    """Allowlist a raw collection; absent optional fields stay unknown (None)."""
-    if dataset not in DATASETS or type(retain_names) is not bool:
-        raise ValueError("invalid metadata normalization options")
-    out = []
-    for row in _rows(rows, MAX_VALUE_ROWS if dataset == "observation_values" else MAX_ROWS):
-        if dataset == "care_team":
-            if not _valid_id(row.get("id")):
-                raise SchemaError("project metadata: member id invalid")
-            station = row.get("station")
-            if station is not None and not isinstance(station, dict):
-                raise SchemaError("project metadata: station invalid")
-            cats = row.get("specialist_categories")
-            professions: list[JSON] | None = (None if cats is None else
-                [_string(c.get("name")) for c in _rows(cats, 50)])
-            value: dict[str, JSON] = {"id": row["id"], "type": _string(row.get("type")),
-                     "professions": professions,
-                     "facility": _string(station.get("name")) if station is not None else None,
-                     "is_director": _boolean(row.get("is_director")),
-                     "is_self": _boolean(row.get("is_self"))}
-            if retain_names:
-                value["last_name"] = _string(row.get("last_name"))
-                value["first_name"] = _string(row.get("first_name"))
-        elif dataset == "medication_periods":
-            medicines = []
-            for medicine in _rows(row.get("medicine_informations"), 20):
-                if not _valid_id(medicine.get("id")):
-                    raise SchemaError("project metadata: medicine id invalid")
-                medicines.append({"id": medicine["id"], "name": _string(medicine.get("name"))})
-            value = {"begin_date": _string(row.get("begin_date")),
-                     "end_date": _string(row.get("end_date")),
-                     "medicine_informations": medicines}
-        elif dataset == "observation_items":
-            value = {"lab_test_item": _item(row.get("lab_test_item")),
-                     **{key: _number(row.get(key)) for key in REFERENCE_FIELDS}}
-        elif dataset == "observation_values":
-            value = {"observation_issued_at": _string(row.get("observation_issued_at")),
-                     **{key: _number(row.get(key)) for key in
-                        ("scalar", "max", "min", "left", "right")}}
-        else:
-            if not _valid_id(row.get("id")):
-                raise SchemaError("project metadata: consultation id invalid")
-            value = {"id": row["id"], "purpose": _string(row.get("purpose")),
-                     "status": _string(row.get("status")),
-                     "is_unread": _boolean(row.get("is_unread"))}
-        out.append(value)
-    return out
 
 
 def fetch_metadata(get, dataset: str, entity_id: int, *, item_id: int | None = None,
@@ -271,7 +155,7 @@ def fetch_metadata(get, dataset: str, entity_id: int, *, item_id: int | None = N
                 params["timestamp"] = result["timestamp"]
             raw = get(path, params, extend_session=False)
             result["pages"] = page
-            rows = _rows(raw.get(key), MAX_ROWS if dataset == "medication_periods" else per_page)
+            rows = collection_rows(raw.get(key), MAX_ROWS if dataset == "medication_periods" else per_page)
             if dataset == "observation_values" and page == 1 and "observation_item" in raw:
                 definitions = normalize_rows("observation_items", [raw["observation_item"]])
                 definition_item = definitions[0].get("lab_test_item")
@@ -355,21 +239,6 @@ def fetch_metadata(get, dataset: str, entity_id: int, *, item_id: int | None = N
     return result
 
 
-def metadata_target(db, project_id: int, dataset: str) -> MetadataTarget | None:
-    """Resolve only stored inventory evidence; no user-supplied patient/group links."""
-    if not _valid_id(project_id) or dataset not in DATASETS:
-        raise ValueError("invalid metadata target")
-    row = db.execute("SELECT project_type,karte_id FROM patients WHERE project_id=?",
-                     (project_id,)).fetchone()
-    if row is None:
-        return None
-    if dataset == "consultations":
-        return {"scope": "group", "entity_id": project_id} if row["project_type"] == "group" else None
-    if dataset == "care_team":
-        return {"scope": "project", "entity_id": project_id}
-    if row["project_type"] == "medical" and _valid_id(row["karte_id"]):
-        return {"scope": "karte", "entity_id": row["karte_id"]}
-    return None
 
 
 def sync_metadata(ledger, adapter, project_id: int, dataset: str, *,
@@ -477,16 +346,6 @@ def _clinical_items(db, project_id, karte_id):
         return None, {}
 
 
-def clinical_definition_fingerprint(karte_id, items):
-    """Prove equal normalized clinical definitions independently of fetch timestamps."""
-    rows = normalize_rows("observation_items", list(items.values()))
-    for row in rows:
-        for field in REFERENCE_FIELDS:
-            if type(row[field]) is float and row[field].is_integer():
-                row[field] = int(row[field])
-    return hashlib.sha256(json.dumps(["karte", karte_id, sorted(
-        rows, key=lambda row: row["lab_test_item"]["id"])],
-        sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
 def _stage_hash(stage):

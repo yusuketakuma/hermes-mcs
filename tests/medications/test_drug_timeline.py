@@ -1,4 +1,5 @@
 """Synthetic medication mention classes and snapshot paging contracts."""
+import semantic_transport
 import json
 from types import SimpleNamespace
 
@@ -147,7 +148,7 @@ def canonical_source(store, monkeypatch, *, name="キラナ錠5mg", grounded=Tru
     monkeypatch.setattr("semantic_store.thread_bundle", lambda *a, **k: {"source_fingerprint": "synthetic"})
     monkeypatch.setattr("semantic_policy.semantic_config", lambda *a: ({}, []))
     monkeypatch.setattr("semantic_policy.policy_fingerprint", lambda *a: "synthetic")
-    monkeypatch.setattr("semantic.llm_model", lambda *a: "synthetic")
+    monkeypatch.setattr(semantic_transport, 'llm_model', lambda *a: "synthetic")
     return doc
 
 

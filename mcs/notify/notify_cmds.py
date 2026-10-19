@@ -481,7 +481,7 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
             break
         error = validate_int(req)
         if (error is None and req.get("op") == "transport_receipt"
-                and notify_cards._db(ledger).execute(
+                and notify_cards.connection(ledger).execute(
                     "SELECT 1 FROM notification_delivery_attempts WHERE attempt_id=?",
                     (req["attempt_id"],)).fetchone() is None):
             # A worker can publish its factual pre-wire recovery receipt

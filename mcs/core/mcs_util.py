@@ -35,6 +35,7 @@ REPO = os.path.abspath(os.environ.get("MCS_UPDATE_REPO") or os.path.dirname(
 CONF_PATH = os.path.join(HOME, "config.json")
 RUN_LOCK = os.path.join(HOME, "data", "run.lock")
 DB = os.path.join(HOME, "data", "ledger.db")
+ATTACH_DIR = os.path.join(HOME, "data", "attachments")
 # written under <HOME>/data by mcs_update while an update is applied
 UPDATE_MARKER_NAME = "update_in_progress.marker"
 CACHE = os.path.join(HOME, "token_cache.json")   # outside data/ (sandbox-mounted)
@@ -138,7 +139,7 @@ _CIRCUIT_MAX_STREAK = math.ceil(math.log2(_CIRCUIT_MAX_S / _CIRCUIT_BASE_S))
 
 
 def _db_file(ledger) -> str:
-    return ledger.db.execute("PRAGMA database_list").fetchone()[2]
+    return getattr(ledger, "db", ledger).execute("PRAGMA database_list").fetchone()[2]
 
 
 def circuit_state_path(ledger):

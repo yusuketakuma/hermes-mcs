@@ -27,7 +27,7 @@ def db(tmp_path):
 ])
 def test_writer_grounded_vitals_survive_reader(body, vitals):
     # The extraction-time guard accepts every key as the patient's current reading ...
-    assert extract_llm._vitals_guard(body, dict(vitals)) == vitals
+    assert clinical_values._vitals_guard(body, dict(vitals)) == vitals
     # ... so the rollup reader must not discard the same source-consistent value.
     assert clinical_values.patient_current_vitals(dict(vitals), body) == vitals
 

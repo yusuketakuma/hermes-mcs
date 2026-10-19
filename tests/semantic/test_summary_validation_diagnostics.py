@@ -1,10 +1,12 @@
 """Summary failures disclose fixed codes, never generated text."""
+import semantic_llm
+import semantic_qc
+import semantic_store
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_drain
 from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
 
@@ -27,9 +29,9 @@ from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
 def test_summary_validation_codes_keep_the_existing_failure_contract(tmp_path, response, expected):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
         errors = {}
-        assert semantic.summarize(lambda _: response, bundle, 1, [], {},
+        assert semantic_llm.summarize(lambda _: response, bundle, 1, [], {},
                                   return_reason=True, error_out=errors) == (None, "model")
         assert errors == {"code": expected}
         assert "SYNTHETIC_PRIVATE_RESPONSE" not in repr(errors)
@@ -40,9 +42,9 @@ def test_summary_validation_codes_keep_the_existing_failure_contract(tmp_path, r
 def test_valid_summary_clears_a_reused_error_dict(tmp_path):
     db = _seeded(tmp_path)
     try:
-        bundle = semantic.thread_bundle(db, 1, 1, [1])
+        bundle = semantic_store.thread_bundle(db, 1, 1, [1])
         errors = {"code": "stale"}
-        summary = semantic.summarize(lambda _: '{"claims":[]}', bundle, 1, [], {},
+        summary = semantic_llm.summarize(lambda _: '{"claims":[]}', bundle, 1, [], {},
                                      error_out=errors)
         assert summary["claims"] == []
         assert errors == {}
@@ -58,8 +60,8 @@ def test_worker_records_validation_code_without_leaking_it_to_the_next_job(tmp_p
         "VALUES (100,'extract_qc',1,1,'{}','pending',0,0,0,0)")
     db.db.commit()
     monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': None})
-    monkeypatch.setattr(semantic_drain, '_qc_seed', lambda *a: 0)
-    monkeypatch.setattr(semantic_drain, '_process_qc_job', lambda *a, **k: 'retry')
+    monkeypatch.setattr(semantic_qc, '_qc_seed', lambda *a: 0)
+    monkeypatch.setattr(semantic_qc, '_process_qc_job', lambda *a, **k: 'retry')
 
     def model(prompt):
         return json.dumps({"other": "SYNTHETIC_PRIVATE_RESPONSE"}) \
@@ -68,7 +70,7 @@ def test_worker_records_validation_code_without_leaking_it_to_the_next_job(tmp_p
     try:
         metrics = []
         for _ in range(2):
-            out = semantic.run_due(db, _cfg(extract_qc='annotate'), {'errors': []},
+            out = semantic_drain.run_due(db, _cfg(extract_qc='annotate'), {'errors': []},
                                    time.monotonic() + 480, jev_client=_FakeJev(),
                                    llm_fn=model, lane='backlog', max_jobs=1)
             metrics.extend(out['job_metrics'])

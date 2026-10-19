@@ -1,4 +1,6 @@
 """Repeated source chunks cannot yield a globally unique evidence quote."""
+import extract_quality
+import extract_validation
 import copy
 
 import pytest
@@ -28,7 +30,7 @@ def run_chunks(monkeypatch, document, pieces=None, **kwargs):
 
 def test_repeated_chunk_skips_only_impossible_evidence_repair(monkeypatch):
     document = {"summary": "経過の連絡", "symptoms": [symptom()]}
-    assert extract_llm._validate(document, PIECE)["symptoms"][0]["evidence"] == PIECE
+    assert extract_validation.validate(document, PIECE)["symptoms"][0]["evidence"] == PIECE
     out, calls = run_chunks(monkeypatch, document)
     assert len(calls) == 2
     assert out["_evidence_dropped"] == 2
@@ -77,7 +79,7 @@ def test_a_unique_chunk_can_repair_with_a_longer_quote(monkeypatch):
 
 
 def test_completeness_repair_is_preserved_for_repeated_chunks(monkeypatch):
-    monkeypatch.setattr(extract_llm, "_completeness_issues", lambda *a: ["必要項目が未収載"])
+    monkeypatch.setattr(extract_quality, 'completeness_issues', lambda *a: ["必要項目が未収載"])
     _, calls = run_chunks(monkeypatch, {"summary": "経過の連絡", "symptoms": [symptom()]})
     assert len(calls) == 4
 
@@ -97,7 +99,7 @@ def test_mixed_local_and_global_evidence_loss_still_repairs(monkeypatch):
 
 
 def test_single_body_thin_repair_remains(monkeypatch):
-    monkeypatch.setattr(extract_llm, "_is_thin", lambda *a: True)
+    monkeypatch.setattr(extract_quality, 'is_thin', lambda *a: True)
     _, calls = run_chunks(monkeypatch, {"summary": "経過の連絡"}, [PIECE * 2])
     assert len(calls) == 2
 

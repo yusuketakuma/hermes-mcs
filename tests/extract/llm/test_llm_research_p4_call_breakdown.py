@@ -1,5 +1,7 @@
 """Per-row and per-pass LLM call breakdown (first/repair/resplit/probe/
 downgrade/checkpoint reuse) with codes only; synthetic bodies, stubbed backend."""
+import extract_quality
+import extract_validation
 import json
 import os
 
@@ -60,10 +62,10 @@ def test_run_pending_breaks_calls_down_by_reason(db, monkeypatch):
     integrity = _integrity(db)
     assert integrity["repairs"] == 1 and "repair_wins" not in integrity
     drops = {}
-    extract_llm._piece_validate(bad, body, body, drops, False, None)
+    extract_validation.validate_piece(bad, body, body, drops, False, None)
     # the same reply drives the histogram: a mislocated lab quote lands in
     # both the ev and labs buckets, every other bucket stays 0
-    expected = {k: len(drops.get(k) or []) for k in extract_llm._ISSUE_KEYS}
+    expected = {k: len(drops.get(k) or []) for k in extract_quality._ISSUE_KEYS}
     assert sum(expected.values()) >= 1 and integrity["repair_issues"] == expected
     assert integrity["calls"] == integrity["first_calls"] + integrity["repair_calls"]
 
@@ -190,7 +192,7 @@ def test_llm_call_stats_keys_are_fixed_and_unreported_is_none():
     hist = extract_llm._llm_call_stats([
         {"calls": 1, "repair_issues": {"ev": 1, "thin": 1}},
         {"calls": 1, "repair_issues": {"ev": 2}}])["repair_issues"]
-    assert hist == {**dict.fromkeys(extract_llm._ISSUE_KEYS, 0), "ev": 3, "thin": 1}
+    assert hist == {**dict.fromkeys(extract_quality._ISSUE_KEYS, 0), "ev": 3, "thin": 1}
     assert extract_llm._llm_call_stats([{"calls": 1}])["repair_issues"] is None
     one = extract_llm._llm_call_stats([
         {"calls": 1, "timings": {"prompt_n": 5}, "repair_timings": {"cache_n": 5}}])

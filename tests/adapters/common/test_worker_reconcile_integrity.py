@@ -8,7 +8,7 @@ import notify_cards
 import notify_cmds
 import pytest
 
-from adapters.common import envelopes, journal, registry, worker as common_worker
+from adapters.common import envelopes, journal, registry
 from adapters.lineworks import delivery
 from notify_testkit import NOW, _dispatch, _intent, _seed_thread
 from lineworks_testkit import CONFIG, overflow_spec, world
@@ -91,7 +91,7 @@ def test_restart_missing_send_witness_stays_unknown(tmp_path, monkeypatch, phase
 
 def test_journal_scan_retains_good_rows_around_deep_damage(tmp_path):
     journal.append(str(tmp_path), "synthetic", {"phase": "begin", "attempt_id": "a"})
-    with Path(journal._path(str(tmp_path), "synthetic")).open("ab") as handle:
+    with Path(journal.segment_path(str(tmp_path), "synthetic")).open("ab") as handle:
         handle.write(b"[" * 20000 + b"]" * 20000 + b"\n")
     journal.append(str(tmp_path), "synthetic", {"phase": "started", "attempt_id": "b"})
     assert set(journal.scan(str(tmp_path))) == {"a", "b"}
@@ -118,13 +118,13 @@ def test_restart_corrupt_part_witness_never_reposts_the_part(tmp_path):
                 "phase": phase, "attempt_id": claim["attempt_id"],
                 "delivery_id": spec["delivery_id"], "result": "delivered", "message_id": mid,
                 "receipt_envelope": envelopes.transport_receipt(claim, "delivered", message_id=mid)})
-        with Path(journal._path(w.dirs["state"], "synthetic-old")).open("ab") as handle:
+        with Path(journal.segment_path(w.dirs["state"], "synthetic-old")).open("ab") as handle:
             handle.write(b'{"phase":"started","attempt_id":"torn-part')
         w.reg.mark_dead(spec["delivery_id"])
         assert worker.acquire_scope_lock()
         try:
             await worker.reconcile()
-            assert common_worker._card_message_id(worker._jview.refresh(), spec["delivery_id"]) == mid
+            assert journal.card_message_id(worker._jview.refresh(), spec["delivery_id"]) == mid
             await worker.tick()
             await worker.tick()
             assert len(w.client.calls) == 2

@@ -1,16 +1,16 @@
 """Snapshot immutability does not make an old audit current (AT-035/056)."""
+import semantic_drain
 import time
 
 import ledger
 import mcs_view
-import semantic
 from semantic_testkit import _FakeJev, _cfg, _llm, _message, _seeded
 
 
 def test_snapshot_view_marks_old_context_audit_stale(tmp_path):
     db = _seeded(tmp_path)
     try:
-        semantic.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 300,
+        semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 300,
                          jev_client=_FakeJev(), llm_fn=_llm)
         path = ledger.publish_snapshot(str(tmp_path / "ledger.db"),
                                        str(tmp_path / "snapshots"))

@@ -1,4 +1,5 @@
 """Current-generation JSON objects with broken document containers must be regenerated."""
+import semantic_transport
 import copy
 import hashlib
 import json
@@ -6,7 +7,6 @@ import time
 
 import pytest
 
-import semantic
 import semantic_drain as drain
 import semantic_extraction as extraction
 from semantic_policy import KIND_FACTS_V2
@@ -69,7 +69,7 @@ def test_malformed_current_cache_is_reextracted_without_losing_history(tmp_path,
             return {"doc": healthy, "extraction_complete": True}
 
         monkeypatch.setattr(extraction, "extract_facts_v2", regenerate)
-        monkeypatch.setattr(semantic, "llm_model", lambda *args: "SYNTH-model")
+        monkeypatch.setattr(semantic_transport, 'llm_model', lambda *args: "SYNTH-model")
         result = drain._fact_stage(ledger, {"fact_source": "canonical", "match_threshold": 0.7},
                                   member, 1, 1, "fp", "policy", _PassJev(),
                                   lambda *args: pytest.fail("unexpected model call"), time.monotonic() + 30)

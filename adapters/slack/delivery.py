@@ -111,7 +111,7 @@ async def _call(fn, **kwargs):
     return await fn(**kwargs)
 
 
-# first chunk of one MCS post in a thread card (notify_cards._body_groups):
+# first chunk of one MCS post in a thread card (notify_parts._body_groups):
 # its summary/stamps header when the post is header/body-split, else
 # its first source-text chunk
 _NEW_POST = re.compile(r"(m:[1-9][0-9]{0,18})#1")

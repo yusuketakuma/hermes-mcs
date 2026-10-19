@@ -1,4 +1,5 @@
 """Archived work follows active work without acquiring notification eligibility."""
+import semantic_policy
 from contextlib import contextmanager
 import json
 import time
@@ -7,7 +8,6 @@ import pytest
 
 import extract
 import extract_llm
-import semantic
 import semantic_drain
 from extract_testkit import _hash, _ledger, _message
 from ledger import Ledger
@@ -197,7 +197,7 @@ def test_patient_classes_keep_independent_turns_after_real_drain_and_reopen(
 
     def drain(store):
         result = {"errors": []}
-        out = semantic.run_due(store, _cfg("shadow", budget=100000), result,
+        out = semantic_drain.run_due(store, _cfg("shadow", budget=100000), result,
                                time.monotonic() + 300, jev_client=_FakeJev(),
                                llm_fn=_llm, max_jobs=1)
         assert out["done"] == 1 and not out["failed"] and not result["errors"]
@@ -255,12 +255,12 @@ def test_archived_new_and_changed_posts_finish_enforce_analysis_without_a_notice
     assert changed["notification_free"] is fresh["notification_free"] is True
     assert not fresh.get("eligible") and fresh["origin"].get("event_id") is None
     result = {"errors": []}
-    out = semantic.run_due(led, _cfg("enforce", budget=100000), result,
+    out = semantic_drain.run_due(led, _cfg("enforce", budget=100000), result,
                            time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 2 and not out["failed"] and not result["errors"]
     for mid in (20, 21):
-        assert led.artifacts(semantic.KIND_SUMMARY, message_id=mid)
-        plan = json.loads(led.artifacts(semantic.KIND_PLAN, message_id=mid)[-1]["meta"])
+        assert led.artifacts(semantic_policy.KIND_SUMMARY, message_id=mid)
+        plan = json.loads(led.artifacts(semantic_policy.KIND_PLAN, message_id=mid)[-1]["meta"])
         assert plan["audit_status"] == "PASS" and plan["publication_mode"] == "enforce"
         assert not plan.get("enqueued")
     assert not led.db.execute("SELECT 1 FROM notify_outbox WHERE kind='semantic_notice'").fetchone()
@@ -296,7 +296,7 @@ def test_fairness_turn_changes_only_when_its_contested_job_is_served(
 
     monkeypatch.setattr(semantic_drain, "_job_lock", job_lock)
     result = {"errors": []}
-    out = semantic.run_due(led, _cfg("shadow", budget=100000), result,
+    out = semantic_drain.run_due(led, _cfg("shadow", budget=100000), result,
                            time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm,
                            max_jobs=max_jobs)
     assert out["done"] == done and not out["failed"] and not result["errors"]

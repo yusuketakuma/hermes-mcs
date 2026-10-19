@@ -4,6 +4,9 @@ result can wait out a tick's hold on the run lock and still be written.
 2026-10-10: after the backlog lane lost its 600 s per-call cap, a call could
 run to the job deadline and leave ~30 s to retake the run lock; ticks held
 it 265-518 s, so 9 of 140 passes lost their results (1 of 422 before)."""
+import semantic_audit
+import semantic_policy
+import semantic_transport
 import contextlib
 import json
 
@@ -18,7 +21,7 @@ from semantic_testkit import _cfg, _FakeJev, _llm, _seeded, _seeded_two
 
 
 def _scfg(budget):
-    return semantic.semantic_config(_cfg("shadow", job_budget_seconds=budget))[0]
+    return semantic_policy.semantic_config(_cfg("shadow", job_budget_seconds=budget))[0]
 
 
 @pytest.mark.parametrize("budget,reserve", [
@@ -30,7 +33,7 @@ def test_the_reserve_never_squeezes_out_a_long_output_call(budget, reserve):
     assert semantic_drain._backlog_commit_reserve(_scfg(budget)) == reserve
     if reserve:
         window = budget - reserve
-        assert window >= semantic._LONG_MIN_CALL_S + semantic_drain._LONG_START_S
+        assert window >= semantic_transport._LONG_MIN_CALL_S + semantic_drain._LONG_START_S
 
 
 def _first_timeout(tmp_path, monkeypatch, budget, lane):
@@ -50,7 +53,7 @@ def _first_timeout(tmp_path, monkeypatch, budget, lane):
                 db.db.execute(
                     "UPDATE fetch_jobs SET payload=json_set(payload,'$.eligible',1) "
                     "WHERE kind='semantic'")
-        semantic.run_due(db, _cfg("shadow", job_budget_seconds=budget),
+        semantic_drain.run_due(db, _cfg("shadow", job_budget_seconds=budget),
                          {"errors": []}, clock[0] + budget + 30,
                          jev_client=_FakeJev(), llm_fn=llm, lane=lane, max_jobs=1)
         return seen[0]
@@ -66,7 +69,7 @@ def test_backlog_calls_end_a_reserve_early_and_other_lanes_are_unchanged(
     assert backlog == pytest.approx(budget - reserve)
     for lane in (None, "realtime"):
         other = _first_timeout(tmp_path / str(lane), monkeypatch, budget, lane)
-        assert other == pytest.approx(min(budget, semantic.LLM_TIMEOUT))
+        assert other == pytest.approx(min(budget, semantic_transport.LLM_TIMEOUT))
 
 
 def test_a_long_result_waiting_out_a_tick_is_saved_and_not_generated_again(
@@ -98,7 +101,7 @@ def test_a_long_result_waiting_out_a_tick_is_saved_and_not_generated_again(
         for _ in range(4):                    # resume until the job is done
             with db.db:
                 db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-            out = semantic.run_due(db, cfg, {"errors": []}, clock[0] + 1290,
+            out = semantic_drain.run_due(db, cfg, {"errors": []}, clock[0] + 1290,
                                    jev_client=_FakeJev(), llm_fn=llm,
                                    lane="backlog", max_jobs=1)
             statuses += [m["status"] for m in out["job_metrics"]]
@@ -135,7 +138,7 @@ def test_no_follow_up_model_call_starts_after_the_transport_deadline(
 
     db = _seeded(tmp_path)
     try:
-        out = semantic.run_due(db, _cfg("shadow", job_budget_seconds=1260),
+        out = semantic_drain.run_due(db, _cfg("shadow", job_budget_seconds=1260),
                                {"errors": []}, clock[0] + 1290,
                                jev_client=_FakeJev(), llm_fn=llm,
                                lane="backlog", max_jobs=1)
@@ -213,7 +216,7 @@ def _audits(db, mid):
 def _rerun(db, cfg, **kw):
     with db.db:
         db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-    return semantic.run_due(db, cfg, {"errors": []}, semantic.time.monotonic() + 300,
+    return semantic_drain.run_due(db, cfg, {"errors": []}, semantic.time.monotonic() + 300,
                             jev_client=_FakeJev(), llm_fn=_llm, **kw)
 
 
@@ -229,7 +232,7 @@ def test_a_jev_cutoff_in_a_later_targets_audit_keeps_the_earlier_target(
             raise runtime.RuntimeBudgetShort("jev_next_call")
         return [], True
 
-    monkeypatch.setattr(semantic, "audit_claims", audit_claims)
+    monkeypatch.setattr(semantic_audit, 'audit_claims', audit_claims)
     db = _seeded_two(tmp_path)
     try:
         out = _rerun(db, _cfg("shadow", loop_mode="off"), lane="backlog", max_jobs=1)
@@ -269,7 +272,7 @@ def test_a_jev_cutoff_in_the_re_audit_keeps_the_repaired_summary(
         return [], True
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
-    monkeypatch.setattr(semantic, "audit_claims", audit_claims)
+    monkeypatch.setattr(semantic_audit, 'audit_claims', audit_claims)
     db = _seeded(tmp_path)
     with db.db:
         row = db.db.execute(
@@ -342,7 +345,7 @@ def test_a_budget_stop_after_a_repair_dispatch_keeps_the_earlier_target(
         return [], True
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
-    monkeypatch.setattr(semantic, "audit_claims", audit_claims)
+    monkeypatch.setattr(semantic_audit, 'audit_claims', audit_claims)
     db = _seeded(tmp_path)
     try:
         out = _rerun(db, _cfg("shadow", loop_mode="off"))

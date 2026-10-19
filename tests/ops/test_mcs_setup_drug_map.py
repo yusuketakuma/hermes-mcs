@@ -1,4 +1,5 @@
 """Explicit dictionary changes validate synthetic files before setup writes."""
+import lifecycle_io
 import copy
 import hashlib
 import json
@@ -32,7 +33,7 @@ def setup_state(tmp_path, monkeypatch):
     files[2].write_text('{"fictional_existing_setting":true}')
     events = []
     monkeypatch.setenv("MCS_SETUP_PASSWORD", "fictional-new-password")
-    monkeypatch.setattr(mcs_setup, "_keychain_store",
+    monkeypatch.setattr(lifecycle_io, "store_keychain",
                         lambda *args: events.append("keychain") or True)
 
     def integration(config, args):

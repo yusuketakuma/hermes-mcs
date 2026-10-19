@@ -15,5 +15,5 @@ def test_directory_control_file_closes_the_fd(tmp_path):
     before = _open_fds()
     for _ in range(20):
         with pytest.raises(OSError):
-            mcs_update._read_control_json(str(tmp_path))
+            mcs_update.journal_store.read_control_json(str(tmp_path))
     assert _open_fds() == before

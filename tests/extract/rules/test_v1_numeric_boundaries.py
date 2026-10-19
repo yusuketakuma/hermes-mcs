@@ -1,4 +1,5 @@
 """Synthetic v1 vitals must not fabricate a prefix of a longer number."""
+import clinical_values
 import pytest
 
 import extract
@@ -29,7 +30,7 @@ def test_cached_prefix_is_not_grounded_by_a_partial_regex_match(body, old_values
     # The complete systolic reading remains valid; the invented diastolic
     # prefix must disappear, without manufacturing a complete pair.
     expected = {"sbp": 120} if "sbp" in old_values else {}
-    assert extract.patient_vitals(old_values, body) == expected
+    assert clinical_values.patient_vitals(old_values, body) == expected
 
 
 @pytest.mark.parametrize("body,values", [
@@ -42,7 +43,7 @@ def test_cached_prefix_is_not_grounded_by_a_partial_regex_match(body, old_values
 ])
 def test_supported_complete_readings_remain_available(body, values):
     assert extract.extract_message(body, "2032-06-01T10:00:00+09:00")["vitals"] == values
-    assert extract.patient_vitals(values, body) == values
+    assert clinical_values.patient_vitals(values, body) == values
 
 
 def test_old_rollup_prefix_is_rechecked_readonly_without_erasing_profile(tmp_path):

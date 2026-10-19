@@ -19,7 +19,7 @@ import ledger
 import mcs_requests as requests
 import mcs_view
 from semantic_projection import PROJECTION_VERSION
-from mcs_adapter import Message
+from mcs_contract import Message
 from ops_testkit import _create, _snapshot, _source
 
 

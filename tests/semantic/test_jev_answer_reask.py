@@ -3,12 +3,12 @@
 2026-10-10: medication-detail rejections (speaker_basis, polarity,
 change_kind) each retried the whole job — a pass and an attempt — and the
 retried jobs then completed, i.e. the defects were transient."""
+import semantic_drain
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_jev as jev
 import semantic_runtime as runtime
 from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
@@ -127,7 +127,7 @@ def test_a_transient_medication_detail_defect_no_longer_retries_the_job(tmp_path
     db = _seeded(tmp_path)
     client = _OnceMalformed()
     try:
-        out = semantic.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 300,
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 300,
                                jev_client=client, llm_fn=_llm, max_jobs=1)
         [metric] = [m for m in out["job_metrics"] if m["kind"] == "semantic"]
         assert client.defects == 1

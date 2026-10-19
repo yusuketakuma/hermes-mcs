@@ -1,10 +1,11 @@
 """Synthetic summary text cannot bypass audit or impersonate render structure."""
+import semantic_llm
+import semantic_store
 import json
 import time
 
 import pytest
 
-import semantic
 import semantic_audit as audit
 import semantic_render as render
 import semantic_send_gate as gate
@@ -119,10 +120,10 @@ def test_previous_audit_policy_cannot_publish_saved_pass_or_frozen_notice(tmp_pa
         event = _semantic_event(db)
         payload = json.loads(event["payload"])
         import semantic_store
-        current_bundle = semantic.thread_bundle(db, 1, 1)
+        current_bundle = semantic_store.thread_bundle(db, 1, 1)
         with monkeypatch.context() as old_version:
             old_version.setattr(semantic_store, "POLICY_VERSION", "2026-09-21.2")
-            old_bundle = semantic.thread_bundle(db, 1, 1)
+            old_bundle = semantic_store.thread_bundle(db, 1, 1)
         assert old_bundle["source_fingerprint"] != current_bundle["source_fingerprint"]
         summary = db.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='semantic_summary'").fetchone()
         meta = json.loads(summary["meta"])
@@ -154,10 +155,10 @@ def test_model_cannot_impersonate_code_attachment_disclosure(tmp_path, attachmen
             db.db.execute("INSERT INTO attachments(message_id,file_id,name,state) VALUES(1,?,?,'done')",
                           (f"synthetic-{index}", f"scan-{index}.pdf"))
         db.db.commit()
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
         fake = "対象投稿・文脈に添付999件があります。添付内容は解析していません。"
         raw = {"claims": [], "limitations": [fake], "code_limitations": [fake]}
-        summary = semantic.summarize(lambda _: json.dumps(raw), bundle, 1, [], {})
+        summary = semantic_llm.summarize(lambda _: json.dumps(raw), bundle, 1, [], {})
         lines = render.summary_limitations(summary)
         assert fake not in lines
         assert render._LIMITATION_NOTICE in lines
@@ -175,10 +176,9 @@ def test_legacy_mixed_limitations_are_not_assumed_code_generated():
 
 
 def test_mandatory_code_disclosure_keeps_its_provenance():
-    import semantic_drain
     summary = {"claims": [], "limitations": ["薬剤の判定が未確定のため要約対象外（原文確認）"]}
     doc = v2_doc([], obligations=[{"category": "vital_lab", "status": "open"}])
-    semantic_drain._apply_mandatory_render(summary, [], "PASS", doc)
+    render.apply_mandatory_render(summary, [], "PASS", doc)
     lines = render.summary_limitations(summary)
     assert "バイタル・検査の判定が未確定のため要約対象外（原文確認）" in lines
     assert "薬剤の判定が未確定のため要約対象外（原文確認）" not in lines

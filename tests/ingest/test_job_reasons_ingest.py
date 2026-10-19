@@ -1,9 +1,9 @@
 """1.0.13 #3: reconcile and history-deepen failures keep stable reason codes."""
+import mcs_contract
 import json
 import time
 
 import job_ops
-import mcs_adapter
 from ingest_testkit import _ledger, _message
 
 
@@ -19,7 +19,7 @@ def test_reconcile_failures_record_code_without_losing_progress(tmp_path):
         db.ensure_patient(1)
         db.job_add("reconcile", 1, payload={"page": 4, "passes": 2,
                                             "last_pass_at": 123.0})
-        err = mcs_adapter.MCSError("http", status=404)
+        err = mcs_contract.MCSError("http", status=404)
 
         class Raises:
             def fetch_history(self, pid, since, **kw):
@@ -35,9 +35,9 @@ def test_reconcile_failures_record_code_without_losing_progress(tmp_path):
 
         class Partial:
             def fetch_history(self, pid, since, **kw):
-                return mcs_adapter.MessageBatch(
+                return mcs_contract.MessageBatch(
                     [_message(mid=50)], pages=1,
-                    error=mcs_adapter.MCSError("schema_error"))
+                    error=mcs_contract.MCSError("schema_error"))
 
         db.db.execute("UPDATE fetch_jobs SET next_try=0")
         job_ops.run_reconcile_jobs(Partial(), db, {"errors": []},

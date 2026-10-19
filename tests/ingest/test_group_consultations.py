@@ -14,7 +14,8 @@ from ledger import Ledger
 import mcs_adapter
 import mcs_util
 import mcs_worker
-from project_metadata import ARTIFACT_KIND, JSON, fetch_metadata, sync_metadata
+from project_metadata_contract import ARTIFACT_KIND, JSON
+from project_metadata import fetch_metadata, sync_metadata
 
 GROUP_ID = 900000002
 MEDICAL_ID = 900000001

@@ -89,7 +89,7 @@ def test_delivered_fallback_is_stable_and_updates_its_own_thread(led, cfg, gc):
     assert list(led.db.execute("SELECT token,expires_at FROM notification_action_tokens ORDER BY token")) == expires
     with led.db:
         specs = []
-        notify_cards._issue_render(led.db, 1, cfg, LATE + 180, specs, force=True)
+        notify_cards.issue_render(led.db, 1, cfg, LATE + 180, specs, force=True)
     spec = specs[0]
     assert spec["op"] == "update" and spec["delivery"]["message_id"] == mid
     assert spec["delivery"]["thread_id"] == thread and "source_thread" not in spec["parts"]
@@ -156,7 +156,7 @@ def test_legacy_null_specs_keep_slack_own_root_and_hold_unknown_discord_route(le
     assert (_card(led)["message_id"], _card(led)["thread_id"]) == (mid, thread)
     with led.db:
         specs = []
-        notify_cards._issue_render(led.db, 1, cfg, LATE + 120, specs, force=True)
+        notify_cards.issue_render(led.db, 1, cfg, LATE + 120, specs, force=True)
     assert bool(specs) is (cfg is SLACK)
 
 

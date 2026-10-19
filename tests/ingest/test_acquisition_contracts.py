@@ -9,6 +9,7 @@ id bands, SYNTHETIC strings); the other two use canary-style values instead.
 Thread pagination omission records current compatibility, not proof that the
 server returned every reply.
 """
+import mcs_contract
 
 import io
 import json
@@ -423,7 +424,7 @@ def test_unknown_snapshot_timestamp_never_becomes_zero_success(replay, timestamp
                        "include_paginate_totals": 0},
          {"projects": [], "paginate": {
              "timestamp": timestamp, "has_next": False}})])
-    with pytest.raises(mcs_adapter.SchemaError):
+    with pytest.raises(mcs_contract.SchemaError):
         adapter.list_unread()
     assert not pending
 
@@ -442,7 +443,7 @@ def test_snapshot_timestamp_storage_boundary_remains_accepted(replay):
 def test_oversized_snapshot_is_rejected_before_acknowledgement(monkeypatch, timestamp):
     adapter = mcs_adapter.MCSAdapter()
     monkeypatch.setattr(adapter, "_get", lambda *args, **kwargs: pytest.fail("invalid snapshot reached network"))
-    with pytest.raises(mcs_adapter.MCSError, match="bad_snapshot_ts"):
+    with pytest.raises(mcs_contract.MCSError, match="bad_snapshot_ts"):
         adapter.mark_patient_read(PID, timestamp)
 
 

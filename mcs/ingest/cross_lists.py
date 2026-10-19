@@ -30,10 +30,9 @@ if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import _mcs_path  # noqa: F401
 
-from mcs_adapter import (
-    API, MCSError, Message, SchemaError, SessionExpired,
-    _message_metadata, _norm_message, _valid_id,
-)
+from mcs_adapter import API
+from mcs_contract import MCSError, Message, SchemaError, SessionExpired, valid_id as _valid_id
+from mcs_payload import message_metadata as _message_metadata, normalize_message as _norm_message
 
 ARTIFACT_KIND = "cross_list_v1"
 DATASETS = ("mentioned", "bookmarked")

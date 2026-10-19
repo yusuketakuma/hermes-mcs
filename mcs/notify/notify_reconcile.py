@@ -41,68 +41,14 @@ import time
 import uuid
 
 import notify_cards as cards
+from notify_scope import card_row
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import loads_dict
 import notify_transport
+import notify_journal
 
 _RESULT_VALUES = ("delivered", "not_sent", "unknown")
 _TERMINAL = ("delivered", "not_sent", "cancelled")
-_JOURNAL_PHASES = ("claimed", "begin", "granted", "denied", "started", "result", "receipt")
-
-
-def _journal_dirs(dirs: dict) -> list:
-    return [dirs[t + "_state"] for t in cards.SUPPORTED_TRANSPORTS]
-
-
-def scan_journals(dirs: dict) -> tuple[dict, bool]:
-    """attempt_id -> {"rows": [...], "tainted": bool}, across every
-    per-worker journal file in both transport state dirs.
-
-    A file with an unparsable non-empty line is tainted: a torn tail
-    is survivable, but a corrupt middle line could hide a 'started' or
-    'result' row — absence-of-evidence verdicts are untrustworthy for
-    any attempt recorded in it.
-    """
-    out: dict[str, dict] = {}
-    incomplete = False
-    for state_dir in _journal_dirs(dirs):
-        names = sorted(n for n in os.listdir(state_dir)
-                       if n.startswith("journal-") and n.endswith(".jsonl"))
-        for name in names:
-            file_rows: dict[str, list] = {}
-            tainted = False
-            # an OSError propagates: an inaccessible journal can contain an
-            # effect lost by the restored DB, so the global restore hold stays
-            with open(os.path.join(state_dir, name), "rb") as fh:
-                for raw in fh:
-                    terminated = raw.endswith(b"\n")
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    if not terminated:
-                        tainted = True
-                    try:
-                        row = json.loads(raw)
-                    except (ValueError, RecursionError):
-                        tainted = True
-                        continue
-                    if not isinstance(row, dict):
-                        tainted = True
-                        continue
-                    if row.get("phase") not in _JOURNAL_PHASES:
-                        tainted = True
-                    aid = row.get("attempt_id")
-                    if isinstance(aid, str) and aid:
-                        file_rows.setdefault(aid, []).append(row)
-                    else:
-                        tainted = True
-            incomplete = incomplete or tainted
-            for aid, rows in file_rows.items():
-                rec = out.setdefault(aid, {"rows": [], "tainted": False})
-                rec["rows"].extend(rows)
-                if tainted:
-                    rec["tainted"] = True
-    return out, incomplete
 
 
 def _read_spec(dirs: dict, delivery_id) -> dict | None:
@@ -140,7 +86,7 @@ def _apply_hold(db, aid, delivery_id, reason, dirs, now,
     render = db.execute(
         "SELECT * FROM notification_renders WHERE delivery_id=?",
         (delivery_id,)).fetchone() if delivery_id else None
-    card = cards._card_row(db, render["card_id"]) \
+    card = card_row(db, render["card_id"]) \
         if render is not None and render["card_id"] is not None else None
     if scope is None:
         scope = (dict(cards.stored_scope(render)) if render is not None
@@ -347,7 +293,7 @@ def _reconcile_attempt(ledger, db, cfg, aid, info, dirs, now) -> dict:
         # durable part attempts settle render_parts rows, never the
         # card-attempt table (T7)
         return _reconcile_part(ledger, db, cfg, aid, info, dirs, now)
-    phases = {r["phase"] for r in rows if r.get("phase") in _JOURNAL_PHASES}
+    phases = {r["phase"] for r in rows if r.get("phase") in notify_journal.PHASES}
     results = [r for r in rows
                if r.get("phase") == "result"
                and r.get("result") in _RESULT_VALUES]
@@ -428,7 +374,7 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     """Journal <-> restored DB comparison + hold/settle for every
     disputed delivery scope. Clears the restore marker only after the
     reconcile receipt is durable. Idempotent."""
-    db = cards._db(ledger)
+    db = cards.connection(ledger)
     now = time.time() if now is None else now
     root = cards.data_root(ledger)
     dirs = cards.notify_dirs(root)
@@ -443,7 +389,7 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         return {"v": 1, "at": now, "skipped": "awaiting_consent",
                 "counts": {}, "verdicts": [], "held": [],
                 "events_held": 0}
-    attempts, journal_incomplete = scan_journals(dirs)
+    attempts, journal_incomplete = notify_journal.scan_journals(dirs)
     holds_before = _hold_rows(db)
     verdicts, held = [], []
     for aid in sorted(attempts):

@@ -1,11 +1,11 @@
 """Human retry extensions stay bounded and tied to one semantic input."""
+import semantic_drain
 import json
 import time
 import uuid
 
 import ledger
 import mcs_requests
-import semantic
 import semantic_jev as jev
 import semantic_runtime as runtime
 from semantic_testkit import _cfg, _FakeJev, _llm, _message, _seeded
@@ -73,7 +73,7 @@ def test_manual_retry_extension_is_bounded_across_seed_and_restart(tmp_path):
                 db.db.execute(
                     "UPDATE fetch_jobs SET next_try=0 WHERE job_id=?",
                     (row["job_id"],))
-            semantic.run_due(db, _cfg("shadow"), {"errors": []},
+            semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                              time.monotonic() + 300,
                              jev_client=failing, llm_fn=_llm)
             row = _semantic_row(db)
@@ -86,7 +86,7 @@ def test_manual_retry_extension_is_bounded_across_seed_and_restart(tmp_path):
                 "UPDATE fetch_jobs SET state='pending',next_try=0 WHERE job_id=?",
                 (row["job_id"],))
         before_calls = len(failing.calls)
-        semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                          time.monotonic() + 300,
                          jev_client=failing, llm_fn=_llm)
         row = _semantic_row(db)
@@ -97,7 +97,7 @@ def test_manual_retry_extension_is_bounded_across_seed_and_restart(tmp_path):
                 "UPDATE fetch_jobs SET state='pending',attempts=-1,next_try=0 "
                 "WHERE job_id=?", (row["job_id"],))
         before_calls = len(failing.calls)
-        semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                          time.monotonic() + 300,
                          jev_client=failing, llm_fn=_llm)
         row = _semantic_row(db)

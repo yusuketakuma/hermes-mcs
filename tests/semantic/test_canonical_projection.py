@@ -5,6 +5,10 @@ extract_llm content shape — verified facts only, honestly lossy.
 ``current_fact_pred`` makes a hash-current canonical_projection row
 shadow the message's extract_llm row for every read-side consumer.
 """
+import semantic_drain
+import semantic_policy
+import semantic_store
+import semantic_transport
 import json
 import pytest
 
@@ -432,15 +436,14 @@ def test_current_fact_pred_resolves_one_generation(tmp_path):
 
 @pytest.mark.parametrize("change", ["context", "policy", "off", "legacy", "prompt"])
 def test_projection_expiry_releases_legacy_and_invalidates_rollup(tmp_path, monkeypatch, change):
-    import semantic
     import semantic_llm
     from semantic_store import invalidate_projections
     from semantic_testkit import _cfg
     db = _seeded(tmp_path)
     try:
-        scfg, _ = semantic.semantic_config(_cfg(
+        scfg, _ = semantic_policy.semantic_config(_cfg(
             "shadow", fact_source="canonical", fact_source_gate="synthetic"))
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
         source_hash = db.db.execute(
             "SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
         db.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
@@ -448,7 +451,7 @@ def test_projection_expiry_releases_legacy_and_invalidates_rollup(tmp_path, monk
         projection_id = db.artifact_add(
             "canonical_projection", "{}", project_id=1, message_id=1,
             meta={"hash": source_hash, "fingerprint": bundle["source_fingerprint"],
-                  "policy_fingerprint": semantic.policy_fingerprint(scfg)})
+                  "policy_fingerprint": semantic_policy.policy_fingerprint(scfg)})
         db.artifact_add("patient_rollup", "{}", project_id=1)
         assert invalidate_projections(db, scfg) == 0
         if change == "context":
@@ -483,7 +486,6 @@ def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
     fresh row (the newest wins for readers) instead of reusing it, and
     a same-version rerun still reuses."""
     import time
-    import semantic
     import semantic_drain as drain
     import semantic_v4 as v4
     from mcs_queries import current_projection_id, current_v4_id
@@ -503,7 +505,7 @@ def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
 
     db = _seeded_two(tmp_path)
     try:
-        semantic.run_due(db, _canonical_cfg(), {"errors": []},
+        semantic_drain.run_due(db, _canonical_cfg(), {"errors": []},
                          time.monotonic() + 300, jev_client=_PassJev(),
                          llm_fn=_llm_v2)
         for kind in ("canonical_projection", v4.KIND_V4):
@@ -520,7 +522,7 @@ def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
         assert current(current_projection_id()) is None
         assert current(current_projection_id(require_version=False)) == old_proj
         scfg = semantic_config(_canonical_cfg())[0]
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
         member = next(m for m in bundle["members"] if m["message_id"] == 1)
         fp, policy = bundle["source_fingerprint"], policy_fingerprint(scfg)
 
@@ -688,7 +690,6 @@ def test_reproject_never_resurrects_or_guesses(tmp_path):
 
 def test_run_due_reprojects_old_version_rows(tmp_path):
     import time
-    import semantic
     import semantic_v4 as v4
     from semantic_testkit import _canonical_cfg
 
@@ -698,7 +699,7 @@ def test_run_due_reprojects_old_version_rows(tmp_path):
     db = _drained_old_version(tmp_path)
     try:
         result = {"errors": []}
-        out = semantic.run_due(db, _canonical_cfg(), result,
+        out = semantic_drain.run_due(db, _canonical_cfg(), result,
                                time.monotonic() + 300, llm_fn=no_llm)
         assert result["errors"] == []
         assert out["reproject"]["reprojected"] == 4
@@ -716,7 +717,6 @@ def test_run_due_reprojects_old_version_rows(tmp_path):
 ])
 def test_run_due_switch_hides_then_revives_only_current_projections(
         tmp_path, monkeypatch, fact_source, change):
-    import semantic
     import semantic_v4 as v4
     from semantic_testkit import _canonical_cfg
     from semantic_testkit import _PassJev
@@ -736,7 +736,7 @@ def test_run_due_switch_hides_then_revives_only_current_projections(
 
         def tick():
             result = {"errors": []}
-            out = semantic.run_due(db, cfg, result, float("inf"),
+            out = semantic_drain.run_due(db, cfg, result, float("inf"),
                                    llm_fn=no_processing, jev_client=_PassJev())
             assert result["errors"] == []
             assert out["done"] == out["failed"] == out["deferred"] == 0
@@ -763,7 +763,7 @@ def test_run_due_switch_hides_then_revives_only_current_projections(
                 row = _kind_rows(db, kind, 1)[-1]
                 db.artifact_add(kind, row["content"], project_id=1, message_id=1,
                                 meta=json.loads(row["meta"]), model=row["model"])
-        monkeypatch.setattr(semantic, "_process_job", no_processing)
+        monkeypatch.setattr(semantic_drain, '_process_job', no_processing)
         assert tick()["reproject"]["reprojected"] == 0
         assert [(r[0], r[1]) for r in read_current()] == [
             (1, "extract_llm"), (2, "extract_llm")]
@@ -832,19 +832,18 @@ def test_run_due_switch_hides_then_revives_only_current_projections(
 @pytest.mark.parametrize("fact_source", ["canonical", "legacy", "shadow"])
 def test_invalidation_reads_model_config_once_per_active_scan(
         tmp_path, monkeypatch, mode, fact_source):
-    import semantic
     from semantic_store import invalidate_projections
     from semantic_testkit import _canonical_cfg
 
     db = _seeded(tmp_path)
     try:
-        scfg = semantic.semantic_config(_canonical_cfg())[0]
+        scfg = semantic_policy.semantic_config(_canonical_cfg())[0]
         scfg.update(mode=mode, fact_source=fact_source)
         # Two independent threads, with both published row kinds.
         db.db.execute("UPDATE messages SET parent_id=NULL")
         db.db.commit()
         for mid in (1, 2):
-            bundle = semantic.thread_bundle(
+            bundle = semantic_store.thread_bundle(
                 db, 1, mid, local_model="synthetic-model")
             source_hash = db.db.execute(
                 "SELECT content_hash FROM messages WHERE message_id=?",
@@ -854,14 +853,14 @@ def test_invalidation_reads_model_config_once_per_active_scan(
                     kind, "{}", project_id=1, message_id=mid,
                     meta={"hash": source_hash,
                           "fingerprint": bundle["source_fingerprint"],
-                          "policy_fingerprint": semantic.policy_fingerprint(scfg)})
+                          "policy_fingerprint": semantic_policy.policy_fingerprint(scfg)})
         reads = []
 
         def model():
             reads.append("read")
             return "synthetic-model"
 
-        monkeypatch.setattr(semantic, "llm_model", model)
+        monkeypatch.setattr(semantic_transport, 'llm_model', model)
         enabled = mode != "off" and fact_source == "canonical"
         assert invalidate_projections(db, scfg) == (0 if enabled else 4)
         assert len(reads) == (1 if enabled else 0)

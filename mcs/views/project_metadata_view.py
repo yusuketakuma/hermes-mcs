@@ -6,10 +6,8 @@ from datetime import date
 import math
 import time
 
-from mcs_adapter import SchemaError
-from project_metadata import (ARTIFACT_KIND, CLINICAL_DATASETS, JSON, MAX_ROWS, accepted_reasons,
-                              attempt_state, clinical_definition_fingerprint, metadata_target,
-                              normalize_rows)
+from mcs_contract import SchemaError
+from project_metadata_contract import ARTIFACT_KIND, CLINICAL_DATASETS, JSON, MAX_ROWS, accepted_reasons, attempt_state, clinical_definition_fingerprint, metadata_target, normalize_rows
 
 
 def _text(value) -> bool:
@@ -153,7 +151,7 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
     include_chat adds separate unconfirmed candidates for clinical datasets only;
     omitted/False never inspects chat. No identity matching or authority is assigned.
     """
-    from mcs_adapter import _valid_id
+    from mcs_contract import valid_id as _valid_id
 
     try:
         invalid = (type(show_names) is not bool or type(include_chat) is not bool

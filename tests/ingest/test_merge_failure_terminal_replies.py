@@ -1,14 +1,14 @@
 """Synthetic regression: a failed thread fetch queues only replies whose bodies are still missing."""
+import mcs_contract
 import time
 
 import job_ops
-import mcs_adapter
 from ingest_testkit import _iso, _ledger, _msg_at
 
 
 class _FailingThreads:
     def fetch_thread(self, pid, mid, **kw):
-        raise mcs_adapter.MCSError("network_error", retryable=True)
+        raise mcs_contract.MCSError("network_error", retryable=True)
 
 
 def test_failed_thread_fetch_leaves_terminal_replies_alone(tmp_path):

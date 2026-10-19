@@ -1,5 +1,6 @@
 """Audited claims and timestamps survive the final notification render."""
-import semantic
+import semantic_llm
+import semantic_render
 from semantic_testkit import _seeded
 
 
@@ -13,9 +14,9 @@ def test_notice_preserves_all_sections_and_uses_instant_order(tmp_path):
         db.db.commit()
         claims = [{"section": section, "text": f"文{section}",
                    "claim_kind": "inference"}
-                  for section in semantic.CLAIM_SECTIONS]
+                  for section in semantic_llm.CLAIM_SECTIONS]
         limitations = [f"制約{i}" for i in range(8)]
-        text = semantic.render_notice(db, 1, 1,
+        text = semantic_render.render_notice(db, 1, 1,
                 {"claims": claims, "limitations": limitations}, "PASS",
                 targets=[1, 2], quality="full")
         assert "2026/09/20 05:00 JST" in text

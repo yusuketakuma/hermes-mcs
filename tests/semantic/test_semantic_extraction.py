@@ -1,4 +1,5 @@
 """Durable extraction and source-to-facts coverage contracts."""
+import semantic_drain
 import json
 import time
 
@@ -172,10 +173,9 @@ def test_source_fact_coverage_reports_findings_and_unknown_technical_state(tmp_p
     assert unknown["failure_reason"] == "resource"
     assert unknown["findings"] == [{"code": "source_fact_coverage_unevaluated"}]
 
-    import semantic
     db = _seeded(tmp_path)
     try:
-        semantic.run_due(db, _cfg("enforce"), {"errors": []},
+        semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
                          time.monotonic() + 300, jev_client=CaptureJev("missing"),
                          llm_fn=_llm)
         audits = db.artifacts("semantic_audit", message_id=1)

@@ -23,6 +23,8 @@ quarantine the intent. This module never imports notify_flush — the
 caller passes the resolved config dict (and the text cap for chunks) so
 tests keep notify_flush._config as the single patch point.
 """
+import semantic_policy
+import semantic_store
 import json
 from mcs_util import loads_dict
 
@@ -128,10 +130,9 @@ def _source_event(ledger, project_id: int, event_id: int):
 def semantic_gate(ledger, ev, payload: dict, cfg: dict,
                   in_progress: bool = False):
     """Recheck a semantic intent immediately before every external post."""
-    import semantic as _sem
     if not isinstance(payload, dict):
         raise ValueError("payload_invalid")
-    scfg, _ = _sem.semantic_config(cfg)
+    scfg, _ = semantic_policy.semantic_config(cfg)
     project_id = ev["project_id"]
     reason = enforce_block_reason(ledger, scfg, project_id)
     if reason == "payload_invalid":
@@ -140,14 +141,14 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
         raise FreezeSend(reason) if in_progress else DeferredSend(reason)
     policy_version = payload.get("policy_version")
     if not isinstance(policy_version, str) \
-            or policy_version != _sem.POLICY_VERSION:
+            or policy_version != semantic_policy.POLICY_VERSION:
         _stale("policy_changed", in_progress)
     degraded = payload.get("degraded", False)
     if type(degraded) is not bool:
         raise ValueError("payload_invalid")
     policy = payload.get("policy_fingerprint")
     if not isinstance(policy, str) \
-            or policy != _sem.policy_fingerprint(scfg):
+            or policy != semantic_policy.policy_fingerprint(scfg):
         _stale("policy_changed", in_progress)
     fp = payload.get("fingerprint")
     root = payload.get("root_id")
@@ -181,7 +182,7 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
                 or not isinstance(progress, dict)
                 or bool(progress.get("sent"))):
             _stale("base_delivered", in_progress)
-        bundle = _sem.thread_bundle(ledger, project_id, root)
+        bundle = semantic_store.thread_bundle(ledger, project_id, root)
         if bundle is None or bundle["source_fingerprint"] != fp:
             _stale("stale_generation", in_progress)
         member_ids = {m["message_id"] for m in bundle["members"]}
@@ -194,7 +195,7 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
                 or not isinstance(target_revision, str) or not target_revision
                 or target not in source_ids):
             raise ValueError("payload_invalid")
-        bundle = _sem.thread_bundle(ledger, project_id, root)
+        bundle = semantic_store.thread_bundle(ledger, project_id, root)
         if bundle is None or bundle["source_fingerprint"] != fp:
             _stale("stale_generation", in_progress)
         member = next((m for m in bundle["members"]
@@ -208,8 +209,7 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
 
 def semantic_render_state(ledger, ev, cfg: dict) -> tuple:
     """Current identities of audited summaries attached to a raw notice."""
-    import semantic as _sem
-    scfg, _ = _sem.semantic_config(cfg)
+    scfg, _ = semantic_policy.semantic_config(cfg)
     project_id = ev["project_id"]
     if enforce_block_reason(ledger, scfg, project_id) is not None:
         return ()
@@ -231,9 +231,9 @@ def semantic_render_state(ledger, ev, cfg: dict) -> tuple:
         root = row["parent_id"] or row["message_id"]
         cur = _summary_current(
             ledger, project_id, mid,
-            lambda r=root, m=mid: _sem.thread_bundle(
+            lambda r=root, m=mid: semantic_store.thread_bundle(
                 ledger, project_id, r, [m]),
-            _sem.policy_fingerprint(scfg))
+            semantic_policy.policy_fingerprint(scfg))
         if cur is None:
             continue
         state.append((mid, cur["artifact_id"], cur["meta"]["fingerprint"]))
@@ -246,8 +246,7 @@ def semantic_render_gate(ledger, ev, initial: tuple, cfg: dict,
     or changed since ``initial`` was snapshotted."""
     if not initial:
         return
-    import semantic as _sem
-    scfg, _ = _sem.semantic_config(cfg)
+    scfg, _ = semantic_policy.semantic_config(cfg)
     # the cheap policy check runs before the thread_bundle-heavy snapshot
     reason = enforce_block_reason(ledger, scfg, ev["project_id"])
     if reason is not None:
@@ -269,7 +268,7 @@ def semantic_chunk_parts(content: str,
     concatenate back to the notice body, so readers attribute lines to
     parts without re-parsing the rendered text.
 
-    ``semantic.render_notice`` already puts the patient, coverage/audit
+    ``semantic_render.render_notice`` already puts the patient, coverage/audit
     labels, and stored MCS URL in the frozen payload. A raw character slice
     would leave those lines only in part 1, so each part gets the same frozen
     header and link. The payload is never rebuilt from the ledger here.
@@ -346,8 +345,7 @@ def semantic_summary_block(ledger, r, cfg: dict) -> str:
     silently absent, and in shadow/assist/off the notification stays
     byte-identical to pre-Phase-J (INV-16, spec §20.2)."""
     try:
-        import semantic as _sem
-        scfg, _ = _sem.semantic_config(cfg)
+        scfg, _ = semantic_policy.semantic_config(cfg)
         if enforce_block_reason(ledger, scfg, r["project_id"]) is not None:
             return ""
         root = r["parent_id"] or r["message_id"]
@@ -355,9 +353,9 @@ def semantic_summary_block(ledger, r, cfg: dict) -> str:
         # generation, not only the target's body revision (INV-15).
         cur = _summary_current(
             ledger, r["project_id"], r["message_id"],
-            lambda: _sem.thread_bundle(ledger, r["project_id"], root,
+            lambda: semantic_store.thread_bundle(ledger, r["project_id"], root,
                                        [r["message_id"]]),
-            _sem.policy_fingerprint(scfg))
+            semantic_policy.policy_fingerprint(scfg))
         if cur is None:
             return ""
         from semantic_render import summary_limitations

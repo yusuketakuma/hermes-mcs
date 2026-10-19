@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import notify_journal
 import uuid
 
 import pytest
@@ -9,7 +10,6 @@ import pytest
 import mcs_requests
 import notify_cards as cards
 import notify_cmds as cmds
-import notify_reconcile as reconcile
 import notify_transport as transport
 from adapters.common import envelopes, registry
 from adapters.common.spec import validate as validate_v1
@@ -52,14 +52,14 @@ def test_lineworks_render_full_body_and_durable_scope_without_thread_api(led, tm
 
 
 def test_lineworks_visible_text_overflow_is_lossless_durable_content(led, monkeypatch):
-    original = cards._card_content
+    original = cards.card_content
 
     def long_display(*args, **kwargs):
         content = original(*args, **kwargs)
         content["containers"] = [{"type": "text", "text": "合成内容" * 400}]
         return content
 
-    monkeypatch.setattr(cards, "_card_content", long_display)
+    monkeypatch.setattr(cards, "card_content", long_display)
     spec = json.loads(_render(led)["spec_json"])
     text = display_text(spec["parts"])
     display = [(p, c) for p, c in zip(
@@ -153,10 +153,10 @@ def test_lineworks_registry_namespace_and_restore_journals_are_isolated(led, tmp
     assert registry.scope_key(SCOPE) != registry.scope_key({**SCOPE, "team_id": "99999999"})
     journal = tmp_path / "data" / "lineworks_state" / "journal-synthetic.jsonl"
     journal.write_text(json.dumps({"attempt_id": "a" * 16, "phase": "started"}) + "\n")
-    rows, tainted = reconcile.scan_journals(dirs)
+    rows, tainted = notify_journal.scan_journals(dirs)
     assert "a" * 16 in rows and not tainted
     journal.write_text(journal.read_text() + "invalid-json\n")
-    _, tainted = reconcile.scan_journals(dirs)
+    _, tainted = notify_journal.scan_journals(dirs)
     assert tainted
 
 
@@ -216,7 +216,7 @@ def test_lineworks_revoke_invalidates_tokens_without_remote_delete(led):
     spec = _deliver(led, render)
     led.db.execute("UPDATE notification_cards SET delivery_state='revoked' WHERE card_id=1")
     specs = []
-    cards._issue_render(led.db, 1, LINEWORKS, NOW, specs, force=True)
+    cards.issue_render(led.db, 1, LINEWORKS, NOW, specs, force=True)
     led.db.commit()
     assert specs[0]["op"] == "revoke"
     assert specs[0]["delivery"]["message_id"] == MID

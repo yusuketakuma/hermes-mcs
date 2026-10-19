@@ -1,4 +1,7 @@
 """Synthetic lifecycle routing through existing installer/setup/updater."""
+import mcs_runtime
+import lifecycle_io
+import setup_wizard
 import json
 import os
 from pathlib import Path
@@ -44,9 +47,9 @@ def test_setup_keeps_hidden_secret_input_on_terminal(pinned, monkeypatch, tmp_pa
     secret = "synthetic-terminal-secret"
     calls = []
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda prompt: secret)
-    monkeypatch.setattr(mcs_setup, "_keychain_store",
+    monkeypatch.setattr(lifecycle_io, "store_keychain",
                         lambda account, password: calls.append(password) or True)
-    monkeypatch.setattr(mcs_setup, "_wizard", lambda cfg: None)
+    monkeypatch.setattr(setup_wizard, "wizard", lambda cfg, **kwargs: None)
     assert mcs_cli.main(["setup"]) == 0
     assert calls == [secret]
     assert secret not in capsys.readouterr().out
@@ -202,7 +205,7 @@ def test_doctor_runs_through_real_cli_without_touching_synthetic_files(tmp_path)
     result = subprocess.run(
         [sys.executable, str(ROOT / "mcs/ops/mcs_cli.py"), "doctor", "--json"],
         env=env, capture_output=True, text=True, timeout=20)
-    assert result.returncode == (0 if mcs_setup.sqlite_wal_safe(sqlite3.sqlite_version_info) else 1)
+    assert result.returncode == (0 if mcs_runtime.sqlite_wal_safe(sqlite3.sqlite_version_info) else 1)
     assert json.loads(result.stdout)["checks"]["services"]["status"] == "not_checked"
     assert "synthetic-private-id" not in result.stdout + result.stderr
     assert before == {str(p): p.read_bytes() for p in home.rglob("*") if p.is_file()}

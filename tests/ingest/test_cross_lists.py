@@ -1,4 +1,5 @@
 """Completely synthetic cross-list replies at the real worker HTTP opening boundary."""
+import mcs_payload
 import io
 import json
 import urllib.error
@@ -250,7 +251,7 @@ def test_opt_in_and_no_implicit_login(store, replay):
 
 
 def test_capture_never_changes_ordinary_collection_or_metadata_current(store, replay):
-    original = mcs_adapter._norm_message(message(is_unread=True, reactions=[]), PID)
+    original = mcs_payload.normalize_message(message(is_unread=True, reactions=[]), PID)
     store.save_messages([original], project_id=PID)
     tables = [r[0] for r in store.db.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN "
@@ -279,7 +280,7 @@ def test_capture_never_changes_ordinary_collection_or_metadata_current(store, re
     {"pid": PID + 1}, {"parent_message": {"id": MID + 20}},
 ])
 def test_stored_project_or_parent_conflict_fails_capture(store, replay, extra):
-    store.save_messages([mcs_adapter._norm_message(message(), PID)], project_id=PID)
+    store.save_messages([mcs_payload.normalize_message(message(), PID)], project_id=PID)
     client, _, _ = replay([page([message(**extra)])])
     result = sync_cross_list(store, client, "mentioned", enabled=True)
     assert result["state"] == "failed" and result["reason"] == "scope_mismatch"

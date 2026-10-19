@@ -1,4 +1,7 @@
 """Every native command route uses synthetic snapshots and the same human gates."""
+import semantic_store
+from adapters.common import dispatch as command_dispatch
+from adapters.common import human_commands
 import asyncio
 import json
 from types import SimpleNamespace
@@ -9,7 +12,6 @@ import pytest
 import hermes_plugin
 import ledger
 import mcs_requests
-import semantic
 from adapters.common import commands, registry
 from adapters.slack.actions import Actions as SlackActions
 from adapters.lineworks.actions import Actions as LineWorksActions
@@ -49,7 +51,7 @@ def route(tmp_path, request):
     eid = db.artifact_add("extract_llm", json.dumps({"summary": "完全合成の要約"}),
                           project_id=1, message_id=1, meta={"hash": chash})
     db.artifact_add("semantic_policy", "c" * 64)
-    bundle = semantic.thread_bundle(db, 1, 1)
+    bundle = semantic_store.thread_bundle(db, 1, 1)
     member = next(m for m in bundle["members"] if m["message_id"] == 1)
     sid = db.artifact_add("semantic_summary", json.dumps({"target_message_id": 1,
         "claims": [{"section": "plan", "text": "完全合成の確認"}]}), project_id=1,
@@ -150,7 +152,7 @@ READS = {"timeline": {}, "thread": {"message_id": 1}, "search": {"query": "確�
 
 
 def test_every_read_route_and_project_boundary(route):
-    assert set(READS) == set(hermes_plugin._READ_KINDS)
+    assert set(READS) == set(command_dispatch.READ_KINDS)
     assert route.call({"op": "status", "project_id": 1})["ok"]
     for kind, fields in READS.items():
         got = route.call({"op": "read", "kind": kind, "project_id": 1, **fields})
@@ -204,9 +206,9 @@ def test_all_control_previews_confirmations_and_tamper_gate(route):
         "card_resolve": {"delivery_id": route.delivery_id, "attempt_id": "synthetic-attempt",
             "result": "mark_not_sent", "evidence": {"method": "synthetic", "ref": "synthetic",
                 "worker_stopped": True, "proof": "api_rejected"}}}
-    assert set(fields) == set(hermes_plugin._CONTROL_FIELDS)
+    assert set(fields) == set(human_commands.CONTROL_FIELDS)
     for action, attrs in fields.items():
-        reason = {"reason": "完全合成の本人確認"} if "reason" in hermes_plugin._CONTROL_FIELDS[action] else {}
+        reason = {"reason": "完全合成の本人確認"} if "reason" in human_commands.CONTROL_FIELDS[action] else {}
         before = list((route.data / "cmd").glob("*.json"))
         preview = route.call({"op": "control", "phase": "preview", "action": action,
                               "project_id": 1, **attrs, **reason})

@@ -7,6 +7,7 @@ Synthetic fixtures + a temp DB only; no Discord, no network, no real
 MCS data."""
 from __future__ import annotations
 
+import notify_parts
 import hashlib
 import json
 import uuid as _uuid_mod
@@ -105,7 +106,7 @@ def notify_render_body(led):
     man = led.db.execute(
         "SELECT * FROM notification_view_manifests ORDER BY manifest_id "
         "DESC LIMIT 1").fetchone()
-    return notify_render._card_body_text(
+    return notify_render.card_body_text(
         led.db, card, man, max_chars=None, cfg=CFG)[1]
 
 
@@ -143,16 +144,16 @@ def test_combined_part_budget_keeps_spec_deliverable(led, monkeypatch,
                                                    chunk_count, attachment_count):
     from adapters.common import spec as spec_mod
     _seed_thread(led)
-    monkeypatch.setattr(notify_cards, "_card_body_text",
+    monkeypatch.setattr(notify_parts, "card_body_text",
                         lambda *a, **k: ("合成", "x" * (1900 * chunk_count)))
     attachments = [{"attachment_id": i + 1, "name": f"file-{i}.txt",
                     "path": f"/tmp/synthetic-{i}", "sha256": "ab" * 32,
                     "bytes": 10} for i in range(attachment_count)]
-    monkeypatch.setattr(notify_cards, "_plan_attachments", lambda *a: attachments)
+    monkeypatch.setattr(notify_parts, "_plan_attachments", lambda *a: attachments)
     _dispatch(led, _intent(led))
     spec = _spec(_latest_render(led))
-    assert len(spec["parts"]["manifest"]) <= notify_cards.MAX_PARTS
-    assert notify_cards._TRUNCATED_PART in spec["parts"]["thread_body_parts"]
+    assert len(spec["parts"]["manifest"]) <= notify_parts.MAX_PARTS
+    assert notify_parts._TRUNCATED_PART in spec["parts"]["thread_body_parts"]
     assert spec_mod.validate(spec) is spec
 
 
@@ -169,12 +170,12 @@ def test_attachment_outside_part_budget_uses_existing_followup(led, monkeypatch)
     _seed_thread(led)
     _msg(led, 102, parent=100, body="x" * 4000)
     aid = _attach(led, 100)
-    monkeypatch.setattr(notify_cards, "MAX_PARTS", 4)
+    monkeypatch.setattr(notify_parts, "MAX_PARTS", 4)
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101, 102]}))
     render = _latest_render(led)
     spec = _spec(render)
     assert len(spec["parts"]["manifest"]) <= 4
-    assert notify_cards._TRUNCATED_PART in spec["parts"]["thread_body_parts"]
+    assert notify_parts._TRUNCATED_PART in spec["parts"]["thread_body_parts"]
     assert not any(p["kind"] == "attachment_part" for p in spec["parts"]["manifest"])
     assert render["state"] == "held"
     assert _card(led)["delivery_state"] == "update_failed"
@@ -888,7 +889,7 @@ def test_parts_state_stat(led):
 
 def _old_body_groups(db, card, planned, prior):
     """The pre-2026-10-03 rule: a backlog reply joins the post before it."""
-    announced = notify_cards._announced_ids(db, card)
+    announced = notify_parts._announced_ids(db, card)
     groups = []
     for mid in planned:
         if not prior or f"m:{mid}#1" in prior or mid in announced:
@@ -908,7 +909,7 @@ def test_reply_appended_by_the_old_rule_is_not_reposted(led, monkeypatch):
     _deliver_bodies(led, _latest_render(led), "msg-1", n=240)
     _msg(led, 300, parent=100, body="履歴の返信")
     with monkeypatch.context() as m:
-        m.setattr(notify_cards, "_body_groups", _old_body_groups)
+        m.setattr(notify_parts, "_body_groups", _old_body_groups)
         notify_cards.sweep(led, CFG, now=NOW + 1)
         r2 = _latest_render(led)
         assert _body_names(r2) == ["m:100#1", "m:101#1"]
@@ -927,13 +928,13 @@ def test_old_appended_reply_paging_away_does_not_open_duplicate(led, monkeypatch
     _deliver_bodies(led, _latest_render(led), "old-first", n=300)
     _msg(led, 300, parent=100, body="旧結合済みの返信")
     with monkeypatch.context() as m:
-        m.setattr(notify_cards, "_body_groups", _old_body_groups)
+        m.setattr(notify_parts, "_body_groups", _old_body_groups)
         notify_cards.sweep(led, CFG, now=NOW + 1)
         _deliver_bodies(led, _latest_render(led), "old-second", n=320)
     card = _card(led)
-    prior = notify_cards._prior_body_posts(led.db, card)
-    assert notify_cards._body_groups(led.db, card, [300], prior) == []
-    assert notify_cards._body_groups(led.db, card, [100, 300], prior) == [("m:100", [100])]
+    prior = notify_parts.prior_body_posts(led.db, card)
+    assert notify_parts._body_groups(led.db, card, [300], prior) == []
+    assert notify_parts._body_groups(led.db, card, [100, 300], prior) == [("m:100", [100])]
 
 
 def test_failed_named_post_never_counts_as_old_appended_reply(led):
@@ -947,8 +948,8 @@ def test_failed_named_post_never_counts_as_old_appended_reply(led):
     _part_receipt(led, render, "body:0002", result="not_sent", remote_id=None,
                   error_code="http_500", n=352)
     card = _card(led)
-    prior = notify_cards._prior_body_posts(led.db, card)
-    assert notify_cards._body_groups(led.db, card, [100, 101], prior) == [
+    prior = notify_parts.prior_body_posts(led.db, card)
+    assert notify_parts._body_groups(led.db, card, [100, 101], prior) == [
         ("m:100", [100]), ("m:101", [101])]
 
 
@@ -962,7 +963,7 @@ def test_shrinking_named_group_edits_only_proven_same_thread_surplus(led):
     assert len(original) > 2
     with led.db:
         led.db.execute("UPDATE messages SET body_text='短い現在の本文',content_hash=? WHERE message_id=100", ("a" * 64,))
-        notify_cards._issue_render(led.db, 1, CFG, NOW + 1, [], force=True)
+        notify_cards.issue_render(led.db, 1, CFG, NOW + 1, [], force=True)
     fresh = _latest_render(led)
     spec = _spec(fresh)
     active = next(p for p in spec["parts"]["manifest"] if p.get("name") == "m:100#1")
@@ -970,7 +971,7 @@ def test_shrinking_named_group_edits_only_proven_same_thread_surplus(led):
     cleanup = [p for p in spec["parts"]["manifest"] if p.get("edit_only") and p.get("name") != "m:100#1"]
     assert {p["name"] for p in cleanup} == set(original) - {"m:100#1"}
     assert all(p["prior_remote_id"] == original[p["name"]] for p in cleanup)
-    assert all(spec["parts"]["thread_body_parts"][int(p["part_id"].split(":")[1]) - 1] == notify_cards._THREAD_BODY_COLLECTED for p in cleanup)
+    assert all(spec["parts"]["thread_body_parts"][int(p["part_id"].split(":")[1]) - 1] == notify_parts._THREAD_BODY_COLLECTED for p in cleanup)
     from adapters.common.spec import validate
     validate(spec)
     # A later completed cleanup is not issued over and over.
@@ -980,7 +981,7 @@ def test_shrinking_named_group_edits_only_proven_same_thread_surplus(led):
     led.db.commit()
     final = []
     with led.db:
-        notify_cards._issue_render(led.db, 1, CFG, NOW + 2, final, force=True)
+        notify_cards.issue_render(led.db, 1, CFG, NOW + 2, final, force=True)
     assert not any(p.get("edit_only") for p in final[0]["parts"]["manifest"])
 
 
@@ -1002,7 +1003,7 @@ def test_surplus_cleanup_does_not_infer_unproven_or_frozen_targets(led, fault):
             led.db.execute("UPDATE notification_render_parts SET name=NULL WHERE delivery_id=? AND kind='body_part'", (first["delivery_id"],))
         led.db.execute("UPDATE messages SET body_text='現在の本文',content_hash=? WHERE message_id=100", ("a" * 64,))
         specs = []
-        notify_cards._issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
+        notify_cards.issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
     if fault == "unknown":
         assert specs == []
     else:
@@ -1017,23 +1018,23 @@ def test_surplus_cleanup_budget_holds_once_without_claiming_completion(led, monk
     _deliver_bodies(led, first, "original", n=1500)
     with led.db:
         led.db.execute("UPDATE messages SET body_text='現在の本文',content_hash=? WHERE message_id=100", ("a" * 64,))
-    monkeypatch.setattr(notify_cards, "MAX_PARTS", 3)
+    monkeypatch.setattr(notify_parts, "MAX_PARTS", 3)
     specs = []
     with led.db:
-        assert notify_cards._issue_render(led.db, 1, CFG, NOW + 1, specs, force=True) is None
+        assert notify_cards.issue_render(led.db, 1, CFG, NOW + 1, specs, force=True) is None
     held = _latest_render(led)
     assert held["state"] == "held" and held["parts_state"] == "held" and specs == []
     assert _card(led)["delivery_state"] == "update_failed"
     assert all(p["state"] == "held" and p["error_code"] == "thread_cleanup_budget_exceeded" for p in _parts(led, held["delivery_id"]))
     assert not _begin(led, held, n=1600)["granted"]
     with led.db:
-        notify_cards._issue_render(led.db, 1, CFG, NOW + 2, specs)
+        notify_cards.issue_render(led.db, 1, CFG, NOW + 2, specs)
     assert _latest_render(led)["delivery_id"] == held["delivery_id"] and specs == []
     # Both startup recovery and the shared publisher must keep this
     # special resource hold private, even when watchdogs see it as live.
     notify_cards.recover(led, CFG, {})
     root = notify_cards.data_root(led)
-    assert notify_cards._publish_specs(led.db, notify_cards.notify_dirs(root), [_spec(held)], NOW + 3) == []
+    assert notify_cards.publish_specs(led.db, notify_cards.notify_dirs(root), [_spec(held)], NOW + 3) == []
     from pathlib import Path
     assert not (Path(root) / "discord_render" / (held["delivery_id"] + ".json")).exists()
     assert _latest_render(led)["spec_published"] == 0
@@ -1044,17 +1045,17 @@ def test_unchanged_attachment_updates_old_summary_caption_without_reupload(led, 
     file = tmp_path / "synthetic.pdf"
     file.write_bytes(b"synthetic attachment")
     _attach(led, 100, local_path=str(file), sha256=hashlib.sha256(file.read_bytes()).hexdigest(), nbytes=file.stat().st_size)
-    original_captions = notify_cards._attachment_captions
-    monkeypatch.setattr(notify_cards, "_attachment_captions", lambda db, card, attachments: {a["attachment_id"]: "OLD-GENERATED-SUMMARY" for a in attachments})
+    original_captions = notify_parts._attachment_captions
+    monkeypatch.setattr(notify_parts, "_attachment_captions", lambda db, card, attachments: {a["attachment_id"]: "OLD-GENERATED-SUMMARY" for a in attachments})
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     first = _latest_render(led)
     _deliver_bodies(led, first, "original", n=1700)
     attachment = next(p for p in _spec(first)["parts"]["manifest"] if p["kind"] == "attachment_part")
     _part_receipt(led, first, attachment["part_id"], remote_id="original-file-message", n=1710)
-    monkeypatch.setattr(notify_cards, "_attachment_captions", original_captions)
+    monkeypatch.setattr(notify_parts, "_attachment_captions", original_captions)
     specs = []
     with led.db:
-        notify_cards._issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
+        notify_cards.issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
     fresh = next(p for p in specs[0]["parts"]["manifest"] if p["kind"] == "attachment_part")
     assert fresh["prior_remote_id"] == "original-file-message" and fresh["edit_only"] is True
     assert "OLD-GENERATED-SUMMARY" not in fresh["caption"] and "📋 要約" not in fresh["caption"]
@@ -1067,10 +1068,10 @@ def test_native_thread_layout_migrates_once_without_source_or_ack_generation_cha
     first = _latest_render(led)
     _deliver_bodies(led, first, "original", n=1800)
     card = _card(led)
-    old = notify_render._card_content(led.db, card, cfg=CFG)
+    old = notify_render.card_content(led.db, card, cfg=CFG)
     old["thread_layout"] = "native-body-without-summary/v1"
     with led.db:
-        led.db.execute("UPDATE notification_cards SET content_fp=? WHERE card_id=1", (notify_render._content_fp(old),))
+        led.db.execute("UPDATE notification_cards SET content_fp=? WHERE card_id=1", (notify_render.content_fingerprint(old),))
     initial_source_generation = card["source_generation"]
     initial_presentation_generation = card["presentation_generation"]
     # A release alone does not migrate already delivered layout-2 cards.
@@ -1091,7 +1092,7 @@ def test_non_ascii_chunk_name_is_not_a_cleanup_number(led):
         led.db.execute("UPDATE notification_render_parts SET name='m:100#²' WHERE delivery_id=? AND name='m:100#2'", (first["delivery_id"],))
         led.db.execute("UPDATE messages SET body_text='現在の本文',content_hash=? WHERE message_id=100", ("a" * 64,))
         specs = []
-        notify_cards._issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
+        notify_cards.issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
     assert specs
     assert not any(p.get("edit_only") and p["name"] == "m:100#²" for p in specs[0]["parts"]["manifest"])
 
@@ -1140,7 +1141,7 @@ def test_publish_failure_on_a_later_spec_leaves_no_open_transaction(led, monkeyp
     second = {**first, "delivery_id": _uuid(9001)}
     root = notify_cards.data_root(led)
     with pytest.raises(OSError):
-        notify_cards._publish_specs(led.db, notify_cards.notify_dirs(root),
+        notify_cards.publish_specs(led.db, notify_cards.notify_dirs(root),
                                     [first, second], NOW + 1)
     assert not led.db.in_transaction
     other = sqlite3.connect(led.db.execute("PRAGMA database_list").fetchone()[2])
@@ -1170,7 +1171,7 @@ def test_reply_summary_arrives_after_delivery_and_updates_its_existing_post(led,
         assert _apply(led, envelopes.part_receipt(claim, part, "delivered", remote_id="original/" + part["part_id"]), cfg)["applied"]
     initial = _spec(first)
     if off_page:
-        assert 101 not in notify_render._card_content(led.db, _card(led), cfg=cfg)["shown"]
+        assert 101 not in notify_render.card_content(led.db, _card(led), cfg=cfg)["shown"]
     for part in initial["parts"]["manifest"]:
         if part["kind"] == "body_part" and part.get("name", "").startswith("m:"):
             body = initial["parts"]["thread_body_parts"][int(part["part_id"].split(":")[1]) - 1]
@@ -1192,3 +1193,27 @@ def test_reply_summary_arrives_after_delivery_and_updates_its_existing_post(led,
     else:
         assert reply["prior_remote_id"] == "original/" + initial_reply["part_id"]
     assert led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == count
+
+
+def test_part_settlement_preserves_borrowed_transaction_and_savepoint(led):
+    import notify_transport
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    req = {**SCOPE, "delivery_id": render["delivery_id"], "part_id": "thread",
+           "render_rev": render["render_rev"], "payload_hash": render["payload_hash"],
+           "route_epoch": render["route_epoch"], "correlation": render["correlation"],
+           "attempt_id": "synthetic-borrowed-part", "result": "delivered",
+           "remote_id": "synthetic-thread"}
+    led.db.execute("BEGIN IMMEDIATE")
+    try:
+        led.db.execute("SAVEPOINT borrowed_part")
+        receipt = notify_transport.settle_part_receipt(led.db, req, NOW)
+        assert receipt["applied"]
+        assert led.db.in_transaction
+        assert _part(led, render["delivery_id"], "thread")["state"] == "delivered"
+        led.db.execute("ROLLBACK TO borrowed_part")
+        assert _part(led, render["delivery_id"], "thread")["state"] == "pending"
+        led.db.execute("RELEASE borrowed_part")
+    finally:
+        led.db.rollback()

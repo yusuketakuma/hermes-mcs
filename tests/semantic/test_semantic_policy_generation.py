@@ -1,4 +1,7 @@
 """Changing interpretation policy invalidates cached analysis and unsent text."""
+import semantic_drain
+import semantic_policy
+import semantic_render
 import json
 import time
 
@@ -6,7 +9,6 @@ import pytest
 import ledger
 import mcs_view
 import notify_flush
-import semantic
 from mcs_requests import payload_hash
 from semantic_testkit import (_canonical_cfg, _cfg, _FakeJev, _llm, _llm_v2,
                               _PassJev, _seeded, _seeded_two)
@@ -16,7 +18,7 @@ def test_policy_change_rechecks_analysis_and_freezes_old_notification(tmp_path, 
     db = _seeded(tmp_path)
     try:
         original = _cfg("enforce")
-        semantic.run_due(db, original, {"errors": []}, time.monotonic() + 300,
+        semantic_drain.run_due(db, original, {"errors": []}, time.monotonic() + 300,
                          jev_client=_FakeJev(), llm_fn=_llm)
         old_summary = db.artifacts("semantic_summary", message_id=1)[-1]
         event = db.db.execute("SELECT * FROM notify_outbox WHERE kind='semantic_notice' LIMIT 1").fetchone()
@@ -30,7 +32,7 @@ def test_policy_change_rechecks_analysis_and_freezes_old_notification(tmp_path, 
             notify_flush._semantic_gate(db, event, json.loads(event["payload"]))
         db.semantic_seed(1, [1], {"source": "replay"})
         fake = _FakeJev()
-        semantic.run_due(db, changed, {"errors": []}, time.monotonic() + 300,
+        semantic_drain.run_due(db, changed, {"errors": []}, time.monotonic() + 300,
                          jev_client=fake, llm_fn=_llm)
         assert fake.requests_made > 0
         current = db.artifacts("semantic_summary", message_id=1)[-1]
@@ -53,14 +55,14 @@ def test_policy_change_rechecks_analysis_and_freezes_old_notification(tmp_path, 
 def test_new_policy_does_not_renotify_an_attempted_delivery(tmp_path):
     db = _seeded(tmp_path)
     try:
-        semantic.run_due(db, _cfg("enforce"), {"errors": []}, time.monotonic() + 300,
+        semantic_drain.run_due(db, _cfg("enforce"), {"errors": []}, time.monotonic() + 300,
                          jev_client=_FakeJev(), llm_fn=_llm)
         events = db.db.execute("SELECT event_id FROM notify_outbox WHERE kind='semantic_notice'").fetchall()
         assert events
         for row in events:
             db.outbox_mark(row["event_id"], "accepted", accepted_ref="synthetic-receipt")
         db.semantic_seed(1, [1], {"source": "replay"})
-        semantic.run_due(db, _cfg("enforce", match_threshold=.8), {"errors": []},
+        semantic_drain.run_due(db, _cfg("enforce", match_threshold=.8), {"errors": []},
                          time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
         assert db.db.execute("SELECT count(*) FROM notify_outbox WHERE kind='semantic_notice'").fetchone()[0] == len(events)
     finally:
@@ -70,36 +72,36 @@ def test_new_policy_does_not_renotify_an_attempted_delivery(tmp_path):
 def test_attempted_notice_does_not_hide_a_new_recorded_arrival(tmp_path):
     db = _seeded(tmp_path)
     try:
-        origin = semantic._notify_src_event(db, 1, [1])
+        origin = semantic_render._notify_src_event(db, 1, [1])
         assert origin is not None
         db.outbox_add("semantic_notice", 1,
                       {"src_event_id": origin, "target_message_id": 1})
         with db.db:
             db.db.execute("UPDATE notify_outbox SET state='failed',attempts=1 "
                           "WHERE kind='semantic_notice'")
-        assert semantic._notify_src_event(db, 1, [1]) is None
+        assert semantic_render._notify_src_event(db, 1, [1]) is None
         db.outbox_add("new_messages", 1, {"message_ids": [1], "source": "correction"})
-        replacement = semantic._notify_src_event(db, 1, [1])
+        replacement = semantic_render._notify_src_event(db, 1, [1])
         assert replacement is not None and replacement != origin
         db.outbox_add("semantic_notice", 1,
                       {"src_event_id": replacement, "target_message_id": 1})
         with db.db:
             db.db.execute("UPDATE notify_outbox SET state='accepted' "
                           "WHERE kind='semantic_notice'")
-        assert semantic._notify_src_event(db, 1, [1]) is None
+        assert semantic_render._notify_src_event(db, 1, [1]) is None
     finally:
         db.close()
 
 
 def test_fact_source_policy_preserves_legacy_hash_and_separates_modes():
-    scfg = semantic.semantic_config(_cfg("enforce"))[0]
+    scfg = semantic_policy.semantic_config(_cfg("enforce"))[0]
     historical = payload_hash({key: scfg.get(key) for key in (
         "model", "match_threshold", "nomatch_threshold", "calibration_version")})
-    assert semantic.policy_fingerprint(scfg) == historical
-    policies = {semantic.policy_fingerprint(dict(scfg, fact_source=mode))
+    assert semantic_policy.policy_fingerprint(scfg) == historical
+    policies = {semantic_policy.policy_fingerprint(dict(scfg, fact_source=mode))
                 for mode in ("legacy", "shadow", "canonical")}
     assert len(policies) == 3
-    assert semantic.policy_fingerprint(dict(scfg, daily_request_budget=1)) == historical
+    assert semantic_policy.policy_fingerprint(dict(scfg, daily_request_budget=1)) == historical
 
 
 @pytest.mark.parametrize("original_source", ["legacy", "canonical"])
@@ -109,7 +111,7 @@ def test_fact_source_switch_holds_old_notice_and_rechecks_receipts(
     db = _seeded_two(tmp_path) if canonical else _seeded(tmp_path)
     try:
         original = _canonical_cfg() if canonical else _cfg("enforce", loop_mode="off")
-        semantic.run_due(db, original, {"errors": []}, time.monotonic() + 300,
+        semantic_drain.run_due(db, original, {"errors": []}, time.monotonic() + 300,
                          jev_client=_PassJev() if canonical else _FakeJev(),
                          llm_fn=_llm_v2 if canonical else _llm)
         old = db.artifacts("semantic_summary", message_id=1)[-1]
@@ -126,7 +128,7 @@ def test_fact_source_switch_holds_old_notice_and_rechecks_receipts(
         if canonical:
             db.semantic_seed(1, [1], {"source": "replay"})
 
-            out = semantic.run_due(db, changed, {"errors": []},
+            out = semantic_drain.run_due(db, changed, {"errors": []},
                                    time.monotonic() + 300,
                                    jev_client=_FakeJev(choice_map={"status": "not_stated"}), llm_fn=_llm_v2)
             assert out["done"] == 1

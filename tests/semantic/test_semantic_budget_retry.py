@@ -1,4 +1,7 @@
 """Executed work that exceeds its deadline must consume the retry budget."""
+import semantic_audit
+import semantic_drain
+import semantic_runtime
 import json
 import time
 
@@ -33,13 +36,13 @@ def test_post_call_deadline_is_bounded(tmp_path, monkeypatch, slow_stage):
         for expected in range(1, 7):
             with db.db:
                 db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-            semantic.run_due(db, _cfg('shadow'), {'errors': []}, clock[0] + 300,
+            semantic_drain.run_due(db, _cfg('shadow'), {'errors': []}, clock[0] + 300,
                              jev_client=Client(), llm_fn=llm)
             row = db.db.execute("SELECT state,attempts,next_try FROM fetch_jobs WHERE kind='semantic'").fetchone()
             assert row['attempts'] == expected
             assert row['next_try'] > time.time()
         assert row['state'] == 'failed' and len(calls) == 6
-        semantic.run_due(db, _cfg('shadow'), {'errors': []}, clock[0] + 300,
+        semantic_drain.run_due(db, _cfg('shadow'), {'errors': []}, clock[0] + 300,
                          jev_client=Client(), llm_fn=llm)
         assert len(calls) == 6
     finally:
@@ -48,10 +51,10 @@ def test_post_call_deadline_is_bounded(tmp_path, monkeypatch, slow_stage):
 
 def test_budget_before_dispatch_defers_without_attempt(tmp_path, monkeypatch):
     db = _seeded(tmp_path)
-    monkeypatch.setattr(semantic.runtime, 'job_deadline', lambda *args: 0)
+    monkeypatch.setattr(semantic_runtime, 'job_deadline', lambda *args: 0)
     client = _FakeJev()
     try:
-        semantic.run_due(db, _cfg('shadow'), {'errors': []}, time.monotonic() + 300,
+        semantic_drain.run_due(db, _cfg('shadow'), {'errors': []}, time.monotonic() + 300,
                          jev_client=client, llm_fn=_llm)
         row = db.db.execute("SELECT state,attempts,next_try FROM fetch_jobs WHERE kind='semantic'").fetchone()
         assert tuple(row[:2]) == ('pending', 0)
@@ -69,7 +72,7 @@ def test_next_call_short_of_reserve_defers_without_attempt(tmp_path, monkeypatch
     six attempts on deadline overruns while progressing)."""
     clock = [100.0]
     monkeypatch.setattr(semantic.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(semantic.runtime.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(semantic_runtime.time, 'monotonic', lambda: clock[0])
     calls = []
 
     def llm(prompt, timeout=None):
@@ -85,7 +88,7 @@ def test_next_call_short_of_reserve_defers_without_attempt(tmp_path, monkeypatch
             with db.db:
                 db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
             before = len(calls)
-            out = semantic.run_due(db, cfg, {'errors': []}, clock[0] + 450,
+            out = semantic_drain.run_due(db, cfg, {'errors': []}, clock[0] + 450,
                                    jev_client=_FakeJev(), llm_fn=llm)
             runs += 1
             row = db.db.execute("SELECT state,attempts,next_try FROM fetch_jobs WHERE kind='semantic'").fetchone()
@@ -113,7 +116,7 @@ def test_budget_short_stops_the_pass_before_the_next_job(tmp_path, monkeypatch):
     guaranteed timeout at the lane deadline, wasted model time)."""
     clock = [100.0]
     monkeypatch.setattr(semantic.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(semantic.runtime.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(semantic_runtime.time, 'monotonic', lambda: clock[0])
     calls = []
 
     def llm(prompt, timeout=None):
@@ -130,7 +133,7 @@ def test_budget_short_stops_the_pass_before_the_next_job(tmp_path, monkeypatch):
         p.messages[1].replies = [_message(4, parent=3)]
         db.save_patient(p, notify={'source': 'unread'}, semantic=True)
         assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 2
-        out = semantic.run_due(db, _cfg('shadow', job_budget_seconds=450.0),
+        out = semantic_drain.run_due(db, _cfg('shadow', job_budget_seconds=450.0),
                                {'errors': []}, clock[0] + 450,
                                jev_client=_FakeJev(), llm_fn=llm)
         # one long call, then the reserve is short: no second job starts
@@ -152,13 +155,13 @@ def test_short_defer_without_progress_charges_an_attempt(tmp_path, monkeypatch):
     db = _seeded(tmp_path)
     monkeypatch.setattr(semantic_drain, "_process_job",
                         lambda *a, **k: "deferred_short")
-    monkeypatch.setattr(semantic, "_process_job",
+    monkeypatch.setattr(semantic_drain, '_process_job',
                         lambda *a, **k: "deferred_short")
     try:
         for _ in range(8):
             with db.db:
                 db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-            semantic.run_due(db, _cfg('shadow'), {'errors': []},
+            semantic_drain.run_due(db, _cfg('shadow'), {'errors': []},
                              time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
         row = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
         assert row['state'] == 'failed' and row['attempts'] >= 1
@@ -202,7 +205,7 @@ def test_nightly_revive_gives_failed_jobs_one_bounded_attempt(tmp_path):
                                 "WHERE kind='semantic'").fetchone()
             pl = json.loads(row["payload"])
             assert row["state"] == "pending" and pl["auto_retry"] == night
-            assert semantic.runtime.attempt_limit(pl) == row["attempts"] + 1
+            assert semantic_runtime.attempt_limit(pl) == row["attempts"] + 1
             with db.db:     # the extra attempt is used up and fails again
                 db.db.execute("UPDATE fetch_jobs SET state='failed',"
                               "attempts=attempts+1,updated_at=? "
@@ -239,10 +242,10 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
         return real_summarize(*args, **kwargs)
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
-    monkeypatch.setattr(semantic, "audit_claims",
+    monkeypatch.setattr(semantic_audit, 'audit_claims',
                         lambda *a, **k: ([{"code": "claim_not_supported", "claim": "synthetic"}], True))
     try:
-        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                                time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
         assert calls == ["repair"]
         assert out["deferred"] == 1 and not out["done"]
@@ -253,7 +256,7 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
         blocked[0] = False
         with db.db:
             db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
-        resumed = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        resumed = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                                    time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
         assert resumed["done"] == 1
         assert calls == ["repair"] * (1 if failure == "post_dispatch" else 2)

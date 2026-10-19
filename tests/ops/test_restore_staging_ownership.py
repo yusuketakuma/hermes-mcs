@@ -116,7 +116,8 @@ def test_record_write_failure_removes_only_our_new_copy(world, monkeypatch):
 
     def fail(*a, **k):
         raise OSError("synthetic journal write failure")
-    monkeypatch.setattr(world.mod, name, fail)
+    target = world.mod.journal_store if world.which == "update" else world.mod
+    monkeypatch.setattr(target, name, fail)
     with pytest.raises(OSError):
         world.replace()
     assert world.staging() == [] and _rows(world.live) == ["live"]

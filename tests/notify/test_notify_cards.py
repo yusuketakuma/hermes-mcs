@@ -4,6 +4,7 @@ only; no Discord, no network, no real MCS data (plan RC02-09,13,21,
 23-25)."""
 from __future__ import annotations
 
+import notify_parts
 import json
 import os
 import sqlite3
@@ -405,12 +406,12 @@ def test_card_renders_headers_not_bodies(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     assert c["pages"] > 1                    # PAGE_THREAD count cap
     seen = set()
     for p in range(c["pages"]):
         card["ui_state"] = json.dumps({"page": p})
-        c = notify_render._card_content(led.db, card)
+        c = notify_render.card_content(led.db, card)
         assert c["page"] == p
         total = (notify_render._blocks_len(c["containers"])
                  + notify_render._blocks_len(c["footer"]))
@@ -433,7 +434,7 @@ def test_card_body_oversized_headers_and_full_action(led, tmp_path):
     ev = _intent(led)
     _dispatch(led, ev, cfg=NO_THREAD_CFG)
     card = _card(led)
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     total = (notify_render._blocks_len(c["containers"])
              + notify_render._blocks_len(c["footer"]))
@@ -468,14 +469,14 @@ def test_card_page_indicator_shows_position(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     assert c["pages"] > 1
     # the context line under the heading: post count, then the page
     ctx = c["containers"][1]["text"]
     assert "14投稿" in ctx and f"1/{c['pages']}ページ" in ctx
     # last page shows its position
     card["ui_state"] = json.dumps({"page": c["pages"] - 1})
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     assert f"{c['pages']}/{c['pages']}ページ" in c["containers"][1]["text"]
     # single-page card carries no page line at all
     _patient(led, 2)
@@ -485,7 +486,7 @@ def test_card_page_indicator_shows_position(led, tmp_path):
     card2 = dict(led.db.execute(
         "SELECT * FROM notification_cards ORDER BY card_id DESC LIMIT 1"
         ).fetchone())
-    c2 = notify_render._card_content(led.db, card2)
+    c2 = notify_render.card_content(led.db, card2)
     assert c2["pages"] == 1
     assert "ページ" not in "\n".join(
         b.get("text") or "" for b in c2["containers"] + c2["footer"])
@@ -515,7 +516,7 @@ def test_card_thread_shows_structured_lines(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     texts = [b.get("text") or "" for b in c["containers"]]
     # layout 2: the post line heads the summary, no 📋 label on the face
     struct = [t for t in texts if t.startswith("・")]
@@ -537,7 +538,7 @@ def test_card_thread_structured_per_message(led, tmp_path):
     card = _card(led)
     for p in range(9):
         card["ui_state"] = json.dumps({"page": p})
-        c = notify_render._card_content(led.db, card)
+        c = notify_render.card_content(led.db, card)
         joined = "\n".join(b.get("text") or "" for b in c["containers"])
         if 100 in c["shown"]:
             assert "疼痛" in joined
@@ -557,7 +558,7 @@ def test_card_stale_and_bad_extraction_not_shown(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     # no current extraction: each post says so instead of a stale block
     assert joined.count("要約 処理待ち") == 2 and "疼痛" not in joined
@@ -579,7 +580,7 @@ def test_card_deleted_message_hides_structured_data(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "（削除された投稿）" in joined
     # only the live reply carries a summary line; the deleted post none
@@ -596,7 +597,7 @@ def test_card_sender_tag_shows_time_profession_org(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "09-24 08:" in joined
     assert "職員（看護師・訪問看護ステーションX）" in joined
@@ -611,7 +612,7 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     ev = _intent(led)
     _dispatch(led, ev)
     card = _card(led)
-    title, text = notify_render._card_body_text(
+    title, text = notify_render.card_body_text(
         led.db, card, {"shown": "[100, 101]"})
     assert "09-24 08:" in text
     # layout 2: header -> summary -> stamps -> body
@@ -633,10 +634,10 @@ def test_signal_quote_shows_sender_metadata(led, tmp_path):
                           "type": "med_followup"})
     _dispatch(led, ev)
     card = _card(led)
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "薬剤師・薬局Y" not in joined
-    _, body = notify_render._card_body_text(
+    _, body = notify_render.card_body_text(
         led.db, card, {"shown": json.dumps(c["shown"])})
     assert "薬剤師・薬局Y" in body
 
@@ -655,11 +656,11 @@ def test_card_signal_structured_evidence(led, tmp_path):
                           "type": "med_followup"})
     _dispatch(led, ev)
     card = _card(led)
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "note sig-x" in joined
     assert "📋 要約" not in joined and "退院後フォローの記録" not in joined
-    _, body = notify_render._card_body_text(
+    _, body = notify_render.card_body_text(
         led.db, card, {"shown": json.dumps(c["shown"])})
     assert "職員\n・状態安定\n・要点: 経過観察\n" in body
     assert "退院後フォローの記録" in body        # raw body still there
@@ -680,7 +681,7 @@ def test_digest_face_groups_signals_per_patient(led):
                           "signal_keys": ["sig-a1", "sig-a2", "sig-b1"]})
     _dispatch(led, ev)
     card = _card(led)
-    c = notify_render._card_content(led.db, card)
+    c = notify_render.card_content(led.db, card)
     texts = [b.get("text") or "" for b in c["containers"]
              if b["type"] == "text"]
     assert texts.count("患者A") == 1 and texts.count("患者B") == 1
@@ -865,8 +866,8 @@ def test_sweep_skips_content_for_settled_revoked_cards(
     be rendered (never delivered, or the delete already landed) the
     thread content must not be recomputed every tick."""
     calls = []
-    real = notify_cards._card_content
-    monkeypatch.setattr(notify_cards, "_card_content",
+    real = notify_cards.card_content
+    monkeypatch.setattr(notify_cards, "card_content",
                         lambda db, card, **kwargs: calls.append(card["card_id"])
                         or real(db, card, **kwargs))
     # (1) revoked before delivery: no message_id -> op None
@@ -893,8 +894,8 @@ def test_sweep_skips_content_after_revoke_delivered(
     _receipt(led, rv, "0" * 15 + "2", message_id="m-9", n=10)
     assert _latest_render(led)["state"] == "delivered"
     calls = []
-    real = notify_cards._card_content
-    monkeypatch.setattr(notify_cards, "_card_content",
+    real = notify_cards.card_content
+    monkeypatch.setattr(notify_cards, "card_content",
                         lambda db, card, **kwargs: calls.append(card["card_id"])
                         or real(db, card, **kwargs))
     _msg(led, 105, 1, parent=100)            # drift is irrelevant now
@@ -1588,7 +1589,7 @@ def test_gc_deletes_expired_tokens_and_old_specs(led, tmp_path):
     led.db.execute(
         "UPDATE notification_render_parts SET state='delivered' "
         "WHERE delivery_id=?", (render["delivery_id"],))
-    notify_cards._update_parts_state(
+    notify_parts.update_state(
         led.db, render["delivery_id"], NOW)
     led.db.commit()
     out = notify_cards.gc(led, CFG, now=NOW)
@@ -2026,7 +2027,7 @@ def test_failed_revoke_stays_revoked_after_retry_exhaustion(led, tmp_path):
     # Emit the first delete; subsequent not_sent receipts retry it.
     specs = []
     with led.db:
-        notify_cards._issue_render(led.db, card['card_id'], CFG, NOW, specs)
+        notify_cards.issue_render(led.db, card['card_id'], CFG, NOW, specs)
     for i in range(notify_cards.MAX_RESEND):
         render = _latest_render(led)
         assert render['op'] == 'revoke'
@@ -2375,7 +2376,7 @@ def test_interactive_acceptance_queues_ready_attachments_once(led, tmp_path):
         assert rows[0]['route'] == 'text' and rows[0]['state'] == 'pending'
         # Repeated completion or worker receipts must never resend the attachment.
         with led.db:
-            notify_cards._complete_intent(led.db, 1, NOW + 1)
+            notify_cards.complete_intent(led.db, 1, NOW + 1)
 
 
 def test_bounded_gc_advances_past_deleted_terminal_spec_files(led, tmp_path):
@@ -2396,7 +2397,7 @@ def test_bounded_gc_advances_past_deleted_terminal_spec_files(led, tmp_path):
         led.db.execute(
             "UPDATE notification_render_parts SET state='delivered' "
             "WHERE delivery_id=?", (r["delivery_id"],))
-        notify_cards._update_parts_state(led.db, r["delivery_id"], NOW)
+        notify_parts.update_state(led.db, r["delivery_id"], NOW)
     led.db.commit()
     notify_cards.gc(led, CFG, now=NOW + 10, limit=1)
     notify_cards.gc(led, CFG, now=NOW + 20, limit=1)
@@ -2437,7 +2438,7 @@ def _settle_parts(led, render):
     led.db.execute(
         "UPDATE notification_render_parts SET state='delivered' "
         "WHERE delivery_id=?", (render["delivery_id"],))
-    notify_cards._update_parts_state(led.db, render["delivery_id"], NOW)
+    notify_parts.update_state(led.db, render["delivery_id"], NOW)
     led.db.commit()
 
 
@@ -2708,7 +2709,7 @@ def test_switched_away_transport_leaves_live_health(led, tmp_path,
     a discord attempt left 'unknown' and its held event kept health
     degraded forever. They stay recorded (never auto-settled) but count
     only as retired."""
-    import run_check
+    import health_report
     _seed_thread(led)
     ev = _intent(led)
     _dispatch(led, ev)
@@ -2741,9 +2742,9 @@ def test_switched_away_transport_leaves_live_health(led, tmp_path,
         assert bool(result["errors"]) == bool(live)
     os.remove(claim)
     assert notify_cards.health_cards(led)["attempts_unsettled"] == 1
-    monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "h.json"))
+    monkeypatch.setattr(health_report, "HEALTH_FILE", str(tmp_path / "h.json"))
     for cfg, held, retired in ((CFG, 1, 0), (slack, 0, 1)):
-        health = run_check._health(led, {"errors": [], "notify": {}}, "ok", cfg=cfg)
+        health = health_report.build_health(led.db, {"errors": [], "notify": {}}, "ok", cfg=cfg)
         assert (health["notify"]["held"],
                 health["notify"]["retired_held"]) == (held, retired)
         assert (health["notify"]["state"] == "incomplete") == bool(held)

@@ -1,4 +1,6 @@
 """Pharmacy detail attributes and the prescription_inquiry event, on wholly synthetic bodies."""
+import extract_schema
+import extract_validation
 import json
 
 import pytest
@@ -26,7 +28,7 @@ def _detail(key, value=None, evidence=BODY):
 def test_the_five_planned_keys_are_detail_keys_with_the_unified_manager_name():
     assert set(NEW_KEYS) <= DETAIL_KEYS
     assert "storage_manager" not in DETAIL_KEYS and "duplicate_check" not in DETAIL_KEYS
-    props = extract_llm._SCHEMA["schema"]["properties"]
+    props = extract_schema.SCHEMA["schema"]["properties"]
     schema = props["patient_context"]["items"]["properties"]
     assert set(NEW_KEYS) <= set(schema["details"]["items"]["properties"]["key"]["enum"])
     assert "prescription_inquiry" in props["events"]["items"]["enum"]
@@ -35,7 +37,7 @@ def test_the_five_planned_keys_are_detail_keys_with_the_unified_manager_name():
 
 @pytest.mark.parametrize("key", NEW_KEYS)
 def test_a_quoted_attribute_survives_validation(key):
-    out = extract_llm._validate({"patient_context": [_item([_detail(key)])]}, BODY)
+    out = extract_validation.validate({"patient_context": [_item([_detail(key)])]}, BODY)
     assert out["patient_context"][0]["details"] == [_detail(key)]
     assert not out.get("_items_dropped") and not out.get("_evidence_dropped")
 
@@ -43,7 +45,7 @@ def test_a_quoted_attribute_survives_validation(key):
 @pytest.mark.parametrize("key", NEW_KEYS)
 def test_an_attribute_outside_the_source_is_dropped_and_counted(key):
     outside = _detail(key, evidence="合成の別文です。")
-    out = extract_llm._validate({"patient_context": [_item([_detail("supporter", "合成家族"), outside])]}, BODY)
+    out = extract_validation.validate({"patient_context": [_item([_detail("supporter", "合成家族"), outside])]}, BODY)
     assert [d["key"] for d in out["patient_context"][0]["details"]] == ["supporter"]
     assert out["_items_dropped"] == 1
 
@@ -52,7 +54,7 @@ def test_unconfirmed_or_planned_results_keep_their_source_wording():
     body = "疑義照会の結果は未確認です。相互作用の確認は来週の予定です。"
     details = [{"key": "inquiry_result", "value": "未確認", "evidence": "疑義照会の結果は未確認です。"},
                {"key": "interaction_check", "value": "来週の予定", "evidence": "相互作用の確認は来週の予定です。"}]
-    out = extract_llm._validate({"patient_context": [_item(details, body)]}, body)
+    out = extract_validation.validate({"patient_context": [_item(details, body)]}, body)
     assert out["patient_context"][0]["details"] == details
 
 
@@ -68,7 +70,7 @@ def test_old_context_without_the_new_attributes_reads_unchanged():
     "処方について照会した結果、変更なしです。",
 ])
 def test_prescription_inquiry_needs_a_prescription_inquiry_cue(body):
-    out = extract_llm._validate({"events": ["prescription_inquiry"]}, body)
+    out = extract_validation.validate({"events": ["prescription_inquiry"]}, body)
     assert out["events"] == ["prescription_inquiry"]
 
 
@@ -80,7 +82,7 @@ def test_prescription_inquiry_needs_a_prescription_inquiry_cue(body):
     "処方は変更なし。会議の日程を照会しました。",
 ])
 def test_a_non_prescription_inquiry_is_no_event(body):
-    out = extract_llm._validate({"summary": "合成の要約", "events": ["prescription_inquiry"]}, body)
+    out = extract_validation.validate({"summary": "合成の要約", "events": ["prescription_inquiry"]}, body)
     assert out["events"] == [] and out["_items_dropped"] == 1
 
 

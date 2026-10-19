@@ -1,6 +1,7 @@
 """Standalone init rejects --plugin-project-ids it cannot fully honour,
 exactly like the Hermes path, before any secret, .env or config write.
 Temporary HOME and stubs only; no keychain, Hermes or real config."""
+import lifecycle_io
 import json
 from types import SimpleNamespace
 
@@ -16,7 +17,7 @@ def _run(monkeypatch, tmp_path, ids):
     monkeypatch.setattr(mcs_setup.subprocess, "run",
                         lambda *a, **k: SimpleNamespace(returncode=0))
     stored = []
-    monkeypatch.setattr(mcs_setup, "_keychain_store",
+    monkeypatch.setattr(lifecycle_io, "store_keychain",
                         lambda *a: stored.append("keychain") or True)
     monkeypatch.setenv("MCS_SETUP_PASSWORD", "synthetic-password")
     monkeypatch.setattr(mcs_setup.sys, "argv",

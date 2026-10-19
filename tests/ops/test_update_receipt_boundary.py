@@ -23,7 +23,7 @@ def test_invalid_or_legacy_receipt_time(tmp_path, monkeypatch, bad_time, expecte
                        (cid, json.dumps(receipt), 'applied', at))
     db.close()
     monkeypatch.setattr(mcs_update, 'LEDGER', str(path))
-    candidates, consumed = mcs_update.scan_pending_approvals(mcs_update._default_state())
+    candidates, consumed = mcs_update.scan_pending_approvals(mcs_update.journal_store.default_state())
     assert [row['command_id'] for row in candidates] == ['valid']
     assert consumed == expected_consumed
 
@@ -50,7 +50,7 @@ def test_ambiguous_rollback_cannot_veto_valid_approval(tmp_path, monkeypatch, ki
                        [('valid', json.dumps(valid), 'applied', 1), ('bad', raw, 'applied', 2)])
     db.close()
     monkeypatch.setattr(mcs_update, 'LEDGER', str(path))
-    candidates, consumed = mcs_update.scan_pending_approvals(mcs_update._default_state())
+    candidates, consumed = mcs_update.scan_pending_approvals(mcs_update.journal_store.default_state())
     assert [row['command_id'] for row in candidates] == ['valid']
     assert consumed == []
 
@@ -92,7 +92,7 @@ def test_nontext_or_empty_receipt_identity_cannot_enter_execution_state(tmp_path
                    (cid, json.dumps(receipt), 'applied', 1))
     db.close()
     monkeypatch.setattr(mcs_update, 'LEDGER', str(path))
-    assert mcs_update.scan_pending_approvals(mcs_update._default_state()) == ([], [])
+    assert mcs_update.scan_pending_approvals(mcs_update.journal_store.default_state()) == ([], [])
 
 
 @pytest.mark.parametrize('base', [False, [], {}, '', 'not-a-sha'])
@@ -107,4 +107,4 @@ def test_invalid_explicit_reviewed_base_cannot_skip_head_binding(tmp_path, monke
                    ('bad', json.dumps(receipt), 'applied', 1))
     db.close()
     monkeypatch.setattr(mcs_update, 'LEDGER', str(path))
-    assert mcs_update.scan_pending_approvals(mcs_update._default_state()) == ([], [])
+    assert mcs_update.scan_pending_approvals(mcs_update.journal_store.default_state()) == ([], [])

@@ -8,7 +8,7 @@ import re
 import stat
 
 from mcs_runtime import mode
-from mcs_setup import _validate_notify, _validate_standalone_scope
+from mcs_config import validate_notify, validate_standalone_scope
 
 TOKENS = {"discord": ("DISCORD_BOT_TOKEN",), "slack": ("SLACK_BOT_TOKEN",)}
 SOCKET_TOKEN = "SLACK_APP_TOKEN"
@@ -35,8 +35,8 @@ def load(root):
     if selected != "standalone":
         raise ConfigError("runtime_mode_not_standalone")
     notify = cfg.get("notify", {})
-    if (not isinstance(notify, dict) or _validate_notify(notify)
-            or _validate_standalone_scope(cfg)):
+    if (not isinstance(notify, dict) or validate_notify(notify)
+            or validate_standalone_scope(cfg)):
         raise ConfigError("standalone_configuration_invalid")
     for key in ("notify_target", "notify_system_target"):
         target = cfg.get(key)
@@ -86,7 +86,7 @@ def connector_settings(root, transport, *, require_interactive=True, target=None
     root = Path(root).expanduser().resolve()
     cfg = load(root)
     notify = cfg.get("notify")
-    if not isinstance(notify, dict) or _validate_notify({**notify, "interactive": transport}):
+    if not isinstance(notify, dict) or validate_notify({**notify, "interactive": transport}):
         raise ValueError("standalone_scope_invalid")
     if require_interactive and notify.get("interactive") != transport:
         raise ValueError("standalone_interactive_not_selected")

@@ -1,6 +1,7 @@
 """Card attachment delivery, live views, health alerts and transport gate — synthetic temp ledger only."""
 from __future__ import annotations
 
+import notify_parts
 import hashlib
 import json
 import os
@@ -52,7 +53,7 @@ def test_earlier_native_content_fp_drifts_layout_once_and_keeps_ack_source(led, 
     assert _click(led, spec, "ack")["outcome"] == "applied"
     card = _card(led)
     card["transport"] = transport
-    content = notify_cards._card_content(led.db, card)
+    content = notify_cards.card_content(led.db, card)
     old_fp = payload_hash({"c": content["containers"], "f": content["footer"],
                            "s": content["shown"], "p": content["page"],
                            "a": content.get("actor_fp")})
@@ -68,7 +69,7 @@ def test_earlier_native_content_fp_drifts_layout_once_and_keeps_ack_source(led, 
     assert notify_render.current_ackers(led.db, card["card_id"], source_generation, content["shown"]) == acknowledged
     assert notify_cards._generation_drift(card, content) == {}
     changed = {**content, "preview_text": "別のプレビュー"}
-    assert notify_render._content_fp(changed) == card["content_fp"]
+    assert notify_render.content_fingerprint(changed) == card["content_fp"]
 
 
 @pytest.mark.parametrize("transport", ["lineworks", None])
@@ -80,7 +81,7 @@ def test_legacy_content_fp_migrates_only_when_delivery_presentation_changes(led,
         card.pop("transport")
     else:
         card["transport"] = transport
-    content = notify_cards._card_content(led.db, card)
+    content = notify_cards.card_content(led.db, card)
     assert "thread_layout" not in content
     assert "layout" not in content
     old_fp = payload_hash({"c": content["containers"], "f": content["footer"],
@@ -91,18 +92,18 @@ def test_legacy_content_fp_migrates_only_when_delivery_presentation_changes(led,
     assert drift == {}
     assert notify_cards._generation_drift(card, content) == {}
     changed = {**content, "preview_text": "別のプレビュー"}
-    assert notify_render._content_fp(changed) == card["content_fp"]
+    assert notify_render.content_fingerprint(changed) == card["content_fp"]
 
 
 def test_layout_one_card_keeps_legacy_face_and_new_cards_use_layout_two(led):
     _delivered_card(led)
     card = _card(led)
     assert card["layout"] == notify_cards.CARD_LAYOUT == 3
-    new = notify_cards._card_content(led.db, card)
-    legacy = notify_cards._card_content(led.db, {**card, "layout": 1})
+    new = notify_cards.card_content(led.db, card)
+    legacy = notify_cards.card_content(led.db, {**card, "layout": 1})
     assert " · 起点 " in legacy["containers"][0]["text"]
     assert " · 起点 " not in new["containers"][0]["text"]
-    assert notify_render._content_fp(legacy) != notify_render._content_fp(new)
+    assert notify_render.content_fingerprint(legacy) != notify_render.content_fingerprint(new)
 
 
 # 2 ---------------------------------------------------------------------
@@ -110,13 +111,13 @@ def test_layout_one_card_keeps_legacy_face_and_new_cards_use_layout_two(led):
 def test_pending_text_followup_owns_the_file_not_the_part(led, tmp_path):
     _seed_thread(led)
     aid = _attachment(led, tmp_path)
-    assert [a["attachment_id"] for a in notify_cards._plan_attachments(led.db, [100])] == [aid]
+    assert [a["attachment_id"] for a in notify_parts._plan_attachments(led.db, [100])] == [aid]
     led.outbox_add("attachment_followup", 1,
                    {"attachment_id": aid, "message_id": 100})
-    assert notify_cards._plan_attachments(led.db, [100]) == []
+    assert notify_parts._plan_attachments(led.db, [100]) == []
     led.db.execute("UPDATE notify_outbox SET state='suppressed' "
                    "WHERE kind='attachment_followup'")
-    assert [a["attachment_id"] for a in notify_cards._plan_attachments(led.db, [100])] == [aid]
+    assert [a["attachment_id"] for a in notify_parts._plan_attachments(led.db, [100])] == [aid]
 
 
 @pytest.mark.parametrize("state", ["pending", "delivered", "unknown"])
@@ -219,7 +220,7 @@ def test_extract_ref_skips_message_shown_from_canonical_projection(led):
 def test_long_attachment_name_keeps_its_extension(led, tmp_path):
     _seed_thread(led)
     _attachment(led, tmp_path, name="写" * 300 + ".png")
-    (entry,) = notify_cards._plan_attachments(led.db, [100])
+    (entry,) = notify_parts._plan_attachments(led.db, [100])
     assert len(entry["name"]) == 200 and entry["name"].endswith("….png")
 
 

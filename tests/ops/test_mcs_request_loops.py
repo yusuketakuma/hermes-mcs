@@ -1,4 +1,6 @@
 """Human adoption of current Loop candidates through request receipts."""
+import semantic_policy
+import semantic_store
 
 import json
 import sqlite3
@@ -10,17 +12,16 @@ import pytest
 import ledger
 import mcs_requests as requests
 import mcs_view
-import semantic
 import semantic_loops
 from semantic_testkit import _cfg, _message, _pending_fact, _seeded
 
 
 def _candidate_setup(tmp_path):
     db = _seeded(tmp_path)
-    cfg, _ = semantic.semantic_config(_cfg())
-    policy = semantic.policy_fingerprint(cfg)
+    cfg, _ = semantic_policy.semantic_config(_cfg())
+    policy = semantic_policy.policy_fingerprint(cfg)
     db.artifact_add("semantic_policy", policy)
-    bundle = semantic.thread_bundle(db, 1, 1, [1])
+    bundle = semantic_store.thread_bundle(db, 1, 1, [1])
     semantic_loops.update_loops(
         db, 1, bundle, {1: _pending_fact(bundle["members"][0])},
         None, cfg, time.monotonic() + 30)
@@ -102,8 +103,8 @@ def test_stale_loop_rejected_and_link_failure_rolls_back(tmp_path):
     assert db.db.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 0
 
     # Rebuild a current candidate, then deny only the link artifact INSERT.
-    cfg, _ = semantic.semantic_config(_cfg())
-    current = semantic.thread_bundle(db, 1, 1, [1])
+    cfg, _ = semantic_policy.semantic_config(_cfg())
+    current = semantic_store.thread_bundle(db, 1, 1, [1])
     semantic_loops.update_loops(
         db, 1, current, {1: _pending_fact(current["members"][0])},
         None, cfg, time.monotonic() + 30)

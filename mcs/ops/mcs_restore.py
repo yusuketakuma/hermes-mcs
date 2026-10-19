@@ -24,6 +24,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import mcs_backup  # noqa: E402
+from export_schema import finite_number  # noqa: E402
 from mcs_requests import (  # noqa: E402
     MAX_COMMAND_BYTES, _text, canonical, parse_command, payload_hash, valid_hash, valid_uuid,
 )
@@ -80,7 +81,7 @@ def _stamp(st):
 @contextmanager
 def _directory(destination: str, *, lock=False):
     path = Path(destination)
-    mcs_backup._private_directory(path)
+    mcs_backup.require_private_directory(path)
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     lock_fd = None
     try:
@@ -100,7 +101,7 @@ def _directory(destination: str, *, lock=False):
 
 
 def _same_directory(path, fd):
-    mcs_backup._private_directory(path)
+    mcs_backup.require_private_directory(path)
     if _identity(path.stat()) != _identity(os.fstat(fd)):
         raise RestoreConsentError("restore_destination_replaced")
 
@@ -148,13 +149,13 @@ def _binding(path, fd, source_sha256, *, static=True) -> Binding:
             or report["restore_pending"] is not True
             or report["attachment_payloads_included"] is not False
             or type(report["verified_at"]) not in (int, float)
-            or not mcs_backup._finite_number(report["verified_at"])
+            or not finite_number(report["verified_at"])
             or report["verified_at"] <= 0
             or not isinstance(marker, dict) or set(marker) != {
                 "v", "phase", "backup_path", "by", "at", "report_id"}
             or type(marker.get("v")) is not int or marker["v"] != 1
             or type(marker["at"]) not in (int, float)
-            or not mcs_backup._finite_number(marker["at"]) or marker["at"] <= 0
+            or not finite_number(marker["at"]) or marker["at"] <= 0
             or marker.get("by") != "mcs_backup_restore"
             or marker.get("phase") != "awaiting_consent"
             or marker.get("backup_path") is not None
@@ -170,7 +171,7 @@ def _binding(path, fd, source_sha256, *, static=True) -> Binding:
         _, digest, db_identity = _read(fd, "ledger.db", database=True)
         if digest != report["plain_sha256"]:
             raise RestoreConsentError("restore_database_hash_mismatch")
-        if mcs_backup._inventory(path / "ledger.db") != report["inventory"]:
+        if mcs_backup.inventory_snapshot(path / "ledger.db") != report["inventory"]:
             raise RestoreConsentError("restore_inventory_mismatch")
     else:
         st = os.stat("ledger.db", dir_fd=fd, follow_symlinks=False)

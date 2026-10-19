@@ -1,4 +1,6 @@
 """Audit loop counts use the view's source/policy guards and formal request status."""
+import semantic_policy
+import semantic_store
 import json
 import sqlite3
 import time
@@ -8,7 +10,6 @@ import pytest
 import ledger
 import mcs_stats
 import mcs_view
-import semantic
 import semantic_loops
 from semantic_testkit import BODY, _cfg, _message, _pending_fact
 from common_testkit import make_ledger
@@ -18,11 +19,11 @@ def test_open_resolution_closed_and_stale_are_distinct_and_read_only(tmp_path):
     db = make_ledger(tmp_path)
     try:
         db.save_messages([_message(mid, body=BODY + "残薬は5錠です。") for mid in range(1, 5)])
-        cfg, _ = semantic.semantic_config(_cfg())
-        policy = semantic.policy_fingerprint(cfg)
+        cfg, _ = semantic_policy.semantic_config(_cfg())
+        policy = semantic_policy.policy_fingerprint(cfg)
         db.artifact_add("semantic_policy", policy)
         for mid in range(1, 5):
-            bundle = semantic.thread_bundle(db, 1, mid, [mid])
+            bundle = semantic_store.thread_bundle(db, 1, mid, [mid])
             semantic_loops.update_loops(db, 1, bundle, {mid: _pending_fact(bundle["members"][0])},
                 None, cfg, time.monotonic() + 30)
             candidate = db.artifacts("loop_candidate", message_id=mid)[0]

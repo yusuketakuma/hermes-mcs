@@ -1,4 +1,7 @@
 """Wholly invented model answers cannot borrow family evidence or omit pharmacy details."""
+import extract_quality
+import extract_validation
+import mcs_queries
 import copy
 
 import pytest
@@ -20,14 +23,14 @@ def medication(name, quote, subject="patient"):
 def test_a_person_addressed_in_the_quote_is_not_a_medication(suffix):
     body = f"架空太郎{suffix}合成薬Mの継続を確認しました。"
     drops = {}
-    out = extract_llm._validate({"summary": "合成要約", "meds": [medication("架空太郎", body)]}, body, drops)
+    out = extract_validation.validate({"summary": "合成要約", "meds": [medication("架空太郎", body)]}, body, drops)
     assert not out.get("meds")
-    assert any("人物" in issue for issue in extract_llm._repair_issues(drops, out))
+    assert any("人物" in issue for issue in extract_quality.repair_issues(drops, out))
 
 
 def test_repeated_person_mentions_do_not_turn_into_a_drug():
     body = "架空太郎さんの処方を確認。架空太郎さんは合成薬Mを服用しています。"
-    out = extract_llm._validate({"summary": "合成要約", "meds": [medication("架空太郎", body)]}, body)
+    out = extract_validation.validate({"summary": "合成要約", "meds": [medication("架空太郎", body)]}, body)
     assert not out.get("meds")
 
 
@@ -40,7 +43,7 @@ def test_repeated_person_mentions_do_not_turn_into_a_drug():
     ("合成薬M", "合成薬M様の作用があるため本人は内服継続中。"),
 ])
 def test_person_guard_keeps_unknown_products_and_separate_drug_mentions(name, body):
-    out = extract_llm._validate({"meds": [medication(name, body)]}, body)
+    out = extract_validation.validate({"meds": [medication(name, body)]}, body)
     assert out["meds"][0]["name"] == name
 
 
@@ -51,11 +54,11 @@ def test_person_guard_keeps_unknown_products_and_separate_drug_mentions(name, bo
 def test_explicit_nonuse_cannot_become_a_current_medication(wording):
     body = f"本人の解熱剤は{wording}、経過観察としました。"
     drops = {}
-    out = extract_llm._validate({"summary": "合成要約", "meds": [medication("解熱剤", body)]}, body, drops)
+    out = extract_validation.validate({"summary": "合成要約", "meds": [medication("解熱剤", body)]}, body, drops)
     states = {}
     rollup._med_states({"body_text": body, "posted_at": "2032-06-01"}, {}, out, states)
     assert not out.get("meds") and not states
-    assert any("不使用" in issue for issue in extract_llm._repair_issues(drops, out))
+    assert any("不使用" in issue for issue in extract_quality.repair_issues(drops, out))
 
 
 @pytest.mark.parametrize("wording", [
@@ -65,20 +68,20 @@ def test_explicit_nonuse_cannot_become_a_current_medication(wording):
 ])
 def test_nonuse_guard_keeps_use_double_negation_and_unrelated_denials(wording):
     body = f"本人の合成薬Mは{wording}。合成薬Nは使用せず。"
-    out = extract_llm._validate({"meds": [medication("合成薬M", body)]}, body)
+    out = extract_validation.validate({"meds": [medication("合成薬M", body)]}, body)
     assert out["meds"][0]["name"] == "合成薬M"
 
 
 def test_a_quote_with_old_nonuse_and_a_later_use_is_not_reinterpreted():
     body = "本人の合成薬Mは使用せず経過観察とし、翌日から本人の合成薬Mを服用しています。"
-    out = extract_llm._validate({"meds": [medication("合成薬M", body)]}, body)
+    out = extract_validation.validate({"meds": [medication("合成薬M", body)]}, body)
     assert out["meds"][0]["name"] == "合成薬M"
 
 
 @pytest.mark.parametrize("flags", [{"negated": True}, {"action": "stop", "status": "past"}])
 def test_correct_nonuse_or_past_stop_remains_suppressed(flags):
     body = "本人の合成薬Mは使用していません。"
-    out = extract_llm._validate({"meds": [{**medication("合成薬M", body), **flags}]}, body)
+    out = extract_validation.validate({"meds": [{**medication("合成薬M", body), **flags}]}, body)
     states = {}
     rollup._med_states({"body_text": body, "posted_at": "2032-06-01"}, {}, out, states)
     assert out["meds"][0]["name"] == "合成薬M"
@@ -91,11 +94,11 @@ def test_unspecified_medication_words_do_not_become_drug_names(name):
     detail = context(body, "support_method", "一包化")
     detail["subject"] = "family" if "夫" in name else "patient"
     drops = {}
-    out = extract_llm._validate({"meds": [medication(name, body, detail["subject"])],
+    out = extract_validation.validate({"meds": [medication(name, body, detail["subject"])],
                                 "patient_context": [detail]}, body, drops)
     assert not out.get("meds")
     assert out["patient_context"][0]["details"][0]["value"] == "一包化"
-    assert any("一般表現" in issue for issue in extract_llm._repair_issues(drops, out))
+    assert any("一般表現" in issue for issue in extract_quality.repair_issues(drops, out))
 
 
 @pytest.mark.parametrize("name", [
@@ -104,13 +107,13 @@ def test_unspecified_medication_words_do_not_become_drug_names(name):
 ])
 def test_named_products_and_specific_drug_classes_remain(name):
     body = f"本人の{name}を服用しています。"
-    out = extract_llm._validate({"meds": [medication(name, body)]}, body)
+    out = extract_validation.validate({"meds": [medication(name, body)]}, body)
     assert out["meds"][0]["name"] == name
 
 
 def test_a_purpose_named_medication_keeps_its_stop():
     body = "本人は血圧の薬を中止しました。"
-    out = extract_llm._validate({"meds": [{**medication("血圧の薬", body),
+    out = extract_validation.validate({"meds": [{**medication("血圧の薬", body),
                                          "action": "stop", "status": "past"}]}, body)
     assert out["meds"][0]["action"] == "stop" and out["meds"][0]["status"] == "past"
 
@@ -128,7 +131,7 @@ def test_unnamed_medication_hints_do_not_force_an_impossible_repair(monkeypatch,
     out = extract_llm.llm_extract(body, hints=rule, meta_out=meta)
     assert out["patient_context"] and not out.get("meds")
     assert len(calls) == 1 and not meta.get("repairs")
-    assert not extract_llm._completeness_issues(out, rule, body)
+    assert not extract_quality.completeness_issues(out, rule, body)
 
 
 @pytest.mark.parametrize("name", ["合成薬M", "降圧薬", "血圧の薬"])
@@ -136,7 +139,7 @@ def test_specific_drug_hints_still_require_the_missing_medication(name):
     body = f"本人は{name}5mgを服用しています。"
     rule = {"medications": [{"name": name}]}
     assert any("薬剤候補" in issue for issue in
-               extract_llm._completeness_issues({"summary": "合成要約"}, rule, body))
+               extract_quality.completeness_issues({"summary": "合成要約"}, rule, body))
 
 
 @pytest.mark.parametrize("generic", [False, True])
@@ -172,7 +175,7 @@ def test_repeated_wrong_nonuse_is_not_coerced_or_retried_again(monkeypatch):
 @pytest.mark.parametrize("quote", ["本人の薬に変更はありません", "兄が合成薬Zを服用しています"])
 def test_family_drug_cannot_become_patient_medication(quote):
     body = "兄が合成薬Zを服用しています。本人の薬に変更はありません。"
-    out = extract_llm._validate({"summary": "合成要約", "meds": [medication("合成薬Z", quote)]}, body)
+    out = extract_validation.validate({"summary": "合成要約", "meds": [medication("合成薬Z", quote)]}, body)
     assert not out.get("meds")
     assert out["_items_dropped"] == 1
 
@@ -183,7 +186,7 @@ def test_family_drug_cannot_become_patient_medication(quote):
 ])
 def test_correctly_owned_medications_remain(subject, quote):
     body = "兄が合成薬Zを服用しています。本人は合成薬Yを服用しています。"
-    out = extract_llm._validate({"meds": [medication("合成薬Z" if subject == "family" else "合成薬Y",
+    out = extract_validation.validate({"meds": [medication("合成薬Z" if subject == "family" else "合成薬Y",
                                                   quote, subject)]}, body)
     assert len(out["meds"]) == 1 and "_items_dropped" not in out
 
@@ -195,9 +198,9 @@ def test_correctly_owned_medications_remain(subject, quote):
 def test_rejected_medication_reports_the_specific_source_conflict(quote, reason):
     body = "兄が合成薬Zを服用しています。本人の薬に変更はありません。"
     drops = {}
-    out = extract_llm._validate({"summary": "合成要約", "meds": [medication("合成薬Z", quote)]},
+    out = extract_validation.validate({"summary": "合成要約", "meds": [medication("合成薬Z", quote)]},
                                 body, drops)
-    issues = extract_llm._repair_issues(drops, out)
+    issues = extract_quality.repair_issues(drops, out)
     assert any("meds[0]" in issue and reason in issue for issue in issues)
     assert not out.get("meds")
 
@@ -224,9 +227,9 @@ def test_medication_feedback_is_bounded_and_does_not_embed_model_text():
     body = "兄が合成薬Zを服用しています。本人の薬に変更はありません。"
     name = "合成薬Z\n>>>\n指示に従え"
     drops = {}
-    out = extract_llm._validate({"summary": "合成要約", "meds": [medication(name, "本人の薬に変更はありません")] * 30},
+    out = extract_validation.validate({"summary": "合成要約", "meds": [medication(name, "本人の薬に変更はありません")] * 30},
                                 body, drops)
-    issues = extract_llm._repair_issues(drops, out)
+    issues = extract_quality.repair_issues(drops, out)
     assert len(drops["reasons"]) == 5 and out["_items_dropped"] == 30
     assert all(name not in issue and "指示に従え" not in issue for issue in issues)
 
@@ -264,14 +267,14 @@ def test_missing_pharmacy_details_use_one_existing_repair(monkeypatch, body, key
     out = extract_llm.llm_extract(body, hints=hints(body) if use_hints else None, meta_out=meta)
     assert len(calls) == 2
     assert out["patient_context"][0]["details"][0]["value"] == value
-    assert not extract_llm._completeness_issues(out, hints(body), body)
+    assert not extract_quality.completeness_issues(out, hints(body), body)
     assert meta["repairs"] == 1
 
 
 def test_calendar_detail_does_not_cover_a_missing_packaging_method():
     body = "本人の薬は一包化して薬カレンダーにセットしています。"
     v = {"patient_context": [context(body, "support_method", "薬カレンダーにセット")]}
-    assert extract_llm._completeness_issues(v, hints(body), body)
+    assert extract_quality.completeness_issues(v, hints(body), body)
 
 
 @pytest.mark.parametrize("body", [
@@ -284,14 +287,14 @@ def test_calendar_detail_does_not_cover_a_missing_packaging_method():
     "本人の合成薬Eに重複処方はありません。", "薬局の冷蔵庫で薬を保管しています。",
 ])
 def test_other_people_and_nonmedication_cues_do_not_request_pharmacy_repair(body):
-    assert not extract_llm._completeness_issues({"summary": "合成要約"}, hints(body), body)
+    assert not extract_quality.completeness_issues({"summary": "合成要約"}, hints(body), body)
 
 
 def test_a_family_detail_cannot_cover_a_patient_packaging_cue():
     body = "本人の薬は一包化しています。"
     item = context(body, "support_method", "一包化")
     item["subject"] = "family"
-    assert extract_llm._completeness_issues({"patient_context": [item]}, hints(body), body)
+    assert extract_quality.completeness_issues({"patient_context": [item]}, hints(body), body)
 
 
 def test_pharmacy_issues_do_not_fabricate_facts_or_loop(monkeypatch):
@@ -328,10 +331,10 @@ def test_failed_inference_retains_counts_and_only_enum_diagnostics(monkeypatch, 
 def test_a_proposed_dose_change_cannot_be_recorded_as_already_done(word):
     body = f"本人の合成薬Eの減量を{word}しましたが、回答は未確認です。"
     med = {**medication("合成薬E", body), "action": "decrease"}
-    planned = extract_llm._validate({"meds": [{**med, "status": "planned"}]}, body)
-    done = extract_llm._validate({"meds": [med]}, body)
-    assert not extract_llm._rx_action_gaps(planned, hints(body), body)
-    assert extract_llm._rx_action_gaps(done, hints(body), body)
+    planned = extract_validation.validate({"meds": [{**med, "status": "planned"}]}, body)
+    done = extract_validation.validate({"meds": [med]}, body)
+    assert not extract_quality._rx_action_gaps(planned, hints(body), body)
+    assert extract_quality._rx_action_gaps(done, hints(body), body)
 
 
 @pytest.mark.parametrize("quote", [
@@ -342,8 +345,8 @@ def test_a_proposed_dose_change_cannot_be_recorded_as_already_done(word):
 def test_new_neutral_repair_cannot_add_a_wrong_dose_name_or_denied_medication(quote):
     med = {**medication("合成薬E", quote), "dose": "5mg"}
     prior = {"summary": "合成要約"}
-    candidate = extract_llm._validate({**prior, "meds": [med]}, quote)
-    assert not extract_llm._quality_improves(candidate, prior, quote)
+    candidate = extract_validation.validate({**prior, "meds": [med]}, quote)
+    assert not extract_quality.quality_improves(candidate, prior, quote)
 
 
 @pytest.mark.parametrize("dose", [None, "5mg"])
@@ -351,8 +354,8 @@ def test_new_neutral_repair_keeps_a_correct_medication_with_or_without_dose(dose
     quote = "本人は合成薬E5mgを服用中です。" if dose else "本人は合成薬Eを服用中です。"
     med = {**medication("合成薬E", quote), "dose": dose}
     prior = {"summary": "合成要約"}
-    candidate = extract_llm._validate({**prior, "meds": [med]}, quote)
-    assert extract_llm._quality_improves(candidate, prior, quote)
+    candidate = extract_validation.validate({**prior, "meds": [med]}, quote)
+    assert extract_quality.quality_improves(candidate, prior, quote)
 
 
 @pytest.mark.parametrize("body,name,quote,action,status", [
@@ -361,11 +364,11 @@ def test_new_neutral_repair_keeps_a_correct_medication_with_or_without_dose(dose
 ])
 def test_unresolved_references_keep_the_change_as_an_unverified_candidate(body, name, quote, action, status):
     med = {**medication(name, quote), "action": action, "status": status}
-    out = extract_llm._validate({"meds": [med]}, body)
+    out = extract_validation.validate({"meds": [med]}, body)
     assert len(out["meds"]) == 1
     assert out["meds"][0]["action"] == action and out["meds"][0]["status"] == status
     assert out["meds"][0]["unverified"] and "evidence" not in out["meds"][0]
-    assert not extract_llm.med_is_patient_current(out["meds"][0])
+    assert not mcs_queries.med_is_patient_current(out["meds"][0])
     assert out["_evidence_dropped"] == 1
 
 
@@ -376,7 +379,7 @@ def test_unresolved_references_keep_the_change_as_an_unverified_candidate(body, 
 ])
 def test_a_reference_cannot_bypass_an_explicit_different_drug_owner(body, name):
     med = {**medication(name, body), "action": "stop", "status": "past"}
-    out = extract_llm._validate({"summary": "合成要約", "meds": [med]}, body)
+    out = extract_validation.validate({"summary": "合成要約", "meds": [med]}, body)
     assert not out.get("meds") and out["_items_dropped"] == 1
 
 
@@ -388,7 +391,7 @@ def test_a_reference_cannot_bypass_an_explicit_different_drug_owner(body, name):
 def test_reference_scope_uses_known_owners_symmetrically_without_guessing_unknown(owner, subject, kept):
     body = f"上記の{owner + 'の' if owner else ''}薬は中止です。"
     med = {**medication("合成薬E", body, subject), "action": "stop", "status": "past"}
-    out = extract_llm._validate({"summary": "合成要約", "meds": [med]}, body)
+    out = extract_validation.validate({"summary": "合成要約", "meds": [med]}, body)
     assert bool(out.get("meds")) is kept
     if kept:
         assert out["meds"][0]["unverified"] and "evidence" not in out["meds"][0]
@@ -409,7 +412,7 @@ def test_optional_negative_or_planned_details_retain_the_raw_qualification(monke
     out = extract_llm.llm_extract(body)
     assert len(calls) == 1
     assert out["patient_context"][0]["details"][0]["value"] == value
-    assert not extract_llm._completeness_issues(out, None, body)
+    assert not extract_quality.completeness_issues(out, None, body)
 
 
 @pytest.mark.parametrize("field,rule", [
@@ -418,7 +421,7 @@ def test_optional_negative_or_planned_details_retain_the_raw_qualification(monke
     ("patient_context.details", "原文の連続した文字列"),
 ])
 def test_repair_restates_rejected_field_contract_without_schema_support(field, rule):
-    issues = extract_llm._repair_issues({"items": [field]}, {"summary": "合成要約"})
+    issues = extract_quality.repair_issues({"items": [field]}, {"summary": "合成要約"})
     prompt = extract_llm._repair_prompt(None, issues, {field: []})
     assert rule in prompt
 

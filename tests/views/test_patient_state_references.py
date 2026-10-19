@@ -1,4 +1,5 @@
 """Readers keep target values and display only still-bound synthetic antecedents."""
+import extract_validation
 import json
 
 import pytest
@@ -27,7 +28,7 @@ def seed(led):
                           enabled=True, base_context=None, version=llm.EXTRACT_VERSION)
     item = context(body, key="storage_place", values=("前と同じ場所",))
     item["details"][-1]["refers_to"] = "S1"
-    doc = llm._validate({"patient_context": [item]}, body, references=frame["refs"])
+    doc = extract_validation.validate({"patient_context": [item]}, body, references=frame["refs"])
     r = {**row, "_frame": frame, "_context": frame["text"], "_target": ("", llm.MODEL)}
     assert llm._replace_current(led, r, json.dumps(doc), ctx=True,
                               integrity={"validation": {"items_dropped": 0, "evidence_dropped": 0}})

@@ -8,6 +8,7 @@ extracted medication fact and stores each successful answer as an existing
 fact/dimension.
 """
 from __future__ import annotations
+import semantic_policy
 
 import json
 import time
@@ -35,8 +36,7 @@ def _policy_fingerprint(scfg: dict) -> str | None:
     supplied = scfg.get("policy_fingerprint")
     if isinstance(supplied, str) and supplied:
         return supplied
-    import semantic
-    return semantic.policy_fingerprint(scfg)
+    return semantic_policy.policy_fingerprint(scfg)
 
 
 def _cached_detail(ledger, project_id, target_id, source_fp, policy_fp,

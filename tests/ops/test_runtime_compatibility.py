@@ -1,4 +1,7 @@
 """Selected runtime metadata and SQLite checks using only synthetic resources."""
+import mcs_runtime
+import lifecycle_io
+import mcs_config
 import json
 import hashlib
 import os
@@ -29,7 +32,7 @@ def _facts(python="3.14.8", sqlite="3.51.3"):
     ((3, 52, 0), True), ((3, 53, 4), True),
 ])
 def test_supported_wal_versions(version, safe):
-    assert mcs_setup.sqlite_wal_safe(version) is safe
+    assert mcs_runtime.sqlite_wal_safe(version) is safe
 
 
 @pytest.mark.parametrize(("python", "sqlite", "recovery", "supported"), [
@@ -45,7 +48,7 @@ def test_supported_wal_versions(version, safe):
 ])
 def test_runtime_compatibility_requires_python314_for_both_roles(
         python, sqlite, recovery, supported):
-    assert (mcs_setup._runtime_problem(_facts(python, sqlite), recovery=recovery)
+    assert (mcs_runtime.runtime_problem(_facts(python, sqlite), recovery=recovery)
             is None) is supported
 
 
@@ -94,7 +97,7 @@ def test_unknown_metadata_never_means_healthy(executable, monkeypatch, result):
     monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: result)
     facts = mcs_setup._runtime_probe(executable)
     assert facts is None
-    assert mcs_setup._runtime_problem(facts) is not None
+    assert mcs_runtime.runtime_problem(facts) is not None
 
 
 @pytest.mark.parametrize(("mode", "sqlite", "expected"), [
@@ -141,7 +144,7 @@ def test_recovery_probes_actual_deployed_program(monkeypatch, tmp_path, use_prog
                         lambda exe: calls.append(exe) or _facts("3.9.6", "3.51.0"))
     facts = mcs_setup._recovery_runtime()
     assert calls == [plist.get("Program", plist["ProgramArguments"][0])]
-    assert mcs_setup._runtime_problem(facts, recovery=True) is not None
+    assert mcs_runtime.runtime_problem(facts, recovery=True) is not None
 
 
 def test_doctor_blocks_unsafe_recovery_without_touching_services(
@@ -276,7 +279,7 @@ def test_updater_precheck_probes_actual_runtimes_not_parent(
     errors = updater.precheck_local(cfg)
     assert bool(errors) is blocked
     if blocked:
-        assert errors == [role + "_runtime: " + mcs_setup._runtime_problem(
+        assert errors == [role + "_runtime: " + mcs_runtime.runtime_problem(
             facts, recovery=role == "recovery")]
     assert probes == [selected, recovery] and sys.executable not in probes
     assert _tree(tmp_path) == before
@@ -295,13 +298,15 @@ def test_apply_runtime_gate_precedes_lock_journal_and_interrupted_recovery(
                         facts if exe == (selected if role == "selected" else recovery)
                         else _facts())
     if interrupted:
-        state = updater._default_state()
+        state = updater.journal_store.default_state()
         state["stages"] = [{"stage": "local_checks", "at": 1.0}]
-        updater.save_state(state)
-    for name in ("acquire_update_lock", "journal", "save_state", "_git",
+        updater.journal_store.save_state(updater.STATE_PATH, state)
+    for name in ("acquire_update_lock", "journal", "_git",
                  "_enqueue_notice", "quiesce", "recover_interrupted"):
         monkeypatch.setattr(updater, name,
                             lambda *a, **k: pytest.fail("runtime gate allowed mutation"))
+    monkeypatch.setattr(updater.journal_store, "save_state",
+                        lambda *a, **k: pytest.fail("runtime gate allowed journal write"))
     before = _tree(tmp_path)
     assert updater.apply("v1.2.0", "a" * 40, None) == 1
     assert _tree(tmp_path) == before
@@ -318,7 +323,7 @@ def test_installer_explicit_template_probe_never_uses_deployed_or_parent_python(
     probes = []
     monkeypatch.setattr(mcs_setup, "_runtime_probe",
                         lambda exe: probes.append(exe) or _facts("3.14.8", "3.51.3"))
-    assert mcs_setup._runtime_problem(mcs_setup._recovery_runtime(template), recovery=True) is None
+    assert mcs_runtime.runtime_problem(mcs_setup._recovery_runtime(template), recovery=True) is None
     assert probes == ["/synthetic/template-python"]
 
 
@@ -360,10 +365,10 @@ def test_recovery_rejects_relative_checkout_and_update_tree_paths(monkeypatch, t
     alias.symlink_to(repo / "python")
     monkeypatch.setattr(mcs_setup, "REPO_ROOT", repo)
     for path in ("relative", str(repo / "python"), str(alias), str(update / "python")):
-        assert mcs_setup._recovery_python_problem(path, update)
+        assert mcs_config.recovery_python_problem(path, update, checkout=repo)
     monkeypatch.setattr(mcs_setup.os, "access", lambda path, mode: path == "/usr/local/bin/python3.14")
     assert mcs_setup._recovery_python({}) == "/usr/local/bin/python3.14"
-    assert mcs_setup._recovery_python_problem(str(tmp_path / "independent-python"), update) is None
+    assert mcs_config.recovery_python_problem(str(tmp_path / "independent-python"), update, checkout=repo) is None
 
 
 def _owned_recovery(monkeypatch, tmp_path):
@@ -472,6 +477,8 @@ def test_doctor_and_updater_do_not_mask_deployed_drift(
     # owned idle drift is repaired after merge (supported update paths);
     # a watchdog services cannot prove it owns still blocks before writes
     path.chmod(0o644)
+    monkeypatch.setattr(updater.journal_store, "save_state",
+                        lambda *a, **k: pytest.fail("runtime gate allowed journal write"))
     before = _tree(tmp_path)
     assert updater.apply("v1.2.0", "a" * 40, None) == 1
     assert _tree(tmp_path) == before
@@ -517,6 +524,8 @@ def test_invalid_render_config_is_reported_not_raised(updater, monkeypatch, tmp_
     assert any(e.startswith("config: ") and e.endswith("_config_invalid") for e in errors)
     errors, _ = mcs_setup._script_drift()
     assert errors and errors[0].startswith("設定に問題があります: ")
+    monkeypatch.setattr(updater.journal_store, "save_state",
+                        lambda *a, **k: pytest.fail("runtime gate allowed journal write"))
     before = _tree(tmp_path)
     assert updater.apply("v1.2.0", "a" * 40, None) == 1
     assert "変更はありません" in capsys.readouterr().out
@@ -531,7 +540,7 @@ def test_bad_recovery_init_stops_before_keychain_and_env(monkeypatch, tmp_path, 
     from test_mcs_setup import _init_env
     _init_env(monkeypatch, tmp_path, {"mcs_login_id": "synthetic", "notify_target": "local"})
     monkeypatch.setenv("MCS_SETUP_PASSWORD", "synthetic-password")
-    monkeypatch.setattr(mcs_setup, "_keychain_store",
+    monkeypatch.setattr(lifecycle_io, "store_keychain",
                         lambda *a, **kw: pytest.fail("secret written before validation"))
     monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: _facts(sqlite="3.51.0"))
     monkeypatch.setattr(sys, "argv", ["mcs_setup", "init", "--yes",

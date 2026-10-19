@@ -3,19 +3,19 @@ must not burn job attempts, which never reset, so cuts spread over a long
 deep import used to fail a live patient's history job for good. Cuts are
 bounded by consecutive no-progress ticks (stalls) instead, so a window that
 never completes still surfaces 'failed'."""
+import mcs_contract
 
 import json
 import time
 
 import job_ops
-import mcs_adapter
 from ingest_testkit import _ledger, _message
 
 _RUNS = 9  # one past ledger.job_retry's max_attempts=8
 
 
 def _cut():
-    return mcs_adapter.MCSError("deadline_exceeded", retryable=True)
+    return mcs_contract.MCSError("deadline_exceeded", retryable=True)
 
 
 class _HistoryAdapter:
@@ -31,11 +31,11 @@ class _HistoryAdapter:
         msgs = [_message(mid=1000 + start_page, project_id=pid)] \
             if self.pages else []
         if not self.cut:
-            return mcs_adapter.MessageBatch(msgs, pages=self.pages,
+            return mcs_contract.MessageBatch(msgs, pages=self.pages,
                                             reached=False)
         while time.monotonic() < self.deadline:
             time.sleep(0.005)
-        return mcs_adapter.MessageBatch(msgs, pages=self.pages,
+        return mcs_contract.MessageBatch(msgs, pages=self.pages,
                                         reached=False, error=_cut())
 
 
@@ -102,7 +102,7 @@ class _ThreadAdapter:
         self.pages = pages
 
     def fetch_thread_window(self, pid, parent_id, start_page=1):
-        return mcs_adapter.MessageBatch([], pages=self.pages,
+        return mcs_contract.MessageBatch([], pages=self.pages,
                                         reached=False, error=_cut())
 
 
@@ -150,7 +150,7 @@ def test_reconcile_skips_uncertifiable_window_after_stall_limit(tmp_path):
     class Adapter:
         def fetch_history(self, pid, since, max_pages=1, start_page=None):
             calls.append(start_page)
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 [_message(mid=50, state="snippet")], pages=2, reached=False)
 
     result = {"errors": []}
@@ -186,7 +186,7 @@ def test_waiting_replies_defer_backs_off(tmp_path):
 
     class Adapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            return mcs_adapter.MessageBatch([], pages=1, reached=True)
+            return mcs_contract.MessageBatch([], pages=1, reached=True)
 
     job_ops.run_history_jobs(Adapter(), db, {"errors": []},
                              time.monotonic() + 100)
@@ -209,7 +209,7 @@ class _SlowAdapter:
         time.sleep(0.05)
         m = _message(mid=5, project_id=pid)
         m.reply_count = 3
-        return mcs_adapter.MessageBatch([m], pages=1, reached=False)
+        return mcs_contract.MessageBatch([m], pages=1, reached=False)
 
     def fetch_thread(self, *a, **k):
         _SlowAdapter.threads += 1

@@ -3,12 +3,12 @@ transient errors and run-deadline cuts are spread across completed passes.
 Its attempt budget resets per pass and deadline cuts consume none, so the
 row never fails and seed_reconcile never replaces page/passes/last_pass_at.
 Fully synthetic."""
+import mcs_contract
 
 import json
 import time
 
 import job_ops
-import mcs_adapter
 from ingest_testkit import _ledger, _message
 
 
@@ -19,10 +19,10 @@ class _Adapter:
 
     def fetch_history(self, pid, since, max_pages=2, start_page=1):
         if self.fail:
-            return mcs_adapter.MessageBatch(
+            return mcs_contract.MessageBatch(
                 [], pages=0, reached=False,
-                error=mcs_adapter.MCSError(self.kind, retryable=True))
-        return mcs_adapter.MessageBatch(
+                error=mcs_contract.MCSError(self.kind, retryable=True))
+        return mcs_contract.MessageBatch(
             [_message(mid=900 + start_page, project_id=pid)],
             pages=1, reached=True)
 

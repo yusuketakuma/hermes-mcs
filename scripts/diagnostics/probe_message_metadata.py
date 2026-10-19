@@ -9,8 +9,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 import _mcs_path  # noqa: F401
-from mcs_adapter import (MCSAdapter, MCSError, SchemaError, UNREAD_SCREEN_CAP, _has_next,
-                         _message_metadata, _valid_id, walk_reaction_actors)
+from mcs_adapter import MCSAdapter, UNREAD_SCREEN_CAP, walk_reaction_actors
+from mcs_contract import MCSError, SchemaError, valid_id as _valid_id
+from mcs_payload import page_has_next as _has_next, message_metadata as _message_metadata
 from mcs_util import CACHE
 
 

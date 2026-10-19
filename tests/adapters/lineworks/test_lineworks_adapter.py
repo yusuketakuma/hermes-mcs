@@ -1,4 +1,5 @@
 """Synthetic LINE WORKS callback, human approval and durable delivery regressions."""
+import notify_parts
 import asyncio
 import copy
 import fcntl
@@ -366,7 +367,7 @@ def _display_overflow_spec():
     parts = spec["parts"]
     parts["containers"][1]["text"] = "\n".join(["合成行" + "x" * 95] * 16)
     head, rest = lineworks_card_split(display_text(parts))
-    tails = notify_cards._split_body_chunks(rest)
+    tails = notify_parts.split_body_chunks(rest)
     _seal(spec, tails, [f"display#{i}" for i in range(1, len(tails) + 1)])
     parts["manifest"].append(_THREAD_PART)
     return spec, head, tails

@@ -1,4 +1,6 @@
 """Old canonical rollup values cannot bypass the current projection gate."""
+import semantic_drain
+import semantic_policy
 import json
 import time
 
@@ -7,7 +9,6 @@ import pytest
 import brain_export
 import notify_views
 import rollup
-import semantic
 import semantic_projection as projection
 import semantic_v4 as v4
 from semantic_testkit import _PassJev, _canonical_cfg, _llm_v2, _seeded_two
@@ -22,7 +23,7 @@ def _published(tmp_path):
             fact.update(epistemic="reported", quantity="5mg" if "アムロジピン" in fact["statement"] else "500mg")
         return json.dumps(result, ensure_ascii=False)
 
-    out = semantic.run_due(db, _canonical_cfg(), {"errors": []}, time.monotonic() + 480,
+    out = semantic_drain.run_due(db, _canonical_cfg(), {"errors": []}, time.monotonic() + 480,
                            jev_client=_PassJev(), llm_fn=model)
     assert out["done"] == 1
     rollup.rebuild(db, 1)
@@ -79,7 +80,7 @@ def test_old_projection_cache_is_safe_for_readers_and_recovers_once(tmp_path, mo
         assert "50mg" not in exported
         before = db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind IN "
                                "('canonical_projection','semantic_facts_v4')").fetchone()[0]
-        assert v4.reproject_stale(db, semantic.semantic_config(_canonical_cfg())[0])["reprojected"] == 4
+        assert v4.reproject_stale(db, semantic_policy.semantic_config(_canonical_cfg())[0])["reprojected"] == 4
         assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind IN "
                              "('canonical_projection','semantic_facts_v4')").fetchone()[0] == before + 4
         rollup.rebuild(db, 1)

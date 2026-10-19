@@ -1,6 +1,7 @@
 """Failures that used to leave health 'ok': an invalid semantic block,
 signal detector errors, a lost failure alert, and card / semantic /
 extraction work that stopped moving. Temp ledger and stubs only."""
+import health_report
 import time
 from types import SimpleNamespace
 
@@ -69,18 +70,18 @@ SLACK = {"notify": {"interactive": "slack"}}
 def test_card_delivery_stall(db, cfg, transport, age, stalled):
     _render(db, transport, time.time() - age)
     _render(db, transport, OLD - 86400, state="delivered")
-    reasons = run_check._backlog_stalls(db, cfg, time.time())
+    reasons = health_report.backlog_stalls(db.db, cfg, time.time())
     assert ("card_delivery_stalled" in reasons) is stalled
 
 
 def test_semantic_stall_needs_old_due_job_and_no_progress(db):
     on = {"semantic": {"mode": "shadow", "project_ids": []}}
     _sem_job(db, 1, "pending", OLD)
-    assert run_check._backlog_stalls(db, {}, time.time()) == []   # off
-    assert run_check._backlog_stalls(db, on, time.time()) == [
+    assert health_report.backlog_stalls(db.db, {}, time.time()) == []   # off
+    assert health_report.backlog_stalls(db.db, on, time.time()) == [
         "semantic_backlog_stalled"]
     _sem_job(db, 2, "done", time.time() - 60)                     # moving
-    assert run_check._backlog_stalls(db, on, time.time()) == []
+    assert health_report.backlog_stalls(db.db, on, time.time()) == []
 
 
 def test_jev_block_is_named_instead_of_a_generic_stall(db):
@@ -95,18 +96,18 @@ def test_jev_block_is_named_instead_of_a_generic_stall(db):
     db.db.commit()
     # the block is named — and a job nobody touched for 6h still means
     # the drainer itself stopped (a waiting drainer keeps touching it)
-    assert run_check._backlog_stalls(db, on, time.time()) == [
+    assert health_report.backlog_stalls(db.db, on, time.time()) == [
         "semantic_jev_payment_required", "semantic_backlog_stalled"]
     db.db.execute("UPDATE fetch_jobs SET updated_at=?", (time.time() - 60,))
     db.db.commit()
-    assert run_check._backlog_stalls(db, on, time.time()) == ["semantic_jev_payment_required"]
+    assert health_report.backlog_stalls(db.db, on, time.time()) == ["semantic_jev_payment_required"]
     # a later successful assessment clears the block and the stall rule returns
     db.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
         "VALUES('semantic_assess',1,1,'{}','{\"technical_status\":\"ok\"}',?)", (time.time(),))
     db.db.execute("UPDATE fetch_jobs SET updated_at=?", (OLD,))
     db.db.commit()
-    assert run_check._backlog_stalls(db, on, time.time()) == ["semantic_backlog_stalled"]
+    assert health_report.backlog_stalls(db.db, on, time.time()) == ["semantic_backlog_stalled"]
 
 
 def test_stall_check_failure_stays_a_plain_reason_code(db, monkeypatch):
@@ -116,9 +117,9 @@ def test_stall_check_failure_stays_a_plain_reason_code(db, monkeypatch):
 
     def boom(*_args, **_kw):
         raise RuntimeError("synthetic")
-    monkeypatch.setattr(run_check, "_backlog_stalls", boom)
+    monkeypatch.setattr(health_report, 'backlog_stalls', boom)
     result = {"errors": [], "notify": {}}
-    health = run_check._health(db, result, "ok", cfg=SLACK)
+    health = health_report.build_health(db.db, result, "ok", cfg=SLACK)
     assert "stall_check_failed" in health["state_reasons"]
     assert all(health_watch._is_code(r) for r in health["state_reasons"])
     assert "stall_check_failed: RuntimeError" in result["errors"]
@@ -127,20 +128,20 @@ def test_stall_check_failure_stays_a_plain_reason_code(db, monkeypatch):
 
 def test_extract_stall_needs_unstarted_old_message_and_no_progress(db):
     _store(db, 1, time.time())
-    assert run_check._backlog_stalls(db, {}, time.time()) == []   # fresh
+    assert health_report.backlog_stalls(db.db, {}, time.time()) == []   # fresh
     _store(db, 2, OLD)
-    assert run_check._backlog_stalls(db, {}, time.time()) == [
+    assert health_report.backlog_stalls(db.db, {}, time.time()) == [
         "extract_backlog_stalled"]
     canonical = {"semantic": {"fact_source": "canonical"}}
     # an errored config is reported as a stage error, not a stall
-    assert run_check._backlog_stalls(db, canonical, time.time()) == []
+    assert health_report.backlog_stalls(db.db, canonical, time.time()) == []
     _artifact(db, 1, time.time() - 60)                            # moving
-    assert run_check._backlog_stalls(db, {}, time.time()) == []
+    assert health_report.backlog_stalls(db.db, {}, time.time()) == []
 
 
 def test_stall_degrades_overall_health(db):
     _render(db, "slack", time.time() - 3600)
-    health = run_check._health(db, {"errors": [], "notify": {}}, "ok",
+    health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok",
                                cfg=SLACK)
     assert health["overall"] == "degraded"
     assert "card_delivery_stalled" in health["state_reasons"]
@@ -183,5 +184,5 @@ def test_large_backlog_with_recent_delivery_is_not_stalled(db):
     for _ in range(300):
         _render(db, 'slack', now - 7200)
     _render(db, 'slack', now - 60, state='delivered')
-    assert 'card_delivery_stalled' not in run_check._backlog_stalls(db, SLACK, now)
-    assert 'card_delivery_stalled' in run_check._backlog_stalls(db, SLACK, now + 1900)
+    assert 'card_delivery_stalled' not in health_report.backlog_stalls(db.db, SLACK, now)
+    assert 'card_delivery_stalled' in health_report.backlog_stalls(db.db, SLACK, now + 1900)

@@ -1,4 +1,5 @@
 """Semantic ingestion revisions preserve coverage without reviving unchanged jobs."""
+import mcs_contract
 
 import hashlib
 import json
@@ -8,12 +9,11 @@ from types import SimpleNamespace
 import pytest
 
 import ledger
-import mcs_adapter
 
 
 def _message(mid=1, *, sender_name="old", body="同じ本文",
              body_state="full", unread=False, parent_id=None):
-    return mcs_adapter.Message(
+    return mcs_contract.Message(
         message_id=mid, project_id=1, parent_id=parent_id,
         sender_id=7, sender_name=sender_name, sender_type="user",
         profession="看護師", organization="病棟A",

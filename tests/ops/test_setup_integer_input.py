@@ -1,4 +1,5 @@
 """Oversized synthetic decimal IDs are validation errors, never CLI crashes."""
+import mcs_config
 import mcs_setup
 
 
@@ -7,7 +8,7 @@ def test_oversized_project_id_is_rejected_without_exception():
 
 
 def test_oversized_discord_chat_id_is_reported_as_invalid():
-    errors = mcs_setup._validate_standalone_scope({
+    errors = mcs_config.validate_standalone_scope({
         "notify_target": "discord:123", "notify": {"discord": {
             "allowed_user_ids": ["synthetic-user"], "project_ids": [1],
             "allowed_chat_ids": ["9" * 5000]}}})

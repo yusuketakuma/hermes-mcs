@@ -1,4 +1,5 @@
 """A/B uses the real formatter and scores a reference on the same grounded unit."""
+import extract_validation
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +23,7 @@ def output(case, *, refs=True):
         detail["refers_to"] = "S1"
     raw = {"patient_context": [{"category": label["category"], "text": case["body"],
                                "evidence": case["body"], "subject": "patient", "details": [detail]}]}
-    return llm._validate(raw, case["body"], ctx=True, references=bench._case_context(case, "on")[1])
+    return extract_validation.validate(raw, case["body"], ctx=True, references=bench._case_context(case, "on")[1])
 
 
 def test_all_four_reference_cases_and_two_contamination_cases_are_fictional_and_well_formed():
@@ -65,7 +66,7 @@ def test_context_only_value_and_other_person_cannot_become_a_target_reference(in
     raw = {"patient_context": [{"category": label["category"], "text": case["body"],
         "evidence": case["body"], "subject": "patient", "details": [{"key": label["detail_key"],
         "value": label["value_contains"], "evidence": case["body"], "refers_to": "S1"}]}]}
-    out = llm._validate(raw, case["body"], references=mapping)
+    out = extract_validation.validate(raw, case["body"], references=mapping)
     assert all("refers_to" not in detail for item in out.get("patient_context", [])
                for detail in item.get("details", []))
     assert out["_items_dropped"] >= 1

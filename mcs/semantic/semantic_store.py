@@ -4,6 +4,8 @@ Thread bundling, fingerprints, current-artifact lookup, and the
 durable Jev daily-usage counter. Policy constants come from
 semantic_policy (a leaf)."""
 from __future__ import annotations
+import semantic_llm
+import semantic_transport
 
 import math
 import time
@@ -13,8 +15,6 @@ from mcs_util import loads_dict
 import semantic_jev as jev
 from semantic_policy import (KIND_ASSESS, KIND_USAGE,
                              POLICY_VERSION, SCHEMA_VERSION)
-
-
 
 
 def _member(row) -> dict:
@@ -43,11 +43,9 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
     ``local_model`` defaults to the host-configured local model; a
     snapshot reader passes the one resolved from its supplied config
     so it never opens host configuration implicitly."""
-    import semantic
-    import semantic_llm
     from clinical_chunking import PLAN_VERSION
     if local_model is None:
-        local_model = semantic.llm_model()
+        local_model = semantic_transport.llm_model()
     return payload_hash({
         # Target roles are selection metadata; artifacts are selected per
         # target ID. Everything used to interpret the source is versioned.
@@ -55,8 +53,8 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
                            for m in members), key=lambda x: x["message_id"]),
         "model": model,
         "local_model": local_model,
-        "prompts": [semantic._FACT_PROMPT, semantic._SUMMARY_PROMPT,
-                    semantic._REPAIR_SUFFIX, semantic_llm._FACT_V2_PROMPT,
+        "prompts": [semantic_llm._FACT_PROMPT, semantic_llm._SUMMARY_PROMPT,
+                    semantic_llm._REPAIR_SUFFIX, semantic_llm._FACT_V2_PROMPT,
                     semantic_llm._FACT_V2_REPAIR_SUFFIX],
         "registry": jev.REGISTRY_VERSION,
         "schema": SCHEMA_VERSION,
@@ -226,8 +224,7 @@ def invalidate_projections(ledger, scfg: dict) -> int:
             if key not in bundles:
                 if local_model is None:
                     # one config read per scan, not one per thread
-                    import semantic
-                    local_model = semantic.llm_model()
+                    local_model = semantic_transport.llm_model()
                 bundle = thread_bundle(ledger, *key,
                                        local_model=local_model)
                 bundles[key] = bundle["source_fingerprint"] if bundle else None

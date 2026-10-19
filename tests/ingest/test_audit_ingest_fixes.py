@@ -1,4 +1,5 @@
 """Synthetic regressions for the ingest audit fixes (temp DB + stubs only)."""
+import mcs_contract
 import json
 import time
 import uuid
@@ -8,7 +9,6 @@ import pytest
 
 import job_ops
 import ledger
-import mcs_adapter
 import mcs_requests
 import run_check
 from ingest_testkit import _ledger, _message, _unread_patient
@@ -17,11 +17,11 @@ from mcs_queries import paused
 
 def _strict_adapter(latest_id, marks):
     return SimpleNamespace(
-        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
-        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+        fetch_unread_messages=lambda *_: mcs_contract.MessageBatch(
             messages=[_message(mid=5, unread=True)], reached=True),
-        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
         fetch_latest=lambda pid: {"message_id": latest_id,
                                   "is_self_only": False},
         mark_patient_read=lambda *a, **k: marks.append(a),
@@ -190,7 +190,7 @@ def test_deadline_skipped_patients_are_reached_next_tick(
 
     def history(pid, since, **kw):
         visited.append(pid)
-        raise mcs_adapter.MCSError("http_error", status=502)
+        raise mcs_contract.MCSError("http_error", status=502)
     adapter = SimpleNamespace(fetch_latest=latest, fetch_history=history)
     # each visit costs 100s of a fake clock; the deadline allows two
     monkeypatch.setattr(run_check, "time", SimpleNamespace(
@@ -237,7 +237,7 @@ def test_walk_resumes_where_the_deadline_stopped_whatever_the_run_ids(
 
     def history(pid, since, **kw):
         visited.append(pid)
-        raise mcs_adapter.MCSError("http_error", status=502)
+        raise mcs_contract.MCSError("http_error", status=502)
     adapter = SimpleNamespace(fetch_latest=latest, fetch_history=history)
     monkeypatch.setattr(run_check, "time", SimpleNamespace(
         monotonic=lambda: len(visited) * 100, time=time.time))

@@ -501,8 +501,8 @@ def _cli_args(world, tmp_path, *, scheduled=False):
 
 
 def _fake_keychain(monkeypatch, *, collision=False):
-    """Inject setup's process seam; no actual security command can be launched."""
-    import mcs_setup
+    """Inject the credential writer's process seam; no actual security command can be launched."""
+    import lifecycle_io
     entries, calls = {}, []
 
     def run(argv, *, input_text=None, **kwargs):
@@ -527,7 +527,7 @@ def _fake_keychain(monkeypatch, *, collision=False):
         return subprocess.CompletedProcess(argv, 0 if found else 44,
                                             found[0] + "\n" if found else "", "")
 
-    monkeypatch.setattr(mcs_setup, "_run", run)
+    monkeypatch.setattr(lifecycle_io, "run_bounded", run)
     monkeypatch.setattr(backup.os, "urandom", lambda size: bytes(range(size)))
 
     def reader():

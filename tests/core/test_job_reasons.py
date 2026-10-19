@@ -8,7 +8,7 @@ import pytest
 import job_ops
 from ingest_testkit import _ledger, _message
 from ledger import Ledger, SCHEMA_VERSION, job_reason_class, job_reason_code
-from mcs_adapter import MCSError, MessageBatch, SchemaError
+from mcs_contract import MCSError, MessageBatch, SchemaError
 from views_testkit import _view
 
 

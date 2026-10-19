@@ -1,11 +1,13 @@
 """Source-only density plans retain atom ownership, scoped evidence and honest progress."""
+import semantic_policy
+import semantic_store
+import semantic_transport
 import json
 from pathlib import Path
 
 import pytest
 
 import clinical_chunking
-import semantic
 import semantic_extraction as extraction
 import semantic_facts as sf
 import semantic_llm
@@ -92,7 +94,7 @@ def test_heading_reference_preserves_scope_but_cannot_supply_evidence():
     prompt = extraction._chunk_prompt(semantic_llm._FACT_V2_PROMPT, target, manifest, body, 50)
     assert "家族" in prompt.split("参考文脈", 1)[1]
     assert "家族" not in _core(prompt)
-    assert extraction._resolve_evidence("家族", target["text"], target["start"], body, semantic) is None
+    assert extraction._resolve_evidence("家族", target["text"], target["start"], body) is None
     assert "使用せず" in _core(prompt) and "中止予定" in _core(prompt)
     assert "patient_context" in semantic_llm._FACT_V2_PROMPT
     assert "任意欄のnull/空配列は省略" in semantic_llm._FACT_V2_PROMPT
@@ -108,8 +110,8 @@ def test_same_line_fragments_keep_mothers_past_scope_and_stop_action_as_referenc
     prompt = extraction._chunk_prompt(semantic_llm._FACT_V2_PROMPT, central, manifest, body, 50)
     reference = prompt.split("参考文脈", 1)[1]
     assert "母の過去の処方" in reference and "を中止" in reference
-    assert extraction._resolve_evidence("母の過去の処方", central["text"], central["start"], body, semantic) is None
-    assert extraction._resolve_evidence("を中止", central["text"], central["start"], body, semantic) is None
+    assert extraction._resolve_evidence("母の過去の処方", central["text"], central["start"], body) is None
+    assert extraction._resolve_evidence("を中止", central["text"], central["start"], body) is None
     assert [spec["text"] for spec in specs] == clinical_chunking.plan_chunks(body, 50)
 
 
@@ -136,11 +138,11 @@ def test_current_plan_reuses_completed_prefix_but_plan_version_change_rejects_it
 
 
 def _progress(db, mid=1):
-    cfg, errors = semantic.semantic_config(_canonical_cfg())
+    cfg, errors = semantic_policy.semantic_config(_canonical_cfg())
     assert not errors
     row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
-    return extraction.progress_for_message(db.db, row, model=semantic.llm_model(),
-                                           policy_fingerprint=semantic.policy_fingerprint(cfg))
+    return extraction.progress_for_message(db.db, row, model=semantic_transport.llm_model(),
+                                           policy_fingerprint=semantic_policy.policy_fingerprint(cfg))
 
 
 def test_progress_complete_requires_current_audited_published_document(tmp_path):
@@ -193,7 +195,7 @@ def test_progress_counts_current_paid_prefix_without_mixing_staging_generation(t
         _patient(db)
         body = "宇宙の架空説明。" * 400
         db.save_messages([_message(1, body=body)], project_id=1)
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
         calls = []
 
         def interrupted(prompt):

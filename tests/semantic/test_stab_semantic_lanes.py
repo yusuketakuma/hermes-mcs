@@ -5,13 +5,13 @@ output defers are capped per generation, and an unsaved long-output mark
 is logged and counted instead of silently dropped.
 
 Synthetic fixtures, temp DB and stubbed model/Jev clients only."""
+import semantic_transport
 import json
 import time
 
 import pytest
 
 import mcs_util
-import semantic
 import semantic_drain
 import semantic_runtime as runtime
 from semantic_testkit import _FakeJev, _cfg, _ledger, _patient, _seeded
@@ -20,14 +20,14 @@ from semantic_testkit import _FakeJev, _cfg, _ledger, _patient, _seeded
 @pytest.fixture(autouse=True)
 def _isolated_marks(monkeypatch, tmp_path):
     monkeypatch.setattr(semantic_drain, "_PASS_REASON", dict(semantic_drain._PASS_REASON))
-    monkeypatch.setattr(semantic, "_FMT_PATH", str(tmp_path / "format.json"))
-    monkeypatch.setattr(semantic, "_LONG_PATH", str(tmp_path / "long.json"))
-    monkeypatch.setattr(semantic, "_LONG_UNSAVED", {})
-    monkeypatch.setattr(semantic, "_LONG_MARK_FAILURES", {"busy": 0, "error": 0})
+    monkeypatch.setattr(semantic_transport, '_FMT_PATH', str(tmp_path / "format.json"))
+    monkeypatch.setattr(semantic_transport, '_LONG_PATH', str(tmp_path / "long.json"))
+    monkeypatch.setattr(semantic_transport, '_LONG_UNSAVED', {})
+    monkeypatch.setattr(semantic_transport, '_LONG_MARK_FAILURES', {"busy": 0, "error": 0})
 
 
 def _run(db, llm_fn, lane=None, **kw):
-    return semantic.run_due(db, _cfg("shadow"), {"errors": []},
+    return semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                             time.monotonic() + 300, jev_client=_FakeJev(),
                             llm_fn=llm_fn, lane=lane, **kw)
 
@@ -106,7 +106,7 @@ def _serve(monkeypatch, outcome):
         status, not_sent = outcome(job)
         semantic_drain._PASS_REASON["not_sent"] = not_sent
         return status
-    monkeypatch.setattr(semantic, "_process_job", process)
+    monkeypatch.setattr(semantic_drain, '_process_job', process)
     return served
 
 
@@ -203,24 +203,24 @@ def test_legacy_payload_long_job_leaves_realtime(jobs_db, monkeypatch):
 
 def test_unsaved_long_mark_is_logged_counted_and_kept(monkeypatch, capsys,
                                                       tmp_path):
-    monkeypatch.setattr(semantic, "_LONG_PATH",
+    monkeypatch.setattr(semantic_transport, '_LONG_PATH',
                         str(tmp_path / "missing" / "\0bad" / "long.json"))
-    semantic._long_mark("k1", 1)
+    semantic_transport._long_mark("k1", 1)
     err = capsys.readouterr().err
     assert '"event": "semantic_long_mark_unsaved"' in err
     assert "k1" not in err                       # never the key/prompt
-    assert semantic.long_mark_failures()["error"] == 1
-    assert semantic._long_marks()["k1"] == 1     # suppression still holds
+    assert semantic_transport.long_mark_failures()["error"] == 1
+    assert semantic_transport._long_marks()["k1"] == 1     # suppression still holds
 
 
 def test_long_mark_lock_contention_counts_busy(monkeypatch, tmp_path):
     import fcntl
     path = tmp_path / "long.json"
-    monkeypatch.setattr(semantic, "_LONG_PATH", str(path))
+    monkeypatch.setattr(semantic_transport, '_LONG_PATH', str(path))
     with open(str(path) + ".lock", "a") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        semantic._long_mark("k2", 2)
-    assert semantic.long_mark_failures()["busy"] == 1
-    semantic._long_mark("k3", 1)                 # next save persists both
+        semantic_transport._long_mark("k2", 2)
+    assert semantic_transport.long_mark_failures()["busy"] == 1
+    semantic_transport._long_mark("k3", 1)                 # next save persists both
     saved = json.loads(path.read_text())
-    assert saved == {"k2": 2, "k3": 1} and semantic._LONG_UNSAVED == {}
+    assert saved == {"k2": 2, "k3": 1} and semantic_transport._LONG_UNSAVED == {}

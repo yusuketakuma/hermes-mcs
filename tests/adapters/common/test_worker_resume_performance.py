@@ -31,8 +31,8 @@ def test_resume_batch_scans_primary_results_once():
                        "result": "delivered", "message_id": str(i)}]
            for i in range(3, 100)},
     })
-    expected = {f"d{i}": worker._card_message_id(records, f"d{i}") for i in range(100)}
-    assert worker._card_message_ids(records) == {
+    expected = {f"d{i}": journal.card_message_id(records, f"d{i}") for i in range(100)}
+    assert journal.primary_results(records)[0] == {
         did: mid for did, mid in expected.items() if did != "d2"}
     assert expected["d0"] == "latest" and expected["d1"] is None
     records.scans = 0
@@ -74,10 +74,10 @@ def test_bad_timestamp_holds_only_its_delivery(ts):
         "good": [{"phase": "result", "delivery_id": "good", "ts": 2,
                   "result": "delivered", "message_id": "safe"}],
     }
-    assert worker._card_message_ids(records) == {"bad": None, "good": "safe"}
+    assert journal.primary_results(records) == ({"bad": None, "good": "safe"}, {"bad"})
     with pytest.raises(ValueError, match="card_result_timestamp_invalid"):
-        worker._card_message_id(records, "bad")
-    assert worker._card_message_id(records, "good") == "safe"
+        journal.card_message_id(records, "bad")
+    assert journal.card_message_id(records, "good") == "safe"
     done, resumed, errors = [], [], []
     instance = object.__new__(worker.DeliveryWorker)
     instance._jview = SimpleNamespace(refresh=lambda: records)
@@ -140,5 +140,5 @@ def test_cached_view_uses_flat_rows_and_preserves_attempt_order_ties():
                 for did, row in expected.items()}
     assert expected["same"] == "b" and expected["unknown"] is None
     view.lookups = 0
-    assert worker._card_message_ids(view) == expected
+    assert journal.primary_results(view)[0] == expected
     assert view.lookups == 0

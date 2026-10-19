@@ -1,4 +1,7 @@
 """Synthetic full-detail and bounded dense-output extraction checks."""
+import extract_quality
+import extract_schema
+import extract_validation
 import json
 
 import pytest
@@ -69,11 +72,11 @@ def test_all_detail_keys_preserve_raw_value_and_nested_source(key):
     body = f"合成の記載 {key}：{value}。"
     detail = {"key": key, "value": value, "evidence": body}
     source = _context(body, details=[detail])
-    out = extract_llm._validate({"patient_context": [source]}, body)
+    out = extract_validation.validate({"patient_context": [source]}, body)
     assert out["patient_context"] == [source]
-    merged = extract_llm._merge([out, out])
+    merged = extract_validation.merge([out, out])
     assert merged["patient_context"] == [source]
-    assert not extract_llm._improves({"patient_context": [_context(body)]}, out)
+    assert not extract_quality.improves({"patient_context": [_context(body)]}, out)
 
 
 @pytest.mark.parametrize("bad", [
@@ -86,7 +89,7 @@ def test_invalid_detail_does_not_turn_uncertainty_into_a_fact(bad):
     detail = {"key": "certainty", "value": "疑い", "evidence": parent}
     source = _context(parent, "adverse_events", [detail, {**detail, **bad}])
     drops = {}
-    out = extract_llm._validate({"patient_context": [source]}, body, drops)
+    out = extract_validation.validate({"patient_context": [source]}, body, drops)
     assert out["patient_context"][0]["details"] == [detail]
     assert out["_items_dropped"] == 1
     assert "patient_context.details" in drops["items"]
@@ -97,7 +100,7 @@ def test_detail_evidence_must_stay_inside_parent_and_be_unique():
     parent = "合成薬Aが被疑薬です。"
     source = _context(parent, "adverse_events", [
         {"key": "certainty", "value": "未確認", "evidence": "症状は未確認です。"}])
-    out = extract_llm._validate({"patient_context": [source]}, body)
+    out = extract_validation.validate({"patient_context": [source]}, body)
     assert out["patient_context"][0]["details"] == []
 
 
@@ -105,10 +108,10 @@ def test_context_detail_enrichment_is_a_nonregressing_repair_and_merge():
     body = "合成薬Aの残薬は3錠で、飲み忘れは未確認です。"
     first = {"key": "residual_quantity", "value": "3錠", "evidence": body}
     second = {"key": "missed_doses", "value": "未確認", "evidence": body}
-    prior = extract_llm._validate({"patient_context": [_context(body, details=[first])]}, body)
-    better = extract_llm._validate({"patient_context": [_context(body, details=[first, second])]}, body)
-    assert extract_llm._improves(better, prior)
-    merged = extract_llm._merge([prior, better])
+    prior = extract_validation.validate({"patient_context": [_context(body, details=[first])]}, body)
+    better = extract_validation.validate({"patient_context": [_context(body, details=[first, second])]}, body)
+    assert extract_quality.improves(better, prior)
+    merged = extract_validation.merge([prior, better])
     assert merged["patient_context"] == better["patient_context"]
     assert prior["patient_context"][0]["details"] == [first]
 
@@ -124,7 +127,7 @@ def test_observation_date_unit_and_condition_stay_source_bound(name, value, unit
     raw = {"name": name, "value": value, "unit": unit, "evidence": body,
            "subject": "patient", "status": "past",
            "measured_on": "2026年10月7日08時30分", "condition": "空腹時"}
-    lab = extract_llm._validate({"labs": [raw]}, body)["labs"][0]
+    lab = extract_validation.validate({"labs": [raw]}, body)["labs"][0]
     assert lab["measured_on"] == raw["measured_on"] and lab["condition"] == "空腹時"
     assert lab["normalized"]["analyte"] == analyte
     assert lab["normalized"]["confirmation"] == "quote_supported"
@@ -137,7 +140,7 @@ def test_observation_date_unit_and_condition_stay_source_bound(name, value, unit
                                                   ("patient", "planned")])
 def test_family_other_and_planned_measurements_cannot_be_confirmed_patient_values(subject, status):
     body = "2026年10月7日測定の体重48.5kg。"
-    lab = extract_llm._validate({"labs": [{"name": "体重", "value": 48.5, "unit": "kg",
+    lab = extract_validation.validate({"labs": [{"name": "体重", "value": 48.5, "unit": "kg",
                                          "subject": subject, "status": status, "evidence": body}]}, body)["labs"][0]
     assert lab["subject"] == subject and lab["status"] == status
     assert lab["unverified"] and lab["normalized"]["confirmation"] == "unverified"
@@ -146,7 +149,7 @@ def test_family_other_and_planned_measurements_cannot_be_confirmed_patient_value
 
 def test_missing_sampling_fields_are_never_filled_from_posting_time():
     body = "Cr 1.2mg/dL。"
-    lab = extract_llm._validate({"labs": [{"name": "Cr", "value": 1.2, "unit": "mg/dL",
+    lab = extract_validation.validate({"labs": [{"name": "Cr", "value": 1.2, "unit": "mg/dL",
                                          "evidence": body, "measured_on": "2026年10月7日",
                                          "condition": "空腹時"}]}, body)["labs"][0]
     assert "measured_on" not in lab and "condition" not in lab
@@ -250,9 +253,9 @@ def test_old_generation_valid_failed_and_checkpointed_rows_reenter_normal_pendin
 
 
 def test_detail_grammar_uses_shared_whitelist_and_keeps_token_budget():
-    item = extract_llm._SCHEMA["schema"]["properties"]["patient_context"]["items"]
+    item = extract_schema.SCHEMA["schema"]["properties"]["patient_context"]["items"]
     assert set(item["properties"]["details"]["items"]["properties"]["key"]["enum"]) == DETAIL_KEYS
-    assert extract_llm._BATCH_ITEM["properties"]["patient_context"]["items"] == item
+    assert extract_schema.BATCH_ITEM["properties"]["patient_context"]["items"] == item
     assert extract_llm.MAX_TOKENS == 1600
 
 
@@ -482,7 +485,7 @@ def test_processing_revision_invalidates_old_global_hints_checkpoint(db, revisio
     db.save_messages([_message(body=body)])
     row = db.db.execute("SELECT * FROM messages").fetchone()
     contract = [row["posted_at"], None, extract_llm.MODEL,
-                extract_llm._PROMPT_HEAD, extract_llm._SCHEMA]
+                extract_llm._PROMPT_HEAD, extract_schema.SCHEMA]
     if revision is not None:
         contract.extend([revision, extract_llm.PLAN_VERSION])
     old_context = hashlib.sha256(json.dumps(contract,
@@ -526,7 +529,7 @@ def test_verified_completed_results_survive_local_hint_checkpoint_revision(db, m
     context = extract_llm._thread_context(db, row)
     old_binding = hashlib.sha256(json.dumps([
         row["posted_at"], context, final["model"], extract_llm._PROMPT_HEAD,
-        extract_llm._SCHEMA, "clinical-plan/v3", extract_llm.PLAN_VERSION, row["_frame"]["digest"]],
+        extract_schema.SCHEMA, "clinical-plan/v3", extract_llm.PLAN_VERSION, row["_frame"]["digest"]],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     assert meta["context_binding"] == old_binding
     db.artifact_add("extract_llm_chunk", final["content"], project_id=1, message_id=1,

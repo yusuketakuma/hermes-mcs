@@ -22,11 +22,11 @@ def test_rollback_with_unusable_schema_backup_never_resets(
     monkeypatch.setattr(updater, "REPO", str(repo))
     before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
     after = _head(repo)
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0", "sha": after, "prev_sha": before,
                          "schema_bump": True,
                          "backup_path": str(tmp_path / "pruned.db")}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     notices = []
     monkeypatch.setattr(updater, "load_config", lambda: {})
     monkeypatch.setattr(updater, "quiesce", lambda: pytest.fail("no quiesce"))
@@ -34,7 +34,7 @@ def test_rollback_with_unusable_schema_backup_never_resets(
                         lambda text, **k: notices.append(text) or True)
     assert updater.rollback("rb-1") == 1
     assert _head(repo) == after
-    st = updater.load_state()
+    st = updater.journal_store.load_state(updater.STATE_PATH)
     assert st["applying"] is None and st["stages"] == []
     assert st["applied"][-1]["sha"] == after
     assert st["executed"]["rb-1"]["result"] == "rollback_failed"

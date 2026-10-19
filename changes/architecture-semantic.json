@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "意味解析の推論通信とジョブ処理の所有先を整理",
+  "summary": "意味解析の動作・公開条件は維持し、推論の接続先・モデル・再試行状態を通信担当へ、原文からの抽出を抽出担当へ集約しました。CLI経由の内部呼び戻しをなくし、検証・表示・ジョブ処理が各正本を直接利用します。",
+  "upgrade": "設定変更は不要です。通常の更新手順で常駐workerへ反映してください。候補のコードhashが変わるため、旧コードのcandidate承認は新しい候補には一致しません。推論のタイムアウト・予算・モデル・prompt・schema・QC・公開条件、状態ファイルの保存先と形式は変更していません。",
+  "details": [
+    "semantic_transportが推論通信とformat/長文出力/失敗状態の唯一の所有者になり、semanticはCLI・明示的replay・statusに限定しました。",
+    "semantic_extractionが抽出入口とdurable chunkを所有し、元module全体を注入して契約や状態を参照する経路を除去しました。",
+    "Jevの分割評価をsemantic_jev、mandatory renderの反映と品質格下げをsemantic_renderへ集約し、QCからdrainへの逆依存を除去しました。",
+    "job claim・予算・原文世代の検証・transaction・commit・回復はsemantic_drainに保持し、独立した状態所有者を増やしていません。"
+  ],
+  "refs": ["mcs/semantic/semantic_transport.py", "mcs/semantic/semantic.py", "mcs/semantic/semantic_drain.py", "mcs/semantic/semantic_extraction.py", "mcs/semantic/semantic_render.py", "mcs/semantic/semantic_jev.py"]
+}

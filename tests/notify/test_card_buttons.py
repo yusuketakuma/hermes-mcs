@@ -2,6 +2,7 @@
 report and ⏰ reminders — runner side. Synthetic temp ledger only."""
 from __future__ import annotations
 
+import notify_scope
 import json
 import sqlite3
 
@@ -226,7 +227,7 @@ def test_button_rows_layout_and_link(led):
 ])
 def test_legacy_defer_keeps_write_action_guards(led, gate, expected):
     spec = _delivered_card(led)
-    card = notify_cards._card_row(led.db, 1)
+    card = notify_scope.card_row(led.db, 1)
     token = notify_cards._mint_token(led.db, 1, "defer", None,
                                     {"source_gen": card["source_generation"]}, NOW)
     if gate == "stale":
@@ -250,7 +251,7 @@ def test_patient_actions_fit_worst_case_without_global_shortcuts(
         led, monkeypatch, transport, kind, in_thread_body):
     from adapters.common import spec as worker_spec
     spec = _delivered_card(led)
-    card = dict(notify_cards._card_row(led.db, 1))
+    card = dict(notify_scope.card_row(led.db, 1))
     card.update(kind=kind, transport=transport,
                 anchor_key=json.dumps({"signal_keys": ["synthetic-key"]}))
     content = {"manifest_id": 1, "shown_kind": "messages", "containers": [],
@@ -529,7 +530,7 @@ def test_report_mark_clears_when_v4_becomes_current(led, tmp_path):
     _dispatch(led, _intent(led))
     _deliver(led)
     assert _report(led, str(tmp_path / "data"), aid)["outcome"] == "applied"
-    card = notify_cards._card_row(led.db, 1)
+    card = notify_scope.card_row(led.db, 1)
     assert notify_render.feedback_pending(led.db, card)
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"

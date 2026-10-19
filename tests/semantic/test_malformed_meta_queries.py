@@ -1,4 +1,5 @@
 """Tick, drain and stats queries skip artifacts with malformed meta."""
+import semantic_qc
 import json
 import time
 
@@ -45,7 +46,7 @@ def test_reproject_and_run_due_skip_malformed_meta(tmp_path):
         assert v4.reproject_stale(db, scfg)["reprojected"] == 0
         for _ in range(2):
             result = {"errors": []}
-            semantic.run_due(db, _canonical_cfg(), result,
+            semantic_drain.run_due(db, _canonical_cfg(), result,
                              time.monotonic() + 300, jev_client=_PassJev(),
                              llm_fn=_llm_v2)
             assert result["errors"] == []
@@ -79,8 +80,8 @@ def test_qc_seed_skips_malformed_meta(tmp_path):
         for kind in ("extract_llm", "extract_qc", "signal_v1"):
             _add_malformed(db, kind, mids=(1,))
         source_id = _v2_artifact(db, 1, _hash(db))
-        assert semantic_drain._qc_seed(db, time.time()) == 1
-        assert semantic_drain._qc_seed(db, time.time()) == 0
+        assert semantic_qc._qc_seed(db, time.time()) == 1
+        assert semantic_qc._qc_seed(db, time.time()) == 0
         payload = json.loads(_qc_job(db)["payload"])
         assert payload["source_artifact_id"] == source_id
         assert payload["hash"] == _hash(db)

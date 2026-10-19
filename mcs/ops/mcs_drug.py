@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import drug_map  # noqa: E402
 from mcs_util import HOME, fsync_dir, load_config, loads_dict  # noqa: E402
+from safe_io import publish_new_bytes  # noqa: E402
 
 SNAPSHOT = Path(HOME) / "data" / "snapshots" / "ledger-snapshot.db"
 BUNDLE = Path(__file__).resolve().parents[2] / "resources" / "drug-master"
@@ -131,11 +132,11 @@ def _impact(path, before, after, limit):
     return report
 
 
-def _bundle(directory: Path = BUNDLE):
+def load_bundled_master(directory: Path = BUNDLE):
     """The bundled manifest of the converter's pinned edition and its archive."""
     import import_drug_master as importer
     folder = (directory / importer.EDITION).resolve()
-    manifest = loads_dict(importer._read(folder / "manifest.json", 65536))
+    manifest = loads_dict(importer.read_master_input(folder / "manifest.json", 65536))
     if (manifest is None or manifest.get("edition") != importer.EDITION
             or manifest.get("layout") != importer.LAYOUT
             or manifest.get("member") != f"y_{importer.EDITION}.csv"
@@ -146,7 +147,7 @@ def _bundle(directory: Path = BUNDLE):
             or type(manifest.get("rows")) is not int
             or not 0 < manifest["rows"] <= importer.MAX_ROWS
             or not isinstance(manifest.get("terms"), dict)
-            or not drug_map._text(manifest["terms"].get("url"))):
+            or not drug_map.valid_text(manifest["terms"].get("url"))):
         raise ValueError("bundle_manifest")
     return manifest, folder / manifest["archive"]
 
@@ -158,7 +159,7 @@ def install_bundled(args, *, directory: Path = BUNDLE, home: str = HOME) -> dict
     check and status-policy confirmation are required inputs, never inferred.
     Config, the ledger and the network are not touched."""
     import import_drug_master as importer
-    manifest, archive = _bundle(directory)
+    manifest, archive = load_bundled_master(directory)
     pin = {"schema": importer.PIN_SCHEMA, "layout": importer.LAYOUT,
            "edition": importer.EDITION, "sha256": manifest["archive_sha256"],
            "member": manifest["member"], "as_of": date.today().isoformat(),
@@ -238,7 +239,7 @@ def bundled_status(cfg, *, directory: Path = BUNDLE, today: date | None = None) 
     """Compare the bundled master with the config-pinned dictionary, read-only."""
     today = today or date.today()
     try:
-        manifest, _ = _bundle(directory)
+        manifest, _ = load_bundled_master(directory)
         bundled = {"edition": manifest["edition"], "rows": manifest["rows"],
                    "archive_sha256": manifest["archive_sha256"],
                    "dict_id": f"mhlw-y-{manifest['edition']}-{manifest['archive_sha256'][:12]}"}
@@ -339,7 +340,7 @@ def _workflow(args):
                         until=args.until, limit=args.limit, cursor=args.cursor, cfg=load_config())
                 elif args.command == "alias-propose":
                     report = drug_alias.proposal(view.db, load_config(), args.alias, args.target)
-                    drug_alias._write_new(args.out, mcs_requests.canonical(report))
+                    publish_new_bytes(args.out, mcs_requests.canonical(report))
                 elif args.command == "alias-receipt":
                     if not mcs_requests.valid_uuid(args.command_id):
                         raise ValueError("bad_command_id")
@@ -446,8 +447,8 @@ def main(argv=None) -> int:
         import import_drug_master as importer
         import drug_master_compare
         try:
-            before_pin = loads_dict(importer._read(args.before_pin, 65536))
-            after_pin = loads_dict(importer._read(args.after_pin, 65536))
+            before_pin = loads_dict(importer.read_master_input(args.before_pin, 65536))
+            after_pin = loads_dict(importer.read_master_input(args.after_pin, 65536))
             if before_pin is None or after_pin is None:
                 raise ValueError("master_pin_required")
             if args.dictionary is not None or args.sha256 is not None:

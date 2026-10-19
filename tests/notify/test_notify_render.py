@@ -1,5 +1,6 @@
 """Signal-card evidence changes must invalidate previously rendered actions."""
 
+import notify_scope
 import json
 
 import pytest
@@ -38,7 +39,7 @@ def test_latest_invalid_signal_never_revives_old_display_or_actions(
     event = _intent(led, "signal", payload={"signal_keys": [key], "project_id": 1})
     _dispatch(led, event, cfg)
     card = _card(led)
-    old_fp = notify_render._source_fp(led.db, card)
+    old_fp = notify_render.source_fingerprint(led.db, card)
     _signal_row(led, key, state="resolved", mids=[100])
     latest = led.db.execute(
         "SELECT artifact_id,content FROM artifacts WHERE kind='signal_v1' "
@@ -55,14 +56,14 @@ def test_latest_invalid_signal_never_revives_old_display_or_actions(
         led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
                        (raw, latest["artifact_id"]))
     assert mcs_signals._latest_signal_states(led.db)[key] is None
-    assert notify_render._latest_signals(led.db, [key], 1) == {}
-    assert notify_render._source_fp(led.db, card) != old_fp
-    model = notify_render._card_content(led.db, card)
+    assert notify_scope.latest_signals(led.db, [key], 1) == {}
+    assert notify_render.source_fingerprint(led.db, card) != old_fp
+    model = notify_render.card_content(led.db, card)
     assert model["shown"] == []
     assert "note " + key not in notify_render.display_text(model)
     assert "INVALID-LATEST-CANARY" not in notify_render.display_text(model)
     assert notify_cards._render_context(led.db, card) == {}
-    assert "note " + key not in notify_render._card_body_text(
+    assert "note " + key not in notify_render.card_body_text(
         led.db, card, {"shown": json.dumps([key])})[1]
 
 
@@ -85,11 +86,11 @@ def test_thread_manifest_cannot_read_another_patient(led):
     _msg(led, 100, body="OWN-PATIENT")
     _msg(led, 200, pid=2, parent=100, body="SYNTHETIC-OTHER-PATIENT")
     card = {"kind": "thread", "root_message_id": 100, "project_id": 1}
-    _, body = notify_render._card_body_text(led.db, card, {"shown": "[100,200]"})
+    _, body = notify_render.card_body_text(led.db, card, {"shown": "[100,200]"})
     assert "OWN-PATIENT" in body and "SYNTHETIC-OTHER-PATIENT" not in body
-    before = notify_render._source_fp(led.db, card)
+    before = notify_render.source_fingerprint(led.db, card)
     led.db.execute("UPDATE messages SET content_hash='foreign-edit' WHERE message_id=200")
-    assert notify_render._source_fp(led.db, card) == before
+    assert notify_render.source_fingerprint(led.db, card) == before
 
 
 def test_late_extract_landing_bumps_thread_source_fp(led):
@@ -99,12 +100,12 @@ def test_late_extract_landing_bumps_thread_source_fp(led):
     count as ready — latest_fact_artifact would reject it too."""
     _seed_thread(led)
     card = {"kind": "thread", "root_message_id": 100, "project_id": 1}
-    before = notify_render._source_fp(led.db, card)
+    before = notify_render.source_fingerprint(led.db, card)
     _extract(led, 100, {"v": 1, "symptoms": ["疼痛"]},
              kind="extract_llm", stale=True)
-    assert notify_render._source_fp(led.db, card) == before
+    assert notify_render.source_fingerprint(led.db, card) == before
     _extract(led, 100, {"v": 1, "symptoms": ["疼痛"]}, kind="extract_llm")
-    assert notify_render._source_fp(led.db, card) != before
+    assert notify_render.source_fingerprint(led.db, card) != before
 
 
 def test_dispatch_does_not_follow_foreign_parent_or_event_member(led):
@@ -116,7 +117,7 @@ def test_dispatch_does_not_follow_foreign_parent_or_event_member(led):
     card = _card(led)
     assert card["project_id"] == 1 and card["root_message_id"] == 100
     assert led.db.execute("SELECT COUNT(*) FROM notification_cards").fetchone()[0] == 1
-    content = notify_render._card_content(led.db, card)
+    content = notify_render.card_content(led.db, card)
     assert content["shown"] == [100]
 
 
@@ -128,7 +129,7 @@ def test_signal_card_rejects_foreign_artifact_and_context(led):
     _dispatch(led, _intent(led, "signal", payload={
         "signal_keys": ["foreign-signal"], "project_id": 1}))
     card = _card(led)
-    assert notify_render._card_content(led.db, card)["shown"] == []
+    assert notify_render.card_content(led.db, card)["shown"] == []
     assert notify_cards._render_context(led.db, card) == {}
 
 
@@ -144,7 +145,7 @@ def test_long_thread_title_keeps_spec_deliverable(led):
 @pytest.mark.parametrize("raw", ["[]", '"string"', "1", "[" * 1200],
                          ids=["array", "string", "number", "recursive"])
 def test_invalid_card_state_falls_back_safely(raw):
-    assert notify_render._anchor_keys({"kind": "signal", "anchor_key": raw}) == []
+    assert notify_render.anchor_keys({"kind": "signal", "anchor_key": raw}) == []
     assert notify_render._page(raw, 3, default=2) == 2
 
 
@@ -152,7 +153,7 @@ def test_card_list_omits_original_body_but_body_view_keeps_it(led):
     _seed_thread(led)
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
     card = _card(led)
-    old_source = notify_render._card_content(led.db, card)["source_fp"]
+    old_source = notify_render.card_content(led.db, card)["source_fp"]
     body = "完全合成の本文。" * 10000 + "SYNTHETIC-END"
     with led.db:
         led.db.execute("UPDATE messages SET body_text=?,content_hash=? WHERE message_id=100",
@@ -161,7 +162,7 @@ def test_card_list_omits_original_body_but_body_view_keeps_it(led):
     statements = []
     led.db.set_trace_callback(statements.append)
     try:
-        face = notify_render._card_content(led.db, card)
+        face = notify_render.card_content(led.db, card)
     finally:
         led.db.set_trace_callback(None)
     assert "body_text" not in statements[0].partition("FROM")[0], \
@@ -170,7 +171,7 @@ def test_card_list_omits_original_body_but_body_view_keeps_it(led):
     assert "2投稿" in notify_render.display_text(face)
     assert face["source_fp"] != old_source
     assert "SYNTHETIC-END" not in face["preview_text"]
-    _, full_body = notify_render._card_body_text(
+    _, full_body = notify_render.card_body_text(
         led.db, card, {"shown": "[100]"}, max_chars=None,
         stamps=False, include_summary=False)
     assert full_body.endswith(body)
@@ -285,7 +286,7 @@ def test_null_ts_reply_does_not_become_thread_root(led):
                    "WHERE message_id=101")
     led.db.commit()
     _dispatch(led, _intent(led))
-    content = notify_render._card_content(led.db, _card(led))
+    content = notify_render.card_content(led.db, _card(led))
     assert content["shown"][0] == 100
     text = notify_render.display_text(content)
     assert "09-24〜" in text

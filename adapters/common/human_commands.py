@@ -8,20 +8,20 @@ from typing import Any
 
 from . import projects
 from .access import (
-    _actor,
-    _authorize,
-    _authorize_system,
-    _confirmation_origin,
-    _project,
+    actor,
+    authorize,
+    authorize_system,
+    confirmation_origin,
+    positive_id,
 )
-from .bridge import _adapter_modules, _deny, _json, _ok
+from .mcs_api import modules, deny, encode_reply, ok
 
-_CREATE_FIELDS = frozenset({
+CREATE_FIELDS = frozenset({
     "op", "phase", "action", "project_id", "source_message_id", "title",
     "assignee", "due_date", "reason", "loop_artifact_id",
     "loop_match_confirmed", "command_id",
 })
-_UPDATE_FIELDS = frozenset({
+UPDATE_FIELDS = frozenset({
     "op", "phase", "action", "project_id", "request_id", "patch",
     "expected_revision", "expected_source_hash", "reason", "loop_artifact_id",
     "loop_match_confirmed", "command_id",
@@ -29,7 +29,7 @@ _UPDATE_FIELDS = frozenset({
 _CONTROL_COMMON_FIELDS = frozenset({
     "op", "phase", "action", "project_id", "command_id",
 })
-_CONTROL_FIELDS = {
+CONTROL_FIELDS = {
     "scan": _CONTROL_COMMON_FIELDS | {"days", "pages"},
     "retry": _CONTROL_COMMON_FIELDS | {"job_id", "expected_payload_hash", "additional_attempts", "reason"},
     "pause": _CONTROL_COMMON_FIELDS | {"feature"},
@@ -117,7 +117,7 @@ def _loop_input_error(fields: dict) -> str | None:
 
 def _current_loop_candidate(view, project_id: int, artifact_id: int,
                             source_message_id: int):
-    _adapter_modules()
+    modules()
     import request_loops
 
     try:
@@ -151,7 +151,7 @@ def _verify_loop_ref(payload: dict, view, project_id: int,
     if "loop_ref" not in payload:
         return None
     loop_ref = payload["loop_ref"]
-    _adapter_modules()
+    modules()
     import request_loops
     error = request_loops.validate_loop_ref(loop_ref)
     if error:
@@ -180,7 +180,7 @@ def _command_base(requests, identity: dict[str, str | None], fields: dict,
         raise ValueError("bad_command_id")
     return {
         "version": 1, "cmd": command, "command_id": command_id,
-        "actor": _actor(identity), "human_confirmed": True,
+        "actor": actor(identity), "human_confirmed": True,
         "project_id": project_id,
     }
 
@@ -236,7 +236,7 @@ def _semantic_job(view, requests, project_id: int, job_id: int, additional_attem
         return None, "invalid_payload", None
     if not isinstance(parsed, dict):
         return None, "invalid_payload", None
-    from mcs_operations import retry_error
+    from operation_contract import retry_error
     error = retry_error(row, parsed, additional_attempts)
     if error:
         return None, error, None
@@ -247,7 +247,7 @@ def _semantic_job(view, requests, project_id: int, job_id: int, additional_attem
 
 def _summary_comparison(view, project_id: int, message_id: int,
                         summary_artifact_id: int | None = None):
-    _adapter_modules()
+    modules()
     import summary_review
 
     try:
@@ -295,7 +295,7 @@ def _new_control(
                 payload[key] = fields[key]
     elif command in _REFERENCE_OPS:
         action = command.removeprefix("ops.")
-        payload.update({k: fields[k] for k in _CONTROL_FIELDS[action] - _CONTROL_COMMON_FIELDS
+        payload.update({k: fields[k] for k in CONTROL_FIELDS[action] - _CONTROL_COMMON_FIELDS
                         if k in fields})
     else:
         payload["feature"] = fields.get("feature")
@@ -339,8 +339,8 @@ def _hold_projects(db, hold, card, events) -> list:
     """Projects a restore hold whose render is gone still proves: its card
     (signal/digest cards through their coverage, like a live render) and
     the outbox rows of its held events. Never taken from the request."""
-    import notify_transport
-    pids = set(notify_transport._card_projects(db, {"card_id": hold["card_id"]}, card)) \
+    import notify_scope
+    pids = set(notify_scope.card_projects(db, {"card_id": hold["card_id"]}, card)) \
         if hold["card_id"] is not None else set()
     for event_id in events:
         row = db.execute("SELECT project_id FROM notify_outbox WHERE event_id=?",
@@ -354,6 +354,7 @@ def _card_resolution(view, settings, identity, payload):
     """Derive recovery scope from the stored render/hold, never native input."""
     import notify_cards
     import notify_transport
+    import notify_scope
     db = view.db
     render = db.execute("SELECT * FROM notification_renders WHERE delivery_id=?",
                         (payload["delivery_id"],)).fetchone()
@@ -382,9 +383,9 @@ def _card_resolution(view, settings, identity, payload):
     if any(scope.get(k) != v for k, v in expected.items()):
         return "scope_mismatch"
     row = render if render is not None else hold
-    card = notify_cards._card_row(db, row["card_id"]) if row["card_id"] is not None else None
+    card = notify_scope.card_row(db, row["card_id"]) if row["card_id"] is not None else None
     if render:
-        pids = notify_transport._card_projects(db, render, card)
+        pids = notify_scope.card_projects(db, render, card)
     else:
         # the same strict reading the rebind writes use: never authorize a
         # subset of a list the writer would read differently
@@ -406,55 +407,55 @@ def _card_resolution(view, settings, identity, payload):
     return None
 
 
-def _build_preview(data: dict, settings: dict[str, Any],
+def build_preview(data: dict, settings: dict[str, Any],
                    identity: dict[str, str | None]) -> str:
     action = data.get("action")
-    project_id, error = _authorize(settings, identity, data.get("project_id"))
+    project_id, error = authorize(settings, identity, data.get("project_id"))
     if error:
-        return _deny(error)
+        return deny(error)
     reason_error = _reason_error(data)
     if reason_error:
-        return _deny(reason_error)
-    requests, mcs_view = _adapter_modules()
+        return deny(reason_error)
+    requests, mcs_view = modules()
     view = None
     loop_ref = None
     loop_candidate = None
     try:
         view = mcs_view.View(settings["snapshot"])
         if action == "create":
-            source_message_id = _project(data.get("source_message_id"))
+            source_message_id = positive_id(data.get("source_message_id"))
             if source_message_id is None:
-                return _deny("bad_source_message_id")
+                return deny("bad_source_message_id")
             source = _source_row(view, requests, project_id, source_message_id)
             loop_ref, loop_candidate, error = _loop_ref(
                 data, view, project_id, source_message_id)
             if error:
-                return _deny(error)
+                return deny(error)
             payload = _new_command(
                 requests, identity, data, project_id, "request.create",
                 source_hash=source["content_hash"], loop_ref=loop_ref)
         elif action == "update":
-            request_id = _project(data.get("request_id"))
+            request_id = positive_id(data.get("request_id"))
             if request_id is None:
-                return _deny("bad_request_id")
+                return deny("bad_request_id")
             current = _current_request(view, requests, project_id, request_id)
             if ("expected_revision" in data
                     and data["expected_revision"] != current["revision"]):
-                return _deny("revision_conflict")
+                return deny("revision_conflict")
             if ("expected_source_hash" in data
                     and data["expected_source_hash"]
                     != current["current_source_hash"]):
-                return _deny("source_changed")
+                return deny("source_changed")
             loop_ref, loop_candidate, error = _loop_ref(
                 data, view, project_id, current["source_message_id"])
             if error:
-                return _deny(error)
+                return deny(error)
             payload = _new_command(
                 requests, identity, data, project_id, "request.update",
                 source_hash=current["current_source_hash"],
                 revision=current["revision"], loop_ref=loop_ref)
         else:
-            return _deny("bad_request_action")
+            return deny("bad_request_action")
     finally:
         if view is not None:
             view.close()
@@ -466,24 +467,24 @@ def _preview(requests, identity: dict[str, str | None], operation: str,
              payload: dict, **extra) -> str:
     """The human-confirmation envelope; `_confirmation_parts` recomputes
     this payload+origin hash on confirm, so every preview goes through here."""
-    origin = _confirmation_origin(identity)
-    return _ok(operation=operation, phase="preview", payload=payload,
+    origin = confirmation_origin(identity)
+    return ok(operation=operation, phase="preview", payload=payload,
                payload_hash=requests.payload_hash({"payload": payload, "origin": origin}),
                origin=origin, queued=False, confirmation_required=True, **extra)
 
 
-def _build_control_preview(data: dict, settings: dict[str, Any],
+def build_control_preview(data: dict, settings: dict[str, Any],
                            identity: dict[str, str | None]) -> str:
     retry_budget = None
     action = data.get("action")
     if action == "card_resolve":
-        error = _authorize_system(settings, identity) or _reason_error(data)
+        error = authorize_system(settings, identity) or _reason_error(data)
         if error:
-            return _deny(error)
-        requests, mcs_view = _adapter_modules()
+            return deny(error)
+        requests, mcs_view = modules()
         payload = _command_base(requests, identity, data, None, "ops.card_resolve")
         del payload["project_id"]
-        payload.update({k: data[k] for k in _CONTROL_FIELDS[action] - _CONTROL_COMMON_FIELDS
+        payload.update({k: data[k] for k in CONTROL_FIELDS[action] - _CONTROL_COMMON_FIELDS
                         if k in data})
         view = mcs_view.View(settings["snapshot"])
         try:
@@ -491,60 +492,60 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
         finally:
             view.close()
         if error or requests.validate(payload):
-            return _deny(error or "invalid_command")
+            return deny(error or "invalid_command")
         return _preview(requests, identity, "control", payload)
     if f"ops.{action}" in _PROJECTLESS_OPS:
         # Projectless lifecycle ops — user/chat allowlist only; no view
         # needed (there is no project scope to resolve against).
-        error = _authorize_system(settings, identity)
+        error = authorize_system(settings, identity)
         if error:
-            return _deny(error)
+            return deny(error)
         reason_error = _reason_error(data)
         if reason_error:
-            return _deny(reason_error)
-        requests, _ = _adapter_modules()
+            return deny(reason_error)
+        requests, _ = modules()
         try:
             payload = _new_control(requests, identity, data, None,
                                    f"ops.{action}")
         except ValueError as e:
-            return _deny(str(e))
+            return deny(str(e))
         return _preview(requests, identity, "control", payload)
-    project_id, error = _authorize(settings, identity, data.get("project_id"))
+    project_id, error = authorize(settings, identity, data.get("project_id"))
     if error:
-        return _deny(error)
+        return deny(error)
     if action == "adopt_summary":
         reason_error = _reason_error(data)
         if reason_error:
-            return _deny(reason_error)
-    requests, mcs_view = _adapter_modules()
+            return deny(reason_error)
+    requests, mcs_view = modules()
     view = None
     comparison = None
     try:
         view = mcs_view.View(settings["snapshot"])
         if action == "scan":
             if not _project_exists(view, project_id):
-                return _deny("project_not_found")
+                return deny("project_not_found")
             days = data.get("days", 14)
             pages = data.get("pages", 10)
             if (type(days) is not int or not 1 <= days <= 365
                     or type(pages) is not int or not 1 <= pages <= 40):
-                return _deny("bad_scan_range")
+                return deny("bad_scan_range")
             payload = _new_control(
                 requests, identity, data, project_id, "ops.scan")
         elif action == "retry":
-            job_id = _project(data.get("job_id"))
+            job_id = positive_id(data.get("job_id"))
             if job_id is None:
-                return _deny("bad_job_id")
+                return deny("bad_job_id")
             row, error, digest = _semantic_job(
                 view, requests, project_id, job_id, data.get("additional_attempts"))
             if error:
-                return _deny(error)
+                return deny(error)
             supplied = data.get("expected_payload_hash")
             if supplied is not None:
                 if not requests.valid_hash(supplied):
-                    return _deny("bad_payload_hash")
+                    return deny("bad_payload_hash")
                 if supplied != digest:
-                    return _deny("payload_changed")
+                    return deny("payload_changed")
             payload = _new_control(
                 requests, identity, data, project_id, "ops.retry",
                 expected_payload_hash=digest)
@@ -553,24 +554,24 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
                             if "additional_attempts" in data else row["attempt_limit"]}
         elif action in {"pause", "resume"}:
             if data.get("feature") != "semantic":
-                return _deny("bad_feature")
+                return deny("bad_feature")
             payload = _new_control(
                 requests, identity, data, project_id, f"ops.{action}")
         elif action == "adopt_summary":
-            message_id = _project(data.get("message_id"))
+            message_id = positive_id(data.get("message_id"))
             if message_id is None:
-                return _deny("bad_message_id")
+                return deny("bad_message_id")
             summary_artifact_id = None
             if "summary_artifact_id" in data:
-                summary_artifact_id = _project(data["summary_artifact_id"])
+                summary_artifact_id = positive_id(data["summary_artifact_id"])
                 if summary_artifact_id is None:
-                    return _deny("bad_summary_artifact_id")
+                    return deny("bad_summary_artifact_id")
             comparison, error = _summary_comparison(
                 view, project_id, message_id, summary_artifact_id)
             if error:
-                return _deny(error)
+                return deny(error)
             if comparison.get("adoptable") is not True:
-                return _json({"ok": False, "error": "summary_not_adoptable",
+                return encode_reply({"ok": False, "error": "summary_not_adoptable",
                               "comparison": comparison})
             payload = _new_control(
                 requests, identity, data, project_id,
@@ -578,13 +579,13 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
         elif f"ops.{action}" in _REFERENCE_OPS:
             error = _reason_error(data)
             if error:
-                return _deny(error)
+                return deny(error)
             payload = _new_control(requests, identity, data, project_id, f"ops.{action}")
             error = _control_reference(view, payload)
             if error:
-                return _deny(error)
+                return deny(error)
         else:
-            return _deny("bad_control_action")
+            return deny("bad_control_action")
     finally:
         if view is not None:
             view.close()
@@ -601,46 +602,46 @@ def _confirmation_parts(data: dict, requests,
     payload = data["payload"]
     supplied_hash = data.get("payload_hash")
     origin = data.get("origin")
-    current_origin = _confirmation_origin(identity)
+    current_origin = confirmation_origin(identity)
     if not isinstance(origin, dict) or origin != current_origin:
         return None, None, None, "origin_mismatch"
     if (not requests.valid_hash(supplied_hash)
             or requests.payload_hash({"payload": payload, "origin": origin})
             != supplied_hash):
         return None, None, None, "payload_hash_mismatch"
-    if payload.get("actor") != _actor(identity):
+    if payload.get("actor") != actor(identity):
         return None, None, None, "actor_mismatch"
     return payload, supplied_hash, origin, None
 
 
-def _confirm(data: dict, settings: dict[str, Any],
+def confirm(data: dict, settings: dict[str, Any],
              identity: dict[str, str | None], *, operation: str) -> str:
-    requests, mcs_view = _adapter_modules()
+    requests, mcs_view = modules()
     payload, supplied_hash, origin, error = _confirmation_parts(
         data, requests, identity)
     if error:
-        return _deny(error)
+        return deny(error)
     command = payload.get("cmd")
     is_control = operation == "control"
     if is_control:
         if not isinstance(command, str) or not command.startswith("ops."):
-            return _deny("invalid_command")
+            return deny("invalid_command")
     elif command not in {"request.create", "request.update"}:
-        return _deny("invalid_command")
+        return deny("invalid_command")
     if command in _PROJECTLESS_OPS or command == "ops.card_resolve":
-        error = _authorize_system(settings, identity)
+        error = authorize_system(settings, identity)
         project_id = None
     else:
-        project_id, error = _authorize(
+        project_id, error = authorize(
             settings, identity, payload.get("project_id"))
     if error:
-        return _deny(error)
+        return deny(error)
     if not is_control:
         reason_error = _reason_error(payload)
         if reason_error:
-            return _deny(reason_error)
+            return deny(reason_error)
     if requests.validate(payload):
-        return _deny("invalid_command")
+        return deny("invalid_command")
     view = None
     try:
         view = None if command in _PROJECTLESS_OPS \
@@ -650,66 +651,66 @@ def _confirm(data: dict, settings: dict[str, Any],
                 source = _source_row(
                     view, requests, project_id, payload["source_message_id"])
                 if source["content_hash"] != payload["source_hash"]:
-                    return _deny("source_changed")
+                    return deny("source_changed")
                 loop_error = _verify_loop_ref(
                     payload, view, project_id, payload["source_message_id"])
                 if loop_error:
-                    return _deny(loop_error)
+                    return deny(loop_error)
             else:
                 current = _current_request(
                     view, requests, project_id, payload["request_id"])
                 if (current["revision"] != payload["expected_revision"]
                         or current["current_source_hash"]
                         != payload["expected_source_hash"]):
-                    return _deny("snapshot_changed")
+                    return deny("snapshot_changed")
                 loop_error = _verify_loop_ref(
                     payload, view, project_id, current["source_message_id"])
                 if loop_error:
-                    return _deny(loop_error)
+                    return deny(loop_error)
         elif command == "ops.scan":
             if not _project_exists(view, project_id):
-                return _deny("project_not_found")
+                return deny("project_not_found")
         elif command == "ops.retry":
             row, error, digest = _semantic_job(
                 view, requests, project_id, payload["job_id"], payload.get("additional_attempts"))
             if error:
-                return _deny(error)
+                return deny(error)
             if digest != payload["expected_payload_hash"]:
-                return _deny("payload_changed")
+                return deny("payload_changed")
         elif command == "ops.adopt_summary":
-            message_id = _project(payload.get("message_id"))
-            summary_artifact_id = _project(payload.get("summary_artifact_id"))
+            message_id = positive_id(payload.get("message_id"))
+            summary_artifact_id = positive_id(payload.get("summary_artifact_id"))
             if message_id is None or summary_artifact_id is None:
-                return _deny("invalid_command")
+                return deny("invalid_command")
             comparison, error = _summary_comparison(
                 view, project_id, message_id, summary_artifact_id)
             if error:
-                return _deny(error)
+                return deny(error)
             if comparison.get("adoptable") is not True:
-                return _deny("summary_not_adoptable")
+                return deny("summary_not_adoptable")
             if (comparison["candidate"]["artifact_id"]
                     != summary_artifact_id
                     or comparison["comparison_hash"]
                     != payload.get("comparison_hash")):
-                return _deny("comparison_changed")
+                return deny("comparison_changed")
         elif command == "ops.card_resolve":
             error = _card_resolution(view, settings, identity, payload)
             if error:
-                return _deny(error)
+                return deny(error)
         elif command in _REFERENCE_OPS:
             if command == "ops.signal_dismiss" and not payload.get("expected_signal_artifact_id"):
-                return _deny("signal_changed")
+                return deny("signal_changed")
             error = _control_reference(view, payload)
             if error:
-                return _deny(error)
+                return deny(error)
         elif command not in _PROJECTLESS_OPS | {"ops.pause", "ops.resume"}:
-            return _deny("invalid_command")
+            return deny("invalid_command")
     finally:
         if view is not None:
             view.close()
     try:
         receipt = requests.enqueue(payload, settings["inbox"])
     except (OSError, ValueError):
-        return _deny("enqueue_failed")
-    return _ok(operation=operation, phase="confirm", receipt=receipt,
+        return deny("enqueue_failed")
+    return ok(operation=operation, phase="confirm", receipt=receipt,
                 payload_hash=supplied_hash)

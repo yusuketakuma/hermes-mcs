@@ -1,5 +1,6 @@
 """Read-only validation and derived display state for current Open Loop candidates."""
 from __future__ import annotations
+import semantic_store
 
 import json
 from types import SimpleNamespace
@@ -110,8 +111,8 @@ def current_candidate(db, project_id: int, artifact_id: int,
 
     # Importing semantic here avoids a module cycle through mcs_requests and
     # keeps this read-only selector usable by the receipt path.
-    from semantic import thread_bundle
-    bundle = thread_bundle(SimpleNamespace(db=db), project_id, root_id)
+
+    bundle = semantic_store.thread_bundle(SimpleNamespace(db=db), project_id, root_id)
     if bundle is None:
         raise ValueError("loop_thread_missing")
     member = next((m for m in bundle["members"]
@@ -170,7 +171,7 @@ def loop_links(db, pid, *, request_id=None, loop_id=None):
 
 def effective_loop_state(db, candidate_row, *, policy=None, bundles=None):
     """Derive a candidate's current display state with the view's exact source and policy guards."""
-    from semantic import thread_bundle
+
     import semantic_jev as jev
     from semantic_loops import _rejected_pair
     from mcs_util import loads_dict
@@ -202,7 +203,7 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None):
         (pid, r["message_id"])).fetchone()
     root = source["root"] if source else None
     if root not in bundles:
-        bundles[root] = thread_bundle(SimpleNamespace(db=db), pid, root) if root else None
+        bundles[root] = semantic_store.thread_bundle(SimpleNamespace(db=db), pid, root) if root else None
     bundle = bundles[root]
     candidate_fp = candidate_meta.get(
         "source_fingerprint", candidate_meta.get("fingerprint"))

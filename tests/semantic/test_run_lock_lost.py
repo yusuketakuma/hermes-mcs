@@ -1,5 +1,6 @@
 """An updater winning the run lock during semantic transport stops the
 drain cleanly: no attempt is charged, no later job starts, no DB write."""
+import semantic_drain
 import json
 import os
 import time
@@ -7,7 +8,6 @@ import time
 import pytest
 
 import mcs_util
-import semantic
 from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
 
 
@@ -53,7 +53,7 @@ def test_updater_in_window_stops_drain_without_charging(lock_env):
 
     try:
         result = {"errors": []}
-        out = semantic.run_due(db, _cfg(), result, time.monotonic() + 480,
+        out = semantic_drain.run_due(db, _cfg(), result, time.monotonic() + 480,
                                llm_fn=model, jev_client=_FakeJev(),
                                max_jobs=4, run_lock_fd=fd)
         assert out["run_lock_lost"] == "held"
@@ -81,7 +81,7 @@ def test_reacquire_timeout_stops_drain_without_writes(lock_env, monkeypatch):
 
     try:
         result = {"errors": []}
-        out = semantic.run_due(db, _cfg(), result, time.monotonic() + 480,
+        out = semantic_drain.run_due(db, _cfg(), result, time.monotonic() + 480,
                                llm_fn=model, jev_client=_FakeJev(),
                                max_jobs=4, run_lock_fd=fd)
         assert out["run_lock_lost"] == "timeout"
@@ -99,7 +99,7 @@ def test_normal_transport_is_unchanged(lock_env):
     db = _seeded(tmp_path)
     try:
         result = {"errors": []}
-        out = semantic.run_due(db, _cfg(), result, time.monotonic() + 480,
+        out = semantic_drain.run_due(db, _cfg(), result, time.monotonic() + 480,
                                llm_fn=_llm, jev_client=_FakeJev(),
                                run_lock_fd=fd)
         assert out["done"] == 1 and not result["errors"]

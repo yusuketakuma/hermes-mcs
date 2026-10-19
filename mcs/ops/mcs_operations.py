@@ -13,263 +13,20 @@ import hashlib
 import json
 import math
 import os
-import re
 import stat
 import tempfile
 import time
 
-from mcs_requests import (RELEASE_TAG_RE, _text, canonical, payload_hash, positive,
-                          release_tag, valid_hash)
+from mcs_requests import RELEASE_TAG_RE, _text, canonical, payload_hash
+from operation_contract import bounded_integer, retry_error
 # paused() is a core read (mcs_queries); re-exported for callers
 from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT, paused
 from safe_io import fsync_dir
 
 
-_FEATURE = "semantic"
 _SEMANTIC_JOB = "semantic"
 _HISTORY_JOB = "history"
 _ADOPTION_ARTIFACT = "semantic_adoption"
-_MAX_ADDITIONAL_ATTEMPTS = 3
-
-
-def _bounded_int(value, low: int, high: int) -> bool:
-    return type(value) is int and low <= value <= high
-
-
-def retry_error(row, payload: dict, additional_attempts=None) -> str | None:
-    """Validate an ordinary or explicitly extended semantic retry.
-
-    The same predicate is used by the Discord preview and the receipt writer;
-    keeping it here prevents a preview from promising a retry that the writer
-    would reject.  A manual extension is valid only for a failed, exhausted
-    row and never changes its accumulated attempt or input-generation state.
-    """
-    if not isinstance(payload, dict):
-        return "invalid_payload"
-    state = row["state"] if not isinstance(row, dict) else row.get("state")
-    attempts = row["attempts"] if not isinstance(row, dict) \
-        else row.get("attempts")
-    if state not in {"failed", "pending"}:
-        return "job_not_retryable"
-    if type(attempts) is not int or attempts < 0:
-        return "invalid_attempts"
-    from semantic_runtime import MAX_SQL_INTEGER, attempt_limit
-    limit = attempt_limit(payload)
-    if additional_attempts is None:
-        return "attempt_limit" if attempts >= limit else None
-    if not _bounded_int(additional_attempts, 1, _MAX_ADDITIONAL_ATTEMPTS):
-        return "bad_additional_attempts"
-    if state != "failed" or attempts < limit:
-        return "additional_attempts_not_allowed"
-    if attempts > MAX_SQL_INTEGER - additional_attempts:
-        return "attempt_limit_overflow"
-    return None
-
-
-def _v_scan(req: dict, base: set) -> str | None:
-    if req.keys() - (base | {"days", "pages"}):
-        return "unknown_field"
-    if "days" in req and not _bounded_int(req["days"], 1, 365):
-        return "bad_days"
-    if "pages" in req and not _bounded_int(req["pages"], 1, 40):
-        return "bad_pages"
-    return None
-
-
-def _v_retry(req: dict, base: set) -> str | None:
-    allowed = base | {"job_id", "expected_payload_hash",
-                      "additional_attempts", "reason"}
-    if req.keys() - allowed:
-        return "unknown_field"
-    if not positive(req.get("job_id")):
-        return "bad_job_id"
-    if not valid_hash(req.get("expected_payload_hash")):
-        return "bad_payload_hash"
-    if "additional_attempts" in req:
-        if not _bounded_int(req["additional_attempts"],
-                            1, _MAX_ADDITIONAL_ATTEMPTS):
-            return "bad_additional_attempts"
-        if not _text(req.get("reason"), 2000):
-            return "bad_reason"
-    elif "reason" in req and not _text(req["reason"], 2000):
-        return "bad_reason"
-    return None
-
-
-def _v_pause_resume(req: dict, base: set) -> str | None:
-    if req.keys() - (base | {"feature"}):
-        return "unknown_field"
-    if req.get("feature") != _FEATURE:
-        return "bad_feature"
-    return None
-
-
-def _v_adopt_summary(req: dict, base: set) -> str | None:
-    allowed = base | {"message_id", "summary_artifact_id",
-                      "comparison_hash", "reason"}
-    if req.keys() - allowed:
-        return "unknown_field"
-    if not positive(req.get("message_id")):
-        return "bad_message_id"
-    if not positive(req.get("summary_artifact_id")):
-        return "bad_summary_artifact_id"
-    if not valid_hash(req.get("comparison_hash")):
-        return "bad_comparison_hash"
-    if not _text(req.get("reason"), 2000):
-        return "bad_reason"
-    return None
-
-
-# 🚫 structured dismissal reasons (ROADMAP #19) — optional; a command
-# without reason_code keeps working (free-text reason only)
-DISMISS_REASON_CODES = ("false_positive", "already_handled", "duplicate",
-                        "out_of_scope", "other")
-
-
-def _v_signal_dismiss(req: dict, base: set) -> str | None:
-    allowed = base | {"signal_key", "reason", "reason_code",
-                      "expected_signal_artifact_id"}
-    if req.keys() - allowed:
-        return "unknown_field"
-    if not _text(req.get("signal_key"), 300):
-        return "bad_signal_key"
-    if not _text(req.get("reason"), 2000):
-        return "bad_reason"
-    if "reason_code" in req and req["reason_code"] not in DISMISS_REASON_CODES:
-        return "bad_reason_code"
-    if "expected_signal_artifact_id" in req \
-            and not positive(req["expected_signal_artifact_id"]):
-        return "bad_expected_artifact_id"
-    return None
-
-
-# ⚠ report target parts (card modal select) — stored verbatim
-EXTRACT_FEEDBACK_FIELDS = ("summary", "urgency", "meds", "symptoms",
-                           "requests", "vitals", "patient_context", "labs",
-                           "events", "other")
-
-
-def _v_extract_feedback(req: dict, base: set) -> str | None:
-    if req.keys() - (base | {"message_id", "artifact_id", "field",
-                             "reason"}):
-        return "unknown_field"
-    if not positive(req.get("message_id")) \
-            or not positive(req.get("artifact_id")):
-        return "bad_extract_ref"
-    if req.get("field") not in EXTRACT_FEEDBACK_FIELDS:
-        return "bad_field"
-    if not _text(req.get("reason"), 2000):
-        return "bad_reason"
-    return None
-
-
-def _v_signal_policy(req: dict, base: set) -> str | None:
-    if req.keys() - (base | {"policy", "reason"}):
-        return "unknown_field"
-    if (not isinstance(req.get("policy"), dict)
-            or not req["policy"]
-            or not all(isinstance(k, str) for k in req["policy"])):
-        return "bad_policy"
-    if not _text(req.get("reason"), 2000):
-        return "bad_reason"
-    return None
-
-
-def _v_refstat_approve(req: dict, base: set) -> str | None:
-    if req.keys() - (base | {"name", "file_hash", "reason"}):
-        return "unknown_field"
-    from mcs_refstats import _name_ok
-    if not _name_ok(req.get("name")):
-        return "bad_refstat_name"
-    if not valid_hash(req.get("file_hash")):
-        return "bad_file_hash"
-    if not _text(req.get("reason"), 2000):
-        return "bad_reason"
-    return None
-
-
-def _v_restore_approve(req: dict, base: set) -> str | None:
-    # Per-restore consent for a schema-bump DB replace — bound to
-    # the exact loss report (report_id) + backup bytes/schema, so an
-    # earlier update/rollback approval can never substitute. Same
-    # projectless lifecycle surface as the update ops.
-    if req.get("project_id") is not None:
-        return "bad_project_id"
-    allowed = base | {"report_id", "backup_sha256", "backup_schema",
-                      "reason"}
-    if req.keys() - allowed:
-        return "unknown_field"
-    if not valid_hash(req.get("report_id")):
-        return "bad_report_id"
-    if not valid_hash(req.get("backup_sha256")):
-        return "bad_backup_sha256"
-    if type(req.get("backup_schema")) is not int \
-            or req["backup_schema"] < 0:
-        return "bad_backup_schema"
-    if not _text(req.get("reason"), 2000):
-        return "bad_reason"
-    return None
-
-
-def _v_update(req: dict, base: set) -> str | None:
-    # System-wide lifecycle ops — no project_id (the mcs_requests
-    # early-return routes them here before the positive-pid gate).
-    # tag/target_sha/base_sha pin WHAT is being approved so a moved
-    # tag can never silently redirect the apply (F5/S18).
-    if req.get("project_id") is not None:
-        return "bad_project_id"
-    if req.get("cmd") == "ops.update_apply":
-        allowed = base | {"tag", "reason", "target_sha", "base_sha"}
-    else:
-        # rollback only needs an optional tag hint — silently
-        # accepted-but-ignored fields are worse than a rejection
-        allowed = base | {"tag", "reason"}
-    if req.keys() - allowed:
-        return "unknown_field"
-    if not _text(req.get("reason"), 2000):
-        return "bad_reason"
-    if req.get("cmd") == "ops.update_apply" and "tag" not in req:
-        return "bad_tag"
-    # the updater's grammar, so a notified (opted-in prerelease) tag is
-    # approvable; the opt-in itself is enforced in _apply_update_op_tx
-    if "tag" in req and not release_tag(req["tag"]):
-        return "bad_tag"
-    for k in ("target_sha", "base_sha"):
-        if k in req and (not isinstance(req[k], str)
-                         or not re.fullmatch(r"[0-9a-f]{40}",
-                                             req[k])):
-            return "bad_sha"
-    return None
-
-
-def _v_drug_alias(req, base):
-    from drug_alias import validate_operation
-    return validate_operation(req, base)
-
-
-_OPS_VALIDATORS = {
-    "ops.drug_alias_apply": _v_drug_alias,
-    "ops.drug_alias_rollback": _v_drug_alias,
-    "ops.scan": _v_scan,
-    "ops.retry": _v_retry,
-    "ops.pause": _v_pause_resume,
-    "ops.resume": _v_pause_resume,
-    "ops.adopt_summary": _v_adopt_summary,
-    "ops.signal_dismiss": _v_signal_dismiss,
-    "ops.extract_feedback": _v_extract_feedback,
-    "ops.signal_policy": _v_signal_policy,
-    "ops.refstat_approve": _v_refstat_approve,
-    "ops.restore_approve": _v_restore_approve,
-    "ops.update_apply": _v_update,
-    "ops.update_rollback": _v_update,
-}
-
-
-def validate_ops(req: dict, common: set[str]) -> str | None:
-    """Validate the operation-specific portion after common identity checks."""
-    base = set(common)
-    handler = _OPS_VALIDATORS.get(req.get("cmd"))
-    return handler(req, base) if handler else "unknown_ops_cmd"
 
 
 def _history_payload(raw) -> dict | None:
@@ -284,7 +41,7 @@ def _history_payload(raw) -> dict | None:
     if type(payload.get("page", 1)) is not int or payload.get("page", 1) < 1:
         return None
     pages = payload.get("pages", 10)
-    if not _bounded_int(pages, 1, 40):
+    if not bounded_integer(pages, 1, 40):
         return None
     if "trickle" in payload and type(payload["trickle"]) is not bool:
         return None
@@ -754,18 +511,18 @@ def _apply_refstat_approve_tx(db, req: dict, now: float,
     File rollback remains armed through artifact/receipt insertion and
     the caller's COMMIT; only then can previous bytes be discarded."""
     # the capture side owns the name rule, artifact kind and layout
-    from mcs_refstats import APPROVAL_KIND, _name_ok, _ref_path
+    from operation_contract import REFSTAT_APPROVAL_KIND, valid_reference_name, reference_path
     name, file_hash = req["name"], req["file_hash"]
     # re-asserted here too: apply_tx is public and this field reaches
     # the filesystem, unlike sibling ops' SQL-bound fields
-    if not _name_ok(name):
+    if not valid_reference_name(name):
         return "bad_refstat_name", {}
     main = db.execute("PRAGMA database_list").fetchone()["file"]
     if not main:
         return "refstat_no_data_dir", {}
     data_dir = os.path.dirname(os.path.abspath(main))
-    pending = _ref_path(data_dir, name, "pending")
-    approved = _ref_path(data_dir, name, "approved")
+    pending = reference_path(data_dir, name, "pending")
+    approved = reference_path(data_dir, name, "approved")
     if filesystem_changes is None:
         raise RuntimeError("refstat_transaction_scope_required")
     if not os.path.isfile(pending) or os.path.islink(pending):
@@ -784,7 +541,7 @@ def _apply_refstat_approve_tx(db, req: dict, now: float,
     cur = db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES(?,?,NULL,?,?,?,?)",
-        (APPROVAL_KIND, None,
+        (REFSTAT_APPROVAL_KIND, None,
          canonical(content).decode("utf-8"),
          "human",
          canonical({"command_id": req["command_id"],
@@ -927,4 +684,4 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     return "unknown_ops_cmd", {}
 
 
-__all__ = ["apply_tx", "paused", "retry_error", "validate_ops"]
+__all__ = ["apply_tx", "paused", "prepare_update_pins"]

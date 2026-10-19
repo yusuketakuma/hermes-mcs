@@ -32,7 +32,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import sqlite3
 import sys
 import time
@@ -45,26 +44,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 from mcs_util import HOME, atomic_write, file_sha256
-
-APPROVAL_KIND = "refstat_approval_v1"
-_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+from operation_contract import (REFSTAT_APPROVAL_KIND, reference_path,
+                                refstats_dir, valid_reference_name)
 
 # volatile envelope keys live at the RESULT level (snapshot,
 # snapshot_age_s, warnings, query, captured_at) — they are siblings of
 # "stats", never inside it, so verify diffs the stats subtree as-is;
 # stripping deeper would silently hide a stat that emitted such a key
-
-
-def refstats_dir(data_dir) -> str:
-    return os.path.join(str(data_dir), "refstats")
-
-
-def _name_ok(name: str) -> bool:
-    return isinstance(name, str) and bool(_NAME_RE.fullmatch(name))
-
-
-def _ref_path(data_dir, name: str, stage: str) -> str:
-    return os.path.join(refstats_dir(data_dir), stage, name + ".json")
 
 
 def _diff(want, got, path: str = "") -> list:
@@ -146,7 +132,7 @@ def _approvals_in_db(db, name: str):
     out = []
     for r in db.execute(
             "SELECT artifact_id,content FROM artifacts WHERE kind=? "
-            "ORDER BY artifact_id DESC", (APPROVAL_KIND,)):
+            "ORDER BY artifact_id DESC", (REFSTAT_APPROVAL_KIND,)):
         try:
             c = json.loads(r["content"] or "{}")
         except (ValueError, TypeError, RecursionError):
@@ -158,7 +144,7 @@ def _approvals_in_db(db, name: str):
 
 
 def cmd_capture(args) -> int:
-    if not _name_ok(args.name):
+    if not valid_reference_name(args.name):
         print(json.dumps({"ok": False, "error": "bad_name"}))
         return 1
     if args.list:
@@ -199,7 +185,7 @@ def cmd_capture(args) -> int:
     if set(STAT_NAMES) & set(result.get("stats") or {}):
         # Audit numbers mean nothing across cue/reader definitions.
         ref["audit_definition"] = definition_fingerprint()
-    pending = _ref_path(args.data_dir, args.name, "pending")
+    pending = reference_path(args.data_dir, args.name, "pending")
     atomic_write(pending, lambda f: json.dump(
         ref, f, ensure_ascii=False, sort_keys=True, allow_nan=False, indent=1),
         tmp_prefix=".capture-")
@@ -227,10 +213,10 @@ def _fold_as_of(stats_obj):
 
 def cmd_pending(args) -> int:
     """Print the approve-command envelope fields for a pending capture."""
-    if not _name_ok(args.name):
+    if not valid_reference_name(args.name):
         print(json.dumps({"ok": False, "error": "bad_name"}))
         return 1
-    path = _ref_path(args.data_dir, args.name, "pending")
+    path = reference_path(args.data_dir, args.name, "pending")
     if not os.path.isfile(path):
         print(json.dumps({"ok": False, "error": "refstat_not_pending"}))
         return 1
@@ -240,10 +226,10 @@ def cmd_pending(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    if not _name_ok(args.name):
+    if not valid_reference_name(args.name):
         print(json.dumps({"ok": False, "error": "bad_name"}))
         return 1
-    path = _ref_path(args.data_dir, args.name, "approved")
+    path = reference_path(args.data_dir, args.name, "approved")
     if not os.path.isfile(path):
         print(json.dumps({"ok": False, "error": "refstat_not_approved"}))
         return 1
@@ -328,7 +314,7 @@ def cmd_list(args) -> int:
         if os.path.isdir(d):
             for f in sorted(os.listdir(d)):
                 p = os.path.join(d, f)
-                if f.endswith(".json") and _name_ok(f[:-5]) \
+                if f.endswith(".json") and valid_reference_name(f[:-5]) \
                         and os.path.isfile(p) and not os.path.islink(p):
                     try:
                         digest = file_sha256(p)

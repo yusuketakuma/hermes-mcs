@@ -1,4 +1,5 @@
 """Japanese guided setup preserves stored values and validates every answer."""
+import setup_wizard
 import pytest
 
 import mcs_setup
@@ -7,13 +8,13 @@ import mcs_setup
 @pytest.mark.parametrize("raw, expected", [("はい", True), ("いいえ", False),
                                            ("y", True), ("n", False)])
 def test_japanese_yes_no_keeps_boolean_storage(raw, expected):
-    assert mcs_setup._parse_answer("bool", raw) == (True, expected)
+    assert setup_wizard.parse_answer("bool", raw) == (True, expected)
 
 
 @pytest.mark.parametrize("raw, expected", [("1", "hermes"), ("2", "standalone"),
                                            ("hermes", "hermes"), ("standalone", "standalone")])
 def test_numbered_choices_keep_existing_config_values(raw, expected):
-    assert mcs_setup._parse_answer("choice:hermes,standalone", raw) == (True, expected)
+    assert setup_wizard.parse_answer("choice:hermes,standalone", raw) == (True, expected)
 
 
 def test_invalid_choice_reprompts_and_enter_keeps_existing_value(monkeypatch, capsys):
@@ -25,7 +26,7 @@ def test_invalid_choice_reprompts_and_enter_keeps_existing_value(monkeypatch, ca
         return next(answers)
 
     monkeypatch.setattr("builtins.input", answer)
-    assert mcs_setup._ask("runtime_mode", "choice:hermes,standalone", "hermes",
+    assert setup_wizard.ask("runtime_mode", "choice:hermes,standalone", "hermes",
                           "どの方法で使いますか？", "standalone", present=True) == "standalone"
     assert len(prompts) == 2
     output = capsys.readouterr().out
@@ -43,7 +44,7 @@ def test_boolean_question_labels_keep_current_or_recommended_value(
         monkeypatch, cur, default, label, expected):
     prompts = []
     monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "")
-    assert mcs_setup._ask("synthetic", "bool", default, "使いますか？", cur) is expected
+    assert setup_wizard.ask("synthetic", "bool", default, "使いますか？", cur) is expected
     assert label in prompts[0]
 
 
@@ -58,7 +59,7 @@ def test_unused_connectors_have_no_empty_steps(monkeypatch, capsys):
         return "いいえ" if key == "drug_map.bundled" else ""
 
     monkeypatch.setattr("builtins.input", answer)
-    mcs_setup._wizard(cfg)
+    setup_wizard.wizard(cfg, home=mcs_setup.HOME)
     output = capsys.readouterr().out
     assert "【手順 1】" in output
     assert "朝のまとめ通知" in output
@@ -73,7 +74,7 @@ def test_unused_connectors_have_no_empty_steps(monkeypatch, capsys):
 def test_llm_url_question_contains_the_complete_post_endpoint():
     from local_llm import ENDPOINT
 
-    question = next(desc for _, rows in mcs_setup.WIZARD
+    question = next(desc for _, rows in setup_wizard.WIZARD
                     for key, _, _, desc, _ in rows if key == "local_llm.url")
     assert ENDPOINT in question
     assert "/v1/chat/completions まで入力" in question

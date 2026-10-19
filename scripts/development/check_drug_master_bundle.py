@@ -27,7 +27,7 @@ def check(manifest_path: Path = DEFAULT) -> dict:
     """Inspect public bundle bytes; never create a dictionary, pin or approval."""
     if not manifest_path.is_absolute() or manifest_path.resolve() != manifest_path:
         raise ValueError("bundle_manifest_path")
-    manifest = parse_command(importer._read(manifest_path, 65536))
+    manifest = parse_command(importer.read_master_input(manifest_path, 65536))
     if (not isinstance(manifest, dict) or set(manifest) != {
             "schema", "edition", "layout", "archive", "member", "archive_bytes",
             "archive_sha256", "csv_bytes", "csv_sha256", "rows", "source",
@@ -68,7 +68,7 @@ def check(manifest_path: Path = DEFAULT) -> dict:
     archive = manifest_path.parent / manifest["archive"]
     if archive.resolve() != archive:
         raise ValueError("bundle_archive_path")
-    raw = importer._read(archive, importer.MAX_INPUT_BYTES)
+    raw = importer.read_master_input(archive, importer.MAX_INPUT_BYTES)
     if len(raw) != manifest["archive_bytes"] or hashlib.sha256(raw).hexdigest() != manifest["archive_sha256"]:
         raise ValueError("bundle_archive_integrity")
     with zipfile.ZipFile(io.BytesIO(raw)) as zipped:

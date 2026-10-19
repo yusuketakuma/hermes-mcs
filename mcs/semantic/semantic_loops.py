@@ -1,4 +1,5 @@
 """Revision-bound advisory candidates; formal requests remain human-owned."""
+import semantic_policy
 import json
 import time
 from datetime import datetime
@@ -93,8 +94,8 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
     Relation results additionally bind the trigger and context generation.
     No function in this module writes to requests or command receipts.
     """
-    from semantic import policy_fingerprint
-    policy = policy_fingerprint(scfg)
+
+    policy = semantic_policy.policy_fingerprint(scfg)
     members = {m["message_id"]: m for m in bundle["members"]}
     fp = bundle["source_fingerprint"]
     root = bundle["root_id"]

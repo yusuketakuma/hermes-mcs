@@ -1,5 +1,6 @@
 """Run sealed private snapshot inputs locally and export only aggregate evaluation reports."""
 from __future__ import annotations
+import extract_validation
 
 import argparse
 import copy
@@ -158,7 +159,7 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
                     result = extract_llm.llm_extract(message['body'], context=context or None,
                                                     references=references or None,
                                                     posted_at=message.get('posted_at'),
-                                                    vital_policy=extract_llm.vital_threshold_policy(cfg),
+                                                    vital_policy=extract_validation.vital_threshold_policy(cfg),
                                                     deadline=time.monotonic() + 300)
                     outputs.append(result if isinstance(result, dict) else None)
                 arms['on' if enabled else 'off'] = {

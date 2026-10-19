@@ -22,7 +22,7 @@ import pytest
 import ledger
 import maintenance
 import mcs_view
-from mcs_adapter import Attachment, Message
+from mcs_contract import Attachment, Message
 
 
 # This is a predeclared synthetic smoke limit, not a production performance

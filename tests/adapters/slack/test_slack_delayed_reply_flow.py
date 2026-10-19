@@ -58,8 +58,8 @@ def test_delayed_reply_is_new_in_original_thread_and_broadcast_once(led, monkeyp
     issued = []
     with led.db:
         led.db.execute("UPDATE messages SET body_text='合成の編集後返信',content_hash=? WHERE message_id=202", ("e" * 64,))
-        notify_cards._issue_render(led.db, 1, SLACK, clock[0] + 1, issued, force=True)
-    notify_cards._publish_specs(led.db, notify_cards.notify_dirs(str(world.root)), issued, clock[0] + 1)
+        notify_cards.issue_render(led.db, 1, SLACK, clock[0] + 1, issued, force=True)
+    notify_cards.publish_specs(led.db, notify_cards.notify_dirs(str(world.root)), issued, clock[0] + 1)
     asyncio.run(_granted_card(world.worker, led, world.root))
     assert len(world.client.thread_posts) == before + expected
     assert sum(bool(p.get("reply_broadcast")) for p in world.client.thread_posts[before:]) == 1

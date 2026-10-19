@@ -15,8 +15,6 @@ Usage:
   python3 extract.py --stats            # aggregate stats only
 """
 import argparse
-import bisect
-import functools
 import json
 import os
 import re
@@ -29,34 +27,23 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
-from clinical_values import CARE_WORKER, FAMILY_PERSON, OTHER_PERSON, PAST_MARK, STAFF_PERSON
+import clinical_scope
+import clinical_values
 from patient_context import extract_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import ELIGIBLE_MESSAGE
-from mcs_util import HOME, acquire_run_lock, loads_dict, locate_quote_span
+from mcs_util import HOME, acquire_run_lock, loads_dict
 
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "extract_v1"
 
 # ---------- patterns ----------
 
-_SYMPTOMS = ("発熱", "お熱", "高熱", "血尿", "疼痛", "痛み", "嘔気", "吐き気",
-             "嘔吐", "下痢", "便秘", "発疹", "めまい", "転倒", "むくみ", "浮腫",
-             "咳", "痰", "喘鳴", "息苦し", "呼吸困難", "呼吸停止",
-             "意識消失", "意識障害", "意識低下", "意識がない", "意識なし",
-             "意識不明", "反応がない", "食欲低下", "食欲不振", "不眠", "せん妄",
-             "誤嚥", "嚥下", "出血", "褥瘡", "皮膚", "倦怠", "疲労", "脱水",
-             "低血糖",
-             # care/nursing wording: excretion, swallowing, skin, behaviour, incidents
-             "失禁", "尿閉", "頻尿", "血便", "下血", "むせ", "口腔乾燥", "口内炎", "しびれ", "麻痺",
-             "振戦", "ふらつき", "傾眠", "意欲低下", "不安", "抑うつ", "不穏", "興奮", "幻覚", "妄想",
-             "徘徊", "帰宅願望", "介護抵抗", "拒薬", "拒食", "掻痒", "かゆみ", "発赤", "発汗", "冷汗",
-             "チアノーゼ", "頻脈", "徐脈", "不整脈", "体重減少", "転落", "誤薬")
 # Only particles, fillers, time words or further listed symptoms may sit between a
 # symptom and its negation, so 「発熱・疼痛なし」「発熱は本日はなし」 are negated while
 # 「痛みが取れない」「食欲不振で食べられない」「発熱あり、疼痛なし」 keep 発熱 positive, and
 # a negated negation (「ないわけではない」) stays positive.
-_LISTED_SYMPTOM = "|".join(map(re.escape, sorted(_SYMPTOMS, key=len, reverse=True)))
+_LISTED_SYMPTOM = "|".join(map(re.escape, sorted(clinical_scope.SYMPTOMS, key=len, reverse=True)))
 _SYMPTOM_NEGATION = re.compile(
     r"さ?(?:[はもがの]|の?訴え|症状|等|など|特に|本日|今日|今回|現在|今朝|夜間|日中|明らかな|[ \t　]"
     r"|[・/／、とや](?:" + _LISTED_SYMPTOM + r"))*"
@@ -81,9 +68,6 @@ _URGENT_NONCURRENT = re.compile(
     r"(?:昨日|一昨日|先日|先週|先月|昨年|以前|過去|"
     r"明日|明後日|来週|来月|来年|後日|今度|\d+日前|\d+日後)"
     r"(?:には|にも|は|に|も)?[、,\s　]*$")
-# A request in the same clause stays current even after a time word
-# (「明日、至急ご連絡ください」); only plans/reports are cancelled.
-_URGENT_REQUEST = re.compile(r"ください|下さい|お願い|ほしい|欲しい|願います")
 # A contingency head directly before the urgent word (「悪化した場合は救急搬送」
 # 「続くようなら至急連絡」) describes a plan, not a current need; a clock time
 # (「10時に至急」) is not a contingency.
@@ -107,49 +91,6 @@ _URGENT_INACTIVE = re.compile(
     # A past ending closes the phrase; 「ただちに」「たすけて」 are not past tense.
     r"(?=$|[、,]|ので|ため|から|けど|けれど|が|と))")
 
-_SELF_PERSON = r"ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?"
-_FAMILY_PERSON, _OTHER_PERSON = FAMILY_PERSON, OTHER_PERSON
-_CLINICAL_OWNER = (r"症状|状態|体調|意識|呼吸|体温|血圧|収縮期|拡張期|容態|病歴|入院|退院|搬送|死亡|脈拍|酸素|薬|服薬|Cr|eGFR|AST|ALT|BUN|HbA1c|Hb|Na|K|血糖|採血|検査|BP|SpO2|熱|体重|身長|weight|height|BS|Glu|glucose|BNP|INR|CRP|Alb|[胸腹頭背腰]痛|"
-                   + "|".join(map(re.escape, _SYMPTOMS)))
-_NAMED_PERSON = r"[ぁ-んァ-ヶ一-龥A-Za-z0-9]{1,16}(?:さん|様)"
-_COMPOUND_PERSON = rf"(?:{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:ご本人|本人)"
-_OWNER_MODIFIER = r"(?:(?:現在|以前|過去|本日)の|強い|弱い|激しい|軽い)*"
-# Vital labels and bare readings a person can own without a particle (ご家族P80, 妻72);
-# a count (家族2名, 娘さん3人) or an age is not a reading.
-_VITAL_OWNER = (r"(?:体温|BT|KT|脈拍?|心拍|HR|(?<![A-Za-z])P(?![A-Za-z])|呼吸|RR|血圧|BP|"
-                r"SpO2|SPO2|Spo2|酸素|血糖|BS|Glu)")
-_READING_OWNER = r"[0-9０-９]+(?:[.．][0-9０-９]+)?(?![0-9０-９.．]|[ \t　]*(?:名|人|歳|才|か?月|ヶ月|年|日|時|分|回目|件|階|号|番|代))"
-_PERSON = re.compile(
-    rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|私|自分|{_NAMED_PERSON})"
-    rf"(?P<link>について|の{_OWNER_MODIFIER}(?:{_CLINICAL_OWNER}|{_VITAL_OWNER})|[ \t　]+(?={_CLINICAL_OWNER})"
-    rf"|に対して|に対し|への|には|に(?={_CLINICAL_OWNER})|は|が|も|を|から|より|[:：])", re.I)
-# Japanese reports need no separator before the owner (本日ご家族P80).
-# The shared vocabulary excludes family kanji inside 大丈夫/工夫/分母.
-_BARE_OWNER = re.compile(
-    rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})"
-    rf"[ \t　]*(?={_VITAL_OWNER}|{_READING_OWNER})", re.I)
-_DIRECT_OWNER = re.compile(rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})の{_OWNER_MODIFIER}[ \t　]*$")
-_CLINICAL_ACTOR = re.compile(r"(?:が|は)[、,\s]*[^。！？!?;；\n、,]*?を(?:開始|中止|増量|減量|変更|処方|投与|測定)")
-_CLINICAL_RECIPIENT = re.compile(rf"(?:{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:に対して|に対し|への)")
-_CARE_ACTOR = re.compile(
-    r"(?:が|は)[ \t　]*(?:(?:入浴|排泄|食事|更衣|移乗|歩行)?介助|訪問"
-    r"|(?:体温|血圧|脈拍|SpO2)(?:を)?(?:測定|測っ|測り|計測)|検温)"
-    r"(?:しました|した|しています|している|た|ました)?[ \t　]*(?=$|[。！？!?;；\n])", re.I)
-_SCOPE_HEADING = re.compile(
-    rf"(?m)^[ \t　]*(?:[【［\[](.*?)[】］\]]|([^\n:：]{{1,24}})[:：]|"
-    rf"({_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|過去|既往|現在|予定|目標|参考|基準)[ \t　]*$)[ \t　]*")
-_REPORTING = re.compile(r"(?:より|から|が(?:報告|連絡|説明|相談|話)|は(?:報告|連絡|説明|相談|話))")
-_CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
-_NONCURRENT_MARK = re.compile(r"過去|既往|以前(?!から|より)|先月(?!から|より)|先週(?!から|より)|昨年|一昨年")
-# A reading taken 昨日/前回 is no current measurement, while 昨日中止 stays a recent change.
-_MEASURED_PAST_MARK = re.compile(rf"(?:{PAST_MARK})(?!から|より)")
-# 「昨日、体温…」: a past word heading the sentence before a comma dates every reading of it.
-_SENTENCE_PAST_LEAD = re.compile(rf"[ \t　]*(?:{PAST_MARK})(?!から|より)(?:は|に|の|も)?[、,]")
-_CONDITIONAL_MARK = re.compile(
-    r"もし|万一|万が一|(?:場合|とき|(?<![0-9０-９一二三四五六七八九十])(?<!採血)(?<!測定)(?<!検査)(?<!服用)(?<!投与)(?<!訪問)(?<!往診)時)(?:は|には|に)|"
-    r"なら(?!ない|なく|なかった|れ|ず|ぬ)|たら(?!しい)|ければ")
-_SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|しかし|ただし|だが|けれど(?:も)?|一方")
-_REASON_CUE = re.compile(r"至急|緊急|救急|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:BP|BS|Glu)\s*\d", re.I)
 _CLINICAL_REASON_CUE = re.compile(r"救急(?:搬送|受診)|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:Cr|eGFR|K|Na|血糖|BP|BS|Glu)\s*\d", re.I)
 
 
@@ -172,7 +113,7 @@ def clinical_urgency_quote(quote, *, symptom=None):
 def urgent_request_quote(quote):
     """Recognize urgency of a requested action without asserting a patient's clinical state."""
     return (isinstance(quote, str) and _URGENT.search(quote) is not None
-            and (_URGENT_REQUEST.search(quote) is not None or _URGENT_SOON_ACTION.search(quote) is not None))
+            and (clinical_scope.URGENT_REQUEST.search(quote) is not None or _URGENT_SOON_ACTION.search(quote) is not None))
 
 
 def patient_clinical_quotes(body, *, patient_name=None):
@@ -189,222 +130,11 @@ def patient_clinical_quotes(body, *, patient_name=None):
             continue
         if not clinical_urgency_quote(clause):
             continue
-        kept, _ = patient_urgency_quotes(body, [clause], patient_name=patient_name)
+        kept, _ = clinical_scope.patient_urgency_quotes(body, [clause], patient_name=patient_name)
         quotes.extend(quote for quote in kept if clinical_urgency_quote(quote))
     return list(dict.fromkeys(quotes))
 
 
-def _person_scope(person, patient_name):
-    # 「同居の娘さん」: _NAMED_PERSON also takes の, so read its relation tail, not the whole as a name.
-    if re.fullmatch(rf"(?:.+の)?(?:{_FAMILY_PERSON})(?:ご本人|本人)?", person):
-        return "family"
-    if re.fullmatch(rf"(?:{_OTHER_PERSON})(?:ご本人|本人)?", person):
-        return "other"
-    alias = person.removesuffix("ご本人").removesuffix("本人").removesuffix("さん").removesuffix("様")
-    alias = re.sub(r"\s+", "", alias)
-    name = re.sub(r"\s+", "", patient_name) if isinstance(patient_name, str) else ""
-    # Strip an explicit time modifier, never a の inside another person's name.
-    known_name = bool(name) and (alias == name or re.fullmatch(
-        rf"(?:{_CURRENT_MARK.pattern})の{re.escape(name)}", alias) is not None)
-    return "patient" if re.fullmatch(_SELF_PERSON, person) or known_name else "unknown"
-
-
-@functools.lru_cache(maxsize=32)
-def _scope_puncts(body):
-    """Positions of the single-character _SCOPE_BREAK marks, cached per body."""
-    return tuple(m.start() for m in re.finditer(r"[。！？!?;；、,\n]", body))
-
-
-@functools.lru_cache(maxsize=32)
-def _scope_events(body, patient_name, provider_fields):
-    """Collect span-independent person/period events once per body, sorted by position, for patient_source_scope."""
-    events, assignments = [], []
-    # _REPORTING/_CLINICAL_ACTOR are matched in place (pos), never on a copied tail.
-    stops = [m.start() for m in re.finditer(r"[。！？!?;；\n]", body)]
-    for match in _SCOPE_HEADING.finditer(body):
-        label = (match[1] or match[2] or match[3] or "").strip()
-        if (provider_fields and (
-                re.fullmatch(r"(?:.*(?:担当(?:医師|看護師|薬剤師|ケアマネ|スタッフ|職員)|主治医|診療医)(?:名|氏名|名前)?"
-                             r"|(?:医師|看護師|薬剤師|ケアマネ)(?:名|氏名|名前))", label)
-                or (match[2] is not None and re.fullmatch(r".+(?:医師|看護師|薬剤師|ケアマネ)", label)))
-                and not re.search(rf"{_FAMILY_PERSON}|本人|自身|自分|症状|状態|体調|既往|病歴|受診|入院|退院|体温|血圧|服薬", label)):
-            assignments.append(match.span())
-            continue  # Provider assignment/signature fields do not own the patient's schedule.
-        # A report-source heading is not the clinical subject below it.
-        if re.fullmatch(rf"(?:{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:から|より)", label):
-            continue
-        # 【ヘルパー報告】: a staff report heading names its writer, not the subject.
-        if re.fullmatch(rf"(?:{STAFF_PERSON})(?:から|より)?の?(?:報告|記録|連絡|申し送り)", label):
-            continue
-        if re.fullmatch(rf"{_COMPOUND_PERSON}|{_NAMED_PERSON}", label):
-            events.append((match.start(), _person_scope(label, patient_name), None))
-        elif re.search(_OTHER_PERSON, label):
-            events.append((match.start(), "other", None))
-        elif re.search(_FAMILY_PERSON, label):
-            events.append((match.start(), "family", None))
-        elif re.search(_SELF_PERSON, label):
-            events.append((match.start(), "patient", None))
-        if re.search(r"過去|既往|以前", label):
-            events.append((match.start(), None, "past"))
-        elif re.search(r"予定|目標|参考|基準", label):
-            events.append((match.start(), None, "planned"))
-        elif re.search(r"現在|現状|本日|本人|患者", label):
-            events.append((match.start(), None, "current"))
-    for match in _PERSON.finditer(body):
-        if any(left <= match.start() < right for left, right in assignments):
-            continue
-        person = match["person"]
-        tail = match.start() + len(person)
-        if _REPORTING.match(body, tail) and not re.fullmatch(_SELF_PERSON, person) and not re.fullmatch(_COMPOUND_PERSON, person):
-            continue
-        if (re.fullmatch(STAFF_PERSON, person)
-                and _CLINICAL_ACTOR.match(body, tail)):
-            k = bisect.bisect_left(stops, match.start())
-            before = body[stops[k - 1] + 1 if k else 0:match.start()]
-            k = bisect.bisect_left(stops, tail)
-            after = body[tail:stops[k] if k < len(stops) else len(body)]
-            if _CLINICAL_RECIPIENT.search(before) and not re.search(r"自身|自分", after):
-                continue  # A prescribing/measuring clinician is the actor, not the recipient.
-        # Only a complete care/measurement action names the actor rather than the owner.
-        # Self-measurement, illness and modified/ambiguous clauses keep the staff owner.
-        if re.fullmatch(CARE_WORKER, person) and _CARE_ACTOR.match(body, tail):
-            continue
-        subject = _person_scope(person, patient_name)
-        events.append((match.start(), subject, None))
-    for match in _BARE_OWNER.finditer(body):
-        if not any(left <= match.start() < right for left, right in assignments):
-            events.append((match.start(), _person_scope(match["person"], patient_name), None))
-    return tuple(sorted(events, key=lambda event: event[0]))
-
-
-def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False,
-                         measurement=False):
-    """Resolve an original span's reported person and explicit noncurrent scope, never from a keyword mask."""
-    if not isinstance(body, str) or not 0 <= start < end <= len(body):
-        return "unknown"
-    # Non-str names never match (_person_scope), so None keeps the cache key hashable.
-    events = list(_scope_events(body, patient_name if isinstance(patient_name, str) else None,
-                                bool(provider_fields)))  # already sorted by position
-    # Owner phrases and break words never span these marks, so only the span's own clause is scanned.
-    puncts = _scope_puncts(body)
-    marks = bisect.bisect_left(puncts, start - 1)  # `$` may sit before a trailing newline at start-1
-    owner = _DIRECT_OWNER.search(body, puncts[marks - 1] + 1 if marks else 0, start)
-    if owner is not None:  # after equal positions, as a stable sort of an appended event
-        bisect.insort_right(events, (owner.start(), _person_scope(owner["person"], patient_name), None),
-                            key=lambda event: event[0])
-    scope, period = default, "current"
-    for position, subject, phase in events[:bisect.bisect_right(events, start, key=lambda event: event[0])]:
-        if subject is not None:
-            scope = subject
-        if phase is not None:
-            period = phase
-    if scope != "patient":
-        return scope
-    # Qualifiers are evaluated in the span's own source clause, not from an
-    # unrelated patient's/history sentence elsewhere in the same message.
-    marks = bisect.bisect_left(puncts, start)
-    left = puncts[marks - 1] + 1 if marks else 0
-    left = max((m.end() for m in _SCOPE_BREAK.finditer(body, left, start)), default=left)
-    right = _SCOPE_BREAK.search(body, end)
-    clause = body[left:right.start() if right else len(body)]
-    if _CONDITIONAL_MARK.search(clause):
-        return "conditional"
-    if period != "current" and not _CURRENT_MARK.search(clause):
-        return period
-    sentence = max(body.rfind(c, 0, start) for c in "。！？!?\n") + 1
-    if measurement and _CURRENT_MARK.search(clause) and (
-            _NONCURRENT_MARK.search(clause) or _MEASURED_PAST_MARK.search(clause)):
-        # 「昨日の体温38.5℃と本日の体温36.5℃」: one clause with both times — each reading
-        # takes the nearest time word written before it within the clause
-        before = body[left:start]
-        nearest = max([(m.end(), "past") for rx in (_NONCURRENT_MARK, _MEASURED_PAST_MARK)
-                       for m in rx.finditer(before)]
-                      + [(m.end(), "current") for m in _CURRENT_MARK.finditer(before)], default=None)
-        if nearest is not None:
-            return "past" if nearest[1] == "past" else scope
-    if (_NONCURRENT_MARK.search(clause)
-            or (measurement and (_MEASURED_PAST_MARK.search(clause)
-                                 or _SENTENCE_PAST_LEAD.match(body, sentence, start)))) \
-            and not (_CURRENT_MARK.search(clause) or _URGENT_REQUEST.search(clause)):
-        return "past"
-    if re.search(r"(?:予定|目標|参考|基準)(?:の|は|値|:|：)", clause) and not _CURRENT_MARK.search(clause):
-        return "planned"
-    return scope
-
-
-def patient_urgency_quotes(body, quotes, *, patient_name=None, default="patient"):
-    """Keep only source-located patient quotes; another person's urgency remains in the original record."""
-    kept, scopes = [], []
-    for quote in quotes:
-        span = locate_quote_span(body, quote) if isinstance(quote, str) and quote.strip() else None
-        if span is None:
-            scopes.append("unknown")
-            continue
-        cuts = sorted({span[0], span[1], *[m.end() for m in _SCOPE_BREAK.finditer(body, *span)],
-                       *[m.start() for m in _PERSON.finditer(body, *span)]})
-        pieces = [(left, right, patient_source_scope(body, left, right, patient_name=patient_name, default=default))
-                  for left, right in zip(cuts, cuts[1:]) if body[left:right].strip()]
-        if pieces and all(scope == "patient" for _, _, scope in pieces):
-            text = body[span[0]:span[1]]
-            scopes.append("patient")
-            if text not in kept:
-                kept.append(text)
-            continue
-        for left, right, scope in pieces:
-            text = body[left:right].strip()
-            if not text or (len(cuts) > 2 and not _REASON_CUE.search(text)):
-                continue
-            scopes.append(scope)
-            if scope == "patient" and text not in kept:
-                kept.append(text)
-    return kept, scopes
-
-
-def patient_vitals(values, body, *, patient_name=None):
-    """Filter flat cached vital values against original patient spans without reinterpreting other-person measurements."""
-    if not isinstance(values, dict) or not isinstance(body, str):
-        return {}
-    kept = {}
-    for key, pattern in _VITAL_PATTERNS.items():
-        for match in re.finditer(pattern, body):
-            if patient_source_scope(body, match.start(), match.end(), patient_name=patient_name,
-                                    measurement=True) != "patient":
-                continue
-            actual = ({"sbp": int(match[1]), "dbp": int(match[2])} if key == "sbp" else
-                      {key: float(match[1].replace("．", ".")) if "." in match[1].replace("．", ".")
-                       else int(match[1])})
-            present = [field for field in actual if type(values.get(field)) in (int, float)]
-            if len(present) == 2 and any(values[field] != actual[field] for field in present):
-                continue            # both sides cached: only this whole reading may match
-            for field in present:
-                if values[field] == actual[field]:
-                    kept[field] = actual[field]
-    # Partial LLM blood pressures still need their own label, side and patient span.
-    from clinical_values import _bp_side, _nearest_vital_label, _vitals_guard
-    partial = {key: values[key] for key in ("sbp", "dbp")
-               if key not in kept and type(values.get(key)) in (int, float)}
-    grounded = _vitals_guard(body, partial)
-    for match in re.finditer(r"\d+(?:[.．]\d+)?", body):
-        start, end = match.span()
-        if _nearest_vital_label(body, start, end) != "bp":
-            continue
-        side = _bp_side(body, start, end)
-        label = re.search(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$", body[max(0, start - 14):start])
-        if side is None and label is not None:
-            side = "sbp" if label[1] == "収縮期" else "dbp"
-        if side is None or patient_source_scope(body, start, end, patient_name=patient_name,
-                                                measurement=True) != "patient":
-            continue
-        if side in partial and grounded.get(side) == partial[side] == float(match[0].replace("．", ".")):
-            kept[side] = partial[side]
-    from clinical_values import _bp_pair_unproven
-    if "sbp" in kept and "dbp" in kept and _bp_pair_unproven(
-            body, kept["sbp"], kept["dbp"],
-            keep=lambda s, e: patient_source_scope(
-                body, s, e, patient_name=patient_name) == "patient"):
-        del kept["sbp"], kept["dbp"]  # two readings never make one pair
-    from clinical_values import _current_only
-    return _current_only(kept, body, patient_name)  # an earlier reading is not the current one
 _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm"),
              (r"(?:ご)?連絡(?:ください|をお願い|いただき)", "contact"),
              (r"共有(?:いたします|します|をお願い|させて)", "share"),
@@ -447,18 +177,6 @@ _PLANNED_BEFORE = re.compile(r"次回|予定(?!通り|どおり)|明日|明後�
 # 予定通りなら (conditional) right before the date, beyond the 6-char window
 _PLANNED_IF = re.compile(r"予定(?:通り|どおり)なら[　\s、,，]*$")
 _PLANNED_AFTER = re.compile(r"[　\s]*(?:の|を)?[　\s]*(?:予定|します|いたします|致します)")
-_VITAL_PATTERNS = {
-    "bt":   r"(?:体温|BT)[:：は]?\s*(\d{2}(?:[.．]\d)?)(?![\d.．])\s*[℃度]?",
-    # 不整脈 is a finding, not a pulse label ("不整脈は20回" ≠ HR 20)
-    "hr":   r"(?:脈拍|(?<!静)(?<!動)(?<!整)脈|HR|心拍数?)[:：は]?\s*(\d{2,3})(?![\d.．])",
-    "rr":   r"(?:呼吸(?:数)?|RR)[:：は]?\s*(\d{1,2})(?![\d.．])",
-    "sbp":  r"(?:血圧|BP)[:：は]?\s*(\d{2,3})\s*[/／]\s*(\d{2,3})(?![\d.．])",
-    # a number followed by a flow unit is oxygen delivery (酸素10L),
-    # never a saturation reading
-    "spo2": r"(?:SpO2|Spo2|SPO2|spo2|酸素)[:：は]?\s*(\d{2,3})(?![\d.．])"
-            r"(?!\s*(?:[LＬlℓ]|リットル))\s*[%％]?",
-    "bs":   r"(?:血糖|BS|Glu)[:：は]?\s*(\d{2,3})(?![\d.．])",
-}
 
 
 def _next_planned_matches(body):
@@ -471,7 +189,7 @@ def _next_planned_matches(body):
         if (re.search(r"中止|キャンセル|延期|未定", body[match.start():match.start("month")])
                 or _NEXT_CANCELLED.match(body[match.end():])):
             continue
-        scopes = (patient_source_scope(body, start, match.end(), provider_fields=True)
+        scopes = (clinical_scope.patient_source_scope(body, start, match.end(), provider_fields=True)
                   for start in (match.start(), match.start("year") if match["year"] else match.start("month")))
         if any(scope in ("family", "other", "unknown", "past", "conditional") for scope in scopes):
             continue
@@ -557,10 +275,10 @@ def patient_rule_urgency_quotes(body):
             before = clause[cursor:start]
             cursor = end
             stop = spans[i + 1][0] if i + 1 < len(spans) else len(clause)
-            if patient_source_scope(body, offset + start, offset + end) != "patient":
+            if clinical_scope.patient_source_scope(body, offset + start, offset + end) != "patient":
                 continue
             if ((_URGENT_NONCURRENT.search(before)
-                 and not _URGENT_REQUEST.search(clause[end:]))
+                 and not clinical_scope.URGENT_REQUEST.search(clause[end:]))
                     or _URGENT_CONDITIONAL.search(before)
                     or _URGENT_HYPOTHETICAL.search(before)
                     or _URGENT_INACTIVE.match(clause[end:stop].strip())
@@ -594,7 +312,7 @@ def extract_message(body: str, posted_at: str) -> dict:
     event_mentions = []
     for event, pattern in event_patterns.items():
         for match in re.finditer(pattern, body):
-            scope = patient_source_scope(body, match.start(), match.end())
+            scope = clinical_scope.patient_source_scope(body, match.start(), match.end())
             if scope in ("family", "other", "unknown"):
                 event_mentions.append({"event": event, "scope": scope, "evidence": match[0]})
             else:
@@ -687,9 +405,9 @@ def extract_message(body: str, posted_at: str) -> dict:
 
     # --- vitals ---
     vit, mentions = {}, []
-    for k, pat in _VITAL_PATTERNS.items():
+    for k, pat in clinical_values.VITAL_PATTERNS.items():
         for m in re.finditer(pat, body):
-            scope = patient_source_scope(body, m.start(), m.end(), measurement=True)
+            scope = clinical_scope.patient_source_scope(body, m.start(), m.end(), measurement=True)
             if k == "sbp":
                 values = {"sbp": int(m.group(1)), "dbp": int(m.group(2))}
             else:
@@ -706,7 +424,7 @@ def extract_message(body: str, posted_at: str) -> dict:
 
     # --- symptoms / adherence flags ---
     # A symptom counts when at least one mention is not directly negated (発熱なし, 吐き気は見られません).
-    sym = [s for s in _SYMPTOMS
+    sym = [s for s in clinical_scope.SYMPTOMS
            if any(not _SYMPTOM_NEGATION.match(body, m.end()) for m in re.finditer(re.escape(s) + ("(?!定)" if s == "不安" else ""), body))]
     if sym:
         out["symptoms"] = sym
@@ -729,7 +447,7 @@ def extract_message(body: str, posted_at: str) -> dict:
 
     # --- actors / voices ---
     actors = set()
-    if re.search(rf"{_FAMILY_PERSON}|親族", body):
+    if re.search(rf"{clinical_scope.FAMILY_PERSON}|親族", body):
         actors.add("family")
     if re.search(r"[（(]本人[)）]", body):
         actors.add("patient_voice")

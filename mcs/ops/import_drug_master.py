@@ -57,7 +57,7 @@ class Conversion:
     payload: bytes | None
 
 
-def _read(path: Path, bound: int) -> bytes:
+def read_master_input(path: Path, bound: int) -> bytes:
     if not path.is_absolute():
         raise MasterError("absolute_input_required")
     raw = read_regular_nofollow(path, bound, lambda: MasterError("input_file_or_size"))
@@ -101,7 +101,7 @@ def _check_pin(pin: dict[str, JSON]):
     if (not isinstance(changes, list) or not isinstance(absent, list)
             or any(not isinstance(v, str) or not re.fullmatch(r"[0-9]", v) for v in changes)
             or any(not isinstance(v, str) or not re.fullmatch(r"[0-9]{1,8}", v) for v in absent)
-            or ((changes or absent) and not drug_map._text(policy.get("confirmed_by")))):
+            or ((changes or absent) and not drug_map.valid_text(policy.get("confirmed_by")))):
         raise MasterError("status_policy_invalid")
     selected = pin.get("medicine_codes")
     if selected is not None and (
@@ -172,12 +172,12 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
     expected, as_of, policy, changes, absent, selected = _check_pin(pin)
     terms = pin.get("terms_checked_on")
     terms_record = pin.get("terms_record")
-    if terms is not None and (_iso(terms) > as_of or not drug_map._text(terms_record)):
+    if terms is not None and (_iso(terms) > as_of or not drug_map.valid_text(terms_record)):
         raise MasterError("terms_metadata_invalid")
     approval = pin.get("approved_by")
-    if approval is not None and (not drug_map._text(approval) or terms is None):
+    if approval is not None and (not drug_map.valid_text(approval) or terms is None):
         raise MasterError("approval_metadata_invalid")
-    raw = _read(path, MAX_INPUT_BYTES)
+    raw = read_master_input(path, MAX_INPUT_BYTES)
     source_hash = hashlib.sha256(raw).hexdigest()
     if source_hash != expected:
         raise MasterError("source_hash_mismatch")
@@ -367,7 +367,7 @@ def main(argv=None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     try:
-        pin = json.loads(_read(args.pin, 65536))
+        pin = json.loads(read_master_input(args.pin, 65536))
         if not isinstance(pin, dict):
             raise MasterError("pin_object_required")
         result = convert(args.source, pin)
@@ -403,7 +403,7 @@ def catalog(path: Path, pin: dict[str, JSON]) -> dict:
     # reviewed layout; candidate conversion remains pinned to EDITION.
     expected, _, _, _, _, _ = _check_pin({**pin, "edition": EDITION,
         "member": f"y_{EDITION}.csv", "as_of": max(as_of, EDITION_DATE).isoformat()})
-    raw = _read(path, MAX_INPUT_BYTES)
+    raw = read_master_input(path, MAX_INPUT_BYTES)
     if hashlib.sha256(raw).hexdigest() != expected:
         raise MasterError("source_hash_mismatch")
     data = _master_csv(path, pin["member"], raw)

@@ -1,4 +1,6 @@
 """Synthetic checks for the beginner setup path; no live services."""
+import lifecycle_io
+import setup_wizard
 import json
 
 import pytest
@@ -13,7 +15,7 @@ from test_mcs_setup import _init_env
     ('choice:off,slack,discord,lineworks', '2', 'slack'),
 ])
 def test_numbered_and_japanese_answers(kind, answer, expected):
-    assert mcs_setup._parse_answer(kind, answer) == (True, expected)
+    assert setup_wizard.parse_answer(kind, answer) == (True, expected)
 
 
 def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
@@ -32,7 +34,7 @@ def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
         return answers.get(key, '')
 
     monkeypatch.setattr('builtins.input', answer)
-    mcs_setup._wizard(cfg)
+    setup_wizard.wizard(cfg, home=mcs_setup.HOME)
     assert 'trickle_pages' not in seen and cfg['trickle_pages'] == 7
     assert 'semantic.mode' not in seen and cfg['semantic']['mode'] == 'off'
     assert cfg['notify']['slack']['allowed_user_ids'] == ['U123']
@@ -43,7 +45,7 @@ def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
 def test_required_unknown_does_not_invent_an_identifier(monkeypatch, capsys):
     answers = iter(['?', '', 'synthetic-login'])
     monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
-    assert mcs_setup._ask('mcs_login_id', 'req', None, 'ログインID', None) == 'synthetic-login'
+    assert setup_wizard.ask('mcs_login_id', 'req', None, 'ログインID', None) == 'synthetic-login'
     output = capsys.readouterr().out
     assert '管理者に確認' in output and '必須項目' in output
 
@@ -74,13 +76,13 @@ def test_cancellation_during_password_input_does_not_claim_config_saved(
     original = json.dumps(cfg).encode()
     if existing:
         path.write_bytes(original)
-    monkeypatch.setattr(mcs_setup, '_wizard', lambda cfg: cfg.update(trickle_pages=2))
+    monkeypatch.setattr(setup_wizard, 'wizard', lambda cfg, **kwargs: cfg.update(trickle_pages=2))
 
     def interrupt(prompt):
         raise interruption('synthetic-private-input')
 
     monkeypatch.setattr(mcs_setup.getpass, 'getpass', interrupt)
-    monkeypatch.setattr(mcs_setup, '_keychain_store', lambda *a: pytest.fail('secret write'))
+    monkeypatch.setattr(lifecycle_io, 'store_keychain', lambda *a: pytest.fail('secret write'))
     monkeypatch.setattr(mcs_setup, '_write_atomic', lambda *a: pytest.fail('config write'))
     assert mcs_setup.main(['init']) == 130
     assert path.exists() is existing
@@ -116,14 +118,14 @@ def test_choices_follow_the_question_and_explain_slack_recommendation(monkeypatc
         return ''
 
     monkeypatch.setattr('builtins.input', answer)
-    assert mcs_setup._ask('notify.interactive', 'choice:off,slack,discord,lineworks',
+    assert setup_wizard.ask('notify.interactive', 'choice:off,slack,discord,lineworks',
                          'off', '通知画面の形式', None) == 'off'
 
 
 def test_notification_target_help_explains_where_to_find_id(monkeypatch, capsys):
     answers = iter(['?', 'slack:C0123456789'])
     monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
-    assert mcs_setup._ask('notify_target', 'req', None, '通知先', None) == 'slack:C0123456789'
+    assert setup_wizard.ask('notify_target', 'req', None, '通知先', None) == 'slack:C0123456789'
     output = capsys.readouterr().out
     assert 'チャンネル名 → 詳細の最下部' in output
     assert 'docs/guides/EASY_SETUP.md' in output

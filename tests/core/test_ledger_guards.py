@@ -1,4 +1,5 @@
 """Synthetic relation guards, activation audits and legacy compatibility."""
+import health_report
 import sqlite3
 from contextlib import closing
 
@@ -143,7 +144,6 @@ def test_clean_existing_database_starts_shadow_and_does_not_self_promote(tmp_pat
 
 
 def test_shadow_evidence_is_visible_to_health_and_snapshot_status(ledger, tmp_path, monkeypatch):
-    import run_check
     from views_testkit import _view
 
     with ledger.db:
@@ -154,9 +154,9 @@ def test_shadow_evidence_is_visible_to_health_and_snapshot_status(ledger, tmp_pa
     assert expected["state"] == "known"
     assert next(row for row in expected["relations"] if row["relation"] == "attachments") == {
         "relation": "attachments", "mode": "shadow", "existing_count": 0, "shadow_count": 1}
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
-    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
-    health = run_check._health(ledger, {"errors": []}, "ok")
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {})
+    monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
+    health = health_report.build_health(ledger.db, {"errors": []}, "ok")
     assert health["ledger_guards"] == expected
     assert health["overall"] == "degraded"
     assert "ledger_relation_violations" in health["state_reasons"]

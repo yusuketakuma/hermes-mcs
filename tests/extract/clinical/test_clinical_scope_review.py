@@ -1,9 +1,9 @@
 """完全合成の測定・処方について、原文の所有者と行為者を区別する。"""
+import clinical_scope
+import extract_validation
 import pytest
 
 import clinical_values
-import extract
-import extract_llm
 
 
 @pytest.mark.parametrize("body,values,expected", [
@@ -23,14 +23,14 @@ def test_possessive_family_surface_is_not_patient(label):
     body = f"母の{label}45。本人の{label}60。"
     first = body.index(label)
     second = body.rindex(label)
-    assert extract.patient_source_scope(body, first, first + len(label)) == "family"
-    assert extract.patient_source_scope(body, second, second + len(label)) == "patient"
+    assert clinical_scope.patient_source_scope(body, first, first + len(label)) == "family"
+    assert clinical_scope.patient_source_scope(body, second, second + len(label)) == "patient"
 
 
 def test_mislabeled_family_weight_stays_unverified_without_losing_patient_weight():
     body = "母の体重45kg。本人の体重60kg。"
     for value, confirmation in [(45, "unverified"), (60, "quote_supported")]:
-        item = extract_llm._validate({"labs": [{"name": "体重", "value": value, "unit": "kg",
+        item = extract_validation.validate({"labs": [{"name": "体重", "value": value, "unit": "kg",
             "subject": "patient", "evidence": body}]}, body)["labs"][0]
         assert item["normalized"]["confirmation"] == confirmation
         assert bool(item.get("unverified")) == (confirmation == "unverified")
@@ -69,20 +69,20 @@ def test_repeated_lab_label_and_value_do_not_inherit_quote_prefix_patient_scope(
     ("本人の現在の収縮期血圧は90です。", {"sbp": 90, "dbp": 60}, {"sbp": 90}),
 ])
 def test_single_blood_pressure_remains_grounded_to_patient_label_and_known_side(body, values, expected):
-    assert extract.patient_vitals(values, body) == expected
+    assert clinical_values.patient_vitals(values, body) == expected
 
 
 @pytest.mark.parametrize("person", ["お兄様", "兄様", "お姉様", "姉さん", "弟さん", "妹様", "孫さん"])
 def test_an_honorific_family_member_is_family(person):
     body = f"ご家族から、{person}が合成薬Aを飲み忘れたと相談がありました。"
     start = body.index("合成薬A")
-    assert extract.patient_source_scope(body, start, start + 4) == "family"
+    assert clinical_scope.patient_source_scope(body, start, start + 4) == "family"
 
 
 def _meds(body, quote, subject):
     med = {"name": "合成薬A", "dose": None, "action": "none", "status": "current", "subject": subject,
            "negated": False, "evidence": quote}
-    return extract_llm._validate({"summary": "合成の要約", "meds": [med]}, body).get("meds", [])
+    return extract_validation.validate({"summary": "合成の要約", "meds": [med]}, body).get("meds", [])
 
 
 def test_an_honorific_family_medication_is_not_kept_as_the_patients():
@@ -100,20 +100,20 @@ def test_a_family_report_keeps_the_patients_own_medication():
 def test_honorific_family_and_patient_measurements_stay_apart():
     body = "お兄様の体温37.8。本人の体温36.5。"
     first, second = body.index("37.8"), body.index("36.5")
-    assert extract.patient_source_scope(body, first, first + 4) == "family"
-    assert extract.patient_source_scope(body, second, second + 4) == "patient"
+    assert clinical_scope.patient_source_scope(body, first, first + 4) == "family"
+    assert clinical_scope.patient_source_scope(body, second, second + 4) == "patient"
 
 
 @pytest.mark.parametrize("person", ["姉川さん", "兄部様"])
 def test_a_named_person_starting_with_a_relation_is_not_family(person):
     body = f"{person}が合成薬Aを飲んでいます。"
     start = body.index("合成薬A")
-    assert extract.patient_source_scope(body, start, start + 4) != "family"
+    assert clinical_scope.patient_source_scope(body, start, start + 4) != "family"
 
 
 def _scope_of(body, word):
     start = body.index(word)
-    return extract.patient_source_scope(body, start, start + len(word))
+    return clinical_scope.patient_source_scope(body, start, start + len(word))
 
 
 @pytest.mark.parametrize("body,word", [
@@ -137,7 +137,7 @@ def test_a_name_or_non_family_modifier_is_not_made_family(body, word):
 def test_a_named_patient_stays_the_patient():
     body = "田中さんの血圧120/80。"
     start = body.index("120")
-    assert extract.patient_source_scope(body, start, start + 3, patient_name="田中") == "patient"
+    assert clinical_scope.patient_source_scope(body, start, start + 3, patient_name="田中") == "patient"
 
 
 def test_a_modified_family_report_keeps_the_patients_own_value():
@@ -148,8 +148,8 @@ def test_a_modified_family_report_keeps_the_patients_own_value():
 def test_the_same_value_for_a_modified_family_member_and_the_patient_stays_apart():
     body = "同居の娘さんの体温37.5。本人の体温37.5。"
     first, second = body.index("37.5"), body.rindex("37.5")
-    assert extract.patient_source_scope(body, first, first + 4) == "family"
-    assert extract.patient_source_scope(body, second, second + 4) == "patient"
+    assert clinical_scope.patient_source_scope(body, first, first + 4) == "family"
+    assert clinical_scope.patient_source_scope(body, second, second + 4) == "patient"
 
 
 @pytest.mark.parametrize("body,name,expected", [
@@ -159,7 +159,7 @@ def test_the_same_value_for_a_modified_family_member_and_the_patient_stays_apart
 ])
 def test_a_modified_name_is_matched_by_its_own_name(body, name, expected):
     start = body.index("90")
-    assert extract.patient_source_scope(body, start, start + 2, patient_name=name) == expected
+    assert clinical_scope.patient_source_scope(body, start, start + 2, patient_name=name) == expected
 
 
 @pytest.mark.parametrize("person,name,expected", [
@@ -170,13 +170,13 @@ def test_a_modified_name_is_matched_by_its_own_name(body, name, expected):
 def test_a_no_inside_a_name_is_not_a_modifier_matching_another_patient(person, name, expected):
     body = f"{person}の血圧120/80です。"
     start = body.index("120")
-    assert extract.patient_source_scope(body, start, start + 3, patient_name=name) == expected
+    assert clinical_scope.patient_source_scope(body, start, start + 3, patient_name=name) == expected
 
 
 @pytest.mark.parametrize("name", ["みのり", "このみ"])
 def test_a_no_inside_the_patients_own_name_is_not_a_modifier(name):
     body = f"{name}さんの血圧120/80。"
     start = body.index("120")
-    assert extract.patient_source_scope(body, start, start + 3, patient_name=name) == "patient"
+    assert clinical_scope.patient_source_scope(body, start, start + 3, patient_name=name) == "patient"
     assert clinical_values.patient_current_vitals({"sbp": 120, "dbp": 80}, body, patient_name=name) == {
         "sbp": 120, "dbp": 80}

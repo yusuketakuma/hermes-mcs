@@ -269,3 +269,77 @@ def test_prior_is_read_after_the_write_lock_including_a_concurrent_correction(tm
         db.db.set_trace_callback(None)
         other.close()
         db.close()
+
+
+@pytest.mark.parametrize("module_name", ["extract_schema", "extract_validation", "extract_quality", "clinical_scope"])
+def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(tmp_path, monkeypatch, module_name):
+    import semantic_candidate
+    db, aid, row = seed(tmp_path)
+    try:
+        weak = '{"summary":"合成の候補"}'
+        assert not llm._replace_current(db, row, weak)
+        assert not db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        contract = llm._upgrade_contract()
+        fingerprint = semantic_candidate.candidate_fingerprint({})
+        assert len(llm._LOADED_SOURCE_DIGESTS[module_name]) == 64
+        monkeypatch.setattr(llm, "_LOADED_SOURCE_DIGESTS", {
+            **llm._LOADED_SOURCE_DIGESTS, module_name: "synthetic-changed-loaded-source"})
+        assert llm._upgrade_contract() != contract
+        assert semantic_candidate.candidate_fingerprint({}) != fingerprint
+        assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        assert not llm._replace_current(db, row, weak)
+        receipts = [json.loads(r["content"]) for r in db.artifacts(llm.UPGRADE_KIND)]
+        assert len(receipts) == 2
+        assert all(r["state"] == "held_prior" and r["prior_artifact_id"] == aid for r in receipts)
+        assert receipts[-1]["contract"] == llm._upgrade_contract()
+        assert db.db.execute("SELECT content FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0] == json.dumps(PRIOR, ensure_ascii=False)
+        assert not db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("module_name,member", [
+    ("extract_schema", "SCHEMA"),
+    ("extract_validation", "Validator"),
+    ("extract_quality", "quality_improves"),
+    ("clinical_scope", "patient_source_scope"),
+    ("clinical_values", "patient_vitals"),
+])
+def test_moved_definition_changes_new_candidate_identity(monkeypatch, module_name, member):
+    import importlib
+    import semantic_candidate
+    module = importlib.import_module(module_name)
+    monkeypatch.setattr(semantic_candidate, "_LOADED_SOURCES", None)
+    before = semantic_candidate.candidate_fingerprint({})
+    assert module_name in semantic_candidate._LOADED_SOURCES
+    if member == "SCHEMA":
+        monkeypatch.setattr(module, member, {**module.SCHEMA, "synthetic_marker": True})
+    else:
+        def changed(*args, **kwargs):
+            return None
+        changed.__module__ = module_name
+        if member == "Validator":
+            monkeypatch.setattr(module.Validator, "meds", changed)
+        else:
+            monkeypatch.setattr(module, member, changed)
+    # A running worker keeps its captured code identity; a new capture must invalidate approval.
+    if member != "SCHEMA":
+        assert semantic_candidate.candidate_fingerprint({}) == before
+    monkeypatch.setattr(semantic_candidate, "_LOADED_SOURCES", None)
+    assert semantic_candidate.candidate_fingerprint({}) != before
+
+
+@pytest.mark.parametrize("member", ["_scope_events", "_scope_puncts"])
+def test_scope_cache_contents_do_not_replace_cached_definition_coverage(monkeypatch, member):
+    import clinical_scope
+    import semantic_candidate
+    wrapper = getattr(clinical_scope, member)
+    before = semantic_candidate._sources()
+    body = "本人の体温は36.5℃です。家族の血圧は120/80です。"
+    clinical_scope.patient_source_scope(body, 0, 2)
+    assert wrapper.cache_info().currsize > 0
+    assert semantic_candidate._sources() == before
+    def changed(*args, **kwargs):
+        return ()
+    monkeypatch.setattr(wrapper.__wrapped__, "__code__", changed.__code__)
+    assert semantic_candidate._sources()["clinical_scope"] != before["clinical_scope"]

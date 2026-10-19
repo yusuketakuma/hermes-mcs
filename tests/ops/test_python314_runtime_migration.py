@@ -19,11 +19,11 @@ def _no_leaked_services_python(monkeypatch):
 
 
 def _state(updater, **applying):
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.0.18", "sha": "b" * 40, "prev_sha": "a" * 40,
                          "reinstall": False, "install_args": [], **applying}
-    updater.save_state(state)
-    return updater.load_state()
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    return updater.journal_store.load_state(updater.STATE_PATH)
 
 
 def _venv(root, version_ok=True):
@@ -59,7 +59,7 @@ def test_old_parent_without_inherited_lock_rolls_back_instead(updater, old_inter
     state = _state(updater)
     with pytest.raises(updater.UpdateError, match="runtime_migration_requires_upgrade_tool"):
         updater._plan_runtime_migration(state)
-    assert "runtime_migration" not in updater.load_state()["applying"]
+    assert "runtime_migration" not in updater.journal_store.load_state(updater.STATE_PATH)["applying"]
 
 
 def test_migration_is_journaled_before_install(updater, old_interpreter, monkeypatch):
@@ -67,14 +67,14 @@ def test_migration_is_journaled_before_install(updater, old_interpreter, monkeyp
     (old_interpreter.parent / "venv.pre-python314").mkdir()
     state = _state(updater, install_args=["--no-brew", "--no-llm"])
     updater._plan_runtime_migration(state)
-    saved = updater.load_state()["applying"]
+    saved = updater.journal_store.load_state(updater.STATE_PATH)["applying"]
     migration = saved["runtime_migration"]
     assert migration["venv"] == str(old_interpreter)
     assert migration["backup_path"] == str(old_interpreter) + ".pre-python314.1"
     assert migration["updater_python"] == "3.13.9" and "checkout" not in migration
     assert saved["reinstall"] is True
     assert saved["install_args"] == ["--no-brew", "--no-llm", "--no-plugin"]
-    assert updater.load_state()["stages"][-1]["stage"] == "runtime_migration"
+    assert updater.journal_store.load_state(updater.STATE_PATH)["stages"][-1]["stage"] == "runtime_migration"
 
 
 def _checkout(path):
@@ -219,7 +219,7 @@ def test_post_merge_migrates_then_reconciles_with_new_python(updater, old_interp
     monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: True)
     assert updater._post_merge(_state(updater)) == 0
     assert order == ["reinstall", ("services", str(old_interpreter / "bin" / "python3")), "restart"]
-    applied = updater.load_state()["applied"][-1]
+    applied = updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]
     assert applied["reinstall_done"] is True
     # a later explicit rollback can still return to the pre-migration runtime
     assert applied["runtime_migration"]["venv"] == str(old_interpreter)
@@ -273,8 +273,8 @@ def test_parent_decision_needs_no_environment_and_lets_child_skip(updater, old_i
     monkeypatch.delenv(updater.RUN_LOCK_FD_ENV, raising=False)
     state = _state(updater)
     updater._plan_runtime_migration(state, held_fd=5)        # the apply parent
-    assert updater.load_state()["applying"]["reinstall"] is True
-    child = updater.load_state()
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["reinstall"] is True
+    child = updater.journal_store.load_state(updater.STATE_PATH)
     updater._plan_runtime_migration(child)                   # no FD env: already decided
     assert child["applying"]["runtime_migration"] == state["applying"]["runtime_migration"]
 
@@ -361,12 +361,12 @@ def _interrupted(updater, tmp_path, monkeypatch, *, reset=False, rollback_shaped
                 "reinstall_done": False, "command_id": "cid-mig",
                 "runtime_migration": {"venv": str(old), "backup_path": str(old) + ".pre-python314"},
                 "at": time.time() - 4000}
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     state["applying"] = (updater._rollback_applying(applying, target, "cid-mig")
                          if rollback_shaped else applying)
     state["stages"] = [{"stage": "rollback" if rollback_shaped else "post_merge",
                         "at": time.time() - 3000}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     return repo, prev, old, runtime, order, notices
 
 
@@ -375,7 +375,7 @@ def _assert_undone(updater, repo, prev, old, runtime, order, notices):
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
     assert (old / "bin/python3").read_text().endswith("echo 3 13\n")
     assert (runtime / "venv.python314-aside").is_dir()
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["applying"] is None and after["executed"]["cid-mig"]["result"] == "rolled_back"
     assert "restart" in order
 
@@ -413,13 +413,13 @@ def test_undo_reports_manual_content_without_restoring_runtime(updater, tmp_path
         updater, tmp_path, monkeypatch, rollback_shaped=True)
     (repo / "f.txt").write_text("manual content")
     head = _git(repo, "rev-parse", "HEAD").stdout
-    applying = updater.load_state()["applying"]
+    applying = updater.journal_store.load_state(updater.STATE_PATH)["applying"]
     python = (old / "bin/python3").read_bytes()
     assert updater.recover_interrupted() == 1
     assert updater._last_report()["detail"] == "local changes outside update: f.txt"
     assert (repo / "f.txt").read_text() == "manual content"
     assert _git(repo, "rev-parse", "HEAD").stdout == head
-    assert updater.load_state()["applying"] == applying
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == applying
     assert (old / "bin/python3").read_bytes() == python
     assert "runtime" not in order and "reset" not in order
 
@@ -435,7 +435,7 @@ def test_undo_waiting_for_restore_consent_holds_with_drainers_stopped(updater, t
     monkeypatch.setattr(updater, "_consent_hold", lambda state, e, path: held.append(e) or "rid")
     assert updater.recover_interrupted() == 0
     assert held and "restart" not in order and not notices
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["applying"]["rollback"] is True
     assert after["applying"]["runtime_migration"]["venv"] == str(old)
 
@@ -546,7 +546,7 @@ def test_supported_previous_pin_refresh_is_journaled_and_restores_old_dependenci
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
     state = _state(updater)
     updater._plan_runtime_migration(state, held_fd=5)
-    saved = updater.load_state()["applying"]
+    saved = updater.journal_store.load_state(updater.STATE_PATH)["applying"]
     migration = saved["runtime_migration"]
     assert migration["checkout"] == str(checkout)
     assert migration["checkout_head"] == old_head
@@ -555,11 +555,11 @@ def test_supported_previous_pin_refresh_is_journaled_and_restores_old_dependenci
     assert saved["reinstall"] is True and "--no-plugin" in saved["install_args"]
     assert not Path(migration["backup_path"]).exists()
     assert (venv / "synthetic-deps").read_text() == "previous pin dependencies"
-    assert updater.load_state()["stages"][-1]["stage"] == "runtime_migration"
+    assert updater.journal_store.load_state(updater.STATE_PATH)["stages"][-1]["stage"] == "runtime_migration"
     order = []
 
     def reinstall(applying):
-        assert updater.load_state()["applying"]["runtime_migration"] == migration
+        assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["runtime_migration"] == migration
         os.rename(venv, migration["backup_path"])
         _venv(checkout)
         (venv / "synthetic-deps").write_text("new pin dependencies")
@@ -576,7 +576,7 @@ def test_supported_previous_pin_refresh_is_journaled_and_restores_old_dependenci
     monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: True)
     assert updater._post_merge(state) == 0
     assert order == ["reinstall", ("services", str(venv / "bin/python3")), "restart"]
-    applied = updater.load_state()["applied"][-1]
+    applied = updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]
     assert applied["runtime_migration"] == migration and applied["reinstall_done"] is True
     assert (Path(migration["backup_path"]) / "synthetic-deps").read_text() \
         == "previous pin dependencies"

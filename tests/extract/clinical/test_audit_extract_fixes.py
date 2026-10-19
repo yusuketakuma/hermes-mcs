@@ -1,4 +1,5 @@
 """抽出監査で見つかった主体・否定・時点・検査名の取り違えを完全合成データで検証する。"""
+import clinical_scope
 import json
 
 import pytest
@@ -15,7 +16,7 @@ NAME = "合成太郎"
 
 def _scope(body, needle):
     at = body.index(needle)
-    return extract.patient_source_scope(body, at, at + len(needle))
+    return clinical_scope.patient_source_scope(body, at, at + len(needle))
 
 
 @pytest.mark.parametrize("person", ["ご主人", "主人", "旦那さん", "奥さん", "嫁", "長男", "次女さん",

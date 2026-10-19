@@ -1,4 +1,5 @@
 """完全合成の原文から構造化要約の対象と時点を確認する。"""
+import clinical_display
 import json
 import pytest
 import extract_llm
@@ -99,7 +100,7 @@ def test_group_explicit_patient_span_preserves_patient_value(store):
 
 
 def test_pure_helpers_keep_absent_source_compatibility():
-    assert structured_view._vital_line({"vitals": {"bt": 36.5}}, {}) == "バイタル: BT 36.5"
+    assert clinical_display.vital_line({"vitals": {"bt": 36.5}}, {}) == "バイタル: BT 36.5"
     assert structured_view._symptom_line({"symptoms": [{"text": "咳"}]}, {}) == "症状: 咳"
     assert structured_view._med_lines({"meds": [{"name": "合成薬A"}]}, {}) == ["薬剤: 合成薬A"]
 

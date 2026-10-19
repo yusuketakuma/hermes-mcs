@@ -1,4 +1,5 @@
 """Clinical rotation at the real adapter worker boundary, entirely synthetic."""
+import project_metadata_contract
 import base64
 import json
 import time
@@ -121,7 +122,7 @@ def test_all_250_items_for_each_live_patient_rotate_with_http_budget_and_pins(wo
         assert values["source"] == "mcs_structured"
     assert len(db.artifacts(metadata.CLINICAL_PROGRESS_KIND)) == 2
     assert all(not any(f"/kartes/{kid}/" in call["url"] for kid in (30, 40, 50)) for call in wire.calls)
-    assert "DROP_CANARY" not in "".join(row["content"] for row in db.artifacts(metadata.ARTIFACT_KIND))
+    assert "DROP_CANARY" not in "".join(row["content"] for row in db.artifacts(project_metadata_contract.ARTIFACT_KIND))
     before = len(wire.calls)
     assert run(db, client)["requests"] == 0 and len(wire.calls) == before
     assert client._token is None and client._deadline is None
@@ -138,7 +139,7 @@ def test_disabled_uncredentialed_or_deadline_stage_does_not_get_or_write(world, 
     else:
         kwargs["deadline"] = time.monotonic() + 10
     assert run(db, client, **kwargs)["requests"] == 0
-    assert wire.calls == [] and db.artifacts(metadata.ARTIFACT_KIND) == []
+    assert wire.calls == [] and db.artifacts(project_metadata_contract.ARTIFACT_KIND) == []
 
 
 def test_budget_hold_keeps_cursor_and_does_not_store_partial_clinical_attempt(world, monkeypatch):
@@ -149,7 +150,7 @@ def test_budget_hold_keeps_cursor_and_does_not_store_partial_clinical_attempt(wo
     stats = run(db, client)
     assert stats["held"] == "budget" and stats["requests"] == 3
     assert progress(db)["phase"] == "observation_items"
-    attempts = db.artifacts(metadata.ARTIFACT_KIND)
+    attempts = db.artifacts(project_metadata_contract.ARTIFACT_KIND)
     assert len(attempts) == 1 and json.loads(attempts[0]["content"])["dataset"] == "medication_periods"
     monkeypatch.setattr(metadata, "CLINICAL_GET_CAP", 12)
     assert run(db, client)["failed"] == 0
@@ -165,7 +166,7 @@ def test_deadline_during_item_walk_is_a_resumable_hold_without_failure(world, mo
     wire.on_call = lambda path: mono.__setitem__(0, 126.0) if path.endswith("observation_items") else None
     stats = run(db, client)
     assert stats["held"] == "deadline" and stats["failed"] == 0 and stats["requests"] == 2
-    assert len(db.artifacts(metadata.ARTIFACT_KIND)) == 1
+    assert len(db.artifacts(project_metadata_contract.ARTIFACT_KIND)) == 1
     assert progress(db)["phase"] == "observation_items" and progress(db)["next_due_at"] == 0
     wire.on_call = None
     assert run(db, client)["failed"] == 0
@@ -230,13 +231,13 @@ def test_equal_definition_refresh_keeps_cursor_and_proves_old_value_definition(w
         db.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=2")
     run(db, client)
     previous = progress(db)
-    old_value = next(json.loads(row["content"]) for row in db.artifacts(metadata.ARTIFACT_KIND)
+    old_value = next(json.loads(row["content"]) for row in db.artifacts(project_metadata_contract.ARTIFACT_KIND)
                      if json.loads(row["content"])["dataset"] == "observation_values")
     client._token = "synthetic-session"
     metadata.sync_metadata(db, client, 1, "observation_items", enabled=True, per_page=50)
     generation, items = metadata._clinical_items(db.db, 1, 10)
     assert generation != old_value["definition_source_artifact_id"]
-    assert metadata.clinical_definition_fingerprint(10, items) == old_value["definition_fingerprint"]
+    assert project_metadata_contract.clinical_definition_fingerprint(10, items) == old_value["definition_fingerprint"]
     wire.calls.clear()
     run(db, client)
     values = [call for call in wire.calls if urlsplit(call["url"]).path.endswith("/values")]
@@ -245,15 +246,15 @@ def test_equal_definition_refresh_keeps_cursor_and_proves_old_value_definition(w
 
 
 def test_definition_fingerprint_ignores_row_order_and_equal_number_representation():
-    rows = metadata.normalize_rows("observation_items", [
+    rows = project_metadata_contract.normalize_rows("observation_items", [
         {"lab_test_item": {"id": 1, "unit": "fictional"}, "upper_reference_limit_scalar": 100},
         {"lab_test_item": {"id": 2, "unit": "fictional"}}])
-    before = metadata.clinical_definition_fingerprint(10, {row["lab_test_item"]["id"]: row for row in rows})
+    before = project_metadata_contract.clinical_definition_fingerprint(10, {row["lab_test_item"]["id"]: row for row in rows})
     rows[0]["upper_reference_limit_scalar"] = 100.0
-    after = metadata.clinical_definition_fingerprint(10, {row["lab_test_item"]["id"]: row for row in reversed(rows)})
+    after = project_metadata_contract.clinical_definition_fingerprint(10, {row["lab_test_item"]["id"]: row for row in reversed(rows)})
     assert before == after
     rows[0]["upper_reference_limit_scalar"] = 101
-    assert metadata.clinical_definition_fingerprint(
+    assert project_metadata_contract.clinical_definition_fingerprint(
         10, {row["lab_test_item"]["id"]: row for row in rows}) != before
 
 
@@ -267,7 +268,7 @@ def test_large_values_stage_until_terminal_page_then_publish_all_rows(world):
     wire.value_rows = 300
     stats = run(db, client)
     assert stats["failed"] == 0 and stats["held"] == "page_slice"
-    attempts = [json.loads(row["content"]) for row in db.artifacts(metadata.ARTIFACT_KIND)
+    attempts = [json.loads(row["content"]) for row in db.artifacts(project_metadata_contract.ARTIFACT_KIND)
                 if json.loads(row["content"])["dataset"] == "observation_values"]
     assert len(attempts) == 1
     assert attempts[0]["complete"] is True and attempts[0]["rows"]
@@ -277,7 +278,7 @@ def test_large_values_stage_until_terminal_page_then_publish_all_rows(world):
     assert run(db, client)["failed"] == 0
     resumed = parse_qs(urlsplit(wire.calls[calls_before]["url"]).query)
     assert resumed["page"] == ["6"] and resumed["timestamp"] == ["12345"]
-    attempts = [json.loads(row["content"]) for row in db.artifacts(metadata.ARTIFACT_KIND)
+    attempts = [json.loads(row["content"]) for row in db.artifacts(project_metadata_contract.ARTIFACT_KIND)
                 if json.loads(row["content"])["dataset"] == "observation_values"]
     assert len(attempts) == 2 and attempts[-1]["complete"] is True
     assert len(attempts[-1]["rows"]) == 300 and "staging" not in progress(db)
@@ -321,7 +322,7 @@ def test_one_failed_value_item_does_not_hold_later_items_and_is_retried(world, f
         if progress(db)["next_due_at"] > clock[0]:
             break
     assert progress(db)["next_due_at"] == clock[0] + metadata.CLINICAL_BACKOFF_S
-    attempts = [json.loads(row["content"]) for row in db.artifacts(metadata.ARTIFACT_KIND)
+    attempts = [json.loads(row["content"]) for row in db.artifacts(project_metadata_contract.ARTIFACT_KIND)
                 if json.loads(row["content"])["dataset"] == "observation_values"]
     assert {attempt["item_id"] for attempt in attempts if attempt["complete"]} == set(range(2, 251))
     failed = [attempt for attempt in attempts if attempt["item_id"] == 1]
@@ -385,7 +386,7 @@ def test_staged_values_never_flow_into_changed_snapshot_or_mapping(world, fault)
         if fault == "karte":
             assert "/kartes/999/" in value_calls[0]["url"]
     assert not any(json.loads(row["content"])["dataset"] == "observation_values"
-                   and json.loads(row["content"])["complete"] for row in db.artifacts(metadata.ARTIFACT_KIND))
+                   and json.loads(row["content"])["complete"] for row in db.artifacts(project_metadata_contract.ARTIFACT_KIND))
 
 
 def test_staging_holds_rotate_to_other_patient_and_resume_from_checkpoint(world, monkeypatch):
@@ -395,7 +396,7 @@ def test_staging_holds_rotate_to_other_patient_and_resume_from_checkpoint(world,
     for _ in range(10):
         stats = run(db, client)
         assert stats["requests"] <= 5
-        completed = [json.loads(row["content"]) for row in db.artifacts(metadata.ARTIFACT_KIND)
+        completed = [json.loads(row["content"]) for row in db.artifacts(project_metadata_contract.ARTIFACT_KIND)
                      if json.loads(row["content"])["dataset"] == "observation_values"]
         if len(completed) == 2:
             break
@@ -409,18 +410,18 @@ def test_staging_holds_rotate_to_other_patient_and_resume_from_checkpoint(world,
 
 def test_value_capacity_boundary_collects_ten_thousand_rows(world):
     db, client, wire, _ = world
-    wire.items, wire.value_rows = 1, metadata.MAX_VALUE_ROWS
+    wire.items, wire.value_rows = 1, project_metadata_contract.MAX_VALUE_ROWS
     with db.db:
         db.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=2")
     for _ in range(45):
         stats = run(db, client)
         assert stats["requests"] <= metadata.CLINICAL_GET_CAP and stats["failed"] == 0
-        complete = [json.loads(row["content"]) for row in db.artifacts(metadata.ARTIFACT_KIND)
+        complete = [json.loads(row["content"]) for row in db.artifacts(project_metadata_contract.ARTIFACT_KIND)
                     if json.loads(row["content"])["dataset"] == "observation_values"]
         if complete:
             break
     assert len(complete) == 1 and complete[0]["complete"] is True
-    assert len(complete[0]["rows"]) == metadata.MAX_VALUE_ROWS
+    assert len(complete[0]["rows"]) == project_metadata_contract.MAX_VALUE_ROWS
 
 
 def test_value_timeout_without_rows_never_becomes_registered_empty(world, monkeypatch):
@@ -449,7 +450,7 @@ def test_mapping_changes_during_get_cannot_publish_clinical_rows(world):
         "UPDATE patients SET karte_id=999 WHERE project_id=1") if "/kartes/10/" in path else None
     stats = run(db, client)
     assert stats["failed"] >= 1
-    attempt = json.loads(db.artifacts(metadata.ARTIFACT_KIND, project_id=1)[0]["content"])
+    attempt = json.loads(db.artifacts(project_metadata_contract.ARTIFACT_KIND, project_id=1)[0]["content"])
     assert attempt["complete"] is False and attempt["rows"] == []
     assert attempt["reason"] == "scope_changed"
 
@@ -472,7 +473,7 @@ def test_deep_stored_metadata_cannot_block_other_patients(world, kind, monkeypat
 
     monkeypatch.setattr(json, "loads", decode)
     stored_kind = (metadata.CLINICAL_PROGRESS_KIND if kind == "progress"
-                   else metadata.ARTIFACT_KIND)
+                   else project_metadata_contract.ARTIFACT_KIND)
     aid = db.artifact_add(stored_kind, raw, project_id=1)
     if kind == "definition":
         assert metadata._clinical_items(db.db, 1, 10) == (None, {})

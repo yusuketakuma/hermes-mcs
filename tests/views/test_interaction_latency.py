@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from ledger import Ledger, publish_snapshot
-from mcs_adapter import Message
+from mcs_contract import Message
 import export_schema
 import mcs_stats
 import mcs_view

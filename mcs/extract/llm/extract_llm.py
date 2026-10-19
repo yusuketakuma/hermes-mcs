@@ -38,7 +38,6 @@ import sys
 import functools
 import threading
 import time
-import unicodedata
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every module dir (any depth) as an import root
@@ -47,22 +46,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 import bounded_http
 import clinical_values
-from clinical_values import (
-    _BP_NUM as _BP_NUM,
-    _BP_PAIR as _BP_PAIR,
-    _BP_SIDE_WORD as _BP_SIDE_WORD,
-    _VITAL_CLASS as _VITAL_CLASS,
-    _VITAL_LABELS as _VITAL_LABELS,
-    _VITAL_UNITS as _VITAL_UNITS,
-    _VITAL_WIN_BACK as _VITAL_WIN_BACK,
-    _VITAL_WIN_FWD as _VITAL_WIN_FWD,
-    _bp_number as _bp_number,
-    _bp_pair_unproven as _bp_pair_unproven,
-    _bp_readings as _bp_readings,
-    _bp_side as _bp_side,
-    _nearest_vital_label as _nearest_vital_label,
-    _vitals_guard as _vitals_guard,
-)
+import clinical_scope
+import extract_schema
+import extract_validation
+import extract_quality
 import clinical_chunking
 import extraction_refresh
 import extract
@@ -70,17 +57,15 @@ from clinical_chunking import PLAN_VERSION, plan_chunks
 import local_llm
 import patient_context
 import patient_state_context
-from patient_context import CATEGORIES, DETAIL_KEYS, context_items
 from ledger import Ledger, LedgerReader
 from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_KIND,
                          current_extract_pred,
                          current_qc_pred,
-                         current_v4_id, json_or_null, med_is_patient_current, qc_source_id)
+                         current_v4_id, json_or_null, qc_source_id)
 from mcs_util import (CONF_PATH, HOME, acquire_run_lock, circuit_failure, circuit_open_s,
                       circuit_streak,
                       circuit_success, disk_floor_mb, disk_free_mb,
-                      json_object, load_config, locate_quote_span,
-                      loads_dict,
+                      json_object, load_config, loads_dict,
                       text_chunks)  # noqa: F401 — historical helper re-export
 
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -111,11 +96,15 @@ _LOADED_SOURCE_DIGESTS = {
     for name, path in (("extract_llm", __file__),
                        ("extract", extract.__file__),
                        ("clinical_values", clinical_values.__file__),
+                       ("clinical_scope", clinical_scope.__file__),
                        ("clinical_chunking", clinical_chunking.__file__),
                        ("extraction_refresh", extraction_refresh.__file__),
                        ("patient_context", patient_context.__file__),
                        ("patient_state_context", patient_state_context.__file__),
-                       ("local_llm", local_llm.__file__))}
+                       ("local_llm", local_llm.__file__),
+                       ("extract_schema", extract_schema.__file__),
+                       ("extract_validation", extract_validation.__file__),
+                       ("extract_quality", extract_quality.__file__))}
 # evidence quotes lengthen output; 900 truncated dense messages mid-JSON
 # (which then burned all 5 retries into permanent errors).  v4 adds
 # severity/onset/route/freq/labs fields, so dense bodies emit ~15% more.
@@ -339,143 +328,6 @@ def _batch_prompt(jobs: list) -> str:
             i=i, posted=posted or "不明", body=body)
     return prompt + "JSON:"
 
-# Output-contract schema for response_format=json_schema. _validate
-# remains the authority — the schema's job is to make the output
-# PARSEABLE and structurally shaped before validation runs.
-_SCHEMA = {
-    "name": "mcs_extract",
-    "schema": {
-        "type": "object",
-        "properties": {
-            "meds": {"type": "array", "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "dose": {"type": ["string", "null"]},
-                    "action": {"type": ["string", "null"],
-                               "enum": ["start", "stop", "change",
-                                        "decrease", "increase", "none",
-                                        None]},
-                    "status": {"type": "string",
-                               "enum": ["current", "past", "planned"]},
-                    "subject": {"type": "string",
-                                "enum": ["patient", "family", "other"]},
-                    "negated": {"type": "boolean"},
-                    "route": {"type": ["string", "null"],
-                              "enum": ["oral", "topical", "injection",
-                                       "infusion", "inhalation", "tube",
-                                       "other", None]},
-                    "freq": {"type": ["string", "null"]},
-                    "prn": {"type": "boolean"},
-                    "evidence": {"type": "string"}},
-                "required": ["name"],
-                "additionalProperties": False}},
-            "symptoms": {"type": "array", "items": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string"},
-                    "negated": {"type": "boolean"},
-                    "status": {"type": "string",
-                               "enum": ["new", "ongoing", "resolved",
-                                        "past"]},
-                    "subject": {"type": "string",
-                                "enum": ["patient", "family", "other"]},
-                    "severity": {"type": ["string", "null"],
-                                 "enum": ["mild", "moderate", "severe",
-                                          None]},
-                    "onset": {"type": ["string", "null"]},
-                    "duration": {"type": ["string", "null"]},
-                    "evidence": {"type": "string"}},
-                "required": ["text", "negated"],
-                "additionalProperties": False}},
-            "events": {"type": "array", "items": {
-                "type": "string",
-                "enum": ["visit", "exam", "admission", "discharge",
-                         "transfer", "fall", "eol", "care",
-                         "family_contact", "prescription_inquiry", "other"]}},
-            "requests": {"type": "array", "items": {
-                "type": "object",
-                "properties": {
-                    "to": {"type": ["string", "null"]},
-                    "from": {"type": ["string", "null"]},
-                    "kind": {"type": ["string", "null"],
-                             "enum": ["request", "question", "self_plan",
-                                      None]},
-                    "action": {"type": ["string", "null"]},
-                    "condition": {"type": ["string", "null"]},
-                    "due": {"type": ["string", "null"]},
-                    "due_text": {"type": ["string", "null"]},
-                    "evidence": {"type": "string"}},
-                "required": ["to", "from", "kind", "action"],
-                "additionalProperties": False}},
-            "vitals": {"type": "object", "properties": {
-                k: {"type": "number"} for k in
-                ("bt", "hr", "rr", "sbp", "dbp", "spo2", "bs")},
-                "additionalProperties": False},
-            "labs": {"type": "array", "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "value": {"type": ["string", "number"]},
-                    "unit": {"type": ["string", "null"]},
-                    "flag": {"type": ["string", "null"],
-                             "enum": ["high", "low", None]},
-                    "evidence": {"type": "string"},
-                    "subject": {"type": "string", "enum": ["patient", "family", "other"]},
-                    "status": {"type": "string", "enum": ["current", "past", "planned"]},
-                    "measured_on": {"type": "string"},
-                    "condition": {"type": "string"}},
-                "required": ["name", "value"],
-                "additionalProperties": False}},
-            "patient_context": {"type": "array", "items": {
-                "type": "object", "properties": {
-                    "category": {"type": "string", "enum": sorted(CATEGORIES)},
-                    "text": {"type": "string", "minLength": 1},
-                    "evidence": {"type": "string", "minLength": 1},
-                    "subject": {"type": "string", "enum": ["patient", "family", "other"]},
-                    "details": {"type": "array", "items": {
-                        "type": "object", "properties": {
-                            "key": {"type": "string", "enum": sorted(DETAIL_KEYS)},
-                            "refers_to": {"type": "string", "pattern": "^S[1-9][0-9]*$"},
-                            "value": {"type": "string", "minLength": 1},
-                            "evidence": {"type": "string", "minLength": 1}},
-                        "required": ["key", "value", "evidence"],
-                        "additionalProperties": False}}},
-                "required": ["category", "text", "evidence", "subject"],
-                "additionalProperties": False}},
-            "summary": {"type": "string", "minLength": 1},
-            "points": {"type": "array", "items": {"type": "string"}},
-            "urgency": {"type": "string",
-                        "enum": ["high", "routine", "unclear"]},
-            "urgency_evidence": {"type": "array",
-                                 "items": {"type": "string"}},
-            # reply-to-earlier-request classification; only meaningful
-            # with thread context (llm_extract drops it otherwise)
-            "reply": {"type": "object", "properties": {
-                "kind": {"type": "string",
-                         "enum": ["ack", "intent", "progress", "answer",
-                                  "done", "cancel"]},
-                "evidence": {"type": "string"}},
-                "required": ["kind"],
-                "additionalProperties": False}},
-        # An omitted section concealed negative findings in constrained output.
-        "required": ["symptoms"],
-        "additionalProperties": False}}
-
-# Batch envelope: same per-message object plus the target index. The
-# index is required — an item without "i" cannot be routed to its body
-# and is dropped, never guessed.
-_BATCH_ITEM = dict(_SCHEMA["schema"])
-_BATCH_ITEM["properties"] = dict(_SCHEMA["schema"]["properties"])
-_BATCH_ITEM["properties"]["i"] = {"type": "integer"}
-_BATCH_ITEM["required"] = [*_SCHEMA["schema"]["required"], "i"]
-_SCHEMA_BATCH = {
-    "name": "mcs_extract_batch",
-    "schema": {"type": "object",
-               "properties": {"items": {"type": "array",
-                                        "items": _BATCH_ITEM}},
-               "required": ["items"],
-               "additionalProperties": False}}
 
 # Repair pass (one shot, only on validation loss): the model sees its
 # own rejected output plus the specific problems — evidence quotes that
@@ -571,13 +423,13 @@ def _probe_format(deadline: float | None = None) -> str | None:
         # T20: the probe sends real inference POSTs — it passes the
         # same admission gate and consumes its class budget
         mode = local_llm.admitted_probe_format(
-            "mcs.extract", endpoint, model, _SCHEMA, timeout=10,
+            "mcs.extract", endpoint, model, extract_schema.SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
             slot=_choose_slot(),
             verify=lambda text: json_object(text) is not None)
     else:
         mode = local_llm.probe_format(
-            endpoint, model, _SCHEMA, timeout=10,
+            endpoint, model, extract_schema.SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
             slot=_choose_slot(),
             verify=lambda text: json_object(text) is not None)
@@ -586,803 +438,6 @@ def _probe_format(deadline: float | None = None) -> str | None:
     _FMT_MODE = mode
     _FMT_TS = time.monotonic()
     return _FMT_MODE
-
-_VITAL_KEYS = {"bt", "hr", "rr", "sbp", "dbp", "spo2", "bs"}
-
-# Deterministic vital-sign thresholds, active only when the config
-# policy enables them (vital_threshold_policy). Vitals carry no
-# subject or tense context, so a crossing is gated by a context scan
-# of the body window around the reading — family readings, past
-# reports, conditional instructions ("90を切ったら連絡") and
-# unmeasurable markers must not fire.
-_VITAL_THRESHOLDS_DEFAULT = {"spo2_lte": 90.0, "sbp_lte": 90.0,
-                             "sbp_gte": 180.0, "bs_lte": 70.0}
-_VITAL_CTX_WIN = 40
-_VITAL_CTX_EXCLUDE = re.compile(
-    r"父|母|義父|義母|(?<![丈工])夫|妻|主人|息子|娘|兄|姉|弟|妹|祖父|祖母|家族|親族"
-    r"|なら|たら|れば|の場合|の際|切ったら|超えたら|下回ったら"
-    r"|を切ると|を超えると|を下回ると"
-    r"|だった|でした|ありました|していた|になった|なりました"
-    r"|先月|先週|昨日|以前|過去に"
-    r"|測定不能|測れ(?:な|ませ|ず)|測定でき(?:な|ませ|ず)|未測定|不明")
-
-
-def _vital_threshold_flags(vit: dict, body: str | None,
-                           thresholds: dict) -> list[dict]:
-    """Deterministic threshold crossings on validated vitals.
-
-    Returns [{key, value, rule, evidence}] — the reading's own body
-    span (±20 chars) as the verbatim quote. A crossing whose reading
-    cannot be anchored to its label, or whose context window shows a
-    family/conditional/past/unmeasurable marker, does not flag."""
-    if not body or not vit:
-        return []
-    toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
-            for m in re.finditer(r"\d+(?:[.．]\d+)?", body)]
-    rules = (("spo2", "lte", thresholds.get("spo2_lte")),
-             ("sbp", "lte", thresholds.get("sbp_lte")),
-             ("sbp", "gte", thresholds.get("sbp_gte")),
-             ("bs", "lte", thresholds.get("bs_lte")))
-    out = []
-    for key, op, limit in rules:
-        if limit is None or key not in vit:
-            continue
-        val = vit[key]
-        if not ((op == "lte" and val <= limit)
-                or (op == "gte" and val >= limit)):
-            continue
-        span = None
-        for s, e, num in toks:
-            if num != val:
-                continue
-            cls = _nearest_vital_label(body, s, e)
-            if cls == "bp":
-                cls = _bp_side(body, s, e) or cls
-            if cls == key:
-                span = (s, e)
-                break
-        if span is None:
-            continue
-        s, e = span
-        if _VITAL_CTX_EXCLUDE.search(
-                body, max(0, s - _VITAL_CTX_WIN), e + _VITAL_CTX_WIN):
-            continue
-        out.append({"key": key, "value": val,
-                    "rule": f"{key}_{op}_{limit:g}",
-                    "evidence": body[max(0, s - 20):min(len(body), e + 20)]
-                    .strip()})
-    return out
-
-
-def vital_threshold_policy(cfg) -> dict | None:
-    """cfg['vital_urgency'] -> {"mode", "thresholds"} or None.
-
-    Default off. mode "flag" records vital_flags on the artifact for
-    review; mode "high" additionally raises urgency to "high" with the
-    flagged spans as urgency_evidence — a clinical-policy decision that
-    must be enabled explicitly, never by accident."""
-    raw = (cfg or {}).get("vital_urgency") if isinstance(cfg, dict) \
-        else None
-    if not isinstance(raw, dict) or raw.get("mode") not in ("flag", "high"):
-        return None
-    merged = dict(_VITAL_THRESHOLDS_DEFAULT)
-    th = raw.get("thresholds")
-    if isinstance(th, dict):
-        for k in _VITAL_THRESHOLDS_DEFAULT:
-            v = th.get(k)
-            if type(v) in (int, float) and math.isfinite(v):
-                merged[k] = float(v)
-    return {"mode": raw["mode"], "thresholds": merged}
-
-
-def _apply_vital_policy(out: dict, body: str | None,
-                        vital_policy: dict) -> None:
-    """Deterministic vital thresholds on a finished extraction —
-    applied post-merge/post-validate so single, chunked and batch
-    paths agree. "flag" annotates only; "high" (explicit clinical
-    policy) raises urgency with the flagged spans as its evidence."""
-    flags = _vital_threshold_flags(out.get("vitals") or {}, body,
-                                   vital_policy["thresholds"])
-    if not flags:
-        return
-    out["vital_flags"] = flags
-    if vital_policy["mode"] == "high" and out.get("urgency") != "high":
-        out["urgency"] = "high"
-        out["urgency_evidence"] = [f["evidence"] for f in flags][:2]
-
-
-# Free-text fields (summary/points): the model sometimes parrots JSON
-# fragments or slips into another language's output — structural
-# characters never belong in a Japanese one-liner.
-_BAD_TEXT = re.compile(r'[{}\[\]"\n\r\t]')
-
-
-def _cap(v, maxlen: int):
-    """Length-bound an optional string field; non-strings pass as-is
-    (type checks happen at the call site)."""
-    return v[:maxlen] if isinstance(v, str) else v
-
-
-def _clean_text(v, maxlen: int) -> str | None:
-    """Strip a free-text field; reject JSON-structural fragments and
-    cap length. None means the value is not a usable string."""
-    if not isinstance(v, str):
-        return None
-    s = v.strip()
-    if not s or _BAD_TEXT.search(s):
-        return None
-    return s[:maxlen]
-
-
-_RX_ACTS = {"start", "stop", "change", "decrease", "increase", "none", None}
-_EVENTS = {"visit", "exam", "admission", "discharge", "transfer", "fall",
-           "eol", "care", "family_contact", "prescription_inquiry", "other"}
-# Discrete clinical events must be grounded in the target body — the
-# model sometimes lifts an event from thread context or invents one
-# (Jev audit: events are the largest NO_MATCH class). Unlisted kinds
-# (care/family_contact/other) stay ungrounded: their cues are too
-# broad for a keyword check to falsify.
-_EVENT_CUES = {
-    "eol": re.compile(
-        r"看取り|逝去|死去|永眠|お亡くなり|亡くな(?:っ|り)|死亡|息を引き取|"
-        r"心肺停止|心停止|呼吸停止|終末期|臨終|旅立|安らか|緩和ケア|"
-        r"ACP|モルヒネ|オピオイド"),
-    "fall": re.compile(r"転倒|転落|滑落|落ち(?:た|て|る)|倒れ"),
-    "admission": re.compile(r"入院|搬送|救急|急性期"),
-    "discharge": re.compile(r"退院|出院|退所|退館"),
-    "transfer": re.compile(r"転院|転棟|転所|搬送|施設間|移動|移り"),
-    "exam": re.compile(
-        r"外来|" + extract.ENCOUNTER_CUE + r"|受診|検査|採血|レントゲン|エコー|心電図|"
-        r"CT|MRI|血液検査|尿検査|処置"),
-    "visit": re.compile(r"訪問|往診|来訪|訪れ|伺|参り|到着|向かい|家に来"),
-    # A bare 照会/疑義 is mostly not about a prescription (T9: 3/3 false cues);
-    # only 疑義照会, 処方提案 or an inquiry in the same clause as 処方/薬 counts.
-    "prescription_inquiry": re.compile(
-        # clause spans are bounded so one long clause cannot scan quadratically
-        r"疑義照会|処方提案|(?:処方|薬(?!剤師|局|師))[^。、，,;；！？!?\n]{0,200}照会"
-        r"|照会[^。、，,;；！？!?\n]{0,200}(?:処方|薬(?!剤師|局|師))"),
-}
-_MED_STATUSES = {"current", "past", "planned"}
-_MED_SUBJECTS = {"patient", "family", "other"}
-_SYM_STATUSES = {"new", "ongoing", "resolved", "past"}
-# schema v4 detail fields — present-but-invalid enum drops the ITEM
-# (never normalize a guess); absent stays absent.
-_RX_ROUTES = {"oral", "topical", "injection", "infusion",
-              "inhalation", "tube", "other"}
-_SYM_SEVERITY = {"mild", "moderate", "severe"}
-# descriptive, not safety-bearing: an invalid kind omits the KEY, the
-# request item survives (unlike status/negated, which drop the item)
-_REQ_KINDS = {"request", "question", "self_plan"}
-_REPLY_KINDS = {"ack", "intent", "progress", "answer", "done", "cancel"}
-_LAB_FLAGS = {"high", "low"}
-_DUE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-def _valid_date(text: str) -> bool:
-    if not _DUE_RE.match(text):
-        return False
-    from datetime import date
-    try:
-        date.fromisoformat(text)
-        return True
-    except ValueError:
-        return False
-
-
-def _flat(text: str) -> str:
-    """NFKC-normalized text with all whitespace removed."""
-    return "".join(unicodedata.normalize("NFKC", text).split())
-
-
-def _nonspecific_med_name(name: str) -> bool:
-    """Bare medication words and person-owned variants identify no particular drug."""
-    generic = re.fullmatch(r"(?:(.+)の)?(?:薬|お薬|内服薬|処方薬|服用薬)", _flat(name))
-    return bool(generic and (not generic[1]
-                            or extract._person_scope(generic[1], None) != "unknown"
-                            or re.fullmatch(extract._NAMED_PERSON, generic[1])))
-
-
-def _validate(d: dict, body: str | None = None,
-              drops: dict | None = None, ctx: bool = False, *, references=None) -> dict | None:
-    """Schema check — malformed LLM output must not become a success
-    artifact (it poisons downstream rollups, Oracle B20). Returns the
-    cleaned dict or None when nothing salvageable remains.
-
-    Per-item strictness, per-key tolerance: a bad item inside a list is
-    dropped without losing its valid siblings (a deterministic model
-    emitting the same malformed item would otherwise burn all retries
-    into a permanent error and lose the whole extraction). A present-
-    but-invalid enum value drops the ITEM — silently normalizing
-    "廃止" to "current" would mislabel a past med as active.
-
-    `body` (the target message's full body_text) enables evidence
-    verification: a quote is stored only when it locates to a UNIQUE
-    verbatim span of the target body — never a context-only or ambiguous
-    match — and the stored value is the body's own span, not the
-    model's rendering of it. Dropped evidence/items are counted under
-    "_evidence_dropped"/"_items_dropped" so the loss stays observable.
-
-    A confirmed medication quote must contain its name and agree with
-    its explicit person. Unresolved drug references and missing/unlocated
-    evidence remain unverified candidates under the compatibility contract.
-
-    `drops`, when given, collects bounded failure detail for the repair
-    pass: {"ev": [rejected quotes], "items": [fields with dropped
-    items]} — capped so a pathological output can't blow memory.
-
-    `ctx` (the prompt carried thread/summary context) enables the lift
-    guard: a med dose/freq or symptom onset/duration absent from the
-    body is dropped at the key — it was lifted from the context."""
-    out: dict = {}
-    v = _Validator(body, drops, ctx, references)
-    try:
-        v.meds(d, out)
-        v.symptoms(d, out)
-        v.labs(d, out)
-        v.events(d, out)
-        v.requests(d, out)
-        v.patient_context(d, out)
-        v.reply(d, out)
-        v.vitals(d, out)
-        v.scalars(d, out)
-        if v.ev_dropped:
-            out["_evidence_dropped"] = v.ev_dropped
-        if v.items_dropped:
-            out["_items_dropped"] = v.items_dropped
-        # when every recognized key was corrupt (or emptied by drops)
-        # the output is a failure, not an empty extraction
-        if v.items_dropped and not any(
-                (isinstance(x, list) and x)
-                or (isinstance(x, dict) and x)
-                or (isinstance(x, str) and x.strip())
-                for k, x in out.items() if not k.startswith("_")):
-            return None
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return out
-
-
-class _Validator:
-    """Per-field schema cleaning shared state: the evidence verifier +
-    drop accounting used by every item validator in _validate."""
-
-    def __init__(self, body, drops, ctx=False, references=None):
-        self.body = body
-        self.drops = drops
-        self.ctx = ctx
-        self.references = references if isinstance(references, dict) else {}
-        self.flat = _flat(body) if body is not None else None
-        self.ev_dropped = 0
-        self.items_dropped = 0
-
-    def grounded(self, text) -> bool:
-        """True when text occurs in the body after NFKC + whitespace
-        removal; with no body there is nothing to check against."""
-        if self.flat is None:
-            return True
-        t = _flat(text) if isinstance(text, str) else ""
-        return bool(t) and t in self.flat
-
-    def unlift(self, item: dict, keys: tuple):
-        """Lift guard: with context in the prompt, drop detail keys
-        whose value the target body does not contain."""
-        if self.ctx and self.body is not None:
-            for k in keys:
-                if item.get(k) and not self.grounded(item[k]):
-                    del item[k]
-
-    def miss(self, q):
-        """Count an unlocated quote so the repair pass re-asks for it."""
-        self.ev_dropped += 1
-        if self.drops is not None:
-            lst = self.drops.setdefault("ev", [])
-            if len(lst) < 5:
-                lst.append(str(q)[:60])
-
-    def drop_item(self, field: str, reason: str | None = None):
-        self.items_dropped += 1
-        if self.drops is not None:
-            lst = self.drops.setdefault("items", [])
-            if field not in lst and len(lst) < 5:
-                lst.append(field)
-            if reason:
-                reasons = self.drops.setdefault("reasons", [])
-                if len(reasons) < 5:
-                    reasons.append(reason)
-
-    def ev(self, item: dict, source: dict):
-        q = source.get("evidence")
-        if q is None:
-            # no evidence key at all — the claim is real input but
-            # cannot be quote-verified: keep it, mark it (F08)
-            item["unverified"] = True
-            return
-        span = locate_quote_span(self.body, q) if isinstance(q, str) \
-            and q.strip() and self.body is not None else None
-        if span is None:
-            self.miss(q)
-            item["unverified"] = True
-        else:
-            item["evidence"] = self.body[span[0]:span[1]]
-
-    @staticmethod
-    def enum(source: dict, key: str, allowed: set):
-        """Normalized enum value, or None when absent. An invalid value
-        returns False so the caller can drop the item."""
-        v = source.get(key)
-        if v is None:
-            return None
-        v = str(v).strip().lower()
-        return v if v in allowed else False
-
-    def patient_context(self, d: dict, out: dict):
-        if "patient_context" not in d:
-            return
-        if not isinstance(d["patient_context"], list):
-            self.drop_item("patient_context")
-            return
-        items = []
-        for item in d["patient_context"]:
-            if (not isinstance(item, dict)
-                    or not isinstance(item.get("category"), str)
-                    or item["category"] not in CATEGORIES
-                    or item.get("subject") not in ("patient", "family", "other")):
-                self.drop_item("patient_context")
-                continue
-            grounded = context_items({"patient_context": [item]}, self.body) \
-                if isinstance(self.body, str) else []
-            if not grounded:
-                self.miss(item.get("evidence"))
-                self.drop_item("patient_context")
-                continue
-            clean = grounded[0]
-            if "details" in item:
-                raw = item["details"]
-                missing = max(0, len(raw) - len(clean.get("details", []))) if isinstance(raw, list) else 1
-                for _ in range(missing):
-                    self.drop_item("patient_context.details")
-                names = sorted({detail["value"] for detail in clean.get("details", [])
-                                if detail["key"] == "drug_name"})
-                for detail in clean.get("details", []):
-                    # Only the supplied S-map may turn model output into a source identity.
-                    detail.pop("refers_to", None)
-                    matches = [entry for entry in raw if isinstance(entry, dict)
-                        and entry.get("key") == detail["key"] and entry.get("value") == detail["value"]
-                        and locate_quote_span(self.body, entry.get("evidence"))
-                        == locate_quote_span(self.body, detail["evidence"]) and "refers_to" in entry] \
-                        if isinstance(raw, list) else []
-                    if not matches:
-                        continue
-                    candidate = matches[0]["refers_to"]
-                    token = candidate.get("token") if isinstance(candidate, dict) else candidate
-                    reference = self.references.get(token) if isinstance(token, str) else None
-                    resolved = patient_context.reference_item({**reference, "token": token}) \
-                        if isinstance(reference, dict) else None
-                    if (len(matches) != 1 or resolved is None or clean["subject"] != "patient"
-                            or resolved["key"] != detail["key"] or len(names) > 1
-                            or clinical_values.patient_item_scope(detail, self.body, default="patient",
-                                surface=(names or resolved["drug_names"] or [None])[0])
-                            not in ("patient", "past", "planned", "conditional")
-                            or (names and names != resolved["drug_names"])
-                            or (isinstance(candidate, dict) and candidate != resolved)):
-                        self.drop_item("patient_context.refers_to")
-                    else:
-                        detail["refers_to"] = resolved
-            items.append({key: clean[key] for key in
-                          ("category", "text", "evidence", "subject", "details") if key in clean})
-        out["patient_context"] = items
-
-    def meds(self, d: dict, out: dict):
-        if "meds" not in d:
-            return
-        if not isinstance(d["meds"], list):
-            self.drop_item("meds")
-            return
-        meds = []
-        for index, m in enumerate(d["meds"]):
-            st = self.enum(m, "status", _MED_STATUSES) \
-                if isinstance(m, dict) else False
-            sj = self.enum(m, "subject", _MED_SUBJECTS) \
-                if isinstance(m, dict) else False
-            rt = self.enum(m, "route", _RX_ROUTES) \
-                if isinstance(m, dict) else False
-            if not (isinstance(m, dict)
-                    and isinstance(m.get("name"), str)
-                    and m["name"].strip()
-                    and (m.get("action") is None
-                         or (isinstance(m.get("action"), str)
-                             and m["action"] in _RX_ACTS))
-                    and ("negated" not in m
-                         or type(m.get("negated")) is bool)
-                    and ("prn" not in m
-                         or type(m.get("prn")) is bool)
-                    and st is not False and sj is not False
-                    and rt is not False):
-                self.drop_item("meds")
-                continue
-            if _nonspecific_med_name(m["name"]):
-                self.drop_item("meds", f"meds[{index}].nameが薬剤を特定しない一般表現です。"
-                               "本文に薬剤名がなければmedsに入れず、服薬管理情報はpatient_contextに残してください。")
-                continue
-            dose = m.get("dose")
-            if type(dose) in (int, float) \
-                    and -1e308 <= dose <= 1e308:
-                dose = str(dose)
-            elif not isinstance(dose, str | type(None)):
-                dose = None
-            item = {"name": m["name"], "dose": dose,
-                    "action": m.get("action"),
-                    "negated": m.get("negated", False)}
-            if rt:
-                item["route"] = rt
-            freq = _clean_text(m.get("freq"), 30)
-            if freq:
-                item["freq"] = freq
-            if m.get("prn") is True:
-                item["prn"] = True
-            # absent status/subject is preserved, never filled
-            # with a fabricated 'current'/'patient' (F08) —
-            # downstream patient-state consumers must treat the
-            # item as a candidate, not confirmed current
-            if st:
-                item["status"] = st
-            if sj:
-                item["subject"] = sj
-            self.unlift(item, ("dose", "freq"))
-            if st is None or sj is None or "negated" not in m:
-                item["unverified"] = True
-            self.ev(item, m)
-            quote = item.get("evidence")
-            if quote is not None:
-                flat_quote = _flat(quote)
-                mentions = list(re.finditer(re.escape(_flat(item["name"])), flat_quote))
-                if mentions and all(re.match(r"(?:さん|氏)(?:の|は|が|に|を|へ|から|と|[、。])",
-                                             flat_quote[mention.end():]) for mention in mentions):
-                    self.drop_item("meds", f"meds[{index}].nameは引用中で敬称付きの人物です。"
-                                   "人物名と薬剤名を区別して再抽出してください。")
-                    continue
-                scope = clinical_values.patient_item_scope(item, self.body, surface=item["name"], default="unknown")
-                wrong_person = sj in _MED_SUBJECTS and scope in _MED_SUBJECTS and scope != sj
-                missing_name = _flat(item["name"]) not in _flat(quote)
-                if missing_name and sj in _MED_SUBJECTS:
-                    span = locate_quote_span(self.body, quote)
-                    # A reference at the quote's start must not mask a later explicit drug owner.
-                    scopes = [extract.patient_source_scope(self.body, span[0] + word.start(),
-                                                           span[0] + word.end(), default="unknown")
-                              for word in re.finditer(r"薬(?!剤師|局)|剤(?!師)|処方", quote)]
-                    if scopes:
-                        wrong_person = any(s in _MED_SUBJECTS and s != sj for s in scopes)
-                if wrong_person:
-                    self.drop_item("meds", f"meds[{index}].subjectと引用の対象者が一致しません。"
-                                   "薬剤名を含む本文の引用と服用者を対応させて再抽出してください。")
-                    continue
-                if missing_name and re.search(r"同薬|同剤|当該薬|その薬|あの薬|上記", quote):
-                    # Preserve a possible stop/reference, without confirming an unproved identity.
-                    self.miss(item.pop("evidence"))
-                    item["unverified"] = True
-                elif missing_name:
-                    self.drop_item("meds", f"meds[{index}].evidenceにnameが含まれていません。"
-                                   "別の文を流用せず、薬剤名を含む本文を引用し、服用者のsubjectを確認してください。")
-                    continue
-                # Only the named drug's direct non-use contradicts its current affirmation.
-                if (st == "current" and m.get("negated") is False
-                        and scope not in ("past", "planned", "conditional")
-                        and _flat(quote).count(_flat(item["name"])) == 1 and re.search(
-                        re.escape(_flat(item["name"])) + _RX_DOSE + _RX_PARTICLE
-                        + r"(?:(?:服用|内服|使用|投与)(?:は|を|も)?"
-                          r"(?:して(?:いない|いません)|せず|しない|しません)"
-                          r"|飲(?:んで(?:いない|いません)|まず|まない|みません)"
-                          r"|使(?:わず|わない|って(?:いない|いません)))"
-                          r"(?!こと|事|わけ|訳|場合|とき|時|なら|と|か|が|けど|けれど|ものの"
-                          r"|で|だ|ほう|方|よう|予定|つもり|日|回)", _flat(quote))):
-                    self.drop_item("meds", f"meds[{index}]のcurrent・negated:falseが引用の不使用と矛盾します。"
-                                   "本文の服用状況を再確認し、否定と時点を保持してください。")
-                    continue
-            item["normalized"] = clinical_values.medication_surface(item["name"])
-            meds.append(item)
-        out["meds"] = meds
-
-    def symptoms(self, d: dict, out: dict):
-        if "symptoms" not in d:
-            return
-        if not isinstance(d["symptoms"], list):
-            self.drop_item("symptoms")
-            return
-        syms = []
-        for s in d["symptoms"]:
-            st = self.enum(s, "status", _SYM_STATUSES) \
-                if isinstance(s, dict) else False
-            sj = self.enum(s, "subject", _MED_SUBJECTS) \
-                if isinstance(s, dict) else False
-            sv = self.enum(s, "severity", _SYM_SEVERITY) \
-                if isinstance(s, dict) else False
-            if not (isinstance(s, dict)
-                    and isinstance(s.get("text"), str)
-                    and s["text"].strip()
-                    and ("negated" not in s
-                         or type(s.get("negated")) is bool)
-                    and st is not False and sj is not False
-                    and sv is not False):
-                self.drop_item("symptoms")
-                continue
-            item = {"text": s["text"],
-                    "negated": s.get("negated", False)}
-            if st:
-                item["status"] = st
-            if sj:
-                item["subject"] = sj
-            if sv:
-                item["severity"] = sv
-            onset = _clean_text(s.get("onset"), 30)
-            if onset:
-                item["onset"] = onset
-            duration = _clean_text(s.get("duration"), 30)
-            if duration:
-                item["duration"] = duration
-            self.unlift(item, ("onset", "duration"))
-            if st is None or sj is None or "negated" not in s:
-                item["unverified"] = True
-            self.ev(item, s)
-            syms.append(item)
-        out["symptoms"] = syms
-
-    def labs(self, d: dict, out: dict):
-        """Reported lab results — only what the body states verbatim.
-        `flag` is kept only when the body itself calls the value out of
-        range; the extractor never invents reference ranges."""
-        if "labs" not in d:
-            return
-        if not isinstance(d["labs"], list):
-            self.drop_item("labs")
-            return
-        labs = []
-        for lb in d["labs"]:
-            fl = self.enum(lb, "flag", _LAB_FLAGS) \
-                if isinstance(lb, dict) else False
-            subject = self.enum(lb, "subject", _MED_SUBJECTS) if isinstance(lb, dict) else False
-            status = self.enum(lb, "status", _MED_STATUSES) if isinstance(lb, dict) else False
-            if not (isinstance(lb, dict)
-                    and isinstance(lb.get("name"), str)
-                    and lb["name"].strip()
-                    and type(lb.get("value")) in (int, float, str)
-                    and fl is not False and subject is not False and status is not False):
-                self.drop_item("labs")
-                continue
-            item = {"name": lb["name"].strip()[:40]}
-            val = lb["value"]
-            if type(val) in (int, float) and -1e308 <= val <= 1e308:
-                item["value"] = val
-            else:
-                sv = _clean_text(val, 30)
-                if not sv:
-                    self.drop_item("labs")
-                    continue
-                item["value"] = sv
-            unit = _clean_text(lb.get("unit"), 15)
-            if unit:
-                item["unit"] = unit
-            if fl:
-                item["flag"] = fl
-            self.ev(item, lb)
-            for key, value in (("subject", subject), ("status", status)):
-                if value:
-                    item[key] = value
-            for key in ("measured_on", "condition"):
-                if key not in lb:
-                    continue
-                value = lb[key]
-                if isinstance(value, str) and value.strip() and value in (item.get("evidence") or ""):
-                    item[key] = value
-                else:
-                    self.drop_item("labs." + key)
-                    item["unverified"] = True
-            item["normalized"] = clinical_values.lab_candidate(
-                item["name"], item["value"], item.get("unit"),
-                item.get("evidence"), unverified=(
-                    item.get("unverified", False)
-                    or lb.get("unverified", False) is not False),
-                flag=item.get("flag"), subject=subject, status=status,
-                measured_on=item.get("measured_on"), condition=item.get("condition"))
-            if item["normalized"]["confirmation"] == "unverified":
-                item["unverified"] = True
-                if self.drops is not None:
-                    notes = self.drops.setdefault("labs", [])
-                    if len(notes) < 5:
-                        notes.append(f"labs.{item['name']} の値・単位・根拠を確認できません")
-            labs.append(item)
-        out["labs"] = labs
-
-    def events(self, d: dict, out: dict):
-        if "events" not in d:
-            return
-        if not isinstance(d["events"], list):
-            self.drop_item("events")
-            return
-        evs = []
-        for e in d["events"]:
-            if not isinstance(e, str) or e not in _EVENTS:
-                continue
-            cue = _EVENT_CUES.get(e)
-            if cue is not None and self.body is not None \
-                    and not cue.search(self.body):
-                self.items_dropped += 1
-                if self.drops is not None:
-                    lst = self.drops.setdefault("events", [])
-                    if len(lst) < 5 and e not in lst:
-                        lst.append(e)
-                continue
-            evs.append(e)
-        out["events"] = evs
-
-    def requests(self, d: dict, out: dict):
-        if "requests" not in d:
-            return
-        if not isinstance(d["requests"], list):
-            self.drop_item("requests")
-            return
-        reqs = []
-        for r in d["requests"]:
-            if not (isinstance(r, dict)
-                    and (r.get("to") is None
-                         or isinstance(r.get("to"), str))
-                    and (r.get("action") is None
-                         or isinstance(r.get("action"), str))
-                    and (r.get("from") is None
-                         or isinstance(r.get("from"), str))):
-                self.drop_item("requests")
-                continue
-            # Ungrounded free text reaches notifications — bound its
-            # length (the prompt asks for 30 chars; a runaway or
-            # injected string must not ride through unbounded).
-            item = {"to": _cap(r.get("to"), 30),
-                    "action": _cap(r.get("action"), 60)}
-            # from/due_text are kept only when the body states them
-            if isinstance(r.get("from"), str) \
-                    and self.grounded(r["from"].strip()[:30]):
-                item["from"] = r["from"].strip()[:30]
-            kind = self.enum(r, "kind", _REQ_KINDS)
-            if kind:
-                item["kind"] = kind
-            # a condition is a quote: stored only as the body's own
-            # span, never as the model's rendering (no fabricated 〜なら).
-            # An unlocated one is a counted miss (repair re-asks) and the
-            # request stays only as an unverified candidate — never an
-            # unconditional instruction.
-            cond = _clean_text(r.get("condition"), 60)
-            span = locate_quote_span(self.body, cond) \
-                if cond and self.body is not None else None
-            if span is not None:
-                item["condition"] = self.body[span[0]:span[1]]
-            elif cond:
-                self.miss(cond)
-                item["unverified"] = True
-            elif r.get("unverified") is True:
-                item["unverified"] = True   # re-validated checkpoint
-            if isinstance(r.get("due"), str) \
-                    and _valid_date(r["due"].strip()):
-                item["due"] = r["due"].strip()
-            # F09: relative phrasing ('明日まで') is preserved
-            # verbatim — never coerced into a guessed ISO date
-            if isinstance(r.get("due_text"), str) \
-                    and r["due_text"].strip():
-                if self.grounded(r["due_text"].strip()[:60]):
-                    item["due_text"] = r["due_text"].strip()[:60]
-                else:
-                    item.pop("due", None)   # derived from an unlocated text
-            self.ev(item, r)
-            reqs.append(item)
-        out["requests"] = reqs
-
-    def reply(self, d: dict, out: dict):
-        r = d.get("reply")
-        if r is None:
-            return          # null = no reply (the object/plain rungs)
-        kind = self.enum(r, "kind", _REPLY_KINDS) \
-            if isinstance(r, dict) else False
-        if not kind:
-            self.drop_item("reply")
-            return
-        item = {"kind": kind}
-        self.ev(item, r)
-        # a typed reply never surfaces without its located quote — and
-        # a quote-less one is a counted drop so the repair asks for it
-        if "evidence" in item:
-            out["reply"] = item
-        else:
-            self.drop_item("reply")
-
-    def vitals(self, d: dict, out: dict):
-        if "vitals" not in d:
-            return
-        v = d["vitals"]
-        if not isinstance(v, dict):
-            self.drop_item("vitals")
-            return
-        vit = {}
-        for k in _VITAL_KEYS:
-            val = v.get(k)
-            if val is None:
-                continue
-            if type(val) not in (int, float) \
-                    or not -1e308 <= val <= 1e308:
-                self.drop_item("vitals")
-                continue
-            vit[k] = float(val)
-        if vit and self.body is not None:
-            vit = _vitals_guard(self.body, vit, self.drops)
-        if vit:
-            out["vitals"] = vit
-
-    def current_prose(self, text: str, field: str) -> bool:
-        """Do not present a source's explicitly noncurrent reading without its qualifier."""
-        if not isinstance(self.body, str):
-            return True
-        # Only explicit measurement syntax is checked, never a nearby drug dose or body weight.
-        readings = [(m.start(group), m.end(group))
-                    for pattern in (*extract._VITAL_PATTERNS.values(),
-                                    r"(?:収縮期|拡張期)(?:血圧)?[:：はが=\s]*(\d+(?:[.．]\d+)?)")
-                    for m in re.finditer(pattern, text) for group in range(1, (m.lastindex or 0) + 1)]
-        for start, end in readings:
-            cls = _nearest_vital_label(text, start, end)
-            if cls is None or extract.patient_source_scope(text, start, end) != "patient":
-                continue
-            left = max(text.rfind(mark, 0, start) for mark in "。！？!?\n") + 1
-            if (re.search(clinical_values._OTHER_TIME, text[left:start])
-                    and not clinical_values._vital_current(text, start)):
-                continue
-            hits = [m.span() for m in re.finditer(r"\d+(?:[.．]\d+)?", self.body)
-                    if clinical_values._bp_number(m[0]) == clinical_values._bp_number(text[start:end])
-                    and _nearest_vital_label(self.body, *m.span()) == cls]
-            if hits and (all(extract.patient_source_scope(self.body, s, e)
-                             in clinical_values._NOT_PATIENT_CURRENT for s, e in hits)
-                         or clinical_values._vital_superseded(self.body, cls, hits)):
-                self.drop_item(field, f"{field}の測定値は本文では本人の現在の値ではありません。"
-                               "要約・要点でも対象者・時点・条件を保持し、未測定の値を補わないでください。")
-                return False
-        return True
-
-    def scalars(self, d: dict, out: dict):
-        if "summary" in d:
-            s = _clean_text(d["summary"], 60)
-            if s:
-                if self.current_prose(s, "summary"):
-                    out["summary"] = s
-            else:
-                self.drop_item("summary")
-        if "urgency" in d:
-            if d["urgency"] in ("high", "routine", "unclear"):
-                out["urgency"] = d["urgency"]
-            else:
-                self.drop_item("urgency")
-        # urgency_evidence: verbatim quotes grounding the verdict, same
-        # locate-in-body rule as item evidence. A "high" whose quotes do
-        # not locate degrades to "unclear" — never "routine": an
-        # unproven alert stays unresolved (the v1 lexical net still
-        # applies downstream) rather than being silently cleared.
-        if isinstance(d.get("urgency_evidence"), list):
-            spans = []
-            for q in d["urgency_evidence"]:
-                if len(spans) >= 2:
-                    break
-                span = locate_quote_span(self.body, q) \
-                    if isinstance(q, str) and q.strip() \
-                    and self.body is not None else None
-                if span is None:
-                    self.miss(q)
-                else:
-                    spans.append(self.body[span[0]:span[1]])
-            if spans:
-                out["urgency_evidence"] = spans
-        if out.get("urgency") == "high" and not out.get("urgency_evidence") \
-                and self.body is not None:
-            out["urgency"] = "unclear"
-        if "points" in d:
-            if isinstance(d["points"], list):
-                out["points"] = [p for p in
-                                 (_clean_text(x, 40) for x in d["points"])
-                                 if p and self.current_prose(p, "points")][:3]
-            else:
-                self.drop_item("points")
 
 
 _CHUNK_SIZE = 3000
@@ -1540,7 +595,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
         rf = None
         if fmt == "schema":
             rf = {"type": "json_schema",
-                  "json_schema": schema or _SCHEMA}
+                  "json_schema": schema or extract_schema.SCHEMA}
         elif fmt == "object":
             rf = {"type": "json_object"}
         err_out: dict = {}
@@ -1615,1089 +670,11 @@ def _llm_call(prompt: str, deadline: float | None = None,
         return json_object(text)
 
 
-def _merge(outs: list[dict]) -> dict:
-    """Deterministic merge of per-chunk validated outputs, in document
-    order.
-
-    Identity keys preserve in-message progression rather than collapsing
-    it: meds dedupe on (name, subject, action) so a past stop and a
-    planned restart coexist; symptoms keep the LAST status per text —
-    a later "resolved" must overwrite an earlier "new" or downstream
-    resolvers never fire; vitals keep the latest reading per key,
-    with blood-pressure sides kept together from one chunk;
-    labs retain distinct explicit sampling dates and confirmation groups;
-    requests dedupe on (to, from, action, due, condition, due_text).
-    urgency is high if any chunk said high (grounded by then — _validate
-    already degraded an unquoted high to unclear); else unclear beats
-    routine, since residual uncertainty must not masquerade as a
-    confident routine. `summary` is dropped — a first-chunk summary is a
-    PARTIAL viewpoint and must not be displayed as the whole message's
-    gist (points survive: they are additive facts, each still true).
-    Drop counters are summed."""
-    out: dict = {}
-    seen_requests: set = set()
-    seen_context: dict = {}
-    med_order: dict = {}
-    sym_idx: dict = {}
-    lab_idx: dict = {}
-    for d in outs:
-        for m in d.get("meds") or []:
-            k = (m["name"], m.get("subject"), m.get("action"))
-            # Retain the latest occurrence in source order: start -> stop
-            # -> start must end at the restart, including its new dose.
-            out.setdefault("meds", [])
-            med_order.pop(k, None)
-            med_order[k] = m
-        for s in d.get("symptoms") or []:
-            key = (s["text"], s.get("subject"))
-            if key in sym_idx:
-                out["symptoms"][sym_idx[key]] = s
-            else:
-                sym_idx[key] = len(out.setdefault("symptoms", []))
-                out["symptoms"].append(s)
-        for lab in d.get("labs") or []:
-            normalized = lab.get("normalized") or {}
-            key = (lab["name"], lab.get("subject"), lab.get("status"),
-                   lab.get("measured_on", normalized.get("measured_on")),
-                   lab.get("condition"), lab.get("unverified", False))
-            if key in lab_idx:
-                out["labs"][lab_idx[key]] = lab
-            else:
-                lab_idx[key] = len(out.setdefault("labs", []))
-                out["labs"].append(lab)
-        for rq in d.get("requests") or []:
-            # condition/due_text change what is asked: two chunks'
-            # requests differing only there are distinct, never merged
-            # (kind stays out — an overlap sentence may be labelled
-            # request in one chunk and question in the next)
-            k = (rq.get("to"), rq.get("from"), rq.get("action"),
-                 rq.get("due"), rq.get("condition"), rq.get("due_text"))
-            if k not in seen_requests:
-                seen_requests.add(k)
-                out.setdefault("requests", []).append(rq)
-        for item in d.get("patient_context") or []:
-            key = tuple(item[key] for key in ("category", "text", "evidence", "subject"))
-            if key not in seen_context:
-                clean = dict(item)
-                if "details" in item:
-                    clean["details"] = list(item["details"])
-                seen_context[key] = clean
-                out.setdefault("patient_context", []).append(clean)
-            elif item.get("details"):
-                prior = seen_context[key]
-                for detail in item["details"]:
-                    if detail not in prior.setdefault("details", []):
-                        prior["details"].append(detail)
-        for e in d.get("events") or []:
-            if e not in out.setdefault("events", []):
-                out["events"].append(e)
-        for p in d.get("points") or []:
-            if len(out.setdefault("points", [])) < 3 \
-                    and p not in out["points"]:
-                out["points"].append(p)
-        vitals = d.get("vitals") or {}
-        if "sbp" in vitals or "dbp" in vitals:
-            # A later single-side reading never borrows the earlier side.
-            prior = out.setdefault("vitals", {})
-            prior.pop("sbp", None)
-            prior.pop("dbp", None)
-        for k, v in vitals.items():
-            out.setdefault("vitals", {})[k] = v   # latest reading wins
-        if d.get("urgency") == "high":
-            out["urgency"] = "high"
-            for q in d.get("urgency_evidence") or []:
-                if len(out.setdefault("urgency_evidence", [])) < 2 \
-                        and q not in out["urgency_evidence"]:
-                    out["urgency_evidence"].append(q)
-        if "reply" not in out and d.get("reply"):
-            out["reply"] = d["reply"]
-        for k in ("_items_dropped", "_evidence_dropped"):
-            if d.get(k):
-                out[k] = out.get(k, 0) + d[k]
-    if med_order:
-        out["meds"] = list(med_order.values())
-    # Unclear beats routine in the merge: a chunk that could not ground
-    # an urgency call leaves residual uncertainty — folding it to
-    # routine would silence the v1 lexical net downstream for no gain.
-    if "urgency" not in out:
-        if any(d.get("urgency") == "unclear" for d in outs):
-            out["urgency"] = "unclear"
-            for d in outs:
-                for q in d.get("urgency_evidence") or []:
-                    if len(out.setdefault("urgency_evidence", [])) < 2 \
-                            and q not in out["urgency_evidence"]:
-                        out["urgency_evidence"].append(q)
-        elif outs and all(d.get("urgency") == "routine" for d in outs):
-            out["urgency"] = "routine"
-    return out
-
-
 # Returned by llm_extract when the caller's deadline ran out mid-
 # message: NOT a failure — the message must not burn retry attempts
 # (it was making progress; the budget simply ended). run_pending
 # leaves it pending for the next tick.
 _DEFERRED = object()
-
-
-def _drop_total(v: dict | None) -> float:
-    """Validation-loss score for comparing an output with its repair —
-    None (total failure) outranks any drop count so a salvageable
-    repair always wins."""
-    if v is None:
-        return float("inf")
-    return (v.get("_evidence_dropped", 0) + v.get("_items_dropped", 0)
-            + sum(bool(lab.get("unverified")) for lab in v.get("labs") or []))
-
-
-_FACT_LIST_FIELDS = ("meds", "symptoms", "labs", "events", "requests", "patient_context")
-
-
-def _facts(v: dict | None, split_conditions: bool = False) -> set:
-    """Clinical assertions retained independently of prose fields.
-
-    With split_conditions a request's located condition is its own
-    fact, so a repair that grounds an unverified request's condition
-    still covers the prior request, and losing a located one regresses.
-    """
-    facts = set()
-    for key in _FACT_LIST_FIELDS:
-        for item in (v or {}).get(key) or []:
-            if isinstance(item, dict):
-                item = {k: x for k, x in item.items()
-                        if not k.startswith("_")
-                        and k not in ("unverified", "evidence", "normalized")}
-                if key == "patient_context":
-                    details = item.pop("details", [])
-                    for detail in details:
-                        facts.add(("patient_context_detail", json.dumps(
-                            {"parent": item, "key": detail["key"], "value": detail["value"]},
-                            sort_keys=True, ensure_ascii=False)))
-                if key == "labs":
-                    details = {k: item.pop(k) for k in ("subject", "status", "measured_on", "condition")
-                               if k in item}
-                    for field, value in details.items():
-                        facts.add(("lab_detail", json.dumps(
-                            {"parent": item, "key": field, "value": value},
-                            sort_keys=True, ensure_ascii=False)))
-                if split_conditions and key == "requests" \
-                        and "condition" in item:
-                    facts.add(("request_condition", json.dumps(
-                        item, sort_keys=True, ensure_ascii=False)))
-                    item.pop("condition")
-            facts.add((key, json.dumps(item, sort_keys=True,
-                                       ensure_ascii=False)))
-    for key, value in ((v or {}).get("vitals") or {}).items():
-        facts.add(("vitals", key, value))
-    reply = (v or {}).get("reply")
-    if isinstance(reply, dict) and reply.get("kind"):
-        facts.add(("reply", reply["kind"]))
-    return facts
-
-
-def _improves(candidate: dict | None, prior: dict | None) -> bool:
-    """Accept repairs only when retained assertions do not regress."""
-    if candidate is None:
-        return False
-    if prior is None:
-        return True
-    prior_facts = _facts(prior, split_conditions=True)
-    candidate_facts = _facts(candidate, split_conditions=True)
-    if not prior_facts.issubset(candidate_facts):
-        return False
-    if prior.get("urgency") == "high" and candidate.get("urgency") != "high":
-        return False
-    return (_drop_total(candidate), -len(candidate_facts)) < (
-        _drop_total(prior), -len(prior_facts))
-
-
-# One bounded completeness pass for sparse clinical assertions. Prose
-# fields never count as recovered facts; multiple items in one field do.
-_THIN_BODY_MIN = 300
-_THIN_FACTS_MIN = 2
-
-
-def _is_thin(v: dict | None, body: str | None) -> bool:
-    return (v is not None and body is not None
-            and len(body) >= _THIN_BODY_MIN
-            and len(_facts(v)) < _THIN_FACTS_MIN)
-
-
-# closed set of repair-trigger codes for the meta histogram: the drops
-# buckets (incl. the legacy vitals key) plus the three non-drop triggers
-_ISSUE_KEYS = ("ev", "items", "reasons", "labs", "events", "vitals",
-               "structure", "completeness", "thin")
-
-
-def _repair_issues(drops: dict, v: dict | None) -> list[str]:
-    """Concrete failure list for the repair prompt — evidence quotes
-    that failed to locate plus fields whose items violated the schema.
-    Empty means nothing actionable to fix (e.g. transport failure)."""
-    issues = [f"evidence「{q}」は対象本文に一致しません(完全一致引用に修正)"
-              for q in drops.get("ev") or []]
-    issues += [f"{s} (vitalsのキーは本文の測定名に合わせてください)"
-               for s in drops.get("vitals") or []]
-    issues += list(drops.get("labs") or [])
-    issues += list(drops.get("reasons") or [])
-    issues += [f"event「{e}」の根拠表現を確認できませんでした"
-               "（対象本文の言い換え・活用も再確認し、根拠がなければ省いてください）"
-               for e in drops.get("events") or []]
-    issues += [f"「{f}」の項目がスキーマ違反でした"
-               for f in drops.get("items") or []]
-    if v is None and not issues:
-        issues.append("出力が構造を満たしませんでした")
-    return issues
-
-
-_QUALITY_CHECKPOINT = "completeness-v1"
-
-
-def _current_cue(body, surface):
-    """A literal patient-current occurrence can invite review without confirming a fact."""
-    if not isinstance(surface, str) or not surface:
-        return False
-    for match in re.finditer(re.escape(surface), body):
-        if extract.patient_source_scope(body, *match.span()) != "patient":
-            continue
-        left = re.split(r"[。！？!?;；\r\n]", body[:match.start()])[-1]
-        right = re.split(r"[。！？!?;；\r\n]", body[match.end():])[0]
-        if not re.search(r"ない|なし|なく|ません|不要|未使用|未測定|中止|済み|ありがとう", left + surface + right):
-            return True
-    return False
-
-
-def _completeness_issues(v, hints, body):
-    """Source-bound missing hints request a reread, never establish clinical facts."""
-    if not isinstance(v, dict):
-        return []
-    issues = _pharmacy_gaps(v, body)
-    if not isinstance(hints, dict):
-        return issues
-
-    for key, value in clinical_values.patient_current_vitals(hints.get("vitals") or {}, body).items():
-        if key not in (v.get("vitals") or {}) and any(
-                float(match[0].replace("．", ".")) == value and _current_cue(body, match[0])
-                for match in re.finditer(_BP_NUM, body)):
-            issues.append(f"本文の測定候補 {key}={value} が未収載です。原文で再確認してください")
-    names = {med.get("name") for med in v.get("meds") or []
-             if med_is_patient_current(med) and clinical_values.patient_item_scope(
-                 med, body, surface=med.get("name")) == "patient"
-             and _current_cue(body, med.get("evidence"))}
-    for med in hints.get("medications") or []:
-        name = med.get("name") if isinstance(med, dict) else None
-        if (isinstance(name, str) and not _nonspecific_med_name(name)
-                and name not in names and _current_cue(body, name)):
-            issues.append(f"本文の薬剤候補「{name}」が未収載です。原文で再確認してください")
-    issues += _rx_action_gaps(v, hints, body)
-    # The rule hints' confirm/contact patterns also fire on reports (確認を終えた);
-    # the per-sentence cues apply the same request-ending test to every kind.
-    for request in _request_cues(body):
-        if (isinstance(request, dict) and request.get("kind") in _REQUEST_STEMS
-                and isinstance(request.get("ctx"), str)
-                and _request_current(body, request["ctx"], request["clause"])
-                and not any(_request_covers(item, request) for item in v.get("requests") or [])):
-            issues.append("本文の確認・連絡・質問候補が未収載です。原文で再確認してください")
-            break
-    return issues
-
-
-_PHARMACY_DETAIL_CUES = {
-    "support_method": re.compile(r"一包化|分包"),
-    "storage_status": re.compile(r"(?:冷蔵|室温|冷凍)(?:で)?保管|薬(?:剤)?の保管状況"),
-    "storage_place": re.compile(r"冷蔵庫|(?:服薬|薬)カレンダー|配薬ボックス|お薬箱|薬(?:剤)?の(?:保管場所|置き場)"),
-    "medication_manager": re.compile(r"(?:薬(?:剤)?の管理|服薬管理)[^。！？!?;；\n]{0,60}(?:が|担当|行)"),
-    "inquiry_result": _EVENT_CUES["prescription_inquiry"],
-    "interaction_check": re.compile(r"相互作用|重複(?:投薬|処方)"),
-}
-
-
-def _pharmacy_gaps(v, body):
-    """Ask once about missing source-local pharmacy details, without creating any facts."""
-    issues = []
-    for sentence in re.finditer(r"[^。！？!?;；\n]+", body):
-        text = sentence[0]
-        if not re.search(r"薬(?!剤師|局)|処方|内服|服薬|インスリン|一包化|分包", text):
-            continue
-        if (re.search(r"(?:薬局|病院|事業所)の(?:冷蔵庫|棚|保管庫)", text)
-                and not re.search(r"本人|患者|利用者", text)):
-            continue
-        for key, pattern in _PHARMACY_DETAIL_CUES.items():
-            for cue in pattern.finditer(text):
-                if extract.patient_source_scope(body, sentence.start() + cue.start(),
-                                                sentence.start() + cue.end()) in ("family", "other", "unknown"):
-                    continue
-                if key == "storage_place" and not re.search(r"保管|置き|置い", text):
-                    continue
-                if key == "support_method" and re.match(
-                        r"(?:を|は|が|も)?\s*(?:検討|希望|予定|不要|なし|され?ていません|していません)",
-                        text[cue.end():]):
-                    continue
-                if key == "interaction_check" and not re.search(r"確認|チェック|照合|点検|調べ", text):
-                    continue
-                if key == "inquiry_result":
-                    if "prescription_inquiry" not in (v.get("events") or []):
-                        issues.append("本文の薬剤の疑義照会・処方提案がeventsに未収載です。原文で再確認してください")
-                    if not re.search(r"回答|返答|了承|了解|承認|見送|変更なし|結果|未確認", text):
-                        continue
-                covered = False
-                for item in v.get("patient_context") or []:
-                    if (not isinstance(item, dict) or item.get("category") != "medication_management"
-                            or item.get("subject") != "patient"):
-                        continue
-                    for detail in item.get("details") or []:
-                        if not isinstance(detail, dict) or detail.get("key") != key:
-                            continue
-                        span = locate_quote_span(body, detail.get("evidence"))
-                        if span is None or not (span[0] < sentence.end() and sentence.start() < span[1]):
-                            continue
-                        # A calendar is another support method; it does not cover omitted packaging.
-                        if key == "support_method" and cue[0] not in str(detail.get("value", "")):
-                            continue
-                        covered = True
-                        break
-                    if covered:
-                        break
-                if not covered:
-                    issues.append(f"本文の服薬管理候補「{cue[0]}」の詳細 {key} が未収載です。原文で再確認してください")
-                break
-    return issues
-
-
-# v1 rx_actions' own change words. Each is met by its own action only: a generic
-# 変更 states no direction, and an increase or decrease keeps its direction.
-_RX_WORDS = {"start": "開始|追加|再開|導入", "stop": "中止|停止|終了|中断|休薬", "decrease": "減量",
-             "increase": "増量", "change": "変更(?!なし)"}
-_RX_ANY = "|".join(_RX_WORDS.values())
-# 変更なし states no change: never a change to cover, but kept as a position so an
-# extracted change of that drug has nothing to rest on (Aは変更なし beside A/change)
-_RX_NO_CHANGE = r"変更(?:なし|無し)"
-# A non-current change is denied, done, planned or weighed right at its own word:
-# 中止しません, 中止しなかった, 中止はしない, 変更無し, 中止済み, 開始予定, 中止は見送り.
-# A later predicate (中止し経過観察予定) or earlier text (副作用なしで) is something else.
-# いたし/致し (開始いたします) is a polite form of し: it keeps the meaning that follows
-_RX_VERB = r"(?:を|は|も|が|の)?\s*(?:いた|致)?(?:し|する|して|され)?"
-_RX_NOT_CURRENT = (_RX_VERB +
-                   r"(?:ない|なく|なかっ|ません|せず|無し|なし|不要|予定|検討|見送|拒否|ありません"
-                   # 中止を撤回, 開始を取り消し, 中止を取りやめ: the change is withdrawn
-                   r"|撤回|取り?消|取消|取り?やめ|とりやめ|白紙"
-                   # 中止していません, 中止されていない (not 開始しています: ongoing, current)
-                   r"|て?い(?:ない|ません|なかっ)"
-                   # できる/出来る states no done change (中止できません, できるか確認中, できます,
-                   # できましたか, できたら) except its plain affirmative past (中止できました, できた)
-                   r"|(?:でき|出来)(?!ました(?!か)|た(?!か|ら|ろう))"
-                   # a question asks nothing either: 開始しますか, 中止しましたか
-                   r"|ますか|ましたか|たか|でしょうか|か[？?])")
-# 開始予定, 開始を検討: not done, but no denial either (a planned item may state it)
-_RX_UNDECIDED = _RX_VERB + r"(?:予定|検討)"
-# A requested, consulted or not yet done change is checked as planned, never as done:
-# 開始してください, 追加を相談, 開始します
-_RX_PLANNED = (_RX_VERB + r"(?:(?:主治医|処方医|医師|薬剤師|看護師)(?:へ|に)\s*)?"
-               r"(?:ください|下さい|ほしい|欲しい|お願い|相談|依頼|(?:処方)?提案|ます(?!た|か))")
-# 明日から架空薬Aを開始: a future time in the change's own clause
-_RX_FUTURE = r"明日|明後日|来週|来月|今後|次回|後日|翌日|今度|週明け"
-# 明日の退院に備えて本日開始しました: a nearer current time decides
-_RX_NOW = r"本日|今日|昨日|昨夜|今朝|先ほど|先程|現在|先日|今回"
-# 中止薬, 開始薬, 追加薬: the word is part of a noun, not a change
-_RX_NOUN_AFTER = r"薬|剤"
-# a name inside a longer one (架空薬A in 架空薬AA, 薬ZA in 架空薬ZA) is no occurrence of it;
-# a form after it (アムロジピン錠) is
-_RX_NAME_CHAR = r"[A-Za-zＡ-Ｚａ-ｚ0-9０-９ァ-ヶー一-龠々]"
-
-
-# a class label before the product (降圧薬アムロジピン, 抗菌薬セフトリアキソン)
-_RX_CLASS = (r"(?:降圧|抗菌|抗生|睡眠|鎮痛|解熱鎮痛|解熱|抗凝固|抗血小板|利尿|緩下|抗精神病|抗うつ"
-             r"|抗不安|抗てんかん|抗アレルギー|糖尿病|整腸|制吐)(?:薬|剤)")
-
-
-def _rx_bounded(name, text):
-    """``name`` occurs in ``text`` as itself, not only inside a longer word."""
-    return any(not re.match(_RX_NAME_GOES_ON, text[m.end():]) and not _rx_glued(text[:m.start()])
-               for m in re.finditer(re.escape(name), text))
-
-
-def _rx_glued(before):
-    """The text before a name runs into it (架空 before 薬ZA); a time word written
-    straight before a drug (本日架空薬A) does not."""
-    return bool(re.search(_RX_NAME_CHAR + "$", before) and not re.search(
-        rf"(?:{_RX_NOW}|{_RX_FUTURE}|当日|毎日|同日|{_RX_CLASS})$", before))
-# AとBを開始, A5mgと架空薬Bを開始: a listing particle beside a known drug (and its dose)
-_RX_LIST = r"(?:と|や|・|及び|および)"
-# v1's _MED_TOKEN allows a space before the unit (5 mg)
-_RX_DOSE_ONE = (r"\s*[0-9０-９.．]+\s*(?:mg|μg|mcg|g|mL|ml|錠|%|単位|包|枚|本|カプセル|cap|Cap|CAP)"
-                # 5mg錠, 5mg1錠: the strength's form or count, kept as written
-                r"(?:\s*[0-9０-９]*\s*(?:錠|カプセル|包|枚|本|T|C)(?![A-Za-zＡ-Ｚａ-ｚ]))?")
-_RX_DOSE = f"(?:{_RX_DOSE_ONE})?"
-# (defined here, after the dose it must not swallow: 架空薬A5mg)
-_RX_NAME_GOES_ON = (rf"(?!錠|散|液|軟膏|テープ|カプセル|注|点眼|貼付|{_RX_DOSE_ONE}|{_RX_ANY}|内服|服用|投与"
-                    r"|及び)" + _RX_NAME_CHAR)
-_RX_PARTICLE = r"\s*(?:(?:を|は|も|の|が)\s*(?:[、，,]\s*)?)?\s*"
-# Aの投与を開始 (the drug's administration), Aを医師が中止 (an actor, the drug still the
-# patient's), Aを本日中止 / いったん中止 (a modifier of the change): still A's change
-_RX_ADMIN = r"(?:の(?:投与|内服|服用|使用|投薬|処方)\s*(?:を|は|も|が)?\s*)?"
-_RX_ACTOR = (r"(?:(?:主治医|医師|先生|看護師|薬剤師|訪問医|母|父|妻|夫|娘|息子|家族|本人)"
-             r"(?:が|より|の判断で)\s*)?")
-_RX_ADVERB = (r"(?:(?:(?:本日|今日|昨日|今朝|明日|明後日|来週|来月|今後|次回|後日|翌日|今度|週明け)"
-              r"(?:から|より|に)?|先ほど|先程|いったん|一旦|一時|再度|再び|すぐに?|直ちに"
-              r"|既に|すでに|新たに|新規に)\s*(?:[、，,]\s*)?)?")
-# Aは副作用のため中止, Aは発疹が出たので中止: the reason sits between the drug and its change
-_RX_CAUSE = r"(?:[^\s。！？、を]{1,12}?(?:のため|ため|ので)\s*、?\s*)?"
-_RX_BETWEEN = _RX_ADMIN + _RX_CAUSE + _RX_ACTOR + _RX_ADVERB
-# 2.5mgから5mgへ増量, 1日2回から1回へ減量: a regimen range between the drug and its word
-_RX_AMOUNT = r"(?:1日|一日)?\s*[0-9０-９.．]+\s*(?:mg|μg|mcg|g|mL|ml|錠|%|単位|回|包|枚|滴|カプセル)"
-_RX_RANGE = rf"(?:(?:{_RX_AMOUNT})\s*から\s*)?(?:{_RX_AMOUNT})\s*(?:へ|に|まで)?\s*"
-# AとB, A、B: a listing separator between two named drugs
-_RX_SEP = r"(?:と|や|・|及び|および|、|，|,)"
-# 服薬指導, 投薬管理: medication services, not drugs
-_RX_SERVICE = r"(?:服薬|投薬|薬剤|与薬|薬)(?:指導|管理|支援|確認|相談|説明|調整|カレンダー)"
-_RX_WORD_CODE = {w.split("(")[0]: c for c, rx in _RX_WORDS.items() for w in rx.split("|")}
-_RX_CONFLICT = {"start", "stop", "decrease", "increase", "change"}
-# Aと共に運動療法を開始: A accompanies; the change's object is what follows
-_RX_ALONG = r"と(?:共に|ともに|同時に|一緒に|いっしょに|併せて|あわせて)"
-# an unnamed object reads as a medication only with v1's own medication words
-_RX_MED_WORD = r"薬|処方|内服|外用|点眼|貼付|錠|剤|坐薬|座薬|注射"
-_RX_HINT_CAP = 10       # extract.extract_message keeps rx_actions[:10]
-
-
-def _rx_med_like(text):
-    """An unnamed object reads as a medication: v1's medication words or a dose."""
-    text = re.sub(_RX_SERVICE, "", text)
-    return bool(re.search(_RX_MED_WORD, text) or re.search(_RX_DOSE_ONE, text))
-
-
-def _rx_objects(region, spans, code):
-    """The change word's objects among named drug spans, right to left, with each
-    one's role: None, "from" (AからB / AをBに変更) or "to". A drug under another
-    predicate (Aを継続しBを中止) is no object. Also returns the region spans of
-    listed neighbours that are no known drug but read as a medication (架空薬Aと架空薬Bを)."""
-    objects, missed = [], []
-    for s, e in reversed(spans):
-        rest = region[e:]
-        if not objects:
-            to = code == "change" and re.fullmatch(_RX_DOSE + r"\s*[へに]\s*", rest)
-            listed = re.match(_RX_DOSE + r"\s*" + _RX_LIST + r"\s*", rest)
-            if to or re.fullmatch(_RX_DOSE + _RX_PARTICLE + _RX_BETWEEN + f"(?:{_RX_RANGE})?", rest):
-                objects.append((s, e, "to" if to else None))
-            elif listed:
-                # Aと<unknown>(と<unknown>…)を開始: A is listed; each unknown member is
-                # a drug only if it reads as one
-                tail = e + listed.end()
-                missed += [(tail + m.start(), tail + m.end())
-                           for m in re.finditer(r"(?:(?!" + _RX_LIST + r").)+", region[tail:])
-                           if _rx_med_like(m.group(0))]
-                objects.append((s, e, None))
-            continue
-        ns, _, role = objects[-1]
-        between = region[e:ns]
-        # AとBを, A、Bを, 本人のAと母のBを: the next drug's own owner may follow the separator
-        if re.fullmatch(_RX_DOSE + r"\s*" + _RX_SEP + r"\s*(?:[^\s、，,をはもがのと]{1,10}の)?\s*", between):
-            objects.append((s, e, role))
-        elif role == "to" and re.fullmatch(_RX_DOSE + r"\s*(?:から|を)\s*", between):
-            objects.append((s, e, "from"))
-    if objects:
-        first = objects[-1][0]
-        before = re.search(_RX_LIST + r"\s*$", region[:first])
-        if before:
-            # <unknown>とAを開始
-            word = re.search(r"[^、をはもがの\s]*$", region[:before.start()])
-            if _rx_med_like(word.group(0)):
-                missed.append(word.span())
-    return objects, missed
-
-
-def _named_in(text, names):
-    """Names written in ``text``, longest first, so 架空薬A inside 架空薬AA is not a second drug."""
-    found, taken = [], []
-    for name in sorted(names, key=len, reverse=True):
-        for m in re.finditer(re.escape(name), text):
-            if not any(m.start() < e and s < m.end() for s, e in taken):
-                taken.append(m.span())
-                if name not in found:
-                    found.append(name)
-    return found
-
-
-def _rx_positions(hints, names, body):
-    """Change words to check, as (start, end, code, unknown): every v1 rx_action
-    located in the body, plus a known drug written directly before a change word that
-    v1 did not hint (本人のカロナールを中止: no medication keyword beside the brand).
-    ``unknown`` marks a fallback whose source word is longer than the known name
-    (ロナール in カロナール, カロナールA in カロナールAA): a drug never extracted."""
-    seen = set()
-    for act in hints.get("rx_actions") or []:
-        code = act.get("action") if isinstance(act, dict) else None
-        ctx = act.get("ctx") if isinstance(act, dict) else None
-        word = _RX_NO_CHANGE if code == "no_change" else _RX_WORDS.get(code)
-        if not word or not isinstance(ctx, str) or not ctx:
-            continue
-        # v1 cuts ctx 14 characters before its change word
-        words = [m for m in re.finditer(word, ctx) if m.start() <= 14]
-        for found in re.finditer(re.escape(ctx), body) if words else ():
-            start = found.start() + words[-1].start()
-            if re.match(_RX_NOUN_AFTER, body[found.start() + words[-1].end():]):
-                continue
-            if start not in seen:
-                seen.add(start)
-                yield start, found.start() + words[-1].end(), code, False
-    for name in sorted(names, key=len, reverse=True):
-        rx = (re.escape(name) + f"((?:{_RX_NAME_GOES_ON})*)" + _RX_DOSE + _RX_PARTICLE + _RX_BETWEEN
-              + f"(?:{_RX_RANGE})?" + r"(" + _RX_NO_CHANGE + "|" + _RX_ANY + r")")
-        for m in re.finditer(rx, body):
-            code = "no_change" if re.fullmatch(_RX_NO_CHANGE, m.group(2)) else _RX_WORD_CODE.get(m.group(2))
-            if code and m.start(2) not in seen and not re.match(_RX_NOUN_AFTER, body[m.end(2):]):
-                seen.add(m.start(2))
-                yield m.start(2), m.end(2), code, bool(m.group(1)) or _rx_glued(body[:m.start()])
-
-
-def _rx_bindings(hints, names, body, *, every=False, ground=False):
-    """Each patient-current rule change word's objects, as (name, allowed actions,
-    (clause start, clause end, planned)); a planned change (requested, consulted,
-    future) is met by a planned med, a done one by a current or past med. A name of None is an unnamed object; a listed neighbour that reads
-    as a medication but is no known drug yields ("?", ...), a drug never extracted.
-    With ``every`` the denied, past and other-person changes are kept too, so a
-    caller can count every change the source states for a drug. With ``ground`` the
-    patient's past and undecided (予定, 検討) changes are kept, as planned for the
-    latter, to support an extracted action; denials, conditions and other people's
-    changes never do. The span also carries the change word's own position."""
-    # The shared scope reads 時に in と同時に as a condition; for the change's own
-    # scope it accompanies like と一緒に (same length, so positions hold)
-    scoped = body.replace("と同時に", "と一緒に")
-    # 入院時に開始しました: an event time of a done change reads as a condition (時に) to the
-    # shared scope; it is the day of that event (same length, so positions hold)
-    scoped = re.sub(r"(?<=入院|退院|転院|来院|受診|往診|訪問|手術|診察)時に(?=[^。！？]*?(?:しました|した[。、]|しています))",
-                    "当日", scoped)
-    carry = {}      # sentence head -> (end of its last change word, that change's drugs)
-    for start, end, code, unknown in sorted(_rx_positions(hints, names, body)):
-        if code == "no_change" and not every:
-            continue        # no change asks nothing and supports no extracted change
-        head = max(body.rfind(c, 0, start) for c in "。！？!?;；\r\n") + 1
-        tail = re.search(r"[。！？!?;；\r\n]", body[end:])
-        tail = end + tail.start() if tail else len(body)
-        mark = re.search(_CLAUSE_MARK, body[end:tail])
-        lead = head + _clause_start(body[head:start])
-        close = end + mark.start() if mark else tail
-        while True:
-            # から and 、 are no clause break inside AからBへ変更, 2.5mgから5mgへ増量,
-            # 明日から開始 or A5mg、Bを開始: the drug before them belongs to this change
-            joined = (re.search(_RX_DOSE + "から$", body[head:lead]) if code == "change" else None)
-            joined = (joined if joined and body[head:head + joined.start()].endswith(tuple(names))
-                      else re.search(f"(?:{_RX_AMOUNT}|{_RX_FUTURE}|{_RX_NOW})\\s*から$", body[head:lead])
-                      or re.search(_RX_DOSE + (
-                          _RX_PARTICLE + _RX_BETWEEN if re.fullmatch(_RX_BETWEEN, body[lead:start]) else "")
-                          + r"\s*[、，,]$", body[head:lead])
-                      # 副作用のため中止: a reason followed directly by the change (an actor or
-                      # adverb at most) keeps the drug before it; an object after the reason
-                      # (架空薬Bを, 運動療法を) is that change's own
-                      or (re.search(r"(?:のため|ため|ので)\s*、?$", body[head:lead])
-                          if re.fullmatch(r"\s*" + _RX_ACTOR + _RX_ADVERB, body[lead:start]) else None))
-            if not joined or not (re.search(r"(?:から|ため|ので)\s*、?$", joined.group(0))
-                                  or body[head:head + joined.start()].endswith(tuple(names))):
-                break
-            previous = lead
-            lead = head + _clause_start(body[head:head + joined.start()])
-            if lead >= previous:
-                break
-        # a condition, history or plan qualifies the whole clause (もし…場合, 以前に…);
-        # whose drug it is, is decided per drug below (本人のAと母のBを開始)
-        clause_scope = extract.patient_source_scope(scoped, start, end)
-        not_current = bool(re.match(_RX_NOT_CURRENT, body[end:close]))
-        # 中止する予定はありません, 中止を検討していません: a denied plan is no plan
-        weighed = re.match(_RX_UNDECIDED, body[end:close])
-        undecided = bool(weighed) and not re.match(
-            r"\s*(?:は|も|が)?\s*(?:あり|し|して|され)?\s*(?:ない|ません|なし|無し|て?い(?:ない|ません|なかっ))",
-            body[end + weighed.end():close])
-        denied = not_current and not undecided
-        if ground and (denied or clause_scope in ("conditional", "unknown")):
-            continue            # history and 予定 may support an item; a denial or condition not
-        if not (every or ground) and (not_current or clause_scope in ("conditional", "past", "unknown")):
-            continue
-        # から is no break for a time (明日から), but 通院予定ですが、 is another clause
-        breaks = list(re.finditer(r"ので|ため|けど|けれど|が、|、", body[head:start]))
-        asked = re.match(_RX_PLANNED, body[end:close])
-        # "consult" (追加を相談) is no instruction: it is checked but never repaired
-        when = body[head + (breaks[-1].end() if breaks else 0):start]
-        future = [m.start() for m in re.finditer(_RX_FUTURE, when)]
-        now = [m.start() for m in re.finditer(_RX_NOW, when)]
-        planned = ("consult" if asked and re.search(r"相談|提案", asked.group(0)) else bool(
-            asked or undecided or clause_scope == "planned" or (future and (not now or future[-1] > now[-1]))))
-        # this change word's objects: AとBを開始 names two, Aを開始しBも開始 one each
-        prior = list(re.finditer(_RX_ANY, body[lead:start]))
-        base = lead + (prior[-1].end() if prior else 0)
-        region = body[base:start]
-        if not every and re.search(r"の\s*" + _RX_SERVICE + _RX_PARTICLE + "$", region):
-            continue            # A5mgの服薬指導を開始: the service starts, not the drug (still counted,
-                                # so an extracted start of the drug finds no ground)
-        along = list(re.finditer(_RX_ALONG, region))
-        if along:
-            base, region = base + along[-1].end(), region[along[-1].end():]
-        spans = []
-        for name in _named_in(region, names):
-            spans += [(m.start(), m.end(), name) for m in re.finditer(re.escape(name), region)
-                      if not _rx_glued(body[:base + m.start()])]
-        spans = sorted({(s, e) for s, e, _ in spans if not any(
-            s2 <= s and e <= e2 and (s2, e2) != (s, e) for s2, e2, _ in spans)})
-        objects, missed = _rx_objects(region, spans, code)
-        # a missed neighbour counts only as the patient's (本人のAと母のBを開始: B is the mother's)
-        if any(every or extract.patient_source_scope(scoped, base + max(
-                [ms] + [ms + m.end() for m in re.finditer(r"の[ \t　]*", region[ms:me])]), base + me) == "patient"
-               for ms, me in missed):
-            yield "?", set(), (lead, close, planned, denied, start)
-        # Aを開始後、中止 / Aを開始し、その後中止: the same sentence's last drugs carry over
-        before = carry.get(head)
-        carried = (not objects and not along and before and before[0] <= start and re.fullmatch(
-            r"(?:後|し|して|した後)?\s*[、,]?\s*(?:その後|そののち|後に|のち|続けて|続いて)?\s*[、,]?\s*",
-            body[before[0]:start]) and before[1])
-        if carried:
-            for name in carried:
-                yield name, {code}, (lead, close, planned, denied, start)
-            carry[head] = (end, carried)
-            continue
-        if not objects and unknown:
-            # only a fragment of a longer source word is known: that drug was never extracted
-            if every or extract.patient_source_scope(scoped, start, end) == "patient":
-                yield "?", set(), (lead, close, planned, denied, start)
-            continue
-        if not objects:
-            if along:
-                # 本人Aと共に架空薬Bを開始 asks for B; Aと共に運動療法を開始 asks nothing
-                if _rx_med_like(region) and (every or extract.patient_source_scope(
-                        scoped, base, start) == "patient"):
-                    yield "?", set(), (lead, close, planned, denied, start)
-                continue
-            if not every and not _rx_med_like(body[lead:close]):
-                continue    # リハビリを開始, or a neighbouring clause's drug (…内服中。心停止)
-            objects = [(None, None, None)]
-        kept = []
-        for s, e, role in objects:
-            name = region[s:e] if s is not None else None
-            # each drug's own owner decides it: the nearest の before it, read up to the
-            # drug itself (本人の架空薬Aと母の架空薬Bを開始 keeps A, 母の付き添いで本人の架空薬A keeps A)
-            at, until = (base + s, base + e) if name else (start, end)
-            last = list(re.finditer(r"の[ \t　]*", body[lead:at]))
-            # the patient's own past (以前にAを開始) may support an item, never another person's
-            if not every and any(extract.patient_source_scope(scoped, a, until) not in (
-                    ("patient", "past", "planned") if ground else ("patient",))
-                                 for a in ([lead + last[-1].end()] if last else []) + [at]):
-                continue
-            if name:
-                kept.append(name)
-            # AからBへ / AをBに変更: the source drug stops and the destination starts;
-            # a generic change on either would leave the replaced drug active
-            allowed = {"from": {"stop"}, "to": {"start"}}.get(role, {code})
-            yield name, allowed, (lead, close, planned, denied, start)
-        carry[head] = (end, kept)
-
-
-def _rx_names(v, hints):
-    """Candidate names from rules and the model, without confirming their drug category.
-
-    A rule's class label (降圧薬アムロジピン) never outranks the product name."""
-    def named(items):
-        return [m["name"] for m in items or [] if isinstance(m, dict) and isinstance(m.get("name"), str) and m["name"]]
-    return {re.sub("^" + _RX_CLASS + "(?=.)", "", n) for n in named(hints.get("medications"))} | set(named(v.get("meds")))
-
-
-def _rx_action_names(names, hints, body):
-    """Names with independent medication cues for adding or replacing an action."""
-    rule_names = _rx_names({}, hints if isinstance(hints, dict) else {})
-    # A model-only name may invite review, but cannot justify a new medication action.
-    return {name for name in names if _rx_bounded(name, body) and (
-        name in rule_names or _rx_med_like(name) or any(
-            not _rx_glued(body[:m.start()]) and (
-                re.match(_RX_DOSE_ONE, body[m.end():]) or re.search(_RX_CLASS + r"\s*$", body[:m.start()]))
-            for m in re.finditer(re.escape(name), body)))}
-
-
-def _rx_covering(v, planned=False):
-    """Meds that may state a change: verified, explicitly the patient's, not denied,
-    and done (current or past) or, for a planned change, planned."""
-    return [med for med in v.get("meds") or [] if isinstance(med, dict)
-            and med.get("subject") == "patient" and not med.get("negated")
-            and not med.get("unverified")
-            and med.get("status") in (("planned",) if planned else ("current", "past"))
-            and isinstance(med.get("name"), str) and med["name"]
-            and isinstance(med.get("evidence"), str) and med["evidence"]]
-
-
-def _rx_grounds(hints, names, body):
-    """Named patient changes an extracted action may rest on (history and 予定 count;
-    denials, withdrawals, conditions and other people's changes do not)."""
-    return [(t, ok, lead, close, pl) for t, ok, (lead, close, pl, *_) in _rx_bindings(
-        hints, names, body, ground=True) if t not in (None, "?")]
-
-
-def _rx_grounded(med, grounds, body):
-    """The med's action rests on a named change of that drug in a fitting state: planned
-    for a planned one, and a done (even historical) stop is past (以前に中止: stop/past)."""
-    return any(
-        med["action"] in ok and t == med["name"]
-        and (med.get("status") == "planned") == bool(pl)
-        and (pl or med["action"] != "stop" or med.get("status") == "past")
-        and any(m.start() < close and m.end() > lead for m in re.finditer(re.escape(med["evidence"]), body))
-        for t, ok, lead, close, pl in grounds)
-
-
-def _rx_action_gaps(v, hints, body):
-    """Patient-current rule change words whose clause no extracted patient med states.
-
-    A name alone never covers a change: every drug named since the clause's
-    previous change word needs its own verified patient med with the matching
-    action, quoted over the clause, and no action its sentence never states.
-    A listed drug the extraction never named keeps the gap open. Other people,
-    past, planned and denied changes ask nothing."""
-    names = _rx_names(v, hints)
-    bindings = list(_rx_bindings(hints, names, body))
-    # every extracted action needs a change the source states for that drug and does
-    # not deny (Bは内服中 beside Aを中止 grounds no stop of B); history still counts,
-    # but a denial (中止しません) or no change word at all grounds nothing
-    # only a named patient object proves its action: an unnamed one (心停止 beside the
-    # drug) or another person's or a conditional change proves nothing
-    stated_any = list(_rx_bindings(hints, names, body, every=True))
-    grounds = _rx_grounds(hints, names, body)
-    if stated_any and any(
-            med.get("action") in _RX_CONFLICT and not _rx_grounded(med, grounds, body)
-            for planned in (False, True) for med in _rx_covering(v, planned)):
-        return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
-    # a repair keeping a fragment (ロナール beside カロナール) beside the right name
-    # still names a drug the source never writes on its own
-    if bindings and any(med.get("action") in _RX_CONFLICT and med["name"] in body
-                        and not _rx_bounded(med["name"], body)
-                        for planned in (False, True) for med in _rx_covering(v, planned)):
-        return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
-    # 架空薬Aを開始し、架空薬Aを中止: every action the source binds to that same drug,
-    # done and planned apart, so a requested stop never excuses a recorded done stop
-    stated = {}
-    for target, allowed, (_, _, planned, _, _) in bindings:
-        stated.setdefault((target, bool(planned)), set()).update(allowed)
-    for target, allowed, (lead, close, planned, _, at) in bindings:
-        # an unnamed object (Aを内服中に心停止) is matched to no drug: fail closed
-        mine = [med for med in _rx_covering(v, planned) if target is not None
-                and med["name"] == target
-                and any(m.start() < close and m.end() > lead
-                        for m in re.finditer(re.escape(med["evidence"]), body))]
-        # an item of the other state (done beside a planned change, or planned beside a
-        # done one) contradicts unless the source states that action in that state too
-        others = [med for med in _rx_covering(v, not planned)
-                  if target is not None and med["name"] == target
-                  and any(m.start() < close and m.end() > lead
-                          for m in re.finditer(re.escape(med["evidence"]), body))]
-        if any(med.get("action") in _RX_CONFLICT - stated.get((med["name"], not planned), set())
-               for med in others):
-            return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
-        if planned == "consult":
-            # 追加を相談: a planned item is enough, with no action; a planned action the
-            # consultation does not name (相談した追加に中止) still contradicts it
-            if not mine or any(med.get("action") in _RX_CONFLICT - allowed
-                               - stated.get((med["name"], True), set()) for med in mine):
-                return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
-            continue
-        # a wrong action kept beside the right one is a contradiction, not a repair;
-        # a done stop is past (中止しました), so a stop still current contradicts it.
-        # An item wrong here may be right for another change of the same drug
-        # (開始し、中止し、その後開始: one start past, one current), so it contradicts
-        # only when no change of that drug and action takes it
-        def right_somewhere(med):
-            # the other change must be one the item's own quote covers: a narrow quote of
-            # 再開 never borrows the earlier occurrence's past start
-            return any(t == target and med.get("action") in ok and pl == planned
-                       and _rx_right(med, ok, pl, _rx_later(bindings, t, pl, st))
-                       and any(m.start() < cl and m.end() > ld
-                               for m in re.finditer(re.escape(med["evidence"]), body))
-                       for t, ok, (ld, cl, pl, _, st) in bindings)
-        right = [_rx_right(med, allowed, planned, _rx_later(bindings, target, planned, at)) for med in mine]
-        if (not any(right)
-                or any(med.get("action") in allowed and not ok and not right_somewhere(med)
-                       for med, ok in zip(mine, right))
-                # 中止しました beside a neutral current item: readers take the last item of a
-                # drug, so the neutral one would keep the stopped drug current
-                or (not planned and "stop" in allowed and any(
-                    med.get("action") in (None, "none") and med.get("status") == "current" for med in mine))
-                or any(med.get("action") in _RX_CONFLICT - allowed - stated.get((med["name"], bool(planned)), set())
-                       for med in mine)):
-            return ["本文の薬剤の開始・中止・変更候補が未収載か異なる操作です。原文で再確認してください"]
-    return []
-
-
-def _rx_later(bindings, target, planned, at):
-    """{"stop"} when the source stops ``target`` after the change at ``at``
-    (開始し、その後中止: the start may be past); 中止し、その後開始 restarts it."""
-    return {"stop"} if any(t == target and "stop" in ok and pl == planned and st > at
-                           for t, ok, (_, _, pl, _, st) in bindings) else set()
-
-
-def _rx_right(med, allowed, planned, later=()):
-    """The med states the bound change: its action, and for a done change its status:
-    a stop is past; a start or a dose change current unless ``later`` holds a stop the
-    source states after it (架空薬Aを開始し、その後中止: both past)."""
-    action, status = med.get("action"), med.get("status")
-    return action in allowed and (planned or (
-        status == "past" if action == "stop"
-        else status == "current" or (status == "past" and "stop" in later)))
-
-
-def _rx_superseded(prior, candidate, hints, body):
-    """Prior medication facts a repair may replace: the source states exactly one
-    change for the drug (denied, past and other-person ones counted too), that change
-    is patient-current, the prior item quotes its clause and states no action or one
-    that change excludes, and the candidate carries the same item with an allowed
-    action instead. Every other field (dose, freq, route, subject, negation) must stay equal."""
-    if (not isinstance(hints, dict) or not isinstance(prior, dict) or not isinstance(candidate, dict)
-            # v1 keeps 10 rx_actions: a full list cannot prove a drug has only one change
-            or len(hints.get("rx_actions") or []) >= _RX_HINT_CAP):
-        return set()
-    names = _rx_names(candidate, hints) | _rx_names(prior, hints)
-    action_names = _rx_action_names(names, hints, body)
-    stated = {}
-    for target, _, _ in _rx_bindings(hints, names, body, every=True):
-        stated[target] = stated.get(target, 0) + 1
-    current = {}
-    for target, allowed, (lead, close, planned, *_) in _rx_bindings(hints, names, body):
-        current.setdefault(target, []).append((allowed, (lead, close), planned))
-
-    def rest(med):
-        return {k: x for k, x in med.items() if not k.startswith("_")
-                and k not in ("action", "status", "evidence", "unverified", "normalized")}
-
-    kept = _facts({"meds": candidate.get("meds") or []}, split_conditions=True)
-    gone = set()
-    for med in prior.get("meds") or []:
-        name = med.get("name") if isinstance(med, dict) else None
-        if name not in action_names or stated.get(name) != 1 or len(current.get(name, [])) != 1:
-            continue                    # several changes or none for this drug: no replacement
-        (allowed, (lead, close), planned), = current[name]
-        if planned == "consult":
-            continue                    # a consultation instructs nothing to repair toward
-        quote = med.get("evidence")
-        fact = next(iter(_facts({"meds": [med]}, split_conditions=True)))
-        # a neutral mention (none) may gain the source's action the same way
-        if (fact not in kept and (med.get("action") in (_RX_CONFLICT - allowed) | {None, "none"}
-                                  or not _rx_right(med, allowed, planned))
-                and isinstance(quote, str) and quote
-                and any(m.start() < close and m.end() > lead for m in re.finditer(re.escape(quote), body))
-                # a planned change stays planned: never turned into a done one
-                and (med.get("status") == "planned") == bool(planned)
-                and any(_rx_right(other, allowed, planned) and rest(other) == rest(med)
-                        for other in _rx_covering(candidate, bool(planned)) if other.get("name") == name)):
-            gone.add(fact)
-    return gone
-
-
-# The rule hint's own action word. A quote spanning several requests covers
-# a hint only when the extracted action names it, not by overlap alone.
-_REQUEST_STEMS = {"confirm": "確認", "contact": "連絡", "ask": "教え"}
-
-
-_REQUEST_END = (r"(?:お願い|ください|下さい|いただけ|いただきたい|いただきますよう|頂け|頂きたい"
-                r"|頂きますよう|ほしい|欲しい|願います)")
-# A stem is requested only when the request ending follows it directly
-# (確認をお願い, 確認してください) or when it is listed (と/や/、) through the
-# following confirm/contact stems up to one that is directly requested. Free text never
-# reaches a later ending past a report (連絡をいただきましたが…教えてください,
-# 確認と連絡を終えたので…連絡してください).
-_REQUEST_DIRECT = rf"(?:を)?(?:して)?{_REQUEST_END}"
-# one listing step: a particle, then text up to the NEXT confirm/contact stem
-_CLAUSE_MARK = r"ので|から|ため|けど|けれど|が、|、"
-_REQUEST_LINK = (r"(?:(?:と|や|・|及び|および)、?|、)"
-                 rf"(?:(?!確認|連絡|{_CLAUSE_MARK})[^。！？!?;；\r\n])*(?:確認|連絡)")
-_REQUEST_CUES = {
-    # any number of listed stems, the last directly requested (確認と…確認と…確認をお願い)
-    kind: re.compile(rf"{stem}(?=(?:{_REQUEST_LINK})*{_REQUEST_DIRECT})")
-    for kind, stem in (("confirm", "確認"), ("contact", "連絡"))}
-# the rule hints' own ask phrasing, tracked per sentence like confirm/contact
-_REQUEST_CUES["ask"] = re.compile(r"教えて(?:ください|いただけ|欲しい)")
-
-
-def _request_cues(body):
-    """Every sentence's confirm/contact/ask request, for the quality re-check only.
-
-    The rule hints keep one entry per pattern, so a second kind in the same
-    sentence (確認と…連絡をお願い) or a second sentence of one kind is not
-    hinted. A stem counts only as the object of a request ending, never
-    inside a noun (連絡記録) or a finished report (連絡をいただきました)."""
-    cues = []
-    for sentence in re.finditer(r"[^。！？!?;；\r\n]+", body):
-        ctx = sentence[0].strip()
-        for kind, rx in _REQUEST_CUES.items():
-            found, start = [], 0
-            for m in rx.finditer(ctx) if ctx else ():
-                # the target lies between the previous stem and this one; the
-                # clause (after ので/から/、…) is what a negation must sit in
-                found.append({"kind": kind, "ctx": ctx,
-                              "chunks": _request_target(ctx[start:m.start()]),
-                              "clause": ctx[_clause_start(ctx[:m.start()]):_clause_end(ctx, m.end())]})
-                start = m.end()
-            _distinct_targets(found)
-            if len(found) > 1:
-                # 記録の確認と検査値の確認: one quote and one 確認 must not cover both
-                for cue in found:
-                    cue["siblings"] = [o["target"] for o in found if o is not cue]
-            cues += found
-    return cues
-
-
-def _clause_start(before):
-    """Start of the clause holding a request stem (after ので, から, 、 …)."""
-    marks = list(re.finditer(_CLAUSE_MARK, before))
-    return marks[-1].end() if marks else 0
-
-
-def _clause_end(ctx, stem_end):
-    """End of the clause holding a request: past its listed stems and request
-    ending, up to the next clause mark (…してください、転倒はありません)."""
-    chain = re.match(rf"(?:{_REQUEST_LINK})*{_REQUEST_DIRECT}", ctx[stem_end:])
-    tail = stem_end + (chain.end() if chain else 0)
-    mark = re.search(_CLAUSE_MARK, ctx[tail:])
-    return tail + mark.start() if mark else len(ctx)
-
-
-def _distinct_targets(found):
-    """Each cue's target: its last word, extended (血圧の記録 vs 血糖の記録) only
-    for cues whose targets would otherwise coincide; a unique one stays short."""
-    sizes = [1] * len(found)
-    while True:
-        names = ["".join(c["chunks"][-n:]) or None for c, n in zip(found, sizes)]
-        clashing = [i for i, name in enumerate(names)
-                    if name and names.count(name) > 1 and sizes[i] < len(found[i]["chunks"])]
-        if not clashing:
-            break
-        for i in clashing:
-            sizes[i] += 1
-    for cue, name in zip(found, names):
-        cue["target"] = name if name and len(name) <= 20 else None
-
-
-def _request_current(body, ctx, clause):
-    """The request sentence is patient-scoped and its own clause is not negated."""
-    for match in re.finditer(re.escape(ctx), body):
-        if (extract.patient_source_scope(body, *match.span()) == "patient"
-                and not re.search(r"ない|なし|なく|ません|不要|未使用|未測定|中止|済み|ありがとう", clause)):
-            return True
-    return False
-
-
-def _request_target(before):
-    """The の-separated words before a request stem (本人の記録の確認 -> [本人, 記録]). ``before``
-    starts at the previous stem, so only its listing particle is dropped and
-    a と inside a word (かかと) is never a boundary."""
-    # a listing particle counts only right after a request stem of any kind
-    clause = re.split(r"(?:確認|連絡)(?:と|や|、|・|及び|および)", before)[-1]
-    clause = re.sub(r"^(?:と|や|、|・|及び|および)", "", clause)
-    clause = clause[_clause_start(clause):]      # 転倒がないので記録 -> 記録
-    clause = re.sub(r"(?:の|を|へ|に|は|も|ご)+$", "", clause)
-    return [c.removeprefix("ご") for c in clause.split("の") if c]
-
-
-def _names_target(text, target, siblings):
-    """``text`` mentions ``target`` outside any longer sibling that contains it
-    (記録 is not named by 看護記録); の is ignored (血糖記録 names 血糖の記録)."""
-    text = text.replace("の", "")
-    for longer in sorted((s for s in siblings if target in s and s != target), key=len, reverse=True):
-        text = text.replace(longer, "")
-    return target in text
-
-
-def _request_covers(item, hint):
-    """An extracted request whose quote overlaps the hint sentence and names its action."""
-    quote = item.get("evidence") if isinstance(item, dict) else None
-    ctx = hint["ctx"]
-    if not isinstance(quote, str) or not quote or not (quote in ctx or ctx in quote):
-        return False
-    action = item.get("action") if isinstance(item.get("action"), str) else ""
-    if "siblings" in hint:
-        # several requests of this kind in one sentence: the item must name this one
-        target, siblings = hint.get("target"), [s for s in hint["siblings"] if s]
-        if not target:
-            return False        # unidentified target: left to the one bounded re-read
-        if not _names_target(action, target, siblings) and (
-                not _names_target(quote, target, siblings)
-                or any(_names_target(quote, s, [target, *siblings]) for s in siblings)):
-            return False
-    target = hint.get("target")
-    if target and _names_target(action, target, [s for s in hint.get("siblings") or [] if s]):
-        return True             # 記録をチェックして主治医に伝達 names both targets
-    stem = _REQUEST_STEMS[hint["kind"]]
-    if stem in action or (hint["kind"] == "ask" and item.get("kind") == "question"):
-        return True
-    # a paraphrased action still covers a quote that names only this request
-    return stem in quote and sum(s in quote for s in _REQUEST_STEMS.values()) == 1
-
-
-def _neutral_med_grounded(med, body):
-    """A new current neutral medication needs its own name, dose and patient quote."""
-    quote = med.get("evidence")
-    if (not isinstance(quote, str) or locate_quote_span(body, quote) is None
-            or clinical_values.patient_item_scope(med, body, surface=med.get("name")) != "patient"
-            or not _current_cue(body, quote)
-            or not _rx_bounded(_flat(med["name"]), _flat(quote))):
-        return False
-    if med.get("dose") is not None and (
-            not isinstance(med["dose"], str) or not any(
-                match[1] == med["name"] and match[2] + match[3] == med["dose"].replace(" ", "")
-                and not re.match(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９/／]", quote[match.end():])
-                for match in extract._MED_TOKEN.finditer(quote))):
-        return False
-    return not (isinstance(med.get("freq"), str) and med["freq"] and not re.search(
-        r"(?<![0-9])" + re.escape(med["freq"]) + r"(?![0-9])", quote))
-
-
-def _quality_improves(candidate, prior, body, hints=None):
-    """Optional gains must retain prior assertions and have their own source evidence.
-
-    The one exception: a medication action the source contradicts (_rx_superseded)
-    may be replaced by the same item with the source's action."""
-    gone = _rx_superseded(prior, candidate, hints, body)
-    if gone:
-        prior = {**prior, "meds": [med for med in prior.get("meds") or [] if not (
-            isinstance(med, dict) and next(iter(_facts({"meds": [med]}, split_conditions=True))) in gone)]}
-    # dropping a contradicted item (a neutral duplicate beside the stop) is itself the gain
-    dropped = bool(gone) and candidate is not None and (
-        _facts(prior, split_conditions=True) <= _facts(candidate, split_conditions=True)
-        and _drop_total(candidate) <= _drop_total(prior)
-        and (prior.get("urgency") != "high" or candidate.get("urgency") == "high"))
-    if not dropped and not _improves(candidate, prior):
-        # Evidence is excluded from _facts. A neutral medication mention
-        # may acquire its missing patient-owned quote without adding a
-        # predicate, provided every assertion and existing owned quote stays.
-        if (candidate is None or prior is None
-                or _facts(candidate, split_conditions=True) != _facts(prior, split_conditions=True)
-                or _drop_total(candidate) > _drop_total(prior)
-                or candidate.get("urgency") != prior.get("urgency")):
-            return False
-
-        def owned_med_quotes(document):
-            quotes = set()
-            for med in document.get("meds") or []:
-                if not med_is_patient_current(med) or med.get("action") not in (None, "none", "no_change"):
-                    continue
-                quote = med.get("evidence")
-                if not _neutral_med_grounded(med, body):
-                    continue
-                quotes.add((next(iter(_facts({"meds": [med]}, split_conditions=True))), quote))
-            return quotes
-
-        return owned_med_quotes(prior) < owned_med_quotes(candidate)
-    protected = _facts(prior, split_conditions=True)
-    action_names = _rx_action_names(_rx_names(candidate, hints if isinstance(hints, dict) else {}), hints, body)
-    # with the rule hints, an added action must rest on a change the source states,
-    # as the completeness check requires (only where the source has change words)
-    grounds = None
-    if isinstance(hints, dict):
-        names = _rx_names(candidate, hints)
-        if list(_rx_bindings(hints, names, body, every=True)):
-            grounds = _rx_grounds(hints, names, body)
-    for key in _FACT_LIST_FIELDS:
-        for item in candidate.get(key) or []:
-            if isinstance(item, dict) and not _facts({key: [item]}, split_conditions=True) <= protected:
-                if item.get("unverified") or locate_quote_span(body, item.get("evidence")) is None:
-                    return False
-                if (key == "meds" and med_is_patient_current(item)
-                        and item.get("action") in (None, "none", "no_change")
-                        and not _neutral_med_grounded(item, body)):
-                    return False
-                if key == "meds" and item.get("action") in _RX_CONFLICT and (
-                        item.get("name") not in action_names
-                        # 中止を撤回しました: a withdrawn or denied change grounds no added action
-                        or (grounds is not None and not _rx_grounded(item, grounds, body))):
-                    return False
-    return True
 
 
 def _piece_reference(body: str, start: int, length: int) -> str:
@@ -2714,34 +691,6 @@ def _piece_reference(body: str, start: int, length: int) -> str:
     shared_tail = after[:end.end() if end else len(after)][-160:]
     reference = "\n".join(part for part in (heading[:160], intro, before[-200:], after[:160], shared_tail) if part)
     return _CTX_HEAD + _sanitize_ctx(reference) + _CTX_TAIL if reference else ""
-
-
-def _piece_validate(document, piece, body, drops=None, ctx=False, references=None):
-    """Evidence must first belong to the core, and remain unique in the whole source."""
-    scoped = _validate(document, piece, drops, ctx, references=references)
-    if scoped is None or piece == body:
-        return scoped
-    repeated = drops is not None and bool(piece) and body.count(piece) > 1
-    global_drops = {} if repeated else drops
-    validated = _validate(scoped, body, global_drops, ctx, references=references)
-    if repeated:
-        for reason, values in global_drops.items():
-            # No substring of an exactly repeated core can become globally unique.
-            # Keep the rejection/counters, but do not ask for an impossible quote.
-            if reason == "ev":
-                continue
-            if reason == "items":
-                values = [field for field in values if field not in ("patient_context", "reply")]
-            if values:
-                target = drops.setdefault(reason, [])
-                if reason == "items":
-                    values = [field for field in values if field not in target]
-                limit = 6 if reason == "vitals" else 5
-                target.extend(values[:max(0, limit - len(target))])
-    if validated is not None:
-        for counter in ("_items_dropped", "_evidence_dropped"):
-            validated[counter] = validated.get(counter, 0) + scoped.get(counter, 0)
-    return validated
 
 
 def llm_extract(body: str, *, context: str | None = None,
@@ -2886,7 +835,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 and notes[-1].get("finish_reason") == "length"):
             return split_piece(key, piece, start, remaining)
         drops: dict = {}
-        v = _piece_validate(d, piece, body, drops, piece_context, references) if d is not None else None
+        v = extract_validation.validate_piece(d, piece, body, drops, piece_context, references) if d is not None else None
         if v is not None and not context:
             # a reply classification without the thread it answers is
             # a guess (the rules live in _CTX_HEAD): drop it before it
@@ -2897,8 +846,8 @@ def llm_extract(body: str, *, context: str | None = None,
         # "extract everything" ask is only fair when one call saw the
         # entire message. Multi-chunk thin output is still recorded on
         # the merged result via meta.thin below.
-        thin = piece == body and _is_thin(v, body)
-        completeness = _completeness_issues(v, piece_hints, piece)
+        thin = piece == body and extract_quality.is_thin(v, body)
+        completeness = extract_quality.completeness_issues(v, piece_hints, piece)
 
         quality_record = None
 
@@ -2907,7 +856,7 @@ def llm_extract(body: str, *, context: str | None = None,
             quality_record = {
                 "state": state,
                 # always an integer: progress reads resolved only at exactly 0
-                "remaining_hint_candidates": len(_completeness_issues(v, piece_hints, piece))}
+                "remaining_hint_candidates": len(extract_quality.completeness_issues(v, piece_hints, piece))}
             if meta_out is not None:
                 meta_out.setdefault("completeness", {})[str(key)] = quality_record
 
@@ -2921,12 +870,12 @@ def llm_extract(body: str, *, context: str | None = None,
             # instead of burning a whole retry attempt. Skipped when
             # the budget is already gone; a salvaged v stays usable
             # either way.
-            issues = _repair_issues(drops, v)
+            issues = extract_quality.repair_issues(drops, v)
             if meta_out is not None:
                 # codes only, never issue text; counted before the budget
                 # check so it is the denominator of what failed validation
-                hist = meta_out.setdefault("repair_issues", dict.fromkeys(_ISSUE_KEYS, 0))
-                for code in _ISSUE_KEYS[:6]:
+                hist = meta_out.setdefault("repair_issues", dict.fromkeys(extract_quality._ISSUE_KEYS, 0))
+                for code in extract_quality._ISSUE_KEYS[:6]:
                     hist[code] += len(drops.get(code) or [])
                 hist["structure"] += int(v is None)
                 hist["completeness"] += len(completeness)
@@ -2981,18 +930,18 @@ def llm_extract(body: str, *, context: str | None = None,
                 if rd is _DEFERRED and v is None:
                     return _DEFERRED
                 if rd is not None and rd is not _DEFERRED:
-                    rv = _piece_validate(rd, piece, body, ctx=piece_context, references=references)
+                    rv = extract_validation.validate_piece(rd, piece, body, ctx=piece_context, references=references)
                     if rv is not None and not context:
                         rv.pop("reply", None)
                     # a replacement must see every change in the message, so only an unsplit body
-                    if (_quality_improves(rv, v, body, piece_hints if piece == body else None)
-                            if completeness else _improves(rv, v)):
+                    if (extract_quality.quality_improves(rv, v, body, piece_hints if piece == body else None)
+                            if completeness else extract_quality.improves(rv, v)):
                         v = rv
                         bump("repair_wins")
                 if completeness:
                     quality_note("dispatch_unknown" if rd is _DEFERRED else
-                                 "unresolved" if _completeness_issues(v, piece_hints, piece) else "hint_gaps_resolved")
-                elif rd is not None and rd is not _DEFERRED and v is not None and _completeness_issues(
+                                 "unresolved" if extract_quality.completeness_issues(v, piece_hints, piece) else "hint_gaps_resolved")
+                elif rd is not None and rd is not _DEFERRED and v is not None and extract_quality.completeness_issues(
                         v, piece_hints, piece):
                     # the first answer was unusable or only lossy: the repaired one's own gaps
                     # are recorded, within the one repair already spent
@@ -3033,9 +982,9 @@ def llm_extract(body: str, *, context: str | None = None,
             return None
         if pending_quality:
             return _DEFERRED
-        out = outs[0] if len(outs) == 1 else _merge(outs)
+        out = outs[0] if len(outs) == 1 else extract_validation.merge(outs)
         if vital_policy:
-            _apply_vital_policy(out, body, vital_policy)
+            extract_validation.apply_vital_policy(out, body, vital_policy)
         if not context:
             out.pop("reply", None)
         if len(outs) > 1:
@@ -3043,7 +992,7 @@ def llm_extract(body: str, *, context: str | None = None,
         if meta_out is not None:
             meta_out.update(_integrity_summary(notes))
             meta_out["chunk_size"] = min(sizes) if sizes else chunk_size
-            if _is_thin(out, body):
+            if extract_quality.is_thin(out, body):
                 meta_out["thin"] = True
         return out
 
@@ -3393,33 +1342,6 @@ def _prior_extract(db, r):
         (KIND, r["message_id"], r["project_id"], r["content_hash"])).fetchone()
 
 
-def _retains_assertion(prior, candidate):
-    if isinstance(prior, dict):
-        return isinstance(candidate, dict) and all(
-            key in ("evidence", "normalized", "unverified") or key.startswith("_")
-            or value is None or _retains_assertion(value, candidate.get(key))
-            for key, value in prior.items())
-    if isinstance(prior, list):
-        return isinstance(candidate, list) and all(
-            any(_retains_assertion(item, other) for other in candidate) for item in prior)
-    return type(prior) is type(candidate) and prior == candidate
-
-
-def _protected_lost(prior, candidate, body):
-    """Count grounded negation/nonpatient assertions lost by an automatic replacement."""
-    old, new = _validate(prior, body) or {}, _validate(candidate or {}, body) or {}
-    lost = {}
-    for field in _FACT_LIST_FIELDS:
-        for item in old.get(field) or []:
-            if (not isinstance(item, dict)
-                    or not (item.get("negated") is True or item.get("subject") in ("family", "other"))
-                    or locate_quote_span(body, item.get("evidence")) is None):
-                continue
-            if not any(_retains_assertion(item, other) for other in new.get(field) or []):
-                lost[field] = lost.get(field, 0) + 1
-    return lost
-
-
 def _hold_sql(*, human=False):
     """Source-bound private receipts; a fresh human report bypasses automatic holds."""
     prior = ("c.artifact_id" if human else "(SELECT p.artifact_id FROM artifacts p "
@@ -3510,7 +1432,7 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
         prior = _prior_extract(ledger.db, r)
         human = extra_meta.get("human_fix") if isinstance(extra_meta, dict) else None
         old = loads_dict(prior["content"]) if prior else None
-        lost = _protected_lost(old, loads_dict(content), source["body_text"]) if old else {}
+        lost = extract_quality.protected_lost(old, loads_dict(content), source["body_text"]) if old else {}
         prior_meta = loads_dict(prior["meta"]) if prior else None
         human_failed = isinstance(human, dict) and human.get("applied") is False
         qc_failed = isinstance(qc_fix, dict) and qc_fix.get("applied") is False
@@ -3534,8 +1456,8 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
             if prior_meta and prior_meta.get("extract_version") != EXTRACT_VERSION:
                 meta["upgrade"] = {"prior_artifact_id": prior["artifact_id"],
                     "prior_version": prior_meta.get("extract_version"),
-                    "facts_lost": len(_facts(_validate(old, source["body_text"]) or {})
-                                      - _facts(_validate(loads_dict(content) or {}, source["body_text"]) or {}))}
+                    "facts_lost": len(extract_quality.facts(extract_validation.validate(old, source["body_text"]) or {})
+                                      - extract_quality.facts(extract_validation.validate(loads_dict(content) or {}, source["body_text"]) or {}))}
             # Keep the INSERT fence even though the prior check owns the write lock.
             cur = ledger.db.execute(
                 "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
@@ -3573,7 +1495,7 @@ def _thin_pending_sql() -> str:
     # Use the same clinical fields as the in-memory completeness check.
     content, meta = json_or_null("t.content"), json_or_null("t.meta")
     counts = [f"COALESCE(json_array_length({content},'$.{field}'),0)"
-              for field in _FACT_LIST_FIELDS]
+              for field in extract_quality._FACT_LIST_FIELDS]
     counts.append(f"(SELECT COUNT(*) FROM json_each({content},'$.vitals'))")
     counts.append(f"(SELECT COALESCE(SUM(json_array_length({json_or_null('value')},'$.details')),0) "
                   f"FROM json_each({content},'$.patient_context'))")
@@ -3591,8 +1513,8 @@ def _thin_pending_sql() -> str:
           AND json_extract({meta},'$.prefilter') IS NULL
           AND json_extract({meta},'$.thin_retried') IS NULL
           AND json_extract({meta},'$.human_fix') IS NULL
-          AND length(m.body_text) >= {_THIN_BODY_MIN}
-          AND ({' + '.join(counts)}) < {_THIN_FACTS_MIN}
+          AND length(m.body_text) >= {extract_quality._THIN_BODY_MIN}
+          AND ({' + '.join(counts)}) < {extract_quality._THIN_FACTS_MIN}
           ORDER BY t.artifact_id DESC LIMIT 1"""
 
 
@@ -3653,7 +1575,7 @@ def pending_pred() -> str:
                           AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})
              OR ({_has_kind('extract_qc', 'q0')}
                  AND EXISTS ({_qc_flagged_sql(val="1")}))
-             OR (length(m.body_text) >= {_THIN_BODY_MIN}
+             OR (length(m.body_text) >= {extract_quality._THIN_BODY_MIN}
                  AND EXISTS ({_thin_pending_sql()})))
         AND NOT EXISTS (SELECT 1 FROM artifacts f
                         WHERE f.kind='{KIND}' AND f.message_id=m.message_id
@@ -3967,7 +1889,7 @@ def _chunk_context(r, context: str | None, *, checkpoint: bool = False) -> str:
     """Bind completed results to their source and checkpoints to the local-hint contract."""
     binding = [r["posted_at"], context,
          _actual_model(r),
-         _PROMPT_HEAD, _SCHEMA, "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION]
+         _PROMPT_HEAD, extract_schema.SCHEMA, "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION]
     if isinstance(r, dict) and r.get("_frame"):
         binding.append(r["_frame"]["digest"])
     return hashlib.sha256(json.dumps(binding,
@@ -3987,7 +1909,7 @@ def _frame_refs(r):
 def _context_contract():
     """Bind the frozen-context/schema contract independently of local-hint source revisions."""
     return hashlib.sha256(json.dumps([EXTRACT_VERSION, PATIENT_CONTEXT_VERSION, PLAN_VERSION,
-        _PROMPT_HEAD, _SCHEMA, _LOADED_SOURCE_DIGESTS["patient_state_context"]],
+        _PROMPT_HEAD, extract_schema.SCHEMA, _LOADED_SOURCE_DIGESTS["patient_state_context"]],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
@@ -4078,14 +2000,14 @@ def _saved_chunk_state(ledger, r, context=None, *, chunk_size=None):
             content = json.loads(content)
         except (ValueError, TypeError, RecursionError):
             continue
-        validated = _validate(content, r["body_text"], references=_frame_refs(r)) if isinstance(content, dict) else None
+        validated = extract_validation.validate(content, r["body_text"], references=_frame_refs(r)) if isinstance(content, dict) else None
         if validated is not None and not validated.get("_items_dropped") and not validated.get("_evidence_dropped"):
             for counter in ("_items_dropped", "_evidence_dropped"):
                 if type(content.get(counter)) is int and content[counter] >= 0:
                     validated[counter] = max(validated.get(counter, 0), content[counter])
-            if meta.get("quality_pass") == _QUALITY_CHECKPOINT and meta.get("quality_status") in ("pending", "started"):
+            if meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in ("pending", "started"):
                 validated["_quality_status"] = meta["quality_status"]
-            elif meta.get("quality_pass") == _QUALITY_CHECKPOINT and meta.get("quality_status") in (
+            elif meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in (
                     "hint_gaps_resolved", "unresolved", "dispatch_unknown", "skipped_budget"):
                 validated["_quality_result"] = {"state": meta["quality_status"],
                                                 "remaining_hint_candidates": meta.get("quality_remaining")}
@@ -4111,11 +2033,11 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                 meta["split_size"] = split_size
             quality_status = value.get("_quality_status")
             if quality_status in ("pending", "started"):
-                meta.update(quality_pass=_QUALITY_CHECKPOINT, quality_status=quality_status)
+                meta.update(quality_pass=extract_quality._QUALITY_CHECKPOINT, quality_status=quality_status)
                 value = {key: item for key, item in value.items() if key != "_quality_status"}
             if isinstance(value.get("_quality_result"), dict):
                 quality = value["_quality_result"]
-                meta.update(quality_pass=_QUALITY_CHECKPOINT, quality_status=quality["state"],
+                meta.update(quality_pass=extract_quality._QUALITY_CHECKPOINT, quality_status=quality["state"],
                             quality_remaining=quality["remaining_hint_candidates"])
                 value = {key: item for key, item in value.items() if key != "_quality_result"}
             ledger.artifact_add_tx("extract_llm_chunk", json.dumps(value, ensure_ascii=False),
@@ -4194,7 +2116,7 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
         if "context_snapshot" in meta and _frame_meta(r) != {
                 key: meta.get(key) for key in ("context_snapshot", "context_digest", "patient_state_context")}:
             return out
-        valid = _validate(document, r["body_text"], references=_frame_refs(r)) if isinstance(document, dict) else None
+        valid = extract_validation.validate(document, r["body_text"], references=_frame_refs(r)) if isinstance(document, dict) else None
         review = db.execute(
             f"SELECT ({_thin_pending_sql()}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) "
             "FROM messages m WHERE m.message_id=? AND m.project_id=?", (r["message_id"], r["project_id"])).fetchone()
@@ -4655,7 +2577,7 @@ def _run_batch_call(tups, target, deadline: float,
         d = _llm_call(
             _batch_prompt([(r["body_text"], r["posted_at"], hints)
                            for _, r, _c, _s, hints, _q, _l in tups]),
-            deadline=deadline, schema=_SCHEMA_BATCH,
+            deadline=deadline, schema=extract_schema.SCHEMA_BATCH,
             max_tokens=_BATCH_MAX_TOKENS,
             need_s=_batch_need_s(len(tups)))
     meta = _integrity_summary(notes[start:])
@@ -4683,7 +2605,7 @@ def _run_batch_call(tups, target, deadline: float,
         seen.add(i)
         index, r = tups[i][0], tups[i][1]
         drops: dict = {}
-        v = _validate({k: val for k, val in item.items() if k != "i"},
+        v = extract_validation.validate({k: val for k, val in item.items() if k != "i"},
                       r["body_text"], drops)
         # an item that validates only with drops joins the residue:
         # the single lane's repair pass gets one feedback re-ask at
@@ -4692,7 +2614,7 @@ def _run_batch_call(tups, target, deadline: float,
         if v is not None and not drops:
             v.pop("reply", None)   # batch rows are context-free
             if vital_policy:
-                _apply_vital_policy(v, r["body_text"], vital_policy)
+                extract_validation.apply_vital_policy(v, r["body_text"], vital_policy)
             out[index] = v
     return "ok", out, meta
 
@@ -5042,7 +2964,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     prior = json.loads(content)
                 except (ValueError, TypeError, RecursionError):
                     prior = None
-                if not _improves(d, prior) and not _protected_lost(prior or {}, d, r["body_text"]):
+                if not extract_quality.improves(d, prior) and not extract_quality.protected_lost(prior or {}, d, r["body_text"]):
                     d = prior
                     r["_kept_prior"] = True
             if not r.get("_kept_prior"):
@@ -5114,7 +3036,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             index, r, ctx, saved, hints, qc, lease = tup
             r["_transport"], r["_transport_at"] = transport, at
             if status == "ok" and index in results:
-                if _completeness_issues(results[index], hints, r["body_text"]):
+                if extract_quality.completeness_issues(results[index], hints, r["body_text"]):
                     # The batch paid for this valid first candidate. Persist it
                     # before the single lane attempts only its optional repair.
                     saved[0] = {**results[index], "_quality_status": "pending"}
@@ -5352,8 +3274,8 @@ def _llm_call_stats(metas) -> dict | None:
                 have.add(prefix + "prompt_n")
         issues = meta.get("repair_issues")
         if isinstance(issues, dict):
-            hist = llm_calls["repair_issues"] or dict.fromkeys(_ISSUE_KEYS, 0)
-            for key in _ISSUE_KEYS:
+            hist = llm_calls["repair_issues"] or dict.fromkeys(extract_quality._ISSUE_KEYS, 0)
+            for key in extract_quality._ISSUE_KEYS:
                 if type(issues.get(key)) is int:
                     hist[key] += issues[key]
             llm_calls["repair_issues"] = hist
@@ -5454,7 +3376,6 @@ def _background_semantic(ledger, stop=None):
         return out
     finally:
         os.close(lock_fd)
-
 
 
 def _nightly_memory_available() -> bool:
@@ -5686,7 +3607,7 @@ def _main() -> int:
         except Exception:
             return set(), None
         try:
-            return legacy_admissions(led, cfg), vital_threshold_policy(cfg)
+            return legacy_admissions(led, cfg), extract_validation.vital_threshold_policy(cfg)
         except Exception:
             return set(), None
     try:

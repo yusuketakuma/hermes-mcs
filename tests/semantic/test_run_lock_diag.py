@@ -47,7 +47,7 @@ def test_a_normal_pass_reports_transport_seconds_only_in_its_output(lock_env):
     db = _seeded(tmp_path)
     jev = _HookableJev()
     try:
-        out = semantic.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 480,
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 480,
                                llm_fn=_llm, jev_client=jev, run_lock_fd=fd)
         assert out["done"] == 1 and "run_lock_lost_detail" not in out
         assert set(out["transport"]) == KEYS
@@ -74,7 +74,7 @@ def test_a_lost_reacquire_reports_its_window_without_job_identity(lock_env, monk
         return _llm(prompt)
 
     try:
-        out = semantic.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 480,
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 480,
                                llm_fn=model, jev_client=_FakeJev(), run_lock_fd=fd)
         assert out["run_lock_lost"] == "timeout"
         detail = out["run_lock_lost_detail"]
@@ -106,7 +106,7 @@ def test_short_calls_add_up_instead_of_rounding_away(lock_env, monkeypatch):
 
     db = _seeded(tmp_path)
     try:
-        out = semantic.run_due(db, _cfg(), {"errors": []}, clock[0] + 480,
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, clock[0] + 480,
                                llm_fn=model, jev_client=_FakeJev(), run_lock_fd=fd)
         assert len(calls) >= 2
         assert out["transport"]["llm_transport_s"] == pytest.approx(0.04 * len(calls))
@@ -132,7 +132,7 @@ def test_a_pass_reports_what_the_shadow_v2_comparison_cost(tmp_path, monkeypatch
 
     db = _seeded(tmp_path)
     try:
-        out = semantic.run_due(db, _cfg("shadow", fact_source="shadow"),
+        out = semantic_drain.run_due(db, _cfg("shadow", fact_source="shadow"),
                                {"errors": []}, clock[0] + 480,
                                jev_client=_FakeJev(), llm_fn=model)
         shadow = out["shadow_v2"]
@@ -160,7 +160,7 @@ def test_a_shadow_call_ended_by_the_budget_counts_as_incomplete(tmp_path, monkey
 
     db = _seeded(tmp_path)
     try:
-        out = semantic.run_due(db, _cfg("shadow", fact_source="shadow"),
+        out = semantic_drain.run_due(db, _cfg("shadow", fact_source="shadow"),
                                {"errors": []}, clock[0] + 480,
                                jev_client=_FakeJev(), llm_fn=model)
         assert out["shadow_v2"] == {"calls": 1, "incomplete": 1, "s": 30.0}
@@ -173,7 +173,7 @@ def test_a_shadow_call_ended_by_the_budget_counts_as_incomplete(tmp_path, monkey
 def test_other_fact_sources_report_no_shadow_cost(tmp_path):
     db = _seeded(tmp_path)
     try:
-        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+        out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                                time.monotonic() + 480, jev_client=_FakeJev(),
                                llm_fn=_llm)
         assert out["shadow_v2"] == {"calls": 0, "incomplete": 0, "s": 0.0}

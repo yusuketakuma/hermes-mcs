@@ -27,8 +27,8 @@ def _text_notice(store):
     return notify_flush._fmt_row(store, {'project_id': 1}, {}, row, '', {})
 
 
-def _source_fp(store):
-    return notify_render._source_fp(store.db, {'kind': 'thread', 'root_message_id': 1, 'project_id': 1})
+def source_fingerprint(store):
+    return notify_render.source_fingerprint(store.db, {'kind': 'thread', 'root_message_id': 1, 'project_id': 1})
 
 
 def test_chat_and_text_summaries_show_candidates_preserving_raw_dose_action_plan(store, tmp_path, monkeypatch):
@@ -42,7 +42,7 @@ def test_chat_and_text_summaries_show_candidates_preserving_raw_dose_action_plan
         assert 'キラナ 5mg[開始][予定](内服・1日1回・頓服)' in text
         assert '成分候補: 架空成分甲［未確認・辞書 ' in text
         assert 'キラナ' in text  # the ingredient never replaces the surface-name row
-    card = notify_render._structured_block(store.db, 1)['text']
+    card = notify_render.structured_block(store.db, 1)['text']
     assert 'キラナ 5mg[開始][予定](内服・1日1回・頓服)' in card
     assert '架空成分甲' not in card and '成分候補:' not in card
 
@@ -82,9 +82,9 @@ def test_render_currency_hides_stale_candidates_and_changes_source_fingerprint(s
     _facts(store, dose='5mg')
     dictionary = _dictionary(tmp_path)
     drug_map.derive(store, dictionary)
-    before = _source_fp(store)
+    before = source_fingerprint(store)
     assert '架空成分甲' in _text_notice(store)
-    assert '架空成分甲' not in notify_render._structured_block(store.db, 1)['text']
+    assert '架空成分甲' not in notify_render.structured_block(store.db, 1)['text']
     if mode == 'switch':
         document = deepcopy(DOCUMENT)
         document['dict_id'] = 'fictional-next'
@@ -103,8 +103,8 @@ def test_render_currency_hides_stale_candidates_and_changes_source_fingerprint(s
         doc['summary'] = '合成の訂正文'
         store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(doc), _facts_row[0]))
     store.db.commit()
-    assert _source_fp(store) != before
-    for text in (_text_notice(store), notify_render._structured_block(store.db, 1)['text']):
+    assert source_fingerprint(store) != before
+    for text in (_text_notice(store), notify_render.structured_block(store.db, 1)['text']):
         assert '架空成分甲' not in text and 'キラナ 5mg[開始]' in text
 
 
@@ -113,13 +113,13 @@ def test_unchanged_derive_and_cursor_progress_do_not_invalidate_card_actions(sto
         _seed(store, mid=mid)
     dictionary = _dictionary(tmp_path)
     drug_map.derive(store, dictionary)
-    before = _source_fp(store)
+    before = source_fingerprint(store)
     assert drug_map.derive(store, dictionary)['done'] == 0
-    assert _source_fp(store) == before
+    assert source_fingerprint(store) == before
     clock = iter(range(1000))
     monkeypatch.setattr(drug_map.time, 'monotonic', lambda: next(clock))
     assert drug_map.derive(store, dictionary, deadline=4)['status'] == 'partial'
-    assert _source_fp(store) == before
+    assert source_fingerprint(store) == before
 
 
 
@@ -127,6 +127,6 @@ def test_disabled_cleanup_does_not_reinvalidate_already_annotation_free_card(sto
     _facts(store)
     drug_map.derive(store, _dictionary(tmp_path))
     drug_map.derive(store, None, deadline=0)
-    before = _source_fp(store)
+    before = source_fingerprint(store)
     assert drug_map.derive(store, None)['status'] == 'unavailable'
-    assert _source_fp(store) == before
+    assert source_fingerprint(store) == before

@@ -5,10 +5,12 @@ The canonical path is gated pre-enablement; these tests drive a full
 pre-enablement repairs: per-target v2 documents, bounded coverage
 resume, and evaluated-only audit reuse.
 """
+import semantic_drain
+import semantic_policy
+import semantic_store
 import json
 import time
 
-import semantic
 import semantic_extraction as extraction
 import semantic_facts as sf
 from mcs_requests import payload_hash
@@ -79,7 +81,7 @@ def test_incomplete_coverage_resumes_once_then_stops(tmp_path):
     parked for review — never re-extracted again."""
     db = _seeded_two(tmp_path)
     try:
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
         fp = bundle["source_fingerprint"]
         member = next(m for m in bundle["members"] if m["message_id"] == 1)
 
@@ -132,7 +134,7 @@ def test_unevaluated_fact_audit_is_re_run(tmp_path):
     verdict — the drain re-audits and records a completed artifact."""
     db = _seeded_two(tmp_path)
     try:
-        bundle = semantic.thread_bundle(db, 1, 1)
+        bundle = semantic_store.thread_bundle(db, 1, 1)
         fp = bundle["source_fingerprint"]
         member = next(m for m in bundle["members"]
                       if m["message_id"] == 1)
@@ -149,8 +151,8 @@ def test_unevaluated_fact_audit_is_re_run(tmp_path):
                        ensure_ascii=False),
             project_id=1, message_id=1, model="test",
             meta={"fingerprint": fp, "doc_hash": doc_hash,
-                  "policy_fingerprint": semantic.policy_fingerprint(
-                      semantic.semantic_config(_canonical_cfg())[0]),
+                  "policy_fingerprint": semantic_policy.policy_fingerprint(
+                      semantic_policy.semantic_config(_canonical_cfg())[0]),
                   "audit_status": "NEEDS_REVIEW"})
 
         _drain(db)
@@ -445,7 +447,7 @@ def test_canonical_switch_reaudits_summary_and_renders_new_facts(tmp_path):
                 "kind": "preference", "statement": "合成記録を希望",
                 "status": "not_stated", "polarity": "affirmed",
                 "evidence_quote": "合成記録を希望"}]})
-        semantic.run_due(db, _cfg("enforce", loop_mode="off"), {"errors": []},
+        semantic_drain.run_due(db, _cfg("enforce", loop_mode="off"), {"errors": []},
                          time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=initial_llm)
         old = _artifacts(db, KIND_SUMMARY, 1)[-1]
         assert _meta(old)["audit_status"] == "PASS"

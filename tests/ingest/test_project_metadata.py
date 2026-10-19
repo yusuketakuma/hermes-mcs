@@ -8,8 +8,10 @@ import urllib.parse
 import pytest
 
 from ledger import Ledger
-from mcs_adapter import MCSAdapter, MCSError
-from project_metadata import ARTIFACT_KIND, normalize_rows, sync_metadata
+from mcs_adapter import MCSAdapter
+from mcs_contract import MCSError
+from project_metadata_contract import ARTIFACT_KIND, normalize_rows
+from project_metadata import sync_metadata
 
 
 def page(key, rows, *, number=1, has_next=False, timestamp: int | None = 12345, **extra):
@@ -203,7 +205,7 @@ def test_values_cannot_use_definition_from_another_item():
     ("consultations", {"id": 1, "is_unread": 1})])
 def test_invalid_structured_values_fail_normalization(dataset, raw):
     # Given / When / Then
-    from mcs_adapter import SchemaError
+    from mcs_contract import SchemaError
     with pytest.raises(SchemaError):
         normalize_rows(dataset, [raw])
 
