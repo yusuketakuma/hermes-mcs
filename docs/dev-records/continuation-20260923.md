@@ -219,53 +219,53 @@ QC/evaluation 領域の追加監査は新規欠陥なしで完了)。
 (bounded backoff)・一部 KeyError の transient 分類は設計範囲内として
 据置き。
 
-## 実運用観察ラウンド (snapshot 02:47 実測) + FIX-SD1
+## 実運用観察ラウンド（端末固有の件数・時刻は除去）+ FIX-SD1
 
-公開snapshot(7643万B・189患者・15,398 msg・26,028 artifacts)を
+私有snapshot（容量・患者数・投稿数・artifact数は除去）を
 read-only観察し、残存 AUDIT 項目を実データで検証した。
 
 ### AUDIT-J03 — 運用観察完了(coveredへ)
 
 - `discovery` job: 永続pending設計どおり日次自己再スケジュール
   (next_try 未来・updated_at 日次更新) — 飢餓なし
-- `reply` 19件全 done: attempts<=6 の有界 retry で最終解決
+- `reply`［端末固有値を除去］全 done: attempts<=6 の有界 retry で最終解決
   (body_incomplete/thread_incomplete の再発 error は全て解決済みの
   履歴ノイズ)
-- `attachments`: 10件 failed も全て attempts=6 打止め — 有界
-- `notify_outbox`: 40件全 accepted・滞留/失敗なし
-- `extract_qc` 1363件 due・attempts=0: max_jobs=4/tick・eligible順
-  FIFOで消化中(過去24hで534件done、~22/h) — 設計内 backlog
-- `semantic` 8件 pending: 非eligible層のFIFOでQC群(低位job_id)の後
-  — 約2.5日待ちは設計内(§19.1 到着優先)。OPTIONAL: QCをsemantic
+- `attachments`:［端末固有値を除去］ failed も全て attempts=6 打止め — 有界
+- `notify_outbox`:［端末固有値を除去］全 accepted・滞留/失敗なし
+- `extract_qc`［端末固有値を除去］ due・attempts=0: max_jobs=4/tick・eligible順
+  FIFOで消化していることを当時確認した。処理件数・速度は除去。
+- `semantic`［端末固有値を除去］ pending: 非eligible層のFIFOでQC群(低位job_id)の後
+  — ［端末固有値を除去］待ちは設計内(§19.1 到着優先)。OPTIONAL: QCをsemantic
   より低位 tier にする検討余地
-- 中間 state ('running'等) の滞留ゼロ、runs 445ok/59partial/
-  1crash(旧) — partial主体は reply/attach/budget の一時的事由
+- 中間 state ('running'等) の滞留ゼロ、runs ［端末固有値を除去］ok/［端末固有値を除去］partial/
+  ［端末固有値を除去］crash(旧) — partial主体は reply/attach/budget の一時的事由
 
 ### AUDIT-J04 — 抽出側は設計内確認、facts側は件数不足で open 継続
 
-- extract_v1 網羅 97.4%: 欠落390件は全て body_text='' (抽出対象外)
-- extract_llm: 新着~100%(7d 81/81、30d 413/414)、旧文 55.9% は
+- extract_v1 網羅 ［端末固有値を除去］: 欠落［端末固有値を除去］は全て body_text='' (抽出対象外)
+- extract_llm: 新着と旧文で充足の差があり、旧文は
   per-tick cap(limit=15/budget)での archive 消化中 — 設計内
 - llm error artifacts: v2 は全て attempts>=5 枯渇(設計打止め)、
-  v1-era 66件は v2 budget で再試行キュー入り(posted_at降順の後方)
-- 長文: corpus最大~1.9KBで単一chunk、メッセージ粒度の durable
+  v1-era ［端末固有値を除去］は v2 budget で再試行キュー入り(posted_at降順の後方)
+- 長文: corpus最大~［端末固有値を除去］で単一chunk、メッセージ粒度の durable
   retry で再開担保 — chunk内 resume は不要水準
-- 低confidence: QC annotate層が item-vs-body で検証(534 done、
+- 低confidence: QC annotate層が item-vs-body で検証し、backlogを消化していた。端末固有の完了件数は除去。
   backlog消化中)
-- semantic_facts 実績3件・loop 0件 — Jev facts網羅性は本番件数
+- semantic_facts・loop は十分な運用実績がなく、Jev facts網羅性は本番件数
   不足のため open 継続
 
 ### AUDIT-J05 — 機構健全・実績なしで open 継続
 
-- loop_candidate/loop_event ゼロ: facts 供給が少なく loop 機構未発動。
+- loop_candidate/loop_event の十分な実績がなく、loop機構の運用評価は保留。
   revision鍵・世代bind・時系列guardの設計は静査で確認済み
-- requests/command_receipts 0件: ops 経路未使用
+- requests/command_receipts ［端末固有値を除去］: ops 経路未使用
 
 ### 確定修復: FIX-SD1
 
 `semantic_drain._write_result` が deferred/PENDING の度に byte同一の
-summary+audit pair を追記していた(実測: 同一 summary_id が 13分で
-3行 — Jev 到達不能期の再監査)。`_current` での同一 outcome 検出を
+summary+audit pair を追記していた(実測: 同一 summary_id が ［端末固有値を除去］で
+［端末固有値を除去］ — Jev 到達不能期の再監査)。`_current` での同一 outcome 検出を
 追加し冪等化。summary内容・audit_status・publication_mode・findings
 が一致する場合のみ書込みを抑止 — status 遷移(PENDING→PASS)は新規
 行として正しく残る。
@@ -419,40 +419,40 @@ T1-T16実装後の全diffレビューで確定した欠陥を最小修復。全�
 
 | 項目 | 変更前 | 変更後 |
 |---|---|---|
-| `-c` | 65536 | **16384** (KV cache ~1/4、1slotあたり8192) |
-| `-np` | 3 | **2** |
-| `--spec-type` | なし | **ngram-simple** (draft model不要・メモリ増なし) |
-| `-ctk`/`-ctv` | q4_0 | **f16** (dequantペナルティ解消) |
+| `-c` | 当時の端末固有値は除去 | 当時の端末固有値は除去 |
+| `-np` | 当時の端末固有値は除去 | 当時の端末固有値は除去 |
+| `--spec-type` | 当時の端末固有値は除去 | 当時の端末固有値は除去 |
+| `-ctk`/`-ctv` | 当時の端末固有値は除去 | 当時の端末固有値は除去 |
 
 #### 変更 (code: MCS背景スロットpin)
 
 - `mcs/local_llm.py`: `BACKGROUND_SLOT = 0` 規約定数を追加
 - `mcs/semantic.py` / `mcs/extract_llm.py`: 全LLM呼出しに `extra_payload={"id_slot": 0}` — **slot 1はRT用に常時空ける**
 
-#### 実測 (同一prompt: 527tok in / 327tok out, 単発値・背景負荷あり)
+#### 当時の性能比較（入力・出力量と処理速度の実測値は除去）
 
 | 設定 | decode |
 |---|---|
-| 変更前 (np3/c65536/q4_0) | 5.1 tok/s |
-| np2/c16384/q4_0 | 5.6 tok/s |
-| +ngram (q4_0) | 5.4 tok/s |
-| +f16 KV (spec無し) | 5.0 tok/s |
-| **f16 KV + ngram (最終)** | **6.3 / 6.2 / 6.9 tok/s** (~15-20%改善) |
+| 変更前の構成 | 端末固有の実測値は除去 |
+| context/並列数を調整した構成 | 端末固有の実測値は除去 |
+| speculative decodeを追加した構成 | 端末固有の構成値・実測値は除去 |
+| KV cacheの精度を変更した構成 | 端末固有の構成値・実測値は除去 |
+| KV cacheとspeculative decodeを併用した最終構成 | 端末固有の実測値は除去 |
 
-補助効果: **swap 15.9GB→4.7GB** (64K ctx KV+長期稼働プロセスのswap滞留が解放)。prefix cache hit時 prefill 4.4s→0.3s。ngram acceptance 29% (42/144 tokens, ログ実測)。
+補助効果としてswap滞留・prefill・speculative decodeの受理状況を比較した。容量・所要時間・割合の実測値は除去。
 
 #### 検証
 
-- `semantic.llm_chat` 実呼出しが **slot 0に着地** (task=1, tokens=20)・slot 1未使用を確認
-- llama-server再起動後 `/slots`: slot 0/1 各 n_ctx=8192・launchdラベル `ai.hermes.llamacpp` 稼働
+- `semantic.llm_chat`の明示slotへの着地と、別枠を使わないことを当時確認した。task識別・出力量は除去。
+- llama-server再起動後に`/slots`と監督状態を確認した。端末固有の並列数・context値は除去。
 - focused pytest (`local_llm|extract_llm|semantic`): 136件全pass / ruff clean
 
 #### 判断・留保
 
-- **ollama embedding server** (qwen3-embedding:0.6b, port 52632, ~900MB): ollama keep-aliveで~4分後auto-unload。GBrain埋め込みで使用中のため手動停止せず
-- **gbrain reranker** (port 8081): RSS 2MBで無害
+- **埋め込みserver**: 当時の稼働用途を維持し、明示許可なく手動停止しない。端末固有のモデル・接続先・資源量は除去。
+- **reranker**: 当時の停止対象から除外した。端末固有の接続先・RSSは除去。
 - **Chrome等ユーザープロセス**: 明示許可なく停止しない — 必要ならユーザー判断
-- decode絶対値 ~6.5tok/s はbase M4 (GPU共有+Metal) 環境の実能力。さらなる短縮はモデル小型化 or 出力契約圧縮 (quote→offset等) が必要
+- 当時の導入環境でdecodeが律速と観測した。端末固有の機種と処理速度は除去済み。モデル小型化や出力契約圧縮は品質評価を伴う別の判断として保持する。
 - RT側クライアント (Hermes agent等) が `id_slot=1` を明示送信するかは未配線 — 現状は「slot 0占有回避」による準予約。完全予約にはRT側にもid_slot送信が必要
 
 ### 第6ラウンド: スロット命名1/2 + RT配線 + 夜間掃除 + 04:00再起動 (2026-09-23)
@@ -466,34 +466,34 @@ T1-T16実装後の全diffレビューで確定した欠陥を最小修復。全�
 
 #### RT側配線 (Hermes → 論理slot 2)
 
-- `~/.hermes/config.yaml` + 全10プロファイル (`profiles/*/config.yaml`): `custom_providers` Hermes Local entryに `extra_body: {id_slot: 1}` を追加 — provider経路の全呼出し (agent turn + auxiliary) がslot 2にpin
-- `context_length: 65536 → 32768`: per-slot n_ctxの実値に整合 (Hermesが適切にcompactするよう実態反映)
+- Hermesの対象profileへ明示的なslot指定を追加し、主処理と補助処理の経路を揃えた。profile数と端末固有設定値は除去。
+- `context_length`を選択したslot容量と整合させた。端末固有の変更前後値は除去。
 
 #### launchd最終設定 (ai.hermes.llamacpp)
 
 | 項目 | 値 | 理由 |
 |---|---|---|
-| `-c` | **65536** | per-slot 32768 — 実績p99=1168・最大43KのHermesプロンプトをカバー (8K/slotではRT側が破綻すると判明し再調整。旧3slot時22016/slotより大) |
-| `-np` | **2** | slot 1=MCS背景専用 / slot 2=RT専用 |
-| `--spec-type` | ngram-simple | acceptance 29%実績・メモリ増なし |
-| `-ctk/-ctv` | **q4_0** | 32K×2slotでf16だとKV ~9.4GBと過剰。q4_0なら~2.3GB |
+| `-c` | 端末固有値は除去 | 対話側の入力が収まるcontextを確保するため再調整した。入力長の実測値は除去。 |
+| `-np` | 端末固有値は除去 | 背景処理と対話処理を分ける当時の構成。現行の配布既定値ではない。 |
+| `--spec-type` | 端末固有値は除去 | 実タスクでの挙動を比較して当時の採用を判断した。実測値は除去。 |
+| `-ctk/-ctv` | 端末固有値は除去 | context容量とメモリ使用量の両方を考慮した。端末固有の設定・容量値は除去。 |
 
 #### 新規LaunchAgents (稼働登録済み)
 
-- `ai.hermes.llm-cleanup` — 毎日 **03:30** `~/.hermes/scripts/nightly_process_cleanup.sh` 実行: `ollama stop`でモデル全unload (on-demand reload) + 3時間超のorphan `chrome-headless-shell` kill。Chrome.app/gbrain reranker(2MB)は対象外
-- `ai.hermes.llamacpp-restart` — 毎日 **04:00** `launchctl kickstart -k gui/501/ai.hermes.llamacpp` (長期稼働のメモリ膨張を日次リセット)
+- `ai.hermes.llm-cleanup` — 当時、夜間清掃を登録。on-demand再読込み可能なモデル解放とorphan清掃を行い、Chrome.appとrerankerは対象外とした。端末固有の時刻・資源量は除去。
+- `ai.hermes.llamacpp-restart` — 当時、長期稼働時のメモリ増大に対する定期再起動を登録。個別の時刻・実行ユーザー識別は除去。
 
 #### 実測検証
 
-- `/slots`: slot 0/1 各 `n_ctx=32768`
+- `/slots`で当時の選択構成を確認した。端末固有のslot/context値は除去。
 - RT呼出し (`id_slot:1`) → wire slot 1着地 / MCS `semantic.llm_chat` → wire slot 0着地 (双方向確認)
-- cleanup script実走: `qwen3-embedding:0.6b` graceful unload確認、ログ出力正常
+- cleanup script実走で補助モデルのgraceful unloadとログ出力を確認した。端末固有のモデル選択値は除去。
 - focused pytest 56件pass / ruff clean
 
 #### 留意
 
-- `kickstart -k`はlaunchd登録済み引数で再起動 — plist編集後は`bootout`+`bootstrap`が必要 (今回初回kickstartで旧argsのまま再起動しn_ctx=8192のままだった件で実証)
-- prompt >32768の呼出しは依然overflowし得る (過去最大43K、発生頻度 ~0.2%)。さらなるheadroomが必要なら`-c`引上げかchunkingが別途必要
+- `kickstart -k`はlaunchd登録済み引数で再起動 — plist編集後は`bootout`+`bootstrap`が必要 (今回初回kickstartで旧argsのまま再起動し旧context値のままだった件で実証)
+- 選択contextを超える入力はoverflowし得る。過去の入力長・発生割合は除去し、headroom確保やchunkingは別の判断として残す。
 
 ### 第7ラウンド: ローカルLLM設定の敵対的レビュー + モデル調査 (2026-09-23)
 
@@ -503,30 +503,30 @@ T1-T16実装後の全diffレビューで確定した欠陥を最小修復。全�
 
 | # | 確認項目 | 結果 |
 |---|---|---|
-| 1 | **未pinリクエストがslot 2を奪うか** | **奪う（実証）** — `id_slot`未指定は空きslotに着地（wire slot 1にtask着地確認）。予約は強制でなく慣行 → gbrainの`llama-server:Qwen3.5-9B`ルート(expansion_model/chat_model)が未pinでslot 2を汚染し得た。**修復**: `~/.gbrain/config.json`の`provider_chat_options`に`id_slot: 0`追加（AI SDK openai-compatibleがproviderOptionsをbodyにspreadする実装を確認済み） |
+| 1 | **未pinリクエストがslot 2を奪うか** | **奪う（実証）** — `id_slot`未指定は空きslotに着地（wire slot 1にtask着地確認）。予約は強制でなく慣行 → 補助経路の未pin呼出しが背景枠へ入り得た。**修復**: 当時の補助経路へ明示pinを追加した。端末固有の構成値は除去 |
 | 2 | `extra_body`のmerge semantics | **安全** — `chat_completions.py:578`で`request_overrides["extra_body"]`は`extra_body.update(v)`のdeep-merge。reasoning/thinking無効化と共存 |
 | 3 | `id_slot`範囲外値 | **fail-openでサイレント** — `id_slot=5`/`-1`も受理されunpin扱い。設定ミスは検出不能（留保） |
-| 4 | `context_length: 32768` vs 出力予算 | **安全** — `_compute_threshold_tokens`が`max_tokens`を織込み、overflow errorはcompaction経路で処理 |
+| 4 | `context_length: （端末固有値は除去）` vs 出力予算 | **安全** — `_compute_threshold_tokens`が`max_tokens`を織込み、overflow errorはcompaction経路で処理 |
 | 5 | `probe_format`未pin | **修復** — request bodyに`id_slot: BACKGROUND_SLOT`追加（20tok probeでもslot 2を汚染し得た） |
-| 6 | 04:00再起動がin-flight要求をkill | **修復** — `llamacpp_restart_if_idle.sh`で`/slots`の`processing`確認、ビジー時スキップ |
-| 7 | llamacpp.log無制限肥大 (18MB→) | **修復** — cleanup scriptに50MiB超でローテーション追加 |
+| 6 | 当時の定期再起動がin-flight要求をkill | **修復** — `llamacpp_restart_if_idle.sh`で`/slots`の`processing`確認、ビジー時スキップ |
+| 7 | llamacpp.log無制限肥大 （端末固有の増加量は除去） | **修復** — cleanup scriptに50MiB超でローテーション追加 |
 | 8 | KeepAlive+設定ミスのcrash loop | 留保 — launchdが10s間隔でスロットル。plist lint済みで現状安全 |
 | 9 | 残りの未pin呼出し元 | `/v1/models` GETのみ（slot不使用）— `mcs_setup` health check等。問題なし |
 
-#### モデル調査結果 (16GB M4・llama.cpp GGUF前提)
+#### モデル調査結果（llama.cpp GGUF前提・端末固有仕様は除去済み）
 
 | 候補 | 評価 |
 |---|---|
-| **NuExtract3-4B** (numind, Q4_K_M 2.6GB) | 実bench検証済み: decode **8.2-9.5 tok/s**（9B比~1.5x）。3case中2件でcontract形状JSON生成、1件は1400tok切捨て失敗（9Bと同型）。ただし`validate_facts_doc`で`doc_version_mismatch` — **厳密contract非互換**。形状は合うが完全準拠せず。MCS専用抽出サーバ化するには prompt tuning or schema適合層が必要。ファイルは`~/.hermes/models/`に保持 |
-| Qwen3.5-0.8B/4B draft spec | **upstream broken** — llama.cpp issue #20039: hybrid DeltaNetのstate rollback未対応で`partial sequence removal`不可。ngram-simpleが現実解（acceptance 29%実績） |
-| Gemma 4 26B-A4B MoE | ~17-20tok/s報告(M5)だがQ4で~14GB — 16GB機では他processと併存不可 |
+| **NuExtract3-4B** (numind, Q4_K_M ［端末固有値を除去］) | 実bench検証で形状JSONの生成と切捨て失敗を確認したが、端末固有の速度・件数・比率は除去。ただし`validate_facts_doc`で`doc_version_mismatch` — **厳密contract非互換**。形状は合うが完全準拠せず。MCS専用抽出サーバ化するには prompt tuning or schema適合層が必要。ファイルは`~/.hermes/models/`に保持 |
+| Qwen3.5-0.8B/4B draft spec | **upstream broken** — llama.cpp issue #20039: hybrid DeltaNetのstate rollback未対応で`partial sequence removal`不可。ngram-simpleが現実解（acceptance ［端末固有値を除去］実績） |
+| Gemma 4 26B-A4B MoE | ~17-20tok/s報告(M5)だがQ4で~14GB — 当時の資源制約では他processとの併存が難しいと判断した。端末固有の容量は除去 |
 | LFM2.5-8B-A1B | ~30tok/sの報告あるがstrict-contract適性未検証 |
 
 **結論**: 現行`Qwen3.5-9B`継続が妥当。NuExtract3は「速度+抽出特化」で有望だがcontract適合に改良要 — 本格評価は`bench/semantic_completeness_cases.json`全12caseの二モデル比較が次段階（要実行判断）。
 
 #### 最終計測 (確定値)
 
-`-c 65536 -np 2 -ctk/-ctv q4_0 --spec-type ngram-simple`: decode **6.3 tok/s**・wall 57.1s・prompt 4.8s（prefix cache後~0.3s）。swap 15.9GB→~4.7GB（最大圧力源解消）。
+context・並列数・KV cache・speculative decodeを比較し、当時の最終構成を選んだ。個別構成値、decode/prefillの所要時間、swap容量は除去。
 
 ### 第8ラウンド: Hermes公式ルートへの移行 (2026-09-23)
 
@@ -595,16 +595,16 @@ T1-T16実装後の全diffレビューで確定した欠陥を最小修復。全�
 - 「Keychainロックで新規取込み停止」は**不正確だった**。Keychainは確かに
   ロック中(`User interaction is not allowed`)だが、Chromeセッションが
   生存しており`auto_login`はCDP経由でトークン取得可能 — `token_cache.json`
-  は10分毎に更新され、run 564で`new_messages:1`を実際に取得。
+  は定期的に更新され、実際の新着取得を確認した。run識別と取得件数は除去。
   fetchは正常動作中。Keychainロックの実害は**Chromeセッション失効時**に
   潜伏するのみ。
 
 #### 実状態監査で判明した真の問題
 
-- `extract_llm` backlog **11,582件** — tickの`llm_budget_cap=90s`で
-  ~4-6件/run → 消化に約20日。実質停滞。
-- `extract_qc` backlog **1,281件** — `run_due`の`max_jobs=4`で~3日。
-- `semantic` pending 50件（shadow mode）。
+- `extract_llm`の処理待ちが、tickの処理予算では十分に進まない状態だった。
+  端末固有の残数・速度・消化日数見積りは除去。
+- `extract_qc`も処理待ちがあった。個別の残数・消化日数見積りは除去。
+- `semantic`にも処理待ちがあった。端末固有の件数・稼働modeは除去。
 
 #### 修復
 
@@ -615,11 +615,11 @@ T1-T16実装後の全diffレビューで確定した欠陥を最小修復。全�
 3. **`run_check.py`: jobs-only runの`llm_budget_cap` 90→240s**、
    `run_due`の`max_jobs` 4→12（既存の`max_jobs=8 if jobs_only`
    パターンに整合。fetch skipでdeadline余裕があるため）。
-4. **`extract_llm --all`ドレーナー即時起動**（nohup, PID 12709）—
+4. **`extract_llm --all`ドレーナー即時起動**（nohup, PIDは除去）—
    per-write lockでtickと共存、全call slot 0 pin、slot 1(RT)保全を
    `/slots`で実測確認。
-5. **hermes cron `mcs-llm-catchup`**（job 535400e964b4、毎日01:10、
-   `mcs_llm_catchup.sh`、2.5hウィンドウで03:40終了→04:00 restartと
+5. **hermes cron `mcs-llm-catchup`**（端末固有のjob識別・実行時刻は除去）。
+   `mcs_llm_catchup.sh`の実行窓を再起動と競合しないよう調整し、
    非競合、single-instanceガード付き）。
 6. **`security set-keychain-settings`試行** — ロック中はrc=36で不可。
    自動ロック無効化はユーザーが一度unlockした後の操作となる（記録）。
@@ -633,7 +633,7 @@ T1-T16実装後の全diffレビューで確定した欠陥を最小修復。全�
 #### 残存
 
 - Keychain自動ロック無効化: ユーザーによる1回のunlockが前提
-- extract_llm backlog ~11.5Kは常駐drainer+夜間windowで数日で消化見込み
+- extract_llmの残数・消化日数の端末固有見積りは除去。常駐drainerと処理窓で進捗を観察する判断を保持。
 
 ### 第11ラウンド: mcs/ フォルダ分離リファクタ (2026-09-23)
 
@@ -685,53 +685,53 @@ mcs/
 - gates 8/8・mine_gates clean・readme --check clean
 - 全16エントリポイント `--help` スモーク通過・`semantic_jev`自己再実行経路確認
 - 実run_check起動→lock_held正常応答（新パスで構造疎通）
-- 稼働中drainer(PID 12709)は移動前load済みimport群で継続動作、
-  初バッチ43件done確認（backlog 11582→11535）
+- 移動前のimportを読込み済みのdrainerが継続動作していることを確認。PIDは除去。
+  初回バッチの完了と処理待ちの減少を確認した。端末固有の件数は除去。
 
 ## ラウンド12: LLMボトルネック分析と改善（extract_llm backlog対策）
 
 ### 計測で確定したボトルネック構造
-- slot 0の実容量 ≈ 93 call/h（extract_llm 53 + QC 40 で共有・実測一致）
-- per-call内訳: prompt eval 128 tok/s・decode 5-6 tok/s（M4 16GBで理論~20+の半分以下）
-- 主因: メモリ枯渇（swap 10.5GB・free 62MB）+ ollama embedding server常駐2.2GB + Metal競合
-- ngram-simple spec decode: 実タスクacceptance 5-19%（JSON定型で有効）→ 保持。合成benchでは中立
+- slot 0の実容量 ［端末固有値を除去］（extract_llm 53 + QC 40 で共有・実測一致）
+- 当時のper-call内訳ではprompt evalよりdecodeが律速だった。個別端末の機種・容量・処理速度と理論値比較は公開記録から除去した。
+- 主因: メモリ圧と補助モデル常駐、Metal利用の競合。swap・空き容量・常駐量の実測値は除去。
+- ngram-simple spec decode: 実タスクacceptance ［端末固有値を除去］（JSON定型で有効）→ 保持。合成benchでは中立
 
 ### 却下した改善案（証拠あり）
-- 短文(<50c)スキップ: 1,736件中19%が実ファクトを含む（40字で要介護認定+期限を抽出した実績）→ recall損失で不採用
+- 短文スキップ: 当時の確認対象にも実ファクトが含まれたため、recall損失を避けて不採用。件数・比率・文字数の実測値は除去。
 - spec除去: A/B同等→実ワークロードで正のため保持
 
 ### 実装
-1. `OLLAMA_KEEP_ALIVE=2m`をbrew plistに追加→ollama再起動（embeddingがidle時auto-unload・~2.2GB GPU/host解放）
+1. 補助埋め込みserverのアイドル時モデル解放を設定・確認した。端末固有の保持時間・解放容量は除去。
 2. extract_llm `--slot N`（id_slot上書き）+ `--shard I/N`（message_id%N分割・drainer間の構造的排他）
 3. `mcs_llm_catchup.sh`をdual-shard化: shard1/2→slot1を夜間のみ貸与、shard0/2→slot0（既存drainer稼働時はskip）
-4. 日中drainerを`--shard 0/2 --slot 0`で再起動（PID 43371）— nightlyとの重複排除
+4. 日中drainerを明示したshard/slotで再起動し、夜間経路との重複を排除。端末固有のPIDは除去。
 5. `--shard/--slot/--stop-after`は`--all`必須にガード（黙殺防止）
 
 ### 見込み効果
-- 夜間window(2.5h)が~2x化: +~130件/夜 → 合計 ~1,400件/日 → 11.5K backlogを~8日→実質短縮
+- 処理窓拡大による改善を見込んだが、端末固有の処理量・残数・消化日数の計算値は除去。
 - メモリ解放効果はdecode速度に直結する可能性（要観測）
 
 ### 未実施（選択肢として保留）
-- `-c 65536→49152`（KV~0.6GB削減、>24K promptがcontext-shiftで縮退 — 要判断）
+- contextを縮小する案は、KV削減と長い入力のcontext-shift縮退を比較して判断する。端末固有の構成値・入力長・容量見積りは除去。
 - 夜間slot1へのQC drainer追加（現状QCはslot0共有）
-- 86件の永久失敗メッセージの個別reset
+-［端末固有値を除去］の永久失敗メッセージの個別reset
 
 ## ラウンド13: 処理能力向上・品質担保の追加施策
 
 ### 追加実装（全て実機適用済み）
 1. **tick↔drainer衝突排除**: `run_pending(oldest_first=True)`を追加しrun_check tickに配線 — drainer(DESC/newest)とtick(ASC/oldest)が逆方向から消化し、同一行の二重LLM処理を構造的に排除（方向分離）
 2. **drainer常駐化**: `ai.mcs.extract-drainer` launchd job新設（KeepAlive・shard 0/2・slot 0）— 手動nohupを廃止し監督付き常駐化。oldest_firstの前提（drainer生存）を保証
-3. **夜間window拡大**: `mcs-llm-catchup` 01:10→**22:30**・WINDOW_S 9000→18000（5h）— slot 1貸与時間を2倍化、終了03:30で04:00再起動と非競合維持
-4. **`-ub 1024`**: prompt eval ~128→140 tok/s（~10%・僅少だが無害）
+3. **夜間window拡大**: `mcs-llm-catchup`の実行窓を広げ、定期再起動との競合を避けた。端末固有の時刻・窓長・倍率は除去。
+4. **microbatch設定**: prompt evalを比較した。端末固有の速度・変化率は除去。
 5. deployment/launchagents/に`ai.mcs.extract-drainer.plist`テンプレ+README更新
 
 ### 証拠で却下
-- **content_hashメモ化**（~300件≒2.6%）: 同hashでもthread contextが異なり出力非同一 → 品質同一性が保てず却下
-- **短文スキップ**: 実測で19%が真ファクト含有（前回・再確認）
+- **content_hashメモ化**（当時の重複件数・割合は除去）: 同hashでもthread contextが異なり出力非同一 → 品質同一性が保てず却下
+- **短文スキップ**: 当時の再確認でも真ファクトを含む例があり、品質のため不採用。比率は除去。
 
 ### 残オプション（判断待ち・報告のみ）
-- **全日polite slot-1貸与**: 各call前に/slots確認→slot1 idleなら借用。容量~2xだがRT着信時最大~1call(20-60s)待ち — RT保証とのトレードオフで未実施
-- `-c 49152`: KV~0.6GB削減・>24K prompt（実績25件）はcontext-shift縮退
+- **全日polite slot-1貸与**: 各call前に/slots確認→slot1 idleなら借用。容量~2xだがRT着信時最大~1call(［端末固有値を除去］)待ち — RT保証とのトレードオフで未実施
+- contextを縮小する案は、KV削減と長い入力のcontext-shift縮退を比較して判断する。端末固有の構成値・入力長・容量・発生件数は除去。
 - QC drainerのslot1夜間追加（現状QCはslot0共有で律速はextract側）
 
 ---
@@ -752,15 +752,15 @@ mcs/
    `_choose_slot()` が全 call 前に `/slots` を照会（2s timeout）、
    RT slot が `is_processing:false` なら借用。probe 失敗・busy は
    slot 0 へ fallback — サーバ停止中も stall しない。`--slot` との
-   同時指定は refuse。RT 到着時の最悪待ちは ~1 call 分（実測では
+   同時指定はrefuse。RT到着時は既存callの待機が発生し得る（当時の実測時間は除去）。
    llama.cpp が slot を time-slice するため両 drainer 稼働中でも
-   RT テスト呼出しは 3.3s で応答）。新設 launchd
+   RTテスト呼出しの応答を当時確認した。新設launchd
    `ai.mcs.extract-drainer-rt`（KeepAlive・`--shard 1/2 --lend-rt`）
-   で shard 1/2 を全日担当 — **背景容量 ~2x** が本施策の最大効果。
+   でshardを担当。端末固有の容量増加見積りは除去。
 
 3. **`-c 49152`**（ai.hermes.llamacpp.plist・再起動済み）:
-   per-slot 24576・KV cache ~0.6GB 解放でメモリ圧を緩和。
-   >24K prompt（実績 ~25件）は llama.cpp の context-shift で
+   per-slot容量を確保し、KV cache削減でメモリ圧を緩和した。端末固有の構成値・容量は除去。
+   >［端末固有値を除去］ prompt（実績 ［端末固有値を除去］）は llama.cpp の context-shift で
    縮退する可能性 — 全体のわずかな割合でトレードオフを受理。
 
 4. **夜間 QC drain**（`semantic_drain.py --drain` CLI 新設）:
@@ -770,10 +770,10 @@ mcs/
    drainer が全日カバー）、`MCS_LLM_SLOT=1 semantic_drain --drain
    --stop-after 18000` で extract_qc/semantic ジョブを slot 1 から
    消化。drainer 全滅時の gap-fill は残置。実機スモークで
-   9バッチ×2件 done（~0.3s/job）を確認。deferred-only バッチ時の
+   完了とlock競合なしを当時確認した。件数・時間の実測値は除去。deferred-onlyバッチ時の
    hot-loop を防止（done=0 なら 10s backoff）。
 
-5. **ollama `OLLAMA_KEEP_ALIVE=2m`** の plist 正式化: 前回の設定が
+5. **補助モデルのkeep-alive設定を永続化**: 前回の設定が
    plist 未保存で失効していたのを `sh.brew.ollama.plist` の
    EnvironmentVariables に追加・再起動して恒久化。
 
@@ -791,16 +791,16 @@ mcs/
 - pytest **694 passed**・ruff clean・gates **8/8**・mine_gates clean・README clean
 - llama-server `-c 49152` で健康応答（/health ok）
 - `launchctl list`: ai.mcs.extract-drainer + ai.mcs.extract-drainer-rt 両者稼働
-- /slots 実測: slot 0 processing（shard 0/2）、slot 1 に rt-drainer が
-  借用実行・RT テスト呼出し 3.3s 応答
-- semantic_drain 実機 smoke: extract_qc 18件 done・lock 競合なし
+- `/slots`で背景枠の処理と借用を当時確認した。端末固有の構成値は除去。
+  RTテスト呼出しの応答も確認した。実測時間は除去。
+- semantic_drainの実機smokeでextract_qc完了・lock競合なしを確認した。端末固有の件数は除去。
 
 ### トレードオフ（報告義務）
 
 - **RT最悪遅延**: polite lending 中に RT 呼出しが来ると最大 ~1 call
-  （数十秒、実測は数秒）の queue 待ち。品質は無影響。
+  queue待ちが生じる。端末固有の実測時間は除去し、品質確認の必要性は保持。
 - **-c 49152**: >24K prompt の極長メッセージは context-shift 縮退
-  （該当は ~25件/14.6K）。
+   （該当する入力の件数・割合は公開記録から除去）。
 - **夜間 slot 1 共有**: QC drain と rt-drainer が slot 1 を共用 —
   22:30–03:30 は両者 queue 分割、片方のみなら占有。
 
@@ -842,11 +842,11 @@ mcs/
   UPDATE）で二重 commit 不能 + run lock で同時実行不可。
 - **QC seeding**: `run_due` 内 `_qc_seed(limit=32)`/iteration — 夜間
   drain loop で律速解消済み。
-- **ollama**: KEEP_ALIVE=2m 実測で機能（15:24呼出→15:26失効予定）。
+- **補助モデルのkeep-alive**: アイドル時の自動解放を当時確認した。設定時間と呼出し・失効時刻は除去。
 - **gbrain nightly(02:00)**: window 内で slot 1 共有だが深夜 batch
   同士の queue 分割は想定内。transcripts ingest は content-hash skip
   で再実行コストほぼゼロ。
-- **`--lend-rt` probe**: call 毎の /slots GET は ~2ms・無視可能。
+- **`--lend-rt` probe**: call毎の`/slots` GETにも負荷がある。端末固有の所要時間は除去。
 - **semantic_drain**: deferred-only バッチは 10s backoff（hot-loop
   防止済み）、`left==0` で queue_empty 終了。
 
@@ -858,8 +858,8 @@ mcs/
   in-memory 喪失 → 最大1 batch 分の再実行。
 - **`left` に永久失敗行が残る**: cosmetic。drainer は poll 継続で
   問題なし。個別 reset は `mcs_requests`/SQL で可能（未実施）。
-- **メモリ圧**: 16GB・swap ~7GB は依然高いが `-c 49152` と
-  ollama keepalive で緩和中。ハード上限由来。
+- **メモリ圧**: 当時はモデルの常駐と推論設定を見直して緩和を検討した。
+  端末固有の容量・swap実測・実機設定値は公開記録から除去した。
 
 ### 検証
 pytest 694 passed・ruff clean・gates 8/8・README clean。
@@ -879,30 +879,30 @@ cancel 停止を確認。**
 
 ### 副産物として発見した真の根本欠陥
 
-cancel 調査中に判明: decode がメモリ圧下で **3-5 t/s** まで低下して
-おり、legitimate な ~1K token 出力は ~250s 必要 — だが `TIMEOUT=90`
-のため client disconnect → server cancel → **decode 済み ~90s 分を
+cancel 調査中に判明: decode がメモリ圧下で **［端末固有値を除去］** まで低下して
+おり、正当な長い出力が完了する前に`TIMEOUT`へ達していた。
+client disconnect → server cancel → **生成済み出力の
 全破棄 + attempts 消費**。これが従来からの散発的失敗の主因の一つ。
 
 **`TIMEOUT 90→300`** に引上げ（コメントで根拠記録）。実測で
-180s/646token の call が完走 — 旧値なら破棄されていた成果。
+旧値では破棄されていたcallが完走したことを確認した。端末固有の時間・token数は除去。
 
 ### 回収した backlog
 
-- 永久失敗 error artifact 28件（attempts>=5・v2）を run lock 下で
+- 永久失敗 error artifact ［端末固有値を除去］（attempts>=5・v2）を run lock 下で
   DELETE → 新 budget で再キュー化（drainer が自然に拾う）
-- attempts=6 の行7件は tick↔drainer の同時選択 race の痕跡 —
+- attempts=6 の確認した行は tick↔drainer の同時選択 race の痕跡 —
   bounded で `_current()` が二重書込み防止済み、容認
 
 ### 最終構成（確定）
 
 ```
-extract drainer  slot 0  shard 0/2  --all --slot 0        KeepAlive
-extract drainer  slot 1* shard 1/2  --all --lend-rt       KeepAlive
+extract drainer  当時の端末固有slot/shard設定は除去（公開CLI引数の契約は維持）
+extract drainer  RT idle時のみ借用する当時の構成（個別値は除去）
                                      (*RT idle 時のみ借用)
-semantic drain   slot 1  夜間 22:30-03:30  MCS_LLM_SLOT=1
-llama-server     -c 65536 -np 2 -fa on -ctk/ctv q4_0 -ub 1024
-TIMEOUT=300  OLLAMA_KEEP_ALIVE=2m  restart_if_idle=is_processing修正済
+semantic drain  当時の夜間窓とslot選択値は除去
+llama-server     当時のcontext/並列数/KV cache/batch設定値は除去
+TIMEOUTは公開コードの履歴を参照。補助モデルのkeep-alive値は除去。restart_if_idleのis_processing修正は保持。
 ```
 
 ### 検証
@@ -915,7 +915,7 @@ TIMEOUT=300  OLLAMA_KEEP_ALIVE=2m  restart_if_idle=is_processing修正済
 
 ## Round 16 — Keychainロックの完全自動化（.env fallback）
 
-ユーザー選択: `.env`フォールバック導入（FileVault OFFの平文リスクを承知の上）。
+ユーザー選択: `.env`フォールバック導入（OSの暗号化設定に応じた平文リスクの説明を受けた。端末固有の有効/無効値は除去）。
 
 ### 実装
 
@@ -940,7 +940,7 @@ TIMEOUT=300  OLLAMA_KEEP_ALIVE=2m  restart_if_idle=is_processing修正済
 security unlock-keychain   # ログインパスワード入力
 python3 - <<'PY'
 import subprocess, sys, os
-sys.path.insert(0, "/Users/yusuke/.mcs/mcs"); import _mcs_path
+sys.path.insert(0, "/path/to/home/.mcs/mcs"); import _mcs_path
 from mcs_setup import _env_write, ENV_PATH
 pw = subprocess.run(["security","find-generic-password","-s",
     "mcs-adapter","-w"],capture_output=True,text=True).stdout.strip()
@@ -996,10 +996,10 @@ fallback で auto_login が動作）。スクリプトは
 - docs SVG内の旧パス `mcs/mcs_view.py` → `mcs/ops/mcs_view.py`
 
 **観測(対応保留・正直な報告)**:
-- attachments 10GB・5268件 — 保持ポリシー無し(archive設計だが無制限成長)
-- decode ~3t/s(16GB・swap~9GBのメモリ圧)が根本律速 → >900tok出力は
+- attachmentsの無制限成長を当時確認した。端末固有の保存容量・件数は除去。
+- 当時の観測ではメモリ圧によるdecode律速で長い出力が予算を超えた（端末固有の容量・swap・処理速度は除去済み）→出力契約と品質を保つ範囲で対策を評価する。
   TIMEOUT=300に届き失敗するケースが残る
-- extract_llm 24h実績 ~708件/日(backlog ~6.8K) — 予測~1,500/日を下回る
+- extract_llmの進捗が見込みを下回った。端末固有の実績・残数・日数見積りは除去。
   (再起動直後の失敗バッチ+メモリ圧の影響)
 - gbrain側のnightly失敗(transcripts ingest/dream "legacy writer"拒否)は
   mcs管轄外だが併記
@@ -1011,13 +1011,13 @@ fallback で auto_login が動作）。スクリプトは
   (name/bytes/sha256/urlは保持)。pending/failedは不触。housekeeping
   stageで毎tick実行。`attachments_pruned`をrun結果に記録
 - **②decode低速の原因特定**: llamacpp.log全履歴分析で —
-  np=1時代 17.1t/s → np=2 16.6t/s → **np=3時代 7.4t/s** → np=2復帰後も
-  7.7→5.9→3.7→**3.6t/s**と漸次低下。`-c 49152`(差戻し済)や`-ub 1024`
-  ではなく、**PhysMem 15G中 13G wired・残73MB**の蓄積的メモリ圧が主因
+  当時のログでは処理速度が継続的に低下し、単なるslot数や引数の変更だけでは
+  説明できなかった。端末固有の処理速度・比較構成値は除去。
+  **蓄積的なメモリ圧**を主因と判断した。物理メモリ・wired・空き容量の実測値は除去。
   (Metal確保がwired計上・np=3期以降の他プロセス成長+swap蓄積)。
-  再起動後もswap 9GBで回復せず。恒久策はHW増設のみ、現状は
+  再起動後も十分な回復を確認できず、当時は資源制約として扱った。端末固有のswap値は除去。
   backlog消化による自然緩和待ち
-- **③実効~708/日**: 様子見(安定後に再計測)
+- **③実効処理量**: 当時は様子見とし、安定後の再計測を予定。端末固有の見積値は除去。
 - **④gbrain nightly失敗**: mcs管轄外として様子見
 
 ## canonical有効化前修正 C01–C07(監査報告対応)

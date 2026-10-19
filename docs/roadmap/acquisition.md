@@ -50,7 +50,7 @@
 - `valid_mcs_db` は `mcs/core/ledger.py:1892-1970`、`publish_snapshot` は :1856-1889。旧 ROADMAP の `:1858-1900` は両者の途中で不正確だった。
 - 暗号化・オフサイトの実装はない。`rg -n 'encrypt|decrypt|cipher|aes|restore_drill' mcs scripts deployment hermes_plugin integration ci tests` は 0 件。旧 ROADMAP の `rg 'encrypt\|restore_drill'` は ripgrep では `\|` がリテラルなので 0 件は当然で、根拠になっていなかった。
 - 制限は明文化済み: `SECURITY.md:57-58`、`SECURITY.md:44-47`、`docs/specs/lifecycle-spec.md:187-200`。
-- 規模: 2026-09-23 の記録で約 76MB・189 患者・15,398 メッセージ（`docs/dev-records/continuation-20260923.md:224`）。現在値は【未確認】。暗号化・転送のコストは小さい。
+- 規模: 当時の端末に固有のDB容量・患者数・メッセージ数は公開記録から除去した。暗号化・転送の負荷は各環境の容量とストレージで確認する。
 - 外部プロセスの前例: `security`（`mcs_adapter.py:720-722`、`mcs_setup.py:587-630`）、`launchctl`（`mcs_util.py:351-373`）、`git`、`hermes`（`notify_flush.py:64-66,654`）。`gate_stdlib_only`（`ci/gates.py:96-122`）が見るのは Python の import だけで、core の subprocess は禁止されていない（禁止は plugin の subprocess: `ci/gates.py:174-`）。
 - 【実行確認】OS 同梱の `/usr/bin/openssl` は LibreSSL 3.3.6、PATH 先頭の Homebrew は OpenSSL 3.6.4。cron wrapper は PATH を `$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin` に固定する（`deployment/scripts/mcs_check.sh:7-8`）ので、実行時は LibreSSL になる。
   - `openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 -salt -pass stdin -in F -out G` は両者で相互に復号でき（`Salted__` 形式）、鍵導出は約 0.36 秒。
@@ -269,7 +269,7 @@
 | `hermes send`（`mcs/notify/notify_flush.py:641-666`） | `subprocess.run(timeout=min(180, remain))` | 超えない。ただし `remain` が小さいと途中打切りで `_SendUncertain` → hold になり、**deadline が不確実性を作る**。下限がない | :647-657、:663-666 |
 | `extract.run_pending`（`extract.py:332-357`） | なし | 超える。`RULE_VERSION` 更新後は全件を 1 tick で再抽出し、1 行ごとに commit（`ledger.py:1814-1820`） | `run_check.py:655-659` |
 | `rollup.rebuild_many`（`rollup.py:394-403`） | なし | 超えうる | `run_check.py:701-712` |
-| `daily_backup` の再検証と `publish_snapshot` | なし（毎 tick） | DB サイズに比例。約 76MB では秒オーダー | `maintenance.py:55`、`run_check.py:1089` |
+| `daily_backup` の再検証と `publish_snapshot` | なし（毎 tick） | DB サイズに比例。端末固有の容量・所要時間の記録は除去 | `maintenance.py:55`、`run_check.py:1089` |
 | SQLite の busy | `timeout=30`・`busy_timeout=30000` | 1 文あたり最大 +30 秒 | `ledger.py:110,123` |
 | `bounded_call` の kill 後の回収 | `process.communicate()` に timeout なし | 理論上のみ | `mcs_worker.py:65,70` |
 | プロセス全体 | 外側は hermes cron の script timeout 3600 秒（テスト定数） | 固着するとロックを最大 3600 秒保持 | `tests/meta/test_deployment_scripts.py:12-14` |

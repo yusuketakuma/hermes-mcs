@@ -358,7 +358,7 @@ python3 mcs/semantic/eval/semantic_evaluation.py --input new-labelled/evaluation
 
 ## 要約v4次期推論エンジン統合実装計画（段階実装中）
 
-この節は当初の推論エンジン計画を記録する。現行G6の追加条件は封印候補評価仕様を優先する。以下は次期**推論エンジンv4**の実装・検証・切替条件を定める。七領域と要約刷新を一つにしたタスク、依存関係、障害復旧、Discord/Slackのスレッド配送、導入更新、外部連携の詳細は、Hermes作業場の `/Users/yusuke/.hermes/hermes-agent/.omo/plans/mcs-seven-domain-reliability.md` のIS-1〜IS-8 / Todo 1〜20を正本とする。ここではv4の臨床品質・速度・排他・版移行を読み切れる契約にする。計画段階であり、実MCS、患者データ、ローカルLLM、Jev、Discord/Slack、本番DBや稼働設定にはアクセスも変更もしない。
+この節は当初の推論エンジン計画を記録する。現行G6の追加条件は封印候補評価仕様を優先する。以下は次期**推論エンジンv4**の実装・検証・切替条件を定める。七領域と要約刷新を一つにしたタスク、依存関係、障害復旧、Discord/Slackのスレッド配送、導入更新、外部連携の詳細は、Hermes作業場の `/path/to/home/.hermes/hermes-agent/.omo/plans/mcs-seven-domain-reliability.md` のIS-1〜IS-8 / Todo 1〜20を正本とする。ここではv4の臨床品質・速度・排他・版移行を読み切れる契約にする。計画段階であり、実MCS、患者データ、ローカルLLM、Jev、Discord/Slack、本番DBや稼働設定にはアクセスも変更もしない。
 
 ### 計画作成時の制約と区別する版
 
@@ -396,7 +396,7 @@ v4がPENDING/NEEDS_REVIEW、原文変更中、Jev未評価、旧参照未移行�
 
 ### 実測で選ぶスロット数とバックログ/リアルタイムの厳密な非重複
 
-この設計時点のテンプレートはllama-server `-np 2 -c 65536`だった。現行の配布テンプレートは`-np 3 -c 49152`（16,384token/slot）で、実機の設定・容量検証をこの文書から推定しない。以下の2枠比較は設計時点の条件で、複数枠は同じdecode batchを共有する（`deployment/launchagents/ai.mcs.llamaserver.plist`; [llama.cpp server batching](https://github.com/ggml-org/llama.cpp/blob/d81aef19941e145d04f88fb180ea89a67d052ab5/tools/server/README-dev.md#batching)）。**3枠を必須値にしない**。1枠・設計時点の2枠・3枠をまず同じ入力と排他条件で比較し、4枠以上もコンテキストとメモリが成立する場合に候補とする。総コンテキスト65536を3枠へ均等割りするなら算術上約21,845token/slot、従来の約32,768token/slotを維持するには総量98304と追加KVメモリが必要だが、実際の`n_ctx`/KV配置は稼働するbinaryで確認する。本機は`hw.model=Mac16,10`、搭載メモリ16GiBと確認したM4 Mac miniで、Apple公称120GB/sはこの処理の実効帯域ではない（[モデル識別](https://support.apple.com/en-us/102852)、[技術仕様](https://support.apple.com/en-us/121555)）。
+この設計時点のテンプレートはllama-server `-np 2 -c 65536`だった。現行の配布テンプレートは`-np 3 -c 49152`（16,384token/slot）で、実機の設定・容量検証をこの文書から推定しない。以下の2枠比較は設計時点の条件で、複数枠は同じdecode batchを共有する（`deployment/launchagents/ai.mcs.llamaserver.plist`; [llama.cpp server batching](https://github.com/ggml-org/llama.cpp/blob/d81aef19941e145d04f88fb180ea89a67d052ab5/tools/server/README-dev.md#batching)）。**3枠を必須値にしない**。1枠・設計時点の2枠・3枠をまず同じ入力と排他条件で比較し、4枠以上もコンテキストとメモリが成立する場合に候補とする。総コンテキスト65536を3枠へ均等割りするなら算術上約21,845token/slot、従来の約32,768token/slotを維持するには総量98304と追加KVメモリが必要だが、実際の`n_ctx`/KV配置は稼働するbinaryで確認する。導入端末の機種・搭載メモリ・機種別の公称帯域は環境固有のため公開記録から除去した。
 
 本番には全ての実際の接続元（MCS、Hermes主処理/補助/委譲/cron、GBrainを含めて検出した経路）を分類する**共通の強制受付境界**が先に必要。MCSの自動新着抽出は「新着優先BACKLOG」であり、人が待つ対話RTとは区別する。classは認証済み経路と操作種別で決め、clientの自己申告だけでRTへ昇格させない。backend直結・旧URL・未分類・fallbackを拒否できない場合、MCSだけのslot固定では非重複を保証できずv4の本番切替はNO-GOとする。受付世代epochと要求の終端を耐久記録し、`O_BACKLOG * O_RT = 0`を**送信前予約からbackend終端確認まで**維持する。server内の待機要求、取消し待ち、結果不明、Jev/QC中のjobも反対classへの切替を許さない。RT到着と新規背景受付の停止を原子的に行い、背景の自然完了または旧backend終了の確認**後**にRTを送る。stock serverへcancelを送っただけ、timeout・切断・`/slots`の一瞬の空きでは終了とみなさない。controller/backend再起動・旧epochの要求・結果不明は双方を閉じて照合する。RT継続流入中にも背景progressを保証するには実測で長さを決めた背景保護時間帯が必要だが、その間のRTは待機/延期し、排他を緩めない。滞留年齢・受付待ち・資源不足を明示する。
 
@@ -409,4 +409,4 @@ v4がPENDING/NEEDS_REVIEW、原文変更中、Jev未評価、旧参照未移行�
 3. **品質・性能ゲート**: 現行 `evaluation/g6-criteria-v2.json` の封印済みheld-out testで許可済み実データの人手ラベル**200件以上**と患者/thread/層別・metric別分母下限を満たし、`mandatory_fact_recall=rendered_fact_recall=evidence_closure=1.0`、`silent_drop=critical_overclaim=loop_false_resolution=0`、既存のrecall/precision/defer閾値を一つも緩めない。薬剤師の負担軽減は盲検比較で確認時間・照合手順と誤見逃しを実測して別に証明する。`evaluation/README.md`の**全巡回p95<15分**を維持し、従来2枠に対して同条件でRT遅延の非劣化と計測誤差を超える処理容量改善を確認する。合成評価だけで臨床G6合格や短縮を宣言しない。
 4. **本番移行の停止点**: 原文の継続保存・旧参照の安全な切替・全クライアント入口排他・採用枠数での実モデル容量・G6人手評価・version-bound activationのいずれかが欠ければ切替しない。configだけでcanonical/enforceを有効化しない。運用者が別途承認した設定と評価receiptに従い、小さな対象→段階拡大し、問題時には新規v4受付を閉じ、まだ旧生成成果が存在する対象だけ旧版を明示選択する。既に上書き済みなら原文+pendingへ戻し、有限の再処理なしに旧結果を復元したと偽らない。既発行通知・原文は切替操作で削除しない。
 
-本節は現行実装の合格証明ではない。コードと資料の照合表、反例、合成実行の範囲、未測定条件はHermes作業場の調査記録 `/Users/yusuke/.hermes/hermes-agent/.omo/ulw-research/20260925-112553/SYNTHESIS.md` に残す。今ある実証は完全合成の41件欠落、policy fingerprint衝突、Jev回答欠落、非PASS v4 reader誤選択と、既存のmandatory表示・修復テスト6件の成功までである。
+本節は現行実装の合格証明ではない。コードと資料の照合表、反例、合成実行の範囲、未測定条件はHermes作業場の調査記録 `/path/to/home/.hermes/hermes-agent/.omo/ulw-research/20260925-112553/SYNTHESIS.md` に残す。今ある実証は完全合成の41件欠落、policy fingerprint衝突、Jev回答欠落、非PASS v4 reader誤選択と、既存のmandatory表示・修復テスト6件の成功までである。

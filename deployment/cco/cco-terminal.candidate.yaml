@@ -2,8 +2,8 @@
 # This restricts terminal/file tools; host-side plugins and other tools are separate.
 terminal:
   backend: docker
-  # Verified local image ID; must exist on the deployment host.
-  docker_image: sha256:8f958bdc1b4a422bfafd97cab4f69836401f616ae985d4b57a53d254f5bcb038
+  # Replace placeholders with an independently verified deployment image and root.
+  docker_image: __VERIFIED_IMAGE_DIGEST__
   cwd: /workspace
   docker_mount_cwd_to_workspace: false
   docker_network: false
@@ -11,10 +11,10 @@ terminal:
   docker_env: {}
   docker_extra_args: []
   docker_volumes:
-    - /Users/yusuke/.mcs/data/snapshots:/mcs/snapshots:ro
+    - __MCS_ROOT__/data/snapshots:/mcs/snapshots:ro
     # Proposals only — NEVER mount data/cmd rw here. The command queue
     # applies any file carrying human_confirmed:true verbatim; an LLM
     # that can write it can self-declare human approval. A human
     # promotes a proposal into data/cmd via the plugin confirm path,
     # which produces the receipt boundary.
-    - /Users/yusuke/.mcs/data/cmd-proposals:/mcs/cmd-proposals:rw
+    - __MCS_ROOT__/data/cmd-proposals:/mcs/cmd-proposals:rw

@@ -1,0 +1,33 @@
+{
+  "category": "changed",
+  "title": "配布する設定例から個別端末への依存を除去",
+  "summary": "配備候補と文書から個別端末のホームパス、ローカルイメージID、機種固有の記載を除きました。CCOの設定候補と承認票は未承認のひな形として提供します。",
+  "upgrade": "CCO候補を利用する場合は、私有作業領域で導入先パスと検証済みimage digestを明示的に置換し、描画後の候補を確認・承認してください。承認票と環境固有のhashはrepo外に保管します。既存の稼働設定は自動変更しません。 コードhashに束縛された候補や保留receiptは更新で失効するため、再評価・人承認は従来の手順に従ってください。",
+  "details": [
+    "配備用YAMLは導入先を表すプレースホルダーを持ち、変数の自動展開や暗黙の適用を行わない。",
+    "旧承認例の端末別パスと設定hashを除き、template_not_approvedで未承認を明示。",
+    "過去記録の事故IDや判断を保ちつつ環境固有の記載を汎用化し、実機の再観測やGit履歴の書換えは行わない。",
+    "ソースの説明コメントと手書き履歴から、個別端末の実測件数・処理速度・保存容量・選択構成・プロセス識別を除去。事故の原因と修復判断、公開の既定値・timeout・lane・モデル契約、schema・安全条件・検証識別子は保持。",
+    "旧版の変更記録は個別端末の値だけを一般化し、対応する生成文書は既存の生成手順で同じ版へ同期する。新しい性能値や配備成功を補作しない。",
+    "本文の追加確認で見つかった観測時間・件数・観測窓の説明も一般化し、実行部分の一致を確認。製品の閾値、予算式、timeout、lane、modelと事故識別子は変更しない。"
+  ],
+  "refs": [
+    "deployment/cco/cco-terminal.candidate.yaml",
+    "deployment/cco/cco-approval-scope.json",
+    "deployment/cco/cco-terminal-isolation.md",
+    "mcs/core/ledger.py",
+    "mcs/core/maintenance.py",
+    "mcs/extract/llm/extract_llm.py",
+    "mcs/llm/local_llm.py",
+    "mcs/semantic/semantic_transport.py",
+    "deployment/launchagents/README.md",
+    "docs/dev-records/continuation-20260923.md",
+    "docs/roadmap/task-extraction.md",
+    "mcs/core/mcs_queries.py",
+    "mcs/core/scheduled_jobs.py",
+    "mcs/ingest/run_check.py",
+    "mcs/semantic/semantic_runtime.py",
+    "mcs/semantic/semantic_drain.py",
+    "deployment/scripts/llamacpp_restart_if_idle.sh"
+  ]
+}

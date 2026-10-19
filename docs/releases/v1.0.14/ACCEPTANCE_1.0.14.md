@@ -90,7 +90,7 @@ REVIEWED/sourceの現存対象と `v1.0.13` のhash一致を確認し、前版�
   [タグ検証](https://github.com/yusuketakuma/hermes-mcs/actions/runs/37377319173)とも成功。
 - 同SHAの隔離archiveはPython3.10/3.13で46項目成功、新規導入合成テスト76件成功。
   1015 trackedファイルの内容・権限を照合し、検証後も不変だった。
-- 実機はHermes/Slack構成。対象版bootstrapのplanはroute=noop、阻害なし、schema9。
+- 端末固有の接続構成値は除去。対象版bootstrapのplanはroute=noop、阻害なし、schema9。
   ソース取得・DB移行は不要だった。既存更新ロックと停止markerを使って抽出を停止し、
   `mcs_setup.py services`で所有サービスを同期してから、抽出ワーカー2本とgatewayを再起動した。
   いずれも旧PIDから新PIDへ変わり、launchdのrunning状態を確認した。

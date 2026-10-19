@@ -3,9 +3,9 @@
 #
 # Waits for a moment with no slot mid-request so in-flight MCS drains /
 # gbrain nightly calls are not killed. The 24/7 extract drainers mean
-# the server is rarely idle for long, but is_processing flips false in
-# the ~1s gap between drainer calls — poll for up to 15 min for one of
-# those gaps, then restart anyway: a killed call only costs one retry
+# the server is rarely idle for long, but is_processing becomes false
+# between drainer calls. Poll within the bounded wait for such a gap,
+# then restart anyway: a killed call only costs one retry
 # (drainers re-attempt), while never restarting lets memory fragment
 # for weeks. The /slots key is "is_processing" (was mis-read as
 # "processing" once — that variant always saw 0 busy and restarted

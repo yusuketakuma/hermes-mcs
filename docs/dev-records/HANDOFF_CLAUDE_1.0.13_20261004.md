@@ -100,7 +100,7 @@ installer recovery配備/bootstrapより前で阻害。Ops439・installer68・ma
 親の確認用読取りevalは中断後に完了通知を受けた。副作用なし、引継ぎ作成以外の
 実装/検証を再開していない。全出力は次に保存されているが、
 引継ぎ先で利用できなければ該当3ファイルを読み直す:
-`/Users/yusuke/.omo/agent/sessions/--Users-yusuke-.mcs--/2026-10-04T02-14-29-700Z_01a104b0-fa44-7e46-bd59-dce4ae9e495c-artifacts/local/detached-eval-call_GNjnpNZZO2DfsH8qXFkETpw4_fc_07fee2acfe5dea24016ac2513d744c87d0bc4280c05025dc38.log`
+`/path/to/home/.omo/agent/sessions/--Users-yusuke-.mcs--/2026-10-04T02-14-29-700Z_01a104b0-fa44-7e46-bd59-dce4ae9e495c-artifacts/local/detached-eval-call_GNjnpNZZO2DfsH8qXFkETpw4_fc_07fee2acfe5dea24016ac2513d744c87d0bc4280c05025dc38.log`
 
 ### C0/C1
 

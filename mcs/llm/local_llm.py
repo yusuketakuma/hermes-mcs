@@ -87,11 +87,9 @@ def lane_slot(lane) -> int:
     return LANES[lane]
 
 
-# Backlog lanes take turns on the shared GPU: with two slots decoding
-# at once, one lane's prompt phase stalls the other's decode to a token
-# per ubatch (measured 2026-10-18: 58 t/s alone, 10 t/s average). A
-# backlog worker sets MCS_LLM_TURN_LOCK to a lock-file path and every
-# chat() of that process then holds one flock across the request.
+# Backlog lanes take turns on the shared GPU to avoid prompt/decode
+# contention. A backlog worker sets MCS_LLM_TURN_LOCK to a lock-file path
+# and every chat() of that process holds one flock across the request.
 # Realtime (lane 1) never takes it.
 TURN_LOCK_ENV = "MCS_LLM_TURN_LOCK"
 TURN_LOCK_POLL_S = 0.2

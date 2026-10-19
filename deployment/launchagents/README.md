@@ -142,8 +142,8 @@ llama-server は `-c 49152 -np 3`（各枠16384 tokens）。枠はレーン1/2/3
 レーン2/3は1つのflock（`MCS_LLM_TURN_LOCK`、`data/llm_turn.lock`。
 `extract_llm` が起動時に設定）でGPUを交互に使い、HTTP要求中だけ保持する。
 旧可変枠（`_ELASTIC_*`、`elastic_hold`/`elastic_resume`）は削除した。
-2026-10-18の所有者機の実測では2枠同時のデコードが平均約10 t/s、単独では
-58 t/sで、1枠ずつ全速で回す方が総量が多い（保証値ではない）。
+バックログの通信をターンロックで直列化し、共有GPU上のprompt/decodeの競合を避ける。
+端末固有の処理速度の実測値は公開記録から除去した。性能は各環境で確認する。
 抽出は既存のclaim lease、semantic/QC はジョブ別flockで
 重複実行を防ぐ。DB更新時は run.lock を保持し、LLM・Jev の実際の通信中
 だけ解放する。通信後はロックを再取得し、既存の世代・source・config
@@ -189,4 +189,4 @@ skip してログに記録し exit 0 — 日次 cron の失敗にはしない。
 ## ollama（embedding）
 
 `OLLAMA_KEEP_ALIVE=2m` を ollama の LaunchAgent plist に設定し、
-embedding model の常駐(~2.2GB)を防ぐ。llama-server の decode 競合緩和。
+embedding model の常駐を防ぐ。llama-server の decode 競合緩和。

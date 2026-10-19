@@ -19,6 +19,6 @@ READMEは10分収集の既定・表示/押下者・本人操作・外部送信/�
 
 文書作業のチェック: release_notes.py check、readme_release.py --check、update_readme.py --check、Slack7組/LINE WORKS2組の生成器 --check、git diff --check は全てexit0。既存archive88件と移動43件のbytes、1.0.12以下CHANGELOGの完全保持をassertで確認。Releaseタイトル/本文をCHANGELOGから /tmp/mcs-release-1.0.13-final-{title.txt,body.md} へexport済み。
 
-runner初回はPATHのPython3.14にpytestがなくexit1。既存runnerのMCS_TEST_PYTHONに /Users/yusuke/.mcs/.venv/bin/python を指定して隔離再実行し、tests/releaseは22 passed・26 subtests passed、exit0（1.97秒）。成功結果を初回環境失敗へ上書きしない。全体runtime/SDK/archive結果は受入票の既存証拠を再利用し、文書編集から実機成功を推定しない。
+runner初回はPATHのPython3.14にpytestがなくexit1。既存runnerのMCS_TEST_PYTHONに /path/to/home/.mcs/.venv/bin/python を指定して隔離再実行し、tests/releaseは22 passed・26 subtests passed、exit0（1.97秒）。成功結果を初回環境失敗へ上書きしない。全体runtime/SDK/archive結果は受入票の既存証拠を再利用し、文書編集から実機成功を推定しない。
 本番Python3.11 whole runnerはhermes_yaml不足でintegration collect失敗を保持（親実行）。tests/結果・最終CI・公開・本番適用は親の後工程。
 commit/push/tag/公開/サービス再起動・実データ操作は文書担当では実施していない。

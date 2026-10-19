@@ -1,3 +1,5 @@
+> 個別端末の実測値は公開用に一般化しています。版・原因・安全条件・判断の履歴は保持しています。
+
 # Changelog
 
 ## [Unreleased]
@@ -321,8 +323,7 @@ watchdog の再配置が必要。
 ### 修正した問題
 
 - **配送（hermes_plugin）** — tick ごとの journal 全件走査を
-  差分読みに置換（1 tick の読み取りが約 1MB で増え続けていたのを
-  一定に）し、保持中の view が後の refresh で書き換わる潜在不具合を
+  差分読みに置換（履歴に伴う読み取り量の増加を抑制）し、保持中の view が後の refresh で書き換わる潜在不具合を
   修正。巻き戻った配送の fence、変化した source 上で拒否された
   begin のカード即時再発行、配送済み本文の破棄、signal 通知 off
   時の render claim、旧世代 worker が知らない feature を持つ spec
@@ -401,7 +402,7 @@ services` の reconcile が必要。
   手がかり表現がある場合のみ採用し、根拠のないイベントは破棄
   して修復パスへ回す。口語表現（倒れ/移り/処置/伺い 等）も
   手がかり語彙に追加。実測で events は QC の NO_MATCH 最大
-  分類（約7割）だった
+  分類だった
 - **不足抽出に1回限りの修復を付与** — 300字以上の単一チャンク
   本文で実フィールド ≤2 しか出ない artifact は内容形状から
   thin を再判定して一度だけ再抽出する（`meta.thin` 未記録の
@@ -411,8 +412,8 @@ services` の reconcile が必要。
   だが thin 記録は残す
 - **ルール(v1)検出を LLM 出力へフィールド単位で統合** — LLM の
   部分的なイベント一覧が v1 限定の検出（medication・
-  adherence・media_ref、約400件の eol）を、部分的な vitals
-  dict が v1 限定の計測値（約520件）を隠していた。イベントは
+  adherence・media_ref・eol）を、部分的な vitals
+  dict が v1 限定の計測値を隠していた。イベントは
   union、vitals はキー単位で LLM 優先のマージに変更。フィールド
   ごとの優先規則をモジュール docstring に契約として記録し
   `notify_flush`・カード描画とのドリフトを防ぐ
@@ -848,7 +849,7 @@ Discord 通知を「カード＋コンパニオンスレッド」の対話型モ
 - **`extract_llm` が並列実行できる** — `run_pending` の LLM 呼出しを
   ワーカー並列化（`--all --workers N`、既定はサーバスロット数）。
   DB 読み書きは呼出しスレッド専有で直列化し、形式検出は fan-out 前に
-  1回だけ行う。実測で約100件/時→約294件/時
+  1回だけ行う。並列呼出しに対応する
 - **夜間の semantic/QC 一括処理** — `semantic_drain --drain` と
   launchd 常駐 drainer（`ai.mcs.extract-drainer[-rt]`、shard 分割）を
   追加。`deployment/scripts/` に定期実行スクリプトの正本を集約

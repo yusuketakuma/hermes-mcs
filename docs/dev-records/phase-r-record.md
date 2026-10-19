@@ -7,7 +7,7 @@ Recorded: 2026-09-20
 
 | item | value |
 |---|---|
-| repo | `/Users/yusuke/.mcs` → `yusuketakuma/mcs-adapter` @ `main` |
+| repo | `/path/to/home/.mcs` → `yusuketakuma/mcs-adapter` @ `main` |
 | baseline | `a8896ec`（R-00 manifest: `docs/r00-baseline.md`） |
 | RF-CODE code tree | `46cffb0`（baseline + `9d2c6d1` REF + `46cffb0` FIX。docs commitは記録用で対象ツリー外） |
 | 変更対象 | `adapter/` 13 modules + 2 test files。`docs/`。`data/`, `chrome-profile/`, `config.json`, `token_cache.json` は gitignore 通り非対象 |
@@ -70,7 +70,7 @@ Recorded: 2026-09-20
 
 ## 8. RF-OPS（本番運用ゲート）
 
-- [x] 複数tick連続観察 — 現行 run.log ローテーション内で 176/181 tick が `ok:true`（launchd 15分間隔、2026-09-20 実測。非致命エラーは `attach download_too_large` 等の既知項目のみ）。Phase J tree deploy 後も正常継続中
+- [x] 複数tick連続観察 — 現行 run.log ローテーション内で 記録したtick が `ok:true`（launchd 15分間隔、2026-09-20 実測。非致命エラーは `attach download_too_large` 等の既知項目のみ）。Phase J tree deploy 後も正常継続中
 - [x] lock競合の実発生確認 — run.log に有機発生 `lock_held` 4件 + 制御実演（2026-09-20: lock保持中に `semantic.py --drain` / `rollup.py` / `extract.py` がすべて `{"ok":false,"error":"lock_held"}` rc=3 で拒否、DB非接触で終了）
 - [x] snapshot→mcs_view読取の手動確認 — `mcs_view.py status`/`loops` が `snapshots/ledger-snapshot.db`（tick毎再生成、generation `132635ac…`）を正常読取（2026-09-20）
 - [x] rollback手順の実演（下記9） — baseline `a8896ec` worktree で86テスト全パス。同一コードが本番DB複製（schema v7、15,375 messages）を Ledger 経由でそのまま読取可能 — schema変更なしのため revert で完全に戻ることを確認（2026-09-20）

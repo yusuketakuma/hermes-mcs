@@ -4,8 +4,8 @@
 
 ## 切替前に確定する対象
 
-- MCS候補：`/Users/yusuke/.codex/worktrees/mcs-20260920-continuation`、基準HEAD `842125da858d4bddc09e7e778bee5e6068c521d9`。
-- Hermes候補：`/Users/yusuke/.codex/worktrees/hermes-mcs-discord-20260920`、基準HEAD `b6e863a213777c3d9e75a9ae4e7a2c0b8a33566d`。
+- MCS候補：`/path/to/home/.codex/worktrees/mcs-20260920-continuation`、基準HEAD `842125da858d4bddc09e7e778bee5e6068c521d9`。
+- Hermes候補：`/path/to/home/.codex/worktrees/hermes-mcs-discord-20260920`、基準HEAD `b6e863a213777c3d9e75a9ae4e7a2c0b8a33566d`。
 - 固定overlay `mcs-candidate-20260921-g0`はその時点の候補。後続の盲検candidate固定修正・文書修正を含まないため、切替対象としては再固定が必要。
 - 実起動定義の全writer、Python実行パス、作業ディレクトリ、HOME、Hermes profile、plugin参照先、再起動対象を切替記録に明示する。候補repo内にはlaunchd定義がない。実配置の読み取り結果は末尾に記録する。
 
@@ -36,19 +36,19 @@ projectのpauseはOFFと異なり、意味機能ONで到着した新入力のpen
 
 ## 実配置の読み取り確認（2026-09-21）
 
-`~/Library/LaunchAgents/local.mcs-{check,cmd,deep}.plist`をplistlibで読んだ。サービス操作はしていない。3本ともPythonは`/Users/yusuke/.hermes/hermes-agent/venv/bin/python`、入口は`/Users/yusuke/.mcs/adapter/run_check.py`。WorkingDirectory/EnvironmentVariablesの指定なし。
+`~/Library/LaunchAgents/local.mcs-{check,cmd,deep}.plist`をplistlibで読んだ。サービス操作はしていない。3本ともPythonは`/path/to/home/.hermes/hermes-agent/venv/bin/python`、入口は`/path/to/home/.mcs/adapter/run_check.py`。WorkingDirectory/EnvironmentVariablesの指定なし。
 
 | label | 起動条件 | 引数 |
 |---|---|---|
 | local.mcs-check | 毎時00/15/30/45分、RunAtLoad=true | --json --download-files |
-| local.mcs-cmd | WatchPaths=/Users/yusuke/.mcs/data/cmd | --json --download-files |
+| local.mcs-cmd | WatchPaths=/path/to/home/.mcs/data/cmd | --json --download-files |
 | local.mcs-deep | 毎時07/37分、RunAtLoad=false | --json --jobs-only |
 
 これはplist上の定義であり、launchdへの現在のロード状態やprocessの生存を証明しない。checkとcmdのRunAtLoad/監視条件を踏まえ、切替時に意図しない巡回を起動しないよう3本を一体で扱う。
 
 実ディレクトリは`.mcs/data/cmd`と`.mcs/data/snapshots`で、候補のjob_ops/maintenance定数と一致する。`.mcs/cmd`と`.mcs/snapshots`は存在しない。上位`.mcs`と`data`は0700、cmd/snapshotsは0755。末端modeだけからCCOのアクセス可否を判断できないため、別利用者・mount・ACLを含む実権限検証は未実施のまま。
 
-既定profileの`/Users/yusuke/.hermes/plugins/mcs-discord-commands`は存在しない。他profileの配置は未確認。plugin導入済みとは報告しない。inbox/snapshot設定例の`/mount/mcs/...`は公開mount内の例であり、上記ホスト実パスと同一視しない。
+既定profileの`/path/to/home/.hermes/plugins/mcs-discord-commands`は存在しない。他profileの配置は未確認。plugin導入済みとは報告しない。inbox/snapshot設定例の`/mount/mcs/...`は公開mount内の例であり、上記ホスト実パスと同一視しない。
 
 
 ## CCO profileの読み取り確認

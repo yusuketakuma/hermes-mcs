@@ -115,7 +115,7 @@ specialist_categories[0].name, stations[0].name`。押下時刻の項目は無�
 |---|---|---|
 | [MCS adapter](../../mcs/ingest/mcs_adapter.py) | `_norm_message`は`count.thread_messages`だけを読み、`reactions`を捨てる。`extend_session=False`・deadline・認証・通信境界がある | `_norm_message`で`reactions[]`を解析（第0層）。1件・一括再取得と押下者一覧のGETを追加（第1・2層） |
 | [収集tick](../../mcs/ingest/run_check.py) | 未読・履歴・返信・self probe・reconcile・連携サマリーの段階がある。`stage_karte_summary`は上限/tick・余白・理由コード付きのbounded GETの前例 | 同じ型で監視集合の再取得段階を追加する。本文通知を遅らせない |
-| [自己識別](../../mcs/signals/mcs_signals.py) | `self_profile_v1.sender_id`は実測None。自局名簿`station_staff_v1`の`is_self`は未使用。`rollup.reply_state`は氏名文字列で送信者を比較 | F-7: `is_self`の`staff_id`を本人IDの既定にし、本人/自局のID判定を提供する。CLI自局判定は名簿/送信者ID欠損時null。本人スタンプの`self_reacted`契約は実API対照で確認する。既存signalの所属/職種による応答候補は同一性判定と区別する |
+| [自己識別](../../mcs/signals/mcs_signals.py) | `self_profile_v1.sender_id`の欠損時も確認対象とする。自局名簿`station_staff_v1`の`is_self`は未使用。`rollup.reply_state`は氏名文字列で送信者を比較 | F-7: `is_self`の`staff_id`を本人IDの既定にし、本人/自局のID判定を提供する。CLI自局判定は名簿/送信者ID欠損時null。本人スタンプの`self_reacted`契約は実API対照で確認する。既存signalの所属/職種による応答候補は同一性判定と区別する |
 | [ledger](../../mcs/core/ledger.py) | 投稿本文hash・取得job・artifact・snapshotがある | 加法migration。反応は本文のupsertと別文で更新し、hash・通知・semanticの判定に触れない |
 | [閲覧](../../mcs/views/mcs_view.py) / [読み取りモデル](../../mcs/views/read_model.py) | スタンプの投影は無い | snapshotから件数・本人フラグ・観測時刻・取得状態を読む |
 | [カード](../../mcs/notify/notify_render.py) / [Slack](../../adapters/slack/cards.py) | 脚注に担当・確認・タスク。本文はthread。未確認一覧はカード単位 | 脚注に本人反応を併記、未確認一覧で反応済みを末尾へ。既存配送契約を維持 |
@@ -169,7 +169,7 @@ F-7の互換条件: 既存シグナルの`signals.self_organizations`・`self_pr
 | セッション | `no_extend_session=1`を各経路で付けて比較 | 受理の有無、期限切れの扱い | 指定付きGETの200、実cacheExpired→既存recovery成功、合成の期限切れ後optional GET打切りを確認。原session行の受理/期限切れ扱いは確認済み。実時間の非延長効果は未実証の追加事項で、必須ゲートへ追加しない |
 | 横断取得 | `/messages/mentioned`（`increment_count`なし）、`/messages/bookmarked` | 既読・セッションへの影響（#23-D1） | no_extend_session=1で両GET200・messages空。非空応答・未読true保持・session副作用は未実証。取り込み・表示は1.0.12 |
 | 更新有無 | `/projects/status?after=`を押下の前後で比較 | `updated`が反応で立つか | after=projects.paginate.timestampで200・projects.updatedはbool。反応/編集による対照は未実証 |
-| #26/#27利用件数 | medication_periods・observation_items・consultationsの登録患者数を集計 | 件数と取得範囲・失敗/未確認を分ける | 臨床100ルーム・karte ID重複除外93患者。薬歴/観測項目は各登録0/不明0・complete=true。相談は全100GET404・93患者不明・complete=false。機能実装は1.0.13 |
+| #26/#27利用件数 | medication_periods・observation_items・consultationsの登録患者数を集計 | 件数と取得範囲・失敗/未確認を分ける | 端末固有のルーム数・患者数・登録件数・取得状態は除去。確認目的と機能実装の記録を保持する。機能実装は1.0.13 |
 
 これらは原1.0.11の22-A一括確認を保持する追跡表である。2026-10-03のユーザー判断は
 「元の全確認を1.0.11に残す」。後続版で使うAPIの先行確認と、その版の機能実装は
@@ -233,7 +233,7 @@ has_unread_responsesキーを返さなかった。adapterの互換正規化で�
    現診断は未読対象への未確認経路を延期するため、各経路の安全な対照方法を先に確定する。
    `viewed`初回付与は、初回GETより前の非変更が確認された独立のbaselineが必要。
    1回目と2回目のGETが一致しても、初回付与なしの証明にはしない。
-   現在は未読0・別アカウント参加者なしで、この条件は未成立。
+   当時は確認条件が未成立だった。端末固有の未読件数・参加者の構成は除去。
 5. **M4 session確認の原要求と追加案を分ける。** 原session行は各GETの指定受理と期限切れの
    扱いであり、指定付き200、実cacheExpiredからの既存recovery成功、合成のoptional GET打切りを
    証拠として残す。実時間の非延長効果は確認していないが、新しい必須条件にはしない。
@@ -261,8 +261,8 @@ has_unread_responsesキーを返さなかった。adapterの互換正規化で�
    無操作の対照も取り、別投稿・編集・画面を開く操作と重なった`updated=true`を
    スタンプ由来と断定しない。この対照はM1の承認があれば本人だけで行える。
 9. **M8 #26/#27の利用件数を完結させる。** 全取得inventory・患者重複除外・失敗数を保ち、
-   薬歴/観測項目の登録0・complete=trueの結果を再利用する。相談の全404は、経路・対象・
-   権限等の原因を切り分けるまで93患者不明・complete=falseを維持する。0件に置き換えない。
+   薬歴/観測項目の取得確認記録を再利用する。相談の404応答は、経路・対象・
+   権限等の原因を切り分けるまで不明・不完全として保持する。未取得を登録0件に置き換えない。
 
 #### 本人だけの公式UI操作として承認に出す具体案
 

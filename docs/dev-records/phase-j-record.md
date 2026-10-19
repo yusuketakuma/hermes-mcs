@@ -209,21 +209,21 @@ python3 semantic_bench.py calibrate                               # 閾値校正
 3. `_SUMMARY_PROMPT` に2ルール追加: 「根拠候補なしの reported_fact は claim 化せず
    limitations へ」「claim は参照候補 statement の言い換えに留める」。
 
-### A/B 実測（同一コーパス20件・実メッセージ）
+### A/B実測（当時の私有コーパス・実メッセージ。件数は除去）
 
 | 指標 | baseline | v2（改善後） |
 |---|---|---|
-| findings/claim | 1.407 | **0.340** |
-| claim_without_evidence | 24 | **3** |
-| claim_quantity_unverified | 14 | 7 |
-| fact_dropped | 0 | 4 |
-| quantity_untraced / mismatch | 0 | 2 / 1 |
+| findings/claim | ［端末固有値を除去］ | ［端末固有値を除去］ |
+| claim_without_evidence | ［端末固有値を除去］ | ［端末固有値を除去］ |
+| claim_quantity_unverified | ［端末固有値を除去］ | ［端末固有値を除去］ |
+| fact_dropped | ［端末固有値を除去］ | ［端末固有値を除去］ |
+| quantity_untraced / mismatch | ［端末固有値を除去］ | ［端末固有値を除去］ |
 
-`claim_without_evidence` 88%減。新出の `fact_dropped` は「根拠なしclaimを落とした
+`claim_without_evidence`の減少を当時確認した（実測割合は除去）。新出の `fact_dropped` は「根拠なしclaimを落とした
 結果、参照されない候補が残る」正常な副産物。残る `claim_quantity_unverified` は
 claim数量と証拠quoteの対応づけ精度の課題（次段）。
 
-別途判明: 抽出の `model` 失敗が 10/20 件 — llama.cpp 温度0でもバッチ並行で揺れ、
+別途判明: 抽出の `model` 失敗が ［端末固有値を除去］ — llama.cpp 温度0でもバッチ並行で揺れ、
 slot 1 backlog 処理との競合下で 90s timeout に達するケースがある。drain は
 retryable として再試行する設計のため運用上は滞留のみ。
 
@@ -234,4 +234,4 @@ retryable として再試行する設計のため運用上は滞留のみ。
 `semantic_bench.py run` を新旧で実行し `report` 比較。候補は Q5_K_M（品質↑・
 RAM+~1GB・速度↓）。再起動中は backlog lane が止まる点に注意。
 
-**ベースライン（2026-09-21 13:50頃）**: jobs done=24/pending=52/failed=0、eligible pending=0、audit = PENDING×4+unparsed×1、findings = `claim_without_evidence`×13・`support_unevaluated`×4・`summary_unavailable`×1、Jev 39/40、extract_llm backlog 残7591。pending の大半は非eligible（trickle/attachment由来）で bundle+assess までで done になる設計 — audit 到達は notify経路の新着のみ。初速所見: ローカルLLMが証拠なしclaimを多発（`claim_without_evidence` が最多）しており、監査が正しく止めている状態。PASS率の実測は新着 eligible job が来てから。
+**当時のベースライン**: jobs・audit・findings・Jev使用量・抽出backlogを確認した。端末固有の件数は除去。pendingには非eligibleのtrickle/attachment由来が多く、bundle+assessまででdoneになる設計。auditへの到達はnotify経路の新着に限るという所見を保持。

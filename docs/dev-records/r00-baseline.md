@@ -6,10 +6,10 @@ Recorded: 2026-09-20. Phase R implementation authorized; commit+push to main per
 
 | item | value |
 |---|---|
-| repo | `/Users/yusuke/.mcs` (remote `yusuketakuma/mcs-adapter`, branch `main`) |
+| repo | `/path/to/home/.mcs` (remote `yusuketakuma/mcs-adapter`, branch `main`) |
 | baseline_commit | `a8896ec` (spec reference `d86237e` + 1 fix commit on top; spec's own note: reference point ≠ checkout target — preserved) |
 | dirty_fingerprint | clean tree (`git status` empty, no stash) |
-| runtime (production) | `/Users/yusuke/.hermes/hermes-agent/venv/bin/python` = Python 3.11.15 |
+| runtime (production) | `/path/to/home/.hermes/hermes-agent/venv/bin/python` = Python 3.11.15 |
 | runtime (test/probe) | `/opt/homebrew/bin/python3.13` = 3.13.15 (no pytest module — tests MUST run under the hermes venv) |
 | sqlite | 3.53.4; ledger schema `user_version=7` |
 | test baseline | `venv/bin/python -m pytest test_mcs_ingestion.py test_mcs_features.py -q` → **86 passed, 0.79s**; isolation: `tmp_path` + monkeypatched module constants; one e2e stub fails on any external request |
@@ -78,7 +78,7 @@ Config: `config.json` → `discord_channel_id`, `mcs_login_id`, `deep_history`, 
 ## 試験コマンド
 
 ```
-cd adapter && /Users/yusuke/.hermes/hermes-agent/venv/bin/python -m pytest test_mcs_ingestion.py test_mcs_features.py -q
+cd adapter && /path/to/home/.hermes/hermes-agent/venv/bin/python -m pytest test_mcs_ingestion.py test_mcs_features.py -q
 lint: ruff check <files>（既存指摘多数・変更差分のみ評価）
 live run: run_check.py --json --download-files（flock排他・本番副作用あり）
 ```

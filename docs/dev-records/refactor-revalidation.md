@@ -45,7 +45,7 @@ Run the owned contract file with the project runner and the pinned test
 interpreter:
 
 ```text
-MCS_TEST_PYTHON=/Users/yusuke/.hermes/hermes-agent/venv/bin/python \
+MCS_TEST_PYTHON=/path/to/home/.hermes/hermes-agent/venv/bin/python \
   scripts/run_tests.sh adapter/test_mcs_recovery_contract.py -q
 ```
 
@@ -205,7 +205,7 @@ Added only the current isolated runner and conftest network/credential guard
 to each temporary tree. Ran the same command in each root:
 
 ```
-MCS_TEST_PYTHON=/Users/yusuke/.hermes/hermes-agent/venv/bin/python scripts/run_tests.sh adapter -q
+MCS_TEST_PYTHON=/path/to/home/.hermes/hermes-agent/venv/bin/python scripts/run_tests.sh adapter -q
 ```
 
 - a8896ec: 86 passed in 1.00s.
@@ -229,7 +229,7 @@ file list; both JSON outputs are byte-identical. No read mark was generated.
 Generated timestamps were intentionally excluded; fixture inputs were equal.
 
 Evidence and reproducible probe:
-`/Users/yusuke/.codex/artifacts/mcs-ref-observable-comparison/`.
+`/path/to/home/.codex/artifacts/mcs-ref-observable-comparison/`.
 Output SHA256:
 `f63ca1578ac9f2580913d4ef58bd495594a1fa32f47167e8da2ea812aa0301c7`.
 This probe covers RT003/004/019 and text-only RT027 portions. It does not
@@ -286,7 +286,7 @@ matching g1-validation.json. The downstream fixes/features remain classified
 separately from the original REF/FIX commits.
 
 The complete changed-file overlay (including Hermes connection changes) is
-frozen in `/Users/yusuke/.codex/artifacts/mcs-candidate-20260921-g0/`.
+frozen in `/path/to/home/.codex/artifacts/mcs-candidate-20260921-g0/`.
 Its per-file hashes, base commits and archive hashes identify the precise
 candidate. This does not promote RF-OPS/G2–G7 or expand the historical
 comparison coverage described above. Documentation-only changes do not

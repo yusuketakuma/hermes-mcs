@@ -28,8 +28,8 @@ repo との drift になる。
 
 現在の `cco/cco-terminal.candidate.yaml` は snapshot 読取専用と
 `cmd-proposals` 書込み用の候補で、実行用 `cmd` は公開しない。
-`cco/cco-approval-scope.json` は旧候補の設定適用記録であり、記録の候補hashは
-現在のファイルと一致しない。現在候補の承認・適用・実機検証の証拠には使わない。
+`cco/cco-approval-scope.json` は未承認の記入用テンプレート。YAMLの導入先パスとimage digestを
+私有領域で明示的に置換し、その候補hash・承認証跡をrepo外に保存する。テンプレートを承認・適用の証拠にしない。
 背景と過去の検証範囲は [CCOの隔離設定と検証記録](cco/cco-terminal-isolation.md)
 を参照する。
 

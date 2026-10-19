@@ -7,8 +7,8 @@
 
 - 基準 HEAD: `842125da858d4bddc09e7e778bee5e6068c521d9`。
 - 基準 adapter tree: `cb2e0b0c095abb109070bba756af3b4782870706`。
-- 元 repo: `yusuketakuma/mcs-adapter`、`/Users/yusuke/.mcs`、main、開始時 clean。
-- 作業先: `/Users/yusuke/.codex/worktrees/mcs-20260920-continuation`、上記 HEAD の独立 detached worktree。
+- 元 repo: `yusuketakuma/mcs-adapter`、`/path/to/home/.mcs`、main、開始時 clean。
+- 作業先: `/path/to/home/.codex/worktrees/mcs-20260920-continuation`、上記 HEAD の独立 detached worktree。
 - 試験用 Python 3.11.15 / SQLite 3.53.1。以前の報告の SQLite 版とは区別する。
 - 元 checkout は起動定義から使われるため、逐次編集しない。実 DB、認証値、Chrome profile、実設定は今回の試験対象外。
 - 今回はローカルコード・合成テスト・文書のみ。commit、push、配備、再起動、実送信は行わない。過去の文書に記された許可を今回の許可として再利用しない。
@@ -79,7 +79,7 @@ G2の実API試験、G6の人間ラベルと正式基準、G7の配備/canaryは�
 - 回復3件: 合成DBのbackup中断、独立dir復元・添付hash・FTS・snapshot読取り。詳細は `refactor-revalidation.md`。
 - 上記のうちsnapshot／loop／通知／回復をまとめて実行: 8 passed（2026-09-20）。
 
-試験コマンドは `MCS_TEST_PYTHON=/Users/yusuke/.hermes/hermes-agent/venv/bin/python scripts/run_tests.sh ... -q`。
+試験コマンドは `MCS_TEST_PYTHON=/path/to/home/.hermes/hermes-agent/venv/bin/python scripts/run_tests.sh ... -q`。
 作業中の部分結果であり、変更確定後に影響suiteを実行して基準結果と区別する。
 
 ## 明示的な段階設定（候補版）
@@ -141,7 +141,7 @@ snapshotは取り込んだ最新policyを使って旧監査をSTALE表示する�
 ### Discord CCO接続の作業開始
 
 ユーザーが既存Hermes Discord連携を指定。稼働Hermesには変更せず、
-`/Users/yusuke/.codex/worktrees/hermes-mcs-discord-20260920`
+`/path/to/home/.codex/worktrees/hermes-mcs-discord-20260920`
 （基準`b6e863a213777c3d9e75a9ae4e7a2c0b8a33566d`）を作成。
 既存plugin handler(raw_args)には操作者情報が渡らないため、genericな
 optional `command_context`接続を追加し、認可を再確認する。
@@ -333,7 +333,7 @@ MCS固有分岐をHermes coreへ追加しない。新規discovery/dispatch2件�
 ### 旧targets修正の独立レビュー
 
 - 読取り専用の限定レビューが完了し、今回差分に確定欠陥なし。list検査後の反復、厳密int要素、source世代・対象差分・累積attempt分岐の維持と3保存入口×3値の専用回帰を確認。レビュー担当自身のテスト実行はなし。
-- ソース固定候補は /Users/yusuke/.codex/artifacts/mcs-candidate-20260921-015416/ 。MCS 72パス、Hermes 10パス。MCS fingerprint 0981337ec2900a667d08a546677f3c674991f3ca85189b57ddaae96dde9cfba3。今回レビュー結果の文書追記より前のsnapshotで、製品ソースは一致する。
+- ソース固定候補は /path/to/home/.codex/artifacts/mcs-candidate-20260921-015416/ 。MCS 72パス、Hermes 10パス。MCS fingerprint 0981337ec2900a667d08a546677f3c674991f3ca85189b57ddaae96dde9cfba3。今回レビュー結果の文書追記より前のsnapshotで、製品ソースは一致する。
 
 ### FIX: offline評価の余分なLoop候補の見落とし
 

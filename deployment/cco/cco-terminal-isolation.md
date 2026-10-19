@@ -7,10 +7,12 @@
 提案ファイルだけで人の承認とみなさず、native plugin の preview/confirm を経て
 実行用 inbox へ投入する。terminal 節だけの候補であり、config 全体を置換しない。
 
-`cco-approval-scope.json` は旧候補の `applied_config_only` 記録で、記録された
-候補hashは現在のYAMLと一致しない。以下の cmd 書込みを含むcanary結果は過去の
-構成の証拠であり、現在候補の承認・適用・実機検証を証明しない。今回、実設定や
-稼働サービスは確認・変更していない。
+`cco-approval-scope.json` は未承認の記入用テンプレートです。端末固有のパス、
+設定hash、ローカルimage IDはリポジトリに保持しません。YAMLの`__MCS_ROOT__`と
+`__VERIFIED_IMAGE_DIGEST__`、承認票の`__PROFILE_CONFIG__`は適用前に私有作業領域で
+明示的に置換します。変数展開や自動適用は行いません。描画後の候補hashと承認証跡はrepo外で保管してください。
+以下の cmd 書込みを含むcanary結果は過去の構成の記録であり、このテンプレートの
+承認・適用・実機検証を証明しません。今回、実設定や稼働サービスは確認・変更していません。
 
 ## 過去の候補と検証計画
 
@@ -20,7 +22,7 @@
 
 - terminal/fileツールへsnapshotディレクトリをread-only、既存cmdディレクトリをread-writeで公開する。原本DB・添付本体・backup・credentials・HOME全体をmountしない。
 - 自動CWD mount、環境変数転送、追加Docker引数を無効にする。コンテナのネットワークは無効。この変更でCCOの既存terminal/file経由の外部アクセスと他のホストファイル利用はできなくなるため、適用前に業務上の必要範囲を確認する。
-- imageは既存ローカルimageのIDに固定した。同IDが存在するこのホスト向けの設定で、別ホストへの移植には配布digestの確認が必要。pull/buildは実行していない。
+- 当時は既存ローカルimageを固定して検証した。環境固有のIDは除去済み。現在のテンプレートは各導入先で配布digestを検証して指定する。今回pull/buildは実行していない。
 - この設定はモデルのterminal/file実行境界だけ。native Discord pluginはgateway process内で動くため、plugin設定のsnapshot/inboxにはホスト側パスを使う。コンテナの`/mcs/...`をそのまま渡さない。他のhost-side tool/MCP/委譲先もこのDocker設定では隔離されない。
 
 検証済み：一時homeへ候補設定のみをコピーし、実コード`build_profile_terminal_scope`でbackend・2mount・network/CWD mount無効・環境転送なしを確認。コンテナは起動していない。実際の読取/書込拒否の証明ではない。
@@ -30,7 +32,7 @@
 
 ## 実Dockerの合成canary結果
 
-2026-09-21、既存ローカルimage `sha256:8f958bdc1b4a422bfafd97cab4f69836401f616ae985d4b57a53d254f5bcb038`を使用。`docker run --rm --pull=never --network=none`、一時snapshotディレクトリをreadonly mount、一時cmdをread-write mountとしてPython probeを実行した。
+2026-09-21、当時の検証用ローカルimage（端末固有IDは除去済み）を使用。`docker run --rm --pull=never --network=none`、一時snapshotディレクトリをreadonly mount、一時cmdをread-write mountとしてPython probeを実行した。
 
 snapshot読取成功、writeはEROFS、inbox書込成功をコンテナ内とホスト側で確認。非公開canary・原本DBのホストパス・Docker socketはコンテナに存在せず、/proc/net/routeは経路0件。コンテナ終了code 0、一時ファイルは終了時にcleanup済み。実原本・credential・snapshotはmountしていない。
 
@@ -46,7 +48,7 @@ snapshot読取成功、writeはEROFS、inbox書込成功をコンテナ内とホ
 
 ## ホスト側経路の確認範囲
 
-CCO profileで設定されたMCPはremote transportのgbrain 1件で、subprocess型のローカルMCP指定はない（URL・認証値は記録しない）。現状の有効pluginはbot-conversationだけ。MCS native pluginは未配置で、導入後もホスト側で動作するため、Dockerのmount制限とは別の信頼境界になる。
+個別端末の有効MCP・plugin一覧は公開記録から除去した。MCS native pluginはホスト側で動作するため、Dockerのmount制限とは別の信頼境界になる。導入先で許可する各MCP・pluginの権限を別途確認する。
 
 MCS pluginはhost contextのnative Discord/user/chat/profileと設定scopeを検査し、固定snapshotのViewと固定inboxへのenqueueだけを呼ぶ。実合成結合でpreview無書込み、確定後も原本のrunnerが適用するまでrequests不変、receiptと重複抑止を検証済み。任意shell/model toolは登録しない。
 

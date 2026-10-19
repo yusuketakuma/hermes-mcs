@@ -273,7 +273,7 @@ CREATE TABLE IF NOT EXISTS message_revisions(
 **現状**
 - sqlite.org/wal.html: 影響は 3.7.0〜3.51.2。修正は 3.51.3（2026-03-13）で、backport は 3.44.6 と 3.50.7。条件は WAL + 2 接続以上（別スレッド / プロセス）が同時に write / checkpoint すること。「タイミング依存で通常運用では起きにくい」との記述がある。3.45〜3.49 系には fix がない。
 - MCS は WAL（`ledger.py:125`）で複数 writer プロセスが同時に開く（tick、resident drainer × 2、cmd / int）ため、前提は構造的に満たされる。手動 checkpoint は restore 経路だけ（`mcs_update.py:1727`、`mcs_recover.py:661`）で、writer 停止が前提。
-- 実行 interpreter: `HERMES_PY`（`mcs_setup.py:1464-1465`）が `__PYTHON__` に展開される（:1889）。実機の drainer / cmd plist と `~/.hermes/scripts/mcs_check.sh:11` は `~/.hermes/hermes-agent/venv/bin/python`。gateway プロセスも同 interpreter。
+- 実行 interpreter: `HERMES_PY`（`mcs_setup.py:1464-1465`）が `__PYTHON__` に展開される（:1889）。配布wrapperと常駐設定は選択したinterpreterを使う。端末固有の解決結果は公開記録に保持しない。
 - 【実行確認】（2026-09-29）:
 
 | interpreter | SQLite | 備考 |

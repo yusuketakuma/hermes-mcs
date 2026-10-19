@@ -47,4 +47,4 @@
 
 整理はscoped-refactor/jevgrepを適用。review済み31コードファイルの安全な一時copyで2責務queryを試したが、JG HTTP402（concurrent requests32）により取得不能、網羅性を主張せずローカル呼出照合へ切替。動的pluginのshim、standalone互換module identity、外置き復旧8関数、署名JSONとSDKescapingは実caller/独立配布境界があり保持した。安全に削除/移動できる未使用処理は確定していない。更新処理の共有化と描画二重読取り削減を実装し、無根拠の削除/機械的分割は行っていない。
 
-復旧runtimeの実機read-only確認では明示設定Python3.14.8が現契約の3.11〜3.13範囲外。導入済みHermes3.11.15の実体を独立runtimeとして明示選択し、既存setup/installer同期で修復する準備。main checkoutはclean、develop HEADはmain ac38c81の子でFF統合可能。外部push/公開は本作業では行わない。
+復旧runtimeの実機read-only確認では明示設定Python（端末固有の選択版は除去）が現契約の3.11〜3.13範囲外。導入済みHermes3.11.15の実体を独立runtimeとして明示選択し、既存setup/installer同期で修復する準備。main checkoutはclean、develop HEADはmain ac38c81の子でFF統合可能。外部push/公開は本作業では行わない。

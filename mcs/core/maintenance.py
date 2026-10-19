@@ -427,8 +427,7 @@ def _fixed_logs() -> tuple:
 
 def prune_attachments(db_path: str) -> int:
     """Delete downloaded attachment payloads older than 14 days —
-    retention-bound the unbounded attachments/ dir (10GB in the first
-    week). The row survives as state='pruned' with name/bytes/sha256/url
+    retention-bound the attachments/ directory. The row survives as state='pruned' with name/bytes/sha256/url
     intact so views still record that the attachment existed; only the
     payload goes. 'pending'/'failed' rows are untouched — a failed
     download keeps its retry path and never ages out mid-retry.

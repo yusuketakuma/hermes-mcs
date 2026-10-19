@@ -1,6 +1,6 @@
 #!/bin/bash
 # Owner-machine benchmark for proposal 5 (background serial vs concurrent,
-# then -ub 128/256/512). Two phases because the 16 GB machine cannot hold
+# then -ub 128/256/512). Two phases to keep the memory budgets separate for
 # llama-bench and the resident llama-server at once (same model loaded
 # twice swaps). -ub is a start flag of the Hermes-owned llamacpp plist;
 # this script never edits a plist and never stops or starts a service.

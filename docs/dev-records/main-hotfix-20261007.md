@@ -30,7 +30,7 @@
 
 main 496c58bへの統合後、抽出worker再起動を検証し、gateway restart reportはsupervisor_restart_verified。Hermes gatewayの実PID生存・home一致と、両抽出worker/command watcher/復旧watchdogのloadを確認した。user domainのgatewayとgui domainのMCS servicesを区別して確認した。
 
-実機の復旧Python明示値が3.14.8で現契約3.11〜3.13範囲外だったため、導入済みHermes3.11.15の独立実体をsetup init --recovery-pythonで明示選択。servicesによる所有/idle検証と同期後、installer --no-brew --no-llm --no-servicesで外置きtoolを原本へ同期した。旧recovery世代は.prevへ保持。最初のinstallerはdesired/deployed driftで何も書かず停止し、既存手順に沿って修復後returncode0。設定差分はrecovery_pythonのみで、認証情報/通知先/権限/解析設定を維持した。実機setup check returncode0、保留marker無し、main作業ツリーcleanを確認した。
+実機の復旧Python明示値が（端末固有の選択版は除去）で現契約3.11〜3.13範囲外だったため、導入済みHermes3.11.15の独立実体をsetup init --recovery-pythonで明示選択。servicesによる所有/idle検証と同期後、installer --no-brew --no-llm --no-servicesで外置きtoolを原本へ同期した。旧recovery世代は.prevへ保持。最初のinstallerはdesired/deployed driftで何も書かず停止し、既存手順に沿って修復後returncode0。設定差分はrecovery_pythonのみで、認証情報/通知先/権限/解析設定を維持した。実機setup check returncode0、保留marker無し、main作業ツリーcleanを確認した。
 
 新LLM方式の中間ビルドは同一投稿の私有一時DB保存・読み戻し一致を703.9秒/1sliceで確認。元の934.5秒/2sliceとはcache条件・粒度が異なるため速度改善率と扱わず、最終hotfixの実精度/網羅性評価とは区別する。全実データ評価はローカル限定、原文/名前/識別子/実値は報告・fixture・外部サービスへ含めていない。一時DBと使い捨てharnessは終了後に削除した。
 
@@ -45,7 +45,7 @@ Slackの既存Bot投稿の上書きは[chat.update](https://docs.slack.dev/refer
 - 修正ソースをmainの`e4b2bf1`へcommit。ローカル111ブランチを照合し、96件はmainの祖先、残る15件・44コミットはすべて既適用の同等パッチで、非等価パッチや独自merge commitは無かった。15件の履歴を`cc5e779`へ統合し、ソースtreeが`e4b2bf1`から変わっていないことを検証した。
 - `data/backups/production-followup-20261007-210258/`へGit履歴bundle、未commitのソース差分と新規ファイル、設定とSQLite backupを保管。bundle検証・DB integrity_check=ok・schema 9一致・私有権限を確認した。不要worktreeの未分類ignoredファイル1件もbyte一致を検証して保全した。原本DB・設定・保存履歴を消去していない。
 - 既存update/run lockとquiesce/resume手順を利用。Gatewayは所有検証付きの再起動報告`supervisor_restart_verified`、実gatewayの生存・`hermes_home`一致・ソース更新後の起動を確認。両抽出workerは別PIDへ置換し、コマンドwatcherと復旧watchdogのロードも確認した。設定のbytesは適用前と一致。
-- 余分なworktreeの実機plist・plugin・cron/wrapper・復旧先への参照が無く、追跡変更・未追跡ファイルも無いことを確認して2件削除。全local headsがmainの祖先になったことを再検証し、main以外110件を削除した。現在はmainの1ブランチ・1worktree。リモートrefs・tag・GitHub公開は変更していない。詳細な削除対象と復元先は私有backup内の`cleanup.json`に記録した。
+- 余分なworktreeの実機plist・plugin・cron/wrapper・復旧先への参照が無く、追跡変更・未追跡ファイルも無いことを確認して削除。全local headsがmainの祖先になったことを再検証し、main以外の統合済みbranchを削除した。作業後はmainだけの構成になったことを確認した。個別のbranch/worktree数は除去。リモートrefs・tag・GitHub公開は変更していない。詳細な削除対象と復元先は私有backup内の`cleanup.json`に記録した。
 - 本番`mcs_setup check`はreturncode 0。LLMのモデル・slot probe再確認はerrors/warningsとも0、既存LLM serviceも稼働。新しい監視観測はstatus=ok・alert=false・disk_alert=falseで、送信待ちの補足だけから正常警報を出していないことを確認した。実患者の内容・原文・秘密値は出力していない。
 
 今回の修正後の合成統合は2,105 passed/8 skipped、CI gates10/10、ruff・文書・SVG/PNG整合が成功。本番Python3.11.15と導入SDKの版は確認し、同runtimeの隔離されたedit-only/guard試験34件は成功した。Gateway SDK統合2経路は隔離HOMEでHermes bootstrapが再execした先にpytestが無く未完了のため、実API受理やGateway統合成功とは扱わない。導入済みPython/SDKの確認前後の版は一致しており、依存追加・変更は適用操作として実施していない。

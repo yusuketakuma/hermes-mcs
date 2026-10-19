@@ -39,19 +39,19 @@ hermes-mcs は抽出と候補提示を担当する。正式な担当割当・期
 
 明示依頼だけでなく、「確認いただけますか」「次回訪問で残薬を確認します」のような間接依頼・自己の実施予定も別種の候補として扱う。「食欲が低下した」から「医師へ連絡する」を生成するような臨床知識からの新規行動の推論は対象外。条件付き依頼は条件未充足のまま保持し、実行指示に昇格しない。不明な担当者・期限は不明のまま表示し、捏造しない。
 
-## 稼働構成と「on」の意味
+## 設定の意味と「on」の切替条件
 
-`config.json` の enum/bool 値のみ確認（2026-09-30。認証情報・患者データ・原本 DB には触れていない）。
+当時の設定確認の履歴はあるが、端末固有のenum/bool値は公開記録から除去した。以下は各設定の意味とコード上の切替条件を示す。
 
-| 設定 | 現在 | on にすると | コード上のゲート・注意 |
+| 設定 | 当時の構成値 | on にすると | コード上のゲート・注意 |
 |---|---|---|---|
-| `semantic.mode` | shadow | `enforce`: Jev 判定を通知に使う。監査 PASS の要約が `semantic_notice` として Discord/Slack へ配送され、degraded notice も出る（`semantic_drain.py:1022`、`semantic_send_gate.py`、`notify_flush.py:320`） | enforce は `threshold_mode: calibrated` + `calibration_version` 必須（`semantic_policy.py:112`）。`calibration_version` は policy fingerprint に入るため、切替で現行の解析結果が全て非 current になり再評価の波が起きる（日次予算 2000 で有界） |
-| `semantic.summary_mode` | shadow | `assist`: 生成された要約候補を `summary_review` で人が比較・採用できる（`publication_mode == "assist"` が採用条件）。`enforce`: 上記の配送 | assist は設定のみ。`mcs_setup.py init` の choice は off/shadow/enforce なので `--set semantic.summary_mode=assist` で入れる |
-| `semantic.loop_mode` | shadow | drain は `!= off` しか見ない。Loop 候補は shadow でも生成され、`read kind:"loops"` で閲覧・`loop_artifact_id` + `loop_match_confirmed` で人が採用できる（`hermes_plugin/README.md`） | assist は設定のみ。enforce は calibration 必須 |
-| `semantic.fact_source` | shadow | `canonical`: カード・rollup・export が `canonical_projection` を読む | `fact-source canonical --gate-evidence report.json` のみ。G6（`g6-criteria-v1.json`、人手ラベル 200 件以上、gate PASS）の評価レポートが token になる。**20-D の項目追従前に切り替えるとカードの「依頼:」行が to=不明・from なしに退行する** |
-| `semantic.threshold_mode` / `calibration_version` | shadow_only / 未設定 | `calibrated` + 版文字列 | `semantic_bench.py calibrate` が shadow 期間の `semantic_audit.claim_audit` から match_threshold の what-if を出す（読み取り専用、実 DB、オーナー実行） |
-| `semantic.extract_qc` | annotate | 最大値（off/annotate のみ） | 変更なし |
-| `daily_digest` / `self_posts` / `signals.notify` / `notify.interactive` | on | — | 変更なし |
+| `semantic.mode` | 端末固有値は除去 | `enforce`: Jev 判定を通知に使う。監査 PASS の要約が `semantic_notice` として Discord/Slack へ配送され、degraded notice も出る（`semantic_drain.py:1022`、`semantic_send_gate.py`、`notify_flush.py:320`） | enforce は `threshold_mode: calibrated` + `calibration_version` 必須（`semantic_policy.py:112`）。`calibration_version` は policy fingerprint に入るため、切替で現行の解析結果が全て非 current になり再評価の波が起きる（日次予算 2000 で有界） |
+| `semantic.summary_mode` | 端末固有値は除去 | `assist`: 生成された要約候補を `summary_review` で人が比較・採用できる（`publication_mode == "assist"` が採用条件）。`enforce`: 上記の配送 | assist は設定のみ。`mcs_setup.py init` の choice は off/shadow/enforce なので `--set semantic.summary_mode=assist` で入れる |
+| `semantic.loop_mode` | 端末固有値は除去 | drain は `!= off` しか見ない。Loop 候補は shadow でも生成され、`read kind:"loops"` で閲覧・`loop_artifact_id` + `loop_match_confirmed` で人が採用できる（`hermes_plugin/README.md`） | assist は設定のみ。enforce は calibration 必須 |
+| `semantic.fact_source` | 端末固有値は除去 | `canonical`: カード・rollup・export が `canonical_projection` を読む | `fact-source canonical --gate-evidence report.json` のみ。G6（`g6-criteria-v1.json`、人手ラベル 200 件以上、gate PASS）の評価レポートが token になる。**20-D の項目追従前に切り替えるとカードの「依頼:」行が to=不明・from なしに退行する** |
+| `semantic.threshold_mode` / `calibration_version` | 端末固有値は除去 | `calibrated` + 版文字列 | `semantic_bench.py calibrate` が shadow 期間の `semantic_audit.claim_audit` から match_threshold の what-if を出す（読み取り専用、実 DB、オーナー実行） |
+| `semantic.extract_qc` | 端末固有値は除去 | 最大値（off/annotate のみ） | 変更なし |
+| `daily_digest` / `self_posts` / `signals.notify` / `notify.interactive` | 端末固有値は除去 | — | 変更なし |
 | 20-B/C で足す新項目 | — | 設定フラグを設けず、配備で即有効 | `EXTRACT_VERSION` は上げない |
 
 `update.mode`（自己更新、未設定=off）は本計画の範囲外。
@@ -164,18 +164,18 @@ A〜C は extract_llm と読み側だけを触り、shadow/enforce の canonical
 
 ## 容量ゲート（2026-09-30 追加）
 
-本機は M4 Mac mini 16 GB、Qwen3.5-9B Q4 常駐 6 GB。実測: 新着は平均 15 件/日（最多 33）、extract_llm は 17 秒/件、semantic（shadow: legacy + v2 + 要約）は中央値 393 秒/件・上位 10% 1,058 秒・平均 2.5 pass。生成速度は単独 12.8 t/s、2 slot 同時 3〜5 t/s。日中（drainer 窓 20-07 の外）に使えるのは 13 時間。
+当時の導入環境に固有の機種・容量・投稿量・処理速度の実測値は公開記録から除去しました。以下は当時の予算設計の記録であり、現行環境の設定値や性能保証ではありません。
 
 | 段 | 見積もり | 判定 |
 |---|---|---|
-| 20-A/B/C | 出力 1〜2 割増、1 日数分 | 制約なし |
-| 20-D/E2 | 平均日 1.6〜3.6 時間（日中の 1〜3 割）。canonical 化で legacy 抽出が消え 2〜3 割減 | 可能 |
+| 20-A/B/C | 当時の端末固有の負荷・時間見積りは除去 | 制約なし |
+| 20-D/E2 | 当時の端末固有の負荷・時間見積りは除去 | 可能 |
 | 20-E3 新着 | 同上 | 可能 |
-| 20-E3 履歴 | 17,978 件 × 393 秒 ≈ 78 日分の LLM 時間 | 不可。新着から・bounded cohort のみ |
+| 20-E3 履歴 | 私有workloadからの件数・所要時間見積りは除去 | 不可。新着から・bounded cohortのみ |
 
 **切替条件（E2・E3 共通）**: 直近 2 週間で (1) semantic の LLM 時間が 1 日平均で日中の 50%（6.5 時間）以下、(2) job の LLM 時間 p90 が 900 秒以下、(3) tick の semantic 実行が realtime slot 混雑で skip される頻度が週 1 回以下。算出元: (1) は `semantic_drain_run` artifact の `job_metrics.llm_s` の合計（`semantic_observe --json --days 14` の `recent_drain.llm_s`。`created_at` で 14 日窓）、(2) は同 `llm_s_p90`（job ごとの `job_metrics.llm_s` の線形補間 percentile — `semantic_evaluation._percentile`。線形補間なので ceil-rank と一致せず上下どちらにもずれうる）、(3) は tick ログの JSON から `"skipped": "slot_busy"` を数える（`grep -c '"skipped": "slot_busy"' data/run.log`。旧 starvation-hold 機構 `semantic_lane.hold_until` は 3 スロット再編で廃止 — realtime lane は busy 時に即 skip し常駐 worker が backlog を継続する）。**オーナー注意**: `maintenance.rotate_log` は >5MB で 1 世代（`.1`）しか残さず日数保証がないため、2 週間の読み出し前にログの保持期間を確認する。超えた場合は切替を進めず、下記の削減策を先に入れる。
 
-**削減策（効果順）**: canonical 切替で legacy `_FACT_PROMPT` を落とす（-25%）→ v2 抽出に `response_format` の JSON schema を使い冗長な出力を削る → 長文だけ job 予算を上げる → モデル軽量化（最後）。検討して見送り（2026-09-30）: preflight「全カテゴリ absent」の chunk で v2 生成を省く案は、了解文の生成が元々短く（約 20 秒、1 日 1.5 分相当）節約が小さい一方、Jev の誤判定で fact を取りこぼす経路になるため採用しない。
+**削減策（効果順）**: canonical 切替で legacy `_FACT_PROMPT` を落とす（推論経路の重複を除く）→ v2 抽出に `response_format` の JSON schema を使い冗長な出力を削る → 長文だけ job 予算を上げる → モデル軽量化（最後）。検討して見送り（2026-09-30）: preflight「全カテゴリ absent」の chunk で v2 生成を省く案は、了解文の生成が元々短く（端末固有の時間見積りは除去）節約が小さい一方、Jev の誤判定で fact を取りこぼす経路になるため採用しない。
 
 ## 評価と昇格
 

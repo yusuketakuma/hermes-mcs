@@ -12,17 +12,17 @@ receipt保管は未指定で、鍵生成・表示・転記・保管確認はま�
 
 ## 対象と配置
 
-Mac miniのMCS原本DBを、検証済みの日次snapshotから暗号化してNASへ保存する。
+導入端末のMCS原本DBを、検証済みの日次snapshotから暗号化してNASへ保存する。
 NASへ置くのは暗号化bundleで、平文DB・鍵・認証情報を置かない。
 添付ファイル本体、Keychain、config、配送journal、サービス設定は別途回復対象となる。
 
 | 保存物 | 配置案 | 確定条件 |
 |---|---|---|
-| 暗号化bundle | Mac miniにmountしたNASの専用ディレクトリ | 実mountパス、保存許可、容量、0700・同一UID、device/inodeを確認 |
-| 運用鍵 | Mac miniの専用`mcs-backup` Keychain service | 作成・保管責任と端末外の回復経路を確定 |
-| 回復鍵 | NASともMac miniとも別の保管場所 | 保管担当、取出し手順、鍵を使った復元訓練を確認 |
+| 暗号化bundle | 導入端末にmountしたNASの専用ディレクトリ | 実mountパス、保存許可、容量、0700・同一UID、device/inodeを確認 |
+| 運用鍵 | 導入端末の専用`mcs-backup` Keychain service | 作成・保管責任と端末外の回復経路を確定 |
+| 回復鍵 | NASとも導入端末とも別の保管場所 | 保管担当、取出し手順、鍵を使った復元訓練を確認 |
 | 信頼するSHA receipt | bundleと別の保管場所 | NASごとの置換・巻戻しを判別でき、端末喪失後にも取得可能 |
-| 平文scratch | Mac miniの私有ディレクトリ | 端末の物理暗号化、必要容量、清掃責任を確認 |
+| 平文scratch | 導入端末の私有ディレクトリ | 端末の物理暗号化、必要容量、清掃責任を確認 |
 
 NASのRAIDやsnapshotは補助であり、鍵回復・独立receipt・復元訓練の代わりにはしない。
 NASの管理snapshotや複製に古い暗号文が残る条件も保持・削除方針へ含める。

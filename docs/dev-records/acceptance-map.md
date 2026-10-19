@@ -46,7 +46,7 @@ G2の限定実API smokeは2026-09-21に成功（合成POST1回、成功後GET1�
 
 ## 最新のローカル回帰結果
 
-`MCS_TEST_PYTHON=/Users/yusuke/.hermes/hermes-agent/venv/bin/python scripts/run_tests.sh adapter -q`
+`MCS_TEST_PYTHON=/path/to/home/.hermes/hermes-agent/venv/bin/python scripts/run_tests.sh adapter -q`
 で **336 passed in 6.96s**（pause再接続・盲検candidate全体固定修正を含む最新候補）。
 Hermes候補のrunnerから`integration/test_hermes_discord.py`も最新候補で1件成功（runner wall 0.9秒）。
 実際のplugin discovery、Discord event構築、GatewayRunnerのallowlist判定、
@@ -84,10 +84,10 @@ G2/G6/G7を、この成功件数で代替しない。
 | 23 | raw/attachment/frozen receipt、shadow/OFF同一通知回帰 | 実宛先/時間帯/添付配送 |
 | 24 | AT対応表、refactor-revalidation、候補manifest | 数量修正後の候補保存済み。全体ゲート照合は未完了 |
 
-参考固定候補: `/Users/yusuke/.codex/artifacts/mcs-candidate-20260921-010805/`。
+参考固定候補: `/path/to/home/.codex/artifacts/mcs-candidate-20260921-010805/`。
 この候補は数量監査不足の再現対象であり、数量修正後の成功証拠として再利用しない。
 
-数量修正後のソース固定候補: `/Users/yusuke/.codex/artifacts/mcs-candidate-20260921-013719/`。MCS 72パス、Hermes 10パスを基準HEADへのoverlayとして保存し、archive内容と現ファイルのhash一致を確認。このsnapshotはG2実接続結果の文書追記より前であり、最新文書の完全なsnapshotではない。
+数量修正後のソース固定候補: `/path/to/home/.codex/artifacts/mcs-candidate-20260921-013719/`。MCS 72パス、Hermes 10パスを基準HEADへのoverlayとして保存し、archive内容と現ファイルのhash一致を確認。このsnapshotはG2実接続結果の文書追記より前であり、最新文書の完全なsnapshotではない。
 
 ## §27 gate disposition（2026-09-21時点）
 

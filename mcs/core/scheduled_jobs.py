@@ -45,10 +45,10 @@ def calendar_entries(schedule: str) -> list[dict]:
             for h in expand(hour, 24) for m in expand(minute, 60)]
 
 
-# The standalone host's scheduler (mcs_standalone.runtime) wraps each job in
-# this cap: hermes cron killed a script after 3600s, and a host that never
-# starts a job still running would otherwise stop it for good after one
-# wedged tick. The wrapper kills the job's process group.
+# The standalone host's scheduler (mcs_standalone.runtime) wraps each job
+# in the same cap as Hermes cron. Otherwise, refusing to start a job
+# that is still running would stop it for good after one wedged tick.
+# The wrapper kills the job's process group.
 CRON_TIMEOUT_S = 3600      # = hermes cron's script timeout
 TIMEOUT_PERL = ("my $t = shift; my $p = 0;"
                # launchd's SIGTERM (bootout, logout) must reach the job too
