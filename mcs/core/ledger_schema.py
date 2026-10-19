@@ -340,6 +340,7 @@ def initialize(db, *, schema_version: int) -> bool:
     # adds v3 columns first — indexes/triggers depend on them
     _migrate(db, schema_version=schema_version, fts=fts, fts_created=fts and not had_fts)
     db.executescript("""
+          CREATE INDEX IF NOT EXISTS idx_patients_name ON patients(patient_name) WHERE patient_name IS NOT NULL;
           CREATE INDEX IF NOT EXISTS idx_messages_project_time
             ON messages(project_id, posted_at_ts);
           CREATE INDEX IF NOT EXISTS idx_messages_notified
