@@ -161,6 +161,8 @@ def test_admitted_chat_keeps_permit_unknown_after_confirmed_idle(turn, tmp_path,
 def test_worker_restart_releases_the_turn(turn, tmp_path):
     code = """
 import json, os, sys, time
+sys.path.insert(0, os.environ["MCS_TEST_MODULE_ROOT"])
+import _mcs_path
 import local_llm
 local_llm.SLOT_WAIT_MAX_S = 30
 def send(endpoint, method, body, timeout, deadline):
@@ -170,9 +172,9 @@ def send(endpoint, method, body, timeout, deadline):
     return 200, {}, json.dumps([{"id": 1, "is_processing": True}]).encode()
 local_llm.chat("prompt", request_fn=send, extra_payload={"id_slot": 1})
 """
-    core = str(next(p for p in sys.path if p.endswith(os.path.join("mcs", "core"))))
+    root = os.path.dirname(os.path.dirname(local_llm.__file__))
     child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True,
-                             env={**os.environ, "PYTHONPATH": core})
+                             env={**os.environ, "MCS_TEST_MODULE_ROOT": root})
     assert child.stdout.readline().strip() == "polling"
     assert not _lock_is_free(turn)
     child.kill()

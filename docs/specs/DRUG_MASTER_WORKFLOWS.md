@@ -90,6 +90,6 @@ python3 mcs/ops/mcs_drug.py reconcile --project 1 --limit 50 --json
 
 ## 検証と未検証事項
 
-[薬剤経緯テスト](../../tests/views/test_drug_timeline.py) と [薬歴照合テスト](../../tests/views/test_drug_reconciliation.py) は、予定/実施記載・本人/家族・過去/現在、世代差、コード候補検索、旧辞書の境界、規格差、未知の単位、薬歴日時、取得漏れ、ページング、読取り専用、CLIからの合成snapshot照合を検査する。
+[薬剤経緯テスト](../../tests/medications/test_drug_timeline.py) と [薬歴照合テスト](../../tests/medications/test_drug_reconciliation.py) は、予定/実施記載・本人/家族・過去/現在、世代差、コード候補検索、旧辞書の境界、規格差、未知の単位、薬歴日時、取得漏れ、ページング、読取り専用、CLIからの合成snapshot照合を検査する。
 
 合成テストは実患者の抽出精度、薬歴取得の網羅性、臨床判断の妥当性を証明しない。今回、実API・原本DB・実LLM・本番辞書の承認や切替・外部exportは実行していない。
