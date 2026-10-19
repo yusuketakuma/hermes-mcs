@@ -748,4 +748,3 @@ def plan(policy_path: str | Path, *, snapshot: str | None = None,
 
 
 preflight = plan
-

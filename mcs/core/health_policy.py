@@ -30,5 +30,3 @@ def freshness_deadline(cfg: dict) -> int:
     deadline = tick * (int(missed) + 1)
     return max(1, int(deadline)) if _finite_number(deadline) \
         else DEFAULT_TICK_S * (DEFAULT_MAX_MISSED + 1)
-
-
