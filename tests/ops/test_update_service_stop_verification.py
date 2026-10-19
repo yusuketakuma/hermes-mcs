@@ -1,4 +1,5 @@
 """Updater service cleanup and quiesce require actual stop evidence."""
+import runtime_inspection
 import itertools
 from types import SimpleNamespace
 
@@ -16,8 +17,8 @@ def test_membership_keeps_owned_plist_without_verified_absence(tmp_path, monkeyp
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(mcs_update, "MANIFEST_PATH", str(tmp_path / "absent-manifest.json"))
     monkeypatch.setattr(mcs_update, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda _cfg: "synthetic-hermes")
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda _exe: True)
+    monkeypatch.setattr(mcs_update, "hermes_exe", lambda _cfg: "synthetic-hermes")
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda _exe: True)
     monkeypatch.setattr(mcs_setup, "_cron_list", lambda _exe: [])
     calls = []
 

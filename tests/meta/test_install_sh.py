@@ -298,7 +298,7 @@ mcs_util.HOME = os.environ['MCS_ROOT']
 mcs_util.CONF_PATH = os.path.join(mcs_util.HOME, 'config.json')
 sys.path.insert(0, {str(ROOT / 'mcs')!r})
 import _mcs_path
-import mcs_setup
+import runtime_inspection
 def metadata(argv, **kwargs):
     with open(os.environ['STUB_LOG'], 'a') as stream:
         stream.write('runtime-metadata ' + argv[0] + '\\n')
@@ -312,8 +312,8 @@ def metadata(argv, **kwargs):
     return subprocess.CompletedProcess(
         argv, 127 if case == 'failed' else 0,
         'not-json' if case == 'unknown' else json.dumps(facts), '')
-mcs_setup._run = metadata
-mcs_setup._recovery_python = lambda cfg: cfg.get("recovery_python", os.path.join(os.environ["STUB_ROOT"], "bin/python3.14"))
+runtime_inspection.run_bounded = metadata
+runtime_inspection.recovery_python = lambda cfg: cfg.get("recovery_python", os.path.join(os.environ["STUB_ROOT"], "bin/python3.14"))
 if sys.argv[1] == '--persist':
     code = sys.stdin.read()
     sys.argv = sys.argv[2:]

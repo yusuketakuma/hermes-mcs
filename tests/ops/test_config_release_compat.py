@@ -1,4 +1,5 @@
 """Configuration input failures preserve settings and avoid credential writes."""
+import runtime_inspection
 import mcs_runtime
 import lifecycle_io
 import setup_wizard
@@ -140,11 +141,11 @@ def test_migration_preflight_preserves_sqlite_and_metadata_gates(
     from test_runtime_compatibility import _facts
     monkeypatch.setattr(mcs_setup, 'AGENTS_DIR', str(tmp_path))
     facts = _facts(python, sqlite)
-    monkeypatch.setattr(mcs_setup, '_runtime_probe', lambda exe: facts)
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: facts)
     errors = mcs_setup.runtime_gate_errors({}, allow_runtime_migration=allowed)
     assert bool(errors) is blocked
     if tuple(map(int, python.split('.'))) < (3, 14):
         assert mcs_runtime.runtime_problem(facts, recovery=True, allow_runtime_migration=True)
-    monkeypatch.setattr(mcs_setup, '_runtime_probe', lambda exe: None)
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: None)
     assert mcs_setup.runtime_gate_errors({}, allow_runtime_migration=True) == [
         'selected_runtime: 実行環境の情報を取得できません']

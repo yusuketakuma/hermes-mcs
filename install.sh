@@ -389,6 +389,10 @@ from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/mcs")
 import _mcs_path
 import mcs_setup
+import mcs_config
+import mcs_runtime
+import runtime_inspection
+from scheduled_jobs import render_template
 try:
     cfg = mcs_setup._owner_config(sys.argv[3])
 except ValueError as exc:
@@ -397,27 +401,27 @@ if sys.argv[4]:
     cfg["recovery_python"] = sys.argv[4]
 if sys.argv[5] == "1" and "recovery_python" not in cfg:
     sys.exit(0)
-desired = mcs_setup._recovery_python(cfg)
-problem = mcs_setup._recovery_python_problem(desired, sys.argv[1])
+desired = runtime_inspection.recovery_python(cfg)
+problem = mcs_config.recovery_python_problem(desired, sys.argv[1])
 if problem:
     raise SystemExit("復旧用 Python に問題があります: " + problem)
 if "recovery_python" in cfg and os.path.lexists(
         Path(mcs_setup.AGENTS_DIR, mcs_setup.RECOVERY_LABEL + ".plist")):
     with open(Path(mcs_setup.AGENTS_DIR, mcs_setup.RECOVERY_LABEL + ".plist"), "rb") as stream:
-        deployed = mcs_setup._recovery_executable(plistlib.load(stream))
+        deployed = runtime_inspection.recovery_executable(plistlib.load(stream))
     if deployed != desired:
         raise SystemExit("復旧用 Python の設定と稼働設定が一致しません。処理が動いていないことを確認し、mcs setup init --yes、mcs setup services の順に修復してください")
 from html import escape
 text = Path(sys.argv[2]).read_text()
-rendered = mcs_setup._render_template(text, {"RECOVERY_PYTHON":escape(desired, quote=False)})
-actual = mcs_setup._recovery_executable(plistlib.loads(rendered.encode()))
-problem = mcs_setup._recovery_python_problem(actual, sys.argv[1])
+rendered = render_template(text, {"RECOVERY_PYTHON":escape(desired, quote=False)})
+actual = runtime_inspection.recovery_executable(plistlib.loads(rendered.encode()))
+problem = mcs_config.recovery_python_problem(actual, sys.argv[1])
 if problem:
     raise SystemExit("復旧サービスのテンプレートに問題があります: " + problem)
 if "recovery_python" in cfg and actual != desired:
     raise SystemExit("復旧サービスのテンプレートが指定した Python と一致しません")
-facts = mcs_setup._runtime_probe(actual) if actual is not None else None
-problem = mcs_setup._runtime_problem(facts, recovery=True)
+facts = runtime_inspection.probe_python(actual) if actual is not None else None
+problem = mcs_runtime.runtime_problem(facts, recovery=True)
 if problem:
     print("復旧用 Python に問題があります: " + problem, file=sys.stderr)
     sys.exit(1)

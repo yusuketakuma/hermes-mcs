@@ -1,4 +1,5 @@
 """Doctor is local by default and shares only bounded diagnostic facts."""
+import runtime_inspection
 import json
 import os
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ def local_config(monkeypatch):
     monkeypatch.setattr(mcs_setup, "load_config", lambda: {
         "mcs_login_id": "synthetic-private-id", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: {
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: {
         "python": "3.14.8", "sqlite": "3.51.3",
         "packages": {"discord.py": None, "slack-bolt": None, "slack-sdk": None}})
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 3))
@@ -133,8 +134,8 @@ def test_service_runtime_sqlite_is_checked_not_path_python(monkeypatch, tmp_path
     def run(argv, **kw):
         calls.append(argv)
         return SimpleNamespace(returncode=1 if "sqlite3" in argv[-1] else 0)
-    monkeypatch.setattr(mcs_setup, "_run", run)
-    assert mcs_setup._py_problem(str(python)) is not None
+    monkeypatch.setattr(runtime_inspection, "run_bounded", run)
+    assert runtime_inspection.python_problem(str(python)) is not None
     assert len(calls) == 2 and all(argv[0] == str(python) for argv in calls)
 
 

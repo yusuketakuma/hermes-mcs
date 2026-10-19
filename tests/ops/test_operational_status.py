@@ -1,4 +1,5 @@
 """Operational diagnostics only read bounded synthetic evidence."""
+import runtime_inspection
 import json
 import os
 import sqlite3
@@ -253,7 +254,7 @@ def test_doctor_includes_stored_operations_without_probes_or_exit_change(
     monkeypatch.setattr(mcs_setup, "load_config", lambda: {
         "mcs_login_id": "synthetic-private-id", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: {
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: {
         "python": "3.14.8", "sqlite": "3.51.3", "packages": {}})
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info",
                         (3, 51, 3) if sqlite_safe else (3, 50, 6))

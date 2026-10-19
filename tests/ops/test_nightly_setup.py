@@ -1,4 +1,5 @@
 """Nightly setup keeps defaults and explicit settings consistent and diagnostics bounded to safe counts."""
+import runtime_inspection
 import json
 import sqlite3
 import sys
@@ -80,7 +81,7 @@ def test_doctor_respects_explicit_data_probe_and_invalid_config(tmp_path, monkey
     cfg = {'mcs_login_id': 'synthetic', 'notify_target': 'local'}
     monkeypatch.setattr(mcs_setup, 'load_config', lambda: cfg)
     monkeypatch.setattr(mcs_setup, '_config_problem', lambda: None)
-    monkeypatch.setattr(mcs_setup, '_runtime_probe', lambda _: {
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda _: {
         'python': '3.14.8', 'sqlite': '3.51.3', 'packages': {}})
     monkeypatch.setattr(mcs_setup.sqlite3, 'sqlite_version_info', (3, 51, 3))
     calls = []

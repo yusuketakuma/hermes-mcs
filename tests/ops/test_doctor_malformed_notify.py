@@ -1,4 +1,5 @@
 """Doctor must report (not crash on) a malformed notify block."""
+import runtime_inspection
 import json
 
 import pytest
@@ -12,7 +13,7 @@ def malformed_config(monkeypatch):
     def install(cfg):
         monkeypatch.setattr(mcs_setup, "load_config", lambda: cfg)
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: {
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: {
         "python": "3.14.8", "sqlite": "3.51.3",
         "packages": {"discord.py": None, "slack-bolt": None, "slack-sdk": None}})
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 3))

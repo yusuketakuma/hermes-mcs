@@ -1,4 +1,5 @@
 """Selected runtime metadata and SQLite checks using only synthetic resources."""
+import runtime_inspection
 import mcs_runtime
 import lifecycle_io
 import mcs_config
@@ -65,8 +66,8 @@ def test_probe_uses_selected_executable_and_never_sdk_import(executable, monkeyp
     def run(argv, **kw):
         calls.append((argv, kw))
         return SimpleNamespace(returncode=0, stdout=json.dumps(_facts()))
-    monkeypatch.setattr(mcs_setup, "_run", run)
-    assert mcs_setup._runtime_probe(executable) == _facts()
+    monkeypatch.setattr(runtime_inspection, "run_bounded", run)
+    assert runtime_inspection.probe_python(executable) == _facts()
     argv, opts = calls[0]
     assert argv[:3] == [executable, "-I", "-c"]
     assert opts == {"timeout": 20}
@@ -74,7 +75,7 @@ def test_probe_uses_selected_executable_and_never_sdk_import(executable, monkeyp
 
 def test_probe_executes_real_stdlib_script_inside_isolated_test_environment():
     # Test-runner Python only, not the machine's scheduled or SDK interpreter.
-    facts = mcs_setup._runtime_probe(sys.executable)
+    facts = runtime_inspection.probe_python(sys.executable)
     assert facts is not None
     assert facts["python"] == ".".join(map(str, sys.version_info[:3]))
     assert facts["sqlite"] == mcs_setup.sqlite3.sqlite_version
@@ -94,8 +95,8 @@ def test_probe_executes_real_stdlib_script_inside_isolated_test_environment():
         **_facts(), "packages": {**_facts()["packages"], "discord.py": "synthetic-secret"}})),
 ])
 def test_unknown_metadata_never_means_healthy(executable, monkeypatch, result):
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: result)
-    facts = mcs_setup._runtime_probe(executable)
+    monkeypatch.setattr(runtime_inspection, "run_bounded", lambda *a, **k: result)
+    facts = runtime_inspection.probe_python(executable)
     assert facts is None
     assert mcs_runtime.runtime_problem(facts) is not None
 
@@ -118,7 +119,7 @@ def test_doctor_reports_selected_versions_not_parent(
     def probe(exe):
         calls.append(exe)
         return _facts(sqlite=sqlite)
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", probe)
+    monkeypatch.setattr(runtime_inspection, "probe_python", probe)
     monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: pytest.fail("service access"))
     assert mcs_setup.cmd_doctor(SimpleNamespace(json=True)) == expected
     out = capsys.readouterr().out
@@ -140,9 +141,10 @@ def test_recovery_probes_actual_deployed_program(monkeypatch, tmp_path, use_prog
         plist["Program"] = "/synthetic/overridden-python"
     (tmp_path / "org.mcs.recovery.plist").write_bytes(plistlib.dumps(plist))
     calls = []
-    monkeypatch.setattr(mcs_setup, "_runtime_probe",
+    monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: calls.append(exe) or _facts("3.9.6", "3.51.0"))
-    facts = mcs_setup._recovery_runtime()
+    facts = runtime_inspection.recovery_runtime(
+        Path(mcs_setup.AGENTS_DIR, "org.mcs.recovery.plist"), checkout=mcs_setup.REPO_ROOT)
     assert calls == [plist.get("Program", plist["ProgramArguments"][0])]
     assert mcs_runtime.runtime_problem(facts, recovery=True) is not None
 
@@ -157,7 +159,7 @@ def test_doctor_blocks_unsafe_recovery_without_touching_services(
     (tmp_path / "org.mcs.recovery.plist").write_bytes(plistlib.dumps(
         {"ProgramArguments": ["/synthetic/recovery-python", "watchdog.py"]}))
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 3))
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe:
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe:
                         _facts("3.9.6", "3.51.0") if exe == "/synthetic/recovery-python"
                         else _facts())
     monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: pytest.fail("service access"))
@@ -172,8 +174,9 @@ def test_doctor_blocks_unsafe_recovery_without_touching_services(
 def test_invalid_recovery_plist_is_unverified(monkeypatch, tmp_path, content):
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(tmp_path))
     (tmp_path / "org.mcs.recovery.plist").write_bytes(content)
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: pytest.fail("invalid program"))
-    assert mcs_setup._recovery_runtime() is None
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: pytest.fail("invalid program"))
+    assert runtime_inspection.recovery_runtime(
+        Path(mcs_setup.AGENTS_DIR, "org.mcs.recovery.plist"), checkout=mcs_setup.REPO_ROOT) is None
 
 
 def _tree(root):
@@ -219,7 +222,7 @@ def test_services_runtime_gate_precedes_all_mutation(
         probes.append(exe)
         return facts if exe == (selected if role == "selected" else recovery) else _facts()
 
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", probe)
+    monkeypatch.setattr(runtime_inspection, "probe_python", probe)
     for name in ("_retire_previous_runtime", "_sync_scripts", "_sync_agents",
                  "_sync_standalone_service", "_save_manifest"):
         monkeypatch.setattr(mcs_setup, name,
@@ -243,7 +246,7 @@ def test_safe_service_runtimes_keep_python_roles_and_rendering(monkeypatch, tmp_
         probes.append(exe)
         return _facts("3.14.8", "3.44.6") if exe == recovery else _facts("3.14.8", "3.50.7")
 
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", probe)
+    monkeypatch.setattr(runtime_inspection, "probe_python", probe)
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 0))
     assert mcs_setup.cmd_services(args) == 0
     assert probes == [selected, recovery]
@@ -262,9 +265,9 @@ def test_updater_precheck_probes_actual_runtimes_not_parent(
         updater, monkeypatch, tmp_path, mode, role, facts, blocked):
     cfg = {"runtime_mode": mode, "mcs_login_id": "synthetic", "notify_target": "local"}
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
-    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: True)
+    monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
+    monkeypatch.setattr(updater, "hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
     recovery = _deployed_recovery(monkeypatch, tmp_path)
     selected = mcs_setup._service_subs(cfg)["PYTHON"]
     probes = []
@@ -273,7 +276,7 @@ def test_updater_precheck_probes_actual_runtimes_not_parent(
         probes.append(exe)
         return facts if exe == (selected if role == "selected" else recovery) else _facts()
 
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", probe)
+    monkeypatch.setattr(runtime_inspection, "probe_python", probe)
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 0))
     before = _tree(tmp_path)
     errors = updater.precheck_local(cfg)
@@ -294,7 +297,7 @@ def test_apply_runtime_gate_precedes_lock_journal_and_interrupted_recovery(
     monkeypatch.setattr(updater, "load_config", lambda: cfg)
     recovery = _deployed_recovery(monkeypatch, tmp_path)
     selected = mcs_setup._service_subs(cfg)["PYTHON"]
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe:
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe:
                         facts if exe == (selected if role == "selected" else recovery)
                         else _facts())
     if interrupted:
@@ -321,9 +324,9 @@ def test_installer_explicit_template_probe_never_uses_deployed_or_parent_python(
         "Program": "/synthetic/template-python",
         "ProgramArguments": ["/synthetic/unused-python", "recovery.py"]}))
     probes = []
-    monkeypatch.setattr(mcs_setup, "_runtime_probe",
+    monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: probes.append(exe) or _facts("3.14.8", "3.51.3"))
-    assert mcs_runtime.runtime_problem(mcs_setup._recovery_runtime(template), recovery=True) is None
+    assert mcs_runtime.runtime_problem(runtime_inspection.recovery_runtime(template, checkout=mcs_setup.REPO_ROOT), recovery=True) is None
     assert probes == ["/synthetic/template-python"]
 
 
@@ -332,7 +335,7 @@ def test_explicit_recovery_init_persists_private_selection(monkeypatch, tmp_path
     _init_env(monkeypatch, tmp_path, {"mcs_login_id": "synthetic", "notify_target": "local"})
     selected = str(tmp_path / "independent-python")
     probes = []
-    monkeypatch.setattr(mcs_setup, "_runtime_probe",
+    monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: probes.append(exe) or _facts("3.14.8"))
     monkeypatch.setattr(sys, "argv", ["mcs_setup", "init", "--yes",
                                     "--recovery-python", selected])
@@ -348,7 +351,7 @@ def test_bad_desired_init_does_not_archive_or_write(monkeypatch, tmp_path, facts
     from test_mcs_setup import _init_env
     _init_env(monkeypatch, tmp_path, {})
     (tmp_path / "c.json").write_text("broken")
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: facts)
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: facts)
     monkeypatch.setattr(sys, "argv", ["mcs_setup", "init", "--yes",
                                     "--recovery-python", str(tmp_path / "independent-python")])
     before = _tree(tmp_path)
@@ -367,7 +370,7 @@ def test_recovery_rejects_relative_checkout_and_update_tree_paths(monkeypatch, t
     for path in ("relative", str(repo / "python"), str(alias), str(update / "python")):
         assert mcs_config.recovery_python_problem(path, update, checkout=repo)
     monkeypatch.setattr(mcs_setup.os, "access", lambda path, mode: path == "/usr/local/bin/python3.14")
-    assert mcs_setup._recovery_python({}) == "/usr/local/bin/python3.14"
+    assert runtime_inspection.recovery_python({}) == "/usr/local/bin/python3.14"
     assert mcs_config.recovery_python_problem(str(tmp_path / "independent-python"), update, checkout=repo) is None
 
 
@@ -409,7 +412,7 @@ def test_services_repairs_owned_unsafe_selection_without_autoenabling(
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired}
     monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: cfg if path is None else {})
-    monkeypatch.setattr(mcs_setup, "_runtime_probe",
+    monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: _facts(sqlite="3.51.0") if exe == old else _facts())
     state = {"loaded": loaded}
     calls = []
@@ -465,7 +468,7 @@ def test_doctor_and_updater_do_not_mask_deployed_drift(
     monkeypatch.setattr(mcs_setup, "load_config", lambda: cfg)
     monkeypatch.setattr(updater, "load_config", lambda: cfg)
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
-    monkeypatch.setattr(mcs_setup, "_runtime_probe",
+    monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: _facts(sqlite="3.51.0") if exe == old else _facts())
     monkeypatch.setattr(mcs_setup, "_run", lambda *a, **kw: pytest.fail("external action"))
     assert mcs_setup.cmd_doctor(SimpleNamespace(json=True)) == 1
@@ -492,7 +495,7 @@ def test_bad_desired_service_selection_blocks_before_any_write(monkeypatch, tmp_
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired}
     monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: cfg if path is None else {})
-    monkeypatch.setattr(mcs_setup, "_runtime_probe",
+    monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: facts if exe == desired else _facts())
     before = _tree(tmp_path)
     assert mcs_setup.cmd_services(args) == 1
@@ -503,10 +506,10 @@ def test_updater_retains_valid_explicit_deployed_selection(updater, monkeypatch,
     recovery = _deployed_recovery(monkeypatch, tmp_path)
     cfg = {"recovery_python": recovery, "mcs_login_id": "synthetic", "notify_target": "local"}
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: True)
+    monkeypatch.setattr(updater, "hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
     probes = []
-    monkeypatch.setattr(mcs_setup, "_runtime_probe",
+    monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: probes.append(exe) or _facts())
     before = dict(cfg), _tree(tmp_path)
     assert updater.precheck_local(cfg) == []
@@ -542,7 +545,7 @@ def test_bad_recovery_init_stops_before_keychain_and_env(monkeypatch, tmp_path, 
     monkeypatch.setenv("MCS_SETUP_PASSWORD", "synthetic-password")
     monkeypatch.setattr(lifecycle_io, "store_keychain",
                         lambda *a, **kw: pytest.fail("secret written before validation"))
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: _facts(sqlite="3.51.0"))
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: _facts(sqlite="3.51.0"))
     monkeypatch.setattr(sys, "argv", ["mcs_setup", "init", "--yes",
                                     "--recovery-python", str(tmp_path / "independent-python")])
     assert mcs_setup.main() == 1

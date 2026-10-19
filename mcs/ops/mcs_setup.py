@@ -2,8 +2,7 @@
 
 `init` interactively (or via flags) provisions what a fresh machine
 needs: ~/.mcs/config.json, ~/.mcs/.env secrets, and the macOS Keychain
-entry the adapter reads at re-login (service 'mcs-adapter' — on the
-Mac mini this is the same login keychain Chrome uses). Existing values
+entry the adapter reads at re-login (service 'mcs-adapter'). Existing values
 are merged, never silently overwritten. An interactive run offers recommended or detailed setup
 (sectioned, defaults shown, Enter keeps the current value); `--yes` runs flags only and `--set KEY=JSON` covers
 any key non-interactively. With notify.interactive="slack"/"discord",
@@ -75,6 +74,7 @@ from mcs_config import (recovery_python_problem,
                         transport_enabled, validate_config, validate_notify)
 import bounded_http
 import mcs_runtime
+import runtime_inspection
 from scheduled_jobs import CRON_JOBS, configured_cron_jobs, render_template
 
 from mcs_util import (CONF_PATH, HOME, REPO, atomic_write, env_value,
@@ -94,10 +94,6 @@ def _evaluation_input(path) -> bytes:
     if len(raw) > EVALUATION_INPUT_BYTES:
         raise ValueError("evaluation_input_too_large")
     return raw
-
-
-def _hermes_ok(exe: str) -> bool:
-    return os.path.isfile(exe) and os.access(exe, os.X_OK)
 
 
 _GATEWAY_LIFECYCLE_VERBS = frozenset({"install", "uninstall", "restart", "start", "stop"})
@@ -272,7 +268,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                   "check", "--root", HOME], timeout=20)
         if r.returncode:
             errors.append("LINE WORKS接続の診断に失敗しました。`python -m lineworks_adapter check`を実行し、docs/guides/LINEWORKS.mdに従って認証情報を確認してください")
-    elif not _hermes_ok(exe):
+    elif not runtime_inspection.executable_available(exe):
         errors.append(f"Hermesコマンドが見つかりません（{exe}）。"
                       "通知を送信できません。install.shでHermesの導入状態を確認してください")
     elif isinstance(cfg.get("notify"), dict) \
@@ -542,7 +538,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
         return True
     transport = ntf["interactive"]
     exe = _hermes_exe(cfg)
-    if not _hermes_ok(exe):
+    if not runtime_inspection.executable_available(exe):
         print("\nHermesコマンドが見つかりません。連携設定は後で "
               "`hermes config set "
               f"{PLUGIN_SETTINGS}.<key> <値>` で行ってください")
@@ -708,7 +704,7 @@ def _init_recovery_problem(cfg, update_repo=None) -> str | None:
     if "recovery_python" not in cfg:
         return None
     return recovery_python_problem(cfg["recovery_python"], update_repo, checkout=REPO_ROOT) or mcs_runtime.runtime_problem(
-        _runtime_probe(cfg["recovery_python"]), recovery=True)
+        runtime_inspection.probe_python(cfg["recovery_python"]), recovery=True)
 
 
 def _init_apply_set_overrides(cfg: dict, set_args) -> int | None:
@@ -1017,7 +1013,7 @@ def cmd_init(args) -> int:
     if cfg.get("runtime_mode") != "standalone" and isinstance(ntf, dict) \
             and ntf.get("interactive") in ("discord", "slack"):
         exe = _hermes_exe(cfg)
-        if _hermes_ok(exe):
+        if runtime_inspection.executable_available(exe):
             gateway_result = _sync_gateway(
                 cfg, exe, lambda m: print(f"  {m}"), dry=False)
     if mcs_runtime.mode(cfg) != mode_before:
@@ -1394,82 +1390,6 @@ def _check_llm(cfg: dict) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-def _runtime_probe(exe: str) -> mcs_runtime.RuntimeFacts | None:
-    # Only stdlib and distribution metadata: never import SDK clients or MCS.
-    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
-        return None
-    r = _run([exe, "-I", "-c", """
-import sys, sqlite3, json
-from importlib.metadata import version, PackageNotFoundError
-packages = {}
-for name in ('discord.py', 'slack-bolt', 'slack-sdk'):
-    try:
-        packages[name] = version(name)
-    except PackageNotFoundError:
-        packages[name] = None
-print(json.dumps({'python': '.'.join(map(str, sys.version_info[:3])),
-                  'sqlite': sqlite3.sqlite_version, 'packages': packages}))
-"""], timeout=20)
-    if r.returncode:
-        return None
-    try:
-        data = json.loads(getattr(r, "stdout", ""))
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(data, dict) or not all(
-            isinstance(data.get(key), str) and
-            re.fullmatch(r"\d+\.\d+\.\d+", data[key])
-            for key in ("python", "sqlite")):
-        return None
-    packages = data.get("packages")
-    names = ("discord.py", "slack-bolt", "slack-sdk")
-    if not isinstance(packages, dict) or set(packages) != set(names):
-        return None
-    if any(value is not None and (
-            not isinstance(value, str) or
-            re.fullmatch(r"\d+(?:\.\d+)+(?:[a-z]+\d+)?", value) is None)
-           for value in packages.values()):
-        return None
-    return {"python": data["python"], "sqlite": data["sqlite"],
-            "packages": packages}
-
-
-def _recovery_python(cfg) -> str:
-    if "recovery_python" in cfg:
-        return cfg["recovery_python"]
-    # Native supervision has a minimal PATH; keep Homebrew's stable path.
-    for path in ("/opt/homebrew/bin/python3.14", "/usr/local/bin/python3.14",
-                 "/usr/bin/python3.14"):
-        if os.access(path, os.X_OK):
-            return path
-    return shutil.which("python3.14") or "/usr/bin/python3.14"
-
-
-def _recovery_executable(plist) -> str | None:
-    if not isinstance(plist, dict):
-        return None
-    if "Program" in plist:
-        exe = plist["Program"]
-    else:
-        argv = plist.get("ProgramArguments")
-        exe = argv[0] if isinstance(argv, list) and argv else None
-    return exe if isinstance(exe, str) and os.path.isabs(exe) else None
-
-
-def _recovery_runtime(plist_path: str | Path | None = None) -> mcs_runtime.RuntimeFacts | None:
-    # Inspect the deployed watchdog's command, not ambient /usr/bin/python3.
-    try:
-        with open(plist_path if plist_path is not None else
-                  os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), "rb") as f:
-            plist = plistlib.load(f)
-        exe = _recovery_executable(plist)
-        if exe is None or recovery_python_problem(exe, checkout=REPO_ROOT):
-            return None
-    except (OSError, ValueError, TypeError, AttributeError, plistlib.InvalidFileException):
-        return None
-    return _runtime_probe(exe)
-
-
 def _recovery_owned() -> bool:
     """Existing private tool, repo pointer and exact command prove ownership."""
     try:
@@ -1498,7 +1418,7 @@ def _recovery_owned() -> bool:
         argv = plist.get("ProgramArguments")
         return (plist.get("Label") == RECOVERY_LABEL and isinstance(argv, list)
                 and len(argv) == 3 and argv[1:] == [str(root / "mcs_recover.py"), "--if-stale"]
-                and _recovery_executable(plist) is not None)
+                and runtime_inspection.recovery_executable(plist) is not None)
     except (OSError, ValueError, TypeError, RuntimeError):
         return False
 
@@ -1512,25 +1432,26 @@ def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None,
     except ValueError as e:     # backup / watchdog_grace_s invalid
         errors.append(f"config: {e}")
     else:
-        why = mcs_runtime.runtime_problem(_runtime_probe(python),
+        why = mcs_runtime.runtime_problem(runtime_inspection.probe_python(python),
                                allow_runtime_migration=allow_runtime_migration)
         if why:
             errors.append("selected_runtime: " + why)
     # Absence is the existing optional-watchdog warning, not an invented
     # interpreter choice. A present but broken plist must fail closed.
     explicit = "recovery_python" in cfg
-    desired = _recovery_python(cfg)
+    desired = runtime_inspection.recovery_python(cfg)
     desired_problem = None
     if explicit:
         desired_problem = recovery_python_problem(desired, update_repo, checkout=REPO_ROOT) or mcs_runtime.runtime_problem(
-            _runtime_probe(desired), recovery=True)
+            runtime_inspection.probe_python(desired), recovery=True)
         if desired_problem:
             errors.append("desired_recovery_runtime: " + desired_problem)
     if os.path.lexists(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
-        why = mcs_runtime.runtime_problem(_recovery_runtime(), recovery=True)
+        why = mcs_runtime.runtime_problem(runtime_inspection.recovery_runtime(
+            os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), checkout=REPO_ROOT), recovery=True)
         try:
             with open(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), "rb") as stream:
-                actual = _recovery_executable(plistlib.load(stream))
+                actual = runtime_inspection.recovery_executable(plistlib.load(stream))
         except (OSError, ValueError, TypeError):
             actual = None
         if actual is not None:
@@ -1551,7 +1472,7 @@ def recovery_repair_pending(cfg) -> bool:
         return False
     try:
         with open(path, "rb") as stream:
-            return _recovery_executable(plistlib.load(stream)) != _recovery_python(cfg)
+            return runtime_inspection.recovery_executable(plistlib.load(stream)) != runtime_inspection.recovery_python(cfg)
     except (OSError, ValueError, TypeError):
         return True
 
@@ -1574,9 +1495,9 @@ def _sync_recovery(cfg, note, dry) -> int:
     path = Path(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")
     if "recovery_python" not in cfg or not os.path.lexists(path):
         return 0
-    desired = _recovery_python(cfg)
+    desired = runtime_inspection.recovery_python(cfg)
     with path.open("rb") as stream:
-        actual = _recovery_executable(plistlib.load(stream))
+        actual = runtime_inspection.recovery_executable(plistlib.load(stream))
     if actual == desired:
         return 0
     if sys.platform != "darwin" or not _recovery_owned():
@@ -1588,7 +1509,7 @@ def _sync_recovery(cfg, note, dry) -> int:
         body = render_template(text, {key: xml_escape(value, quote=False) for key, value in {
             "RECOVERY_PYTHON": desired, "RECOVERY": RECOVERY_DIR,
             "DATA": str(Path(HOME, "data"))}.items()})
-        if _recovery_executable(plistlib.loads(body.encode())) != desired:
+        if runtime_inspection.recovery_executable(plistlib.loads(body.encode())) != desired:
             note("復旧監視: 設定のひな形と使用するPythonが一致しないため、置き換えていません")
             return 1
     except (OSError, ValueError, TypeError):
@@ -1774,12 +1695,13 @@ def cmd_doctor(args) -> int:
         checks["runtime"] = _doctor_check(["runtime mode invalid"], [])
     else:
         mode = mcs_runtime.mode(cfg)
-        selected = _runtime_probe(_services_py(cfg))
+        selected = runtime_inspection.probe_python(_services_py(cfg))
         why = mcs_runtime.runtime_problem(selected)
         checks["runtime"] = _doctor_check([why] if why else [], [])
         if sys.platform == "darwin" and os.path.isfile(
                 os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
-            recovery = _recovery_runtime()
+            recovery = runtime_inspection.recovery_runtime(
+                os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), checkout=REPO_ROOT)
             why = mcs_runtime.runtime_problem(recovery, recovery=True)
             checks["recovery_runtime"] = _doctor_check([why] if why else [], [])
     probes = frozenset(getattr(args, "probe", None) or [])
@@ -1805,13 +1727,13 @@ def cmd_doctor(args) -> int:
     desired = None
     matches = None
     if not config_errors and "recovery_python" in cfg:
-        desired = _runtime_probe(_recovery_python(cfg))
+        desired = runtime_inspection.probe_python(runtime_inspection.recovery_python(cfg))
         why = mcs_runtime.runtime_problem(desired, recovery=True)
         checks["desired_recovery_runtime"] = _doctor_check([why] if why else [], [])
         if os.path.lexists(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
             try:
                 with open(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), "rb") as stream:
-                    matches = _recovery_executable(plistlib.load(stream)) == _recovery_python(cfg)
+                    matches = runtime_inspection.recovery_executable(plistlib.load(stream)) == runtime_inspection.recovery_python(cfg)
             except (OSError, ValueError, TypeError):
                 matches = False
             checks["recovery_selection"] = _doctor_check(
@@ -1960,30 +1882,7 @@ def _services_py(cfg: dict) -> str:
 
 def _hermes_py_problem() -> str | None:
     """None when HERMES_PY is an executable Python >= 3.14."""
-    return _py_problem(HERMES_PY)
-
-
-def _py_problem(exe: str) -> str | None:
-    """None when `exe` is an executable Python >= 3.14."""
-    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
-        return f"Python（{exe}）が見つからないか、実行できません"
-    r = _run([exe, "-c",
-              "import sys; sys.exit(sys.version_info < (3, 14))"],
-             timeout=20)
-    if r.returncode != 0:
-        return (f"Python（{exe}）を起動できないか、3.14未満です "
-                f"(rc={r.returncode})")
-    # Inspect the actual service interpreter's linked SQLite, not the
-    # version of a sqlite3 executable or a different Python on PATH.
-    r = _run([exe, "-c",
-              "import sqlite3,sys; v=sqlite3.sqlite_version_info; "
-              "sys.exit(0 if v >= (3,51,3) or "
-              "(v[:2] == (3,50) and v >= (3,50,7)) or "
-              "(v[:2] == (3,44) and v >= (3,44,6)) else 1)"],
-             timeout=20)
-    if r.returncode:
-        return "常駐処理のSQLiteに安全なデータ保存の修正がありません（3.51.3以上、3.50.7以上、または3.44.6以上の対応系列が必要です）"
-    return None
+    return runtime_inspection.python_problem(HERMES_PY)
 
 
 def _cron_label(script: str) -> str:
@@ -2010,7 +1909,7 @@ def _install_fix(stage: str) -> str:
 
 
 def _standalone_py_problem(cfg: dict) -> str | None:
-    return _py_problem(mcs_runtime.python_executable(cfg, root=HOME))
+    return runtime_inspection.python_problem(mcs_runtime.python_executable(cfg, root=HOME))
 
 
 def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
@@ -2030,7 +1929,7 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
                           "手順2で独立動作のPython環境を再構築" if standalone else "手順2でHermesのPython環境を再構築")
                       + "、続いて`mcs_setup.py services`を実行してください")
     exe = _hermes_exe(cfg) if not standalone else ""
-    if not standalone and _hermes_ok(exe) and not _hermes_ok(_hermes_exe(cfg, LAUNCHD_PATH)):
+    if not standalone and runtime_inspection.executable_available(exe) and not runtime_inspection.executable_available(_hermes_exe(cfg, LAUNCHD_PATH)):
         errors.append(
             f"この操作環境ではHermes（{exe}）を使えますが、常駐処理の検索先"
             f"（{LAUNCHD_PATH}）では見つからず、定期処理から通知できません。"
@@ -2072,7 +1971,8 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
                         f"未導入です。更新が中断しても自動復旧できません。"
                         + fix)
     else:
-        why = mcs_runtime.runtime_problem(_recovery_runtime(), recovery=True)
+        why = mcs_runtime.runtime_problem(runtime_inspection.recovery_runtime(
+            os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), checkout=REPO_ROOT), recovery=True)
         if why:
             errors.append(f"復旧監視: {why}。復元時のデータ保存を"
                           "安全に行えるか確認できません。" + fix)
@@ -2937,7 +2837,7 @@ def cmd_services(args) -> int:
             note(f"通知設定を保存できません（{type(e).__name__}: {e}）。servicesを再実行してください")
             flags_failed = True
 
-    if not _hermes_ok(hermes):
+    if not runtime_inspection.executable_available(hermes):
         note(f"定期処理: Hermesコマンドが見つからないため設定を見送りました（{hermes}）")
         problems += 1
     else:

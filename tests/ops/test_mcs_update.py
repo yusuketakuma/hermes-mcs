@@ -3,6 +3,7 @@
 Fully synthetic: temp git repos + temp sqlite + stubbed subprocess/
 network. No real MCS, Discord, Keychain, or external repo access.
 """
+import runtime_inspection
 import json
 import os
 import py_compile
@@ -45,10 +46,9 @@ def _standalone_heartbeat(updater, **updates):
 
 
 def test_standalone_precheck_does_not_require_hermes(updater, monkeypatch):
-    import mcs_setup
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
-    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("Hermes lookup forbidden"))
+    monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
+    monkeypatch.setattr(mcs_update, "hermes_exe", lambda cfg: pytest.fail("Hermes lookup forbidden"))
     assert updater.precheck_local({"runtime_mode": "standalone", "mcs_login_id": "u", "notify_target": "local"}) == []
 
 
@@ -108,6 +108,7 @@ def updater(tmp_path, monkeypatch):
     selected.touch()
     selected.chmod(0o700)
     monkeypatch.setattr(mcs_setup, "HOME", str(runtime_home))
+    monkeypatch.setattr(mcs_update, "HOME", str(runtime_home))
     monkeypatch.setattr(mcs_setup, "HERMES_PY", str(selected))
     agents = runtime_home / "agents"
     agents.mkdir()
@@ -115,7 +116,7 @@ def updater(tmp_path, monkeypatch):
     (agents / "org.mcs.recovery.plist").write_bytes(plistlib.dumps(
         {"ProgramArguments": [str(selected), "synthetic-recovery.py"]}))
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: _facts())
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: _facts())
     monkeypatch.setattr(mcs_update, "REPO", str(tmp_path / "repo"))
     monkeypatch.setattr(mcs_update, "DATA", str(tmp_path / "data"))
     monkeypatch.setattr(mcs_update, "STATE_PATH",
@@ -424,8 +425,8 @@ def test_cron_reconcile_shares_the_setup_parser(updater, monkeypatch, output, pr
     if output == "ansi":
         output = _cron_listing(f"{updater.SCRIPTS_DIR}/{script}", ansi=True)
     monkeypatch.setattr(updater, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda path: True)
+    monkeypatch.setattr(mcs_update, "hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda path: True)
     calls = []
 
     def execute(argv, **kwargs):
@@ -441,8 +442,8 @@ def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returnc
     import mcs_setup
     script = mcs_setup.CRON_JOBS[0][2]
     monkeypatch.setattr(updater, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda path: True)
+    monkeypatch.setattr(mcs_update, "hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda path: True)
     calls = []
 
     def list_result(argv, **kwargs):
@@ -471,11 +472,10 @@ def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returnc
 ])
 def test_rollback_offsite_cron_requires_matching_owned_identity(
         updater, monkeypatch, script, evidence, removed):
-    import mcs_setup
 
     monkeypatch.setattr(updater, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda path: True)
+    monkeypatch.setattr(mcs_update, "hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda path: True)
     if evidence is not None:
         path = Path(updater.MANIFEST_PATH)
         path.write_text(json.dumps({"cron": [evidence]}))
@@ -2632,14 +2632,13 @@ def test_invalid_runtime_mode_is_reported_not_raised(updater, tmp_path, monkeypa
 @pytest.mark.parametrize("print_code", [113, 1, 124])
 def test_membership_removes_an_agent_plist_only_after_launchd_says_gone(
         updater, tmp_path, monkeypatch, print_code):
-    import mcs_setup
     agents = tmp_path / "update-agents"
     agents.mkdir()
     plist = agents / "ai.mcs.extract-retired.plist"
     plist.write_text("<plist/>")
     monkeypatch.setattr(updater, "AGENTS_DIR", str(agents))
     monkeypatch.setattr(updater, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda path: False)
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda path: False)
     monkeypatch.setattr(updater.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
         argv, print_code if argv[1] == "print" else 0, "", ""))
     problems = updater._reconcile_membership({"cron": [], "agents": []})
@@ -2779,7 +2778,7 @@ def test_legacy_baseline_matches_current_environment_probe(updater, monkeypatch)
     monkeypatch.setattr(mcs_setup.os.path, "exists", lambda path: False)
     monkeypatch.setattr(mcs_setup, "_check_llm", lambda cfg: ([], []))
     monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: True)
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
     monkeypatch.setattr(mcs_setup, "env_value", lambda *args, **kwargs: None)
     monkeypatch.delenv("MCS_LLM_ADMISSION", raising=False)
     errors, _ = mcs_setup.check_environment({})

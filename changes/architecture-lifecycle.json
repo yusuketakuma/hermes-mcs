@@ -10,7 +10,8 @@
     "旧updaterが候補のmcsだけを配置してmcs_setup.validate_configを呼ぶ入口を保持します。",
     "操作コマンドのpayload検証とretry判断・参照統計の共有契約を、receiptの同一transaction内の更新処理から分離しました。",
     "独立動作でログ用FDからstreamへの受渡しに失敗してもFDを閉じてから再起動を要求します。更新journalの読取りも共通のnofollow検証に揃えました。",
-    "処理状況の観測から評価専用moduleへの依存を除き、既存の統計計算を共有します。"
+    "処理状況の観測から評価専用moduleへの依存を除き、既存の統計計算を共有します。",
+    "導入・更新・復旧監視のPython診断をruntime_inspectionに集約し、明示した実行ファイルと配備先を毎回調べるよう整理しました。installerの復旧診断も共有する公開実装へ揃え、設定変更・サービス適用・更新journalの所有者と安全条件を維持します。"
   ],
   "refs": [
     "mcs/core/mcs_config.py",
@@ -22,6 +23,7 @@
     "mcs/ops/update_policy.py",
     "mcs/ops/operation_contract.py",
     "mcs_standalone/runtime.py",
-    "mcs/ops/semantic_observe.py"
+    "mcs/ops/semantic_observe.py",
+    "mcs/ops/runtime_inspection.py"
   ]
 }

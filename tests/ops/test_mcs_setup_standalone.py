@@ -3,6 +3,7 @@ without Hermes; Hermes mode keeps its existing surface."""
 import lifecycle_io
 import mcs_config
 import scheduled_jobs
+import runtime_inspection
 import json
 import os
 import plistlib
@@ -133,7 +134,7 @@ def test_standalone_services_use_launchd_not_hermes(monkeypatch, tmp_path):
     host = runtime.Runtime(tmp_path, config())
     argv = host.argv["mcs_check"]
     assert argv[0] == "/usr/bin/perl"  # the host retains the whole-job timeout
-    assert argv[3:] == [str(mcs_setup.CRON_TIMEOUT_S), "/bin/bash",
+    assert argv[3:] == [str(scheduled_jobs.CRON_TIMEOUT_S), "/bin/bash",
                        str(tmp_path / "scripts" / "mcs_check.sh")]
     plist = plistlib.loads((tmp_path / "agents" / "ai.mcs.standalone.plist").read_bytes())
     assert plist["ProgramArguments"] == [venv, "-m", "mcs_standalone", "run", "--root", str(tmp_path)]
@@ -272,7 +273,7 @@ def test_back_to_hermes_without_hermes_keeps_the_launchd_schedule(monkeypatch, t
     calls, args = _standalone_services(monkeypatch, tmp_path, config())
     assert mcs_setup.cmd_services(args) == 0
     calls, args = _services_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: False)
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: False)
     mcs_setup.cmd_services(args)
     outs = {a[2].rsplit("/", 1)[-1] for a in calls if a[:2] == ["launchctl", "bootout"]}
     assert mcs_setup.STANDALONE_LABEL not in outs

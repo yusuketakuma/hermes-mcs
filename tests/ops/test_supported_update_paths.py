@@ -1,4 +1,5 @@
 """Versioned update contracts with synthetic Git objects, no Git history/process."""
+import runtime_inspection
 from contextlib import closing
 import hashlib
 import json
@@ -150,9 +151,9 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     monkeypatch.setattr(updater, "_git", objects.run)
     monkeypatch.setattr(updater, "remote_tag_sha", lambda tag: objects.after)
     monkeypatch.setattr(maintenance, "BACKUP_DIR", updater.BACKUP_DIR)
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda *a: "synthetic-hermes")
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda *a: True)
-    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
+    monkeypatch.setattr(updater, "hermes_exe", lambda *a: "synthetic-hermes")
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda *a: True)
+    monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
     monkeypatch.setattr(updater, "_standalone_drainer_problems", lambda: [])
     monkeypatch.setattr(updater, "_baseline_check", lambda cfg: [])
     calls = []
@@ -404,7 +405,7 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
         "ProgramArguments": [old, str(recovery / "mcs_recover.py"), "--if-stale"]}))
     plist.chmod(0o600)
     monkeypatch.setattr(mcs_setup, "RECOVERY_DIR", str(recovery))
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe:
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe:
                         _facts("3.9.6", "3.51.0") if exe == old else _facts())
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(mcs_setup, "_run", lambda argv, **kw: SimpleNamespace(

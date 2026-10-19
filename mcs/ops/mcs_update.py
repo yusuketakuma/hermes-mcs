@@ -50,12 +50,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 from cli_args import JapaneseArgumentParser as _JapaneseParser  # noqa: E402
 import mcs_runtime  # noqa: E402
+import runtime_inspection  # noqa: E402
 import update_journal as journal_store  # noqa: E402
 import update_policy  # noqa: E402
 from mcs_requests import parse_command, release_tag  # noqa: E402
 
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
-                      atomic_write, launchd_bootstrap, load_config)
+                      atomic_write, hermes_exe, launchd_bootstrap, load_config)
 from mcs_util import file_sha256 as _file_sha256  # noqa: E402
 from safe_io import fsync_dir  # noqa: E402
 
@@ -531,11 +532,11 @@ def precheck_local(cfg: dict) -> list[str]:
     errors.extend(mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO,
                                                  allow_runtime_migration=True))
     if cfg.get("runtime_mode") == "standalone":
-        if mcs_setup._standalone_py_problem(cfg):
+        if runtime_inspection.python_problem(mcs_runtime.python_executable(cfg, root=HOME)):
             errors.append("standalone_interpreter_unavailable")
     else:
-        hermes = mcs_setup._hermes_exe(cfg)
-        if not mcs_setup._hermes_ok(hermes):
+        hermes = hermes_exe(cfg)
+        if not runtime_inspection.executable_available(hermes):
             errors.append("hermes_not_resolvable")
     problem = _migration_checkout_problem(cfg)
     if problem:
@@ -2206,7 +2207,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
                 or (row.get(key) is not None and not isinstance(row[key], str))
                 for row in rows)):
             return ["service_snapshot_invalid"]
-    hermes = mcs_setup._hermes_exe(cfg)
+    hermes = hermes_exe(cfg)
     desired_cron = {(d.get("script") or ""): d for d in
                     desired.get("cron", [])}
     known_scripts = {s for _, _, s in mcs_setup.CRON_JOBS} | {"mcs_offsite.sh"}
@@ -2225,7 +2226,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
         evidence += current["cron"]
     desired_paths = {os.path.normpath(os.path.join(SCRIPTS_DIR, script))
                      for script in desired_cron if script}
-    if mcs_setup._hermes_ok(hermes):
+    if runtime_inspection.executable_available(hermes):
         try:
             # one parser with mcs_setup: ANSI-tolerant, None = unparsable
             entries = mcs_setup._cron_list(hermes)

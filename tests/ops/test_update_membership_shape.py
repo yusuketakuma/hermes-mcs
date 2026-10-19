@@ -1,7 +1,7 @@
 """Unreadable service membership must be rejected before any external operation."""
+import runtime_inspection
 import pytest
 
-import mcs_setup
 import mcs_update
 
 
@@ -17,7 +17,7 @@ def test_invalid_membership_stops_before_external_operations(monkeypatch, desire
     def unexpected(*args, **kwargs):
         pytest.fail('invalid membership reached service or filesystem operation')
 
-    monkeypatch.setattr(mcs_setup, '_hermes_exe', unexpected)
+    monkeypatch.setattr(mcs_update, 'hermes_exe', unexpected)
     monkeypatch.setattr(mcs_update.glob, 'glob', unexpected)
     monkeypatch.setattr(mcs_update.os, 'open', unexpected)
     monkeypatch.setattr(mcs_update.subprocess, 'run', unexpected)
@@ -30,7 +30,7 @@ def test_invalid_runtime_mode_is_reported_before_any_removal(monkeypatch):
     def unexpected(*args, **kwargs):
         pytest.fail('invalid runtime_mode reached cron or agent removal')
 
-    monkeypatch.setattr(mcs_setup, '_hermes_ok', lambda hermes: True)
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda hermes: True)
     monkeypatch.setattr(mcs_update.glob, 'glob', unexpected)
     monkeypatch.setattr(mcs_update.subprocess, 'run', unexpected)
     assert mcs_update._reconcile_membership({}) == ['runtime_mode_unverifiable']

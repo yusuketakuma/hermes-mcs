@@ -1,5 +1,6 @@
 """Update and recovery in runtime_mode=standalone: restart the connector
 agent instead of the Hermes gateway and never require Hermes."""
+import runtime_inspection
 import json
 
 import mcs_update
@@ -30,12 +31,12 @@ def test_update_restarts_the_connector_or_gateway(monkeypatch, tmp_path):
 def test_update_precheck_needs_no_hermes_in_standalone(monkeypatch):
     import mcs_setup
     monkeypatch.setattr(mcs_update, "_tree_clean", lambda: True)
-    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: False)
-    monkeypatch.setattr(mcs_setup, "_py_problem", lambda exe: None)
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: False)
+    monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
     monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: ([], []))
     assert "hermes_not_resolvable" in mcs_update.precheck_local({})
     assert "hermes_not_resolvable" not in mcs_update.precheck_local({"runtime_mode": "standalone"})
-    monkeypatch.setattr(mcs_setup, "_py_problem", lambda exe: "missing")
+    monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: "missing")
     assert "standalone_interpreter_unavailable" in mcs_update.precheck_local({"runtime_mode": "standalone"})
 
 

@@ -5,6 +5,7 @@ need neither Git history nor a live database. Service/Git boundaries in public
 rollback are stubbed; SQLite migration, backup, consent, replacement,
 reconciliation, locks and updater bookkeeping remain real.
 """
+import runtime_inspection
 from contextlib import closing
 import hashlib
 import json
@@ -224,7 +225,7 @@ def updater(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_setup, "HOME", str(root))
     monkeypatch.setattr(mcs_setup, "HERMES_PY", str(selected))
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
-    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: _facts())
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: _facts())
     paths = {
         "REPO": root, "DATA": data, "LEDGER": data / "ledger.db",
         "STATE_PATH": data / "update_state.json", "UPDATE_LOCK": data / "update.lock",
@@ -303,12 +304,12 @@ def test_released_schema_update_rollback_requires_bound_consent(
     monkeypatch.setattr(updater, "quiesce", lambda: updater._write_marker())
     monkeypatch.setattr(updater, "restart_agents",
                         lambda bounce=True: restarts.append(bounce) or [])
-    state = updater._default_state()
+    state = updater.journal_store.default_state()
     bump = origin["schema_version"] < ledger.SCHEMA_VERSION
     state["applied"] = [{
         "tag": origin["release"], "sha": "b" * 40, "prev_sha": "a" * 40,
         "schema_bump": bump, "backup_path": str(backup), "at": 100}]
-    updater.save_state(state)
+    updater.journal_store.save_state(updater.STATE_PATH, state)
 
     if not bump:
         latest = _records(live)
@@ -330,7 +331,7 @@ def test_released_schema_update_rollback_requires_bound_consent(
     assert report["backup_schema"] == origin["schema_version"]
     assert report["backup_sha256"] == backup_hash
     assert report["stored_since_backup"]["messages"] == 1
-    assert "synthetic-rollback" not in updater.load_state()["executed"]
+    assert "synthetic-rollback" not in updater.journal_store.load_state(updater.STATE_PATH)["executed"]
     with closing(sqlite3.connect(live)) as con:
         con.row_factory = sqlite3.Row
         denied = notify_transport.apply_transport_begin(
@@ -344,7 +345,7 @@ def test_released_schema_update_rollback_requires_bound_consent(
     assert restarts == [True]
     assert not Path(updater.MARKER_PATH).exists()
     assert notify_cards.restore_pending(str(live.parent)) is None
-    after = updater.load_state()
+    after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["applying"] is None
     assert after["stages"] == []
     assert after["executed"]["synthetic-rollback"]["result"] == "rolled_back"
