@@ -236,7 +236,7 @@ class Interrupted:
         self.stream.write(raw[:7])
         self.stream.flush()
         os._exit(73)
-os.fdopen = lambda fd, mode: Interrupted(original(fd, mode))
+os.fdopen = lambda fd, mode, *args, **kwargs: Interrupted(original(fd, mode, *args, **kwargs))
 safe_io.publish_new_bytes(Path(sys.argv[2]), b'{"approval_id":"synthetic"}')
 '''
     result = subprocess.run([sys.executable, "-B", "-c", code,
