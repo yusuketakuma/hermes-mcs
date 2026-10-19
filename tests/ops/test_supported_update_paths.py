@@ -1,4 +1,8 @@
 """Versioned update contracts with synthetic Git objects, no Git history/process."""
+import mcs_util
+import lifecycle_io
+import service_contract
+import service_management
 import update_discovery
 import runtime_inspection
 from contextlib import closing
@@ -148,12 +152,12 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
                        path.get("target", MANIFEST["target"]["version"]),
                        ledger.SCHEMA_VERSION if schema is None else schema)
     monkeypatch.setattr(updater, "HOME", str(root))
-    monkeypatch.setattr(updater, "load_config", lambda: cfg)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
     monkeypatch.setattr(updater, "_git", objects.run)
     monkeypatch.setattr(update_discovery, "git", objects.run)
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: objects.after)
     monkeypatch.setattr(maintenance, "BACKUP_DIR", updater.BACKUP_DIR)
-    monkeypatch.setattr(updater, "hermes_exe", lambda *a: "synthetic-hermes")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda *a: True)
     monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
     monkeypatch.setattr(updater, "_standalone_drainer_problems", lambda: [])
@@ -393,7 +397,7 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
     from test_runtime_compatibility import _facts
     path = next(p for p in ELIGIBLE if p["source"] == "v1.0.12" and p["runtime"] == "hermes")
     objects, _, _, _, _ = _world(tmp_path, monkeypatch, updater, path, install=install)
-    cfg = updater.load_config()
+    cfg = mcs_util.load_config()
     old, desired = "/synthetic/system/python3", str(tmp_path / "recovery-runtime/bin/python3")
     recovery = tmp_path / "mcs-recovery"
     recovery.mkdir(mode=0o700)
@@ -401,16 +405,22 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
     (recovery / "mcs_recover.py").chmod(0o700)
     (recovery / "repo_path").write_text(str(Path(mcs_setup.REPO_ROOT).resolve()) + "\n")
     (recovery / "repo_path").chmod(0o600)
-    plist = Path(mcs_setup.AGENTS_DIR, mcs_setup.RECOVERY_LABEL + ".plist")
+    plist = Path(mcs_setup.AGENTS_DIR, service_contract.RECOVERY_LABEL + ".plist")
     plist.write_bytes(plistlib.dumps({
-        "Label": mcs_setup.RECOVERY_LABEL,
+        "Label": service_contract.RECOVERY_LABEL,
         "ProgramArguments": [old, str(recovery / "mcs_recover.py"), "--if-stale"]}))
     plist.chmod(0o600)
     monkeypatch.setattr(mcs_setup, "RECOVERY_DIR", str(recovery))
+    # Synthetic Git tree and loaded service source are separate in this fixture.
+    from dataclasses import replace
+    service_paths = replace(updater._service_paths(), recovery_dir=str(recovery),
+                            checkout=str(mcs_setup.REPO_ROOT))
+    monkeypatch.setattr(updater, "_service_paths", lambda: service_paths)
+    assert service_management.recovery_owned(paths=updater._service_paths())
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe:
                         _facts("3.9.6", "3.51.0") if exe == old else _facts())
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **kw: SimpleNamespace(
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda argv, **kw: SimpleNamespace(
         returncode=113 if argv[:2] == ["launchctl", "print"] else 0, stdout=""))
     notes = []
 
@@ -418,8 +428,8 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
         # what _run_post_merge hands the NEW-code child; the parent apply
         # still holds update.lock and run.lock
         monkeypatch.setenv(updater._UPDATE_PM_ENV, updater.journal_store.load_state(updater.STATE_PATH)["applying"]["sha"])
-        assert mcs_setup.runtime_gate_errors(cfg, repair_recovery=True) == []
-        if mcs_setup._sync_recovery(cfg, notes.append, False):
+        assert service_management.runtime_gate_errors(cfg, repair_recovery=True, paths=mcs_setup._service_paths()) == []
+        if service_management.sync_recovery(cfg, notes.append, False, paths=mcs_setup._service_paths()):
             raise updater.UpdateError("services_failed: " + notes[-1])
 
     monkeypatch.setattr(updater, "_services_reconcile", services)
@@ -450,4 +460,4 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
     assert len(merged()) == 1 and objects.head == objects.after
     assert updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]["sha"] == objects.after
     assert plistlib.loads(plist.read_bytes())["ProgramArguments"][0] == desired
-    assert mcs_setup.runtime_gate_errors(cfg) == []
+    assert service_management.runtime_gate_errors(cfg, paths=mcs_setup._service_paths()) == []

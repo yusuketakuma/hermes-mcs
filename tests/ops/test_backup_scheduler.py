@@ -1,4 +1,5 @@
 """Disabled-by-default scheduler boundary; only synthetic policy and process stubs."""
+import service_management
 
 import json
 from pathlib import Path
@@ -34,7 +35,7 @@ def _wrapper(tmp_path, exit_code=0, *, enabled=False):
             "BACKUP_POLICY": str(tmp_path / "owner policy.json"),
             "BACKUP_SNAPSHOT": "",
             "BACKUP_SNAPSHOT_DIR": str(tmp_path / "daily backups")}
-    runner.write_text(next(body for name, body in mcs_setup._rendered_scripts(subs)
+    runner.write_text(next(body for name, body in service_management.rendered_scripts(subs, paths=mcs_setup._service_paths())
                            if name == SCRIPT.name))
     return runner, data, calls
 

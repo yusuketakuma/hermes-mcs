@@ -7,7 +7,6 @@ from typing import TypedDict
 
 from mcs_util import HOME
 
-STANDALONE_LABEL = "ai.mcs.standalone"
 GATEWAY_SOURCE_DIRS = ("hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord", "mcs")
 
 

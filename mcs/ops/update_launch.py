@@ -14,8 +14,14 @@ STRIPPED_ENV = (
 
 def launch_environment(environment, *, detached: bool) -> dict:
     """Copy a borrowed environment, dropping only the update launch identities."""
-    excluded = STRIPPED_ENV + (("XPC_SERVICE_NAME", "MCS_JOB_PID") if detached else ())
-    return {key: value for key, value in environment.items() if key not in excluded}
+    cleaned = {key: value for key, value in environment.items() if key not in STRIPPED_ENV}
+    return without_job_identity(cleaned) if detached else cleaned
+
+
+
+def without_job_identity(environment) -> dict:
+    """Copy a borrowed environment without its current launchd job identity."""
+    return {key: value for key, value in environment.items() if key not in ("XPC_SERVICE_NAME", "MCS_JOB_PID")}
 
 
 def wrapper_path(cfg: dict, *, root, hermes_wrapper: str) -> str:

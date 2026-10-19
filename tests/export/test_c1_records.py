@@ -16,6 +16,7 @@ import ledger
 import mcs_signals
 import mcs_view
 import read_model
+import snapshots
 from semantic_projection import PROJECTION_VERSION
 from semantic_testkit import _message
 
@@ -84,7 +85,7 @@ def _snapshot(tmp_path, monkeypatch, times=None):
                     "INSERT INTO artifacts(kind,project_id,content,meta,created_at)"
                     " VALUES('signal_v1',1,?,?,?)",
                     (json.dumps(content), json.dumps({"key": f"sig-{n}"}), SNAP_TS))
-    monkeypatch.setattr(ledger, "time", SimpleNamespace(time=lambda: SNAP_TS))
+    monkeypatch.setattr(snapshots, "time", SimpleNamespace(time=lambda: SNAP_TS))
     published = ledger.publish_snapshot(str(live), str(tmp_path / "snapshots"))
     assert published is not None
     return live, published

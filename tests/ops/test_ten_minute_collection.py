@@ -1,4 +1,5 @@
 """Existing services and the standalone host share ten-minute fetch slots."""
+import service_management
 import json
 from types import SimpleNamespace
 
@@ -19,7 +20,7 @@ def test_services_migrate_existing_fetch_jobs_without_duplicates(tmp_path, monke
     manifest["cron"].append({"id": "000002", "script": "mcs_deep.sh"})
     path.write_text(json.dumps(manifest))
     assert mcs_setup.cmd_services(args) == 0
-    actual = {row["script"]: row for row in mcs_setup._cron_list("/x/hermes")}
+    actual = {row["script"]: row for row in service_management.inspect_cron('/x/hermes')}
     assert actual["mcs_check.sh"]["schedule"] == "*/10 * * * *"
     assert actual["mcs_deep.sh"]["schedule"] == "10,40 * * * *"
     assert actual["mcs_check.sh"]["id"] == "000001"
@@ -29,7 +30,7 @@ def test_services_migrate_existing_fetch_jobs_without_duplicates(tmp_path, monke
     assert mcs_setup.cmd_services(args) == 0
     assert [call for call in calls if call[1:3] in (
         ["cron", "create"], ["cron", "edit"], ["cron", "remove"])] == mutations
-    assert len(mcs_setup._cron_list("/x/hermes")) == 6
+    assert len(service_management.inspect_cron('/x/hermes')) == 6
 
 
 def test_standalone_fetches_only_on_ten_minute_grid(tmp_path, monkeypatch):

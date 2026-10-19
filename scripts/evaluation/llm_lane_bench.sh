@@ -4,7 +4,7 @@
 # llama-bench and the resident llama-server at once (same model loaded
 # twice swaps). -ub is a start flag of the Hermes-owned llamacpp plist;
 # this script never edits a plist and never stops or starts a service.
-# Label names must match mcs_setup.RESIDENT_LABELS.
+# Label names must match service_contract.RESIDENT_LABELS.
 # Every recorded value is numeric/boolean/reason code: no prompt or
 # response text is kept, and the prompts are generated synthetic text.
 set -u

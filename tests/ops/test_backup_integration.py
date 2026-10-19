@@ -1,4 +1,6 @@
 """Explicit backup settings render safely and health reads only synthetic records."""
+import lifecycle_io
+import service_management
 import scheduled_jobs
 import json
 from dataclasses import asdict
@@ -12,6 +14,7 @@ import sys
 import pytest
 
 import mcs_backup
+from backup_config import validate_backup_config
 import mcs_setup
 import health_report
 from ledger import Ledger
@@ -47,19 +50,19 @@ def test_disabled_backup_never_reads_policy_or_keys(monkeypatch):
     monkeypatch.setattr(mcs_backup, "load_policy", forbidden)
     monkeypatch.setattr(mcs_backup, "_keychain_read", forbidden)
     assert health_report.backup_health({}, 100) == {"state": "disabled", "reasons": []}
-    assert mcs_setup._service_subs({})["BACKUP_ENABLED"] == "0"
+    assert service_management.service_substitutions({}, paths=mcs_setup._service_paths())["BACKUP_ENABLED"] == "0"
 
 
 def test_backup_configuration_requires_owner_paths_schedule_and_intervals(backup_settings):
     _, config = backup_settings
     settings = config["backup"]
-    assert mcs_setup._backup_config(settings) is None
+    assert validate_backup_config(settings) is None
     for key in ("policy", "snapshot_dir", "schedule", "verify_interval_s", "drill_interval_s"):
         incomplete = {k: v for k, v in settings.items() if k != key}
-        assert mcs_setup._backup_config(incomplete) is not None
+        assert validate_backup_config(incomplete) is not None
     for schedule in ("60 3 * * *", "17 24 * * *", "*/5 * * * *", "17 3 * * 1"):
-        assert mcs_setup._backup_config({**settings, "schedule": schedule}) is not None
-    subs = mcs_setup._service_subs(config)
+        assert validate_backup_config({**settings, "schedule": schedule}) is not None
+    subs = service_management.service_substitutions(config, paths=mcs_setup._service_paths())
     assert subs["BACKUP_ENABLED"] == "1"
     assert subs["BACKUP_POLICY"] == settings["policy"]
     assert subs["BACKUP_SNAPSHOT_DIR"] == settings["snapshot_dir"]
@@ -122,14 +125,14 @@ def test_explicit_static_path_and_two_hours_are_shared_by_both_schedulers(
     backup["snapshot"] = str(root / "snapshots/ledger-snapshot.db")
     del backup["snapshot_dir"]
     backup["schedule"] = "17 3,15 * * *"
-    jobs = mcs_setup.configured_cron_jobs(cfg)
-    assert jobs[:-1] == mcs_setup.CRON_JOBS
+    jobs = scheduled_jobs.configured_cron_jobs(cfg)
+    assert jobs[:-1] == scheduled_jobs.CRON_JOBS
     assert jobs[-1][1:] == ("17 3,15 * * *", "mcs_offsite.sh")
     calendars = [{"Hour": 3, "Minute": 17}, {"Hour": 15, "Minute": 17}]
     assert scheduled_jobs.calendar_entries(backup["schedule"]) == calendars
     independent = Runtime(root, {**cfg, "runtime_mode": "standalone"})
     assert dict(independent.schedules)["mcs_offsite"] == calendars
-    assert len(independent.schedules) == len(mcs_setup.CRON_JOBS) + 1
+    assert len(independent.schedules) == len(scheduled_jobs.CRON_JOBS) + 1
     entries = []
     calls = []
     monkeypatch.setattr(mcs_setup, "SCRIPTS_DIR", str(root / "scripts"))
@@ -148,10 +151,9 @@ def test_explicit_static_path_and_two_hours_are_shared_by_both_schedulers(
                             "schedule": argv[3], "script": argv[argv.index("--script") + 1]})
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(mcs_setup, "_run", hermes)
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', hermes)
     monkeypatch.setattr(mcs_setup.subprocess, "run", hermes)
-    problems, _ = mcs_setup._sync_cron(
-        {"cron": []}, "synthetic-hermes", {"cron": []}, lambda _: None, False, jobs=jobs)
+    problems, _ = service_management.sync_cron({'cron': []}, 'synthetic-hermes', {'cron': []}, lambda _: None, False, jobs=jobs)
     assert problems == 0
     offsite = [call for call in calls if call[2] == "create" and call[3] == backup["schedule"]]
     assert len(offsite) == 1
@@ -163,7 +165,7 @@ def test_explicit_static_path_and_two_hours_are_shared_by_both_schedulers(
 def test_bounded_explicit_hour_lists_are_representable(backup_settings, schedule):
     _, cfg = backup_settings
     cfg["backup"]["schedule"] = schedule
-    assert mcs_setup._backup_config(cfg["backup"]) is None
+    assert validate_backup_config(cfg["backup"]) is None
     assert len(scheduled_jobs.calendar_entries(schedule)) == len(schedule.split()[1].split(","))
 
 
@@ -177,7 +179,7 @@ def test_invalid_or_unbounded_backup_cadence_never_creates_jobs(backup_settings,
     _, cfg = backup_settings
     cfg["backup"]["schedule"] = schedule
     with pytest.raises(ValueError, match="backup_config_invalid"):
-        mcs_setup.configured_cron_jobs(cfg)
+        scheduled_jobs.configured_cron_jobs(cfg)
 
 
 @pytest.mark.parametrize("sources", [
@@ -190,7 +192,7 @@ def test_explicit_source_selector_cannot_be_missing_relative_or_ambiguous(
     del cfg["backup"]["snapshot_dir"]
     cfg["backup"].update(sources)
     with pytest.raises(ValueError, match="backup_config_invalid"):
-        mcs_setup._service_subs(cfg)
+        service_management.service_substitutions(cfg, paths=mcs_setup._service_paths())
 
 
 @pytest.mark.parametrize("mode", ["hermes", "standalone"])
@@ -231,7 +233,7 @@ def test_rendered_wrapper_consumes_only_explicit_static_generation(
     monkeypatch.setattr(mcs_setup, "HOME", str(root))
     monkeypatch.setattr(mcs_setup, "HERMES_PY", str(driver))
     wrapper = root / "wrapper.sh"
-    wrapper.write_text(dict(mcs_setup._rendered_scripts(mcs_setup._service_subs(cfg)))[
+    wrapper.write_text(dict(service_management.rendered_scripts(service_management.service_substitutions(cfg, paths=mcs_setup._service_paths()), paths=mcs_setup._service_paths()))[
         "mcs_offsite.sh"])
     result = subprocess.run(["/bin/bash", str(wrapper)], capture_output=True, text=True,
                             env=dict(os.environ), timeout=30, check=False)
@@ -267,7 +269,7 @@ def test_standalone_host_owns_only_explicit_offsite_schedule(backup_settings):
     assert enabled.argv["mcs_offsite"][-1] == str(root / "scripts" / "mcs_offsite.sh")
     disabled = Runtime(root, {"runtime_mode": "standalone"})
     assert "mcs_offsite" not in disabled.argv
-    assert len(disabled.schedules) == len(mcs_setup.CRON_JOBS)
+    assert len(disabled.schedules) == len(scheduled_jobs.CRON_JOBS)
     assert len(enabled.schedules) == len(disabled.schedules) + 1
 
 
@@ -277,11 +279,11 @@ def test_hermes_offsite_registration_and_disable_preserve_shared_jobs(
 
     _, config = backup_settings
     entries = [{"id": f"synthetic-{i}", "name": name, "schedule": schedule, "script": script}
-               for i, (name, schedule, script) in enumerate(mcs_setup.CRON_JOBS)]
+               for i, (name, schedule, script) in enumerate(scheduled_jobs.CRON_JOBS)]
     entries.append({"id": "shared", "name": "shared external",
                     "schedule": "0 0 * * *", "script": "external.sh"})
     calls = []
-    monkeypatch.setattr(mcs_setup, "_cron_list", lambda _: [dict(row) for row in entries])
+    monkeypatch.setattr(service_management, 'inspect_cron', lambda _: [dict(row) for row in entries])
     def execute(argv, **kwargs):
         calls.append(argv)
         if argv[2] == "create":
@@ -293,20 +295,16 @@ def test_hermes_offsite_registration_and_disable_preserve_shared_jobs(
             pytest.fail("unexpected synthetic cron operation")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(mcs_setup, "_run", execute)
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', execute)
     enabled_manifest = {"cron": []}
-    problems, _ = mcs_setup._sync_cron(
-        {}, "synthetic-hermes", enabled_manifest, lambda _: None, False,
-        jobs=mcs_setup.configured_cron_jobs(config))
+    problems, _ = service_management.sync_cron({}, 'synthetic-hermes', enabled_manifest, lambda _: None, False, jobs=scheduled_jobs.configured_cron_jobs(config))
     assert problems == 0
     assert len(calls) == 1 and calls[0][2] == "create"
     assert calls[0][3] == "17 3 * * *"
     assert enabled_manifest["cron"][-1]["script"] == "mcs_offsite.sh"
     disabled_manifest = {"cron": []}
-    problems, _ = mcs_setup._sync_cron(
-        enabled_manifest, "synthetic-hermes", disabled_manifest, lambda _: None, False,
-        jobs=mcs_setup.configured_cron_jobs({}))
+    problems, _ = service_management.sync_cron(enabled_manifest, 'synthetic-hermes', disabled_manifest, lambda _: None, False, jobs=scheduled_jobs.configured_cron_jobs({}))
     assert problems == 0
     assert calls[-1] == ["synthetic-hermes", "cron", "remove", "synthetic-offsite"]
     assert entries[-1]["id"] == "shared"
-    assert len(entries) == len(mcs_setup.CRON_JOBS) + 1
+    assert len(entries) == len(scheduled_jobs.CRON_JOBS) + 1

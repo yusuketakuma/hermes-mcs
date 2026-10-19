@@ -1,4 +1,6 @@
 """Python 3.14 runtime migration in the updater — synthetic venvs and repos only."""
+from ops_testkit import select_updater_service_python
+import service_management
 import owned_process
 import os
 from pathlib import Path
@@ -263,10 +265,10 @@ def test_runtime_venv_follows_the_selected_service_interpreter(updater, tmp_path
     checkout = tmp_path / "hermes-agent"
     (checkout / ".git").mkdir(parents=True)
     monkeypatch.setattr(mcs_setup, "HERMES_PY", str(checkout / "venv/bin/python"))
+    select_updater_service_python(monkeypatch, updater, str(checkout / 'venv/bin/python'))
     assert updater._runtime_venv({}) == (str(checkout / "venv"), str(checkout))
     # the standalone venv's parent is the MCS checkout, never a Hermes checkout
-    monkeypatch.setattr(mcs_setup.mcs_runtime, "python_executable",
-                        lambda cfg, root: str(tmp_path / "mcs/venv/bin/python3"))
+    monkeypatch.setattr(updater, "HOME", str(tmp_path / "mcs"))
     assert updater._runtime_venv({"runtime_mode": "standalone"}) == (str(tmp_path / "mcs/venv"), None)
 
 
@@ -312,6 +314,7 @@ def test_linked_worktree_checkout_head_is_recorded_too(updater, tmp_path, monkey
     assert (checkout / ".git").is_file()
     venv = _venv(checkout, version_ok=False)
     monkeypatch.setattr(mcs_setup, "HERMES_PY", str(venv / "bin/python3"))
+    select_updater_service_python(monkeypatch, updater, str(venv / 'bin/python3'))
     assert updater._runtime_venv({}) == (str(venv), str(checkout))
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
     state = _state(updater)
@@ -348,7 +351,7 @@ def _interrupted(updater, tmp_path, monkeypatch, *, reset=False, rollback_shaped
     order, notices = [], []
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **k: notices.append(text) or True)
     monkeypatch.setattr(updater, "_services_reconcile", lambda: order.append("services"))
-    monkeypatch.setattr(updater, "_reconcile_membership", lambda snapshot: [])
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda snapshot, **_service_kwargs: [])
     monkeypatch.setattr(updater, "_postcheck", lambda state, sha: [])
     monkeypatch.setattr(updater, "quiesce", lambda: order.append("quiesce") or [])
     monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: order.append("restart") or [])

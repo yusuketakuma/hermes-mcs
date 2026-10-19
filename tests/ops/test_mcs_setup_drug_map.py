@@ -1,4 +1,5 @@
 """Explicit dictionary changes validate synthetic files before setup writes."""
+import mcs_util
 import lifecycle_io
 import copy
 import hashlib
@@ -26,7 +27,7 @@ def setup_state(tmp_path, monkeypatch):
     old = _dictionary(tmp_path, "old.json")
     cfg = {"mcs_login_id": "fictional-user", "notify_target": "slack", "drug_map": old}
     _init_env(monkeypatch, tmp_path, cfg)
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: copy.deepcopy(cfg))
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: copy.deepcopy(cfg))
     files = (tmp_path / "c.json", tmp_path / ".env", tmp_path / "shared-settings.json")
     files[0].write_text(json.dumps(cfg))
     files[1].write_text("MCS_PASSWORD=fictional-old-password\n")
@@ -181,7 +182,7 @@ def test_explicit_rollback_to_legacy_dictionary_is_allowed(tmp_path, monkeypatch
     cfg, files, _ = setup_state
     old = dict(cfg["drug_map"])
     new = _dictionary(tmp_path, "new.json", _source_document())
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: json.loads(files[0].read_text()))
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: json.loads(files[0].read_text()))
     assert _run(monkeypatch, ["drug_map=" + json.dumps(new)]) == 0
     assert json.loads(files[0].read_text())["drug_map"] == new
     assert _run(monkeypatch, ["drug_map=" + json.dumps(old)]) == 0

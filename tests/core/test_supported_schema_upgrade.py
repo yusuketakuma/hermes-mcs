@@ -5,6 +5,9 @@ need neither Git history nor a live database. Service/Git boundaries in public
 rollback are stubbed; SQLite migration, backup, consent, replacement,
 reconciliation, locks and updater bookkeeping remain real.
 """
+from ops_testkit import select_updater_service_python
+import mcs_util
+import service_management
 import runtime_inspection
 from contextlib import closing
 import hashlib
@@ -227,6 +230,7 @@ def updater(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: _facts())
     paths = {
+        "HOME": root, "AGENTS_DIR": agents,
         "REPO": root, "DATA": data, "LEDGER": data / "ledger.db",
         "STATE_PATH": data / "update_state.json", "UPDATE_LOCK": data / "update.lock",
         "RUN_LOCK": data / "run.lock", "MARKER_PATH": data / "update_in_progress",
@@ -236,10 +240,11 @@ def updater(tmp_path, monkeypatch):
     }
     for name, path in paths.items():
         monkeypatch.setattr(mcs_update, name, str(path))
-    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
+    select_updater_service_python(monkeypatch, mcs_update, str(selected))
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **kw: True)
     monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
-    monkeypatch.setattr(mcs_update, "_reconcile_membership", lambda manifest: [])
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda manifest, **_service_kwargs: [])
     monkeypatch.setattr(mcs_setup, "check_environment", lambda cfg: ([], []))
     monkeypatch.setattr(mcs_update, "_agent_pid", lambda label: 12345)
     return mcs_update

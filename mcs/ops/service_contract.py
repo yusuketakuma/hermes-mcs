@@ -1,0 +1,197 @@
+"""Plan service ownership, runtime substitutions and cron reconciliation from supplied facts."""
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import shlex
+from html import escape as xml_escape
+
+import mcs_runtime
+from backup_config import validate_backup_config
+import scheduled_jobs
+
+GATEWAY_LIFECYCLE_VERBS = frozenset({"install", "uninstall", "restart", "start", "stop"})
+
+RESIDENT_LABELS = ('ai.mcs.extract-drainer', 'ai.mcs.extract-drainer-2')
+
+WATCHER_LABELS = ('local.mcs-cmd', 'local.mcs-int', 'local.mcs-health')
+
+AGENT_LABELS = list(WATCHER_LABELS + RESIDENT_LABELS)
+
+EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
+
+RECOVERY_LABEL = "org.mcs.recovery"
+
+LLAMA_LABELS = ("ai.hermes.llamacpp", "ai.mcs.llamaserver")
+
+STANDALONE_LABEL = "ai.mcs.standalone"
+
+STANDALONE_UNIT = "mcs-standalone.service"
+
+HEALTH_LABEL = "local.mcs-health"
+
+HEALTH_UNIT = "mcs-health.service"
+
+HEALTH_TIMER = "mcs-health.timer"
+
+HEALTH_UNITS = (HEALTH_UNIT, HEALTH_TIMER)
+
+CRON_LABEL_PREFIX = "ai.mcs.cron."
+
+
+def cron_label(script: str) -> str:
+    return CRON_LABEL_PREFIX + script.removesuffix('.sh').replace('_', '-')
+
+def desired_agent_labels(cfg: dict) -> list[str]:
+    """Every LaunchAgent `services` owns for the selected runtime."""
+    if not mcs_runtime.standalone(cfg):
+        return list(AGENT_LABELS)
+    return [STANDALONE_LABEL, HEALTH_LABEL]
+
+def owns_agent(label: str) -> bool:
+    """MCS's LaunchAgent naming space (never install.sh-owned labels)."""
+    return label not in EXCLUDED_LABELS and (label.startswith(('local.mcs-', 'ai.mcs.extract-', CRON_LABEL_PREFIX)) or label == STANDALONE_LABEL)
+
+def normalize_schedule(s: str) -> str | None:
+    """Extract a comparable 5-field cron expr from a Schedule field —
+    tolerant of 'cron: ' prefixes or extra decoration."""
+    field = '[0-9A-Za-z*/?,#\\-]+'
+    m = re.search(f'(?<!\\S)({field}(?:\\s+{field}){{4}})(?!\\S)', s or '')
+    return ' '.join(m.group(1).split()) if m else None
+
+def content_digest(text: str) -> str:
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
+
+def cron_converged(after, sched, script) -> bool:
+    jobs = [e for e in after if e.get('script') == script]
+    if len(jobs) != 1:
+        return False
+    cur, want = (normalize_schedule(jobs[0].get('schedule')), normalize_schedule(sched))
+    return not (cur and want and (cur != want))
+
+def parse_cron_listing(stdout: str, returncode: int) -> list[dict] | None:
+    if returncode != 0:
+        return None
+    out: list[dict] = []
+    cur = None
+    output = re.sub(r"\x1b\[[0-9;]*m", "", stdout)
+    for line in output.splitlines():
+        m = re.match(r"^\s{2}([0-9a-f]{6,})\b", line)
+        if m:
+            cur = {"id": m.group(1)}
+            out.append(cur)
+            continue
+        m = re.match(r"^\s+(Name|Schedule|Script):\s*(.+?)\s*$", line)
+        if m:
+            if cur is None:
+                return None            # field before any header
+            cur[m.group(1).lower()] = m.group(2)
+    # Hermes >= 2026-09-28 prints "No scheduled jobs in profile '<name>'."
+    if not out and not re.search(r"^No scheduled jobs(?: in profile '[^'\n]*')?\.",
+                                 output, re.M):
+        return None
+    if any(not entry.get("name") or not entry.get("schedule") for entry in out):
+        return None
+    return out
+
+
+def selected_python(cfg, *, standalone_runtime_home, hermes_python):
+    return os.path.join(standalone_runtime_home, "venv", "bin", "python3") if mcs_runtime.standalone(cfg) else hermes_python
+
+
+def service_substitutions(cfg, *, root, checkout, standalone_runtime_home, hermes_runtime_home, hermes_python):
+    standalone = mcs_runtime.standalone(cfg)
+    python = selected_python(cfg, standalone_runtime_home=standalone_runtime_home, hermes_python=hermes_python)
+    subs = {"PYTHON": python, "REPO": checkout, "DATA": os.path.join(root, "data"),
+            "RUNTIME_HOME": standalone_runtime_home if standalone else hermes_runtime_home}
+    backup = cfg.get("backup", {"enabled": False})
+    error = validate_backup_config(backup)
+    if error:
+        raise ValueError("backup_config_invalid")
+    subs.update(BACKUP_ENABLED="1" if backup["enabled"] else "0",
+                BACKUP_POLICY=backup["policy"] if backup["enabled"] else "",
+                BACKUP_SNAPSHOT=backup.get("snapshot", "") if backup["enabled"] else "",
+                BACKUP_SNAPSHOT_DIR=backup.get("snapshot_dir", "") if backup["enabled"] else "")
+    grace = cfg.get("watchdog_grace_s", 60)
+    if type(grace) is not int or not 0 <= grace <= 3600:
+        raise ValueError("watchdog_grace_config_invalid")
+    subs["WATCHDOG_GRACE"] = str(grace)
+    return subs
+
+
+def render_script(text, substitutions):
+    return scheduled_jobs.render_template(text, {key: shlex.quote(value) for key, value in substitutions.items()})
+
+
+def render_agent(text, substitutions):
+    return scheduled_jobs.render_template(text, {key: xml_escape(value, quote=False) for key, value in substitutions.items()})
+
+
+
+def plan_cron(previous_owned, desired_jobs, observed_entries):
+    """Plan ordered actions using one verified listing; None never means no jobs."""
+    desired_scripts = {script for _, _, script in desired_jobs}
+    if observed_entries is None:
+        return {"unverifiable": True, "duplicates": [], "actions": [],
+                "desired_scripts": desired_scripts, "owned_scripts": set()}
+    existing = {value for entry in observed_entries for value in
+                (entry.get("name"), entry.get("script")) if value}
+    by_script = {entry.get("script"): entry for entry in observed_entries if entry.get("script")}
+    duplicates = sorted(script for script in desired_scripts
+                        if sum(entry.get("script") == script for entry in observed_entries) > 1)
+    owned_scripts = desired_scripts | {entry.get("script") for entry in previous_owned.get("cron", [])
+                                      if isinstance(entry, dict) and entry.get("script")}
+    actions = []
+    if not duplicates:
+        for name, schedule, script in desired_jobs:
+            entry = by_script.get(script)
+            action = {"name": name, "schedule": schedule, "script": script,
+                      "entry": dict(entry) if entry is not None else None}
+            if entry is None:
+                action["kind"] = "collision" if name in existing or script in existing else "create"
+            else:
+                current, wanted = normalize_schedule(entry.get("schedule")), normalize_schedule(schedule)
+                action.update(kind="edit" if current and wanted and current != wanted else "keep",
+                              current_schedule=current)
+            actions.append(action)
+        for entry in observed_entries:
+            script = entry.get("script")
+            if script and script in owned_scripts and script not in desired_scripts:
+                actions.append({"kind": "remove", "entry": dict(entry), "script": script})
+    return {"unverifiable": False, "duplicates": duplicates, "actions": actions,
+            "desired_scripts": desired_scripts, "owned_scripts": owned_scripts}
+
+
+def confirm_cron(created_scripts, owned_scripts, desired_scripts, planned_membership,
+                 after_entries, desired_jobs):
+    """Classify post-change proof and return ownership without mutating observations."""
+    unverifiable = after_entries is None or not all(
+        cron_converged(after_entries, schedule, script) for _, schedule, script in desired_jobs)
+    survivors = [entry for entry in after_entries or []
+                 if isinstance(entry.get("script"), str) and entry["script"] in owned_scripts
+                 and entry["script"] not in desired_scripts]
+    left = list(dict.fromkeys(entry["script"] for entry in survivors))
+    membership = list(planned_membership)
+    persist = False
+    if after_entries is not None and created_scripts:
+        present = {entry.get("script") for entry in after_entries}
+        confirmed = [script for script in created_scripts if script in present]
+        if confirmed:
+            membership = [entry for entry in membership if not (
+                isinstance(entry, dict) and entry.get("script") in created_scripts
+                and entry.get("script") not in present)]
+            have = {entry.get("script") for entry in membership if isinstance(entry, dict)}
+            for entry in survivors:
+                script = entry["script"]
+                if script not in have:
+                    membership.append({"name": entry.get("name"), "id": entry.get("id"),
+                                       "schedule": entry.get("schedule"), "script": script})
+                    have.add(script)
+            persist = True
+    return {"unverifiable": unverifiable, "surviving_scripts": left,
+            "problems": int(unverifiable) + int(bool(left)),
+            "cron": membership, "persist_ownership": persist}
+
+# Legacy KeepAlive labels are stopped by update, never started by desired-state plans.
+LEGACY_LABELS = ("ai.mcs.extract-drainer-rt",)

@@ -1,5 +1,7 @@
 """Update and recovery in runtime_mode=standalone: restart the connector
 agent instead of the Hermes gateway and never require Hermes."""
+import mcs_util
+import service_contract
 import update_launch
 import runtime_inspection
 import json
@@ -71,7 +73,7 @@ def test_update_ops_find_the_standalone_wrapper(monkeypatch, tmp_path):
     monkeypatch.setattr("mcs_util.HOME", str(tmp_path))
     monkeypatch.setattr(update_launch, 'HERMES_WRAPPER', str(tmp_path / "hermes" / "mcs_update.sh"))
     cfg = {"runtime_mode": "standalone", "update": {"mode": "notify"}}
-    monkeypatch.setattr(mcs_update, "load_config", lambda *a: cfg)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda *a: cfg)
     monkeypatch.setattr("mcs_util.load_config", lambda *a: cfg)
     wrapper = tmp_path / "scripts" / "mcs_update.sh"
     assert update_launch.wrapper_path(cfg, root=tmp_path,
@@ -85,16 +87,16 @@ def test_update_ops_find_the_standalone_wrapper(monkeypatch, tmp_path):
 
 def test_connector_changes_restart_only_in_standalone(monkeypatch):
     monkeypatch.setattr(mcs_update, "_git_out", lambda args: "M\tmcs_standalone/__main__.py\n")
-    monkeypatch.setattr(mcs_update, "load_config", lambda *a: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda *a: {})
     assert not any("通知接続（gateway）の再起動" in n for n in mcs_update.impact_summary("a", "v1"))
-    monkeypatch.setattr(mcs_update, "load_config", lambda *a: {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda *a: {"runtime_mode": "standalone"})
     assert any("通知接続（gateway）の再起動" in n for n in mcs_update.impact_summary("a", "v1"))
 
 
 def test_rollback_to_a_pre_standalone_tree_is_refused(monkeypatch):
     import pytest
     from types import SimpleNamespace
-    monkeypatch.setattr(mcs_update, "load_config", lambda *a: {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda *a: {"runtime_mode": "standalone"})
     monkeypatch.setattr(mcs_update, "_git", lambda args: SimpleNamespace(returncode=128))
     resets = []
     monkeypatch.setattr(mcs_update, "_git_out", lambda args: resets.append(args) or "")
@@ -125,9 +127,9 @@ def test_the_hermes_independent_health_watch_is_known_everywhere():
 
     import mcs_setup
     recover = _load()
-    assert "local.mcs-health" in mcs_setup.AGENT_LABELS
-    assert set(mcs_setup.AGENT_LABELS) <= recover.KNOWN_AGENT_LABELS
-    assert "local.mcs-health" in mcs_update.WATCHER_LABELS
+    assert "local.mcs-health" in service_contract.AGENT_LABELS
+    assert set(service_contract.AGENT_LABELS) <= recover.KNOWN_AGENT_LABELS
+    assert "local.mcs-health" in service_contract.WATCHER_LABELS
     body = Path(mcs_setup.REPO_ROOT, "deployment", "launchagents",
                 "local.mcs-health.plist").read_bytes()
     plist = plistlib.loads(body)

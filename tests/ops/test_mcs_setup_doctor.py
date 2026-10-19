@@ -1,4 +1,7 @@
 """Doctor is local by default and shares only bounded diagnostic facts."""
+import lifecycle_io
+import mcs_util
+import service_management
 import runtime_inspection
 import json
 import os
@@ -13,7 +16,7 @@ from ops_testkit import bounded_python
 
 @pytest.fixture
 def local_config(monkeypatch):
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
         "mcs_login_id": "synthetic-private-id", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: {
@@ -28,7 +31,7 @@ def local_config(monkeypatch):
 
 
 def test_default_doctor_checks_no_services_secrets_or_network(local_config, monkeypatch, capsys):
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: pytest.fail("service probe"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("service probe"))
     monkeypatch.setattr(local_llm, "bounded_request", lambda *a: pytest.fail("network"))
     assert mcs_setup.main(["doctor", "--json"]) == 0
     out = capsys.readouterr().out
@@ -50,7 +53,7 @@ def test_data_probe_reaches_restore_diagnosis_only_when_requested(
                 "restore_delivery_held": False if probe_data else None,
                 "recovery_scope": "collect_only"}
     monkeypatch.setattr(card_worker_status, "diagnose", diagnose)
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: pytest.fail("service probe"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("service probe"))
     monkeypatch.setattr(local_llm, "bounded_request", lambda *a: pytest.fail("network"))
     args = ["doctor", "--json"] + (["--probe", "data"] if explicit else [])
     assert mcs_setup.main(args) == 0
@@ -66,7 +69,7 @@ def test_explicit_llm_probe_is_bounded_and_other_scopes_stay_unchecked(
         calls.append((url, method, body, timeout))
         return 200, {}, b'[{}, {}, {}]' if url.endswith("/slots") else b'{"data":[]}'
     monkeypatch.setattr(local_llm, "bounded_request", request)
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: pytest.fail("service probe"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("service probe"))
     assert mcs_setup.main(["doctor", "--probe", "llm", "--json"]) == 0
     checks = json.loads(capsys.readouterr().out)["checks"]
     assert checks["llm"]["status"] == "healthy"
@@ -94,9 +97,9 @@ def test_undersized_llm_slots_block(local_config, monkeypatch, capsys):
 
 def test_service_domain_failure_is_not_checked(local_config, monkeypatch, capsys):
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
-    monkeypatch.setattr(mcs_setup, "_run",
+    monkeypatch.setattr(lifecycle_io, 'run_bounded',
                         lambda *a, **k: SimpleNamespace(returncode=1))
-    monkeypatch.setattr(mcs_setup, "check_runtime", lambda cfg: pytest.fail("unavailable"))
+    monkeypatch.setattr(service_management, 'check_runtime', lambda cfg, **_service_kwargs: pytest.fail("unavailable"))
     assert mcs_setup.main(["doctor", "--probe", "services", "--json"]) == 0
     check = json.loads(capsys.readouterr().out)["checks"]["services"]
     assert check == {"status": "not_checked", "errors": 0, "warnings": 1}
@@ -104,10 +107,10 @@ def test_service_domain_failure_is_not_checked(local_config, monkeypatch, capsys
 
 def test_service_probe_excludes_arbitrary_diagnostic_text(local_config, monkeypatch, capsys):
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
-    monkeypatch.setattr(mcs_setup, "_run",
+    monkeypatch.setattr(lifecycle_io, 'run_bounded',
                         lambda *a, **k: SimpleNamespace(returncode=0))
-    monkeypatch.setattr(mcs_setup, "check_runtime",
-                        lambda cfg: (["synthetic-secret/body/123456"], []))
+    monkeypatch.setattr(service_management, 'check_runtime',
+                        lambda cfg, **_service_kwargs: (["synthetic-secret/body/123456"], []))
     assert mcs_setup.main(["doctor", "--probe", "services", "--json"]) == 1
     out = capsys.readouterr().out
     assert json.loads(out)["checks"]["services"]["status"] == "blocked"
@@ -149,7 +152,7 @@ def test_doctor_does_not_invent_loaded_revision(monkeypatch, started, modified, 
     monkeypatch.setattr(mcs_setup.subprocess, "run", git)
     def probe(argv, **kw):
         return SimpleNamespace(returncode=0, stdout="pid = 123\n" if argv[0] == "launchctl" else "invalid")
-    monkeypatch.setattr(mcs_setup, "_run", probe)
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', probe)
     monkeypatch.setattr(mcs_setup.time, "mktime", lambda value: started)
     monkeypatch.setattr(mcs_setup.time, "strptime", lambda value, fmt: ())
     source = mcs_setup._doctor_source({}, probe=True)
@@ -162,7 +165,7 @@ def test_doctor_does_not_invent_loaded_revision(monkeypatch, started, modified, 
 
 
 def test_doctor_source_default_does_not_probe_services(monkeypatch):
-    monkeypatch.setattr(mcs_setup, "_run", lambda *args, **kw: pytest.fail("service access"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *args, **kw: pytest.fail("service access"))
     monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *args, **kw:
                         SimpleNamespace(returncode=1, stdout="synthetic-secret-not-a-sha"))
     source = mcs_setup._doctor_source({}, probe=False)
@@ -183,7 +186,7 @@ def test_doctor_restart_receipt_is_supervisor_evidence_only(tmp_path, monkeypatc
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k:
                         SimpleNamespace(returncode=0, stdout="a" * 40))
-    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **kw:
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda argv, **kw:
                         SimpleNamespace(returncode=0, stdout="pid = 123\n" if argv[0] == "launchctl" else "invalid"))
     source = mcs_setup._doctor_source({}, probe=True)
     assert source["restart_request"]["status"] == expected

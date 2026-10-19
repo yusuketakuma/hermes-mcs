@@ -1,4 +1,5 @@
 """Timed-out update children are reaped before journal outcome is resolved."""
+import mcs_util
 import subprocess
 
 import mcs_update
@@ -22,7 +23,7 @@ def test_post_merge_timeout_reaps_child_before_reading_done(monkeypatch, durable
 
     monkeypatch.setattr(mcs_update.subprocess, "Popen", lambda *args, **kwargs: Child())
     monkeypatch.setattr(mcs_update.os, "killpg", lambda pid, signal: killed.append((pid, signal)))
-    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     state = {"stages": [{"stage": "done"}] if durable_done else [], "applying": None}
     monkeypatch.setattr(mcs_update.journal_store, "load_state", lambda path: state)
     if durable_done:

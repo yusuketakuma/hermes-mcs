@@ -1,4 +1,5 @@
 """Rendered tick wrappers forward explicit grace without starting MCS."""
+import service_management
 import scheduled_jobs
 import json
 import os
@@ -25,7 +26,7 @@ def test_rendered_wrapper_uses_configured_watchdog_grace(tmp_path, script, grace
         "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n")
     python.chmod(0o700)
     subs = {"DATA": str(data), "PYTHON": str(python), "REPO": str(tmp_path),
-            "WATCHDOG_GRACE": mcs_setup._service_subs({"watchdog_grace_s": grace})["WATCHDOG_GRACE"]}
+            "WATCHDOG_GRACE": service_management.service_substitutions({'watchdog_grace_s': grace}, paths=mcs_setup._service_paths())["WATCHDOG_GRACE"]}
     source = Path(__file__).resolve().parents[2] / "deployment" / "scripts" / script
     target = tmp_path / script
     target.write_text(scheduled_jobs.render_template(
@@ -43,7 +44,7 @@ def test_rendered_wrapper_uses_configured_watchdog_grace(tmp_path, script, grace
 
 
 def test_grace_default_and_invalid_values_are_checked_before_render():
-    assert mcs_setup._service_subs({})["WATCHDOG_GRACE"] == "60"
+    assert service_management.service_substitutions({}, paths=mcs_setup._service_paths())["WATCHDOG_GRACE"] == "60"
     for value in (-1, True, "60", 3601):
         with pytest.raises(ValueError, match="watchdog_grace_config_invalid"):
-            mcs_setup._service_subs({"watchdog_grace_s": value})
+            service_management.service_substitutions({'watchdog_grace_s': value}, paths=mcs_setup._service_paths())

@@ -1,4 +1,5 @@
 """Synthetic withdraw directives, reference-receiver CLI and sender classification."""
+import mcs_util
 
 import json
 from pathlib import Path
@@ -10,7 +11,6 @@ import c1_envelopes as envs
 import c1_records
 from c1_receiver import ReferenceReceiver
 import ext_contract as ext
-import mcs_setup
 from test_c1_cli import world  # noqa: F401  (pytest fixture)
 from test_c1_envelopes import _records, _build
 from test_ext_contract import _auth, NOW
@@ -244,7 +244,7 @@ def test_classify_sender_ignores_unresolved_self_id():
                                             ([], "other_professional")])
 def test_snapshot_classification_is_opt_in(world, monkeypatch, capsys, orgs, kind):  # noqa: F811
     _, snapshot, auth, state, sink = world
-    monkeypatch.setattr(mcs_setup, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: {"signals": {"self_organizations": orgs}})
     code, result = _cli(capsys, [
         "handoff", "--c1", "--classify-senders", "--auth", str(auth), "--snapshot",

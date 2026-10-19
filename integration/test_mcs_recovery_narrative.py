@@ -60,6 +60,8 @@ import ledger as _ledger  # noqa: E402
 import llm_admission as adm  # noqa: E402
 import local_llm  # noqa: E402
 import mcs_update  # noqa: E402
+import service_management  # noqa: E402
+import mcs_util  # noqa: E402
 import notify_cards  # noqa: E402
 import notify_cmds  # noqa: E402
 import notify_reconcile  # noqa: E402
@@ -122,9 +124,11 @@ def isolated_narrative_state(monkeypatch):
     for name in ("REPO", "LEDGER", "DATA", "STATE_PATH", "UPDATE_LOCK",
                  "RUN_LOCK", "MARKER_PATH", "REPORT_PATH", "RESTORE_REPORT_PATH",
                  "BACKUP_DIR", "MANIFEST_PATH", "quiesce", "_services_reconcile",
-                 "_reconcile_membership", "_postcheck", "load_config",
+                 "_postcheck",
                  "_enqueue_notice", "restart_gateway", "restart_agents", "_git"):
         monkeypatch.setattr(mcs_update, name, getattr(mcs_update, name))
+    monkeypatch.setattr(service_management, "retire_to_snapshot", service_management.retire_to_snapshot)
+    monkeypatch.setattr(mcs_util, "load_config", mcs_util.load_config)
 
 
 def _threads(bot):
@@ -268,9 +272,9 @@ def _patch_updater(up, tmp_path):
 def _stub_updater_boundaries(up, restarts):
     up.quiesce = lambda: (up._write_marker(), [])[1]
     up._services_reconcile = lambda: None
-    up._reconcile_membership = lambda m: []
+    service_management.retire_to_snapshot = lambda m, **kwargs: []
     up._postcheck = lambda s, e: []
-    up.load_config = lambda: {}
+    mcs_util.load_config = lambda: {}
     up._enqueue_notice = lambda *a, **k: True
     up.restart_gateway = lambda c: None
     up.restart_agents = lambda: restarts.append(1) or []

@@ -204,3 +204,11 @@ sys.argv = [sys.argv[0], *sys.argv[3:]]
         raise AssertionError("synthetic operation exceeded its 5-second deadline") from error
     assert result.returncode == 0, result.stderr
     return result
+
+
+def select_updater_service_python(monkeypatch, updater, python):
+    """Select one synthetic interpreter without masking caller-owned path facts."""
+    from dataclasses import replace
+    factory = updater._service_paths
+    monkeypatch.setattr(updater, "_service_paths",
+                        lambda: replace(factory(), hermes_python=python))

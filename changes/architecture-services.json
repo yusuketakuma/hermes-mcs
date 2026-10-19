@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "常駐設定と更新時の照合を同じ処理に統一",
+  "summary": "常駐処理の設定判断と実際の照合・適用を共通化し、初期設定と更新で同じ管理対象・実行環境の規則を使うよう整理しました。定期処理の順序、通知設定、変更後の確認と失敗時の管理記録は維持します。",
+  "upgrade": "追加の設定操作は不要です。稼働中の処理には通常の更新・再起動手順で反映します。この変更だけで実機の常駐設定を適用したり、承認を省略したりしません。",
+  "details": [
+    "サービスの管理対象・cron計画・runtime選択・テンプレート展開はservice_contract、実際の読取・適用・管理記録はservice_managementが所有します。",
+    "setupは対話と出力、updaterは状態遷移・ロック・更新journalを引き続き所有します。旧updaterが候補のmcsだけを展開してvalidate_configを呼ぶ互換入口を保持します。",
+    "不明なcron一覧を空とみなさず、確認できた新規登録だけを部分管理記録へ残します。gateway再起動の未完了記録、停止のexit113確認、通知flag保存の順序は維持します。"
+  ],
+  "refs": [
+    "mcs/ops/service_contract.py",
+    "mcs/ops/service_management.py"
+  ]
+}

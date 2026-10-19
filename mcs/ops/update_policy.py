@@ -34,7 +34,8 @@ def defuse_mentions(text: str) -> str:
 def environment_impact(names: list[str], cfg: dict) -> list[str]:
     """Explain changes from a repository fileset and the selected runtime."""
     notes = []
-    if any(n in ("mcs/ops/mcs_setup.py", "mcs/core/mcs_config.py", "config.json") or
+    if any(n in ("mcs/ops/mcs_setup.py", "mcs/ops/service_contract.py",
+                 "mcs/ops/service_management.py", "mcs/core/mcs_config.py", "config.json") or
            n.endswith("/config.json") for n in names):
         notes.append("新しい必須設定の可能性があります")
     if any(n.startswith("deployment/") for n in names):

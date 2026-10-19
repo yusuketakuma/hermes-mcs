@@ -1,4 +1,5 @@
 """Unreadable runtime selection cannot start or stop either service family."""
+import service_contract
 import json
 import os
 
@@ -54,7 +55,7 @@ assert updater.restart_agents() == ['runtime_mode_unverifiable']
 def test_config_read_error_is_not_hermes(runtime, monkeypatch):
     def unreadable(path):
         raise PermissionError("synthetic denied")
-    monkeypatch.setattr(updater, "_read_control_json", unreadable)
+    monkeypatch.setattr(updater.journal_store, "read_control_json", unreadable)
     assert updater.restart_agents() == ["runtime_mode_unverifiable"]
 
 
@@ -70,9 +71,9 @@ def test_valid_and_absent_config_preserve_runtime_contract(
     assert updater._restart_runtime_mode() == recovery._runtime_mode() == expected
     removed = []
     monkeypatch.setattr(updater, "_remove_marker", lambda: removed.append(True))
-    monkeypatch.setattr(updater, "RESIDENT_LABELS", ())
-    monkeypatch.setattr(updater, "LEGACY_LABELS", ())
-    monkeypatch.setattr(updater, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'LEGACY_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     if expected == "standalone":
         monkeypatch.setattr(updater, "_standalone_drainer_problems", lambda: [])
     assert updater.restart_agents() == []

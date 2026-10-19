@@ -5,6 +5,7 @@ mcs import roots — it must run standalone on a broken repo). Fully
 synthetic temp repos/state; no real services touched.
 """
 import restore_evidence
+import scheduled_jobs
 import json
 import os
 import subprocess
@@ -918,9 +919,8 @@ def test_known_cron_scripts_cover_setup_cron_jobs():
     """mcs_setup.CRON_JOBS scripts must all live in KNOWN_CRON_SCRIPTS —
     a missing entry makes a snapshot-based recovery delete a live,
     desired cron job (the mcs_health.sh drift class)."""
-    import mcs_setup
     rec = _load()
-    desired = {script for _name, _sched, script in mcs_setup.CRON_JOBS}
+    desired = {script for _name, _sched, script in scheduled_jobs.CRON_JOBS}
     assert desired <= rec.KNOWN_CRON_SCRIPTS
     assert "mcs_offsite.sh" in rec.KNOWN_CRON_SCRIPTS
     assert "ai.mcs.cron.mcs-offsite" not in rec.KNOWN_AGENT_LABELS

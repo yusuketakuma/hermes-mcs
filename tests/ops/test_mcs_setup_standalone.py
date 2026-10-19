@@ -1,5 +1,7 @@
 """runtime_mode=standalone: config grants, launchd schedules and services
 without Hermes; Hermes mode keeps its existing surface."""
+import service_contract
+import service_management
 import lifecycle_io
 import mcs_config
 import scheduled_jobs
@@ -75,24 +77,24 @@ def test_cron_schedules_become_launchd_calendars(schedule, want):
 
 
 def test_every_cron_job_has_a_calendar_and_unsupported_fields_fail():
-    for _, schedule, _ in mcs_setup.CRON_JOBS:
+    for _, schedule, _ in scheduled_jobs.CRON_JOBS:
         assert scheduled_jobs.calendar_entries(schedule)
     with pytest.raises(ValueError):
         scheduled_jobs.calendar_entries("0 0 1 * *")
 
 
 def test_agent_labels_and_ownership_follow_the_runtime():
-    assert mcs_setup._agent_labels({}) == mcs_setup.AGENT_LABELS
-    labels = mcs_setup._agent_labels(config())
-    cron = [mcs_setup._cron_label(s) for _, _, s in mcs_setup.CRON_JOBS]
+    assert service_contract.desired_agent_labels({}) == service_contract.AGENT_LABELS
+    labels = service_contract.desired_agent_labels(config())
+    cron = [service_contract.cron_label(s) for _, _, s in scheduled_jobs.CRON_JOBS]
     # the health watch stays outside the host it watches
-    assert labels == [mcs_setup.STANDALONE_LABEL, mcs_setup.HEALTH_LABEL]
+    assert labels == [service_contract.STANDALONE_LABEL, service_contract.HEALTH_LABEL]
     # The same host owns collection even without a card connection.
-    assert mcs_setup._agent_labels(config("off")) == labels
-    for label in cron + [mcs_setup.STANDALONE_LABEL, "local.mcs-cmd"]:
-        assert mcs_setup._owned_label(label)
+    assert service_contract.desired_agent_labels(config('off')) == labels
+    for label in cron + [service_contract.STANDALONE_LABEL, "local.mcs-cmd"]:
+        assert service_contract.owns_agent(label)
     for label in ("ai.mcs.llamaserver", "org.mcs.recovery", "ai.hermes.gateway"):
-        assert not mcs_setup._owned_label(label)
+        assert not service_contract.owns_agent(label)
 
 
 def test_standalone_config_validation():
@@ -119,8 +121,9 @@ def test_standalone_config_validation():
 
 def _standalone_services(monkeypatch, tmp_path, cfg, **kw):
     calls, args = _services_env(monkeypatch, tmp_path, **kw)
-    monkeypatch.setattr(mcs_setup, "load_config",
-                        lambda path=None: mcs_util.load_config(path) if path else cfg)
+    _previous_service_load_config_124 = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config',
+                        lambda path=None: _previous_service_load_config_124(path) if path else cfg)
     monkeypatch.setattr(mcs_runtime, "HOME", str(tmp_path))
     return calls, args
 
@@ -143,7 +146,7 @@ def test_standalone_services_use_launchd_not_hermes(monkeypatch, tmp_path):
     assert not any(a[0] == "/x/hermes" for a in calls)
     manifest = json.loads((tmp_path / "data" / "service_manifest.json").read_text())
     assert manifest["cron"] == [] and [row["label"] for row in manifest["agents"]] == [
-        mcs_setup.STANDALONE_LABEL, mcs_setup.HEALTH_LABEL]
+        service_contract.STANDALONE_LABEL, service_contract.HEALTH_LABEL]
     health = plistlib.loads((tmp_path / "agents" / "local.mcs-health.plist").read_bytes())
     assert health["ProgramArguments"][0] == venv and health["StartInterval"] == 300
     assert health["EnvironmentVariables"] == {"MCS_ROOT": str(tmp_path)}
@@ -154,18 +157,18 @@ def test_linux_switch_stops_and_verifies_owned_systemd_service(monkeypatch, tmp_
     unit = tmp_path / "mcs-standalone.service"
     unit.write_text("synthetic")
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
-    monkeypatch.setattr(mcs_setup, "_standalone_service_path", lambda: str(unit))
+    monkeypatch.setattr(service_management, 'standalone_service_path', lambda**_service_kwargs: str(unit))
     calls = []
     def systemctl(argv, **kwargs):
         calls.append(argv)
         return SimpleNamespace(returncode=state if "is-active" in argv else 0)
-    monkeypatch.setattr(mcs_setup, "_run", systemctl)
-    assert mcs_setup._retire_agents({mcs_setup.STANDALONE_LABEL}, lambda msg: None, True) == 0
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', systemctl)
+    assert service_management.retire_agents({service_contract.STANDALONE_LABEL}, lambda msg: None, True, paths=mcs_setup._service_paths()) == 0
     assert not calls and unit.exists()
-    assert mcs_setup._retire_agents({mcs_setup.STANDALONE_LABEL}, lambda msg: None, False) == expected
+    assert service_management.retire_agents({service_contract.STANDALONE_LABEL}, lambda msg: None, False, paths=mcs_setup._service_paths()) == expected
     assert calls[:2] == [
-        ["systemctl", "--user", "disable", "--now", mcs_setup.STANDALONE_UNIT],
-        ["systemctl", "--user", "is-active", "--quiet", mcs_setup.STANDALONE_UNIT]]
+        ["systemctl", "--user", "disable", "--now", service_contract.STANDALONE_UNIT],
+        ["systemctl", "--user", "is-active", "--quiet", service_contract.STANDALONE_UNIT]]
     assert unit.exists() is bool(expected)
     if not expected:
         assert calls[-1] == ["systemctl", "--user", "daemon-reload"]
@@ -174,11 +177,11 @@ def test_linux_switch_stops_and_verifies_owned_systemd_service(monkeypatch, tmp_
 def test_switching_retires_the_other_runtimes_jobs(monkeypatch, tmp_path):
     # Hermes -> standalone: owned hermes cron jobs are removed
     owned = [{"id": f"{i:06d}", "name": n, "schedule": s, "script": sc}
-             for i, (n, s, sc) in enumerate(mcs_setup.CRON_JOBS)]
+             for i, (n, s, sc) in enumerate(scheduled_jobs.CRON_JOBS)]
     calls, args = _standalone_services(monkeypatch, tmp_path, config(), cron_entries=owned)
-    listing = mcs_setup._cron_list
+    listing = service_management.inspect_cron
     # like the real parser: a fresh list per call, not the one removes mutate
-    monkeypatch.setattr(mcs_setup, "_cron_list", lambda h: list(listing(h)))
+    monkeypatch.setattr(service_management, 'inspect_cron', lambda h: list(listing(h)))
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / "service_manifest.json").write_text(json.dumps(
         {"cron": [{"script": e["script"]} for e in owned]}))
@@ -191,7 +194,7 @@ def test_switching_retires_the_other_runtimes_jobs(monkeypatch, tmp_path):
     assert mcs_setup.cmd_services(args) == 0
     assert ["/x/hermes", "gateway", "restart"] in [a[:3] for a in calls]
     outs = {a[2].rsplit("/", 1)[-1] for a in calls if a[:2] == ["launchctl", "bootout"]}
-    assert mcs_setup.STANDALONE_LABEL in outs
+    assert service_contract.STANDALONE_LABEL in outs
     assert not (tmp_path / "agents" / "ai.mcs.standalone.plist").exists()
 
 
@@ -199,7 +202,7 @@ def test_init_stores_standalone_tokens_in_mcs_env_only(monkeypatch, tmp_path):
     env = tmp_path / ".env"
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(env))
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "synthetic-discord-token")
-    monkeypatch.setattr(mcs_setup, "_hermes_exe",
+    monkeypatch.setattr(mcs_util, 'hermes_exe',
                         lambda *a: pytest.fail("standalone must not use Hermes"))
     assert mcs_setup._apply_plugin_integration(config(), SimpleNamespace(yes=True)) is True
     assert env.read_text() == "DISCORD_BOT_TOKEN=synthetic-discord-token\n"
@@ -276,7 +279,7 @@ def test_back_to_hermes_without_hermes_keeps_the_launchd_schedule(monkeypatch, t
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: False)
     mcs_setup.cmd_services(args)
     outs = {a[2].rsplit("/", 1)[-1] for a in calls if a[:2] == ["launchctl", "bootout"]}
-    assert mcs_setup.STANDALONE_LABEL not in outs
+    assert service_contract.STANDALONE_LABEL not in outs
     assert (tmp_path / "agents" / "ai.mcs.standalone.plist").exists()
     assert not any(label.startswith("ai.mcs.cron.") for label in outs)
 
@@ -290,7 +293,7 @@ def test_services_never_reloads_the_job_it_runs_inside(monkeypatch, tmp_path):
     plist = tmp_path / "agents" / "ai.mcs.cron.mcs-update.plist"
     plist.parent.mkdir()
     plist.write_text("synthetic")
-    assert mcs_setup._agent_reconcile("ai.mcs.cron.mcs-update", str(plist), lambda m: None, False)
+    assert service_management.agent_reconcile('ai.mcs.cron.mcs-update', str(plist), lambda m: None, False, paths=mcs_setup._service_paths())
     touched = [a for a in calls if a[0] == "launchctl" and "ai.mcs.cron.mcs-update" in " ".join(a)]
     assert touched == []
     plist = tmp_path / "agents" / "ai.mcs.cron.mcs-update.plist"
@@ -368,7 +371,7 @@ def test_self_reload_waits_for_the_updater_not_for_services(monkeypatch, tmp_pat
     monkeypatch.setattr(mcs_setup.subprocess, "Popen", lambda argv, **kw: helpers.append(argv))
     monkeypatch.setenv("XPC_SERVICE_NAME", "ai.mcs.cron.mcs-update")
     monkeypatch.setenv("MCS_JOB_PID", "424242")
-    assert mcs_setup._agent_reconcile("ai.mcs.cron.mcs-update", "/synthetic/plist", lambda m: None, False)
+    assert service_management.agent_reconcile('ai.mcs.cron.mcs-update', '/synthetic/plist', lambda m: None, False, paths=mcs_setup._service_paths())
     assert helpers[0][4] == "424242"
 
 
@@ -397,11 +400,11 @@ def test_retire_previous_hermes_removes_plists_so_login_does_not_reload(monkeypa
         (agents / (label + ".plist")).write_text("x")
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
     # launchd answers 113 once a booted-out label is gone
-    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **k: SimpleNamespace(
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda argv, **k: SimpleNamespace(
         returncode=113 if argv[:2] == ["launchctl", "print"] else 0))
     prev = {"runtime_mode": "hermes",
             "agents": [{"label": "ai.mcs.extract-drainer"}, {"label": "local.mcs-cmd"}]}
-    assert mcs_setup._retire_previous_runtime(prev, "standalone", lambda m: None, False) == 0
+    assert service_management.retire_previous_runtime(prev, 'standalone', lambda m: None, False, paths=mcs_setup._service_paths()) == 0
     assert list(agents.iterdir()) == []
 
 
@@ -411,11 +414,11 @@ def test_unverifiable_launchd_stop_keeps_the_old_agent_and_starts_nothing(
     """A timed-out or unstartable `launchctl print` is unknown, not stopped:
     the old plist stays and the new runtime is not bootstrapped."""
     label = "ai.mcs.extract-drainer"
-    real_loaded = mcs_setup._agent_loaded
+    real_loaded = service_management.agent_loaded
     calls, args = _standalone_services(monkeypatch, tmp_path, config(), loaded={label})
-    fixture_loaded = mcs_setup._agent_loaded
-    monkeypatch.setattr(mcs_setup, "_agent_loaded",
-                        lambda name: real_loaded(name) if name == label else fixture_loaded(name))
+    fixture_loaded = service_management.agent_loaded
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda name, **_service_kwargs: real_loaded(name) if name == label else fixture_loaded(name))
     fixture_run = mcs_setup.subprocess.run
 
     def run(argv, **kw):
@@ -434,7 +437,7 @@ def test_unverifiable_launchd_stop_keeps_the_old_agent_and_starts_nothing(
     manifest.write_text(json.dumps({"runtime_mode": "hermes", "agents": [{"label": label}], "cron": []}))
     assert mcs_setup.cmd_services(args) == 1
     assert old.exists()
-    assert not any(a[:2] == ["launchctl", "bootstrap"] and a[-1].endswith(mcs_setup.STANDALONE_LABEL + ".plist")
+    assert not any(a[:2] == ["launchctl", "bootstrap"] and a[-1].endswith(service_contract.STANDALONE_LABEL + ".plist")
                    for a in calls)
     assert json.loads(manifest.read_text())["runtime_mode"] == "hermes"
 
@@ -447,10 +450,10 @@ def test_retiring_an_agent_with_unknown_state_keeps_its_plist(monkeypatch, tmp_p
     plist.write_text("synthetic")
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
-    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **kw: SimpleNamespace(
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda argv, **kw: SimpleNamespace(
         returncode=print_code if argv[1] == "print" else 0, stdout="", stderr=""))
-    assert mcs_setup._agent_loaded("ai.mcs.cron.mcs-check") is None
-    assert mcs_setup._retire_agents({"ai.mcs.cron.mcs-check"}, lambda m: None, False) == 1
+    assert service_management.agent_loaded('ai.mcs.cron.mcs-check', paths=mcs_setup._service_paths()) is None
+    assert service_management.retire_agents({'ai.mcs.cron.mcs-check'}, lambda m: None, False, paths=mcs_setup._service_paths()) == 1
     assert plist.exists()
 
 
@@ -458,13 +461,13 @@ def _switch_back_env(monkeypatch, tmp_path):
     """standalone -> hermes with a supervised gateway already running."""
     cfg = config()
     cfg["runtime_mode"] = "hermes"
-    calls, args = _standalone_services(monkeypatch, tmp_path, cfg, loaded={mcs_setup.STANDALONE_LABEL})
+    calls, args = _standalone_services(monkeypatch, tmp_path, cfg, loaded={service_contract.STANDALONE_LABEL})
     (tmp_path / "agents").mkdir()
     (tmp_path / "data").mkdir()
-    (tmp_path / "agents" / (mcs_setup.STANDALONE_LABEL + ".plist")).write_text("synthetic old host")
+    (tmp_path / "agents" / (service_contract.STANDALONE_LABEL + ".plist")).write_text("synthetic old host")
     manifest = tmp_path / "data" / "service_manifest.json"
     manifest.write_text(json.dumps({"runtime_mode": "standalone",
-                                    "agents": [{"label": mcs_setup.STANDALONE_LABEL}], "cron": []}))
+                                    "agents": [{"label": service_contract.STANDALONE_LABEL}], "cron": []}))
     return calls, args, manifest
 
 
@@ -642,10 +645,10 @@ def test_retirement_keeps_plists_unless_launchd_reports_not_found(
     agents.mkdir()
     (agents / "ai.mcs.extract-drainer.plist").write_text("x")
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
-    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **k: SimpleNamespace(
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda argv, **k: SimpleNamespace(
         returncode=print_code if argv[:2] == ["launchctl", "print"] else 0))
     prev = {"runtime_mode": "hermes", "agents": [{"label": "ai.mcs.extract-drainer"}]}
-    assert mcs_setup._retire_previous_runtime(prev, "standalone", lambda m: None, False) == 1
+    assert service_management.retire_previous_runtime(prev, 'standalone', lambda m: None, False, paths=mcs_setup._service_paths()) == 1
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
-    assert mcs_setup._retire_agents({"ai.mcs.extract-drainer"}, lambda m: None, False) == 1
+    assert service_management.retire_agents({'ai.mcs.extract-drainer'}, lambda m: None, False, paths=mcs_setup._service_paths()) == 1
     assert (agents / "ai.mcs.extract-drainer.plist").exists()

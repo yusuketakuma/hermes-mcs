@@ -1,4 +1,7 @@
 """Selected runtime metadata and SQLite checks using only synthetic resources."""
+import mcs_util
+import service_contract
+import service_management
 import runtime_inspection
 import mcs_runtime
 import lifecycle_io
@@ -107,7 +110,7 @@ def test_unknown_metadata_never_means_healthy(executable, monkeypatch, result):
 ])
 def test_doctor_reports_selected_versions_not_parent(
         monkeypatch, tmp_path, capsys, mode, sqlite, expected):
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
         "runtime_mode": mode, "mcs_login_id": "synthetic-private",
         "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
@@ -120,7 +123,7 @@ def test_doctor_reports_selected_versions_not_parent(
         calls.append(exe)
         return _facts(sqlite=sqlite)
     monkeypatch.setattr(runtime_inspection, "probe_python", probe)
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: pytest.fail("service access"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("service access"))
     assert mcs_setup.cmd_doctor(SimpleNamespace(json=True)) == expected
     out = capsys.readouterr().out
     report = json.loads(out)
@@ -129,7 +132,7 @@ def test_doctor_reports_selected_versions_not_parent(
     assert report["checks"]["interpreter"]["status"] == "healthy"
     assert report["checks"]["runtime"]["status"] == ("blocked" if expected else "healthy")
     assert report["checks"]["recovery_runtime"]["status"] == "not_checked"
-    assert calls == [mcs_setup._services_py({"runtime_mode": mode})]
+    assert calls == [service_management.selected_python({'runtime_mode': mode}, paths=mcs_setup._service_paths())]
     assert "synthetic-private" not in out and "/synthetic/" not in out
 
 
@@ -153,7 +156,7 @@ def test_doctor_blocks_unsafe_recovery_without_touching_services(
         monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(tmp_path))
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
         "mcs_login_id": "synthetic", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     (tmp_path / "org.mcs.recovery.plist").write_bytes(plistlib.dumps(
@@ -162,7 +165,7 @@ def test_doctor_blocks_unsafe_recovery_without_touching_services(
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe:
                         _facts("3.9.6", "3.51.0") if exe == "/synthetic/recovery-python"
                         else _facts())
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: pytest.fail("service access"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("service access"))
     assert mcs_setup.cmd_doctor(SimpleNamespace(json=True)) == 1
     report = json.loads(capsys.readouterr().out)
     assert report["checks"]["recovery_runtime"]["status"] == "blocked"
@@ -186,7 +189,7 @@ def _tree(root):
         for path in [root, *sorted(root.rglob("*"))]}
 
 
-def _deployed_recovery(monkeypatch, tmp_path):
+def _deployed_recovery(monkeypatch, tmp_path, *, owner=mcs_setup):
     agents = tmp_path / "runtime-agents"
     agents.mkdir()
     executable = tmp_path / "recovery-python"
@@ -194,7 +197,7 @@ def _deployed_recovery(monkeypatch, tmp_path):
     executable.chmod(0o700)
     (agents / "org.mcs.recovery.plist").write_bytes(plistlib.dumps(
         {"ProgramArguments": [str(executable), "synthetic-recovery.py"]}))
-    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
+    monkeypatch.setattr(owner, "AGENTS_DIR", str(agents))
     return str(executable)
 
 
@@ -212,10 +215,10 @@ def test_services_runtime_gate_precedes_all_mutation(
     calls, args = _services_env(monkeypatch, tmp_path)
     args.dry_run = dry
     cfg = {"runtime_mode": mode}
-    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: cfg if path is None else {})
-    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: cfg if path is None else {})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     recovery = _deployed_recovery(monkeypatch, tmp_path)
-    selected = mcs_setup._service_subs(cfg)["PYTHON"]
+    selected = service_management.service_substitutions(cfg, paths=mcs_setup._service_paths())["PYTHON"]
     probes = []
 
     def probe(exe):
@@ -223,9 +226,9 @@ def test_services_runtime_gate_precedes_all_mutation(
         return facts if exe == (selected if role == "selected" else recovery) else _facts()
 
     monkeypatch.setattr(runtime_inspection, "probe_python", probe)
-    for name in ("_retire_previous_runtime", "_sync_scripts", "_sync_agents",
-                 "_sync_standalone_service", "_save_manifest"):
-        monkeypatch.setattr(mcs_setup, name,
+    for name in ("retire_previous_runtime", "sync_scripts", "sync_agents",
+                 "sync_standalone_service", "save_manifest"):
+        monkeypatch.setattr(service_management, name,
                             lambda *a, **k: pytest.fail("runtime gate allowed mutation"))
     before = _tree(tmp_path)
     assert mcs_setup.cmd_services(args) == 1
@@ -239,7 +242,7 @@ def test_safe_service_runtimes_keep_python_roles_and_rendering(monkeypatch, tmp_
     from test_mcs_setup import _services_env
     calls, args = _services_env(monkeypatch, tmp_path)
     recovery = _deployed_recovery(monkeypatch, tmp_path)
-    selected = mcs_setup._service_subs({})["PYTHON"]
+    selected = service_management.service_substitutions({}, paths=mcs_setup._service_paths())["PYTHON"]
     probes = []
 
     def probe(exe):
@@ -266,10 +269,10 @@ def test_updater_precheck_probes_actual_runtimes_not_parent(
     cfg = {"runtime_mode": mode, "mcs_login_id": "synthetic", "notify_target": "local"}
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
     monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
-    monkeypatch.setattr(updater, "hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
-    recovery = _deployed_recovery(monkeypatch, tmp_path)
-    selected = mcs_setup._service_subs(cfg)["PYTHON"]
+    recovery = _deployed_recovery(monkeypatch, tmp_path, owner=updater)
+    selected = service_management.service_substitutions(cfg, paths=updater._service_paths())["PYTHON"]
     probes = []
 
     def probe(exe):
@@ -294,9 +297,9 @@ def test_updater_precheck_probes_actual_runtimes_not_parent(
 def test_apply_runtime_gate_precedes_lock_journal_and_interrupted_recovery(
         updater, monkeypatch, tmp_path, capsys, role, facts, interrupted):
     cfg = {"mcs_login_id": "synthetic", "notify_target": "local"}
-    monkeypatch.setattr(updater, "load_config", lambda: cfg)
-    recovery = _deployed_recovery(monkeypatch, tmp_path)
-    selected = mcs_setup._service_subs(cfg)["PYTHON"]
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
+    recovery = _deployed_recovery(monkeypatch, tmp_path, owner=updater)
+    selected = service_management.service_substitutions(cfg, paths=updater._service_paths())["PYTHON"]
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe:
                         facts if exe == (selected if role == "selected" else recovery)
                         else _facts())
@@ -392,7 +395,7 @@ def _owned_recovery(monkeypatch, tmp_path):
     old = "/synthetic/old-python"
     path = agents / "org.mcs.recovery.plist"
     path.write_bytes(plistlib.dumps({
-        "Label": mcs_setup.RECOVERY_LABEL,
+        "Label": service_contract.RECOVERY_LABEL,
         "ProgramArguments": [old, str(tool), "--if-stale"]}))
     path.chmod(0o600)
     monkeypatch.setattr(mcs_setup, "HOME", str(root))
@@ -411,12 +414,12 @@ def test_services_repairs_owned_unsafe_selection_without_autoenabling(
     path, old = _owned_recovery(monkeypatch, tmp_path)
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired}
-    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: cfg if path is None else {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: cfg if path is None else {})
     monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: _facts(sqlite="3.51.0") if exe == old else _facts())
     state = {"loaded": loaded}
     calls = []
-    other_run = mcs_setup._run
+    other_run = lifecycle_io.run_bounded
     def run(argv, **kwargs):
         if argv[0] != "launchctl":
             return other_run(argv, **kwargs)
@@ -429,11 +432,11 @@ def test_services_repairs_owned_unsafe_selection_without_autoenabling(
         if argv[1] == "bootstrap":
             state["loaded"] = True
         return SimpleNamespace(returncode=0, stdout="")
-    monkeypatch.setattr(mcs_setup, "_run", run)
-    for name in ("_retire_previous_runtime", "_sync_scripts", "_sync_agents",
-                 "_sync_standalone_service"):
-        monkeypatch.setattr(mcs_setup, name, lambda *a, **kw: 0)
-    assert mcs_setup._recovery_owned()
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', run)
+    for name in ("retire_previous_runtime", "sync_scripts", "sync_agents",
+                 "sync_standalone_service"):
+        monkeypatch.setattr(service_management, name, lambda *a, **kw: 0)
+    assert service_management.recovery_owned(paths=mcs_setup._service_paths())
     assert mcs_setup.cmd_services(args) == 0
     actual = plistlib.loads(path.read_bytes())
     assert actual["ProgramArguments"] == [
@@ -441,7 +444,7 @@ def test_services_repairs_owned_unsafe_selection_without_autoenabling(
     assert path.stat().st_mode & 0o777 == 0o600
     assert state["loaded"] is loaded
     assert sum(call[1] == "bootstrap" for call in calls) == int(loaded)
-    assert mcs_setup.runtime_gate_errors(cfg) == []
+    assert service_management.runtime_gate_errors(cfg, paths=mcs_setup._service_paths()) == []
 
 
 @pytest.mark.parametrize("boundary", ["foreign", "active", "unknown"])
@@ -451,11 +454,10 @@ def test_owned_recovery_repair_rejects_unknown_or_active_before_writes(
     monkeypatch.setattr(sys, "platform", "darwin")
     if boundary == "foreign":
         path.chmod(0o644)
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **kw: SimpleNamespace(
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **kw: SimpleNamespace(
         returncode=0, stdout="pid = 123\n" if boundary == "active" else "state = unknown\n"))
     before = _tree(tmp_path)
-    assert mcs_setup._sync_recovery(
-        {"recovery_python": str(tmp_path / "independent-python")}, lambda text: None, False) == 1
+    assert service_management.sync_recovery({'recovery_python': str(tmp_path / 'independent-python')}, lambda text: None, False, paths=mcs_setup._service_paths()) == 1
     assert _tree(tmp_path) == before
 
 
@@ -463,14 +465,15 @@ def test_doctor_and_updater_do_not_mask_deployed_drift(
         updater, monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")  # launchd watchdog scenario
     path, old = _owned_recovery(monkeypatch, tmp_path)
+    monkeypatch.setattr(updater, "AGENTS_DIR", str(path.parent))
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired, "mcs_login_id": "synthetic", "notify_target": "local"}
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: cfg)
-    monkeypatch.setattr(updater, "load_config", lambda: cfg)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: _facts(sqlite="3.51.0") if exe == old else _facts())
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **kw: pytest.fail("external action"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **kw: pytest.fail("external action"))
     assert mcs_setup.cmd_doctor(SimpleNamespace(json=True)) == 1
     report = json.loads(capsys.readouterr().out)
     assert report["runtimes"]["desired_recovery"]["sqlite"] == "3.51.3"
@@ -494,7 +497,7 @@ def test_bad_desired_service_selection_blocks_before_any_write(monkeypatch, tmp_
     calls, args = _services_env(monkeypatch, tmp_path)
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired}
-    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: cfg if path is None else {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: cfg if path is None else {})
     monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: facts if exe == desired else _facts())
     before = _tree(tmp_path)
@@ -503,29 +506,29 @@ def test_bad_desired_service_selection_blocks_before_any_write(monkeypatch, tmp_
 
 
 def test_updater_retains_valid_explicit_deployed_selection(updater, monkeypatch, tmp_path):
-    recovery = _deployed_recovery(monkeypatch, tmp_path)
+    recovery = _deployed_recovery(monkeypatch, tmp_path, owner=updater)
     cfg = {"recovery_python": recovery, "mcs_login_id": "synthetic", "notify_target": "local"}
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
-    monkeypatch.setattr(updater, "hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
     probes = []
     monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: probes.append(exe) or _facts())
     before = dict(cfg), _tree(tmp_path)
     assert updater.precheck_local(cfg) == []
-    assert probes == [mcs_setup._service_subs(cfg)["PYTHON"], recovery, recovery]
+    assert probes == [service_management.service_substitutions(cfg, paths=updater._service_paths())["PYTHON"], recovery, recovery]
     assert (cfg, _tree(tmp_path)) == before
 
 
 @pytest.mark.parametrize("bad", [{"backup": {"enabled": True}}, {"watchdog_grace_s": "60"}])
 def test_invalid_render_config_is_reported_not_raised(updater, monkeypatch, tmp_path, capsys, bad):
     cfg = {"mcs_login_id": "synthetic", "notify_target": "local", **bad}
-    monkeypatch.setattr(updater, "load_config", lambda: cfg)
-    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: cfg)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: cfg)
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
     errors = updater.precheck_local(cfg)
     assert any(e.startswith("config: ") and e.endswith("_config_invalid") for e in errors)
-    errors, _ = mcs_setup._script_drift()
+    errors, _ = service_management.script_drift(paths=mcs_setup._service_paths())
     assert errors and errors[0].startswith("設定に問題があります: ")
     monkeypatch.setattr(updater.journal_store, "save_state",
                         lambda *a, **k: pytest.fail("runtime gate allowed journal write"))
@@ -563,10 +566,10 @@ def test_services_rejects_nonobject_recovery_plist_without_mutation(
     path, _ = _owned_recovery(monkeypatch, tmp_path)
     path.write_bytes(plistlib.dumps(plist))
     cfg = {"recovery_python": str(tmp_path / "independent-python")}
-    monkeypatch.setattr(mcs_setup, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda path=None: cfg if path is None else {})
     before = _tree(tmp_path)
     assert mcs_setup.cmd_services(args) == 1
-    assert not mcs_setup._recovery_owned()
+    assert not service_management.recovery_owned(paths=mcs_setup._service_paths())
     assert calls == [] and _tree(tmp_path) == before
     assert "recovery_runtime:" in capsys.readouterr().out

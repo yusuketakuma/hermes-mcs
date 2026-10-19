@@ -1,4 +1,5 @@
 """Synthetic checks for the beginner setup path; no live services."""
+import service_management
 import lifecycle_io
 import setup_wizard
 import json
@@ -83,7 +84,7 @@ def test_cancellation_during_password_input_does_not_claim_config_saved(
 
     monkeypatch.setattr(mcs_setup.getpass, 'getpass', interrupt)
     monkeypatch.setattr(lifecycle_io, 'store_keychain', lambda *a: pytest.fail('secret write'))
-    monkeypatch.setattr(mcs_setup, '_write_atomic', lambda *a: pytest.fail('config write'))
+    monkeypatch.setattr(service_management, 'write_service_file', lambda *a: pytest.fail('config write'))
     assert mcs_setup.main(['init']) == 130
     assert path.exists() is existing
     if existing:

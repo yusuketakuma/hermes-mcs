@@ -1,6 +1,8 @@
 """Standalone init rejects --plugin-project-ids it cannot fully honour,
 exactly like the Hermes path, before any secret, .env or config write.
 Temporary HOME and stubs only; no keychain, Hermes or real config."""
+import service_contract
+import service_management
 import lifecycle_io
 import json
 from types import SimpleNamespace
@@ -50,7 +52,7 @@ def test_desired_agents_are_only_the_repo_templates(monkeypatch, tmp_path, mode)
     cfg = config() if mode == "standalone" else {"runtime_mode": "hermes"}
     subs = {"PYTHON": "/synthetic/python", "REPO": str(tmp_path), "DATA": str(tmp_path / "data"),
             "RUNTIME_HOME": str(tmp_path), "WATCHDOG_GRACE": "60"}
-    agents = mcs_setup._desired_agents(subs, cfg)
-    assert set(agents) == set(mcs_setup._agent_labels(cfg))
-    assert not any(label.startswith(mcs_setup.CRON_LABEL_PREFIX) for label in agents)
+    agents = service_management.desired_agents(subs, cfg, paths=mcs_setup._service_paths())
+    assert set(agents) == set(service_contract.desired_agent_labels(cfg))
+    assert not any(label.startswith(service_contract.CRON_LABEL_PREFIX) for label in agents)
     assert all("__PYTHON__" not in body for body in agents.values())

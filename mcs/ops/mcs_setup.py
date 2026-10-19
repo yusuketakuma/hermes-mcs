@@ -30,18 +30,13 @@ use hidden prompts and private files; they are not inferred from the environment
 from __future__ import annotations
 
 import argparse
-import fcntl
 import stat
 import getpass
-import hashlib
-from html import escape as xml_escape
 import json
 import math
 import os
 import plistlib
 import re
-import shlex
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -66,20 +61,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 import semantic_transport
 
-from backup_config import validate_backup_config as _backup_config
 import setup_wizard
+import service_management
+import mcs_util
+import service_contract
 import lifecycle_io
-from lifecycle_io import KEYCHAIN_SERVICE, run_bounded as _run
+from lifecycle_io import KEYCHAIN_SERVICE
 from mcs_config import (recovery_python_problem,
                         transport_enabled, validate_config, validate_notify)
 import bounded_http
 import mcs_runtime
 import runtime_inspection
-from scheduled_jobs import CRON_JOBS, configured_cron_jobs, render_template
 
-from mcs_util import (CONF_PATH, HOME, REPO, atomic_write, env_value,
-                      load_config)
-from mcs_util import hermes_exe as _hermes_exe
+from mcs_util import (CONF_PATH, HOME, REPO, env_value)
 from safe_io import read_regular_nofollow
 
 ENV_PATH = os.path.join(HOME, ".env")
@@ -96,30 +90,8 @@ def _evaluation_input(path) -> bytes:
     return raw
 
 
-_GATEWAY_LIFECYCLE_VERBS = frozenset({"install", "uninstall", "restart", "start", "stop"})
-
-
-def _hermes_cli(exe: str, profile: str, *argv: str, input_text: str | None = None):
-    """Public hermes CLI against a named profile ("" = launch/default).
-    Returns the CompletedProcess, or None when the call can't run."""
-    cmd = [exe] + (["-p", profile] if profile else []) + list(argv)
-    if (os.environ.get("MCS_TEST_SANDBOX") == "1" and argv[:1] == ("gateway",)
-            and argv[1:2] and argv[1] in _GATEWAY_LIFECYCLE_VERBS
-            and (os.path.exists(exe) or shutil.which(exe))):
-        # hermes writes the gateway LaunchAgent under the real account home and
-        # loads it into the real launchd, whatever HOME/HERMES_HOME a test set
-        # (the live gateway plist was rewritten this way on 2026-10-04).
-        return subprocess.CompletedProcess(
-            cmd, 126, "", "refused under MCS_TEST_SANDBOX: gateway lifecycle")
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=30, input=input_text)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-
 def _hermes_config_get(exe: str, profile: str, key: str):
-    r = _hermes_cli(exe, profile, "config", "get", key)
+    r = service_management.hermes_cli(exe, profile, 'config', 'get', key)
     if r and r.returncode == 0 and r.stdout.strip():
         return r.stdout.strip()
     return None
@@ -143,7 +115,7 @@ def _process_started_at(pid: int) -> float | None:
 
     LC_ALL=C keeps the stamp in the English format strptime parses
     (a ja_JP locale prints the weekday in kanji)."""
-    r = _run(["ps", "-o", "lstart=", "-p", str(pid)], timeout=10,
+    r = lifecycle_io.run_bounded(["ps", "-o", "lstart=", "-p", str(pid)], timeout=10,
              env={**os.environ, "LC_ALL": "C"})
     if r.returncode != 0:
         return None
@@ -179,10 +151,9 @@ def _hermes_config_set(exe: str, profile: str, key: str, val) -> bool:
     # exposes them in child argv (DISCORD_BOT_TOKEN, SLACK_BOT_TOKEN,
     # SLACK_APP_TOKEN, ...).
     if key.endswith("_TOKEN"):
-        r = _hermes_cli(exe, profile, "config", "set", key, "--stdin",
-                        input_text=str(val))
+        r = service_management.hermes_cli(exe, profile, 'config', 'set', key, '--stdin', input_text=str(val))
     else:
-        r = _hermes_cli(exe, profile, "config", "set", key, str(val))
+        r = service_management.hermes_cli(exe, profile, 'config', 'set', key, str(val))
     return bool(r and r.returncode == 0)
 
 
@@ -201,7 +172,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         # login keychain is still locked — when present, keychain
         # unreadability is a warning, not a blocker.
         env_pw = bool(env_value("MCS_PASSWORD", check_env=False))
-        r = _run(
+        r = lifecycle_io.run_bounded(
             ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE])
         if r.returncode != 0:
             (warnings if env_pw else errors).append(
@@ -216,7 +187,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             # 'keychain_locked'; probing -w here surfaces that at setup
             # time (and may pop the one-time 'Always Allow' dialog in an
             # interactive session).
-            w = _run(
+            w = lifecycle_io.run_bounded(
                 ["security", "find-generic-password", "-s",
                  KEYCHAIN_SERVICE, "-w"])
             if w.returncode != 0:
@@ -248,23 +219,23 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     # mcs_util.hermes_exe notify_flush uses: config hermes_bin, else PATH,
     # else the standard user-local install (launchd PATH is minimal).
     ntf = cfg.get("notify") or {}
-    exe = _hermes_exe(cfg) if cfg.get("runtime_mode") != "standalone" else ""
+    exe = mcs_util.hermes_exe(cfg) if cfg.get("runtime_mode") != "standalone" else ""
     lineworks = isinstance(ntf, dict) and ntf.get("interactive") == "lineworks"
     target = cfg.get("notify_target", "")
     if mcs_runtime.standalone(cfg):
         # Slack/Discord run on MCS's own connector — Hermes is not used.
-        r = _run([mcs_runtime.python_executable(cfg),
+        r = lifecycle_io.run_bounded([mcs_runtime.python_executable(cfg),
                   os.path.join(REPO_ROOT, "mcs_standalone", "__main__.py"),
                   "check", "--root", HOME], timeout=30)
         if r.returncode:
             errors.append("独立動作の診断に失敗しました。次の手順を確認してください: "
                           "docs/guides/STANDALONE.md")
-        if sys.platform == "darwin" and _agent_loaded("ai.hermes.gateway"):
+        if sys.platform == "darwin" and service_management.agent_loaded('ai.hermes.gateway', paths=_service_paths()):
             warnings.append("MCSが独立して接続していますが、Hermesの接続サービスも稼働しています。"
                             "Slack/Discordの二重接続を避けるため、Hermes側の接続設定を外すか、"
                             "Hermesの接続サービスを停止してください（docs/guides/STANDALONE.md）")
     elif lineworks or (isinstance(target, str) and target.startswith("lineworks:")):
-        r = _run([sys.executable, os.path.join(REPO_ROOT, "lineworks_adapter", "__main__.py"),
+        r = lifecycle_io.run_bounded([sys.executable, os.path.join(REPO_ROOT, "lineworks_adapter", "__main__.py"),
                   "check", "--root", HOME], timeout=20)
         if r.returncode:
             errors.append("LINE WORKS接続の診断に失敗しました。`python -m lineworks_adapter check`を実行し、docs/guides/LINEWORKS.mdに従って認証情報を確認してください")
@@ -275,7 +246,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             and cfg["notify"].get("interactive") in ("discord", "slack"):
         # The gateway is hermes's own supervised service — cards and
         # /mcs commands cannot deliver without it (both transports).
-        r = _hermes_cli(exe, "", "gateway", "status")
+        r = service_management.hermes_cli(exe, '', 'gateway', 'status')
         if not (r and r.returncode == 0
                 and "supervised" in (r.stdout or "")):
             warnings.append("Hermesの接続サービスが常駐管理されていません。"
@@ -301,7 +272,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                         "外部の意味解析を有効にする場合に必要です")
     if sys.platform == "darwin" and cfg.get("runtime_mode") != "standalone":
         agents = os.path.expanduser("~/Library/LaunchAgents")
-        labels = _agent_labels(cfg)
+        labels = service_contract.desired_agent_labels(cfg)
         warnings.extend(
             f"常駐処理{label}が未導入です。設定のひな形と"
             "導入手順はdeployment/launchagents/README.mdを確認してください"
@@ -313,7 +284,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         # `check` stayed green). _agent_loaded resolves the GUI-domain
         # service; a domain that does not answer at all means this
         # session simply cannot verify — warn once, don't per-agent fail.
-        domain_ok = _run(["launchctl", "print", f"gui/{os.getuid()}"],
+        domain_ok = lifecycle_io.run_bounded(["launchctl", "print", f"gui/{os.getuid()}"],
                          timeout=10).returncode == 0
         if not domain_ok:
             warnings.append(
@@ -323,7 +294,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             plist = os.path.join(agents, f"{label}.plist")
             if not os.path.exists(plist) or not domain_ok:
                 continue
-            if not _agent_loaded(label):
+            if not service_management.agent_loaded(label, paths=_service_paths()):
                 errors.append(
                     f"常駐処理{label}は導入済みですが読み込まれていません。"
                     "`mcs_setup.py services`を実行してください。個別の起動方法: "
@@ -537,7 +508,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
             or ntf.get("interactive") not in ("discord", "slack"):
         return True
     transport = ntf["interactive"]
-    exe = _hermes_exe(cfg)
+    exe = mcs_util.hermes_exe(cfg)
     if not runtime_inspection.executable_available(exe):
         print("\nHermesコマンドが見つかりません。連携設定は後で "
               "`hermes config set "
@@ -882,7 +853,7 @@ def cmd_init(args) -> int:
     # interpreter (including --set overrides) has been verified.
     if not args.yes and not _guard_config(False):
         return 1
-    cfg = load_config()
+    cfg = mcs_util.load_config()
     try:
         mode_before = mcs_runtime.mode(cfg)
     except ValueError:
@@ -985,8 +956,7 @@ def cmd_init(args) -> int:
         # PHI/session stores: owner-only even when the dir pre-existed
         os.makedirs(d, mode=0o700, exist_ok=True)
         os.chmod(d, 0o700)
-    _write_atomic(CONF_PATH, json.dumps(cfg, ensure_ascii=False,
-                                      indent=2, sort_keys=True) + "\n", 0o600)
+    service_management.write_service_file(CONF_PATH, json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + '\n', 384)
     args._config_saved = True
     print(f"設定ファイルを保存しました: {CONF_PATH}")
     if not args.yes:
@@ -1012,10 +982,9 @@ def cmd_init(args) -> int:
         notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
     if cfg.get("runtime_mode") != "standalone" and isinstance(ntf, dict) \
             and ntf.get("interactive") in ("discord", "slack"):
-        exe = _hermes_exe(cfg)
+        exe = mcs_util.hermes_exe(cfg)
         if runtime_inspection.executable_available(exe):
-            gateway_result = _sync_gateway(
-                cfg, exe, lambda m: print(f"  {m}"), dry=False)
+            gateway_result = service_management.sync_gateway(cfg, exe, lambda m: print(f'  {m}'), dry=False)
     if mcs_runtime.mode(cfg) != mode_before:
         # config alone does not switch runtimes: the interpreter, the
         # schedule and the Slack/Discord connection belong to install.sh
@@ -1063,7 +1032,7 @@ def cmd_fact_source(args) -> int:
     """
     if not _guard_config(False):
         return 1
-    cfg = load_config()
+    cfg = mcs_util.load_config()
     existing_sem = cfg.get("semantic")
     if existing_sem is not None and not isinstance(existing_sem, dict):
         print("解析結果の採用方法: config.jsonのsemanticの形式が不正です。"
@@ -1150,8 +1119,7 @@ def cmd_fact_source(args) -> int:
         print("意味解析の設定に誤りがあるため保存していません。修正してください: "
               + "; ".join(sem_errors))
         return 1
-    _write_atomic(CONF_PATH, json.dumps(cfg, ensure_ascii=False,
-                                      indent=2, sort_keys=True) + "\n", 0o600)
+    service_management.write_service_file(CONF_PATH, json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + '\n', 384)
     print(f"解析結果の採用方法を保存しました: semantic.fact_source = {source}"
           + (f"（評価証拠の識別子: {sem['fact_source_gate']}）"
              if source == "canonical" else ""))
@@ -1195,7 +1163,7 @@ def cmd_jev_value(args) -> int:
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
         print("追加解析の評価: 配布されている完全合成の評価ケースを使用してください")
         return 1
-    cfg = load_config()
+    cfg = mcs_util.load_config()
     scfg = cfg.get("semantic") or {}
     jev_client = None
     api_key = env_value("TYPESAFE_API_KEY")
@@ -1317,10 +1285,10 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
 
 
 def cmd_check(args) -> int:
-    cfg = load_config()
+    cfg = mcs_util.load_config()
     # blocker priority: what every scheduled job runs on, then the
     # config itself, then machine probes, then deployment drift
-    e0, w0 = check_runtime(cfg)
+    e0, w0 = service_management.check_runtime(cfg, paths=_service_paths())
     why = _config_problem()
     if why:
         e0 = e0 + [f"設定ファイル{CONF_PATH}を読み取れないか、形式が不正です（詳細: {why}）。"
@@ -1328,7 +1296,7 @@ def cmd_check(args) -> int:
                    "`mcs_setup.py init --yes`で退避して設定し直してください"]
     e1, w1 = validate_config(cfg)
     e2, w2 = check_environment(cfg)
-    e3, w3 = _script_drift() if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
+    e3, w3 = service_management.script_drift(paths=_service_paths()) if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
     errors = e0 + e1 + e2 + e3
     warnings = w0 + w1 + w2 + w3 + _queue_warnings(cfg)
     for w in warnings:
@@ -1390,192 +1358,6 @@ def _check_llm(cfg: dict) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-def _recovery_owned() -> bool:
-    """Existing private tool, repo pointer and exact command prove ownership."""
-    try:
-        root = Path(RECOVERY_DIR)
-        st = root.lstat()
-        if (root.resolve() != root or not stat.S_ISDIR(st.st_mode)
-                or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o700):
-            return False
-        contents = {}
-        for name, path, mode in (
-                ("tool", root / "mcs_recover.py", 0o700),
-                ("pointer", root / "repo_path", 0o600),
-                ("plist", Path(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), 0o600)):
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd, "rb") as stream:
-                st = os.fstat(stream.fileno())
-                if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
-                        or stat.S_IMODE(st.st_mode) != mode or st.st_size > 1048576):
-                    return False
-                contents[name] = stream.read(1048577)
-        if Path(contents["pointer"].decode().strip()).resolve() != Path(REPO_ROOT).resolve():
-            return False
-        plist = plistlib.loads(contents["plist"])
-        if not isinstance(plist, dict):
-            return False
-        argv = plist.get("ProgramArguments")
-        return (plist.get("Label") == RECOVERY_LABEL and isinstance(argv, list)
-                and len(argv) == 3 and argv[1:] == [str(root / "mcs_recover.py"), "--if-stale"]
-                and runtime_inspection.recovery_executable(plist) is not None)
-    except (OSError, ValueError, TypeError, RuntimeError):
-        return False
-
-
-def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None,
-                        allow_runtime_migration=False) -> list[str]:
-    """Refuse mutations on unsafe selected or explicitly deployed runtimes."""
-    errors = []
-    try:
-        python = _service_subs(cfg)["PYTHON"]
-    except ValueError as e:     # backup / watchdog_grace_s invalid
-        errors.append(f"config: {e}")
-    else:
-        why = mcs_runtime.runtime_problem(runtime_inspection.probe_python(python),
-                               allow_runtime_migration=allow_runtime_migration)
-        if why:
-            errors.append("selected_runtime: " + why)
-    # Absence is the existing optional-watchdog warning, not an invented
-    # interpreter choice. A present but broken plist must fail closed.
-    explicit = "recovery_python" in cfg
-    desired = runtime_inspection.recovery_python(cfg)
-    desired_problem = None
-    if explicit:
-        desired_problem = recovery_python_problem(desired, update_repo, checkout=REPO_ROOT) or mcs_runtime.runtime_problem(
-            runtime_inspection.probe_python(desired), recovery=True)
-        if desired_problem:
-            errors.append("desired_recovery_runtime: " + desired_problem)
-    if os.path.lexists(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
-        why = mcs_runtime.runtime_problem(runtime_inspection.recovery_runtime(
-            os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), checkout=REPO_ROOT), recovery=True)
-        try:
-            with open(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), "rb") as stream:
-                actual = runtime_inspection.recovery_executable(plistlib.load(stream))
-        except (OSError, ValueError, TypeError):
-            actual = None
-        if actual is not None:
-            why = recovery_python_problem(actual, update_repo, checkout=REPO_ROOT) or why
-        repair = (repair_recovery and explicit and actual != desired
-                  and not desired_problem and _recovery_owned())
-        if explicit and actual != desired and not repair:
-            errors.append("recovery_runtime: desired/deployed selection drift")
-        if why and not repair:
-            errors.append("recovery_runtime: " + why)
-    return errors
-
-
-def recovery_repair_pending(cfg) -> bool:
-    """An explicit selection differs from the deployed watchdog command."""
-    path = os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")
-    if "recovery_python" not in cfg or not os.path.lexists(path):
-        return False
-    try:
-        with open(path, "rb") as stream:
-            return runtime_inspection.recovery_executable(plistlib.load(stream)) != runtime_inspection.recovery_python(cfg)
-    except (OSError, ValueError, TypeError):
-        return True
-
-
-def _update_parent_holds_locks(data: Path) -> bool:
-    """True only in the update's post-merge child: the parent apply keeps
-    update.lock and run.lock, and spawned it with the journal's sha as
-    handshake token (mcs_update._UPDATE_PM_ENV)."""
-    token = os.environ.get("_MCS_UPDATE_PM")
-    try:
-        with open(data / "update_state.json", encoding="utf-8") as stream:
-            applying = json.load(stream).get("applying")
-    except (OSError, ValueError, AttributeError):
-        return False
-    return bool(token) and isinstance(applying, dict) and applying.get("sha") == token
-
-
-def _sync_recovery(cfg, note, dry) -> int:
-    """Change only an owned, quiescent installed watchdog; never enable a missing one."""
-    path = Path(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")
-    if "recovery_python" not in cfg or not os.path.lexists(path):
-        return 0
-    desired = runtime_inspection.recovery_python(cfg)
-    with path.open("rb") as stream:
-        actual = runtime_inspection.recovery_executable(plistlib.load(stream))
-    if actual == desired:
-        return 0
-    if sys.platform != "darwin" or not _recovery_owned():
-        note("復旧監視: 所有者またはOSを確認できないため、置き換えていません")
-        return 1
-    try:
-        text = Path(REPO_ROOT, "deployment/launchagents",
-                    f"{RECOVERY_LABEL}.plist").read_text()
-        body = render_template(text, {key: xml_escape(value, quote=False) for key, value in {
-            "RECOVERY_PYTHON": desired, "RECOVERY": RECOVERY_DIR,
-            "DATA": str(Path(HOME, "data"))}.items()})
-        if runtime_inspection.recovery_executable(plistlib.loads(body.encode())) != desired:
-            note("復旧監視: 設定のひな形と使用するPythonが一致しないため、置き換えていません")
-            return 1
-    except (OSError, ValueError, TypeError):
-        note("復旧監視: 設定のひな形を確認できないため、置き換えていません")
-        return 1
-    uid = os.getuid()
-    target = f"gui/{uid}/{RECOVERY_LABEL}"
-    current = _run(["launchctl", "print", target], timeout=10)
-    loaded = current.returncode == 0
-    if (loaded and (re.search(r"^\s*pid\s*=", current.stdout or "", re.M)
-                    or not re.search(r"^\s*state = (?:not running|waiting)\s*$",
-                                     current.stdout or "", re.M))) \
-            or (not loaded and current.returncode != 113):
-        note("復旧監視: 実行中または状態不明のため、置き換えていません")
-        return 1
-    note("復旧監視: 停止中の既存監視で、使用するPythonの設定変更を検出しました")
-    if dry:
-        return 0
-    data = Path(HOME, "data")
-    try:
-        st = data.lstat()
-    except OSError:
-        note("復旧監視: 排他制御用の保存先がないため、置き換えていません")
-        return 1
-    if (data.resolve() != data or not stat.S_ISDIR(st.st_mode)
-            or st.st_uid != uid or stat.S_IMODE(st.st_mode) != 0o700):
-        note("復旧監視: 排他制御用の保存先の安全性を確認できないため、置き換えていません")
-        return 1
-    fds = []
-    parent_held = _update_parent_holds_locks(data)
-    try:
-        for name in ("update.lock", "run.lock"):
-            fd = os.open(data / name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
-                         0o600)
-            fds.append(fd)
-            st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != uid:
-                note("復旧監視: 排他制御ファイルの所有者が不明のため、置き換えていません")
-                return 1
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                if not parent_held:
-                    raise
-        if loaded:
-            if _run(["launchctl", "bootout", target]).returncode != 0:
-                return 1
-            if _run(["launchctl", "print", target], timeout=10).returncode != 113:
-                note("復旧監視: 停止を確認できないため、常駐設定は変更していません")
-                return 1
-        _write_atomic(str(path), body, 0o600)
-        if loaded and _run(["launchctl", "bootstrap", f"gui/{uid}", str(path)]).returncode != 0:
-            note("復旧監視: 新しい常駐設定を保存しましたが起動に失敗しました。別のPythonへの自動切り替えは行いません")
-            return 1
-        if loaded and _run(["launchctl", "print", target], timeout=10).returncode != 0:
-            note("復旧監視: 新しい監視の起動を確認できません。別のPythonへの自動切り替えは行いません")
-            return 1
-        return 0
-    except (OSError, BlockingIOError):
-        note("復旧監視: 他の処理が使用中か、操作に失敗したため、置き換えていません")
-        return 1
-    finally:
-        for fd in reversed(fds):
-            os.close(fd)
-
-
 def _doctor_source(cfg: dict, *, probe: bool) -> dict:
     """Report disk revision separately from observed process start evidence."""
     revision, dirty = None, None
@@ -1599,7 +1381,7 @@ def _doctor_source(cfg: dict, *, probe: bool) -> dict:
         running["status"] = "unknown"
         pids = set()
         for domain in ("user", "gui"):
-            r = _run(["launchctl", "print", f"{domain}/{os.getuid()}/ai.hermes.gateway"],
+            r = lifecycle_io.run_bounded(["launchctl", "print", f"{domain}/{os.getuid()}/ai.hermes.gateway"],
                      timeout=10)
             match = re.search(r"^\s*pid = (\d+)$", getattr(r, "stdout", "") or "", re.M)
             if r.returncode == 0 and match and int(match.group(1)) > 0:
@@ -1640,7 +1422,6 @@ def _doctor_source(cfg: dict, *, probe: bool) -> dict:
             "restart_request": restart}
 
 
-
 _NIGHTLY_COUNTS = ("initial_pending", "delta_pending", "history_pending",
                    "audit_pending", "failed", "complete")
 
@@ -1675,7 +1456,7 @@ def _doctor_nightly(cfg: dict, *, probe: bool) -> dict:
 
 def cmd_doctor(args) -> int:
     """Local read-only diagnostics; explicit probes return only safe counts."""
-    cfg = load_config()
+    cfg = mcs_util.load_config()
     config_errors, config_warnings = validate_config(cfg)
     if _config_problem():
         config_errors.append("configuration unreadable")
@@ -1695,13 +1476,13 @@ def cmd_doctor(args) -> int:
         checks["runtime"] = _doctor_check(["runtime mode invalid"], [])
     else:
         mode = mcs_runtime.mode(cfg)
-        selected = runtime_inspection.probe_python(_services_py(cfg))
+        selected = runtime_inspection.probe_python(service_management.selected_python(cfg, paths=_service_paths()))
         why = mcs_runtime.runtime_problem(selected)
         checks["runtime"] = _doctor_check([why] if why else [], [])
         if sys.platform == "darwin" and os.path.isfile(
-                os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
+                os.path.join(AGENTS_DIR, f"{service_contract.RECOVERY_LABEL}.plist")):
             recovery = runtime_inspection.recovery_runtime(
-                os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), checkout=REPO_ROOT)
+                os.path.join(AGENTS_DIR, f"{service_contract.RECOVERY_LABEL}.plist"), checkout=REPO_ROOT)
             why = mcs_runtime.runtime_problem(recovery, recovery=True)
             checks["recovery_runtime"] = _doctor_check([why] if why else [], [])
     probes = frozenset(getattr(args, "probe", None) or [])
@@ -1712,14 +1493,14 @@ def cmd_doctor(args) -> int:
             checks["llm"] = _doctor_check(*_check_llm(cfg))
         if "services" in probes:
             if sys.platform == "darwin":
-                domain = _run(["launchctl", "print", f"gui/{os.getuid()}"],
+                domain = lifecycle_io.run_bounded(["launchctl", "print", f"gui/{os.getuid()}"],
                               timeout=10)
                 if domain.returncode:
                     checks["services"]["warnings"] = 1
                 else:
-                    checks["services"] = _doctor_check(*check_runtime(cfg))
+                    checks["services"] = _doctor_check(*service_management.check_runtime(cfg, paths=_service_paths()))
             elif mcs_runtime.standalone(cfg):
-                checks["services"] = _doctor_check(*check_runtime(cfg))
+                checks["services"] = _doctor_check(*service_management.check_runtime(cfg, paths=_service_paths()))
     # No paths, values, messages from validators/subprocesses, IDs or raw
     # responses cross this boundary. Only process IDs/source hashes are exposed
     # by the explicit source probe; application/patient IDs stay private.
@@ -1730,9 +1511,9 @@ def cmd_doctor(args) -> int:
         desired = runtime_inspection.probe_python(runtime_inspection.recovery_python(cfg))
         why = mcs_runtime.runtime_problem(desired, recovery=True)
         checks["desired_recovery_runtime"] = _doctor_check([why] if why else [], [])
-        if os.path.lexists(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
+        if os.path.lexists(os.path.join(AGENTS_DIR, f"{service_contract.RECOVERY_LABEL}.plist")):
             try:
-                with open(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), "rb") as stream:
+                with open(os.path.join(AGENTS_DIR, f"{service_contract.RECOVERY_LABEL}.plist"), "rb") as stream:
                     matches = runtime_inspection.recovery_executable(plistlib.load(stream)) == runtime_inspection.recovery_python(cfg)
             except (OSError, ValueError, TypeError):
                 matches = False
@@ -1849,1040 +1630,15 @@ G6_CRITERIA_PATH = os.path.join(REPO_ROOT, "evaluation",
 # with standalone) so alerts still go out when hermes cron itself stalls
 # (one long cron job blocks the rest); health_watch.py's flock and dedup
 # state make the pair safe.
-RESIDENT_LABELS = ["ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2"]
-WATCHER_LABELS = ["local.mcs-cmd", "local.mcs-int", "local.mcs-health"]
-AGENT_LABELS = WATCHER_LABELS + RESIDENT_LABELS
 # install.sh-owned labels that must never enter MCS ownership (S5).
-EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
 MANIFEST_PATH = os.path.join(HOME, "data", "service_manifest.json")
 # the PATH every cron wrapper exports (deployment/scripts/*.sh) — launchd
 # and hermes cron never see the login shell's PATH
 LAUNCHD_PATH = os.pathsep.join([os.path.expanduser("~/.local/bin"),
                                 "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
 RECOVERY_DIR = os.path.expanduser("~/.mcs-recovery")
-RECOVERY_LABEL = "org.mcs.recovery"
 # whichever is loaded serves :8080 (see llamacpp_restart_if_idle.sh)
-LLAMA_LABELS = ("ai.hermes.llamacpp", "ai.mcs.llamaserver")
-STANDALONE_LABEL = "ai.mcs.standalone"
-STANDALONE_UNIT = "mcs-standalone.service"
 # = mcs_standalone.service.HEALTH_*: the standalone host's external watcher
-HEALTH_LABEL = "local.mcs-health"
-HEALTH_UNITS = ("mcs-health.service", "mcs-health.timer")
-HEALTH_TIMER = "mcs-health.timer"
-
-
-CRON_LABEL_PREFIX = "ai.mcs.cron."
-
-
-def _services_py(cfg: dict) -> str:
-    """The interpreter every rendered wrapper and agent runs on."""
-    return mcs_runtime.python_executable(cfg) if mcs_runtime.standalone(cfg) \
-        else HERMES_PY
-
-
-def _hermes_py_problem() -> str | None:
-    """None when HERMES_PY is an executable Python >= 3.14."""
-    return runtime_inspection.python_problem(HERMES_PY)
-
-
-def _cron_label(script: str) -> str:
-    return CRON_LABEL_PREFIX + script.removesuffix(".sh").replace("_", "-")
-
-
-def _agent_labels(cfg: dict) -> list[str]:
-    """Every LaunchAgent `services` owns for the selected runtime."""
-    if not mcs_runtime.standalone(cfg):
-        return list(AGENT_LABELS)
-    # The health watch stays outside the host so its death still alerts.
-    return [STANDALONE_LABEL, HEALTH_LABEL]
-
-
-def _owned_label(label: str) -> bool:
-    """MCS's LaunchAgent naming space (never install.sh-owned labels)."""
-    return label not in EXCLUDED_LABELS and (
-        label.startswith(("local.mcs-", "ai.mcs.extract-", CRON_LABEL_PREFIX))
-        or label == STANDALONE_LABEL)
-
-
-def _install_fix(stage: str) -> str:
-    return f"`{os.path.join(REPO_ROOT, 'install.sh')}`を再実行してください（{stage}）"
-
-
-def _standalone_py_problem(cfg: dict) -> str | None:
-    return runtime_inspection.python_problem(mcs_runtime.python_executable(cfg, root=HOME))
-
-
-def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
-    """What the scheduled jobs run on: the services interpreter, hermes
-    as launchd resolves it, the update-recovery watchdog and the
-    llama-server agent."""
-    errors, warnings = [], []
-    try:
-        mcs_runtime.mode(cfg)
-    except ValueError:
-        return errors, warnings
-    standalone = cfg.get("runtime_mode") == "standalone"
-    why = _standalone_py_problem(cfg) if standalone else _hermes_py_problem()
-    if why:
-        errors.append(f"{why} — 定期処理・常駐処理を"
-                      "開始できません。" + _install_fix(
-                          "手順2で独立動作のPython環境を再構築" if standalone else "手順2でHermesのPython環境を再構築")
-                      + "、続いて`mcs_setup.py services`を実行してください")
-    exe = _hermes_exe(cfg) if not standalone else ""
-    if not standalone and runtime_inspection.executable_available(exe) and not runtime_inspection.executable_available(_hermes_exe(cfg, LAUNCHD_PATH)):
-        errors.append(
-            f"この操作環境ではHermes（{exe}）を使えますが、常駐処理の検索先"
-            f"（{LAUNCHD_PATH}）では見つからず、定期処理から通知できません。"
-            f"`ln -s {shlex.quote(exe)} ~/.local/bin/hermes`または"
-            "init --set hermes_bin=...で指定してください")
-    if standalone:
-        path = _standalone_service_path()
-        if not os.path.exists(path):
-            warnings.append("独立動作の常駐設定が未導入です。`mcs_setup.py services`を実行してください。個別の起動方法: 常駐管理ツールから`python -m mcs_standalone run`を起動してください")
-        elif not _standalone_loaded():
-            errors.append("独立動作の常駐処理は導入済みですが読み込まれていません。`mcs_setup.py services`を実行してください")
-        else:
-            try:
-                from mcs_standalone.service import render
-                _, desired = render(HOME, platform=sys.platform)
-                if Path(path).read_text(encoding="utf-8") != desired:
-                    errors.append("独立動作の常駐設定が現在のプログラムと一致しません。`mcs_setup.py services`を実行してください")
-            except (OSError, ValueError):
-                errors.append("独立動作の常駐設定を確認できません")
-        if os.path.exists(path):
-            e, w = _check_standalone_health()
-            errors += e
-            warnings += w
-    if sys.platform != "darwin":
-        return errors, warnings
-    uid = os.getuid()
-    if _run(["launchctl", "print", f"gui/{uid}"],
-            timeout=10).returncode != 0:
-        return errors, warnings   # check_environment already warns
-    tool = os.path.join(RECOVERY_DIR, "mcs_recover.py")
-    plist = os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")
-    fix = _install_fix("手順6で復旧ツールと定期監視を導入")
-    try:
-        deployed = Path(tool).read_bytes()
-    except OSError:
-        deployed = None
-    if deployed is None or not os.path.exists(plist):
-        warnings.append(f"更新の復旧監視（{RECOVERY_LABEL}）が"
-                        f"未導入です。更新が中断しても自動復旧できません。"
-                        + fix)
-    else:
-        why = mcs_runtime.runtime_problem(runtime_inspection.recovery_runtime(
-            os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), checkout=REPO_ROOT), recovery=True)
-        if why:
-            errors.append(f"復旧監視: {why}。復元時のデータ保存を"
-                          "安全に行えるか確認できません。" + fix)
-        with suppress(OSError):
-            if deployed != Path(REPO_ROOT, "deployment", "recovery",
-                                "mcs_recover.py").read_bytes():
-                warnings.append(f"復旧ツール{tool}が配布版と異なります。"
-                                + fix)
-        try:
-            recorded = Path(RECOVERY_DIR, "repo_path").read_text(
-                encoding="utf-8").strip()
-        except OSError:
-            recorded = HOME   # mcs_recover.py's own fallback
-        if os.path.realpath(recorded) != os.path.realpath(REPO_ROOT):
-            warnings.append(f"復旧監視の対象は{recorded}です。"
-                            f"この導入先{REPO_ROOT}とは異なります。" + fix)
-        if not _agent_loaded(RECOVERY_LABEL):
-            errors.append(f"復旧監視{RECOVERY_LABEL}は導入済みですが"
-                          f"読み込まれていません。起動方法: `launchctl bootstrap gui/{uid} "
-                          f"{plist}`")
-    if not any(_agent_loaded(lb) for lb in LLAMA_LABELS):
-        installed = [lb for lb in LLAMA_LABELS if os.path.exists(
-            os.path.join(AGENTS_DIR, f"{lb}.plist"))]
-        if installed:
-            lp = os.path.join(AGENTS_DIR, f"{installed[0]}.plist")
-            errors.append(f"ローカルAIの常駐処理{installed[0]}は導入済みですが"
-                          "読み込まれておらず、AIは停止しています。起動方法: "
-                          f"`launchctl bootstrap gui/{uid} {lp}`")
-        else:
-            warnings.append(
-                "ローカルAIの常駐設定がありません（" + " / ".join(LLAMA_LABELS)
-                + "）。local_llm.urlの接続先で独自に管理している場合は問題ありません。"
-                "それ以外は" + _install_fix("手順4"))
-    return errors, warnings
-
-
-def _write_atomic(path: str, body: str, mode: int | None = None) -> None:
-    """tmp -> fsync -> chmod -> os.replace -> dir fsync — a mid-write
-    crash never leaves a truncated script/plist behind, and the file
-    never exists at the destination with the wrong mode (S: atomic
-    render)."""
-    atomic_write(path, lambda f: f.write(body), mode, tmp_prefix=".svc.")
-
-
-def _sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-def _cron_list(hermes: str) -> list[dict] | None:
-    """Tolerant parse of `hermes cron list --all` — job-id header line
-    followed by indented 'Name/Schedule/Script:' fields. Returns None
-    when the call fails or output is unparseable (=> 'unverifiable')."""
-    try:
-        r = subprocess.run([hermes, "cron", "list", "--all"],
-                           capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if r.returncode != 0:
-        return None
-    out: list[dict] = []
-    cur = None
-    output = re.sub(r"\x1b\[[0-9;]*m", "", r.stdout)
-    for line in output.splitlines():
-        m = re.match(r"^\s{2}([0-9a-f]{6,})\b", line)
-        if m:
-            cur = {"id": m.group(1)}
-            out.append(cur)
-            continue
-        m = re.match(r"^\s+(Name|Schedule|Script):\s*(.+?)\s*$", line)
-        if m:
-            if cur is None:
-                return None            # field before any header
-            cur[m.group(1).lower()] = m.group(2)
-    # Hermes >= 2026-09-28 prints "No scheduled jobs in profile '<name>'."
-    if not out and not re.search(r"^No scheduled jobs(?: in profile '[^'\n]*')?\.",
-                                 output, re.M):
-        return None
-    if any(not entry.get("name") or not entry.get("schedule") for entry in out):
-        return None
-    return out
-
-
-def _norm_sched(s: str) -> str | None:
-    """Extract a comparable 5-field cron expr from a Schedule field —
-    tolerant of 'cron: ' prefixes or extra decoration."""
-    field = r"[0-9A-Za-z*/?,#\-]+"
-    m = re.search(rf"(?<!\S)({field}(?:\s+{field}){{4}})(?!\S)", s or "")
-    return " ".join(m.group(1).split()) if m else None
-
-
-def _agent_loaded(label: str) -> bool | None:
-    """Whether launchd has `label` loaded; None when the probe timed out or
-    could not start (124/127) — unknown is falsy but never proof of a stop."""
-    uid = os.getuid()
-    r = _run(["launchctl", "print", f"gui/{uid}/{label}"])
-    if r.returncode in (124, 127):
-        return None
-    return r.returncode == 0
-
-
-def _agent_absent(label: str) -> bool:
-    """True only when launchd reports `label` not found (113): any other
-    probe failure is not proof that a booted-out agent stopped."""
-    return _run(["launchctl", "print", f"gui/{os.getuid()}/{label}"]).returncode == 113
-
-
-def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
-    """Bootout+bootstrap when the plist changed; bootstrap when absent.
-    Converges loaded state to rendered content (R6)."""
-    uid = os.getuid()
-    if os.environ.get("XPC_SERVICE_NAME") == label:
-        # bootout would kill this very process (the updater running as
-        # ai.mcs.cron.mcs-update): a detached helper reloads the job once
-        # this run has ended (the job abandons its process group).
-        note(f"常駐処理{label}: この設定処理の終了後に読み込み直します")
-        if not dry:
-            target = f"gui/{uid}/{label}"
-            script = ('while kill -0 "$1" 2>/dev/null; do sleep 5; done; '
-                      'launchctl bootout "$2"; launchctl bootstrap "$3" "$4"')
-            env = {k: v for k, v in os.environ.items()
-                   if k not in ("XPC_SERVICE_NAME", "MCS_JOB_PID")}
-            waiter = os.environ.get("MCS_JOB_PID") or str(os.getpid())
-            subprocess.Popen(["/bin/sh", "-c", script, "mcs-reload", waiter,
-                              target, f"gui/{uid}", dst],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, env=env, close_fds=True,
-                             start_new_session=True)
-        return True
-    if _agent_loaded(label):
-        note(f"常駐処理{label}: 設定が変わったため読み込み直します")
-        if not dry:
-            _run(["launchctl", "bootout", f"gui/{uid}/{label}"])
-    else:
-        note(f"常駐処理{label}: 起動します")
-    if dry:
-        return True
-    # imported here, not at module top: an older-generation mcs_update
-    # (mid update/rollback) lazily imports this module against its own
-    # already-loaded mcs_util, which may predate launchd_bootstrap
-    from mcs_util import launchd_bootstrap
-    err = launchd_bootstrap(label, dst, _run)
-    if err:
-        note(f"  起動に失敗しました。常駐処理の状態を確認してください: {err}")
-    return err is None
-
-
-def _load_manifest() -> dict:
-    return load_config(MANIFEST_PATH)
-
-
-def _save_manifest(manifest: dict) -> None:
-    _write_atomic(MANIFEST_PATH,
-                  json.dumps(manifest, ensure_ascii=False,
-                             indent=1, sort_keys=True))
-
-
-def _service_subs(cfg=None) -> dict:
-    cfg = load_config() if cfg is None else cfg
-    python = mcs_runtime.python_executable(cfg, root=HOME) if cfg.get("runtime_mode") == "standalone" else HERMES_PY
-    subs = {"PYTHON": python, "REPO": REPO_ROOT,
-            "DATA": os.path.join(HOME, "data"),
-            "RUNTIME_HOME": mcs_runtime.runtime_home(cfg, root=HOME)}
-    backup = cfg.get("backup", {"enabled": False})
-    error = _backup_config(backup)
-    if error:
-        raise ValueError("backup_config_invalid")
-    subs.update(BACKUP_ENABLED="1" if backup["enabled"] else "0",
-                BACKUP_POLICY=backup["policy"] if backup["enabled"] else "",
-                BACKUP_SNAPSHOT=backup.get("snapshot", "") if backup["enabled"] else "",
-                BACKUP_SNAPSHOT_DIR=backup.get("snapshot_dir", "") if backup["enabled"] else "")
-    grace = cfg.get("watchdog_grace_s", 60)
-    if type(grace) is not int or not 0 <= grace <= 3600:
-        raise ValueError("watchdog_grace_config_invalid")
-    subs["WATCHDOG_GRACE"] = str(grace)
-    return subs
-
-
-def _scripts_dir(cfg=None):
-    cfg = load_config() if cfg is None else cfg
-    return mcs_runtime.scripts_dir(cfg, root=HOME) if cfg.get("runtime_mode") == "standalone" else SCRIPTS_DIR
-
-
-def _rendered_scripts(subs):
-    """Yield (name, rendered body) for every deployment/scripts/*.sh —
-    the single rendering path for both `services` and `check`."""
-    src = os.path.join(REPO_ROOT, "deployment", "scripts")
-    for name in sorted(os.listdir(src)):
-        if not name.endswith(".sh"):
-            continue
-        yield name, render_template(
-            Path(os.path.join(src, name)).read_text(encoding="utf-8"),
-            {key: shlex.quote(value) for key, value in subs.items()})
-
-
-def _script_drift() -> tuple[list[str], list[str]]:
-    """Deployed cron wrappers vs what `services` would render now. A
-    checkout update without a `services` rerun leaves stale wrappers
-    running (2026-09 incident: the old night filter in mcs_check.sh
-    turned a delayed tick into a no-op and unread polling gapped past
-    the session limit) — drift is an error, absence only a warning."""
-    drifted, missing = [], []
-    directory = _scripts_dir()
-    try:
-        subs = _service_subs()
-    except ValueError as e:     # validate_config names the offending key
-        return [f"設定に問題があります: {e}。定期処理のファイル比較は行っていません"], []
-    for name, body in _rendered_scripts(subs):
-        try:
-            cur = Path(directory, name).read_text(encoding="utf-8")
-        except OSError:
-            missing.append(name)
-            continue
-        if cur != body:
-            drifted.append(name)
-    errors = [f"配備済みの定期処理が配布版と異なります（{directory}）: "
-              + ", ".join(drifted)
-              + " — `mcs_setup.py services`で同期してください"] if drifted else []
-    warnings = [f"定期処理が{directory}に未配備です: "
-                + ", ".join(missing)
-                + " — `mcs_setup.py services`を実行してください"] if missing else []
-    return errors, warnings
-
-
-def _sync_scripts(subs, manifest, note, dry, directory=None) -> None:
-    """Stage 1: cron wrapper scripts -> ~/.hermes/scripts, or ~/.mcs/scripts
-    in standalone mode (atomic)."""
-    directory = directory or _scripts_dir()
-    for name, body in _rendered_scripts(subs):
-        dst = os.path.join(directory, name)
-        manifest["scripts"].append({"name": name,
-                                    "sha256": _sha256(body)})
-        cur = None
-        with suppress(OSError):
-            cur = Path(dst).read_text(encoding="utf-8")
-        if cur == body:
-            note(f"定期処理{name}: 最新の内容です")
-            continue
-        note(f"定期処理{name}: {dst}に保存します")
-        if not dry:
-            os.makedirs(directory, mode=0o700, exist_ok=True)
-            _write_atomic(dst, body, 0o755)
-
-
-def _desired_agents(subs, cfg) -> dict[str, str]:
-    """label -> rendered plist from the repo launchagents templates. The
-    standalone runtime is one supervised host whose own scheduler runs
-    every job (mcs_standalone.runtime), so no per-job agent exists."""
-    pdir = os.path.join(REPO_ROOT, "deployment", "launchagents")
-    out = {}
-    for label in _agent_labels(cfg):
-        out[label] = render_template(
-            Path(pdir, label + ".plist").read_text(encoding="utf-8"),
-            {key: xml_escape(value, quote=False) for key, value in subs.items()})
-    return out
-
-
-def _sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
-    """Stage 2: launchd agents (macOS only) — converge content AND
-    loaded state; retire owned-but-undesired agents from our naming
-    space only, never install.sh-owned labels (S5)."""
-    if sys.platform != "darwin":
-        note("macOS以外のため、launchdの常駐設定は行いません")
-        return 0
-    problems = 0
-    desired = _desired_agents(subs, load_config() if cfg is None else cfg)
-    for label, body in desired.items():
-        dst = os.path.join(AGENTS_DIR, label + ".plist")
-        try:
-            cur = Path(dst).read_text(encoding="utf-8")
-        except OSError:
-            cur = None
-        changed = cur != body
-        if changed:
-            note(f"常駐処理{label}: {dst}に設定を保存します")
-            if not dry:
-                _write_atomic(dst, body)
-        if changed or not _agent_loaded(label):
-            if not _agent_reconcile(label, dst, note, dry):
-                problems += 1
-                manifest["agents"].append(
-                    {"label": label, "sha256": _sha256(body),
-                     "loaded": False})
-                continue
-        else:
-            note(f"常駐処理{label}: 読み込み済みです")
-        manifest["agents"].append({"label": label,
-                                   "sha256": _sha256(body),
-                                   "loaded": True})
-    # retire owned-but-undesired agents: our naming space only,
-    # never install.sh-owned labels (S5)
-    installed = {p[:-6] for p in os.listdir(AGENTS_DIR) if p.endswith(".plist")} \
-        if os.path.isdir(AGENTS_DIR) else set()
-    return problems + _retire_agents(
-        {label for label in installed if _owned_label(label)} - set(desired) - set(keep),
-        note, dry)
-
-
-def _retire_agents(labels, note, dry) -> int:
-    """Bootout + remove installed MCS-owned agents in `labels`."""
-    if sys.platform.startswith("linux") and STANDALONE_LABEL in labels:
-        path = _standalone_service_path()
-        if not os.path.exists(path):
-            return _retire_standalone_health(note, dry)
-        note("独立動作の常駐処理: 自動起動を無効にして停止します")
-        if dry:
-            return _retire_standalone_health(note, dry)
-        if _run(["systemctl", "--user", "disable", "--now", STANDALONE_UNIT]).returncode:
-            return 1
-        state = _run(["systemctl", "--user", "is-active", "--quiet", STANDALONE_UNIT])
-        if state.returncode not in (3, 4):  # inactive / unknown unit; other errors are unverifiable
-            note("独立動作の常駐処理: 停止を確認できないため、設定ファイルを保持します")
-            return 1
-        try:
-            os.unlink(path)
-        except OSError:
-            return 1
-        return int(_run(["systemctl", "--user", "daemon-reload"]).returncode != 0) \
-            + _retire_standalone_health(note, dry)
-    if sys.platform != "darwin" or not os.path.isdir(AGENTS_DIR):
-        return 0
-    problems = 0
-    uid = os.getuid()
-    for label in sorted(labels):
-        path = os.path.join(AGENTS_DIR, label + ".plist")
-        if not _owned_label(label) or not os.path.exists(path):
-            continue
-        note(f"常駐処理{label}: 現在の設定では不要なため、停止して設定を削除します")
-        if not dry:
-            _run(["launchctl", "bootout", f"gui/{uid}/{label}"])
-            if not _agent_absent(label):
-                note(f"  常駐処理{label}: 稼働中または停止を確認できないため、設定ファイルを保持します")
-                problems += 1
-                continue
-            try:
-                os.unlink(path)
-            except OSError:
-                problems += 1
-    return problems
-
-
-def _cron_converged(after, sched, script) -> bool:
-    jobs = [e for e in after if e.get("script") == script]
-    if len(jobs) != 1:
-        return False
-    cur, want = (_norm_sched(jobs[0].get("schedule")),
-                 _norm_sched(sched))
-    return not (cur and want and cur != want)
-
-
-def _verify_cron_after(hermes, created, owned_scripts, desired_scripts,
-                       manifest, note, jobs=None) -> tuple[int, bool]:
-    """Post-change convergence check for _sync_cron. Returns (problems,
-    persist_ownership); mutates manifest['cron'] in place."""
-    problems = 0
-    # a zero exit is not proof — confirm desired jobs converged AND
-    # owned-but-undesired jobs are gone. A survivor keeps problems
-    # raised. No confirmed create: do not rewrite, so the previous
-    # file (which lists that script) stays. A create this run that
-    # `after` shows must be saved with the survivor, or the new job
-    # is unowned once it leaves the desired set. same tolerance as
-    # the pre-check: schedules are compared only when both sides
-    # parse — an undecodable display is not drift
-    after = _cron_list(hermes)
-    if after is None or not all(_cron_converged(after, sched, script)
-                                for _, sched, script in
-                                (CRON_JOBS if jobs is None else jobs)):
-        note("定期処理: 変更後の状態を確認できないか、同じ処理が"
-             "重複・不足しています。servicesを再実行してください")
-        problems += 1
-    # owned-but-undesired jobs still live after the change
-    survivors = [e for e in after or []
-                 if isinstance(e.get("script"), str)
-                 and e["script"] in owned_scripts
-                 and e["script"] not in desired_scripts]
-    left = list(dict.fromkeys(e["script"] for e in survivors))
-    if left:
-        note("定期処理: 削除後も不要な処理が残っています（"
-             + ", ".join(left) + ")")
-        problems += 1
-    # any confirmed create stays owned whatever else failed (this
-    # stage or a later one) — else the job is orphaned once retired
-    if after is not None and created:
-        present = {e.get("script") for e in after}
-        confirmed = [s for s in created if s in present]
-        if confirmed:
-            manifest["cron"] = [
-                c for c in manifest["cron"]
-                if not (isinstance(c, dict)
-                        and c.get("script") in created
-                        and c.get("script") not in present)]
-            have = {c.get("script") for c in manifest["cron"]
-                    if isinstance(c, dict)}
-            for entry in survivors:
-                script = entry["script"]
-                if script not in have:
-                    manifest["cron"].append({
-                        "name": entry.get("name"),
-                        "id": entry.get("id"),
-                        "schedule": entry.get("schedule"),
-                        "script": script})
-                    have.add(script)
-            return problems, True
-    return problems, False
-
-
-def _sync_cron(prev, hermes, manifest, note,
-               dry, jobs=None) -> tuple[int, bool]:
-    """Stage 3: hermes cron jobs — create missing, edit drifted,
-    remove owned-but-undesired; an unparseable list fails CLOSED
-    (M1): 'unverifiable' is NOT 'no jobs', and creating on that
-    assumption produces duplicates. Returns (problems,
-    persist_ownership): the latter is True when a verified create must
-    be saved even though problems were raised."""
-    # jobs=[] (standalone) retires every owned job: launchd runs them
-    jobs = CRON_JOBS if jobs is None else jobs
-    persist = False
-    entries = _cron_list(hermes)
-    if entries is None:
-        note("定期処理: 登録一覧を読み取れないため、"
-             "登録内容は変更していません")
-        return 1, persist
-    problems = 0
-    mutated = False
-    created: list[str] = []
-    # derive identities from the SAME verified list — a second
-    # `cron list` call could fail transiently and return an
-    # empty set that looks like 'no jobs' (fail-open, M1)
-    existing = {v for e in entries for v in
-                (e.get("name"), e.get("script")) if v}
-    by_script = {e.get("script"): e for e in entries
-                 if e.get("script")}
-    desired_scripts = {s for _, _, s in jobs}
-    # one job per owned script is the invariant every step below
-    # relies on — which duplicate is authoritative is an operator call
-    dups = sorted(s for s in desired_scripts
-                  if sum(e.get("script") == s for e in entries) > 1)
-    if dups:
-        note("定期処理: 同じ処理が重複しています。処理IDを手動で確認・整理してください "
-             f"({', '.join(dups)}）。続いてservicesを再実行してください")
-        return 1, persist
-    owned_scripts = desired_scripts | {
-        c.get("script") for c in prev.get("cron", [])
-        if isinstance(c, dict) and c.get("script")}
-    for name, sched, script in jobs:
-        entry = by_script.get(script)
-        if entry is None and (name in existing
-                              or script in existing):
-            # identity seen but its script is unparseable — neither
-            # 'exists' (unverified) nor safe to create (duplicate)
-            note(f"定期処理'{name}': 同名の処理がありますが、"
-                 f"実行ファイルが{script}ではないか読み取れません。追加していません。"
-                 "`hermes cron list --all`で確認して修正してください")
-            problems += 1
-            continue
-        if entry is None:
-            note(f"定期処理'{name}': 登録します（実行間隔 {sched} → {script}）")
-            mutated = True
-            if not dry:
-                r = _run(
-                    [hermes, "cron", "create", sched,
-                     "--name", name, "--script", script,
-                     "--no-agent", "--deliver", "local"])
-                if r.returncode != 0:
-                    note(f"  登録に失敗しました。処理の一覧を確認してください: "
-                         f"{(r.stderr or r.stdout).strip()}")
-                    problems += 1
-                    continue
-                created.append(script)
-            manifest["cron"].append(
-                {"name": name, "schedule": sched,
-                 "script": script})
-            continue
-        cur_sched = _norm_sched(entry.get("schedule"))
-        want_sched = _norm_sched(sched)
-        if cur_sched and want_sched and cur_sched != want_sched:
-            note(f"定期処理'{name}': 実行間隔を変更します "
-                 f"{cur_sched} -> {sched}")
-            mutated = True
-            if not dry:
-                r = _run(
-                    [hermes, "cron", "edit", entry["id"],
-                     "--schedule", sched])
-                if r.returncode != 0:
-                    note(f"  変更に失敗しました。処理の一覧を確認してください: "
-                         f"{(r.stderr or r.stdout).strip()}")
-                    problems += 1
-        else:
-            note(f"定期処理'{name}': 登録済みです")
-        manifest["cron"].append(
-            {"name": name, "schedule": sched, "script": script,
-             "id": entry["id"]})
-    for entry in entries:
-        script = entry.get("script")
-        if script and script in owned_scripts \
-                and script not in desired_scripts:
-            note(f"定期処理'{entry.get('name', script)}': "
-                 f"現在の設定では不要なため、削除します（ID: {entry['id']}）")
-            mutated = True
-            if not dry:
-                r = _run(
-                    [hermes, "cron", "remove", entry["id"]])
-                if r.returncode != 0:
-                    note(f"  削除に失敗しました。処理の一覧を確認してください: "
-                         f"{(r.stderr or r.stdout).strip()}")
-                    problems += 1
-    if mutated and not dry:
-        p, ps = _verify_cron_after(hermes, created, owned_scripts,
-                                   desired_scripts, manifest, note, jobs)
-        problems += p
-        persist = persist or ps
-    return problems, persist
-
-
-def _sync_gateway(cfg, hermes, note, dry) -> int:
-    """Stage 4: hermes gateway — needed for either interactive
-    transport (Discord interactions / Slack socket mode); `gateway
-    install` creates the launchd service hermes owns."""
-    ntf = cfg.get("notify") if isinstance(cfg, dict) else None
-    if cfg.get("runtime_mode") == "standalone" or not (isinstance(ntf, dict)
-            and ntf.get("interactive") in ("discord", "slack")):
-        return 0
-    r = _hermes_cli(hermes, "", "gateway", "status")
-    up = bool(r and r.returncode == 0
-              and "supervised" in (r.stdout or ""))
-    if up:
-        note("接続サービス: 常駐管理されています")
-        return 0
-    if dry:
-        note("接続サービス: 常駐設定を導入して起動します")
-        return 0
-    for sub in ("install", "start"):
-        r = _hermes_cli(hermes, "", "gateway", sub)
-        if not (r and r.returncode == 0):
-            detail = (r.stderr or r.stdout).strip() \
-                if r else "no response"
-            note(f"接続サービスの{sub}操作に失敗しました。稼働状態を確認してください: {detail}")
-            return 1
-    note("接続サービス: 常駐設定の導入と起動が完了しました")
-    return 0
-
-
-def _standalone_service_path():
-    if sys.platform == "darwin":
-        return os.path.join(AGENTS_DIR, STANDALONE_LABEL + ".plist")
-    return os.path.expanduser("~/.config/systemd/user/" + STANDALONE_UNIT)
-
-
-def _health_unit_path(name):
-    """Where the standalone health watch file `name` lives (plist or unit)."""
-    if sys.platform == "darwin":
-        return os.path.join(AGENTS_DIR, name)
-    return os.path.join(os.path.dirname(_standalone_service_path()), name)
-
-
-def _standalone_health_loaded():
-    if sys.platform == "darwin":
-        return _agent_loaded(HEALTH_LABEL)
-    if sys.platform.startswith("linux"):
-        return _run(["systemctl", "--user", "is-active", "--quiet", HEALTH_TIMER]).returncode == 0
-    return False
-
-
-def _retire_standalone_health(note, dry) -> int:
-    """Linux: disable and remove the standalone health timer (launchd's
-    plist is retired like any other owned agent)."""
-    paths = [path for path in map(_health_unit_path, HEALTH_UNITS) if os.path.exists(path)]
-    if not paths:
-        return 0
-    note("独立動作の稼働監視: 自動起動を無効にして停止します")
-    if dry:
-        return 0
-    if _run(["systemctl", "--user", "disable", "--now", HEALTH_TIMER]).returncode:
-        return 1
-    for path in paths:
-        try:
-            os.unlink(path)
-        except OSError:
-            return 1
-    return int(_run(["systemctl", "--user", "daemon-reload"]).returncode != 0)
-
-
-def _check_standalone_health() -> tuple[list[str], list[str]]:
-    """doctor: the external health watch is installed, current and loaded,
-    and the host's own status shows no crash loop or stalled work."""
-    errors, warnings = [], []
-    try:
-        from mcs_standalone.service import render_health
-        bodies = render_health(HOME, platform=sys.platform)
-    except ValueError:
-        return errors, warnings
-    installed = True
-    for name, body in bodies:
-        try:
-            current = Path(_health_unit_path(name)).read_text(encoding="utf-8")
-        except OSError:
-            current = None
-        if current is None:
-            installed = False
-        elif current != body:
-            errors.append("独立動作の稼働監視が現在の配布版と異なります — `mcs_setup.py services`を実行してください")
-            break
-    if not installed:
-        warnings.append("独立動作の稼働監視が未導入です。本体が停止しても警報が出ません。`mcs_setup.py services`を実行してください")
-    elif not _standalone_health_loaded():
-        errors.append("独立動作の稼働監視は導入済みですが、読み込まれていません — `mcs_setup.py services`を実行してください")
-    try:
-        import health_watch
-        _, reasons, details = health_watch.standalone_host_reasons(HOME, time.time(), load_config())
-    except Exception as exc:   # diagnostics only: never fail doctor on the reader
-        warnings.append(f"独立動作の状態を読み取れません（{type(exc).__name__}）")
-        return errors, warnings
-    for code in reasons:
-        extra = details.get(code)
-        warnings.append(f"独立動作に確認が必要です（診断コード: {code}）" + (f" ({extra})" if extra else "")
-                        + " — see `python -m mcs_standalone status` and data/standalone.log")
-    return errors, warnings
-
-
-def _sync_standalone_health(manifest, note, dry) -> int:
-    """Install the health watch next to the host, never inside it: a dead,
-    wedged or crash-looping host must still raise an alert."""
-    from mcs_standalone.service import render_health
-    changed = False
-    bodies = render_health(HOME, platform=sys.platform)
-    for name, body in bodies:
-        path = _health_unit_path(name)
-        try:
-            current = Path(path).read_text(encoding="utf-8")
-        except OSError:
-            current = None
-        if current != body:
-            changed = True
-            note(f"独立動作の稼働監視: {path}に設定を保存します")
-            if not dry:
-                _write_atomic(path, body, 0o600)
-    loaded = _standalone_health_loaded()
-    if not changed and loaded:
-        note("独立動作の稼働監視: 読み込み済みです")
-    elif not dry:
-        if sys.platform == "darwin":
-            if not _agent_reconcile(HEALTH_LABEL, _health_unit_path(bodies[0][0]), note, False):
-                return 1
-        else:
-            if changed and _run(["systemctl", "--user", "daemon-reload"]).returncode:
-                return 1
-            # restart (not start) so a rewritten timer takes its new schedule
-            if _run(["systemctl", "--user", "enable", HEALTH_TIMER]).returncode \
-                    or _run(["systemctl", "--user", "restart", HEALTH_TIMER]).returncode:
-                note("独立動作の稼働監視: 有効化に失敗しました。常駐設定を確認してください")
-                return 1
-        if not _standalone_health_loaded():
-            note("独立動作の稼働監視: 起動を確認できません。常駐設定を確認してください")
-            return 1
-    else:
-        note("独立動作の稼働監視: 起動します")
-    for name, body in bodies:
-        manifest["agents"].append({"label": HEALTH_LABEL if sys.platform == "darwin" else name,
-                                   "sha256": _sha256(body), "loaded": not dry})
-    return 0
-
-
-def _standalone_loaded():
-    if sys.platform == "darwin":
-        return _agent_loaded(STANDALONE_LABEL)
-    if sys.platform.startswith("linux"):
-        return _run(["systemctl", "--user", "is-active", "--quiet", STANDALONE_UNIT]).returncode == 0
-    return False
-
-
-def _retire_previous_runtime(prev, desired_mode, note, dry):
-    """Stop only the previous manifest's owned jobs before switching runtimes."""
-    if not prev or prev.get("runtime_mode", "hermes") == desired_mode:
-        return 0
-    if prev.get("runtime_mode") == "standalone":
-        # Keep its native entry until the replacement cron is verified.
-        return 0
-    labels = {row.get("label") for row in prev.get("agents", []) if isinstance(row, dict)} & set(AGENT_LABELS)
-    scripts = {row.get("script") for row in prev.get("cron", []) if isinstance(row, dict)} & (
-        {script for _, _, script in CRON_JOBS} | {"mcs_offsite.sh"})
-    if dry:
-        note("以前のHermes経由のMCS処理を停止します: " + ", ".join(sorted(labels | scripts)))
-        return 0
-    for label in sorted(labels):
-        _run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
-        if not _agent_absent(label):
-            note(f"以前の常駐処理{label}: 停止を確認できないため、新しい処理は起動していません")
-            return 1
-        # bootout does not persist: launchd reloads a left plist at next login
-        with suppress(FileNotFoundError):
-            os.unlink(os.path.join(AGENTS_DIR, label + ".plist"))
-    if scripts:
-        exe = _hermes_exe(load_config())
-        entries = _cron_list(exe)
-        if entries is None:
-            note("以前のHermes定期処理の状態を確認できないため、新しい処理は起動していません")
-            return 1
-        for entry in entries:
-            if entry.get("script") in scripts:
-                if _run([exe, "cron", "remove", entry["id"]]).returncode:
-                    return 1
-        after = _cron_list(exe)
-        if after is None or any(row.get("script") in scripts for row in after):
-            return 1
-    return 0
-
-
-def _sync_standalone_service(manifest, note, dry):
-    """Install one supervised host; its scheduler owns every MCS job."""
-    from mcs_standalone.service import render, request_restart
-    if sys.platform != "darwin" and not sys.platform.startswith("linux"):
-        note("独立動作の常駐設定にはlaunchdかsystemdが必要です。このOSでは別の常駐管理ツールを使ってください")
-        return 1
-    _, body = render(HOME, platform=sys.platform)
-    path = _standalone_service_path()
-    try:
-        current = Path(path).read_text(encoding="utf-8")
-    except OSError:
-        current = None
-    changed = current != body
-    running = _standalone_loaded()
-    note(f"独立動作の常駐処理: {'設定を更新します' if changed else '最新の設定です'} {path}")
-    if not dry:
-        if changed:
-            _write_atomic(path, body, 0o600)
-        if sys.platform.startswith("linux") and changed:
-            if _run(["systemctl", "--user", "daemon-reload"]).returncode:
-                return 1
-        # launchd keeps the definition loaded at bootstrap: a rewritten plist
-        # (moved checkout, new interpreter) takes effect only via bootout+bootstrap.
-        # A loaded label with no plist on disk keeps the non-killing start path.
-        reload = sys.platform == "darwin" and running and changed and current is not None
-        if running and not reload:
-            # Synchronization also reloads changed Python sources whose service argv is unchanged.
-            try:
-                request_restart(HOME)
-            except (OSError, ValueError):
-                # A loaded launchd label can be waiting after init was incomplete.
-                # Starting without -k never kills a live host or its updater.
-                start = ["launchctl", "kickstart", f"gui/{os.getuid()}/{STANDALONE_LABEL}"] if sys.platform == "darwin" else ["systemctl", "--user", "start", STANDALONE_UNIT]
-                if _run(start).returncode:
-                    note("独立動作の起動に失敗しました。既存のサービス設定は保持しています")
-                    return 1
-                deadline = time.monotonic() + 5
-                while time.monotonic() < deadline:
-                    try:
-                        request_restart(HOME)
-                        break
-                    except (OSError, ValueError):
-                        time.sleep(0.2)
-                else:
-                    note("独立動作の再起動要求に失敗しました。既存のサービス設定は保持しています")
-                    return 1
-        elif sys.platform == "darwin":
-            if not _agent_reconcile(STANDALONE_LABEL, path, note, False):
-                return 1
-        elif _run(["systemctl", "--user", "enable", "--now", STANDALONE_UNIT]).returncode:
-            return 1
-        if not _standalone_loaded():
-            note("独立動作の起動を確認できません。常駐処理の状態を確認してください")
-            return 1
-    manifest["agents"].append({"label": STANDALONE_LABEL if sys.platform == "darwin" else STANDALONE_UNIT,
-                              "sha256": _sha256(body), "loaded": not dry})
-    manifest["scheduler"] = "standalone"
-    return 0
-
-
-def _record_llm_slots(manifest, note) -> None:
-    """Stage 5 (T19): record the selected/rollback backend slot counts
-    and the checked-in plist's -np so drift between the deployed width
-    and the code-side selection is visible in the snapshot."""
-    try:
-        import local_llm
-        plist_np = None
-        src = os.path.join(REPO_ROOT, "deployment", "launchagents",
-                           "ai.mcs.llamaserver.plist")
-        m = re.search(r"<string>-np</string><string>(\d+)</string>",
-                      Path(src).read_text(encoding="utf-8"))
-        plist_np = int(m.group(1)) if m else None
-        manifest["llm_slots"] = {
-            "selected": local_llm.SLOT_COUNT,
-            "rollback": local_llm.ROLLBACK_SLOT_COUNT,
-            "plist_np": plist_np,
-            "consistent": plist_np == local_llm.SLOT_COUNT}
-        if plist_np != local_llm.SLOT_COUNT:
-            note(f"注意: AIの常駐設定の同時処理枠（-np={plist_np}）が、"
-                 f"選択した{local_llm.SLOT_COUNT}枠と一致しません。"
-                 "測定して選んだ設定に合わせてください")
-    except Exception as e:
-        # a manifest annotation must never take the services run down —
-        # the agents/cron above were the real work
-        note(f"AIの同時処理枠を管理記録へ保存できません（{type(e).__name__}: {e}）")
-
-
-def cmd_services(args) -> int:
-    dry = getattr(args, "dry_run", False)
-    cfg = load_config()
-    try:
-        selected_mode = mcs_runtime.mode(cfg)
-    except ValueError:
-        print("常駐設定: 実行方法が不正です。hermesかstandaloneを指定してください。変更していません")
-        return 1
-    try:
-        subs = _service_subs(cfg)
-    except ValueError as e:
-        print(f"常駐設定: 設定に問題があります。修正して再実行してください: {e}。変更していません")
-        return 1
-    problems = 0
-    persist_partial = False
-    prev = _load_manifest()
-    manifest = {"v": 1, "at": time.time(), "runtime_mode": selected_mode,
-                "python": subs["PYTHON"], "scripts": [],
-                "agents": [], "cron": []}
-
-    def note(msg):
-        print(("  [変更予定のみ] " if dry else "  ") + msg)
-
-    why = _standalone_py_problem(cfg) if selected_mode == "standalone" else _hermes_py_problem()
-    if why:
-        # every wrapper/plist is rendered with __PYTHON__ — a missing
-        # interpreter would make each job fail at every run
-        print(f"常駐設定: {why}。設定ファイルは作成していません。"
-              + _install_fix("手順2で独立動作のPython環境を再構築" if selected_mode == "standalone" else "手順2でHermesのPython環境を再構築")
-              + "。続いてservicesを再実行してください")
-        return 1
-    runtime_errors = runtime_gate_errors(cfg, repair_recovery=True)
-    if runtime_errors:
-        print("常駐設定: 実行環境に問題があります。導入時のPythonと復旧監視の設定を確認してください。詳細: "
-              + "; ".join(runtime_errors) + "。変更していません")
-        return 1
-    if _sync_recovery(cfg, note, dry):
-        return 1
-    if _retire_previous_runtime(prev, selected_mode, note, dry):
-        return 1
-    _sync_scripts(subs, manifest, note, dry)
-    if selected_mode == "standalone":
-        problems += _sync_standalone_service(manifest, note, dry)
-        if not problems:
-            problems += _sync_standalone_health(manifest, note, dry)
-        _record_llm_slots(manifest, note)
-        if not dry and not problems:
-            try:
-                _save_manifest(manifest)
-            except OSError:
-                note("独立動作の管理記録を保存できません。保存先の権限と空き容量を確認してください")
-                problems += 1
-        return 1 if problems else 0
-    hermes = _hermes_exe(cfg)
-    cron_labels = frozenset(
-        _cron_label(script) for _, _, script in configured_cron_jobs(cfg))
-    problems += _sync_agents(subs, manifest, note, dry, cfg,
-                             cron_labels | {STANDALONE_LABEL})
-    # the Hermes plugin decides from these flags whether to stand down;
-    # a failed publish fails the run but never blocks the manifest below
-    flags_failed = False
-    if not dry and isinstance(cfg.get("notify"), dict) \
-            and not validate_notify(cfg["notify"]):
-        try:
-            import notify_cards
-            notify_cards.ensure_dirs(os.path.join(HOME, "data"))
-            notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
-        except Exception as e:
-            note(f"通知設定を保存できません（{type(e).__name__}: {e}）。servicesを再実行してください")
-            flags_failed = True
-
-    if not runtime_inspection.executable_available(hermes):
-        note(f"定期処理: Hermesコマンドが見つからないため設定を見送りました（{hermes}）")
-        problems += 1
-    else:
-        cron_problems, persist_partial = _sync_cron(
-            prev, hermes, manifest, note, dry, jobs=configured_cron_jobs(cfg))
-        problems += cron_problems
-        retire_problems = 0
-        if not cron_problems:
-            retire_problems = _retire_agents(cron_labels | {STANDALONE_LABEL}, note, dry)
-            problems += retire_problems
-        # a partial switch saves runtime_mode=hermes: the pending flag keeps
-        # the restart owed until a run completes it
-        switching = prev.get("runtime_mode") == "standalone" \
-            or prev.get("gateway_restart_pending") is True
-        blocked = bool(cron_problems or retire_problems)
-        if not switching or not blocked:
-            problems += _sync_gateway(cfg, hermes, note, dry)
-        restarted = False
-        if switching and not blocked and flags_failed:
-            note("接続サービス: 通知設定の保存が完了するまで再起動を保留します")
-        elif switching and not blocked:
-            # a gateway that loaded while standalone owned the bot skipped
-            # /mcs and the card workers — reload it under the new flags
-            note("接続サービス: 独立動作からHermes経由に戻したため再起動します")
-            if not dry:
-                r = _hermes_cli(hermes, "", "gateway", "restart")
-                restarted = bool(r and r.returncode == 0)
-                if not restarted:
-                    note("  接続サービスの再起動に失敗しました。`hermes gateway restart`で再実行してください")
-                    problems += 1
-        if switching and not restarted:
-            manifest["gateway_restart_pending"] = True
-
-    _record_llm_slots(manifest, note)
-    # manifest — the rollback snapshot's source of truth (R6).
-    # A partial cron failure still persists verified creates plus
-    # surviving owned jobs; an unverified create does not set the flag.
-    if not dry and (not problems or persist_partial):
-        try:
-            _save_manifest(manifest)
-            note(f"管理記録の保存先: {MANIFEST_PATH}")
-        except OSError as e:
-            note(f"管理記録を保存できません。保存先の権限と空き容量を確認してください: {e}")
-            problems += 1
-    return 1 if problems or flags_failed else 0
 
 
 class _SetupParser(argparse.ArgumentParser):
@@ -2990,5 +1746,28 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
 
+def _service_paths():
+    return service_management.default_paths(root=HOME, checkout=REPO_ROOT,
+        hermes_python=HERMES_PY, hermes_scripts_dir=SCRIPTS_DIR, agents_dir=AGENTS_DIR,
+        recovery_dir=RECOVERY_DIR, manifest_path=MANIFEST_PATH, launchd_path=LAUNCHD_PATH)
+
+
+def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None, allow_runtime_migration=False):
+    """Compatibility gate used by an older updater during runtime migration."""
+    return service_management.runtime_gate_errors(cfg, paths=_service_paths(),
+        repair_recovery=repair_recovery, update_repo=update_repo,
+        allow_runtime_migration=allow_runtime_migration)
+
+
+def cmd_services(args):
+    dry = getattr(args, "dry_run", False)
+    def note(message):
+        print(("  [変更予定のみ] " if dry else "  ") + message)
+    result = service_management.apply_services(mcs_util.load_config(), paths=_service_paths(), dry_run=dry, note=note)
+    if result.message is not None:
+        print(result.message)
+    return result.exit_code
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

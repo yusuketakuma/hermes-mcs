@@ -389,6 +389,7 @@ from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/mcs")
 import _mcs_path
 import mcs_setup
+import service_contract
 import mcs_config
 import mcs_runtime
 import runtime_inspection
@@ -406,8 +407,8 @@ problem = mcs_config.recovery_python_problem(desired, sys.argv[1])
 if problem:
     raise SystemExit("復旧用 Python に問題があります: " + problem)
 if "recovery_python" in cfg and os.path.lexists(
-        Path(mcs_setup.AGENTS_DIR, mcs_setup.RECOVERY_LABEL + ".plist")):
-    with open(Path(mcs_setup.AGENTS_DIR, mcs_setup.RECOVERY_LABEL + ".plist"), "rb") as stream:
+        Path(mcs_setup.AGENTS_DIR, service_contract.RECOVERY_LABEL + ".plist")):
+    with open(Path(mcs_setup.AGENTS_DIR, service_contract.RECOVERY_LABEL + ".plist"), "rb") as stream:
         deployed = runtime_inspection.recovery_executable(plistlib.load(stream))
     if deployed != desired:
         raise SystemExit("復旧用 Python の設定と稼働設定が一致しません。処理が動いていないことを確認し、mcs setup init --yes、mcs setup services の順に修復してください")

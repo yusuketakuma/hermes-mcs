@@ -1,4 +1,5 @@
 """Jev value evaluation dispatches only checked-in synthetic cases."""
+import mcs_util
 from copy import deepcopy
 import json
 import os
@@ -19,7 +20,7 @@ def _case(name="extract_cases.json"):
 
 def _isolate(monkeypatch):
     calls = []
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: calls.append("config") or {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: calls.append("config") or {})
     monkeypatch.setattr(mcs_setup, "env_value", lambda name: calls.append("credentials") or "synthetic-key")
     monkeypatch.setattr(semantic_jev, "JevClient", lambda **kw: calls.append("client") or object())
     def evaluate(cases, llm_fn, client, **kw):
@@ -109,9 +110,10 @@ def test_nonregular_cases_are_refused_before_credentials(tmp_path, monkeypatch, 
         bounded_python(tmp_path, """
 from pathlib import Path
 import mcs_setup
+import mcs_util
 def forbidden(*args, **kwargs):
     raise AssertionError('unsafe cases reached config or credentials')
-mcs_setup.load_config = forbidden
+mcs_util.load_config = forbidden
 mcs_setup.env_value = forbidden
 assert mcs_setup.main(['jev-value', '--cases', sys.argv[1], '--out', sys.argv[2]]) == 1
 assert not Path(sys.argv[2]).exists()

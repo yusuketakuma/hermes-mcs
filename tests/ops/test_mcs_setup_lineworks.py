@@ -1,4 +1,6 @@
 """LINE WORKS setup accepts explicit scopes and rejects incomplete authority."""
+import lifecycle_io
+import service_management
 import setup_wizard
 from copy import deepcopy
 from pathlib import Path
@@ -8,6 +10,7 @@ import pytest
 
 import local_llm
 import mcs_setup
+import mcs_util
 
 
 def config():
@@ -73,7 +76,7 @@ def test_local_diagnostic_has_no_hermes_gateway_or_secret_output(monkeypatch, tm
     monkeypatch.setattr(mcs_setup, "CHROME_BIN", str(chrome))
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path / ".mcs"))
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
-    monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: None)
+    monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: None)
     monkeypatch.setattr(mcs_setup, "env_value", lambda *a, **kw: None)
     monkeypatch.setattr(local_llm, "bounded_request", lambda *a: (503, {}, b""))
     calls = []
@@ -82,7 +85,7 @@ def test_local_diagnostic_has_no_hermes_gateway_or_secret_output(monkeypatch, tm
         calls.append((argv, kw))
         return SimpleNamespace(returncode=result, stdout="synthetic-secret", stderr="synthetic-secret")
 
-    monkeypatch.setattr(mcs_setup, "_run", run)
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', run)
     errors, warnings = mcs_setup.check_environment(deepcopy(config()))
     assert len(calls) == 1
     assert calls[0][0][-3:] == ["check", "--root", mcs_setup.HOME]
@@ -93,7 +96,7 @@ def test_local_diagnostic_has_no_hermes_gateway_or_secret_output(monkeypatch, tm
 
 
 def test_lineworks_never_installs_hermes_gateway():
-    assert mcs_setup._sync_gateway(config(), "nonexistent", lambda _: pytest.fail("gateway mutation"), False) == 0
+    assert service_management.sync_gateway(config(), 'nonexistent', lambda _: pytest.fail('gateway mutation'), False) == 0
 
 
 def test_off_lineworks_text_target_still_uses_the_independent_local_diagnostic(monkeypatch, tmp_path):
@@ -108,7 +111,7 @@ def test_off_lineworks_text_target_still_uses_the_independent_local_diagnostic(m
     monkeypatch.setattr(mcs_setup, "CHROME_BIN", str(chrome))
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
-    monkeypatch.setattr(mcs_setup.shutil, "which", lambda *args: None)
+    monkeypatch.setattr(mcs_util.shutil, "which", lambda *args: None)
     monkeypatch.setattr(mcs_setup, "env_value", lambda *args, **kwargs: None)
     monkeypatch.setattr(local_llm, "bounded_request", lambda *args: (503, {}, b""))
     monkeypatch.setattr(adapter_cli, "load_credentials", lambda *_: (
@@ -120,7 +123,7 @@ def test_off_lineworks_text_target_still_uses_the_independent_local_diagnostic(m
         calls.append(argv)
         return SimpleNamespace(returncode=adapter_cli.check(argv[-1]), stdout="", stderr="")
 
-    monkeypatch.setattr(mcs_setup, "_run", run)
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', run)
     assert mcs_setup.check_environment(cfg)[0] == []
     assert calls[0][-3:] == ["check", "--root", str(tmp_path)]
 

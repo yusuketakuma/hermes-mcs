@@ -11,13 +11,10 @@ import time
 import uuid
 
 from mcs_runtime import python_executable
+import service_contract
 from mcs_util import atomic_write
 
-LABEL = "ai.mcs.standalone"
 # Watches the host from outside it: the same label as Hermes mode's agent.
-HEALTH_LABEL = "local.mcs-health"
-HEALTH_UNIT = "mcs-health.service"
-HEALTH_TIMER = "mcs-health.timer"
 HEALTH_INTERVAL_S = 300
 STATUS_FILE = "standalone-status.json"
 RESTART_FILE = "standalone-restart.request"
@@ -82,12 +79,12 @@ def render_health(root, platform=None):
     argv = [python, repository + "/mcs/ingest/health_watch.py", "--home", str(root)]
     logfile = str(root / "data/health_watch.log")
     if platform == "darwin":
-        value = {"Label": HEALTH_LABEL, "ProgramArguments": argv,
+        value = {"Label": service_contract.HEALTH_LABEL, "ProgramArguments": argv,
                  "EnvironmentVariables": {"MCS_ROOT": str(root)},
                  "WorkingDirectory": repository, "StartInterval": HEALTH_INTERVAL_S,
                  "RunAtLoad": False, "StandardOutPath": logfile,
                  "StandardErrorPath": logfile, "Umask": 0o077}
-        return [(HEALTH_LABEL + ".plist", plistlib.dumps(value).decode("utf-8"))]
+        return [(service_contract.HEALTH_LABEL + ".plist", plistlib.dumps(value).decode("utf-8"))]
     if platform.startswith("linux"):
         _systemd_quote(repository)
         unit = ("[Unit]\nDescription=Independent MCS health watch\n\n"
@@ -97,8 +94,8 @@ def render_health(root, platform=None):
                 + "\nTimeoutStartSec=300\nUMask=0077\n")
         timer = ("[Unit]\nDescription=Independent MCS health watch timer\n\n"
                  f"[Timer]\nOnBootSec={HEALTH_INTERVAL_S}s\nOnUnitActiveSec={HEALTH_INTERVAL_S}s\n"
-                 f"Unit={HEALTH_UNIT}\n\n[Install]\nWantedBy=timers.target\n")
-        return [(HEALTH_UNIT, unit), (HEALTH_TIMER, timer)]
+                 f"Unit={service_contract.HEALTH_UNIT}\n\n[Install]\nWantedBy=timers.target\n")
+        return [(service_contract.HEALTH_UNIT, unit), (service_contract.HEALTH_TIMER, timer)]
     raise ValueError("standalone_service_platform_unsupported")
 
 
@@ -110,12 +107,12 @@ def render(root, platform=None):
     argv = [python, "-m", "mcs_standalone", "run", "--root", str(root)]
     logfile = str(root / "data/standalone.log")
     if platform == "darwin":
-        value = {"Label": LABEL, "ProgramArguments": argv,
+        value = {"Label": service_contract.STANDALONE_LABEL, "ProgramArguments": argv,
                  "WorkingDirectory": repository, "RunAtLoad": True, "KeepAlive": True,
                  "ExitTimeOut": 3660, "AbandonProcessGroup": True,
                  "ThrottleInterval": 30, "StandardOutPath": logfile,
                  "StandardErrorPath": logfile, "Umask": 0o077}
-        return LABEL + ".plist", plistlib.dumps(value).decode("utf-8")
+        return service_contract.STANDALONE_LABEL + ".plist", plistlib.dumps(value).decode("utf-8")
     if platform.startswith("linux"):
         quote = _systemd_quote
         quote(repository)  # reject newline/NUL in the repository path too
@@ -125,5 +122,5 @@ def render(root, platform=None):
                 + "\nExecStart=" + " ".join(quote(v) for v in argv)
                 + "\nRestart=always\nRestartSec=30\nTimeoutStopSec=3660\nUMask=0077\n"
                   "KillMode=control-group\n\n[Install]\nWantedBy=default.target\n")
-        return "mcs-standalone.service", body
+        return service_contract.STANDALONE_UNIT, body
     raise ValueError("standalone_service_platform_unsupported")

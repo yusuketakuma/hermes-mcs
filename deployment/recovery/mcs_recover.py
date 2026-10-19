@@ -73,14 +73,14 @@ AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
 RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2")
 WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int", "local.mcs-health")
 EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
-# current desired sets — kept in sync with mcs_setup.AGENT_LABELS /
-# CRON_JOBS; recovery must never delete what the restored code wants
+# current desired sets — kept in sync with service_contract.AGENT_LABELS /
+# scheduled_jobs.CRON_JOBS; recovery must never delete what the restored code wants
 KNOWN_AGENT_LABELS = frozenset(RESIDENT_LABELS + WATCHER_LABELS)
 KNOWN_CRON_SCRIPTS = frozenset({
     "mcs_check.sh", "mcs_deep.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
     "mcs_update.sh", "llamacpp_restart_if_idle.sh", "mcs_offsite.sh"})
 SCRIPTS_DIR = os.path.expanduser("~/.hermes/scripts")
-# runtime_mode=standalone (mcs_setup._agent_labels): launchd calendar
+# runtime_mode=standalone (service_contract.desired_agent_labels): launchd calendar
 # agents replace hermes cron, ai.mcs.standalone replaces the gateway
 # Optional offsite is host-owned, not an extra external calendar agent.
 STANDALONE_LABEL = "ai.mcs.standalone"

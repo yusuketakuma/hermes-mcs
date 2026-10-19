@@ -1,6 +1,7 @@
 """fact_source gate tests (T7): legacy|shadow|canonical config
 validation, v2->v1 projection shape, and the evidence-gated activation
 command."""
+import mcs_util
 import json
 from functools import cache
 from pathlib import Path
@@ -137,7 +138,7 @@ def _cmd_cfg(tmp_path, monkeypatch, cfg):
     conf = tmp_path / "config.json"
     conf.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
-    monkeypatch.setattr(mcs_setup, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: json.loads(conf.read_text()))
     return conf
 

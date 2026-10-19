@@ -26,7 +26,7 @@
 | `mcs/views/` | snapshot読取・scope/projection・統計/詳細/CLI | `registered_data`は登録情報の読取、`clinical_display`は臨床値の表示。DBを再openしない |
 | `mcs/signals/` | 原文と抽出に基づく候補評価・根拠 | 候補artifact/通知状態の更新を持つ。表示や単なる未記録と臨床判断を混同しない |
 | `mcs/export/` | C1 schema・レコード選択・封筒・受信契約 | 純粋な変換、snapshot読取、専用保存先への受信を区別 |
-| `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`runtime_inspection`は読取観測、`update_policy`は判断、`update_journal`は更新記録。`owned_process`は所有する子プロセスの停止/回収、`update_discovery`は期限付きGit実行と版探索、`update_launch`はwrapper起動を所有 |
+| `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`runtime_inspection`は読取観測、`service_contract`は管理対象・実行環境選択・cron計画、`service_management`は実際の照合・適用・管理記録、`update_policy`は判断、`update_journal`は更新記録。`owned_process`は所有する子プロセスの停止/回収、`update_discovery`は期限付きGit実行と版探索、`update_launch`はwrapper起動を所有 |
 | `mcs/ops/restore_evidence.py` | 復元損失reportの作成、完全一致する人承認receiptの読取 | 専用read-only接続を開閉し、接続を閉じてからhash・schema照合とatomic report公開。更新側はlock・hold・journal・DB置換を引き続き所有 |
 | `adapters/common/` | 接続先共通の認可・患者scope・command/preview/confirm・配送worker | workerがscope lock/claim/再試行、registryが永続slot記録、journalが配送事実を所有 |
 | `adapters/{slack,discord,lineworks}/` | 接続先固有のUI・SDK・送信/受信 | 承認と共通scope検証を通し、SDKの許可ファイルと遅延importを維持 |

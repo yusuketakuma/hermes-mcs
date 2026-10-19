@@ -1,4 +1,6 @@
 """mcs_setup.validate_config — the typesafe required-condition gate."""
+import service_contract
+import service_management
 import runtime_inspection
 import lifecycle_io
 import setup_wizard
@@ -212,13 +214,13 @@ def test_check_environment_resolves_hermes_binary(monkeypatch,
         lambda *a, **k: (200, {}, b"{}"))
 
     # unresolvable on PATH and on disk -> error
-    monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: None)
+    monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: None)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: False)
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
     assert any("Hermesコマンドが見つかりません" in e for e in errors)
 
     # PATH hit -> clean
-    monkeypatch.setattr(mcs_setup.shutil, "which",
+    monkeypatch.setattr(mcs_util.shutil, "which",
                         lambda *a: "/usr/bin/hermes")
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
@@ -252,7 +254,7 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
     monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
-    monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: "/x/hermes")
+    monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: "/x/hermes")
     monkeypatch.setattr(
         local_llm, "bounded_request",
         lambda *a, **k: (200, {}, b"{}"))
@@ -286,29 +288,29 @@ def test_check_environment_flags_installed_but_unloaded_agent(
     monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
-    monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: "/x/hermes")
+    monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: "/x/hermes")
     monkeypatch.setattr(
         local_llm, "bounded_request",
         lambda *a, **k: (200, {}, b"{}"))
     monkeypatch.setattr(mcs_setup.subprocess, "run",
                         lambda *a, **k: SimpleNamespace(
                             returncode=0, stdout="", stderr=""))
-    monkeypatch.setattr(mcs_setup, "_run",
+    monkeypatch.setattr(lifecycle_io, 'run_bounded',
                         lambda *a, **k: SimpleNamespace(returncode=0))
 
     loaded = {"ai.mcs.extract-drainer"}
-    monkeypatch.setattr(mcs_setup, "_agent_loaded",
-                        lambda label: label in loaded)
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda label, **_service_kwargs: label in loaded)
     errors, warnings = mcs_setup.check_environment(
         {"notify_target": "slack"})
-    missing = [lb for lb in mcs_setup.AGENT_LABELS if lb not in loaded]
+    missing = [lb for lb in service_contract.AGENT_LABELS if lb not in loaded]
     for label in missing:
         assert any(label in e and "読み込まれていません" in e for e in errors)
 
     # GUI domain unreachable -> warn once, no per-agent errors
-    monkeypatch.setattr(mcs_setup, "_run",
+    monkeypatch.setattr(lifecycle_io, 'run_bounded',
                         lambda *a, **k: SimpleNamespace(returncode=1))
-    monkeypatch.setattr(mcs_setup, "_agent_loaded", lambda label: False)
+    monkeypatch.setattr(service_management, 'agent_loaded', lambda label, **_service_kwargs: False)
     errors, warnings = mcs_setup.check_environment(
         {"notify_target": "slack"})
     assert not any("読み込まれていません" in e for e in errors)
@@ -435,7 +437,7 @@ def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path, source, needs_resta
         returncode = 0
         stdout = "Mon Sep 28 13:00:00 2026"
     started = time.mktime(time.strptime(R.stdout, "%a %b %d %H:%M:%S %Y"))
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: R())
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: R())
 
     src.write_text("x = 1")
     pyc = cache / "worker.cpython-311.pyc"
@@ -465,7 +467,7 @@ def test_process_start_is_parsed_in_the_c_locale(monkeypatch):
         c_locale = (kw.get("env") or {}).get("LC_ALL") == "C"
         return SimpleNamespace(returncode=0, stdout=stamp if c_locale else "\u65e5 10/11 16:24:47 2026")
     monkeypatch.setenv("LC_ALL", "ja_JP.UTF-8")
-    monkeypatch.setattr(mcs_setup, "_run", ps)
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', ps)
     started = time.mktime(time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
     monkeypatch.setattr(mcs_setup, "_gateway_sources_mtime", lambda: started + 60)
     assert mcs_setup._plugin_newer_than_gateway("PID 123 running") is True
@@ -630,7 +632,7 @@ def test_check_environment_locked_keychain_with_env_fallback(monkeypatch):
     monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
-    monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: "/x/hermes")
+    monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: "/x/hermes")
     monkeypatch.setattr(
         local_llm, "bounded_request",
         lambda *a, **k: (200, {}, b"{}"))
@@ -681,7 +683,7 @@ def test_init_self_identity_flags(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.delenv("MCS_SETUP_PASSWORD", raising=False)
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    monkeypatch.setattr(mcs_setup, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: {"mcs_login_id": "u1",
                                  "notify_target": "slack"})
     monkeypatch.setattr(
@@ -771,8 +773,8 @@ def _init_env(monkeypatch, tmp_path, cfg):
                         lambda c, a: True)
     # init syncs the gateway: a real `hermes gateway install` under a temp
     # HOME rewrote the live gateway LaunchAgent on 2026-10-04.
-    monkeypatch.setattr(mcs_setup, "_sync_gateway", lambda *a, **k: 0)
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: dict(cfg))
+    monkeypatch.setattr(service_management, 'sync_gateway', lambda *a, **k: 0)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: dict(cfg))
     # the dictionary step reads a bundle: generic init tests get none (skipped)
     import mcs_drug
     monkeypatch.setattr(mcs_drug, "BUNDLE", tmp_path / "no-bundle")
@@ -996,15 +998,16 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
     from test_runtime_compatibility import _facts
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: _facts())
     # interpreter probe has its own tests — keep it out of `calls`
-    monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
+    monkeypatch.setattr(service_management, 'hermes_py_problem', lambda**_service_kwargs: None)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
-    monkeypatch.setattr(mcs_setup, "_agent_loaded",
-                        lambda label: label in loaded)
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "/x/hermes")
-    monkeypatch.setattr(mcs_setup, "load_config",
-                        lambda path=None: mcs_util.load_config(path) if path else {})
-    monkeypatch.setattr(mcs_setup, "_cron_list", lambda h: entries)
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda label, **_service_kwargs: label in loaded)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "/x/hermes")
+    _previous_service_load_config_1007 = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config',
+                        lambda path=None: _previous_service_load_config_1007(path) if path else {})
+    monkeypatch.setattr(service_management, 'inspect_cron', lambda h: entries)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
     monkeypatch.setattr(mcs_setup.os, "getuid", lambda: 501)
@@ -1045,11 +1048,11 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     s = (tmp_path / "scripts" / "mcs_check.sh").read_text()
     assert "__PYTHON__" not in s and "/h/venv/bin/python" in s
     # every launchd plist rendered and bootstrapped
-    for label in mcs_setup.AGENT_LABELS:
+    for label in service_contract.AGENT_LABELS:
         body = (tmp_path / "agents" / f"{label}.plist").read_text()
         assert "__REPO__" not in body
     boots = [a for a in calls if a[:2] == ["launchctl", "bootstrap"]]
-    assert len(boots) == len(mcs_setup.AGENT_LABELS) == 5
+    assert len(boots) == len(service_contract.AGENT_LABELS) == 5
     # cron: the job whose script is already registered is skipped;
     # the other 5 (incl. the update check) are created
     creates = [" ".join(a) for a in calls
@@ -1067,13 +1070,13 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     offsite = tmp_path / "scripts" / "mcs_offsite.sh"
     assert offsite.is_file() and "ENABLED=0" in offsite.read_text()
     assert not any("mcs_offsite.sh" in command for command in creates)
-    assert len(manifest["agents"]) == len(mcs_setup.AGENT_LABELS)
+    assert len(manifest["agents"]) == len(service_contract.AGENT_LABELS)
     assert len(manifest["cron"]) == 6
 
 
 def test_services_skips_loaded_agents_and_existing_cron(
         monkeypatch, tmp_path):
-    loaded = set(mcs_setup.AGENT_LABELS)
+    loaded = set(service_contract.AGENT_LABELS)
     calls, args = _services_env(
         monkeypatch, tmp_path, loaded=loaded,
         cron_entries=[{"id": f"{i:06d}", "name": n, "schedule": s,
@@ -1083,7 +1086,7 @@ def test_services_skips_loaded_agents_and_existing_cron(
     subs = {"PYTHON": mcs_setup.HERMES_PY, "REPO": mcs_setup.REPO_ROOT,
             "DATA": str(tmp_path / "data")}
     (tmp_path / "agents").mkdir(parents=True)
-    for label in mcs_setup.AGENT_LABELS:
+    for label in service_contract.AGENT_LABELS:
         body = scheduled_jobs.render_template(
             (Path(mcs_setup.REPO_ROOT) / "deployment/launchagents"
              / f"{label}.plist").read_text(), subs)
@@ -1134,11 +1137,11 @@ def test_unverifiable_cron_list_is_not_an_empty_schedule(monkeypatch, output, ex
     from types import SimpleNamespace
     monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k:
                         SimpleNamespace(returncode=0, stdout=output))
-    assert mcs_setup._cron_list("/synthetic/hermes") == expected
+    assert service_management.inspect_cron('/synthetic/hermes') == expected
 
 
 def test_decorated_schedule_compares_actual_five_fields():
-    assert mcs_setup._norm_sched("cron: */5 * * * * (UTC)") == "*/5 * * * *"
+    assert service_contract.normalize_schedule('cron: */5 * * * * (UTC)') == "*/5 * * * *"
 
 
 def test_services_retires_previous_manifest_agent(monkeypatch, tmp_path):
@@ -1169,7 +1172,7 @@ def test_services_rerun_keeps_one_cron_per_script(monkeypatch, tmp_path):
     calls, args = _services_env(monkeypatch, tmp_path)
     assert mcs_setup.cmd_services(args) == 0
     assert mcs_setup.cmd_services(args) == 0
-    entries = mcs_setup._cron_list("/x/hermes")
+    entries = service_management.inspect_cron('/x/hermes')
     scripts = [e["script"] for e in entries]
     assert sorted(scripts) == sorted(s for _, _, s in scheduled_jobs.CRON_JOBS)
     # the second run found every job and created nothing
@@ -1193,7 +1196,7 @@ def test_services_failure_preserves_last_recoverable_manifest(
     import json
     calls, args = _services_env(monkeypatch, tmp_path)
     path, previous = _seed_manifest(tmp_path)
-    monkeypatch.setattr(mcs_setup, "_cron_list", lambda h: None)
+    monkeypatch.setattr(service_management, 'inspect_cron', lambda h: None)
     assert mcs_setup.cmd_services(args) == 1
     assert json.loads(path.read_text()) == previous
     assert not _cron_creates(calls)
@@ -1300,7 +1303,7 @@ def test_services_noop_remove_keeps_created_job_owned(
     inner = mcs_setup.subprocess.run
     hold = {"remove": True}
     removed: set[str] = set()
-    entries = mcs_setup._cron_list("/x/hermes")
+    entries = service_management.inspect_cron('/x/hermes')
 
     def listing(_hermes):
         # copy: the remove loop must see every pre-change job. Mutating
@@ -1316,14 +1319,14 @@ def test_services_noop_remove_keeps_created_job_owned(
                                    stdout="Success: job removed.",
                                    stderr="")
         return inner(argv, **kw)
-    monkeypatch.setattr(mcs_setup, "_cron_list", listing)
+    monkeypatch.setattr(service_management, 'inspect_cron', listing)
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
     assert mcs_setup.cmd_services(args) == 1
     scripts = [c.get("script") for c in
                json.loads(path.read_text())["cron"]]
     assert created["script"] in scripts
     assert stale["script"] in scripts
-    new_id = next(e["id"] for e in mcs_setup._cron_list("/x/hermes")
+    new_id = next(e["id"] for e in service_management.inspect_cron('/x/hermes')
                   if e.get("script") == created["script"])
     hold["remove"] = False
     calls.clear()
@@ -1334,7 +1337,7 @@ def test_services_noop_remove_keeps_created_job_owned(
     assert mcs_setup.cmd_services(args) == 0
     assert ["/x/hermes", "cron", "remove", new_id] in calls
     assert all(e.get("script") != created["script"]
-               for e in mcs_setup._cron_list("/x/hermes"))
+               for e in service_management.inspect_cron('/x/hermes'))
     retired = [c.get("script") for c in
                json.loads(path.read_text())["cron"]]
     assert created["script"] not in retired
@@ -1365,8 +1368,8 @@ def test_services_failed_run_keeps_created_job_owned(
         return inner(argv, **kw)
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
     if failure == "agent":
-        monkeypatch.setattr(mcs_setup, "_agent_reconcile",
-                            lambda *a: not fail["on"])
+        monkeypatch.setattr(service_management, 'agent_reconcile',
+                            lambda *a, **_service_kwargs: not fail["on"])
     assert mcs_setup.cmd_services(args) == 1
     assert len(_cron_creates(calls)) == 1
     first = json.loads(path.read_text())
@@ -1376,7 +1379,7 @@ def test_services_failed_run_keeps_created_job_owned(
     assert mcs_setup.cmd_services(args) == 1
     assert not _cron_creates(calls)
     assert json.loads(path.read_text()) == first
-    new_id = next(e["id"] for e in mcs_setup._cron_list("/x/hermes")
+    new_id = next(e["id"] for e in service_management.inspect_cron('/x/hermes')
                   if e["script"] == created["script"])
     fail["on"] = False
     calls.clear()
@@ -1386,7 +1389,7 @@ def test_services_failed_run_keeps_created_job_owned(
     assert mcs_setup.cmd_services(args) == 0
     assert ["/x/hermes", "cron", "remove", new_id] in calls
     assert all(e["script"] != created["script"]
-               for e in mcs_setup._cron_list("/x/hermes"))
+               for e in service_management.inspect_cron('/x/hermes'))
     assert created["script"] not in [
         c.get("script") for c in json.loads(path.read_text())["cron"]]
 
@@ -1427,11 +1430,12 @@ def test_services_installs_gateway_when_interactive(
     through the public `hermes gateway` CLI."""
     calls, args = _services_env(
         monkeypatch, tmp_path,
-        loaded=set(mcs_setup.AGENT_LABELS),
+        loaded=set(service_contract.AGENT_LABELS),
         cron_names={s for _, _, s in scheduled_jobs.CRON_JOBS})
+    _previous_service_load_config_1434 = mcs_util.load_config
     monkeypatch.setattr(
-        mcs_setup, "load_config",
-        lambda path=None: mcs_util.load_config(path) if path else
+        mcs_util, 'load_config',
+        lambda path=None: _previous_service_load_config_1434(path) if path else
         {"notify": {"interactive": "discord"}})
     calls.clear()
     # fake_run returns empty stdout -> "supervised" absent -> install
@@ -1445,11 +1449,12 @@ def test_services_gateway_supervised_is_noop(monkeypatch, tmp_path):
     from types import SimpleNamespace
     calls, args = _services_env(
         monkeypatch, tmp_path,
-        loaded=set(mcs_setup.AGENT_LABELS),
+        loaded=set(service_contract.AGENT_LABELS),
         cron_names={s for _, _, s in scheduled_jobs.CRON_JOBS})
+    _previous_service_load_config_1452 = mcs_util.load_config
     monkeypatch.setattr(
-        mcs_setup, "load_config",
-        lambda path=None: mcs_util.load_config(path) if path else
+        mcs_util, 'load_config',
+        lambda path=None: _previous_service_load_config_1452(path) if path else
         {"notify": {"interactive": "discord"}})
 
     def fake_run(argv, **kw):
@@ -1468,7 +1473,7 @@ def test_services_gateway_supervised_is_noop(monkeypatch, tmp_path):
 def test_services_gateway_skipped_when_off(monkeypatch, tmp_path):
     calls, args = _services_env(
         monkeypatch, tmp_path,
-        loaded=set(mcs_setup.AGENT_LABELS),
+        loaded=set(service_contract.AGENT_LABELS),
         cron_names={s for _, _, s in scheduled_jobs.CRON_JOBS})
     calls.clear()
     assert mcs_setup.cmd_services(args) == 0
@@ -1483,9 +1488,10 @@ def test_standalone_services_owns_one_host_and_no_hermes_jobs(monkeypatch, tmp_p
     calls, args = _services_env(monkeypatch, tmp_path)
     requests = []
     monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
-    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: mcs_util.load_config(path) if path else {"runtime_mode": "standalone"})
-    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("Hermes must not be resolved"))
+    _previous_service_load_config_1488 = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous_service_load_config_1488(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: pytest.fail("Hermes must not be resolved"))
     assert mcs_setup.cmd_services(args) == 0
     manifest = mcs_util.load_config(mcs_setup.MANIFEST_PATH)
     assert manifest["runtime_mode"] == "standalone"
@@ -1502,9 +1508,10 @@ def test_standalone_services_owns_one_host_and_no_hermes_jobs(monkeypatch, tmp_p
 def test_standalone_loaded_host_without_heartbeat_starts_without_kill(monkeypatch, tmp_path):
     from mcs_standalone import service
 
-    calls, args = _services_env(monkeypatch, tmp_path, loaded={mcs_setup.STANDALONE_LABEL})
-    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: mcs_util.load_config(path) if path else {"runtime_mode": "standalone"})
-    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={service_contract.STANDALONE_LABEL})
+    _previous_service_load_config_1508 = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous_service_load_config_1508(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     attempts = iter([False, True])
 
     def request(root):
@@ -1521,9 +1528,10 @@ def test_standalone_mode_switch_stops_only_previous_owned_jobs(monkeypatch, tmp_
     calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int"},
                                cron_entries=[{"id": "aaaaaa", "name": "old", "schedule": "*/5 * * * *", "script": "mcs_check.sh"},
                                              {"id": "bbbbbb", "name": "other", "schedule": "0 0 * * *", "script": "other.sh"}])
-    mcs_setup._save_manifest({"agents": [{"label": "local.mcs-int"}], "cron": [{"script": "mcs_check.sh"}]})
-    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: mcs_util.load_config(path) if path else {"runtime_mode": "standalone"})
-    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
+    service_management.save_manifest({'agents': [{'label': 'local.mcs-int'}], 'cron': [{'script': 'mcs_check.sh'}]}, paths=mcs_setup._service_paths())
+    _previous_service_load_config_1527 = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous_service_load_config_1527(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     assert mcs_setup.cmd_services(args) == 0
     assert ["/x/hermes", "cron", "remove", "aaaaaa"] in calls
     assert not any("bbbbbb" in call or "ai.hermes.gateway" in call for call in calls)
@@ -1532,18 +1540,18 @@ def test_standalone_mode_switch_stops_only_previous_owned_jobs(monkeypatch, tmp_
 
 def test_standalone_init_never_writes_hermes_config(monkeypatch):
     from types import SimpleNamespace
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("Hermes lookup forbidden"))
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: pytest.fail("Hermes lookup forbidden"))
     assert not mcs_setup._apply_plugin_integration({"runtime_mode": "standalone", "notify": {"interactive": "slack"}}, SimpleNamespace(yes=True))
 
 
 def test_invalid_runtime_doctor_fails_without_service_probes(monkeypatch, capsys):
     from types import SimpleNamespace
 
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {"runtime_mode": ["standalone"]})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": ["standalone"]})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda cfg: [])
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("invalid mode must not probe Hermes"))
-    monkeypatch.setattr(mcs_setup, "_run", lambda *args, **kwargs: pytest.fail("invalid mode must not probe services"))
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: pytest.fail("invalid mode must not probe Hermes"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *args, **kwargs: pytest.fail("invalid mode must not probe services"))
     assert mcs_setup.cmd_doctor(SimpleNamespace()) == 1
     assert "常駐処理の実行環境: 要修正" in capsys.readouterr().out
 
@@ -1559,7 +1567,7 @@ def _plugin_env(monkeypatch, existing=None):
     """Stub the hermes CLI surface; `existing` maps config keys that
     `config get` already resolves."""
     sets = []
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda c: "/x/hermes")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda c: "/x/hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda e: True)
     monkeypatch.setattr(
         mcs_setup, "_hermes_config_get",
@@ -1619,7 +1627,7 @@ def test_plugin_integration_rejects_non_int_project_ids(monkeypatch, flag):
 
 def test_plugin_integration_off_is_noop(monkeypatch):
     monkeypatch.setattr(
-        mcs_setup, "_hermes_exe",
+        mcs_util, 'hermes_exe',
         lambda c: (_ for _ in ()).throw(AssertionError("must not run")))
     assert mcs_setup._apply_plugin_integration(
         {"notify": {"interactive": "off"}}, _plugin_args()) is True
@@ -1662,7 +1670,7 @@ def test_plugin_integration_skipped_keys_are_not_failures(monkeypatch):
 
 
 def test_plugin_integration_without_hermes_cli_fails(monkeypatch):
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda c: "/x/hermes")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda c: "/x/hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda e: False)
     assert mcs_setup._apply_plugin_integration(
         dict(_SLACK_CFG), _plugin_args()) is False
@@ -1683,7 +1691,7 @@ def test_init_fails_when_plugin_settings_not_written(
     monkeypatch.setattr(mcs_setup, "_hermes_config_set",
                         lambda e, p, k, v: False)
     ran = []
-    monkeypatch.setattr(mcs_setup, "_sync_gateway",
+    monkeypatch.setattr(service_management, 'sync_gateway',
                         lambda *a, **k: ran.append("gateway") or 0)
     monkeypatch.setattr(mcs_setup, "cmd_check",
                         lambda args: ran.append("check") or 0)
@@ -1845,13 +1853,13 @@ def test_check_warns_when_gateway_unsupervised(monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
     monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
-    monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: "/x/h")
+    monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: "/x/h")
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
 
     def fake_cli(exe, profile, *argv, **kw):
         return SimpleNamespace(returncode=1, stdout="", stderr="")
-    monkeypatch.setattr(mcs_setup, "_hermes_cli", fake_cli)
+    monkeypatch.setattr(service_management, 'hermes_cli', fake_cli)
     monkeypatch.setattr(local_llm, "bounded_request",
                         lambda *a, **k: (200, {}, b"{}"))
     _, warnings = mcs_setup.check_environment(
@@ -1927,12 +1935,11 @@ def test_agent_reconcile_retries_transient_bootstrap(
             argv, rc, "success", "" if rc == 0 else "5: Input/output error")
 
     sleeps, notes = [], []
-    monkeypatch.setattr(mcs_setup, "_run", fake_run)
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', fake_run)
     monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=mcs_util.time.time,
                                         sleep=sleeps.append))
-    assert mcs_setup._agent_reconcile("ai.mcs.x", "/p.plist",
-                                      notes.append, False) is ok
+    assert service_management.agent_reconcile('ai.mcs.x', '/p.plist', notes.append, False, paths=mcs_setup._service_paths()) is ok
     assert state["calls"][:2] == ["print", "bootout"]
     assert state["calls"].count("bootstrap") == boots
     assert state["calls"][-1] == "print"
@@ -1956,30 +1963,30 @@ def test_check_reports_deployed_script_drift(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path / "home dir"))
 
     # nothing deployed yet (fresh install) -> warning, not an error
-    errors, warnings = mcs_setup._script_drift()
+    errors, warnings = service_management.script_drift(paths=mcs_setup._service_paths())
     assert errors == []
     assert any("a.sh, b.sh" in w and "services" in w for w in warnings)
 
     # the services render is by definition in sync
-    mcs_setup._sync_scripts(mcs_setup._service_subs(), {"scripts": []},
-                            lambda m: None, dry=False)
+    service_management.sync_scripts(service_management.service_substitutions(mcs_util.load_config(), paths=mcs_setup._service_paths()), {'scripts': []}, lambda m: None, dry=False, paths=mcs_setup._service_paths())
     assert "'" in (tmp_path / "scripts" / "b.sh").read_text()  # quoted
-    assert mcs_setup._script_drift() == ([], [])
+    assert service_management.script_drift(paths=mcs_setup._service_paths()) == ([], [])
 
     # repo template changed, deployed copy not resynced -> named error
     (src / "a.sh").write_text("#!/bin/sh\nexec __PYTHON__ __REPO__/y\n")
-    errors, warnings = mcs_setup._script_drift()
+    errors, warnings = service_management.script_drift(paths=mcs_setup._service_paths())
     assert warnings == []
     assert len(errors) == 1 and "a.sh" in errors[0] \
         and "b.sh" not in errors[0] and "mcs_setup.py services" in errors[0]
 
-    monkeypatch.setattr(mcs_setup, "load_config",
-                        lambda path=None: mcs_util.load_config(path) if path else {})
+    _previous_service_load_config_1976 = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config',
+                        lambda path=None: _previous_service_load_config_1976(path) if path else {})
     monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: ([], []))
     monkeypatch.setattr(mcs_setup, "check_environment",
                         lambda cfg: ([], []))
     monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda cfg: [])
-    monkeypatch.setattr(mcs_setup, "check_runtime", lambda cfg: ([], []))
+    monkeypatch.setattr(service_management, 'check_runtime', lambda cfg, **_service_kwargs: ([], []))
     assert mcs_setup.cmd_check(None) == 1
     assert "a.sh" in capsys.readouterr().out
 
@@ -2026,13 +2033,14 @@ def test_fact_source_refuses_invalid_config(monkeypatch, tmp_path):
 
 
 def _check_only(monkeypatch, runtime=([], []), config=([], [])):
-    monkeypatch.setattr(mcs_setup, "load_config",
-                        lambda path=None: mcs_util.load_config(path) if path else {})
-    monkeypatch.setattr(mcs_setup, "check_runtime", lambda cfg: runtime)
+    _previous_service_load_config_2029 = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config',
+                        lambda path=None: _previous_service_load_config_2029(path) if path else {})
+    monkeypatch.setattr(service_management, 'check_runtime', lambda cfg, **_service_kwargs: runtime)
     monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: config)
     monkeypatch.setattr(mcs_setup, "check_environment",
                         lambda cfg: ([], []))
-    monkeypatch.setattr(mcs_setup, "_script_drift", lambda: ([], []))
+    monkeypatch.setattr(service_management, 'script_drift', lambda**_service_kwargs: ([], []))
     monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda cfg: [])
 
 
@@ -2075,7 +2083,7 @@ def test_doctor_is_local_and_does_not_run_check(monkeypatch, capsys):
     from types import SimpleNamespace
 
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
-    monkeypatch.setattr(mcs_setup, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: {"mcs_login_id": "synthetic", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: {
@@ -2101,16 +2109,16 @@ def test_check_runtime_verifies_services_interpreter(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
     cfg = {"hermes_bin": _stub_py(tmp_path / "hermes", 0)}
     monkeypatch.setattr(mcs_setup, "HERMES_PY", str(tmp_path / "absent"))
-    errors, _ = mcs_setup.check_runtime(cfg)
+    errors, _ = service_management.check_runtime(cfg, paths=mcs_setup._service_paths())
     assert any("absent）が見つからない" in e and "install.sh" in e
                for e in errors)
     monkeypatch.setattr(mcs_setup, "HERMES_PY",
                         _stub_py(tmp_path / "old-py", 1))
-    errors, _ = mcs_setup.check_runtime(cfg)
+    errors, _ = service_management.check_runtime(cfg, paths=mcs_setup._service_paths())
     assert any("起動できないか、3.14未満" in e for e in errors)
     monkeypatch.setattr(mcs_setup, "HERMES_PY",
                         _stub_py(tmp_path / "py", 0))
-    assert mcs_setup.check_runtime(cfg) == ([], [])
+    assert service_management.check_runtime(cfg, paths=mcs_setup._service_paths()) == ([], [])
 
 
 def test_check_runtime_hermes_must_resolve_on_launchd_path(monkeypatch,
@@ -2118,19 +2126,19 @@ def test_check_runtime_hermes_must_resolve_on_launchd_path(monkeypatch,
     """hermes found only via the login shell PATH (e.g. Homebrew) is
     invisible to launchd/cron wrappers — an error with the exact fix."""
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
-    monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
+    monkeypatch.setattr(service_management, 'hermes_py_problem', lambda**_service_kwargs: None)
     shell_only = "/opt/homebrew/bin/hermes"
-    monkeypatch.setattr(mcs_setup.shutil, "which",
+    monkeypatch.setattr(mcs_util.shutil, "which",
                         lambda cmd, mode=None, path=None:
                         shell_only if path is None else None)
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: exe == shell_only)
-    errors, _ = mcs_setup.check_runtime({})
+    errors, _ = service_management.check_runtime({}, paths=mcs_setup._service_paths())
     assert any("常駐処理の検索先" in e
                and f"ln -s {shell_only} ~/.local/bin/hermes" in e
                for e in errors)
     # an explicit hermes_bin is what every job uses -> fine
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
-    assert mcs_setup.check_runtime({"hermes_bin": shell_only}) == ([], [])
+    assert service_management.check_runtime({'hermes_bin': shell_only}, paths=mcs_setup._service_paths()) == ([], [])
 
 
 def _runtime_darwin(monkeypatch, tmp_path, loaded=()):
@@ -2144,22 +2152,22 @@ def _runtime_darwin(monkeypatch, tmp_path, loaded=()):
     monkeypatch.setattr(mcs_setup, "REPO_ROOT", str(repo))
     monkeypatch.setattr(mcs_setup, "RECOVERY_DIR", str(tmp_path / "recovery"))
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(tmp_path / "agents"))
-    monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
+    monkeypatch.setattr(service_management, 'hermes_py_problem', lambda**_service_kwargs: None)
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: {
         "python": "3.14.8", "sqlite": "3.51.3",
         "packages": {"discord.py": None, "slack-bolt": None, "slack-sdk": None}})
-    monkeypatch.setattr(mcs_setup, "_run",
+    monkeypatch.setattr(lifecycle_io, 'run_bounded',
                         lambda *a, **k: SimpleNamespace(returncode=0))
     loaded = set(loaded)
-    monkeypatch.setattr(mcs_setup, "_agent_loaded",
-                        lambda label: label in loaded)
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda label, **_service_kwargs: label in loaded)
     return repo, loaded
 
 
 def test_check_runtime_nothing_installed_only_warns(monkeypatch, tmp_path):
     _runtime_darwin(monkeypatch, tmp_path)
-    errors, warnings = mcs_setup.check_runtime({"hermes_bin": "/x"})
+    errors, warnings = service_management.check_runtime({'hermes_bin': '/x'}, paths=mcs_setup._service_paths())
     assert errors == []
     assert any("org.mcs.recovery" in w and "未導入" in w
                for w in warnings)
@@ -2176,12 +2184,12 @@ def test_check_runtime_recovery_watchdog(monkeypatch, tmp_path):
     import plistlib
     (tmp_path / "agents" / "org.mcs.recovery.plist").write_bytes(
         plistlib.dumps({"ProgramArguments": ["/synthetic/recovery-python", "watchdog.py"]}))
-    assert mcs_setup.check_runtime({"hermes_bin": "/x"}) == ([], [])
+    assert service_management.check_runtime({'hermes_bin': '/x'}, paths=mcs_setup._service_paths()) == ([], [])
 
     (rec / "mcs_recover.py").write_text("v0")
     (rec / "repo_path").write_text("/elsewhere\n")
     loaded.discard("org.mcs.recovery")
-    errors, warnings = mcs_setup.check_runtime({"hermes_bin": "/x"})
+    errors, warnings = service_management.check_runtime({'hermes_bin': '/x'}, paths=mcs_setup._service_paths())
     assert any("配布版と異なります" in w for w in warnings)
     assert any("対象は/elsewhere" in w for w in warnings)
     assert any("org.mcs.recoveryは導入済みですが読み込まれていません" in e
@@ -2192,7 +2200,7 @@ def test_check_runtime_llama_agent_installed_but_unloaded(monkeypatch,
                                                          tmp_path):
     _runtime_darwin(monkeypatch, tmp_path)
     (tmp_path / "agents" / "ai.mcs.llamaserver.plist").write_text("x")
-    errors, _ = mcs_setup.check_runtime({"hermes_bin": "/x"})
+    errors, _ = service_management.check_runtime({'hermes_bin': '/x'}, paths=mcs_setup._service_paths())
     assert any("ai.mcs.llamaserverは導入済みですが読み込まれておらず" in e
                for e in errors)
 
@@ -2201,9 +2209,9 @@ def test_services_refuses_missing_interpreter(monkeypatch, tmp_path,
                                               capsys):
     """Rendering wrappers/plists around a missing interpreter makes every
     job fail at every run — services must stop before writing anything."""
-    probe = mcs_setup._hermes_py_problem
+    probe = service_management.hermes_py_problem
     calls, args = _services_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(mcs_setup, "_hermes_py_problem", probe)
+    monkeypatch.setattr(service_management, 'hermes_py_problem', probe)
     monkeypatch.setattr(mcs_setup.os.path, "isfile",
                         lambda p: p != mcs_setup.HERMES_PY)
     assert mcs_setup.cmd_services(args) == 1
@@ -2262,7 +2270,7 @@ def test_malformed_service_manifest_is_recoverable(monkeypatch, tmp_path, raw):
     path = tmp_path / "manifest.json"
     path.write_bytes(raw)
     monkeypatch.setattr(mcs_setup, "MANIFEST_PATH", str(path))
-    assert mcs_setup._load_manifest() == {}
+    assert service_management.load_manifest(paths=mcs_setup._service_paths()) == {}
 
 
 @pytest.mark.parametrize("cfg", [_DISCORD_CFG, _SLACK_CFG])
@@ -2270,7 +2278,7 @@ def test_init_returns_failure_when_gateway_sync_fails(monkeypatch, tmp_path, cfg
     _init_env(monkeypatch, tmp_path, {
         "mcs_login_id": "synthetic", "notify_target": "local", **cfg})
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda e: True)
-    monkeypatch.setattr(mcs_setup, "_sync_gateway", lambda *a, **k: 1)
+    monkeypatch.setattr(service_management, 'sync_gateway', lambda *a, **k: 1)
     monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: 0)
     monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init", "--yes"])
     assert mcs_setup.main() == 1
@@ -2285,11 +2293,11 @@ def test_gateway_lifecycle_refused_in_test_sandbox(monkeypatch, tmp_path, verb):
     exe = tmp_path / "hermes"
     exe.write_text(f"#!/bin/sh\ntouch {marker}\n")
     exe.chmod(0o755)
-    r = mcs_setup._hermes_cli(str(exe), "", "gateway", verb)
+    r = service_management.hermes_cli(str(exe), '', 'gateway', verb)
     assert r is not None and r.returncode == 126 and "MCS_TEST_SANDBOX" in r.stderr
     assert not marker.exists()
     # read-only verbs still run
-    assert mcs_setup._hermes_cli(str(exe), "", "gateway", "status").returncode == 0
+    assert service_management.hermes_cli(str(exe), '', 'gateway', 'status').returncode == 0
     assert marker.exists()
 
 
@@ -2315,8 +2323,9 @@ def test_fact_source_refuses_when_the_semantic_validator_crashes(monkeypatch, tm
     conf.write_text(json.dumps({"mcs_login_id": "synthetic", "semantic": {"mode": "off"}}))
     before = conf.read_bytes()
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
-    monkeypatch.setattr(mcs_setup, "load_config",
-                        lambda path=None: mcs_util.load_config(path or str(conf)))
+    _previous_service_load_config_2318 = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config',
+                        lambda path=None: _previous_service_load_config_2318(path or str(conf)))
 
     def crash(cfg):
         raise TypeError("synthetic validator crash")
@@ -2344,12 +2353,13 @@ def test_changed_standalone_plist_is_reloaded_into_launchd(monkeypatch, tmp_path
     from mcs_standalone import service
 
     monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
-    calls, args = _services_env(monkeypatch, tmp_path, loaded={mcs_setup.STANDALONE_LABEL})
-    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: mcs_util.load_config(path) if path else {"runtime_mode": "standalone"})
-    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={service_contract.STANDALONE_LABEL})
+    _previous_service_load_config_2348 = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous_service_load_config_2348(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     requests = []
     monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
-    stale = mcs_setup._standalone_service_path()
+    stale = service_management.standalone_service_path(paths=mcs_setup._service_paths())
     (tmp_path / "agents").mkdir(exist_ok=True)
     with open(stale, "w") as f:
         f.write("<plist>old checkout</plist>")
@@ -2403,8 +2413,8 @@ def test_wizard_missing_project_ids_still_required(monkeypatch):
                                   ["services", "--help"], ["doctor", "--help"],
                                   ["--unknown-option"]])
 def test_japanese_cli_guidance_does_not_read_or_change_config(monkeypatch, capsys, argv):
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: pytest.fail("guidance must not read config"))
-    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: pytest.fail("guidance must not run services"))
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: pytest.fail("guidance must not read config"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("guidance must not run services"))
     with pytest.raises(SystemExit) as stopped:
         mcs_setup.main(argv)
     output = capsys.readouterr()

@@ -1,6 +1,9 @@
 """Upgrade path — scripts/mcs_upgrade.py launcher + mcs_update plan /
 reinstall. Fully synthetic: temp git repos, stubbed launchctl/install.sh.
 """
+import mcs_util
+import service_contract
+import service_management
 import update_discovery
 import update_launch
 import importlib.util
@@ -248,7 +251,7 @@ def _plan_env(updater, monkeypatch, tmp_path, tag_errors, *, legacy=False,
     _release(tmp_path / "remote-work", bare, "v1.2.0",
              {"CHANGELOG.md": CHANGELOG})
     _git(repo, "fetch", "-q", "--tags")
-    monkeypatch.setattr(updater, "load_config", lambda: cfg or {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg or {})
     monkeypatch.setattr(updater, "precheck_local", lambda c: [])
     monkeypatch.setattr(updater, "precheck_tag", lambda t: list(tag_errors))
     return repo
@@ -368,7 +371,7 @@ def test_quiesce_stops_legacy_drainer_only_when_installed(updater, monkeypatch,
     agents = tmp_path / "agents"
     agents.mkdir()
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(agents))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
     monkeypatch.setattr(mcs_update, "_stray_drainer_pids", lambda: [])
     ran = []
     monkeypatch.setattr(mcs_update, "_run", lambda argv, **k: ran.append(argv))
@@ -449,7 +452,7 @@ def test_plan_reports_gate_crash_as_blocker(updater, monkeypatch, tmp_path):
 
 def test_launcher_apply_refuses_standalone(updater, monkeypatch):
     monkeypatch.setenv("MCS_UPDATE_REPO", "/nonexistent")
-    monkeypatch.setattr(updater, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: {"runtime_mode": "standalone"})
     assert updater.apply("v1.2.0", None, None) == 2
 
@@ -681,9 +684,8 @@ def test_updater_bad_arguments_explain_help_in_japanese(capsys):
 
 @pytest.mark.parametrize("repair", [False, True])
 def test_plan_exposes_reinstall_recovery_repair(updater, monkeypatch, tmp_path, repair):
-    import mcs_setup
     _plan_env(updater, monkeypatch, tmp_path, ["install_sh_changed"])
-    monkeypatch.setattr(mcs_setup, "recovery_repair_pending", lambda cfg: repair)
+    monkeypatch.setattr(service_management, 'recovery_repair_pending', lambda cfg, **_service_kwargs: repair)
     report = updater.plan("v1.2.0")
     assert report["route"] == "reinstall"
     assert report["reinstall_requires_recovery_repair"] is repair

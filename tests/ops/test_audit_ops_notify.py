@@ -1,5 +1,7 @@
 """Synthetic regressions: Discord guild scope, LINE WORKS callback order,
 updater recovery keeps unrelated manual edits."""
+import mcs_util
+import service_contract
 import asyncio
 import json
 import os
@@ -93,8 +95,8 @@ def test_lineworks_callback_is_handled_before_a_slow_delivery_tick(monkeypatch, 
 def test_updater_recovery_resets_only_update_paths(updater, tmp_path, monkeypatch, dirty, at):
     repo, bare = _make_repo(tmp_path)
     monkeypatch.setattr(mcs_update, "REPO", str(repo))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
     monkeypatch.setattr(mcs_update, "restart_agents", lambda **k: [])
     monkeypatch.setattr(mcs_update, "restart_services", lambda *a, **k: None)
@@ -271,7 +273,7 @@ def test_rollback_preserves_third_content_before_restoring_runtime(updater, tmp_
     _git(repo, "checkout", "-q", "--detach", target)
     (repo / "f.txt").write_text("MANUAL THIRD CONTENT")
     monkeypatch.setattr(updater, "REPO", str(repo))
-    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "hermes"})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "hermes"})
     monkeypatch.setattr(updater, "_rollback_layout_error", lambda entry: None)
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: pytest.fail("runtime restore before refusal"))
     git = updater._git
@@ -387,7 +389,7 @@ def test_rollback_untracked_collision_refuses_before_journal_and_recovery_is_noo
     repo, prev, target = _provenance_repo(tmp_path)
     (repo / "deleted.txt").write_text("UNTRACKED OPERATOR CONTENT")
     monkeypatch.setattr(updater, "REPO", str(repo))
-    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "hermes"})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "hermes"})
     events, notices = [], []
     monkeypatch.setattr(updater, "quiesce", lambda: events.append("quiesce") or [])
     monkeypatch.setattr(updater, "restart_agents", lambda **k: events.append("restart") or [])

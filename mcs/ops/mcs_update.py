@@ -50,6 +50,10 @@ import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 from cli_args import JapaneseArgumentParser as _JapaneseParser  # noqa: E402
 import mcs_runtime  # noqa: E402
 import runtime_inspection  # noqa: E402
+import service_management  # noqa: E402
+import service_contract  # noqa: E402
+import mcs_util  # noqa: E402
+import mcs_config  # noqa: E402
 import update_journal as journal_store  # noqa: E402
 import update_policy  # noqa: E402
 import owned_process  # noqa: E402
@@ -59,7 +63,7 @@ import restore_evidence  # noqa: E402
 from mcs_requests import read_scheduled_receipt, release_tag  # noqa: E402
 
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
-                      atomic_write, hermes_exe, launchd_bootstrap, load_config)
+                      atomic_write, launchd_bootstrap)
 from mcs_util import file_sha256 as _file_sha256  # noqa: E402
 from safe_io import fsync_dir  # noqa: E402
 
@@ -91,17 +95,14 @@ BACKUP_DIR = os.path.join(DATA, "backups")
 SCRIPTS_DIR = os.path.expanduser("~/.hermes/scripts")
 AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
 
-RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2")
 # v1.0.2-1.0.7 KeepAlive drainer: stopped by quiesce, never restarted —
 # the new services drop it, a rollback's old services recreate it
-LEGACY_LABELS = ("ai.mcs.extract-drainer-rt",)
 # install.sh opt-outs an operator may repeat on a reinstall apply; --mode
 # stays out (install.sh derives it from config.json)
 INSTALL_ARGS = frozenset({"--no-llm", "--no-brew", "--no-plugin",
                           "--no-recovery"})
 from update_policy import REINSTALL_ERRORS  # noqa: E402
 T_INSTALL = 3600
-WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int", "local.mcs-health")
 # S5: only the labels listed above are touched; install.sh-owned
 # ai.mcs.llamaserver / org.mcs.recovery must never be.
 PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "models/")
@@ -371,7 +372,7 @@ def impact_summary(cur_sha: str, tag: str) -> list[str]:
     """Read changed paths and explain their operational impact."""
     out = _git_out(["diff", "--name-status", f"{cur_sha}..{tag}"])
     names = [line.split("\t")[-1] for line in out.splitlines() if line]
-    return update_policy.environment_impact(names, load_config())
+    return update_policy.environment_impact(names, mcs_util.load_config())
 
 
 def _tag_is_newer(tag, sha, cur_sha) -> bool:
@@ -389,14 +390,19 @@ def _tag_is_newer(tag, sha, cur_sha) -> bool:
 
 # -------------------------------------------------------------- gates
 
+
+def _service_paths():
+    return service_management.default_paths(root=HOME, checkout=REPO,
+        hermes_scripts_dir=SCRIPTS_DIR, agents_dir=AGENTS_DIR, manifest_path=MANIFEST_PATH)
+
+
 def precheck_local(cfg: dict) -> list[str]:
     """Local-only gates (no tag objects needed yet)."""
     errors = []
     if not _tree_clean():
         errors.append("tree_dirty")
-    import mcs_setup
     try:
-        errs, _ = mcs_setup.validate_config(cfg)
+        errs, _ = mcs_config.validate_config(cfg)
         errors.extend("config: " + e for e in errs)
     except Exception as e:
         errors.append(f"validate_config_failed: {type(e).__name__}")
@@ -406,13 +412,12 @@ def precheck_local(cfg: dict) -> list[str]:
             errors.append("insufficient_disk")
     # an owned idle watchdog whose explicit selection drifted is repaired by
     # the post-merge `services`; anything else still blocks before merge
-    errors.extend(mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO,
-                                                 allow_runtime_migration=True))
+    errors.extend(service_management.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO, allow_runtime_migration=True, paths=_service_paths()))
     if cfg.get("runtime_mode") == "standalone":
         if runtime_inspection.python_problem(mcs_runtime.python_executable(cfg, root=HOME)):
             errors.append("standalone_interpreter_unavailable")
     else:
-        hermes = hermes_exe(cfg)
+        hermes = mcs_util.hermes_exe(cfg)
         if not runtime_inspection.executable_available(hermes):
             errors.append("hermes_not_resolvable")
     problem = _migration_checkout_problem(cfg)
@@ -537,7 +542,7 @@ def _ls_tree_paths(tag: str, subdir: str | None = None
 def precheck_tag(tag: str) -> list[str]:
     """Candidate-tree content gates — all work on fetched objects."""
     errors: list[str] = []
-    standalone = mcs_runtime.standalone(load_config())
+    standalone = mcs_runtime.standalone(mcs_util.load_config())
     if standalone and not _standalone_target_supported(tag):
         errors.append("standalone_runtime_missing_in_target")
     paths = []
@@ -688,7 +693,7 @@ def plan(tag: str) -> dict:
     """Read-only upgrade plan for scripts/mcs_upgrade.py and
     docs/guides/UPGRADE_AGENT.md: classifies the existing gate tokens,
     never mutates the tree, state or services."""
-    cfg = load_config()
+    cfg = mcs_util.load_config()
     try:
         cur_tag, cur_sha = update_discovery.current_version(checkout=REPO, environment=os.environ)
     except update_discovery.DiscoveryError as exc:
@@ -720,7 +725,6 @@ def plan(tag: str) -> dict:
 
 
 def _plan(tag, cfg, state, current, target_sha) -> dict:
-    import mcs_setup
     cur_tag, cur_sha = current["tag"], current["sha"]
     local_errors = precheck_local(cfg)
     tag_errors = precheck_tag(tag)
@@ -751,7 +755,7 @@ def _plan(tag, cfg, state, current, target_sha) -> dict:
         "restarts": restarts,
         "recovery_tool_changed": recovery_changed,
         "install_args": recorded_install_args(),
-        "reinstall_requires_recovery_repair": bool(reinstall and mcs_setup.recovery_repair_pending(cfg)),
+        "reinstall_requires_recovery_repair": bool(reinstall and service_management.recovery_repair_pending(cfg, paths=_service_paths())),
         "notes": [] if noop else upgrade_notes(tag, cur_tag) + _recovery_notes(cfg, blockers, reinstall),
     }
 
@@ -770,13 +774,12 @@ def recorded_install_args() -> list[str] | None:
 
 def _recovery_notes(cfg, blockers, reinstall) -> list[str]:
     """The operator step for a recovery runtime the update cannot fix itself."""
-    import mcs_setup
     notes = []
     if "recovery_python" not in cfg and any(b.startswith("recovery_runtime:") for b in blockers):
         notes.append("recovery_runtime — config.json の recovery_python に checkout 外の安全な"
                      " interpreter の絶対パスを設定して再実行。所有済みで停止中の watchdog は"
                      " merge 後の services が置き換えます")
-    if reinstall and mcs_setup.recovery_repair_pending(cfg):
+    if reinstall and service_management.recovery_repair_pending(cfg, paths=_service_paths()):
         notes.append("recovery_python と配備済み watchdog が不一致 — apply に"
                      " --install-arg=--no-recovery を付けます（merge 後の services が置き換えます）")
     return notes
@@ -795,7 +798,7 @@ def _uid() -> int:
 
 def _run(argv: list, timeout: int = T_LAUNCHCTL
          ) -> subprocess.CompletedProcess:
-    """subprocess.run that never raises — mcs_setup._run's contract,
+    """subprocess.run that never raises — lifecycle_io.run_bounded contract,
     kept local so a rolled-back tree never mixes generations. A hung
     command yields returncode 124 (as timeout(1)), one that cannot start
     127: every launchctl caller records a per-label problem and moves on,
@@ -902,7 +905,7 @@ def quiesce() -> list[str]:
     for restart verification. Marker first — helper launchers (cron
     catchup) must see it before any process is stopped (S8)."""
     _write_marker()
-    if load_config().get("runtime_mode") == "standalone":
+    if mcs_util.load_config().get("runtime_mode") == "standalone":
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             status = _standalone_status()
@@ -911,11 +914,11 @@ def quiesce() -> list[str]:
                 return ["extract-0", "extract-2"]
             time.sleep(0.2)
         raise UpdateError("standalone_quiesce_unverifiable")
-    for label in LEGACY_LABELS:
+    for label in service_contract.LEGACY_LABELS:
         if os.path.exists(os.path.join(AGENTS_DIR, label + ".plist")):
             _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
     stopped = []
-    for label in RESIDENT_LABELS:
+    for label in service_contract.RESIDENT_LABELS:
         _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
@@ -992,7 +995,7 @@ def restart_agents(bounce: bool = True) -> list[str]:
         return _standalone_drainer_problems()
     problems = []
     deadline = time.monotonic() + RESTART_BUDGET_S
-    for label in RESIDENT_LABELS:
+    for label in service_contract.RESIDENT_LABELS:
         if time.monotonic() >= deadline:
             problems.append(f"restart_deadline:{label}")
             continue
@@ -1017,14 +1020,14 @@ def restart_agents(bounce: bool = True) -> list[str]:
             time.sleep(0.5)
         if not pid:
             problems.append(f"drainer_not_running:{label}")
-    for label in LEGACY_LABELS:
+    for label in service_contract.LEGACY_LABELS:
         # still installed = the tree was never moved past the old layout
         # (bail before merge, or a rollback): bring it back as quiesce
         # found it. New services retire it, so after an apply it is gone.
         plist = os.path.join(AGENTS_DIR, label + ".plist")
         if os.path.exists(plist) and not _bootstrap_agent(label, plist):
             problems.append(f"bootstrap_failed:{label}")
-    for label in WATCHER_LABELS:
+    for label in service_contract.WATCHER_LABELS:
         if time.monotonic() >= deadline:
             problems.append(f"restart_deadline:{label}")
             continue
@@ -1270,7 +1273,7 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
         errors.append("ledger_open_failed")
     try:
         import mcs_setup
-        cfg = load_config()
+        cfg = mcs_util.load_config()
         errs, _ = mcs_setup.check_environment(cfg)
         baseline = {update_policy.environment_error_identity(e)
                     for e in (state.get("baseline_check") or [])}
@@ -1278,11 +1281,11 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
         errors.extend("new_env_error: " + e for e in new)
     except Exception:
         errors.append("postcheck_unverifiable")
-    if load_config().get("runtime_mode") == "standalone":
+    if mcs_util.load_config().get("runtime_mode") == "standalone":
         errors.extend(_standalone_drainer_problems())
     else:
         errors.extend(f"drainer_not_running:{label}"
-                      for label in RESIDENT_LABELS if _agent_pid(label) is None)
+                      for label in service_contract.RESIDENT_LABELS if _agent_pid(label) is None)
     return errors
 
 
@@ -1390,9 +1393,8 @@ def _runtime_python(venv: str) -> str | None:
 
 def _runtime_venv(cfg: dict) -> tuple[str, str | None]:
     """(venv, Hermes checkout or None) of the interpreter services run."""
-    import mcs_setup
     venv = os.path.dirname(os.path.dirname(os.path.abspath(
-        mcs_setup._service_subs(cfg)["PYTHON"])))
+        service_management.service_substitutions(cfg, paths=_service_paths())["PYTHON"])))
     if cfg.get("runtime_mode") == "standalone":
         return venv, None
     checkout = os.path.dirname(venv)     # <hermes-agent>/venv
@@ -1408,7 +1410,7 @@ def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
     if "runtime_migration" in applying:
         _check_runtime_restore(applying)
         return
-    venv, checkout = _runtime_venv(load_config())
+    venv, checkout = _runtime_venv(mcs_util.load_config())
     needs_python = _needs_migration(venv)
     head_sha = None
     if checkout:
@@ -1675,7 +1677,7 @@ def _apply_validate_args(tag: str | None, sha: str | None,
     if sha is not None and not update_discovery.COMMIT_SHA_RE.fullmatch(sha):
         print("更新先のコミット識別子が正しくありません:", sha)
         return 2
-    if os.environ.get("MCS_UPDATE_REPO") and mcs_runtime.standalone(load_config()):
+    if os.environ.get("MCS_UPDATE_REPO") and mcs_runtime.standalone(mcs_util.load_config()):
         # the launcher's temp copy cannot drive the standalone host's
         # cooperative quiesce — standalone updates go through the host
         print("独立動作中のため、この方法では更新できません。UPGRADE_AGENT.mdの独立動作向け手順を確認してください（standalone_external_apply）")
@@ -1692,12 +1694,10 @@ def _apply_validate_args(tag: str | None, sha: str | None,
 def _apply_runtime_gate_errors(cfg: dict, reinstall: bool,
                                install_args: tuple) -> list:
     """Return the runtime gate errors that block apply before any mutation."""
-    import mcs_setup
     # the old interpreter is allowed here: post-merge migrates it (1.0.18)
-    runtime_errors = mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO,
-                                                   allow_runtime_migration=True)
+    runtime_errors = service_management.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO, allow_runtime_migration=True, paths=_service_paths())
     if reinstall and "--no-recovery" not in install_args \
-            and mcs_setup.recovery_repair_pending(cfg):
+            and service_management.recovery_repair_pending(cfg, paths=_service_paths()):
         # install.sh stops on that drift after merge; services repairs it
         runtime_errors.append("recovery_runtime: selection repair pending — "
                               "add --install-arg=--no-recovery")
@@ -1759,7 +1759,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args)
     if rc is not None:
         return rc
-    cfg = load_config()
+    cfg = mcs_util.load_config()
     runtime_errors = _apply_runtime_gate_errors(cfg, reinstall, install_args)
     if runtime_errors:
         # Even acquiring update.lock or writing local_checks is a mutation.
@@ -2024,96 +2024,12 @@ def _baseline_check(cfg: dict) -> list[str]:
 def _gateway_restart_if_needed(state: dict) -> None:
     applying = state.get("applying") or {}
     applied = (state.get("applied") or [{}])[-1]
-    restart_services(load_config(), applying.get("plugin_changed")
+    restart_services(mcs_util.load_config(), applying.get("plugin_changed")
                      or applied.get("plugin_changed"))
 
 
 # -------------------------------------------------------------- rollback
 
-def _reconcile_membership(desired: dict) -> list[str]:
-    """Delete owned-but-undesired cron jobs + agents. Recreation is
-    left to `services` (old code re-renders content)."""
-    problems = []
-    import mcs_setup
-    cfg = load_config()
-    if cfg.get("runtime_mode") == "standalone":
-        # One host owns jobs; its restored code reconciles membership on restart.
-        return []
-    if cfg.get("runtime_mode", "hermes") != "hermes":
-        # same token as mcs_recover; reported before any cron/agent removal
-        return ["runtime_mode_unverifiable"]
-    desired = {} if desired is None else desired
-    if not isinstance(desired, dict):
-        return ["service_snapshot_invalid"]
-    for section, key in (("cron", "script"), ("agents", "label")):
-        rows = desired.get(section, [])
-        if (not isinstance(rows, list) or any(
-                not isinstance(row, dict)
-                or (row.get(key) is not None and not isinstance(row[key], str))
-                for row in rows)):
-            return ["service_snapshot_invalid"]
-    hermes = hermes_exe(cfg)
-    desired_cron = {(d.get("script") or ""): d for d in
-                    desired.get("cron", [])}
-    known_scripts = {s for _, _, s in mcs_setup.CRON_JOBS} | {"mcs_offsite.sh"}
-    current = {}
-    try:
-        fd = os.open(MANIFEST_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, "rb") as manifest:
-            st = os.fstat(manifest.fileno())
-            if (stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid()
-                    and stat.S_IMODE(st.st_mode) == 0o600 and st.st_size <= 262144):
-                current = json.loads(manifest.read(262145))
-    except (OSError, ValueError, RecursionError):
-        pass
-    evidence = list(desired_cron.values())
-    if isinstance(current, dict) and isinstance(current.get("cron"), list):
-        evidence += current["cron"]
-    desired_paths = {os.path.normpath(os.path.join(SCRIPTS_DIR, script))
-                     for script in desired_cron if script}
-    if runtime_inspection.executable_available(hermes):
-        try:
-            # one parser with mcs_setup: ANSI-tolerant, None = unparsable
-            entries = mcs_setup._cron_list(hermes)
-            if entries is None:
-                problems.append("cron_list_unverifiable")
-            for entry in entries or []:
-                jid = entry["id"]
-                script = (entry.get("script") or "").strip()
-                actual = os.path.normpath(os.path.join(SCRIPTS_DIR, script))
-                owned = any(
-                    isinstance(row, dict) and row.get("id") == jid
-                    and isinstance(row.get("script"), str) and row["script"]
-                    and actual == os.path.normpath(os.path.join(SCRIPTS_DIR, row["script"]))
-                    for row in evidence)
-                owned |= (os.path.isabs(script) and os.path.basename(script) in known_scripts
-                          and actual == os.path.join(SCRIPTS_DIR, os.path.basename(script)))
-                if script and owned and actual not in desired_paths:
-                    rr = subprocess.run(
-                        [hermes, "cron", "remove", jid],
-                        capture_output=True, text=True, timeout=30)
-                    if rr.returncode != 0:
-                        problems.append(f"cron_remove_failed:{script}")
-        except (OSError, subprocess.TimeoutExpired):
-            problems.append("cron_list_unverifiable")
-    else:
-        problems.append("cron_list_unverifiable")
-    desired_agents = {a.get("label") for a in
-                      desired.get("agents", [])}
-    current = set(mcs_setup._agent_labels(cfg))
-    for path in glob.glob(os.path.join(AGENTS_DIR, "*.plist")):
-        label = os.path.basename(path)[:-6]
-        if not mcs_setup._owned_label(label):
-            continue
-        if label not in desired_agents and label not in current:
-            _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
-            stopped = _run(["launchctl", "print", f"gui/{_uid()}/{label}"])
-            if getattr(stopped, "returncode", None) != 113:
-                problems.append(f"agent_retirement_unverifiable:{label}")
-                continue
-            with suppress(OSError):
-                os.unlink(path)
-    return problems
 
 
 def _rollback_backup_error(entry: dict) -> str | None:
@@ -2203,7 +2119,7 @@ def _rollback_tree(entry: dict, on_hold=None) -> None:
     already quiesced. Do not additionally delete untracked paths just
     because their names occur in the update diff; ownership is unproven."""
     prev = entry["prev_sha"]
-    if load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(prev):
+    if mcs_util.load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(prev):
         raise UpdateError("standalone_runtime_missing_in_target")
     err = _rollback_layout_error(entry)
     if err:
@@ -2220,10 +2136,7 @@ def _rollback_tree(entry: dict, on_hold=None) -> None:
     if entry.get("schema_bump") and entry.get("backup_path"):
         _restore_db(entry["backup_path"], on_hold=on_hold)
     _cancel_unsent_notices()
-    problems = _reconcile_membership(
-        entry.get("manifest_snapshot")
-        if "manifest_snapshot" in entry
-        else journal_store.load_state(STATE_PATH).get("manifest_snapshot"))
+    problems = service_management.retire_to_snapshot(entry.get('manifest_snapshot') if 'manifest_snapshot' in entry else journal_store.load_state(STATE_PATH).get('manifest_snapshot'), cfg=mcs_util.load_config(), paths=_service_paths())
     _services_reconcile()
     if problems:
         raise UpdateError("membership: " + ",".join(problems))
@@ -2386,7 +2299,7 @@ def rollback(command_id: str | None = None) -> int:
                     "result": "rolled_back", "at": time.time()}
             journal_store.save_state(STATE_PATH, state)
             # gateway restart AFTER the durable save (self-deadlock)
-            restart_services(load_config(), entry.get("plugin_changed"))
+            restart_services(mcs_util.load_config(), entry.get("plugin_changed"))
             _enqueue_notice(f"[MCS] ロールバックしました: "
                             f"{entry.get('tag')} → {prev[:12]}")
             return 0
@@ -2430,7 +2343,7 @@ def _reconcile_restored() -> None:
     import notify_reconcile
     restored = ledger.Ledger(LEDGER)
     try:
-        report = notify_reconcile.reconcile_after_restore(restored, load_config())
+        report = notify_reconcile.reconcile_after_restore(restored, mcs_util.load_config())
         if report.get("journal_incomplete"):
             raise ValueError("restore_journal_incomplete")
     except Exception as e:
@@ -2771,7 +2684,7 @@ def _finish_resumed(state: dict, applying: dict) -> int:
     _report("resumed", "post-merge completed after crash")
     _enqueue_notice(
         "[MCS] 更新の中断を検出し、post-merge を完了しました")
-    restart_services(load_config(), applying.get("plugin_changed"))
+    restart_services(mcs_util.load_config(), applying.get("plugin_changed"))
     return 0
 
 
@@ -2969,7 +2882,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     if applying.get("runtime_migration"):
                         quiesce()       # drainers may have been restarted since
                     _restore_runtime(applying)
-                    problems = _reconcile_membership(applying.get("manifest_snapshot"))
+                    problems = service_management.retire_to_snapshot(applying.get('manifest_snapshot'), cfg=mcs_util.load_config(), paths=_service_paths())
                     if problems:
                         return escalate("membership: " + ",".join(problems))
                 elif applying.get("reinstall") \
@@ -3173,7 +3086,7 @@ def cmd_check() -> int:
     if state.get("_corrupt"):
         print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
         return 2
-    cfg = load_config()
+    cfg = mcs_util.load_config()
     upd = cfg.get("update") if isinstance(cfg.get("update"), dict) else {}
     mode = _update_mode(cfg)
     # --- lock-free detection -----------------------------------------
@@ -3349,7 +3262,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     # services children reload the launchd job running this updater only
-    # after THIS process ends (mcs_setup._agent_reconcile waits on it)
+    # after THIS process ends (service_management.agent_reconcile waits on it)
     os.environ.setdefault("MCS_JOB_PID", str(os.getpid()))
     args = _build_parser().parse_args(argv)
     if args.post_merge:

@@ -1,5 +1,6 @@
 """Rollback layout floor: old code must never run against cards of a
 newer layout (synthetic repo, temp ledger, no services)."""
+import mcs_util
 import sqlite3
 import subprocess
 
@@ -36,7 +37,7 @@ def test_rollback_refuses_before_journal_when_target_lacks_the_layout(
     _, after = _state(updater, repo)
     _cards(updater.LEDGER, 1, 3)
     notices = []
-    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(updater, "quiesce", lambda: pytest.fail("no quiesce"))
     monkeypatch.setattr(updater, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
@@ -125,7 +126,7 @@ def test_rollback_tree_refuses_before_any_reset(updater, tmp_path, monkeypatch):
     _rollback_tree without rollback()'s pre-journal check."""
     _cards(updater.LEDGER, 3)
     calls = []
-    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: None)
     monkeypatch.setattr(updater, "_git", lambda argv, timeout=None: calls.append(argv)
                         or subprocess.CompletedProcess(argv, 1, "", ""))
@@ -163,7 +164,7 @@ def test_git_read_failure_is_unverified_even_for_layout_one(
             argv, 0, "100644 blob " + "a" * 40 + "\tmcs/notify/notify_cards.py\0", "")
 
     monkeypatch.setattr(updater, "_git", git)
-    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: pytest.fail("no restore"))
     entry = {"prev_sha": "b" * 40}
     assert updater._rollback_layout_error(entry).startswith("rollback_layout_unverified:")

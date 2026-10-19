@@ -1,4 +1,6 @@
 """Canonical promotion consumes only a complete regular evidence file."""
+import mcs_util
+import service_management
 import json
 import os
 from types import SimpleNamespace
@@ -23,12 +25,14 @@ def test_invalid_evidence_never_reaches_gate_or_config_write(tmp_path, monkeypat
         bounded_python(tmp_path, """
 from types import SimpleNamespace
 import mcs_setup
+import mcs_util
+import service_management
 mcs_setup._guard_config = lambda yes: True
-mcs_setup.load_config = lambda: {}
+mcs_util.load_config = lambda: {}
 def forbidden(*args, **kwargs):
     raise SystemExit('unsafe evidence reached promotion or write')
 mcs_setup._shipped_g6_criteria = forbidden
-mcs_setup._write_atomic = forbidden
+service_management.write_service_file = forbidden
 assert mcs_setup.cmd_fact_source(SimpleNamespace(
     fact_source='canonical', gate_evidence=sys.argv[1])) == 1
 """, evidence)
@@ -38,12 +42,12 @@ assert mcs_setup.cmd_fact_source(SimpleNamespace(
         target.write_bytes(raw)
         evidence.symlink_to(target)
     monkeypatch.setattr(mcs_setup, "_guard_config", lambda yes: True)
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
 
     def forbidden(*args, **kwargs):
         pytest.fail("unsafe evidence reached promotion or write")
 
     monkeypatch.setattr(mcs_setup, "_shipped_g6_criteria", forbidden)
-    monkeypatch.setattr(mcs_setup, "_write_atomic", forbidden)
+    monkeypatch.setattr(service_management, 'write_service_file', forbidden)
     assert mcs_setup.cmd_fact_source(SimpleNamespace(
         fact_source="canonical", gate_evidence=str(evidence))) == 1

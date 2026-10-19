@@ -1,5 +1,6 @@
 """Updater rollback/restart guards (synthetic repo, temp DB, stubbed
 launchctl and network)."""
+import mcs_util
 import sqlite3
 
 import pytest
@@ -28,7 +29,7 @@ def test_rollback_with_unusable_schema_backup_never_resets(
                          "backup_path": str(tmp_path / "pruned.db")}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
     notices = []
-    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(updater, "quiesce", lambda: pytest.fail("no quiesce"))
     monkeypatch.setattr(updater, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)

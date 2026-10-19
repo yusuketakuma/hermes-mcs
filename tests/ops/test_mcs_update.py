@@ -3,7 +3,11 @@
 Fully synthetic: temp git repos + temp sqlite + stubbed subprocess/
 network. No real MCS, Discord, Keychain, or external repo access.
 """
+from ops_testkit import select_updater_service_python
 import restore_evidence
+import scheduled_jobs
+import service_contract
+import service_management
 import owned_process
 import update_discovery
 import runtime_inspection
@@ -51,12 +55,12 @@ def _standalone_heartbeat(updater, **updates):
 def test_standalone_precheck_does_not_require_hermes(updater, monkeypatch):
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
     monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
-    monkeypatch.setattr(mcs_update, "hermes_exe", lambda cfg: pytest.fail("Hermes lookup forbidden"))
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: pytest.fail("Hermes lookup forbidden"))
     assert updater.precheck_local({"runtime_mode": "standalone", "mcs_login_id": "u", "notify_target": "local"}) == []
 
 
 def test_standalone_quiesce_and_restart_keep_the_host_alive(updater, monkeypatch):
-    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "standalone"})
     (Path(updater.DATA).parent / "config.json").write_text('{"runtime_mode":"standalone"}')
     _standalone_heartbeat(updater, update_in_progress=True, children={"update": {"pid": os.getpid(), "kind": "core"}})
     monkeypatch.setattr(updater, "_run", lambda *a, **k: pytest.fail("native service must not be stopped"))
@@ -68,7 +72,7 @@ def test_standalone_quiesce_and_restart_keep_the_host_alive(updater, monkeypatch
 
 
 def test_standalone_quiesce_fails_closed_on_missing_host(updater, monkeypatch):
-    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "standalone"})
     ticks = iter([0, 21])
     monkeypatch.setattr(updater.time, "monotonic", lambda: next(ticks))
     with pytest.raises(updater.UpdateError, match="standalone_quiesce_unverifiable"):
@@ -85,7 +89,7 @@ def test_standalone_update_requests_restart_for_the_observed_generation(updater)
 
 
 def test_standalone_refuses_rollback_to_a_tag_without_runtime(updater, monkeypatch):
-    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "standalone"})
     calls = []
     monkeypatch.setattr(updater, "_git", lambda argv: calls.append(argv) or subprocess.CompletedProcess(argv, 1, "", ""))
     with pytest.raises(updater.UpdateError, match="standalone_runtime_missing_in_target"):
@@ -113,12 +117,14 @@ def updater(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_setup, "HOME", str(runtime_home))
     monkeypatch.setattr(mcs_update, "HOME", str(runtime_home))
     monkeypatch.setattr(mcs_setup, "HERMES_PY", str(selected))
+    select_updater_service_python(monkeypatch, mcs_update, str(selected))
     agents = runtime_home / "agents"
     agents.mkdir()
     import plistlib
     (agents / "org.mcs.recovery.plist").write_bytes(plistlib.dumps(
         {"ProgramArguments": [str(selected), "synthetic-recovery.py"]}))
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(agents))
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: _facts())
     monkeypatch.setattr(mcs_update, "REPO", str(tmp_path / "repo"))
     monkeypatch.setattr(mcs_update, "DATA", str(tmp_path / "data"))
@@ -208,7 +214,7 @@ def test_rollback_keeps_manifest_and_restarts_changed_plugin(
     monkeypatch.setattr(updater, "restart_agents", lambda: [])
     monkeypatch.setattr(updater, "_postcheck", lambda *a: [])
     monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: True)
-    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     assert updater._post_merge(state) == 0
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["applied"][-1]["manifest_snapshot"] == desired
@@ -225,8 +231,8 @@ def test_rollback_keeps_manifest_and_restarts_changed_plugin(
 
     monkeypatch.setattr(updater, "restart_gateway", restart)
     monkeypatch.setattr(updater, "quiesce", lambda: [])
-    monkeypatch.setattr(updater, "_reconcile_membership",
-                        lambda manifest: memberships.append(manifest) or [])
+    monkeypatch.setattr(service_management, 'retire_to_snapshot',
+                        lambda manifest, **_service_kwargs: memberships.append(manifest) or [])
     if interrupted:
         state["applying"] = {"tag": "rollback:v1.1.0", "sha": before,
                              "prev_sha": after, "rollback": True,
@@ -337,13 +343,13 @@ def test_impact_summary(updater, tmp_path):
 def test_impact_summary_distinguishes_gateway_and_independent_adapter(
         updater, monkeypatch, path, gateway, lineworks):
     monkeypatch.setattr(updater, "_git_out", lambda args: "M\t" + path + "\n")
-    monkeypatch.setattr(updater, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: {"notify": {"interactive": "lineworks"}})
     impact = updater.impact_summary("synthetic-before", "v1.1.0")
     assert any("通知接続（gateway）の再起動" in line for line in impact) is gateway
     assert any("LINE WORKS" in line and "再起動" in line for line in impact) is lineworks
     # without the LINE WORKS adapter (plan() restarts none) there is no note
-    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     impact = updater.impact_summary("synthetic-before", "v1.1.0")
     assert not any("LINE WORKS" in line for line in impact)
 
@@ -422,13 +428,12 @@ def _cron_listing(script, ansi=False):
 ])
 def test_cron_reconcile_shares_the_setup_parser(updater, monkeypatch, output, problems, removed):
     """Coloured ids, the per-profile empty message and a format drift go
-    through mcs_setup._cron_list: drift is reported, never silently skipped."""
-    import mcs_setup
-    script = mcs_setup.CRON_JOBS[0][2]
+    through service_management.inspect_cron: drift is reported, never silently skipped."""
+    script = scheduled_jobs.CRON_JOBS[0][2]
     if output == "ansi":
         output = _cron_listing(f"{updater.SCRIPTS_DIR}/{script}", ansi=True)
-    monkeypatch.setattr(updater, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_update, "hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda path: True)
     calls = []
 
@@ -436,16 +441,16 @@ def test_cron_reconcile_shares_the_setup_parser(updater, monkeypatch, output, pr
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, output if argv[2] == "list" else "", "")
     monkeypatch.setattr(updater.subprocess, "run", execute)
-    assert updater._reconcile_membership({"cron": [], "agents": []}) == problems
+    monkeypatch.setattr(owned_process, "run_owned", execute)
+    assert service_management.retire_to_snapshot({'cron': [], 'agents': []}, cfg=mcs_util.load_config(), paths=updater._service_paths()) == problems
     assert (["synthetic-hermes", "cron", "remove", "abcdef"] in calls) is removed
 
 
 @pytest.mark.parametrize("returncode", [0, 1])
 def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returncode):
-    import mcs_setup
-    script = mcs_setup.CRON_JOBS[0][2]
-    monkeypatch.setattr(updater, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_update, "hermes_exe", lambda cfg: "synthetic-hermes")
+    script = scheduled_jobs.CRON_JOBS[0][2]
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda path: True)
     calls = []
 
@@ -459,7 +464,8 @@ def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returnc
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(updater.subprocess, "run", list_result)
-    problems = updater._reconcile_membership({"cron": [], "agents": []})
+    monkeypatch.setattr(owned_process, "run_owned", list_result)
+    problems = service_management.retire_to_snapshot({'cron': [], 'agents': []}, cfg=mcs_util.load_config(), paths=updater._service_paths())
     assert problems == (["cron_list_unverifiable"] if returncode != 0 else [])
     expected = [["synthetic-hermes", "cron", "list", "--all"]]
     if returncode == 0:
@@ -476,8 +482,8 @@ def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returnc
 def test_rollback_offsite_cron_requires_matching_owned_identity(
         updater, monkeypatch, script, evidence, removed):
 
-    monkeypatch.setattr(updater, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_update, "hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda path: True)
     if evidence is not None:
         path = Path(updater.MANIFEST_PATH)
@@ -489,7 +495,8 @@ def test_rollback_offsite_cron_requires_matching_owned_identity(
         output = _cron_listing(script) if argv[2] == "list" else ""
         return subprocess.CompletedProcess(argv, 0, output, "")
     monkeypatch.setattr(updater.subprocess, "run", execute)
-    assert updater._reconcile_membership({"cron": [], "agents": []}) == []
+    monkeypatch.setattr(owned_process, "run_owned", execute)
+    assert service_management.retire_to_snapshot({'cron': [], 'agents': []}, cfg=mcs_util.load_config(), paths=updater._service_paths()) == []
     assert (["synthetic-hermes", "cron", "remove", "abcdef"] in calls) is removed
 
 @pytest.mark.parametrize("name", ["user-added.txt", "新規ファイル.txt", "sp ace.txt"])
@@ -504,7 +511,7 @@ def test_rollback_preserves_untracked_update_name(updater, tmp_path, monkeypatch
     target = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _git(repo, "reset", "--hard", previous)
     path.write_text("user content after interrupted update")
-    monkeypatch.setattr(updater, "_reconcile_membership", lambda manifest: [])
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda manifest, **_service_kwargs: [])
     monkeypatch.setattr(updater, "_services_reconcile", lambda: None)
 
     updater._rollback_tree({"sha": target, "prev_sha": previous})
@@ -657,7 +664,7 @@ def _apply_env(updater, monkeypatch, *, precheck_errors=(),
                         lambda t: list(precheck_errors))
     monkeypatch.setattr(update_discovery, 'remote_tag_sha',
                         lambda t, **_lif05_paths: sha)
-    monkeypatch.setattr(mcs_update, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: cfg or {})
     monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
     monkeypatch.setattr(mcs_update, "quiesce", lambda: [])
@@ -803,8 +810,8 @@ def test_update_config_validation():
 def test_recover_interrupted_pre_merge(updater, tmp_path, monkeypatch):
     repo, _ = _make_repo(tmp_path)
     mcs_update.REPO = str(repo)
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -824,8 +831,8 @@ def test_recover_interrupted_pre_merge(updater, tmp_path, monkeypatch):
 def test_recover_merge_head_abort(updater, tmp_path, monkeypatch):
     repo, _ = _make_repo(tmp_path)
     mcs_update.REPO = str(repo)
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
     prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -845,8 +852,8 @@ def test_recover_escalates_unclassifiable(updater, tmp_path,
                                           monkeypatch):
     repo, _ = _make_repo(tmp_path)
     mcs_update.REPO = str(repo)
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
     state = updater.journal_store.default_state()
@@ -870,8 +877,8 @@ def test_recover_pre_applying_remnant_is_cleaned(updater, tmp_path,
     so recovery must simply clean up (F10)."""
     repo, _ = _make_repo(tmp_path)
     mcs_update.REPO = str(repo)
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
     state = updater.journal_store.default_state()
@@ -914,8 +921,8 @@ def test_recover_mixed_tree_after_merge_stage_crash(updater, tmp_path,
     gating could never reach this path; measurement must (F1)."""
     repo, _ = _make_repo(tmp_path)
     mcs_update.REPO = str(repo)
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
     prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -1141,9 +1148,9 @@ def _schema_bump_world(updater, tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_update, "quiesce",
                         lambda: (mcs_update._write_marker(), [])[1])
     monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
-    monkeypatch.setattr(mcs_update, "_reconcile_membership", lambda m: [])
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda m, **_service_kwargs: [])
     monkeypatch.setattr(mcs_update, "_postcheck", lambda s, e: [])
-    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
     monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
     restarts = []
@@ -1335,8 +1342,8 @@ def test_recover_holds_on_orphaned_restore_consent(updater, tmp_path,
     the report tells the human (only a human can repair the journal)."""
     repo, _ = _make_repo(tmp_path)
     mcs_update.REPO = str(repo)
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "restart_agents",
                         lambda **k: pytest.fail("hold must not restart"))
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
@@ -1446,7 +1453,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
     back.parent.mkdir(parents=True, exist_ok=True)
     _mk_schema(back, 7, messages=2)
     _mk_schema(live, 8, messages=5)
-    monkeypatch.setattr(mcs_update, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
@@ -1469,7 +1476,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
     monkeypatch.setattr(mcs_update, "quiesce", quiesce)
     monkeypatch.setattr(mcs_update, "restart_agents", restart)
     monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
-    monkeypatch.setattr(mcs_update, "_reconcile_membership", lambda m: [])
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda m, **_service_kwargs: [])
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
     monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
 
@@ -1512,7 +1519,7 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
     back.parent.mkdir(parents=True, exist_ok=True)
     _mk_schema(back, 7, messages=2)
     _mk_schema(live, 8, messages=5)
-    monkeypatch.setattr(mcs_update, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
@@ -1530,7 +1537,7 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
     monkeypatch.setattr(mcs_update, "restart_agents",
                         lambda: (mcs_update._remove_marker(), [])[1])
     monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
-    monkeypatch.setattr(mcs_update, "_reconcile_membership", lambda m: [])
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda m, **_service_kwargs: [])
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
     monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
 
@@ -1614,8 +1621,8 @@ def test_restart_agents_retries_transient_bootstrap(
     monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=sleeps.append))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ("ai.mcs.x",))
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ("ai.mcs.x",))
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_agent_pid",
                         lambda label: 4242 if fake.loaded else None)
     monkeypatch.setattr(mcs_update, "_remove_marker", lambda: None)
@@ -1641,8 +1648,8 @@ def test_restart_agents_watcher_uses_verified_bootstrap(
     monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ("ai.mcs.w",))
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ("ai.mcs.w",))
     monkeypatch.setattr(mcs_update, "_remove_marker", lambda: None)
     assert mcs_update.restart_agents() == problems
     assert fake.calls == ["print"] + ["bootstrap"] * len(outcomes) + ["print"]
@@ -1701,9 +1708,9 @@ def test_restart_agents_survives_hung_launchctl(
     monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
                         ("ai.mcs.a", "ai.mcs.b"))
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ("local.mcs-w",))
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ("local.mcs-w",))
     Path(mcs_update.MARKER_PATH).write_text("1")
     assert mcs_update.restart_agents() == problems
     # the loop went on past the wedged label to every later agent
@@ -1723,10 +1730,10 @@ def test_launchd_waits_ignore_wall_clock_jump(updater, monkeypatch):
         wall[0] += 3600                # system clock jumps an hour per poll
     monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
         time=lambda: wall[0], monotonic=lambda: mono[0], sleep=sleep))
-    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ("ai.mcs.a",))
-    monkeypatch.setattr(mcs_update, "LEGACY_LABELS", ())
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ("ai.mcs.a",))
+    monkeypatch.setattr(service_contract, 'LEGACY_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_run", lambda argv:
                         subprocess.CompletedProcess(argv, 0, "", ""))
     monkeypatch.setattr(mcs_update, "_bootstrap_agent", lambda label, plist: True)
@@ -1749,7 +1756,7 @@ def test_quiesce_never_takes_unverifiable_stop_as_stopped(
     monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
         time=lambda: clock[0], monotonic=lambda: clock[0],
         sleep=lambda s: clock.__setitem__(0, clock[0] + s)))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
                         ("ai.mcs.a", "ai.mcs.b"))
     monkeypatch.setattr(mcs_update, "_stray_drainer_pids", lambda: [])
     monkeypatch.setattr(mcs_update.subprocess, "run",
@@ -1787,9 +1794,9 @@ def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
     monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
                         ("ai.mcs.a", "ai.mcs.b"))
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_stray_drainer_pids", lambda: [])
     monkeypatch.setattr(mcs_update, "_rollback_tree",
                         lambda e: pytest.fail("must not reset"))
@@ -1820,8 +1827,8 @@ def test_recover_escalates_when_services_reconcile_hangs(
     import sys
     repo, _ = _make_repo(tmp_path)
     mcs_update.REPO = str(repo)
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
     real_run = owned_process.run_owned
@@ -1977,7 +1984,7 @@ def test_quiesce_fails_closed_when_stray_check_unverifiable(
             raise outcome
         return outcome
     monkeypatch.setattr(mcs_update.subprocess, "run", run)
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
     assert mcs_update._stray_drainer_pids() is None
     with pytest.raises(mcs_update.UpdateError,
                        match="stray_drainer_unverifiable"):
@@ -1988,7 +1995,7 @@ def test_stray_check_no_match_is_clean(updater, monkeypatch):
     monkeypatch.setattr(
         mcs_update.subprocess, "run",
         lambda argv, *a, **k: subprocess.CompletedProcess(argv, 1, "", ""))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
     assert mcs_update._stray_drainer_pids() == []
     assert mcs_update.quiesce() == []
 
@@ -2016,9 +2023,9 @@ def test_restart_agents_all_hung_stays_within_budget(
     monkeypatch.setattr(mcs_update, "time", fake_time)
     monkeypatch.setattr(mcs_util, "time", fake_time)
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
                         ("ai.mcs.a", "ai.mcs.b"))
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS",
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS',
                         ("local.mcs-w", "local.mcs-v"))
     problems = mcs_update.restart_agents()
     # worst case: a label started just before the budget runs out costs
@@ -2055,7 +2062,7 @@ def test_apply_never_bails_a_foreign_journal_when_recover_raises(
     updater.journal_store.save_state(updater.STATE_PATH, foreign)
     before = Path(updater.STATE_PATH).read_bytes()
     monkeypatch.setattr(mcs_update.journal_store, "load_state", load_state)
-    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     rolled, notices = [], []
     monkeypatch.setattr(mcs_update, "_rollback_tree", rolled.append)
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
@@ -2215,10 +2222,10 @@ def test_restart_agents_ensure_mode_never_bounces_a_running_drainer(
     monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
                         ("ai.mcs.run", "ai.mcs.stopped", "ai.mcs.gone",
                          "ai.mcs.hung"))
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     assert mcs_update.restart_agents(bounce=False) == [
         "bootstrap_failed:ai.mcs.hung"]
     assert not any(verb == "bootout" for verb, _ in fake.calls)
@@ -2246,9 +2253,9 @@ def test_restart_agents_slow_drainer_does_not_starve_the_next(
     monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
-    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS',
                         ("ai.mcs.a", "ai.mcs.b"))
-    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     assert mcs_update.restart_agents() == ["drainer_not_running:ai.mcs.a"]
     assert "ai.mcs.b" in fake.running
 
@@ -2394,7 +2401,7 @@ def test_rollback_applying_journal_shape():
 def test_check_skips_notice_and_auto_when_head_contains_tag(
         updater, monkeypatch, ancestry_rc, expect_notice):
     """HEAD ahead of the newest tag is not an update; only rc 0 proves it."""
-    monkeypatch.setattr(mcs_update, "load_config", lambda: {
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
         "update": {"mode": "auto", "auto_delay_h": 0}})
     monkeypatch.setattr(update_discovery, 'detect_latest',
                         lambda pre, **_lif05_paths: ("v9.0.0", "a" * 40))
@@ -2440,7 +2447,7 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
     back.parent.mkdir(parents=True, exist_ok=True)
     _mk_schema(back, 7, messages=2)
     _mk_schema(live, 8, messages=5)
-    monkeypatch.setattr(mcs_update, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
@@ -2453,7 +2460,7 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
     monkeypatch.setattr(mcs_update, "restart_agents",
                         lambda **k: (mcs_update._remove_marker(), [])[1])
     monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
-    monkeypatch.setattr(mcs_update, "_reconcile_membership", lambda m: [])
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda m, **_service_kwargs: [])
     monkeypatch.setattr(mcs_update, "_postcheck", lambda s, e: [])
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: notices.append(a[0]) or True)
@@ -2499,7 +2506,7 @@ def test_post_merge_bail_stops_restarted_writers_before_rollback(updater, monkey
     previous = updater._head_sha()
     target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: target)
-    monkeypatch.setattr(updater, "_reconcile_membership", lambda snapshot: [])
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda snapshot, **_service_kwargs: [])
     events = []
 
     def quiesce():
@@ -2541,7 +2548,7 @@ def test_post_merge_bail_stops_restarted_writers_before_rollback(updater, monkey
 
 
 def test_deferred_update_notice_refetches_release_context(updater, monkeypatch):
-    monkeypatch.setattr(updater, "load_config", lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_lif05_paths: ("v1.1.0", "a" * 40))
     monkeypatch.setattr(update_discovery, 'current_version', lambda**_lif05_paths: ("v1.0.0", "b" * 40))
     monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
@@ -2571,7 +2578,7 @@ def test_core_change_requires_gateway_restart_and_notice(updater, monkeypatch):
         return "mcs/notify/notify_cards.py\0" if "mcs" in args else ""
 
     monkeypatch.setattr(updater, "_git_out", diff)
-    monkeypatch.setattr(updater, "load_config",
+    monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: {"notify": {"interactive": "lineworks"}})
     assert updater._plugin_changed("v1.1.0", {})
     impact = updater.impact_summary("synthetic-before", "v1.1.0")
@@ -2582,14 +2589,14 @@ def test_core_change_requires_gateway_restart_and_notice(updater, monkeypatch):
 def test_lineworks_impact_only_when_the_adapter_is_in_use(updater, monkeypatch):
     monkeypatch.setattr(updater, "_git_out", lambda args: "M\tmcs/notify/notify_cards.py\n")
     for cfg in ({}, {"notify": {"interactive": "slack"}}, {"notify": "lineworks"}):
-        monkeypatch.setattr(updater, "load_config", lambda cfg=cfg: cfg)
+        monkeypatch.setattr(mcs_util, 'load_config', lambda cfg=cfg: cfg)
         impact = updater.impact_summary("synthetic-before", "v1.1.0")
         assert any("通知接続（gateway）の再起動" in line for line in impact)
         assert not any("LINE WORKS" in line for line in impact)
 
 
 def test_checkout_ahead_of_latest_tag_does_not_refetch_daily(updater, monkeypatch):
-    monkeypatch.setattr(updater, "load_config", lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_lif05_paths: ("v1.1.0", "a" * 40))
     monkeypatch.setattr(update_discovery, 'current_version', lambda**_lif05_paths: ("v1.1.0-3-gsynthetic", "b" * 40))
     monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
@@ -2612,7 +2619,7 @@ def test_invalid_runtime_mode_is_reported_not_raised(updater, tmp_path, monkeypa
     from ops_testkit import _make_repo
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
-    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "synthetic-invalid"})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "synthetic-invalid"})
     monkeypatch.setattr(updater, "precheck_local", lambda cfg: [])
     result = updater.plan("v1.1.0")
     assert result["route"] == "blocked"
@@ -2620,7 +2627,7 @@ def test_invalid_runtime_mode_is_reported_not_raised(updater, tmp_path, monkeypa
     monkeypatch.setattr(updater, "_git_out", lambda args: "M\tmcs/notify/notify_cards.py\n")
     with pytest.raises(ValueError):
         updater.impact_summary("synthetic-before", "v1.1.0")
-    monkeypatch.setattr(updater, "load_config", lambda: {
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
         "runtime_mode": "synthetic-invalid", "update": {"mode": "notify"}})
     monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_lif05_paths: ("v1.1.0", "a" * 40))
     monkeypatch.setattr(update_discovery, 'current_version', lambda**_lif05_paths: ("v1.0.0", "b" * 40))
@@ -2640,11 +2647,13 @@ def test_membership_removes_an_agent_plist_only_after_launchd_says_gone(
     plist = agents / "ai.mcs.extract-retired.plist"
     plist.write_text("<plist/>")
     monkeypatch.setattr(updater, "AGENTS_DIR", str(agents))
-    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda path: False)
     monkeypatch.setattr(updater.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
         argv, print_code if argv[1] == "print" else 0, "", ""))
-    problems = updater._reconcile_membership({"cron": [], "agents": []})
+    monkeypatch.setattr(owned_process, "run_owned", lambda argv, **kw: subprocess.CompletedProcess(
+        argv, print_code if argv[1] == "print" else 0, "", ""))
+    problems = service_management.retire_to_snapshot({'cron': [], 'agents': []}, cfg=mcs_util.load_config(), paths=updater._service_paths())
     gone = print_code == 113
     assert plist.exists() is not gone
     assert ("agent_retirement_unverifiable:ai.mcs.extract-retired" in problems) is not gone
@@ -2750,7 +2759,7 @@ def test_postcheck_accepts_only_same_legacy_diagnostic(
     after = translated.format(*values)
     monkeypatch.setattr(mcs_update, "_head_sha", lambda: "synthetic-sha")
     monkeypatch.setattr(mcs_update, "_tree_clean", lambda: True)
-    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(mcs_update, "_agent_pid", lambda label: 123)
     monkeypatch.setattr(ledger, "Ledger", lambda path:
                         SimpleNamespace(db=SimpleNamespace(close=lambda: None)))
@@ -2780,7 +2789,7 @@ def test_legacy_baseline_matches_current_environment_probe(updater, monkeypatch)
     monkeypatch.setattr(mcs_setup, "CHROME_BIN", "/synthetic-missing-chrome")
     monkeypatch.setattr(mcs_setup.os.path, "exists", lambda path: False)
     monkeypatch.setattr(mcs_setup, "_check_llm", lambda cfg: ([], []))
-    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
     monkeypatch.setattr(mcs_setup, "env_value", lambda *args, **kwargs: None)
     monkeypatch.delenv("MCS_LLM_ADMISSION", raising=False)

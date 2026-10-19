@@ -1,5 +1,7 @@
 """Recovery retains interrupted state until workers actually restart."""
 import restore_evidence
+import mcs_util
+import service_management
 import update_discovery
 import json
 from pathlib import Path
@@ -137,15 +139,14 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
         updater, tmp_path, monkeypatch, runtime_mode):
     import ledger
     import maintenance
-    import mcs_setup
     from ops_testkit import _git
     repo, live, back, before, after, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     _git(repo, "reset", "-q", "--hard", "v1.0.0")
     updater.journal_store.save_state(updater.STATE_PATH, updater.journal_store.default_state())
     cfg = {"runtime_mode": runtime_mode, "update": {"mode": "notify"}}
-    monkeypatch.setattr(updater, "load_config", lambda: cfg)
-    monkeypatch.setattr(mcs_setup, "runtime_gate_errors", lambda *a, **k: [])
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
+    monkeypatch.setattr(service_management, 'runtime_gate_errors', lambda *a, **k: [])
     monkeypatch.setattr(updater, "precheck_local", lambda c: [])
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: after)
     monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
@@ -233,7 +234,6 @@ def test_incomplete_restore_never_finishes_without_restoring_target(
 def test_apply_pre_reset_rollback_failure_survives_recovery(
         updater, tmp_path, monkeypatch, failure_stage):
     import maintenance
-    import mcs_setup
     from ops_testkit import _git
 
     repo, live, back, _before, after, restarts = _schema_bump_world(
@@ -241,8 +241,8 @@ def test_apply_pre_reset_rollback_failure_survives_recovery(
     _git(repo, "reset", "-q", "--hard", "v1.0.0")
     updater.journal_store.save_state(updater.STATE_PATH, updater.journal_store.default_state())
     cfg = {"runtime_mode": "standalone", "update": {"mode": "notify"}}
-    monkeypatch.setattr(updater, "load_config", lambda: cfg)
-    monkeypatch.setattr(mcs_setup, "runtime_gate_errors", lambda *a, **k: [])
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
+    monkeypatch.setattr(service_management, 'runtime_gate_errors', lambda *a, **k: [])
     monkeypatch.setattr(updater, "precheck_local", lambda c: [])
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: after)
     monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
