@@ -23,6 +23,8 @@ from contextlib import suppress
 
 import mcs_requests
 import notify_cards
+import notify_action_tokens
+import notify_actions
 import notify_transport
 from mcs_requests import _text, canonical, positive, valid_hash, valid_uuid
 
@@ -329,9 +331,9 @@ def dispatch(ledger, req, cfg, root, now=None):
     publications. Human commands forward to the existing apply path."""
     op = req.get("op")
     if op == "notification":
-        return notify_cards.apply_notification(ledger, req, cfg, now)
+        return notify_actions.apply_notification(ledger, req, cfg, now)
     if op == "refresh":
-        return notify_cards.apply_refresh(ledger, req, cfg, now)
+        return notify_actions.apply_refresh(ledger, req, cfg, now)
     if op == "transport_begin":
         return notify_transport.apply_transport_begin(ledger, req, cfg, now)
     if op == "transport_receipt":
@@ -524,11 +526,11 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         try:
             published = notify_cards.publish_file(res_dir, safe + ".json",
                                                   canonical(out))
-            if notify_cards.LIVE_RESULT_KEYS & out.keys():
+            if notify_actions.LIVE_RESULT_KEYS & out.keys():
                 # age it so gc's TOKEN_WRITE_S sweep drops it after
                 # LIVE_RESULT_S — view text never sits on disk for a week
-                aged = time.time() - notify_cards.TOKEN_WRITE_S \
-                    + notify_cards.LIVE_RESULT_S
+                aged = time.time() - notify_action_tokens.TOKEN_WRITE_S \
+                    + notify_actions.LIVE_RESULT_S
                 with suppress(OSError):
                     os.utime(published, (aged, aged))
         except OSError as e:

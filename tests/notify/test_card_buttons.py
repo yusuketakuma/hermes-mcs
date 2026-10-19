@@ -12,6 +12,9 @@ import extract_llm
 import ledger as _ledger
 import mcs_signals
 import notify_cards
+import notify_action_context
+import notify_action_tokens
+import notify_actions
 import notify_cmds
 import notify_flush
 import notify_render
@@ -228,14 +231,14 @@ def test_button_rows_layout_and_link(led):
 def test_legacy_defer_keeps_write_action_guards(led, gate, expected):
     spec = _delivered_card(led)
     card = notify_scope.card_row(led.db, 1)
-    token = notify_cards._mint_token(led.db, 1, "defer", None,
+    token = notify_action_tokens.mint(led.db, 1, "defer", None,
                                     {"source_gen": card["source_generation"]}, NOW)
     if gate == "stale":
         led.db.execute("UPDATE notification_cards SET source_generation=source_generation+1")
     elif gate == "revoked":
         led.db.execute("UPDATE notification_cards SET delivery_state='revoked'")
     led.db.commit()
-    out = notify_cards.apply_notification(led, {
+    out = notify_actions.apply_notification(led, {
         "command_id": f"{token}:{'ab' * 8}", "actor": A, "token": token,
         "origin": dict(ORIGIN, message_id="m-9")},
         CFG_OFF if gate == "off" else CFG, now=NOW)
@@ -259,7 +262,7 @@ def test_patient_actions_fit_worst_case_without_global_shortcuts(
                "toggles": {"acked": False, "assigned": False, "has_tasks": True}}
     context = {"source_message_id": 100, "source_hash": f"{100:064x}",
                "extract_ref": {"artifact_id": 1}, "signals": {"synthetic-key": {}}}
-    monkeypatch.setattr(notify_cards, "_meds_message", lambda *a: 100)
+    monkeypatch.setattr(notify_action_context, 'meds_message', lambda *a: 100)
     monkeypatch.setattr(notify_cards, "drug_search_available", lambda db: True)
     post_count = worker_spec.MAX_POST_ACTIONS if (
         kind == "thread" and ((transport == "slack" and in_thread_body)
@@ -339,7 +342,7 @@ def test_task_status_rerenders_the_card(led):
     spec = _spec(led)
     r = _click(led, spec, "tasks", now=NOW + 2)
     done = r["tasks"][0]["transitions"]["done"]["token"]
-    out = notify_cards.apply_notification(led, {
+    out = notify_actions.apply_notification(led, {
         "version": 1, "op": "notification",
         "command_id": f"{done}:{'cd' * 8}", "actor": A, "token": done,
         "origin": dict(ORIGIN, message_id="eph-1")}, CFG, now=NOW + 3)
@@ -417,12 +420,12 @@ def test_roster_falls_back_to_own_station_senders(led):
     _msg(led, 100, sender="佐藤 一郎", org="みどり薬局, 別の薬局")
     _msg(led, 101, sender="訪問 看護", org="あおば訪問看護")
     _msg(led, 102, sender="佐藤 一郎", org="みどり薬局, 別の薬局")
-    assert notify_cards.assignee_choices(led.db) == []    # no identity
+    assert notify_action_context.assignee_choices(led.db) == []    # no identity
     with led.db:
         mcs_signals.record_self_profile(led.db, {
             "sender_id": 9, "name": "薬局 太郎", "professions": [],
             "organizations": ["みどり薬局"]})
-    assert notify_cards.assignee_choices(led.db) == [
+    assert notify_action_context.assignee_choices(led.db) == [
         "薬局 太郎（みどり薬局）", "佐藤 一郎（みどり薬局）"]
 
 

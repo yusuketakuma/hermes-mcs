@@ -1,6 +1,7 @@
 """Posters recorded on a patient's room put that room's own staff first among task assignees."""
 import mcs_signals
 import notify_cards
+import notify_action_context
 from notify_testkit import _msg, _patient, led, pinned_clock  # noqa: F401 - shared fixtures
 
 __all__ = ["led", "pinned_clock"]
@@ -15,12 +16,12 @@ def test_task_assignees_who_posted_in_this_room_come_first(led):
     with led.db:
         mcs_signals.record_self_profile(led.db, {
             "sender_id": 9, "name": "薬局 太郎", "professions": [], "organizations": ["みどり薬局"]})
-    base = notify_cards.assignee_choices(led.db)
-    scoped = notify_cards.assignee_choices(led.db, project_id=1)
+    base = notify_action_context.assignee_choices(led.db)
+    scoped = notify_action_context.assignee_choices(led.db, project_id=1)
     assert base[0] == "薬局 太郎（みどり薬局）" and sorted(base) == sorted(scoped) and len(base) == 3
     assert scoped[0] == "鈴木 二郎（みどり薬局）"
     assert [x for x in scoped if x != scoped[0]] == [x for x in base if x != scoped[0]]   # order kept
-    assert notify_cards.assignee_choices(led.db, project_id=3) == base   # nobody posted there
+    assert notify_action_context.assignee_choices(led.db, project_id=3) == base   # nobody posted there
 
 
 def test_a_namesake_elsewhere_never_jumps_ahead(led):
@@ -36,7 +37,7 @@ def test_a_namesake_elsewhere_never_jumps_ahead(led):
                    "(300,1,902,'同名職員','看護師','別の訪問看護','2026-09-24T08:00',1,'本文',?,'full'),"
                    "(301,1,203,'合成C','薬剤師','合成薬局','2026-09-24T08:01',2,'本文',?,'full')",
                    (f"{300:064x}", f"{301:064x}"))
-    assert notify_cards.assignee_choices(led.db, project_id=1) == [
+    assert notify_action_context.assignee_choices(led.db, project_id=1) == [
         "合成C（合成薬局）", "合成A（合成薬局）", "同名職員（合成薬局）"]
 
 
@@ -49,9 +50,9 @@ def test_a_room_poster_beyond_the_cap_still_comes_first(led):
     led.db.execute("INSERT INTO messages(message_id,project_id,sender_id,sender_name,profession,organization,"
                    "posted_at,posted_at_ts,body_text,content_hash,body_state) VALUES"
                    "(400,1,329,'合成職員29','薬剤師','合成薬局','2026-09-24T08:00',1,'本文',?,'full')", (f"{400:064x}",))
-    got = notify_cards.assignee_choices(led.db, project_id=1)
-    assert got[0] == "合成職員29（合成薬局）" and len(got) == notify_cards.STAFF_CHOICES
-    assert notify_cards.assignee_choices(led.db)[-1] == f"合成職員{notify_cards.STAFF_CHOICES - 1:02d}（合成薬局）"
+    got = notify_action_context.assignee_choices(led.db, project_id=1)
+    assert got[0] == "合成職員29（合成薬局）" and len(got) == notify_action_context.STAFF_CHOICES
+    assert notify_action_context.assignee_choices(led.db)[-1] == f"合成職員{notify_action_context.STAFF_CHOICES - 1:02d}（合成薬局）"
 
 
 def test_thread_names_never_show_an_unknown_date(led):

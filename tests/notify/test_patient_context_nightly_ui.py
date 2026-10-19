@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-import notify_cards
+import notify_actions
 import notify_views
 from notify_testkit import CFG, NOW, ORIGIN, _delivered_card, _token_for, led, pinned_clock
 
@@ -13,7 +13,7 @@ ENABLED = {**CFG, "extract": {"patient_context_nightly": {"enabled": True, "publ
 
 
 def click(led, token, *, actor="discord:1001", now=NOW, cfg=ENABLED):
-    return notify_cards.apply_notification(led, {
+    return notify_actions.apply_notification(led, {
         "command_id": f"{token}:{now}:{actor}", "actor": actor, "token": token,
         "origin": dict(ORIGIN, message_id="m-9")}, cfg, now=now)
 
@@ -142,8 +142,8 @@ def test_replayed_summary_does_not_advance_checkpoint(led):
     token = _token_for(spec, "summary")
     req = {"command_id": "same-view", "actor": "discord:1001", "token": token,
            "origin": dict(ORIGIN, message_id="m-9")}
-    first = notify_cards.apply_notification(led, req, ENABLED, now=NOW)
-    second = notify_cards.apply_notification(led, req, ENABLED, now=NOW + 30)
+    first = notify_actions.apply_notification(led, req, ENABLED, now=NOW)
+    second = notify_actions.apply_notification(led, req, ENABLED, now=NOW + 30)
     assert first["context_since"] == second["context_since"] == 0
     row = led.db.execute("SELECT content FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
     assert json.loads(row[0])["at"] == NOW
@@ -156,9 +156,9 @@ def test_resend_of_a_later_reopening_keeps_that_openings_baseline(led, later):
     spec = _delivered_card(led)
     req = {"command_id": "same-view", "actor": "discord:1001", "token": _token_for(spec, "summary"),
            "origin": dict(ORIGIN, message_id="m-9")}
-    first = notify_cards.apply_notification(led, req, ENABLED, now=NOW)
-    reopened = notify_cards.apply_notification(led, req, ENABLED, now=NOW + later)
-    resent = notify_cards.apply_notification(led, req, ENABLED, now=NOW + later + 30)
+    first = notify_actions.apply_notification(led, req, ENABLED, now=NOW)
+    reopened = notify_actions.apply_notification(led, req, ENABLED, now=NOW + later)
+    resent = notify_actions.apply_notification(led, req, ENABLED, now=NOW + later + 30)
     assert first["context_since"] == 0 and reopened["context_since"] == NOW
     assert resent["context_since"] == reopened["context_since"]
     row = led.db.execute("SELECT content FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
@@ -224,8 +224,8 @@ def test_later_click_by_same_user_on_same_card_advances_checkpoint(led):
     # adapters derive the command id from token and actor only, so repeat clicks share it
     req = {"command_id": f"{token}:{envelopes.actor_hash(actor)}", "actor": actor, "token": token,
            "origin": dict(ORIGIN, message_id="m-9")}
-    first = notify_cards.apply_notification(led, req, ENABLED, now=NOW)
-    later = notify_cards.apply_notification(led, req, ENABLED, now=NOW + 2 * 86400)
+    first = notify_actions.apply_notification(led, req, ENABLED, now=NOW)
+    later = notify_actions.apply_notification(led, req, ENABLED, now=NOW + 2 * 86400)
     assert first["context_since"] == 0 and later["context_since"] == NOW
     row = led.db.execute("SELECT content FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
     assert json.loads(row[0])["at"] == NOW + 2 * 86400

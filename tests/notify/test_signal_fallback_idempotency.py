@@ -219,3 +219,54 @@ def test_gc_route_witness_contains_no_content_and_is_not_replayed(led):
                        (json.dumps({**witness, "text": "SYNTHETIC-CONTENT-CANARY"}),))
     notify_cards.gc(led, CFG, now=LATE + 3)
     assert "SYNTHETIC-CONTENT-CANARY" not in (_latest_render(led)["spec_json"] or "")
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["settled", "pending-parts"])
+def test_route_move_returns_card_effect_and_keeps_caller_transaction(led, pending):
+    created = _fallback(led, CFG)
+    _land(led, created, CFG, finish=not pending)
+    card = _card(led)
+    original = dict(card)
+    tokens = [tuple(row) for row in led.db.execute(
+        "SELECT token,expires_at FROM notification_action_tokens ORDER BY token")]
+    led.db.execute("BEGIN IMMEDIATE")
+    try:
+        moved, changed, wait = notify_cards._move_signal(
+            led.db, card, "synthetic-new-source-thread", LATE + 10)
+        assert card == original
+        assert led.db.in_transaction
+        if pending:
+            assert not changed and wait
+            assert moved == original and _card(led) == original
+        else:
+            assert changed and not wait
+            assert moved is not card
+            assert moved["message_id"] is None
+            assert moved["thread_id"] == "synthetic-new-source-thread"
+            assert moved["thread_state"] == "created"
+            assert moved["delivery_state"] == "pending"
+            persisted = _card(led)
+            for key in ("message_id", "thread_id", "thread_state", "delivery_state"):
+                assert persisted[key] == moved[key]
+            assert all(row[0] <= LATE + 10 for row in led.db.execute(
+                "SELECT expires_at FROM notification_action_tokens WHERE card_id=1"))
+    finally:
+        led.db.rollback()
+    assert _card(led) == original
+    assert [tuple(row) for row in led.db.execute(
+        "SELECT token,expires_at FROM notification_action_tokens ORDER BY token")] == tokens
+
+
+def test_signal_binding_distinguishes_wait_from_unchanged_route(led):
+    _seed_thread(led)
+    _signal_row(led, "synthetic-transition", stype="transition_reconciliation", mids=[101])
+    event = _intent(led, "signal", payload={"signal_keys": ["synthetic-transition"], "project_id": 1})
+    _dispatch(led, event, CFG)
+    card = _card(led)
+    original = dict(card)
+    with led.db:
+        early, changed, wait = notify_cards._bind_signal_thread(led.db, card, CFG, NOW + 1)
+        assert early == original and not changed and wait
+        late, changed, wait = notify_cards._bind_signal_thread(led.db, card, CFG, LATE)
+        assert late == original and not changed and not wait
+    assert card == original

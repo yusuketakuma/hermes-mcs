@@ -3,7 +3,7 @@ import clinical_display
 import json
 import pytest
 import extract_llm
-import notify_cards
+import notify_action_context
 import structured_view
 from extract_testkit import _ledger, _message, _hash
 
@@ -162,7 +162,7 @@ def test_medication_presence_reuses_scope_without_dictionary_reads(
     monkeypatch.setattr(structured_view, "_drug_refs",
                         lambda *args: pytest.fail("presence reads dictionary annotations"))
     before = store.db.total_changes
-    assert list(notify_cards._meds_messages(
+    assert list(notify_action_context.meds_messages(
         store.db, {"kind": "notice"}, {"source_message_id": 1})) == ([1] if wanted else [])
     assert store.db.total_changes == before
 

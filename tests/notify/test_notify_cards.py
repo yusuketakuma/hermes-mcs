@@ -12,6 +12,8 @@ import sqlite3
 import pytest
 
 import notify_cards
+import notify_action_tokens
+import notify_actions
 import notify_reconcile
 import notify_render
 import notify_transport
@@ -318,7 +320,7 @@ def test_ack_assign_persist_and_defer_retired(led, tmp_path):
         tok = _token_for(spec, action)
         req = _notif(tok, actor="discord:1001")
         req["origin"] = dict(ORIGIN, message_id="m-9")
-        r = notify_cards.apply_notification(led, req, CFG, now=NOW)
+        r = notify_actions.apply_notification(led, req, CFG, now=NOW)
         assert r["outcome"] == "applied", (action, r)
         assert r["action"] == action
         # applied state must re-render immediately — a click can't wait
@@ -343,12 +345,12 @@ def test_ack_assign_persist_and_defer_retired(led, tmp_path):
     _begin(led, latest, n=2)
     _receipt(led, latest, f"{2:016x}", message_id="m-9", n=10)
     _settle_bodies(led, latest)
-    tok = notify_cards._mint_token(
+    tok = notify_action_tokens.mint(
         led.db, card["card_id"], "defer", None,
         {"source_gen": card["source_generation"]}, NOW)
     led.db.commit()
     before = _latest_render(led)["render_rev"]
-    r = notify_cards.apply_notification(
+    r = notify_actions.apply_notification(
         led, {**_notif(tok), "origin": dict(ORIGIN, message_id="m-9")},
         CFG, now=NOW)
     assert r["outcome"] == "rejected" and r["error"] == "action_retired"
@@ -379,7 +381,7 @@ def test_body_action_returns_full_text(led, tmp_path):
         "SELECT COUNT(*) c FROM notification_renders").fetchone()["c"]
     req = _notif(tok)
     req["origin"] = dict(ORIGIN, message_id="m-9")
-    r = notify_cards.apply_notification(led, req, CFG, now=NOW)
+    r = notify_actions.apply_notification(led, req, CFG, now=NOW)
     assert r["outcome"] == "applied" and r["action"] == "body"
     assert r["title"].endswith("本文")
     assert long_body in r["body"] and "短い返信" in r["body"]
@@ -451,7 +453,7 @@ def test_card_body_oversized_headers_and_full_action(led, tmp_path):
          / (render["delivery_id"] + ".json")).read_text())
     req = _notif(_token_for(spec, "body"))
     req["origin"] = dict(ORIGIN, message_id="m-9")
-    r = notify_cards.apply_notification(led, req, CFG, now=NOW)
+    r = notify_actions.apply_notification(led, req, CFG, now=NOW)
     assert r["outcome"] == "applied" and r["action"] == "body"
     assert "（省略" in r["body"] and "長い記録。" in r["body"]
     assert len(r["body"]) <= notify_render.BODY_MAX_CHARS + 80
@@ -710,7 +712,7 @@ def test_body_action_signal_full_evidence(led, tmp_path):
     tok = _token_for(spec, "body")
     req = _notif(tok)
     req["origin"] = dict(ORIGIN, message_id="m-9")
-    r = notify_cards.apply_notification(led, req, CFG, now=NOW)
+    r = notify_actions.apply_notification(led, req, CFG, now=NOW)
     assert r["outcome"] == "applied" and r["action"] == "body"
     # signal notice + the FULL evidence body — the card shows only a
     # 120-char snippet of the quote
@@ -725,7 +727,7 @@ def test_action_scope_and_stale_source_rejected(led, tmp_path):
     bad = _notif(tok)
     bad["origin"] = dict(ORIGIN, channel_id="other-ch")
     bad["command_id"] = f"{tok}:{'cd' * 8}"
-    r = notify_cards.apply_notification(led, bad, CFG, now=NOW)
+    r = notify_actions.apply_notification(led, bad, CFG, now=NOW)
     assert r["outcome"] == "rejected" and r["error"] == "scope_mismatch"
     # mutate source -> token's need_source_gen goes stale
     _msg(led, 103, 1, parent=100)
@@ -733,13 +735,13 @@ def test_action_scope_and_stale_source_rejected(led, tmp_path):
     good = _notif(tok)
     good["origin"] = dict(ORIGIN, message_id="m-9")
     good["command_id"] = f"{tok}:{'ef' * 8}"
-    r = notify_cards.apply_notification(led, good, CFG, now=NOW)
+    r = notify_actions.apply_notification(led, good, CFG, now=NOW)
     assert r["outcome"] == "rejected" and r["error"] == "stale_source"
     # a fresh token still works
     spec2 = json.loads(
         (tmp_path / "data" / "discord_render"
          / (_latest_render(led)["delivery_id"] + ".json")).read_text())
-    r = notify_cards.apply_notification(
+    r = notify_actions.apply_notification(
         led, {**_notif(_token_for(spec2, "assign")),
               "command_id": f"{_token_for(spec2, 'assign')}:{'ef' * 8}",
               "origin": dict(ORIGIN, message_id="m-9")},
@@ -749,14 +751,14 @@ def test_action_scope_and_stale_source_rejected(led, tmp_path):
 
 def test_unknown_and_expired_tokens(led, tmp_path):
     card, spec = _delivered_card(led, tmp_path)
-    r = notify_cards.apply_notification(
+    r = notify_actions.apply_notification(
         led, _notif("f" * 32), CFG, now=NOW)
     assert r["outcome"] == "rejected" and r["error"] == "unknown_token"
     tok = _token_for(spec, "assign")
     led.db.execute("UPDATE notification_action_tokens SET expires_at=? "
                    "WHERE token=?", (NOW - 1, tok))
     led.db.commit()
-    r = notify_cards.apply_notification(led, _notif(tok), CFG, now=NOW)
+    r = notify_actions.apply_notification(led, _notif(tok), CFG, now=NOW)
     assert r["outcome"] == "rejected" and r["error"] == "token_expired"
 
 
@@ -1196,7 +1198,7 @@ def test_notification_receipt_reader(led, tmp_path):
     card, spec = _delivered_card(led, tmp_path)
     tok = _token_for(spec, "ack")
     cid = f"{tok}:{'ab' * 8}"
-    notify_cards.apply_notification(
+    notify_actions.apply_notification(
         led, {**_notif(tok), "origin": dict(ORIGIN, message_id="m-9")},
         CFG, now=NOW)
     snap_dir = tmp_path / "snap"
@@ -1304,11 +1306,11 @@ def test_refresh_reissues_from_origin(led, tmp_path):
     req = {"version": 1, "op": "refresh", "command_id": _uuid(40),
            "actor": "nurse-1",
            "origin": dict(ORIGIN, message_id="m-9")}
-    r = notify_cards.apply_refresh(led, req, CFG, now=NOW)
+    r = notify_actions.apply_refresh(led, req, CFG, now=NOW)
     assert r["outcome"] == "applied"
     assert _latest_render(led)["render_rev"] == rev_before + 1
     # unknown origin -> rejected
-    r = notify_cards.apply_refresh(led, {
+    r = notify_actions.apply_refresh(led, {
         "version": 1, "op": "refresh", "command_id": _uuid(41),
         "actor": "nurse-1", "origin": dict(ORIGIN, message_id="nope")},
         CFG, now=NOW)
@@ -1348,7 +1350,7 @@ def test_page_nav_issues_new_render_and_tokens(led, tmp_path):
     assert spec2["parts"]["pages"] > 1
     # a card opens on its newest page — only 'prev' is actionable there
     tok = _token_for(spec2, "prev")
-    r = notify_cards.apply_notification(
+    r = notify_actions.apply_notification(
         led, {**_notif(tok), "command_id": f"{tok}:{'ab' * 8}",
               "origin": dict(ORIGIN, message_id="m-9")}, CFG, now=NOW)
     assert r["outcome"] == "applied" and r["action"] == "page"
@@ -1507,7 +1509,7 @@ def test_refresh_on_revoked_card_rejected(led, tmp_path):
     notify_cards.revoke_card(led.db, card["card_id"], NOW)
     led.db.commit()
     before = dict(_latest_render(led))
-    r = notify_cards.apply_refresh(led, {
+    r = notify_actions.apply_refresh(led, {
         "version": 1, "op": "refresh", "command_id": _uuid(42),
         "actor": "nurse-1",
         "origin": dict(ORIGIN, message_id="m-9")}, CFG, now=NOW)
@@ -1544,7 +1546,7 @@ def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
     assert ctx["signals"]["sig-modal"]["artifact_id"] > 0
     for i, action in enumerate(("request", "dismiss")):
         tok = _token_for(spec, action)
-        r = notify_cards.apply_notification(
+        r = notify_actions.apply_notification(
             led, {**_notif(tok, n=70 + i),
                   "command_id": f"{tok}:{(70 + i):016x}",
                   "origin": dict(ORIGIN, message_id="signal-reply", thread_id="original-thread")},
@@ -1607,13 +1609,13 @@ def test_origin_must_match_bound_message(led, tmp_path):
     deployment scope matches (token alone resolves the card)."""
     card, spec = _delivered_card(led, tmp_path)
     tok = _token_for(spec, "assign")
-    r = notify_cards.apply_notification(
+    r = notify_actions.apply_notification(
         led, {**_notif(tok),
               "origin": dict(ORIGIN, message_id="other-msg")},
         CFG, now=NOW)
     assert r["outcome"] == "rejected" and r["error"] == "origin_mismatch"
     # the bound message's own interaction still applies
-    r = notify_cards.apply_notification(
+    r = notify_actions.apply_notification(
         led, {**_notif(tok), "command_id": f"{tok}:{'cd' * 8}",
               "origin": dict(ORIGIN, message_id="m-9")},
         CFG, now=NOW)
@@ -1721,7 +1723,7 @@ def test_gc_removes_old_cmd_results(led, tmp_path):
     old.write_text("{}")
     fresh = res_dir / "fresh.json"
     fresh.write_text("{}")
-    stale = notify_cards.TOKEN_WRITE_S + 100
+    stale = notify_action_tokens.TOKEN_WRITE_S + 100
     os.utime(old, (NOW - stale, NOW - stale))
     out = notify_cards.gc(led, CFG, now=NOW)
     assert out["result_files"] == 1
@@ -1737,7 +1739,7 @@ def test_gc_cmd_results_picks_by_age_not_name(led, tmp_path):
         (res_dir / f"0000-{i}.json").write_text("{}")
     old = res_dir / "ffff.json"
     old.write_text("{}")
-    stale = notify_cards.TOKEN_WRITE_S + 100
+    stale = notify_action_tokens.TOKEN_WRITE_S + 100
     os.utime(old, (NOW - stale, NOW - stale))
     out = notify_cards.gc(led, CFG, now=NOW, limit=2)
     assert out["result_files"] == 1
@@ -2013,7 +2015,7 @@ def test_refresh_rejects_other_deployment_scope(led, tmp_path, field):
     rev = _latest_render(led)['render_rev']
     origin = dict(ORIGIN, message_id='m-9')
     origin[field] = 'other'
-    out = notify_cards.apply_refresh(led, {
+    out = notify_actions.apply_refresh(led, {
         'version': 1, 'op': 'refresh', 'command_id': _uuid(900),
         'actor': 'nurse-1', 'origin': origin}, CFG, now=NOW)
     assert out['outcome'] == 'rejected'
@@ -2251,16 +2253,16 @@ def test_body_replay_uses_live_source_and_revocation(led, tmp_path):
     card, spec = _delivered_card(led, tmp_path, cfg=NO_THREAD_CFG)
     req = _notif(_token_for(spec, 'body'))
     req['origin'] = dict(ORIGIN, message_id='m-9')
-    first = notify_cards.apply_notification(led, req, CFG, now=NOW)
+    first = notify_actions.apply_notification(led, req, CFG, now=NOW)
     assert '本文' in first['body']
     led.db.execute("UPDATE messages SET body_state='deleted' WHERE project_id=1")
     led.db.commit()
-    second = notify_cards.apply_notification(led, req, CFG, now=NOW + 1)
+    second = notify_actions.apply_notification(led, req, CFG, now=NOW + 1)
     assert '（削除された投稿）' in second['body']
     assert ': 本文' not in second['body']
     notify_cards.revoke_card(led.db, card['card_id'], NOW + 2)
     led.db.commit()
-    third = notify_cards.apply_notification(led, req, CFG, now=NOW + 3)
+    third = notify_actions.apply_notification(led, req, CFG, now=NOW + 3)
     assert third['outcome'] == 'rejected'
     assert 'body' not in third
 
@@ -2301,7 +2303,7 @@ def test_body_text_not_retained_in_receipts_or_snapshot(led, tmp_path):
     led.db.commit()
     req = {**_notif(_token_for(spec, "body")),
            "origin": dict(ORIGIN, message_id="m-9")}
-    first = notify_cards.apply_notification(led, req, CFG, now=NOW)
+    first = notify_actions.apply_notification(led, req, CFG, now=NOW)
     assert first["outcome"] == "applied" and marker in first["body"]
     stored = led.db.execute(
         "SELECT receipt_json FROM command_receipts WHERE command_id=?",
@@ -2332,7 +2334,7 @@ def test_body_text_not_retained_in_receipts_or_snapshot(led, tmp_path):
     finally:
         snap.close()
     # a re-click still answers from the live (now deleted) source
-    again = notify_cards.apply_notification(led, req, CFG, now=NOW + 1)
+    again = notify_actions.apply_notification(led, req, CFG, now=NOW + 1)
     assert marker not in again["body"]
 
 
@@ -2558,7 +2560,7 @@ def _tasks_token(led, spec):
     ack = led.db.execute(
         "SELECT * FROM notification_action_tokens WHERE token=?",
         (_token_for(spec, "ack"),)).fetchone()
-    tok = notify_cards._mint_token(
+    tok = notify_action_tokens.mint(
         led.db, ack["card_id"], "tasks", None,
         {"source_gen": ack["need_source_gen"],
          "manifest_id": ack["need_manifest_id"],
@@ -2571,7 +2573,7 @@ def _tasks_click(led, spec, msg_id="m-9", suffix="ab"):
     """Each click needs a fresh command_id — a repeated one replays the
     stored receipt by design."""
     tok = _tasks_token(led, spec)
-    return notify_cards.apply_notification(
+    return notify_actions.apply_notification(
         led, {**_notif(tok), "command_id": f"{tok}:{suffix * 8}",
               "origin": dict(ORIGIN, message_id=msg_id)},
         CFG, now=NOW)
@@ -2643,7 +2645,7 @@ def test_task_status_transition_and_stale_reject(led, tmp_path):
     tr = r["tasks"][0]["transitions"]["in_progress"]
     # the click arrives on the ephemeral list message — not the card's
     # bound message — which the token's "ephemeral" flag legitimizes
-    out = notify_cards.apply_notification(
+    out = notify_actions.apply_notification(
         led, {**_notif(tr["token"]),
               "origin": dict(ORIGIN, message_id="eph-1")},
         CFG, now=NOW)
@@ -2653,7 +2655,7 @@ def test_task_status_transition_and_stale_reject(led, tmp_path):
         (rid,)).fetchone()
     assert row["status"] == "in_progress" and row["revision"] == 2
     # the same view token is now stale — rejected, never double-applied
-    out2 = notify_cards.apply_notification(
+    out2 = notify_actions.apply_notification(
         led, {**_notif(tr["token"], n=21),
               "command_id": f"{tr['token']}:{'cd' * 8}",
               "origin": dict(ORIGIN, message_id="eph-1")},
@@ -2666,7 +2668,7 @@ def test_task_status_done_absorbs_and_terminal_rejected(led, tmp_path):
     rid = _request(led, src_mid=100)
     r = _tasks_click(led, spec)
     done_tok = r["tasks"][0]["transitions"]["done"]["token"]
-    out = notify_cards.apply_notification(
+    out = notify_actions.apply_notification(
         led, {**_notif(done_tok),
               "origin": dict(ORIGIN, message_id="eph-1")},
         CFG, now=NOW)
@@ -2678,12 +2680,12 @@ def test_task_status_done_absorbs_and_terminal_rejected(led, tmp_path):
     # defensive: a hand-minted token pinning the live revision still
     # refuses to move a terminal row (the table is the authority)
     rid2 = _request(led, src_mid=101, status="cancelled")
-    tok = notify_cards._mint_token(
+    tok = notify_action_tokens.mint(
         led.db, card["card_id"], "task_status",
         {"request_id": rid2, "status": "done", "ephemeral": True},
         {"request_rev": 1}, NOW)
     led.db.commit()
-    out2 = notify_cards.apply_notification(
+    out2 = notify_actions.apply_notification(
         led, {**_notif(tok),
               "origin": dict(ORIGIN, message_id="eph-1")},
         CFG, now=NOW)
@@ -2696,7 +2698,7 @@ def test_task_status_rejects_non_ephemeral_mismatch(led, tmp_path):
     minted for an ephemeral surface may arrive on another message."""
     card, spec = _delivered_card(led, tmp_path)
     tok = _tasks_token(led, spec)
-    out = notify_cards.apply_notification(
+    out = notify_actions.apply_notification(
         led, {**_notif(tok), "origin": dict(ORIGIN, message_id="eph-1")},
         CFG, now=NOW)
     assert out["outcome"] == "rejected" \

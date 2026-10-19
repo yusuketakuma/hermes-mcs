@@ -6,6 +6,8 @@ import json
 import pytest
 
 import notify_cards
+import notify_action_context
+import notify_actions
 import notify_flush
 import notify_render
 from notify_testkit import (
@@ -62,7 +64,7 @@ def test_latest_invalid_signal_never_revives_old_display_or_actions(
     assert model["shown"] == []
     assert "note " + key not in notify_render.display_text(model)
     assert "INVALID-LATEST-CANARY" not in notify_render.display_text(model)
-    assert notify_cards._render_context(led.db, card) == {}
+    assert notify_action_context.render_context(led.db, card) == {}
     assert "note " + key not in notify_render.card_body_text(
         led.db, card, {"shown": json.dumps([key])})[1]
 
@@ -130,7 +132,7 @@ def test_signal_card_rejects_foreign_artifact_and_context(led):
         "signal_keys": ["foreign-signal"], "project_id": 1}))
     card = _card(led)
     assert notify_render.card_content(led.db, card)["shown"] == []
-    assert notify_cards._render_context(led.db, card) == {}
+    assert notify_action_context.render_context(led.db, card) == {}
 
 
 def test_long_thread_title_keeps_spec_deliverable(led):
@@ -243,7 +245,7 @@ def test_signal_evidence_change_invalidates_old_action(led, change):
     # nevertheless changed and must invalidate the button immediately.
     request = _notif(_token_for(spec, "assign"))
     request["origin"] = ORIGIN
-    result = notify_cards.apply_notification(led, request, CFG, now=NOW + 1)
+    result = notify_actions.apply_notification(led, request, CFG, now=NOW + 1)
     assert result["outcome"] == "rejected" and result["error"] == "stale_source"
 
 

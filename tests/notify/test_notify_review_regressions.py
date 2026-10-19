@@ -1,5 +1,6 @@
 import json
 import notify_cards
+import notify_actions
 import notify_render
 from notify_testkit import (led, _settle_bodies, _seed_thread, _extract, _dispatch, _intent, _card, _latest_render, _begin, _receipt, _notif, _token_for, CFG, NOW)
 
@@ -32,5 +33,5 @@ def test_old_write_token_rejects_changed_extraction(led):
     attempt = _begin(led, render)
     _receipt(led, render, attempt["attempt_id"], message_id="mid-1")
     _extract(led, 100, {"summary": "合成の訂正済み要約"}, kind="extract_llm")
-    result = notify_cards.apply_notification(led, _notif(_token_for(spec, "assign")), CFG, now=NOW+1)
+    result = notify_actions.apply_notification(led, _notif(_token_for(spec, "assign")), CFG, now=NOW+1)
     assert result["outcome"] == "rejected" and result["error"] == "stale_source"

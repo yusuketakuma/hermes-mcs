@@ -10,6 +10,9 @@ import sys
 import pytest
 
 import notify_cards
+import notify_action_context
+import notify_action_tokens
+import notify_actions
 import notify_cmds
 import notify_flush
 import notify_render
@@ -189,10 +192,10 @@ def test_tasks_view_is_live_and_not_persisted(led):
     req = {"version": 1, "op": "notification",
            "command_id": f"{tok}:{'ab' * 8}", "actor": CLICKER,
            "token": tok, "origin": dict(ORIGIN, message_id="m-9")}
-    first = notify_cards.apply_notification(led, dict(req), CFG, now=NOW + 2)
+    first = notify_actions.apply_notification(led, dict(req), CFG, now=NOW + 2)
     assert [t["title"] for t in first["tasks"]] == ["合成タスク1"]
     kit._add_request(led, title="合成タスク2")
-    again = notify_cards.apply_notification(led, dict(req), CFG, now=NOW + 3)
+    again = notify_actions.apply_notification(led, dict(req), CFG, now=NOW + 3)
     assert sorted(t["title"] for t in again["tasks"]) == ["合成タスク1", "合成タスク2"]
     stored = led.db.execute("SELECT receipt_json FROM command_receipts "
                             "WHERE command_id=?", (req["command_id"],)).fetchone()
@@ -205,14 +208,14 @@ def test_tasks_view_is_live_and_not_persisted(led):
 def test_extract_ref_skips_message_shown_from_canonical_projection(led):
     _seed_thread(led)
     _llm_extract(led, 101, {"meds": []})
-    assert notify_cards._extract_ref(led.db, 1, root=100)["message_id"] == 101
+    assert notify_action_context._extract_ref(led.db, 1, root=100)["message_id"] == 101
     h = led.db.execute("SELECT content_hash FROM messages WHERE message_id=101"
                        ).fetchone()[0]
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
         "created_at) VALUES('canonical_projection',1,101,'{}','test',?,?)",
         (json.dumps({"hash": h, "projection_version": PROJECTION_VERSION}), NOW))
-    assert notify_cards._extract_ref(led.db, 1, root=100) is None
+    assert notify_action_context._extract_ref(led.db, 1, root=100) is None
 
 
 # 7 ---------------------------------------------------------------------
@@ -274,8 +277,8 @@ def test_view_results_expire_after_an_hour(led):
     assert "body" in json.loads(open(path, encoding="utf-8").read())
     import time
     age = time.time() - os.stat(path).st_mtime
-    assert notify_cards.TOKEN_WRITE_S - notify_cards.LIVE_RESULT_S - 60 < age
-    notify_cards.gc(led, CFG, now=time.time() + notify_cards.LIVE_RESULT_S + 1)
+    assert notify_action_tokens.TOKEN_WRITE_S - notify_actions.LIVE_RESULT_S - 60 < age
+    notify_cards.gc(led, CFG, now=time.time() + notify_actions.LIVE_RESULT_S + 1)
     assert not os.path.exists(path)
 
 

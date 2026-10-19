@@ -1,4 +1,5 @@
 """Confirm previews name the render-pinned patient and post (display only)."""
+import notify_action_context
 import pytest
 
 from adapters.common.text import preview_text
@@ -22,7 +23,6 @@ def test_discord_markdown_in_a_patient_name_stays_literal():
 
 
 def test_the_card_context_pins_the_target(tmp_path):
-    import notify_cards
     from notify_testkit import _msg, _patient
     from ledger import Ledger
     led = Ledger(str(tmp_path / "m.db"))
@@ -30,7 +30,7 @@ def test_the_card_context_pins_the_target(tmp_path):
         _patient(led, 1, name="合成 花子")
         _msg(led, 100, pid=1)
         card = {"kind": "thread", "root_message_id": 100, "project_id": 1}
-        ctx = notify_cards._render_context(led.db, card)
+        ctx = notify_action_context.render_context(led.db, card)
         assert ctx["target"].startswith("合成 花子 · ") and ctx["target"].endswith("の投稿")
     finally:
         led.close()

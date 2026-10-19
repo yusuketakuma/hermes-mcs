@@ -1,20 +1,27 @@
 {
   "category": "changed",
   "title": "通知の配送計画と認可・復旧の責務を分離",
-  "summary": "通知の内容・順序・患者境界・人承認条件を維持し、配送する本文・添付の計画、保存済みscopeの照会、送信証拠の読取りを共通の正本へ整理しました。",
+  "summary": "通知の内容・順序・患者境界・人承認条件を維持し、配送計画、カード操作と閲覧用の状態、承認対象の文脈、送信証拠の読取りをそれぞれの正本へ整理しました。",
   "upgrade": "設定操作は不要です。カード配置世代・schema・配送仕様は変わりません。稼働workerへの反映は従来の再起動手順が必要ですが、この作業では配備・再起動を実施しません。",
   "details": [
     "notify_parts が sealed part の計画と状態SQLを所有し、DB接続とtransactionは呼出側から借用する。",
     "待機中投稿と部品予算によるholdを明示した引数・返値へ移し、card辞書への隠れた受渡しを除去した。",
     "notify_scope の保存済みカード・患者集合・scope照会を認可と配送側が共有し、表示projectionも正本の公開APIへ直接依存する。",
     "notify_journal の読取り専用scannerへ復旧と人承認による証拠検証を集約し、notify_transportとnotify_reconcileの循環を解消した。",
-    "人承認による部品解決は同じtransaction/savepointを借用する明示APIを使い、spec保存後commit・atomic publish・公開metadata更新の順序を維持した。"
+    "人承認による部品解決は同じtransaction/savepointを借用する明示APIを使い、spec保存後commit・atomic publish・公開metadata更新の順序を維持した。",
+    "signalの配送先変更は更新後card・変更有無・待機状態を返値で明示し、入力辞書を変更せず同じtransaction内のtoken失効と再発行順序を維持する。",
+    "notify_actions がカード操作・private閲覧のcheckpoint・command receiptのtransactionを所有し、notify_action_tokensの発行契約とnotify_action_contextの読取り専用source pinをカード発行側と共有する。",
+    "カード操作とrefreshの呼出元・テストpatch先は新正本へ直接移行し、旧moduleへのprivate再exportや操作側へ戻るcallbackを残さない。"
   ],
   "refs": [
     "mcs/notify/notify_parts.py",
     "mcs/notify/notify_scope.py",
     "mcs/notify/notify_journal.py",
     "mcs/notify/notify_transport.py",
-    "mcs/notify/notify_cards.py"
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_actions.py",
+    "mcs/notify/notify_action_tokens.py",
+    "mcs/notify/notify_action_context.py",
+    "mcs/notify/notify_cmds.py"
   ]
 }

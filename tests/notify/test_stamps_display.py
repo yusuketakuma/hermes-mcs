@@ -1,4 +1,5 @@
 """自分の投稿への反応・自分宛メンション・しおり等の表示（読取り専用・完全合成）。"""
+import notify_actions
 import notify_parts
 import json
 import asyncio
@@ -675,7 +676,7 @@ def test_stamp_actor_refresh_keeps_human_confirmation_and_source_identity(led, m
     origin = {k: spec["delivery"][k] for k in ("profile", "application_id", "channel_id", "guild_id")}
     origin["message_id"] = "m-1"
     req = envelopes.notification(_token_for(spec, "ack"), "discord:1001", origin)
-    assert notify_cards.apply_notification(led, req, CFG, now=NOW)["outcome"] == "applied"
+    assert notify_actions.apply_notification(led, req, CFG, now=NOW)["outcome"] == "applied"
     _stamp_settle(led, _latest_render(led))
     before = _card(led)
     led.save_reaction_actors(100, [{"actor_id": OTHER, "reaction_type": "viewed", "name": "合成後着"}],

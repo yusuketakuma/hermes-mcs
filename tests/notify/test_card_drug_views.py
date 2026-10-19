@@ -9,6 +9,7 @@ import pytest
 
 import drug_map
 import notify_cards
+import notify_actions
 from notify_testkit import (
     CFG, CLICKER, MED, NOW, ORIGIN, _deliver, _dispatch, _drug_card, _drug_click, _extract,
     _intent, _llm_extract, _seed_thread, _spec, led, pinned_clock)
@@ -283,7 +284,7 @@ def test_refresh_from_thread_requires_trusted_body_and_existing_scope(led, fault
         origin["channel_id"] = "other-channel"
     elif fault == "foreign_guild":
         origin["guild_id"] = "other-guild"
-    result = notify_cards.apply_refresh(led, {"version": 1, "op": "refresh",
+    result = notify_actions.apply_refresh(led, {"version": 1, "op": "refresh",
         "command_id": "11111111-1111-4111-8111-111111111111", "actor": CLICKER,
         "origin": origin}, CFG, now=NOW)
     assert result["error"] == error

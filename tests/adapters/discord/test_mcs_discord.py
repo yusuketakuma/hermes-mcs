@@ -25,6 +25,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import ledger as _ledger
 import notify_cards
+import notify_render
+import notify_action_tokens
+import notify_actions
 import notify_transport
 import notify_cmds
 
@@ -2323,7 +2326,7 @@ def test_thread_body_send_failure_only_logs(world, monkeypatch):
         "SELECT error_code FROM notification_render_parts WHERE kind='body_part'")]
     assert errors and set(errors) == {"http_500"}
     before = world.led.db.execute("SELECT count(*) FROM notification_renders").fetchone()[0]
-    notify_cards.apply_refresh(world.led, {
+    notify_actions.apply_refresh(world.led, {
         "command_id": "00000000-0000-4000-8000-00000000f001", "actor": "discord:1001",
         "origin": {"profile": "mcs", "application_id": "1", "guild_id": "7",
                    "channel_id": "42", "message_id": world.card()["message_id"]}}, CFG)
@@ -2383,7 +2386,7 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         assert "📋 要約" not in body and "解析更新中" not in body
         _, current_spec = world.spec()
         assert current_spec["delivery"]["thread_id"] == str(original_thread_id)
-        assert "要約 処理待ち" in notify_cards.card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
+        assert "要約 処理待ち" in notify_render.card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
         assert "要約 処理待ち" in "\n".join(item.get("text", "") for item in current_spec["parts"]["containers"])
 
         n = len(thread.sent)
@@ -2961,7 +2964,7 @@ def test_old_defer_button_answers_retired(world):
     worker, reg, bot, spec = _delivered(world)
     msg = bot.channels[42].sent[0]
     card = world.card()
-    tok = notify_cards._mint_token(world.led.db, card["card_id"], "defer",
+    tok = notify_action_tokens.mint(world.led.db, card["card_id"], "defer",
                                    None, {}, NOW)
     world.led.db.commit()
     reg.put_tokens({tok: {"action": "defer", "card_key": card["card_key"],
