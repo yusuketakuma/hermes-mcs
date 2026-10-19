@@ -114,9 +114,20 @@ _CLINICAL_OWNER = (r"症状|状態|体調|意識|呼吸|体温|血圧|収縮期|
 _NAMED_PERSON = r"[ぁ-んァ-ヶ一-龥A-Za-z0-9]{1,16}(?:さん|様)"
 _COMPOUND_PERSON = rf"(?:{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:ご本人|本人)"
 _OWNER_MODIFIER = r"(?:(?:現在|以前|過去|本日)の|強い|弱い|激しい|軽い)*"
+# Vital labels and bare readings a person can own without a particle (ご家族P80, 妻72);
+# a count (家族2名, 娘さん3人) or an age is not a reading.
+_VITAL_OWNER = (r"(?:体温|BT|KT|脈拍?|心拍|HR|(?<![A-Za-z])P(?![A-Za-z])|呼吸|RR|血圧|BP|"
+                r"SpO2|SPO2|Spo2|酸素|血糖|BS|Glu)")
+_READING_OWNER = r"[0-9０-９]+(?:[.．][0-9０-９]+)?(?![0-9０-９.．]|[ \t　]*(?:名|人|歳|才|か?月|ヶ月|年|日|時|分|回目|件|階|号|番|代))"
 _PERSON = re.compile(
     rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|私|自分|{_NAMED_PERSON})"
-    rf"(?P<link>について|の{_OWNER_MODIFIER}(?:{_CLINICAL_OWNER})|[ \t　]+(?={_CLINICAL_OWNER})|に対して|に対し|への|には|に(?={_CLINICAL_OWNER})|は|が|も|を|から|より|[:：])", re.I)
+    rf"(?P<link>について|の{_OWNER_MODIFIER}(?:{_CLINICAL_OWNER}|{_VITAL_OWNER})|[ \t　]+(?={_CLINICAL_OWNER})"
+    rf"|に対して|に対し|への|には|に(?={_CLINICAL_OWNER})|は|が|も|を|から|より|[:：])", re.I)
+# The same owner with no particle (ご家族P80, 本人72 家族80); a person word inside
+# another word (大丈夫, 工夫, 分母) is not a person, so it must start a word.
+_BARE_OWNER = re.compile(
+    rf"(?<![ぁ-ゖァ-ヺー一-龥])(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})"
+    rf"[ \t　]*(?={_VITAL_OWNER}|{_READING_OWNER})")
 _DIRECT_OWNER = re.compile(rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})の{_OWNER_MODIFIER}[ \t　]*$")
 _CLINICAL_ACTOR = re.compile(r"(?:が|は)[、,\s]*[^。！？!?;；\n、,]*?を(?:開始|中止|増量|減量|変更|処方|投与|測定)")
 _CLINICAL_RECIPIENT = re.compile(rf"(?:{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:に対して|に対し|への)")
@@ -260,6 +271,9 @@ def _scope_events(body, patient_name, provider_fields):
             continue
         subject = _person_scope(person, patient_name)
         events.append((match.start(), subject, None))
+    for match in _BARE_OWNER.finditer(body):
+        if not any(left <= match.start() < right for left, right in assignments):
+            events.append((match.start(), _person_scope(match["person"], patient_name), None))
     return tuple(sorted(events, key=lambda event: event[0]))
 
 

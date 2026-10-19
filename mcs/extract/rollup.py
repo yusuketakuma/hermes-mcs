@@ -50,9 +50,10 @@ STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape, or when a scope/guard
 # change alters what build_rollup keeps: current-version caches are trusted
 # without per-read rebuilds, and dirty_projects() rebuilds every row stamped
-# with another version (10: source-bound pharmacy reports).
+# with another version (10: source-bound pharmacy reports; 11: vital owners
+# written without a particle and oxygen flows are not patient readings).
 # Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
-PERIOD_CHECK_VERSION = 10
+PERIOD_CHECK_VERSION = 11
 # Pre-9 rollup keys; readers map them to the current names until rebuilt.
 _LEGACY_KEYS = {"current_med_period": "med_period_candidate",
                 "possibly_deleted": "unrefreshed_message_ids"}

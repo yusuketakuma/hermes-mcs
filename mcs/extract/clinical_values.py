@@ -11,7 +11,7 @@ from mcs_util import locate_quote_span, fold_map
 # One person/time vocabulary for extract.py, patient_context.py and this module.
 FAMILY_PERSON = (r"ご家族|家族|ご主人|主人|旦那(?:さん|様)?|奥(?:さん|様)|お?嫁(?:さん)?|配偶者|"
                  r"お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|母|父|"
-                 r"(?:長男|長女|次男|次女)(?:さん|様)?|娘(?:さん|様)?|息子(?:さん|様)?|夫|妻|"
+                 r"(?:長男|長女|次男|次女)(?:さん|様)?|娘(?:さん|様)?|息子(?:さん|様)?|(?<![丈工])夫|妻|"
                  r"お?兄(?:さん|様)?|お?姉(?:さん|様)?|(?:弟|妹|孫)(?:さん|様)?|同居者")
 # care staff: another person, except when they are the one measuring/treating the patient
 # care workers usually write the visit report, so they own a value only when written as its owner
@@ -63,7 +63,7 @@ def patient_current_vitals(values, body, *, patient_name=None):
     if isinstance(values, dict) and patient_item_scope({}, body, patient_name=patient_name) == "patient":
         # A source-labelled measurement overrides unscoped parsed compatibility.
         # Unmentioned/legacy fields keep their existing trusted-output contract.
-        observed = set()
+        observed, grounded = set(), {}
         for match in re.finditer(r"\d+(?:[.．]\d+)?", body):
             label = _nearest_vital_label(body, *match.span())
             if label == "bp":
@@ -71,8 +71,17 @@ def patient_current_vitals(values, body, *, patient_name=None):
                 observed.update((side,) if side else ("sbp", "dbp"))
             elif label:
                 observed.add(label)
+                # The writer guard's label grammar (P72, 体温が36.5℃) also confirms an equal patient reading;
+                # scope from the label start so an owner before it (ご家族のP72) is seen.
+                starts = [m.start() for m in _VITAL_LABELS[label].finditer(
+                    body, max(0, match.start() - _VITAL_WIN_BACK), match.start())]
+                if (type(values.get(label)) in (int, float) and values[label] == _bp_number(match[0])
+                        and extract.patient_source_scope(body, starts[-1] if starts else match.start(),
+                                                         match.end(), patient_name=patient_name,
+                                                         measurement=True) == "patient"):
+                    grounded[label] = values[label]
         return {**{key: value for key, value in values.items() if key not in observed},
-                **kept}
+                **_current_only(grounded, body, patient_name), **kept}
     return kept
 
 
@@ -452,6 +461,9 @@ def _vital_superseded(body: str, cls: str, spans, patient_name=None) -> bool:
                    for m in _VITAL_LABELS[cls].finditer(body)))
 
 
+_FLOW_AFTER = re.compile(r"[ \t　]*(?:[LＬlℓ](?![A-Za-z])|リットル)")
+
+
 def _vitals_guard(body: str | None, vit: dict,
                   drops: dict | None = None) -> dict:
     """Anchor each vital to the label nearest its value in the body.
@@ -479,6 +491,8 @@ def _vitals_guard(body: str | None, vit: dict,
         if not hits:
             note(f"vitals.{k}={val:g} は本文に数値がありません")
             continue
+        # 酸素2L: a number followed by a flow unit is oxygen delivery, never a vital
+        hits = [(s, e) for s, e in hits if not _FLOW_AFTER.match(body, e)]
         hits = [(s, e) for s, e in hits
                 if extract.patient_source_scope(body, s, e) not in _NOT_PATIENT_CURRENT]
         if not hits:
