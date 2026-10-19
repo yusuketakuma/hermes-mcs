@@ -6,7 +6,7 @@
 
 ### 2026-10-04追記: #19の内部観測
 
-[mcs_signals](../../mcs/ops/mcs_signals.py)は記録上の解消原因・再open・却下後の
+[mcs_signals](../../mcs/signals/mcs_signals.py)は記録上の解消原因・再open・却下後の
 同一根拠抑制を保持し、[mcs_stats](../../mcs/views/mcs_stats.py)の明示選択
 `signal_feedback`で分母付き内部統計を出します。既存export presetには追加しません。
 これは診療・対応完了や精度・再現率の計測ではなく、人手ラベル・`human>=200`・
@@ -66,7 +66,7 @@ F-2のルール緊急度問題は1.0.13で是正予定。#17と#19（残件、�
 「即時配信」自体は新着通知が既に即時（tick 粒度）。個人宛ルーティングは作らない（ROADMAP §6）。
 
 **現状**
-- 抽出（ルール）: `_URGENT`（至急 / 緊急 / 早急 / すぐに / 急ぎ / 救急 / 搬送）の部分一致で high（`mcs/extract/v1/extract.py:48, 304-306`）。否定・時制は見ない。【実行確認】上記 3 文が high。専用テストなし。
+- 抽出（ルール）: `_URGENT`（至急 / 緊急 / 早急 / すぐに / 急ぎ / 救急 / 搬送）の部分一致で high（`mcs/extract/rules/extract.py:48, 304-306`）。否定・時制は見ない。【実行確認】上記 3 文が high。専用テストなし。
 - 抽出（LLM）: `urgency: high|routine`（`extract_llm.py:98` プロンプト、:306 schema、:915-919 検証、:1131-1138 チャンク統合は any-high、:1186 修復で high を落とさない）。
 - QC: Jev（既定 OFF）が high / routine / unclear を再判定し、不一致を再抽出へ回す（`semantic_qc.py:156-165, 279-323`、`extract_llm.py:1641-1650, 1712`）。
 - 合成ベンチ `evaluation/extract_cases.json` は 21 件で、urgency 期待 high が 2、routine が 12。精度算出には不足。

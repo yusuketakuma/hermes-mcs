@@ -650,7 +650,7 @@ def test_probe_outputs_only_shape_and_read_state(target_unread):
     spec = importlib.util.spec_from_file_location(
         "metadata_probe",
         Path(__file__).resolve().parents[2]
-        / "scripts/development/probe_message_metadata.py",
+        / "scripts/diagnostics/probe_message_metadata.py",
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -697,7 +697,7 @@ def test_usage_probe_deduplicates_patients_and_keeps_failures_unknown():
 
     spec = importlib.util.spec_from_file_location(
         "metadata_probe_usage", Path(__file__).resolve().parents[2]
-        / "scripts/development/probe_message_metadata.py")
+        / "scripts/diagnostics/probe_message_metadata.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     calls = []
@@ -741,7 +741,7 @@ def test_usage_probe_does_not_count_schema_or_access_errors_as_empty():
 
     spec = importlib.util.spec_from_file_location(
         "metadata_probe_unknown", Path(__file__).resolve().parents[2]
-        / "scripts/development/probe_message_metadata.py")
+        / "scripts/diagnostics/probe_message_metadata.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
@@ -771,7 +771,7 @@ def test_extended_probe_only_shape_and_no_unread_route_calls():
 
     spec = importlib.util.spec_from_file_location(
         "metadata_probe_routes", Path(__file__).resolve().parents[2]
-        / "scripts/development/probe_message_metadata.py")
+        / "scripts/diagnostics/probe_message_metadata.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     calls = []

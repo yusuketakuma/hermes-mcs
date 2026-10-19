@@ -7,6 +7,6 @@
     "巡回の途中位置は打ち切り時と一巡完了時にまとめて保存する。変化した投稿は従来どおり注記と途中位置を同じ書込みで確定する。"
   ],
   "refs": [
-    "mcs/extract/drug_map.py"
+    "mcs/medications/drug_map.py"
   ]
 }

@@ -25,7 +25,7 @@
 
 区分の意味: 必須記録＝薬剤服用歴等・調剤録への記載が算定要件または法定義務。必須報告(医師)／必須報告(ケアマネ)＝文書等での提供が要件。必須(法定義務)＝法律上の行為義務。計画＝薬学的管理指導計画の内容。条件付き報告＝必要に応じて行う提供。指針推奨＝行政指針の推奨。
 
-既存抽出フィールドは `mcs/extract/v4/extract_llm.py`（`meds`・`symptoms`・`requests`・`events`）と `mcs/extract/patient_context.py`（`patient_context.<category>.<detail>`）に対応させた。`events` の値は `visit, exam, admission, discharge, transfer, fall, eol, care, family_contact, prescription_inquiry, other` に限られる（`prescription_inquiry` は詳細契約3で追加。「疑義照会」「処方提案」、または処方・薬と同じ節の照会が本文にある場合だけ残る）。
+既存抽出フィールドは `mcs/extract/llm/extract_llm.py`（`meds`・`symptoms`・`requests`・`events`）と `mcs/patients/patient_context.py`（`patient_context.<category>.<detail>`）に対応させた。`events` の値は `visit, exam, admission, discharge, transfer, fall, eol, care, family_contact, prescription_inquiry, other` に限られる（`prescription_inquiry` は詳細契約3で追加。「疑義照会」「処方提案」、または処方・薬と同じ節の照会が本文にある場合だけ残る）。
 
 | ID | 項目 | 定義 | 区分 | 出典 | 既存抽出フィールド対応 |
 |---|---|---|---|---|---|
@@ -88,7 +88,7 @@
 
 - PV 項目は薬剤服用歴・調剤録・文書報告に求められる事項で、チャット投稿1件ごとに全項目を求めるものではない。投稿に項目が無いことを、記録・報告・服薬確認の未実施と判断しない。
 - `MANDATORY_CATEGORIES` に PV 項目を足したり、PV 項目の未記載を必須分類の未解決として扱ったりしない。分類ごとの結論は従来どおり投稿内容だけで決める。
-- `mcs/extract/pharmacy_cues.py` の `projection_categories` はこの対応に沿うが、語の出現を数える目印で、抽出内容の正しさ（操作・主体・否定・時制）を示さない。
+- `mcs/extract/clinical/pharmacy_cues.py` の `projection_categories` はこの対応に沿うが、語の出現を数える目印で、抽出内容の正しさ（操作・主体・否定・時制）を示さない。
 - PV-20・PV-24・PV-27 など「未確認」の行は、確認できるまで必須扱いの根拠に使わない。
 
 ## 医療用チャットの役割

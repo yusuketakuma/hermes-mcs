@@ -1773,7 +1773,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     Two lanes, one lineage: the rule pass is pure-pattern and instant —
     it keeps real-time analysis at ingest speed so notifications and
     signals never wait on the LLM queue. The extract_llm pass
-    (mcs/extract/v4, extract_llm.EXTRACT_VERSION) then folds the same rule output
+    (mcs/extract/llm, extract_llm.EXTRACT_VERSION) then folds the same rule output
     in as prompt hints and mints the extract_v1 artifact itself when
     the rule pass has not."""
     try:

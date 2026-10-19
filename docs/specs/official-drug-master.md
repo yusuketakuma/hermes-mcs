@@ -64,7 +64,7 @@ compact JSON見積5,430,199 bytes、最大42別名/identityを確認した。
 実master行・実名別名をrepoやfixtureへ保存していない。これは実辞書の全件変換・
 私有出力・採用や臨床精度測定の完了ではなく、容量境界の確認。
 
-開発候補の[drug_map](../../mcs/extract/drug_map.py)は20,000 entries・8MiB、
+開発候補の[drug_map](../../mcs/medications/drug_map.py)は20,000 entries・8MiB、
 100 aliases/entryを上限にする。[converter](../../mcs/ops/import_drug_master.py)は
 全件/明示部分集合、候補件数・payload bytes・上限をreport-onlyで示し、
 上限超過は拒否/保留して黙って切り詰めない。知らないedition・layout・変更区分/日付、
@@ -85,8 +85,8 @@ lookup/search/辞書比較の読取りAPIと共通CLIは開発実装・対象合
 network取得・実DBの更新・設定有効化を自動で行わない。
 
 合成回帰資産は[converter](../../tests/ops/test_import_drug_master.py)、
-[大きな辞書・進捗/世代](../../tests/extract/test_drug_map_incremental.py)、
-[辞書差分](../../tests/extract/test_drug_map_diff.py)、
+[大きな辞書・進捗/世代](../../tests/medications/test_drug_map_incremental.py)、
+[辞書差分](../../tests/medications/test_drug_map_diff.py)、
 [型別候補統計](../../tests/views/test_drug_candidates.py)。実masterの匿名化行もfixtureへ転載しない。
 実装済みのCLIは `mcs drug lookup NAME [--dictionary PATH --sha256 HASH] [--limit N] [--json]`、
 `mcs drug search NAME [--dictionary PATH --sha256 HASH] [--limit N] [--json]` と、
@@ -190,8 +190,8 @@ searchは名称・別名・識別子の正規化部分一致で参照候補を�
 
 入力・保存の回帰は[converter](../../tests/ops/test_import_drug_master.py)と
 [bundle](../../tests/meta/test_drug_master_bundle.py)、世代・障害復旧は
-[loader](../../tests/extract/test_drug_map.py)、[pipeline](../../tests/ingest/test_drug_map_pipeline.py)、
-[incremental](../../tests/extract/test_drug_map_incremental.py)に置く。
+[loader](../../tests/medications/test_drug_map.py)、[pipeline](../../tests/ingest/test_drug_map_pipeline.py)、
+[incremental](../../tests/medications/test_drug_map_incremental.py)に置く。
 本表は具体的な失敗経路を追った有限の確認であり、実機ディスク性能・停電・臨床精度や全環境の無障害を保証しない。
 
 ### 更新・戻し・中断後の操作

@@ -20,7 +20,7 @@
 
 | 目的 | 読む文書 |
 |---|---|
-| コードの場所と検証方法を知る | [リポジトリ構成と開発リファレンス](development/DEVELOPMENT.md#構成) · [安全上の制約](../SECURITY.md) |
+| コードの場所と検証方法を知る | [責務・依存・移植範囲](development/REPOSITORY_STRUCTURE.md) · [リポジトリ構成と開発リファレンス](development/DEVELOPMENT.md#構成) · [安全上の制約](../SECURITY.md) |
 | 患者情報の整理と表示を確認する | [患者背景の構造化契約](specs/patient-context.md) · [在宅薬局で扱う情報](specs/pharmacy-visit-information.md) |
 | 医薬品マスターの配布と利用を確認する | [公式マスターの契約](specs/official-drug-master.md) · [照会・更新の手順](specs/DRUG_MASTER_WORKFLOWS.md) · [同梱原本](../resources/drug-master/README.md) |
 | 更新・復旧・外部出力の境界を確認する | [ライフサイクル仕様](specs/lifecycle-spec.md) · [外部出力契約](specs/external-export-contract.md) |

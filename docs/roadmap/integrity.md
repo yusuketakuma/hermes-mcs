@@ -200,7 +200,7 @@ PRAGMA foreign_key_check; PRAGMA quick_check;
 - MCS API が編集時刻を返すかは【未検証】（adapter は読まない）。
 
 下流（staleness）:
-- 現行判定は `meta.hash == messages.content_hash`（`mcs_queries.py:42-62`）。v1 は `_delete_stale`（`extract/v1/extract.py:310`）、v4 は `_replace_current`（`extract_llm.py:1534`）で古い artifact を消す。semantic は `_semantic_member` の revision = content_hash（`ledger.py:1351`）と `_invalidate_thread_projections`（:620）。通知は `_source_fp`（`notify_render.py:165`）、依頼は stale 表示（`mcs_view.py:388-390`）。履歴表は append-only でこれらは読まないため、影響なし。
+- 現行判定は `meta.hash == messages.content_hash`（`mcs_queries.py:42-62`）。v1 は `_delete_stale`（`extract/rules/extract.py:310`）、v4 は `_replace_current`（`extract_llm.py:1534`）で古い artifact を消す。semantic は `_semantic_member` の revision = content_hash（`ledger.py:1351`）と `_invalidate_thread_projections`（:620）。通知は `_source_fp`（`notify_render.py:165`）、依頼は stale 表示（`mcs_view.py:388-390`）。履歴表は append-only でこれらは読まないため、影響なし。
 
 文書の限界と乖離:
 - `docs/development/DEVELOPMENT.md:279,515-517` は「hash だけでは編集前の原文は復元できない」と明記している。`docs/specs/semantic-evaluation.md:327` の「原文revisionは保存し続ける」は現実装（最新のみ）と乖離しているので、文言の整理が要る。
@@ -208,7 +208,7 @@ PRAGMA foreign_key_check; PRAGMA quick_check;
 名称:
 - `possibly_deleted`（`rollup.py:211-216`）は、`updated_seen` が「先頭メッセージの `updated_seen` − 21 日」より古い先頭 20 件。削除の証拠ではなく、tombstone（`body_state='deleted'`）も区別しない。reconcile が一巡していない履歴や NULL の旧行（`or 0`）も入る。挙動のテストがない（fixture の `[]` だけ: `tests/ops/test_brain_export.py:93,235`）。
 - `current_med_period`（`rollup.py:142-145,186,220-268`）は、extract_v1 の規則正規表現による日付範囲のうち、start ≤ 当日 ≤ end かつ前後 16 字に 予定 | 検討 がない最初の 1 件。どの薬かは不明で、後続の「中止」で取り消されない（`med_state` とは独立）。
-- 露出面: `brain_export.py:197-199,227-228`、`docs/guides/USER_GUIDE.md:73,313-315`、`docs/development/DEVELOPMENT.md:208-209`、`tests/extract/test_rollup_period.py:45,56,65,70,75`、`tests/ops/test_brain_export.py:84,93,235`。
+- 露出面: `brain_export.py:197-199,227-228`、`docs/guides/USER_GUIDE.md:73,313-315`、`docs/development/DEVELOPMENT.md:208-209`、`tests/patients/test_rollup_period.py:45,56,65,70,75`、`tests/ops/test_brain_export.py:84,93,235`。
 - 接続側: `message` の allowlist は `export_schema.py:137-147`、`_BASE` の contract enum は :105。旧案の同一性`type+project_id+message_id+content_hash`は廃止され、論理キーに`content_hash`を含めない（[接続判断の正本](connector-decisions.md)）。hashは変化検知に使う。signal の note は「確定ではありません」と書くが（`mcs_signals.py:405-426`）、集約スコープでは出ないため、`rx_period_expiry` / `pharmacist_request_unanswered` / `med_change_no_followup` は enum 名だけが届く。
 
 **設計方針**
@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS message_revisions(
 
 (3) 命名: `current_med_period` → `med_period_candidate`、`possibly_deleted` → `unrefreshed_message_ids`（提案名）。brain_export の見出しと注記に「規則抽出・未確認」「削除の証拠ではない（tombstone は `coverage.collection.deleted`）」を入れる。USER_GUIDE と DEVELOPMENT を直す。`PERIOD_CHECK_VERSION` を 2 → 3 にする（`rollup.py:47`）。旧キーを持つ rollup は一度 tick で再構築される（`run_check.py:709-710`。全患者を 1 tick で再構築するコストは【未検証】）。brain_export は移行期に新旧キーの両方を読む。`possibly_deleted` の挙動テストを新設する（現状なし）。
 
-1.0.20 で (3) を実施した。`PERIOD_CHECK_VERSION` は 8 → 9（2 → 3 の記載は当時の値）。旧キーは `current_cached_refs` が新キーへ読み替え、判定は `_unrefreshed_ids` に一本化した。挙動テストは `tests/extract/test_rollup_dirty.py`。チャットの表示は「処方期間の候補」。DEVELOPMENT の rollup 説明の更新は残る。
+1.0.20 で (3) を実施した。`PERIOD_CHECK_VERSION` は 8 → 9（2 → 3 の記載は当時の値）。旧キーは `current_cached_refs` が新キーへ読み替え、判定は `_unrefreshed_ids` に一本化した。挙動テストは `tests/patients/test_rollup_dirty.py`。チャットの表示は「処方期間の候補」。DEVELOPMENT の rollup 説明の更新は残る。
 
 (4) wire の enum（#8-D2）: A = 現行enum名維持を2026-09-29に決定済み。契約文書に意味と制約を明記する。旧案Bの改名は今回行わない。
 
@@ -385,7 +385,7 @@ Keychainの非対話拒否は「ロック」と断定せずアクセス許可制
 未送信/unknown/heldの参照は消さず、withdrawn再登場も欠落原本をdownloadedとして復活させない。
 旧版が既に失ったpathから孤立ファイルを推測して削除する修復は含まない。
 
-[薬剤候補](../../mcs/extract/drug_map.py)は辞書世代・抽出ID・本文hash等を束縛し、
+[薬剤候補](../../mcs/medications/drug_map.py)は辞書世代・抽出ID・本文hash等を束縛し、
 進捗の不存在と破損を区別する。辞書変更/無効化時は旧注釈を現在有効とせず、
 cursorは既存artifactへ保存する。世代の有効性はrollup・サマリー・cached/snapshot閲覧と
 brain_exportにも連動し、古い候補注釈を除外して元の薬剤言及を保持する。cursorの移動だけで
@@ -398,4 +398,4 @@ brain_exportにも連動し、古い候補注釈を除外して元の薬剤言�
 [添付回帰](../../tests/core/test_attachment_prune_retry.py)と
 [欠落後再登場](../../tests/core/test_attachment_revival_cleanup.py)、
 [監視回帰](../../tests/ingest/test_health_watch.py)、
-[候補進捗](../../tests/extract/test_drug_map_incremental.py)が現在の合成検証資産。
+[候補進捗](../../tests/medications/test_drug_map_incremental.py)が現在の合成検証資産。

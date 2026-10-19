@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts/development/llm_lane_bench.sh"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts/evaluation/llm_lane_bench.sh"
 TOOLS = {"/usr/bin/curl": "curl", "/bin/launchctl": "launchctl",
          "/opt/homebrew/bin/llama-bench": "llama-bench", "/usr/bin/pgrep": "pgrep",
          "/bin/ps": "ps", "/usr/sbin/sysctl": "sysctl"}

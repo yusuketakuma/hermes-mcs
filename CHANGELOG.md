@@ -72,14 +72,14 @@
 - 不具合修正：semantic_drainはLLMNotSent(llm_turn_busy)を同じ回でJev照会があっても1時間のdeferred_backoffではなく60秒の短い延期（deferred）にする。抽出レーンとの一時的なGPU競合で意味抽出ジョブが1時間止まらない。
 - 不具合修正：抽出側の_probe_formatもGPUターン待ちでprobeがNoneを返した場合はキャッシュ済みモードと_FMT_TSを変えずに返す（semantic側と同じ）。一度probeが混み合っただけで後続行が再probeと延期を繰り返さない。
 - 不具合修正（独立レビューH1/H2）：持ち越し結果の lease 更新が拒否された（本文変更・lease喪失）場合は自分の旧claimを同時に解放し、新本文が次の選択で直ちに解析対象になる。複数の持ち越しで途中の sqlite 一時エラーが起きても、更新済み lease をその場で持ち越しリストへ書き戻すため、常駐の再試行で完成済み結果を所有権喪失と誤判定して捨てない。
-- 根拠: mcs/core/local_llm.py、mcs/semantic/semantic.py、mcs/extract/v4/extract_llm.py、mcs/extract/patient_nightly.py、tests/core/test_local_llm.py、tests/semantic/test_semantic_llm_retry.py、tests/extract/test_lane_slot_and_lock.py、tests/extract/test_patient_nightly.py、mcs/semantic/semantic_drain.py、tests/extract/test_slot_routing.py
+- 根拠: mcs/llm/local_llm.py、mcs/semantic/semantic.py、mcs/extract/llm/extract_llm.py、mcs/patients/patient_nightly.py、tests/llm/test_local_llm.py、tests/semantic/test_semantic_llm_retry.py、tests/extract/llm/test_lane_slot_and_lock.py、tests/patients/test_patient_nightly.py、mcs/semantic/semantic_drain.py、tests/extract/llm/test_slot_routing.py
 
 #### 並行処理の保存状態と性能比較の判定を修正
 
 - W1: 候補読取り前に既存の公開版番号を固定し、保存直前のBEGIN IMMEDIATE内で比較。選択中・選択後の別接続更新を合成回帰で検証。
 - T1/W2/W3: 期限到達時の計測保持、呼出ごとのprompt_n/cache_n対だけの集計、probe_runsへの名称訂正。
 - B1/B2: bench開始には両サーバlaunchdラベル不在・プロセス不在・接続不可が必要。HTTPの時間切れを停止の証拠にしない。比較元と候補の新着応答を全件成功・JSON妥当・正常終了に限定。
-- 根拠: mcs/extract/patient_nightly.py、mcs/extract/v4/extract_llm.py、scripts/development/llm_lane_bench.sh
+- 根拠: mcs/patients/patient_nightly.py、mcs/extract/llm/extract_llm.py、scripts/evaluation/llm_lane_bench.sh
 
 #### 新着と過去分の処理を分け、患者コンテキストを24時間作成
 
@@ -88,20 +88,20 @@
 - run.lock の再取得待ち（常駐は3秒）が切れた完了結果は `carry` に保持し、次の周回の終了時ロックで保存する。原文が変わった分と claim lease の残りが120秒を切った分は保存せず解放する。レーン3は患者コンテキスト作成の前に持ち越し分を先に保存する。
 - 2026-10-18の所有者機の実測: 2枠同時のデコードが平均約10 t/s、単独で58 t/s。ロック待ち切れで捨てていた完了結果が1日約136件。いずれも保証値ではない。
 - レビュー反映（7a37526c 後）: 持ち越し内容をログに出さない、持ち越し保存を保存した周回の件数・患者に計上、レーン3の周回前の持ち越し保存は短い待ちでロック中の結果を保持、更新検知時は旧コードで保存せず解放、GPUの番を取れても必要時間が残らなければ busy、admission の permit は busy を未送信として解放、semantic の形式probeは busy で plain を固定しない。
-- 根拠: mcs/core/local_llm.py、mcs/extract/v4/extract_llm.py、mcs/extract/patient_nightly.py、deployment/launchagents/ai.mcs.extract-drainer.plist、deployment/launchagents/ai.mcs.extract-drainer-2.plist、deployment/scripts/mcs_check.sh
+- 根拠: mcs/llm/local_llm.py、mcs/extract/llm/extract_llm.py、mcs/patients/patient_nightly.py、deployment/launchagents/ai.mcs.extract-drainer.plist、deployment/launchagents/ai.mcs.extract-drainer-2.plist、deployment/scripts/mcs_check.sh
 
 #### 処理待ちを次の実行時刻に合わせ、推論の計測を改善
 
 - 提案1（夜間 run.lock 待ち中の結果保持）: 部分採用。本体（同一 run_due 内の短い再取得ループ・BEGIN IMMEDIATE 下の再確認・推論中はロックなし）は hardening（1c55a151）で実装済みのため、残る2点だけ追加: 待ちループが admit() 偽（更新中・設定変更・回路・ディスク）で即終了し、deferred 結果に reason=run_lock と lock_wait_s、progressed/failed 結果に lock_wait_s を付ける。見送り: 呼出をまたぐ in-process 持ち越し（carry）は、run_due が呼出ごとに無状態で、snapshot/scan 署名・data_version・night_id・lane・rotation を呼出間で保持・再検証する状態と更新境界のフェンスを新設することになり、救える件数（run.lock が60秒超連続保持される頻度）が未測定のため。代替: lock_wait_s と reason=run_lock を nightly ログ行で集計し、60秒上限超過が常態なら上限を単位deadlineまで伸ばす（1行、既存テストの「61秒以下」は意図した要件変更として改訂）。レーン3の順序は不変。
-- 提案2（常駐の待機短縮）: 採用。pause(120)×2 と pause(min(300, next_retry)) の3箇所だけを、_next_due_in が返す次の将来 due 時刻（抽出再試行・fetch_jobs の semantic/extract_qc の next_try・レーン3の患者コンテキスト再試行）と持ち越し結果の有無で短縮する idle() に置換（下限5秒、上限は従来値）。期限超過で選ばれない行は短縮対象外、DB例外時は固定ポーリング。回路/ディスク・接続先停止(30)・ロック競合(5)・一時エラー(30)の待機は不変。レビュー修正: _next_retry に省略可能な after 引数を追加し、_next_due_in は将来の行だけから MIN を取る（期限切れで選ばれない行が後ろの将来 due を隠して固定120秒に戻る取りこぼしを解消。既定 None は tests/extract/test_retry_timestamp.py の契約を維持）。見送り分: レーン3 nightly の deferred（容量ゲート/ロック喪失）の早期起床、endpoint-down の30秒。計測: 各待機で標準出力に数値のみのJSON行 {idle_s, due_in_s, carried, ts}。全失敗分岐の次回再試行時刻も将来の行だけから求める（_next_retry(led, after=now)）。
+- 提案2（常駐の待機短縮）: 採用。pause(120)×2 と pause(min(300, next_retry)) の3箇所だけを、_next_due_in が返す次の将来 due 時刻（抽出再試行・fetch_jobs の semantic/extract_qc の next_try・レーン3の患者コンテキスト再試行）と持ち越し結果の有無で短縮する idle() に置換（下限5秒、上限は従来値）。期限超過で選ばれない行は短縮対象外、DB例外時は固定ポーリング。回路/ディスク・接続先停止(30)・ロック競合(5)・一時エラー(30)の待機は不変。レビュー修正: _next_retry に省略可能な after 引数を追加し、_next_due_in は将来の行だけから MIN を取る（期限切れで選ばれない行が後ろの将来 due を隠して固定120秒に戻る取りこぼしを解消。既定 None は tests/extract/llm/test_retry_timestamp.py の契約を維持）。見送り分: レーン3 nightly の deferred（容量ゲート/ロック喪失）の早期起床、endpoint-down の30秒。計測: 各待機で標準出力に数値のみのJSON行 {idle_s, due_in_s, carried, ts}。全失敗分岐の次回再試行時刻も将来の行だけから求める（_next_retry(led, after=now)）。
 - 提案3（プロンプト順序と prefix cache）: 部分採用。調査で通常・batch・nightly・semantic の各プロンプトは固定部先行を確認し、唯一可変先行だった分割片の修復問合せ（reference + _repair_prompt）だけを _REPAIR_HEAD 先頭・参考文脈は前回出力フェンスの後に組み替えた（_repair_prompt に reference 引数）。_llm_call_stats に cache_hit_ratio（Σcache_n/(Σcache_n+Σprompt_n)、両方報告した meta のみ、無ければ null）を追加。失効束縛（_context_contract は _PROMPT_HEAD と _SCHEMA のみ）に修復プロンプトは含まれず checkpoint は失効しない。見送り: 修復ヘッドへの _PROMPT_SPEC 共有は修復問合せごとに約5,400字増え、修復の出力契約を変える一方で省けるのは次の単発呼出の spec 分のみ（examples は再評価）で、CI の合成資産では品質影響を確認できないため。代替: lane 2 の pass で repairs が1以上の 行群の cache 比率が repairs が0の行群より 0.15 以上低く、かつ prompt_ms が LLM 時間の 1/3 超なら別項目として組み替える。_PROMPT_HEAD 全体の共有は slot context（16,384 token）超過の恐れがあるため採らない。
 - 提案4（LLM 呼出しの内訳）: 採用。_integrity_summary が first_calls/repair_calls/probe_runs/format_downgrades/repair_timings を返し、meta に repairs/repair_wins/length_resplits/checkpoint_reuses と固定9キーの修復理由ヒストグラム repair_issues（コードのみ、指摘文なし）を積み、_llm_call_stats は固定キー集合（未報告は null）、並列 run_pending の fan-out 前 probe は llm_calls.probe_runs に加算。calls == first_calls + repair_calls を維持。監査（cbcb35d3）で二重送信は未検出（carry→commit は推論なし、ロック喪失後の再実行は checkpoint から0呼出で復元、修復は拒否出力を載せた1回のみ）。見送り: 独立の resent カウンタ（行ごとに追加のDB読取りが要り、checkpoint_reuses が1以上 かつ calls==0 と run 単位の lock_lost/carried/deferred で既に観測可能）、後続のプロンプト/ルール修正と修復ヘッド組み替え（_PROMPT_HEAD/_SCHEMA 変更は全 checkpoint を失効させるため、受入済み200行以上の内訳を見てから）。
-- 提案5（-ub と背景並列のベンチ）: 採用（判定は測定窓待ち）。scripts/development/llm_lane_bench.sh を追加: --phase bench（llama-bench、サーバ停止中のみ。16GB機で同一モデルの二重ロードが swap するため）と --phase e2e（稼働中サーバのみ）を /slots 応答で相互に拒否、--i-stopped-the-workers と launchctl print 113 以外は fail-closed、合成プロンプト生成、数値のみの requests.jsonl/summary.json、稼働中サーバの実 argv（server_ub）で run を紐づけ、--report が複数 run を -ub×mode で集計して採用規則（baseline 512×serial に対し保存済み有効結果/時間が改善し、新着p95・JSON妥当性・timeout率・RSS/swap が悪化しない候補のみ条件成立、欠測は判定不可）を機械評価。llama-bench は --spec-type/-np を取れず候補絞込みにのみ使い、採用可否は e2e で決める。テストは dry-run・ガード・report のみ（実サーバに触れない）。本ワークフローではサービス停止もベンチ実行もしていない。decision: pending measurement window。
+- 提案5（-ub と背景並列のベンチ）: 採用（判定は測定窓待ち）。scripts/evaluation/llm_lane_bench.sh を追加: --phase bench（llama-bench、サーバ停止中のみ。16GB機で同一モデルの二重ロードが swap するため）と --phase e2e（稼働中サーバのみ）を /slots 応答で相互に拒否、--i-stopped-the-workers と launchctl print 113 以外は fail-closed、合成プロンプト生成、数値のみの requests.jsonl/summary.json、稼働中サーバの実 argv（server_ub）で run を紐づけ、--report が複数 run を -ub×mode で集計して採用規則（baseline 512×serial に対し保存済み有効結果/時間が改善し、新着p95・JSON妥当性・timeout率・RSS/swap が悪化しない候補のみ条件成立、欠測は判定不可）を機械評価。llama-bench は --spec-type/-np を取れず候補絞込みにのみ使い、採用可否は e2e で決める。テストは dry-run・ガード・report のみ（実サーバに触れない）。本ワークフローではサービス停止もベンチ実行もしていない。decision: pending measurement window。
 - 提案6（タイムアウト後の slot 解放確認）: 採用。local_llm に SLOT_WAIT_MAX_S=10/SLOT_WAIT_POLL_S=0.5/SLOT_WAIT_IDLE_SAMPLES=2 と _wait_slot_idle を追加し、MCS_LLM_TURN_LOCK 設定下で id_slot が整数の送信済み要求が OSError（タイムアウト・切断）で失敗したときだけ、対象枠の is_processing=false を2回連続観測するまで（最長10秒・呼出元期限内）flock を保持してから解放。error_out に slot_wait_ms/slot_wait_confirmed、extract の integrity に待機があった行だけ slot_wait_ms/slot_wait_unconfirmed。admission の permit/reconcile は不変。部分採用の注記: 待機は呼出元 deadline で打ち切るため、semantic.llm_chat と run deadline で切られた抽出送信では待機0で終わり、効くのは extract の TIMEOUT 打ち切りと patient_nightly。slot_wait_ms=0 の件数でその頻度を測り、deadline を最大10秒超えて待つ案は別判断。未送信タイムアウト（unreachable）や非OSErrorでは待機しない。
 - 小さな整理（提案3の派生、候補選択の重複読取り）: 採用。run_due の候補集計をレーン毎の先頭候補1件（key・選択時 snapshot・progress）だけ保持する形にし、選択後の _snapshot/_pending 再読取りを除去（lane A は hydrate 読取りの source_sig が選択時と一致しなければ source_changed で終了）。complete/progressed/failed 結果に scanned/scan_ms を付ける。推論後の data_version・fresh snapshot・run lock・admit・BEGIN IMMEDIATE・署名比較は不変。見送り: 候補の事前フィルタ（messages に行版数が無く、PRAGMA data_version/total_changes は DB 全体単位で単位ごとに失効し、時刻だけの判定は禁止）。代替: scan_ms が lane 3 単位時間の大部分を占めると実測された場合のみ、PROGRESS meta に判定入力の署名 digest を保存して前回の pending を再利用する案を比較する。CodeRabbit指摘により、BEGIN IMMEDIATE 内で選択時の KIND/PROGRESS の最新 artifact_id も照合し、別のレーン3プロセスが先に保存した結果を古い入力で上書きしない（source_changed で次の単位に再選択）。
 - 計測の集約: nightly ログ行の lock_wait_s/reason/scanned/scan_ms、常駐の idle 行、llm_calls の内訳（repair_issues は固定9キーの件数のみ）と cache_hit_ratio、integrity の slot_wait_ms、ベンチの summary.json は数値、固定の状態・理由コード、欠測値のnullを含む。本文・患者id・氏名・プロンプト本文は含まない。
 - 統合レビュー: probe_runsは形式検出処理1巡の回数でHTTP要求数ではない。cache_hit_ratioは同じ呼出でprompt_n/cache_nの両方を取得できた測定だけを合算。期限切れの送信でも呼出・slot待機の計測を残す。idleの連続観測は取消完了の証明ではなく、未確認時も期限内で待機を終える。
-- 根拠: mcs/core/local_llm.py、mcs/extract/patient_nightly.py、mcs/extract/v4/extract_llm.py、scripts/development/llm_lane_bench.sh、docs/development/DEVELOPMENT.md、tests/core/test_llm_research_p6_timeout_slot.py、tests/extract/test_llm_research_p1_nightly_keep.py、tests/extract/test_llm_research_p2_waits.py、tests/extract/test_llm_research_p3_prompt_cache.py、tests/extract/test_llm_research_p3b_pending_dedup.py、tests/extract/test_llm_research_p4_call_breakdown.py、tests/meta/test_llm_research_p5_ubatch_bench.py
+- 根拠: mcs/llm/local_llm.py、mcs/patients/patient_nightly.py、mcs/extract/llm/extract_llm.py、scripts/evaluation/llm_lane_bench.sh、docs/development/DEVELOPMENT.md、tests/llm/test_llm_research_p6_timeout_slot.py、tests/patients/test_llm_research_p1_nightly_keep.py、tests/extract/llm/test_llm_research_p2_waits.py、tests/extract/llm/test_llm_research_p3_prompt_cache.py、tests/patients/test_llm_research_p3b_pending_dedup.py、tests/extract/llm/test_llm_research_p4_call_breakdown.py、tests/meta/test_llm_research_p5_ubatch_bench.py
 
 </details>
 
@@ -213,7 +213,7 @@
 - アクティブ患者とアーカイブ済み患者の交互順は、既存scheduler行の別キーへ保存する。実run_dueとDB再オープンによる両方向の回帰で、区分間の干渉と実行されない候補での更新を防ぐ。
 - 固定SDKの検査はPyJWT・cryptographyの名前を正規化し、両方の固定版を必ず照合する。表記揺れ・欠落・version不一致の合成検査と、Hermes/独立接続の実SDKレーンで確認する。製品の依存固定値は変更しない。
 - アーカイブ済み患者の保存では新規・内容変更があった記録だけを意味チェックへ引き継ぎ、通知しない印を既存の世代管理へ渡す。以前の通知由来の記録が残っていても、新しい保存から通知を追加しない。
-- 根拠: mcs/core/ledger.py、mcs/extract/v1/extract.py、mcs/extract/v4/extract_llm.py、mcs/semantic/semantic_drain.py、tests/semantic/test_archived_later_queue.py
+- 根拠: mcs/core/ledger.py、mcs/extract/rules/extract.py、mcs/extract/llm/extract_llm.py、mcs/semantic/semantic_drain.py、tests/semantic/test_archived_later_queue.py
 
 #### 確定前に入力内容を最後まで確認できるよう修正
 
@@ -234,14 +234,14 @@
 #### 介助者自身の測定値を患者の記録へ混ぜないよう修正
 
 - 介助者を行為者として扱う例外を、文末まで確認できる介助・訪問・測定の表現に限定する。代名詞が対象者不明とされる既存判定は維持し、本人以外や対象者不明の測定値を患者の値から除外する。
-- 根拠: mcs/extract/v1/extract.py
+- 根拠: mcs/extract/rules/extract.py
 
 #### 過去の依頼の確認漏れと収集順の読取り失敗を修正
 
 - 依頼の全件読取りでは出力だけでなく返信照合の上限も解除し、ルール抽出だけに記録された依頼も返信を照合する。古い返信済み依頼を、返答が見つからない依頼として表示しない。
 - 同じスレッドの返信を一度ずつ処理し、大量の依頼・返信でも同じ照合を繰り返さない。時刻・投稿者・完了後の取消という判定条件と表示順は維持する。
 - 収集順のJSONが配列・数値などの場合は既存の辞書読取り処理で拒否し、患者番号順から確認する。保存記録は削除しない。
-- 根拠: mcs/extract/rollup.py、mcs/views/patient_context_view.py、mcs/ingest/run_check.py、tests/views/test_patient_context_request_coverage.py、tests/ingest/test_walk_order.py
+- 根拠: mcs/patients/rollup.py、mcs/views/patient_context_view.py、mcs/ingest/run_check.py、tests/views/test_patient_context_request_coverage.py、tests/ingest/test_walk_order.py
 
 #### Hermes の手編集を復旧前に確認
 
@@ -266,7 +266,7 @@
 
 - patient_state_context._digestを既存のmcs_util.payload_hashの別名に置き換え、同じJSON直列化とSHA256計算の重複を削除する。
 - UTF-8、キー順の固定、空白の除去、非有限数の拒否、および既存のハッシュ値を保持する。
-- 根拠: mcs/extract/patient_state_context.py、mcs/core/mcs_util.py
+- 根拠: mcs/patients/patient_state_context.py、mcs/core/mcs_util.py
 
 #### 本人だけに届く回答の表示を修正
 
@@ -294,7 +294,7 @@
 - 夜間の空き判定を通常の意味チェック・品質チェックの有効条件へ合わせ、無効な機能の待機ジョブを変更せずに夜間処理を進める。
 - 設定不正時の停止、通常抽出の優先、待機期限が到来した有効ジョブの優先、推論後の再確認を維持する。
 - 配備ガイドの背景抽出順を実装へ合わせ、未抽出を優先する新しい順の抽出と、種類ごとに古い待機分を進める意味・品質チェックを区別する。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_nightly_worker.py、deployment/launchagents/README.md
+- 根拠: mcs/extract/llm/extract_llm.py、tests/patients/test_nightly_worker.py、deployment/launchagents/README.md
 
 #### 未発行のSlack通知を送信せず取り消す運用者向け手順
 
@@ -321,7 +321,7 @@
 - 受付後の文言を「受け付けました。結果は反映後に表示されます。」にそろえ、Discordの内部IDを出さない。Slackの送信失敗にも再操作の案内を付けた。
 - LINE WORKSの入力で番号の範囲外・必須の空欄・文字数超過・期限の形式誤りを、その場で理由を添えて聞き直す。入力のやり直しは不要になった。
 - LINE WORKSの1000字カードは投稿の区切り線で分け、投稿の途中で切らない。長い回答のページ送りボタンは最後の分割に付ける。
-- 根拠: adapters/common/text.py、adapters/slack/actions.py、adapters/discord/actions.py、adapters/lineworks/actions.py、mcs/notify/present_lineworks.py
+- 根拠: adapters/common/text.py、adapters/slack/actions.py、adapters/discord/actions.py、adapters/lineworks/actions.py、mcs/notify/presentation/present_lineworks.py
 
 #### 操作手順と過去のリリース記録を探しやすく整理
 
@@ -335,7 +335,7 @@
 - notify_cards._face_posts が投稿ごとの {at, stamps, original} を parts.slack.face_posts に載せ、該当投稿の原文chunkは manifest から外す。添付・💊・既存の配送記録を使った新着案内は維持。
 - adapters/common/spec が face_posts を検証（thread カードのみ、最大8件、at は rule 行の index、スタンプ最大4行）。
 - adapters/slack/cards.render_parts が各投稿の要約の後にスタンプ context と折りたたみ container を描画し、thread_part_blocks と同じ _folded_original を共用。
-- 根拠: mcs/notify/present_slack.py、mcs/notify/notify_cards.py、adapters/common/spec.py、adapters/slack/cards.py、docs/guides/USER_GUIDE.md
+- 根拠: mcs/notify/presentation/present_slack.py、mcs/notify/notify_cards.py、adapters/common/spec.py、adapters/slack/cards.py、docs/guides/USER_GUIDE.md
 
 #### Slackの薬剤ボタン・返信通知・長文への切替を修正
 
@@ -345,7 +345,7 @@
 - 分割済み本文の配送対象は部品名から確認し、カードにだけ表示された投稿を古い結合本文に含まれると誤認しません。本文表示の欠落の修正であり、原本DBのデータ消失はありません。旧結合本文の互換経路を維持します。
 - Slackテストは実際の既定配置で実行し、旧スレッド本文の機構を調べるテストだけ明示的に旧配置を選びます。
 - カードのブロック予算は折りたたみ内部も含めて計算し、超過する投稿の全文は既存のスレッド配送へ回します。利用ガイドと画面例の説明も、新着案内・長文の配送先に合わせました。
-- 根拠: adapters/slack/delivery.py、mcs/notify/notify_cards.py、tests/adapters/slack/test_slack_face_posts.py、tests/adapters/slack/test_slack_delayed_reply_flow.py、mcs/notify/present_slack.py、docs/guides/USER_GUIDE.md
+- 根拠: adapters/slack/delivery.py、mcs/notify/notify_cards.py、tests/adapters/slack/test_slack_face_posts.py、tests/adapters/slack/test_slack_delayed_reply_flow.py、mcs/notify/presentation/present_slack.py、docs/guides/USER_GUIDE.md
 
 #### 患者の記録と依頼一覧を読み取りやすく修正
 
@@ -371,7 +371,7 @@
 - v1 の症状判定で「なく」「認められない」「見当たらない」を否定、「否定しない」「否定されない」は否定しないとし、RULE_VERSION を 24 にした。
 - 同じ節に過去と現在の測定値がある場合、各値は直前の時点語に従う。
 - 前回から変わったことは、利用者側の初回観測を夜間の追加発見より先に判定する。poster_gaps は基準時刻ちょうどの投稿も含める。
-- 根拠: mcs/notify/notify_cards.py、mcs/views/patient_context_view.py、mcs/extract/clinical_values.py、mcs/extract/v1/extract.py、mcs/views/mcs_stats.py
+- 根拠: mcs/notify/notify_cards.py、mcs/views/patient_context_view.py、mcs/extract/clinical/clinical_values.py、mcs/extract/rules/extract.py、mcs/views/mcs_stats.py
 
 #### 更新前の操作待ちと復旧エラーの案内を修正
 
@@ -531,7 +531,7 @@
 - 症状は、助詞・時点の語（本日・今回など）・並べた別の症状（「発熱・疼痛なし」「咳と痰なし」）を挟んで否定（なし・ありません・認めず・見られません・(-)など）が続く記述を数えない。同じ症状の否定されていない記述が1つでもあれば症状として残す。「痛みが取れない」のような動詞の否定、「ないわけではない」のような否定の打消し、別の症状だけが否定された「発熱あり、疼痛なし」の発熱は症状として残す。
 - 昨日・前回・先日・入院中・入院時の測定値は過去の記述として扱う。「昨日、体温…」のように文頭の過去の語が読点で区切られていても、その文の測定値すべてに及ぶ（同じ区切りに「本日」などがあれば現在の記述）。「昨日から」「前回より」は現在の記述のまま。薬の開始・中止など測定以外の記述の判定は変えない。
 - 最新の検査値は検査項目（未知の名前は全角半角・大文字小文字をそろえた名前）ごとに最も新しい報告を残す。同じ投稿に同じ項目が複数あるときは、原文で確認できる採血・検査日が最も新しいものを採用し、日付で順序を決められなければその投稿からは現在値を表示しない（古い投稿の値でも埋めない）。
-- 根拠: mcs/extract/v1/extract.py、mcs/extract/clinical_values.py、mcs/extract/patient_context.py、mcs/extract/rollup.py
+- 根拠: mcs/extract/rules/extract.py、mcs/extract/clinical/clinical_values.py、mcs/patients/patient_context.py、mcs/patients/rollup.py
 
 #### はい・いいえの質問は推奨値も同じ言葉で案内
 
@@ -624,7 +624,7 @@
 - 原文段落の引用選択は意味の言い換えを行わない。Cの再点検は原文との構造・属性照合であり、臨床的な正確性を自動判定しない。
 - 解析に失敗した投稿は未点検のまま投稿単位で再試行を管理し、同じ患者のほかの履歴調査を止めない。
 - 共通のLLM入場制御を使わない設定でも、夜間リクエスト本文にslot 2の指定を渡し、新着用の枠へ割り込まない。
-- 根拠: mcs/extract/patient_nightly.py、mcs/extract/v4/extract_llm.py、docs/specs/patient-context.md
+- 根拠: mcs/patients/patient_nightly.py、mcs/extract/llm/extract_llm.py、docs/specs/patient-context.md
 
 #### 患者の背景・変化・返信状況などを原文根拠付きで確認
 
@@ -645,7 +645,7 @@
 - 取り込み漏れの補完と最新投稿の確認は、段階ごとに打ち切った位置を1件の記録に保存し、次回はそこから再開する（新しい表や管理基盤は追加しない）。時間切れで1人しか確認できない場合も、次回は次の患者へ進む。
 - 夜間まとめの状況表示は、処理が行う判定と同じく、範囲が読めない患者とMCSが明示的に拒否した患者を対象から外す。それ以外の取得失敗は対象に残し、0件扱いにしない。
 - 復旧で更新後の状態に手動変更が残り停止した場合は、作業ツリーを戻したとは記録しない。同じ状態の再確認では通知処理を最初の1回だけ再起動し、以後は稼働の確認に留める。手動変更は保持する。
-- 根拠: mcs/ingest/run_check.py、mcs/extract/patient_nightly.py、deployment/recovery/mcs_recover.py
+- 根拠: mcs/ingest/run_check.py、mcs/patients/patient_nightly.py、deployment/recovery/mcs_recover.py
 
 #### 患者の記録表示で使っていない内部処理を整理
 
@@ -668,7 +668,7 @@
 - 担当者候補の部屋優先は名簿のIDと投稿者IDの一致（IDがない場合は氏名と所属の一致）で判定する
 - 保存済み検査値の型が不正な投稿はその検査の現在値を出さず、古い値も復活させない
 - ledger の fullfsync 設定を初回のスキーマ書込みより前に適用する
-- 根拠: mcs/ops/mcs_update.py、deployment/recovery/mcs_recover.py、mcs/extract/v1/extract.py、mcs/extract/clinical_values.py、mcs/extract/rollup.py、mcs/views/patient_context_view.py、mcs/notify/notify_cards.py、mcs/core/ledger.py
+- 根拠: mcs/ops/mcs_update.py、deployment/recovery/mcs_recover.py、mcs/extract/rules/extract.py、mcs/extract/clinical/clinical_values.py、mcs/patients/rollup.py、mcs/views/patient_context_view.py、mcs/notify/notify_cards.py、mcs/core/ledger.py
 
 #### 薬局以外の職種が書く記録も患者背景として取得
 
@@ -679,8 +679,8 @@
 - 表示: patient_context_view.ROLE_LABELS / ROLE_ORDER を役割の正本とし、CLI --role の choices と通知カードの表示順ボタンが同じ一覧を参照。食形態を前回比較の対象属性に追加。
 - 関係者・事業者: patient_context_view.participants が messages の投稿者メタデータ（職種・氏名・事業所）を患者の部屋に限定したSQLで集計し（削除済み投稿を除外し、投稿者IDと所属を分離）、CLI --view participants と背景一覧の末尾（関係者・事業者（投稿者から取得））に投稿件数・最終投稿日時付きで出す。契約・主担当・現在の関与は判定しない。
 - docs/specs/patient-context.md に職種別見出し語彙の節と世代更新を記載。
-- 完全合成の10職種73見出しで、更新前は15見出し、更新後は73見出しが保持される（tests/extract/test_role_data_extension.py）。実投稿での抽出精度・網羅率は未測定。
-- 根拠: mcs/extract/patient_context.py、mcs/extract/v1/extract.py、mcs/extract/v4/extract_llm.py、mcs/views/patient_context_view.py、mcs/notify/notify_views.py、mcs/views/mcs_view.py、docs/specs/patient-context.md
+- 完全合成の10職種73見出しで、更新前は15見出し、更新後は73見出しが保持される（tests/patients/test_role_data_extension.py）。実投稿での抽出精度・網羅率は未測定。
+- 根拠: mcs/patients/patient_context.py、mcs/extract/rules/extract.py、mcs/extract/llm/extract_llm.py、mcs/views/patient_context_view.py、mcs/notify/notify_views.py、mcs/views/mcs_view.py、docs/specs/patient-context.md
 
 </details>
 
@@ -885,18 +885,18 @@
 - 服用量を製剤規格に読み替えず、未取得の単位は不明のまま保持する。
 - 単一コード候補だけをページ内でまとめ、曖昧な薬名から同一薬や服用中を確定しない。
 - 実施記載は肯定かつasserted/reportedの根拠に限り、推測・不明は実施確定へ強めない。
-- 根拠: mcs/views/drug_timeline.py、mcs/views/drug_reconciliation.py、mcs/ops/mcs_drug.py
+- 根拠: mcs/medications/drug_timeline.py、mcs/medications/drug_reconciliation.py、mcs/ops/mcs_drug.py
 
 #### 薬剤名の横断検索とマスター更新の確認候補
 
 - 旧版との比較は同じ42項目layoutの固定hash付き公開CSVまたはZIPを読み、廃止・経過措置・名称変更・採用辞書の一致を確認候補として返す。
 - 剤形コードは内用薬等の大分類であり、錠剤等の文字表記とは区別する。成分同等性、処方の正誤、禁忌を確定しない。
-- 根拠: mcs/extract/drug_map.py、mcs/ops/import_drug_master.py、mcs/views/drug_master_compare.py、mcs/ops/mcs_drug.py
+- 根拠: mcs/medications/drug_map.py、mcs/ops/import_drug_master.py、mcs/medications/drug_master_compare.py、mcs/ops/mcs_drug.py
 
 #### 薬剤の言及履歴と別名の承認操作を追加
 
 - 辞書SHA、resolver版、影響snapshot hashで古い提案を拒否し、部分失敗では旧辞書pinを保持する。
-- 根拠: mcs/views/drug_timeline.py、mcs/ops/drug_alias.py、mcs/ops/mcs_drug.py
+- 根拠: mcs/medications/drug_timeline.py、mcs/medications/drug_alias.py、mcs/ops/mcs_drug.py
 
 #### 抽出候補の昇格証拠を実行する候補に固定
 
@@ -945,7 +945,7 @@
 
 - clinical_chunking.PLAN_VERSIONを1から2へ更新。
 - 旧版チェックポイントの保持・再利用拒否と新版の再利用を合成テストで確認。
-- 根拠: mcs/extract/clinical_chunking.py、docs/guides/UPGRADE_AGENT.md
+- 根拠: mcs/extract/clinical/clinical_chunking.py、docs/guides/UPGRADE_AGENT.md
 
 #### 新しいカード表示を作成した後は旧版へのロールバックを拒否
 
@@ -1053,7 +1053,7 @@
 - clinical_chunking._DOSE と、extract_llm の prescription_inquiry 判定の同一節の走査（200文字まで）にも上限を設けた。
 - 合成文字列で、旧パターンが3乗で伸びる入力を1秒以内に処理し、代表的な薬剤表記の結果が変わらない回帰テストを追加。
 - Claude Security スキャン（2026-10-16、F2、CWE-1333）の指摘。
-- 根拠: mcs/extract/v1/extract.py、mcs/extract/clinical_chunking.py、mcs/extract/v4/extract_llm.py
+- 根拠: mcs/extract/rules/extract.py、mcs/extract/clinical/clinical_chunking.py、mcs/extract/llm/extract_llm.py
 
 #### 統計のoverviewが許可されたプロジェクトの範囲だけを返すように
 
@@ -1249,7 +1249,7 @@
 #### 破損した薬剤名への辞書候補表示を抑止
 
 - current_refs の薬剤名取得を、derive・impact が既に使っている _source_meds に統一。
-- 根拠: mcs/extract/drug_map.py、tests/extract/test_drug_map.py
+- 根拠: mcs/medications/drug_map.py、tests/medications/test_drug_map.py
 
 #### 監視記録の不正なファイルによる停止を防止
 
@@ -1277,7 +1277,7 @@
 #### LLMの入力エラーで処理枠が残る問題を修正
 
 - 追加設定の組み立てを予約取得より前へ移動し、送信前の失敗が予約を残さないようにしました。
-- 根拠: mcs/core/local_llm.py
+- 根拠: mcs/llm/local_llm.py
 
 #### 詳細診断で監査充足率だけが上限を超えても他の集計を表示
 
@@ -1359,13 +1359,13 @@
 
 - context_sha256 は [文脈, 参照表] から計算し、モードは既存の patient_state_mode 欄に記録する。参考情報があるケースでは従来どおりオンとオフでdigestが異なる。
 - 参考情報の無い承認済み合成ケースで、両モードのモデル呼出しの入力とdigestが一致することを確かめる回帰を追加した。
-- 根拠: mcs/extract/eval/extract_bench.py、tests/extract/test_patient_state_scoring.py
+- 根拠: mcs/extract/eval/extract_bench.py、tests/extract/evaluation/test_patient_state_scoring.py
 
 #### 抽出結果の比較で対象者の誤りを見逃さないよう修正
 
 - ベンチマークは本文内の引用・値・型を検証したうえで、渡された抽出結果の対象者と分類をそのまま採点する。現在の検証処理による属性の意味的な除去を、旧実装の結果へ後付けしない。
 - 家族の一包化を本人へ結び付けた旧形式の出力が、現在のvalidatorでは除去され、共通oracleでは誤出力として数えられることを完全合成の回帰で確認した。禁止条件や正解データは変更していない。
-- 根拠: mcs/extract/eval/extract_bench.py、tests/extract/test_extract_bench_scoring.py
+- 根拠: mcs/extract/eval/extract_bench.py、tests/extract/evaluation/test_extract_bench_scoring.py
 
 #### 配送記録の書き込み失敗時にファイルを閉じ忘れる問題を修正
 
@@ -1384,7 +1384,7 @@
 - 固定集団の比較前に、保存行が作成時と同じ項目・型・語の分類・判定対象区分であることを確認し、欠落・余分な項目・未知の分類・真偽値でない値・空の分類・重複IDがあれば集計せず pin_schema で止める。正しい固定集団の比較結果は変わらない。
 - スレッド文脈の行を結ぶ改行も文字数上限（1200）に数え、文脈が上限を超えて抽出の準備が context_budget_exceeded で止まり続けることを防ぐ。参考情報の設定が無効でも有効でも同じ。
 - 完全合成のデータで、修正前に失敗する回帰を追加した。実データでの計測値の変化は確認していない。
-- 根拠: mcs/extract/pharmacy_cues.py、mcs/extract/eval/audit_cohort.py、mcs/extract/v4/extract_llm.py
+- 根拠: mcs/extract/clinical/pharmacy_cues.py、mcs/extract/eval/audit_cohort.py、mcs/extract/llm/extract_llm.py
 
 #### 稼働監視の読取り後に接続の待ち時間設定が戻らない場合を修正
 
@@ -1403,7 +1403,7 @@
 - バイタルの再確認候補に、保存結果の読み出しと共通の現在値フィルターを適用する。本人以外や、同じ投稿で現在の測定から外れた以前の値を不足候補に戻さない。
 - 本文で裏付けられる現在の測定値が本当に欠けている場合の再確認は保持する。ルールの候補を臨床事実として自動追加せず、現在の値が未測定の場合も別の値で補完しない。
 - 完全合成の投稿とスタブ応答で、現在の片側血圧と全体が未測定の場合を確認した。実モデルや本番の発生率は別途検証する。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_completeness_quality.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_completeness_quality.py
 
 #### 解析の実行記録に、処理時間帯と完了時刻を追加
 
@@ -1422,7 +1422,7 @@
 
 - 辞書のファイル記述子取得後に起きたI/Oエラーを安全な検証エラーへ統一し、既存の辞書無効化経路へ渡す。
 - ストリーム作成や読み取りの失敗時も取得済みファイル記述子を閉じる。完全合成の回帰で旧候補の抑制・原薬剤名の保持・次回成功時の復旧を確認した。
-- 根拠: mcs/extract/drug_map.py、tests/ingest/test_drug_map_pipeline.py
+- 根拠: mcs/medications/drug_map.py、tests/ingest/test_drug_map_pipeline.py
 
 #### 同梱の公式医薬品マスターを20261013版に更新
 
@@ -1431,7 +1431,7 @@
 - 公式取得物のSHAは2回の独立取得で一致した。R08rec3は前回と同一で、改版されたR08rec1の医薬品節の定義も変わっていないことを確認した。
 - 全19,286行をconverterで変換でき、既存のstatus policyで12,195件・約5.1MBと上限内だった。
 - 変換reportにas_of・next_boundary_on・日付別future_starts/future_endsを追加。SHA保護されたsourceの日付情報をloaderで検証し、候補集合の次の境界や旧辞書の情報不足をstatusで区別する。最終日包含の修正を除き候補の除外方針を維持し、承認条件は変更しない。
-- 根拠: resources/drug-master/20261013/manifest.json、mcs/ops/import_drug_master.py、docs/specs/official-drug-master.md、mcs/extract/drug_map.py、mcs/ops/mcs_drug.py、tests/ops/test_import_drug_master.py、tests/ops/test_mcs_drug_bundled.py
+- 根拠: resources/drug-master/20261013/manifest.json、mcs/ops/import_drug_master.py、docs/specs/official-drug-master.md、mcs/medications/drug_map.py、mcs/ops/mcs_drug.py、tests/ops/test_import_drug_master.py、tests/ops/test_mcs_drug_bundled.py
 
 #### 自動再抽出で根拠のある否定や家族の情報を失わないよう保護
 
@@ -1441,14 +1441,14 @@
 - 新しい実抽出と既知の無信号判定では検証破棄数を0も含めて記録する。旧内容の持越しで未記録の破棄数を0と推定しない。旧版から実際に置換した場合は元世代と形式上失ったassertion数も記録する。 正の破棄数だけではカードの処理完了表示を変更せず、品質側のupgrade_status/auditでは要確認にする。型不正・負の破棄数は処理進捗でも要確認とする。
 - 読取り専用の --upgrade-status では全対象を正常完了・旧結果保持・要確認・失敗・待機・投影側に排他集計する。本文・個別IDは出さず、モデルを呼ばない。待機が0でも正常完了の証明とはしない。
 - 完全合成のDBとスタブで検証する。本番反映・実LLMの精度・実データの再解析や改善率は本変更の検証に含めない。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_extract_upgrade_preservation.py、tests/extract/test_extract_upgrade_status.py、tests/notify/test_extraction_progress.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_extract_upgrade_preservation.py、tests/extract/llm/test_extract_upgrade_status.py、tests/notify/test_extraction_progress.py
 
 #### 薬剤情報の欠落候補を全投稿から集計
 
 - 同じ読取り専用スナップショットと共通の抽出選択条件を使用し、現行の意味抽出が旧抽出を覆う場合も区別する。
 - 細かな内訳の表示上限とは別に、全件の分母と項目別集計を保持する。旧結果で破棄数を記録していない場合は不明として扱う。
 - エクスポートと基準統計の保存前に、固定語彙と数値の許可リストを検証する。依頼の派生状態は既存画面と同じ出典・失効判定を共用する。
-- 根拠: mcs/views/extraction_audit.py、mcs/views/mcs_stats.py、mcs/ops/export_schema.py、mcs/ops/mcs_refstats.py、mcs/ops/request_loops.py
+- 根拠: mcs/views/extraction_audit.py、mcs/views/mcs_stats.py、mcs/export/export_schema.py、mcs/ops/mcs_refstats.py、mcs/ops/request_loops.py
 
 #### 1.0.21の抽出改善をまとめて抽出世代8・ルール世代21へ更新
 
@@ -1456,14 +1456,14 @@
 - 再抽出で否定・家族・他者などの根拠付き情報が失われる候補は、既存の安全処理どおり旧結果を保持して記録し、旧結果を新世代として作り直さない。人確認済みの訂正・承認の経路も従来どおり。
 - 有効な抽出項目が1つも残らない出力（要約・要点だけで、それらも原文と矛盾して除外された場合を含む）は、1回の再確認後も完了した抽出として保存せず、失敗として記録する従来の扱いを維持する。
 - 世代7の結果を基準とした比較・監査の記録（cohort の BASELINE7/TARGET8 など）と、それらの承認状態は変更していない。
-- 根拠: mcs/extract/v4/extract_llm.py、mcs/extract/v1/extract.py、tests/extract/test_llm_patient_context.py
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/extract/rules/extract.py、tests/patients/test_llm_patient_context.py
 
 #### 抽出の再確認で測定値・対象者・原文値の形式を再提示
 
 - 再確認用の指示でも、vitalsは数値だけの単一object、medsは薬剤名と対象者が対応する引用、patient_context.detailsは親引用内の連続した原文値という既存契約を明記する。
 - 配列形式のバイタル、別人の根拠、原文にない詳細値を受け入れる変換は加えず、従来の検証と修正候補の採否判定を維持する。
 - 完全合成の回答を使い、既存の1回の再確認で、正しい形式・家族の対象者・原文値を持つ回答が保存される経路を確認する。実モデルの精度と本番動作は別途検証する。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_pharmacy_model_regressions.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/medications/test_pharmacy_model_regressions.py
 
 #### 薬剤の引用不一致を再確認し、古い測定値の要約への混入を抑止
 
@@ -1471,27 +1471,27 @@
 - 要約と各要点は既存の測定表記で特定できる数値を照合する。本文の同じ測定名・数値がすべて本人以外や条件付きなどの場合、または明示された現在の測定により古くなった場合、限定のない記述だけを除外して既存の再確認へ渡す。家族や過去・条件を明示した記述と、同じ数値の薬剤用量・体重は保持する。
 - 要約の数値の補完や文章の書き換えは行わない。本文にない数値の全面検証や換算判定は含まず、未検証の精度向上を主張しない。完全合成の回帰テストで保存・再確認・再確認失敗時の除外を検証する。
 - 要約・要点しか無い出力でそれらが原文と矛盾して除外され、有効な項目が残らない場合は、1回の再確認後も完了した抽出として保存せず失敗として記録する（従来の扱い）。緊急度や事実を補って保存しない。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_pharmacy_model_regressions.py、tests/extract/test_model_vitals_source_guard.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/medications/test_pharmacy_model_regressions.py、tests/extract/clinical/test_model_vitals_source_guard.py
 
 #### 「お兄様」など敬称付きの家族を本人と取り違えない
 
 - extract._FAMILY_PERSON の兄・姉に「お」と「さん/様」、弟・妹・孫に「さん/様」を付けた形を家族の語として追加した。新しい続柄語や一般の「〜さん」を家族へ寄せる変更はしていない。
 - 「姉川さん」のように続柄の字で始まる人名は従来どおり家族と判定しない。報告者（「お姉様から」）と対象者の区別も維持する。
 - 敬称付き家族の薬を本人として出した結果の破棄、家族として出した結果の保持、家族と本人の測定値の分離、家族からの報告での本人の薬の保持を完全合成の回帰で確認した。
-- 根拠: mcs/extract/v1/extract.py、tests/extract/test_clinical_scope_review.py
+- 根拠: mcs/extract/rules/extract.py、tests/extract/clinical/test_clinical_scope_review.py
 
 #### 家族の薬を正しく記録した結果も抽出比較で評価
 
 - family-med-not-patient の正解に subject=family の薬剤を追加し、禁止条件を subject=patient に限定した。薬剤名だけによる禁止は、家族の薬を family/other で記録する既存の抽出仕様と矛盾していた。
 - 既存の全ケースの本文・IDと、残るケースのラベルは保持した。属性省略を wildcard とする採点処理、確認済み検査値のみを数える条件、他の安全ゲートは変更していない。
 - 家族としての正答、本人への誤帰属、別の対象者、無出力を区別する合成回帰を追加した。旧84ケースの集計が元の期待値と一致することを確認してから、この1件のラベル変更による差分だけを期待値へ反映した。
-- 根拠: evaluation/extract_cases.json、tests/extract/test_extract_bench_scoring.py
+- 根拠: evaluation/extract_cases.json、tests/extract/evaluation/test_extract_bench_scoring.py
 
 #### 「同居の娘さん」「現在の佐藤さん」のような修飾付きの人物を正しく読む
 
 - 人名の候補が「〜の」＋既存の家族語（娘さん・息子様・母など）で終わる場合だけ家族と判定する。名前は全体を患者名と照合し、「現在」「本日」など既存の時点語の修飾だけを分けて照合する。名前の中の「の」で切った末尾を別の患者名として照合せず、新しい続柄語も追加しない。
 - 患者名が分かる場合の本人判定、家族からの報告で本人の値を残す区別、家族と本人で同じ値がある場合の分離を完全合成の回帰で確認した。
-- 根拠: mcs/extract/v1/extract.py、tests/extract/test_clinical_scope_review.py
+- 根拠: mcs/extract/rules/extract.py、tests/extract/clinical/test_clinical_scope_review.py
 
 #### 薬剤管理の語の取りこぼしを同じ投稿集団で比較する開発用ツールを追加
 
@@ -1501,7 +1501,7 @@
 - 語の捕捉は代理指標なので、最終の品質判定には前後の出力digestに結び付いた意味のラベルが必要。ラベルが無い・古い・足りない（分類ごとに pin 時の件数と50件の少ない方）場合は判定不能とし、内部ラベルは人によるラベルとは区別する。
 - 保存先はシンボリックリンク解決後もdata配下に限り、権限が0600より広い既存ファイルは拒否し、書込みは一時ファイルからの置換で途中失敗時に元のファイルを残す。標準出力はASCIIの集計だけを出す。
 - テストは完全合成の行と一時rootだけを使う。実データでの計測や改善の確認は行っていない。
-- 根拠: mcs/extract/eval/audit_cohort.py、tests/extract/test_audit_cohort.py
+- 根拠: mcs/extract/eval/audit_cohort.py、tests/extract/evaluation/test_audit_cohort.py
 
 #### 通知待ちと前回の中断理由を診断記録へ追加
 
@@ -1510,7 +1510,7 @@
 - 中断時刻は発生時刻ではなく記録から確認できる検出時刻。本文・患者識別情報・私有パス・生のエラーを新しい診断項目へ出さない。
 - 抽出対象の共通条件をルール抽出・read model・healthで共有し、NULL/空白/本文状態などの既存境界を維持する。
 - 日次backupの確認はディレクトリ走査256件/0.5秒、完了印256バイトを上限にし、リンク・FIFO・大きすぎる完了印を受理しない。DBを開かず、元のbackup・再試行・保持動作を変更しない。
-- 根拠: mcs/ingest/run_check.py、mcs/notify/notify_cards.py、mcs/core/mcs_queries.py、mcs/extract/v1/extract.py、mcs/views/read_model.py、mcs/core/maintenance.py
+- 根拠: mcs/ingest/run_check.py、mcs/notify/notify_cards.py、mcs/core/mcs_queries.py、mcs/extract/rules/extract.py、mcs/views/read_model.py、mcs/core/maintenance.py
 
 #### 薬剤の開始・中止の取りこぼしと壊れた品質記録の完了表示を修正
 
@@ -1523,7 +1523,7 @@
 - 完全合成の応答で照合・抑制・未解決・進捗表示の境界を確認する。実モデルの精度を測定した結果ではない。
 - モデルが薬剤欄へ出した名称は再確認候補の手掛かりにとどめ、薬剤である独立根拠にはしない。補完で薬剤の操作を追加したり、既存の操作・状態を置換したりする際は、その名称自体のルール由来の薬剤候補・薬剤語、原文の同じ名称に直結する用量または直前の薬剤分類名が必要。別の薬剤の用量や分類を流用しない。独立根拠のない用量なし商品名でも既存の操作欠落・部分名の再確認は維持するが、曖昧な補完は採用せず要確認に残す。正しい初回出力の扱いは変えず、辞書の自動導入・承認・有効化やモデルの分類全体の保証は行わない。
 - 薬剤の助詞・時点修飾語の直後の読点（Aを、中止、Aは、本日中止、Aを本日、中止）は操作から対象を切り離さない。読点後に別の薬剤やリハビリ等の明示的な目的語がある場合は、直前の薬剤をその操作へ引き継がない。既存の薬剤の並列表記と、別の述語による操作の区別を維持する。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_completeness_quality.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_completeness_quality.py
 
 #### マスター更新時の圧縮破損と最終使用日の扱いを修正
 
@@ -1538,7 +1538,7 @@
 - 薬・お薬・内服薬・処方薬・服用薬の単独語と、人物を示す所有者の「の」が付く一般表現をmeds.nameから除外し、固定の理由を既存の修復へ渡す。未知の商品名・合成薬名・降圧薬などの薬効分類や、血圧の薬・便秘の薬など対象を示す表現は辞書未収載を理由に除外しない。既に抽出された根拠付きの服薬管理情報は保持する。
 - 同じ一般表現がルールの薬剤候補にあっても、除外対象の名前を必須項目として要求しない。原文に存在しない薬剤名の補完や不要な再確認を避け、具体的な薬剤名・薬効分類の未収載確認は維持する。薬名不明の変更操作まで解決済みとは扱わない。
 - 否定・薬剤名・状態の値を自動変換したり、原文にない薬剤名を補ったりしない。修復が同じ誤りを返しても再試行を増やさず、無効な薬剤項目を残さない。実モデルでの改善率や本番での発生は未確認。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_pharmacy_model_regressions.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/medications/test_pharmacy_model_regressions.py
 
 #### 送信待ちの通知に、待っている理由を記録して表示
 
@@ -1552,13 +1552,13 @@
 
 - 同一ジョブ・世代の完了を重複計上せず、壁時計の区間で速度を算出する。再試行時刻待ち・保持された失敗・欠測・古い集計を理由付きで区別し、これらがある場合の見通しは保留する。保持された失敗件数を現在の障害と断定しない。本文・患者識別情報・生の例外を出力しない。
 - 完了/失敗を含む保持ジョブはSQLで最大16群へ集計し、直近の有効実績だけ最大64 ID/記録で世代照合する。Python JSONの分類と累計64MiBの共有読取り上限は維持し、上限超過は全体を確認不能にする（最後に読む現行監査充足率だけが超過した場合は、その項目を確認不能とするpartialで終了2）。
-- 根拠: mcs/ops/operational_progress.py、mcs/ops/semantic_observe.py
+- 根拠: mcs/views/operational_progress.py、mcs/ops/semantic_observe.py
 
 #### 診断で処理状況と集計の鮮度を確認
 
 - 読取り容量を制限し、通常ファイルだけを読み取る。出力は許可された件数・状態・時刻に限定する。既存のdoctor終了コードは維持する。
 - 詳細観測は読取専用transactionで時刻・容量・反復回数を制限し、上限到達時の部分集計は確認不能として返す。中断記録のfinished_atは発生時刻と断定せず検出時刻として扱う。
-- 根拠: mcs/ops/operational_status.py、mcs/ops/mcs_setup.py、mcs/ops/semantic_observe.py
+- 根拠: mcs/views/operational_status.py、mcs/ops/mcs_setup.py、mcs/ops/semantic_observe.py
 
 #### 抽出ベンチで患者情報（patient_context）を採点
 
@@ -1567,7 +1567,7 @@
 - 未定義の分類・詳細項目・空の値・参照先（refers_to）を書いたラベルは、実行前の検証で不正として拒否する。参照先の採点は次段階の確定後に追加する。
 - 既存の合成ケースに対する採点（完全出力・各項目の劣化・抽出失敗・禁止項目の混入）が変更前と一致することを固定値のテストで確認する。
 - 合成コーパスの許可リスト・コーパスの指紋・--mock-ok の挙動は変更しない。採点はモデルの品質の測定結果ではない。
-- 根拠: mcs/extract/eval/extract_bench.py、tests/extract/test_extract_bench_scoring.py
+- 根拠: mcs/extract/eval/extract_bench.py、tests/extract/evaluation/test_extract_bench_scoring.py
 
 #### 服薬管理の背景を参照時点と原文に結び付ける
 
@@ -1577,7 +1577,7 @@
 - refers_toは供給された参照番号だけを解決して保存し、本文にない値や引用は採用しない。未知・型不正・別薬剤や別主体への参照は除いて破棄数に記録する。失敗した同世代の再抽出で元結果を保持するときは、元のモデルと背景の由来も保持する。
 - 詳細読取り・本人向けまとめ・許可された薬剤項目の共有カードでは、参照元の本文hash・時刻・主体・薬剤・項目fingerprintを再照合する。一致するときだけ保存された参照値と日付を示し、原文や抽出が変わった場合は「参照先は更新済み」と表示する。別の値へ差し替えない。
 - 評価CLIの--patient-state on/offは同じ背景formatterを使い、各ケースの実効context hashと使用モデル、検証済み出力を記録する。完全創作の参照4正例・混入2負例を追加した。実モデルの品質A/Bと本番での動作は別途検証する。
-- 根拠: mcs/extract/patient_state_context.py、mcs/extract/patient_context.py、mcs/extract/v4/extract_llm.py、mcs/views/read_model.py、mcs/extract/eval/extract_bench.py、tests/extract/test_patient_state_pipeline.py、tests/views/test_patient_state_references.py
+- 根拠: mcs/patients/patient_state_context.py、mcs/patients/patient_context.py、mcs/extract/llm/extract_llm.py、mcs/views/read_model.py、mcs/extract/eval/extract_bench.py、tests/patients/test_patient_state_pipeline.py、tests/views/test_patient_state_references.py
 
 #### 送信待ちの数え漏れと、待ちの理由の取り違えを修正
 
@@ -1590,7 +1590,7 @@
 
 - 薬剤候補の名前が引用中のすべての出現箇所で「さん」「氏」と助詞等を伴う場合に拒否する。
 - 未知の製品名、敬称と同じ文字を含む製品名、引用内に別の薬剤としての出現がある場合は一律に除外しない。「様」は「薬剤名様の作用」と区別できないため判定に使わない。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_pharmacy_model_regressions.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/medications/test_pharmacy_model_regressions.py
 
 #### 薬の保管・管理者、疑義照会の結果、重複・相互作用の確認を抽出
 
@@ -1599,7 +1599,7 @@
 - events に prescription_inquiry を追加した。「疑義照会」「処方提案」、または処方・薬（薬剤師・薬局を除く）と同じ節に照会がある本文でだけ残し、担当者会議の日程など薬剤以外の照会や単独の「疑義」は破棄する。出来事の記載は照会の実施完了や人の承認を意味しない。
 - 見出しのルール抽出では、薬の保管状況・薬の保管場所・服薬管理者・疑義照会結果・処方提案結果・相互作用確認など、薬剤に限った見出しだけを服薬管理の詳細として読む。単独の「保管状況」「保管場所」「照会結果」は書類や会議にも使われるため、薬剤の詳細として扱わない。
 - 完全合成の本文で、各属性の受理と引用外の破棄、予定・未確認の原文保持、旧結果の読取り不変、照会の手掛かりの採否を確認した。実データでの抽出精度や改善率は確認していない。
-- 根拠: mcs/extract/v4/extract_llm.py、mcs/extract/patient_context.py、tests/extract/test_pharmacy_attributes.py
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/patients/patient_context.py、tests/medications/test_pharmacy_attributes.py
 
 #### 抽出ベンチに訪問薬剤管理の合成ケースを追加
 
@@ -1607,7 +1607,7 @@
 - 一包化は support_method、保管・管理者・照会結果・重複/相互作用確認は新しい詳細属性で期待し、家族の薬・書類の保管・会議日程の照会・書類の重複確認は禁止ラベルで誤抽出を検出する。予定や未回答の照会結果は原文の表記で期待する。
 - 既存84件の採点の固定値は変えず、固定値を作った旧ケースIDの集合を明示してその範囲だけで比較する。新しいケースは、本文から組み立てた正しい出力で期待が満たせることと、禁止ラベルが検出されることを別に確認する。
 - --mock-ok で全ケースの期待・禁止が検証を通ることを確認した。モデルの精度の測定結果ではない。
-- 根拠: evaluation/extract_cases.json、tests/extract/test_extract_bench_scoring.py
+- 根拠: evaluation/extract_cases.json、tests/extract/evaluation/test_extract_bench_scoring.py
 
 #### 共有カードに薬の保管・照会結果・相互作用確認の行を表示
 
@@ -1624,24 +1624,24 @@
 - 薬剤の引用が一意に存在しても、薬剤名が含まれない、または明記された対象者が出力と異なる項目は破棄し、再確認用に数える。同薬・上記などの照応は、明示された別人の所有と矛盾しない場合に限り情報を捨てず、引用を外した未確認候補として保持し、現行薬として確定しない。 明示された所有者との不一致は、照応語や本人の継続という別節があっても破棄し、本人の薬の候補として表示しない。
 - 原文にある用量・対象者・否定との整合を、再確認で新しく追加される現行薬の項目でも検証する。処方提案・医師への相談を予定として扱い、減量済みへ変えない。 用量が書かれていない薬は、原文の薬剤名と対象者を確認して保持できる。否定・予定の服薬詳細は、その修飾を含む原文値で保持する。
 - 長文の一部で抽出に失敗した場合も、処理済みの呼出回数・トークン数と固定の失敗段階を記録する。診断情報には本文やモデル応答を含めず、失敗を成功・0回として扱わない。完全合成テストで確認し、実投稿での発生率や精度改善率は未確認。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_pharmacy_model_regressions.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/medications/test_pharmacy_model_regressions.py
 
 #### 訪問薬剤管理の情報項目カタログと欠落候補の計測用部品を追加
 
 - docs/specs/pharmacy-visit-information.md に PV-1〜37 の項目・区分・出典・既存抽出項目との対応、意味抽出の必須分類との対応候補を記載した。未確認の施行日・改正有無は未確認のまま残し、投稿ごとに全項目を求める仕様にはしない。
-- mcs/extract/pharmacy_cues.py は一包化・疑義照会・保管・残薬など16分類の語を、同じ節の否定・家族・過去の表現を除いて見つける。抽出結果に同じ語があるかを見る捕捉判定は語の有無だけを測り、操作・主体・否定・時制の正しさは示さない。
+- mcs/extract/clinical/pharmacy_cues.py は一包化・疑義照会・保管・残薬など16分類の語を、同じ節の否定・家族・過去の表現を除いて見つける。抽出結果に同じ語があるかを見る捕捉判定は語の有無だけを測り、操作・主体・否定・時制の正しさは示さない。
 - mcs/extract/eval/pattern_cards.py は集計カードを固定の語彙と件数だけに制限し、手元の台帳の人名・施設名（履歴や未知の表の名前らしい項目を含む）を含むカードを拒否する。名前は出力せず、ロールバック journal が残る台帳や読み取り上限を超える台帳は検査せずに失敗とする。
 - 集計カードの名前検査は、既知の薬剤名・検査項目名のJSON位置とMCSの役割列を、人名・施設名の列から区別する。actor・contacts・未知の名前位置や直接の人名/施設名、短い実名、分割して再構成した実名の保護は維持する。非JSON列や配列の文字列要素も安全に読み、名前ではないという理由だけで検査全体を止めない。
 - 服薬の管理者を表す予定の詳細項目名は medication_manager に統一した。新しい詳細項目は抽出の仕様にはまだ追加していない。
 - テストは完全合成の台帳・本文だけを使う。実投稿・実データでの計測や薬剤状態の判定精度は確認していない。
-- 根拠: docs/specs/pharmacy-visit-information.md、mcs/extract/pharmacy_cues.py、mcs/extract/eval/pattern_cards.py、tests/extract/test_pharmacy_cues.py、tests/extract/test_pattern_cards.py
+- 根拠: docs/specs/pharmacy-visit-information.md、mcs/extract/clinical/pharmacy_cues.py、mcs/extract/eval/pattern_cards.py、tests/medications/test_pharmacy_cues.py、tests/extract/evaluation/test_pattern_cards.py
 
 #### 薬の詳細を本人の服薬管理の項目にだけ残す
 
 - patient_context.detail_items が親項目の category と subject を受け取る。薬専用の5キーは medication_management 以外では落とす。
 - subject が patient/unspecified の項目では、値のすべての出現が、同じ文で直前（無ければ直後）に書かれた本人以外の「Xの薬」に属する詳細を落とす。管理者・支援者など人を表す値も同じ所有者で判定し、所有者語そのものは値の出現に数えない。所有者が書かれていない場合は落とさない。
 - 書類の保管・家族自身の薬の一包化/保管/残薬/管理者を落とし、本人の薬への家族支援・管理者と、家族の薬と並ぶ本人の薬の詳細を保持する合成回帰を追加した。
-- 根拠: mcs/extract/patient_context.py、tests/extract/test_pharmacy_attributes.py
+- 根拠: mcs/patients/patient_context.py、tests/medications/test_pharmacy_attributes.py
 
 #### 患者情報・検査値・出来事の誤りも報告できるように
 
@@ -1656,7 +1656,7 @@
 - 本人向け記録まとめの服薬管理の報告欄は、同じprojectと投稿・本文hash・親引用・項目と薬剤の対応を再照合して表示する。原文の編集・削除・異なる患者・改変された集約値は表示に使わず、新しい値で勝手に差し替えない。表示は8報告までで、残りがあれば件数を示す。
 - 旧artifactに対象の詳細項目が無ければ空として扱う。集約の既存キーと1患者1currentの保存方式を維持する。自動共有カードへの掲載はこの変更では増やさない。
 - 完全合成の投稿と一時DBで、複数薬剤・同じ親の複数値・本人以外の主体・過去/否定/予定・編集/削除・異なる患者・保持数の上限を確認する。実データと実LLMでの精度・稼働は未検証。
-- 根拠: mcs/extract/rollup.py、mcs/notify/notify_views.py、tests/extract/test_pharmacy_state.py、tests/notify/test_pharmacy_state_summary.py
+- 根拠: mcs/patients/rollup.py、mcs/notify/notify_views.py、tests/medications/test_pharmacy_state.py、tests/notify/test_pharmacy_state_summary.py
 
 #### 抽出監査の基準統計を計測定義に結び付けて照合
 
@@ -1669,33 +1669,33 @@
 
 - チャンク内検証の失敗と本文全体での引用の曖昧さを分け、完全反復チャンクで修復不能な引用だけを修復要求から除外する。
 - 引用と項目の損失件数、全項目の検証失敗、形式不正、未収載候補、一意なチャンクの引用延長による修復を保持する。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_repeated_chunk_repair.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_repeated_chunk_repair.py
 
 #### 構造化抽出で症状や依頼の項目が省略される問題を修正
 
 - 単件・バッチの両生成スキーマで症状欄を必須とし、症状のnegatedをbooleanのまま必須化する。症状やその否定がない本文では空配列とし、測定の依頼・予定から症状を作らないことを指示する。空配列を省く一般規則・複数対象の最小出力・症状のない出力例もこれに合わせる。
 - requestsのto・from・kindを必須かつnull可とし、保存済みデータを読む検証条件や人承認条件は変更しない。
-- 根拠: mcs/extract/v4/extract_llm.py
+- 根拠: mcs/extract/llm/extract_llm.py
 
 #### shadow評価の合格判定に合成データの出所確認を必須化
 
 - run_shadow_e2e は呼出側が source を明示する必要があり、synthetic 以外（未指定・人由来・不正値）はモデルも Jev も呼ばずに全段階を未評価、passed=false、理由 source_unconfirmed として返す。
-- scripts/development/semantic_shadow_e2e.py はケースファイル最上位の source が synthetic であることを確認してから渡し、それ以外はモデルを呼ばず終了コード1で止める。この印は架空データであることを示すだけで、人の臨床ラベルや人手評価の代わりにはならない。
+- scripts/evaluation/semantic_shadow_e2e.py はケースファイル最上位の source が synthetic であることを確認してから渡し、それ以外はモデルを呼ばず終了コード1で止める。この印は架空データであることを示すだけで、人の臨床ラベルや人手評価の代わりにはならない。
 - 監査結果に既知の終了状態（PASS・NEEDS_REVIEW・INCOMPLETE）と評価済みの印が無い場合は STATUS_MISSING とし、合格にしない。合格しなかったケースには最初に止まった段階の理由コードを付ける。
 - 既存の抽出失敗・未完了・修復・後続投稿による失敗隠し・描画未完了・通知outboxを作らないことの検証はそのまま維持する。テストは完全合成のデータだけを使い、実データや外部Jevでの臨床精度は確認していない。
-- 根拠: mcs/semantic/eval/semantic_evaluation.py、scripts/development/semantic_shadow_e2e.py、tests/semantic/test_jev_value.py、tests/meta/test_maintenance_development_regressions.py
+- 根拠: mcs/semantic/eval/semantic_evaluation.py、scripts/evaluation/semantic_shadow_e2e.py、tests/semantic/test_jev_value.py、tests/meta/test_maintenance_development_regressions.py
 
 #### 家族の値や以前の測定値を本人の現在のバイタルにしない
 
 - clinical_values._vitals_guard は各値の本文中の出現を既存の対象者判定（extract.patient_source_scope）で確かめ、すべてが家族・他人・条件付き・予定・過去なら不採用として理由を記録する。患者名が分からない「田中さん」のような判定不能の記載は、従来どおり読み出し時の患者名照合に任せる。
 - 各測定の直前にある時点の記載（現在・本日などと午前・朝・前回など）で現在の測定かを判定する。本人の同じ種類の測定が現在として報告されている（「血圧は現在90/60」のように時点が測定名の後にある場合や、値が無い「現在の血圧は測定できませんでした」を含む）のに、その値の本人の測定が現在でない場合は現在値にしない。別の種類の測定や別の人の同じ数値・現在の測定は根拠にしない。保存済みの値を読む共有処理（extract.patient_vitals）にも同じ規則を入れ、集計・カード表示・抽出漏れの確認が同じ判定になる。 時点の根拠と、同じ値の出現のどちらも本人の同じ種類の測定に束縛し、対象者が不明な別人の同値で古い本人値を復活させない。氏名を持たない書込み経路の、不明な対象者だけを理由に値を除外しない従来互換は保持する。
 - 朝・夕など時点の明示が無い複数測定、単純な過去の報告、片側だけの血圧、時点の記載が無い旧形式の値は従来どおり保持することを、完全合成の回帰で確認した。
-- 根拠: mcs/extract/clinical_values.py、mcs/extract/v1/extract.py、tests/extract/test_model_vitals_source_guard.py
+- 根拠: mcs/extract/clinical/clinical_values.py、mcs/extract/rules/extract.py、tests/extract/clinical/test_model_vitals_source_guard.py
 
 #### 中断時の後始末の失敗で元の中断を隠さない
 
 - 中断時の状態記録の例外から元の例外を保護し、応答形式の確認が正常復帰した場合だけ完了判定を行う。完全合成の中断とSQLite状態処理の同時失敗で、送信済み・未確認の枠が解放されないことを検証する。
-- 根拠: mcs/core/local_llm.py、tests/core/test_llm_admission.py
+- 根拠: mcs/llm/local_llm.py、tests/llm/test_llm_admission.py
 
 #### 添付の送信前確認で全ファイルの保持を削減
 
@@ -1769,7 +1769,7 @@
 
 - 既存の候補集合と判定位置を保ち、呼出し内で最大256件ずつ応答の根拠を確認する。呼出しをまたぐcacheは保持しない。
 - 同じ接続で保存値が変わった場合は再確認し、まとめた読取りに失敗した場合も従来の候補ごとの失敗順序を維持する。
-- 根拠: mcs/ops/mcs_signals.py、tests/ops/test_signal_response_queries.py
+- 根拠: mcs/signals/mcs_signals.py、tests/ops/test_signal_response_queries.py
 
 #### Slack workerの起動失敗時に接続の参照を解放
 
@@ -1801,14 +1801,14 @@
 - 修正の開始記録を保存した直後に期限を迎えて送信しなかった場合も、未送信として修正待ちへ戻し、次の処理で再確認する。送信済み・送信結果不明の修正は再送しない。
 - 確認・連絡・質問の候補は1件ずつ照合し、別の依頼が抽出済みでも取りこぼした依頼を再確認の対象にする。同じ引用に複数の依頼があっても、抽出した依頼の内容が候補に当たる場合だけ充足とみなす。
 - 品質の再確認では、確認・連絡の依頼と質問を文ごと・種類ごとに候補とし、同じ文に複数の依頼がある場合や別の文に同じ種類の依頼がある場合も照合する。確認・連絡の候補では、名詞の一部（連絡記録など）や受領の報告を除く。質問の候補表現は既存のルールと同じ条件を使う。この変更単独では公開ルールの抽出結果と抽出世代を変えない。
-- 根拠: mcs/extract/v4/extract_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_drain.py、tests/extract/test_completeness_quality.py、tests/extract/test_clinical_chunk_planning.py、tests/extract/test_detail_clinical_extraction.py、tests/semantic/test_coverage_completeness_repair.py
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_drain.py、tests/extract/llm/test_completeness_quality.py、tests/extract/llm/test_clinical_chunk_planning.py、tests/extract/llm/test_detail_clinical_extraction.py、tests/semantic/test_coverage_completeness_repair.py
 
 #### 薬剤統計で同じ辞書世代の反復確認を整理
 
 - 固定スナップショットを読む薬剤統計の呼出し内だけで、既存の辞書進捗を再利用する。全体に共有するデータcacheや接続cacheは作らない。
 - 原文・artifact・辞書世代・候補の検証は既存の読取関数を共有する。公開current_refsの2引数と最新状態を読む条件を維持し、統計の既存の読取差替え口も同じ2引数で呼ぶ。
 - 完全合成のスナップショットで、未記録・無効・無効化・辞書切替・原文不一致の候補を区別し、集計出力と反復問い合わせを照合する。実患者データ・実辞書・LLMは使用しない。
-- 根拠: mcs/extract/drug_map.py、mcs/views/mcs_stats.py、tests/views/test_drug_candidates.py、tests/extract/test_drug_map.py、tests/extract/test_drug_map_incremental.py
+- 根拠: mcs/medications/drug_map.py、mcs/views/mcs_stats.py、tests/views/test_drug_candidates.py、tests/medications/test_drug_map.py、tests/medications/test_drug_map_incremental.py
 
 #### 保存済みバイタルの読取からLLM実行層への依存を整理
 
@@ -1816,14 +1816,14 @@
 - ルールと保存値の読取はclinical_valuesを使い、extract_llmの既存helper名は同名aliasとして保持する。CLI・flat import・保存済みartifactの契約を変更しない。
 - 既存のclinical_values source digestによる実行中コードの鮮度確認を維持する。ルール版・LLM世代は増やさない。
 - ルール読取と保存値読取の両入口について、LLM実行モジュールのimportを禁止した合成回帰を追加する。
-- 根拠: mcs/extract/clinical_values.py、mcs/extract/v1/extract.py、mcs/extract/v4/extract_llm.py、tests/extract/test_bp_pair_guard.py
+- 根拠: mcs/extract/clinical/clinical_values.py、mcs/extract/rules/extract.py、mcs/extract/llm/extract_llm.py、tests/extract/clinical/test_bp_pair_guard.py
 
 #### 依頼候補と進捗表示の内部処理を整理
 
 - 依頼候補と一覧表示で最新semantic_policyの読取り処理と臨床データセット定義を共用する。
 - 抽出進捗は既存のresolved_modelでモデルを選び、Python 3.14の日時処理を直接使う。日付だけのZを拒否する回帰テストを保持する。
 - semanticモジュールの公開要約とflat importの説明を現行構造へそろえる。
-- 根拠: mcs/ops/request_loops.py、mcs/views/extraction_progress.py、mcs/extract/v1/extract.py
+- 根拠: mcs/ops/request_loops.py、mcs/views/extraction_progress.py、mcs/extract/rules/extract.py
 
 </details>
 
@@ -1896,7 +1896,7 @@
 
 - 設定変更・DB移行は不要ですが、Hermes gateway の再起動が必要です。起動中の旧 gateway は、再接続時に削除済みの別名を読み込もうとする場合があるためです。mcs update で更新した場合は再起動が自動で予約されます。git pull などで手動更新した場合は hermes gateway restart を実行してください。旧版へ戻す場合は旧ファイル一式がそのまま戻るため、同じく再起動すれば安全に戻せます。
 
-- 定期処理・設定・DBの変更は不要です。評価用CLIを直接実行する場合のパスが変わります: `mcs/semantic/semantic_{bench,blind,lifecycle,evaluation}.py` → `mcs/semantic/eval/`、`mcs/extract/v4/extract_bench.py` → `mcs/extract/eval/extract_bench.py`、`mcs/semantic/semantic_observe.py` → `mcs/ops/semantic_observe.py`。
+- 定期処理・設定・DBの変更は不要です。評価用CLIを直接実行する場合のパスが変わります: `mcs/semantic/semantic_{bench,blind,lifecycle,evaluation}.py` → `mcs/semantic/eval/`、`mcs/extract/llm/extract_bench.py` → `mcs/extract/eval/extract_bench.py`、`mcs/semantic/semantic_observe.py` → `mcs/ops/semantic_observe.py`。
 
 - 時間不足で見送られた状態が続き、最新のバックアップが1日より古くなると health.json に backup_deferred_deadline が出ます（ディスク不足の disk_low とは区別されます）。ログは従来どおり5MBを超えるとコピーしてから切り詰め（.1 に1世代）、シンボリックリンクはたどりません。
 
@@ -2035,7 +2035,7 @@
 - 適用条件: 設定変更・DB移行・追加操作は不要です。
 - Discord独立接続の未使用SDK確認関数、カード描画の未使用定数、意味解析の未使用状態一覧、スタンプ行の未使用互換関数を削除する。
 - flat importの登録範囲、CIのlint実行方法、extract/v4内の世代呼称の説明をコメントで実装に合わせる。
-- 根拠: adapters/discord/standalone.py、mcs/notify/notify_render.py、mcs/semantic/semantic_v4.py、mcs/views/message_metadata.py、mcs/extract/v4/extract_llm.py
+- 根拠: adapters/discord/standalone.py、mcs/notify/notify_render.py、mcs/semantic/semantic_v4.py、mcs/views/message_metadata.py、mcs/extract/llm/extract_llm.py
 
 #### 共通のハッシュ計算を基盤側へ集約
 
@@ -2060,7 +2060,7 @@
 - 適用条件: 設定変更・DB移行・追加操作は不要です。
 - self_profile・station_staffの読み書きと送信者ID判定をcore/self_identity.pyへ移し、mcs_signalsから同じ名前で再exportする。
 - 最新artifactの読込みと意味解析の一時停止判定をcore/mcs_queriesへ移し、mcs_operationsから再exportする。
-- 根拠: mcs/core/self_identity.py、mcs/core/mcs_queries.py、mcs/ops/mcs_signals.py、mcs/ops/mcs_operations.py
+- 根拠: mcs/core/self_identity.py、mcs/core/mcs_queries.py、mcs/signals/mcs_signals.py、mcs/ops/mcs_operations.py
 
 #### 意味解析v4の読み込み処理を整理
 
@@ -2111,7 +2111,7 @@
 - mcs_update.py の apply から引数検証・実行環境ゲート・タグ検査・manifest退避・成功記録を、recover_interrupted から鮮度判定・同意保留の記録・done後処理・再開完了の記録を同じファイル内の関数へ分ける。ロック取得順、journal書込み、quiesce・rollback・marker処理の順序は維持する。
 - mcs_setup.py の cmd_init から --set 適用・semantic/signals指定・standalone権限・秘密情報保存・独立接続初期化を、_apply_plugin_integration から standalone トークン保存・プラグイン設定計画・Hermes トークン保存を分ける。プラットフォームトークン名の定数は従来どおり _apply_plugin_integration 内に置く。
 - extract_llm.py の run_pending から引数検証・古い成果物の掃除・候補選択・ジョブ準備・バッチ呼出し・作業単位の組立て・残件集計を分ける。DBアクセスは呼出しスレッドのみで、claim・commit・lease解放の順序は変わらない。
-- 根拠: mcs/ops/mcs_update.py、mcs/ops/mcs_setup.py、mcs/extract/v4/extract_llm.py
+- 根拠: mcs/ops/mcs_update.py、mcs/ops/mcs_setup.py、mcs/extract/llm/extract_llm.py
 
 #### 人の確認後の送信処理と結果通知の巡回を共通化
 
@@ -2175,7 +2175,7 @@
 #### 評価・ベンチ用ツールを eval フォルダへ移動
 
 - 変更内容: オフライン評価・ベンチ用のツールを `mcs/semantic/eval/`・`mcs/extract/eval/` へ、意味解析の観測スナップショットを `mcs/ops/` へ移しました。収集・通知・解析の定期処理と動作は変わりません。評価用コマンドを直接パス指定で実行していた場合は新しいパスを使ってください。
-- 適用条件: 定期処理・設定・DBの変更は不要です。評価用CLIを直接実行する場合のパスが変わります: `mcs/semantic/semantic_{bench,blind,lifecycle,evaluation}.py` → `mcs/semantic/eval/`、`mcs/extract/v4/extract_bench.py` → `mcs/extract/eval/extract_bench.py`、`mcs/semantic/semantic_observe.py` → `mcs/ops/semantic_observe.py`。
+- 適用条件: 定期処理・設定・DBの変更は不要です。評価用CLIを直接実行する場合のパスが変わります: `mcs/semantic/semantic_{bench,blind,lifecycle,evaluation}.py` → `mcs/semantic/eval/`、`mcs/extract/llm/extract_bench.py` → `mcs/extract/eval/extract_bench.py`、`mcs/semantic/semantic_observe.py` → `mcs/ops/semantic_observe.py`。
 - flat importのモジュール名は変わらないため、importとテストの差し替えはそのまま動く。
 - 1階層深くなったCLIはmcs/ルートを探すbootstrapと同梱コーパスの参照位置を合わせる。
 - 根拠: mcs/semantic/eval/、mcs/extract/eval/、mcs/ops/semantic_observe.py
@@ -2246,7 +2246,7 @@
 - llm_admission.Broker.reconcile_unknown(evidence) は、現在の epoch で unknown / cancel_pending のまま UNKNOWN_HOLD_S(1800秒)を過ぎた枠を、evidence が空でない証跡文字列を返したときだけ terminal(outcome=reconciled)にする。証跡の取得はストアの書込みロックの外で行う。
 - local_llm.admitted_chat は class_full / rt_pending で拒否されたとき、5分に1回まで /slots を1秒間隔で3回確認し(すべて is_processing=false のときだけ証跡)、解放できたら1回だけ受付をやり直す。
 - Broker.status() に unresolved・oldest_unresolved_age_s・slots を追加し、local_llm.admission_status() で取得できるようにした。
-- 根拠: mcs/core/llm_admission.py、mcs/core/local_llm.py、tests/core/test_stab_admission_reconcile.py
+- 根拠: mcs/llm/llm_admission.py、mcs/llm/local_llm.py、tests/llm/test_stab_admission_reconcile.py
 
 #### 長い出力の印を保存できなかったとき、記録を残し同じ処理内では印を保つように修正
 
@@ -2264,17 +2264,17 @@
 - /v1/models が応答し生成が transport 失敗(タイムアウト等)のときも circuit_failure を数える。遮断器の streak が1以上の間は error 行を書かない(slow_deferred)。応答のあった呼び出しで streak は0に戻るため、健全なサーバーで毎回失敗するメッセージは従来どおり試行回数の上限で止まる。
 - semantic_drain.run_due は LLMNotSent の llm_unreachable / llm_unavailable を同じ遮断器に1パス1回だけ数え、そのパスでは残りの semantic ジョブを呼ばない(out.llm_down)。応答のあった呼び出しは circuit_success で遮断器を解除する。受付制御の保留や long_output の予算不足は停止として数えない。
 - mcs_util の circuit_failure / circuit_success を flock で直列化し、並行する抽出・意味評価・tick の更新で回数が失われないようにした。llm_health()・llm_last_success()・llm_down_since()・llm_down_for_s()・circuit_streak() を追加した。
-- 根拠: mcs/core/mcs_util.py、mcs/extract/v4/extract_llm.py、mcs/semantic/semantic_drain.py、tests/extract/test_stab_llm_breaker.py、tests/core/test_stab_circuit_lock.py、tests/semantic/test_stab_semantic_lanes.py
+- 根拠: mcs/core/mcs_util.py、mcs/extract/llm/extract_llm.py、mcs/semantic/semantic_drain.py、tests/extract/llm/test_stab_llm_breaker.py、tests/core/test_stab_circuit_lock.py、tests/semantic/test_stab_semantic_lanes.py
 
 #### 抽出待ちの選び方を軽くし、新着メッセージを再抽出より先に処理するように変更
 
 - 変更内容: 抽出待ちの選定は毎回すべての保管メッセージを走査していました。高価な判定の前に索引だけで決まる確認を置き、一度も抽出していない新着メッセージを先に探すようにしたため、合成5万件の計測では、新着があるときの1件選定が約0.37秒から約0.05秒になりました。抽出の版が上がって全件が再抽出対象になっても、新着が後回しになりません。選ばれる対象の集合は従来と同じで、順序だけが「新着→再抽出・再試行」に変わります。残件数が出なかったログには、最大10分ごとに数え直す概算(left_estimate)を出します。
 - 適用条件: 追加操作は不要です。抽出の対象条件・試行回数の上限・抽出の版は変わりません。
-- pending_pred は、v4投影・QC・人手報告の各判定の前に (kind, message_id) 索引だけの存在確認を置き、thin 判定の前に本文長の条件を置いた。qc_fix の判定は確定済みかどうかの判定の後に移した。いずれも同値変形で、従来の式と結果が一致することを tests/extract/test_stab_pending_pred.py で確認している。
+- pending_pred は、v4投影・QC・人手報告の各判定の前に (kind, message_id) 索引だけの存在確認を置き、thin 判定の前に本文長の条件を置いた。qc_fix の判定は確定済みかどうかの判定の後に移した。いずれも同値変形で、従来の式と結果が一致することを tests/extract/llm/test_stab_pending_pred.py で確認している。
 - run_pending の選定は LEFT JOIN + GROUP BY を相関副問合せに置き換え、posted_at が同じときは message_id で順序を決める。既定(新しい順)では extract_llm の行を一度も持たないメッセージを先に選び、不足分を残りから選ぶ。oldest_first は従来どおり1回で選ぶ。
 - 結果に fresh_selected・left_estimate・left_estimate_age_s を追加した。left は従来どおり短い選定のときだけ正確な値を返す。
 - 計測(合成5万件・新着2%・Python 3.14・3回の最小値): 1件選定 0.369秒→0.049秒、20件 0.443秒→0.084秒。新着がなく再試行だけが残る場合は 0.437秒→0.351秒。messages(posted_at_ts) の索引を加えた場合、1件選定は約0.004秒(新着なしでは0.076秒)。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_stab_pending_pred.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_stab_pending_pred.py
 
 #### 長い出力が必要な意味評価ジョブが新着レーンを塞ぐ問題を修正
 
@@ -2389,7 +2389,7 @@
 - 適用条件: 追加操作は不要です。同梱の抽出処理は待ち時間0を渡すため、通常の運用で動作は変わりません。
 - admitted_chat は wait_s が有限の0以上の数値でなければ permit 取得前に ValueError(wait_s_invalid) を返す。
 - これまで None や文字列は待機登録後の比較で TypeError になり rt_waiting が残った。無限大は呼出し側の期限がなければ待ち続けた。
-- 根拠: mcs/core/local_llm.py、tests/core/test_llm_admission.py
+- 根拠: mcs/llm/local_llm.py、tests/llm/test_llm_admission.py
 
 #### 添付取得で HTTP 425 を受けたとき、すぐに失敗扱いにせず再試行するよう修正
 
@@ -2495,24 +2495,24 @@
 
 - 変更内容: ローカルLLMの接続遮断（サーキットブレーカー）中やディスク残量不足のあいだ、常駐の抽出処理が5秒ごとに未抽出の検索を繰り返し、データベースの負荷を上げていた問題を修正しました。遮断の残り時間（最大2分）だけ待ってから再確認します。また、1回の処理が失敗だけで再試行予定の記録もない場合に常駐処理が終了していた問題を修正し、2分後に再確認して常駐を続けるようにしました。
 - 適用条件: 追加操作は不要です。更新後に抽出の常駐処理が再起動されると反映されます。
-- mcs/extract/v4/extract_llm.py の run_pending は返り値に disk_low を含める。--all の常駐ループは、抽出が0件で circuit_open_s または disk_low が立っているとき min(120, circuit_open_s) 秒（disk_low のみは120秒）待機する。
+- mcs/extract/llm/extract_llm.py の run_pending は返り値に disk_low を含める。--all の常駐ループは、抽出が0件で circuit_open_s または disk_low が立っているとき min(120, circuit_open_s) 秒（disk_low のみは120秒）待機する。
 - 失敗だけの回で _next_retry が None（接続不可の失敗はエラー記録を残さない）のとき、ループを抜けずに120秒待って継続する。--stop-after による終了は従来どおり。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_extract_truncation_and_resident_errors.py、tests/extract/test_extract_prefilter.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_extract_truncation_and_resident_errors.py、tests/extract/rules/test_extract_prefilter.py
 
 #### brain_export のシグナル一覧で注記の改行が表を崩す問題を修正
 
 - 変更内容: brain_export の signals ページで、注記に改行を含むシグナルがあると表の行が途中で切れていた問題を修正しました。注記も他の列と同じく、改行を空白に置き換えて1つのセルに収めます。
 - 適用条件: 追加操作は不要です。次回の brain_export から反映されます。
 - mcs/ops/brain_export.py の _signals_md は note を _cell で整形する（| のエスケープと改行の空白化）。
-- mcs/ops/mcs_signals.py の dismiss_reason_counts は、どの検出器も出さない種別 med_followup を既知の種別として扱わず unknown に数える。本番では出現しない種別のため集計値は変わらない。
-- 根拠: mcs/ops/brain_export.py、mcs/ops/mcs_signals.py
+- mcs/signals/mcs_signals.py の dismiss_reason_counts は、どの検出器も出さない種別 med_followup を既知の種別として扱わず unknown に数える。本番では出現しない種別のため集計値は変わらない。
+- 根拠: mcs/ops/brain_export.py、mcs/signals/mcs_signals.py
 
 #### LLM抽出結果の本文に、実際に使ったモデル名を記録
 
 - 変更内容: config.json の local_llm.model で既定以外のモデルを指定している環境で、抽出結果の本文（JSON）の _model に既定のモデル名が書かれていた問題を修正しました。本文にも、記録の model 列・meta と同じ実際に使ったモデル名が入ります。
 - 適用条件: 追加操作は不要です。更新後に新しく保存される抽出結果から反映され、保存済みの結果は書き換えません。
-- mcs/extract/v4/extract_llm.py は成功時と失敗記録の本文の _model に、その行で固定した対象モデル（_target）を記録する。EXTRACT_VERSION は変えない。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_extract_content_model.py
+- mcs/extract/llm/extract_llm.py は成功時と失敗記録の本文の _model に、その行で固定した対象モデル（_target）を記録する。EXTRACT_VERSION は変えない。
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_extract_content_model.py
 
 #### 自動再ログインでパスワードを入力する相手のブラウザを確認
 
@@ -2612,7 +2612,7 @@
 - 停止の記録は従来「1回の実行で1回」だったが、応答で停止が解除された後に再び停止した場合は、新しい停止として1回記録する（連続した停止区間ごとに1回）。
 - 各呼出しの完了時刻を記録し、並列処理で完了順と処理順が入れ替わっても、より新しい観測を古い応答で上書きしない。複数件をまとめた呼出しの応答も同じ扱いにし、抽出結果が使えても最後の修復呼出しが停止だった場合は停止として記録する。
 - 接続拒否・503・タイムアウトなど応答のない失敗は従来どおり停止として数える。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_stab_llm_breaker.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_stab_llm_breaker.py
 
 #### ローカルLLMのポート誤りと .env の文字コード誤りを早い段階で扱うよう修正
 
@@ -2764,10 +2764,10 @@
 
 - 変更内容: 患者の記録まとめの「処方期間」を「処方期間の候補」に改めました。投稿から規則で抽出した日付範囲で、どの薬の期間かは特定していないためです。brain_export の患者ページも見出しを「med period candidate（規則抽出・未確認）」に、未更新投稿の注記を「unrefreshed_message_ids（削除の証拠ではない）」に変えました。保存キーは med_period_candidate / unrefreshed_message_ids になります。
 - 適用条件: 追加操作は不要です。更新後は全患者の患者要約を定期処理の時間枠内で順次再構築し、終わらなかった分は次回以降に続けます。処理中も旧キーの要約は新しい名称として読み取られます。
-- mcs/extract/rollup.py の PERIOD_CHECK_VERSION を 8 → 9 に上げ、dirty_projects が旧版の要約をすべて再構築する。current_cached_refs は再構築前の旧キー（current_med_period / possibly_deleted）を新キーへ読み替える。
+- mcs/patients/rollup.py の PERIOD_CHECK_VERSION を 8 → 9 に上げ、dirty_projects が旧版の要約をすべて再構築する。current_cached_refs は再構築前の旧キー（current_med_period / possibly_deleted）を新キーへ読み替える。
 - 更新確認されていない投稿の判定（他の投稿が更新確認されているのに21日以上更新確認されていない先頭20件）を _unrefreshed_ids に一本化し、要約の内容と再構築判定の署名で同じ実装を使う。判定条件は変えていない。削除済み（tombstone）の件数は read model の coverage.collection.deleted が正本。
 - docs/guides/USER_GUIDE.md の患者の記録まとめと rollup の説明を、処方期間の候補と未更新投稿IDの意味に合わせて更新した。
-- 根拠: mcs/extract/rollup.py、mcs/notify/notify_views.py、mcs/ops/brain_export.py、docs/guides/USER_GUIDE.md、docs/roadmap/integrity.md
+- 根拠: mcs/patients/rollup.py、mcs/notify/notify_views.py、mcs/ops/brain_export.py、docs/guides/USER_GUIDE.md、docs/roadmap/integrity.md
 
 #### カード操作コマンドの文字列検証を承認経路と統一
 
@@ -2800,10 +2800,10 @@
 
 - 変更内容: 家族・医療者・「以前」などの言及を含む患者で、🧾 要約や brain_export を開くたびに、最新の集約結果があっても全投稿の再集約をやり直していた問題を修正しました。あわせて、長い投稿の出典主体の判定が本文長の二乗で遅くなっていた処理を、同じ判定結果のまま、本文全体の走査は投稿ごとに1回、各判定は該当する文節の範囲だけを見るようにしました。表示内容は変わりません。
 - 適用条件: 追加操作は不要です。
-- mcs/extract/rollup.py の current_cached_refs は、主体の混在による再計算を period_check_version が現行と異なる（または未記録の）旧キャッシュに限る。現行版のキャッシュは build_rollup が同じ主体ガードで作ったもので、投稿や患者名の変更は従来どおり dirty_projects が次の定期処理で再構築する。そのため、変更から再構築までの間は、他の患者と同じくキャッシュの値を返す。
-- mcs/extract/v1/extract.py の patient_source_scope は、範囲に依存しない本文全体の見出し・人物の走査を _scope_events に分け、直近32件の本文について結果を再利用する。所有者表現（例: 母の）と区切り語の前方検索は、句読点・改行で区切られた該当文節の範囲だけを走査する（所有者表現と区切り語は句読点・改行をまたがないため結果は同一）。
-- mcs/extract/clinical_values.py の patient_item_scope は、引用位置が特定できない旧項目の判定で、患者以外の区切りが見つかった時点で走査を止める。空本文は従来どおり unknown。
-- 根拠: mcs/extract/rollup.py、mcs/extract/v1/extract.py、mcs/extract/clinical_values.py、tests/extract/test_rollup_subject_scope.py
+- mcs/patients/rollup.py の current_cached_refs は、主体の混在による再計算を period_check_version が現行と異なる（または未記録の）旧キャッシュに限る。現行版のキャッシュは build_rollup が同じ主体ガードで作ったもので、投稿や患者名の変更は従来どおり dirty_projects が次の定期処理で再構築する。そのため、変更から再構築までの間は、他の患者と同じくキャッシュの値を返す。
+- mcs/extract/rules/extract.py の patient_source_scope は、範囲に依存しない本文全体の見出し・人物の走査を _scope_events に分け、直近32件の本文について結果を再利用する。所有者表現（例: 母の）と区切り語の前方検索は、句読点・改行で区切られた該当文節の範囲だけを走査する（所有者表現と区切り語は句読点・改行をまたがないため結果は同一）。
+- mcs/extract/clinical/clinical_values.py の patient_item_scope は、引用位置が特定できない旧項目の判定で、患者以外の区切りが見つかった時点で走査を止める。空本文は従来どおり unknown。
+- 根拠: mcs/patients/rollup.py、mcs/extract/rules/extract.py、mcs/extract/clinical/clinical_values.py、tests/patients/test_rollup_subject_scope.py
 
 #### 自分の投稿などがまとめて増えたとき、一部が通知されないことがある問題を修正
 
@@ -2998,7 +2998,7 @@
 - 適用条件: 追加操作は不要です。更新後の表示から反映されます。
 - mcs/views/structured_view.py の structured_lines は、根拠の引用に LLM の urgency_evidence の先頭をそのまま使っていた。判定側（message_urgency_details）が患者のスコープで絞り込んだ reasons の先頭を使うように変更した。
 - 家族の急変と患者本人の症状を含む完全合成の投稿で、表示される根拠が患者本人の記述になることを回帰テストで確認する。
-- 根拠: mcs/views/structured_view.py、tests/extract/test_alert_subject_guard.py
+- 根拠: mcs/views/structured_view.py、tests/extract/clinical/test_alert_subject_guard.py
 
 #### 送信済みLLM処理の時間切れを試行として記録
 
@@ -3006,7 +3006,7 @@
 - 適用条件: 追加操作・DB移行は不要です。送信前の予算不足、受付待ち、接続拒否・503による延期は従来どおり試行回数を増やしません。
 - transport timeoutがcaller deadlineへ到達した場合だけexpiredとして記録。endpointのprobeや障害breakerへ送らず既存の失敗会計を行う。
 - batch内で実送信した全行にも失敗を反映する。期限後の単独再試行に回して無料延期へ戻さない。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_stab_llm_breaker.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_stab_llm_breaker.py
 
 </details>
 
@@ -3163,7 +3163,7 @@
 - 診察・往診・診療の語を含む施設名、医師名簿や一般説明を除外する共有cueを、ルールとLLMのイベント根拠確認で再利用する。実際の診察・往診・予約・予定の言及は保持する。
 - LLM選択時の空配列とルールfallback、保存形式・臨床閾値は変更しない。完全合成の回帰と通常更新による古いルールの置換を確認する。
 - 共有ルールモジュールの出所hashも実行中LLMの鮮度確認へ含め、古いcueを混ぜて保存しない。
-- 根拠: mcs/extract/v1/extract.py、mcs/extract/v4/extract_llm.py、tests/extract/test_rule_summary_sentence_context.py
+- 根拠: mcs/extract/rules/extract.py、mcs/extract/llm/extract_llm.py、tests/extract/rules/test_rule_summary_sentence_context.py
 
 #### 意味解析の滞留を修正（定期収集中に完了した解析結果を捨てていた）
 
@@ -3171,7 +3171,7 @@
 - 再取得の時間切れ中に更新マーカーやコードの印が変わった場合は従来どおり常駐を終了して再起動する。変化のない時間切れでは終了せず処理を続ける。
 - 診断として、ワーカーの1回分の処理結果（ログ）に preamble_s（保守処理の時間）と lock_skipped / floor_skipped（遷移なしで飛ばした件数）を、意味解析の実行記録の job_metrics に llm_error（LLM側の失敗コード。本文は含まない）を追加する。
 - 合成テストで、定数の整合・背景レーンだけが長い上限と締め切りを渡すこと・締め切りで待ちを打ち切ること・更新中の時間切れで終了すること・2本目ワーカーが自分の枠で解析すること（既存契約の固定）・診断項目を確認する。
-- 根拠: mcs/core/mcs_util.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic.py、mcs/extract/v4/extract_llm.py、tests/semantic/test_semantic_backlog_budget.py
+- 根拠: mcs/core/mcs_util.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic.py、mcs/extract/llm/extract_llm.py、tests/semantic/test_semantic_backlog_budget.py
 
 #### 意味解析が止まる・長い出力や一時的な失敗で再試行を浪費する問題を修正
 
@@ -3180,7 +3180,7 @@
 - 1問だけの不正応答（`質問ID:理由` 形式の protocol_error）を再試行扱いにする判定を共通の分類関数へ移し、薬剤詳細・網羅性に加えて事実監査・要約の主張監査・命題評価・未完了事項の関係判定・QC にも適用する。未完了事項の関係判定はその後、別項目の聞き直しと取得失敗の記録の方式に置き換えた。応答全体の形式不正は従来どおり即時の失敗。
 - ローカルLLMの HTTP 503（モデル読込中）を、接続拒否と同じく未送信として扱い、意味解析は延期、抽出は保留にする。その他の HTTP エラーは従来どおり失敗として数える。
 - 合成テストで、背景レーンが QC と意味解析を交互に選ぶこと、各評価段階の不正応答が再試行になること、主張監査の不正応答でジョブが失敗せず保留に戻ること、503 で試行回数を消費しないことを確認し、背景レーンだけ1回の呼出しに600秒を超える時間を渡すこと、締切後の結果を保存しないこと、ロックを取り直せない場合に試行回数が変わらないことも確認する。
-- 根拠: mcs/semantic/semantic_drain.py、mcs/semantic/semantic.py、mcs/extract/v4/extract_llm.py、mcs/core/llm_admission.py、tests/semantic/test_three_slot_lanes.py、tests/semantic/test_mcs_semantic.py、tests/semantic/test_semantic_backlog_budget.py、tests/extract/test_extract_llm.py
+- 根拠: mcs/semantic/semantic_drain.py、mcs/semantic/semantic.py、mcs/extract/llm/extract_llm.py、mcs/llm/llm_admission.py、tests/semantic/test_three_slot_lanes.py、tests/semantic/test_mcs_semantic.py、tests/semantic/test_semantic_backlog_budget.py、tests/extract/llm/test_extract_llm.py
 
 #### 意味解析が再試行になった理由を実行記録に残す
 
@@ -3271,7 +3271,7 @@
 - 成果物・医薬品辞書・期間の再判定など、既存の更新条件は維持します。署名は集計前に取得し、途中で入力が変わった場合は再判定されます。
 - 修復診断のdirty_rollupsは同じ判定を読み取り専用で利用します。必要な入力列がない古いsnapshotは不明として扱い、0件とは表示しません。
 - 完全合成の回帰で、再観測の抑制、投稿者・時刻・返信先・患者名の変更、削除可能性と登録データ状態の変化の即時更新、診断との一致を確認します。実機の速度改善量は反映後に測ります。
-- 根拠: mcs/extract/rollup.py、mcs/ops/mcs_repair.py、tests/extract/test_bugfix_r2_5_rollup_dirty.py、tests/ops/test_mcs_repair.py
+- 根拠: mcs/patients/rollup.py、mcs/ops/mcs_repair.py、tests/extract/test_bugfix_r2_5_rollup_dirty.py、tests/ops/test_mcs_repair.py
 
 #### 意味解析の実行ロック喪失を調べるための時間をログに出す
 
@@ -3286,7 +3286,7 @@
 - 意味解析を実行した処理の後は、抽出が空でも120秒の待機に入らず次の処理へ進む。
 - 定期収集（tick）の新着抽出、QCと意味解析の交互選択、新着レーンは変更しない。
 - 合成テストで、意味解析の実行後に抽出が直近通知分へ絞られ30分後に戻ること、許可範囲を広げないこと、延期だけの処理では期間が延びないこと、意味解析の後に長い待機に入らないこと、新着枠の期間が定期収集と一致することを確認する。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/semantic/test_semantic_backlog_budget.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/semantic/test_semantic_backlog_budget.py
 
 #### 更新・復旧中にサービス設定が止まっても子処理を残さない
 
@@ -3415,7 +3415,7 @@
 
 - 時刻から投稿を毎回探索する旧 msgs_by_ts を削除し、同時刻・欠損日時の集計期待値を独立した合成例で検証する。
 - テストだけが参照していた _saved_chunks ラッパーを削除し、現行 _saved_chunk_state のキャッシュ部分を直接検証する。
-- 根拠: mcs/extract/rollup.py、mcs/extract/v4/extract_llm.py
+- 根拠: mcs/patients/rollup.py、mcs/extract/llm/extract_llm.py
 
 #### 通知表示の不要な補助コードを整理
 
@@ -3490,7 +3490,7 @@
 - Linuxは/proc/PID/statの起動時刻、macOSはLC_ALL=C・TZ=UTCで実行するps -o lstartを、1回1秒・1回の回収あたり合計2秒以内で読み取る。
 - 起動時刻は固定形式（Linuxは対象PIDの記録の22番目の数値、macOSは曜日と実在日付まで一致するC形式の日時）だけを採用し、破損・未知形式・方式の異なる記録同士・読取り失敗・秒単位で区別できない再利用では解放しない。
 - 同じプロセス番号は1回の回収で1度だけ照会し、fork後の子プロセスは自分の起動時刻を記録する。
-- 根拠: mcs/core/llm_admission.py、tests/core/test_llm_admission_reclaim.py
+- 根拠: mcs/llm/llm_admission.py、tests/llm/test_llm_admission_reclaim.py
 
 #### バックアップの警報で保持上限と暗号化ツールの不備を区別
 
@@ -3511,13 +3511,13 @@
 - _nearest_vital_labelがラベル探索の範囲を文字列の切り出しで作っていたため、BPのBが範囲外になると残るPを脈拍と判定していた問題を、本文上の範囲検索に修正した。
 - 収縮期と拡張期が同じ値（例 BP80/80）のとき拡張期を収縮期の記述と誤って除いていた問題を、値がその側の位置にもある場合はその側として扱うよう修正した。
 - 組の確認に使う数値は既存の抽出と同じ書式（小数・全角の小数点を含む）で読み、小数の別測定どうしも組み合わせない。丸め・単位換算・範囲の推定は行わない。
-- 根拠: mcs/extract/v4/extract_llm.py、mcs/extract/v1/extract.py、tests/extract/test_bp_pair_guard.py
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/extract/rules/extract.py、tests/extract/clinical/test_bp_pair_guard.py
 
 #### 薬剤の確認画面から抽出元の表記を削除
 
 - notify_views.meds_viewの未確認行の注記をカード要約の「薬剤候補（未確認）」と同じ出所なしの表記へ揃える。
 - layout 1の既存カードの緊急度表記は所有者決定（2026-10-08）どおり変更しない。
-- 根拠: mcs/notify/notify_views.py、tests/notify/test_card_drug_views.py、tests/extract/test_alert_subject_guard.py
+- 根拠: mcs/notify/notify_views.py、tests/notify/test_card_drug_views.py、tests/extract/clinical/test_alert_subject_guard.py
 
 #### 読めない取得記録で臨床データの収集が止まる問題を修正
 
@@ -3528,7 +3528,7 @@
 
 - 区切り位置から次の項目の範囲を検索し、局所文字列だけを切り出す。
 - 改変前の実装との完全合成200ケースの分割一致と、既存の原文保全・再開・根拠の契約を照合する。
-- 根拠: mcs/extract/clinical_chunking.py、tests/extract/test_clinical_chunk_planning.py
+- 根拠: mcs/extract/clinical/clinical_chunking.py、tests/extract/llm/test_clinical_chunk_planning.py
 
 #### Discordで無効になったカードの更新依頼が失敗したときの案内を修正
 
@@ -3586,7 +3586,7 @@
 
 - integrityのusage/timingsは実際に提供された項目だけを保持する。
 - 集計のprompt_msとpredicted_msの取得有無を個別に判定し、非有限の合計は未知として、有効なほかの測定値を保持する。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_integrity_partial_metrics.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_integrity_partial_metrics.py
 
 #### 応答時間集計の差分から少人数の結果を推定しにくくする
 
@@ -3599,7 +3599,7 @@
 - extract_llm._mergeの血圧2キーを一つの測定として扱い、後のchunkが血圧を含む場合は両キーを入れ替える。
 - 血圧以外の新しい測定値だけを含むchunkは、以前の血圧を変更しない。
 - 成功済みの旧extract_version=6も既存pending_predと書込み側_currentの世代判定により再処理対象になる。JSON出力schemaは変えない。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_merge_bp_readings.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/clinical/test_merge_bp_readings.py
 
 #### 古い通知記録が壊れていてもDB更新を停止しない
 
@@ -3682,13 +3682,13 @@
 
 - extract_llm._next_retryの集約対象をJSONの数値型かつ有限値に限定する。
 - 従来受け付けていた有限値の範囲、最早時刻、上限に達した試行の除外は維持する。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_retry_timestamp.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_retry_timestamp.py
 
 #### 患者集約に原文と一致しないバイタル値が残る問題を修正
 
 - 患者限定の旧形式互換が、原文に測定名がある項目の不一致値を再追加しないようにする。測定記述のない旧形式の信頼済み出力・未対応拡張の既存契約は保持する。
 - 旧集約の期間版だけが古い場合はバイタル欄だけを読み直し、他の旧形式情報を巻き込んで消さない。既存の人物・投影の無効化条件は維持する。
-- 根拠: mcs/extract/clinical_values.py、mcs/extract/rollup.py、tests/extract/test_clinical_scope_review.py、tests/extract/test_rollup_canonical.py
+- 根拠: mcs/extract/clinical/clinical_values.py、mcs/patients/rollup.py、tests/extract/clinical/test_clinical_scope_review.py、tests/patients/test_rollup_canonical.py
 
 #### MCS障害中も日次バックアップを続け、時間切れで取得しなかった患者を未完了として表示
 
@@ -3722,7 +3722,7 @@
 #### 読めないアラート記録を候補なしと扱う問題を修正
 
 - 最新行の不明状態を既存のsignal_state_corruptコードで返し、brain_exportは出力の置換や整理を始める前に状態不明を拒否する。正常に測定できた0件は従来どおり扱う。
-- 根拠: mcs/ops/mcs_signals.py、mcs/ops/brain_export.py、tests/ops/test_mcs_signals.py、tests/ops/test_brain_export.py
+- 根拠: mcs/signals/mcs_signals.py、mcs/ops/brain_export.py、tests/ops/test_mcs_signals.py、tests/ops/test_brain_export.py
 
 #### 時間を置いて届いた返信も、Slackのチャンネルに通知する
 
@@ -3764,7 +3764,7 @@
 #### 読めないアラートの集約記録で新しい通知まで止まる問題を修正
 
 - 待機ダイジェストへの追加前に既存のloads_dictで保存JSONを検証し、読み取れない行へ結合せず新しい通知を登録する。既存のsignal keyによる重複抑制を先に通す。
-- 根拠: mcs/ops/mcs_signals.py、tests/ops/test_mcs_signals.py
+- 根拠: mcs/signals/mcs_signals.py、tests/ops/test_mcs_signals.py
 
 #### 更新前の無視ファイル検査が失敗した理由を保持
 
@@ -3800,7 +3800,7 @@
 
 - RULE_VERSIONを19、PERIOD_CHECK_VERSIONを8へ更新。
 - ASCIIと全角の数字・小数点を数値境界として扱い、現在値の原文照合にも共通判定を使用。
-- 根拠: mcs/extract/v1/extract.py、mcs/extract/rollup.py、tests/extract/test_v1_numeric_boundaries.py
+- 根拠: mcs/extract/rules/extract.py、mcs/patients/rollup.py、tests/extract/rules/test_v1_numeric_boundaries.py
 
 #### 無効になった依頼候補を現在の候補として表示する問題を修正
 
@@ -4032,7 +4032,7 @@
 - 分割履歴と完了区間を既存の非公開checkpointに保存し、失敗区間だけを分割する。
 - 本文hash・モデル・投稿日時・prompt・参考文脈に束縛し、破損・不一致の途中結果を採用しない。
 - 修復も同じ区間の候補を使い、対象外の区間を再出力する負荷を抑える。
-- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_detail_clinical_extraction.py
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_detail_clinical_extraction.py
 
 #### 家族・他者の薬や測定値が本人の集約とシグナルに混入する問題を修正
 
@@ -4041,7 +4041,7 @@
 - 最新の薬剤記録を選ぶ前に主体を検証し、家族の中止記載で本人の薬剤を消さない。
 - 旧cacheは読取り専用で臨床項目を補正し、旧schemaで補正できない場合は未確認の臨床項目を現在値として表示しない。
 - 集約・シグナル・通知と統計で同じ原文scope判定を利用し、急ぎの依頼や主体保留をAI通常判定の抑止と混同しない。
-- 根拠: mcs/extract/rollup.py、mcs/extract/clinical_values.py、mcs/ops/mcs_signals.py、mcs/views/mcs_stats.py
+- 根拠: mcs/patients/rollup.py、mcs/extract/clinical/clinical_values.py、mcs/signals/mcs_signals.py、mcs/views/mcs_stats.py
 
 #### 運用アラートの発生頻度を引き下げ、コード更新中の誤警報を解消
 
@@ -4092,7 +4092,7 @@
 - 過去・予定・条件付きの記載を現在の本人急変へ自動昇格させず、家族の測定値とイベントは原文根拠付きの別記載として保存する。
 - 緊急通知の対象人物と引用理由は同じ原文ガードで検証し、既存の配送確認条件を維持する。
 - 完全合成の混在・報告者・複合人物表現・否定・時点・既存キャッシュの回帰で検証する。
-- 根拠: mcs/extract/v1/extract.py、mcs/views/structured_view.py、mcs/notify/notify_urgent.py、tests/extract/test_alert_subject_guard.py
+- 根拠: mcs/extract/rules/extract.py、mcs/views/structured_view.py、mcs/notify/notify_urgent.py、tests/extract/clinical/test_alert_subject_guard.py
 
 #### カードから薬剤の確認と医薬品辞書の検索ができるように
 
@@ -4102,7 +4102,7 @@
 - 「薬剤を確認」はシグナルの根拠投稿、またはスレッド内で薬剤のある最新投稿を対象にし、カードの薬剤行と同じ選択規則（家族・過去・否定を除外）を使う。複数候補・総称では成分名を出さない。
 - 「薬剤を検索」はconfigに固定され、DBの現行導出世代と一致する承認済み辞書だけを使う。切替中・未有効・読込み不能ではボタンを出さず、候補も返さない。
 - LINE WORKSで検索語を空にしたとき、無応答で終わらず入力を促すようにした。
-- 根拠: mcs/notify/notify_cards.py、mcs/notify/notify_views.py、mcs/views/structured_view.py、mcs/extract/drug_map.py、adapters/common/text.py、adapters/slack/actions.py、adapters/discord/actions.py、adapters/lineworks/actions.py
+- 根拠: mcs/notify/notify_cards.py、mcs/notify/notify_views.py、mcs/views/structured_view.py、mcs/medications/drug_map.py、adapters/common/text.py、adapters/slack/actions.py、adapters/discord/actions.py、adapters/lineworks/actions.py
 
 #### カード見出しの「様」を削除し、機械照合の緊急表示を 🚨 に
 
@@ -4151,7 +4151,7 @@
 - 原文があるバイタルと閾値超過は測定名・値の一致を必須とし、本文に無い保存値を復活させない。
 - 非患者グループの主体を既定で未確認とし、未確認値を本人情報へ昇格させない。
 - canonical所見は原文の対象・時点を注記して保持し、既存の原文なし・最小形式の互換性を維持する。
-- 根拠: mcs/views/structured_view.py、mcs/extract/clinical_values.py、tests/views/test_clinical_summary_source_scope.py
+- 根拠: mcs/views/structured_view.py、mcs/extract/clinical/clinical_values.py、tests/views/test_clinical_summary_source_scope.py
 
 #### 服薬・副作用・観測・支援・変更後の結果を詳細属性で保持
 
@@ -4161,7 +4161,7 @@
 - canonical v3/v4の同fact引用・subject・doc_hashと監査に追加属性を束縛し、既存PASS／admission／公開fenceを維持する。
 - 本文の全coverageと新layout checkpointを保持し、実出力length時だけ細分化する。語彙による詳細除外は行わない。
 - 本人限定要約で登録sourceの取得状態と観測日時・単位を確認できる。原文・全属性・履歴はdetailに保持し、aggregateは値を含めない。
-- 根拠: mcs/extract/patient_context.py、mcs/extract/v1/extract.py、mcs/extract/rollup.py、mcs/views/read_model.py、mcs/views/project_metadata_view.py、mcs/notify/notify_views.py、mcs/ops/mcs_setup.py、mcs/semantic/semantic_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_facts.py、mcs/semantic/semantic_audit.py、mcs/semantic/semantic_projection.py
+- 根拠: mcs/patients/patient_context.py、mcs/extract/rules/extract.py、mcs/patients/rollup.py、mcs/views/read_model.py、mcs/views/project_metadata_view.py、mcs/notify/notify_views.py、mcs/ops/mcs_setup.py、mcs/semantic/semantic_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_facts.py、mcs/semantic/semantic_audit.py、mcs/semantic/semantic_projection.py
 
 #### 情報の多い投稿を意味のまとまりで事前分割
 
@@ -4171,7 +4171,7 @@
 - 参照専用の見出し・隣接文と対象本文の証拠を区別し、否定・主体・時制・薬剤や症状の関係を維持する。
 - LLMに不要な空欄・重複説明を出力させず、必要な引用・分類判定を省略しない。現行v2にも詳細属性の説明を適用する。
 - 本人限定のまとめは最新20投稿の状態と区間数だけを追加し、抽出完了を情報の正しさや臨床対応の完了と扱わない。共有通知本文は変更しない。
-- 根拠: mcs/extract/clinical_chunking.py、mcs/extract/v4/extract_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_store.py、mcs/notify/notify_views.py、docs/development/plans/LONG_MESSAGE_1.0.16.md
+- 根拠: mcs/extract/clinical/clinical_chunking.py、mcs/extract/llm/extract_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_store.py、mcs/notify/notify_views.py、docs/development/plans/LONG_MESSAGE_1.0.16.md
 
 #### 服薬実態・有害事象・検査条件・支援・次回確認を原文付きで抽出
 
@@ -4181,7 +4181,7 @@
 - 検査・測定値に本人/家族等の対象、過去/予定の区別、原文の測定日時・単位・検体条件を保持する。体重・身長・血糖と既存の腎肝機能値を扱い、未記載の日時・単位・条件・正常異常を補完しない。
 - detailはチャンク統合・修復・保存を通じて保持する。世代6の既存retry・lease・QC・checkpoint境界を使い、旧世代の失敗上限や未完了checkpointが新契約の再抽出を妨げないようにする。
 - 出力が実際にlengthで打ち切られた場合だけ本文チャンクを細分化する。既存のcheckpointに新しい分割を記録し、中断後は完了部分を再利用する。全本文の取得範囲を完了するまで本抽出結果を公開しない。
-- 根拠: mcs/extract/v4/extract_llm.py、mcs/extract/clinical_values.py、tests/extract/test_detail_clinical_extraction.py
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/extract/clinical/clinical_values.py、tests/extract/llm/test_detail_clinical_extraction.py
 
 #### 患者背景の詳細属性と登録済み検査・薬剤を取得元別に確認
 
@@ -4223,7 +4223,7 @@
 - 変更記録: 投稿要約・患者まとめ・テキスト通知の薬剤行で、辞書に一致しない名称は「辞書候補: 一致なし」、候補が複数ある名称は「辞書候補: 複数あり」、総称は「辞書候補: 総称・個別薬剤は特定不可」と表示します。以前の「成分候補: 不明」のように成分名と読み違える表記をなくし、辞書の版は「［未確認・辞書 識別子］」として括弧が二重にならないようにしました。候補が未確認である点は変わりません。
 - 個別更新条件: 追加設定は不要です。新しい表示から順に適用されます。カード表面の要約は辞書候補を表示しないため、既存カードの再描画は起きません。
 - drug_map.candidate_note: 未解決・複数・総称は接頭辞「辞書候補」と平易なラベルにし、辞書の版を［］で囲む。注記の有無（rollupの検証に使う真偽）は変えない。
-- 根拠: mcs/extract/drug_map.py
+- 根拠: mcs/medications/drug_map.py
 
 #### 薬剤の詳細をスレッド内で本人だけに表示
 
@@ -4246,7 +4246,7 @@
 - 正規化済み別名に異なる識別子が新しく対応した場合を、新規の複数候補化または既存複数候補の拡大として区別する。衝突の各候補数は全件を数え、個別候補IDの表示もlimitで制限して省略を明示する。
 - 辞書ID・SHA・承認有無を返し、operatorのapproved_byは出力しない。出力は辞書差分であり、臨床的同等性、成分一致、人による処方確認や自動承認を意味しない。
 - 完全合成の追加/削除/名称/種別/別名変更、全半角衝突、既存衝突の拡大、80候補の上限表示と全件件数、未承認比較、決定的順序と入力不変を検証する。
-- 根拠: mcs/extract/drug_map.py、tests/extract/test_drug_map_diff.py
+- 根拠: mcs/medications/drug_map.py、tests/medications/test_drug_map_diff.py
 
 #### 医薬品辞書の更新前後で薬剤名の照合変化を確認
 
@@ -4255,7 +4255,7 @@
 - 出力は薬剤名ごとの集計だけで、投稿ID・患者ID・原文を含めない。
 - 未抽出と形式不正の投稿は未評価件数として別に数える。
 - 両辞書のID/SHA256/承認有無とsnapshot世代を記録する。
-- 根拠: mcs/ops/mcs_drug.py、mcs/extract/drug_map.py
+- 根拠: mcs/ops/mcs_drug.py、mcs/medications/drug_map.py
 
 #### 薬剤候補の更新を途中から再開し、公式マスター全件の辞書に対応
 
@@ -4268,7 +4268,7 @@
 - lookupは一致候補・元の別名・分解した剤形/用量・辞書ID/SHA/出典/承認有無・未確定理由を返す。operatorの識別情報はlookup出典へ含めない。商品/一般名処方は完全一致の別名のみ、成分/分類の従来照合は維持する。
 - 公式converterは全件か明示部分集合か、候補件数・出力bytes・上限をreport-onlyで示す。期限終了・未来日付・不明policy・衝突・未知editionは従来どおり除外/保留し、黙って切り詰めない。合成19,272製品の全件読込みと末尾候補、少量予算の再開、辞書切替/無効化、元抽出の変更、不正行の隔離を検証する。
 - 進捗記録は不存在の旧版互換と、存在する破損を区別する。破損・重複JSON項目・cursorの型/範囲・辞書世代の型不正では旧候補を表示せず、安定したinvalid世代を返す。再導出は安全に先頭へ戻して復旧する。
-- 根拠: mcs/extract/drug_map.py、mcs/ops/import_drug_master.py、tests/extract/test_drug_map_incremental.py、tests/ops/test_import_drug_master.py
+- 根拠: mcs/medications/drug_map.py、mcs/ops/import_drug_master.py、tests/medications/test_drug_map_incremental.py、tests/ops/test_import_drug_master.py
 
 #### 薬剤辞書を名称・別名・識別子の部分一致で参照検索
 
@@ -4278,7 +4278,7 @@
 - 識別子ごとに重複を除き決定的な順序で返す。全件の一致数と一致別名数を保持し、表示する製品と各製品の別名もlimitで制限して省略を明示する。
 - 結果にread_only/candidate_only、辞書ID/SHA/承認有無/出典を示し、operator識別情報は含めない。未承認辞書の検索は承認や有効化の代わりにならない。
 - 完全合成の用量/剤形が異なる製品、かな/全半角の部分一致、識別子検索、完全一致照合との分離、衝突・LASA名の非推定、30件と8別名の上限表示、未知名・不正入力・入力不変を検証する。
-- 根拠: mcs/extract/drug_map.py、tests/extract/test_drug_map_search.py
+- 根拠: mcs/medications/drug_map.py、tests/medications/test_drug_map_search.py
 
 #### 薬剤候補の統計を成分・一般名処方・製品に分け、未照合名を確認
 
@@ -4332,7 +4332,7 @@
 - LLMプロンプトに緊急度の3値契約・根拠引用必須・条件節/過去形/事務的言及は routine の指示を追加し、合成 few-shot に高緊急の正例と緊急語を含む条件付き陰性例を各1件追加した（プロンプト変更により飛行中のチャンク再開のみ作り直し）。
 - 評価資産 evaluation/extract_cases.json を46→60件に拡充（高緊急の正例・緊急語の条件節/過去形/家族の事象・判断保留・長文チャンク）。合成ケースのみで、実測の臨床精度を主張しない。
 - テストは完全合成の投稿文と artifact のみを使う。
-- 根拠: mcs/extract/v4/extract_llm.py、mcs/views/structured_view.py、mcs/notify/notify_urgent.py、mcs/notify/notify_render.py、mcs/notify/notify_flush.py、mcs/notify/notify_digest.py、mcs/semantic/semantic_qc.py、mcs/extract/v4/extract_bench.py、evaluation/extract_cases.json、tests/extract/test_extract_llm.py、tests/extract/test_extraction_review.py、tests/notify/test_notify_urgent.py
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/views/structured_view.py、mcs/notify/notify_urgent.py、mcs/notify/notify_render.py、mcs/notify/notify_flush.py、mcs/notify/notify_digest.py、mcs/semantic/semantic_qc.py、mcs/extract/llm/extract_bench.py、evaluation/extract_cases.json、tests/extract/llm/test_extract_llm.py、tests/extract/test_extraction_review.py、tests/notify/test_notify_urgent.py
 
 #### 解析途中と完了後の通知更新を共通化
 
@@ -4342,7 +4342,7 @@
 - 原投稿・送信先・権限と不確定送信の排他制御を維持し、進捗だけで確認の世代を取り消さない。
 - 1render内の進捗読取りをローカルdictで共有し、globalcacheや新しい常駐処理を加えない。
 - 確認済みの互換import・独立復旧・migrationは保持し、安全な根拠のない削除やフォルダ移動は行わない。
-- 根拠: mcs/notify/extraction_refresh.py、mcs/notify/notify_render.py、mcs/extract/v4/extract_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_drain.py
+- 根拠: mcs/notify/extraction_refresh.py、mcs/notify/notify_render.py、mcs/extract/llm/extract_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_drain.py
 
 #### 添付ファイルの削除失敗を完了扱いせず再試行
 
@@ -4401,7 +4401,7 @@
 - patient_rollupのmetaへmed_ref_generationを保存し、集約前に取得した世代を束縛する。生成途中の世代変更はdirtyのまま残し、カーソルの進行だけでは全患者を再集約しない。
 - 読取り専用の共通検証で、世代不一致と現行ソースに照合できないrefだけを除外する。辞書ファイルの読取り、DB書込み、原本の薬剤行削除は行わない。
 - 旧版の世代記録がないキャッシュは互換性を保持し、世代記録がある旧キャッシュは現行ソースに保守的に照合する。壊れた参照によって患者の他の情報を抑止しない。
-- 根拠: mcs/extract/rollup.py、mcs/notify/notify_views.py、mcs/ops/brain_export.py、tests/extract/test_rollup_drug_generation.py、tests/notify/test_summary_drug_generation.py、tests/ops/test_brain_export_drug_generation.py
+- 根拠: mcs/patients/rollup.py、mcs/notify/notify_views.py、mcs/ops/brain_export.py、tests/medications/test_rollup_drug_generation.py、tests/notify/test_summary_drug_generation.py、tests/ops/test_brain_export_drug_generation.py
 
 #### 別コマンドをgatewayの再起動対象と誤認する問題を修正
 
@@ -4495,7 +4495,7 @@
 - 家族・本人以外の予定と、未定・中止・キャンセル・延期の旧日付を除き、予定日から過去の訪問日を作らない。曜日だけ・相対日だけの表現は日付へ推測変換しない。
 - 診療担当者の割当項目・医療者名と肩書の署名見出しを本人以外の臨床情報と区別し、予定の項目と日付の両方で所有者を照合する。医療者自身や家族の見出しは保持し、この区別は予定の解析だけに適用する。
 - ルール抽出世代を18へ更新し、既存のrun_pendingとLLM抽出時のv1更新経路で再抽出する。
-- 根拠: mcs/extract/v1/extract.py、tests/extract/test_next_visit_schedule.py
+- 根拠: mcs/extract/rules/extract.py、tests/extract/rules/test_next_visit_schedule.py
 
 #### チャット表示から「AI判定」表記と但し書きを削除
 
@@ -4504,7 +4504,7 @@
 - structured_view.URGENCY_LABEL_PLAIN と notify_render.URGENCY_PLAIN を追加し、レイアウト2のカード・テキスト通知・プレビュー・日次サマリー・再確認通知で使う。旧表記はレイアウト1のカードだけに残す。
 - notify_views・notify_digest・alert_view・mcs_signals の但し書き定数と括弧書きを削除する。CLI・監査出力（mcs_view・metadata_report・brain_export・辞書差分）は対象外。
 - AGENTS.md: チャット表示に但し書き・出所ラベルを付けない方針を追記。
-- 根拠: mcs/views/structured_view.py、mcs/notify/notify_render.py、mcs/notify/notify_views.py、mcs/notify/notify_digest.py、mcs/notify/alert_view.py、mcs/notify/notify_flush.py、mcs/ops/mcs_signals.py、AGENTS.md
+- 根拠: mcs/views/structured_view.py、mcs/notify/notify_render.py、mcs/notify/notify_views.py、mcs/notify/notify_digest.py、mcs/notify/alert_view.py、mcs/notify/notify_flush.py、mcs/signals/mcs_signals.py、AGENTS.md
 
 #### 配送結果が先に届いたときの通知保留を修正
 
@@ -4523,7 +4523,7 @@
 - 連携サマリーとチャットの情報を混ぜず、過去・否定・未確認を原文のまま保持する。
 - read_model detail／evidence／timelineは根拠付きの全文を返し、aggregateでは分類・件数のみ公開する。
 - 本人限定患者まとめの完全合成説明図を更新し、Slack／LINE WORKSのSVG・PNGを生成元と同期する。
-- 根拠: mcs/extract/patient_context.py、mcs/extract/v1/extract.py、mcs/extract/v4/extract_llm.py、mcs/extract/rollup.py、mcs/notify/notify_views.py、mcs/views/read_model.py、mcs/views/mcs_view.py
+- 根拠: mcs/patients/patient_context.py、mcs/extract/rules/extract.py、mcs/extract/llm/extract_llm.py、mcs/patients/rollup.py、mcs/notify/notify_views.py、mcs/views/read_model.py、mcs/views/mcs_view.py
 
 #### 患者まとめで未完了タスクを先頭に表示し、期限切れを明示
 
@@ -4540,7 +4540,7 @@
 - runner: present_slack・present_discord・present_lineworks の POST_ACTIONS / ACCENT_URGENT で出力を決め、投稿ボタンの部品数をカード下部の一覧ボタンより優先して確保する。
 - Slack: 投稿行はcontextのまま、要約sectionのaccessoryにボタンを置く。Discord: 投稿行をSectionにしてaccessoryボタンを置き、部品数を超える場合はテキストへ戻す。実discord.py 2.7.1でSection・accessory・accent_colorの生成を確認。
 - 緊急度の赤い縁は計算済みの緊急度判定だけで決め、本文中の🚨の文字では変わらない。
-- 根拠: adapters/common/spec.py、adapters/slack/cards.py、adapters/discord/cards.py、mcs/notify/notify_cards.py、mcs/notify/notify_render.py、mcs/notify/present_slack.py、mcs/notify/present_discord.py、mcs/notify/present_lineworks.py
+- 根拠: adapters/common/spec.py、adapters/slack/cards.py、adapters/discord/cards.py、mcs/notify/notify_cards.py、mcs/notify/notify_render.py、mcs/notify/presentation/present_slack.py、mcs/notify/presentation/present_discord.py、mcs/notify/presentation/present_lineworks.py
 
 #### 通知先変更後の旧配送と長いタスク一覧を修正
 
@@ -4595,7 +4595,7 @@
 - Chrome停止は設定済み実行ファイルと専用プロファイルの両方を照合し、プロセス一覧取得が失敗した場合は終了しません。
 - 全文候補の重複追加を削除し、区間外の候補混入を検出する回帰テストを追加しました。
 - 途中の分割checkpointだけ処理契約を更新し、旧契約の部分結果を新しい処理へ混在させません。原文・モデル・設定に合う検証済みの完了結果と進捗表示は維持します。
-- 根拠: mcs/ingest/mcs_adapter.py、mcs/extract/v4/extract_llm.py
+- 根拠: mcs/ingest/mcs_adapter.py、mcs/extract/llm/extract_llm.py
 
 #### 緊急度と臨床情報の原文照合を修正
 
@@ -4605,7 +4605,7 @@
 - 体重・身長などの測定語彙と原文の直接所有者を照合し、家族の測定を誤って本人とした抽出は未確認にする。
 - 処方・投与・測定の行為者を対象者と混同せず、本人以外の明示的な自己情報は保持する。
 - 片側血圧は既存の測定ラベル検証と原文の本人対象・収縮期/拡張期の位置を確認し、欠けた側を推定しない。
-- 根拠: mcs/extract/v1/extract.py、mcs/extract/clinical_values.py、mcs/views/structured_view.py
+- 根拠: mcs/extract/rules/extract.py、mcs/extract/clinical/clinical_values.py、mcs/views/structured_view.py
 
 #### 監視警報の再通知・LINE WORKSの患者別アラート・緊急表示の強弱を修正
 
@@ -4700,7 +4700,7 @@
 - canonical/v4履歴を持つ旧版の患者集約は、読取時に臨床項目を現行ソースから再構築し、既存のdirty-project再集約で版を記録する。legacyだけの集約とプロフィール等は維持する。
 - 既存の再試行はジョブ状態と試行回数・修復済みの枠に従う。replayは同じsource/policyの保存済み段階を必ず再抽出する操作ではなく、一括再抽出や本番操作を更新の一部として行わない。
 - 実Jevの誤判定や実患者への誤表示を確認したものではなく、完全合成の対照入力とスタブで公開前の検証経路を確認した。
-- 根拠: mcs/semantic/semantic_audit.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic_v4.py、mcs/semantic/semantic_projection.py、mcs/semantic/semantic_store.py、mcs/extract/rollup.py、mcs/views/read_model.py、mcs/core/mcs_queries.py、tests/core/test_projection_version_gate.py
+- 根拠: mcs/semantic/semantic_audit.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic_v4.py、mcs/semantic/semantic_projection.py、mcs/semantic/semantic_store.py、mcs/patients/rollup.py、mcs/views/read_model.py、mcs/core/mcs_queries.py、tests/core/test_projection_version_gate.py
 
 #### 元スレッドがないアラートの重複投稿を修正
 
@@ -4759,7 +4759,7 @@
 - adapters/slack/cards.render_parts: thread カードの rule テキストを context ブロックで描画する。
 - adapters/discord/cards._zones: thread カードの rule テキストを -# subtext で描画する。
 - 送信先ごとの表示判断を mcs/notify/present_{slack,discord,lineworks}.py に分離した（出力は不変）。
-- 根拠: adapters/slack/cards.py、adapters/discord/cards.py、mcs/notify/present_slack.py、mcs/notify/present_discord.py、mcs/notify/present_lineworks.py
+- 根拠: adapters/slack/cards.py、adapters/discord/cards.py、mcs/notify/presentation/present_slack.py、mcs/notify/presentation/present_discord.py、mcs/notify/presentation/present_lineworks.py
 
 #### スレッド内の投稿は本文を先に、スタンプを末尾に
 
@@ -4822,7 +4822,7 @@
 - meta.hash が本文と一致しない抽出・error 付きの抽出は判定に使わない。
 - テストは完全合成の投稿文と artifact のみを使う。
 - 統計data_qualityにurgency_rule_outcomesを追加。現行の機械照合の緊急（rule_high）のうち、AI通常判定で🚨が出ない件数（llm_routine_suppressed）、AI高・監査不一致・機械照合のみの件数を件数だけで示す。見逃し率の実測ではない。
-- 根拠: mcs/extract/v1/extract.py、mcs/views/mcs_stats.py、mcs/views/structured_view.py、tests/extract/test_extraction_review.py
+- 根拠: mcs/extract/rules/extract.py、mcs/views/mcs_stats.py、mcs/views/structured_view.py、tests/extract/test_extraction_review.py
 
 #### 緊急度の再確認通知と薬剤表示を見やすく整理
 
@@ -4915,7 +4915,7 @@
 - 利用者への影響: LLM受付制御（MCS_LLM_ADMISSION）の保存先を古い形式から更新するとき、複数のプロセスが同時に起動すると同じ列を二重に追加しようとして初期化に失敗することがありました。形式の確認と更新を1つの書込みトランザクションで行い、後から来たプロセスは更新済みの形式をそのまま使います。
 - 更新条件: LLM受付制御は既定で無効のため、既定設定では影響はありません。有効にしている場合も追加操作は不要です。
 - _initialize_storeの表作成・列追加・索引作成をBEGIN IMMEDIATEのトランザクション内で行う。
-- 根拠: mcs/core/llm_admission.py、tests/core/test_llm_admission_reclaim.py
+- 根拠: mcs/llm/llm_admission.py、tests/llm/test_llm_admission_reclaim.py
 
 #### 通知カードの添付ファイルの二重投稿と未送信を修正
 
@@ -4993,7 +4993,7 @@
 - 失敗時の障害通知の登録に失敗した場合、alert_enqueue_failedをエラーに加える。
 - Hermesのカードworkerが有効化されているのに設定不足で起動しない場合、ログにworker_disabledを1行出す。
 - 隔離されたdata/cmd_int/*.json.invalidも1日後に削除する。
-- 根拠: mcs/ingest/run_check.py、mcs/extract/v4/extract_llm.py、hermes_plugin/card_workers.py、mcs/core/maintenance.py
+- 根拠: mcs/ingest/run_check.py、mcs/extract/llm/extract_llm.py、hermes_plugin/card_workers.py、mcs/core/maintenance.py
 
 #### 独立実行で子プロセスの異常終了の繰り返しが見えなかった問題を修正
 
@@ -5055,7 +5055,7 @@
 - 参考文脈の読み込みを既存の親投稿と最新3返信に必要な最大4行に限定する。
 - 薬剤の同一性キーと最後の出現順を維持した辞書集約を使う。
 - 処理済みFutureを実行管理から外し、結果を最後の処理待ちが完了するまで保持しない。
-- 根拠: mcs/extract/v4/extract_llm.py
+- 根拠: mcs/extract/llm/extract_llm.py
 
 #### 常駐抽出と薬剤候補の全件走査を削減
 
@@ -5063,7 +5063,7 @@
 - 更新条件: 追加操作は不要です。抽出結果の出力にある left（残り件数）と queue_ages_s は、取得件数が上限に達した回では null（不明）になります。取得件数が上限未満の回は従来どおり数えます。薬剤候補の作成条件・辞書の扱いは変わりません。
 - 辞書が使えないときは、既存の薬剤候補がある投稿だけを対象に削除する（作成は従来どおり行わない）。
 - --all ループの待機判定は selected も使うため、left が null でも動作は変わらない。
-- 根拠: mcs/extract/v4/extract_llm.py、mcs/extract/drug_map.py
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/medications/drug_map.py
 
 #### 抽出キャッシュの履歴読込みを軽量化
 
@@ -5071,7 +5071,7 @@
 - 更新条件: 追加操作は不要です。更新後のキャッシュ参照から適用されます。保存履歴の削除、抽出範囲・モデル・QC・公開条件の変更はありません。
 - 分割結果は従来どおり古い順に照合し、最新世代の所有規則を維持する。
 - 詳細判定は新しい順に照合して有効な一致結果が見つかれば終了する。
-- 根拠: mcs/core/ledger.py、mcs/extract/v4/extract_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_assessment.py
+- 根拠: mcs/core/ledger.py、mcs/extract/llm/extract_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_assessment.py
 
 #### 収集ジョブの履歴増加による待ち時間を抑制
 
@@ -5141,7 +5141,7 @@
 - 更新条件: 追加の設定操作は不要です。更新後の集約処理から適用されます。収集範囲・通知・既読化・承認条件・モデルの変更はありません。
 - 返信を照合する依頼を表示上限内に限定し、全履歴の返信を証拠として維持する。
 - 投稿日時を走査中に索引化し、同じ時刻・不明時刻では従来どおり最初の投稿を参照する。
-- 根拠: mcs/extract/rollup.py
+- 根拠: mcs/patients/rollup.py
 
 #### 意味解析のバックログ処理で1件ごとの全件走査を削減
 
@@ -5170,7 +5170,7 @@
 - 利用者への影響: シグナル履歴が増えても、最新状態の表示・判定で過去の本文を繰り返し解析しません。最新行が壊れている場合に古い候補を再表示しない扱いと、候補の順序は維持します。
 - 更新条件: 追加操作は不要です。シグナルの判定条件・通知設定・既定値は変わりません。
 - 履歴をキーごとに集約してから最新本文だけを共通の検証経路で解析する。
-- 根拠: mcs/ops/mcs_signals.py、tests/ops/test_signal_history_perf.py
+- 根拠: mcs/signals/mcs_signals.py、tests/ops/test_signal_history_perf.py
 
 #### Slack の名前取得キャッシュのメモリ増加を抑制
 
@@ -5246,7 +5246,7 @@
 - 利用者への影響: LLM受付制御（MCS_LLM_ADMISSION）を有効にしている場合、要求中に強制終了したプロセスの受付枠が、他のプロセスが動いている間は解放されず、対話用の枠が残ると背景処理が止まり続けることがありました。記録したプロセスが存在せず、かつ十分な猶予時間（30分）を過ぎた枠だけを次の受付時に解放します。動作中のプロセスの枠は解放しません。終了済みの受付記録は7日を過ぎると少しずつ削除します。
 - 更新条件: LLM受付制御は既定で無効のため、既定設定では影響はありません。MCS_LLM_ADMISSION を有効にしている場合も追加操作は不要で、受付記録の保存先に所有プロセス列が自動追加されます。更新前に作られた受付枠は所有プロセスが不明なため自動解放されず、従来どおり全プロセス終了後の再起動で整理されます。
 - permits に owner_pid を記録し、acquire の書込みトランザクション内で、現行 epoch の占有中 permit のうち sent/admitted/created の最新時刻から LEASE_S（1800秒）を超え、かつ os.kill(pid, 0) が ESRCH のものを outcome=owner_dead で fenced にする（1回20件まで）。待機中のRTなら rt_waiting も戻す。terminal/fenced で7日を超えた行は、最古100行の範囲から削除する。
-- 根拠: mcs/core/llm_admission.py
+- 根拠: mcs/llm/llm_admission.py
 
 #### 並列抽出時の推論受付制御の停止を修正
 
@@ -5255,7 +5255,7 @@
 - 共有brokerの生成競合を抑制し、共有接続を使用する状態操作をインスタンス単位で同期する。SQLiteのプロセス間トランザクションと生存ロックを維持する。
 - commitの失敗もrollback対象とし、受付に到達しなかった更新を残さず次のトランザクションを開始できるようにする。接続の初期設定が失敗した場合も新規接続を閉じる。
 - 合成transportを2スレッド同時に実行し、通信が直列化されないこととterminal状態・受付枠の解放を検証。
-- 根拠: mcs/core/local_llm.py、mcs/core/llm_admission.py
+- 根拠: mcs/llm/local_llm.py、mcs/llm/llm_admission.py
 
 #### 不正な統計項目を固定の不明・破損状態として扱う
 
@@ -5264,7 +5264,7 @@
 - 却下件数の種別ラベルを既存検知器の固定一覧またはunknownへ限定する。
 - 基準統計のas_ofの非有限値をint変換前に拒否しrefstat_corruptへ分類する。
 - 浮動小数点の微小誤差許容を整数が正確に表現できる範囲へ限定し、大きな整数とfloatの比較の丸め・OverflowErrorを防ぐ。
-- 根拠: mcs/ops/mcs_signals.py、mcs/ops/mcs_refstats.py、tests/ops/test_ops_aggregate_stability.py
+- 根拠: mcs/signals/mcs_signals.py、mcs/ops/mcs_refstats.py、tests/ops/test_ops_aggregate_stability.py
 
 #### バックアップ失敗時の接続と一時ファイルを確実に解放
 
@@ -5331,7 +5331,7 @@
 - 更新条件: 追加操作は不要です。更新後の抽出準備から適用されます。モデル呼出し・抽出範囲・人承認条件は変わりません。既に残っている処理権は従来どおり期限切れで解放されます。
 - 推論前の処理権取得とルール準備にも例外時の解放を適用する。
 - 解放時の所有者確認を維持し、別workerの新しい処理権を削除しない。
-- 根拠: mcs/extract/v4/extract_llm.py
+- 根拠: mcs/extract/llm/extract_llm.py
 
 #### 不正な抽出履歴による再処理の停止を防止
 
@@ -5339,7 +5339,7 @@
 - 更新条件: 追加操作は不要です。更新後の履歴参照から適用されます。取得範囲・モデル・QCの公開条件・人承認条件は変わりません。読めないQC履歴は自動承認や品質改善の証拠として使いません。
 - 失敗結果の復活・QCフィードバック・薄い結果の比較・薬剤候補の保存元照合でJSONの変換制限も扱う。
 - 不正な行で正常な兄弟行の処理を中断しない。
-- 根拠: mcs/extract/v4/extract_llm.py、mcs/extract/drug_map.py、mcs/extract/rollup.py、mcs/extract/v1/extract.py
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/medications/drug_map.py、mcs/patients/rollup.py、mcs/extract/rules/extract.py
 
 #### 途中で打ち切られたLLM応答を空の抽出結果として保存しないよう修正
 
@@ -5347,7 +5347,7 @@
 - 更新条件: 追加操作は不要です。更新後の新しい抽出から適用されます。既に保存された空の抽出結果は自動では再抽出されません。モデル・出力上限・QCの公開条件は変わりません。
 - v4抽出の1回の呼出しで、semantic側と同じ受入判定（finish_reason=length・空応答・HTTPエラーを不採用）を使う。
 - 失敗は既存の修復・バックオフ経路で扱い、試行回数の上限も従来どおり。
-- 根拠: mcs/extract/v4/extract_llm.py
+- 根拠: mcs/extract/llm/extract_llm.py
 
 #### 抽出ワーカーの一時的な例外で常駐抽出が停止・結果を失う問題を修正
 
@@ -5355,14 +5355,14 @@
 - 更新条件: 追加操作は不要です。常駐抽出を再起動した時点から適用されます。抽出対象・モデル・再試行上限は変わりません。
 - 例外はstderrに種類名だけを記録し、本文や応答は出力しない。
 - 例外の出た行は deferred として数え、claimは従来どおり解放する。
-- 根拠: mcs/extract/v4/extract_llm.py
+- 根拠: mcs/extract/llm/extract_llm.py
 
 #### 不正な深いモデル応答で出力形式の確認が停止する問題を修正
 
 - 利用者への影響: モデルが深く入れ子になった不正なJSON本文を返した場合、出力形式の確認が予期しない例外で停止せず、従来の代替形式へ移るようにしました。JSONとして確認できない応答を、構造化出力として正常扱いしません。
 - 更新条件: 設定変更は不要です。更新後の出力形式確認から適用されます。モデル・取得範囲・呼出し回数上限・受付条件は維持します。
 - 既存のJSON読取り失敗の処理にRecursionErrorを含める。schema/object両方の出力形式確認を合成応答で検証する。
-- 根拠: mcs/core/local_llm.py
+- 根拠: mcs/llm/local_llm.py
 
 #### 更新確認・取り込み失敗時も外部診断文の転記を防止
 
@@ -5403,7 +5403,7 @@
 - 利用者への影響: 表現できないほど大きな処理時間・期限が指定された場合に、数値変換の異常ではなく入力エラーとして拒否します。ローカルモデルと共通HTTP経路で送信前に判定します。
 - 更新条件: 設定変更は不要です。正しい処理時間・期限と既存の送信先制約は変わりません。
 - 浮動小数点の範囲を超える整数はmath.isfiniteより前に拒否し、timeout_invalid/deadline_invalidの既存契約を維持する。
-- 根拠: mcs/core/local_llm.py、mcs/core/bounded_http.py
+- 根拠: mcs/llm/local_llm.py、mcs/core/bounded_http.py
 
 #### 配送履歴が破損した際の復旧処理の停止を修正
 
@@ -5500,7 +5500,7 @@
 - 利用者への影響: 保存済みデータの日時に極端に大きな整数が含まれていても、記録の選択やバックアップ復元同意の処理が予期しない例外で停止しないようにしました。不明な日時は不明として扱い、復元の不正な日時は所定のエラーで拒否します。
 - 更新条件: 設定変更は不要です。更新後の選択・復元確認から適用されます。日時の不正を正常や新鮮と見なさず、既存の人承認・保存元の一致確認を維持します。
 - 既存の有限数値検証を再利用し、floatへの変換ができない巨大整数を安全に拒否する。
-- 根拠: mcs/ops/c1_records.py、mcs/ops/mcs_restore.py
+- 根拠: mcs/export/c1_records.py、mcs/ops/mcs_restore.py
 
 #### 更新前バックアップが削除されずディスクを圧迫する問題を修正
 
@@ -5580,7 +5580,7 @@
 - 利用者への影響: 患者サマリー集約のCLIで初期化・集約・終了時にエラーや中断が起きても、開いたDBと処理ロックを解放します。失敗した呼出しが同じプロセス内の次の処理を妨げません。
 - 更新条件: 追加操作は不要です。更新後の集約CLIから適用されます。保存内容・集約範囲・通知・人承認条件は変わりません。
 - 初期化から終了までfinallyで資源の所有期間を管理し、DB終了が失敗してもロック解放を試みる。
-- 根拠: mcs/extract/rollup.py
+- 根拠: mcs/patients/rollup.py
 
 #### 承認表示で曖昧なreceiptとコマンド不整合を拒否
 
@@ -5654,7 +5654,7 @@
 - run_dueはRunLockLostを通常の再試行とは別に扱い、現在のジョブを書き換えず(試行回数・次回時刻を維持)、後続ジョブを開始せずに終了する。
 - run_checkは以降の段を実行せず終了コード1で終わる。ロック保持時だけ実行記録と健康状態を書き、保持していなければDBへ書き込まない。バックログ解析(semantic_drain --drain)も同じ場合に再取得せず停止する。
 - 抽出の常駐ワーカーは、semanticの処理中に実行ロックを失うと終了し、launchdまたは独立実行ホストにより新しいコードで再起動される。
-- 根拠: mcs/core/mcs_util.py、mcs/extract/v4/extract_llm.py、mcs/ingest/run_check.py、mcs/semantic/semantic_drain.py
+- 根拠: mcs/core/mcs_util.py、mcs/extract/llm/extract_llm.py、mcs/ingest/run_check.py、mcs/semantic/semantic_drain.py
 
 #### 位置引数専用のモデル関数との互換性を修正
 
@@ -5864,14 +5864,14 @@
 - 概要: 収集時に抽出できなかった新しい投稿や再抽出待ちの投稿を、古い未処理分より先に抽出します。これまでは未処理分をすべて片付けるまで数時間待つことがありました。
 - 更新条件: 抽出ワーカー（ai.mcs.extract-drainer・ai.mcs.extract-drainer-2）の再起動後に有効になります。設定の変更は不要です。古い未処理分は、新着がない間に従来どおり処理されます。
 - 常駐抽出ワーカーの選択順を投稿日時の新しい順に変更。処理中の行は従来どおり claim lease で除外する。
-- 根拠: mcs/extract/v4/extract_llm.py
+- 根拠: mcs/extract/llm/extract_llm.py
 
 #### 抽出結果がカードに反映されるまで時間がかかる問題を修正
 
 - 概要: 投稿の構造化抽出が終わった直後に、その投稿のスレッド本文と要約を書き換えます。これまではカードの定期点検が一巡するまで古い表示のまま残り、カードが多いと30分以上かかることがありました。
 - 更新条件: 抽出ワーカー（ai.mcs.extract-drainer・ai.mcs.extract-drainer-2）の再起動後に有効になります。定期収集の新着抽出は次回の収集から適用されます。設定の変更は不要です。
 - 現行抽出の保存直後に、該当投稿を含むスレッドカードの再描画を発行する。表示が変わらない場合は再描画せず、失敗しても抽出結果は保持して定期点検に任せる。
-- 根拠: mcs/extract/v4/extract_llm.py
+- 根拠: mcs/extract/llm/extract_llm.py
 
 #### LINE WORKSでスレッド本文が更新のたびに再投稿される問題などを修正
 
@@ -5956,7 +5956,7 @@
 - 概要: 全角小数の体温（３８．２℃）を38ではなく38.2として記録します。「搬送していません」「搬送されませんでした」「至急ではなかった」などの否定表現を緊急度「高」と判定しなくなります。「次回2026/10/20」のように年付きで書いた次回予定日を正しく取り込みます。
 - 更新条件: 追加操作は不要です。ルール版数が9に上がるため、既存投稿のルール抽出は抽出ジョブが順次やり直します。
 - 体温の小数点に全角「．」を許可。否定・過去の打消し表現を緊急度の非該当に追加。次回予定日の年付き表記に対応。RULE_VERSIONを9に更新。
-- 根拠: mcs/extract/v1/extract.py
+- 根拠: mcs/extract/rules/extract.py
 
 </details>
 
@@ -6137,7 +6137,7 @@
 - meta・coverage・signals_truncated・患者別coverageを各分割に複製し、投稿と本文を不可分に扱う。同一投影のsignalは件数を減らさず同じpartへまとめる。
 - 実際のUTF-8 wire bytesをparse前に1048576bytes以下へ制限し、最終のindex・count・集合hashを含む容量で分割する。収まらない共通メタデータや不可分な組を削除・切詰めして合わせない。
 - 不足した集合はincompleteで完全性の証拠を返さない。同一auth・世代の既存完全集合の証拠が与えられた場合は、別集合を競合として拒否する。currentの保存・選択、撤回wire、送信者の分類は実装しない。
-- 根拠: mcs/ops/c1_envelopes.py、tests/ops/test_c1_envelopes.py
+- 根拠: mcs/export/c1_envelopes.py、tests/ops/test_c1_envelopes.py
 
 #### 新契約の予約と手渡し受領を既存の安全経路へ接続
 
@@ -6148,7 +6148,7 @@
 - 新版は型別件数が一致しない受領票や旧略式ackで本文送付を成功へ変えない。旧の束縛済みjournalと略式ackは互換を維持する。
 - 集合の輸送受理を臨床完了や完全集合のcurrent証拠とは扱わない。本文例外はmessage_bodyのroot body_textだけで、他の禁止項目を解放しない。
 - health --authは新版の7型認可を新版として検査し正常と報告する。scope省略の新版認可はaggregate扱いで例外にならず、受領票束はすべてのjournal束縛を先に確認し、一部だけ適用してから拒否することはない。
-- 根拠: mcs/ops/ext_contract.py、mcs/ops/c1_envelopes.py、tests/ops/test_c1_delivery.py、tests/ops/test_c1_authorization.py
+- 根拠: mcs/ops/ext_contract.py、mcs/export/c1_envelopes.py、tests/ops/test_c1_delivery.py、tests/ops/test_c1_authorization.py
 
 #### 新契約のsnapshot手渡しと変更なしの確認を追加
 
@@ -6159,7 +6159,7 @@
 - 新版の既存state/outboxは所有者・私有mode・symlinkを検査し、共有directoryのmodeを自動変更しない。
 - 要約はenvelope ID・part・件数・bytes・statusだけで本文を出さない。messages_kept=0は警告に留め、業務対応の不在や完了を推定しない。
 - link-hintsはHermesのlocal TTYでだけ患者名・project_id・最終投稿日を表示する。redirectとstandaloneは読取り前に拒否し、snapshot世代に束縛したページングを使う。氏名のfile出力・wire送付・自動患者リンクは行わない。
-- 根拠: mcs/ops/ext_contract.py、mcs/ops/c1_records.py、mcs/ops/c1_envelopes.py、tests/ops/test_c1_cli.py
+- 根拠: mcs/ops/ext_contract.py、mcs/export/c1_records.py、mcs/export/c1_envelopes.py、tests/ops/test_c1_cli.py
 
 #### C1候補データの独立したローカル契約検査を追加
 
@@ -6169,7 +6169,7 @@
 - profileはfields・patients・max_snapshot_age_s・retention_daysの4項目を検査する。load_authorization(c1=True)から明示的に呼び、本人承認・失効・期限・理由の既存検査も維持する。旧envelopeは新型のgrantを拒否する。
 - message_bodyはtext形式、UTF-8で8192bytes以下、送出本文のhash、同じproject・message・世代のfull本文投稿との対応を必須にする。本文例外は同recordのroot body_textだけで、他のrecord・自由項目・入れ子の禁止キーを許可しない。
 - patient_coverageのnullは不明のまま保持し、ledgerのfloor変換や送信者の分類は行わない。分割・wire識別子・envelope IDは追加しない。
-- 根拠: mcs/ops/c1_contract.py、mcs/ops/ext_contract.py、tests/ops/test_c1_contract.py、tests/ops/test_c1_authorization.py
+- 根拠: mcs/export/c1_contract.py、mcs/ops/ext_contract.py、tests/ops/test_c1_contract.py、tests/ops/test_c1_authorization.py
 
 #### ローカル参照受信側に集合と投稿版のライフサイクルを追加
 
@@ -6180,7 +6180,7 @@
 - 欠落投稿の降格は患者complete・既知のfloor/上端・範囲内の投稿時刻が揃う場合だけとし、臨床的な完了・無応答とは扱わない。
 - ローカル撤回は到着前にもtombstoneを保持し、期限切れは初回受領時刻から判定して本文を削除する。受領・撤回のメタデータは再送防止のため保持し、容量上限では自動破棄せず拒否する。
 - 診断は固定理由と件数だけを返し、actor・本文・sourceや投稿の識別子を含めない。撤回wireや共同fixture pinは別工程。
-- 根拠: mcs/ops/c1_receiver.py、tests/ops/test_c1_receiver.py
+- 根拠: mcs/export/c1_receiver.py、tests/ops/test_c1_receiver.py
 
 #### C1候補レコードの読み取り専用組立と対保持選択を追加
 
@@ -6194,7 +6194,7 @@
 - since_days窓はsnapshot generated_atから計算した開始とsnapshot時刻の両端を含む。時刻不明は窓から除き不明件数を明示し、壁時計で補わない。既知floorだけを窓開始へclampし、integer epochのfloorには開始値のceilを使う。不明floorと検証済みcoverage上端は変更しない。selectionの欠落を返信なし・臨床的な不在へ変換しない。
 - 合成の実Ledger→publish_snapshot→View→組立/選択で、元DBとsnapshotのbytes hash/mtime・書込み数・caller transaction・既存JSONL不変、本文のempty/full/snippet/unknown/deleted/NULLとUTF-8境界、全患者coverage、完成validatorの対検証をテストする。実データ・network・LLM・サービス・新規依存を使用しない。
 - 残るC0/CD判断はwire契約版・同一性/hash/part集合・sender identity分類・archived/現在の取得対象scopeの外部送付・相手側の完全集合と降格規則・最終fixture pin。本単体の成功をC0合意や実送付・本番・human/G6の受入とはしない。
-- 根拠: mcs/ops/c1_records.py、tests/ops/test_c1_records.py
+- 根拠: mcs/export/c1_records.py、tests/ops/test_c1_records.py
 
 #### 手渡し送付に撤回指示書・合成受信側コマンド・C0固定fixtureを追加
 
@@ -6208,7 +6208,7 @@
 - CLIの --since-days は整数として受け付ける。
 - receiveは同じoutbox内のreceipt等を入力とせずskipと数え、受理済みのenvelopeに後から届いた拒否receiptは上書きせず保留する。reconcile --allはjournalの一時ファイルを無視する。
 - 世代単位の撤回と reconcile --all はjournalの件数上限（health診断用の1,000件既定）で止まらず、1,000件を超えるjournalでも全envelopeへ撤回を展開する。
-- 根拠: mcs/ops/ext_contract.py、mcs/ops/c1_envelopes.py、mcs/ops/c1_receiver.py、mcs/ops/c1_records.py、mcs/ops/c1_contract.py、mcs/ops/export_schema.py、tests/ops/ext_fixtures.py、tests/ops/test_ext_contract_c0.py、tests/ops/test_c1_withdraw_receive.py
+- 根拠: mcs/ops/ext_contract.py、mcs/export/c1_envelopes.py、mcs/export/c1_receiver.py、mcs/export/c1_records.py、mcs/export/c1_contract.py、mcs/export/export_schema.py、tests/ops/ext_fixtures.py、tests/ops/test_ext_contract_c0.py、tests/ops/test_c1_withdraw_receive.py
 
 #### 依頼と返信のcanonical追従を合成評価で確認
 
@@ -6260,7 +6260,7 @@
 - 測定日と未確認状態が異なる検査結果はchunk結合時に別候補として保持します。
 - 承認済み薬剤辞書の導出artifact・統計注釈、v1ルール抽出・rollup・外部投影の拡張はこの限定実装の対象外です。
 - 検査値の本人以外判定で「大丈夫」「工夫」などの語に含まれる「夫」を家族と誤判定しないよう修正しました。家族を示す語を含む引用は従来どおり未確認のまま残します。
-- 根拠: mcs/extract/clinical_values.py、mcs/extract/v4/extract_llm.py、mcs/views/structured_view.py
+- 根拠: mcs/extract/clinical/clinical_values.py、mcs/extract/llm/extract_llm.py、mcs/views/structured_view.py
 
 #### 変換cohortの投稿参照を整合
 
@@ -6289,7 +6289,7 @@
 - CLIの期限なし処理は従来どおりです。既存のchunk単位commitを維持します。
 - watchdogは固着時に非ゼロ終了し、次回は未完了runをcrashedにします。通常終了時は解除します。個別SQL・抽出一行の中では協調中断しません。
 - 全体期限を越えたstageの後は追加作業を次回へ残し、終了記録とsnapshot公開を続けます。healthに所要秒数・超過秒数・最も遅いstageを記録し、期限超過をdegradedとして表示します。
-- 根拠: mcs/ingest/run_check.py、mcs/extract/v1/extract.py、mcs/extract/rollup.py、tests/extract/test_derive_deadline.py、tests/ingest/test_run_watchdog.py、deployment/scripts/mcs_check.sh、deployment/scripts/mcs_deep.sh、mcs/ingest/health_watch.py
+- 根拠: mcs/ingest/run_check.py、mcs/extract/rules/extract.py、mcs/patients/rollup.py、tests/extract/test_derive_deadline.py、tests/ingest/test_run_watchdog.py、deployment/scripts/mcs_check.sh、deployment/scripts/mcs_deep.sh、mcs/ingest/health_watch.py
 
 #### 薬剤の表層名を保った成分候補注釈
 
@@ -6299,7 +6299,7 @@
 - med_refを現行source artifactのID・本文hash・抽出内容hash・辞書ID/SHA・resolver版に束縛し、変更時は旧注釈を置き換えます。
 - rollupの再構築版を4に更新し、統計には表層名別の従来値と独立した分母付き成分候補内訳を追加します。外部機械exportのallowlistは変更しません。
 - 候補注釈の置換・削除はrollupの再構築判定に含め、期限で再構築が後回しになった患者にも古い候補を残しません。初回は既存rollupを一度だけ再構築します。内容が変わらない患者は1回の再構築で再判定対象から外れます。辞書照合が期限で打ち切られた場合は状態をpartialとして返し、実行結果のerrorsにdrug_map: partialを記録します（辞書未使用時はunavailableのまま）。
-- 根拠: mcs/extract/drug_map.py、mcs/extract/rollup.py、mcs/views/mcs_stats.py、mcs/ops/brain_export.py、mcs/ingest/run_check.py、mcs/ops/mcs_setup.py、tests/ingest/test_drug_map_pipeline.py
+- 根拠: mcs/medications/drug_map.py、mcs/patients/rollup.py、mcs/views/mcs_stats.py、mcs/ops/brain_export.py、mcs/ingest/run_check.py、mcs/ops/mcs_setup.py、tests/ingest/test_drug_map_pipeline.py
 
 #### 認証付き暗号化バックアップと隔離復元訓練を追加
 
@@ -6470,7 +6470,7 @@
 - private stagingを0600で作り、既存loaderとoutput hashを照合してからhard linkで新規destinationへ公開する。既存ファイル・symlink・共有/他owner directoryは上書きせず、失敗時の一時ファイルを除く。dry-runはaliases/rowsを表示せず、原本・config・DBを変更しない。
 - fixturesは全て創作した42列cp932データであり、実マスターの行や匿名化行を使わない。実CLI、ZIP/CSV pin、旧/未来版拒否、unknown/ended identity、Unicode・衝突・kana上限、loader/annotation、0600/owner/umask/no overwrite、failure不変を検証する。
 - 残るoperator判断は実source file/hashの確認、利用条件・転送/保存許可・承認record、変更/番兵値の根拠、採用するmedicine_codes subsetと辞書上限内のcuration。実マスター全件の変換・権利確認・本番有効化の受入とはしない。
-- 根拠: mcs/ops/import_drug_master.py、mcs/extract/drug_map.py、tests/ops/test_import_drug_master.py、tests/extract/test_drug_map.py
+- 根拠: mcs/ops/import_drug_master.py、mcs/medications/drug_map.py、tests/ops/test_import_drug_master.py、tests/medications/test_drug_map.py
 
 #### 取得不能な返信・履歴jobを初回で失敗扱いに
 
@@ -6507,7 +6507,7 @@
 - 参照LocalSinkはmcs-ext-receipt/1のacceptedとdelete結果を発行し、受領拒否を成功ackとして扱わない。
 - HandoffSinkは自己ackを発行せず、JSON・NDJSON・ディレクトリからの手動receipt取込で照合する。終端ではローカルのstagingコピーを除去し、journalと監査を保持する。
 - semantic・検知器・統計presetとexport allowlistの整合を合成テストで検証し、本文・氏名・未知の臨床項目を送付しない。
-- 根拠: mcs/ops/ext_contract.py、mcs/ops/export_schema.py、tests/ops/test_receipt_contract.py
+- 根拠: mcs/ops/ext_contract.py、mcs/export/export_schema.py、tests/ops/test_receipt_contract.py
 
 #### 再照合の完全巡回を記録
 
@@ -6605,7 +6605,7 @@
 - 解消は保存された根拠に対する検出器の除外条件で説明し、説明できない原因はunclassifiedとする。actor、氏名、自由文、根拠IDは集計に含めない。
 - signal_feedback_v1は評価ごとに1行追加せず、案件・種別・日本時間の日ごとに1行へ合算する。合計回数と初回観測時刻は従来どおり。日内の時刻でas_of・since・untilを指定し、その日の行が境界をまたぐ場合は件数を推定せず集計から除き、statusをpartialとして該当行数を返す。
 - 閲覧とbrain exportが表示する承認済み閾値ポリシーは、実際に適用する閾値と同じ厳格な来歴条件（文字列のcommand_idとactor）で判定する。条件を満たさない行は表示上も未承認として扱う。
-- 根拠: mcs/ops/mcs_signals.py、mcs/ops/mcs_operations.py、mcs/views/mcs_stats.py
+- 根拠: mcs/signals/mcs_signals.py、mcs/ops/mcs_operations.py、mcs/views/mcs_stats.py
 
 #### 構造化薬歴・観測値とチャット候補の任意併記
 
@@ -6667,7 +6667,7 @@
 - 時点語の直後でも同じ文節に依頼表現（ください・お願い等）があれば現在の至急として扱い、予定や報告だけを打ち消す。「すぐに搬送」「緊急で搬送」のように隣接する緊急語は一つの句として否定・完了を判定する。
 - 「搬送の必要はありません」「救急要請なし」を否定として扱う。
 - 世代更新時は旧ルール結果を先に一括削除せず、再抽出した行ごとに同じトランザクションで置き換える。期限で中断しても未処理の行は旧結果を保持し、緊急度や処方シグナルが一時的に欠落しない。
-- 根拠: mcs/extract/v1/extract.py、mcs/views/structured_view.py、tests/extract/test_extraction_review.py
+- 根拠: mcs/extract/rules/extract.py、mcs/views/structured_view.py、tests/extract/test_extraction_review.py
 
 #### 標準配置の日次バックアップを診断できるよう修正
 
@@ -6691,7 +6691,7 @@
 - RGB/RGBA PNGの全走査行で標準フィルター0〜4を検査し、正常な画像・保存形式を維持します。
 - GitHub Releaseの必要な識別・公開状態の型を事前検査し、取得後の競合・更新後の再照合も維持します。
 - 合成shadow評価の任意fixture入口と有効な期限は維持し、不正なcase型をモデル呼出し前に拒否します。実データ・実APIを使わず回帰を検証しました。
-- 根拠: scripts/development/update_readme.py、scripts/development/generate_slack_gallery.py、scripts/development/release_notes.py、scripts/development/readme_release.py、scripts/development/sync_release_notes.py、scripts/development/semantic_shadow_e2e.py、tests/meta/test_maintenance_development_regressions.py
+- 根拠: scripts/development/update_readme.py、scripts/development/generate_slack_gallery.py、scripts/development/release_notes.py、scripts/development/readme_release.py、scripts/development/sync_release_notes.py、scripts/evaluation/semantic_shadow_e2e.py、tests/meta/test_maintenance_development_regressions.py
 
 #### 数字だけのDiscord IDを設定するとカード操作が動かない問題を修正
 
@@ -6709,7 +6709,7 @@
 - SQLiteのJSON検証を通ってもPythonが読めない深い抽出結果は薬剤候補の根拠に使わず、読取はDB不変、派生処理は既存契約どおり古い候補だけを除去して再構築対象を返す。原文と抽出結果は保持する。
 - 患者集計のsource読取と返信段階の再読取でもJSON深度超過を捕捉し、既存の無事実・無返信段階として扱う。正常なsourceと返信、抽出世代や集計schemaは変わらない。
 - 薬剤の同一性・aliasやstemの照合・根拠・承認・schema・メタデータの契約は維持する。
-- 根拠: mcs/extract/drug_map.py、mcs/extract/rollup.py
+- 根拠: mcs/medications/drug_map.py、mcs/patients/rollup.py
 
 #### 抽出の再試行と根拠・時刻の確認を修正
 
@@ -6721,7 +6721,7 @@
 - 定性検査値は完全な値と文境界を確認し、否定・疑いなどを含む別の結果を先頭一致だけで確認済みにしない。原文の候補は保持する。
 - 抽出APIの処理予算とCLIの停止時間をDB・LLM処理より前に検証する。
 - ベンチのモデル実行前に全caseの本文・context・投稿時刻・期待値を同梱合成資産と照合する。来歴ラベルだけの自己申告では送信を許可せず、CLI引数・レポート保存形式は維持する。
-- 根拠: mcs/extract/v4/extract_llm.py、mcs/extract/rollup.py、mcs/extract/clinical_values.py、mcs/extract/v4/extract_bench.py
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/patients/rollup.py、mcs/extract/clinical/clinical_values.py、mcs/extract/llm/extract_bench.py
 
 #### 常駐ジョブのログを所有者だけが読める権限で作成
 
@@ -6761,14 +6761,14 @@
 - 利用者への影響（個別記録）: LLM抽出が毎回失敗する同じ本文は、夜間の自動再試行を3回までで止めます。これまでは再試行の失敗時に回数が引き継がれず、毎晩ローカルLLMを無駄に呼び続けることがありました。
 - 設定・更新条件（個別記録）: 追加操作は不要です。すでに回数が失われた失敗行は、この更新後の再試行から改めて最大3回まで数えます。
 - run_pendingの失敗記録を_failに統一し、夜間再試行の回数(auto_retry)を新しいエラー行へ引き継ぐ。
-- 根拠: mcs/extract/v4/extract_llm.py
+- 根拠: mcs/extract/llm/extract_llm.py
 
 #### 独立実行で別の保管場所を指定したときのバックアップ先を修正
 
 - 利用者への影響（個別記録）: 独立実行で既定以外の保管場所を指定した場合も、バックアップ・読取り用スナップショット・ログ整理がその保管場所の中で行われます。既定の保管場所で使っている場合の動作は変わりません。
 - 設定・更新条件（個別記録）: 追加操作は不要です。既定以外の保管場所で運用していた場合、以前のバックアップとスナップショットが既定の保管場所のdata配下に残っていることがあるため、必要に応じて確認してください。
 - 保守処理と既定offのLLM受付制御DBの保存先を、MCS_ROOTで選ばれた保管場所に合わせた。
-- 根拠: mcs/core/maintenance.py、mcs/core/local_llm.py
+- 根拠: mcs/core/maintenance.py、mcs/llm/local_llm.py
 
 #### 薬の変更件数から「〜は出来ない」という可否の記述を除外
 
@@ -6829,7 +6829,7 @@
 - 利用者への影響（個別記録）: ケアが終了してアーカイブされた部屋でも、期間表現の終了間近・終了後のシグナルが確認一覧や書き出しに表示され続けていました。他のシグナルと同じくアーカイブ済みの部屋を対象外とし、既存の未対応シグナルはアーカイブを理由に解消されます。
 - 設定・更新条件（個別記録）: 追加操作は不要です。既定値・設定は変わりません。
 - rx_period_expiryとrx_period_lapsedの検出でアーカイブ済みの部屋を除外し、既存のopenはproject_archivedとして解消。med_period_artifactsは統計と共有のため変更なし。
-- 根拠: mcs/ops/mcs_signals.py、tests/ops/test_mcs_signals.py
+- 根拠: mcs/signals/mcs_signals.py、tests/ops/test_mcs_signals.py
 
 #### 意味解析の期限超過と不正な要約の受理を修正
 
@@ -6972,7 +6972,7 @@
 - 設定・更新条件（個別記録）: 追加操作は不要です。閾値の既定値と人による承認条件は変更しません。破損した自己情報は、次の正常な取得で新しい記録を保存するまで未確認です。
 - 最新のartifactを選んだ後でJSONと承認主体を検証し、不正・深すぎるJSONから履歴へ戻らない。
 - プロフィールと所属の読取りは保存済みデータを変更せず、明示設定の優先順位を維持する。
-- 根拠: mcs/ops/mcs_signals.py
+- 根拠: mcs/signals/mcs_signals.py
 
 #### 破損した最新シグナルを古い候補として除外する問題を修正
 
@@ -6996,7 +6996,7 @@
 - 設定・更新条件（個別記録）: ルール抽出の世代を8へ更新します。次の抽出処理で保存済み本文の旧結果をローカルで再生成します。MCSからの再取得は不要です。処理期限に達した投稿は旧結果を保持し、次の処理へ引き継ぎます。本文が削除済み・取得未完了の場合は古い派生結果を残しません。
 - 不正JSONや深すぎるmetadataを新しい抽出の妨げにしない。正常な現世代結果の冪等性とchunkごとの一括置換を維持する。
 - 末尾Zの日時だけをUTC時差へ正規化し、日付のみ・naive日時・不正な日時の既存境界と医学ルールの解釈を維持する。
-- 根拠: mcs/extract/v1/extract.py
+- 根拠: mcs/extract/rules/extract.py
 
 #### 更新中断後の再試行とメタデータ再取得を修正
 
@@ -7007,7 +7007,7 @@
 - 監視と押下者取得の対象選択では、スタンプ配列のJSONオブジェクトだけを判定し、不正な文字列要素によるSQL例外を防ぐ。表示側は不正な配列を引き続き不正として区別する。
 - 共通の引数検証でdeadlineの型と有限性を確認し、admitted_probe_formatもpermit取得前に接続先とtimeoutを検証する。
 - 完全合成の不正JSON・深いJSON・不正な推論引数31件、旧版・現行版FTS新規作成の中断4件、監視対象選択の不正配列4件を、修正前失敗する回帰として追加する。
-- 根拠: mcs/core/ledger.py、mcs/core/local_llm.py
+- 根拠: mcs/core/ledger.py、mcs/llm/local_llm.py
 
 #### ローカル出力先と受領記録を安全に保護
 
@@ -7310,7 +7310,7 @@ Slack・LINE WORKSにも共通のコマンド操作を追加しました。ス�
 - 不正な保存フィールドを無効として読み取り、新しいshadow取得の失敗時には本人スタンプを応答根拠に使わない。不正なshadowをcaptureへ昇格しない。
 - 本人スタンプで解消した未応答候補を監視期間内の再取得対象に残し、取消の公開後に再評価する。間隔・失敗時backoff・取得予算は維持する。
 - 押下者取得と鮮度判定は最新の正常なcaptureまたはshadow観測を使い、公開設定とは独立させる。差分比較では種別省略の件数をゼロとする。
-- 根拠: mcs/core/ledger.py、mcs/ops/mcs_signals.py、mcs/views/message_metadata.py、mcs/views/metadata_report.py
+- 根拠: mcs/core/ledger.py、mcs/signals/mcs_signals.py、mcs/views/message_metadata.py、mcs/views/metadata_report.py
 
 #### Slack・LINE WORKSでも全機能のコマンド操作に対応
 
@@ -7404,7 +7404,7 @@ Slack・LINE WORKSにも共通のコマンド操作を追加しました。ス�
 - 数値文字列と整数の送信者IDを正の64ビット整数に正規化し、不正値を不明扱いにする。
 - 名簿の本人IDが複数ある場合は氏名やプロフィールで推測せず不明扱いにする。
 - プロフィール補完は追記式で、既存の所属・職種の既定値を維持する。
-- 根拠: mcs/ops/mcs_signals.py、mcs/extract/rollup.py、mcs/views/mcs_view.py
+- 根拠: mcs/signals/mcs_signals.py、mcs/patients/rollup.py、mcs/views/mcs_view.py
 
 #### LINE WORKSで本文のないDMが不明な処理として残る問題を修正
 
@@ -7426,7 +7426,7 @@ Slack・LINE WORKSにも共通のコマンド操作を追加しました。ス�
 - 通常tick/deepの定期設定を型検証し、shadowをsemantic処理後に実行する。専用deadlineを設定・復元し、healthにIDなしの状態・予算・延期理由を記録する。
 - 返信投稿は親投稿ID付きの既存thread APIを使って正確に1件取得する。ルート投稿用経路へ返信IDを送って422になる失敗を防ぐ。
 - 契約確認用の診断は、生の対象未読を取得前後で独立観測し、不完全・不明・初回の型不正を成功にしない。押下者は上限付き2断面の集合を値を出さず比較し、利用件数は患者データとgroup相談を分ける。最終MCS実画面検証はユーザーが担当する。
-- 根拠: mcs/ingest/mcs_adapter.py、mcs/core/ledger.py、mcs/ingest/run_check.py、scripts/development/probe_message_metadata.py
+- 根拠: mcs/ingest/mcs_adapter.py、mcs/core/ledger.py、mcs/ingest/run_check.py、scripts/diagnostics/probe_message_metadata.py
 
 #### MCSスタンプの観測時刻が収集のたびに更新される問題を修正
 
@@ -7438,14 +7438,14 @@ Slack・LINE WORKSにも共通のコマンド操作を追加しました。ス�
 - 総ページ数が2ページ目から返る場合も、未読一覧の終端ページとの一致を要求する。初回の空一覧と総ページ数0は保持する。
 - 空datasetの任意paginateを検証し、has_nextや件数・ページの矛盾をunknownへ集計する。paginate欠落の互換性と非空先頭ページによる登録あり判定を保持する。
 - 投稿診断と利用数診断の終了コード0の意味を受入票で分け、全22-A完了とは扱わない。
-- 根拠: scripts/development/probe_message_metadata.py、tests/ingest/test_metadata_probe_observation.py、tests/ingest/test_metadata_probe_usage.py、docs/development/acceptance/ACCEPTANCE_1.0.11.md
+- 根拠: scripts/diagnostics/probe_message_metadata.py、tests/ingest/test_metadata_probe_observation.py、tests/ingest/test_metadata_probe_usage.py、docs/development/acceptance/ACCEPTANCE_1.0.11.md
 
 #### 利用件数の調査不能を完了や登録0件と区別
 
 - ページ番号・ページ容量・重複ルーム・終端の整合を検証し、取得できていない対象を完全集計から除外して隠さない。
 - medicalルームのkarte欠損・不正値を患者0件の成功にせず、解決不能な対象数と不完全状態を返す。
 - 診断出力に患者ID・ルームID・本文・認証情報を追加しない。
-- 根拠: scripts/development/probe_message_metadata.py、tests/ingest/test_metadata_probe_usage.py
+- 根拠: scripts/diagnostics/probe_message_metadata.py、tests/ingest/test_metadata_probe_usage.py
 
 #### MCSスタンプの本人反応と観測時刻を表示
 
@@ -7487,7 +7487,7 @@ Slack・LINE WORKSにも共通のコマンド操作を追加しました。ス�
 #### 本人の承知・完了スタンプを依頼の応答に数える設定を既定offで追加
 
 - evidenceは変えず、既存の自局投稿による応答判定はそのまま。
-- 根拠: mcs/ops/mcs_signals.py
+- 根拠: mcs/signals/mcs_signals.py
 
 #### スタンプ再取得の照合レポートを追加
 
@@ -7828,14 +7828,14 @@ LINE WORKSにMCSの要約・原文・添付を届け、本人との個別トー�
 #### 不正な却下理由の記録でアラート一覧が停止する問題を修正
 
 - 人承認コマンドと集計で同じDISMISS_REASON_CODESを参照する。
-- 根拠: mcs/ops/mcs_signals.py
+- 根拠: mcs/signals/mcs_signals.py
 
 #### 監視とローカル解析が不正な入力で停止する問題を修正
 
 - JSON辞書の読取りと形式確認に既存の共有処理を再利用する。
 - 送信前に見送ったRT形式確認の待機permitだけを解放し、送信済み処理の不確実性は保持する。
 - 30,000件を超える抽出対象はSQLite json_eachでSQL内絞込みを保ち、LIMIT後の絞込みを廃止する。
-- 根拠: mcs/core/mcs_util.py、mcs/core/local_llm.py、mcs/ingest/health_watch.py、mcs/extract/v4/extract_llm.py
+- 根拠: mcs/core/mcs_util.py、mcs/llm/local_llm.py、mcs/ingest/health_watch.py、mcs/extract/llm/extract_llm.py
 
 #### 型の壊れた抽出結果でも構造化表示を継続
 
@@ -7847,7 +7847,7 @@ LINE WORKSにMCSの要約・原文・添付を届け、本人との個別トー�
 
 - 依頼や薬剤と共通の未確認判定を検査表示にも使用し、フラグがfalse以外の値なら候補として扱います。
 - 患者集約は検査項目のフラグを保持しており、保存形式・抽出処理・数値や根拠の再検証は変更しません。
-- 根拠: mcs/views/structured_view.py、tests/views/test_structured_view.py、tests/extract/test_rollup_canonical.py
+- 根拠: mcs/views/structured_view.py、tests/views/test_structured_view.py、tests/patients/test_rollup_canonical.py
 
 #### 差分調査による補足
 
@@ -8033,8 +8033,8 @@ llama-server の同時スロット数が 2 → 3（`-np 3`、1枠あたりコン
 比較元 `v1.0.7` → 対象 `v1.0.8`。commit履歴とtag間の実装・テスト差分を照合し、後続版の仕様を混ぜずに本文を再編集しました。
 
 - `v1.0.8:mcs/ingest/run_check.py`
-- `v1.0.8:mcs/core/local_llm.py`
-- `v1.0.8:mcs/extract/v4/extract_llm.py`
+- `v1.0.8:mcs/llm/local_llm.py`
+- `v1.0.8:mcs/extract/llm/extract_llm.py`
 - `v1.0.8:mcs/notify/notify_cards.py`
 - `v1.0.8:deployment/launchagents/ai.mcs.llamaserver.plist`
 
@@ -8497,7 +8497,7 @@ watchdog の再配置が必要。
 - `v1.0.6:hermes_plugin/mcs_delivery/registry.py`
 - `v1.0.6:deployment/recovery/mcs_recover.py`
 - `v1.0.6:mcs/ops/mcs_update.py`
-- `v1.0.6:mcs/extract/rollup.py`
+- `v1.0.6:mcs/patients/rollup.py`
 
 旧版の実画面や実環境の性能は再測定していません。画面を推測した比較、未測定の効率値は追加していません。
 
@@ -8676,7 +8676,7 @@ services` の reconcile が必要。
 
 #### アップグレード時の注意
 
-- **drainer の実行パスが `mcs/extract/v4/extract_llm.py` に
+- **drainer の実行パスが `mcs/extract/llm/extract_llm.py` に
   移動** — `mcs_setup.py services` の reconcile で plist を
   再描画・再起動する。旧パスを参照する実行経路・cron
   wrapper・ドキュメントは残っていない
@@ -8700,9 +8700,9 @@ services` の reconcile が必要。
 
 - `v1.0.5:mcs/notify/notify_render.py`
 - `v1.0.5:mcs/views/structured_view.py`
-- `v1.0.5:mcs/extract/v4/extract_llm.py`
+- `v1.0.5:mcs/extract/llm/extract_llm.py`
 - `v1.0.5:mcs/ops/mcs_setup.py`
-- `v1.0.5:tests/extract/test_extract_review_regressions.py`
+- `v1.0.5:tests/extract/llm/test_extract_review_regressions.py`
 
 旧版の実画面や実環境の性能は再測定していません。画面を推測した比較、未測定の効率値は追加していません。
 
@@ -8882,7 +8882,7 @@ restart` が必要（`check` が起動中 gateway より plugin が新しい
 
 #### 新しい運用機能
 
-- **外部 export の共有 schema** — `mcs/ops/export_schema.py` を
+- **外部 export の共有 schema** — `mcs/export/export_schema.py` を
   新設し、producer と受け口で閉じた schema を共有。自由記述の
   混入・未承認の送信・結果不明時の重複実行を防止
 - **`check` の診断強化** — 起動中 gateway より `hermes_plugin/`
@@ -8932,10 +8932,10 @@ restart` が必要（`check` が起動中 gateway より plugin が新しい
 #### 静的照合した実装・テスト
 
 - `v1.0.4:install.sh`
-- `v1.0.4:mcs/core/local_llm.py`
+- `v1.0.4:mcs/llm/local_llm.py`
 - `v1.0.4:mcs/ops/mcs_setup.py`
 - `v1.0.4:mcs/ingest/run_check.py`
-- `v1.0.4:tests/core/test_local_llm.py`
+- `v1.0.4:tests/llm/test_local_llm.py`
 
 </details>
 
@@ -9435,7 +9435,7 @@ Discord 通知を「カード＋コンパニオンスレッド」の対話型モ
 - `v1.0.2:mcs/semantic/semantic_qc.py`
 - `v1.0.2:mcs/semantic/semantic_policy.py`
 
-- `v1.0.2:mcs/core/local_llm.py`
+- `v1.0.2:mcs/llm/local_llm.py`
 - `v1.0.2:mcs/ingest/job_ops.py`
 - `392f0306a0770b66cbf5d98dcc88a7680d5e5a8e`
 - `10af407b2943307d62c5f342fad49a44d83cdea8`

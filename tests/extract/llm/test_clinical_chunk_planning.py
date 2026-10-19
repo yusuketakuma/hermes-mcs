@@ -13,7 +13,7 @@ __all__ = ["db"]
 
 
 def test_shared_plan_contract_and_dense_short_corpus():
-    cases = json.loads((Path(__file__).resolve().parents[2] / "evaluation/semantic_completeness_cases.json").read_text())["cases"]
+    cases = json.loads((Path(__file__).resolve().parents[3] / "evaluation/semantic_completeness_cases.json").read_text())["cases"]
     case = next(case for case in cases if case["id"] == "dense-multi-drug-16plus")
     source = case["messages"][0]["body"]
     assert len(source) < 3000
@@ -162,7 +162,7 @@ def test_every_real_adapter_call_uses_pinned_model_during_config_edit(monkeypatc
 
 
 def test_dense_planning_bypasses_batch_even_when_source_is_short(db, monkeypatch):
-    cases = json.loads((Path(__file__).resolve().parents[2] / "evaluation/semantic_completeness_cases.json").read_text())["cases"]
+    cases = json.loads((Path(__file__).resolve().parents[3] / "evaluation/semantic_completeness_cases.json").read_text())["cases"]
     source = next(case for case in cases if case["id"] == "dense-multi-drug-16plus")["messages"][0]["body"]
     for mid in (1, 2):
         db.save_messages([_message(mid=mid, body=source)])

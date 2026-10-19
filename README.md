@@ -424,3 +424,5 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 Proprietary — All Rights Reserved。
 利用・改変はリポジトリ管理者の明示許可に従ってください（[LICENSE](LICENSE)）。
+
+開発者向け: [責務別のコード配置・依存・移植範囲](docs/development/REPOSITORY_STRUCTURE.md)。

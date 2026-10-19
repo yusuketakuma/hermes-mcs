@@ -18,7 +18,7 @@ nearest measurement label in the body at validation time.
 
 Naming: comments here call this engine "the v3 pass" (the generation
 it was built as; see the clinical-plan/v3 prompt key). It lives in
-extract/v4/ as the current generation (docs/specs/semantic-evaluation.md),
+extract/llm/ as the current generation (docs/specs/semantic-evaluation.md),
 EXTRACT_VERSION is an independent schema counter, and semantic_v4 is a
 separate generation-crossing engine.
 """
@@ -3643,7 +3643,7 @@ def pending_pred() -> str:
     same body-length bound), so a missing guard row already decides it.
     The qc_fix test runs after the settle test, which is false for most
     of a mature corpus. Boolean results are identical to the unguarded
-    composition (tests/extract/test_stab_pending_pred.py)."""
+    composition (tests/extract/llm/test_stab_pending_pred.py)."""
     return f"""{ELIGIBLE_MESSAGE}
         AND (NOT {_has_kind(V4_PROJECTION_KIND, 'v0', project=True)}
              OR {current_v4_id()} IS NULL)

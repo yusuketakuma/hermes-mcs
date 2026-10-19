@@ -6,7 +6,7 @@ from pathlib import Path
 import extract_bench
 import extract_llm
 
-CORPUS = Path(__file__).resolve().parents[2] / "evaluation" / "extract_cases_labs.json"
+CORPUS = Path(__file__).resolve().parents[3] / "evaluation" / "extract_cases_labs.json"
 
 
 def _claims(case):

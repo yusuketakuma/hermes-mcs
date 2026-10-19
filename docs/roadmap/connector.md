@@ -9,7 +9,7 @@
 [ext_contract](../../mcs/ops/ext_contract.py)は`mcs-ext-receipt/1`のaccepted/delete結果を照合し、
 LocalSinkとHandoffSinkの取込・失効・抑制・削除状態を扱います。
 Handoffの自己ackや受領拒否を成功として扱わず、journalと監査を保持します。
-[export allowlist](../../mcs/ops/export_schema.py)の検査はローカル合成の根拠であり、
+[export allowlist](../../mcs/export/export_schema.py)の検査はローカル合成の根拠であり、
 外部サービスの同意・接続・削除保証を証明しません。
 元のC0〜C4、CD-1〜CD-10、Q1〜Q12と公開条件は保持し、実送付・配備を受入済みとしません。
 
@@ -104,7 +104,7 @@ C0 fixture（受理12・拒否23＋生成のみ15・receipt 6・withdraw 4）・
 `docs/specs/external-export-contract.md`に固定した。相手repoとの同一ID合意、
 CD-1〜CD-10の共同合意、実受領・本番受入は未完了。
 
-先行した純粋検証は`mcs/ops/c1_contract.py`に実装済み。`canonical_json`は
+先行した純粋検証は`mcs/export/c1_contract.py`に実装済み。`canonical_json`は
 有限値・safe integer・固定小数域・Unicodeを検査する限定canonicalで、
 任意のRFC 8785互換やraw JSONの重複キー解決を保証するものではない。
 `validate_profile`は明示7型・全患者・3600秒以内の鮮度・30日以内の保持を

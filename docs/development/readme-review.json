@@ -5,9 +5,9 @@
       "notes": "2026-10-19 1.0.27候補: レーン1新着・2/3背景の直列化、レーン3の24時間作成と解析済み条件、既存公開ゲートを実装へ照合。辞書未設定の対話だけ既定はいを提案し人承認を保持。モデル/schema/世代と収集10分は不変。",
       "sources": [
         "README.md",
-        "mcs/core/local_llm.py",
-        "mcs/extract/patient_nightly.py",
-        "mcs/extract/v4/extract_llm.py",
+        "mcs/llm/local_llm.py",
+        "mcs/patients/patient_nightly.py",
+        "mcs/extract/llm/extract_llm.py",
         "mcs/ops/mcs_setup.py"
       ]
     },
@@ -35,10 +35,10 @@
       "notes": "2026-10-19 1.0.27候補: 公開と人承認、モデル・情報送信先を維持。辞書は確認日/確認者/採用の入力が必要でinit --yesでは未作成。carry本文をログへ出さず、timeout後idleは取消証明としない。benchmarkは停止と全RT成功を確認。",
       "sources": [
         "SECURITY.md",
-        "mcs/core/local_llm.py",
-        "mcs/extract/v4/extract_llm.py",
+        "mcs/llm/local_llm.py",
+        "mcs/extract/llm/extract_llm.py",
         "mcs/ops/mcs_setup.py",
-        "scripts/development/llm_lane_bench.sh",
+        "scripts/evaluation/llm_lane_bench.sh",
         "resources/drug-master/README.md"
       ]
     },

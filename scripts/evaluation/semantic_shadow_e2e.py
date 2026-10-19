@@ -8,7 +8,7 @@ local LLM (real Qwen when running) and, when TYPESAFE_API_KEY is set, a
 real Jev client.
 
 Usage:
-  python3 scripts/development/semantic_shadow_e2e.py \
+  python3 scripts/evaluation/semantic_shadow_e2e.py \
       --cases evaluation/semantic_completeness_cases.json \
       --out /tmp/shadow-e2e.json [--jev] [--deadline 300]
 

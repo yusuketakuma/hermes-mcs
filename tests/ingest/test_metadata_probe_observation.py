@@ -27,7 +27,7 @@ def probe_module():
     spec = importlib.util.spec_from_file_location(
         "metadata_probe_observation",
         Path(__file__).resolve().parents[2]
-        / "scripts/development/probe_message_metadata.py")
+        / "scripts/diagnostics/probe_message_metadata.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

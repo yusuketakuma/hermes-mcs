@@ -140,8 +140,8 @@ zaitaku-calender側の契約・ID・権限は今回の改訂で変更しない�
 | #7 | [read-only監査](../mcs/core/ledger_audit.py)と関係別guard。旧DBはshadow観測を保持 | ownerの観測証拠・有効化判断。shadow件数ゼロだけでは期間完了としない |
 | #8 | schema9の本文を持たないhash/revision履歴（M1） | 本文履歴の拡張判断、既存原文・編集の実観測 |
 | #9 | 選択runtimeと配備recoveryのPython/SQLite診断、SDK配布metadata表示 | canonical追随の統合、SDK実接続・常駐プロセス・配備受入 |
-| #11 | [drug_map](../mcs/extract/drug_map.py)の明示辞書と出典付き成分候補 | 辞書利用条件・実辞書の採用。候補を処方正本にしない |
-| #19 | [signal lifecycle](../mcs/ops/mcs_signals.py)と内部の解消・再open・抑制統計 | 人手ラベル・精度校正・privacy条件。内部統計は`human>=200`の代替ではない |
+| #11 | [drug_map](../mcs/medications/drug_map.py)の明示辞書と出典付き成分候補 | 辞書利用条件・実辞書の採用。候補を処方正本にしない |
+| #19 | [signal lifecycle](../mcs/signals/mcs_signals.py)と内部の解消・再open・抑制統計 | 人手ラベル・精度校正・privacy条件。内部統計は`human>=200`の代替ではない |
 | #30 | [manifest](../tests/fixtures/schema_upgrade/update-paths.json)に元26経路と現行13版16構成の合成回帰を保持 | 原runner/rawログ、原schema0〜4/6、実Git・host・SDK導入・配備 |
 | receipt・metadata | [外部receipt契約](../mcs/ops/ext_contract.py)、[project metadata](../mcs/ingest/project_metadata.py)、[cross lists](../mcs/ingest/cross_lists.py)のローカル入口 | 接続先合意、実API副作用・出典・公開条件。opt-inは公開承認ではない |
 
@@ -382,7 +382,7 @@ install/update/setup/doctorの統一を一つのリリースへ集約する。
 | 添付保守 | [maintenance](../mcs/core/maintenance.py)は削除完了まで既存行に再試行先を保持し、別名→原本の順で削除。欠落ファイルを削除数に加えず、失敗を完了扱いしない | 未送信・結果不明・保留参照を保持。保存先外・symlinkは拒否。既に旧版が失ったpathから残存ファイルを推測して削除しない |
 | 監視警報 | [health_watch](../mcs/ingest/health_watch.py)は検出と配送状態を分離し、送信前の記録と並列抑止を追加 | 既知未送信は60秒以上で次回監視時に再試行。同じ警報のunknownは自動再送せず履歴を保持。保存失敗は非0終了。本文は状態コード・数値のみ |
 | doctor・Keychain | [doctor](../mcs/ops/mcs_setup.py)はディスクrevision/変更有無と稼働PID/起動時刻・再起動receiptを区別。Keychain拒否はロックとアクセス許可制限の両方を説明 | 既定doctorはサービス・認証情報・networkをprobeしない。`--probe services`は明示指定。稼働source revision不明はunknown、Keychain解除・権限変更を自動実行しない |
-| #11 候補辞書・進捗 | [drug_map](../mcs/extract/drug_map.py)は100件のkeyset走査と既存artifactの進捗を使い、辞書世代変更・無効化・原文変更を照合。辞書は20,000件・8MiB、別名100件/entryまで | 古い候補を現在有効として表示しない。実辞書の利用条件・承認・config有効化は未確認。成分・一般名処方・製品を推定統合しない |
+| #11 候補辞書・進捗 | [drug_map](../mcs/medications/drug_map.py)は100件のkeyset走査と既存artifactの進捗を使い、辞書世代変更・無効化・原文変更を照合。辞書は20,000件・8MiB、別名100件/entryまで | 古い候補を現在有効として表示しない。実辞書の利用条件・承認・config有効化は未確認。成分・一般名処方・製品を推定統合しない |
 | 読取り照合・比較 | 共通CLIのlookup/search/compareで一致候補・出典、名称/IDの参照検索と辞書差分/別名衝突を確認 | 共通CLIの合成51件成功。searchは部分一致による参照一覧で薬剤の確定ではない。compareはbefore/after両辞書のpathとSHAを必須、limitは0〜200。臨床同等性・相互作用・禁忌を判定しない |
 | 型別統計・未照合レビュー | [stats](../mcs/views/mcs_stats.py)にingredient/general_name/product別の候補内訳とローカルの未照合/複数候補確認一覧を開発実装 | 型別統計・候補世代と表示の対象合成回帰216件成功。本人・現在・非否定の言及と原表記を維持し、C1へ新項目を自動公開しない |
 
@@ -396,7 +396,7 @@ install/update/setup/doctorの統一を一つのリリースへ集約する。
 引数と受入範囲は[抽出の追記](roadmap/extraction.md)に示す。歴史記録の全26更新経路や
 原schemaの制約、owner判断・人手校正・外部契約の保留条件はこの追記で解除しない。
 
-候補世代は[rollup](../mcs/extract/rollup.py)、サマリー・キャッシュ/snapshot閲覧と
+候補世代は[rollup](../mcs/patients/rollup.py)、サマリー・キャッシュ/snapshot閲覧と
 [brain_export](../mcs/ops/brain_export.py)にも連動する。辞書変更・無効化・破損時は
 旧候補注釈を落とし、元の薬剤言及は保持する。cursor移動だけを辞書世代変更と扱わない。
 

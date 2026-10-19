@@ -30,7 +30,7 @@ python3 mcs/ops/mcs_drug.py check-surface '架空製品錠5mg' \
   --reference '架空製品錠10mg' --unit 錠 --reference-unit 錠 --json
 ```
 
-[drug_map.compare_surfaces](../../mcs/extract/drug_map.py) は両側の薬名から読める規格・剤形と、明示された単位だけを比較する。`strength_difference/form_difference/unit_difference` を確認理由とし、未記載は `missing` に残す。差があれば `review`、必要な項目がなければ `unknown`、確認できた表記に差がなければ `no_difference_observed`。いずれも `equivalence_confirmed=false`。
+[drug_map.compare_surfaces](../../mcs/medications/drug_map.py) は両側の薬名から読める規格・剤形と、明示された単位だけを比較する。`strength_difference/form_difference/unit_difference` を確認理由とし、未記載は `missing` に残す。差があれば `review`、必要な項目がなければ `unknown`、確認できた表記に差がなければ `no_difference_observed`。いずれも `equivalence_confirmed=false`。
 
 単位換算や臨床的等価の推定はしない。服用量・一日量の `dose` を製剤規格へ読み替えない。公式マスターの `form_code` と、名称から取り出した錠・液などの `form` を混同しない。
 
@@ -42,7 +42,7 @@ python3 mcs/ops/mcs_drug.py master-impact \
   --after /private/master/new.zip --after-pin /private/master/new-pin.json --json
 ```
 
-[drug_master_compare.compare](../../mcs/views/drug_master_compare.py) が、版・仕様・原本SHA256を固定したCSV/ZIPを全薬剤コードで比較する。pinの検証は [import_drug_master.catalog](../../mcs/ops/import_drug_master.py) が行う。既存 `compare` は変換済み私有辞書同士、`impact` はその辞書変更が投稿の候補へ与える影響であり、公式原本を比べる `master-impact` と入力が異なる。
+[drug_master_compare.compare](../../mcs/medications/drug_master_compare.py) が、版・仕様・原本SHA256を固定したCSV/ZIPを全薬剤コードで比較する。pinの検証は [import_drug_master.catalog](../../mcs/ops/import_drug_master.py) が行う。既存 `compare` は変換済み私有辞書同士、`impact` はその辞書変更が投稿の候補へ与える影響であり、公式原本を比べる `master-impact` と入力が異なる。
 
 追加、名称変更、廃止確認、経過措置期限、単位・剤形区分・一般名コード変更、新版に見当たらないコードを分ける。新版から消えた行だけで廃止を断定しない。採用辞書に保持された出典コードで影響を照合し、旧辞書に出典metadataがなければ採用影響はunknown/partialとして残す。名称差分を表示しても辞書承認、pin変更、薬剤候補の再生成を自動実行しない。
 
@@ -54,7 +54,7 @@ python3 mcs/ops/mcs_drug.py master-impact \
 python3 mcs/ops/mcs_drug.py timeline --project 1 --name '架空製品錠5mg' --limit 50 --json
 ```
 
-[drug_timeline.timeline](../../mcs/views/drug_timeline.py) は保存済み投稿のページを返す。`--since/--until` は投稿日時のUnix秒、`--cursor` は同じsnapshot・検索条件の次ページ、`--snapshot` は明示するローカルsnapshot。薬剤のイベント日時を投稿日時から補作しない。
+[drug_timeline.timeline](../../mcs/medications/drug_timeline.py) は保存済み投稿のページを返す。`--since/--until` は投稿日時のUnix秒、`--cursor` は同じsnapshot・検索条件の次ページ、`--snapshot` は明示するローカルsnapshot。薬剤のイベント日時を投稿日時から補作しない。
 
 各itemに原抽出の `mention`、投稿・artifact参照、`change` を持たせる。
 
@@ -77,7 +77,7 @@ python3 mcs/ops/mcs_drug.py timeline --project 1 --name '架空製品錠5mg' --l
 python3 mcs/ops/mcs_drug.py reconcile --project 1 --limit 50 --json
 ```
 
-[drug_reconciliation.reconcile](../../mcs/views/drug_reconciliation.py) はtimelineと同じページ条件で投稿を読み、[get_project_metadata](../../mcs/views/project_metadata_view.py) が返す取得済み `medication_periods` と照合する。nameフィルタはtimelineだけ。追加取得は行わない。
+[drug_reconciliation.reconcile](../../mcs/medications/drug_reconciliation.py) はtimelineと同じページ条件で投稿を読み、[get_project_metadata](../../mcs/views/project_metadata_view.py) が返す取得済み `medication_periods` と照合する。nameフィルタはtimelineだけ。追加取得は行わない。
 
 構造化薬歴は薬名、薬歴内ID、begin_date/end_dateを持つ。薬歴内IDを公式薬剤コードとして扱わない。取得時点 `last_complete_at`、最新試行 `attempted_at`、state/current_known/historicalをそのまま示す。すべての保存済み期間を比較するため、過去の期間の一致を現処方の一致としない。
 

@@ -77,7 +77,7 @@ hermes-mcs は抽出と候補提示を担当する。正式な担当割当・期
 | Loop 候補・返信関係 | 世代束縛・候補同一性・Jev 判定（同じ薬剤・行動・期間の一致を要求）。閲覧と人手採用の経路あり | 変更なし。判定文の修正は保留へ（下記） |
 | 要約の採用・配送 | `summary_review`（assist）、`semantic_notice`（enforce）、`semantic_observe` の日次観測 | 20-E で on 化。新規実装なし |
 
-根拠ファイル: `mcs/extract/v4/{extract_llm,extract_bench}.py`、`mcs/extract/rollup.py`、`mcs/views/{structured_view,summary_review,mcs_view}.py`、`mcs/semantic/{semantic_llm,semantic_facts,semantic_extraction,semantic_projection,semantic_loops,semantic_drain,semantic_policy,semantic_send_gate,semantic_bench,semantic_blind,semantic_observe}.py`、`mcs/notify/notify_flush.py`、`mcs/ops/{request_loops,mcs_setup}.py`、`evaluation/`、`docs/specs/{semantic-facts-v2-rollout,semantic-evaluation}.md`。
+根拠ファイル: `mcs/extract/llm/{extract_llm,extract_bench}.py`、`mcs/patients/rollup.py`、`mcs/views/{structured_view,summary_review,mcs_view}.py`、`mcs/semantic/{semantic_llm,semantic_facts,semantic_extraction,semantic_projection,semantic_loops,semantic_drain,semantic_policy,semantic_send_gate,semantic_bench,semantic_blind,semantic_observe}.py`、`mcs/notify/notify_flush.py`、`mcs/ops/{request_loops,mcs_setup}.py`、`evaluation/`、`docs/specs/{semantic-facts-v2-rollout,semantic-evaluation}.md`。
 
 ## 進め方
 

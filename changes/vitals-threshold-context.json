@@ -4,9 +4,9 @@
   "summary": "明示的に有効にしているバイタル閾値警告で、「大丈夫」「工夫」や「測れた」「測定できた」を含む本人の値が警告対象から外れていました。家族の値や測定不能は引き続き除外します。",
   "upgrade": "vital_urgencyの既定は無効のままです。設定・閾値・解析世代は変更せず、通常の新しい解析から反映します。保存済み全投稿の再解析はしません。",
   "refs": [
-    "mcs/extract/v4/extract_llm.py"
+    "mcs/extract/llm/extract_llm.py"
   ],
   "details": [
-    "家族語の夫を丈夫・工夫と区別し、測れ・測定できは不能を示す語尾だけ除外する。回帰は完全合成のtests/extract/test_vital_threshold_context.py。"
+    "家族語の夫を丈夫・工夫と区別し、測れ・測定できは不能を示す語尾だけ除外する。回帰は完全合成のtests/extract/llm/test_vital_threshold_context.py。"
   ]
 }

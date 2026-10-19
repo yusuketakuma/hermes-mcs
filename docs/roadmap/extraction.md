@@ -9,7 +9,7 @@
 
 ### 2026-10-04追記: #11のローカル実装
 
-[drug_map](../../mcs/extract/drug_map.py)は明示指定した辞書のID・SHA・利用条件を検査し、
+[drug_map](../../mcs/medications/drug_map.py)は明示指定した辞書のID・SHA・利用条件を検査し、
 元の薬剤表層名と独立した成分候補を出典付きで付けます。自動ダウンロード・曖昧一致・
 人手正本への上書きではなく、辞書と抽出根拠が変われば注釈を再評価します。
 実辞書の権利・採用と実データの評価は別判断です。以下の初期調査時点の
@@ -28,13 +28,13 @@ F-1の未確認検査値の表示分離は現行`structured_view._lab_lines`に�
 
 ## 0. 結論
 
-- 3 項目とも C0/C1 を遅らせない。出力はすべてローカルの候補で、`mcs-read-model/1` の allowlist（`mcs/ops/export_schema.py:68-147`）は変更しない。allowlist に足すなら、C0 fixture の再合意と `mcs-ext-auth/2`（C2 / Q9）の別判断になる。
+- 3 項目とも C0/C1 を遅らせない。出力はすべてローカルの候補で、`mcs-read-model/1` の allowlist（`mcs/export/export_schema.py:68-147`）は変更しない。allowlist に足すなら、C0 fixture の再合意と `mcs-ext-auth/2`（C2 / Q9）の別判断になる。
 - **最優先は #15 の既存 labs 表示の安全化（F-1）**。合成入力で「値が自分の evidence と矛盾する」場合も「evidence がない」場合も、Discord/Slack カードの「検査:」行に確定表示されることを実行確認した。薬・症状・依頼は `unverified` を尊重しているが、検査値だけが抜けている。
 - 番号の対応: §3-11 = 旧 v2 #3（優先順位 3）、§3-15 = v2 #10、§3-16 = v2 #9（優先順位 5）。
 
 ### 旧 ROADMAP の誤り・古い点
 
-1. **§3-15 は既存実装を書いていなかった**。本文由来の labs 抽出は extract v4 で実装済み: `extract_llm.py:95`（プロンプト）、`:293-303`（schema）、`:789-826`（`_Validator.labs`）、`rollup.py:137-141,183-184`（`recent_labs`）、`structured_view.py:195-208,336-337`（「検査:」行）、`semantic_qc.py:22`（QC 対象に labs）、テスト `tests/extract/test_extract_llm.py:2061-2118`。旧版の「#9 依存」（添付依存）は本文由来の検査値には無関係。実際にないのは、v1 ルール・日付・基準範囲・bench・値と evidence の突合・unverified の扱い（下記 #15）。
+1. **§3-15 は既存実装を書いていなかった**。本文由来の labs 抽出は extract v4 で実装済み: `extract_llm.py:95`（プロンプト）、`:293-303`（schema）、`:789-826`（`_Validator.labs`）、`rollup.py:137-141,183-184`（`recent_labs`）、`structured_view.py:195-208,336-337`（「検査:」行）、`semantic_qc.py:22`（QC 対象に labs）、テスト `tests/extract/llm/test_extract_llm.py:2061-2118`。旧版の「#9 依存」（添付依存）は本文由来の検査値には無関係。実際にないのは、v1 ルール・日付・基準範囲・bench・値と evidence の突合・unverified の扱い（下記 #15）。
 2. **§3-11 の引用が弱かった**。`zaitaku-calender docs/operations.md:151` は 2026-09-05 時点の snapshot で、`:142` に「現在値として使用しない」とある。G-OPS-2 の定義は `docs/plans/implementation-plan.md:140,202`。利用条件の根拠は `docs/operations-common-master.md:111`（SSK の一般利用条件は無断使用・転載を制限）。`:113` の運営者「問題なし」は他薬局への配信・再配布の件で、根拠 URL もなく、hermes-mcs のローカル利用の許諾ではない。
    「YJ に体系を合わせる」も正確ではない。zaitaku 側の `code_system` は `ssk`（9 桁数字）と `yj`（12 桁 `[0-9A-Z]`）の 2 種だけ（`migrations/0028_master_drug_identifier_assertions.sql:17,24-25`）。YJ だけでは製品・有効期間が一意でない（`docs/operations-common-master.md:190`）。名前照合では製品レベル ID を返せない。
 3. **§3-16 は「ローカル」の中身が未整理だった**。実機の llama-server は vision 不可。添付の実体は 14 日で削除され（`maintenance.py:25,164-230`）、`pruned` は終端で再取得経路がない（`ledger.py:1657-1662` は `state='pending'` だけ）。`docs/specs/lifecycle-spec.md:194` の「再 DL 可」は未実装の可能性がある。過去添付の OCR は §3-4 の補完とは別実装が要る。
@@ -83,9 +83,9 @@ F-1の未確認検査値の表示分離は現行`structured_view._lab_lines`に�
 7. **候補の提示**: 既存の「候補（未確認）」規約に合わせる。例「成分候補: X（辞書 dict_id@sha8・未確認）」。ambiguous は「複数候補」とし、成分名は出さない。確認操作は作らない（現行薬の正本は zaitaku-calender）。
 
 **成果物**
-- `mcs/extract/drug_map.py`（世代横断のモジュールなので `extract/` 直下。ライブラリだけで `Ledger(` を直接 open しないため `LEDGER_WRITERS` への追加は不要）。
+- `mcs/medications/drug_map.py`（世代横断のモジュールなので `extract/` 直下。ライブラリだけで `Ledger(` を直接 open しないため `LEDGER_WRITERS` への追加は不要）。
 - tick の配線、`rollup.py` / `mcs_stats.py` / `brain_export.py` の注釈、バージョン更新。
-- `tests/extract/test_drug_map.py`（合成辞書は Python 定数。架空名）、`tests/views/test_mcs_stats.py` 追記、export の回帰テスト。
+- `tests/medications/test_drug_map.py`（合成辞書は Python 定数。架空名）、`tests/views/test_mcs_stats.py` 追記、export の回帰テスト。
 - `docs/guides/USER_GUIDE.md:362` と `docs/development/DEVELOPMENT.md:341-342` の更新、`scripts/development/update_readme.py` 実行。
 - コミットグループ案: ① fold / split / 辞書ロード ② `med_ref` の導出と tick の配線 ③ rollup / stats / brain_export の注釈と version bump ④ docs。
 
@@ -109,7 +109,7 @@ F-1の未確認検査値の表示分離は現行`structured_view._lab_lines`に�
 
 ## #15 検査値の抽出
 
-**2026-10-04 合成評価（A-3 のローカル実装）**: `extract_bench` に `_match_lab`（analyte/折畳み名・正規化値、指定時の unit / flag / measured_on / unverified）を追加した。labs は `expect.labs` を持つケースだけで採点し、確認済み（quote_supported）の出力だけを TP/FP に数える。未確認候補は別表示なので数えない。凍結合成コーパス `evaluation/extract_cases_labs.json`（24 件・9 区分）は、モデル出力を模した主張を `_validate` と `lab_candidate` に通す。`tests/extract/test_labs_evaluation.py` で forbid 違反 0、P=1.0・R=0.952（tp20/fp0/fn1）を固定した。この数値はラベル自体を検証器に通した模擬主張から得たもので、検証器の確認判定を測るものであり、モデルの P/R ではない。唯一の取りこぼしは「基準」を含む引用を未確認に留める保守的な判定。実 LLM での bench 実行と P/R 目標値の承認は外部作業として未実施。
+**2026-10-04 合成評価（A-3 のローカル実装）**: `extract_bench` に `_match_lab`（analyte/折畳み名・正規化値、指定時の unit / flag / measured_on / unverified）を追加した。labs は `expect.labs` を持つケースだけで採点し、確認済み（quote_supported）の出力だけを TP/FP に数える。未確認候補は別表示なので数えない。凍結合成コーパス `evaluation/extract_cases_labs.json`（24 件・9 区分）は、モデル出力を模した主張を `_validate` と `lab_candidate` に通す。`tests/extract/evaluation/test_labs_evaluation.py` で forbid 違反 0、P=1.0・R=0.952（tp20/fp0/fn1）を固定した。この数値はラベル自体を検証器に通した模擬主張から得たもので、検証器の確認判定を測るものであり、モデルの P/R ではない。唯一の取りこぼしは「基準」を含む引用を未確認に留める保守的な判定。実 LLM での bench 実行と P/R 目標値の承認は外部作業として未実施。
 
 **目的**: 本文（後に添付 #16）の検査結果を、確認可能な候補として型付きで取り出す。時系列ビューは作らない（ROADMAP §6）。Q9 が承認された場合に、C2 が再抽出なしで投影できる形にする。
 
@@ -122,7 +122,7 @@ F-1の未確認検査値の表示分離は現行`structured_view._lab_lines`に�
   - 表示先: `structured_lines` → `notify_flush.py:367`、`notify_render.py:149-163` → Discord/Slack。
   - rollup `recent_labs` は name キー・最新のみ・上限 15・`at` は投稿日時で測定日ではない（`rollup.py:85,137-141,183-184`）。読み手はない（brain_export は vitals / meds だけ: `brain_export.py:192-205`）。
 - semantic: `vital_lab` は必須カテゴリ（`semantic_facts.py:38-42,54`）だが、値は文字列だけ。legacy 投影に labs / vitals はなく、canonical_facts に statement が載るだけ（`semantic_projection.py:174-270,282-325`）。canonical / v4 が現行だと型付き labs / vitals が読み側から消え、「バイタル・検査｜statement」の自由文だけが残る（`mcs_queries.py:167-186`、`structured_view.py:127-151`）。canonical の有効化ゲートは 2026-09-23 時点で未設定（`docs/dev-records/continuation-20260923.md:1115`）。現在の設定値は【未確認】。v1 hint は vitals → vital_lab に変換するが、証拠引用が `str(value)` で曖昧（`semantic_extraction.py:835-838`）。
-- QC: Jev（外部 API・既定 OFF: `SECURITY.md:79-86`、`SECURITY.md:28`）。対象順は vitals, meds, symptoms, labs, events、上限 16 件の round-robin（`semantic_qc.py:21-22,123-130`）。質問文は labs で汎用（:149-154）。順序は `tests/views/test_qc_view.py:131-145`、`tests/extract/test_extract_qc.py:596-606` で固定。
+- QC: Jev（外部 API・既定 OFF: `SECURITY.md:79-86`、`SECURITY.md:28`）。対象順は vitals, meds, symptoms, labs, events、上限 16 件の round-robin（`semantic_qc.py:21-22,123-130`）。質問文は labs で汎用（:149-154）。順序は `tests/views/test_qc_view.py:131-145`、`tests/extract/llm/test_extract_qc.py:596-606` で固定。
 - bench: `extract_bench._score_case` は labs の採点なし（`extract_bench.py:120-200`）。`evaluation/extract_cases.json` は 21 件で labs の期待は 0 件。既存コーパスは FROZEN（`extract_bench.py:4-6`、corpus_sha256 比較 :324-327）。
 - zaitaku の測定値語彙: `measurement_type ∈ {height, weight, egfr, creatinine, ast, alt, other}`、value は 10 進文字列 ≥0（20 桁以内）、unit 必須、`measured_on` 必須（`src/validation/patient/patient-clinical-profile.ts:20-22,133-152`）。hermes-mcs の vitals に weight / height はない（`extract_llm.py:407`）。
 
@@ -241,7 +241,7 @@ F-1の未確認検査値の表示分離は現行`structured_view._lab_lines`に�
 ## 2026-10-06追記: #11の1.0.16開発候補
 
 旧節の「正規化なし」や1.0.13版割当は初期調査・設計の記録であり、現在の未実装一覧ではない。
-[drug_map](../../mcs/extract/drug_map.py)と[converter](../../mcs/ops/import_drug_master.py)には、
+[drug_map](../../mcs/medications/drug_map.py)と[converter](../../mcs/ops/import_drug_master.py)には、
 明示辞書の検証、出典付き候補、読取り専用lookup/辞書比較と全件容量対応が開発実装されている。
 共通CLI・型別統計・ローカル未照合レビューの統合も実装済み。共通CLIの合成51件と
 世代連動の対象合成216件は成功し、公開前の最終一式検証中。未公開・未配備。
@@ -280,15 +280,15 @@ impactは公開snapshotの現行抽出（`derive`と同じsource）の薬剤名�
 searchは正規化した名称・別名・識別子の部分一致で参照候補を探し、候補付与・承認や設定変更は行わない。
 実MCS・原本DB・辞書の自動取得/有効化や人手正本への書込みは行わない。
 
-合成回帰資産は[進捗/世代](../../tests/extract/test_drug_map_incremental.py)、
-[辞書比較](../../tests/extract/test_drug_map_diff.py)、
-[更新影響](../../tests/extract/test_drug_map_impact.py)、
+合成回帰資産は[進捗/世代](../../tests/medications/test_drug_map_incremental.py)、
+[辞書比較](../../tests/medications/test_drug_map_diff.py)、
+[更新影響](../../tests/medications/test_drug_map_impact.py)、
 [全件converter](../../tests/ops/test_import_drug_master.py)、
 [候補統計](../../tests/views/test_drug_candidates.py)。実master行をfixtureへ転載せず、
 合成の大容量・衝突・不正入力・再開を検証する。これらの存在だけを最終CI/臨床精度の成功とは扱わない。
 相互作用・禁忌チェック、成分/YJ推定、治療上の同等性、OCRの採用は今回の実装範囲外。
 
-世代の有効性は[rollup](../../mcs/extract/rollup.py)とサマリー/キャッシュ/snapshot閲覧、
+世代の有効性は[rollup](../../mcs/patients/rollup.py)とサマリー/キャッシュ/snapshot閲覧、
 [brain_export](../../mcs/ops/brain_export.py)でも確認する。辞書切替・無効化・不正な進捗後は
 古い候補注釈だけを落とし、元の薬剤言及を残す。cursorだけの移動では安定した辞書世代を変えない。
 対象回帰は[CLI](../../tests/ops/test_mcs_drug.py)と

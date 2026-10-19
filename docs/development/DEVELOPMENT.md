@@ -9,11 +9,13 @@
 
 ## 構成
 
+モジュールの公開入口・依存・副作用・移植単位は[責務と依存](REPOSITORY_STRUCTURE.md)を参照。配置変更と解析世代・保存形式の変更は分けて扱う。
+
 ### 目的からコードと資料を探す
 
 | 目的 | 配置と境界 |
 |---|---|
-| 収集・保存・解析・表示 | `mcs/`。`core/` は保存と共通基盤、`ingest/` は収集、`extract/` は抽出、`semantic/` は意味解析、`notify/` は通知の組立て、`views/` は読取り表示、`ops/` は管理操作 |
+| 収集・保存・解析・表示 | `mcs/`。`core/` は保存基盤、`llm/` は共通推論、`patients/` は患者集約、`medications/` は薬剤処理、`signals/` は検知、`export/` は手動外部出力、`ingest/` は収集、`extract/` は抽出、`semantic/` は意味解析、`notify/` は通知の組立て、`views/` は読取り表示、`ops/` は管理操作 |
 | 通知先への接続 | `adapters/{slack,discord,lineworks}/` と共通の `adapters/common/`。Hermes接続の入口は `hermes_plugin/`、独立hostは `mcs_standalone/`、LINE WORKSの互換CLI入口は `lineworks_adapter/` |
 | 導入・常駐・復旧 | 入口は `install.sh` と `scripts/mcs`。`deployment/launchagents/` は常駐設定、`deployment/scripts/` は定期実行wrapper、`deployment/recovery/` はcheckout外へ配置する復旧ツール |
 | 開発用の生成・検査 | `scripts/development/` は文書・画面・リリース記録などの生成器。`ci/` は安全ゲートと事故記録の回帰対応、`.github/workflows/` はCI・リリース連携 |
@@ -40,8 +42,6 @@
 | `mcs/core/bounded_http.py` | Bounded HTTP transport — one short-lived worker per request. |
 | `mcs/core/ledger.py` | SQLite ledger for MCS unread capture + history archive. |
 | `mcs/core/ledger_audit.py` | Bounded count-only integrity audit of an explicit static SQLite ledger. |
-| `mcs/core/llm_admission.py` | Cross-client RT/BACKLOG admission boundary for the shared local inference backend (T20). |
-| `mcs/core/local_llm.py` | Loopback local-LLM transport and response metadata. |
 | `mcs/core/maintenance.py` | MCS housekeeping — backup, log rotation, read-only snapshot publish. |
 | `mcs/core/mcs_queries.py` | Shared extraction-scan contract for the read side. |
 | `mcs/core/mcs_runtime.py` | Resolve the explicitly selected Hermes or standalone runtime paths. |
@@ -49,19 +49,20 @@
 | `mcs/core/safe_io.py` | Crash-safe file primitives shared by core, ingest, notify and ops modules. |
 | `mcs/core/self_identity.py` | Who "we" are in MCS: the logged-in user and own-station roster. |
 | `mcs/core/stats_math.py` | Small statistics helpers shared by the runtime views and offline evaluation. |
-| `mcs/extract/clinical_chunking.py` | Plan source-preserving clinical units before inference using output-pressure heuristics. |
-| `mcs/extract/clinical_values.py` | Conservative surface normalization and quote-bound laboratory/vital candidates. |
-| `mcs/extract/drug_map.py` | Pinned private dictionaries and source-bound medication candidate annotations. |
+| `mcs/export/c1_contract.py` | Validate opt-in C1 values without choosing an envelope wire contract. |
+| `mcs/export/c1_envelopes.py` | Build and validate bounded /2 envelopes without storage or delivery effects. |
+| `mcs/export/c1_receiver.py` | Persist a bounded synthetic /2 reference lifecycle in private local files. |
+| `mcs/export/c1_records.py` | Assemble proposed C1 records and paired selections from one read transaction. |
+| `mcs/export/export_schema.py` | Project and validate aggregate export records with a shared field allowlist. |
+| `mcs/extract/clinical/clinical_chunking.py` | Plan source-preserving clinical units before inference using output-pressure heuristics. |
+| `mcs/extract/clinical/clinical_values.py` | Conservative surface normalization and quote-bound laboratory/vital candidates. |
+| `mcs/extract/clinical/pharmacy_cues.py` | Detect clause-local pharmacy cues and their lexical coverage in mapped extraction fields. |
+| `mcs/extract/clinical/semantic_quantities.py` | Deterministic quantity checks for semantic claims. |
 | `mcs/extract/eval/audit_cohort.py` | Pin a fixed pharmacy-cue audit cohort and compare it after one extraction generation change. |
 | `mcs/extract/eval/extract_bench.py` | Field-level benchmark for extract_llm (message-level extraction). |
 | `mcs/extract/eval/pattern_cards.py` | Lint aggregate pattern cards against fixed vocabulary and local name denylisting. |
-| `mcs/extract/patient_context.py` | Extract and read source-bound patient context without inferring current clinical state. |
-| `mcs/extract/patient_nightly.py` | 患者コンテキストを原文の根拠から作り、調査の続きと公開条件を保持する。 |
-| `mcs/extract/patient_state_context.py` | Freeze bounded, source-grounded pharmacy references for one extraction attempt. |
-| `mcs/extract/pharmacy_cues.py` | Detect clause-local pharmacy cues and their lexical coverage in mapped extraction fields. |
-| `mcs/extract/rollup.py` | MCS patient rollup — one consolidated artifact per patient. |
-| `mcs/extract/v1/extract.py` | MCS structured extraction — rule-based v1. |
-| `mcs/extract/v4/extract_llm.py` | MCS LLM extraction — the extract_llm layer via local llama.cpp (Qwen3.5-9B). |
+| `mcs/extract/llm/extract_llm.py` | MCS LLM extraction — the extract_llm layer via local llama.cpp (Qwen3.5-9B). |
+| `mcs/extract/rules/extract.py` | MCS structured extraction — rule-based v1. |
 | `mcs/ingest/cross_lists.py` | Opt-in cross-project mentioned/bookmarked acquisition and storage-only capture. |
 | `mcs/ingest/health_watch.py` | MCS health watcher — independent supervised reader of health.json. |
 | `mcs/ingest/init_data.py` | MCS initial data import — bulk-fetch recent history for all active patients. |
@@ -70,6 +71,13 @@
 | `mcs/ingest/mcs_worker.py` | Workers with absolute deadlines for MCS API, attachments, and local Chrome I/O. |
 | `mcs/ingest/project_metadata.py` | Opt-in bounded project/group metadata acquisition and local artifact sync. |
 | `mcs/ingest/run_check.py` | MCS unread check — cron/launchd entry point (orchestrator only). |
+| `mcs/llm/llm_admission.py` | Cross-client RT/BACKLOG admission boundary for the shared local inference backend (T20). |
+| `mcs/llm/local_llm.py` | Loopback local-LLM transport and response metadata. |
+| `mcs/medications/drug_alias.py` | 薬剤別名の影響プレビューとreceiptに束縛した私有辞書切替を行う。 |
+| `mcs/medications/drug_map.py` | Pinned private dictionaries and source-bound medication candidate annotations. |
+| `mcs/medications/drug_master_compare.py` | 固定した公式マスターの版間差分と採用辞書への影響を読取り専用で示す。 |
+| `mcs/medications/drug_reconciliation.py` | 保存済みの構造化薬歴と投稿の薬剤言及を確認候補として照合する。 |
+| `mcs/medications/drug_timeline.py` | 公開snapshotから世代と取得範囲を示す薬剤言及履歴を読む。 |
 | `mcs/notify/alert_view.py` | 再確認候補の対象・根拠・時点を短い通知に表示する。 |
 | `mcs/notify/extraction_refresh.py` | Queue source-safe card updates after committed extraction progress, without sending to chat. |
 | `mcs/notify/notify_cards.py` | Interactive notification cards — delivery ledger and neutral render specs. |
@@ -81,18 +89,12 @@
 | `mcs/notify/notify_transport.py` | Interactive notification delivery grants, receipts, and operator recovery. |
 | `mcs/notify/notify_urgent.py` | 現在のLLM緊急度と通知・確認記録から独立した再確認候補を永続化する。 |
 | `mcs/notify/notify_views.py` | Interactive notification cards — clicker-scoped ephemeral views. |
-| `mcs/notify/present_discord.py` | Discord presentation choices for MCS cards and clicker-only answers. |
-| `mcs/notify/present_lineworks.py` | LINE WORKS presentation choices for MCS cards and clicker-only answers. |
-| `mcs/notify/present_slack.py` | Slack presentation choices for MCS cards and clicker-only answers. |
+| `mcs/notify/presentation/present_discord.py` | Discord presentation choices for MCS cards and clicker-only answers. |
+| `mcs/notify/presentation/present_lineworks.py` | LINE WORKS presentation choices for MCS cards and clicker-only answers. |
+| `mcs/notify/presentation/present_slack.py` | Slack presentation choices for MCS cards and clicker-only answers. |
 | `mcs/ops/backup_config.py` | Validate the ``backup`` config block without loading setup or the ledger. |
 | `mcs/ops/brain_export.py` | Export published-snapshot summaries as markdown for external knowledge stores. |
-| `mcs/ops/c1_contract.py` | Validate opt-in C1 values without choosing an envelope wire contract. |
-| `mcs/ops/c1_envelopes.py` | Build and validate bounded /2 envelopes without storage or delivery effects. |
-| `mcs/ops/c1_receiver.py` | Persist a bounded synthetic /2 reference lifecycle in private local files. |
-| `mcs/ops/c1_records.py` | Assemble proposed C1 records and paired selections from one read transaction. |
 | `mcs/ops/cli_args.py` | MCSコマンドの日本語ヘルプと引数エラーを共通化する。 |
-| `mcs/ops/drug_alias.py` | 薬剤別名の影響プレビューとreceiptに束縛した私有辞書切替を行う。 |
-| `mcs/ops/export_schema.py` | Project and validate aggregate export records with a shared field allowlist. |
 | `mcs/ops/ext_contract.py` | Governed external export contract — disabled by default (T16). |
 | `mcs/ops/import_drug_master.py` | Convert an explicitly pinned official medicine master offline into a private dictionary. |
 | `mcs/ops/mcs_backup.py` | Authenticated encrypted SQLite snapshots and isolated, held restore drills. |
@@ -104,14 +106,15 @@
 | `mcs/ops/mcs_requests.py` | Human-confirmed local requests; no network or automatic task creation. |
 | `mcs/ops/mcs_restore.py` | Human consent for adopting a new-terminal backup, with all delivery held. |
 | `mcs/ops/mcs_setup.py` | MCSの初期設定・動作確認・常駐サービスの設定。 |
-| `mcs/ops/mcs_signals.py` | Prospective review-candidate signals — MCS-STAT-PROSPECTIVE T2. |
 | `mcs/ops/mcs_update.py` | MCSの更新 — 新しい版の確認・適用・元の版への復帰・中断した更新の復旧。 |
 | `mcs/ops/notification_cancel.py` | 未発行のSlack通知と未送信が確定した集計通知を、履歴を残して取り消す。 |
-| `mcs/ops/operational_progress.py` | Count scoped processing queues and recorded progress without exposing source rows. |
-| `mcs/ops/operational_status.py` | Read bounded, count-only operational evidence without probing services. |
 | `mcs/ops/request_loops.py` | Read-only validation and derived display state for current Open Loop candidates. |
 | `mcs/ops/requires_python_admits.py` | Exit 0 when a pyproject's [project] requires-python admits the running interpreter. |
 | `mcs/ops/semantic_observe.py` | Read bounded snapshots of processing queues, rates, coverage and interruptions. |
+| `mcs/patients/patient_context.py` | Extract and read source-bound patient context without inferring current clinical state. |
+| `mcs/patients/patient_nightly.py` | 患者コンテキストを原文の根拠から作り、調査の続きと公開条件を保持する。 |
+| `mcs/patients/patient_state_context.py` | Freeze bounded, source-grounded pharmacy references for one extraction attempt. |
+| `mcs/patients/rollup.py` | MCS patient rollup — one consolidated artifact per patient. |
 | `mcs/semantic/eval/semantic_bench.py` | Auto-metrics benchmark for the semantic pipeline (Phase J tooling). |
 | `mcs/semantic/eval/semantic_blind.py` | Prepare local blinded worksheets from three fixed-bundle outputs. |
 | `mcs/semantic/eval/semantic_evaluation.py` | Offline evaluation for fixed semantic bundles and reviewed labels. |
@@ -137,24 +140,23 @@
 | `mcs/semantic/semantic_policy.py` | Semantic policy + config layer (spec §22.1): mode names, artifact kind constants, schema/policy versions, config… |
 | `mcs/semantic/semantic_projection.py` | Canonical ``semantic-facts/v2`` -> legacy read-model projection. |
 | `mcs/semantic/semantic_qc.py` | extract_qc: Jev quality control over extract_llm artifacts. |
-| `mcs/semantic/semantic_quantities.py` | Deterministic quantity checks for semantic claims. |
 | `mcs/semantic/semantic_relations.py` | Candidate relation reconciliation for semantic-facts/v2. |
 | `mcs/semantic/semantic_render.py` | Semantic notice rendering (spec §20, §19.3). |
 | `mcs/semantic/semantic_runtime.py` | Durable execution guards for the semantic worker. |
 | `mcs/semantic/semantic_send_gate.py` | Send-time semantic gate — last-moment policy re-verification. |
 | `mcs/semantic/semantic_store.py` | Semantic input bundles and artifact read helpers (spec §12.1). |
 | `mcs/semantic/semantic_v4.py` | v4 publication, stage receipts, and fail-closed legacy migration. |
+| `mcs/signals/mcs_signals.py` | Prospective review-candidate signals — MCS-STAT-PROSPECTIVE T2. |
 | `mcs/views/card_worker_status.py` | 配送workerの起動証拠を非機密の状態とコード版で照合する。 |
 | `mcs/views/cross_lists_view.py` | Gated read-only cross-list artifacts with independent completeness and freshness. |
-| `mcs/views/drug_master_compare.py` | 固定した公式マスターの版間差分と採用辞書への影響を読取り専用で示す。 |
-| `mcs/views/drug_reconciliation.py` | 保存済みの構造化薬歴と投稿の薬剤言及を確認候補として照合する。 |
-| `mcs/views/drug_timeline.py` | 公開snapshotから世代と取得範囲を示す薬剤言及履歴を読む。 |
 | `mcs/views/extraction_audit.py` | Measure source-scoped extraction omission proxies as aggregate snapshot statistics. |
 | `mcs/views/extraction_progress.py` | Read-only, bounded extraction progress counts for private patient summaries. |
 | `mcs/views/mcs_stats.py` | Cross-project statistics over the published ledger snapshot. |
 | `mcs/views/mcs_view.py` | Local snapshot queries and explicit human-approved inbox commands (JSON CLI). |
 | `mcs/views/message_metadata.py` | 取得済み投稿のスタンプを観測日時と取得状態付きで読み取る。 |
 | `mcs/views/metadata_report.py` | capture と shadow のスタンプ観測を件数だけで照合する読取り専用レポート。 |
+| `mcs/views/operational_progress.py` | Count scoped processing queues and recorded progress without exposing source rows. |
+| `mcs/views/operational_status.py` | Read bounded, count-only operational evidence without probing services. |
 | `mcs/views/patient_context_view.py` | 患者コンテキストの背景・変化・返信・訪問前確認などを原文根拠付きで読み出す。 |
 | `mcs/views/project_metadata_view.py` | Read-only local view of complete project metadata and independent fetch state. |
 | `mcs/views/read_model.py` | Versioned machine-readable read model over one published snapshot. |
@@ -278,12 +280,12 @@ $PY mcs/ingest/init_data.py --project <id>       # 患者個別
 - `artifacts` テーブル: `artifact_add(kind, ...)` / `artifacts(kind, ...)` —
   LLM 要約・トリアージ・タグ・エクスポート等の派生データ格納用
 - `posted_at_ts` (epoch) で範囲クエリがインデックス済み
-- `extract.py` (`extract/v1/`) — ルールベース構造化 (kind='extract_v1'): events/visit_date/
+- `extract.py` (`extract/rules/`) — ルールベース構造化 (kind='extract_v1'): events/visit_date/
   next_planned/med_periods/medications/rx_actions/vitals/symptoms/
   adherence_flags/requests/actors/soap/urgency をJSON化。run_check が毎回
   差分抽出 (`run_pending`) — 即時解析のスピードレーン。同じ出力は v4
   LLM パスのヒント入力にもなり、semantic 抽出の決定的ヒントにも使われる
-- `extract_llm.py` (`extract/v4/`) — ローカルLLM (Qwen3.5-9B @ llama.cpp :8080) による
+- `extract_llm.py` (`extract/llm/`) — ローカルLLM (Qwen3.5-9B @ llama.cpp :8080) による
   高度抽出 (kind='extract_llm'): 用量なし薬剤名・否定極性・依頼宛先・
   50字要約・要点points。ルール抽出結果を候補としてプロンプト注入し、
   同パスで extract_v1 artifact も保証（v1+v2 兼務）。schema検証済み
@@ -760,14 +762,14 @@ python mcs/extract/eval/extract_bench.py run --mock-ok   # オフライン: 期�
 ### ローカルLLMのレーン/ubatch ベンチ（所有者機・承認した窓でのみ）
 
 目的（提案5）: 背景レーンの serial（レーン2のみ）/ concurrent（レーン2+3同時）の比較と、
-`-ub 128/256/512` の比較。`scripts/development/llm_lane_bench.sh` が計測し、記録は数値のみ
+`-ub 128/256/512` の比較。`scripts/evaluation/llm_lane_bench.sh` が計測し、記録は数値のみ
 （実投稿・応答本文は保存しない。生成した合成プロンプトは保存する）。
 
 ```bash
-scripts/development/llm_lane_bench.sh --phase e2e --i-stopped-the-workers --dry-run   # 計画確認（サーバに触れない）
-scripts/development/llm_lane_bench.sh --phase e2e --i-stopped-the-workers             # 稼働中サーバで要求を流す
-scripts/development/llm_lane_bench.sh --phase bench --i-stopped-the-workers           # サーバ停止中に llama-bench
-scripts/development/llm_lane_bench.sh --report                                        # 全 run の集計と採用規則の機械評価
+scripts/evaluation/llm_lane_bench.sh --phase e2e --i-stopped-the-workers --dry-run   # 計画確認（サーバに触れない）
+scripts/evaluation/llm_lane_bench.sh --phase e2e --i-stopped-the-workers             # 稼働中サーバで要求を流す
+scripts/evaluation/llm_lane_bench.sh --phase bench --i-stopped-the-workers           # サーバ停止中に llama-bench
+scripts/evaluation/llm_lane_bench.sh --report                                        # 全 run の集計と採用規則の機械評価
 ```
 
 - 停止対象: `ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2` を
@@ -839,7 +841,7 @@ README「人工知能（AI）の使用箇所と情報の行き先」の「技術
 
 | 用途 | モデル | 使用先 | モジュール |
 |---|---|---|---|
-| メッセージ構造化抽出(薬・依頼・否定極性・50字要約) | `Qwen3.5-9B` | ローカル llama.cpp `127.0.0.1:8080` | `mcs/extract/v4/extract_llm.py` |
+| メッセージ構造化抽出(薬・依頼・否定極性・50字要約) | `Qwen3.5-9B` | ローカル llama.cpp `127.0.0.1:8080` | `mcs/extract/llm/extract_llm.py` |
 | セマンティック処理のリアルタイム問合せ | `Qwen3.5-9B` | 同上 | `mcs/semantic/semantic.py` `llm_chat` |
 | 意味的妥当性の評価・監査・ベンチ | `jev-1.13.0`(固定) | TypeSafe Jev API `api.typesafe.ai/v1/systemone` | `mcs/semantic/semantic_jev.py`・`semantic_assessment.py`・`semantic_audit.py`・`semantic_bench.py` |
 

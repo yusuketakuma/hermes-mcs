@@ -24,9 +24,11 @@ def test_c1_gates_flag_synthetic_violations(monkeypatch, tmp_path):
     gates = _gates()
     ops = tmp_path / "mcs" / "ops"
     ops.mkdir(parents=True)
+    exports = tmp_path / "mcs" / "export"
+    exports.mkdir()
     (ops / "ext_contract.py").write_text("import json\nfrom urllib.request import urlopen\n")
-    (ops / "c1_records.py").write_text("import subprocess\n")
-    (ops / "c1_future.py").write_text("import socket\n")  # new c1_* is covered
+    (exports / "c1_records.py").write_text("import subprocess\n")
+    (exports / "c1_future.py").write_text("import socket\n")  # new c1_* is covered
     (ops / "brain_export.py").write_text("import subprocess\n")  # not C1 layer
     ingest = tmp_path / "mcs" / "ingest"
     ingest.mkdir()

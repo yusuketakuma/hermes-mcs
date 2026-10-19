@@ -7,6 +7,6 @@
     "別周回の持ち越し結果を、その結果を確定した周回で集計する。患者コンテキスト作成前の確定は数値のみの専用ログに記録する。"
   ],
   "refs": [
-    "mcs/extract/v4/extract_llm.py"
+    "mcs/extract/llm/extract_llm.py"
   ]
 }

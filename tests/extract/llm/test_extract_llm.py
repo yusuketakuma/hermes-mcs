@@ -1,4 +1,4 @@
-"""extract_llm tests (current v4 engine, mcs/extract/v4/extract_llm.py).
+"""extract_llm tests (current v4 engine, mcs/extract/llm/extract_llm.py).
 
 Covers: strict output validation (polarity/status/evidence fields),
 lazy replacement of older-version rows, backoff and claims, thread

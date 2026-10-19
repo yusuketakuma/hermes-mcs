@@ -535,7 +535,7 @@ def gate_ext_contract_offline() -> list[str]:
     """The C1 contract/export modules directly import no network or subprocess
     module (transitive imports such as mcs_util -> urllib are not checked)."""
     bad = []
-    for path in _py_files(MCS / "ops"):
+    for path in _py_files(MCS):
         if not _is_ext_module(path.stem):
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):

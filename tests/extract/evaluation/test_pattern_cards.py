@@ -17,7 +17,7 @@ from common_testkit import make_ledger
 from pattern_cards import JSON, _denylist, lint
 
 
-CLI = Path(__file__).resolve().parents[2] / "mcs/extract/eval/pattern_cards.py"
+CLI = Path(__file__).resolve().parents[3] / "mcs/extract/eval/pattern_cards.py"
 
 # Independent schema fixtures: enum-looking names defeat vocabulary-only rejection.
 NAME_SOURCE_INSERTS = {

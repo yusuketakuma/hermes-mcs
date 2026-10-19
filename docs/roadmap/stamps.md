@@ -113,13 +113,13 @@ specialist_categories[0].name, stations[0].name`。押下時刻の項目は無�
 |---|---|---|
 | [MCS adapter](../../mcs/ingest/mcs_adapter.py) | `_norm_message`は`count.thread_messages`だけを読み、`reactions`を捨てる。`extend_session=False`・deadline・認証・通信境界がある | `_norm_message`で`reactions[]`を解析（第0層）。1件・一括再取得と押下者一覧のGETを追加（第1・2層） |
 | [収集tick](../../mcs/ingest/run_check.py) | 未読・履歴・返信・self probe・reconcile・連携サマリーの段階がある。`stage_karte_summary`は上限/tick・余白・理由コード付きのbounded GETの前例 | 同じ型で監視集合の再取得段階を追加する。本文通知を遅らせない |
-| [自己識別](../../mcs/ops/mcs_signals.py) | `self_profile_v1.sender_id`は実測None。自局名簿`station_staff_v1`の`is_self`は未使用。`rollup.reply_state`は氏名文字列で送信者を比較 | F-7: `is_self`の`staff_id`を本人IDの既定にし、本人/自局のID判定を提供する。CLI自局判定は名簿/送信者ID欠損時null。本人スタンプの`self_reacted`契約は実API対照で確認する。既存signalの所属/職種による応答候補は同一性判定と区別する |
+| [自己識別](../../mcs/signals/mcs_signals.py) | `self_profile_v1.sender_id`は実測None。自局名簿`station_staff_v1`の`is_self`は未使用。`rollup.reply_state`は氏名文字列で送信者を比較 | F-7: `is_self`の`staff_id`を本人IDの既定にし、本人/自局のID判定を提供する。CLI自局判定は名簿/送信者ID欠損時null。本人スタンプの`self_reacted`契約は実API対照で確認する。既存signalの所属/職種による応答候補は同一性判定と区別する |
 | [ledger](../../mcs/core/ledger.py) | 投稿本文hash・取得job・artifact・snapshotがある | 加法migration。反応は本文のupsertと別文で更新し、hash・通知・semanticの判定に触れない |
 | [閲覧](../../mcs/views/mcs_view.py) / [読み取りモデル](../../mcs/views/read_model.py) | スタンプの投影は無い | snapshotから件数・本人フラグ・観測時刻・取得状態を読む |
 | [カード](../../mcs/notify/notify_render.py) / [Slack](../../adapters/slack/cards.py) | 脚注に担当・確認・タスク。本文はthread。未確認一覧はカード単位 | 脚注に本人反応を併記、未確認一覧で反応済みを末尾へ。既存配送契約を維持 |
-| [抽出](../../mcs/extract/v4/extract_llm.py) / [rollup](../../mcs/extract/rollup.py) | 本文の依頼候補と返信種別、`reply_state`（未表示） | 返信・スタンプ・メンションを別の根拠として併記し、LLM再抽出を誘発しない |
-| [シグナル](../../mcs/ops/mcs_signals.py) | `pharmacist_request_unanswered`の応答判定はルーム内の自局投稿か台帳登録 | #22-D5合意後、本人の承知/完了スタンプ・スレッド内返信を応答判定に加える案（1.0.12）。メンションは宛先判定に使い、それ自体を応答にしない |
-| [外部出力allowlist](../../mcs/ops/export_schema.py) | 反応のrecord型は無い | 1.0.xでは既存外部契約を拡張しない |
+| [抽出](../../mcs/extract/llm/extract_llm.py) / [rollup](../../mcs/patients/rollup.py) | 本文の依頼候補と返信種別、`reply_state`（未表示） | 返信・スタンプ・メンションを別の根拠として併記し、LLM再抽出を誘発しない |
+| [シグナル](../../mcs/signals/mcs_signals.py) | `pharmacist_request_unanswered`の応答判定はルーム内の自局投稿か台帳登録 | #22-D5合意後、本人の承知/完了スタンプ・スレッド内返信を応答判定に加える案（1.0.12）。メンションは宛先判定に使い、それ自体を応答にしない |
+| [外部出力allowlist](../../mcs/export/export_schema.py) | 反応のrecord型は無い | 1.0.xでは既存外部契約を拡張しない |
 
 F-7の互換条件: 既存シグナルの`signals.self_organizations`・`self_professions`は明示設定を最優先とし、
 空配列はその所属/職種判定を無効化する。名簿から上書きしない。名簿未取得・不正・本人候補が曖昧な場合、

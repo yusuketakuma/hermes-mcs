@@ -214,8 +214,8 @@
   - coverage/import job: `data/cmd` の import（`job_ops.py:74-87,177-206`、形式は `docs/development/DEVELOPMENT.md:147`）、`init_data.py`（`mcs/ingest/init_data.py:39-`）、discovery / `seed_trickle`（`job_ops.py:652-790`）。**`floor <= since` の患者は import を skip する**（`job_ops.py:181-183`、`init_data.py:127-130`）。疑わしい floor は再取込されず、floor を無効化する手段もない（`set_history_floor` は単調: `ledger.py:904-917`）。
   - 通知なし再照合（GET のみ）: `reconcile` job（`job_ops.py:570-647`）。`save_messages` に notify を渡さない（:623-624）。GET のみで `keep_read_status=1`（`mcs_adapter.py:1228-1229`）。ただし対象は floor 済み患者だけ（:574-576）で、1 呼出しあたり 2 頁 × 2 患者（:48-50）。全頁を歩き切ると 6 時間 park して最初からやり直す（:629-633）ので、「終わった」記録が残らない。
   - 返信・添付: reply job（`job_ops.py:313-429`）、`replies_without_job`（`ledger.py:1545-1560`）、`stage_attachments`（`run_check.py:616-641`）。署名 URL が更新されると failed の添付は自動で pending に戻る（`ledger.py:530-552`）。reconcile の再歩行がこの再開を誘発する。
-  - hash/artifact 再生成: v1 は `extract._delete_stale`（`mcs/extract/v1/extract.py:310-329`）と `extract.py --all`、v4 は `extract_llm` の stale 削除と drainer、semantic は `ops.retry`。
-  - rollup 再構築: `rollup.py`（`mcs/extract/rollup.py:406-427`。`--all` は実際には無視されて常に全件）と dirty 検出（:353-391）。
+  - hash/artifact 再生成: v1 は `extract._delete_stale`（`mcs/extract/rules/extract.py:310-329`）と `extract.py --all`、v4 は `extract_llm` の stale 削除と drainer、semantic は `ops.retry`。
+  - rollup 再構築: `rollup.py`（`mcs/patients/rollup.py:406-427`。`--all` は実際には無視されて常に全件）と dirty 検出（:353-391）。
 - 「floor を疑う」判定手段も、修復の実施記録を残す仕組みもない。既存の記録類は `runs`、`command_receipts`、`restore_report.json`、`docs/dev-records/*.md`（手書き）だけ。
 - `mcs_view` は常に `gapless_verified:false`・`exact_missing_ranges:null`（設計上「完全を主張しない」）。
 - 旧 ROADMAP の評価: 「通知なし再照合」は reconcile job として既にあり、足りないのは対象範囲（floor 済みだけ）・完了記録・進捗の可視化。実行時間の見積もりは実データが読めないので【未確認】。
@@ -259,7 +259,7 @@
 
 **現状**
 - `RUN_DEADLINE_S = 480`（`mcs/ingest/run_check.py:60`）。deadline はロック取得後に始まる（:1149-1156）。ロック待ちは最大 150 秒（`LOCK_WAIT_S` :204）で deadline に含まれない。
-- MCS API・添付・CDP・Keychain・Chrome 起動は、いずれも deadline に縛られる。`_request` → `_io` → `bounded_call` が worker を `min(timeout, deadline)` で kill・回収する（`mcs_adapter.py:513-532,871-913`、`mcs/ingest/mcs_worker.py:30-95`）。テストは `tests/ingest/test_adapter_wire.py:743-802`（api / download / bootstrap）、:712-720、:917-963。ローカル LLM と Jev も worker 経由で kill され、`need_s` の下限ゲートがある（`mcs/extract/v4/extract_llm.py:1017-1049`）。**つまり、MCS / LLM の通信経路は実装済み**（旧 ROADMAP の F13）。
+- MCS API・添付・CDP・Keychain・Chrome 起動は、いずれも deadline に縛られる。`_request` → `_io` → `bounded_call` が worker を `min(timeout, deadline)` で kill・回収する（`mcs_adapter.py:513-532,871-913`、`mcs/ingest/mcs_worker.py:30-95`）。テストは `tests/ingest/test_adapter_wire.py:743-802`（api / download / bootstrap）、:712-720、:917-963。ローカル LLM と Jev も worker 経由で kill され、`need_s` の下限ゲートがある（`mcs/extract/llm/extract_llm.py:1017-1049`）。**つまり、MCS / LLM の通信経路は実装済み**（旧 ROADMAP の F13）。
 - 超えうる箇所:
 
 | 箇所 | 上限の仕組み | 超過の可能性 | 根拠 |
@@ -284,7 +284,7 @@
 6. health に `run.elapsed_s`・`overshoot_s`・`slowest_stage` を足し、閾値超過で `degraded` にする。
 
 **成果物**
-- 変更: `mcs/ingest/run_check.py`（stage 計時・health・watchdog）、`mcs/notify/notify_flush.py`（下限）、`mcs/extract/v1/extract.py`、`mcs/extract/rollup.py`、`mcs/core/maintenance.py`（条件付き）、`mcs/ingest/health_watch.py`（閾値）。新規ファイルなし（テストは既存ファイルへ追加）。
+- 変更: `mcs/ingest/run_check.py`（stage 計時・health・watchdog）、`mcs/notify/notify_flush.py`（下限）、`mcs/extract/rules/extract.py`、`mcs/patients/rollup.py`、`mcs/core/maintenance.py`（条件付き）、`mcs/ingest/health_watch.py`（閾値）。新規ファイルなし（テストは既存ファイルへ追加）。
 
 **受入条件とテスト（合成のみ）**
 - `run_check.main()` を `_point_run_check_at`（`tests/ingest/test_run_check_stages.py:1425` 付近）で動かし、遅いステージの stub が deadline を越えたとき、後続のステージが省略され、全体が想定時間内に戻る。
