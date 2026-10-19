@@ -2537,6 +2537,25 @@ def test_post_merge_bail_stops_restarted_writers_before_rollback(updater, monkey
         assert not Path(updater.MARKER_PATH).exists()
 
 
+def test_drug_info_hook_never_delays_recovery_or_an_execution(updater, monkeypatch):
+    monkeypatch.setattr(updater, "load_config", lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(updater, "detect_latest", lambda pre: (None, None))
+    monkeypatch.setattr(updater, "current_version", lambda: ("v1.0.0", "b" * 40))
+    monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
+    hooks = []
+    monkeypatch.setattr(updater, "_drug_info_notices", hooks.append)
+    assert updater.cmd_check() == 0 and len(hooks) == 1      # nothing to execute
+    monkeypatch.setattr(updater, "scan_pending_approvals",
+                        lambda state: ([{"rollback": True, "command_id": "c1"}], []))
+    monkeypatch.setattr(updater, "rollback", lambda command_id=None: 0)
+    assert updater.cmd_check() == 0 and len(hooks) == 1      # approved rollback first
+    state = updater._default_state()
+    state["stages"].append({"stage": "local_checks", "at": 1.0})
+    updater.save_state(state)
+    monkeypatch.setattr(updater, "recover_interrupted", lambda: 0)
+    assert updater.cmd_check() == 0 and len(hooks) == 1      # recovery first
+
+
 def test_deferred_update_notice_refetches_release_context(updater, monkeypatch):
     monkeypatch.setattr(updater, "load_config", lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(updater, "detect_latest", lambda pre: ("v1.1.0", "a" * 40))

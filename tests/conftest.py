@@ -156,12 +156,13 @@ _install(subprocess, "Popen", _guarded_popen)
 # the worker against their own fixture endpoints); only the production
 # endpoints are denied at the boundary.
 import bounded_http  # noqa: E402
+import drug_info  # noqa: E402
 import local_llm  # noqa: E402
 import semantic_jev as _jev  # noqa: E402
 
 _LIVE_ENDPOINTS = frozenset(
     {local_llm.ENDPOINT, _jev.JEV_ENDPOINT, _jev.JEV_MODELS_URL,
-     *local_llm.probe_urls(local_llm.ENDPOINT)}
+     drug_info.GATEWAY_URL, *local_llm.probe_urls(local_llm.ENDPOINT)}
     | set(_jev.JEV_ALLOWED_ENDPOINTS))
 _LOOPBACK_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
 
