@@ -36,3 +36,10 @@ def test_slack_server_side_error_after_post_is_unknown(error):
         assert outcome["result"] == "unknown", outcome
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("error", [[], {}, ["internal_error"], 7, None])
+def test_non_string_error_field_is_classified_without_raising(error):
+    from adapters.slack.delivery import _failed
+    outcome = _failed(SlackServerError(error), "create", None)
+    assert outcome["result"] != "unknown", outcome

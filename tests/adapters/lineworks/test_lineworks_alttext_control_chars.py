@@ -46,4 +46,3 @@ def test_card_with_control_char_in_preview_is_still_delivered(tmp_path, PREVIEW)
     parts["manifest"][0].update(bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest())
     out = asyncio.run(w.sender.perform(spec))
     assert out["result"] == "delivered", out
-
