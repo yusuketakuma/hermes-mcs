@@ -316,6 +316,7 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     ("clinical_values", "VITAL_NUMBER_TOKEN"),
     ("clinical_values", "_VITAL_CTX_EXCLUDE"),
     ("patient_context", "pharmacy_state_items"),
+    ("patient_context", "project_context_items"),
     ("patient_context", "PHARMACY_STATE_KEYS"),
     ("mcs_queries", "karte_summary_current"),
     ("mcs_queries", "karte_summary_block"),

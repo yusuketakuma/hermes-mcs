@@ -11,7 +11,7 @@ from clinical_chunking import PLAN_VERSION
 from mcs_queries import JST
 from mcs_util import loads_dict
 from writer_lock import acquire_run_lock
-from patient_context import CATEGORIES, context_items, extract_context
+from patient_context import CATEGORIES, context_items, extract_context, project_context_items
 from mcs_queries import source_patient_context
 import patient_nightly_plan as nightly_plan
 
@@ -114,11 +114,14 @@ def _sources(db, pid, *, hydrate=True, mid=None):
         rows = extractions.get(message["message_id"], [])
         message["extraction_sig"] = _digest([tuple(r)[2:] for r in rows])
         items = source_patient_context(db, message, art_rows=list(reversed(rows))) if hydrate else []
-        # Nightly retains the quoted own value, never presentation-only antecedent state.
-        # The old detail projection added a state key; context_items then removed that reference.
+        # Retain the old detail projection's exact prompt fields. Antecedent
+        # display state never enters the nightly source; context_items used to remove it.
         items = [{**item, **({"details": [{key: value for key, value in detail.items()
                     if key != "refers_to"} for detail in item["details"]]} if "details" in item else {})}
                  for item in items]
+        source = {key: message.get(key) for key in
+                  ("project_id", "message_id", "content_hash", "posted_at_ts")}
+        items = project_context_items(items, "detail", source)
         # Explicit headings remain usable before the ordinary extractor runs.
         items = context_items({"patient_context": items + (extract_context(message.get("body_text")) if hydrate else [])},
                               message.get("body_text"))

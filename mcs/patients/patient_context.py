@@ -352,3 +352,22 @@ def merged_context(v1, llm, body: str) -> list[dict]:
                     if detail not in prior.setdefault("details", []):
                         prior["details"].append(detail)
     return result
+
+
+def project_context_items(items, scope, source):
+    """Preserve grounded attribute values in detail and count only their keys in aggregate."""
+    if scope == "detail":
+        return [{**{key: item[key] for key in ("category", "text", "evidence", "subject")},
+                 **({"origin": item["origin"]} if item.get("origin") == "explicit_heading" else {}),
+                 **({"details": item["details"]} if item.get("details") else {}),
+                 "source": dict(source)} for item in items]
+    counts = {}
+    attributes = {}
+    for item in items:
+        counts[item["category"]] = counts.get(item["category"], 0) + 1
+        for detail in item.get("details") or []:
+            category = attributes.setdefault(item["category"], {})
+            category[detail["key"]] = category.get(detail["key"], 0) + 1
+    return [{"category": key, "count": value,
+             **({"details": [{"key": name, "count": count} for name, count in sorted(attributes[key].items())]}
+                if key in attributes else {})} for key, value in sorted(counts.items())]

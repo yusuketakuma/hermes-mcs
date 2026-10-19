@@ -37,7 +37,7 @@ from mcs_queries import extraction_kind_map, source_patient_context
 from snapshot_access import snapshot_meta, table_exists
 from registered_data import registered_data
 
-from patient_context import context_items, extract_context, reference_item
+from patient_context import context_items, extract_context, reference_item, project_context_items
 
 CONTRACT = "mcs-read-model/1"
 SCOPES = ("aggregate", "detail")
@@ -206,24 +206,6 @@ def reference_text(reference):
     return f"（参照: {date}「{quote}」）"
 
 
-def _context_projection(items, scope, source):
-    """Preserve grounded attribute values in detail and count only their keys in aggregate."""
-    if scope == "detail":
-        return [{**{key: item[key] for key in ("category", "text", "evidence", "subject")},
-                 **({"origin": item["origin"]} if item.get("origin") == "explicit_heading" else {}),
-                 **({"details": item["details"]} if item.get("details") else {}),
-                 "source": dict(source)} for item in items]
-    counts = {}
-    attributes = {}
-    for item in items:
-        counts[item["category"]] = counts.get(item["category"], 0) + 1
-        for detail in item.get("details") or []:
-            category = attributes.setdefault(item["category"], {})
-            category[detail["key"]] = category.get(detail["key"], 0) + 1
-    return [{"category": key, "count": value,
-             **({"details": [{"key": name, "count": count} for name, count in sorted(attributes[key].items())]}
-                if key in attributes else {})} for key, value in sorted(counts.items())]
-
 
 def _attachments(db, scope: str, project_id=None):
     """The attachment manifest — ids/state always, file names only in
@@ -292,7 +274,7 @@ def _project_metadata(db, scope, project_id, limit):
                     record["unclassified_text"] = bool(comment) and not items
                 source = {"artifact_id": row["artifact_id"], "project_id": row["project_id"],
                           "fetched_at": meta["fetched_at"], "updated_at": content.get("updated_at")}
-                record["patient_context"] = _context_projection(items, scope, source)
+                record["patient_context"] = project_context_items(items, scope, source)
         records.append(record)
     return {"records": records, "total": total, "truncated": limit is not None and total > limit}
 
@@ -400,4 +382,4 @@ def message_patient_context(db, message, scope="detail", *, by_kind=None, art_ro
                          if row["artifact_id"] == by_kind["extract_llm"]["artifact_id"]), None)
         meta = selected["meta"] if selected is not None else None
         _context_references(db, message, items, json.loads(meta) if isinstance(meta, str) else meta)
-    return _context_projection(items, scope, source)
+    return project_context_items(items, scope, source)

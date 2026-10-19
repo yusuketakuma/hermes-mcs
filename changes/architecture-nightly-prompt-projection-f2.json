@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキスト作成で従来の入力項目を維持",
+  "summary": "内部整理後も、患者コンテキスト作成へ渡す既存情報の出典・項目・空欄の扱いを従来どおりに保ちます。",
+  "upgrade": "追加設定は不要です。更新後のworkerから適用され、入力定義の変更により候補承認は通常の指紋失効条件で再確認されます。",
+  "details": [
+    "患者項目の純粋projectionを既存patient_context正本へ移し、表示と患者情報の走査が同じdetail項目契約を使う。",
+    "sourceの4項目・明示見出しだけのorigin・非空detailsだけの出力を維持し、参照先の表示状態や素の内部キーをpromptへ渡さない。"
+  ],
+  "refs": [
+    "mcs/patients/patient_nightly.py",
+    "mcs/patients/patient_context.py",
+    "mcs/views/read_model.py"
+  ]
+}
