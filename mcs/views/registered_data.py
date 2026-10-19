@@ -41,6 +41,8 @@ def registered_data(db, scope, project_id, limit):
         FROM clinical p JOIN artifacts a ON a.project_id=p.project_id
         WHERE a.kind='project_metadata_v1' AND CASE WHEN json_valid(a.content) THEN
           json_extract(a.content,'$.dataset')='observation_values'
+          AND json_type(a.content,'$.entity_id')='integer'
+          AND typeof(json_extract(a.content,'$.entity_id'))='integer'
           AND json_extract(a.content,'$.entity_id')=p.karte_id
           AND json_type(a.content,'$.item_id')='integer'
           AND typeof(json_extract(a.content,'$.item_id'))='integer'

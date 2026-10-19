@@ -197,7 +197,12 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
     base = ("SELECT artifact_id,content FROM artifacts WHERE kind=? AND project_id=? "
             "AND CASE WHEN json_valid(content) THEN "
             "json_extract(content,'$.dataset')=? "
+            "AND json_type(content,'$.entity_id')='integer' "
+            "AND typeof(json_extract(content,'$.entity_id'))='integer' "
             "AND json_extract(content,'$.entity_id')=? "
+            "AND (json_type(content,'$.item_id') IS NULL OR "
+            "json_type(content,'$.item_id') IN ('null','integer')) "
+            "AND typeof(json_extract(content,'$.item_id')) IN ('null','integer') "
             "AND json_extract(content,'$.item_id') IS ? ELSE 0 END ")
     params = (ARTIFACT_KIND, project_id, dataset, target["entity_id"], item_id)
     latest = db.execute(base + "ORDER BY artifact_id DESC LIMIT 1", params).fetchone()
@@ -274,7 +279,10 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                     latest_definition = db.execute(
                         "SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=? "
                         "AND CASE WHEN json_valid(content) THEN json_extract(content,'$.dataset')='observation_items' "
+                        "AND json_type(content,'$.entity_id')='integer' "
+                        "AND typeof(json_extract(content,'$.entity_id'))='integer' "
                         "AND json_extract(content,'$.entity_id')=? "
+                        "AND json_extract(content,'$.item_id') IS NULL "
                         "AND json_extract(content,'$.complete')=1 ELSE 0 END "
                         "ORDER BY artifact_id DESC LIMIT 1", (ARTIFACT_KIND, project_id, target["entity_id"])).fetchone()
                     definition = get_project_metadata(db, project_id, "observation_items", now=now,
@@ -290,7 +298,9 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                         old = json.loads(pin_row["content"]) if pin_row else None
                         if (not isinstance(old, dict) or old.get("contract") != "project-metadata/1"
                                 or old.get("dataset") != "observation_items" or old.get("scope") != target["scope"]
-                                or old.get("entity_id") != target["entity_id"] or old.get("complete") is not True
+                                or type(old.get("entity_id")) is not int
+                                or old.get("entity_id") != target["entity_id"]
+                                or old.get("item_id") is not None or old.get("complete") is not True
                                 or old.get("reason") is not None or old.get("http_status") is not None):
                             raise SchemaError("metadata view: definition source invalid")
                         old_rows = normalize_rows("observation_items", old["rows"])
