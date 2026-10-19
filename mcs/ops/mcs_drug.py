@@ -360,6 +360,47 @@ def _workflow(args):
     return 0
 
 
+def _drug_info(args) -> int:
+    """Public drug-information commands (local TinyFish gateway; master names and disease keywords only)."""
+    import import_drug_master as importer
+    import drug_info
+    try:
+        if args.command == "info-guideline":
+            report = drug_info.guideline(args.disease)
+        elif args.command == "formulary-check":
+            report = [{"name": item["name"], "state": state, "reason": reason}
+                      for item, state, reason in drug_info.formulary_check(limit=args.limit)]
+        elif args.command == "formulary-ack":
+            report = drug_info.formulary_ack(args.name, args.sha256)
+        elif args.command == "formulary-list":
+            report = drug_info.status()
+        else:
+            manifest, rows = drug_info.master_rows()
+            if args.command == "info-master":
+                status, detail = drug_info.check_listing((manifest["edition"], manifest["rows"]))
+                report = {"status": status, "detail": detail, "source": drug_info.MENU}
+            elif args.command == "formulary-add":
+                names = importer.read_master_input(args.list, 1024 * 1024).decode("utf-8").splitlines()[:500]
+                report = {"master_edition": manifest["edition"],
+                          "report": drug_info.formulary_add(names, rows, limit=args.limit)}
+            else:
+                entries, suggestions = drug_info.resolve(args.name, rows)
+                if len(entries) != 1:
+                    # Nothing was sent: only an exact, unique master name leaves this machine.
+                    report = {"status": "unresolved" if not entries else "ambiguous",
+                              "matches": [e["name"] for e in entries][:10], "suggestions": suggestions}
+                else:
+                    report = {"product": entries[0], **drug_info.find_insert(
+                        entries[0], tuple(args.term) if args.term else drug_info.DEFAULT_TERMS)}
+                report["master_edition"] = manifest["edition"]
+    except (ValueError, TypeError, OSError, importer.MasterError) as error:
+        code = str(error) if isinstance(error, drug_info.DrugInfoError) else type(error).__name__
+        print(f"drug: 公開医薬品情報を照会できません（{_line(code)}）", file=sys.stderr)
+        return 1
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -443,7 +484,24 @@ def main(argv=None) -> int:
     command.add_argument("command_id")
     command.add_argument("--snapshot", type=Path, default=SNAPSHOT)
     command.add_argument("--json", action="store_true")
+    command = sub.add_parser("info-lookup", help="同梱マスターの品名で公開添付文書（PMDA）を照会する")
+    command.add_argument("name", help="販売名又は一般名の標準記載（マスターと完全一致）")
+    command.add_argument("--term", action="append", help="抜粋する語（既定: 禁忌・相互作用・用法及び用量・重要な基本的注意）")
+    command = sub.add_parser("info-guideline", help="一般の疾患名でMindsの診療ガイドラインを検索する")
+    command.add_argument("disease", help="一般の疾患名だけ（患者の文・氏名・日付は入れない）")
+    sub.add_parser("info-master", help="公式医薬品マスターの公開一覧と同梱版を比べる")
+    command = sub.add_parser("formulary-add", help="採用薬の添付文書を改訂監視へ登録する")
+    command.add_argument("--list", type=Path, required=True, help="1行1品名のテキスト（マスターの名前）")
+    command.add_argument("--limit", type=int, default=10, choices=range(1, 31))
+    command = sub.add_parser("formulary-check", help="登録した添付文書の改訂を確認する")
+    command.add_argument("--limit", type=int, default=3, choices=range(1, 11))
+    command = sub.add_parser("formulary-ack", help="読み直した添付文書の新しい本文を受け入れる")
+    command.add_argument("name")
+    command.add_argument("--sha256", required=True)
+    sub.add_parser("formulary-list", help="改訂監視の登録と最新の確認結果")
     args = parser.parse_args(argv)
+    if args.command.startswith(("info-", "formulary-")):
+        return _drug_info(args)
     if args.command == "master-impact":
         import import_drug_master as importer
         import drug_master_compare
