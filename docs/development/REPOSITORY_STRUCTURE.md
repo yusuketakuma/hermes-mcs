@@ -26,7 +26,7 @@
 | `mcs/views/` | snapshot読取・scope/projection・統計/詳細/CLI | `registered_data`は登録情報の読取、`clinical_display`は臨床値の表示。DBを再openしない |
 | `mcs/signals/` | 原文と抽出に基づく候補評価・根拠 | 候補artifact/通知状態の更新を持つ。表示や単なる未記録と臨床判断を混同しない |
 | `mcs/export/` | C1 schema・レコード選択・封筒・受信契約 | 純粋な変換、snapshot読取、専用保存先への受信を区別 |
-| `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`runtime_inspection`は読取観測、`update_policy`は判断、`update_journal`は更新記録。実機操作は各ライフサイクル入口が所有 |
+| `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`runtime_inspection`は読取観測、`update_policy`は判断、`update_journal`は更新記録。`owned_process`は所有する子プロセスの停止/回収、`update_discovery`は期限付きGit実行と版探索、`update_launch`はwrapper起動を所有 |
 | `adapters/common/` | 接続先共通の認可・患者scope・command/preview/confirm・配送worker | workerがscope lock/claim/再試行、registryが永続slot記録、journalが配送事実を所有 |
 | `adapters/{slack,discord,lineworks}/` | 接続先固有のUI・SDK・送信/受信 | 承認と共通scope検証を通し、SDKの許可ファイルと遅延importを維持 |
 | `hermes_plugin/` | plugin登録・遅延bootstrap・host設定/identity変換・worker接続 | import時点ではadapterを読込まず、正しいcheckoutを解決して接続 |
@@ -45,6 +45,7 @@
 - 人承認の復旧は`notify_recovery`から`notify_transport`の借用transaction上の確定処理を使います。復旧receiptと状態を同時にcommitし、spec公開はその後に行います。読取側は`notify_scope`へ直接依存します。
 - 薬局の参照項目は`patient_context`、保存済み履歴のSQLは`mcs_queries`が正本です。抽出・semantic・表示から集約writerを経由せずに利用し、解釈に影響する両moduleをsource digestとcandidate定義の変更検知に含めます。
 - 表示用のバイタルは`clinical_display`、登録情報のprojectionは`registered_data`が正本です。表示limitでcoverageや全体件数を変えません。
+- 更新の遠隔版探索はreceiptの書込transactionに入る前に行い、ローカルのwrapper/設定はreceipt確定の境界で再確認します。更新journal・復元同意・rollbackはupdater、切り離し起動はcommit後の呼出元が所有します。独立復旧ツールはcheckout破損時にも起動できる自己完結のprocess処理を保持します。
 
 ## 移植・拡張時の境界
 

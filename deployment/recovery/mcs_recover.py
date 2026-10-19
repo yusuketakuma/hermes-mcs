@@ -98,7 +98,7 @@ GIT_TERM_GRACE_S = 2      # an owned git removes its own *.lock on SIGTERM
 
 
 def _run_owned(argv, timeout, env, stdin=None):
-    """= mcs_update._run_owned, self-contained. subprocess.run(capture_output,
+    """= owned_process.run_owned, self-contained without the checkout. subprocess.run(capture_output,
     text) for one command in its own
     session. On timeout or interruption that session is stopped by
     _stop_owned and the exception re-raised. Worst case: timeout +

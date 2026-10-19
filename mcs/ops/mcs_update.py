@@ -31,7 +31,6 @@ import os
 import re
 import runpy
 import shutil
-import signal
 import sqlite3
 import stat
 import subprocess
@@ -53,6 +52,9 @@ import mcs_runtime  # noqa: E402
 import runtime_inspection  # noqa: E402
 import update_journal as journal_store  # noqa: E402
 import update_policy  # noqa: E402
+import owned_process  # noqa: E402
+import update_discovery  # noqa: E402
+import update_launch  # noqa: E402
 from mcs_requests import parse_command, release_tag  # noqa: E402
 
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
@@ -87,7 +89,6 @@ RESTORE_REPORT_PATH = os.path.join(DATA, "restore_report.json")
 BACKUP_DIR = os.path.join(DATA, "backups")
 SCRIPTS_DIR = os.path.expanduser("~/.hermes/scripts")
 AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
-WRAPPER = os.path.join(SCRIPTS_DIR, "mcs_update.sh")
 
 RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2")
 # v1.0.2-1.0.7 KeepAlive drainer: stopped by quiesce, never restarted —
@@ -103,7 +104,6 @@ WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int", "local.mcs-health")
 # S5: only the labels listed above are touched; install.sh-owned
 # ai.mcs.llamaserver / org.mcs.recovery must never be.
 PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "models/")
-HEX_RE = re.compile(r"^[0-9a-f]{40}$")
 # drainer stray sweep: interpreter argv0 + script path — never matches
 # `vim extract_llm.py` or `pytest ...` (H7/F13)
 # pgrep uses POSIX ERE; BSD pgrep does not recognize Python's \S.
@@ -111,13 +111,8 @@ _STRAY_RE = (r"^([^[:space:]]*/)?[Pp]ython[0-9.]* "
              r"([^[:space:]]*/)?(extract_llm|semantic_drain)"
              r"[.]py([[:space:]]|$)")
 
-GIT_ENV = {"GIT_HTTP_LOW_SPEED_LIMIT": "1000",
-           "GIT_HTTP_LOW_SPEED_TIME": "30",
-           "GIT_TERMINAL_PROMPT": "0"}
-T_LS_REMOTE = 15
 T_FETCH = 120
 T_MERGE = 60
-T_GIT = 30
 T_POST_MERGE = 600        # services + restart + postcheck can be slow
 # launchctl answers in well under 1s and the drainers install no SIGTERM
 # handler (bootout returns as soon as they die), so 10s is >10x headroom
@@ -140,11 +135,6 @@ ESCALATE_REALERT_S = 6 * 3600
 GIT_LOCK_MIN_AGE_S = 600  # younger .git/*.lock may belong to a live op
 RUN_LOCK_TRIES = 40       # 30s x 40 = 20min > RUN_DEADLINE_S (S21)
 RUN_LOCK_INTERVAL = 30
-_UPDATE_ENV_STRIP = (
-    "_HERMES_GATEWAY", "_HERMES_GATEWAY_BREAKAWAY",
-    "HERMES_SUPERVISED_CHILD", "HERMES_S6_SUPERVISED_CHILD",
-    "HERMES_GATEWAY", "HERMES_GATEWAY_MODE", "HERMES_GATEWAY_DETACHED",
-    "HERMES_CRON_JOB", "HERMES_JOB_ID", "HERMES_QUIET", "TERMINAL_CWD")
 _UPDATE_PM_ENV = "_MCS_UPDATE_PM"   # post-merge child handshake token
 # Python runtime migration (1.0.18): the updater keeps running on the old
 # interpreter while install.sh rebuilds the venv. The held run.lock FD is
@@ -214,64 +204,21 @@ def _acquire_run_lock_wait(tries: int = RUN_LOCK_TRIES) -> int | None:
 
 # ------------------------------------------------------------------ git
 
-GIT_TERM_GRACE_S = 2      # an owned git removes its own *.lock on SIGTERM
 
 
-def _run_owned(argv: list[str], timeout: float, env: dict,
-               stdin=None) -> subprocess.CompletedProcess:
-    """subprocess.run(capture_output, text) for one command in its own
-    session. On timeout or interruption that session is stopped by
-    _stop_owned and the exception re-raised. Worst case: timeout +
-    GIT_TERM_GRACE_S + the bounded reap."""
-    child = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, text=True, env=env,
-                             start_new_session=True)
+
+
+
+
+def _git(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S
+         ) -> subprocess.CompletedProcess:
     try:
-        out, err = child.communicate(timeout=timeout)
-    except BaseException:
-        _stop_owned(child)
-        raise
-    return subprocess.CompletedProcess(argv, child.returncode, out, err)
+        return update_discovery.git(args, timeout, checkout=REPO,
+                                    environment=os.environ)
+    except update_discovery.DiscoveryError as exc:
+        raise UpdateError(str(exc)) from exc
 
-
-def _stop_owned(child) -> None:
-    """SIGTERM first so git cleans its lock, SIGKILL after the grace,
-    then a bounded reap. Only a still-unreaped leader's group is
-    signalled — its pid (= group id) cannot have been reused."""
-    if child.returncode is None:
-        with suppress(OSError):
-            os.killpg(child.pid, signal.SIGTERM)
-        with suppress(BaseException):
-            child.communicate(timeout=GIT_TERM_GRACE_S)
-        if child.returncode is None:
-            with suppress(OSError):
-                os.killpg(child.pid, signal.SIGKILL)
-    with suppress(BaseException):
-        child.communicate(timeout=5)
-    if child.returncode is None:
-        with suppress(BaseException):
-            child.wait(timeout=5)
-    for stream in (child.stdout, child.stderr):
-        if stream is not None:
-            with suppress(OSError):
-                stream.close()   # an escaped holder must not leak our fds
-
-
-def _git(args: list[str], timeout: int = T_GIT) -> subprocess.CompletedProcess:
-    env = dict(os.environ)
-    env.update(GIT_ENV)
-    try:
-        result = _run_owned(["git", "-C", REPO, *args], timeout, env)
-        if result.returncode != 0:
-            result.stderr = f"exit={result.returncode}"
-        return result
-    except subprocess.TimeoutExpired as e:
-        raise UpdateError("git_timeout: " + " ".join(args[:1])) from e
-    except OSError as e:
-        raise UpdateError(f"git_spawn_failed: {e}") from e
-
-
-def _git_out(args: list[str], timeout: int = T_GIT) -> str:
+def _git_out(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S) -> str:
     r = _git(args, timeout)
     if r.returncode != 0:
         raise UpdateError("git_failed: " + " ".join(args[:1])
@@ -394,70 +341,10 @@ def _local_changes_outside(prev, target) -> list[str]:
         raise UpdateError("diff: content provenance unknown") from exc
 
 
-def remote_tag_sha(tag: str) -> str | None:
-    """Peeled commit sha for <tag> at origin, or None. Queries both the
-    ref and its ^{} peel — a lightweight tag returns only the direct
-    line, whose sha IS the commit (S15)."""
-    r = _git(["ls-remote", "origin",
-              f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
-             timeout=T_LS_REMOTE)
-    if r.returncode != 0:
-        return None
-    direct = peeled = None
-    for line in r.stdout.splitlines():
-        sha, _, ref = line.partition("\t")
-        if ref == f"refs/tags/{tag}^{{}}":
-            peeled = sha.strip()
-        elif ref == f"refs/tags/{tag}":
-            direct = sha.strip()
-    sha = peeled or direct
-    return sha if sha and HEX_RE.fullmatch(sha) else None
 
 
-def detect_latest(include_prerelease: bool = False
-                  ) -> tuple[str | None, str | None]:
-    """(tag, peeled commit sha) of the semver-max tag at origin.
-    Peeled ^{} lines win over the direct tag-object line (B2); a
-    lightweight tag only has the direct line, which IS the commit."""
-    r = _git(["ls-remote", "--tags", "origin"], timeout=T_LS_REMOTE)
-    if r.returncode != 0:
-        raise UpdateError("ls-remote failed: " + r.stderr.strip()[:200])
-    direct: dict[str, str] = {}
-    peeled: dict[str, str] = {}
-    for line in r.stdout.splitlines():
-        sha, _, ref = line.partition("\t")
-        sha = sha.strip()
-        if not ref.startswith("refs/tags/") or not HEX_RE.fullmatch(sha):
-            continue
-        name = ref[len("refs/tags/"):]
-        if name.endswith("^{}"):
-            peeled[name[:-3]] = sha
-        else:
-            direct[name] = sha
-    best: tuple[tuple, str] | None = None
-    for name in direct:
-        key = update_policy.version_key(name)
-        if key is None:
-            continue
-        if not include_prerelease and key[3] == 0:
-            continue
-        # deterministic tie-break on the name so v1.2.3 vs 1.2.3
-        # duplicates never pick randomly
-        if best is None or key > best[0] \
-                or (key == best[0] and name > best[1]):
-            best = (key, name)
-    if best is None:
-        return None, None
-    return best[1], peeled.get(best[1]) or direct[best[1]]
 
 
-def current_version() -> tuple[str | None, str | None]:
-    """(nearest ancestor tag, HEAD sha)."""
-    try:
-        tag = _git_out(["describe", "--tags", "--abbrev=0"]).strip()
-    except UpdateError:
-        tag = None
-    return tag, _head_sha()
 
 
 # ------------------------------------------------------------- detection
@@ -560,7 +447,7 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
         index = git("ls-files", "-v", "-z")
     except (OSError, subprocess.TimeoutExpired):
         return "hermes_checkout_unreadable"
-    if head.returncode != 0 or not HEX_RE.fullmatch(head.stdout.strip()) or index.returncode != 0:
+    if head.returncode != 0 or not update_discovery.COMMIT_SHA_RE.fullmatch(head.stdout.strip()) or index.returncode != 0:
         return "hermes_checkout_unreadable"
     if any(not row.startswith("H ") for row in index.stdout.split("\0") if row):
         return "hermes_checkout_branch_or_dirty"
@@ -579,7 +466,7 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
     if keep:
         # the operator confirmed this exact checkout: kept as is, never moved
         # (decided before the pin rules, exactly as install.sh does)
-        if not HEX_RE.fullmatch(keep):
+        if not update_discovery.COMMIT_SHA_RE.fullmatch(keep):
             return "keep_hermes_checkout_invalid"
         if head.stdout.strip() != keep:
             return "keep_hermes_checkout_mismatch"
@@ -685,7 +572,7 @@ def precheck_tag(tag: str) -> list[str]:
                 ["git", "-C", REPO, "check-ignore", "-z", "--stdin",
                  "--no-index"],
                 input="\0".join(paths), capture_output=True, text=True,
-                timeout=T_GIT)
+                timeout=update_discovery.LOCAL_TIMEOUT_S)
         except (OSError, subprocess.TimeoutExpired):
             errors.append("check_ignore_failed")
         else:
@@ -747,7 +634,7 @@ def precheck_tag(tag: str) -> list[str]:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             blob = subprocess.run(
                 ["git", "-C", REPO, "cat-file", "blob", bsha],
-                capture_output=True, timeout=T_GIT)
+                capture_output=True, timeout=update_discovery.LOCAL_TIMEOUT_S)
             if blob.returncode != 0:
                 raise UpdateError("cat-file failed: " + path)
             with open(dst, "wb") as f:
@@ -812,7 +699,10 @@ def plan(tag: str) -> dict:
     docs/guides/UPGRADE_AGENT.md: classifies the existing gate tokens,
     never mutates the tree, state or services."""
     cfg = load_config()
-    cur_tag, cur_sha = current_version()
+    try:
+        cur_tag, cur_sha = update_discovery.current_version(checkout=REPO, environment=os.environ)
+    except update_discovery.DiscoveryError as exc:
+        raise UpdateError(str(exc)) from exc
     state = journal_store.load_state(STATE_PATH)
     try:
         con = sqlite3.connect(Path(LEDGER).resolve().as_uri() + "?mode=ro",
@@ -983,7 +873,7 @@ def _stray_drainer_pids() -> list[int] | None:
     unrelated commands containing the filename never match (H7).
     None = unverifiable (pgrep hung, missing, or exit >1 — 1 is "no
     match"): quiesce must never read that as "no strays"."""
-    r = _run(["pgrep", "-u", str(_uid()), "-f", _STRAY_RE], timeout=T_GIT)
+    r = _run(["pgrep", "-u", str(_uid()), "-f", _STRAY_RE], timeout=update_discovery.LOCAL_TIMEOUT_S)
     if r.returncode not in (0, 1):
         return None
     return [int(p) for p in r.stdout.split()
@@ -1250,9 +1140,9 @@ def _scan_receipt(executed, applies, rollbacks, consumed, cid, rj, at, rowid) ->
         base = rec.get("base_sha")
         if update_policy.version_key(rec.get("tag")) is None \
                 or not isinstance(rec.get("target_sha"), str) \
-                or not HEX_RE.fullmatch(rec["target_sha"]) \
+                or not update_discovery.COMMIT_SHA_RE.fullmatch(rec["target_sha"]) \
                 or (base is not None and (not isinstance(base, str)
-                                          or not HEX_RE.fullmatch(base))):
+                                          or not update_discovery.COMMIT_SHA_RE.fullmatch(base))):
             return
         applies.append({"command_id": cid, "tag": rec.get("tag"),
                         "target_sha": rec.get("target_sha"),
@@ -1324,27 +1214,8 @@ def scan_pending_approvals(state: dict
     return candidates, consumed
 
 
-def wrapper_path(cfg: dict | None = None, *, root=None) -> str:
-    """The deployed mcs_update.sh for the selected runtime."""
-    cfg = load_config() if cfg is None else cfg
-    return os.path.join(mcs_runtime.scripts_dir(cfg, root=root), "mcs_update.sh") \
-        if mcs_runtime.standalone(cfg) else WRAPPER
 
 
-def spawn_detached() -> None:
-    """Launch the updater detached from the caller's fds/session (S9).
-    Used by drain_commands AFTER the receipt commit — the spawned
-    process re-verifies via receipt scan, never trusting argv."""
-    # the detached updater is not the launchd job that spawned it: drop
-    # that job's identity so its own services run may reload that job
-    env = {k: v for k, v in os.environ.items()
-           if k not in _UPDATE_ENV_STRIP + ("XPC_SERVICE_NAME", "MCS_JOB_PID")}
-    os.makedirs(DATA, exist_ok=True)
-    wrapper = wrapper_path(root=Path(DATA).parent)
-    with open(os.path.join(DATA, "update.log"), "ab") as log:
-        subprocess.Popen([wrapper], stdin=subprocess.DEVNULL,
-                         stdout=log, stderr=log, env=env,
-                         close_fds=True, start_new_session=True)
 
 
 # ------------------------------------------------------------- pipeline
@@ -1403,7 +1274,7 @@ def _record_attempt(state: dict, tag: str | None, result: str,
 
 def _services_reconcile() -> None:
     try:
-        r = _run_owned(
+        r = owned_process.run_owned(
             [_SERVICES_PYTHON or sys.executable, os.path.join(REPO, "mcs", "ops", "mcs_setup.py"),
              "services"], 120, os.environ.copy(), stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
@@ -1571,7 +1442,7 @@ def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
     if checkout:
         head = subprocess.run(["git", "-C", checkout, "rev-parse", "HEAD"],
                               capture_output=True, text=True, timeout=30)
-        if head.returncode != 0 or not HEX_RE.fullmatch(head.stdout.strip()):
+        if head.returncode != 0 or not update_discovery.COMMIT_SHA_RE.fullmatch(head.stdout.strip()):
             raise UpdateError("runtime_migration_checkout_unreadable")
         head_sha = head.stdout.strip()
     if not needs_python and not _refresh_runtime_pin(venv, head_sha):
@@ -1620,8 +1491,8 @@ def _check_runtime_restore(entry: dict) -> str | None:
         return None
     target = migration.get("checkout_target", head if migration.get("kept_checkout") else HERMES_PIN)
     if not isinstance(checkout, str) or not os.path.isabs(checkout) \
-            or not isinstance(head, str) or not HEX_RE.fullmatch(head) \
-            or not isinstance(target, str) or not HEX_RE.fullmatch(target):
+            or not isinstance(head, str) or not update_discovery.COMMIT_SHA_RE.fullmatch(head) \
+            or not isinstance(target, str) or not update_discovery.COMMIT_SHA_RE.fullmatch(target):
         raise UpdateError("runtime_restore_checkout_unreadable")
     try:
         def git(*args):
@@ -1785,8 +1656,7 @@ def _run_post_merge(sha: str) -> None:
     keeps both locks held — start_new_session so a timeout can killpg()
     grandchildren too. Raises UpdateError unless the child either exits
     cleanly or proves it already wrote 'done' (H5)."""
-    env = {k: v for k, v in os.environ.items()
-           if k not in _UPDATE_ENV_STRIP}
+    env = update_launch.launch_environment(os.environ, detached=False)
     env[_UPDATE_PM_ENV] = sha       # child handshake token (L17)
     env.pop(RUN_LOCK_FD_ENV, None)
     run_fd = _HELD_RUN_LOCK_FD
@@ -1830,7 +1700,7 @@ def _apply_validate_args(tag: str | None, sha: str | None,
     if not release_tag(tag):
         print("更新する版の指定が正しくありません（例: v1.0.23）:", tag)
         return 2
-    if sha is not None and not HEX_RE.fullmatch(sha):
+    if sha is not None and not update_discovery.COMMIT_SHA_RE.fullmatch(sha):
         print("更新先のコミット識別子が正しくありません:", sha)
         return 2
     if os.environ.get("MCS_UPDATE_REPO") and mcs_runtime.standalone(load_config()):
@@ -2063,7 +1933,10 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             return bail("precheck_local: " + ",".join(errors))
 
         journal(state, "remote_verify")
-        remote = remote_tag_sha(tag)
+        try:
+            remote = update_discovery.remote_tag_sha(tag, checkout=REPO, environment=os.environ)
+        except update_discovery.DiscoveryError as exc:
+            raise UpdateError(str(exc)) from exc
         if sha is None:
             sha = remote                # manual `apply --tag` convenience
         if sha is None or remote != sha:
@@ -3473,10 +3346,16 @@ def cmd_check() -> int:
     tag = sha = None
     if mode != "off":
         try:
-            tag, sha = detect_latest(bool(upd.get("include_prerelease")))
+            try:
+                tag, sha = update_discovery.detect_latest(bool(upd.get("include_prerelease")), checkout=REPO, environment=os.environ)
+            except update_discovery.DiscoveryError as exc:
+                raise UpdateError(str(exc)) from exc
         except UpdateError:
             tag = sha = None            # receipts still get processed
-    cur_tag, cur_sha = current_version()
+    try:
+        cur_tag, cur_sha = update_discovery.current_version(checkout=REPO, environment=os.environ)
+    except update_discovery.DiscoveryError as exc:
+        raise UpdateError(str(exc)) from exc
     notes = impact = None
     newer = _tag_is_newer(tag, sha, cur_sha)
     # refetch for a deferred notice only while one is still owed — a
@@ -3565,7 +3444,10 @@ def cmd_status() -> int:
     if state.get("_corrupt"):
         print("update_state.jsonを読み取れず、更新状況を確認できません。削除せず管理者に確認してください")
         return 2
-    cur_tag, cur_sha = current_version()
+    try:
+        cur_tag, cur_sha = update_discovery.current_version(checkout=REPO, environment=os.environ)
+    except update_discovery.DiscoveryError as exc:
+        raise UpdateError(str(exc)) from exc
     print(json.dumps({"current_tag": cur_tag, "current_sha": cur_sha,
                       "state": state}, ensure_ascii=False, indent=2,
                      default=str))

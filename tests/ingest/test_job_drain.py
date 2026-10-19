@@ -1,6 +1,7 @@
 """job_ops drain coverage — history/reply/discovery/trickle/reconcile
 jobs, archived-patient handling (Oracle F1-F10, F01-F07), history
 floors, drain fairness."""
+import update_launch
 import mcs_contract
 
 import json
@@ -1510,7 +1511,6 @@ def test_consent_hold_defers_everything_but_restore_approve(
     import uuid
     import notify_cards
     import mcs_requests
-    import mcs_update
 
     with closing(_ledger(tmp_path)) as db:
         db.ensure_patient(1)
@@ -1533,8 +1533,8 @@ def test_consent_hold_defers_everything_but_restore_approve(
                         "actor": "t", "human_confirmed": True})
             mcs_requests.enqueue(req, str(cmd_dir))
         spawned = []
-        monkeypatch.setattr(mcs_update, "spawn_detached",
-                            lambda: spawned.append(1))
+        monkeypatch.setattr(update_launch, 'spawn_detached',
+                            lambda**_lif05_paths: spawned.append(1))
         result = {"errors": []}
         job_ops.drain_commands(db, result, str(cmd_dir))
 

@@ -1,4 +1,5 @@
 """Recovery retains interrupted state until workers actually restart."""
+import update_discovery
 import json
 from pathlib import Path
 import subprocess
@@ -68,8 +69,8 @@ def test_loss_report_wraps_publication_io_failure(updater, tmp_path, monkeypatch
     def fail(*args, **kwargs):
         raise OSError("synthetic report publish failed")
 
-    monkeypatch.setattr(updater.journal_store, "atomic_write", fail)
-    with pytest.raises(updater.UpdateError):
+    monkeypatch.setattr(updater, "atomic_write", fail)
+    with pytest.raises(updater.UpdateError, match="restore_report_publish_failed"):
         updater._restore_loss_report(back)
 
 
@@ -137,7 +138,7 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     monkeypatch.setattr(updater, "load_config", lambda: cfg)
     monkeypatch.setattr(mcs_setup, "runtime_gate_errors", lambda *a, **k: [])
     monkeypatch.setattr(updater, "precheck_local", lambda c: [])
-    monkeypatch.setattr(updater, "remote_tag_sha", lambda t: after)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: after)
     monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: back)
     monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
@@ -234,7 +235,7 @@ def test_apply_pre_reset_rollback_failure_survives_recovery(
     monkeypatch.setattr(updater, "load_config", lambda: cfg)
     monkeypatch.setattr(mcs_setup, "runtime_gate_errors", lambda *a, **k: [])
     monkeypatch.setattr(updater, "precheck_local", lambda c: [])
-    monkeypatch.setattr(updater, "remote_tag_sha", lambda t: after)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: after)
     monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: back)
     monkeypatch.setattr(updater, "_baseline_check", lambda c: [])

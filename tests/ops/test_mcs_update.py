@@ -3,6 +3,8 @@
 Fully synthetic: temp git repos + temp sqlite + stubbed subprocess/
 network. No real MCS, Discord, Keychain, or external repo access.
 """
+import owned_process
+import update_discovery
 import runtime_inspection
 import json
 import os
@@ -246,8 +248,8 @@ def test_remote_tag_sha_annotated_and_lightweight(updater, tmp_path):
     monkeypatch_repo = str(repo)
     import mcs_update as mu
     mu.REPO = monkeypatch_repo
-    lite = mu.remote_tag_sha("v1.0.0")
-    ann = mu.remote_tag_sha("v1.1.0")
+    lite = update_discovery.remote_tag_sha("v1.0.0", checkout=mcs_update.REPO, environment=mcs_update.os.environ)
+    ann = update_discovery.remote_tag_sha("v1.1.0", checkout=mcs_update.REPO, environment=mcs_update.os.environ)
     commit_lite = _git(repo, "rev-list", "-n1", "v1.0.0").stdout.strip()
     commit_ann = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
     assert lite == commit_lite           # lightweight: direct = commit
@@ -258,13 +260,13 @@ def test_remote_tag_sha_annotated_and_lightweight(updater, tmp_path):
 def test_detect_latest_semver_max(updater, tmp_path):
     repo, _ = _make_repo(tmp_path)
     mcs_update.REPO = str(repo)
-    tag, sha = mcs_update.detect_latest()
+    tag, sha = update_discovery.detect_latest(checkout=mcs_update.REPO, environment=mcs_update.os.environ)
     assert tag == "v1.1.0"
     assert len(sha) == 40
 
 
 def test_detect_latest_prerelease_excluded(updater, monkeypatch):
-    def fake_git(args, timeout=30):
+    def fake_git(args, timeout=30, **_lif05_paths):
         class R:
             returncode = 0
             stdout = (("a" * 40) + "\trefs/tags/v1.2.0\n"
@@ -272,10 +274,10 @@ def test_detect_latest_prerelease_excluded(updater, monkeypatch):
                       + ("c" * 40) + "\trefs/tags/v1.3.0-rc1^{}\n")
             stderr = ""
         return R()
-    monkeypatch.setattr(mcs_update, "_git", fake_git)
-    tag, sha = mcs_update.detect_latest()
+    monkeypatch.setattr(update_discovery, "git", fake_git)
+    tag, sha = update_discovery.detect_latest(checkout=mcs_update.REPO, environment=mcs_update.os.environ)
     assert tag == "v1.2.0"
-    tag, sha = mcs_update.detect_latest(include_prerelease=True)
+    tag, sha = update_discovery.detect_latest(include_prerelease=True, checkout=mcs_update.REPO, environment=mcs_update.os.environ)
     # opt-in picks the prerelease — and peels it to the commit sha
     assert tag == "v1.3.0-rc1"
     assert sha == "c" * 40
@@ -652,8 +654,8 @@ def _apply_env(updater, monkeypatch, *, precheck_errors=(),
     monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
     monkeypatch.setattr(mcs_update, "precheck_tag",
                         lambda t: list(precheck_errors))
-    monkeypatch.setattr(mcs_update, "remote_tag_sha",
-                        lambda t: sha)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha',
+                        lambda t, **_lif05_paths: sha)
     monkeypatch.setattr(mcs_update, "load_config",
                         lambda: cfg or {})
     monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
@@ -690,7 +692,7 @@ def test_apply_persists_adapter_restart_decision_before_restarting_gateway(
     _git(remote_work, "tag", "v1.2.0")
     _git(remote_work, "push", "-q", str(tmp_path / "remote.git"), "main", "v1.2.0")
     sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
-    monkeypatch.setattr(updater, "remote_tag_sha", lambda tag: sha)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
                         lambda expected: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
     restarts = []
@@ -725,7 +727,7 @@ def test_bail_consumes_failed_receipt(updater, tmp_path, monkeypatch):
     if not sha:
         _git(repo, "fetch", "-q", "--tags")
         sha = _git(repo, "rev-list", "-n1", "v9.9.9").stdout.strip()
-    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     rc = updater.apply("v9.9.9", sha, "cid-fail")
     assert rc == 1
     after = updater.journal_store.load_state(updater.STATE_PATH)
@@ -739,7 +741,7 @@ def test_apply_transient_lock_failure_keeps_receipt(updater, tmp_path,
     attempted; a later check may legitimately retry."""
     repo = _apply_env(updater, monkeypatch)
     sha = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
-    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     monkeypatch.setattr(mcs_update, "_acquire_run_lock_wait",
                         lambda **kw: None)
     rc = updater.apply("v1.1.0", sha, "cid-wait")
@@ -768,7 +770,7 @@ def test_schema_bump_never_auto_applies(updater, tmp_path, monkeypatch):
                       precheck_errors=["schema_bump:7->8"],
                       cfg={"update": {"mode": "auto"}})
     sha = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
-    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     rc = updater.apply("v1.1.0", sha, None)   # auto path: no receipt
     assert rc == 1
     after = updater.journal_store.load_state(updater.STATE_PATH)
@@ -1446,7 +1448,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
     monkeypatch.setattr(mcs_update, "load_config",
                         lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
-    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     monkeypatch.setattr(mcs_update, "precheck_tag",
                         lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
@@ -1512,7 +1514,7 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
     monkeypatch.setattr(mcs_update, "load_config",
                         lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
-    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     monkeypatch.setattr(mcs_update, "precheck_tag",
                         lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
@@ -1821,13 +1823,13 @@ def test_recover_escalates_when_services_reconcile_hangs(
     monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
-    real_run = mcs_update._run_owned
+    real_run = owned_process.run_owned
 
     def run(argv, timeout, env, stdin=None):
         if argv[0] == sys.executable:
             raise exc
         return real_run(argv, timeout, env, stdin)
-    monkeypatch.setattr(mcs_update, "_run_owned", run)
+    monkeypatch.setattr(owned_process, 'run_owned', run)
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
     state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": head,
@@ -1849,13 +1851,13 @@ def test_recover_escalates_when_services_reconcile_hangs(
 
 def _hang_git(monkeypatch):
     # _git's process boundary is the owned-session runner
-    real_owned = mcs_update._run_owned
+    real_owned = owned_process.run_owned
 
     def run(argv, timeout, env, stdin=None):
         if argv[0] == "git":
             raise subprocess.TimeoutExpired(argv, timeout)
         return real_owned(argv, timeout, env, stdin)
-    monkeypatch.setattr(mcs_update, "_run_owned", run)
+    monkeypatch.setattr(owned_process, 'run_owned', run)
 
 
 def test_recover_git_failure_escalates_outside_consent_hold(
@@ -1897,7 +1899,7 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     notices = []
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
-    real_owned = mcs_update._run_owned
+    real_owned = owned_process.run_owned
     _hang_git(monkeypatch)
     assert updater.recover_interrupted() == 1
     assert restarts == [] and notices == []
@@ -1909,7 +1911,7 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     assert "cid-rb" not in state.get("executed", {})
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] == "restore_consent_blocked"
-    monkeypatch.setattr(mcs_update, "_run_owned", real_owned)
+    monkeypatch.setattr(owned_process, 'run_owned', real_owned)
     _seed_consent(live, back)
     assert updater.recover_interrupted() == 0
     assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["cid-rb"]["result"] \
@@ -2332,7 +2334,7 @@ def test_marker_only_hold_survives_git_failure(
     notices = []
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
-    real_owned = mcs_update._run_owned
+    real_owned = owned_process.run_owned
     _hang_git(monkeypatch)
     assert updater.recover_interrupted() == 1
     assert restarts == [] and notices == []
@@ -2346,7 +2348,7 @@ def test_marker_only_hold_survives_git_failure(
         "result"] == "restore_consent_blocked"
     if unreadable:
         return                  # only a human can repair the marker
-    monkeypatch.setattr(mcs_update, "_run_owned", real_owned)
+    monkeypatch.setattr(owned_process, 'run_owned', real_owned)
     _seed_consent(live, back)
     assert updater.recover_interrupted() == 0
     assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["cid-rb"]["result"] \
@@ -2393,10 +2395,10 @@ def test_check_skips_notice_and_auto_when_head_contains_tag(
     """HEAD ahead of the newest tag is not an update; only rc 0 proves it."""
     monkeypatch.setattr(mcs_update, "load_config", lambda: {
         "update": {"mode": "auto", "auto_delay_h": 0}})
-    monkeypatch.setattr(mcs_update, "detect_latest",
-                        lambda pre: ("v9.0.0", "a" * 40))
-    monkeypatch.setattr(mcs_update, "current_version",
-                        lambda: ("v9.0.0", "b" * 40))
+    monkeypatch.setattr(update_discovery, 'detect_latest',
+                        lambda pre, **_lif05_paths: ("v9.0.0", "a" * 40))
+    monkeypatch.setattr(update_discovery, 'current_version',
+                        lambda**_lif05_paths: ("v9.0.0", "b" * 40))
     monkeypatch.setattr(mcs_update, "fetch_notes", lambda tag: "notes")
     monkeypatch.setattr(mcs_update, "impact_summary", lambda a, b: [])
     monkeypatch.setattr(mcs_update, "scan_pending_approvals",
@@ -2440,7 +2442,7 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
     monkeypatch.setattr(mcs_update, "load_config",
                         lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
-    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     monkeypatch.setattr(mcs_update, "precheck_tag",
                         lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
@@ -2495,7 +2497,7 @@ def test_post_merge_bail_stops_restarted_writers_before_rollback(updater, monkey
     _git(repo, "reset", "-q", "--hard", "v1.0.0")
     previous = updater._head_sha()
     target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
-    monkeypatch.setattr(updater, "remote_tag_sha", lambda tag: target)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: target)
     monkeypatch.setattr(updater, "_reconcile_membership", lambda snapshot: [])
     events = []
 
@@ -2539,8 +2541,8 @@ def test_post_merge_bail_stops_restarted_writers_before_rollback(updater, monkey
 
 def test_deferred_update_notice_refetches_release_context(updater, monkeypatch):
     monkeypatch.setattr(updater, "load_config", lambda: {"update": {"mode": "notify"}})
-    monkeypatch.setattr(updater, "detect_latest", lambda pre: ("v1.1.0", "a" * 40))
-    monkeypatch.setattr(updater, "current_version", lambda: ("v1.0.0", "b" * 40))
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_lif05_paths: ("v1.1.0", "a" * 40))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda**_lif05_paths: ("v1.0.0", "b" * 40))
     monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
     monkeypatch.setattr(updater, "_git", lambda args, **kw:
                         subprocess.CompletedProcess(args, int(args[0] == "merge-base"), "", ""))
@@ -2587,8 +2589,8 @@ def test_lineworks_impact_only_when_the_adapter_is_in_use(updater, monkeypatch):
 
 def test_checkout_ahead_of_latest_tag_does_not_refetch_daily(updater, monkeypatch):
     monkeypatch.setattr(updater, "load_config", lambda: {"update": {"mode": "notify"}})
-    monkeypatch.setattr(updater, "detect_latest", lambda pre: ("v1.1.0", "a" * 40))
-    monkeypatch.setattr(updater, "current_version", lambda: ("v1.1.0-3-gsynthetic", "b" * 40))
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_lif05_paths: ("v1.1.0", "a" * 40))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda**_lif05_paths: ("v1.1.0-3-gsynthetic", "b" * 40))
     monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
     calls = []
     monkeypatch.setattr(updater, "_git", lambda args, **kw: calls.append(args[0])
@@ -2619,8 +2621,8 @@ def test_invalid_runtime_mode_is_reported_not_raised(updater, tmp_path, monkeypa
         updater.impact_summary("synthetic-before", "v1.1.0")
     monkeypatch.setattr(updater, "load_config", lambda: {
         "runtime_mode": "synthetic-invalid", "update": {"mode": "notify"}})
-    monkeypatch.setattr(updater, "detect_latest", lambda pre: ("v1.1.0", "a" * 40))
-    monkeypatch.setattr(updater, "current_version", lambda: ("v1.0.0", "b" * 40))
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_lif05_paths: ("v1.1.0", "a" * 40))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda**_lif05_paths: ("v1.0.0", "b" * 40))
     monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
     monkeypatch.setattr(updater, "_git", lambda args, **kw: subprocess.CompletedProcess(args, 1, "", ""))
     monkeypatch.setattr(updater, "fetch_notes", lambda tag: "notes")

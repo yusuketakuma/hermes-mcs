@@ -1,5 +1,6 @@
 """Update and recovery in runtime_mode=standalone: restart the connector
 agent instead of the Hermes gateway and never require Hermes."""
+import update_launch
 import runtime_inspection
 import json
 
@@ -67,12 +68,14 @@ def test_update_ops_find_the_standalone_wrapper(monkeypatch, tmp_path):
     import mcs_operations
     import mcs_runtime
     monkeypatch.setattr(mcs_runtime, "HOME", str(tmp_path))
-    monkeypatch.setattr(mcs_update, "WRAPPER", str(tmp_path / "hermes" / "mcs_update.sh"))
+    monkeypatch.setattr("mcs_util.HOME", str(tmp_path))
+    monkeypatch.setattr(update_launch, 'HERMES_WRAPPER', str(tmp_path / "hermes" / "mcs_update.sh"))
     cfg = {"runtime_mode": "standalone", "update": {"mode": "notify"}}
     monkeypatch.setattr(mcs_update, "load_config", lambda *a: cfg)
     monkeypatch.setattr("mcs_util.load_config", lambda *a: cfg)
     wrapper = tmp_path / "scripts" / "mcs_update.sh"
-    assert mcs_update.wrapper_path() == str(wrapper)
+    assert update_launch.wrapper_path(cfg, root=tmp_path,
+                                      hermes_wrapper=update_launch.HERMES_WRAPPER) == str(wrapper)
     req = {"cmd": "ops.update_apply", "tag": "v9.9.9"}
     assert mcs_operations._apply_update_op_tx(None, req, None)[0] == "updater_not_deployed"
     wrapper.parent.mkdir(parents=True)
@@ -102,12 +105,14 @@ def test_rollback_to_a_pre_standalone_tree_is_refused(monkeypatch):
 
 def test_detached_updater_drops_the_launchd_job_identity(monkeypatch, tmp_path):
     seen = {}
-    monkeypatch.setattr(mcs_update, "DATA", str(tmp_path))
-    monkeypatch.setattr(mcs_update, "wrapper_path", lambda *a, **kw: "/x/mcs_update.sh")
-    monkeypatch.setattr(mcs_update.subprocess, "Popen", lambda argv, **kw: seen.update(kw))
+    monkeypatch.setattr("mcs_util.load_config", lambda: {})
+    monkeypatch.setattr(update_launch, 'wrapper_path', lambda *a, **kw: "/x/mcs_update.sh")
+    monkeypatch.setattr(update_launch.subprocess, "Popen", lambda argv, **kw: seen.update(kw))
     monkeypatch.setenv("XPC_SERVICE_NAME", "local.mcs-cmd")
     monkeypatch.setenv("MCS_JOB_PID", "1")
-    mcs_update.spawn_detached()
+    update_launch.spawn_detached(
+        root=tmp_path, data_dir=tmp_path, hermes_wrapper="/x/mcs_update.sh",
+        environment=mcs_update.os.environ)
     assert "XPC_SERVICE_NAME" not in seen["env"] and "MCS_JOB_PID" not in seen["env"]
 
 

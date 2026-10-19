@@ -561,19 +561,20 @@ def prepare_update_pins(req: dict) -> dict:
         return req
     out = dict(req)
     try:
-        import mcs_update
+        import update_discovery
+        from mcs_util import REPO
     except Exception:
         return out
     if out.get("target_sha") is None and out.get("tag"):
         try:
-            sha = mcs_update.remote_tag_sha(out["tag"])
+            sha = update_discovery.remote_tag_sha(out["tag"], checkout=REPO, environment=os.environ)
         except Exception:
             sha = None
         if sha is not None:
             out["target_sha"] = sha
     if out.get("base_sha") is None:
         try:
-            base = mcs_update.current_version()[1]
+            base = update_discovery.current_version(checkout=REPO, environment=os.environ)[1]
         except Exception:
             base = None
         if base is not None:
@@ -591,21 +592,14 @@ def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
     sha pins must arrive resolved (prepare_update_pins pre-tx); this
     function never performs network I/O inside the write transaction."""
     try:
-        import mcs_update
-        from mcs_util import load_config
+        import update_launch
+        from mcs_util import HOME
+        deployed, upd = update_launch.inspect_launch(
+            root=HOME, hermes_wrapper=update_launch.HERMES_WRAPPER)
     except Exception:
         return "updater_not_deployed", {}
-    try:
-        wrapper = mcs_update.wrapper_path()
-    except Exception:
-        wrapper = mcs_update.WRAPPER
-    if not os.path.isfile(wrapper):
+    if not deployed:
         return "updater_not_deployed", {}
-    upd = {}
-    with suppress(Exception):
-        cfg = load_config()
-        if isinstance(cfg.get("update"), dict):
-            upd = cfg["update"]
     if upd.get("mode", "off") == "off":
         # fail fast: accepting a receipt under mode=off would leave it
         # silently dormant while telling the user it was scheduled

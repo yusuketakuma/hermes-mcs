@@ -1,6 +1,7 @@
 """A git command that outlives its timeout is stopped as an owned session:
 SIGTERM first so git removes its own index.lock, then SIGKILL, always
 reaped. Temporary repositories only; nothing outside them is touched."""
+import owned_process
 import os
 import signal
 import subprocess
@@ -26,13 +27,13 @@ def _module(monkeypatch, which, repo):
     module = mcs_update if which == "update" else _load()
     monkeypatch.setattr(module, "REPO", str(repo))
     children = []
-    real = module.subprocess.Popen
+    real = (owned_process if which == "update" else module).subprocess.Popen
 
     def track(*args, **kwargs):
         child = real(*args, **kwargs)
         children.append(child)
         return child
-    monkeypatch.setattr(module.subprocess, "Popen", track)
+    monkeypatch.setattr((owned_process if which == "update" else module).subprocess, "Popen", track)
     return module, children
 
 
@@ -84,7 +85,7 @@ def test_timed_out_git_leaves_no_index_lock_and_no_process(tmp_path, monkeypatch
     assert not (repo / ".git" / "index.lock").exists()
     reset = subprocess.run(["git", "-C", str(repo), "reset", "--hard"], capture_output=True)
     assert reset.returncode == 0                      # the next rollback is not blocked
-    assert elapsed < 1 + module.GIT_TERM_GRACE_S + 6   # bounded worst case
+    assert elapsed < 1 + (owned_process.TERM_GRACE_S if which == "update" else module.GIT_TERM_GRACE_S) + 6   # bounded worst case
 
 
 @pytest.mark.parametrize("which", ["update", "recover"])
@@ -94,8 +95,9 @@ def test_term_ignoring_command_is_killed_and_reaped(monkeypatch, which):
                 "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"]
     started = time.monotonic()
     with pytest.raises(subprocess.TimeoutExpired):
-        module._run_owned(stubborn, 0.5, dict(os.environ))
-    assert time.monotonic() - started < 0.5 + module.GIT_TERM_GRACE_S + 6
+        (owned_process.run_owned if which == "update" else module._run_owned)(
+            stubborn, 0.5, dict(os.environ))
+    assert time.monotonic() - started < 0.5 + (owned_process.TERM_GRACE_S if which == "update" else module.GIT_TERM_GRACE_S) + 6
 
 
 @pytest.mark.parametrize("which", ["update", "recover"])
@@ -121,7 +123,7 @@ def test_spawn_failure_keeps_each_tools_contract(monkeypatch, which):
 
     def missing(*args, **kwargs):
         raise FileNotFoundError("synthetic git missing")
-    monkeypatch.setattr(module.subprocess, "Popen", missing)
+    monkeypatch.setattr((owned_process if which == "update" else module).subprocess, "Popen", missing)
     if which == "update":
         with pytest.raises(mcs_update.UpdateError, match="git_spawn_failed"):
             module._git(["status"])
@@ -135,7 +137,7 @@ def test_interruption_stops_the_owned_session_and_reraises(tmp_path, monkeypatch
     module = mcs_update if which == "update" else _load()
     monkeypatch.setattr(module, "REPO", str(repo))
     children, locked = [], []
-    real_popen = module.subprocess.Popen
+    real_popen = (owned_process if which == "update" else module).subprocess.Popen
     lock = repo / ".git" / "index.lock"
 
     def interrupted_once(*args, **kwargs):
@@ -157,10 +159,10 @@ def test_interruption_stops_the_owned_session_and_reraises(tmp_path, monkeypatch
             return original(*a, **k)
         child.communicate = communicate
         return child
-    monkeypatch.setattr(module.subprocess, "Popen", interrupted_once)
+    monkeypatch.setattr((owned_process if which == "update" else module).subprocess, "Popen", interrupted_once)
     with pytest.raises(KeyboardInterrupt):
         module._git(["hold"], timeout=30)
-    monkeypatch.setattr(module.subprocess, "Popen", real_popen)   # before ps checks
+    monkeypatch.setattr((owned_process if which == "update" else module).subprocess, "Popen", real_popen)   # before ps checks
     assert locked == [True]
     assert children[0].returncode is not None
     assert _group_gone(children[0].pid)
@@ -170,9 +172,9 @@ def test_interruption_stops_the_owned_session_and_reraises(tmp_path, monkeypatch
 def test_reaped_leader_group_is_never_signalled(monkeypatch):
     """Once our child is reaped its pid may be reused: no signal is sent."""
     sent = []
-    monkeypatch.setattr(mcs_update.os, "killpg", lambda *a: sent.append(a))
+    monkeypatch.setattr(owned_process.os, "killpg", lambda *a: sent.append(a))
     child = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     child.communicate()
-    mcs_update._stop_owned(child)
+    owned_process.stop_owned(child)
     assert sent == []

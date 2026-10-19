@@ -1,6 +1,7 @@
 """run_check stage contracts — stage_unread / stage_backfill /
 stage_attachments / stage_derive / stage_self_probe, tick E2E, run
 lock, health, session-expired alerting."""
+import update_launch
 import semantic_drain
 import health_report
 import mcs_contract
@@ -19,6 +20,7 @@ import extract_llm
 import job_ops
 import ledger
 import mcs_adapter
+import mcs_download
 import notify_flush
 import run_check
 from ingest_testkit import _ledger, _message, _unread_patient, _att, _msg_at, _iso
@@ -700,7 +702,7 @@ def test_download_failure_status_reaches_retry_policy(tmp_path, monkeypatch, sta
     def fail(req, timeout):
         raise urllib.error.HTTPError(req.full_url, status, "synthetic", {}, None)
 
-    monkeypatch.setattr(mcs_adapter, "no_proxy_opener",
+    monkeypatch.setattr(mcs_download, "no_proxy_opener",
                         lambda *handlers: SimpleNamespace(open=fail))
     adapter = mcs_adapter.MCSAdapter(worker=lambda payload, timeout, deadline:
         mcs_worker._execute(dict(payload, timeout=timeout)))
@@ -1479,8 +1481,8 @@ def test_consent_hold_tick_freezes_all_but_approve(tmp_path, monkeypatch,
          "backup_schema": 7, "reason": "synthetic"}, str(cmd))
     import mcs_update
     spawned = []
-    monkeypatch.setattr(mcs_update, "spawn_detached",
-                        lambda: spawned.append(1))
+    monkeypatch.setattr(update_launch, 'spawn_detached',
+                        lambda**_lif05_paths: spawned.append(1))
     # the respawn path recomputes the report — stub the backup read but
     # keep the REAL consent scan against the tick's own ledger
     monkeypatch.setattr(mcs_update, "_restore_loss_report",
@@ -2345,7 +2347,7 @@ def test_enospc_download_keeps_attachment_pending(tmp_path, monkeypatch):
         def __exit__(self, *a): pass
         def read(self, n): raise OSError(errno.ENOSPC, "synthetic")
 
-    monkeypatch.setattr(mcs_adapter, "no_proxy_opener",
+    monkeypatch.setattr(mcs_download, "no_proxy_opener",
                         lambda *handlers: SimpleNamespace(
                             open=lambda req, timeout: Full()))
     adapter = mcs_adapter.MCSAdapter(worker=lambda payload, timeout, deadline:

@@ -26,6 +26,7 @@ only: no real MCS, no real Jev, no platform API, no Keychain, no
 launchctl, no patient DB, no deploy. This file collects without a
 hermes checkout — it never imports gateway.* (see ../conftest.py).
 """
+import update_discovery
 import asyncio
 import hashlib
 import json
@@ -660,7 +661,7 @@ def _run_narrative(tmp_path):
         after = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
         original_git = mcs_update._git
 
-        def target_git(args, timeout=mcs_update.T_GIT):
+        def target_git(args, timeout=update_discovery.LOCAL_TIMEOUT_S):
             # The narrative increments only schema version; its pre-send
             # backup and restore target use the same card layout. The minimal
             # Git fixture has no notification implementation of its own.

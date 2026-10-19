@@ -1,4 +1,5 @@
 """Python 3.14 runtime migration in the updater — synthetic venvs and repos only."""
+import owned_process
 import os
 from pathlib import Path
 import subprocess
@@ -166,7 +167,7 @@ def test_services_use_the_rebuilt_runtime_only_when_verified(
     if version_ok and backup:
         updater._use_migrated_runtime(migration)
         seen = []
-        monkeypatch.setattr(updater, "_run_owned", lambda argv, *a, **k:
+        monkeypatch.setattr(owned_process, 'run_owned', lambda argv, *a, **k:
                             seen.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
         updater._services_reconcile()
         assert seen[0][0] == str(venv / "bin" / "python3")

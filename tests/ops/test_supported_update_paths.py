@@ -1,4 +1,5 @@
 """Versioned update contracts with synthetic Git objects, no Git history/process."""
+import update_discovery
 import runtime_inspection
 from contextlib import closing
 import hashlib
@@ -149,7 +150,8 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     monkeypatch.setattr(updater, "HOME", str(root))
     monkeypatch.setattr(updater, "load_config", lambda: cfg)
     monkeypatch.setattr(updater, "_git", objects.run)
-    monkeypatch.setattr(updater, "remote_tag_sha", lambda tag: objects.after)
+    monkeypatch.setattr(update_discovery, "git", objects.run)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: objects.after)
     monkeypatch.setattr(maintenance, "BACKUP_DIR", updater.BACKUP_DIR)
     monkeypatch.setattr(updater, "hermes_exe", lambda *a: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda *a: True)

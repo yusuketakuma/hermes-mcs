@@ -1,4 +1,6 @@
 """Synthetic contracts for the CCO-only durable operation commands."""
+import update_discovery
+import update_launch
 
 import json
 import time
@@ -214,9 +216,8 @@ def test_update_apply_rejects_when_updater_not_deployed(
         tmp_path, monkeypatch):
     """A receipt claiming 'scheduled' while nothing can launch the
     updater is a lie — reject before commit (C)."""
-    import mcs_update
     import mcs_util
-    monkeypatch.setattr(mcs_update, "WRAPPER",
+    monkeypatch.setattr(update_launch, 'HERMES_WRAPPER',
                         str(tmp_path / "no-such-wrapper.sh"))
     monkeypatch.setattr(mcs_util, "load_config",
                         lambda: {"update": {"mode": "notify"}})
@@ -232,11 +233,10 @@ def test_update_apply_rejects_when_updater_not_deployed(
 def test_update_apply_rejects_when_mode_off(tmp_path, monkeypatch):
     """mode=off must reject at intake — otherwise the receipt sits
     dormant while the user believes it was scheduled (Q17)."""
-    import mcs_update
     import mcs_util
     wrapper = tmp_path / "mcs_update.sh"
     wrapper.write_text("#!/bin/sh\n")
-    monkeypatch.setattr(mcs_update, "WRAPPER", str(wrapper))
+    monkeypatch.setattr(update_launch, 'HERMES_WRAPPER', str(wrapper))
     monkeypatch.setattr(mcs_util, "load_config", lambda: {})
     db = Ledger(str(tmp_path / "ledger.db"))
     req = _update_command("ops.update_apply", tag="v1.2.3",
@@ -267,17 +267,16 @@ def test_update_apply_rejects_project_id_and_extra_fields(
 def test_update_apply_schedules_and_pins_sha(tmp_path, monkeypatch):
     """Happy path: deployed wrapper + mode on => scheduled receipt
     with tag/sha pins recorded."""
-    import mcs_update
     import mcs_util
     wrapper = tmp_path / "mcs_update.sh"
     wrapper.write_text("#!/bin/sh\n")
-    monkeypatch.setattr(mcs_update, "WRAPPER", str(wrapper))
+    monkeypatch.setattr(update_launch, 'HERMES_WRAPPER', str(wrapper))
     monkeypatch.setattr(mcs_util, "load_config",
                         lambda: {"update": {"mode": "notify"}})
-    monkeypatch.setattr(mcs_update, "remote_tag_sha",
-                        lambda t: "b" * 40)
-    monkeypatch.setattr(mcs_update, "current_version",
-                        lambda: ("v1.0.0", "c" * 40))
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha',
+                        lambda t, **_lif05_paths: "b" * 40)
+    monkeypatch.setattr(update_discovery, 'current_version',
+                        lambda**_lif05_paths: ("v1.0.0", "c" * 40))
     db = Ledger(str(tmp_path / "ledger.db"))
     req = _update_command("ops.update_apply", tag="v1.2.3")
     receipt = mcs_requests.apply_command(db, req)
@@ -291,16 +290,13 @@ def test_update_apply_schedules_and_pins_sha(tmp_path, monkeypatch):
 
 
 def _update_env(tmp_path, monkeypatch):
-    """Deployed wrapper + mode on; returns the mcs_update module for
-    further stubbing."""
-    import mcs_update
+    """Configure a deployed wrapper and mode without importing the updater CLI."""
     import mcs_util
     wrapper = tmp_path / "mcs_update.sh"
     wrapper.write_text("#!/bin/sh\n")
-    monkeypatch.setattr(mcs_update, "WRAPPER", str(wrapper))
+    monkeypatch.setattr(update_launch, 'HERMES_WRAPPER', str(wrapper))
     monkeypatch.setattr(mcs_util, "load_config",
                         lambda: {"update": {"mode": "notify"}})
-    return mcs_update
 
 
 def test_update_apply_resolves_sha_outside_tx(tmp_path, monkeypatch):
@@ -308,12 +304,12 @@ def test_update_apply_resolves_sha_outside_tx(tmp_path, monkeypatch):
     transaction via prepare_update_pins — an ls-remote inside BEGIN
     IMMEDIATE would hold the DB writer lock for the network
     round-trip (F-tx)."""
-    mcs_update = _update_env(tmp_path, monkeypatch)
+    _update_env(tmp_path, monkeypatch)
     calls = []
-    monkeypatch.setattr(mcs_update, "remote_tag_sha",
-                        lambda t: calls.append(t) or "b" * 40)
-    monkeypatch.setattr(mcs_update, "current_version",
-                        lambda: ("v1.0.0", "c" * 40))
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha',
+                        lambda t, **_lif05_paths: calls.append(t) or "b" * 40)
+    monkeypatch.setattr(update_discovery, 'current_version',
+                        lambda**_lif05_paths: ("v1.0.0", "c" * 40))
     db = Ledger(str(tmp_path / "ledger.db"))
     req = _update_command("ops.update_apply", tag="v1.2.3")
     receipt = mcs_requests.apply_command(db, req)
@@ -327,10 +323,10 @@ def test_update_apply_resolves_sha_outside_tx(tmp_path, monkeypatch):
 
 
 def test_unconfirmed_update_never_resolves_remote_pins(tmp_path, monkeypatch):
-    mcs_update = _update_env(tmp_path, monkeypatch)
+    _update_env(tmp_path, monkeypatch)
     calls = []
-    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda tag: calls.append(tag) or "b" * 40)
-    monkeypatch.setattr(mcs_update, "current_version", lambda: ("v1.0.0", "c" * 40))
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: calls.append(tag) or "b" * 40)
+    monkeypatch.setattr(update_discovery, 'current_version', lambda**_lif05_paths: ("v1.0.0", "c" * 40))
     db = Ledger(str(tmp_path / "ledger.db"))
     try:
         receipt = mcs_requests.apply_command(db, _update_command(
@@ -405,10 +401,10 @@ def test_signal_dismiss_corrupt_foreign_latest_checks_scope_before_pin(tmp_path)
 def test_update_apply_unresolvable_tag_rejected(tmp_path, monkeypatch):
     """A tag that fails to resolve pre-tx rejects the receipt — the
     in-tx path never performs its own network lookup as a fallback."""
-    mcs_update = _update_env(tmp_path, monkeypatch)
+    _update_env(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        mcs_update, "remote_tag_sha",
-        lambda t: (_ for _ in ()).throw(mcs_update.UpdateError("x")))
+        update_discovery, 'remote_tag_sha',
+        lambda t, **_lif05_paths: (_ for _ in ()).throw(update_discovery.DiscoveryError("x")))
     db = Ledger(str(tmp_path / "ledger.db"))
     req = _update_command("ops.update_apply", tag="v1.2.3")
     receipt = mcs_requests.apply_command(db, req)
@@ -420,14 +416,14 @@ def test_update_apply_unresolvable_tag_rejected(tmp_path, monkeypatch):
 def test_update_apply_unresolvable_base_rejected(tmp_path, monkeypatch):
     """A HEAD that fails to resolve pre-tx rejects the receipt — never a
     committed approval with base_sha null, and no in-tx git retry."""
-    mcs_update = _update_env(tmp_path, monkeypatch)
+    _update_env(tmp_path, monkeypatch)
     calls = []
-    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: "b" * 40)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: "b" * 40)
 
-    def boom():
+    def boom(**_lif05_paths):
         calls.append(1)
-        raise mcs_update.UpdateError("x")
-    monkeypatch.setattr(mcs_update, "current_version", boom)
+        raise update_discovery.DiscoveryError("x")
+    monkeypatch.setattr(update_discovery, 'current_version', boom)
     db = Ledger(str(tmp_path / "ledger.db"))
     try:
         receipt = mcs_requests.apply_command(
@@ -443,12 +439,12 @@ def test_update_apply_unresolvable_base_rejected(tmp_path, monkeypatch):
 def test_update_apply_pinned_sha_skips_remote(tmp_path, monkeypatch):
     """A pre-pinned target_sha must not trigger any remote lookup —
     neither pre-tx nor in-tx."""
-    mcs_update = _update_env(tmp_path, monkeypatch)
+    _update_env(tmp_path, monkeypatch)
     calls = []
-    monkeypatch.setattr(mcs_update, "remote_tag_sha",
-                        lambda t: calls.append(t) or None)
-    monkeypatch.setattr(mcs_update, "current_version",
-                        lambda: ("v1.0.0", "c" * 40))
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha',
+                        lambda t, **_lif05_paths: calls.append(t) or None)
+    monkeypatch.setattr(update_discovery, 'current_version',
+                        lambda**_lif05_paths: ("v1.0.0", "c" * 40))
     db = Ledger(str(tmp_path / "ledger.db"))
     req = _update_command("ops.update_apply", tag="v1.2.3",
                           target_sha="d" * 40)
@@ -539,10 +535,9 @@ def test_restore_approve_drains_during_consent_hold(tmp_path, monkeypatch):
                          str(cmd_dir))
     legacy = cmd_dir / "legacy-import.json"
     legacy.write_text(json.dumps({"cmd": "import", "project_id": 99}))
-    import mcs_update
     spawned = []
-    monkeypatch.setattr(mcs_update, "spawn_detached",
-                        lambda: spawned.append(1))
+    monkeypatch.setattr(update_launch, 'spawn_detached',
+                        lambda**_lif05_paths: spawned.append(1))
     result = {"errors": []}
     job_ops.drain_commands(db, result, str(cmd_dir))
     assert result["command_commands"] == 1       # only the consent op

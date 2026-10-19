@@ -1263,7 +1263,11 @@ def _consent_only(lock_fd) -> int:
                 report = mcs_update._restore_loss_report(
                     marker["backup_path"])
                 if mcs_update._restore_consent(report) is not None:
-                    mcs_update.spawn_detached()
+                    import update_launch
+                    update_launch.spawn_detached(
+                        root=HOME, data_dir=os.path.join(HOME, "data"),
+                        hermes_wrapper=update_launch.HERMES_WRAPPER,
+                        environment=os.environ)
             except Exception:
                 result["errors"].append("consent_respawn_failed")
     except Exception as e:

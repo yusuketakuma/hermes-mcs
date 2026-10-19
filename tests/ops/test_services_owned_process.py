@@ -6,6 +6,7 @@ import time
 import pytest
 
 import mcs_update
+import owned_process
 from ops_testkit import _load
 
 
@@ -36,7 +37,8 @@ def test_services_failure_uses_owned_runner_and_fixed_diagnostics(
             raise OSError('SYNTHETIC_SECRET_CANARY')
         return subprocess.CompletedProcess(argv, 1, 'SYNTHETIC_SECRET_CANARY', '')
 
-    monkeypatch.setattr(module, '_run_owned', owned)
+    monkeypatch.setattr(owned_process if kind == 'update' else module,
+                        'run_owned' if kind == 'update' else '_run_owned', owned)
     # A direct subprocess.run would appear successful and bypass cleanup.
     monkeypatch.setattr(module.subprocess, 'run', lambda argv, **kw:
                         subprocess.CompletedProcess(argv, 0, '', ''))
@@ -70,8 +72,9 @@ def test_service_timeout_stops_its_synthetic_helper_tree(tmp_path, monkeypatch, 
         monkeypatch.setattr(module, '_runtime_mode', lambda: 'standalone')
         monkeypatch.setattr(module, '_runtime_config', lambda: {})
         monkeypatch.setattr(module, '_setup_python', lambda: sys.executable)
-    run = module._run_owned
-    monkeypatch.setattr(module, '_run_owned', lambda argv, timeout, env, stdin=None:
+    run = owned_process.run_owned if kind == 'update' else module._run_owned
+    monkeypatch.setattr(owned_process if kind == 'update' else module,
+                        'run_owned' if kind == 'update' else '_run_owned', lambda argv, timeout, env, stdin=None:
                         run(argv, 2, env, stdin))
     try:
         if kind == 'update':

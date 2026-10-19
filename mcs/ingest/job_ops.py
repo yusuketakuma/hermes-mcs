@@ -192,8 +192,11 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 # restore consent re-enters the held rollback at once
                 # instead of waiting for the next scheduled check.
                 try:
-                    import mcs_update
-                    mcs_update.spawn_detached()
+                    import update_launch
+                    update_launch.spawn_detached(
+                        root=HOME, data_dir=os.path.join(HOME, "data"),
+                        hermes_wrapper=update_launch.HERMES_WRAPPER,
+                        environment=os.environ)
                 except Exception:
                     result["errors"].append("update_spawn_failed")
             # Receipt makes the next drain idempotent.

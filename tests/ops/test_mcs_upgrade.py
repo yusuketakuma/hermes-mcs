@@ -1,6 +1,8 @@
 """Upgrade path — scripts/mcs_upgrade.py launcher + mcs_update plan /
 reinstall. Fully synthetic: temp git repos, stubbed launchctl/install.sh.
 """
+import update_discovery
+import update_launch
 import importlib.util
 import json
 import os
@@ -284,7 +286,7 @@ def _install_tag(updater, monkeypatch, tmp_path):
                       precheck_errors=["install_sh_changed"])
     sha = _release(tmp_path / "remote-work", tmp_path / "remote.git",
                    "v1.2.0", {"install.sh": "#!/bin/sh\n"})
-    monkeypatch.setattr(updater, "remote_tag_sha", lambda t: sha)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
                         lambda expected: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
     return repo, sha
@@ -564,11 +566,11 @@ def _approve(tmp_path, monkeypatch, update_cfg, tag):
     import mcs_util
     wrapper = tmp_path / "mcs_update.sh"
     wrapper.write_text("#!/bin/sh\n")
-    monkeypatch.setattr(mcs_update, "WRAPPER", str(wrapper))
+    monkeypatch.setattr(update_launch, 'HERMES_WRAPPER', str(wrapper))
     monkeypatch.setattr(mcs_util, "load_config", lambda: {"update": update_cfg})
-    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: "b" * 40)
-    monkeypatch.setattr(mcs_update, "current_version",
-                        lambda: ("v1.2.0", "c" * 40))
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: "b" * 40)
+    monkeypatch.setattr(update_discovery, 'current_version',
+                        lambda**_lif05_paths: ("v1.2.0", "c" * 40))
     db = Ledger(str(tmp_path / "ledger.db"))
     try:
         return mcs_requests.apply_command(db, _apply_req(tag=tag))
