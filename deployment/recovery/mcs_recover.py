@@ -17,6 +17,7 @@
 定期監視では対応不要の場合は何も表示せず、終了コード 0 で終わります。
 問題を調べるときは、まず --status と復旧結果の記録を確認してください。
 """
+import ast
 import errno
 import fcntl
 import glob
@@ -427,6 +428,83 @@ def _awaiting_consent():
             or ("phase" not in data and "restored_at" in data)):
         return {"unreadable": True}
     return data if data.get("phase") == "awaiting_consent" else None
+
+
+
+def _unreconciled_restore():
+    """An updater/watchdog restore witness whose notification reconcile is pending.
+
+    Backup adoption has its own writer-resume proof; its marker is not this hold.
+    """
+    try:
+        marker = _read_local_json(os.path.join(DATA, "restore_pending.json"))
+    except (OSError, ValueError, RecursionError):
+        return None  # existing _awaiting_consent holds unreadable markers
+    if isinstance(marker, dict) and marker.get("by") in ("mcs_update", "mcs_recover") \
+            and (marker.get("phase") == "restored"
+                 or "phase" not in marker and "restored_at" in marker):
+        return marker
+    return None
+
+
+
+def _restored_writer_compatible():
+    """Prove a restored DB matches the exact clean checkout being resumed.
+
+    Read the canonical schema literal as data; never import restored code.
+    Unknown journal, source, target or DB identity retains the writer hold.
+    """
+    state = _load_state()
+    applying = state.get("applying")
+    marker = _unreconciled_restore()
+    if state.get("_corrupt") or not isinstance(applying, dict) \
+            or applying.get("rollback") is not True or not applying.get("sha") \
+            or not isinstance(applying.get("backup_path"), str) \
+            or marker is None or marker.get("backup_path") != applying["backup_path"]:
+        return False
+    path = os.path.join(REPO, "mcs", "core", "ledger.py")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with _fdopen_owned(fd, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 1024 * 1024:
+                return False
+            raw = stream.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            return False
+        tree = ast.parse(raw.decode("utf-8"))
+        stores = [node for node in ast.walk(tree) if isinstance(node, ast.Name)
+                  and isinstance(node.ctx, ast.Store) and node.id == "SCHEMA_VERSION"]
+        values = [node.value for node in tree.body if isinstance(node, ast.Assign)
+                  and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                  and node.targets[0].id == "SCHEMA_VERSION"]
+        if len(stores) != 1 or len(values) != 1 or not isinstance(values[0], ast.Constant) \
+                or type(values[0].value) is not int or values[0].value < 0:
+            return False
+        head = _head()
+        if not head or head != applying["sha"] or _clean() is not True:
+            return False
+        committed = _git(["show", head + ":mcs/core/ledger.py"])
+        if committed is None or committed.returncode != 0 \
+                or committed.stdout.encode("utf-8") != raw:
+            return False
+        return (_head() == head and _clean() is True
+                and _db_version(LEDGER) == values[0].value)
+    except (OSError, ValueError, SyntaxError, RecursionError):
+        return False
+
+
+def _restore_reconcile_pending():
+    """Keep the existing incomplete flag; the durable restore witness holds on save failure."""
+    state = _load_state()
+    applying = state.get("applying")
+    if not state.get("_corrupt") and isinstance(applying, dict):
+        applying["restore_incomplete"] = True
+        try:
+            _save_state(state)
+        except OSError:
+            pass  # never authorize resume because the journal could not be saved
+    return "restore_reconcile_pending"
 
 
 def _report_alert(result, state, detail, text, **extra):
@@ -1471,6 +1549,8 @@ def _restore_db(backup_path, on_hold=None):
                 _mark_restored(backup_path)
             except OSError as e:
                 return f"restore_marker_failed: {e}"
+        if _unreconciled_restore() is not None and not _restored_writer_compatible():
+            return _restore_reconcile_pending()
         return None
     # Per-restore human consent (R2): an earlier update/rollback
     # approval does not substitute. The sender hold lands before the
@@ -1509,7 +1589,9 @@ def _restore_db(backup_path, on_hold=None):
         return f"restore_failed: {e}"
     if _db_version(LEDGER) != back:
         return "restore_verify_failed"
-    return None
+    # The compatible restored runner reconciles journals before delivery.
+    # Keep the marker; never open this DB with the watchdog's/newer writer.
+    return None if _restored_writer_compatible() else _restore_reconcile_pending()
 
 
 def _recovery_explanation(detail):
@@ -1521,6 +1603,7 @@ def _recovery_explanation(detail):
         "restore_consent without": "復元の承認待ち記録と更新記録が一致しません。記録を確認し、保留を解除しないでください。",
         "restore_consent with": "復元の承認待ち中にプログラムの保存状態が変わっています。保留を維持して更新記録を確認してください。",
         "restore_consent hold lost": "承認待ちの復元先と現在のプログラムが一致しません。更新記録を確認してください。",
+        "restore_reconcile_pending": "データベースは復元済みですが、通知記録の照合が未完了です。処理は停止したまま、管理担当者が適合する版で照合方法を確認してください。",
         "restore_incomplete": "データベースの復元が未完了で、更新記録との整合を確認できません。復旧結果の記録を確認してください。",
         "MERGE_HEAD without": "プログラムの統合が中断されていますが、戻し先の版が分かりません。更新記録を確認してください。",
         "merge --abort failed": "中断した統合を取り消せないか、戻し先の版を確認できません。導入先の Git の状態を確認してください。",
@@ -1552,6 +1635,10 @@ def recover(if_stale=False):
         _report("corrupt_state",
                 "update_state.json unreadable — escalate, do nothing")
         return 2
+    if _unreconciled_restore() is not None and not _restored_writer_compatible():
+        _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation",
+                writers_stopped=True)
+        return 1
     applying = state.get("applying")
     stages = [s.get("stage") for s in state.get("stages", [])]
     if not applying and not stages \
@@ -1569,6 +1656,10 @@ def recover(if_stale=False):
         if state.get("_corrupt"):
             _report("corrupt_state", "update_state.json unreadable under lock")
             return 2
+        if _unreconciled_restore() is not None and not _restored_writer_compatible():
+            _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation",
+                    writers_stopped=True)
+            return 1
         applying = state.get("applying")
         stages = [s.get("stage") for s in state.get("stages", [])]
         if if_stale and (applying or stages):
@@ -1760,6 +1851,10 @@ def recover(if_stale=False):
                     # approval arrives.
                     _report("restore_consent_pending", err)
                     return 0
+                if err == "restore_reconcile_pending":
+                    _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation",
+                            writers_stopped=True)
+                    return 1
                 if err:
                     return escalate("rollback db restore: " + err)
                 # DB at the backup schema, marker left awaiting_consent:
@@ -1889,6 +1984,9 @@ def interactive_recovery():
     if state.get("_corrupt"):
         print("更新記録を読み取れません。変更せず停止しました。担当者に確認を依頼してください。")
         return 2
+    if _unreconciled_restore() is not None and not _restored_writer_compatible():
+        print(_recovery_explanation("restore_reconcile_pending"))
+        return 1
     held = bool(state.get("restore_consent") or _awaiting_consent())
     if held:
         print("データを戻す前の確認で保留した記録があります。通知の対象・失われる可能性のあるデータを担当者と確認してください。")
@@ -1922,6 +2020,9 @@ def interactive_recovery():
         print("\n復旧処理を完了できませんでした。途中まで変更された可能性があります。mcs recover で状態を再確認し、担当者に確認を依頼してください。")
         return 1
     state = _load_state()
+    if _unreconciled_restore() is not None and not _restored_writer_compatible():
+        print(_recovery_explanation("restore_reconcile_pending"))
+        return 1
     if state.get("restore_consent") or _awaiting_consent():
         print("データを戻す前の確認で保留しています。未承認なら既存の承認手順を使ってください。承認済みなら自動監視の再確認を待ち、進まなければ担当者に確認を依頼してください。")
         return 1

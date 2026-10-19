@@ -1,0 +1,19 @@
+{
+  "category": "changed",
+  "title": "旧版への復元中にDBと実装の世代を保護",
+  "upgrade": "追加設定は不要です。restore_reconcile_schema_blocked または restore_reconcile_pending が出た場合は保留を維持し、管理担当者が適合する版・復旧Python・通知の照合方法を確認してください。追加承認やmarker削除では解除しないでください。",
+  "summary": "旧版へのrollback後も、読み込み済みの実装で復元と更新後の確認を続けられるようにしました。",
+  "details": [
+    "復元・通知再照合・環境診断の実装をcheckout切替前に読み込み、旧treeに存在しないmoduleの遅延読込みで復元が中断する問題を防ぎます。",
+    "report・同意・marker・DB置換・再照合の順序と、保留・journal・既定値の契約を維持します。",
+    "復元先が読込済みwriterより古いschemaの場合は再migrationせず、安全な手動対応まで既存の復元保留を維持します。",
+    "独立した復旧監視も、更新・復旧処理が残した未照合の復元記録を保留します。journalが空・不在・読取不能でも復元記録だけで再開を拒否し、復元承認と通知照合の完了を区別します。",
+    "独立復旧では、復元DBと再開するcheckoutのschemaが同じで、更新記録・HEAD・実ファイルの一致を確認できる場合にwriterを再開します。通知の保留markerは残し、runnerの照合完了まで配送を許可しません。不明・不一致の場合は従来の保留を維持します。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "tests/ops/test_update_loaded_rollback_closure.py",
+    "deployment/recovery/mcs_recover.py",
+    "tests/meta/test_mcs_recover.py"
+  ]
+}

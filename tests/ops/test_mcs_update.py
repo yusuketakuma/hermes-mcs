@@ -1024,8 +1024,7 @@ def _journal_kept(updater):
 
 
 def test_restore_db_removes_wal_sidecars(updater, tmp_path, monkeypatch):
-    """Restoring over a WAL-mode DB must delete -wal/-shm first — a
-    stale WAL replayed against the restored file corrupts it (F9)."""
+    """SQLite settles old WAL sidecars before replacing the live DB (F9)."""
     import ledger as _ledger  # noqa: F401 — real module, tmp DBs only
     live = str(tmp_path / "ledger.db")
     back = str(tmp_path / "backup.db")
@@ -1044,15 +1043,35 @@ def test_restore_db_removes_wal_sidecars(updater, tmp_path, monkeypatch):
     monkeypatch.setattr(_ledger, "valid_mcs_db", lambda p: True)
     _seed_consent(live, back)
     _rollback_journal(mcs_update, back)
-    mcs_update._restore_db(back)
+    # The deliberately tiny t-table fixture tests copy/sidecar ownership,
+    # not a current Ledger schema. Never migrate it for reconciliation.
+    monkeypatch.setattr(_ledger, "Ledger",
+                        lambda *a, **kw: pytest.fail("old schema must not open new writer"))
+    replace = updater._replace_database
+    copied = []
+
+    def checked_replace(*args):
+        replace(*args)
+        # A later read of the WAL-mode backup can create fresh sidecars.
+        assert not Path(live + "-wal").exists()
+        assert not Path(live + "-shm").exists()
+        copied.append(True)
+
+    monkeypatch.setattr(updater, "_replace_database", checked_replace)
+    with pytest.raises(mcs_update.UpdateError, match="restore_reconcile_schema_blocked"):
+        mcs_update._restore_db(back)
+    assert copied == [True]
     _journal_kept(mcs_update)
-    assert not Path(live + "-wal").exists()
-    assert not Path(live + "-shm").exists()
-    # _restore_db opens a Ledger for reconcile, which migrates the
-    # restored file to SCHEMA_VERSION — the proof the swap happened is
-    # the backup's own row, not user_version
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["restore_incomplete"] is True
+    marker = json.loads(Path(updater.DATA, "restore_pending.json").read_text())
+    assert marker["phase"] == "restored"
+    assert marker["by"] == "mcs_update"
+    assert marker["report_id"] == json.loads(Path(updater.RESTORE_REPORT_PATH).read_text())["report_id"]
+    # Copy succeeded, but old-schema notification reconciliation remains
+    # held. Both the backup row and its schema version must survive.
     con = sqlite3.connect("file:" + live + "?mode=ro", uri=True)
     assert con.execute("SELECT x FROM t").fetchone()[0] == "back"
+    assert con.execute("PRAGMA user_version").fetchone()[0] == 6
     con.close()
 
 
@@ -1077,6 +1096,8 @@ def test_restore_db_skips_same_version(updater, tmp_path, monkeypatch):
     row = con.execute("SELECT x FROM sentinel").fetchone()[0]
     con.close()
     assert row == live               # untouched — no copy happened
+    assert _live_version(live) == 7
+    assert not Path(updater.DATA, "restore_pending.json").exists()
 
 
 def test_restore_db_io_error_is_update_error(updater, tmp_path,
@@ -1274,29 +1295,52 @@ def test_rollback_schema_bump_holds_for_consent(updater, tmp_path,
     assert "cid-rb" not in state.get("executed", {})
 
 
-def test_rollback_consent_converges_via_recover(updater, tmp_path,
+def _assert_old_schema_restore_held(updater, live, back, restarts, command_id,
+                                    prior_execution=None):
+    """Approved copy preserves old schema while notification reconcile stays held."""
+    import notify_spool
+    assert _live_version(live) == 7
+    assert restarts == []
+    assert Path(updater.MARKER_PATH).exists()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"]["rollback"] is True
+    assert state["applying"]["restore_incomplete"] is True
+    assert state["restore_consent"]
+    if prior_execution is None:
+        assert command_id not in state.get("executed", {})
+    else:
+        assert state["executed"][command_id] == prior_execution
+    marker = notify_spool.restore_pending(updater.DATA)
+    assert marker is not None
+    assert marker["phase"] == "restored"
+    assert marker["backup_path"] == back
+    report = json.loads(Path(updater.RESTORE_REPORT_PATH).read_text())
+    assert marker["report_id"] == report["report_id"]
+    assert report["backup_schema"] == 7
+    assert report["backup_sha256"] == updater._file_sha256(back)
+    connection = sqlite3.connect("file:" + live + "?mode=ro", uri=True)
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
+    finally:
+        connection.close()
+
+
+def test_rollback_consent_keeps_old_schema_reconcile_held(updater, tmp_path,
                                                 monkeypatch):
     """After the bound ops.restore_approve receipt lands, recovery
-    re-enters _restore_db: swap happens, reconcile clears the marker,
-    drainers restart, the rollback completes (T13 happy path)."""
+    re-enters _restore_db: the approved copy preserves the backup schema,
+    while incompatible notification reconcile keeps writers held."""
     repo, live, back, before, _after, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     assert updater.rollback("cid-rb") == 2
     _seed_consent(live, back)
-    assert updater.recover_interrupted() == 0
-    assert _live_version(live) >= 7        # backup bytes restored
+    assert updater.recover_interrupted() == 1
+    assert _live_version(live) == 7        # copy must never remigrate
     con = sqlite3.connect("file:" + live + "?mode=ro", uri=True)
     assert con.execute(
         "SELECT COUNT(*) FROM messages").fetchone()[0] == 2
     con.close()
-    # reconcile consumed the marker — no stale hold pinning senders
-    import notify_spool
-    assert notify_spool.restore_pending(str(tmp_path / "data")) is None
-    state = updater.journal_store.load_state(updater.STATE_PATH)
-    assert state["applying"] is None
-    assert "restore_consent" not in state
-    assert state["executed"]["cid-rb"]["result"] == "rolled_back"
-    assert restarts == [1]                 # drainers came back up
+    _assert_old_schema_restore_held(updater, live, back, restarts, "cid-rb")
 
 
 def test_rollback_wrong_report_consent_stays_held(updater, tmp_path,
@@ -1452,7 +1496,7 @@ def test_failed_restore_copy_preserves_live_wal(updater, tmp_path, monkeypatch, 
         writer.close()
 
 
-@pytest.mark.parametrize("approved_swap_failure", [False, True])
+@pytest.mark.parametrize("approved_swap_failure", [False, True, "approved_restore"])
 def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
                                                        monkeypatch, approved_swap_failure):
     """A post-merge failure on a schema-bump release that lands in the
@@ -1507,7 +1551,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
 
     if approved_swap_failure:
         monkeypatch.setattr(restore_evidence, "find_restore_consent", lambda report, **_paths: "synthetic-consent")
-
+    if approved_swap_failure is True:
         def fail_swap(path, expected_sha, before_replace):
             before_replace()
             raise OSError("synthetic replace failure")
@@ -1519,6 +1563,17 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
     assert st.get("restore_consent")
     assert events[-1] == "quiesce" and "restart" in events
     assert Path(mcs_update.MARKER_PATH).exists()
+    if approved_swap_failure == "approved_restore":
+        assert st["applying"]["restore_incomplete"] is True
+        db = sqlite3.connect(live)
+        try:
+            assert db.execute("PRAGMA user_version").fetchone()[0] == 7
+            assert db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
+        finally:
+            db.close()
+        import notify_spool
+        marker = notify_spool.restore_pending(mcs_update.DATA)
+        assert marker is not None and marker["phase"] == "restored"
 
 
 def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
@@ -1916,7 +1971,8 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
         updater, tmp_path, monkeypatch):
     """Inside a restore-consent hold an unmeasurable tree keeps the
     freeze (drainers down, both markers, receipt pending, no outbox
-    write that would void the loss report) and the next pass converges."""
+    write that would void the loss report). After repair, the approved old-schema
+    copy stays held until compatible notification reconciliation is possible."""
     import notify_spool
     repo, live, back, _b, _a, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
@@ -1938,10 +1994,9 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     assert report["result"] == "restore_consent_blocked"
     monkeypatch.setattr(owned_process, 'run_owned', real_owned)
     _seed_consent(live, back)
-    assert updater.recover_interrupted() == 0
-    assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["cid-rb"]["result"] \
-        == "rolled_back"
-    assert restarts == [1]
+    assert updater.recover_interrupted() == 1
+    _assert_old_schema_restore_held(updater, live, back, restarts, "cid-rb")
+    assert notices == []
 
 
 # ------------------------------------------ stray check fails closed
@@ -2304,7 +2359,7 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
     escalate: drainers restarted on the newer-schema DB, marker gone,
     receipt consumed and an outbox notice that voids the consent. Now
     the freeze holds, and once the condition clears the documented
-    consent receipt still converges to rolled_back."""
+    consent receipt permits the copy, but the old-schema reconcile remains held."""
     import notify_spool
     repo, live, back, before, after, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
@@ -2328,12 +2383,9 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
     assert report["result"] == "restore_consent_blocked"
     undo()
     _seed_consent(live, back)
-    assert updater.recover_interrupted() == 0
-    assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["cid-rb"]["result"] \
-        == "rolled_back"
-    from ledger import SCHEMA_VERSION
-    # Consuming the consent receipt reopens the restored DB with the current writer.
-    assert _live_version(live) == SCHEMA_VERSION and restarts == [1]
+    assert updater.recover_interrupted() == 1
+    _assert_old_schema_restore_held(updater, live, back, restarts, "cid-rb")
+    assert notices == []
     con = sqlite3.connect(live)
     assert con.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
     con.close()
@@ -2345,7 +2397,8 @@ def test_marker_only_hold_survives_git_failure(
     """A hold entered before holds were journaled has only the
     awaiting_consent marker: a git failure must still keep the freeze
     (old code escalated — no restore_consent record) and the hold is
-    recorded in the journal from the marker; the consent converges."""
+    recorded in the journal from the marker; after consent the old-schema
+    copy succeeds while its notification reconciliation remains held."""
     repo, live, back, _b, _a, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     assert updater.rollback("cid-rb") == 2
@@ -2375,9 +2428,9 @@ def test_marker_only_hold_survives_git_failure(
         return                  # only a human can repair the marker
     monkeypatch.setattr(owned_process, 'run_owned', real_owned)
     _seed_consent(live, back)
-    assert updater.recover_interrupted() == 0
-    assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["cid-rb"]["result"] \
-        == "rolled_back"
+    assert updater.recover_interrupted() == 1
+    _assert_old_schema_restore_held(updater, live, back, restarts, "cid-rb")
+    assert notices == []
 
 
 @pytest.mark.parametrize("content", [

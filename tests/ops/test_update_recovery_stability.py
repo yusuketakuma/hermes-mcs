@@ -9,7 +9,8 @@ import subprocess
 
 import pytest
 
-from test_mcs_update import _schema_bump_world, _seed_consent, updater
+from test_mcs_update import (_assert_old_schema_restore_held, _schema_bump_world,
+                             _seed_consent, updater)
 
 __all__ = ["updater"]
 
@@ -130,8 +131,8 @@ def test_approved_swap_failure_keeps_restore_hold(updater, tmp_path, monkeypatch
     assert state["restore_consent"] and state["applying"]["rollback"]
     assert "synthetic" not in state["executed"]
     monkeypatch.setattr(updater, "_replace_database", replace)
-    assert updater.recover_interrupted() == 0
-    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None and restarts == [1]
+    assert updater.recover_interrupted() == 1
+    _assert_old_schema_restore_held(updater, live, back, restarts, "synthetic")
 
 
 @pytest.mark.parametrize("runtime_mode", ["hermes", "standalone"])
@@ -169,6 +170,7 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     damaged = Path(live).read_bytes()
     assert updater.apply("v1.1.0", after, "synthetic-apply") == 1
     assert updater._head_sha() == before and restarts == ["child"]
+    assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["synthetic-apply"]["result"] == "failed"
 
     restarts.clear()
     notices = []
@@ -184,12 +186,17 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     assert Path(live).read_bytes() == damaged
     assert not Path(updater.DATA, "restore_pending.json").exists()
 
-    # once the backup is usable and the restore approved, the hold ends
+    # Recovery records the unusable backup as escalated before approval.
+    # Approval of DB restoration must preserve that recorded result exactly.
+    prior_execution = updater.journal_store.load_state(updater.STATE_PATH)["executed"]["synthetic-apply"]
+    assert prior_execution["result"] == "escalated"
+    # Once usable and approved, the copy succeeds but old-schema reconcile stays held.
     backup_broken.clear()
     _seed_consent(live, back)
-    assert updater.recover_interrupted() == 0
-    assert restarts == [1] and not Path(updater.MARKER_PATH).exists()
-    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None
+    assert updater.recover_interrupted() == 1
+    _assert_old_schema_restore_held(updater, live, back, restarts, "synthetic-apply",
+                                    prior_execution=prior_execution)
+    assert notices == []
 
 
 @pytest.mark.parametrize("shape", ["previous_clean", "previous_dirty", "merge_head",

@@ -60,6 +60,24 @@ import owned_process  # noqa: E402
 import update_discovery  # noqa: E402
 import update_launch  # noqa: E402
 import restore_evidence  # noqa: E402
+# Rollback resets the checkout before restore/reconcile/postcheck. Keep their
+# finite code dependencies loaded from this generation, including lazily used
+# presenters and admission/backup-adoption checks. Never import a mixed tree.
+import ledger  # noqa: E402
+import notify_spool  # noqa: E402
+import notify_reconcile  # noqa: E402
+import environment_diagnostics  # noqa: E402
+import notify_flush  # noqa: E402,F401 - restore text quarantine
+import notify_digest  # noqa: E402,F401 - restored digest card reissue
+import notify_urgent  # noqa: E402,F401 - restored alert settlement
+import alert_view  # noqa: E402,F401 - restored alert card reissue
+import extraction_progress  # noqa: E402,F401 - restored card presentation
+import present_discord  # noqa: E402,F401 - restored card presentation
+import present_slack  # noqa: E402,F401 - restored card presentation
+import present_lineworks  # noqa: E402,F401 - restored card presentation
+import local_llm  # noqa: E402,F401 - postcheck model/admission diagnostics
+import llm_admission  # noqa: E402,F401 - postcheck admission diagnostics
+import mcs_restore  # noqa: E402,F401 - existing backup-adoption marker gate
 from mcs_requests import read_scheduled_receipt  # noqa: E402
 
 from mcs_util import HOME, REPO
@@ -848,12 +866,27 @@ def _awaiting_consent_marker() -> dict | None:
         return {"unreadable": True}
     if not isinstance(data, dict):
         return {"unreadable": True}
+    if data.get("by") == "mcs_backup_restore":
+        # Adoption may resume writers while delivery remains quarantined.
+        # This canonical check is captured before any checkout rollback.
+        return notify_spool.restore_awaiting_consent(DATA)
     if data.get("phase") == "awaiting_consent":
         return data
     if data.get("phase") == "restored" \
             or ("phase" not in data and "restored_at" in data):
         return None
     return {"unreadable": True}
+
+
+def _restore_writer_hold_marker() -> dict | None:
+    """Keep updater-owned unfinished restores frozen without revoking adoption."""
+    marker = _awaiting_consent_marker()
+    if marker is not None:
+        return marker
+    marker = notify_spool.restore_pending(DATA)
+    if marker is not None and marker.get("by") in ("mcs_update", "mcs_recover"):
+        return marker
+    return None
 
 
 def _remove_marker() -> None:
@@ -1227,7 +1260,6 @@ def _enqueue_notice(text: str, use_run_lock: bool = False) -> bool:
                 [sys.executable, "-c", _NOTICE_CHILD, live, LEDGER, text],
                 stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
             return r.returncode == 0
-        import ledger
         db = ledger.Ledger(LEDGER)
         try:
             db.outbox_add("update_notice", None, {"text": text})
@@ -1267,13 +1299,11 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
     if not _tree_clean():
         errors.append("tree_dirty_after_merge")
     try:
-        import ledger
         db = ledger.Ledger(LEDGER)
         db.db.close()
     except Exception:
         errors.append("ledger_open_failed")
     try:
-        import environment_diagnostics
         cfg = mcs_util.load_config()
         errs, _ = environment_diagnostics.check_environment(
             cfg, paths=_service_paths(), chrome_bin=mcs_util.CHROME_BIN,
@@ -1834,7 +1864,9 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                           f"{type(qe).__name__}: {qe}"[:200])
                 return rc
             except Exception as e:
-                if _awaiting_consent_marker() or journal_store.load_state(STATE_PATH).get("restore_consent"):
+                if (_restore_writer_hold_marker() is not None
+                        or journal_store.load_state(STATE_PATH).get("restore_consent")
+                        or (journal_store.load_state(STATE_PATH).get("applying") or {}).get("restore_incomplete")):
                     consent_hold = True
                     _report("restore_consent_blocked", str(e))
                     try:
@@ -2016,7 +2048,6 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
 
 def _baseline_check(cfg: dict) -> list[str]:
     try:
-        import environment_diagnostics
         errs, _ = environment_diagnostics.check_environment(
             cfg, paths=_service_paths(), chrome_bin=mcs_util.CHROME_BIN,
             credential_paths=(os.path.join(mcs_util.HOME, ".env"),
@@ -2047,7 +2078,6 @@ def _rollback_backup_error(entry: dict) -> str | None:
     its journal must stay classifiable as a pending restore.)"""
     if not (entry.get("schema_bump") and entry.get("backup_path")):
         return None
-    import ledger
     if ledger.valid_mcs_db(entry["backup_path"]):
         return None
     return "backup_invalid: " + entry["backup_path"]
@@ -2274,7 +2304,9 @@ def rollback(command_id: str | None = None) -> int:
                 consent_hold = True
                 return 2
             except Exception as e:
-                if _awaiting_consent_marker() or journal_store.load_state(STATE_PATH).get("restore_consent"):
+                if (_restore_writer_hold_marker() is not None
+                        or journal_store.load_state(STATE_PATH).get("restore_consent")
+                        or (journal_store.load_state(STATE_PATH).get("applying") or {}).get("restore_incomplete")):
                     consent_hold = True
                     _report("restore_consent_blocked", str(e))
                     return 2
@@ -2345,8 +2377,17 @@ def _reconcile_restored() -> None:
     """Post-swap journal-vs-DB reconcile while writers stay quiesced —
     on failure the restore_pending marker stays up (send grants keep
     denying) and the caller escalates for the next pass to retry."""
-    import ledger
-    import notify_reconcile
+    # The captured writer belongs to the newer generation. Opening a restored
+    # older DB through it would migrate it before the old tree resumes. Keep
+    # the restored marker and the existing incomplete-restore journal instead.
+    version = restore_evidence.database_version(LEDGER)
+    if version != ledger.SCHEMA_VERSION:
+        state = journal_store.load_state(STATE_PATH)
+        applying = state.get("applying")
+        if isinstance(applying, dict):
+            applying["restore_incomplete"] = True
+            journal_store.save_state(STATE_PATH, state)
+        raise UpdateError("restore_reconcile_schema_blocked")
     restored = ledger.Ledger(LEDGER)
     try:
         report = notify_reconcile.reconcile_after_restore(restored, mcs_util.load_config())
@@ -2513,8 +2554,6 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
     raises RestoreConsentPending and callers must HOLD, not unwind.
     Loses records written between apply and restore; Discord posts
     already sent cannot be retracted (design R2)."""
-    import ledger
-    import notify_spool
     marker = notify_spool.restore_pending(DATA)
     if marker and marker.get("unreadable"):
         raise UpdateError("restore_marker_unreadable")
@@ -2525,16 +2564,17 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
         raise UpdateError("live_db_unreadable")
     back_ver = restore_evidence.database_version(backup_path)
     if live_ver is not None and live_ver == back_ver:
-        # Nothing to replace — but a crash between the post-swap marker
-        # rewrite and the swap can leave an awaiting_consent marker
-        # pinning every send; promote it and reconcile normally.
-        if notify_spool.restore_awaiting_consent(DATA) is not None:
-            try:
-                notify_spool.mark_restored(DATA, backup_path=backup_path,
-                                           by="mcs_update")
-            except OSError as e:
-                raise UpdateError(
-                    f"restore_marker_failed: {e}") from e
+        # A remaining restore marker still requires reconciliation. A prior
+        # swap may already have restored the backup version; version equality
+        # alone must not finish a schema-blocked or interrupted reconcile.
+        if marker is not None:
+            if notify_spool.restore_awaiting_consent(DATA) is not None:
+                try:
+                    notify_spool.mark_restored(DATA, backup_path=backup_path,
+                                               by="mcs_update")
+                except OSError as e:
+                    raise UpdateError(
+                        f"restore_marker_failed: {e}") from e
             _reconcile_restored()
         return
     # Sender hold BEFORE measuring the loss — a grant slipping between
@@ -2722,6 +2762,11 @@ def recover_interrupted(if_stale: bool = False) -> int:
         applying = state.get("applying")
         stages = [s.get("stage") for s in state.get("stages", [])]
         if not applying and not stages:
+            if _restore_writer_hold_marker() is not None:
+                _report("restore_reconcile_blocked",
+                        "restore witness without update journal — keep writers stopped",
+                        writers_stopped=True)
+                return 1
             _remove_marker()           # orphan marker — writer is dead
             return 0
         if if_stale and _journal_is_fresh(state, applying):
@@ -2745,10 +2790,11 @@ def recover_interrupted(if_stale: bool = False) -> int:
 
         def held() -> bool:
             """Restore-consent hold: the journal record, or (fail
-            closed — a hold whose record is missing) the awaiting_consent
-            / unreadable restore_pending marker."""
+            closed — a hold whose record is missing) the awaiting/unreadable
+            marker or updater-owned unfinished restore witness. Adopted
+            backup restoration keeps its writer/delivery separation."""
             return bool(state.get("restore_consent")) \
-                or _awaiting_consent_marker() is not None
+                or _restore_writer_hold_marker() is not None
 
         def drainers(dkey: str) -> list:
             """Bounce drainers once per journal + HEAD (or after this
@@ -2881,6 +2927,9 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     _consent_hold(state, e, applying.get("backup_path"))
                     return 0
                 except UpdateError as e:
+                    if (isinstance(applying, dict)
+                            and (journal_store.load_state(STATE_PATH).get("applying") or {}).get("restore_incomplete")):
+                        applying["restore_incomplete"] = True
                     return escalate("rollback db restore: " + str(e))
                 # the DB is at the backup schema and the marker left
                 # awaiting_consent: the hold is over — later failures

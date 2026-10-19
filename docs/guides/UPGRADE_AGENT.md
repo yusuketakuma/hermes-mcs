@@ -283,7 +283,13 @@ Hermesのコードが更新開始時・移行先のどちらとも違う場合�
   `rollback failed — escalate` の場合は追加操作をせず報告する（復旧 watchdog と人の判断に委ねる）。
   schema 変更を伴う更新で旧版の checkout へ戻した後なら、DB 復元が完了するまで抽出処理と更新 marker を止めたままにする（通知は復旧レポートで行う）。
   以後の `recover` も、復旧レポートが `escalate` と `writers_stopped: true` を示す間は処理を再開しない。
-  使えるバックアップと復元承認がそろった `recover` で復元が完了すると、通常の再開に戻る。
+  使えるバックアップと復元承認がそろい、復元後の照合も完了した場合に通常の再開に戻る。
+  `restore_reconcile_schema_blocked` は、復元したDBを読込済みの新版writerで開くと再移行してしまうため、照合と再開を停止した状態です。
+  DBはバックアップのschemaを保ち、復元済みmarkerと`restore_incomplete`を残します。追加の承認では解除されません。
+  独立した復旧監視の`restore_reconcile_pending`も、DBのコピー後に通知照合が未完了であることを示します。更新journalが空・不在でも、更新・復旧処理の復元済みmarkerが残っていれば保留を維持します。
+  旧schemaで通知を自動再照合できないため、管理担当者が適合する版・復旧Python・通知の照合方法を確認するまで、markerやjournalを削除せず収集・通知を強制再開しないでください。
+  独立した復旧ツールは、復元DBと実際に再開するcleanなcheckoutのschemaが一致し、更新記録・HEAD・正規のschema定義を確認できる場合に限り、既存の `mcs recover` でwriterを再開します。
+  配送の保留markerは残し、再開したrunnerが既存の通知記録照合を完了するまで通知を許可しません。版が不明・不一致、記録や定義を読めない場合、および復元の承認待ちは保留を維持します。適合するcheckoutの確認後に同じ `mcs recover` で再確認し、marker削除や追加承認で迂回しないでください。
 - 適用後に問題が見つかり戻す場合（ユーザー承認後）: `"$PY" "$REPO/mcs/ops/mcs_update.py" rollback`。
   schema 変更があった更新は DB 復元を伴い、損失報告への人承認を求められることがある。
 - `rollback_blocked_layout_floor` は保存済みカード形式を戻り先が扱えないことを示します。自動巻戻し・中断復旧にも同じ下限を適用し、旧コードへの切替前に拒否します。1.0.23から旧版へ戻すには、必要な損失確認と人承認を経て更新前backupを復元してください。復元holdは維持し、通常収集や通知を手動で強制再開しません。

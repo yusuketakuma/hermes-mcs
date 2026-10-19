@@ -726,7 +726,7 @@ def test_restore_uses_exact_backup_path_with_uri_delimiters(
     assert report["backup_schema"] == 7
     _consent(rec, live, back)
     _rollback_journal(rec, back)
-    assert rec._restore_db(str(back)) is None
+    assert rec._restore_db(str(back)) == "restore_reconcile_pending"
     _journal_kept(rec)
     assert rec._db_version(str(live)) == 7
 
@@ -754,7 +754,7 @@ def test_restore_measures_and_approves_exact_live_uri_path(
     assert live.read_bytes() == before
     _consent(rec, live, back)
     _rollback_journal(rec, back)
-    assert rec._restore_db(str(back)) is None
+    assert rec._restore_db(str(back)) == "restore_reconcile_pending"
     _journal_kept(rec)
     assert rec._db_version(str(live)) == 7
     assert decoy.read_bytes() == decoy_before
@@ -825,7 +825,7 @@ def test_restore_db_replaces_and_verifies(rec, tmp_path, monkeypatch):
     monkeypatch.setattr(rec, "LEDGER", str(live))
     _consent(rec, live, back)
     _rollback_journal(rec, back)
-    assert rec._restore_db(str(back)) is None
+    assert rec._restore_db(str(back)) == "restore_reconcile_pending"
     _journal_kept(rec)
     assert rec._db_version(str(live)) == 7
     marker = json.loads((tmp_path / "data"
@@ -867,8 +867,7 @@ def test_recover_escalates_on_rollback_db_restore(rec, tmp_path,
 
 
 def test_recover_resumed_verifies_db_restore(rec, tmp_path, monkeypatch):
-    """Happy path: converged tree + valid backup => restore runs and
-    the report may claim 'resumed'."""
+    """A verified copy retains its journal until compatible notification reconcile."""
     live = tmp_path / "data" / "ledger.db"
     back = tmp_path / "data" / "backup.db"
     _mk_db(live, 8)
@@ -878,12 +877,13 @@ def test_recover_resumed_verifies_db_restore(rec, tmp_path, monkeypatch):
     monkeypatch.setattr(rec, "_notify", lambda *a: None)
     monkeypatch.setattr(rec, "_reconcile_membership", lambda s: [])
     _consent(rec, live, back)
-    assert rec.recover() == 0
+    assert rec.recover() == 1
     assert rec._db_version(str(live)) == 7
     report = json.loads(Path(rec.REPORT_PATH).read_text())
-    assert report["result"] == "resumed"
+    assert report["result"] == "restore_reconcile_pending" and report["writers_stopped"] is True
     after = json.loads(Path(rec.STATE_PATH).read_text())
-    assert after["executed"]["cid-rb"]["result"] == "rolled_back"
+    assert "cid-rb" not in after["executed"]
+    assert after["applying"]["restore_incomplete"] is True
     assert after["applied"] == []
 
 
@@ -1513,8 +1513,9 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
         rec, tmp_path, monkeypatch, kind):
     """Journal inconsistency / restore failure inside a hold used to
     escalate (drainers up on the newer-schema DB, marker gone, receipt
-    consumed). Now the freeze holds with one deduped `hermes send`, and
-    once the condition clears the consent receipt converges."""
+    consumed). The freeze holds with one deduped `hermes send`. After
+    consent, the DB copy succeeds but notification reconciliation still
+    requires a compatible writer, so the journal and markers remain held."""
     live, back, restarts, notices = _held_world(rec, tmp_path,
                                                 monkeypatch)
     repo = tmp_path / "repo"
@@ -1535,20 +1536,31 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
     assert len(notices) == 1                        # hermes send, deduped
     undo()
     _consent(rec, live, back)
-    assert rec.recover() == 0
+    assert rec.recover() == 1  # copied, but compatible notification reconcile is still pending
     assert rec._db_version(str(live)) == 7
+    assert live.read_bytes() == back.read_bytes()
     state = json.loads(Path(rec.STATE_PATH).read_text())
-    assert state["executed"]["cid-rb"]["result"] == "rolled_back"
-    assert "restore_consent" not in state
-    assert len(restarts) == 1
+    assert "cid-rb" not in state.get("executed", {})
+    assert state["restore_consent"] and state["applying"]["restore_incomplete"] is True
+    assert restarts == []
+    assert Path(rec.MARKER_PATH).exists()
+    marker = tmp_path / "data" / "restore_pending.json"
+    assert json.loads(marker.read_text())["phase"] == "restored"
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == "restore_reconcile_pending" and report["writers_stopped"] is True
+    held_db, held_state, held_marker = live.read_bytes(), Path(rec.STATE_PATH).read_bytes(), marker.read_bytes()
+    assert rec.recover() == 1
+    assert live.read_bytes() == held_db and Path(rec.STATE_PATH).read_bytes() == held_state
+    assert marker.read_bytes() == held_marker and restarts == []
+    assert len(notices) == 1  # pending reconcile reports only; no new send
 
 
 def test_marker_only_hold_survives_git_failure(rec, tmp_path,
                                                monkeypatch):
     """A hold entered by a watchdog that did not journal it has only
     the awaiting_consent marker: a git failure keeps the freeze (old
-    code escalated), the hold is recorded from the marker, and consent
-    still converges."""
+    code escalated), the hold is recorded from the marker. Consent permits
+    the DB copy; compatible notification reconciliation remains required."""
     live, back, restarts, notices = _held_world(rec, tmp_path,
                                                 monkeypatch)
     state = json.loads(Path(rec.STATE_PATH).read_text())
@@ -1567,9 +1579,21 @@ def test_marker_only_hold_survives_git_failure(rec, tmp_path,
     assert hold["from_marker"] is True and hold["report_id"] == rid
     monkeypatch.setattr(rec, "_git", original_git)
     _consent(rec, live, back)
-    assert rec.recover() == 0
+    assert rec.recover() == 1  # consent authorizes copying, not notification reconciliation
+    assert rec._db_version(str(live)) == 7
+    assert live.read_bytes() == back.read_bytes()
     state = json.loads(Path(rec.STATE_PATH).read_text())
-    assert state["executed"]["cid-rb"]["result"] == "rolled_back"
+    assert "cid-rb" not in state.get("executed", {})
+    assert state["restore_consent"] and state["applying"]["restore_incomplete"] is True
+    assert restarts == [] and Path(rec.MARKER_PATH).exists()
+    marker = tmp_path / "data" / "restore_pending.json"
+    assert json.loads(marker.read_text())["phase"] == "restored"
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == "restore_reconcile_pending" and report["writers_stopped"] is True
+    held_db, held_state, held_marker = live.read_bytes(), Path(rec.STATE_PATH).read_bytes(), marker.read_bytes()
+    assert rec.recover() == 1
+    assert live.read_bytes() == held_db and Path(rec.STATE_PATH).read_bytes() == held_state
+    assert marker.read_bytes() == held_marker and restarts == []
 
 
 def test_notify_kills_a_wedged_standalone_sender(tmp_path, monkeypatch):
@@ -1738,6 +1762,7 @@ def test_status_keeps_json_contract(rec, monkeypatch, capsys):
     ("git unverifiable: rev-parse HEAD", "保存状態を確認できません"),
     ("rollback db restore: restore_consent_pending:synthetic", "人の承認待ち"),
     ("rollback db restore: restore_failed: synthetic-private-path", "保留を維持"),
+    ("restore_reconcile_pending", "通知記録の照合が未完了"),
     ("reinstall_incomplete", "再インストール"),
     ("unclassifiable repo state — synthetic", "自動変更を見送りました"),
     ("unexpected synthetic-private-path", "復旧を完了できません"),
@@ -1831,3 +1856,251 @@ def test_runtime_migration_is_left_to_the_target_updater(rec, tmp_path, monkeypa
     with open(rec.STATE_PATH, "w") as f:
         json.dump({"v": 1, "applying": None, "stages": [], "applied": [], "attempts": {}, "executed": {}}, f)
     assert rec.recover() == 0 and not os.path.exists(rec.MARKER_PATH)
+
+
+@pytest.mark.parametrize("by", ["mcs_update", "mcs_recover"])
+@pytest.mark.parametrize("journal_fault", ["none", "save", "corrupt", "missing"])
+def test_restored_witness_holds_fresh_watchdog_retry(
+        rec, tmp_path, monkeypatch, by, journal_fault):
+    live, back = tmp_path / "data" / "ledger.db", tmp_path / "data" / "backup.db"
+    _mk_db(live, 7)
+    _mk_db(back, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    _rollback_journal(rec, back)
+    marker = tmp_path / "data" / "restore_pending.json"
+    witness = {"v": 1, "phase": "restored", "by": by,
+               "restored_at": 123, "at": 123, "backup_path": str(back)}
+    marker.write_text(json.dumps(witness))
+    Path(rec.MARKER_PATH).write_text("synthetic writer freeze")
+    original_save = rec._save_state
+    if journal_fault == "save":
+        def failed_save(state):
+            if (state.get("applying") or {}).get("restore_incomplete"):
+                raise OSError("synthetic journal publish failure")
+            return original_save(state)
+        monkeypatch.setattr(rec, "_save_state", failed_save)
+    elif journal_fault == "corrupt":
+        Path(rec.STATE_PATH).write_text("{broken")
+    elif journal_fault == "missing":
+        Path(rec.STATE_PATH).unlink()
+    db_before, marker_before = live.read_bytes(), marker.read_bytes()
+    assert rec._restore_db(str(back)) == "restore_reconcile_pending"
+    assert live.read_bytes() == db_before and marker.read_bytes() == marker_before
+    # Reload the standalone script, not a module retaining an in-memory hold.
+    fresh = _load()
+    for name in ("REPO", "DATA", "STATE_PATH", "LEDGER", "UPDATE_LOCK", "RUN_LOCK", "MARKER_PATH", "REPORT_PATH"):
+        monkeypatch.setattr(fresh, name, getattr(rec, name))
+    def forbidden(*args, **kwargs):
+        pytest.fail("unreconciled restore must not run Git, write DB, restart or delete markers")
+    for name in ("_git", "_head", "_restart_drainers", "_restart_services", "_remove_marker", "_notify", "_reconcile_membership"):
+        monkeypatch.setattr(fresh, name, forbidden)
+    state_before = Path(rec.STATE_PATH).read_bytes() if Path(rec.STATE_PATH).exists() else None
+    for _ in range(2):
+        assert fresh.recover() == (2 if journal_fault == "corrupt" else 1)
+        assert live.read_bytes() == db_before and marker.read_bytes() == marker_before
+        assert Path(rec.MARKER_PATH).read_text() == "synthetic writer freeze"
+        assert (Path(rec.STATE_PATH).read_bytes() if Path(rec.STATE_PATH).exists() else None) == state_before
+    if journal_fault == "none":
+        assert rec._load_state()["applying"]["restore_incomplete"] is True
+
+
+def test_independent_copy_requires_reconcile_after_actual_swap_and_fresh_retry(rec, tmp_path, monkeypatch):
+    live, back = tmp_path / "data" / "ledger.db", tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    _consent(rec, live, back)
+    _rollback_journal(rec, back)
+    assert rec._restore_db(str(back)) == "restore_reconcile_pending"
+    assert rec._db_version(str(live)) == 7
+    _journal_kept(rec)
+    marker = tmp_path / "data" / "restore_pending.json"
+    original_marker = marker.read_bytes()
+    original_state = Path(rec.STATE_PATH).read_bytes()
+    assert rec._load_state()["applying"]["restore_incomplete"] is True
+    fresh = _load()
+    for name in ("DATA", "STATE_PATH", "LEDGER"):
+        monkeypatch.setattr(fresh, name, getattr(rec, name))
+    assert fresh._restore_db(str(back)) == "restore_reconcile_pending"
+    assert marker.read_bytes() == original_marker
+    assert Path(rec.STATE_PATH).read_bytes() == original_state
+    assert fresh._db_version(str(live)) == 7
+
+
+@pytest.mark.parametrize("phase", ["awaiting_consent", "restored"])
+def test_updater_reconcile_hold_does_not_claim_backup_adoption_marker(rec, tmp_path, phase):
+    marker = tmp_path / "data" / "restore_pending.json"
+    marker.write_text(json.dumps({"by": "mcs_backup_restore", "phase": phase,
+                                  "restored_at": 123}))
+    before = marker.read_bytes()
+    assert rec._unreconciled_restore() is None
+    assert marker.read_bytes() == before
+
+
+def test_same_schema_without_restore_witness_still_resumes_without_copy(rec, tmp_path, monkeypatch):
+    import sqlite3
+    live, back = tmp_path / "data" / "ledger.db", tmp_path / "data" / "backup.db"
+    _mk_db(live, 7)
+    _mk_db(back, 7)
+    connection = sqlite3.connect(str(live))
+    try:
+        connection.execute("INSERT INTO t VALUES('synthetic-live-sentinel')")
+        connection.commit()
+    finally:
+        connection.close()
+    _rollback_state(rec, tmp_path, str(back))
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    restarts = []
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda _snapshot: [])
+    monkeypatch.setattr(rec, "_restart_drainers", lambda **kw: restarts.append("drainers") or [])
+    monkeypatch.setattr(rec, "_restart_services", lambda *args: restarts.append("services") or 0)
+    monkeypatch.setattr(rec, "_replace_database", lambda *args: pytest.fail("schema noop must not copy"))
+    Path(rec.MARKER_PATH).write_text("synthetic update in progress")
+    live_before = live.read_bytes()
+    assert not (tmp_path / "data" / "restore_pending.json").exists()
+    assert rec.recover() == 0
+    assert live.read_bytes() == live_before and rec._db_version(str(live)) == 7
+    state = rec._load_state()
+    assert state["applying"] is None and state["stages"] == []
+    assert state["executed"]["cid-rb"]["result"] == "rolled_back"
+    assert "restore_consent" not in state and not Path(rec.MARKER_PATH).exists()
+    assert restarts == ["drainers", "services"]
+    assert json.loads(Path(rec.REPORT_PATH).read_text())["result"] == "resumed"
+
+
+@pytest.mark.parametrize("already_pending", [True, False], ids=["before-dialog", "after-recover"])
+def test_interactive_pending_reconcile_requires_compatible_handler_not_more_consent(
+        rec, tmp_path, monkeypatch, capsys, already_pending):
+    import builtins
+    marker = tmp_path / "data" / "restore_pending.json"
+    witness = {"v": 1, "by": "mcs_recover", "phase": "restored", "restored_at": 123}
+    state = {"applying": {"rollback": True}, "stages": [], "restore_consent": {"report_id": "synthetic"}}
+    monkeypatch.setattr(rec, "_load_state", lambda: state)
+    monkeypatch.setattr(rec.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    def recover():
+        assert not already_pending
+        marker.write_text(json.dumps(witness))
+        return 1
+    def answer(prompt):
+        assert not already_pending
+        return "2"
+    monkeypatch.setattr(rec, "recover", recover)
+    monkeypatch.setattr(builtins, "input", answer)
+    if already_pending:
+        marker.write_text(json.dumps(witness))
+    assert rec.interactive_recovery() == 1
+    text = capsys.readouterr().out
+    assert "通知記録の照合が未完了" in text
+    assert "自動監視の再確認を待ち" not in text
+    assert json.loads(marker.read_text()) == witness
+
+
+
+def _commit_recovery_schema(rec, tmp_path, version):
+    repo = tmp_path / "repo"
+    canonical = repo / "mcs" / "core" / "ledger.py"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("SCHEMA_VERSION = " + str(version) + "\nraise AssertionError('restored code must not be imported')\n")
+    _git(repo, "add", "mcs/core/ledger.py")
+    _git(repo, "commit", "-qm", "synthetic canonical schema")
+    state = rec._load_state()
+    state["applying"]["sha"] = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    rec._save_state(state)
+    return canonical
+
+
+@pytest.mark.parametrize("version", [7, 9])
+def test_matching_restored_writer_resumes_but_keeps_delivery_witness(rec, tmp_path, monkeypatch, version):
+    live, back = tmp_path / "data" / "ledger.db", tmp_path / "data" / "backup.db"
+    _mk_db(live, version + 1)
+    _mk_db(back, version)
+    _rollback_state(rec, tmp_path, str(back))
+    _commit_recovery_schema(rec, tmp_path, version)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    _consent(rec, live, back)
+    restarts = []
+    marker = tmp_path / "data" / "restore_pending.json"
+    def restart(**kwargs):
+        assert rec._db_version(str(live)) == version
+        assert json.loads(marker.read_text())["phase"] == "restored"
+        restarts.append("writers")
+        return []
+    monkeypatch.setattr(rec, "_restart_drainers", restart)
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda _snapshot: [])
+    monkeypatch.setattr(rec, "_restart_services", lambda *args: 0)
+    Path(rec.MARKER_PATH).write_text("synthetic update hold")
+    assert rec.recover() == 0
+    assert rec._db_version(str(live)) == version and live.read_bytes() == back.read_bytes()
+    state = rec._load_state()
+    assert state["applying"] is None and state["stages"] == []
+    assert state["executed"]["cid-rb"]["result"] == "rolled_back"
+    assert restarts == ["writers"] and not Path(rec.MARKER_PATH).exists()
+    witness = marker.read_bytes()
+    assert json.loads(witness)["by"] == "mcs_recover"
+    # Writer restart is not notification acceptance; runner keeps this witness
+    # until its existing same-generation journal reconciliation is durable.
+    assert marker.read_bytes() == witness
+
+
+def test_fresh_retry_of_matching_restored_writer_keeps_delivery_marker(rec, tmp_path, monkeypatch):
+    live, back = tmp_path / "data" / "ledger.db", tmp_path / "data" / "backup.db"
+    _mk_db(live, 7)
+    _mk_db(back, 7)
+    _rollback_state(rec, tmp_path, str(back))
+    _commit_recovery_schema(rec, tmp_path, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    rec._mark_restored(str(back))
+    marker = tmp_path / "data" / "restore_pending.json"
+    witness = marker.read_bytes()
+    fresh = _load()
+    for name in ("REPO", "DATA", "STATE_PATH", "LEDGER"):
+        monkeypatch.setattr(fresh, name, getattr(rec, name))
+    assert fresh._restored_writer_compatible() is True
+    assert fresh._restore_db(str(back)) is None
+    assert marker.read_bytes() == witness and fresh._db_version(str(live)) == 7
+
+
+@pytest.mark.parametrize("fault", ["schema", "dynamic", "duplicate", "bytes", "head", "git_read", "source_read"])
+def test_unproven_restored_writer_stays_held(rec, tmp_path, monkeypatch, fault):
+    live, back = tmp_path / "data" / "ledger.db", tmp_path / "data" / "backup.db"
+    _mk_db(live, 7)
+    _mk_db(back, 7)
+    _rollback_state(rec, tmp_path, str(back))
+    canonical = _commit_recovery_schema(rec, tmp_path, 9 if fault == "schema" else 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    rec._mark_restored(str(back))
+    if fault in ("dynamic", "duplicate", "bytes"):
+        canonical.write_text({"dynamic": "SCHEMA_VERSION = int('7')\n",
+                              "duplicate": "SCHEMA_VERSION = 7\nSCHEMA_VERSION = 7\n",
+                              "bytes": canonical.read_text() + "# untracked byte drift\n"}[fault])
+        monkeypatch.setattr(rec, "_clean", lambda: True)  # bytes proof must be independent
+    elif fault == "head":
+        monkeypatch.setattr(rec, "_head", lambda: "f" * 40)
+    elif fault == "git_read":
+        real_git = rec._git
+        monkeypatch.setattr(rec, "_git", lambda args, *a, **kw: None if args[0] == "show" else real_git(args, *a, **kw))
+    elif fault == "source_read":
+        canonical.unlink()
+    marker = tmp_path / "data" / "restore_pending.json"
+    witness, contents = marker.read_bytes(), live.read_bytes()
+    assert rec._restored_writer_compatible() is False
+    assert rec._restore_db(str(back)) == "restore_reconcile_pending"
+    assert live.read_bytes() == contents and marker.read_bytes() == witness
+    assert rec._load_state()["applying"]["restore_incomplete"] is True
+
+
+def test_existing_same_version_awaiting_consent_promotion_keeps_legacy_flow(rec, tmp_path, monkeypatch):
+    live, back = tmp_path / "data" / "ledger.db", tmp_path / "data" / "backup.db"
+    _mk_db(live, 7)
+    _mk_db(back, 7)
+    _rollback_state(rec, tmp_path, str(back))
+    _commit_recovery_schema(rec, tmp_path, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    rec._mark_restored(str(back), phase="awaiting_consent", report_id="synthetic-still-held")
+    marker = tmp_path / "data" / "restore_pending.json"
+    before = marker.read_bytes()
+    assert rec._restored_writer_compatible() is False  # new permission excludes awaiting phase
+    assert rec._restore_db(str(back)) is None  # existing same-version legacy promotion stays intact
+    promoted = json.loads(marker.read_text())
+    assert promoted["phase"] == "restored" and marker.read_bytes() != before
+    assert rec._restored_writer_compatible() is True and rec._db_version(str(live)) == 7
