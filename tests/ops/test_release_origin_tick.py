@@ -1,4 +1,5 @@
 """Released DDL/runtime classes reach the real tick and snapshot view offline."""
+import collection_stages
 from contextlib import closing
 import json
 import sys
@@ -89,7 +90,9 @@ def test_origin_migration_tick_extract_snapshot_view(tmp_path, monkeypatch, caps
         "LOCKFILE": data / "run.lock", "CONF_PATH": config,
         "CACHE": root / "absent-token.json",
     }.items():
-        monkeypatch.setattr(run_check, name, str(value))
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (run_check),
+            name, str(value))
     monkeypatch.setattr(health_report, "HEALTH_FILE", str(root / health_report.HEALTH_REL))
     for name, value in {
         "HOME": root, "DB_MAINT_STATE": data / "db_maintenance.json",

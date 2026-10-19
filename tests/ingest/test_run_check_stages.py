@@ -1,6 +1,7 @@
 """run_check stage contracts — stage_unread / stage_backfill /
 stage_attachments / stage_derive / stage_self_probe, tick E2E, run
 lock, health, session-expired alerting."""
+import collection_stages
 import update_launch
 import semantic_drain
 import health_report
@@ -47,8 +48,8 @@ def test_attachment_destination_uses_ledger_identity(tmp_path, monkeypatch):
         attachment_failed=lambda *a, **kw: None,
         pending_notify_message_ids=lambda: [],
     )
-    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
-    run_check.stage_attachments(adapter, db, {"errors": []},
+    monkeypatch.setattr(collection_stages, 'ATTACH_DIR', str(tmp_path))
+    collection_stages.stage_attachments(adapter, db, {"errors": []},
                                 time.monotonic() + 60)
     assert len(set(seen)) == 2
 
@@ -82,14 +83,14 @@ def test_backfill_does_not_advance_past_missing_reply():
             reserved.append((kind, pid, kwargs["payload"]))
 
     result = {"errors": [], "backfilled": 0}
-    run_check.stage_backfill(Adapter(), Store(), result,
+    collection_stages.stage_backfill(Adapter(), Store(), result,
                              time.monotonic() + 60, 1)
 
     assert covered == []
     assert reserved == [
         ("thread", 1, {"page": 1}),
         ("history_head", 1,
-         {"since": 0, "page": 1, "pages": run_check.BACKFILL_MAX_PAGES,
+         {"since": 0, "page": 1, "pages": collection_stages.BACKFILL_MAX_PAGES,
           "trickle": False}),
     ]
 
@@ -124,7 +125,9 @@ def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
         "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
         "CONF_PATH": config, "CACHE": tmp_path / "absent-token.json",
     }.items():
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, str(value))
     for name, value in {
         "BACKUP_DIR": data / "backups", "SNAPSHOT_DIR": data / "snapshots",
         "LOGFILE": data / "run.log",
@@ -210,8 +213,8 @@ def test_notify_pending_attachments_jump_download_queue(tmp_path,
     adapter = SimpleNamespace(
         download=lambda url, dest: seen.append(url)
         or {"bytes": 1, "sha256": "x"})
-    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
-    run_check.stage_attachments(adapter, db, {"errors": []},
+    monkeypatch.setattr(collection_stages, 'ATTACH_DIR', str(tmp_path))
+    collection_stages.stage_attachments(adapter, db, {"errors": []},
                                 time.monotonic() + 60)
     assert seen[0] == "u_new"
     db.close()
@@ -267,9 +270,9 @@ def test_unread_commit_boundary_preserves_work_before_ack(tmp_path, monkeypatch,
     def run():
         result = {"errors": [], "incomplete": [], "messages": 0,
                   "new_messages": 0, "marked_read": []}
-        run_check.stage_unread(
-            adapter, db, SimpleNamespace(mark_read=True), result,
-            time.monotonic() + 30, db.begin_run(None), semantic=True)
+        collection_stages.stage_unread(
+            adapter, db, result,
+            time.monotonic() + 30, db.begin_run(None), semantic=True, mark_read=True)
 
     with monkeypatch.context() as patch:
         if stop == "before_commit":
@@ -336,9 +339,9 @@ def test_incomplete_fetch_or_ack_never_becomes_confirmed(tmp_path, failure):
 
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": []}
-    run_check.stage_unread(
-        Adapter(), db, SimpleNamespace(mark_read=True), result,
-        time.monotonic() + 30, db.begin_run(None))
+    collection_stages.stage_unread(
+        Adapter(), db, result,
+        time.monotonic() + 30, db.begin_run(None), mark_read=True)
     assert result["marked_read"] == []
     db.close()
     db = ledger.Ledger(path)
@@ -387,7 +390,7 @@ def test_backfill_page_failure_keeps_saved_page_without_coverage(tmp_path, error
 
     result = {"errors": [], "backfilled": 0}
     def run():
-        run_check.stage_backfill(Adapter(), db, result,
+        collection_stages.stage_backfill(Adapter(), db, result,
                                  time.monotonic() + 60, db.begin_run(None),
                                  semantic=True)
     if isinstance(error, mcs_contract.SessionExpired):
@@ -435,7 +438,7 @@ def test_backfill_recovers_read_reply_on_old_parent_without_hiding_gaps(tmp_path
             return []
 
     result = {"errors": [], "backfilled": 0}
-    run_check.stage_backfill(Adapter(), db, result, time.monotonic() + 60,
+    collection_stages.stage_backfill(Adapter(), db, result, time.monotonic() + 60,
                              db.begin_run(None), semantic=True)
     row = db.db.execute(
         "SELECT parent_id,body_text,body_state,is_unread FROM messages WHERE message_id=11"
@@ -452,14 +455,14 @@ def test_session_expired_alert_throttled(tmp_path):
     """A dead session alerts once per hour, not once per tick — the run
     row and health file still record every expiry."""
     db = _ledger(tmp_path)
-    assert run_check._alert_session_expired(db, 1, "d") is True
-    assert run_check._alert_session_expired(db, 2, "d") is False
+    assert collection_stages.queue_session_expired(db, 1, "d") is True
+    assert collection_stages.queue_session_expired(db, 2, "d") is False
     db.db.execute(
         "UPDATE notify_outbox SET created_at=?"
         " WHERE kind='session_expired'",
-        (time.time() - run_check.ALERT_MIN_INTERVAL_S - 1,))
+        (time.time() - collection_stages.ALERT_MIN_INTERVAL_S - 1,))
     db.db.commit()
-    assert run_check._alert_session_expired(db, 3, "d") is True
+    assert collection_stages.queue_session_expired(db, 3, "d") is True
     n = db.db.execute(
         "SELECT COUNT(*) c FROM notify_outbox"
         " WHERE kind='session_expired'").fetchone()["c"]
@@ -469,11 +472,11 @@ def test_session_expired_alert_throttled(tmp_path):
 
 def test_err_str_includes_structured_detail():
     e = mcs_contract.SessionExpired("auto_login=keychain_locked")
-    assert run_check._err_str(e) == \
+    assert mcs_contract.describe_error(e) == \
         "session_expired: auto_login=keychain_locked"
     e2 = mcs_contract.MCSError("http_error", "GET /x", status=500)
-    assert run_check._err_str(e2) == "http_error(status=500): GET /x"
-    assert run_check._err_str(ValueError("v")) == "ValueError"
+    assert mcs_contract.describe_error(e2) == "http_error(status=500): GET /x"
+    assert mcs_contract.describe_error(ValueError("v")) == "ValueError"
 
 
 def test_snippet_parent_blocks_mark_read(tmp_path):
@@ -492,9 +495,9 @@ def test_snippet_parent_blocks_mark_read(tmp_path):
     )
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": []}
-    run_check.stage_unread(
-        adapter, db, SimpleNamespace(mark_read=True), result,
-        time.monotonic() + 30, db.begin_run(None))
+    collection_stages.stage_unread(
+        adapter, db, result,
+        time.monotonic() + 30, db.begin_run(None), mark_read=True)
 
     assert marks == []
     assert result["marked_read"] == []
@@ -652,7 +655,7 @@ def test_backfill_tail_survives_a_completed_deep_import(tmp_path):
 
     result = {"errors": [], "backfilled": 0}
     adapter = Adapter()
-    run_check.stage_backfill(adapter, db, result, time.monotonic() + 300, 1)
+    collection_stages.stage_backfill(adapter, db, result, time.monotonic() + 300, 1)
     assert db.job_pending("history_head", 1)
     assert result["coverage_gaps"]
     assert db.db.execute("SELECT 1 FROM messages WHERE message_id=32").fetchone() is None
@@ -683,7 +686,7 @@ def test_backfill_deferred_certification_is_not_an_error(tmp_path):
                     "paginate": {"has_next": start + params["per_page"] < len(items)}}
 
     result = {"errors": [], "backfilled": 0}
-    run_check.stage_backfill(Adapter(), db, result, time.monotonic() + 300, 1)
+    collection_stages.stage_backfill(Adapter(), db, result, time.monotonic() + 300, 1)
     assert result["errors"] == []
     assert not result.get("coverage_gaps")
     assert db.job_pending("history_head", 1)
@@ -707,8 +710,8 @@ def test_download_failure_status_reaches_retry_policy(tmp_path, monkeypatch, sta
     adapter = mcs_adapter.MCSAdapter(worker=lambda payload, timeout, deadline:
         mcs_worker._execute(dict(payload, timeout=timeout)))
     adapter._token = "synthetic"
-    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
-    run_check.stage_attachments(adapter, db, {"errors": []}, time.monotonic() + 100)
+    monkeypatch.setattr(collection_stages, 'ATTACH_DIR', str(tmp_path))
+    collection_stages.stage_attachments(adapter, db, {"errors": []}, time.monotonic() + 100)
     row = db.db.execute("SELECT state,error FROM attachments").fetchone()
     assert tuple(row) == (expected, f"http_{status}")
     assert not (tmp_path / "1.part").exists()
@@ -964,7 +967,9 @@ def test_begin_run_failure_closes_writer_and_reports_safe_error(tmp_path, monkey
     for name, value in {"HOME": tmp_path, "DB": data / "ledger.db",
                         "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
                         "HEALTH_FILE": data / "health.json"}.items():
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, str(value))
 
     def fail_begin(*args, **kwargs):
         raise RuntimeError("SYNTHETIC_PRIVATE_CANARY")
@@ -1062,13 +1067,13 @@ def test_self_probe_fetches_and_notifies_own_post(tmp_path):
             return {"message_id": 101, "is_self_only": True}
 
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            assert since == wm - run_check.BACKFILL_OVERLAP_S
+            assert since == wm - collection_stages.BACKFILL_OVERLAP_S
             self.history_calls += 1
             return mcs_contract.MessageBatch([own], pages=1, reached=True)
 
     adapter = Adapter()
     result = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(adapter, db, result,
+    collection_stages.stage_self_probe(adapter, db, result,
                                time.monotonic() + 300, run_id=1)
 
     assert adapter.history_calls == 1
@@ -1101,9 +1106,9 @@ def test_stage_fetch_probe_notifies_own_post_backfill_would_absorb(
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             return mcs_contract.MessageBatch([own], pages=1, reached=True)
 
-    monkeypatch.setattr(run_check, "stage_unread", lambda *a, **k: None)
+    monkeypatch.setattr(collection_stages, 'stage_unread', lambda *a, **k: None)
     result = {"errors": [], "new_messages": 0, "backfilled": 0}
-    args = SimpleNamespace(jobs_only=False, no_backfill=False)
+    args = SimpleNamespace(mark_read=False, jobs_only=False, no_backfill=False)
     run_check._stage_fetch(Adapter(), db, args, {"self_posts": True},
                            result, time.monotonic() + 300, 1, False, None)
 
@@ -1154,9 +1159,9 @@ def test_self_post_burst_past_probe_pages_notifies_every_new_post(
                     "paginate": {"has_next":
                                  start + params["per_page"] < len(items)}}
 
-    monkeypatch.setattr(run_check, "stage_unread", lambda *a, **k: None)
-    monkeypatch.setattr(run_check, "_outage_since", lambda: None)
-    args = SimpleNamespace(jobs_only=False, no_backfill=False)
+    monkeypatch.setattr(collection_stages, 'stage_unread', lambda *a, **k: None)
+    monkeypatch.setattr(collection_stages, 'outage_since', lambda: None)
+    args = SimpleNamespace(mark_read=False, jobs_only=False, no_backfill=False)
     adapter = Adapter()
     for run_id in (1, 2):
         result = {"errors": [], "new_messages": 0, "backfilled": 0}
@@ -1188,7 +1193,7 @@ def test_self_probe_skips_when_latest_already_stored(tmp_path):
             raise AssertionError("must not fetch")
 
     result = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(Adapter(), db, result,
+    collection_stages.stage_self_probe(Adapter(), db, result,
                                time.monotonic() + 300, run_id=1)
     assert result["self_probe"] == 1
     assert "self_probe_fetched" not in result
@@ -1210,7 +1215,7 @@ def test_self_probe_null_message_means_nothing_new(tmp_path):
             raise AssertionError("must not fetch")
 
     result = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(Adapter(), db, result,
+    collection_stages.stage_self_probe(Adapter(), db, result,
                                time.monotonic() + 300, run_id=1)
     assert result["self_probe"] == 1
     assert result["errors"] == []
@@ -1228,7 +1233,7 @@ def test_self_probe_never_imported_patient_skipped(tmp_path):
             raise AssertionError("must not probe")
 
     result = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(Adapter(), db, result,
+    collection_stages.stage_self_probe(Adapter(), db, result,
                                time.monotonic() + 300, run_id=1)
     assert result["self_probe"] == 0
     db.close()
@@ -1251,7 +1256,7 @@ def test_self_probe_missed_post_uses_probe_source(tmp_path):
                                             reached=True)
 
     result = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(Adapter(), db, result,
+    collection_stages.stage_self_probe(Adapter(), db, result,
                                time.monotonic() + 300, run_id=1)
     payload = json.loads(db.db.execute(
         "SELECT payload FROM notify_outbox").fetchone()["payload"])
@@ -1282,7 +1287,7 @@ def test_self_probe_unfetchable_id_not_retried(tmp_path):
     adapter = Adapter()
     for _ in range(2):
         result = {"errors": [], "new_messages": 0}
-        run_check.stage_self_probe(adapter, db, result,
+        collection_stages.stage_self_probe(adapter, db, result,
                                    time.monotonic() + 300, run_id=1)
         assert result["self_probe"] == 1
     assert adapter.history_calls == 1
@@ -1311,13 +1316,13 @@ def test_self_probe_incomplete_walk_retries_latest_id(tmp_path):
 
     adapter = Adapter()
     first = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(adapter, db, first,
+    collection_stages.stage_self_probe(adapter, db, first,
                                time.monotonic() + 300, run_id=1)
     assert db.probe_marker(97) is None
     assert "probe 97: history_incomplete" in first["errors"]
 
     second = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(adapter, db, second,
+    collection_stages.stage_self_probe(adapter, db, second,
                                time.monotonic() + 300, run_id=2)
     assert adapter.history_calls == 2
     assert db.has_message(555)
@@ -1350,13 +1355,13 @@ def test_self_probe_incomplete_body_does_not_mark_latest(tmp_path):
 
     adapter = Adapter()
     first = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(
+    collection_stages.stage_self_probe(
         adapter, db, first, time.monotonic() + 300, run_id=1)
     assert db.probe_marker(98) is None
     assert "probe 98: history_incomplete" in first["errors"]
 
     second = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(
+    collection_stages.stage_self_probe(
         adapter, db, second, time.monotonic() + 300, run_id=2)
     assert adapter.history_calls == 2
     assert db.has_message(555)
@@ -1400,7 +1405,9 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
         "HEALTH_FILE": data / "health.json", "CONF_PATH": config,
         "MCSAdapter": Adapter, "stage_derive": lambda *a, **k: None,
     }.items():
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value)
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, str(value)
                             if isinstance(value, Path) else value)
     for name in ("drain_commands", "seed_discovery", "run_discovery",
                  "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
@@ -1455,7 +1462,9 @@ def test_consent_hold_tick_freezes_all_but_approve(tmp_path, monkeypatch,
         "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
         "CONF_PATH": config, "CACHE": tmp_path / "absent-token.json",
     }.items():
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, str(value))
     monkeypatch.setattr(run_check, "MCSAdapter",
                         lambda *a, **k: pytest.fail(
                             "adapter must not be built during the hold"))
@@ -1517,7 +1526,7 @@ def test_with_relogin_recovers_and_replays_stage(tmp_path):
 
     adapter = SimpleNamespace(auto_login=lambda **kw: "ok")
     result = {"errors": [], "run_id": 7}
-    assert run_check._with_relogin(
+    assert collection_stages.with_relogin(
         adapter, db, result, "history_jobs", stage) == "done"
     assert len(calls) == 2
     row = db.db.execute(
@@ -1559,10 +1568,10 @@ def test_relogin_replay_drops_the_aborted_attempts_records(tmp_path):
         mark_patient_read=lambda *a, **k: None)
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": [], "run_id": 7}
-    run_check._with_relogin(
-        adapter, db, result, "unread", run_check.stage_unread, adapter, db,
-        SimpleNamespace(mark_read=False), result, time.monotonic() + 30,
-        db.begin_run(None))
+    collection_stages.with_relogin(
+        adapter, db, result, "unread", collection_stages.stage_unread, adapter, db,
+        result, time.monotonic() + 30,
+        db.begin_run(None), mark_read=False)
     assert expired == [1]
     assert result["incomplete"] == [] and result["errors"] == []
     assert result["messages"] == 2                 # not double-counted
@@ -1591,7 +1600,7 @@ def test_relogin_replay_keeps_job_drain_failures(tmp_path):
     adapter = SimpleNamespace(auto_login=lambda **kw: "ok",
                               fetch_thread=fetch_thread)
     result = {"errors": [], "run_id": 7}
-    run_check._with_relogin(
+    collection_stages.with_relogin(
         adapter, db, result, "reply_jobs", job_ops.run_reply_jobs,
         adapter, db, result, time.monotonic() + 60)
     assert expired == [1]
@@ -1605,7 +1614,7 @@ def test_relogin_journals_heal_facts_without_seeding(tmp_path, monkeypatch):
     adapter = SimpleNamespace(auto_login=lambda **kw: "ok", healed_tabs=1,
                               chrome_restarted=True)
     result = {"errors": [], "run_id": 9}
-    assert run_check._attempt_relogin(
+    assert collection_stages.attempt_relogin(
         adapter, db, result, "unread", mcs_contract.SessionExpired(status=403)) == "ok"
     assert result["relogin_attempts"][0]["healed_tabs"] == 1
     assert result["relogin_attempts"][0]["chrome_restarted"] is True
@@ -1629,10 +1638,10 @@ def test_first_collecting_run_after_any_outage_announces_and_seeds(
     _health_unread_at(tmp_path, monkeypatch,
                       None if gap_s is None else now - gap_s)
     seen = {}
-    monkeypatch.setattr(run_check, "stage_unread", lambda *a, **k: None)
-    monkeypatch.setattr(run_check, "stage_backfill",
+    monkeypatch.setattr(collection_stages, 'stage_unread', lambda *a, **k: None)
+    monkeypatch.setattr(collection_stages, 'stage_backfill',
                         lambda *a, **k: seen.update(k))
-    args = SimpleNamespace(jobs_only=False, no_backfill=False)
+    args = SimpleNamespace(mark_read=False, jobs_only=False, no_backfill=False)
     result = {"errors": [], "run_id": 3}
     run_check._stage_fetch(None, db, args, {"self_posts": False}, result,
                            time.monotonic() + 300, 3, False, 86400)
@@ -1670,7 +1679,7 @@ def test_with_relogin_failed_login_escalates_with_state(tmp_path):
         raise mcs_contract.SessionExpired(status=403)
 
     with pytest.raises(mcs_contract.SessionExpired) as exc:
-        run_check._with_relogin(adapter, db, result, "discovery", stage)
+        collection_stages.with_relogin(adapter, db, result, "discovery", stage)
     assert exc.value.detail == "auto_login=keychain_locked"
     assert db.db.execute("SELECT COUNT(*) FROM notify_outbox"
                          ).fetchone()[0] == 0
@@ -1691,7 +1700,7 @@ def test_with_relogin_no_double_attempt_for_stage_owned_login(tmp_path):
         raise mcs_contract.SessionExpired("auto_login=manual_required")
 
     with pytest.raises(mcs_contract.SessionExpired) as exc:
-        run_check._with_relogin(adapter, db, result, "unread", stage)
+        collection_stages.with_relogin(adapter, db, result, "unread", stage)
     assert exc.value.detail == "auto_login=manual_required"
     assert calls == []
     db.close()
@@ -1710,7 +1719,7 @@ def test_with_relogin_reexpiry_after_recovery_aborts(tmp_path):
         raise mcs_contract.SessionExpired(status=403)
 
     with pytest.raises(mcs_contract.SessionExpired) as exc:
-        run_check._with_relogin(adapter, db, result, "unread", stage)
+        collection_stages.with_relogin(adapter, db, result, "unread", stage)
     assert exc.value.detail == "auto_login=ok_then_expired"
     assert len(calls) == 2
     db.close()
@@ -1735,18 +1744,18 @@ def test_with_relogin_budget_caps_attempts_per_run(tmp_path):
             return "done"
         return stage
 
-    for _ in range(run_check.RELOGIN_MAX_PER_RUN):
-        assert run_check._with_relogin(
+    for _ in range(collection_stages.RELOGIN_MAX_PER_RUN):
+        assert collection_stages.with_relogin(
             adapter, db, result, "unread", once_fail()) == "done"
-    assert len(logins) == run_check.RELOGIN_MAX_PER_RUN
+    assert len(logins) == collection_stages.RELOGIN_MAX_PER_RUN
 
     def expired():
         raise mcs_contract.SessionExpired(status=403)
 
     with pytest.raises(mcs_contract.SessionExpired) as exc:
-        run_check._with_relogin(adapter, db, result, "unread", expired)
+        collection_stages.with_relogin(adapter, db, result, "unread", expired)
     assert exc.value.detail == ""      # raw — no further attempt made
-    assert len(logins) == run_check.RELOGIN_MAX_PER_RUN
+    assert len(logins) == collection_stages.RELOGIN_MAX_PER_RUN
     db.close()
 
 
@@ -1755,15 +1764,15 @@ def test_session_recovered_alert_not_throttled(tmp_path):
     possibly-visible session_expired alert, so suppressing it would
     leave a stale manual-login demand standing in the channel."""
     db = _ledger(tmp_path)
-    run_check._alert_session_recovered(db, 1, "d")
-    run_check._alert_session_recovered(db, 2, "d")
+    collection_stages._alert_session_recovered(db, 1, "d")
+    collection_stages._alert_session_recovered(db, 2, "d")
     rows = db.db.execute(
         "SELECT kind FROM notify_outbox WHERE kind='session_recovered'"
         ).fetchall()
     assert len(rows) == 2
     # session_expired itself stays throttled
-    assert run_check._alert_session_expired(db, 3, "d") is True
-    assert run_check._alert_session_expired(db, 4, "d") is False
+    assert collection_stages.queue_session_expired(db, 3, "d") is True
+    assert collection_stages.queue_session_expired(db, 4, "d") is False
     db.close()
 
 
@@ -1776,7 +1785,7 @@ def test_attempt_relogin_journals_exception_type_without_private_detail(tmp_path
 
     adapter = SimpleNamespace(auto_login=boom)
     result = {"errors": [], "run_id": 1}
-    state = run_check._attempt_relogin(
+    state = collection_stages.attempt_relogin(
         adapter, db, result, "unread",
         mcs_contract.SessionExpired(status=403))
     assert state == "failed"
@@ -1834,7 +1843,9 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
         "MCSAdapter": lambda *a, **k: adapter,
         "stage_derive": lambda *a, **k: None,
     }.items():
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value)
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, str(value)
                             if isinstance(value, Path) else value)
     for name in ("drain_commands", "seed_discovery", "run_discovery",
                  "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
@@ -1879,12 +1890,12 @@ def test_attempt_relogin_owns_run_budget(tmp_path):
     result = {"errors": [], "run_id": 1,
               "relogin_attempts": [
                   {"stage": "earlier", "error": "e", "state": "ok"}
-                  for _ in range(run_check.RELOGIN_MAX_PER_RUN)]}
-    assert run_check._attempt_relogin(
+                  for _ in range(collection_stages.RELOGIN_MAX_PER_RUN)]}
+    assert collection_stages.attempt_relogin(
         adapter, db, result, "run",
         mcs_contract.SessionExpired(status=403)) == "budget_exhausted"
     assert logins == []
-    assert len(result["relogin_attempts"]) == run_check.RELOGIN_MAX_PER_RUN
+    assert len(result["relogin_attempts"]) == collection_stages.RELOGIN_MAX_PER_RUN
     assert db.db.execute("SELECT COUNT(*) FROM notify_outbox"
                          ).fetchone()[0] == 0
     db.close()
@@ -1953,7 +1964,9 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
         "MCSAdapter": lambda *a, **k: adapter,
         "stage_derive": lambda *a, **k: None,
     }.items():
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value)
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, str(value)
                             if isinstance(value, Path) else value)
     for name in ("drain_commands", "seed_discovery", "run_discovery",
                  "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
@@ -1971,15 +1984,15 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
     monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
     # three wrapped stages each recover once, spending the whole budget;
     # the fourth expiry escalates raw (wrapper declined) to the boundary
-    monkeypatch.setattr(run_check, "stage_unread", _expire_once())
-    monkeypatch.setattr(run_check, "stage_backfill", _expire_once())
+    monkeypatch.setattr(collection_stages, 'stage_unread', _expire_once())
+    monkeypatch.setattr(collection_stages, 'stage_backfill', _expire_once())
     monkeypatch.setattr(job_ops, "run_discovery", _expire_once())
     monkeypatch.setattr(job_ops, "run_reply_jobs", _always_expired)
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
 
     assert run_check.main() == 2
     out = json.loads(capsys.readouterr().out)
-    assert adapter.logins == run_check.RELOGIN_MAX_PER_RUN
+    assert adapter.logins == collection_stages.RELOGIN_MAX_PER_RUN
     assert [a["stage"] for a in out["relogin_attempts"]] == [
         "unread", "backfill", "discovery"]
     assert "auto_login=budget_exhausted" in out["errors"][-1]
@@ -1991,7 +2004,7 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
         "SELECT kind FROM notify_outbox ORDER BY rowid")]
     # session_recovered is intentionally unthrottled: one per REAL
     # recovery, none for the declined boundary attempt
-    assert kinds == ["session_recovered"] * run_check.RELOGIN_MAX_PER_RUN \
+    assert kinds == ["session_recovered"] * collection_stages.RELOGIN_MAX_PER_RUN \
         + ["session_expired"]
     row = db.db.execute(
         "SELECT status, error FROM runs ORDER BY run_id DESC LIMIT 1"
@@ -2007,7 +2020,9 @@ def _point_run_check_at(tmp_path, monkeypatch):
                         "ATTACH_DIR": data / "attachments",
                         "LOCKFILE": data / "run.lock",
                         "HEALTH_FILE": data / "health.json"}.items():
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, str(value))
     data.mkdir(exist_ok=True)
     return data
 
@@ -2031,9 +2046,11 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
 
     monkeypatch.setattr(run_check, "_stage_fetch", slow_fetch)
     later = Mock()
-    for name in ("_run_jobs", "stage_derive", "_deliver", "_with_relogin",
+    for name in ("_run_jobs", "stage_derive", "_deliver", "with_relogin",
                  "_run_semantic", "_run_metadata_shadow", "_housekeeping"):
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, later)
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, later)
     # the real _finish_run decides the stored status; only its I/O tail is stubbed
     import maintenance
     import notify_cards
@@ -2234,7 +2251,7 @@ def _lagging_patient(tmp_path):
 def test_coverage_lag_is_information_not_an_error(tmp_path, monkeypatch):
     db = _lagging_patient(tmp_path)
     result = {"errors": [], "backfilled": 0, "incomplete": [], "notify": {}}
-    run_check.stage_backfill(_pinned_history_adapter(), db, result,
+    collection_stages.stage_backfill(_pinned_history_adapter(), db, result,
                              time.monotonic() + 300, 1)
     assert result["coverage_gaps"] and result["coverage_gaps"][0]["lag_s"] > 0
     assert result["errors"] == []
@@ -2253,7 +2270,7 @@ def test_stalled_history_head_escalates_collection(tmp_path, monkeypatch,
                                                    reason):
     db = _lagging_patient(tmp_path)
     adapter = _pinned_history_adapter()
-    run_check.stage_backfill(adapter, db, {"errors": [], "backfilled": 0},
+    collection_stages.stage_backfill(adapter, db, {"errors": [], "backfilled": 0},
                              time.monotonic() + 300, 1)
     if reason == "failed":
         db.db.execute("UPDATE fetch_jobs SET state='failed' "
@@ -2261,10 +2278,10 @@ def test_stalled_history_head_escalates_collection(tmp_path, monkeypatch,
     else:
         db.db.execute("UPDATE fetch_jobs SET updated_at=? "
                       "WHERE kind='history_head'",
-                      (time.time() - run_check.COVERAGE_STALL_S - 60,))
+                      (time.time() - collection_stages.COVERAGE_STALL_S - 60,))
     db.db.commit()
     result = {"errors": [], "backfilled": 0, "incomplete": [], "notify": {}}
-    run_check.stage_backfill(adapter, db, result, time.monotonic() + 300, 1)
+    collection_stages.stage_backfill(adapter, db, result, time.monotonic() + 300, 1)
     assert result["coverage_stalled"][0]["pid"] == 1
     assert result["coverage_stalled"][0]["reason"] == reason
     assert result["errors"] == [f"backfill 1: coverage_stalled_{reason}"]
@@ -2327,10 +2344,10 @@ def test_attachments_defer_under_disk_pressure(tmp_path, monkeypatch):
     db = _pending_attachments(tmp_path)
     monkeypatch.setenv("MCS_DISK_GUARD_MB", "512")
     monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 1024.0)
-    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
+    monkeypatch.setattr(collection_stages, 'ATTACH_DIR', str(tmp_path))
     adapter = SimpleNamespace(download=lambda *a: pytest.fail("downloaded"))
     result = {"errors": []}
-    run_check.stage_attachments(adapter, db, result, time.monotonic() + 100)
+    collection_stages.stage_attachments(adapter, db, result, time.monotonic() + 100)
     assert result == {"errors": [], "attachments_deferred": 2}
     rows = db.db.execute("SELECT state,attempts FROM attachments").fetchall()
     assert [tuple(r) for r in rows] == [("pending", 0), ("pending", 0)]
@@ -2353,9 +2370,9 @@ def test_enospc_download_keeps_attachment_pending(tmp_path, monkeypatch):
     adapter = mcs_adapter.MCSAdapter(worker=lambda payload, timeout, deadline:
         mcs_worker._execute(dict(payload, timeout=timeout)))
     adapter._token = "synthetic"
-    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
+    monkeypatch.setattr(collection_stages, 'ATTACH_DIR', str(tmp_path))
     result = {"errors": []}
-    run_check.stage_attachments(adapter, db, result, time.monotonic() + 100)
+    collection_stages.stage_attachments(adapter, db, result, time.monotonic() + 100)
     assert result == {"errors": [], "attachments_deferred": 2}
     rows = db.db.execute("SELECT state,attempts FROM attachments").fetchall()
     assert [tuple(r) for r in rows] == [("pending", 0), ("pending", 0)]
@@ -2562,8 +2579,7 @@ def test_semantic_run_records_outcome_or_error(tmp_path, monkeypatch, outcome):
 def _capped_run(db, adapter):
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": []}
-    run_check.stage_unread(adapter, db, SimpleNamespace(mark_read=True),
-                           result, time.monotonic() + 30, db.begin_run(None))
+    collection_stages.stage_unread(adapter, db, result, time.monotonic() + 30, db.begin_run(None), mark_read=True)
     return result
 
 
@@ -2768,8 +2784,8 @@ def test_fallback_ack_seeds_head_walk_on_post_ack_gap(tmp_path, probe):
     assert "mark 1: post_ack_gap" in result["errors"]
     job = db.job_pending("history_head", 1)
     assert json.loads(job["payload"]) == {
-        "since": db.coverage_ts(1) - run_check.BACKFILL_OVERLAP_S, "page": 1,
-        "pages": run_check.BACKFILL_MAX_PAGES, "trickle": False,
+        "since": db.coverage_ts(1) - collection_stages.BACKFILL_OVERLAP_S, "page": 1,
+        "pages": collection_stages.BACKFILL_MAX_PAGES, "trickle": False,
         "notify": True}
     db.close()
 
@@ -2852,7 +2868,7 @@ def _run_stage(adapter, db, targets=(), jobs_only=False, deadline=None):
     for pid in targets:                     # what the save paths do
         db.karte_summary_mark_due(pid)
     result = {"errors": [], "incomplete": []}
-    run_check.stage_karte_summary(
+    collection_stages.stage_karte_summary(
         adapter, db, result, deadline or time.monotonic() + 300,
         jobs_only=jobs_only)
     return result
@@ -2899,7 +2915,7 @@ def test_karte_summary_cap_twelve_and_carry_over(tmp_path, artifact):
     adapter = _MemoAdapter()
     result = _run_stage(adapter, db, targets=range(1, 14))
 
-    assert len(adapter.calls) == run_check.KARTE_SUMMARY_TICK_CAP == 12
+    assert len(adapter.calls) == collection_stages.KARTE_SUMMARY_TICK_CAP == 12
     assert adapter.calls[0] == 130                               # newest first
     assert result["karte_summary"]["deferred"] == 1
     assert result["karte_summary"]["fetched"] == 12
@@ -2914,7 +2930,7 @@ def test_karte_summary_cap_twelve_and_carry_over(tmp_path, artifact):
     db.close()
 
 
-@pytest.mark.parametrize("left", [-1, run_check.KARTE_SUMMARY_MARGIN_S / 2])
+@pytest.mark.parametrize("left", [-1, collection_stages.KARTE_SUMMARY_MARGIN_S / 2])
 def test_karte_summary_deadline_margin_stops_the_loop(tmp_path, left):
     # the stage keeps KARTE_SUMMARY_MARGIN_S of the run for the tail
     # (semantic lane, finish) like its sibling stages, so a tick that
@@ -3062,7 +3078,7 @@ def test_new_message_paths_mark_karte_summary_due(tmp_path):
             return mcs_contract.MessageBatch([own], pages=1, reached=True)
 
     result = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(Adapter(), db, result,
+    collection_stages.stage_self_probe(Adapter(), db, result,
                                time.monotonic() + 300, run_id=1)
     assert sorted(db.karte_summary_due()) == [1, 2]
     db.close()
@@ -3189,8 +3205,10 @@ def test_run_lock_lost_ends_tick_without_later_stages(
     monkeypatch.setattr(run_check, "MCSAdapter",
                         lambda **kwargs: SimpleNamespace(set_deadline=lambda deadline: None))
     for name in ("_stage_fetch", "_run_jobs", "stage_derive", "_deliver",
-                 "_with_relogin"):
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, lambda *a, **k: None)
+                 "with_relogin"):
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, lambda *a, **k: None)
 
     def lost(*a, **k):
         raise RunLockLost(held=held)
@@ -3198,7 +3216,9 @@ def test_run_lock_lost_ends_tick_without_later_stages(
     monkeypatch.setattr(run_check, "_run_semantic", lost)
     later = Mock()
     for name in ("_run_metadata_shadow", "_housekeeping", "_finish_run"):
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, later)
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, later)
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
     assert run_check._main() == 1
     later.assert_not_called()

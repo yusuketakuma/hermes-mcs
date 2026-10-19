@@ -131,3 +131,15 @@ class ReplyBatch:
 
 def valid_id(v) -> bool:
     return type(v) is int and 0 < v < 2**63
+
+
+def describe_error(e: Exception) -> str:
+    """Describe structured acquisition failures without response bodies.
+
+    MCSError.detail is internal structured text (e.g.
+    'auto_login=keychain_locked') and is safe for logs/alerts."""
+    if isinstance(e, MCSError):
+        base = f"{e.kind}(status={e.status})" if e.status else e.kind
+        detail = getattr(e, "detail", "")
+        return f"{base}: {detail}" if detail else base
+    return type(e).__name__

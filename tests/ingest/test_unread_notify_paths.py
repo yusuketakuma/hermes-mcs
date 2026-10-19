@@ -2,13 +2,13 @@
 reply merges keep the unread flag, post-ack-gap walks notify read
 arrivals, and replies acknowledged by thread-read before storage keep
 unread evidence on their reply job. Synthetic stubs only — no real MCS."""
+import collection_stages
 import mcs_contract
 import json
 import time
 from types import SimpleNamespace
 
 import job_ops
-import run_check
 import pytest
 from ingest_testkit import _ledger, _message
 
@@ -54,7 +54,7 @@ def test_post_ack_gap_walk_notifies_already_read_rows(db):
     db.job_add("history_head", 1, payload={"since": 0, "page": 1,
                                            "pages": 2, "trickle": False})
     result = {"errors": []}
-    run_check._post_ack_gap(
+    collection_stages._post_ack_gap(
         SimpleNamespace(fetch_latest=lambda pid: {"message_id": 200}),
         db, 1, result)
     assert result["errors"] == ["mark 1: post_ack_gap"]
@@ -109,7 +109,7 @@ def test_reply_acknowledged_by_thread_read_is_notified_when_stored(db):
         thread_unread=lambda pid, parent: answers.pop(0),
         fetch_thread=lambda pid, parent: [SimpleNamespace(message_id=11)],
         read_thread=lambda pid, parent: {11, 13, 14})
-    run_check.stage_thread_read(adapter, db, {"errors": []},
+    collection_stages.stage_thread_read(adapter, db, {"errors": []},
                                 time.monotonic() + 120)
     for rid in (13, 14):
         assert json.loads(db.job_pending("reply", 1, rid)["payload"]) \

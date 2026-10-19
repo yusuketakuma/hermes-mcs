@@ -1,4 +1,5 @@
 """AT054: the real tick preserves ordinary work when semantic budget waits."""
+import collection_stages
 import semantic_jev
 import json
 import sys
@@ -74,7 +75,9 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
         "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
         "CONF_PATH": config, "CACHE": tmp_path / "absent-token.json",
     }.items():
-        monkeypatch.setattr(run_check, name, str(value))
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (run_check),
+            name, str(value))
     for name, value in {
         "BACKUP_DIR": data / "backups", "SNAPSHOT_DIR": data / "snapshots",
         "LOGFILE": data / "run.log",

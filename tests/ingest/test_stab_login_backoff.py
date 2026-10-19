@@ -1,5 +1,6 @@
 """H5: a submitted login that never validates is not re-sent with the
 same credential every tick. Stubs only — no Chrome, Keychain or MCS."""
+import collection_stages
 import mcs_contract
 import json
 import os
@@ -94,7 +95,6 @@ def test_success_clears_the_record_and_recovery_is_never_gated(adapter, tmp_path
 def test_backoff_detail_still_raises_the_manual_login_alert(tmp_path, monkeypatch):
     """run_check alerts on every non-ok auto_login state; the backoff
     state must take the same session_expired path."""
-    import run_check
     from ingest_testkit import _ledger
     db = _ledger(tmp_path)
 
@@ -107,10 +107,10 @@ def test_backoff_detail_still_raises_the_manual_login_alert(tmp_path, monkeypatc
     result = {"errors": []}
     err = mcs_contract.SessionExpired("synthetic")
     with pytest.raises(mcs_contract.SessionExpired) as raised:
-        run_check._with_relogin(Stub(), db, result, "unread",
+        collection_stages.with_relogin(Stub(), db, result, "unread",
                                 lambda: (_ for _ in ()).throw(err))
     assert "auto_login=manual_required:backoff" in raised.value.detail
-    assert run_check._alert_session_expired(db, 1, raised.value.detail) is True
+    assert collection_stages.queue_session_expired(db, 1, raised.value.detail) is True
     db.close()
 
 

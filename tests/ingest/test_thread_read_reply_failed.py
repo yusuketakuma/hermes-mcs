@@ -1,11 +1,11 @@
 """A thread whose missing reply job burnt out (state=failed) is reported
 once per thread and never treated as settled: no read acknowledgement,
 no confirm, the job is not revived. Synthetic stubs only — no real MCS."""
+import collection_stages
 import time
 from types import SimpleNamespace
 from contextlib import closing
 
-import run_check
 from ingest_testkit import _ledger
 from test_thread_read import _store
 
@@ -26,7 +26,7 @@ def _fail(db, rid, parent=10):
 
 def _tick(db, adapter):
     result = {"errors": []}
-    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, result, time.monotonic() + 120)
     return result
 
 

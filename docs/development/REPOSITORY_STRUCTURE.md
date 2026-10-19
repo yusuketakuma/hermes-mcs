@@ -12,7 +12,7 @@
 | `mcs/core/mcs_queries.py` | 連携サマリー・artifact履歴・原文参照の共通読取 | 呼出元の同一connectionとtransactionを借用し、open/close/commitしない。表示用の架空Ledgerを作らない |
 | `mcs/core/snapshots.py` | snapshotのコピー・候補検証・atomic publish | 一時接続・一時ファイル・検証用子プロセスを生成し、成功/失敗時の終了と破棄を所有 |
 | `mcs/core/snapshot_access.py` | 借用snapshotの世代・時刻とtable存在確認 | 呼出元の同一connectionを借用し、open/close/commitしない |
-| `mcs/ingest/` | `mcs_adapter`の認証/取得、`mcs_worker`の子process統括、`mcs_cdp`のWebSocket、`mcs_download`の添付stream、`mcs_payload`の応答正規化 | session/retry/全体deadline/最終ファイル置換はadapter。wireとpartialは子process側、取得stage順は`run_check` |
+| `mcs/ingest/` | `mcs_adapter`の認証/取得、`mcs_worker`の子process統括、`mcs_cdp`のWebSocket、`mcs_download`の添付stream、`mcs_payload`の応答正規化 | session/retry/全体deadline/最終ファイル置換はadapter。wireとpartialは子process側。`collection_stages`が取得・再ログイン・walk cursorのstageを実行し、`run_check`が順序・全体締切・run lockを所有 |
 | `mcs/ingest/health_report.py` | healthの観測・集計・coverage | 借用connectionと過去health記録を読み、書込み失敗のincidentは`run_check`が記録 |
 | `mcs/llm/` | 推論通信、turn lock、admissionと接続状態 | モデル呼出しの寿命と通信状態。抽出結果のDB保存は担当workerが所有 |
 | `mcs/extract/rules/` | 投稿のルール抽出と実行統括 | 純粋な投稿判定と、run lockを伴う保存入口を区別 |
@@ -35,6 +35,7 @@
 ## 主要な依存方向
 
 - 共通commandと認可は`adapters/common/`が正本であり、Hermesとstandaloneがそれを利用します。共通処理はhost pluginからprivate helperを借りません。
+- 取得stageは`collection_stages`が認証回復の共通予算と部分保存・snapshot既読化の順序を保って実行します。統括はmodule全体やCLI引数を注入せず、必要な値と借用adapter/writerを渡します。stage側は接続を開閉せず、既存のwriterのtransaction境界を使います。
 - MCSのwireはworkerから`mcs_cdp`/`mcs_download`を直接呼び、親adapterのprivate実装へ戻りません。添付のURL検証は`mcs_download`が共通化し、親だけがtoken取得と最終ファイル置換を行います。
 - MCSの値・例外は`mcs_contract`、登録データの検証は`project_metadata_contract`が正本です。読取側が通信クライアントや取得CLIの実装をimportする必要を減らします。
 - ルールとLLMは共通の臨床scope/値を利用します。臨床scopeが抽出統括へ戻る循環は作りません。

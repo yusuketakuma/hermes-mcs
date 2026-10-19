@@ -1,10 +1,10 @@
 """Synthetic regressions: a recovered stage replay records each walk entry once."""
+import collection_stages
 import health_report
 import mcs_contract
 import time
 
 import mcs_adapter
-import run_check
 from ingest_testkit import _iso, _ledger, _message, _msg_at, _unread_patient
 
 
@@ -39,8 +39,8 @@ def test_backfill_replay_records_each_coverage_gap_once(tmp_path):
 
     adapter = Adapter()
     result = {"errors": [], "backfilled": 0, "incomplete": [], "run_id": 1}
-    run_check._with_relogin(adapter, db, result, "backfill",
-                            run_check.stage_backfill, adapter, db, result,
+    collection_stages.with_relogin(adapter, db, result, "backfill",
+                            collection_stages.stage_backfill, adapter, db, result,
                             time.monotonic() + 300, 1)
     assert expired == [1]
     assert [g["pid"] for g in result["coverage_gaps"]] == [1]
@@ -71,8 +71,8 @@ def test_self_probe_replay_lists_each_fetched_patient_once(tmp_path):
 
     adapter = Adapter()
     result = {"errors": [], "new_messages": 0, "run_id": 1}
-    run_check._with_relogin(adapter, db, result, "self_probe",
-                            run_check.stage_self_probe, adapter, db, result,
+    collection_stages.with_relogin(adapter, db, result, "self_probe",
+                            collection_stages.stage_self_probe, adapter, db, result,
                             time.monotonic() + 300, 1)
     assert expired == [1]
     assert result["self_probe_fetched"] == [90, 91]
@@ -120,10 +120,10 @@ def test_unread_replay_keeps_records_of_patients_acked_before_expiry(tmp_path):
         mark_patient_read=lambda pid, *a, **k: marked.add(pid))
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": [], "run_id": 7}
-    run_check._with_relogin(
-        adapter, db, result, "unread", run_check.stage_unread, adapter, db,
-        SimpleNamespace(mark_read=True), result, time.monotonic() + 30,
-        db.begin_run(None))
+    collection_stages.with_relogin(
+        adapter, db, result, "unread", collection_stages.stage_unread, adapter, db,
+        result, time.monotonic() + 30,
+        db.begin_run(None), mark_read=True)
     assert expired == [1]
     assert result["errors"] == ["mark 1: post_ack_gap"]
     assert result["marked_read"] == [3, 1, 2]
@@ -161,10 +161,10 @@ def test_unread_replay_keeps_a_mark_failure_of_a_patient_no_longer_unread(tmp_pa
         fetch_latest=lambda pid: {"message_id": pid, "is_self_only": False})
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": [], "run_id": 7}
-    run_check._with_relogin(
-        adapter, db, result, "unread", run_check.stage_unread, adapter, db,
-        SimpleNamespace(mark_read=True), result, time.monotonic() + 30,
-        db.begin_run(None))
+    collection_stages.with_relogin(
+        adapter, db, result, "unread", collection_stages.stage_unread, adapter, db,
+        result, time.monotonic() + 30,
+        db.begin_run(None), mark_read=True)
     assert expired == [1]
     assert result["errors"] == ["mark 1: network_error"]
     assert result["messages"] == 2 and result["marked_read"] == [2]
@@ -197,11 +197,78 @@ def test_backfill_replay_keeps_a_stalled_head_walk(tmp_path):
 
     adapter = Adapter()
     result = {"errors": [], "backfilled": 0, "incomplete": [], "run_id": 1}
-    run_check._with_relogin(adapter, db, result, "backfill",
-                            run_check.stage_backfill, adapter, db, result,
+    collection_stages.with_relogin(adapter, db, result, "backfill",
+                            collection_stages.stage_backfill, adapter, db, result,
                             time.monotonic() + 300, 1)
     assert expired == [1]
     assert result["errors"] == ["backfill 1: coverage_stalled_failed"]
     assert [g["pid"] for g in result["coverage_stalled"]] == [1]
     assert health_report.collection(result)["collection"] != "ok"
     db.close()
+
+
+
+def test_nested_unread_recovery_shares_budget_and_keeps_committed_work(tmp_path):
+    """List recovery and later patient expiry share a budget and durable saves."""
+    import sqlite3
+    from contextlib import closing
+
+    db = _ledger(tmp_path)
+    run_id = db.begin_run(None)
+    calls = {"lists": 0, "reply_expired": False}
+    logins, marked = [], []
+
+    class Adapter:
+        def list_unread(self):
+            calls["lists"] += 1
+            if calls["lists"] == 1:
+                raise mcs_contract.SessionExpired(status=403)
+            return mcs_contract.UnreadSnapshot(
+                timestamp=123, patients=[_unread_patient(1), _unread_patient(2)])
+
+        def fetch_unread_messages(self, pid, snapshot_ts):
+            assert snapshot_ts == 123
+            return mcs_contract.MessageBatch(
+                [_message(mid=pid, project_id=pid, unread=True)], reached=True)
+
+        def fetch_unread_replies(self, message):
+            if message.project_id == 2 and not calls["reply_expired"]:
+                calls["reply_expired"] = True
+                raise mcs_contract.SessionExpired(status=403)
+            return mcs_contract.ReplyBatch([], [])
+
+        def auto_login(self, **kwargs):
+            # A separate connection observes committed work, not this writer's
+            # uncommitted rows. The second recovery follows the partial save.
+            with closing(sqlite3.connect(tmp_path / "ledger.db")) as observer:
+                logins.append((
+                    observer.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+                    observer.execute("SELECT COUNT(*) FROM notify_outbox"
+                                     " WHERE kind='new_messages'").fetchone()[0],
+                    observer.execute("SELECT snapshot_ts FROM runs WHERE run_id=?",
+                                     (run_id,)).fetchone()[0]))
+            return "ok"
+
+        def mark_patient_read(self, pid, snapshot_ts, **kwargs):
+            marked.append((pid, snapshot_ts))
+
+        def fetch_latest(self, pid):
+            return {"message_id": pid}
+
+    adapter = Adapter()
+    result = {"errors": [], "incomplete": [], "messages": 0,
+              "new_messages": 0, "marked_read": [], "run_id": run_id}
+    try:
+        collection_stages.with_relogin(
+            adapter, db, result, "unread", collection_stages.stage_unread,
+            adapter, db, result, time.monotonic() + 30, run_id, mark_read=True)
+        assert calls == {"lists": 3, "reply_expired": True}
+        assert logins[0][:2] == (0, 0)
+        assert logins[1] == (2, 2, 123)
+        assert marked == [(1, 123), (2, 123)]
+        assert result["errors"] == result["incomplete"] == []
+        assert result["messages"] == result["new_messages"] == 2
+        assert [a["state"] for a in result["relogin_attempts"]] == ["ok", "ok"]
+        assert "_unread_counted" not in result
+    finally:
+        db.close()

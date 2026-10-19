@@ -1,6 +1,7 @@
 """A failed tick still keeps the local daily backup, and an unread walk
 cut by the deadline records the patients it never fetched. Synthetic
 ledger and adapter stubs only; no MCS request, Keychain or send."""
+import collection_stages
 import health_report
 import mcs_contract
 import os
@@ -42,7 +43,9 @@ def _tick_world(tmp_path, monkeypatch, failure, *, overdue):
         "CONF_PATH": config, "CACHE": tmp_path / "absent-token.json",
         "HEALTH_FILE": data / "health.json",
     }.items():
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, str(value))
     for name, value in {
         "BACKUP_DIR": data / "backups", "SNAPSHOT_DIR": data / "snapshots",
         "LOGFILE": data / "run.log",
@@ -60,7 +63,7 @@ def _tick_world(tmp_path, monkeypatch, failure, *, overdue):
     monkeypatch.setattr(job_ops, "drain_commands", lambda db, result:
                         drain(db, result, str(data / "cmd")))
     monkeypatch.setattr(run_check, "MCSAdapter", Adapter)
-    monkeypatch.setattr(run_check, "_attempt_relogin",
+    monkeypatch.setattr(collection_stages, 'attempt_relogin',
                         lambda *a, **k: "keychain_locked")
     monkeypatch.setattr(notify_flush, "flush", lambda *a, **k:
                         pytest.fail("notification forbidden"))
@@ -130,8 +133,8 @@ def test_patients_never_fetched_before_the_deadline_are_incomplete(tmp_path, mon
         mark_patient_read=lambda *a, **k: pytest.fail("no ack"))
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": []}
-    run_check.stage_unread(adapter, db, SimpleNamespace(mark_read=False), result,
-                           5.0, db.begin_run(None))
+    collection_stages.stage_unread(adapter, db, result,
+                           5.0, db.begin_run(None), mark_read=False)
     assert fetched == [1]
     assert result["incomplete"] == [2, 3]
     assert "deadline_exceeded" in result["errors"]
@@ -152,8 +155,8 @@ def test_an_unread_walk_within_the_deadline_stays_complete(tmp_path):
         mark_patient_read=lambda *a, **k: None)
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": []}
-    run_check.stage_unread(adapter, db, SimpleNamespace(mark_read=False), result,
-                           time.monotonic() + 30, db.begin_run(None))
+    collection_stages.stage_unread(adapter, db, result,
+                           time.monotonic() + 30, db.begin_run(None), mark_read=False)
     assert result["incomplete"] == [] and result["errors"] == []
     assert health_report.collection(result)["collection"] == "ok"
     db.close()
@@ -226,12 +229,12 @@ def test_expired_session_401_keeps_attachment_pending(tmp_path, monkeypatch):
     m = _message()
     m.attachments = [_att("file0")]
     db.save_messages([m])
-    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
+    monkeypatch.setattr(collection_stages, 'ATTACH_DIR', str(tmp_path))
     monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)  # independent of the host's free disk
     adapter = SimpleNamespace(download=_raise_401,
                               _probe_session_ok=lambda: False)
     with pytest.raises(mcs_contract.SessionExpired):
-        run_check.stage_attachments(adapter, db, {"errors": []},
+        collection_stages.stage_attachments(adapter, db, {"errors": []},
                                     time.monotonic() + 100)
     assert _states(db) == [("pending", 0)]
     db.close()
@@ -242,12 +245,12 @@ def test_401_with_live_session_is_recorded(tmp_path, monkeypatch):
     m = _message()
     m.attachments = [_att("file0")]
     db.save_messages([m])
-    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
+    monkeypatch.setattr(collection_stages, 'ATTACH_DIR', str(tmp_path))
     monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)  # independent of the host's free disk
     adapter = SimpleNamespace(download=_raise_401,
                               _probe_session_ok=lambda: True)
     result = {"errors": []}
-    run_check.stage_attachments(adapter, db, result, time.monotonic() + 100)
+    collection_stages.stage_attachments(adapter, db, result, time.monotonic() + 100)
     assert _states(db) == [("failed", 1)]
     db.close()
 
@@ -269,7 +272,7 @@ def test_self_probe_stores_same_second_latest_post(tmp_path):
             return mcs_contract.MessageBatch(keep, pages=1, reached=True)
 
     result = {"errors": [], "new_messages": 0}
-    run_check.stage_self_probe(Adapter(), db, result,
+    collection_stages.stage_self_probe(Adapter(), db, result,
                                time.monotonic() + 300, run_id=1)
     assert db.has_message(101)
     assert result["new_messages"] == 1

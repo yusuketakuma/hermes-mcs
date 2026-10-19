@@ -1,4 +1,5 @@
 """Synthetic new-terminal consent; no services, credentials or real records."""
+import collection_stages
 from contextlib import closing
 import json
 import shutil
@@ -369,7 +370,9 @@ def test_runner_begin_run_requires_actual_backup_consent(restored, monkeypatch,
         "LOCKFILE": restored / "run.lock", "ATTACH_DIR": restored / "attachments",
         "CACHE": restored / "absent-token", "CONF_PATH": restored / "absent-config",
     }.items():
-        monkeypatch.setattr(run_check, name, str(path))
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (run_check),
+            name, str(path))
     monkeypatch.setattr(job_ops, "drain_commands", lambda *a: None)
 
     class Adapter:

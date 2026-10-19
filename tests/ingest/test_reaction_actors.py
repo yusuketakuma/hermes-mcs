@@ -1,4 +1,5 @@
 """Synthetic 22-E publish and 22-F reaction-actor contracts (no real MCS)."""
+import collection_stages
 import health_report
 
 import copy
@@ -17,7 +18,7 @@ from mcs_contract import MCSError, SessionExpired
 from mcs_payload import normalize_message as _norm_message
 from mcs_signals import record_station_staff
 from message_metadata import get_message_metadata
-from run_check import stage_metadata_shadow
+from collection_stages import stage_metadata_shadow
 
 SELF_ID = 11
 TS = 987654321
@@ -388,7 +389,7 @@ def test_publish_writes_capture_failure_does_not(db):
 def test_config_gates(monkeypatch, cfg, publish, actors):
     monkeypatch.setattr(run_check, "_code_changed", lambda result: False)
     seen = {}
-    monkeypatch.setattr(run_check, "stage_metadata_shadow",
+    monkeypatch.setattr(collection_stages, 'stage_metadata_shadow',
                         lambda *a, **kw: seen.update(kw))
     run_check._run_metadata_shadow(None, SimpleNamespace(),
                                    {"errors": []}, 100, cfg)

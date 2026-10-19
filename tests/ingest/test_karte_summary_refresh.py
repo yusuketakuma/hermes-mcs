@@ -1,4 +1,5 @@
 """Daily source-summary refresh uses only synthetic ledgers and GET stubs."""
+import collection_stages
 import pytest
 
 import ledger
@@ -48,7 +49,7 @@ def test_due_fresh_chats_keep_priority_and_total_cap(world):
     clock[0] += ledger.KARTE_SUMMARY_REFRESH_S
     adapter = _MemoAdapter()
     result = _run_stage(adapter, db, targets=[14, 15, 16], jobs_only=True)["karte_summary"]
-    assert result["fetched"] == run_check.KARTE_SUMMARY_TICK_CAP == 12
+    assert result["fetched"] == collection_stages.KARTE_SUMMARY_TICK_CAP == 12
     assert adapter.calls[:3] == [160, 150, 140]
     assert result["deferred"] == 1 and db.karte_summary_due() == [10]
 

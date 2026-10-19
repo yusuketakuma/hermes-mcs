@@ -1,4 +1,5 @@
 """Synthetic metadata capture and shadow isolation contracts."""
+import collection_stages
 import health_report
 
 import json
@@ -15,7 +16,7 @@ from mcs_contract import MCSError, SchemaError
 from mcs_payload import normalize_message as _norm_message
 from mcs_signals import record_station_staff
 from message_metadata import get_message_metadata
-from run_check import stage_metadata_shadow
+from collection_stages import stage_metadata_shadow
 import run_check
 
 
@@ -587,7 +588,7 @@ def test_shadow_restores_deadline_after_unexpected_failure(tmp_path):
 ])
 def test_shadow_config_and_manual_selection(monkeypatch, cfg, manual, expected):
     monkeypatch.setattr(run_check, "_code_changed", lambda result: False)
-    monkeypatch.setattr(run_check, "stage_metadata_shadow", lambda adapter, store, result, deadline,
+    monkeypatch.setattr(collection_stages, 'stage_metadata_shadow', lambda adapter, store, result, deadline,
                         **kwargs: result.update(metadata_shadow={"mode": "shadow"}))
     result = {"errors": []}
     store = SimpleNamespace()
@@ -604,16 +605,20 @@ def test_scheduled_tick_and_deep_share_shadow_after_semantic(
     for key, value in {"HOME": str(tmp_path), "DB": str(tmp_path / "data/ledger.db"),
                        "ATTACH_DIR": str(tmp_path / "data/attachments"),
                        "LOCKFILE": str(tmp_path / "data/run.lock")}.items():
-        monkeypatch.setattr(run_check, key, value)
+        monkeypatch.setattr(
+            collection_stages if key in {"ATTACH_DIR", "with_relogin"} else (run_check),
+            key, value)
     adapter = shadow_adapter(lambda pid, mid: message(mid))
     monkeypatch.setattr(run_check, "MCSAdapter", lambda **kwargs: adapter)
     monkeypatch.setattr(run_check, "_config", lambda: {"metadata_shadow": enabled})
     monkeypatch.setattr(run_check, "_semantic_enabled", lambda *args: False)
     monkeypatch.setattr(run_check, "_code_changed", lambda result: False)
     events = []
-    for name in ("_stage_fetch", "_run_jobs", "stage_derive", "_with_relogin",
+    for name in ("_stage_fetch", "_run_jobs", "stage_derive", "with_relogin",
                  "_housekeeping", "_write_health"):
-        monkeypatch.setattr(run_check, name, lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (run_check),
+            name, lambda *args, **kwargs: None)
     monkeypatch.setattr(run_check, "_deliver", lambda *args: events.append("delivery"))
     monkeypatch.setattr(run_check, "_run_semantic", lambda *args, **kwargs: events.append("semantic"))
 
@@ -621,7 +626,7 @@ def test_scheduled_tick_and_deep_share_shadow_after_semantic(
         events.append("shadow")
         result["metadata_shadow"] = {"mode": "shadow"}
 
-    monkeypatch.setattr(run_check, "stage_metadata_shadow", shadow)
+    monkeypatch.setattr(collection_stages, 'stage_metadata_shadow', shadow)
     monkeypatch.setattr(run_check, "_finish_run", lambda *args: "ok")
     assert run_check._main() == 0
     result = json.loads(capsys.readouterr().out)

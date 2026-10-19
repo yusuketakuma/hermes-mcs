@@ -1,4 +1,5 @@
 """Synthetic regressions for the ingest audit fixes (temp DB + stubs only)."""
+import collection_stages
 import mcs_contract
 import json
 import time
@@ -10,7 +11,6 @@ import pytest
 import job_ops
 import ledger
 import mcs_requests
-import run_check
 from ingest_testkit import _ledger, _message, _unread_patient
 from mcs_queries import paused
 
@@ -36,9 +36,9 @@ def test_strict_ack_checks_post_ack_gap(tmp_path, latest_id, gap):
     marks = []
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": []}
-    run_check.stage_unread(_strict_adapter(latest_id, marks), db,
-                           SimpleNamespace(mark_read=True), result,
-                           time.monotonic() + 30, db.begin_run(None))
+    collection_stages.stage_unread(_strict_adapter(latest_id, marks), db,
+                           result,
+                           time.monotonic() + 30, db.begin_run(None), mark_read=True)
     assert marks == [(1, 123)] and result["marked_read"] == [1]
     assert ("mark 1: post_ack_gap" in result["errors"]) is gap
     assert (db.job_pending("history_head", 1) is not None) is gap
@@ -170,8 +170,8 @@ def test_queue_order_survives_a_clock_step_back(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("stage,margin", [
-    (run_check.stage_self_probe, run_check.SELF_PROBE_MARGIN_S),
-    (run_check.stage_backfill, 30)])
+    (collection_stages.stage_self_probe, collection_stages.SELF_PROBE_MARGIN_S),
+    (collection_stages.stage_backfill, 30)])
 def test_deadline_skipped_patients_are_reached_next_tick(
         tmp_path, monkeypatch, stage, margin):
     """F3: a tick that runs out of time must not skip the same tail
@@ -193,7 +193,7 @@ def test_deadline_skipped_patients_are_reached_next_tick(
         raise mcs_contract.MCSError("http_error", status=502)
     adapter = SimpleNamespace(fetch_latest=latest, fetch_history=history)
     # each visit costs 100s of a fake clock; the deadline allows two
-    monkeypatch.setattr(run_check, "time", SimpleNamespace(
+    monkeypatch.setattr(collection_stages, "time", SimpleNamespace(
         monotonic=lambda: len(visited) * 100, time=time.time))
     ticks = []
     for run_id in (1, 2, 3):
@@ -216,8 +216,8 @@ def test_ledger_connection_uses_full_fsync(tmp_path):
 
 
 @pytest.mark.parametrize("stage,margin", [
-    (run_check.stage_self_probe, run_check.SELF_PROBE_MARGIN_S),
-    (run_check.stage_backfill, 30)])
+    (collection_stages.stage_self_probe, collection_stages.SELF_PROBE_MARGIN_S),
+    (collection_stages.stage_backfill, 30)])
 @pytest.mark.parametrize("patients,run_ids", [(2, (1, 3, 5)), (3, (1, 4, 7))])
 def test_walk_resumes_where_the_deadline_stopped_whatever_the_run_ids(
         tmp_path, monkeypatch, stage, margin, patients, run_ids):
@@ -239,7 +239,7 @@ def test_walk_resumes_where_the_deadline_stopped_whatever_the_run_ids(
         visited.append(pid)
         raise mcs_contract.MCSError("http_error", status=502)
     adapter = SimpleNamespace(fetch_latest=latest, fetch_history=history)
-    monkeypatch.setattr(run_check, "time", SimpleNamespace(
+    monkeypatch.setattr(collection_stages, "time", SimpleNamespace(
         monotonic=lambda: len(visited) * 100, time=time.time))
     ticks = []
     for run_id in run_ids:

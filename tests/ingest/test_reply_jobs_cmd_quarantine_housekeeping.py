@@ -1,6 +1,7 @@
 """Burnt-out reply jobs stay failed under thread read,
 torn cmd files are quarantined, and housekeeping runs past the deadline
 once the daily backup is overdue. Synthetic stubs only — no real MCS."""
+import collection_stages
 import health_report
 import json
 import os
@@ -55,7 +56,7 @@ def _fail_reply_job(db, mid, parent):
 def test_failed_reply_job_for_unstored_reply_is_not_revived(db):
     _store(db, 11, 10, "full")
     _fail_reply_job(db, 12, 10)
-    run_check.stage_thread_read(_adapter([True], [11, 12]), db,
+    collection_stages.stage_thread_read(_adapter([True], [11, 12]), db,
                                 {"errors": []}, time.monotonic() + 120)
     row = db.db.execute("SELECT state,attempts FROM fetch_jobs").fetchone()
     assert tuple(row) == ("failed", 9)
@@ -66,7 +67,7 @@ def test_snippet_reply_with_burnt_out_job_no_longer_blocks_the_clear(db):
     _fail_reply_job(db, 11, 10)
     adapter = _adapter([True, False], [11])
     result = {"errors": []}
-    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, result, time.monotonic() + 120)
     assert adapter.calls == ["check", "clear", "check"]
     assert result["threads_marked_read"] == [10]
     row = db.db.execute("SELECT state,attempts FROM fetch_jobs").fetchone()
@@ -97,7 +98,9 @@ def test_overdue_backup_makes_housekeeping_run_past_the_deadline(
                         "ATTACH_DIR": data / "attachments",
                         "LOCKFILE": data / "run.lock",
                         "HEALTH_FILE": data / "health.json"}.items():
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, str(value))
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, str(value))
     data.mkdir()
     clock = [100.0]
     monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
@@ -110,9 +113,11 @@ def test_overdue_backup_makes_housekeeping_run_past_the_deadline(
     monkeypatch.setattr(run_check, "_stage_fetch", lambda *a: clock.__setitem__(
         0, clock[0] + run_check.RUN_DEADLINE_S + 1))
     later, housekeeping = Mock(), Mock()
-    for name in ("_run_jobs", "stage_derive", "_deliver", "_with_relogin",
+    for name in ("_run_jobs", "stage_derive", "_deliver", "with_relogin",
                  "_run_semantic", "_run_metadata_shadow"):
-        monkeypatch.setattr(health_report if name == "HEALTH_FILE" else run_check, name, later)
+        monkeypatch.setattr(
+            collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
+            name, later)
     monkeypatch.setattr(run_check, "_housekeeping", housekeeping)
     monkeypatch.setattr(maintenance, "backup_overdue", lambda: True)
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)

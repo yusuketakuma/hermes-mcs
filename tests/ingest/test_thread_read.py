@@ -1,6 +1,7 @@
 """Per-thread read acknowledgement (owner report 2026-10-06): stored
 replies stayed unread on MCS because a reply's unread state lives on
 its thread. Synthetic stubs only — no real MCS."""
+import collection_stages
 import mcs_contract
 import json
 import time
@@ -9,7 +10,6 @@ from types import SimpleNamespace
 import pytest
 
 import mcs_adapter
-import run_check
 from ingest_testkit import _ledger
 
 
@@ -101,14 +101,14 @@ def test_stored_unread_thread_is_cleared_and_confirmed_once(db):
     _store(db, 11, parent=10)
     adapter = _adapter([True, False], server=[11])
     result = _result()
-    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, result, time.monotonic() + 120)
     assert adapter.calls == ["check", "clear", "check"]
     assert result["threads_marked_read"] == [10]
     row = db.db.execute("SELECT status,last_reply_id FROM thread_read_marks").fetchone()
     assert tuple(row) == ("confirmed", 11)
     # confirmed: the next tick does not touch the thread again
     again = _adapter([], server=[11])
-    run_check.stage_thread_read(again, db, _result(), time.monotonic() + 120)
+    collection_stages.stage_thread_read(again, db, _result(), time.monotonic() + 120)
     assert again.calls == []
     # a newer stored reply makes it a candidate again
     _store(db, 12, parent=10)
@@ -119,7 +119,7 @@ def test_stored_unread_thread_is_cleared_and_confirmed_once(db):
 def test_incomplete_stored_reply_is_fetched_without_clearing(db, body_state):
     _store(db, 11, parent=10, body_state=body_state)
     adapter = _adapter([True], server=[11])
-    run_check.stage_thread_read(adapter, db, _result(), time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, _result(), time.monotonic() + 120)
     assert adapter.calls == ["check"]
     assert db.stored_reply_ids(10) == set()
     jobs = db.db.execute("SELECT kind,message_id,parent_id FROM fetch_jobs").fetchall()
@@ -130,7 +130,7 @@ def test_unstored_reply_blocks_the_clear_and_is_fetched_first(db):
     _store(db, 10)
     _store(db, 11, parent=10)
     adapter = _adapter([True], server=[11, 12])
-    run_check.stage_thread_read(adapter, db, _result(), time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, _result(), time.monotonic() + 120)
     assert adapter.calls == ["check"]                 # never cleared
     jobs = db.db.execute("SELECT kind,message_id,parent_id FROM fetch_jobs").fetchall()
     assert [tuple(j) for j in jobs] == [("reply", 12, 10)]
@@ -144,7 +144,7 @@ def test_foreign_patient_reply_is_reported_never_requeued_and_never_cleared(db):
     for _tick in range(2):
         adapter = _adapter([True], server=[11, 12])
         result = _result()
-        run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+        collection_stages.stage_thread_read(adapter, db, result, time.monotonic() + 120)
         # a refetch cannot move message 11 to patient 1: nothing is queued,
         # and patient 1 has not stored it, so the thread is not cleared
         assert "thread_read: reply_stored_for_other_patient" in result["errors"]
@@ -157,7 +157,7 @@ def test_foreign_patient_reply_is_reported_never_requeued_and_never_cleared(db):
         db.db.execute("UPDATE messages SET project_id=1 WHERE message_id=11")
     adapter = _adapter([True, False], server=[11, 12])
     result = _result()
-    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, result, time.monotonic() + 120)
     assert result["errors"] == []
     assert adapter.calls == ["check", "clear", "check"]
     assert result["threads_marked_read"] == [10]
@@ -175,7 +175,7 @@ def test_foreign_reply_is_detected_by_id_whatever_its_body_or_parent(
     _store(db, 12, parent=10)
     adapter = _adapter([True], server=[11, 12])
     result = _result()
-    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, result, time.monotonic() + 120)
     assert "thread_read: reply_stored_for_other_patient" in result["errors"]
     assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
     assert adapter.calls == ["check"]
@@ -196,7 +196,7 @@ def test_foreign_patient_reply_does_not_stand_in_for_an_unstored_one(db):
     _store(db, 12, parent=10)
     adapter = _adapter([True], server=[11, 12, 13])
     result = _result()
-    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, result, time.monotonic() + 120)
     # only 13 (stored nowhere) is fetched; the foreign 11 is reported, not queued
     assert [tuple(row) for row in db.db.execute(
         "SELECT kind,project_id,message_id FROM fetch_jobs")] == [("reply", 1, 13)]
@@ -224,7 +224,7 @@ def test_scoped_stored_reply_ids_keep_settled_body_and_failed_job_contract(db):
 def test_already_read_thread_is_confirmed_without_a_clearing_read(db):
     _store(db, 11, parent=10)
     adapter = _adapter([False], server=[11])
-    run_check.stage_thread_read(adapter, db, _result(), time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, _result(), time.monotonic() + 120)
     assert adapter.calls == ["check"]
     assert db.db.execute("SELECT status FROM thread_read_marks").fetchone()[0] == "confirmed"
 
@@ -232,7 +232,7 @@ def test_already_read_thread_is_confirmed_without_a_clearing_read(db):
 def test_unconfirmed_clear_stays_unknown_and_a_racing_reply_is_fetched(db):
     _store(db, 11, parent=10)
     adapter = _adapter([True, True], server=[11], seen=[11, 13])
-    run_check.stage_thread_read(adapter, db, _result(), time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, _result(), time.monotonic() + 120)
     assert db.db.execute("SELECT status FROM thread_read_marks").fetchone()[0] == "unknown"
     jobs = [tuple(j) for j in db.db.execute(
         "SELECT kind,message_id,parent_id FROM fetch_jobs")]
@@ -251,7 +251,7 @@ def test_failed_clear_keeps_durable_unknown_intent(db):
 
     adapter.read_thread = fail
     result = _result()
-    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, result, time.monotonic() + 120)
     assert result["threads_marked_read"] == []
     assert result["errors"]
     assert db.db.execute("SELECT status FROM thread_read_marks").fetchone()[0] == "unknown"
@@ -302,10 +302,10 @@ def test_failed_thread_read_keeps_racing_reply_job_and_unread_evidence(db, failu
     result = _result()
     if failure == "session":
         with pytest.raises(mcs_contract.SessionExpired) as caught:
-            run_check.stage_thread_read(wire, db, result, time.monotonic() + 120)
+            collection_stages.stage_thread_read(wire, db, result, time.monotonic() + 120)
         assert caught.value is original
     else:
-        run_check.stage_thread_read(wire, db, result, time.monotonic() + 120)
+        collection_stages.stage_thread_read(wire, db, result, time.monotonic() + 120)
         assert result["errors"]
     assert result["threads_marked_read"] == []
     assert db.db.execute("SELECT status FROM thread_read_marks").fetchone()[0] == "unknown"
@@ -315,7 +315,7 @@ def test_failed_thread_read_keeps_racing_reply_job_and_unread_evidence(db, failu
     assert (jobs[0]["kind"], jobs[0]["message_id"], jobs[0]["parent_id"]) == ("reply", 13, 10)
     assert json.loads(jobs[0]["payload"]) == {"unread": True}
     # Once the server reports read, the following tick must keep the job.
-    run_check.stage_thread_read(_adapter([False], server=[11]), db, _result(),
+    collection_stages.stage_thread_read(_adapter([False], server=[11]), db, _result(),
                                 time.monotonic() + 120)
     assert db.job_pending("reply", 1, 13) is not None
     assert db.db.execute("SELECT count(*) FROM fetch_jobs").fetchone()[0] == 1
@@ -323,12 +323,12 @@ def test_failed_thread_read_keeps_racing_reply_job_and_unread_evidence(db, failu
 
 def test_old_replies_and_mcs_errors_stay_bounded(db):
     _store(db, 11, parent=10, first_seen=time.time() - 30 * 86400)
-    assert db.thread_read_candidates(time.time() - run_check.THREAD_READ_WINDOW_S, 10) == []
+    assert db.thread_read_candidates(time.time() - collection_stages.THREAD_READ_WINDOW_S, 10) == []
     _store(db, 21, parent=20)
 
     def boom(pid, parent):
         raise mcs_contract.MCSError("http_error", "x", status=500)
     adapter = SimpleNamespace(thread_unread=boom)
     result = _result()
-    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    collection_stages.stage_thread_read(adapter, db, result, time.monotonic() + 120)
     assert result["errors"] and result["errors"][0].startswith("thread_read:")

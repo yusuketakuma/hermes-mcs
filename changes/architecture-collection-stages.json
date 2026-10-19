@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "収集処理と定期実行の責務を整理",
+  "summary": "未読・履歴・添付などの収集処理と、定期実行の順序制御を分離しました。取得範囲・通知・既読化の条件、再ログインの回数、各処理の時間制限と既定値は維持します。",
+  "upgrade": "追加の設定操作は不要です。通常の更新手順で反映されます。保存済みの投稿・通知・取得位置を引き継ぎ、人承認・復元同意・サービスの起動条件は変更しません。",
+  "details": [
+    "収集stageと取得位置・既読化・再ログイン時の再実行管理をcollection_stagesへ集約し、CLIにはロック・実行順・世代判定・watchdogと終了処理を維持します。",
+    "収集処理には既読化の指定を値として渡し、構造化エラーの表示を共有契約の公開実装へ揃えました。投稿保存と通知intentの同一transaction、保存後の既読化、部分保存と再実行の境界を維持します。"
+  ],
+  "refs": [
+    "mcs/ingest/collection_stages.py",
+    "mcs/ingest/run_check.py",
+    "mcs/core/mcs_contract.py",
+    "mcs/views/operational_progress.py"
+  ]
+}

@@ -1,16 +1,15 @@
 """Regressions for the 2026-09-30 adversarial review: each test pins the
 corrected behavior of a reproduced defect. Synthetic data only."""
+import collection_stages
 import mcs_contract
 import semantic_drain
 import extract_validation
 import json
 import time
-from types import SimpleNamespace
 
 import extract_llm
 import notify_views
 import rollup
-import run_check
 import semantic_runtime as runtime
 from semantic_testkit import (
     _AuditFailJev, _canonical_cfg, _ledger,
@@ -56,8 +55,7 @@ def test_cap_gate_rejects_failed_unstored_reply(tmp_path):
 
         result = {"errors": [], "incomplete": [], "messages": 0,
                   "new_messages": 0, "marked_read": []}
-        run_check.stage_unread(Adapter(), db, SimpleNamespace(mark_read=True),
-                               result, time.monotonic()+300, None)
+        collection_stages.stage_unread(Adapter(), db, result, time.monotonic()+300, None, mark_read=True)
         assert acknowledgements == []
         assert result["marked_read"] == []
     finally:

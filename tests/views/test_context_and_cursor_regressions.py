@@ -1,10 +1,10 @@
 """Fully synthetic reproduction of independently found v1.0.24+ regressions."""
+import collection_stages
 import json
 from types import SimpleNamespace
 
 import pytest
 import patient_context_view as pcv
-import run_check
 from semantic_testkit import _message
 from test_read_model import _artifact, _db, _hash_of
 from test_patient_context_v3_views import _reply, T0, DAY
@@ -34,7 +34,7 @@ def test_probe_old_unanswered_request_survives_more_than_fifteen_new_replied_req
 def test_probe_valid_nonobject_cursor_does_not_stop_patient_walk(tmp_path, content):
     db = _db(tmp_path, ())
     try:
-        db.artifact_add(run_check.WALK_CURSOR_KIND, json.dumps(content), meta={"stage": "backfill"})
-        assert [row["project_id"] for row in run_check._walk_order(db, "backfill")] == [1]
+        db.artifact_add(collection_stages.WALK_CURSOR_KIND, json.dumps(content), meta={"stage": "backfill"})
+        assert [row["project_id"] for row in collection_stages.walk_order(db, "backfill")] == [1]
     finally:
         db.close()
