@@ -209,19 +209,19 @@ def test_answer_survives_snapshot_removal_after_read(led, tmp_path, monkeypatch)
 
 
 def test_discord_mcs_summary_op(led, tmp_path, monkeypatch):
-    import hermes_plugin
+    from adapters.common.dispatch import dispatch
     path = _snapshot(led, tmp_path)
     settings = {"snapshot": str(path), "allowed_user_ids": {"1001"},
                 "allowed_chat_ids": {"42"}, "project_ids": frozenset({1})}
     ident = {"user_id": "1001", "chat_id": "42", "scope_id": None,
              "profile": None, "message_id": None}
-    out = hermes_plugin._dispatch({"op": "summary", "scope": "days:2"},
+    out = dispatch({"op": "summary", "scope": "days:2"},
                                   settings, ident)
     assert out.startswith("## 📊 MCS サマリー")
-    denied = hermes_plugin._dispatch({"op": "summary"}, settings,
+    denied = dispatch({"op": "summary"}, settings,
                                      {**ident, "user_id": "9"})
     assert json.loads(denied)["error"] == "user_not_allowed"
-    assert json.loads(hermes_plugin._dispatch(
+    assert json.loads(dispatch(
         {"op": "summary", "x": 1}, settings, ident))["error"] == "unknown_field"
 
 
@@ -251,12 +251,12 @@ def test_kill_switch_without_a_text_target_suppresses(led):
 
 
 def test_hermes_summary_keeps_names_out(led, tmp_path):
-    import hermes_plugin
+    from adapters.common.dispatch import dispatch
     _patient(led, 1, name="患者A")
     led.db.execute("UPDATE patients SET station_name='みどり'")
     _add_request(led, "残薬", "山田", "2000-01-01")     # listed by room
     path = _snapshot(led, tmp_path)
-    out = hermes_plugin._dispatch(
+    out = dispatch(
         {"op": "summary", "scope": "station:みどり"},
         {"snapshot": str(path), "allowed_user_ids": {"1001"},
          "allowed_chat_ids": {"42"}, "project_ids": frozenset({1})},
