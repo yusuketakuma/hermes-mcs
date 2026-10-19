@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -79,6 +80,11 @@ def test_bad_samples_reset_the_idle_run(turn, bad):
 
 
 def test_never_idle_within_bound_releases_unconfirmed(turn, monkeypatch):
+    # A slow filesystem must not consume the synthetic polling budget.
+    clock = [0.0]
+    def advance(seconds):
+        clock[0] += seconds
+    monkeypatch.setattr(local_llm, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=advance))
     monkeypatch.setattr(local_llm, "SLOT_WAIT_MAX_S", 0.1)
     send, state = _fake(turn, [True])
     err = {}
