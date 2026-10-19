@@ -22,9 +22,10 @@ _MODULES = ('semantic_extraction', 'semantic_facts', 'semantic_audit',
             'clinical_scope', 'clinical_urgency', 'clinical_chunking', 'semantic_quantities', 'clinical_values', 'patient_context', 'mcs_queries', 'semantic_assembly', 'writer_lock', 'semantic_store', 'semantic_v4', 'semantic_v4_cohort', 'patient_nightly_plan', 'semantic_runtime', 'llm_availability', 'self_identity', 'safe_io')
 
 
-# Process-local probe/counter state is not an interpretation constant.
+# Runtime locations and mutable probe state are not interpretation constants.
 _RUNTIME_STATE = {'semantic_transport': frozenset({'_FMT_MODE', '_FMT_TS', '_LONG_UNSAVED',
-                                       '_LONG_MARK_FAILURES', '_LLM_FAILURE'})}
+                                       '_LONG_MARK_FAILURES', '_LLM_FAILURE'}),
+                  'writer_lock': frozenset({'_MCS_ROOT', 'RUN_LOCK'})}
 
 
 def _constant(value):

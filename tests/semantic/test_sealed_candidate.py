@@ -527,6 +527,18 @@ def test_writer_policy_constant_changes_only_new_worker_identity(monkeypatch, co
     assert candidate.candidate_fingerprint({}) != before
 
 
+
+@pytest.mark.parametrize("name", ["_MCS_ROOT", "RUN_LOCK"])
+def test_checkout_and_run_lock_paths_do_not_change_candidate_identity(monkeypatch, tmp_path, name):
+    import writer_lock
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    before = candidate.candidate_fingerprint({})
+    monkeypatch.setattr(writer_lock, name, str(tmp_path / "different-checkout-or-data-root"))
+    assert candidate.candidate_fingerprint({}) == before
+    monkeypatch.setattr(candidate, "_LOADED_SOURCES", None)
+    assert candidate.candidate_fingerprint({}) == before
+
+
 def test_live_writer_marker_and_descriptor_do_not_change_definition_identity(tmp_path, monkeypatch):
     import writer_lock
     monkeypatch.setattr(writer_lock, "HOME", str(tmp_path))
