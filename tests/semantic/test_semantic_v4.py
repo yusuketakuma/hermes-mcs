@@ -492,7 +492,7 @@ def test_cohort_never_dispatches_without_enforceable_token_budget(tmp_path):
         calls = []
         result = semantic_drain._process_job(
             db, cfg, job, _PassJev(), lambda prompt: calls.append(prompt),
-            time.monotonic() + 60)
+            time.monotonic() + 60, diagnostics=semantic_drain._job_diagnostics())
         assert result == "failed"
         assert calls == []
         assert v4.cohort_items_done(db, "bounded")[1]["reason"] == \
@@ -500,7 +500,7 @@ def test_cohort_never_dispatches_without_enforceable_token_budget(tmp_path):
         count = len(_rows(db, v4.KIND_V4_ITEM, 1))
         assert semantic_drain._process_job(
             db, cfg, job, _PassJev(), lambda prompt: calls.append(prompt),
-            time.monotonic() + 60) == "failed"
+            time.monotonic() + 60, diagnostics=semantic_drain._job_diagnostics()) == "failed"
         assert len(_rows(db, v4.KIND_V4_ITEM, 1)) == count
     finally:
         db.close()

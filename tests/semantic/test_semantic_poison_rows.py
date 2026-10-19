@@ -95,7 +95,7 @@ def test_unreadable_job_payload_is_terminal_without_model_calls(ledger):
     job = ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind=?", (drain.JOB_KIND,)).fetchone()
     assert drain._process_job_inner(ledger, {}, job, None,
                                     lambda *args: pytest.fail("must not call model"),
-                                    time.monotonic() + 30) == "failed"
+                                    time.monotonic() + 30, diagnostics=drain._job_diagnostics()) == "failed"
 
 
 def test_unreadable_plan_meta_does_not_hide_valid_sibling(ledger):

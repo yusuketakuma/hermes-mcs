@@ -9,6 +9,8 @@ import pytest
 import mcs_util
 import semantic
 import semantic_drain
+import semantic_policy
+import semantic_store
 import semantic_runtime as runtime
 from semantic_testkit import _cfg, _FakeJev, _llm, _llm_v2, _seeded
 
@@ -40,6 +42,26 @@ class _HookableJev(_FakeJev):
     def evaluate(self, state, questions, deadline):
         self._http_request()
         return super().evaluate(state, questions, deadline)
+
+
+def _direct_shadow_stage(db, deadline):
+    """A standalone stage has no run_due accounting capability by default."""
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
+    member = bundle["members"][0]
+    calls = []
+
+    def model(prompt):
+        if "原子事実抽出器" in prompt:
+            calls.append(1)
+            return _llm_v2(prompt)
+        return _llm(prompt)
+
+    scfg, errors = semantic_policy.semantic_config(_cfg("shadow", fact_source="shadow"))
+    assert not errors
+    semantic_drain._fact_stage(
+        db, scfg, member, 1, member["message_id"], "direct-synthetic-source", "direct-policy",
+        _FakeJev(), model, deadline)
+    assert calls                       # an actual standalone comparison ran
 
 
 def test_a_normal_pass_reports_transport_seconds_only_in_its_output(lock_env):
@@ -143,7 +165,9 @@ def test_a_pass_reports_what_the_shadow_v2_comparison_cost(tmp_path, monkeypatch
                               "WHERE kind='semantic_drain_run'").fetchall()
         assert "shadow_v2" not in json.loads(run[0])     # log only
         # released with the pass: a later direct _fact_stage cannot add to it
-        assert semantic_drain._SHADOW_V2["pass"] is None
+        before = dict(out["shadow_v2"])
+        _direct_shadow_stage(db, clock[0] + 480)
+        assert out["shadow_v2"] == before
     finally:
         db.close()
 
@@ -165,7 +189,9 @@ def test_a_shadow_call_ended_by_the_budget_counts_as_incomplete(tmp_path, monkey
                                jev_client=_FakeJev(), llm_fn=model)
         assert out["shadow_v2"] == {"calls": 1, "incomplete": 1, "s": 30.0}
         assert out["deferred"] == 1 and out["done"] == 0   # still propagates
-        assert semantic_drain._SHADOW_V2["pass"] is None
+        before = dict(out["shadow_v2"])
+        _direct_shadow_stage(db, clock[0] + 480)
+        assert out["shadow_v2"] == before
     finally:
         db.close()
 

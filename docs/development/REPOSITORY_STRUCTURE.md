@@ -41,6 +41,7 @@
 - LLM統括はschema/検証/品質を呼びます。純粋な検証moduleは`extract_llm`のglobals、endpoint、call notesを操作しません。
 - semanticの処理はtransport/store/QC/renderの正本を呼び、CLI moduleへの遅延importやmodule全体の引数注入を使いません。
 - semanticのlive/cache/repairは同じ純粋な組立てを利用します。cache再構築は呼出元のconnectionを借用し、擬似writerやLLMの代用品を作りません。chunk・preflight・関係判定が未完了なら再構築成功として返しません。
+- semanticの停止理由と品質診断は各job、補助抽出の集計は各passが所有し、必要な処理へ明示的に渡します。入れ子の実行や次のQC jobへ診断を持ち越しません。公平性のturnと再投入の抑制時刻は、常駐workerの状態として別に保持します。
 - 通知のspec計画、同一TXのjournal記録、commit後のatomic publishの順序を保ちます。parts/scopeを分けてもtransactionの所有を分散しません。
 - 人承認の復旧は`notify_recovery`から`notify_transport`の借用transaction上の確定処理を使います。復旧receiptと状態を同時にcommitし、spec公開はその後に行います。読取側は`notify_scope`へ直接依存します。
 - 薬局の参照項目は`patient_context`、保存済み履歴のSQLは`mcs_queries`が正本です。抽出・semantic・表示から集約writerを経由せずに利用し、解釈に影響する両moduleをsource digestとcandidate定義の変更検知に含めます。

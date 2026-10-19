@@ -70,21 +70,17 @@ def _jev_fail_flag(error) -> str | None:
             "retry": "retryable"}.get(jev.failure_class(error), "hard")
 
 
-# First cause that stopped the current job pass short of done — a code,
-# never content. A pass can end "retry" with neither llm_error nor
-# jev_error; the run record must still explain why.
-_PASS_REASON: dict = {"code": None}
-# Log-only (never in the drain_run artifact): what the shadow v2 comparison
-# cost this run_due pass. It is evaluation only, so its share decides
-# whether sampling it would speed the backlog (2026-10-10).
-_SHADOW_V2: dict = {"pass": None}
+def _job_diagnostics() -> dict:
+    """Allocate code-only diagnostics owned by one served job, including QC."""
+    return {"code": None, "summary_validation_error": None,
+            "loops_rejected": None, "not_sent": None}
 
 
-def _why(code: str) -> bool:
+def _why(diagnostics: dict, code: str) -> bool:
     """Record ``code`` unless an earlier cause already did; returns True
     so a flag assignment can carry its reason."""
-    if _PASS_REASON["code"] is None:
-        _PASS_REASON["code"] = code
+    if diagnostics["code"] is None:
+        diagnostics["code"] = code
     return True
 
 
@@ -176,7 +172,7 @@ def _park_needs_review(ledger, pid, mid, fp, policy, v2_doc,
 
 
 def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
-                jev_client, llm_fn, deadline):
+                jev_client, llm_fn, deadline, *, shadow_stats: dict | None = None):
     """Fact stage for one bundle member.
 
     fact_source selects the canonical path: "shadow" still feeds
@@ -196,7 +192,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
     if fact_source != "legacy":
         early, v2_doc, doc_build = _fact_v2_document(
             ledger, member, pid, mid, fp, policy, fact_source,
-            jev_client, llm_fn, deadline)
+            jev_client, llm_fn, deadline, shadow_stats=shadow_stats)
         if early is not None:
             return early
     if fact_source == "canonical":
@@ -218,7 +214,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
 
 
 def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
-                      jev_client, llm_fn, deadline):
+                      jev_client, llm_fn, deadline, *, shadow_stats: dict | None = None):
     """Reuse or extract the v2 fact document for a non-legacy fact source.
 
     Returns (early, v2_doc, doc_build): early is the _fact_stage result to
@@ -296,7 +292,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
             v4.record_stage(ledger, pid, mid, fp, policy,
                             "s1_extract", "start")
         started = time.monotonic()
-        shadow = _SHADOW_V2["pass"] if fact_source == "shadow" else None
+        shadow = shadow_stats if fact_source == "shadow" else None
         complete = False
         try:
             v2_result = extract_facts_v2(
@@ -696,7 +692,7 @@ def _publish_v4(ledger, pid: int, mid: int, fp: str, policy: str,
 
 
 def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
-                   prev, deadline):
+                   prev, deadline, *, diagnostics: dict):
     """Primary Jev proposition assessment of one target, durably recorded.
 
     Returns (verdicts, flag): verdicts is None when no answer arrived (the
@@ -723,7 +719,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                 "retry_wait" if e.retryable else "error")
             meta_base["error_kind"] = e.kind
             flag = _jev_fail_flag(e)
-            _why(f"assess_jev_{flag}")
+            _why(diagnostics, f"assess_jev_{flag}")
     meta_base["jev_requests"] = (
         jev_client.requests_made - req0) if jev_client else 0
     if answers is None:
@@ -764,7 +760,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
 
 
 def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
-                    facts, verdicts, existing, deadline):
+                    facts, verdicts, existing, deadline, *, diagnostics: dict):
     """Stored, candidate, or freshly generated summary for one target, with
     the one reserved format repair.
 
@@ -794,8 +790,8 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                         and semantic_transport.last_llm_failure() != "length_stop" \
                         and _current(ledger.db, KIND_SUMMARY_FORMAT_REPAIR,
                                      mid, fp, policy) is None:
-                    if _PASS_REASON.get("summary_validation_error") is None:
-                        _PASS_REASON["summary_validation_error"] = summary_error["code"]
+                    if diagnostics.get("summary_validation_error") is None:
+                        diagnostics["summary_validation_error"] = summary_error["code"]
                     guard("summary_format_repair_reservation")
                     format_repair_id = ledger.artifact_add(
                         KIND_SUMMARY_FORMAT_REPAIR,
@@ -829,7 +825,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
 
 
 def _promote_loops(ledger, scfg, pl, pid, bundle, facts_by_target,
-                   jev_client, deadline):
+                   jev_client, deadline, *, diagnostics: dict):
     """Loop candidates/relation events for the live generation.
 
     Returns (loops_done, loops_short, resource, retryable, hard): the last
@@ -854,18 +850,18 @@ def _promote_loops(ledger, scfg, pl, pid, bundle, facts_by_target,
         flag = _jev_fail_flag(getattr(jev_client, "last_error", None)) \
             if not loops_done and jev_client is not None else None
         if rejections:
-            if _PASS_REASON.get("loops_rejected") is None:
-                _PASS_REASON["loops_rejected"] = rejections[0]["code"]
+            if diagnostics.get("loops_rejected") is None:
+                diagnostics["loops_rejected"] = rejections[0]["code"]
             if flag is None:
                 # Only cached rejections, or a later pair's success
                 # reset last_error: the known rejection is the cause —
                 # a bounded retry, never a free defer that would loop
                 # forever. A later hard/resource failure keeps its own
                 # handling below.
-                _why("loops_jev_rejected")
+                _why(diagnostics, "loops_jev_rejected")
                 retryable = True
         if not loops_done and jev_client is not None:
-            _why(f"loops_jev_{flag}")
+            _why(diagnostics, f"loops_jev_{flag}")
             resource |= flag == "resource"
             retryable |= flag == "retryable"
             hard |= flag == "hard"
@@ -936,7 +932,8 @@ def _record_notice_plan_tx(ledger, scfg, pl, pid, root, mid, fp, policy,
 def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                        cfg_path: str | None = None,
                        config_generation: str | None = None,
-                       reserve_fn=None, lane: str | None = None) -> str:
+                       reserve_fn=None, lane: str | None = None, *,
+                       diagnostics: dict, shadow_stats: dict | None = None) -> str:
     """One semantic job -> durable artifacts + job state transition.
     Returns 'done'|'deferred'|'retry'|'failed'."""
     pid, root = job["project_id"], job["message_id"]
@@ -1055,7 +1052,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 break
             target_verdicts, flag = _assess_target(
                 ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
-                prev, deadline)
+                prev, deadline, diagnostics=diagnostics)
             resource_wait |= flag == "resource"
             retryable_failure |= flag == "retryable"
             hard_fail |= flag == "hard"
@@ -1066,7 +1063,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if scfg["summary_mode"] == "off" and scfg["loop_mode"] == "off":
             continue
         stage = _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
-                            jev_client, llm_fn, deadline)
+                            jev_client, llm_fn, deadline, shadow_stats=shadow_stats)
         if stage["outcome"] is not None:
             if fact_source == "canonical":
                 # T18: a fact-stage failure still leaves a durable
@@ -1079,7 +1076,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     [{"code": f"fact_stage_{stage['outcome']}"}]
                     + list(stage.get("findings") or []),
                     doc_hash=(v4._doc_hash(doc) if doc else None))
-            _why(f"fact_stage_{stage['outcome']}")
+            _why(diagnostics, f"fact_stage_{stage['outcome']}")
             if stage["outcome"] == "retryable":
                 retryable_failure = True
             elif stage["outcome"] == "hard_fail":
@@ -1097,7 +1094,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         detail_findings[mid] = event_details["findings"]
         if not event_details["complete"] and event_details["failure_reason"] != "invalid":
             incomplete = _why(
-                f"medication_detail_{event_details['failure_reason']}")
+                diagnostics, f"medication_detail_{event_details['failure_reason']}")
             error = getattr(jev_client, "last_error", None)
             if error is not None and jev.failure_class(error) == "failed":
                 hard_fail = True
@@ -1127,7 +1124,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                               "technical_status": "complete" if coverage["evaluated"] else "pending"})
             coverage_by_target[mid] = coverage["findings"]
             if not coverage["evaluated"]:
-                incomplete = _why(f"coverage_{coverage.get('failure_reason')}")
+                incomplete = _why(diagnostics, f"coverage_{coverage.get('failure_reason')}")
                 error = getattr(jev_client, "last_error", None)
                 if error is not None and jev.failure_class(error) == "failed":
                     hard_fail = True
@@ -1177,13 +1174,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             break
         summary, summary_reason, summary_error, sent_error = _obtain_summary(
             ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
-            facts, verdicts, existing, deadline)
+            facts, verdicts, existing, deadline, diagnostics=diagnostics)
         if sent_error is not None:
             not_sent = sent_error
         if summary is None:
-            _why(f"summary_{summary_reason}")
-            if _PASS_REASON.get("summary_validation_error") is None:
-                _PASS_REASON["summary_validation_error"] = summary_error.get("code")
+            _why(diagnostics, f"summary_{summary_reason}")
+            if diagnostics.get("summary_validation_error") is None:
+                diagnostics["summary_validation_error"] = summary_error.get("code")
             # same dedup as the assess wait-state above: a persistent
             # local-LLM outage defers without stacking identical
             # PENDING rows on every drain
@@ -1257,7 +1254,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if not evaluated and jev_client is not None:
                 flag = _jev_fail_flag(getattr(jev_client, "last_error",
                                               None))
-                _why(f"audit_jev_{flag}")
+                _why(diagnostics, f"audit_jev_{flag}")
                 resource_wait |= flag == "resource"
                 retryable_failure |= flag == "retryable"
                 hard_fail |= flag == "hard"
@@ -1372,7 +1369,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         # candidate_fp and pair dedup.
         loops_done, loops_short, resource, retryable, hard = _promote_loops(
             ledger, scfg, pl, pid, bundle, facts_by_target, jev_client,
-            deadline)
+            deadline, diagnostics=diagnostics)
         resource_wait |= resource
         retryable_failure |= retryable
         hard_fail |= hard
@@ -1408,21 +1405,21 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         return "failed"
     if loops_short:
         # same mapping as a cutoff raised anywhere else in the pass
-        _why("budget_short")
+        _why(diagnostics, "budget_short")
         return "deferred_short"
     if pending:
         # evaluation incomplete (e.g. Jev outage mid-audit) — the job
         # must not sit 'done' on an unfinished audit; consume a bounded
         # retry attempt so a persistent outage eventually fails rather
         # than busy-loops (AT-058)
-        _why("audit_pending")
+        _why(diagnostics, "audit_pending")
         return "deferred" if resource_wait and not retryable_failure \
             else "retry"
     if not loops_done:
         # relation pass truncated by the pair budget/deadline — the
         # results committed above stand; the job re-runs to evaluate
         # the remaining (candidate, target) pairs (§17.2 持ち越し)
-        _why("loops_incomplete")
+        _why(diagnostics, "loops_incomplete")
         return "retry" if retryable_failure else "deferred"
     return "done"
 
@@ -1437,7 +1434,8 @@ _LLM_DOWN_REASONS = frozenset({"llm_unreachable", "llm_unavailable"})
 def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                  cfg_path: str | None = None,
                  config_generation: str | None = None,
-                 reserve_fn=None, lane: str | None = None) -> str:
+                 reserve_fn=None, lane: str | None = None, *,
+                 diagnostics: dict, shadow_stats: dict | None = None) -> str:
     """Preserve stale workers while bounding timeouts after dispatched work."""
     requests_before = jev_client.requests_made if jev_client is not None else 0
     llm_started = False
@@ -1456,15 +1454,15 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         status = _process_job_inner(
             ledger, scfg, job, jev_client, tracked_llm, deadline,
             cfg_path=cfg_path, config_generation=config_generation,
-            reserve_fn=reserve_fn, lane=lane)
+            reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats)
         from extraction_refresh import refresh_extraction_cards
         refresh_extraction_cards(ledger, job["project_id"], job["message_id"])
         return status
     except (runtime.RuntimeStale, runtime.RuntimeOff):
         return "stale"
     except runtime.LLMNotSent as e:
-        _PASS_REASON["not_sent"] = getattr(e, "stage", None)
-        if _PASS_REASON["not_sent"] == "llm_turn_busy":
+        diagnostics["not_sent"] = getattr(e, "stage", None)
+        if diagnostics["not_sent"] == "llm_turn_busy":
             # the other lane held the GPU turn: the endpoint is healthy
             # and the next pass normally gets it, so no hourly backoff
             return "deferred"
@@ -1480,10 +1478,10 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         # tick from the durable stages without charging an attempt.
         # Distinct from "deferred" so run_due stops the pass: the
         # remaining budget cannot fit another long generation either
-        _why("budget_short")
+        _why(diagnostics, "budget_short")
         return "deferred_short"
     except runtime.RuntimeBudget as e:
-        _why(f"budget_{e.stage}")
+        _why(diagnostics, f"budget_{e.stage}")
         return "retry" if jev_sent() or llm_started else "deferred"
 
 
@@ -1885,7 +1883,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
 
 def _job_metric(job, token, cohort: str, status, job_age: float,
                 job_elapsed: float, llm_s: float, jev_s: float, used: int,
-                usage: dict, jev_client) -> dict:
+                usage: dict, jev_client, *, diagnostics: dict) -> dict:
     """The bounded per-job metrics row of one drain pass."""
     return {
         "job_id": job["job_id"], "project_id": job["project_id"],
@@ -1915,10 +1913,10 @@ def _job_metric(job, token, cohort: str, status, job_age: float,
         # the previous job's code.
         "llm_error": semantic_transport.last_llm_failure()
         if status not in (None, "done") and llm_s > 0 else None,
-        "retry_reason": _PASS_REASON["code"]
+        "retry_reason": diagnostics["code"]
         if status != "done" else None,
-        "summary_validation_error": _PASS_REASON["summary_validation_error"],
-        "loops_rejected": _PASS_REASON["loops_rejected"],
+        "summary_validation_error": diagnostics["summary_validation_error"],
+        "loops_rejected": diagnostics["loops_rejected"],
     }
 
 
@@ -2132,7 +2130,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     transport = out["transport"] = {
         "llm_transport_s": 0.0, "llm_reacquire_s": 0.0,
         "jev_transport_s": 0.0, "jev_reacquire_s": 0.0}
-    _SHADOW_V2["pass"] = out["shadow_v2"] = {"calls": 0, "incomplete": 0, "s": 0.0}
+    # Log-only totals belong to this pass output; only its explicit stage chain may add to them.
+    shadow_stats = out["shadow_v2"] = {"calls": 0, "incomplete": 0, "s": 0.0}
 
     def _unlocked(kind, call, *args, **kwargs):
         started, ended = time.monotonic(), None
@@ -2354,10 +2353,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     if jev_client is not None else None
                 timed_llm, llm_acc = _timed_llm(llm_fn)
                 art0 = _last_stage_artifact(ledger, job["project_id"])
-                _PASS_REASON["code"] = None
-                _PASS_REASON["summary_validation_error"] = None
-                _PASS_REASON["loops_rejected"] = None
-                _PASS_REASON["not_sent"] = None
+                diagnostics = _job_diagnostics()
                 try:
                     if job["kind"] == QC_JOB_KIND:
                         status = semantic_qc._process_qc_job(
@@ -2369,7 +2365,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                             ledger, scfg, job, timed_jev, timed_llm, deadline,
                             cfg_path=cfg_path,
                             config_generation=cfg_generation,
-                            reserve_fn=reserve_fn, lane=lane)
+                            reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats)
                 except mcs_util.RunLockLost as e:
                     # An updater won the lock in a transport window (or the
                     # bounded reacquire expired). Write nothing: the job
@@ -2383,7 +2379,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     result["errors"].append("semantic: run_lock_lost")
                     return out
                 except Exception as e:
-                    _why(f"exception_{type(e).__name__}")
+                    _why(diagnostics, f"exception_{type(e).__name__}")
                     runtime.transition(ledger, token, "retry", retry_in=300,
                                        max_attempts=limit)
                     result["errors"].append(
@@ -2401,7 +2397,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     # attempt like any other overrun
                     status = "retry"
                 if status in ("deferred", "deferred_backoff") \
-                        and _PASS_REASON.get("not_sent") == "long_output_needs_budget":
+                        and diagnostics.get("not_sent") == "long_output_needs_budget":
                     key = str(job["job_id"])
                     prior = long_seen.get(key) or long_defers.get(key)
                     n = (prior["n"] if prior and prior["g"] == token.generation
@@ -2412,7 +2408,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         # its long-output call — stop the free loop: charge
                         # the attempt (ends 'failed' at the ceiling, where
                         # revive_failed and the operator can see it)
-                        _why("long_output_defer_capped")
+                        _why(diagnostics, "long_output_defer_capped")
                         out["long_output_capped"] = \
                             out.get("long_output_capped", 0) + 1
                         status = "retry"
@@ -2430,7 +2426,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 metric = _job_metric(
                     job, token, cohort_of.get(id(job), "backfill"), status,
                     job_age, job_elapsed, llm_s, jev_s, used, usage,
-                    jev_client)
+                    jev_client, diagnostics=diagnostics)
                 if status == "done":
                     # every "done" return has already passed the
                     # generation-fenced transition
@@ -2497,7 +2493,6 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                                       long_defers)
         return out
     finally:
-        _SHADOW_V2["pass"] = None
         if original_http is not None:
             jev_client._http_request = original_http
 

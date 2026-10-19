@@ -162,7 +162,7 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
     assert semantic_transport.llm_chat("synthetic prompt", timeout=2.0) is None
     elapsed = time.monotonic() - started_at
 
-    assert started.wait(5.0)
+    assert started.wait(5.0), semantic_transport.last_llm_failure()
     assert elapsed < trickle_s / 2
     headers, body = received[0]
     assert headers.get("Authorization") is None
@@ -289,7 +289,7 @@ def test_not_sent_llm_defers_only_when_no_jev_was_spent(
 
     monkeypatch.setattr(semantic_drain, "_process_job_inner", inner)
     assert semantic_drain._process_job(
-        None, None, None, client, lambda *a, **k: None, None) == expected
+        None, None, None, client, lambda *a, **k: None, None, diagnostics=semantic_drain._job_diagnostics()) == expected
 
 
 def test_not_sent_target_summary_keeps_completed_siblings(tmp_path):

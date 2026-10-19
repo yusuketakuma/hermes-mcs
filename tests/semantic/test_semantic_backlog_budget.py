@@ -396,9 +396,8 @@ def test_run_record_names_why_a_pass_will_retry(tmp_path, llm, expected):
 
 
 def test_retry_reason_is_per_job_and_keeps_the_first_cause(tmp_path, monkeypatch):
-    """Review condition: the reason is shared module state, so it must be
-    reset per job — a later job that stops without a recorded cause must
-    not inherit the earlier job's code — and the first cause of a pass wins."""
+    """A later job that stops without a recorded cause must not inherit
+    the earlier job's code; the first cause of each job wins."""
     import json
     db = _seeded(tmp_path)
     payload = json.loads(db.db.execute(
@@ -410,8 +409,8 @@ def test_retry_reason_is_per_job_and_keeps_the_first_cause(tmp_path, monkeypatch
     def process(*a, **k):
         first, second, status = next(passes)
         if first:
-            semantic_drain._why(first)
-            semantic_drain._why(second)
+            semantic_drain._why(k["diagnostics"], first)
+            semantic_drain._why(k["diagnostics"], second)
         return status
 
     monkeypatch.setattr(semantic_drain, '_process_job', process)
