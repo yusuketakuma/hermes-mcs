@@ -22,7 +22,7 @@ def test_history_validates_once_per_key_and_preserves_latest_tombstones(monkeypa
     ]
     db.executemany("INSERT INTO artifacts(kind,project_id,content,meta) VALUES(?,?,?,?)",
                    rows)
-    original = mcs_signals._signal_content
+    original = mcs_signals.signal_content
     # Reference the old append-only fold, including unreadable latest rows.
     expected = {}
     for _, pid, content, meta in rows:
@@ -39,7 +39,7 @@ def test_history_validates_once_per_key_and_preserves_latest_tombstones(monkeypa
         calls.append(1)
         return original(content, pid)
 
-    monkeypatch.setattr(mcs_signals, "_signal_content", counted)
+    monkeypatch.setattr(mcs_signals, "signal_content", counted)
     try:
         actual = mcs_signals._latest_signal_states(db)
     finally:

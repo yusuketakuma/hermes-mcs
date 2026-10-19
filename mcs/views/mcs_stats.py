@@ -995,7 +995,7 @@ def _feedback_episodes(db, scope, types):
 
     An invalid/terminal row without an observed opening has no
     denominator and voids any open episode under the same key."""
-    from mcs_signals import (ARTIFACT_KIND, _signal_content,
+    from mcs_signals import (ARTIFACT_KIND, signal_content,
                              signal_message_ids)
     episodes: list[_FeedbackEpisode] = []
     latest: dict[str, _FeedbackLatest] = {}
@@ -1015,7 +1015,7 @@ def _feedback_episodes(db, scope, types):
         if not isinstance(key, str) or not key:
             invalid += 1
             continue
-        c = _signal_content(content_s, pid)
+        c = signal_content(content_s, pid)
         if c is None or c["type"] not in types:
             invalid += 1
             previous = latest.pop(key, None)

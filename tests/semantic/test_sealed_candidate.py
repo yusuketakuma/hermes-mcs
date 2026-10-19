@@ -278,6 +278,23 @@ def test_loaded_jev_method_change_only_affects_new_worker_fingerprint(monkeypatc
     assert candidate.candidate_fingerprint({}) != original
 
 
+@pytest.mark.parametrize('name', ['item_scope', 'scoped_vitals', 'vital_line'])
+def test_moved_clinical_display_changes_only_new_worker_identity(monkeypatch, name):
+    import clinical_display
+
+    monkeypatch.setattr(candidate, '_LOADED_SOURCES', None)
+    original = candidate.candidate_fingerprint({})
+
+    def changed(*args, **kwargs):
+        raise AssertionError('interpretation code is fingerprinted, never called')
+
+    changed.__module__ = clinical_display.__name__
+    monkeypatch.setattr(clinical_display, name, changed)
+    assert candidate.candidate_fingerprint({}) == original
+    monkeypatch.setattr(candidate, '_LOADED_SOURCES', None)
+    assert candidate.candidate_fingerprint({}) != original
+
+
 @pytest.mark.parametrize('accessor', ['method', 'static', 'class_method', 'fget', 'fset', 'fdel'])
 def test_class_callable_surfaces_are_fingerprinted_without_evaluation(monkeypatch, accessor):
     import sys

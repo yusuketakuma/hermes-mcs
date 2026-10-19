@@ -17,7 +17,7 @@ from mcs_util import payload_hash
 _MODULES = ('semantic_extraction', 'semantic_facts', 'semantic_audit',
             'semantic_relations', 'semantic_render', 'semantic_llm', 'semantic_jev',
             'semantic', 'semantic_transport', 'semantic_assessment', 'semantic_projection', 'semantic_policy',
-            'semantic_acceptance', 'structured_view',
+            'semantic_acceptance', 'structured_view', 'clinical_display',
             'extract_schema', 'extract_validation', 'extract_quality',
             'clinical_scope', 'clinical_values')
 

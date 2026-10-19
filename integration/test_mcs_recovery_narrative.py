@@ -670,12 +670,12 @@ def _run_narrative(tmp_path):
             return original_git(args, timeout)
 
         mcs_update._git = target_git
-        state = mcs_update._default_state()
+        state = mcs_update.journal_store.default_state()
         state["applied"] = [{"tag": "v1.1.0", "sha": after,
                              "prev_sha": before, "schema_bump": True,
                              "backup_path": str(backup),
                              "at": time.time()}]
-        mcs_update.save_state(state)
+        mcs_update.journal_store.save_state(mcs_update.STATE_PATH, state)
         live_bytes = (N.data / "ledger.db").read_bytes()
         rc = mcs_update.rollback("cid-rb")
         # consent hold: no receipt -> no swap, marker up, grant denied
@@ -902,11 +902,11 @@ def test_failure_missing_consent_receipt_stays_held(tmp_path):
     mcs_update.LEDGER = str(live)
     before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
     after = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
-    state = mcs_update._default_state()
+    state = mcs_update.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0", "sha": after,
                          "prev_sha": before, "schema_bump": True,
                          "backup_path": str(back), "at": time.time()}]
-    mcs_update.save_state(state)
+    mcs_update.journal_store.save_state(mcs_update.STATE_PATH, state)
     live_bytes = live.read_bytes()
     assert mcs_update.rollback("cid-rb") == 2
     # no receipt seeded — recover must stay held

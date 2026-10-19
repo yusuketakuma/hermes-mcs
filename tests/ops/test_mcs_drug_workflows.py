@@ -9,6 +9,7 @@ import brain_export
 import ledger
 import mcs_drug
 import mcs_requests
+from safe_io import publish_new_bytes
 from test_drug_alias import corpus as corpus
 from test_drug_timeline import current
 
@@ -58,7 +59,7 @@ def test_alias_apply_and_rollback_do_not_require_snapshot(corpus, tmp_path, caps
     if snapshot_state == "corrupt":
         snapshot.write_bytes(b"synthetic invalid snapshot")
     proposed = tmp_path / "proposal.json"
-    drug_alias._write_new(proposed, mcs_requests.canonical(
+    publish_new_bytes(proposed, mcs_requests.canonical(
         drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")))
     inbox = tmp_path / "data/cmd"
     inbox.mkdir()

@@ -13,6 +13,7 @@ import mcs_repair as repair
 import mcs_requests as requests
 import mcs_restore as restore
 import mcs_refstats as refstats
+from operation_contract import REFSTAT_APPROVAL_KIND
 import test_mcs_backup as backup_tests
 import test_mcs_repair as repair_tests
 from test_backup_restore_consent import approved, resumed, restored as restored
@@ -137,14 +138,14 @@ def test_deeply_corrupt_approval_does_not_hide_an_earlier_valid_baseline(
         depth = sys.getrecursionlimit() + 100
         nested = "[" * depth + "0" + "]" * depth
         if damage == "artifact":
-            db.artifact_add(refstats.APPROVAL_KIND, nested)
+            db.artifact_add(REFSTAT_APPROVAL_KIND, nested)
         else:
             command_id = str(uuid.uuid4())
             with db.db:
                 db.db.execute(
                     "INSERT INTO command_receipts(command_id,payload_hash,outcome,receipt_json,processed_at) "
                     "VALUES(?,?,'applied',?,1)", (command_id, "b" * 64, nested))
-            db.artifact_add(refstats.APPROVAL_KIND, json.dumps({
+            db.artifact_add(REFSTAT_APPROVAL_KIND, json.dumps({
                 "name": "base", "file_hash": digest, "command_id": command_id}))
         snapshot = _snapshot(tmp_path)
     finally:

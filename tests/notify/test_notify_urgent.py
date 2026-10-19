@@ -109,13 +109,13 @@ def test_unapproved_or_incomplete_policy_never_enqueues(world, policy):
 @pytest.mark.parametrize("value", [10 ** 400, -(10 ** 400)], ids=["huge", "negative_huge"])
 def test_unrepresentable_policy_numbers_are_rejected_without_stopping_notifications(
         led, key, value):
-    import mcs_setup
+    import mcs_config
 
     policy = {"mode": "on", "room_cooldown_min": 1, key: value}
     cfg = {"urgency_escalation": policy}
     before = led.db.total_changes
     assert notify_urgent.settings(cfg) is None
-    assert mcs_setup._urgency_escalation(policy) is not None
+    assert mcs_config._urgency_escalation(policy) is not None
     assert notify_urgent.maybe_enqueue(led, cfg)["queued"] == 0
     assert led.db.total_changes == before
 

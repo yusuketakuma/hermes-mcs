@@ -7,7 +7,7 @@ import pytest
 
 import drug_map
 import extract
-import mcs_setup
+import mcs_config
 import mcs_signals
 import notify_views
 import rollup
@@ -109,7 +109,7 @@ def test_deep_dictionary_returns_safe_tick_diagnostic_without_db_writes(tmp_path
     path.write_bytes(raw)
     path.chmod(0o600)
     config = {"drug_map": {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}}
-    assert mcs_setup._drug_map_config(config["drug_map"]) is None
+    assert mcs_config._drug_map_config(config["drug_map"]) is None
     monkeypatch.setattr(run_check.time, "monotonic", lambda: 1)
     monkeypatch.setattr(extract, "run_pending", lambda *args, **kwargs: {"done": 0, "pids": []})
     monkeypatch.setattr(mcs_signals, "evaluate", lambda *args, **kwargs: {})
@@ -127,11 +127,11 @@ def test_deep_dictionary_returns_safe_tick_diagnostic_without_db_writes(tmp_path
 
 
 def test_dictionary_config_requires_absolute_path_and_pin():
-    assert mcs_setup._drug_map_config({"path": "/fictional", "sha256": "a" * 64}) is None
+    assert mcs_config._drug_map_config({"path": "/fictional", "sha256": "a" * 64}) is None
     for value in (None, {}, {"path": "relative", "sha256": "a" * 64},
                   {"path": "/fictional", "sha256": "not-pinned"},
                   MappingProxyType({"path": "/fictional", "sha256": "a" * 64})):
-        assert mcs_setup._drug_map_config(value) is not None
+        assert mcs_config._drug_map_config(value) is not None
 
 
 def test_deadline_cut_derive_is_reported_as_error(tmp_path, monkeypatch):
