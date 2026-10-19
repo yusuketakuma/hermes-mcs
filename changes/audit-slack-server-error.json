@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "Slack の内部エラー応答を送信結果不明として扱い二重投稿を防止",
+  "summary": "Slack が internal_error / fatal_error を返すと未送信と確定して再送していたため、実際には保存されていた場合に二重投稿になることがありました。送信結果不明として記録し、再送しません。",
+  "upgrade": "追加操作は不要です。Slack の配送workerの再起動で反映されます。",
+  "details": [
+    "internal_error/fatal_error を not_sent ではなく unknown に分類。回帰: tests/adapters/slack/test_slack_server_error_outcome.py"
+  ],
+  "refs": [
+    "adapters/slack/delivery.py"
+  ]
+}

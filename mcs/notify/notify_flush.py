@@ -176,7 +176,8 @@ def _collect_files(att_map: dict, order: list[int],
                 skip(a, "未送信")
                 continue
             fname = os.path.basename(str(a["name"] or a["file_id"] or "file"))
-            fname = re.sub(r'["\\\r\n]', "_", fname) or "file"
+            # every control char too: LINE WORKS rejects them and the whole notice stalls
+            fname = re.sub(r'[\x00-\x1f\x7f"\\]', "_", fname) or "file"
             files.append((fname[:150], a["local_path"]))
             total += size
     return files

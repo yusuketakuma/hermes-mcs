@@ -1059,8 +1059,9 @@ class MCSAdapter:
         if (not profile_dir or not os.path.isabs(profile_dir)
                 or not chrome_bin or not os.path.isabs(chrome_bin)):
             return []
+        # the next token must be a flag or URL: "<profile> copy" is another profile
         flag = re.compile(r"(?:^|\s)--user-data-dir=" + re.escape(profile_dir)
-                          + r"(?:\s|$)")
+                          + r"(?:\s--|\s[a-z][a-z0-9+.-]*://|$)")
         try:
             result = subprocess.run(["ps", "-axww", "-o", "pid=,command="],
                                     capture_output=True, text=True, timeout=10)

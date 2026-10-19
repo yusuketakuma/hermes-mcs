@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "同じ投稿の薬剤・症状の記載で本文が繰り返し表示される問題を修正",
+  "summary": "1件の投稿に複数の薬剤や症状の記載があると、患者コンテキストの一覧で同じ本文が記載の数だけ重ねて表示されていました。同じ投稿の本文は1回だけ表示します。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "patient_context_list の同一投稿行の結合で quotes を重複させない。回帰: tests/views/test_patient_context_mention_quotes.py"
+  ],
+  "refs": [
+    "mcs/notify/notify_views.py"
+  ]
+}

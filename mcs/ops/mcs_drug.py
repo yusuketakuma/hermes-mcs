@@ -31,14 +31,19 @@ STATUS_LABELS = {"resolved": "単一候補", "ambiguous": "複数候補", "gener
                  "unresolved": "候補なし"}
 
 
-def _limit(value: str) -> int:
+def _limit(value: str, floor: int = 0) -> int:
     try:
         number = int(value)
     except ValueError:
-        raise argparse.ArgumentTypeError("limit は0〜200の整数です") from None
-    if not 0 <= number <= 200:
-        raise argparse.ArgumentTypeError("limit は0〜200の整数です")
+        raise argparse.ArgumentTypeError(f"limit は{floor}〜200の整数です") from None
+    if not floor <= number <= 200:
+        raise argparse.ArgumentTypeError(f"limit は{floor}〜200の整数です")
     return number
+
+
+def _listing_limit(value: str) -> int:
+    # related_names and master compare refuse 0, so reject it here instead of blaming the dictionary.
+    return _limit(value, 1)
 
 
 def _dictionary(path, sha256):
@@ -361,7 +366,8 @@ def main(argv=None) -> int:
         command.add_argument("name")
         command.add_argument("--dictionary", help="私有辞書の絶対パス（省略時は既存設定）")
         command.add_argument("--sha256", help="照合する辞書のSHA256")
-        command.add_argument("--limit", type=_limit, default=20)
+        command.add_argument("--limit", type=_listing_limit if name == "related" else _limit,
+                             default=20)
         command.add_argument("--json", action="store_true")
     for name in ("compare", "impact"):
         command = sub.add_parser(name)
@@ -386,7 +392,7 @@ def main(argv=None) -> int:
                              help="入力原本のSHA256・版・仕様を固定するpin JSON")
     command.add_argument("--dictionary", help="採用辞書の絶対パス（省略時は既存設定）")
     command.add_argument("--sha256", help="採用辞書のSHA256")
-    command.add_argument("--limit", type=_limit, default=100)
+    command.add_argument("--limit", type=_listing_limit, default=100)
     command.add_argument("--json", action="store_true")
     command = sub.add_parser("install-bundled",
                              help="同梱の公式医薬品マスターから私有辞書を新規作成する")

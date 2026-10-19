@@ -2895,8 +2895,13 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
                 # the thread never came (card_thread off, the post's card
                 # suppressed): a thread-only alert parked forever would
                 # occupy a flush slot and the daily quota for nothing
-                _close_notice(db, event_id, renders, now)
-                return {"suppressed": reason}
+                if _notice_unsent(db, renders):
+                    _close_notice(db, event_id, renders, now)
+                    return {"suppressed": reason}
+                # a granted/unknown send must stay open for its receipt
+                held = "alert_render_live" if any(render["state"] in LIVE_RENDER for render in renders) else "alert_outcome_pending"
+                _reseat(db, event_id, now, held)
+                return {"parked": held}
             # the card usually lands within minutes; afterwards an hourly
             # look is enough and keeps the due queue free for other sends
             db.execute("UPDATE notify_outbox SET next_try=?,progress=?,updated_at=? WHERE event_id=?",

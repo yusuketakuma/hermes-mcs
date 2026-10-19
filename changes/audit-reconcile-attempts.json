@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "再照合ジョブが一時的なエラーの累積で止まり進捗が消える問題を修正",
+  "summary": "過去の投稿を巡回して照合するジョブで、一時的な通信エラーや実行時間切れが回をまたいで8回たまると失敗扱いになり、再登録時に巡回位置と完了記録が消えて1ページ目から取り直していました。巡回を1周終えるたびに失敗回数を戻し、実行時間切れは失敗に数えません。",
+  "upgrade": "追加操作は不要です。取得の上限・間隔は変わりません。",
+  "details": [
+    "完了した巡回で attempts を0に戻し、deadline_exceeded は job_defer 扱い。回帰: tests/ingest/test_reconcile_attempts_per_pass.py"
+  ],
+  "refs": [
+    "mcs/ingest/job_ops.py",
+    "mcs/core/ledger.py"
+  ]
+}

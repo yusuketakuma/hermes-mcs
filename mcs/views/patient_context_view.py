@@ -225,6 +225,7 @@ def replies(db, project_id) -> dict:
     """連絡・返答の確認: request candidates with the thread's later replies as recorded.
     A missing reply reads 返答が見つからない, never 未対応; a 完了-like reply is not a formal completion."""
     from ledger import LedgerReader
+    from mcs_queries import item_unverified
     from notify_views import REPLY_LABELS
     from rollup import build_rollup
     # The cached rollup can outlive an edited/deleted request, reply or plan post; rebuild
@@ -252,7 +253,7 @@ def replies(db, project_id) -> dict:
         return text + (f"（最終投稿 {str(seen)[:16].replace('T', ' ')}）" if seen else "")
     return {"view": "replies", "items": [
         {"message_id": r.get("mid"), "at": r.get("at"), "text": r.get("ctx"), "sender": asked_by(r.get("mid")),
-         "reply_state": r.get("reply_state"),
+         "reply_state": r.get("reply_state"), "unverified": item_unverified(r),
          "reply": (f"返信あり（{REPLY_LABELS[r['reply_state']]}・記録上）"
                    if r.get("reply_state") in REPLY_LABELS else "返答が見つからない"),
          "reply_conflict": r.get("reply_conflict") is True} for r in rows],
@@ -266,7 +267,9 @@ def previsit(db, ev, now, *, days=7) -> dict:
     talk = replies(db, ev["project_id"])
     picked, posts = {"written_checks": [], "unanswered": []}, set()
     for group, rows in (("written_checks", [i for i in ev["items"] if i["category"] == "followup"]),
-                        ("unanswered", [r for r in talk["items"] if r["reply_state"] is None])):
+                        # an unverified request candidate is not a written request awaiting a reply
+                        ("unanswered", [r for r in talk["items"] if r["reply_state"] is None
+                                        and not r["unverified"]])):
         for row in rows:
             if row["message_id"] not in posts:
                 posts.add(row["message_id"])
@@ -350,7 +353,7 @@ def handoff(db, ev) -> dict:
     talk = replies(db, ev["project_id"])
     return {"view": "handoff", "coverage": ev["coverage"], "as_of": ev["as_of"],
             "written_checks": [i for i in ev["items"] if i["category"] == "followup"],
-            "unanswered": [r for r in talk["items"] if r["reply_state"] is None]}
+            "unanswered": [r for r in talk["items"] if r["reply_state"] is None and not r["unverified"]]}
 
 
 def search(db, project_id, query) -> dict:

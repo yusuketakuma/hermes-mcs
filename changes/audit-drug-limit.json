@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "薬剤の関連名・マスター影響確認で --limit 0 を入力段階で案内",
+  "summary": "mcs drug related と master-impact に --limit 0 を指定すると、正しい辞書でも「権限とSHA256を確認してください」と誤った原因が表示されていました。この2つでは「limit は1〜200の整数です」と案内します。",
+  "upgrade": "追加操作は不要です。他の drug コマンドは従来どおり0〜200を受け付けます。",
+  "details": [
+    "related/master-impact の --limit 下限を1に揃える。回帰: tests/ops/test_mcs_drug_limit_floor.py"
+  ],
+  "refs": [
+    "mcs/ops/mcs_drug.py"
+  ]
+}

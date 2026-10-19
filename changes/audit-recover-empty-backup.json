@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "復旧監視が空のバックアップを復元候補にしないよう修正",
+  "summary": "更新の巻き戻し中にバックアップが0バイトになっていると、復旧監視がそれを復元可能な古いDBとみなして承認待ちに進んでいました。更新ツールと同じく読めないバックアップとして停止します。",
+  "upgrade": "復旧監視（~/.mcs-recovery）への反映は導入済みの更新手順に従います。",
+  "details": [
+    "_restore_db で非通常ファイル・0バイトを backup_unreadable とする。回帰: tests/ops/test_recover_rejects_empty_backup.py"
+  ],
+  "refs": [
+    "deployment/recovery/mcs_recover.py"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "Slack の長いタスク一覧が二重に表示される問題を修正",
+  "summary": "ボタン付きのタスク一覧で代替テキストが3000文字を超えると、一覧の末尾が文字だけの追加メッセージとして重ねて送られていました。ボタン付きの表示1件だけを送ります。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "Block Kit 送信時に代替テキストの分割送信を行わない。回帰: tests/adapters/slack/test_slack_task_list_blocks_single_message.py"
+  ],
+  "refs": [
+    "adapters/slack/actions.py"
+  ]
+}

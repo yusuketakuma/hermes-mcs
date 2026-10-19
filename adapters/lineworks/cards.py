@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 
 from adapters.common.spec import PRIMARY_ACTIONS, validate as validate_display
 from adapters.common.text import notification_preview
@@ -62,7 +63,8 @@ def buttons(text, actions, *, preview=None):
             {"type": "button", "style": "secondary", "action": {
                 **action, **({"text": action["label"]} if action["type"] == "message" else {})}}
             for action in actions]}}
-    alt = " ".join((preview or text or "MCS").split())
+    # client._validate_content rejects C0/DEL in altText; split() alone keeps them.
+    alt = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", preview or text or "MCS").split()) or "MCS"
     return {"type": "flex", "altText": alt[:399] + "…" if len(alt) > 400 else alt,
             "contents": contents}
 

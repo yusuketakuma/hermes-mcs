@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "再解釈で消えた未完了事項が新しい世代で復活する問題を修正",
+  "summary": "解析の世代が変わったとき、元投稿の再評価で出なくなった未完了事項が旧世代から引き継がれて候補に戻ることがありました。再評価した投稿は今回の結果だけで候補を決め、消えた事項は履歴として残します。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "再評価した origin の旧世代項目を fork で current に戻さない。回帰: tests/semantic/test_loop_fork_skips_reinterpreted_origin.py"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_loops.py"
+  ]
+}

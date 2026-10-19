@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "通知設定が壊れていても診断が止まらないように修正",
+  "summary": "config.json の notify 欄がオブジェクトでないと、動作診断や収集の健全性確認で配送workerの確認がエラーになっていました。設定の不備を「要修正」と報告し、配送workerは「確認できません」と表示します。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "card_worker_status.diagnose は非 object の notify/送信先設定を worker_start_unverified とし、doctor は設定エラー時に空設定で診断。回帰: tests/ops/test_doctor_malformed_notify.py、tests/views/test_card_worker_status.py"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "mcs/views/card_worker_status.py"
+  ]
+}

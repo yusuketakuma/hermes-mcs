@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "未確認の依頼候補が「返答が見つからない記録」に並ぶ問題を修正",
+  "summary": "否定・推測・根拠なしで未確認扱いの依頼候補が、訪問前の確認と引継ぎの「返答が見つからない記録」に確定した依頼と同じように並んでいました。この2つの一覧から外し、連絡・返答の確認一覧では未確認の印を付けます。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "返答なし一覧は unverified を除外し、連絡一覧に unverified 印を渡す。回帰: tests/views/test_unverified_request_replies.py"
+  ],
+  "refs": [
+    "mcs/views/patient_context_view.py"
+  ]
+}

@@ -731,15 +731,20 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
             pl["passes"] = passes + 1
             pl["last_pass_at"] = time.time()
             ledger.job_defer(job["job_id"], RECONCILE_INTERVAL_S,
-                             payload=pl)
+                             payload=pl, reset_attempts=True)
         elif batch.error:
-            if isinstance(batch.error, SessionExpired):
+            if batch.error.kind == "deadline_exceeded":
+                # run-deadline cut: unfinished work, not a failure
+                ledger.job_defer(job["job_id"], 300, payload=pl,
+                                 reason_code="deadline_exceeded")
+            elif isinstance(batch.error, SessionExpired):
                 ledger.job_defer(job["job_id"], 300, payload=pl,
                                  reason_code=_job_failure_reason(batch.error))
                 raise batch.error
-            ledger.job_retry(job["job_id"], 300, payload=pl,
-                             reason_code=_job_failure_reason(batch.error),
-                             fail_fast=False)
+            else:
+                ledger.job_retry(job["job_id"], 300, payload=pl,
+                                 reason_code=_job_failure_reason(batch.error),
+                                 fail_fast=False)
             result["errors"].append(f"reconcile {pid}: {batch.error.kind}")
         else:
             ledger.job_defer(job["job_id"],

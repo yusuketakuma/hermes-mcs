@@ -1167,11 +1167,14 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     jev_client, member["body_original"], facts, deadline,
                     target_id=f"m{mid}", match_threshold=scfg["match_threshold"])
                 guard("coverage_result")
-                ledger.artifact_add(
-                    KIND_COVERAGE, json.dumps(coverage, ensure_ascii=False),
-                    project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                    meta={"fingerprint": fp, "policy_fingerprint": policy,
-                          "technical_status": "complete" if coverage["evaluated"] else "pending"})
+                # an identical unevaluated re-run is a durable wait, not new
+                # information — record the outcome once (FIX-SD1)
+                if previous is None or previous["content"] != coverage:
+                    ledger.artifact_add(
+                        KIND_COVERAGE, json.dumps(coverage, ensure_ascii=False),
+                        project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+                        meta={"fingerprint": fp, "policy_fingerprint": policy,
+                              "technical_status": "complete" if coverage["evaluated"] else "pending"})
             coverage_by_target[mid] = coverage["findings"]
             if not coverage["evaluated"]:
                 incomplete = _why(f"coverage_{coverage.get('failure_reason')}")

@@ -201,6 +201,9 @@ def _sdk_problem() -> str | None:
 def check(root: str) -> int:
     """Local-only verification: config, tokens and pinned SDKs. No network."""
     cfg = config.load(root)
+    from mcs_setup import configured_cron_jobs
+    # Runtime() schedules these jobs; fail here with the code, not a crash-loop.
+    _coded(configured_cron_jobs, cfg)
     used = {t for t in (config.interactive(cfg),) if t}
     for key in ("notify_target", "notify_system_target"):
         target = cfg.get(key)

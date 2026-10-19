@@ -2869,8 +2869,11 @@ def cmd_doctor(args) -> int:
     from operational_status import stored_status, status_lines
     operations = stored_status(HOME, cfg)
     from card_worker_status import diagnose
-    worker = diagnose(os.path.join(HOME, 'data'), cfg,
+    # An invalid config cannot name the worker owner; the restore hold needs no cfg.
+    worker = diagnose(os.path.join(HOME, 'data'), {} if config_errors else cfg,
                       probe_data='data' in probes and not config_errors)
+    if config_errors:
+        worker.update(state='unknown', reason='worker_start_unverified')
     checks['card_worker'] = _doctor_check([], [worker['reason']]
         if worker['state'] in ('unknown', 'disabled') else [])
     checks['restore_delivery'] = _doctor_check([],

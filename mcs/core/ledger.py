@@ -2140,11 +2140,16 @@ class Ledger:
         self.db.commit()
 
     def job_defer(self, job_id: int, retry_in: float,
-                  payload: dict | None = None, *, reason_code: str | None = None):
+                  payload: dict | None = None, *, reason_code: str | None = None,
+                  reset_attempts: bool = False):
         """Reschedule WITHOUT consuming an attempt — used for progress
         checkpoints and waiting on sub-jobs, not failures."""
         if reason_code is not None and job_reason_code(reason_code) is None:
             raise ValueError("invalid_job_reason")
+        if reset_attempts:
+            # a rotating job's budget is per pass, not per lifetime
+            self.db.execute("UPDATE fetch_jobs SET attempts=0 WHERE job_id=?",
+                            (job_id,))
         if payload is not None:
             self.db.execute(
                 "UPDATE fetch_jobs SET payload=?,next_try=?,updated_at=?,reason_code=? "

@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "送信中の緊急アラートが取り下げ扱いになる問題を修正",
+  "summary": "送信中や送信結果が不明な緊急アラートが、元カードのスレッドを失ったまま6時間を過ぎると未送信の取り下げとして記録され、後で配信完了が届いても直りませんでした。送信していないことが確かな場合だけ取り下げます。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "thread hold 期限切れの close に _notice_unsent ガードを追加し、送信中・不明は待機。回帰: tests/notify/test_urgent_inflight_send_not_suppressed.py"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py"
+  ]
+}

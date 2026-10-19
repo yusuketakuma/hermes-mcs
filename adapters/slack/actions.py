@@ -346,6 +346,8 @@ class Actions:
                     kwargs["blocks"] = _sections(unescape(chunk)) + [
                         {"type": "actions", "elements": navigation}]
                 await _call(client.chat_postEphemeral, **kwargs)
+                if blocks:
+                    break  # the blocks carry the content; later chunks would repeat it
             return True
         except Exception as exc:
             self._log("followup_failed", error=type(exc).__name__)

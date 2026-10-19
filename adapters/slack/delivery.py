@@ -131,6 +131,8 @@ def _announces(spec, part) -> bool:
 # chat.update rejections that prove the prior reply cannot be edited
 _REPOST_ON_UPDATE = frozenset({"message_not_found", "cant_update_message",
                                "edit_window_closed"})
+# Slack: "it's possible some aspect of the operation succeeded"
+_MAY_HAVE_APPLIED = frozenset({"internal_error", "fatal_error"})
 
 
 def _failed(exc, op, message_id):
@@ -142,6 +144,8 @@ def _failed(exc, op, message_id):
         else type(exc).__name__.lower()
     if data.get("error") == "message_not_found" and op == "revoke":
         return {"result": "delivered", "message_id": message_id}
+    if data.get("error") in _MAY_HAVE_APPLIED:
+        return {"result": "unknown", "error_code": code}
     if (isinstance(status, int) and 400 <= status < 500) \
             or (data.get("ok") is False
                 and isinstance(status, int) and status < 500):

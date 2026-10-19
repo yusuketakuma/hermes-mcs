@@ -204,6 +204,9 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
         # a reinterpreted-away row is history, never a fork source
         if meta.get("invalidated") or _current_meta(meta, fp, policy):
             continue
+        # a message re-evaluated above: its current facts alone decide
+        if row["message_id"] in facts_by_target:
+            continue
         # Legacy artifacts without both bindings cannot be promoted to a
         # current generation without re-proving their provenance.
         if not isinstance(meta.get("fingerprint"), str) \

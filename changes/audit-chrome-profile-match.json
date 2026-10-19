@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "専用プロファイルと似た名前の別 Chrome を停止対象にしないよう修正",
+  "summary": "専用プロファイルのパスに空白と文字列を足した別のプロファイル（例: 名前の末尾に「 copy」）で起動した Chrome も、専用 Chrome として停止対象に数えていました。パスが完全に一致する場合だけ対象にします。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "--user-data-dir の後続を flag・URL・行末に限定。回帰: tests/ingest/test_profile_chrome_space_sibling.py"
+  ],
+  "refs": [
+    "mcs/ingest/mcs_adapter.py"
+  ]
+}

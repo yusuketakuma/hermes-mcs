@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "制御文字を含む投稿や添付名で LINE WORKS への通知が止まる問題を修正",
+  "summary": "投稿本文に見えない制御文字が含まれるとカードが送信前の検証で毎回拒否され、添付名に制御文字があると通知全体が保留されていました。プレビューの制御文字は空白に、添付名の制御文字は「_」に置き換えます。",
+  "upgrade": "追加操作は不要です。LINE WORKS の独立アダプターの再起動で反映されます。",
+  "details": [
+    "altText の C0 制御文字を空白化し、_collect_files は制御文字・DEL・引用符・バックスラッシュを「_」に置換。回帰: tests/adapters/lineworks/test_lineworks_alttext_control_chars.py、tests/notify/test_attachment_name_controls.py"
+  ],
+  "refs": [
+    "adapters/lineworks/cards.py",
+    "mcs/notify/notify_flush.py"
+  ]
+}

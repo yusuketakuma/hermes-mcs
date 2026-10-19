@@ -1439,7 +1439,9 @@ def _restore_db(backup_path, on_hold=None):
             return "restore_marker_unreadable"
     live = _db_version(LEDGER)
     back = _db_version(backup_path)
-    if back is None:
+    # SQLite opens a zero-byte file as an empty schema-0 DB; reject it like ledger.valid_mcs_db
+    if back is None or not os.path.isfile(backup_path) \
+            or os.path.getsize(backup_path) == 0:
         return "backup_unreadable: " + str(backup_path)
     if live is None:
         return "live_db_unreadable"

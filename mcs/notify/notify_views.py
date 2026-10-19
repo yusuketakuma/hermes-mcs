@@ -843,7 +843,9 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             last = rows[-1] if rows else None
             if (last and last["group"] == group and last.get("message_id") == item.get("message_id")
                     and last["source"] == source and quotes and not item.get("reply")):
-                last["quotes"] += quotes        # same post, same group: one source line
+                # same post, same group: one source line; each mention of one
+                # post carries the same body, so keep each quote once
+                last["quotes"] += [q for q in quotes if q not in last["quotes"]]
             else:
                 rows.append({"group": group, "project_id": project_id, "message_id": item.get("message_id"),
                              "quotes": quotes, "source": source, "date": date, "source_rest": rest,

@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "独立実行モードの設定確認でバックアップ設定の誤りも検出",
+  "summary": "バックアップ設定が不正でも mcs_standalone check は確認完了と表示し、run はエラーコードなしで異常終了と自動再起動を繰り返していました。check と run の両方で backup_config_invalid を表示して停止します。",
+  "upgrade": "独立実行モードだけが対象です。設定が正しい環境では操作は不要です。",
+  "details": [
+    "check でも run と同じ configured_cron_jobs の検証を通し、失敗をコード付きで報告。回帰: tests/adapters/standalone/test_check_rejects_invalid_backup_config.py"
+  ],
+  "refs": [
+    "mcs_standalone/__main__.py"
+  ]
+}

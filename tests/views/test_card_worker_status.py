@@ -68,3 +68,10 @@ def test_data_probe_closes_connection_on_success_and_query_failure(tmp_path, mon
     assert workers.diagnose(tmp_path, {}, probe_data=True)['restore_delivery_held'] is None
     with pytest.raises(sqlite3.ProgrammingError, match='closed'):
         opened[-1].execute('SELECT 1')
+
+
+def test_malformed_notify_block_is_unverified_not_a_crash(tmp_path):
+    for cfg in ({'notify': 'slack'}, {'notify': ['slack']},
+                {'notify': {'interactive': 'slack', 'slack': 'default'}}):
+        result = workers.diagnose(tmp_path, cfg)
+        assert (result['state'], result['reason']) == ('unknown', 'worker_start_unverified')

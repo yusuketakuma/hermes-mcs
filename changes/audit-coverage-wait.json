@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "医療情報の確認待ちの間に同じ記録が増え続ける問題を修正",
+  "summary": "外部解析の予算切れや認証情報の未設定で網羅確認が止まっている間、同じ内容の未完了記録が約1分ごとに追加され、進んだものとして数えられていました。内容が変わったときだけ記録します。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "同一内容の pending semantic_coverage 行を重複追加しない。回帰: tests/semantic/test_coverage_wait_dedup.py"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_drain.py"
+  ]
+}
