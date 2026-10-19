@@ -17,9 +17,9 @@ not guarded. Slack strips its retry handlers. See hermes_plugin/README.md.)
 
 The transport's own wire calls live behind ``_perform`` and
 ``_perform_part``; everything around them — claims, grants, journals,
-receipts, retries — is shared here. All filesystem work happens via
-``asyncio.to_thread``; the event loop never blocks on the spec/result
-poll.
+receipts, retries — is shared here. Spec/result scans and selected
+publications use ``asyncio.to_thread``. Journal appends and registry
+mutations remain synchronous, preserving their phase/durability order.
 """
 from __future__ import annotations
 

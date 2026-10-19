@@ -5,6 +5,7 @@ import errno
 import fcntl
 import json
 import plistlib
+import pytest
 from types import SimpleNamespace
 
 from mcs_standalone import runtime, service
@@ -431,3 +432,142 @@ def test_manual_plist_template_keeps_the_host_alive_like_the_rendered_one():
     rendered = plistlib.loads(service.render("/tmp/synthetic-root", platform="darwin")[1].encode())
     for key in ("KeepAlive", "ExitTimeOut", "AbandonProcessGroup", "ThrottleInterval", "Umask"):
         assert template[key] == rendered[key], key
+
+
+
+# Adopted PIDs are observed identities, not reusable signal capabilities.
+@pytest.mark.parametrize("operation", ["terminate", "kill"])
+def test_adopted_process_checks_identity_before_each_signal(monkeypatch, operation):
+    clock = [0.0]
+    argv = ["synthetic-worker"]
+    found = [(1, " ".join(argv))]
+    sent = []
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(runtime, "_process_args", lambda _pid: found[0])
+    monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: sent.append((pid, sig)) if sig else None)
+    assert runtime._is_orphan(4001, argv) is True
+    adopted = runtime._Adopted(4001, argv)
+    # Exit and PID reuse happen before the next periodic identity check.
+    found[0] = (1, "synthetic-other-process")
+    clock[0] = 1.0
+    getattr(adopted, operation)()
+    assert sent == []
+    assert adopted.poll() == 0
+
+
+def test_adopted_background_reuse_during_term_grace_never_receives_kill(tmp_path, monkeypatch):
+    host = _host(tmp_path, monkeypatch)
+    clock = [0.0]
+    argv = host.argv["extract-0"]
+    found = [(1, " ".join(argv))]
+    sent = []
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(runtime, "_process_args", lambda _pid: found[0])
+    monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: sent.append((pid, sig)) if sig else None)
+    status = tmp_path / "data" / service.STATUS_FILE
+    status.write_text(json.dumps({"pid": 3999, "children": {"extract-0": {"pid": 4001}}}))
+    status.chmod(0o600)
+    host.adopt_orphans(100)
+    assert sent == [(4001, runtime.signal.SIGTERM)]
+    host.schedules = []
+    monkeypatch.setattr(runtime, "BACKGROUND", {})
+    found[0] = (1, "synthetic-other-process")
+    clock[0] = runtime.STOP_GRACE_S + 1
+    host.tick(100 + runtime.STOP_GRACE_S + 1, draining=True)
+    assert sent == [(4001, runtime.signal.SIGTERM)]
+    host.tick(100 + runtime.STOP_GRACE_S + 2, draining=True)
+    assert "extract-0" not in host.children
+    assert host.exits["extract-0"]["last_exit"] is None
+
+
+def test_unreadable_adopted_identity_keeps_child_and_inflight_slot(tmp_path, monkeypatch):
+    host = _host(tmp_path, monkeypatch)
+    clock = [0.0]
+    argv = host.argv["mcs_check"]
+    found = [(1, " ".join(argv))]
+    sent = []
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(runtime, "_process_args", lambda _pid: found[0])
+    monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: sent.append((pid, sig)) if sig else None)
+    adopted = runtime._Adopted(4002, argv)
+    host.children["mcs_check"] = {"process": adopted, "kind": "core", "stopping_at": None,
+                                   "adopted": True, "unfired": 600}
+    host.fired, host.inflight = {"mcs_check": 1200}, {"mcs_check": 600}
+    found[0] = None  # Synthetic ps timeout/read failure while kill(pid, 0) succeeds.
+    clock[0] = 31
+    host.tick(1231, draining=True)
+    assert host.children["mcs_check"]["process"] is adopted
+    assert host.inflight == {"mcs_check": 600} and host.fired == {"mcs_check": 1200}
+    assert host.exits == {}
+    adopted.terminate()
+    adopted.kill()
+    assert sent == [] and adopted.poll() is None
+    # A transient read failure must not permanently discard ownership.
+    found[0] = (1, " ".join(argv))
+    adopted.terminate()
+    assert sent == [(4002, runtime.signal.SIGTERM)] and adopted.poll() is None
+
+
+def test_unreadable_adopted_liveness_is_not_proof_of_exit(monkeypatch):
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: 0.0)
+    adopted = runtime._Adopted(4003, ["synthetic-worker"])
+
+    def unreadable(_pid, sig):
+        assert sig == 0
+        raise PermissionError("synthetic liveness probe unavailable")
+
+    monkeypatch.setattr(runtime.os, "kill", unreadable)
+    assert adopted.poll() is None
+    assert not adopted.ended
+
+
+
+def test_verified_adopted_background_still_terms_kills_and_reaps(tmp_path, monkeypatch):
+    host = _host(tmp_path, monkeypatch)
+    clock = [0.0]
+    alive = [True]
+    sent = []
+    argv = host.argv["extract-0"]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(runtime, "_process_args",
+                        lambda _pid: (1, " ".join(argv)) if alive[0] else None)
+
+    def signal_process(pid, sig):
+        if not alive[0]:
+            raise ProcessLookupError("synthetic child gone")
+        if sig:
+            sent.append((pid, sig))
+            if sig == runtime.signal.SIGKILL:
+                alive[0] = False
+
+    monkeypatch.setattr(runtime.os, "kill", signal_process)
+    status = tmp_path / "data" / service.STATUS_FILE
+    status.write_text(json.dumps({"pid": 3999, "children": {"extract-0": {"pid": 4001}}}))
+    status.chmod(0o600)
+    host.adopt_orphans(100)
+    host.schedules = []
+    monkeypatch.setattr(runtime, "BACKGROUND", {})
+    assert sent == [(4001, runtime.signal.SIGTERM)]
+    clock[0] = runtime.STOP_GRACE_S - 1
+    host.tick(100 + clock[0], draining=True)
+    assert sent == [(4001, runtime.signal.SIGTERM)]
+    clock[0] = runtime.STOP_GRACE_S
+    host.tick(100 + clock[0], draining=True)
+    assert sent == [(4001, runtime.signal.SIGTERM), (4001, runtime.signal.SIGKILL)]
+    host.tick(101 + clock[0], draining=True)
+    assert host.children == {} and host.exits["extract-0"]["last_exit"] is None
+
+
+def test_initial_unreadable_identity_is_not_adopted_or_signalled(tmp_path, monkeypatch):
+    host = _host(tmp_path, monkeypatch)
+    status = tmp_path / "data" / service.STATUS_FILE
+    status.write_text(json.dumps({"pid": 3999, "children": {"extract-0": {"pid": 4001}}}))
+    status.chmod(0o600)
+    monkeypatch.setattr(runtime, "_process_args", lambda _pid: None)
+
+    def no_signal(*_args):
+        raise AssertionError("unknown initial identity cannot authorize a signal")
+
+    monkeypatch.setattr(runtime.os, "kill", no_signal)
+    host.adopt_orphans(100)
+    assert host.children == {}

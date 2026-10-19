@@ -92,9 +92,11 @@ def _process_args(pid):
 
 
 def _is_orphan(pid, argv):
-    """A child of a killed host: same command line, no longer our child."""
+    """True for a matching orphan, False for another process, None if unreadable."""
     found = _process_args(pid)
-    return found is not None and found[0] != os.getpid() and found[1] == " ".join(argv)
+    if found is None:
+        return None
+    return found[0] != os.getpid() and found[1] == " ".join(argv)
 
 
 class _Adopted:
@@ -110,24 +112,33 @@ class _Adopted:
         if not self.ended:
             try:
                 os.kill(self.pid, 0)
-            except OSError:
+            except ProcessLookupError:
                 self.ended = True
+            except OSError:
+                pass  # An unreadable live process is not proof of exit.
             else:
                 # A reaped orphan's pid can be reused: re-verify its identity.
                 if time.monotonic() - self.checked >= 30:
                     self.checked = time.monotonic()
-                    self.ended = not _is_orphan(self.pid, self.argv)
+                    self.ended = _is_orphan(self.pid, self.argv) is False
         return 0 if self.ended else None
 
-    def terminate(self):
-        if not self.ended:
+    def _signal(self, sig):
+        if self.ended:
+            return
+        identity = _is_orphan(self.pid, self.argv)
+        if identity is False:
+            self.ended = True
+        elif identity is True:
             with suppress(OSError):
-                os.kill(self.pid, signal.SIGTERM)
+                os.kill(self.pid, sig)
+        # Unknown identity holds ownership and sends nothing; a later poll retries.
+
+    def terminate(self):
+        self._signal(signal.SIGTERM)
 
     def kill(self):
-        if not self.ended:
-            with suppress(OSError):
-                os.kill(self.pid, signal.SIGKILL)
+        self._signal(signal.SIGKILL)
 
 
 class Runtime:
