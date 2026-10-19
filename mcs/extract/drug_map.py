@@ -694,14 +694,14 @@ def derive(ledger, dictionary: DrugMap | None, *,
             changed = not ((not old and content is None) or
                            (len(old) == 1 and tuple(old[0]) == (encoded, encoded_meta)))
             progress["cursor"] = mid
-            with ledger.db:
-                if changed:
+            if changed:
+                with ledger.db:
                     ledger.db.execute("DELETE FROM artifacts WHERE kind=? AND message_id=?",
                                       (KIND, mid))
                     if content is not None:
                         ledger.artifact_add_tx(KIND, encoded, project_id=pid,
                                                message_id=mid, meta=meta)
-                _save_progress(ledger.db, progress)
+                    _save_progress(ledger.db, progress)
             cursor = mid
             if changed:
                 done += 1
@@ -709,6 +709,11 @@ def derive(ledger, dictionary: DrugMap | None, *,
                     pids.add(pid)
         if cut:
             break
+    if cut:
+        # unchanged rows commit nothing (each commit is an fsync under
+        # synchronous=FULL); the cursor is only a resume hint, saved here
+        with ledger.db:
+            _save_progress(ledger.db, progress)
     return {"status": "unavailable" if not usable else "partial" if cut else "ok",
             "done": done, "pids": sorted(pids)}
 
