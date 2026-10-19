@@ -6,20 +6,20 @@ import urllib.error
 
 import pytest
 
-import mcs_adapter
+import mcs_download
 import mcs_worker
 from mcs_util import RETRY_LATER_4XX
 
 
 @pytest.mark.parametrize("status", sorted(RETRY_LATER_4XX) + [404])
 def test_download_classifies_4xx_like_the_job_ledger(tmp_path, monkeypatch, status):
-    def refuse(url):
+    def refuse(url, token, deadline, opener):
         raise urllib.error.HTTPError(url, status, "synthetic", {}, None)
-    adapter = mcs_adapter.MCSAdapter()
-    monkeypatch.setattr(adapter, "_open_download", refuse)
+    monkeypatch.setattr(mcs_download, "_open_download", refuse)
     with pytest.raises(mcs_contract.MCSError) as error:
-        adapter._download_to_part("https://www.medical-care.net/f",
-                                  str(tmp_path / "f.part"))
+        mcs_download.download_to_part("https://www.medical-care.net/f",
+                                      str(tmp_path / "f.part"),
+                                      token="synthetic-token", timeout=1)
     assert error.value.status == status
     assert error.value.retryable is (status in RETRY_LATER_4XX)
 

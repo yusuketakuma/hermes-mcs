@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 import mcs_adapter
+import mcs_contract
 
 ROOT = Path(__file__).resolve().parents[2]
 # deployment/ holds scheduled Python entrypoints (mcs_recover.py under
@@ -31,6 +32,8 @@ PRODUCTION_ROOTS = ("mcs", "adapters", "hermes_plugin", "mcs_standalone",
                     "lineworks_adapter", "deployment", "scripts")
 ADAPTER = Path("mcs/ingest/mcs_adapter.py")
 CONTRACT = Path("mcs/core/mcs_contract.py")
+WORKER = Path("mcs/ingest/mcs_worker.py")
+DOWNLOAD = Path("mcs/ingest/mcs_download.py")
 # Unrelated HTTP clients that define their own ``_request`` (LINE WORKS
 # Bot REST, Slack SDK shim). Neither can reach the MCS API origin.
 OWN_REQUEST_CLIENTS = {Path("adapters/lineworks/client.py"),
@@ -41,7 +44,7 @@ OWN_REQUEST_CLIENTS = {Path("adapters/lineworks/client.py"),
 DELIVERY_SURFACES = ("mcs/notify", "adapters", "hermes_plugin",
                      "mcs_standalone", "lineworks_adapter")
 DELIVERY_ALLOWED_ADAPTER_NAMES = {"project_url"}
-NETWORK_MODULES = {"mcs_adapter", "mcs_worker", "run_check", "init_data",
+NETWORK_MODULES = {"mcs_adapter", "mcs_worker", "mcs_cdp", "mcs_download", "run_check", "init_data",
                    "cross_lists", "project_metadata"}
 
 
@@ -176,8 +179,8 @@ def test_no_mcs_write_route_is_named_in_code():
 
 # Who may hold the MCS endpoint constants: cross_lists hands API to the
 # pinned _io("api", method="GET") call; the worker only prefix-checks it.
-ENDPOINT_IMPORTERS = {Path("mcs/ingest/cross_lists.py"), ADAPTER}
-ENDPOINT_ATTRIBUTE_READERS = {Path("mcs/ingest/mcs_worker.py")}
+ENDPOINT_IMPORTERS = {Path("mcs/ingest/cross_lists.py"), ADAPTER, WORKER}
+ENDPOINT_ATTRIBUTE_READERS = set()
 MCS_ENDPOINT_NAMES = {"API", "BASE"}
 MCS_ENDPOINT_MODULES = {"mcs_adapter", "mcs_contract"}
 
@@ -201,7 +204,7 @@ def test_mcs_endpoint_constants_are_confined():
 def test_endpoint_holders_open_no_connection_of_their_own():
     """The endpoint holders reach MCS only via the adapter's worker; the
     worker's api branch is the single urllib Request for MCS."""
-    for rel in ENDPOINT_IMPORTERS - {ADAPTER} | {CONTRACT}:
+    for rel in ENDPOINT_IMPORTERS - {ADAPTER, WORKER} | {CONTRACT}:
         names = {node.attr if isinstance(node, ast.Attribute) else node.id
                  for node in ast.walk(_parse(rel))
                  if isinstance(node, (ast.Attribute, ast.Name))}
@@ -209,29 +212,27 @@ def test_endpoint_holders_open_no_connection_of_their_own():
                             "HTTPConnection", "build_opener"}, rel
 
 
-def test_adapter_builds_no_writing_request():
-    """Besides the worker sink, the adapter's own urllib Requests (attachment
-    download and its same-host redirect) are bodiless GETs."""
-    requests = [node for node in ast.walk(_parse(ADAPTER))
+def test_download_builds_no_writing_request():
+    """Attachment Requests, including signed redirects, remain bodiless GETs."""
+    requests = [node for node in ast.walk(_parse(DOWNLOAD))
                 if isinstance(node, ast.Call)
                 and (getattr(node.func, "attr", None) == "Request"
                      or getattr(node.func, "id", None) == "Request")]
-    assert requests, "adapter download Request vanished — re-point this test"
+    assert requests, "download Request vanished — re-point this test"
     bad = [node.lineno for node in requests
            if len(node.args) > 1
            or any(kw.arg in ("data", "method") for kw in node.keywords)]
-    assert not bad, f"adapter Request with a body or method at {bad}"
+    assert not bad, f"download Request with a body or method at {bad}"
 
 
 def test_mcs_origin_literal_is_confined():
-    """Only the shared value contract and the adapter's login guard name
-    the MCS origin; the contract opens no connection of its own."""
+    """Only the contract, login guard and attachment policy name MCS hosts."""
     found = set()
     for rel in _production_files():
         for _node, text in _string_constants(_parse(rel)):
             if "medical-care.net" in text:
                 found.add(rel)
-    assert found <= {ADAPTER, CONTRACT}, sorted(map(str, found))
+    assert found <= {ADAPTER, CONTRACT, DOWNLOAD}, sorted(map(str, found))
 
 
 def test_delivery_and_action_surfaces_hold_no_mcs_client():
@@ -451,7 +452,7 @@ def test_worker_sends_the_callers_method_unchanged(monkeypatch):
     monkeypatch.setattr(mcs_util, "no_proxy_opener", lambda *_a: _Opener())
     result = mcs_worker._execute({
         "operation": "api", "timeout": 1, "method": "GET", "data": None,
-        "url": mcs_adapter.API + "/projects", "headers": {}})
+        "url": mcs_contract.API + "/projects", "headers": {}})
     assert result["status"] == 404
     assert sent == [("GET", None)]
 

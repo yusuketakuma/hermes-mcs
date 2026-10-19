@@ -17,6 +17,7 @@ if __name__ == "__main__":
     import _mcs_path  # noqa: F401
 
 import mcs_contract
+from mcs_contract import API
 
 MAX_JSON_BYTES = 8 * 1024 * 1024
 
@@ -138,7 +139,6 @@ def _loopback_url(url: str, scheme: str):
 
 
 def _execute(envelope: dict) -> dict:
-    import mcs_adapter as adapter_module
     from mcs_util import NoRedirect, no_proxy_opener
 
     timeout = envelope["timeout"]
@@ -148,7 +148,7 @@ def _execute(envelope: dict) -> dict:
     operation = envelope.get("operation")
     if operation == "api":
         url = envelope["url"]
-        if not url.startswith(adapter_module.API + "/"):
+        if not url.startswith(API + "/"):
             raise WorkerError("url_not_allowed")
         method = envelope["method"]
         if method not in ("GET", "POST"):
@@ -173,10 +173,9 @@ def _execute(envelope: dict) -> dict:
             return {"status": response.status, "headers": dict(response.headers),
                     "body": base64.b64encode(body).decode("ascii")}
     if operation == "download":
-        adapter = adapter_module.MCSAdapter()
-        adapter._token = envelope.get("token")
-        adapter.set_deadline(time.monotonic() + timeout)
-        return adapter._download_to_part(envelope["url"], envelope["partial"])
+        from mcs_download import download_to_part
+        return download_to_part(envelope["url"], envelope["partial"],
+                                token=envelope.get("token"), timeout=timeout)
     if operation == "cdp_json":
         url = envelope["url"]
         _loopback_url(url, "http")
@@ -191,8 +190,8 @@ def _execute(envelope: dict) -> dict:
             return {"value": json.loads(body)}
     if operation == "cdp_eval":
         _loopback_url(envelope["url"], "ws")
-        return {"value": adapter_module._ws_eval(
-            envelope["url"], envelope["expression"], timeout)}
+        from mcs_cdp import evaluate
+        return {"value": evaluate(envelope["url"], envelope["expression"], timeout)}
     raise WorkerError("url_not_allowed")
 
 

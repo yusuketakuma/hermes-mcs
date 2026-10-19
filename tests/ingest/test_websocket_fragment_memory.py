@@ -3,12 +3,13 @@ import tracemalloc
 
 import pytest
 
-import mcs_adapter
+import mcs_cdp
+import mcs_contract
 
 
 def _conn(frames):
     reads = iter(frames)
-    conn = mcs_adapter._WSConn.__new__(mcs_adapter._WSConn)
+    conn = mcs_cdp._WSConn.__new__(mcs_cdp._WSConn)
 
     def read_exact(length):
         expected, value = next(reads)
@@ -66,7 +67,7 @@ def test_empty_start_with_control_frames_accepts_continuations():
 ])
 def test_fragment_start_protocol_errors_do_not_depend_on_payload_length(headers):
     conn = _conn([(2, header) for header in headers])
-    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_protocol"):
+    with pytest.raises(mcs_contract.BootstrapError, match="cdp_ws_protocol"):
         conn.recv_message()
 
 

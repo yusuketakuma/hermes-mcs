@@ -18,6 +18,8 @@ from types import SimpleNamespace
 import pytest
 
 import mcs_adapter
+import mcs_cdp
+import mcs_download
 from ingest_testkit import _message
 
 
@@ -354,11 +356,11 @@ def test_assert_allowed_url_bad_port_is_mcserror():
                 "https://www.medical-care.net/f#fragment",
                 "https://[::1/x"):
         with pytest.raises(mcs_contract.MCSError) as e:
-            mcs_adapter._assert_allowed_url(bad)
+            mcs_download.validate_download_url(bad)
         assert e.value.kind == "url_not_allowed"
     # allowed still passes
-    mcs_adapter._assert_allowed_url("https://www.medical-care.net/f")
-    mcs_adapter._assert_allowed_url("https://www.medical-care.net:443/f")
+    mcs_download.validate_download_url("https://www.medical-care.net/f")
+    mcs_download.validate_download_url("https://www.medical-care.net:443/f")
 
 
 class _FakeSock:
@@ -396,7 +398,7 @@ def _ws_frame(payload: bytes, opcode=0x1, fin=True, mask=False) -> bytes:
 
 
 def _ws_conn(incoming: bytes = b""):
-    conn = mcs_adapter._WSConn.__new__(mcs_adapter._WSConn)
+    conn = mcs_cdp._WSConn.__new__(mcs_cdp._WSConn)
     conn._sock = _FakeSock(incoming)
     conn._buf = bytearray()
     conn._deadline = time.monotonic() + 5
@@ -434,7 +436,7 @@ def test_ws_handshake_verifies_accept_key():
 def test_ws_handshake_rejects_wrong_accept():
     conn = _ws_conn(b"HTTP/1.1 101 Switching Protocols\r\n"
                     b"Sec-WebSocket-Accept: wrong\r\n\r\n")
-    with pytest.raises(mcs_adapter.BootstrapError, match="handshake"):
+    with pytest.raises(mcs_contract.BootstrapError, match="handshake"):
         conn._handshake("127.0.0.1", 9222, "/x")
 
 
@@ -443,7 +445,7 @@ def test_ws_header_terminator_cannot_bypass_header_limit(length):
     # A terminator in the final read must not certify an oversized header.
     conn = _ws_conn(b"x" * (length - 4) + b"\r\n\r\n")
     cap = 16 if length == 17 else 65536
-    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_too_large"):
+    with pytest.raises(mcs_contract.BootstrapError, match="cdp_ws_too_large"):
         conn._read_until(b"\r\n\r\n", cap)
     # Bytes after a valid header belong to frames, not to the header budget.
     header = b"x" * (cap - 4) + b"\r\n\r\n"
@@ -454,19 +456,19 @@ def test_ws_header_terminator_cannot_bypass_header_limit(length):
 
 def test_ws_constructor_closes_socket_after_failed_handshake(monkeypatch):
     sock = _FakeSock(b"HTTP/1.1 403 Forbidden\r\n\r\n")
-    monkeypatch.setattr(mcs_adapter.socket, "create_connection",
+    monkeypatch.setattr(mcs_cdp.socket, "create_connection",
                         lambda *args, **kwargs: sock)
-    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_handshake"):
-        mcs_adapter._WSConn("ws://127.0.0.1:9222/x", 5)
+    with pytest.raises(mcs_contract.BootstrapError, match="cdp_ws_handshake"):
+        mcs_cdp._WSConn("ws://127.0.0.1:9222/x", 5)
     assert sock.closed
 
 
 def test_ws_constructor_closes_socket_after_invalid_unicode_url(monkeypatch):
     sock = _FakeSock()
-    monkeypatch.setattr(mcs_adapter.socket, "create_connection",
+    monkeypatch.setattr(mcs_cdp.socket, "create_connection",
                         lambda *args, **kwargs: sock)
     with pytest.raises(UnicodeEncodeError):
-        mcs_adapter._WSConn("ws://127.0.0.1:9222/devtools/\ud800", 5)
+        mcs_cdp._WSConn("ws://127.0.0.1:9222/devtools/\ud800", 5)
     assert sock.closed
     assert sock.sent == b""
 
@@ -482,10 +484,10 @@ def test_ws_constructor_allocates_buffer_before_acquiring_socket(monkeypatch):
     def allocation_failed(*args, **kwargs):
         raise MemoryError("synthetic buffer allocation failed")
 
-    monkeypatch.setattr(mcs_adapter.socket, "create_connection", opened)
-    monkeypatch.setattr(mcs_adapter, "bytearray", allocation_failed, raising=False)
+    monkeypatch.setattr(mcs_cdp.socket, "create_connection", opened)
+    monkeypatch.setattr(mcs_cdp, "bytearray", allocation_failed, raising=False)
     with pytest.raises(MemoryError, match="synthetic buffer allocation failed"):
-        mcs_adapter._WSConn("ws://127.0.0.1:9222/devtools/synthetic", 5)
+        mcs_cdp._WSConn("ws://127.0.0.1:9222/devtools/synthetic", 5)
     assert connections == []
 
 
@@ -502,12 +504,12 @@ def test_ws_constructor_preserves_interruption_during_handshake(monkeypatch, clo
         if close_failure:
             raise OSError("synthetic close failure")
 
-    monkeypatch.setattr(mcs_adapter.socket, "create_connection",
+    monkeypatch.setattr(mcs_cdp.socket, "create_connection",
                         lambda *args, **kwargs: sock)
-    monkeypatch.setattr(mcs_adapter._WSConn, "_handshake", interrupted)
+    monkeypatch.setattr(mcs_cdp._WSConn, "_handshake", interrupted)
     monkeypatch.setattr(sock, "close", close)
     with pytest.raises(KeyboardInterrupt) as failure:
-        mcs_adapter._WSConn("ws://127.0.0.1:9222/devtools/synthetic", 5)
+        mcs_cdp._WSConn("ws://127.0.0.1:9222/devtools/synthetic", 5)
     assert failure.value is interruption
     assert sock.closed
 
@@ -531,19 +533,19 @@ def test_ws_recv_close_and_oversize_fail():
     conn = _ws_conn(_ws_frame(b"bye", opcode=0x8))
     try:
         conn.recv_message()
-    except mcs_adapter.BootstrapError:
+    except mcs_contract.BootstrapError:
         pass
     else:
         raise AssertionError("close frame must end the connection")
     conn = _ws_conn(_ws_frame(b"x" * 100, fin=False))
     conn._MAX_MSG = 10
-    with pytest.raises(mcs_adapter.BootstrapError, match="too_large"):
+    with pytest.raises(mcs_contract.BootstrapError, match="too_large"):
         conn.recv_message()
 
 
 def test_ws_recv_rejects_masked_server_frames():
     conn = _ws_conn(_ws_frame(b'{"id":1}', mask=True))
-    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_protocol"):
+    with pytest.raises(mcs_contract.BootstrapError, match="cdp_ws_protocol"):
         conn.recv_message()
 
 
@@ -555,7 +557,7 @@ def test_ws_rejects_oversize_from_header_before_reading_body(prefix, opcode):
     conn = _ws_conn(prefix + bytes([0x80 | opcode, 127])
                     + (11).to_bytes(8, "big"))
     conn._MAX_MSG = 16 if prefix else 10
-    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_too_large"):
+    with pytest.raises(mcs_contract.BootstrapError, match="cdp_ws_too_large"):
         conn.recv_message()
 
 
@@ -566,7 +568,7 @@ def test_ws_rejects_oversize_from_header_before_reading_body(prefix, opcode):
 def test_ws_rejects_invalid_control_frame_before_reading_body(opcode, fin, length):
     head = bytes([(0x80 if fin else 0) | opcode, 126])
     conn = _ws_conn(head + length.to_bytes(2, "big"))
-    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_protocol"):
+    with pytest.raises(mcs_contract.BootstrapError, match="cdp_ws_protocol"):
         conn.recv_message()
 
 
@@ -584,8 +586,8 @@ def test_ws_eval_roundtrip_and_id_match(monkeypatch):
         real_send(text)
 
     conn.send_text = send
-    monkeypatch.setattr(mcs_adapter, "_WSConn", lambda *a, **k: conn)
-    assert mcs_adapter._ws_eval("ws://127.0.0.1:9/x", "1+1", 5) == "tok123"
+    monkeypatch.setattr(mcs_cdp, "_WSConn", lambda *a, **k: conn)
+    assert mcs_cdp.evaluate("ws://127.0.0.1:9/x", "1+1", 5) == "tok123"
     assert request["method"] == "Runtime.evaluate"
     assert request["params"]["returnByValue"] is True
 
@@ -647,7 +649,7 @@ def test_worker_rejects_oversized_json_response(monkeypatch, operation):
                         lambda *args: SimpleNamespace(open=lambda *a, **k: response))
     with pytest.raises(mcs_worker.WorkerError) as error:
         mcs_worker._execute({"operation": operation, "timeout": 1,
-                             "url": mcs_adapter.API + "/projects" if operation == "api"
+                             "url": mcs_contract.API + "/projects" if operation == "api"
                              else "http://127.0.0.1:9333/json/list",
                              "method": "GET", "headers": {}})
     assert error.value.kind == "response_too_large"
@@ -854,7 +856,7 @@ def test_adapter_worker_deadline_reaps_slow_reader(tmp_path, monkeypatch, operat
     script.write_text(
         "import sys, time\n"
         f"sys.path.insert(0, {str(module_root)!r})\n"
-        "import _mcs_path, mcs_adapter, mcs_worker, mcs_util\n"
+        "import _mcs_path, mcs_download, mcs_worker, mcs_util\n"
         "class SlowResponse:\n"
         "    status = 200\n"
         "    headers = {}\n"
@@ -865,7 +867,7 @@ def test_adapter_worker_deadline_reaps_slow_reader(tmp_path, monkeypatch, operat
         "        while True: time.sleep(0.02)\n"
         "class Opener:\n"
         "    def open(self, *args, **kwargs): return SlowResponse()\n"
-        "mcs_adapter.no_proxy_opener = lambda *args: Opener()\n"
+        "mcs_download.no_proxy_opener = lambda *args: Opener()\n"
         "mcs_util.no_proxy_opener = lambda *args: Opener()\n"
         "raise SystemExit(mcs_worker.worker_main())\n", encoding="utf-8")
     monkeypatch.setattr(mcs_worker, "_worker_command",
@@ -990,7 +992,7 @@ def test_attachment_worker_keeps_redirect_and_atomic_file_contract(tmp_path, mon
                     "location": "https://files.medical-care.net/signed"}, None)
             return io.BytesIO(b"synthetic-attachment")
 
-    monkeypatch.setattr(mcs_adapter, "no_proxy_opener", lambda *handlers: Opener())
+    monkeypatch.setattr(mcs_download, "no_proxy_opener", lambda *handlers: Opener())
     destination = tmp_path / "file"
     destination.write_bytes(b"old")
 
@@ -1009,7 +1011,7 @@ def test_attachment_worker_keeps_redirect_and_atomic_file_contract(tmp_path, mon
                       "sha256": hashlib.sha256(b"synthetic-attachment").hexdigest()}
     assert not Path(str(destination) + ".part").exists()
 
-    monkeypatch.setattr(mcs_adapter, "_MAX_DOWNLOAD_BYTES", 2)
+    monkeypatch.setattr(mcs_download, "_MAX_DOWNLOAD_BYTES", 2)
     with pytest.raises(mcs_contract.MCSError) as error:
         adapter.download("https://www.medical-care.net/f", str(destination))
     assert error.value.kind == "download_too_large"

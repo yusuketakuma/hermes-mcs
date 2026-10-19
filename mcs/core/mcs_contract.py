@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 BASE = "https://www.medical-care.net"
+API = f"{BASE}/api/v2t"
 
 
 def project_url(project_id: int) -> str:
@@ -26,6 +27,11 @@ class MCSError(Exception):
         # when this exception (including SessionExpired) aborts the walk.
         self.observed_reply_ids: frozenset[int] = frozenset()
 
+
+
+class BootstrapError(MCSError):
+    def __init__(self, detail: str):
+        super().__init__("bootstrap_error", detail)
 
 
 class SessionExpired(MCSError):
