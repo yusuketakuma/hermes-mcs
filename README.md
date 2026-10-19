@@ -27,7 +27,7 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 
 MCSサーバーの負荷対策として、自動取得の間隔を5分から10分へ変更しています。
 
-このREADMEはmainの機能を説明します。[1.0.13のローカル支援](#candidate)は既定offで、実機・外部の受入条件は分けて記載します。導入する版の変更・更新手順は[CHANGELOG](CHANGELOG.md)と[Releases](https://github.com/yusuketakuma/hermes-mcs/releases)で確認してください。
+このREADMEはmainの機能を説明します。[任意のローカル支援](#candidate)は機能ごとに適用条件があり、実機・外部の受入条件は分けて記載します。導入する版の変更・更新手順は[CHANGELOG](CHANGELOG.md)と[Releases](https://github.com/yusuketakuma/hermes-mcs/releases)で確認してください。
 通知を有効にすると患者名・本文・送信対象の添付が設定先へ送られます。端末のロック画面にも患者名・投稿内容が表示され得るため、通知プレビュー設定と端末の閲覧権限を確認してください。[情報の行き先と安全境界](#data)を導入前に確認してください。
 
 <a name="demo"></a>
@@ -187,9 +187,11 @@ LINE WORKSではカードのボタンと本人との1:1トークの `mcs JSON` �
 
 <a name="candidate"></a>
 
-### 1.0.13のローカル支援（既定off・実機受入は別途）
+<a name="1013のローカル支援既定off実機受入は別途"></a>
 
-次はmainで実装された任意の入口です。合成データの全体検証、固定版SDKとの境界、隔離した配布物の検証は完了しています。実APIの未読保持・権限、canonicalの人手評価と昇格、緊急再通知の実運用、鍵の保管と相手側の受入は別条件です。機能の自動有効化や外部GET・公開・配備の承認を意味しません。
+### 任意のローカル支援と受入条件
+
+次はmainにあるローカル支援の入口です。利用条件と有効化の手順は各行のガイド・仕様で確認してください。合成検証や固定版SDKの結果は、対象版の[受入記録](docs/releases/README.md)で追跡します。実APIの未読保持・権限、canonicalの人手評価と昇格、緊急再通知の実運用、鍵の保管と相手側の受入は別条件です。機能の自動有効化や外部GET・公開・配備の承認を意味しません。
 
 | ローカルで確認できる支援 | 入口と適用条件 |
 |---|---|
@@ -404,9 +406,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 ## ドキュメント
 
-[安定稼働版1.0.13の計画](docs/releases/v1.0.13/RELEASE_1.0.13.md)は、
-旧1.0.13〜1.0.15・追加提案・バグ修正・4つの統一コマンドを集約しました。
-ローカル実装と合成検証は完了し、実機・実API・人手・相手側の受入条件は同計画の§6で追跡します。
+目的別の全体索引は[文書を探す](docs/README.md)を参照してください。現在の操作はガイド、開発手順は開発リファレンス、版ごとの受入はリリース記録で確認できます。
 
 | 読む目的 | 文書 |
 |---|---|
@@ -419,6 +419,8 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 | 今後の計画 | [ロードマップ](docs/ROADMAP.md) |
 | 候補の封印評価・昇格条件 | [候補評価仕様](docs/specs/SEALED_CANDIDATE_EVALUATION.md)。合成評価と実データの人手評価を分離し、候補指紋と独立承認receiptを照合します。 |
 | リリースとREADMEの更新ルール | [リリースノート規則](docs/development/RELEASE_NOTES.md) · [README運用](docs/development/README_MAINTENANCE.md) |
+
+[版ごとの計画・受入記録](docs/releases/README.md)と[開発記録](docs/dev-records/README.md)は当時の証跡です。[安定稼働版1.0.13の計画](docs/releases/v1.0.13/RELEASE_1.0.13.md)の受入条件も、その版の記録として保持します。現在の仕様・運用手順は上のガイドを参照してください。
 
 ## ライセンス
 

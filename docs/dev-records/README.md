@@ -1,10 +1,9 @@
 # dev-records — 開発記録の索引
 
-1.0.13の[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)は当時の記録として残している。1.0.13・1.0.14は公開済みで、各版の変更は[CHANGELOG](../../CHANGELOG.md)を正本とする。
-
-
-当時の判断・検証・レビュー結果を残した証跡。現在の仕様や操作手順の正本ではない
-（現行は `docs/development/DEVELOPMENT.md` とコード）。ファイル名は変更しない — 他文書が
+当時の判断・検証・レビュー結果を残した証跡。現在の仕様や操作手順の正本ではない。
+現在の操作・契約は[文書索引](../README.md)、開発手順は[開発リファレンス](../development/DEVELOPMENT.md)とコードを参照する。
+各版の変更は[CHANGELOG](../../CHANGELOG.md)、版別の計画・受入は[リリース記録](../releases/README.md)で確認する。
+1.0.13の[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)も当時の記録として保持する。ファイル名は変更しない — 他文書が
 `file:line` で引用している。CI（`ci/gates.py`・`ci/mine_gates.py`）はこのディレクトリの
 `.md` / `.json` だけを許可し、再帰的に走査する。
 

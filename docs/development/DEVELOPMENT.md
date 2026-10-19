@@ -778,6 +778,17 @@ scripts/run_tests.sh                  # tests/ + integration/ の合成テスト
 make lint                            # CIと同じ範囲・ruff設定
 ```
 
+テストは一時DBと通信スタブだけを使い、実MCS・Discord・Keychain・原本DBへ
+アクセスしない。`integration/test_hermes_*` は hermes-agent checkout 上でのみ
+収集される（合成テストのみの `test_mcs_*` は既定の `testpaths` と `scripts/run_tests.sh`
+無引数実行で `tests/` と共に収集される）。
+領域をまたぐ共通テストヘルパー（一時 Ledger の `make_ledger`・`ledger_fixture`）は
+`tests/support/common_testkit.py` に置き、領域固有のものは各 `*_testkit.py` に置く。
+
+### 抽出品質の評価
+
+以下はローカルLLMを使う評価と、通信しないfixture整合検査です。通常テストとは実行条件を分けます。
+
 抽出品質のベンチ(ローカルLLM実機が必要):
 
 ```bash
@@ -824,13 +835,6 @@ scripts/evaluation/llm_lane_bench.sh --report                                   
   e2e/requests.jsonl・bench/・summary.json/txt）。
 - drainer 停止中はヘルス監視の遅延警報が出得るが再起動はされない（`org.mcs.recovery --if-stale` は
   更新 marker がある時だけ動く）。テストは dry-run・ガード・report だけで実サーバに触れない。
-
-テストは一時DBと通信スタブだけを使い、実MCS・Discord・Keychain・原本DBへ
-アクセスしない。`integration/test_hermes_*` は hermes-agent checkout 上でのみ
-収集される（合成テストのみの `test_mcs_*` は既定の `testpaths` と `scripts/run_tests.sh`
-無引数実行で `tests/` と共に収集される）。
-領域をまたぐ共通テストヘルパー（一時 Ledger の `make_ledger`・`ledger_fixture`）は
-`tests/support/common_testkit.py` に置き、領域固有のものは各 `*_testkit.py` に置く。
 
 ## 未検証残件
 
