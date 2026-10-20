@@ -53,6 +53,7 @@ def test_invalid_identity_cannot_replace_integer_record(context_db, monkeypatch,
     assert result["definition_source_artifact_id"] == pin
     assert result["attempted_at"] == 100
     projected = registered_data(store.db, "detail", 1, None)
+    assert projected is not None
     values = [r for r in projected["records"] if r["dataset"] == "observation_values"]
     assert len(values) == 1 and values[0]["item_id"] == item
     assert values[0]["rows"][0]["scalar"] == 23
@@ -68,11 +69,20 @@ def test_invalid_definition_identity_cannot_advance_pinned_generation(context_db
     invalid["rows"][0]["lab_test_item"]["unit"] = "synthetic-poison-unit"
     store.artifact_add(ARTIFACT_KIND, json.dumps(invalid), project_id=1)
     result = get_project_metadata(store.db, 1, "observation_values", item_id=55, now=110)
+    _result_rows = result["rows"]
+    assert isinstance(_result_rows, list) and _result_rows
+    _result_row = _result_rows[0]
+    assert isinstance(_result_row, dict)
+    _result_definition = result["definition"]
+    assert isinstance(_result_definition, dict)
+    _result_lab = _result_definition["lab_test_item"]
+    assert isinstance(_result_lab, dict)
     assert result["state"] == "complete" and result["current_known"] is True
     assert result["definition_binding"] == "current"
     assert result["definition_source_artifact_id"] == pin
-    assert result["rows"][0]["scalar"] == 23
-    assert result["definition"]["lab_test_item"]["unit"] == "架空単位"
+    assert _result_row["scalar"] == 23
+    assert _result_lab["unit"] == "架空単位"
+
 
 
 @pytest.mark.parametrize("bad,karte", [(True, 1), (10.0, 10)], ids=["bool-old-pin", "float-old-pin"])
@@ -110,6 +120,7 @@ def test_malformed_same_integer_identity_stays_unknown_without_resurrection(cont
     assert result["current_known"] is False and result["historical"] is False
     assert result["rows"] == [] and result["definition"] is None
     projected = registered_data(store.db, "detail", 1, None)
+    assert projected is not None
     row = next(r for r in projected["records"] if r["dataset"] == "observation_values")
     assert row["state"] == "unknown" and row["rows"] == []
 
@@ -122,6 +133,7 @@ def test_invalid_entity_distinct_item_does_not_create_phantom_target(context_db,
     invalid.update(entity_id=bad, item_id=999, rows=[], attempted_at=101)
     store.artifact_add(ARTIFACT_KIND, json.dumps(invalid), project_id=1)
     projected = registered_data(store.db, "detail", 1, None)
+    assert projected is not None
     assert projected["total"] == 3 and projected["truncated"] is False
     assert [(r["dataset"], r["item_id"]) for r in projected["records"]] == [
         ("medication_periods", None), ("observation_items", None), ("observation_values", 55)]
@@ -140,12 +152,23 @@ def test_definition_without_item_identity_remains_compatible(context_db, monkeyp
     with store.db:
         store.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps(payload), pin))
     definition = get_project_metadata(store.db, 1, "observation_items", now=110)
+    _definition_rows = definition["rows"]
+    assert isinstance(_definition_rows, list) and _definition_rows
+    _definition_row = _definition_rows[0]
+    assert isinstance(_definition_row, dict)
+    _definition_lab = _definition_row["lab_test_item"]
+    assert isinstance(_definition_lab, dict)
     assert definition["state"] == "complete" and definition["current_known"] is True
-    assert len(definition["rows"]) == 1 and definition["rows"][0]["lab_test_item"]["id"] == 55
-    assert definition["rows"][0]["lab_test_item"]["unit"] == "架空単位"
+    assert len(_definition_rows) == 1 and _definition_lab["id"] == 55
+    assert _definition_lab["unit"] == "架空単位"
     value = get_project_metadata(store.db, 1, "observation_values", item_id=55, now=110)
+    _value_rows = value["rows"]
+    assert isinstance(_value_rows, list) and _value_rows
+    _value_row = _value_rows[0]
+    assert isinstance(_value_row, dict)
     assert value["state"] == "complete" and value["definition_binding"] == "current"
-    assert value["definition_source_artifact_id"] == pin and value["rows"][0]["scalar"] == 23
+    assert value["definition_source_artifact_id"] == pin and _value_row["scalar"] == 23
+
 
 
 @pytest.mark.parametrize("bad_item", [55, False], ids=["nonnull-integer-item", "nonnull-bool-item"])
@@ -157,8 +180,18 @@ def test_nonnull_definition_item_cannot_advance_current_generation(context_db, m
     invalid["rows"][0]["lab_test_item"]["unit"] = "synthetic-poison-unit"
     store.artifact_add(ARTIFACT_KIND, json.dumps(invalid), project_id=1)
     definition = get_project_metadata(store.db, 1, "observation_items", now=110)
+    _definition_rows = definition["rows"]
+    assert isinstance(_definition_rows, list) and _definition_rows
+    _definition_row = _definition_rows[0]
+    assert isinstance(_definition_row, dict)
+    _definition_lab = _definition_row["lab_test_item"]
+    assert isinstance(_definition_lab, dict)
     assert definition["state"] == "complete" and definition["attempted_at"] == 100
-    assert definition["rows"][0]["lab_test_item"]["unit"] == "架空単位"
+    assert _definition_lab["unit"] == "架空単位"
     value = get_project_metadata(store.db, 1, "observation_values", item_id=55, now=110)
+    _value_rows = value["rows"]
+    assert isinstance(_value_rows, list) and _value_rows
+    _value_row = _value_rows[0]
+    assert isinstance(_value_row, dict)
     assert value["state"] == "complete" and value["definition_binding"] == "current"
-    assert value["definition_source_artifact_id"] == pin and value["rows"][0]["scalar"] == 23
+    assert value["definition_source_artifact_id"] == pin and _value_row["scalar"] == 23
