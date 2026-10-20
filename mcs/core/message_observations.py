@@ -1,10 +1,10 @@
 """Read captured post metadata and choose observation refresh work on borrowed connections."""
 from __future__ import annotations
 
-import json
 import re
 import time
 
+from mcs_util import loads_dict
 from stamp_contract import REACTION_LABELS, valid_stored_reactions
 
 METADATA_SHADOW_INTERVAL_S = 30 * 60
@@ -150,10 +150,7 @@ def decode_metadata(row) -> dict:
         result["last_error"] = (error if isinstance(error, str)
                                 and ERROR_CODE.fullmatch(error)
                                 else "metadata_error")
-    try:
-        content = json.loads(raw)
-    except (ValueError, TypeError, RecursionError):
-        content = None
+    content = loads_dict(raw)
     for key, (valid, status) in _FIELDS.items():
         if key + "_invalid" in errors:
             result[status] = "invalid"

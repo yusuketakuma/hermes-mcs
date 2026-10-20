@@ -7,11 +7,11 @@ import sys
 import time
 from contextlib import suppress
 
-import mcs_worker
+import worker_process
 
 
 def test_reap_is_bounded_when_a_descendant_holds_the_pipe(tmp_path, monkeypatch):
-    monkeypatch.setattr(mcs_worker, "REAP_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(worker_process, "REAP_TIMEOUT_S", 0.5)
     ready = tmp_path / "descendant-ready"
     descendant = ("from pathlib import Path; import sys, time; "
                   "Path(sys.argv[1]).write_text('ready'); time.sleep(30)")
@@ -30,7 +30,7 @@ def test_reap_is_bounded_when_a_descendant_holds_the_pipe(tmp_path, monkeypatch)
         assert ready.is_file(), "synthetic descendant must have started"
         proc.kill()
         started = time.monotonic()
-        mcs_worker._reap(proc)
+        worker_process.reap_worker(proc)
         assert time.monotonic() - started < 5
         assert proc.stdout.closed
     finally:
@@ -46,5 +46,5 @@ def test_reap_is_bounded_when_a_descendant_holds_the_pipe(tmp_path, monkeypatch)
 def test_reap_collects_a_cooperative_child_normally():
     proc = subprocess.Popen([sys.executable, "-c", "print('x')"],
                             stdout=subprocess.PIPE)
-    mcs_worker._reap(proc)
+    worker_process.reap_worker(proc)
     assert proc.returncode == 0

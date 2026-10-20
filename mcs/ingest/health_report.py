@@ -196,7 +196,6 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
     import semantic_policy
     from mcs_queries import current_v4_id
     reasons = []
-    db = db
     if notify_scope.interactive_enabled(cfg):
         oldest = db.execute(
             "SELECT MIN(created_at) FROM notification_renders "

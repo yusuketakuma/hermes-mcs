@@ -15,7 +15,7 @@ from contextlib import closing, suppress
 
 import pytest
 
-import bounded_http
+import worker_process
 import ledger
 import snapshots
 import maintenance
@@ -485,7 +485,7 @@ def test_db_maintenance_waits_for_time(tmp_path, monkeypatch):
 # ---------- low: a killed worker is reaped within a bound ----------
 
 def test_reap_returns_when_a_descendant_keeps_the_pipe(tmp_path, monkeypatch):
-    monkeypatch.setattr(bounded_http, "REAP_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(worker_process, "REAP_TIMEOUT_S", 0.5)
     ready = tmp_path / "descendant-ready"
     descendant = ("from pathlib import Path; import sys, time; "
                   "Path(sys.argv[1]).write_text('ready'); time.sleep(30)")
@@ -503,7 +503,7 @@ def test_reap_returns_when_a_descendant_keeps_the_pipe(tmp_path, monkeypatch):
         assert ready.is_file(), "synthetic descendant must have started"
         proc.kill()
         started = time.monotonic()
-        bounded_http._reap(proc)
+        worker_process.reap_worker(proc)
         assert time.monotonic() - started < 5
     finally:
         with suppress(OSError):

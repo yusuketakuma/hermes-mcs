@@ -1,0 +1,19 @@
+{
+  "category": "changed",
+  "title": "収集基盤の重複処理を共通化",
+  "summary": "MCS取得と推論通信の子プロセス回収、保存済み投稿メタデータの読取りで重複していた処理を共通化しました。通信の期限と認証情報の扱い、未取得・不正値・観測済みの区別は従来どおりです。",
+  "upgrade": "追加操作は不要です。設定・保存形式・取得範囲の変更はありません。",
+  "details": [
+    "停止済みの通信子プロセスを回収する処理をworker_processへ集約し、2つのprivate実装を削除しました。",
+    "5秒のpipe排出上限、失敗時のpipe閉鎖と0.1秒の終了待ち、呼出元によるkillの順序を維持しています。",
+    "投稿メタデータは既存の保存JSON読取りhelperを利用し、破損・非object・個別項目の不正を従来どおり区別します。",
+    "稼働監視の停滞判定から、結果を変えない引数の自己代入を除きました。"
+  ],
+  "refs": [
+    "mcs/core/worker_process.py",
+    "mcs/core/bounded_http.py",
+    "mcs/ingest/mcs_worker.py",
+    "mcs/core/message_observations.py",
+    "mcs/ingest/health_report.py"
+  ]
+}
