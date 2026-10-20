@@ -20,14 +20,11 @@ def test_render_keeps_body_private_and_preserves_buttons():
     assert "非公開の合成本体" not in text + json.dumps(blocks, ensure_ascii=False)
     actions = [b for b in blocks if b["type"] == "actions"]
     assert len(actions) == 1
-    # compact mobile layout: 確認/担当 stay buttons, every other action
-    # is an option of one select — each still carries its durable token
-    button, menu = actions[0]["elements"]
-    assert (button["action_id"], button["value"]) == ("mcs:a:" + "c" * 32,
-                                                      "c" * 32)
+    # All ordinary actions share one select, with the same durable tokens.
+    menu, = actions[0]["elements"]
     assert menu["type"] == "static_select"
     assert menu["action_id"] == "mcs:menu"
-    assert [o["value"] for o in menu["options"]] == ["b" * 32]
+    assert [o["value"] for o in menu["options"]] == ["b" * 32, "c" * 32]
     assert any(b["type"] == "header" for b in blocks)
 
 
@@ -93,10 +90,8 @@ def test_select_click_resolves_the_same_token_as_a_button():
     assert slack_actions.parse_action_origin(outsider, select, **kw) is None
 
 
-def test_full_card_is_one_compact_row():
-    """Every action of a busy card fits one actions block: the primary
-    actions (ack/assign/request) as buttons and the rest as options of
-    a single select."""
+def test_full_card_preserves_every_ordinary_action_in_one_select():
+    """Moving primary actions into the menu preserves all tokens and order."""
     spec = _spec()
     ids = ("ack", "assign", "request", "tasks_done", "summary", "report",
            "mytasks", "unacked", "search", "prev", "next")
@@ -109,8 +104,9 @@ def test_full_card_is_one_compact_row():
     actions = [b for b in blocks if b["type"] == "actions"]
     assert len(actions) == 1
     kinds = [e["type"] for e in actions[0]["elements"]]
-    assert kinds == ["button", "button", "button", "static_select"]
-    assert len(actions[0]["elements"][3]["options"]) == len(ids) - 3
+    assert kinds == ["static_select"]
+    assert [o["value"] for o in actions[0]["elements"][0]["options"]] == [
+        b["token"] for b in buttons]
 
 
 def test_link_label_and_query_escape_slack_markup_without_changing_link():

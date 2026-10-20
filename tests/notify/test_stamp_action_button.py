@@ -113,15 +113,21 @@ def _rendered_spec(led, monkeypatch, transport):
     return _spec(led)
 
 
-def test_slack_draws_the_stamp_row_as_its_own_buttons(led, monkeypatch):
+def test_slack_draws_the_stamp_row_as_compact_pairs(led, monkeypatch):
     from adapters.slack import cards as slack_cards
     spec = _rendered_spec(led, monkeypatch, "slack")
-    rows = [b for b in slack_cards.render(spec)[1] if b.get("type") == "actions"]
-    stamp_row = rows[-1]["elements"]
-    assert [e["text"]["text"] for e in stamp_row] == ["👀", "🙆", "🙏", "👍", "✅"]
-    assert all(e["type"] == "button" and e["action_id"].startswith("mcs:a:") for e in stamp_row)
-    # the existing primary row and menu are unchanged and come first
-    assert not any(e.get("text", {}).get("text", "").startswith("👀") for e in rows[0]["elements"])
+    blocks = slack_cards.render(spec)[1]
+    compact, = [b for b in blocks if b.get("type") == "context_actions"]
+    assert len(compact["elements"]) == 3
+    stamp_row = [e[key] for e in compact["elements"]
+                 for key in ("positive_button", "negative_button")]
+    assert [e["text"]["text"] for e in stamp_row] == ["👀", "🙆", "🙏", "👍", "✅", "別の投稿"]
+    planned = [b for row in spec["parts"]["action_rows"] for b in row]
+    expected = [b["token"] for b in planned if b["id"] == "stamp_press"]
+    expected += [b["token"] for b in planned if b["id"] == "stamp"]
+    assert [e["value"] for e in stamp_row] == expected
+    menu, = [b for b in blocks if b.get("type") == "actions"]
+    assert [e["type"] for e in menu["elements"]] == ["static_select"]
 
 
 def test_lineworks_keeps_its_buttons_and_adds_one_horizontal_stamp_row(led, monkeypatch):

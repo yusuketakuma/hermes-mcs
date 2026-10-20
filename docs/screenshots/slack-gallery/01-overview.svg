@@ -41,15 +41,9 @@
 <path d="M236 586.4000000000001 L633 586.4000000000001" stroke="#d5dcd7" fill="none"/>
 <text x="236" y="612.4000000000001" font-size="17" fill="#66716f">📝 タスク 1件 · スタンプ 👀2 🙆1</text>
 <path d="M236 627.6000000000001 L633 627.6000000000001" stroke="#d5dcd7" fill="none"/>
-<rect x="236" y="655.6000000000001" width="110" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="250" y="682.6000000000001" font-size="18" fill="#202124">確認する</text>
-<rect x="356" y="655.6000000000001" width="110" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="370" y="682.6000000000001" font-size="18" fill="#202124">担当する</text>
-<rect x="476" y="655.6000000000001" width="128" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="490" y="682.6000000000001" font-size="18" fill="#202124">タスク作成</text>
-<rect x="236" y="707.6000000000001" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="250" y="734.6000000000001" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
-<text x="236" y="783.6000000000001" font-size="18" fill="#1264a3">MCSで開く</text>
+<rect x="236" y="655.6000000000001" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="250" y="682.6000000000001" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
+<text x="236" y="731.6000000000001" font-size="18" fill="#1264a3">MCSで開く</text>
 <text x="689" y="227" font-size="23" fill="#202124" font-weight="bold">スレッド</text>
 <text x="689" y="257" font-size="16" fill="#66716f"># mcs-demo</text>
 <path d="M682 275 L1059 275" stroke="#e3e7e4" fill="none"/>

@@ -125,18 +125,19 @@ class Screen:
         self.line(x, y - 12, x + width, y - 12, "#d5dcd7")
         return y + 16
 
-    def actions(self, x, y, confirmed=False, wrap=False, stamp_row=False):
-        """確認する・担当する・タスク作成 + one select; MCSで開く is a text link below."""
-        self.button(x, y, "確認する", 110, confirmed)
-        self.button(x + 120, y, "担当する", 110)
-        self.button(x + 240, y, "タスク作成", 128)
-        sx, sy = (x, y + 52) if wrap else (x + 378, y)
-        self.button(sx, sy, "操作を選ぶ… ▾", 173)
+    def actions(self, x, y, stamp_row=False):
+        """One menu and three compact stamp pairs; MCSで開く remains a text link."""
+        self.button(x, y, "操作を選ぶ… ▾", 173)
         if stamp_row:
-            for i, label in enumerate(("👀", "🙆", "🙏", "👍", "✅")):
-                self.button(x + i * 133, sy + 52, label, 125, primary=i == 1)
-        self.text(x, sy + (128 if stamp_row else 76), "MCSで開く", 18, "#1264a3")
-        return sy + (152 if stamp_row else 100)
+            left = x
+            for a, b, width in (("👀", "🙆 ✓", 90), ("🙏", "👍", 80), ("✅", "別の投稿", 132)):
+                self.rect(left, y + 52, width, 32, "#f3f6f4", 6, "#a9b5ae")
+                self.text(left + 9, y + 74, a, 16)
+                self.line(left + 37, y + 58, left + 37, y + 78, "#a9b5ae")
+                self.text(left + 46, y + 74, b, 16)
+                left += width + 8
+        self.text(x, y + (116 if stamp_row else 76), "MCSで開く", 18, "#1264a3")
+        return y + (140 if stamp_row else 100)
 
     def card(self, x, y, width=770, full=False):
         """Card zones top to bottom: patient title, meta line, per post a
@@ -171,8 +172,7 @@ def overview():
     s = Screen(1, "連絡の要点と原文を、同じSlackで。", "要約・スタンプ・折りたたみの原文はカードに。画像やPDFの添付はスレッドへ。", 1200)
     s.line(662, 194, 662, 1119)
     x, y = s.app(188, 227)
-    # Slack wraps controls in a narrow pane; the menu remains one select.
-    s.actions(x, s.card(x, y, 397), wrap=True)
+    s.actions(x, s.card(x, y, 397))
     s.text(689, 227, "スレッド", 23, INK, True)
     s.text(689, 257, "# mcs-demo", 16, MUTED)
     s.line(682, 275, 1059, 275)
@@ -186,25 +186,26 @@ def overview():
 def notification():
     s = Screen(2, "通知カードから、確認と担当を共有。", "上から概要・投稿ごとの要約・スタンプ・原文・状態・操作の順。区切り線で分かれます。", 1060)
     x, y = s.app()
-    s.actions(x, s.card(x, y, full=True), confirmed=True)
+    s.actions(x, s.card(x, y, full=True))
     return s.finish()
 
 
 def menu():
-    s = Screen(3, "スタンプは1回で、ほかの操作はメニューから。", "操作者とMCSアカウントを設定した例。強調したスタンプをもう一度押すと取消。", 1120)
+    s = Screen(3, "スタンプは1回で、ほかの操作はメニューから。", "小型表示の配置案（実画面は未確認）。✓ のスタンプをもう一度押すと取消。", 1200)
     x, y = s.app()
     y = s.card(x, y)
     s.actions(x, y, stamp_row=True)
     # notify_cards._action_rows order; the card has open tasks (📝 タスク 1件)
-    labels = ("タスク一覧", "患者の記録まとめ", "この患者を検索", "誤りを報告", "MCSスタンプ")
-    mx, my = x + 378, y + 104
+    labels = ("確認する", "担当する", "タスク作成", "タスク一覧", "患者の記録まとめ", "この患者を検索", "誤りを報告")
+    mx, my = x + 378, y
+    s.text(mx, my - 15, "メニューの項目", 16, MUTED)
     s.rect(mx, my, 300, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
     for i, label in enumerate(labels):
         yy = my + 12 + i * 42
         if i == 0:
             s.rect(mx + 7, yy - 2, 286, 38, "#e5f3ec", 4)
         s.text(mx + 24, yy + 24, label, 19, GREEN if i == 0 else INK, i == 0)
-    s.text(x, 1000, "全体の新着集計・自分のタスク・未確認一覧は、集計カードのメニューへ。", 17, MUTED)
+    s.text(x, 1090, "全体の新着集計・自分のタスク・未確認一覧は、集計カードのメニューへ。", 17, MUTED)
     return s.finish()
 
 

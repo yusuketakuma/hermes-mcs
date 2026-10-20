@@ -16,11 +16,12 @@ from adapters.common.text import (ERR_JA, MODAL_ACTIONS, RECEIPT_TEXT, MODAL_TIT
                                  ja, modal_fields, preview_text,
                                  followup_waiting, search_query, split_body, view_answer,
                                  view_scope_ok)
-from .cards import LINK_ACTION, MENU_ACTION, _sections, context_list_blocks, render_parts
+from .cards import LINK_ACTION, MENU_ACTION, STAMP_PAIR_PREFIX, _sections, context_list_blocks, render_parts
 
-_ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
 _LINK = re.compile("^" + re.escape(LINK_ACTION) + "$")
 _MENU = re.compile("^" + re.escape(MENU_ACTION) + "$")
+_STAMP_PAIR = re.compile("^" + re.escape(STAMP_PAIR_PREFIX) + r"([0-9a-f]{32}):([0-9a-f]{32})$")
+_ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$|" + _STAMP_PAIR.pattern)
 _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
@@ -145,6 +146,12 @@ def parse_action_origin(body, action, *, team_id, application_id, channel_id,
         picked = action.get("selected_option")
         token = picked.get("value") if isinstance(picked, dict) else None
         expected = MENU_ACTION
+    elif action.get("type") == "feedback_buttons":
+        expected = action.get("action_id")
+        pair = _STAMP_PAIR.fullmatch(expected) if isinstance(expected, str) else None
+        token = action.get("value")
+        if pair is None or pair[1] == pair[2] or token not in pair.groups():
+            return None
     else:
         token = action.get("value")
         expected = "mcs:a:" + str(token)
@@ -423,7 +430,8 @@ class Actions:
             await self._say(origin["channel_id"], user, "権限がありません。")
             return
         kind = ctx["action"]
-        if kind not in _KINDS:
+        if kind not in _KINDS or (action.get("type") == "feedback_buttons"
+                                  and kind not in ("stamp", "stamp_press")):
             await self._say(origin["channel_id"], user, "操作できません。")
             return
         clicker = await self._clicker_name(body["user"]) \

@@ -5,7 +5,7 @@ import re
 from html import escape
 from urllib.parse import urlsplit
 
-from adapters.common.spec import PRIMARY_ACTIONS, STAMP_ROW_ACTION
+from adapters.common.spec import STAMP_ROW_ACTION
 from adapters.common.spec import validate as validate_v1
 from adapters.common.text import notification_preview, stamp_icon
 
@@ -22,6 +22,7 @@ _BODY_PART = re.compile(r"^(m:[1-9][0-9]{0,18})#[1-9][0-9]{0,4}$")
 _STAMP_LINE = "スタンプ "          # stamp_format.thread_stamp_line prefix
 LINK_ACTION = "mcs:link"          # URL buttons still post an action — acked
 MENU_ACTION = "mcs:menu"          # the compact 操作 select — value = token
+STAMP_PAIR_PREFIX = "mcs:stamp-pair:"
 _DIVIDER = {"type": "divider"}
 _MENU_PLACEHOLDER = "操作を選ぶ…"
 _MENTION = re.compile(r"<@[UW][A-Z0-9]{1,30}>")
@@ -272,7 +273,7 @@ def render(spec, names=None):
     blocks = render_parts(spec["parts"], names,
                           spec["parts"].get("mentions") == "silent",
                           card_kind=spec.get("kind"))
-    quick, menu, links, stamps = [], [], [], []
+    menu, links, stamps = [], [], []
     for row in spec["parts"].get("action_rows") or []:
         for button in row:
             if len(button["label"]) > 75:
@@ -281,23 +282,12 @@ def render(spec, names=None):
                 links.append(button)
             elif button.get("id") == STAMP_ROW_ACTION:
                 stamps.append(button)
-            elif button.get("id") in PRIMARY_ACTIONS:
-                # buttons; every other action goes into one select so the
-                # card stays one compact row on mobile
-                quick.append(button)
             else:
                 menu.append(button)
+    stamp_form = next((b for b in menu if b["id"] == "stamp"), None) if len(stamps) == 5 else None
+    if stamp_form:
+        menu.remove(stamp_form)
     elements = []
-    for button in quick:
-        entry = {
-            "type": "button",
-            "text": {"type": "plain_text", "text": button["label"]},
-            "action_id": "mcs:a:" + button["token"],
-            "value": button["token"],
-        }
-        if button.get("style") in ("primary", "success"):
-            entry["style"] = "primary"
-        elements.append(entry)
     if menu:
         elements.append({
             "type": "static_select", "action_id": MENU_ACTION,
@@ -308,7 +298,26 @@ def render(spec, names=None):
         if blocks:
             blocks.append(dict(_DIVIDER))
         blocks.append({"type": "actions", "elements": elements})
-    if stamps:
+    if stamp_form:
+        controls = []
+        for button in [*stamps, stamp_form]:
+            own = button.get("style") == "primary" and button is not stamp_form
+            label = "別の投稿" if button is stamp_form else stamp_icon(button["label"]) + (" ✓" if own else "")
+            accessible = "投稿を選んでスタンプを操作" if button is stamp_form else (
+                ("取消: " if own else "スタンプ: ") + button["label"])
+            if len(accessible) > 75:
+                raise ValueError("slack_button_label")
+            controls.append({"text": {"type": "plain_text", "text": label},
+                             "value": button["token"], "accessibility_label": accessible})
+        # Slack requires pairs; the sixth control reuses the existing post picker.
+        blocks.append({"type": "context_actions",
+                       "block_id": f"mcs:stamps:{spec['delivery_id']}:{spec['render_rev']}",
+                       "elements": [
+                           {"type": "feedback_buttons",
+                            "action_id": STAMP_PAIR_PREFIX + controls[i]["value"] + ":" + controls[i + 1]["value"],
+                            "positive_button": controls[i], "negative_button": controls[i + 1]}
+                           for i in range(0, len(controls), 2)]})
+    elif stamps:
         # one press sends, like MCS's own stamp row: emoji only, the own stamp highlighted
         blocks.append({"type": "actions", "elements": [
             {"type": "button", "text": {"type": "plain_text", "text": stamp_icon(b["label"])},

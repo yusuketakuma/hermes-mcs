@@ -162,6 +162,11 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
         handler.client.current_session = ws
         spec = _spec()
         spec["parts"]["action_rows"][0][0].update(id="request", label="依頼")
+        spec["parts"]["action_rows"][0].append({
+            "id": "stamp", "ui": "button", "label": "MCSスタンプ", "token": "d" * 32})
+        spec["parts"]["action_rows"].append([
+            {"id": "stamp_press", "ui": "button", "label": label, "token": f"{i:032x}"}
+            for i, label in enumerate(("👀見ました", "🙆承知", "🙏感謝", "👍いいね", "✅完了"), 1)])
         spec["parts"]["context"] = {"project_id": 123, "source_message_id": 456,
                                        "source_hash": "a" * 64}
         settings = {**spec["delivery"], "data_root": str(tmp_path / "data"),
@@ -272,6 +277,38 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
             assert human["title"] == "架空の確認依頼" and human["source_hash"] == "a" * 64
             await dispatch({**body, "actions": [confirm]})
             assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 2
+            posted = next(params for op, params in wire.calls if op == "chat.postMessage")
+            posted_blocks = posted["blocks"]
+            if isinstance(posted_blocks, str):
+                posted_blocks = json.loads(posted_blocks)
+            compact, = [block for block in posted_blocks if block["type"] == "context_actions"]
+            assert len(compact["elements"]) == 3
+            async def stamp_form(request_id, timeout):
+                return {"outcome": "applied", "modal": True, "form": {
+                    "card_id": 7, "token": "d" * 32, "mcs_user_id": 501,
+                    "project_id": 123, "form_hash": "f" * 64,
+                    "types": [["viewed", "見ました"]],
+                    "posts": [{"opt": "p1", "message_id": 456, "source_hash": "a" * 64,
+                               "label": "10-01 09:00 合成投稿", "own": {
+                                   "type": None, "state": "observed", "observed_at": 1.0}}]}}
+            monkeypatch.setattr(actions, "_wait_result", stamp_form)
+            expected = set()
+            for pair in compact["elements"]:
+                for side in ("positive_button", "negative_button"):
+                    token = pair[side]["value"]
+                    expected.add(token)
+                    await dispatch({**body, "actions": [{
+                        "type": "feedback_buttons", "action_id": pair["action_id"], "value": token}]})
+            queued = [json.loads(path.read_text()) for path in Path(dirs["cmd_int"]).glob("*.json")]
+            stamp_commands = [item for item in queued if item.get("token") in expected]
+            assert len(queued) == 8 and len(stamp_commands) == 6
+            assert {item["token"] for item in stamp_commands} == expected
+            assert all(item["clicked_at"] > 0 and item["origin"]["message_id"] == outcome["message_id"]
+                       for item in stamp_commands)
+            stamp_modal = wire.views[-1]["view"]
+            if isinstance(stamp_modal, str):
+                stamp_modal = json.loads(stamp_modal)
+            assert stamp_modal["title"]["text"] == "MCSスタンプ"
             assert all(ack["envelope_id"] == "fictional-envelope" for ack in ws.acks)
         finally:
             actions.unload()
