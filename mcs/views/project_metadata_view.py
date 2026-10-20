@@ -193,12 +193,14 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
         result["reason"] = "association_unverified"
         return result
     result["scope"] = target["scope"]
+    # Group provenance must validate the latest attempt, including numeric aliases.
+    entity_filter = ("" if dataset == "consultations" else
+                     "AND json_type(content,'$.entity_id')='integer' "
+                     "AND typeof(json_extract(content,'$.entity_id'))='integer' ")
     # Invalid JSON cannot be evidence for any dataset or target.
     base = ("SELECT artifact_id,content FROM artifacts WHERE kind=? AND project_id=? "
             "AND CASE WHEN json_valid(content) THEN "
-            "json_extract(content,'$.dataset')=? "
-            "AND json_type(content,'$.entity_id')='integer' "
-            "AND typeof(json_extract(content,'$.entity_id'))='integer' "
+            "json_extract(content,'$.dataset')=? " + entity_filter +
             "AND json_extract(content,'$.entity_id')=? "
             "AND (json_type(content,'$.item_id') IS NULL OR "
             "json_type(content,'$.item_id') IN ('null','integer')) "
