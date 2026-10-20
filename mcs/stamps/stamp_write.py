@@ -17,6 +17,7 @@ import stat
 import time
 import uuid
 
+from mcs_contract import MCSError
 from mcs_util import canonical, payload_hash, positive, valid_hash, valid_text
 from message_observations import decode_metadata, get_message_metadata
 import notify_scope
@@ -98,7 +99,7 @@ def form(db, card, cfg, actor, now, token) -> dict:
         return {"error": "stamp_target_invalid"}
     posts = []
     for mid in mids[:MAX_FORM_POSTS]:
-        row = db.execute("SELECT message_id,parent_id,body_state,content_hash,posted_at "
+        row = db.execute("SELECT message_id,parent_id,body_state,content_hash,posted_at,sender_name "
                          "FROM messages WHERE message_id=? AND project_id=?", (mid, card["project_id"])).fetchone()
         if (row is None or row["body_state"] != "full" or not valid_hash(row["content_hash"])
                 or (mid != card["root_message_id"] and row["parent_id"] != card["root_message_id"])):
@@ -109,23 +110,29 @@ def form(db, card, cfg, actor, now, token) -> dict:
             own["state"] = "pending"
         at = row["posted_at"] or ""
         attached = db.execute("SELECT 1 FROM attachments WHERE message_id=? LIMIT 1", (mid,)).fetchone()
+        # The sender and the post's place in the card tell same-minute replies apart.
+        sender = " ".join(str(row["sender_name"] or "").split())[:12]
         posts.append({"opt": f"p{len(posts) + 1}", "message_id": mid,
                       "source_hash": row["content_hash"], "own": own,
-                      "label": f"{at[5:16].replace('T', ' ')} "
+                      "label": f"{len(posts) + 1}. {at[5:16].replace('T', ' ')} "
                                + ("根元" if mid == card["root_message_id"] else "返信")
+                               + (f" {sender}" if sender else "")
                                + ("（添付あり）" if attached else "")})
     if not posts:
         return {"error": "stamp_target_invalid"}
     result = {"posts": posts, "types": [list(kv) for kv in REACTION_LABELS.items()],
               "project_id": card["project_id"], "card_id": card["card_id"], "token": token,
               "mcs_user_id": options(cfg)["account_user_id"]}
-    result["form_hash"] = payload_hash(result)
+    # Other posts' re-observation must not void a confirm: the selected post's
+    # own state is matched separately against expected_own at admission.
+    result["form_hash"] = payload_hash({**result, "posts": [
+        {k: v for k, v in p.items() if k != "own"} for p in posts]})
     return result
 
 
 def validate_operation(req, base):
     fields = {"card_id", "token", "message_id", "source_hash", "form_hash", "expected_own",
-              "reason", "mcs_user_id", "op", "reaction_type"}
+              "reason", "mcs_user_id", "op", "reaction_type", "confirmed_at"}
     if req.keys() - (base | fields):
         return "unknown_field"
     if any(not positive(req.get(k)) for k in ("card_id", "message_id", "mcs_user_id")):
@@ -135,6 +142,10 @@ def validate_operation(req, base):
         return "stamp_target_invalid"
     if not valid_text(req.get("reason"), 200):
         return "reason_required"
+    at = req.get("confirmed_at")
+    # Absent only on envelopes from before confirmed_at existed; an explicit null is malformed.
+    if "confirmed_at" in req and (type(at) not in (int, float) or not math.isfinite(at) or at <= 0):
+        return "stamp_target_invalid"
     own = req.get("expected_own")
     if (not isinstance(own, dict) or set(own) != {"type", "observed_at"}
             or (own["type"] is not None and (not isinstance(own["type"], str)
@@ -229,7 +240,11 @@ def enqueue_tx(db, req, cfg, root, now):
             return "stamp_result_unknown", {}
     except (OSError, ValueError, KeyError, TypeError):
         return "stamp_restore_hold", {}
-    value = {"request": req, "namespace": namespace, "state": "queued", "queued_at": now,
+    # The intent ages from the human confirm, not from when the runner got to it.
+    confirmed = req.get("confirmed_at", now)
+    if not now - INTENT_MAX_AGE_S <= confirmed <= now + 60:
+        return "stamp_intent_expired", {}
+    value = {"request": req, "namespace": namespace, "state": "queued", "queued_at": min(confirmed, now),
              "frontier": payload_hash(witnesses)}
     db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
                "VALUES(?,?,?,?,?,?)", (KIND, req["project_id"], req["message_id"],
@@ -415,7 +430,8 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
         if prior is None:
             _check_live_intent(ledger.db, req, cfg, root, time.time(), value)
     except StampRefused as exc:
-        if prior is None:
+        # A pending restore holds the approved intent (drain keeps it queued) instead of ending it.
+        if prior is None and str(exc) != "stamp_restore_hold":
             _save_outcome(ledger, row["artifact_id"], value, "rejected", str(exc))
             return "rejected"
         raise
@@ -437,10 +453,25 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
         if time.monotonic() + 2 >= deadline:
             raise TimeoutError("stamp_wait_deadline")
         publish_new_bytes(path, canonical(witness))
+        refused = False
         try:
-            adapter.write_reaction(req["message_id"], req.get("reaction_type"), cancel=req["op"] == "cancel")
+            try:
+                adapter.write_reaction(req["message_id"], req.get("reaction_type"), cancel=req["op"] == "cancel")
+            except MCSError as error:
+                # A definite client refusal; session, throttling and server errors stay unknown.
+                if not (type(error) is MCSError and error.kind == "http_error"
+                        and isinstance(error.status, int) and 400 <= error.status < 500
+                        and error.status not in (401, 403, 408, 429)):
+                    raise
+                refused = True
             actual = _fresh_post(adapter, ledger, req)
-            state = "confirmed" if actual == desired else "unknown"
+            if actual == desired:
+                state = "confirmed"
+            elif refused and actual == req["expected_own"]["type"]:
+                # Refused and read back unchanged: terminal, so the post is not locked forever.
+                state = "rejected"
+            else:
+                state = "unknown"
         except Exception:
             state = "unknown"
     witness["state"] = state
@@ -448,7 +479,8 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
         publish_new_bytes(path, canonical(witness))
     else:
         atomic_write(str(path), lambda f: f.write(canonical(witness).decode()), mode=0o600, makedirs=False)
-    _save_outcome(ledger, row["artifact_id"], value, state)
+    _save_outcome(ledger, row["artifact_id"], value, state,
+                  "stamp_server_rejected" if state == "rejected" else None)
     return state
 
 
@@ -483,6 +515,11 @@ def drain(ledger, adapter, cfg, root, deadline):
                 if (isinstance(value, dict) and isinstance(value.get("request"), dict)
                         and _approved(ledger.db, value["request"])):
                     _save_outcome(ledger, row["artifact_id"], value, state, "stamp_check_held")
+                else:
+                    # Move an unsaveable row behind the others so it cannot starve the window.
+                    with ledger.db:
+                        ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.updated_at',?) "
+                                          "WHERE artifact_id=? AND kind=?", (time.time(), row["artifact_id"], KIND))
             value = json.loads(ledger.db.execute(
                 "SELECT content FROM artifacts WHERE artifact_id=?", (row["artifact_id"],)).fetchone()[0])
             try:

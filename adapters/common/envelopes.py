@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 import uuid
 
 from . import text
@@ -268,7 +269,8 @@ def mcs_reaction(actor: str, form: dict, attrs: dict,
            "token": form["token"], "message_id": post["message_id"],
            "source_hash": post["source_hash"], "form_hash": form["form_hash"],
            "expected_own": attrs["expected_own"], "reason": attrs["reason"],
-           "mcs_user_id": form["mcs_user_id"], "op": attrs["op"]}
+           "mcs_user_id": form["mcs_user_id"], "op": attrs["op"],
+           "confirmed_at": time.time()}
     if attrs["op"] == "add":
         env["reaction_type"] = attrs["kind"]
     return env

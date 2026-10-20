@@ -210,13 +210,20 @@ def test_every_api_worker_call_is_a_literal_get():
 
 
 def test_no_mcs_write_route_is_named_in_code():
-    """mark_as_read (retired) and reaction removal stay out of code;
-    docstrings may still explain why they are not called."""
+    """mark_as_read (retired) stays out of code; the reaction-removal suffix is
+    named only inside the approved stamp write (and the worker's POST
+    allowlist), so no other code can assemble that route piecewise. The add
+    route shares its path with a GET read, so the method guards pin that one."""
     hits = []
+    allowed = {STAMP_WRITE, (WORKER, None)}
     for rel in _production_files():
         for node, text in _string_constants(_parse(rel)):
-            if "mark_as_read" in text or "reactions/delete" in text:
+            if "mark_as_read" in text:
                 hits.append(f"{rel}:{node.lineno}")
+            elif "/delete" in text:
+                where = (rel, _enclosing(rel, node)) if rel != WORKER else (WORKER, None)
+                if where not in allowed:
+                    hits.append(f"{rel}:{node.lineno}")
     assert not hits, hits
 
 

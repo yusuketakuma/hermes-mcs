@@ -46,7 +46,7 @@ def test_add_builds_exact_contract_fields_from_the_shown_form():
     env = _payload({"post": "p2", "op": "add:completed", "reason": "確認しました"})
     assert set(env) == {"version", "cmd", "command_id", "actor", "human_confirmed",
                         "project_id", "card_id", "token", "message_id", "source_hash",
-                        "form_hash", "expected_own", "reason", "mcs_user_id", "op",
+                        "form_hash", "expected_own", "reason", "mcs_user_id", "op", "confirmed_at",
                         "reaction_type"}
     assert env["cmd"] == "ops.mcs_reaction" and env["human_confirmed"] is True
     assert (env["message_id"], env["source_hash"]) == (101, "2" * 64)

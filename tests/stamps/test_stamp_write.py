@@ -451,3 +451,107 @@ def test_expired_execution_window_leaves_queued_intent_without_api_calls(scene):
         "confirmed": 0, "unknown": 0, "rejected": 0, "held": 0}
     assert _receipt(scene, request)["stamp_state"] == "queued"
     assert api.posts == [] and api.gets == [] and api.profiles == 0
+
+
+@pytest.mark.parametrize("status", [400, 404, 409, 422])
+def test_definite_refusal_read_back_unchanged_ends_and_unlocks_the_post(scene, status):
+    from mcs_contract import MCSError
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    scene[3].failure = MCSError("http_error", status=status)
+    assert _drain(scene)["rejected"] == 1
+    receipt = _receipt(scene, request)
+    assert (receipt["stamp_state"], receipt["stamp_error"]) == ("rejected", "stamp_server_rejected")
+    assert scene[3].posts == [(100, "viewed", False)]
+    scene[3].failure = None
+    _drain(scene)
+    assert scene[3].posts == [(100, "viewed", False)]       # terminal: never re-sent
+    assert _apply(scene, _command(scene, serial=701, kind="accepted"))["stamp_state"] == "queued"
+
+
+@pytest.mark.parametrize("failure", ["throttled", "server", "session", "redirect"])
+def test_ambiguous_or_session_failures_stay_unknown(scene, failure):
+    from mcs_contract import MCSError, SessionExpired
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    scene[3].failure = {"throttled": MCSError("http_error", status=429),
+                        "server": MCSError("http_error", status=500, retryable=True),
+                        "session": SessionExpired(status=401),
+                        "redirect": MCSError("http_error", status=302)}[failure]
+    _drain(scene)
+    assert _receipt(scene, request)["stamp_state"] == "unknown"
+
+
+def test_refusal_with_a_changed_read_back_stays_unknown(scene, monkeypatch):
+    from mcs_contract import MCSError
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    api = scene[3]
+
+    def refuse_but_change(mid, reaction_type=None, *, cancel=False):
+        api.posts.append((mid, reaction_type, cancel))
+        api.own = "accepted"                     # someone else's change is not our refusal
+        raise MCSError("http_error", status=409)
+    monkeypatch.setattr(api, "write_reaction", refuse_but_change)
+    _drain(scene)
+    assert _receipt(scene, request)["stamp_state"] == "unknown"
+
+
+def test_pending_restore_holds_a_queued_intent_instead_of_ending_it(scene):
+    import notify_spool
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    notify_spool.mark_restored(str(scene[2]))
+    _drain(scene)
+    assert _receipt(scene, request)["stamp_state"] == "queued"
+    assert scene[3].posts == []
+    notify_spool.clear_restore_pending(str(scene[2]))
+    assert _drain(scene)["confirmed"] == 1
+
+
+def test_unsaveable_rows_rotate_behind_valid_queued_work(scene):
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    ledger = scene[0]
+    for n in range(4):
+        ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                          "VALUES(?,1,100,?,'{}',?)", (stamp_write.KIND, json.dumps(
+                              {"state": "queued", "request": {"command_id": f"bogus-{n}"}}), NOW - 100))
+    ledger.db.commit()
+    _drain(scene)                                  # the four stale rows fill the first window
+    assert _drain(scene)["confirmed"] == 1         # rotated behind, the approved one runs next
+
+
+def test_intent_ages_from_the_human_confirm_time(scene):
+    stale = dict(_command(scene), confirmed_at=NOW - stamp_write.INTENT_MAX_AGE_S - 1)
+    result = _apply(scene, stale)
+    assert result["outcome"] == "rejected" and result["error"] == "stamp_intent_expired"
+    fresh = dict(_command(scene, serial=701), confirmed_at=NOW - 100)
+    assert _apply(scene, fresh)["stamp_state"] == "queued"
+    row = scene[0].db.execute("SELECT content FROM artifacts WHERE kind=? ORDER BY artifact_id DESC",
+                              (stamp_write.KIND,)).fetchone()
+    assert json.loads(row[0])["queued_at"] == NOW - 100
+    bad = dict(_command(scene, serial=702), confirmed_at="yesterday")
+    assert _apply(scene, bad)["outcome"] == "rejected"
+    null = dict(_command(scene, serial=703), confirmed_at=None)
+    result = _apply(scene, null)
+    assert result["outcome"] == "rejected" and result["error"] == "stamp_target_invalid"
+    _drain(scene)
+    assert len(scene[3].posts) == 1  # only the fresh confirm reached the wire
+
+
+def test_reobserving_another_post_keeps_the_confirm_valid(scene):
+    request = _command(scene, mid=100)
+    before = _form(scene)["form_hash"]
+    ledger, _, _, api, _ = scene
+    api.own = "viewed"
+    ledger.save_metadata_shadow(api.message(101), publish=True)   # only the other post changed
+    api.own = None
+    assert _form(scene)["form_hash"] == before
+    assert _apply(scene, request)["stamp_state"] == "queued"
+
+
+def test_post_labels_are_numbered_and_name_the_sender(scene):
+    labels = [p["label"] for p in _form(scene)["posts"]]
+    assert [label.split(".", 1)[0] for label in labels] == [str(i + 1) for i in range(len(labels))]
+    assert len(set(labels)) == len(labels)
