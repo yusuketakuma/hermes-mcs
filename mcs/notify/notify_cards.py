@@ -85,6 +85,7 @@ LINEWORKS_SUMMARY_WAIT_S = 120
 # tests/notify/test_card_extras.py pins them equal
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
 MAX_BUTTONS = 5              # spec.MAX_BUTTONS
+MAX_ROWS = 5                 # spec.MAX_ROWS
 MAX_POST_ACTIONS = 5          # spec.MAX_POST_ACTIONS
 # Card face layout stamped at creation: existing cards keep layout 1/2 (no
 # fingerprint change, no mass re-render / LINE WORKS re-post); cards
@@ -247,6 +248,29 @@ def _stamp_enabled(cfg) -> bool:
         return False
 
 
+def _stamp_target(db, card, content):
+    """(latest shown post, the actor's own stamp as last observed or None) for
+    MCS's own stamp row, or None when the card shows no post to stamp."""
+    import stamp_write
+    from message_observations import get_message_metadata
+    shown = [m for m in content.get("shown") or [] if positive(m)]
+    if not shown:
+        return None
+    latest = db.execute(
+        "SELECT message_id FROM messages WHERE project_id=? AND body_state='full' "
+        "AND (message_id=? OR parent_id=?) AND message_id IN (%s) "
+        "ORDER BY posted_at DESC, message_id DESC LIMIT 1" % ",".join("?" * len(shown)),
+        (card["project_id"], card["root_message_id"], card["root_message_id"], *shown)).fetchone()
+    if latest is None:
+        return None
+    try:
+        own = stamp_write._own(get_message_metadata(db, latest[0]))
+        mine = own["type"] if own["state"] == "observed" else None
+    except Exception:              # unknown is shown as unpressed; the press re-checks MCS state
+        mine = None
+    return latest[0], mine
+
+
 def _action_rows(db, card, content, now, context=None,
                  in_thread_body=False, reserve=0, cfg=None, mint=True):
     """Button rows for a render; every button carries a fresh token.
@@ -340,6 +364,27 @@ def _action_rows(db, card, content, now, context=None,
         if content["page"] + 1 < content["pages"]:
             btn("next", {"page": content["page"] + 1})
     flush()
+    # row 1b — MCS's own stamp row for the latest post: one press sends.
+    # Optional: placed under the primary row only when every other row is
+    # already planned and both the row and component ceilings still hold.
+    target = (_stamp_target(db, card, content)
+              if kind == "thread" and positive(pid) and _stamp_enabled(cfg) else None)
+    if target is not None and rows and len(rows) < MAX_ROWS:
+        from stamp_contract import REACTION_LABELS, STAMP_EMOJI
+        used = (sum(c["type"] != "meta" for c in content["containers"])
+                + sum(f["type"] == "text" for f in content["footer"])
+                + sum(len(r) + 1 for r in rows))
+        if used + len(REACTION_LABELS) + 1 <= MAX_COMPONENTS - reserve:
+            mid, mine = target
+            for kind_, name in REACTION_LABELS.items():
+                # the render binds add/cancel and the own stamp it showed;
+                # a press after the own stamp changed is refused, never flipped
+                btn("stamp_press", {"message_id": mid, "kind": kind_,
+                                    "op": "cancel" if kind_ == mine else "add", "own": mine},
+                    label=f"{STAMP_EMOJI[kind_]}{name}" + ("✓" if kind_ == mine else ""),
+                    style="primary" if kind_ == mine else None)
+            rows.insert(1, list(row))
+            row.clear()
     # digest-only lists (ephemeral answers). Optional: only
     # as many as the worker's component ceiling still allows — a spec
     # over budget is rejected whole and the card would not render at all

@@ -87,9 +87,16 @@ def _validate_content(content):
                  and texts[0].get("wrap") is True
                  and isinstance(footer, dict) and footer.get("type") == "box"
                  and footer.get("layout") == "vertical" and isinstance(actions, list)
-                 and 1 <= len(actions) <= 10
-                 and all(isinstance(button, dict) and button.get("type") == "button"
-                         and _valid_action(button.get("action")) for button in actions))
+                 and 1 <= len(actions) <= 10)
+        if valid and isinstance(actions[-1], dict) and actions[-1].get("type") == "box":
+            # the one MCS stamp row: a last horizontal box of 1-5 buttons
+            row = actions[-1].get("contents")
+            valid = (actions[-1].get("layout") == "horizontal" and isinstance(row, list)
+                     and 1 <= len(row) <= 5)
+            actions = actions[:-1] + (row if valid else [])
+        valid = valid and 1 <= len(actions) <= 10 and all(
+            isinstance(button, dict) and button.get("type") == "button"
+            and _valid_action(button.get("action")) for button in actions)
         if valid:
             try:
                 valid = len(json.dumps(bubble, ensure_ascii=False, allow_nan=False).encode("utf-8")) <= 15000

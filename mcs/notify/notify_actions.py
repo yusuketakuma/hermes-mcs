@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import time
+import uuid
 
 import notify_cards as cards
 import notify_scope
@@ -37,7 +38,7 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
     db = cards.connection(ledger)
     now = time.time() if now is None else now
     command_id = req["command_id"]
-    digest = payload_hash({k: v for k, v in req.items() if k != "request_id"})
+    digest = payload_hash({k: v for k, v in req.items() if k not in ("request_id", "clicked_at")})
     specs = []
     with db:
         db.execute("BEGIN IMMEDIATE")
@@ -189,6 +190,8 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         return {**base, "outcome": "applied", "action": action,
                 "modal": True, "params": tok_params,
                 "form": action_context.task_form(db, card)}
+    if action == "stamp_press":
+        return _stamp_press(db, base, card, actor, token, tok_params, cfg, now, req)
     if action == "stamp":
         import stamp_write
         form = stamp_write.form(db, card, cfg, actor, now, token)
@@ -198,6 +201,85 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
                 "params": {"token": token, "card_id": card["card_id"]}, "form": form}
     return {**base, "outcome": "rejected",
             "error": "action_not_applicable"}
+
+
+STAMP_PRESS_REASON = "カードから直接操作"
+
+
+def _stamp_press(db, base, card, actor, token, params, cfg, now, req) -> dict:
+    """Build (never apply) the human stamp command of one card press.
+
+    Like MCS's own row: the pressed stamp is added, or taken back when it is
+    already the actor's own. The command reuses the receipt route of a
+    confirmed form, so execution, readback and restore safety are unchanged."""
+    import stamp_write
+    form = stamp_write.form(db, card, cfg, actor, now, token)
+    if form.get("error"):
+        return {**base, "outcome": "rejected", "error": form["error"]}
+    # The caller is re-authorized above (gate, operator, token, card) before
+    # a retried or double-tapped press replays its first answer.
+    command_id = _stamp_command_id(req["command_id"])
+    old = db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
+                     (command_id,)).fetchone()
+    if old:
+        out = json.loads(old[0])
+        return {**base, "outcome": out.get("outcome"), "error": out.get("error"),
+                "action": "stamp_press", "stamp_op": out.get("stamp_op"),
+                "stamp_command_id": command_id}
+    post = next((p for p in form["posts"] if p["message_id"] == params.get("message_id")), None)
+    kind, op = params.get("kind"), params.get("op")
+    if post is None or kind not in dict(form["types"]) or op not in ("add", "cancel"):
+        return {**base, "outcome": "rejected", "error": "stamp_target_changed"}
+    own = post["own"]
+    if own["state"] == "pending":
+        return {**base, "outcome": "rejected", "error": "stamp_result_unknown"}
+    if own["state"] != "observed":
+        return {**base, "outcome": "rejected", "error": "stamp_observation_required"}
+    # The press means what the card showed: if the own stamp changed since the
+    # render, an add would become a cancel (or back), so it is refused instead.
+    if own["type"] != params.get("own") or (op == "cancel") != (own["type"] == kind):
+        return {**base, "outcome": "rejected", "error": "stamp_target_changed"}
+    # The intent ages from the host-recorded click, never from when the runner got to it.
+    clicked = req.get("clicked_at")
+    if type(clicked) not in (int, float) or not math.isfinite(clicked) or clicked <= 0:
+        return {**base, "outcome": "rejected", "error": "stamp_intent_expired"}
+    command = {"version": 1, "cmd": "ops.mcs_reaction", "command_id": command_id,
+               "actor": actor, "human_confirmed": True, "reason": STAMP_PRESS_REASON,
+               "project_id": form["project_id"], "card_id": form["card_id"], "token": token,
+               "message_id": post["message_id"], "source_hash": post["source_hash"],
+               "form_hash": form["form_hash"], "mcs_user_id": form["mcs_user_id"],
+               "expected_own": {"type": own["type"], "observed_at": own["observed_at"]},
+               "op": op, "confirmed_at": clicked}
+    if op == "add":
+        command["reaction_type"] = kind
+    return {**base, "outcome": "applied", "action": "stamp_press", "stamp_command": command}
+
+
+def stamp_press(ledger, req, cfg, root, now, apply_human):
+    """op='notification' on a stamp_press token -> its human stamp command, or None.
+
+    The click checks (token, scope, origin, gate, freshness) run read-only;
+    ``apply_human`` then applies the command through the human command path."""
+    db = cards.connection(ledger)
+    tok = db.execute("SELECT action FROM notification_action_tokens WHERE token=?",
+                     (req.get("token"),)).fetchone()
+    if tok is None or tok["action"] != "stamp_press":
+        return None
+    now = time.time() if now is None else now
+    with db:
+        db.execute("BEGIN")
+        built = _apply_notification_tx(db, req, cfg, now, [], replay=None)
+    if built.get("outcome") != "applied" or "stamp_command" not in built:
+        return built                       # refused, or the replay of the first press
+    command = built.pop("stamp_command")
+    out = apply_human(command)
+    # The press answers once; the card shows the MCS-confirmed state after readback.
+    return {**built, "outcome": out.get("outcome"), "error": out.get("error"),
+            "stamp_op": command["op"], "stamp_command_id": command["command_id"]}
+
+
+def _stamp_command_id(click_command_id: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "mcs-stamp-press:" + click_command_id))
 
 
 def _act_view(db, base, card, action, inputs, now, cfg=None,

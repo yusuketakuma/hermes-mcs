@@ -1292,6 +1292,29 @@ def test_station_staffs_paginates_and_skips_station_accounts():
     assert all(c[1]["per_page"] == 100 and c[2] is False for c in calls)
 
 
+import pytest as _pytest  # noqa: E402
+
+
+@_pytest.mark.parametrize("dropped", [
+    {"id": 88, "is_self": True},                                   # no name
+    {"id": "x", "last_name": "合成", "is_self": True},              # invalid id
+    {"id": 88, "last_name": "合成", "is_self": True, "is_station_account": True},
+])
+def test_strict_self_refuses_a_self_row_the_roster_would_drop(dropped):
+    """A write's identity proof: a skipped second self must not leave one that looks unique."""
+    page = _staff_page([{"id": 77, "last_name": "合成", "first_name": "一", "is_self": True},
+                        dropped], False)
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            return page
+
+    st = [{"id": 7, "name": "合成薬局"}]
+    assert [r["staff_id"] for r in Adapter().station_staffs(st)] == [77]   # read contract unchanged
+    with _pytest.raises(mcs_contract.SchemaError):
+        Adapter().station_staffs(st, strict_self=True)
+
+
 def test_station_staffs_failure_kinds():
     import pytest
 

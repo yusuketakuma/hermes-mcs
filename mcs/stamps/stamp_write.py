@@ -22,7 +22,7 @@ from mcs_util import canonical, payload_hash, positive, valid_hash, valid_text
 from message_observations import decode_metadata, get_message_metadata
 import notify_scope
 from safe_io import atomic_write, fsync_dir, publish_new_bytes, read_private_bytes
-from stamp_contract import REACTION_LABELS, normalize_reactions, options
+from stamp_contract import REACTION_LABELS, STAMP_EMOJI, normalize_reactions, options
 
 KIND = "mcs_stamp_operation_v1"
 INSTANCE_KIND = "mcs_stamp_instance_v1"
@@ -39,7 +39,10 @@ class StampRefused(ValueError):
 
 def enabled(cfg, actor=None):
     value = options(cfg)
-    return (value.get("enabled") is True and notify_scope.interactive_enabled(cfg)
+    # On by default once the MCS account and the operator are configured;
+    # `"enabled": false` turns it off. Neither identity is ever guessed.
+    return (value.get("enabled", True) is True and positive(value.get("account_user_id"))
+            and isinstance(value.get("operator"), str) and notify_scope.interactive_enabled(cfg)
             and value["operator"].split(":", 1)[0] == notify_scope.active_transport(cfg)
             and (actor is None or actor == value["operator"]))
 
@@ -81,7 +84,7 @@ def form(db, card, cfg, actor, now, token) -> dict:
         return {"error": "stamp_target_invalid"}
     patient = db.execute("SELECT is_archived FROM patients WHERE project_id=?", (card["project_id"],)).fetchone()
     tok = db.execute("SELECT * FROM notification_action_tokens WHERE token=?", (token,)).fetchone()
-    if (patient is None or patient[0] or tok is None or tok["action"] != "stamp"
+    if (patient is None or patient[0] or tok is None or tok["action"] not in ("stamp", "stamp_press")
             or tok["card_id"] != card["card_id"] or tok["expires_at"] <= now
             or tok["need_source_gen"] != card["source_generation"]):
         return {"error": "stamp_target_changed"}
@@ -110,17 +113,20 @@ def form(db, card, cfg, actor, now, token) -> dict:
             own["state"] = "pending"
         at = row["posted_at"] or ""
         attached = db.execute("SELECT 1 FROM attachments WHERE message_id=? LIMIT 1", (mid,)).fetchone()
-        # The sender and the post's place in the card tell same-minute replies apart.
+        # The sender tells same-minute replies apart; the existing layout is kept
+        # (LINE WORKS numbers choices itself, so the label carries no number).
         sender = " ".join(str(row["sender_name"] or "").split())[:12]
         posts.append({"opt": f"p{len(posts) + 1}", "message_id": mid,
                       "source_hash": row["content_hash"], "own": own,
-                      "label": f"{len(posts) + 1}. {at[5:16].replace('T', ' ')} "
+                      "label": f"{at[5:16].replace('T', ' ')} "
                                + ("根元" if mid == card["root_message_id"] else "返信")
                                + (f" {sender}" if sender else "")
                                + ("（添付あり）" if attached else "")})
     if not posts:
         return {"error": "stamp_target_invalid"}
+    # types keep MCS's own order and names; emoji is a separate key so older UIs ignore it.
     result = {"posts": posts, "types": [list(kv) for kv in REACTION_LABELS.items()],
+              "emoji": dict(STAMP_EMOJI),
               "project_id": card["project_id"], "card_id": card["card_id"], "token": token,
               "mcs_user_id": options(cfg)["account_user_id"]}
     # Other posts' re-observation must not void a confirm: the selected post's
@@ -249,7 +255,7 @@ def enqueue_tx(db, req, cfg, root, now):
     db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
                "VALUES(?,?,?,?,?,?)", (KIND, req["project_id"], req["message_id"],
                canonical(value).decode(), canonical({"command_id": req["command_id"]}).decode(), now))
-    return None, {"cmd": req["cmd"], "stamp_state": "queued", "scheduled": True}
+    return None, {"cmd": req["cmd"], "stamp_state": "queued", "scheduled": True, "stamp_op": req["op"]}
 
 
 def _scope_witnesses(directory, req, namespace):
@@ -423,8 +429,15 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
             _check_reconciliation(ledger.db, req, cfg, root)
         if any(k != req["command_id"] and w["state"] not in TERMINAL for k, w in witnesses.items()):
             raise StampRefused("stamp_result_unknown")
-        from self_identity import normalize_sender_id
-        if normalize_sender_id(adapter.self_profile().get("sender_id")) != req["mcs_user_id"]:
+        # the core module stays byte-identical (its digest feeds extraction fingerprints)
+        from self_identity import _station_self_id as station_self_id, normalize_sender_id
+        profile = adapter.self_profile()
+        account = normalize_sender_id(profile.get("sender_id"))
+        if account is None:
+            # /users/self may omit the id; the fresh own-station roster's single
+            # is_self member is the same session's identity. Absent or ambiguous stays unknown.
+            account = station_self_id(adapter.station_staffs(profile.get("stations") or [], strict_self=True))
+        if account is None or account != req["mcs_user_id"]:
             raise StampRefused("stamp_account_mismatch")
         actual = _fresh_post(adapter, ledger, req)
         if prior is None:

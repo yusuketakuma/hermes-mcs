@@ -34,7 +34,7 @@ _LEGACY_FIELDS = {"request": ("title", "reason", "assignee", "due_date"),
 _KINDS = ("ack", "assign", "defer", "body", "prev", "next", "request",
           "dismiss", "tasks", "task_status", "summary", "report",
           "mytasks", "unacked", "search", "digest", "meds", "drugsearch",
-          "stamp")
+          "stamp", "stamp_press")
 SUMMARY_COMMAND = "/mcs-summary"
 MCS_COMMAND = "/mcs"
 RESULT_POLL_S = 0.25

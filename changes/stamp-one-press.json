@@ -1,0 +1,28 @@
+{
+  "category": "added",
+  "title": "カードのスタンプ列から1回押しでMCSスタンプを送信",
+  "summary": "スレッドカードの最新投稿の下に、MCS本体と同じ順で5種類のスタンプを並べました（Slack・Discordは絵文字のみ）。押すとその場で送信を受け付け、自分が押しているスタンプをもう一度押すと取消です。表示後に自分のスタンプが変わった場合や、押してから20分を過ぎて届いた押下は送信しません。MCSが自分のIDを返さない場合も、所属ステーション名簿で本人を1人に特定できれば照合できます。操作者とMCSアカウントを設定していれば既定で有効です。",
+  "upgrade": "スタンプ送信を使うには stamps.account_user_id と stamps.operator を設定します（enabled は省略で有効、false で無効）。カードとボタンの変更を反映するには Hermes gateway と LINE WORKS アダプターの再起動が必要です。既存のカードは次の更新時にスタンプ列が加わります。",
+  "details": [
+    "1回押しは runner 側で ops.mcs_reaction の承認コマンドに変換し、既存の receipt・試行記録・GET照合の経路をそのまま通す。理由は「カードから直接操作」。",
+    "トークンは表示時の追加/取消と自分のスタンプを固定し、押下時に変わっていれば stamp_target_changed で拒否する（追加が取消に、取消が追加に変わらない）。",
+    "notification エンベロープにホストのクリック時刻 clicked_at を加え、1回押しはこれを確認時刻として20分の期限を判定する。clicked_at は冪等性の照合から除く。",
+    "再送・二重押しは、操作者・ゲート・トークン・カードを再確認してから最初の受付を返す。",
+    "スタンプ列は他の行をすべて組み立てた後、行数（5）と部品数（40）に収まる場合だけ主ボタンの下に入れる。収まらない場合は省き、従来のフォームを残す。",
+    "LINE WORKS のクライアント検証は、フッター末尾の横並び1列（ボタン1〜5個）だけを追加で許可し、合計10ボタン・容量の上限は維持する。",
+    "送信前のアカウント照合は /users/self の ID を優先し、無い場合だけ同じセッションで取得した所属ステーション名簿の is_self が1人のときその ID を使う。不明・複数・不一致は送信しない。",
+    "回帰: tests/stamps/test_stamp_write.py、tests/notify/test_stamp_action_button.py、tests/adapters/common/test_stamp_ui.py、tests/adapters/lineworks/test_lineworks_stamp_form.py"
+  ],
+  "refs": [
+    "adapters/common/envelopes.py",
+    "adapters/common/text.py",
+    "adapters/discord/cards.py",
+    "adapters/lineworks/cards.py",
+    "adapters/lineworks/client.py",
+    "adapters/slack/cards.py",
+    "mcs/notify/notify_actions.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_cmds.py",
+    "mcs/stamps/stamp_write.py"
+  ]
+}

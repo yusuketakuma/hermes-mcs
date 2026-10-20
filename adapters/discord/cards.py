@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from typing import BinaryIO
 
-from adapters.common.spec import MAX_COMPONENTS, MAX_TEXT, PRIMARY_ACTIONS
-from adapters.common.text import escape_md, notification_preview
+from adapters.common.spec import MAX_COMPONENTS, MAX_TEXT, PRIMARY_ACTIONS, STAMP_ROW_ACTION
+from adapters.common.text import escape_md, notification_preview, stamp_icon
 
 # accent bar colour per card kind — the visible card edge; a missing
 # kind (notice op) leaves the container unaccented
@@ -115,6 +115,8 @@ def _button_items(spec, primary_actions=PRIMARY_ACTIONS):
             if spec["parts"].get("thread_drug_actions") is True \
                     and button.get("id") in {"meds", "drugsearch"}:
                 continue
+            if button.get("id") == STAMP_ROW_ACTION:
+                continue                   # drawn as its own row by _stamp_buttons
             if button.get("ui") == "link":
                 links.append(discord.ui.Button(style=discord.ButtonStyle.link,
                                                label=button["label"], url=button["url"]))
@@ -125,6 +127,16 @@ def _button_items(spec, primary_actions=PRIMARY_ACTIONS):
             else:
                 menu.append(discord.SelectOption(label=button["label"], value=button["token"]))
     return primary + links, menu
+
+
+def _stamp_buttons(spec) -> list:
+    """MCS's own stamp row: emoji only, one press sends; the own stamp is primary."""
+    import discord
+    return [discord.ui.Button(
+        style=getattr(discord.ButtonStyle, b.get("style", "secondary")),
+        label=stamp_icon(b["label"]), custom_id=f"{ACTION_PREFIX}{b['token']}")
+        for row in spec["parts"].get("action_rows") or [] for b in row
+        if b.get("id") == STAMP_ROW_ACTION]
 
 
 def thread_drug_view(spec, *, private=False):
@@ -173,6 +185,10 @@ def message_payload(spec, *, components_v2=False):
         view.add_item(discord.ui.Select(
             custom_id=MENU_ID, placeholder=_MENU_PLACEHOLDER,
             min_values=1, max_values=1, options=menu[:_MENU_MAX], row=1))
+    stamps = _stamp_buttons(spec)
+    for button in stamps:
+        button.row = 3
+        view.add_item(button)
     for line, button in posts[:_POST_BUTTONS_MAX]:
         # "-# MM-DD HH:MM sender…" -> "💊 MM-DD HH:MM"
         stamp = " ".join(line.removeprefix("-# ").split(" ")[:2])
@@ -182,7 +198,7 @@ def message_payload(spec, *, components_v2=False):
             custom_id=f"{ACTION_PREFIX}{button['token']}", row=2))
     payload = {"content": escape_md(notification_preview(spec["parts"])),
                "embed": discord.Embed(description=face, colour=_accent(spec))}
-    if primary or menu or posts:
+    if primary or menu or posts or stamps:
         view.stop()
         payload["view"] = view
     return payload
@@ -207,6 +223,11 @@ def build_view(spec: dict):
     rows = []
     if primary.children:
         rows.append(primary)
+    stamp_row = discord.ui.ActionRow()
+    for button in _stamp_buttons(spec):
+        stamp_row.add_item(button)
+    if stamp_row.children:
+        rows.append(stamp_row)
     if menu:
         select_row = discord.ui.ActionRow()
         select_row.add_item(discord.ui.Select(

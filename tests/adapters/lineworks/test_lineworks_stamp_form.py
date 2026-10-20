@@ -32,7 +32,7 @@ def test_stamp_form_prompts_by_number_and_confirms_the_shown_target(tmp_path):
     assert [d["id"] for d in session["definitions"]] == ["post", "op", "reason"]
     assert session["form"] == FORM
     assert "番号で返信" in w.client.calls[-1][1]["text"]
-    for answer in ("1", "3", "誤って押した"):      # post p1, 取消, reason
+    for answer in ("1", "2", "誤って押した"):      # post p1, its own 承知 again = 取消, reason
         asyncio.run(w.actions._input("operator", ACTOR, answer))
     preview = str(w.client.calls[-1][1])          # a confirm-button template
     assert "取消（現在: 承知）" in preview and "収集アカウント" in preview

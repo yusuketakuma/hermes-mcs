@@ -21,7 +21,7 @@ id は `patients.probe_mid` に記録して繰返し取得を抑える。
 | import | flat import を維持。エントリポイントは `mcs/` を sys.path に追加し `_mcs_path` を import。`.py` のある配下を任意の深さで登録する。直下の import モジュールは `_mcs_path.py` のみ。同名モジュールが旧配置に残る場合は誤読込せず停止する |
 | 抽出 | `extract/rules/` はルール（v1）、`extract/llm/` は現行LLM（旧配置v4）。`extract/clinical/` は臨床値の共通処理。`patients/rollup.py` と `semantic/` は世代横断。世代番号は配置名と独立。v2/v3 の旧実装は git 履歴。評価・ベンチ用は `extract/eval/`・`semantic/eval/`（定期処理からは読まない） |
 | 通知 | `adapters/{slack,discord,lineworks,common}/`。独立接続も接続先配下に置く。`hermes_plugin/` は Hermes 接続・互換入口、`lineworks_adapter/` は独立CLI入口 |
-| スタンプ | `mcs/stamps/` が種別・読取り・表示・人承認操作を所有する。送信は既定OFF。`stamp_write`の承認記録・復元用記録を通し、通信は既存の`MCSAdapter`だけで行う。[契約](docs/specs/stamp-management.md) |
+| スタンプ | `mcs/stamps/` が種別・読取り・表示・人承認操作を所有する。送信は操作者1人とMCSアカウントの設定時だけ既定ON（`stamps.enabled=false`で無効）。`stamp_write`の承認記録・復元用記録を通し、通信は既存の`MCSAdapter`だけで行う。[契約](docs/specs/stamp-management.md) |
 | 独立実行 | `runtime_mode=standalone` の `mcs_standalone/` が単一host・6定期ジョブ・cmd取込・抽出worker2本を所有。Hermes未指定は従来経路。`docs/guides/STANDALONE.md` |
 | 検証 | `tests/` は実行領域に対応、`integration/` は統合、`evaluation/` は完全合成の評価資産。conftest がヘルパー import と socket 遮断を担う |
 | 配布master | `resources/drug-master/` は公式公開master原本・出典/版/hashのmanifest。実患者データやfixtureではない。リリース時の更新確認・同梱検証と、私有辞書への変換/承認/有効化を分離する |

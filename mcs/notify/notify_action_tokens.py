@@ -18,6 +18,8 @@ ACTIONS = {
     "drugsearch": ("薬剤を検索", "secondary", "view"),
     "dismiss": ("却下", "danger", "write"),
     "stamp":   ("MCSスタンプ", "secondary", "write"),
+    # one MCS stamp on the card's latest post, sent on a single press
+    "stamp_press": ("MCSスタンプ", "secondary", "write"),
     "prev":    ("◀ 前", "secondary", "view"),
     "next":    ("次 ▶", "secondary", "view"),
     "mytasks": ("自分のタスク", "secondary", "view"),

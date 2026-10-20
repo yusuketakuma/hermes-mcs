@@ -39,9 +39,17 @@ class StampAPI:
                              [{"type": self.own, "count": 1, "self_reacted": True}])}
         return normalize_message(raw, 1, parent_id=None if mid == 100 else 100)
 
+    roster = ()                    # own-station staff served by station_staffs()
+
     def self_profile(self):
         self.profiles += 1
-        return {"sender_id": self.account}
+        return {"sender_id": self.account, "stations": [{"id": 5, "name": "合成薬局"}]}
+
+    def station_staffs(self, stations, *, strict_self=False):
+        assert stations == [{"id": 5, "name": "合成薬局"}] and strict_self is True
+        if isinstance(self.roster, Exception):
+            raise self.roster
+        return list(self.roster)
 
     def fetch_message_metadata(self, pid, mid, *, parent_id):
         self.gets.append((pid, mid, parent_id))
@@ -177,6 +185,54 @@ def test_unexpected_adapter_value_error_is_private_and_retryable(scene, monkeypa
     monkeypatch.setattr(api, "self_profile", original)
     assert _drain(scene)["confirmed"] == 1
     assert api.posts == [(100, "viewed", False)]
+
+
+def _staff(sid, is_self):
+    return {"staff_id": sid, "name": "合成 職員", "professions": [], "station": "合成薬局", "is_self": is_self}
+
+
+def test_a_profile_without_id_uses_the_single_self_in_the_fresh_roster(scene):
+    api = scene[3]
+    api.account, api.roster = None, [_staff(12, False), _staff(77, True)]
+    _apply(scene, _command(scene))
+    assert _drain(scene)["confirmed"] == 1
+    assert api.posts == [(100, "viewed", False)]
+
+
+@pytest.mark.parametrize("roster", [
+    [],                                                  # roster without the logged-in user
+    [_staff(12, False)],
+    [_staff(77, True), _staff(78, True)],                # ambiguous self
+    [_staff(78, True)],                                  # another account
+    [_staff("x", True)],                                 # invalid id
+])
+def test_an_unknown_or_other_account_never_posts(scene, roster):
+    api = scene[3]
+    api.account, api.roster = None, roster
+    request = _command(scene)
+    _apply(scene, request)
+    _drain(scene)
+    assert api.posts == []
+    assert _receipt(scene, request)["stamp_error"] == "stamp_account_mismatch"
+
+
+def test_a_failed_roster_read_holds_without_posting(scene):
+    from mcs_contract import MCSError
+    api = scene[3]
+    api.account, api.roster = None, MCSError("station_staffs_unavailable", "synthetic")
+    request = _command(scene)
+    _apply(scene, request)
+    _drain(scene)
+    assert api.posts == [] and _receipt(scene, request)["stamp_state"] != "confirmed"
+
+
+def test_a_profile_id_is_used_as_is_without_reading_the_roster(scene):
+    api = scene[3]
+    api.account, api.roster = 78, RuntimeError("roster must not be read")
+    request = _command(scene)
+    _apply(scene, request)
+    _drain(scene)
+    assert api.posts == [] and _receipt(scene, request)["stamp_error"] == "stamp_account_mismatch"
 
 
 def test_empty_observation_is_selectable_but_unfetched_is_unknown(scene):
@@ -551,7 +607,144 @@ def test_reobserving_another_post_keeps_the_confirm_valid(scene):
     assert _apply(scene, request)["stamp_state"] == "queued"
 
 
-def test_post_labels_are_numbered_and_name_the_sender(scene):
-    labels = [p["label"] for p in _form(scene)["posts"]]
-    assert [label.split(".", 1)[0] for label in labels] == [str(i + 1) for i in range(len(labels))]
-    assert len(set(labels)) == len(labels)
+def test_post_labels_keep_the_layout_and_add_only_the_sender(scene):
+    ledger = scene[0]
+    ledger.db.execute("UPDATE messages SET sender_name=? WHERE message_id=101", ("合成  太郎",))
+    ledger.db.commit()
+    posts = {p["message_id"]: p["label"] for p in _form(scene)["posts"]}
+    assert posts[101].endswith("返信 合成 太郎（添付あり）")
+    # Layout as before: date, root/reply, then the sender; never a number
+    # (LINE WORKS prefixes its own "1." to each choice).
+    assert all(label[:2].isdigit() and label[2] == "-" for label in posts.values())
+
+
+# ---------- one press on the card's MCS-style stamp row ----------
+
+def _press_buttons(scene):
+    from notify_testkit import _spec as spec_of
+    return [b for row in spec_of(scene[0])["parts"]["action_rows"] for b in row
+            if b["id"] == "stamp_press"]
+
+
+def _press(scene, label_prefix, *, actor=CLICKER, serial=None, clicked_at=NOW, cfg=None, button=None):
+    import notify_cmds
+    from notify_testkit import ORIGIN
+    ledger, scene_cfg, root, _, _ = scene
+    cfg = cfg or scene_cfg
+    button = button or next(b for b in _press_buttons(scene) if b["label"].startswith(label_prefix))
+    req = {"version": 1, "op": "notification",
+           "command_id": f"{button['token']}:{(serial or 1):016x}", "actor": actor,
+           "token": button["token"], "origin": ORIGIN}
+    if clicked_at is not None:
+        req["clicked_at"] = clicked_at
+    assert notify_cmds.validate_int(req) is None
+    return notify_cmds.dispatch(ledger, req, cfg, str(root), now=NOW)
+
+
+def test_card_carries_mcs_stamp_row_on_the_latest_post(scene):
+    buttons = _press_buttons(scene)
+    assert [b["label"] for b in buttons] == ["👀見ました", "🙆承知", "🙏感謝", "👍いいね", "✅完了"]
+    params = [json.loads(scene[0].db.execute(
+        "SELECT params FROM notification_action_tokens WHERE token=?", (b["token"],)).fetchone()[0])
+        for b in buttons]
+    assert {p["message_id"] for p in params} == {101}
+    assert [p["kind"] for p in params] == ["viewed", "accepted", "thanked", "good", "completed"]
+
+
+def test_one_press_queues_the_receipted_command_and_sends_after_readback(scene):
+    result = _press(scene, "🙆")
+    assert (result["outcome"], result["action"], result["stamp_op"]) == ("applied", "stamp_press", "add")
+    row = scene[0].db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
+                              (result["stamp_command_id"],)).fetchone()
+    receipt = json.loads(row[0])
+    assert (receipt["stamp_state"], receipt["scheduled"]) == ("queued", True)
+    assert scene[3].posts == []                     # nothing on the wire inside the click
+    # a retried or double-tapped click replays, never queues a second POST
+    again = _press(scene, "🙆")
+    assert again["stamp_command_id"] == result["stamp_command_id"]
+    assert scene[0].db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?",
+                               (stamp_write.KIND,)).fetchone()[0] == 1
+    assert _drain(scene)["confirmed"] == 1
+    assert scene[3].posts == [(101, "accepted", False)]
+    # the card is re-rendered from the MCS readback, own stamp highlighted
+    own = next(b for b in _press_buttons(scene) if b["label"].startswith("🙆"))
+    assert own["label"] == "🙆承知✓" and own["style"] == "primary"
+
+
+def test_pressing_the_own_stamp_takes_it_back_like_mcs(scene):
+    ledger, _, _, api, _ = scene
+    api.own = "accepted"
+    ledger.save_metadata_shadow(api.message(101), publish=True)
+    ledger.db.commit()
+    import notify_cards
+    notify_cards.issue_render(ledger.db, 1, scene[1], NOW + 1, [], force=True)
+    ledger.db.commit()
+    own = next(b for b in _press_buttons(scene) if b["label"].startswith("🙆"))
+    assert own["label"] == "🙆承知✓" and own["style"] == "primary"
+    result = _press(scene, "🙆")
+    assert result["stamp_op"] == "cancel"
+    assert _drain(scene)["confirmed"] == 1
+    assert api.posts == [(101, None, True)]
+
+
+def _republish_own(scene, own):
+    ledger, _, _, api, _ = scene
+    api.own = own
+    ledger.save_metadata_shadow(api.message(101), publish=True)
+    ledger.db.commit()
+
+
+def _rerender(scene):
+    import notify_cards
+    notify_cards.issue_render(scene[0].db, 1, scene[1], NOW + 1, [], force=True)
+    scene[0].db.commit()
+
+
+@pytest.mark.parametrize("shown,now_own,label", [
+    (None, "accepted", "🙆"),       # rendered unpressed: an add must not become a cancel
+    ("accepted", None, "🙆"),       # rendered pressed: a cancel must not become an add
+])
+def test_a_press_after_the_own_stamp_changed_is_refused_not_flipped(scene, shown, now_own, label):
+    _republish_own(scene, shown)
+    _rerender(scene)
+    button = next(b for b in _press_buttons(scene) if b["label"].startswith(label))
+    _republish_own(scene, now_own)                 # MCS changed after the render
+    result = _press(scene, label, button=button)
+    assert result["outcome"] == "rejected" and result["error"] == "stamp_target_changed"
+    assert scene[0].db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?",
+                               (stamp_write.KIND,)).fetchone()[0] == 0
+    _drain(scene)
+    assert scene[3].posts == []
+
+
+def test_a_press_ages_from_the_host_click_time(scene):
+    assert _press(scene, "👀", clicked_at=None)["error"] == "stamp_intent_expired"
+    late = _press(scene, "👀", serial=2, clicked_at=NOW - stamp_write.INTENT_MAX_AGE_S - 1)
+    assert late["outcome"] == "rejected" and late["error"] == "stamp_intent_expired"
+    _drain(scene)
+    assert scene[3].posts == []
+    ok = _press(scene, "👀", serial=3, clicked_at=NOW - 30)
+    row = scene[0].db.execute("SELECT content FROM artifacts WHERE kind=?", (stamp_write.KIND,)).fetchone()
+    assert ok["stamp_op"] == "add" and json.loads(row[0])["queued_at"] == NOW - 30
+
+
+def test_a_replayed_press_is_reauthorized_first(scene):
+    button = next(b for b in _press_buttons(scene) if b["label"].startswith("👀"))
+    assert _press(scene, "👀", button=button)["outcome"] == "applied"
+    off = {**scene[1], "stamps": {**scene[1]["stamps"], "enabled": False}}
+    again = _press(scene, "👀", button=button, cfg=off)
+    assert again["outcome"] == "rejected" and again["error"] == "stamp_not_allowed"
+
+
+def test_only_the_operator_can_press(scene):
+    result = _press(scene, "👀", actor="discord:2002")
+    assert result["outcome"] == "rejected" and result["error"] == "stamp_not_allowed"
+    assert scene[3].posts == []
+
+
+def test_stamps_are_on_by_default_once_the_identity_is_configured(scene):
+    cfg = {**scene[1], "stamps": {"account_user_id": 77, "operator": CLICKER}}
+    assert stamp_write.enabled(cfg, CLICKER)
+    assert not stamp_write.enabled({**cfg, "stamps": {**cfg["stamps"], "enabled": False}}, CLICKER)
+    assert not stamp_write.enabled({**cfg, "stamps": {"operator": CLICKER}}, CLICKER)
+    assert not stamp_write.enabled({**cfg, "stamps": {}}, CLICKER)

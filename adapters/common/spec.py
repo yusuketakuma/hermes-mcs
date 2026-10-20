@@ -88,6 +88,8 @@ MAX_CAPTION = 300
 # select, LINE WORKS 1:1 menu behind ``more``). The ``link`` button
 # (ui=link) is always primary too.
 PRIMARY_ACTIONS = ("ack", "assign", "request")
+# MCS's own stamp row: drawn as its own row of buttons under the primary row
+STAMP_ROW_ACTION = "stamp_press"
 
 STYLES = {"primary": 1, "secondary": 2, "success": 3, "danger": 4}
 _CONTAINER_TYPES = ("heading", "text", "field", "quote", "meta")

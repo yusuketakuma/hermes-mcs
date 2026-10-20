@@ -14,6 +14,7 @@ artifact it saw) — the card UX can never weaken the human gate.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import sqlite3
@@ -224,10 +225,13 @@ def validate_int(req) -> str | None:
 
 def _val_notification(req, cid, transport: str) -> str | None:
     if _fields(req, {"version", "op", "command_id", "actor",
-                     "token", "origin", "request_id", "input"}):
+                     "token", "origin", "request_id", "input", "clicked_at"}):
         return "unknown_field"
     if "request_id" in req and not valid_uuid(req["request_id"]):
         return "bad_request_id"
+    at = req.get("clicked_at")
+    if "clicked_at" in req and (type(at) not in (int, float) or not math.isfinite(at) or at <= 0):
+        return "bad_clicked_at"
     if "input" in req and not _input(req["input"]):
         return "bad_input"
     if not isinstance(cid, str) or not _TOKEN_COMMAND_ID.fullmatch(cid):
@@ -335,6 +339,12 @@ def dispatch(ledger, req, cfg, root, now=None):
     publications. Human commands forward to the existing apply path."""
     op = req.get("op")
     if op == "notification":
+        # A stamp press becomes the same human command a confirmed form sends.
+        pressed = notify_actions.stamp_press(
+            ledger, req, cfg, root, now,
+            lambda command: dispatch(ledger, command, cfg, root, now))
+        if pressed is not None:
+            return pressed
         return notify_actions.apply_notification(ledger, req, cfg, now)
     if op == "refresh":
         return notify_actions.apply_refresh(ledger, req, cfg, now)

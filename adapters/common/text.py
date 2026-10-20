@@ -99,6 +99,10 @@ def _applied_text(result: dict) -> str:
         return "確認を取り消しました。" if result.get("withdrawn") else "確認済みにしました。"
     if action == "assign":
         return "担当を外しました。" if result.get("released") else "担当にしました。"
+    if action == "stamp_press":
+        # The card shows the stamp once MCS confirms it, as MCS's own row does.
+        what = "取消" if result.get("stamp_op") == "cancel" else "スタンプ"
+        return f"MCSへの{what}を受け付けました。MCSで反映を確認するとカードの表示が変わります（自動では再送しません）。"
     if result.get("stamp_state") is not None or action == "stamp":
         return STAMP_STATE_TEXT.get(result.get("stamp_state"), STAMP_STATE_TEXT["queued"])
     if result.get("field"):
@@ -341,35 +345,55 @@ def modal_fields(action: str, form: dict | None = None,
     return []
 
 
+def stamp_icon(label: str) -> str:
+    """The emoji alone of a card stamp-row label ("👀見ました✓" -> "👀"); the label if none."""
+    from stamp_contract import STAMP_EMOJI
+    return next((e for e in STAMP_EMOJI.values() if label.startswith(e)), label)
+
+
 def _stamp_types(form: dict) -> dict:
     """Runner-sent canonical kind -> label pairs; the UI keeps no own table."""
     return {k: v for k, v in (form.get("types") or [])
             if isinstance(k, str) and isinstance(v, str)}
 
 
-def _stamp_own_text(own, types: dict) -> str:
+def _stamp_icons(form: dict) -> dict:
+    """Runner-sent kind -> emoji; absent from older runners, then labels stand alone."""
+    icons = form.get("emoji")
+    return {k: v for k, v in icons.items() if isinstance(k, str) and isinstance(v, str)
+            and 0 < len(v) <= 4} if isinstance(icons, dict) else {}
+
+
+def _stamp_name(kind, types: dict, icons: dict) -> str:
+    label = types.get(kind, "未知")
+    return f"{icons[kind]}{label}" if kind in icons else label
+
+
+def _stamp_own_text(own, types: dict, icons: dict | None = None) -> str:
     own = own if isinstance(own, dict) else {}
     if own.get("state") == "pending":
         return "（確認中）"
     if own.get("state") != "observed":
         return "（自分: 不明）"
     kind = own.get("type")
-    return "（自分: なし）" if kind is None else f"（自分: {types.get(kind, '未知')}）"
+    return "（自分: なし）" if kind is None else f"（自分: {_stamp_name(kind, types, icons or {})}）"
 
 
 def stamp_fields(form: dict | None) -> list:
-    """🏷 modal: a post the runner offered, an operation and a reason."""
+    """🏷 modal: a post the runner offered, a stamp and a reason.
+
+    Like MCS's own stamp row: the five stamps in MCS order, and choosing the
+    stamp you already pressed takes it back (no separate cancel button)."""
     form = form if isinstance(form, dict) else {}
-    types = _stamp_types(form)
+    types, icons = _stamp_types(form), _stamp_icons(form)
     posts = [p for p in form.get("posts") or [] if isinstance(p, dict)
              and isinstance(p.get("opt"), str) and isinstance(p.get("label"), str)]
-    ops = [(f"add:{k}", f"{v}を押す") for k, v in types.items()]
-    ops.append(("cancel", "自分のスタンプを取消"))
+    ops = [(f"add:{k}", _stamp_name(k, types, icons)) for k in types]
     return [{"id": "post", "label": "対象の投稿", "required": True,
-             "options": [(p["opt"], (p["label"] + _stamp_own_text(p.get("own"), types))[:75])
+             "options": [(p["opt"], (p["label"] + _stamp_own_text(p.get("own"), types, icons))[:75])
                          for p in posts], "default": None},
-            {"id": "op", "label": "操作", "required": True, "options": ops,
-             "default": None},
+            {"id": "op", "label": "スタンプ（押しているものを選ぶと取消）", "required": True,
+             "options": ops, "default": None},
             {"id": "reason", "label": "理由", "required": True, "multiline": True,
              "max": STAMP_REASON_MAX, "default": ""}]
 
@@ -388,7 +412,9 @@ def stamp_attrs(fields: dict, form: dict | None):
     if own.get("state") != "observed":
         return "この投稿の現在のMCSスタンプを確認できないため送信できません。"
     op = fields.get("op") or ""
-    if op == "cancel":
+    if op.startswith("add:") and op[4:] == own.get("type"):
+        op = "cancel"           # MCS toggles: the pressed stamp again takes it back
+    if op == "cancel":          # also the explicit choice of forms opened before this layout
         if own.get("type") is None:
             return "取消できる自分のスタンプがありません。"
         kind = None
