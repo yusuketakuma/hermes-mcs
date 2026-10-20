@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "LINE WORKSで同じクリックを再処理するときの操作時刻を保持",
+  "summary": "LINE WORKSの操作受付を再試行しても、最初にボタンを押した時刻を保持します。通信前の一時的な失敗でスタンプの受付期限が延びることを防ぎます。",
+  "upgrade": "LINE WORKSを使用している場合は、通常の更新手順で独立アダプターを再起動してください。操作時刻が残っていない古い記録のスタンプ操作は送信せず、新しいカードから改めて操作してください。",
+  "details": [
+    "同じクリックの再試行ではrequest_idとclicked_atを保存済みの記録から再利用し、操作者・対象・送信先・原文の検証を維持する。",
+    "古い記録に操作時刻がない場合は補わず、既存の期限検査でスタンプ操作を拒否する。"
+  ],
+  "refs": [
+    "adapters/lineworks/actions.py",
+    "tests/adapters/lineworks/test_lineworks_actions_review.py",
+    "aaabe3ba"
+  ]
+}

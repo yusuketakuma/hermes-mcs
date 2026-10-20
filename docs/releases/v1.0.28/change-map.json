@@ -2,7 +2,7 @@
   "status": "Local candidate; publication and final acceptance pending",
   "meaningful_entries": 17,
   "comparison_rows": 3,
-  "fragment_count": 111,
+  "fragment_count": 112,
   "mapping": [
     {
       "id": "T01",
@@ -20,7 +20,7 @@
         "One POST attempt; durable restore witness retained; GET-only unknown reconciliation; definite refusal + unchanged state may terminate rejected and permit a new explicit operation.",
         "Gateway/LINE WORKS restart and existing-card update behavior; LINE WORKS may post revised cards on activation changes."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "新機能/カードからMCSスタンプを操作",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -38,7 +38,7 @@
         "Disabled/unset thread mode preserves legacy file-bearing text; proven-not-sent thread/attachment can use narrow fallback. Unknown/accepted/historical notifications never blindly replay.",
         "Match original patient/post/scope, attachment ID/hash and exact delivery receipt; attachment-only delivery is not a new reply. LINE WORKS control characters sanitized without changing the stored original."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "不具合修正/後から取得した画像・PDFを元の会話へ追加",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -56,14 +56,16 @@
         "architecture-slack-native-boundary",
         "audit-slack-server-error",
         "audit-slack-task-list",
-        "audit-urgent-inflight"
+        "audit-urgent-inflight",
+        "lineworks-click-retry-time"
       ],
       "retain_distinctions": [
         "Unknown Slack server outcomes are held, not retried. Known429 retry classification/current permission recheck remains.",
         "Keep native scope/receipt/part transaction, source generation and post-commit publication order. Inflight/unknown urgent alerts are not suppressed as unsent.",
-        "Preserve SDK pins, content/chunk limits, LINE WORKS split rules and patient/human-approval boundaries; gateway/adapter restarts still required."
+        "Preserve SDK pins, content/chunk limits, LINE WORKS split rules and patient/human-approval boundaries; gateway/adapter restarts still required.",
+        "LINE WORKS retries reuse first click time; legacy records without it never fabricate a fresh stamp authorization."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "不具合修正/通知の重複と緊急アラートの誤った取り下げを防止",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -84,7 +86,7 @@
         "vital_urgency remains OFF unless explicitly enabled; no threshold/model/rule/extraction-generation change.",
         "Rollup decision version11 rebuilds affected patient caches gradually and hides old family values; no full historical re-extraction; semantic fact stream is a separate scope."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "不具合修正/測定値の対象者と測定時点の区別を修正",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -118,7 +120,7 @@
         "Keep same-TX result/job/receipt/outbox and held_prior protection; incomplete relation/coverage remains held; unbudgetable conversion remains held, no destructive recovery assumption.",
         "Isolate per-invocation Jev/job/error/accounting state; preserve actual transport budgets/retries and per-part authorization refresh; suppress duplicate unchanged waiting records and resurrected old loop items."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "改善/解析の保留・再開と原文の照合を安定化",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -139,7 +141,7 @@
         "Repeat quote once per message; exclude unverified requests from unanswered lists while labeling them in contact lists.",
         "Same borrowed snapshot, no data reacquisition or schema/default change; ordinary worker restart and candidate invalidation rules remain."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "不具合修正/患者まとめと依頼一覧の誤解を招く表示を修正",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -158,7 +160,7 @@
         "Invalid latest same canonical identity remains unknown rather than reviving earlier current values; group consultations inspect latest alias candidate then reject malformed provenance.",
         "No rewriting stored payloads, new acquisition scope or schema version; CLI closes owned reader/lock even on error."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "不具合修正/登録情報の不正なIDと過去の記録の扱いを修正",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -178,7 +180,7 @@
         "Register/acknowledge watched inserts explicitly; unknown/malformed listing and state are not update-free; preserve pinned dictionaries/approval/source matching.",
         "related/master-impact require limit1–200; other drug commands retain0–200. Optimization writes changed annotations and resumable cursor with same results; no unqualified machine-time claim."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "新機能/添付文書・診療ガイドラインの照会と更新確認",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -195,7 +197,7 @@
         "Same-save thread invalidation shared only within one call/TX; next save invalidates fresh projections; exception rolls back all related changes.",
         "Performance claims limited to measured fully synthetic cases; retain source-independent SQL/functional oracles and index/snapshot/backup cost qualifications, no whole-production guarantee."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "改善/同名患者の確認と同じスレッドの一括保存を効率化",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -213,7 +215,7 @@
         "Separate timeout from validator rejection; record fixed reason/status/timing only, not DB content/path.",
         "Cancellation tries bounded owned-child kill/reap preserving original exception; unknown unreaped child retains inherited-lock fence; no unverified snapshot publication."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "不具合修正/読取り用スナップショットの公開と失敗理由を改善",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -238,7 +240,7 @@
         "Diagnose malformed notify config as invalid/unverified; use run.log for collection output and mcs_check.log separately for standalone host launch/exit.",
         "Respect exact dedicated-browser profile boundary and documented process-argument ambiguity; own resources released on import/diagnostic failure."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "不具合修正/収集の再照合と薬剤辞書の処理で進捗を保持",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -270,7 +272,7 @@
         "Independent recovery can resume compatible verified writer while retaining notification reconciliation hold; empty/missing/unreadable journal does not prove completion. Reject empty backups.",
         "Unknown/foreign adopted process identity never authorizes signal or completed slot; standalone invalid backup config gets explicit code."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "新機能/未公開のローカル候補を固定して更新 + 動作・設定の変更/旧版への復元で、適合しないDBを再移行せず保留",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -287,7 +289,7 @@
         "Preserve human authorization, envelope/receipt validation, unknown hold, accepted/deletion evidence, same wire/CLI/error semantics.",
         "Own descriptors close on transfer failure; no borrowed key/connection close or new publication ordering."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "動作・設定の変更/手動の外部搬出は引き続き既定で無効",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -306,7 +308,7 @@
         "Preserve sealed-input/human-review/threshold/budget/model conditions; resource cleanup and outside-repo CLI startup corrected.",
         "Evaluation helper reorganization is not new human evaluation evidence or permission to promote/enforce."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "改善/失敗・中断後にファイルやロックが残る経路を修正",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -332,7 +334,7 @@
         "Keep cancellation identity, durability/fsync/transaction/publication order, data/receipt formats, logger retention and per-test timeout.",
         "Normal process restart applies runtime fixes; changed safe-I/O identity still follows existing candidate reevaluation rules."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "改善/失敗・中断後にファイルやロックが残る経路を修正",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -358,7 +360,7 @@
         "Retain incidents/hashes/synthetic examples/official master/history meaning while generalizing machine observations; no Git-history rewrite.",
         "Shared read owners borrow existing snapshot/TX; newest invalid signal is a tombstone. Stats/cohort definition identity changes require reevaluation; new worker definitions invalidate old approvals without mass re-extraction."
       ],
-      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "動作・設定の変更/配布する設定例とコード配置を整理",
       "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
     },
@@ -507,6 +509,7 @@
     "updater-loaded-rollback-closure": "538cf42eefa12691c4c43a1b2831e9a9969caaca493b4d2d69dd2f93c9dc208a",
     "upgrade-module-layout-restart": "5df8fed3f09c4131cdfa3ebf43a06b847100f6a43d2dd8605dabfa260e96465d",
     "vitals-owner-scope": "5ed0c72fcdeb55b4f7fc4c963aa0451d2cb1471e949fa991d6456543ca9499f9",
-    "vitals-threshold-context": "5078602d0cd864e35866e2552b2c35a57aa5039285fe5604d9b68b3c05091342"
+    "vitals-threshold-context": "5078602d0cd864e35866e2552b2c35a57aa5039285fe5604d9b68b3c05091342",
+    "lineworks-click-retry-time": "c7a58f9b6b190aac50ae189a9e27de1b98304763fb9801bc8720573ae4370d13"
   }
 }
