@@ -37,4 +37,4 @@ repo との drift になる。
 
 抽出workerは `mcs/extract/llm/extract_llm.py`、共通推論は `mcs/llm/` に配置する。plistとcatchupスクリプトを同時に更新し、適用時は通常の更新手順でサービスを再同期する。`mcs/ops/mcs_cli.py`・setup/update/recover の公開入口は維持する。構造変更だけで実機のplistや稼働workerは更新されない。詳細は[責務・依存・移植範囲](../docs/development/REPOSITORY_STRUCTURE.md)。
 
-スタンプ管理は`mcs/stamps/`を同梱し、既存の収集ジョブから実行する。新しい常駐サービスは追加しない。送信は既定OFFで、設定と復元時の記録は[スタンプ管理契約](../docs/specs/stamp-management.md)を参照する。
+スタンプ管理は`mcs/stamps/`を同梱し、既存の収集ジョブから実行する。新しい常駐サービスは追加しない。送信は操作者とMCSアカウントを設定すると既定で有効になり、設定と復元時の記録は[スタンプ管理契約](../docs/specs/stamp-management.md)を参照する。

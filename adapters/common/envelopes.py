@@ -184,7 +184,9 @@ def notification(token: str, actor: str, origin: dict,
            "op": "notification",
            "command_id": f"{token}:{actor_hash(actor)}",
            "request_id": str(uuid.uuid4()),
-           "actor": actor, "token": token, "origin": origin}
+           "actor": actor, "token": token, "origin": origin,
+           # when the human pressed: a stamp press ages from here, not from its delivery
+           "clicked_at": time.time()}
     if inputs:
         env["input"] = inputs
         env["command_id"] = (

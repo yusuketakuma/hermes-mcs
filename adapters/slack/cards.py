@@ -5,9 +5,9 @@ import re
 from html import escape
 from urllib.parse import urlsplit
 
-from adapters.common.spec import PRIMARY_ACTIONS
+from adapters.common.spec import PRIMARY_ACTIONS, STAMP_ROW_ACTION
 from adapters.common.spec import validate as validate_v1
-from adapters.common.text import notification_preview
+from adapters.common.text import notification_preview, stamp_icon
 
 _SECTION_MAX = 3000
 _HEADER_MAX = 150
@@ -272,13 +272,15 @@ def render(spec, names=None):
     blocks = render_parts(spec["parts"], names,
                           spec["parts"].get("mentions") == "silent",
                           card_kind=spec.get("kind"))
-    quick, menu, links = [], [], []
+    quick, menu, links, stamps = [], [], [], []
     for row in spec["parts"].get("action_rows") or []:
         for button in row:
             if len(button["label"]) > 75:
                 raise ValueError("slack_button_label")
             if button.get("ui") == "link":
                 links.append(button)
+            elif button.get("id") == STAMP_ROW_ACTION:
+                stamps.append(button)
             elif button.get("id") in PRIMARY_ACTIONS:
                 # buttons; every other action goes into one select so the
                 # card stays one compact row on mobile
@@ -306,6 +308,12 @@ def render(spec, names=None):
         if blocks:
             blocks.append(dict(_DIVIDER))
         blocks.append({"type": "actions", "elements": elements})
+    if stamps:
+        # one press sends, like MCS's own stamp row: emoji only, the own stamp highlighted
+        blocks.append({"type": "actions", "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": stamp_icon(b["label"])},
+             "action_id": "mcs:a:" + b["token"], "value": b["token"],
+             **({"style": "primary"} if b.get("style") == "primary" else {})} for b in stamps]})
     for button in links:
         # a text link, not a button — it costs no row on mobile
         url = button["url"]

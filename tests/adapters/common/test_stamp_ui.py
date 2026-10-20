@@ -37,7 +37,8 @@ def test_modal_offers_only_runner_posts_and_types_with_required_reason():
     assert [v for v, _ in fields["post"]["options"]] == ["p1", "p2", "p3", "p4"]
     assert "承知" in dict(fields["post"]["options"])["p1"]
     ops = dict(fields["op"]["options"])
-    assert set(ops) == {"add:viewed", "add:accepted", "add:completed", "cancel"}
+    # MCS's own row: the stamps in runner order, no separate cancel choice
+    assert list(ops) == ["add:viewed", "add:accepted", "add:completed"]
     assert fields["reason"]["required"] and fields["reason"]["max"] == 200
     assert "stamp" in text.MODAL_ACTIONS and text.MODAL_TITLES["stamp"]
 
@@ -62,9 +63,15 @@ def test_cancel_requires_a_known_own_stamp_and_carries_no_kind():
     assert isinstance(_payload({"post": "p2", "op": "cancel", "reason": "x"}), str)
 
 
-def test_same_kind_is_sent_for_the_runner_no_op():
-    env = _payload({"post": "p1", "op": "add:accepted", "reason": "再確認"})
-    assert env["op"] == "add" and env["reaction_type"] == "accepted"
+def test_choosing_the_own_stamp_takes_it_back_like_mcs():
+    env = _payload({"post": "p1", "op": "add:accepted", "reason": "取り消す"})
+    assert env["op"] == "cancel" and "reaction_type" not in env
+    assert env["expected_own"]["type"] == "accepted"
+
+
+def test_forms_opened_before_the_mcs_layout_still_accept_cancel():
+    env = _payload({"post": "p1", "op": "cancel", "reason": "取り消す"})
+    assert env["op"] == "cancel"
 
 
 @pytest.mark.parametrize("fields", [

@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from adapters.common.spec import PRIMARY_ACTIONS, validate as validate_display
+from adapters.common.spec import PRIMARY_ACTIONS, STAMP_ROW_ACTION, validate as validate_display
 from adapters.common.text import notification_preview
 from notify_render import display_text
 from present_lineworks import card_split
@@ -57,13 +57,19 @@ def buttons(text, actions, *, preview=None):
         return {"type": "text", "text": text or "MCS"}
     if len(text) > 1000 or not 1 <= len(actions) <= 10:
         raise ValueError("lineworks_button_budget")
+    def button(action, **extra):
+        return {"type": "button", "style": "secondary", **extra, "action": {
+            **action, **({"text": action["label"]} if action["type"] == "message" else {})}}
+    # MCS's own stamp row sits under the other buttons as one horizontal row.
+    stamps = [{k: v for k, v in a.items() if k != "_stamp"} for a in actions if a.get("_stamp")]
+    footer = [button(a) for a in actions if not a.get("_stamp")]
+    if stamps:
+        footer.append({"type": "box", "layout": "horizontal", "spacing": "xs",
+                       "contents": [button(a, height="sm") for a in stamps]})
     contents = {"type": "bubble", "body": {
         "type": "box", "layout": "vertical", "contents": [
             {"type": "text", "text": text or "MCS", "wrap": True}]},
-        "footer": {"type": "box", "layout": "vertical", "contents": [
-            {"type": "button", "style": "secondary", "action": {
-                **action, **({"text": action["label"]} if action["type"] == "message" else {})}}
-            for action in actions]}}
+        "footer": {"type": "box", "layout": "vertical", "contents": footer}}
     # client._validate_content rejects C0/DEL in altText; split() alone keeps them.
     alt = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", preview or text or "MCS").split()) or "MCS"
     return {"type": "flex", "altText": alt[:399] + "…" if len(alt) > 400 else alt,
@@ -71,7 +77,7 @@ def buttons(text, actions, *, preview=None):
 
 
 # Card buttons, in display order; every other action sits behind ``more``.
-CARD_BUTTONS = (*PRIMARY_ACTIONS, "link", "more")
+CARD_BUTTONS = (*PRIMARY_ACTIONS, "link", "more", STAMP_ROW_ACTION)
 
 
 def _slot(button):
@@ -105,7 +111,8 @@ def action_buttons(spec):
                             "uri": button["url"]})
         else:
             actions.append({"type": "message", "label": button["label"],
-                            "postback": "mcs:a:" + button["token"]})
+                            "postback": "mcs:a:" + button["token"],
+                            **({"_stamp": True} if button["id"] == STAMP_ROW_ACTION else {})})
     return actions
 
 

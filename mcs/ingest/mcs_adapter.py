@@ -499,13 +499,16 @@ class MCSAdapter:
                                     max_pages=max_pages, per_page=per_page)
 
     def station_staffs(self, stations: list, per_page: int = 100,
-                       max_pages: int = 10) -> list:
+                       max_pages: int = 10, *, strict_self: bool = False) -> list:
         """The pharmacy's own member roster: GET /stations/{id}/staffs
         for each own station (from /users/self), paginated. Shared
         facility accounts (is_station_account) are skipped. Returns
         [{staff_id, name, professions, station, is_self}] in MCS order.
         Raises MCSError(kind='station_staffs_unavailable') on failure —
-        an expired session stays SessionExpired."""
+        an expired session stays SessionExpired. strict_self (identity
+        proof for a write) raises SchemaError instead of skipping an
+        is_self row that is unusable, so a dropped second self cannot
+        make the remaining one look unique."""
         out = []
         for st in stations:
             sid, sname = st.get("id"), st.get("name") or ""
@@ -529,9 +532,13 @@ class MCSAdapter:
                 for u in users:
                     if u.get("is_station_account") is True \
                             or not valid_id(u.get("id")):
+                        if strict_self and u.get("is_self") is True:
+                            raise SchemaError("staffs: self row unusable")
                         continue
                     name = sender_name(u)
                     if not name:
+                        if strict_self and u.get("is_self") is True:
+                            raise SchemaError("staffs: self row unusable")
                         continue
                     out.append({"staff_id": u["id"], "name": name,
                                 "professions": [p for p in profession(u)

@@ -104,3 +104,97 @@ def test_stamp_gate_changes_rerender_existing_cards_only_while_enabled(led, monk
     gate["on"] = False
     notify_cards.issue_render(led.db, 1, CFG, NOW + 4, [])
     assert _latest_render(led)["render_rev"] == rev + 2 and "stamp" not in _ids(_spec(led))
+
+
+def _rendered_spec(led, monkeypatch, transport):
+    monkeypatch.setitem(sys.modules, "stamp_write", _gate(True))
+    _seed_thread(led)
+    assert _dispatch(led, _intent(led), _transport_cfg(transport, False))["dispatched"]
+    return _spec(led)
+
+
+def test_slack_draws_the_stamp_row_as_its_own_buttons(led, monkeypatch):
+    from adapters.slack import cards as slack_cards
+    spec = _rendered_spec(led, monkeypatch, "slack")
+    rows = [b for b in slack_cards.render(spec)[1] if b.get("type") == "actions"]
+    stamp_row = rows[-1]["elements"]
+    assert [e["text"]["text"] for e in stamp_row] == ["👀", "🙆", "🙏", "👍", "✅"]
+    assert all(e["type"] == "button" and e["action_id"].startswith("mcs:a:") for e in stamp_row)
+    # the existing primary row and menu are unchanged and come first
+    assert not any(e.get("text", {}).get("text", "").startswith("👀") for e in rows[0]["elements"])
+
+
+def test_lineworks_keeps_its_buttons_and_adds_one_horizontal_stamp_row(led, monkeypatch):
+    from adapters.lineworks import cards as lineworks_cards
+    spec = _rendered_spec(led, monkeypatch, "lineworks")
+    footer = lineworks_cards.render(spec)["contents"]["footer"]["contents"]
+    *plain, row = footer
+    assert row["type"] == "box" and row["layout"] == "horizontal"
+    assert [b["action"]["label"] for b in row["contents"]] == ["👀見ました", "🙆承知", "🙏感謝", "👍いいね", "✅完了"]
+    assert all("_stamp" not in b["action"] for b in footer if b.get("type") == "button")
+    assert all(b["type"] == "button" for b in plain) and len(plain) + 5 <= 10
+
+
+def test_discord_draws_the_stamp_row_below_the_primary_buttons(led, monkeypatch):
+    from discord_testkit import _fake_discord
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    from adapters.discord import cards as discord_cards
+    spec = _rendered_spec(led, monkeypatch, "discord")
+    items = discord_cards.message_payload(spec)["view"].items
+    stamps = [i for i in items if getattr(i, "row", None) == 3]
+    assert [b.label for b in stamps] == ["👀", "🙆", "🙏", "👍", "✅"]
+    assert all(getattr(i, "row", None) != 3 for i in items if i not in stamps)
+
+
+def test_lineworks_stamp_row_passes_the_real_client_validation(led, monkeypatch):
+    from adapters.lineworks import cards as lineworks_cards
+    from adapters.lineworks import client as lineworks_client
+    content = lineworks_cards.render(_rendered_spec(led, monkeypatch, "lineworks"))
+    lineworks_client._validate_content(content)       # what send_message runs before the network
+    footer = content["contents"]["footer"]["contents"]
+    # only one last row of at most five buttons is allowed; nothing else nested
+    for broken in ([*footer, footer[-1]], [footer[-1], *footer[:-1]],
+                   [*footer[:-1], {**footer[-1], "contents": footer[-1]["contents"] * 2}]):
+        bad = {**content, "contents": {**content["contents"], "footer": {
+            **content["contents"]["footer"], "contents": broken}}}
+        with pytest.raises(lineworks_client.ClientError):
+            lineworks_client._validate_content(bad)
+
+
+@pytest.mark.parametrize("transport", ["slack", "discord", "lineworks"])
+def test_stamp_row_is_left_out_rather_than_break_the_row_budget(led, monkeypatch, transport):
+    """Paged thread card without a companion thread, with tasks, report, meds
+    and drug search: every other row is planned first, the optional stamp row
+    goes in only when rows and components still fit."""
+    import notify_cards
+    import structured_view
+    from adapters.common import spec as worker_spec
+    from notify_testkit import _add_request
+    monkeypatch.setitem(sys.modules, "stamp_write", _gate(True))
+    monkeypatch.setattr(notify_cards, "drug_search_available", lambda db: True)
+    monkeypatch.setattr(structured_view, "medication_entries",
+                        lambda db, mid: ([{"name": "合成薬"}], []))
+    from notify_testkit import _llm_extract
+    mids = tuple(range(100, 120))
+    _seed_thread(led, mids=mids)
+    _add_request(led)
+    _llm_extract(led, 101, {"summary": "合成要約", "requests": []})   # a current extraction -> 誤りを報告
+    led.db.commit()
+    assert _dispatch(led, _intent(led, payload={"message_ids": list(mids)}),
+                     _transport_cfg(transport, False))["dispatched"]
+    spec = _spec(led)
+    rows = spec["parts"]["action_rows"]
+    assert {"report", "tasks", "prev", "next"} & set(_ids(spec)) >= {"report", "tasks"}
+    assert len(rows) <= worker_spec.MAX_ROWS
+    if transport == "discord":
+        # primary + secondary(2) + meds + paging = 5 rows: the stamp row would be the 6th
+        assert len(rows) == worker_spec.MAX_ROWS and "stamp_press" not in _ids(spec)
+    stamp_rows = [r for r in rows if any(b["id"] == "stamp_press" for b in r)]
+    assert len(stamp_rows) <= 1
+    if stamp_rows:
+        assert rows.index(stamp_rows[0]) == 1 and len(stamp_rows[0]) == 5
+    assert "stamp" in _ids(spec)                       # the form stays the fallback
+    from adapters.lineworks import cards as lineworks_cards
+    from adapters.slack import cards as slack_cards
+    {"discord": worker_spec.validate, "slack": slack_cards.validate,
+     "lineworks": lineworks_cards.validate}[transport](spec)
