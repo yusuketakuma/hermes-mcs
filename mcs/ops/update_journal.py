@@ -5,7 +5,7 @@ import json
 import os
 import stat
 
-from safe_io import atomic_write
+from safe_io import atomic_write, fdopen_owned
 
 def default_state() -> dict:
     return {"v": 1, "stages": [], "applied": [], "attempts": {},
@@ -39,13 +39,7 @@ def valid_state(state):
 def read_control_json(path):
     """Read a regular local control file without following links or waiting on FIFOs."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        # fdopen raises (e.g. IsADirectoryError) without closing ``fd``
-        handle = os.fdopen(fd, "r", encoding="utf-8")
-    except BaseException:
-        os.close(fd)
-        raise
-    with handle:
+    with fdopen_owned(fd, "r", encoding="utf-8") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             raise ValueError("control_file_not_regular")
         return json.load(handle)

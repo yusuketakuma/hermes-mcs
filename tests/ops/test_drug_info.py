@@ -62,6 +62,26 @@ def test_only_exact_unique_master_names_resolve():
     assert len(drug_info.resolve("【般】架空錠", ROWS)[0]) == 2  # shared generic label stays ambiguous
 
 
+def test_bundled_public_rows_do_not_import_the_drug_cli(tmp_path, monkeypatch):
+    import builtins
+    import import_drug_master as importer
+    from test_mcs_drug_bundled import _bundle
+
+    bundle = _bundle(tmp_path)
+    load = importer.load_bundled_master
+    monkeypatch.setattr(importer, "load_bundled_master", lambda: load(bundle))
+    original_import = builtins.__import__
+
+    def without_cli(name, *args, **kwargs):
+        assert name != "mcs_drug", "public master reads must not load the drug CLI"
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_cli)
+    manifest, rows = drug_info.master_rows()
+    assert manifest["rows"] == len(rows) == 2
+    assert {row["medicine"] for row in rows} == {"900000001", "900000002"}
+
+
 def test_insert_is_confirmed_only_by_the_product_name_in_the_document(gateway):
     fake = gateway(bodies={PDF.format("A"): "販売名 別の架空錠", PDF.format("B"): BODY})
     entry = drug_info.resolve("架空アオ錠１０ｍｇ「架空」", ROWS)[0][0]
@@ -175,8 +195,8 @@ def test_update_check_hook_is_best_effort_and_opt_out(monkeypatch):
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda text, use_run_lock=False: sent.append(text) or len(sent) == 1)
     monkeypatch.setattr(drug_info, "daily_notices", lambda local, root=None: [("a", 1, "one"), ("b", 2, "two")])
     monkeypatch.setattr(drug_info, "mark_notified", lambda k, v, root=None: marked.append(k))
-    import mcs_drug
-    monkeypatch.setattr(mcs_drug, "load_bundled_master", lambda directory=None: ({"edition": "20261013", "rows": 1}, None))
+    import import_drug_master
+    monkeypatch.setattr(import_drug_master, "load_bundled_master", lambda directory=None: ({"edition": "20261013", "rows": 1}, None))
     mcs_update._drug_info_notices({})
     assert sent == ["one", "two"] and marked == ["a"]  # second enqueue failed -> not marked
     sent.clear()

@@ -7,7 +7,6 @@ from datetime import date
 import json
 import os
 from pathlib import Path
-import re
 import shlex
 import sqlite3
 import sys
@@ -18,9 +17,9 @@ import drug_map  # noqa: E402
 from mcs_util import HOME, load_config, loads_dict  # noqa: E402
 from safe_io import fsync_dir  # noqa: E402  # noqa: E402
 from safe_io import publish_new_bytes  # noqa: E402
+from import_drug_master import BUNDLE, load_bundled_master  # noqa: E402
 
 SNAPSHOT = Path(HOME) / "data" / "snapshots" / "ledger-snapshot.db"
-BUNDLE = Path(__file__).resolve().parents[2] / "resources" / "drug-master"
 # R08rec1 pp16/18: medicine change values 0/3/5 stay usable (1/9 are deleted or
 # abolished); 99999999 means not abolished and 0 means no deadline. These are
 # applied only under the operator's --confirmed-by declaration.
@@ -131,26 +130,6 @@ def _impact(path, before, after, limit):
         view.close()
     report["snapshot"] = {"generation_id": view.meta["generation_id"]}
     return report
-
-
-def load_bundled_master(directory: Path = BUNDLE):
-    """The bundled manifest of the converter's pinned edition and its archive."""
-    import import_drug_master as importer
-    folder = (directory / importer.EDITION).resolve()
-    manifest = loads_dict(importer.read_master_input(folder / "manifest.json", 65536))
-    if (manifest is None or manifest.get("edition") != importer.EDITION
-            or manifest.get("layout") != importer.LAYOUT
-            or manifest.get("member") != f"y_{importer.EDITION}.csv"
-            or manifest.get("archive") != f"y_{importer.EDITION}.zip"
-            or any(not isinstance(manifest.get(key), str)
-                   or not re.fullmatch(r"[0-9a-f]{64}", manifest[key])
-                   for key in ("archive_sha256", "csv_sha256"))
-            or type(manifest.get("rows")) is not int
-            or not 0 < manifest["rows"] <= importer.MAX_ROWS
-            or not isinstance(manifest.get("terms"), dict)
-            or not drug_map.valid_text(manifest["terms"].get("url"))):
-        raise ValueError("bundle_manifest")
-    return manifest, folder / manifest["archive"]
 
 
 def install_bundled(args, *, directory: Path = BUNDLE, home: str = HOME) -> dict:

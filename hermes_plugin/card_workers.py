@@ -96,8 +96,9 @@ def _owner_identity(ctx, adapter):
 
 def _worker_witness(settings, transport, reason):
     try:
-        from .bridge import _adapter_modules
-        _adapter_modules()
+        _ensure_repo_root()
+        from adapters.common.mcs_api import bootstrap
+        bootstrap()
         import card_worker_status
         card_worker_status.record(settings["data_root"], transport,
                                   settings["profile"], reason)

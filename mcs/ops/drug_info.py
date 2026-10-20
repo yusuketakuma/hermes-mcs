@@ -188,8 +188,7 @@ def excerpts(text, terms, limit=5, width=1200):
 def master_rows():
     """Validated rows of the converter's bundled edition (read-only, via the existing importer)."""
     import import_drug_master as importer
-    import mcs_drug
-    manifest, archive = mcs_drug.load_bundled_master()
+    manifest, archive = importer.load_bundled_master()
     pin = {"schema": importer.PIN_SCHEMA, "layout": importer.LAYOUT, "edition": importer.EDITION,
            "sha256": manifest["archive_sha256"], "member": manifest["member"],
            "as_of": max(date.today(), importer.EDITION_DATE).isoformat()}

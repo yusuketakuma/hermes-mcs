@@ -338,7 +338,8 @@ def test_log_stream_failure_closes_descriptor_before_requesting_restart(tmp_path
     host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
     opened = []
 
-    def unavailable_stream(fd, mode):
+    def unavailable_stream(fd, mode, *, closefd):
+        assert closefd is True
         opened.append(fd)
         raise OSError("synthetic stream handoff failure")
 

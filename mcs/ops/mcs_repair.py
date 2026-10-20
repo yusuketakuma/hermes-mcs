@@ -450,10 +450,10 @@ def _log(path, *, create):
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() \
                 or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1:
             raise ValueError("private_audit_log_required")
-        return os.fdopen(fd, "r+b" if create else "rb")
     except BaseException:
         os.close(fd)
         raise
+    return fdopen_owned(fd, "r+b" if create else "rb")
 
 
 def _backup_proof(backup, expected, snapshot):

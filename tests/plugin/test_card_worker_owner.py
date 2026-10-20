@@ -78,14 +78,13 @@ def test_failed_supervisor_does_not_record_started(monkeypatch, tmp_path, transp
 
 
 @pytest.mark.parametrize('transport', ['discord', 'slack'])
-@pytest.mark.parametrize('failure_at', ['adapter_modules', 'status_import'])
+@pytest.mark.parametrize('failure_at', ['bootstrap', 'status_import'])
 @pytest.mark.parametrize('startup_error', [False, True])
 def test_diagnostic_import_failure_preserves_started_supervisor(
         tmp_path, monkeypatch, transport, failure_at, startup_error):
     import builtins
     import importlib
-    from hermes_plugin import bridge
-    from adapters.common import paths
+    from adapters.common import mcs_api, paths
     settings = {'data_root': str(tmp_path), 'profile': 'owner', 'application_id': '101'}
     monkeypatch.setattr(cw, '_interactive_settings', lambda *_: dict(settings))
     monkeypatch.setattr(cw, '_slack_adapter_settings', lambda *_: dict(settings))
@@ -105,10 +104,10 @@ def test_diagnostic_import_failure_preserves_started_supervisor(
             self.started = True
             return True
     monkeypatch.setattr(tasks, 'Supervisor', Supervisor)
-    if failure_at == 'adapter_modules':
+    if failure_at == 'bootstrap':
         def unavailable():
             raise ImportError('diagnostic-bootstrap-unavailable')
-        monkeypatch.setattr(bridge, '_adapter_modules', unavailable)
+        monkeypatch.setattr(mcs_api, 'bootstrap', unavailable)
     else:
         original_import = builtins.__import__
         def limited_import(name, *args, **kwargs):

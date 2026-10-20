@@ -10,9 +10,3 @@ def _ensure_repo_root() -> None:
     root = str(Path(__file__).resolve().parents[1])
     if root not in sys.path:
         sys.path.insert(0, root)
-
-
-def _adapter_modules():
-    _ensure_repo_root()
-    from adapters.common.mcs_api import modules
-    return modules()

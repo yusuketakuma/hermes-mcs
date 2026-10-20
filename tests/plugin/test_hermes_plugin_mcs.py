@@ -777,9 +777,8 @@ def test_interactive_settings_accepts_int_ids(tmp_path):
     assert (scope["application_id"], scope["guild_id"]) == ("999", "7")
 
 
-def test_adapter_modules_adds_repo_root_when_loaded_by_file_location():
-    """Hermes loads the plugin by path without the repo on sys.path;
-    op=summary still needs `adapters.common` importable."""
+def test_worker_witness_bootstraps_without_command_apis_when_loaded_by_file_location(tmp_path):
+    """The aliased plugin records status without loading command or SDK modules."""
     import subprocess
     plugin = Path(hermes_plugin.__file__).resolve()
     code = (
@@ -790,9 +789,16 @@ def test_adapter_modules_adds_repo_root_when_loaded_by_file_location():
         "mod = importlib.util.module_from_spec(spec)\n"
         "sys.modules[spec.name] = mod\n"
         "spec.loader.exec_module(mod)\n"
-        "from hermes_plugins.mcs import bridge\nbridge._adapter_modules()\n"
+        "from hermes_plugins.mcs import card_workers\n"
+        f"settings = {{'data_root': {str(tmp_path)!r}, 'profile': 'synthetic'}}\n"
+        "card_workers._worker_witness(settings, 'discord', 'worker_started')\n"
+        "import card_worker_status\n"
+        "assert card_worker_status.status(settings['data_root'], 'discord', 'synthetic') == "
+        "{'state': 'started', 'reason': 'worker_started'}\n"
+        "assert not {'mcs_requests', 'mcs_view', 'discord', 'slack_sdk', 'slack_bolt'} & sys.modules.keys()\n"
         "from adapters.common import summary\n"
-        "print(callable(summary.answer))\n"
+        "assert callable(summary.answer)\n"
+        "print(True)\n"
     )
     done = subprocess.run([sys.executable, "-I", "-c", code],
                           cwd="/", capture_output=True, text=True, timeout=60)

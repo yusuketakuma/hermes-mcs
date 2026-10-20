@@ -3216,8 +3216,8 @@ def _drug_info_notices(cfg: dict) -> None:
         return
     try:
         import drug_info
-        import mcs_drug
-        manifest, _archive = mcs_drug.load_bundled_master()
+        import import_drug_master
+        manifest, _archive = import_drug_master.load_bundled_master()
         for key, value, text in drug_info.daily_notices((manifest["edition"], manifest["rows"])):
             if _enqueue_notice(text, use_run_lock=True):
                 drug_info.mark_notified(key, value)

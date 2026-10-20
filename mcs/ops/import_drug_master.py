@@ -22,6 +22,7 @@ import zlib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import drug_map  # noqa: E402
+from mcs_util import loads_dict  # noqa: E402
 from safe_io import fsync_dir, read_regular_nofollow, fdopen_owned  # noqa: E402
 
 JSON: TypeAlias = None | bool | int | float | str | list["JSON"] | dict[str, "JSON"]
@@ -35,6 +36,7 @@ EDITION_DATE = date(int(EDITION[:4]), int(EDITION[4:6]), int(EDITION[6:]))  # pi
 MAX_INPUT_BYTES = 32 * 1024 * 1024
 MAX_CSV_BYTES = 32 * 1024 * 1024
 MAX_ROWS = 100000
+BUNDLE = Path(__file__).resolve().parents[2] / "resources" / "drug-master"
 # Official pp222/223: character/byte bounds and numeric leading-zero omission.
 WIDTHS = (1, 1, 9, 2, 64, 2, 20, 3, 1, 12, 1, 13, 2, 1, 1, 1, 1,
           1, 1, 1, 5, 1, 9, 1, 13, 1, 1, 1, 49, 8, 8, 12, 9, 8, 200,
@@ -64,6 +66,25 @@ def read_master_input(path: Path, bound: int) -> bytes:
     if len(raw) > bound:
         raise MasterError("input_size")
     return raw
+
+
+def load_bundled_master(directory: Path = BUNDLE):
+    """Read the bundled manifest of the converter's pinned edition and its archive path."""
+    folder = (directory / EDITION).resolve()
+    manifest = loads_dict(read_master_input(folder / "manifest.json", 65536))
+    if (manifest is None or manifest.get("edition") != EDITION
+            or manifest.get("layout") != LAYOUT
+            or manifest.get("member") != f"y_{EDITION}.csv"
+            or manifest.get("archive") != f"y_{EDITION}.zip"
+            or any(not isinstance(manifest.get(key), str)
+                   or not re.fullmatch(r"[0-9a-f]{64}", manifest[key])
+                   for key in ("archive_sha256", "csv_sha256"))
+            or type(manifest.get("rows")) is not int
+            or not 0 < manifest["rows"] <= MAX_ROWS
+            or not isinstance(manifest.get("terms"), dict)
+            or not drug_map.valid_text(manifest["terms"].get("url"))):
+        raise ValueError("bundle_manifest")
+    return manifest, folder / manifest["archive"]
 
 
 def _iso(value: JSON) -> date:

@@ -30,8 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from semantic_policy import JOB_KIND, KIND_DRAIN_RUN, QC_JOB_KIND  # noqa: E402
-from semantic_drain import SCHED_KIND  # noqa: E402
+from semantic_policy import JOB_KIND, KIND_DRAIN_RUN, QC_JOB_KIND, SCHED_KIND  # noqa: E402
 
 from mcs_util import HOME, loads_dict  # noqa: E402 — honours MCS_ROOT
 DB = os.path.join(HOME, "data", "ledger.db")

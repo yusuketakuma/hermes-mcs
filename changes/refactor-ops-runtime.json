@@ -1,0 +1,20 @@
+{
+  "category": "changed",
+  "title": "状態確認・医薬品情報照会・更新処理の内部依存を整理",
+  "summary": "接続workerの起動状態や解析の進捗、同梱医薬品マスターの確認を、必要な共通処理から直接読み取るよう整理しました。更新記録・修復記録・独立動作のログを開く処理は共通のファイル管理を使い、読込み失敗や中断時にも開いたファイルを確実に閉じます。",
+  "upgrade": "設定や承認条件の変更、追加操作はありません。Hermes利用時のpluginへの反映には通常の更新手順によるgateway再起動が必要です。",
+  "details": [
+    "worker状態記録を既存の遅延bootstrapへ直接接続し、不要になったprivate helperを削除しました。",
+    "更新journal・修復記録・独立runtimeのFD移管をsafe_io.fdopen_ownedへ統一し、独立復旧ツールの自己完結実装は保持しました。",
+    "同梱manifest検証をimport_drug_masterへ集約し、公開情報照会と更新通知から薬剤CLIへの不要な依存を除きました。mcs_drug.load_bundled_master入口は保持しました。",
+    "進捗観測が使うscheduler種別はsemantic_policyから読み、worker本体の読込みを不要にしました。"
+  ],
+  "refs": [
+    "hermes_plugin/card_workers.py",
+    "mcs/ops/update_journal.py",
+    "mcs/ops/mcs_repair.py",
+    "mcs_standalone/runtime.py",
+    "mcs/ops/import_drug_master.py",
+    "mcs/ops/semantic_observe.py"
+  ]
+}

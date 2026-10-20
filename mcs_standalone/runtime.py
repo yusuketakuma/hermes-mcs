@@ -262,12 +262,7 @@ class Runtime:
         path = self.data / (job + ".log")
         try:
             fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-            try:
-                output = os.fdopen(fd, "ab")
-            except BaseException:
-                os.close(fd)
-                raise
-            with output:
+            with safe_io.fdopen_owned(fd, "ab") as output:
                 os.fchmod(output.fileno(), 0o600)
                 child = subprocess.Popen(self.argv[job], cwd=REPO,
                     env={**os.environ, "MCS_ROOT": str(self.root)}, stdin=subprocess.DEVNULL,
