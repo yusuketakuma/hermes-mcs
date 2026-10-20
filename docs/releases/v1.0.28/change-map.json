@@ -1,0 +1,512 @@
+{
+  "status": "Local candidate; publication and final acceptance pending",
+  "meaningful_entries": 17,
+  "comparison_rows": 3,
+  "fragment_count": 111,
+  "mapping": [
+    {
+      "id": "T01",
+      "suggested_primary_category": "added",
+      "user_purpose": "Operate and reconcile MCS stamps from the card",
+      "fragment_ids": [
+        "architecture-metadata-read-contract",
+        "stamp-management",
+        "stamp-one-press",
+        "stamp-review-fixes"
+      ],
+      "retain_distinctions": [
+        "Five known kinds; one-press add/cancel and fallback form; clicked/confirmed-time limit and selected-post expected-state binding.",
+        "Enabled by default only after both account ID and operator are configured; false disables; no identities means no sending.",
+        "One POST attempt; durable restore witness retained; GET-only unknown reconciliation; definite refusal + unchanged state may terminate rejected and permit a new explicit operation.",
+        "Gateway/LINE WORKS restart and existing-card update behavior; LINE WORKS may post revised cards on activation changes."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "新機能/カードからMCSスタンプを操作",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T02",
+      "suggested_primary_category": "fixed",
+      "user_purpose": "Deliver late attachments to the original conversation",
+      "fragment_ids": [
+        "audit-lineworks-control-chars",
+        "fix-late-attachments-cross-transport",
+        "hotfix-slack-thread-attachments"
+      ],
+      "retain_distinctions": [
+        "Slack/Discord native thread path requires interactive and thread enabled; LINE WORKS uses the same talkroom/card scope.",
+        "Disabled/unset thread mode preserves legacy file-bearing text; proven-not-sent thread/attachment can use narrow fallback. Unknown/accepted/historical notifications never blindly replay.",
+        "Match original patient/post/scope, attachment ID/hash and exact delivery receipt; attachment-only delivery is not a new reply. LINE WORKS control characters sanitized without changing the stored original."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "不具合修正/後から取得した画像・PDFを元の会話へ追加",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T03",
+      "suggested_primary_category": "fixed",
+      "user_purpose": "Avoid duplicate or wrongly withdrawn chat notifications",
+      "fragment_ids": [
+        "architecture-connections",
+        "architecture-discord-request-guard",
+        "architecture-lineworks-split-owner",
+        "architecture-lineworks-text-contract",
+        "architecture-notification",
+        "architecture-notify-render-public",
+        "architecture-slack-native-boundary",
+        "audit-slack-server-error",
+        "audit-slack-task-list",
+        "audit-urgent-inflight"
+      ],
+      "retain_distinctions": [
+        "Unknown Slack server outcomes are held, not retried. Known429 retry classification/current permission recheck remains.",
+        "Keep native scope/receipt/part transaction, source generation and post-commit publication order. Inflight/unknown urgent alerts are not suppressed as unsent.",
+        "Preserve SDK pins, content/chunk limits, LINE WORKS split rules and patient/human-approval boundaries; gateway/adapter restarts still required."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "不具合修正/通知の重複と緊急アラートの誤った取り下げを防止",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T04",
+      "suggested_primary_category": "fixed",
+      "user_purpose": "Keep measured values attached to the right person and context",
+      "fragment_ids": [
+        "architecture-clinical-quantity-contract",
+        "architecture-clinical-urgency-owner",
+        "architecture-clinical-vital-owner",
+        "architecture-medication-token-owner",
+        "vitals-owner-scope",
+        "vitals-threshold-context"
+      ],
+      "retain_distinctions": [
+        "Family/other-person, past/planned/negated and oxygen-flow exclusions remain or are corrected as stated; plain current patient labels remain readable.",
+        "vital_urgency remains OFF unless explicitly enabled; no threshold/model/rule/extraction-generation change.",
+        "Rollup decision version11 rebuilds affected patient caches gradually and hides old family values; no full historical re-extraction; semantic fact stream is a separate scope."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "不具合修正/測定値の対象者と測定時点の区別を修正",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T05",
+      "suggested_primary_category": "changed",
+      "user_purpose": "Preserve source evidence and safe resumption of analysis",
+      "fragment_ids": [
+        "architecture-borrowed-db",
+        "architecture-candidate-identity",
+        "architecture-canonical-publication",
+        "architecture-extraction",
+        "architecture-jev-execution",
+        "architecture-pharmacy-context",
+        "architecture-projection-lifecycle",
+        "architecture-semantic-assembly",
+        "architecture-semantic-cohort-owner",
+        "architecture-semantic-job-state",
+        "architecture-semantic-notice-owner",
+        "architecture-semantic-read-protocols",
+        "architecture-semantic",
+        "architecture-source-values",
+        "audit-coverage-wait",
+        "audit-loop-fork",
+        "hotfix-llm-save",
+        "semantic-presentation-gate"
+      ],
+      "retain_distinctions": [
+        "Restart extraction workers after update; old candidate approvals and held receipts do not authorize changed loaded definitions; reevaluate through existing approval flow.",
+        "No code-hash-triggered full historical re-extraction; extraction generation9/rule24, model/prompt/QC/publication conditions and JST03:30 day boundary unchanged where stated.",
+        "Keep same-TX result/job/receipt/outbox and held_prior protection; incomplete relation/coverage remains held; unbudgetable conversion remains held, no destructive recovery assumption.",
+        "Isolate per-invocation Jev/job/error/accounting state; preserve actual transport budgets/retries and per-part authorization refresh; suppress duplicate unchanged waiting records and resurrected old loop items."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "改善/解析の保留・再開と原文の照合を安定化",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T06",
+      "suggested_primary_category": "fixed",
+      "user_purpose": "Read patient context and extraction progress without misleading duplicates",
+      "fragment_ids": [
+        "architecture-nightly-prompt-projection-f2",
+        "architecture-patient-mentions-read-owner",
+        "architecture-patient-nightly-plan",
+        "audit-mention-quotes",
+        "audit-unverified-requests",
+        "fix-extraction-progress-import"
+      ],
+      "retain_distinctions": [
+        "Preserve patient/family/current/historical distinctions and exact original source references; show unknown when extraction module cannot load.",
+        "Repeat quote once per message; exclude unverified requests from unanswered lists while labeling them in contact lists.",
+        "Same borrowed snapshot, no data reacquisition or schema/default change; ordinary worker restart and candidate invalidation rules remain."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "不具合修正/患者まとめと依頼一覧の誤解を招く表示を修正",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T07",
+      "suggested_primary_category": "fixed",
+      "user_purpose": "Keep registered metadata identity and failed states distinct",
+      "fragment_ids": [
+        "architecture-metadata-cli-cleanup",
+        "fix-group-consultation-provenance",
+        "metadata-identity-types",
+        "clinical-definition-canonical-identity"
+      ],
+      "retain_distinctions": [
+        "Strict integer clinical entity/item and pinned-definition identity; valid empty acquisition differs from unknown/unfetched.",
+        "Invalid latest same canonical identity remains unknown rather than reviving earlier current values; group consultations inspect latest alias candidate then reject malformed provenance.",
+        "No rewriting stored payloads, new acquisition scope or schema version; CLI closes owned reader/lock even on error."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "不具合修正/登録情報の不正なIDと過去の記録の扱いを修正",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T08",
+      "suggested_primary_category": "added",
+      "user_purpose": "Look up official medicine information and monitor accepted references",
+      "fragment_ids": [
+        "architecture-drug-annotation-read-contract",
+        "audit-drug-limit",
+        "drug-info-tinyfish",
+        "hotfix-drug-map-walk"
+      ],
+      "retain_distinctions": [
+        "Drug info uses only the local free gateway and bounded requests; only exact official-master product names/general disease names leave the machine, no patient data/private dictionary.",
+        "drug_info_watch defaults ON; disable explicitly with false. Missing gateway gives lookup failure and silent periodic notices, not no-match or proof of no update.",
+        "Register/acknowledge watched inserts explicitly; unknown/malformed listing and state are not update-free; preserve pinned dictionaries/approval/source matching.",
+        "related/master-impact require limit1–200; other drug commands retain0–200. Optimization writes changed annotations and resumable cursor with same results; no unqualified machine-time claim."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "新機能/添付文書・診療ガイドラインの照会と更新確認",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T09",
+      "suggested_primary_category": "changed",
+      "user_purpose": "Reduce repeated work while keeping every patient and thread",
+      "fragment_ids": [
+        "perf-patient-name-index",
+        "perf-thread-projection-invalidation"
+      ],
+      "retain_distinctions": [
+        "Nonunique partial patient-name index auto-created on first writer open; existing DB first open consumes build time/space. Exact name/Unicode/archived behavior and processing set unchanged.",
+        "Same-save thread invalidation shared only within one call/TX; next save invalidates fresh projections; exception rolls back all related changes.",
+        "Performance claims limited to measured fully synthetic cases; retain source-independent SQL/functional oracles and index/snapshot/backup cost qualifications, no whole-production guarantee."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "改善/同名患者の確認と同じスレッドの一括保存を効率化",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T10",
+      "suggested_primary_category": "fixed",
+      "user_purpose": "Publish readable snapshots reliably and explain failures",
+      "fragment_ids": [
+        "snapshot-failure-reason",
+        "snapshot-validator-cancellation",
+        "snapshot-verify-budget"
+      ],
+      "retain_distinctions": [
+        "Verify budget follows max(size-based floor, measured copy multiplier), still capped180seconds and caller hard deadline; checks/schema unchanged. This release DOES intentionally change the wait calculation.",
+        "Separate timeout from validator rejection; record fixed reason/status/timing only, not DB content/path.",
+        "Cancellation tries bounded owned-child kill/reap preserving original exception; unknown unreaped child retains inherited-lock fence; no unverified snapshot publication."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "不具合修正/読取り用スナップショットの公開と失敗理由を改善",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T11",
+      "suggested_primary_category": "fixed",
+      "user_purpose": "Keep collection, manual import and health diagnosis recoverable",
+      "fragment_ids": [
+        "architecture-collection-stages",
+        "architecture-health-policy",
+        "architecture-health-runtime-fd-closure",
+        "architecture-ingest-contracts",
+        "audit-chrome-profile-match",
+        "audit-doctor-notify",
+        "audit-reconcile-attempts",
+        "health-watch-collection-log-guidance",
+        "ingest-cli-resource-lifetime"
+      ],
+      "retain_distinctions": [
+        "Preserve acquisition scope/order, bounded retries/relogin, same-TX message+notification intent, saved-before-read acknowledgement.",
+        "Reset reconciliation attempts per completed pass and defer deadlines without erasing cursor/completion evidence.",
+        "Diagnose malformed notify config as invalid/unverified; use run.log for collection output and mcs_check.log separately for standalone host launch/exit.",
+        "Respect exact dedicated-browser profile boundary and documented process-argument ambiguity; own resources released on import/diagnostic failure."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "不具合修正/収集の再照合と薬剤辞書の処理で進捗を保持",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T12",
+      "suggested_primary_category": "added",
+      "user_purpose": "Apply fixed local candidates and recover without crossing runtime generations",
+      "fragment_ids": [
+        "architecture-backup-evidence",
+        "architecture-environment-diagnostics",
+        "architecture-independent-recovery-fd",
+        "architecture-installer-config-boundary",
+        "architecture-lifecycle",
+        "architecture-request-value-policy-boundary",
+        "architecture-restore-evidence",
+        "architecture-runtime-process-identity",
+        "architecture-services",
+        "audit-recover-empty-backup",
+        "audit-standalone-backup-check",
+        "local-candidate-update",
+        "standalone-adopted-process-identity",
+        "updater-loaded-rollback-closure",
+        "upgrade-module-layout-restart"
+      ],
+      "retain_distinctions": [
+        "Use normal updater: service settings sync/restart automatically; direct Git update needs services regeneration and gateway/extractor/standalone restart. Never leave stale duplicate flat-import modules.",
+        "Local candidate requires exact candidate+oldHEAD commit IDs, confirm-human and bounded reason; no tag/Release/fetch required and never auto-update/chat-adopted. Reinstall-dependent updates preserve opt-outs.",
+        "Restore consent/report/backup/hash/journal/marker ordering preserved. Old-schema restore is not migrated by the new writer; blocked/pending requires compatible runtime/operator handling, not marker deletion or extra approval.",
+        "Independent recovery can resume compatible verified writer while retaining notification reconciliation hold; empty/missing/unreadable journal does not prove completion. Reject empty backups.",
+        "Unknown/foreign adopted process identity never authorizes signal or completed slot; standalone invalid backup config gets explicit code."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "新機能/未公開のローカル候補を固定して更新 + 動作・設定の変更/旧版への復元で、適合しないDBを再移行せず保留",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T13",
+      "suggested_primary_category": "changed",
+      "user_purpose": "Keep manual external export governed by consent and receipts",
+      "fragment_ids": [
+        "architecture-export-fd-handoff",
+        "architecture-export-lifecycle-boundary"
+      ],
+      "retain_distinctions": [
+        "External export remains OFF by default; no new destination, automatic send or resend.",
+        "Preserve human authorization, envelope/receipt validation, unknown hold, accepted/deletion evidence, same wire/CLI/error semantics.",
+        "Own descriptors close on transfer failure; no borrowed key/connection close or new publication ordering."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "動作・設定の変更/手動の外部搬出は引き続き既定で無効",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T14",
+      "suggested_primary_category": "changed",
+      "user_purpose": "Compare fixed evaluation inputs without changing acceptance rules",
+      "fragment_ids": [
+        "architecture-audit-cohort-fd",
+        "architecture-offline-evaluation-contract",
+        "architecture-semantic-bench-reader",
+        "architecture-snapshot-target-contract"
+      ],
+      "retain_distinctions": [
+        "Offline fixed inputs and explicit model execution remain distinct; no new implicit model/Jev or DB-write path.",
+        "Preserve sealed-input/human-review/threshold/budget/model conditions; resource cleanup and outside-repo CLI startup corrected.",
+        "Evaluation helper reorganization is not new human evaluation evidence or permission to promote/enforce."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "改善/失敗・中断後にファイルやロックが残る経路を修正",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T15",
+      "suggested_primary_category": "fixed",
+      "user_purpose": "Release owned files and locks when work fails or is interrupted",
+      "fragment_ids": [
+        "architecture-candidate-approval-fd",
+        "architecture-circuit-lock-cleanup",
+        "architecture-private-file-boundary",
+        "architecture-request-queue-fd-handoff",
+        "architecture-rule-cli-resources",
+        "architecture-semantic-status-reader",
+        "architecture-semantic-writer-close",
+        "architecture-test-guard-fd",
+        "maintenance-stream-lifetime",
+        "owned-fd-transfer"
+      ],
+      "retain_distinctions": [
+        "Close only owned/duplicated descriptors and writer locks; never borrowed key, original stderr or borrowed connection.",
+        "Retain private UID/mode/regular/nofollow/size constraints, credential precedence and error classes; cleanup does not imply success or fallback.",
+        "Keep cancellation identity, durability/fsync/transaction/publication order, data/receipt formats, logger retention and per-test timeout.",
+        "Normal process restart applies runtime fixes; changed safe-I/O identity still follows existing candidate reevaluation rules."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "改善/失敗・中断後にファイルやロックが残る経路を修正",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T16",
+      "suggested_primary_category": "changed",
+      "user_purpose": "Make configuration portable and keep one owner for shared contracts",
+      "fragment_ids": [
+        "architecture-core-state",
+        "architecture-dataflow",
+        "architecture-ledger-schema",
+        "architecture-shared-request-values",
+        "architecture-signal-reader-contracts",
+        "architecture-statistics-contract",
+        "architecture-writer-lock",
+        "portable-configuration",
+        "responsibility-layout"
+      ],
+      "retain_distinctions": [
+        "Preserve public CLI/flat-import and required old-updater compatibility entrances; keep schema version stable, with the separately declared new index.",
+        "Current-hash body evidence/accepted deltas are distinct from static/unread coverage; consolidation does not claim all code/dependencies were removed or fully reviewed.",
+        "CCO examples are unapproved placeholders: render with explicit deployment paths/image digest and keep approval-specific values outside repo; do not activate automatically.",
+        "Retain incidents/hashes/synthetic examples/official master/history meaning while generalizing machine observations; no Git-history rewrite.",
+        "Shared read owners borrow existing snapshot/TX; newest invalid signal is a tombstone. Stats/cohort definition identity changes require reevaluation; new worker definitions invalidate old approvals without mass re-extraction."
+      ],
+      "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all111 changes.",
+      "public_anchor": "動作・設定の変更/配布する設定例とコード配置を整理",
+      "mapped_notes_rule": "Retain all original generated details/refs and archived input. Unique internal limits/ownership/oracles remain in those mapped notes, not new public features."
+    },
+    {
+      "id": "T17",
+      "suggested_primary_category": "fixed",
+      "user_purpose": "Release superseded chat connection owners and stopped supervisors",
+      "fragment_ids": [
+        "slack-unload-hook-lifetime",
+        "discord-unload-hook-lifetime"
+      ],
+      "public_anchor": "不具合修正/接続の再作成と停止時に古い処理を解放",
+      "retain_distinctions": [
+        "Current host and scope identity, immediate-close cleanup, task-owned lock release and unknown delivery treatment are preserved."
+      ],
+      "mapped_notes_rule": "Original summaries, upgrade conditions, details and refs retained in technical fold and archived fragments."
+    }
+  ],
+  "corrections": [
+    {
+      "topic": "T14,T15",
+      "change": "Combined as one operational stability entry; no new evaluation evidence claim."
+    },
+    {
+      "topic": "T12",
+      "change": "Split local-candidate addition from incompatible-restore behavior; both map to same original IDs."
+    },
+    {
+      "topic": "T16",
+      "change": "Physical index addition separately disclosed; no global claim that DB structure is unchanged."
+    }
+  ],
+  "limitations": [
+    "Draft does not qualify release readiness or production API success.",
+    "All technical details and reference completeness depend on root retaining normal build output unchanged beneath the edited public sections.",
+    "Root has already corrected five input fragments; this draft uses the corrected intended contracts rather than repeating old OFF/private-value/owner claims."
+  ],
+  "fragment_sha256": {
+    "architecture-audit-cohort-fd": "c7398be0e16f7633dbe5c552e506517ad94bc9ce7aad382519ea4edca84792af",
+    "architecture-backup-evidence": "581a1b60a799eb5f2e5c82da7938af40be4b385fda4cd125bd5fbfa155096834",
+    "architecture-borrowed-db": "7aaf3020c469121d38fd6c59157eb1921ef63d237fe55c2bd6ed646e1dcaff99",
+    "architecture-candidate-approval-fd": "b857b3548846087ac303e2d225aac57f8354f3ad6eaaf02b1ee2bb98222f81d6",
+    "architecture-candidate-identity": "fc9b379085e3fe6cd8c6320d6345da22c1ca24108255ab4ed3e9d0117def5772",
+    "architecture-canonical-publication": "b0b1cda53ba75734ed83aee70033d579cd3180ab1d1aace62bd010c12383854a",
+    "architecture-circuit-lock-cleanup": "f633dfaa5f84273c66881525112b6f8e7b5b25133c2c6168761a24dbfad718e3",
+    "architecture-clinical-quantity-contract": "2b68023c0d6673a4ffbe58b986e35267beab6ad97e85f1c2ac2600540d89469a",
+    "architecture-clinical-urgency-owner": "e712c534901cb3f6a94b98dec19ef1165c45a9777201a48ad8bda10a4a28c7e5",
+    "architecture-clinical-vital-owner": "a841b546db947b3256b024d076b02fb5e9bf3b23feabe70d86a2069acc52d03c",
+    "architecture-collection-stages": "0b9fe44edf140533ae02e01ed0ffec8ff2931f838bf4e949911ff73fb4c9ff00",
+    "architecture-connections": "d373d3126ff7a83159aa3ae722b4c8cc7d79f948252e25984a888363c309f30c",
+    "architecture-core-state": "c0013bdcad46c4754beadc71674eac02578bbc657cb57fc46fc6af63389ca9e2",
+    "architecture-dataflow": "2a04e0f360e3b93327ab750be98c7c4cebd21422477590ea6500fde84df7b8ea",
+    "architecture-discord-request-guard": "39d221c2690d3aa05e9bc20be7b82fb65c6637c1f1a2b171e4b7ced12007a4e6",
+    "architecture-drug-annotation-read-contract": "4e45f0146ad7567801efffbbc826b3a915600df4d5acae5b6b87aa59bfa191cb",
+    "architecture-environment-diagnostics": "767287e256cfe41658dd29b51c7d1f0ff2d2c12654b1d78c974a4b38f755b9d3",
+    "architecture-export-fd-handoff": "e54e588c499d30d29202362ab27da436a3ef866680afcc80c2b55c5a850a2ce6",
+    "architecture-export-lifecycle-boundary": "527cec543ab145aead425628c85a6d02f52e419eacedaee98cf495647817a4cb",
+    "architecture-extraction": "0254e39717785249084a568cd6334b36991a48d4c5bc2187b159e790a079cb44",
+    "architecture-health-policy": "2ac780d28db44f2149d381e76b9208a48f77cd81234593d8ad8d105a022fc1f9",
+    "architecture-health-runtime-fd-closure": "b46e2f786e69f18ec819e465a1f6461cad45196c1a6f71139fe4382a57d17496",
+    "architecture-independent-recovery-fd": "04dbb10eb96cb06992d6279d90c6f330df6418b98383eb3e1593685689901139",
+    "architecture-ingest-contracts": "c58af9afda168a23bee3cc93b0042bfef7575842c814eb8825e9d500c702f0a5",
+    "architecture-installer-config-boundary": "15cf5f082ce565fb3487b258d1607b96f1a3fe21e7c54a0e56507d9e718bbd2f",
+    "architecture-jev-execution": "871bbf9c64a2c72e804894d0a4124c0cb912300df3c66105a561844f25635e82",
+    "architecture-ledger-schema": "6253f3dd3ff0900116e64c0c2efb4639c9dee46ed3bbae12b2c9ee3ad89f2772",
+    "architecture-lifecycle": "7890b52d4b823c98e6bc7df2001e33861229b10da75f9bae56b38b88b7e0dcdb",
+    "architecture-lineworks-split-owner": "aa126cc4e3dac91bfb5b15c97d7d8b224fe7eecab5fb0f32f982c16936a45836",
+    "architecture-lineworks-text-contract": "0bd5e57b45ef6ddccec0340aba4579b758c6206adbd861996fc246b96ec3b9a1",
+    "architecture-medication-token-owner": "3f97ab8726dc9e6280747b8c1174f1f281c4030cf0ab46f0966be5e280f7fe15",
+    "architecture-metadata-cli-cleanup": "b47bb416c44cba7354de483abeaee07452ed136082c842a723f6fa792cfabc25",
+    "architecture-metadata-read-contract": "496035765bff6b785d3434988762b49e1975e5af72313c54bd6dbffb9c23f559",
+    "architecture-nightly-prompt-projection-f2": "3d2b1b2204463ae8a81656d27e8c9f6fb4b3e24000dc582ac75489cb8e182c06",
+    "architecture-notification": "b457fb226c3ad886df1aa8eb9fd31d690ee9ef6d92c912d56f14608896aabeea",
+    "architecture-notify-render-public": "9fece3f08c8e4efc880c824e9bf1d0b9685559f5523cbb04619987453d171d73",
+    "architecture-offline-evaluation-contract": "5f0d931ac625313acd33fa18869ffab65c00aea194dd1cc7510a75b5b9c89686",
+    "architecture-patient-mentions-read-owner": "c51a663f73560eeca2d12367027a2a94864da64ea2ee7f9a7a5b120ddec7fb67",
+    "architecture-patient-nightly-plan": "5ac9f9b90ec8cc8aacab6429bf2e8dcf9967aa5ccd2ee704730da36657e1b1f8",
+    "architecture-pharmacy-context": "6d046d2100448843a7e4ba527f9db322afcc4f2aa8eeb293a9e209f4da33aafa",
+    "architecture-private-file-boundary": "b7af18af8dc02f2ce932a8bd17c7cceabf73256c97bd0b82362d5b7b924ede7d",
+    "architecture-projection-lifecycle": "1f4fa788cfc24793b5508b6cbe34cb05f09e88137304a874589e0c7e331d9e77",
+    "architecture-request-queue-fd-handoff": "0fe03f3dccae4e06473e6d7ff921f9bc02a85516e00aa8863151672a8b8eea22",
+    "architecture-request-value-policy-boundary": "09152533db4a88ebd1bf4a49712856bfc4ea00bf54fbbf0c8573c48742ba6c6f",
+    "architecture-restore-evidence": "8cbb9a2d3b59d16c6836fddb87ebddeec0c505afab46bbe711ddc886af75202e",
+    "architecture-rule-cli-resources": "d7b820a43005895f0b2c02e9ff2eaa69bb4f90ba9bfc66d4ec36d2f2a65fee53",
+    "architecture-runtime-process-identity": "556757a823ca96c163b3b80b1a1e5ede4931c70921375de2f454004d8c6b3e34",
+    "architecture-semantic": "a88dded0c6c2805ce35db2bec69d617805b3d823e736dd153336a6fd6346f3d3",
+    "architecture-semantic-assembly": "1824497d89bfa40ca8dbbe35c194ac709f1a30c3bb2e74efc3c5f52e8862f225",
+    "architecture-semantic-bench-reader": "e69a8644ced36adde4db5d24c7e61b2a9e6d68fb299b65eee9c053447e1c9ba4",
+    "architecture-semantic-cohort-owner": "1a51971efd55e00b5e3820b867affd230b79c6d6c7d15e067cdcc306a77580a2",
+    "architecture-semantic-job-state": "0ea1400c7cb45f216ed669311d710c0e8b7e554dc8832a11ff36547685f56130",
+    "architecture-semantic-notice-owner": "f3069f6824cb2970a536135c7eba17833c9e03900ae2278d38c02dec5095a6b4",
+    "architecture-semantic-read-protocols": "5833ce2e062bb7326c5bf35605b7d36ad292eccba5b4a55b0fc1d57ad5f1321b",
+    "architecture-semantic-status-reader": "0d67c17355a5280c141b3d1a65dc726529c3ea7b7478025182c1dd77dcab5469",
+    "architecture-semantic-writer-close": "51b75db4520bebc2ce41421502d7a00667b72b803191515e84f8026cda5c233a",
+    "architecture-services": "4c962cd64ddb6f089127fb3808638a080d30ff5f621e05210cb8deb66909edd5",
+    "architecture-shared-request-values": "f22967946212909dd65945f8469d4ca36ced73b6288402581cf2da247048b5d4",
+    "architecture-signal-reader-contracts": "b360362f6706717f672f56576a51510ffe3d1cb4f8386c523e9b3cdef2312249",
+    "architecture-slack-native-boundary": "813dc25cac682d28fa59ac6e22dc294825ab0fadc7791df0fe6d15f89be0ac88",
+    "architecture-snapshot-target-contract": "8193481abc85e7783092c3999fedfa021ed74f8bd74e9ce922d38c69cc9ee1a1",
+    "architecture-source-values": "425ff8ac2e2079ba9005ab05d6231c1dcbeef02a9a687107b4e9387d854d87ca",
+    "architecture-statistics-contract": "0cff49e5d8c1a6a2488913285501aa2333957c9c6c1811495b480d6f2feb716e",
+    "architecture-test-guard-fd": "84b518152eb45ed4c562902032df7eaaf6963e4aac314a728d7fc133b83116f2",
+    "architecture-writer-lock": "f16ef6954ac89ccf0951197e073f8ecdcc7f6e8ffd24350c73d1f5a95cb6121e",
+    "audit-chrome-profile-match": "68caf5e26e9da5ce8f6ea24b6aafa14c7a8364ef9fc37e8bb74426ab7bcd4e88",
+    "audit-coverage-wait": "b35941c93af91dae29d857d7476426a500a5cb6c171d6f7e02922a3d0ac17f90",
+    "audit-doctor-notify": "91f7ac059746af7f00bd9628bf06d4ed2191584e5ca3f750c41299a84c64aa15",
+    "audit-drug-limit": "a9e5741910cbf4f690c99469e52cb83b80336d8a7aeeeab62de95013a25b5b27",
+    "audit-lineworks-control-chars": "b234215b5e7778e06f457fe8063c7a85ff9a17f05901736dff9a9c1b4dfab6d1",
+    "audit-loop-fork": "8acc3b5e885c4ce42af5dcfd1859c9a0b946c246f8713fa76a8659602e3b6b9b",
+    "audit-mention-quotes": "3a7f9ce93314a1fa41a232e27b8e25afbd41e0a9c3d89b8c0884c23e62683ed4",
+    "audit-reconcile-attempts": "9c2057aea0024ae93637d61c39ee4a1bc37bcd93a4ce5616e5c3cfc74a832f76",
+    "audit-recover-empty-backup": "a0f2972158c4a364ac9bacebf334cc1817cd13ed99291b44dd36d611775c8479",
+    "audit-slack-server-error": "671c8ca7c0d1b780bf938c56142577db2747773877973eba53423e400d4e88b6",
+    "audit-slack-task-list": "d3c26a66c77335c7bd1f17973c9cbb96896c68f76c91e29543a40a919412d66c",
+    "audit-standalone-backup-check": "a9ba38266924ea5c1efc723b29cab96e72b0740a47a2dc52c2244bcb3dfaf1fb",
+    "audit-unverified-requests": "72efda2cd28f8016ae5244b2544d9a80bbcabefec6c0c94d85aee2a4c89144ba",
+    "audit-urgent-inflight": "0e091ae6e6773e52f710f882af5a159b4c9ef290ba3db3ad61826d99ddfe5e4a",
+    "clinical-definition-canonical-identity": "5827942d6366f102c41220837f943c304a86363a7faac90cd40fc382c360484d",
+    "discord-unload-hook-lifetime": "f049a858bc73c28c05f4b913c60c8d2b00c27a0068f05fe50ff965f79c354c37",
+    "drug-info-tinyfish": "f17c1b8d5ad6a3c5630abbe6267c158aea7bd1ace59a050327655fda2be72459",
+    "fix-extraction-progress-import": "3c651e88411a5ac20f0e9fc0eee040f1d84686a8eeb08b0a81d266659dc489b9",
+    "fix-group-consultation-provenance": "10e53b4b7306463b46af97555f72f5e5e63e02d4b1732e558c633cf600855637",
+    "fix-late-attachments-cross-transport": "d82ba6554065018cd82a31399fbae4fb29375306ca5e9720229c1424bf9481db",
+    "health-watch-collection-log-guidance": "19035f56a6b9f24ceaa665b1c5a3ffd862c41f6f716348b145e3c3e130ceb804",
+    "hotfix-drug-map-walk": "6a02f5f925785c31b2a8029eeeaecc6da202ba854c425c9a70642d96083f6076",
+    "hotfix-llm-save": "090db55d2674c3c901ce089c1942766688fe3faa47deecc61abcdcfebeacb0d9",
+    "hotfix-slack-thread-attachments": "c07dad3761576fb2214f4fe21d9cb14c34ef297d078eaa0b2e4e46e3ab1469ae",
+    "ingest-cli-resource-lifetime": "7ee7e74e83907a94972e2eb269069a7e4af0a341cc3a5f8968eef742b1922583",
+    "local-candidate-update": "a001460d817266f761d25317180de310555e59dfb44358caff365da4a7760c6c",
+    "maintenance-stream-lifetime": "109a2f164fd08be1ff821252ec9da8a8b5679ea3834c62ab6e959e225b139eaf",
+    "metadata-identity-types": "4b9b9c435ae83c5f6de353643e669ebe009b69281913cb6ccd25dcaab4351f35",
+    "owned-fd-transfer": "956bae4a8c87c6d9f9c901991f5b0ae2476f537370de1c715aa7febd2fd01f4d",
+    "perf-patient-name-index": "0ecb94c940e0e3ec4c4549c4c4461bc5b9b156098481d23150312a036c88f286",
+    "perf-thread-projection-invalidation": "66920d643f2bb3fed819816532dfb8a988146367e63ab4fbfcf8916ca6896e17",
+    "portable-configuration": "8d5edf2a9cb30a82fbfa7455e4baf4b046111e709c510010c993ca55c0597fcc",
+    "responsibility-layout": "ebf2b567a796115fc7eafcc8d195a73d1b32e1225b359b99bc6c0dd08aa5c9a4",
+    "semantic-presentation-gate": "54e1fb18e18e237a02c13881ca2369785a4ea7ac649862bafb831a4c5617b86f",
+    "slack-unload-hook-lifetime": "ecda7fbc45e99609d69ef07542f01c44d56dbcc63efa1e4313b6f95aec5ecc13",
+    "snapshot-failure-reason": "cf7a1caf71846b2d5f0b9c221889b5d22a4e04e9abd6e83d76fa090e4018818f",
+    "snapshot-validator-cancellation": "f09cfd1cad21c084db12a4964f4963f46e09384bf3edb25217a3304c54c03064",
+    "snapshot-verify-budget": "11765ccd692a9198dd39792f0d5727056f97c9cccd7f74aa4716483eeb0a255e",
+    "stamp-management": "5b150f3d60b5006d02d4a109b479d743adcccf6d8f0645af76070f6da039bb7a",
+    "stamp-one-press": "7c00a953f9bc2fb350be2736b6b740f20c2e225731a5cf7a6c069f88defd8633",
+    "stamp-review-fixes": "8cecf98700f9b7cc5b8b106f7351deeac978742b90ac0adf680172d3c20ec962",
+    "standalone-adopted-process-identity": "5e2202eff211bc5ee4224a5b43c5a4f528caea53b21bc84a3fb73f1f22c6288d",
+    "updater-loaded-rollback-closure": "538cf42eefa12691c4c43a1b2831e9a9969caaca493b4d2d69dd2f93c9dc208a",
+    "upgrade-module-layout-restart": "5df8fed3f09c4131cdfa3ebf43a06b847100f6a43d2dd8605dabfa260e96465d",
+    "vitals-owner-scope": "5ed0c72fcdeb55b4f7fc4c963aa0451d2cb1471e949fa991d6456543ca9499f9",
+    "vitals-threshold-context": "5078602d0cd864e35866e2552b2c35a57aa5039285fe5604d9b68b3c05091342"
+  }
+}

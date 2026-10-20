@@ -1,0 +1,11 @@
+{
+  "kind": "synthetic explanation, not provider screenshot",
+  "source": "docs/screenshots/slack-gallery/03-actions",
+  "source_commit": "35d0470ae6a0005a92589cc142acc62bc990f722",
+  "generator": "scripts/development/generate_slack_gallery.py",
+  "copied_without_modification": true,
+  "sha256": {
+    "png": "f7ea465482396404bb210eb0f6b4c06931c6baf75c09e54316ecf04146987ef2",
+    "svg": "da812e2682c6aee068d0f1547f0c0c5bc470010f038ab884c5cea968396b9d41"
+  }
+}

@@ -1,56 +1,76 @@
 {
-  "version": "1.0.27",
+  "version": "1.0.28",
   "sections": {
     "features": {
-      "notes": "2026-10-19 1.0.27候補: レーン1新着・2/3背景の直列化、レーン3の24時間作成と解析済み条件、既存公開ゲートを実装へ照合。辞書未設定の対話だけ既定はいを提案し人承認を保持。モデル/schema/世代と収集10分は不変。",
+      "notes": "2026-10-21 1.0.28候補: 責務別の配置、追加添付の配送、スタンプの読取りと操作を現行ソースへ照合。操作者1人とMCSアカウントを指定した場合だけ送信が既定ONになる。1回押しの対象は表示中の最新投稿で、ほかの表示済み投稿はフォームで選ぶ。追加・変更・取消、本文の版と本人状態の再照合、20分の受付期限を確認した。実MCSへの操作成功は未確認。",
       "sources": [
         "README.md",
-        "mcs/llm/local_llm.py",
-        "mcs/patients/patient_nightly.py",
-        "mcs/extract/llm/extract_llm.py",
-        "mcs/ops/mcs_setup.py"
+        "mcs/stamps/stamp_write.py",
+        "mcs/stamps/stamp_contract.py",
+        "mcs/notify/notify_actions.py",
+        "mcs/notify/notify_cards.py",
+        "mcs/notify/notify_parts.py",
+        "mcs/ingest/mcs_adapter.py",
+        "docs/development/REPOSITORY_STRUCTURE.md"
       ]
     },
     "demos": {
-      "notes": "2026-10-19 1.0.27候補: チャットの配置は変更なしで前版のSlackギャラリー確認を再利用。レーンの説明図は新実装から作成。実画面・実性能の測定とは区別する。",
+      "notes": "2026-10-21 1.0.28候補: Slackを先頭とする合成の説明図と、3接続先の操作部品を照合。Slackの03-actionsはスタンプ送信を設定した例で、本人のスタンプを強調する。ほかのSlack7画面とLINE WORKS2画面は送信未設定の例。版資料のSVG・PNGは03-actionsと同一hashで、生成元をvisual-source.jsonに記録している。実画面の表示・操作成功と公開URL上の画像表示は未確認。",
       "sources": [
-        "docs/releases/v1.0.27/README.md",
-        "docs/releases/v1.0.27/llm-lanes.svg",
-        "docs/releases/v1.0.27/llm-lanes.png",
-        "docs/screenshots/slack-gallery/README.md"
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/slack-gallery/03-actions.svg",
+        "docs/screenshots/slack-gallery/03-actions.png",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/assets.json",
+        "scripts/development/generate_slack_gallery.py",
+        "adapters/slack/cards.py",
+        "adapters/discord/cards.py",
+        "adapters/lineworks/cards.py",
+        "docs/releases/v1.0.28/README.md",
+        "docs/releases/v1.0.28/visual-source.json"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-19 1.0.27候補: README入口・EASY_SETUP・UPGRADE_AGENTを照合。update applyがservices再同期と再起動を自動実行し、手動checkoutのみの場合との差を補足。旧slot引数からlaneへ移行しrollbackは旧版に戻す。",
+      "notes": "2026-10-21 1.0.28候補: READMEの導入・更新・復旧の入口、必要環境、読取り専用preflight、初期設定と実接続の確認条件をガイドへ照合。公開前の適用は候補SHAと更新前SHAを固定する更新経路を使い、バックアップ・ロック・停止・再起動・適用後確認を維持する。通常のgit mergeだけで稼働checkoutを進める手順にはしない。実機への新規導入は今回のREADME確認では実行していない。",
       "sources": [
         "README.md",
+        "install.sh",
         "docs/guides/EASY_SETUP.md",
+        "docs/guides/SETUP_AGENT.md",
         "docs/guides/UPGRADE_AGENT.md",
-        "mcs/ops/mcs_update.py",
-        "deployment/recovery/mcs_recover.py",
-        "tests/fixtures/schema_upgrade/update-paths.json"
+        "docs/guides/LOCAL_AGENT_INSTALL.md",
+        "scripts/mcs_upgrade.py",
+        "mcs/ops/mcs_update.py"
       ]
     },
     "safety": {
-      "notes": "2026-10-19 1.0.27候補: 公開と人承認、モデル・情報送信先を維持。辞書は確認日/確認者/採用の入力が必要でinit --yesでは未作成。carry本文をログへ出さず、timeout後idleは取消証明としない。benchmarkは停止と全RT成功を確認。",
+      "notes": "2026-10-21 1.0.28候補: 通知先への患者情報・添付の送信、Jevと出力機能の別条件、未取得と0件、人承認と復元保留の説明を照合。スタンプは指定したMCSアカウント名義で動作し、操作receiptの保存後に本人・対象・版を確認して1回だけ送信する。結果不明はGET照合を続け、自動再送しない。スタンプ送信と押下者取得の既定値は別で、正式タスクの完了も変更しない。実送信・実SDK接続の成功は未確認。",
       "sources": [
+        "README.md",
         "SECURITY.md",
-        "mcs/llm/local_llm.py",
-        "mcs/extract/llm/extract_llm.py",
-        "mcs/ops/mcs_setup.py",
-        "scripts/evaluation/llm_lane_bench.sh",
+        "docs/specs/stamp-management.md",
+        "mcs/stamps/stamp_write.py",
+        "mcs/ingest/mcs_adapter.py",
+        "mcs/ingest/mcs_worker.py",
+        "adapters/common/confirm.py",
+        "mcs/notify/notify_transport.py",
         "resources/drug-master/README.md"
       ]
     },
     "docs": {
-      "notes": "2026-10-19 1.0.27候補: 現行ガイドを1.0.27へ合わせ、歴史1.0.26以前は保持。変更記録とREADME要約を既存生成器で同期し、版資料と統合表を既存releasesへ集約。",
+      "notes": "2026-10-21 1.0.28候補: 利用ガイド、スタンプ契約、責務・依存の文書、ギャラリーと版資料の参照先を確認。111件の変更記録からCHANGELOGを生成し、17項目へ編集した説明と全件の技術詳細・適用条件・根拠を対応表に保持する。READMEの生成要約も同じCHANGELOGから同期する。1.0.28の受入票では候補検証・本番稼働・公開を分け、未確認の実操作や最終CIを受入済みとは扱わない。過去版の受入記録は変更しない。",
       "sources": [
         "README.md",
         "CHANGELOG.md",
+        "docs/README.md",
         "docs/releases/README.md",
-        "docs/releases/v1.0.27/ACCEPTANCE_1.0.27.md",
+        "docs/releases/v1.0.28/README.md",
+        "docs/development/README_MAINTENANCE.md",
+        "docs/development/REPOSITORY_STRUCTURE.md",
         "docs/development/DEVELOPMENT.md",
-        "docs/guides/UPGRADE_AGENT.md"
+        "docs/guides/USER_GUIDE.md",
+        "docs/specs/stamp-management.md"
       ]
     }
   }

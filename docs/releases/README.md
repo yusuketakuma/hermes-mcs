@@ -8,6 +8,7 @@
 
 | 版 | 記録 |
 |---|---|
+| 1.0.28（候補） | [受入・残条件](v1.0.28/ACCEPTANCE_1.0.28.md) · [スタンプの説明図](v1.0.28/README.md) |
 | 1.0.27 | [受入・残条件](v1.0.27/ACCEPTANCE_1.0.27.md) · [統合対応表](v1.0.27/integration-manifest.json) · [処理の説明図](v1.0.27/README.md) |
 | 1.0.26 | [受入・公開前の残件](v1.0.26/ACCEPTANCE_1.0.26.md) · [統合対応表](v1.0.26/integration-manifest.json) · [画面例](v1.0.26/README.md) |
 | 1.0.25 | [受入](v1.0.25/ACCEPTANCE_1.0.25.md) · [患者背景の計画](v1.0.25/PATIENT_CONTEXT_1.0.25.md) · [画面例](v1.0.25/README.md) |

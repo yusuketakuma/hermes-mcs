@@ -6,6 +6,1140 @@
 
 ## [Unreleased]
 
+## [1.0.28] — 2026-10-21
+
+**チャットからMCSスタンプを操作し、添付の配送と処理の再開を改善**
+
+この版では、カードからのMCSスタンプ操作と、公式の医薬品情報を調べる機能を追加しました。後から取得した添付の届け先、測定値の対象者、登録情報の表示を修正し、収集・解析・復旧が途中で止まった場合の記録と再開処理を見直しています。
+
+| 場面 | これまで | この版 |
+|---|---|---|
+| 投稿にスタンプを付ける | MCS本体で操作 | 設定した操作者がチャットのカードから追加・変更・取消を依頼可能 |
+| 本文の通知後に添付を取得 | 別の通知になったり、添付なしで完了したりする場合がある | 条件を満たす元のカード・スレッドへ追加し、添付の配送結果を確認 |
+| 復元したDBが実行中の版より古い | 新しい実装で再移行して再開するおそれがある | 古い保存形式を保って停止し、適合する版と通知の照合方法を管理担当者が確認 |
+
+### 新機能
+
+- **カードからMCSスタンプを操作**
+  Slack・Discord・LINE WORKSのカードに5種類のスタンプを表示します。表示中の最新投稿に対して、設定した操作者が押すと送信を受け付け、自分のスタンプをもう一度押すと取消になります。表示済みの別の投稿を選ぶフォームも使え、画像・PDFは添付が属する投稿が対象です。フォームでも同じスタンプを選ぶと取消になります。対象の状態が変わった場合や、押してから20分を過ぎて届いた操作は送信しません。結果不明の操作を自動で再送せず、拒否された理由も表示します。
+- **添付文書・診療ガイドラインの照会と更新確認**
+  同梱マスターの品名からPMDAの添付文書を、一般の疾患名からMindsの診療ガイドラインを調べられます。登録した採用薬の添付文書と公式医薬品マスターの公開一覧を毎日確認します。結果は参考情報として原典を確認してください。利用にはローカルのTinyFish無料ゲートウェイが必要です。
+- **未公開のローカル候補を固定して更新**
+  管理担当者が候補と更新前のコミットを指定し、人の確認と理由を記録して適用できます。通常更新と同じバックアップ・停止・適用後確認・失敗時の復旧を使います。自動更新やチャット承認から未公開候補を適用することはありません。
+
+### 改善
+
+- **同名患者の確認と同じスレッドの一括保存を効率化**
+  通知見出しで使う患者名の索引を追加し、同じスレッドの投稿をまとめて保存する際の重複処理を減らしました。対象の患者・投稿、照合結果、保存失敗時に変更を取り消す条件は維持します。効果は確認した合成データの範囲であり、すべての運用環境の速度を保証するものではありません。
+- **解析の保留・再開と原文の照合を安定化**
+  保存待ちの解析結果が後の周回で完了・保留された場合も進捗に記録します。確認待ちの記録が重複したり、終了した依頼が再び現れたりする問題を修正しました。原文、対象者、解析世代を確認してから結果を再利用し、根拠や取得範囲が不足する結果は保留します。
+- **失敗・中断後にファイルやロックが残る経路を修正**
+  収集、承認記録、登録情報、バックアップ、評価、ログ整理などで、開始や終了処理に失敗した場合も、この操作で開いたファイルやロックを解放します。評価の基準や人の確認は変えず、内部の整理を新たな評価・承認の実績とは扱いません。
+
+### 不具合修正
+
+- **接続の再作成と停止時に古い処理を解放**
+  Slack・Discordで接続を作り直すたびに、古い送信処理が終了まで残る問題を修正しました。起動直後に停止した場合も保持参照を解放し、別の接続で動いている処理は止めません。配送中の結果不明や、ロックを解放する条件は維持します。
+- **後から取得した画像・PDFを元の会話へ追加**
+  Slack・Discordでは元のカードのスレッドへ、LINE WORKSでは元のカードと同じトークルームへ送ります。対象の投稿・送信先と添付の一致を確認し、添付が届いていないのに本文だけで完了扱いにしません。添付だけの追加を新しい返信として通知することも防ぎます。適用条件と再送しない範囲は「更新時の注意」を確認してください。
+- **通知の重複と緊急アラートの誤った取り下げを防止**
+  Slackの長いタスク一覧が二重に表示される問題を修正しました。送信中・結果不明の緊急アラートは未送信として取り下げず、Slackのサーバーエラーでも結果が不明なら自動再送しません。明確な送信拒否への再試行では、現在の権限を再確認します。LINE WORKSで表示できない制御文字は表示時に処理し、保存した原文は変えません。
+- **測定値の対象者と測定時点の区別を修正**
+  家族の値や酸素流量を本人の最新バイタルとして扱う問題と、日常語や測定成功の記載によって本人の閾値警告が落ちる問題を修正しました。家族・過去・予定・否定・測定不能の区別は保ちます。バイタル閾値警告は引き続き明示的に有効にした場合だけ使います。
+- **患者まとめと依頼一覧の誤解を招く表示を修正**
+  同じ投稿の引用の重複を抑え、未確認の依頼候補を「返答が見つからない記録」から外します。連絡の確認一覧では未確認と分かるように表示します。抽出処理を読み込めない場合は、進捗の表示を止めず「不明」とします。「記録が見つからない」ことを「対応がなかった」とは断定しません。
+- **登録情報の不正なIDと過去の記録の扱いを修正**
+  不正な型のIDによって別の情報を「0件」と表示したり、取得対象の件数を増やしたりする問題を修正しました。最新のグループ相談のIDが不正な場合も、以前の正常な記録を最新として表示しません。取得済みの空の結果と、未取得・取得失敗は区別します。検査項目の取得でも正式な整数IDと一覧の指定を照合し、不正な保存データを取得元として使いません。保存データは書き換えません。
+- **読取り用スナップショットの公開と失敗理由を改善**
+  ファイルの大きさに加え、コピーにかかった時間から検証の待ち時間を決め、遅いディスクで公開に失敗し続ける問題を修正しました。上限180秒と収集全体の期限を守り、検証内容は変えません。時間切れ・検証拒否などを区別して記録し、中断時は検証用プロセスの終了・回収を試みます。検証未完のファイルは公開しません。
+- **収集の再照合と薬剤辞書の処理で進捗を保持**
+  過去の投稿を巡回する再照合では、完了した周回ごとに失敗回数を戻し、時間切れを失敗に数えません。薬剤辞書の照合は変化した投稿だけを書き込み、途中位置を保持します。監視通知の収集ログ案内は実際の `data/run.log` に合わせました。取得範囲・間隔・既読化の条件は変えません。
+
+### 動作・設定の変更
+
+- **旧版への復元で、適合しないDBを再移行せず保留**
+  復元したDBが現在の実装と適合しない場合、復元内容を保って停止します。空のバックアップは復元候補にしません。適合する版で書込み処理を再開できても、通知の照合が済むまでは配送を保留します。確認不能の残存プロセスを停止したり、終了済みと扱ったりすることも避けます。
+- **手動の外部搬出は引き続き既定で無効**
+  承認、送受領、撤回の記録を整理し、失敗・中断時の後始末を修正しました。新しい送信先、自動送信、自動再送は追加しません。人の確認、対象データの範囲、結果不明時の保留、受領・削除の確認条件は維持します。
+- **配布する設定例とコード配置を整理**
+  設定例・文書から個別端末のパスや機種・実測情報への依存を除き、コードとテストの担当範囲を整理しました。既存の稼働設定を自動で置き換える変更ではありません。コマンド、保存形式、モデル・プロンプト、解析世代と公開・人承認の条件は、上記で明記した変更を除き維持します。
+
+### 更新時の注意
+
+- **通常の更新ツールを使用してください。** `mcs_upgrade.py` / `mcs update` はサービス設定の作り直しと再起動を行います。公開前の候補も更新ガイド§2-Aの固定SHA適用を使い、稼働checkoutへ先にGitだけで取り込まないでください。Hermes gateway・抽出worker・独立host・使用中のLINE WORKSアダプターに新しいコードが反映されたことを確認してください。旧配置の同名Pythonファイルが残ると、安全のため起動を停止します。履歴と保持先を確認せず削除しないでください。再導入を求められた場合は、更新ガイドに従い `--reinstall` と以前の省略オプションを維持します。
+- **スタンプは本人IDと1人の操作者を設定すると既定で有効です。** `stamps.account_user_id` と `stamps.operator` の対応を確認してください。操作付き通知も有効である必要があります。無効にするには `stamps.enabled=false` を指定します。設定がない状態では送信しません。既存カードには次の更新からスタンプ列が加わり、LINE WORKSでは有効・無効の切替時に更新版カードが順に追加投稿される場合があります。`data/stamp_operations` の記録は削除・巻戻しせず、DB復元時も一緒に扱ってください。記録を伴わない別配置への復元では古い操作を停止します。実APIでの反映と本番適用は、合成検証とは別に確認が必要です。
+- **後着添付の追加には通知の設定条件があります。** Slack・Discordは操作付き通知とスレッド表示、LINE WORKSは操作付き通知が必要です。スレッド表示が無効・未設定の場合は従来のファイル付きテキスト通知を維持します。未送信と確認できる場合だけ従来経路へ切り替え、送信済み・結果不明・過去に完了扱いとなった通知は自動再送しません。元のカードや送信先を確認できない場合も、別の送信先へ送り直しません。
+- **医薬品情報の定期確認は既定で有効です。** 停止する場合は `drug_info_watch: false` を設定します。送信するのは同梱マスターと完全一致する品名と一般の疾患名だけで、患者の投稿・属性・台帳・私有辞書は送りません。ゲートウェイがない場合、照会は失敗として表示し、定期確認は通知しません。通知がないことを「更新なし」と判断せず、必要なら別途原典を確認してください。公開一覧の比較は、リリース時の公式原本の照合の代わりにはなりません。採用薬の登録・確認は明示的に行います。
+- **旧候補の評価・承認は新しい実装へ流用できません。** 抽出・表示・参照条件の実装識別が変わるため、該当する候補と保留済みの再抽出は既存の手順で再評価・独立承認します。コードの識別値だけを理由に、同じ解析世代の保存済み投稿を全件再解析しません。本人・家族の値を扱う患者集約は次の収集から順に作り直されますが、意味解析の事実は別系統です。抽出世代9・ルール世代24、日付境界の日本時間03:30、モデル・プロンプト・品質・公開条件は変更しません。
+- **DBの索引作成と復元保留に注意してください。** 患者名の索引は更新後の最初の書込み開始時に自動作成し、既存DBでは時間と追加容量を使います。スキーマ世代は変えません。`restore_reconcile_schema_blocked` / `restore_reconcile_pending` が出た場合は保留を維持し、適合する版・復旧Python・通知の照合方法を管理担当者が確認してください。追加承認や復元記録の削除では解除しないでください。記録が空・不読であることも復旧完了の証拠にはなりません。
+- **未公開候補と配備ひな形は自動適用しません。** ローカル候補の適用には、候補と更新前HEADの40桁SHA、`--confirm-human`、200字以内の理由が必要です。変更をコミットして候補を固定し、更新計画の阻害条件を解消してください。CCOの設定候補は未承認のひな形です。私有作業領域で導入先パスと検証済みimage digestを指定し、描画後に確認・承認します。承認票と環境固有のhashはリポジトリ外へ保管してください。
+- **薬剤コマンドの件数指定を確認してください。** `related` / `master-impact` は1〜200件、その他の薬剤コマンドは従来どおり0〜200件を指定します。辞書の承認や参照する世代は変えません。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### 評価用の固定集合保存でファイルを確実に閉じる
+
+抽出評価の固定集合を保存する際、権限設定やファイル準備に失敗した場合も一時ファイルを閉じ、以前の保存結果を保ちます。
+
+- 更新時の注意: 追加操作は不要です。評価対象の世代、判定式、保存形式、公開条件は変更しません。
+- 一時ファイルの所有権を既存の共通処理へ渡してから権限を設定し、失敗時のクローズと一時ファイル除去を順序付ける。
+- 根拠: mcs/extract/eval/audit_cohort.py、tests/extract/evaluation/test_audit_cohort.py
+
+#### バックアップの復旧証拠と読取り専用検査を共通化
+
+バックアップの記録・状態確認・復旧前の検査を専用の正本へまとめました。健康状態の確認は暗号処理や鍵取得の入口を経由せず、保存済みの証拠を直接読みます。
+
+- 更新時の注意: 設定変更は不要です。暗号形式、人承認、復元後の配送hold、記録の公開順序と検査予算は変わりません。
+- バックアップ記録・読取り専用inventory・復旧準備の判定をbackup_evidenceへ移し、暗号処理と操作を囲む記録ロックは従来の所有者が保持する。
+- 根拠: mcs/ops/backup_evidence.py、mcs/ops/mcs_backup.py、mcs/ingest/health_report.py
+
+#### 集計と抽出進捗の読み取り責務を整理
+
+患者集計、抽出の参照文脈、保存済み進捗の読取りを、呼出元が開いたDB接続で行う共通契約へ揃えました。原文の適格性、履歴の選択順、保留結果や公開結果の判定は維持します。
+
+- 更新時の注意: 設定変更は不要です。更新時は通常の手順で抽出workerを再起動してください。参照文脈と履歴入力の共通処理も候補hashに含めるため、旧candidate承認・旧保留receiptは新しい契約には一致せず再判定します。同世代の抽出済み結果をコードhashだけで全件再抽出しません。
+- 読取り関数は接続の開閉やtransactionの確定を行わず、書込みとその所有者は従来のままです。
+- 原文参照と履歴読取りの正本mcs_queriesを、読み込み済みsource digestとcandidate実体定義moduleの双方で検査します。
+- 根拠: mcs/core/mcs_queries.py、mcs/patients/rollup.py、mcs/extract/llm/extract_llm.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_store.py、mcs/semantic/semantic_v4.py
+
+#### 承認記録の準備失敗時にもファイルを閉じる
+
+人が明示的に確認した承認記録を作る際、ファイル準備で失敗しても開いたファイルを閉じるようにしました。既存記録の競合や不完全な記録を拒否する条件は保持します。
+
+- 更新時の注意: 追加操作は不要です。承認に必要な証拠、記録の識別子・権限、再承認・公開条件は変更しません。
+- 排他的に作成した承認ファイルの所有権を既存fdopen_ownedへ渡し、streamへの移管失敗時にもraw descriptorを閉じる。失敗した記録の削除や上書きは追加しない。
+- 根拠: mcs/semantic/semantic_candidate.py、tests/semantic/test_sealed_candidate.py
+
+#### 実行中キャッシュによる候補識別値の揺れを修正
+
+臨床判定のキャッシュを使っただけで候補識別値が変わり、同じコードの承認照合が不一致になる問題を修正しました。関数・メソッド・定数の変更は引き続き別の候補として検知します。
+
+- 更新時の注意: 候補識別値の算出契約が変わるため、旧候補の評価・人承認は新候補へ流用できません。再評価と独立承認は既存の手順に従ってください。本作業では昇格・配備・既定値の変更を行いません。
+- コードの参照数や文字列の内部共有状態を除き、読み込み済みの定義・入れ子のコード・slice・定数の型と順序を識別に保持。変換したコードは識別用に直列化するだけで実行しない。
+- 実行中workerの識別を固定する既存契約、変更後の候補による旧receipt失効、臨床判断と公開条件は維持。
+- 根拠: mcs/semantic/semantic_candidate.py、tests/extract/llm/test_extract_upgrade_preservation.py、tests/semantic/test_sealed_candidate.py
+
+#### 確定候補の再利用と公開判断を集約
+
+原文に結び付く事実候補と完了した監査だけを再利用し、公開結果とその記録を同じ処理元で保存するよう整理しました。
+
+- 更新時の注意: 追加設定は不要です。通常のworker更新で反映します。実装識別が変わるため、既存候補と保留済み再抽出は通常の再評価対象になります。
+- 原文・添付・完全性の検査、一度だけの補完と修復、原文根拠の数量検査、公開とreceiptの同一トランザクションを維持します。
+- モデル、抽出世代、既定値、予算、承認・公開条件は変更しません。
+- 根拠: mcs/semantic/semantic_facts.py、mcs/semantic/semantic_audit.py、mcs/semantic/semantic_v4.py
+
+#### LLM状態ロックの取得中断で専用FDを回収
+
+LLMの稼働状態を共有するロックの取得中に処理が中断された場合も、所有するFDを回収します。ロックを開けない場合の従来の継続条件、状態ファイル、待機時間と再試行条件は変更しません。
+
+- 更新時の注意: 設定変更は不要です。通常の更新・再起動でworkerへ反映してください。モデル・prompt・公開条件・承認条件やDB形式は変更しません。
+- 外側のfinallyが取得とyieldの全体を覆うようにし、KeyboardInterrupt/SystemExitでも所有FDを閉じます。OSErrorで処理を継続する既存契約とcloseによるunlockを維持します。例外detailsをログへ追加しません。
+- 根拠: mcs/llm/llm_availability.py、tests/core/test_circuit_lock_acquisition_cleanup.py
+
+#### 原文の数量検証と分割計画の実装識別を補完
+
+薬剤の量・単位・回数を原文と照合する処理と、入力を分割する計画の実体まで、候補承認の実装識別に含めました。同じ原文の数値は従来どおり扱い、換算や数量の補完は行いません。
+
+- 更新時の注意: 追加設定や再取得は不要です。実装識別が変わるため、候補承認と保留済み再抽出は通常の再評価対象です。モデル、分割世代、抽出世代、上限、公開・通知・既読化・人承認条件は変更しません。
+- 数量の書式正規化は既存の一つの実体を直接共有し、有限数の判定や単位変換とは混同しません。
+- 数量検証は各事実自身の引用だけを使用し、別薬剤・別時点や根拠外の値で救済しない従来条件を維持します。
+- 根拠: mcs/extract/clinical/semantic_quantities.py、mcs/extract/clinical/clinical_values.py、mcs/extract/llm/extract_llm.py、mcs/semantic/semantic_candidate.py
+
+#### 緊急度の読取を臨床判断の正本へ統一
+
+シグナル・通知・画面・評価が同じ原文根拠と本人の状態に基づく緊急度を読みます。判定条件や通知の許可条件は変更しません。
+
+- 更新時の注意: 追加操作は不要です。変更した抽出workerを次回起動した際に新しいコード識別が適用され、以前の候補・保留判定は既存の再評価経路で照合されます。
+- 臨床urgencyの語句・否定・subject・原文根拠の判断をclinical_urgencyへ集約し、表示moduleへの依存を除去する。
+- 現行artifactとQCのSQL読取はmcs_queriesへ移し、同じ借用接続・世代・fallback順序を保持する。
+- 移動先を定義moduleとloaded source digestの両方で識別し、held_prior保護と失効回帰を維持する。
+- 共通fact表示の属性ラベルはsemantic_renderの公開契約名から共有します。臨床判断と表示を分け、同じ表示規則をprivate名や二重定義で持ちません。
+- 根拠: mcs/extract/clinical/clinical_urgency.py、mcs/core/mcs_queries.py、mcs/semantic/semantic_render.py、mcs/views/structured_view.py
+
+#### 測定値の原文・対象者・時点の確認を一元化
+
+測定値や要約の対象者・時点を確認する処理を、原文に基づく臨床値の実装へ集約しました。本人以外の測定、過去・条件付きの値、未確認の根拠を扱う条件は変わりません。
+
+- 更新時の注意: 追加操作は不要です。抽出世代、数値の丸め、閾値、機能の既定off、要約・修復・公開条件は変更しません。
+- 測定値の閾値判定に使う原文の適格性と、要約が現在値を偽らないための純粋な判断を既存clinical_valuesへ集約する。設定解釈と項目ごとの不採用理由・会計は検証側に保持する。
+- 既存の測定値ガードと数値文法を実体の公開入口へ統一し、旧private転送入口は残さない。
+- 根拠: mcs/extract/clinical/clinical_values.py、mcs/extract/llm/extract_validation.py、mcs/extract/llm/extract_quality.py
+
+#### 収集処理と定期実行の責務を整理
+
+未読・履歴・添付などの収集処理と、定期実行の順序制御を分離しました。取得範囲・通知・既読化の条件、再ログインの回数、各処理の時間制限と既定値は維持します。
+
+- 更新時の注意: 追加の設定操作は不要です。通常の更新手順で反映されます。保存済みの投稿・通知・取得位置を引き継ぎ、人承認・復元同意・サービスの起動条件は変更しません。
+- 収集stageと取得位置・既読化・再ログイン時の再実行管理をcollection_stagesへ集約し、CLIにはロック・実行順・世代判定・watchdogと終了処理を維持します。
+- 収集処理には既読化の指定を値として渡し、構造化エラーの表示を共有契約の公開実装へ揃えました。投稿保存と通知intentの同一transaction、保存後の既読化、部分保存と再実行の境界を維持します。
+- 根拠: mcs/ingest/collection_stages.py、mcs/ingest/run_check.py、mcs/core/mcs_contract.py、mcs/views/operational_progress.py
+
+#### 接続先共通のコマンドと患者権限を一元化
+
+Slack・Discord・LINE WORKS の閲覧・人承認操作は従来の検証と患者境界を保ち、Hermes 接続の有無に依存しない共通実装を使います。コマンド名・設定・既定値は変更しません。
+
+- 更新時の注意: 追加の設定操作は不要です。稼働中の Hermes gateway・独立アダプターへの反映には従来どおり再起動が必要です。この変更自体は再起動や配備を行いません。
+- 認可・患者 scope・preview/confirm・dispatch の正本を adapters/common に移し、host 接続・登録・遅延 bootstrap を Hermes plugin に残した。
+- 配送 journal の確定カード結果の照会を journal の公開 API に集約し、送信状態・lock・task の所有者は維持した。
+- LINE WORKS の設定検証は setup CLI ではなく共有設定モジュールを使用する。
+- 根拠: adapters/common/、hermes_plugin/、adapters/lineworks/config.py
+
+#### AIの稼働状態と本人判定の共有処理を整理
+
+AIの利用可否・障害記録、ファイルの安全な公開、本人情報の参照をそれぞれ一つの実装へ整理しました。障害時の待機時間、空き容量の基準、本人判定、通知・承認条件は維持します。
+
+- 更新時の注意: 稼働状態ファイルの移動や追加設定は不要です。候補を識別するコード情報が更新されるため、既存の候補承認を新コードへ流用しません。canonical抽出を使う場合は、通常の合成評価と人承認を新候補について再確認してください。実機への適用や再起動は通常の更新手順で行います。
+- LLMの障害記録・circuit・disk guardはllm_availability、ファイル公開はsafe_io、検索SQL関数の接続登録はmcs_queriesを正本とします。DB接続は呼出元から借用し、接続の終了やtransactionの確定を行いません。
+- 本人情報の公開参照APIをself_identityへ揃え、signals経由の不要な再exportを除去します。ID不明・曖昧な本人情報、明示した空リストと未設定の区別は維持します。
+- 候補identityは移動した定義moduleとloaded sourceの両方を含みます。古いworkerの識別子を最新のdisk内容へ置換せず、held_priorによる原文の否定・主体等の保護も維持します。
+- writer lockと更新世代fenceは今回の可用性ownerへ混ぜず、既存の処理・例外境界を維持します。
+- 根拠: mcs/llm/llm_availability.py、mcs/core/safe_io.py、mcs/core/self_identity.py
+
+#### 収集・読取・保存の内部責務を整理
+
+収集データの検証、患者情報の読取、状態監視、snapshot公開の実装を責務ごとにまとめました。収集範囲、表示内容、通知の承認条件と既定値は維持します。
+
+- 更新時の注意: 本変更は開発候補です。この作業では版の公開や本番適用は行いません。DB schemaの変更はありません。
+- MCSの値・例外と応答の正規化を通信クライアントから分離し、登録情報の読取が収集処理をimportする依存を解消。
+- 読取は呼出元が検証した同一snapshot connectionを借用し、scope・全体件数・表示limitの意味を保持。
+- snapshot公開処理が一時接続・検証用子プロセス・一時ファイルの寿命を所有。台帳は接続とwriterを所有し、schema・migration・構造検証はledger_schemaへ集約。
+- health集計は借用connectionのみを受け取り、収集統括が失敗時のincident記録を所有。
+- 連携サマリーとartifact履歴の読取はmcs_queriesを正本とし、既存台帳APIと患者集約が同じ借用connectionで読む。接続の作成・終了やtransactionの確定は行わない。
+- 収集用の子プロセスで共通契約を読む前にbootstrapし、リポジトリ外からの通常起動・隔離起動を回帰検証。通信・秘密値・応答とdeadlineの検査は維持。
+- MCSのWebSocketと添付streamを子processの通信責務へまとめ、workerから親adapterを生成・呼戻しする依存を解消。認証・再試行・全体期限と最終ファイル置換は親が保持し、URL制限・hash・HTTP分類は維持。
+- 添付取得で利用しないHTTPエラー応答を確実に閉じ、リダイレクト成功・拒否・再取得失敗でも本文を読み込まず解放。送信先とBearerの制約、エラー分類と再試行条件は維持。
+- スタンプ監視対象と押下者の読取を借用connectionの正本へ分離し、承認済みシグナルpolicyの最新状態・厳密な承認由来・値域の扱いを共有しました。台帳の同一transaction・未取得と失敗の区別・通知経路と定期件数は維持します。
+- 通知kindの振分けでカード描画処理を読み込む依存を解消し、job・意味解析seedのtransaction内APIを公開正本へ揃えました。メッセージ・通知・無効化・再試行の同時確定と既存返値を維持します。
+- 根拠: mcs/core/mcs_contract.py、mcs/core/snapshots.py、mcs/ingest/health_report.py、mcs/views/registered_data.py、mcs/core/mcs_queries.py、mcs/core/ledger_schema.py、mcs/ingest/mcs_worker.py、mcs/ingest/mcs_cdp.py、mcs/ingest/mcs_download.py、mcs/core/message_observations.py、mcs/signals/signal_policy.py、mcs/notify/notify_scope.py、mcs/core/ledger.py
+
+#### Discordの送信ガードを配送側へ集約
+
+Discordのカード描画から、同じPOSTを繰り返さないためのリクエストガードを配送側へ移しました。確実な429拒否だけ再試行し、送信後の結果不明を保持する条件は変わりません。
+
+- 更新時の注意: 追加設定は不要です。SDK固定版、通知表示、患者範囲、承認条件は変わりません。
+- 配送と独立接続は同じ実体のガードを直接使い、描画側への転送aliasは残しません。
+- 既存sessionごとの一回設置とtask単位の状態リセット、Hermes自身の別task送信を隔離する条件を維持します。
+- 根拠: adapters/discord/cards.py、adapters/discord/delivery.py、adapters/discord/standalone.py
+
+#### 薬剤注記の読取り契約と状態の所有者を統一
+
+薬剤の表示・集計が参照する辞書世代と注記を、既存の薬剤処理の公開入口へ揃えました。同じスナップショット内で一度読んだ辞書世代を集計中に再利用します。
+
+- 更新時の注意: 追加操作は不要です。辞書の承認、候補の照合、保存形式、患者範囲と表示結果は変更しません。
+- private参照を実体の公開名へ移し、集計moduleに残っていたテストの差し替え先による実行分岐を除去します。
+- 原文hash・最新注記・辞書の版と承認条件の検証は同じ実体で維持し、借用DBを開き直したり閉じたりしません。
+- 根拠: mcs/medications/drug_map.py、mcs/views/mcs_stats.py、mcs/medications/drug_timeline.py、mcs/notify/notify_views.py
+
+#### 設定・更新時の環境診断の責務を整理
+
+設定と更新が同じ環境診断を直接参照するよう整理しました。診断の文言・エラー区分・承認条件・接続先・時間制限・既定値は変わりません。
+
+- 更新時の注意: 追加操作は不要です。旧更新ツールが利用する設定診断の入口も維持します。
+- 環境観測とその補助処理をenvironment_diagnosticsへ移し、設定CLIの対話・表示・適用処理から分離する。
+- 旧updater向けcheck_environmentとvalidate_configの公開互換入口を保持し、新updaterは環境診断を直接利用する。
+- 根拠: mcs/ops/environment_diagnostics.py、mcs/ops/mcs_setup.py、mcs/ops/mcs_update.py
+
+#### 外部搬出のファイル引渡し失敗時の後始末を修正
+
+ローカルの搬出監査・受領証跡の出力・手動入力読取りで、ストリームへの引渡しが失敗しても、この操作で開いたファイルを閉じるようにしました。送信・受領・撤回の判定と証跡の形式は変わりません。
+
+- 更新時の注意: 追加操作は不要です。通知・外部送信・既定値は変わりません。
+- 専有FDのストリームへの引渡しは既存safe_io.fdopen_ownedが所有し、fchmod・書込み・例外時の回収を呼出元のwith境界で確定します。
+- journal・受領記録の公開順序と、結果不明を保留する既存契約は変更しません。
+- 根拠: mcs/export/export_delivery.py、mcs/ops/ext_contract.py
+
+#### 手動の外部搬出の契約と証跡管理を整理
+
+外部搬出の承認・形式検証と、送受領・撤回の証跡管理を設定画面やコマンド処理から分離しました。人の確認、データ範囲、結果不明時の保留、受領確認と削除確認の条件は変わりません。
+
+- 更新時の注意: 追加操作は不要です。外部搬出は引き続き既定で無効であり、新しい接続先・自動送信・再送は追加しません。保存形式とCLIのJSON・終了コードは変わりません。
+- 既存の世代別envelope/receiptと承認検証をexport_contract、ローカルjournal・audit・sink/healthの状態管理をexport_deliveryへ実体移管する。
+- 外部搬出offline/tick除外gateの同じ禁止規則を新所有モジュールにも適用する。
+- 外部出力の数値判定を統計の共有正本から直接使い、backup/restoreから出力schema経由で処理を読む依存を除きます。共有するrecord headerのvalidatorは公開契約名へ揃え、wire形式・許可field・拒否条件は変えません。
+- 根拠: mcs/ops/ext_contract.py、mcs/export/export_contract.py、mcs/export/export_delivery.py
+
+#### 抽出結果の検証と品質判断の責務を整理
+
+抽出内容・臨床判断・モデル・世代は維持し、原文の検証、抽出結果の統合、補完候補の品質判断を推論通信・保存処理から分離しました。患者と家族、現在と過去の区別は共通の原文スコープ判定を使います。
+
+- 更新時の注意: 設定変更は不要です。コード更新時は通常の手順で抽出workerを再起動してください。実装のコードhashが変わるため、旧candidate承認・旧保留receiptは新しい契約には一致しません。保留対象は再判定し、原文に裏付けられた否定・本人以外の情報を失う候補は従来どおり保留します。コードhashだけでは同世代の抽出済み結果を全件再抽出しません。
+- extract_schemaが出力形、extract_validationが原文検証・chunk統合、extract_qualityが補完・修復・保護判定を所有し、MODEL・ENDPOINT・呼出記録・DB transaction・resident状態はextract_llmが所有します。
+- clinical_scopeが人・時点の判定と上限付き解析cache、clinical_valuesが測定値の検証を所有し、臨床値からルール実行moduleへの逆依存を除去しました。
+- 読み込み済みsource digestとcandidate定義moduleの対象を移動先へ拡張し、旧承認・保留・再抽出境界の確認対象に含めました。
+- 抽出世代9、ルール世代24、schema、prompt、QC閾値、公開条件、終日処理とJST03:30の作業日切替は変更していません。
+- 根拠: mcs/extract/llm/、mcs/extract/clinical/clinical_scope.py、mcs/extract/clinical/clinical_values.py、mcs/semantic/semantic_candidate.py
+
+#### 収集監視と表示の状態判定を共通化
+
+監視記録の鮮度と履歴取得の停滞を判定する共通条件を、通信・通知を行わない処理へ集約しました。表示側は監視の実行入口や収集stageを読み込まずに同じ条件を使います。
+
+- 更新時の注意: 追加設定は不要です。収集間隔、監視の猶予、停滞の条件、警報と表示内容は変更しません。
+- health_policyが設定値の有限数検証・既定値・鮮度期限と停滞閾値を所有します。
+- 監視側は状態ファイル・配送記録・通知、収集側は取得とcursor、表示側は借用snapshotの読取りを引き続き所有します。
+- 根拠: mcs/core/health_policy.py、mcs/ingest/health_watch.py、mcs/ingest/collection_stages.py、mcs/views/operational_status.py、mcs/views/operational_progress.py
+
+#### 状態ファイル処理の失敗時にも資源を解放
+
+監視・初期設定・参照ファイルの読書きが開始時に失敗した場合も、取得済みのファイル資源を解放します。監視の判定・再送条件は変更しません。
+
+- 更新時の注意: 追加操作は不要です。変更したプロセスを次回起動したときから適用されます。
+- 監視と集計の状態JSON読取を同じ容量制限付き・リンク追従なしのファイル処理へ集約する。
+- 所有ファイル記述子のストリーム引受失敗時の解放を既存safe_io正本へ揃え、借用FD・既存の解放guardは保持する。
+- 根拠: mcs/core/safe_io.py、mcs/ingest/health_watch.py、tests/core/test_runtime_fd_handoffs.py
+
+#### 復旧処理のファイル生成失敗時に資源を解放
+
+独立復旧ツールでファイルの読み書きを開始できなかった場合も、取得済みのファイル記述子を解放します。
+
+- 更新時の注意: 更新後に配布される独立復旧ツールから適用されます。追加設定や承認条件の変更はありません。
+- 追跡ファイル検査・原子的JSON保存・復元用stagingでstream生成に失敗したFDを回収する。
+- 独立起動と凍結gatewayプログラムは標準ライブラリだけで動作し、元の保存・fsync・復元承認順序を維持する。
+- 根拠: deployment/recovery/mcs_recover.py
+
+#### 限定一覧取得の通信と解析の責務を整理
+
+限定一覧の通信・認証・制限時間の管理を既存の接続モジュールへ集約し、一覧の検証と取得結果の整理を分離しました。取得範囲、再ログインの条件、期限切れや未取得の扱いは変わりません。
+
+- 更新時の注意: 設定変更は不要です。既存のCLIと取得上限を維持し、自動取得や再試行は追加しません。
+- 通信側が認証・残時間・応答分類とdeadline復元を所有し、一覧側は上限付きのページ検証と取得記録を扱う。
+- 根拠: mcs/ingest/mcs_adapter.py、mcs/ingest/cross_lists.py、mcs/views/cross_lists_view.py
+
+#### 導入時の設定読取りと復旧診断の責務を整理
+
+導入ツールが設定CLIの内部実装へ依存しないよう整理し、設定ファイルを読み取る際にファイルの引渡しが失敗しても、この操作で開いたファイルを閉じるようにしました。読取りの所有者・容量・形式条件と復旧用Pythonの安全条件は変わりません。
+
+- 更新時の注意: install.shの変更を検出する旧版からの更新では、既存の更新ガイドに従い、これまでの省略オプションを保持して再導入付き更新を実行してください。自動更新だけでは適用されません。既定値・保存形式・導入順序は変わりません。
+- 所有者を確認する設定読取りの実体をlifecycle_ioへ、選択済み復旧Pythonの検査をruntime_inspectionへ集約する。
+- 既存fdopen_ownedで所有FDの引渡し失敗時の回収を担い、設定エラーへの翻訳は読取関数で維持する。
+- 根拠: mcs/ops/mcs_setup.py、mcs/ops/lifecycle_io.py、mcs/ops/runtime_inspection.py、install.sh
+
+#### 評価リクエストの実行状態を呼出し単位に分離
+
+評価clientを再利用しても、別ジョブの実行条件やHTTP期限が混ざらないよう、送信前後の確認と予約・ロック解放を呼出し単位へ揃えました。
+
+- 更新時の注意: 追加設定は不要です。通常のworker更新で反映します。実装識別が変わるため、候補承認と保留済み再抽出は通常の再評価対象です。
+- 送信前の世代確認、日次予算予約のcommit、POST、ロック再取得、応答検証と使用量記録、送信後の確認の順序を維持します。
+- モデル・接続先・取得範囲・再試行・予算・既定値・承認条件は変更しません。
+- 根拠: mcs/semantic/semantic_jev.py、mcs/semantic/semantic_runtime.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic_qc.py
+
+#### 台帳の保存構造と実行処理の責務を分離
+
+台帳のschema、移行、検索索引と関係整合性ガードの実装を保存構造の正本へまとめました。保存内容や収集・通知の条件は維持します。
+
+- 更新時の注意: 開発候補の内部整理です。DB schema番号と保存形式は変わらず、本作業で既存DBの変更や本番適用は行いません。旧更新ツールが読むschema番号とカード世代の定数は従来のファイルに保持します。
+- 接続・接続設定・接続失敗時の終了はLedgerが所有し、ledger_schemaは渡された接続で初期化・移行・整合性ガードのtransactionを所有。
+- 依頼と通知のDDLを同じschema正本へ移し、DB初期化から実行CLIを読み込む依存を解消。
+- 移行前の重複・版・中断チェック、FTSバックフィルとversion更新の同一transaction、relation auditの再検査順序を維持。
+- 読取だけの静的DB契約は接続を作らず、呼出元が指定する対応schema番号を使う。
+- 根拠: mcs/core/ledger.py、mcs/core/ledger_schema.py、mcs/core/mcs_queries.py
+
+#### 導入・更新と独立動作で共有する設定・実行契約を整理
+
+設定の検証、定期処理、実行環境の判定、認証情報の保存と更新判断を、それぞれ一つの実装で管理するよう整理しました。コマンドの指定方法、既定値、通知、更新時の承認・保留と復旧条件は維持します。
+
+- 更新時の注意: 追加の設定操作は不要です。稼働中の独立動作ホストには、通常の更新手順による再起動で新しい実装を反映します。この変更によってサービスを自動で再起動したり、更新・復元の承認を省略したりすることはありません。
+- 独立動作の設定とジョブ実行が初期設定CLIの私有処理を読み込む依存を解消しました。
+- 設定ウィザードの入力・同意と、設定保存・環境診断・常駐処理の適用を分離しました。
+- 更新journalの形式検証とファイルI/O、更新前の純粋な判断をCLIから分離しました。ロックと状態遷移・rollbackの所有者は更新処理に維持します。
+- 旧updaterが候補のmcsだけを配置してmcs_setup.validate_configを呼ぶ入口を保持します。
+- 操作コマンドのpayload検証とretry判断・参照統計の共有契約を、receiptの同一transaction内の更新処理から分離しました。
+- 独立動作でログ用FDからstreamへの受渡しに失敗してもFDを閉じてから再起動を要求します。更新journalの読取りも共通のnofollow検証に揃えました。
+- 処理状況の観測から評価専用moduleへの依存を除き、既存の統計計算を共有します。
+- 導入・更新・復旧監視のPython診断をruntime_inspectionに集約し、明示した実行ファイルと配備先を毎回調べるよう整理しました。installerの復旧診断も共有する公開実装へ揃え、設定変更・サービス適用・更新journalの所有者と安全条件を維持します。
+- 更新に必要なGit探索、所有する子プロセスの停止・回収、承認receipt確定後の切り離し起動をCLIから分離しました。環境変数の除去規則を共有し、同一transactionのreceipt・復元同意・更新journalと旧Pythonでの移行経路を維持します。
+- 中断復旧のjournal・HEAD位置と再開経路の有限判断をupdate_policyに集約しました。停止markerの再読、GitとDBの確認、同意・復元・サービス再開とjournal保存は従来の時点と順序を維持します。
+- 復旧同意・更新検査・修復と出力の所有FDからstreamへの受渡しを共通の安全処理へ揃え、受渡し例外でもFDを回収します。既存の承認・同一transaction・journal・公開順序・既定値は維持します。
+- 根拠: mcs/core/mcs_config.py、mcs/core/scheduled_jobs.py、mcs/core/mcs_runtime.py、mcs/ops/setup_wizard.py、mcs/ops/lifecycle_io.py、mcs/ops/update_journal.py、mcs/ops/update_policy.py、mcs/ops/operation_contract.py、mcs_standalone/runtime.py、mcs/ops/semantic_observe.py、mcs/ops/runtime_inspection.py、mcs/ops/owned_process.py、mcs/ops/update_discovery.py、mcs/ops/update_launch.py、mcs/ops/mcs_operations.py、mcs/ingest/job_ops.py、mcs/ingest/run_check.py
+
+#### LINE WORKSのカード分割の正本参照を統一
+
+LINE WORKSのカード本文と続きの分割を、既存の接続先表示処理へ直接参照する構成に揃えました。本文、改行、続きのマーカーと表示上限は変更しません。
+
+- 更新時の注意: 追加設定は不要です。保存形式、表示世代、配送順序、患者範囲と承認条件は変わりません。
+- 汎用描画moduleを経由する転送aliasを除き、adapterとテストを既存の分割実体へ直接移行します。
+- 根拠: mcs/notify/presentation/present_lineworks.py、mcs/notify/notify_render.py、adapters/lineworks/cards.py
+
+#### LINE WORKSの入力検証を公開契約へ統一
+
+認証設定とLINE WORKSの送信処理で共用する文字列検証を、client側の同じ公開関数へ揃えました。秘密値の読取、許可する文字・長さと送信先の条件は変更しません。
+
+- 更新時の注意: 追加設定は不要です。認証方式、患者範囲、通知内容と既定値は変わりません。
+- clientの実体を直接使い、認証設定やCLIからprivate名を参照する依存を解消します。
+- 改行を含む表示本文、添付名、秘密鍵などの異なる検証条件は統合しません。
+- 根拠: adapters/lineworks/client.py、adapters/lineworks/config.py、adapters/lineworks/__main__.py
+
+#### 薬剤表記の共通構文を一つの定義へ集約
+
+ルール抽出と要約の修復確認が同じ薬剤名・用量表記を参照する構成に整理しました。受理する表記、長い入力の制限、原文根拠を保つ条件は変わりません。
+
+- 更新時の注意: 追加操作は不要です。既定値、抽出世代、モデル、臨床判断、通知・公開・人承認条件は変更しません。実装識別が変わる場合は候補承認と保留済み再抽出に既存の失効規則を適用します。
+- bounded regexの実体を既存extract_schemaへ移し、ルールモジュールの非公開変数を品質判定から参照する依存を除く。
+- 既存の完全合成長文・用量境界assertを維持し、共有構文の定義変更が候補承認を失効させることを追跡する。
+- 根拠: mcs/extract/rules/extract.py、mcs/extract/llm/extract_schema.py、mcs/extract/llm/extract_quality.py
+
+#### 登録情報CLIの中断時に所有ロックを回収
+
+登録情報の取得CLIでDBを閉じる処理が失敗・中断した場合も、所有するrun lockを解放します。取得範囲、公開条件と保存順序は維持します。
+
+- 更新時の注意: 設定変更は不要です。通常の更新でCLIへ反映されます。
+- 借用resourceは閉じず、CLI自身が取得したロックだけをfinallyで回収します。完全合成のwriter終了失敗・取消で元の例外と再取得可能性を検証します。
+- 根拠: mcs/ingest/project_metadata.py、tests/ingest/test_project_metadata.py
+
+#### スタンプ照合レポートの読取契約を整理
+
+保存済みスタンプの検証を共通の公開関数へ統一し、照合レポートの内部処理には同じ読取り接続だけを渡す構成にしました。未取得・不正・観測済みの区別や、レポートの件数は変わりません。
+
+- 更新時の注意: 設定変更や再取得は不要です。CLIとレポートの公開入口、DB形式、取得範囲は変更しません。
+- 保存済み観測のdecode_metadataを正本とし、レポート内部は呼出元の同じSQLite接続を借用する。
+- 根拠: mcs/core/message_observations.py、mcs/views/metadata_report.py
+
+#### 患者コンテキスト作成で従来の入力項目を維持
+
+内部整理後も、患者コンテキスト作成へ渡す既存情報の出典・項目・空欄の扱いを従来どおりに保ちます。
+
+- 更新時の注意: 追加設定は不要です。更新後のworkerから適用され、入力定義の変更により候補承認は通常の指紋失効条件で再確認されます。
+- 患者項目の純粋projectionを既存patient_context正本へ移し、表示と患者情報の走査が同じdetail項目契約を使う。
+- sourceの4項目・明示見出しだけのorigin・非空detailsだけの出力を維持し、参照先の表示状態や素の内部キーをpromptへ渡さない。
+- 根拠: mcs/patients/patient_nightly.py、mcs/patients/patient_context.py、mcs/views/read_model.py
+
+#### 通知の配送計画と認可・復旧の責務を分離
+
+通知の内容・順序・患者境界・人承認条件を維持し、配送計画、カード操作と閲覧用の状態、承認対象の文脈、送信証拠の読取りをそれぞれの正本へ整理しました。
+
+- 更新時の注意: 設定操作は不要です。カード配置世代・schema・配送仕様は変わりません。稼働workerへの反映は従来の再起動手順が必要ですが、この作業では配備・再起動を実施しません。
+- notify_parts が sealed part の計画と状態SQLを所有し、DB接続とtransactionは呼出側から借用する。
+- 待機中投稿と部品予算によるholdを明示した引数・返値へ移し、card辞書への隠れた受渡しを除去した。
+- notify_scope の保存済みカード・患者集合・scope照会を認可と配送側が共有し、表示projectionも正本の公開APIへ直接依存する。
+- notify_journal の読取り専用scannerへ復旧と人承認による証拠検証を集約し、notify_transportとnotify_reconcileの循環を解消した。
+- 人承認による部品解決は同じtransaction/savepointを借用する明示APIを使い、spec保存後commit・atomic publish・公開metadata更新の順序を維持した。
+- signalの配送先変更は更新後card・変更有無・待機状態を返値で明示し、入力辞書を変更せず同じtransaction内のtoken失効と再発行順序を維持する。
+- notify_actions がカード操作・private閲覧のcheckpoint・command receiptのtransactionを所有し、notify_action_tokensの発行契約とnotify_action_contextの読取り専用source pinをカード発行側と共有する。
+- カード操作とrefreshの呼出元・テストpatch先は新正本へ直接移行し、旧moduleへのprivate再exportや操作側へ戻るcallbackを残さない。
+- notify_recovery が人承認によるカード・部品の復旧、保存済みscopeとjournal証拠の検証、rebindと承認receiptを所有する。機械配送のsettle_attempt_txとsettle_part_receiptは借用transaction内で状態だけを確定し、承認条件・失効・SAVEPOINT rollback・commit後publishの順序を維持する。
+- notify_spoolが保存済みspec・flags・復元markerのファイル公開と修復を所有し、新規renderのcommit後公開・specごとの公開記録commit・部品予算holdとworker claim保持を維持する。
+- notify_scopeへ通知先設定とhealthの待機理由・配置世代・未確定配送の読取りを集約し、health_reportがカード更新moduleへ依存せず同じ借用DBと有界checkpointで観測する。
+- attachment_followupsが添付の通知intent重複防止とaccepted coverage判定を所有し、投稿保存・カード受付・thread失敗の各呼出元から同じtransactionを借用する。新しいBEGIN・commit・DB接続・送信を追加しない。
+- 根拠: mcs/notify/notify_parts.py、mcs/notify/notify_scope.py、mcs/notify/notify_journal.py、mcs/notify/notify_transport.py、mcs/notify/notify_cards.py、mcs/notify/notify_actions.py、mcs/notify/notify_action_tokens.py、mcs/notify/notify_action_context.py、mcs/notify/notify_cmds.py、mcs/notify/notify_recovery.py、mcs/notify/notify_spool.py、mcs/core/attachment_followups.py、mcs/ingest/health_report.py
+
+#### 通知の共通表示処理の公開境界を整理
+
+通知文の一行表示、保存済み投稿時刻、表示世代とメンション記法の共通処理を、通知描画の公開APIへ揃えました。通知の内容・時刻表記・患者範囲・承認条件は変更しません。
+
+- 更新時の注意: 追加設定や操作は不要です。表示世代、保存形式、配送順序と既存workerの適用条件は変わりません。
+- 通知描画・閲覧・緊急候補表示・Slackの担当表示が同じ実体を直接参照し、旧private名のaliasは残しません。
+- 一行表示と固定通知文、接続先別の文字検証は異なる契約として保持します。
+- 根拠: mcs/notify/notify_render.py、mcs/notify/notify_views.py、mcs/notify/alert_view.py、mcs/notify/presentation/present_slack.py
+
+#### 比較評価の読取り契約を正本へ統一
+
+固定入力の比較評価で使う検証・集計・文脈整形を、それぞれの実装元の公開入口へ揃えました。評価結果や人の確認を必要とする条件は変わりません。
+
+- 更新時の注意: 追加操作は不要です。モデル、文脈予算、評価閾値、保存形式、公開・承認条件は変更しません。
+- 別領域のprivate入口への参照を、同じ実体を持つ公開名へ全呼出元とテストを含めて移行する。旧名の転送関数や新しい共通コンテナは作成しない。
+- 通常の記録採点と、明示的に渡された合成パイプラインの実行補助を説明上で区別する。
+- 根拠: mcs/semantic/eval/semantic_evaluation.py、mcs/semantic/eval/semantic_blind.py、mcs/views/summary_review.py、mcs/extract/llm/extract_llm.py
+
+#### 患者表示の原文読取りと観測時刻の責務を整理
+
+患者表示と集計で使う現行抽出の読取りを同じ正本へ統一しました。原文の主体・否定・予定の区別、患者範囲、未取得や履歴の表示は変わりません。
+
+- 更新時の注意: 設定変更や再取得は不要です。公開入口・DB形式・承認条件・表示件数の既定は変更しません。
+- 同じSQLite接続を借用する読取りへ集約し、患者表示から集計writer/CLIのprivate helper依存を除去する。
+- 保存済み観測の時刻検証は既存実体を公開名へ統一し、別の時刻や数値の契約とは統合しない。
+- 根拠: mcs/core/mcs_queries.py、mcs/patients/rollup.py、mcs/views/patient_context_view.py、mcs/views/message_metadata.py、mcs/views/response_observation_view.py
+
+#### 患者背景の原文読取と日次選択を整理
+
+患者背景の資料選択と回答検証を、画面表示や保存処理から分離しました。原文、家族などの主体、否定・過去・予定と確認できない情報の扱いは維持します。
+
+- 更新時の注意: 追加操作や設定変更は不要です。終日実行とJST03:30の日付切替、モデル、取得範囲、通知、既読化、人承認条件は変更しません。読取実装の識別が変わるため、候補承認や保留済み再抽出は通常の失効規則に従います。
+- 画面用の参照先装飾を日次生成の入力にせず、引用された本人・家族の記録をそのまま扱います。
+- 送信前の余裕時間、source/version fence、ロックと保存TX、未完了スキャンと件数上限を維持します。
+- 根拠: mcs/patients/patient_nightly.py、mcs/patients/patient_nightly_plan.py、mcs/core/mcs_queries.py
+
+#### 薬局状態の原文参照と候補失効の確認対象を統一
+
+薬局状態の原文参照を患者情報の共通処理へ集約し、その判断コードや属性一覧が変わったときに旧候補承認を引き継がないようにしました。本人・家族、過去・予定・否定の原文と保存済み結果の保護条件は維持します。
+
+- 更新時の注意: 設定変更は不要です。更新時は通常の手順で抽出workerを再起動してください。旧candidate承認・旧保留receiptは新しい契約には一致せず再判定します。同世代の抽出済み結果をコードhashだけで全件再抽出しません。
+- 薬局状態の属性・原文参照・hash形式の検証をpatient_contextが所有し、集計処理への逆依存を除去しました。
+- patient_contextは既存の読み込み済みsource digestに加え、candidateの実体定義moduleと定数の検査対象にも含めました。抽出世代・prompt・QC・公開条件・JST03:30切替は変更していません。
+- 根拠: mcs/patients/patient_context.py、mcs/patients/patient_state_context.py、mcs/semantic/semantic_candidate.py
+
+#### 独立動作の私有ファイル読取を共有実装へ整理
+
+独立動作の認証情報・予定状態・稼働状態・再起動要求に同じ安全なファイル読取を使うよう整理しました。所有者・非公開権限・通常ファイル・容量上限とリンク拒否、認証情報の優先順位は維持します。
+
+- 更新時の注意: 追加の設定操作は不要です。通常の更新で反映されます。共有安全I/Oの実装識別子が変わるため、意味解析候補の評価・人承認が必要な構成では通常の再評価・承認手順を維持してください。既存の読取失敗を成功や認証情報の自動fallbackへ変更しません。
+- safe_ioがnofollow・CLOEXEC・NONBLOCK、現在UID・private mode・regular file、読取前後の容量検査とFDの寿命を所有します。
+- credentialの固定エラーコードへの翻訳はconfig側へ、無効state/status/requestの扱いは各呼出元へ維持します。設定の私有helperや転送wrapperは残しません。
+- 私有ファイル読取りのFD引渡しも共通fdopen_ownedを直接利用し、同じ解放処理の重複を除去します。通常読取・容量上限・所有者/権限・例外の分類は維持します。
+- 根拠: mcs/core/safe_io.py、mcs_standalone/config.py、mcs_standalone/runtime.py、mcs_standalone/service.py
+
+#### 抽出結果の失効管理を集約
+
+更新された原文や設定に対して古い抽出結果を再利用しない判断と、結果の失効・復活を管理する処理を整理しました。
+
+- 更新時の注意: 追加設定は不要です。通常のworker更新で反映します。候補の実装識別が変わるため、既存の候補承認と保留済み再抽出には通常の再評価が必要です。
+- OFFの恒久失効、fact_source変更からの限定復活、現在原文とPASS監査の検査、rollup削除と同一トランザクションを維持します。
+- モデル、抽出世代、既定値、臨床判断、承認・公開条件は変更しません。保護済み原文根拠とheld_priorを維持します。
+- 根拠: mcs/semantic/semantic_v4.py、mcs/semantic/semantic_projection.py、mcs/semantic/semantic_store.py
+
+#### 依頼ファイルの作成失敗時に専有FDを回収
+
+依頼を保存する準備段階でファイル操作が失敗した場合も、作成したファイル記述子を確実に閉じます。未公開の依頼を再試行できる条件は変わりません。
+
+- 更新時の注意: 追加操作は不要です。人承認、依頼の順序、保存・公開・永続化の条件と不明状態の扱いは変更しません。
+- 既存のfdopen_ownedをqueueの実体で使い、OSError・中断系例外でも移譲前の専有FDを回収します。
+- 公開前の失敗は元の例外を保持し、公開済みの永続化不明・queue lock・一時ファイル回収の順序は維持します。
+- 根拠: mcs/ops/mcs_requests.py、mcs/core/safe_io.py
+
+#### 更新版と識別hashの検証を純粋な契約へ統一
+
+更新対象の版名と識別hashを確認する処理を、状態を書き込まない既存の契約へ揃えました。人承認・依頼の記録や適用順序は変わりません。
+
+- 更新時の注意: 追加操作は不要です。版名の文法、hashの形式、承認条件、更新・復旧の順序と既定値は変更しません。
+- 版名の実定義はupdate_policy、hashの実定義はmcs_utilへ移し、依頼のqueue/receipt処理へ戻る純粋な検証の依存を解消します。
+- 互換が必要なcanonical/payload_hash/positiveの公開入口は保持し、古いupdaterが使うsetup公開入口や自己完結bootstrapの文法コピーも保持します。
+- 根拠: mcs/ops/update_policy.py、mcs/core/mcs_util.py、mcs/ops/operation_contract.py、mcs/ops/mcs_requests.py
+
+#### 復元前の損失確認と同意の照合を整理
+
+復元前に表示する損失レポートの作成と、人が確認した同意の照合を共通化しました。復元先・backup・レポートの結び付け、同意がない間の停止、保存と復元の順序は維持します。
+
+- 更新時の注意: 追加の設定操作は不要です。通常の更新手順で反映されます。既存の同意receipt・更新journal・停止markerを引き継ぎ、承認や復元を自動で省略しません。
+- 定期処理が更新CLIの私有関数を読み込まず、明示したDB・backup・レポートのパスで照合できるよう整理しました。
+- レポートの観測接続を閉じてからbackupのhash・schemaを確認し、同じ形式でatomicに公開します。同意が見つかった後も全receiptを読み終え、後続の読取り失敗は未承認として扱います。
+- DB置換・停止marker・更新journal・復旧と再開の順序は更新処理の所有に維持します。
+- 根拠: mcs/ops/restore_evidence.py、mcs/ops/mcs_requests.py、mcs/ops/mcs_update.py、mcs/ingest/run_check.py
+
+#### ルール抽出の失敗時も接続と実行ロックを解放
+
+手動のルール抽出・集計で読取りや表示が失敗した場合も、開いたDB接続と実行ロックを解放するようにしました。正常時の出力と抽出・集計の対象は変わりません。
+
+- 更新時の注意: 追加操作は不要です。既定値、抽出世代、モデル、臨床判断、通知・公開・人承認条件は変更しません。実装識別が変わる場合は候補承認と保留済み再抽出に既存の失効規則を適用します。
+- 接続取得後の処理をfinallyで囲み、接続closeが失敗しても外側のfinallyで所有FDを解放する。
+- statsでは従来どおりreaderを使いrun.lockを取得しない。lock_heldのJSONと終了コード、元の例外分類・出力順は保持する。
+- 根拠: mcs/extract/rules/extract.py
+
+#### 独立実行の終了した処理を正しく回収
+
+監視対象プロセスの生存確認が権限エラーになっても、同一性を定期的に再確認し、別プロセスへの置換を確認できたときは実行枠を回収します。確認できない処理の枠は引き続き保持します。
+
+- 更新時の注意: 独立実行hostの通常再起動後に反映します。配備・実機再起動は今回実行しません。認可、処理順、再試行条件、共有プロセスへの送信条件は変わりません。
+- 読み取れない生存確認と、取得できた別のプロセスの同一性を区別します。元の30秒ごとの確認間隔と、確認不能時にシグナルを送らない条件は維持します。
+- 根拠: mcs_standalone/runtime.py
+
+#### 保存済み抽出からの再構成と推論・保存の責務を整理
+
+保存済みの原文根拠から結果を再構成するとき、通常抽出と共通の組み立て処理を使い、モデルやJevへの呼出し、DB書込みを行わない経路に整理しました。否定・本人以外・未完了の比較や必須項目を保留する条件は維持します。
+
+- 更新時の注意: 設定変更は不要です。更新時は通常の手順で抽出workerを再起動してください。実体の判断コードを候補hashへ含めるため旧candidate承認と旧保留receiptは新契約には一致せず再判定します。同世代の抽出済み結果をコードhashだけで全件再抽出しません。
+- semantic_assemblyがfact・原文証拠・必須項目・進捗・文書の組み立てを所有し、semantic_extractionが推論・checkpoint・再試行を所有します。
+- 原文と世代の一致、欠けたcheckpointやpreflightを保留する条件、比較未完了時の公開拒否と保存済み結果の保護は変更していません。
+- 原文のUTF-8 hashをsemantic_facts.text_sha256へ一元化し、複製と領域を跨ぐprivate参照を解消。定義moduleを候補・保留receiptの変更検知に含め、旧候補と保留判断の再評価境界を維持。
+- 同一原文の組立結果と保留理由を合成入力で比較。関係照合が未完了ならキャッシュ再構築を拒否し、投稿分割ごとの状態コピーは該当分割だけに限定して全体状態の反復複製を避ける。
+- 根拠: mcs/semantic/semantic_assembly.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_v4.py
+
+#### 評価用の読取り接続を異常終了時にも閉じる
+
+保存済み監査の集計中にSQLや行の読取りで失敗した場合も、評価用DB接続を閉じるようにしました。評価コードの移動後に残っていたテストの参照先も実体へ揃えています。
+
+- 更新時の注意: 追加設定や再取得は不要です。集計式、評価入力、モデル、外部送信や公開の条件は変更しません。
+- 校正用の一時readerは取得した側がcontextlib.closingで解放し、query/fetch失敗時もcloseします。
+- テストの差し替え先を実際の意味抽出処理へ移し、既存の期待値と失敗条件を保ちます。
+- 根拠: mcs/semantic/eval/semantic_bench.py、tests/semantic/test_semantic_bench.py
+
+#### 変換集合の受付と記録を一つの実装へ集約
+
+固定した変換対象の受付、処理前の保留、予約記録を同じ実装で扱うようにしました。保留中の対象や古い保存結果を保持する条件は変わりません。
+
+- 更新時の注意: 追加操作は不要です。モデル、抽出世代、件数・予算上限、再試行、通知・人承認・公開条件は変更しません。総token予算を強制できない変換は従来どおり保留し、別の復旧検証がない保存内容の削除は行いません。
+- 既存の変換集合モジュールを評価補助ディレクトリから実行領域へ移し、実行時の受付・予約・保留契約も同じ所有者へ集約する。旧ファイルと転送入口は残さない。
+- 読取り・BEGIN判定には同じSQLite接続を借用し、ジョブと予約receiptのトランザクション境界は保持する。
+- 移動後の実体定義とロード済みソースの双方を候補指紋へ含め、旧承認やheld receiptが失効する境界を維持する。
+- 根拠: mcs/semantic/semantic_v4_cohort.py、mcs/semantic/semantic_v4.py、mcs/semantic/semantic_drain.py、mcs/extract/llm/extract_llm.py
+
+#### 抽出ジョブの診断と試行集計を実行単位ごとに保持
+
+抽出を入れ子で実行した場合や次のジョブへ進んだ場合も、停止理由や補助抽出の集計が他の実行に混ざらないよう、各ジョブと各実行回がそれぞれ状態を所有する形に整理しました。
+
+- 更新時の注意: 設定変更は不要です。通常の更新手順で抽出workerを再起動すると適用されます。抽出世代・モデル・予算・人承認・公開条件は変更しません。
+- 最初の停止理由、品質診断、送信前の停止理由は1ジョブだけで共有します。
+- 補助抽出の件数と時間は1回の実行の出力だけに集計し、次の実行や直接呼び出した処理には持ち越しません。
+- 根拠: mcs/semantic/semantic_drain.py
+
+#### 意味要約の通知計画と配信判定を整理
+
+要約の通知対象・重複確認・保存計画を一つの実装へ集約しました。原文の取得経路、監査結果、現在の設定に基づく通知条件と、未取得・判定不能の扱いは変わりません。
+
+- 更新時の注意: 追加操作は不要です。通知先・既定値・モデル・抽出世代・承認条件は変更しません。実装の識別が変わるため候補承認と保留済み再抽出は既存の失効規則に従います。
+- 通知planとoutbox intentは従来どおり分析結果・ジョブ遷移と同じトランザクションで保存する。遅延通知の既存保存境界は維持する。
+- 表示と送信前の確認は同じSQLite接続を借用し、接続の作成・commit・closeを行わない。
+- 移動した実体と送信許可・表示のソースを候補指紋とロード済みソースに含め、旧ワーカーを新実装として承認しない。
+- 根拠: mcs/semantic/semantic_notice.py、mcs/semantic/semantic_render.py、mcs/semantic/semantic_send_gate.py、mcs/semantic/semantic_drain.py
+
+#### 意味抽出の保存結果と再開条件の読取契約を統一
+
+薬剤ごとの評価履歴は同じDB接続から読み取り、依頼候補の関係評価と画面表示では同じ検証関数を使用する構成に整理しました。未取得・評価不能・再試行中の区別と、人が確認して依頼へ採用する条件は維持します。
+
+- 更新時の注意: 追加設定や再取得は不要です。モデル・取得範囲・日次予算・期限・通知・既読化・人承認条件は変更しません。実装識別が変わるため、候補承認と保留済み再抽出は通常の失効規則に従います。
+- 保存済み評価の新しい有効世代を順次読む処理に統一し、whole Ledgerの旧読取fallbackを除きます。
+- 未完了の関係評価、修復・予約・lock再取得の境界と保存順は変更しません。
+- 長文呼出しに必要な時間はtransportの一つの定義を共有し、閾値や時間配分は変えません。
+- 根拠: mcs/semantic/semantic_assessment.py、mcs/semantic/semantic_loops.py、mcs/semantic/semantic_transport.py、mcs/ops/request_loops.py
+
+#### 意味解析の状態表示で読取り接続を確実に閉じる
+
+状態表示の設定読取りや集計、出力準備で失敗した場合も、開いた読取り専用DB接続を閉じるようにしました。
+
+- 更新時の注意: 追加操作は不要です。CLI引数、JSON形式、正常時の終了コード、書込みロックやモデル処理の条件は変更しません。
+- 既存のcontextlib.closingで状態表示専用の読取り接続を囲み、集計やJSON準備の例外が伝播する前に閉じる。
+- 根拠: mcs/semantic/semantic.py、tests/semantic/test_semantic_cli_contract.py
+
+#### 意味解析終了時のロック解放を確実にする
+
+意味解析の書込み接続を閉じる処理が失敗した場合にも、取得済みの実行ロックを解放します。
+
+- 更新時の注意: 追加操作は不要です。CLI、正常時の出力、例外の分類、抽出・承認・公開条件は変更しません。
+- 接続クローズと実行ロック解放を入れ子のfinallyで管理し、接続クローズの例外がロック解放を飛ばさないようにする。
+- 根拠: mcs/semantic/semantic.py、tests/semantic/test_semantic_cli_contract.py
+
+#### 意味解析の推論通信とジョブ処理の所有先を整理
+
+意味解析の動作・公開条件は維持し、推論の接続先・モデル・再試行状態を通信担当へ、原文からの抽出を抽出担当へ集約しました。CLI経由の内部呼び戻しをなくし、検証・表示・ジョブ処理が各正本を直接利用します。
+
+- 更新時の注意: 設定変更は不要です。通常の更新手順で常駐workerへ反映してください。候補のコードhashが変わるため、旧コードのcandidate承認は新しい候補には一致しません。推論のタイムアウト・予算・モデル・prompt・schema・QC・公開条件、状態ファイルの保存先と形式は変更していません。
+- semantic_transportが推論通信とformat/長文出力/失敗状態の唯一の所有者になり、semanticはCLI・明示的replay・statusに限定しました。
+- semantic_extractionが抽出入口とdurable chunkを所有し、元module全体を注入して契約や状態を参照する経路を除去しました。
+- Jevの分割評価をsemantic_jev、mandatory renderの反映と品質格下げをsemantic_renderへ集約し、QCからdrainへの逆依存を除去しました。
+- job claim・予算・原文世代の検証・transaction・commit・回復はsemantic_drainに保持し、独立した状態所有者を増やしていません。
+- 根拠: mcs/semantic/semantic_transport.py、mcs/semantic/semantic.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_render.py、mcs/semantic/semantic_jev.py
+
+#### 常駐設定と更新時の照合を同じ処理に統一
+
+常駐処理の設定判断と実際の照合・適用を共通化し、初期設定と更新で同じ管理対象・実行環境の規則を使うよう整理しました。定期処理の順序、通知設定、変更後の確認と失敗時の管理記録は維持します。
+
+- 更新時の注意: 追加の設定操作は不要です。稼働中の処理には通常の更新・再起動手順で反映します。この変更だけで実機の常駐設定を適用したり、承認を省略したりしません。
+- サービスの管理対象・cron計画・runtime選択・テンプレート展開はservice_contract、実際の読取・適用・管理記録はservice_managementが所有します。
+- setupは対話と出力、updaterは状態遷移・ロック・更新journalを引き続き所有します。旧updaterが候補のmcsだけを展開してvalidate_configを呼ぶ互換入口を保持します。
+- 不明なcron一覧を空とみなさず、確認できた新規登録だけを部分管理記録へ残します。gateway再起動の未完了記録、停止のexit113確認、通知flag保存の順序は維持します。
+- 根拠: mcs/ops/service_contract.py、mcs/ops/service_management.py
+
+#### 操作入力の共通検証を整理
+
+入力の確認と通知状態の読み取りを共有する実装の責務を整理しました。承認条件・表示・保存形式・既定値は変わりません。
+
+- 更新時の注意: 追加操作は不要です。
+- 文字列検証の実体をmcs_util.valid_textへ集約し、依頼の発行・実行でqueue名の正規表現を共有する。
+- canonical・payload_hash・positiveの既存公開互換入口は維持する。
+- 根拠: mcs/core/mcs_util.py、mcs/ingest/job_ops.py、mcs/notify/notify_cmds.py、mcs/notify/notify_recovery.py、mcs/ops/mcs_operations.py、mcs/ops/mcs_requests.py、mcs/ops/mcs_restore.py、mcs/ops/notification_cancel.py、mcs/ops/operation_contract.py
+
+#### 通知が参照するシグナル状態の契約を整理
+
+入力の確認と通知状態の読み取りを共有する実装の責務を整理しました。承認条件・表示・保存形式・既定値は変わりません。
+
+- 更新時の注意: 追加操作は不要です。
+- 最新シグナルと登録済み依頼の読み取りを、既存所有モジュールの公開関数へ統一する。
+- 最新の壊れたシグナル行を旧行へ戻さない規則と借用接続の所有権を維持する。
+- 根拠: mcs/notify/notify_digest.py、mcs/notify/notify_urgent.py、mcs/signals/mcs_signals.py、tests/notify/test_notify_render.py、tests/ops/test_mcs_signal_feedback.py、tests/ops/test_signal_history_perf.py、tests/signals/test_mcs_signals.py
+
+#### Slack操作と配送の境界を整理
+
+クリックの接続先と利用者の検証を操作側へ集約し、配送側が操作画面へ依存する循環を除きました。返信・カードの再送は従来どおり確実な429拒否時だけで、待機後の権限も確認します。
+
+- 更新時の注意: 追加設定は不要です。通知・患者範囲・承認・既定値とSDK接続方式は変わりません。
+- 構築時のworkspace/channel/profileと許可利用者を保持し、画面操作が実体parserへ直接渡します。
+- 配送のnative callは既存の一回再送分類を所有し、private返信は明示した有効性だけを借用します。
+- 根拠: adapters/slack/actions.py、adapters/slack/delivery.py
+
+#### 評価CLIの単独起動とモデル選択の寿命を修正
+
+保存済みの評価入力を扱うCLIが別の作業ディレクトリからも起動できるよう、抽出moduleを読む前に既存bootstrapを通します。評価と抽出workerのモデル選択は同じ一つのcontextmanagerを使用し、失敗時も以前の選択へ戻します。
+
+- 更新時の注意: 追加設定や再取得は不要です。実モデルの実行には従来どおり明示した評価入力と設定が必要です。モデル既定、評価の封印・人によるレビュー・公開条件は変更しません。
+- CLIのbootstrap後に検証処理を読み込み、リポジトリ外からの通常起動と隔離起動に対応します。
+- 推論対象の一時切替を既存の単一context managerへ集約し、例外や入れ子でも元の対象を復元します。
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/extract/eval/extract_bench.py、mcs/semantic/eval/semantic_snapshot.py
+
+#### 原文の日時と対象語の解釈を共通化
+
+抽出・表示用変換・関係判定が、同じ原文の日時と対象語をそれぞれの正本から解釈するよう整理しました。
+
+- 更新時の注意: 追加設定は不要です。通常のworker更新で反映します。実装識別が変わるため、候補承認や保留済み再抽出には通常の再評価が必要です。
+- 相対日時を絶対日付へ推測せず、元の年範囲と実在日付検証を維持します。対象語の正規化、関係比較のcache・期限・未比較件数、既存の抽出世代・既定値・承認条件を変更しません。
+- 根拠: mcs/extract/clinical/clinical_values.py、mcs/semantic/semantic_facts.py
+
+#### 集計範囲と監査の計算条件を共通化
+
+統計と抽出監査で使う期間・患者範囲、表示上限、結果の形式を同じ正本へ集約しました。同じ公開スナップショットを読み、集計値や未取得の扱いは変わりません。
+
+- 更新時の注意: 設定変更は不要です。コホート比較用の定義識別子は新しい実装に合わせて変わるため、保存済みの比較結果を再利用する場合は新しい識別子で再評価してください。DB形式・臨床判断・公開条件は変更しません。
+- 期間・患者scope・表示上限・結果形式の契約をstats_contractへ集約し、監査の定義識別子は実際の関数と上限を参照する。
+- 根拠: mcs/views/stats_contract.py、mcs/views/mcs_stats.py、mcs/views/extraction_audit.py
+
+#### 検証入口のエラー時に専用出力FDを回収
+
+テストの停止監視で専用出力streamの作成に失敗した場合も、複製したFDを回収するよう整理しました。元の標準エラー出力は閉じず、テストの期限と監視条件を維持します。
+
+- 更新時の注意: 利用者側の設定変更は不要です。収集・解析・通知・承認・更新の実行条件は変更しません。
+- testbootstrapはruntime moduleを読み込まず、stdlibだけで所有する複製FDの受渡しを保護します。既存timer/hookの動作を維持し、constructor失敗・取消・ライブラリ側が先に閉じた場合を合成AST抽出試験で確認します。
+- 根拠: conftest.py、tests/meta/test_root_guard_fd_transfer.py
+
+#### 更新中の書込み保護を集約
+
+更新中の古い処理が書込みを続けないためのロックと世代確認を一つの管理元に集約しました。
+
+- 更新時の注意: 新しいソースを使うworkerの通常再起動時に反映します。配備・実機再起動は別途必要です。モデル、抽出世代、既定値、承認・公開条件は変更しません。
+- 一時的なロック解放・再取得、待機期限、更新マーカー、子プロセスへのFD継承条件は維持します。
+- 抽出・候補の実装識別に新しい管理元を含めるため、既存候補と保留済み再抽出は通常の再評価対象になります。保護済み原文根拠とheld_priorは維持します。
+- writer_lockの実行時定数 _MCS_ROOT / RUN_LOCK は候補の識別対象から除きます。待機規則・更新マーカー名と読み込み済みコードの識別は維持します。
+- 根拠: mcs/core/writer_lock.py
+
+#### 専用プロファイルと似た名前の別 Chrome を停止対象にしないよう修正
+
+専用プロファイルのパスに空白と文字列を足した別のプロファイル（例: 名前の末尾に「 copy」や「 2」）で起動した Chrome も、専用 Chrome として停止対象に数えていました。こうした別プロファイルを誤って停止対象にしないよう修正しました。
+
+- 更新時の注意: 追加操作は不要です。
+- --user-data-dir の後続を flag・URI・行末に限定。ps は引数を空白区切りに平坦化するため、パス自体に「 about:」のような URI 形が続く別プロファイルとは区別できない（既知の制約）。回帰: tests/ingest/test_profile_chrome_space_sibling.py
+- 根拠: mcs/ingest/mcs_adapter.py
+
+#### 医療情報の確認待ちの間に同じ記録が増え続ける問題を修正
+
+外部解析の予算切れや認証情報の未設定で網羅確認が止まっている間、同じ内容の未完了記録が約1分ごとに追加され、進んだものとして数えられていました。内容が変わったときだけ記録します。
+
+- 更新時の注意: 追加操作は不要です。
+- 同一内容の pending semantic_coverage 行を重複追加しない。回帰: tests/semantic/test_coverage_wait_dedup.py
+- 根拠: mcs/semantic/semantic_drain.py
+
+#### 通知設定が壊れていても診断が止まらないように修正
+
+config.json の notify 欄がオブジェクトでないと、動作診断や収集の健全性確認で配送workerの確認がエラーになっていました。設定の不備を「要修正」と報告し、配送workerは「確認できません」と表示します。
+
+- 更新時の注意: 追加操作は不要です。
+- card_worker_status.diagnose は非 object の notify/送信先設定を worker_start_unverified とし、doctor は設定エラー時に空設定で診断。回帰: tests/ops/test_doctor_malformed_notify.py、tests/views/test_card_worker_status.py
+- 根拠: mcs/ops/mcs_setup.py、mcs/views/card_worker_status.py
+
+#### 薬剤の関連名・マスター影響確認で --limit 0 を入力段階で案内
+
+mcs drug related と master-impact に --limit 0 を指定すると、正しい辞書でも「権限とSHA256を確認してください」と誤った原因が表示されていました。この2つでは「limit は1〜200の整数です」と案内します。
+
+- 更新時の注意: 追加操作は不要です。他の drug コマンドは従来どおり0〜200を受け付けます。
+- related/master-impact の --limit 下限を1に揃える。回帰: tests/ops/test_mcs_drug_limit_floor.py
+- 根拠: mcs/ops/mcs_drug.py
+
+#### 制御文字を含む投稿や添付名で LINE WORKS への通知が止まる問題を修正
+
+投稿本文に見えない制御文字が含まれるとカードが送信前の検証で毎回拒否され、添付名に制御文字があると通知全体が保留されていました。プレビューの制御文字は空白に、添付名の制御文字は「_」に置き換えます。
+
+- 更新時の注意: 追加操作は不要です。LINE WORKS の独立アダプターの再起動で反映されます。
+- altText の C0 制御文字を空白化し、_collect_files は制御文字・DEL・引用符・バックスラッシュを「_」に置換。回帰: tests/adapters/lineworks/test_lineworks_alttext_control_chars.py、tests/notify/test_attachment_name_controls.py
+- 根拠: adapters/lineworks/cards.py、mcs/notify/notify_flush.py
+
+#### 再解釈で消えた未完了事項が新しい世代で復活する問題を修正
+
+解析の世代が変わったとき、元投稿の再評価で出なくなった未完了事項が旧世代から引き継がれて候補に戻ることがありました。再評価した投稿は今回の結果だけで候補を決め、消えた事項は履歴として残します。
+
+- 更新時の注意: 追加操作は不要です。
+- 再評価した origin の旧世代項目を fork で current に戻さない。回帰: tests/semantic/test_loop_fork_skips_reinterpreted_origin.py
+- 根拠: mcs/semantic/semantic_loops.py
+
+#### 同じ投稿の薬剤・症状の記載で本文が繰り返し表示される問題を修正
+
+1件の投稿に複数の薬剤や症状の記載があると、患者コンテキストの一覧で同じ本文が記載の数だけ重ねて表示されていました。同じ投稿の本文は1回だけ表示します。
+
+- 更新時の注意: 追加操作は不要です。
+- patient_context_list の同一投稿行の結合で quotes を重複させない。回帰: tests/views/test_patient_context_mention_quotes.py
+- 根拠: mcs/notify/notify_views.py
+
+#### 再照合ジョブが一時的なエラーの累積で止まり進捗が消える問題を修正
+
+過去の投稿を巡回して照合するジョブで、一時的な通信エラーや実行時間切れが回をまたいで8回たまると失敗扱いになり、再登録時に巡回位置と完了記録が消えて1ページ目から取り直していました。巡回を1周終えるたびに失敗回数を戻し、実行時間切れは失敗に数えません。
+
+- 更新時の注意: 追加操作は不要です。取得の上限・間隔は変わりません。
+- 完了した巡回で attempts を0に戻し、deadline_exceeded は job_defer 扱い。回帰: tests/ingest/test_reconcile_attempts_per_pass.py
+- 根拠: mcs/ingest/job_ops.py、mcs/core/ledger.py
+
+#### 復旧監視が空のバックアップを復元候補にしないよう修正
+
+更新の巻き戻し中にバックアップが0バイトになっていると、復旧監視がそれを復元可能な古いDBとみなして承認待ちに進んでいました。更新ツールと同じく読めないバックアップとして停止します。
+
+- 更新時の注意: 復旧監視（~/.mcs-recovery）への反映は導入済みの更新手順に従います。
+- _restore_db で非通常ファイル・0バイトを backup_unreadable とする。回帰: tests/ops/test_recover_rejects_empty_backup.py
+- 根拠: deployment/recovery/mcs_recover.py
+
+#### Slack の内部エラー応答を送信結果不明として扱い二重投稿を防止
+
+Slack が internal_error / fatal_error を返すと未送信と確定して再送していたため、実際には保存されていた場合に二重投稿になることがありました。送信結果不明として記録し、再送しません。
+
+- 更新時の注意: 追加操作は不要です。Slack の配送workerの再起動で反映されます。
+- internal_error/fatal_error を not_sent ではなく unknown に分類。回帰: tests/adapters/slack/test_slack_server_error_outcome.py
+- 根拠: adapters/slack/delivery.py
+
+#### Slack の長いタスク一覧が二重に表示される問題を修正
+
+ボタン付きのタスク一覧で代替テキストが3000文字を超えると、一覧の末尾が文字だけの追加メッセージとして重ねて送られていました。ボタン付きの表示1件だけを送ります。
+
+- 更新時の注意: 追加操作は不要です。
+- Block Kit 送信時に代替テキストの分割送信を行わない。回帰: tests/adapters/slack/test_slack_task_list_blocks_single_message.py
+- 根拠: adapters/slack/actions.py
+
+#### 独立実行モードの設定確認でバックアップ設定の誤りも検出
+
+バックアップ設定が不正でも mcs_standalone check は確認完了と表示し、run はエラーコードなしで異常終了と自動再起動を繰り返していました。check と run の両方で backup_config_invalid を表示して停止します。
+
+- 更新時の注意: 独立実行モードだけが対象です。設定が正しい環境では操作は不要です。
+- check でも run と同じ configured_cron_jobs の検証を通し、失敗をコード付きで報告。回帰: tests/adapters/standalone/test_check_rejects_invalid_backup_config.py
+- 根拠: mcs_standalone/__main__.py
+
+#### 未確認の依頼候補が「返答が見つからない記録」に並ぶ問題を修正
+
+否定・推測・根拠なしで未確認扱いの依頼候補が、訪問前の確認と引継ぎの「返答が見つからない記録」に確定した依頼と同じように並んでいました。この2つの一覧から外し、連絡・返答の確認一覧では未確認の印を付けます。
+
+- 更新時の注意: 追加操作は不要です。
+- 返答なし一覧は unverified を除外し、連絡一覧に unverified 印を渡す。回帰: tests/views/test_unverified_request_replies.py
+- 根拠: mcs/views/patient_context_view.py
+
+#### 送信中の緊急アラートが取り下げ扱いになる問題を修正
+
+送信中や送信結果が不明な緊急アラートが、元カードのスレッドを失ったまま6時間を過ぎると未送信の取り下げとして記録され、後で配信完了が届いても直りませんでした。送信していないことが確かな場合だけ取り下げます。
+
+- 更新時の注意: 追加操作は不要です。
+- thread hold 期限切れの close に _notice_unsent ガードを追加し、送信中・不明は待機。回帰: tests/notify/test_urgent_inflight_send_not_suppressed.py
+- 根拠: mcs/notify/notify_cards.py
+
+#### 検査項目の取得に不正な保存IDを使わない
+
+保存済みの検査項目一覧に不正な型のIDや項目単位の指定が含まれる場合、その一覧を検査値の取得元として採用しません。読取り側と同じ条件で、対象患者の正式な一覧を照合します。
+
+- 更新時の注意: 追加操作は不要です。保存データの書換えや全件再取得は行いません。最新の正式な取得が失敗している場合は、以前の成功記録で補わず保留する動作を維持します。
+- 検査項目一覧の選択時にJSONとSQLiteの整数型、一覧に対するitem_idの未指定またはnullを検証する。
+- float・bool・文字列のID、一覧以外のitem_id指定、正常な整数IDと旧形式の未指定を合成回帰で確認する。
+- 根拠: mcs/ingest/project_metadata.py、tests/ingest/test_clinical_metadata_acquisition.py
+
+#### Discordの再接続を繰り返しても古い処理がメモリに残らないように
+
+Discordの接続を作り直すたびに、置き換わった古い送信処理が終了まで保持され続けていました。再接続を繰り返す長時間の運用でも、古い処理を解放するようにしました。送信・停止の動作は変わりません。
+
+- 更新時の注意: Hermes gateway（独立動作では常駐host）の再起動で反映されます。設定の変更は不要です。
+- Supervisor.start が接続のたびに host の終了時処理へ自分を追加していたため、host は置き換わった Supervisor をすべて参照し続けていた。
+- Slack と同じく、終了時処理は host とスコープごとに1つだけ登録し、終了時にはそのスコープの最新の Supervisor だけを停止する。host は弱参照で持ち、閉じた host を残さない。
+- 回帰: tests/adapters/discord/test_mcs_discord.py::test_rebuilds_do_not_keep_old_supervisors_alive_in_the_host
+- 根拠: adapters/discord/tasks.py
+
+#### 同梱医薬品マスターを起点に添付文書・診療ガイドラインを照会し、公式マスターと添付文書の更新を毎日確認
+
+mcs drug info-lookup で、同梱マスターの品名からPMDAの添付文書（改訂版・抜粋・本文SHA256）を照会できるようになりました。info-guideline で一般の疾患名からMindsの診療ガイドラインを検索できます。formulary-add で採用薬の添付文書を登録すると、毎日の更新確認で本文の変化を通知します。同じ更新確認で、公式医薬品マスターの公開一覧と同梱版の一致も確認し、新しい版や不一致を通知します。
+
+- 更新時の注意: 通信はこのMacのローカルTinyFish無料ゲートウェイ（127.0.0.1:3149）だけを使います。ゲートウェイがない環境では照会できず（「該当なし」ではなく照会失敗として示します）、定期確認は何も通知しません。その場合はAIの通常のWeb検索で原典を確認してください。定期確認は既定で有効で、止める場合は設定に drug_info_watch: false を追加します。送信するのは同梱マスターと完全一致する品名と一般の疾患名だけで、患者の投稿・属性・台帳・私有辞書は送りません。結果は参考情報で、原典を読んでから使ってください。公開一覧の比較はリリース時の公式原本の照合の代わりにはなりません。
+- 添付文書はマスターの販売名（NFKC）が本文にあるPDFだけを確定し、なければunconfirmed。複数規格が同じPDFの場合は既存の登録を置き換えない。
+- 確認できない・読み取れない・切捨てられた一覧はunknownとして記録し、更新なしとは扱わない。通知は通知用outboxへの登録が成功した後に既送として記録する（外部への配送結果とは別）。
+- 壊れた監視状態ファイルは書き換えずwatch_state_malformedで止め、照会もしない。形の壊れた検索応答は0件ではなくsearch_response_invalidとして扱う。
+- 中断した更新の復旧や承認済みの適用・ロールバックを行う回の更新確認では照会しない（その確認を遅らせない）。次の回に照会する。
+- ゲートウェイのトークンは本人だけが読める通常ファイルを上限付きで読み（リンク・FIFO・権限の緩いファイルは未設定扱い）、照会を始める前に確かめる。ゲートウェイや外部サイトのエラー本文は表示・保存せず、決まったコードに置き換える（無料枠・認証の停止判定は維持）。
+- 監視状態はfsyncと原子的な置換・ディレクトリfsyncで保存する。採用薬の再確認の時間上限は各照会にも適用し、上限を過ぎた照会は始めない。
+- 通信はbounded_http（プロキシ・リダイレクトなし、応答256KiB・時間上限）。合成データの回帰: tests/ops/test_drug_info.py
+- 根拠: mcs/ops/drug_info.py、mcs/ops/mcs_drug.py、mcs/ops/mcs_update.py、docs/guides/USER_GUIDE.md
+
+#### 抽出の進み具合の表示が読み込みエラーで止まる問題を修正
+
+版を戻した直後などで抽出処理のモジュールを読み込めない場合、患者まとめの抽出の進み具合を「不明」として表示し、表示処理を止めません。
+
+- 更新時の注意: 追加操作は不要です。設定・既定値・DB形式は変わりません。
+- 読み込めないときは完了と数えず、不明として扱う。
+- 根拠: mcs/views/extraction_progress.py、tests/notify/test_extraction_progress.py
+
+#### 過去の相談記録を最新と誤表示する問題を修正
+
+グループ相談の最新の保存データに小数のIDが入った場合、以前の正常な記録を最新の情報として表示する問題を修正します。臨床データの厳密な整数ID照合は維持します。
+
+- 更新時の注意: 追加操作は不要です。保存済みのグループ相談の表示に適用されます。設定・既定値・DB schemaは変更しません。
+- グループ相談では最新候補を取得した後、既存の厳密なID・scope検証で不正な記録を拒否する。
+- 臨床の登録データ、定義の固定、一覧対象の整数型条件は維持する。
+- 根拠: mcs/views/project_metadata_view.py
+
+#### 後から取得できた添付をDiscord・LINE WORKSでも元のカードへ追加
+
+本文の通知後に取得できた画像やPDFなどの添付を、Discordでは元のカードのスレッドへ、LINE WORKSでは元のカードと同じトークルームへ追加します。これまでは既定の通知先へ別のテキスト通知として送られていました。
+
+- 更新時の注意: Discordは操作付き通知とスレッド表示が有効な環境、LINE WORKSは操作付き通知が有効な環境が対象です。収集処理は次回の起動から新しいコードを読み込みます。設定・DB形式の変更はありません。Discordでスレッド表示が無効または未設定の場合は、従来のファイル付きテキスト送信を維持します。過去に完了扱いになった通知や送信結果が不明な通知は、重複送信を防ぐため自動で再送しません。
+- Slackと同じ照合（元の患者・投稿・接続先・スレッド、添付IDとファイルhashの受領記録）を、Discord・LINE WORKSにも適用する。
+- LINE WORKSでは元のカードの投稿を再利用し、同じカードを二重に投稿しない。
+- Discordでスレッド作成が未送信で失敗し、添付も送信されていないと確認できる場合は、従来の添付送信を維持する。
+- 根拠: mcs/notify/notify_cards.py、mcs/notify/notify_flush.py、tests/notify/test_late_attachments_cross_transport.py
+
+#### 稼働監視通知の収集ログ案内を修正
+
+収集エラーの監視通知から、実際に収集結果を保存する data/run.log を確認できるようにします。
+
+- 更新時の注意: 設定変更は不要です。適用後の監視通知から案内が変わります。ログファイル名・収集間隔・警報条件は変更しません。
+- Hermes・独立動作の両方が使う収集wrapperの出力先へ案内を合わせます。
+- 独立hostの収集ジョブ停止の案内では、ジョブの起動・終了記録 data/mcs_check.log と収集本文 data/run.log の両方を保持します。
+- 根拠: mcs/ingest/health_watch.py、tests/ingest/test_health_watch.py、deployment/scripts/mcs_check.sh、mcs_standalone/runtime.py
+
+#### 薬剤辞書の照合が10分ごとの収集を遅らせる問題を修正
+
+薬剤辞書を有効にした環境で、変化のない投稿まで1件ずつ書き込み直していたため、収集が遅れ、負荷が重なると監視警報（状態の記録が更新されない）が出ていました。変化した投稿だけを書き込むようにし、照合結果は変わりません。
+
+- 更新時の注意: 更新後の通常収集から反映されます。設定・辞書・照合結果・保存形式は変わりません。旧版へ戻しても途中位置の記録はそのまま読めます。
+- 巡回の途中位置は打ち切り時と一巡完了時にまとめて保存する。変化した投稿は従来どおり注記と途中位置を同じ書込みで確定する。
+- 根拠: mcs/medications/drug_map.py
+
+#### LLMの持ち越し保存と安全な保留の進捗記録を修正
+
+保存待ちの解析結果が後の周回で保存・保留された際、完了件数がログから抜けて停止したように見える問題を修正します。
+
+- 更新時の注意: 常駐抽出workerの更新反映が必要です。既定値、保存条件、重要な既存記録を保護する条件は変更しません。
+- 別周回の持ち越し結果を、その結果を確定した周回で集計する。患者コンテキスト作成前の確定は数値のみの専用ログに記録する。
+- 根拠: mcs/extract/llm/extract_llm.py
+
+#### 後から取得できた添付を元のSlackスレッドへ追加
+
+本文の通知後に取得できた画像やPDFなどの添付を、元のSlackスレッドへ追加します。添付の送信に失敗した場合、本文だけを送って完了扱いにすることを防ぎます。
+
+- 更新時の注意: Slackの操作付き通知とスレッド表示が有効な環境が対象です。収集処理は次回の起動から新しいコードを読み込みます。設定・DB形式の変更はありません。過去に完了扱いになった通知や送信結果が不明な通知は、重複送信を防ぐため自動で再送しません。
+- 元の患者・投稿・Slack接続先・スレッドを照合し、既存の添付配送partを使って送信する。
+- 該当する添付IDとファイルhashの配送受領記録を確認してから、追加通知を完了にする。
+- カード・スレッド・添付の受領記録がどの順で届いても、最後の必要な記録で完了判定をやり直す。
+- スレッド表示が無効または未設定のSlack構成は、従来のファイル付きテキスト送信経路を維持する。
+- スレッド作成が未送信で失敗し、添付も送信されていないと確認できる場合は、従来の添付送信を維持する。送信結果が不明な場合や元のカードが失効した場合は別経路へ送らない。
+- 添付だけを追加するときは、新しい返信があるという案内を出さない。
+- 根拠: mcs/notify/notify_cards.py、mcs/notify/notify_flush.py、mcs/notify/notify_transport.py
+
+#### 収集CLI中断時のロック解放を確実化
+
+初期取込の準備失敗や中断、一覧取込のDB終了処理の失敗でも、所有するロックを解放するようにしました。取込済みデータ、取得順序、認証や制限時間の条件は変わりません。
+
+- 更新時の注意: 設定変更は不要です。失敗後も従来の再開手順を使います。
+- 初期取込はExitStackで取得直後から資源を管理し、一覧取込はDB終了処理が例外になってもfinallyで所有ロックを閉じる。
+- 根拠: mcs/ingest/init_data.py、mcs/ingest/cross_lists.py
+
+#### 公開前の候補を固定コミットで本番確認できるように
+
+運用者が明示承認した未公開のローカル候補を、タグやGitHub Releaseを作らず、このMacへ適用できます。通常更新と同じバックアップ・停止・サービス同期・再起動・適用後確認・失敗時の復旧を使います。
+
+- 更新時の注意: 通常のタグ更新・自動更新では追加操作は不要です。未公開候補の適用には候補と更新前HEADの40桁SHA、--confirm-human、200字以内の理由が必要です。変更をコミットして候補を固定し、planの阻害条件を解消してください。再導入が必要な候補では従来どおり--reinstallと前回のopt-outを指定し、導入済み復旧watchdogを維持します。未公開候補は自動更新・チャット承認の対象にはしません。
+- --candidate-shaは公開タグの指定と排他にし、ローカルにあるcommit objectだけを受け付ける。候補の照合ではfetchやremote照会を行わない。
+- 候補内容の全検査と既存apply pipelineを共用し、run lock取得後に更新前HEADを再確認する。更新記録には未公開候補の種別・本人確認・理由を残す。
+- 候補のmcsと独立復旧helperを正確に一時展開する。更新途中の承認待ち・送信結果不明・rollbackの保護は変更しない。
+- 根拠: mcs/ops/mcs_update.py、scripts/mcs_upgrade.py、docs/guides/UPGRADE_AGENT.md
+
+#### ログ整理に失敗したときのファイル資源を解放
+
+ログの控えを開く途中で失敗しても、取得済みのファイル資源を解放するようにしました。元のログを保持し、次回の整理を継続できます。
+
+- 更新時の注意: 追加操作は不要です。ログの保存世代、権限、コピー後の切詰め方式とエラー分類は変更しません。
+- 既存のsafe_io.fdopen_ownedで所有するFDをストリームへ一度だけ引き渡します。
+- 合成の通常例外・中断・終了を各4窓20回繰り返し、FD解放、元ログ保持と正常復帰を検証します。
+- 根拠: mcs/core/maintenance.py、mcs/core/safe_io.py
+
+#### 登録情報の不正なIDによる誤表示を防止
+
+登録情報のIDが不正な型の場合に、別の正しいIDの記録を「0件」と表示したり、取得対象の件数を増やしたりする問題を修正します。
+
+- 更新時の注意: 追加操作は不要です。保存データは書き換えず、読取り時にIDの型を検証します。取得範囲・スキーマ世代・既定値・承認条件は変わりません。
+- 整数のIDを真偽値や小数と同一視しないよう、共通の読取処理・定義の世代照合・取得対象の列挙を揃えます。
+- 同じ正規IDの最新記録自体が壊れている場合は、従来どおり取得状態を不明とし、過去の値を現在の値として復活させません。
+- 患者や観測項目の対応、取得済み0件と未取得の区別、参照元の定義とsnapshotの境界を保持します。
+- 根拠: mcs/views/project_metadata_view.py、mcs/views/registered_data.py、tests/views/test_registered_data_projection.py
+
+#### ファイル引渡し失敗時の記述子回収を共通化
+
+バックアップ・修復結果・参照統計の承認・サービス証拠の読取りで、取得したファイル記述子をストリームへ渡せない場合も共通処理で回収します。呼出元から借用したバックアップ鍵の記述子は保持します。
+
+- 更新時の注意: 設定変更は不要です。検証・人承認・暗号・保存形式・transactionと公開順序は変わりません。
+- 標準ライブラリへのFD所有権移管に失敗したときも元のFDを閉じ、既に閉じられたEBADF以外の終了エラーは隠さない。
+- 根拠: mcs/core/safe_io.py、mcs/ops/service_management.py、mcs/ops/mcs_backup.py、mcs/ops/mcs_operations.py、mcs/ops/mcs_repair.py
+
+#### 通知見出しの同名患者確認を効率化
+
+通知見出しで同名の患者を確認するための索引を追加し、患者数が多い場合の検索を効率化します。
+
+- 更新時の注意: 追加設定は不要です。更新後、台帳への書込みを開始する際に索引を自動作成します。既存DBでは初回の作成に時間と追加容量を使います。スキーマ世代・既定値・承認条件は変わりません。
+- 患者名の一致規則と通知見出しは変更しません。同名・空名・空白・Unicode・アーカイブ済み患者の扱いを保持します。
+- 名前がNULLでない行の索引に限定し、患者一覧と履歴取得ジョブの既存の列挙順への影響を避けます。患者・投稿の処理対象は減らしません。
+- 索引は通常の非一意索引で、既存の読み取り専用snapshot・backupに索引の存在を要求しません。
+- 性能の比較は完全合成の通知処理に限定します。保存・索引作成・snapshot公開・バックアップ用のSQLiteコピーの費用も個別に確認しています。
+- 根拠: mcs/core/ledger_schema.py、tests/core/test_patient_name_index.py
+
+#### 同じスレッドの一括保存で重複処理を削減
+
+同じスレッドの複数投稿をまとめて保存するとき、既存の解析結果を無効にする処理をスレッドごとにまとめます。
+
+- 更新時の注意: 追加設定は不要です。DB schema・既定値・抽出プロンプト・公開条件に変更はありません。
+- 投稿・通知・解析ジョブと同じトランザクションで最初の無効化を行い、同じ保存処理内の重複するSQLを省きます。
+- 次の保存には前回の記録を持ち越さず、新しい解析結果も必要に応じて無効化します。例外時は関連する保存をまとめて取り消します。
+- 性能の確認は完全合成の一括保存条件に限り、実運用全体の速度向上を保証するものではありません。
+- 根拠: mcs/core/ledger.py、tests/core/test_thread_projection_invalidation_batch.py
+
+#### 配布する設定例から個別端末への依存を除去
+
+配備候補と文書から個別端末のホームパス、ローカルイメージID、機種固有の記載を除きました。CCOの設定候補と承認票は未承認のひな形として提供します。
+
+- 更新時の注意: CCO候補を利用する場合は、私有作業領域で導入先パスと検証済みimage digestを明示的に置換し、描画後の候補を確認・承認してください。承認票と環境固有のhashはrepo外に保管します。既存の稼働設定は自動変更しません。 コードhashに束縛された候補や保留receiptは更新で失効するため、再評価・人承認は従来の手順に従ってください。
+- 配備用YAMLは導入先を表すプレースホルダーを持ち、変数の自動展開や暗黙の適用を行わない。
+- 旧承認例の端末別パスと設定hashを除き、template_not_approvedで未承認を明示。
+- 過去記録の事故IDや判断を保ちつつ環境固有の記載を汎用化し、実機の再観測やGit履歴の書換えは行わない。
+- ソースの説明コメントと手書き履歴から、個別端末の実測件数・処理速度・保存容量・選択構成・プロセス識別を除去。事故の原因と修復判断、公開の既定値・timeout・lane・モデル契約、schema・安全条件・検証識別子は保持。
+- 旧版の変更記録は個別端末の値だけを一般化し、対応する生成文書は既存の生成手順で同じ版へ同期する。新しい性能値や配備成功を補作しない。
+- 本文の追加確認で見つかった観測時間・件数・観測窓の説明も一般化し、実行部分の一致を確認。製品の閾値、予算式、timeout、lane、modelと事故識別子は変更しない。
+- 根拠: deployment/cco/cco-terminal.candidate.yaml、deployment/cco/cco-approval-scope.json、deployment/cco/cco-terminal-isolation.md、mcs/core/ledger.py、mcs/core/maintenance.py、mcs/extract/llm/extract_llm.py、mcs/llm/local_llm.py、mcs/semantic/semantic_transport.py、deployment/launchagents/README.md、docs/dev-records/continuation-20260923.md、docs/roadmap/task-extraction.md、mcs/core/mcs_queries.py、mcs/core/scheduled_jobs.py、mcs/ingest/run_check.py、mcs/semantic/semantic_runtime.py、mcs/semantic/semantic_drain.py、deployment/scripts/llamacpp_restart_if_idle.sh
+
+#### コードとテストを責務ごとに整理
+
+共通LLM実行・ルール抽出・臨床値・患者集約・薬剤・シグナル・外部出力をフォルダで分け、接続先ごとのアダプターとの境界と移植時に必要な依存を明記しました。既存の操作入口・保存形式・モデル・解析世代は維持します。
+
+- 更新時の注意: 通常の更新手順で常駐サービスの設定を再同期し、稼働中のworkerとgatewayを再起動してください。旧配置の同名Pythonファイルが手動で残っていると、誤った実装を読むのを避けるため起動を停止します。旧ファイルは履歴と照合して保持先を確認してください。一部のソース説明も更新するため、作成途中のソース識別付き結果は再検証されることがあります。保存済み投稿の全件再解析は行いません。
+- flat importと公開CLI入口を維持し、plist・補助スクリプト・文書・テストの参照を追従。
+- C1の通信禁止検査をops限定からmcs配下へ広げ、移動後も同じ禁止を検証。
+- 封印評価資産・公式マスター原本・過去版の記録・生成済みwikiは保持。私有設定と実データは整理対象外。
+- 依存閉包と副作用をdocs/development/REPOSITORY_STRUCTURE.mdに記載。独立配布可能なパッケージへ変更したものではない。
+- 根拠: docs/development/REPOSITORY_STRUCTURE.md、mcs/_mcs_path.py、ci/gates.py
+
+#### 要約表示と送信直前の安全確認の責務を整理
+
+通知の表示・分割処理と、現在の設定・元投稿・要約世代を確認する処理の正本を分離しました。通知内容、分割上限、送信前と各分割送信時の再確認、結果不明時の保留条件は変わりません。
+
+- 更新時の注意: 設定変更は不要です。候補の定義に含まれる要約表示処理の正本が変わるため、以前の候補に結び付いた評価・承認は新しい候補へ引き継ぎません。必要な合成検証・通常の承認手順を維持してください。
+- 要約表示と根拠付き分割はsemantic_renderへ、各送信前の現行性・権限判定はsemantic_send_gateへ揃え、配送統括は現在の設定を都度渡す。
+- 根拠: mcs/semantic/semantic_render.py、mcs/semantic/semantic_send_gate.py、mcs/notify/notify_flush.py
+
+#### Slackの再接続を繰り返しても古い処理がメモリに残らないように
+
+Slackの接続が切れて再接続するたびに、置き換わった古い送信処理が終了まで保持され続けていました。再接続を繰り返す長時間の運用でも、古い処理を解放するようにしました。送信・停止の動作は変わりません。
+
+- 更新時の注意: Hermes gateway（独立動作では常駐host）の再起動で反映されます。設定の変更は不要です。
+- Supervisor.start が再接続のたびに host の終了時処理へ自分を追加していたため、host は置き換わった Supervisor をすべて参照し続けていた。
+- 終了時処理はスコープごとに host へ1つだけ登録し、終了時にはそのスコープの最新の Supervisor だけを停止する。別の host・別のスコープはそれぞれ登録する。
+- 回帰: tests/adapters/slack/test_mcs_slack.py::test_reconnects_do_not_keep_old_supervisors_alive_in_the_host
+- 根拠: adapters/slack/tasks.py
+
+#### 読取り用スナップショットを公開できなかった理由を収集結果に記録
+
+収集の終わりに読取り用スナップショットを公開できなかったとき、これまでは「snapshot: RuntimeError」としか残らず、原因を切り分けられませんでした。今後は収集結果の snapshot_failure に、止まった箇所（期限切れ、検証の排他待ち、検証の拒否・異常終了・時間切れなど）と、コピー・検証にかかった秒数を記録します。検証の条件や期限は変えていません。
+
+- 更新時の注意: 追加操作は不要です。記録には固定の理由コードと秒数・終了コードだけを含め、パスやデータベースの内容は含めません。
+- snapshots.last_failure() が直近の公開失敗の理由を返し、公開を始めるたびに空に戻す。
+- run_check は公開が失敗したとき result.snapshot_failure にこれを入れる。検証・期限・既存スナップショットの扱いは変更なし。
+- 回帰: tests/core/test_snapshot_failure_reason.py
+- 根拠: mcs/core/snapshots.py、mcs/ingest/run_check.py
+
+#### snapshot検証の中断時にも検証子の終了回収を試行
+
+snapshot検証の待機が中断された場合、起動済みの検証子の停止・有界回収を試みてから元の中断を伝えます。
+
+- 更新時の注意: 追加設定は不要です。検証期限・schema・公開条件は変わりません。検証未完のsnapshotは公開せず、終了を回収できない子が持つlockによる並走防止も維持します。
+- 待機の通常エラーは従来どおり検証失敗とし、中断の例外はcleanup失敗で置き換えません。中断時のkillと終了の競合でも有界のwaitを試行します。
+- この修正候補はコード上の中断時所有経路を対象とし、観測された本番snapshot失敗の原因を特定したものではありません。
+- 根拠: mcs/core/snapshots.py、tests/core/test_ledger_candidate_validation.py、tests/core/test_runtime_fd_handoffs.py
+
+#### ディスクが遅いときに読取り用スナップショットの公開が失敗し続ける問題を修正
+
+収集の終わりに作る読取り用スナップショットの検証は、30秒にファイルサイズを64MiB/秒で割った時間を加えた予算で行っていたため、ディスクが遅い時間帯には検証が終わる前に打ち切られて公開に失敗していました。コピーにかかった時間に合わせて検証の待ち時間を延ばし（上限180秒・収集の期限内は従来どおり）、それでも打ち切られた場合は「検証の拒否」ではなく「時間切れ」と記録します。検証の内容は変えていません。
+
+- 更新時の注意: 追加操作は不要です。
+- 検証の予算 = max(30秒＋サイズ/64MiB, 1.5×コピー時間)、上限は従来の180秒、呼出し元の hard deadline を超えない。
+- 検証子プロセスが自身の期限で止まった場合は終了コード5（validator_timeout）。1は明示的な拒否だけ。
+- コピー時間に対して検証予算が短くなる場合を合成テストで再現し、待ち時間の算出と時間切れの分類を確認する。
+- 回帰: tests/core/test_snapshot_failure_reason.py
+- 根拠: mcs/core/snapshots.py
+
+#### MCSスタンプの操作と管理を集約
+
+Slack・Discord・LINE WORKSのカードから、MCSの投稿・返信へのスタンプ追加・変更・取消を人の確認後に依頼できます。画像やPDFは添付が属する投稿を対象とし、結果不明の操作は自動で再送しません。既存の読取り・押下者・表示もスタンプ用モジュールへ集約しました。
+
+- 更新時の注意: account_user_idと1人のoperatorを設定すると、stamps.enabledを省略した場合も送信が有効になります。実際のMCS本人IDと操作者の対応を確認し、無効にする場合はstamps.enabled=falseを設定してください。配置時は通常の更新手順で既存プロセスへ新コードを読み込ませてください。有効・無効の切替時、LINE WORKSでは既存の対象カードの更新版が順に追加投稿される場合があります。data/stamp_operationsの記録を削除・巻戻しせず保持してください。記録を伴わない別配置へのDB復元では古い操作を停止します。実APIの送信・反映確認と本番適用は別途必要です。
+- stamp_contract/read/format/writeを正本にし、一般のメタデータ検証はcore/message_observationsに移動。
+- 承認receiptと待ち行列は同一transaction、通信はcommit後のrun lock内。本人ID・患者範囲・原文版を再確認し、フォーム形式の追加または本文なしの取消を1回だけ試みる。
+- DB復元後も私有の試行記録・配置識別子・操作履歴を照合し、結果不明はGETだけで再確認する。
+- 受付と反映確認を区別し、Discordの即時受付結果で最終通知の待ちを消さない。DB schema、抽出世代、既読化、臨床判断は変更しない。
+- 根拠: mcs/stamps/、mcs/ingest/mcs_adapter.py、adapters/common/envelopes.py、docs/specs/stamp-management.md
+
+#### カードのスタンプ列から1回押しでMCSスタンプを送信
+
+スレッドカードの最新投稿の下に、MCS本体と同じ順で5種類のスタンプを並べました（Slack・Discordは絵文字のみ）。押すとその場で送信を受け付け、自分が押しているスタンプをもう一度押すと取消です。表示後に自分のスタンプが変わった場合や、押してから20分を過ぎて届いた押下は送信しません。MCSが自分のIDを返さない場合も、所属ステーション名簿で本人を1人に特定できれば照合できます。操作者とMCSアカウントを設定していれば既定で有効です。
+
+- 更新時の注意: スタンプ送信を使うには stamps.account_user_id と stamps.operator を設定します（enabled は省略で有効、false で無効）。カードとボタンの変更を反映するには Hermes gateway と LINE WORKS アダプターの再起動が必要です。既存のカードは次の更新時にスタンプ列が加わります。
+- 1回押しは runner 側で ops.mcs_reaction の承認コマンドに変換し、既存の receipt・試行記録・GET照合の経路をそのまま通す。理由は「カードから直接操作」。
+- トークンは表示時の追加/取消と自分のスタンプを固定し、押下時に変わっていれば stamp_target_changed で拒否する（追加が取消に、取消が追加に変わらない）。
+- notification エンベロープにホストのクリック時刻 clicked_at を加え、1回押しはこれを確認時刻として20分の期限を判定する。clicked_at は冪等性の照合から除く。
+- 再送・二重押しは、操作者・ゲート・トークン・カードを再確認してから最初の受付を返す。
+- スタンプ列は他の行をすべて組み立てた後、行数（5）と部品数（40）に収まる場合だけ主ボタンの下に入れる。収まらない場合は省き、従来のフォームを残す。
+- LINE WORKS のクライアント検証は、フッター末尾の横並び1列（ボタン1〜5個）だけを追加で許可し、合計10ボタン・容量の上限は維持する。
+- 送信前のアカウント照合は /users/self の ID を優先し、無い場合だけ同じセッションで取得した所属ステーション名簿の is_self が1人のときその ID を使う。不明・複数・不一致は送信しない。
+- 回帰: tests/stamps/test_stamp_write.py、tests/notify/test_stamp_action_button.py、tests/adapters/common/test_stamp_ui.py、tests/adapters/lineworks/test_lineworks_stamp_form.py
+- 根拠: adapters/common/envelopes.py、adapters/common/text.py、adapters/discord/cards.py、adapters/lineworks/cards.py、adapters/lineworks/client.py、adapters/slack/cards.py、mcs/notify/notify_actions.py、mcs/notify/notify_cards.py、mcs/notify/notify_cmds.py、mcs/stamps/stamp_write.py
+
+#### MCSスタンプの拒否理由の表示と、操作が止まる不具合を修正
+
+MCSスタンプを受け付けられなかったとき、理由に関係なく「最新のカードからやり直して」と表示していました。担当者以外の操作、確認中の操作がある場合、復元の確認中など、理由ごとの文言を表示します。MCSが送信を明確に拒否し、状態が変わっていないと確認できた場合は、その操作を「反映できませんでした」で終え、同じ投稿にもう一度操作できるようにしました。フォームを開いてから確定するまでに別の投稿の状態が更新されただけで拒否される問題と、同じ時刻の返信を見分けられない問題も直し、選択肢に番号と投稿者名を表示します。
+
+- 更新時の注意: 表示の変更を反映するにはHermes gatewayとLINE WORKSアダプターの再起動が必要です。スタンプ送信はMCS本人IDと1人の操作者を設定した場合に有効になります。無効にする場合はstamps.enabled=falseを設定してください。
+- 4xx（401・403・408・429を除く）の拒否で、直後のGETが承認時の状態のままならrejected（stamp_server_rejected）。POSTは1回のまま。別の変化が見えたらunknownのまま。
+- 復元の確認中は、試行前の承認をrejectedにせずqueuedのまま保留する。
+- 受付期限は確定時刻（envelopeのconfirmed_at、旧形式は受付時刻）から数える。
+- form_hashから各投稿の観測状態を外し、選んだ投稿の状態はexpected_ownで個別に照合する。
+- 保存できない行は取得枠の後ろへ回し、後続の承認済み操作を止めない。
+- workerはPOSTの宛先をスタンプの2経路に限る。取消経路の文字列は承認済みの送信関数の中だけに置くことをテストで固定。
+- 回帰: tests/stamps/test_stamp_write.py、tests/ingest/test_no_auto_write_path.py
+- 根拠: mcs/stamps/stamp_write.py、adapters/common/text.py、adapters/common/envelopes.py、mcs/ingest/mcs_worker.py
+
+#### 独立実行の残存プロセス停止時の確認を強化
+
+ホスト再起動後に引き継いだプロセスを停止する直前に、起動内容が一致するか毎回確認します。一致しない場合や確認できない場合は停止信号を送らず、確認不能の生存状態を完了扱いにしません。
+
+- 更新時の注意: 追加の設定操作は不要です。通常の更新後に反映されます。定期処理・再試行・人承認・通知の条件は変更しません。
+- 残存プロセスの識別結果を一致・不一致・確認不能に区別し、停止信号の直前に一致を確認します。
+- 確認不能の生存確認や起動情報は終了の証拠にせず、処理中の定期実行枠と待機状態を保持します。
+- 根拠: mcs_standalone/runtime.py
+
+#### 旧版への復元中にDBと実装の世代を保護
+
+旧版へのrollback後も、読み込み済みの実装で復元と更新後の確認を続けられるようにしました。
+
+- 更新時の注意: 追加設定は不要です。restore_reconcile_schema_blocked または restore_reconcile_pending が出た場合は保留を維持し、管理担当者が適合する版・復旧Python・通知の照合方法を確認してください。追加承認やmarker削除では解除しないでください。
+- 復元・通知再照合・環境診断の実装をcheckout切替前に読み込み、旧treeに存在しないmoduleの遅延読込みで復元が中断する問題を防ぎます。
+- report・同意・marker・DB置換・再照合の順序と、保留・journal・既定値の契約を維持します。
+- 復元先が読込済みwriterより古いschemaの場合は再migrationせず、安全な手動対応まで既存の復元保留を維持します。
+- 独立した復旧監視も、更新・復旧処理が残した未照合の復元記録を保留します。journalが空・不在・読取不能でも復元記録だけで再開を拒否し、復元承認と通知照合の完了を区別します。
+- 独立復旧では、復元DBと再開するcheckoutのschemaが同じで、更新記録・HEAD・実ファイルの一致を確認できる場合にwriterを再開します。通知の保留markerは残し、runnerの照合完了まで配送を許可しません。不明・不一致の場合は従来の保留を維持します。
+- 根拠: mcs/ops/mcs_update.py、tests/ops/test_update_loaded_rollback_closure.py、deployment/recovery/mcs_recover.py、tests/meta/test_mcs_recover.py
+
+#### モジュール配置の変更に伴う更新時の再起動
+
+抽出・シグナルなどのモジュールの置き場所が変わりました。更新ツールで更新した場合は、サービス設定の作り直しと再起動を自動で行います。
+
+- 更新時の注意: 通常の更新ツール（mcs_upgrade.py / mcs update）で更新してください。gitで直接取り込む場合は、取り込んだ直後に python3 mcs/ops/mcs_setup.py services を実行し、Hermes gateway・抽出worker・独立hostを再起動してください。再起動するまで、更新前から動いているプロセスは移動したモジュールを読み込めず、表示や通知の処理が失敗します。抽出workerの起動設定も、作り直すまで旧パスを指したままになります。
+- 抽出workerの起動先は mcs/extract/llm/extract_llm.py に変わる。
+- 同じ名前のモジュールが mcs/ 配下に2つあると、起動時に停止する。手で置いた .py の複製を残さない。
+- 根拠: mcs/_mcs_path.py、deployment/launchagents/ai.mcs.extract-drainer.plist、deployment/scripts/mcs_llm_catchup.sh
+
+#### 家族のバイタルや酸素流量を本人の最新バイタルとして扱わないよう修正
+
+「ご家族P80」「妻72」「脈拍 本人72 家族80」のように助詞なしで人物の後に続く値や、「ご家族のP72」のようにラベルを挟んだ値を、本人の測定として保存・表示することがありました。「酸素2L」の流量も酸素飽和度として通っていました。これらを本人の値から外し、あわせて「BT36.5 P72」のように本人の値として確認できる記載は患者の最新バイタルに表示します。「大丈夫」「工夫」の「夫」は家族と読みません。
+
+- 更新時の注意: 追加操作は不要です。患者ごとの集約は次の収集から順に作り直され、修正前に保存された家族の値も表示から外れます。解析世代は変えないため、保存済み投稿の全件再解析は起きません。意味解析（semantic）の事実は別系統のため対象外です。
+- 共有の本人判定に、人物の直後へバイタルのラベル・数値が続く所有者表現を追加（人数・年齢・期間の数値は除外）。「本日ご家族P80」のような前置きや「の」＋ラベルにも対応。
+- 家族語の「夫」は「丈夫」「工夫」の一部では一致させない。書込みガードは数値の直後に L・リットルがある値をバイタルとして通さない。
+- 読取り側は書込みガードと同じラベル文法・同じ値・本人範囲の値を保持。rollup の判定版数を 11 に上げ、旧版のキャッシュは読取り時に再計算し、作り直し対象にする。
+- 回帰: tests/extract/clinical/test_vitals_owner_scope.py、tests/patients/test_rollup_bare_label_vitals.py
+- レビュー追補: Hr/hr の家族表記を共有判定へ統一し、SpO2 のラベル内の 2 を測定値から除外。流量は読取りの再照合でも候補にしない。
+- 酸素流量と同じ数の人数・年齢・期間等が続く場合も、その数を測定候補にしない。
+- 根拠: mcs/extract/rules/extract.py、mcs/extract/clinical/clinical_values.py、mcs/patients/rollup.py
+
+#### 本人のバイタル閾値警告が日常語や測定成功の記載で落ちる問題を修正
+
+明示的に有効にしているバイタル閾値警告で、「大丈夫」「工夫」や「測れた」「測定できた」を含む本人の値が警告対象から外れていました。家族の値や測定不能は引き続き除外します。
+
+- 更新時の注意: vital_urgencyの既定は無効のままです。設定・閾値・解析世代は変更せず、通常の新しい解析から反映します。保存済み全投稿の再解析はしません。
+- 家族語の夫を丈夫・工夫と区別し、測れ・測定できは不能を示す語尾だけ除外する。回帰は完全合成のtests/extract/llm/test_vital_threshold_context.py。
+- 根拠: mcs/extract/llm/extract_llm.py
+
+</details>
+
 ## [1.0.27] — 2026-10-19
 
 **過去分の解析を続けながら、患者コンテキストを24時間作成**
