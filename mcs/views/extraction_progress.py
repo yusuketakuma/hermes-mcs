@@ -29,7 +29,9 @@ def message_progress(db, row, *, cfg=None):
                 import extract_llm
                 progress = extract_llm.progress_for_message(
                     db, row, model=extract_llm.resolved_model(cfg))
-        except (sqlite3.DatabaseError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        # A rolled-back tree can leave the reader off sys.path; show unknown, not a crash.
+        except (ImportError, sqlite3.DatabaseError, ValueError, TypeError, KeyError, AttributeError,
+                RecursionError):
             progress = None
     if (not isinstance(progress, dict)
             or progress.get("state") not in ("processing", "complete", "attention")

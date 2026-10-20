@@ -33,6 +33,14 @@ def test_private_summary_uses_only_validated_counts_and_no_checkpoint_text(led, 
     assert "CANARY" not in text and "CANARY" not in str(progress)
 
 
+def test_missing_progress_reader_counts_as_unknown(led, monkeypatch):
+    _patient(led)
+    _msg(led, 1)
+    monkeypatch.setitem(__import__("sys").modules, "extract_llm", None)
+    progress = extraction_progress.patient_progress(led.db, 1, cfg={})
+    assert progress["unknown"] == 1 and progress["complete"] == 0
+
+
 def test_canonical_active_never_falls_back_to_completed_legacy(led, monkeypatch):
     _patient(led)
     _msg(led, 1)
