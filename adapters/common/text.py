@@ -61,6 +61,20 @@ ERR_JA = {
     "project_mismatch": "対象の患者が見つかりません。最新のカードでやり直してください。",
     "project_not_found": "対象の患者が見つかりません。最新のカードでやり直してください。",
     "payload_changed": "抽出結果が更新されたため報告できません。最新のカードでやり直してください。",
+    "stamp_not_allowed": "MCSスタンプは設定された担当者だけが操作できます。",
+    "stamp_target_changed": "対象の投稿かスタンプの状態が変わりました。最新のカードからやり直してください。",
+    "stamp_target_invalid": "このカードにはスタンプを付けられる投稿がありません。",
+    "stamp_result_unknown": "この投稿には結果を確認中のスタンプ操作があります。確認が終わるまでお待ちください。",
+    "stamp_witness_capacity": "この投稿のスタンプ操作の記録が上限に達しました。管理者に連絡してください。",
+    "stamp_restore_hold": "データの復元を確認中のため、スタンプ操作を一時停止しています。",
+    "stamp_witness_invalid": "スタンプ操作の記録を確認できないため停止しました。管理者に連絡してください。",
+    "stamp_intent_expired": "確定から時間がたったため送信しませんでした。最新のカードからやり直してください。",
+    "stamp_observation_required": "現在のスタンプ状態を確認できないため送信しませんでした。少し待ってからやり直してください。",
+    "stamp_type_invalid": "選べないスタンプの種類です。",
+    "stamp_operation_invalid": "選んだ操作はこの投稿では実行できません（取消するスタンプがありません）。",
+    "stamp_account_mismatch": "MCSのログイン中のアカウントが設定と一致しないため送信しませんでした。",
+    "stamp_server_rejected": "MCSがスタンプ操作を受け付けませんでした。MCSの画面で状態を確認してください。",
+    "stamp_receipt_invalid": "承認の記録を確認できないため送信しませんでした。",
 }
 # a dispatch exception may land before or after the commit: say neither
 CRASH_TEXT = ("処理中にエラーが発生しました。最新のカードで結果を確認してからやり直してください。"
@@ -100,7 +114,10 @@ def ja(result: dict | None) -> str:
     if not result:
         return "結果を取得できませんでした（処理中の可能性があります）。"
     if result.get("stamp_state") == "rejected":
-        return STAMP_REJECTED_TEXT
+        # The runner's rejection code says why; an unknown code keeps the generic line.
+        reason = result.get("stamp_error") or result.get("error")
+        known = str(reason).startswith("stamp_") and str(reason) in ERR_JA
+        return STAMP_REJECTED_TEXT + ("\n" + ERR_JA[str(reason)] if known else "")
     if result.get("stamp_state") in STAMP_STATE_TEXT:
         return STAMP_STATE_TEXT[result["stamp_state"]]
     err = result.get("error")

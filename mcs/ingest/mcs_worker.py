@@ -5,6 +5,7 @@ import base64
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -138,6 +139,9 @@ def _loopback_url(url: str, scheme: str):
     parsed.port  # noqa: B018
 
 
+_STAMP_POST = re.compile(r"/messages/[1-9][0-9]{0,17}/reactions(?:/delete)?")
+
+
 def _execute(envelope: dict) -> dict:
     from mcs_util import NoRedirect, no_proxy_opener
 
@@ -152,6 +156,9 @@ def _execute(envelope: dict) -> dict:
             raise WorkerError("url_not_allowed")
         method = envelope["method"]
         if method not in ("GET", "POST"):
+            raise WorkerError("url_not_allowed")
+        # The only write is the human-approved own stamp; any other POST target is refused here too.
+        if method == "POST" and not _STAMP_POST.fullmatch(url[len(API):].split("?", 1)[0]):
             raise WorkerError("url_not_allowed")
         data = envelope.get("data")
         request = urllib.request.Request(

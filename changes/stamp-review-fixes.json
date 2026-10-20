@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "MCSスタンプの拒否理由の表示と、操作が止まる不具合を修正",
+  "summary": "MCSスタンプを受け付けられなかったとき、理由に関係なく「最新のカードからやり直して」と表示していました。担当者以外の操作、確認中の操作がある場合、復元の確認中など、理由ごとの文言を表示します。MCSが送信を明確に拒否し、状態が変わっていないと確認できた場合は、その操作を「反映できませんでした」で終え、同じ投稿にもう一度操作できるようにしました。フォームを開いてから確定するまでに別の投稿の状態が更新されただけで拒否される問題と、同じ時刻の返信を見分けられない問題も直し、選択肢に番号と投稿者名を表示します。",
+  "upgrade": "追加操作は不要です。表示の変更を反映するにはHermes gatewayとLINE WORKSアダプターの再起動が必要です。スタンプ送信は既定でOFFのままです。",
+  "details": [
+    "4xx（401・403・408・429を除く）の拒否で、直後のGETが承認時の状態のままならrejected（stamp_server_rejected）。POSTは1回のまま。別の変化が見えたらunknownのまま。",
+    "復元の確認中は、試行前の承認をrejectedにせずqueuedのまま保留する。",
+    "受付期限は確定時刻（envelopeのconfirmed_at、旧形式は受付時刻）から数える。",
+    "form_hashから各投稿の観測状態を外し、選んだ投稿の状態はexpected_ownで個別に照合する。",
+    "保存できない行は取得枠の後ろへ回し、後続の承認済み操作を止めない。",
+    "workerはPOSTの宛先をスタンプの2経路に限る。取消経路の文字列は承認済みの送信関数の中だけに置くことをテストで固定。",
+    "回帰: tests/stamps/test_stamp_write.py、tests/ingest/test_no_auto_write_path.py"
+  ],
+  "refs": [
+    "mcs/stamps/stamp_write.py",
+    "adapters/common/text.py",
+    "adapters/common/envelopes.py",
+    "mcs/ingest/mcs_worker.py"
+  ]
+}
