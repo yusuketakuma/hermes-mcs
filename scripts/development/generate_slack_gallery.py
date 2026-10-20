@@ -125,15 +125,18 @@ class Screen:
         self.line(x, y - 12, x + width, y - 12, "#d5dcd7")
         return y + 16
 
-    def actions(self, x, y, confirmed=False, wrap=False):
+    def actions(self, x, y, confirmed=False, wrap=False, stamp_row=False):
         """確認する・担当する・タスク作成 + one select; MCSで開く is a text link below."""
         self.button(x, y, "確認する", 110, confirmed)
         self.button(x + 120, y, "担当する", 110)
         self.button(x + 240, y, "タスク作成", 128)
         sx, sy = (x, y + 52) if wrap else (x + 378, y)
         self.button(sx, sy, "操作を選ぶ… ▾", 173)
-        self.text(x, sy + 76, "MCSで開く", 18, "#1264a3")
-        return sy + 100
+        if stamp_row:
+            for i, label in enumerate(("👀見ました", "🙆承知✓", "🙏感謝", "👍いいね", "✅完了")):
+                self.button(x + i * 133, sy + 52, label, 125, primary=i == 1)
+        self.text(x, sy + (128 if stamp_row else 76), "MCSで開く", 18, "#1264a3")
+        return sy + (152 if stamp_row else 100)
 
     def card(self, x, y, width=770, full=False):
         """Card zones top to bottom: patient title, meta line, per post a
@@ -188,20 +191,20 @@ def notification():
 
 
 def menu():
-    s = Screen(3, "次の操作を、ひとつのメニューから。", "この患者の記録まとめ・検索・誤りの報告に加え、有効な場合はMCSスタンプも選べます。", 1040)
+    s = Screen(3, "スタンプは1回で、ほかの操作はメニューから。", "操作者とMCSアカウントを設定した例。✓のスタンプをもう一度押すと取消。", 1120)
     x, y = s.app()
     y = s.card(x, y)
-    s.actions(x, y)
+    s.actions(x, y, stamp_row=True)
     # notify_cards._action_rows order; the card has open tasks (📝 タスク 1件)
     labels = ("タスク一覧", "患者の記録まとめ", "この患者を検索", "誤りを報告", "MCSスタンプ")
-    mx, my = x + 378, y + 48
+    mx, my = x + 378, y + 104
     s.rect(mx, my, 300, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
     for i, label in enumerate(labels):
         yy = my + 12 + i * 42
         if i == 0:
             s.rect(mx + 7, yy - 2, 286, 38, "#e5f3ec", 4)
         s.text(mx + 24, yy + 24, label, 19, GREEN if i == 0 else INK, i == 0)
-    s.text(x, 920, "全体の新着集計・自分のタスク・未確認一覧は、集計カードのメニューへ。", 17, MUTED)
+    s.text(x, 1000, "全体の新着集計・自分のタスク・未確認一覧は、集計カードのメニューへ。", 17, MUTED)
     return s.finish()
 
 

@@ -15,7 +15,7 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 |---|---|
 | `01-overview` | `docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・添付の配送）、`mcs/notify/notify_parts.py`の`face_posts`（投稿ごとの要約の下にスタンプ行と原文をカード本文へ。返信にも同じ順。添付の`📎`行と要約を含まない見出し）、`adapters/slack/cards.py`の`render_parts`・`_folded_original`（スタンプ行は小さな補足表示、原文は`原文（N字）`の折りたたみブロック）、`present_slack.face_block_count`（収まらない投稿はスレッド本文へ） |
 | `02-notification` | `mcs/notify/notify_render.py`の`card_content`・`_thread_context`・`_footer`（概要・投稿ごとの要約・状態の区画）、`adapters/slack/cards.py`（区画間の区切り線、`確認する`・`担当する`・`タスク作成`のボタンと「操作を選ぶ…」、`MCSで開く`のテキストリンク）、`mcs/notify/notify_action_tokens.py`の`ACTIONS`、`mcs/stamps/stamp_format.py`（スタンプの件数・表示）、`mcs/views/message_metadata.py`（自分の投稿数） |
-| `03-actions` | 同カード実装（ボタン以外の操作をボタン行の順に選択メニューへ。未完了タスクがあれば`タスク一覧`が先頭。患者の検索は常に含み、全体の新着集計・自分のタスク・未確認一覧は集計カードだけ。MCSスタンプは有効な場合だけ`誤りを報告`の後に表示。この画面例では有効。その他の表示項目は状態・設定に依存） |
+| `03-actions` | `notify_cards._stamp_target`・`_action_rows`・`adapters/slack/cards.py`（最新の表示投稿に5種類のスタンプを1回押しで依頼。自分のスタンプは`✓`付きで、もう一度押すと取消）。ほかの操作はボタン行の順に選択メニューへ。未完了タスクがあれば`タスク一覧`が先頭。患者の検索は常に含み、全体の新着集計・自分のタスク・未確認一覧は集計カードだけ。別の投稿を選ぶ`MCSスタンプ`フォームも`誤りを報告`の後に残る。その他の表示項目は状態・設定に依存 |
 | `04-task-form` | `adapters/common/text.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
 | `05-task-preview` | 同`preview_text`と`_preview`（本人向け、確定する／取消） |
 | `06-task-list` | `adapters/slack/actions.py`の`_task_blocks`・`_task_text`（本人向けの一覧。各タスクの直後にその状態操作） |
@@ -23,6 +23,8 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 | `08-urgent-notice` | `mcs/notify/alert_view.py`の`render_parts`を完全合成のメモリDBで実行（患者本人／対象未確認、同投稿の一意な原文引用、投稿日時と緊急度の判定時刻、原本確認、未対応を断定しない記録表示）。`notify_urgent.py`の配送前検証と既存通知スレッドへの追加配送は別の安全条件。 |
 
 表示例では絵文字や一部の長い行を読みやすく簡略化する。
+`03-actions`だけは操作者1人とMCSアカウントを設定し、スタンプ送信が有効な例。ほかの7画面はスタンプ送信を設定していない例で、スタンプの読取り表示は維持する。
+両方の本人情報を設定すると送信は既定で有効になり、`stamps.enabled=false`で無効にできる。画像の生成器は設定を読み込まず、この違いを説明用の例として描く。
 ダッシュボードや患者管理画面は描かない。Slackの`/mcs`コマンドは本文と導入ガイドで説明し、このカード操作の画面例には含めない。
 
 ## 更新
@@ -44,6 +46,7 @@ Inkscapeのない環境では一時コピーのSVG viewportだけを正方形へ
 元の1650px幅・縦横比の範囲をImageMagickで切り出した。SVG本体の配置は変えず、
 `verify_png()`と`asset_hashes()`でPNGの完結性・寸法・SVG/PNGのハッシュを検査・同期した。
 2026-10-20の`03-actions`はMCSスタンプを有効にした場合のメニューを追加し、同じQuick Look＋ImageMagickの手順で描画した。ほかの7画面は変更していない。
+同日の1回押しへの変更では、`03-actions`にスタンプ列と本人状態の強調表示を追加し、投稿を選ぶフォームもメニューに残した。ほかの7画面は変更していない。
 絵文字の描画は環境によって異なり、実アプリの表示とは区別する。
 `scripts/development/generate_slack_gallery.py`の説明用の例とレイアウトを修正し、SVGとPNGを一緒に更新する。
 8画面の文字切れ・重なり・説明・本人向け表示・人承認条件を確認する。
