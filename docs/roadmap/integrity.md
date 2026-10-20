@@ -285,7 +285,7 @@ CREATE TABLE IF NOT EXISTS message_revisions(
 
   - watchdog は通常 `mode=ro`、復元時だけ rw + checkpoint（`mcs_recover.py:638-662`）。Apple が backport 済みかは【未検証】。
 - hermes-agent v0.19.0 は uv 管理 Python に SQLite 3.50.4 を同梱していた（NousResearch/hermes-agent#69784。2026-07-23 報告、PR #70055 で closed）。runtime の更新で版が変わり得る。
-- repo に確認コードは 0 件（`sqlite_version` の grep）。`docs/guides/INSTALLATION.md:93` は Python 版だけ。plugin / gateway は DELETE journal の snapshot を ro で読むだけ（`mcs_view.py:65`、`hermes_plugin/projects.py:30-33`）で対象外。
+- repo に確認コードは 0 件（`sqlite_version` の grep）。`docs/guides/INSTALLATION.md:93` は Python 版だけ。plugin / gateway は DELETE journal の snapshot を ro で読むだけ（`mcs_view.py:65`、`adapters/common/projects.py:30-33`）で対象外。
 - 既存の安全網は日次 backup と `quick_check`（`maintenance.py:47-77`、`ledger.py:1892+`、7 世代）。
 
 **設計方針**

@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "抽出の進み具合の表示が読み込みエラーで止まる問題を修正",
+  "summary": "版を戻した直後などで抽出処理のモジュールを読み込めない場合、患者まとめの抽出の進み具合を「不明」として表示し、表示処理を止めません。",
+  "upgrade": "追加操作は不要です。設定・既定値・DB形式は変わりません。",
+  "details": [
+    "読み込めないときは完了と数えず、不明として扱う。"
+  ],
+  "refs": ["mcs/views/extraction_progress.py", "tests/notify/test_extraction_progress.py"]
+}

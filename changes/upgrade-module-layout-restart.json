@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "モジュール配置の変更に伴う更新時の再起動",
+  "summary": "抽出・シグナルなどのモジュールの置き場所が変わりました。更新ツールで更新した場合は、サービス設定の作り直しと再起動を自動で行います。",
+  "upgrade": "通常の更新ツール（mcs_upgrade.py / mcs update）で更新してください。gitで直接取り込む場合は、取り込んだ直後に python3 mcs/ops/mcs_setup.py services を実行し、Hermes gateway・抽出worker・独立hostを再起動してください。再起動するまで、更新前から動いているプロセスは移動したモジュールを読み込めず、表示や通知の処理が失敗します。抽出workerの起動設定も、作り直すまで旧パスを指したままになります。",
+  "details": [
+    "抽出workerの起動先は mcs/extract/llm/extract_llm.py に変わる。",
+    "同じ名前のモジュールが mcs/ 配下に2つあると、起動時に停止する。手で置いた .py の複製を残さない。"
+  ],
+  "refs": ["mcs/_mcs_path.py", "deployment/launchagents/ai.mcs.extract-drainer.plist", "deployment/scripts/mcs_llm_catchup.sh"]
+}

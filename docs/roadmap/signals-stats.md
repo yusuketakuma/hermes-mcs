@@ -81,7 +81,7 @@ F-2のルール緊急度問題は1.0.13で是正予定。#17と#19（残件、�
 - 通知経路:
   - 警告マークは text route だけ（`notify_flush.py:369, 378`）。interactive カードは緊急度を描画しない（`notify_cards.py` / `notify_render.py` / `structured_view._head_lines`: :154 に urgency 参照なし）。`urgent` payload も card 経路は無視する（`notify_cards.py:1235-1257`）。
   - `notify.interactive` の既定は off。wizard は discord へ誘導するため、本番の実態は【未検証】。
-  - 警告マーク・urgent 経路のテストは `tests/ops/test_mcs_signals.py:1227-1250, 1448-1473` だけ。`rg '⚠' tests integration` は 0 件。
+  - 警告マーク・urgent 経路のテストは `tests/signals/test_mcs_signals.py:1227-1250, 1448-1473` だけ。`rg '⚠' tests integration` は 0 件。
 - 後追い判明: tick は derive（ルール抽出 → LLM 最大 15 件・既定 90s、oldest_first: `run_check.py:685-697`）→ deliver の順（:1195-1198）。LLM urgency が第一報に間に合う保証はなく、後から high になっても再通知経路がない。
 - 確認状態は既にカードにある: ack / 担当 / 保留（`notification_acknowledgements` / `notification_triage`: `notify_cards.py:188-202`。適用は :1548-1565, 1656-1700）。保留 24h（:61）は sweep が期限到来で open に戻す（:1877-1886）。ack は manifest（shown）単位（:1665-1685）。text route に ack はない。
 - 旧 ROADMAP の訂正:
@@ -116,7 +116,7 @@ F-2のルール緊急度問題は1.0.13で是正予定。#17と#19（残件、�
 **受入条件とテスト（合成のみ）**
 - `message_urgency`: LLM high / rule high / 両方 / hash 不一致 / deleted / LLM routine + rule high の各挙動を固定する。
 - text と card の両方で high 投稿に緊急度が出て、routine には出ない。LLM 到着後に card が update render になる（新 intent なし）。
-- 述語置換後も `tests/ops/test_mcs_signals.py:1227-1250, 1448-1473` が不変。
+- 述語置換後も `tests/signals/test_mcs_signals.py:1227-1250, 1448-1473` が不変。
 - E1 が 1 件だけ（再評価で増えない）。第一報前から high の投稿には E1 なし。E2 は `now` 注入で決定的に `after_min` / `repeat_min` / `max_repeats` を守る。
 - 停止条件（ack、assigned、deferred の期限内・期限後、自施設投稿、依頼登録、削除・編集、archived、降格、mode off）を各 1 件。enqueue 後に停止条件が成立すると、送信直前に terminal drop。部分送信ありは hold（`_fail_event`: `notify_flush.py:868-929` の規約）。
 - shadow は送信されない。text route では E2 が出ない。payload と文面に `<@` / `@here` / `@everyone` / 投稿者名 / 本文センチネルがない。`max_per_day` と room 冷却。夜間 20 分 tick でも取りこぼさず遅延だけ。
