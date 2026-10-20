@@ -45,11 +45,22 @@ def _fail(reason: str, **extra) -> None:
     _failure.update(reason=reason, **extra)
 
 
+# Exit 1 is only an explicit validation refusal; a failed bootstrap/import
+# exits 3 and an exception inside the validator 4, so the parent can tell them
+# apart without reading the child's output. Success is still exit 0 only.
 _SNAPSHOT_VALIDATION_CODE = (
-    "import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
-    "from ledger import valid_mcs_db; "
-    "sys.exit(0 if valid_mcs_db(sys.argv[2], deadline=float(sys.argv[3])) else 1)"
+    "import sys\n"
+    "try:\n"
+    "    sys.path.insert(0, sys.argv[1]); import _mcs_path; from ledger import valid_mcs_db\n"
+    "except BaseException:\n"
+    "    sys.exit(3)\n"
+    "try:\n"
+    "    ok = valid_mcs_db(sys.argv[2], deadline=float(sys.argv[3]))\n"
+    "except BaseException:\n"
+    "    sys.exit(4)\n"
+    "sys.exit(0 if ok is True else 1)\n"
 )
+_EXIT_REASONS = {1: "validator_rejected", 3: "validator_bootstrap_error", 4: "validator_exception"}
 
 
 def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
@@ -75,8 +86,7 @@ def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
             try:
                 code = child.wait(timeout=max(0, deadline - monotonic()))
                 if code != 0:
-                    # 1 is valid_mcs_db refusing the copy; other codes are a crashed child.
-                    _fail("validator_rejected" if code == 1 else "validator_exit",
+                    _fail(_EXIT_REASONS.get(code, "validator_exit"),
                           exit_code=code, verify_s=round(monotonic() - started, 3))
                 return code == 0
             except subprocess.TimeoutExpired:

@@ -32,7 +32,9 @@ def test_deadline_before_copy(db, tmp_path):
 
 
 @pytest.mark.parametrize("code,reason", [("import sys; sys.exit(1)", "validator_rejected"),
-                                         ("import sys; sys.exit(3)", "validator_exit")])
+                                         ("import sys; sys.exit(3)", "validator_bootstrap_error"),
+                                         ("import sys; sys.exit(4)", "validator_exception"),
+                                         ("import sys; sys.exit(7)", "validator_exit")])
 def test_validator_exit_codes_are_told_apart(db, tmp_path, monkeypatch, code, reason):
     _child(monkeypatch, code)
     assert snapshots.publish_snapshot(db, str(tmp_path / "out")) is None
@@ -60,3 +62,19 @@ def test_busy_validation_lock(db, tmp_path, monkeypatch):
     assert snapshots.last_failure()["reason"] == "validation_lock_busy"
     assert snapshots.publish_snapshot(db, str(out))          # the next publish resets the reason
     assert snapshots.last_failure() == {}
+
+
+def _real_child(*argv):
+    import subprocess
+    import sys
+    return subprocess.run([sys.executable, "-I", "-c", snapshots._SNAPSHOT_VALIDATION_CODE, *argv],
+                          capture_output=True, timeout=60).returncode
+
+
+def test_real_child_separates_bootstrap_errors_exceptions_and_refusals(tmp_path):
+    from pathlib import Path
+    mcs_root = str(Path(snapshots.__file__).resolve().parents[1])
+    far = str(monotonic() + 60)
+    assert _real_child(str(tmp_path), str(tmp_path / "x.db"), far) == 3      # no _mcs_path there
+    assert _real_child(mcs_root, str(tmp_path / "x.db"), "not-a-number") == 4
+    assert _real_child(mcs_root, str(tmp_path / "missing.db"), far) == 1     # explicit refusal
