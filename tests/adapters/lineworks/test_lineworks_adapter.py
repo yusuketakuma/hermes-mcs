@@ -347,16 +347,23 @@ def test_verified_attachment_mapping_and_corruption_never_sends(tmp_path):
     assert w.client.calls == []
 
 
-def test_card_shows_only_primary_link_and_more_in_fixed_order():
+def test_card_shows_only_the_menu_and_link_in_fixed_order():
+    """As on Slack: 確認・担当・タスク作成 join the other operations behind 操作を選ぶ…."""
     spec = overflow_spec()
     cards.validate(spec)  # no actions#N parts are planned any more
     content = cards.render(spec)
     actions = [button["action"] for button in content["contents"]["footer"]["contents"]]
-    assert [a["label"] for a in actions] == [
-        "確認する", "担当する", "タスク作成", "MCSで開く", "その他の操作"]
-    assert actions[3] == {"type": "uri", "label": "MCSで開く",
-                                     "uri": "https://example.invalid/mcs"}
-    assert [b["id"] for b in cards.secondary(spec)] == list(SECONDARY)
+    assert [a["label"] for a in actions] == ["操作を選ぶ…", "MCSで開く"]
+    assert actions[1] == {"type": "uri", "label": "MCSで開く",
+                          "uri": "https://example.invalid/mcs"}
+    assert [b["id"] for b in cards.secondary(spec)] == [*SECONDARY, "request", "assign", "ack"]
+
+
+def test_a_card_without_the_menu_button_keeps_its_operations_on_the_card():
+    spec = overflow_spec()
+    for row in spec["parts"]["action_rows"]:
+        row[:] = [b for b in row if b["id"] != "more"]
+    assert [a["label"] for a in cards.action_buttons(spec)] == ["確認する", "担当する", "タスク作成", "MCSで開く"]
 
 
 _THREAD_PART = {"part_id": "thread", "kind": "thread", "index": 99, "name": "合成",
@@ -690,14 +697,16 @@ def test_more_opens_secondary_actions_in_dm_and_only_they_run_from_dm(tmp_path):
         assert all(c[2] == {"user_id": "operator", "channel_id": None} for c in w.client.calls)
         assert [m["contents"]["body"]["contents"][0]["text"] for m in menus] == ["💬 合成 患者 様（合成）"] * 2
         offered = [a["action"]["postback"] for m in menus for a in m["contents"]["footer"]["contents"]]
-        assert [len(m["contents"]["footer"]["contents"]) for m in menus] == [10, 1]
-        assert offered == ["mcs:a:" + by_action[a] for a in SECONDARY]
-        # A primary token pressed from the 1:1 talk stays room-only.
-        await w.actions.handle(event(postback="mcs:a:" + by_action["ack"], channel=None))
+        assert [len(m["contents"]["footer"]["contents"]) for m in menus] == [10, 4]
+        assert offered == ["mcs:a:" + by_action[a] for a in (*SECONDARY, "request", "assign", "ack")]
+        # A card-only token pressed from the 1:1 talk stays room-only.
+        await w.actions.handle(event(postback="mcs:a:" + by_action["more"], channel=None))
         assert command_files(w) == []
+        # 確認する is now one of the menu's operations, so it runs from the 1:1 talk.
+        await w.actions.handle(event(postback="mcs:a:" + by_action["ack"], channel=None))
         await w.actions.handle(event(postback="mcs:a:" + by_action["tasks"], channel=None))
         commands = command_files(w)
-        assert len(commands) == 1 and commands[0]["token"] == by_action["tasks"]
+        assert sorted(c["token"] for c in commands) == sorted([by_action["ack"], by_action["tasks"]])
 
     asyncio.run(scenario())
 

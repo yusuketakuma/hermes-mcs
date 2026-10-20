@@ -36,7 +36,8 @@ def test_discord_classic_preview_preserves_complete_face_buttons_and_v2_compatib
     assert "合成フッター" in payload["embed"].description
     assert "非公開の合成本体" not in payload["content"] + payload["embed"].description
     items = payload["view"].items
-    assert any(getattr(item, "custom_id", "") == "mcs:a:" + "c" * 32 for item in items)
+    # 確認する now sits in the 操作を選ぶ… select, as on Slack
+    assert any(option.value == "c" * 32 for item in items for option in getattr(item, "options", []))
     assert discord.message_payload(spec, components_v2=True).keys() == {"view"}
 
 

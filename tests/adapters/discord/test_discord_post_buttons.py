@@ -40,7 +40,7 @@ def test_embed_turns_each_post_action_into_a_button_of_its_own_row():
     buttons = _post_buttons(payload)
     assert [b.label for b in buttons] == ["💊 09-24 08:40", "💊 09-25 09:10"]
     assert [b.custom_id for b in buttons] == ["mcs:a:" + "0" * 32, "mcs:a:" + "0" * 31 + "1"]
-    assert all(b.row == 2 for b in buttons)
+    assert all(b.row == 3 for b in buttons)
     assert "09-24 08:40 合成職員" in payload["embed"].description   # the line stays text
 
 

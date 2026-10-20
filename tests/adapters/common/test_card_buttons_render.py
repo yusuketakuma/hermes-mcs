@@ -175,15 +175,16 @@ def test_secondary_action_sets_reach_all_three_transport_menus(monkeypatch, kind
     _, blocks = slack_cards.render(slack_spec)
     menu = next(element for block in blocks if block["type"] == "actions"
                 for element in block["elements"] if element["type"] == "static_select")
-    assert [tokens[option["value"]] for option in menu["options"]] == secondary
+    # every transport: 確認・担当・タスク作成 lead the one 操作 menu, as on Slack
+    assert [tokens[option["value"]] for option in menu["options"]] == primary + secondary
     assert any(block["type"] == "context" and block["elements"][0]["type"] == "mrkdwn"
                for block in blocks) == (kind != "digest")
 
     _, options = discord_cards._button_items(spec)
-    assert [tokens[option.value] for option in options] == secondary
+    assert [tokens[option.value] for option in options] == primary + secondary
     spec["parts"]["thread_drug_actions"] = True
     _, options = discord_cards._button_items(spec)
-    assert [tokens[option.value] for option in options] == [
+    assert [tokens[option.value] for option in options] == primary + [
         action for action in secondary if action not in {"meds", "drugsearch"}]
     thread = discord_cards.thread_drug_view(spec)
     assert ([] if thread is None else [tokens[b.custom_id.removeprefix("mcs:a:")]
@@ -193,10 +194,9 @@ def test_secondary_action_sets_reach_all_three_transport_menus(monkeypatch, kind
     spec["parts"]["action_rows"].append([
         {"id": "more", "ui": "button", "label": "その他の操作", "token": "f" * 32}])
     menu = lineworks_cards.secondary(spec)
-    assert [button["id"] for button in menu] == secondary
-    assert len(menu) <= 10
+    assert [button["id"] for button in menu] == primary + secondary
     assert [button["label"] for button in lineworks_cards.action_buttons(spec)] == (
-        primary + ([] if kind == "digest" else [LINK["label"]]) + ["その他の操作"])
+        ["操作を選ぶ…"] + ([] if kind == "digest" else [LINK["label"]]))
 
 
 # ---------- shared modal definitions ------------------------------------
@@ -363,14 +363,15 @@ def test_discord_view_zones_separators_and_menu(monkeypatch):
     assert all(c.visible and c.spacing == 1 for c in inner
                if type(c).__name__ == "Separator")
     assert inner[6].content.startswith("-# ")
-    primary, menu_row = inner[-2].children, inner[-1].children
-    assert [b.custom_id for b in primary[:3]] == [
-        f"mcs:a:{n:032x}" for n in range(3)]
-    assert primary[-1].url == LINK["url"]
+    # the Slack order: the 操作を選ぶ… select first, then the MCSで開く link
+    menu_row, link_row = inner[-2].children, inner[-1].children
     (menu,) = menu_row
-    assert menu.custom_id == "mcs:menu"
+    assert menu.custom_id == "mcs:menu" and menu.placeholder == "操作を選ぶ…"
     assert [(o.label, o.value) for o in menu.options] == [
+        ("Lack", f"{0:032x}"), ("Lassign", f"{1:032x}"), ("Lrequest", f"{2:032x}"),
         ("Lbody", f"{3:032x}"), ("Lsummary", "f" * 32)]
+    (link,) = link_row
+    assert link.url == LINK["url"]
 
 
 def test_discord_escape_is_literal_and_length_preserving():

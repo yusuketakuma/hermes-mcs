@@ -5,7 +5,7 @@ import hashlib
 import re
 
 from adapters.common.spec import PRIMARY_ACTIONS, STAMP_ROW_ACTION, validate as validate_display
-from adapters.common.text import notification_preview
+from adapters.common.text import notification_preview, stamp_icon
 from notify_render import display_text
 from present_lineworks import card_split
 from notify_parts import split_body_chunks
@@ -60,12 +60,15 @@ def buttons(text, actions, *, preview=None):
     def button(action, **extra):
         return {"type": "button", "style": "secondary", **extra, "action": {
             **action, **({"text": action["label"]} if action["type"] == "message" else {})}}
-    # MCS's own stamp row sits under the other buttons as one horizontal row.
+    # MCS's own stamp row is one horizontal row where the first stamp sits.
     stamps = [{k: v for k, v in a.items() if k != "_stamp"} for a in actions if a.get("_stamp")]
-    footer = [button(a) for a in actions if not a.get("_stamp")]
-    if stamps:
-        footer.append({"type": "box", "layout": "horizontal", "spacing": "xs",
-                       "contents": [button(a, height="sm") for a in stamps]})
+    footer = []
+    for a in actions:
+        if not a.get("_stamp"):
+            footer.append(button(a))
+        elif a is next(x for x in actions if x.get("_stamp")):
+            footer.append({"type": "box", "layout": "horizontal", "spacing": "xs",
+                           "contents": [button(x, height="sm") for x in stamps]})
     contents = {"type": "bubble", "body": {
         "type": "box", "layout": "vertical", "contents": [
             {"type": "text", "text": text or "MCS", "wrap": True}]},
@@ -76,18 +79,32 @@ def buttons(text, actions, *, preview=None):
             "contents": contents}
 
 
-# Card buttons, in display order; every other action sits behind ``more``.
-CARD_BUTTONS = (*PRIMARY_ACTIONS, "link", "more", STAMP_ROW_ACTION)
+# Card buttons in display order, as on Slack: 操作を選ぶ…, the stamp row, 別の投稿,
+# MCSで開く. Every other operation (確認・担当・タスク作成 too) sits behind ``more``.
+CARD_BUTTONS = ("more", STAMP_ROW_ACTION, "stamp", "link")
+# without a ``more`` button nothing could reach them, so they stay on the card
+_FALLBACK_BUTTONS = (*PRIMARY_ACTIONS, "link", "more", STAMP_ROW_ACTION)
+_LABELS = {"more": "操作を選ぶ…", "stamp": "別の投稿"}
 
 
 def _slot(button):
     return "link" if button.get("ui") == "link" else button["id"]
 
 
+def _on_card(spec):
+    """Buttons drawn on the card; the stamp form only beside a full stamp row."""
+    flat = [b for row in spec["parts"].get("action_rows") or [] for b in row]
+    if not any(_slot(b) == "more" for b in flat):
+        return [b for b in flat if _slot(b) in _FALLBACK_BUTTONS]
+    full = sum(b.get("id") == STAMP_ROW_ACTION for b in flat) == 5
+    return [b for b in flat if _slot(b) in CARD_BUTTONS and (full or b["id"] != "stamp")]
+
+
 def secondary(spec):
-    """The card's buttons offered in the 1:1 「その他の操作」 menu."""
+    """The card's buttons offered in the 1:1 「操作を選ぶ…」 menu."""
+    shown = _on_card(spec)
     return [b for row in spec["parts"].get("action_rows") or [] for b in row
-            if _slot(b) not in CARD_BUTTONS]
+            if not any(b is c for c in shown)]
 
 
 def heading(spec):
@@ -99,20 +116,23 @@ def heading(spec):
 
 
 def action_buttons(spec):
-    """The card's own buttons: ack, assign, request, link, more."""
+    """The card's own buttons: 操作を選ぶ…, the stamp row, 別の投稿, MCSで開く."""
     actions = []
-    shown = [b for row in spec["parts"].get("action_rows") or [] for b in row
-             if _slot(b) in CARD_BUTTONS]
-    for button in sorted(shown, key=lambda b: CARD_BUTTONS.index(_slot(b))):
-        if len(button["label"]) > 20:
+    order = CARD_BUTTONS if any(_slot(b) == "more" for row in spec["parts"].get("action_rows") or []
+                                for b in row) else _FALLBACK_BUTTONS
+    for button in sorted(_on_card(spec), key=lambda b: order.index(_slot(b))):
+        stamp = button.get("id") == STAMP_ROW_ACTION
+        # emoji only and the own stamp marked ✓, as on Slack and Discord
+        label = (stamp_icon(button["label"]) + (" ✓" if button.get("style") == "primary" else "")
+                 if stamp else _LABELS.get(_slot(button), button["label"]))
+        if len(label) > 20:
             raise ValueError("lineworks_button_label")
         if button.get("ui") == "link":
-            actions.append({"type": "uri", "label": button["label"],
-                            "uri": button["url"]})
+            actions.append({"type": "uri", "label": label, "uri": button["url"]})
         else:
-            actions.append({"type": "message", "label": button["label"],
+            actions.append({"type": "message", "label": label,
                             "postback": "mcs:a:" + button["token"],
-                            **({"_stamp": True} if button["id"] == STAMP_ROW_ACTION else {})})
+                            **({"_stamp": True} if stamp else {})})
     return actions
 
 

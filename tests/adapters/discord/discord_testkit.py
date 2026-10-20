@@ -92,6 +92,7 @@ def _fake_discord():
             self.options = list(options)
             self.required = required
             self.min_values, self.max_values = min_values, max_values
+            self.placeholder, self.row = _.get("placeholder"), _.get("row")
 
     class Separator:
         def __init__(self, visible=True, spacing=None):

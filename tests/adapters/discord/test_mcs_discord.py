@@ -189,8 +189,11 @@ def test_real_spec_validates_and_builds(world):
     buttons = [b for i in inner if hasattr(i, "children")
                for b in i.children if not hasattr(b, "options")]
     ids = [b.custom_id for b in buttons if b.url is None]
-    assert ids and all(i.startswith("mcs:a:") for i in ids)
-    assert all(len(i) == 38 for i in ids)      # "mcs:a:" + 32 hex
+    assert all(i.startswith("mcs:a:") and len(i) == 38 for i in ids)   # "mcs:a:" + 32 hex
+    # 確認する and the other operations are tokens in the 操作を選ぶ… select
+    menus = [b for i in inner if hasattr(i, "children") for b in i.children if hasattr(b, "options")]
+    assert [m.placeholder for m in menus] == ["操作を選ぶ…"]
+    assert all(len(o.value) == 32 for o in menus[0].options)
     # 🔗 MCSで開く is a plain link button — no custom_id, no token
     links = [b for b in buttons if b.url is not None]
     assert [b.url for b in links] == [
