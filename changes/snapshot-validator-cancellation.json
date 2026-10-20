@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "snapshot検証の中断時にも検証子の終了回収を試行",
+  "summary": "snapshot検証の待機が中断された場合、起動済みの検証子の停止・有界回収を試みてから元の中断を伝えます。",
+  "upgrade": "追加設定は不要です。検証期限・schema・公開条件は変わりません。検証未完のsnapshotは公開せず、終了を回収できない子が持つlockによる並走防止も維持します。",
+  "details": [
+    "待機の通常エラーは従来どおり検証失敗とし、中断の例外はcleanup失敗で置き換えません。中断時のkillと終了の競合でも有界のwaitを試行します。",
+    "この修正候補はコード上の中断時所有経路を対象とし、観測された本番snapshot失敗の原因を特定したものではありません。"
+  ],
+  "refs": [
+    "mcs/core/snapshots.py",
+    "tests/core/test_ledger_candidate_validation.py",
+    "tests/core/test_runtime_fd_handoffs.py"
+  ]
+}

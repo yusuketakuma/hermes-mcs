@@ -220,3 +220,141 @@ def test_unmigratable_candidate_is_rejected_without_modifying_it(tmp_path, damag
 
     assert not valid_mcs_db(str(path))
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("fault,cleanup", [
+    (SystemExit, "reap"), (OSError, "reap"),
+    (KeyboardInterrupt, "kill-race"), (KeyboardInterrupt, "blocked"),
+    (KeyboardInterrupt, "already-reaped"),
+])
+def test_validator_wait_fault_keeps_publication_and_owned_lock_contract(
+        tmp_path, monkeypatch, fault, cleanup):
+    import fcntl
+    import os
+    import subprocess
+
+    source = tmp_path / "source.db"
+    Ledger(str(source)).close()
+    original = source.read_bytes()
+    output = tmp_path / "snapshots"
+    output.mkdir()
+    published = output / "ledger-snapshot.db"
+    published.write_bytes(b"synthetic prior snapshot")
+    failure = fault("synthetic validator wait fault")
+    children = []
+
+    class Child:
+        def __init__(self, *args, **kwargs):
+            assert len(kwargs["pass_fds"]) == 1
+            self.fd = os.dup(kwargs["pass_fds"][0])
+            self.returncode = None
+            self.waits, self.kills = [], 0
+            children.append(self)
+
+        def release(self):
+            if self.fd is not None:
+                owned, self.fd = self.fd, None
+                os.close(owned)
+
+        def poll(self):
+            if cleanup == "already-reaped":
+                self.returncode = 0
+                self.release()
+            return self.returncode
+
+        def kill(self):
+            # Match Popen.kill -> send_signal's existing reaped-process guard.
+            if self.poll() is not None:
+                return
+            self.kills += 1
+            if cleanup == "kill-race":
+                raise ProcessLookupError("synthetic exit race")
+
+        def wait(self, timeout):
+            self.waits.append(timeout)
+            if len(self.waits) == 1:
+                raise failure
+            if cleanup == "blocked":
+                raise subprocess.TimeoutExpired("synthetic validator", timeout)
+            self.returncode = -9 if cleanup == "reap" else 0
+            self.release()
+            return self.returncode
+
+    monkeypatch.setattr(snapshots.subprocess, "Popen", Child)
+    try:
+        if fault is OSError:
+            assert snapshots.publish_snapshot(str(source), str(output)) is None
+        else:
+            with pytest.raises(fault) as caught:
+                snapshots.publish_snapshot(str(source), str(output))
+            assert caught.value is failure
+        assert len(children) == 1
+        child = children[0]
+        assert len(child.waits) == 2 and child.waits[-1] == 1
+        assert child.kills == (0 if cleanup == "already-reaped" else 1)
+        assert source.read_bytes() == original
+        assert published.read_bytes() == b"synthetic prior snapshot"
+        assert not list(output.glob(".snapshot.*"))
+        assert (output / ".validation.lock").stat().st_mode & 0o777 == 0o600
+        with (output / ".validation.lock").open() as lock:
+            if cleanup == "blocked":
+                assert child.returncode is None
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                assert not snapshots._valid_snapshot_candidate(
+                    str(output / "synthetic-next.db"), deadline=time.monotonic() + 10)
+                assert len(children) == 1
+            else:
+                assert child.returncode is not None
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        # The deliberately unreaped model must not leave this test's duplicate FD.
+        for child in children:
+            child.release()
+
+
+def test_snapshot_validator_cancel_reaps_actual_owned_child(tmp_path, monkeypatch):
+    import fcntl
+
+    path = tmp_path / "candidate.db"
+    path.write_bytes(b"synthetic candidate; validator body is replaced by sleep")
+    monkeypatch.setattr(snapshots, "_SNAPSHOT_VALIDATION_CODE",
+                        "import time; time.sleep(30)")
+    spawn = snapshots.subprocess.Popen
+    children = []
+    failure = KeyboardInterrupt("synthetic validator cancellation")
+
+    def record(*args, **kwargs):
+        child = spawn(*args, **kwargs)
+        original_wait, original_kill = child.wait, child.kill
+        children.append((child, original_wait, original_kill))
+        first = True
+
+        def interrupt(timeout):
+            nonlocal first
+            if first:
+                first = False
+                raise failure
+            return original_wait(timeout=timeout)
+
+        monkeypatch.setattr(child, "wait", interrupt)
+        return child
+
+    monkeypatch.setattr(snapshots.subprocess, "Popen", record)
+    try:
+        with pytest.raises(KeyboardInterrupt) as caught:
+            snapshots._valid_snapshot_candidate(str(path), deadline=time.monotonic() + 10)
+        assert caught.value is failure
+        assert len(children) == 1
+        assert children[0][0].poll() is not None
+        with (tmp_path / ".validation.lock").open() as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert path.read_bytes() == b"synthetic candidate; validator body is replaced by sleep"
+    finally:
+        # Red characterization must also stop/reap the exact owned child.
+        for child, wait, kill in children:
+            try:
+                if child.poll() is None:
+                    kill()
+            finally:
+                wait(timeout=2)

@@ -66,6 +66,14 @@ def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
                     # uninterruptible disk wait exits and the OS closes it.
                     pass
                 return False
+            except BaseException:
+                # Cleanup must not replace the original interruption/wait error.
+                # An unreaped child keeps the inherited lock as a validator fence.
+                with suppress(BaseException):
+                    child.kill()
+                with suppress(BaseException):
+                    child.wait(timeout=1)
+                raise
     except OSError:
         return False
 
