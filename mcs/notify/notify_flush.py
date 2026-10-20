@@ -1155,7 +1155,8 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     due = ledger.outbox_due(limit)
     import notify_cards
     slack_attachments = (notify_cards.interactive_enabled(cfg)
-                         and notify_cards.active_transport(cfg) == "slack")
+                         and notify_cards.active_transport(cfg) == "slack"
+                         and notify_cards.notify_cfg(cfg).get("card_thread") is True)
     exe = _hermes_exe(cfg)
     exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(

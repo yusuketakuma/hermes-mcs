@@ -127,6 +127,41 @@ def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch, kind):
     db.close()
 
 
+@pytest.mark.parametrize("card_thread", [False, None], ids=["off", "unset"])
+def test_attachment_followup_keeps_text_file_delivery_without_card_thread(
+        tmp_path, monkeypatch, card_thread):
+    from slack_testkit import SLACK
+
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(70))
+    cfg = {**SLACK, "notify": dict(SLACK["notify"])}
+    if card_thread is None:
+        cfg["notify"].pop("card_thread")
+    else:
+        cfg["notify"]["card_thread"] = card_thread
+    source = tmp_path / "synthetic.pdf"
+    source.write_bytes(b"completely synthetic PDF")
+    event_id = db.outbox_add("attachment_followup", 70, {"message_id": 1})
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *_: "/bin/sh")
+    monkeypatch.setattr(notify_flush, "_target", lambda *_: "slack:C_SYNTHETIC")
+    monkeypatch.setattr(notify_flush, "_format_event",
+                        lambda *_: ("synthetic file notice", [(source.name, str(source))]))
+    calls = []
+    monkeypatch.setattr(notify_flush, "_send",
+                        lambda argv, content, files=None, **kw: calls.append(files))
+    try:
+        result = notify_flush.flush(db)
+        assert calls == [[(source.name, str(source))]]
+        assert result["sent"] == 1 and result["failed"] == 0
+        state = db.db.execute("SELECT state,route FROM notify_outbox WHERE event_id=?",
+                              (event_id,)).fetchone()
+        assert tuple(state) == ("accepted", "text")
+        assert not db.db.execute("SELECT 1 FROM notification_intent_batches").fetchone()
+    finally:
+        db.close()
+
+
 def test_media_path_aliases_extensionless_files(tmp_path):
     """Attachments are stored extensionless (attachments/<id>) but
     platforms derive the upload filename from the path basename — the
