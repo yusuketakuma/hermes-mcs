@@ -50,6 +50,8 @@
 
 Slackでは通常操作を選択メニューへ集約し、5種類のスタンプと既存フォームの「別の投稿」を`context_actions`内の`feedback_buttons`3組にまとめます。自分のスタンプは`✓`で示します。各組の`action_id`に2個の既存トークンを含め、クリックの`value`がそのどちらかであることを検証します。カード更新時は`block_id`も変更します。既存のworkspace・app・channel・操作者・投稿・患者scope検査を通し、組の経路は`stamp_press`または`stamp`だけに限ります。5種類とフォームが揃わない旧specでは通常のスタンプボタンを保持します。Discord・LINE WORKSの描画と共通の操作受付契約は変えません。
 
+Slack APIが小型表示を`invalid_blocks`で明確に拒否した場合だけ、現在の送信権限を再確認し、従来のスタンプボタンとメニューの`MCSスタンプ`へ描画し直して1回再試行します。本文・操作トークン・送信先を保持し、更新を新規投稿へ変更しません。タイムアウト・結果不明・その他の拒否ではこの再試行を行わず、旧形式も拒否された場合は止まります。通常の429待機・再試行の上限は変わりません。ログには固定コード`slack_compact_stamps_unsupported`だけを記録します。
+
 このSlack小型表示は開発候補です。公式の[小型操作ブロック](https://docs.slack.dev/reference/block-kit/blocks/context-actions-block/)と[2個組のボタン](https://docs.slack.dev/reference/block-kit/block-elements/feedback-buttons-element/)の契約を使いますが、iOS/Android実機の配置・連続クリック・選択状態と実際のイベント形式は未確認です。本番反映前に、非機密の専用投稿で追加・反映確認後の同じボタンによる取消・「別の投稿」の動作を確認します。クライアント内の一時的な選択表示はMCS反映の証拠とせず、MCS読取り後の`✓`と保存済み結果を正本とします。図や合成テストをこの確認の代用にしません。
 
 ほかの投稿は、Slackの「別の投稿」（小型操作欄がないときは「MCSスタンプ」）、Discord・LINE WORKSの「MCSスタンプ」操作で、runnerが返したフォームを使います。フォームはカードのsource generation、token、表示済みmanifestに拘束されます。既存スレッドカードのページ上限は8投稿で、スタンプフォームは該当manifestから最大20投稿までを候補にします。全履歴から任意の投稿を検索して操作するフォームではありません。

@@ -4,13 +4,16 @@ import asyncio
 import math
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
 import pytest
 
 from adapters.slack.actions import parse_action_origin
 from adapters.slack.cards import render
+from adapters.slack import cards, delivery
 from slack_actions_testkit import TOKEN, ack, click, command, fixture
 from slack_card_testkit import _spec
+from slack_testkit import FakeClient
 
 
 def _stamps_spec():
@@ -131,3 +134,129 @@ def test_compact_click_cannot_bypass_the_pinned_registry(tmp_path, denial):
         await actions._action(ack, body, _pair_action("d" * 32 if denial == "unknown_token" else TOKEN))
         assert not list(Path(dirs["cmd_int"]).glob("*.json"))
     asyncio.run(run())
+
+
+def _slack_error(status=200, error="invalid_blocks"):
+    exc = RuntimeError("synthetic Slack rejection")
+    exc.response = SimpleNamespace(status_code=status, data={"ok": False, "error": error})
+    return exc
+
+
+def _deliver_card(failures, *, op="create", thread=False, gate=None, spec=None):
+    async def run():
+        client = FakeClient()
+        pending = list(failures)
+        method = "chat_update" if op == "update" else "chat_postMessage"
+        original = getattr(client, method)
+
+        async def send(**kwargs):
+            if pending:
+                client.calls.append((op, kwargs))
+                raise pending.pop(0)
+            return await original(**kwargs)
+
+        setattr(client, method, send)
+        adapter = delivery.SlackCardAdapter(SimpleNamespace(client=client),
+            team_id="T_SYNTHETIC", application_id="A_SYNTHETIC",
+            channel_id="C_SYNTHETIC", profile="cco")
+        assert await adapter.bind()
+        card = spec if spec is not None else _stamps_spec()
+        card["op"] = op
+        if op == "update":
+            card["delivery"]["message_id"] = "1790000000.000001"
+        if thread:
+            card["kind"] = "signal"
+            card["parts"]["source_thread"] = True
+            card["delivery"]["thread_id"] = "1790000000.000002"
+        token = delivery.RETRY_ALLOWED.set(gate)
+        try:
+            outcome = await adapter.perform(card)
+        finally:
+            delivery.RETRY_ALLOWED.reset(token)
+        return outcome, [(kind, kw) for kind, kw in client.calls if kind in {"create", "update"}]
+    return asyncio.run(run())
+
+
+@pytest.mark.parametrize("op", ["create", "update"])
+@pytest.mark.parametrize("thread", [False, True])
+def test_rejected_compact_card_retries_once_with_all_controls_and_same_target(op, thread, caplog):
+    caplog.set_level("INFO", logger="adapters.slack.delivery")
+    checked = []
+
+    async def allowed():
+        checked.append(True)
+        return True
+
+    outcome, calls = _deliver_card([_slack_error()], op=op, thread=thread, gate=allowed)
+    assert outcome["result"] == "delivered" and len(calls) == 2
+    assert checked == [True]
+    assert [kind for kind, _ in calls] == [op, op]
+    first, last = [kw for _, kw in calls]
+    assert {k: v for k, v in first.items() if k != "blocks"} == {
+        k: v for k, v in last.items() if k != "blocks"}
+    assert any(b["type"] == "context_actions" for b in first["blocks"])
+    assert not any(b["type"] == "context_actions" for b in last["blocks"])
+    controls = [e for b in last["blocks"] if b["type"] == "actions" for e in b["elements"]]
+    menu, = [e for e in controls if e["type"] == "static_select"]
+    assert [o["value"] for o in menu["options"]] == ["b" * 32, "c" * 32, "d" * 32]
+    stamps = [e for e in controls if e["type"] == "button"]
+    assert [e["value"] for e in stamps] == [f"{i:032x}" for i in range(1, 6)]
+    assert stamps[1]["style"] == "primary"
+    assert [b for b in first["blocks"] if b["type"] not in {"actions", "context_actions"}] == [
+        b for b in last["blocks"] if b["type"] != "actions"]
+    if op == "update":
+        assert outcome["message_id"] == last["ts"] == "1790000000.000001"
+    elif thread:
+        assert last["thread_ts"] == "1790000000.000002"
+    assert caplog.text.count("slack_compact_stamps_unsupported") == 1
+    assert "合成カード" not in caplog.text
+
+
+@pytest.mark.parametrize("failure,result", [
+    (_slack_error(), "not_sent"), (TimeoutError("synthetic"), "unknown"),
+])
+def test_rejected_legacy_retry_is_not_repeated(failure, result):
+    outcome, calls = _deliver_card([_slack_error(), failure], op="update")
+    assert outcome["result"] == result and len(calls) == 2
+    assert all(kind == "update" for kind, _ in calls)
+
+
+@pytest.mark.parametrize("failure,result", [
+    (TimeoutError("synthetic"), "unknown"),
+    (_slack_error(500), "unknown"), (_slack_error(None), "unknown"),
+    (_slack_error(200, "internal_error"), "unknown"),
+    (_slack_error(403, "missing_scope"), "not_sent"),
+])
+def test_uncertain_or_other_failure_never_retries_compact_card(failure, result):
+    outcome, calls = _deliver_card([failure])
+    assert outcome["result"] == result and len(calls) == 1
+
+
+def test_compact_fallback_honors_revoked_send_authority():
+    async def denied():
+        return False
+
+    outcome, calls = _deliver_card([_slack_error()], gate=denied)
+    assert outcome == {"result": "not_sent", "error_code": "invalid_blocks"}
+    assert len(calls) == 1
+
+
+def test_legacy_card_rejection_does_not_retry_or_drop_its_blocks():
+    outcome, calls = _deliver_card([_slack_error()], spec=_spec())
+    assert outcome == {"result": "not_sent", "error_code": "invalid_blocks"}
+    assert len(calls) == 1 and calls[0][1]["blocks"]
+
+
+def test_fallback_that_exceeds_block_budget_is_not_sent(monkeypatch):
+    spec = _stamps_spec()
+    spec["parts"]["action_rows"][0] = [spec["parts"]["action_rows"][0][-1]]
+    monkeypatch.setattr(cards, "_BLOCK_MAX", len(render(spec)[1]))
+    outcome, calls = _deliver_card([_slack_error()], spec=spec)
+    assert outcome == {"result": "not_sent", "error_code": "bad_render"}
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failures", [[asyncio.CancelledError()], [_slack_error(), asyncio.CancelledError()]])
+def test_compact_and_legacy_attempts_propagate_cancellation(failures):
+    with pytest.raises(asyncio.CancelledError):
+        _deliver_card(failures)

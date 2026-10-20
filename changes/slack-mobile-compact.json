@@ -6,7 +6,8 @@
   "details": [
     "Slackのcontext_actions内にfeedback_buttonsを3組配置し、既存のスタンプ5個と投稿選択フォームのトークンを再利用する。",
     "組に含まれるトークンと操作種別を検証し、既存の患者・操作者・投稿・原文検証、クリック時刻、receipt、結果不明時の再照合を維持する。",
-    "5種類とフォームが揃わない旧specのスタンプボタン、Discord・LINE WORKSの描画を保持する。"
+    "5種類とフォームが揃わない旧specのスタンプボタン、Discord・LINE WORKSの描画を保持する。",
+    "Slackが小型表示をinvalid_blocksで明確に拒否した場合だけ、送信権限を再確認して同じ投稿・スレッドへ従来表示で1回再試行する。本文・操作は省略せず、タイムアウトや送信結果不明では再送しない。"
   ],
-  "refs": ["adapters/slack/cards.py", "adapters/slack/actions.py"]
+  "refs": ["adapters/slack/cards.py", "adapters/slack/actions.py", "adapters/slack/delivery.py"]
 }

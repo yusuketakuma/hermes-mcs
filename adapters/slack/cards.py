@@ -267,7 +267,7 @@ def _link_context(text):
     return [{"type": "context", "elements": [{"type": "mrkdwn", "text": mrkdwn}]}]
 
 
-def render(spec, names=None):
+def render(spec, names=None, *, compact_stamps=True):
     """Render visible containers/footer without serializing private context."""
     validate(spec)
     blocks = render_parts(spec["parts"], names,
@@ -284,7 +284,8 @@ def render(spec, names=None):
                 stamps.append(button)
             else:
                 menu.append(button)
-    stamp_form = next((b for b in menu if b["id"] == "stamp"), None) if len(stamps) == 5 else None
+    stamp_form = next((b for b in menu if b["id"] == "stamp"), None) \
+        if compact_stamps and len(stamps) == 5 else None
     if stamp_form:
         menu.remove(stamp_form)
     elements = []

@@ -12,7 +12,7 @@ import time
 from collections.abc import Mapping
 
 from adapters.common.paths import read_verified_attachment
-from adapters.common import envelopes
+from adapters.common import envelopes, eventlog
 from adapters.common.spec import token_map
 from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
@@ -21,6 +21,7 @@ from .paths import notify_dirs
 
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
 _CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_log = eventlog.make_logger(__name__)
 # A failed users.info (missing scope, 429, network) is retried after this
 # long — same idea as registry.CAPABILITY_NEG_S; successes never expire.
 NAME_NEG_S = 900
@@ -236,7 +237,7 @@ class SlackCardAdapter:
                 and delivery.get("profile") == self._profile)
 
     async def perform(self, spec):
-        """One native API attempt, returning a factual transport outcome."""
+        """One card send, with bounded retries only after definite rejection."""
         if not self._bound:
             return {"result": "not_sent", "error_code": "workspace_unverified"}
         delivery = spec.get("delivery") if isinstance(spec, dict) else None
@@ -279,7 +280,15 @@ class SlackCardAdapter:
             return {"result": "not_sent", "error_code": "retry_policy_unknown"}
         op = spec["op"]
         message_id = delivery.get("message_id")
+        kwargs = dict(channel=self._channel_id, text=text, blocks=blocks,
+                      parse="none", link_names=False)
         try:
+            if op == "update":
+                send = sender.chat_update
+                kwargs["ts"] = message_id
+            else:
+                send = sender.chat_postMessage
+                kwargs.update(unfurl_links=False, unfurl_media=False)
             if spec["parts"].get("thread_notice") is True or spec["parts"].get("source_thread") is True:
                 thread_ts = delivery.get("thread_id")
                 notice = spec["parts"].get("thread_notice") is True
@@ -302,22 +311,26 @@ class SlackCardAdapter:
                 if (history.get("ok") is not True or not isinstance(roots, list) or not roots
                         or roots[0].get("ts") != thread_ts or not self.authored(roots[0])):
                     return {"result": "not_sent", "error_code": "thread_root_unverified"}
-                if op == "update":
-                    response = await call_native(sender.chat_update, channel=self._channel_id, ts=message_id,
-                        text=text, blocks=blocks, parse="none", link_names=False)
-                else:
-                    response = await call_native(sender.chat_postMessage, channel=self._channel_id,
-                        thread_ts=thread_ts, text=text, blocks=blocks, parse="none", link_names=False,
-                        unfurl_links=False, unfurl_media=False)
-            elif op == "update":
-                response = await call_native(
-                    sender.chat_update, channel=self._channel_id, ts=message_id,
-                    text=text, blocks=blocks, parse="none", link_names=False)
-            else:
-                response = await call_native(
-                    sender.chat_postMessage, channel=self._channel_id, text=text, blocks=blocks,
-                    parse="none", link_names=False,
-                    unfurl_links=False, unfurl_media=False)
+                if op != "update":
+                    kwargs["thread_ts"] = thread_ts
+            try:
+                response = await call_native(send, **kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                outcome = _failed(exc, op, message_id)
+                if outcome != {"result": "not_sent", "error_code": "invalid_blocks"} \
+                        or not any(b["type"] == "context_actions" for b in blocks):
+                    return outcome
+                allowed = RETRY_ALLOWED.get()
+                if allowed is not None and not await allowed():
+                    return outcome
+                try:
+                    _, kwargs["blocks"] = render(spec, names, compact_stamps=False)
+                except ValueError:
+                    return {"result": "not_sent", "error_code": "bad_render"}
+                _log("blocks_rejected", reason="slack_compact_stamps_unsupported")
+                response = await call_native(send, **kwargs)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -351,8 +364,7 @@ class DeliveryWorker(_BaseWorker):
 
     def _retry_gate(self, spec):
         """RETRY_ALLOWED for one send: the current authority, logged
-        when it withholds the 429 resend (the receipt says only
-        ratelimited)."""
+        when it withholds a retry (the receipt preserves the rejection)."""
         async def allowed():
             if await self._send_allowed(spec):
                 return True
