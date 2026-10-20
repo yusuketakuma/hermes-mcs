@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="780" viewBox="0 0 780 780" font-family="Hiragino Sans, sans-serif">
+<title>導入・更新・復旧の進め方</title><desc>日本語の質問に答えて進める操作の説明図。実画面ではありません。</desc>
+<rect width="780" height="780" fill="#f5f7fa"/>
+<text x="44" y="48" font-size="38" fill="#243449">迷ったら「推奨」を選ぶ</text>
+<text x="44" y="88" font-size="27" fill="#243449">日本語の質問に、番号で答えて進めます</text>
+<rect x="34" y="110" width="712" height="164" rx="16" fill="white" stroke="#b7c6d6"/>
+<text x="62" y="150" font-size="32" fill="#126b58">1  初めて使う</text>
+<text x="62" y="200" font-size="28" fill="#243449">導入方法を選ぶ → ソフトを導入</text>
+<text x="62" y="246" font-size="28" fill="#243449">必要な設定 → 接続・通知を確認</text>
+<rect x="34" y="290" width="712" height="164" rx="16" fill="white" stroke="#b7c6d6"/>
+<text x="62" y="330" font-size="32" fill="#126b58">2  新しい版に更新する</text>
+<text x="62" y="380" font-size="28" fill="#243449">更新先と変更内容を確認</text>
+<text x="62" y="426" font-size="28" fill="#243449">自分で実行を選ぶ → 結果を確認</text>
+<rect x="34" y="470" width="712" height="164" rx="16" fill="white" stroke="#b7c6d6"/>
+<text x="62" y="510" font-size="32" fill="#126b58">3  更新が途中で止まった</text>
+<text x="62" y="560" font-size="28" fill="#243449">まず状態を確認する</text>
+<text x="62" y="606" font-size="28" fill="#243449">自分で復旧を選ぶ → 結果を確認</text>
+<text x="44" y="688" font-size="27" fill="#243449">施設のID・通知先・操作権限は確認が必要</text>
+<text x="44" y="725" font-size="27" fill="#243449">データを戻す承認は、別の手順で確認</text>
+<text x="44" y="763" font-size="22" fill="#596879">操作の説明図です。実画面ではありません。</text>
+</svg>

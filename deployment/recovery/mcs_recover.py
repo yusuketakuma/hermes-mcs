@@ -35,6 +35,8 @@ import uuid
 from contextlib import suppress
 from pathlib import Path
 
+INTERACTIVE_GUIDE_VERSION = 1
+
 HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
 DATA = os.path.join(HOME, "data")
 RECOVERY_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1688,7 +1690,77 @@ def _remove_marker():
         pass
 
 
+def interactive_recovery():
+    """Guide a human through the existing interrupted-update recovery."""
+    if not sys.stdin.isatty():
+        print("対話形式の復旧はターミナルで mcs recover を実行してください。")
+        return 2
+    print("MCS 復旧のご案内 — 中断した更新の状態を確認します。")
+    print("手順 1/3: 状態を確認しています（この確認では変更しません）。")
+    state = _load_state()
+    if state.get("_corrupt"):
+        print("更新記録を読み取れません。変更せず停止しました。担当者に確認を依頼してください。")
+        return 2
+    held = bool(state.get("restore_consent") or _awaiting_consent())
+    if held:
+        print("データを戻す前の確認で保留した記録があります。通知の対象・失われる可能性のあるデータを担当者と確認してください。")
+        print("未承認の場合は、理由と承認記録を残す既存の承認手順を使ってください。以下の実行選択は復元の承認ではありません。既存の承認記録を再確認し、承認条件を満たす場合だけ復旧を進めます。")
+    pending = held or state.get("applying") or state.get("stages") or os.path.exists(MARKER_PATH)
+    if not pending:
+        print("中断した更新は見つかりませんでした。復旧処理は不要です。")
+        print("通知などに問題がある場合は mcs doctor で確認してください。")
+        return 0
+    print("中断または進行中の更新記録があります。実行中の更新には割り込みません。")
+    print("手順 2/3: 復旧すると収集・通知の再起動や、更新前の版への戻しが行われる場合があります。")
+    while True:
+        print("  1. 今回は終了する・担当者に相談する（わからない場合の推奨）")
+        print("  2. 上記を確認して、中断した更新の復旧を試す")
+        print("  0. 中止する")
+        try:
+            answer = input("番号を入力して Enter（省略時 1）: ").strip() or "1"
+        except (EOFError, KeyboardInterrupt):
+            print("\n中止しました。復旧処理は開始していません。")
+            return 0
+        if answer in ("0", "1"):
+            print("復旧処理は開始していません。再開するときは mcs recover を実行してください。")
+            return 0
+        if answer == "2":
+            break
+        print("0・1・2 のいずれかを入力してください。")
+    print("手順 3/3: 復旧を試しています。完了までこの画面を閉じずにお待ちください。")
+    try:
+        result = recover()
+    except (KeyboardInterrupt, OSError):
+        print("\n復旧処理を完了できませんでした。途中まで変更された可能性があります。mcs recover で状態を再確認し、担当者に確認を依頼してください。")
+        return 1
+    state = _load_state()
+    if state.get("restore_consent") or _awaiting_consent():
+        print("データを戻す前の確認で保留しています。未承認なら既存の承認手順を使ってください。承認済みなら自動監視の再確認を待ち、進まなければ担当者に確認を依頼してください。")
+        return 1
+    if result or state.get("_corrupt"):
+        print("復旧は完了していません。繰り返し実行せず、担当者に確認を依頼してください。")
+        return result or 1
+    if state.get("applying") or state.get("stages") or os.path.exists(MARKER_PATH):
+        print("まだ更新記録が残っています。他の処理が動作中の可能性があります。少し待って再確認してください。")
+        return 1
+    print("中断した更新の処理が終了しました。mcs doctor と通知先の応答で動作を確認してください。")
+    return 0
+
+
 def main():
+    if any(arg not in ("--interactive", "--status", "--if-stale", "--help", "-h")
+           for arg in sys.argv[1:]):
+        print("使い方: mcs_recover.py --interactive（対話形式） / --status（状態確認）")
+        return 2
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print("MCS 復旧: --interactive で日本語の案内を開始します。")
+        print("--status は状態確認のみ。--if-stale は自動監視用です。")
+        return 0
+    if "--interactive" in sys.argv:
+        if "--if-stale" in sys.argv or "--status" in sys.argv:
+            print("--interactive は単独で指定してください。")
+            return 2
+        return interactive_recovery()
     if "--status" in sys.argv:
         state = _load_state()
         print(json.dumps({"state": state, "head": _head(),

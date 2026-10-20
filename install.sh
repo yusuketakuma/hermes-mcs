@@ -44,15 +44,51 @@
 # A stage that fails stops the install with a non-zero exit — repair
 # it and re-run; later stages never run on top of a broken one.
 # What is NOT automated (needs your secrets / interactive choices):
-# `mcs_setup.py init` (guided all-settings wizard), the Discord/Slack
-# tokens, and the plugin settings block — the final summary lists them.
+# `mcs_setup.py init` (guided wizard) handles secrets and settings;
+# terminal installs offer to open it after the software is prepared.
 set -eu
 # files this script creates are the owner's only; existing modes are kept
 umask 077
 
 usage() {
-    # print the header comment block (everything after the shebang)
-    awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+    cat <<'EOF'
+MCS 導入ガイド — この Mac に必要なソフトと自動実行の仕組みを準備します。
+使い方: sh install.sh [オプション] [HERMES_HOME]
+通常はオプションなしで実行し、画面の番号を選んでください。
+
+  --preflight / --check-only  導入前の確認だけ（変更しません）
+  --dry-run                  確認と作業予定の表示だけ（変更しません）
+  --mode hermes|standalone    連携方式を指定（省略時は既存設定、未設定は hermes）
+  --no-brew                   必要ソフトの導入を省略（管理者向け）
+  --no-llm                    この Mac で動く AI の導入を省略
+  --no-plugin                Slack/Discord の操作ボタンの導入を省略
+  --no-services              自動実行の登録を省略
+  --no-recovery              復旧ツールの登録を省略
+  --recovery-python PATH     復旧用 Python の絶対パス（管理者向け）
+  --force-repo               既存の導入元を変更（管理者向け）
+  -h / --help                この説明を表示
+
+普段お使いのユーザーで実行してください。sudo は使いません。
+途中で止まった場合は、表示された原因を解消して同じ操作を再実行できます。
+EOF
+}
+
+# EOF is cancellation, never acceptance of a recommended action.
+choose() {
+    while :; do
+        printf '%s' "$1"
+        _answer=""
+        if ! read -r _answer; then
+            printf '\n入力を終了したため、ここで中止しました。\n'
+            return 130
+        fi
+        case "$_answer" in
+            ""|1) _answer=1; return ;;
+            2) return ;;
+            0) printf '中止しました。\n'; return 130 ;;
+            *) printf '1 または 2 を入力してください。中止は 0 です。\n' ;;
+        esac
+    done
 }
 
 MODE=install
@@ -91,25 +127,24 @@ done
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ ! -e "$HOME/.mcs/config.json" ] \
         && [ ! -L "$HOME/.mcs/config.json" ] \
         && [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ]; then
-    printf '%s\n' "How should MCS connect to Slack/Discord?" \
-        "  1) hermes      — through Hermes Agent" \
-        "  2) standalone  — without Hermes Agent"
-    printf 'choose 1 or 2 [1]: '
-    _answer=""
-    read -r _answer || :
+    printf '%s\n' "MCS の導入を始めます。番号を入力して Enter キーで進みます。" \
+        "Slack / Discord との連携方式を選んでください。" \
+        "  1) わからないので推奨を使う — Hermes Agent と連携（標準）" \
+        "  2) MCS 単独で使う — Hermes Agent を導入しない" \
+        "LINE WORKS を使う場合も、通知先は後の初期設定で選べます。"
+    choose '選択 [1・推奨 / 2 / 0・中止]: '
     case "$_answer" in
-        2|standalone) RUNTIME_MODE=standalone ;;
-        ""|1|hermes) RUNTIME_MODE=hermes ;;
-        *) printf '%s\n' "invalid choice — use --mode hermes|standalone" >&2; exit 2 ;;
+        2) RUNTIME_MODE=standalone ;;
+        1) RUNTIME_MODE=hermes ;;
     esac
     RUNTIME_EXPLICIT=1
 fi
 
 say()  { printf '\n=== %s ===\n' "$1"; }
-ok()   { printf '  ok: %s\n' "$*"; }
-skip() { printf '  skip: %s\n' "$*"; }
-warn() { printf '  warn: %s\n' "$*" >&2; }
-die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+ok()   { printf '  完了: %s\n' "$*"; }
+skip() { printf '  省略: %s\n' "$*"; }
+warn() { printf '  注意: %s\n' "$*" >&2; }
+die()  { printf '停止: %s\n' "$*" >&2; exit 1; }
 SUMMARY=""
 sum()  { SUMMARY="$SUMMARY  $*
 "; }
@@ -479,7 +514,7 @@ pf_net() {  # <label> <url> <needed: 1 = blocker when unreachable>
 }
 
 preflight() {
-    say "preflight (read-only — nothing is written)"
+    say "導入前の確認（preflight・変更は行いません）"
     pf_info "runtime mode: $RUNTIME_MODE (change with --mode hermes|standalone)"
     if [ "$IS_ROOT" -eq 1 ]; then
         pf_ng "running as root" "re-run as your normal user, without sudo"
@@ -608,7 +643,7 @@ preflight() {
 plan_line() { printf '  %-14s %s\n' "$1" "$2"; }
 state() { if [ -e "$1" ] || [ -L "$1" ]; then printf 'exists'; else printf 'new'; fi; }
 dry_run_plan() {
-    say "plan (--dry-run: nothing below is executed)"
+    say "作業予定（--dry-run・実際の変更は行いません）"
     plan_line "launcher" "$HOME/.local/bin/mcs -> selected runtime + $REPO/mcs/ops/mcs_cli.py"
     if [ "$SKIP_BREW" -eq 1 ]; then plan_line "1/6 brew" "skipped (--no-brew)"
     else plan_line "1/6 brew" "brew install any of: git python@3.14 uv llama.cpp, cask google-chrome (installed ones are skipped)"; fi
@@ -657,7 +692,7 @@ if [ "$MODE" != install ]; then
 fi
 
 # ---------------------------------------------------------- guards
-[ "$IS_ROOT" -eq 0 ] || die "do not run install.sh as root or with sudo — it installs into your own home; re-run as your normal user"
+[ "$IS_ROOT" -eq 0 ] || die "sudo や管理者 root として実行しないでください。普段のユーザーで、sudo を付けずにやり直してください"
 # mcs_setup services renders cron wrappers/plists against ~/.hermes (its
 # HERMES_PY and scripts dir are fixed there) — a custom HERMES_HOME would
 # install services pointing at an interpreter that does not exist
@@ -691,20 +726,32 @@ if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0
     fi
 fi
 
+if [ -t 0 ] && [ -t 1 ]; then
+    printf '\nこれから行うこと\n'
+    printf '  必要なソフト、通知連携、この Mac で動く AI、自動実行、復旧ツールを準備します。\n'
+    printf '  指定した省略オプションは維持します。連携方式: %s\n' "$RUNTIME_MODE"
+    printf '  初回はインターネット接続が必要です。AI の取得は約 5.7 GB で時間がかかります。\n'
+    printf '  準備後に、MCS のログイン情報と通知先を画面に沿って設定します。\n'
+    printf '  1) この内容で導入する（推奨）\n  2) 今は中止する\n'
+    choose '選択 [1・推奨 / 2 / 0・中止]: '
+    [ "$_answer" = 1 ] || { printf '導入を中止しました。\n'; exit 130; }
+fi
+
 # every non-zero exit from here on is a stopped install, not a usage error
 trap 'if [ "$?" -ne 0 ]; then
-    printf "%s\n" "error: installation stopped; repair the failed stage and re-run install.sh" >&2
+    printf "%s\n" "導入が途中で停止しました。直前のエラーを確認し、原因を解消して同じ操作をやり直してください。設定やデータを削除してやり直す必要はありません。 (installation stopped)" >&2
 fi' EXIT
 
 # ---------------------------------------------------------------- 1. brew
-say "1/6 Homebrew packages"
+say "1/6 必要なソフトを準備（Homebrew packages）"
 if [ "$SKIP_BREW" -eq 1 ]; then
     skip "stage skipped (--no-brew) — assuming git/python/uv/llama.cpp/Chrome are already provided"
     sum "1/6 brew:     skipped (--no-brew)"
 elif ! command -v brew >/dev/null 2>&1; then
-    die "brew not found — install Homebrew first:
+    die "必要なソフトを導入する Homebrew が見つかりません（brew not found）。
+次のコマンドで Homebrew を導入してください。Mac のログインパスワードを求められることがあります:
   $BREW_INSTALL
-then re-run install.sh (or pass --no-brew if you manage these tools yourself)"
+終わったら、もう一度同じ導入操作を行ってください。手順書: docs/guides/EASY_SETUP.md"
 else
     _new=""
     for pkg in git python@3.14 uv llama.cpp; do
@@ -732,7 +779,7 @@ fi
 
 # ----------------------------------------------------------- 2. hermes
 if [ "$RUNTIME_MODE" = standalone ]; then
-    say "2/6 standalone runtime"
+    say "2/6 MCS 単独実行の準備（standalone runtime）"
     mkdir -p "$RUNTIME_HOME"
     if ! py_ok "$VENV_PY" 14 15; then
         PYBIN="$(find_py)" || die "Python 3.14 required — brew install python@3.14"
@@ -761,7 +808,7 @@ if [ "$RUNTIME_MODE" = standalone ]; then
     MCS_PY="$VENV_PY"
     sum "2/6 runtime:  standalone venv and official connector SDKs"
 else
-say "2/6 hermes-agent"
+say "2/6 Hermes Agent を準備（hermes-agent）"
 mkdir -p "$HERMES_HOME"
 # checkout: a fresh clone is bracketed by CLONE_MARK, so an interrupted
 # clone/checkout is redone on re-run instead of being accepted unpinned.
@@ -963,7 +1010,7 @@ PYMODE
 fi
 
 # -------------------------------------------------------- 3. plugin
-say "3/6 Discord/Slack command plugin"
+say "3/6 Slack / Discord の操作ボタンを準備"
 if [ "$SKIP_PLUGIN" -eq 1 ]; then
     if [ "$RUNTIME_MODE" = standalone ]; then
         skip "not used in standalone mode — the standalone connector serves the cards"
@@ -995,7 +1042,7 @@ else
 fi
 
 # -------------------------------------------------- 4. local LLM server
-say "4/6 local LLM (llama-server :8080)"
+say "4/6 この Mac で動く AI を準備（llama-server :8080）"
 if [ "$SKIP_LLM" -eq 1 ]; then
     skip "stage skipped (--no-llm) — keep your own OpenAI-compatible server answering on 127.0.0.1:8080"
     sum "4/6 llm:      skipped (--no-llm)"
@@ -1032,7 +1079,7 @@ else
         if [ -f "$MODEL_FILE" ]; then
             skip "model already present"
         else
-            printf '  downloading model (~5.7 GB, resumable): %s\n' "$MODEL_FILE"
+            printf '  AI を取得しています（約 5.7 GB・中断後も再開可能）: %s\n' "$MODEL_FILE"
             mkdir -p "$MODEL_DIR"
             # .part is kept on failure so the next run resumes (-C -).
             # A .part that already holds every byte (interrupted between
@@ -1049,7 +1096,7 @@ else
             else
                 curl -fL --retry 5 --retry-delay 5 -C - --progress-bar \
                         -o "$MODEL_FILE.part" "$MODEL_URL" \
-                    || die "model download failed — re-run install.sh to resume (partial file: $MODEL_FILE.part)"
+                    || die "AI の取得が中断しました。ネットワーク接続を確認し、同じ導入操作で再開してください（途中ファイル: $MODEL_FILE.part)"
             fi
             _got="$(shasum -a 256 < "$MODEL_FILE.part" | awk '{print $1}')"
             if [ "$_got" != "$MODEL_SHA256" ]; then
@@ -1091,7 +1138,7 @@ else
 fi
 
 # ------------------------------------------- 5. launchd + hermes cron
-say "5/6 scheduled services ($RUNTIME_MODE)"
+say "5/6 自動実行を登録（${RUNTIME_MODE}）"
 # the agents stage 5/6 load log to / watch these — they must exist first
 # (new ones are 0700 via umask; existing modes are kept)
 mkdir -p "$HOME/.mcs" "$MCS_DATA" "$MCS_DATA/cmd" "$MCS_DATA/cmd_int"
@@ -1107,7 +1154,7 @@ else
 fi
 
 # --------------------------------- 6. update recovery (independent)
-say "6/6 update recovery (watchdog + tool)"
+say "6/6 更新に備えた復旧ツールを登録"
 if [ "$SKIP_RECOVERY" -eq 1 ]; then
     skip "stage skipped (--no-recovery)"
     sum "6/6 recovery: skipped (--no-recovery)"
@@ -1180,97 +1227,58 @@ if [ -z "${MCS_UPDATE_REINSTALL:-}" ]; then
 fi
 
 # ------------------------------------------------------------ summary
+# Software preparation succeeded; a later setup failure has its own guidance.
+trap - EXIT
+SETUP_STATUS=0
 PYQ="$(shell_quote "$MCS_PY")"
 SETUPQ="$(shell_quote "$SETUP")"
 # `-m` resolves only from the checkout: install.sh may run from elsewhere.
 INREPO="cd $(shell_quote "$REPO") &&"
 printf '\n============================================================\n'
-printf 'Installed. Summary:\n'
+printf 'ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。\n'
 printf '%s' "$SUMMARY"
 printf '============================================================\n'
-printf '\nOne guided step remains — it needs your secrets/choices:\n\n'
-printf '    %s setup\n' "$(shell_quote "$MCS_SHIM")"
-printf '    # equivalent existing entrypoint:\n'
+printf '\n次は MCS のログイン情報と通知先を設定します。\n'
+printf 'アカウント情報は、ご自身の端末で入力してください。\n'
+printf '準備ができていない項目は初期設定の案内に従って後で設定できます。\n'
+printf '初期設定だけでは MCS に接続できません。専用 Chrome の起動・MCS へのログイン、通知先の接続確認まで行ってください。\n'
+printf '手順書: docs/guides/EASY_SETUP.md\n'
+printf '後で続ける場合のコマンド:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
+printf '    # 同じ初期設定を開く別のコマンド:\n'
 printf '    %s %s init\n' "$PYQ" "$SETUPQ"
+if [ -t 0 ] && [ -t 1 ]; then
+    printf '\n  1) 続けて初期設定を始める（推奨）\n  2) 後で設定する\n'
+    if ! choose '選択 [1・推奨 / 2 / 0・終了]: '; then
+        _answer=2
+        printf 'ソフトの準備は完了しています。初期設定は後で再開できます。\n'
+    fi
+    if [ "$_answer" = 1 ]; then
+        "$MCS_PY" "$SETUP" init || SETUP_STATUS=$?
+        if [ "$SETUP_STATUS" -ne 0 ]; then
+            printf '\nソフトの準備は完了していますが、初期設定は完了していません。\n'
+            printf '入力内容や表示された問題を確認し、次のコマンドで再開してください:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
+        fi
+    fi
+fi
+printf '\n設定後の確認コマンド:\n    %s %s check\n' "$PYQ" "$SETUPQ"
 if [ "$RUNTIME_MODE" = standalone ]; then
-    cat <<'EOF'
-
-Select your notification destination and explicit actor/project scopes.
-The wizard stores connector secrets with hidden prompts in owner-only files.
-Hermes profiles, plugins and gateway are not used.
-Run init first; the host waits until configuration and credentials are ready.
-Then run the required-condition check and inspect status:
-EOF
-    printf '    %s %s check\n' "$PYQ" "$SETUPQ"
     printf '    %s %s -m mcs_standalone status\n' "$INREPO" "$PYQ"
-    cat <<'EOF'
-
-LINE WORKS (notify.interactive=lineworks): enter its secrets on your own
-terminal with the command below; the standalone host starts the adapter,
-so do not also run a separate lineworks_adapter service.
-EOF
-    printf '    %s %s -m lineworks_adapter init\n' "$INREPO" "$PYQ"
-    printf '\nSee docs/guides/STANDALONE.md (including switching from Hermes).\n'
-    exit 0
+    printf '\n詳しい説明: docs/guides/STANDALONE.md\n'
 fi
 cat <<'EOF'
 
-The wizard covers EVERY config.json setting (Enter keeps the
-current/default — a partially configured install just confirms
-existing values). When you pick notify.interactive=slack or
-discord it also, through the public hermes CLI only:
-
-  - writes the plugin settings block (snapshot/inbox/allowlists and
-    the notify.<transport> scope — slack_* keys for Slack) into the
-    hermes profile you name — multiplex setups: the profile that
-    serves that transport
-  - stores DISCORD_BOT_TOKEN (or SLACK_BOT_TOKEN + SLACK_APP_TOKEN)
-    in the profile .env (env var or prompt — never an argv flag),
-    skipping tokens already configured
-  - syncs the supervised gateway when interactive is configured
-  - runs the final required-condition check and reports blockers
-
-Non-interactive equivalent (slack):
-
+LINE WORKS を選んだ場合は、専用の接続設定も必要です。
+詳しい説明: docs/guides/LINEWORKS.md
 EOF
-printf '    %s %s init --yes \\\n' "$PYQ" "$SETUPQ"
-cat <<'EOF'
-        --login-id <ID> --notify-target slack:<channel_id> \
-        --set 'notify.interactive="slack"' \
-        --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C"}' \
-        --plugin-profile <serving profile> \
-        --plugin-user-ids <uid> \
-        --plugin-project-ids <pid>
-    # SLACK_BOT_TOKEN=<token> SLACK_APP_TOKEN=<token> in the
-    #   environment store the tokens
-    # Discord: notify.interactive="discord" + notify.discord={profile,
-    #   application_id, guild_id, channel_id}; the token comes from
-    #   DISCORD_BOT_TOKEN in the environment
-
-LINE WORKS (notify.interactive=lineworks) uses neither the Hermes
-plugin nor the gateway. After init, enter its secrets on your own
-terminal (hidden prompts, owner-only file), check, then run it or
-generate the resident service (docs/guides/LINEWORKS.md):
-
-EOF
-for sub in init check service; do
+for sub in init check; do
     printf '    %s %s -m lineworks_adapter %s\n' "$INREPO" "$PYQ" "$sub"
 done
-cat <<'EOF'
-
-init already syncs the gateway and validates the install.
-Only when services were skipped, or check reports deployed-script drift,
-run services and check again:
-
-EOF
-printf '    %s %s services   # picks up gateway\n' "$PYQ" "$SETUPQ"
-printf '    %s %s check\n' "$PYQ" "$SETUPQ"
-cat <<'EOF'
-
-Notes:
-- node.js is NOT a dependency — the pipeline and plugin are pure
-  Python (stdlib + hermes-bundled discord.py).
-- Jev/typesafe needs only TYPESAFE_API_KEY — the init wizard stores
-  it in ~/.mcs/.env. Nothing to install.
-- ollama is shared embedding infra, not required by MCS itself.
-EOF
+if [ "$RUNTIME_MODE" = standalone ]; then
+    printf 'MCS が LINE WORKS の接続を起動します。専用サービスを別に起動しないでください。\n'
+else
+    printf 'LINE WORKS の接続設定と確認を終えたら、自動起動を登録します:\n'
+    printf '    %s %s -m lineworks_adapter service\n' "$INREPO" "$PYQ"
+fi
+printf '\n自動実行の登録を省略した場合は、初期設定後に次を実行してください。\n'
+printf '    %s %s services\n' "$PYQ" "$SETUPQ"
+exit "$SETUP_STATUS"

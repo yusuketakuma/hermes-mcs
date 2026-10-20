@@ -5,11 +5,12 @@ REPO="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)"
 case "${1:-}" in
     install) shift; exec /bin/sh "$REPO/install.sh" "$@" ;;
     ""|-h|--help)
-        printf '%s\n' 'Usage: mcs install|update|setup|doctor|drug [options]' \
-            'Before installation: sh scripts/mcs install [options]'
+        printf '%s\n' '使い方: mcs install|update|recover|setup|doctor|drug [オプション]' \
+            'install: 導入 / update: 更新の案内 / recover: 中断した更新の復旧' \
+            '初めて導入するとき: sh scripts/mcs install'
         exit 0 ;;
-    update|setup|doctor|drug) ;;
-    *) printf '%s\n' 'Unknown command; use install, update, setup, doctor or drug.' >&2; exit 2 ;;
+    update|recover|setup|doctor|drug) ;;
+    *) printf '%s\n' '操作名を確認してください。mcs --help で使い方を表示できます。' >&2; exit 2 ;;
 esac
 unset PYTHONPATH PYTHONHOME
 for PY in "${MCS_ROOT:-$HOME/.mcs}/venv/bin/python3" \
@@ -18,5 +19,5 @@ for PY in "${MCS_ROOT:-$HOME/.mcs}/venv/bin/python3" \
         exec "$PY" "$REPO/mcs/ops/mcs_cli.py" "$@"
     fi
 done
-printf '%s\n' 'Installed interpreter missing. Run: sh scripts/mcs install' >&2
+printf '%s\n' 'MCS の実行環境が見つかりません。担当者に確認し、sh scripts/mcs install で導入してください。' >&2
 exit 1

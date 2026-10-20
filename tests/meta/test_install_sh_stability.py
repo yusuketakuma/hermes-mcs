@@ -35,7 +35,7 @@ exec /bin/COMMAND "$@"
     failed_path = str(dst) + (".tmp" if target == "llama_cleanup" else "")
     failed = _run({**env, "STUB_FAIL_PUBLISH": failed_path}, hermes_home)
     assert failed.returncode != 0, failed.stdout + failed.stderr
-    assert STOPPED in failed.stderr and "Installed." not in failed.stdout
+    assert STOPPED in failed.stderr and "ソフトの準備が完了しました" not in failed.stdout
     assert dst.read_bytes() == prior
     assert len(_bootstraps(stub_root, "llamaserver")) + len(
         _bootstraps(stub_root, "org.mcs.recovery")) == launches

@@ -1,5 +1,7 @@
 # MCS セットアップ実行手順書（AIエージェント用）
 
+人が直接操作する手順は[はじめての導入・更新](EASY_SETUP.md)を参照してください。対話設定は推奨コースと全項目コースを選べます。エージェントの非対話引数と承認手順は本書のとおりです。
+
 このガイドは現行のinstall/update/setup/doctorと、下記のinstall.sh・init・bootstrap・plan/apply・doctorの手順を説明する。
 統一入口は `sh scripts/mcs install`、導入後は `mcs setup`・`mcs update`・`mcs doctor`。
 導入する公開タグの仕様はCHANGELOGと[更新ガイド](UPGRADE_AGENT.md)で確認する。合成検証と実機受入は区別し、実接続・鍵・通知先の受入は各環境で確認する。
@@ -147,8 +149,10 @@ Phase 1 の `--preflight` が exit 0 であることが前提。
 ./install.sh             # Phase 1 の【ユーザー確認】で決めたフラグ（--no-llm / --force-repo 等）を付ける
 ```
 
-【検証】出力の最後に `Installed. Summary:` と 6 ステージ分の結果
-（`1/6 brew:` 〜 `6/6 recovery:`）が出て exit 0。加えて:
+【検証】`ソフトの準備が完了しました` と 6 ステージ分の結果が表示される。
+終了コード0でも、初期設定を後回しにした場合は利用開始前の作業が残る。
+初期設定を開始して失敗・中断した場合は非0となるが、ソフトの再導入は不要。
+表示された再開コマンドと、次の確認で段階を区別する:
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python -V        # 3.14（以後の mcs_setup はこのインタプリタ）
@@ -157,16 +161,15 @@ curl -sf -m 3 http://127.0.0.1:8080/v1/models    # llama-server 応答（--no-ll
 cat ~/.mcs-recovery/repo_path                    # この checkout の絶対パス（--no-recovery 以外）
 ```
 
-Summary に続いて表示される `init`・`services`・`check` のコマンド
+準備結果に続いて表示される `init`・`services`・`check` のコマンド
 （venv インタプリタと `mcs_setup.py` のフルパス付き）を Phase 5 で使う。
 
-【失敗時】install.sh は失敗したステージで止まり、`error: <原因と直し方>`
-と `error: installation stopped; repair the failed stage and re-run
-install.sh` を出す（後続ステージは実行されない）。`error:` 行の指示を
+【失敗時】install.sh は失敗したステージで止まり、`停止: <原因と直し方>`
+と `導入が途中で停止しました` を出す（後続ステージは実行されない）。`停止:` 行の指示を
 実行し、同じフラグで `./install.sh` を再実行する — 完了済みの部分は
 skip され、中断した clone/checkout・venv・pip install・モデル DL
 （`.part` から再開）は続きから進む。よくある原因と対処は
-INSTALLATION.md §7-1。`warn:` 行（`~/.local/bin` が PATH に無い、
+INSTALLATION.md §7-1。`注意:` 行（`~/.local/bin` が PATH に無い、
 llama plist の再読込保留、hermes 管理 LLM agent の未ロード等）は
 install を止めないが、表示されたコマンドをユーザーに案内する。
 

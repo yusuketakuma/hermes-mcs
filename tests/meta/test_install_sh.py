@@ -232,6 +232,7 @@ if [ "$1" = "-" ] && [ -n "$STUB_REAL_PYTHON" ]; then
     exec "$STUB_REAL_PYTHON" -B "$STUB_ROOT/runtime-check.py" --persist "$@"
 fi
 case "$*" in
+  *"mcs_setup.py init"*) exit "${STUB_SETUP_EXIT:-0}" ;;
   *"mcs_setup.py services"*)
     if [ -d "$HOME/.mcs/data/cmd" ] && [ -d "$HOME/.mcs/data/cmd_int" ]; then
         echo "datadirs-ready" >> "$STUB_LOG"
@@ -534,8 +535,8 @@ def test_install_run_then_rerun_converges(tmp_path):
     assert loaded == {"ai.mcs.llamaserver", "org.mcs.recovery"}
     # the pinned clone is reported pinned; final summary lists next steps
     assert "hermes-agent cloned (pinned" in r1.stdout
-    assert "Installed. Summary:" in r1.stdout
-    assert "init already syncs the gateway and validates" in r1.stdout
+    assert "ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。" in r1.stdout
+    assert "専用 Chrome の起動・MCS へのログイン" in r1.stdout
 
     r2 = _run(env, hermes_home)
     assert r2.returncode == 0, r2.stderr
@@ -730,7 +731,7 @@ def test_backslash_home_and_final_instructions_survive(tmp_path):
         == f"{ROOT}\n"
     venv_py = hermes_home / "hermes-agent" / "venv" / "bin" / "python"
     assert f"'{venv_py}' '{ROOT}/mcs/ops/mcs_setup.py' init\n" in r.stdout
-    assert "init --yes \\\n        --login-id <ID>" in r.stdout
+    assert "後で続ける場合のコマンド:" in r.stdout
     assert f"'{venv_py}' '{ROOT}/mcs/ops/mcs_setup.py' check" in r.stdout
     shim = (home / ".local" / "bin" / "hermes").read_text()
     assert f"exec '{venv_py.parent / 'hermes'}' \"$@\"" in shim
@@ -1065,7 +1066,7 @@ def test_dry_run_plans_no_second_llm_when_hermes_manages_it(tmp_path):
     agents.mkdir(parents=True, exist_ok=True)
     (agents / "ai.hermes.llamacpp.plist").write_text("<plist/>")
     r = _run(env, hermes_home, "--dry-run")
-    plan = r.stdout[r.stdout.index("=== plan"):]
+    plan = r.stdout[r.stdout.index("=== 作業予定"):]
     assert "hermes-managed" in plan and "is kept" in plan
     assert "ai.mcs.llamaserver" not in plan
 
@@ -1151,7 +1152,7 @@ def test_dry_run_prints_plan_and_writes_nothing(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     r = _run(env, None, "--dry-run", "--no-llm")
     assert r.returncode == 0, r.stdout
-    assert "plan (--dry-run" in r.stdout
+    assert "作業予定（--dry-run" in r.stdout
     assert "4/6 llm        skipped" in r.stdout
     assert "mcs_setup.py services" in r.stdout
     assert list(home.iterdir()) == []
@@ -1173,7 +1174,7 @@ def test_foreign_mcs_launcher_blocks_preflight_and_install_before_stage1(tmp_pat
     assert shim.read_text() == "#!/bin/sh\n# some other tool\n"
 
 
-STOPPED = "installation stopped; repair the failed stage and re-run install.sh"
+STOPPED = "導入が途中で停止しました。"
 
 
 @pytest.mark.parametrize("switch,message", [
@@ -1198,7 +1199,7 @@ def test_failed_stage_stops_install_then_rerun_recovers(
     assert r.returncode != 0
     assert message in r.stderr
     assert STOPPED in r.stderr
-    assert "Installed." not in r.stdout
+    assert "ソフトの準備が完了しました" not in r.stdout
     if switch not in ("STUB_FAIL_WATCHDOG", "STUB_WATCHDOG_NOLOAD"):
         # stopped before stage 6 — the old tool is untouched
         assert (rec / "mcs_recover.py").read_bytes() == old_gen
@@ -1246,7 +1247,7 @@ def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
     assert json.loads((home / ".mcs/config.json").read_text())["runtime_mode"] == "standalone"
     for command in ("-m lineworks_adapter init", "-m mcs_standalone status"):
         assert f"cd '{ROOT}' && " in first.stdout.split(command)[0].splitlines()[-1]
-    assert "do not also run a separate lineworks_adapter service" in " ".join(first.stdout.split())
+    assert "専用サービスを別に起動しないでください" in first.stdout
     assert "-m lineworks_adapter service" not in first.stdout
     calls = _calls(stub)
     text = "\n".join(calls)
@@ -1286,7 +1287,7 @@ def test_fresh_mac_without_python_explains_instead_of_silent_exit(tmp_path):
     assert not (home / ".mcs").exists()
     r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services")
     assert "the recovery interpreter is checked in stage 6" in r.stderr
-    assert "1/6 Homebrew packages" in r.stdout
+    assert "1/6 必要なソフトを準備" in r.stdout
 
 
 def test_fresh_mac_preflight_defers_recovery_check_when_brew_installs_python(tmp_path):

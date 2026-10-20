@@ -636,3 +636,13 @@ def test_cli_accepts_a_prerelease_and_rejects_non_ascii_digits(monkeypatch):
     with pytest.raises(SystemExit) as result:
         mcs_cli.main(["update", "plan", "--to", "v١.٠.٢"])
     assert result.value.code == 2
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_plan_exposes_reinstall_recovery_repair(updater, monkeypatch, tmp_path, repair):
+    import mcs_setup
+    _plan_env(updater, monkeypatch, tmp_path, ["install_sh_changed"])
+    monkeypatch.setattr(mcs_setup, "recovery_repair_pending", lambda cfg: repair)
+    report = updater.plan("v1.2.0")
+    assert report["route"] == "reinstall"
+    assert report["reinstall_requires_recovery_repair"] is repair

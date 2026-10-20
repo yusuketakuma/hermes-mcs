@@ -216,9 +216,14 @@ def test_non_local_session_is_not_reported_as_installed(home, source, monkeypatc
     assert not (home / ".mcs").exists() and not (home / "install-ran").exists()
 
 
-def test_dry_run_writes_nothing(home, source):
-    assert install_local.main(["--dry-run"], source=str(source)) == 0
+@pytest.mark.parametrize(("flags", "status"), [
+    (["--dry-run"], 0), (["--preflight"], 2), (["--check-only"], 2),
+    (["--dry-run", "--preflight"], 2), (["--dry-run", "--check-only"], 2)])
+def test_read_only_writes_nothing(home, source, flags, status, capsys):
+    assert install_local.main(flags, source=str(source)) == status
     assert not (home / ".mcs").exists() and not (home / "install-ran").exists()
+    if status:
+        assert "導入前の確認は未実施" in capsys.readouterr().err
 
 
 def test_interrupted_clone_leaves_no_partial_checkout_and_rerun_converges(home, source, monkeypatch):

@@ -185,8 +185,8 @@ def clone(source, dest):
 
 
 def main(argv=None, source=None):
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--dest", help="恒久的な checkout の置き場所（省略時は既存の導入先、なければ ~/.mcs。"
+    parser = argparse.ArgumentParser(description="この Mac に MCS のプログラムを配置し、日本語の導入ガイドを開きます。")
+    parser.add_argument("--dest", help="プログラムを保管するフォルダ（省略時は既存の導入先、なければ ~/.mcs。"
                                        "~/.mcs に設定・データだけがある場合は ~/.local/share/hermes-mcs）")
     parser.add_argument("--dry-run", action="store_true",
                         help="計画だけを表示し、何も書き込まない（install.sh --dry-run も実行）")
@@ -211,20 +211,27 @@ def main(argv=None, source=None):
     except Refused as error:
         print(f"install_local: {error}", file=sys.stderr)
         return 2
-    print(f"取得元の checkout: {source}")
+    print(f"取得元のプログラム: {source}")
     label = {"use_source": "このまま使う", "clone": "新しく作る", "reuse": "既存を使う"}[action]
-    print(f"恒久的な checkout: {dest}（{label}）")
+    print(f"プログラムの保管先: {dest}（{label}）")
     print(f"MCS の設定・収集データ: {os.path.expanduser(RUNTIME_ROOT)}（移動しません）")
     for note in notes:
         print(f"注意: {note}")
     sys.stdout.flush()   # keep this summary ahead of install.sh output
     child_env = {**os.environ, "MCS_ROOT": os.path.abspath(os.path.expanduser(RUNTIME_ROOT))}
-    if args.dry_run:
+    preflight = any(flag in passthrough for flag in ("--preflight", "--check-only"))
+    if args.dry_run or preflight:
         if action == "clone":
             # install.sh plans against its own location; the clone does not exist yet.
-            print("--dry-run: checkout を作成していないため install.sh の計画は作成後に確認してください")
+            if preflight:
+                print("導入前の確認は未実施です。保管先にプログラムがないため確認できません。"
+                      "プログラムを配置した後に、同じ確認コマンドを実行してください。"
+                      "この操作では配置も変更も行っていません。", file=sys.stderr)
+                return 2
+            print("確認のみ: プログラムはまだ配置していません。配置後の詳細な確認は導入時に行います")
             return 0
-        return subprocess.run(["sh", os.path.join(dest, "install.sh"), "--dry-run", *passthrough],
+        return subprocess.run(["sh", os.path.join(dest, "install.sh"),
+                               *(["--dry-run"] if args.dry_run else []), *passthrough],
                               cwd=dest, env=child_env).returncode
     if action == "clone":
         try:
@@ -233,7 +240,7 @@ def main(argv=None, source=None):
             print(f"install_local: checkout を作成できませんでした（{type(error).__name__}）。"
                   "途中の作業フォルダは削除しました。原因を直して再実行してください", file=sys.stderr)
             return 4
-        print(f"checkout を作成しました: {dest}", flush=True)
+        print(f"プログラムを配置しました: {dest}", flush=True)
     return subprocess.run(["sh", os.path.join(dest, "install.sh"), *passthrough],
                           cwd=dest, env=child_env).returncode
 
