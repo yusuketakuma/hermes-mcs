@@ -892,8 +892,7 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
         "WHERE event_id=?", (ev["event_id"],)).fetchone()
     text_mode = (not notify_cards.interactive_enabled(cfg)
                  or (ev["kind"] == "attachment_followup"
-                     and notify_cards.active_transport(cfg) == "slack"
-                     and notify_cards.notify_cfg(cfg).get("card_thread") is not True))
+                     and not notify_cards.late_attachment_thread(cfg)))
     if not sealed and ev["kind"] not in ("urgent_notice", "signal") and text_mode:
         if ev["kind"] == "attachment_followup" and not _send_never_began(ev):
             _hold_event(ledger, ev, cfg, reason="thread_route_after_partial", rescue=False)
@@ -1165,14 +1164,12 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
            "parked": 0}
     due = ledger.outbox_due(limit)
     import notify_cards
-    slack_attachments = (notify_cards.interactive_enabled(cfg)
-                         and notify_cards.active_transport(cfg) == "slack"
-                         and notify_cards.notify_cfg(cfg).get("card_thread") is True)
+    thread_attachments = notify_cards.late_attachment_thread(cfg)
     exe = _hermes_exe(cfg)
     exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(
             _route(e) == "interactive" or e["kind"] in ("urgent_notice", "signal")
-            or (slack_attachments and e["kind"] == "attachment_followup")
+            or (thread_attachments and e["kind"] == "attachment_followup")
             or _hermes_free(cfg, _target(cfg, e["kind"])) for e in due):
         res["skipped"] = len(due)
         return res
@@ -1206,7 +1203,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         # no SQLite/restore lookup or native delivery can be attempted here.
         if (exe_ok and _route(ev) == "text"
                 and ev["kind"] not in ("urgent_notice", "signal")
-                and not (slack_attachments and ev["kind"] == "attachment_followup")
+                and not (thread_attachments and ev["kind"] == "attachment_followup")
                 and not _target(cfg, ev["kind"])):
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
@@ -1228,7 +1225,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (ev["event_id"],))
             ledger.db.commit()
         if (_route(ev) == "interactive" or ev["kind"] in ("urgent_notice", "signal")
-                or (slack_attachments and ev["kind"] == "attachment_followup")) \
+                or (thread_attachments and ev["kind"] == "attachment_followup")) \
                 and _dispatch_interactive(ledger, ev, cfg, res):
             continue
         if not exe_ok and not _hermes_free(cfg, _target(cfg, ev["kind"])):
