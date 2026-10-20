@@ -3366,3 +3366,60 @@ def test_confirmation_preview_continuation_cannot_start_active_markdown(world):
     assert all(not message["content"].startswith("#") for message in ix.followup.sent)
     assert "＃ 合成見出し" in "".join(message["content"] for message in ix.followup.sent)
     assert all(not message["pings"] for message in ix.followup.sent)
+
+
+def test_rebuilds_do_not_keep_old_supervisors_alive_in_the_host(world, monkeypatch):
+    """Each fatal rebuild starts a new supervisor on the same host; the
+    host's unload list must not pin every superseded one, an old host's
+    close leaves a newer host alone, and a closed, dropped host goes."""
+    import gc
+    import weakref
+    from mcs_standalone.host import Host
+    monkeypatch.setattr(tasks, "_LIVE", {})
+    monkeypatch.setattr(tasks, "_HOOKED", weakref.WeakKeyDictionary())
+    world.seed()
+    world.dispatch()
+    settings = {**SETTINGS, "data_root": str(world.data), "profile": "mcs"}
+
+    def _bot():
+        bot = SignalBot()
+        bot.closed = False
+        bot.is_closed = lambda: bot.closed
+        return bot
+
+    async def run():
+        host = Host({})
+        gone, current = [], None
+        for _ in range(4):
+            bot = _bot()
+            if current is not None:
+                current._bot.closed = True             # fatal rebuild closes the old client
+            previous, current = current, tasks.Supervisor(
+                ctx=host, bot=bot, settings=settings,
+                log=lambda e, **f: world.logs.append((e, f)))
+            assert current.start()
+            if previous is not None:
+                await asyncio.wait_for(previous._task, 10)
+                gone.append(weakref.ref(previous))
+            await asyncio.wait_for(bot.wired.wait(), 10)
+            del previous, bot
+        gc.collect()
+        assert [ref() for ref in gone] == [None] * 3
+        assert len(host._unload) == 1
+        other = Host({})                               # a newer host for the same scope
+        newest = current
+        del current
+        later = tasks.Supervisor(ctx=other, bot=_bot(), settings=settings,
+                                 log=lambda e, **f: None)
+        newest._bot.closed = True
+        assert later.start()
+        await asyncio.wait_for(newest._task, 10)
+        await host.close()                             # the old host
+        assert not later._stopping
+        await other.close()
+        assert later._stopping
+        return weakref.ref(host)
+
+    host_ref = asyncio.run(run())
+    gc.collect()
+    assert host_ref() is None
