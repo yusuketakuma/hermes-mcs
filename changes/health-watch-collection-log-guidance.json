@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "稼働監視通知の収集ログ案内を修正",
+  "summary": "収集エラーの監視通知から、実際に収集結果を保存する data/run.log を確認できるようにします。",
+  "upgrade": "設定変更は不要です。適用後の監視通知から案内が変わります。ログファイル名・収集間隔・警報条件は変更しません。",
+  "details": [
+    "Hermes・独立動作の両方が使う収集wrapperの出力先へ案内を合わせます。",
+    "独立hostの収集ジョブ停止の案内では、ジョブの起動・終了記録 data/mcs_check.log と収集本文 data/run.log の両方を保持します。"
+  ],
+  "refs": [
+    "mcs/ingest/health_watch.py",
+    "tests/ingest/test_health_watch.py",
+    "deployment/scripts/mcs_check.sh",
+    "mcs_standalone/runtime.py"
+  ]
+}

@@ -525,6 +525,7 @@ _STATUS_JA = {"degraded": "一部に異常があります", "failed": "収集が
               "corrupt": "状態の記録が壊れています"}
 _SEVERE = frozenset({"failed", "stale", "missing", "corrupt"})
 _CHECK = "python3 mcs/ops/mcs_setup.py check"
+_COLLECTION_LOG = "data/run.log"  # mcs_check.sh redirects run_check output in both modes.
 _STANDALONE_STATUS = "python -m mcs_standalone status"
 _STANDALONE_RESTART = ("hostを再起動（macOS: launchctl kickstart -k gui/$(id -u)/ai.mcs.standalone、"
                        "Linux: systemctl --user restart mcs-standalone.service）")
@@ -556,11 +557,11 @@ _REASON_JA = {
     "restore_delivery_held": ("復元後の通知を保留しています",
                               "復元は収集再開までです。配送先照合と個別承認なしに通知を再開しません"),
     "run_failed": ("収集の実行が失敗しました",
-                   f"data/run_check.log の末尾を確認。続く場合は {_CHECK}"),
+                   f"{_COLLECTION_LOG} の末尾を確認。続く場合は {_CHECK}"),
     "session_expired": ("MCSのログインが切れ、自動の再ログインも失敗しました",
                         "MCSに手動でログインし直す（docs/guides/INSTALLATION.md の session_expired）"),
     "stage_errors": ("収集の一部の処理でエラーがありました",
-                     "次回の収集で再試行されます。続く場合は data/run_check.log を確認"),
+                     f"次回の収集で再試行されます。続く場合は {_COLLECTION_LOG} を確認"),
     "code_changed": ("収集中にコードが更新されました", "対処不要。次回の収集で続行します"),
     "run_deadline_exceeded": ("収集が制限時間を超えました",
                               "続く場合は llama-server とネットワークの負荷を確認"),
@@ -592,7 +593,7 @@ _REASON_JA = {
     "backup_deferred_deadline": ("収集の制限時間内に日次バックアップを取れず、1日以上更新されていません",
                                  f"DBの大きさと収集の所要時間を確認。続く場合は {_CHECK}"),
     "stall_check_failed": ("停滞の判定処理が失敗しました",
-                           f"data/run_check.log の stall_check_failed を確認。続く場合は {_CHECK}"),
+                           f"{_COLLECTION_LOG} の stall_check_failed を確認。続く場合は {_CHECK}"),
     "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
                                       "TypeSafe の契約・残高を確認。解消まで意味チェックは待機し、収集・通知には影響しません"),
     "semantic_jev_no_api_key": ("TypeSafe Jev のAPIキーが設定されていません",
@@ -602,7 +603,7 @@ _REASON_JA = {
     "semantic_jev_auth_error": ("TypeSafe Jev の認証に失敗しました",
                                 "TYPESAFE_API_KEY の値と有効期限を確認"),
     "unread_collection_unknown": ("未読収集の状況が記録されていません",
-                                  "次回の収集を待ち、続く場合は data/run_check.log を確認"),
+                                  f"次回の収集を待ち、続く場合は {_COLLECTION_LOG} を確認"),
     "standalone_host_down": ("独立接続のhostが動いていません",
                              f"{_STANDALONE_STATUS} と data/standalone.log を確認し、{_STANDALONE_RESTART}"),
     "standalone_child_failing": ("hostの子プロセスが異常終了を繰り返しています",
@@ -614,7 +615,7 @@ _REASON_JA = {
                                 "data/update.log と python3 mcs/ops/mcs_update.py status を確認し、"
                                 "必要なら python3 mcs/ops/mcs_update.py recover"),
     "standalone_check_stalled": ("hostの未読収集が成功していません",
-                                 f"data/mcs_check.log と data/run.log を確認。続く場合は {_CHECK}"),
+                                 f"data/mcs_check.log と {_COLLECTION_LOG} を確認。続く場合は {_CHECK}"),
 }
 # runtime_mode=standalone: the host owns the connection and the workers,
 # so the Hermes gateway / per-agent hints do not apply

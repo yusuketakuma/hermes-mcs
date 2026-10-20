@@ -934,7 +934,7 @@ def test_alert_text_is_japanese_with_jst_times():
                      "影響: 通知に遅れや不具合があります。",
                      "原因と対処:",
                      "・収集の一部の処理でエラーがありました",
-                     "　→ 次回の収集で再試行されます。続く場合は data/run_check.log を確認",
+                     "　→ 次回の収集で再試行されます。続く場合は data/run.log を確認",
                      "・送信待ちの通知があります",
                      "　→ doctor で現在の待ち理由を確認。記録だけでは再送可否を判断できません",
                      "最終正常 01-01 09:00 / 最新記録 01-01 10:00（JST）",
@@ -974,3 +974,29 @@ def test_standalone_owned_reason_is_shown_in_japanese():
     text = "\n".join(health_watch._reason_rows({}, ["standalone_owned"]))
     assert "standalone_owned" not in text
     assert "独立動作が配送を担当しています" in text
+
+
+@pytest.mark.parametrize("runtime_mode", [None, "hermes", "standalone"])
+@pytest.mark.parametrize("reason", ["run_failed", "stage_errors", "stall_check_failed",
+                                    "unread_collection_unknown"])
+def test_collection_alert_points_to_wrapper_collection_log(runtime_mode, reason):
+    report = {"status": "degraded", "alert": True, "disk_alert": False,
+              "disk_low": False, "state_reasons": [reason], "health_at": 3600}
+    if runtime_mode is not None:
+        report["runtime_mode"] = runtime_mode
+    text = "\n".join(health_watch._alert_lines(report))
+    assert "data/run.log" in text
+    assert "data/run_check.log" not in text
+    # Standalone also invokes mcs_check.sh: its per-job file is not the run body.
+    assert "data/mcs_check.log" not in text
+    if reason == "stall_check_failed":
+        assert "stall_check_failed を確認" in text
+
+
+def test_standalone_check_stall_names_both_wrapper_and_collection_logs():
+    text = "\n".join(health_watch._alert_lines({
+        "status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+        "runtime_mode": "standalone", "state_reasons": ["standalone_check_stalled"],
+        "health_at": 3600}))
+    assert "data/mcs_check.log と data/run.log を確認" in text
+    assert "data/run_check.log" not in text
