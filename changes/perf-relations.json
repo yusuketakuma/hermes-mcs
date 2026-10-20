@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "意味解析で同じ文を繰り返し照合する負荷を削減",
+  "summary": "意味解析の事実どうしを照合するとき、同じ文の正規化結果を一度の処理内で再利用します。対象者・否定・時点・薬剤・依頼の関係判定、照合順、期限切れ時の保留条件は維持します。",
+  "upgrade": "設定変更は不要です。通常の更新手順でworkerへ反映してください。モデル・prompt・取得範囲・文脈量・再試行予算・QC・人承認・公開条件は変更していません。コードhashが変わるため、旧candidateの承認は新しいコードには一致しません。",
+  "details": [
+    "既存の呼出内entity token cacheに加えて、文全体のNFKC・casefold正規化を呼出内だけで再利用します。処理間に可変cacheを持ち越しません。",
+    "全組合せの比較回数・順序・64組ごとの期限確認・pairs_skippedの分母は従来と同じです。関係を間引く索引候補は、密な合成入力で事前の遅延条件を満たさず不採用としました。",
+    "固定した完全合成入力と原実装oracleで関係集合・方向・理由・原文根拠・fingerprintの一致を確認しました。実LLM・Jev・実データ・本番での性能や臨床品質の改善を示す測定ではありません。"
+  ],
+  "refs": ["mcs/semantic/semantic_relations.py", "tests/semantic/test_semantic_relations_performance.py"]
+}

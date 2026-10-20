@@ -74,8 +74,21 @@ def relation_set_fingerprint(relations: list) -> str:
     return "relset_" + payload_hash(rows)[:16]
 
 
-def _norm(text) -> str:
-    return sf._normalize_name(text or "")
+class _RelationCache(dict):
+    """One reconciliation call's entity tokens and normalized statements."""
+
+    def __init__(self):
+        super().__init__()
+        self.normalized = {}
+
+
+def _norm(text, cache=None) -> str:
+    if cache is None or not (isinstance(text, str) or text is None):
+        return sf._normalize_name(text or "")
+    value = cache.get(text)
+    if value is None:
+        value = cache[text] = sf._normalize_name(text or "")
+    return value
 
 
 def _entity_tokens(statement: str) -> set:
@@ -136,9 +149,12 @@ def _classify_pair(left: dict, right: dict, token_cache=None) -> dict | None:
     lf_id, rf_id = left.get("fact_id"), right.get("fact_id")
     if not lf_id or not rf_id or lf_id == rf_id:
         return None
+    normalized = getattr(token_cache, "normalized", None)
+    left_statement = _norm(left.get("statement"), normalized)
+    right_statement = _norm(right.get("statement"), normalized)
     rel_type = None
     reason = None
-    if _norm(left.get("statement")) == _norm(right.get("statement")) \
+    if left_statement == right_statement \
             and all(left.get(field) == right.get(field) for field in (
                 "kind", "subject", "actor", "polarity", "epistemic",
                 "workflow_status", "event_time", "valid_time", "quantity",
@@ -183,7 +199,7 @@ def _classify_pair(left: dict, right: dict, token_cache=None) -> dict | None:
             if lw in WORKFLOW_ORDER and rw in WORKFLOW_ORDER \
                     and WORKFLOW_ORDER.index(lw) < WORKFLOW_ORDER.index(rw):
                 rel_type, reason = "TRANSITION", "workflow_progression"
-            elif _norm(left.get("statement")) != _norm(right.get("statement")):
+            elif left_statement != right_statement:
                 rel_type, reason = "COMPLEMENTS", "shared_entity"
             else:
                 rel_type, reason = "UNRESOLVED", "clinical_attributes_differ"
@@ -224,7 +240,7 @@ def reconcile_facts(active_facts: list, new_facts: list,
     active = [f for f in (active_facts or []) if isinstance(f, dict)]
     new = [f for f in (new_facts or []) if isinstance(f, dict)]
     relations = {}
-    token_cache = {}
+    token_cache = _RelationCache()
     total = len(active) * len(new) + len(new) * (len(new) - 1) // 2
     compared = 0
     # New-vs-active is the reconciliation boundary; new-vs-new catches
