@@ -1563,3 +1563,72 @@ def test_slack_attachment_caption_and_unavailable_caption(led, tmp_path):
     assert again == {"result": "delivered",
                      "remote_id": "1790000000.000042"}
     assert len(w.client.thread_posts) == 1 and len(w.client.upload_calls) == 1
+
+
+def test_reconnects_do_not_keep_old_supervisors_alive_in_the_host(tmp_path, monkeypatch):
+    """Each in-process reconnect starts a new supervisor on the same host;
+    the host's unload list must not pin every superseded one for the
+    process lifetime, and closing it still stops the newest."""
+    import gc
+    import weakref
+    from adapters.slack import tasks as slack_tasks
+    from mcs_standalone.host import Host
+    monkeypatch.setattr(slack_tasks, "POLL_S", 0.01)
+    monkeypatch.setattr(slack_tasks, "_LIVE", {}, raising=False)
+    monkeypatch.setattr(slack_tasks, "_HOOKED", {}, raising=False)
+    for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "flags" / "notify.json").write_text(
+        json.dumps({"interactive": True, "transport": "slack"}))
+    config = {
+        "slack_adapter_enabled": True, "slack_team_id": "T_SYNTHETIC",
+        "slack_application_id": "A_SYNTHETIC", "slack_channel_id": "C_SYNTHETIC",
+        "slack_profile": "cco", "slack_allowed_user_ids": ["U_OPERATOR"],
+        "project_ids": [1], "data_root": str(tmp_path)}
+
+    class App:
+        def __init__(self):
+            self.client = FakeClient()
+            self.wired = asyncio.Event()
+
+        def _wire(self, key):
+            def deco(fn):
+                self.wired.set()
+            return deco
+
+        def action(self, pattern):
+            return self._wire(pattern)
+
+        def view(self, name):
+            return self._wire(name)
+
+    class Ctx(Host):
+        profile_name = "cco"
+
+    async def scenario():
+        host = Ctx(config)
+        factory = make_slack_factory(host)
+        gone = []
+        current = None
+        for _ in range(5):
+            app = App()
+            native = SimpleNamespace(
+                _owner_profile="cco",
+                gateway_runner=SimpleNamespace(_primary_profile_name="default"),
+                _get_client=lambda channel, team_id=None, app=app: app.client)
+            previous, current = current, factory(app, native)
+            assert current is not None
+            await asyncio.wait_for(app.wired.wait(), 5)
+            if previous is not None:
+                await asyncio.wait_for(previous._task, 5)
+                gone.append(weakref.ref(previous))
+            del previous, app, native
+        gc.collect()
+        assert [ref() for ref in gone] == [None] * 4      # superseded ones are released
+        assert len(host._unload) == 1
+        newest = current
+        del current
+        await host.close()
+        assert newest._stopping and newest._task.done()
+
+    asyncio.run(scenario())

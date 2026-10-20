@@ -26,6 +26,18 @@ LOCK_WAIT_S = POLL_S * 15
 
 # scope key -> newest supervisor in this process
 _LIVE: dict = {}
+# scope key -> host already holding this scope's unload hook. Hosts keep
+# their unload callbacks until they close, so one hook per scope stops the
+# newest supervisor instead of pinning every superseded one.
+_HOOKED: dict = {}
+
+
+def _unload_newest(ctx, key):
+    def unload():
+        live = _LIVE.get(key)
+        if live is not None and live._ctx is ctx:
+            live.unload()
+    return unload
 
 
 class Supervisor:
@@ -64,7 +76,9 @@ class Supervisor:
                 del _LIVE[key]
             self._log("worker_start_failed")
             return False
-        self._ctx.on_unload(self.unload)
+        if _HOOKED.get(key) is not self._ctx:
+            self._ctx.on_unload(_unload_newest(self._ctx, key))
+            _HOOKED[key] = self._ctx
         return True
 
     def unload(self):
