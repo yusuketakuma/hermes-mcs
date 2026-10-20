@@ -378,6 +378,17 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
     ext = cfg.get("extract")
     if isinstance(ext, dict) and "patient_state_context" in ext and type(ext["patient_state_context"]) is not bool:
         errors.append("extract.patient_state_context: true（有効）かfalse（無効）を指定してください")
+    if isinstance(ext, dict) and "patient_context_nightly" in ext:
+        nightly = ext["patient_context_nightly"]
+        prefix = "extract.patient_context_nightly"
+        if not isinstance(nightly, dict):
+            errors.append(f"{prefix}: JSONオブジェクト（キーと値の組）を指定してください")
+        else:
+            if set(nightly) - {"enabled", "publication"}:
+                errors.append(f"{prefix}: enabledとpublication以外の設定項目は使えません")
+            for key in ("enabled", "publication"):
+                if key in nightly and type(nightly[key]) is not bool:
+                    errors.append(f"{prefix}.{key}: true（有効）かfalse（無効）を指定してください")
     if isinstance(sig, dict) and "notify" in sig and type(sig["notify"]) is not bool:
         errors.append("signals.notify: true（有効）かfalse（無効）を指定してください")
     ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
@@ -2624,6 +2635,39 @@ def _doctor_source(cfg: dict, *, probe: bool) -> dict:
             "restart_request": restart}
 
 
+
+_NIGHTLY_COUNTS = ("initial_pending", "delta_pending", "history_pending",
+                   "audit_pending", "failed", "complete")
+
+
+def _doctor_nightly(cfg: dict, *, probe: bool) -> dict:
+    """夜間の患者まとめを、明示診断時だけ読取り専用で件数確認する。"""
+    from patient_nightly import options
+    result = {"status": "not_checked", **options(cfg), "counts": None}
+    if not probe:
+        return result
+    result["status"] = "unknown"
+    try:
+        ledger = Path(HOME) / "data" / "ledger.db"
+        if ledger.is_symlink():
+            return result
+        with closing(sqlite3.connect(ledger.resolve().as_uri() + "?mode=ro", uri=True,
+                                     timeout=1)) as db:
+            from patient_nightly import status
+            db.row_factory = sqlite3.Row
+            deadline = time.monotonic() + 1
+            db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+            raw = status(db, cfg)
+        if not isinstance(raw, dict) or any(
+                type(raw.get(key)) is not int or raw[key] < 0 for key in _NIGHTLY_COUNTS):
+            return result
+        result["counts"] = {key: raw[key] for key in _NIGHTLY_COUNTS}
+        result["status"] = "warning" if raw["failed"] else "healthy"
+    except (OSError, ValueError, TypeError, sqlite3.Error):
+        pass
+    return result
+
+
 def cmd_doctor(args) -> int:
     """Local read-only diagnostics; explicit probes return only safe counts."""
     cfg = load_config()
@@ -2700,10 +2744,12 @@ def cmd_doctor(args) -> int:
     checks['restore_delivery'] = _doctor_check([],
         ['restore_delivery_unverified'] if worker['restore_delivery_held'] is None else
         ['restore_delivery_held'] if worker['restore_delivery_held'] else [])
+    nightly = _doctor_nightly(cfg, probe="data" in probes and not config_errors)
     report = {"mode": mode, "python": sys.version.split()[0],
               "sqlite": sqlite3.sqlite_version, "checks": checks,
               "runtimes": runtimes,
               "operations": operations, "card_worker": worker,
+              "patient_context_nightly": nightly,
               "source": _doctor_source(cfg, probe="services" in probes and not config_errors),
               "recovery_selection": {"explicit": "recovery_python" in cfg,
                                      "matches_deployed": matches}}
@@ -2740,6 +2786,13 @@ def cmd_doctor(args) -> int:
             print("  復元後の保留: 収集のみ継続し、配送は保留しています")
         elif worker['restore_delivery_held'] is None:
             print("  復元後の保留: 状態を確認できません")
+        print(f"  夜間の患者まとめ: {labels.get(nightly['status'], '未確認')}、"
+              f"生成={'有効' if nightly['enabled'] else '無効'}、"
+              f"限定閲覧={'有効' if nightly['publication'] else '無効'}")
+        if nightly["counts"] is not None:
+            names = ("初回未生成", "差分待ち", "過去走査待ち", "根拠点検待ち", "失敗", "完了")
+            print("    " + "、".join(f"{name}{nightly['counts'][key]}件"
+                                    for key, name in zip(_NIGHTLY_COUNTS, names)))
         for line in status_lines(operations):
             print(line)
         source = report["source"]

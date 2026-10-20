@@ -111,20 +111,36 @@ def test_pre_merge_interrupt_restores(rec, tmp_path):
     assert report["result"] == "interrupted_pre_merge"
 
 
-def test_mixed_tree_resets_to_prev(rec, tmp_path):
+@pytest.mark.parametrize("dirty", ["update_path", "unrelated_path"])
+def test_mixed_tree_resets_to_prev(rec, tmp_path, dirty):
     repo = _make_repo(tmp_path)
+    (repo / "g.txt").write_text("operator")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "c2")
     prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    # simulate a half-applied checkout: tracked file mutated, no
-    # MERGE_HEAD — merge --abort can't help, reset --hard can
-    (repo / "f.txt").write_text("CORRUPTED")
-    state = _applying(prev, stage="applying")
+    (repo / "f.txt").write_text("target")
+    _git(repo, "commit", "-qam", "target")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "-q", prev)
+    # half-applied checkout touches only update paths; any other tracked
+    # change is someone's manual edit and must survive
+    path = "f.txt" if dirty == "update_path" else "g.txt"
+    (repo / path).write_text("CHANGED")
+    state = _applying(prev, sha=target, stage="applying")
     with open(rec.STATE_PATH, "w") as f:
         json.dump(state, f)
-    assert rec.recover() == 0
-    assert (repo / "f.txt").read_text() == "one"
+    report_path = Path(rec.REPORT_PATH)
+    if dirty == "update_path":
+        assert rec.recover() == 0
+        assert (repo / "f.txt").read_text() == "one"
+        assert json.loads(report_path.read_text())["result"] == "mixed_tree_reset"
+    else:
+        assert rec.recover() == 1
+        assert (repo / "g.txt").read_text() == "CHANGED"
+        report = json.loads(report_path.read_text())
+        assert report["result"] == "escalate"
+        assert report["detail"] == "local changes outside update: g.txt"
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
-    report = json.loads(Path(rec.REPORT_PATH).read_text())
-    assert report["result"] in ("mixed_tree_reset",)
 
 
 def test_mixed_tree_preserves_untracked_update_collision(rec, tmp_path,
@@ -1253,6 +1269,31 @@ def test_alert_key_matches_updater():
         assert recovery._alert_key(state, detail) \
             == mcs_update._alert_key(state, detail)
     assert recovery.ESCALATE_REALERT_S == mcs_update.ESCALATE_REALERT_S
+
+
+def test_recovery_constants_and_journal_checks_match_updater(tmp_path):
+    import sqlite3
+
+    import mcs_update
+    recovery = _load()
+    for name in ("STALE_S", "_STAGING_NAME", "_STAGING_KEYS"):
+        assert getattr(recovery, name) == getattr(mcs_update, name), name
+    db = tmp_path / "synthetic.db"
+    con = sqlite3.connect(db)
+    con.execute("PRAGMA user_version = 7")
+    con.close()
+    for path in (db, tmp_path / "missing.db"):
+        assert recovery._db_version(str(path)) == mcs_update._db_version(str(path))
+    valid = _applying("p" * 40)
+    states = [valid, {"v": 1}, {"v": 1, "applying": None, "restore_consent": {}},
+              None, [], {"v": 2}, {"v": True}, {"v": 1, "stages": {}},
+              {"v": 1, "stages": [1]}, {"v": 1, "applying": "x"},
+              {"v": 1, "executed": []}, {"v": 1, "stages": [{"stage": 1}]},
+              {"v": 1, "applied": [{"at": -1}]}, {"v": 1, "applied": [{"at": "1"}]},
+              {"v": 1, "stages": [{"stage": "x", "at": 1e12}]}]
+    for state in states:
+        assert recovery._valid_state(state) == mcs_update._valid_state(state), state
+    assert recovery._valid_state(valid) and not recovery._valid_state({"v": 2})
 
 
 # ---------- repeated escalation ensures drainers (= mcs_update)

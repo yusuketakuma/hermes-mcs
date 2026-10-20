@@ -364,7 +364,9 @@ def enqueue(req, cmd_dir):
     if len(raw) > MAX_COMMAND_BYTES:
         raise ValueError("command_too_large")
     # The inbox must already exist; never accidentally create a host-like path in a container.
-    fd, temp = tempfile.mkstemp(prefix="request-", suffix=".tmp", dir=cmd_dir)
+    # time-ordered name: drain_commands applies files in sorted order
+    fd, temp = tempfile.mkstemp(prefix=f"request-{time.time_ns():020d}-",
+                                suffix=".tmp", dir=cmd_dir)
     receipt = {"command_id": req["command_id"], "payload_hash": payload_hash(req), "outcome": "queued"}
     published = False
     try:

@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from ledger import Ledger, LedgerReader, karte_summary_block
-from clinical_values import patient_item_scope, patient_current_vitals
+from clinical_values import fold_surface, lab_analyte, patient_item_scope, patient_current_vitals
 from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
@@ -310,9 +310,10 @@ def build_rollup(ledger, project_id: int) -> dict:
                         lb, m["body_text"], patient_name=patient_name,
                         surface=lb.get("name")) != "patient":
                 continue  # source detail retains history; it cannot fill current patient labs
-            if isinstance(lb, dict) and isinstance(lb.get("name"), str) \
-                    and lb["name"].strip() and lb["name"] not in latest_labs:
-                latest_labs[lb["name"]] = {"at": m["posted_at"], **lb}
+            if isinstance(lb, dict) and isinstance(lb.get("name"), str) and lb["name"].strip():
+                # Cr/クレアチニン, CRP/crp are one analyte: the newest report keeps the slot.
+                latest_labs.setdefault(lab_analyte(lb["name"]) or fold_surface(lb["name"]),
+                                       {"at": m["posted_at"], **lb})
         per, chk = _period_candidates(m, v1, as_of, patient_name=patient_name)
         if med_period is None:
             med_period = per

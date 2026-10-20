@@ -89,7 +89,7 @@ class Actions:
                     return
             elif not (context.get("action") == "task_status"
                       or (source.get("channelId") is None and (
-                          context.get("via_more") or (context.get("action") == "meds"
+                          context.get("via_more") or (context.get("action") in ("meds", "summary", "search")
                                                      and context.get("ephemeral") is True)))):
                 return
             origin = {key: self.settings[key] for key in SCOPE_KEYS}

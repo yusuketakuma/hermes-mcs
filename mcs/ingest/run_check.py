@@ -1043,9 +1043,9 @@ def _cap_cleared(adapter, ledger, p, result, top: bool = False) -> bool:
 
 
 def _post_ack_gap(adapter, ledger, pid: int, result):
-    """After a plain-list acknowledgement, verify the server's newest
-    message is stored. The plain read clears the whole project flag, so
-    a post that landed after the gate would arrive read and unnotified —
+    """After any acknowledgement, verify the server's newest message is
+    stored. The read clears the project flag, so a post that landed
+    after the unread snapshot would arrive read and unnotified —
     seed a bounded history_head walk and record post_ack_gap instead of
     letting it disappear. An unanswerable probe counts as a gap."""
     try:
@@ -1216,8 +1216,9 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                                           fallback_plain=p.ack_fallback)
                 ledger.mark_read(p.project_id, snap.timestamp, "confirmed")
                 result["marked_read"].append(p.project_id)
-                if p.ack_fallback:
-                    _post_ack_gap(adapter, ledger, p.project_id, result)
+                # strict acks too: a post landing between list_unread and
+                # this GET is cleared server-side without being stored
+                _post_ack_gap(adapter, ledger, p.project_id, result)
             except MCSError as e:
                 result["errors"].append(
                     f"mark {p.project_id}: {_err_str(e)}")
@@ -1294,6 +1295,17 @@ def stage_thread_read(adapter, ledger, result, deadline):
 
 # ---------- stage: coverage backfill ----------
 
+def _rotated(rows: list, run_id) -> list:
+    """Start each tick's patient walk one position later, so a deadline
+    break does not skip the same tail patients every tick."""
+    # shortcut: stateless rotation by run_id — a skipped patient waits up
+    # to n-m ticks; a persisted cursor would bound it to ~n/m ticks
+    if not rows or not isinstance(run_id, int):
+        return rows
+    k = (run_id - 1) % len(rows)   # run 1 starts at the head
+    return rows[k:] + rows[:k]
+
+
 def stage_backfill(adapter, ledger, result, deadline, run_id,
                    semantic: bool = False,
                    notify_max_age_s: float | None = None,
@@ -1308,7 +1320,7 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
     newest stored message, so storing a new unread cannot skip older
     unfetched items (Oracle B06). Coverage only advances on a complete
     walk; a gap stays visible via coverage_lag."""
-    for row in ledger.frontier_patients():
+    for row in _rotated(ledger.frontier_patients(), run_id):
         pid = row["project_id"]
         if time.monotonic() > deadline - 30:
             result["errors"].append("deadline_exceeded")
@@ -1422,7 +1434,7 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
     (probe_mid) so it is not re-fetched every tick.
     """
     probed = 0
-    for row in ledger.frontier_patients():
+    for row in _rotated(ledger.frontier_patients(), run_id):
         pid = row["project_id"]
         wm = ledger.high_watermark(pid)
         if not wm:

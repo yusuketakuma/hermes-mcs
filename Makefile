@@ -5,7 +5,7 @@
 UV := $(shell command -v uv 2>/dev/null)
 ifdef UV
 PYTEST = uv run --no-project --with "pytest==9.1.1" scripts/run_tests.sh
-RUFF   = uv run --no-project --with "ruff==0.17.0" ruff
+RUFF   = uv run --no-project --with "ruff==0.17.1" ruff
 else
 PYTEST = scripts/run_tests.sh
 RUFF   = ruff

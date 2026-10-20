@@ -137,9 +137,16 @@ def main(argv=None) -> int:
         if args.keep_hermes_checkout:
             env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = args.keep_hermes_checkout
         try:
-            return subprocess.run(cmd, env=env, cwd=repo).returncode
+            rc = subprocess.run(cmd, env=env, cwd=repo).returncode
         except OSError as exc:
             raise SystemExit(f"更新プログラムを起動できませんでした。Pythonの実行環境を確認してください（{exc.strerror}）") from None
+        # The updater also exits 0 when it defers (another update running, recovery pending).
+        if args.cmd == "apply" and rc == 0 and _git(repo, "rev-parse", "HEAD").strip() \
+                != _git(repo, "rev-parse", f"refs/tags/{tag}^{{commit}}").strip():
+            print(f"{tag} は適用されていません。別の更新処理の実行中か、中断した更新の復旧待ちの可能性があります。"
+                  "しばらく待ってから data/recovery_report.json を確認し、もう一度実行してください", file=sys.stderr)
+            return 2
+        return rc
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

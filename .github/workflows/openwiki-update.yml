@@ -52,7 +52,7 @@ jobs:
       - name: Install OpenWiki
         if: ${{ steps.preflight.outputs.ready == 'true' }}
         # mermaid + jsdom are optional; they add high-fidelity validation of Mermaid diagrams. Remove if your wiki has none.
-        run: npm install --global openwiki@0.7.2 mermaid@11.17.2 jsdom@30.1.2
+        run: npm install --global openwiki@0.7.2 mermaid@11.17.2 jsdom@30.1.3
 
       - name: Run OpenWiki
         id: openwiki

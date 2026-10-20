@@ -255,6 +255,7 @@ def test_unread_commit_boundary_preserves_work_before_ack(tmp_path, monkeypatch,
         fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
             messages=[_message(unread=True)], reached=True),
         fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        fetch_latest=lambda pid: {"message_id": 1, "is_self_only": False},
         mark_patient_read=lambda *a, **k: marks.append(a),
     )
 
@@ -2575,6 +2576,7 @@ def test_unread_capped_patient_waits_for_history_then_acks(tmp_path):
             messages=[_message(mid=90, unread=True)], reached=True, capped=True),
         fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
         oldest_unread_id=lambda pid: oldest["id"],
+        fetch_latest=lambda pid: {"message_id": 90, "is_self_only": False},
         mark_patient_read=lambda *a, **k: marks.append(a),
     )
     result = _capped_run(db, adapter)

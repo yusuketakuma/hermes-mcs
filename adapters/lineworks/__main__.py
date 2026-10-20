@@ -120,17 +120,24 @@ async def serve(root, port):
                 if current != scope:
                     _log("configuration_changed_restart_required")
                     break
+                # Button operations first: a tick can wait minutes on delivery retries.
+                # A callback failure must not also stop delivery.
+                try:
+                    inbox.expire()
+                    for pending in inbox.pending():
+                        working, event = inbox.take(pending)
+                        try:
+                            await actions.handle(event)
+                        except Exception as exc:
+                            inbox.finish(working, "unknown")
+                            _log("callback_processing_unknown", error=type(exc).__name__)
+                        else:
+                            inbox.finish(working, "processed")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    _log("callback_processing_failed", error=type(exc).__name__)
                 await worker.tick()
-                inbox.expire()
-                for pending in inbox.pending():
-                    working, event = inbox.take(pending)
-                    try:
-                        await actions.handle(event)
-                    except Exception as exc:
-                        inbox.finish(working, "unknown")
-                        _log("callback_processing_unknown", error=type(exc).__name__)
-                    else:
-                        inbox.finish(working, "processed")
                 await actions.sweep_followups()
             except asyncio.CancelledError:
                 raise

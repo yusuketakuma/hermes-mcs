@@ -157,8 +157,9 @@ MIGRATION_INSTALL_ARGS = ("--no-llm", "--no-plugin")
 KEEP_CHECKOUT_ENV = "MCS_UPDATE_KEEP_HERMES_CHECKOUT"
 # mirror install.sh: a migration accepts the current pin as is and moves only
 # the previous pins (HERMES_PIN / HERMES_PREVIOUS_PINS)
-HERMES_PIN = "f36c1da0016ce14c9c531cb9514ab4b0b667240d"
-HERMES_PREVIOUS_PINS = frozenset({"6f35b1ed84536f7e7fd2f605f7779dd051cce05f",
+HERMES_PIN = "b7758d8555931846f4b8f798d4ea9715f65077ca"
+HERMES_PREVIOUS_PINS = frozenset({"f36c1da0016ce14c9c531cb9514ab4b0b667240d",
+                                  "6f35b1ed84536f7e7fd2f605f7779dd051cce05f",
                                   "fd50a275e2616118c48fe07e7e1c878782b15ccd",
                                   "1e8fbfe6b41399a46e232f6cde5618cfdfa2729a",
                                   "16390dc80d248b7b49554c0cde52caf22e1fc3d8"})
@@ -348,6 +349,17 @@ def _head_sha() -> str:
 
 def _tree_clean() -> bool:
     return _git_out(["status", "--porcelain", "-uno"]).strip() == ""
+
+
+def _local_changes_outside(prev, target) -> list[str]:
+    """Tracked dirty paths the prev..target update never touches (someone's
+    manual edit a reset would destroy). Raises UpdateError when git cannot tell."""
+    if not prev or not target:
+        raise UpdateError("diff: update range unknown")
+    touched, dirty = (set(filter(None, _git_out(args).split("\0"))) for args in (
+        ["diff", "--name-only", "--no-renames", "-z", prev, target],
+        ["diff", "--name-only", "--no-renames", "-z", "HEAD"]))
+    return sorted(dirty - touched)
 
 
 def remote_tag_sha(tag: str) -> str | None:
@@ -3260,6 +3272,10 @@ def recover_interrupted(if_stale: bool = False) -> int:
         if head == target:
             if not clean:
                 # crash during the target checkout — converge to target
+                foreign = _local_changes_outside(prev, target)
+                if foreign:
+                    return escalate("local changes outside update: "
+                                    + ",".join(foreign)[:160])
                 tree_reset = True
                 _git_out(["reset", "--hard", target])
                 if not _tree_clean():
@@ -3325,6 +3341,10 @@ def recover_interrupted(if_stale: bool = False) -> int:
             if not clean:
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach (F1)
+                foreign = _local_changes_outside(prev, target)
+                if foreign:
+                    return escalate("local changes outside update: "
+                                    + ",".join(foreign)[:160])
                 _git_out(["reset", "--hard", prev])
                 if _head_sha() != prev or not _tree_clean():
                     return escalate("prev tree could not be cleaned")

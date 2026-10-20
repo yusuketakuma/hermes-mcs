@@ -8,6 +8,16 @@ from typing import Literal, TypedDict
 from semantic_quantities import _number
 from mcs_util import locate_quote_span, fold_map
 
+# One person/time vocabulary for extract.py, patient_context.py and this module.
+FAMILY_PERSON = (r"ご家族|家族|ご主人|主人|旦那(?:さん|様)?|奥(?:さん|様)|お?嫁(?:さん)?|配偶者|"
+                 r"お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|母|父|"
+                 r"(?:長男|長女|次男|次女)(?:さん|様)?|娘(?:さん|様)?|息子(?:さん|様)?|夫|妻|"
+                 r"お?兄(?:さん|様)?|お?姉(?:さん|様)?|(?:弟|妹|孫)(?:さん|様)?|同居者")
+OTHER_PERSON = (r"本人以外|他者|他人|第三者|他の(?:患者|利用者)|他患者|別の(?:患者|利用者)|別患者|"
+                r"(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ|ヘルパー|介護士|介護職員?)(?:さん|様)?")
+# A reading written at one of these times is not the current one.
+PAST_MARK = r"昨日|前回|先日|入院中|入院時"
+
 
 def patient_item_scope(item, body, *, patient_name=None, surface=None, default="patient"):
     """Resolve one stored item's original span before using it as patient current data."""
@@ -155,6 +165,12 @@ class LabCandidate(LabDetails):
     confirmation: Literal["quote_supported", "unverified"]
 
 
+def lab_analyte(name: str) -> str | None:
+    """The analyte key for a lab name spelling (Cr/クレアチニン -> creatinine), else None."""
+    label = fold_surface(name)
+    return next((key for key, names in _LAB_NAMES.items() if label in names), None)
+
+
 def lab_candidate(name: str, value: str | int | float, unit: str | None,
                   evidence: str | None, *, unverified: bool = False,
                   flag: str | None = None, subject: str | None = None,
@@ -162,7 +178,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                   condition: str | None = None, patient_name: str | None = None) -> LabCandidate:
     """Keep unknown/mismatched values separate; quote support is not human approval."""
     label = fold_surface(name)
-    analyte = next((key for key, names in _LAB_NAMES.items() if label in names), None)
+    analyte = lab_analyte(name)
     raw_value = unicodedata.normalize("NFKC", str(value)).strip()
     # Bound before Decimal rendering (including floats with huge exponents).
     numeric = ((type(value) in (int, float) and 0 <= value <= 1e20)
@@ -376,7 +392,7 @@ _NOT_PATIENT_CURRENT = ("family", "other", "conditional", "planned", "past")
 
 
 # Other times a reading can be written at; the nearest mark before it decides.
-_OTHER_TIME = r"午前|午後|朝|昼|夕方?|夜|前回|以前|過去|昨日|先週|先月|昨年"
+_OTHER_TIME = rf"午前|午後|朝|昼|夕方?|夜|{PAST_MARK}|以前|過去|先週|先月|昨年"
 
 
 def _vital_current(body: str, pos: int) -> bool:

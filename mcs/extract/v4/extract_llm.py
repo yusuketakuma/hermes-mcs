@@ -33,6 +33,7 @@ from pathlib import Path
 import queue
 import re
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -5191,6 +5192,92 @@ def _background_semantic(ledger, stop=None):
         os.close(lock_fd)
 
 
+
+def _nightly_memory_available() -> bool:
+    """Reserve ten percent memory for foreground work; unknown pressure defers."""
+    try:
+        if sys.platform == "darwin":
+            result = subprocess.run(
+                ["/usr/bin/memory_pressure", "-Q"], capture_output=True,
+                text=True, timeout=2, check=True,
+                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+            match = re.search(r"System-wide memory free percentage:\s*(\d+)%",
+                              result.stdout)
+            return bool(match and 10 <= int(match[1]) <= 100)
+        if sys.platform.startswith("linux"):
+            values = dict(re.findall(r"^(MemAvailable|MemTotal):\s*(\d+) kB$",
+                                     Path("/proc/meminfo").read_text(), re.M))
+            available, total = int(values["MemAvailable"]), int(values["MemTotal"])
+            return total > 0 and total >= available >= max(1048576, total * 0.1)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        pass
+    return False
+
+
+def _background_nightly(ledger, held, initial_state, stop=None):
+    """Use only idle elastic capacity; recheck higher-priority work at each boundary."""
+    import mcs_util
+
+    if _SLOT_OVERRIDE != _ELASTIC_SLOT:
+        return {"status": "off", "done": 0}
+    try:
+        cfg = load_config()
+        import patient_nightly
+        if (not patient_nightly.options(cfg)["enabled"]
+                or not patient_nightly.night_window(time.time())):
+            return {"status": "off", "done": 0}
+    except Exception as exc:
+        return {"status": "error", "done": 0, "error": type(exc).__name__}
+    deadline = time.monotonic() + 900
+    if stop is not None:
+        deadline = min(deadline, stop)
+
+    def admit():
+        # This checks the full eligible backlog, not the recent-only semantic
+        # priority subset or this worker's shard. Unknown capacity is not idle.
+        if (time.monotonic() >= deadline or held()
+                or mcs_util._updater_state() != initial_state
+                or initial_state[0] or circuit_open_s(ledger)):
+            return False
+        current = load_config()
+        if current != cfg:
+            return False
+        if not _nightly_memory_available():
+            return False
+        free = disk_free_mb(ledger)
+        if free is None or free < disk_floor_mb():
+            return False
+        busy = _slots_busy(deadline)
+        if (not busy or busy.get(_ELASTIC_SLOT) is not False
+                or busy.get(local_llm.REALTIME_SLOT) is not False):
+            return False
+        from semantic_policy import JOB_KIND, QC_JOB_KIND, semantic_config
+        if semantic_config(current)[1]:
+            return False
+        admitted = legacy_admissions(ledger, current)
+        if _select_pending(ledger, 1, admitted, None, False)[0]:
+            return False
+        # Match semantic/QC eligibility: future retries do not consume idle
+        # capacity, but become higher priority as soon as their backoff ends.
+        return ledger.db.execute(
+            "SELECT 1 FROM fetch_jobs WHERE state='pending' AND next_try<=? "
+            "AND kind IN (?,?) LIMIT 1", (time.time(), JOB_KIND, QC_JOB_KIND)).fetchone() is None
+
+    try:
+        if not admit():
+            result = {"status": "deferred", "done": 0}
+        else:
+            with local_llm.pinned_slot(_ELASTIC_SLOT):
+                result = patient_nightly.run_due(
+                    ledger, cfg, deadline=deadline, admit=admit)
+    except Exception as exc:
+        # Nightly failures must not interrupt collection or normal extraction.
+        result = {"status": "error", "done": 0, "error": type(exc).__name__}
+    if mcs_util._updater_state() != initial_state:
+        result["run_lock_lost"] = "updated"
+    return result
+
+
 def main() -> int:
     global _SLOT_OVERRIDE
     previous = _SLOT_OVERRIDE
@@ -5321,6 +5408,8 @@ def _main() -> int:
             elastic = _SLOT_OVERRIDE == _ELASTIC_SLOT
             gate: dict = {}
             semantic_first_until = 0.0
+            from mcs_util import _updater_state
+            nightly_state = _updater_state()
 
             def held() -> bool:
                 """Elastic gate with one log line per hold/resume."""
@@ -5406,6 +5495,16 @@ def _main() -> int:
                 if r["left"] == 0 or (
                         r["done"] == 0 and r["failed"] == 0
                         and r.get("selected", 0) == 0):
+                    if elastic:
+                        nightly = _background_nightly(led, held, nightly_state, stop)
+                        if nightly.get("status") != "off":
+                            print(json.dumps({"nightly": nightly, "ts": time.time()},
+                                             ensure_ascii=False), flush=True)
+                        if nightly.get("run_lock_lost") == "updated":
+                            return 0
+                        if nightly.get("done"):
+                            pause(1)
+                            continue
                     # Queue drained (or only poison-gated/permanent-failure
                     # rows remain — they count in `left` but can never be
                     # selected). Stay resident and poll instead of exiting:

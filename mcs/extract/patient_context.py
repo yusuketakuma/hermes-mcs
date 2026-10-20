@@ -2,6 +2,7 @@
 import math
 import re
 
+from clinical_values import FAMILY_PERSON
 from mcs_util import locate_quote_span
 
 
@@ -89,7 +90,7 @@ _DRUG_ONLY_KEYS = frozenset({"storage_status", "storage_place", "medication_mana
                              "interaction_check"})
 _PATIENT_OWNERS = ("ご本人", "本人", "患者", "利用者")
 _DRUG_OWNER = re.compile(
-    r"(?P<who>ご本人|本人|患者|利用者|ご家族|家族|母親|父親|祖母|祖父|長男|長女|次男|次女|娘|息子|夫|妻|兄|姉|弟|妹|孫|母|父)"
+    rf"(?P<who>ご本人|本人|患者|利用者|{FAMILY_PERSON})"
     r"(?:さん|様)?の(?:お)?(?:内服薬|処方薬|残薬|薬)")
 
 
