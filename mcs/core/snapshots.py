@@ -46,8 +46,9 @@ def _fail(reason: str, **extra) -> None:
 
 
 # Exit 1 is only an explicit validation refusal; a failed bootstrap/import
-# exits 3 and an exception inside the validator 4, so the parent can tell them
-# apart without reading the child's output. Success is still exit 0 only.
+# exits 3, an exception inside the validator 4 and running out of its own
+# deadline 5, so the parent can tell them apart without reading the child's
+# output. Success is still exit 0 only.
 _SNAPSHOT_VALIDATION_CODE = (
     "import sys\n"
     "try:\n"
@@ -58,9 +59,11 @@ _SNAPSHOT_VALIDATION_CODE = (
     "    ok = valid_mcs_db(sys.argv[2], deadline=float(sys.argv[3]))\n"
     "except BaseException:\n"
     "    sys.exit(4)\n"
-    "sys.exit(0 if ok is True else 1)\n"
+    "import time\n"
+    "sys.exit(0 if ok is True else 5 if time.monotonic() >= float(sys.argv[3]) else 1)\n"
 )
-_EXIT_REASONS = {1: "validator_rejected", 3: "validator_bootstrap_error", 4: "validator_exception"}
+_EXIT_REASONS = {1: "validator_rejected", 3: "validator_bootstrap_error", 4: "validator_exception",
+                 5: "validator_timeout"}
 
 
 def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
@@ -166,7 +169,11 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
         finally:
             src.close()
         copied = monotonic()
-        verify_by = copied + snapshot_verify_timeout_s(tmp)
+        # Verification reads the same bytes the copy just wrote: when the disk is
+        # slow enough to stretch the copy, the size-based budget cannot hold, so
+        # the budget follows the measured copy (same cap, still under the deadline).
+        verify_by = copied + max(snapshot_verify_timeout_s(tmp), min(
+            SNAPSHOT_VERIFY_TIMEOUT_S + SNAPSHOT_VERIFY_EXTRA_MAX_S, 1.5 * (copied - started)))
         if deadline is not None:
             verify_by = min(verify_by, deadline)
         if not _valid_snapshot_candidate(tmp, deadline=verify_by):

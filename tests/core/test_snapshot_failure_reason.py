@@ -34,6 +34,7 @@ def test_deadline_before_copy(db, tmp_path):
 @pytest.mark.parametrize("code,reason", [("import sys; sys.exit(1)", "validator_rejected"),
                                          ("import sys; sys.exit(3)", "validator_bootstrap_error"),
                                          ("import sys; sys.exit(4)", "validator_exception"),
+                                         ("import sys; sys.exit(5)", "validator_timeout"),
                                          ("import sys; sys.exit(7)", "validator_exit")])
 def test_validator_exit_codes_are_told_apart(db, tmp_path, monkeypatch, code, reason):
     _child(monkeypatch, code)
@@ -78,3 +79,34 @@ def test_real_child_separates_bootstrap_errors_exceptions_and_refusals(tmp_path)
     assert _real_child(str(tmp_path), str(tmp_path / "x.db"), far) == 3      # no _mcs_path there
     assert _real_child(mcs_root, str(tmp_path / "x.db"), "not-a-number") == 4
     assert _real_child(mcs_root, str(tmp_path / "missing.db"), far) == 1     # explicit refusal
+
+
+def test_real_child_reports_its_own_deadline_as_timeout(tmp_path):
+    from pathlib import Path
+    mcs_root = str(Path(snapshots.__file__).resolve().parents[1])
+    db = tmp_path / "x.db"
+    db.write_bytes(b"not empty")
+    assert _real_child(mcs_root, str(db), str(monotonic() - 1)) == 5      # deadline already past
+
+
+def test_verify_budget_follows_a_slow_copy_within_the_cap(db, tmp_path, monkeypatch):
+    seen, clock = {}, {"t": 0.0}
+
+    def verify(path, *, deadline):
+        seen["budget"] = deadline - clock["t"]
+        return True
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", verify)
+    monkeypatch.setattr(snapshots, "monotonic", lambda: clock["t"])
+    real_connect, opened = snapshots.sqlite3.connect, []
+
+    def connect(*a, **k):
+        opened.append(1)
+        if len(opened) % 2 == 0:                      # the copy target: the copy "takes" 100 s
+            clock["t"] += 100.0
+        return real_connect(*a, **k)
+    monkeypatch.setattr(snapshots.sqlite3, "connect", connect)
+    assert snapshots.publish_snapshot(db, str(tmp_path / "out"))
+    assert seen["budget"] == 150.0                    # 1.5 x copy, not the ~30 s size floor
+    clock["t"] = 0.0
+    assert snapshots.publish_snapshot(db, str(tmp_path / "out"), deadline=120.0)
+    assert seen["budget"] == 20.0                     # never past the caller's hard deadline
