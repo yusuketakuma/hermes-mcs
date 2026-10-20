@@ -890,7 +890,15 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
     sealed = ledger.db.execute(
         "SELECT 1 FROM notification_intent_batches "
         "WHERE event_id=?", (ev["event_id"],)).fetchone()
-    if not sealed and ev["kind"] not in ("urgent_notice", "signal", "attachment_followup") and not notify_cards.interactive_enabled(cfg):
+    text_mode = (not notify_cards.interactive_enabled(cfg)
+                 or (ev["kind"] == "attachment_followup"
+                     and notify_cards.active_transport(cfg) == "slack"
+                     and notify_cards.notify_cfg(cfg).get("card_thread") is not True))
+    if not sealed and ev["kind"] not in ("urgent_notice", "signal") and text_mode:
+        if ev["kind"] == "attachment_followup" and not _send_never_began(ev):
+            _hold_event(ledger, ev, cfg, reason="thread_route_after_partial", rescue=False)
+            res["failed"] += 1
+            return True
         notify_cards.revert_to_text(ledger, ev["event_id"])
         return False
     if ev["kind"] == "attachment_followup" and _route(ev) == "text":
@@ -909,6 +917,9 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
             return True
     try:
         outcome = notify_cards.dispatch_intent(ledger, ev, cfg)
+        if outcome.get("text_fallback") and not sealed and _send_never_began(ev) \
+                and notify_cards.revert_to_text(ledger, ev["event_id"]):
+            return False
         if outcome.get("parked"):
             res["parked"] += 1
         elif outcome.get("held"):

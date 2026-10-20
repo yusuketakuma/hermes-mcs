@@ -434,3 +434,142 @@ def test_two_late_slack_files_survive_one_spec_publish_failure(
     assert len([call for call in world.client.calls if call[0] == "files_upload_v2"]) == 2
     assert len(world.client.upload_calls) == 2 and not legacy
     assert all(_late_followup_state(led, eid) == "accepted" for eid in events)
+
+
+# Slack's thread part binds an existing root without a thread-creation HTTP
+# call. Settle its canonical receipts to model a factual rejected binding.
+def _failed_slack_thread_file(led, tmp_path, monkeypatch, result="not_sent"):
+    from pathlib import Path
+    from adapters.common import envelopes
+    import notify_flush
+    import notify_transport
+    from slack_testkit import ROOT_TS
+
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW)
+    _seed_thread(led, mids=(100,))
+    source = Path(notify_cards.data_root(led)) / "attachments" / "fallback.pdf"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    blob = b"completely synthetic rejected-thread PDF"
+    source.write_bytes(blob)
+    with led.db:
+        aid = led.db.execute(
+            "INSERT INTO attachments(message_id,file_id,name,state,local_path,bytes,sha256) "
+            "VALUES(100,'synthetic-rejected','fallback.pdf','downloaded',?,?,?)",
+            (str(source), len(blob), hashlib.sha256(blob).hexdigest())).lastrowid
+    event = _intent(led, payload={"message_ids": [100]})
+    assert _dispatch(led, event, SLACK)["dispatched"]
+    render = _latest_render(led)
+    spec = json.loads(render["spec_json"])
+    claim = {"spec": spec, "attempt_id": "ab" * 8,
+             "worker_id": "bc" * 8, "payload_hash": render["payload_hash"]}
+    assert notify_transport.apply_transport_begin(
+        led, envelopes.transport_begin(claim), SLACK, now=NOW)["granted"]
+    assert notify_transport.apply_transport_receipt(
+        led, envelopes.transport_receipt(claim, "delivered", message_id=ROOT_TS),
+        SLACK, now=NOW)["applied"]
+    thread = next(p for p in spec["parts"]["manifest"] if p["kind"] == "thread")
+    assert notify_transport.apply_part_receipt(
+        led, envelopes.part_receipt(claim, thread, result, error_code="http_404"),
+        SLACK, now=NOW)["applied"]
+    assert led.db.execute(
+        "SELECT state FROM notification_render_parts WHERE attachment_id=?", (aid,)
+    ).fetchone()[0] == "held"
+    row = led.db.execute(
+        "SELECT event_id FROM notify_outbox WHERE kind='attachment_followup'").fetchone()
+    # An unknown thread normally queues nothing; a legacy pending row is
+    # deliberately supplied so the negative case checks refusal to send it.
+    eid = row[0] if row else led.outbox_add(
+        "attachment_followup", 1, {"attachment_id": aid, "message_id": 100})
+    cfg = {**SLACK, "notify_target": "slack:C_SYNTHETIC"}
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *_: "/bin/sh")
+    sent = []
+    monkeypatch.setattr(notify_flush, "_send", lambda argv, text, files=None, **kw:
+                        sent.append((text, files)))
+    return eid, aid, source, blob, cfg, sent
+
+
+@pytest.mark.parametrize("blocked", [
+    None, "unknown_thread", "revoked", "foreign_scope", "foreign_project",
+    "owner_pending", "owner_unknown", "owner_delivered", "owner_remote"])
+def test_failed_slack_thread_file_falls_back_only_with_safe_witness(
+        led, tmp_path, monkeypatch, blocked):
+    import notify_flush
+
+    eid, aid, source, blob, cfg, sent = _failed_slack_thread_file(
+        led, tmp_path, monkeypatch,
+        result="unknown" if blocked == "unknown_thread" else "not_sent")
+    if blocked == "revoked":
+        with led.db:
+            notify_cards.revoke_card(led.db, _latest_render(led)["card_id"], NOW)
+    elif blocked == "foreign_scope":
+        cfg["notify"] = {**cfg["notify"], "slack": {
+            **cfg["notify"]["slack"], "channel_id": "C_FOREIGN_SYNTHETIC"}}
+    elif blocked == "foreign_project":
+        led.ensure_patient(2)
+        with led.db:
+            led.db.execute("UPDATE notify_outbox SET project_id=2 WHERE event_id=?", (eid,))
+    elif blocked and blocked.startswith("owner_"):
+        state = blocked.removeprefix("owner_")
+        # Adversarial persisted witness: even contradictory owner state
+        # cannot be discarded merely because its thread was not_sent.
+        with led.db:
+            led.db.execute(
+                "UPDATE notification_render_parts SET state=?,remote_id=? "
+                "WHERE attachment_id=?",
+                ("held" if state == "remote" else state,
+                 "F_SYNTHETIC_PRIOR" if state in ("remote", "delivered") else None, aid))
+    notify_flush.flush(led)
+    row = led.db.execute("SELECT state,route FROM notify_outbox WHERE event_id=?",
+                         (eid,)).fetchone()
+    if blocked is None:
+        assert row["state"] == "accepted" and row["route"] == "text"
+        assert len(sent) == 1 and sent[0][1] == [("fallback.pdf", str(source))]
+        assert source.read_bytes() == blob
+        notify_flush.flush(led)
+        assert len(sent) == 1
+    else:
+        assert not sent and row["state"] != "accepted"
+
+
+@pytest.mark.parametrize("prior", ["unsealed_unsent", "sealed", "unsealed_unknown"])
+@pytest.mark.parametrize("switch", ["interactive", "card_thread"])
+def test_slack_attachment_kill_switch_preserves_send_ownership(
+        led, tmp_path, monkeypatch, prior, switch):
+    import notify_flush
+
+    world, aid, eid, blob, _legacy = _late_slack_file(led, tmp_path, monkeypatch)
+    if prior == "sealed":
+        notify_flush.flush(led)
+        assert led.db.execute(
+            "SELECT 1 FROM notification_intent_batches WHERE event_id=?", (eid,)
+        ).fetchone() is not None
+    else:
+        with led.db:
+            led.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (eid,))
+            if prior == "unsealed_unknown":
+                led.db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?",
+                               (json.dumps({"next": 0, "sent": [], "sending": 1}), eid))
+    off = {**SLACK, "notify": {**SLACK["notify"], switch: "off" if switch == "interactive" else False},
+           "notify_target": "slack:C_SYNTHETIC"}
+    monkeypatch.setattr(notify_flush, "_config", lambda: off)
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
+    sent = []
+    monkeypatch.setattr(notify_flush, "_send", lambda argv, text, files=None, **kw:
+                        sent.append((text, files)))
+    notify_flush.flush(led)
+    row = led.db.execute("SELECT state,route,progress FROM notify_outbox WHERE event_id=?",
+                         (eid,)).fetchone()
+    if prior == "unsealed_unsent":
+        assert row["state"] == "accepted" and row["route"] == "text"
+        assert len(sent) == 1 and len(sent[0][1]) == 1
+        assert sent[0][1][0][0] == "synthetic.png"
+        from pathlib import Path
+        assert Path(sent[0][1][0][1]).read_bytes() == blob
+        notify_flush.flush(led)
+        assert len(sent) == 1
+    else:
+        assert not sent and row["route"] == "interactive" and row["state"] != "accepted"
+        if prior == "unsealed_unknown":
+            assert json.loads(row["progress"])["sending"] == 1
+    assert not world.client.upload_calls

@@ -2278,7 +2278,7 @@ def _resolve_targets(db, ev, payload) -> list:
         if not positive(aid) or not positive(mid) or not positive(ev["project_id"]):
             return []
         rows = db.execute(
-            """SELECT DISTINCT c.card_id,a.sha256 FROM attachments a
+            """SELECT DISTINCT c.card_id,a.sha256,c.thread_state FROM attachments a
                JOIN messages m ON m.message_id=a.message_id
                JOIN notification_intent_cards ic ON ic.state='delivered'
                JOIN notification_intent_batches b ON b.event_id=ic.event_id
@@ -2291,8 +2291,17 @@ def _resolve_targets(db, ev, payload) -> list:
                      WHERE patient.project_id=m.project_id AND patient.is_archived=1)
                  AND c.kind='thread' AND c.transport='slack'
                  AND c.delivery_state IN ('delivered','update_failed')
-                 AND c.message_id IS NOT NULL AND c.thread_id IS NOT NULL
-                 AND c.thread_state='created'
+                 AND c.message_id IS NOT NULL
+                 AND ((c.thread_state='created' AND c.thread_id IS NOT NULL)
+                   OR (c.thread_state='failed' AND EXISTS(
+                     SELECT 1 FROM notification_render_parts t
+                     WHERE t.delivery_id=ic.delivery_id AND t.kind='thread'
+                       AND t.state='not_sent' AND t.remote_id IS NULL)
+                     AND NOT EXISTS(SELECT 1 FROM notification_render_parts p
+                       WHERE p.attachment_id=a.attachment_id
+                         AND p.kind='attachment_part'
+                         AND (p.state NOT IN ('held','not_sent')
+                              OR p.remote_id IS NOT NULL))))
                  AND o.kind='new_messages' AND o.state='accepted'
                  AND EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(b.frozen_payload)
                      THEN b.frozen_payload ELSE '{}' END,'$.message_ids') x
@@ -2302,7 +2311,8 @@ def _resolve_targets(db, ev, payload) -> list:
                      WHERE x.type='integer' AND x.value=m.message_id)
                ORDER BY c.card_id""", (aid, mid, ev["project_id"])).fetchall()
         return [{"card_id": r["card_id"], "coverage": [mid],
-                 "attachment_sha256": r["sha256"]} for r in rows
+                 "attachment_sha256": r["sha256"],
+                 "text_fallback": r["thread_state"] == "failed"} for r in rows
                 if valid_hash(r["sha256"])]
     if kind == "new_messages":
         ids = sorted({m for m in (payload.get("message_ids") or [])
@@ -3127,6 +3137,8 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                            if _scope_match(_card_row(db, target["card_id"]), scope)]
                 if len(targets) != 1:
                     return {"error": "attachment_thread_unavailable"}
+                if targets[0]["text_fallback"]:
+                    return {"error": "attachment_thread_unavailable", "text_fallback": True}
                 frozen = {**frozen, "attachment_sha256": targets[0]["attachment_sha256"]}
             db.execute(
                 "INSERT INTO notification_intent_batches("
