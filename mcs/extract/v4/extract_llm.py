@@ -4874,7 +4874,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            if parallel else
                            (lambda i, v: _checkpoint(index, i, v)))
 
-    def _commit(r, d, ctx, integrity, qc) -> bool:
+    def _commit(r, d, ctx, integrity, qc, *, settled=None) -> bool:
         """Persist one validated result — the caller holds the lock.
         True when the artifact was written (a carried commit from an
         earlier pass counts it in the pass that finally wrote it)."""
@@ -4902,8 +4902,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             if ledger.db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
                                  f"AND EXISTS ({_hold_sql()})", (r["message_id"],)).fetchone():
                 held_prior += 1
+                if settled is not None:
+                    settled["held_prior"] += 1
             else:
                 deferred += 1
+                if settled is not None:
+                    settled["deferred"] += 1
             return False
         # the whole body is now covered — checkpoints for
         # it are dead weight (F14)
@@ -4913,6 +4917,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             " AND message_id=?", (r["message_id"],))
         ledger.db.commit()
         done += 1
+        if settled is not None:
+            settled["done"] += 1
         done_pids.add(r["project_id"])
         return True
 
@@ -5219,10 +5225,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             with lock(per_write_lock) as held:
                 for i, (r, lease, commit) in enumerate(carry or ()):
                     if held and _owns_current_source(ledger, r, lease):
-                        if commit():
-                            # the thunk counted it in the pass that
-                            # produced it; this pass is the one reporting
-                            done += 1
+                        settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
+                        commit(settled=settled)
+                        # The thunk closes over its original pass's counters.
+                        done += settled["done"]
+                        held_prior += settled["held_prior"]
+                        deferred += settled["deferred"]
+                        if settled["done"]:
                             done_pids.add(r["project_id"])
                         _release(ledger, r, lease)
                         carried += 1
@@ -5483,13 +5492,14 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
     if not carry:
         return
     keep = []
+    settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
     with _write_lock(True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S) as held:
         if held and fence is not None:
             import mcs_util
             write = write and mcs_util._updater_state() == fence
         for i, (r, lease, commit) in enumerate(carry):
             if held and write and _owns_current_source(ledger, r, lease):
-                commit()
+                commit(settled=settled)
                 _release(ledger, r, lease)
             elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
                 _release(ledger, r, lease)
@@ -5504,6 +5514,8 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                     carry[i] = (r, renewed, commit)
                     keep.append((r, renewed, commit))
     carry[:] = keep
+    if any(settled.values()):
+        print(json.dumps({"carry_settled": settled, "ts": time.time()}), flush=True)
 
 
 def _background_nightly(ledger, initial_state, stop=None):
