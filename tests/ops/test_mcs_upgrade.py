@@ -168,6 +168,51 @@ def test_launcher_never_treats_deferred_candidate_apply_as_success(tmp_path, cap
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == base
 
 
+def test_launcher_missing_candidate_reports_local_guidance_before_staging(tmp_path, monkeypatch):
+    repo, _ = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    launcher = _launcher()
+    monkeypatch.setattr(launcher.tempfile, "mkdtemp",
+                        lambda **kw: pytest.fail("missing candidate must not allocate staging"))
+    monkeypatch.setattr(launcher, "extract",
+                        lambda *a, **kw: pytest.fail("missing candidate must not extract"))
+    with pytest.raises(SystemExit) as caught:
+        launcher.main(["--repo", str(repo), "plan", "--candidate-sha", "0" * 40,
+                       "--base-sha", base])
+    message = str(caught.value.code)
+    assert "未公開候補" in message and "ローカル" in message
+    assert "--candidate-sha" in message and "--repo" in message
+    assert "接続" not in message and "アクセス権" not in message
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == base
+
+
+def test_launcher_preserves_a_dash_leading_reason_at_the_child_parser(tmp_path, capfd):
+    repo, _ = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    entry = repo / "mcs/ops/mcs_update.py"
+    entry.parent.mkdir(parents=True)
+    entry.write_text(
+        "import argparse, json\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('operation')\n"
+        "parser.add_argument('--candidate-sha')\n"
+        "parser.add_argument('--base-sha')\n"
+        "parser.add_argument('--confirm-human', action='store_true')\n"
+        "parser.add_argument('--reason', required=True)\n"
+        "args = parser.parse_args()\n"
+        "print(json.dumps({'reason': args.reason, 'confirmed': args.confirm_human}))\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "synthetic candidate parser")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "reset", "--hard", base)
+    assert _launcher().main(["--repo", str(repo), "apply", "--candidate-sha", target,
+                             "--base-sha", base, "--confirm-human", "--reason=-synthetic"]) == 2
+    captured = capfd.readouterr()
+    assert json.loads(captured.out) == {"reason": "-synthetic", "confirmed": True}
+    assert "適用されていません" in captured.err
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == base
+
+
 def test_launcher_refuses_target_without_updater(tmp_path):
     repo, _ = _make_repo(tmp_path)
     with pytest.raises(SystemExit, match="更新プログラム mcs/ops/mcs_update.py がありません"):

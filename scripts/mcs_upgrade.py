@@ -247,9 +247,13 @@ def _main(argv=None) -> int:
         raise SystemExit("--keep-hermes-checkout には省略しない40桁の16進数のコミット識別子が必要です")
     tag = candidate_sha or args.to or latest_tag(repo)
     if candidate_sha is not None:
-        if (_git(repo, "cat-file", "-t", candidate_sha).strip() != "commit"
-                or _git(repo, "rev-parse", "--verify", candidate_sha + "^{commit}").strip() != candidate_sha):
-            raise SystemExit("未公開候補はローカルに存在するコミットだけを指定してください")
+        try:
+            candidate_available = (_git(repo, "cat-file", "-t", candidate_sha).strip() == "commit"
+                and _git(repo, "rev-parse", "--verify", candidate_sha + "^{commit}").strip() == candidate_sha)
+        except SystemExit:
+            candidate_available = False
+        if not candidate_available:
+            raise SystemExit("未公開候補のコミットをローカルで確認できません。--candidate-sha と --repo を確認してください") from None
     elif len(tag) > 255 or not SEMVER_RE.fullmatch(tag):
         raise SystemExit(f"更新する版の指定が正しくありません（例: v1.0.23）: {tag}")
     tmp = tempfile.mkdtemp(prefix="mcs_upgrade_")
@@ -268,7 +272,7 @@ def _main(argv=None) -> int:
             cmd += ["--reinstall"] if args.reinstall else []
             cmd += [f"--install-arg={a}" for a in args.install_arg]
             if candidate_sha is not None:
-                cmd += ["--confirm-human", "--reason", args.reason]
+                cmd += ["--confirm-human", f"--reason={args.reason}"]
         env = {**os.environ, "MCS_UPDATE_REPO": repo}
         env.pop("MCS_UPDATE_KEEP_HERMES_CHECKOUT", None)
         if args.keep_hermes_checkout:
