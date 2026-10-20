@@ -122,7 +122,7 @@ def _plan_attachments(db, shown) -> list:
               -- is owned by that followup; a part would post it twice.
               -- suppressed/held followups leave the file to the part.
               AND NOT EXISTS(SELECT 1 FROM notify_outbox o
-                WHERE o.kind='attachment_followup'
+                WHERE o.kind='attachment_followup' AND o.route IS NOT 'interactive'
                   AND o.state IN ('pending','failed','accepted')
                   AND json_valid(o.payload)
                   AND json_extract(o.payload,'$.attachment_id')=a.attachment_id)
@@ -150,12 +150,14 @@ def _plan_attachments(db, shown) -> list:
     return out
 
 
-def _announced_ids(db, card, *, event_ids=None) -> set:
-    """Message ids a still-pending intent announces on this card."""
+def _announced_ids(db, card, *, event_ids=None, body_only=False) -> set:
+    """Pending message coverage, optionally excluding file-only announcements."""
     covered = set()
     for r in db.execute(
             "SELECT event_id,coverage FROM notification_intent_cards "
-            "WHERE card_id=? AND state='pending'", (card["card_id"],)):
+            "WHERE card_id=? AND state='pending' AND (?=0 OR NOT EXISTS("
+            "SELECT 1 FROM notify_outbox o WHERE o.event_id=notification_intent_cards.event_id "
+            "AND o.kind='attachment_followup'))", (card["card_id"], body_only)):
         if event_ids is not None and r["event_id"] not in event_ids:
             continue
         try:
@@ -562,7 +564,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     present = presenter(card["transport"])
     editable = present.EDITABLE
     slack_thread = card["transport"] == "slack" and card["kind"] == "thread"
-    announced = (_announced_ids(db, card, event_ids=set(spec["delivery"]["intent_event_ids"]))
+    announced = (_announced_ids(db, card, event_ids=set(spec["delivery"]["intent_event_ids"]),
+                               body_only=True)
                  if update and slack_thread else set())
     if hasattr(present, "overflow"):
         keyed.extend(present.overflow(parts, split_body_chunks))

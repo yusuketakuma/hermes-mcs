@@ -97,17 +97,16 @@ def test_missing_notification_channel_stays_retryable(monkeypatch):
     assert marked == [(1, "failed", 3600)]
 
 
-def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
-    """A usage rejection of the file-bearing send (hermes send exit 2 —
-    never a delivery failure where acceptance is unknown) must not sink
-    the notification — drop the files and retry the chunk text-only."""
+@pytest.mark.parametrize("kind", ["new_messages", "attachment_followup"])
+def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch, kind):
+    """A body notice may survive rejected media; a file-only followup cannot."""
     db = _ledger(tmp_path)
     db.upsert_patient_info(_unread_patient(70))
     f = tmp_path / "f.txt"
     f.write_bytes(b"x")
-    db.outbox_add("new_messages", 70, {"message_ids": [1]})
-    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
-    monkeypatch.setattr(notify_sender, 'target', lambda cfg, kind: "chan")
+    db.outbox_add(kind, 70, {"message_ids": [1]})
+    monkeypatch.setattr(mcs_util, "hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, "target", lambda cfg, kind: "chan")
     monkeypatch.setattr(notify_flush, "_format_event",
                         lambda led, ev: ("body text", [("f.txt", str(f))]))
     calls = []
@@ -117,12 +116,17 @@ def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
         if files:
             raise notify_sender.SendUsage("media rejected")
 
-    monkeypatch.setattr(notify_sender, 'send', fake_send)
+    monkeypatch.setattr(notify_sender, "send", fake_send)
     res = notify_flush.flush(db)
-    assert res["sent"] == 1
-    assert calls == [True, False]
-    assert db.db.execute(
-        "SELECT state FROM notify_outbox").fetchone()[0] == "accepted"
+    state = db.db.execute("SELECT state FROM notify_outbox").fetchone()[0]
+    if kind == "attachment_followup":
+        assert res["sent"] == 0 and res["failed"] == 1
+        assert calls == [True]
+        assert state == "failed"
+    else:
+        assert res["sent"] == 1
+        assert calls == [True, False]
+        assert state == "accepted"
     db.close()
 
 
@@ -527,5 +531,40 @@ def test_invalid_interactive_payload_is_held_not_retried(tmp_path,
         row = db.db.execute("SELECT state,next_try FROM notify_outbox "
                             "WHERE event_id=?", (eid,)).fetchone()
         assert row["state"] == "failed" and row["next_try"] is None
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("card_thread", [False, None], ids=["off", "unset"])
+def test_attachment_followup_keeps_text_file_delivery_without_card_thread(
+        tmp_path, monkeypatch, card_thread):
+    from slack_testkit import SLACK
+
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(70))
+    cfg = {**SLACK, "notify": dict(SLACK["notify"])}
+    if card_thread is None:
+        cfg["notify"].pop("card_thread")
+    else:
+        cfg["notify"]["card_thread"] = card_thread
+    source = tmp_path / "synthetic.pdf"
+    source.write_bytes(b"completely synthetic PDF")
+    event_id = db.outbox_add("attachment_followup", 70, {"message_id": 1})
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    monkeypatch.setattr(mcs_util, "hermes_exe", lambda *_: "/bin/sh")
+    monkeypatch.setattr(notify_sender, "target", lambda *_: "slack:C_SYNTHETIC")
+    monkeypatch.setattr(notify_flush, "_format_event",
+                        lambda *_: ("synthetic file notice", [(source.name, str(source))]))
+    calls = []
+    monkeypatch.setattr(notify_sender, "send",
+                        lambda argv, content, files=None, **kw: calls.append(files))
+    try:
+        result = notify_flush.flush(db)
+        assert calls == [[(source.name, str(source))]]
+        assert result["sent"] == 1 and result["failed"] == 0
+        state = db.db.execute("SELECT state,route FROM notify_outbox WHERE event_id=?",
+                              (event_id,)).fetchone()
+        assert tuple(state) == ("accepted", "text")
+        assert not db.db.execute("SELECT 1 FROM notification_intent_batches").fetchone()
     finally:
         db.close()

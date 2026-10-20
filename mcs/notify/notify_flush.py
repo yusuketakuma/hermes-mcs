@@ -633,11 +633,36 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
     sealed = ledger.db.execute(
         "SELECT 1 FROM notification_intent_batches "
         "WHERE event_id=?", (ev["event_id"],)).fetchone()
-    if not sealed and ev["kind"] not in ("urgent_notice", "signal") and not notify_scope.interactive_enabled(cfg):
+    text_mode = (not notify_scope.interactive_enabled(cfg)
+                 or (ev["kind"] == "attachment_followup"
+                     and notify_scope.active_transport(cfg) == "slack"
+                     and notify_scope.notify_cfg(cfg).get("card_thread") is not True))
+    if not sealed and ev["kind"] not in ("urgent_notice", "signal") and text_mode:
+        if ev["kind"] == "attachment_followup" and not _send_never_began(ev):
+            hold_event(ledger, ev, cfg, reason="thread_route_after_partial", rescue=False)
+            res["failed"] += 1
+            return True
         notify_cards.revert_to_text(ledger, ev["event_id"])
         return False
+    if ev["kind"] == "attachment_followup" and _route(ev) == "text":
+        if not _send_never_began(ev):
+            hold_event(ledger, ev, cfg, reason="thread_route_after_partial", rescue=False)
+            res["failed"] += 1
+            return True
+        with ledger.db:
+            changed = ledger.db.execute(
+                "UPDATE notify_outbox SET route='interactive' WHERE event_id=? "
+                "AND kind='attachment_followup' AND route='text' "
+                "AND state IN ('pending','failed') AND progress IS ?",
+                (ev["event_id"], ev["progress"])).rowcount
+        if not changed:
+            res["skipped"] += 1
+            return True
     try:
         outcome = notify_cards.dispatch_intent(ledger, ev, cfg)
+        if outcome.get("text_fallback") and not sealed and _send_never_began(ev) \
+                and notify_cards.revert_to_text(ledger, ev["event_id"]):
+            return False
         if outcome.get("parked"):
             res["parked"] += 1
         elif outcome.get("held"):
@@ -783,7 +808,8 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
                          post_files if i == 0 else None,
                          deadline, attachment_pins=attachment_pins)
         except notify_sender.SendUsage:
-            if i != 0 or not post_files:
+            # A file-only followup cannot succeed by discarding its payload.
+            if i != 0 or not post_files or ev["kind"] == "attachment_followup":
                 raise
             post_files = None
             if not gate(i, payload):
@@ -879,10 +905,15 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
            "parked": 0}
     due = ledger.outbox_due(limit)
+    import notify_scope
+    slack_attachments = (notify_scope.interactive_enabled(cfg)
+                         and notify_scope.active_transport(cfg) == "slack"
+                         and notify_scope.notify_cfg(cfg).get("card_thread") is True)
     exe = mcs_util.hermes_exe(cfg)
     exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(
             _route(e) == "interactive" or e["kind"] in ("urgent_notice", "signal")
+            or (slack_attachments and e["kind"] == "attachment_followup")
             or notify_sender.hermes_free(cfg, notify_sender.target(cfg, e["kind"])) for e in due):
         res["skipped"] = len(due)
         return res
@@ -916,6 +947,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         # no SQLite/restore lookup or native delivery can be attempted here.
         if (exe_ok and _route(ev) == "text"
                 and ev["kind"] not in ("urgent_notice", "signal")
+                and not (slack_attachments and ev["kind"] == "attachment_followup")
                 and not notify_sender.target(cfg, ev["kind"])):
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
@@ -936,7 +968,8 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                 continue
             ledger.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (ev["event_id"],))
             ledger.db.commit()
-        if (_route(ev) == "interactive" or ev["kind"] in ("urgent_notice", "signal")) \
+        if (_route(ev) == "interactive" or ev["kind"] in ("urgent_notice", "signal")
+                or (slack_attachments and ev["kind"] == "attachment_followup")) \
                 and _dispatch_interactive(ledger, ev, cfg, res):
             continue
         if not exe_ok and not notify_sender.hermes_free(cfg, notify_sender.target(cfg, ev["kind"])):
