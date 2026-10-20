@@ -71,6 +71,17 @@ class TalkScreen(Screen):
             self.parts.append(f'<text x="{x + 211}" y="{y + 23}" font-size="16" '
                               f'fill="{BLUE}" text-anchor="middle">{escape(label)}</text>')
             y += 33
+        return y
+
+    def row(self, x, y, labels):
+        """cards.buttons' one horizontal stamp box: small buttons side by side."""
+        width = (402 - 4 * (len(labels) - 1)) / len(labels)
+        for i, label in enumerate(labels):
+            left = x + 10 + i * (width + 4)
+            self.rect(round(left), y + 2, round(width), 29, "#f3f5f7", 5, "#d5e1e5")
+            self.parts.append(f'<text x="{round(left + width / 2)}" y="{y + 23}" font-size="16" '
+                              f'fill="{BLUE}" text-anchor="middle">{escape(label)}</text>')
+        return y + 33
 
 
 def delivery():
@@ -85,7 +96,10 @@ def delivery():
                           (RULE, MUTED, False), (sender, MUTED, False), *summary[1:],
                           (RULE, MUTED, False), ("👤 担当: 田中 · ✅ 確認: 田中", INK, False),
                           ("📝 タスク 1件 · スタンプ 👀2 🙆1 · 自分 1投稿", INK, False)])
-    s.template(66, y, ["確認する", "担当する", "タスク作成", "MCSで開く", "その他の操作"])
+    # cards.CARD_BUTTONS order, as on Slack: menu, stamp row, 別の投稿, MCSで開く
+    y = s.template(66, y, ["操作を選ぶ…"])
+    y = s.row(66, y, ["👀", "🙆 ✓", "🙏", "👍", "✅"])
+    s.template(66, y, ["別の投稿", "MCSで開く"])
     s.bot(588, 245)
     # Layout 3 separates the header and original; later header updates reuse the original.
     y = s.block(610, 286, [(f"↳ 山田 花子 · 10-01 09:40 {SENDER}", INK, True),
@@ -105,21 +119,22 @@ def delivery():
 
 
 def task_confirm():
-    s = TalkScreen(2, "その他の操作とタスクは、本人との1:1トークで。",
+    s = TalkScreen(2, "操作とタスクは、本人との1:1トークで。",
                    "共有カードのボタンから開始。メニュー選択・項目入力・確認は本人だけに届きます。")
     s.panel(24, "① Botとの1:1トーク", "許可ユーザー本人だけのトーク / 抜粋")
     s.panel(568, "② タスクの確認と確定", "「確定する」を選ぶまで登録されません")
-    s.text(44, 252, "「その他の操作」を押したとき", 16, GREEN, True)
+    s.text(44, 252, "「操作を選ぶ…」を押したとき", 16, GREEN, True)
     s.bot(44, 266)
-    # cards.secondary keeps notify_cards._action_rows order (open tasks shown)
+    # cards.secondary keeps notify_cards._action_rows order (open tasks shown);
+    # 確認・担当・タスク作成 lead it now that the card carries only the menu
     s.template(66, s.block(66, 304, [(HEADING, INK, True)]),
-               ["タスク一覧", "患者の記録まとめ", "誤りを報告", "全体の新着集計",
-                "自分のタスク", "未確認一覧", "この患者を検索"])
-    s.text(44, 600, "「タスク作成」を押したとき", 16, GREEN, True)
-    s.bot(44, 614)
-    s.bubble(66, 652, "タスク内容\n中止する場合は「取消」。", height=83)
-    s.bubble(88, 750, "次回訪問時に残薬を確認", user=True)
-    s.paragraph(44, 850, "続いて担当者・期限・理由を同様に入力します。", 468, 16, MUTED)
+               ["確認する", "担当する", "タスク作成", "タスク一覧", "患者の記録まとめ",
+                "この患者を検索", "誤りを報告"])
+    s.text(44, 640, "「タスク作成」を押したとき", 16, GREEN, True)
+    s.bot(44, 654)
+    s.bubble(66, 692, "タスク内容\n中止する場合は「取消」。", height=83)
+    s.bubble(88, 790, "次回訪問時に残薬を確認", user=True)
+    s.paragraph(44, 890, "続いて担当者・期限・理由を同様に入力します。", 468, 16, MUTED)
     s.bot(588, 245)
     s.rect(610, 286, 422, 279, "#fff", 9, "#d5e1e5")
     s.text(626, 321, "確認 — タスク作成", 21, INK, True)

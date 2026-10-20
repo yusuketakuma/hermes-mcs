@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="880" height="720" viewBox="0 0 880 720" font-family="'Hiragino Sans', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="760" viewBox="0 0 880 760" font-family="'Hiragino Sans', sans-serif">
   <title>架空データを使った Discord 通知カード表示例</title>
   <desc>実患者・実投稿を参照せずに新規作成した、Discord 通知カード（区切り線で分かれた概要・要約・状態・操作）の図。</desc>
-  <rect width="880" height="720" fill="#313338"/>
+  <rect width="880" height="760" fill="#313338"/>
   <rect x="0" y="0" width="880" height="44" rx="0" fill="#1e1f22"/>
   <text x="20" y="28" font-size="14" fill="#dbdee1"># mcs-demo</text>
   <text x="856" y="28" font-size="11" fill="#b5bac1" text-anchor="end">架空の表示例</text>
@@ -11,7 +11,7 @@
   <rect x="170" y="55" width="38" height="16" rx="3" fill="#3f4248"/>
   <text x="189" y="67" font-size="9" fill="#dbdee1" text-anchor="middle">APP</text>
   <text x="222" y="67" font-size="11" fill="#b5bac1">今日 10:02</text>
-  <rect x="76" y="90" width="690" height="439" rx="8" fill="#2b2d31" stroke="#1e1f22"/>
+  <rect x="76" y="90" width="690" height="477" rx="8" fill="#2b2d31" stroke="#1e1f22"/>
   <text x="92" y="118" font-size="14" fill="#ffffff" font-weight="bold">💬 山田 花子（あおぞら）· 起点 10-01 🚨 緊急度高</text>
   <text x="92" y="139" font-size="11" fill="#b5bac1">2投稿 · 📎 1 · @自分宛て</text>
   <text x="92" y="156" font-size="11" fill="#b5bac1">🆕 返信+1</text>
@@ -31,17 +31,23 @@
   <text x="92" y="401" font-size="11" fill="#b5bac1">👤 担当: 田中 · ✅ 確認: 田中</text>
   <text x="92" y="419" font-size="11" fill="#b5bac1">📝 タスク 1件 · スタンプ 👀5 🙆2 · 自分 2投稿</text>
   <line x1="92" y1="431" x2="750" y2="431" stroke="#4e5058" stroke-width="1"/>
-  <rect x="92" y="443" width="84" height="30" rx="5" fill="#248046"/>
-  <text x="134.0" y="462.0" font-size="12" fill="#fff" text-anchor="middle">確認する</text>
-  <rect x="184" y="443" width="84" height="30" rx="5" fill="#4e5058"/>
-  <text x="226.0" y="462.0" font-size="12" fill="#fff" text-anchor="middle">担当する</text>
-  <rect x="276" y="443" width="96" height="30" rx="5" fill="#4e5058"/>
-  <text x="324.0" y="462.0" font-size="12" fill="#fff" text-anchor="middle">タスク作成</text>
-  <rect x="380" y="443" width="104" height="30" rx="5" fill="#4e5058"/>
-  <text x="432.0" y="462.0" font-size="12" fill="#fff" text-anchor="middle">MCSで開く ↗</text>
-  <rect x="92" y="481" width="360" height="32" rx="5" fill="#1e1f22" stroke="#4e5058"/>
-  <text x="106" y="502" font-size="12" fill="#b5bac1">その他の操作…</text>
-  <text x="436" y="502" font-size="11" fill="#b5bac1" text-anchor="middle">▾</text>
+  <rect x="92" y="443" width="360" height="32" rx="5" fill="#1e1f22" stroke="#4e5058"/>
+  <text x="106" y="464" font-size="12" fill="#b5bac1">操作を選ぶ…</text>
+  <text x="436" y="464" font-size="11" fill="#b5bac1" text-anchor="middle">▾</text>
+  <rect x="92" y="483" width="52" height="30" rx="5" fill="#4e5058"/>
+  <text x="118.0" y="502" font-size="13" fill="#fff" text-anchor="middle">👀</text>
+  <rect x="152" y="483" width="52" height="30" rx="5" fill="#4e5058"/>
+  <text x="178.0" y="502" font-size="13" fill="#fff" text-anchor="middle">🙆 ✓</text>
+  <rect x="212" y="483" width="52" height="30" rx="5" fill="#4e5058"/>
+  <text x="238.0" y="502" font-size="13" fill="#fff" text-anchor="middle">🙏</text>
+  <rect x="272" y="483" width="52" height="30" rx="5" fill="#4e5058"/>
+  <text x="298.0" y="502" font-size="13" fill="#fff" text-anchor="middle">👍</text>
+  <rect x="332" y="483" width="52" height="30" rx="5" fill="#4e5058"/>
+  <text x="358.0" y="502" font-size="13" fill="#fff" text-anchor="middle">✅</text>
+  <rect x="92" y="521" width="84" height="30" rx="5" fill="#4e5058"/>
+  <text x="134.0" y="540" font-size="12" fill="#fff" text-anchor="middle">別の投稿</text>
+  <rect x="184" y="521" width="104" height="30" rx="5" fill="#4e5058"/>
+  <text x="236.0" y="540" font-size="12" fill="#fff" text-anchor="middle">MCSで開く ↗</text>
   <circle cx="745" cy="114" r="9" fill="#5865f2"/>
   <text x="745" y="118" font-size="10" fill="#fff" text-anchor="middle">1</text>
   <circle cx="745" cy="185" r="9" fill="#5865f2"/>
@@ -50,18 +56,18 @@
   <text x="745" y="401" font-size="10" fill="#fff" text-anchor="middle">3</text>
   <circle cx="745" cy="458" r="9" fill="#5865f2"/>
   <text x="745" y="462" font-size="10" fill="#fff" text-anchor="middle">4</text>
-  <line x1="0" y1="549" x2="880" y2="549" stroke="#1e1f22" stroke-width="1"/>
-  <circle cx="24" cy="571" r="8" fill="#5865f2"/>
-  <text x="24" y="575" font-size="9" fill="#fff" text-anchor="middle">1</text>
-  <text x="40" y="575" font-size="11" fill="#b5bac1">概要 — 患者名・施設・起点日・緊急度、投稿数・添付・自分宛て・新しい返信</text>
-  <circle cx="24" cy="591" r="8" fill="#5865f2"/>
-  <text x="24" y="595" font-size="9" fill="#fff" text-anchor="middle">2</text>
-  <text x="40" y="595" font-size="11" fill="#b5bac1">投稿ごとの要約 — 送信者行と 📋 要約（Separator で投稿ごとに分かれる）</text>
+  <line x1="0" y1="589" x2="880" y2="589" stroke="#1e1f22" stroke-width="1"/>
   <circle cx="24" cy="611" r="8" fill="#5865f2"/>
-  <text x="24" y="615" font-size="9" fill="#fff" text-anchor="middle">3</text>
-  <text x="40" y="615" font-size="11" fill="#b5bac1">状態 — 担当・確認・タスク件数・スタンプ</text>
+  <text x="24" y="615" font-size="9" fill="#fff" text-anchor="middle">1</text>
+  <text x="40" y="615" font-size="11" fill="#b5bac1">概要 — 患者名・施設・起点日・緊急度、投稿数・添付・自分宛て・新しい返信</text>
   <circle cx="24" cy="631" r="8" fill="#5865f2"/>
-  <text x="24" y="635" font-size="9" fill="#fff" text-anchor="middle">4</text>
-  <text x="40" y="635" font-size="11" fill="#b5bac1">操作 — 確認する・担当する・タスク作成・MCSで開く と「その他の操作…」</text>
-  <text x="20" y="657" font-size="9" fill="#8b949e">名前・投稿・数値は架空です。実データ・実投稿の匿名化例は使用していません。</text>
+  <text x="24" y="635" font-size="9" fill="#fff" text-anchor="middle">2</text>
+  <text x="40" y="635" font-size="11" fill="#b5bac1">投稿ごとの要約 — 送信者行と 📋 要約（Separator で投稿ごとに分かれる）</text>
+  <circle cx="24" cy="651" r="8" fill="#5865f2"/>
+  <text x="24" y="655" font-size="9" fill="#fff" text-anchor="middle">3</text>
+  <text x="40" y="655" font-size="11" fill="#b5bac1">状態 — 担当・確認・タスク件数・スタンプ</text>
+  <circle cx="24" cy="671" r="8" fill="#5865f2"/>
+  <text x="24" y="675" font-size="9" fill="#fff" text-anchor="middle">4</text>
+  <text x="40" y="675" font-size="11" fill="#b5bac1">操作 — 「操作を選ぶ…」（確認する・担当する・タスク作成ほか）、スタンプ（自分は ✓）、別の投稿・MCSで開く</text>
+  <text x="20" y="697" font-size="9" fill="#8b949e">名前・投稿・数値は架空です。実データ・実投稿の匿名化例は使用していません。</text>
 </svg>

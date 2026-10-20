@@ -130,13 +130,13 @@ class Actions:
             await self._confirm(match[1], bool(match[2]), user, actor)
 
     async def _more(self, user, context):
-        """「その他の操作」: the card's secondary buttons, privately in the 1:1 talk."""
+        """「操作を選ぶ…」: the card's menu operations, privately in the 1:1 talk."""
         actions = [{"type": "message", "label": item["label"], "postback": "mcs:a:" + item["token"]}
                    for item in context.get("menu") or []]
         if not actions:
             await self._say(user, "この操作は無効です。最新のカードでやり直してください。")
             return
-        head = context.get("heading") or "その他の操作"
+        head = context.get("heading") or "操作を選ぶ…"
         for i in range(0, len(actions), 10):
             await self._say(user, head, actions[i:i + 10])
 
