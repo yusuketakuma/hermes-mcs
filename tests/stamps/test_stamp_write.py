@@ -533,6 +533,11 @@ def test_intent_ages_from_the_human_confirm_time(scene):
     assert json.loads(row[0])["queued_at"] == NOW - 100
     bad = dict(_command(scene, serial=702), confirmed_at="yesterday")
     assert _apply(scene, bad)["outcome"] == "rejected"
+    null = dict(_command(scene, serial=703), confirmed_at=None)
+    result = _apply(scene, null)
+    assert result["outcome"] == "rejected" and result["error"] == "stamp_target_invalid"
+    _drain(scene)
+    assert len(scene[3].posts) == 1  # only the fresh confirm reached the wire
 
 
 def test_reobserving_another_post_keeps_the_confirm_valid(scene):

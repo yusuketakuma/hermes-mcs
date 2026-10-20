@@ -143,7 +143,8 @@ def validate_operation(req, base):
     if not valid_text(req.get("reason"), 200):
         return "reason_required"
     at = req.get("confirmed_at")
-    if at is not None and (type(at) not in (int, float) or not math.isfinite(at) or at <= 0):
+    # Absent only on envelopes from before confirmed_at existed; an explicit null is malformed.
+    if "confirmed_at" in req and (type(at) not in (int, float) or not math.isfinite(at) or at <= 0):
         return "stamp_target_invalid"
     own = req.get("expected_own")
     if (not isinstance(own, dict) or set(own) != {"type", "observed_at"}
