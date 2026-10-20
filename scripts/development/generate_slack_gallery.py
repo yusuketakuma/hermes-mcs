@@ -133,7 +133,7 @@ class Screen:
         sx, sy = (x, y + 52) if wrap else (x + 378, y)
         self.button(sx, sy, "操作を選ぶ… ▾", 173)
         if stamp_row:
-            for i, label in enumerate(("👀見ました", "🙆承知✓", "🙏感謝", "👍いいね", "✅完了")):
+            for i, label in enumerate(("👀", "🙆", "🙏", "👍", "✅")):
                 self.button(x + i * 133, sy + 52, label, 125, primary=i == 1)
         self.text(x, sy + (128 if stamp_row else 76), "MCSで開く", 18, "#1264a3")
         return sy + (152 if stamp_row else 100)
@@ -191,7 +191,7 @@ def notification():
 
 
 def menu():
-    s = Screen(3, "スタンプは1回で、ほかの操作はメニューから。", "操作者とMCSアカウントを設定した例。✓のスタンプをもう一度押すと取消。", 1120)
+    s = Screen(3, "スタンプは1回で、ほかの操作はメニューから。", "操作者とMCSアカウントを設定した例。強調したスタンプをもう一度押すと取消。", 1120)
     x, y = s.app()
     y = s.card(x, y)
     s.actions(x, y, stamp_row=True)
