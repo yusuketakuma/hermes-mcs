@@ -10,13 +10,21 @@ from collections import deque
 from mcs_requests import canonical, positive
 from mcs_util import valid_hash
 from notify_render import card_body_text, preview_header, notification_preview, presenter
-from notify_scope import scope_matches, stored_scope
+from notify_scope import (active_transport, interactive_enabled, notify_cfg,
+                          scope_matches, stored_scope)
 
 THREAD_PART_LIMIT = 1900
 MAX_PARTS = 256
 LINEWORKS_POST_UPDATES = 3
 _TRUNCATED_PART = "（配送上限のため更新を保留 — 原本を参照）"
 _THREAD_BODY_COLLECTED = "（この区画の内容は更新済みの本文に集約しました）"
+
+def late_attachment_thread(cfg: dict) -> bool:
+    """Late files join the card's own thread (or LINE WORKS room grouping)."""
+    return interactive_enabled(cfg) and (
+        notify_cfg(cfg).get("card_thread") is True
+        or presenter(active_transport(cfg)).ALWAYS_THREAD)
+
 
 def text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()

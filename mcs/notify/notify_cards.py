@@ -860,7 +860,7 @@ def complete_intent(db, event_id, now) -> str | None:
                    JOIN messages m ON m.message_id=a.message_id
                    WHERE ic.event_id=? AND ic.state='delivered'
                      AND r.card_id=c.card_id AND r.state='delivered'
-                     AND c.transport='slack' AND r.transport=c.transport
+                     AND r.transport=c.transport
                      AND r.profile IS c.profile AND r.application_id IS c.application_id
                      AND r.team_id IS c.team_id AND r.channel_id IS c.channel_id
                      AND c.delivery_state!='revoked' AND c.thread_state='created'
@@ -913,7 +913,7 @@ def _resolve_targets(db, ev, payload) -> list:
                  AND m.body_state IS NOT 'deleted' AND c.project_id=m.project_id
                  AND NOT EXISTS(SELECT 1 FROM patients patient
                      WHERE patient.project_id=m.project_id AND patient.is_archived=1)
-                 AND c.kind='thread' AND c.transport='slack'
+                 AND c.kind='thread'
                  AND c.delivery_state IN ('delivered','update_failed')
                  AND c.message_id IS NOT NULL
                  AND ((c.thread_state='created' AND c.thread_id IS NOT NULL)
@@ -1584,7 +1584,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
             elif row["kind"] == "attachment_followup":
                 # Retry only unbound work after existing attempts/parts settle.
                 # A bound held/unknown plan remains owned by its receipt path.
-                if not notify_scope.interactive_enabled(cfg) or notify_scope.notify_cfg(cfg).get("card_thread") is not True:
+                if not notify_parts.late_attachment_thread(cfg):
                     return {"error": "attachment_thread_unavailable"}
                 for pending in db.execute(
                         "SELECT card_id FROM notification_intent_cards WHERE event_id=? "
@@ -1626,8 +1626,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 return {"error": "payload_invalid"}
             targets = _resolve_targets(db, row, frozen)
             if row["kind"] == "attachment_followup":
-                if not notify_scope.interactive_enabled(cfg) or notify_scope.active_transport(cfg) != "slack" \
-                        or notify_scope.notify_cfg(cfg).get("card_thread") is not True:
+                if not notify_parts.late_attachment_thread(cfg):
                     return {"error": "attachment_thread_unavailable"}
                 targets = [target for target in targets
                            if notify_scope.scope_matches(notify_scope.card_row(db, target["card_id"]), scope)]

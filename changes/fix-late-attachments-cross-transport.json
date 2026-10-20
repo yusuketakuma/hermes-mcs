@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "後から取得できた添付をDiscord・LINE WORKSでも元のカードへ追加",
+  "summary": "本文の通知後に取得できた画像やPDFなどの添付を、Discordでは元のカードのスレッドへ、LINE WORKSでは元のカードと同じトークルームへ追加します。これまでは既定の通知先へ別のテキスト通知として送られていました。",
+  "upgrade": "Discordは操作付き通知とスレッド表示が有効な環境、LINE WORKSは操作付き通知が有効な環境が対象です。収集処理は次回の起動から新しいコードを読み込みます。設定・DB形式の変更はありません。Discordでスレッド表示が無効または未設定の場合は、従来のファイル付きテキスト送信を維持します。過去に完了扱いになった通知や送信結果が不明な通知は、重複送信を防ぐため自動で再送しません。",
+  "details": [
+    "Slackと同じ照合（元の患者・投稿・接続先・スレッド、添付IDとファイルhashの受領記録）を、Discord・LINE WORKSにも適用する。",
+    "LINE WORKSでは元のカードの投稿を再利用し、同じカードを二重に投稿しない。",
+    "Discordでスレッド作成が未送信で失敗し、添付も送信されていないと確認できる場合は、従来の添付送信を維持する。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_flush.py",
+    "tests/notify/test_late_attachments_cross_transport.py"
+  ]
+}
