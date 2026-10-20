@@ -884,7 +884,7 @@ def _plan_attachments(db, shown) -> list:
               -- is owned by that followup; a part would post it twice.
               -- suppressed/held followups leave the file to the part.
               AND NOT EXISTS(SELECT 1 FROM notify_outbox o
-                WHERE o.kind='attachment_followup'
+                WHERE o.kind='attachment_followup' AND o.route IS NOT 'interactive'
                   AND o.state IN ('pending','failed','accepted')
                   AND json_valid(o.payload)
                   AND json_extract(o.payload,'$.attachment_id')=a.attachment_id)
@@ -912,12 +912,14 @@ def _plan_attachments(db, shown) -> list:
     return out
 
 
-def _announced_ids(db, card, *, event_ids=None) -> set:
-    """Message ids a still-pending intent announces on this card."""
+def _announced_ids(db, card, *, event_ids=None, body_only=False) -> set:
+    """Pending message coverage, optionally excluding file-only announcements."""
     covered = set()
     for r in db.execute(
             "SELECT event_id,coverage FROM notification_intent_cards "
-            "WHERE card_id=? AND state='pending'", (card["card_id"],)):
+            "WHERE card_id=? AND state='pending' AND (?=0 OR NOT EXISTS("
+            "SELECT 1 FROM notify_outbox o WHERE o.event_id=notification_intent_cards.event_id "
+            "AND o.kind='attachment_followup'))", (card["card_id"], body_only)):
         if event_ids is not None and r["event_id"] not in event_ids:
             continue
         try:
@@ -1325,7 +1327,8 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     present = presenter(card["transport"])
     editable = present.EDITABLE
     slack_thread = card["transport"] == "slack" and card["kind"] == "thread"
-    announced = (_announced_ids(db, card, event_ids=set(spec["delivery"]["intent_event_ids"]))
+    announced = (_announced_ids(db, card, event_ids=set(spec["delivery"]["intent_event_ids"]),
+                               body_only=True)
                  if update and slack_thread else set())
     if hasattr(present, "overflow"):
         keyed.extend(present.overflow(parts, _split_body_chunks))
@@ -2211,6 +2214,45 @@ def _complete_intent(db, event_id, now) -> str | None:
     if states - {"delivered", "suppressed"}:
         return None
     if "delivered" in states:
+        owner = db.execute(
+            "SELECT o.kind,b.frozen_payload FROM notify_outbox o "
+            "LEFT JOIN notification_intent_batches b ON b.event_id=o.event_id "
+            "WHERE o.event_id=?", (event_id,)).fetchone()
+        if owner is not None and owner["kind"] == "attachment_followup":
+            try:
+                frozen = json.loads(owner["frozen_payload"])
+            except (ValueError, TypeError, RecursionError):
+                return None
+            if not isinstance(frozen, dict) or not positive(frozen.get("attachment_id")) \
+                    or not positive(frozen.get("message_id")) \
+                    or not valid_hash(frozen.get("attachment_sha256")):
+                return None
+            delivered = db.execute(
+                """SELECT 1 FROM notification_intent_cards ic
+                   JOIN notification_renders r ON r.delivery_id=ic.delivery_id
+                   JOIN notification_cards c ON c.card_id=ic.card_id
+                   JOIN notification_render_parts p ON p.delivery_id=r.delivery_id
+                   JOIN attachments a ON a.attachment_id=p.attachment_id
+                   JOIN messages m ON m.message_id=a.message_id
+                   WHERE ic.event_id=? AND ic.state='delivered'
+                     AND r.card_id=c.card_id AND r.state='delivered'
+                     AND c.transport='slack' AND r.transport=c.transport
+                     AND r.profile IS c.profile AND r.application_id IS c.application_id
+                     AND r.team_id IS c.team_id AND r.channel_id IS c.channel_id
+                     AND c.delivery_state!='revoked' AND c.thread_state='created'
+                     AND m.project_id=c.project_id AND m.message_id=?
+                     AND m.body_state IS NOT 'deleted' AND a.state='downloaded'
+                     AND a.sha256=? AND p.attachment_id=?
+                     AND p.kind='attachment_part' AND p.state='delivered'
+                     AND p.remote_id IS NOT NULL AND p.remote_id!='' AND p.payload_sha256=?
+                     AND EXISTS(SELECT 1 FROM notification_render_parts t
+                         WHERE t.delivery_id=r.delivery_id AND t.kind='thread'
+                           AND t.state='delivered' AND t.remote_id=c.thread_id)
+                   LIMIT 1""",
+                (event_id, frozen.get("message_id"), frozen["attachment_sha256"],
+                 frozen["attachment_id"], frozen["attachment_sha256"])).fetchone()
+            if delivered is None:
+                return None
         db.execute(
             "UPDATE notify_outbox SET state='accepted',next_try=NULL,"
             "accepted_ref=?,updated_at=? WHERE event_id=?",
@@ -2231,6 +2273,37 @@ def _complete_intent(db, event_id, now) -> str | None:
 def _resolve_targets(db, ev, payload) -> list:
     """Frozen intent -> [(card_key, coverage, anchor)] fan-out."""
     kind = ev["kind"]
+    if kind == "attachment_followup":
+        aid, mid = payload.get("attachment_id"), payload.get("message_id")
+        if not positive(aid) or not positive(mid) or not positive(ev["project_id"]):
+            return []
+        rows = db.execute(
+            """SELECT DISTINCT c.card_id,a.sha256 FROM attachments a
+               JOIN messages m ON m.message_id=a.message_id
+               JOIN notification_intent_cards ic ON ic.state='delivered'
+               JOIN notification_intent_batches b ON b.event_id=ic.event_id
+               JOIN notify_outbox o ON o.event_id=ic.event_id
+               JOIN notification_cards c ON c.card_id=ic.card_id
+               WHERE a.attachment_id=? AND m.message_id=? AND m.project_id=?
+                 AND a.state='downloaded' AND a.local_path IS NOT NULL
+                 AND m.body_state IS NOT 'deleted' AND c.project_id=m.project_id
+                 AND NOT EXISTS(SELECT 1 FROM patients patient
+                     WHERE patient.project_id=m.project_id AND patient.is_archived=1)
+                 AND c.kind='thread' AND c.transport='slack'
+                 AND c.delivery_state IN ('delivered','update_failed')
+                 AND c.message_id IS NOT NULL AND c.thread_id IS NOT NULL
+                 AND c.thread_state='created'
+                 AND o.kind='new_messages' AND o.state='accepted'
+                 AND EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(b.frozen_payload)
+                     THEN b.frozen_payload ELSE '{}' END,'$.message_ids') x
+                     WHERE x.type='integer' AND x.value=m.message_id)
+                 AND EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(ic.coverage)
+                     THEN ic.coverage ELSE '[]' END) x
+                     WHERE x.type='integer' AND x.value=m.message_id)
+               ORDER BY c.card_id""", (aid, mid, ev["project_id"])).fetchall()
+        return [{"card_id": r["card_id"], "coverage": [mid],
+                 "attachment_sha256": r["sha256"]} for r in rows
+                if valid_hash(r["sha256"])]
     if kind == "new_messages":
         ids = sorted({m for m in (payload.get("message_ids") or [])
                       if positive(m)})
@@ -3002,6 +3075,20 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 for pending in db.execute("SELECT card_id FROM notification_intent_cards WHERE event_id=? AND state='pending'", (event_id,)).fetchall():
                     _issue_render(db, pending[0], cfg, now, specs)
                 outcome["dispatched"] = bool(specs)
+            elif row["kind"] == "attachment_followup":
+                # Retry only unbound work after existing attempts/parts settle.
+                # A bound held/unknown plan remains owned by its receipt path.
+                if not interactive_enabled(cfg) or notify_cfg(cfg).get("card_thread") is not True:
+                    return {"error": "attachment_thread_unavailable"}
+                for pending in db.execute(
+                        "SELECT card_id FROM notification_intent_cards WHERE event_id=? "
+                        "AND state='pending' AND delivery_id IS NULL", (event_id,)).fetchall():
+                    card = _card_row(db, pending[0])
+                    if card is None or card["delivery_state"] == "revoked" \
+                            or card["thread_state"] != "created" or not card["thread_id"]:
+                        return {"error": "attachment_thread_unavailable"}
+                    _issue_render(db, pending[0], cfg, now, specs, force=True)
+                outcome["dispatched"] = bool(specs)
             # sealed already — a flush re-entry repairs + completes
             if _complete_intent(db, event_id, now) is None:
                 _reseat(db, event_id, now, "intent_cards_unsettled")
@@ -3031,6 +3118,16 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                     "WHERE event_id=?",
                     ("payload_invalid", now, event_id))
                 return {"error": "payload_invalid"}
+            targets = _resolve_targets(db, row, frozen)
+            if row["kind"] == "attachment_followup":
+                if not interactive_enabled(cfg) or active_transport(cfg) != "slack" \
+                        or notify_cfg(cfg).get("card_thread") is not True:
+                    return {"error": "attachment_thread_unavailable"}
+                targets = [target for target in targets
+                           if _scope_match(_card_row(db, target["card_id"]), scope)]
+                if len(targets) != 1:
+                    return {"error": "attachment_thread_unavailable"}
+                frozen = {**frozen, "attachment_sha256": targets[0]["attachment_sha256"]}
             db.execute(
                 "INSERT INTO notification_intent_batches("
                 "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,"
@@ -3040,8 +3137,9 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                  canonical(scope).decode() if active_transport(cfg) in ("slack", "lineworks") else None))
             card_ids = []
             covered = set()
-            for target in _resolve_targets(db, row, frozen):
-                cid = _card_for(db, target, scope, now)
+            for target in targets:
+                cid = (target["card_id"] if row["kind"] == "attachment_followup"
+                       else _card_for(db, target, scope, now))
                 db.execute(
                     "INSERT OR IGNORE INTO notification_intent_cards("
                     "event_id,card_id,coverage) VALUES(?,?,?)",
@@ -3060,7 +3158,8 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 covered.update(target["coverage"])
             if card_ids:
                 for cid in card_ids:
-                    _issue_render(db, cid, cfg, now, specs)
+                    _issue_render(db, cid, cfg, now, specs,
+                                  force=row["kind"] == "attachment_followup")
                 if row["kind"] == "new_messages":
                     from notify_urgent import capture_initial
                     capture_initial(ledger, cfg, {

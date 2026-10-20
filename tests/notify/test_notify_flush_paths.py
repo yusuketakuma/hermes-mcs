@@ -94,15 +94,14 @@ def test_missing_notification_channel_stays_retryable(monkeypatch):
     assert marked == [(1, "failed", 3600)]
 
 
-def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
-    """A usage rejection of the file-bearing send (hermes send exit 2 —
-    never a delivery failure where acceptance is unknown) must not sink
-    the notification — drop the files and retry the chunk text-only."""
+@pytest.mark.parametrize("kind", ["new_messages", "attachment_followup"])
+def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch, kind):
+    """A body notice may survive rejected media; a file-only followup cannot."""
     db = _ledger(tmp_path)
     db.upsert_patient_info(_unread_patient(70))
     f = tmp_path / "f.txt"
     f.write_bytes(b"x")
-    db.outbox_add("new_messages", 70, {"message_ids": [1]})
+    db.outbox_add(kind, 70, {"message_ids": [1]})
     monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
     monkeypatch.setattr(notify_flush, "_target", lambda cfg, kind: "chan")
     monkeypatch.setattr(notify_flush, "_format_event",
@@ -116,10 +115,15 @@ def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
 
     monkeypatch.setattr(notify_flush, "_send", fake_send)
     res = notify_flush.flush(db)
-    assert res["sent"] == 1
-    assert calls == [True, False]
-    assert db.db.execute(
-        "SELECT state FROM notify_outbox").fetchone()[0] == "accepted"
+    state = db.db.execute("SELECT state FROM notify_outbox").fetchone()[0]
+    if kind == "attachment_followup":
+        assert res["sent"] == 0 and res["failed"] == 1
+        assert calls == [True]
+        assert state == "failed"
+    else:
+        assert res["sent"] == 1
+        assert calls == [True, False]
+        assert state == "accepted"
     db.close()
 
 

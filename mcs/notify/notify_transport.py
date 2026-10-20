@@ -602,6 +602,14 @@ def apply_part_receipt(ledger, req, cfg, now=None, *, _in_transaction=False) -> 
                        "part_state": req["result"],
                        "parts_state": cards._update_parts_state(
                            db, render["delivery_id"], now)}
+        if receipt.get("applied") and render is not None and part is not None \
+                and part["kind"] in ("attachment_part", "thread"):
+            for owner in db.execute(
+                    "SELECT ic.event_id FROM notification_intent_cards ic "
+                    "JOIN notify_outbox o ON o.event_id=ic.event_id "
+                    "WHERE ic.delivery_id=? AND o.kind='attachment_followup'",
+                    (render["delivery_id"],)).fetchall():
+                cards._complete_intent(db, owner["event_id"], now)
         cards.mark_snapshot_dirty(db)
     return receipt
 
