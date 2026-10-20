@@ -358,3 +358,29 @@ def test_bad_due_date_reprompts_with_the_reason_and_keeps_the_dialogue(tmp_path)
     said = w.client.calls[-1][1]["text"]
     assert said.startswith("入力を確認できませんでした（YYYY-MM-DD 形式）。\n期限")
     assert w.reg.modal(modal_id)["index"] == 0 and command_files(w) == []
+
+
+def test_a_retry_keeps_the_first_click_time_and_an_old_record_sends_none(tmp_path, monkeypatch):
+    """The click time is the human confirm time of a stamp press, so a retry
+    of the same click must not freshen it; a followup stored before the
+    field existed sends no click time (a stamp press then expires)."""
+    w = world(tmp_path, action="summary")
+    click = event(postback="mcs:a:" + TOKEN)
+    published = []
+
+    async def capture(payload):
+        published.append(dict(payload))
+
+    monkeypatch.setattr(w.actions, "_publish", capture)
+    asyncio.run(w.actions.handle(click))
+    first = published[0]
+    record = w.actions.reg.followup(first["command_id"])
+    assert record["clicked_at"] == first["clicked_at"]
+    monkeypatch.setattr(envelopes.time, "time", lambda: first["clicked_at"] + 600)
+    asyncio.run(w.actions.handle(click))
+    assert published[1]["clicked_at"] == first["clicked_at"]
+    del record["clicked_at"]
+    w.actions.reg.put_followup(first["command_id"], record)
+    asyncio.run(w.actions.handle(click))
+    assert "clicked_at" not in published[2]
+    assert published[2]["request_id"] == first["request_id"]

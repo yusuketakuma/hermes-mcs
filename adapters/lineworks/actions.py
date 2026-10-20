@@ -105,16 +105,22 @@ class Actions:
                 return
             env = envelopes.notification(token, actor, origin,
                                          projects.view_inputs(self.settings, kind, ""))
-            # A retry of the same token/actor reuses the existing followup's request id.
+            # A retry of the same token/actor reuses the existing followup's request id
+            # and click time; a record from before clicked_at existed sends none.
             previous = self.reg.followup(env["command_id"])
             if previous:
                 env["request_id"] = previous["request_id"]
+                if "clicked_at" in previous:
+                    env["clicked_at"] = previous["clicked_at"]
+                else:
+                    env.pop("clicked_at", None)
                 if await asyncio.to_thread(paths.read_result, self.dirs["cmd_results"], env["request_id"]) is None:
                     await self._publish(env)
                 return
             self.reg.put_followup(env["command_id"], {
                 "kind": "form" if kind in text.MODAL_ACTIONS else "action",
                 "action": kind, "request_id": env["request_id"], "origin": origin,
+                "clicked_at": env["clicked_at"],
                 "actor": actor, "user": user, "token": token,
                 "context": context.get("context") or {}})
             await self._publish(env)
