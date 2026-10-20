@@ -2,12 +2,14 @@
 "自動押下経路が無いことをテストで固定する"; stamps.md §7: "自動経路から
 POSTを呼べないことをテストで固定する").
 
-Today the whole MCS surface is read-only: every API call is a GET, read
-state clears only as a side effect of the snapshot-gated message GET, and
-the only DOM interaction is the login form in ``_auto_login`` (behind ``auto_login``). These tests
-pin that, so a future human-approved write (1.1.x) has to arrive as a
-deliberate, reviewed change to this file rather than slipping in through
-a scheduled job, a card button, or a delivery adapter.
+Every API call is a GET except one human-approved write: the own-stamp
+add/cancel POST in ``MCSAdapter.write_reaction``, reached only from
+``stamp_write._execute`` after its receipt check (stamps.md). Read state
+clears only as a side effect of the snapshot-gated message GET, and the
+only DOM interaction is the login form in ``_auto_login`` (behind
+``auto_login``). These tests pin that, so any further write has to arrive
+as a deliberate, reviewed change to this file rather than slipping in
+through a scheduled job, a card button, or a delivery adapter.
 
 Static AST checks over the production tree plus a recording fake worker —
 no network, no real MCS."""
@@ -109,12 +111,53 @@ def _calls_to(attr):
                 yield rel, node
 
 
+# The single human-approved write and its single caller (stamps.md).
+STAMP_WRITE = (ADAPTER, "write_reaction")
+STAMP_CALLER = (Path("mcs/stamps/stamp_write.py"), "_execute")
+
+
+def _enclosing(rel, call):
+    """Name of the innermost function whose body contains ``call``."""
+    found = None
+    for node in ast.walk(_parse(rel)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.lineno <= call.lineno <= node.end_lineno \
+                and (found is None or node.lineno > found.lineno):
+            found = node
+    return found.name if found else None
+
+
+def _keyword(call, name):
+    value = next((kw.value for kw in call.keywords if kw.arg == name), None)
+    return value.value if isinstance(value, ast.Constant) else ...
+
+
 def test_every_mcs_request_call_is_a_literal_get():
     calls = list(_calls_to("_request"))
     assert calls, "MCSAdapter._request callers vanished — re-point this test"
-    bad = [f"{rel}:{node.lineno}" for rel, node in calls
-           if _method_of(node, 0) != "GET"]
+    writes = [(rel, node) for rel, node in calls if _method_of(node, 0) != "GET"]
+    bad = [f"{rel}:{node.lineno}" for rel, node in writes
+           if (rel, _enclosing(rel, node)) != STAMP_WRITE]
     assert not bad, f"non-GET (or non-literal) MCS request: {bad}"
+    # The stamp write is one literal POST that never retries or logs in.
+    assert len(writes) == 1, [f"{rel}:{node.lineno}" for rel, node in writes]
+    (_rel, post), = writes
+    assert _method_of(post, 0) == "POST"
+    assert (_keyword(post, "retries"), _keyword(post, "extend_session"),
+            _keyword(post, "_cached_session_only")) == (0, False, True)
+
+
+def test_stamp_write_is_reached_only_from_the_approved_executor():
+    callers = [(rel, _enclosing(rel, node)) for rel, node in _calls_to("write_reaction")]
+    assert callers == [STAMP_CALLER], callers
+    rel, name = STAMP_CALLER
+    executor = next(node for node in ast.walk(_parse(rel))
+                    if isinstance(node, ast.FunctionDef) and node.name == name)
+    # The receipt check is the executor's first branch; only local parsing precedes it.
+    first = next(node for node in executor.body if not isinstance(node, ast.Assign))
+    assert isinstance(first, ast.If) and any(
+        isinstance(n, ast.Call) and getattr(n.func, "id", None) == "_approved"
+        for n in ast.walk(first.test)), "stamp executor lost its receipt check"
 
 
 def test_request_forwards_its_method_unmodified():
