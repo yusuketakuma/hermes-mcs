@@ -651,10 +651,13 @@ def _apply_restore_op_tx(db, req, current) -> tuple[str | None, dict]:
 
 
 def apply_tx(db, req: dict, now: float | None = None, *,
-             filesystem_changes=None) -> tuple[str | None, dict]:
+             filesystem_changes=None, cfg=None, data_dir=None) -> tuple[str | None, dict]:
     """Apply one validated operation without committing its transaction."""
     db = getattr(db, "db", db)
     current = time.time() if now is None else float(now)
+    if req["cmd"] == "ops.mcs_reaction":
+        from stamp_write import enqueue_tx
+        return enqueue_tx(db, req, cfg, data_dir, current)
     if req["cmd"] in ("ops.drug_alias_apply", "ops.drug_alias_rollback"):
         from drug_alias import apply_tx as apply_alias_tx
         return apply_alias_tx(db, req, filesystem_changes)

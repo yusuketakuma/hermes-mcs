@@ -189,6 +189,13 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         return {**base, "outcome": "applied", "action": action,
                 "modal": True, "params": tok_params,
                 "form": action_context.task_form(db, card)}
+    if action == "stamp":
+        import stamp_write
+        form = stamp_write.form(db, card, cfg, actor, now, token)
+        if form.get("error"):
+            return {**base, "outcome": "rejected", "error": form["error"]}
+        return {**base, "outcome": "applied", "action": "stamp", "modal": True,
+                "params": {"token": token, "card_id": card["card_id"]}, "form": form}
     return {**base, "outcome": "rejected",
             "error": "action_not_applicable"}
 

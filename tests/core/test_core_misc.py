@@ -1325,7 +1325,7 @@ def test_karte_summary_due_flag_is_durable_until_stored(tmp_path):
     ("capture", "publish"), ("shadow", "failure"),
 ])
 def test_corrupt_optional_metadata_does_not_block_recapture(tmp_path, raw, source, entry, recursion_limited_json):
-    from message_metadata import get_message_metadata, get_metadata_shadow_status
+    from message_observations import get_message_metadata, get_metadata_shadow_status
 
     db = _ledger(tmp_path)
     try:

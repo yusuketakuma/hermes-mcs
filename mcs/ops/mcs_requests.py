@@ -169,7 +169,7 @@ def validate(req):
     return "unknown_cmd"
 
 
-def apply_command(ledger, req):
+def apply_command(ledger, req, *, cfg=None, data_dir=None):
     """Receipt-first transaction; exceptions leave the queue input retryable."""
     if not isinstance(req, dict) or not valid_uuid(req.get("command_id")):
         raise ValueError("bad_command_id")
@@ -218,7 +218,9 @@ def apply_command(ledger, req):
                 and req["cmd"].startswith("ops."):
             from mcs_operations import apply_tx
             error, extra = apply_tx(db, req, now=now,
-                                   filesystem_changes=filesystem_changes)
+                                   filesystem_changes=filesystem_changes,
+                                   **({"cfg": cfg, "data_dir": data_dir}
+                                      if req["cmd"] == "ops.mcs_reaction" else {}))
         elif not error:
             error, rid, before, after = _apply_request_tx(
                 db, req, pid, now)

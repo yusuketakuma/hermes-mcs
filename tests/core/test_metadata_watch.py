@@ -5,6 +5,7 @@ import pytest
 
 from common_testkit import ledger_fixture
 import message_observations
+import stamp_read
 from signal_policy import resolved_thresholds
 
 NOW = 1_800_000_000.0
@@ -111,7 +112,7 @@ def test_signal_branch_matches_correlated_reference(led):
 @pytest.mark.parametrize("element", ["synthetic", "{broken"])
 @pytest.mark.parametrize("selector", ["watch", "actors"])
 def test_invalid_reaction_element_does_not_abort_metadata_selectors(led, element, selector):
-    from message_metadata import get_message_metadata
+    from message_observations import get_message_metadata
 
     db = led.db
     db.execute("INSERT INTO patients(project_id,is_archived) VALUES(1,0)")
@@ -127,5 +128,5 @@ def test_invalid_reaction_element_does_not_abort_metadata_selectors(led, element
     # This is only a fetch selector; malformed metadata stays invalid in display.
     assert get_message_metadata(db, 1)["reactions_status"] == "invalid"
     targets = (message_observations.metadata_watch_targets(led.db, now=NOW) if selector == "watch"
-               else message_observations.reaction_actor_targets(led.db, now=NOW))
+               else stamp_read.reaction_actor_targets(led.db, now=NOW))
     assert [r["message_id"] for r in targets] == [1]

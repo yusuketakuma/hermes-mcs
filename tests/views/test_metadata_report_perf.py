@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import message_metadata
 import metadata_report
 import message_observations
 
@@ -69,11 +68,11 @@ def test_report_uses_same_decoder_for_corrupt_rows_and_sanitizes_errors(db, monk
         _row(db, mid, "shadow", raw=raw, error=error)
     _row(db, 5, "capture")
     expected = {
-        (raw, checked, error): message_metadata._read_metadata(db, mid, source)
+        (raw, checked, error): message_observations._read_metadata(db, mid, source)
         for mid, source, raw, checked, error in db.execute(
             "SELECT message_id,source,content,checked_at,last_error FROM message_metadata")
     }
-    original = message_metadata.decode_metadata
+    original = message_observations.decode_metadata
     decoded = []
 
     def checked_decode(row):
@@ -83,7 +82,7 @@ def test_report_uses_same_decoder_for_corrupt_rows_and_sanitizes_errors(db, monk
             decoded.append(tuple(row))
         return result
 
-    monkeypatch.setattr(message_metadata, "decode_metadata", checked_decode)
+    monkeypatch.setattr(message_observations, "decode_metadata", checked_decode)
     report = metadata_report.build_report(_reader(db, monkeypatch=monkeypatch), now=NOW)
     assert len(decoded) == 5
     assert report["outcomes"] == {

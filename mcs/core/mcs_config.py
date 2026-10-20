@@ -47,6 +47,12 @@ def _drug_map_config(value):
     return f"薬剤辞書の設定を確認してください（詳細: {problem}）" if problem else None
 
 
+def _stamps_config(value):
+    from stamp_contract import config_error
+    problem = config_error(value)
+    return f"MCSスタンプの設定を確認してください（{problem}）" if problem else None
+
+
 def recovery_python_problem(path, update_repo=None, *, checkout=REPO):
     """An independent runtime cannot live in either mutable checkout."""
     if not isinstance(path, str) or not os.path.isabs(path):
@@ -97,6 +103,7 @@ CONFIG_RULES = {
     "metadata_shadow":       (False, _bool),
     "metadata_refresh_publish": (False, _bool),
     "metadata_actors":       (False, _bool),
+    "stamps":                (False, _stamps_config),
     "clinical_metadata":     (False, _bool),
     "notify":                (False, _dict),
     "signals":               (False, _dict),

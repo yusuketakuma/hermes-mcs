@@ -24,7 +24,7 @@ from mcs_contract import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from mcs_util import fold_map, search_fold
 from mcs_queries import register_search_fold
-from message_metadata import stamp_counts
+from stamp_format import stamp_counts
 import notify_render
 from notify_render import (
     render_source_generation, posted_hhmm, inline_text, mmdd, patient_name, source_fingerprint,

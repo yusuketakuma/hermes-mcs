@@ -461,6 +461,14 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
             deadline=deadline)
     except Exception as e:
         result["errors"].append(f"cmd_int: {type(e).__name__}")
+    # Human intent was committed above; external mutations never run in that TX.
+    try:
+        import stamp_write
+        if stamp_write.enabled(cfg):
+            result["stamps"] = stamp_write.drain(
+                ledger, adapter, cfg, os.path.join(HOME, "data"), deadline)
+    except Exception as e:
+        result["errors"].append(f"stamps: {type(e).__name__}")
     job_ops.seed_discovery(ledger)
     discover_archived = cfg.get("discover_archived", False)
     if type(discover_archived) is not bool:

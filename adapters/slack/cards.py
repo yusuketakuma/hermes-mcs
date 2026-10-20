@@ -19,7 +19,7 @@ SCHEMA = "mcs-card-render/v2"
 # the post's summary+stamps chunk and its source-text chunks
 _HEADER_PART = re.compile(r"^(m:[1-9][0-9]{0,18}):header#1$")
 _BODY_PART = re.compile(r"^(m:[1-9][0-9]{0,18})#[1-9][0-9]{0,4}$")
-_STAMP_LINE = "スタンプ "          # message_metadata.thread_stamp_line prefix
+_STAMP_LINE = "スタンプ "          # stamp_format.thread_stamp_line prefix
 LINK_ACTION = "mcs:link"          # URL buttons still post an action — acked
 MENU_ACTION = "mcs:menu"          # the compact 操作 select — value = token
 _DIVIDER = {"type": "divider"}

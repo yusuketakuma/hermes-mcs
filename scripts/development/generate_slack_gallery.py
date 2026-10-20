@@ -188,12 +188,12 @@ def notification():
 
 
 def menu():
-    s = Screen(3, "次の操作を、ひとつのメニューから。", "この患者の記録まとめ・検索・誤りの報告を、メニューから選びます。", 1040)
+    s = Screen(3, "次の操作を、ひとつのメニューから。", "この患者の記録まとめ・検索・誤りの報告に加え、有効な場合はMCSスタンプも選べます。", 1040)
     x, y = s.app()
     y = s.card(x, y)
     s.actions(x, y)
     # notify_cards._action_rows order; the card has open tasks (📝 タスク 1件)
-    labels = ("タスク一覧", "患者の記録まとめ", "この患者を検索", "誤りを報告")
+    labels = ("タスク一覧", "患者の記録まとめ", "この患者を検索", "誤りを報告", "MCSスタンプ")
     mx, my = x + 378, y + 48
     s.rect(mx, my, 300, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
     for i, label in enumerate(labels):

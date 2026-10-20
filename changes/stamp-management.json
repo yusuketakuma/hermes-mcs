@@ -1,0 +1,18 @@
+{
+  "category": "added",
+  "title": "MCSスタンプの操作と管理を集約",
+  "summary": "Slack・Discord・LINE WORKSのカードから、MCSの投稿・返信へのスタンプ追加・変更・取消を人の確認後に依頼できます。画像やPDFは添付が属する投稿を対象とし、結果不明の操作は自動で再送しません。既存の読取り・押下者・表示もスタンプ用モジュールへ集約しました。",
+  "upgrade": "送信は既定OFFです。stamps.enabled、account_user_id、operatorを明示し、実際のMCS本人IDと操作者の対応を確認してください。配置時は通常の更新手順で既存プロセスへ新コードを読み込ませてください。有効・無効の切替時、LINE WORKSでは既存の対象カードの更新版が順に追加投稿される場合があります。data/stamp_operationsの記録を削除・巻戻しせず保持してください。記録を伴わない別配置へのDB復元では古い操作を停止します。実APIの送信・反映確認と本番適用は別途必要です。",
+  "details": [
+    "stamp_contract/read/format/writeを正本にし、一般のメタデータ検証はcore/message_observationsに移動。",
+    "承認receiptと待ち行列は同一transaction、通信はcommit後のrun lock内。本人ID・患者範囲・原文版を再確認し、フォーム形式の追加または本文なしの取消を1回だけ試みる。",
+    "DB復元後も私有の試行記録・配置識別子・操作履歴を照合し、結果不明はGETだけで再確認する。",
+    "受付と反映確認を区別し、Discordの即時受付結果で最終通知の待ちを消さない。DB schema、抽出世代、既読化、臨床判断は変更しない。"
+  ],
+  "refs": [
+    "mcs/stamps/",
+    "mcs/ingest/mcs_adapter.py",
+    "adapters/common/envelopes.py",
+    "docs/specs/stamp-management.md"
+  ]
+}

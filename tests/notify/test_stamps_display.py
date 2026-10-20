@@ -16,10 +16,11 @@ import mcs_view
 import notify_digest
 import notify_render
 import notify_views
-from message_metadata import (
-    actor_line, flag_lines, get_message_metadata, mentions_self, stamp_line)
+from stamp_format import actor_line, stamp_line
+from message_metadata import flag_lines, mentions_self
+from message_observations import get_message_metadata
 from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _msg, _patient, _signal_row, led
-import message_observations
+import stamp_read
 
 __all__ = ["led"]
 
@@ -655,12 +656,12 @@ def test_stamp_actor_partial_walk_is_unknown_and_preserves_the_last_complete_set
     _post(led, 100, OTHER, ts=NOW - 100)
     rows = [{"actor_id": OTHER, "reaction_type": "viewed", "name": "合成部分氏名"}]
     led.save_reaction_actors(100, rows, False, error="incomplete", now=NOW - 10)
-    assert actor_line(message_observations.reaction_actor_summary(led.db, 100)) == "押した人: 未取得（取得失敗）"
+    assert actor_line(stamp_read.reaction_actor_summary(led.db, 100)) == "押した人: 未取得（取得失敗）"
     rows[0]["name"] = "合成完全氏名"
     led.save_reaction_actors(100, rows, True, now=NOW - 10)
     rows[0]["name"] = "合成失敗氏名"
     led.save_reaction_actors(100, rows, False, error="incomplete", now=NOW)
-    assert actor_line(message_observations.reaction_actor_summary(led.db, 100)) == (
+    assert actor_line(stamp_read.reaction_actor_summary(led.db, 100)) == (
         "押した人（再取得失敗）: 👀 合成完全氏名 · 観測 09-21 23:13")
 
 

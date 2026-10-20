@@ -6,7 +6,8 @@ import pytest
 
 from project_metadata_contract import ARTIFACT_KIND
 from project_metadata_view import get_project_metadata
-import message_metadata as mm
+import message_observations as observations
+import stamp_format
 
 
 @pytest.fixture
@@ -71,18 +72,18 @@ def _db(error):
 
 def test_mentions_invalid_keeps_reactions_observed():
     db = _db("mentions_invalid")
-    meta = mm.get_message_metadata(db, 5)
+    meta = observations.get_message_metadata(db, 5)
     assert meta["reactions_status"] == "observed"
     assert meta["mentions_status"] == "invalid"
     assert meta["last_error"] is None
-    assert "再取得失敗" not in mm.stamp_line(meta)
-    assert mm.get_metadata_shadow_status(db, 5)["state"] != "failed"
+    assert "再取得失敗" not in stamp_format.stamp_line(meta)
+    assert observations.get_metadata_shadow_status(db, 5)["state"] != "failed"
 
 
 def test_reaction_and_fetch_errors_still_reported():
-    assert mm.get_message_metadata(_db("reactions_invalid"), 5)["last_error"] \
+    assert observations.get_message_metadata(_db("reactions_invalid"), 5)["last_error"] \
         == "reactions_invalid"
-    assert mm.get_message_metadata(_db("network_error"), 5)["last_error"] \
+    assert observations.get_message_metadata(_db("network_error"), 5)["last_error"] \
         == "network_error"
-    assert mm.get_message_metadata(
+    assert observations.get_message_metadata(
         _db("mentions_invalid,network_error"), 5)["last_error"] == "metadata_error"

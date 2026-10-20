@@ -166,7 +166,7 @@ def _self_reaction_response(db, mid):
     """The logged-in user's 承知/完了 stamp observed on the request post
     itself (capture only). Other stamps, other people's stamps and
     unfetched or invalid metadata never count."""
-    from message_metadata import get_message_metadata, get_metadata_shadow_status
+    from message_observations import get_message_metadata, get_metadata_shadow_status
     meta = get_message_metadata(db, mid)
     shadow = get_metadata_shadow_status(db, mid)
     if meta["last_error"] or (shadow["last_error"] and (

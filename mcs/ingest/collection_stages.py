@@ -20,6 +20,7 @@ import health_report
 from stats_math import finite_number
 import job_ops
 import message_observations
+import stamp_read
 
 BACKFILL_MAX_PAGES = 3        # per patient, per run — newest-first walk
 BACKFILL_OVERLAP_S = 120      # re-scan window; dedup handles repeats
@@ -925,7 +926,7 @@ def _stage_reaction_actors(adapter, ledger, until, *, skip, cfg=None):
     A complete walk re-renders the live thread card holding the message
     (with cfg), so new names reach Slack/Discord without waiting for the
     bounded card sweep to rotate back to that card."""
-    targets = message_observations.reaction_actor_targets(ledger.db, limit=REACTION_ACTORS_TICK_CAP)
+    targets = stamp_read.reaction_actor_targets(ledger.db, limit=REACTION_ACTORS_TICK_CAP)
     stats = {"due": len(targets), "fetched": 0, "complete": 0,
              "deferred": len(targets) if skip else 0, "errors": []}
     for index, target in enumerate([] if skip else targets):

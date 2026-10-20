@@ -15,7 +15,7 @@ from mcs_adapter import MCSAdapter
 from mcs_contract import MCSError, SchemaError
 from mcs_payload import normalize_message as _norm_message
 from self_identity import record_station_staff
-from message_metadata import get_message_metadata
+from message_observations import get_message_metadata
 from collection_stages import stage_metadata_shadow
 import run_check
 import message_observations

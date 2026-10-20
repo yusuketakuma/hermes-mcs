@@ -231,14 +231,16 @@ class Actions:
                 await self._publish(env)
             return
         payload = envelopes.human_payload(session["action"], actor, session["context"],
-                                          session["params"], session["fields"])
+                                          session["params"], session["fields"],
+                                          form=session.get("form"))
         if isinstance(payload, str) or not projects.project_allowed(self.settings, payload["project_id"]):
             await self._say(user, payload if isinstance(payload, str) else "対象が無効です。")
             return
         cid = confirm.open_confirm(self.reg, token=session["token"], actor=actor,
                                    origin=session["origin"], payload=payload)
         await self._say(user, text.preview_text(session["action"], payload, markdown=False,
-                                                target=(session.get("context") or {}).get("target")), [
+                                                target=(session.get("context") or {}).get("target"),
+                                                form=session.get("form")), [
             {"type": "message", "label": label, "postback": f"mcs:c:{cid}{suffix}"}
             for label, suffix in confirm.CHOICES])
 
@@ -305,7 +307,8 @@ class Actions:
                 continue
             result = await asyncio.to_thread(paths.read_result, self.dirs["cmd_results"],
                                              rec.get("request_id") or cid)
-            if result is None or (rec.get("request_id") and result.get("request_id") != rec["request_id"]):
+            if result is None or (rec.get("request_id") and result.get("request_id") != rec["request_id"]) \
+                    or text.followup_waiting(result):
                 continue
             # At most once: a DM with a lost response must never be automatically posted again.
             if not self.reg.drop_followup(cid):
@@ -325,8 +328,14 @@ class Actions:
 
     async def _deliver_followup(self, user, rec, result):
         if rec["kind"] == "form" and result.get("modal") and result.get("outcome") == "applied":
+            form = result.get("form")
+            if rec["action"] == "stamp" and not isinstance(form, dict):
+                # the stamp target list comes only from the runner — never prompt blind
+                await self._say(user, text.STAMP_FORM_PENDING)
+                return
             session = {**rec, "params": result.get("params") or {}, "fields": {}, "index": 0,
-                       "definitions": text.modal_fields(rec["action"], result.get("form"), "")}
+                       "definitions": text.modal_fields(rec["action"], form, ""),
+                       **({"form": form} if rec["action"] == "stamp" else {})}
             self.reg.put_modal("lw-form-" + envelopes.actor_hash(rec["actor"]), session)
             await self._prompt(user, session)
             return

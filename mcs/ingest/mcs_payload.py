@@ -1,7 +1,7 @@
 """Validate and normalize MCS response values without transport or persistent state."""
 from __future__ import annotations
 
-import re
+from stamp_contract import normalize_reactions
 from mcs_contract import Attachment, Message, UnreadPatient, SchemaError, project_url, valid_id
 
 
@@ -93,14 +93,9 @@ def attachments(files: list | None) -> list[Attachment]:
 
 
 
-_REACTION_KIND = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 
 
 
-def reaction_kind_ok(kind) -> bool:
-    """A concrete reaction kind: a short token, never the 'all' aggregate."""
-    return isinstance(kind, str) and bool(_REACTION_KIND.fullmatch(kind)) \
-        and kind != "all"
 
 
 
@@ -118,20 +113,7 @@ def message_metadata(m: dict, project_id: int) -> tuple[dict, list[str]]:
             elif not isinstance(value, list):
                 raise ValueError
             elif key == "reactions":
-                normalized, seen = [], set()
-                for r in value:
-                    if (not isinstance(r, dict)
-                            or not reaction_kind_ok(r.get("type"))
-                            or r["type"] in seen
-                            or type(r.get("count")) is not int
-                            or not 0 <= r["count"] <= 2**63 - 1
-                            or type(r.get("self_reacted")) is not bool
-                            or (r["self_reacted"] and r["count"] == 0)):
-                        raise ValueError
-                    seen.add(r["type"])
-                    normalized.append({k: r[k] for k in
-                                       ("type", "count", "self_reacted")})
-                value = normalized
+                value = normalize_reactions(value)
             else:
                 normalized = []
                 for item in value:

@@ -256,12 +256,55 @@ def signal_dismiss(actor: str, context: dict, signal_key: str,
     return env
 
 
+def mcs_reaction(actor: str, form: dict, attrs: dict,
+                 command_id: str | None = None):
+    """ops.mcs_reaction from the runner form shown to this actor — the
+    target, card, token and MCS account never come from typed input."""
+    post = attrs["post"]
+    env = {"version": 1, "cmd": "ops.mcs_reaction",
+           "command_id": command_id or str(uuid.uuid4()),
+           "actor": actor, "human_confirmed": True,
+           "project_id": form["project_id"], "card_id": form["card_id"],
+           "token": form["token"], "message_id": post["message_id"],
+           "source_hash": post["source_hash"], "form_hash": form["form_hash"],
+           "expected_own": attrs["expected_own"], "reason": attrs["reason"],
+           "mcs_user_id": form["mcs_user_id"], "op": attrs["op"]}
+    if attrs["op"] == "add":
+        env["reaction_type"] = attrs["kind"]
+    return env
+
+
+def _stamp_form_ok(form) -> bool:
+    def positive(value):
+        return type(value) is int and value > 0
+
+    def digest(value):
+        return isinstance(value, str) and len(value) == 64 \
+            and all(c in "0123456789abcdef" for c in value)
+    return (isinstance(form, dict) and positive(form.get("project_id"))
+            and positive(form.get("card_id")) and positive(form.get("mcs_user_id"))
+            and isinstance(form.get("token"), str) and len(form["token"]) == 32
+            and all(c in "0123456789abcdef" for c in form["token"])
+            and digest(form.get("form_hash")))
+
+
 def human_payload(action: str, actor: str, context: dict, params: dict,
-                  fields: dict):
+                  fields: dict, form: dict | None = None):
     """The confirmable human command of a 📝/🚫/⚠ modal submit, built
     from the render-pinned ``context``, the runner-stored token
     ``params`` and the typed ``fields`` — the envelope dict, or a JA
     error string. User input never picks the target."""
+    if action == "stamp":
+        if not _stamp_form_ok(form):
+            return "スタンプの対象を特定できません。最新のカードからやり直してください。"
+        got = text.stamp_attrs(fields, form)
+        if isinstance(got, str):
+            return got
+        post = got["post"]
+        if type(post.get("message_id")) is not int or post["message_id"] <= 0 \
+                or not isinstance(post.get("source_hash"), str):
+            return "スタンプの対象を特定できません。最新のカードからやり直してください。"
+        return mcs_reaction(actor, form, got)
     if action == "report":
         got = text.feedback_attrs(fields)
         if isinstance(got, str):

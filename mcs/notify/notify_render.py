@@ -14,13 +14,13 @@ import re
 import sqlite3
 import time
 
-from message_observations import reaction_actor_summary
+from stamp_read import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive
 from mcs_util import valid_hash
-from message_metadata import (get_message_metadata, is_self_sender,
-                              mentions_self, self_stamps, stamp_counts,
-                              thread_stamp_line, actor_line)
+from message_observations import get_message_metadata
+from message_metadata import is_self_sender, mentions_self
+from stamp_format import self_stamps, stamp_counts, thread_stamp_line, actor_line
 import structured_view
 from notify_scope import latest_signals
 import clinical_urgency

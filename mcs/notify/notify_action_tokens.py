@@ -17,6 +17,7 @@ ACTIONS = {
     "meds":    ("薬剤を確認", "secondary", "view"),
     "drugsearch": ("薬剤を検索", "secondary", "view"),
     "dismiss": ("却下", "danger", "write"),
+    "stamp":   ("MCSスタンプ", "secondary", "write"),
     "prev":    ("◀ 前", "secondary", "view"),
     "next":    ("次 ▶", "secondary", "view"),
     "mytasks": ("自分のタスク", "secondary", "view"),
@@ -36,7 +37,7 @@ WRITE_ACTIONS = frozenset(
 
 
 # Live responses are recomputed after current authorization even on replay.
-LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
+LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report", "stamp",
                          "mytasks", "unacked", "search", "digest", "tasks",
                          "meds", "drugsearch"})
 

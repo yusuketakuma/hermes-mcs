@@ -53,7 +53,8 @@ from mcs_download import disk_error_kind, validate_download_url
 from mcs_contract import (API, BASE, BootstrapError, MCSError as MCSError, SessionExpired as SessionExpired, SchemaError as SchemaError, Attachment as Attachment, Message as Message,
                           UnreadPatient as UnreadPatient, UnreadSnapshot as UnreadSnapshot, MessageBatch as MessageBatch, ReplyBatch as ReplyBatch, project_url as project_url, valid_id)
 from mcs_payload import (text_field, sender_name, profession, organization, page_has_next, unread_patient,
-                         reaction_kind_ok, message_metadata, normalize_message, normalize_threads)
+                         message_metadata, normalize_message, normalize_threads)
+from stamp_contract import REACTION_LABELS, reaction_kind_ok
 # The MCS unread screen (and its unread=1 route) lists at most this many
 # messages per project — owner-confirmed 2026-09-30. Reaching it means
 # older unread rows may be invisible to the unread walk.
@@ -1056,8 +1057,12 @@ class MCSAdapter:
 
     def _request(self, method: str, path: str, params: dict | None = None,
                  data: bytes | None = None, headers: dict | None = None,
-                 extend_session: bool = True, retries: int = 2) -> tuple[int, bytes, dict]:
+                 extend_session: bool = True, retries: int = 2, *,
+                 _cached_session_only: bool = False) -> tuple[int, bytes, dict]:
         self._remaining_timeout(self.timeout)
+        if _cached_session_only and (not isinstance(self._token, str)
+                or not self._token.strip() or any(c in self._token for c in "\r\n")):
+            raise MCSError("no_token")
         if not self._token:
             self.bootstrap_token()
         q = dict(params or {})
@@ -1080,7 +1085,7 @@ class MCSAdapter:
                     self._sleep_bounded(1.5 * (attempt + 1))
                 continue
             status = result["status"]
-            if status == 403 and path != SESSION_PROBE_PATH \
+            if status == 403 and not _cached_session_only and path != SESSION_PROBE_PATH \
                     and self._probe_session_ok():
                 # the session is fine — a route/project-level denial
                 # (retired route, revoked project) is a per-request
@@ -1097,6 +1102,39 @@ class MCSAdapter:
                                retryable=status >= 500)
             return status, base64.b64decode(result["body"], validate=True), result["headers"]
         raise MCSError("network_error", f"{method} {path}", retryable=True) from last
+
+    def write_reaction(self, message_id: int, reaction_type: str | None = None, *,
+                       cancel: bool = False) -> int:
+        """Attempt one authenticated own-stamp mutation; the caller owns its durable fence.
+
+        Never log in, probe the session, or retry a possible remote effect.
+        A response status is transport evidence only; callers must verify the
+        exact post before reporting the requested reaction state as observed.
+        """
+        if (not valid_id(message_id) or type(cancel) is not bool
+                or (cancel and reaction_type is not None)
+                or (not cancel and (not isinstance(reaction_type, str)
+                                    or reaction_type not in REACTION_LABELS))):
+            raise ValueError("invalid reaction arguments")
+        path = f"/messages/{message_id}/reactions"
+        data, headers = None, None
+        if cancel:
+            path += "/delete"
+        else:
+            data = urllib.parse.urlencode({"reaction_type": reaction_type}).encode("utf-8")
+            headers = {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"}
+        try:
+            status, _body, _headers = self._request(
+                "POST", path, data=data, headers=headers,
+                extend_session=False, retries=0, _cached_session_only=True)
+            return status
+        except SessionExpired as error:
+            raise SessionExpired(status=error.status) from None
+        except MCSError as error:
+            raise MCSError(error.kind, status=error.status, retryable=False) from None
+        except Exception:
+            # Neither server bodies nor worker diagnostics belong in receipts.
+            raise MCSError("reaction_request_failed", retryable=False) from None
 
     def _sleep_bounded(self, seconds: float):
         """Retry backoff never sleeps past the propagated deadline — the

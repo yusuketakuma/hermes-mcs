@@ -238,8 +238,17 @@ def _card_for(db, target, scope, now) -> int:
     return cur.lastrowid
 
 
+def _stamp_enabled(cfg) -> bool:
+    """Shared-card gate only; the clicking operator is re-checked on click and confirm."""
+    try:
+        import stamp_write
+        return stamp_write.enabled(cfg) is True
+    except Exception:                      # absent or broken gate: no write button
+        return False
+
+
 def _action_rows(db, card, content, now, context=None,
-                 in_thread_body=False, reserve=0):
+                 in_thread_body=False, reserve=0, cfg=None, mint=True):
     """Button rows for a render; every button carries a fresh token.
     Buttons whose modal flow cannot pin a source (no context) are not
     emitted — a button that can never succeed is worse than none."""
@@ -261,7 +270,9 @@ def _action_rows(db, card, content, now, context=None,
     def btn(action, params=None, label=None, style=None):
         if len(row) == MAX_BUTTONS:
             flush()
-        tok = action_tokens.mint(db, card["card_id"], action, params, need, now)
+        # mint=False measures the same plan without writing tokens
+        tok = (action_tokens.mint(db, card["card_id"], action, params, need, now)
+               if mint else None)
         b = {"id": action, "ui": "button",
              "style": style or action_tokens.ACTIONS[action][1],
              "label": label or action_tokens.ACTIONS[action][0], "token": tok}
@@ -308,6 +319,8 @@ def _action_rows(db, card, content, now, context=None,
     if kind == "signal" and len(keys) == 1 \
             and keys[0] in (context.get("signals") or {}):
         btn("dismiss", {"signal_key": keys[0]})
+    if kind == "thread" and positive(pid) and _stamp_enabled(cfg):
+        btn("stamp")
     flush()
     # row 2b — 💊 medication check / dictionary search (read-only views)
     if positive(pid) and (in_thread_body
@@ -379,10 +392,19 @@ def _parts_in_flight(db, latest) -> bool:
         "LIMIT 1", (latest["delivery_id"],)).fetchone() is not None
 
 
-def _generation_drift(card, content) -> dict:
+def _presentation_fp(card, content, cfg=None) -> str:
+    """The stamp button is presentation: only an enabled gate changes the
+    fingerprint, so default-off cards keep the stored value (no mass re-render)."""
+    fp = content_fingerprint(content)
+    if _stamp_enabled(cfg) and card["kind"] == "thread" and positive(card["project_id"]):
+        fp = hashlib.sha256(f"{fp}:stamp".encode()).hexdigest()
+    return fp
+
+
+def _generation_drift(card, content, cfg=None) -> dict:
     """Source/presentation fingerprint diff — the first observation
     seeds each baseline without a generation bump."""
-    pres_fp = content_fingerprint(content)
+    pres_fp = _presentation_fp(card, content, cfg)
     gens = {}
     if card["source_fp"] is None:
         gens["source_fp"] = content["source_fp"]   # baseline, not a bump
@@ -549,7 +571,10 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     # Discord answers a card-face click in the channel, so where the
     # thread body carries the 💊 buttons (THREAD_DRUG_ACTIONS) the card
     # face gets none — drug details stay inside the thread (owner rule)
-    post_mids = (_post_action_targets(db, card, content)
+    post_mids = (_post_action_targets(db, card, content, sum(
+                     len(r) + 1 for r in _action_rows(
+                         db, card, content, now, context, in_thread_body=in_thread_body,
+                         cfg=cfg, mint=False)))
                  if present.POST_ACTIONS and card["kind"] == "thread"
                  and card["delivery_state"] != "revoked"
                  and (in_thread_body or not present.DRUG_ROW_NEEDS_THREAD)
@@ -559,7 +584,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         "containers": containers,
         "action_rows": _action_rows(db, card, content, now, context,
                                     in_thread_body=in_thread_body,
-                                    reserve=2 * len(post_mids)),
+                                    reserve=2 * len(post_mids), cfg=cfg),
         "footer": footer
                   + [{"type": "meta", "correlation": correlation}],
         "manifest_id": content["manifest_id"],
@@ -608,7 +633,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     return spec, budget_hold
 
 
-def _post_action_targets(db, card, content) -> list:
+def _post_action_targets(db, card, content, row_cost) -> list:
     """[(container index, message id)] of the shown medication posts that
     get a 💊 beside their own post line, page order, at most
     MAX_POST_ACTIONS and only while the component budget leaves room."""
@@ -618,7 +643,7 @@ def _post_action_targets(db, card, content) -> list:
     rules = [i for i, c in enumerate(content["containers"])
              if c.get("rule") and c.get("type") == "text"]
     room = (MAX_COMPONENTS - sum(c["type"] != "meta" for c in content["containers"])
-            - sum(f["type"] == "text" for f in content["footer"]) - 20) // 2
+            - sum(f["type"] == "text" for f in content["footer"]) - row_cost) // 2
     out = []
     for at, mid in zip(rules, content["shown"]):
         if len(out) >= min(MAX_POST_ACTIONS, max(0, room)):
@@ -750,9 +775,9 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
             # The global source fingerprint remains intact for stale-action guards;
             # shown sets and intent binding describe only this render's coverage.
             content = card_content(db, card, cfg=cfg, waiting=waiting)
-            if not (ready - delivered) and content_fingerprint(content) == card["content_fp"]:
+            if not (ready - delivered) and _presentation_fp(card, content, cfg) == card["content_fp"]:
                 return None  # only the still-waiting posts changed
-    gens = _generation_drift(card, content)
+    gens = _generation_drift(card, content, cfg)
     if not _render_needed(db, card, latest, gens, cfg, now, force, waiting):
         return None                        # delivered/terminal & no drift
     if op == "update" and _parts_in_flight(db, latest):

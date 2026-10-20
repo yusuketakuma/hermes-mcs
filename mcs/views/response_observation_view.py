@@ -9,9 +9,9 @@ from typing import TypedDict
 import self_identity
 from mcs_requests import canonical, payload_hash, positive
 from mcs_util import valid_hash
-from message_metadata import (
-    REACTION_LABELS, observation_timestamp, get_message_metadata, mentions_self,
-)
+from stamp_contract import REACTION_LABELS
+from message_observations import observation_timestamp, get_message_metadata
+from message_metadata import mentions_self
 from snapshot_access import snapshot_meta, table_exists
 
 SCHEMA = "mcs-response-observation-list/1"

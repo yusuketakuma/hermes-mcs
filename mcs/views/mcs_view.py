@@ -17,7 +17,7 @@ import _mcs_path  # noqa: F401
 import semantic_store
 
 from ledger import LedgerReader
-from message_observations import reaction_actor_summary
+from stamp_read import reaction_actor_summary
 from project_metadata_contract import CLINICAL_DATASETS
 from project_metadata_view import physician_viewed_status
 from mcs_contract import project_url
@@ -27,8 +27,8 @@ from mcs_util import HOME, loads_dict, search_fold, valid_text, valid_hash
 from mcs_queries import register_search_fold
 from snapshot_access import snapshot_meta
 from read_model import message_patient_context
-from message_metadata import (
-    flag_lines, get_message_metadata, get_metadata_shadow_status, is_self_sender)
+from message_metadata import flag_lines, is_self_sender
+from message_observations import get_message_metadata, get_metadata_shadow_status
 import mcs_requests as requests
 
 from mcs_queries import UNKNOWN_TIME

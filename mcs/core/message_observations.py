@@ -1,9 +1,11 @@
-"""Read post metadata watch targets and actor observations on a borrowed connection."""
+"""Read captured post metadata and choose observation refresh work on borrowed connections."""
 from __future__ import annotations
 
-import sqlite3
+import json
+import re
 import time
-from contextlib import suppress
+
+from stamp_contract import REACTION_LABELS, valid_stored_reactions
 
 METADATA_SHADOW_INTERVAL_S = 30 * 60
 METADATA_REFRESH_TIERS = ((2 * 3600, 10 * 60), (24 * 3600, 30 * 60),
@@ -11,45 +13,6 @@ METADATA_REFRESH_TIERS = ((2 * 3600, 10 * 60), (24 * 3600, 30 * 60),
                           (30 * 86400, 24 * 3600))
 METADATA_SHADOW_TICK_CAP = 8
 METADATA_SHADOW_BACKOFF_S = 6 * 3600
-REACTION_ACTORS_TTL_S = 24 * 3600
-
-
-def reaction_actor_targets(db, limit=4, *, now=None):
-    """Watched posts whose captured reactions changed since the last
-        complete actor fetch, or whose complete set expired; failures back off."""
-    now = time.time() if now is None else now
-    # w: roots and replies of threads active in the last 7 days in
-    # active rooms (第2層 watch set) — stamps are pressed on both.
-    return db.execute("""
-          SELECT m.message_id,m.project_id FROM messages m
-          JOIN (SELECT m.message_id FROM messages m
-            JOIN patients p ON p.project_id=m.project_id
-            WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
-              AND m.posted_at_ts<=?
-              AND (SELECT MAX(x.posted_at_ts) FROM messages x
-                   WHERE x.project_id=m.project_id
-                     AND x.body_state IS NOT 'deleted' AND x.posted_at_ts<=?
-                     AND COALESCE(x.parent_id,x.message_id)=COALESCE(m.parent_id,m.message_id))>=?
-          ) w ON w.message_id=m.message_id
-          JOIN message_metadata md ON md.message_id=m.message_id AND md.source=(
-            SELECT source FROM message_metadata latest
-            WHERE latest.message_id=m.message_id AND latest.last_error IS NULL
-              AND json_valid(latest.content)
-              AND json_type(latest.content,'$.reactions.value')='array'
-            ORDER BY latest.checked_at DESC,latest.source='capture' DESC LIMIT 1)
-          LEFT JOIN message_reaction_actor_fetch f ON f.message_id=m.message_id
-          WHERE json_valid(md.content)
-            AND json_type(md.content,'$.reactions.value')='array'
-            AND (f.last_error IS NULL OR f.checked_at<=?)
-            AND (CASE WHEN f.complete_at IS NULL THEN EXISTS(
-                   SELECT 1 FROM json_each(md.content,'$.reactions.value') r
-                   WHERE json_extract(CASE WHEN r.type='object' THEN r.value END,
-                                      '$.count')>0)
-                 ELSE json_extract(md.content,'$.reactions.observed_at')>f.complete_at
-                   OR f.complete_at<=? END)
-          ORDER BY COALESCE(f.complete_at,0),m.message_id LIMIT ?
-        """, (now, now, now - 7*86400, now - METADATA_SHADOW_BACKOFF_S,
-          now - REACTION_ACTORS_TTL_S, limit)).fetchall()
 
 
 def metadata_watch_targets(db, limit=METADATA_SHADOW_TICK_CAP, *, now=None):
@@ -136,53 +99,177 @@ def metadata_watch_targets(db, limit=METADATA_SHADOW_TICK_CAP, *, now=None):
           now, METADATA_SHADOW_BACKOFF_S, limit)).fetchall()
 
 
-def reaction_actor_summary(db, message_id, *, now=None) -> dict:
-    """押下者の職種×種別件数・氏名・本人の有無・取得状態を返す（#22-D2で氏名表示）。
+def observation_timestamp(value):
+    """Return a valid stored observation time, otherwise unknown (None)."""
+    return (value if type(value) in (int, float)
+            and 0 < value < 253402214400 else None)
 
-    state: complete | stale (expired or reactions changed since) |
-    failed (last walk incomplete; counts are the last complete set) |
-    not_fetched. Counts outside 'complete' are past observations only."""
-    from self_identity import self_sender_id
-    now = time.time() if now is None else now
-    out = {"state": "not_fetched", "complete_at": None, "checked_at": None,
-           "counts": {}, "self_included": None, "actors": []}
-    with suppress(sqlite3.OperationalError):   # tables absent on a pre-22-F db
-        f = db.execute("SELECT complete_at,checked_at,last_error FROM "
-                       "message_reaction_actor_fetch WHERE message_id=?",
-                       (message_id,)).fetchone()
-        if f is None:
-            return out
-        out.update(complete_at=f[0], checked_at=f[1])
-        if f[0] is not None:
-            self_id = self_sender_id(db)
-            columns = {r[1] for r in db.execute(
-                "PRAGMA table_info(message_reaction_actors)")}
-            name_col = "actor_name" if "actor_name" in columns else "NULL"
-            org_col = "organization" if "organization" in columns else "NULL"
-            current = " AND removed_at IS NULL" if "removed_at" in columns else ""
-            for actor, kind, prof, name, org in db.execute(
-                    "SELECT actor_id,reaction_type,profession," + name_col + "," + org_col +
-                    " FROM message_reaction_actors WHERE message_id=?" + current +
-                    " ORDER BY observed_at,actor_id", (message_id,)):
-                by_kind = out["counts"].setdefault(prof or "", {})
-                by_kind[kind] = by_kind.get(kind, 0) + 1
-                out["actors"].append({"reaction_type": kind, "name": name,
-                                      "profession": prof, "organization": org,
-                                      "self": self_id is not None and actor == self_id})
-                if self_id is not None and actor == self_id:
-                    out["self_included"] = True
-            if self_id is not None and out["self_included"] is None:
-                out["self_included"] = False
-            seen = db.execute(
-                "SELECT json_extract(content,'$.reactions.observed_at') FROM message_metadata "
-                "WHERE message_id=? AND last_error IS NULL AND json_valid(content) "
-                "AND json_type(content,'$.reactions.value')='array' "
-                "ORDER BY checked_at DESC,source='capture' DESC LIMIT 1",
-                (message_id,)).fetchone()
-            changed = seen is not None and seen[0] is not None and seen[0] > f[0]
-        if f[2] is not None:
-            out["state"] = "failed"
-        elif f[0] is not None:
-            out["state"] = ("stale" if changed or f[0] <= now - REACTION_ACTORS_TTL_S
-                            else "complete")
-    return out
+
+def _valid_mentions(value) -> bool:
+    return isinstance(value, list) and not any(
+        not isinstance(m, dict) or m.get("type") not in ("user", "station", "project")
+        or type(m.get("id")) is not int or not 0 < m["id"] < 2**63 for m in value)
+
+
+_FIELDS = {"reactions": (valid_stored_reactions, "reactions_status"),
+           "mentions": (_valid_mentions, "mentions_status"),
+           "is_bookmarked": (lambda v: type(v) is bool, "bookmark_status"),
+           "is_pinned": (lambda v: type(v) is bool, "pin_status")}
+
+
+_FIELD_ONLY_ERRORS = {k + "_invalid" for k in _FIELDS if k != "reactions"}
+
+
+ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def _read_metadata(db, mid, source) -> dict:
+    row = None
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                  "AND name='message_metadata'").fetchone():
+        row = db.execute("SELECT content,checked_at,last_error FROM message_metadata "
+                         "WHERE message_id=? AND source=?", (mid, source)).fetchone()
+    return decode_metadata(row)
+
+
+def decode_metadata(row) -> dict:
+    """Validate one stored metadata row using the shared observation rules."""
+    result = {"reactions": None, "reactions_status": "not_fetched",
+              "reactions_observed_at": None, "checked_at": None,
+              "last_error": None, "mentions_observed_at": None}
+    for key, (_, status) in _FIELDS.items():
+        result.setdefault(key, None)
+        result[status] = "not_fetched"
+    if row is None:
+        return result
+    raw, checked, error = row
+    result["checked_at"] = observation_timestamp(checked)
+    errors = str(error).split(",") if error else []
+    # 反応以外の項目の不正は各 <key>_status で示し、取得失敗とは扱わない。
+    if any(e not in _FIELD_ONLY_ERRORS for e in errors):
+        result["last_error"] = (error if isinstance(error, str)
+                                and ERROR_CODE.fullmatch(error)
+                                else "metadata_error")
+    try:
+        content = json.loads(raw)
+    except (ValueError, TypeError, RecursionError):
+        content = None
+    for key, (valid, status) in _FIELDS.items():
+        if key + "_invalid" in errors:
+            result[status] = "invalid"
+            continue
+        field = content.get(key) if isinstance(content, dict) else None
+        if not isinstance(content, dict):
+            result[status] = "invalid"
+            continue
+        if field is None:
+            continue
+        value = field.get("value") if isinstance(field, dict) else None
+        observed = (observation_timestamp(field.get("observed_at"))
+                    if isinstance(field, dict) else None)
+        if observed is None or not valid(value):
+            result[status] = "invalid"
+            continue
+        result[key], result[status] = value, "observed"
+        if key == "reactions":
+            result["reactions_observed_at"] = observed
+        elif key == "mentions":
+            result["mentions_observed_at"] = observed
+    return result
+
+
+def _observation_age(metadata, as_of):
+    observed = metadata["reactions_observed_at"]
+    return (max(0, as_of - observed) if observed is not None
+            and observation_timestamp(as_of) is not None else None)
+
+
+def get_message_metadata(db, mid, *, as_of=None) -> dict:
+    """capture のみを読み、未取得と空配列を区別する（旧snapshotにも対応）。"""
+    result = _read_metadata(db, mid, "capture")
+    if as_of is not None:
+        result.update(
+            source="capture", age_as_of=observation_timestamp(as_of),
+            reactions_age_s=_observation_age(result, as_of),
+            freshness_note="通常収集時の観測です。古い投稿の反応更新には遅延があり、"
+                           "shadowの再取得結果はこの表示に反映しません。")
+        result["response_observation"] = response_observation(
+            db, mid, result, as_of=as_of)
+    return result
+
+
+def response_observation(
+        db, mid, metadata, *, as_of
+) -> dict[str, dict[str, str | float | list[str] | None] | str | None]:
+    """保存済み返信と本人のUI操作を別々に示し、業務完了や未対応を推定しない。"""
+    import self_identity
+    self_id = self_identity.self_sender_id(db)
+    row = db.execute(
+        "SELECT project_id,parent_id,posted_at_ts FROM messages WHERE message_id=?",
+        (mid,)).fetchone()
+    reply_at = None
+    time_context = "unknown"
+    known = (self_id is not None and row is not None
+             and observation_timestamp(row[2]) is not None and observation_timestamp(as_of) is not None)
+    if known and row is not None:
+        root = row[1] or mid
+        time_context = "bounded"
+        for reply in db.execute(
+            "SELECT sender_id,posted_at_ts FROM messages WHERE project_id=? "
+            "AND parent_id=? "
+            "AND COALESCE(body_state,'')!='deleted' ORDER BY posted_at_ts,message_id",
+            (row[0], root)):
+            actor = self_identity.normalize_sender_id(reply[0])
+            at = observation_timestamp(reply[1])
+            if actor is None:
+                if at is None or at > row[2]:
+                    time_context = "unknown"
+                continue
+            if actor != self_id:
+                continue
+            if at is None or at > as_of:
+                time_context = "unknown"
+            elif at > row[2] and reply_at is None:
+                reply_at = at
+    if known and reply_at is None and row is not None:
+        # Fewer stored replies than the thread reports: an unseen reply may be ours.
+        total = db.execute("SELECT reply_count FROM messages WHERE message_id=?",
+                           (row[1] or mid,)).fetchone()
+        stored = db.execute("SELECT COUNT(*) FROM messages WHERE project_id=? AND parent_id=?",
+                            (row[0], row[1] or mid)).fetchone()[0]
+        if total is not None and type(total[0]) is int and total[0] > stored:
+            known = False
+    reactions = metadata["reactions"]
+    return {
+        "reply": {"state": "observed" if reply_at is not None else
+                  "not_observed" if known else "unknown", "posted_at": reply_at},
+        "reply_time_context": time_context,
+        "self_reaction": {
+            "state": "invalid" if metadata["reactions_status"] == "invalid" else
+                     "failed" if metadata["last_error"] else metadata["reactions_status"],
+            "types": sorted({r["type"] if r["type"] in REACTION_LABELS else "unknown"
+                             for r in reactions or [] if r["self_reacted"]}),
+            "observed_at": metadata["reactions_observed_at"],
+            "checked_at": metadata["checked_at"],
+            "age_s": _observation_age(metadata, as_of),
+            "current_state": "unknown",
+            "basis": "ui_operation_only"},
+        "clinical_completion": None,
+        "nonresponse": None,
+        "unread": None,
+    }
+
+
+def get_metadata_shadow_status(db, mid, *, as_of=None) -> dict:
+    """shadowの取得状態と日時だけを返し、反応の値は公開しない。"""
+    metadata = _read_metadata(db, mid, "shadow")
+    state = ("failed" if metadata["last_error"] else
+             "invalid" if metadata["reactions_status"] == "invalid" else
+             "observed" if metadata["reactions_observed_at"] is not None else
+             "checked_without_reactions" if metadata["checked_at"] is not None else
+             "not_attempted")
+    return {"mode": "shadow", "state": state, "displayed": False,
+            "checked_at": metadata["checked_at"],
+            "reactions_observed_at": metadata["reactions_observed_at"],
+            "reactions_age_s": _observation_age(metadata, as_of),
+            "age_as_of": observation_timestamp(as_of), "last_error": metadata["last_error"]}

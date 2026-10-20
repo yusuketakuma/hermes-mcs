@@ -11,8 +11,8 @@ import mcs_view
 import notify_digest
 import notify_render
 import notify_views
-from message_metadata import (
-    get_message_metadata, get_metadata_shadow_status, stamp_line)
+from message_observations import get_message_metadata, get_metadata_shadow_status
+from stamp_format import stamp_line
 from notify_testkit import (
     CFG, NOW, _add_request, _card, _delivered_card, _dispatch, _intent, _msg, _patient,
     led, pinned_clock,

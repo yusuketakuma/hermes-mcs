@@ -27,7 +27,8 @@
 | `mcs/semantic/semantic_notice.py` | 通知適格性・起源照合・配送重複確認・公開計画 | 通常の結果/計画/intent/状態遷移は呼出元writerの同一transaction。既存degraded通知はintentごとのcommitを維持し、描画と送信直前gateは借用読取に限定 |
 | `mcs/semantic/semantic_assembly.py` | fact・根拠・依頼属性・進捗の組立て | 入力のコピーと返値を所有し、DB・推論・時刻・保存状態を持たない。`semantic_extraction`がlive/cache/repairの実行と借用connectionの読取を所有 |
 | `mcs/notify/` | 対象選定、spec/part計画、描画、送信許可、journal照合、receipt | `notify_parts`がpart計画、`notify_scope`がscope、`notify_spool`が保存先と公開、`notify_sender`がDBを持たないCLI送信を所有。`notify_actions`と`notify_transport`が同一transactionの適用/配送事実を確定し、公開はcommit後に行う |
-| `mcs/views/` | snapshot読取・scope/projection・統計/詳細/CLI | `registered_data`は登録情報、`clinical_display`は臨床値、`stats_contract`は集計範囲/結果形式、`message_metadata`は保存済み観測の検証。呼出元のDBを再openしない |
+| `mcs/stamps/` | `stamp_contract`は種別・設定・集計検証、`stamp_read`は押下者の読取、`stamp_format`は表示、`stamp_write`は人承認操作 | 読取は同一connectionを借用する。承認と待ち行列はreceiptと同一TX、送信はcommit後のrun lock内。`MCSAdapter`が通信を所有し、DB復元で巻き戻さない試行記録で二重送信を防ぐ |
+| `mcs/views/` | snapshot読取・scope/projection・統計/詳細/CLI | `registered_data`は登録情報、`clinical_display`は臨床値、`stats_contract`は集計範囲/結果形式、`message_metadata`はメンション・固定表示。保存済み観測の検証は`core/message_observations`。呼出元のDBを再openしない |
 | `mcs/signals/` | 原文と抽出に基づく候補評価・根拠 | 候補artifact/通知状態の更新を持つ。表示や単なる未記録と臨床判断を混同しない |
 | `mcs/export/` | C1 schema・レコード選択、`export_contract`の承認/envelope/receipt検証、`export_delivery`のjournal/配送/撤回/health | 純粋な検証と専用保存先への配送を区別。`ext_contract`は操作CLI・参照受信入口に限定。viewは呼出元の同一snapshotを借用し、搬出処理のために再openしない |
 | `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`runtime_inspection`は読取観測、`service_contract`は管理対象・実行環境選択・cron計画、`service_management`は実際の照合・適用・管理記録、`update_policy`は判断、`update_journal`は更新記録。`owned_process`は所有する子プロセスの停止/回収、`update_discovery`は期限付きGit実行と版探索、`update_launch`はwrapper起動を所有 |
@@ -54,6 +55,7 @@
 - 患者コンテキスト作成の選択/予算は純粋な計画へ分け、原文と時刻の観測、再試行と公開はworkerが所有します。終日処理とJST03:30の作業日境界は維持します。
 - 集計と抽出監査は`stats_contract`の同じ期間/患者範囲/上限を使います。表示上限と全体件数を分け、監査の定義識別子は実際の計算契約に結び付けます。
 - 通知のspec計画、同一TXのjournal記録、commit後のatomic publishの順序を保ちます。parts/scopeを分けてもtransactionの所有を分散しません。
+- スタンプは読取り・表示・操作を`stamps/`へ集約します。一般のメタデータ検証は`core/message_observations`に置き、収集や送信が表示moduleを経由しない構成にします。操作の設定・本人照合・復元時の停止条件は[スタンプ管理契約](../specs/stamp-management.md)が正本です。
 - 人承認の復旧は`notify_recovery`から`notify_transport`の借用transaction上の確定処理を使います。復旧receiptと状態を同時にcommitし、spec公開はその後に行います。読取側は`notify_scope`へ直接依存します。
 - 薬剤照合の進捗と現行参照の読取は`drug_map`の実体が正本です。統計/通知/薬剤履歴は同じsnapshotと一巡の進捗を共有し、テスト用の関数同一性で別経路へ分岐しません。
 - 共通hashの検証は`mcs_util`、版タグの文法は`update_policy`が正本です。操作契約や表示がqueue CLIを経由せず、queueの保存・ロック・順序は`mcs_requests`が所有します。hostの遅延bootstrap後に必要な処理を読む契約は維持します。
@@ -83,6 +85,7 @@
 | 患者の読取表示 | `read_model`, `registered_data`, `clinical_display` | 同一snapshot、患者scope、未取得/0件、limitと全体coverage |
 | 通知のpart/再開 | `notify_parts`, `notify_journal`, `notify_transport` | 同一TX、receipt/冪等性、送信結果不明、commit後publish |
 | 通知操作・人承認復旧 | `notify_actions`, `notify_action_tokens`, `notify_action_context`, `notify_recovery` | token/source/scopeの再照合、保存と公開の順序、worker証跡、結果不明の保持 |
+| MCSスタンプの追加・取消・表示 | `stamp_contract`, `stamp_read`, `stamp_format`, `stamp_write` | 確認済みの操作者とアカウント、投稿の版、receipt/TX、復元後の再送防止、未取得と0件の区別 |
 | schema・台帳構造 | `ledger_schema`, `ledger`, `mcs_queries` | 接続の所有、同一TX、旧updaterの数値literal読取、既存DBのmigration/backup/rollback |
 | 更新/復旧 | `mcs_update`, `update_policy`, `update_journal`, `mcs_recover` | 旧版が新treeを読むこと、journal/lock/rollback、独立復旧入口 |
 

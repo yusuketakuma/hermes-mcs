@@ -52,7 +52,8 @@ def _watch(db, now, project_id, shadow_checks):
 
 def build_report(reader, now=None, *, project_id=None) -> dict:
     """Count-only comparison of capture and shadow rows."""
-    from message_metadata import ERROR_CODE, REACTION_LABELS, decode_metadata
+    from message_observations import ERROR_CODE, decode_metadata
+    from stamp_contract import REACTION_LABELS
     from snapshot_access import table_exists
     now = time.time() if now is None else now
     db = reader.db

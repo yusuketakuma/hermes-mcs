@@ -4,6 +4,7 @@ import json
 
 from common_testkit import ledger_fixture
 import message_observations
+import stamp_read
 import signal_policy
 
 led = ledger_fixture()
@@ -16,8 +17,8 @@ def test_observation_readers_keep_borrowed_transaction_and_savepoint(led):
         db.execute("SAVEPOINT observations")
         before = db.total_changes
         assert message_observations.metadata_watch_targets(db, now=100) == []
-        assert message_observations.reaction_actor_targets(db, now=100) == []
-        assert message_observations.reaction_actor_summary(db, 1, now=100)["state"] == "not_fetched"
+        assert stamp_read.reaction_actor_targets(db, now=100) == []
+        assert stamp_read.reaction_actor_summary(db, 1, now=100)["state"] == "not_fetched"
         assert db.total_changes == before and db.in_transaction
         db.execute("ROLLBACK TO observations")
         db.execute("RELEASE observations")

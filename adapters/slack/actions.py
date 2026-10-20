@@ -11,9 +11,10 @@ import time
 from adapters.common import projects
 from adapters.common import confirm, envelopes, paths, registry
 from adapters.common.text import (ERR_JA, MODAL_ACTIONS, RECEIPT_TEXT, MODAL_TITLES, SEARCH_EMPTY,
+                                 STAMP_FORM_PENDING,
                                  VIEW_FORMS, digest_inputs,
                                  ja, modal_fields, preview_text,
-                                 search_query, split_body, view_answer,
+                                 followup_waiting, search_query, split_body, view_answer,
                                  view_scope_ok)
 from .cards import LINK_ACTION, MENU_ACTION, _sections, context_list_blocks, render_parts
 
@@ -32,7 +33,8 @@ _LEGACY_FIELDS = {"request": ("title", "reason", "assignee", "due_date"),
 # action_retired and refreshes the posted card
 _KINDS = ("ack", "assign", "defer", "body", "prev", "next", "request",
           "dismiss", "tasks", "task_status", "summary", "report",
-          "mytasks", "unacked", "search", "digest", "meds", "drugsearch")
+          "mytasks", "unacked", "search", "digest", "meds", "drugsearch",
+          "stamp")
 SUMMARY_COMMAND = "/mcs-summary"
 MCS_COMMAND = "/mcs"
 RESULT_POLL_S = 0.25
@@ -447,7 +449,7 @@ class Actions:
         a definite rejection answers instead of opening."""
         user = body["user"]["id"]
         form = None
-        if kind == "request":
+        if kind in ("request", "stamp"):
             result = await self._wait_result(env["request_id"],
                                              MODAL_OPEN_WAIT_S)
             if result is not None and not (
@@ -456,13 +458,18 @@ class Actions:
                 await self._say(origin["channel_id"], user, ja(result))
                 return
             form = (result or {}).get("form")
+            if kind == "stamp" and not isinstance(form, dict):
+                # the stamp target list comes only from the runner — never open blind
+                await self._say(origin["channel_id"], user, STAMP_FORM_PENDING)
+                return
         defs = modal_fields(kind, form, clicker)
         modal_id = registry.new_modal_id()
         self._reg.put_modal(modal_id, {
             "token": token, "actor": actor, "origin": origin,
             "action": kind, "request_id": env["request_id"],
             "context": ctx.get("context") or {}, "user": user,
-            "field_ids": [f["id"] for f in defs]})
+            "field_ids": [f["id"] for f in defs],
+            **({"form": form} if kind == "stamp" else {})})
         try:
             client = self._client()
             if client is None:
@@ -557,7 +564,8 @@ class Actions:
         origin = pending["origin"]
         payload = envelopes.human_payload(
             pending["action"], pending["actor"], pending["context"],
-            result.get("params") or {}, pending["fields"])
+            result.get("params") or {}, pending["fields"],
+            form=pending.get("form"))
         if isinstance(payload, str) or not projects.project_allowed(
                 self._settings, payload["project_id"]):
             await self._say(origin["channel_id"], pending["user"],
@@ -568,7 +576,8 @@ class Actions:
             self._reg, token=pending["token"], actor=pending["actor"],
             origin=origin, payload=payload)
         text = preview_text(pending["action"], payload, markdown=False,
-                            target=(pending.get("context") or {}).get("target"))
+                            target=(pending.get("context") or {}).get("target"),
+                            form=pending.get("form"))
         buttons = {"type": "actions", "elements": [
                       {"type": "button", "text": {"type": "plain_text",
                                                 "text": label},
@@ -712,7 +721,8 @@ class Actions:
                 paths.read_result, self._dirs["cmd_results"],
                 rec.get("request_id") or cid)
             if result is None or (rec.get("request_id") is not None
-                                  and result.get("request_id") != rec["request_id"]):
+                                  and result.get("request_id") != rec["request_id"]) \
+                    or followup_waiting(result):
                 continue
             if not self._reg.drop_followup(cid):
                 continue    # a concurrent sweep took it during the read

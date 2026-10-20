@@ -1,6 +1,6 @@
 """Equivalence checks for helpers shared between ingest writers and readers."""
 import project_metadata_contract
-import mcs_payload
+import stamp_contract
 import pytest
 
 import mcs_adapter
@@ -46,4 +46,4 @@ def test_thread_page_budget_matches_the_inline_formula(count, budget):
                                      ("", False), ("x" * 65, False), ("bad kind", False),
                                      (None, False), (3, False)])
 def test_reaction_kind_predicate(kind, ok):
-    assert mcs_payload.reaction_kind_ok(kind) is ok
+    assert stamp_contract.reaction_kind_ok(kind) is ok

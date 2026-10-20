@@ -265,5 +265,8 @@ _OPS_VALIDATORS = {
 def validate_ops(req: dict, common: set[str]) -> str | None:
     """Validate the operation-specific portion after common identity checks."""
     base = set(common)
+    if req.get("cmd") == "ops.mcs_reaction":
+        from stamp_write import validate_operation
+        return validate_operation(req, base)
     handler = _OPS_VALIDATORS.get(req.get("cmd"))
     return handler(req, base) if handler else "unknown_ops_cmd"

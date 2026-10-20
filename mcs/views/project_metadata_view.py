@@ -358,7 +358,7 @@ def physician_viewed_status(db, project_id: int, message_id: int, *,
     observed only when the viewed reactor's recorded profession is also 医師.
     Not observed is not "not read", and no names or IDs are returned.
     """
-    from message_observations import reaction_actor_summary
+    from stamp_read import reaction_actor_summary
 
     out: dict[str, JSON] = {"state": "unknown", "reason": None, "physicians": None,
                             "viewed_observed": None, "not_observed": None}

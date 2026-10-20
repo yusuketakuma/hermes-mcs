@@ -350,10 +350,14 @@ class Actions:
             self._result_log(interaction, action, result)
             await self._ephemeral(interaction, text.ja(result))
             return
+        form = (result or {}).get("form")
+        if action == "stamp" and not isinstance(form, dict):
+            # the stamp target list comes only from the runner — never open blind
+            await self._ephemeral(interaction, text.STAMP_FORM_PENDING)
+            return
         modal_id = registry.new_modal_id()
         modal = self._build_modal(
-            action, modal_id, (result or {}).get("form"),
-            _display_name(interaction))
+            action, modal_id, form, _display_name(interaction))
         if modal is None:
             await self._ephemeral(interaction,
                                   "このカードではその操作を実行できません。")
@@ -361,7 +365,8 @@ class Actions:
         self._reg.put_modal(modal_id, {
             "token": token, "action": action, "actor": actor,
             "origin": origin, "context": ctx.get("context") or {},
-            "params": (result or {}).get("params") or {}})
+            "params": (result or {}).get("params") or {},
+            **({"form": form} if action == "stamp" else {})})
         try:
             await interaction.response.send_modal(modal)
             self._result_log(interaction, action,
@@ -485,7 +490,7 @@ class Actions:
                 iter(pending["context"].get("signals") or {}), "")
         preview = envelopes.human_payload(
             pending["action"], actor, pending["context"], params,
-            self._modal_fields(interaction))
+            self._modal_fields(interaction), form=pending.get("form"))
         if isinstance(preview, str):
             await self._followup(interaction, preview)   # error text
             return
@@ -495,7 +500,8 @@ class Actions:
             "payload": preview})
         await self._send_preview(interaction, pending["action"],
                                  preview, confirm_id,
-                                 (pending.get("context") or {}).get("target"))
+                                 (pending.get("context") or {}).get("target"),
+                                 form=pending.get("form"))
 
     async def _search(self, interaction, modal_id: str,
                       pending: dict) -> None:
@@ -553,7 +559,8 @@ class Actions:
         return out
 
     async def _send_preview(self, interaction, action: str,
-                            payload: dict, confirm_id: str, target: str | None = None) -> None:
+                            payload: dict, confirm_id: str, target: str | None = None,
+                            form: dict | None = None) -> None:
         import discord
 
         view = discord.ui.View(timeout=None)
@@ -561,7 +568,7 @@ class Actions:
             view.add_item(discord.ui.Button(
                 style=discord.ButtonStyle.secondary if suffix else discord.ButtonStyle.success,
                 label=label, custom_id=f"{CONFIRM_PREFIX}{confirm_id}{suffix}"))
-        chunks = text.split_body(text.preview_text(action, payload, True, target=target), max_chunks=None)
+        chunks = text.split_body(text.preview_text(action, payload, True, target=target, form=form), max_chunks=None)
         for index, chunk in enumerate(chunks):
             # A hard-wrapped continuation can begin with a new Markdown block marker.
             shown = text.escape_md(chunk) if index else chunk
@@ -671,7 +678,7 @@ class Actions:
             interaction,
             text.RECEIPT_TEXT)
         result = await self._wait_result(cid, HUMAN_WAIT_S)
-        if result is None:
+        if result is None or text.followup_waiting(result):
             return                        # supervisor sweeps followups
         if not self._reg.drop_followup(cid):
             return                        # the sweep already delivered it
@@ -735,7 +742,8 @@ class Actions:
             result = await asyncio.to_thread(
                 paths.read_result, self._dirs["cmd_results"], cid)
             if result is None or (rec.get("request_id") is not None
-                                  and result.get("request_id") != rec["request_id"]):
+                                  and result.get("request_id") != rec["request_id"]) \
+                    or text.followup_waiting(result):
                 continue
             # membership is looked up once the answer is ready to send,
             # not on every sweep tick while the result is pending

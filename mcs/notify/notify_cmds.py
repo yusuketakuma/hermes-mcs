@@ -35,7 +35,7 @@ from mcs_util import valid_hash
 _RECEIPT_OPS = ("transport_receipt", "thread_receipt", "part_receipt")
 TRANSPORT_OPS = ("transport_begin",) + _RECEIPT_OPS
 NOTIFY_OPS = ("notification", "refresh")
-HUMAN_CMDS = ("request.create", "ops.signal_dismiss", "ops.extract_feedback")
+HUMAN_CMDS = ("request.create", "ops.signal_dismiss", "ops.extract_feedback", "ops.mcs_reaction")
 _VALID_OPS = frozenset(TRANSPORT_OPS) | frozenset(NOTIFY_OPS)
 
 _TOKEN_COMMAND_ID = re.compile(r"^[0-9a-f]{32}:[0-9a-f]{16}$")
@@ -365,7 +365,9 @@ def dispatch(ledger, req, cfg, root, now=None):
         if error:
             return {"outcome": "rejected", "error": error,
                     "command_id": req.get("command_id")}
-        out = mcs_requests.apply_command(ledger, req)
+        out = mcs_requests.apply_command(
+            ledger, req, **({"cfg": cfg, "data_dir": root}
+                           if req.get("cmd") == "ops.mcs_reaction" else {}))
         if out.get("outcome") == "applied" \
                 and req.get("cmd") in ("request.create",
                                        "ops.extract_feedback"):

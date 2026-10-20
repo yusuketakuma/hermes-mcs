@@ -2055,7 +2055,7 @@ def test_self_reaction_only_on_request_post(led):
 
 def test_failed_refresh_never_uses_previous_stamp_as_response(led):
     from types import SimpleNamespace
-    from message_metadata import get_message_metadata
+    from message_observations import get_message_metadata
     _ph_request(led.db)
     _capture(led.db, 1, [_stamp("accepted", True)])
     # An invalid recapture retains the observation for history, but must
@@ -2097,13 +2097,13 @@ def test_stamp_resolved_request_stays_watched_until_cancellation(led):
 
 
 def test_self_reaction_detector_error_never_resolves(led, monkeypatch):
-    import message_metadata
+    import message_observations
     _ph_request(led.db)
     _ev(led, SELF_REACT_CFG)
 
     def boom(*a, **k):
         raise RuntimeError("x")
-    monkeypatch.setattr(message_metadata, "get_message_metadata", boom)
+    monkeypatch.setattr(message_observations, "get_message_metadata", boom)
     res = _ev(led, SELF_REACT_CFG)
     assert "pharmacist_request_unanswered:RuntimeError" in res["errors"]
     assert res["resolved"] == 0 and len(_ph_open(led.db)) == 1

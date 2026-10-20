@@ -69,6 +69,13 @@ UNKNOWN_ERROR_TEXT = "この操作は完了できませんでした。最新の�
 
 
 RECEIPT_TEXT = "受け付けました。結果は反映後に表示されます。"
+# Admission is not completion: only a fresh MCS readback says confirmed.
+STAMP_STATE_TEXT = {
+    "queued": "MCSスタンプを受け付けました。MCSでの反映を確認中です（自動では再送しません）。",
+    "unknown": "MCSスタンプの送信結果を確認中です。自動では再送しません。",
+    "confirmed": "MCSスタンプを反映しました（MCSで確認済み）。",
+}
+STAMP_REJECTED_TEXT = "MCSスタンプを反映できませんでした。最新のカードで状態を確認してください。"
 
 
 def _applied_text(result: dict) -> str:
@@ -78,6 +85,8 @@ def _applied_text(result: dict) -> str:
         return "確認を取り消しました。" if result.get("withdrawn") else "確認済みにしました。"
     if action == "assign":
         return "担当を外しました。" if result.get("released") else "担当にしました。"
+    if result.get("stamp_state") is not None or action == "stamp":
+        return STAMP_STATE_TEXT.get(result.get("stamp_state"), STAMP_STATE_TEXT["queued"])
     if result.get("field"):
         return "誤りの報告を記録しました。"
     if result.get("signal_key"):
@@ -90,6 +99,10 @@ def _applied_text(result: dict) -> str:
 def ja(result: dict | None) -> str:
     if not result:
         return "結果を取得できませんでした（処理中の可能性があります）。"
+    if result.get("stamp_state") == "rejected":
+        return STAMP_REJECTED_TEXT
+    if result.get("stamp_state") in STAMP_STATE_TEXT:
+        return STAMP_STATE_TEXT[result["stamp_state"]]
     err = result.get("error")
     if result.get("outcome") == "applied" or result.get("applied"):
         return _applied_text(result)
@@ -233,7 +246,10 @@ TASK_REASON = "通知カードからタスク作成"
 STAFF_OPTIONS = 25
 MODAL_TITLES = {"request": "タスク作成", "dismiss": "候補を却下",
                 "report": "抽出の誤りを報告", "search": "この患者を検索",
-                "drugsearch": "薬剤を検索", "digest": "サマリー（絞込み）"}
+                "drugsearch": "薬剤を検索", "digest": "サマリー（絞込み）",
+                "stamp": "MCSスタンプ"}
+STAMP_REASON_MAX = 200
+STAMP_FORM_PENDING = "スタンプの対象を準備中です。少し待ってからもう一度操作してください。"
 # card actions whose click opens a modal (text.modal_fields) instead of
 # answering directly
 MODAL_ACTIONS = tuple(MODAL_TITLES)
@@ -291,6 +307,8 @@ def modal_fields(action: str, form: dict | None = None,
                  "options": list(DISMISS_REASONS), "default": None},
                 {"id": "note", "label": "メモ（任意）", "required": False,
                  "multiline": True, "max": 2000, "default": ""}]
+    if action == "stamp":
+        return stamp_fields(form)
     if action == "search":
         return [{"id": "query", "label": "キーワード（空白区切りで AND）",
                  "required": True, "max": 100, "default": ""}]
@@ -304,6 +322,71 @@ def modal_fields(action: str, form: dict | None = None,
                 {"id": "name", "label": "担当の名前（担当で絞る場合）",
                  "required": False, "max": 120, "default": clicker[:120]}]
     return []
+
+
+def _stamp_types(form: dict) -> dict:
+    """Runner-sent canonical kind -> label pairs; the UI keeps no own table."""
+    return {k: v for k, v in (form.get("types") or [])
+            if isinstance(k, str) and isinstance(v, str)}
+
+
+def _stamp_own_text(own, types: dict) -> str:
+    own = own if isinstance(own, dict) else {}
+    if own.get("state") == "pending":
+        return "（確認中）"
+    if own.get("state") != "observed":
+        return "（自分: 不明）"
+    kind = own.get("type")
+    return "（自分: なし）" if kind is None else f"（自分: {types.get(kind, '未知')}）"
+
+
+def stamp_fields(form: dict | None) -> list:
+    """🏷 modal: a post the runner offered, an operation and a reason."""
+    form = form if isinstance(form, dict) else {}
+    types = _stamp_types(form)
+    posts = [p for p in form.get("posts") or [] if isinstance(p, dict)
+             and isinstance(p.get("opt"), str) and isinstance(p.get("label"), str)]
+    ops = [(f"add:{k}", f"{v}を押す") for k, v in types.items()]
+    ops.append(("cancel", "自分のスタンプを取消"))
+    return [{"id": "post", "label": "対象の投稿", "required": True,
+             "options": [(p["opt"], (p["label"] + _stamp_own_text(p.get("own"), types))[:75])
+                         for p in posts], "default": None},
+            {"id": "op", "label": "操作", "required": True, "options": ops,
+             "default": None},
+            {"id": "reason", "label": "理由", "required": True, "multiline": True,
+             "max": STAMP_REASON_MAX, "default": ""}]
+
+
+def stamp_attrs(fields: dict, form: dict | None):
+    """🏷 values -> the selected runner post and operation, or an error string.
+    Only the two contract refusals live here; the runner re-checks the rest."""
+    form = form if isinstance(form, dict) else {}
+    post = next((p for p in form.get("posts") or [] if isinstance(p, dict)
+                 and p.get("opt") == fields.get("post")), None)
+    if post is None:
+        return "対象の投稿を選択してください。"
+    own = post.get("own") if isinstance(post.get("own"), dict) else {}
+    if own.get("state") == "pending":
+        return "この投稿のMCSスタンプは確認中です。結果が出てからやり直してください。"
+    if own.get("state") != "observed":
+        return "この投稿の現在のMCSスタンプを確認できないため送信できません。"
+    op = fields.get("op") or ""
+    if op == "cancel":
+        if own.get("type") is None:
+            return "取消できる自分のスタンプがありません。"
+        kind = None
+    elif op.startswith("add:") and op[4:] in _stamp_types(form):
+        kind = op[4:]
+    else:
+        return "操作を選択してください。"
+    reason = (fields.get("reason") or "").strip()
+    if not reason:
+        return "理由の入力が必要です。"
+    if len(reason) > STAMP_REASON_MAX:
+        return f"理由は{STAMP_REASON_MAX}文字以内で入力してください。"
+    return {"post": post, "op": "cancel" if kind is None else "add", "kind": kind,
+            "reason": reason, "expected_own": {"type": own.get("type"),
+                                               "observed_at": own.get("observed_at")}}
 
 
 def digest_inputs(fields: dict, clicker: str = "") -> dict:
@@ -375,6 +458,11 @@ def dismiss_attrs(fields: dict):
 
 
 SEARCH_EMPTY = "検索する語を入力してください。"
+
+
+def followup_waiting(result) -> bool:
+    """An admitted stamp is not finished: keep its followup for the terminal result."""
+    return isinstance(result, dict) and result.get("stamp_state") == "queued"
 
 
 def search_query(fields: dict) -> str | None:
@@ -484,7 +572,8 @@ def view_answer(result: dict | None, allowed,
 CONFIRM_TTL_NOTE = "\nこの確認は10分で無効になります。"
 
 
-def preview_text(action: str, payload: dict, markdown: bool, target: str | None = None) -> str:
+def preview_text(action: str, payload: dict, markdown: bool, target: str | None = None,
+                 form: dict | None = None) -> str:
     """The human-confirm preview of a task/dismiss/report payload —
     Discord markdown (bold heading) or Slack plain
     text."""
@@ -496,6 +585,24 @@ def preview_text(action: str, payload: dict, markdown: bool, target: str | None 
     # the render-pinned patient/post, display only (the command is pinned separately)
     about = (f"対象: {_literal(str(target)[:120], not markdown)}\n"
              if isinstance(target, str) and target.strip() else "")
+    if action == "stamp":
+        labels = _stamp_types(form if isinstance(form, dict) else {})
+        # the chosen post from the pinned form, not only the card-level target
+        post = next((p for p in (form or {}).get("posts") or [] if isinstance(p, dict)
+                     and p.get("message_id") == payload.get("message_id")
+                     and p.get("source_hash") == payload.get("source_hash")), None)
+        chosen = (f"投稿: {lit(str(post.get('label') or '')[:75])}\n"
+                  if post and isinstance(post.get("label"), str) else "投稿: 不明\n")
+        if payload.get("op") == "cancel":
+            kind = (payload.get("expected_own") or {}).get("type")
+            what = f"取消（現在: {lit(labels.get(kind, '未知'))}）"
+        else:
+            what = f"{lit(labels.get(payload.get('reaction_type'), '未知'))}を押す"
+        return (f"{bold}確認 — MCSスタンプ{bold}\n" + about + chosen
+                + f"操作: {what}\n理由: {lit(payload['reason'])}\n"
+                "確定すると、MCSの収集アカウント名義でスタンプを送信し、"
+                "あなたの名前と理由を記録します。MCSで反映を確認するまで完了にしません。"
+                + CONFIRM_TTL_NOTE)
     if action == "dismiss":
         code = dict(DISMISS_REASONS).get(payload.get("reason_code"))
         reason = lit(payload["reason"])
