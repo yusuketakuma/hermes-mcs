@@ -45,6 +45,9 @@ def _hook_unload(ctx, key) -> None:
     def unload():
         live = _LIVE.get(key)
         if live is not None and live._ctx is ctx:
+            # a task cancelled before it ever ran skips its finally, so the
+            # host's unload drops the entry itself
+            del _LIVE[key]
             live.unload()
     ctx.on_unload(unload)
     if hooked is not None:

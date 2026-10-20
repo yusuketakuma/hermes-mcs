@@ -1668,7 +1668,47 @@ def test_unload_hooks_follow_each_host_and_scope_without_pinning_hosts(monkeypat
 
     gone = asyncio.run(scenario())
     gc.collect()
-    assert gone() is None and len(slack_tasks._HOOKED) == 1   # B is still the live owner
-    slack_tasks._LIVE.clear()                     # its task's finally drops it in real runs
+    assert gone() is None and not slack_tasks._LIVE and not len(slack_tasks._HOOKED)
+
+
+def test_closing_the_host_before_the_task_runs_releases_the_supervisor(tmp_path, monkeypatch):
+    """start() then an immediate close cancels a task that never ran, so its
+    finally cannot clean up; the host's own unload must drop the live entry."""
+    import gc
+    import weakref
+    from adapters.slack import tasks as slack_tasks
+    from mcs_standalone.host import Host
+    monkeypatch.setattr(slack_tasks, "_LIVE", {})
+    monkeypatch.setattr(slack_tasks, "_HOOKED", weakref.WeakKeyDictionary())
+    for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
+        (tmp_path / name).mkdir()
+    settings = {"transport": "slack", "data_root": str(tmp_path),
+                "team_id": "T_SYNTHETIC", "application_id": "A_SYNTHETIC",
+                "channel_id": "C_SYNTHETIC", "profile": "cco",
+                "allowed_user_ids": {"U_OPERATOR"}, "project_ids": {1}}
+    app = SimpleNamespace(client=FakeClient(), action=lambda p: (lambda fn: fn),
+                          view=lambda n: (lambda fn: fn))
+
+    def sup(ctx):
+        return slack_tasks.Supervisor(ctx=ctx, app=app, adapter=None, settings=settings,
+                                      log=lambda *a, **k: None)
+
+    async def run():
+        host = Host({})
+        first = sup(host)
+        assert first.start()
+        await host.close()                     # no yield: the task never started
+        assert first._stopping and not slack_tasks._LIVE
+        old, other = Host({}), Host({})
+        assert sup(old).start()
+        newer = sup(other)
+        assert newer.start()                   # supersedes the old host's supervisor
+        await old.close()
+        assert slack_tasks._LIVE[registry.scope_key(settings)] is newer and not newer._stopping
+        await other.close()
+        assert newer._stopping and not slack_tasks._LIVE
+        return weakref.ref(first), weakref.ref(host)
+
+    refs = asyncio.run(run())
     gc.collect()
-    assert not len(slack_tasks._HOOKED)
+    assert [r() for r in refs] == [None, None]

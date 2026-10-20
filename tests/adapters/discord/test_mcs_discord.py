@@ -3423,3 +3423,38 @@ def test_rebuilds_do_not_keep_old_supervisors_alive_in_the_host(world, monkeypat
     host_ref = asyncio.run(run())
     gc.collect()
     assert host_ref() is None
+
+
+def test_closing_the_host_before_the_task_runs_releases_the_supervisor(world, monkeypatch):
+    """start() then an immediate close cancels a task that never ran, so its
+    finally cannot clean up; the host's own unload must drop the live entry."""
+    import gc
+    import weakref
+    from mcs_standalone.host import Host
+    monkeypatch.setattr(tasks, "_LIVE", {})
+    monkeypatch.setattr(tasks, "_HOOKED", weakref.WeakKeyDictionary())
+    settings = {**SETTINGS, "data_root": str(world.data), "profile": "mcs"}
+
+    async def run():
+        host = Host({})
+        sup = tasks.Supervisor(ctx=host, bot=SignalBot(), settings=settings,
+                               log=lambda e, **f: None)
+        assert sup.start()
+        await host.close()                     # no yield: the task never started
+        assert sup._stopping and not tasks._LIVE
+        # an old host's close leaves a newer host's supervisor alone
+        old, other = Host({}), Host({})
+        first = tasks.Supervisor(ctx=old, bot=SignalBot(), settings=settings,
+                                 log=lambda e, **f: None)
+        newer = tasks.Supervisor(ctx=other, bot=SignalBot(), settings=settings,
+                                 log=lambda e, **f: None)
+        assert first.start() and newer.start()
+        await old.close()
+        assert tasks._LIVE[tasks.registry.scope_key(settings)] is newer and not newer._stopping
+        await other.close()
+        assert newer._stopping and not tasks._LIVE
+        return weakref.ref(sup), weakref.ref(host)
+
+    refs = asyncio.run(run())
+    gc.collect()
+    assert [r() for r in refs] == [None, None]
