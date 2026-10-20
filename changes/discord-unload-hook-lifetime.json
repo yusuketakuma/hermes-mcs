@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "Discordの再接続を繰り返しても古い処理がメモリに残らないように",
+  "summary": "Discordの接続を作り直すたびに、置き換わった古い送信処理が終了まで保持され続けていました。再接続を繰り返す長時間の運用でも、古い処理を解放するようにしました。送信・停止の動作は変わりません。",
+  "upgrade": "Hermes gateway（独立動作では常駐host）の再起動で反映されます。設定の変更は不要です。",
+  "details": [
+    "Supervisor.start が接続のたびに host の終了時処理へ自分を追加していたため、host は置き換わった Supervisor をすべて参照し続けていた。",
+    "Slack と同じく、終了時処理は host とスコープごとに1つだけ登録し、終了時にはそのスコープの最新の Supervisor だけを停止する。host は弱参照で持ち、閉じた host を残さない。",
+    "回帰: tests/adapters/discord/test_mcs_discord.py::test_rebuilds_do_not_keep_old_supervisors_alive_in_the_host"
+  ],
+  "refs": ["adapters/discord/tasks.py"]
+}

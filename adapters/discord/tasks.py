@@ -17,6 +17,7 @@ its listener without a process restart.
 from __future__ import annotations
 
 import asyncio
+import weakref
 from typing import Any
 
 from adapters.common import paths, registry
@@ -30,6 +31,34 @@ from contextlib import suppress
 # lock within one poll of close; this bound covers that handoff without
 # letting a foreign owner be raced.
 LOCK_WAIT_S = POLL_S * 5
+
+# scope key -> newest supervisor in this process
+_LIVE: dict = {}
+# host -> scope keys whose unload hook it already holds. Hosts keep their
+# unload callbacks until they close, so one hook per host and scope stops the
+# newest supervisor instead of pinning every superseded one; weak keys let a
+# closed, dropped host go.
+_HOOKED = weakref.WeakKeyDictionary()
+
+
+def _hook_unload(ctx, key) -> None:
+    try:
+        hooked = _HOOKED.setdefault(ctx, set())
+    except TypeError:                # a host that cannot be weakly referenced
+        hooked = None
+    if hooked is not None and key in hooked:
+        return
+
+    def unload():
+        live = _LIVE.get(key)
+        if live is not None and live._ctx is ctx:
+            # a task cancelled before it ever ran skips its finally, so the
+            # host's unload drops the entry itself
+            del _LIVE[key]
+            live.unload()
+    ctx.on_unload(unload)
+    if hooked is not None:
+        hooked.add(key)
 
 
 def _bot_closed(bot: Any) -> bool:
@@ -78,7 +107,9 @@ class Supervisor:
             self._stop_listener()
             self._log("worker_start_failed")
             return False
-        self._ctx.on_unload(self.unload)
+        key = registry.scope_key(self._settings)
+        _LIVE[key] = self
+        _hook_unload(self._ctx, key)
         return True
 
     def _stop_listener(self) -> None:
@@ -139,3 +170,6 @@ class Supervisor:
             # cancellation mid-send is an 'unknown' the journal keeps
             self._stop_listener()
             self._worker.release_scope_lock()
+            key = registry.scope_key(self._settings)
+            if _LIVE.get(key) is self:
+                del _LIVE[key]

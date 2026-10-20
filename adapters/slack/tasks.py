@@ -11,6 +11,7 @@ Discord supervisor does the same via ``bot.is_closed()``).
 from __future__ import annotations
 
 import asyncio
+import weakref
 
 from adapters.common import paths as shared_paths
 from adapters.common import registry
@@ -26,6 +27,31 @@ LOCK_WAIT_S = POLL_S * 15
 
 # scope key -> newest supervisor in this process
 _LIVE: dict = {}
+# host -> scope keys whose unload hook it already holds. Hosts keep their
+# unload callbacks until they close, so one hook per host and scope stops the
+# newest supervisor instead of pinning every superseded one; weak keys let a
+# closed, dropped host go.
+_HOOKED = weakref.WeakKeyDictionary()
+
+
+def _hook_unload(ctx, key) -> None:
+    try:
+        hooked = _HOOKED.setdefault(ctx, set())
+    except TypeError:                # a host that cannot be weakly referenced
+        hooked = None
+    if hooked is not None and key in hooked:
+        return
+
+    def unload():
+        live = _LIVE.get(key)
+        if live is not None and live._ctx is ctx:
+            # a task cancelled before it ever ran skips its finally, so the
+            # host's unload drops the entry itself
+            del _LIVE[key]
+            live.unload()
+    ctx.on_unload(unload)
+    if hooked is not None:
+        hooked.add(key)
 
 
 class Supervisor:
@@ -64,7 +90,7 @@ class Supervisor:
                 del _LIVE[key]
             self._log("worker_start_failed")
             return False
-        self._ctx.on_unload(self.unload)
+        _hook_unload(self._ctx, key)
         return True
 
     def unload(self):
