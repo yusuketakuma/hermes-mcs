@@ -1575,7 +1575,7 @@ def test_reconnects_do_not_keep_old_supervisors_alive_in_the_host(tmp_path, monk
     from mcs_standalone.host import Host
     monkeypatch.setattr(slack_tasks, "POLL_S", 0.01)
     monkeypatch.setattr(slack_tasks, "_LIVE", {}, raising=False)
-    monkeypatch.setattr(slack_tasks, "_HOOKED", {}, raising=False)
+    monkeypatch.setattr(slack_tasks, "_HOOKED", __import__("weakref").WeakKeyDictionary(), raising=False)
     for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
         (tmp_path / name).mkdir()
     (tmp_path / "flags" / "notify.json").write_text(
@@ -1632,3 +1632,43 @@ def test_reconnects_do_not_keep_old_supervisors_alive_in_the_host(tmp_path, monk
         assert newest._stopping and newest._task.done()
 
     asyncio.run(scenario())
+
+
+def test_unload_hooks_follow_each_host_and_scope_without_pinning_hosts(monkeypatch):
+    """One hook per host and scope: switching hosts A->B->A adds none twice,
+    closing an old host leaves the newer host's supervisor running, and a
+    closed host that is dropped is released."""
+    import gc
+    import weakref
+    from adapters.slack import tasks as slack_tasks
+    from mcs_standalone.host import Host
+    monkeypatch.setattr(slack_tasks, "_LIVE", {})
+    monkeypatch.setattr(slack_tasks, "_HOOKED", weakref.WeakKeyDictionary())
+
+    class Live:
+        def __init__(self, ctx):
+            self._ctx, self.unloaded = ctx, 0
+
+        def unload(self):
+            self.unloaded += 1
+
+    async def scenario():
+        a, b = Host({}), Host({})
+        for ctx in (a, b, a):
+            slack_tasks._hook_unload(ctx, "scope-1")
+        slack_tasks._hook_unload(a, "scope-2")
+        assert len(a._unload) == 2 and len(b._unload) == 1   # no duplicate on A
+        newest = slack_tasks._LIVE["scope-1"] = Live(b)
+        await a.close()                                       # the old host
+        assert newest.unloaded == 0
+        await b.close()
+        assert newest.unloaded == 1
+        gone = weakref.ref(a)
+        return gone
+
+    gone = asyncio.run(scenario())
+    gc.collect()
+    assert gone() is None and len(slack_tasks._HOOKED) == 1   # B is still the live owner
+    slack_tasks._LIVE.clear()                     # its task's finally drops it in real runs
+    gc.collect()
+    assert not len(slack_tasks._HOOKED)
