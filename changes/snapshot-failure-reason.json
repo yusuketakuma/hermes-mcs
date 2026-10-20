@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "読取り用スナップショットを公開できなかった理由を収集結果に記録",
+  "summary": "収集の終わりに読取り用スナップショットを公開できなかったとき、これまでは「snapshot: RuntimeError」としか残らず、原因を切り分けられませんでした。今後は収集結果の snapshot_failure に、止まった箇所（期限切れ、検証の排他待ち、検証の拒否・異常終了・時間切れなど）と、コピー・検証にかかった秒数を記録します。検証の条件や期限は変えていません。",
+  "upgrade": "追加操作は不要です。記録には固定の理由コードと秒数・終了コードだけを含め、パスやデータベースの内容は含めません。",
+  "details": [
+    "snapshots.last_failure() が直近の公開失敗の理由を返し、公開を始めるたびに空に戻す。",
+    "run_check は公開が失敗したとき result.snapshot_failure にこれを入れる。検証・期限・既存スナップショットの扱いは変更なし。",
+    "回帰: tests/core/test_snapshot_failure_reason.py"
+  ],
+  "refs": [
+    "mcs/core/snapshots.py",
+    "mcs/ingest/run_check.py"
+  ]
+}

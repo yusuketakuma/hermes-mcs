@@ -753,6 +753,8 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
         result["snapshot"] = state is not None
         result["snapshot_state"] = state
         if state is None:
+            import snapshots
+            result["snapshot_failure"] = snapshots.last_failure()
             raise RuntimeError("snapshot_verify_failed")
         if state == "published":
             notify_cards.clear_snapshot_dirty(ledger)

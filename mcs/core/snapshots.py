@@ -31,6 +31,20 @@ def snapshot_verify_timeout_s(path: str) -> float:
         size = 0
     return SNAPSHOT_VERIFY_TIMEOUT_S + min(
         SNAPSHOT_VERIFY_EXTRA_MAX_S, size / SNAPSHOT_VERIFY_RATE_BPS)
+# Why the latest publish returned None: a fixed code plus elapsed seconds,
+# never paths or database content. Reset at the start of every publish.
+_failure: dict = {}
+
+
+def last_failure() -> dict:
+    """Bounded reason and timings of the most recent unpublished snapshot."""
+    return dict(_failure)
+
+
+def _fail(reason: str, **extra) -> None:
+    _failure.update(reason=reason, **extra)
+
+
 _SNAPSHOT_VALIDATION_CODE = (
     "import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
     "from ledger import valid_mcs_db; "
@@ -41,7 +55,9 @@ _SNAPSHOT_VALIDATION_CODE = (
 def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
     """Isolate candidate validation so disk waits cannot hold the publisher."""
     if monotonic() >= deadline:
+        _fail("verify_deadline_at_start")
         return False
+    started = monotonic()
     try:
         fd = os.open(os.path.join(os.path.dirname(path), '.validation.lock'),
                      os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -49,6 +65,7 @@ def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
+                _fail("validation_lock_busy")
                 return False
             child = subprocess.Popen(
                 [sys.executable, '-I', '-c', _SNAPSHOT_VALIDATION_CODE,
@@ -56,8 +73,15 @@ def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, pass_fds=(fd,))
             try:
-                return child.wait(timeout=max(0, deadline - monotonic())) == 0
+                code = child.wait(timeout=max(0, deadline - monotonic()))
+                if code != 0:
+                    # 1 is valid_mcs_db refusing the copy; other codes are a crashed child.
+                    _fail("validator_rejected" if code == 1 else "validator_exit",
+                          exit_code=code, verify_s=round(monotonic() - started, 3))
+                return code == 0
             except subprocess.TimeoutExpired:
+                _fail("validator_timeout", verify_s=round(monotonic() - started, 3),
+                      budget_s=round(deadline - started, 3))
                 child.kill()
                 try:
                     child.wait(timeout=1)
@@ -74,7 +98,8 @@ def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
                 with suppress(BaseException):
                     child.wait(timeout=1)
                 raise
-    except OSError:
+    except OSError as error:
+        _fail("validator_oserror", errno=error.errno)
         return False
 
 
@@ -91,8 +116,11 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
     watchdog: the copy is abandoned and the verify budget capped there,
     so a large ledger fails this publish instead of getting the process
     killed mid-copy on every tick."""
+    _failure.clear()
     if deadline is not None and monotonic() >= deadline:
+        _fail("deadline_before_copy")
         return None
+    started = monotonic()
 
     def check_deadline(*_):
         if deadline is not None and monotonic() >= deadline:
@@ -115,6 +143,7 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
                 try:
                     src.backup(dst, pages=4096, progress=check_deadline)
                 except _SnapshotDeadline:
+                    _fail("copy_deadline", copy_s=round(monotonic() - started, 3))
                     return None
                 with dst:
                     dst.execute("INSERT OR REPLACE INTO snapshot_meta("
@@ -126,10 +155,14 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
                 dst.close()
         finally:
             src.close()
-        verify_by = monotonic() + snapshot_verify_timeout_s(tmp)
+        copied = monotonic()
+        verify_by = copied + snapshot_verify_timeout_s(tmp)
         if deadline is not None:
             verify_by = min(verify_by, deadline)
         if not _valid_snapshot_candidate(tmp, deadline=verify_by):
+            _failure.setdefault("reason", "validator_false")
+            _fail(_failure["reason"], copy_s=round(copied - started, 3),
+                  capped_by_deadline=deadline is not None and verify_by == deadline)
             return None
         publish_tmp(tmp, dest)
         # A reader keeps its old inode or opens the complete new generation.
