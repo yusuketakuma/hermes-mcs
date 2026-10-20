@@ -12,7 +12,7 @@ from mcs_util import loads_dict
 import semantic_extraction as extraction
 import semantic_store as store
 import semantic_drain as drain
-from semantic_policy import KIND_FACT_PROJ, KIND_USAGE
+from semantic_policy import KIND_FACT_PROJ, KIND_USAGE, SCHED_KIND
 from semantic_testkit import _message
 
 
@@ -84,7 +84,7 @@ def test_unreadable_chunk_is_ignored_and_manifest_can_be_rebuilt(ledger):
 def test_unreadable_scheduler_payload_does_not_stop_next_drain(ledger):
     drain._sched_write(ledger, {})
     ledger.db.execute("UPDATE fetch_jobs SET payload=? WHERE kind=?",
-                      (poison_json(ledger), drain.SCHED_KIND))
+                      (poison_json(ledger), SCHED_KIND))
     ledger.db.commit()
     assert drain._sched_state(ledger) == {}
 

@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import unicodedata
 
+import extract_quality
 from mcs_queries import ELIGIBLE_MESSAGE, FACT_KINDS_SQL, JST, current_fact_pred
 from mcs_util import loads_dict
 from pharmacy_cues import CUE_CLASSES
@@ -41,7 +42,8 @@ def definition_fingerprint() -> str:
     contracts = [
         (file.name, hashlib.sha256(file.read_bytes()).hexdigest()) for file in files
     ] + [(function.__name__, inspect.getsource(function))
-         for function in (stats_contract.message_scope_sql, stats_contract.resolve_scope, stats_contract.parse_timestamp)]
+         for function in (stats_contract.message_scope_sql, stats_contract.resolve_scope,
+                          stats_contract.parse_timestamp, extract_quality.completeness_resolved)]
     contracts.extend((("stats_detail_limit", stats_contract.DETAIL_LIMIT),
                       ("semantic_categories", KIND_CATEGORY), ("projection_version", PROJECTION_VERSION)))
     return hashlib.sha256(json.dumps(contracts, sort_keys=True,
@@ -75,12 +77,7 @@ def _month(value) -> str:
 
 
 def _quality(meta: dict, document: dict) -> str:
-    integrity = meta.get("integrity", {})
-    quality = integrity.get("completeness", {}) if isinstance(integrity, dict) else None
-    if not isinstance(quality, dict) or any(
-            not isinstance(entry, dict) or entry.get("state") != "hint_gaps_resolved"
-            or type(entry.get("remaining_hint_candidates")) is not int
-            or entry["remaining_hint_candidates"] != 0 for entry in quality.values()):
+    if not extract_quality.completeness_resolved(meta):
         return "attention"
     if any(key in document and (type(document[key]) is not int or document[key] != 0)
            for key in ("_items_dropped", "_evidence_dropped")):

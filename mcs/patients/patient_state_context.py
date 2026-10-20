@@ -3,6 +3,7 @@ from datetime import datetime
 import json
 import re
 
+import extract_quality
 from clinical_values import patient_item_scope
 from mcs_queries import ELIGIBLE_MESSAGE, JST, current_fact_pred, current_v4_id, json_or_null
 from mcs_util import loads_dict
@@ -54,15 +55,12 @@ def _clean_legacy(meta, version):
     integrity = meta.get("integrity")
     if meta.get("extract_version") != version or not isinstance(integrity, dict):
         return False
-    validation, completeness = integrity.get("validation"), integrity.get("completeness", {})
+    validation = integrity.get("validation")
     if not isinstance(validation, dict) or any(
             type(validation.get(key)) is not int or validation[key] != 0
             for key in ("items_dropped", "evidence_dropped")):
         return False
-    if not isinstance(completeness, dict) or any(
-            not isinstance(entry, dict) or entry.get("state") != "hint_gaps_resolved"
-            or type(entry.get("remaining_hint_candidates")) is not int
-            or entry["remaining_hint_candidates"] != 0 for entry in completeness.values()):
+    if not extract_quality.completeness_resolved(meta):
         return False
     return not any(key in meta and (not isinstance(meta[key], dict)
                    or meta[key].get("applied") is not True) for key in ("qc_fix", "human_fix"))

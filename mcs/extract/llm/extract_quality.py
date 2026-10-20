@@ -122,6 +122,17 @@ def repair_issues(drops: dict, v: dict | None) -> list[str]:
 _QUALITY_CHECKPOINT = "completeness-v1"
 
 
+def completeness_resolved(meta: dict) -> bool:
+    """Accept legacy absence or fully resolved hint counts, never malformed quality records."""
+    integrity = meta.get("integrity", {})
+    quality = integrity.get("completeness", {}) if isinstance(integrity, dict) else None
+    return isinstance(quality, dict) and all(
+        isinstance(entry, dict) and entry.get("state") == "hint_gaps_resolved"
+        # bool/float zero and missing counts cannot establish resolution.
+        and type(entry.get("remaining_hint_candidates")) is int
+        and entry["remaining_hint_candidates"] == 0 for entry in quality.values())
+
+
 def _current_cue(body, surface):
     """A literal patient-current occurrence can invite review without confirming a fact."""
     if not isinstance(surface, str) or not surface:

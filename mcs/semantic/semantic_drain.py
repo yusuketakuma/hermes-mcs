@@ -44,7 +44,7 @@ from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT,
                              KIND_PLAN, KIND_POLICY, KIND_REPAIR,
                              KIND_SHADOW_V2, KIND_SUMMARY,
                              KIND_SUMMARY_FORMAT_REPAIR, KIND_USAGE,
-                             QC_JOB_KIND, SCHEMA_VERSION,
+                             QC_JOB_KIND, SCHEMA_VERSION, SCHED_KIND,
                              policy_fingerprint, semantic_config)
 import semantic_notice
 from semantic_store import current_artifact, jev_state, jev_usage_today
@@ -1363,9 +1363,6 @@ def _timed_llm(fn):
             finally:
                 acc["s"] += time.perf_counter() - started
     return timed, acc
-
-
-SCHED_KIND = "semantic_sched"
 
 
 def _sched_state(ledger) -> dict:

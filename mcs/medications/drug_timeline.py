@@ -4,6 +4,7 @@ import semantic_transport
 
 
 import drug_map
+import extract_quality
 from mcs_queries import incomplete_reply_roots
 from mcs_util import loads_dict
 
@@ -44,12 +45,7 @@ def mentions(reader, mid, *, cfg=None):
             context = _thread_context(reader.db, message)
         if meta.get("context_binding") != _chunk_context(message, context):
             return None
-        integrity = meta.get("integrity", {})
-        quality = integrity.get("completeness", {}) if isinstance(integrity, dict) else None
-        if not isinstance(quality, dict) or any(not isinstance(v, dict)
-                or v.get("state") != "hint_gaps_resolved"
-                or type(v.get("remaining_hint_candidates")) is not int
-                or v["remaining_hint_candidates"] != 0 for v in quality.values()):
+        if not extract_quality.completeness_resolved(meta):
             return None
         doc = loads_dict(source[2]) or {}
         meds = doc.get("meds")
@@ -181,7 +177,7 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
         if result is None:
             continue
         source, meds = result
-        refs = ({r["i"]: r for r in drug_map.current_refs(view.db, row["message_id"])}
+        refs = ({r["i"]: r for r in drug_map.current_refs_with_progress(view.db, row["message_id"], progress)}
                 if dictionary == "derived" else {})
         for i, med in enumerate(meds):
             ref = refs.get(i) if source[1] == "extract_llm" else None

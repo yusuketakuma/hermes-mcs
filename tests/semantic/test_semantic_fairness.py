@@ -18,6 +18,7 @@ import pytest
 import semantic
 import semantic_drain
 from semantic_observe import observe
+from semantic_policy import SCHED_KIND
 from semantic_testkit import _cfg, _FakeJev, _ledger, _llm, _message, _patient
 
 
@@ -351,7 +352,7 @@ def test_observe_corrupt_records_are_visible_without_read_writes(tmp_path):
         with db.db:
             db.db.execute("INSERT INTO artifacts(kind,meta) VALUES('extract_llm','[1]')")
             db.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,payload) "
-                          "VALUES(?,0,0,'[]')", (semantic_drain.SCHED_KIND,))
+                          "VALUES(?,0,0,'[]')", (SCHED_KIND,))
         before = db.db.total_changes
         snap = observe(str(tmp_path / 'ledger.db'), {'semantic': []})
         assert snap['jev_requests_today'] is None

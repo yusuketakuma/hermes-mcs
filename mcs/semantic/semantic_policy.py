@@ -11,6 +11,7 @@ SCHEMA_VERSION = "2026-09-20"
 POLICY_VERSION = "2026-10-16.1"
 JOB_KIND = "semantic"
 QC_JOB_KIND = "extract_qc"
+SCHED_KIND = "semantic_sched"
 QC_ARTIFACT = "extract_qc"
 
 KIND_BUNDLE = "semantic_bundle"

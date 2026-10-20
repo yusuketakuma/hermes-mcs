@@ -2156,22 +2156,13 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
                 for key in ("qc_fix", "human_fix")))):
             return out
         integrity = meta.get("integrity") if isinstance(meta, dict) else None
-        # absent is legacy-complete; a present malformed record is never complete
-        quality = (integrity.get("completeness", {}) if isinstance(integrity, dict)
-                   else {} if isinstance(meta, dict) and "integrity" not in meta else None)
         validation = integrity.get("validation") if isinstance(integrity, dict) else None
         if bound and isinstance(integrity, dict) and "validation" in integrity and (
                 not isinstance(validation, dict) or any(
                     type(validation.get(key)) is not int or validation[key] < 0
                     for key in ("items_dropped", "evidence_dropped"))):
             return out
-        if bound and (not isinstance(quality, dict) or any(
-                not isinstance(entry, dict) or entry.get("state") != "hint_gaps_resolved"
-                # resolved is written with an integer 0 remaining; anything else
-                # (a count, a missing, null, bool or non-integer value) is no resolution
-                or type(entry.get("remaining_hint_candidates")) is not int
-                or entry["remaining_hint_candidates"] != 0
-                for entry in quality.values())):
+        if bound and not extract_quality.completeness_resolved(meta):
             return out
         if (bound and not meta.get("error") and valid is not None
                 and not valid.get("_items_dropped") and not valid.get("_evidence_dropped")

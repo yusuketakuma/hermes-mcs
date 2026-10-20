@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from adapters.common import envelopes, text
+from adapters.common import envelopes, forms
 import extract_llm
 from extract_testkit import _hash, _ledger, _message
 import mcs_requests
@@ -33,9 +33,9 @@ def test_new_feedback_field_end_to_end_reextracts_once(tmp_path, monkeypatch, fi
     db = _ledger(tmp_path)
     try:
         aid = seed(db)
-        options = dict(text.modal_fields("report")[0]["options"])
+        options = dict(forms.modal_fields("report")[0]["options"])
         assert field in options
-        assert text.feedback_attrs({"field": field, "note": "合成の確認結果"}) == (
+        assert forms.feedback_attrs({"field": field, "note": "合成の確認結果"}) == (
             field, "合成の確認結果")
         req = command(aid, field)
         first = mcs_requests.apply_command(db, req)

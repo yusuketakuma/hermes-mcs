@@ -198,6 +198,15 @@ def test_cohort_definition_binds_the_actual_scope_implementation(monkeypatch):
     assert audit.definition_fingerprint() != before
 
 
+def test_cohort_definition_binds_shared_completeness_interpretation(monkeypatch):
+    import extract_quality
+    before = audit.definition_fingerprint()
+    def different_completeness(meta):
+        return True
+    monkeypatch.setattr(extract_quality, "completeness_resolved", different_completeness)
+    assert audit.definition_fingerprint() != before
+
+
 def test_cohort_definition_binds_semantic_category_and_projection_version(monkeypatch):
     import semantic_projection
     before = audit.definition_fingerprint()

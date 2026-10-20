@@ -256,7 +256,8 @@ def test_a_full_base_block_is_never_cut_through_its_reference_delimiters(tmp_pat
         led.close()
 
 
-@pytest.mark.parametrize("mutation", ["counter", "model", "completeness", "failed_fix"])
+@pytest.mark.parametrize("mutation", ["counter", "model", "completeness", "resolved_bool",
+                                       "resolved_float", "resolved_missing_count", "failed_fix"])
 def test_incomplete_validation_or_provenance_never_becomes_a_reference(tmp_path, mutation):
     led = _ledger(tmp_path)
     try:
@@ -268,6 +269,11 @@ def test_incomplete_validation_or_provenance_never_becomes_a_reference(tmp_path,
             meta["actual_model"] = "another-synthetic-model"
         elif mutation == "completeness":
             meta["integrity"]["completeness"] = {"0": {"state": "unresolved", "remaining_hint_candidates": 1}}
+        elif mutation.startswith("resolved_"):
+            entry = {"state": "hint_gaps_resolved"}
+            if mutation != "resolved_missing_count":
+                entry["remaining_hint_candidates"] = False if mutation == "resolved_bool" else 0.0
+            meta["integrity"]["completeness"] = {"0": entry}
         else:
             meta["human_fix"] = {"applied": False}
         with led.db:

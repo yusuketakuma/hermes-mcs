@@ -70,6 +70,24 @@ def test_stale_plan_rule_fallback_deleted_and_partial_not_absence(corpus):
     assert "なし" not in report["explanation"]
 
 
+@pytest.mark.parametrize("integrity,complete", [
+    ({}, True), (None, False), ([], False),
+    ({"completeness": {}}, True), ({"completeness": None}, False),
+    ({"completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}, True),
+    ({"completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": False}}}, False),
+    ({"completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0.0}}}, False),
+    ({"completeness": {"0": {"state": "hint_gaps_resolved"}}}, False),
+    ({"completeness": {"0": {"state": "unresolved", "remaining_hint_candidates": 0}}}, False),
+])
+def test_completeness_keeps_unresolved_mentions_out_of_timeline(corpus, integrity, complete):
+    current(corpus, 1, [{"name": "キラナ", "subject": "patient"}])
+    corpus.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.integrity',json(?)) WHERE kind='extract_llm'",
+                      (json.dumps(integrity),))
+    report = drug_timeline.timeline(view_of(corpus), 1)
+    assert bool(report["items"]) is complete
+    assert report["coverage"]["no_current_extraction"] == (0 if complete else 1)
+
+
 def test_paging_scope_and_generation_bound(corpus):
     for mid in (1, 2, 3):
         current(corpus, mid, [{"name": "キラナ", "subject": "patient"}])
@@ -127,6 +145,24 @@ def test_changed_dictionary_pin_hides_old_candidates(corpus, tmp_path):
         cfg={"drug_map": {"path": str(tmp_path / "new.json"), "sha256": "f" * 64}})
     assert report["items"][0]["candidate"] is None
     assert report["coverage"]["dictionary"] == "pending" and "照合中" in report["explanation"]
+
+
+def test_timeline_reuses_dictionary_progress_in_its_borrowed_snapshot(corpus, tmp_path, monkeypatch):
+    import drug_map
+    from test_drug_map import _dictionary
+    for mid in (1, 2, 3):
+        current(corpus, mid, [{"name": "キラナ", "subject": "patient"}])
+    drug_map.derive(corpus, _dictionary(tmp_path))
+    read_progress, reads = drug_map.read_annotation_progress, []
+    def counted(db):
+        reads.append(db)
+        return read_progress(db)
+    monkeypatch.setattr(drug_map, "read_annotation_progress", counted)
+    report = drug_timeline.timeline(view_of(corpus), 1)
+    assert reads == [corpus.db]
+    assert {item["message_id"] for item in report["items"]} == {1, 2, 3}
+    assert all(item["candidate"]["status"] == "resolved" for item in report["items"])
+    assert report["coverage"]["matching_pending_on_page"] == 0
 
 
 def canonical_source(store, monkeypatch, *, name="キラナ錠5mg", grounded=True, extra_names=()):
