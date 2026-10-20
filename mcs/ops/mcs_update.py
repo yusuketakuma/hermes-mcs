@@ -708,10 +708,28 @@ def upgrade_notes(tag: str, cur_tag: str | None) -> list[dict]:
     return update_policy.parse_upgrade_notes(text, tag, cur_tag)
 
 
-def plan(tag: str) -> dict:
+def _candidate_args_valid(candidate_sha, base_sha) -> bool:
+    """Only complete commit identities may select an unpublished local target."""
+    return all(isinstance(value, str) and update_discovery.COMMIT_SHA_RE.fullmatch(value)
+               for value in (candidate_sha, base_sha))
+
+
+def _candidate_commit(sha: str) -> str:
+    """Resolve an existing commit object, never a branch, tag object or network ref."""
+    if (_git_out(["cat-file", "-t", sha]).strip() != "commit"
+            or _git_out(["rev-parse", "--verify", sha + "^{commit}"]).strip() != sha):
+        raise UpdateError("candidate_commit_unavailable")
+    return sha
+
+
+def plan(tag: str | None = None, *, candidate_sha: str | None = None,
+         base_sha: str | None = None) -> dict:
     """Read-only upgrade plan for scripts/mcs_upgrade.py and
     docs/guides/UPGRADE_AGENT.md: classifies the existing gate tokens,
     never mutates the tree, state or services."""
+    candidate = candidate_sha is not None
+    if candidate and (tag is not None or not _candidate_args_valid(candidate_sha, base_sha)):
+        return {"route": "blocked", "blockers": ["candidate_arguments_invalid"]}
     cfg = mcs_util.load_config()
     try:
         cur_tag, cur_sha = update_discovery.current_version(checkout=REPO, environment=os.environ)
@@ -729,13 +747,23 @@ def plan(tag: str) -> dict:
         schema = None
     current = {"tag": cur_tag, "sha": cur_sha, "schema": schema}
     try:
-        target_sha = _git_out(["rev-parse", f"refs/tags/{tag}^{{commit}}"]).strip()
+        target_sha = (_candidate_commit(candidate_sha) if candidate else
+                      _git_out(["rev-parse", f"refs/tags/{tag}^{{commit}}"]).strip())
     except UpdateError:
         return {"route": "blocked", "current": current,
-                "target": {"tag": tag, "sha": None},
-                "blockers": ["tag_not_fetched"]}
+                "target": {"tag": tag, "sha": candidate_sha},
+                "blockers": ["candidate_commit_unavailable" if candidate else "tag_not_fetched"]}
     try:
-        return _plan(tag, cfg, state, current, target_sha)
+        result = _plan(candidate_sha if candidate else tag, cfg, state, current, target_sha,
+                       candidate=candidate)
+        if candidate:
+            result["target"] = {"tag": None, "sha": target_sha, "kind": "local_candidate"}
+            result["base_sha"] = base_sha
+            result["notes"].insert(0, {"notes": "未公開のローカル候補です。確認済みの固定コミットだけを適用し、タグ・GitHub Releaseは作成しません。"})
+            if cur_sha != base_sha:
+                result["blockers"] = sorted({*result["blockers"], "base_sha_mismatch"})
+                result["route"] = "blocked"
+        return result
     except (UpdateError, subprocess.SubprocessError, OSError,
             ValueError) as e:           # ValueError: invalid runtime_mode
         return {"route": "blocked", "current": current,
@@ -743,7 +771,7 @@ def plan(tag: str) -> dict:
                 "blockers": [f"plan_failed: {e}"[:200]]}
 
 
-def _plan(tag, cfg, state, current, target_sha) -> dict:
+def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> dict:
     cur_tag, cur_sha = current["tag"], current["sha"]
     local_errors = precheck_local(cfg)
     tag_errors = precheck_tag(tag)
@@ -775,7 +803,8 @@ def _plan(tag, cfg, state, current, target_sha) -> dict:
         "recovery_tool_changed": recovery_changed,
         "install_args": recorded_install_args(),
         "reinstall_requires_recovery_repair": bool(reinstall and service_management.recovery_repair_pending(cfg, paths=_service_paths())),
-        "notes": [] if noop else upgrade_notes(tag, cur_tag) + _recovery_notes(cfg, blockers, reinstall),
+        "notes": [] if noop else ([] if candidate else upgrade_notes(tag, cur_tag))
+        + _recovery_notes(cfg, blockers, reinstall),
     }
 
 
@@ -1579,6 +1608,9 @@ def _post_merge(state: dict) -> int:
         "manifest_snapshot": applying.get("manifest_snapshot"),
         **({"runtime_migration": applying["runtime_migration"]}
            if applying.get("runtime_migration") else {}),
+        **({"target_kind": "local_candidate", "human_confirmed": True,
+            "reason": applying["reason"]}
+           if applying.get("target_kind") == "local_candidate" else {}),
         "command_id": applying.get("command_id"), "at": time.time()})
     state["stages"].append({"stage": "done", "at": time.time()})
     state["applying"] = None
@@ -1704,9 +1736,22 @@ def _run_post_merge(sha: str, *, run_lock_fd: int | None) -> None:
 
 def _apply_validate_args(tag: str | None, sha: str | None,
                          command_id: str | None, reinstall: bool,
-                         install_args: tuple) -> int | None:
+                         install_args: tuple, *, candidate_sha: str | None = None,
+                         base_sha: str | None = None, confirm_human: bool = False,
+                         reason: str | None = None) -> int | None:
     """Reject malformed apply arguments before any state is read."""
-    if not update_policy.release_tag(tag):
+    if candidate_sha is not None:
+        if (tag is not None or sha is not None or command_id is not None
+                or not _candidate_args_valid(candidate_sha, base_sha)
+                or confirm_human is not True or not isinstance(reason, str)
+                or not reason.strip() or len(reason) > 200
+                or any(ord(char) < 32 or ord(char) == 127 for char in reason)):
+            print("未公開候補の適用には40桁の候補SHA・更新前SHA・--confirm-human・200字以内の理由が必要です。タグ・--sha・操作IDとは併用できません")
+            return 2
+    elif confirm_human or reason is not None:
+        print("--confirm-human と --reason は未公開候補の適用時だけ指定できます")
+        return 2
+    elif not update_policy.release_tag(tag):
         print("更新する版の指定が正しくありません（例: v1.0.23）:", tag)
         return 2
     if sha is not None and not update_discovery.COMMIT_SHA_RE.fullmatch(sha):
@@ -1781,7 +1826,8 @@ def _apply_record_success(tag: str, command_id: str | None) -> dict:
 
 def apply(tag: str | None, sha: str | None, command_id: str | None,
           base_sha: str | None = None, reinstall: bool = False,
-          install_args: tuple = ()) -> int:
+          install_args: tuple = (), *, candidate_sha: str | None = None,
+          confirm_human: bool = False, reason: str | None = None) -> int:
     """The staged apply pipeline (④).
 
     Lock discipline: update.lock is acquired BEFORE the first journal
@@ -1790,9 +1836,21 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     reliably means the writer died. run.lock is taken second (after
     the long pre-checks) — run.lock holders (drainer ticks) never
     block on update.lock, so no lock-order inversion exists."""
-    rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args)
+    rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args,
+                              candidate_sha=candidate_sha, base_sha=base_sha,
+                              confirm_human=confirm_human, reason=reason)
     if rc is not None:
         return rc
+    candidate = candidate_sha is not None
+    target_ref = candidate_sha if candidate else f"refs/tags/{tag}"
+    if candidate:
+        try:
+            _candidate_commit(candidate_sha)
+        except UpdateError:
+            print("未公開候補はローカルに存在するコミットだけを指定してください（変更はありません）")
+            return 2
+        tag = "candidate:" + candidate_sha
+        sha = candidate_sha
     cfg = mcs_util.load_config()
     runtime_errors = _apply_runtime_gate_errors(cfg, reinstall, install_args)
     if runtime_errors:
@@ -1940,27 +1998,34 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         if errors:
             return bail("precheck_local: " + ",".join(errors))
 
-        journal(state, "remote_verify")
-        try:
-            remote = update_discovery.remote_tag_sha(tag, checkout=REPO, environment=os.environ)
-        except update_discovery.DiscoveryError as exc:
-            raise UpdateError(str(exc)) from exc
-        if sha is None:
-            sha = remote                # manual `apply --tag` convenience
-        if sha is None or remote != sha:
-            return bail("tag_moved: remote sha changed — 要再レビュー")
+        if candidate:
+            journal(state, "candidate_verify")
+            _candidate_commit(candidate_sha)
+            if _head_sha() != base_sha:
+                return bail("base_sha_mismatch: 承認時点と HEAD が異なる — 要再レビュー")
+        else:
+            journal(state, "remote_verify")
+            try:
+                remote = update_discovery.remote_tag_sha(tag, checkout=REPO, environment=os.environ)
+            except update_discovery.DiscoveryError as exc:
+                raise UpdateError(str(exc)) from exc
+            if sha is None:
+                sha = remote                # manual `apply --tag` convenience
+            if sha is None or remote != sha:
+                return bail("tag_moved: remote sha changed — 要再レビュー")
 
-        journal(state, "fetch")
-        _git(["fetch", "--tags", "origin"], timeout=T_FETCH)
-        local_sha = _git_out(
-            ["rev-parse", f"refs/tags/{tag}^{{commit}}"]).strip()
-        if local_sha != sha:
-            return bail("local_tag_sha_mismatch")
+            journal(state, "fetch")
+            _git(["fetch", "--tags", "origin"], timeout=T_FETCH)
+            local_sha = _git_out(
+                ["rev-parse", target_ref + "^{commit}"]).strip()
+            if local_sha != sha:
+                return bail("local_tag_sha_mismatch")
 
         journal(state, "tag_checks")
-        reason, bump = _apply_tag_gate(tag, cfg, command_id, reinstall)
-        if reason:
-            return bail(reason)
+        gate_problem, bump = _apply_tag_gate(candidate_sha if candidate else tag,
+                                              cfg, command_id, reinstall)
+        if gate_problem:
+            return bail(gate_problem)
 
         journal(state, "backup")
         import maintenance
@@ -1997,11 +2062,14 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
 
         state["applying"] = {
             "tag": tag, "sha": sha, "prev_sha": _head_sha(),
-            "plugin_changed": _plugin_changed(tag, cfg),
+            "plugin_changed": _plugin_changed(candidate_sha if candidate else tag, cfg),
             "schema_bump": bool(bump),
             "reinstall": reinstall, "install_args": list(install_args),
             "backup_path": bpath, "manifest_snapshot": snap,
             "command_id": command_id, "at": time.time()}
+        if candidate:
+            state["applying"].update(target_kind="local_candidate",
+                                     human_confirmed=True, reason=reason)
         journal(state, "applying")
 
         journal(state, "quiesce")
@@ -2012,7 +2080,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         quiesce()
 
         journal(state, "merge")
-        r = _git(["merge", "--ff-only", f"refs/tags/{tag}"],
+        r = _git(["merge", "--ff-only", target_ref],
                  timeout=T_MERGE)
         if r.returncode != 0:
             raise UpdateError("merge_failed: " + r.stderr.strip()[:200])
@@ -3290,14 +3358,22 @@ def cmd_status() -> int:
 def cmd_apply(args) -> int:
     return apply(args.tag, args.sha, args.command_id,
                  base_sha=args.base_sha, reinstall=args.reinstall,
-                 install_args=tuple(args.install_arg))
+                 install_args=tuple(args.install_arg), candidate_sha=args.candidate_sha,
+                 confirm_human=args.confirm_human, reason=args.reason)
 
 
 def cmd_plan(args) -> int:
-    if not update_policy.release_tag(args.tag):
+    if args.candidate_sha is not None:
+        if not _candidate_args_valid(args.candidate_sha, args.base_sha):
+            print("未公開候補の確認には40桁の候補SHAと更新前SHAが必要です")
+            return 2
+        result = plan(candidate_sha=args.candidate_sha, base_sha=args.base_sha)
+    elif args.base_sha is not None or not update_policy.release_tag(args.tag):
         print("確認する版の指定が正しくありません（例: v1.0.23）:", args.tag)
         return 2
-    print(json.dumps(plan(args.tag), ensure_ascii=False, indent=2))
+    else:
+        result = plan(args.tag)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -3323,9 +3399,13 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.set_defaults(fn=lambda args: cmd_check())
     sub = ap.add_subparsers(dest="cmd")
     ap_p = sub.add_parser("apply", help="指定した版へ更新する")
-    ap_p.add_argument("--tag", help="更新する版（例: v1.0.23）")
+    apply_target = ap_p.add_mutually_exclusive_group()
+    apply_target.add_argument("--tag", help="更新する版（例: v1.0.23）")
+    apply_target.add_argument("--candidate-sha", help="未公開のローカル候補（省略しない40桁のコミット識別子）")
     ap_p.add_argument("--sha", help="確認済みの更新先コミット識別子")
     ap_p.add_argument("--base-sha", help="更新前に一致を確認するコミット識別子")
+    ap_p.add_argument("--confirm-human", action="store_true", help="未公開候補のローカル適用を本人が承認したことを確認する")
+    ap_p.add_argument("--reason", help="未公開候補を適用する理由（200字以内、秘密値・患者情報を含めない）")
     ap_p.add_argument("--command-id", help="承認済み操作の識別子")
     ap_p.add_argument("--reinstall", action="store_true",
                       help="更新後にinstall.shを実行し、必要なソフトと設定を再導入する")
@@ -3333,7 +3413,10 @@ def _build_parser() -> argparse.ArgumentParser:
                       choices=sorted(INSTALL_ARGS), help="再導入に渡すオプション（複数指定可）")
     ap_p.set_defaults(fn=lambda args: cmd_apply(args))
     pl_p = sub.add_parser("plan", help="変更せずに更新内容と実行を妨げる条件を確認する（JSON出力）")
-    pl_p.add_argument("--tag", required=True, help="確認する版（例: v1.0.23）")
+    plan_target = pl_p.add_mutually_exclusive_group(required=True)
+    plan_target.add_argument("--tag", help="確認する版（例: v1.0.23）")
+    plan_target.add_argument("--candidate-sha", help="確認する未公開のローカル候補（40桁のコミット識別子）")
+    pl_p.add_argument("--base-sha", help="未公開候補の確認時に一致を確認する更新前コミット識別子")
     pl_p.set_defaults(fn=lambda args: cmd_plan(args))
     sub.add_parser("check", help="新しい版を確認し、設定・承認に従って更新する（省略時の動作）").set_defaults(fn=lambda args: cmd_check())
     sub.add_parser("status", help="現在の版と更新履歴を表示する（JSON出力）").set_defaults(fn=lambda args: cmd_status())

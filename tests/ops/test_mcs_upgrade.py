@@ -95,6 +95,79 @@ def test_launcher_apply_succeeds_only_when_the_tag_is_checked_out(tmp_path, capf
     assert "適用されていません" not in capfd.readouterr().err
 
 
+def test_launcher_extracts_the_exact_local_candidate_without_fetch(tmp_path, monkeypatch, capfd):
+    repo, _ = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    files = {
+        "mcs/ops/mcs_update.py": (
+            "import json, os, pathlib, sys\n"
+            "root = pathlib.Path(__file__).resolve().parents[2]\n"
+            "print(json.dumps({'argv': sys.argv[1:], 'repo': os.environ['MCS_UPDATE_REPO'],"
+            " 'files': sorted(str(p.relative_to(root)) for p in root.rglob('*') if p.is_file())}))\n"),
+        "mcs/core/synthetic.py": "# synthetic candidate contract\n",
+        "deployment/recovery/mcs_recover.py": "# synthetic independent recovery\n",
+        "adapters/synthetic.py": "# must not be staged\n",
+    }
+    for name, content in files.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "synthetic local candidate")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "reset", "--hard", base)
+    launcher = _launcher()
+    original = launcher._git
+
+    def local_git(repository, *args, **kwargs):
+        assert args[0] not in ("fetch", "ls-remote", "tag")
+        return original(repository, *args, **kwargs)
+
+    monkeypatch.setattr(launcher, "_git", local_git)
+    assert launcher.main(["--repo", str(repo), "plan", "--candidate-sha", target,
+                          "--base-sha", base]) == 0
+    seen = json.loads(capfd.readouterr().out)
+    assert seen["argv"] == ["plan", "--candidate-sha", target, "--base-sha", base]
+    assert seen["repo"] == os.path.realpath(repo)
+    assert seen["files"] == sorted(name for name in files if not name.startswith("adapters/"))
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == base
+
+
+@pytest.mark.parametrize("suffix", [
+    ["--candidate-sha", "a" * 39, "--base-sha", "b" * 40],
+    ["--candidate-sha", "a" * 40],
+    ["--candidate-sha", "a" * 40, "--base-sha", "b" * 40],
+    ["--candidate-sha", "a" * 40, "--base-sha", "b" * 40, "--confirm-human"],
+    ["--candidate-sha", "a" * 40, "--base-sha", "b" * 40, "--reason", "synthetic"],
+    ["--to", "v1.0.28", "--base-sha", "b" * 40],
+    ["--to", "v1.0.28", "--confirm-human", "--reason", "synthetic"],
+    ["--to", "v1.0.28", "--candidate-sha", "a" * 40],
+])
+def test_launcher_rejects_candidate_without_a_frozen_human_decision(monkeypatch, suffix):
+    launcher = _launcher()
+    monkeypatch.setattr(launcher, "_git", lambda *a, **k: pytest.fail("invalid input must not invoke Git"))
+    with pytest.raises(SystemExit) as caught:
+        launcher.main(["apply", *suffix])
+    assert caught.value.code == 2
+
+
+def test_launcher_never_treats_deferred_candidate_apply_as_success(tmp_path, capfd):
+    repo, _ = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    entry = repo / "mcs/ops/mcs_update.py"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("raise SystemExit(0)\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "synthetic untagged candidate")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "reset", "--hard", base)
+    assert _launcher().main(["--repo", str(repo), "apply", "--candidate-sha", target,
+                             "--base-sha", base, "--confirm-human", "--reason",
+                             "synthetic local validation"]) == 2
+    assert "適用されていません" in capfd.readouterr().err
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == base
+
+
 def test_launcher_refuses_target_without_updater(tmp_path):
     repo, _ = _make_repo(tmp_path)
     with pytest.raises(SystemExit, match="更新プログラム mcs/ops/mcs_update.py がありません"):

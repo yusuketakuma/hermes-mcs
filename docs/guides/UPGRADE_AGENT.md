@@ -189,6 +189,35 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 
 `${TAG}:scripts/mcs_upgrade.py` が無い（v1.0.10 以前を移行先にした）場合は、その版へはこの手順で更新できない。
 
+### 2-A. 公開前の固定候補をこのMacへ適用する場合
+
+運用者が「本番で動作を確認してから公開する」と承認した場合は、`--candidate-sha` で未公開のローカル候補を指定できます。タグ・GitHub Releaseは作成しません。候補の40桁SHAと、レビュー時点の本番HEADの40桁SHAを固定し、変更をコミットしてから使います。branch名・省略SHA・tag object・tree・blobは指定できません。候補は本番checkoutのローカルGit objectとして存在し、本番HEADの子孫である必要があります。
+
+```bash
+CANDIDATE_SHA='<レビュー済み候補の40桁SHA>'
+BASE_SHA='<レビュー時点の本番HEADの40桁SHA>'
+WORK=$(mktemp -d)
+git -C "$REPO" show "${CANDIDATE_SHA}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"
+"$PY" "$WORK/mcs_upgrade.py" --repo "$REPO" plan \
+  --candidate-sha "$CANDIDATE_SHA" --base-sha "$BASE_SHA"
+```
+
+`plan`の`target.kind`は`local_candidate`、`target.tag`は`null`です。`blockers`が空になるまで§3の手順で対処します。候補に`install.sh`等の変更があれば、公開版と同じく`route=reinstall`になります。前回の導入内容とopt-outは§4で確認し、そのまま引き継いでください。復旧watchdogを導入済みなら省略しません。
+
+明示承認後、`route=apply`なら次を実行します。`route=reinstall`では同じコマンドに`--reinstall`と、§4で確認した各`--install-arg=...`を追加します。理由には秘密値・患者情報を含めず、200字以内で記載してください。
+
+```bash
+"$PY" "$WORK/mcs_upgrade.py" --repo "$REPO" apply \
+  --candidate-sha "$CANDIDATE_SHA" --base-sha "$BASE_SHA" \
+  --confirm-human --reason 'レビュー済み候補を本番で確認するため'
+```
+
+候補の取得・照合では通信しません。再導入を伴う場合の依存取得などは、通常の再導入と同じです。`--to`・`--tag`・`--sha`・`--command-id`との併用、自動更新・チャット承認からの候補指定には対応しません。`--confirm-human`はこのローカル適用への承認であり、DB復元の人承認を代行しません。
+
+候補でも、保護path・設定・schema・更新前HEAD・fast-forwardの確認、バックアップ、update/run lock、更新記録、worker停止、新コードによるサービス同期・再起動・適用後確認は同じ更新処理を通ります。未公開候補と本人確認・理由を更新記録へ保存し、失敗・中断・rollbackは§7の既存手順で扱います。保留中の復元承認や送信結果不明は解除しません。
+
+本番checkoutのmainを先に通常の`git merge`で進めると、その時点で稼働コードが置き換わります。開発worktreeでmainを祖先に含む候補を作り、更新処理がworkerを停止してからmainを進めてください。適用後は§6の稼働確認を行い、実際の動作を確認してから公開可否を判断します。
+
 ## 3. 阻害要因の解消
 
 `blockers` ごとに対処し、§2 の `plan` を再実行して `blockers` が空になるまで繰り返す。

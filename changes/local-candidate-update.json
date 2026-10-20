@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "公開前の候補を固定コミットで本番確認できるように",
+  "summary": "運用者が明示承認した未公開のローカル候補を、タグやGitHub Releaseを作らず、このMacへ適用できます。通常更新と同じバックアップ・停止・サービス同期・再起動・適用後確認・失敗時の復旧を使います。",
+  "upgrade": "通常のタグ更新・自動更新では追加操作は不要です。未公開候補の適用には候補と更新前HEADの40桁SHA、--confirm-human、200字以内の理由が必要です。変更をコミットして候補を固定し、planの阻害条件を解消してください。再導入が必要な候補では従来どおり--reinstallと前回のopt-outを指定し、導入済み復旧watchdogを維持します。未公開候補は自動更新・チャット承認の対象にはしません。",
+  "details": [
+    "--candidate-shaは公開タグの指定と排他にし、ローカルにあるcommit objectだけを受け付ける。候補の照合ではfetchやremote照会を行わない。",
+    "候補内容の全検査と既存apply pipelineを共用し、run lock取得後に更新前HEADを再確認する。更新記録には未公開候補の種別・本人確認・理由を残す。",
+    "候補のmcsと独立復旧helperを正確に一時展開する。更新途中の承認待ち・送信結果不明・rollbackの保護は変更しない。"
+  ],
+  "refs": ["mcs/ops/mcs_update.py", "scripts/mcs_upgrade.py", "docs/guides/UPGRADE_AGENT.md"]
+}

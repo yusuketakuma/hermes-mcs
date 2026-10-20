@@ -30,6 +30,7 @@ import tempfile
 # an explicit --to may name a prerelease; the default target never does.
 SEMVER_RE = re.compile(
     r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
+COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _git(repo: str, *args: str, binary: bool = False):
@@ -55,9 +56,10 @@ def latest_tag(repo: str) -> str:
     return max(found, key=lambda m: tuple(map(int, m.groups()[:3]))).group(0)
 
 
-def extract(repo: str, tag: str, dest: str) -> None:
+def extract(repo: str, tag: str, dest: str, *, local_candidate: bool = False) -> None:
     """Exact updater/runtime blobs, including its independent recovery helper."""
-    for rec in _git(repo, "ls-tree", "-rz", "refs/tags/" + tag, "--", "mcs",
+    ref = tag if local_candidate else "refs/tags/" + tag
+    for rec in _git(repo, "ls-tree", "-rz", ref, "--", "mcs",
                     "deployment/recovery/mcs_recover.py").split("\0"):
         if not rec:
             continue
@@ -197,14 +199,34 @@ def _main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("plan", "apply", "guide"):
         p = sub.add_parser(name, help="更新内容を確認する（変更しません・JSON出力）" if name == "plan" else "日本語の対話形式で更新を案内する" if name == "guide" else "更新を実行する")
-        p.add_argument("--to", help="更新する版（例: v1.0.23。省略時: 最新の正式版）")
+        target = p.add_mutually_exclusive_group()
+        target.add_argument("--to", help="更新する版（例: v1.0.23。省略時: 最新の正式版）")
+        if name != "guide":
+            target.add_argument("--candidate-sha", help="未公開のローカル候補（40桁のコミット識別子。通信しません）")
+            p.add_argument("--base-sha", help="未公開候補の更新前コミット識別子（40桁）")
         p.add_argument("--keep-hermes-checkout", metavar="SHA",
                        help="指定したHermesの版を維持する（未変更でPython 3.14対応のもの）。"
                             "省略しない40桁のコミット識別子を指定")
         if name == "apply":
             p.add_argument("--reinstall", action="store_true", help="必要なソフトと設定も再導入する")
             p.add_argument("--install-arg", action="append", default=[], help="再導入に渡すオプション（例: --install-arg=--no-llm。複数指定可）")
+            p.add_argument("--confirm-human", action="store_true", help="未公開候補のローカル適用を本人が承認したことを確認する")
+            p.add_argument("--reason", help="未公開候補を適用する理由（200字以内。秘密値・患者情報を含めない）")
     args = ap.parse_args(argv)
+    candidate_sha = getattr(args, "candidate_sha", None)
+    base_sha = getattr(args, "base_sha", None)
+    if candidate_sha is not None:
+        if not all(isinstance(value, str) and COMMIT_SHA_RE.fullmatch(value)
+                   for value in (candidate_sha, base_sha)):
+            ap.error("未公開候補の指定には40桁の候補SHAと更新前SHAが必要です")
+        if args.cmd == "apply" and (args.confirm_human is not True
+                or not isinstance(args.reason, str) or not args.reason.strip()
+                or len(args.reason) > 200
+                or any(ord(char) < 32 or ord(char) == 127 for char in args.reason)):
+            ap.error("未公開候補の適用には --confirm-human と200字以内の理由が必要です")
+    elif base_sha is not None or getattr(args, "confirm_human", False) \
+            or getattr(args, "reason", None) is not None:
+        ap.error("更新前SHA・本人確認・理由は --candidate-sha と一緒に指定してください")
     if args.cmd == "guide":
         if not sys.stdin.isatty():
             print("対話形式の更新はターミナルで mcs update を実行してください。")
@@ -219,23 +241,34 @@ def _main(argv=None) -> int:
         raise SystemExit("Python 3.10以上が必要です。Hermesまたは "
                          "~/.mcs/venv のPythonを使ってください（UPGRADE_AGENT.md 第1節）")
     repo = os.path.realpath(_git(args.repo, "rev-parse", "--show-toplevel").strip())
-    if not args.no_fetch:
+    if not args.no_fetch and candidate_sha is None:
         _git(repo, "fetch", "--tags", "origin")
     if args.keep_hermes_checkout and not re.fullmatch(r"[0-9a-f]{40}", args.keep_hermes_checkout):
         raise SystemExit("--keep-hermes-checkout には省略しない40桁の16進数のコミット識別子が必要です")
-    tag = args.to or latest_tag(repo)
-    if len(tag) > 255 or not SEMVER_RE.fullmatch(tag):
+    tag = candidate_sha or args.to or latest_tag(repo)
+    if candidate_sha is not None:
+        if (_git(repo, "cat-file", "-t", candidate_sha).strip() != "commit"
+                or _git(repo, "rev-parse", "--verify", candidate_sha + "^{commit}").strip() != candidate_sha):
+            raise SystemExit("未公開候補はローカルに存在するコミットだけを指定してください")
+    elif len(tag) > 255 or not SEMVER_RE.fullmatch(tag):
         raise SystemExit(f"更新する版の指定が正しくありません（例: v1.0.23）: {tag}")
     tmp = tempfile.mkdtemp(prefix="mcs_upgrade_")
     try:
-        extract(repo, tag, tmp)
+        if candidate_sha is None:
+            extract(repo, tag, tmp)
+        else:
+            extract(repo, tag, tmp, local_candidate=True)
         updater = os.path.join(tmp, "mcs", "ops", "mcs_update.py")
         if not os.path.exists(updater):
             raise SystemExit(f"{tag} に更新プログラム mcs/ops/mcs_update.py がありません")
-        cmd = [sys.executable, updater, "plan" if args.cmd == "guide" else args.cmd, "--tag", tag]
+        cmd = [sys.executable, updater, "plan" if args.cmd == "guide" else args.cmd]
+        cmd += (["--candidate-sha", candidate_sha, "--base-sha", base_sha]
+                if candidate_sha is not None else ["--tag", tag])
         if args.cmd == "apply":
             cmd += ["--reinstall"] if args.reinstall else []
             cmd += [f"--install-arg={a}" for a in args.install_arg]
+            if candidate_sha is not None:
+                cmd += ["--confirm-human", "--reason", args.reason]
         env = {**os.environ, "MCS_UPDATE_REPO": repo}
         env.pop("MCS_UPDATE_KEEP_HERMES_CHECKOUT", None)
         if args.keep_hermes_checkout:
@@ -249,7 +282,7 @@ def _main(argv=None) -> int:
             raise SystemExit(f"更新プログラムを起動できませんでした。Pythonの実行環境を確認してください（{exc.strerror}）") from None
         # The updater also exits 0 when it defers (another update running, recovery pending).
         if args.cmd == "apply" and rc == 0 and _git(repo, "rev-parse", "HEAD").strip() \
-                != _git(repo, "rev-parse", f"refs/tags/{tag}^{{commit}}").strip():
+                != (candidate_sha or _git(repo, "rev-parse", f"refs/tags/{tag}^{{commit}}").strip()):
             print(f"{tag} は適用されていません。別の更新処理の実行中か、中断した更新の復旧待ちの可能性があります。"
                   "しばらく待ってから data/recovery_report.json を確認し、もう一度実行してください", file=sys.stderr)
             return 2
