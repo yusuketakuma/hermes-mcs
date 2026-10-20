@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "検査項目の取得に不正な保存IDを使わない",
+  "summary": "保存済みの検査項目一覧に不正な型のIDや項目単位の指定が含まれる場合、その一覧を検査値の取得元として採用しません。読取り側と同じ条件で、対象患者の正式な一覧を照合します。",
+  "upgrade": "追加操作は不要です。保存データの書換えや全件再取得は行いません。最新の正式な取得が失敗している場合は、以前の成功記録で補わず保留する動作を維持します。",
+  "details": [
+    "検査項目一覧の選択時にJSONとSQLiteの整数型、一覧に対するitem_idの未指定またはnullを検証する。",
+    "float・bool・文字列のID、一覧以外のitem_id指定、正常な整数IDと旧形式の未指定を合成回帰で確認する。"
+  ],
+  "refs": [
+    "mcs/ingest/project_metadata.py",
+    "tests/ingest/test_clinical_metadata_acquisition.py"
+  ]
+}

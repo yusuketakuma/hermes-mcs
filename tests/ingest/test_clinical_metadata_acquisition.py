@@ -483,3 +483,56 @@ def test_deep_stored_metadata_cannot_block_other_patients(world, kind, monkeypat
     assert any("/kartes/20/" in call["url"] for call in wire.calls)
     if kind == "definition":
         assert db.db.execute("SELECT content FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0] == raw
+
+
+@pytest.mark.parametrize("karte_id,changes,omit_item,admit", [
+    (10, {}, False, True),
+    (1, {}, False, True),
+    (10, {}, True, True),
+    (10, {"entity_id": 10.0}, False, False),
+    (1, {"entity_id": True}, False, False),
+    (10, {"entity_id": "10"}, False, False),
+    (10, {"item_id": 999}, False, False),
+    (10, {"item_id": False}, False, False),
+    (10, {"item_id": 999.0}, False, False),
+    (10, {"item_id": "999"}, False, False),
+], ids=["integer10-control", "integer1-control", "legacy-missing-item-control",
+        "float-entity", "bool-entity", "string-entity", "nonnull-int-item",
+        "nonnull-bool-item", "nonnull-float-item", "nonnull-string-item"])
+def test_value_get_requires_canonical_collection_definition(world, karte_id, changes, omit_item, admit):
+    db, client, wire, clock = world
+    with db.db:
+        db.db.execute("UPDATE patients SET karte_id=? WHERE project_id=1", (karte_id,))
+    client._token = "synthetic-session"
+    wire.items = 1
+    original_id = metadata.sync_metadata(
+        db, client, 1, "observation_items", enabled=True, now=clock[0], per_page=50)["artifact_id"]
+    content = json.loads(db.db.execute(
+        "SELECT content FROM artifacts WHERE artifact_id=?", (original_id,)).fetchone()[0])
+    content["rows"][0]["lab_test_item"]["id"] = 999
+    content["attempted_at"] = clock[0] + 1
+    content.update(changes)
+    if omit_item:
+        del content["item_id"]
+    pin = db.artifact_add(project_metadata_contract.ARTIFACT_KIND,
+                          json.dumps(content), project_id=1)
+    wire.calls.clear()
+    result = metadata.sync_metadata(
+        db, client, 1, "observation_values", enabled=True, item_id=999,
+        definition_source_artifact_id=pin, now=clock[0] + 2, per_page=50)
+    if not admit:
+        assert result == {"state": "unknown", "reason": "definition_mapping_changed",
+                          "artifact_id": None}
+        assert wire.calls == []
+        generation, items = metadata._clinical_items(db.db, 1, karte_id)
+        assert generation == original_id and set(items) == {1}
+    else:
+        assert result["state"] == "complete" and result["reason"] is None
+        assert len(wire.calls) == 1
+        assert urlsplit(wire.calls[0]["url"]).path == (
+            f"/api/v2t/kartes/{karte_id}/observation_items/999/values")
+        viewed = get_project_metadata(db.db, 1, "observation_values", item_id=999,
+                                      now=clock[0] + 3)
+        assert viewed["state"] == "complete" and viewed["current_known"] is True
+        assert viewed["definition_source_artifact_id"] == pin
+        assert viewed["rows"][0]["scalar"] == 123

@@ -327,7 +327,10 @@ def _clinical_items(db, project_id, karte_id):
     row = db.execute("""SELECT artifact_id,content FROM artifacts
         WHERE kind=? AND project_id=? AND CASE WHEN json_valid(content) THEN
           json_extract(content,'$.dataset')='observation_items'
-          AND json_extract(content,'$.entity_id')=? ELSE 0 END
+          AND json_type(content,'$.entity_id')='integer'
+          AND typeof(json_extract(content,'$.entity_id'))='integer'
+          AND json_extract(content,'$.entity_id')=?
+          AND json_extract(content,'$.item_id') IS NULL ELSE 0 END
         ORDER BY artifact_id DESC LIMIT 1""", (ARTIFACT_KIND, project_id, karte_id)).fetchone()
     if row is None:
         return None, {}
