@@ -3,7 +3,7 @@
   "synthetic": true,
   "origins": "origins.json",
   "target": {
-    "version": "v1.0.27",
+    "version": "v1.0.28",
     "code": "current workspace updater",
     "schema": "ledger.SCHEMA_VERSION"
   },
@@ -13,7 +13,7 @@
     "original_runner": "upgrade_routes.py",
     "original_log": "upgrade-routes-2.log",
     "artifact_location": "unversioned isolated temporary task directory; absolute path not recorded",
-    "tag_checks": "2026-10-04 local git rev-parse, cat-file -e and diff --quiet: commits agree with origins.json; updater absent through v1.0.2; standalone starts at v1.0.10; install.sh differs through v1.0.9 but is identical across v1.0.10-v1.0.12; 2026-10-13 local v1.0.20 tag dereferences to bbca0e09484f9115e88660ba764a7a79071d88e3; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py exist at that exact commit. 2026-10-16 local v1.0.21 tag dereferences to 802d45c9a50034a735e6138648f44b49722509ae; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py exist at that exact commit. 2026-10-17 local v1.0.22 tag dereferences to f8c6c20d4f7fd841d5d66adfbf4b9675371a9339; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Schema-only AST extraction confirms v1.0.22 and the v1.0.23 candidate share shape-11 (schema 9, 56 normalized definitions; provenance in origins.json). 2026-10-17 local v1.0.23 tag dereferences to 1c11122808bde5472800df24fb01b94f6f1158be; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Schema-only AST extraction confirms v1.0.23 and the v1.0.24 candidate share shape-11 (schema 9, 56 normalized definitions; provenance in origins.json). 2026-10-17 local v1.0.24 tag dereferences to 35b5a5531e04441391bfb43b8389a7ca43a5dc94; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Bounded schema-only AST extraction confirms v1.0.24, v1.0.23, unchanged shape-11 and the v1.0.25 candidate share schema 9 and all 56 normalized definitions; same-tag source/dependency hashes are recorded in origins.json. 2026-10-18 local v1.0.25 tag dereferences to 5ecea075500cba976764b508cdaef5004ce8795f; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Bounded schema-only AST extraction confirms v1.0.25, v1.0.24, unchanged shape-11 and the v1.0.26 candidate share schema 9 and all 56 normalized definitions; same-tag source/dependency hashes are recorded in origins.json. 2026-10-19 local v1.0.26 tag dereferences to 982c471b19a26ef790afb135c7d0c9d3d69c0702; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Bounded schema-only AST extraction confirms v1.0.26, v1.0.25, unchanged shape-11 and the v1.0.27 candidate share schema 9 and all 56 normalized definitions; same-tag source/dependency hashes are recorded in origins.json.",
+    "tag_checks": "2026-10-04 local git rev-parse, cat-file -e and diff --quiet: commits agree with origins.json; updater absent through v1.0.2; standalone starts at v1.0.10; install.sh differs through v1.0.9 but is identical across v1.0.10-v1.0.12; 2026-10-13 local v1.0.20 tag dereferences to bbca0e09484f9115e88660ba764a7a79071d88e3; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py exist at that exact commit. 2026-10-16 local v1.0.21 tag dereferences to 802d45c9a50034a735e6138648f44b49722509ae; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py exist at that exact commit. 2026-10-17 local v1.0.22 tag dereferences to f8c6c20d4f7fd841d5d66adfbf4b9675371a9339; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Schema-only AST extraction confirms v1.0.22 and the v1.0.23 candidate share shape-11 (schema 9, 56 normalized definitions; provenance in origins.json). 2026-10-17 local v1.0.23 tag dereferences to 1c11122808bde5472800df24fb01b94f6f1158be; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Schema-only AST extraction confirms v1.0.23 and the v1.0.24 candidate share shape-11 (schema 9, 56 normalized definitions; provenance in origins.json). 2026-10-17 local v1.0.24 tag dereferences to 35b5a5531e04441391bfb43b8389a7ca43a5dc94; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Bounded schema-only AST extraction confirms v1.0.24, v1.0.23, unchanged shape-11 and the v1.0.25 candidate share schema 9 and all 56 normalized definitions; same-tag source/dependency hashes are recorded in origins.json. 2026-10-18 local v1.0.25 tag dereferences to 5ecea075500cba976764b508cdaef5004ce8795f; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Bounded schema-only AST extraction confirms v1.0.25, v1.0.24, unchanged shape-11 and the v1.0.26 candidate share schema 9 and all 56 normalized definitions; same-tag source/dependency hashes are recorded in origins.json. 2026-10-19 local v1.0.26 tag dereferences to 982c471b19a26ef790afb135c7d0c9d3d69c0702; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Bounded schema-only AST extraction confirms v1.0.26, v1.0.25, unchanged shape-11 and the v1.0.27 candidate share schema 9 and all 56 normalized definitions; same-tag source/dependency hashes are recorded in origins.json. 2026-10-21 local v1.0.27 tag dereferences to 272512db2892cff8cec4371b962f48ad8604e72b; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py at that exact commit. Its mcs/core/ledger.py, mcs/ops/mcs_requests.py, mcs/notify/notify_cards.py and mcs/core/mcs_util.py blobs are byte-identical to the recorded v1.0.26 hashes, so v1.0.27 shares unchanged shape-11 (schema 9, 56 normalized definitions) with v1.0.26 and the v1.0.28 candidate; same-tag source/dependency hashes are recorded in origins.json.",
     "claim": "Historical success is a recorded result, not a rerun of historical updater binaries. Current contract tests use stored synthetic objects and original DDL, without repository Git history."
   },
   "source_features": [
@@ -149,6 +149,11 @@
     },
     {
       "release": "v1.0.26",
+      "updater": true,
+      "standalone": true
+    },
+    {
+      "release": "v1.0.27",
       "updater": true,
       "standalone": true
     }
@@ -572,6 +577,18 @@
     },
     {
       "source": "v1.0.26",
+      "runtime": "standalone",
+      "entry": "host",
+      "external_plan": "standalone_external_apply"
+    },
+    {
+      "source": "v1.0.27",
+      "runtime": "hermes",
+      "entry": "target_bootstrap",
+      "external_plan": null
+    },
+    {
+      "source": "v1.0.27",
       "runtime": "standalone",
       "entry": "host",
       "external_plan": "standalone_external_apply"
