@@ -464,7 +464,8 @@ def test_record_stage_skips_malformed_meta_rows_fail_open(tmp_path):
     ({"calls": 1.5}, NOW + 3600),
     ({"tokens": -1}, NOW + 3600),
     ({}, float("nan")), ({}, float("inf")), ({}, True),
-])
+], ids=["bool-items", "negative-items", "fractional-calls", "negative-tokens",
+        "nan-expiry", "infinite-expiry", "bool-expiry"])
 def test_cohort_rejects_invalid_budgets_without_persistence(tmp_path,
                                                           ceilings, expiry):
     db = _ledger(tmp_path)
