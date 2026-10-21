@@ -2,7 +2,6 @@
 from __future__ import annotations
 import llm_availability
 
-import glob
 import os
 import shutil
 import sqlite3
@@ -62,15 +61,48 @@ def attachment_disk_low(free_mb: float | None) -> bool:
         and free_mb < floor + ATTACH_DISK_MARGIN_MB
 
 
+QUARANTINE_SCAN_MAX = 2048        # directory entries per health read
+QUARANTINE_SCAN_S = 0.5
+
+
+def quarantined_commands(data: str) -> int | None:
+    """*.json.invalid files in the two command queues (data/cmd and
+    data/cmd_int), each opened no-follow; None (unknown) once the scan
+    passes its entry or time bound, or a queue cannot be read."""
+    count, seen = 0, 0
+    stop = time.monotonic() + QUARANTINE_SCAN_S
+    for queue in ("cmd", "cmd_int"):
+        try:
+            fd = os.open(os.path.join(data, queue),
+                         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
+        try:
+            with os.scandir(fd) as entries:
+                for entry in entries:
+                    seen += 1
+                    if seen > QUARANTINE_SCAN_MAX or time.monotonic() > stop:
+                        return None
+                    count += entry.name.endswith(".json.invalid")
+        except OSError:
+            return None
+        finally:
+            os.close(fd)
+    return count
+
+
 def early_warnings(db, result: dict, free_mb: float | None) -> dict:
     """Fixed warning codes plus counts and byte sizes only — no paths,
     names or message text. Informational: overall and state_reasons keep
     their own rules, so a warning never pages by itself."""
     data = os.path.join(HOME, "data")
     out: dict = {"warnings": []}
-    out["cmd_quarantined"] = len(glob.glob(
-        os.path.join(glob.escape(data), "cmd*", "*.json.invalid")))
-    if out["cmd_quarantined"]:
+    out["cmd_quarantined"] = quarantined_commands(data)
+    if out["cmd_quarantined"] is None:
+        out["warnings"].append("cmd_quarantined_unknown")
+    elif out["cmd_quarantined"]:
         out["warnings"].append("cmd_quarantined")
     wal = None
     with suppress(sqlite3.Error, OSError, TypeError, IndexError):

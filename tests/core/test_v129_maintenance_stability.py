@@ -135,3 +135,23 @@ def test_retention_drops_only_unsent_superseded_renders_and_free_manifests(tmp_p
     assert {r[0] for r in con.execute(
         "SELECT manifest_id FROM notification_view_manifests")} == {2, 3, 4}
     db.close()
+
+
+def test_prune_leftovers_never_follows_a_symlinked_spool_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victims = [outside / ".pub-keep", outside / ".atomic.k.tmp"]
+    for f in victims:
+        f.write_bytes(b"x")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "archive_state").symlink_to(outside, target_is_directory=True)
+    real = tmp_path / "data" / "slack_render"
+    real.mkdir()
+    (real / ".pub-link").symlink_to(outside / ".pub-keep")   # a symlinked entry too
+    monkeypatch.setattr(maintenance, "LEFTOVER_KEEP_S", -60)  # everything is "old"
+    assert maintenance.prune_leftovers() == 0
+    assert all(f.exists() for f in victims)
+    assert (real / ".pub-link").is_symlink()

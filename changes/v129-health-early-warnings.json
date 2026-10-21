@@ -4,7 +4,8 @@
   "summary": "health に、隔離したコマンドファイルの件数、台帳の WAL ファイルの大きさ、読取り用コピーの検証が時間枠の60%を2回続けて超えたこと、空き容量が disk_low の手前まで減ったこと、手動で置いたバックアップの合計容量を、固定の警告コードと数値だけで記録します。処理が異常終了したときは、例外の種類と最も内側のファイル名・行番号を記録します。",
   "upgrade": "追加操作は不要です。警告は情報として記録するだけで、overall・state_reasons・監視通知の条件は変わりません。手動バックアップは削除しません。",
   "details": [
-    "新しいキー: warnings（cmd_quarantined / ledger_wal_large / snapshot_verify_near_budget / disk_space_low_soon）、cmd_quarantined、ledger_wal_bytes、snapshot_verify_slow_runs、manual_backup_bytes。",
+    "新しいキー: warnings（cmd_quarantined / ledger_wal_large / snapshot_verify_near_budget / disk_space_low_soon / cmd_quarantined_unknown）、cmd_quarantined、ledger_wal_bytes、snapshot_verify_slow_runs、manual_backup_bytes。",
+    "隔離件数は data/cmd と data/cmd_int だけを、シンボリックリンクをたどらずに数える。2048件または0.5秒を超えた場合と読めない場合は数えずに不明（null）とし、cmd_quarantined_unknown を記録する。",
     "WAL の警告は 256MB 超、空き容量の警告は MCS_DISK_GUARD_MB + 4096MB 未満（disk_low の基準 +2048MB より手前）で出す。",
     "異常終了時は errors に crash_site: （型名）@（ファイル名）:（行） を追加する。パス・例外の文言・患者情報は含めない。通知の detail は従来の crash: （型名） のまま。",
     "回帰: tests/ingest/test_v129_ingest_stability.py"

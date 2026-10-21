@@ -108,3 +108,31 @@ def test_early_warnings_are_codes_and_numbers_only(db, tmp_path, monkeypatch):
     assert health_report.early_warnings(db.db, result, None)["snapshot_verify_slow_runs"] == 0
     assert health_report.early_warnings(db.db, {}, None)["snapshot_verify_slow_runs"] == 1
     assert os.path.exists(backups / "hand-copy.db")       # never deleted
+
+
+def test_quarantine_count_reads_only_the_queues_and_is_bounded(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    for queue in ("cmd", "cmd_int", "cmd_results"):
+        (data / queue).mkdir(parents=True)
+    (data / "cmd" / "a.json.invalid").write_text("{}")
+    (data / "cmd_int" / "b.json.invalid").write_text("{}")
+    (data / "cmd_results" / "c.json.invalid").write_text("{}")   # not a queue
+    assert health_report.quarantined_commands(str(data)) == 2
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x.json.invalid").write_text("{}")
+    (data / "cmd").rename(tmp_path / "old_cmd")
+    (data / "cmd").symlink_to(outside, target_is_directory=True)
+    assert health_report.quarantined_commands(str(data)) is None   # never followed
+    (data / "cmd").unlink()
+    monkeypatch.setattr(health_report, "QUARANTINE_SCAN_MAX", 0)
+    assert health_report.quarantined_commands(str(data)) is None   # bound reached
+    ticks = [0.0]
+
+    def monotonic():                      # each read advances the clock 10s
+        ticks[0] += 10.0
+        return ticks[0]
+
+    monkeypatch.setattr(health_report, "QUARANTINE_SCAN_MAX", 2048)
+    monkeypatch.setattr(health_report.time, "monotonic", monotonic)
+    assert health_report.quarantined_commands(str(data)) is None   # time bound

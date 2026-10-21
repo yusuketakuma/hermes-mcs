@@ -598,13 +598,8 @@ def prune_leftovers() -> int:
     every *_render/ and *_state/ directory (render specs carry PHI).
     ctime: a quarantine rename keeps the original mtime."""
     cutoff = time.time() - LEFTOVER_KEEP_S
-    removed = 0
-    data = glob.escape(os.path.join(HOME, "data"))
-    spools = [os.path.join(data, "cmd_results"),
-              os.path.join(data, "*_render"), os.path.join(data, "*_state")]
-    for pattern in (*(os.path.join(spool, temp) for spool in spools
-                      for temp in (".atomic.*.tmp", ".pub-*", ".alias-*.tmp")),
-                    os.path.join(HOME, "data", "attachments", ".download-*.part"),
+    removed = _prune_spool_temporaries(os.path.join(HOME, "data"), cutoff)
+    for pattern in (os.path.join(HOME, "data", "attachments", ".download-*.part"),
                     os.path.join(HOME, "data", "cmd", "*.json.invalid"),
                     os.path.join(HOME, "data", "cmd_int", "*.json.invalid"),
                     *(os.path.join(directory, stage + sidecar)
@@ -616,6 +611,46 @@ def prune_leftovers() -> int:
                 if os.stat(path).st_ctime < cutoff:
                     os.unlink(path)
                     removed += 1
+    return removed
+
+
+def _atomic_temporary(name: str) -> bool:
+    return name.startswith(".pub-") or (
+        name.endswith(".tmp") and name.startswith((".atomic.", ".alias-")))
+
+
+def _prune_spool_temporaries(data: str, cutoff: float) -> int:
+    """Stale atomic-write temporaries in data/cmd_results, data/*_render
+    and data/*_state. Each directory is opened no-follow and pinned by
+    fd; entries are checked and unlinked relative to that fd, so a
+    symlinked spool directory (or entry) never reaches outside data/."""
+    removed = 0
+    try:
+        names = os.listdir(data)
+    except OSError:
+        return 0
+    for name in names:
+        if name != "cmd_results" and not name.endswith(("_render", "_state")):
+            continue
+        try:
+            fd = os.open(os.path.join(data, name),
+                         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            continue                     # symlink, not a directory, gone
+        try:
+            with os.scandir(fd) as entries:
+                for entry in entries:
+                    if not _atomic_temporary(entry.name):
+                        continue
+                    with suppress(OSError):
+                        st = os.stat(entry.name, dir_fd=fd, follow_symlinks=False)
+                        if stat.S_ISREG(st.st_mode) and st.st_ctime < cutoff:
+                            os.unlink(entry.name, dir_fd=fd)
+                            removed += 1
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
     return removed
 
 
