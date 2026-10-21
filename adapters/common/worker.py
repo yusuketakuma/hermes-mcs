@@ -651,13 +651,23 @@ class DeliveryWorker:
             claim, part, outcome["result"],
             remote_id=outcome.get("remote_id"),
             error_code=outcome.get("error_code"))
+        origin = {}
+        if (part["kind"] == "attachment_part" and not part.get("unavailable")
+                and outcome["result"] == "delivered"
+                and outcome.get("attachment_origin") in ("upload", "remote_match", "edit")):
+            # The same fsync as the result binds how this exact sealed file was delivered.
+            origin["attachment_origin"] = {
+                "method": outcome["attachment_origin"],
+                "attachment_id": part["attachment_id"],
+                "sha256": part["sha256"], "bytes": part["bytes"],
+                "thread_id": ctx.get("thread_id")}
         self._journal("result", attempt_id=aid,
                       delivery_id=spec["delivery_id"],
                       part_id=part["part_id"], kind=part["kind"],
                       result=outcome["result"],
                       remote_id=outcome.get("remote_id"),
                       error_code=outcome.get("error_code"),
-                      receipt_envelope=env)
+                      receipt_envelope=env, **origin)
         await asyncio.to_thread(
             envelopes.publish_command, self._dirs["cmd_int"], env)
         self._journal("receipt", attempt_id=aid,

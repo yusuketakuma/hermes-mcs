@@ -64,7 +64,7 @@ def test_slack_same_owned_file_edits_message_caption_and_returns_file_id(led):
             "edit_only": True, "name": "synthetic.pdf", "bytes": 10, "sha256": "a" * 64, "caption": "metadata only"}
     posted = len(w.client.thread_posts)
     out = asyncio.run(w.worker._attachment_part(spec, part, {"thread_id": ROOT_TS, "history": copy.deepcopy(replies), "consumed": set()}))
-    assert out == {"result": "delivered", "remote_id": "F_SYN"}
+    assert out == {"result": "delivered", "remote_id": "F_SYN", "attachment_origin": "edit"}
     assert _updates(w)[-1]["ts"] == target["ts"] and _updates(w)[-1]["text"] == "metadata only"
     assert len(w.client.thread_posts) == posted
     target["files"][0]["editable"] = True
@@ -146,7 +146,7 @@ def test_slack_user_only_file_caption_edits_exact_shared_message(led):
     before = writes(w)
     ctx = {"thread_id": ROOT_TS, "history": None, "consumed": set()}
     out = asyncio.run(w.worker._attachment_part(spec, part, ctx))
-    assert out == {"result": "delivered", "remote_id": "F_SYN"}
+    assert out == {"result": "delivered", "remote_id": "F_SYN", "attachment_origin": "edit"}
     assert writes(w)[len(before):] == [("update", _updates(w)[-1])]
     assert _updates(w)[-1]["ts"] == target["ts"]
     assert _updates(w)[-1]["text"] == part["caption"]
@@ -159,7 +159,7 @@ def test_slack_user_only_shared_file_is_reused_without_upload(led):
     before = writes(w)
     ctx = {"thread_id": ROOT_TS, "history": None, "consumed": set()}
     out = asyncio.run(w.worker._attachment_part(spec, part, ctx))
-    assert out == {"result": "delivered", "remote_id": "F_SYN"}
+    assert out == {"result": "delivered", "remote_id": "F_SYN", "attachment_origin": "remote_match"}
     assert writes(w) == before
     assert ctx["consumed"] == {"F_SYN"}
 
@@ -289,7 +289,7 @@ def test_slack_caption_refreshes_exact_file_metadata_once(led, stale):
     before = writes(w)
     out = asyncio.run(w.worker._attachment_part(
         spec, part, {"thread_id": ROOT_TS, "history": replies, "consumed": set()}))
-    assert out == {"result": "delivered", "remote_id": "F_SYN"}
+    assert out == {"result": "delivered", "remote_id": "F_SYN", "attachment_origin": "edit"}
     assert reads == [{"file": "F_SYN", "limit": 1}]
     assert len(writes(w)) == len(before) + 1
     assert _updates(w)[-1]["ts"] == target["ts"]

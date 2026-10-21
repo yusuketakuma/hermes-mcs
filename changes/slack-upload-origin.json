@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "Slack添付のアップロードと既存ファイル照合を配送記録で区別",
+  "summary": "新しく処理するSlack添付について、アップロードの成功応答を受けた場合、既存ファイルに照合した場合、既存の添付説明を編集した場合を区別して記録します。配送済みという結果だけから、アップロードしたと推測する必要をなくします。",
+  "upgrade": "通常の更新手順で配送workerへ反映してください。既存の証拠不足の記録をアップロード済みへ変更せず、添付説明の保留・サイズやハッシュの照合条件・不明な送信の再送禁止を維持します。記録は既存のジャーナル保存・整理条件に従い、永久の証明書やSlack側の内容同一性の証明ではありません。",
+  "details": [
+    "既存result行のattachment_originにupload/remote_match/edit、封印済みattachment_id・sha256・bytesと送信先thread_idを保存する。同じ行のremote_idとreceipt_envelopeがdelivery_id・part_id・payload_hash・routeを束縛する。path・本文・添付説明は追加しない。",
+    "送信結果の通知前に既存のfsyncで記録する。通知の保存失敗後は結果を再通知し、再アップロードしない。応答不明・取得失敗の表示行を実アップロードの証拠にしない。DB schema・既存receiptの形式・公開条件は変更しない。",
+    "回帰: tests/adapters/slack/test_slack_upload_origin.py。実Slackへの接続・実ファイルの再送・本番の保留解除は行わない。"
+  ],
+  "refs": ["adapters/slack/delivery.py", "adapters/common/worker.py"]
+}
