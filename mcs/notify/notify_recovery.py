@@ -511,6 +511,8 @@ def _part_resolution_journal_error(ledger, req):
                        and witness["delivery_id"] in cancelled for witness in witnesses) and (
                         row.get("phase") not in ("claimed", "begin", "denied")
                         or row.get("result") in ("delivered", "unknown")):
+                    if _withdrawn_before_grant(db, record, cancelled):
+                        continue
                     return "preflight_target_unverified"
         return None
     rows = [row for record in attempts.values() for row in record["rows"]
@@ -528,6 +530,59 @@ def _part_resolution_journal_error(ledger, req):
     if proof == "api_rejected" and not any(row.get("phase") == "result" and row.get("result") == "not_sent" for row in rows):
         return "api_rejection_unproven"
     return None
+
+
+def _withdrawn_before_grant(db, record, cancelled):
+    # _settle_orphan_claim emits receipt directly from begin_sent. The
+    # same error code also exists after a grant, so prove the entire path.
+    import notify_cmds
+    rows = record["rows"]
+    if (record["tainted"] or len(rows) < 3 or rows[0].get("phase") != "claimed"
+            or rows[-1].get("phase") != "receipt"
+            or any(row.get("phase") != "begin" for row in rows[1:-1])):
+        return False
+    delivery_id, aid, worker = (rows[0].get(key) for key in ("delivery_id", "attempt_id", "worker_id"))
+    if not isinstance(delivery_id, str) or delivery_id not in cancelled:
+        return False
+    render = render_row(db, delivery_id)
+    echo = {**stored_scope(render), "version": 2, "attempt_id": aid,
+            **{key: render[key] for key in ("delivery_id", "render_rev", "payload_hash", "route_epoch")}}
+    first_begin = rows[1].get("begin_envelope")
+    for index, row in enumerate(rows):
+        if (row.get("v") != 1 or row.get("delivery_id") != delivery_id or row.get("attempt_id") != aid
+                or row.get("worker_id") != worker or row.get("part_id") is not None or row.get("kind") is not None
+                or row.get("message_id") is not None or row.get("remote_id") is not None):
+            return False
+        if index == len(rows) - 1:
+            if (row.get("result") != "not_sent" or row.get("error_code") != "spec_withdrawn"
+                    or "receipt_envelope" in row):
+                return False
+        elif row.get("result") is not None or row.get("error_code") is not None:
+            return False
+        elif index == 0:
+            if row.get("render_rev") != render["render_rev"] or row.get("op") != render["op"]:
+                return False
+        else:
+            begin, receipt = row.get("begin_envelope"), row.get("receipt_envelope")
+            for env, expected in ((begin, {**echo, "op": "transport_begin", "worker_id": worker}),
+                                  (receipt, {**echo, "op": "transport_receipt", "result": "unknown",
+                                             "correlation": render["correlation"]})):
+                if (not isinstance(env, dict) or notify_cmds.validate_int(env)
+                        or any(env.get(key) != value for key, value in expected.items())
+                        or env.get("message_id") is not None or env.get("error_code") is not None):
+                    return False
+            if begin != first_begin or row.get("command_id") != begin["command_id"]:
+                return False
+    attempts = db.execute("SELECT * FROM notification_delivery_attempts WHERE attempt_id=? OR begin_command_id=?",
+                          (aid, first_begin["command_id"])).fetchall()
+    if not attempts:
+        return True
+    if len(attempts) != 1:
+        return False
+    attempt = attempts[0]
+    return (attempt["attempt_id"] == aid and attempt["state"] == "not_sent" and attempt["delivery_id"] == delivery_id
+            and attempt["worker_id"] == worker and attempt["message_id"] is None
+            and attempt["begin_command_id"] == first_begin["command_id"])
 
 
 def _unstarted_cancelled_renders(db, card_id):

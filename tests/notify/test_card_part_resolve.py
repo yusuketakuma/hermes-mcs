@@ -617,3 +617,90 @@ def test_cancelled_render_with_send_evidence_still_blocks_preflight_recovery(led
                      "delivery_id": cancelled, "phase": evidence.removeprefix("journal_"), "result": "unknown"})
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     reject_preflight(led, req, monkeypatch, "preflight_target_unverified")
+
+
+def cancelled_withdrawal(led, monkeypatch, *, stored_attempt=True, begins=2):
+    from adapters.common import envelopes
+    from notify_scope import stored_scope
+    from slack_testkit import SLACK
+    req, _, _, path, rows = preflight_recovery(led, monkeypatch, cancelled=True)
+    cancelled = led.db.execute("SELECT * FROM notification_renders WHERE state='cancelled'").fetchone()
+    # Envelope construction only needs the preserved identity, never the old caption.
+    claim = {"attempt_id": "e" * 16, "worker_id": "b" * 16, "payload_hash": cancelled["payload_hash"],
+             "spec": {"delivery_id": cancelled["delivery_id"], "render_rev": cancelled["render_rev"],
+                      "delivery": {**stored_scope(cancelled), "route_epoch": cancelled["route_epoch"],
+                                   "correlation": cancelled["correlation"]}}}
+    begin = envelopes.transport_begin(claim)
+    if stored_attempt:
+        assert transport.apply_transport_begin(led, begin, SLACK, now=NOW + 2)["error"] == "denied_render_cancelled"
+        assert transport.apply_transport_receipt(led, envelopes.transport_receipt(
+            claim, "not_sent", error_code="spec_withdrawn"), SLACK, now=NOW + 2)["applied"]
+    identity = {"v": 1, "ts": NOW, "worker_id": claim["worker_id"],
+                "attempt_id": claim["attempt_id"], "delivery_id": cancelled["delivery_id"]}
+    withdrawn = [{**identity, "phase": "claimed", "render_rev": cancelled["render_rev"], "op": cancelled["op"]}]
+    withdrawn.extend({**identity, "phase": "begin", "command_id": begin["command_id"],
+                      "begin_envelope": dict(begin), "receipt_envelope": envelopes.transport_receipt(claim, "unknown")}
+                     for _ in range(begins))
+    withdrawn.append({**identity, "phase": "receipt", "result": "not_sent", "error_code": "spec_withdrawn"})
+    return req, path, rows, withdrawn
+
+
+@pytest.mark.parametrize("stored_attempt", [False, True])
+@pytest.mark.parametrize("begins", [1, 2])
+def test_cancelled_pregrant_withdrawal_allows_only_exact_edit_recovery(led, monkeypatch, stored_attempt, begins):
+    from slack_testkit import SLACK
+    req, path, rows, withdrawn = cancelled_withdrawal(led, monkeypatch, stored_attempt=stored_attempt, begins=begins)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows + withdrawn))
+    original_journal = path.read_bytes()
+    cancelled = withdrawn[0]["delivery_id"]
+    before = [dict(row) for row in led.db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=?", (cancelled,))]
+    receipt = notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 3)
+    assert receipt["outcome"] == "applied" and receipt["part_state"] == "not_sent"
+    assert path.read_bytes() == original_journal
+    assert [dict(row) for row in led.db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=?", (cancelled,))] == before
+
+
+@pytest.mark.parametrize("change", ["grant", "started", "result", "receipt_twice", "missing_claim", "missing_begin",
+    "error", "unknown", "scope", "manifest", "changed_begin", "placeholder", "worker", "attempt", "db_command", "db_unknown", "db_split"])
+def test_withdrawal_exception_rejects_any_drift_in_its_proof(led, monkeypatch, change):
+    req, path, rows, withdrawn = cancelled_withdrawal(led, monkeypatch)
+    if change in ("grant", "started", "result"):
+        withdrawn.insert(-1, {**withdrawn[-1], "phase": "granted" if change == "grant" else change})
+    elif change == "receipt_twice":
+        withdrawn.append(dict(withdrawn[-1]))
+    elif change == "missing_claim":
+        withdrawn.pop(0)
+    elif change == "missing_begin":
+        withdrawn = [withdrawn[0], withdrawn[-1]]
+    elif change == "error":
+        withdrawn[-1]["error_code"] = "worker_restart"
+    elif change == "unknown":
+        withdrawn[-1]["result"] = "unknown"
+    elif change == "scope":
+        withdrawn[1]["begin_envelope"]["channel_id"] = "C_OTHER"
+    elif change == "manifest":
+        withdrawn[1]["begin_envelope"]["payload_hash"] = "c" * 64
+    elif change == "changed_begin":
+        withdrawn[2]["begin_envelope"]["command_id"] = _uuid(993)
+        withdrawn[2]["command_id"] = _uuid(993)
+    elif change == "placeholder":
+        withdrawn[1]["receipt_envelope"]["result"] = "delivered"
+        withdrawn[1]["receipt_envelope"]["message_id"] = "1790000009.000001"
+    elif change == "worker":
+        withdrawn[-1]["worker_id"] = "c" * 16
+    elif change == "attempt":
+        withdrawn[-1]["attempt_id"] = "f" * 16
+    elif change == "db_split":
+        with led.db:
+            led.db.execute("UPDATE notification_delivery_attempts SET begin_command_id=? WHERE attempt_id=?",
+                           (_uuid(993), withdrawn[0]["attempt_id"]))
+            led.db.execute("INSERT INTO notification_delivery_attempts(attempt_id,delivery_id,begin_command_id,state,worker_id,created_at) "
+                           "VALUES(?,?,?,'not_sent',?,?)", ("f" * 16, withdrawn[0]["delivery_id"],
+                           withdrawn[1]["command_id"], withdrawn[0]["worker_id"], NOW))
+    else:
+        column, value = ("begin_command_id", _uuid(993)) if change == "db_command" else ("state", "unknown")
+        with led.db:
+            led.db.execute("UPDATE notification_delivery_attempts SET " + column + "=? WHERE attempt_id=?",
+                           (value, withdrawn[0]["attempt_id"]))
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows + withdrawn))
+    reject_preflight(led, req, monkeypatch, "preflight_target_unverified")
