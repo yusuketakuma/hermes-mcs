@@ -363,6 +363,15 @@ def _job_failure_reason(error: MCSError) -> str:
     return "fetch_error"
 
 
+def _job_retry(ledger, job_id: int, error: MCSError, retry_in: float = 300, **kw):
+    """job_retry, except a locally refused rate_limited read (never sent) defers without an attempt."""
+    if error.kind == "rate_limited":
+        ledger.job_defer(job_id, retry_in, kw.get("payload"),
+                         reason_code=kw.get("reason_code"))
+    else:
+        ledger.job_retry(job_id, retry_in, **kw)
+
+
 def run_reply_jobs(adapter, ledger, result, deadline,
                    semantic: bool = False,
                    notify_max_age_s: float | None = None):
@@ -411,7 +420,7 @@ def run_reply_jobs(adapter, ledger, result, deadline,
         except SessionExpired:
             raise  # auth failure aborts the run — never consumed as job retry
         except MCSError as e:
-            ledger.job_retry(job["job_id"], reason_code=_job_failure_reason(e))
+            _job_retry(ledger, job["job_id"], e, reason_code=_job_failure_reason(e))
             result["errors"].append(
                 f"reply {job['message_id']}: {e.kind}")
             continue
@@ -444,8 +453,8 @@ def run_reply_jobs(adapter, ledger, result, deadline,
                     ledger.job_defer(job["job_id"], 300, payload=pl,
                                      reason_code=reason)
                 else:
-                    ledger.job_retry(job["job_id"], 300, payload=pl,
-                                     reason_code=reason)
+                    _job_retry(ledger, job["job_id"], window_error, 300, payload=pl,
+                               reason_code=reason)
             result["errors"].append(f"thread {job['parent_id']}: {window_error.kind}")
             if isinstance(window_error, SessionExpired):
                 raise window_error
@@ -534,7 +543,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
         except SessionExpired:
             raise
         except MCSError as e:
-            ledger.job_retry(job["job_id"], reason_code=_job_failure_reason(e))
+            _job_retry(ledger, job["job_id"], e, reason_code=_job_failure_reason(e))
             result["errors"].append(f"import {pid}: {e.kind}")
             continue
         hist = batch.messages
@@ -611,8 +620,8 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                 ledger.job_defer(job["job_id"], 300, payload=pl,
                                  reason_code=_job_failure_reason(batch.error))
             else:
-                ledger.job_retry(job["job_id"], 300, payload=pl,
-                                 reason_code=_job_failure_reason(batch.error))
+                _job_retry(ledger, job["job_id"], batch.error, 300, payload=pl,
+                           reason_code=_job_failure_reason(batch.error))
         elif pl.get("stalls", 0) >= HISTORY_STALL_LIMIT:
             # window can never certify (e.g. 'snippet' parent whose full
             # body has no API surface) — fail visibly; the job is still
@@ -703,9 +712,9 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
         except MCSError as e:
             # plain attempt budget: a first-attempt permanent failure would
             # drop the row and the reseed would lose page/passes/last_pass_at
-            ledger.job_retry(job["job_id"], 300,
-                             reason_code=_job_failure_reason(e),
-                             fail_fast=False)
+            _job_retry(ledger, job["job_id"], e, 300,
+                       reason_code=_job_failure_reason(e),
+                       fail_fast=False)
             result["errors"].append(f"reconcile {pid}: {e.kind}")
             continue
         merged = merge_full_replies(adapter, batch.messages, 0, deadline,
@@ -747,9 +756,9 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
                                  reason_code=_job_failure_reason(batch.error))
                 raise batch.error
             else:
-                ledger.job_retry(job["job_id"], 300, payload=pl,
-                                 reason_code=_job_failure_reason(batch.error),
-                                 fail_fast=False)
+                _job_retry(ledger, job["job_id"], batch.error, 300, payload=pl,
+                           reason_code=_job_failure_reason(batch.error),
+                           fail_fast=False)
             result["errors"].append(f"reconcile {pid}: {batch.error.kind}")
         else:
             ledger.job_defer(job["job_id"],

@@ -102,3 +102,63 @@ def test_human_approved_stamp_post_is_not_refused_locally(monkeypatch):
     adapter._rate_limited = mcs_adapter.RATE_LIMIT_STOP
     assert adapter.write_reaction(1, next(iter(mcs_adapter.REACTION_LABELS))) == 200
     assert len(calls) == 1
+
+
+def _job_rows(db, ids):
+    return {r["kind"]: (r["state"], r["attempts"], r["next_try"]) for r in db.db.execute(
+        "SELECT kind,state,attempts,next_try FROM fetch_jobs WHERE job_id IN (%s)"
+        % ",".join("?" * len(ids)), ids)}
+
+
+def test_locally_refused_jobs_keep_attempts_and_complete_with_a_fresh_adapter(tmp_path, monkeypatch):
+    import mcs_contract
+    import job_ops
+    from ingest_testkit import _ledger, _message
+
+    db = _ledger(tmp_path)
+    db.ensure_patient(91)
+    db.job_add("reply", 91, 501, parent_id=500)
+    db.job_add("thread", 91, 600, parent_id=600, payload={"page": 1})
+    db.job_add("history", 91, payload={"since": 0, "page": 1, "pages": 2})
+    db.job_add("reconcile", 91, payload={"page": 1})
+    db.db.execute("UPDATE fetch_jobs SET attempts=7")
+    db.db.commit()
+    ids = [r[0] for r in db.db.execute("SELECT job_id FROM fetch_jobs")]
+    assert len(ids) == 4
+
+    adapter, calls, _sleeps = _adapter(monkeypatch, iter([429, 429]))
+    with pytest.raises(MCSError):
+        adapter._request("GET", "/projects")     # an unrelated read exhausts the run
+    assert len(calls) == 2
+
+    def drain(a):
+        db.db.execute("UPDATE fetch_jobs SET next_try=0")
+        db.db.commit()
+        result = {"errors": []}
+        job_ops.run_reply_jobs(a, db, result, time.monotonic() + 60)
+        job_ops.run_history_jobs(a, db, result, time.monotonic() + 60, min_margin=0)
+        job_ops.run_reconcile_jobs(a, db, result, time.monotonic() + 60)
+        return result
+
+    result = drain(adapter)
+    assert len(calls) == 2                       # no further transport request
+    assert result["errors"]
+    rows = _job_rows(db, ids)
+    assert {k: v[:2] for k, v in rows.items()} == {
+        k: ("pending", 7) for k in ("reply", "thread", "history", "reconcile")}
+    assert min(v[2] for v in rows.values()) > time.time()   # deferred, not due now
+
+    class Fresh:
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(
+                [_message(mid=parent_id + 1, project_id=pid, parent_id=parent_id)],
+                pages=1, reached=True)
+
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            return mcs_contract.MessageBatch([], pages=1, reached=True)
+
+    drain(Fresh())
+    rows = _job_rows(db, ids)
+    assert rows["reply"][0] == rows["thread"][0] == rows["history"][0] == "done"
+    assert rows["reconcile"][0] == "pending"     # rotating job: next pass, never failed
+    db.close()
