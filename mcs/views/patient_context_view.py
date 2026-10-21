@@ -252,7 +252,7 @@ def previsit(db, ev, now, *, days=7) -> dict:
                 posts.add(row["message_id"])
                 picked[group].append(row)
     return {"view": "previsit", "recent": changes(db, ev, now - days * 86400)["by_discovery"], **picked,
-            "next_planned": talk["next_planned"], "as_of": ev["as_of"]}
+            "next_planned": talk["next_planned"], "as_of": ev["as_of"], "coverage": ev["coverage"]}
 
 
 def timeline(ev, categories=None) -> dict:

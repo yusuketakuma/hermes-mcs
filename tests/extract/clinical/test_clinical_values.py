@@ -249,3 +249,20 @@ def test_item_scope_group_default_is_unknown_without_explicit_patient_source():
     item = {"evidence": "Cr 0.9mg/dL"}
     assert clinical_values.patient_item_scope(item, "Cr 0.9mg/dL", default="unknown") == "unknown"
     assert clinical_values.patient_item_scope(item, "本人はCr 0.9mg/dL", default="unknown") == "patient"
+
+
+@pytest.mark.parametrize("name,value,unit,quote,expected", [
+    ("K", "4.1", "%", "K 4.1%", "unverified"),
+    ("Cr", "1.2", "g", "Cr 1.2g", "unverified"),
+    ("INR", "2.1", "kg", "INR 2.1kg", "unverified"),
+    ("HbA1c", "7.2", "mg/dL", "HbA1c 7.2mg/dL", "unverified"),
+    ("K", "4.1", "mEq/L", "K 4.1mEq/L", "quote_supported"),
+    ("K", "4.1", "mmol/L", "K 4.1mmol/L", "quote_supported"),
+    ("Cr", "1.2", "mg/dL", "Cr 1.2mg/dL", "quote_supported"),
+    ("HbA1c", "7.2", "%", "HbA1c 7.2%", "quote_supported"),
+    ("INR", "2.1", None, "INR 2.1", "quote_supported"),
+    ("体重", "52", "kg", "体重52kg", "quote_supported"),
+    ("eGFR", "45", "mL/min/1.73m2", "eGFR 45mL/min/1.73m2", "quote_supported"),
+])
+def test_lab_candidate_unit_must_fit_the_named_item(name, value, unit, quote, expected):
+    assert clinical_values.lab_candidate(name, value, unit, quote)["confirmation"] == expected

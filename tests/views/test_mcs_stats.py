@@ -140,6 +140,43 @@ def test_med_change_followup_suppressed_by_request(db):
     assert st["no_followup_record"]["total"] == 0
 
 
+def test_med_change_followup_deleted_post_is_not_a_followup(db):
+    _msg(db, 1, chash="h1", ts=SNAP_TS - 30 * 86400)
+    _extract(db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(db, 2, ts=SNAP_TS - 29 * 86400, state="deleted")
+    assert run(db, stat="med_change_followup")["med_change_followup"]["no_followup_record"]["total"] == 1
+
+
+def test_med_change_followup_uses_signal_patient_scope(db):
+    """Same scoping as the signal: family-scoped items, archived rooms and corrupt rows are not counted."""
+    _msg(db, 1, chash="h1", ts=SNAP_TS - 30 * 86400)
+    db.execute("UPDATE messages SET body_text=? WHERE message_id=1", ("母の状態：\n合成薬Aを開始。",))
+    db.execute("INSERT INTO artifacts(kind,message_id,content,meta) VALUES ('extract_llm',1,?,?)", (json.dumps(
+        {"meds": [{"name": "合成薬A", "action": "start", "evidence": "合成薬Aを開始"}]}), json.dumps({"hash": "h1"})))
+    _msg(db, 2, pid=2, chash="h2", ts=SNAP_TS - 30 * 86400)
+    _extract(db, 2, "h2", [{"name": "薬B", "action": "stop"}])
+    db.execute("INSERT INTO patients(project_id,is_archived) VALUES (2,1)")
+    _msg(db, 3, pid=3, chash="h3", ts=SNAP_TS - 30 * 86400)
+    db.execute("INSERT INTO artifacts(kind,message_id,content,meta) VALUES ('extract_llm',3,'{broken',?)",
+               (json.dumps({"hash": "h3"}),))
+    _msg(db, 4, pid=4, chash="h4", ts=SNAP_TS - 30 * 86400)
+    _extract(db, 4, "h4", [{"name": "薬D", "action": "stop"}])
+    st = run(db, stat="med_change_followup")["med_change_followup"]
+    assert st["status"] == "ok"
+    assert [r["message_id"] for r in st["no_followup_record"]["items"]] == [4]
+    assert "合成薬A" not in json.dumps(run(db, stat="meds")["meds"], ensure_ascii=False)
+
+
+def test_med_change_followup_uses_approved_followup_days(db):
+    db.row_factory = sqlite3.Row   # as on the ledger snapshot connection the stats read in production
+    db.execute("INSERT INTO artifacts(kind,message_id,content,meta) VALUES ('signal_policy_v1',NULL,?,NULL)",
+               (json.dumps({"command_id": "c", "actor": "t", "policy": {"followup_days": 3}}),))
+    _msg(db, 1, chash="h1", ts=SNAP_TS - 5 * 86400)
+    _extract(db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(db, 2, ts=SNAP_TS - 1 * 86400)   # 4 days later: outside the approved 3-day window
+    assert run(db, stat="med_change_followup")["med_change_followup"]["no_followup_record"]["total"] == 1
+
+
 def test_transition_reconciliation_stat(db):
     _msg(db, 1, chash="h1", ts=SNAP_TS - 5 * 86400)
     _extract(db, 1, "h1", [], events=["discharge"])
@@ -195,7 +232,7 @@ def test_open_loop_partial_honesty(db):
 def test_overview_counts(db):
     _msg(db, 1, pid=1)
     _msg(db, 2, pid=2, sender=2, prof="薬剤師")
-    db.execute("INSERT INTO patients VALUES (1,0,'ok',0),(2,1,'done',0)")
+    db.execute("INSERT INTO patients VALUES (1,0,'ok',0,NULL),(2,1,'done',0,NULL)")
     st = run(db, stat="overview")["overview"]
     assert st["rooms_total"] == 2 and st["posts_in_scope"] == 2
     assert st["rooms_by_state"]["archived"] == 1
@@ -204,7 +241,7 @@ def test_overview_counts(db):
 def test_overview_project_scope_hides_other_rooms(db):
     _msg(db, 1, pid=1, ts=1789900000)
     _msg(db, 2, pid=2, sender=2, prof="薬剤師", ts=1789800000)
-    db.execute("INSERT INTO patients VALUES (1,0,'ok',0),(2,1,'done',0)")
+    db.execute("INSERT INTO patients VALUES (1,0,'ok',0,NULL),(2,1,'done',0,NULL)")
     st = run(db, stat="overview", project=1)["overview"]
     assert st["rooms_total"] == 1 and st["posts_in_scope"] == 1
     assert st["rooms_by_state"] == {"ok": 1}

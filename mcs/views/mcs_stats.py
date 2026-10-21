@@ -37,6 +37,7 @@ import drug_map
 import extraction_audit
 import stats_contract
 import clinical_urgency
+from clinical_values import patient_item_scope
 import mcs_queries
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
@@ -361,19 +362,30 @@ def _med_messages(db, scope, extra_sql="", extra_params=()):
     NEWEST row wins, as in every display reader (structured_view)."""
     w, p = stats_contract.message_scope_sql(scope)
     rows = db.execute(
-        f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content
+        f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content,
+                   m.body_text, pt.patient_name
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
+            LEFT JOIN patients pt ON pt.project_id=m.project_id
             WHERE a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred()}
               {extra_sql}{w}
             ORDER BY a.artifact_id DESC""",
         [*extra_params, *p])
     seen = set()
-    for pid, mid, ts, content in rows:
+    for pid, mid, ts, content, body, name in rows:
         if mid in seen:
             continue
+        # a corrupt newest row still claims the message: an older row is not its current reading
         seen.add(mid)
-        meds = json.loads(content).get("meds") or []
+        try:
+            doc = json.loads(content)
+        except (json.JSONDecodeError, TypeError, RecursionError):
+            continue
+        meds = doc.get("meds") if isinstance(doc, dict) else None
+        if not isinstance(meds, list):
+            continue
+        # the same source-span patient scope the signal detectors apply (_patient_fact_keys)
+        meds = [x for x in meds if isinstance(x, dict) and patient_item_scope(x, body, patient_name=name, surface=x.get("name")) == "patient"]
         if meds:
             yield pid, mid, ts, meds
 
@@ -655,11 +667,14 @@ def st_med_change_followup(db, scope):
     as_of) with no subsequent room post within 7d. 'No follow-up
     record found' — never 'no follow-up happened'. A request row
     referencing the message counts as a visible follow-up."""
-    cutoff = scope["as_of"] - 7 * DAY_S
+    from signal_policy import resolved_thresholds
+    window = resolved_thresholds(db)["followup_days"] * DAY_S   # the approved signal window (default 7d)
+    cutoff = scope["as_of"] - window
     total, no_follow = 0, []
+    # archived rooms are excluded as in the med_change_no_followup signal
     for pid, mid, ts, meds in _med_messages(
             db, scope, "AND m.posted_at_ts IS NOT NULL"
-            " AND m.posted_at_ts <= ?", (cutoff,)):
+            " AND m.posted_at_ts <= ? AND COALESCE(pt.is_archived,0)=0", (cutoff,)):
         # CHANGE_ACTIONS only — a "none" (no-change) mention is not a
         # change; negated/other-person/historical mentions are filtered
         # by the same predicate the signal detector uses
@@ -676,8 +691,9 @@ def st_med_change_followup(db, scope):
             continue
         follow = db.execute(
             "SELECT 1 FROM messages WHERE project_id=? "
-            "AND posted_at_ts > ? AND posted_at_ts <= ? LIMIT 1",
-            (pid, ts, ts + 7 * DAY_S)).fetchone()
+            "AND posted_at_ts > ? AND posted_at_ts <= ? "
+            "AND body_state IS NOT 'deleted' LIMIT 1",
+            (pid, ts, ts + window)).fetchone()
         if not follow:
             no_follow.append({"project_id": pid, "message_id": mid})
     return stats_contract.stat_result("ok", scope, {

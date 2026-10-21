@@ -147,6 +147,12 @@ def test_previsit_lists_every_check_once_per_post_without_fixed_cap(ctx):
     assert [r["message_id"] for r in note["unanswered"]] == [4, 3, 2]  # newest first; post 5 not repeated; no cap
 
 
+def test_previsit_carries_coverage_like_handoff(ctx):
+    """A missing reply is only 返答が見つからない within what was fetched; previsit says how much that is."""
+    ev = pcv.evidence(ctx.db.db, 1)
+    assert pcv.previsit(ctx.db.db, ev, T0 + 7 * DAY)["coverage"] == ev["coverage"] == pcv.handoff(ctx.db.db, ev)["coverage"]
+
+
 def test_residual_values_without_written_dates_are_not_assumed_simultaneous(ctx):
     got = pcv.discrepancies(pcv.evidence(ctx.db.db, 1))["items"]
     assert len(got) == 1 and got[0]["identity"] == ["架空薬"] and got[0]["kind"] == "time_unknown"

@@ -59,19 +59,36 @@ def approved_policy(db):
     return artifact_id, content
 
 
-def resolved_thresholds(db):
-    """Resolved thresholds: defaults overlaid by the latest approved
-    signal_policy_v1 artifact. Malformed/out-of-range values in the
-    artifact are ignored per key rather than failing the whole run."""
+# (delay, max-age): a detector looks at posts aged between these two, so a
+# max-age at or below the delay leaves an empty window that reads as "no signals"
+WINDOW_PAIRS = (("followup_days", "followup_max_age_d"),
+                ("request_response_days", "fyi_max_age_d"))
+
+
+def resolved_policy(db):
+    """(thresholds, warnings): resolved_thresholds plus fixed warning codes
+    (threshold_window_clamped:<max-age key>) for combinations that were
+    clamped because they would leave a detector window empty."""
     th = {name: default for name, (default, lo, hi)
           in THRESHOLDS.items()}
+    warnings = []
     approved = approved_policy(db)
-    if approved is None:
-        return th
-    policy = approved[1].get("policy")
+    policy = approved[1].get("policy") if approved is not None else None
     if isinstance(policy, dict):
         for name, (_default, lo, hi) in THRESHOLDS.items():
             v = policy.get(name)
             if type(v) is int and lo <= v <= hi:
                 th[name] = v
-    return th
+    for delay, max_age in WINDOW_PAIRS:
+        if th[max_age] <= th[delay]:
+            th[max_age] = th[delay] + 1   # keep at least one day of window
+            warnings.append(f"threshold_window_clamped:{max_age}")
+    return th, warnings
+
+
+def resolved_thresholds(db):
+    """Resolved thresholds: defaults overlaid by the latest approved
+    signal_policy_v1 artifact. Malformed/out-of-range values in the
+    artifact are ignored per key rather than failing the whole run;
+    a max-age that would empty its detector window is clamped (see resolved_policy)."""
+    return resolved_policy(db)[0]

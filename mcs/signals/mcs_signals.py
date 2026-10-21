@@ -45,7 +45,7 @@ from self_identity import self_sets
 
 from signal_policy import (
     approved_policy,
-    resolved_thresholds,
+    resolved_policy,
 )
 import clinical_urgency
 
@@ -263,7 +263,8 @@ def _med_followup(db, now, th, sig_cfg):
               AND NOT EXISTS (SELECT 1 FROM messages m2
                               WHERE m2.project_id=mm.pid
                                 AND m2.posted_at_ts > mm.ts
-                                AND m2.posted_at_ts <= mm.ts + ?)
+                                AND m2.posted_at_ts <= mm.ts + ?
+                                AND m2.body_state IS NOT 'deleted')
               -- gate: the LATEST mention of this med must itself have
               -- passed the window with no visible follow-up
               AND lm.ts <= ?
@@ -272,7 +273,8 @@ def _med_followup(db, now, th, sig_cfg):
               AND NOT EXISTS (SELECT 1 FROM messages m3
                               WHERE m3.project_id=lm.pid
                                 AND m3.posted_at_ts > lm.ts
-                                AND m3.posted_at_ts <= lm.ts + ?)
+                                AND m3.posted_at_ts <= lm.ts + ?
+                                AND m3.body_state IS NOT 'deleted')
             ORDER BY mm.pid, mm.med, mm.mid""",
         (_patient_fact_keys(db, "meds", now - th["followup_max_age_d"] * DAY_S),
          now - th["followup_max_age_d"] * DAY_S, *self_params,
@@ -638,9 +640,11 @@ ADHERENCE_TERMINAL = ("管理は出来ない", "管理はできない",
                       "服薬管理出来ない", "服薬管理できない",
                       "服薬管理出来ません", "服薬管理できません")
 # てい/してい covers 「飲み忘れていない」「飲み忘れはしていない」;
-# ません covers 「残薬ありません」 (the pattern consumes the あり)
+# ません covers 「残薬ありません」 (the pattern consumes the あり);
+# an adverb may sit before the negation: 「飲み忘れは特にない」「残薬が全くない」
 _NEGATE_RE = re.compile(
-    r"^[はがも、。\s]*(?:してい|てい|て)?(ない|なし|ありません|なく|ません)")
+    r"^[はがも、。\s]*(?:(?:特に|全く|ほとんど|あまり|今のところ)[は、\s]*)?"
+    r"(?:してい|てい|て)?(ない|なし|ありません|なく|ません)")
 
 
 def _adherence_phrases(text, *, patient_name=None):
@@ -653,7 +657,7 @@ def _adherence_phrases(text, *, patient_name=None):
     for pat in ADHERENCE_PATTERNS:
         i = text.find(pat)
         while i >= 0:
-            tail = text[i + len(pat): i + len(pat) + 10]
+            tail = text[i + len(pat): i + len(pat) + 16]
             if not _NEGATE_RE.match(tail) and clinical_scope.patient_source_scope(
                     text, i, i + len(pat), patient_name=patient_name) == "patient":
                 hits.append(pat)
@@ -1035,7 +1039,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
     notify intents for newly opened signals only when
     signals.notify===true. Returns counts for the run log."""
     now = now if now is not None else time.time()
-    th = resolved_thresholds(ledger.db)
+    th, policy_warnings = resolved_policy(ledger.db)
     sig_cfg = cfg.get("signals")
     notify = isinstance(sig_cfg, dict) and sig_cfg.get("notify") is True
 
@@ -1161,7 +1165,8 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
             "notify_enqueued": enqueued,
             "notify_digest_merged": dig_merged,
             "notify_enabled": notify,
-            "detectors_ran": sorted(ran_types), "errors": errors}
+            "detectors_ran": sorted(ran_types), "errors": errors,
+            "warnings": policy_warnings}
 
 
 def evidence_fp(evidence) -> str:
@@ -1561,6 +1566,7 @@ def current_open(db, project_id=None, limit=50):
     last_run = db.execute(
         "SELECT MAX(finished_at) FROM runs WHERE status != 'failed'"
     ).fetchone()[0]
+    thresholds, policy_warnings = resolved_policy(db)
     approved = approved_policy(db)
     policy = None
     if approved is not None:
@@ -1573,4 +1579,4 @@ def current_open(db, project_id=None, limit=50):
             "errors": ["signal_state_corrupt"] if any(
                 state is None for state in latest.values()) else [],
             "pipeline_last_run_at": last_run,
-            "thresholds": resolved_thresholds(db), "policy": policy}
+            "thresholds": thresholds, "warnings": policy_warnings, "policy": policy}

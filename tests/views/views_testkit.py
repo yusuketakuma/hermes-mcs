@@ -16,7 +16,7 @@ SCHEMA = """
 CREATE TABLE snapshot_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                             generation_id TEXT, generated_at REAL);
 CREATE TABLE patients (project_id INTEGER PRIMARY KEY, is_archived INTEGER,
-                       fetch_state TEXT, created_at REAL);
+                       fetch_state TEXT, created_at REAL, patient_name TEXT);
 CREATE TABLE messages (message_id INTEGER PRIMARY KEY, project_id INTEGER,
                        parent_id INTEGER, sender_id INTEGER,
                        sender_name TEXT, sender_type TEXT, profession TEXT,
