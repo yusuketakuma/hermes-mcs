@@ -96,14 +96,14 @@ def _llama_restart(tmp_path, launchctl_body, *,
         path.unlink()
     body = (SCRIPTS / "llamacpp_restart_if_idle.sh").read_text(
         encoding="utf-8")
-    # Advance only the synthetic monotonic clock; never wait 15 real minutes.
+    # Keep subprocess.wait's clock real; only the wrapper's polling is synthetic.
     clock = (
+        "from types import SimpleNamespace\n"
         "_clock = [0]\n"
-        "time.monotonic = lambda: _clock[0]\n"
-        f"time.sleep = lambda seconds: _clock.__setitem__(0, _clock[0] + max(seconds, {clock_step}))\n"
         "def wall_clock_jump():\n"
         "    raise AssertionError('wall clock must not control the wait')\n"
-        "time.time = wall_clock_jump\n"
+        "time = SimpleNamespace(monotonic=lambda: _clock[0], time=wall_clock_jump,\n"
+        f"    sleep=lambda seconds: _clock.__setitem__(0, _clock[0] + max(seconds, {clock_step})))\n"
     )
     if log_failure:
         method = "mkdir" if log_failure == "mkdir" else "open"
@@ -162,6 +162,15 @@ def test_llama_restart_falls_back_to_loaded_repo_label(tmp_path):
         tmp_path, 'case "$2" in */ai.hermes.llamacpp) exit 113;; esac\nexit 0\n')
     assert proc.returncode == 0
     assert "restarted ai.mcs.llamaserver" in log
+
+
+def test_llama_restart_waits_for_probe_exit_after_stdout_closes(tmp_path):
+    proc, log = _llama_restart(
+        tmp_path, "exit 0\n",
+        curl_body="printf '[{\"is_processing\":false}]\\n'\nexec 1>&-\nsleep 0.1\n")
+    assert proc.returncode == 0
+    assert "restarted ai.hermes.llamacpp" in log
+    assert (tmp_path / "stub/launchctl.args").read_text().splitlines().count("kickstart") == 1
 
 
 def test_llama_slot_probe_bypasses_inherited_proxy(tmp_path):
