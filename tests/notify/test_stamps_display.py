@@ -16,6 +16,7 @@ import mcs_view
 import notify_digest
 import notify_render
 import notify_views
+import rollup
 from stamp_format import actor_line, stamp_line
 from message_metadata import flag_lines, mentions_self
 from message_observations import get_message_metadata
@@ -297,9 +298,11 @@ def test_patient_summary_request_reply_states(led):
              "mid": 100, "reply_state": "done", "reply_conflict": True},
             {"kind": "doctor", "ctx": "処方変更", "at": "2026-09-29T09:00", "mid": 101}]
     reqs += [{"ctx": f"依頼{i}", "at": "2026-09-01T09:00", "mid": 200 + i} for i in range(5)]
+    # Exercise rendering of an already validated current rollup, not legacy migration.
     led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
-                   "created_at) VALUES('patient_rollup',1,NULL,?,'t','{}',?)",
-                   (json.dumps({"recent_requests": reqs}), NOW))
+                   "created_at) VALUES('patient_rollup',1,NULL,?,'t',?,?)",
+                   (json.dumps({"recent_requests": reqs}),
+                    json.dumps({"period_check_version": rollup.PERIOD_CHECK_VERSION}), NOW))
     led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
                    "created_at) VALUES('loop_candidate',1,101,?,'t','{}',?)",
                    (json.dumps({"origin": {"revision": f"{101:064x}"}}), NOW))

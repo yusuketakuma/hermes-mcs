@@ -7,6 +7,7 @@ import os
 import stat
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -794,3 +795,35 @@ def test_signal_note_is_escaped_as_one_table_cell(env):
     signals = (out / "signals" / "latest.md").read_text()
     row = next(line for line in signals.splitlines() if "SYNTH 一行目" in line)
     assert "SYNTH 一行目 \\| 二行目" in row
+
+
+def test_legacy_snapshot_without_refresh_column_rechecks_old_reply_annotations(env):
+    import rollup
+    snap, _ = env
+    with closing(sqlite3.connect(snap)) as db:
+        cached = json.loads(db.execute(
+            "SELECT content FROM artifacts WHERE kind='patient_rollup'").fetchone()[0])
+    cached["recent_requests"][0]["reply_state"] = "done"
+    before = snap.read_bytes()
+    with closing(sqlite3.connect(snap.as_uri() + "?mode=ro", uri=True)) as db:
+        db.row_factory = sqlite3.Row
+        assert "updated_seen" not in {row[1] for row in db.execute("PRAGMA table_info(messages)")}
+        result = rollup.current_cached_refs(db, 1, cached,
+            {"period_check_version": rollup.PERIOD_CHECK_VERSION - 1})
+        assert not result.get("recent_requests")  # no source request/relation in this snapshot
+        assert db.total_changes == 0
+    assert snap.read_bytes() == before
+    assert cached["recent_requests"][0]["reply_state"] == "done"  # caller input not mutated
+
+
+def test_legacy_request_without_reply_inference_needs_no_rebuild(env, monkeypatch):
+    import rollup
+    snap, out = env
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("an unannotated request does not need reply-state migration")
+
+    monkeypatch.setattr(rollup, "build_rollup", unexpected)
+    before = snap.read_bytes()
+    assert brain_export.run(out, snap)["ok"]
+    assert snap.read_bytes() == before
