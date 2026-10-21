@@ -850,7 +850,8 @@ def stage_karte_summary(adapter, ledger, result, deadline,
         except MCSError as e:
             stats["errors"].append({"project": pid, "kind": e.kind})
             ledger.karte_summary_mark_due(pid, due=e.retryable)
-            ledger.karte_summary_failed(pid)
+            if e.kind != "rate_limited":  # never sent: no 6 h backoff
+                ledger.karte_summary_failed(pid)
             continue
         stats["fetched"] += 1
         if payload is None:
@@ -896,6 +897,13 @@ def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
                 parent = {"parent_id": target["parent_id"]} if target["parent_id"] is not None else {}
                 m = adapter.fetch_message_metadata(target["project_id"], target["message_id"], **parent)
             except MCSError as e:
+                if e.kind == "rate_limited":
+                    # refused locally after the run's 429 stop: nothing was observed
+                    remaining = len(targets) - index
+                    stats["deferred"] += remaining
+                    stats["deferred_reasons"]["rate_limited"] = remaining
+                    stopped = True
+                    break
                 ledger.save_metadata_shadow(SimpleNamespace(**dict(target)), error=e.kind)
                 stats["errors"].append({"message_id": target["message_id"], "kind": e.kind})
                 if isinstance(e, SessionExpired) or e.kind == "deadline_exceeded":
