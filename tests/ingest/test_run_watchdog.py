@@ -25,13 +25,22 @@ def test_watchdog_exits_wedged_child_with_a_bounded_parent_timeout(tmp_path):
         "run_check._arm_watchdog(time.monotonic(),1)\n"
         "print('ARMED',flush=True)\n"
         "threading.Event().wait()\n")
-    result = subprocess.run(
-        [sys.executable, "-c", script, str(database)], capture_output=True, text=True,
-        env={**os.environ, "HOME": str(tmp_path), "MCS_ROOT": str(tmp_path)},
-        timeout=10)
-    assert result.stdout.strip() == "ARMED"
-    assert result.returncode != 0
-    assert result.stderr
+    # Interpreter start and Ledger setup are not under test and slow down under
+    # suite load; the parent bound starts once the child reports it is armed.
+    with subprocess.Popen(
+            [sys.executable, "-c", script, str(database)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env={**os.environ, "HOME": str(tmp_path), "MCS_ROOT": str(tmp_path)}) as child:
+        try:
+            assert child.stdout is not None
+            assert child.stdout.readline().strip() == "ARMED"
+            stdout, stderr = child.communicate(timeout=10)
+        finally:
+            if child.poll() is None:
+                child.kill()
+    assert stdout.strip() == ""
+    assert child.returncode != 0
+    assert stderr
     db = Ledger(str(database))
     try:
         db.begin_run(None)

@@ -120,8 +120,11 @@ def test_replay_same_source_keeps_summary_retry_attempts(tmp_path):
 
 def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
                                                                  monkeypatch):
+    import bounded_http
+
     received = []
     started = threading.Event()
+    landed_at = []
     response = json.dumps({
         "choices": [{"message": {"content": "synthetic"}}],
     }).encode()
@@ -136,6 +139,7 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
             self.send_response(200)
             self.send_header("Content-Length", str(len(response)))
             self.end_headers()
+            landed_at.append(time.monotonic())
             started.set()
             try:
                 for byte in response:
@@ -153,18 +157,34 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
     monkeypatch.setattr(semantic_transport, '_probe_format',
                         lambda *a: "plain")   # no format probe
     trickle_s = 0.25 * len(response)
-    started_at = time.monotonic()
-    # The worker is a fresh interpreter process whose spawn can take a
-    # while under suite load, so timeout=2.0 leaves headroom for the POST
-    # to land.  The byte-trickled response takes ~20 s; returning None far
-    # below that proves the absolute deadline fired instead of a per-read
-    # idle timeout — with a wide margin rather than a tight wall-clock
-    # bound that flakes on a loaded machine.
-    assert semantic_transport.llm_chat("synthetic prompt", timeout=2.0) is None
-    elapsed = time.monotonic() - started_at
+    spawn = bounded_http.subprocess.Popen
 
-    assert started.wait(5.0), semantic_transport.last_llm_failure()
-    assert elapsed < trickle_s / 2
+    def popen_after_post(*args, **kwargs):
+        # Worker interpreter start is not under test and slows down under
+        # suite load: send the request, then hand the parent's real-time
+        # communicate window over only once the POST has landed.
+        process = spawn(*args, **kwargs)
+        communicate = process.communicate
+
+        def communicate_after_post(input=None, timeout=None):
+            process.stdin.write(input)
+            process.stdin.close()
+            process.stdin = None
+            while not started.wait(0.05) and process.poll() is None:
+                pass
+            return communicate(timeout=timeout)
+        process.communicate = communicate_after_post
+        return process
+
+    monkeypatch.setattr(bounded_http.subprocess, "Popen", popen_after_post)
+    # The byte-trickled response takes ~20 s; returning None far below that
+    # after the POST landed proves the absolute deadline cut the in-flight
+    # response instead of a per-read idle timeout.
+    assert semantic_transport.llm_chat("synthetic prompt", timeout=2.0) is None
+    returned_at = time.monotonic()
+
+    assert started.is_set(), semantic_transport.last_llm_failure()
+    assert returned_at - landed_at[0] < trickle_s / 2
     headers, body = received[0]
     assert headers.get("Authorization") is None
     assert body["model"] == semantic_transport.LLM_MODEL
