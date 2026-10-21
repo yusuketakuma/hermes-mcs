@@ -378,6 +378,7 @@ def test_prune_history_keeps_references_and_audit_rows(tmp_path):
     with closing(sqlite3.connect(tmp_path / "ledger.db")) as con:
         out = maintenance.prune_history(con, now)
     assert out == {"runs": 2, "read_marks": 1, "alerts": 1,
+                   "unsent_renders": 0, "view_manifests": 0,
                    "drain_runs": 1, "usage_receipts": 1}
     assert sorted(r[0] for r in db.db.execute("SELECT status FROM runs")) \
         == ["failed", "ok"]           # newest per status survives

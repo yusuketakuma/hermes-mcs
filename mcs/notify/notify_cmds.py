@@ -38,6 +38,10 @@ TRANSPORT_OPS = ("transport_begin",) + _RECEIPT_OPS
 NOTIFY_OPS = ("notification", "refresh")
 HUMAN_CMDS = ("request.create", "ops.signal_dismiss", "ops.extract_feedback", "ops.mcs_reaction")
 _VALID_OPS = frozenset(TRANSPORT_OPS) | frozenset(NOTIFY_OPS)
+# per-command storage failures that repeat on every retry; busy/locked
+# (OperationalError) and a damaged file (DatabaseError) are not per-command
+DETERMINISTIC_DB_ERRORS = (sqlite3.IntegrityError, sqlite3.DataError,
+                           sqlite3.ProgrammingError)
 
 _TOKEN_COMMAND_ID = re.compile(r"^[0-9a-f]{32}:[0-9a-f]{16}$")
 _ATTEMPT_ID = re.compile(r"^[0-9a-f]{16}$")
@@ -516,8 +520,17 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         else:
             try:
                 out = dispatch(ledger, req, cfg, root)
+            except DETERMINISTIC_DB_ERRORS as e:
+                # the same command fails the same way on every drain and
+                # would block every later one: quarantine it like a parse
+                # failure (type only — the text can carry user data)
+                with suppress(sqlite3.Error):
+                    notify_cards.connection(ledger).rollback()
+                error = f"storage_rejected:{type(e).__name__}"
+                out = {"outcome": "rejected", "error": error,
+                       "command_id": cid}
             except sqlite3.Error:
-                raise      # storage failures stay retryable, like data/cmd
+                raise      # busy/locked/corrupt storage stays retryable, like data/cmd
             except Exception as e:
                 # Exception text can embed paths/user data — the result
                 # file is plugin-readable, so record the type only.

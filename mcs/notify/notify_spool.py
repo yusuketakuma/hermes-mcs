@@ -197,50 +197,60 @@ def recover(ledger, cfg, result) -> dict:
     ensure_dirs(root)
     now = time.time()
     fixed = {"republished": 0, "missing_claimed": 0}
+    # Read and publish outside any write transaction (stat + fsync per
+    # render must not hold the ledger lock), then one short transaction
+    # that updates only rows still in the state that was read.
+    marks = []
+    for r in db.execute(
+            "SELECT delivery_id,spec_json,transport,state FROM notification_renders r "
+            "WHERE state IN ('queued','held') OR (state='delivered' "
+            "AND EXISTS (SELECT 1 FROM notification_render_parts p "
+            "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))").fetchall():
+        if _cleanup_budget_held(db, r["delivery_id"]):
+            continue
+        path = os.path.join(dirs[r["transport"] + "_render"],
+                            r["delivery_id"] + ".json")
+        if os.path.isfile(path):
+            marks.append((r, False))
+        elif r["spec_json"]:
+            publish_file(dirs[r["transport"] + "_render"],
+                         r["delivery_id"] + ".json",
+                         r["spec_json"].encode("utf-8"))
+            marks.append((r, True))
     with db:
         db.execute("BEGIN IMMEDIATE")
-        for r in db.execute(
-                "SELECT delivery_id,spec_json,transport FROM notification_renders r "
-                "WHERE state IN ('queued','held') OR (state='delivered' "
-                "AND EXISTS (SELECT 1 FROM notification_render_parts p "
-                "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))").fetchall():
-            if _cleanup_budget_held(db, r["delivery_id"]):
-                continue
-            path = os.path.join(dirs[r["transport"] + "_render"],
-                                r["delivery_id"] + ".json")
-            if os.path.isfile(path):
-                db.execute(
-                    "UPDATE notification_renders SET spec_published=1 "
-                    "WHERE delivery_id=?", (r["delivery_id"],))
-            elif r["spec_json"]:
-                publish_file(dirs[r["transport"] + "_render"],
-                             r["delivery_id"] + ".json",
-                             r["spec_json"].encode("utf-8"))
-                db.execute(
+        for r, republished in marks:
+            if republished:
+                n = db.execute(
                     "UPDATE notification_renders SET spec_published=1,"
                     "first_published_at=COALESCE(first_published_at,?),"
-                    "updated_at=? WHERE delivery_id=?",
-                    (now, now, r["delivery_id"]))
-                fixed["republished"] += 1
-        retired = notify_scope.retired_transports(cfg)
-        stale = {"live": 0, "retired": 0}
-        for t in notify_scope.SUPPORTED_TRANSPORTS:
-            try:
-                names = [os.path.join(dirs[t + "_render"], n)
-                         for n in os.listdir(dirs[t + "_render"])
-                         if n.endswith(".json.claimed")]
-            except OSError:
-                continue
-            for n in names:
-                with suppress(OSError):
-                    if now - os.stat(n).st_mtime > 60:
-                        stale["retired" if t in retired else "live"] += 1
-        # a claim left on a transport switched away from is disclosed,
-        # never live delivery trouble (the claim itself is kept)
-        fixed["missing_claimed"] = stale["live"]
-        fixed["retired_claimed"] = stale["retired"]
-        if stale["live"]:
-            result.setdefault("errors", []).append(
-                f"claimed_specs_stale:{stale['live']}")
+                    "updated_at=? WHERE delivery_id=? AND state=?",
+                    (now, now, r["delivery_id"], r["state"])).rowcount
+                fixed["republished"] += n
+            else:
+                db.execute(
+                    "UPDATE notification_renders SET spec_published=1 "
+                    "WHERE delivery_id=? AND state=?",
+                    (r["delivery_id"], r["state"]))
+    retired = notify_scope.retired_transports(cfg)
+    stale = {"live": 0, "retired": 0}
+    for t in notify_scope.SUPPORTED_TRANSPORTS:
+        try:
+            names = [os.path.join(dirs[t + "_render"], n)
+                     for n in os.listdir(dirs[t + "_render"])
+                     if n.endswith(".json.claimed")]
+        except OSError:
+            continue
+        for n in names:
+            with suppress(OSError):
+                if now - os.stat(n).st_mtime > 60:
+                    stale["retired" if t in retired else "live"] += 1
+    # a claim left on a transport switched away from is disclosed,
+    # never live delivery trouble (the claim itself is kept)
+    fixed["missing_claimed"] = stale["live"]
+    fixed["retired_claimed"] = stale["retired"]
+    if stale["live"]:
+        result.setdefault("errors", []).append(
+            f"claimed_specs_stale:{stale['live']}")
     publish_flags(cfg, root)
     return fixed

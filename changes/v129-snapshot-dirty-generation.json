@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "読取り用コピーの作成中に起きた変更が反映されないことがある問題を修正",
+  "summary": "読取り用コピーを作っている間に通知の状態が変わると、作成後にその変更の印まで消してしまい、次の強制更新まで古い内容が残ることがありました。印を世代番号にして、作成前に読んだ世代のときだけ消すようにしました。依頼の状態変更や患者の表示情報の変更も、変更として検出して1時間を待たずに反映します。",
+  "upgrade": "追加操作は不要です。更新後の最初の処理で、変更の検出方法が変わったため読取り用コピーを1回作り直します。",
+  "details": [
+    "notification_meta.notify_dirty を世代カウンタとして使う（列の追加はない）。clear_snapshot_dirty(ledger, generation) は値が変わっていないときだけ 0 に戻す。",
+    "_content_signature に requests の MAX(updated_at) と、patients の表示項目（種別・氏名・病名・事業所・URL）のハッシュを追加した。last_seen などの記録用の列は含めない。",
+    "回帰: tests/notify/test_v129_notify_stability.py, tests/core/test_v129_maintenance_stability.py"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/ingest/run_check.py",
+    "mcs/core/maintenance.py"
+  ]
+}

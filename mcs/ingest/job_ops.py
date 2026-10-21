@@ -22,6 +22,7 @@ Responsibilities:
   job drains; missing bodies/failed threads become durable reply jobs.
 """
 import os
+import sqlite3
 import time
 from dataclasses import dataclass
 from contextlib import suppress
@@ -156,7 +157,7 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 os.replace(path, path + ".invalid")
                 result["errors"].append("cmd_invalid: bad_request_identity")
                 continue
-            # Storage exceptions propagate: do not consume a command whose commit failed.
+            # Retryable storage exceptions propagate: do not consume a command whose commit failed.
             # ops.card_resolve carries no normal project_id — its scope is
             # derived from the stored render/coverage — so it must branch
             # before the common apply_command validation would reject it.
@@ -170,12 +171,17 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 else:
                     receipt = mcs_requests.apply_command(ledger, req)
             except (ValueError, TypeError, KeyError, UnicodeError,
-                    RecursionError) as e:
+                    RecursionError, sqlite3.IntegrityError, sqlite3.DataError,
+                    sqlite3.ProgrammingError) as e:
                 # a deterministic data failure (a corrupt stored receipt,
                 # a payload the handler cannot read) would re-fire on
                 # every drain and fail each tick: quarantine the file.
-                # Storage errors and a not-ready schema (RuntimeError)
-                # still propagate so the command is never consumed.
+                # A constraint/data error from SQLite is just as
+                # per-command. Busy/locked storage, a damaged file and a
+                # not-ready schema (RuntimeError) still propagate so the
+                # command is never consumed.
+                with suppress(sqlite3.Error):
+                    getattr(ledger, "db", ledger).rollback()
                 os.replace(path, path + ".invalid")
                 result["errors"].append(
                     f"cmd_invalid: apply_failed {type(e).__name__}")

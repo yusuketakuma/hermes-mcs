@@ -2,9 +2,11 @@
 from __future__ import annotations
 import llm_availability
 
+import glob
 import os
 import shutil
 import sqlite3
+import stat
 import time
 from contextlib import suppress
 
@@ -18,6 +20,9 @@ import maintenance
 
 HEALTH_FILE = os.path.join(HOME, HEALTH_REL)
 ATTACH_DISK_MARGIN_MB = 2048
+DISK_WARN_MARGIN_MB = 2 * ATTACH_DISK_MARGIN_MB   # warn before disk_low
+WAL_WARN_BYTES = 256 * 1024 * 1024
+SNAPSHOT_VERIFY_WARN_RATIO = 0.6
 
 def prev_health() -> dict:
     """The previously published health block ({} when unreadable)."""
@@ -55,6 +60,48 @@ def attachment_disk_low(free_mb: float | None) -> bool:
     floor = disk_floor_mb()
     return bool(floor) and free_mb is not None \
         and free_mb < floor + ATTACH_DISK_MARGIN_MB
+
+
+def early_warnings(db, result: dict, free_mb: float | None) -> dict:
+    """Fixed warning codes plus counts and byte sizes only — no paths,
+    names or message text. Informational: overall and state_reasons keep
+    their own rules, so a warning never pages by itself."""
+    data = os.path.join(HOME, "data")
+    out: dict = {"warnings": []}
+    out["cmd_quarantined"] = len(glob.glob(
+        os.path.join(glob.escape(data), "cmd*", "*.json.invalid")))
+    if out["cmd_quarantined"]:
+        out["warnings"].append("cmd_quarantined")
+    wal = None
+    with suppress(sqlite3.Error, OSError, TypeError, IndexError):
+        main = next(r for r in db.execute("PRAGMA database_list") if r[1] == "main")[2]
+        st = os.lstat(main + "-wal")
+        wal = st.st_size if stat.S_ISREG(st.st_mode) else None
+    out["ledger_wal_bytes"] = wal
+    if wal is not None and wal > WAL_WARN_BYTES:
+        out["warnings"].append("ledger_wal_large")
+    # two published snapshots in a row spending most of their verify
+    # budget: the next growth step fails the snapshot (and its gates)
+    timing = result.get("snapshot_timing") or {}
+    verify, budget = timing.get("verify_s"), timing.get("budget_s")
+    prev = prev_health().get("snapshot_verify_slow_runs")
+    prev = prev if type(prev) is int and prev >= 0 else 0
+    if finite_number(verify) and finite_number(budget) and budget > 0:
+        slow = prev + 1 if verify > SNAPSHOT_VERIFY_WARN_RATIO * budget else 0
+    else:
+        slow = prev                      # no publish this tick: carry forward
+    out["snapshot_verify_slow_runs"] = slow
+    if slow >= 2:
+        out["warnings"].append("snapshot_verify_near_budget")
+    floor = disk_floor_mb()
+    if floor and free_mb is not None and not attachment_disk_low(free_mb) \
+            and free_mb < floor + DISK_WARN_MARGIN_MB:
+        out["warnings"].append("disk_space_low_soon")
+    try:
+        out["manual_backup_bytes"] = maintenance.manual_backup_bytes()
+    except Exception:
+        out["manual_backup_bytes"] = None
+    return out
 
 
 def collection(result: dict) -> dict:
@@ -618,6 +665,7 @@ def build_health(db, result: dict, status: str,
         "metadata_shadow": shadow_health,
         "attention": attention,
         "stall_marks": stall_marks,
+        **early_warnings(db, result, free_mb),
         "errors": list(result.get("errors") or []),
     }
 

@@ -137,22 +137,26 @@ def mark_snapshot_dirty(db) -> None:
     """The published snapshot is now behind for notification tables;
     persists across a crash so the next run republishes (RC21). Owns
     its own table — snapshot_meta's 3-column insert contract is shared
-    with publish_snapshot and must not change."""
+    with publish_snapshot and must not change. Each mark bumps a
+    generation, so a mark landing during a publish survives its clear."""
     db.execute(
         "INSERT INTO notification_meta(singleton,notify_dirty) "
-        "VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET notify_dirty=1")
+        "VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET notify_dirty=notify_dirty+1")
 
 
-def snapshot_dirty(ledger) -> bool:
+def snapshot_dirty(ledger) -> int:
+    """The dirty generation (0 = clean); pass it to clear_snapshot_dirty."""
     row = connection(ledger).execute(
         "SELECT notify_dirty FROM notification_meta WHERE singleton=1"
     ).fetchone()
-    return bool(row and row["notify_dirty"])
+    return int(row["notify_dirty"]) if row and row["notify_dirty"] else 0
 
 
-def clear_snapshot_dirty(ledger) -> None:
+def clear_snapshot_dirty(ledger, generation: int) -> None:
+    """Clear only the generation read before the publish began."""
     connection(ledger).execute(
-        "UPDATE notification_meta SET notify_dirty=0 WHERE singleton=1")
+        "UPDATE notification_meta SET notify_dirty=0 "
+        "WHERE singleton=1 AND notify_dirty=?", (generation,))
     connection(ledger).commit()
 
 
@@ -2152,28 +2156,30 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
             # cleanup so a bounded GC can reach older files on later ticks.
             db.execute("UPDATE notification_renders SET spec_published=0 "
                        "WHERE delivery_id=?", (r["delivery_id"],))
-        # cmd_results files are a transport artifact — the durable audit
-        # lives in command_receipts. The plugin polls a result for
-        # minutes at most; anything a week old is dead weight.
-        # Names are random uuids, so pick candidates by age, oldest first
-        # — a name-sorted window would stall once it held only fresh files.
-        results = 0
-        expired = []
-        try:
-            with os.scandir(dirs["cmd_results"]) as it:
-                for e in it:
-                    if not e.name.endswith(".json"):
-                        continue
-                    with suppress(OSError):
-                        mtime = e.stat(follow_symlinks=False).st_mtime
-                        if now - mtime > action_tokens.TOKEN_WRITE_S:
-                            expired.append((mtime, e.path))
-        except OSError:
-            pass
-        expired.sort()
-        for _mtime, path in expired[:limit]:
-            with suppress(OSError):
-                os.unlink(path)
-                results += 1
-        return {"tokens": tokens, "spec_json_cleared": cleared,
-                "spec_files": removed, "result_files": results}
+    # cmd_results files are a transport artifact — the durable audit
+    # lives in command_receipts. The plugin polls a result for
+    # minutes at most; anything a week old is dead weight.
+    # Names are random uuids, so pick candidates by age, oldest first
+    # — a name-sorted window would stall once it held only fresh files.
+    # Outside the write transaction: ~20k entries must not hold the
+    # ledger lock a card click or tick needs.
+    results = 0
+    expired = []
+    try:
+        with os.scandir(dirs["cmd_results"]) as it:
+            for e in it:
+                if not e.name.endswith(".json"):
+                    continue
+                with suppress(OSError):
+                    mtime = e.stat(follow_symlinks=False).st_mtime
+                    if now - mtime > action_tokens.TOKEN_WRITE_S:
+                        expired.append((mtime, e.path))
+    except OSError:
+        pass
+    expired.sort()
+    for _mtime, path in expired[:limit]:
+        with suppress(OSError):
+            os.unlink(path)
+            results += 1
+    return {"tokens": tokens, "spec_json_cleared": cleared,
+            "spec_files": removed, "result_files": results}

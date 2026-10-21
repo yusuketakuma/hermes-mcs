@@ -6,14 +6,17 @@ and must each be independently failure-isolated by the caller.
 """
 import errno
 import glob
+import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import stat
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 from contextlib import closing, suppress
 from time import monotonic
@@ -21,6 +24,7 @@ from time import monotonic
 from snapshots import publish_snapshot as _publish_snapshot
 from ledger import valid_mcs_db
 from mcs_util import HOME
+from mcs_queries import JST
 from safe_io import atomic_write, publish_tmp, fdopen_owned
 from llm_availability import disk_floor_mb
 from safe_io import read_regular_nofollow
@@ -166,7 +170,7 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     the watchdog kills every tick would never complete (M7)."""
     os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
     os.chmod(BACKUP_DIR, 0o700)   # PHI store: never umask-loose
-    stamp = time.strftime("%Y%m%d")
+    stamp = datetime.now(JST).strftime("%Y%m%d")   # the operator's day, not host-local
     dest = os.path.join(BACKUP_DIR, f"ledger-{stamp}.db")
     # the .ok marker (size+mtime_ns at publish time) skips the full
     # quick_check while the verified file is untouched; any change or a
@@ -267,6 +271,35 @@ def local_backup_status(*, now: float) -> dict:
     return out("verified" if verified else "unverified", age)
 
 
+_ROTATED_BACKUP = re.compile(
+    r"(ledger-\d{8}\.db(\.ok)?|preupdate-.*\.db|.*\.tmp(-journal|-wal|-shm)?)")
+
+
+def manual_backup_bytes() -> int | None:
+    """Total bytes of regular files in data/backups that no rotation or
+    prune owns (copies an operator made by hand). A number for health
+    only: these are never deleted. None when the scan is unbounded or
+    unreadable; 0 when the directory is missing."""
+    total = 0
+    stop = monotonic() + LOCAL_STATUS_SCAN_S
+    try:
+        with os.scandir(BACKUP_DIR) as entries:
+            for n, entry in enumerate(entries):
+                if n >= LOCAL_STATUS_SCAN_MAX or monotonic() > stop:
+                    return None
+                if _ROTATED_BACKUP.fullmatch(entry.name):
+                    continue
+                with suppress(FileNotFoundError):
+                    st = entry.stat(follow_symlinks=False)
+                    if stat.S_ISREG(st.st_mode):
+                        total += st.st_size
+    except FileNotFoundError:
+        return 0
+    except OSError:
+        return None
+    return total
+
+
 def backup_overdue() -> bool:
     """True when the newest daily backup is older than BACKUP_OVERDUE_S.
     No backup yet is not overdue: a fresh install gets its first one on
@@ -284,7 +317,7 @@ def preupdate_backup(db_path: str) -> str:
     # same room check as daily_backup: apply bails on this before quiesce
     if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < _backup_need_mb(db_path):
         raise MaintenanceError("backup_disk_low")
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(JST).strftime("%Y%m%d-%H%M%S")
     fd, tmp = tempfile.mkstemp(
         prefix=f"preupdate-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
     os.close(fd)
@@ -351,20 +384,33 @@ def rotate_log(paths=None):
     copy the content aside then truncate the live file in place
     (copytruncate): the writer's O_APPEND fd resumes at offset 0 (F21).
     A symlinked <name>.1 is refused and that log left unrotated; the other
-    logs still rotate, then MaintenanceError reports the refusal."""
+    logs still rotate, then MaintenanceError reports the refusal. The live
+    log itself is opened no-follow and only when lstat shows a regular
+    file. Idempotent and cheap (one lstat per log), so it runs every tick."""
     refused = []
     for path in paths or _default_logs():
         try:
-            if os.path.getsize(path) > LOG_MAX:
-                with open(path, "rb") as src:
-                    # owner-only regardless of umask, also for an older loose .1
-                    fd = os.open(path + ".1", os.O_WRONLY | os.O_CREAT
-                                 | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-                    with fdopen_owned(fd, "wb") as dst:
-                        os.fchmod(fd, 0o600)
-                        shutil.copyfileobj(src, dst)
-                with open(path, "w"):
-                    pass
+            st = os.lstat(path)
+            # a symlinked or special live log is never read or truncated
+            if not stat.S_ISREG(st.st_mode) or st.st_size <= LOG_MAX:
+                continue
+            live = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+            with fdopen_owned(live, "rb") as src:
+                if not stat.S_ISREG(os.fstat(live).st_mode):
+                    continue
+                with suppress(FileNotFoundError):
+                    mode = os.lstat(path + ".1").st_mode
+                    if not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+                        continue        # never write into a FIFO/device
+                # owner-only regardless of umask, also for an older loose .1
+                fd = os.open(path + ".1", os.O_WRONLY | os.O_CREAT
+                             | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                with fdopen_owned(fd, "wb") as dst:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        continue
+                    os.fchmod(fd, 0o600)
+                    shutil.copyfileobj(src, dst)
+                os.ftruncate(live, 0)
         except OSError as e:
             if e.errno == errno.ELOOP:   # a symlinked .1 is never followed
                 refused.append(path)
@@ -549,11 +595,18 @@ def prune_leftovers() -> int:
     """Delete day-old download temp files (a hard kill skips the
     adapter's own cleanup), quarantined cmd/ and cmd_int/
     *.json.invalid files and the backup/snapshot staging copies (PHI)
-    and their SQLite sidecars a hard kill strands. ctime: a quarantine rename keeps the original
-    mtime."""
+    and their SQLite sidecars a hard kill strands, plus atomic-write
+    temporaries (.atomic.*.tmp, .pub-*, .alias-*.tmp) in cmd_results/ and
+    every *_render/ and *_state/ directory (render specs carry PHI).
+    ctime: a quarantine rename keeps the original mtime."""
     cutoff = time.time() - LEFTOVER_KEEP_S
     removed = 0
-    for pattern in (os.path.join(HOME, "data", "attachments", ".download-*.part"),
+    data = glob.escape(os.path.join(HOME, "data"))
+    spools = [os.path.join(data, "cmd_results"),
+              os.path.join(data, "*_render"), os.path.join(data, "*_state")]
+    for pattern in (*(os.path.join(spool, temp) for spool in spools
+                      for temp in (".atomic.*.tmp", ".pub-*", ".alias-*.tmp")),
+                    os.path.join(HOME, "data", "attachments", ".download-*.part"),
                     os.path.join(HOME, "data", "cmd", "*.json.invalid"),
                     os.path.join(HOME, "data", "cmd_int", "*.json.invalid"),
                     *(os.path.join(directory, stage + sidecar)
@@ -580,9 +633,10 @@ def _content_signature(db_path: str) -> dict | None:
     """Cheap change marker of the ledger: schema_version plus MAX(rowid)
     of every rowid table (an index seek each, never a scan). Tick
     bookkeeping (runs) is left out so an idle tick reads as unchanged.
-    Pure in-place updates by other processes do not move it; those
-    reach readers through the snapshot_dirty flag (notification state)
-    or the SNAPSHOT_MAX_AGE_S forced republish. None when unreadable —
+    In-place edits of requests (MAX(updated_at)) and patient display
+    fields (a digest of the small patients table) move it too; other
+    in-place updates reach readers through the snapshot_dirty flag
+    (notification state) or the SNAPSHOT_MAX_AGE_S forced republish. None when unreadable —
     the caller then publishes (fail toward fresh)."""
     try:
         uri = Path(db_path).resolve().as_uri() + "?mode=ro"
@@ -599,6 +653,18 @@ def _content_signature(db_path: str) -> dict | None:
                     continue
                 sig[name] = con.execute(
                     f"SELECT MAX(rowid) FROM {_quote(name)}").fetchone()[0]
+            # small tables edited in place: a request status change or a
+            # renamed patient must republish without waiting an hour
+            if "requests" in sig:
+                sig["requests@updated_at"] = con.execute(
+                    "SELECT MAX(updated_at) FROM requests").fetchone()[0]
+            if "patients" in sig:
+                digest = hashlib.sha256()
+                for row in con.execute(
+                        "SELECT project_id,project_type,patient_name,disease,"
+                        "station_name,url FROM patients ORDER BY project_id"):
+                    digest.update(json.dumps(row).encode())
+                sig["patients@content"] = digest.hexdigest()
             return sig
     except (OSError, sqlite3.Error):
         return None
@@ -728,6 +794,52 @@ def _outbox_refs(con, tables: set) -> str:
     return " AND ".join(guards) or "1"
 
 
+def _prune_unsent_renders(con, cutoff: float, tables: set) -> int:
+    """Delete superseded never-delivered renders with their parts and
+    attempts, in short batches. Only renders with no external effect
+    qualify: state not_sent/cancelled, every part and attempt not_sent,
+    spec file already gone (spec_published=0), a later render on the
+    card (or a card-less notice), and no intent binding or restore hold
+    naming the render or its attempts."""
+    need = {"notification_renders", "notification_render_parts",
+            "notification_delivery_attempts", "notification_intent_cards",
+            "notification_restore_holds"}
+    if not need <= tables:
+        return 0
+    total = 0
+    while True:
+        ids = [r[0] for r in con.execute(
+            """SELECT r.delivery_id FROM notification_renders r
+               WHERE r.state IN ('not_sent','cancelled') AND r.updated_at < ?
+                 AND r.spec_published=0
+                 AND (r.card_id IS NULL OR EXISTS(
+                   SELECT 1 FROM notification_renders s
+                   WHERE s.card_id=r.card_id AND s.render_rev>r.render_rev))
+                 AND NOT EXISTS(SELECT 1 FROM notification_render_parts p
+                   WHERE p.delivery_id=r.delivery_id AND p.state!='not_sent')
+                 AND NOT EXISTS(SELECT 1 FROM notification_delivery_attempts a
+                   WHERE a.delivery_id=r.delivery_id AND a.state!='not_sent')
+                 AND r.delivery_id NOT IN (SELECT delivery_id
+                   FROM notification_intent_cards WHERE delivery_id IS NOT NULL)
+                 AND r.delivery_id NOT IN (SELECT delivery_id
+                   FROM notification_restore_holds WHERE delivery_id IS NOT NULL)
+                 AND NOT EXISTS(SELECT 1 FROM notification_delivery_attempts a
+                   JOIN notification_restore_holds h ON h.attempt_id=a.attempt_id
+                   WHERE a.delivery_id=r.delivery_id)
+               LIMIT ?""", (cutoff, PRUNE_BATCH))]
+        if not ids:
+            return total
+        marks = ",".join("?" * len(ids))
+        with con:
+            for table in ("notification_render_parts",
+                          "notification_delivery_attempts",
+                          "notification_renders"):
+                con.execute(f"DELETE FROM {table} WHERE delivery_id IN ({marks})", ids)
+        total += len(ids)
+        if len(ids) < PRUNE_BATCH:
+            return total
+
+
 def prune_history(con, now: float | None = None) -> dict:
     """Age-based retention for append-only bookkeeping.
 
@@ -739,8 +851,17 @@ def prune_history(con, now: float | None = None) -> dict:
     - finished system alerts (RETAINED_ALERT_KINDS, accepted/suppressed)
       older than RETENTION_S that no table or restore hold references;
     - semantic_drain_run metrics older than DRAIN_RUN_KEEP_S and Jev usage
-      receipts older than USAGE_KEEP_S.
-    Kept on purpose: message_revisions (the edit audit trail), done/failed
+      receipts older than USAGE_KEEP_S;
+    - never-delivered renders older than RETENTION_S with their parts and
+      attempts (_prune_unsent_renders), then view manifests older than
+      RETENTION_S that are not their card's newest and that no render,
+      acknowledgement or action token references.
+    Kept on purpose: delivered renders and their parts/attempts (proof of
+    what was shown, read by stats and reconcile), command_receipts
+    (approval, stamp, dictionary and update provenance and command
+    idempotency), notification_acknowledgements (human action record),
+    thread_read_marks and message_reaction_actor_fetch (one current-state
+    row per thread/message, not a log), message_revisions (the edit audit trail), done/failed
     fetch_jobs (dedupe and state markers: reply reconciliation, the
     semantic scheduler row, QC gating), every other outbox kind and every
     other artifact kind (fingerprint caches, evaluation id references)."""
@@ -764,6 +885,22 @@ def prune_history(con, now: float | None = None) -> dict:
             "AND created_at < ? AND COALESCE(updated_at, created_at) < ? "
             f"AND {_outbox_refs(con, tables)}",
             (*RETAINED_ALERT_KINDS, cutoff, cutoff))
+    out["unsent_renders"] = _prune_unsent_renders(con, cutoff, tables)
+    if {"notification_view_manifests", "notification_renders",
+            "notification_acknowledgements",
+            "notification_action_tokens"} <= tables:
+        out["view_manifests"] = _delete_batched(
+            con, "notification_view_manifests",
+            "created_at < ? AND manifest_id < (SELECT MAX(m.manifest_id) "
+            "FROM notification_view_manifests m "
+            "WHERE m.card_id=notification_view_manifests.card_id) "
+            "AND manifest_id NOT IN (SELECT manifest_id FROM notification_renders "
+            "WHERE manifest_id IS NOT NULL) "
+            "AND manifest_id NOT IN (SELECT manifest_id "
+            "FROM notification_acknowledgements) "
+            "AND manifest_id NOT IN (SELECT need_manifest_id "
+            "FROM notification_action_tokens WHERE need_manifest_id IS NOT NULL)",
+            (cutoff,))
     if "artifacts" in tables:
         out["drain_runs"] = _delete_batched(
             con, "artifacts", "kind='semantic_drain_run' AND created_at < ?",
