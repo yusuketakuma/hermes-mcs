@@ -1,5 +1,7 @@
 """Plan bounded nightly source scans and validate verbatim selections without I/O."""
 import json
+from itertools import accumulate
+
 from clinical_chunking import plan_chunks
 from patient_context import CATEGORIES, context_items
 
@@ -7,6 +9,11 @@ MAX_FACTS = 256
 MAX_SUMMARY = 12
 MAX_SOURCE_FACTS = 128
 MAX_PROMPT_CHARS = 18000
+# A scan answer quotes every sentence it keeps twice (text and evidence), so a
+# background-rich prose chunk can outgrow the fixed answer budget; such a chunk
+# is re-planned finer, a bounded number of times, instead of retried unchanged.
+SCAN_CHUNK = 3000
+MAX_SCAN_SPLIT = 3
 
 
 def select_facts(facts):
@@ -50,7 +57,10 @@ def summary_selection(answer, reports):
 
 def scan_plan(source, saved):
     """Choose one chunk and determine whether its complete quote already covers it."""
-    chunks = plan_chunks(source["body_text"])
+    split = saved.get("split", 0)
+    if type(split) is not int or not 0 <= split <= MAX_SCAN_SPLIT:
+        split, saved = 0, {}
+    chunks = plan_chunks(source["body_text"], SCAN_CHUNK >> split)
     cursor = saved.get("cursor", 0)
     if type(cursor) is not int or not 0 <= cursor < len(chunks):
         cursor, saved = 0, {}
@@ -66,6 +76,37 @@ def scan_plan(source, saved):
             uncovered[start:start + len(quote)] = " " * len(quote)
     covered = bool(chunk.strip()) and not "".join(uncovered).strip()
     return chunks, cursor, saved, items, covered
+
+
+def split_scan(source, saved, cursor):
+    """The finer plan after a length stop, resumed where the stopped chunk began.
+
+    None once the finest plan also stopped: that stays an ordinary failure."""
+    split = saved.get("split", 0)
+    body = source["body_text"]
+    coarse = plan_chunks(body, SCAN_CHUNK >> split)
+    offset = sum(map(len, coarse[:cursor]))
+    for level in range(split + 1, MAX_SCAN_SPLIT + 1):
+        finer = plan_chunks(body, SCAN_CHUNK >> level)
+        starts = list(accumulate(map(len, finer), initial=0))[:len(finer)]
+        # the chunks partition the body, so some finer chunk starts at or before it
+        resume = max(i for i, start in enumerate(starts) if start <= offset)
+        # a re-plan that leaves the stopped text whole would only repeat the stop
+        if len(finer[resume]) < len(coarse[cursor]):
+            return {"cursor": resume, "chunks": len(finer), "split": level}
+    return None
+
+
+def rejected_items(answer, chunk):
+    """Fixed reasons for each refused scan item, by index only: never its text."""
+    out = []
+    for index, item in enumerate(answer.get("patient_context") or []):
+        valid = context_items({"patient_context": [item]}, chunk)
+        if not valid:
+            out.append({"index": index, "reason": "not_verbatim_or_invalid"})
+        elif isinstance(item, dict) and item.get("details", []) != valid[0].get("details", []):
+            out.append({"index": index, "reason": "details_not_in_quote"})
+    return out
 
 
 def scan_items(answer, chunk):

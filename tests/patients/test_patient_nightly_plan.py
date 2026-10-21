@@ -61,3 +61,33 @@ def test_lane_priority_and_rotation_keep_initial_then_oldest():
     assert lanes == list("AAAAAABBBC")
     assert plan.lane_rotation({"C": 1}, {"cursor": 0}) == ("C", 0, 1)
     assert plan.lane_rotation({}, {"cursor": 9}) == (None, 9, 0)
+
+
+def test_split_scan_resumes_where_the_stopped_chunk_began_and_is_bounded():
+    body = "本日訪問しました。合成の記録として、ご本人は落ち着いて過ごされていました。" * 60
+    source = {"body_text": body, "items": []}
+    coarse = plan.plan_chunks(body, plan.SCAN_CHUNK)
+    finer = plan.split_scan(source, {}, 0)
+    assert finer == {"cursor": 0, "chunks": len(plan.plan_chunks(body, plan.SCAN_CHUNK >> 1)), "split": 1}
+    chunks, cursor, _, _, _ = plan.scan_plan(source, finer)
+    assert "".join(chunks) == body and cursor == 0 and len(chunks) > len(coarse)
+    second = plan.split_scan(source, finer, 1)      # stopped at the second finer chunk
+    finest = plan.plan_chunks(body, plan.SCAN_CHUNK >> second["split"])
+    starts = [sum(map(len, finest[:i])) for i in range(len(finest))] + [len(body)]
+    offset = len(chunks[0])
+    assert second["split"] > finer["split"] and starts[second["cursor"]] <= offset < starts[second["cursor"] + 1]
+    assert len(finest[second["cursor"]]) < len(chunks[1])   # a level that actually shrinks it
+    assert plan.split_scan(source, {"split": plan.MAX_SCAN_SPLIT}, 0) is None
+    short = {"body_text": "合成の短い記録。", "items": []}
+    assert plan.split_scan(short, {}, 0) is None     # nothing to split: an ordinary failure
+    assert plan.scan_plan(source, {"split": 99, "cursor": 3})[1] == 0   # invalid state restarts
+
+
+def test_rejected_items_name_index_and_reason_only():
+    chunk = "生活環境: 合成の居住記録。"
+    answer = {"patient_context": [
+        {"category": "living", "text": chunk, "evidence": chunk, "subject": "unspecified"},
+        {"category": "living", "text": "合成の別文", "evidence": "合成の別文", "subject": "unspecified"},
+        {"category": "unknown", "text": chunk, "evidence": chunk, "subject": "unspecified"}]}
+    assert plan.rejected_items(answer, chunk) == [
+        {"index": 1, "reason": "not_verbatim_or_invalid"}, {"index": 2, "reason": "not_verbatim_or_invalid"}]
