@@ -2429,6 +2429,29 @@ def _gc_stale_artifacts(ledger, lock, per_write_lock: bool) -> None:
             _stale_gc_at = time.time()
 
 
+# Patient context waits for a patient's last pending post (2026-10-18 owner
+# rule), so a few patients nearest completion re-extract before the rest.
+# The ranking is one grouped scan per process every _LEFT_ESTIMATE_S, never
+# a per-selection sort; selection then walks each patient's own index range.
+_FOCUS: dict = {}
+_FOCUS_PATIENTS = 3
+
+
+def _focus_patients(ledger) -> list:
+    """Active patients with the fewest selectable pending posts (cached)."""
+    key = _left_estimate_key(ledger)
+    hit = _FOCUS.get(key)
+    if hit is None or time.monotonic() - hit["at"] >= _LEFT_ESTIMATE_S:
+        pids = [r[0] for r in ledger.db.execute(
+            "SELECT m.project_id FROM messages m WHERE m.project_id IS NOT NULL"
+            " AND NOT EXISTS (SELECT 1 FROM patients p WHERE p.project_id=m.project_id"
+            " AND COALESCE(p.is_archived,0)!=0)"
+            f" AND {pending_pred()} AND ({_retry_budget_sql()})"
+            " GROUP BY m.project_id ORDER BY COUNT(*), m.project_id LIMIT ?", (_FOCUS_PATIENTS,))]
+        hit = _FOCUS[key] = {"at": time.monotonic(), "pids": pids}
+    return hit["pids"]
+
+
 def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     shard: tuple[int, int] | None,
                     oldest_first: bool) -> tuple[list, int | None]:
@@ -2468,10 +2491,10 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     # time.time(), so it is compared against the same Python clock —
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
-    def _select(fresh, n, archived, rehold=None):
-        return ledger.db.execute(_selection_sql(order, adm_sql, fresh, archived, rehold), (
+    def _select(fresh, n, archived, rehold=None, scope="", scope_params=()):
+        return ledger.db.execute(_selection_sql(order, adm_sql + scope, fresh, archived, rehold), (
             KIND, EXTRACT_VERSION,
-            *adm_params,
+            *adm_params, *scope_params,
             shard[1] if shard else None,
             shard[1] if shard else 1,
             shard[0] if shard else 0,
@@ -2481,17 +2504,32 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
             n)).fetchall()
 
     rows, fresh_selected = [], None if oldest_first else 0
+    focus = [] if oldest_first else _focus_patients(ledger)
+    # NULL project rows must survive the exclusion (NULL NOT IN is NULL)
+    rest = (" AND (m.project_id IS NULL OR m.project_id NOT IN ("
+            + ",".join("?" * len(focus)) + "))") if focus else ""
     # Active patients precede archived ones in both order modes. Each
     # class keeps its former order: fresh then re-extraction for newest,
     # chronological only for oldest, and within it update-released holds
     # come last. Disjoint filters keep LIMIT streaming.
     for archived in (False, True):
         for fresh in ((None,) if oldest_first else (True, False)):
+            if fresh is False and not archived:
+                # the patients nearest completion re-extract first, one by one
+                for pid in focus:
+                    for rehold in (False, True):
+                        if len(rows) >= limit:
+                            return rows, fresh_selected
+                        rows += _select(False, limit - len(rows), False, rehold,
+                                        scope=" AND m.project_id=?", scope_params=(pid,))
             # a never-extracted body has no hold, so fresh needs no split
             for rehold in ((None,) if fresh else (False, True)):
                 if len(rows) >= limit:
                     return rows, fresh_selected
-                selected = _select(fresh, limit - len(rows), archived, rehold)
+                scoped = fresh is False and not archived and focus
+                selected = _select(fresh, limit - len(rows), archived, rehold,
+                                   scope=rest if scoped else "",
+                                   scope_params=focus if scoped else ())
                 rows += selected
                 if fresh_selected is not None and fresh:
                     fresh_selected += len(selected)
