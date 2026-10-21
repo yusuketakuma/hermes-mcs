@@ -392,8 +392,9 @@ HEALTH_OBSERVATION_ITEMS = 10002  # 10,000 rows plus the two boundary checks
 HEALTH_OBSERVATION_ROW_BYTES = 2 * 1024 * 1024
 
 
-def bounded_health_read(db, read, seconds=HEALTH_OBSERVATION_S):
+def bounded_health_read(db, read, seconds=None):
     """Bound additive reads on the tick-owned connection; preserve its transaction."""
+    seconds = HEALTH_OBSERVATION_S if seconds is None else seconds  # read at call time
     deadline = time.monotonic() + seconds
     items = 0
 
