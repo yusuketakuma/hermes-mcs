@@ -170,6 +170,7 @@ class SlackCardAdapter:
         self._profile = profile
         self._bound = False
         self._bot_id = ""
+        self._bot_user_id = ""
         self._names: OrderedDict = OrderedDict()
 
     async def display_name(self, uid):
@@ -205,6 +206,8 @@ class SlackCardAdapter:
 
     async def bind(self):
         """Verify the native client belongs to the intended workspace."""
+        self._bound = False
+        self._bot_id = self._bot_user_id = ""
         try:
             identity = _payload(await self._client.auth_test())
         except Exception:
@@ -216,14 +219,24 @@ class SlackCardAdapter:
             # message with identical text can never bind a part
             bot = identity.get("bot_id")
             self._bot_id = bot if isinstance(bot, str) else ""
+            user = identity.get("user_id")
+            self._bot_user_id = user if self._bot_id and isinstance(user, str) else ""
         return self._bound
 
     def authored(self, message) -> bool:
         """True only for a message this bound bot/app posted — the
         authorship gate before any reply or file may bind a part. An
         unbound adapter's empty bot_id never matches."""
-        return bool((self._bot_id and message.get("bot_id") == self._bot_id)
-                    or message.get("app_id") == self._application_id)
+        if not self._bound or not isinstance(message, Mapping):
+            return False
+        identities = (("bot_id", self._bot_id), ("app_id", self._application_id),
+                      ("user", self._bot_user_id))
+        # A file-share message may expose only its verified bot user; the
+        # file's uploader is not proof that this bot shared the message.
+        if any(expected and message.get(key) not in (None, expected)
+               for key, expected in identities):
+            return False
+        return any(expected and message.get(key) == expected for key, expected in identities)
 
     def single_attempt(self):
         """Send-safe snapshot of the bound client — shared by the
@@ -543,6 +556,7 @@ class DeliveryWorker(_BaseWorker):
         if (spec.get("op") != "update" or not isinstance(thread_ts, str) or thread_ts != spec["delivery"].get("thread_id")
                 or spec["delivery"].get("channel_id") != self._settings["channel_id"]
                 or not isinstance(prior, str) or prior in ctx["consumed"]):
+            self._log("edit_preflight_held", reason="edit_scope_unverified")
             return {"result": "unknown", "error_code": "edit_target_unverified"}
         if ctx.get("history") is None:
             try:
@@ -550,31 +564,44 @@ class DeliveryWorker(_BaseWorker):
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self._log("edit_preflight_held", reason="edit_history_unverified")
                 return {"result": "unknown", "error_code": "edit_history_unverified"}
         targets = []
+        reason = "edit_reference_missing"
         for message in ctx["history"]:
-            if message.get("ts") == thread_ts or not self._sender.authored(message):
+            if message.get("ts") == thread_ts:
+                continue
+            files = [file for file in message.get("files") or []
+                     if isinstance(file, dict) and file.get("id") == prior] if attachment else []
+            if (attachment and not files) or (not attachment and message.get("ts") != prior):
                 continue
             if message.get("thread_ts", thread_ts) != thread_ts:
+                reason = "edit_thread_mismatch"
+                continue
+            if not self._sender.authored(message):
+                reason = "edit_author_unverified"
                 continue
             if attachment:
-                for file in message.get("files") or []:
-                    if (not isinstance(file, dict) or file.get("id") != prior
-                            or file.get("name") != part.get("name") or file.get("size") != part.get("bytes")):
+                reason = "edit_file_unverified"
+                for file in files:
+                    if file.get("name") != part.get("name") or file.get("size") != part.get("bytes"):
                         continue
                     immutable = (file.get("mode") == "hosted" and file.get("is_external") is False
                                  and file.get("editable") is False)
                     if file.get("sha256") == part.get("sha256") or (file.get("sha256") is None and immutable):
                         targets.append(message)
                         break
-            elif message.get("ts") == prior:
+            else:
                 targets.append(message)
         sender = self._sender.single_attempt()
         if len(targets) != 1 or sender is None:
+            self._log("edit_preflight_held", reason=("edit_native_client_unverified" if sender is None
+                      else "edit_target_ambiguous" if len(targets) > 1 else reason), rows=len(targets))
             return {"result": "unknown", "error_code": "edit_target_unverified"}
         target = targets[0]
         ts = target.get("ts")
         if not isinstance(ts, str) or not _TS.fullmatch(ts):
+            self._log("edit_preflight_held", reason="edit_timestamp_unverified")
             return {"result": "unknown", "error_code": "edit_target_unverified"}
         try:
             response = await self._blocks_call(
@@ -681,6 +708,9 @@ class DeliveryWorker(_BaseWorker):
             rid = await self._file_remote_match(thread_ts, part, ctx)
             if rid is not None:
                 return {"result": "delivered", "remote_id": rid}
+        if part.get("prior_remote_id"):
+            # A failed identity check must not re-upload a previously sent file.
+            return {"result": "unknown", "error_code": "file_target_unverified"}
         blob = await asyncio.to_thread(
             read_verified_attachment, part.get("path"), part, self._root)
         if blob is None:

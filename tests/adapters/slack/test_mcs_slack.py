@@ -1281,9 +1281,11 @@ def test_slack_sealed_prior_file_without_remote_hash_reuses_only_immutable_uploa
     part["prior_remote_id"] = fid
     ctx = {"thread_id": ROOT_TS, "history": None, "consumed": set()}
     out = asyncio.run(w.worker._attachment_part({**spec, "op": "update"}, part, ctx))
-    assert out["result"] == "delivered"
-    assert len(w.client.upload_calls) == uploads + int(editable)
-    if not editable:
+    assert len(w.client.upload_calls) == uploads
+    if editable:
+        assert out == {"result": "unknown", "error_code": "file_target_unverified"}
+    else:
+        assert out["result"] == "delivered"
         assert out["remote_id"] == fid
         assert fid in ctx["consumed"]
 
@@ -1313,8 +1315,12 @@ def test_slack_prior_file_receipt_never_bypasses_remote_proof(led, tmp_path, inv
         part.pop("prior_remote_id")
     out = asyncio.run(w.worker._attachment_part({**spec, "op": "update"}, part,
         {"thread_id": ROOT_TS, "history": None, "consumed": set()}))
-    assert out["result"] == "delivered" and out["remote_id"] != remote["id"]
-    assert len(w.client.upload_calls) == uploads + 1
+    if invalid_proof == "no_receipt":
+        assert out["result"] == "delivered" and out["remote_id"] != remote["id"]
+        assert len(w.client.upload_calls) == uploads + 1
+    else:
+        assert out == {"result": "unknown", "error_code": "file_target_unverified"}
+        assert len(w.client.upload_calls) == uploads
 
 
 def test_slack_attachment_foreign_file_never_binds(led, tmp_path):
