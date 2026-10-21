@@ -10,7 +10,7 @@ import notify_cards
 import notify_render
 import present_slack
 
-from adapters.slack import cards as slack_cards
+from adapters.slack import presentation as slack_presentation
 from adapters.slack.cards import validate
 from notify_testkit import (NOW, _card, _dispatch, _intent, _latest_render, _seed_thread,
                             delivered_source, led, pinned_clock)
@@ -45,7 +45,7 @@ def test_face_shows_stamps_and_folded_original_under_each_post(led, monkeypatch)
     assert all(p["stamps"] == [STAMP] for p in posts)
     assert spec["parts"]["thread_body_parts"] == []
     assert not [p for p in spec["parts"]["manifest"] if p["kind"] == "body_part"]
-    blocks = slack_cards.render_parts(spec["parts"], card_kind="thread")
+    blocks = slack_presentation.render_parts(spec["parts"], card_kind="thread")
     folds = [i for i, b in enumerate(blocks) if b.get("type") == "container"]
     assert [b["title"]["text"] for b in (blocks[i] for i in folds)] == ["原文（6字）", "原文（7字）"]
     assert all(blocks[i - 1]["type"] == "context" and STAMP in json.dumps(blocks[i - 1], ensure_ascii=False)
@@ -102,7 +102,7 @@ def test_observed_zero_stamps_gives_an_empty_row_and_the_fold_follows_the_summar
     spec = _spec(led)
     validate(spec)
     assert spec["parts"]["slack"]["face_posts"][0]["stamps"] == []
-    blocks = slack_cards.render_parts(spec["parts"], card_kind="thread")
+    blocks = slack_presentation.render_parts(spec["parts"], card_kind="thread")
     fold = next(i for i, b in enumerate(blocks) if b.get("type") == "container")
     assert blocks[fold - 1]["type"] == "section"
 
@@ -116,7 +116,7 @@ def test_block_cap_sends_the_rest_of_the_page_to_the_thread(led, monkeypatch):
     validate(spec)
     posts = spec["parts"]["slack"]["face_posts"]
     assert 0 < len(posts) < len(mids)
-    blocks = slack_cards.render_parts(spec["parts"], card_kind="thread")
+    blocks = slack_presentation.render_parts(spec["parts"], card_kind="thread")
     assert len(blocks) <= present_slack.face_block_count(spec["parts"], posts) <= present_slack.BLOCK_MAX
     names = {p["name"] for p in spec["parts"]["manifest"] if p["kind"] == "body_part"}
     assert names == {f"m:{m}#1" for m in mids[len(posts):]} | {f"m:{m}:header#1" for m in mids[len(posts):]}

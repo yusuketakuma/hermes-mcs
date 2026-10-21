@@ -108,20 +108,20 @@ _DENIAL_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
 def dispatch(data: dict, settings: dict[str, Any],
-              identity: dict[str, str | None]) -> str:
+              identity: dict[str, str | None], *, authorized=None) -> str:
     # Helpers raise ValueError(code) for source_missing, request_not_found,
     # bad_due_date, ...; surface the code so the reader can tell a typo from
     # an incomplete fetch. Anything that is not a bare code (paths, values)
     # still collapses to operation_failed.
     try:
-        return dispatch_operation(data, settings, identity)
+        return dispatch_operation(data, settings, identity, authorized=authorized)
     except ValueError as error:
         code = str(error)
         return deny(code if _DENIAL_CODE.fullmatch(code) else "operation_failed")
 
 
 def dispatch_operation(data: dict, settings: dict[str, Any],
-                 identity: dict[str, str | None]) -> str:
+                 identity: dict[str, str | None], *, authorized=None) -> str:
     op = data.get("op")
     if op == "status":
         if set(data) - _STATUS_FIELDS:
@@ -146,7 +146,7 @@ def dispatch_operation(data: dict, settings: dict[str, Any],
     if op == "request":
         phase = data.get("phase")
         if phase == "confirm":
-            return confirm(data, settings, identity, operation="request")
+            return confirm(data, settings, identity, operation="request", authorized=authorized)
         if phase != "preview":
             return deny("bad_request_phase")
         action = data.get("action")
@@ -160,7 +160,7 @@ def dispatch_operation(data: dict, settings: dict[str, Any],
         if phase == "receipt":
             return _notification_receipt(data, settings, identity, operator=True)
         if phase == "confirm":
-            return confirm(data, settings, identity, operation="control")
+            return confirm(data, settings, identity, operation="control", authorized=authorized)
         if phase != "preview":
             return deny("bad_control_phase")
         action = data.get("action")
@@ -188,7 +188,7 @@ def dispatch_operation(data: dict, settings: dict[str, Any],
     return deny("unknown_operation")
 
 
-def make_handler(get_config):
+def make_handler(get_config, *, authorized=None):
     def handler(raw_args: str, command_context=None):
         identity, error = validate_context(command_context)
         if error:
@@ -205,7 +205,7 @@ def make_handler(get_config):
         if not isinstance(data, dict) or "op" not in data:
             return deny("bad_command")
         try:
-            return dispatch(data, settings, identity)
+            return dispatch(data, settings, identity, authorized=authorized)
         except Exception:
             # Paths, SQL details, and input values must never escape the
             # command response or Hermes logs through an exception string.

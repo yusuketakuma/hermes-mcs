@@ -35,15 +35,21 @@
 <text x="82" y="556.0" font-size="15" fill="#202124">👤 担当: 田中 · ✅ 確認: 田中</text>
 <text x="82" y="580.0" font-size="15" fill="#202124">📝 タスク 1件 · スタンプ 👀2 🙆1 · 自分 1投稿</text>
 <rect x="76" y="596.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
-<text x="277" y="617.0" font-size="16" fill="#176cc2" text-anchor="middle">確認する</text>
-<rect x="76" y="629.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
-<text x="277" y="650.0" font-size="16" fill="#176cc2" text-anchor="middle">担当する</text>
+<text x="277" y="617.0" font-size="16" fill="#176cc2" text-anchor="middle">操作を選ぶ…</text>
+<rect x="76" y="629.0" width="77" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
+<text x="115" y="650.0" font-size="16" fill="#176cc2" text-anchor="middle">👀</text>
+<rect x="157" y="629.0" width="77" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
+<text x="196" y="650.0" font-size="16" fill="#176cc2" text-anchor="middle">🙆 ✓</text>
+<rect x="238" y="629.0" width="77" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
+<text x="277" y="650.0" font-size="16" fill="#176cc2" text-anchor="middle">🙏</text>
+<rect x="320" y="629.0" width="77" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
+<text x="358" y="650.0" font-size="16" fill="#176cc2" text-anchor="middle">👍</text>
+<rect x="401" y="629.0" width="77" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
+<text x="439" y="650.0" font-size="16" fill="#176cc2" text-anchor="middle">✅</text>
 <rect x="76" y="662.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
-<text x="277" y="683.0" font-size="16" fill="#176cc2" text-anchor="middle">タスク作成</text>
+<text x="277" y="683.0" font-size="16" fill="#176cc2" text-anchor="middle">別の投稿</text>
 <rect x="76" y="695.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="716.0" font-size="16" fill="#176cc2" text-anchor="middle">MCSで開く</text>
-<rect x="76" y="728.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
-<text x="277" y="749.0" font-size="16" fill="#176cc2" text-anchor="middle">その他の操作</text>
 <rect x="588" y="245" width="30" height="30" rx="8" fill="#087f5b"/>
 <text x="595" y="267" font-size="18" fill="#fff" font-weight="bold">M</text>
 <text x="630" y="266" font-size="16" fill="#66716f" font-weight="bold">MCS Bot</text>

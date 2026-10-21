@@ -163,7 +163,9 @@
       "status": "covered",
       "summary": "HOME/資格情報/通信/Keychainから隔離する共通runner",
       "tests": [
-        "test_run_lock_excludes_second_writer"
+        "test_integration_only_run_installs_guards",
+        "test_suite_guard_denies_any_path_on_live_llm_authority",
+        "test_mcs_worker_guard_blocks_production_child"
       ],
       "notes": "conftest.py socket遮断ガードとして実装済み"
     },

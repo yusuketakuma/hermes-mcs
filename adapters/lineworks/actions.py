@@ -6,7 +6,7 @@ import functools
 import re
 
 from adapters.common import projects
-from adapters.common import confirm, envelopes, paths, text
+from adapters.common import confirm, envelopes, paths, forms, text
 
 from .cards import buttons
 from .client import ClientError
@@ -118,7 +118,7 @@ class Actions:
                     await self._publish(env)
                 return
             self.reg.put_followup(env["command_id"], {
-                "kind": "form" if kind in text.MODAL_ACTIONS else "action",
+                "kind": "form" if kind in forms.MODAL_ACTIONS else "action",
                 "action": kind, "request_id": env["request_id"], "origin": origin,
                 "clicked_at": env["clicked_at"],
                 "actor": actor, "user": user, "token": token,
@@ -130,13 +130,13 @@ class Actions:
             await self._confirm(match[1], bool(match[2]), user, actor)
 
     async def _more(self, user, context):
-        """「その他の操作」: the card's secondary buttons, privately in the 1:1 talk."""
+        """「操作を選ぶ…」: the card's menu operations, privately in the 1:1 talk."""
         actions = [{"type": "message", "label": item["label"], "postback": "mcs:a:" + item["token"]}
                    for item in context.get("menu") or []]
         if not actions:
             await self._say(user, "この操作は無効です。最新のカードでやり直してください。")
             return
-        head = context.get("heading") or "その他の操作"
+        head = context.get("heading") or "操作を選ぶ…"
         for i in range(0, len(actions), 10):
             await self._say(user, head, actions[i:i + 10])
 
@@ -209,7 +209,7 @@ class Actions:
         if len(value) > field.get("max", 2000):
             await self._prompt(user, session, f"入力を確認できませんでした（最大{field.get('max', 2000)}文字）。")
             return
-        if field["id"] == "due_date" and value and not text.valid_due(value):
+        if field["id"] == "due_date" and value and not forms.valid_due(value):
             await self._prompt(user, session, "入力を確認できませんでした（YYYY-MM-DD 形式）。")
             return
         session["fields"][field["id"]] = value
@@ -219,12 +219,12 @@ class Actions:
             await self._prompt(user, session)
             return
         self.reg.drop_modal(mid)
-        if session["action"] in (*text.VIEW_FORMS, "mytasks"):
+        if session["action"] in (*forms.VIEW_FORMS, "mytasks"):
             if session["action"] == "digest":
                 inputs = {**(projects.view_inputs(self.settings, "digest", "") or {}),
-                          **text.digest_inputs(session["fields"])}
-            elif session["action"] in text.QUERY_FORMS:
-                inputs = {"query": text.search_query(session["fields"])}
+                          **forms.digest_inputs(session["fields"])}
+            elif session["action"] in forms.QUERY_FORMS:
+                inputs = {"query": forms.search_query(session["fields"])}
                 if not inputs["query"]:
                     await self._say(user, text.SEARCH_EMPTY)
                     return
@@ -340,7 +340,7 @@ class Actions:
                 await self._say(user, text.STAMP_FORM_PENDING)
                 return
             session = {**rec, "params": result.get("params") or {}, "fields": {}, "index": 0,
-                       "definitions": text.modal_fields(rec["action"], form, ""),
+                       "definitions": forms.modal_fields(rec["action"], form, ""),
                        **({"form": form} if rec["action"] == "stamp" else {})}
             self.reg.put_modal("lw-form-" + envelopes.actor_hash(rec["actor"]), session)
             await self._prompt(user, session)

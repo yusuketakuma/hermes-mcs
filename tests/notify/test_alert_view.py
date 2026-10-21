@@ -24,7 +24,7 @@ def test_grounded_reason_and_separate_post_observation_times(led):
     assert "MCSで開く" in text and "投稿 #100" in text
     assert len(text) < 600
     assert "🚨" in notify_render.parts_text(parts, "discord")
-    from adapters.slack.cards import render_parts
+    from adapters.slack.presentation import render_parts
     blocks = render_parts(parts, silent=True)
     assert blocks[0]["type"] == "header"
 

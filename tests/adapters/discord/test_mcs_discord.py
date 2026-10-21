@@ -34,8 +34,7 @@ import notify_action_tokens
 import notify_actions
 import notify_cmds
 
-from adapters.common import (envelopes, journal, paths,
-                                        registry, text)
+from adapters.common import envelopes, journal, paths, registry, forms, text
 from adapters.common import spec as spec_mod
 from adapters.common import worker as worker_mod
 from adapters.discord import (actions as actions_mod, cards,
@@ -189,8 +188,11 @@ def test_real_spec_validates_and_builds(world):
     buttons = [b for i in inner if hasattr(i, "children")
                for b in i.children if not hasattr(b, "options")]
     ids = [b.custom_id for b in buttons if b.url is None]
-    assert ids and all(i.startswith("mcs:a:") for i in ids)
-    assert all(len(i) == 38 for i in ids)      # "mcs:a:" + 32 hex
+    assert all(i.startswith("mcs:a:") and len(i) == 38 for i in ids)   # "mcs:a:" + 32 hex
+    # 確認する and the other operations are tokens in the 操作を選ぶ… select
+    menus = [b for i in inner if hasattr(i, "children") for b in i.children if hasattr(b, "options")]
+    assert [m.placeholder for m in menus] == ["操作を選ぶ…"]
+    assert all(len(o.value) == 32 for o in menus[0].options)
     # 🔗 MCSで開く is a plain link button — no custom_id, no token
     links = [b for b in buttons if b.url is not None]
     assert [b.url for b in links] == [
@@ -981,7 +983,7 @@ def test_confirm_preview_text_per_transport():
     ("2026-10-01", True), ("2026-02-30", False), ("20261001", False),
     ("2026-10-1", False), ("", False)])
 def test_valid_due_requires_real_yyyy_mm_dd(due, ok):
-    assert text.valid_due(due) is ok
+    assert forms.valid_due(due) is ok
 
 
 def test_split_body_chunks_bounded():

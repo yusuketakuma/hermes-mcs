@@ -231,7 +231,7 @@ class DeliveryWorker(BaseWorker):
                               "message_id": outcome["message_id"]}
                       for token, context in token_map(spec).items()}
             if any(c["action"] == "more" for c in tokens.values()):
-                # 「その他の操作」 re-offers the secondary siblings in the presser's 1:1 talk.
+                # 「操作を選ぶ…」 offers the card operations in the presser's 1:1 talk.
                 menu = [{"token": b["token"], "label": b["label"]} for b in cards.secondary(spec)]
                 for token, context in tokens.items():
                     if context["action"] == "more":

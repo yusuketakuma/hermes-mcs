@@ -5,6 +5,8 @@ import hashlib
 import re
 
 from adapters.common.spec import PRIMARY_ACTIONS, STAMP_ROW_ACTION, validate as validate_display
+from adapters.common.card_controls import (MENU_LABEL, STAMP_PICKER_LABEL,
+                                           plan_controls, stamp_label)
 from adapters.common.text import notification_preview
 from notify_render import display_text
 from present_lineworks import card_split
@@ -60,12 +62,16 @@ def buttons(text, actions, *, preview=None):
     def button(action, **extra):
         return {"type": "button", "style": "secondary", **extra, "action": {
             **action, **({"text": action["label"]} if action["type"] == "message" else {})}}
-    # MCS's own stamp row sits under the other buttons as one horizontal row.
+    # MCS's own stamp row is one horizontal row where the first stamp sits.
     stamps = [{k: v for k, v in a.items() if k != "_stamp"} for a in actions if a.get("_stamp")]
-    footer = [button(a) for a in actions if not a.get("_stamp")]
-    if stamps:
-        footer.append({"type": "box", "layout": "horizontal", "spacing": "xs",
-                       "contents": [button(a, height="sm") for a in stamps]})
+    first_stamp = next((a for a in actions if a.get("_stamp")), None)
+    footer = []
+    for a in actions:
+        if not a.get("_stamp"):
+            footer.append(button(a))
+        elif a is first_stamp:
+            footer.append({"type": "box", "layout": "horizontal", "spacing": "xs",
+                           "contents": [button(x, height="sm") for x in stamps]})
     contents = {"type": "bubble", "body": {
         "type": "box", "layout": "vertical", "contents": [
             {"type": "text", "text": text or "MCS", "wrap": True}]},
@@ -76,18 +82,27 @@ def buttons(text, actions, *, preview=None):
             "contents": contents}
 
 
-# Card buttons, in display order; every other action sits behind ``more``.
-CARD_BUTTONS = (*PRIMARY_ACTIONS, "link", "more", STAMP_ROW_ACTION)
+_LABELS = {"more": MENU_LABEL, "stamp": STAMP_PICKER_LABEL}
 
 
-def _slot(button):
-    return "link" if button.get("ui") == "link" else button["id"]
+def _on_card(controls):
+    """Buttons drawn on the card; the stamp form only beside a full stamp row."""
+    more = [b for b in controls.operations if b.get("id") == "more"]
+    if more:
+        picker = controls.stamp_picker
+        return [*more, *controls.stamps, *([picker] if picker else []), *controls.links]
+    # Legacy cards without a menu must keep their primary operations reachable.
+    primary = sorted((b for b in controls.operations if b.get("id") in PRIMARY_ACTIONS),
+                     key=lambda b: PRIMARY_ACTIONS.index(b["id"]))
+    return [*primary, *controls.links, *controls.stamps]
 
 
 def secondary(spec):
-    """The card's buttons offered in the 1:1 「その他の操作」 menu."""
-    return [b for row in spec["parts"].get("action_rows") or [] for b in row
-            if _slot(b) not in CARD_BUTTONS]
+    """The card's buttons offered in the 1:1 「操作を選ぶ…」 menu."""
+    controls = plan_controls(spec["parts"])
+    if any(b.get("id") == "more" for b in controls.operations):
+        return [b for b in controls.menu if b.get("id") != "more"]
+    return [b for b in controls.operations if b.get("id") not in PRIMARY_ACTIONS]
 
 
 def heading(spec):
@@ -99,20 +114,21 @@ def heading(spec):
 
 
 def action_buttons(spec):
-    """The card's own buttons: ack, assign, request, link, more."""
+    """The card's own buttons: 操作を選ぶ…, the stamp row, 別の投稿, MCSで開く."""
     actions = []
-    shown = [b for row in spec["parts"].get("action_rows") or [] for b in row
-             if _slot(b) in CARD_BUTTONS]
-    for button in sorted(shown, key=lambda b: CARD_BUTTONS.index(_slot(b))):
-        if len(button["label"]) > 20:
+    for button in _on_card(plan_controls(spec["parts"])):
+        stamp = button.get("ui") != "link" and button.get("id") == STAMP_ROW_ACTION
+        # emoji only and the own stamp marked ✓, as on Slack and Discord
+        label = (button["label"] if button.get("ui") == "link" else
+                 stamp_label(button) if stamp else _LABELS.get(button.get("id"), button["label"]))
+        if len(label) > 20:
             raise ValueError("lineworks_button_label")
         if button.get("ui") == "link":
-            actions.append({"type": "uri", "label": button["label"],
-                            "uri": button["url"]})
+            actions.append({"type": "uri", "label": label, "uri": button["url"]})
         else:
-            actions.append({"type": "message", "label": button["label"],
+            actions.append({"type": "message", "label": label,
                             "postback": "mcs:a:" + button["token"],
-                            **({"_stamp": True} if button["id"] == STAMP_ROW_ACTION else {})})
+                            **({"_stamp": True} if stamp else {})})
     return actions
 
 

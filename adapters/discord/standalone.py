@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 from urllib.parse import urlsplit
 
-from adapters.common import eventlog, paths, text as display_text, worker
+from adapters.common import commands as native_commands, eventlog, paths, text as display_text, worker
 from adapters.common.access import CONTEXT_FLAGS
 from adapters.common.dispatch import make_handler
 from . import cards, delivery
@@ -221,7 +221,8 @@ class _Commands:
         self.bot = bot
         self.settings = settings
         self.scope = scope
-        self.handler = make_handler(_CheckedHost(host, scope).get_config)
+        self.handler = make_handler(_CheckedHost(host, scope).get_config,
+                                    authorized=scope.current)
 
     async def slash(self, interaction, text: str):
         if not await self.scope.invoke(self._slash, interaction, text):
@@ -232,7 +233,7 @@ class _Commands:
     async def _slash(self, interaction, raw):
         identity = _native_context(interaction, self.settings, slash=True)
         await interaction.response.defer(ephemeral=True, thinking=True)
-        answer = (await asyncio.to_thread(self.handler, raw, identity)
+        answer = (await native_commands.run_native(self.handler, raw, identity)
                   if identity else '{"ok":false,"error":"native_context_rejected"}')
         for chunk in display_text.split_body(answer, max_chunks=None):
             await interaction.followup.send(
@@ -251,7 +252,7 @@ class _Commands:
         identity = _native_context(message, self.settings, slash=False)
         if identity is None:
             return
-        answer = await asyncio.to_thread(self.handler, content[5:], identity)
+        answer = await native_commands.run_native(self.handler, content[5:], identity)
         # Channel input is accepted, but its snapshot/preview is only sent to
         # the human's own DM. Never fall back to a public channel on failure.
         target = await message.author.create_dm()

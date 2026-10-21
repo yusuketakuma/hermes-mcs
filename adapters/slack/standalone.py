@@ -262,6 +262,7 @@ async def run(root, stopping=None):
         if connector_settings(root, "slack") != settings \
                 or load_credentials(root, "slack") != credentials:
             raise ValueError("slack_configuration_changed_restart_required")
+        return True
 
     stopping = stopping if stopping is not None else asyncio.Event()
     client, session = _client(credentials, current)
@@ -275,6 +276,7 @@ async def run(root, stopping=None):
         app, handler = await _socket(client, credentials, inflight)
         supervisor = Supervisor(ctx=host, app=app, adapter=None,
                                 settings=settings, log=_event)
+        supervisor._actions._native_current = lambda: not stopping.is_set() and current()
         if not supervisor.start():
             raise ValueError("slack_worker_start_failed")
         # Receive only after the supervisor owns the scope lock and has
@@ -305,7 +307,12 @@ async def run(root, stopping=None):
                 pass
     finally:
         if supervisor is not None:
-            supervisor.unload()
+            # Revoke admission now, but keep the supervisor's scope lock until
+            # every native command thread has ended. Host.close owns its unload.
+            # A startup still awaiting bind must not reopen native admission.
+            supervisor._actions._native_current = lambda: False
+            supervisor._actions.unload()
+            supervisor._worker.stop()
         try:
             if handler is not None:
                 await handler.close_async()
@@ -314,14 +321,16 @@ async def run(root, stopping=None):
                 connecting.cancel()
                 with suppress(asyncio.CancelledError, Exception):
                     await connecting
-            for task in tuple(inflight):
-                task.cancel()
-            if inflight:
-                await asyncio.gather(*tuple(inflight), return_exceptions=True)
             try:
-                await host.close()
+                for task in tuple(inflight):
+                    task.cancel()
+                if inflight:
+                    await asyncio.gather(*tuple(inflight), return_exceptions=True)
             finally:
-                await session.close()
+                try:
+                    await host.close()
+                finally:
+                    await session.close()
 
 
 def _files(root, payload):

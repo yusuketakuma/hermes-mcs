@@ -50,7 +50,7 @@ _STANDALONE_ASYNC = {"Event", "FIRST_COMPLETED", "create_task", "current_task", 
 # collectors must remain dependency-free, and importing /mcs must work
 # without an SDK installed. No new client/token ownership is delegated.
 _SDK_FILES = {"mcs_discord/actions.py", "mcs_discord/cards.py"}
-_ASYNC_FILES = {"mcs_discord/actions.py", "mcs_discord/delivery.py",
+_ASYNC_FILES = {"common/commands.py", "mcs_discord/actions.py", "mcs_discord/delivery.py",
                 "mcs_discord/tasks.py", "common/worker.py",
                 "mcs_slack/actions.py", "mcs_slack/delivery.py",
                 "mcs_slack/tasks.py"}
@@ -314,6 +314,9 @@ def gate_plugin_sandbox() -> list[str]:
                                          if identity == "lineworks/__main__.py" else set())
         if independent:
             async_members |= _STANDALONE_ASYNC
+        if identity == "common/commands.py":
+            # Native command cancellation must await its owned synchronous work.
+            async_members = {"to_thread", "create_task", "wait", "CancelledError"}
         bad.extend(f"{path.name}:{v}" for v in
                    _module_surface(tree, "asyncio", async_members))
         for i, line in enumerate(text.splitlines(), 1):

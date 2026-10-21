@@ -1,6 +1,6 @@
 """v1.0.26 sweep: Slack patient-context blocks and the shared list text."""
 from adapters.common import text
-from adapters.slack.cards import _CONTEXT_MAX, context_list_blocks
+from adapters.slack.presentation import CONTEXT_MAX, context_list_blocks
 
 ROW = {"group": "前後14日の記録", "project_id": 1, "quotes": ["病名: 架空病A"], "date": "09/22",
        "source_rest": "sender #1", "url": "https://www.medical-care.net/projects/medical/1"}
@@ -17,7 +17,7 @@ def test_notes_are_divided_from_the_last_rows_source_line():
 
 
 def test_source_rest_is_plain_text_and_split_not_cut():
-    rest = "_看護_ 出来事の記載: ~10/1~ 予定" + "あ" * _CONTEXT_MAX
+    rest = "_看護_ 出来事の記載: ~10/1~ 予定" + "あ" * CONTEXT_MAX
     blocks = context_list_blocks({**VIEW, "items": [{**ROW, "source_rest": rest}], "notes": []},
                                  lambda pid: True)
     ctx = [b for b in blocks if b["type"] == "context"]

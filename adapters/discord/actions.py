@@ -22,7 +22,7 @@ import time
 from typing import Any
 
 from adapters.common import projects
-from adapters.common import confirm, envelopes, paths, registry, text
+from adapters.common import confirm, envelopes, paths, registry, forms, text
 from .cards import ACTION_PREFIX, MENU_ID, no_pings, thread_drug_view
 
 MODAL_PREFIX = "mcs:m:"
@@ -298,7 +298,7 @@ class Actions:
             await self._ephemeral(interaction, "権限がありません。")
             return
 
-        if action in text.MODAL_ACTIONS:
+        if action in forms.MODAL_ACTIONS:
             await self._open_modal(interaction, token, action, actor,
                                    origin, ctx)
             return
@@ -401,14 +401,14 @@ class Actions:
 
     def _build_modal(self, action: str, modal_id: str,
                      form: dict | None = None, clicker: str = ""):
-        """The shared modal definition (text.modal_fields) as a Discord
+        """The shared modal definition (forms.modal_fields) as a Discord
         modal — a select rides a Label (discord.py >= 2.6)."""
         import discord
 
-        fields = text.modal_fields(action, form, clicker)
+        fields = forms.modal_fields(action, form, clicker)
         if not fields:
             return None
-        modal = discord.ui.Modal(title=text.MODAL_TITLES[action],
+        modal = discord.ui.Modal(title=forms.MODAL_TITLES[action],
                                  custom_id=f"{MODAL_PREFIX}{modal_id}")
         for f in fields:
             if f.get("options"):
@@ -458,7 +458,7 @@ class Actions:
                 "フォームを開いたカードと送信元が一致しません。")
             return
         await interaction.response.defer(ephemeral=True)
-        if pending["action"] in text.VIEW_FORMS:
+        if pending["action"] in forms.VIEW_FORMS:
             await self._search(interaction, modal_id, pending)
             return
 
@@ -511,9 +511,9 @@ class Actions:
         if pending["action"] == "digest":
             inputs = {**(projects.view_inputs(self._settings, "digest", "")
                          or {}),
-                      **text.digest_inputs(fields, _display_name(interaction))}
+                      **forms.digest_inputs(fields, _display_name(interaction))}
         else:
-            query = text.search_query(fields)
+            query = forms.search_query(fields)
             if query is None:
                 await self._followup(interaction, text.SEARCH_EMPTY)
                 return

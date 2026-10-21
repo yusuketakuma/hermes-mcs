@@ -1,6 +1,7 @@
 """The MCS stamp button follows only the shared write gate. Synthetic temp ledger only."""
 from __future__ import annotations
 
+import hashlib
 import sys
 from types import SimpleNamespace
 
@@ -130,26 +131,37 @@ def test_slack_draws_the_stamp_row_as_compact_pairs(led, monkeypatch):
     assert [e["type"] for e in menu["elements"]] == ["static_select"]
 
 
-def test_lineworks_keeps_its_buttons_and_adds_one_horizontal_stamp_row(led, monkeypatch):
+def test_lineworks_matches_slack_menu_stamp_row_other_post_and_link(led, monkeypatch):
     from adapters.lineworks import cards as lineworks_cards
     spec = _rendered_spec(led, monkeypatch, "lineworks")
     footer = lineworks_cards.render(spec)["contents"]["footer"]["contents"]
-    *plain, row = footer
+    menu, row, other, link = footer
+    assert menu["action"]["label"] == "操作を選ぶ…"
     assert row["type"] == "box" and row["layout"] == "horizontal"
-    assert [b["action"]["label"] for b in row["contents"]] == ["👀見ました", "🙆承知", "🙏感謝", "👍いいね", "✅完了"]
+    assert [b["action"]["label"] for b in row["contents"]] == ["👀", "🙆", "🙏", "👍", "✅"]
+    assert other["action"]["label"] == "別の投稿" and other["action"]["postback"].startswith("mcs:a:")
+    assert link["action"]["type"] == "uri"
     assert all("_stamp" not in b["action"] for b in footer if b.get("type") == "button")
-    assert all(b["type"] == "button" for b in plain) and len(plain) + 5 <= 10
+    # the stamp form left the 1:1 menu; 確認・担当・タスク作成 joined it
+    ids = [b["id"] for b in lineworks_cards.secondary(spec)]
+    assert "stamp" not in ids and {"ack", "assign"} <= set(ids)
 
 
-def test_discord_draws_the_stamp_row_below_the_primary_buttons(led, monkeypatch):
+def test_discord_matches_slack_menu_stamp_row_then_other_post_and_link(led, monkeypatch):
     from discord_testkit import _fake_discord
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
     from adapters.discord import cards as discord_cards
     spec = _rendered_spec(led, monkeypatch, "discord")
     items = discord_cards.message_payload(spec)["view"].items
-    stamps = [i for i in items if getattr(i, "row", None) == 3]
-    assert [b.label for b in stamps] == ["👀", "🙆", "🙏", "👍", "✅"]
-    assert all(getattr(i, "row", None) != 3 for i in items if i not in stamps)
+    rows = {}
+    for item in items:
+        rows.setdefault(item.row, []).append(item)
+    (menu,) = rows[0]
+    assert menu.placeholder == "操作を選ぶ…"
+    assert [b.label for b in rows[1]] == ["👀", "🙆", "🙏", "👍", "✅"]
+    assert [b.label for b in rows[2]] == ["別の投稿", "MCSで開く"]
+    tokens = {o.value for o in menu.options}
+    assert rows[2][0].custom_id.removeprefix("mcs:a:") not in tokens   # the form is not in the menu
 
 
 def test_lineworks_stamp_row_passes_the_real_client_validation(led, monkeypatch):
@@ -158,13 +170,63 @@ def test_lineworks_stamp_row_passes_the_real_client_validation(led, monkeypatch)
     content = lineworks_cards.render(_rendered_spec(led, monkeypatch, "lineworks"))
     lineworks_client._validate_content(content)       # what send_message runs before the network
     footer = content["contents"]["footer"]["contents"]
-    # only one last row of at most five buttons is allowed; nothing else nested
-    for broken in ([*footer, footer[-1]], [footer[-1], *footer[:-1]],
-                   [*footer[:-1], {**footer[-1], "contents": footer[-1]["contents"] * 2}]):
+    (box,) = [i for i, child in enumerate(footer) if child["type"] == "box"]
+    row = footer[box]
+    # exactly one horizontal row of at most five buttons; nothing else nested
+    for broken in ([*footer, row], [*footer[:box], {**row, "layout": "vertical"}, *footer[box + 1:]],
+                   [*footer[:box], {**row, "contents": row["contents"] * 2}, *footer[box + 1:]]):
         bad = {**content, "contents": {**content["contents"], "footer": {
             **content["contents"]["footer"], "contents": broken}}}
         with pytest.raises(lineworks_client.ClientError):
             lineworks_client._validate_content(bad)
+
+
+@pytest.mark.parametrize("transport", ["slack", "discord", "lineworks"])
+@pytest.mark.parametrize("stamp_count", [0, 4, 5])
+def test_partial_and_complete_stamp_rows_keep_each_operation_reachable_once(
+        led, monkeypatch, transport, stamp_count):
+    from adapters.discord import cards as discord_cards
+    from adapters.lineworks import cards as lineworks_cards
+    from adapters.slack import cards as slack_cards
+    from discord_testkit import _fake_discord
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    spec = _rendered_spec(led, monkeypatch, transport)
+    for i, row in enumerate(spec["parts"]["action_rows"]):
+        if row and row[0]["id"] == "stamp_press":
+            spec["parts"]["action_rows"][i] = row[:stamp_count]
+    spec["parts"]["action_rows"] = [r for r in spec["parts"]["action_rows"] if r]
+    from adapters.common.envelopes import canonical
+    card_payload = {k: spec["parts"][k] for k in ("containers", "footer", "action_rows", "preview_text")
+                    if k in spec["parts"]}
+    spec["parts"]["manifest"][0]["sha256"] = hashlib.sha256(canonical(card_payload)).hexdigest()
+    expected = [b["token"] for row in spec["parts"]["action_rows"] for b in row if "token" in b]
+    form_token, = [b["token"] for row in spec["parts"]["action_rows"] for b in row if b["id"] == "stamp"]
+    actual, menu = [], []
+    if transport == "slack":
+        for block in slack_cards.render(spec)[1]:
+            for item in block.get("elements", []):
+                if item["type"] == "static_select":
+                    menu.extend(o["value"] for o in item["options"])
+                elif item["type"] == "button":
+                    actual.append(item["value"])
+                elif item["type"] == "feedback_buttons":
+                    actual.extend(item[k]["value"] for k in ("positive_button", "negative_button"))
+    elif transport == "discord":
+        for item in discord_cards.message_payload(spec)["view"].items:
+            menu.extend(o.value for o in getattr(item, "options", []))
+            if str(getattr(item, "custom_id", "")).startswith("mcs:a:"):
+                actual.append(item.custom_id.removeprefix("mcs:a:"))
+    else:
+        content = lineworks_cards.render(spec)
+        from adapters.lineworks.client import _validate_content
+        _validate_content(content)
+        for item in content["contents"]["footer"]["contents"]:
+            for button in item["contents"] if item["type"] == "box" else [item]:
+                if "postback" in button["action"]:
+                    actual.append(button["action"]["postback"].removeprefix("mcs:a:"))
+        menu.extend(b["token"] for b in lineworks_cards.secondary(spec))
+    assert sorted(actual + menu) == sorted(expected)
+    assert (form_token in menu) is (stamp_count != 5)
 
 
 @pytest.mark.parametrize("transport", ["slack", "discord", "lineworks"])

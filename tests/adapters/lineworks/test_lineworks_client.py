@@ -105,6 +105,19 @@ def test_content_limits_fail_before_authentication():
     assert wire.calls == []
 
 
+@pytest.mark.parametrize("footer", [None, {}, {"type": "box", "layout": "vertical"},
+                                     {"type": "box", "layout": "vertical", "contents": None},
+                                     {"type": "box", "layout": "vertical", "contents": 1}])
+def test_malformed_flex_footer_is_refused_before_authentication(footer):
+    wire = Wire([])
+    content = {"type": "flex", "altText": "合成", "contents": {
+        "type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [
+            {"type": "text", "text": "合成", "wrap": True}]}, "footer": footer}}
+    with pytest.raises(ClientError, match="validation_invalid"):
+        client(wire).send_message(content, channel_id="room")
+    assert wire.calls == []
+
+
 def test_attachment_local_size_limit_fails_before_authentication():
     wire = Wire([])
     with pytest.raises(ClientError, match="validation_invalid"):

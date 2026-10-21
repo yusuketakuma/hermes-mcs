@@ -618,7 +618,7 @@ def _confirmation_parts(data: dict, requests,
 
 
 def confirm(data: dict, settings: dict[str, Any],
-             identity: dict[str, str | None], *, operation: str) -> str:
+             identity: dict[str, str | None], *, operation: str, authorized=None) -> str:
     requests, mcs_view = modules()
     payload, supplied_hash, origin, error = _confirmation_parts(
         data, requests, identity)
@@ -712,7 +712,8 @@ def confirm(data: dict, settings: dict[str, Any],
         if view is not None:
             view.close()
     try:
-        receipt = requests.enqueue(payload, settings["inbox"])
+        receipt = requests.enqueue(payload, settings["inbox"],
+                                   **({"authorized": authorized} if authorized is not None else {}))
     except (OSError, ValueError):
         return deny("enqueue_failed")
     return ok(operation=operation, phase="confirm", receipt=receipt,

@@ -90,26 +90,42 @@ def test_layout_view_serializes_components_v2():
     assert [c["type"] for c in comps] == [17]
     assert comps[0]["accent_color"] == cards._ACCENTS["signal"]
     inner = comps[0]["components"]
-    # body TextDisplay=10, Separator=14, footer, Separator, the primary
-    # button row and the 他の操作 select row; meta is never displayed
-    assert [c["type"] for c in inner] == [10, 14, 10, 14, 1, 1]
+    # All card operations now use one select; meta remains hidden.
+    assert [c["type"] for c in inner] == [10, 14, 10, 14, 1]
     assert all(c["divider"] and c["spacing"] == 1
                for c in inner if c["type"] == 14)
     assert inner[2]["content"] == "-# mcs notify"
-    buttons = inner[-2]["components"]
-    assert [b["type"] for b in buttons] == [2]
-    assert buttons[0]["custom_id"] == "mcs:a:" + "ab" * 16
     (menu,) = inner[-1]["components"]
     assert (menu["type"], menu["custom_id"]) == (3, "mcs:menu")
     assert [(o["label"], o["value"]) for o in menu["options"]] == [
-        ("棄却", "ef" * 16)]
+        ("確認", "ab" * 16), ("棄却", "ef" * 16)]
     # multi-byte labels/contents survive the wire unchanged
     assert "患者A" in inner[0]["content"]
     # '>>>' would swallow the rest of the merged display — the quote
     # must use the per-line '>' form
     assert "> 発言: 嘔気が続く" in inner[0]["content"]
     assert ">>>" not in inner[0]["content"]
-    assert buttons[0]["style"] == discord.ButtonStyle.success.value
+
+
+@pytest.mark.parametrize("components_v2", [False, True])
+def test_pinned_sdk_keeps_full_link_row_and_stamp_form(components_v2):
+    spec = _spec()
+    stamps = [{"id": "stamp_press", "ui": "button", "label": label, "token": f"{i:032x}"}
+              for i, label in enumerate(("👀", "🙆", "🙏", "👍", "✅"), 1)]
+    links = [{"id": "link", "ui": "link", "label": f"合成リンク{i}",
+              "url": f"https://example.test/{i}"} for i in range(5)]
+    picker = {"id": "stamp", "ui": "button", "label": "MCSスタンプ", "token": "a" * 32}
+    spec["parts"]["action_rows"] = [stamps, links, [picker]]
+    spec_mod.validate(spec)
+    wire = cards.message_payload(spec, components_v2=components_v2)["view"].to_components()
+    rows = [c for c in (wire[0]["components"] if components_v2 else wire) if c["type"] == 1]
+    assert all(len(row["components"]) <= 5 for row in rows)
+    items = [item for row in rows for item in row["components"]]
+    menu, = [item for item in items if item["type"] == 3]
+    assert [o["value"] for o in menu["options"]] == [picker["token"]]
+    assert [b["custom_id"] for b in items if b["type"] == 2 and "custom_id" in b] == [
+        "mcs:a:" + b["token"] for b in stamps]
+    assert [b["url"] for b in items if "url" in b] == [b["url"] for b in links]
 
 
 def test_layout_view_marks_v2_flag_for_send_and_edit():
@@ -297,7 +313,9 @@ def test_mobile_classic_serialization_has_content_full_embed_and_same_tokens():
         assert not payload.get("flags", 0) & (32768 | 4096)
         assert "患者A" in payload["embeds"][0]["description"]
         assert "mcs notify" in payload["embeds"][0]["description"]
-        assert payload["components"][0]["components"][0]["custom_id"] == "mcs:a:" + "ab" * 16
+        menu = payload["components"][0]["components"][0]
+        assert menu["custom_id"] == "mcs:menu"
+        assert [option["value"] for option in menu["options"]] == ["ab" * 16, "ef" * 16]
         assert payload["allowed_mentions"]["parse"] == []
         v2 = handle_message_parameters(**cards.message_payload(spec, components_v2=True))
         assert v2.payload["flags"] & 32768
@@ -321,7 +339,12 @@ def test_render_only_card_views_do_not_accumulate_in_native_store():
                 # pinned discord.py2.7.1. No HTTP client or connection.
                 if not view.is_finished() and view.is_dispatchable():
                     store.add_view(view, mid)
-                assert "mcs:a:" + "ab" * 16 in str(view.to_components())
+                components = view.to_components()
+                rows = components[0]["components"] if legacy else components
+                menu, = [item for row in rows if row["type"] == 1
+                         for item in row["components"] if item["type"] == 3]
+                assert menu["custom_id"] == "mcs:menu"
+                assert [option["value"] for option in menu["options"]] == ["ab" * 16, "ef" * 16]
             assert not store._views and not store._synced_message_views
     asyncio.run(scenario())
 

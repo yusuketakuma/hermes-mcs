@@ -1,6 +1,6 @@
 # 責務別の構成と再利用の境界
 
-この文書は1.0.28開発候補の内部構造を説明します。現時点では統合検証と全領域の調査が進行中です。版の公開、本番適用、モジュール単体での独立配布を示すものではありません。
+この文書は1.0.28開発候補の内部構造を説明します。調査した範囲と各候補の検証結果は、その候補の作業記録で確認してください。版の公開、本番適用、モジュール単体での独立配布を示すものではありません。
 
 利用手順は[文書索引](../README.md)、モジュール・CLIの生成表と検証入口は[開発リファレンス](DEVELOPMENT.md)が正本です。この文書は依存方向、共有状態、副作用の所有者を説明します。
 
@@ -13,6 +13,7 @@
 | `mcs/core/writer_lock.py`・`safe_io` | writerの取得・コード/更新世代の照合、安全なファイル公開とFD所有権移管 | 取得したFDは呼出元が保持・解放する。借用接続をclose/commitせず、ファイル公開は既存の同期・置換順序を守る |
 | `mcs/core/snapshots.py` | snapshotのコピー・候補検証・atomic publish | 一時接続・一時ファイル・検証用子プロセスを生成し、成功/失敗時の終了と破棄を所有 |
 | `mcs/core/snapshot_access.py` | 借用snapshotの世代・時刻とtable存在確認 | 呼出元の同一connectionを借用し、open/close/commitしない |
+| `mcs/core/worker_process.py` | 通信workerの終了後のpipe排出・FD閉鎖・wait | workerを生成・停止する呼出元から終了対象を受け取る。プロセスグループのTERM/KILL・停止判断は移さない |
 | `mcs/ingest/` | `mcs_adapter`の認証/取得、`mcs_worker`の子process統括、`mcs_cdp`のWebSocket、`mcs_download`の添付stream、`mcs_payload`の応答正規化 | session/retry/全体deadline/最終ファイル置換はadapter。wireとpartialは子process側。`collection_stages`が取得・再ログイン・walk cursorのstageを実行し、`run_check`が順序・全体締切・run lockを所有 |
 | `mcs/ingest/health_report.py` | healthの観測・集計・coverage | 借用connectionと過去health記録を読み、書込み失敗のincidentは`run_check`が記録 |
 | `mcs/llm/` | 推論通信、turn lock、admission、`llm_availability`の接続・回路状態 | 通信状態の読書きは明示された保存先/借用接続上で行う。抽出結果・claim・carryのDB保存と解放は担当workerが所有 |
@@ -35,6 +36,8 @@
 | `mcs/ops/environment_diagnostics.py` | 接続・認証・プロセス源泉の診断 | 有限のpath/実行環境を受け、既存の期限付き観測を実行する。setupは対話・結果表示、updaterはbaseline比較を所有。旧setup診断入口は旧updater互換だけに残す |
 | `mcs/ops/backup_evidence.py`・`restore_evidence` | backup記録/inventory/復元準備と、損失report/一致する人承認receipt | 専用read-only接続の終了と、終了後のhash/atomic公開を所有。暗号化・操作を囲むロックはbackup統括、hold・journal・DB置換はupdaterが引き続き所有 |
 | `adapters/common/` | 接続先共通の認可・患者scope・command/preview/confirm・配送worker | workerがscope lock/claim/再試行、registryが永続slot記録、journalが配送事実を所有 |
+| `adapters/common/forms.py`・`card_controls.py` | フォーム定義と入力値検証、カード操作の分類とスタンプ表示名 | runnerが発行した選択肢・tokenを借用する純粋処理。フォームの保管・期限は各actions/registry、最終認可・適用はrunnerが所有 |
+| `adapters/slack/presentation.py` | 本文・スレッド・患者情報のBlock Kit描画、表示上限と文字/リンクの安全な変換 | SDK・通信・保存を持たない。`cards.py`がspec検証と操作部品の組立て、`actions.py`が本人向け回答、`delivery.py`が配送を所有 |
 | `adapters/{slack,discord,lineworks}/` | 接続先固有のUI・SDK・送信/受信 | 承認と共通scope検証を通し、SDKの許可ファイルと遅延importを維持 |
 | `hermes_plugin/` | plugin登録・遅延bootstrap・host設定/identity変換・worker接続 | import時点ではadapterを読込まず、正しいcheckoutを解決して接続 |
 | `mcs_standalone/` | 独立host・service・Runtime・ネイティブ接続 | Runtimeが子プロセス/slot/停止/回収を所有。共通設定はsetup CLIへ依存しない |
@@ -42,6 +45,9 @@
 ## 主要な依存方向
 
 - 共通commandと認可は`adapters/common/`が正本であり、Hermesとstandaloneがそれを利用します。共通処理はhost pluginからprivate helperを借りません。
+- 入力フォームは`forms`、結果の日本語表示は`text`、カード操作の分類は`card_controls`が正本です。SDKの部品・上限・イベント形式は各adapterに残します。Slackの本文描画を利用する回答/配送は`presentation`へ直接依存し、カードmoduleのprivate関数を借りません。
+- 抽出の補完済み判定は`extract_quality`へ集約します。患者状態・薬剤履歴・監査は同じ判定を利用し、それぞれの原文/世代/context照合と保留条件は自身で維持します。
+- 同梱薬剤masterの読取りは`import_drug_master`が所有します。導入CLI・更新前確認・参照情報は同じ読取りを使い、CLI初期化を経由しません。semanticのjob種別は`semantic_policy`に置き、観測CLIがdrain統括を読み込まない構成にします。
 - 取得stageは`collection_stages`が認証回復の共通予算と部分保存・snapshot既読化の順序を保って実行します。統括はmodule全体やCLI引数を注入せず、必要な値と借用adapter/writerを渡します。stage側は接続を開閉せず、既存のwriterのtransaction境界を使います。
 - MCSのwireはworkerから`mcs_cdp`/`mcs_download`を直接呼び、親adapterのprivate実装へ戻りません。添付のURL検証は`mcs_download`が共通化し、親だけがtoken取得と最終ファイル置換を行います。
 - MCSの値・例外は`mcs_contract`、登録データの検証は`project_metadata_contract`が正本です。読取側が通信クライアントや取得CLIの実装をimportする必要を減らします。
@@ -59,6 +65,7 @@
 - 人承認の復旧は`notify_recovery`から`notify_transport`の借用transaction上の確定処理を使います。復旧receiptと状態を同時にcommitし、spec公開はその後に行います。読取側は`notify_scope`へ直接依存します。
 - 薬剤照合の進捗と現行参照の読取は`drug_map`の実体が正本です。統計/通知/薬剤履歴は同じsnapshotと一巡の進捗を共有し、テスト用の関数同一性で別経路へ分岐しません。
 - 共通hashの検証は`mcs_util`、版タグの文法は`update_policy`が正本です。操作契約や表示がqueue CLIを経由せず、queueの保存・ロック・順序は`mcs_requests`が所有します。hostの遅延bootstrap後に必要な処理を読む契約は維持します。
+- 独立Slack/Discordのネイティブcommandは`common.commands.run_native`が同期処理の実終了まで待ち、呼出元のlistenerを途中で解放しません。接続先が現在の設定・停止状態を検証し、`mcs_requests.enqueue`がqueue lock取得後と公開直前にその検証を実行します。公開後の保存結果不明とreceiptは既存queueが所有し、応答の取消を未送信扱いにはしません。
 - 薬局の参照項目は`patient_context`、保存済み履歴のSQLは`mcs_queries`が正本です。抽出・semantic・表示から集約writerを経由せずに利用し、解釈に影響する両moduleをsource digestとcandidate定義の変更検知に含めます。
 - 表示用のバイタルは`clinical_display`、登録情報のprojectionは`registered_data`が正本です。表示limitでcoverageや全体件数を変えません。
 - 更新の遠隔版探索はreceiptの書込transactionに入る前に行い、ローカルのwrapper/設定はreceipt確定の境界で再確認します。更新journal・復元同意・rollbackはupdater、切り離し起動はcommit後の呼出元が所有します。独立復旧ツールはcheckout破損時にも起動できる自己完結のprocess処理を保持します。
@@ -78,6 +85,7 @@
 | 変更したい内容 | 最初に確認する正本 | 一緒に確認する契約 |
 |---|---|---|
 | 接続先追加/host変更 | `adapters/common/access.py`, `dispatch.py`, `human_commands.py` | actor/origin/transport/患者scope/payload hash、例外秘匿、SDK遅延load |
+| 入力フォーム/カード操作/Slack本文 | `adapters/common/forms.py`, `card_controls.py`, `adapters/slack/presentation.py` | runner発行の選択肢とtoken、取消対象、表示順、患者scope、未知/未取得、各SDKの上限と再送条件 |
 | 定期ジョブ/設定検証 | `scheduled_jobs`, `mcs_config` | CLI互換、service生成、standalone catchup/停止、旧updaterのimport閉包 |
 | 抽出の検証/品質判断 | `extract_validation`, `extract_quality`, `clinical_scope` | evidence/context、否定/他者/時点、held_prior、candidate定義とsource digest |
 | 推論通信 | `local_llm`, `semantic_transport` | wire slot/turn/deadline、送信不明、carryと保存、回路状態 |

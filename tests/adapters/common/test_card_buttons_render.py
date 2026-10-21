@@ -11,7 +11,7 @@ import pytest
 from adapters.common import envelopes, spec as spec_mod, text
 from adapters.discord import cards as discord_cards
 from adapters.lineworks import cards as lineworks_cards
-from adapters.slack import cards as slack_cards
+from adapters.slack import cards as slack_cards, presentation as slack_presentation
 from discord_testkit import _fake_discord
 
 LINK = {"id": "link", "ui": "link", "label": "🔗 MCSで開く",
@@ -146,7 +146,7 @@ def test_slack_footer_stays_plain_without_mentions():
 
 
 def test_slack_mention_ids_reads_footer_only():
-    assert slack_cards.mention_ids(_spec(slack=True)) == {"U0AB12CD"}
+    assert slack_presentation.mention_ids(_spec(slack=True)) == {"U0AB12CD"}
 
 
 @pytest.mark.parametrize("kind,secondary", [
@@ -175,15 +175,16 @@ def test_secondary_action_sets_reach_all_three_transport_menus(monkeypatch, kind
     _, blocks = slack_cards.render(slack_spec)
     menu = next(element for block in blocks if block["type"] == "actions"
                 for element in block["elements"] if element["type"] == "static_select")
-    assert [tokens[option["value"]] for option in menu["options"]] == secondary
+    # every transport: 確認・担当・タスク作成 lead the one 操作 menu, as on Slack
+    assert [tokens[option["value"]] for option in menu["options"]] == primary + secondary
     assert any(block["type"] == "context" and block["elements"][0]["type"] == "mrkdwn"
                for block in blocks) == (kind != "digest")
 
     _, options = discord_cards._button_items(spec)
-    assert [tokens[option.value] for option in options] == secondary
+    assert [tokens[option.value] for option in options] == primary + secondary
     spec["parts"]["thread_drug_actions"] = True
     _, options = discord_cards._button_items(spec)
-    assert [tokens[option.value] for option in options] == [
+    assert [tokens[option.value] for option in options] == primary + [
         action for action in secondary if action not in {"meds", "drugsearch"}]
     thread = discord_cards.thread_drug_view(spec)
     assert ([] if thread is None else [tokens[b.custom_id.removeprefix("mcs:a:")]
@@ -193,94 +194,9 @@ def test_secondary_action_sets_reach_all_three_transport_menus(monkeypatch, kind
     spec["parts"]["action_rows"].append([
         {"id": "more", "ui": "button", "label": "その他の操作", "token": "f" * 32}])
     menu = lineworks_cards.secondary(spec)
-    assert [button["id"] for button in menu] == secondary
-    assert len(menu) <= 10
+    assert [button["id"] for button in menu] == primary + secondary
     assert [button["label"] for button in lineworks_cards.action_buttons(spec)] == (
-        primary + ([] if kind == "digest" else [LINK["label"]]) + ["その他の操作"])
-
-
-# ---------- shared modal definitions ------------------------------------
-
-def test_task_fields_with_and_without_roster():
-    bare = text.modal_fields("request", None, "佐藤")
-    assert [f["id"] for f in bare] == ["task", "assignee", "due_date",
-                                       "reason"]
-    assert bare[-1]["required"] is False and bare[-1]["default"] == ""
-    assert bare[1]["default"] == "佐藤" and bare[0]["default"] == ""
-    roster = text.modal_fields(
-        "request", {"hint": "残薬確認", "staff": ["佐藤（みどり薬局）",
-                                               "x" * 76]}, "佐藤")
-    # Discord modals hold at most 5 components
-    assert [f["id"] for f in roster] == ["task", "assignee_pick",
-                                        "assignee", "due_date", "reason"]
-    assert roster[0]["default"] == "残薬確認"
-    # an over-long name can never become an option (Slack 75 chars)
-    assert roster[1]["options"] == [("佐藤（みどり薬局）", "佐藤（みどり薬局）")]
-    assert roster[1]["default"] == "佐藤（みどり薬局）"
-    assert text.modal_fields("defer") == []
-
-
-@pytest.mark.parametrize("fields,expect", [
-    ({"task": " 残薬確認 ", "assignee_pick": "佐藤（みどり薬局）"},
-     {"title": "残薬確認", "assignee": "佐藤（みどり薬局）",
-      "reason": text.TASK_REASON}),
-    ({"task": "t", "assignee": "手入力", "assignee_pick": "佐藤"},
-     {"title": "t", "assignee": "手入力", "reason": text.TASK_REASON}),
-    ({"task": "t", "due_date": "2026-10-01"},
-     {"title": "t", "due_date": "2026-10-01", "reason": text.TASK_REASON}),
-    ({"task": "t", "reason": " 家族から依頼 "},
-     {"title": "t", "reason": "家族から依頼"}),
-    # an old 依頼 form submitted across a restart still validates
-    ({"title": "旧件名", "reason": "旧理由"},
-     {"title": "旧件名", "reason": "旧理由"}),
-    ({"task": ""}, "タスク内容の入力が必要です。"),
-    ({"task": "t", "due_date": "2026-02-30"},
-     "期限は YYYY-MM-DD 形式で入力してください。"),
-    ({"task": "t", "assignee": "a" * 121},
-     "担当者は120文字以内で入力してください。"),
-])
-def test_task_attrs(fields, expect):
-    assert text.task_attrs(copy.deepcopy(fields)) == expect
-
-
-def test_feedback_attrs():
-    assert text.feedback_attrs({"field": "meds", "note": " 量 "}) \
-        == ("meds", "量")
-    assert text.feedback_attrs({"field": "vitals"}) \
-        == ("vitals", "抽出の誤り報告（バイタル）")
-    assert text.feedback_attrs({"field": "x"}) \
-        == "誤っている箇所を選択してください。"
-
-
-# ---------- 🚫 reason codes / 🔎 / list views ------------------------------
-
-def test_feedback_fields_match_the_runner_vocabulary():
-    import operation_contract
-    assert tuple(v for v, _ in text.FEEDBACK_FIELDS) \
-        == operation_contract.EXTRACT_FEEDBACK_FIELDS
-    assert dict(text.FEEDBACK_FIELDS)["urgency"] == "緊急度"
-
-
-def test_dismiss_reasons_match_the_runner_vocabulary():
-    import operation_contract
-    assert tuple(v for v, _ in text.DISMISS_REASONS) \
-        == operation_contract.DISMISS_REASON_CODES
-    fields = text.modal_fields("dismiss")
-    assert [f["id"] for f in fields] == ["reason_code", "note"]
-    assert fields[0]["required"] and fields[0]["options"]
-
-
-@pytest.mark.parametrize("fields,expect", [
-    ({"reason_code": "duplicate", "note": " 同じ件 "}, ("同じ件", "duplicate")),
-    ({"reason_code": "false_positive", "note": ""}, ("誤検知", "false_positive")),
-    ({"reason_code": "", "note": "x"}, "却下理由を選択してください。"),
-    ({"reason_code": "nope"}, "却下理由を選択してください。"),
-    # a modal opened before the upgrade: free text only, no code
-    ({"reason": "旧理由"}, ("旧理由", None)),
-    ({"reason": ""}, "理由の入力が必要です。"),
-])
-def test_dismiss_attrs(fields, expect):
-    assert text.dismiss_attrs(fields) == expect
+        ["操作を選ぶ…"] + ([] if kind == "digest" else [LINK["label"]]))
 
 
 def test_dismiss_preview_names_the_code():
@@ -306,14 +222,6 @@ def test_input_folds_into_command_id_and_validates():
     assert len({plain["command_id"], q1["command_id"], q2["command_id"]}) == 3
     for env in (plain, q1, q2):
         assert notify_cmds.validate_int(env) is None
-
-
-def test_search_query_normalizes():
-    assert text.search_query({"query": "  発熱　 咳 "}) == "発熱 咳"
-    assert text.search_query({"query": "  "}) is None
-    assert [f["id"] for f in text.modal_fields("search")] == ["query"]
-    assert [f["id"] for f in text.modal_fields("drugsearch")] == ["query"]
-    assert set(text.QUERY_FORMS) <= set(text.VIEW_FORMS) <= set(text.MODAL_ACTIONS)
 
 
 def test_list_messages_filters_scope_and_caps():
@@ -363,14 +271,15 @@ def test_discord_view_zones_separators_and_menu(monkeypatch):
     assert all(c.visible and c.spacing == 1 for c in inner
                if type(c).__name__ == "Separator")
     assert inner[6].content.startswith("-# ")
-    primary, menu_row = inner[-2].children, inner[-1].children
-    assert [b.custom_id for b in primary[:3]] == [
-        f"mcs:a:{n:032x}" for n in range(3)]
-    assert primary[-1].url == LINK["url"]
+    # the Slack order: the 操作を選ぶ… select first, then the MCSで開く link
+    menu_row, link_row = inner[-2].children, inner[-1].children
     (menu,) = menu_row
-    assert menu.custom_id == "mcs:menu"
+    assert menu.custom_id == "mcs:menu" and menu.placeholder == "操作を選ぶ…"
     assert [(o.label, o.value) for o in menu.options] == [
+        ("Lack", f"{0:032x}"), ("Lassign", f"{1:032x}"), ("Lrequest", f"{2:032x}"),
         ("Lbody", f"{3:032x}"), ("Lsummary", "f" * 32)]
+    (link,) = link_row
+    assert link.url == LINK["url"]
 
 
 def test_discord_escape_is_literal_and_length_preserving():

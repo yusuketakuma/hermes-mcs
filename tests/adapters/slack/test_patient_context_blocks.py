@@ -1,7 +1,7 @@
 """Slack shows the patient-context views as Block Kit; other lists keep their text form."""
 import pytest
 
-from adapters.slack.cards import context_list_blocks
+from adapters.slack.presentation import context_list_blocks
 
 VIEW = {"layout": "patient_context", "title": "合成患者 — 患者さんの全体像（1/2ページ）",
         "head": ["関係者: 看護師 合成看護師", "表示順: 標準"],

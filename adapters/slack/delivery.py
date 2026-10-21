@@ -16,7 +16,8 @@ from adapters.common import envelopes, eventlog
 from adapters.common.spec import token_map
 from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
-from .cards import mention_ids, render, thread_part_blocks, validate
+from .cards import render, validate
+from .presentation import mention_ids, thread_part_blocks
 from .paths import notify_dirs
 
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")

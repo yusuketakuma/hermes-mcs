@@ -66,6 +66,8 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
   認証・Bot REST・署名Callbackを所有する（stdlib・OpenSSL、固定公式URL、
   no-redirect/no-proxy、期限・容量制限、秘密値の環境自動取得なし）。
   Hermes接続のadapterの `asyncio` は `sleep`・`to_thread`・`CancelledError` に限定する。
+  `adapters/common/commands.py` だけは同期コマンドの終了を待つため、
+  `to_thread`・`create_task`・`wait`・`CancelledError` を使う。通信・SDKは所有しない。
   独立Slack/Discordの `standalone.py` は接続・task終了待ちのasyncioも使用する。
   正確なSDK/asyncio許可は `ci/gates.py` に限定し、通常adapterへ拡張しない。
   独立LINE WORKSの `__main__.py` だけは常駐起動/停止用の

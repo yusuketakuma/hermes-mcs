@@ -10,13 +10,13 @@ import time
 
 from adapters.common import projects
 from adapters.common import confirm, envelopes, paths, registry
-from adapters.common.text import (ERR_JA, MODAL_ACTIONS, RECEIPT_TEXT, MODAL_TITLES, SEARCH_EMPTY,
-                                 STAMP_FORM_PENDING,
-                                 VIEW_FORMS, digest_inputs,
-                                 ja, modal_fields, preview_text,
-                                 followup_waiting, search_query, split_body, view_answer,
-                                 view_scope_ok)
-from .cards import LINK_ACTION, MENU_ACTION, STAMP_PAIR_PREFIX, _sections, context_list_blocks, render_parts
+from adapters.common.forms import (MODAL_ACTIONS, MODAL_TITLES, VIEW_FORMS,
+                                   digest_inputs, modal_fields, search_query)
+from adapters.common.text import (ERR_JA, RECEIPT_TEXT, SEARCH_EMPTY, STAMP_FORM_PENDING,
+                                 ja, preview_text, followup_waiting, split_body,
+                                 view_answer, view_scope_ok)
+from .cards import LINK_ACTION, MENU_ACTION, STAMP_PAIR_PREFIX
+from .presentation import text_sections, context_list_blocks, render_parts
 
 _LINK = re.compile("^" + re.escape(LINK_ACTION) + "$")
 _MENU = re.compile("^" + re.escape(MENU_ACTION) + "$")
@@ -27,7 +27,7 @@ _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
 _EXPIRED = "この確認は期限切れです。もう一度操作してください。"
 # block ids of modals opened by a worker that predates pending
-# field_ids — text.task_attrs / dismiss_attrs still accept these keys
+# field_ids — forms.task_attrs / dismiss_attrs still accept these keys
 _LEGACY_FIELDS = {"request": ("title", "reason", "assignee", "due_date"),
                   "dismiss": ("reason",)}
 # "defer" (保留) is retired but still routed: the runner answers
@@ -45,7 +45,7 @@ MODAL_OPEN_WAIT_S = 1.5
 
 
 def _modal_blocks(fields):
-    """Shared modal fields (text.modal_fields) as Slack input blocks."""
+    """Shared modal fields as Slack input blocks."""
     blocks = []
     for f in fields:
         if f.get("options"):
@@ -93,10 +93,10 @@ def _task_blocks(items):
     # JST day computed here: the Hermes card worker never imports
     # _mcs_path, so flat mcs modules (notify_render) are not importable
     today = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
-    blocks = _sections("📋 タスク（このスレッド）")
+    blocks = text_sections("📋 タスク（このスレッド）")
     count = 0
     for task in items:
-        blocks.extend(_sections(_task_text(task, today)))
+        blocks.extend(text_sections(_task_text(task, today)))
         elements = []
         for to, tr in (task.get("transitions") or {}).items():
             if count >= 25:
@@ -214,6 +214,7 @@ class Actions:
         self._sender = sender
         self._log = log
         self._active = False
+        self._native_current = None
         self._followup_cursor = 0
 
     def register(self):
@@ -240,9 +241,10 @@ class Actions:
                 and body.get("channel_id") == self._settings["channel_id"]):
             return
         from adapters.common import commands, text
-        answer = await asyncio.to_thread(
+        answer = await commands.run_native(
             commands.answer, self._settings, body.get("text"),
-            user=body["user_id"], channel=body["channel_id"])
+            user=body["user_id"], channel=body["channel_id"],
+            authorized=self._native_command_current)
         for chunk in text.split_body(answer, max_chunks=None):
             await self._say(body["channel_id"], body["user_id"], chunk)
 
@@ -281,6 +283,13 @@ class Actions:
 
     def unload(self):
         self._active = False
+
+    def _native_command_current(self):
+        try:
+            return self._active and (self._native_current is None
+                                     or self._native_current() is True)
+        except (OSError, ValueError, TypeError):
+            return False
 
     def _scope(self, body):
         """A modal/ephemeral click has no original card ts; use its stored pin."""
@@ -354,7 +363,7 @@ class Actions:
                     kwargs["blocks"] = blocks + (
                         [{"type": "actions", "elements": navigation}] if navigation else [])
                 elif navigation and index == 0:
-                    kwargs["blocks"] = _sections(unescape(chunk)) + [
+                    kwargs["blocks"] = text_sections(unescape(chunk)) + [
                         {"type": "actions", "elements": navigation}]
                 await call_native(client.chat_postEphemeral, retry_allowed=still_active, **kwargs)
                 if blocks:
@@ -452,7 +461,7 @@ class Actions:
 
     async def _open_modal(self, body, env, token, actor, origin, ctx, kind,
                           clicker):
-        """Open the shared modal (text.modal_fields) for a published
+        """Open the shared modal for a published
         modal-action click. 📝 first waits briefly for the runner's form;
         a definite rejection answers instead of opening."""
         user = body["user"]["id"]
@@ -595,7 +604,7 @@ class Actions:
         # Stay within _say's escaped-text budget and Slack's 4000-byte advice.
         chunks = split_body(text, limit=_EPHEMERAL_MAX // 5, max_chunks=None)
         for index, chunk in enumerate(chunks):
-            blocks = _sections(chunk)
+            blocks = text_sections(chunk)
             if index == len(chunks) - 1:
                 blocks.append(buttons)
             if not await self._say(origin["channel_id"], pending["user"], chunk, blocks=blocks):

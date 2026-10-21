@@ -17,7 +17,7 @@ import os
 import time
 import uuid
 
-from . import text
+from . import forms
 from .paths import atomic_write, safe_name
 
 MAX_COMMAND_BYTES = 16384
@@ -301,7 +301,7 @@ def human_payload(action: str, actor: str, context: dict, params: dict,
     if action == "stamp":
         if not _stamp_form_ok(form):
             return "スタンプの対象を特定できません。最新のカードからやり直してください。"
-        got = text.stamp_attrs(fields, form)
+        got = forms.stamp_attrs(fields, form)
         if isinstance(got, str):
             return got
         post = got["post"]
@@ -310,7 +310,7 @@ def human_payload(action: str, actor: str, context: dict, params: dict,
             return "スタンプの対象を特定できません。最新のカードからやり直してください。"
         return mcs_reaction(actor, form, got)
     if action == "report":
-        got = text.feedback_attrs(fields)
+        got = forms.feedback_attrs(fields)
         if isinstance(got, str):
             return got
         if not isinstance(context.get("extract_ref"), dict) \
@@ -318,7 +318,7 @@ def human_payload(action: str, actor: str, context: dict, params: dict,
             return "報告対象の抽出結果を特定できません。"
         return extract_feedback(actor, context, *got)
     if action == "dismiss":
-        got = text.dismiss_attrs(fields)
+        got = forms.dismiss_attrs(fields)
         if isinstance(got, str):
             return got
         key = params.get("signal_key")
@@ -334,7 +334,7 @@ def human_payload(action: str, actor: str, context: dict, params: dict,
             or not context.get("source_hash") \
             or not context.get("project_id"):
         return "起票対象の投稿を特定できません。"
-    attrs = text.task_attrs(fields)
+    attrs = forms.task_attrs(fields)
     if isinstance(attrs, str):
         return attrs
     return request_create(actor, context, attrs)

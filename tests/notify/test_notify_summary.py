@@ -9,7 +9,7 @@ import pytest
 
 import notify_digest
 import notify_render
-from adapters.common import text
+from adapters.common import forms, text
 from adapters.slack.actions import _parts_blocks
 from notify_testkit import (
     NOW, _add_request, _click, _delivered_digest, _patient, led, pinned_clock)
@@ -174,11 +174,11 @@ def test_slack_answer_is_a_block_kit_card():
 
 
 def test_modal_inputs_default_to_all_and_the_clicker():
-    assert text.digest_inputs({}, "山田") == {"query": "all", "name": "山田"}
-    assert text.digest_inputs({"query": " mine  days:2 ", "name": "佐藤"},
+    assert forms.digest_inputs({}, "山田") == {"query": "all", "name": "山田"}
+    assert forms.digest_inputs({"query": " mine  days:2 ", "name": "佐藤"},
                               "山田") == {"query": "mine days:2",
                                           "name": "佐藤"}
-    assert [f["id"] for f in text.modal_fields("digest", None, "山田")] == [
+    assert [f["id"] for f in forms.modal_fields("digest", None, "山田")] == [
         "query", "name"]
     answer = text.view_answer({"outcome": "applied", "action": "digest",
                                "text": "## 見出し"}, lambda p: True)

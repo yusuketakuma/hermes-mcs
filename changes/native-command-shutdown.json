@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "接続の終了後に確認操作が遅れて受け付けられる問題を修正",
+  "summary": "Slack・Discord の独立接続を終了した場合や操作権限を変更した場合、待機中の確認操作をそのまま受け付けないようにしました。処理中の書込みは終了まで追跡し、受付結果が確定していない操作を未送信扱いに変えません。",
+  "upgrade": "独立接続は更新後に Slack・Discord アダプターを再起動してください。Hermes 接続の Slack に反映するには gateway の再起動が必要です。承認条件・モデル・取得範囲・通知先・既定値の変更はありません。",
+  "details": [
+    "同期コマンドの処理を、繰返し取消が届いても終了まで接続の所有下に保持する。",
+    "人承認操作の queue lock 待機中・取得後・公開直前に接続と経路の有効性を再確認する。CLI の従来の待機方法は維持する。",
+    "公開後の永続化結果が不明な場合は、既存の unknown と保存済みコマンドを保持する。"
+  ],
+  "refs": ["adapters/common/commands.py", "adapters/discord/standalone.py", "adapters/slack/standalone.py", "mcs/ops/mcs_requests.py"]
+}

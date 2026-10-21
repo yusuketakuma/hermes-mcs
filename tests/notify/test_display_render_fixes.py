@@ -6,7 +6,7 @@ import json
 
 import alert_view
 import notify_render
-from adapters.slack import cards as slack_cards
+from adapters.slack import presentation as slack_presentation
 from notify_testkit import (_dispatch, _extract, _msg, _patient, _seed_thread,
                             _signal_row, _spec, _intent, led)
 
@@ -86,7 +86,7 @@ def test_slack_urgent_notice_link_is_clickable(led):
     parts = alert_view.render_parts(
         {"project_id": 1, "message_id": 100, "subject": "patient",
          "reasons": ["本人が急変し至急確認が必要です"]}, led.db)
-    blocks = slack_cards.render_parts(parts)
+    blocks = slack_presentation.render_parts(parts)
     footer = [e for b in blocks if b["type"] == "context" for e in b["elements"]
               if "原本確認" in e["text"]]
     assert len(footer) == 1 and footer[0]["type"] == "mrkdwn"

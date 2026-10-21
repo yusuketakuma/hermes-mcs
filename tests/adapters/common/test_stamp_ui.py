@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from adapters.common import envelopes, text
+from adapters.common import envelopes, forms, text
 
 TOKEN = "a" * 32
 FORM = {
@@ -33,14 +33,14 @@ def _payload(fields, form=FORM):
 
 
 def test_modal_offers_only_runner_posts_and_types_with_required_reason():
-    fields = {f["id"]: f for f in text.modal_fields("stamp", FORM)}
+    fields = {f["id"]: f for f in forms.modal_fields("stamp", FORM)}
     assert [v for v, _ in fields["post"]["options"]] == ["p1", "p2", "p3", "p4"]
     assert "承知" in dict(fields["post"]["options"])["p1"]
     ops = dict(fields["op"]["options"])
     # MCS's own row: the stamps in runner order, no separate cancel choice
     assert list(ops) == ["add:viewed", "add:accepted", "add:completed"]
     assert fields["reason"]["required"] and fields["reason"]["max"] == 200
-    assert "stamp" in text.MODAL_ACTIONS and text.MODAL_TITLES["stamp"]
+    assert "stamp" in forms.MODAL_ACTIONS and forms.MODAL_TITLES["stamp"]
 
 
 def test_add_builds_exact_contract_fields_from_the_shown_form():

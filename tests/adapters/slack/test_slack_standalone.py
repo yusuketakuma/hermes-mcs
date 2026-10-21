@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import sys
+import threading
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -260,6 +261,98 @@ def test_runtime_registers_before_receive_and_closes_all_tasks(
     asyncio.run(scenario())
     assert closed == ["socket", "host"] and session.closed
     assert all(task.done() for task in tasks)
+
+
+@pytest.mark.parametrize("cancel_shutdown", [False, True])
+def test_shutdown_retains_supervisor_lock_until_native_thread_finishes(
+        config, tmp_path, monkeypatch, cancel_shutdown):
+    from adapters.common.commands import run_native
+    from adapters.slack import tasks as slack_tasks
+
+    for name in ("slack_render", "cmd_int", "cmd_results", "flags"):
+        (tmp_path / "data" / name).mkdir(parents=True)
+    (tmp_path / "data" / "flags" / "notify.json").write_text(json.dumps({
+        "interactive": True, "transport": "slack"}))
+    client = Client()
+    session = wire_client(monkeypatch, client)
+    started, release, ended = (threading.Event() for _ in range(3))
+    supervisors, listeners = [], []
+    real_supervisor = standalone.Supervisor
+
+    def supervisor(**kwargs):
+        instance = real_supervisor(**kwargs)
+        supervisors.append(instance)
+        return instance
+
+    def native_work():
+        started.set()
+        try:
+            assert release.wait(5), "synthetic native work was not released"
+        finally:
+            ended.set()
+
+    monkeypatch.setattr(standalone, "Supervisor", supervisor)
+    monkeypatch.setattr(slack_tasks, "POLL_S", 0.01)
+
+    async def scenario():
+        stopping, socket_closed = asyncio.Event(), asyncio.Event()
+
+        async def socket(_client, _credentials, inflight):
+            app = SimpleNamespace(client=client, action=lambda _p: lambda fn: fn,
+                                  view=lambda _n: lambda fn: fn)
+
+            async def connect():
+                assert supervisors[0]._actions._native_command_current()
+                task = asyncio.create_task(run_native(native_work))
+                listeners.append(task)
+                inflight.add(task)
+                task.add_done_callback(inflight.discard)
+                deadline = asyncio.get_running_loop().time() + 5
+                while not started.is_set():
+                    assert asyncio.get_running_loop().time() < deadline
+                    await asyncio.sleep(0.005)
+                stopping.set()
+
+            async def close():
+                socket_closed.set()
+
+            return app, SimpleNamespace(connect_async=connect, close_async=close,
+                                        client=SimpleNamespace(closed=False))
+
+        monkeypatch.setattr(standalone, "_socket", socket)
+        running = asyncio.create_task(standalone.run(tmp_path, stopping))
+        try:
+            await asyncio.wait_for(socket_closed.wait(), timeout=5)
+            # Give the real supervisor several ticks: early unload would now
+            # finish its finally and release the delivery scope lock.
+            await asyncio.sleep(0.05)
+            owner, = supervisors
+            assert not owner._actions._active and owner._worker._stopping
+            assert owner._actions._native_current() is False
+            assert not running.done() and not owner._task.done()
+            assert owner._worker._lock_fd is not None
+            assert not session.closed and not ended.is_set()
+            if cancel_shutdown:
+                for _ in range(3):
+                    running.cancel()
+                    await asyncio.sleep(0)
+                    assert not running.done() and not owner._task.done()
+                    assert not ended.is_set() and owner._worker._lock_fd is not None
+            release.set()
+            if cancel_shutdown:
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(running, timeout=5)
+            else:
+                await asyncio.wait_for(running, timeout=5)
+            assert ended.is_set() and session.closed
+            assert owner._task.done() and owner._worker._lock_fd is None
+            assert all(task.done() and task.cancelled() for task in listeners)
+        finally:
+            release.set()
+            stopping.set()
+            await asyncio.gather(running, return_exceptions=True)
+
+    asyncio.run(scenario())
 
 
 # ---------- control-sequence escaping and config change before post --------

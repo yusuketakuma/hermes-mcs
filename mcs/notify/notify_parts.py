@@ -205,20 +205,18 @@ def _thread_plan_ids(db, card, shown, waiting=frozenset()) -> list:
 
 
 def _prior_remote_ids(db, card) -> dict:
-    """part_id -> (remote id, payload sha256) of the newest delivered
-    body chunk or attachment among this card's earlier renders. A
-    chunk's text changes after the first post (the extraction result
-    arrives, a reply joins the thread) and every update render re-plans
-    the thread's attachments; the plan names the message that already
-    carries each part so the worker rewrites a chunk in place and reuses
-    an identical file instead of posting a second copy."""
+    """part_id -> (remote id, payload sha256) of each newest delivered attachment.
+
+    Updates re-plan the thread's attachments; naming the message that already
+    carries an identical file lets the worker reuse it without posting a copy.
+    """
     out: dict = {}
     for r in db.execute(
             """SELECT p.part_id, p.remote_id, p.payload_sha256
                FROM notification_render_parts p
                JOIN notification_renders r ON r.delivery_id=p.delivery_id
                WHERE r.card_id=?
-                 AND p.kind IN ('body_part','attachment_part')
+                 AND p.kind='attachment_part'
                  AND p.state='delivered' AND p.remote_id IS NOT NULL
                ORDER BY r.render_rev, p.idx""", (card["card_id"],)):
         out[r["part_id"]] = (str(r["remote_id"]), r["payload_sha256"])

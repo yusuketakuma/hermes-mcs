@@ -83,10 +83,8 @@ PART_ENTRY_KEYS = frozenset({
     "attachment_id", "path", "unavailable", "prior_remote_id", "caption", "edit_only", "broadcast"})
 MAX_CAPTION = 300
 
-# Buttons a card keeps as buttons on every transport; every other
-# action goes into the transport's secondary surface (Slack/Discord
-# select, LINE WORKS 1:1 menu behind ``more``). The ``link`` button
-# (ui=link) is always primary too.
+# Primary operations retained on older LINE WORKS cards without ``more``.
+# Current cards use each transport's menu; links and stamps stay on the card.
 PRIMARY_ACTIONS = ("ack", "assign", "request")
 # MCS's own stamp row: drawn as its own row of buttons under the primary row
 STAMP_ROW_ACTION = "stamp_press"

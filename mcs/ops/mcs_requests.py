@@ -356,7 +356,25 @@ def queue_lock(cmd_dir, *, wait=True):
         os.close(fd)  # closing releases the flock
 
 
-def enqueue(req, cmd_dir):
+@contextmanager
+def _enqueue_lock(cmd_dir, authorized):
+    if authorized is None:
+        with queue_lock(cmd_dir):
+            yield
+        return
+    # A revoked native listener must be able to finish even when another
+    # process holds the inbox lock. CLI callers retain their blocking wait.
+    while True:
+        if authorized() is not True:
+            raise ValueError("command_scope_changed")
+        with queue_lock(cmd_dir, wait=False) as acquired:
+            if acquired:
+                yield
+                return
+        time.sleep(0.05)
+
+
+def enqueue(req, cmd_dir, *, authorized=None):
     error = validate(req)
     if error:
         raise ValueError(error)
@@ -365,7 +383,9 @@ def enqueue(req, cmd_dir):
         raise ValueError("command_too_large")
     receipt = {"command_id": req["command_id"], "payload_hash": payload_hash(req), "outcome": "queued"}
     # The inbox must already exist; never accidentally create a host-like path in a container.
-    with queue_lock(cmd_dir):
+    with _enqueue_lock(cmd_dir, authorized):
+        if authorized is not None and authorized() is not True:
+            raise ValueError("command_scope_changed")
         # drain_commands applies files in name order: number after every queued command,
         # even if the clock stepped back, so the lock order is the apply order.
         queued = [int(m[1]) for name in os.listdir(cmd_dir) if (m := QUEUED_REQUEST_RE.match(name))]
@@ -377,6 +397,8 @@ def enqueue(req, cmd_dir):
                 stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())
+            if authorized is not None and authorized() is not True:
+                raise ValueError("command_scope_changed")
             os.link(temp, temp[:-4] + ".json")  # Atomic publication without clobbering pending input.
             published = True
             os.unlink(temp)

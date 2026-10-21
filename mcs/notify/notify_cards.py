@@ -1136,6 +1136,30 @@ def _notice_spec(event_id, parts, cfg, scope, rev, transport) -> dict:
     return spec
 
 
+def _persist_notice_render(db, spec, event_id, now) -> None:
+    """Persist a sealed card-less notice and seed its parts in the borrowed transaction.
+
+    The caller owns the transaction and publishes the spec after commit.
+    """
+    delivery = spec["delivery"]
+    db.execute(
+        """INSERT INTO notification_renders(
+             delivery_id,card_id,op,render_rev,manifest_id,
+             route_epoch,profile,application_id,guild_id,
+             channel_id,transport,team_id,spec_json,payload_hash,
+             correlation,state,parts_state,intent_event_id,
+             created_at,updated_at)
+           VALUES(?,NULL,'notice',?,NULL,?,?,?,?,?,?,?,?,?,?,
+                  'queued','pending',?,?,?)""",
+        (spec["delivery_id"], spec["render_rev"], delivery["route_epoch"],
+         delivery.get("profile"), delivery.get("application_id"),
+         delivery.get("guild_id"), delivery.get("channel_id"),
+         delivery.get("transport", "discord"), delivery.get("team_id"),
+         canonical(spec).decode(), payload_hash(spec), delivery["correlation"],
+         event_id, now, now))
+    notify_parts.seed_parts(db, spec, now)
+
+
 def _notice_renders(db, event_id) -> list:
     return db.execute(
         "SELECT * FROM notification_renders WHERE card_id IS NULL "
@@ -1298,25 +1322,7 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
                  if transport in ("slack", "lineworks") else None))
             spec = _notice_spec(event_id, parts, cfg, scope,
                                 len(renders) + 1, transport)
-            db.execute(
-                """INSERT INTO notification_renders(
-                     delivery_id,card_id,op,render_rev,manifest_id,
-                     route_epoch,profile,application_id,guild_id,
-                     channel_id,transport,team_id,spec_json,payload_hash,
-                     correlation,state,parts_state,intent_event_id,
-                     created_at,updated_at)
-                   VALUES(?,NULL,'notice',?,NULL,?,?,?,?,?,?,?,?,?,?,
-                          'queued','pending',?,?,?)""",
-                (spec["delivery_id"], spec["render_rev"],
-                 spec["delivery"]["route_epoch"],
-                 spec["delivery"].get("profile"),
-                 spec["delivery"].get("application_id"),
-                 spec["delivery"].get("guild_id"),
-                 spec["delivery"].get("channel_id"), transport,
-                 spec["delivery"].get("team_id"), canonical(spec).decode(),
-                 payload_hash(spec), spec["delivery"]["correlation"],
-                 event_id, now, now))
-            notify_parts.seed_parts(db, spec, now)
+            _persist_notice_render(db, spec, event_id, now)
             specs.append(spec)
             _reseat(db, event_id, now, "notice_render_issued")
         mark_snapshot_dirty(db)
@@ -1574,16 +1580,7 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
                        "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,transport,scope_json) "
                        "VALUES(?,?,?,?,?,?,?)", (event_id, canonical(payload).decode(), payload_hash(payload),
                        notify_scope.route_epoch(cfg), now, notify_scope.active_transport(cfg), canonical(notify_scope.delivery_scope(cfg)).decode()))
-            db.execute("""INSERT INTO notification_renders(
-                delivery_id,card_id,op,render_rev,manifest_id,route_epoch,profile,application_id,guild_id,
-                channel_id,transport,team_id,spec_json,payload_hash,correlation,state,parts_state,
-                intent_event_id,created_at,updated_at)
-                VALUES(?,NULL,'notice',?,NULL,?,?,?,?,?,?,?,?,?,?,'queued','pending',?,?,?)""",
-                (spec["delivery_id"], spec["render_rev"], notify_scope.route_epoch(cfg), scope.get("profile"),
-                 scope["application_id"], scope.get("guild_id"), scope["channel_id"], notify_scope.active_transport(cfg),
-                 scope.get("team_id"), canonical(spec).decode(), payload_hash(spec),
-                 spec["delivery"]["correlation"], event_id, now, now))
-            notify_parts.seed_parts(db, spec, now)
+            _persist_notice_render(db, spec, event_id, now)
             specs.append(spec)
             db.execute("UPDATE notify_outbox SET route='interactive',progress=NULL WHERE event_id=?", (event_id,))
             _reseat(db, event_id, now, "alert_render_issued")

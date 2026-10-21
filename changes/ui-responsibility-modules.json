@@ -1,0 +1,25 @@
+{
+  "category": "changed",
+  "title": "チャット画面の共通処理と接続先ごとの描画を整理",
+  "summary": "画面や操作条件を維持したまま、入力フォーム・スタンプ操作の表示・Slack本文の描画をそれぞれの正本へ整理しました。画面の修正が認可や配送の状態管理へ波及しにくい構成にします。",
+  "upgrade": "設定変更は不要です。適用時はHermes gatewayまたは利用中の独立アダプターを再起動してください。更新後の画面や操作を処理するプロセスへ新コードを読み込ませる必要があります。患者・操作者・原文の検証、スタンプの追加/取消条件、結果不明時に自動再送しない扱いは変わりません。",
+  "details": [
+    "adapters/common/forms.pyがフォーム定義と入力値検証、card_controls.pyが操作の分類とスタンプ表示名を所有する。既存のcallerと検証を正本へ移し、text.pyへの互換転送は残さない。",
+    "Slackの本文・スレッド・本人向け患者情報の描画をpresentation.pyへ分離。カード検証、操作部品、通信、永続状態は元の所有先に残す。",
+    "共通フォームの7テスト関数を責務別のファイルへ移動し、パラメーターとassertionを維持する。",
+    "日次・緊急の通知記録INSERTとpart初期化をnotify_cardsの1関数へ集約。呼出元が持つtransactionとcommit後のpublish順序を維持する。添付引継ぎqueryは必要なattachment_partだけを読む。",
+    "全tracked caller・CLI・動的参照が存在しないstamp_write.pending_statusを削除。配送結果不明を保持する処理とstamp formの状態確認は維持する。",
+    "LINE WORKSの不正なfooter入力で想定外のTypeErrorになる回帰を修正し、送信前にClientErrorで拒否する5ケースを追加。",
+    "隔離runnerのTEST-01証跡を、既存のHOME/資格情報/通信と本番worker拒否を実証するテストへ対応させる。",
+    "Discordの旧カードでリンク5個の行が埋まっている場合はスタンプフォームをメニューに残し、6ボタン行を作らない。通常カードの1回押しスタンプと表示順は維持する。"
+  ],
+  "refs": [
+    "adapters/common/forms.py",
+    "adapters/common/card_controls.py",
+    "adapters/slack/presentation.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_parts.py",
+    "mcs/stamps/stamp_write.py",
+    "adapters/lineworks/client.py"
+  ]
+}

@@ -6,7 +6,7 @@ import pytest
 from slack_card_testkit import _spec
 from slack_testkit import isolated_slack_ledger as led, _rewrite_world, ROOT_TS
 
-from adapters.slack.cards import thread_part_blocks
+from adapters.slack.presentation import thread_part_blocks
 
 __all__ = ["led"]
 pytestmark = pytest.mark.thread_bodies

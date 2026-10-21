@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from typing import BinaryIO
 
-from adapters.common.spec import MAX_COMPONENTS, MAX_TEXT, PRIMARY_ACTIONS, STAMP_ROW_ACTION
-from adapters.common.text import escape_md, notification_preview, stamp_icon
+from adapters.common.spec import MAX_BUTTONS, MAX_COMPONENTS, MAX_TEXT
+from adapters.common.card_controls import (MENU_LABEL, STAMP_PICKER_LABEL,
+                                           plan_controls, stamp_label)
+from adapters.common.text import escape_md, notification_preview
 
 # accent bar colour per card kind — the visible card edge; a missing
 # kind (notice op) leaves the container unaccented
@@ -27,8 +29,7 @@ def _accent(spec):
     return _ACCENTS.get(spec.get("kind"))
 
 ACTION_PREFIX = "mcs:a:"          # card button custom_id = prefix + token
-MENU_ID = "mcs:menu"              # the 他の操作 select — value = token
-_MENU_PLACEHOLDER = "その他の操作…"     # the same words as the LINE WORKS button
+MENU_ID = "mcs:menu"              # the 操作 select — value = token
 _POST_BUTTONS_MAX = 5                   # one action row of per-post 💊 buttons
 _MENU_MAX = 25                    # options per select
 
@@ -106,37 +107,44 @@ def _zone_text(zone) -> list:
     return [ln if isinstance(ln, str) else ln[0] for ln in zone]
 
 
-def _button_items(spec, primary_actions=PRIMARY_ACTIONS):
-    """The same durable primary/link buttons and secondary menu in both formats."""
+def _button_items(spec, primary_actions=()):
+    """Buttons for ``primary_actions`` and links, every other operation in the menu.
+
+    Cards pass none, so 確認・担当・タスク作成 sit in the menu as on Slack;
+    the companion-thread drug view passes its own button set."""
     import discord
-    primary, menu, links = [], [], []
-    for row in spec["parts"].get("action_rows") or []:
-        for button in row:
-            if spec["parts"].get("thread_drug_actions") is True \
-                    and button.get("id") in {"meds", "drugsearch"}:
-                continue
-            if button.get("id") == STAMP_ROW_ACTION:
-                continue                   # drawn as its own row by _stamp_buttons
-            if button.get("ui") == "link":
-                links.append(discord.ui.Button(style=discord.ButtonStyle.link,
-                                               label=button["label"], url=button["url"]))
-            elif button.get("id") in primary_actions:
-                primary.append(discord.ui.Button(
-                    style=getattr(discord.ButtonStyle, button.get("style", "secondary")),
-                    label=button["label"], custom_id=f"{ACTION_PREFIX}{button['token']}"))
-            else:
-                menu.append(discord.SelectOption(label=button["label"], value=button["token"]))
+    controls = plan_controls(spec["parts"])
+    primary, links, menu = [], [], []
+    # A full link row leaves the stamp form reachable in the menu.
+    operations = controls.menu if len(controls.links) < MAX_BUTTONS else controls.operations
+    for button in (*operations, *controls.links):
+        if spec["parts"].get("thread_drug_actions") is True \
+                and button.get("id") in {"meds", "drugsearch"}:
+            continue
+        if button.get("ui") == "link":
+            links.append(discord.ui.Button(style=discord.ButtonStyle.link,
+                                            label=button["label"], url=button["url"]))
+        elif button.get("id") in primary_actions:
+            primary.append(discord.ui.Button(
+                style=getattr(discord.ButtonStyle, button.get("style", "secondary")),
+                label=button["label"], custom_id=f"{ACTION_PREFIX}{button['token']}"))
+        else:
+            menu.append(discord.SelectOption(label=button["label"], value=button["token"]))
     return primary + links, menu
 
 
-def _stamp_buttons(spec) -> list:
-    """MCS's own stamp row: emoji only, one press sends; the own stamp is primary."""
+def _stamp_rows(spec):
+    """(stamp row, 別の投稿 button or None): emoji only, the own stamp marked ✓ as on Slack."""
     import discord
-    return [discord.ui.Button(
-        style=getattr(discord.ButtonStyle, b.get("style", "secondary")),
-        label=stamp_icon(b["label"]), custom_id=f"{ACTION_PREFIX}{b['token']}")
-        for row in spec["parts"].get("action_rows") or [] for b in row
-        if b.get("id") == STAMP_ROW_ACTION]
+    controls = plan_controls(spec["parts"])
+    form = controls.stamp_picker if len(controls.links) < MAX_BUTTONS else None
+    row = [discord.ui.Button(
+        style=discord.ButtonStyle.secondary,
+        label=stamp_label(b),
+        custom_id=f"{ACTION_PREFIX}{b['token']}") for b in controls.stamps]
+    other = discord.ui.Button(style=discord.ButtonStyle.secondary, label=STAMP_PICKER_LABEL,
+                              custom_id=f"{ACTION_PREFIX}{form['token']}") if form else None
+    return row, other
 
 
 def thread_drug_view(spec, *, private=False):
@@ -177,17 +185,18 @@ def message_payload(spec, *, components_v2=False):
     if len(face) > 4096:
         raise ValueError("discord_embed_budget")
     view = discord.ui.View(timeout=None)
-    primary, menu = _button_items(spec)
-    for button in primary:
-        button.row = 0
-        view.add_item(button)
+    # the Slack order: 操作を選ぶ…, the stamp row, 別の投稿 + MCSで開く, then per-post 💊
+    links, menu = _button_items(spec)
     if menu:
         view.add_item(discord.ui.Select(
-            custom_id=MENU_ID, placeholder=_MENU_PLACEHOLDER,
-            min_values=1, max_values=1, options=menu[:_MENU_MAX], row=1))
-    stamps = _stamp_buttons(spec)
+            custom_id=MENU_ID, placeholder=MENU_LABEL,
+            min_values=1, max_values=1, options=menu[:_MENU_MAX], row=0))
+    stamps, other = _stamp_rows(spec)
     for button in stamps:
-        button.row = 3
+        button.row = 1
+        view.add_item(button)
+    for button in ([other] if other else []) + links:
+        button.row = 2
         view.add_item(button)
     for line, button in posts[:_POST_BUTTONS_MAX]:
         # "-# MM-DD HH:MM sender…" -> "💊 MM-DD HH:MM"
@@ -195,10 +204,10 @@ def message_payload(spec, *, components_v2=False):
         view.add_item(discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             label=button["label"] if len(posts) == 1 else f"💊 {stamp}"[:80],
-            custom_id=f"{ACTION_PREFIX}{button['token']}", row=2))
+            custom_id=f"{ACTION_PREFIX}{button['token']}", row=3))
     payload = {"content": escape_md(notification_preview(spec["parts"])),
                "embed": discord.Embed(description=face, colour=_accent(spec))}
-    if primary or menu or posts or stamps:
+    if links or menu or posts or stamps:
         view.stop()
         payload["view"] = view
     return payload
@@ -206,8 +215,8 @@ def message_payload(spec, *, components_v2=False):
 
 def build_view(spec: dict):
     """spec -> discord.ui.LayoutView. Called only after validate().
-    Face: text zones split by Separators, a Separator, then one row of
-    primary buttons (+ link) and one row holding the 他の操作 select."""
+    Face: text zones split by Separators, a Separator, then the 操作を選ぶ…
+    select, the stamp row and one row with 別の投稿 + MCSで開く."""
     import discord  # SDK required only inside the handler boundary
 
     zones, footer = _zones(spec, escape_md)
@@ -216,24 +225,22 @@ def build_view(spec: dict):
         return discord.ui.Separator(
             visible=True, spacing=discord.SeparatorSpacing.small)
 
-    primary = discord.ui.ActionRow()
-    buttons, menu = _button_items(spec)
-    for button in buttons:
-        primary.add_item(button)
+    links, menu = _button_items(spec)
+    stamps, other = _stamp_rows(spec)
     rows = []
-    if primary.children:
-        rows.append(primary)
-    stamp_row = discord.ui.ActionRow()
-    for button in _stamp_buttons(spec):
-        stamp_row.add_item(button)
-    if stamp_row.children:
-        rows.append(stamp_row)
+    # the Slack order: 操作を選ぶ…, the stamp row, then 別の投稿 + MCSで開く
     if menu:
         select_row = discord.ui.ActionRow()
         select_row.add_item(discord.ui.Select(
-            custom_id=MENU_ID, placeholder=_MENU_PLACEHOLDER,
+            custom_id=MENU_ID, placeholder=MENU_LABEL,
             min_values=1, max_values=1, options=menu[:_MENU_MAX]))
         rows.append(select_row)
+    for group in (stamps, ([other] if other else []) + links):
+        row = discord.ui.ActionRow()
+        for button in group:
+            row.add_item(button)
+        if row.children:
+            rows.append(row)
 
     def face(groups):
         out = []

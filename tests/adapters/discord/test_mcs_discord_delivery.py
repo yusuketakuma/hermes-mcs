@@ -1961,7 +1961,7 @@ def test_parent_card_drug_actions_only_appear_in_companion_thread(tmp_path, monk
     assert {"synthetic-meds", "synthetic-drugsearch"} <= set(tokens(legacy))
     spec["parts"]["thread_drug_actions"] = True
     parent = cards.message_payload(spec, components_v2=components_v2)["view"]
-    assert tokens(parent) == ["mcs:a:synthetic-ack"]
+    assert tokens(parent) == ["synthetic-ack"]           # 確認する sits in the 操作 menu
     assert tokens(cards.thread_drug_view(spec)) == [
         "mcs:a:synthetic-meds", "mcs:a:synthetic-drugsearch"]
 

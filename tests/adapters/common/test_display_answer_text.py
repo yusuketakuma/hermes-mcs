@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from adapters.common import text
+from adapters.common import forms, text
 
 CODES = ("card_missing", "signal_not_open", "signal_not_found", "signal_corrupt",
          "project_mismatch", "project_not_found", "payload_changed",
@@ -63,7 +63,7 @@ def test_long_list_notice_does_not_send_staff_to_mcs():
 
 
 def test_digest_modal_labels_use_japanese_keys():
-    query, name = text.modal_fields("digest", clicker="合成 職員")
+    query, name = forms.modal_fields("digest", clicker="合成 職員")
     assert "mine" not in query["label"] and "all" not in query["label"]
     assert query["default"] == "全体"
     assert "mine" not in name["label"]

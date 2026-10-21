@@ -88,12 +88,14 @@ def _validate_content(content):
                  and isinstance(footer, dict) and footer.get("type") == "box"
                  and footer.get("layout") == "vertical" and isinstance(actions, list)
                  and 1 <= len(actions) <= 10)
-        if valid and isinstance(actions[-1], dict) and actions[-1].get("type") == "box":
-            # the one MCS stamp row: a last horizontal box of 1-5 buttons
-            row = actions[-1].get("contents")
-            valid = (actions[-1].get("layout") == "horizontal" and isinstance(row, list)
-                     and 1 <= len(row) <= 5)
-            actions = actions[:-1] + (row if valid else [])
+        boxes = ([i for i, child in enumerate(actions)
+                  if isinstance(child, dict) and child.get("type") == "box"] if valid else [])
+        if valid and boxes:
+            # the one MCS stamp row: a single horizontal box of 1-5 buttons
+            row = actions[boxes[0]].get("contents")
+            valid = (len(boxes) == 1 and actions[boxes[0]].get("layout") == "horizontal"
+                     and isinstance(row, list) and 1 <= len(row) <= 5)
+            actions = actions[:boxes[0]] + (row if valid else []) + actions[boxes[0] + 1:]
         valid = valid and 1 <= len(actions) <= 10 and all(
             isinstance(button, dict) and button.get("type") == "button"
             and _valid_action(button.get("action")) for button in actions)

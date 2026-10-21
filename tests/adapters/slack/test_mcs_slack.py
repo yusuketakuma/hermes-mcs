@@ -16,7 +16,7 @@ from hermes_plugin.card_workers import make_slack_factory
 from adapters.common import envelopes, journal, registry
 from adapters.common.spec import token_map
 from adapters.slack import paths as slack_paths
-from adapters.slack.cards import thread_part_blocks
+from adapters.slack.presentation import thread_part_blocks
 import notify_cards as runner_cards
 import notify_spool
 import notify_cmds as runner_cmds

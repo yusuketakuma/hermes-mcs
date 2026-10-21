@@ -68,14 +68,6 @@ def _latest(db, mid):
     return json.loads(row[0]) if row else None
 
 
-def pending_status(db, project_id, root):
-    return db.execute(
-        "SELECT 1 FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
-        "WHERE a.kind=? AND m.project_id=? AND (m.message_id=? OR m.parent_id=?) "
-        "AND (NOT json_valid(a.content) OR json_extract(a.content,'$.state') "
-        "IN ('queued','unknown','started')) LIMIT 1", (KIND, project_id, root, root)).fetchone() is not None
-
-
 def form(db, card, cfg, actor, now, token) -> dict:
     """Read selectable posts from the exact rendered manifest on a borrowed snapshot."""
     if not enabled(cfg, actor):

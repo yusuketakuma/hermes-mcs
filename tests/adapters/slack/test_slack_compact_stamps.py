@@ -250,7 +250,7 @@ def test_legacy_card_rejection_does_not_retry_or_drop_its_blocks():
 def test_fallback_that_exceeds_block_budget_is_not_sent(monkeypatch):
     spec = _stamps_spec()
     spec["parts"]["action_rows"][0] = [spec["parts"]["action_rows"][0][-1]]
-    monkeypatch.setattr(cards, "_BLOCK_MAX", len(render(spec)[1]))
+    monkeypatch.setattr(cards, "BLOCK_MAX", len(render(spec)[1]))
     outcome, calls = _deliver_card([_slack_error()], spec=spec)
     assert outcome == {"result": "not_sent", "error_code": "bad_render"}
     assert len(calls) == 1
