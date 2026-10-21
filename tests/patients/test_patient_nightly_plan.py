@@ -91,3 +91,19 @@ def test_rejected_items_name_index_and_reason_only():
         {"category": "unknown", "text": chunk, "evidence": chunk, "subject": "unspecified"}]}
     assert plan.rejected_items(answer, chunk) == [
         {"index": 1, "reason": "not_verbatim_or_invalid"}, {"index": 2, "reason": "not_verbatim_or_invalid"}]
+
+
+def test_an_invalid_cursor_restarts_the_plan_and_its_split_together():
+    body = "本日訪問しました。合成の記録として、ご本人は落ち着いて過ごされていました。" * 160
+    source = {"body_text": body, "items": []}
+    for cursor in (True, -1, 999):
+        chunks, at, saved, _, _ = plan.scan_plan(source, {"split": 1, "cursor": cursor})
+        assert at == 0 and saved == {} and chunks == plan.plan_chunks(body, plan.SCAN_CHUNK)
+
+
+def test_grounded_items_keep_only_what_passes_on_its_own():
+    chunk = "生活環境: 合成の居住記録。"
+    good = {"category": "living", "text": chunk, "evidence": chunk, "subject": "unspecified"}
+    answer = {"patient_context": [good, {"category": "living", "text": "合成の別文",
+                                         "evidence": "合成の別文", "subject": "unspecified"}]}
+    assert plan.grounded_items(answer, chunk) == plan.context_items({"patient_context": [good]}, chunk)

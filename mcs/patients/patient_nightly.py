@@ -459,7 +459,9 @@ def _scan(cfg, source, saved, night_id, deadline, admit, end):
         except ValueError as exc:
             if str(exc) != "nightly_unsupported_items":
                 raise
-            # one bounded repair: name the refused items by index and fixed reason only
+            # one bounded repair: name the refused items by index and fixed reason only;
+            # what already passed on its own joins only a repair that passes too
+            kept = nightly_plan.grounded_items(answer, chunk)
             answer, replan = asked({**payload, "instruction": payload["instruction"]
                                     + "前回の回答のrejectedの項目は、原文と完全一致しないか、属性が引用の中にありません。"
                                     "原文に完全一致する引用だけでJSON全体を返し直す。裏付けできない項目は含めない。",
@@ -467,6 +469,7 @@ def _scan(cfg, source, saved, night_id, deadline, admit, end):
             if replan:
                 return replan
             checked = nightly_plan.scan_items(answer, chunk)
+            checked += [item for item in kept if item not in checked]
         items += checked
     facts = {f["id"]: f for f in saved.get("facts", [])}
     known = {f["id"] for f in _facts(source, source["items"], night_id=night_id, discovery="new_report")}

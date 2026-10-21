@@ -879,3 +879,21 @@ def test_a_repair_that_stops_at_the_budget_is_replanned_too(runtime, monkeypatch
     scan = document(led, nightly.SCAN)
     assert scan['complete'] and scan['split'] == 1 and scan.get('attempts', 0) == 0
     assert 'rejected' in scans[1] and len(scans[2]['source']) <= 1500
+
+
+def test_an_empty_repair_does_not_drop_what_the_first_answer_grounded(runtime, monkeypatch):
+    led, _, _ = runtime
+    first = '合成の訪問で、ご本人は落ち着いていました。'
+    seed(led, body=first + '合成の家族は同居しています。')
+    def reply(p):
+        if 'rejected' in p:
+            return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': []})}
+        return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': [
+            {'category': 'living', 'text': first, 'evidence': first, 'subject': 'unspecified', 'details': []},
+            {'category': 'living', 'text': '合成の言い換え', 'evidence': '合成の言い換え',
+             'subject': 'unspecified', 'details': []}]})}
+    _scan_chat(monkeypatch, reply)
+    finish(runtime)
+    scan = document(led, nightly.SCAN)
+    # without keeping it the empty repair would leave no fact at all
+    assert scan['complete'] and len(scan['facts']) == 1 and first in scan['facts'][0]['text']

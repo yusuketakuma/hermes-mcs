@@ -63,7 +63,9 @@ def scan_plan(source, saved):
     chunks = plan_chunks(source["body_text"], SCAN_CHUNK >> split)
     cursor = saved.get("cursor", 0)
     if type(cursor) is not int or not 0 <= cursor < len(chunks):
+        # a reset restarts the whole plan: a finer split must not outlive its cursor
         cursor, saved = 0, {}
+        chunks = plan_chunks(source["body_text"], SCAN_CHUNK)
     chunk = chunks[cursor]
     items = context_items({"patient_context": source["items"]}, chunk)
     # A fully quoted labelled unit needs no second inference. Unknown prose
@@ -97,16 +99,30 @@ def split_scan(source, saved, cursor):
     return None
 
 
+def _checked_item(item, chunk):
+    """(grounded item, None) or (None, fixed refusal reason) for one scan item."""
+    valid = context_items({"patient_context": [item]}, chunk)
+    if not valid:
+        return None, "not_verbatim_or_invalid"
+    if isinstance(item, dict) and item.get("details", []) != valid[0].get("details", []):
+        return None, "details_not_in_quote"
+    return valid[0], None
+
+
 def rejected_items(answer, chunk):
     """Fixed reasons for each refused scan item, by index only: never its text."""
     out = []
     for index, item in enumerate(answer.get("patient_context") or []):
-        valid = context_items({"patient_context": [item]}, chunk)
-        if not valid:
-            out.append({"index": index, "reason": "not_verbatim_or_invalid"})
-        elif isinstance(item, dict) and item.get("details", []) != valid[0].get("details", []):
-            out.append({"index": index, "reason": "details_not_in_quote"})
+        reason = _checked_item(item, chunk)[1]
+        if reason:
+            out.append({"index": index, "reason": reason})
     return out
+
+
+def grounded_items(answer, chunk):
+    """The items of a refused answer that pass the same checks on their own."""
+    return [valid for valid in (_checked_item(item, chunk)[0]
+                                for item in answer.get("patient_context") or []) if valid]
 
 
 def scan_items(answer, chunk):
