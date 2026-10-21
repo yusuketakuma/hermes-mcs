@@ -881,19 +881,24 @@ def test_a_repair_that_stops_at_the_budget_is_replanned_too(runtime, monkeypatch
     assert 'rejected' in scans[1] and len(scans[2]['source']) <= 1500
 
 
-def test_an_empty_repair_does_not_drop_what_the_first_answer_grounded(runtime, monkeypatch):
+@pytest.mark.parametrize('repaired, failed', [(False, True), (True, False)])
+def test_a_repair_must_keep_what_the_first_answer_grounded(runtime, monkeypatch, repaired, failed):
     led, _, _ = runtime
     first = '合成の訪問で、ご本人は落ち着いていました。'
     seed(led, body=first + '合成の家族は同居しています。')
+    grounded = {'category': 'living', 'text': first, 'evidence': first, 'subject': 'unspecified', 'details': []}
     def reply(p):
-        if 'rejected' in p:
-            return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': []})}
+        if 'rejected' in p:      # an empty repair drops the grounded item; a full one keeps it
+            return {'status': 200, 'finish_reason': 'stop',
+                    'text': json.dumps({'patient_context': [grounded] if repaired else []})}
         return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': [
-            {'category': 'living', 'text': first, 'evidence': first, 'subject': 'unspecified', 'details': []},
-            {'category': 'living', 'text': '合成の言い換え', 'evidence': '合成の言い換え',
-             'subject': 'unspecified', 'details': []}]})}
+            grounded, {'category': 'living', 'text': '合成の言い換え', 'evidence': '合成の言い換え',
+                       'subject': 'unspecified', 'details': []}]})}
     _scan_chat(monkeypatch, reply)
-    finish(runtime)
+    results = [step(runtime) for _ in range(6)]
+    reasons = [r.get('reason') for r in results if r['status'] == 'failed']
     scan = document(led, nightly.SCAN)
-    # without keeping it the empty repair would leave no fact at all
-    assert scan['complete'] and len(scan['facts']) == 1 and first in scan['facts'][0]['text']
+    if failed:   # the chunk is not completed by dropping what was grounded
+        assert reasons[:1] == ['nightly_unsupported_items'] and not scan.get('complete')
+    else:
+        assert not reasons and scan['complete'] and len(scan['facts']) == 1
