@@ -18,8 +18,11 @@ from safe_io import fdopen_owned, publish_tmp
 SNAPSHOT_VERIFY_TIMEOUT_S = 30.0
 # quick_check time grows with the file: the verify budget adds one second
 # per SNAPSHOT_VERIFY_RATE_BPS of snapshot, capped, so a ledger that has
-# outgrown the floor is not refused on every publish (H4)
-SNAPSHOT_VERIFY_RATE_BPS = 64 * 1024 * 1024
+# outgrown the floor is not refused on every publish (H4). quick_check on a
+# 281 MB ledger took 12.4 s (~23 MB/s) beside the live workers and timed
+# out past 34 s under heavier load while the copy took 2 s, so the rate
+# leaves several times the measured read speed as headroom.
+SNAPSHOT_VERIFY_RATE_BPS = 4 * 1024 * 1024
 SNAPSHOT_VERIFY_EXTRA_MAX_S = 150.0
 
 
@@ -39,6 +42,16 @@ _failure: dict = {}
 def last_failure() -> dict:
     """Bounded reason and timings of the most recent unpublished snapshot."""
     return dict(_failure)
+
+
+# Copy/verify seconds and the verify budget of the latest publish that
+# succeeded, so the remaining margin stays visible without a failure.
+_timing: dict = {}
+
+
+def last_timing() -> dict:
+    """Bounded timings of the most recent published snapshot."""
+    return dict(_timing)
 
 
 def _fail(reason: str, **extra) -> None:
@@ -130,6 +143,7 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
     so a large ledger fails this publish instead of getting the process
     killed mid-copy on every tick."""
     _failure.clear()
+    _timing.clear()
     if deadline is not None and monotonic() >= deadline:
         _fail("deadline_before_copy")
         return None
@@ -181,6 +195,8 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
             _fail(_failure["reason"], copy_s=round(copied - started, 3),
                   capped_by_deadline=deadline is not None and verify_by == deadline)
             return None
+        _timing.update(copy_s=round(copied - started, 3),
+                       verify_s=round(monotonic() - copied, 3), budget_s=round(verify_by - copied, 3))
         publish_tmp(tmp, dest)
         # A reader keeps its old inode or opens the complete new generation.
         return dest

@@ -181,6 +181,9 @@ def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
     finally:
         writer.close()
     assert out is not None
+    timing = snapshots.last_timing()        # the margin is visible on success too
+    assert set(timing) == {"copy_s", "verify_s", "budget_s"}
+    assert 0 <= timing["verify_s"] <= timing["budget_s"]
     with closing(sqlite3.connect(out)) as snap:
         assert snap.execute("SELECT COUNT(*) FROM t").fetchone()[0] >= 6000
 
@@ -194,6 +197,9 @@ def test_snapshot_verify_budget_grows_with_size(tmp_path, monkeypatch):
     big = snapshots.snapshot_verify_timeout_s(str(small))
     assert snapshots.SNAPSHOT_VERIFY_TIMEOUT_S < big <= (
         snapshots.SNAPSHOT_VERIFY_TIMEOUT_S + snapshots.SNAPSHOT_VERIFY_EXTRA_MAX_S)
+    # a production-sized ledger (~300 MB) keeps headroom over a loaded quick_check
+    monkeypatch.setattr(ledger.os.path, "getsize", lambda _p: 300 * 1024 ** 2)
+    assert snapshots.snapshot_verify_timeout_s(str(small)) >= 90
 
 
 # ---------- M7: backup respects the hard deadline ----------

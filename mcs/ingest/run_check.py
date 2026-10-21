@@ -757,6 +757,8 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
             result["snapshot_failure"] = snapshots.last_failure()
             raise RuntimeError("snapshot_verify_failed")
         if state == "published":
+            import snapshots
+            result["snapshot_timing"] = snapshots.last_timing()
             notify_cards.clear_snapshot_dirty(ledger)
     except Exception as e:
         result["errors"].append(f"snapshot: {type(e).__name__}")
