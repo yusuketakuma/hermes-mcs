@@ -74,7 +74,10 @@ def test_interactive_install_asks_for_the_runtime(tmp_path, setup_answer, setup_
         assert process.stdout is not None and process.stdin is not None
         ready.register(process.stdout, selectors.EVENT_READ)
         output = b""
-        deadline = time.monotonic() + 10
+        # One hang guard for the whole installer run, like the other installer
+        # runs in this file: no prompt has a latency contract, and preflight
+        # work before the first prompt slows down under suite load.
+        deadline = time.monotonic() + 120
         try:
             for prompt, answer in [
                 ("選択 [1・推奨 / 2 / 0・中止]: ", b"wrong\n"),
@@ -92,7 +95,6 @@ def test_interactive_install_asks_for_the_runtime(tmp_path, setup_answer, setup_
                 process.stdin.write(answer)
                 process.stdin.flush()
             # Keep BSD script's input open until the last answer has been consumed.
-            deadline = time.monotonic() + 120
             while True:
                 remaining = deadline - time.monotonic()
                 assert remaining > 0 and ready.select(remaining), output
