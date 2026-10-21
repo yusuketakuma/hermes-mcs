@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import semantic_store
+import pytest
 
 from hermes_plugin import card_workers
 from adapters.common import dispatch as command_dispatch
@@ -851,3 +852,46 @@ def test_lazy_command_import_failure_hides_host_details(monkeypatch):
     handler = hermes_plugin._make_handler(_Context({}))
     assert json.loads(handler("{}", _context())) == {
         "ok": False, "error": "operation_failed"}
+
+
+@pytest.mark.parametrize("flags", [
+    {"interactive": True, "transport": "discord", "route_epoch": 3},
+    {"interactive": True, "route_epoch": 3},
+    {"interactive": False, "transport": "discord", "route_epoch": 3},
+    {"interactive": True, "transport": "slack", "route_epoch": 3},
+    {"interactive": True, "transport": "discord"},
+    {"interactive": True, "transport": "discord", "route_epoch": True},
+    {"interactive": True, "transport": "discord", "route_epoch": 3,
+     "restore_pending": True},
+])
+def test_discord_factory_pins_current_route_epoch(tmp_path, monkeypatch, flags):
+    from types import SimpleNamespace
+    from adapters.discord import tasks
+    settings = _settings(tmp_path)
+    settings.update(interactive=True, data_root=str(tmp_path / "data"),
+                    application_id="101", channel_id="42", guild_id="7")
+    root = Path(settings["data_root"])
+    (root / "flags").mkdir(parents=True)
+    (root / "flags" / "notify.json").write_text(json.dumps(flags))
+    captured = []
+
+    class Supervisor:
+        def __init__(self, **kwargs):
+            captured.append(kwargs["settings"])
+
+        def start(self):
+            return True
+
+    monkeypatch.setattr(tasks, "Supervisor", Supervisor)
+    got = card_workers.make_discord_factory(_Context(settings))(
+        SimpleNamespace(user=SimpleNamespace(id=101), application_id=101),
+        SimpleNamespace(_owner_profile="default"))
+    expected = (flags.get("interactive") is True
+                and flags.get("transport", "discord") == "discord"
+                and type(flags.get("route_epoch")) is int
+                and not flags.get("restore_pending"))
+    assert (got is not None) is expected
+    if expected:
+        assert captured[0]["route_epoch"] == 3
+    else:
+        assert captured == []
