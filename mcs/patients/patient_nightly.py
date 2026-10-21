@@ -4,6 +4,8 @@ import hashlib
 import json
 import math
 import os
+from pathlib import Path
+import re
 import time
 
 import local_llm
@@ -20,6 +22,10 @@ SCAN = "patient_context_scan_v1"
 PROGRESS = "patient_context_progress_v1"
 CONTRACT = "patient-context-nightly/1"
 CALL_SECONDS = 300
+# the fixed nightly_* codes name which check refused an answer; never content
+_FAILURE_CODE = re.compile(r"nightly_[a-z_]{1,60}")
+# Exhausted retries reopen once the answer checks change; same checks, same refusal.
+_CHECKS = hashlib.sha256(Path(nightly_plan.__file__).read_bytes()).hexdigest()
 COMMIT_MARGIN = 5
 
 
@@ -329,7 +335,8 @@ def _all_facts(db, pid, snapshot, night_id):
 
 
 def _ready(progress, now):
-    return now is None or (progress.get("attempts", 0) < 5 and progress.get("next_try", 0) <= now)
+    return now is None or ((progress.get("attempts", 0) < 5 or progress.get("checks") != _CHECKS)
+                           and progress.get("next_try", 0) <= now)
 
 
 def _pending(db, pid, cfg, *, now=None):
@@ -403,6 +410,8 @@ def _ask(cfg, payload, deadline, admit, end):
         # lane 2 held the GPU turn for the whole call window: nothing
         # was sent, so the patient is not charged a failure
         raise Deferred("nightly_turn_busy")
+    if response and response.get("status") == 200 and response.get("finish_reason") == "length":
+        raise ValueError("nightly_length_stop")
     if not response or response.get("finish_reason") != "stop" or response.get("status") != 200:
         raise ValueError("nightly_incomplete_response")
     answer = loads_dict(response.get("text"))
@@ -539,7 +548,8 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
     except Deferred:
         return {"status": "deferred", "done": 0}
     except (ValueError, TypeError, KeyError, TimeoutError) as exc:
-        failure = type(exc).__name__
+        code = str(exc)
+        failure = code if type(exc) is ValueError and _FAILURE_CODE.fullmatch(code) else type(exc).__name__
     if result is None and failure is None:
         return {"status": "deferred", "done": 0}
     if time.monotonic() >= deadline or time.time() >= end or not admit():
@@ -586,7 +596,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
                 return {"status": "source_changed", "done": 0}
             prior = progress if lane == "A" else saved
             attempts = prior.get("attempts", 0) + 1 if failure else 0
-            retry = {"failure": failure, "attempts": attempts,
+            retry = {"failure": failure, "attempts": attempts, "checks": _CHECKS,
                      "next_try": now + min(86400, 300 * 2 ** min(attempts, 8)) if failure else 0}
             progress = {**progress, "last_attempt": now, "night_id": night_id,
                         "source_sig": snapshot["source_sig"], **(retry if lane == "A" else {})}
@@ -611,4 +621,4 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
     finally:
         os.close(fd)
     return {"status": "failed" if failure else "progressed", "done": int(not failure), "lane": lane,
-            "lock_wait_s": waited, **stats}
+            **({"reason": failure} if failure else {}), "lock_wait_s": waited, **stats}

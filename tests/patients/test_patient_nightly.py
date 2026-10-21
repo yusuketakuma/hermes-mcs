@@ -261,9 +261,12 @@ def test_failure_backoff_does_not_starve_other_patient(runtime, monkeypatch):
     original = nightly.local_llm.admitted_chat
     monkeypatch.setattr(nightly.local_llm, 'admitted_chat', lambda *a, **k: {
         'status': 200, 'finish_reason': 'length', 'text': '{}'})
-    assert step(runtime)['status'] == 'failed'
+    result = step(runtime)
+    # the fixed check code is kept (and logged), not just the exception type
+    assert result['status'] == 'failed' and result['reason'] == 'nightly_length_stop'
     progress = document(led, nightly.PROGRESS)
     assert progress['next_try'] > clock.wall and progress['attempts'] == 1
+    assert progress['failure'] == 'nightly_length_stop'
     assert nightly.status(led.db, CFG)['failed'] == 1
     monkeypatch.setattr(nightly.local_llm, 'admitted_chat', original)
     assert step(runtime)['status'] == 'progressed'
@@ -356,6 +359,16 @@ def test_changed_source_resets_exhausted_retries(runtime, monkeypatch):
     clock.wall += 86400
     step(runtime)
     assert document(led, nightly.PROGRESS)['attempts'] == 5
+    # changed answer checks earn one more try; the same checks stay exhausted
+    monkeypatch.setattr(nightly, '_CHECKS', 'synthetic-changed-checks')
+    clock.wall += 86400
+    # stored scans reopen with the same checks change; lane A gets its one try after them
+    results = [step(runtime) for _ in range(3)]
+    assert [r['status'] for r in results if r.get('lane') == 'A'] == ['failed']
+    assert document(led, nightly.PROGRESS)['attempts'] == 6
+    clock.wall += 86400
+    step(runtime)
+    assert document(led, nightly.PROGRESS)['attempts'] == 6
     seed(led, body='生活環境: 更新された合成の背景。')
     monkeypatch.setattr(nightly.local_llm, 'admitted_chat', original)
     assert step(runtime)['status'] == 'progressed'

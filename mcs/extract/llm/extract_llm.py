@@ -1386,8 +1386,9 @@ def _prior_extract(db, r):
         (KIND, r["message_id"], r["project_id"], r["content_hash"])).fetchone()
 
 
-def _hold_sql(*, human=False):
-    """Source-bound private receipts; a fresh human report bypasses automatic holds."""
+def _hold_sql(*, human=False, released=False):
+    """Source-bound private receipts; a fresh human report bypasses automatic holds.
+    ``released`` matches the same receipt minted under an older code contract."""
     prior = ("c.artifact_id" if human else "(SELECT p.artifact_id FROM artifacts p "
         "JOIN messages pm ON pm.message_id=p.message_id "
         f"WHERE p.kind='{KIND}' AND pm.message_id=m.message_id "
@@ -1403,7 +1404,7 @@ def _hold_sql(*, human=False):
             AND json_type(u.content,'$.prior_artifact_id')='integer'
             AND json_extract(u.content,'$.prior_artifact_id')={prior}
             AND json_extract(u.content,'$.target_version')={EXTRACT_VERSION}
-            AND json_extract(u.content,'$.contract')='{_upgrade_contract()}'
+            AND json_extract(u.content,'$.contract'){'<>' if released else '='}'{_upgrade_contract()}'
             AND COALESCE(json_extract(u.meta,'$.invalidated'),0)=0
             AND {reason} ELSE 0 END"""
 
@@ -2287,6 +2288,15 @@ _FRESH_SQL = ("NOT EXISTS (SELECT 1 FROM artifacts x WHERE x.kind='" + KIND
               + "' AND x.message_id=m.message_id)")
 
 
+def _rehold_sql() -> str:
+    """An automatic hold of this body at this generation that a code update
+    released (pending_pred keeps only current-contract holds out). These
+    re-runs mostly end held again, so they wait behind work that can land;
+    human/QC re-extracts and invalidated holds are never pushed back."""
+    return f"""(EXISTS ({_hold_sql(released=True)})
+        AND ({_qc_flagged_sql()}) IS NULL AND ({_human_flagged_sql()}) IS NULL)"""
+
+
 # Current-version, same-body error rows of one message (the retry state).
 _ERROR_ROWS_SQL = """FROM artifacts e WHERE e.message_id=m.message_id AND e.kind=?
         AND CASE WHEN json_valid(e.meta)
@@ -2335,7 +2345,7 @@ def upgrade_status(db, *, model: str | None) -> dict:
 
 
 def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None,
-                   archived: bool | None = None) -> str:
+                   archived: bool | None = None, rehold: bool | None = None) -> str:
     """run_pending's due-row selection.
 
     Retry state is read through correlated subqueries instead of a
@@ -2347,9 +2357,12 @@ def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None,
     due: COALESCE(MAX(next_try),0) <= now); message_id breaks posted_at
     ties, which were unordered before (M5). ``fresh`` True/False keeps
     only never-extracted / previously-extracted messages (M12).
-    ``archived`` partitions patients without adding a sort before LIMIT."""
+    ``archived`` partitions patients without adding a sort before LIMIT;
+    ``rehold`` likewise splits off update-released automatic holds."""
     fresh_sql = ("" if fresh is None else
                  f" AND {_FRESH_SQL}" if fresh else f" AND NOT {_FRESH_SQL}")
+    rehold_sql = ("" if rehold is None else
+                  f" AND {_rehold_sql()}" if rehold else f" AND NOT {_rehold_sql()}")
     archived_sql = ""
     if archived is not None:
         archived_sql = (" AND " + ("" if archived else "NOT ")
@@ -2364,7 +2377,7 @@ def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None,
              COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,'$.attempts'),0))
                        {_ERROR_ROWS_SQL}), 0) AS attempts
       FROM messages m
-      WHERE {ELIGIBLE_MESSAGE}{adm_sql}{archived_sql}{fresh_sql}
+      WHERE {ELIGIBLE_MESSAGE}{adm_sql}{archived_sql}{fresh_sql}{rehold_sql}
         AND (? IS NULL OR m.message_id % ? = ?)
         AND NOT EXISTS (SELECT 1 FROM fetch_jobs claim
                         WHERE claim.kind='extract_claim'
@@ -2455,8 +2468,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     # time.time(), so it is compared against the same Python clock —
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
-    def _select(fresh, n, archived):
-        return ledger.db.execute(_selection_sql(order, adm_sql, fresh, archived), (
+    def _select(fresh, n, archived, rehold=None):
+        return ledger.db.execute(_selection_sql(order, adm_sql, fresh, archived, rehold), (
             KIND, EXTRACT_VERSION,
             *adm_params,
             shard[1] if shard else None,
@@ -2470,15 +2483,18 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     rows, fresh_selected = [], None if oldest_first else 0
     # Active patients precede archived ones in both order modes. Each
     # class keeps its former order: fresh then re-extraction for newest,
-    # chronological only for oldest. Disjoint filters keep LIMIT streaming.
+    # chronological only for oldest, and within it update-released holds
+    # come last. Disjoint filters keep LIMIT streaming.
     for archived in (False, True):
         for fresh in ((None,) if oldest_first else (True, False)):
-            if len(rows) >= limit:
-                return rows, fresh_selected
-            selected = _select(fresh, limit - len(rows), archived)
-            rows += selected
-            if fresh_selected is not None and fresh:
-                fresh_selected += len(selected)
+            # a never-extracted body has no hold, so fresh needs no split
+            for rehold in ((None,) if fresh else (False, True)):
+                if len(rows) >= limit:
+                    return rows, fresh_selected
+                selected = _select(fresh, limit - len(rows), archived, rehold)
+                rows += selected
+                if fresh_selected is not None and fresh:
+                    fresh_selected += len(selected)
     return rows, fresh_selected
 
 
