@@ -264,24 +264,37 @@ class Actions:
             return
         channel = body["channel_id"]
         user = body["user_id"]
+
+        async def current():
+            return (self._native_command_current()
+                    and await self._interactive(require_epoch=True))
+
+        if not await current():
+            return
         snapshot = self._settings.get("snapshot")
         if not snapshot:
-            await self._say(channel, user, "サマリーの元データが設定されていません。")
+            await self._say(channel, user, "サマリーの元データが設定されていません。",
+                            authorized=current)
             return
         name = ""
         if {"mine", "担当"} & set(str(body.get("text") or "").lower().split()):
             name = await self._clicker_name({"id": body["user_id"],
                                              "name": body.get("user_name")})
         from adapters.common import summary
+        if not await current():
+            return
         got = await asyncio.to_thread(
             summary.answer, snapshot, str(body.get("text") or "")[:300],
             name=name, allowed=projects.summary_scope(self._settings),
             dialect="slack")
+        if not await current():
+            return
         if "error" in got:
-            await self._say(channel, user, got["error"])
+            await self._say(channel, user, got["error"], authorized=current)
             return
         blocks = _parts_blocks({"action": "digest", "parts": got["parts"]})
-        await self._say(channel, user, got["text"][:3000], blocks=blocks)
+        await self._say(channel, user, got["text"][:3000], blocks=blocks,
+                        authorized=current)
 
     def unload(self):
         self._active = False
@@ -302,13 +315,15 @@ class Actions:
                 and body.get("api_app_id") == self._settings["application_id"]
                 and user.get("id") in self._settings["allowed_user_ids"])
 
-    async def _interactive(self):
+    async def _interactive(self, *, require_epoch=False):
         """The effective flags still route interactive cards to Slack."""
         flags = await asyncio.to_thread(
             paths.read_flags, os.path.dirname(self._dirs["flags"]))
         epoch = self._settings.get("route_epoch")
-        return paths.route_open(flags, "slack", epoch,
-                                check_epoch=epoch is not None)
+        return ((not require_epoch or type(epoch) is int)
+                and paths.route_open(flags, "slack", epoch,
+                                     check_epoch=require_epoch or epoch is not None,
+                                     int_epoch=require_epoch))
 
     def _client(self):
         # The adapter vends a send-safe snapshot of the shared native
@@ -343,7 +358,7 @@ class Actions:
         return ctx
 
     async def _say(self, channel, user, text, *, blocks=None, thread_ts=None,
-                   navigation=None) -> bool:
+                   navigation=None, authorized=None) -> bool:
         from .delivery import call_native  # same single Retry-After resend as cards
         client = self._client()
         if client is None:
@@ -351,11 +366,11 @@ class Actions:
             return False
 
         async def still_active():
-            return self._active
+            return self._active and (authorized is None or await authorized())
 
         try:
             for index, chunk in enumerate(_ephemeral_chunks(text)):
-                if not self._active:
+                if not await still_active():
                     return False
                 kwargs = {"channel": channel, "user": user,
                           "text": chunk, "link_names": False}

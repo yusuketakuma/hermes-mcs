@@ -25,12 +25,15 @@ def test_owner_source(adapter, ctx, expected):
     ('owner', 101, 202, False, 'application_mismatch'),
     (None, 101, 101, False, 'owner_unverified'),
 ])
-def test_discord_bound_owner_and_native_bot(monkeypatch, owner, user, application, starts, reason):
+def test_discord_bound_owner_and_native_bot(tmp_path, monkeypatch, owner, user, application, starts, reason):
     events, started = [], []
     ctx = NS(get_config=lambda k, d=None: d)
     adapter = NS() if owner is None else NS(_owner_profile=owner)
     monkeypatch.setattr(cw, '_interactive_settings', lambda *_: {
-        'data_root': '/synthetic', 'profile': 'owner', 'application_id': '101'})
+        'data_root': str(tmp_path), 'profile': 'owner', 'application_id': '101'})
+    from adapters.common import paths
+    monkeypatch.setattr(paths, 'read_flags', lambda *_: {
+        'interactive': True, 'transport': 'discord', 'route_epoch': 3})
     monkeypatch.setattr(cw, '_standalone_owned', lambda *_: False)
     monkeypatch.setattr(cw, '_event_logger', lambda *_: lambda event, **kw: events.append((event, kw)))
     from adapters.discord import tasks

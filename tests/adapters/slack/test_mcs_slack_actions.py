@@ -866,6 +866,9 @@ def test_summary_slash_command_answers_ephemerally(tmp_path, monkeypatch):
     async def scenario():
         actions, app, reg, dirs = fixture(tmp_path)
         actions._settings["snapshot"] = "/synthetic/snap.db"
+        actions._settings["route_epoch"] = 7
+        Path(dirs["flags"], "notify.json").write_text(json.dumps({
+            "interactive": True, "transport": "slack", "route_epoch": 7}))
         body = {"team_id": SCOPE["team_id"], "api_app_id": "A_SYNTHETIC",
                 "user_id": "U_OPERATOR", "channel_id": "C_SYNTHETIC",
                 "response_url": "https://evil.invalid/", "text": "station:みどり days:2"}
@@ -1220,4 +1223,100 @@ def test_confirmation_preview_stops_before_buttons_when_part_fails(tmp_path, fai
         await actions._preview(pending, {"params": {"project_id": 123}})
         assert attempts == fail_at
         assert all(b["type"] != "actions" for m in app.client.messages for b in m["blocks"])
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change_at", ["before", "during"])
+@pytest.mark.parametrize("change", ["interactive_off", "transport_changed", "epoch_changed",
+                                   "epoch_missing", "epoch_bool", "restore_pending",
+                                   "host_replaced", "unloaded"])
+def test_summary_rechecks_route_and_host_before_reading_and_sending(
+        tmp_path, monkeypatch, change_at, change):
+    from adapters.common import summary
+    calls, acks = [], []
+
+    async def scenario():
+        actions, app, _, dirs = fixture(tmp_path)
+        actions._settings.update(snapshot="/synthetic/snap.db", route_epoch=7)
+        flags = {"interactive": True, "transport": "slack", "route_epoch": 7}
+        flag_path = Path(dirs["flags"], "notify.json")
+        flag_path.write_text(json.dumps(flags))
+
+        def invalidate():
+            if change == "host_replaced":
+                actions._native_current = lambda: False
+            elif change == "unloaded":
+                actions.unload()
+            else:
+                altered = dict(flags)
+                if change == "interactive_off":
+                    altered["interactive"] = False
+                elif change == "transport_changed":
+                    altered["transport"] = "discord"
+                elif change == "epoch_changed":
+                    altered["route_epoch"] = 8
+                elif change == "epoch_missing":
+                    altered.pop("route_epoch")
+                elif change == "epoch_bool":
+                    altered["route_epoch"] = True
+                    actions._settings["route_epoch"] = 1
+                else:
+                    altered["restore_pending"] = True
+                flag_path.write_text(json.dumps(altered))
+
+        def answer(*_args, **_kwargs):
+            calls.append(True)
+            if change_at == "during":
+                invalidate()
+            return {"text": "PRIVATE-SYNTHETIC", "parts": {
+                "containers": [{"type": "text", "text": "PRIVATE-SYNTHETIC"}],
+                "footer": []}}
+
+        async def acknowledged():
+            acks.append(True)
+
+        monkeypatch.setattr(summary, "answer", answer)
+        if change_at == "before":
+            invalidate()
+        await actions._summary(acknowledged, {
+            "team_id": SCOPE["team_id"], "api_app_id": SCOPE["application_id"],
+            "user_id": "U_OPERATOR", "channel_id": SCOPE["channel_id"], "text": ""})
+        assert acks == [True]
+        assert len(calls) == (change_at == "during")
+        assert app.client.messages == []
+    asyncio.run(scenario())
+
+
+def test_summary_does_not_retry_a_rate_limited_send_after_route_changes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from adapters.common import summary
+
+    class RateLimited(Exception):
+        response = SimpleNamespace(status_code=429, data={"error": "ratelimited"},
+                                   headers={"Retry-After": "0"})
+
+    async def scenario():
+        actions, app, _, dirs = fixture(tmp_path)
+        actions._settings.update(snapshot="/synthetic/snap.db", route_epoch=7)
+        flag_path = Path(dirs["flags"], "notify.json")
+        flag_path.write_text(json.dumps({"interactive": True, "transport": "slack",
+                                         "route_epoch": 7}))
+        monkeypatch.setattr(summary, "answer", lambda *_a, **_kw: {
+            "text": "PRIVATE-SYNTHETIC", "parts": {
+                "containers": [{"type": "text", "text": "PRIVATE-SYNTHETIC"}],
+                "footer": []}})
+        attempts = []
+
+        async def post(**kwargs):
+            attempts.append(kwargs)
+            flag_path.write_text(json.dumps({"interactive": True, "transport": "slack",
+                                             "route_epoch": 8}))
+            raise RateLimited()
+
+        monkeypatch.setattr(actions, "_client", lambda: SimpleNamespace(chat_postEphemeral=post))
+        await actions._summary(ack, {
+            "team_id": SCOPE["team_id"], "api_app_id": SCOPE["application_id"],
+            "user_id": "U_OPERATOR", "channel_id": SCOPE["channel_id"], "text": ""})
+        assert len(attempts) == 1
+        assert app.client.messages == []
     asyncio.run(scenario())

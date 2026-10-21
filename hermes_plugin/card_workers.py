@@ -146,6 +146,16 @@ def make_discord_factory(ctx):
             _worker_witness(settings, "discord", "application_mismatch")
             return None
         _ensure_repo_root()
+        from adapters.common import paths
+        flags = paths.read_flags(settings["data_root"])
+        epoch = flags.get("route_epoch")
+        # Restore holds pause delivery, not the supervisor that resumes it.
+        if (type(epoch) is not int
+                or flags.get("interactive") is not True
+                or flags.get("transport", "discord") != "discord"
+                or flags.get("runtime_mode") == "standalone"):
+            return None
+        settings["route_epoch"] = epoch
         from adapters.discord.tasks import Supervisor
         supervisor = Supervisor(ctx=ctx, bot=native, settings=settings,
                                 log=_event_logger("mcs_discord"))
