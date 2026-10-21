@@ -39,7 +39,7 @@ def test_eight_posts_overflow_to_thread_without_losing_originals(led, pinned_clo
         assert (original in on_face and not in_thread) or (original not in on_face and in_thread == original)
 
 
-def test_recursive_budget_accepts_50_but_counts_the_51st_block():
+def test_recursive_budget_counts_boundary_and_separate_stamp_zone():
     spec = _spec()
     parts = spec["parts"]
     # Twenty one-line post boundaries cost 39 top-level blocks. The
@@ -50,7 +50,10 @@ def test_recursive_budget_accepts_50_but_counts_the_51st_block():
     post = {"at": 0, "stamps": [], "original": "検" * 30000}
     parts["slack"] = {"face_posts": [post]}
     assert _block_count(cards.render(spec)[1]) == present_slack.face_block_count(parts, [post]) == 50
-    # One stamp context pushes the same candidate beyond the application's
-    # conservative budget; the runner's existing admission gate rejects it.
-    post["stamps"] = ["スタンプ 未取得"]
+    # One extra section crosses the exact recursive admission boundary.
+    parts["containers"].append({"type": "text", "text": "補足"})
     assert _block_count(cards.render(spec)[1]) == present_slack.face_block_count(parts, [post]) == 51
+    parts["containers"].pop()
+    # The shared stamp zone needs both its divider and its observed context.
+    post["stamps"] = ["スタンプ 未取得"]
+    assert _block_count(cards.render(spec)[1]) == present_slack.face_block_count(parts, [post]) == 52

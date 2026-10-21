@@ -68,7 +68,7 @@ def atomic_write(path: str, raw: bytes, tmp_prefix: str = ".atomic-",
     the whole old file or the whole new one, and a mid-write crash
     leaves no torn file (the tmp file is unlinked on failure).
     Returns ``path``."""
-    # Core stays unloaded during adapter/plugin import. Resolve its stdlib-only
+    # Core stays unloaded while importing adapters or plugins. Resolve its stdlib-only
     # owned-FD handoff before acquiring a temporary descriptor.
     from . import mcs_api
     mcs_api.bootstrap()
