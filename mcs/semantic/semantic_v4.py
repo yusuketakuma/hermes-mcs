@@ -155,6 +155,7 @@ def stage_request_following(ledger, bundle, doc, *, policy):
         "doc_hash": semantic_facts.doc_hash(clean),
         "projection": project_v2_doc_legacy(clean, request_details=True),
         "loop_facts": project_v2_facts(clean, request_details=True),
+        "evidence": clean["evidence"],
         "promotion_ready": False,
         "required_promotion_gates": [
             "request_detail_audit", "loop_identity_owner_decision",

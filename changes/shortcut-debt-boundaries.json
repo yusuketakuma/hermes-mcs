@@ -1,0 +1,32 @@
+{
+  "category": "fixed",
+  "title": "依頼の返信根拠と保存・通知の境界を厳密にする",
+  "summary": "依頼と対応する現行の記録がある場合だけ返信状態を表示し、同じスレッドの別件返信を流用しません。DBの競合・復旧バックアップの保持・認証情報入力先の照合を改善し、通知本文の空白を黙って削除しないようにします。",
+  "upgrade": "患者集約は版12で再構築されます。現行版キャッシュは読取ごとに全件再構築せず、投稿・Loop・policyの変更を既存の鮮度判定で反映します。依頼との対応を確認できない場合は、現行画面で「返答が見つからない」「返信: 記録なし」と表示されます。これは未対応の断定ではありません。返信状態の根拠となるLoop関係の取得にはJevが必要で、無効または予算0等で関係を取得していない場合は返信状態を表示できません。意味処理コードの変更で候補識別が変わるため、旧候補の承認記録は従来どおり再評価が必要です。複数のschema変更境界のバックアップを保持するため、従来より保存容量が必要になる場合があります。変更後のコードを読み込む常駐処理は通常の更新手順で反映してください。本作業では配備・サービス再起動・本番データ変更は行いません。",
+  "details": [
+    "messageの読取り前にwriter予約を取得し、既存transactionとsavepointのrollbackを保持する。別projectへのREPLACEは親子整合性監査を失効させる。schema版は変更しない。",
+    "更新履歴中の全schema変更境界に必要なbackupを保持する。通常更新の不要コピー削除は従来の条件を維持する。",
+    "Chrome接続の確立後にpeerを確認し、同じ接続にのみ認証情報を入力する。",
+    "原文を保った分割と外部の空投稿禁止を両立できない場合は配送を保留し、本文を欠落させない。従来の余剰空白削除をやめるため、この条件ではカード全体が保留となる。",
+    "LLMのowner識別が取れない新規permitは理由付きで拒否し、次回取得時に再確認する。既存の識別不能なownerは安全な解放証拠がない限り保持し、正規の照合とepoch境界で扱う。",
+    "realtime抽出はbatch分割とsingle fallbackの予算を含めてclaim数を決める。",
+    "semantic候補をskipした場合は既検査行を除いて有限に補充する。実行数・検査数・deadline・患者優先順と公平性を分け、検査上限に達した未処理行はpendingで保持する。内部metricsのlanesは初回選択件数から補充を含む検査候補件数へ変わり、実行数はselected系で別に記録する。",
+    "返信判定は依頼文と同一のLoop根拠を一意対応させ、患者・投稿版・policy・時刻・投稿者を照合する。言い換え等で一意に対応しないものは未確認とする。旧形式のoriginだけを持ちloop_artifact_idがないLoop eventは、依頼ごとの返信根拠には使用しない。",
+    "評価は全evidence参照を使用する。Loopの表示件数を保ちながら重複評価防止では過去の対応記録も照合する。",
+    "signal抑制集計は新形式の観測時刻を使い期間内だけを数える。同時刻を合算し、明細4096件超は有界の期間集計へ保持する。超過区間や過去形式の時刻内訳を分割できない場合はpartialを維持する。",
+    "revoked/deletedカードも旧版のsweepや再描画の対象になり得るため、保存layoutのrollback下限を維持し回帰テストで固定する。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "mcs/core/ledger_schema.py",
+    "mcs/core/maintenance.py",
+    "mcs/ingest/mcs_cdp.py",
+    "mcs/ingest/run_check.py",
+    "mcs/llm/llm_admission.py",
+    "mcs/notify/notify_parts.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/patients/rollup.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/signals/mcs_signals.py"
+  ]
+}

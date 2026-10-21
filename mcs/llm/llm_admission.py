@@ -425,6 +425,9 @@ class Broker:
         if cls != bound:
             return {"admitted": False, "reason": "class_not_bound",
                     "bound_class": bound}
+        # A failed identity probe is retryable on the next acquisition.
+        if self._identity is not None and self._identity[1] is None:
+            self._identity = None
         with self._write_tx():
             self._reclaim_and_prune()
             meta = self._meta()
@@ -445,6 +448,9 @@ class Broker:
                         >= self.slots:
                     return {"admitted": False, "reason": "class_full",
                             "epoch": epoch}
+            if _identity_scheme(self._owner()[1]) is None:
+                return {"admitted": False, "reason": "owner_identity_unavailable",
+                        "epoch": epoch}
             # RT registers waiting intent BEFORE any admission check
             # resolves — the flag itself is the atomic close of new
             # BACKLOG admission

@@ -298,9 +298,9 @@ def prune_preupdate_backups(state_path: str | None = None) -> int:
     record — reference-based retention (B3): a flapping fetch loop can
     never push out the backup a rollback still needs. Actionable means
     the in-flight `applying` journal, a pending `restore_consent` hold,
-    and the newest schema_bump `applied` entry (rollback restores the DB
-    only for schema_bump entries; applied[] only grows, so referencing
-    every entry kept a full ledger copy per update forever)."""
+    and every schema_bump `applied` entry, so successive rollbacks retain
+    the DB copy for each schema boundary. Ordinary applied updates do not
+    retain a separate copy."""
     import json
     state_path = state_path or os.path.join(
         HOME, "data", "update_state.json")
@@ -319,11 +319,7 @@ def prune_preupdate_backups(state_path: str | None = None) -> int:
             bp = rec.get("backup_path")
             if bp is not None and (not isinstance(bp, str) or not bp.strip()):
                 return 0
-        newest_bump = next(
-            (r for r in reversed(applied) if r.get("schema_bump")), None)
-        # ponytail: only the newest bump is kept — rolling back across two
-        # schema bumps needs the older copy too; keep all bumps if that matters
-        for rec in held + [newest_bump or {}]:
+        for rec in held + [r for r in applied if r.get("schema_bump")]:
             if isinstance(rec.get("backup_path"), str):
                 referenced.add(os.path.abspath(rec["backup_path"]))
     except (OSError, ValueError, TypeError, RecursionError):

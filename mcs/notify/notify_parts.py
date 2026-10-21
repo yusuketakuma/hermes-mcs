@@ -32,8 +32,7 @@ def text_sha256(text: str) -> str:
 
 def split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT) -> list:
     """Lossless chunks <= limit for the durable thread plan —
-    ``"".join(chunks) == text`` holds (save a blank run too long to
-    carry, see _no_blank_chunks): lines keep their trailing
+    ``"".join(chunks) == text`` holds: lines keep their trailing
     newline and overlong lines hard-wrap, so planned parts reassemble
     byte-exact into the sealed body (the plugin sends these verbatim)."""
     chunks, cur = [], ""
@@ -66,9 +65,9 @@ def split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT) -> list:
 
 def _no_blank_chunks(chunks: list, limit: int) -> list:
     """A whitespace-only chunk would be an empty post (Discord rejects
-    it): its whitespace joins a neighbouring visible character instead —
-    lossless and within ``limit``, except a blank run too long for its
-    neighbours (about 2x ``limit``), whose excess whitespace drops."""
+    it): move its whitespace next to a visible character when possible.
+    Otherwise keep the lossless chunks; the manifest holds an unrepresentable
+    body rather than dropping source whitespace or sending an empty post."""
     out: list = []
     queue, carry = deque(chunks), ""
     while queue:
@@ -99,16 +98,12 @@ def _no_blank_chunks(chunks: list, limit: int) -> list:
             out.append(c)
             continue
         if lead >= limit:
-            # ponytail: a blank run too long for its neighbours (about
-            # 2x limit) cannot be lossless without an empty post — drop
-            # the excess whitespace only
-            c = c[lead - limit + 1:]
+            return list(chunks)
         out.append(c[:limit])
         queue.appendleft(c[limit:])
     if not out:
         return list(chunks)                # nothing visible at all
-    # trailing carry: whitespace that did not fit is dropped likewise
-    return out
+    return list(chunks) if carry else out
 
 
 def _plan_attachments(db, shown) -> list:
@@ -610,6 +605,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                     posts[old_key] = remote_id
     if not editable and update:
         keyed = _lineworks_update_budget(db, card, keyed)
+    if any(not chunk.strip() for _key, chunk in keyed):
+        budget_hold = "blank_part_unrepresentable"
     attachments = _plan_attachments(db, planned)
     if len(keyed) + len(attachments) > MAX_PARTS - 2:
         # Hold the render as a whole: retaining the earliest chunks silently

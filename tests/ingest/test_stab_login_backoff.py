@@ -31,6 +31,8 @@ def adapter(monkeypatch, tmp_path):
     monkeypatch.setattr(a, "_login_page", lambda: {"webSocketDebuggerUrl": "ws://x"})
     monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
     monkeypatch.setattr(a, "_cdp_eval", cdp_eval)
+    monkeypatch.setattr(a, "_cdp_eval_owned",
+                        lambda ws, profile, chrome, expr: cdp_eval(ws, expr))
     monkeypatch.setattr(a, "_cdp_peer_owned", lambda *a: True)
     monkeypatch.setattr(a, "_config", lambda: {"mcs_login_id": "synthetic-id"})
     monkeypatch.setattr(a, "_keychain_password", lambda *a, **k: secret["pw"])

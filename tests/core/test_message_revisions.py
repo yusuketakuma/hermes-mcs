@@ -101,7 +101,7 @@ def test_snapshot_contains_hash_chain_not_old_body(tmp_path):
 
 
 class _RacingConnection:
-    """Lets a second writer commit a revision right before ours inserts."""
+    """Lets a second writer commit just before ours reserves its writer lock."""
 
     def __init__(self, conn, on_revision_insert):
         self._conn = conn
@@ -117,7 +117,7 @@ class _RacingConnection:
         return self._conn.__exit__(*exc)
 
     def execute(self, sql, *args):
-        if self._hook and "INSERT OR IGNORE INTO message_revisions" in sql:
+        if self._hook and "UPDATE messages SET message_id=message_id WHERE 0" in sql:
             hook, self._hook = self._hook, None
             hook()
         return self._conn.execute(sql, *args)

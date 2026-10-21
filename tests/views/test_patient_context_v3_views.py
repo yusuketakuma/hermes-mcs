@@ -126,6 +126,8 @@ def _reply(ctx, mid, parent, kind):
         body_state="full", is_unread=False, reply_count=0)], project_id=1)
     ctx.db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (T0 + parent * DAY + 3600, mid))
     _artifact(ctx.db, "extract_llm", mid, {"reply": {"kind": kind}}, {"hash": _hash_of(ctx.db, mid)})
+    from test_shortcut_debt_request_replies import seed_loop_replies
+    seed_loop_replies(ctx.db)
 
 
 def test_replies_never_claim_untreated_or_formal_completion(ctx):

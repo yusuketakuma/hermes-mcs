@@ -823,6 +823,8 @@ class Ledger:
         to a later 'snippet'."""
         now = time.time()
         chash = hashlib.sha256((m.body_html or "").encode()).hexdigest()
+        # A zero-row write reserves the writer without committing caller work.
+        self.db.execute("UPDATE messages SET message_id=message_id WHERE 0")
         existing = self.db.execute(
             "SELECT project_id,body_state,content_hash,first_seen FROM messages WHERE message_id=?",
             (m.message_id,)).fetchone()
@@ -837,8 +839,6 @@ class Ledger:
             # INSERT itself: seq and prev_content_hash come from the row
             # read under the write lock, and an edit an overlapping writer
             # already recorded is skipped instead of logged twice.
-            # ponytail: `existing` is still read before the lock, so the
-            # messages row itself relies on run.lock serializing writers
             self.db.execute("""
               INSERT OR IGNORE INTO message_revisions
                 (message_id,seq,content_hash,prev_content_hash,body_state,observed_at)

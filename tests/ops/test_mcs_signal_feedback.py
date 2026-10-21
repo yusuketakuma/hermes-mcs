@@ -214,7 +214,7 @@ def test_suppression_feedback_is_bounded_per_day_and_keeps_totals(led):
     assert stat["suppression_first_observed_at"] == runs[0]
 
 
-def test_suppression_day_row_straddling_as_of_is_partial_not_overcounted(led):
+def test_suppression_observations_crossing_as_of_remain_exact(led):
     # Given: two same-day evaluations of a dismissed, still-detected signal.
     _msg(led.db, 1, ts=NOW - 20 * DAY, chash="h1")
     fact(led.db, 1, meds=[{"name": "synthetic-med", "action": "stop"}])
@@ -228,11 +228,10 @@ def test_suppression_day_row_straddling_as_of_is_partial_not_overcounted(led):
         "as_of": datetime.fromtimestamp(NOW + 30, timezone.utc).isoformat()})
     res = out["stats"]["signal_feedback"]
     stat = res["by_type"]["med_change_no_followup"]
-    # Then: the later evaluation is not counted; the day is reported unknown.
-    assert res["status"] == "partial"
-    assert res["reason"] == "suppression_day_straddles_window"
-    assert stat["dismissed_candidate_evaluations"] == 0
-    assert stat["suppression_rows_straddling_window"] == 1
+    # Then: the later evaluation is excluded and the earlier one is exact.
+    assert res["status"] == "ok"
+    assert stat["dismissed_candidate_evaluations"] == 1
+    assert stat["suppression_rows_straddling_window"] == 0
     # And: a read after the last evaluation stays complete and exact.
     full = feedback(led.db, NOW + 100)
     assert full["status"] == "ok"

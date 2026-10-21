@@ -51,6 +51,7 @@ import clinical_urgency
 
 ARTIFACT_KIND = "signal_v1"
 FEEDBACK_KIND = "signal_feedback_v1"
+FEEDBACK_OBSERVATION_LIMIT = 4096
 
 
 def _key(type_, pid, anchor):
@@ -1119,12 +1120,9 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
         if notify:
             enqueued, dig_merged = _notify_opened(
                 ledger, newly, now, th, sig_cfg)
-        # one accumulating row per project/type/JST day — a per-evaluate
-        # row grew ~288/day per suppressed pair. "at" stays the day's first
-        # observation, so sums and first-observed time are unchanged;
-        # "last_at" lets stats refuse a row that straddles as_of/since/until.
-        # ponytail: a sub-day window drops the straddled day as partial;
-        # bucket finer if sub-day windows ever matter.
+        # Keep one daily row while retaining individual observation times for
+        # exact sub-day/as-of reads up to a fixed cap. Overflow keeps totals
+        # and its interval; crossing that interval remains explicitly partial.
         day = datetime.fromtimestamp(now, JST).date().isoformat()
         for (pid, stype), (eligible, suppressed) in suppression.items():
             meta = json.dumps({"type": stype, "day": day})
@@ -1138,12 +1136,45 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
                     prev = json.loads(row[1])
                 except (ValueError, TypeError, RecursionError):
                     prev = None
-            if (isinstance(prev, dict)
+            if (isinstance(prev, dict) and prev.get("v") == 2
+                    and isinstance(prev.get("observations"), list)
+                    and all(isinstance(o, list) and len(o) == 3
+                            and type(o[0]) in (int, float) and 0 <= o[0] < 1e12
+                            and type(o[1]) is int and type(o[2]) is int
+                            and 0 <= o[2] <= o[1] for o in prev["observations"])
+                    and ("overflow" not in prev or (
+                        isinstance(prev["overflow"], dict)
+                        and type(prev["overflow"].get("at")) in (int, float)
+                        and type(prev["overflow"].get("last_at")) in (int, float)
+                        and 0 <= prev["overflow"]["at"] <= prev["overflow"]["last_at"] < 1e12
+                        and type(prev["overflow"].get("dismissed_candidates")) is int
+                        and type(prev["overflow"].get("same_evidence_suppressed")) is int
+                        and 0 <= prev["overflow"]["same_evidence_suppressed"]
+                        <= prev["overflow"]["dismissed_candidates"]))
                     and type(prev.get("dismissed_candidates")) is int
-                    and type(prev.get("same_evidence_suppressed")) is int):
+                    and type(prev.get("same_evidence_suppressed")) is int
+                    and 0 <= prev["same_evidence_suppressed"] <= prev["dismissed_candidates"]
+                    and type(prev.get("at")) in (int, float)
+                    and type(prev.get("last_at")) in (int, float)
+                    and 0 <= prev["at"] <= prev["last_at"] < 1e12):
                 prev["dismissed_candidates"] += eligible
                 prev["same_evidence_suppressed"] += suppressed
-                prev["last_at"] = now
+                prev["last_at"] = max(now, prev["last_at"])
+                prev["at"] = min(now, prev["at"])
+                observation = next((o for o in prev["observations"] if o[0] == now), None)
+                if observation is not None:
+                    observation[1] += eligible
+                    observation[2] += suppressed
+                elif len(prev["observations"]) < FEEDBACK_OBSERVATION_LIMIT:
+                    prev["observations"].append([now, eligible, suppressed])
+                else:
+                    overflow = prev.setdefault("overflow", {
+                        "at": now, "last_at": now, "dismissed_candidates": 0,
+                        "same_evidence_suppressed": 0})
+                    overflow["at"] = min(now, overflow["at"])
+                    overflow["last_at"] = max(now, overflow["last_at"])
+                    overflow["dismissed_candidates"] += eligible
+                    overflow["same_evidence_suppressed"] += suppressed
                 ledger.db.execute(
                     "UPDATE artifacts SET content=? WHERE artifact_id=?",
                     (json.dumps(prev), row[0]))
@@ -1152,9 +1183,10 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
                 "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
                 "VALUES(?,?,?,?,?)",
                 (FEEDBACK_KIND, pid, json.dumps({
-                    "v": 1, "type": stype, "at": now, "last_at": now,
+                    "v": 2, "type": stype, "at": now, "last_at": now,
                     "dismissed_candidates": eligible,
-                    "same_evidence_suppressed": suppressed}),
+                    "same_evidence_suppressed": suppressed,
+                    "observations": [[now, eligible, suppressed]]}),
                  meta, now))
     return {"open": len(current), "opened": opened,
             "superseded": superseded, "resolved": resolved,

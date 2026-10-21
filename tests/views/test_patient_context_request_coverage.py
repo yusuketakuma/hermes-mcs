@@ -52,21 +52,67 @@ def test_explicit_full_request_read_keeps_old_request_and_its_reply(tmp_path, ol
         store.close()
 
 
-def test_reply_index_matches_previous_semantics_for_mixed_threads_and_times():
+def _apply_relations(requests, replies, monkeypatch):
+    """Exercise per-request matching using explicit current synthetic Loop relations."""
+    import request_loops
+
+    mapping = {"ack": "acknowledges", "progress": "progress_report", "answer": "answers_question",
+               "done": "completion_report", "cancel": "cancellation_report"}
+    messages, events = [], {}
+    for root, rows in replies.items():
+        events[root] = []
+        for at, sender, kind in rows:
+            mid = len(messages) + 10000
+            messages.append({"message_id": mid, "parent_id": root,
+                             "posted_at_ts": at, "sender_id": sender, "body_state": "full"})
+            relation = mapping[kind]
+            events[root].append({"relation": relation, "reported_relation": relation,
+                                 "confidence": 1, "stale": False, "trigger_message_id": mid})
+    sources = [{"message_id": row["mid"], "artifact_id": i} for i, (row, *_) in enumerate(requests)]
+    loops = {i: {"adoption_eligible": True, "description": row["ctx"],
+                 "relation_events": events.get(root, [])}
+             for i, (row, root, *_rest) in enumerate(requests)}
+    calls = []
+
+    class Rows(list):
+        def fetchall(self):
+            return self
+
+    class DB:
+        def execute(self, _sql, _params):
+            return Rows(sources)
+
+    monkeypatch.setattr(request_loops, "latest_policy", lambda _: "synthetic")
+
+    def current(_db, selected, **_kwargs):
+        result = []
+        for source in selected:
+            aid = source["artifact_id"]
+            calls.append(aid)
+            result.append({**loops[aid], "artifact_id": aid,
+                           "relation_events": [{**event, "loop_artifact_id": aid}
+                                               for event in loops[aid]["relation_events"]]})
+        return result
+
+    monkeypatch.setattr(request_loops, "effective_loop_states", current)
+    rollup._match_request_replies(DB(), 1, requests, [r[0] for r in requests], messages, 1000)
+    return calls
+
+
+def test_reply_relations_match_explicit_evidence_for_mixed_threads_and_times(monkeypatch):
     import random
 
     rng = random.Random(1026)
-    senders = [None, "a", "b", "c", "d"]
-    kinds = tuple(rollup._REPLY_STAGE)
+    senders = [None, 1, 2, 3, 4]
+    kinds = tuple(k for k in rollup._REPLY_STAGE if k != "intent")
     for _ in range(100):
-        # Deliberately unsorted: NULL->0 can follow negative SQL timestamps.
-        replies = {root: [(rng.randrange(-3, 8), rng.choice(senders), rng.choice(kinds))
-                          for _ in range(40)] for root in range(3)}
-        requests = [({}, rng.randrange(4), rng.randrange(-3, 8), rng.choice(senders))
-                    for _ in range(30)]
+        replies = {root: [(rng.randrange(97, 108), rng.choice(senders), rng.choice(kinds))
+                          for _ in range(40)] for root in range(1, 4)}
+        requests = [({"mid": i, "ctx": f"架空依頼{i}"}, rng.randrange(1, 5),
+                     rng.randrange(97, 108), rng.choice(senders)) for i in range(30)]
         expected = []
-        for _, root, ts, sender in requests:
-            row = {}
+        for row, root, ts, sender in requests:
+            row = dict(row)
             seen = [(at, kind) for at, other, kind in replies.get(root, ())
                     if at > ts and sender is not None and other is not None and other != sender]
             if seen:
@@ -76,22 +122,15 @@ def test_reply_index_matches_previous_semantics_for_mixed_threads_and_times():
                     row["reply_conflict"] = True
             expected.append(row)
         original = {root: list(rows) for root, rows in replies.items()}
-        rollup._match_request_replies(requests, replies)
+        calls = _apply_relations(requests, replies, monkeypatch)
         assert [row for row, *_ in requests] == expected
         assert replies == original
+        assert len(calls) == len(requests)
 
 
-def test_full_reply_scan_reads_each_thread_reply_once():
-    class CountedReplies(list):
-        visits = 0
-
-        def __iter__(self):
-            for row in super().__iter__():
-                self.visits += 1
-                yield row
-
-    replies = CountedReplies([(1, "b", "done")] * 3000)
-    requests = [({}, 1, 0, "a") for _ in range(3000)]
-    rollup._match_request_replies(requests, {1: replies})
-    assert all(row == {"reply_state": "done"} for row, *_ in requests)
-    assert replies.visits == len(replies)
+def test_full_reply_scan_reads_each_current_candidate_once(monkeypatch):
+    requests = [({"mid": i, "ctx": f"架空依頼{i}"}, i + 1, 100, 1) for i in range(3000)]
+    replies = {i + 1: [(101, 2, "done")] for i in range(3000)}
+    calls = _apply_relations(requests, replies, monkeypatch)
+    assert all(row["reply_state"] == "done" for row, *_ in requests)
+    assert len(calls) == len(set(calls)) == len(requests)

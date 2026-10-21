@@ -300,7 +300,7 @@ def test_fairness_turn_changes_only_when_its_contested_job_is_served(
                            time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm,
                            max_jobs=max_jobs)
     assert out["done"] == done and not out["failed"] and not result["errors"]
-    assert out["lock_skipped"].get(semantic_drain.JOB_KIND, 0) == (0 if archive_held else 1)
+    assert out["lock_skipped"].get(semantic_drain.JOB_KIND, 0) == (0 if archive_held else 2)
     sched = semantic_drain._sched_state(led)
     assert sched["arrival_selected"] == done and sched["backfill_selected"] == 0
     assert sched.get("archived_turn" if mixed else "turn") == expected_turn

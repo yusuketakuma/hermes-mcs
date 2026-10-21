@@ -171,3 +171,17 @@ def test_git_read_failure_is_unverified_even_for_layout_one(
     with pytest.raises(updater.UpdateError, match="rollback_layout_unverified"):
         updater._rollback_tree(entry)
     assert all(call[0] in ("show", "ls-tree") for call in calls)
+
+
+@pytest.mark.parametrize("state", ["revoked", "message_deleted", "delivery_unknown"])
+def test_rollback_keeps_layout_floor_for_retained_cards(updater, tmp_path, monkeypatch, state):  # noqa: F811
+    """A terminal-looking card can still owe remote cleanup or re-rendering."""
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    _state(updater, repo)
+    _cards(updater.LEDGER, 3)
+    with sqlite3.connect(updater.LEDGER) as db:
+        db.execute("ALTER TABLE notification_cards ADD COLUMN delivery_state TEXT")
+        db.execute("UPDATE notification_cards SET delivery_state=?", (state,))
+    entry = updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]
+    assert updater._rollback_layout_error(entry) is not None
