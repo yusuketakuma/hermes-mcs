@@ -1,0 +1,17 @@
+{
+  "category": "added",
+  "title": "患者コンテキスト作成の失敗理由を lane ごとに件数で表示",
+  "summary": "health の patient_context.lanes と、動作診断（mcs_setup doctor --json）の患者コンテキスト作成に、lane A（要約）・B（過去走査）・C（根拠点検）ごとの回答上限での停止・原文に裏付けのない回答・その他の失敗の件数と、細かい分割に切り替えた走査・1回の修正依頼で通った走査の件数を表示します。過去走査の分割と修正依頼の効果を件数で追えるようになります。",
+  "upgrade": "追加操作は不要です。修正依頼が通った件数は、この版以降に記録された走査から数えます。overall・state_reasons・監視通知の条件は変わりません。",
+  "details": [
+    "固定コード: length_stop / unsupported（nightly_unsupported_items・nightly_unsupported_summary）/ other_failure / split / repair。患者・投稿・本文は出さない。",
+    "件数は保存済みの最新状態（後の成功で失敗は消える）を数える。累積の発生回数ではない。古い契約の走査記録も含む。",
+    "走査記録に修正依頼が通った回数 repairs を追加する。",
+    "回帰: tests/patients/test_patient_nightly.py、tests/ops/test_nightly_setup.py"
+  ],
+  "refs": [
+    "mcs/patients/patient_nightly.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ingest/health_report.py"
+  ]
+}
