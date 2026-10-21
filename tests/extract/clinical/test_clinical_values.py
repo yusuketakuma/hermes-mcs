@@ -261,6 +261,9 @@ def test_item_scope_group_default_is_unknown_without_explicit_patient_source():
     ("Cr", "1.2", "mg/dL", "Cr 1.2mg/dL", "quote_supported"),
     ("HbA1c", "7.2", "%", "HbA1c 7.2%", "quote_supported"),
     ("INR", "2.1", None, "INR 2.1", "quote_supported"),
+    ("カリウム", "4.1", None, "カリウム4.1%", "unverified"),
+    ("INR", "2.1", None, "INR 2.1kg", "unverified"),
+    ("カリウム", "4.1", None, "カリウム4.1mEq/L", "quote_supported"),
     ("体重", "52", "kg", "体重52kg", "quote_supported"),
     ("eGFR", "45", "mL/min/1.73m2", "eGFR 45mL/min/1.73m2", "quote_supported"),
 ])
