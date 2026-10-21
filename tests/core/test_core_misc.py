@@ -833,14 +833,8 @@ def test_preupdate_backups_in_same_second_keep_both_generations(
     db.ensure_patient(1)
     db.close()
     monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
-    from datetime import datetime
-
-    class SameSecond(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2026, 9, 25, 1, 2, 3, tzinfo=tz)
-
-    monkeypatch.setattr(maintenance, "datetime", SameSecond)
+    monkeypatch.setattr(maintenance.time, "strftime",
+                        lambda _fmt: "20260925-010203")
 
     first = maintenance.preupdate_backup(str(source))
     db = ledger.Ledger(str(source))

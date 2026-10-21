@@ -16,7 +16,6 @@ import sqlite3
 import stat
 import tempfile
 import time
-from datetime import datetime
 from pathlib import Path
 from contextlib import closing, suppress
 from time import monotonic
@@ -24,7 +23,6 @@ from time import monotonic
 from snapshots import publish_snapshot as _publish_snapshot
 from ledger import valid_mcs_db
 from mcs_util import HOME
-from mcs_queries import JST
 from safe_io import atomic_write, publish_tmp, fdopen_owned
 from llm_availability import disk_floor_mb
 from safe_io import read_regular_nofollow
@@ -170,7 +168,7 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     the watchdog kills every tick would never complete (M7)."""
     os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
     os.chmod(BACKUP_DIR, 0o700)   # PHI store: never umask-loose
-    stamp = datetime.now(JST).strftime("%Y%m%d")   # the operator's day, not host-local
+    stamp = time.strftime("%Y%m%d")
     dest = os.path.join(BACKUP_DIR, f"ledger-{stamp}.db")
     # the .ok marker (size+mtime_ns at publish time) skips the full
     # quick_check while the verified file is untouched; any change or a
@@ -317,7 +315,7 @@ def preupdate_backup(db_path: str) -> str:
     # same room check as daily_backup: apply bails on this before quiesce
     if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < _backup_need_mb(db_path):
         raise MaintenanceError("backup_disk_low")
-    stamp = datetime.now(JST).strftime("%Y%m%d-%H%M%S")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
     fd, tmp = tempfile.mkstemp(
         prefix=f"preupdate-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
     os.close(fd)

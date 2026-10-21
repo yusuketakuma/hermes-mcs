@@ -1,29 +1,11 @@
-"""v1.0.29 maintenance stability: JST backup day, no-follow live log
+"""v1.0.29 maintenance stability: no-follow live log
 rotation, stranded atomic-write temporaries, in-place edit detection in
 the snapshot signature, and retention of never-delivered renders and
 unreferenced view manifests. Temp files and synthetic rows only."""
 import time
-from datetime import datetime, timezone
 
 import ledger
 import maintenance
-
-
-def test_daily_backup_is_named_by_the_jst_day(tmp_path, monkeypatch):
-    source = tmp_path / "source.db"
-    ledger.Ledger(str(source)).close()
-    backups = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
-    monkeypatch.setattr(maintenance, "disk_floor_mb", lambda: 0)
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):        # 2026-01-01 16:00 UTC = 01-02 01:00 JST
-            return datetime(2026, 1, 1, 16, 0, tzinfo=timezone.utc).astimezone(tz)
-
-    monkeypatch.setattr(maintenance, "datetime", Clock)
-    maintenance.daily_backup(str(source))
-    assert [p.name for p in backups.glob("ledger-*.db")] == ["ledger-20260102.db"]
 
 
 def test_rotate_log_never_follows_a_symlinked_live_log(tmp_path, monkeypatch):
