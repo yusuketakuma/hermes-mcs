@@ -371,6 +371,15 @@ def initialize(db, *, schema_version: int) -> bool:
             ON fetch_jobs(updated_at, kind) WHERE state='failed';
           CREATE UNIQUE INDEX IF NOT EXISTS uq_attachments_msg_file
             ON attachments(message_id, file_id);
+          CREATE INDEX IF NOT EXISTS idx_messages_reply_first_seen
+            ON messages(first_seen) WHERE parent_id IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS idx_messages_reply_open
+            ON messages(parent_id, project_id) WHERE parent_id IS NOT NULL
+              AND (body_state IS NULL OR body_state NOT IN ('full','deleted'));
+          CREATE INDEX IF NOT EXISTS idx_nrenders_state_updated
+            ON notification_renders(state, updated_at);
+          CREATE INDEX IF NOT EXISTS idx_nparts_pending
+            ON notification_render_parts(delivery_id) WHERE state='pending';
         """)
     if fts:
         db.executescript("""
