@@ -1,6 +1,7 @@
 """A process watchdog terminates a wedged synthetic tick without polling."""
 import json
 import os
+import selectors
 from pathlib import Path
 import subprocess
 import sys
@@ -33,6 +34,11 @@ def test_watchdog_exits_wedged_child_with_a_bounded_parent_timeout(tmp_path):
             env={**os.environ, "HOME": str(tmp_path), "MCS_ROOT": str(tmp_path)}) as child:
         try:
             assert child.stdout is not None
+            # Startup gets its own finite bound so a wedged start still reaches
+            # the kill below instead of the suite-wide guard.
+            with selectors.DefaultSelector() as ready:
+                ready.register(child.stdout, selectors.EVENT_READ)
+                assert ready.select(120), "child never reported ARMED"
             assert child.stdout.readline().strip() == "ARMED"
             stdout, stderr = child.communicate(timeout=10)
         finally:

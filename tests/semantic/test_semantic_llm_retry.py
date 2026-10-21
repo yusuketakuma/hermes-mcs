@@ -158,21 +158,29 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
                         lambda *a: "plain")   # no format probe
     trickle_s = 0.25 * len(response)
     spawn = bounded_http.subprocess.Popen
+    workers, timed_out = [], []
 
     def popen_after_post(*args, **kwargs):
         # Worker interpreter start is not under test and slows down under
         # suite load: send the request, then hand the parent's real-time
         # communicate window over only once the POST has landed.
         process = spawn(*args, **kwargs)
+        workers.append(process)
         communicate = process.communicate
 
         def communicate_after_post(input=None, timeout=None):
+            if input is None:          # the reap after kill: unchanged
+                return communicate(timeout=timeout)
             process.stdin.write(input)
             process.stdin.close()
             process.stdin = None
             while not started.wait(0.05) and process.poll() is None:
                 pass
-            return communicate(timeout=timeout)
+            try:
+                return communicate(timeout=timeout)
+            except bounded_http.subprocess.TimeoutExpired:
+                timed_out.append(process)
+                raise
         process.communicate = communicate_after_post
         return process
 
@@ -185,6 +193,9 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
 
     assert started.is_set(), semantic_transport.last_llm_failure()
     assert returned_at - landed_at[0] < trickle_s / 2
+    # the parent's absolute deadline fired, then the worker was killed and reaped
+    assert len(workers) == 1 and timed_out == workers
+    assert workers[0].returncode is not None and workers[0].returncode < 0
     headers, body = received[0]
     assert headers.get("Authorization") is None
     assert body["model"] == semantic_transport.LLM_MODEL
