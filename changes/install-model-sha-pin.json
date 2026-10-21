@@ -1,0 +1,12 @@
+{
+  "category": "security",
+  "title": "モデルの sha256 照合を環境変数だけで上書きできないように変更",
+  "summary": "install.sh は MCS_MODEL_SHA256 を設定しただけでは固定 sha256 を置き換えず、警告を出して固定値で照合します。上書きは MCS_ALLOW_MODEL_SHA_OVERRIDE=1 を同時に指定したときだけ有効で、その場合も警告を出します。",
+  "upgrade": "通常の導入では操作不要です。検証用に別の sha256 で照合する場合だけ MCS_ALLOW_MODEL_SHA_OVERRIDE=1 を併せて指定してください。",
+  "details": [
+    "固定値は install.sh の MODEL_SHA256 に記録する。"
+  ],
+  "refs": [
+    "install.sh"
+  ]
+}

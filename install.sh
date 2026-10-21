@@ -247,7 +247,16 @@ MODEL_FILE="$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf"
 # Pinned revision and its LFS sha256 (Hugging Face API + resolve headers,
 # 2026-10-11); a floating main could swap the bytes that read PHI bodies.
 MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf"
-MODEL_SHA256="${MCS_MODEL_SHA256:-03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8}"
+MODEL_SHA256="03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"
+# The pin is overridable only for tests and explicit verification runs.
+if [ -n "${MCS_MODEL_SHA256:-}" ]; then
+  if [ "${MCS_ALLOW_MODEL_SHA_OVERRIDE:-}" = 1 ]; then
+    MODEL_SHA256="$MCS_MODEL_SHA256"
+    warn "MCS_MODEL_SHA256 の指定値でモデルを照合します（固定 sha256 を使いません）"
+  else
+    warn "MCS_MODEL_SHA256 は MCS_ALLOW_MODEL_SHA_OVERRIDE=1 がないため無視し、固定 sha256 で照合します"
+  fi
+fi
 AGENTS_DIR="$HOME/Library/LaunchAgents"
 LLAMA_PLIST="$AGENTS_DIR/ai.mcs.llamaserver.plist"
 HERMES_LLAMA_PLIST="$AGENTS_DIR/ai.hermes.llamacpp.plist"
