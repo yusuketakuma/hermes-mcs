@@ -52,12 +52,11 @@ def render(spec, names=None):
         if any(len(o["text"]["text"]) > 75 for o in options):
             raise ValueError("slack_button_label")
         stamp_control = {
-            "type": "section",
+            "type": "actions",
             "block_id": f"mcs:stamps:{spec['delivery_id']}:{spec['render_rev']}",
-            "text": {"type": "plain_text", "text": "スタンプ · 表示中の最新投稿へ"},
-            "accessory": {"type": "static_select", "action_id": STAMP_MENU_ACTION,
+            "elements": [{"type": "static_select", "action_id": STAMP_MENU_ACTION,
                           "placeholder": {"type": "plain_text", "text": "スタンプを押す…"},
-                          "options": options}}
+                          "options": options}]}
     blocks = render_parts(spec["parts"], names,
                           spec["parts"].get("mentions") == "silent",
                           card_kind=spec.get("kind"), stamp_control=stamp_control)

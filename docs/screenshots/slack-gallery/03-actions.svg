@@ -35,22 +35,21 @@
 <rect x="232" y="469.00000000000006" width="786" height="38" rx="8" fill="#f3f6f4" stroke="#dce2dd"/>
 <text x="240" y="491.00000000000006" font-size="16" fill="#66716f">▸ 原文（35字）</text>
 <path d="M240 512.6 L1010 512.6" stroke="#d5dcd7" fill="none"/>
-<text x="240" y="538.6" font-size="17" fill="#66716f">📝 タスク 1件 · スタンプ 👀2 🙆1</text>
+<text x="240" y="538.6" font-size="17" fill="#66716f">📝 タスク 1件</text>
 <text x="240" y="563.8000000000001" font-size="15" fill="#087f5b">スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点</text>
-<text x="240" y="591.8000000000001" font-size="17" fill="#202124">スタンプ · 表示中の最新投稿へ</text>
-<rect x="240" y="619.0000000000001" width="250" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="254" y="646.0000000000001" font-size="18" fill="#202124">スタンプを押す… ▾</text>
-<path d="M240 677.0000000000001 L1010 677.0000000000001" stroke="#d5dcd7" fill="none"/>
-<rect x="240" y="705.0000000000001" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="254" y="732.0000000000001" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
-<text x="240" y="781.0000000000001" font-size="18" fill="#1264a3">MCSで開く</text>
-<text x="645" y="595.0000000000001" font-size="15" fill="#66716f">開いたスタンプメニュー（説明図）</text>
-<rect x="645" y="610.0000000000001" width="330" height="270" rx="8" fill="#fff" stroke="#aebbb2"/>
-<text x="663" y="646.0000000000001" font-size="19" fill="#202124">👀 見ました</text>
-<text x="663" y="688.0000000000001" font-size="19" fill="#087f5b">🙆 承知 ✓（取消）</text>
-<text x="663" y="730.0000000000001" font-size="19" fill="#202124">🙏 感謝</text>
-<text x="663" y="772.0000000000001" font-size="19" fill="#202124">👍 いいね</text>
-<text x="663" y="814.0000000000001" font-size="19" fill="#202124">✅ 完了</text>
-<text x="663" y="856.0000000000001" font-size="19" fill="#202124">🗂 別の投稿</text>
+<rect x="240" y="587.8000000000001" width="250" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="254" y="614.8000000000001" font-size="18" fill="#202124">スタンプを押す… ▾</text>
+<path d="M240 645.8000000000001 L1010 645.8000000000001" stroke="#d5dcd7" fill="none"/>
+<rect x="240" y="673.8000000000001" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="254" y="700.8000000000001" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
+<text x="240" y="749.8000000000001" font-size="18" fill="#1264a3">MCSで開く</text>
+<text x="645" y="593.8000000000001" font-size="15" fill="#66716f">開いたスタンプメニュー（説明図）</text>
+<rect x="645" y="608.8000000000001" width="330" height="270" rx="8" fill="#fff" stroke="#aebbb2"/>
+<text x="663" y="644.8000000000001" font-size="19" fill="#202124">👀 見ました</text>
+<text x="663" y="686.8000000000001" font-size="19" fill="#087f5b">🙆 承知 ✓（取消）</text>
+<text x="663" y="728.8000000000001" font-size="19" fill="#202124">🙏 感謝</text>
+<text x="663" y="770.8000000000001" font-size="19" fill="#202124">👍 いいね</text>
+<text x="663" y="812.8000000000001" font-size="19" fill="#202124">✅ 完了</text>
+<text x="663" y="854.8000000000001" font-size="19" fill="#202124">🗂 別の投稿</text>
 <text x="240" y="1130" font-size="17" fill="#66716f">「別の投稿」は既存の対象選択・確認画面へ進みます。スタンプは5種類。</text>
 </svg>

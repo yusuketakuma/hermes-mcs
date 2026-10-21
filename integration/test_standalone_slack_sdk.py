@@ -287,7 +287,7 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
                 posted_blocks = json.loads(posted_blocks)
             compact, = [block for block in posted_blocks
                          if block.get("block_id", "").startswith("mcs:stamps:")]
-            select = compact["accessory"]
+            select = compact["elements"][0]
             assert len(select["options"]) == 6
             assert select["type"] == "static_select"
             async def stamp_form(request_id, timeout):

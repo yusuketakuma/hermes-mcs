@@ -118,9 +118,10 @@ def test_slack_groups_stamp_choices_with_a_distinct_post_picker(led, monkeypatch
     from adapters.slack import cards as slack_cards
     spec = _rendered_spec(led, monkeypatch, "slack")
     blocks = slack_cards.render(spec)[1]
-    (menu,) = [b for b in blocks if b.get("type") == "actions"]
-    (stamp_control,) = [b["accessory"] for b in blocks
-                        if b.get("accessory", {}).get("action_id") == slack_cards.STAMP_MENU_ACTION]
+    (menu,) = [b for b in blocks if b.get("type") == "actions"
+               and b["elements"][0]["action_id"] == slack_cards.MENU_ACTION]
+    (stamp_control,) = [e for b in blocks if b.get("type") == "actions"
+                        for e in b["elements"] if e.get("action_id") == slack_cards.STAMP_MENU_ACTION]
     assert stamp_control["type"] == "static_select"
     assert stamp_control["placeholder"]["text"] == "スタンプを押す…"
     assert "initial_option" not in stamp_control
@@ -207,12 +208,10 @@ def test_partial_and_complete_stamp_rows_keep_each_operation_reachable_once(
     actual, menu = [], []
     if transport == "slack":
         for block in slack_cards.render(spec)[1]:
-            control = block.get("accessory", {})
-            if control.get("action_id") == slack_cards.STAMP_MENU_ACTION:
-                actual.extend(o["value"] for o in control["options"])
             for item in block.get("elements", []):
                 if item["type"] == "static_select":
-                    menu.extend(o["value"] for o in item["options"])
+                    target = actual if item["action_id"] == slack_cards.STAMP_MENU_ACTION else menu
+                    target.extend(o["value"] for o in item["options"])
                 elif item["type"] == "button":
                     actual.append(item["value"])
     elif transport == "discord":

@@ -39,7 +39,7 @@ POSTS = (
 STAMPS = ("スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
           "スタンプ 👀3 田中・佐藤・鈴木 / 🙆1 高橋 · 10-01 10:30時点")
 STATE = ("👤 担当: 田中 · ✅ 確認: 田中",
-         "📝 タスク 1件 · スタンプ 👀5 🙆2 · 自分 2投稿")
+         "📝 タスク 1件")
 RULE = "─" * 12
 BODY = "次回訪問時に残薬を確認してください。服薬カレンダーの写真を共有します。"
 
@@ -146,14 +146,13 @@ class Screen:
                 y = self.paragraph(x, y - 2, "・" + bullet, width, 18)
             y = self.fold(x, y, width, 16)
         y = self.rule(x, y, width)
-        for line in STATE if full else ("📝 タスク 1件 · スタンプ 👀2 🙆1",):
+        for line in STATE if full else ("📝 タスク 1件",):
             y = self.paragraph(x, y - 2, line, width, 17, MUTED)
         for (sender, _), stamps in zip(POSTS[:2 if full else 1], STAMPS):
             if full:
                 y = self.paragraph(x, y - 2, sender, width, 15, MUTED)
             y = self.paragraph(x, y - 2, stamps, width, 15, GREEN)
         if stamp_controls:
-            y = self.paragraph(x, y + 4, "スタンプ · 表示中の最新投稿へ", width, 17, INK)
             self.button(x, y, "スタンプを押す… ▾", 250)
             y += 70
         return self.rule(x, y, width)
@@ -195,7 +194,7 @@ def menu():
     y = s.card(x, y, stamp_controls=True)
     s.actions(x, y)
     labels = ("👀 見ました", "🙆 承知 ✓（取消）", "🙏 感謝", "👍 いいね", "✅ 完了", "🗂 別の投稿")
-    mx, my = x + 405, y - 95
+    mx, my = x + 405, y - 65
     s.text(mx, my - 15, "開いたスタンプメニュー（説明図）", 15, MUTED)
     s.rect(mx, my, 330, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
     for i, label in enumerate(labels):

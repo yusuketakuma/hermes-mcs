@@ -1179,7 +1179,9 @@ def _footer(db, card, shown, generation) -> tuple:
         late = sum(1 for t in tasks if t["due_date"] and t["due_date"] < today)
         work.append(f"📝 タスク {len(tasks)}件"
                     + (f"（期限切れ {late}）" if late else ""))
-    work.extend(card_reaction_lines(card_reactions(db, card, shown)))
+    # Slack thread cards show per-post counts, people and acquisition state together.
+    if card["kind"] != "thread" or "transport" not in card.keys() or card["transport"] != "slack":
+        work.extend(card_reaction_lines(card_reactions(db, card, shown)))
     if work:
         lines.append(" · ".join(work))
     if feedback_pending(db, card):

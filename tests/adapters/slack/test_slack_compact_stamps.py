@@ -34,8 +34,8 @@ def _stamp_control(blocks):
 def test_stamp_controls_expand_one_menu_with_six_distinct_names():
     blocks = render(_stamps_spec())[1]
     control = _stamp_control(blocks)
-    menu = control["accessory"]
-    assert control["text"]["text"] == "スタンプ · 表示中の最新投稿へ"
+    menu = control["elements"][0]
+    assert control["type"] == "actions" and "text" not in control
     assert menu["type"] == "static_select"
     assert menu["placeholder"]["text"] == "スタンプを押す…"
     assert [o["text"]["text"] for o in menu["options"]] == [
@@ -62,11 +62,12 @@ def _origin(body, action):
 def test_compact_controls_preserve_all_tokens_and_observed_own_state():
     spec = _stamps_spec()
     _, blocks = render(spec)
-    ordinary, = [b for b in blocks if b["type"] == "actions"]
+    ordinary, = [b for b in blocks if b["type"] == "actions"
+                  and b["elements"][0]["action_id"] == cards.MENU_ACTION]
     select, = ordinary["elements"]
     assert [o["value"] for o in select["options"]] == ["b" * 32, "c" * 32]
     control = _stamp_control(blocks)
-    menu = control["accessory"]
+    menu = control["elements"][0]
     assert [o["value"] for o in menu["options"]] == [f"{i:032x}" for i in range(1, 6)] + ["d" * 32]
     body, _ = click()
     for option in menu["options"]:
@@ -225,10 +226,11 @@ def test_visible_controls_keep_the_target_and_never_fallback(op, thread, rejecte
     assert len(calls) == 1 and calls[0][0] == op
     payload = calls[0][1]
     assert not any(b["type"] == "context_actions" for b in payload["blocks"])
-    ordinary, = [b for b in payload["blocks"] if b["type"] == "actions"]
+    ordinary, = [b for b in payload["blocks"] if b["type"] == "actions"
+                  and b["elements"][0]["action_id"] == cards.MENU_ACTION]
     menu, = ordinary["elements"]
     assert [o["value"] for o in menu["options"]] == ["b" * 32, "c" * 32]
-    stamps = _stamp_control(payload["blocks"])["accessory"]["options"]
+    stamps = _stamp_control(payload["blocks"])["elements"][0]["options"]
     assert [o["value"] for o in stamps] == [f"{i:032x}" for i in range(1, 6)] + ["d" * 32]
     assert "取消" in stamps[1]["text"]["text"]
     assert payload["blocks"] == render(_stamps_spec())[1]

@@ -454,7 +454,8 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     _post(led, 100, SELF, ts=NOW - 100)
     _post(led, 101, OTHER, ts=NOW - 50, parent=100)
     for mid in (100, 101):
-        _meta(led, mid, reactions=[_r("viewed", 2, True)])
+        _meta(led, mid, error="reacquire_failed" if mid == 101 else None,
+              reactions=[_r("viewed", 2, True)])
         led.save_reaction_actors(mid, [
             {"actor_id": SELF, "reaction_type": "viewed", "name": f"合成本人{mid}"},
             {"actor_id": OTHER, "reaction_type": "viewed", "name": f"合成他者{mid}<@UFAKE>"},
@@ -463,20 +464,20 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     assert _dispatch(led, _intent(led), cfg)["dispatched"]
     spec = json.loads(_latest_render(led)["spec_json"])
     footer = "\n".join(item["text"] for item in spec["parts"]["footer"] if item["type"] == "text")
-    assert "スタンプ 👀3 · 自分 2投稿" in footer and "MCS 👀" not in footer
+    assert ("スタンプ 👀3 · 自分 2投稿" in footer) == (platform != "slack")
+    assert "MCS 👀" not in footer
     assert "合成本人" not in footer and "合成他者" not in footer
     if platform == "slack":
         blocks = slack_cards.render(spec)[1]
-        assert any("スタンプ 👀3" in element.get("text", "") for block in blocks
+        assert not any("スタンプ 👀3" in element.get("text", "") for block in blocks
                    for element in block.get("elements", []))
         stamp_context = [element for block in blocks if block["type"] == "context"
                          for element in block["elements"] if "スタンプ" in element["text"]]
-        # the footer total plus each post's own row on the card face, all
-        # plain text: actor names never become Slack mentions
-        assert len(stamp_context) == 3 and all(e["type"] == "plain_text" for e in stamp_context)
+        # Per-post counts and people remain; the redundant total is hidden.
+        assert len(stamp_context) == 2 and all(e["type"] == "plain_text" for e in stamp_context)
         assert all("<@" not in e["text"] for e in stamp_context)
-        assert stamp_context[0]["text"] == "スタンプ 👀3 · 自分 2投稿"
-        assert "合成他者100" in stamp_context[1]["text"] and "合成他者101" in stamp_context[2]["text"]
+        assert "合成他者100" in stamp_context[0]["text"] and "合成他者101" in stamp_context[1]["text"]
+        assert "再取得失敗" in stamp_context[1]["text"]
     elif platform == "discord":
         view = discord_cards.build_view(spec)
         assert any("-# スタンプ 👀3" in getattr(child, "content", "")
