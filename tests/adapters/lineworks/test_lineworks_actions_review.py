@@ -10,6 +10,7 @@ from lineworks_testkit import SCOPE, TOKEN, command_files, event, world
 
 
 def _result(w, result_id, result):
+    result = {"projects": [], **result}  # runner view results carry their counted scope
     path = Path(w.dirs["cmd_results"]) / (paths.safe_name(result_id) + ".json")
     paths.atomic_write(str(path), json.dumps(result, ensure_ascii=False).encode())
 
@@ -74,7 +75,7 @@ def test_repeated_private_view_input_uses_a_fresh_result_id(tmp_path, action, fi
     asyncio.run(w.actions._input("operator", actor, "合成条件"))
     first = command_files(w)[0]
     _result(w, first["request_id"], {
-        "request_id": first["request_id"], "outcome": "applied", "action": "list"})
+        "request_id": first["request_id"], "outcome": "applied", "action": "list", "projects": [1]})
     asyncio.run(w.actions.sweep_followups())
     w.reg.put_modal(modal_id, {**session, "fields": {}, "index": 0})
     asyncio.run(w.actions._input("operator", actor, "合成条件"))

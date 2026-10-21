@@ -1,0 +1,13 @@
+{
+  "category": "security",
+  "title": "設定ファイルと .env の読取りを安全化",
+  "summary": "config.json と ~/.mcs/.env・~/.hermes/.env は、シンボリックリンク・通常ファイル以外・上限超過（config 1 MiB、.env 64 KiB）を読まず、未設定と同じ扱いにします。グループ/他者が書込みできる、または別ユーザー所有のファイルは今回の版では読み込んだうえで警告コード local_file_permissions_weak を一度だけ出します。",
+  "upgrade": "通常の導入（0600 の実ファイル）では操作不要です。config.json や .env をシンボリックリンクにしている場合は実ファイルへ置き換えてください。警告が出た場合は chmod 600 で権限を絞ってください。",
+  "details": [
+    "mcs_util.load_config・env_value が safe_io.read_regular_nofollow を使う。",
+    "権限の警告はファイル名だけを出し、内容は出さない。"
+  ],
+  "refs": [
+    "mcs/core/mcs_util.py"
+  ]
+}

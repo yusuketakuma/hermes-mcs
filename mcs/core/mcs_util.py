@@ -5,9 +5,12 @@ import json
 import os
 import re
 import shutil
+import sys
 import unicodedata
 import urllib.request
 from contextlib import suppress
+
+from safe_io import read_regular_nofollow
 
 
 HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
@@ -24,12 +27,34 @@ CHROME_PROFILE = os.path.join(HOME, "chrome-profile")
 CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
+CONFIG_MAX_BYTES = 1024 * 1024
+DOTENV_MAX_BYTES = 64 * 1024
+_weak_warned: set = set()
+
+
+def _read_local(path: str, limit: int) -> bytes:
+    """Bounded no-follow read of a regular local file; group/world-writable
+    or foreign-owned files are read but warned once per path (warn-only
+    this release so an update cannot brick an install with loose modes)."""
+    raw = read_regular_nofollow(path, limit, ValueError)
+    if len(raw) > limit:
+        raise ValueError
+    # shortcut: lstat after the read can race a swap; it only gates a warning
+    with suppress(OSError):
+        st = os.lstat(path)
+        if (st.st_mode & 0o022 or st.st_uid != os.getuid()) \
+                and path not in _weak_warned:
+            _weak_warned.add(path)
+            print(f"mcs: local_file_permissions_weak ({os.path.basename(path)})",
+                  file=sys.stderr)
+    return raw
+
+
 def load_config(path: str = CONF_PATH) -> dict:
     """config.json -> dict; a missing/malformed file means {} so every
     caller falls back to its documented per-key defaults + validation."""
     try:
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
+        raw = json.loads(_read_local(path, CONFIG_MAX_BYTES).decode("utf-8"))
         return raw if isinstance(raw, dict) else {}
     except (OSError, ValueError, RecursionError):
         return {}
@@ -49,9 +74,9 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
                  (os.path.join(HOME, ".env"),
                   os.path.expanduser("~/.hermes/.env"))):
         # an undecodable (non-UTF-8) dotenv is skipped like an unreadable one
-        with suppress(OSError, UnicodeDecodeError), \
-                open(path, encoding="utf-8") as f:
-            for line in f:
+        with suppress(OSError, ValueError):
+            for line in _read_local(path, DOTENV_MAX_BYTES).decode(
+                    "utf-8").splitlines(keepends=True):
                 if line.startswith(key + "="):
                     v = line.split("=", 1)[1].strip()
                     # decodes lifecycle_io.write_env's quoting; the standalone

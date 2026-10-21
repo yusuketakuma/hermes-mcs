@@ -1,0 +1,12 @@
+{
+  "category": "security",
+  "title": "対象範囲が不明な表示結果を送らない",
+  "summary": "本文・まとめ・一覧・ダイジェスト・タスクの表示結果に集計対象の患者範囲が付いていない場合は、内容を送らず範囲変更の案内を返します。それ以外の操作結果の扱いは変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "adapters/common/text.view_scope_ok が projects の list を必須にする。"
+  ],
+  "refs": [
+    "adapters/common/text.py"
+  ]
+}

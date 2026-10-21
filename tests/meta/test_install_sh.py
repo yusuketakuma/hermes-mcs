@@ -336,6 +336,7 @@ exec(compile(code, '<installer-runtime-check>', 'exec'))
         "STUB_PARSE_PYTHON": sys.executable,
         # sha256 of the stub curl's model bytes ("stub-model-bytes\n")
         "MCS_MODEL_SHA256": STUB_MODEL_SHA256,
+        "MCS_ALLOW_MODEL_SHA_OVERRIDE": "1",
     })
     return home, hermes_home, stub_root, env
 
@@ -1089,11 +1090,22 @@ def test_model_download_is_pinned_and_verified_by_default(tmp_path):
     text = INSTALL.read_text()
     assert re.search(r'^MODEL_URL="https://huggingface\.co/[^"]+/resolve/[0-9a-f]{40}/[^"]+\.gguf"$',
                      text, re.M)
-    assert re.search(r'^MODEL_SHA256="\$\{MCS_MODEL_SHA256:-[0-9a-f]{64}\}"$', text, re.M)
+    assert re.search(r'^MODEL_SHA256="[0-9a-f]{64}"$', text, re.M)
     home, hermes_home, stub_root, env = _world(tmp_path)
     del env["MCS_MODEL_SHA256"]
     r = _run(env, hermes_home)
     assert r.returncode == 1 and "モデルの整合性が確認できません" in r.stderr
+    assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf").exists()
+
+
+def test_model_checksum_env_needs_the_explicit_override_flag(tmp_path):
+    """MCS_MODEL_SHA256 alone must not replace the pin: without
+    MCS_ALLOW_MODEL_SHA_OVERRIDE=1 the stub bytes fail the pinned check."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    del env["MCS_ALLOW_MODEL_SHA_OVERRIDE"]
+    r = _run(env, hermes_home)
+    assert r.returncode == 1 and "モデルの整合性が確認できません" in r.stderr
+    assert "MCS_ALLOW_MODEL_SHA_OVERRIDE=1 がないため無視" in r.stderr
     assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf").exists()
 
 

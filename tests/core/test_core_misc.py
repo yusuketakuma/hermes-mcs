@@ -9,6 +9,7 @@ import os
 import sqlite3
 
 import ledger_schema
+import mcs_util
 import stat
 import sys
 import time
@@ -1434,3 +1435,43 @@ def test_unreadable_semantic_seed_does_not_rollback_new_reply(tmp_path, raw):
     assert not payload.get("eligible")
     assert db.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 0
     db.close()
+
+
+# --- config.json / dotenv reads: no links, bounded, weak modes warned ---
+def test_config_refuses_symlink_and_oversize(tmp_path):
+    target = tmp_path / "target.json"
+    target.write_text(json.dumps({"k": 1}))
+    link = tmp_path / "config.json"
+    link.symlink_to(target)
+    assert mcs_util.load_config(str(link)) == {}
+    big = tmp_path / "big.json"
+    big.write_text('{"k": "' + "x" * mcs_util.CONFIG_MAX_BYTES + '"}')
+    assert mcs_util.load_config(str(big)) == {}
+    assert mcs_util.load_config(str(target)) == {"k": 1}
+
+
+def test_writable_config_and_dotenv_are_read_with_one_warning(tmp_path, capsys):
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"k": 2}')
+    env = tmp_path / ".env"
+    env.write_text("SYNTH_KEY=synthetic-value\n")
+    os.chmod(cfg, 0o666)
+    os.chmod(env, 0o620)
+    assert mcs_util.load_config(str(cfg)) == {"k": 2}
+    assert mcs_util.load_config(str(cfg)) == {"k": 2}
+    assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)], check_env=False) == "synthetic-value"
+    err = capsys.readouterr().err
+    assert err.count("local_file_permissions_weak (config.json)") == 1
+    assert "local_file_permissions_weak (.env)" in err
+    assert "synthetic-value" not in err
+
+
+def test_dotenv_symlink_is_skipped_like_a_missing_file(tmp_path):
+    real = tmp_path / "real.env"
+    real.write_text("SYNTH_KEY=from-link\n")
+    link = tmp_path / ".env"
+    link.symlink_to(real)
+    second = tmp_path / "second.env"
+    second.write_text("SYNTH_KEY=from-second\n")
+    assert mcs_util.env_value("SYNTH_KEY", paths=[str(link), str(second)],
+                              check_env=False) == "from-second"

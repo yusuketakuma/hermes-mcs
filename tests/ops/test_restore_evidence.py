@@ -104,3 +104,14 @@ def test_same_timestamp_consent_uses_newest_rowid(tmp_path):
                         (cid, json.dumps(receipt)))
     con.close()
     assert restore_evidence.find_restore_consent(report, live_path=str(path)) == "synthetic-second"
+
+
+def test_open_failure_reports_only_the_error_type(tmp_path, monkeypatch):
+    def connect(*args, **kwargs):
+        raise sqlite3.OperationalError("unable to open /synthetic/private/path.db")
+    monkeypatch.setattr(restore_evidence.sqlite3, "connect", connect)
+    with pytest.raises(restore_evidence.RestoreEvidenceError) as caught:
+        restore_evidence.create_loss_report(
+            live_path=str(tmp_path / "a.db"), backup_path=str(tmp_path / "b.db"),
+            report_path=str(tmp_path / "r.json"))
+    assert str(caught.value) == "restore_report_live_db: OperationalError"

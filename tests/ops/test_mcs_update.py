@@ -2901,3 +2901,21 @@ def test_legacy_baseline_matches_current_slot_probe(monkeypatch):
     assert mcs_update.update_policy.environment_error_identity(errors[0]) == mcs_update.update_policy.environment_error_identity(original)
     changed = original.replace("1 slots", "2 slots")
     assert mcs_update.update_policy.environment_error_identity(errors[0]) != mcs_update.update_policy.environment_error_identity(changed)
+
+
+def test_unstartable_command_reports_only_the_error_type(monkeypatch):
+    def boom(*a, **k):
+        raise FileNotFoundError(2, "No such file", "/synthetic/private/launchctl")
+    monkeypatch.setattr(mcs_update.subprocess, "run", boom)
+    r = mcs_update._run(["launchctl", "print"])
+    assert (r.returncode, r.stderr) == (127, "FileNotFoundError")
+
+
+def test_marker_is_private_and_never_follows_a_link(updater, tmp_path):
+    updater._write_marker()
+    assert (os.stat(updater.MARKER_PATH).st_mode & 0o777) == 0o600
+    os.unlink(updater.MARKER_PATH)
+    os.symlink(tmp_path / "elsewhere", updater.MARKER_PATH)
+    with pytest.raises(OSError):
+        updater._write_marker()
+    assert not (tmp_path / "elsewhere").exists()

@@ -11,7 +11,8 @@ from lineworks_testkit import SCOPE, world
 def test_private_view_uses_plain_headings_and_keeps_literal_special_text(tmp_path, action):
     w = world(tmp_path, action=action)
     literal = '**合成** <@synthetic> & [リンク](https://example.invalid/synthetic) 🧪'
-    result = {"outcome": "applied", "action": action, "title": "合成見出し", "body": literal,
+    result = {"outcome": "applied", "action": action, "projects": [1],
+              "title": "合成見出し", "body": literal,
               "tasks": [{"request_id": 1, "project_id": 1, "status": "open", "title": literal}],
               "list": {"title": "合成見出し", "items": [
                   {"project_id": 1, "text": literal},
@@ -32,7 +33,7 @@ def test_private_view_uses_plain_headings_and_keeps_literal_special_text(tmp_pat
 @pytest.mark.parametrize("markdown", [False, True])
 def test_long_private_answer_retains_its_budget_and_announces_omission(action, markdown):
     body = "合" * (text.BODY_CHUNK * (text.BODY_MAX_CHUNKS + 2))
-    result = {"outcome": "applied", "action": action, "body": body, "text": body,
+    result = {"outcome": "applied", "action": action, "body": body, "text": body, "projects": [1],
               "title": "合成見出し", "list": {"title": "合成見出し", "notes": [body]}}
     answer = text.view_answer(result, lambda _pid: True, markdown=markdown)
     assert len(answer) == text.BODY_MAX_CHUNKS

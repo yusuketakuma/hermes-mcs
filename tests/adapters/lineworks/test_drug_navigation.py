@@ -16,7 +16,7 @@ def test_navigation_is_durable_before_first_private_chunk_and_actor_bound(tmp_pa
     w = world(tmp_path, action="meds")
     token, actor = "c" * 32, "lineworks:40029600:operator"
     context = {"action": "meds", "project_id": 1, "actor": actor, "ephemeral": True}
-    result = {"outcome": "applied", "action": "list",
+    result = {"outcome": "applied", "action": "list", "projects": [1],
               "list": {"title": "完全合成の薬剤", "notes": ["合" * 4000]},
               "navigation": [{"id": "meds", "ui": "button", "label": "次の薬剤",
                               "token": token, "style": "secondary"}],

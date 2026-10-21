@@ -1,0 +1,13 @@
+{
+  "category": "security",
+  "title": "更新ログと更新中マーカーをリンクを辿らず 0600 で作成",
+  "summary": "update.log と更新中マーカーは、シンボリックリンクを辿らず所有者のみ読書きできる権限で作成します。リンクに置き換えられている場合は書き込まずに失敗します。",
+  "upgrade": "追加操作は不要です。既存の update.log の権限は変わりません。",
+  "details": [
+    "O_NOFOLLOW|O_CREAT と 0o600 で開き、safe_io.fdopen_owned で閉じる。"
+  ],
+  "refs": [
+    "mcs/ops/update_launch.py",
+    "mcs/ops/mcs_update.py"
+  ]
+}

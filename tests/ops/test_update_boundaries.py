@@ -146,3 +146,19 @@ def test_drain_launches_after_committed_receipt_and_passes_no_command(tmp_path, 
         assert result["errors"] == [] and seen == [True]
     finally:
         db.close()
+
+
+def test_detached_launch_log_is_private_and_never_follows_a_link(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": "standalone"})
+    monkeypatch.setattr(update_launch.subprocess, "Popen", lambda argv, **kw: None)
+    data = tmp_path / "data"
+    kwargs = dict(root=tmp_path, data_dir=data, hermes_wrapper="/synthetic/fallback",
+                  environment={})
+    update_launch.spawn_detached(**kwargs)
+    assert (os.stat(data / "update.log").st_mode & 0o777) == 0o600
+    (data / "update.log").unlink()
+    (data / "update.log").symlink_to(tmp_path / "elsewhere")
+    with pytest.raises(OSError):
+        update_launch.spawn_detached(**kwargs)
+    assert not (tmp_path / "elsewhere").exists()

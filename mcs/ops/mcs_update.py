@@ -858,7 +858,7 @@ def _run(argv: list, timeout: int = T_LAUNCHCTL
         return subprocess.CompletedProcess(argv, 124, "",
                                            f"timed out after {timeout}s")
     except OSError as e:
-        return subprocess.CompletedProcess(argv, 127, "", str(e))
+        return subprocess.CompletedProcess(argv, 127, "", type(e).__name__)
 
 
 def _agent_pid(label: str, unknown: int | None = None) -> int | None:
@@ -873,7 +873,9 @@ def _agent_pid(label: str, unknown: int | None = None) -> int | None:
 
 
 def _write_marker() -> None:
-    with open(MARKER_PATH, "w") as f:
+    fd = os.open(MARKER_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                 | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    with fdopen_owned(fd, "w") as f:
         f.write(str(time.time()))
         f.flush()
         os.fsync(f.fileno())
