@@ -20,7 +20,6 @@ set -u
 JOBS="lint-test hygiene standalone-sdk incident-gates macos hermes-integration"
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)
-workflow=$repo/.github/workflows/ci.yml
 out=""
 fetch=0
 selected=""
@@ -40,7 +39,39 @@ done
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# --- pins, read from ci.yml so the runner never carries its own copy ---
+if [ "${_MCS_CI_LOCAL_SRC:-}" != "$repo" ]; then
+    # Stage 1: bind the run to one SHA. Any uncommitted or untracked change —
+    # in this runner, ci.yml, the Makefile or anything a job reads — would make
+    # the evidence describe code that the SHA does not contain, so refuse it.
+    if [ -n "$(git -C "$repo" status --porcelain --untracked-files=all)" ]; then
+        echo "refusing: $repo has uncommitted or untracked changes; commit them so the result is bound to its SHA" >&2
+        exit 2
+    fi
+    sha=$(git -C "$repo" rev-parse HEAD) || exit 2
+    [ -n "$out" ] || out=${TMPDIR:-/tmp}/mcs-ci-local/${sha:0:12}-$(date -u +%Y%m%dT%H%M%SZ)
+    mkdir -p "$out" || exit 2
+    out=$(cd "$out" && pwd -P)
+    case "$out/" in "$repo/"*) echo "--out must be outside the repository" >&2; exit 2 ;; esac
+    [ -z "$(ls -A "$out")" ] || { echo "--out must be empty: $out" >&2; exit 2; }
+    src=$out/checkout
+    git clone --quiet --no-checkout "$repo" "$src" && git -C "$src" checkout --quiet --detach "$sha" || exit 2
+    [ "$(git -C "$src" rev-parse HEAD)" = "$sha" ] || { echo "clone is not at $sha" >&2; exit 2; }
+    # Stage 2 is the clone's own copy of this runner: jobs, pins and run lines
+    # all come from the recorded SHA, never from the caller's files
+    fetch_flag=""; [ "$fetch" = 0 ] || fetch_flag=--fetch
+    # shellcheck disable=SC2086  # $selected is a word list of validated job names
+    exec env _MCS_CI_LOCAL_SRC="$src" _MCS_CI_LOCAL_OUT="$out" _MCS_CI_LOCAL_ORIGIN="$repo" \
+        bash "$src/scripts/development/ci_local.sh" $fetch_flag $selected
+fi
+
+# Stage 2: running from the isolated clone
+src=$repo
+out=${_MCS_CI_LOCAL_OUT:?}
+sha=$(git -C "$src" rev-parse HEAD) || exit 2
+clean_before=$(git -C "$src" status --porcelain --untracked-files=all)
+workflow=$src/.github/workflows/ci.yml
+
+# --- pins, read from the clone's ci.yml/Makefile; the runner keeps no copy ---
 pin() { grep -oE "$1" "$workflow" | head -n 1 | sed -E "s/$2//"; }
 py_pin=$(pin 'python-version: "[0-9.]+"' '^python-version: "|"$')
 pytest_pin=$(pin 'pytest==[0-9.]+' '^pytest==')
@@ -48,26 +79,11 @@ uv_pin=$(pin 'uv==[0-9.]+' '^uv==')
 job_block() { awk -v j="  $1:" '$0==j{f=1;next} f&&/^  [a-z]/{exit} f' "$workflow"; }
 hermes_repo=$(job_block hermes-integration | sed -nE 's/^ *repository: *//p' | head -n 1)
 hermes_ref=$(job_block hermes-integration | sed -nE 's/^ *ref: *([0-9a-f]{40}).*/\1/p' | head -n 1)
-ruff_pin=$(sed -nE 's/.*ruff==([0-9.]+).*/\1/p' "$repo/Makefile" | head -n 1)
+ruff_pin=$(sed -nE 's/.*ruff==([0-9.]+).*/\1/p' "$src/Makefile" | head -n 1)
 if [ -z "$py_pin" ] || [ -z "$pytest_pin" ] || [ -z "$uv_pin" ] || [ -z "$ruff_pin" ] ||
     [ -z "$hermes_repo" ] || [ -z "$hermes_ref" ]; then
     echo "could not read the pins from ci.yml/Makefile" >&2; exit 2
 fi
-
-sha=$(git -C "$repo" rev-parse HEAD) || exit 2
-source_dirty=$(git -C "$repo" status --porcelain --untracked-files=all)
-[ -n "$out" ] || out=${TMPDIR:-/tmp}/mcs-ci-local/${sha:0:12}-$(date -u +%Y%m%dT%H%M%SZ)
-mkdir -p "$out" || exit 2
-out=$(cd "$out" && pwd -P)
-case "$out/" in "$repo/"*) echo "--out must be outside the repository" >&2; exit 2 ;; esac
-[ -z "$(ls -A "$out")" ] || { echo "--out must be empty: $out" >&2; exit 2; }
-
-# isolated clean checkout of the exact SHA: jobs never see or touch the
-# caller's tree, so uncommitted changes there are not part of the result
-src=$out/checkout
-git clone --quiet --no-checkout "$repo" "$src" && git -C "$src" checkout --quiet --detach "$sha" || exit 2
-[ "$(git -C "$src" rev-parse HEAD)" = "$sha" ] || { echo "clone is not at $sha" >&2; exit 2; }
-clean_before=$(git -C "$src" status --porcelain --untracked-files=all)
 
 if [ "$fetch" = 0 ]; then
     # no network unless asked: pip and uv resolve only from local caches
@@ -199,7 +215,7 @@ printf 'job\tstatus\texit\tstarted\tfinished\truns_on\thost\tnote\n' >"$summary"
     echo "sha=$sha"
     echo "checkout=$src"
     echo "checkout_clean_before=$([ -z "$clean_before" ] && echo yes || echo no)"
-    echo "caller_tree_clean=$([ -z "$source_dirty" ] && echo yes || echo 'no (未commitの変更は検査対象外)')"
+    echo "caller=${_MCS_CI_LOCAL_ORIGIN:-}（未commit・untracked の変更なしを確認済み）"
     echo "host=$(uname -srm)"
     echo "fetch=$fetch"
     echo "pins: python=$py_pin pytest=$pytest_pin uv=$uv_pin hermes=$hermes_repo@$hermes_ref"

@@ -820,6 +820,7 @@ setup/teardownの失敗時に領域が残る保証はなく、runner終了時に
 課金・利用上限・runner 障害で最終 SHA の CI job が開始できない場合だけ、
 `scripts/development/ci_local.sh` で `ci.yml` の6 job（lint-test・hygiene・standalone-sdk・
 incident-gates・macos・hermes-integration）を、その SHA の clean な clone で直列に実行します。
+未commit・untracked の変更がある checkout では実行を拒否し、job・run 行・固定版はすべて clone 側のランナーと `ci.yml` から読みます。
 CI が実行されて失敗した場合の代わりにはなりません。重いテストを含むため共有 slot を取ってから実行します。
 
 ```bash
