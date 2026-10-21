@@ -113,12 +113,12 @@ def test_old_results_and_unfetched_context_do_not_invent_pharmacy_values(tmp_pat
         result = rollup.build_rollup(led.db, 1)
         assert result["patient_context"] == {"memo": {}, "chat": {}}
         assert result["pharmacy_state"]["items"] == []
-        assert rollup.PERIOD_CHECK_VERSION == 11
+        assert rollup.PERIOD_CHECK_VERSION == 12
         rollup.rebuild(led, 1)
         rollup.rebuild(led, 1)
         artifacts = led.artifacts("patient_rollup", project_id=1)
         assert len(artifacts) == 1
-        assert json.loads(artifacts[0]["meta"])["period_check_version"] == 11
+        assert json.loads(artifacts[0]["meta"])["period_check_version"] == rollup.PERIOD_CHECK_VERSION
     finally:
         led.close()
 

@@ -177,9 +177,12 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now):
 def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict:
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
     patient_name = patient[0] if patient else None
-    msgs = db.execute("""
+    # Legacy read-only snapshots may lack observation time; NULL stays unknown.
+    refreshed = "updated_seen" if any(r[1] == "updated_seen" for r in db.execute(
+        "PRAGMA table_info(messages)")) else "NULL"
+    msgs = db.execute(f"""
       SELECT message_id, project_id, posted_at, posted_at_ts, body_text, sender_id, sender_name, sender_type,
-             parent_id, updated_seen, body_state, content_hash
+             parent_id, {refreshed} AS updated_seen, body_state, content_hash
       FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
     """, (project_id,)).fetchall()
     out: dict = {"project_id": project_id, "generated_at": time.time(),
@@ -615,7 +618,8 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
     clinical_stale = ("latest_vitals" in out and isinstance(meta, dict)
                       and "period_check_version" in meta
                       and meta["period_check_version"] != PERIOD_CHECK_VERSION)
-    request_stale = legacy and "recent_requests" in out
+    request_stale = legacy and any(
+        "reply_state" in row or "reply_conflict" in row for row in _dicts(out.get("recent_requests")))
     if scoped or projection_stale or clinical_stale or request_stale:
         try:
             current = build_rollup(db, project_id)

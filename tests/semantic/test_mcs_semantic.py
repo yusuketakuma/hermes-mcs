@@ -1392,13 +1392,15 @@ def test_project_filter_defers_not_starves(tmp_path):
     db.save_patient(p1, notify={"source": "unread"}, semantic=True)
     cfg = _cfg("shadow", project_ids=[1])
     res = {"errors": []}
-    # first window: the 4 lowest-id jobs are out of scope -> deferred
-    semantic_drain.run_due(db, cfg, res, time.monotonic() + 300,
-                     jev_client=_FakeJev(), llm_fn=_llm, max_jobs=4)
+    # Refill skips deferred rows in the same window, reaching the scoped job.
+    first = semantic_drain.run_due(db, cfg, res, time.monotonic() + 300,
+                                  jev_client=_FakeJev(), llm_fn=_llm, max_jobs=4)
+    assert first["done"] == 1
+    assert first["deferred"] == 6
     out = semantic_drain.run_due(db, cfg, res, time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm,
                            max_jobs=4)
-    assert out["done"] == 1
+    assert out["done"] == 0       # the completed job is not processed twice
     row = db.db.execute(
         "SELECT state FROM fetch_jobs WHERE kind='semantic' "
         "AND project_id=1").fetchone()

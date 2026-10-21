@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 import notify_views
+import rollup
 from notify_testkit import NOW, _msg, _patient, led as led  # noqa: F401
 
 
@@ -88,9 +89,11 @@ def test_loop_candidate_counts_only_current_revision(led):
     _patient(led)
     _msg(led, 101)
     reqs = [{"ctx": "処方変更", "at": "2026-09-29T09:00", "mid": 101}]
+    # Exercise rendering of an already validated current rollup, not legacy migration.
     led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
-                   "created_at) VALUES('patient_rollup',1,NULL,?,'t','{}',?)",
-                   (json.dumps({"recent_requests": reqs}), NOW))
+                   "created_at) VALUES('patient_rollup',1,NULL,?,'t',?,?)",
+                   (json.dumps({"recent_requests": reqs}),
+                    json.dumps({"period_check_version": rollup.PERIOD_CHECK_VERSION}), NOW))
 
     def mark(revision):
         led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,"
