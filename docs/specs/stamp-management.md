@@ -55,7 +55,7 @@ Slackでは、投稿ごとの観測済みスタンプをカード下部へ集め
 
 Discord・LINE WORKSは従来の並び（「操作を選ぶ…」、スタンプ5個、「別の投稿」、「MCSで開く」）を保ちます。Discordは選択メニューの行、スタンプ5個の行、「別の投稿」と「MCSで開く」の行、投稿ごとの💊の行の順です。LINE WORKSはフッターに「操作を選ぶ…」、横1列のスタンプ、「別の投稿」、「MCSで開く」を並べ、確認・担当・タスク作成を含む操作は押した本人の1:1トークのメニューで選びます。「別の投稿」は既存のスタンプフォームのトークンで、スタンプ5個がそろう場合だけメニューから外します。トークン・操作者・患者scope・receiptの検査と共通の操作受付契約は変えません。
 
-Slackの[`feedback_buttons`](https://docs.slack.dev/reference/block-kit/block-elements/feedback-buttons-element/)は実モバイルで親指の絵柄になり、任意の絵柄を指定するfieldがありません。[`icon_button`](https://docs.slack.dev/reference/block-kit/block-elements/icon-button-element/)も公式仕様では`trash`のみです（2026-10-21確認）。識別できる名称と絵文字を持つ[選択メニュー](https://docs.slack.dev/reference/block-kit/block-elements/select-menu-element/)を[sectionのaccessory](https://docs.slack.dev/reference/block-kit/blocks/section-block/)として使います（2026-10-21確認）。展開時のシートや配置はSlackクライアントに従います。`invalid_blocks`時の小型表示から旧表示への再描画・再送は不要となり削除しました。通常の429待機・権限再確認と結果不明の扱いは維持します。
+Slackの[`feedback_buttons`](https://docs.slack.dev/reference/block-kit/block-elements/feedback-buttons-element/)は実モバイルで親指の絵柄になり、任意の絵柄を指定するfieldがありません。[`icon_button`](https://docs.slack.dev/reference/block-kit/block-elements/icon-button-element/)も公式仕様では`trash`のみです（2026-10-21確認）。識別できる名称と絵文字を持つ[選択メニュー](https://docs.slack.dev/reference/block-kit/block-elements/select-menu-element/)を[actionsブロック](https://docs.slack.dev/reference/block-kit/blocks/actions-block/)のelementsとして使います（2026-10-21確認）。展開時のシートや配置はSlackクライアントに従います。`invalid_blocks`時の小型表示から旧表示への再描画・再送は不要となり削除しました。通常の429待機・権限再確認と結果不明の扱いは維持します。
 
 新規カードと次回更新されるカードから反映します。実端末での配置・メニューによる取消・「別の投稿」の動作は合成テストと区別して確認します。クライアント内の一時的な選択表示をMCS反映の証拠とせず、MCS読取り後の`✓`と保存済み結果を正本とします。
 
