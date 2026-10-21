@@ -1,11 +1,11 @@
 {
   "kind": "synthetic explanation, not provider screenshot",
   "source": "docs/screenshots/slack-gallery/03-actions",
-  "source_commit": "35d0470ae6a0005a92589cc142acc62bc990f722",
+  "source_commit": "8971a02509a468955d2885e74991413f419d403c",
   "generator": "scripts/development/generate_slack_gallery.py",
   "copied_without_modification": true,
   "sha256": {
-    "png": "f7ea465482396404bb210eb0f6b4c06931c6baf75c09e54316ecf04146987ef2",
-    "svg": "da812e2682c6aee068d0f1547f0c0c5bc470010f038ab884c5cea968396b9d41"
+    "png": "e454117da832b3c44d2029038bde5ddb3f91d61a889595d0cfe37442cd3f70ea",
+    "svg": "e54e3e05d79884361509f857a25bb25a76ee627efa12ba55f7c620dc71038ac1"
   }
 }

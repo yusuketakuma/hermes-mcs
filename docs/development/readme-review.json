@@ -2,7 +2,7 @@
   "version": "1.0.28",
   "sections": {
     "features": {
-      "notes": "2026-10-21 1.0.28候補: 責務別の配置、追加添付の配送、スタンプの読取りと操作を現行ソースへ照合。操作者1人とMCSアカウントを指定した場合だけ送信が既定ONになる。1回押しの対象は表示中の最新投稿で、ほかの表示済み投稿はフォームで選ぶ。追加・変更・取消、本文の版と本人状態の再照合、20分の受付期限を確認した。実MCSへの操作成功は未確認。",
+      "notes": "2026-10-21 1.0.28公開候補（本番source8971a025）: スタンプの最終Slack表示は受信スタンプ詳細と送信メニューを同一エリアへ集約し、メニュー展開→絵文字・名称による種類選択の2段階。Discord/LINE WORKSの小型操作、操作者/本人設定時の既定ON、既知5種、追加/取消/別投稿、原文と本人状態・期限の再照合を確認。患者参考情報の長文分割・有限修復と検証済み情報保持、添付説明の現行metadata照合を実装と比較した。所有者は過去の実スタンプ追加・取消のMCS反映を報告したが、現在の全接続先/全画面を実機受入済みとはしない。",
       "sources": [
         "README.md",
         "mcs/stamps/stamp_write.py",
@@ -11,11 +11,14 @@
         "mcs/notify/notify_cards.py",
         "mcs/notify/notify_parts.py",
         "mcs/ingest/mcs_adapter.py",
-        "docs/development/REPOSITORY_STRUCTURE.md"
+        "docs/development/REPOSITORY_STRUCTURE.md",
+        "mcs/patients/patient_nightly.py",
+        "mcs/patients/patient_nightly_plan.py",
+        "adapters/slack/delivery.py"
       ]
     },
     "demos": {
-      "notes": "2026-10-21 1.0.28候補: Slackを先頭とする合成の説明図と、3接続先の操作部品を照合。Slackの03-actionsはスタンプ送信を設定した例で、本人のスタンプを強調する。ほかのSlack7画面とLINE WORKS2画面は送信未設定の例。版資料のSVG・PNGは03-actionsと同一hashで、生成元をvisual-source.jsonに記録している。実画面の表示・操作成功と公開URL上の画像表示は未確認。",
+      "notes": "2026-10-21 1.0.28公開候補（本番source8971a025）: Slack 03-actionsの現在の生成元とPNG/SVGを照合し、版別画像を同一hashで同期。受信スタンプと2段階送信の最終配置を確認。Slack8画面とLINE WORKS2画面の生成器checkを使用し、実画面の現行版確認と区別する。人物・組織・本文は架空の説明用データだけ。",
       "sources": [
         "docs/screenshots/slack-gallery/README.md",
         "docs/screenshots/slack-gallery/03-actions.svg",
@@ -32,7 +35,7 @@
       ]
     },
     "quickstart": {
-      "notes": "2026-10-21 1.0.28候補: READMEの導入・更新・復旧の入口、必要環境、読取り専用preflight、初期設定と実接続の確認条件をガイドへ照合。公開前の適用は候補SHAと更新前SHAを固定する更新経路を使い、バックアップ・ロック・停止・再起動・適用後確認を維持する。通常のgit mergeだけで稼働checkoutを進める手順にはしない。実機への新規導入は今回のREADME確認では実行していない。",
+      "notes": "2026-10-21 1.0.28公開候補（本番source8971a025）: 通常導入/更新/復旧、fixed candidateと基点の指定、worker停止/再同期/再起動、旧updaterのmcs-only closure、schema/layout literalと更新経路manifestをソースへ照合。今回の新規実機導入/実患者DB rollbackは行わない。データ形式・導入依存を変えないrelease文書差分では既存合成経路の同一ソース証拠を再利用する。",
       "sources": [
         "README.md",
         "install.sh",
@@ -45,7 +48,7 @@
       ]
     },
     "safety": {
-      "notes": "2026-10-21 1.0.28候補: 通知先への患者情報・添付の送信、Jevと出力機能の別条件、未取得と0件、人承認と復元保留の説明を照合。スタンプは指定したMCSアカウント名義で動作し、操作receiptの保存後に本人・対象・版を確認して1回だけ送信する。結果不明はGET照合を続け、自動再送しない。スタンプ送信と押下者取得の既定値は別で、正式タスクの完了も変更しない。実送信・実SDK接続の成功は未確認。 LINE WORKSの同じクリックの再試行でも最初の操作時刻を保持し、時刻のない古い記録ではスタンプを送信しないことを確認した。",
+      "notes": "2026-10-21 1.0.28公開候補（本番source8971a025）: 患者・操作者・原文版・承認receipt、結果不明の自動再送禁止を維持。Slackファイル最新情報は既存接続のfiles:readを利用し、容量/内容/本人を確認できない説明更新は保留。説明だけの人承認復旧は完全journalと元配送・対象・worker停止を要求し、新規uploadを伴う復旧を拒否。現存する過去caption保留を送信済みと扱わない。患者参考情報の公開・原文条件を変更せず、実生成品質の改善は未測定。",
       "sources": [
         "README.md",
         "SECURITY.md",
@@ -56,11 +59,13 @@
         "adapters/common/confirm.py",
         "mcs/notify/notify_transport.py",
         "resources/drug-master/README.md",
-        "adapters/lineworks/actions.py"
+        "adapters/lineworks/actions.py",
+        "docs/guides/NOTIFICATION_RECOVERY.md",
+        "mcs/notify/notify_recovery.py"
       ]
     },
     "docs": {
-      "notes": "2026-10-21 1.0.28候補: 利用ガイド、スタンプ契約、責務・依存の文書、ギャラリーと版資料の参照先を確認。112件の変更記録からCHANGELOGを生成し、17項目へ編集した説明と全件の技術詳細・適用条件・根拠を対応表に保持する。READMEの生成要約も同じCHANGELOGから同期する。1.0.28の受入票では候補検証・本番稼働・公開を分け、未確認の実操作や最終CIを受入済みとは扱わない。過去版の受入記録は変更しない。",
+      "notes": "2026-10-21 1.0.28公開候補（本番source8971a025）: CHANGELOGの公開17項目と128件の変更記録を対応表で全件照合し、追加16件の説明・更新条件・技術詳細・参照を保持。既存公開1.0.27以前は変更しない。導入/利用/スタンプ/復旧/構成の正本への導線と相対リンクを検査する。受入票でsource検証・本番稼働・公開を分け、Actions課金阻害・添付説明保留・実生成未測定を明記。",
       "sources": [
         "README.md",
         "CHANGELOG.md",
@@ -71,7 +76,8 @@
         "docs/development/REPOSITORY_STRUCTURE.md",
         "docs/development/DEVELOPMENT.md",
         "docs/guides/USER_GUIDE.md",
-        "docs/specs/stamp-management.md"
+        "docs/specs/stamp-management.md",
+        "docs/releases/v1.0.28/change-map.json"
       ]
     }
   }

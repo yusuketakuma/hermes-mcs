@@ -1,8 +1,8 @@
 {
-  "status": "Local candidate; publication and final acceptance pending",
+  "status": "1.0.28 publication candidate; source8971a025 applied locally; final CI and publication pending",
   "meaningful_entries": 17,
   "comparison_rows": 3,
-  "fragment_count": 112,
+  "fragment_count": 128,
   "mapping": [
     {
       "id": "T01",
@@ -12,13 +12,19 @@
         "architecture-metadata-read-contract",
         "stamp-management",
         "stamp-one-press",
-        "stamp-review-fixes"
+        "stamp-review-fixes",
+        "discord-lineworks-compact",
+        "slack-mobile-compact",
+        "slack-distinct-stamp-controls",
+        "slack-stamp-zone",
+        "slack-stamp-zone-trim"
       ],
       "retain_distinctions": [
         "Five known kinds; one-press add/cancel and fallback form; clicked/confirmed-time limit and selected-post expected-state binding.",
         "Enabled by default only after both account ID and operator are configured; false disables; no identities means no sending.",
         "One POST attempt; durable restore witness retained; GET-only unknown reconciliation; definite refusal + unchanged state may terminate rejected and permit a new explicit operation.",
-        "Gateway/LINE WORKS restart and existing-card update behavior; LINE WORKS may post revised cards on activation changes."
+        "Gateway/LINE WORKS restart and existing-card update behavior; LINE WORKS may post revised cards on activation changes.",
+        "Final Slack UI: received stamp details and outbound menu share one zone; menu expansion then named-kind selection. Intermediate compact-button fragments are history of the same candidate, not the final Slack layout."
       ],
       "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "新機能/カードからMCSスタンプを操作",
@@ -31,12 +37,16 @@
       "fragment_ids": [
         "audit-lineworks-control-chars",
         "fix-late-attachments-cross-transport",
-        "hotfix-slack-thread-attachments"
+        "hotfix-slack-thread-attachments",
+        "slack-caption-file-metadata",
+        "slack-caption-preflight-recovery",
+        "slack-caption-reconciliation"
       ],
       "retain_distinctions": [
         "Slack/Discord native thread path requires interactive and thread enabled; LINE WORKS uses the same talkroom/card scope.",
         "Disabled/unset thread mode preserves legacy file-bearing text; proven-not-sent thread/attachment can use narrow fallback. Unknown/accepted/historical notifications never blindly replay.",
-        "Match original patient/post/scope, attachment ID/hash and exact delivery receipt; attachment-only delivery is not a new reply. LINE WORKS control characters sanitized without changing the stored original."
+        "Match original patient/post/scope, attachment ID/hash and exact delivery receipt; attachment-only delivery is not a new reply. LINE WORKS control characters sanitized without changing the stored original.",
+        "Exact existing attachment caption only; files.info read needs files:read, mismatches remain held; no retry of unknown upload or automatic resolution of old holds."
       ],
       "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "不具合修正/後から取得した画像・PDFを元の会話へ追加",
@@ -112,13 +122,16 @@
         "audit-coverage-wait",
         "audit-loop-fork",
         "hotfix-llm-save",
-        "semantic-presentation-gate"
+        "semantic-presentation-gate",
+        "nightly-scan-split",
+        "patient-context-speed"
       ],
       "retain_distinctions": [
         "Restart extraction workers after update; old candidate approvals and held receipts do not authorize changed loaded definitions; reevaluate through existing approval flow.",
         "No code-hash-triggered full historical re-extraction; extraction generation9/rule24, model/prompt/QC/publication conditions and JST03:30 day boundary unchanged where stated.",
         "Keep same-TX result/job/receipt/outbox and held_prior protection; incomplete relation/coverage remains held; unbudgetable conversion remains held, no destructive recovery assumption.",
-        "Isolate per-invocation Jev/job/error/accounting state; preserve actual transport budgets/retries and per-part authorization refresh; suppress duplicate unchanged waiting records and resurrected old loop items."
+        "Isolate per-invocation Jev/job/error/accounting state; preserve actual transport budgets/retries and per-part authorization refresh; suppress duplicate unchanged waiting records and resurrected old loop items.",
+        "Bounded finer splitting and one repair; coverage and validated facts retained; generation improvement on real model remains unmeasured."
       ],
       "technical_details_rule": "Keep every mapped fragment detail and reference in the one technical-details fold/archive; sanitize confirmed local observed values first. Existing per-fragment no-change statements apply to that unit, not to all112 changes.",
       "public_anchor": "改善/解析の保留・再開と原文の照合を安定化",
@@ -208,7 +221,8 @@
       "fragment_ids": [
         "snapshot-failure-reason",
         "snapshot-validator-cancellation",
-        "snapshot-verify-budget"
+        "snapshot-verify-budget",
+        "snapshot-verify-rate"
       ],
       "retain_distinctions": [
         "Verify budget follows max(size-based floor, measured copy multiplier), still capped180seconds and caller hard deadline; checks/schema unchanged. This release DOES intentionally change the wait calculation.",
@@ -351,7 +365,11 @@
         "architecture-statistics-contract",
         "architecture-writer-lock",
         "portable-configuration",
-        "responsibility-layout"
+        "responsibility-layout",
+        "refactor-core-ingest",
+        "refactor-data-domains",
+        "refactor-ops-runtime",
+        "ui-responsibility-modules"
       ],
       "retain_distinctions": [
         "Preserve public CLI/flat-import and required old-updater compatibility entrances; keep schema version stable, with the separately declared new index.",
@@ -370,7 +388,8 @@
       "user_purpose": "Release superseded chat connection owners and stopped supervisors",
       "fragment_ids": [
         "slack-unload-hook-lifetime",
-        "discord-unload-hook-lifetime"
+        "discord-unload-hook-lifetime",
+        "native-command-shutdown"
       ],
       "public_anchor": "不具合修正/接続の再作成と停止時に古い処理を解放",
       "retain_distinctions": [
@@ -396,7 +415,8 @@
   "limitations": [
     "Draft does not qualify release readiness or production API success.",
     "All technical details and reference completeness depend on root retaining normal build output unchanged beneath the edited public sections.",
-    "Root has already corrected five input fragments; this draft uses the corrected intended contracts rather than repeating old OFF/private-value/owner claims."
+    "Root has already corrected five input fragments; this draft uses the corrected intended contracts rather than repeating old OFF/private-value/owner claims.",
+    "Historical Slack attachment caption remains held because identity metadata differs; no auto resend or clearance. Actual generation quality and latest provider UI remain outside synthetic acceptance."
   ],
   "fragment_sha256": {
     "architecture-audit-cohort-fd": "c7398be0e16f7633dbe5c552e506517ad94bc9ce7aad382519ea4edca84792af",
@@ -446,7 +466,6 @@
     "architecture-restore-evidence": "8cbb9a2d3b59d16c6836fddb87ebddeec0c505afab46bbe711ddc886af75202e",
     "architecture-rule-cli-resources": "d7b820a43005895f0b2c02e9ff2eaa69bb4f90ba9bfc66d4ec36d2f2a65fee53",
     "architecture-runtime-process-identity": "556757a823ca96c163b3b80b1a1e5ede4931c70921375de2f454004d8c6b3e34",
-    "architecture-semantic": "a88dded0c6c2805ce35db2bec69d617805b3d823e736dd153336a6fd6346f3d3",
     "architecture-semantic-assembly": "1824497d89bfa40ca8dbbe35c194ac709f1a30c3bb2e74efc3c5f52e8862f225",
     "architecture-semantic-bench-reader": "e69a8644ced36adde4db5d24c7e61b2a9e6d68fb299b65eee9c053447e1c9ba4",
     "architecture-semantic-cohort-owner": "1a51971efd55e00b5e3820b867affd230b79c6d6c7d15e067cdcc306a77580a2",
@@ -455,6 +474,7 @@
     "architecture-semantic-read-protocols": "5833ce2e062bb7326c5bf35605b7d36ad292eccba5b4a55b0fc1d57ad5f1321b",
     "architecture-semantic-status-reader": "0d67c17355a5280c141b3d1a65dc726529c3ea7b7478025182c1dd77dcab5469",
     "architecture-semantic-writer-close": "51b75db4520bebc2ce41421502d7a00667b72b803191515e84f8026cda5c233a",
+    "architecture-semantic": "a88dded0c6c2805ce35db2bec69d617805b3d823e736dd153336a6fd6346f3d3",
     "architecture-services": "4c962cd64ddb6f089127fb3808638a080d30ff5f621e05210cb8deb66909edd5",
     "architecture-shared-request-values": "f22967946212909dd65945f8469d4ca36ced73b6288402581cf2da247048b5d4",
     "architecture-signal-reader-contracts": "b360362f6706717f672f56576a51510ffe3d1cb4f8386c523e9b3cdef2312249",
@@ -479,6 +499,7 @@
     "audit-unverified-requests": "72efda2cd28f8016ae5244b2544d9a80bbcabefec6c0c94d85aee2a4c89144ba",
     "audit-urgent-inflight": "0e091ae6e6773e52f710f882af5a159b4c9ef290ba3db3ad61826d99ddfe5e4a",
     "clinical-definition-canonical-identity": "5827942d6366f102c41220837f943c304a86363a7faac90cd40fc382c360484d",
+    "discord-lineworks-compact": "d74eabe0410c6b108cdf6f6b161c391b528a56d72ea22cc095bef2abcab12d75",
     "discord-unload-hook-lifetime": "f049a858bc73c28c05f4b913c60c8d2b00c27a0068f05fe50ff965f79c354c37",
     "drug-info-tinyfish": "f17c1b8d5ad6a3c5630abbe6267c158aea7bd1ace59a050327655fda2be72459",
     "fix-extraction-progress-import": "3c651e88411a5ac20f0e9fc0eee040f1d84686a8eeb08b0a81d266659dc489b9",
@@ -489,27 +510,42 @@
     "hotfix-llm-save": "090db55d2674c3c901ce089c1942766688fe3faa47deecc61abcdcfebeacb0d9",
     "hotfix-slack-thread-attachments": "c07dad3761576fb2214f4fe21d9cb14c34ef297d078eaa0b2e4e46e3ab1469ae",
     "ingest-cli-resource-lifetime": "7ee7e74e83907a94972e2eb269069a7e4af0a341cc3a5f8968eef742b1922583",
+    "lineworks-click-retry-time": "c7a58f9b6b190aac50ae189a9e27de1b98304763fb9801bc8720573ae4370d13",
     "local-candidate-update": "a001460d817266f761d25317180de310555e59dfb44358caff365da4a7760c6c",
     "maintenance-stream-lifetime": "109a2f164fd08be1ff821252ec9da8a8b5679ea3834c62ab6e959e225b139eaf",
     "metadata-identity-types": "4b9b9c435ae83c5f6de353643e669ebe009b69281913cb6ccd25dcaab4351f35",
+    "native-command-shutdown": "5cd4cd1e47682c0b3a73ffae43b6856aef420152a7823ef2c7399fb50cb7d1ce",
+    "nightly-scan-split": "4870d7eb3416f6f2d7cd755e541bcbd7998f2605f212f75503065c90e3eaffa4",
     "owned-fd-transfer": "956bae4a8c87c6d9f9c901991f5b0ae2476f537370de1c715aa7febd2fd01f4d",
+    "patient-context-speed": "299258a33da1352c23ec3c25c2ecf8e2d7cf6c511d5baeb06ad6a1ac9738ab99",
     "perf-patient-name-index": "0ecb94c940e0e3ec4c4549c4c4461bc5b9b156098481d23150312a036c88f286",
     "perf-thread-projection-invalidation": "66920d643f2bb3fed819816532dfb8a988146367e63ab4fbfcf8916ca6896e17",
     "portable-configuration": "8d5edf2a9cb30a82fbfa7455e4baf4b046111e709c510010c993ca55c0597fcc",
+    "refactor-core-ingest": "1b1fad365598b3c94d7245fd1da61bbc336ee365fd59df2dfb3189777de6f3d6",
+    "refactor-data-domains": "5696221d4892d041da6b4d0c7809908043b363b6764bc48df4ce648d6e7e45dc",
+    "refactor-ops-runtime": "548d70279e71f09c758ddb0f8968f2b5664cf7bd1c2be82fe93737eb4b3d5fca",
     "responsibility-layout": "ebf2b567a796115fc7eafcc8d195a73d1b32e1225b359b99bc6c0dd08aa5c9a4",
     "semantic-presentation-gate": "54e1fb18e18e237a02c13881ca2369785a4ea7ac649862bafb831a4c5617b86f",
+    "slack-caption-file-metadata": "a39e713858fb84ad9ea5cfee97428f91f2df253fadd308f5e37f458cc0800fb9",
+    "slack-caption-preflight-recovery": "4c896ec1ca9ac7d2364ebf4f1098381e2ba1fa91b8e1b9becfb5eaab1ea9a4d1",
+    "slack-caption-reconciliation": "22e7884bb16d211437934b753c98f080308c29a1c36cc61a6993a7d736442598",
+    "slack-distinct-stamp-controls": "1059fad62207c4ea14a927da95c9644b76096f279db210a2450be1712c526f58",
+    "slack-mobile-compact": "959900bf03a6a220d3915d8cb2b66b3a68b3f4e29ff3e4d780bbc5309e2709bc",
+    "slack-stamp-zone-trim": "9068006d60c6a5d52899d4ad6bbf2d31d0db56e62251f4a2e79cbcb2a9233479",
+    "slack-stamp-zone": "bdf37079f249d872f8c87471c14de4dd9cd054b498c861b84ad8b49b88e8098f",
     "slack-unload-hook-lifetime": "ecda7fbc45e99609d69ef07542f01c44d56dbcc63efa1e4313b6f95aec5ecc13",
     "snapshot-failure-reason": "cf7a1caf71846b2d5f0b9c221889b5d22a4e04e9abd6e83d76fa090e4018818f",
     "snapshot-validator-cancellation": "f09cfd1cad21c084db12a4964f4963f46e09384bf3edb25217a3304c54c03064",
     "snapshot-verify-budget": "11765ccd692a9198dd39792f0d5727056f97c9cccd7f74aa4716483eeb0a255e",
+    "snapshot-verify-rate": "c75a6630ddec54d1a3df9049753816dce491c36c5c0c769181f8fdc3a6dd5a50",
     "stamp-management": "5b150f3d60b5006d02d4a109b479d743adcccf6d8f0645af76070f6da039bb7a",
     "stamp-one-press": "7c00a953f9bc2fb350be2736b6b740f20c2e225731a5cf7a6c069f88defd8633",
     "stamp-review-fixes": "8cecf98700f9b7cc5b8b106f7351deeac978742b90ac0adf680172d3c20ec962",
     "standalone-adopted-process-identity": "5e2202eff211bc5ee4224a5b43c5a4f528caea53b21bc84a3fb73f1f22c6288d",
+    "ui-responsibility-modules": "afa4a7a09d415885f4cc44b4c4f1af91a6efb1984146e5bb2aeef6f40d130155",
     "updater-loaded-rollback-closure": "538cf42eefa12691c4c43a1b2831e9a9969caaca493b4d2d69dd2f93c9dc208a",
     "upgrade-module-layout-restart": "5df8fed3f09c4131cdfa3ebf43a06b847100f6a43d2dd8605dabfa260e96465d",
     "vitals-owner-scope": "5ed0c72fcdeb55b4f7fc4c963aa0451d2cb1471e949fa991d6456543ca9499f9",
-    "vitals-threshold-context": "5078602d0cd864e35866e2552b2c35a57aa5039285fe5604d9b68b3c05091342",
-    "lineworks-click-retry-time": "c7a58f9b6b190aac50ae189a9e27de1b98304763fb9801bc8720573ae4370d13"
+    "vitals-threshold-context": "5078602d0cd864e35866e2552b2c35a57aa5039285fe5604d9b68b3c05091342"
   }
 }
