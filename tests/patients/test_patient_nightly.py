@@ -783,3 +783,122 @@ def test_finished_inference_waits_briefly_for_the_run_lock(runtime, monkeypatch)
     before = clock.mono
     assert step(runtime)['status'] == 'deferred'
     assert clock.mono - before <= 61 and document(led, pid=2) is None
+
+
+PROSE = '本日訪問しました。合成の記録として、ご本人は落ち着いて過ごされていました。' * 60
+
+
+def _scan_chat(monkeypatch, reply):
+    """Stub only scan calls; summaries keep the fixture's grounded answer."""
+    original = nightly.local_llm.admitted_chat
+    scans = []
+
+    def chat(owner, text, **kwargs):
+        payload = json.loads(text)
+        if 'reports' in payload:
+            return original(owner, text, **kwargs)
+        scans.append(payload)
+        return reply(payload)
+    monkeypatch.setattr(nightly.local_llm, 'admitted_chat', chat)
+    return scans
+
+
+def _quote(body):
+    return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': [
+        {'category': 'living', 'text': body, 'evidence': body, 'subject': 'unspecified', 'details': []}]})}
+
+
+def test_a_length_stopped_scan_is_replanned_finer_instead_of_retried_unchanged(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, body=PROSE)
+    scans = _scan_chat(monkeypatch, lambda p: _quote(p['source']) if len(p['source']) <= 1500
+                       else {'status': 200, 'finish_reason': 'length', 'text': '{'})
+    finish(runtime)                                  # every unit progresses; nothing is charged
+    scan = document(led, nightly.SCAN)
+    assert scan['complete'] and scan['split'] == 1 and scan.get('attempts', 0) == 0
+    assert len(scans[0]['source']) > 1500 and all(len(p['source']) <= 1500 for p in scans[1:])
+    assert ''.join(p['source'] for p in scans[1:]) == PROSE   # the finer plan covers every char
+
+
+def test_the_finest_plan_still_stopping_is_an_ordinary_failure(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, body=PROSE)
+    _scan_chat(monkeypatch, lambda p: {'status': 200, 'finish_reason': 'length', 'text': '{'})
+    for _ in range(12):
+        result = step(runtime)
+        if result['status'] == 'failed':
+            break
+    assert result['reason'] == 'nightly_length_stop'
+    scan = document(led, nightly.SCAN)
+    assert scan['attempts'] == 1 and 1 <= scan.get('split', 0) <= nightly.nightly_plan.MAX_SCAN_SPLIT
+    assert not scan.get('complete')
+
+
+def test_unsupported_items_get_one_repair_with_reasons_but_no_text(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, body='合成の訪問で、ご本人は落ち着いていました。')     # unlabelled: needs inference
+    def reply(p):
+        if 'rejected' in p:
+            return _quote(p['source'])
+        return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': [
+            {'category': 'living', 'text': '合成の言い換え', 'evidence': '合成の言い換え',
+             'subject': 'unspecified', 'details': []}]})}
+    scans = _scan_chat(monkeypatch, reply)
+    finish(runtime)
+    assert [p.get('rejected') for p in scans] == [None, [{'index': 0, 'reason': 'not_verbatim_or_invalid'}]]
+    assert document(led, nightly.SCAN)['complete']
+
+
+def test_a_failed_repair_stays_an_unsupported_failure(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, body='合成の訪問で、ご本人は落ち着いていました。')
+    scans = _scan_chat(monkeypatch, lambda p: {'status': 200, 'finish_reason': 'stop', 'text': json.dumps(
+        {'patient_context': [{'category': 'living', 'text': '合成の言い換え', 'evidence': '合成の言い換え',
+                              'subject': 'unspecified', 'details': []}]})})
+    for _ in range(8):
+        result = step(runtime)
+        if result['status'] == 'failed':
+            break
+    assert result['reason'] == 'nightly_unsupported_items'
+    assert len(scans) == 2                           # one answer, one bounded repair
+
+
+def test_a_repair_that_stops_at_the_budget_is_replanned_too(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, body=PROSE)
+    def reply(p):
+        if len(p['source']) <= 1500:
+            return _quote(p['source'])
+        if 'rejected' in p:
+            return {'status': 200, 'finish_reason': 'length', 'text': '{'}
+        return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': [
+            {'category': 'living', 'text': '合成の言い換え', 'evidence': '合成の言い換え',
+             'subject': 'unspecified', 'details': []}]})}
+    scans = _scan_chat(monkeypatch, reply)
+    finish(runtime)
+    scan = document(led, nightly.SCAN)
+    assert scan['complete'] and scan['split'] == 1 and scan.get('attempts', 0) == 0
+    assert 'rejected' in scans[1] and len(scans[2]['source']) <= 1500
+
+
+@pytest.mark.parametrize('repaired, failed', [(False, True), (True, False)])
+def test_a_repair_must_keep_what_the_first_answer_grounded(runtime, monkeypatch, repaired, failed):
+    led, _, _ = runtime
+    first = '合成の訪問で、ご本人は落ち着いていました。'
+    seed(led, body=first + '合成の家族は同居しています。')
+    grounded = {'category': 'living', 'text': first, 'evidence': first, 'subject': 'unspecified', 'details': []}
+    def reply(p):
+        if 'rejected' in p:      # an empty repair drops the grounded item; a full one keeps it
+            return {'status': 200, 'finish_reason': 'stop',
+                    'text': json.dumps({'patient_context': [grounded] if repaired else []})}
+        return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': [
+            grounded, {'category': 'living', 'text': '合成の言い換え', 'evidence': '合成の言い換え',
+                       'subject': 'unspecified', 'details': []}]})}
+    _scan_chat(monkeypatch, reply)
+    results = [step(runtime) for _ in range(6)]
+    reasons = [r.get('reason') for r in results if r['status'] == 'failed']
+    scan = document(led, nightly.SCAN)
+    if failed:   # the chunk is not completed by dropping what was grounded
+        assert reasons[:1] == ['nightly_unsupported_items'] and not scan.get('complete')
+    else:
+        assert not reasons and scan['complete'] and len(scan['facts']) == 1
