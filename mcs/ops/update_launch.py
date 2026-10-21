@@ -64,7 +64,11 @@ def spawn_detached(*, root, data_dir, hermes_wrapper: str, environment) -> None:
     env = launch_environment(environment, detached=True)
     os.makedirs(data_dir, exist_ok=True)
     wrapper = wrapper_path(load_config(), root=root, hermes_wrapper=hermes_wrapper)
-    with open(os.path.join(data_dir, "update.log"), "ab") as log:
+    from safe_io import fdopen_owned
+    fd = os.open(os.path.join(data_dir, "update.log"),
+                 os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+                 | os.O_CLOEXEC, 0o600)
+    with fdopen_owned(fd, "ab") as log:
         subprocess.Popen([wrapper], stdin=subprocess.DEVNULL,
                          stdout=log, stderr=log, env=env,
                          close_fds=True, start_new_session=True)

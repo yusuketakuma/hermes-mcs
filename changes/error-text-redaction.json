@@ -1,0 +1,14 @@
+{
+  "category": "security",
+  "title": "更新・復元レポートに例外本文を含めない",
+  "summary": "更新処理でコマンドを起動できなかったときの記録と、復元前の損失レポートで DB を開けなかったときのエラーは、例外の種類名だけを記録し、パスなどを含む例外本文を出しません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs_update._run の起動失敗は stderr に例外型名を入れる。",
+    "restore_evidence の DB オープン失敗は restore_report_live_db・restore_report_backup_db の後ろに例外型名だけを付ける。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "mcs/ops/restore_evidence.py"
+  ]
+}

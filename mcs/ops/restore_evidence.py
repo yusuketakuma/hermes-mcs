@@ -75,13 +75,13 @@ def create_loss_report(*, live_path: str, backup_path: str, report_path: str) ->
         live = sqlite3.connect(
             Path(live_path).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error as e:
-        raise RestoreEvidenceError(f"restore_report_live_db: {e}") from e
+        raise RestoreEvidenceError(f"restore_report_live_db: {type(e).__name__}") from None
     try:
         back = sqlite3.connect(
             Path(backup_path).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error as e:
         live.close()
-        raise RestoreEvidenceError(f"restore_report_backup_db: {e}") from e
+        raise RestoreEvidenceError(f"restore_report_backup_db: {type(e).__name__}") from None
     try:
         live.execute("BEGIN")
         back.execute("BEGIN")
