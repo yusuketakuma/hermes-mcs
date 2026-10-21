@@ -225,8 +225,12 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
                       "user_id": "U_OPERATOR", "channel_id": "C_SYNTHETIC",
                       "response_url": "https://evil.invalid/"}
             await dispatch(native, "slash_commands")
-            assert len(admitted) == 1 and admitted[0][2] == {
+            assert len(admitted) == 1
+            identity = dict(admitted[0][2])
+            native_guard = identity.pop("authorized")
+            assert identity == {
                 "user": "U_OPERATOR", "channel": "C_SYNTHETIC"}
+            assert native_guard() is True
             assert json.loads(wire.ephemerals[-1]["text"])["ok"]
             assert wire.ephemerals[-1]["user"] == "U_OPERATOR"
             await dispatch({**native, "channel_id": "C_FOREIGN"}, "slash_commands")
@@ -310,6 +314,8 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
                 stamp_modal = json.loads(stamp_modal)
             assert stamp_modal["title"]["text"] == "MCSスタンプ"
             assert all(ack["envelope_id"] == "fictional-envelope" for ack in ws.acks)
+            actions.unload()
+            assert native_guard() is False
         finally:
             actions.unload()
             for task in tuple(inflight):
