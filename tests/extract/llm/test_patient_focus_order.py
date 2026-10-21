@@ -4,6 +4,7 @@ Patient context waits for a patient's last pending post, so the few
 patients with the fewest pending posts re-extract before the rest, after
 new arrivals. Synthetic temp DB only."""
 import json
+import time
 
 import extract_llm
 from extract_llm import EXTRACT_VERSION, KIND
@@ -86,3 +87,20 @@ def test_a_patient_archived_while_cached_moves_behind_active_ones(tmp_path, monk
                   " VALUES (2, 'synthetic-2', 1)")
     db.db.commit()
     assert _order(db)[0] == [4, 3, 2, 1]
+
+
+def test_an_admission_set_turns_focus_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    db = _corpus(tmp_path)
+    rows, _ = extract_llm._select_pending(db, 10, {1, 2, 3, 4}, None, False)
+    assert [r["message_id"] for r in rows] == [4, 3, 2, 1]
+
+
+def test_a_patient_whose_rest_is_in_backoff_is_not_focused(tmp_path, monkeypatch):
+    monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    db = _corpus(tmp_path)
+    db.artifact_add(KIND, json.dumps({}), project_id=2, message_id=1, meta={
+        "error": True, "attempts": 1, "next_try": time.time() + 900,
+        "hash": _hash(db, 1), "extract_version": EXTRACT_VERSION})
+    assert extract_llm._focus_patients(db) == [1]
+    assert _order(db)[0] == [4, 3, 2]

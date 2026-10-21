@@ -2438,7 +2438,9 @@ _FOCUS_PATIENTS = 3
 
 
 def _focus_patients(ledger) -> list:
-    """Active patients with the fewest selectable pending posts (cached)."""
+    """Active patients with the fewest selectable pending posts (cached).
+    Rows waiting out a retry backoff are not counted, so a patient whose
+    rest is not due yet does not hold a focus place."""
     key = _left_estimate_key(ledger)
     hit = _FOCUS.get(key)
     if hit is None or time.monotonic() - hit["at"] >= _LEFT_ESTIMATE_S:
@@ -2447,7 +2449,9 @@ def _focus_patients(ledger) -> list:
             " AND NOT EXISTS (SELECT 1 FROM patients p WHERE p.project_id=m.project_id"
             " AND COALESCE(p.is_archived,0)!=0)"
             f" AND {pending_pred()} AND ({_retry_budget_sql()})"
-            " GROUP BY m.project_id ORDER BY COUNT(*), m.project_id LIMIT ?", (_FOCUS_PATIENTS,))]
+            f" AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) {_ERROR_ROWS_SQL}), 0) <= ?"
+            " GROUP BY m.project_id ORDER BY COUNT(*), m.project_id LIMIT ?",
+            (KIND, EXTRACT_VERSION, time.time(), _FOCUS_PATIENTS))]
         hit = _FOCUS[key] = {"at": time.monotonic(), "pids": pids}
     return hit["pids"]
 
@@ -2504,7 +2508,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
             n)).fetchall()
 
     rows, fresh_selected = [], None if oldest_first else 0
-    focus = [] if oldest_first else _focus_patients(ledger)
+    # an admission set (canonical engine) already decides what may run
+    focus = [] if oldest_first or admitted_ids is not None else _focus_patients(ledger)
     # NULL project rows must survive the exclusion (NULL NOT IN is NULL)
     rest = (" AND (m.project_id IS NULL OR m.project_id NOT IN ("
             + ",".join("?" * len(focus)) + "))") if focus else ""
@@ -2515,7 +2520,9 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     for archived in (False, True):
         for fresh in ((None,) if oldest_first else (True, False)):
             if fresh is False and not archived:
-                # the patients nearest completion re-extract first, one by one
+                # the patients nearest completion re-extract first, one by one;
+                # their released holds too, since the patient completes only
+                # once those re-runs settle under the current contract
                 for pid in focus:
                     for rehold in (False, True):
                         if len(rows) >= limit:
