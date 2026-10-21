@@ -584,13 +584,21 @@ class DeliveryWorker(_BaseWorker):
             if attachment:
                 reason = "edit_file_unverified"
                 for file in files:
-                    if file.get("name") != part.get("name") or file.get("size") != part.get("bytes"):
+                    if file.get("name") != part.get("name"):
+                        reason = "edit_file_name_mismatch"
+                        continue
+                    if file.get("size") != part.get("bytes"):
+                        reason = "edit_file_size_mismatch"
                         continue
                     immutable = (file.get("mode") == "hosted" and file.get("is_external") is False
                                  and file.get("editable") is False)
                     if file.get("sha256") == part.get("sha256") or (file.get("sha256") is None and immutable):
                         targets.append(message)
                         break
+                    reason = ("edit_file_hash_mismatch" if file.get("sha256") is not None
+                              else "edit_file_mode_unverified" if file.get("mode") != "hosted"
+                              else "edit_file_external_unverified" if file.get("is_external") is not False
+                              else "edit_file_editability_unverified")
             else:
                 targets.append(message)
         sender = self._sender.single_attempt()

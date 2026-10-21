@@ -265,5 +265,8 @@ def test_slack_user_identity_preserves_file_and_thread_preflight_checks(led, fau
     assert out == {"result": "unknown", "error_code": "edit_target_unverified"}
     assert writes(w) == before
     reason = {"id": "edit_reference_missing", "thread": "edit_thread_mismatch",
-              "duplicate": "edit_target_ambiguous"}.get(fault, "edit_file_unverified")
+              "duplicate": "edit_target_ambiguous", "name": "edit_file_name_mismatch",
+              "size": "edit_file_size_mismatch", "sha256": "edit_file_hash_mismatch",
+              "mode": "edit_file_mode_unverified", "is_external": "edit_file_external_unverified",
+              "editable": "edit_file_editability_unverified"}[fault]
     assert logs == [("edit_preflight_held", {"reason": reason, "rows": 2 if fault == "duplicate" else 0})]
