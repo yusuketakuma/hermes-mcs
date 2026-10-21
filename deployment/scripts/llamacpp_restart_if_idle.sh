@@ -1,64 +1,120 @@
 #!/bin/bash
-# 04:00 daily llama-server restart.
-#
-# Waits for a moment with no slot mid-request so in-flight MCS drains /
-# gbrain nightly calls are not killed. The 24/7 extract drainers mean
-# the server is rarely idle for long, but is_processing becomes false
-# between drainer calls. Poll within the bounded wait for such a gap,
-# then restart anyway: a killed call only costs one retry
-# (drainers re-attempt), while never restarting lets memory fragment
-# for weeks. The /slots key is "is_processing" (was mis-read as
-# "processing" once — that variant always saw 0 busy and restarted
-# mid-request every day).
-set -u
-LOG=__DATA__/llamacpp-restart.log
-mkdir -p "$(dirname "$LOG")"
-ts() { date -u +%FT%TZ; }
+# Daily restart only after a valid, idle /slots observation within 15 minutes.
+exec /usr/bin/python3 - "__DATA__/llamacpp-restart.log" <<'PY'
+import datetime
+import json
+import os
+import selectors
+import subprocess
+import sys
+import time
+from contextlib import suppress
+from pathlib import Path
 
-busy_slots() {
-  /usr/bin/curl --noproxy '*' -s -m 5 http://127.0.0.1:8080/slots 2>/dev/null \
-    | /usr/bin/python3 -c "import json,sys; print(sum(1 for s in json.load(sys.stdin) if s.get('is_processing')))" 2>/dev/null
-}
+LOG = Path(sys.argv[1])
+MAX_RESPONSE = 65536
 
-deadline=$(( $(date +%s) + 900 ))   # wait up to 15 min for an idle gap
-while :; do
-  busy=$(busy_slots)
-  if [ "$busy" = "" ]; then
-    echo "$(ts) slots unreachable — restarting anyway" >> "$LOG"
-    break
-  fi
-  if [ "$busy" -eq 0 ]; then
-    echo "$(ts) idle — restarting" >> "$LOG"
-    break
-  fi
-  if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "$(ts) still busy after 15m ($busy slot(s)) — restarting anyway" >> "$LOG"
-    break
-  fi
-  sleep 10
-done
 
-# kickstart target: the loaded label differs per machine. Hermes-managed
-# installs run ai.hermes.llamacpp; the repo template installs as
-# ai.mcs.llamaserver (install.sh fallback). Whichever is loaded wins.
-LABEL=""
-for cand in ai.hermes.llamacpp ai.mcs.llamaserver; do
-  if /bin/launchctl print "gui/$(id -u)/$cand" >/dev/null 2>&1; then
-    LABEL="$cand"
-    break
-  fi
-done
-if [ -z "$LABEL" ]; then
-  # --no-llm / self-managed server: nothing of ours to restart — a
-  # normal state, not a daily cron failure
-  echo "$(ts) no llamacpp launchd agent loaded — restart skipped" >> "$LOG"
-  exit 0
-fi
-if /bin/launchctl kickstart -k "gui/$(id -u)/$LABEL"; then
-  echo "$(ts) restarted $LABEL (kickstart -k)" >> "$LOG"
-else
-  rc=$?
-  echo "$(ts) kickstart -k $LABEL FAILED rc=$rc" >> "$LOG"
-  printf 'llamacpp restart: kickstart -k %s failed (rc=%s)\n' "$LABEL" "$rc"
-  exit "$rc"
-fi
+def log(message):
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with LOG.open("a", encoding="utf-8") as stream:
+        stream.write(f"{stamp} {message}\n")
+
+
+def unique_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def busy_slots(deadline):
+    """Return a strict busy count, or None when the observation is unknown."""
+    request_deadline = min(deadline, time.monotonic() + 5)
+    proc = subprocess.Popen(
+        ["/usr/bin/curl", "--disable", "--noproxy", "*", "--max-redirs", "0", "--fail",
+         "--silent", "--max-time", "5", "http://127.0.0.1:8080/slots"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    try:
+        data = bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(proc.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = request_deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    return None
+                chunk = os.read(proc.stdout.fileno(), MAX_RESPONSE + 1 - len(data))
+                if not chunk:
+                    break
+                data.extend(chunk)
+                if len(data) > MAX_RESPONSE:
+                    return None
+        remaining = request_deadline - time.monotonic()
+        if remaining <= 0 or proc.wait(timeout=remaining) != 0:
+            return None
+        slots = json.loads(data, object_pairs_hook=unique_keys)
+        if not isinstance(slots, list) or not slots:
+            return None
+        if any(not isinstance(slot, dict) or type(slot.get("is_processing")) is not bool
+               for slot in slots):
+            return None
+        return sum(slot["is_processing"] for slot in slots)
+    except (OSError, ValueError, RecursionError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        proc.stdout.close()
+
+
+def main():
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    log("checking loaded llamacpp agent before idle wait")
+    # Preserve loaded-label precedence; --no-llm needs no slot probe.
+    label = ""
+    for candidate in ("ai.hermes.llamacpp", "ai.mcs.llamaserver"):
+        result = subprocess.run(
+            ["/bin/launchctl", "print", f"gui/{os.getuid()}/{candidate}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        if result.returncode == 0:
+            label = candidate
+            break
+    if not label:
+        log("no llamacpp launchd agent loaded — restart skipped")
+        return 0
+
+    deadline = time.monotonic() + 900
+    while time.monotonic() < deadline:
+        busy = busy_slots(deadline)
+        if busy == 0 and time.monotonic() < deadline:
+            # The server has no atomic idle-and-restart API; keep this check next to kickstart.
+            result = subprocess.run(
+                ["/bin/launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"],
+                timeout=5,
+            )
+            if result.returncode == 0:
+                log(f"idle — restarted {label} (kickstart -k)")
+            else:
+                log(f"kickstart -k {label} FAILED rc={result.returncode}")
+                print(f"llamacpp restart: kickstart -k {label} failed (rc={result.returncode})")
+            return result.returncode
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(10, remaining))
+    log("slots busy or unknown after 15m — restart skipped")
+    return 0
+
+
+try:
+    sys.exit(main())
+except (OSError, subprocess.TimeoutExpired) as exc:
+    with suppress(OSError):
+        log(f"restart FAILED ({type(exc).__name__})")
+    print(f"llamacpp restart: failed ({type(exc).__name__})")
+    sys.exit(1)
+PY
