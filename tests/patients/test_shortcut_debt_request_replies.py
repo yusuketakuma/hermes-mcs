@@ -165,7 +165,88 @@ def test_cached_request_refresh_failure_is_not_replaced_with_empty_requests(tmp_
         monkeypatch.setattr(rollup, "build_rollup", unreadable)
         with pytest.raises(sqlite3.OperationalError, match="synthetic unreadable source"):
             rollup.current_cached_refs(db.db, 1, cached,
-                                       {"period_check_version": rollup.PERIOD_CHECK_VERSION})
+                                       {"period_check_version": rollup.PERIOD_CHECK_VERSION - 1})
         assert cached["recent_requests"][0]["ctx"] == "架空依頼"
+    finally:
+        db.close()
+
+
+def test_request_matching_batches_only_current_requested_candidates(tmp_path, monkeypatch):
+    import request_loops
+
+    db, event, meta, _original = _setup(tmp_path)
+    try:
+        template_row = db.db.execute("SELECT * FROM artifacts WHERE kind='loop_candidate'").fetchone()
+        template = json.loads(template_row["content"])
+        wanted_ids = []
+        for index in range(12):
+            description = f"架空の対象依頼{index}"
+            aid = db.artifact_add("loop_candidate", json.dumps({**template, "description": description}),
+                                  project_id=1, message_id=1, meta=meta)
+            wanted_ids.append(aid)
+            db.artifact_add("loop_event", json.dumps({**event, "loop_artifact_id": aid}),
+                            project_id=1, message_id=2, meta=meta)
+        messages = list(db.db.execute("SELECT * FROM messages WHERE project_id=1"))
+
+        def match():
+            rows = [{"mid": 1, "ctx": f"架空の対象依頼{i}"} for i in range(12)]
+            rollup._match_request_replies(db.db, 1, [(row, 1, 101, 1) for row in rows],
+                                          rows, messages, 1000)
+            return rows
+
+        before = match()
+        assert all(row.get("reply_state") == "done" for row in before)
+        for index in range(120):
+            unrelated = db.artifact_add("loop_candidate", json.dumps({**template, "description": f"無関係な架空依頼{index}"}),
+                                        project_id=1, message_id=1, meta=meta)
+            db.artifact_add("loop_event", json.dumps({**event, "loop_artifact_id": unrelated}),
+                            project_id=1, message_id=2, meta=meta)
+            db.artifact_add("loop_candidate", json.dumps({**template, "description": f"架空の対象依頼{index % 12}"}),
+                            project_id=1, message_id=1, meta={**meta, "fingerprint": "old"})
+        evaluated = []
+        actual = request_loops._effective_loop_state
+
+        def observe(conn, source, *args, **kwargs):
+            evaluated.append(source["artifact_id"])
+            return actual(conn, source, *args, **kwargs)
+
+        monkeypatch.setattr(request_loops, "_effective_loop_state", observe)
+        trace = []
+        db.db.set_trace_callback(trace.append)
+        assert match() == before
+        db.db.set_trace_callback(None)
+        assert len(evaluated) == len(wanted_ids)
+        assert set(evaluated) == set(wanted_ids)
+        assert sum("FROM artifacts" in sql and "'loop_event'" in sql for sql in trace) == 1
+        assert sum("FROM messages WHERE project_id=" in sql and "content_hash" in sql
+                   and " root " in sql for sql in trace) == 1
+    finally:
+        db.close()
+
+
+def test_origin_only_relations_do_not_answer_two_distinct_requests(tmp_path):
+    db, event, meta, first = _setup(tmp_path)
+    try:
+        source = db.db.execute("SELECT * FROM artifacts WHERE kind='loop_candidate'").fetchone()
+        second = {"mid": 1, "ctx": "架空の別の依頼"}
+        template = json.loads(source["content"])
+        db.artifact_add("loop_candidate", json.dumps({**template, "description": second["ctx"]}),
+                        project_id=1, message_id=1, meta=meta)
+        legacy = dict(event)
+        legacy.pop("loop_artifact_id")
+        db.artifact_add("loop_event", json.dumps(legacy), project_id=1, message_id=2, meta=meta)
+        messages = list(db.db.execute("SELECT * FROM messages WHERE project_id=1"))
+        requests = [first, second]
+
+        def match():
+            rollup._match_request_replies(db.db, 1, [(row, 1, 101, 1) for row in requests],
+                                          requests, messages, 1000)
+
+        match()
+        assert all("reply_state" not in row for row in requests)
+        db.artifact_add("loop_event", json.dumps(event), project_id=1, message_id=2, meta=meta)
+        match()
+        assert first["reply_state"] == "done"
+        assert "reply_state" not in second
     finally:
         db.close()

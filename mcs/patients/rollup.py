@@ -109,7 +109,7 @@ def _stored_lab_ok(r) -> bool:
 
 def _match_request_replies(db, project_id, req_thread, requests, messages, now):
     """Annotate only uniquely matched requests with current Loop relation evidence."""
-    from request_loops import effective_loop_state, latest_policy
+    from request_loops import effective_loop_states, latest_policy
     import semantic_jev as jev
 
     kinds = {"acknowledges": "ack", "progress_report": "progress",
@@ -121,17 +121,25 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now):
             continue
         key = (row["mid"], row["ctx"])
         counts[key] = counts.get(key, 0) + 1
-    candidates, bundles = {}, {}
+    wanted = {(row["mid"], row["ctx"]) for row, _root, _ts, sender in req_thread
+              if isinstance(row.get("ctx"), str) and sender is not None
+              and counts[(row["mid"], row["ctx"])] == 1}
+    if not wanted:
+        return
+    candidates = {}
     policy = latest_policy(db)
-    for source in db.execute(
-            "SELECT artifact_id,project_id,message_id,content,meta FROM artifacts "
-            "WHERE kind='loop_candidate' AND project_id=?", (project_id,)):
-        loop = effective_loop_state(db, source, policy=policy, bundles=bundles,
-                                    relation_limit=None)
-        if loop and loop.get("adoption_eligible"):
-            key = (source["message_id"], loop.get("description"))
-            if isinstance(key[1], str):
-                candidates.setdefault(key, []).append(loop)
+    sources = db.execute(
+        "SELECT artifact_id,project_id,message_id,content,meta FROM artifacts a "
+        "WHERE kind='loop_candidate' AND project_id=? AND EXISTS ("
+        "SELECT 1 FROM json_each(?) requested WHERE "
+        "a.message_id=json_extract(requested.value,'$[0]') AND "
+        "CASE WHEN json_valid(a.content) THEN json_extract(a.content,'$.description') END="
+        "json_extract(requested.value,'$[1]'))", (project_id, json.dumps(sorted(wanted)))).fetchall()
+    source_mids = {source["artifact_id"]: source["message_id"] for source in sources}
+    for loop in effective_loop_states(db, sources, policy=policy,
+                                     relation_limit=None, eligible_only=True):
+        key = (source_mids[loop["artifact_id"]], loop["description"])
+        candidates.setdefault(key, []).append(loop)
     by_id = {m["message_id"]: m for m in messages}
     for row, root, ts, sender in req_thread:
         if not isinstance(row.get("ctx"), str):
@@ -147,6 +155,8 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now):
             trigger = by_id.get(event.get("trigger_message_id"))
             confidence = jev.finite_value(event.get("confidence"))
             if (not kind or event.get("stale") or not trigger
+                    or type(event.get("loop_artifact_id")) is not int
+                    or event["loop_artifact_id"] != matched[0]["artifact_id"]
                     or confidence is None or not 0 <= confidence <= 1
                     or not isinstance(event.get("reported_relation"), str)
                     or event["reported_relation"] not in jev.LOOP_RELATION_OPTIONS
@@ -605,7 +615,7 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
     clinical_stale = ("latest_vitals" in out and isinstance(meta, dict)
                       and "period_check_version" in meta
                       and meta["period_check_version"] != PERIOD_CHECK_VERSION)
-    request_stale = "recent_requests" in out
+    request_stale = legacy and "recent_requests" in out
     if scoped or projection_stale or clinical_stale or request_stale:
         try:
             current = build_rollup(db, project_id)

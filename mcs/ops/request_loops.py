@@ -168,19 +168,10 @@ def loop_links(db, pid, *, request_id=None, loop_id=None):
     return links
 
 
-def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relation_limit=5):
-    """Derive a candidate's current display state with the view's exact source and policy guards."""
-
-    import semantic_jev as jev
-    from semantic_loops import rejected_relation_pair
-    from mcs_util import loads_dict
-
+def _loop_source_state(db, candidate_row, policy, bundles, sources):
+    """Validate source and adoption before reading any relation history."""
     r = candidate_row
     pid = r["project_id"]
-    if policy is None:
-        policy = latest_policy(db)
-    if bundles is None:
-        bundles = {}
     try:
         cand = json.loads(r["content"])
     except (ValueError, TypeError, RecursionError):
@@ -196,10 +187,12 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relati
         candidate_meta = {}
     if not isinstance(candidate_meta, dict):
         candidate_meta = {}
-    source = db.execute(
-        "SELECT content_hash,COALESCE(parent_id,message_id) root "
-        "FROM messages WHERE project_id=? AND message_id=?",
-        (pid, r["message_id"])).fetchone()
+    key = (pid, r["message_id"])
+    if key not in sources:
+        sources[key] = db.execute(
+            "SELECT content_hash,COALESCE(parent_id,message_id) root "
+            "FROM messages WHERE project_id=? AND message_id=?", key).fetchone()
+    source = sources[key]
     root = source["root"] if source else None
     if root not in bundles:
         bundles[root] = semantic_store.thread_bundle(db, pid, root) if root else None
@@ -212,12 +205,34 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relati
         and candidate_fp == bundle["source_fingerprint"]
         and policy
         and candidate_meta.get("policy_fingerprint") == policy)
-    members = {m["message_id"]: m for m in bundle["members"]} if bundle else {}
+    members = {m["message_id"]: m for m in bundle["members"]} if current else {}
     cand["adoption_eligible"] = current and valid_origin_evidence(
         origin, members.get(r["message_id"]))
+    return cand, origin, current, bundle, members
+
+
+def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relation_limit=5):
+    """Derive a candidate's current display state with the view's exact source and policy guards."""
+    policy = latest_policy(db) if policy is None else policy
+    state = _loop_source_state(db, candidate_row, policy,
+                               {} if bundles is None else bundles, {})
+    if state is None:
+        return None
+    return _effective_loop_state(db, candidate_row, state, policy, relation_limit)
+
+
+def _effective_loop_state(db, r, state, policy, relation_limit,
+                          event_rows=None, rejection_rows=None):
+    import semantic_jev as jev
+    from semantic_loops import rejected_relation_pair
+    from mcs_util import loads_dict
+
+    cand, origin, current, bundle, members = state
+    pid = r["project_id"]
     events = []                       # (created_at, event)
     evaluated_pairs = set()
-    for e in db.execute(
+    if event_rows is None:
+        event_rows = db.execute(
             "SELECT content,meta,created_at FROM artifacts "
             "WHERE kind='loop_event' AND project_id=? "
             "AND CASE WHEN json_valid(content) THEN "
@@ -225,7 +240,8 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relati
             "(json_extract(content,'$.loop_artifact_id') IS NULL AND "
             "json_extract(content,'$.loop_origin_id')=?) ELSE 0 END "
             "ORDER BY artifact_id DESC",
-            (pid, r["artifact_id"], r["message_id"])):
+            (pid, r["artifact_id"], r["message_id"]))
+    for e in event_rows:
         try:
             ev = json.loads(e["content"])
             meta = json.loads(e["meta"] or "{}")
@@ -261,11 +277,13 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relati
     cand["relation_events"] = [ev for _, ev in events[:relation_limit]]
     unavailable = set()
     if current:
-        for rejection in db.execute(
+        if rejection_rows is None:
+            rejection_rows = db.execute(
                 "SELECT content,meta FROM artifacts WHERE kind='loop_relation_rejected' "
                 "AND project_id=? AND CASE WHEN json_valid(content) THEN "
                 "json_extract(content,'$.loop_artifact_id')=? ELSE 0 END",
-                (pid, r["artifact_id"])):
+                (pid, r["artifact_id"]))
+        for rejection in rejection_rows:
             receipt, meta = loads_dict(rejection["content"]), loads_dict(rejection["meta"])
             if not receipt or not meta or not isinstance(meta.get("retry_scope"), str):
                 continue
@@ -309,3 +327,43 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relati
     cand["artifact_id"] = r["artifact_id"]
     cand["linked_requests"] = loop_links(db, pid, loop_id=r["artifact_id"])
     return cand
+
+
+def effective_loop_states(db, candidate_rows, *, policy=None, bundles=None,
+                          relation_limit=5, eligible_only=False):
+    """Evaluate candidates with one history query per project, sharing source guards."""
+    policy = latest_policy(db) if policy is None else policy
+    bundles = {} if bundles is None else bundles
+    states, sources, projects = {}, {}, {}
+    for row in candidate_rows:
+        state = _loop_source_state(db, row, policy, bundles, sources)
+        if state is None or (eligible_only and not state[0]["adoption_eligible"]):
+            continue
+        states[row["artifact_id"]] = state
+        projects.setdefault(row["project_id"], []).append(row)
+    result = []
+    for pid, rows in projects.items():
+        ids = {r["artifact_id"] for r in rows}
+        origins = {}
+        for row in rows:
+            origins.setdefault(row["message_id"], []).append(row["artifact_id"])
+        events, rejections = {aid: [] for aid in ids}, {aid: [] for aid in ids}
+        for record in db.execute(
+                "SELECT kind,content,meta,created_at,"
+                "CASE WHEN json_valid(content) THEN json_extract(content,'$.loop_artifact_id') END loop_id,"
+                "CASE WHEN json_valid(content) THEN json_extract(content,'$.loop_origin_id') END origin_id "
+                "FROM artifacts WHERE project_id=? AND kind IN ('loop_event','loop_relation_rejected') "
+                "AND CASE WHEN json_valid(content) THEN "
+                "json_extract(content,'$.loop_artifact_id') IN (SELECT value FROM json_each(?)) OR "
+                "(kind='loop_event' AND json_extract(content,'$.loop_artifact_id') IS NULL AND "
+                "json_extract(content,'$.loop_origin_id') IN (SELECT value FROM json_each(?))) ELSE 0 END "
+                "ORDER BY artifact_id DESC", (pid, json.dumps(sorted(ids)), json.dumps(list(origins)))):
+            targets = ([record["loop_id"]] if record["loop_id"] in ids else
+                       origins.get(record["origin_id"], []) if record["loop_id"] is None else [])
+            collection = events if record["kind"] == "loop_event" else rejections
+            for aid in targets:
+                collection[aid].append(record)
+        result.extend(_effective_loop_state(db, row, states[row["artifact_id"]], policy,
+                                            relation_limit, events[row["artifact_id"]],
+                                            rejections[row["artifact_id"]]) for row in rows)
+    return result

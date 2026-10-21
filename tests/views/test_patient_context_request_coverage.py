@@ -74,17 +74,27 @@ def _apply_relations(requests, replies, monkeypatch):
              for i, (row, root, *_rest) in enumerate(requests)}
     calls = []
 
+    class Rows(list):
+        def fetchall(self):
+            return self
+
     class DB:
         def execute(self, _sql, _params):
-            return sources
+            return Rows(sources)
 
     monkeypatch.setattr(request_loops, "latest_policy", lambda _: "synthetic")
 
-    def current(_db, source, **_kwargs):
-        calls.append(source["artifact_id"])
-        return loops[source["artifact_id"]]
+    def current(_db, selected, **_kwargs):
+        result = []
+        for source in selected:
+            aid = source["artifact_id"]
+            calls.append(aid)
+            result.append({**loops[aid], "artifact_id": aid,
+                           "relation_events": [{**event, "loop_artifact_id": aid}
+                                               for event in loops[aid]["relation_events"]]})
+        return result
 
-    monkeypatch.setattr(request_loops, "effective_loop_state", current)
+    monkeypatch.setattr(request_loops, "effective_loop_states", current)
     rollup._match_request_replies(DB(), 1, requests, [r[0] for r in requests], messages, 1000)
     return calls
 
