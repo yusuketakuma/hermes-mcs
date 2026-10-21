@@ -3180,7 +3180,7 @@ def test_private_medication_navigation_registers_tokens_before_first_chunk(world
     _, reg, bot = world.mkworker()
     act = world.mkactions(reg, bot)
     token = "a" * 32
-    result = {"outcome": "applied", "action": "list",
+    result = {"outcome": "applied", "action": "list", "projects": [1],
               "navigation": [{"id": "meds", "ui": "button", "style": "secondary",
                               "label": "次の5件", "token": token}],
               "token_ctx": {token: {"action": "meds", "project_id": 1}}}

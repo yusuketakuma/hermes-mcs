@@ -180,7 +180,7 @@ def test_modal_inputs_default_to_all_and_the_clicker():
                                           "name": "佐藤"}
     assert [f["id"] for f in forms.modal_fields("digest", None, "山田")] == [
         "query", "name"]
-    answer = text.view_answer({"outcome": "applied", "action": "digest",
+    answer = text.view_answer({"outcome": "applied", "action": "digest", "projects": [1],
                                "text": "## 見出し"}, lambda p: True)
     assert answer == [("## 見出し", None)]
 

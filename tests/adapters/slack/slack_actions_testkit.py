@@ -106,6 +106,8 @@ def submitted(modal_id, user="U_OPERATOR", **fields):
 
 
 def result(dirs, cid, **values):
+    # the runner's view results always carry their counted patient scope
+    values.setdefault("projects", [])
     with open(f"{dirs['cmd_results']}/{shared_paths.safe_name(cid)}.json", "w",
               encoding="utf-8") as stream:
         json.dump(values, stream)

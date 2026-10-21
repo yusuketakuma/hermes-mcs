@@ -85,6 +85,6 @@ def test_long_tasks_keep_full_text_and_usable_owner_scoped_controls(world, monke
 def test_plain_task_transports_keep_their_existing_chunk_ownership():
     items = [{"request_id": 1, "title": "x" * 1000, "status": "open"},
              {"request_id": 2, "title": "y" * 1000, "status": "open"}]
-    result = {"outcome": "applied", "action": "tasks", "tasks": items}
+    result = {"outcome": "applied", "action": "tasks", "tasks": items, "projects": [1]}
     assert text.view_answer(result, lambda pid: True, markdown=False) == [
         (text.task_list_text(items, plain=True), items)]

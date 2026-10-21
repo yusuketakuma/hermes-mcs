@@ -8,7 +8,7 @@ from adapters.common import paths, text
 
 def test_discord_body_answer_has_no_active_markdown():
     answer = text.view_answer(
-        {"outcome": "applied", "action": "body", "title": "山田**花子",
+        {"outcome": "applied", "action": "body", "projects": [1], "title": "山田**花子",
          "body": "[MCSで確認](https://evil.example/x)\n# 至急\n||隠し||"},
         lambda pid: True)
     msg = answer[0][0]
@@ -27,14 +27,14 @@ def test_escape_keeps_body_budget():
 
 
 def test_discord_list_and_tasks_escape_items_not_markup():
-    result = {"outcome": "applied", "action": "list", "list": {
+    result = {"outcome": "applied", "action": "list", "projects": [1], "list": {
         "title": "🔎 a_b", "head": ["# 見出し"],
         "items": [{"project_id": 1, "group": "~~群~~", "text": "・||x|| https://e.example/a_b"}],
         "notes": ["> 引用"]}}
     out = text.view_answer(result, lambda pid: True)[0][0].split("\n")
     assert out == ["**🔎 a＿b**", "＃ 見出し", "■ ～～群～～",
                    "・｜｜x｜｜ https://e.example/a_b", "", "＞ 引用"]
-    tasks = text.view_answer({"outcome": "applied", "action": "tasks", "tasks": [
+    tasks = text.view_answer({"outcome": "applied", "action": "tasks", "projects": [1], "tasks": [
         {"request_id": 1, "status": "open", "title": "[x](https://e.example)",
          "assignee": "**誰**"}]}, lambda pid: True)[0][0]
     assert tasks.endswith("#1 ［x］(https://e.example) — 担当: ＊＊誰＊＊")
@@ -49,7 +49,7 @@ def test_discord_list_and_tasks_escape_items_not_markup():
 
 
 def test_plain_dialects_are_unchanged():
-    result = {"outcome": "applied", "action": "body", "title": "a**b", "body": "# x"}
+    result = {"outcome": "applied", "action": "body", "projects": [1], "title": "a**b", "body": "# x"}
     assert text.view_answer(result, lambda pid: True, markdown=False,
                             plain=True)[0][0] == "a**b\n# x"
 
@@ -80,3 +80,15 @@ def test_card_rejections_are_explained_in_japanese():
     for code in ("action_not_applicable", "actor_mismatch", "origin_mismatch"):
         msg = text.ja({"outcome": "rejected", "error": code})
         assert code not in msg and not msg.startswith("拒否されました")
+
+
+def test_view_without_counted_scope_fails_closed():
+    allowed = lambda pid: True  # noqa: E731
+    for action in ("body", "summary", "list", "digest", "tasks"):
+        assert not text.view_scope_ok({"action": action}, allowed)
+        assert not text.view_scope_ok({"action": action, "projects": "1"}, allowed)
+        assert text.view_scope_ok({"action": action, "projects": []}, allowed)
+    assert not text.view_scope_ok({"action": "body", "projects": [2]}, lambda pid: pid == 1)
+    assert text.view_scope_ok({"action": "task_status"}, allowed)
+    assert text.view_answer({"outcome": "applied", "action": "body", "body": "x"},
+                            allowed) == [(text.SCOPE_CHANGED_TEXT, None)]

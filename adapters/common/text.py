@@ -306,12 +306,18 @@ def list_messages(result: dict, allowed, markdown: bool = True, *,
     return _answer_chunks("\n".join(lines))
 
 
+_SCOPED_VIEWS = frozenset({"body", "summary", "list", "digest", "tasks"})
+
+
 def view_scope_ok(result: dict, allowed) -> bool:
     """False when a view result was counted over a project this
     deployment no longer serves (a click queued before its scope
     narrowed): neither its text nor its card may be sent."""
     scope = result.get("projects")
-    return not isinstance(scope, list) or all(allowed(p) for p in scope)
+    if not isinstance(scope, list):
+        # a view answer without its counted scope fails closed
+        return result.get("action") not in _SCOPED_VIEWS
+    return all(allowed(p) for p in scope)
 
 
 def view_answer(result: dict | None, allowed,

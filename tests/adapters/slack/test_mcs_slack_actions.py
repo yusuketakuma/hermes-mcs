@@ -999,11 +999,11 @@ def test_ephemeral_chunks_split_by_characters_at_line_boundaries():
 
 def test_plain_answers_carry_no_markup():
     from adapters.common import text
-    body = text.view_answer({"outcome": "applied", "action": "body",
+    body = text.view_answer({"outcome": "applied", "action": "body", "projects": [1],
                              "title": "合成", "body": "本文"},
                             lambda _p: True, markdown=False)
     assert body == [("合成\n本文", None)]
-    tasks = text.view_answer({"outcome": "applied", "action": "tasks",
+    tasks = text.view_answer({"outcome": "applied", "action": "tasks", "projects": [1],
                               "tasks": [{"request_id": 1, "status": "open",
                                          "title": "t"}]},
                              lambda _p: True, markdown=False)
