@@ -815,6 +815,25 @@ make lint                            # CIと同じ範囲・ruff設定
 setup/teardownの失敗時に領域が残る保証はなく、runner終了時には一時HOME全体を削除します。
 診断用ログ・JUnit・検証記録を残す場合は、一時HOMEの外へ保存してください。
 
+### hosted CI を開始できない場合のローカル同等チェック
+
+課金・利用上限・runner 障害で最終 SHA の CI job が開始できない場合だけ、
+`scripts/development/ci_local.sh` で `ci.yml` の6 job（lint-test・hygiene・standalone-sdk・
+incident-gates・macos・hermes-integration）を、その SHA の clean な clone で直列に実行します。
+CI が実行されて失敗した場合の代わりにはなりません。重いテストを含むため共有 slot を取ってから実行します。
+
+```bash
+scripts/development/ci_local.sh --out /path/outside/repo            # 既定はネットワークなし
+MCS_CI_PYTHON=... MCS_CI_STANDALONE_PYTHON=... MCS_CI_HERMES_AGENT=... scripts/development/ci_local.sh
+scripts/development/ci_local.sh --fetch                              # ci.yml の固定版を出力先へ取得
+```
+
+python・pytest・uv・hermes-agent の ref は `ci.yml` から読み取ります。出力先に job ごとのログ、
+`summary.tsv`（状態・終了コード・開始/終了時刻・runs-on・host）、`meta.txt`（SHA・clean 確認・固定版）を残します。
+前提が揃わない job は「実行不能」となり、全6 job が pass した場合だけ終了コード0です。
+ubuntu runner 固有の差は未検証として残り、結果は CI 成功として記録しません。
+`tests/meta/test_ci_local_runner.py` が job 名と run 行の `ci.yml` との一致を検証します。
+
 ### 台帳・通知見出しの性能回帰
 
 `Ledger`が接続とtransactionを所有し、同じ保存呼出しで同一スレッドを更新する場合の

@@ -1,0 +1,16 @@
+{
+  "category": "added",
+  "title": "hosted CI を開始できない場合のローカル同等チェックを追加",
+  "summary": "開発者向けです。課金や runner 障害で CI が開始できないとき、ci.yml の6 job に対応するチェックを同じ SHA の clean な clone で直列に実行し、job ごとのログ・終了コード・時刻・SHA と pass/fail/実行不能の要約を残せます。CI が実行されて失敗した場合の代わりにはならず、結果を CI 成功としては記録しません。",
+  "upgrade": "追加操作は不要です。利用者の実行時の動作は変わりません。ネットワークを使う固定版の取得は --fetch を指定した場合だけ行います。",
+  "details": [
+    "python・pytest・uv・hermes-agent の ref は ci.yml から読み取り、ランナーに別の固定値を持たない。",
+    "前提（Python・pytest の版、shellcheck、固定SDKの venv、hermes-agent の ref）が揃わない job は実行不能とし、全6 job が pass した場合だけ終了コード0とする。",
+    "ubuntu runner で動く job は macOS 上で実行するため、ubuntu 固有の差は未検証として要約に残す。"
+  ],
+  "refs": [
+    "scripts/development/ci_local.sh",
+    "tests/meta/test_ci_local_runner.py",
+    "docs/development/DEVELOPMENT.md"
+  ]
+}
