@@ -1103,6 +1103,7 @@ def _doctor_check(errors: list[str], warnings: list[str]) -> DoctorCheck:
 
 _NIGHTLY_COUNTS = ("initial_pending", "delta_pending", "history_pending",
                    "audit_pending", "failed", "complete")
+_NIGHTLY_LANE_CODES = ("length_stop", "unsupported", "other_failure", "split", "repair")
 
 
 def _doctor_nightly(cfg: dict, *, probe: bool) -> dict:
@@ -1127,6 +1128,13 @@ def _doctor_nightly(cfg: dict, *, probe: bool) -> dict:
                 type(raw.get(key)) is not int or raw[key] < 0 for key in _NIGHTLY_COUNTS):
             return result
         result["counts"] = {key: raw[key] for key in _NIGHTLY_COUNTS}
+        lanes = raw.get("lanes")
+        # fixed lane codes and counts only; a malformed block stays unknown, not zero
+        result["lanes"] = {lane: {code: lanes[lane][code] for code in _NIGHTLY_LANE_CODES}
+                           for lane in "ABC"} if isinstance(lanes, dict) and all(
+            isinstance(lanes.get(lane), dict) and all(
+                type(lanes[lane].get(code)) is int and lanes[lane][code] >= 0
+                for code in _NIGHTLY_LANE_CODES) for lane in "ABC") else None
         result["status"] = "warning" if raw["failed"] else "healthy"
     except (OSError, ValueError, TypeError, sqlite3.Error):
         pass

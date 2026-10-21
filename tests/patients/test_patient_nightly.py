@@ -832,6 +832,9 @@ def test_the_finest_plan_still_stopping_is_an_ordinary_failure(runtime, monkeypa
     scan = document(led, nightly.SCAN)
     assert scan['attempts'] == 1 and 1 <= scan.get('split', 0) <= nightly.nightly_plan.MAX_SCAN_SPLIT
     assert not scan.get('complete')
+    lanes = nightly.status(led.db, CFG)['lanes']
+    assert lanes['B'] == {'length_stop': 1, 'unsupported': 0, 'other_failure': 0, 'split': 1, 'repair': 0}
+    assert lanes['A'] == lanes['C'] == dict.fromkeys(lanes['B'], 0)
 
 
 def test_unsupported_items_get_one_repair_with_reasons_but_no_text(runtime, monkeypatch):
@@ -847,6 +850,8 @@ def test_unsupported_items_get_one_repair_with_reasons_but_no_text(runtime, monk
     finish(runtime)
     assert [p.get('rejected') for p in scans] == [None, [{'index': 0, 'reason': 'not_verbatim_or_invalid'}]]
     assert document(led, nightly.SCAN)['complete']
+    assert document(led, nightly.SCAN)['repairs'] == 1
+    assert nightly.lane_metrics(led.db)['lanes']['B']['repair'] == 1
 
 
 def test_a_failed_repair_stays_an_unsupported_failure(runtime, monkeypatch):
@@ -861,6 +866,8 @@ def test_a_failed_repair_stays_an_unsupported_failure(runtime, monkeypatch):
             break
     assert result['reason'] == 'nightly_unsupported_items'
     assert len(scans) == 2                           # one answer, one bounded repair
+    lanes = nightly.lane_metrics(led.db)['lanes']
+    assert lanes['B']['unsupported'] == 1 and lanes['B']['repair'] == 0
 
 
 def test_a_repair_that_stops_at_the_budget_is_replanned_too(runtime, monkeypatch):
@@ -902,3 +909,28 @@ def test_a_repair_must_keep_what_the_first_answer_grounded(runtime, monkeypatch,
         assert reasons[:1] == ['nightly_unsupported_items'] and not scan.get('complete')
     else:
         assert not reasons and scan['complete'] and len(scan['facts']) == 1
+
+
+def test_health_counts_context_progress_without_patients(runtime, monkeypatch):
+    import extract_llm
+    import health_report
+    led, _, _ = runtime
+    seed(led, body='生活環境: 合成の居住記録。')
+    seed(led, mid=2, pid=2, body='生活環境: 合成の別記録。')
+    finish(runtime)
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {})
+    out = health_report.patient_context_health(led.db, CFG, 10.0, 'synthetic-source')
+    assert out['status'] == 'recorded' and out['publication'] is True
+    assert out['published'] == 2 and out['active_patients'] == 2
+    complete = sum(extract_llm.patient_extraction_complete(led, pid) for pid in (1, 2))
+    assert out['extraction_complete'] == complete
+    assert out['focus_targets'] == min(out['focus_eligible'], extract_llm._FOCUS_PATIENTS)
+    assert 'synthetic-1' not in json.dumps(out) and set(out['lanes']) == {'A', 'B', 'C'}
+    # a recorded block is reused within the period; a stale or other-db one is recounted
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {'patient_context': {**out, 'published': 9}})
+    assert health_report.patient_context_health(led.db, CFG, 20.0, 'synthetic-source')['published'] == 9
+    assert health_report.patient_context_health(led.db, CFG, 20.0, 'other')['published'] == 2
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {})
+    monkeypatch.setattr(health_report, 'PATIENT_CONTEXT_S', 0)
+    assert health_report.patient_context_health(led.db, CFG, 30.0, 'synthetic-source') == {
+        'status': 'unknown', 'observed_at': 30.0, 'reason': 'observation_limit'}

@@ -112,3 +112,19 @@ def test_a_patient_with_only_new_arrivals_holds_no_focus_place(tmp_path, monkeyp
     db.save_messages([_message(mid=9, project_id=3, body="体温は36度です。経過観察 9",
                                posted_at="2026-09-09T00:00:00+09:00")])
     assert extract_llm._focus_patients(db) == [2]   # patient 3 has 1 pending, but it is new
+
+
+def test_progress_counts_match_completion_and_focus_without_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    db = _corpus(tmp_path)
+    for pid in (1, 2, 3):                 # patient 3 has no stored post left to extract
+        db.db.execute("INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES (?,?)",
+                      (pid, f"synthetic-{pid}"))
+    db.db.execute("INSERT OR IGNORE INTO patients(project_id,patient_name,is_archived) "
+                  "VALUES (4,'synthetic-4',1)")
+    db.db.commit()
+    out = extract_llm.patient_progress_counts(db.db)
+    complete = sum(extract_llm.patient_extraction_complete(db, pid) for pid in (1, 2, 3))
+    assert out == {"active_patients": 3, "extraction_complete": complete,
+                   "focus_eligible": 2, "focus_targets": 1}
+    assert complete == 1

@@ -55,8 +55,21 @@ def test_probe_uses_readonly_connection_and_whitelists_counts(synthetic_database
     report = mcs_setup._doctor_nightly({'extract': {'patient_context_nightly': {
         'enabled': True, 'publication': False}}}, probe=True)
     assert report == {'status': 'warning', 'enabled': True, 'publication': False,
-                      'counts': counts}
+                      'counts': counts, 'lanes': None}
     assert 'private' not in json.dumps(report)
+
+
+def test_probe_passes_only_fixed_lane_codes(synthetic_database, monkeypatch):
+    counts = dict.fromkeys(mcs_setup._NIGHTLY_COUNTS, 0)
+    lanes = {lane: dict.fromkeys(mcs_setup._NIGHTLY_LANE_CODES, 1) for lane in 'ABC'}
+    lanes['B']['synthetic-private-name'] = 3
+    monkeypatch.setitem(sys.modules, 'patient_nightly', SimpleNamespace(
+        options=patient_nightly.options, status=lambda *a: {**counts, 'lanes': lanes}))
+    report = mcs_setup._doctor_nightly({}, probe=True)
+    assert report['lanes'] == {lane: dict.fromkeys(mcs_setup._NIGHTLY_LANE_CODES, 1) for lane in 'ABC'}
+    assert 'private' not in json.dumps(report)
+    lanes['C']['repair'] = -1                      # malformed is unknown, never zero
+    assert mcs_setup._doctor_nightly({}, probe=True)['lanes'] is None
 
 
 @pytest.mark.parametrize('bad', [-1, True, '2', None])

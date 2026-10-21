@@ -383,6 +383,42 @@ def card_part_resolve_plan(ledger, delivery_id, part_id) -> dict:
             "expected_state": "unknown"}
 
 
+# reasons the planner/worker stores on a held or unknown part; others count as 'unknown'
+PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
+                     "blank_part_unrepresentable", "card_revoked",
+                     *_PREFLIGHT_ERRORS)
+
+
+def part_hold_report(ledger) -> dict:
+    """Dry-run counts of held/unknown parts by fixed reason and of specs GC keeps; reads only.
+
+    Every fixed reason is present (0 is observed, not missing); a NULL code
+    is 'not_recorded' and any other code 'unknown'. ``resolvable`` counts
+    the parts card_part_resolve_plan would plan. The caller bounds time."""
+    db = cards.connection(ledger)
+    marks = ",".join("?" * len(PART_HOLD_REASONS))
+    by_state = {state: dict.fromkeys((*PART_HOLD_REASONS, "not_recorded", "unknown"), 0)
+                for state in ("held", "unknown")}
+    resolvable = 0
+    for row in db.execute(
+            f"SELECT state, CASE WHEN error_code IN ({marks}) THEN error_code "
+            "WHEN error_code IS NULL THEN 'not_recorded' ELSE 'unknown' END, COUNT(*), "
+            "SUM(state='unknown' AND attempt_id IS NOT NULL AND attempt_id!='') "
+            "FROM notification_render_parts WHERE kind!='card' AND state IN ('held','unknown') "
+            "GROUP BY 1,2", PART_HOLD_REASONS):
+        by_state[row[0]][row[1]] += row[2]
+        resolvable += row[3]
+    spec = db.execute(
+        "SELECT COALESCE(SUM(spec_json IS NOT NULL),0), COALESCE(SUM(spec_published=1),0), "
+        "COALESCE(SUM(EXISTS(SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id "
+        "AND r.transport='slack' AND p.kind='attachment_part' AND p.state='unknown' "
+        f"AND p.error_code IN ({','.join('?' * len(_PREFLIGHT_ERRORS))}))),0) "
+        "FROM notification_renders r", _PREFLIGHT_ERRORS).fetchone()
+    return {"parts": by_state, "resolvable": resolvable,
+            "specs": {"stored_json": spec[0], "published_files": spec[1],
+                      "kept_for_edit_check": spec[2]}}
+
+
 def validate_card_part_resolve(req) -> str | None:
     """Validate human approval of exactly one sealed unknown part."""
     from mcs_util import valid_text
