@@ -1439,7 +1439,7 @@ _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
 
 
 def _due_lanes(ledger, kinds: tuple, max_jobs: int,
-               archived: bool = False) -> tuple[list, list, dict]:
+               archived: bool = False, *, excluded=(), turns=None) -> tuple[list, list, dict]:
     """Two-lane due selection with a persisted fairness share.
 
     Arrival-seeded jobs (payload.eligible=1 — a real notification event
@@ -1455,6 +1455,8 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
     is written by the caller once the batch is consumed."""
     now = time.time()
     scope = ("" if archived else "NOT ") + _ARCHIVED_JOB
+    scope += " AND job_id NOT IN (SELECT value FROM json_each(?))"
+    excluded_json = json.dumps(sorted(excluded))
     turn_key = "archived_turn" if archived else "turn"
     kind_ph = ",".join("?" * len(kinds))
     eligible = ("json_valid(payload) "
@@ -1463,12 +1465,12 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
       SELECT COUNT(*) FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
         AND {eligible} AND {scope}
-    """, (now, *kinds)).fetchone()[0]
+    """, (now, *kinds, excluded_json)).fetchone()[0]
     backlog_due = ledger.db.execute(f"""
       SELECT COUNT(*) FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
         AND NOT ({eligible}) AND {scope}
-    """, (now, *kinds)).fetchone()[0]
+    """, (now, *kinds, excluded_json)).fetchone()[0]
     share = 0
     turn_next = None
     if backlog_due:
@@ -1481,7 +1483,7 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
                 # an absent marker keeps arrival first (its ordinary
                 # priority), so backfill wins the SECOND contention.
                 turn_next = ("arrival"
-                             if _sched_state(ledger).get(turn_key)
+                             if (turns or _sched_state(ledger)).get(turn_key)
                              != "arrival" else "backfill")
                 share = 1 if turn_next == "backfill" else 0
             else:
@@ -1496,14 +1498,14 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
         AND {eligible} AND {scope}
       ORDER BY {order} LIMIT ?
-    """, (now, *kinds, JOB_KIND, max_jobs - share)).fetchall() \
+    """, (now, *kinds, excluded_json, JOB_KIND, max_jobs - share)).fetchall() \
         if max_jobs - share > 0 else []
     backfill = ledger.db.execute(f"""
       SELECT * FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
         AND NOT ({eligible}) AND {scope}
       ORDER BY {order} LIMIT ?
-    """, (now, *kinds, JOB_KIND, share)).fetchall() if share else []
+    """, (now, *kinds, excluded_json, JOB_KIND, share)).fetchall() if share else []
     mutation = {"turn": turn_next, "turn_key": turn_key}
     contested = arrivals or backfill
     if turn_next and contested:
@@ -1562,17 +1564,18 @@ def _job_lock(ledger, job_id):
 
 
 def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
-                max_jobs: int, long_defers: dict | None = None) -> tuple:
+                max_jobs: int, long_defers: dict | None = None, *,
+                excluded=(), turns=None) -> tuple:
     """Select active patients first, retaining each cohort's bounded fairness."""
     active = _select_due_class(
-        ledger, lane, kinds, qc_active, max_jobs, long_defers, False)
-    # shortcut: skipped active candidates may leave capacity unused;
-    # add bounded refill only if full utilization is required.
+        ledger, lane, kinds, qc_active, max_jobs, long_defers, False,
+        excluded=excluded, turns=turns)
     remaining = max_jobs - len(active[0])
     if remaining <= 0:
         return active
     archived = _select_due_class(
-        ledger, lane, kinds, qc_active, remaining, long_defers, True)
+        ledger, lane, kinds, qc_active, remaining, long_defers, True,
+        excluded=excluded, turns=turns)
     due, qc_jobs, arrivals, backfill = [
         a + b for a, b in zip(active[:4], archived[:4])]
     return (due, qc_jobs, arrivals, backfill,
@@ -1581,7 +1584,7 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
 
 def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
                       max_jobs: int, long_defers: dict | None,
-                      archived: bool) -> tuple:
+                      archived: bool, *, excluded=(), turns=None) -> tuple:
     """Due-job selection for one patient class in a drain pass.
 
     Returns (due, qc_jobs, arrivals, backfill, sched_mut): the ordered
@@ -1590,18 +1593,20 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
     the long-output budget out of the realtime lane.
     """
     scope = ("" if archived else "NOT ") + _ARCHIVED_JOB
+    scope += " AND job_id NOT IN (SELECT value FROM json_each(?))"
+    excluded_json = json.dumps(sorted(excluded))
     if lane is None:
         qc_rows = []
         if qc_active and max_jobs > 1:
             qc_rows = ledger.db.execute(
                 "SELECT * FROM fetch_jobs WHERE state='pending' "
                 f"AND kind=? AND next_try<=? AND {scope} ORDER BY job_id LIMIT ?",
-                (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
+                (QC_JOB_KIND, time.time(), excluded_json, max_jobs)).fetchall()
         qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
         qc_jobs = list(qc_rows[:qc_share])
         arrivals, backfill, sched_mut = _due_lanes(
             ledger, (JOB_KIND,) if qc_jobs else kinds,
-            max_jobs - len(qc_jobs), archived)
+            max_jobs - len(qc_jobs), archived, excluded=excluded, turns=turns)
         # unused lane capacity flows back to QC — same rule the backfill
         # cohort uses against an idle arrival lane
         spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
@@ -1632,7 +1637,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
                 "fetch_jobs.payload) THEN json_extract(fetch_jobs.payload,"
                 "'$.generation') END) "
                 f"ORDER BY {_REALTIME_ORDER} LIMIT ?",
-                (time.time(), JOB_KIND, json.dumps(long_defers or {}),
+                (time.time(), JOB_KIND, excluded_json, json.dumps(long_defers or {}),
                  max_jobs + 8 + len(long_defers or {}))).fetchall()
             # a payload from before the generation field: its generation
             # is the payload digest, which SQL cannot compute
@@ -1653,7 +1658,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
                         "SELECT * FROM fetch_jobs WHERE state='pending' "
                         f"AND next_try<=? AND kind=? AND {scope} ORDER BY "
                         f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
-                        (time.time(), kind, max_jobs + 8)).fetchall()]
+                        (time.time(), kind, excluded_json, max_jobs + 8)).fetchall()]
         # Include extra candidates so another worker's current job cannot
         # hide the next runnable item. Work remains bounded by max_jobs.
         qc_jobs = [j for j in rows if j['kind'] == QC_JOB_KIND]
@@ -1665,6 +1670,41 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
     due = (list(rows) if lane is not None else
            qc_jobs + list(arrivals) + list(backfill))
     return due, qc_jobs, arrivals, backfill, sched_mut
+
+
+def _refill_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
+                first_batch, selected, out, deadline, consumed_turns):
+    """Refill skipped slots without revisiting jobs or scanning an unbounded queue."""
+    inspected = set()
+    batch = first_batch
+    scan_limit = max_jobs * 16
+    while len(inspected) < scan_limit and sum(selected.values()) < max_jobs:
+        before = len(inspected)
+        due, qc_jobs, arrivals, backfill, mutation = batch
+        if not due:
+            return
+        cohort_of = {row["job_id"]: name for name, rows in (
+            ("qc", qc_jobs), ("arrival", arrivals), ("backfill", backfill))
+            for row in rows}
+        for job in due:
+            if (len(inspected) >= scan_limit or sum(selected.values()) >= max_jobs
+                    or time.monotonic() >= deadline):
+                return
+            job_id = job["job_id"]
+            if job_id in inspected:
+                continue
+            inspected.add(job_id)
+            cohort_name = cohort_of[job_id]
+            out["lanes"][cohort_name] += 1
+            yield job, cohort_name, mutation
+        if len(inspected) == before or time.monotonic() >= deadline:
+            return
+        remaining = max_jobs - sum(selected.values())
+        if remaining <= 0 or len(inspected) >= scan_limit:
+            return
+        turns = {**_sched_state(ledger), **consumed_turns}
+        batch = _select_due(ledger, lane, kinds, qc_active, remaining,
+                            long_defers, excluded=inspected, turns=turns)
 
 
 def _job_metric(job, token, cohort: str, status, job_age: float,
@@ -1780,6 +1820,7 @@ def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
             sched["qc_last_served_at"] = time.time()
         if sched_mut.get("turn") and sched_mut.get("turn_consumed"):
             sched[sched_mut.get("turn_key", "turn")] = sched_mut["turn"]
+        sched.update(sched_mut.get("consumed_turns", {}))
         if long_seen or long_defers:
             _merge_long_defers(ledger, sched, long_seen or {})
         _sched_write(ledger, sched)
@@ -1999,18 +2040,17 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # the semantic lanes leave unused. A 1-job window cannot be split —
     # QC falls back to the persisted cohort alternation inside the
     # non-eligible lane.
-    due, qc_jobs, arrivals, backfill, sched_mut = _select_due(
-        ledger, lane, kinds, qc_active, max_jobs, long_defers)
-    cohort_of = {id(job): "qc" for job in qc_jobs}
-    cohort_of.update({id(job): "arrival" for job in arrivals})
-    cohort_of.update({id(job): "backfill" for job in backfill})
-    out["lanes"] = {"arrival": len(arrivals), "backfill": len(backfill)}
+    first_batch = _select_due(ledger, lane, kinds, qc_active, max_jobs, long_defers)
+    due = first_batch[0]
+    consumed_turns = {}
+    sched_mut = {"consumed_turns": consumed_turns}
+    out["lanes"] = {"arrival": 0, "backfill": 0}
     if qc_active:
-        out["lanes"]["qc"] = len(qc_jobs)
+        out["lanes"]["qc"] = 0
     selected = {"qc": 0, "arrival": 0, "backfill": 0}
-    for job in due:
-        if sum(selected.values()) >= max_jobs:
-            break
+    for job, cohort_name, mutation in _refill_due(
+            ledger, lane, kinds, qc_active, max_jobs, long_defers,
+            first_batch, selected, out, deadline, consumed_turns):
         if llm_health["down"] and job["kind"] == JOB_KIND:
             # the endpoint refused this pass: the remaining model jobs
             # would each only re-defer (and rewrite updated_at); they
@@ -2112,9 +2152,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             # only now has the job cleared every gate — the persisted
             # fairness counters count jobs that were actually served, not
             # selections lost to circuit/budget/pause breaks (T14)
-            selected[cohort_of[id(job)]] += 1
-            if job["job_id"] == sched_mut.get("turn_job_id"):
-                sched_mut["turn_consumed"] = True
+            selected[cohort_name] += 1
+            if job["job_id"] == mutation.get("turn_job_id"):
+                consumed_turns[mutation.get("turn_key", "turn")] = mutation["turn"]
             if lane == "backlog":
                 _BACKLOG_TURN["kind"] = job["kind"]
             req0 = jev_client.requests_made if jev_client is not None else 0
@@ -2201,7 +2241,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             llm_s = llm_acc["s"]
             jev_s = jev_timing["s"]
             metric = _job_metric(
-                job, token, cohort_of.get(id(job), "backfill"), status,
+                job, token, cohort_name, status,
                 job_age, job_elapsed, llm_s, jev_s, used, usage,
                 jev_client, diagnostics=diagnostics)
             if status == "done":

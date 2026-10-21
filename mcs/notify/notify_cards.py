@@ -1136,7 +1136,7 @@ def _notice_spec(event_id, parts, cfg, scope, rev, transport) -> dict:
     return spec
 
 
-def _persist_notice_render(db, spec, event_id, now) -> None:
+def _persist_notice_render(db, spec, event_id, now) -> bool:
     """Persist a sealed card-less notice and seed its parts in the borrowed transaction.
 
     The caller owns the transaction and publishes the spec after commit.
@@ -1158,6 +1158,17 @@ def _persist_notice_render(db, spec, event_id, now) -> None:
          canonical(spec).decode(), payload_hash(spec), delivery["correlation"],
          event_id, now, now))
     notify_parts.seed_parts(db, spec, now)
+    if any(not chunk.strip() for chunk in spec["parts"].get("thread_body_parts", [])):
+        reason = "blank_part_unrepresentable"
+        db.execute("UPDATE notification_renders SET state='held',parts_state='held' "
+                   "WHERE delivery_id=?", (spec["delivery_id"],))
+        db.execute("UPDATE notification_render_parts SET state='held',error_code=? "
+                   "WHERE delivery_id=?", (reason, spec["delivery_id"]))
+        db.execute("UPDATE notify_outbox SET state='failed',next_try=NULL,"
+                   + HOLD_PROGRESS_SET + ",updated_at=? WHERE event_id=?",
+                   (reason, now, event_id))
+        return False
+    return True
 
 
 def _notice_renders(db, event_id) -> list:
@@ -1322,9 +1333,9 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
                  if transport in ("slack", "lineworks") else None))
             spec = _notice_spec(event_id, parts, cfg, scope,
                                 len(renders) + 1, transport)
-            _persist_notice_render(db, spec, event_id, now)
-            specs.append(spec)
-            _reseat(db, event_id, now, "notice_render_issued")
+            if _persist_notice_render(db, spec, event_id, now):
+                specs.append(spec)
+                _reseat(db, event_id, now, "notice_render_issued")
         mark_snapshot_dirty(db)
     if specs:
         notify_spool.ensure_dirs(root)
@@ -1580,10 +1591,10 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
                        "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,transport,scope_json) "
                        "VALUES(?,?,?,?,?,?,?)", (event_id, canonical(payload).decode(), payload_hash(payload),
                        notify_scope.route_epoch(cfg), now, notify_scope.active_transport(cfg), canonical(notify_scope.delivery_scope(cfg)).decode()))
-            _persist_notice_render(db, spec, event_id, now)
-            specs.append(spec)
-            db.execute("UPDATE notify_outbox SET route='interactive',progress=NULL WHERE event_id=?", (event_id,))
-            _reseat(db, event_id, now, "alert_render_issued")
+            if _persist_notice_render(db, spec, event_id, now):
+                specs.append(spec)
+                db.execute("UPDATE notify_outbox SET route='interactive',progress=NULL WHERE event_id=?", (event_id,))
+                _reseat(db, event_id, now, "alert_render_issued")
         mark_snapshot_dirty(db)
     if specs:
         root = notify_spool.data_root(ledger)

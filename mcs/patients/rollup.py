@@ -51,14 +51,15 @@ STALE_DAYS = 21          # message unseen this long while siblings refresh
 # change alters what build_rollup keeps: current-version caches are trusted
 # without per-read rebuilds, and dirty_projects() rebuilds every row stamped
 # with another version (10: source-bound pharmacy reports; 11: vital owners
-# written without a particle and oxygen flows are not patient readings).
+# written without a particle and oxygen flows are not patient readings;
+# 12: per-request, current Loop evidence replaces thread-wide reply inference).
 # Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
-PERIOD_CHECK_VERSION = 11
+PERIOD_CHECK_VERSION = 12
 # Pre-9 rollup keys; readers map them to the current names until rebuilt.
 _LEGACY_KEYS = {"current_med_period": "med_period_candidate",
                 "possibly_deleted": "unrefreshed_message_ids"}
-# #20-C thread-level reply_state: strongest reply kind seen in the thread
-# after the request, from another sender. View-only, never a transition.
+# Only current Loop relation evidence may qualify a request reply.
+# This remains a read annotation, never a request status transition.
 _REPLY_STAGE = {k: i for i, k in enumerate(
     ("ack", "intent", "progress", "answer", "done", "cancel"))}
 
@@ -68,21 +69,6 @@ PHARMACY_STATE_LIMIT = 100
 def _dicts(value) -> list[dict]:
     return [item for item in value if isinstance(item, dict)] \
         if isinstance(value, list) else []
-
-
-def _llm_reply_kind(blob):
-    """reply.kind of one extract_llm artifact (blob or its already
-    parsed dict), else None."""
-    try:
-        lm = blob if isinstance(blob, dict) \
-            else json.loads(blob) if blob else None
-    except (ValueError, TypeError, RecursionError):
-        return None
-    if not isinstance(lm, dict) or lm.get("_error"):
-        return None
-    reply = lm.get("reply")
-    kind = reply.get("kind") if isinstance(reply, dict) else None
-    return kind if isinstance(kind, str) else None
 
 
 def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, request_limit):
@@ -121,35 +107,60 @@ def _stored_lab_ok(r) -> bool:
             and all(r.get(k) is None or isinstance(r.get(k), str) for k in ("unit", "evidence", "measured_on")))
 
 
-def _match_request_replies(req_thread, replies):
-    """Match later replies once per thread, excluding the requester's own posts."""
-    threads = {}
-    # Sort normalized timestamps: SQL puts NULL last, but its normalized 0 can
-    # follow negative timestamps. Row references preserve the displayed order.
-    for row, root, ts, sender in sorted(req_thread, key=lambda r: r[2], reverse=True):
-        if sender is None:
+def _match_request_replies(db, project_id, req_thread, requests, messages, now):
+    """Annotate only uniquely matched requests with current Loop relation evidence."""
+    from request_loops import effective_loop_state, latest_policy
+    import semantic_jev as jev
+
+    kinds = {"acknowledges": "ack", "progress_report": "progress",
+             "answers_question": "answer", "completion_report": "done",
+             "cancellation_report": "cancel"}
+    counts = {}
+    for row in requests:
+        if not isinstance(row.get("ctx"), str):
             continue
-        if root not in threads:
-            threads[root] = (sorted(replies.get(root, ()), key=lambda r: r[0]), {}, [])
-        pending, kinds, done = threads[root]
-        while pending and pending[-1][0] > ts:
-            rts, other, kind = pending.pop()
-            if other is None:
+        key = (row["mid"], row["ctx"])
+        counts[key] = counts.get(key, 0) + 1
+    candidates, bundles = {}, {}
+    policy = latest_policy(db)
+    for source in db.execute(
+            "SELECT artifact_id,project_id,message_id,content,meta FROM artifacts "
+            "WHERE kind='loop_candidate' AND project_id=?", (project_id,)):
+        loop = effective_loop_state(db, source, policy=policy, bundles=bundles,
+                                    relation_limit=None)
+        if loop and loop.get("adoption_eligible"):
+            key = (source["message_id"], loop.get("description"))
+            if isinstance(key[1], str):
+                candidates.setdefault(key, []).append(loop)
+    by_id = {m["message_id"]: m for m in messages}
+    for row, root, ts, sender in req_thread:
+        if not isinstance(row.get("ctx"), str):
+            continue
+        key = (row["mid"], row["ctx"])
+        matched = candidates.get(key, [])
+        if sender is None or counts[key] != 1 or len(matched) != 1:
+            continue
+        seen = []
+        for event in matched[0]["relation_events"]:
+            relation = event.get("relation")
+            kind = kinds.get(relation) if isinstance(relation, str) else None
+            trigger = by_id.get(event.get("trigger_message_id"))
+            confidence = jev.finite_value(event.get("confidence"))
+            if (not kind or event.get("stale") or not trigger
+                    or confidence is None or not 0 <= confidence <= 1
+                    or not isinstance(event.get("reported_relation"), str)
+                    or event["reported_relation"] not in jev.LOOP_RELATION_OPTIONS
+                    or trigger["body_state"] not in (None, "full")
+                    or (trigger["parent_id"] or trigger["message_id"]) != root):
                 continue
-            latest = kinds.setdefault(kind, [])
-            # Excluding one sender only needs the two newest distinct senders.
-            if len(latest) < 2 and all(s != other for _, s in latest):
-                latest.append((rts, other))
-            if kind == "done":
-                # Replies arrive newest first; retain the two oldest distinct
-                # senders to find the earliest done after excluding one sender.
-                done[:] = [(rts, other)] + [p for p in done if p[1] != other][:1]
-        stages = [kind for kind, latest in kinds.items() if any(s != sender for _, s in latest)]
-        if stages:
-            row["reply_state"] = max(stages, key=_REPLY_STAGE.get)
-            done_at = next((at for at, s in done if s != sender), None)
-            cancel_at = next((at for at, s in kinds.get("cancel", ()) if s != sender), None)
-            if done_at is not None and cancel_at is not None and cancel_at > done_at:
+            other = normalize_sender_id(trigger["sender_id"])
+            at = trigger["posted_at_ts"]
+            if other is not None and other != sender and at is not None and 0 < ts < at <= now:
+                seen.append((at, kind))
+        if seen:
+            row["reply_state"] = max((kind for _, kind in seen), key=_REPLY_STAGE.get)
+            done = [at for at, kind in seen if kind == "done"]
+            if done and any(kind == "cancel" and at > min(done) for at, kind in seen):
                 row["reply_conflict"] = True
 
 
@@ -211,9 +222,7 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
     # slot-less canonical categories stay enumerable in the read model.
     canonical = {}
     requests = []
-    # thread root -> [(ts, sender ID, reply kind)] / LLM request rows with
-    # their (root, ts, sender ID) for the reply_state pass below
-    replies = {}
+    # Request rows retain source/thread identity for grounded Loop matching.
     req_thread = []
     next_planned = None
     senders = {}
@@ -307,11 +316,6 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
         _symptom_ts(m, v1, lm, ts, sym_pos, sym_neg, patient_name=patient_name)
         root = m["parent_id"] or m["message_id"]
         _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, request_limit)
-        # reply lives only in extract_llm; read it there even when a
-        # canonical_projection / semantic_facts_v4 blob shadows lm
-        kind = _llm_reply_kind(llm)
-        if kind in _REPLY_STAGE:
-            replies.setdefault(root, []).append((ts, sender_id, kind))
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")
             if isinstance(fid, str) and fid and fid not in canonical:
@@ -355,11 +359,7 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
     if symptoms:
         out["recent_symptoms"] = [{"symptom": k, "last": v}
                                   for k, v in list(symptoms.items())[:20]]
-    # ponytail: thread-level reply_state — any later reply by another
-    # sender in the same thread counts, no per-request action matching
-    # (that is the Loop path). Unknown sender IDs cannot prove different
-    # authors. NULL posted_at_ts is 0 and never 'later'.
-    _match_request_replies(req_thread, replies)
+    _match_request_replies(db, project_id, req_thread, requests, msgs, out["generated_at"])
     if requests:
         out["recent_requests"] = requests[:request_limit]
     if canonical:
@@ -605,14 +605,19 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
     clinical_stale = ("latest_vitals" in out and isinstance(meta, dict)
                       and "period_check_version" in meta
                       and meta["period_check_version"] != PERIOD_CHECK_VERSION)
-    if scoped or projection_stale or clinical_stale:
+    request_stale = "recent_requests" in out
+    if scoped or projection_stale or clinical_stale or request_stale:
         try:
             current = build_rollup(db, project_id)
         except sqlite3.OperationalError:
+            if request_stale:
+                raise  # a failed current read cannot prove that requests are absent
             current = {}  # a legacy snapshot cannot prove scoped current fields
         clinical_keys = (("latest_vitals", "recent_labs", "med_period_candidate", "medications",
                           "unverified_medications", "planned_medications", "recent_symptoms")
-                         if scoped or projection_stale else ("latest_vitals",))
+                         if scoped or projection_stale else ("latest_vitals",) if clinical_stale else ())
+        if request_stale:
+            clinical_keys += ("recent_requests",)
         for key in clinical_keys:
             if key in current:
                 out[key] = current[key]
@@ -625,8 +630,9 @@ def _newest_source_ts(ledger, project_id: int) -> float:
     """Newest source stamp dirty_projects compares to generated_at."""
     return ledger.db.execute(
         "SELECT MAX(IFNULL((SELECT MAX(created_at) FROM artifacts"
-        " WHERE project_id=:p AND kind IN ('extract_v1','extract_llm',"
-        "'canonical_projection','semantic_facts_v4','karte_summary','project_metadata_v1')), 0),"
+        " WHERE (project_id=:p AND kind IN ('extract_v1','extract_llm',"
+        "'canonical_projection','semantic_facts_v4','karte_summary','project_metadata_v1',"
+        "'loop_candidate','loop_event')) OR kind='semantic_policy'), 0),"
         " IFNULL((SELECT MAX(updated_seen) FROM messages"
         " WHERE project_id=:p), 0))", {"p": project_id}).fetchone()[0]
 
@@ -636,8 +642,9 @@ def _message_source_signature(db, project_id, now):
     from registered_data import registered_data
     patient = db.execute("SELECT patient_name,karte_id,project_type FROM patients WHERE project_id=?",
                          (project_id,)).fetchone()
-    context = db.execute("SELECT artifact_id,kind,meta FROM artifacts WHERE project_id=? "
-                         "AND kind IN ('karte_summary','project_metadata_v1') ORDER BY artifact_id",
+    context = db.execute("SELECT artifact_id,kind,meta FROM artifacts WHERE (project_id=? "
+                         "AND kind IN ('karte_summary','project_metadata_v1','loop_candidate','loop_event')) "
+                         "OR kind='semantic_policy' ORDER BY artifact_id",
                          (project_id,)).fetchall()
     rows = db.execute("""
       SELECT message_id, posted_at, posted_at_ts, content_hash,

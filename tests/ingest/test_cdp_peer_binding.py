@@ -43,6 +43,8 @@ def _adapter(monkeypatch, *, lsof_out, lsof_rc=0, chrome_pids=(4242,),
         return SimpleNamespace(returncode=lsof_rc, stdout=lsof_out, stderr="")
 
     monkeypatch.setattr(a, "_cdp_eval", cdp_eval)
+    monkeypatch.setattr(a, "_cdp_eval_owned",
+                        lambda ws, profile, chrome, expr: cdp_eval(ws, expr))
     monkeypatch.setattr(subprocess, "run", run)
     return a, sent
 

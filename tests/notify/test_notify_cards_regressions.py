@@ -131,18 +131,18 @@ def test_lineworks_failed_thread_keeps_display_overflow(led, monkeypatch):
     "x" * 1900 + " " * 1905,
     "　" * 2500 + "本文",
 ])
-def test_body_chunks_have_no_blank_post(text):
+def test_body_chunks_preserve_blank_runs(text):
     chunks = notify_parts.split_body_chunks(text)
-    assert all(c.strip() for c in chunks)
     assert all(len(c) <= notify_parts.THREAD_PART_LIMIT for c in chunks)
-    joined = "".join(chunks)
-    assert joined.split() == text.split()      # only whitespace may drop
+    assert "".join(chunks) == text
 
 
 def test_body_chunks_mid_blank_run_stays_lossless():
     for text in ("a\n" + (" " * 1000 + "\n") * 3 + "b",
                  "x" * 1000 + "\n" + "\n" * 3000 + "b"):
-        assert "".join(notify_parts.split_body_chunks(text)) == text
+        chunks = notify_parts.split_body_chunks(text)
+        assert "".join(chunks) == text
+        assert all(chunk.strip() for chunk in chunks)
 
 
 def test_digest_thread_name_uses_jst_day(monkeypatch):
@@ -273,7 +273,7 @@ def test_long_single_line_keeps_boundaries_without_repeated_suffix_copies():
     ("a\n1234", 4, ["a\n", "1234"]),
     ("a\n12345", 4, ["a\n12", "345"]),
     ("ab\n\n\nc", 4, ["ab\n\n", "\nc"]),
-    ("a" + " " * 10 + "b", 4, ["a   ", "   b"]),
+    ("a" + " " * 10 + "b", 4, ["a   ", "    ", "   b"]),
     (" " * 8, 4, [" " * 4, " " * 4]),
 ])
 def test_body_chunks_preserve_exact_text_and_boundaries(text, limit, expected):

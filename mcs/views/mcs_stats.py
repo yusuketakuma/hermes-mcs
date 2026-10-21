@@ -1035,7 +1035,7 @@ def _feedback_evidence(db, scope, selected) -> None:
 
 
 def _feedback_suppression(db, scope, types):
-    """Daily suppression rows -> (suppression, suppression_since, straddled)."""
+    """Suppression observations -> (suppression, suppression_since, straddled)."""
     from mcs_signals import FEEDBACK_KIND
     suppression = {name: [0, 0] for name in types}
     suppression_since = {}
@@ -1049,6 +1049,53 @@ def _feedback_suppression(db, scope, types):
             continue
         if (not isinstance(c, dict) or not isinstance(c.get("type"), str)
                 or c["type"] not in types):
+            continue
+        if c.get("v") == 2:
+            if scope["project_id"] is not None and pid != scope["project_id"]:
+                continue
+            observations = c.get("observations")
+            if (not isinstance(observations, list) or not observations or any(
+                    not isinstance(o, list) or len(o) != 3
+                    or type(o[0]) not in (int, float) or not math.isfinite(o[0]) or o[0] < 0
+                    or type(o[1]) is not int or type(o[2]) is not int
+                    or not 0 <= o[2] <= o[1] for o in observations)):
+                straddled[c["type"]] = straddled.get(c["type"], 0) + 1
+                continue
+            intervals = [(at, at, den, num) for at, den, num in observations]
+            overflow = c.get("overflow")
+            if overflow is not None:
+                if (not isinstance(overflow, dict)
+                        or type(overflow.get("at")) not in (int, float)
+                        or type(overflow.get("last_at")) not in (int, float)
+                        or not math.isfinite(overflow["at"])
+                        or not math.isfinite(overflow["last_at"])
+                        or not 0 <= overflow["at"] <= overflow["last_at"]
+                        or type(overflow.get("dismissed_candidates")) is not int
+                        or type(overflow.get("same_evidence_suppressed")) is not int
+                        or not 0 <= overflow["same_evidence_suppressed"] <= overflow["dismissed_candidates"]):
+                    straddled[c["type"]] = straddled.get(c["type"], 0) + 1
+                    continue
+                intervals.append((overflow["at"], overflow["last_at"],
+                                  overflow["dismissed_candidates"], overflow["same_evidence_suppressed"]))
+            if (sum(o[2] for o in intervals) != c.get("dismissed_candidates")
+                    or sum(o[3] for o in intervals) != c.get("same_evidence_suppressed")
+                    or min(o[0] for o in intervals) != c.get("at")
+                    or max(o[1] for o in intervals) != c.get("last_at")):
+                straddled[c["type"]] = straddled.get(c["type"], 0) + 1
+                continue
+            for at, last, den, num in intervals:
+                if (at > scope["as_of"]
+                        or (scope["since"] is not None and last < scope["since"])
+                        or (scope["until"] is not None and at >= scope["until"])):
+                    continue
+                if (last > scope["as_of"]
+                        or (scope["since"] is not None and at < scope["since"] <= last)
+                        or (scope["until"] is not None and last >= scope["until"])):
+                    straddled[c["type"]] = straddled.get(c["type"], 0) + 1
+                    continue
+                suppression[c["type"]][0] += den
+                suppression[c["type"]][1] += num
+                suppression_since[c["type"]] = min(at, suppression_since.get(c["type"], at))
             continue
         at, den, num = (c.get("at"), c.get("dismissed_candidates"),
                         c.get("same_evidence_suppressed"))

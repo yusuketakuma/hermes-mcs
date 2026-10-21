@@ -593,32 +593,8 @@ class MCSAdapter:
 
     @staticmethod
     def _profile_chrome_pids(profile_dir: str, chrome_bin: str) -> list[int]:
-        """Pids of Chrome main processes of exactly this dedicated profile; [] when unknown."""
-        import subprocess
-        if (not profile_dir or not os.path.isabs(profile_dir)
-                or not chrome_bin or not os.path.isabs(chrome_bin)):
-            return []
-        # the next token must be a flag or URI (about:blank too): "<profile> copy" is another profile
-        flag = re.compile(r"(?:^|\s)--user-data-dir=" + re.escape(profile_dir)
-                          + r"(?:\s--|\s[a-z][a-z0-9+.-]*:|$)")
-        try:
-            result = subprocess.run(["ps", "-axww", "-o", "pid=,command="],
-                                    capture_output=True, text=True, timeout=10)
-        except (OSError, subprocess.SubprocessError):
-            return []
-        if result.returncode != 0:
-            return []
-        pids = []
-        for line in result.stdout.splitlines():
-            pid, _, command = line.strip().partition(" ")
-            # ps flattens argv: paths may contain spaces, but Chrome's flags follow its executable.
-            program, separator, _ = command.partition(" --")
-            if (pid.isdigit() and int(pid) != os.getpid() and separator
-                    and os.path.realpath(program) == os.path.realpath(chrome_bin)
-                    and flag.search(command)
-                    and " --type=" not in f" {command}"):
-                pids.append(int(pid))
-        return pids
+        from mcs_cdp import profile_chrome_pids
+        return profile_chrome_pids(profile_dir, chrome_bin)
 
     def _cdp_peer_owned(self, ws_url: str, profile_dir: str,
                         chrome_bin: str) -> bool:
@@ -731,6 +707,12 @@ class MCSAdapter:
 
     def _cdp_eval(self, ws_url: str, expr: str, timeout: int = 15):
         return self._io("cdp_eval", timeout, url=ws_url, expression=expr)["value"]
+
+    def _cdp_eval_owned(self, ws_url: str, profile_dir: str,
+                        chrome_bin: str, expr: str):
+        return self._io("cdp_eval", 15, url=ws_url, expression=expr,
+                        peer_profile={"profile_dir": profile_dir,
+                                      "chrome_bin": chrome_bin})["value"]
 
     def _cdp_json(self, path: str, method: str = "GET", timeout: float = 5):
         return self._io("cdp_json", timeout, url=self.cdp_url + path,
@@ -1001,12 +983,9 @@ class MCSAdapter:
                     login_id, getattr(self, "_pw_source", None))
                 if blocked:
                     return "manual_required:backoff"
-                # shortcut: the listener is checked, then the fill opens its
-                # own socket; a profile Chrome dying in that gap re-opens
-                # the race — a pinned connection would close it
                 if not self._cdp_peer_owned(ws, profile_dir, chrome_bin):
                     return "failed"
-                fill = self._cdp_eval(ws, f"""(() => {{
+                fill = self._cdp_eval_owned(ws, profile_dir, chrome_bin, f"""(() => {{
                   if (location.origin !== 'https://www.medical-care.net')
                     return 'bad_origin';
                   const idEl = document.querySelector('input[name=loginId]');

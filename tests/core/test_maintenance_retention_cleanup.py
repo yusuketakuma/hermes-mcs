@@ -40,9 +40,10 @@ def test_prune_keeps_only_actionable_preupdate_backups(tmp_path, monkeypatch):
     }
     state_path = tmp_path / "update_state.json"
     state_path.write_text(json.dumps(state))
-    assert maintenance.prune_preupdate_backups(str(state_path)) == 3
+    assert maintenance.prune_preupdate_backups(str(state_path)) == 2
     assert sorted(p.name for p in backups.iterdir()) == [
-        "preupdate-applying.db", "preupdate-consent.db", "preupdate-new-bump.db"]
+        "preupdate-applying.db", "preupdate-consent.db", "preupdate-new-bump.db",
+        "preupdate-old-bump.db"]
 
 
 def test_preupdate_backup_refuses_when_disk_is_low(tmp_path, monkeypatch):

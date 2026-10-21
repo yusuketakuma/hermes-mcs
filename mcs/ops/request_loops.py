@@ -168,7 +168,7 @@ def loop_links(db, pid, *, request_id=None, loop_id=None):
     return links
 
 
-def effective_loop_state(db, candidate_row, *, policy=None, bundles=None):
+def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relation_limit=5):
     """Derive a candidate's current display state with the view's exact source and policy guards."""
 
     import semantic_jev as jev
@@ -224,7 +224,7 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None):
             "json_extract(content,'$.loop_artifact_id')=? OR "
             "(json_extract(content,'$.loop_artifact_id') IS NULL AND "
             "json_extract(content,'$.loop_origin_id')=?) ELSE 0 END "
-            "ORDER BY artifact_id DESC LIMIT 50",
+            "ORDER BY artifact_id DESC",
             (pid, r["artifact_id"], r["message_id"])):
         try:
             ev = json.loads(e["content"])
@@ -258,9 +258,7 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None):
                 ev.get("loop_artifact_id") is None
                 and ev.get("loop_origin_id") == r["message_id"]):
             events.append((e["created_at"], ev))
-    cand["relation_events"] = [ev for _, ev in events[:5]]
-    # shortcut: suppression uses the existing 50-event window;
-    # query older matching events if long histories need exact counts.
+    cand["relation_events"] = [ev for _, ev in events[:relation_limit]]
     unavailable = set()
     if current:
         for rejection in db.execute(

@@ -6,11 +6,42 @@ from contextlib import suppress
 import hashlib
 import json
 import os
+import re
 import socket
 import time
 import urllib.parse
 
 from mcs_contract import BootstrapError
+
+
+def profile_chrome_pids(profile_dir: str, chrome_bin: str, *,
+                        timeout: float = 10) -> list[int]:
+    """Pids of Chrome main processes of exactly this dedicated profile; [] when unknown."""
+    import subprocess
+    if (not profile_dir or not os.path.isabs(profile_dir)
+            or not chrome_bin or not os.path.isabs(chrome_bin)):
+        return []
+    # the next token must be a flag or URI (about:blank too): "<profile> copy" is another profile
+    flag = re.compile(r"(?:^|\s)--user-data-dir=" + re.escape(profile_dir)
+                      + r"(?:\s--|\s[a-z][a-z0-9+.-]*:|$)")
+    try:
+        result = subprocess.run(["ps", "-axww", "-o", "pid=,command="],
+                                capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    pids = []
+    for line in result.stdout.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        # ps flattens argv: paths may contain spaces, but Chrome's flags follow its executable.
+        program, separator, _ = command.partition(" --")
+        if (pid.isdigit() and int(pid) != os.getpid() and separator
+                and os.path.realpath(program) == os.path.realpath(chrome_bin)
+                and flag.search(command)
+                and " --type=" not in f" {command}"):
+            pids.append(int(pid))
+    return pids
 
 
 class _WSConn:
@@ -152,12 +183,61 @@ class _WSConn:
             self._sock.close()
 
 
-def evaluate(ws_url: str, expression: str, timeout: float = 15):
+def _connected_peer_owned(conn, peer_profile: dict) -> bool:
+    """Verify the server end of this established socket before sending credentials."""
+    import subprocess
+
+    def remaining():
+        seconds = conn._deadline - time.monotonic()
+        if seconds <= 0:
+            raise BootstrapError("cdp_ws_timeout")
+        return min(10, seconds)
+
+    pids = profile_chrome_pids(peer_profile["profile_dir"],
+                               peer_profile["chrome_bin"], timeout=remaining())
+    lsof = next((p for p in ("/usr/sbin/lsof", "/usr/bin/lsof")
+                 if os.access(p, os.X_OK)), None)
+    if not pids or lsof is None:
+        return False
+    server, client = conn._sock.getpeername(), conn._sock.getsockname()
+
+    def endpoint(address):
+        host, port = address[:2]
+        return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+
+    wanted = endpoint(server) + "->" + endpoint(client)
+    host = f"[{server[0]}]" if ":" in server[0] else server[0]
+    try:
+        listing = subprocess.run(
+            [lsof, "-nP", "-a", f"-iTCP@{host}:{server[1]}",
+             "-sTCP:ESTABLISHED", "-Fpun"], capture_output=True, text=True,
+            timeout=remaining())
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if listing.returncode != 0:
+        return False
+    owners, pid, uid = [], None, None
+    for line in listing.stdout.splitlines():
+        if line[:1] == "p":
+            pid = int(line[1:]) if line[1:].isdigit() else None
+            uid = None
+        elif line[:1] == "u":
+            uid = int(line[1:]) if line[1:].isdigit() else None
+        elif line == "n" + wanted:
+            owners.append((pid, uid))
+    return bool(owners) and all(
+        pid in pids and uid == os.getuid() for pid, uid in owners)
+
+
+def evaluate(ws_url: str, expression: str, timeout: float = 15, *,
+             peer_profile: dict | None = None):
     """Runtime.evaluate over the minimal ws client; returns the
     result.value, or raises BootstrapError/MCSError — never a bare
     KeyError on a malformed CDP reply."""
     conn = _WSConn(ws_url, timeout)
     try:
+        if peer_profile is not None and not _connected_peer_owned(conn, peer_profile):
+            raise BootstrapError("cdp_peer_unowned")
         conn.send_text(json.dumps({
             "id": 1, "method": "Runtime.evaluate",
             "params": {"expression": expression,

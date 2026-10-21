@@ -272,3 +272,29 @@ def test_answer_survives_an_unreadable_snapshot(tmp_path):
     bad.write_bytes(b"not a database")
     assert summary.answer(bad, "all", now=NOW) == {
         "error": summary.SNAPSHOT_MISSING}
+
+
+def test_notice_with_unrepresentable_blank_part_is_sealed_but_not_publishable(led):
+    ev = _enqueue(led)
+    payload = json.loads(ev["payload"])
+    scope = notify_cards.notify_scope.delivery_scope(DAILY)
+    spec = notify_cards._notice_spec(ev["event_id"], payload["parts"], DAILY, scope, 1, "discord")
+    spec["parts"]["thread_body_parts"] = ["synthetic before", " " * 1900, "synthetic after"]
+    spec["parts"]["manifest"] += [
+        {"part_id": "thread", "kind": "thread", "index": 1, "name": "synthetic"},
+        *[{"part_id": f"body:{i:04d}", "kind": "body_part", "index": i + 1,
+           "name": f"synthetic#{i}", "sha256": notify_cards.notify_parts.text_sha256(chunk),
+           "bytes": len(chunk.encode())}
+          for i, chunk in enumerate(spec["parts"]["thread_body_parts"], 1)],
+    ]
+    with led.db:
+        assert notify_cards._persist_notice_render(led.db, spec, ev["event_id"], NOW) is False
+    [render] = _notices(led, ev)
+    assert render["state"] == render["parts_state"] == "held"
+    assert json.loads(render["spec_json"])["parts"]["thread_body_parts"][1] == " " * 1900
+    parts = list(led.db.execute("SELECT state,error_code FROM notification_render_parts WHERE delivery_id=?",
+                                (spec["delivery_id"],)))
+    assert parts and all(tuple(row) == ("held", "blank_part_unrepresentable") for row in parts)
+    row = led.db.execute("SELECT state,progress FROM notify_outbox WHERE event_id=?", (ev["event_id"],)).fetchone()
+    assert row["state"] == "failed"
+    assert json.loads(row["progress"])["hold_reason"] == "blank_part_unrepresentable"

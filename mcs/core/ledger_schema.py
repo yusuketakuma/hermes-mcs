@@ -49,7 +49,7 @@ RELATION_RECOUNT_S = 3600
 _GUARD_TRIGGERS = frozenset(
     [f"g1_{table}_msg_{suffix}" for table, _, _ in _GUARD_RELATIONS
      for suffix in ("ins", "upd")]
-    + [f"relation_audit_messages_{suffix}" for suffix in ("del", "upd")])
+    + [f"relation_audit_messages_{suffix}" for suffix in ("del", "upd", "replace")])
 
 
 REQUEST_SCHEMA = """
@@ -418,8 +418,8 @@ def relation_guards_current(db) -> bool:
         Read-only (WAL readers never block writers). An ``enforce`` relation
         is trusted without a recount while its triggers exist and its
         ``ledger_relation_audit`` mode still matches: the only paths that can
-        orphan an enforced child (a messages DELETE or key UPDATE) clear that
-        row through the ``relation_audit_messages_*`` triggers. ``shadow``
+        orphan an enforced child (a messages DELETE, key UPDATE or replacement
+        in another project) clear that row through the ``relation_audit_messages_*`` triggers. ``shadow``
         relations are recounted because ``existing_count`` is health evidence
         — at most once per RELATION_RECOUNT_S: every process opens the
         ledger, and a full orphan COUNT on each open grew with the corpus.
@@ -568,8 +568,6 @@ def install_relation_guards(db, *, new_database: bool = False,
             """)
         # Parent-side changes can orphan children the g1 triggers already
         # admitted; they invalidate the audit so the next open recounts.
-        # ponytail: INSERT OR REPLACE on messages fires no DELETE trigger
-        # unless recursive_triggers is on; no ledger writer uses REPLACE.
         for suffix, event, when in (
                 ("del", "DELETE", "1"),
                 ("upd", "UPDATE OF message_id, project_id",
@@ -580,6 +578,16 @@ def install_relation_guards(db, *, new_database: bool = False,
                     AFTER {event} ON messages WHEN {when}
                     BEGIN DELETE FROM ledger_relation_audit; END
                 """)
+        # REPLACE skips DELETE triggers with SQLite's default settings.
+        # Probe before replacement, while the previous parent still exists.
+        db.execute("""
+                CREATE TRIGGER IF NOT EXISTS relation_audit_messages_replace
+                BEFORE INSERT ON messages
+                WHEN EXISTS(SELECT 1 FROM messages
+                            WHERE message_id=NEW.message_id
+                              AND project_id IS NOT NEW.project_id)
+                BEGIN DELETE FROM ledger_relation_audit; END
+            """)
     _mark_relation_recount(db)
 
 

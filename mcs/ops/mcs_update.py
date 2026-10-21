@@ -2191,8 +2191,9 @@ def _rollback_layout_error(entry: dict) -> str | None:
                 # no cards table, or a schema older than the layout column:
                 # every card is layout 1 and nothing can be misread
                 return None
-            # shortcut: revoked/deleted cards count too, narrow by
-            # delivery_state if a rollback is ever blocked by dead cards only
+            # Revoked/deleted cards remain sweep inputs and may owe a remote
+            # revoke or a new render. Their stored layout is still a rollback
+            # contract; delivery state alone cannot prove they are disposable.
             stored = con.execute(
                 "SELECT COALESCE(MAX(layout),1) FROM notification_cards"
             ).fetchone()[0]

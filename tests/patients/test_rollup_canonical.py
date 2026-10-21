@@ -256,6 +256,8 @@ def _thread(db, rows):
         db.save_messages([msg])
         db.artifact_add("extract_llm", json.dumps(content), project_id=1,
                         message_id=mid, meta={"hash": _hash(db, mid)})
+    from test_shortcut_debt_request_replies import seed_loop_replies
+    seed_loop_replies(db)
 
 
 _REQ = {"requests": [{"to": "SYNTH-医師", "action": "処方変更を確認"}]}
@@ -351,15 +353,14 @@ def test_rollup_sql_valid_shadowed_reply_at_python_depth_limit_is_safe(db):
     try:
         json.loads(deep)
     except RecursionError:
-        readable = False
-    else:
-        readable = True
+        pass
     db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (deep, source_id))
     db.db.commit()
     before = tuple(db.db.iterdump())
     changes = db.db.total_changes
     rows = rollup.build_rollup(db.db, 1)["recent_requests"]
-    assert rows[0].get("reply_state") == ("done" if readable else None)
+    # Independent current Loop evidence remains usable when a legacy blob is unreadable.
+    assert rows[0].get("reply_state") == "done"
     assert tuple(db.db.iterdump()) == before
     assert db.db.total_changes == changes
 
@@ -401,6 +402,8 @@ def test_rollup_reply_uses_sender_ids(db, request_id, reply_id, same_name, state
                   (reply_id,))
     if same_name:
         db.db.execute("UPDATE messages SET sender_name='SYNTH-A'")
+    from test_shortcut_debt_request_replies import seed_loop_replies
+    seed_loop_replies(db)
     assert rollup.build_rollup(db.db, 1)["recent_requests"][0].get("reply_state") \
         == state
 
@@ -466,13 +469,15 @@ def test_rollup_decodes_each_llm_blob_once(db, monkeypatch, shadow, decodes):
                 {"requests": _REQ["requests"]} if mid == 1 else {}),
                 project_id=1, message_id=mid,
                 meta={"hash": _hash(db, mid), "projection_version": PROJECTION_VERSION})
+    extraction_blobs = {r[0] for r in db.db.execute(
+        "SELECT content FROM artifacts WHERE kind IN ('extract_llm','canonical_projection')")}
     calls = []
     real = json.loads
     monkeypatch.setattr(rollup.json, "loads",
                         lambda s, *a, **k: calls.append(s) or real(s, *a, **k))
     rows = rollup.build_rollup(db.db, 1)["recent_requests"]
     assert rows[0]["reply_state"] == "done"
-    assert len(calls) == decodes
+    assert sum(s in extraction_blobs for s in calls) == decodes
 
 
 # ---------- 連携サマリー (#21) ----------------------------------------------

@@ -177,13 +177,11 @@ def stage_derive(ledger, result, deadline, cfg=None,
             # fail-closed on an errored semantic config. No cfg (direct
             # callers) keeps the per-key defaults, as before.
             admitted = extract_llm.legacy_admissions(ledger, cfg or {})
+            # A fragmented batch can contain one row and retry it as a single.
+            per_row_budget = (extract_llm._batch_need_s(1) + extract_llm._MIN_CALL_S
+                              if extract_llm._BATCH_K >= 2 else extract_llm._MIN_CALL_S)
             result["extract_llm"] = extract_llm.run_pending(
-                # one single call, using the shared _MIN_CALL_S floor, fits per
-                # _MIN_CALL_S of budget — claiming more rows only burns
-                # claim/release commits and blocks the drainers from them.
-                # ponytail: assumes singles (_BATCH_K=0); revisit if
-                # batching comes back.
-                ledger, limit=max(1, int(budget // extract_llm._MIN_CALL_S)),
+                ledger, limit=max(1, int(budget // per_row_budget)),
                 budget_s=budget, admitted_ids=(
                     realtime if admitted is None else realtime & admitted),
                 # Only realtime arrivals use this slot, newest first.

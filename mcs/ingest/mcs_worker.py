@@ -174,6 +174,10 @@ def _execute(envelope: dict) -> dict:
     if operation == "cdp_eval":
         _loopback_url(envelope["url"], "ws")
         from mcs_cdp import evaluate
+        peer_profile = envelope.get("peer_profile")
+        if peer_profile is not None:
+            return {"value": evaluate(envelope["url"], envelope["expression"],
+                                      timeout, peer_profile=peer_profile)}
         return {"value": evaluate(envelope["url"], envelope["expression"], timeout)}
     raise WorkerError("url_not_allowed")
 

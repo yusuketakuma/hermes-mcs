@@ -220,7 +220,14 @@ def shadow_compare(db):
             continue
         # Validate pairing operands before counting a candidate as comparable.
         # Missing evidence stays unpaired; malformed evidence stays unknown.
-        # ponytail: one stored quote per fact; use full evidence refs if pairing needs them.
+        stored_evidence = candidate.get("evidence")
+        if stored_evidence is not None and (
+                not isinstance(stored_evidence, list) or any(
+                    not isinstance(e, dict) or not isinstance(e.get("evidence_id"), str)
+                    or not isinstance(e.get("quote"), str) for e in stored_evidence)):
+            counts["stale_or_invalid"] += 1
+            continue
+        evidence = {e["evidence_id"]: e["quote"] for e in stored_evidence or []}
         quotes = {}
         for fact in loop_facts:
             if isinstance(fact, dict) and fact.get("_v2_kind") == "request_pending" \
@@ -230,7 +237,14 @@ def shadow_compare(db):
                         or quote is not None and not isinstance(quote, str)):
                     quotes = None
                     break
-                quotes.setdefault(statement, []).append(quote)
+                refs = fact.get("evidence_refs", [])
+                if stored_evidence is not None and (
+                        not isinstance(refs, list) or any(
+                            not isinstance(ref, str) or ref not in evidence for ref in refs)):
+                    quotes = None
+                    break
+                quotes.setdefault(statement, []).extend(
+                    [evidence[ref] for ref in refs] if stored_evidence is not None else [quote])
         if quotes is None:
             counts["stale_or_invalid"] += 1
             continue
