@@ -748,3 +748,68 @@ def test_stamps_are_on_by_default_once_the_identity_is_configured(scene):
     assert not stamp_write.enabled({**cfg, "stamps": {**cfg["stamps"], "enabled": False}}, CLICKER)
     assert not stamp_write.enabled({**cfg, "stamps": {"operator": CLICKER}}, CLICKER)
     assert not stamp_write.enabled({**cfg, "stamps": {}}, CLICKER)
+
+
+def test_changed_own_stamp_refreshes_for_explicit_post_reselection(scene):
+    old = next(b for b in _press_buttons(scene) if b["label"].startswith("🙆"))
+    _republish_own(scene, "accepted")
+    result = _press(scene, "🙆", button=old)
+    assert result["error"] == "stamp_target_changed" and result["stamp_reselect"] is True
+    assert scene[3].posts == []
+    assert scene[0].db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?", (stamp_write.KIND,)).fetchone()[0] == 0
+    # The old press keeps its meaning; only a new explicit form selection can proceed.
+    assert _press(scene, "🙆", button=old, serial=2)["error"] == "stamp_target_changed"
+    token = _token_for(_spec(scene[0]), "stamp")
+    fresh = (*scene[:4], token)
+    command = _command(fresh, kind="viewed", mid=101)
+    assert _apply(fresh, command)["outcome"] == "applied"
+    assert _drain(fresh)["confirmed"] == 1
+    assert scene[3].posts == [(101, "viewed", False)]
+
+
+@pytest.mark.parametrize("alter", ["actor", "project", "expired"])
+def test_reselection_never_refreshes_unrelated_or_unauthorized_cards(scene, monkeypatch, alter):
+    import notify_cards
+    req = _command(scene)
+    if alter == "actor":
+        req["actor"] = "discord:untrusted"
+    elif alter == "project":
+        req["project_id"] = 2
+    else:
+        scene[0].db.execute("UPDATE notification_action_tokens SET expires_at=? WHERE token=?", (NOW - 1, req["token"]))
+        scene[0].db.commit()
+    monkeypatch.setattr(notify_cards, "rerender_message_cards", lambda *a, **k: pytest.fail("must not refresh"))
+    denied = {"outcome": "rejected", "error": "stamp_target_changed"}
+    assert stamp_write.refresh_rejected(scene[0], req, denied, scene[1], NOW) == denied
+    assert scene[3].posts == []
+
+
+def test_reselection_render_failure_preserves_the_original_refusal(scene, monkeypatch):
+    import notify_cards
+    def fail(*args, **kwargs):
+        raise OSError("synthetic private detail")
+    monkeypatch.setattr(notify_cards, "rerender_message_cards", fail)
+    req = _command(scene)
+    denied = {"outcome": "rejected", "error": "stamp_target_changed"}
+    result = stamp_write.refresh_rejected(scene[0], req, denied, scene[1], NOW)
+    assert result == {**denied, "rerender_error": "OSError"}
+    assert scene[3].posts == []
+
+
+def test_stale_source_refuses_without_retargeting_the_press(scene):
+    button = next(b for b in _press_buttons(scene) if b["label"].startswith("👀"))
+    scene[0].db.execute("UPDATE messages SET content_hash=? WHERE message_id=101", ("f" * 64,))
+    scene[0].db.commit()
+    result = _press(scene, "👀", button=button)
+    assert result["outcome"] == "rejected" and result["error"] == "stale_source"
+    assert result["stamp_reselect"] is True
+    assert scene[3].posts == []
+    assert scene[0].db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?", (stamp_write.KIND,)).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("code", ["stamp_result_unknown", "stamp_observation_required", "stamp_restore_hold"])
+def test_unresolved_stamp_state_never_requests_a_reselection_refresh(scene, monkeypatch, code):
+    import notify_cards
+    monkeypatch.setattr(notify_cards, "rerender_message_cards", lambda *a, **k: pytest.fail("must not refresh"))
+    result = {"outcome": "rejected", "error": code}
+    assert stamp_write.refresh_rejected(scene[0], _command(scene), result, scene[1], NOW) == result

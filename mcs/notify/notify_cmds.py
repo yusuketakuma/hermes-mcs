@@ -347,9 +347,12 @@ def dispatch(ledger, req, cfg, root, now=None):
         pressed = notify_actions.stamp_press(
             ledger, req, cfg, root, now,
             lambda command: dispatch(ledger, command, cfg, root, now))
-        if pressed is not None:
-            return pressed
-        return notify_actions.apply_notification(ledger, req, cfg, now)
+        out = pressed if pressed is not None else notify_actions.apply_notification(ledger, req, cfg, now)
+        if out.get("outcome") == "rejected" and out.get("error") in {
+                "stale_source", "source_changed", "stamp_target_changed"}:
+            import stamp_write
+            return stamp_write.refresh_rejected(ledger, req, out, cfg, now)
+        return out
     if op == "refresh":
         return notify_actions.apply_refresh(ledger, req, cfg, now)
     if op == "transport_begin":
@@ -396,6 +399,9 @@ def dispatch(ledger, req, cfg, root, now=None):
                     req.get("source_message_id") or req.get("message_id"))
             except Exception as e:  # noqa: BLE001 — best-effort refresh
                 out = {**out, "rerender_error": type(e).__name__}
+        if req.get("cmd") == "ops.mcs_reaction":
+            import stamp_write
+            return stamp_write.refresh_rejected(ledger, req, out, cfg, now)
         return out
     return {"outcome": "rejected", "error": "unknown_op"}
 

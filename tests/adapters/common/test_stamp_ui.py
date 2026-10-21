@@ -139,3 +139,16 @@ def test_preview_names_the_selected_post_not_only_the_card_target():
     assert target in root and target in reply
     tampered = {**_payload({"post": "p2", "op": "add:viewed", "reason": "x"}), "source_hash": "9" * 64}
     assert "投稿: 不明" in text.preview_text("stamp", tampered, markdown=False, form=FORM)
+
+
+@pytest.mark.parametrize("code", ["stale_source", "source_changed", "stamp_target_changed"])
+def test_stamp_refusal_explains_explicit_reselection_without_resending(code):
+    result = {"outcome": "rejected", "error": code, "stamp_reselect": True}
+    out = text.ja(result)
+    assert "別の投稿" in out and "対象の投稿とスタンプを選び直し" in out
+    assert "前の操作は再送しません" in out
+    terminal = text.ja({"stamp_state": "rejected", "stamp_error": code})
+    assert terminal == out
+    # Unrelated old-source operations and unknown stamp deliveries keep their own advice.
+    assert "別の投稿" not in text.ja({"outcome": "rejected", "error": code})
+    assert "別の投稿" not in text.ja({"stamp_state": "unknown"})
