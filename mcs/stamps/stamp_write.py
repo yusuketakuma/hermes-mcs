@@ -128,6 +128,42 @@ def form(db, card, cfg, actor, now, token) -> dict:
     return result
 
 
+def refresh_rejected(ledger, req, result, cfg, now=None):
+    """Refresh an authorized stale stamp card without replacing its rejected intent."""
+    if (result.get("outcome") != "rejected"
+            or result.get("error") not in {"stale_source", "source_changed", "stamp_target_changed"}
+            or not enabled(cfg, req.get("actor"))):
+        return result
+    try:
+        now = time.time() if now is None else now
+        db = ledger.db
+        tok = db.execute("SELECT * FROM notification_action_tokens WHERE token=?",
+                         (req.get("token"),)).fetchone()
+        if tok is None or tok["action"] not in {"stamp", "stamp_press"} or tok["expires_at"] <= now:
+            return result
+        card = notify_scope.card_row(db, tok["card_id"])
+        scope = notify_scope.delivery_scope(cfg)
+        if (card is None or card["kind"] != "thread" or card["delivery_state"] == "revoked"
+                or scope is None or not notify_scope.scope_matches(card, scope)
+                or req.get("card_id", card["card_id"]) != card["card_id"]
+                or req.get("project_id", card["project_id"]) != card["project_id"]):
+            return result
+        patient = db.execute("SELECT is_archived FROM patients WHERE project_id=?",
+                             (card["project_id"],)).fetchone()
+        mid = req.get("message_id", card["root_message_id"])
+        member = db.execute("SELECT 1 FROM messages WHERE message_id=? AND project_id=? "
+                            "AND (message_id=? OR parent_id=?)", (mid, card["project_id"],
+                            card["root_message_id"], card["root_message_id"])).fetchone()
+        if patient is None or patient[0] or member is None:
+            return result
+        import notify_cards
+        notify_cards.rerender_message_cards(ledger, cfg, card["project_id"], mid, now=now)
+        return {**result, "stamp_reselect": True}
+    except Exception as exc:
+        # Rendering is best effort; the original refusal remains authoritative.
+        return {**result, "rerender_error": type(exc).__name__}
+
+
 def validate_operation(req, base):
     fields = {"card_id", "token", "message_id", "source_hash", "form_hash", "expected_own",
               "reason", "mcs_user_id", "op", "reaction_type", "confirmed_at"}
@@ -529,7 +565,10 @@ def drain(ledger, adapter, cfg, root, deadline):
                 "SELECT content FROM artifacts WHERE artifact_id=?", (row["artifact_id"],)).fetchone()[0])
             try:
                 _publish_result(ledger, root, value)
-                if value.get("state") in {"confirmed", "unknown"}:
+                if value.get("state") == "rejected":
+                    refresh_rejected(ledger, value["request"],
+                                     {"outcome": "rejected", "error": value.get("error")}, cfg)
+                elif value.get("state") in {"confirmed", "unknown"}:
                     import notify_cards
                     notify_cards.rerender_message_cards(
                         ledger, cfg, value["request"]["project_id"], value["request"]["message_id"])

@@ -122,11 +122,17 @@ def ja(result: dict | None) -> str:
     if result.get("stamp_state") == "rejected":
         # The runner's rejection code says why; an unknown code keeps the generic line.
         reason = result.get("stamp_error") or result.get("error")
+        if reason in {"source_changed", "stale_source", "stamp_target_changed"}:
+            return ja({"outcome": "rejected", "error": reason, "stamp_reselect": True})
         known = str(reason).startswith("stamp_") and str(reason) in ERR_JA
         return STAMP_REJECTED_TEXT + ("\n" + ERR_JA[str(reason)] if known else "")
     if result.get("stamp_state") in STAMP_STATE_TEXT:
         return STAMP_STATE_TEXT[result["stamp_state"]]
     err = result.get("error")
+    if result.get("stamp_reselect"):
+        return (ERR_JA.get(str(err), STAMP_REJECTED_TEXT)
+                + "\n最新のカードで「別の投稿」（メニュー内にある場合があります）を開き、"
+                  "対象の投稿とスタンプを選び直してください。前の操作は再送しません。")
     if result.get("outcome") == "applied" or result.get("applied"):
         return _applied_text(result)
     if str(err).startswith("crash:"):
