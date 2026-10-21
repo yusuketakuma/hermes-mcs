@@ -1,0 +1,16 @@
+{
+  "category": "added",
+  "title": "保留中の通知部品と残っている送信仕様を件数で表示",
+  "summary": "health の notify.part_holds に、保留（held）・結果不明（unknown）の通知部品の件数を固定の理由ごとに、card_part_resolve_plan で解除の計画を作れる件数、DBに残る送信仕様と公開中の仕様ファイル、Slack の添付編集の確認待ちで残している仕様の件数を記録します。復旧に必要な作業量を事前に確認できます。",
+  "upgrade": "追加操作は不要です。読取りだけで、保留の解除・送信・削除は行いません。0.25秒を超えた場合は unknown とします。overall・state_reasons・監視通知の条件は変わりません。",
+  "details": [
+    "固定の理由: part_budget_exceeded / thread_cleanup_budget_exceeded / blank_part_unrepresentable / card_revoked / edit_target_unverified / edit_history_unverified。理由が記録されていないものは not_recorded、その他の値は unknown として数える。0件の理由も表示する。",
+    "card 部品は ops.card_resolve の対象なので数えない。",
+    "集計は notify_recovery.part_hold_report が持つ。",
+    "回帰: tests/notify/test_v129_recovery_outlook.py"
+  ],
+  "refs": [
+    "mcs/notify/notify_recovery.py",
+    "mcs/ingest/health_report.py"
+  ]
+}

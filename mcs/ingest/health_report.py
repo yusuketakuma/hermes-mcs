@@ -392,9 +392,9 @@ HEALTH_OBSERVATION_ITEMS = 10002  # 10,000 rows plus the two boundary checks
 HEALTH_OBSERVATION_ROW_BYTES = 2 * 1024 * 1024
 
 
-def bounded_health_read(db, read):
+def bounded_health_read(db, read, seconds=HEALTH_OBSERVATION_S):
     """Bound additive reads on the tick-owned connection; preserve its transaction."""
-    deadline = time.monotonic() + HEALTH_OBSERVATION_S
+    deadline = time.monotonic() + seconds
     items = 0
 
     def checkpoint():
@@ -409,7 +409,7 @@ def bounded_health_read(db, read):
     previous_wait = db.execute("PRAGMA busy_timeout").fetchone()[0]
     savepoint = False
     try:
-        db.execute(f"PRAGMA busy_timeout={min(previous_wait, int(HEALTH_OBSERVATION_S * 1000))}")
+        db.execute(f"PRAGMA busy_timeout={min(previous_wait, int(seconds * 1000))}")
         db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH,
                     min(previous_limit, HEALTH_OBSERVATION_ROW_BYTES))
         db.execute("SAVEPOINT mcs_health_observation")
@@ -451,6 +451,52 @@ def pending_health(db, now):
                              if breakdown["oldest_age_s"] is not None else
                              0 if breakdown["total"] == 0 else None),
             "pending_by_reason": {**breakdown, "status": "recorded", "observed_at": now}}
+
+
+PATIENT_CONTEXT_S = 2.0     # one bounded count per COVERAGE_COUNT_S, like coverage
+_PATIENT_CONTEXT_COUNTS = ("published", "active_patients", "extraction_complete",
+                           "focus_eligible", "focus_targets")
+
+
+def _observation_failure(exc) -> str:
+    """A read stopped by its bound is 'observation_limit'; any other failure is unavailable."""
+    limited = str(exc) == "observation_limit" or (
+        isinstance(exc, sqlite3.OperationalError) and "interrupt" in str(exc))
+    return "observation_limit" if limited else "observation_unavailable"
+
+
+def patient_context_health(db, checked_cfg, now, source) -> dict:
+    """Counts only, never patients: nightly lane outcomes, extraction-complete
+    and patient-focus counts, stored published contexts. A recorded block is
+    reused for COVERAGE_COUNT_S on the same db; a read past its bound is
+    'unknown', never zero."""
+    import extract_llm
+    import patient_nightly
+    prev = prev_health().get("patient_context")
+    if (isinstance(prev, dict) and prev.get("status") == "recorded"
+            and prev.get("source") == source and finite_number(prev.get("observed_at"))
+            and 0 <= now - prev["observed_at"] < COVERAGE_COUNT_S
+            and all(type(prev.get(k)) is int and prev[k] >= 0 for k in _PATIENT_CONTEXT_COUNTS)):
+        return prev
+    try:
+        counts = bounded_health_read(db, lambda _check: {
+            **patient_nightly.lane_metrics(db), **extract_llm.patient_progress_counts(db)},
+            seconds=PATIENT_CONTEXT_S)
+    except Exception as exc:
+        return {"status": "unknown", "observed_at": now, "reason": _observation_failure(exc)}
+    publication = patient_nightly.options(checked_cfg)["publication"] if checked_cfg is not None else None
+    return {**counts, "publication": publication, "status": "recorded",
+            "observed_at": now, "source": source}
+
+
+def part_holds_health(db, now) -> dict:
+    """Held/unknown notification parts by fixed reason and retained specs (counts only)."""
+    import notify_recovery
+    try:
+        report = bounded_health_read(db, lambda _check: notify_recovery.part_hold_report(db))
+    except Exception as exc:
+        return {"status": "unknown", "observed_at": now, "reason": _observation_failure(exc)}
+    return {**report, "status": "recorded", "observed_at": now}
 
 
 def build_health(db, result: dict, status: str,
@@ -684,7 +730,8 @@ def build_health(db, result: dict, status: str,
                    "held": held,
                    "held_reasons": held_reasons,
                    "retired_held": retired_held,
-                   "held_pinned_attachments": held_pins},
+                   "held_pinned_attachments": held_pins,
+                   "part_holds": part_holds_health(db, now)},
         "semantic_jobs": {"pending": sem["c"],
                           "oldest_age_s": (round(now - sem["o"], 1)
                                            if sem["o"] else 0)},
@@ -696,6 +743,7 @@ def build_health(db, result: dict, status: str,
         "cards": cards_health,
         "metadata_shadow": shadow_health,
         "attention": attention,
+        "patient_context": patient_context_health(db, cfg if checked else None, now, source),
         "stall_marks": stall_marks,
         **early_warnings(db, result, free_mb),
         "errors": list(result.get("errors") or []),
