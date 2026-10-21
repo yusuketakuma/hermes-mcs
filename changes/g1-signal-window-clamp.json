@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "承認済みの閾値の組合せでシグナルの対象期間が空になる問題を修正",
+  "summary": "承認済みの閾値で「追跡の待ち日数」が「対象とする投稿の最大日数」以上になると、薬変更後の後続記録・薬剤師への依頼の返答確認のシグナルが一件も出なくなり、「該当なし」と区別できませんでした。最大日数を待ち日数+1日まで自動で広げ、警告コードを表示します。",
+  "upgrade": "追加操作は不要です。既定値は変わりません。承認済みの閾値でこの組合せになっている場合だけ、評価結果とシグナル一覧に threshold_window_clamped:followup_max_age_d または threshold_window_clamped:fyi_max_age_d が出ます。承認記録そのものは書き換えません。",
+  "details": [
+    "対象の組: followup_days と followup_max_age_d、request_response_days と fyi_max_age_d。transition_lookback_d と transition_med_window_d は前後の窓で対象期間が空にならないため対象外。",
+    "回帰: tests/signals/test_mcs_signals.py"
+  ],
+  "refs": [
+    "mcs/signals/signal_policy.py",
+    "mcs/signals/mcs_signals.py"
+  ]
+}

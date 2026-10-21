@@ -171,6 +171,14 @@ def test_med_change_with_followup_not_flagged(led):
     assert _ev(led)["open"] == 0
 
 
+def test_med_change_deleted_later_post_is_not_followup(led):
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(led.db, 2, ts=NOW - 29 * DAY)
+    led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=2")
+    assert _ev(led)["open"] == 1
+
+
 def test_med_change_recent_mention_not_yet_candidate(led):
     _msg(led.db, 1, ts=NOW - 2 * DAY)    # window hasn't elapsed
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "start"}])
@@ -720,6 +728,26 @@ def test_policy_latest_wins_and_audited(led):
     c = json.loads(rows[-1]["content"])
     assert c["policy"] == {"req_age_days": 40}
     assert c["actor"] == "tester" and c["reason"] == "再調整"
+
+
+def test_policy_empty_window_is_clamped_and_reported(led):
+    """followup_days past followup_max_age_d would leave no mention old enough yet recent
+    enough — an empty window must not read as 'no signals'."""
+    assert _policy(led, {"followup_days": 30, "followup_max_age_d": 7,
+                         "request_response_days": 10, "fyi_max_age_d": 7})["outcome"] == "applied"
+    _msg(led.db, 1, ts=NOW - 30 * DAY - 3600)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    res = _ev(led)
+    codes = ["threshold_window_clamped:followup_max_age_d", "threshold_window_clamped:fyi_max_age_d"]
+    assert res["warnings"] == codes
+    assert _states(led.db)["med_change_no_followup:1:薬A"] == "open"
+    current = mcs_signals.current_open(led.db)
+    assert current["warnings"] == codes
+    assert current["thresholds"]["followup_max_age_d"] == 31 and current["thresholds"]["fyi_max_age_d"] == 11
+
+
+def test_default_policy_has_no_window_warning(led):
+    assert _ev(led)["warnings"] == [] and mcs_signals.current_open(led.db)["warnings"] == []
 
 
 def test_policy_validation(led):
@@ -1625,6 +1653,14 @@ def test_adherence_negations_do_not_flag(led):
     mids = sorted(m for s in items
                   for m in s["evidence"]["message_ids"])
     assert mids == [3, 4]
+
+
+@pytest.mark.parametrize("body,hit", [
+    ("飲み忘れは特にない", False), ("残薬が全くない", False), ("飲み忘れはほとんどないとのこと", False),
+    ("飲み忘れは今のところありません", False), ("飲み忘れもあまりない", False),
+    ("飲み忘れが特に多い", True), ("飲み忘れはほとんど毎日ある", True), ("残薬が全く減っていない", True)])
+def test_adherence_adverb_before_negation(body, hit):
+    assert bool(mcs_signals._adherence_phrases(body)) is hit
 
 
 def test_adherence_past_status_excluded(led):

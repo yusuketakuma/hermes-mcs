@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "削除された投稿を薬変更後の後続記録として数えないように",
+  "summary": "薬変更の言及の後に投稿があっても、その投稿が削除済みなら後続記録として扱いません。削除された投稿だけでシグナルが消えたり、統計で後続記録ありと数えられたりしなくなります。",
+  "upgrade": "追加操作は不要です。次回のシグナル評価から反映され、該当する薬変更のシグナルが新たに開く場合があります。",
+  "details": [
+    "med_change_no_followup シグナルと統計 med_change_followup の両方で、既存の自分の投稿確認と同じ body_state IS NOT 'deleted' 条件を使う。",
+    "回帰: tests/signals/test_mcs_signals.py, tests/views/test_mcs_stats.py"
+  ],
+  "refs": [
+    "mcs/signals/mcs_signals.py",
+    "mcs/views/mcs_stats.py"
+  ]
+}

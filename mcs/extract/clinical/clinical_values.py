@@ -143,6 +143,26 @@ _LAB_UNITS = {
     "kg": "kg", "g": "g", "cm": "cm", "m": "m",
     "pg/ml": "pg/mL", "ml/min/1.73m2": "mL/min/1.73m2",
 }
+# Units each named item is reported in (folded _LAB_UNITS keys); an item named in
+# _LAB_NAMES with any other unit (K in %, INR in kg) stays a candidate. No conversions.
+_LAB_ITEM_UNITS = {
+    "creatinine": ("mg/dl", "μmol/l"),
+    "egfr": ("ml/min/1.73m2",),
+    "potassium": ("meq/l", "mmol/l"),
+    "sodium": ("meq/l", "mmol/l"),
+    "hba1c": ("%",),
+    "inr": (),
+    "crp": ("mg/dl",),
+    "hemoglobin": ("g/dl",),
+    "albumin": ("g/dl",),
+    "ast": ("u/l",),
+    "alt": ("u/l",),
+    "bnp": ("pg/ml",),
+    "bun": ("mg/dl", "mmol/l"),
+    "weight": ("kg", "g"),
+    "height": ("cm", "m"),
+    "blood_glucose": ("mg/dl", "mmol/l"),
+}
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
@@ -217,6 +237,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     names = _LAB_NAMES[analyte] if analyte else (label,)
     pattern = (r"(?<![a-z0-9])(?:" + "|".join(re.escape(n) for n in names)
                + r")(?![a-z])(?:値|ハ|:|=)*")
+    allowed_units = _LAB_ITEM_UNITS.get(analyte, _LAB_UNITS)
     readings = []
     for match in re.finditer(pattern, quote):
         tail = quote[match.end():]
@@ -224,7 +245,8 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             result = re.match(r"([+-]?[0-9]+(?:\.[0-9]+)?)(?![0-9.])"
                               r"([a-zμ%/0-9.^²]*)", tail)
             if result and normalized_quantity_number(result[1]) == number:
-                if unit_key is None or result[2] == unit_key:
+                # an omitted unit must not bypass the item's units: the quoted one is checked too
+                if (result[2] == unit_key) if unit_key else (not result[2] or result[2] in allowed_units):
                     readings.append(match)
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
             remainder = tail[len(fold_surface(raw_value)):]
@@ -236,7 +258,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             if complete and (unit_key is None or (result_unit and result_unit[0] == unit_key)):
                 readings.append(match)
     supported = (len(readings) == 1 and not unverified
-                 and (unit_key is None or unit_key in _LAB_UNITS)
+                 and (unit_key is None or unit_key in allowed_units)
                  and (number is not None or not any(c.isdigit() for c in raw_value)))
     if supported and number is not None:
         matched_label = re.sub(r"(?:値|ハ|:|=)*$", "", readings[0].group())
