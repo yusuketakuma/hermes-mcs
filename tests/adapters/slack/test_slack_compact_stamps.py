@@ -27,13 +27,24 @@ def _stamps_spec():
     return spec
 
 
-def test_stamp_controls_show_six_distinct_visible_illustrations_and_names():
+def _stamp_control(blocks):
+    return next(b for b in blocks if b.get("block_id", "").startswith("mcs:stamps:"))
+
+
+def test_stamp_controls_expand_one_menu_with_six_distinct_names():
     blocks = render(_stamps_spec())[1]
-    buttons = [e for b in blocks if b["type"] == "actions"
-               for e in b["elements"] if e["type"] == "button"]
-    assert [b["text"]["text"] for b in buttons] == [
-        "👀見ました", "🙆承知 ✓", "🙏感謝", "👍いいね", "✅完了", "🗂 別の投稿"]
+    control = _stamp_control(blocks)
+    menu = control["accessory"]
+    assert control["text"]["text"] == "スタンプ · 表示中の最新投稿へ"
+    assert menu["type"] == "static_select"
+    assert menu["placeholder"]["text"] == "スタンプを押す…"
+    assert [o["text"]["text"] for o in menu["options"]] == [
+        "👀見ました", "🙆承知 ✓（取消）", "🙏感謝", "👍いいね", "✅完了", "🗂 別の投稿"]
+    assert all(o["text"]["type"] == "plain_text" for o in menu["options"])
+    assert "initial_option" not in menu
     assert not any(b["type"] == "context_actions" for b in blocks)
+    assert not any(e["type"] == "button" for b in blocks if b["type"] == "actions"
+                   for e in b["elements"])
 
 
 def _pair_action(token=TOKEN, *, second=False):
@@ -51,25 +62,42 @@ def _origin(body, action):
 def test_compact_controls_preserve_all_tokens_and_observed_own_state():
     spec = _stamps_spec()
     _, blocks = render(spec)
-    menu, compact = [b for b in blocks if b["type"] == "actions"]
-    select, = menu["elements"]
-    assert select["type"] == "static_select"
+    ordinary, = [b for b in blocks if b["type"] == "actions"]
+    select, = ordinary["elements"]
     assert [o["value"] for o in select["options"]] == ["b" * 32, "c" * 32]
-    buttons = compact["elements"]
-    assert len(buttons) == 6 and all(b["type"] == "button" for b in buttons)
-    assert [b["value"] for b in buttons] == [f"{i:032x}" for i in range(1, 6)] + ["d" * 32]
-    assert all(b["text"]["type"] == "plain_text" and 0 < len(b["accessibility_label"]) <= 75
-               for b in buttons)
-    assert "取消" in buttons[1]["accessibility_label"]
-    assert buttons[1]["style"] == "primary" and "✓" in buttons[1]["text"]["text"]
-    assert "見ました" in buttons[0]["accessibility_label"]
+    control = _stamp_control(blocks)
+    menu = control["accessory"]
+    assert [o["value"] for o in menu["options"]] == [f"{i:032x}" for i in range(1, 6)] + ["d" * 32]
     body, _ = click()
-    for button in buttons:
-        origin = _origin(body, button)
-        assert origin and origin["token"] == button["value"]
+    for option in menu["options"]:
+        origin = _origin(body, {**menu, "selected_option": option})
+        assert origin and origin["token"] == option["value"]
+    assert blocks.index(control) < blocks.index(ordinary)
     spec["render_rev"] += 1
-    newer, = [b for b in render(spec)[1] if b.get("block_id", "").startswith("mcs:stamps:")]
-    assert compact["block_id"] != newer["block_id"]
+    assert control["block_id"] != _stamp_control(render(spec)[1])["block_id"]
+
+
+def test_observed_stamps_and_send_menu_share_one_area_after_the_originals():
+    spec = _stamps_spec()
+    spec["parts"]["containers"] += [
+        {"type": "text", "rule": True, "text": "10-01 09:00 合成の根元投稿"},
+        {"type": "text", "text": "合成要点1"},
+        {"type": "text", "rule": True, "text": "10-01 09:10 合成の返信"},
+        {"type": "text", "text": "合成要点2"}]
+    spec["parts"]["slack"] = {"face_posts": [
+        {"at": 3, "original": "合成本文1", "stamps": ["スタンプ 👀2 合成甲・合成乙 · 観測 10:00"]},
+        {"at": 5, "original": "合成本文2", "stamps": ["スタンプ 🙆1 · 自分 🙆 · 再取得失敗"]}]}
+    blocks = render(spec)[1]
+    fold_end = max(i for i, b in enumerate(blocks) if b["type"] == "container")
+    stamp_at = [i for i, b in enumerate(blocks) if b["type"] == "context"
+                and "スタンプ" in b["elements"][0]["text"]]
+    control_at = blocks.index(_stamp_control(blocks))
+    assert len(stamp_at) == 2 and fold_end < min(stamp_at) < max(stamp_at) < control_at
+    assert "合成の根元投稿" in blocks[stamp_at[0]]["elements"][0]["text"]
+    assert "合成の返信" in blocks[stamp_at[1]]["elements"][0]["text"]
+    assert "再取得失敗" in blocks[stamp_at[1]]["elements"][0]["text"]
+    assert blocks[control_at + 1]["type"] == "divider"
+
 
 
 @pytest.mark.parametrize("without", ["form", "one_stamp"])
@@ -81,7 +109,7 @@ def test_incomplete_older_specs_keep_every_action(without):
         spec["parts"]["action_rows"][1].pop()
     _, blocks = render(spec)
     assert not any(b["type"] == "context_actions" for b in blocks)
-    controls = [e for b in blocks if b["type"] == "actions" for e in b["elements"]]
+    controls = [e for b in blocks for e in (b.get("elements", []) if b["type"] == "actions" else [b["accessory"]] if "accessory" in b else [])]
     actual = [o["value"] for e in controls if e["type"] == "static_select" for o in e["options"]]
     actual += [e["value"] for e in controls if e["type"] == "button"]
     expected = [e["token"] for row in spec["parts"]["action_rows"] for e in row]
@@ -110,13 +138,15 @@ def test_compact_click_keeps_native_origin_checks(field, value):
     assert _origin({**body, field: value}, _pair_action()) is None
 
 
-@pytest.mark.parametrize("wire", ["legacy_positive", "legacy_negative", "button"])
+@pytest.mark.parametrize("wire", ["legacy_positive", "legacy_negative", "button", "menu"])
 def test_stamp_click_queues_existing_command_with_click_time(tmp_path, wire):
     async def run():
         actions, app, _, dirs = fixture(tmp_path, kind="stamp_press")
         body, _ = click()
         action = ({"type": "button", "action_id": "mcs:a:" + TOKEN, "value": TOKEN}
-                  if wire == "button" else _pair_action(second=wire == "legacy_negative"))
+                  if wire == "button" else {"type": "static_select", "action_id": "mcs:stamps-menu",
+                                         "selected_option": {"value": TOKEN}} if wire == "menu"
+                  else _pair_action(second=wire == "legacy_negative"))
         handler, = [fn for pattern, fn in app.actions.items()
                     if re.fullmatch(pattern, action["action_id"])]
         await handler(ack, body, action)
@@ -130,13 +160,17 @@ def test_stamp_click_queues_existing_command_with_click_time(tmp_path, wire):
 
 
 @pytest.mark.parametrize("denial", ["wrong_post", "wrong_patient", "wrong_kind", "unknown_token"])
-def test_compact_click_cannot_bypass_the_pinned_registry(tmp_path, denial):
+@pytest.mark.parametrize("wire", ["pair", "menu"])
+def test_compact_click_cannot_bypass_the_pinned_registry(tmp_path, denial, wire):
     async def run():
         actions, _, _, dirs = fixture(
             tmp_path, kind="ack" if denial == "wrong_kind" else "stamp_press",
             project_ids={999} if denial == "wrong_patient" else {123})
         body, _ = click(ts="1790000000.000002" if denial == "wrong_post" else "1790000000.000001")
-        await actions._action(ack, body, _pair_action("d" * 32 if denial == "unknown_token" else TOKEN))
+        token = "d" * 32 if denial == "unknown_token" else TOKEN
+        action = (_pair_action(token) if wire == "pair" else
+                  {"type": "static_select", "action_id": "mcs:stamps-menu", "selected_option": {"value": token}})
+        await actions._action(ack, body, action)
         assert not list(Path(dirs["cmd_int"]).glob("*.json"))
     asyncio.run(run())
 
@@ -191,12 +225,12 @@ def test_visible_controls_keep_the_target_and_never_fallback(op, thread, rejecte
     assert len(calls) == 1 and calls[0][0] == op
     payload = calls[0][1]
     assert not any(b["type"] == "context_actions" for b in payload["blocks"])
-    controls = [e for b in payload["blocks"] if b["type"] == "actions" for e in b["elements"]]
-    menu, = [e for e in controls if e["type"] == "static_select"]
+    ordinary, = [b for b in payload["blocks"] if b["type"] == "actions"]
+    menu, = ordinary["elements"]
     assert [o["value"] for o in menu["options"]] == ["b" * 32, "c" * 32]
-    stamps = [e for e in controls if e["type"] == "button"]
-    assert [e["value"] for e in stamps] == [f"{i:032x}" for i in range(1, 6)] + ["d" * 32]
-    assert stamps[1]["style"] == "primary"
+    stamps = _stamp_control(payload["blocks"])["accessory"]["options"]
+    assert [o["value"] for o in stamps] == [f"{i:032x}" for i in range(1, 6)] + ["d" * 32]
+    assert "取消" in stamps[1]["text"]["text"]
     assert payload["blocks"] == render(_stamps_spec())[1]
     if op == "update":
         assert payload["ts"] == "1790000000.000001"
@@ -244,3 +278,10 @@ def test_visible_controls_that_exceed_block_budget_are_not_sent(monkeypatch):
 def test_card_attempts_propagate_cancellation(op):
     with pytest.raises(asyncio.CancelledError):
         _deliver_card([asyncio.CancelledError()], op=op)
+
+
+@pytest.mark.parametrize("option", [None, {}, {"value": "bad"}, {"value": None}, "bad"])
+def test_stamp_menu_rejects_malformed_selection(option):
+    body, _ = click()
+    assert _origin(body, {"type": "static_select", "action_id": "mcs:stamps-menu",
+                          "selected_option": option}) is None

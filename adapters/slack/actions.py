@@ -15,11 +15,11 @@ from adapters.common.forms import (MODAL_ACTIONS, MODAL_TITLES, VIEW_FORMS,
 from adapters.common.text import (ERR_JA, RECEIPT_TEXT, SEARCH_EMPTY, STAMP_FORM_PENDING,
                                  ja, preview_text, followup_waiting, split_body,
                                  view_answer, view_scope_ok)
-from .cards import LINK_ACTION, MENU_ACTION, STAMP_PAIR_PREFIX
+from .cards import LINK_ACTION, MENU_ACTION, STAMP_MENU_ACTION, STAMP_PAIR_PREFIX
 from .presentation import text_sections, context_list_blocks, render_parts
 
 _LINK = re.compile("^" + re.escape(LINK_ACTION) + "$")
-_MENU = re.compile("^" + re.escape(MENU_ACTION) + "$")
+_MENU = re.compile("^(?:" + "|".join(map(re.escape, (MENU_ACTION, STAMP_MENU_ACTION))) + ")$")
 _STAMP_PAIR = re.compile("^" + re.escape(STAMP_PAIR_PREFIX) + r"([0-9a-f]{32}):([0-9a-f]{32})$")
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$|" + _STAMP_PAIR.pattern)
 _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
@@ -145,7 +145,9 @@ def parse_action_origin(body, action, *, team_id, application_id, channel_id,
         # the compact 操作 menu: the chosen option carries the same token
         picked = action.get("selected_option")
         token = picked.get("value") if isinstance(picked, dict) else None
-        expected = MENU_ACTION
+        expected = action.get("action_id")
+        if expected not in (MENU_ACTION, STAMP_MENU_ACTION):
+            return None
     elif action.get("type") == "feedback_buttons":
         expected = action.get("action_id")
         pair = _STAMP_PAIR.fullmatch(expected) if isinstance(expected, str) else None
@@ -439,8 +441,9 @@ class Actions:
             await self._say(origin["channel_id"], user, "権限がありません。")
             return
         kind = ctx["action"]
-        if kind not in _KINDS or (action.get("type") == "feedback_buttons"
-                                  and kind not in ("stamp", "stamp_press")):
+        stamp_only = (action.get("type") == "feedback_buttons"
+                      or action.get("action_id") == STAMP_MENU_ACTION)
+        if kind not in _KINDS or (stamp_only and kind not in ("stamp", "stamp_press")):
             await self._say(origin["channel_id"], user, "操作できません。")
             return
         clicker = await self._clicker_name(body["user"]) \

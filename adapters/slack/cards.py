@@ -11,6 +11,7 @@ from .presentation import BLOCK_MAX, CONTEXT_MAX, render_parts, safe_url
 SCHEMA = "mcs-card-render/v2"
 LINK_ACTION = "mcs:link"
 MENU_ACTION = "mcs:menu"
+STAMP_MENU_ACTION = "mcs:stamps-menu"
 STAMP_PAIR_PREFIX = "mcs:stamp-pair:"
 
 
@@ -32,9 +33,6 @@ def validate(spec):
 def render(spec, names=None):
     """Render visible containers/footer without serializing private context."""
     validate(spec)
-    blocks = render_parts(spec["parts"], names,
-                          spec["parts"].get("mentions") == "silent",
-                          card_kind=spec.get("kind"))
     controls = plan_controls(spec["parts"])
     for row in spec["parts"].get("action_rows") or []:
         for button in row:
@@ -43,6 +41,26 @@ def render(spec, names=None):
     stamp_form = controls.stamp_picker
     menu = controls.menu
     links, stamps = controls.links, controls.stamps
+    stamp_control = None
+    if stamps:
+        options = [{"text": {"type": "plain_text", "text":
+                              b["label"] + ("（取消）" if b.get("style") == "primary" else "")},
+                    "value": b["token"]} for b in stamps]
+        if stamp_form:
+            options.append({"text": {"type": "plain_text", "text": "🗂 " + STAMP_PICKER_LABEL},
+                            "value": stamp_form["token"]})
+        if any(len(o["text"]["text"]) > 75 for o in options):
+            raise ValueError("slack_button_label")
+        stamp_control = {
+            "type": "section",
+            "block_id": f"mcs:stamps:{spec['delivery_id']}:{spec['render_rev']}",
+            "text": {"type": "plain_text", "text": "スタンプ · 表示中の最新投稿へ"},
+            "accessory": {"type": "static_select", "action_id": STAMP_MENU_ACTION,
+                          "placeholder": {"type": "plain_text", "text": "スタンプを押す…"},
+                          "options": options}}
+    blocks = render_parts(spec["parts"], names,
+                          spec["parts"].get("mentions") == "silent",
+                          card_kind=spec.get("kind"), stamp_control=stamp_control)
     elements = []
     if menu:
         elements.append({
@@ -54,23 +72,6 @@ def render(spec, names=None):
         if blocks:
             blocks.append({"type": "divider"})
         blocks.append({"type": "actions", "elements": elements})
-    if stamps:
-        stamp_buttons = []
-        for button in stamps + ((stamp_form,) if stamp_form else ()):
-            own = button.get("style") == "primary" and button is not stamp_form
-            label = "🗂 " + STAMP_PICKER_LABEL if button is stamp_form else button["label"]
-            accessible = "投稿を選んでスタンプを操作" if button is stamp_form else (
-                ("取消: " if own else "スタンプ: ") + button["label"])
-            if len(accessible) > 75:
-                raise ValueError("slack_button_label")
-            stamp_buttons.append({"type": "button", "text": {"type": "plain_text", "text": label},
-                                  "action_id": "mcs:a:" + button["token"],
-                                  "value": button["token"], "accessibility_label": accessible,
-                                  **({"style": "primary"} if own else {})})
-        # Feedback buttons show fixed thumbs on mobile, regardless of their text.
-        blocks.append({"type": "actions",
-                       "block_id": f"mcs:stamps:{spec['delivery_id']}:{spec['render_rev']}",
-                       "elements": stamp_buttons})
     for button in links:
         # a text link, not a button — it costs no row on mobile
         url = button["url"]

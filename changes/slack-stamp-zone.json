@@ -1,0 +1,16 @@
+{
+  "summary": "Slackのスタンプ表示と送信メニューを同じエリアにまとめます。",
+  "details": [
+    "投稿ごとの件数・押した人・自分の状態をカード下部へ集約し、複数投稿の出典を保持します。",
+    "スタンプを押すメニューを開いて種類を選ぶ2段階に変更。自分の種類は取消と明示し、別の投稿を選ぶ既存フォームも維持します。"
+  ],
+  "upgrade": "gatewayの再起動後、新規または更新されるカードから反映します。既存カードを一括再送しません。Discord・LINE WORKSの操作と送信・取消の安全条件は変わりません。",
+  "category": "changed",
+  "title": "Slackのスタンプ表示と送信を同じエリアへ集約",
+  "refs": [
+    "adapters/slack/cards.py",
+    "adapters/slack/presentation.py",
+    "adapters/slack/actions.py",
+    "mcs/notify/presentation/present_slack.py"
+  ]
+}

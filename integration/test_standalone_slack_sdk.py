@@ -287,8 +287,9 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
                 posted_blocks = json.loads(posted_blocks)
             compact, = [block for block in posted_blocks
                          if block.get("block_id", "").startswith("mcs:stamps:")]
-            assert len(compact["elements"]) == 6
-            assert all(button["type"] == "button" for button in compact["elements"])
+            select = compact["accessory"]
+            assert len(select["options"]) == 6
+            assert select["type"] == "static_select"
             async def stamp_form(request_id, timeout):
                 return {"outcome": "applied", "modal": True, "form": {
                     "card_id": 7, "token": "d" * 32, "mcs_user_id": 501,
@@ -299,9 +300,10 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
                                    "type": None, "state": "observed", "observed_at": 1.0}}]}}
             monkeypatch.setattr(actions, "_wait_result", stamp_form)
             expected = set()
-            for button in compact["elements"]:
-                expected.add(button["value"])
-                await dispatch({**body, "actions": [button]})
+            for option in select["options"]:
+                expected.add(option["value"])
+                await dispatch({**body, "actions": [{"type": "static_select",
+                    "action_id": select["action_id"], "selected_option": option}]})
             queued = [json.loads(path.read_text()) for path in Path(dirs["cmd_int"]).glob("*.json")]
             stamp_commands = [item for item in queued if item.get("token") in expected]
             assert len(queued) == 8 and len(stamp_commands) == 6

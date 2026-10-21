@@ -475,7 +475,8 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
         # plain text: actor names never become Slack mentions
         assert len(stamp_context) == 3 and all(e["type"] == "plain_text" for e in stamp_context)
         assert all("<@" not in e["text"] for e in stamp_context)
-        assert "合成他者101" in stamp_context[1]["text"] and stamp_context[2]["text"] == "スタンプ 👀3 · 自分 2投稿"
+        assert stamp_context[0]["text"] == "スタンプ 👀3 · 自分 2投稿"
+        assert "合成他者100" in stamp_context[1]["text"] and "合成他者101" in stamp_context[2]["text"]
     elif platform == "discord":
         view = discord_cards.build_view(spec)
         assert any("-# スタンプ 👀3" in getattr(child, "content", "")

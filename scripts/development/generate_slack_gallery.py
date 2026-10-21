@@ -125,19 +125,16 @@ class Screen:
         self.line(x, y - 12, x + width, y - 12, "#d5dcd7")
         return y + 16
 
-    def actions(self, x, y, stamp_row=False):
-        """One menu and named stamp buttons; MCSで開く remains a text link."""
+    def actions(self, x, y):
+        """Ordinary actions stay separate from the stamp area's select."""
         self.button(x, y, "操作を選ぶ… ▾", 173)
-        if stamp_row:
-            for i, label in enumerate(("👀見ました", "🙆承知 ✓", "🙏感謝", "👍いいね", "✅完了", "🗂 別の投稿")):
-                self.button(x, y + 52 + i * 48, label, 250, primary=i == 1)
-        self.text(x, y + (370 if stamp_row else 76), "MCSで開く", 18, "#1264a3")
-        return y + (394 if stamp_row else 100)
+        self.text(x, y + 76, "MCSで開く", 18, "#1264a3")
+        return y + 100
 
-    def card(self, x, y, width=770, full=False):
+    def card(self, x, y, width=770, full=False, stamp_controls=False):
         """Card zones top to bottom: patient title, meta line, per post a
-        small time/sender line over its summary, its stamp row and the
-        source text folded behind a collapsed 原文（N字） block, state."""
+        small time/sender line over its summary and folded source text,
+        then one area for observed stamps and their sending menu."""
         y = self.paragraph(x, y, HEADING, width, 21, INK, True)
         y = self.paragraph(x, y - 4, META.format(n=2 if full else 1), width, 17, MUTED)
         if full:
@@ -147,11 +144,18 @@ class Screen:
             y = self.paragraph(x, y, sender, width, 15, MUTED)
             for bullet in bullets:
                 y = self.paragraph(x, y - 2, "・" + bullet, width, 18)
-            y = self.paragraph(x, y - 2, stamps, width, 15, GREEN)
             y = self.fold(x, y, width, 16)
         y = self.rule(x, y, width)
         for line in STATE if full else ("📝 タスク 1件 · スタンプ 👀2 🙆1",):
             y = self.paragraph(x, y - 2, line, width, 17, MUTED)
+        for (sender, _), stamps in zip(POSTS[:2 if full else 1], STAMPS):
+            if full:
+                y = self.paragraph(x, y - 2, sender, width, 15, MUTED)
+            y = self.paragraph(x, y - 2, stamps, width, 15, GREEN)
+        if stamp_controls:
+            y = self.paragraph(x, y + 4, "スタンプ · 表示中の最新投稿へ", width, 17, INK)
+            self.button(x, y, "スタンプを押す… ▾", 250)
+            y += 70
         return self.rule(x, y, width)
 
     def fold(self, x, y, width, size=17):
@@ -179,28 +183,24 @@ def overview():
 
 
 def notification():
-    s = Screen(2, "通知カードから、確認と担当を共有。", "上から概要・投稿ごとの要約・スタンプ・原文・状態・操作の順。区切り線で分かれます。", 1060)
+    s = Screen(2, "通知カードから、確認と担当を共有。", "要約と原文の下に、受信したスタンプを集約。複数投稿は対象を区別して表示します。", 1180)
     x, y = s.app()
     s.actions(x, s.card(x, y, full=True))
     return s.finish()
 
 
 def menu():
-    s = Screen(3, "スタンプは1回で、ほかの操作はメニューから。", "絵文字と名前で操作を区別。✓ をもう一度押すと取消。配置は端末により異なります。", 1400)
+    s = Screen(3, "スタンプの確認も送信も、同じエリアで。", "① メニューを開く → ② スタンプを選ぶ。✓（取消）を選ぶと自分の分を取り消します。", 1250)
     x, y = s.app()
-    y = s.card(x, y)
-    s.actions(x, y, stamp_row=True)
-    # notify_cards._action_rows order; the card has open tasks (📝 タスク 1件)
-    labels = ("確認する", "担当する", "タスク作成", "タスク一覧", "患者の記録まとめ", "この患者を検索", "誤りを報告")
-    mx, my = x + 378, y
-    s.text(mx, my - 15, "メニューの項目", 16, MUTED)
-    s.rect(mx, my, 300, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
+    y = s.card(x, y, stamp_controls=True)
+    s.actions(x, y)
+    labels = ("👀 見ました", "🙆 承知 ✓（取消）", "🙏 感謝", "👍 いいね", "✅ 完了", "🗂 別の投稿")
+    mx, my = x + 405, y - 95
+    s.text(mx, my - 15, "開いたスタンプメニュー（説明図）", 15, MUTED)
+    s.rect(mx, my, 330, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
     for i, label in enumerate(labels):
-        yy = my + 12 + i * 42
-        if i == 0:
-            s.rect(mx + 7, yy - 2, 286, 38, "#e5f3ec", 4)
-        s.text(mx + 24, yy + 24, label, 19, GREEN if i == 0 else INK, i == 0)
-    s.text(x, 1290, "全体の新着集計・自分のタスク・未確認一覧は、集計カードのメニューへ。", 17, MUTED)
+        s.text(mx + 18, my + 36 + i * 42, label, 19, GREEN if i == 1 else INK)
+    s.text(x, 1130, "「別の投稿」は既存の対象選択・確認画面へ進みます。スタンプは5種類。", 17, MUTED)
     return s.finish()
 
 

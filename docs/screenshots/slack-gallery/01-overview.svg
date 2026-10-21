@@ -34,12 +34,12 @@
 <text x="236" y="430.40000000000003" font-size="18" fill="#202124">・依頼: 確認依頼:次回訪問時に残薬を確認(期</text>
 <text x="236" y="459.20000000000005" font-size="18" fill="#202124">限:次回訪問時)</text>
 <text x="236" y="486.00000000000006" font-size="18" fill="#202124">・区分: 依頼・添付</text>
-<text x="236" y="512.8000000000001" font-size="15" fill="#087f5b">スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 </text>
-<text x="236" y="536.8000000000001" font-size="15" fill="#087f5b">10:00時点</text>
-<rect x="228" y="542.8000000000001" width="413" height="38" rx="8" fill="#f3f6f4" stroke="#dce2dd"/>
-<text x="236" y="564.8000000000001" font-size="16" fill="#66716f">▸ 原文（35字）</text>
-<path d="M236 586.4000000000001 L633 586.4000000000001" stroke="#d5dcd7" fill="none"/>
-<text x="236" y="612.4000000000001" font-size="17" fill="#66716f">📝 タスク 1件 · スタンプ 👀2 🙆1</text>
+<rect x="228" y="496.80000000000007" width="413" height="38" rx="8" fill="#f3f6f4" stroke="#dce2dd"/>
+<text x="236" y="518.8000000000001" font-size="16" fill="#66716f">▸ 原文（35字）</text>
+<path d="M236 540.4000000000001 L633 540.4000000000001" stroke="#d5dcd7" fill="none"/>
+<text x="236" y="566.4000000000001" font-size="17" fill="#66716f">📝 タスク 1件 · スタンプ 👀2 🙆1</text>
+<text x="236" y="591.6000000000001" font-size="15" fill="#087f5b">スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 </text>
+<text x="236" y="615.6000000000001" font-size="15" fill="#087f5b">10:00時点</text>
 <path d="M236 627.6000000000001 L633 627.6000000000001" stroke="#d5dcd7" fill="none"/>
 <rect x="236" y="655.6000000000001" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
 <text x="250" y="682.6000000000001" font-size="18" fill="#202124">操作を選ぶ… ▾</text>

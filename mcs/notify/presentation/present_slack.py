@@ -79,10 +79,16 @@ def face_block_count(parts, face_posts=()) -> int:
                     else item["text"])
             n += _count(text, _SECTION_MAX) + (kind == "quote")
     footer = [i for i in parts.get("footer") or [] if i["type"] == "text"]
-    n += bool(footer) + sum(_count(i["text"], _CONTEXT_MAX) for i in footer)
     buttons = [b for row in parts.get("action_rows") or [] for b in row]
+    has_stamps = any(b.get("id") == "stamp_press" for b in buttons)
+    n += bool(footer or has_stamps or any(p["stamps"] for p in face_posts))
+    n += sum(_count(i["text"], _CONTEXT_MAX) for i in footer)
     n += 2 * any(b.get("ui") != "link" for b in buttons)
+    n += has_stamps                              # stamp-area select section
     n += sum(b.get("ui") == "link" for b in buttons)
     for post in face_posts:
-        n += sum(_count(s, _CONTEXT_MAX) for s in post["stamps"]) + 1 + _count(post["original"], _SECTION_MAX)
+        if post["stamps"]:
+            lines = [parts["containers"][post["at"]]["text"]] if len(face_posts) > 1 else []
+            n += _count("\n".join(lines + post["stamps"]), _CONTEXT_MAX)
+        n += 1 + _count(post["original"], _SECTION_MAX)
     return n

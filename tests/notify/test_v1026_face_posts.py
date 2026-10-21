@@ -31,7 +31,7 @@ def _spec(led):
     return json.loads(_latest_render(led)["spec_json"])
 
 
-def test_face_shows_stamps_and_folded_original_under_each_post(led, monkeypatch):
+def test_face_groups_stamps_below_all_folded_originals(led, monkeypatch):
     monkeypatch.setattr(notify_render, "thread_stamp_row", lambda *_a, **_k: STAMP)
     _seed_thread(led, mids=(100, 101))
     with led.db:
@@ -48,8 +48,11 @@ def test_face_shows_stamps_and_folded_original_under_each_post(led, monkeypatch)
     blocks = slack_presentation.render_parts(spec["parts"], card_kind="thread")
     folds = [i for i, b in enumerate(blocks) if b.get("type") == "container"]
     assert [b["title"]["text"] for b in (blocks[i] for i in folds)] == ["原文（6字）", "原文（7字）"]
-    assert all(blocks[i - 1]["type"] == "context" and STAMP in json.dumps(blocks[i - 1], ensure_ascii=False)
-               for i in folds)
+    stamp_at = [i for i, b in enumerate(blocks) if b["type"] == "context"
+                and STAMP in json.dumps(b, ensure_ascii=False)]
+    assert len(stamp_at) == 2 and min(stamp_at) > max(folds)
+    assert all(spec["parts"]["containers"][p["at"]]["text"]
+               in blocks[i]["elements"][0]["text"] for p, i in zip(posts, stamp_at))
     assert blocks[folds[0]]["child_blocks"][0]["text"]["text"] == "合成の元投稿"
     assert len(blocks) <= present_slack.face_block_count(spec["parts"], posts) <= present_slack.BLOCK_MAX
     # the reply's own line and summary sit between the two folds
@@ -108,6 +111,7 @@ def test_observed_zero_stamps_gives_an_empty_row_and_the_fold_follows_the_summar
 
 
 def test_block_cap_sends_the_rest_of_the_page_to_the_thread(led, monkeypatch):
+    monkeypatch.setattr(present_slack, "BLOCK_MAX", 40)
     monkeypatch.setattr(notify_render, "thread_stamp_row", lambda *_a, **_k: "a\nb\nc\nd")
     mids = tuple(range(100, 108))
     _seed_thread(led, mids=mids)

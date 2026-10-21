@@ -155,7 +155,7 @@ def context_list_blocks(view: dict, allowed) -> list | None:
         blocks += contexts(notes)
     return blocks if len(blocks) <= _ANSWER_BLOCKS else None
 
-def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
+def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=None) -> list:
     """Visible containers/footer of the shared display model as Block
     Kit — used for cards and the clicker-only 📊 answer. On a thread
     card each post's time/sender line (a ``rule`` text) is a context
@@ -166,10 +166,8 @@ def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
     pending = None
 
     def close_post():
-        # the post's stamps and folded original follow its summary
+        # Keep source text by its summary; observed stamps share the control area.
         if pending:
-            for line in pending["stamps"]:
-                blocks.extend(contexts(line))
             blocks.append(_folded_original(pending["original"]))
 
     for index, item in enumerate(parts["containers"]):
@@ -203,11 +201,18 @@ def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
     close_post()
 
     footer = [i for i in parts.get("footer") or [] if i["type"] == "text"]
-    if footer and blocks:
+    stamp_posts = [p for p in face.values() if p["stamps"]]
+    if (footer or stamp_posts or stamp_control) and blocks:
         blocks.append(dict(_DIVIDER))
     for item in footer:
         text = _names(item["text"], names) if silent else item["text"]
         blocks.extend(_link_context(text) or contexts(text))
+    for post in stamp_posts:
+        # A multi-post card must retain which post each observed reaction belongs to.
+        lines = [parts["containers"][post["at"]]["text"]] if len(face) > 1 else []
+        blocks.extend(contexts("\n".join(lines + post["stamps"])))
+    if stamp_control:
+        blocks.append(stamp_control)
     return blocks
 
 def _link_context(text):
