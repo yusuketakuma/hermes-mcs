@@ -7,7 +7,14 @@
     "補完状態の解釈をextract_qualityへ集約し、各入口の文脈・検証・世代・保留条件は保持しました。",
     "共通判定を抽出元コードとセマンティック候補の変更検知に含め、監査コホートの定義識別子にも結び付けています。",
     "薬剤履歴は同じsnapshotで読み取った辞書の進捗を投稿間で共有し、投稿ごとの重複読取りを省きました。",
-    "スケジューラの保存種別を既存のsemantic_policyへ集約し、観測処理が定数だけのためにworker全体を読み込む依存を解消しました。保存種別の値と状態更新の所有者は変えていません。"
+    "スケジューラの保存種別を既存のsemantic_policyへ集約し、観測処理が定数だけのためにworker全体を読み込む依存を解消しました。保存種別の値と状態更新の所有者は変えていません。",
+    "実行経路で使わないextract_llm.text_chunksの再公開を削除し、内部テスト5箇所を正本mcs_util.text_chunksへ移しました。入力・シナリオ・assertionは変えていません。"
   ],
-  "refs": ["mcs/extract/llm/extract_quality.py", "mcs/medications/drug_timeline.py", "mcs/patients/patient_state_context.py", "mcs/views/extraction_audit.py", "mcs/semantic/semantic_policy.py"]
+  "refs": [
+    "mcs/extract/llm/extract_quality.py",
+    "mcs/medications/drug_timeline.py",
+    "mcs/patients/patient_state_context.py",
+    "mcs/views/extraction_audit.py",
+    "mcs/semantic/semantic_policy.py"
+  ]
 }

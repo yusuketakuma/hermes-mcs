@@ -86,7 +86,7 @@ from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_
                          current_extract_pred,
                          current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
-from mcs_util import CONF_PATH, HOME, json_object, load_config, loads_dict, text_chunks  # noqa: F401
+from mcs_util import CONF_PATH, HOME, json_object, load_config, loads_dict  # noqa: F401
 from writer_lock import acquire_run_lock
 from llm_availability import circuit_failure, circuit_open_s, circuit_streak, circuit_success, disk_floor_mb, disk_free_mb  # noqa: F401 — historical helper re-export  # noqa: F401 — historical helper re-export
 

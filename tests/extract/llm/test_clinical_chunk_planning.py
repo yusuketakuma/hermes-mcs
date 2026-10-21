@@ -8,6 +8,7 @@ import pytest
 
 import clinical_chunking
 import extract_llm
+from mcs_util import text_chunks
 from patient_context import CATEGORIES
 from test_extraction_review import _message, db
 
@@ -137,7 +138,7 @@ def test_planner_source_digest_and_schema_preserve_safety_fields():
 
 def test_diagnostic_scoped_revalidation():
     body = "\n".join(f"独居の完全合成詳細{i:02d}です。" + "合成補足" * 5 for i in range(12))
-    piece = extract_llm.text_chunks(body, 160)[0]
+    piece = text_chunks(body, 160)[0]
     doc = {"patient_context": [{"category": "living", "text": piece, "evidence": piece, "subject": "patient"}]}
     scoped = extract_validation.validate(doc, piece)
     global_result = extract_validation.validate(scoped, body)

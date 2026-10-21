@@ -7,6 +7,7 @@ import json
 import pytest
 
 import extract_llm
+from mcs_util import text_chunks
 from patient_context import DETAIL_KEYS
 from test_extraction_review import _message, db
 
@@ -335,7 +336,7 @@ def test_late_nested_split_does_not_repeat_completed_original_chunk(db, monkeypa
     body = "初回完了の合成区間" + "A" * 110 + "後半密な合成区間" + "B" * 170
     db.save_messages([_message(body=body)])
     row = db.db.execute("SELECT * FROM messages").fetchone()
-    roots = extract_llm.text_chunks(body, 120)
+    roots = text_chunks(body, 120)
     if cached_empty:
         row = _framed_source(db, row)
         extract_llm._persist_chunks(db, row, {0: {}})
@@ -367,7 +368,7 @@ def test_piece_hints_and_repair_hints_cannot_include_sibling_details(monkeypatch
     def infer(prompt, **kwargs):
         piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
         prompts.append(prompt)
-        other = next(part for part in extract_llm.text_chunks(body, 70) if part != piece)
+        other = next(part for part in text_chunks(body, 70) if part != piece)
         # Each supplied rule/context field belongs to this target piece only.
         blocks = [part.split(extract_llm._HINT_TAIL, 1)[0]
                   for part in prompt.split(extract_llm._HINT_HEAD)[1:]]
@@ -394,7 +395,7 @@ def test_child_of_initial_single_chunk_never_gets_whole_body_thin_repair(monkeyp
     _fake_backend(monkeypatch, reply)
     out = extract_llm.llm_extract(body)
     assert out is not None
-    assert len(seen) == 1 + len(extract_llm.text_chunks(body, len(body) // 2))
+    assert len(seen) == 1 + len(text_chunks(body, len(body) // 2))
 
 
 @pytest.mark.parametrize("dense", [False, True])
@@ -430,7 +431,7 @@ def test_repair_length_stop_splits_pending_piece_and_preserves_completed_sibling
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 100)
     body = "先に完了する合成区間" + "D" * 90 + "修復が密な合成区間" + "E" * 75
     db.save_messages([_message(body=body)])
-    roots = extract_llm.text_chunks(body, 100)
+    roots = text_chunks(body, 100)
     calls = []
     def reply(piece):
         calls.append(piece)
