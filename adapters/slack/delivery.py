@@ -51,6 +51,24 @@ def _payload(response):
     return data if isinstance(data, Mapping) else {}
 
 
+def _file_problem(file, part):
+    if file.get("name") != part.get("name"):
+        return "edit_file_name_mismatch"
+    if file.get("size") != part.get("bytes"):
+        return "edit_file_size_mismatch"
+    if file.get("sha256") == part.get("sha256"):
+        return None
+    if file.get("sha256") is not None:
+        return "edit_file_hash_mismatch"
+    if file.get("mode") != "hosted":
+        return "edit_file_mode_unverified"
+    if file.get("is_external") is not False:
+        return "edit_file_external_unverified"
+    if file.get("editable") is not False:
+        return "edit_file_editability_unverified"
+    return None
+
+
 def single_attempt(client):
     # Snapshot the native SDK client without a new token or HTTP session.
     # Its default connection retry can duplicate a post whose response was
@@ -568,6 +586,9 @@ class DeliveryWorker(_BaseWorker):
                 return {"result": "unknown", "error_code": "edit_history_unverified"}
         targets = []
         reason = "edit_reference_missing"
+        sender = self._sender.single_attempt()
+        file_info_checked, file_info = False, None
+        info_problem = "edit_file_info_unverified"
         for message in ctx["history"]:
             if message.get("ts") == thread_ts:
                 continue
@@ -582,26 +603,36 @@ class DeliveryWorker(_BaseWorker):
                 reason = "edit_author_unverified"
                 continue
             if attachment:
-                reason = "edit_file_unverified"
                 for file in files:
-                    if file.get("name") != part.get("name"):
-                        reason = "edit_file_name_mismatch"
+                    problem = _file_problem(file, part)
+                    if problem and file.get("sha256") not in (None, part.get("sha256")):
+                        reason = "edit_file_hash_mismatch"
                         continue
-                    if file.get("size") != part.get("bytes"):
-                        reason = "edit_file_size_mismatch"
-                        continue
-                    immutable = (file.get("mode") == "hosted" and file.get("is_external") is False
-                                 and file.get("editable") is False)
-                    if file.get("sha256") == part.get("sha256") or (file.get("sha256") is None and immutable):
+                    if problem and callable(getattr(sender, "files_info", None)):
+                        if not file_info_checked:
+                            file_info_checked = True
+                            try:
+                                data = _payload(await sender.files_info(file=prior, limit=1))
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as exc:
+                                data = _payload(getattr(exc, "response", None))
+                            if data.get("error") in ("missing_scope", "no_permission", "access_denied"):
+                                info_problem = "edit_file_info_permission"
+                            candidate = data.get("file")
+                            if (data.get("ok") is True and isinstance(candidate, Mapping)
+                                    and candidate.get("id") == prior):
+                                file_info = candidate
+                        refreshed = _file_problem(file_info, part) if file_info is not None else info_problem
+                        if refreshed is None:
+                            self._log("edit_file_metadata_refreshed", reason=problem)
+                        problem = refreshed
+                    if problem is None:
                         targets.append(message)
                         break
-                    reason = ("edit_file_hash_mismatch" if file.get("sha256") is not None
-                              else "edit_file_mode_unverified" if file.get("mode") != "hosted"
-                              else "edit_file_external_unverified" if file.get("is_external") is not False
-                              else "edit_file_editability_unverified")
+                    reason = problem
             else:
                 targets.append(message)
-        sender = self._sender.single_attempt()
         if len(targets) != 1 or sender is None:
             self._log("edit_preflight_held", reason=("edit_native_client_unverified" if sender is None
                       else "edit_target_ambiguous" if len(targets) > 1 else reason), rows=len(targets))

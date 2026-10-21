@@ -270,3 +270,93 @@ def test_slack_user_identity_preserves_file_and_thread_preflight_checks(led, fau
               "mode": "edit_file_mode_unverified", "is_external": "edit_file_external_unverified",
               "editable": "edit_file_editability_unverified"}[fault]
     assert logs == [("edit_preflight_held", {"reason": reason, "rows": 2 if fault == "duplicate" else 0})]
+
+
+@pytest.mark.parametrize("stale", ["missing_size", "old_size", "missing_mode"])
+def test_slack_caption_refreshes_exact_file_metadata_once(led, stale):
+    w, spec, replies, target, part = user_shared_file(led)
+    current = dict(target["files"][0])
+    if stale == "old_size":
+        target["files"][0]["size"] = 0
+    else:
+        target["files"][0].pop("size" if stale == "missing_size" else "mode")
+    reads, logs = [], []
+    async def info(**kwargs):
+        reads.append(kwargs)
+        return {"ok": True, "file": current}
+    w.client.files_info = info
+    w.worker._log = lambda event, **fields: logs.append((event, fields))
+    before = writes(w)
+    out = asyncio.run(w.worker._attachment_part(
+        spec, part, {"thread_id": ROOT_TS, "history": replies, "consumed": set()}))
+    assert out == {"result": "delivered", "remote_id": "F_SYN"}
+    assert reads == [{"file": "F_SYN", "limit": 1}]
+    assert len(writes(w)) == len(before) + 1
+    assert _updates(w)[-1]["ts"] == target["ts"]
+    assert logs == [("edit_file_metadata_refreshed", {"reason":
+                    "edit_file_mode_unverified" if stale == "missing_mode" else "edit_file_size_mismatch"})]
+
+
+@pytest.mark.parametrize("fault", ["size", "name", "sha256", "editable", "is_external", "mode",
+                                  "id", "missing_scope", "malformed", "exception", "duplicate"])
+def test_slack_current_file_metadata_must_still_pass_all_checks(led, fault):
+    w, spec, replies, target, part = user_shared_file(led)
+    current = dict(target["files"][0])
+    target["files"][0]["size"] = 0
+    if fault in ("size", "name", "sha256", "editable", "is_external", "mode", "id"):
+        current[fault] = {"size": 11, "name": "other.pdf", "sha256": "b" * 64,
+                          "editable": True, "is_external": True, "mode": "external", "id": "F_OTHER"}[fault]
+    if fault == "duplicate":
+        replies.append({**target, "ts": "1790000000.000099"})
+    reads, logs = [], []
+    async def info(**kwargs):
+        reads.append(kwargs)
+        if fault == "exception":
+            raise RuntimeError("synthetic private error detail")
+        if fault == "missing_scope":
+            return {"ok": False, "error": "missing_scope", "file": current}
+        return {"ok": True, "file": [] if fault == "malformed" else current}
+    w.client.files_info = info
+    w.worker._log = lambda event, **fields: logs.append((event, fields))
+    before = writes(w)
+    out = asyncio.run(w.worker._attachment_part(
+        spec, part, {"thread_id": ROOT_TS, "history": replies, "consumed": set()}))
+    assert out == {"result": "unknown", "error_code": "edit_target_unverified"}
+    assert writes(w) == before
+    assert reads == [{"file": "F_SYN", "limit": 1}]
+    assert "synthetic private" not in str(logs)
+    assert logs[-1][0] == "edit_preflight_held"
+    if fault == "missing_scope":
+        assert logs[-1][1]["reason"] == "edit_file_info_permission"
+
+
+@pytest.mark.parametrize("fault", ["valid", "foreign", "thread", "id", "hash"])
+def test_slack_file_info_never_replaces_authorship_or_explicit_hash(led, fault):
+    w, spec, replies, target, part = user_shared_file(led)
+    if fault == "foreign":
+        target["user"] = "U_OTHER"
+    elif fault == "thread":
+        target["thread_ts"] = "1790000000.000999"
+    elif fault == "id":
+        target["files"][0]["id"] = "F_OTHER"
+    elif fault == "hash":
+        target["files"][0].update(size=0, sha256="b" * 64)
+    async def info(**kwargs):
+        pytest.fail("native file read is not permitted or needed here")
+    w.client.files_info = info
+    out = asyncio.run(w.worker._attachment_part(
+        spec, part, {"thread_id": ROOT_TS, "history": replies, "consumed": set()}))
+    assert out["result"] == ("delivered" if fault == "valid" else "unknown")
+
+
+def test_slack_file_metadata_lookup_cancel_propagates_without_write(led):
+    w, spec, replies, target, part = user_shared_file(led)
+    target["files"][0]["size"] = 0
+    async def info(**kwargs):
+        raise asyncio.CancelledError()
+    w.client.files_info = info
+    before = writes(w)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(w.worker._attachment_part(
+            spec, part, {"thread_id": ROOT_TS, "history": replies, "consumed": set()}))
+    assert writes(w) == before
