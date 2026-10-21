@@ -1701,3 +1701,12 @@ def test_download_bootstraps_token(monkeypatch, tmp_path):
     dest = tmp_path / "f.bin"
     a.download("https://www.medical-care.net/files/1", str(dest))
     assert calls == ["t" * 32] and dest.read_bytes() == b"x"
+
+
+@pytest.mark.parametrize("url", ["ws://192.0.2.1:9222/x", "ws://example.test:9222/x",
+                                 "ws://127.0.0.1.example.test:9222/x"])
+def test_ws_refuses_non_loopback_before_connecting(monkeypatch, url):
+    monkeypatch.setattr(mcs_cdp.socket, "create_connection",
+                        lambda *a, **k: pytest.fail("must not connect"))
+    with pytest.raises(mcs_contract.BootstrapError, match="cdp_ws_url_invalid"):
+        mcs_cdp._WSConn(url, 5)

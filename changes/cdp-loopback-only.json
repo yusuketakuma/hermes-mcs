@@ -1,0 +1,12 @@
+{
+  "category": "security",
+  "title": "Chrome DevTools への接続をローカルだけに限定",
+  "summary": "MCS ログイン用の Chrome DevTools WebSocket は 127.0.0.1・::1・localhost 以外の宛先へ接続せず、cdp_ws_url_invalid で止めます。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs_cdp._WSConn が接続前に宛先ホストを確認する。"
+  ],
+  "refs": [
+    "mcs/ingest/mcs_cdp.py"
+  ]
+}

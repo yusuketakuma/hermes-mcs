@@ -30,7 +30,8 @@ class _WSConn:
             host, port = u.hostname, u.port or 80
         except ValueError:
             raise BootstrapError("cdp_ws_url_invalid") from None
-        if u.scheme != "ws" or not host:
+        # DevTools has no auth: never speak it to anything but this host
+        if u.scheme != "ws" or host not in ("127.0.0.1", "::1", "localhost"):
             raise BootstrapError("cdp_ws_url_invalid")
         self._deadline = time.monotonic() + timeout
         self._buf = bytearray()
