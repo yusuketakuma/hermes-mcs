@@ -195,9 +195,10 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
             _fail(_failure["reason"], copy_s=round(copied - started, 3),
                   capped_by_deadline=deadline is not None and verify_by == deadline)
             return None
-        _timing.update(copy_s=round(copied - started, 3),
-                       verify_s=round(monotonic() - copied, 3), budget_s=round(verify_by - copied, 3))
+        verified = monotonic()
         publish_tmp(tmp, dest)
+        _timing.update(copy_s=round(copied - started, 3),
+                       verify_s=round(verified - copied, 3), budget_s=round(verify_by - copied, 3))
         # A reader keeps its old inode or opens the complete new generation.
         return dest
     finally:

@@ -184,6 +184,12 @@ def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
     timing = snapshots.last_timing()        # the margin is visible on success too
     assert set(timing) == {"copy_s", "verify_s", "budget_s"}
     assert 0 <= timing["verify_s"] <= timing["budget_s"]
+    # a later refused publish leaves no stale success timing behind
+    monkeypatch.setattr(snapshots, "monotonic", real)
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate",
+                        lambda _p, *, deadline: False)
+    assert snapshots.publish_snapshot(path, str(tmp_path / "snap"), deadline=real() + 10) is None
+    assert snapshots.last_timing() == {}
     with closing(sqlite3.connect(out)) as snap:
         assert snap.execute("SELECT COUNT(*) FROM t").fetchone()[0] >= 6000
 
