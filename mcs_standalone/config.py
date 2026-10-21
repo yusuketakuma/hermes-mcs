@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 
 import safe_io
 
@@ -22,9 +23,18 @@ class ConfigError(ValueError):
 def load(root):
     try:
         path = Path(root).expanduser().resolve() / "config.json"
-        if path.stat().st_size > 1024 * 1024:
+        limit = 1024 * 1024
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        with safe_io.fdopen_owned(fd, "rb") as stream:
+            st = os.fstat(stream.fileno())
+            # one fd for the checks and the read: no stat/read swap window
+            if (not stat.S_ISREG(st.st_mode) or st.st_mode & 0o022
+                    or st.st_size > limit):
+                raise ValueError
+            raw = stream.read(limit + 1)
+        if len(raw) > limit:
             raise ValueError
-        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg = json.loads(raw.decode("utf-8"))
         if not isinstance(cfg, dict):
             raise ValueError
     except (OSError, ValueError, TypeError, RecursionError, UnicodeError):

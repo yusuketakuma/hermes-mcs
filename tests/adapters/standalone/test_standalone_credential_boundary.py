@@ -99,3 +99,17 @@ def test_a_pre_existing_proxy_variable_is_restored_after_the_strip(monkeypatch):
             cli.main([])
         assert "Http_Proxy" not in os.environ
     assert os.environ["Http_Proxy"] == "http://pre-existing.invalid:3128"
+
+
+def test_standalone_config_refuses_writable_or_linked_file(tmp_path):
+    write_root(tmp_path)
+    path = tmp_path / "config.json"
+    config.load(tmp_path)
+    os.chmod(path, 0o664)
+    with pytest.raises(config.ConfigError, match="standalone_configuration_invalid"):
+        config.load(tmp_path)
+    os.chmod(path, 0o644)
+    path.rename(tmp_path / "real.json")
+    path.symlink_to(tmp_path / "real.json")
+    with pytest.raises(config.ConfigError, match="standalone_configuration_invalid"):
+        config.load(tmp_path)
