@@ -104,3 +104,11 @@ def test_a_patient_whose_rest_is_in_backoff_is_not_focused(tmp_path, monkeypatch
         "hash": _hash(db, 1), "extract_version": EXTRACT_VERSION})
     assert extract_llm._focus_patients(db) == [1]
     assert _order(db)[0] == [4, 3, 2]
+
+
+def test_a_patient_with_only_new_arrivals_holds_no_focus_place(tmp_path, monkeypatch):
+    monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    db = _corpus(tmp_path)
+    db.save_messages([_message(mid=9, project_id=3, body="体温は36度です。経過観察 9",
+                               posted_at="2026-09-09T00:00:00+09:00")])
+    assert extract_llm._focus_patients(db) == [2]   # patient 3 has 1 pending, but it is new

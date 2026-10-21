@@ -2450,7 +2450,10 @@ def _focus_patients(ledger) -> list:
             " AND COALESCE(p.is_archived,0)!=0)"
             f" AND {pending_pred()} AND ({_retry_budget_sql()})"
             f" AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) {_ERROR_ROWS_SQL}), 0) <= ?"
-            " GROUP BY m.project_id ORDER BY COUNT(*), m.project_id LIMIT ?",
+            # focus selects re-extraction only, so a patient whose rest is all
+            # new arrivals would hold a place it cannot use
+            f" GROUP BY m.project_id HAVING SUM(CASE WHEN {_FRESH_SQL} THEN 0 ELSE 1 END) > 0"
+            " ORDER BY COUNT(*), m.project_id LIMIT ?",
             (KIND, EXTRACT_VERSION, time.time(), _FOCUS_PATIENTS))]
         hit = _FOCUS[key] = {"at": time.monotonic(), "pids": pids}
     return hit["pids"]
