@@ -467,26 +467,29 @@ def _observation_failure(exc) -> str:
 
 def patient_context_health(db, checked_cfg, now, source) -> dict:
     """Counts only, never patients: nightly lane outcomes, extraction-complete
-    and patient-focus counts, stored published contexts. A recorded block is
-    reused for COVERAGE_COUNT_S on the same db; a read past its bound is
-    'unknown', never zero."""
+    and patient-focus counts, stored published contexts. Counts are reused for
+    COVERAGE_COUNT_S on the same db and extraction generation; publication is
+    always read from the current checked config (None when unchecked). A read
+    past its bound is 'unknown', never zero."""
     import extract_llm
     import patient_nightly
+    publication = patient_nightly.options(checked_cfg)["publication"] if checked_cfg is not None else None
+    key = {"source": source, "extract_version": extract_llm.EXTRACT_VERSION}
     prev = prev_health().get("patient_context")
     if (isinstance(prev, dict) and prev.get("status") == "recorded"
-            and prev.get("source") == source and finite_number(prev.get("observed_at"))
+            and all(prev.get(k) == v for k, v in key.items()) and finite_number(prev.get("observed_at"))
             and 0 <= now - prev["observed_at"] < COVERAGE_COUNT_S
             and all(type(prev.get(k)) is int and prev[k] >= 0 for k in _PATIENT_CONTEXT_COUNTS)):
-        return prev
+        return {**prev, "publication": publication}
     try:
         counts = bounded_health_read(db, lambda _check: {
             **patient_nightly.lane_metrics(db), **extract_llm.patient_progress_counts(db)},
             seconds=PATIENT_CONTEXT_S)
     except Exception as exc:
-        return {"status": "unknown", "observed_at": now, "reason": _observation_failure(exc)}
-    publication = patient_nightly.options(checked_cfg)["publication"] if checked_cfg is not None else None
+        return {"status": "unknown", "observed_at": now, "reason": _observation_failure(exc),
+                "publication": publication}
     return {**counts, "publication": publication, "status": "recorded",
-            "observed_at": now, "source": source}
+            "observed_at": now, **key}
 
 
 def part_holds_health(db, now) -> dict:
