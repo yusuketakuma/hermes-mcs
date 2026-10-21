@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from project_metadata_contract import MetadataFetch
 
-from mcs_util import HOME, env_value, load_config
+from mcs_util import HOME, RETRY_LATER_4XX, env_value, load_config
 from safe_io import atomic_write
 from mcs_worker import WorkerError, bounded_call
 
@@ -298,6 +298,20 @@ def thread_page_budget(reply_count: int) -> dict:
 
 
 
+RATE_LIMIT_STOP = 2      # 429 responses per run before API reads stop
+RETRY_AFTER_MAX_S = 60   # longest honored Retry-After wait
+
+
+def _retry_after(headers, default: float) -> float:
+    """Bounded Retry-After delay in seconds; ``default`` when absent or not delta-seconds."""
+    value = next((v for k, v in (headers or {}).items()
+                  if str(k).lower() == "retry-after"), None)
+    try:
+        return min(RETRY_AFTER_MAX_S, max(0.0, float(str(value).strip())))
+    except ValueError:
+        return default
+
+
 class MCSAdapter:
     def __init__(self, cdp_url: str = "http://127.0.0.1:9333",
                  token_cache: str | None = None, timeout: int = 20, *,
@@ -307,6 +321,9 @@ class MCSAdapter:
         self._token: str | None = None
         self._token_cache = token_cache
         self._deadline: float | None = None
+        # one adapter per run: after RATE_LIMIT_STOP 429s every later API
+        # request of this run is refused locally, so the next tick retries
+        self._rate_limited = 0
         self._worker = bounded_call if worker is None else worker
         # per-attempt browser repair facts, journaled by run_check
         self.healed_tabs, self.chrome_restarted = 0, False
@@ -1059,6 +1076,11 @@ class MCSAdapter:
         h.update(headers or {})
         last: Exception | None = None
         for attempt in range(retries + 1):
+            # a human-approved stamp POST is never refused locally: a refusal
+            # after its witness would read as an unknown, never-resent effect
+            if self._rate_limited >= RATE_LIMIT_STOP and not _cached_session_only:
+                raise MCSError("rate_limited", f"{method} {path}", status=429,
+                               retryable=True)
             try:
                 result = self._io(
                     "api", self.timeout, url=url, method=method, headers=h,
@@ -1081,11 +1103,16 @@ class MCSAdapter:
             if status in (401, 403):
                 raise SessionExpired(f"{method} {path}", status=status)
             if status >= 300:
-                if status in (429, 500, 502, 503, 504) and attempt < retries:
-                    self._sleep_bounded(1.5 * (attempt + 1))
+                if status == 429:
+                    self._rate_limited += 1
+                if status in (429, 500, 502, 503, 504) and attempt < retries \
+                        and self._rate_limited < RATE_LIMIT_STOP:
+                    delay = 1.5 * (attempt + 1)
+                    self._sleep_bounded(_retry_after(result.get("headers"), delay)
+                                        if status == 429 else delay)
                     continue
                 raise MCSError("http_error", f"{method} {path}", status=status,
-                               retryable=status >= 500)
+                               retryable=status >= 500 or status in RETRY_LATER_4XX)
             return status, base64.b64decode(result["body"], validate=True), result["headers"]
         raise MCSError("network_error", f"{method} {path}", retryable=True) from last
 

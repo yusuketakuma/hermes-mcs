@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "返信の既読確認と本文再取得の対象探しを索引で行い、定期実行ごとの全件走査をなくすように",
+  "summary": "定期実行のたびに保存済みの返信をすべて読み直していた2つの処理（スレッド既読確認の候補探し、本文が未取得の返信の再取得予約）が、返信だけを対象にした索引を使うようになりました。結果は変わりません。あわせて、通知の配送状態と未配送部分を探すための索引を追加しました。",
+  "upgrade": "追加操作は不要です。次にDBを開いたときに索引が自動で作られます（schema versionは変わりません）。返信の多いDBでは初回作成に少し時間がかかることがあります。",
+  "details": [
+    "追加索引: idx_messages_reply_first_seen（返信のfirst_seen）、idx_messages_reply_open（本文がfull/deleted以外の返信）、idx_nrenders_state_updated（notification_renders(state, updated_at)）、idx_nparts_pending（未配送のnotification_render_parts）。",
+    "クエリ本体は変更しない。合成DBのEXPLAIN QUERY PLANで索引の使用を確認する。",
+    "回帰: tests/core/test_v1029_reply_indexes.py"
+  ],
+  "refs": [
+    "mcs/core/ledger_schema.py"
+  ]
+}
