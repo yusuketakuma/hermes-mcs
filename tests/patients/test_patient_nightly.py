@@ -930,7 +930,17 @@ def test_health_counts_context_progress_without_patients(runtime, monkeypatch):
     monkeypatch.setattr(health_report, 'prev_health', lambda: {'patient_context': {**out, 'published': 9}})
     assert health_report.patient_context_health(led.db, CFG, 20.0, 'synthetic-source')['published'] == 9
     assert health_report.patient_context_health(led.db, CFG, 20.0, 'other')['published'] == 2
+    # publication always follows the current config, even on a reused block
+    private = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': False}}}
+    reused = health_report.patient_context_health(led.db, private, 20.0, 'synthetic-source')
+    assert reused['published'] == 9 and reused['publication'] is False
+    assert health_report.patient_context_health(led.db, None, 20.0, 'synthetic-source')['publication'] is None
+    # a new extraction generation recounts instead of reusing the old counts
+    version = extract_llm.EXTRACT_VERSION
+    monkeypatch.setattr(extract_llm, 'EXTRACT_VERSION', version + 1)
+    assert health_report.patient_context_health(led.db, CFG, 20.0, 'synthetic-source')['published'] == 2
+    monkeypatch.setattr(extract_llm, 'EXTRACT_VERSION', version)
     monkeypatch.setattr(health_report, 'prev_health', lambda: {})
     monkeypatch.setattr(health_report, 'PATIENT_CONTEXT_S', 0)
-    assert health_report.patient_context_health(led.db, CFG, 30.0, 'synthetic-source') == {
-        'status': 'unknown', 'observed_at': 30.0, 'reason': 'observation_limit'}
+    assert health_report.patient_context_health(led.db, None, 30.0, 'synthetic-source') == {
+        'status': 'unknown', 'observed_at': 30.0, 'reason': 'observation_limit', 'publication': None}

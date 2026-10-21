@@ -2,9 +2,9 @@
   "category": "added",
   "title": "患者コンテキストの進み具合を状態ファイルに件数で表示",
   "summary": "health の patient_context に、対象の患者数、保存済みの投稿がすべて抽出済みの患者数、patient-focus で先に再抽出する候補の患者数と実際の対象数、限定閲覧用に公開済みの患者コンテキスト数を件数だけで記録します。患者名・IDは記録しません。",
-  "upgrade": "追加操作は不要です。件数は1時間ごとに数え直し、2秒を超えた場合は unknown（reason=observation_limit）とします。overall・state_reasons・監視通知の条件は変わりません。",
+  "upgrade": "追加操作は不要です。件数は1時間ごと、または抽出の世代が変わったときに数え直し、2秒を超えた場合は unknown（reason=observation_limit）とします。publication は毎回その時点の設定から記録し、設定を確認できないときは null です。overall・state_reasons・監視通知の条件は変わりません。",
   "details": [
-    "新しいキー: active_patients / extraction_complete / focus_eligible / focus_targets / published / publication / status / observed_at。",
+    "新しいキー: active_patients / extraction_complete / focus_eligible / focus_targets / published / publication / status / observed_at / source / extract_version。",
     "抽出済み・patient-focus の判定は、患者コンテキスト作成と再抽出の順序付けと同じ条件を使う。published は保存済みの公開フラグの件数で、現在の設定 publication を並べて記録する。",
     "回帰: tests/patients/test_patient_nightly.py、tests/extract/llm/test_patient_focus_order.py"
   ],
