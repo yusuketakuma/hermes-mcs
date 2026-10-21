@@ -863,6 +863,8 @@ def test_lazy_command_import_failure_hides_host_details(monkeypatch):
     {"interactive": True, "transport": "discord", "route_epoch": True},
     {"interactive": True, "transport": "discord", "route_epoch": 3,
      "restore_pending": True},
+    {"interactive": True, "transport": "discord", "route_epoch": 3,
+     "runtime_mode": "standalone"},
 ])
 def test_discord_factory_pins_current_route_epoch(tmp_path, monkeypatch, flags):
     from types import SimpleNamespace
@@ -872,7 +874,11 @@ def test_discord_factory_pins_current_route_epoch(tmp_path, monkeypatch, flags):
                     application_id="101", channel_id="42", guild_id="7")
     root = Path(settings["data_root"])
     (root / "flags").mkdir(parents=True)
-    (root / "flags" / "notify.json").write_text(json.dumps(flags))
+    effective = dict(flags)
+    restoring = effective.pop("restore_pending", False)
+    (root / "flags" / "notify.json").write_text(json.dumps(effective))
+    if restoring:
+        (root / "restore_pending.json").write_text("{}")
     captured = []
 
     class Supervisor:
@@ -889,9 +895,20 @@ def test_discord_factory_pins_current_route_epoch(tmp_path, monkeypatch, flags):
     expected = (flags.get("interactive") is True
                 and flags.get("transport", "discord") == "discord"
                 and type(flags.get("route_epoch")) is int
-                and not flags.get("restore_pending"))
+                and flags.get("runtime_mode") != "standalone")
     assert (got is not None) is expected
     if expected:
         assert captured[0]["route_epoch"] == 3
+        if restoring:
+            import asyncio
+            from adapters.discord.actions import Actions
+            actions = Actions(bot=None, settings=captured[0], root=str(root),
+                              reg=None, log=lambda *args, **kwargs: None)
+            assert asyncio.run(actions._interactive()) is False
+            (root / "restore_pending.json").unlink()
+            assert asyncio.run(actions._interactive()) is True
+            effective["route_epoch"] = 4
+            (root / "flags" / "notify.json").write_text(json.dumps(effective))
+            assert asyncio.run(actions._interactive()) is False
     else:
         assert captured == []

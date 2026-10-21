@@ -4,7 +4,7 @@
   "summary": "Discordの接続に経路世代を固定し、Slackのサマリーは計算前・送信前・再試行前に接続と通知経路を確認します。停止や切替の後に古い接続から情報を返す経路を防ぎます。",
   "upgrade": "Hermes gatewayと使用中の独立接続を通常の更新手順で再起動してください。経路の有効化・承認・対象患者の条件は維持し、経路世代のないDiscord接続は開始しません。本作業で本番の再起動や設定変更は行いません。",
   "details": [
-    "Discord factoryで有効な経路と整数のroute_epochを確認し、Supervisorと操作handlerへ同じ世代を渡す。",
+    "Discord factoryで接続先・有効設定と整数のroute_epochを確認し、Supervisorと操作handlerへ同じ世代を渡す。復旧照合中もSupervisorは維持し、配送・操作は照合完了まで既存ゲートで止める。",
     "Slack /mcs-summaryの本人・workspace・app・channelの既存照合に、接続の現行性とrestore/transport/epochの再検証を追加。停止・切替後はsnapshotを読み始めず、計算中に変化した場合も回答を送らない。",
     "429の待機後も送信権限を再確認する。一般のカード操作の旧epoch互換条件は変更しない。"
   ],

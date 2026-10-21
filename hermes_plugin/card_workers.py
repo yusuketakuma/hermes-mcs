@@ -149,9 +149,10 @@ def make_discord_factory(ctx):
         from adapters.common import paths
         flags = paths.read_flags(settings["data_root"])
         epoch = flags.get("route_epoch")
+        # Restore holds pause delivery, not the supervisor that resumes it.
         if (type(epoch) is not int
-                or not paths.route_open(flags, "discord", epoch, int_epoch=True,
-                                        default_transport="discord")
+                or flags.get("interactive") is not True
+                or flags.get("transport", "discord") != "discord"
                 or flags.get("runtime_mode") == "standalone"):
             return None
         settings["route_epoch"] = epoch
