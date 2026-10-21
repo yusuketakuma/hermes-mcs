@@ -22,7 +22,7 @@ from message_observations import get_message_metadata
 from message_metadata import is_self_sender, mentions_self
 from stamp_format import self_stamps, stamp_counts, thread_stamp_line, actor_line
 import structured_view
-from notify_scope import latest_signals
+from notify_scope import latest_signals, notify_cfg
 import clinical_urgency
 
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
@@ -902,11 +902,16 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     containers = _fit_item(containers, CARD_TEXT_BUDGET - PAGE_TEXT_BUDGET)
     budget = PAGE_TEXT_BUDGET
     pages_idx = _pack_pages([_blocks_len(b) for b in rendered], max_count)
+    stamp_details = (kind == "thread" and layout >= 3
+                     and "transport" in card.keys() and card["transport"] == "slack"
+                     and notify_cfg(cfg).get("card_thread") is True
+                     and card["thread_state"] not in ("failed", "deleted")
+                     and card["delivery_state"] != "revoked")
     while True:
         page_states = []
         for p, indices in enumerate(pages_idx):
             shown = [key for i in indices for key in item_shown[i]]
-            footer, toggles = _footer(db, card, shown, generation)
+            footer, toggles = _footer(db, card, shown, generation, stamp_details=stamp_details)
             page_states.append((shown, footer, toggles))
         # the page marker joins the context line after paging; reserve it
         budget = min(budget, CARD_TEXT_BUDGET - _blocks_len(containers)
@@ -1147,7 +1152,7 @@ def inline_text(text, cap) -> str:
     return t if len(t) <= cap else t[:cap - 1] + "…"
 
 
-def _footer(db, card, shown, generation) -> tuple:
+def _footer(db, card, shown, generation, *, stamp_details) -> tuple:
     """(footer items, toggles) — ``toggles`` is the same card state the
     button faces show (acked / assigned / has_tasks), handed to
     notify_cards._action_rows so a render queries it once. Not part of
@@ -1179,8 +1184,8 @@ def _footer(db, card, shown, generation) -> tuple:
         late = sum(1 for t in tasks if t["due_date"] and t["due_date"] < today)
         work.append(f"📝 タスク {len(tasks)}件"
                     + (f"（期限切れ {late}）" if late else ""))
-    # Slack thread cards show per-post counts, people and acquisition state together.
-    if card["kind"] != "thread" or "transport" not in card.keys() or card["transport"] != "slack":
+    # Keep the only stamp summary when per-post details cannot be displayed.
+    if not stamp_details:
         work.extend(card_reaction_lines(card_reactions(db, card, shown)))
     if work:
         lines.append(" · ".join(work))

@@ -468,6 +468,22 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     assert "MCS 👀" not in footer
     assert "合成本人" not in footer and "合成他者" not in footer
     if platform == "slack":
+        card = dict(_card(led))
+        missing_layout = {k: v for k, v in card.items() if k != "layout"}
+        # These cards cannot carry the detailed rows: retain counts and failure state.
+        for fallback, fallback_cfg in [
+                (missing_layout, cfg),
+                (card | {"layout": 1}, cfg),
+                (card | {"layout": 2}, cfg),
+                (card | {"thread_state": "failed"}, cfg),
+                (card | {"thread_state": "deleted"}, cfg),
+                (card | {"delivery_state": "revoked"}, cfg),
+                (card, {**cfg, "notify": {**cfg["notify"], "card_thread": False}}),
+                (card, None)]:
+            fallback_footer = "\n".join(item["text"] for item in
+                notify_render.card_content(led.db, fallback, cfg=fallback_cfg)["footer"])
+            assert "スタンプ 👀3 · 自分 2投稿" in fallback_footer
+            assert "再取得失敗" in fallback_footer
         blocks = slack_cards.render(spec)[1]
         assert not any("スタンプ 👀3" in element.get("text", "") for block in blocks
                    for element in block.get("elements", []))
