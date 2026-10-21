@@ -30,10 +30,49 @@ snapshotは保存時点の情報です。現行状態と異なれば適用時に
 | `remote_id` | `mark_delivered`の場合、照合済みの配送先投稿ID |
 | `evidence.method` / `evidence.ref` | 確認方法と、非機密の証拠参照 |
 | `evidence.worker_stopped` | 停止を確認した場合に限り`true` |
-| `evidence.proof` | `mark_not_sent`の場合、`no_journal_started`・`api_rejected`・`remote_absent`のいずれか |
+| `evidence.proof` | `mark_not_sent`の場合、`no_journal_started`・`api_rejected`・`remote_absent`のいずれか。Slack添付説明の更新前拒否には下記の`local_preflight_rejected`を使用 |
 | `evidence.duplicate_risk_accepted` | LINE WORKSで`remote_absent`を根拠にする場合、重複リスクを人が受け入れた時だけ`true` |
 
 送信結果が不明というだけで`mark_not_sent`を選ばないでください。既存journalの配送成功記録と矛盾する証拠、読めないjournal、古い計画は既存validatorと適用処理が拒否します。
+
+### Slackの添付説明だけが更新できない場合
+
+添付が表示されていることと、その説明の更新が成功したことは別です。元のアップロードの成功記録を、説明更新の成功証拠として使わないでください。
+
+通知ワーカーの`edit_preflight_held`は、書込み前の照合で止まったことを示します。
+`reason`は固定コードだけで、本文・氏名・ファイル名・通知先IDは記録しません。
+
+| reason | 確認する条件 |
+|---|---|
+| `edit_scope_unverified` | 保存した通知先・スレッド・前回の送信先IDとの対応 |
+| `edit_history_unverified` | スレッド履歴を上限内ですべて取得できたか |
+| `edit_reference_missing` | 保存した投稿・ファイルIDが履歴にあるか |
+| `edit_thread_mismatch` | 対象投稿が保存済みスレッド内にあるか |
+| `edit_author_unverified` | 接続時に確認したBot自身の投稿か。ファイルの所有者だけでは確認不可 |
+| `edit_file_unverified` | ファイル名・容量・内容hashまたは不変ファイルの条件が一致するか |
+| `edit_target_ambiguous` | 同じファイルを持つ更新先が複数ないか |
+| `edit_native_client_unverified` / `edit_timestamp_unverified` | 送信クライアント・対象時刻IDを検証できたか |
+
+このログ単独では配送記録を書き換えません。`edit_target_unverified`または
+`edit_history_unverified`で保留されたSlackの添付説明には、
+`result=mark_not_sent`と`evidence.proof=local_preflight_rejected`を指定できます。
+この場合の「未送信」は説明の編集要求だけを指し、元のファイルを未送信とは扱いません。
+`remote_id`を入力して更新先を指定することもできません。
+
+適用処理が、完全なjournalの開始・更新前拒否・receipt、同じ試行のscopeとhash、
+元のアップロード成功記録とスレッド・part・ファイル内容の一致を検証します。
+別の未確定part、異なる送信結果、途切れた記録がある場合は拒否します。
+通知ワーカーを停止した証拠と人の承認は、この方法でも必要です。
+
+承認が成立すると、**現在の内容**から既存投稿・添付を更新する計画を作り直します。
+保存specが既に削除されていても、旧本文やhashを推測して復元しません。
+新規投稿や再アップロードが必要な計画は拒否し、元の保留状態へ戻します。
+承認receiptの`replacement_delivery_id`・`replacement_manifest_sha256`と
+`content_basis=current_content`が新計画を示します。これは編集成功の証拠ではないため、
+ワーカー復帰後に新しい配送receiptで結果を確認してください。
+
+この2種類の添付説明保留は、解決までspecを私有領域に保持します。
+その他の終端計画は従来どおり整理し、保留解決後はこの計画も整理対象へ戻ります。
 
 ## 3. 承認済みのJSONをenqueueする
 

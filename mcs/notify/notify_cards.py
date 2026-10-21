@@ -2060,7 +2060,8 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
     recover) republish queued/held renders or delivered plans with
     pending parts; the latter cannot enter this clearing path. The
     worker and reconcile read the spec file, which a pending part plan
-    keeps. Rows, hashes,
+    keeps. Slack attachment edits rejected before writing keep both specs
+    until their unknown result is resolved. Rows, hashes,
     correlations and part metadata stay for audit. Bounded per call —
     the rest waits for the next tick."""
     db = connection(ledger)
@@ -2087,6 +2088,11 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                      AND NOT EXISTS (
                        SELECT 1 FROM notification_intent_cards ic
                        WHERE ic.delivery_id=r.delivery_id AND ic.state='pending')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM notification_render_parts p
+                       WHERE p.delivery_id=r.delivery_id AND r.transport='slack'
+                         AND p.kind='attachment_part' AND p.state='unknown'
+                         AND p.error_code IN ('edit_target_unverified','edit_history_unverified'))
                      AND ((r.card_id IS NULL AND r.op='notice'
                            AND r.state IN ('cancelled','not_sent'))
                           OR (r.state IN ('cancelled','not_sent')
@@ -2128,6 +2134,10 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                 "AND spec_published=1 AND parts_state!='pending' "
                 "AND NOT EXISTS (SELECT 1 FROM notification_render_parts p "
                 "WHERE p.delivery_id=r.delivery_id AND p.state='pending') "
+                "AND NOT EXISTS (SELECT 1 FROM notification_render_parts p "
+                "WHERE p.delivery_id=r.delivery_id AND r.transport='slack' "
+                "AND p.kind='attachment_part' AND p.state='unknown' "
+                "AND p.error_code IN ('edit_target_unverified','edit_history_unverified')) "
                 "ORDER BY updated_at LIMIT ?", (limit,)).fetchall():
             path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")
