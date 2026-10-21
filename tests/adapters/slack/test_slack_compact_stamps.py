@@ -1,4 +1,4 @@
-"""Compact Slack controls keep the existing token, scope and stamp paths."""
+"""Visible stamp controls and legacy compact clicks keep token and scope checks."""
 
 import asyncio
 import math
@@ -27,6 +27,15 @@ def _stamps_spec():
     return spec
 
 
+def test_stamp_controls_show_six_distinct_visible_illustrations_and_names():
+    blocks = render(_stamps_spec())[1]
+    buttons = [e for b in blocks if b["type"] == "actions"
+               for e in b["elements"] if e["type"] == "button"]
+    assert [b["text"]["text"] for b in buttons] == [
+        "👀見ました", "🙆承知 ✓", "🙏感謝", "👍いいね", "✅完了", "🗂 別の投稿"]
+    assert not any(b["type"] == "context_actions" for b in blocks)
+
+
 def _pair_action(token=TOKEN, *, second=False):
     pair = ("c" * 32, token) if second else (token, "c" * 32)
     return {"type": "feedback_buttons", "action_id": "mcs:stamp-pair:" + ":".join(pair),
@@ -42,29 +51,24 @@ def _origin(body, action):
 def test_compact_controls_preserve_all_tokens_and_observed_own_state():
     spec = _stamps_spec()
     _, blocks = render(spec)
-    menu, = [b for b in blocks if b["type"] == "actions"]
+    menu, compact = [b for b in blocks if b["type"] == "actions"]
     select, = menu["elements"]
     assert select["type"] == "static_select"
     assert [o["value"] for o in select["options"]] == ["b" * 32, "c" * 32]
-    compact, = [b for b in blocks if b["type"] == "context_actions"]
-    assert len(compact["elements"]) == 3
-    buttons = [e[key] for e in compact["elements"]
-               for key in ("positive_button", "negative_button")]
-    assert [b["text"]["text"] for b in buttons] == ["👀", "🙆 ✓", "🙏", "👍", "✅", "別の投稿"]
+    buttons = compact["elements"]
+    assert len(buttons) == 6 and all(b["type"] == "button" for b in buttons)
     assert [b["value"] for b in buttons] == [f"{i:032x}" for i in range(1, 6)] + ["d" * 32]
     assert all(b["text"]["type"] == "plain_text" and 0 < len(b["accessibility_label"]) <= 75
                for b in buttons)
     assert "取消" in buttons[1]["accessibility_label"]
+    assert buttons[1]["style"] == "primary" and "✓" in buttons[1]["text"]["text"]
     assert "見ました" in buttons[0]["accessibility_label"]
     body, _ = click()
-    for pair in compact["elements"]:
-        assert pair["type"] == "feedback_buttons" and len(pair["action_id"]) <= 255
-        for key in ("positive_button", "negative_button"):
-            origin = _origin(body, {"type": pair["type"], "action_id": pair["action_id"],
-                                    "value": pair[key]["value"]})
-            assert origin and origin["token"] == pair[key]["value"]
+    for button in buttons:
+        origin = _origin(body, button)
+        assert origin and origin["token"] == button["value"]
     spec["render_rev"] += 1
-    newer, = [b for b in render(spec)[1] if b["type"] == "context_actions"]
+    newer, = [b for b in render(spec)[1] if b.get("block_id", "").startswith("mcs:stamps:")]
     assert compact["block_id"] != newer["block_id"]
 
 
@@ -106,12 +110,13 @@ def test_compact_click_keeps_native_origin_checks(field, value):
     assert _origin({**body, field: value}, _pair_action()) is None
 
 
-@pytest.mark.parametrize("second", [False, True])
-def test_compact_stamp_click_queues_existing_command_with_click_time(tmp_path, second):
+@pytest.mark.parametrize("wire", ["legacy_positive", "legacy_negative", "button"])
+def test_stamp_click_queues_existing_command_with_click_time(tmp_path, wire):
     async def run():
         actions, app, _, dirs = fixture(tmp_path, kind="stamp_press")
         body, _ = click()
-        action = _pair_action(second=second)
+        action = ({"type": "button", "action_id": "mcs:a:" + TOKEN, "value": TOKEN}
+                  if wire == "button" else _pair_action(second=wire == "legacy_negative"))
         handler, = [fn for pattern, fn in app.actions.items()
                     if re.fullmatch(pattern, action["action_id"])]
         await handler(ack, body, action)
@@ -179,46 +184,25 @@ def _deliver_card(failures, *, op="create", thread=False, gate=None, spec=None):
 
 @pytest.mark.parametrize("op", ["create", "update"])
 @pytest.mark.parametrize("thread", [False, True])
-def test_rejected_compact_card_retries_once_with_all_controls_and_same_target(op, thread, caplog):
-    caplog.set_level("INFO", logger="adapters.slack.delivery")
-    checked = []
-
-    async def allowed():
-        checked.append(True)
-        return True
-
-    outcome, calls = _deliver_card([_slack_error()], op=op, thread=thread, gate=allowed)
-    assert outcome["result"] == "delivered" and len(calls) == 2
-    assert checked == [True]
-    assert [kind for kind, _ in calls] == [op, op]
-    first, last = [kw for _, kw in calls]
-    assert {k: v for k, v in first.items() if k != "blocks"} == {
-        k: v for k, v in last.items() if k != "blocks"}
-    assert any(b["type"] == "context_actions" for b in first["blocks"])
-    assert not any(b["type"] == "context_actions" for b in last["blocks"])
-    controls = [e for b in last["blocks"] if b["type"] == "actions" for e in b["elements"]]
+@pytest.mark.parametrize("rejected", [False, True])
+def test_visible_controls_keep_the_target_and_never_fallback(op, thread, rejected, caplog):
+    outcome, calls = _deliver_card([_slack_error()] if rejected else [], op=op, thread=thread)
+    assert outcome["result"] == ("not_sent" if rejected else "delivered")
+    assert len(calls) == 1 and calls[0][0] == op
+    payload = calls[0][1]
+    assert not any(b["type"] == "context_actions" for b in payload["blocks"])
+    controls = [e for b in payload["blocks"] if b["type"] == "actions" for e in b["elements"]]
     menu, = [e for e in controls if e["type"] == "static_select"]
-    assert [o["value"] for o in menu["options"]] == ["b" * 32, "c" * 32, "d" * 32]
+    assert [o["value"] for o in menu["options"]] == ["b" * 32, "c" * 32]
     stamps = [e for e in controls if e["type"] == "button"]
-    assert [e["value"] for e in stamps] == [f"{i:032x}" for i in range(1, 6)]
+    assert [e["value"] for e in stamps] == [f"{i:032x}" for i in range(1, 6)] + ["d" * 32]
     assert stamps[1]["style"] == "primary"
-    assert [b for b in first["blocks"] if b["type"] not in {"actions", "context_actions"}] == [
-        b for b in last["blocks"] if b["type"] != "actions"]
+    assert payload["blocks"] == render(_stamps_spec())[1]
     if op == "update":
-        assert outcome["message_id"] == last["ts"] == "1790000000.000001"
+        assert payload["ts"] == "1790000000.000001"
     elif thread:
-        assert last["thread_ts"] == "1790000000.000002"
-    assert caplog.text.count("slack_compact_stamps_unsupported") == 1
+        assert payload["thread_ts"] == "1790000000.000002"
     assert "合成カード" not in caplog.text
-
-
-@pytest.mark.parametrize("failure,result", [
-    (_slack_error(), "not_sent"), (TimeoutError("synthetic"), "unknown"),
-])
-def test_rejected_legacy_retry_is_not_repeated(failure, result):
-    outcome, calls = _deliver_card([_slack_error(), failure], op="update")
-    assert outcome["result"] == result and len(calls) == 2
-    assert all(kind == "update" for kind, _ in calls)
 
 
 @pytest.mark.parametrize("failure,result", [
@@ -227,12 +211,12 @@ def test_rejected_legacy_retry_is_not_repeated(failure, result):
     (_slack_error(200, "internal_error"), "unknown"),
     (_slack_error(403, "missing_scope"), "not_sent"),
 ])
-def test_uncertain_or_other_failure_never_retries_compact_card(failure, result):
+def test_uncertain_or_other_failure_never_retries_visible_card(failure, result):
     outcome, calls = _deliver_card([failure])
     assert outcome["result"] == result and len(calls) == 1
 
 
-def test_compact_fallback_honors_revoked_send_authority():
+def test_rejection_does_not_send_again_when_authority_is_revoked():
     async def denied():
         return False
 
@@ -247,16 +231,16 @@ def test_legacy_card_rejection_does_not_retry_or_drop_its_blocks():
     assert len(calls) == 1 and calls[0][1]["blocks"]
 
 
-def test_fallback_that_exceeds_block_budget_is_not_sent(monkeypatch):
+def test_visible_controls_that_exceed_block_budget_are_not_sent(monkeypatch):
     spec = _stamps_spec()
     spec["parts"]["action_rows"][0] = [spec["parts"]["action_rows"][0][-1]]
-    monkeypatch.setattr(cards, "BLOCK_MAX", len(render(spec)[1]))
+    monkeypatch.setattr(cards, "BLOCK_MAX", len(render(spec)[1]) - 1)
     outcome, calls = _deliver_card([_slack_error()], spec=spec)
     assert outcome == {"result": "not_sent", "error_code": "bad_render"}
-    assert len(calls) == 1
+    assert calls == []
 
 
-@pytest.mark.parametrize("failures", [[asyncio.CancelledError()], [_slack_error(), asyncio.CancelledError()]])
-def test_compact_and_legacy_attempts_propagate_cancellation(failures):
+@pytest.mark.parametrize("op", ["create", "update"])
+def test_card_attempts_propagate_cancellation(op):
     with pytest.raises(asyncio.CancelledError):
-        _deliver_card(failures)
+        _deliver_card([asyncio.CancelledError()], op=op)

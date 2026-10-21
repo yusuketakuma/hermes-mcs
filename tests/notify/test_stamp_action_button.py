@@ -114,20 +114,19 @@ def _rendered_spec(led, monkeypatch, transport):
     return _spec(led)
 
 
-def test_slack_draws_the_stamp_row_as_compact_pairs(led, monkeypatch):
+def test_slack_draws_visible_stamp_names_and_a_distinct_post_picker(led, monkeypatch):
     from adapters.slack import cards as slack_cards
     spec = _rendered_spec(led, monkeypatch, "slack")
     blocks = slack_cards.render(spec)[1]
-    compact, = [b for b in blocks if b.get("type") == "context_actions"]
-    assert len(compact["elements"]) == 3
-    stamp_row = [e[key] for e in compact["elements"]
-                 for key in ("positive_button", "negative_button")]
-    assert [e["text"]["text"] for e in stamp_row] == ["👀", "🙆", "🙏", "👍", "✅", "別の投稿"]
+    menu, stamp_block = [b for b in blocks if b.get("type") == "actions"]
+    stamp_row = stamp_block["elements"]
+    assert all(e["type"] == "button" for e in stamp_row)
+    assert [e["text"]["text"] for e in stamp_row] == [
+        "👀見ました", "🙆承知", "🙏感謝", "👍いいね", "✅完了", "🗂 別の投稿"]
     planned = [b for row in spec["parts"]["action_rows"] for b in row]
     expected = [b["token"] for b in planned if b["id"] == "stamp_press"]
     expected += [b["token"] for b in planned if b["id"] == "stamp"]
     assert [e["value"] for e in stamp_row] == expected
-    menu, = [b for b in blocks if b.get("type") == "actions"]
     assert [e["type"] for e in menu["elements"]] == ["static_select"]
 
 
@@ -209,8 +208,6 @@ def test_partial_and_complete_stamp_rows_keep_each_operation_reachable_once(
                     menu.extend(o["value"] for o in item["options"])
                 elif item["type"] == "button":
                     actual.append(item["value"])
-                elif item["type"] == "feedback_buttons":
-                    actual.extend(item[k]["value"] for k in ("positive_button", "negative_button"))
     elif transport == "discord":
         for item in discord_cards.message_payload(spec)["view"].items:
             menu.extend(o.value for o in getattr(item, "options", []))

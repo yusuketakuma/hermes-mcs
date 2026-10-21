@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "Slackのスタンプを絵文字と名前で判別できる表示へ修正",
+  "summary": "親指だけに見えて操作を区別できなかったSlackのスタンプを、見ました・承知・感謝・いいね・完了の絵文字と名前を持つボタンに変更しました。6個目は「🗂 別の投稿」と表示し、対象を選ぶ操作であることが分かります。1回押しによる追加と、同じスタンプの取消は維持します。",
+  "upgrade": "Hermes gateway、独立Slack接続ではstandaloneの再起動後、新規カードと次回更新されるカードから反映します。通常の更新手順では再起動を行います。標準ボタンを使うため、モバイルでの折り返し・縦並びはSlackの表示に従い、横一列は保証しません。スタンプ種別・操作者・送信条件・Discord・LINE WORKSの表示は変更しません。",
+  "details": [
+    "feedback_buttonsは実モバイルで固定の親指になり、指定したラベルを可視の絵柄として扱わなかった。標準buttonへ統一し、旧カードのpairクリック受信と認可検査は保持する。",
+    "小型部品へのinvalid_blocks拒否に限る旧表示への再試行は削除し、タイムアウト・結果不明の再送禁止と通常の429再試行条件を維持する。"
+  ],
+  "refs": [
+    "adapters/slack/cards.py",
+    "adapters/slack/delivery.py",
+    "tests/adapters/slack/test_slack_compact_stamps.py"
+  ]
+}

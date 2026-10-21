@@ -285,8 +285,10 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
             posted_blocks = posted["blocks"]
             if isinstance(posted_blocks, str):
                 posted_blocks = json.loads(posted_blocks)
-            compact, = [block for block in posted_blocks if block["type"] == "context_actions"]
-            assert len(compact["elements"]) == 3
+            compact, = [block for block in posted_blocks
+                         if block.get("block_id", "").startswith("mcs:stamps:")]
+            assert len(compact["elements"]) == 6
+            assert all(button["type"] == "button" for button in compact["elements"])
             async def stamp_form(request_id, timeout):
                 return {"outcome": "applied", "modal": True, "form": {
                     "card_id": 7, "token": "d" * 32, "mcs_user_id": 501,
@@ -297,12 +299,9 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
                                    "type": None, "state": "observed", "observed_at": 1.0}}]}}
             monkeypatch.setattr(actions, "_wait_result", stamp_form)
             expected = set()
-            for pair in compact["elements"]:
-                for side in ("positive_button", "negative_button"):
-                    token = pair[side]["value"]
-                    expected.add(token)
-                    await dispatch({**body, "actions": [{
-                        "type": "feedback_buttons", "action_id": pair["action_id"], "value": token}]})
+            for button in compact["elements"]:
+                expected.add(button["value"])
+                await dispatch({**body, "actions": [button]})
             queued = [json.loads(path.read_text()) for path in Path(dirs["cmd_int"]).glob("*.json")]
             stamp_commands = [item for item in queued if item.get("token") in expected]
             assert len(queued) == 8 and len(stamp_commands) == 6

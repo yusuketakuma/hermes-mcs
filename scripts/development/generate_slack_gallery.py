@@ -126,18 +126,13 @@ class Screen:
         return y + 16
 
     def actions(self, x, y, stamp_row=False):
-        """One menu and three compact stamp pairs; MCSで開く remains a text link."""
+        """One menu and named stamp buttons; MCSで開く remains a text link."""
         self.button(x, y, "操作を選ぶ… ▾", 173)
         if stamp_row:
-            left = x
-            for a, b, width in (("👀", "🙆 ✓", 90), ("🙏", "👍", 80), ("✅", "別の投稿", 132)):
-                self.rect(left, y + 52, width, 32, "#f3f6f4", 6, "#a9b5ae")
-                self.text(left + 9, y + 74, a, 16)
-                self.line(left + 37, y + 58, left + 37, y + 78, "#a9b5ae")
-                self.text(left + 46, y + 74, b, 16)
-                left += width + 8
-        self.text(x, y + (116 if stamp_row else 76), "MCSで開く", 18, "#1264a3")
-        return y + (140 if stamp_row else 100)
+            for i, label in enumerate(("👀見ました", "🙆承知 ✓", "🙏感謝", "👍いいね", "✅完了", "🗂 別の投稿")):
+                self.button(x, y + 52 + i * 48, label, 250, primary=i == 1)
+        self.text(x, y + (370 if stamp_row else 76), "MCSで開く", 18, "#1264a3")
+        return y + (394 if stamp_row else 100)
 
     def card(self, x, y, width=770, full=False):
         """Card zones top to bottom: patient title, meta line, per post a
@@ -191,7 +186,7 @@ def notification():
 
 
 def menu():
-    s = Screen(3, "スタンプは1回で、ほかの操作はメニューから。", "小型表示の配置案（実画面は未確認）。✓ のスタンプをもう一度押すと取消。", 1200)
+    s = Screen(3, "スタンプは1回で、ほかの操作はメニューから。", "絵文字と名前で操作を区別。✓ をもう一度押すと取消。配置は端末により異なります。", 1400)
     x, y = s.app()
     y = s.card(x, y)
     s.actions(x, y, stamp_row=True)
@@ -205,7 +200,7 @@ def menu():
         if i == 0:
             s.rect(mx + 7, yy - 2, 286, 38, "#e5f3ec", 4)
         s.text(mx + 24, yy + 24, label, 19, GREEN if i == 0 else INK, i == 0)
-    s.text(x, 1090, "全体の新着集計・自分のタスク・未確認一覧は、集計カードのメニューへ。", 17, MUTED)
+    s.text(x, 1290, "全体の新着集計・自分のタスク・未確認一覧は、集計カードのメニューへ。", 17, MUTED)
     return s.finish()
 
 

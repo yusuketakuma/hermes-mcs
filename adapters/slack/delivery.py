@@ -314,24 +314,7 @@ class SlackCardAdapter:
                     return {"result": "not_sent", "error_code": "thread_root_unverified"}
                 if op != "update":
                     kwargs["thread_ts"] = thread_ts
-            try:
-                response = await call_native(send, **kwargs)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                outcome = _failed(exc, op, message_id)
-                if outcome != {"result": "not_sent", "error_code": "invalid_blocks"} \
-                        or not any(b["type"] == "context_actions" for b in blocks):
-                    return outcome
-                allowed = RETRY_ALLOWED.get()
-                if allowed is not None and not await allowed():
-                    return outcome
-                try:
-                    _, kwargs["blocks"] = render(spec, names, compact_stamps=False)
-                except ValueError:
-                    return {"result": "not_sent", "error_code": "bad_render"}
-                _log("blocks_rejected", reason="slack_compact_stamps_unsupported")
-                response = await call_native(send, **kwargs)
+            response = await call_native(send, **kwargs)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
