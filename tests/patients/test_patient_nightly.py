@@ -861,3 +861,21 @@ def test_a_failed_repair_stays_an_unsupported_failure(runtime, monkeypatch):
             break
     assert result['reason'] == 'nightly_unsupported_items'
     assert len(scans) == 2                           # one answer, one bounded repair
+
+
+def test_a_repair_that_stops_at_the_budget_is_replanned_too(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, body=PROSE)
+    def reply(p):
+        if len(p['source']) <= 1500:
+            return _quote(p['source'])
+        if 'rejected' in p:
+            return {'status': 200, 'finish_reason': 'length', 'text': '{'}
+        return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': [
+            {'category': 'living', 'text': '合成の言い換え', 'evidence': '合成の言い換え',
+             'subject': 'unspecified', 'details': []}]})}
+    scans = _scan_chat(monkeypatch, reply)
+    finish(runtime)
+    scan = document(led, nightly.SCAN)
+    assert scan['complete'] and scan['split'] == 1 and scan.get('attempts', 0) == 0
+    assert 'rejected' in scans[1] and len(scans[2]['source']) <= 1500

@@ -441,24 +441,31 @@ def _scan(cfg, source, saved, night_id, deadline, admit, end):
             "JSON {\"patient_context\":[{category,text,evidence,subject,details:[]}]}。"
             "text/evidenceは同じ完全な引用。対象不明はsubject=unspecified。該当なしは空配列。",
             "categories": sorted(CATEGORIES), "already_found": items, "source": chunk}
-        try:
-            answer = _ask(cfg, payload, deadline, admit, end)
-        except ValueError as exc:
-            finer = str(exc) == "nightly_length_stop" and nightly_plan.split_scan(source, saved, cursor)
-            if not finer:
-                raise
-            # nothing was accepted from this chunk: resume on the finer plan, keeping facts
-            return {**finer, "complete": False, "facts": saved.get("facts", []), "audited": False}
+        def asked(body):
+            """The answer, or the finer re-plan when it stopped at the answer budget."""
+            try:
+                return _ask(cfg, body, deadline, admit, end), None
+            except ValueError as exc:
+                finer = str(exc) == "nightly_length_stop" and nightly_plan.split_scan(source, saved, cursor)
+                if not finer:
+                    raise
+                # nothing was accepted from this chunk: resume on the finer plan, keeping facts
+                return None, {**finer, "complete": False, "facts": saved.get("facts", []), "audited": False}
+        answer, replan = asked(payload)
+        if replan:
+            return replan
         try:
             checked = nightly_plan.scan_items(answer, chunk)
         except ValueError as exc:
             if str(exc) != "nightly_unsupported_items":
                 raise
             # one bounded repair: name the refused items by index and fixed reason only
-            answer = _ask(cfg, {**payload, "instruction": payload["instruction"]
-                                + "前回の回答のrejectedの項目は、原文と完全一致しないか、属性が引用の中にありません。"
-                                "原文に完全一致する引用だけでJSON全体を返し直す。裏付けできない項目は含めない。",
-                                "rejected": nightly_plan.rejected_items(answer, chunk)}, deadline, admit, end)
+            answer, replan = asked({**payload, "instruction": payload["instruction"]
+                                    + "前回の回答のrejectedの項目は、原文と完全一致しないか、属性が引用の中にありません。"
+                                    "原文に完全一致する引用だけでJSON全体を返し直す。裏付けできない項目は含めない。",
+                                    "rejected": nightly_plan.rejected_items(answer, chunk)})
+            if replan:
+                return replan
             checked = nightly_plan.scan_items(answer, chunk)
         items += checked
     facts = {f["id"]: f for f in saved.get("facts", [])}
