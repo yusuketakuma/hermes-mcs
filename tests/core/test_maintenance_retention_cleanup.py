@@ -121,11 +121,13 @@ def test_rotate_log_covers_update_recovery_cmd_int_and_llamacpp(monkeypatch, tmp
     monkeypatch.setenv("HOME", str(tmp_path))
     checked = []
 
-    def getsize(path):
-        checked.append(path)
-        return 0
+    real = os.lstat
 
-    monkeypatch.setattr(maintenance.os.path, "getsize", getsize)
+    def lstat(path, *args, **kwargs):
+        checked.append(path)
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(maintenance.os, "lstat", lstat)
     maintenance.rotate_log()
     names = {os.path.basename(p) for p in checked}
     assert {"update.log", "recovery.log", "cmd_int.log", "llamacpp.log"} <= names
@@ -137,11 +139,13 @@ def test_rotate_log_covers_standalone_llamacpp_log(monkeypatch, tmp_path):
     monkeypatch.setattr(maintenance, "HOME", str(tmp_path / "mcs"))
     checked = []
 
-    def getsize(path):
-        checked.append(path)
-        return 0
+    real = os.lstat
 
-    monkeypatch.setattr(maintenance.os.path, "getsize", getsize)
+    def lstat(path, *args, **kwargs):
+        checked.append(path)
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(maintenance.os, "lstat", lstat)
     maintenance.rotate_log()
     assert str(tmp_path / "mcs" / "logs" / "llamacpp.log") in checked
     assert str(tmp_path / "user" / ".hermes" / "logs" / "llamacpp.log") in checked

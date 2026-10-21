@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "ログの切替えを毎回の処理で行い、取り残された一時ファイルを掃除するように",
+  "summary": "ログの切替え（5MB超）は日次バックアップと同じ後片付けの段階でしか行われず、処理が時間切れで後片付けを省くと何日も遅れることがありました。切替えを毎回の処理で行うようにしました。また、強制終了で残った書込み途中の一時ファイル（送信用の内容に患者情報を含み得る）を1日後に削除します。ログ本体がシンボリックリンクの場合はたどらず、読取りも切詰めもしません。",
+  "upgrade": "追加操作は不要です。次の定期処理から反映されます。",
+  "details": [
+    "rotate_log は通常ファイルであることを lstat で確かめ、本体を O_NOFOLLOW で開いて copytruncate する。.1 側がシンボリックリンクの場合は従来どおり拒否して報告する。",
+    "prune_leftovers は data/cmd_results・data/*_render・data/*_state の .atomic.*.tmp・.pub-*・.alias-*.tmp のうち1日より古いものを削除する。公開済みの spec・claim・journal には触れない。各ディレクトリはシンボリックリンクをたどらずに開いて固定し、その中の通常ファイルだけを検査・削除する（リンク先の外部ディレクトリやリンクされたファイルは削除しない）。",
+    "回帰: tests/core/test_v129_maintenance_stability.py, tests/ingest/test_v129_ingest_stability.py"
+  ],
+  "refs": [
+    "mcs/core/maintenance.py",
+    "mcs/ingest/run_check.py"
+  ]
+}

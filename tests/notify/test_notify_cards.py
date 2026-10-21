@@ -1191,7 +1191,7 @@ def test_snapshot_dirty_flag_lifecycle(led):
     assert not notify_cards.snapshot_dirty(led)
     _dispatch(led, _intent(led))
     assert notify_cards.snapshot_dirty(led)
-    notify_cards.clear_snapshot_dirty(led)
+    notify_cards.clear_snapshot_dirty(led, notify_cards.snapshot_dirty(led))
     assert not notify_cards.snapshot_dirty(led)
 
 

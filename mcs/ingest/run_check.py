@@ -104,6 +104,17 @@ LOCK_WAIT_S = 150
 _CODE_STAMP = writer_lock.code_stamp()
 
 
+def _crash_site(e: BaseException) -> str:
+    """Type and file:line of the innermost frame — never the message,
+    which can embed paths or user data; basename only (no home dir)."""
+    tb = e.__traceback__
+    while tb is not None and tb.tb_next is not None:
+        tb = tb.tb_next
+    where = (f"{os.path.basename(tb.tb_frame.f_code.co_filename)}:{tb.tb_lineno}"
+             if tb is not None else "unknown")
+    return f"{type(e).__name__}@{where}"
+
+
 def _code_changed(result: dict) -> bool:
     """True once the mcs/ tree changed under this tick; records 'code_changed' once.
 
@@ -348,11 +359,12 @@ def _commands_only(lock_fd, deadline) -> int:
             ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30))
         notify_spool.publish_flags(cfg, root)
         notify_cards.gc(ledger, cfg)
-        if notify_cards.snapshot_dirty(ledger):
+        dirty = notify_cards.snapshot_dirty(ledger)
+        if dirty:
             result["snapshot"] = maintenance.publish_snapshot(
                 DB, deadline=_hard_deadline())
             if result["snapshot"]:
-                notify_cards.clear_snapshot_dirty(ledger)
+                notify_cards.clear_snapshot_dirty(ledger, dirty)
             else:
                 result["ok"] = False
                 result["errors"].append("snapshot_publish_failed")
@@ -362,7 +374,8 @@ def _commands_only(lock_fd, deadline) -> int:
         # exception text can embed paths/user data — type name only,
         # matching the tick's outermost boundary
         print(json.dumps({"ok": False,
-                          "error": f"crash:{type(e).__name__}"}))
+                          "error": f"crash:{type(e).__name__}",
+                          "crash_site": _crash_site(e)}))
         return 1
     finally:
         try:
@@ -665,7 +678,7 @@ def _hard_deadline() -> float | None:
 
 
 def _housekeeping(result):
-    """Daily backup, log rotation, attachment pruning and the daily
+    """Daily backup, attachment pruning and the daily
     database upkeep — each failure lands in errors without failing the
     run. Backup and upkeep start only when the watchdog leaves them time
     (M7); a skipped backup is recorded, not silently dropped."""
@@ -690,10 +703,6 @@ def _housekeeping(result):
     except Exception as e:
         result["errors"].append(f"db_maintenance: {type(e).__name__}")
     try:
-        maintenance.rotate_log()
-    except Exception as e:
-        result["errors"].append(f"log_rotate: {type(e).__name__}")
-    try:
         pruned = maintenance.prune_attachments(DB)
         if pruned:
             result["attachments_pruned"] = pruned
@@ -705,11 +714,21 @@ def _housekeeping(result):
         result["errors"].append(f"prune_leftovers: {type(e).__name__}")
 
 
+def _rotate_logs(result) -> None:
+    """Every tick: housekeeping may be deferred for days by slow ticks,
+    and rotation is one lstat per log unless a log is over the cap."""
+    try:
+        maintenance.rotate_log()
+    except Exception as e:
+        result["errors"].append(f"log_rotate: {type(e).__name__}")
+
+
 def _overdue_housekeeping(result) -> None:
     """An MCS failure or crash ends the tick before housekeeping; a long outage or
     manual re-login wait must not also stop the local daily backup. Once
     it is overdue (no backup yet is not overdue), run the local-only
     housekeeping — no MCS request, no send — and keep its errors."""
+    _rotate_logs(result)
     try:
         if maintenance.backup_overdue():
             _housekeeping(result)
@@ -757,7 +776,7 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
         if state == "published":
             import snapshots
             result["snapshot_timing"] = snapshots.last_timing()
-            notify_cards.clear_snapshot_dirty(ledger)
+            notify_cards.clear_snapshot_dirty(ledger, dirty)
     except Exception as e:
         result["errors"].append(f"snapshot: {type(e).__name__}")
         ledger.finish_run(run_id, "partial",
@@ -955,6 +974,7 @@ def _main() -> int:
                 ledger, adapter, enabled=True, deadline=deadline)
         # optional, but a slow MCS can spend every tick's budget on unread
         # — once the daily backup is overdue it runs past the deadline
+        _rotate_logs(result)
         _run_stage(result, "housekeeping", deadline, _housekeeping, result,
                    required=maintenance.backup_overdue())
         status = _run_stage(result, "finish", deadline, _finish_run,
@@ -1011,6 +1031,7 @@ def _main() -> int:
             _fail_run(ledger, args, result, run_id, "failed",
                       f"crash: {type(e).__name__}", deadline,
                       alert="run_failed")
+        result["errors"].append(f"crash_site: {_crash_site(e)}")
         _overdue_housekeeping(result)
         _write_health(ledger, result, "failed", run_id=run_id, cfg=cfg)
         print(json.dumps(result, ensure_ascii=False))

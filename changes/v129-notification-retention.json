@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "送られなかった通知の古い記録を90日で整理するように",
+  "summary": "日次の整理で、送信されなかった（取消し・未送信）通知の記録のうち、90日より古く、同じカードに新しい版があり、外部への影響の記録や参照が残っていないものを、その部品・送信試行の記録とともに削除します。どの記録からも参照されなくなった古い表示内容の記録も削除します。",
+  "upgrade": "追加操作は不要です。更新後の最初の日次整理から適用されます。",
+  "details": [
+    "削除する条件: 状態が not_sent/cancelled、更新が90日より前、送信用ファイルが掃除済み（spec_published=0）、同じカードに後の版がある（カードのない通知を含む）、部品と送信試行がすべて not_sent、通知の対応付け（intent）と復元時の保留（restore hold）から参照されていない。",
+    "表示内容の記録（view manifest）は、90日より古く、そのカードの最新ではなく、通知・確認・操作ボタンのどれからも参照されていないものだけを削除する。",
+    "残すもの: 配信済みの通知とその部品・送信試行（表示した証拠として統計と照合が読む）、command_receipts（承認・スタンプ・辞書・更新の記録とコマンドの重複防止）、確認の記録（notification_acknowledgements）、thread_read_marks と message_reaction_actor_fetch（スレッド・投稿ごとの現在の状態で、ログではない）。",
+    "回帰: tests/core/test_v129_maintenance_stability.py"
+  ],
+  "refs": [
+    "mcs/core/maintenance.py"
+  ]
+}
