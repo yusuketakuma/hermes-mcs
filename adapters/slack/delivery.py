@@ -660,7 +660,10 @@ class DeliveryWorker(_BaseWorker):
                 or data.get("channel") not in (None, self._settings["channel_id"])):
             return {"result": "unknown", "error_code": "bad_slack_response"}
         ctx["consumed"].add(prior)
-        return {"result": "delivered", "remote_id": prior}
+        outcome = {"result": "delivered", "remote_id": prior}
+        if attachment:
+            outcome["attachment_origin"] = "edit"
+        return outcome
 
     async def _rewrite_prior(self, thread_ts: str, prior, text: str,
                              ctx: dict, blocks=None):
@@ -746,7 +749,8 @@ class DeliveryWorker(_BaseWorker):
             # corruption locally cannot fake a match either way
             rid = await self._file_remote_match(thread_ts, part, ctx)
             if rid is not None:
-                return {"result": "delivered", "remote_id": rid}
+                return {"result": "delivered", "remote_id": rid,
+                        "attachment_origin": "remote_match"}
         if part.get("prior_remote_id"):
             # A failed identity check must not re-upload a previously sent file.
             return {"result": "unknown", "error_code": "file_target_unverified"}
@@ -775,7 +779,8 @@ class DeliveryWorker(_BaseWorker):
         if data.get("ok") is not True or not fid:
             return {"result": "unknown",
                     "error_code": "bad_slack_response"}
-        return {"result": "delivered", "remote_id": fid}
+        return {"result": "delivered", "remote_id": fid,
+                "attachment_origin": "upload"}
 
     async def _file_remote_match(self, thread_ts: str, part: dict,
                                  ctx: dict):
