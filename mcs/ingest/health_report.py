@@ -431,6 +431,17 @@ def bounded_health_read(db, read, seconds=None):
             db.execute(f"PRAGMA busy_timeout={previous_wait}")
 
 
+def collection_diagnostics_health(db, errors, now):
+    """Observe collection details within the existing reader budget without changing the verdict."""
+    import collection_diagnostics as diagnostics
+    try:
+        incomplete = bounded_health_read(
+            db, lambda checkpoint: diagnostics.incomplete_counts(db, now, checkpoint))
+    except (sqlite3.Error, RuntimeError, ValueError, TypeError):
+        incomplete = diagnostics.unknown_incomplete()
+    return {"observed_at": now, "errors": diagnostics.error_counts(errors), "incomplete": incomplete}
+
+
 def pending_health(db, now):
     """Use the same streamed population for counts and reasons, or keep the old count."""
     import notify_scope
@@ -727,6 +738,7 @@ def build_health(db, result: dict, status: str,
         "at": now,
         "unread_at": unread_at(result, status, now),
         **coll,
+        "collection_diagnostics": collection_diagnostics_health(db, real_errors, now),
         "disk_free_mb": round(free_mb) if free_mb is not None else None,
         "disk_low": disk_low,
         "notify": {"state": notify_state,

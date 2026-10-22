@@ -15,10 +15,10 @@ def test_hash_file_refuses_any_sidecar_entry(tmp_path, make_sidecar, suffix):
     snapshot.write_bytes(b"synthetic")
     make_sidecar(tmp_path / f"snapshot.db{suffix}", tmp_path)
     with pytest.raises(ValueError, match="static_snapshot_required"):
-        mcs_repair._hash_file(snapshot)
+        mcs_repair.hash_file(snapshot)
 
 
 def test_hash_file_accepts_a_static_file(tmp_path):
     snapshot = tmp_path / "snapshot.db"
     snapshot.write_bytes(b"synthetic")
-    assert len(mcs_repair._hash_file(snapshot)) == 64
+    assert len(mcs_repair.hash_file(snapshot)) == 64

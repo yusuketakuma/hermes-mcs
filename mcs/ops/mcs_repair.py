@@ -77,8 +77,13 @@ class PublishedOutputError(OSError):
     """A complete output exists, but directory persistence is unconfirmed."""
 
 
-def _hash_file(path: str | Path) -> str:
-    """Hash an explicit regular file, refusing symlinks and live sidecars."""
+def hash_file(path: str | Path, *, deadline: float | None = None,
+              clock=time.monotonic) -> str:
+    """Hash an explicit regular file, refusing symlinks and live sidecars.
+
+    With ``deadline`` the hash is refused once the monotonic clock passes it
+    (checked per 1 MiB read; one blocking read itself cannot be interrupted).
+    """
     path = Path(path)
     if has_sqlite_sidecars(path):
         raise ValueError("static_snapshot_required")
@@ -88,12 +93,26 @@ def _hash_file(path: str | Path) -> str:
             raise ValueError("regular_file_required")
         digest = hashlib.sha256()
         for chunk in iter(lambda: stream.read(1_048_576), b""):
+            if deadline is not None and clock() >= deadline:
+                raise ValueError("time_budget_exceeded")
             digest.update(chunk)
         return digest.hexdigest()
 
 
-def _digest(value) -> str:
+def canonical_digest(value) -> str:
     return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def snapshot_binding(db) -> SnapshotBinding | None:
+    """Digest the published generation id; None when the snapshot has no valid one."""
+    columns = {r[1] for r in db.execute("PRAGMA table_info(snapshot_meta)")}
+    if not {"singleton", "generation_id", "generated_at"} <= columns:
+        return None
+    row = db.execute("SELECT generation_id,generated_at FROM snapshot_meta "
+                     "WHERE singleton=1").fetchone()
+    if row and valid_uuid(row[0]) and type(row[1]) in (int, float) and 0 <= row[1] < 1e12:
+        return {"generation_digest": canonical_digest(row[0]), "generated_at": row[1]}
+    return None
 
 
 def _stages() -> list[Stage]:
@@ -155,7 +174,7 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
     nonce = str(uuid.uuid4()) if nonce is None else nonce
     if not valid_uuid(nonce):
         raise ValueError("nonce_invalid")
-    before = _hash_file(snapshot)
+    before = hash_file(snapshot)
     audit = audit_db(snapshot, max_steps=max_steps)
     counts: dict[str, int | None] = {}
     groups: dict[str, dict[str, int] | None] = {}
@@ -192,12 +211,7 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
                     # Query text and SQLite error text must never reach reports.
                     pass
 
-        if supported({"snapshot_meta": "singleton generation_id generated_at"}):
-            row = db.execute("SELECT generation_id,generated_at FROM snapshot_meta "
-                             "WHERE singleton=1").fetchone()
-            if row and valid_uuid(row[0]) and type(row[1]) in (int, float) \
-                    and 0 <= row[1] < 1e12:
-                binding = {"generation_digest": _digest(row[0]), "generated_at": row[1]}
+        binding = snapshot_binding(db)
         count("patients", {"patients": "project_id"}, "SELECT COUNT(*) FROM patients")
         count("floor_recorded", {"patients": "history_floor"},
               "SELECT COUNT(*) FROM patients WHERE history_floor=-1 OR history_floor>0")
@@ -303,7 +317,7 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
                     + " bucket,COUNT(*) FROM fetch_jobs GROUP BY bucket", params).fetchall())
             except sqlite3.DatabaseError:
                 pass
-    if before != _hash_file(snapshot):
+    if before != hash_file(snapshot):
         raise ValueError("snapshot_changed")
     report: RepairPlan = {
         "format": FORMAT, "nonce": nonce, "max_steps": max_steps, "plan_digest": "",
@@ -316,7 +330,7 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
                      "records_are_not_execution_authority",
                      "distinct_device_is_not_disaster_recovery_proof"],
     }
-    report["plan_digest"] = _digest({k: v for k, v in report.items() if k != "plan_digest"})
+    report["plan_digest"] = canonical_digest({k: v for k, v in report.items() if k != "plan_digest"})
     return report
 
 
@@ -423,7 +437,7 @@ def _entries(stream, digest, nonce, count_keys):
                 or not 0 <= entry["errors"] <= 1_000_000:
             raise ValueError("audit_log_incompatible")
         unsigned = {k: v for k, v in entry.items() if k != "entry_digest"}
-        if entry.get("entry_digest") != _digest(unsigned):
+        if entry.get("entry_digest") != canonical_digest(unsigned):
             raise ValueError("audit_log_tampered")
         for key in ("before", "after"):
             values = entry.get(key)
@@ -458,14 +472,14 @@ def _log(path, *, create):
 
 def _backup_proof(backup, expected, snapshot):
     """Verify bytes and integrity on a different device; assertions alone never suffice."""
-    if not valid_hash(expected) or _hash_file(backup) != expected:
+    if not valid_hash(expected) or hash_file(backup) != expected:
         raise ValueError("backup_hash_unverified")
     if Path(backup).stat().st_dev == Path(snapshot).stat().st_dev:
         raise ValueError("independent_backup_required")
-    if expected != _hash_file(snapshot):
+    if expected != hash_file(snapshot):
         raise ValueError("backup_snapshot_mismatch")
     result = audit_db(backup)
-    if not result["ok"] or _hash_file(backup) != expected:
+    if not result["ok"] or hash_file(backup) != expected:
         raise ValueError("backup_audit_unverified")
     return {"sha256": expected, "independent_device": True, "audit": result}
 
@@ -514,7 +528,7 @@ def record(value: RepairPlan, snapshot: str | Path, current_snapshot: str | Path
                 found = 0
             if found != 1:
                 raise ValueError("existing_applied_receipt_required")
-        if _hash_file(current_snapshot) != after["snapshot_sha256"]:
+        if hash_file(current_snapshot) != after["snapshot_sha256"]:
             raise ValueError("current_snapshot_changed")
     # No unsupported promise can be used to advance the ordered audit.
     c = after["counts"]
@@ -541,8 +555,8 @@ def record(value: RepairPlan, snapshot: str | Path, current_snapshot: str | Path
             raise ValueError("previous_stage_blocked")
         if entries and canonical(entries[0]["backup"]) != canonical(proof):
             raise ValueError("backup_evidence_changed")
-        if _hash_file(current_snapshot) != after["snapshot_sha256"] \
-                or _hash_file(snapshot) != value["snapshot_sha256"]:
+        if hash_file(current_snapshot) != after["snapshot_sha256"] \
+                or hash_file(snapshot) != value["snapshot_sha256"]:
             raise ValueError("current_snapshot_changed")
         entry = {
             "format": FORMAT, "nonce": nonce, "plan_digest": plan_digest,
@@ -557,7 +571,7 @@ def record(value: RepairPlan, snapshot: str | Path, current_snapshot: str | Path
             "after_snapshot_binding": after["snapshot_binding"],
             "schema_version": after["schema_version"],
         }
-        entry["entry_digest"] = _digest(entry)
+        entry["entry_digest"] = canonical_digest(entry)
         encoded = canonical(entry) + b"\n"
         if stream.tell() + len(encoded) > MAX_BYTES:
             raise ValueError("audit_log_too_large")
@@ -614,6 +628,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--nonce")
     p.add_argument("--max-steps", type=int, default=10_000_000)
     p.add_argument("--out")
+    p = subs.add_parser("attachments")
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--attachment-root", required=True)
+    p.add_argument("--limit", type=int, default=1000)
+    p.add_argument("--max-seconds", type=float, default=30.0)
+    p.add_argument("--after-id", type=int, default=0)
+    p.add_argument("--out")
     for name in ("record", "finalize"):
         p = subs.add_parser(name)
         for field in ("plan", "snapshot", "current-snapshot", "log", "nonce", "plan-digest"):
@@ -637,6 +658,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if command == "plan":
             result = plan(**args)
+        elif command == "attachments":
+            from attachment_audit import audit
+            # ids and the cursor go only to the private owner-only output
+            result, private = audit(**args)
+            if out:
+                save_new(out, private)
+            print(json.dumps(result, sort_keys=True, allow_nan=False))
+            return 0
         else:
             plan_path = args.pop("plan")
             value = _read_json(plan_path)
@@ -655,4 +684,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # attachment_audit imports this module; keep one module object, not two
+    sys.modules.setdefault("mcs_repair", sys.modules[__name__])
     sys.exit(main())
