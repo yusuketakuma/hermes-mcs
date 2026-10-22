@@ -112,13 +112,13 @@ def _git(repo, *args):
                    check=True, capture_output=True, timeout=30)
 
 
-def _synthetic_repo(tmp_path, gates_exit):
+def _synthetic_repo(tmp_path, gates_exit, workflow=SYNTHETIC_WORKFLOW):
     repo = tmp_path / "repo"
     (repo / "scripts/development").mkdir(parents=True)
     (repo / ".github/workflows").mkdir(parents=True)
     (repo / "ci").mkdir()
     (repo / "scripts/development/ci_local.sh").write_text(RUNNER.read_text())
-    (repo / ".github/workflows/ci.yml").write_text(SYNTHETIC_WORKFLOW)
+    (repo / ".github/workflows/ci.yml").write_text(workflow)
     (repo / "Makefile").write_text('RUFF = uv run --with "ruff==0.17.1" ruff\n')
     (repo / "ci/gates.py").write_text(f"raise SystemExit({gates_exit})\n")
     (repo / "ci/mine_gates.py").write_text("")
@@ -133,9 +133,9 @@ def _synthetic_repo(tmp_path, gates_exit):
     return repo, stub
 
 
-def _run(repo, stub, out, *jobs):
+def _run(repo, stub, out, *jobs, **extra_env):
     env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
-           "HOME": str(out.parent), "MCS_CI_PYTHON": str(stub)}
+           "HOME": str(out.parent), "MCS_CI_PYTHON": str(stub), **extra_env}
     return subprocess.run(["bash", str(repo / "scripts/development/ci_local.sh"),
                            "--out", str(out), *jobs],
                           capture_output=True, text=True, timeout=60, env=env)
@@ -180,3 +180,45 @@ def test_passing_job_is_recorded_but_partial_run_is_not_complete(tmp_path):
     assert summary["incident-gates"] == ["pass", "0"]
     assert summary["lint-test"][0] == "未実行"
     assert result.returncode == 1
+
+
+def test_fetch_installs_only_the_packages_into_the_new_venv(tmp_path):
+    repo, _ = _synthetic_repo(tmp_path, 0)
+    # base stub: `-m venv DIR` creates DIR/bin/python, which records its argv
+    stub = tmp_path / "venv-python"
+    stub.write_text('#!/bin/sh\n[ "$1" = -c ] && exit 0\n'
+                    'mkdir -p "$3/bin"\n'
+                    'printf \'#!/bin/sh\\n[ "$1" = -c ] && exit 0\\n'
+                    'printf "%%s\\\\n" "$@" >"$(dirname "$0")/../argv"\\n\' >"$3/bin/python"\n'
+                    'chmod +x "$3/bin/python"\n')
+    stub.chmod(0o755)
+    out = tmp_path / "out"
+    _run(repo, stub, out, "--fetch", "standalone-sdk")
+    argv = (out / "venv-standalone/argv").read_text().splitlines()
+    assert argv == ["-m", "pip", "install", "--quiet", "pytest==9.1.1", "-r",
+                    f"{out / 'checkout'}/deployment/requirements-standalone.txt"]
+
+
+@pytest.mark.parametrize("dirty", [False, True])
+def test_hermes_checkout_with_tracked_edits_is_not_runnable(tmp_path, dirty):
+    hermes = tmp_path / "hermes"
+    (hermes / ".venv/bin").mkdir(parents=True)
+    (hermes / ".venv/bin/python").write_text("#!/bin/sh\n")
+    (hermes / ".venv/bin/python").chmod(0o755)
+    (hermes / "setup.py").write_text("\n")
+    _git(hermes, "init", "-q")
+    _git(hermes, "add", "setup.py")
+    _git(hermes, "commit", "-q", "-m", "pinned")
+    ref = subprocess.run(["git", "-C", str(hermes), "rev-parse", "HEAD"], capture_output=True,
+                         text=True, check=True).stdout.strip()
+    if dirty:
+        (hermes / "setup.py").write_text("# local edit\n")
+    workflow = SYNTHETIC_WORKFLOW.replace("0" * 40, ref)
+    repo, stub = _synthetic_repo(tmp_path, 0, workflow)
+    out = tmp_path / "out"
+    _run(repo, stub, out, "hermes-integration", MCS_CI_HERMES_AGENT=str(hermes))
+    row = (out / "summary.tsv").read_text().splitlines()
+    note = next(r for r in row if r.startswith("hermes-integration\t")).split("\t")
+    # the untracked .venv alone never blocks; a tracked edit always does
+    assert (note[1] == "実行不能") is dirty
+    assert ("未commit の変更" in note[-1]) is dirty
