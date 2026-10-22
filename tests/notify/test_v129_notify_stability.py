@@ -101,15 +101,17 @@ def test_deterministic_storage_error_quarantines_only_that_command(led, tmp_path
     assert answer["error"] == "storage_rejected:IntegrityError"
 
 
-def test_busy_storage_still_stops_the_drain_without_consuming(led, tmp_path, monkeypatch):
+@pytest.mark.parametrize("error", [sqlite3.OperationalError("database is locked"),
+                                   sqlite3.ProgrammingError("Cannot operate on a closed database.")])
+def test_busy_storage_still_stops_the_drain_without_consuming(led, tmp_path, monkeypatch, error):
     root = _two_commands(led, tmp_path)
     monkeypatch.setattr(notify_cmds, "validate_int", lambda req: None)
 
     def dispatch(*a):
-        raise sqlite3.OperationalError("database is locked")
+        raise error
 
     monkeypatch.setattr(notify_cmds, "dispatch", dispatch)
-    with pytest.raises(sqlite3.OperationalError):
+    with pytest.raises(type(error)):
         notify_cmds.drain_int_commands(led, {"errors": []}, CFG, str(root))
     assert sorted(n for n in os.listdir(root / "cmd_int") if not n.startswith(".")) == ["a.json", "b.json"]
 

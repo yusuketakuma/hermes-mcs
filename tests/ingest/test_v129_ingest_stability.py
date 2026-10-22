@@ -53,6 +53,21 @@ def test_constraint_error_quarantines_the_command_and_the_next_one_runs(db, tmp_
     assert result["errors"] == ["cmd_invalid: apply_failed IntegrityError"]
 
 
+def test_api_misuse_error_propagates_and_keeps_the_command(db, tmp_path, monkeypatch):
+    import mcs_requests
+    cmd = tmp_path / "cmd"
+    cmd.mkdir()
+    _command(cmd / "a.json")
+
+    def apply(ledger, req):
+        raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+
+    monkeypatch.setattr(mcs_requests, "apply_command", apply)
+    with pytest.raises(sqlite3.ProgrammingError):
+        job_ops.drain_commands(db, {"errors": []}, cmd_dir=str(cmd))
+    assert sorted(p.name for p in cmd.iterdir()) == ["a.json"]
+
+
 def test_crash_site_is_type_and_innermost_basename_line():
     def inner():
         raise RuntimeError("/Users/someone/secret text")

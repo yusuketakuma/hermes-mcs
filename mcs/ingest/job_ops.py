@@ -171,8 +171,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 else:
                     receipt = mcs_requests.apply_command(ledger, req)
             except (ValueError, TypeError, KeyError, UnicodeError,
-                    RecursionError, sqlite3.IntegrityError, sqlite3.DataError,
-                    sqlite3.ProgrammingError) as e:
+                    RecursionError, sqlite3.IntegrityError,
+                    sqlite3.DataError) as e:
                 # a deterministic data failure (a corrupt stored receipt,
                 # a payload the handler cannot read) would re-fire on
                 # every drain and fail each tick: quarantine the file.

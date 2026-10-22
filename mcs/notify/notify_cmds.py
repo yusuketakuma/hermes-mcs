@@ -39,9 +39,9 @@ NOTIFY_OPS = ("notification", "refresh")
 HUMAN_CMDS = ("request.create", "ops.signal_dismiss", "ops.extract_feedback", "ops.mcs_reaction")
 _VALID_OPS = frozenset(TRANSPORT_OPS) | frozenset(NOTIFY_OPS)
 # per-command storage failures that repeat on every retry; busy/locked
-# (OperationalError) and a damaged file (DatabaseError) are not per-command
-DETERMINISTIC_DB_ERRORS = (sqlite3.IntegrityError, sqlite3.DataError,
-                           sqlite3.ProgrammingError)
+# (OperationalError), a damaged file (DatabaseError) and API misuse such as a
+# closed connection (ProgrammingError) are not per-command
+DETERMINISTIC_DB_ERRORS = (sqlite3.IntegrityError, sqlite3.DataError)
 
 _TOKEN_COMMAND_ID = re.compile(r"^[0-9a-f]{32}:[0-9a-f]{16}$")
 _ATTEMPT_ID = re.compile(r"^[0-9a-f]{16}$")

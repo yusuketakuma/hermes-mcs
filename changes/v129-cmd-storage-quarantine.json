@@ -4,7 +4,7 @@
   "summary": "ボタン操作や依頼・運用コマンドの取込みで、制約違反など毎回同じ結果になる保存エラーが起きると、そのコマンドで取込みが止まり、後ろに並んだ操作も処理されませんでした。こうしたコマンドは .invalid として隔離し、残りの操作を続けて処理します。データベースの使用中・ロック中・破損など、やり直せば通る可能性があるエラーは従来どおりコマンドを残して次回に再試行します。",
   "upgrade": "追加操作は不要です。隔離されたファイルは従来の .invalid と同じく1日後に掃除されます。",
   "details": [
-    "対象は sqlite3 の IntegrityError・DataError・ProgrammingError。data/cmd では cmd_invalid: apply_failed （型名）、data/cmd_int では storage_rejected:（型名） の固定コードで記録し、例外の文言は記録しない。",
+    "対象は sqlite3 の IntegrityError・DataError（閉じた接続などの ProgrammingError はコマンドに依存しないため隔離せず再送出）。data/cmd では cmd_invalid: apply_failed （型名）、data/cmd_int では storage_rejected:（型名） の固定コードで記録し、例外の文言は記録しない。",
     "OperationalError と DatabaseError（破損など）は従来どおり再送出し、コマンドを消費しない。",
     "回帰: tests/notify/test_v129_notify_stability.py, tests/ingest/test_v129_ingest_stability.py"
   ],

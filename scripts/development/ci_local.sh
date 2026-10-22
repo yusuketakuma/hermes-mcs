@@ -102,8 +102,9 @@ shim() {
 py_ok() { "$1" -c "import sys; sys.exit(sys.version_info[:2] != tuple(map(int, '$py_pin'.split('.'))))" 2>/dev/null; }
 pytest_ok() { "$1" -c "import pytest, sys; sys.exit(pytest.__version__ != '$pytest_pin')" 2>/dev/null; }
 make_venv() {  # make_venv DIR PKG...  (network, --fetch only)
-    "$base_python" -m venv "$1" >>"$out/fetch.log" 2>&1 &&
-        "$1/bin/python" -m pip install --quiet "$@" >>"$out/fetch.log" 2>&1
+    venv_dir=$1; shift
+    "$base_python" -m venv "$venv_dir" >>"$out/fetch.log" 2>&1 &&
+        "$venv_dir/bin/python" -m pip install --quiet "$@" >>"$out/fetch.log" 2>&1
 }
 
 base_python=${MCS_CI_PYTHON:-$(command -v python3 || true)}
@@ -163,6 +164,9 @@ prereq_hermes_integration() {
     [ -n "$hermes" ] || { reason="hermes-agent checkout がない（MCS_CI_HERMES_AGENT か --fetch）"; return 1; }
     [ "$(git -C "$hermes" rev-parse HEAD 2>/dev/null)" = "$hermes_ref" ] ||
         { reason="hermes-agent が ci.yml の ref $hermes_ref ではない"; return 1; }
+    # .venv is untracked; tracked edits would run code other than the recorded ref.
+    [ -z "$(git -C "$hermes" status --porcelain --untracked-files=no 2>/dev/null)" ] ||
+        { reason="hermes-agent checkout に未commit の変更がある"; return 1; }
     [ -x "$hermes/.venv/bin/python" ] || { reason="$hermes/.venv/bin/python がない"; return 1; }
 }
 

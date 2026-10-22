@@ -719,6 +719,8 @@ def _rotate_logs(result) -> None:
     and rotation is one lstat per log unless a log is over the cap."""
     try:
         maintenance.rotate_log()
+    except maintenance.MaintenanceError as e:
+        result["errors"].append(f"log_rotate: {e}")  # fixed reason token
     except Exception as e:
         result["errors"].append(f"log_rotate: {type(e).__name__}")
 
