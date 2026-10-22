@@ -129,7 +129,8 @@ def test_lw_unknown_replacement_does_not_retire_old_buttons():
     from adapters.lineworks.delivery import DeliveryWorker
     from types import SimpleNamespace
     retired = []
-    async def perform(spec):
+    async def perform(spec, *, retry_allowed):
+        assert callable(retry_allowed)
         return {"result": "unknown", "error_code": "synthetic_timeout"}
     worker = object.__new__(DeliveryWorker)
     worker._ours = lambda delivery: True
