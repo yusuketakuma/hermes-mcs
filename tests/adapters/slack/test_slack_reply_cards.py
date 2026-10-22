@@ -109,3 +109,21 @@ def test_an_existing_layout_three_root_keeps_collecting_replies(led, monkeypatch
 def test_reply_card_switch_must_be_boolean(value):
     import mcs_config
     assert any("slack_reply_cards" in e for e in mcs_config.validate_notify({"slack_reply_cards": value}))
+
+
+def test_a_layout_four_root_keeps_reply_cards_after_the_switch_is_off(led, monkeypatch):
+    clock = [NOW]
+    monkeypatch.setattr(notify_cards.time, "time", lambda: clock[0])
+    _seed_thread(led, mids=(100,))
+    assert _dispatch(led, _intent(led), REPLY, now=clock[0])["dispatched"]
+    clock[0] += 3600
+    _msg(led, 202, parent=100, body="合成の返信", ts=int(clock[0]))
+    _dispatch(led, _intent(led, payload={"message_ids": [202]}), SLACK, now=clock[0])
+    root, reply = _cards(led)
+    assert root["layout"] == 4 and reply["card_key"].endswith("|reply:202")
+
+
+def test_reply_cards_need_the_card_thread_switch():
+    off = {**REPLY, "notify": {**REPLY["notify"], "card_thread": False}}
+    assert notify_cards.reply_cards_on(REPLY) is True
+    assert notify_cards.reply_cards_on(off) is False

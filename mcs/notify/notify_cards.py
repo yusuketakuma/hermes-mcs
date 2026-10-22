@@ -255,8 +255,11 @@ def _scoped_card_key(key, scope):
 
 def reply_cards_on(cfg) -> bool:
     """Slack reply cards (layout 4) are opt-in until checked on a real client."""
+    # reply cards live in the root card's thread: without card_thread no
+    # thread is ever opened and every reply would wait, then hit the channel
     return (notify_scope.active_transport(cfg) == "slack"
-            and notify_scope.notify_cfg(cfg).get("slack_reply_cards") is True)
+            and notify_scope.notify_cfg(cfg).get("slack_reply_cards") is True
+            and notify_scope.notify_cfg(cfg).get("card_thread") is True)
 
 
 def _split_reply_targets(db, targets, scope, cfg):
@@ -266,8 +269,9 @@ def _split_reply_targets(db, targets, scope, cfg):
     replies (no re-post of history, no double listing); the decision is the
     stored layout, never a date. The root target keeps the whole coverage so
     intent completion and the root-thread attachment route stay unchanged."""
-    if not reply_cards_on(cfg):
+    if notify_scope.active_transport(cfg) != "slack":
         return targets
+    on = reply_cards_on(cfg)
     out = []
     for target in targets:
         if target.get("kind") != "thread" or "|reply:" in target["card_key"]:
@@ -275,7 +279,10 @@ def _split_reply_targets(db, targets, scope, cfg):
             continue
         row = db.execute("SELECT layout FROM notification_cards WHERE card_key=?",
                          (_scoped_card_key(target["card_key"], scope),)).fetchone()
-        if row is not None and (row["layout"] or 1) < 4:
+        # the stored layout decides an existing root (a layout-4 root shows no
+        # replies itself, even after the switch is turned off); the switch
+        # only decides whether a new root is created as layout 4
+        if (row["layout"] or 1) < 4 if row is not None else not on:
             out.append(target)
             continue
         root = target["root_message_id"]
@@ -841,6 +848,8 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
         if wait:
             _cancel_open_renders(db, card_id, now)
             return None
+        _clear_thread_hold(db, "event_id IN (SELECT event_id FROM notification_intent_cards "
+                               "WHERE card_id=? AND state='pending')", card_id)
     op = _render_op(card)
     if op is None:
         return None      # revoked & never delivered: nothing to render
