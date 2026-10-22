@@ -244,6 +244,7 @@ _PLUGIN_FORBIDDEN_TEXT = re.compile(r"\bos\.environ\b|\bshutil\.rmtree\b")
 # User-requested independent LINE WORKS transport; native Hermes adapters
 # retain their exact existing sandbox. Privileges belong only to these files.
 _LINEWORKS_IMPORTS = {
+    "sdc/transport.py": {"urllib"},  # Fixed-origin SDC transport only.
     "lineworks/client.py": {"subprocess", "urllib"},
     "lineworks/server.py": {"http"},
     "lineworks/__main__.py": {"asyncio"},

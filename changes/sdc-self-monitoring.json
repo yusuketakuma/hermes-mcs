@@ -1,0 +1,8 @@
+{
+  "category": "added",
+  "title": "自社Macの版とプロセス状態を送信専用Connectorで確認",
+  "summary": "承認済みの自社検証環境だけに状態監視を接続できます。登録は管理画面と端末の両方で確認し、既定では送信しません。患者情報・本文・添付・hostname・任意の診断出力は送信しません。",
+  "upgrade": "実機受入後、専用OSユーザー・FileVaultと承認済みHTTPS送信先を確認し、0700の専用領域へ0600のendpoint.jsonを導入してください。mcs connectで登録し、mcs disconnectでConnectorだけを停止します。R1のファイル鍵保管を顧客へ提供せず、常駐導入と実通信は別途承認が必要です。",
+  "details": ["connect / connection / disconnect / rotate-keyを選択済みのPythonへ委譲します。", "5分周期の短時間tickは送信中の本文を固定し、失効・順序巻戻し時は送信を止めます。", "既存ジョブ・医療core・通知・更新・Keychainは変更しません。実D1/自社Macの負荷と撤去受入は未実施です。"],
+  "refs": ["adapters/sdc/", "mcs/ops/sdc_cli.py", "mcs/ops/service_contract.py"]
+}
