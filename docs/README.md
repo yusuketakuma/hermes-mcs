@@ -4,6 +4,8 @@
 各版の受入結果や当時の計画は[リリース記録](releases/README.md)にまとめています。
 導入した版の変更点は[CHANGELOG](../CHANGELOG.md)、現在の操作条件は対応するガイドとコードで確認できます。
 
+収集の異常は[収集エラーと未取得本文の診断](guides/COLLECTION_DIAGNOSTICS.md)、保存済み添付の点検は[添付の整合と再取得候補](guides/ATTACHMENT_RECOVERY.md)を参照してください。
+
 ## 導入・利用・復旧
 
 | 目的 | 読む文書 |

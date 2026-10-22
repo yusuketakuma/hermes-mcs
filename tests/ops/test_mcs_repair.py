@@ -228,7 +228,7 @@ def test_plan_binding_refuses_incompatible_or_tampered_inputs(independent, mode)
     if mode in ("changed_count", "rehash"):
         value["counts"]["floor_recorded"] = 999
         if mode == "rehash":
-            value["plan_digest"] = repair._digest(
+            value["plan_digest"] = repair.canonical_digest(
                 {k: v for k, v in value.items() if k != "plan_digest"})
     if mode == "nonce":
         value["nonce"] = str(uuid.uuid4())

@@ -1,0 +1,16 @@
+{
+  "category": "added",
+  "title": "保存済み添付の読取り専用点検を追加",
+  "summary": "DBで保存済みの添付について、実ファイルの欠損・サイズ不一致・読取り不能を手動で点検し、再取得の候補を私有ファイルへ整理できます。DB・ファイルの変更、再取得、再送、既読化は行いません。",
+  "upgrade": "追加操作は不要です。必要な時に`python3 mcs/ops/mcs_repair.py attachments`を公開snapshotと添付ディレクトリを明示して実行します。定期処理・既定値・DB schema・既存のplan/record/finalizeは変更しません。手順は`docs/guides/ATTACHMENT_RECOVERY.md`です。",
+  "details": [
+    "静的snapshotをmode=roで開き、sidecarや実行中の変更を拒否する。添付ディレクトリは`/`から1階層ずつsymlinkをたどらずに開き、ファイルはnofollow・非ブロッキングで開く。",
+    "missing・size_mismatch・unreadableを再取得候補、not_regular・path_mismatch・record_invalidを人の確認対象に分ける。内容hashは比較しない。",
+    "件数と時間に上限がある。時間上限はDB検索とファイル点検の合計、および前後のsnapshot hashそれぞれに適用し、hashが上限を超えた場合は結果を拒否する。点検が止まった場合はpartialと続きの位置を返し、件数を数える前に止まった未点検数は不明（null）とする。標準出力は件数と固定理由だけで、添付IDなどは0600の私有ファイルにだけ書く。"
+  ],
+  "refs": [
+    "mcs/ops/attachment_audit.py",
+    "mcs/ops/mcs_repair.py",
+    "docs/guides/ATTACHMENT_RECOVERY.md"
+  ]
+}

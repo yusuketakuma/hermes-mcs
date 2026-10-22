@@ -180,6 +180,8 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         report["recorded_state_reasons"] = reasons
         reasons = None
     report["state_reasons"] = reasons
+    from collection_diagnostics import validated
+    report["collection_diagnostics"] = validated(h.get("collection_diagnostics"), h["at"])
     backup = h.get("backup")
     if (isinstance(backup, dict) and backup.get("state") in ("degraded", "failed")
             and report["status"] in ("degraded", "failed")):
@@ -771,6 +773,12 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                      else _backup_local_text(report.get("backup_local")))
         elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):
             extra = f"（最古 {_hours(oldest.get('semantic_jobs'))}）"
+        if base in ("stage_errors", "collection_incomplete") and not report.get("observations_recorded") \
+                and report.get("collection_diagnostics") is not None:
+            from collection_diagnostics import detail_lines
+            section = "errors" if base == "stage_errors" else "incomplete"
+            details = detail_lines(report.get("collection_diagnostics"), section)
+            extra += "（" + " / ".join(details) + "）"
         rows += [f"・{meaning}{extra}", f"　→ {action}"]
     return rows
 

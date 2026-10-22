@@ -1141,6 +1141,29 @@ def _doctor_nightly(cfg: dict, *, probe: bool) -> dict:
     return result
 
 
+def _doctor_collection(cfg: dict, *, probe: bool) -> dict:
+    """Read the latest bounded collection observation only when explicitly requested."""
+    result = {"status": "not_checked", "counts": None}
+    if not probe:
+        return result
+    from health_policy import HEALTH_REL, freshness_deadline
+    from health_watch import classify_health
+    observed = classify_health(os.path.join(HOME, HEALTH_REL), time.time(), freshness_deadline(cfg))
+    result["status"] = "stale" if observed["status"] == "stale" else "unknown"
+    if observed["status"] not in ("ok", "degraded", "failed"):
+        return result
+    counts = observed.get("collection_diagnostics")
+    if counts is None:
+        return result
+    errors, incomplete = counts["errors"], counts["incomplete"]
+    if errors["state"] != "known" or incomplete["state"] != "known":
+        result["counts"] = counts
+        return result
+    result["status"] = "warning" if errors["total"] or incomplete["projects"] else "healthy"
+    result["counts"] = counts
+    return result
+
+
 def cmd_doctor(args) -> int:
     """Local read-only diagnostics; explicit probes return only safe counts."""
     cfg = mcs_util.load_config()
@@ -1222,11 +1245,12 @@ def cmd_doctor(args) -> int:
         ['restore_delivery_unverified'] if worker['restore_delivery_held'] is None else
         ['restore_delivery_held'] if worker['restore_delivery_held'] else [])
     nightly = _doctor_nightly(cfg, probe="data" in probes and not config_errors)
+    collection = _doctor_collection(cfg, probe="data" in probes and not config_errors)
     report = {"mode": mode, "python": sys.version.split()[0],
               "sqlite": sqlite3.sqlite_version, "checks": checks,
               "runtimes": runtimes,
               "operations": operations, "card_worker": worker,
-              "patient_context_nightly": nightly,
+              "patient_context_nightly": nightly, "collection": collection,
               "source": environment_diagnostics.source_status(cfg, probe="services" in probes and not config_errors, paths=_service_paths()),
               "recovery_selection": {"explicit": "recovery_python" in cfg,
                                      "matches_deployed": matches}}
@@ -1270,6 +1294,12 @@ def cmd_doctor(args) -> int:
             names = ("初回未生成", "差分待ち", "過去走査待ち", "根拠点検待ち", "失敗", "完了")
             print("    " + "、".join(f"{name}{nightly['counts'][key]}件"
                                     for key, name in zip(_NIGHTLY_COUNTS, names)))
+        print(f"  収集の内訳: {labels.get(collection['status'], '未確認')}")
+        if collection["counts"] is not None:
+            from collection_diagnostics import detail_lines
+            for section in ("errors", "incomplete"):
+                for line in detail_lines(collection["counts"], section):
+                    print("    " + line)
         for line in status_lines(operations):
             print(line)
         source = report["source"]

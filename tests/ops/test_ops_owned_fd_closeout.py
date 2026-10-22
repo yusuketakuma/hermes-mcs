@@ -38,7 +38,7 @@ def test_ops_owned_stream_failure_closes_descriptor(tmp_path, monkeypatch, opera
                     import_drug_master.Conversion({}, b"synthetic"), tmp_path / "dictionary.json")
         elif operation == "repair_hash":
             def invoke():
-                mcs_repair._hash_file(source)
+                mcs_repair.hash_file(source)
         elif operation in {"consent_read", "consent_publish"}:
             directory = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
             def invoke():
