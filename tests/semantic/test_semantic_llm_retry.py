@@ -174,7 +174,9 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
             process.stdin.write(input)
             process.stdin.close()
             process.stdin = None
-            while not started.wait(0.05) and process.poll() is None:
+            startup_deadline = time.monotonic() + 60
+            while (not started.wait(0.05) and process.poll() is None
+                   and time.monotonic() < startup_deadline):
                 pass
             try:
                 return communicate(timeout=timeout)

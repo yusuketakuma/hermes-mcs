@@ -1,5 +1,5 @@
 {
-  "status": "1.0.29 publication candidate draft; release/v1.0.29 e42e9593 + release documents; production apply, operation check and publication pending",
+  "status": "1.0.29 publication candidate draft; release/v1.0.29 1854794e + review follow-up; production apply, operation check and publication pending",
   "baseline": {
     "previous_release": "v1.0.28 6940d135f0e642b932b7164869f199e7cef89503",
     "production_source": "main 8971a025"
