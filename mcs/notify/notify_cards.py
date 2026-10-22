@@ -255,14 +255,16 @@ def _scoped_card_key(key, scope):
 
 # LINE WORKS has no native thread to hold a reply card; it keeps collecting
 REPLY_CARD_TRANSPORTS = ("slack", "discord")
+# on unless notify.reply_cards is false (owner decision 2026-10-23)
+REPLY_CARDS_DEFAULT = True
 
 
 def reply_cards_on(cfg) -> bool:
-    """Reply cards (layout 4) are opt-in until checked on a real client."""
+    """Reply cards (layout 4) for Slack/Discord with card threads, unless switched off."""
     # reply cards live in the root card's thread: without card_thread no
     # thread is ever opened and every reply would wait, then hit the channel
     return (notify_scope.active_transport(cfg) in REPLY_CARD_TRANSPORTS
-            and notify_scope.notify_cfg(cfg).get("reply_cards") is True
+            and notify_scope.notify_cfg(cfg).get("reply_cards", REPLY_CARDS_DEFAULT) is True
             and notify_scope.notify_cfg(cfg).get("card_thread") is True)
 
 

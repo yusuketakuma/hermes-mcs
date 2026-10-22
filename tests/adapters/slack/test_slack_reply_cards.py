@@ -148,3 +148,12 @@ def test_each_layout_four_card_acts_on_and_tracks_only_its_own_post(led, monkeyp
     _msg(led, 202, parent=100, body="合成の返信2", ts=int(clock[0]))
     assert {c["card_id"]: notify_render.source_fingerprint(led.db, c)
             for c in (root, first)} == before
+
+
+def test_reply_cards_ship_on_by_default_and_can_be_switched_off():
+    import re
+    from pathlib import Path
+    source = Path(notify_cards.__file__).read_text(encoding="utf-8")
+    assert re.search(r"^REPLY_CARDS_DEFAULT = True$", source, re.M)
+    off = {**REPLY, "notify": {**REPLY["notify"], "reply_cards": False}}
+    assert notify_cards.reply_cards_on(off) is False

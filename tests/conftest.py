@@ -17,6 +17,8 @@ import sys
 import tempfile
 import urllib.parse
 import urllib.request
+
+import pytest
 from pathlib import Path
 
 _TESTS = Path(__file__).resolve().parent
@@ -238,3 +240,11 @@ atexit.register(_restore)
 
 def pytest_unconfigure(config) -> None:
     _restore()
+
+
+@pytest.fixture(autouse=True)
+def _collecting_cards_unless_requested(monkeypatch):
+    """Suites written for the collecting card layout keep it; reply-card tests
+    set notify.reply_cards explicitly (the shipped default is pinned separately)."""
+    import notify_cards
+    monkeypatch.setattr(notify_cards, "REPLY_CARDS_DEFAULT", False)
