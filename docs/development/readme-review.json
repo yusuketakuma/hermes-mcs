@@ -1,83 +1,61 @@
 {
-  "version": "1.0.28",
+  "version": "1.0.29",
   "sections": {
     "features": {
-      "notes": "2026-10-21 1.0.28公開候補（本番source8971a025）: スタンプの最終Slack表示は受信スタンプ詳細と送信メニューを同一エリアへ集約し、メニュー展開→絵文字・名称による種類選択の2段階。Discord/LINE WORKSの小型操作、操作者/本人設定時の既定ON、既知5種、追加/取消/別投稿、原文と本人状態・期限の再照合を確認。患者参考情報の長文分割・有限修復と検証済み情報保持、添付説明の現行metadata照合を実装と比較した。所有者は過去の実スタンプ追加・取消のMCS反映を報告したが、現在の全接続先/全画面を実機受入済みとはしない。",
+      "notes": "2026-10-22 1.0.29リリース候補（release/v1.0.29 e42e9593＋文書）: 変更記録34件を機能説明へ照合。README冒頭のMCSサーバー負荷対策に、HTTP 429でRetry-After（最大60秒）を守り1回の定期実行で2回受けたら残りを次回へ回す挙動を追記（mcs_adapter.py・bounded_http.py）。再解析順の変更（patient-focus）・health/doctorの件数表示・添付点検はいずれも既定ON/OFFや取得範囲・通知・人承認を変えないため、機能一覧の既定値記載は変更不要と判断。スタンプ・通知カードの機能説明は今回の変更（別投稿からの選び直し案内）と矛盾しない。",
       "sources": [
         "README.md",
-        "mcs/stamps/stamp_write.py",
-        "mcs/stamps/stamp_contract.py",
-        "mcs/notify/notify_actions.py",
-        "mcs/notify/notify_cards.py",
-        "mcs/notify/notify_parts.py",
         "mcs/ingest/mcs_adapter.py",
-        "docs/development/REPOSITORY_STRUCTURE.md",
-        "mcs/patients/patient_nightly.py",
-        "mcs/patients/patient_nightly_plan.py",
-        "adapters/slack/delivery.py"
+        "mcs/core/bounded_http.py",
+        "mcs/ingest/collection_diagnostics.py",
+        "mcs/ops/attachment_audit.py",
+        "mcs/ops/mcs_repair.py",
+        "CHANGELOG.md"
       ]
     },
     "demos": {
-      "notes": "2026-10-21 1.0.28公開候補（本番source8971a025）: Slack 03-actionsの現在の生成元とPNG/SVGを照合し、版別画像を同一hashで同期。受信スタンプと2段階送信の最終配置を確認。Slack8画面とLINE WORKS2画面の生成器checkを使用し、実画面の現行版確認と区別する。人物・組織・本文は架空の説明用データだけ。",
+      "notes": "2026-10-22 1.0.29リリース候補（release/v1.0.29 e42e9593＋文書）: Slack 8画面・LINE WORKS 2画面の表示例と生成元を確認。今回の変更でカードの配置・ボタン・表示条件は変わらない（スタンプの選び直しは拒否時の案内文、範囲不明時は内容を送らず案内を返す変更で、既存の画面例に含まれない）。そのためSVG・PNGの再生成は不要で、ギャラリーのhash記録も変更しない。人物・組織・本文は架空の説明用データのまま。",
       "sources": [
         "docs/screenshots/slack-gallery/README.md",
-        "docs/screenshots/slack-gallery/03-actions.svg",
-        "docs/screenshots/slack-gallery/03-actions.png",
         "docs/screenshots/slack-gallery/assets.json",
         "docs/screenshots/lineworks-gallery/README.md",
         "docs/screenshots/lineworks-gallery/assets.json",
-        "scripts/development/generate_slack_gallery.py",
-        "adapters/slack/cards.py",
-        "adapters/discord/cards.py",
-        "adapters/lineworks/cards.py",
-        "docs/releases/v1.0.28/README.md",
-        "docs/releases/v1.0.28/visual-source.json"
+        "adapters/slack/actions.py",
+        "mcs/stamps/stamp_write.py"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-21 1.0.28公開候補（本番source8971a025）: 通常導入/更新/復旧、fixed candidateと基点の指定、worker停止/再同期/再起動、旧updaterのmcs-only closure、schema/layout literalと更新経路manifestをソースへ照合。今回の新規実機導入/実患者DB rollbackは行わない。データ形式・導入依存を変えないrelease文書差分では既存合成経路の同一ソース証拠を再利用する。",
+      "notes": "2026-10-22 1.0.29リリース候補（release/v1.0.29 e42e9593＋文書）: 導入・診断・更新の導線を照合。doctorの説明に、--probe dataで収集エラーの原因分類と件数・未取得本文の最長経過時間を表示できることと、収集の診断ガイドへの導線を追記（mcs_setup.py の _doctor_collection、collection_diagnostics.py）。install.shのモデルsha256上書きはMCS_ALLOW_MODEL_SHA_OVERRIDE=1併用時だけになったが、通常導入では操作不要のため導入手順の本文は変更不要。config.json・.envのシンボリックリンク不可と権限の警告・独立実行の起動拒否は、更新ガイドの1.0.29節とCHANGELOGの更新時の注意で案内する。",
       "sources": [
         "README.md",
         "install.sh",
-        "docs/guides/EASY_SETUP.md",
-        "docs/guides/SETUP_AGENT.md",
+        "mcs/ops/mcs_setup.py",
+        "mcs/core/mcs_util.py",
         "docs/guides/UPGRADE_AGENT.md",
-        "docs/guides/LOCAL_AGENT_INSTALL.md",
-        "scripts/mcs_upgrade.py",
-        "mcs/ops/mcs_update.py"
+        "docs/guides/COLLECTION_DIAGNOSTICS.md"
       ]
     },
     "safety": {
-      "notes": "2026-10-21 1.0.28公開候補（本番source8971a025）: 患者・操作者・原文版・承認receipt、結果不明の自動再送禁止を維持。Slackファイル最新情報は既存接続のfiles:readを利用し、容量/内容/本人を確認できない説明更新は保留。説明だけの人承認復旧は完全journalと元配送・対象・worker停止を要求し、新規uploadを伴う復旧を拒否。現存する過去caption保留を送信済みと扱わない。患者参考情報の公開・原文条件を変更せず、実生成品質の改善は未測定。",
+      "notes": "2026-10-22 1.0.29リリース候補（release/v1.0.29 e42e9593＋文書）: 既読化・外部送信・承認・復旧の限界を照合。既読化の条件に、本文を取得できていない親投稿がある患者は既読にせず後続の収集で補完することを追記（collection_stages.py）。範囲不明の表示結果を送らない・接続世代の失効後に送らない変更は送信を減らす方向で、送信先と人承認の記載は変更不要。添付点検（mcs_repair.py attachments）は読取り専用で、DB・ファイル変更・再取得・再送・既読化をしない。公式医薬品masterは2026-10-22に公式siteとZIP（20261013版、sha256一致）を確認し同梱版のまま、activation falseと人承認必須を維持。",
       "sources": [
         "README.md",
         "SECURITY.md",
-        "docs/specs/stamp-management.md",
-        "mcs/stamps/stamp_write.py",
-        "mcs/ingest/mcs_adapter.py",
-        "mcs/ingest/mcs_worker.py",
-        "adapters/common/confirm.py",
-        "mcs/notify/notify_transport.py",
-        "resources/drug-master/README.md",
-        "adapters/lineworks/actions.py",
-        "docs/guides/NOTIFICATION_RECOVERY.md",
-        "mcs/notify/notify_recovery.py"
+        "mcs/ingest/collection_stages.py",
+        "adapters/slack/actions.py",
+        "mcs/ops/attachment_audit.py",
+        "resources/drug-master/README.md"
       ]
     },
     "docs": {
-      "notes": "2026-10-21 1.0.28公開候補（本番source8971a025）: CHANGELOGの公開17項目と128件の変更記録を対応表で全件照合し、追加16件の説明・更新条件・技術詳細・参照を保持。既存公開1.0.27以前は変更しない。導入/利用/スタンプ/復旧/構成の正本への導線と相対リンクを検査する。受入票でsource検証・本番稼働・公開を分け、Actions課金阻害・添付説明保留・実生成未測定を明記。",
+      "notes": "2026-10-22 1.0.29リリース候補（release/v1.0.29 e42e9593＋文書）: 文書導線と相対リンクを照合。ドキュメント表の更新・復旧の行に、収集の診断と保存済み添付の点検のガイドを追加。OpenWiki（openwiki/と更新workflow）はユーザー指示で廃止し、README・docs索引に導線は残っていない。CHANGELOGの1.0.29は34件の変更記録を16項目へまとめ、全件の対応をdocs/releases/v1.0.29/change-map.jsonで照合。過去版の記載とarchiveは変更しない。",
       "sources": [
         "README.md",
         "CHANGELOG.md",
         "docs/README.md",
         "docs/releases/README.md",
-        "docs/releases/v1.0.28/README.md",
-        "docs/development/README_MAINTENANCE.md",
-        "docs/development/REPOSITORY_STRUCTURE.md",
-        "docs/development/DEVELOPMENT.md",
-        "docs/guides/USER_GUIDE.md",
-        "docs/specs/stamp-management.md",
-        "docs/releases/v1.0.28/change-map.json"
+        "docs/guides/COLLECTION_DIAGNOSTICS.md",
+        "docs/guides/ATTACHMENT_RECOVERY.md",
+        "docs/development/README_MAINTENANCE.md"
       ]
     }
   }

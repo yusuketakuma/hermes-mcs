@@ -1,0 +1,215 @@
+{
+  "status": "1.0.29 publication candidate draft; release/v1.0.29 e42e9593 + release documents; production apply, operation check and publication pending",
+  "baseline": {
+    "previous_release": "v1.0.28 6940d135f0e642b932b7164869f199e7cef89503",
+    "production_source": "main 8971a025"
+  },
+  "public_entries": 16,
+  "comparison_rows": 3,
+  "fragment_count": 34,
+  "mapping": [
+    {
+      "id": "N1",
+      "changelog_section": "新機能",
+      "fragment_category_primary": "added",
+      "title": "収集エラーの内訳と未取得本文の経過時間を確認",
+      "fragment_ids": [
+        "v129-collection-diagnostics"
+      ]
+    },
+    {
+      "id": "N2",
+      "changelog_section": "新機能",
+      "fragment_category_primary": "added",
+      "title": "状態ファイルで早期警告と処理の進み具合を確認",
+      "fragment_ids": [
+        "v129-health-early-warnings",
+        "v129-part-hold-outlook",
+        "v129-nightly-lane-outcomes",
+        "v129-patient-context-progress"
+      ]
+    },
+    {
+      "id": "N3",
+      "changelog_section": "新機能",
+      "fragment_category_primary": "added",
+      "title": "保存済み添付の読取り専用点検",
+      "fragment_ids": [
+        "v129-attachment-integrity"
+      ]
+    },
+    {
+      "id": "I1",
+      "changelog_section": "改善",
+      "fragment_category_primary": "changed",
+      "title": "再解析を残りの少ない患者から進める",
+      "fragment_ids": [
+        "patient-focus-order"
+      ]
+    },
+    {
+      "id": "I2",
+      "changelog_section": "改善",
+      "fragment_category_primary": "changed",
+      "title": "定期処理と操作の待ち時間を短縮",
+      "fragment_ids": [
+        "reply-scan-indexes",
+        "v129-notify-lock-scope"
+      ]
+    },
+    {
+      "id": "I3",
+      "changelog_section": "改善",
+      "fragment_category_primary": "changed",
+      "title": "Slack添付の配送記録とスタンプ操作の案内",
+      "fragment_ids": [
+        "slack-upload-origin",
+        "stamp-explicit-reselection"
+      ]
+    },
+    {
+      "id": "I4",
+      "changelog_section": "改善",
+      "fragment_category_primary": "added",
+      "title": "開発者向け：CIを開始できない場合のローカル同等チェック",
+      "fragment_ids": [
+        "v129-ci-local-runner"
+      ]
+    },
+    {
+      "id": "F1",
+      "changelog_section": "不具合修正",
+      "fragment_category_primary": "security",
+      "title": "接続の切替え後や対象範囲が不明なときに情報を送らない",
+      "fragment_ids": [
+        "chat-origin-authorization",
+        "view-scope-fail-closed"
+      ]
+    },
+    {
+      "id": "F2",
+      "changelog_section": "不具合修正",
+      "fragment_category_primary": "security",
+      "title": "設定・更新ファイルを安全に読み書きする",
+      "fragment_ids": [
+        "local-config-read-hardening",
+        "standalone-config-read-hardening",
+        "update-files-nofollow",
+        "error-text-redaction"
+      ]
+    },
+    {
+      "id": "F3",
+      "changelog_section": "不具合修正",
+      "fragment_category_primary": "security",
+      "title": "導入とログインの経路を限定する",
+      "fragment_ids": [
+        "install-model-sha-pin",
+        "cdp-loopback-only"
+      ]
+    },
+    {
+      "id": "F4",
+      "changelog_section": "不具合修正",
+      "fragment_category_primary": "fixed",
+      "title": "未取得の投稿・添付・予定を正しく扱う",
+      "fragment_ids": [
+        "v129-audit-four-fixes"
+      ]
+    },
+    {
+      "id": "F5",
+      "changelog_section": "不具合修正",
+      "fragment_category_primary": "fixed",
+      "title": "服薬・検査値のシグナルと統計の誤判定を修正",
+      "fragment_ids": [
+        "g1-adherence-adverb-negation",
+        "g1-followup-deleted-posts",
+        "g1-lab-item-units",
+        "g1-signal-window-clamp",
+        "g1-stats-med-patient-scope"
+      ]
+    },
+    {
+      "id": "F6",
+      "changelog_section": "不具合修正",
+      "fragment_category_primary": "fixed",
+      "title": "依頼の返信根拠と保存・通知の境界を厳密にする",
+      "fragment_ids": [
+        "shortcut-debt-boundaries"
+      ]
+    },
+    {
+      "id": "F7",
+      "changelog_section": "不具合修正",
+      "fragment_category_primary": "fixed",
+      "title": "処理が止まる・遅れる問題を修正",
+      "fragment_ids": [
+        "v129-cmd-storage-quarantine",
+        "v129-snapshot-dirty-generation",
+        "v129-log-rotate-leftovers",
+        "llamacpp-idle-restart"
+      ]
+    },
+    {
+      "id": "B1",
+      "changelog_section": "動作・設定の変更",
+      "fragment_category_primary": "changed",
+      "title": "MCSサーバーが混雑したら、その回の取得を止めて次回に再試行",
+      "fragment_ids": [
+        "mcs-rate-limit-backoff"
+      ]
+    },
+    {
+      "id": "B2",
+      "changelog_section": "動作・設定の変更",
+      "fragment_category_primary": "changed",
+      "title": "統計の追跡日数と通知記録の保存期間",
+      "fragment_ids": [
+        "g1-stats-followup-window",
+        "v129-notification-retention"
+      ]
+    }
+  ],
+  "notes": [
+    "Every archived fragment maps to exactly one public entry; technical details below the public sections keep the generator output for all fragments.",
+    "Security fragments are listed under 不具合修正 with the セキュリティ prefix, per RELEASE_NOTES.md.",
+    "The developer-only CI local runner is listed under 改善 because it does not change runtime behavior."
+  ],
+  "fragment_sha256": {
+    "cdp-loopback-only": "78b397d2d0b26fb0e2cb80e36c99943310d35fd035bfa89b94ac0db82914659a",
+    "chat-origin-authorization": "3e984f0ae154fdc1061d7886e60399eacaf9ef36a5b972edb4d116dce2ed2ffa",
+    "error-text-redaction": "19643dbfa551f437bb36542c5a94a1fb8569e2f4238ece29973eecdcd5359965",
+    "g1-adherence-adverb-negation": "ffbf1e995367feed76a5ceb7b01bfea78bd19755237eeb8ce7e8ff84506929ea",
+    "g1-followup-deleted-posts": "043afd56db8f8bd6516d5fce967b2956c740a6a65c375eb73e86a62a13127c7a",
+    "g1-lab-item-units": "0852a8175d7b2bb6bd670cc7d34afd7a14540f328adf1c32a63993967f8a0b32",
+    "g1-signal-window-clamp": "c2b7afc3d6628f02dd6d2198cca103dcc6a97cfc9b7c6e3b95a59c2321d09955",
+    "g1-stats-followup-window": "dbdabea900deeb098a0c269cbb1e6ce2879f3d3f0b5a6e4f66cf5101bda7acc6",
+    "g1-stats-med-patient-scope": "50ec706b0f9fccb80f0121b2ba75f6e80196ea8fc074f8802e00123344e645e2",
+    "install-model-sha-pin": "a977d57a2782af034106b8d7292c6b916267a0d8a799f284c220cf3360892243",
+    "llamacpp-idle-restart": "0392f50c2e6d8fd43eea7f70d0dabbcd9d600f5459f0b59858905a1896a73b88",
+    "local-config-read-hardening": "d4c41f8c3e421899b3dc704c764e2ae16af8dc2c2cf47e9646ae162ebd9c1a28",
+    "mcs-rate-limit-backoff": "6c7f2b178da15bcb7035c23a15d03a772dfcc6e5ca4af03f2537204622251661",
+    "patient-focus-order": "ea53d186871eb9b4e346f80a7268690dfed6870f3e2f6582d1f4c59ad5b7b934",
+    "reply-scan-indexes": "19cbe1d02735d1eae5bae4ac8b91b846b1432ba42e0b222e41c023508b1870bd",
+    "shortcut-debt-boundaries": "2f122a3c245edacd540d948054b0e75e77a8bfe099d3cfcac9be2f3ffed6207c",
+    "slack-upload-origin": "1c351ca33b8ea5af66ad9265b45559f629009c338b5bdfe5b7aa9117efbaaaee",
+    "stamp-explicit-reselection": "7ce4364229dbb49bfa67c12756d4aca188dcbca1a1d457e771d8dd10f51f8147",
+    "standalone-config-read-hardening": "224805e1f9099464cedb75272c051682bb9343c1de3efa836aefe9e60dc3abb0",
+    "update-files-nofollow": "874f889c0c7a95142c6f19139ccda79cdbf8ba49832b4db06dbde98a92e02c76",
+    "v129-attachment-integrity": "d0b2e59768775defe63ae1a5dae8750a869c0b422fbd132a590e0400a594fc7e",
+    "v129-audit-four-fixes": "c6c86ab6d754c0fd452882887d72a9345907bd9b1a13d47bd34783f915cf2998",
+    "v129-ci-local-runner": "b14109b89408d3f02d14806cb46e9198544797b8c728f8984c0aa6666aae9fae",
+    "v129-cmd-storage-quarantine": "fe0aee52cea5f27798f0d34a1ae193d7689c9be824b34019e9f0a4bcf8fb10bc",
+    "v129-collection-diagnostics": "a0ebdc24981f7490b745ecb2b5ad6eb8a846a158d0ca2dc505a3a58f5f745f7a",
+    "v129-health-early-warnings": "a2af9268c56ca2be5064f7a36274b990661f8c5131c0e60cff2822e8774a94e0",
+    "v129-log-rotate-leftovers": "fc977d7890a322f53d30f6566e31a32114b1d1f28154aae4d17170ec4c586fbb",
+    "v129-nightly-lane-outcomes": "6ae1e5c5c88af6a5d391ac28671de16ea27b3d3cd66af085f14b5e03f8429dc4",
+    "v129-notification-retention": "d552482c3797b0c21fdd235f1c0336900f4fabdde6c21d71db10def834c6ec1f",
+    "v129-notify-lock-scope": "bc3c3215dc5b8134eefdc5b605e0fa914280a42e859542d568684101f167368e",
+    "v129-part-hold-outlook": "4f37a802a749d6b7ddab810c93c28d743ba57093ee7e467d356d86fe406557f1",
+    "v129-patient-context-progress": "0a8a56bd9e70375a676a33ce4dce48938cdafdfe4851874927a9bc05a11b4711",
+    "v129-snapshot-dirty-generation": "787432e92af337598508e99dafef5147e65d342c907493fac2e9ba59c119c7a0",
+    "view-scope-fail-closed": "e6587768f148cbbbf31e71222504cf09b26c7f8f6ed3ad17103b4657fe0759cb"
+  }
+}

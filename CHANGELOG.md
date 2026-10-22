@@ -6,6 +6,345 @@
 
 ## [Unreleased]
 
+## [1.0.29] — 2026-10-22
+
+**収集の診断を追加し、MCSサーバー負荷の抑制と既読化・統計の誤判定を修正**
+
+この版では、収集エラーの内訳や処理の進み具合を状態ファイルと診断で確認できるようにし、MCSサーバーが混雑したときの取得を控えめにしました。本文を取得できていない投稿の既読化、服薬・検査値のシグナルと統計、設定ファイルや接続経路の扱いも安全側へ見直しています。
+
+> 更新前の確認：Hermes gateway・独立実行のアダプター・抽出workerの再起動が必要です。`config.json`・`.env` をシンボリックリンクにしている場合は実ファイルへ置き換え、独立実行で `config.json` がグループ/他者書込み可なら `chmod 600` にしてください（独立実行は起動を止めます）。
+
+| 場面 | これまで | この版 |
+|---|---|---|
+| 収集エラーの警報が出た | 警報の種類だけで、原因の見当を付けにくい | 原因の分類と件数、未取得の本文が最初に保存されてからの最長経過時間を警報と診断に表示 |
+| MCSサーバーが混雑を返す（HTTP 429） | 短い間隔で再試行し、同じ回で残りの患者への問い合わせを続ける | 指定された待ち時間を守り、1回の定期実行で2回受けたら残りは次回（10分後）へ回す |
+| 本文を取得できていない親投稿がある | 患者を既読にする場合がある | 既読にせず、後続の収集で本文を補完する |
+
+### 新機能
+
+- **収集エラーの内訳と未取得本文の経過時間を確認**
+  収集エラーの警報と `mcs_setup.py doctor --probe data` に、固定の原因分類ごとの件数、取得未完了の件数、保存された未取得の親本文が最初に保存されてからの最長経過時間を表示します。患者名や本文は含めず、確認できない場合は0件や正常と区別して「確認できません」と表示します。診断は書込み・再送・既読化・自動修復を行いません。
+
+  ![収集エラーの警報に原因の内訳を添え、状態ファイルに原因分類ごとの件数と未取得本文の最長経過時間を記録し、doctor --probe dataで読み、必要なときだけ保存済み添付を読取り専用で点検する流れの説明図](https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.0.29/docs/releases/v1.0.29/collection-diagnostics.png)
+
+  警報から診断、必要なときの添付の点検までの流れを示す説明図です（実画面ではありません）。
+
+- **状態ファイルで早期警告と処理の進み具合を確認**
+  health に、隔離したコマンドファイルの件数、台帳のWALの大きさ、読取り用コピーの検証時間の超過傾向、空き容量の減少、手動バックアップの合計容量を早期警告として記録します。あわせて、保留・結果不明の通知部品の件数、患者コンテキストの対象数・作成済み数・処理中の件数、lane（要約・過去走査・根拠点検）ごとの失敗理由の件数も表示します。いずれも件数と固定コードだけで、全体の判定と監視通知の条件は変わりません。
+
+- **保存済み添付の読取り専用点検**
+  DBで保存済みの添付について、実ファイルの欠損・サイズ不一致・読取り不能を `mcs_repair.py attachments` で手動点検し、再取得の候補を本人だけが読めるファイルへ整理できます。件数と時間に上限があり、途中で止まった場合は続きの位置を残します。DB・ファイルの変更、再取得、再送、既読化は行いません。手順は[添付の点検ガイド](docs/guides/ATTACHMENT_RECOVERY.md)です。
+
+### 改善
+
+- **再解析を残りの少ない患者から進める**
+  再解析の順番を、未解析の投稿が少ない患者から終わらせる形に変え、患者の参考情報を作れる患者が早く増えるようにしました。新しく届いた投稿を先に解析する順番、解析の内容・承認条件、参考情報を作る条件（患者の投稿をすべて解析してから）は変わりません。本番での効果は適用後に観測します。
+
+- **定期処理と操作の待ち時間を短縮**
+  返信の既読確認と本文再取得の対象探しを索引で行い、定期実行ごとの全件の読み直しをなくしました。カード操作と定期処理の後片付けでは、古い応答ファイルの一覧作成と送信用ファイルの再公開を台帳のロックの外で行い、ほかの処理が待たされる時間を短くしました。結果と対象の条件は変わりません。
+
+- **Slack添付の配送記録とスタンプ操作の案内**
+  新しく処理するSlack添付で、アップロードした場合・既存ファイルに照合した場合・既存の説明を編集した場合を区別して記録します。表示後に投稿や自分のスタンプが変わった操作は従来どおり拒否し、カードを更新して「別の投稿」から選び直す手順を案内します。旧ボタンを最新の投稿へ振り替えたり、自動で再送したりはしません。
+
+- **開発者向け：CIを開始できない場合のローカル同等チェック**
+  課金やrunner障害でCIが開始できないとき、ci.ymlの6つのjobに対応するチェックを同じSHAのcleanなcloneで直列に実行し、jobごとの結果とログを残せます。CIが実行されて失敗した場合の代わりにはならず、結果をCI成功として記録しません。利用者の実行時の動作は変わりません。
+
+### 不具合修正
+
+- **セキュリティ：接続の切替え後や対象範囲が不明なときに情報を送らない**
+  Discordの接続に経路世代を固定し、Slackのサマリーと `/mcs` は処理の前・送信の前・再試行の前に接続と通知経路がまだ有効かを確認します。本文・まとめ・一覧・ダイジェスト・タスクの結果に患者範囲が付いていない場合は内容を送らず、範囲変更の案内を返します。経路世代のないDiscord接続は開始しません。
+
+- **セキュリティ：設定・更新ファイルを安全に読み書きする**
+  `config.json`・`~/.mcs/.env`・`~/.hermes/.env` は、シンボリックリンク・通常ファイル以外・上限超過（config 1 MiB、.env 64 KiB）を読まず、未設定と同じ扱いにします。グループ/他者が書込みできるファイルは読み込んだうえで警告 `local_file_permissions_weak` を出し、独立実行の `config.json` では起動を止めます。更新ログと更新中マーカーはリンクを辿らず所有者だけが読み書きできる権限で作り、更新・復元のレポートには例外本文を含めません。
+
+- **セキュリティ：導入とログインの経路を限定する**
+  `install.sh` は `MCS_MODEL_SHA256` だけではモデルの固定sha256を置き換えず、`MCS_ALLOW_MODEL_SHA_OVERRIDE=1` を併せて指定した場合だけ上書きします（いずれも警告を出します）。MCSログイン用のChrome DevToolsは、127.0.0.1・::1・localhost以外の宛先へ接続しません。
+
+- **未取得の投稿・添付・予定を正しく扱う**
+  本文を取得できていない親投稿がある患者は既読にせず、後続の収集で補完します。添付は保存先ディレクトリの同期まで済んでから保存済みと記録します。未来の予定より古い実施記録を、その予定の進行として扱いません。過去に既読化した投稿や消えた添付を自動で取り戻す変更ではありません。
+
+- **服薬・検査値のシグナルと統計の誤判定を修正**
+  「飲み忘れは特にない」のような否定を服薬の懸念として拾わず、削除された投稿を薬変更後の後続記録に数えません。項目に合わない単位の検査値（カリウムの%など）は確認済みにしません。承認済みの閾値の組合せでシグナルの対象期間が空になる場合は、期間を自動で広げて警告コードを表示します。薬の統計は本人の記載とアーカイブしていない患者だけで数え、壊れた解析結果が1件あっても統計全体を止めません。
+
+- **依頼の返信根拠と保存・通知の境界を厳密にする**
+  依頼と対応する現行の記録がある場合だけ返信状態を表示し、同じスレッドの別件の返信を流用しません。対応を確認できない場合は「返答が見つからない」「返信: 記録なし」と表示し、未対応とは断定しません。DBの競合・復旧バックアップの保持・認証情報の入力先の照合を改善し、通知本文の空白を黙って削除しません。
+
+- **処理が止まる・遅れる問題を修正**
+  毎回同じ保存エラーになる操作は `.invalid` として隔離し、後ろに並んだ操作を続けて処理します（DBの使用中・ロック中・破損などは従来どおり次回に再試行します）。読取り用コピーの作成中に起きた変更が反映されないことがある問題と、ログの切替えが何日も遅れる問題を直し、強制終了で残った書込み途中の一時ファイルを1日後に削除します。ローカルAIの定期再起動は、全枠の待機を確認できた場合だけ行います。
+
+### 動作・設定の変更
+
+- **MCSサーバーが混雑したら、その回の取得を止めて次回に再試行**
+  MCSサーバーへの問い合わせを、遅く・控えめになる方向だけに変えました。HTTP 429を受けたら、サーバーが指定する待ち時間（最大60秒、その回の実行時間の上限内）を守ってから再試行します。1回の定期実行で2回受けた時点で残りの取得を止め、次の定期実行（10分後）で取得します。既読化・人承認・no-redirect/no-proxyの条件は変わりません。
+
+- **統計の追跡日数と通知記録の保存期間**
+  統計の「薬変更後の後続記録」は、固定の7日ではなく、シグナルと同じ承認済みの追跡日数で数えます（既定は7日のままです）。日次の整理で、送られなかった通知の記録のうち、90日より古く、同じカードに新しい版があり、外部への影響の記録や参照が残っていないものを削除します。
+
+### 更新時の注意
+
+- 通常の更新手順で、Hermes gateway、使用中の独立実行のアダプター、抽出workerを再起動してください。接続・送信の確認、収集、抽出の修正は再起動後または次の定期処理から反映されます。
+
+- `config.json`・`.env` をシンボリックリンクにしている場合は実ファイルへ置き換えてください。警告 `local_file_permissions_weak` が出た場合は `chmod 600` で権限を絞ってください。独立実行で `config.json` がグループ/他者書込み可の場合は、`chmod 600`（または644）にするまで起動しません。Hermes経由の導入には影響しません。
+
+- ローカルAIの定期再起動スクリプトを使用している環境では、更新後の配備候補を適用してください。スロット状態を取得できない環境では自動再起動を見送ります。
+
+- 抽出・意味判定のコードが変わるため、以前の候補と保留の記録は更新後に再評価の対象になります。保存済みの結果と人の承認は自動で置き換えません。患者集約は版12で再構築されます。
+
+- 次にDBを開いたときに返信用の索引が自動で作られます（schema versionは変わりません）。返信の多いDBでは初回に少し時間がかかります。更新後の最初の処理で読取り用コピーを1回作り直します。複数の変更境界のバックアップを保持するため、保存容量が従来より必要になる場合があります。
+
+- 承認済みの閾値を変更している環境では、シグナルの警告コード `threshold_window_clamped:*` と統計の対象期間の変化が出る場合があります。本人以外の記載とアーカイブ済み患者を除くため、薬関連の統計の件数が減る場合があります。
+
+- 返信状態の根拠となる関係の取得にはJevが必要です。無効または予算0で関係を取得していない場合は返信状態を表示できません。
+
+- 新しい診断の内訳は、更新後に収集が一度診断情報を保存してから表示されます。旧版の記録では「確認できません」と表示されます。
+
+- 検証用に別のsha256でモデルを照合する場合だけ、`MCS_ALLOW_MODEL_SHA_OVERRIDE=1` を併せて指定してください。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### Chrome DevTools への接続をローカルだけに限定
+
+- mcs_cdp._WSConn が接続前に宛先ホストを確認する。
+- 根拠: mcs/ingest/mcs_cdp.py
+
+#### 接続先の切替後に古い経路から回答しないよう確認を強化
+
+- Discord factoryで接続先・有効設定と整数のroute_epochを確認し、Supervisorと操作handlerへ同じ世代を渡す。復旧照合中もSupervisorは維持し、配送・操作は照合完了まで既存ゲートで止める。
+- Slack /mcs-summaryの本人・workspace・app・channelの既存照合に、接続の現行性とrestore/transport/epochの再検証を追加。停止・切替後はsnapshotを読み始めず、計算中に変化した場合も回答を送らない。
+- 429の待機後も送信権限を再確認する。一般のカード操作の旧epoch互換条件は変更しない。
+- 根拠: hermes_plugin/card_workers.py、adapters/slack/actions.py、tests/plugin/test_hermes_plugin_mcs.py、tests/adapters/slack/test_mcs_slack_actions.py
+
+#### 更新・復元レポートに例外本文を含めない
+
+- mcs_update._run の起動失敗は stderr に例外型名を入れる。
+- restore_evidence の DB オープン失敗は restore_report_live_db・restore_report_backup_db の後ろに例外型名だけを付ける。
+- 根拠: mcs/ops/mcs_update.py、mcs/ops/restore_evidence.py
+
+#### 「飲み忘れは特にない」などを服薬の懸念として拾わないように
+
+- 否定の確認範囲を言及直後の10文字から16文字に広げた。
+- 回帰: tests/signals/test_mcs_signals.py
+- 根拠: mcs/signals/mcs_signals.py
+
+#### 削除された投稿を薬変更後の後続記録として数えないように
+
+- med_change_no_followup シグナルと統計 med_change_followup の両方で、既存の自分の投稿確認と同じ body_state IS NOT 'deleted' 条件を使う。
+- 回帰: tests/signals/test_mcs_signals.py, tests/views/test_mcs_stats.py
+- 根拠: mcs/signals/mcs_signals.py、mcs/views/mcs_stats.py
+
+#### 検査値の単位が項目に合わない場合は確認済みにしない
+
+- 項目ごとの許容単位は既存の単位一覧の中から選び、単位換算はしない。項目名が一覧にない検査は従来の共通一覧で判定する。単位が省略された場合も、原文の数値の直後に書かれた単位を同じ表で確認する。
+- 回帰: tests/extract/clinical/test_clinical_values.py
+- 根拠: mcs/extract/clinical/clinical_values.py
+
+#### 承認済みの閾値の組合せでシグナルの対象期間が空になる問題を修正
+
+- 対象の組: followup_days と followup_max_age_d、request_response_days と fyi_max_age_d。transition_lookback_d と transition_med_window_d は前後の窓で対象期間が空にならないため対象外。
+- 回帰: tests/signals/test_mcs_signals.py
+- 根拠: mcs/signals/signal_policy.py、mcs/signals/mcs_signals.py
+
+#### 薬変更後の後続記録の統計を承認済みの追跡日数に合わせる
+
+- 処方期間の終了が近い記録の統計（14日先まで）は、シグナルの既定3日とは用途が異なるため変えていない。
+- 回帰: tests/views/test_mcs_stats.py
+- 根拠: mcs/views/mcs_stats.py
+
+#### 薬の統計を本人の記載だけで数え、壊れた解析結果で統計全体が止まらないように
+
+- 範囲判定は clinical_values.patient_item_scope（シグナルの _patient_fact_keys と同じ規則）を使う。アーカイブ除外は薬変更後の後続記録の統計だけで、過去の集計である薬の動きの統計には適用しない。
+- 回帰: tests/views/test_mcs_stats.py
+- 根拠: mcs/views/mcs_stats.py
+
+#### モデルの sha256 照合を環境変数だけで上書きできないように変更
+
+- 固定値は install.sh の MODEL_SHA256 に記録する。
+- 根拠: install.sh
+
+#### 処理中や状態不明のローカルAIを定期再起動しない
+
+- 単調時計で最大15分を管理し、空配列・欠落キー・真偽値以外・不正JSONを待機状態とみなさない。
+- 固定loopbackへの状態取得はproxy・redirectを使用せず、1要求5秒・応答64KiBを上限とする。
+- 既存の管理ラベル選択順、未管理サーバーの正常スキップ、再起動失敗の終了コードを維持する。
+- 待機確認と再起動を原子的に実行するAPIはなく、その間の新規要求の到着までは防げない。
+- 根拠: deployment/scripts/llamacpp_restart_if_idle.sh
+
+#### 設定ファイルと .env の読取りを安全化
+
+- mcs_util.load_config・env_value が safe_io.read_regular_nofollow を使う。
+- 権限の警告はファイル名だけを出し、内容は出さない。
+- 根拠: mcs/core/mcs_util.py
+
+#### MCSサーバーから混雑の応答（429）を受けたら、その回の取得を止めて次の定期実行で再試行するように
+
+- 429の最終的な失敗を再試行対象として扱う（408・425も同じ扱い。mcs_util.RETRY_LATER_4XX）。連携サマリーは再取得予約が残り、次回に再取得する。
+- 停止後のAPI要求は通信せずに理由コード rate_limited（status 429・再試行対象）で失敗し、各段階は既存の再試行経路（未完了・再取得ジョブ）に回す。送っていない返信・スレッド・履歴・照合ジョブは試行回数を使わずに次回へ延期し、上限到達で失敗にしない（実際に受けた429は従来どおり試行回数を使う）。送っていない連携サマリーの取得には6時間の失敗待ちを付けず、投稿の付加情報の再確認は rate_limited として次回へ繰り越し、観測エラーとして記録しない。停止は1回の実行（adapter 1つ）に限り、次の実行では解除される。
+- 人が承認したスタンプの送信（1回だけの書込み）と添付ファイルのダウンロードはこの停止の対象外。
+- 回帰: tests/ingest/test_v1029_rate_limit.py
+- 根拠: mcs/ingest/mcs_adapter.py、mcs/ingest/collection_stages.py、mcs/ingest/job_ops.py
+
+#### 再解析を残りの少ない患者から進め、患者の参考情報を作れる患者を早く増やすように
+
+- まだ一度も解析していない投稿（新着の時刻順ではなく、未解析であることで判断）を先に選ぶ順番は維持する。その後の再解析では、活動中で再解析の対象が残る患者のうち、残りが少ない3人の投稿を患者ごとの索引で先に取り出す。残りは従来の順番（新しい投稿から、更新で解除された保留は最後）で選ぶ。
+- 患者ごとの残り件数は、参考情報の完了判定（patient_extraction_complete）と同じ条件に、次の再試行時刻が来ていることを加えて数える（完了判定では再試行待ちの投稿も残りに数える）。結果はプロセス内で10分間使い回し、選択のたびに全件を数えたり並べ替えたりはしない。
+- 古い順に取り出す呼出し、担当の分割（shard）、受け入れ対象の絞込み、再試行の上限・待ち時間、QC・薄い結果・保留の再解析の条件はそのまま。使い回しの間にアーカイブされた患者は、活動中の患者の後に回る。
+- 回帰: tests/extract/llm/test_patient_focus_order.py
+- 根拠: mcs/extract/llm/extract_llm.py
+
+#### 返信の既読確認と本文再取得の対象探しを索引で行い、定期実行ごとの全件走査をなくすように
+
+- 追加索引: idx_messages_reply_first_seen（返信のfirst_seen）、idx_messages_reply_open（本文がfull/deleted以外の返信）、idx_nrenders_state_updated（notification_renders(state, updated_at)）、idx_nparts_pending（未配送のnotification_render_parts）。
+- クエリ本体は変更しない。合成DBのEXPLAIN QUERY PLANで索引の使用を確認する。
+- 回帰: tests/core/test_v1029_reply_indexes.py
+- 根拠: mcs/core/ledger_schema.py
+
+#### 依頼の返信根拠と保存・通知の境界を厳密にする
+
+- messageの読取り前にwriter予約を取得し、既存transactionとsavepointのrollbackを保持する。別projectへのREPLACEは親子整合性監査を失効させる。schema版は変更しない。
+- 更新履歴中の全schema変更境界に必要なbackupを保持する。通常更新の不要コピー削除は従来の条件を維持する。
+- Chrome接続の確立後にpeerを確認し、同じ接続にのみ認証情報を入力する。
+- 原文を保った分割と外部の空投稿禁止を両立できない場合は配送を保留し、本文を欠落させない。従来の余剰空白削除をやめるため、この条件ではカード全体が保留となる。
+- LLMのowner識別が取れない新規permitは理由付きで拒否し、次回取得時に再確認する。既存の識別不能なownerは安全な解放証拠がない限り保持し、正規の照合とepoch境界で扱う。
+- realtime抽出はbatch分割とsingle fallbackの予算を含めてclaim数を決める。
+- semantic候補をskipした場合は既検査行を除いて有限に補充する。実行数・検査数・deadline・患者優先順と公平性を分け、検査上限に達した未処理行はpendingで保持する。内部metricsのlanesは初回選択件数から補充を含む検査候補件数へ変わり、実行数はselected系で別に記録する。
+- 返信判定は依頼文と同一のLoop根拠を一意対応させ、患者・投稿版・policy・時刻・投稿者を照合する。言い換え等で一意に対応しないものは未確認とする。旧形式のoriginだけを持ちloop_artifact_idがないLoop eventは、依頼ごとの返信根拠には使用しない。
+- 評価は全evidence参照を使用する。Loopの表示件数を保ちながら重複評価防止では過去の対応記録も照合する。
+- signal抑制集計は新形式の観測時刻を使い期間内だけを数える。同時刻を合算し、明細4096件超は有界の期間集計へ保持する。超過区間や過去形式の時刻内訳を分割できない場合はpartialを維持する。
+- revoked/deletedカードも旧版のsweepや再描画の対象になり得るため、保存layoutのrollback下限を維持し回帰テストで固定する。
+- 根拠: mcs/core/ledger.py、mcs/core/ledger_schema.py、mcs/core/maintenance.py、mcs/ingest/mcs_cdp.py、mcs/ingest/run_check.py、mcs/llm/llm_admission.py、mcs/notify/notify_parts.py、mcs/notify/notify_cards.py、mcs/patients/rollup.py、mcs/semantic/semantic_drain.py、mcs/signals/mcs_signals.py
+
+#### Slack添付のアップロードと既存ファイル照合を配送記録で区別
+
+- 既存result行のattachment_originにupload/remote_match/edit、封印済みattachment_id・sha256・bytesと送信先thread_idを保存する。同じ行のremote_idとreceipt_envelopeがdelivery_id・part_id・payload_hash・routeを束縛する。path・本文・添付説明は追加しない。
+- 送信結果の通知前に既存のfsyncで記録する。通知の保存失敗後は結果を再通知し、再アップロードしない。応答不明・取得失敗の表示行を実アップロードの証拠にしない。DB schema・既存receiptの形式・公開条件は変更しない。
+- 回帰: tests/adapters/slack/test_slack_upload_origin.py。実Slackへの接続・実ファイルの再送・本番の保留解除は行わない。
+- 根拠: adapters/slack/delivery.py、adapters/common/worker.py
+
+#### 変更されたスタンプ操作で対象投稿を選び直せるよう案内
+
+- 現在の操作者・有効なスタンプtoken・同じ患者とスレッドの投稿であることを確認した拒否だけが既存再描画経路を使用する。失効・別患者・無権限・送信結果不明の操作は再選択要求で再送しない。
+- Slackはスタンプメニュー、DiscordとLINE WORKSは別の投稿ボタン（部品上限時はメニュー）の既存フォームを利用する。
+- 根拠: mcs/stamps/stamp_write.py、mcs/notify/notify_cmds.py、adapters/common/text.py
+
+#### 独立実行の config.json をグループ/他者書込み可なら拒否
+
+- stat と読取りの間でファイルが差し替わる余地をなくした。
+- 根拠: mcs_standalone/config.py
+
+#### 更新ログと更新中マーカーをリンクを辿らず 0600 で作成
+
+- O_NOFOLLOW|O_CREAT と 0o600 で開き、safe_io.fdopen_owned で閉じる。
+- 根拠: mcs/ops/update_launch.py、mcs/ops/mcs_update.py
+
+#### 保存済み添付の読取り専用点検を追加
+
+- 静的snapshotをmode=roで開き、sidecarや実行中の変更を拒否する。添付ディレクトリは`/`から1階層ずつsymlinkをたどらずに開き、ファイルはnofollow・非ブロッキングで開く。
+- missing・size_mismatch・unreadableを再取得候補、not_regular・path_mismatch・record_invalidを人の確認対象に分ける。内容hashは比較しない。
+- 件数と時間に上限がある。時間上限はDB検索とファイル点検の合計、および前後のsnapshot hashそれぞれに適用し、hashが上限を超えた場合は結果を拒否する。点検が止まった場合はpartialと続きの位置を返し、件数を数える前に止まった未点検数は不明（null）とする。標準出力は件数と固定理由だけで、添付IDなどは0600の私有ファイルにだけ書く。
+- 根拠: mcs/ops/attachment_audit.py、mcs/ops/mcs_repair.py、docs/guides/ATTACHMENT_RECOVERY.md
+
+#### 未取得投稿の既読化と送信・添付保存・予定の時系列判定を修正
+
+- 本文のfull（添付だけの空本文も含む）とdeletedは従来どおり収集完了にできる。unknownとsnippetは親本文未取得として保持する。
+- Slackは処理開始前、各結果chunkの送信前、429再試行前にhost・interactive・route epochを再確認する。
+- 添付rename後に既存のfsync_dirを実行し、失敗時はDBのdownloaded確定へ進まず再試行対象に残す。
+- 予定と実施の比較可能な日時が逆転している場合はTRANSITIONを作らず、既存の関係分類に戻す。event_timeが精度・timezoneの不一致で比較できない場合はvalid_timeを確認し、最初の比較可能な軸を使う。どちらも比較不能なら従来の未確定の扱いを保ち、factは保持する。
+- 根拠: mcs/ingest/collection_stages.py、adapters/slack/actions.py、mcs/ingest/mcs_adapter.py、mcs/semantic/semantic_relations.py
+
+#### hosted CI を開始できない場合のローカル同等チェックを追加
+
+- 未commit・untracked の変更がある checkout では実行を拒否し、記録した SHA の clone 側にあるランナーで job を実行する。
+- python・pytest・uv・hermes-agent の ref は ci.yml から読み取り、ランナーに別の固定値を持たない。
+- 前提（Python・pytest の版、shellcheck、固定SDKの venv、hermes-agent の ref）が揃わない job は実行不能とし、全6 job が pass した場合だけ終了コード0とする。
+- ubuntu runner で動く job は macOS 上で実行するため、ubuntu 固有の差は未検証として要約に残す。
+- 根拠: scripts/development/ci_local.sh、tests/meta/test_ci_local_runner.py、docs/development/DEVELOPMENT.md
+
+#### 同じ操作が毎回保存エラーになると後続の操作がすべて止まる問題を修正
+
+- 対象は sqlite3 の IntegrityError・DataError（閉じた接続などの ProgrammingError はコマンドに依存しないため隔離せず再送出）。data/cmd では cmd_invalid: apply_failed （型名）、data/cmd_int では storage_rejected:（型名） の固定コードで記録し、例外の文言は記録しない。
+- OperationalError と DatabaseError（破損など）は従来どおり再送出し、コマンドを消費しない。
+- 回帰: tests/notify/test_v129_notify_stability.py, tests/ingest/test_v129_ingest_stability.py
+- 根拠: mcs/notify/notify_cmds.py、mcs/ingest/job_ops.py
+
+#### 収集エラーの内訳と未取得本文の経過時間を確認できるように
+
+- エラーは最大256件の内訳と総数を区別する。患者と親投稿はそれぞれ最大1024行・既存0.25秒の観測予算で読み、完走できなければ件数を不明にする。
+- 経過時間は未取得本文のfirst_seenから測り、連続失敗時間や投稿時刻からの時間とは区別する。
+- 公開前に固定キーと数値を検証し、生の理由文字列・例外詳細を警報やdoctorの新項目へ流さない。
+- 未取得親本文は不完全患者を起点に既存の患者別索引で読み、正常患者の全親投稿の走査と並べ替えを避ける。
+- 根拠: mcs/ingest/collection_diagnostics.py、mcs/ingest/health_report.py、mcs/ingest/health_watch.py、mcs/ops/mcs_setup.py、docs/guides/COLLECTION_DIAGNOSTICS.md
+
+#### 状態ファイルに早期警告と件数・容量を追加
+
+- 新しいキー: warnings（cmd_quarantined / ledger_wal_large / snapshot_verify_near_budget / disk_space_low_soon / cmd_quarantined_unknown）、cmd_quarantined、ledger_wal_bytes、snapshot_verify_slow_runs、manual_backup_bytes。
+- 隔離件数は data/cmd と data/cmd_int だけを、シンボリックリンクをたどらずに数える。2048件または0.5秒を超えた場合と読めない場合は数えずに不明（null）とし、cmd_quarantined_unknown を記録する。
+- WAL の警告は 256MB 超、空き容量の警告は MCS_DISK_GUARD_MB + 4096MB 未満（disk_low の基準 +2048MB より手前）で出す。
+- 異常終了時は errors に crash_site: （型名）@（ファイル名）:（行） を追加する。パス・例外の文言・患者情報は含めない。通知の detail は従来の crash: （型名） のまま。
+- 回帰: tests/ingest/test_v129_ingest_stability.py
+- 根拠: mcs/ingest/health_report.py、mcs/ingest/run_check.py、mcs/core/maintenance.py
+
+#### ログの切替えを毎回の処理で行い、取り残された一時ファイルを掃除するように
+
+- rotate_log は通常ファイルであることを lstat で確かめ、本体を O_NOFOLLOW で開いて copytruncate する。.1 側がシンボリックリンクの場合は従来どおり拒否して報告する。
+- prune_leftovers は data/cmd_results・data/*_render・data/*_state の .atomic.*.tmp・.pub-*・.alias-*.tmp のうち1日より古いものを削除する。公開済みの spec・claim・journal には触れない。各ディレクトリはシンボリックリンクをたどらずに開いて固定し、その中の通常ファイルだけを検査・削除する（リンク先の外部ディレクトリやリンクされたファイルは削除しない）。
+- 回帰: tests/core/test_v129_maintenance_stability.py, tests/ingest/test_v129_ingest_stability.py
+- 根拠: mcs/core/maintenance.py、mcs/ingest/run_check.py
+
+#### 患者コンテキスト作成の失敗理由を lane ごとに件数で表示
+
+- 固定コード: length_stop / unsupported（nightly_unsupported_items・nightly_unsupported_summary）/ other_failure / split / repair。患者・投稿・本文は出さない。
+- 件数は保存済みの最新状態（後の成功で失敗は消える）を数える。累積の発生回数ではない。古い契約の走査記録も含む。
+- 走査記録に修正依頼が通った回数 repairs を追加する。
+- 回帰: tests/patients/test_patient_nightly.py、tests/ops/test_nightly_setup.py
+- 根拠: mcs/patients/patient_nightly.py、mcs/ops/mcs_setup.py、mcs/ingest/health_report.py
+
+#### 送られなかった通知の古い記録を90日で整理するように
+
+- 削除する条件: 状態が not_sent/cancelled、更新が90日より前、送信用ファイルが掃除済み（spec_published=0）、同じカードに後の版がある（カードのない通知を含む）、部品と送信試行がすべて not_sent、通知の対応付け（intent）と復元時の保留（restore hold）から参照されていない。
+- 表示内容の記録（view manifest）は、90日より古く、そのカードの最新ではなく、通知・確認・操作ボタンのどれからも参照されていないものだけを削除する。
+- 残すもの: 配信済みの通知とその部品・送信試行（表示した証拠として統計と照合が読む）、command_receipts（承認・スタンプ・辞書・更新の記録とコマンドの重複防止）、確認の記録（notification_acknowledgements）、thread_read_marks と message_reaction_actor_fetch（スレッド・投稿ごとの現在の状態で、ログではない）。
+- 回帰: tests/core/test_v129_maintenance_stability.py
+- 根拠: mcs/core/maintenance.py
+
+#### カード操作と定期処理の後片付けで台帳を長くロックしないように
+
+- notify_cards.gc: data/cmd_results の走査と期限切れファイルの削除を書込みトランザクションの後へ移動した。トークン削除と spec の消去はこれまでどおりトランザクション内で行う。
+- notify_spool.recover: 対象の読取り・ファイル確認・再公開をトランザクションの外で行い、最後に短い BEGIN IMMEDIATE で、読み取った時と同じ状態の行だけを更新する。途中で状態が変わった行は更新せず、次の recover で判断し直す。
+- 回帰: tests/notify/test_v129_notify_stability.py
+- 根拠: mcs/notify/notify_cards.py、mcs/notify/notify_spool.py
+
+#### 保留中の通知部品と残っている送信仕様を件数で表示
+
+- 固定の理由: part_budget_exceeded / thread_cleanup_budget_exceeded / blank_part_unrepresentable / card_revoked / edit_target_unverified / edit_history_unverified。理由が記録されていないものは not_recorded、その他の値は unknown として数える。0件の理由も表示する。
+- card 部品は ops.card_resolve の対象なので数えない。
+- 集計は notify_recovery.part_hold_report が持つ。
+- 回帰: tests/notify/test_v129_recovery_outlook.py
+- 根拠: mcs/notify/notify_recovery.py、mcs/ingest/health_report.py
+
+#### 患者コンテキストの進み具合を状態ファイルに件数で表示
+
+- 新しいキー: active_patients / extraction_complete / focus_eligible / focus_targets / published / publication / status / observed_at / source / extract_version。
+- 抽出済み・patient-focus の判定は、患者コンテキスト作成と再抽出の順序付けと同じ条件を使う。published は保存済みの公開フラグの件数で、現在の設定 publication を並べて記録する。
+- 回帰: tests/patients/test_patient_nightly.py、tests/extract/llm/test_patient_focus_order.py
+- 根拠: mcs/ingest/health_report.py、mcs/extract/llm/extract_llm.py、mcs/patients/patient_nightly.py
+
+#### 読取り用コピーの作成中に起きた変更が反映されないことがある問題を修正
+
+- notification_meta.notify_dirty を世代カウンタとして使う（列の追加はない）。clear_snapshot_dirty(ledger, generation) は値が変わっていないときだけ 0 に戻す。
+- _content_signature に requests の MAX(updated_at) と、patients の表示項目（種別・氏名・病名・事業所・URL）のハッシュを追加した。last_seen などの記録用の列は含めない。
+- 回帰: tests/notify/test_v129_notify_stability.py, tests/core/test_v129_maintenance_stability.py
+- 根拠: mcs/notify/notify_cards.py、mcs/ingest/run_check.py、mcs/core/maintenance.py
+
+#### 対象範囲が不明な表示結果を送らない
+
+- adapters/common/text.view_scope_ok が projects の list を必須にする。
+- 根拠: adapters/common/text.py
+
+</details>
+
 ## [1.0.28] — 2026-10-21
 
 **チャットからMCSスタンプを操作し、添付の配送と処理の再開を改善**

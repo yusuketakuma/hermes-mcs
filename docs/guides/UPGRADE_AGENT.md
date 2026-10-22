@@ -2,13 +2,24 @@
 
 Hermes経由の導入・更新にはuvが必要です。Hermesのディレクトリで依存を解決し、安全性のための依存設定を適用します。uvがない場合は変更前に停止し、pipへ切り替えません。`--no-brew`を使う場合はuvを事前に導入してください。
 
-1.0.25〜1.0.28の推奨Hermes agentはv0.22.2ベースのMCS companion（固定commit `2c08ca7ade8f867d07e4bff6581be54405b0c9d0`）です。新規導入・CI・更新の固定値をそろえています。以前の固定版 `b7758d8`・`f36c1da` と、それ以前の認識済み固定版は再導入経路の移行対象です。変更中・未知のcheckoutは自動で置き換えません。Hermes経由の環境は再導入（`--reinstall`）で固定版を移行し、gatewayを再起動します。独立動作（Hermesなし）の環境はHermesの移行対象ではありません。
+1.0.25〜1.0.29の推奨Hermes agentはv0.22.2ベースのMCS companion（固定commit `2c08ca7ade8f867d07e4bff6581be54405b0c9d0`）です。新規導入・CI・更新の固定値をそろえています。以前の固定版 `b7758d8`・`f36c1da` と、それ以前の認識済み固定版は再導入経路の移行対象です。変更中・未知のcheckoutは自動で置き換えません。Hermes経由の環境は再導入（`--reinstall`）で固定版を移行し、gatewayを再起動します。独立動作（Hermesなし）の環境はHermesの移行対象ではありません。
 
 
-このガイドはv1.0.28候補のinstall/update/setup/doctorと復旧手順に対応します。公開前の未受入事項は[1.0.28の受入票](../releases/v1.0.28/ACCEPTANCE_1.0.28.md)で確認してください。
+このガイドはv1.0.29候補のinstall/update/setup/doctorと復旧手順に対応します。公開前の未受入事項は[1.0.29の受入票](../releases/v1.0.29/ACCEPTANCE_1.0.29.md)で確認してください。1.0.28の状況は[1.0.28の受入票](../releases/v1.0.28/ACCEPTANCE_1.0.28.md)に残します。
 1.0.22の合成検証・公開・実機反映の状況は[リリース受入票](../releases/v1.0.22/ACCEPTANCE_1.0.22.md)、
 1.0.21は[1.0.21の受入票](../releases/v1.0.21/ACCEPTANCE_1.0.21.md)で追跡する。
 過去の1.0.13実機受入計画は[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)に残す。
+
+### 1.0.29で追加された更新時の確認
+
+- 通常の更新ツールで、Hermes gateway、使用中の独立通知アダプター、抽出workerへ同じ候補を反映してください。接続世代・範囲の確認、収集、抽出の修正は再起動後または次の定期処理から有効になります。checkoutだけの変更では適用完了になりません。
+- `config.json`・`~/.mcs/.env`・`~/.hermes/.env` はシンボリックリンク・通常ファイル以外・上限超過（config 1 MiB、.env 64 KiB）を読まず、未設定と同じ扱いにします。リンクにしている場合は更新前に実ファイルへ置き換えてください。グループ/他者が書込みできるファイルは警告 `local_file_permissions_weak` を出して読み込みます。`runtime_mode=standalone` の `config.json` がグループ/他者書込み可なら `standalone_configuration_invalid` で起動を止めるので、`chmod 600`（または644）にしてください。
+- MCSサーバーがHTTP 429を返した場合、Retry-After（最大60秒、その回の期限内）を守って再試行し、1回の定期実行で2回受けたら残りの取得を次回へ回します。取得範囲・既読化・人承認・no-redirect/no-proxyは変わりません。本文を取得できていない親投稿がある患者は既読にしません。
+- DB schema 9、ルール世代24、LLM抽出世代9、モデルは維持します。患者集約は版12（期間検査）で再構築されます。抽出・意味判定のコードの識別値が変わるため、旧候補に対する承認・保留receiptは新しい候補の承認になりません。保存済みの結果と人の承認は自動で置き換えません。
+- 次にDBを開いたとき返信用の索引を自動で作ります（schema versionは変えません）。返信の多いDBでは初回に時間がかかります。更新後の最初の処理で読取り用スナップショットを1回作り直します。複数の変更境界のバックアップを保持するため、空き容量を確認してください。
+- 送られなかった通知の記録は、90日より古く、同じカードに新しい版があり、外部への影響の記録や参照がないものを日次の整理で削除します。旧版へ戻しても削除済みの記録は戻りません。
+- ローカルAIの定期再起動スクリプトを使用する環境では、`deployment/` の更新後の配備候補を適用してください。スロット状態を取得できない環境では自動再起動を見送ります。
+- 新しい診断の確認は `mcs_setup.py doctor --probe data`、保存済み添付の点検は `mcs_repair.py attachments` です（[収集の診断](COLLECTION_DIAGNOSTICS.md)・[添付の点検](ATTACHMENT_RECOVERY.md)）。どちらも読取り専用で、更新の成否判定には使いません。
 
 ### 1.0.28で追加された更新時の確認
 
@@ -125,7 +136,7 @@ v1.0.0〜1.0.2は手動更新条件を保持し、standaloneの外部applyは阻
 schema巻戻しの個別復旧同意を更新承認で代用できません。
 
 [更新経路manifest](../../tests/fixtures/schema_upgrade/update-paths.json)は過去26経路の根拠と、
-現行28公開版（v1.0.0〜v1.0.27）・46経路のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
+現行29公開版（v1.0.0〜v1.0.28）・48経路のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
 テストは完全合成でGit履歴に依存しませんが、旧target updater全体の26経路再実行、
 実Git・host協調停止・SDK導入・実機配備を検証したものではありません。
 launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、

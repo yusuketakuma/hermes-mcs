@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="760" viewBox="0 0 390 760" role="img" aria-labelledby="title desc">
+  <title id="title">MCS 1.0.29 の収集の診断と添付の点検の流れの説明図</title>
+  <desc id="desc">収集エラーの警報に原因の内訳を添え、保存された状態ファイルに原因分類ごとの件数、取得未完了の件数、未取得の本文の最長経過時間を記録する。doctor の --probe data は保存済みの記録だけを読む。必要なときだけ、保存済み添付を読取り専用で点検する。診断と点検は再送、既読化、自動修復をしない。実画面ではない説明図。</desc>
+  <rect width="390" height="760" fill="#f7f5f0"/>
+  <g font-family="Hiragino Sans,Noto Sans CJK JP,sans-serif" fill="#202124">
+    <text x="16" y="31" font-size="16" font-weight="700" fill="#087f5b">HERMES-MCS / 1.0.29</text>
+    <text x="16" y="65" font-size="24" font-weight="700">収集の詰まりを読み取る</text>
+    <text x="16" y="90" font-size="15" fill="#596560">新しい確認の流れ（説明図）</text>
+
+    <rect x="16" y="110" width="358" height="104" rx="12" fill="#fff4e5" stroke="#e3c79b"/>
+    <circle cx="43" cy="141" r="17" fill="#b35c00"/>
+    <text x="43" y="148" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">1</text>
+    <text x="72" y="149" font-size="20" font-weight="700">収集エラーの警報</text>
+    <text x="31" y="180" font-size="15">原因の内訳を件数で添える</text>
+    <text x="31" y="201" font-size="13" fill="#6b5a44">現在の記録のときだけ。古い記録は原因扱いしない</text>
+
+    <text x="195" y="234" text-anchor="middle" font-size="20" fill="#8a948f">↓</text>
+
+    <rect x="16" y="246" width="358" height="178" rx="12" fill="#edf4ff" stroke="#afc3dc"/>
+    <circle cx="43" cy="277" r="17" fill="#305b91"/>
+    <text x="43" y="284" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">2</text>
+    <text x="72" y="285" font-size="20" font-weight="700">状態ファイルに記録</text>
+    <text x="31" y="317" font-size="15">・原因分類（9種）ごとの件数</text>
+    <text x="31" y="342" font-size="15">・取得が終わっていない患者の件数</text>
+    <text x="31" y="367" font-size="15">・未取得の本文の最長経過時間</text>
+    <text x="31" y="396" font-size="13" fill="#44566b">確認できないときは0件ではなく</text>
+    <text x="31" y="414" font-size="13" fill="#44566b">「確認できません」と示す。患者名・本文は含めない</text>
+
+    <text x="195" y="444" text-anchor="middle" font-size="20" fill="#8a948f">↓</text>
+
+    <rect x="16" y="456" width="358" height="104" rx="12" fill="#e7f0eb" stroke="#b9c9c0"/>
+    <circle cx="43" cy="487" r="17" fill="#087f5b"/>
+    <text x="43" y="494" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">3</text>
+    <text x="72" y="495" font-size="18" font-weight="700">doctor --probe data</text>
+    <text x="31" y="526" font-size="15">保存済みの記録を読んで表示する</text>
+    <text x="31" y="547" font-size="13" fill="#465a4f">DBを読み直さない</text>
+
+    <text x="195" y="580" text-anchor="middle" font-size="20" fill="#8a948f">↓ 必要なときだけ</text>
+
+    <rect x="16" y="592" width="358" height="104" rx="12" fill="#fff" stroke="#b9c9c0" stroke-dasharray="6 4"/>
+    <circle cx="43" cy="623" r="17" fill="#596560"/>
+    <text x="43" y="630" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">4</text>
+    <text x="72" y="631" font-size="18" font-weight="700">保存済み添付の点検</text>
+    <text x="31" y="662" font-size="15">欠損・サイズ不一致・読取り不能</text>
+    <text x="31" y="683" font-size="13" fill="#465a4f">mcs_repair.py attachments（読取り専用）</text>
+
+    <text x="16" y="724" font-size="14" font-weight="700" fill="#9b2c2c">再送・既読化・自動修復はしない</text>
+    <text x="16" y="746" font-size="12" fill="#596560">実画面ではない説明図。人物・投稿は使っていない</text>
+  </g>
+</svg>

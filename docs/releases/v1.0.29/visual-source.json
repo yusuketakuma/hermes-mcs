@@ -1,0 +1,22 @@
+{
+  "kind": "synthetic explanation, not a screenshot or measured result",
+  "source": "docs/releases/v1.0.29/collection-diagnostics.svg",
+  "renderer": "macOS qlmanage -t -s 760 on a 760x760 wrapper (drawing at x=185), then ImageMagick crop 390x760+185+0",
+  "evidence": [
+    "mcs/ingest/collection_diagnostics.py",
+    "mcs/ingest/health_watch.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/attachment_audit.py",
+    "docs/guides/COLLECTION_DIAGNOSTICS.md",
+    "docs/guides/ATTACHMENT_RECOVERY.md"
+  ],
+  "checked": "PNG 390x760 opened locally: no clipped or overlapping labels at 390px width",
+  "sha256": {
+    "png": "f683645a755db40e918900906c696a1e3bd5da85604ee0dc92e5326c17fb4c75",
+    "svg": "a9ecaea9ea49d4c1ad82e1129db777fbb8546ec9b6b8f4a663c04a6f200092b0"
+  },
+  "published_reference": {
+    "changelog_and_release": "https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.0.29/docs/releases/v1.0.29/collection-diagnostics.png",
+    "status": "not reachable until tag v1.0.29 is pushed; URL reachability and Release rendering unverified"
+  }
+}
