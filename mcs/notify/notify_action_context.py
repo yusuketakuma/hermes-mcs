@@ -4,7 +4,7 @@ from __future__ import annotations
 from mcs_queries import current_fact_pred
 from mcs_requests import positive
 from mcs_util import valid_hash
-from notify_render import anchor_keys, patient_name, signal_evidence
+from notify_render import anchor_keys, own_post, patient_name, signal_evidence
 from notify_scope import latest_signals
 
 TASK_HINT_MAX = 300           # 📝 prefill — the modal field holds 1000
@@ -41,14 +41,17 @@ def render_context(db, card) -> dict:
     Digests span projects, so no card-level source pin is emitted."""
     ctx: dict = {}
     if card["kind"] == "thread":
-        mid = card["root_message_id"]
+        # a layout-4 card acts on the one post it shows, never its thread
+        own = own_post(card)
+        mid = own or card["root_message_id"]
         if positive(mid):
             ctx["project_id"] = card["project_id"]
             ctx["source_message_id"] = mid
             pin = source_hash(db, mid, card["project_id"])
             if pin is not None:
                 ctx["source_hash"] = pin
-            ref = _extract_ref(db, card["project_id"], root=mid)
+            ref = (_extract_ref(db, card["project_id"], mid=mid) if own
+                   else _extract_ref(db, card["project_id"], root=mid))
             if ref:
                 ctx["extract_ref"] = ref
             _confirm_target(db, ctx)
@@ -93,7 +96,7 @@ def meds_messages(db, card, context):
     mid = context.get("source_message_id")
     if not positive(mid):
         return
-    if card["kind"] == "thread":
+    if card["kind"] == "thread" and own_post(card) is None:
         mids = (r[0] for r in db.execute(
             "SELECT message_id FROM messages WHERE (message_id=? OR parent_id=?)"
             " AND project_id=? AND body_state='full'"

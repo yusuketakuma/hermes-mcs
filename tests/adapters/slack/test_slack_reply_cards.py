@@ -127,3 +127,24 @@ def test_reply_cards_need_the_card_thread_switch():
     off = {**REPLY, "notify": {**REPLY["notify"], "card_thread": False}}
     assert notify_cards.reply_cards_on(REPLY) is True
     assert notify_cards.reply_cards_on(off) is False
+
+
+def test_each_layout_four_card_acts_on_and_tracks_only_its_own_post(led, monkeypatch):
+    import notify_action_context
+    import notify_render
+    clock = [NOW]
+    monkeypatch.setattr(notify_cards.time, "time", lambda: clock[0])
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led), REPLY, now=clock[0])
+    clock[0] += 60
+    _msg(led, 201, parent=100, body="合成の返信1", ts=int(clock[0]))
+    _dispatch(led, _intent(led, payload={"message_ids": [201]}), REPLY, now=clock[0])
+    root, first = _cards(led)
+    assert notify_action_context.render_context(led.db, root)["source_message_id"] == 100
+    assert notify_action_context.render_context(led.db, first)["source_message_id"] == 201
+    before = {c["card_id"]: notify_render.source_fingerprint(led.db, c) for c in (root, first)}
+    # a later reply never changes what the earlier cards render or act on
+    clock[0] += 60
+    _msg(led, 202, parent=100, body="合成の返信2", ts=int(clock[0]))
+    assert {c["card_id"]: notify_render.source_fingerprint(led.db, c)
+            for c in (root, first)} == before

@@ -569,12 +569,14 @@ def source_fingerprint(db, card) -> str:
     card = dict(card)
     kind = card["kind"]
     if kind == "thread":
+        own = own_post(card)
         msgs = db.execute(
             "SELECT message_id,content_hash,body_state FROM messages "
             "WHERE (message_id=? OR parent_id=?) AND project_id=? "
+            "AND (? IS NULL OR message_id=?) "
             "ORDER BY posted_at_ts,message_id",
             (card["root_message_id"], card["root_message_id"],
-             card["project_id"])).fetchall()
+             card["project_id"], own, own)).fetchall()
         # Selected artifact generations invalidate actions after corrections.
         ready = structured_view.fact_generations(
             db, [m["message_id"] for m in msgs])
@@ -631,6 +633,15 @@ def reply_source(card):
         return None
     source = anchor.get("source") if isinstance(anchor, dict) else None
     return source if type(source) is int and source > 0 else None
+
+
+def own_post(card):
+    """The one post a layout-4 thread card is about (its reply, or the root),
+    or None for cards that cover their whole thread."""
+    if card["kind"] != "thread":
+        return None
+    layout = (card["layout"] if "layout" in card.keys() else 1) or 1
+    return (reply_source(card) or card["root_message_id"]) if layout >= 4 else None
 
 
 def anchor_keys(card) -> list:
@@ -1068,10 +1079,10 @@ def open_tasks(db, card) -> list:
            WHERE project_id=? AND status IN ('open','in_progress')
            AND source_message_id IN (
              SELECT message_id FROM messages
-             WHERE message_id=? OR parent_id=?)
+             WHERE (message_id=? OR parent_id=?) AND (? IS NULL OR message_id=?))
            ORDER BY due_date IS NULL, due_date, request_id""",
         (card["project_id"], card["root_message_id"],
-         card["root_message_id"])).fetchall()
+         card["root_message_id"], own_post(card), own_post(card))).fetchall()
 
 
 FOOTER_ACKERS = 8
@@ -1080,7 +1091,8 @@ FOOTER_ACKERS = 8
 def card_reactions(db, card, shown=None) -> list:
     """カードが参照する同患者の未削除投稿についてcaptureの反応だけを読む。"""
     if card["kind"] == "thread":
-        params = [card["project_id"], card["root_message_id"], card["root_message_id"]]
+        own = own_post(card)
+        params = [card["project_id"], card["root_message_id"], card["root_message_id"], own, own]
         selected = ""
         if shown is not None:
             selected = " AND message_id IN (" + ",".join("?" for _ in shown) + ")"
@@ -1088,6 +1100,7 @@ def card_reactions(db, card, shown=None) -> list:
         posts = [(r[0], r[1]) for r in db.execute(
             "SELECT message_id,sender_id FROM messages WHERE project_id=? "
             "AND (message_id=? OR parent_id=?) AND body_state IS NOT 'deleted' "
+            "AND (? IS NULL OR message_id=?)"
             + selected + " ORDER BY posted_at_ts,message_id", params)]
     else:
         keys = shown if shown is not None else anchor_keys(card)
