@@ -178,7 +178,8 @@ def _thread_plan_ids(db, card, shown, waiting=frozenset()) -> list:
     this card. The face opens on the last page, so an intent spanning
     several pages would otherwise never post its earlier bodies (the
     in-thread card has no 📄 button to reach them)."""
-    if card["kind"] != "thread":
+    if card["kind"] != "thread" or ((card["layout"] if "layout" in card.keys() else 1) or 1) >= 4:
+        # layout 4: the root card carries its root post, each reply its own card
         return list(shown)
     # Previously delivered named posts must also receive late actor names
     # and stale/failed state updates, even after their card page moves away.

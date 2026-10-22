@@ -105,7 +105,9 @@ def test_legacy_content_fp_migrates_only_when_delivery_presentation_changes(led,
 def test_layout_one_card_keeps_legacy_face_and_new_cards_use_layout_two(led):
     _delivered_card(led)
     card = _card(led)
-    assert card["layout"] == notify_cards.CARD_LAYOUT == 3
+    # layout 4 is written only for Slack reply cards (notify.slack_reply_cards)
+    assert card["layout"] == notify_cards.FACE_LAYOUT == 3
+    assert notify_cards.CARD_LAYOUT == 4
     new = notify_cards.card_content(led.db, card)
     legacy = notify_cards.card_content(led.db, {**card, "layout": 1})
     assert " · 起点 " in legacy["containers"][0]["text"]

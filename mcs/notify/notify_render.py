@@ -621,6 +621,18 @@ def source_fingerprint(db, card) -> str:
         and card.get("thread_state") in ("failed", "deleted")})
 
 
+def reply_source(card):
+    """The reply a layout-4 reply card shows, or None for any other card."""
+    if card["kind"] != "thread":
+        return None
+    try:
+        anchor = json.loads(card["anchor_key"] or "{}")
+    except (ValueError, TypeError, RecursionError):
+        return None
+    source = anchor.get("source") if isinstance(anchor, dict) else None
+    return source if type(source) is int and source > 0 else None
+
+
 def anchor_keys(card) -> list:
     try:
         anchor = json.loads(card["anchor_key"] or "{}")
@@ -805,14 +817,17 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     urgent = False
     layout = card["layout"] if "layout" in card.keys() else 1
     if kind == "thread":
+        # layout 4: a reply card shows its one reply, the root card its root only
+        only = reply_source(card) or (card["root_message_id"] if layout >= 4 else None)
         msgs = [dict(m) for m in db.execute(
             """SELECT message_id,sender_id,sender_name,profession,organization,
                       posted_at,body_state,first_seen,
                       reply_count FROM messages
                WHERE (message_id=? OR parent_id=?) AND project_id=?
+                 AND (? IS NULL OR message_id=?)
                ORDER BY message_id<>?, posted_at_ts, message_id""",
             (card["root_message_id"], card["root_message_id"],
-             card["project_id"], card["root_message_id"]))]
+             card["project_id"], only, only, card["root_message_id"]))]
         msgs = [m for m in msgs if m["message_id"] not in waiting]
         if isinstance(cfg, dict):
             progress_by_mid = {m["message_id"]: progress_state(db, m["message_id"], cfg)
@@ -848,6 +863,14 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
                   and (m.get("first_seen") or 0) > (_card_created(card) or float("inf")))
         if new:
             containers.append({"type": "text", "text": f"🆕 返信+{new}"})
+        if layout >= 4 and only == card["root_message_id"]:
+            replies = db.execute(
+                "SELECT COUNT(*) FROM messages WHERE parent_id=? AND project_id=? "
+                "AND message_id<>? AND body_state<>'deleted'",
+                (card["root_message_id"], card["project_id"],
+                 card["root_message_id"])).fetchone()[0]
+            if replies:
+                containers.append({"type": "text", "text": f"↳ 返信 {replies}件はスレッド内"})
         # per post: sender line + its full 📋 要約 (or its empty state)
         rendered = []
         for m in msgs:

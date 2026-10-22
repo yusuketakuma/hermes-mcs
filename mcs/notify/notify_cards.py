@@ -56,7 +56,7 @@ from notify_render import (
     anchor_keys, card_content, content_fingerprint,
     mmdd, patient_name, preview_header, preview_line, signal_evidence,
     fit_parts,
-    plain_notice, presenter)
+    plain_notice, presenter, reply_source)
 import notify_parts
 import notify_action_context as action_context
 import notify_action_tokens as action_tokens
@@ -89,8 +89,13 @@ MAX_ROWS = 5                 # spec.MAX_ROWS
 MAX_POST_ACTIONS = 5          # spec.MAX_POST_ACTIONS
 # Card face layout stamped at creation: existing cards keep layout 1/2 (no
 # fingerprint change, no mass re-render / LINE WORKS re-post); cards
-# created from now on use the current one (owner decision 2026-10-08)
-CARD_LAYOUT = 3
+# created from now on use the current one (owner decision 2026-10-08).
+# Layout 4 = Slack reply cards (notify.slack_reply_cards): the root card shows
+# the root post only and each later reply gets its own card in the root's
+# thread. CARD_LAYOUT is the newest layout this code can write, so the
+# updater refuses a rollback to code that would misread a layout-4 card.
+CARD_LAYOUT = 4
+FACE_LAYOUT = 3               # every card that is not a reply-card thread
 
 
 # ---------- borrowed card connection ----------
@@ -204,11 +209,7 @@ def _card_for(db, target, scope, now) -> int:
                            (json.dumps({"signal_keys": merged},
                                        ensure_ascii=False), now, found))
             return found
-    key = target["card_key"]
-    if scope.get("transport") in ("slack", "lineworks"):
-        transport = scope["transport"]
-        version = notify_scope.TRANSPORT_VERSIONS[transport]
-        key = f"v{version}|{transport}|{payload_hash(scope)}|{key.removeprefix('v1|')}"
+    key = _scoped_card_key(target["card_key"], scope)
     row = db.execute("SELECT card_id,project_id,delivery_state "
                      "FROM notification_cards WHERE card_key=?",
                      (key,)).fetchone()
@@ -239,8 +240,54 @@ def _card_for(db, target, scope, now) -> int:
          scope.get("profile"), scope.get("application_id"),
          scope.get("guild_id"), scope.get("channel_id"),
          scope.get("transport", "discord"), scope.get("team_id"),
-         "{}", now, now, CARD_LAYOUT))
+         "{}", now, now,
+         CARD_LAYOUT if target.get("reply_layout") else min(CARD_LAYOUT, FACE_LAYOUT)))
     return cur.lastrowid
+
+
+def _scoped_card_key(key, scope):
+    if scope.get("transport") in ("slack", "lineworks"):
+        transport = scope["transport"]
+        version = notify_scope.TRANSPORT_VERSIONS[transport]
+        key = f"v{version}|{transport}|{payload_hash(scope)}|{key.removeprefix('v1|')}"
+    return key
+
+
+def reply_cards_on(cfg) -> bool:
+    """Slack reply cards (layout 4) are opt-in until checked on a real client."""
+    return (notify_scope.active_transport(cfg) == "slack"
+            and notify_scope.notify_cfg(cfg).get("slack_reply_cards") is True)
+
+
+def _split_reply_targets(db, targets, scope, cfg):
+    """Give each later reply of a layout-4 root its own card in the root's thread.
+
+    A root whose card already exists below layout 4 keeps collecting its
+    replies (no re-post of history, no double listing); the decision is the
+    stored layout, never a date. The root target keeps the whole coverage so
+    intent completion and the root-thread attachment route stay unchanged."""
+    if not reply_cards_on(cfg):
+        return targets
+    out = []
+    for target in targets:
+        if target.get("kind") != "thread" or "|reply:" in target["card_key"]:
+            out.append(target)
+            continue
+        row = db.execute("SELECT layout FROM notification_cards WHERE card_key=?",
+                         (_scoped_card_key(target["card_key"], scope),)).fetchone()
+        if row is not None and (row["layout"] or 1) < 4:
+            out.append(target)
+            continue
+        root = target["root_message_id"]
+        out.append({**target, "reply_layout": True})
+        for mid in target["coverage"]:
+            if mid != root:
+                out.append({"card_key": f"{target['card_key']}|reply:{mid}",
+                            "kind": "thread", "project_id": target["project_id"],
+                            "root_message_id": root, "coverage": [mid],
+                            "anchor": {"root": root, "source": mid},
+                            "reply_layout": True})
+    return out
 
 
 def _stamp_enabled(cfg) -> bool:
@@ -645,6 +692,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         target = signal_thread_target(db, card, cfg)
         if target is not None and card["thread_id"] == target["thread_id"] and notify_scope.scope_matches(card, target):
             spec["parts"]["source_thread"] = True
+    if reply_source(card) and card["thread_id"]:
+        spec["parts"]["source_thread"] = True
     if any("<@" in (f.get("text") or "") for f in footer):
         # the footer names members as <@id> mentions — a worker must
         # render them without pinging; one that predates this key
@@ -787,6 +836,11 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
             # count as live and block the replacement until content drift
             _cancel_open_renders(db, card_id, now)
         force = force or changed
+    if reply_source(card) and card["delivery_state"] != "revoked":
+        card, wait = _bind_reply_thread(db, card, cfg, now)
+        if wait:
+            _cancel_open_renders(db, card_id, now)
+            return None
     op = _render_op(card)
     if op is None:
         return None      # revoked & never delivered: nothing to render
@@ -988,6 +1042,9 @@ def _resolve_targets(db, ev, payload) -> list:
                  AND NOT EXISTS(SELECT 1 FROM patients patient
                      WHERE patient.project_id=m.project_id AND patient.is_archived=1)
                  AND c.kind='thread'
+                 AND NOT (c.layout>=4 AND m.message_id<>c.root_message_id
+                          AND (NOT json_valid(c.anchor_key)
+                               OR json_extract(c.anchor_key,'$.source') IS NULL))
                  AND c.delivery_state IN ('delivered','update_failed')
                  AND c.message_id IS NOT NULL
                  AND ((c.thread_state='created' AND c.thread_id IS NOT NULL)
@@ -1374,7 +1431,8 @@ def _source_thread_target(db, project_id, mid, cfg, *, base=None):
         WHERE (? IS NULL OR ic.event_id=?) AND o.kind='new_messages' AND ic.state='delivered' AND j.type='integer' AND j.value=?
           AND c.kind='thread' AND c.project_id=? AND c.root_message_id=?
           AND c.delivery_state IN ('delivered','update_failed') AND c.message_id IS NOT NULL
-          AND c.thread_state='created' AND c.thread_id IS NOT NULL""",
+          AND c.thread_state='created' AND c.thread_id IS NOT NULL
+          AND (NOT json_valid(c.anchor_key) OR json_extract(c.anchor_key,'$.source') IS NULL)""",
         (base, base, mid, project_id, root)).fetchall()
     bound = [dict(row) for row in rows if notify_scope.scope_matches(row, scope)
              and (row["delivery_state"] == "delivered" or _thread_binding_creates(db, row))]
@@ -1470,6 +1528,31 @@ def _clear_thread_hold(db, where: str, *params) -> None:
     db.execute("UPDATE notify_outbox SET progress=json_remove(progress,'$.thread_hold') "
                f"WHERE {where} AND CASE WHEN json_valid(progress) "
                "THEN json_type(progress,'$.thread_hold') END IS NOT NULL", params)
+
+
+def _bind_reply_thread(db, card, cfg, now) -> tuple[dict, bool]:
+    """Return (card, wait): a reply card renders only inside its root card's
+    delivered thread. Until then its intents wait like a signal's; after the
+    same bounded wait it falls back to the channel (an unreachable reply is
+    worse than one outside its thread)."""
+    if card["thread_id"]:
+        return card, False
+    root_key = card["card_key"].rsplit("|reply:", 1)[0]
+    root = db.execute("SELECT * FROM notification_cards WHERE card_key=?", (root_key,)).fetchone()
+    if (root is not None and root["delivery_state"] in ("delivered", "update_failed")
+            and root["message_id"] and root["thread_state"] == "created"
+            and root["thread_id"] == root["message_id"]
+            and notify_scope.scope_matches(root, notify_scope.stored_scope(card))):
+        db.execute("UPDATE notification_cards SET thread_id=?,thread_state='created',updated_at=? "
+                   "WHERE card_id=?", (root["thread_id"], now, card["card_id"]))
+        return notify_scope.card_row(db, card["card_id"]), False
+    if now - (card["created_at"] or now) > SIGNAL_SOURCE_HOLD_MAX_S:
+        return card, False
+    for event in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? "
+                            "AND state='pending'", (card["card_id"],)).fetchall():
+        db.execute("UPDATE notify_outbox SET progress=?,next_try=?,updated_at=? WHERE event_id=?",
+                   (json.dumps({"thread_hold": "source_thread_not_ready"}), now + RESEAT_S, now, event[0]))
+    return card, True
 
 
 def _bind_signal_thread(db, card, cfg, now) -> tuple[dict, bool, bool]:
@@ -1707,6 +1790,8 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                     ("payload_invalid", now, event_id))
                 return {"error": "payload_invalid"}
             targets = _resolve_targets(db, row, frozen)
+            if row["kind"] == "new_messages":
+                targets = _split_reply_targets(db, targets, scope, cfg)
             if row["kind"] == "attachment_followup":
                 if not notify_parts.late_attachment_thread(cfg):
                     return {"error": "attachment_thread_unavailable"}

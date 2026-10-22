@@ -55,6 +55,14 @@ _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 # the feature (the 2026-09 incident: card delivered, companion thread
 # body and attachments missing). Extend these sets together with the
 # code that consumes the new key.
+REPLY_CARD_KEY = re.compile(r"\|reply:[1-9][0-9]{0,18}$")
+
+
+def reply_card_key(key) -> bool:
+    """A Slack reply card (layout 4) lives in its root card's thread."""
+    return isinstance(key, str) and REPLY_CARD_KEY.search(key) is not None
+
+
 SPEC_KEYS = frozenset({
     "schema", "delivery_id", "logical_intent_id", "card_key", "kind", "op",
     "render_rev", "source_generation", "presentation_generation",
@@ -356,7 +364,8 @@ def validate(spec) -> dict:
             or not spec["delivery"].get("thread_id") or not spec["delivery"].get("message_id")):
         _err("bad_thread_notice")
     if "source_thread" in parts and (
-            parts["source_thread"] is not True or spec.get("kind") != "signal"
+            parts["source_thread"] is not True
+            or not (spec.get("kind") == "signal" or reply_card_key(spec.get("card_key")))
             or spec["op"] == "notice" or not spec["delivery"].get("thread_id")
             or spec["delivery"].get("transport", "discord") not in ("slack", "discord")):
         _err("bad_source_thread")
