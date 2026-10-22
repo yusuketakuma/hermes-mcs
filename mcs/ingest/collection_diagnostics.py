@@ -73,11 +73,12 @@ def incomplete_counts(db, now: float, checkpoint) -> dict:
             raise RuntimeError("observation_limit")
         counts[reason if reason in FETCH_LABELS else "other"] += 1
     bodies, unknown_age, oldest = 0, 0, None
+    # Keep incomplete patients outermost so unrelated root history cannot consume the read budget.
     rows = db.execute(
-        "SELECT m.first_seen FROM messages m JOIN patients p USING(project_id) "
+        "SELECT m.first_seen FROM patients p CROSS JOIN messages m ON m.project_id=p.project_id "
         "WHERE p.fetch_state='incomplete' AND COALESCE(p.is_archived,0)=0 "
         "AND m.parent_id IS NULL AND m.body_state IN ('snippet','unknown') "
-        "ORDER BY m.message_id LIMIT ?", (MAX_ROWS + 1,))
+        "LIMIT ?", (MAX_ROWS + 1,))
     for (first_seen,) in rows:
         checkpoint()
         bodies += 1

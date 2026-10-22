@@ -59,6 +59,31 @@ def test_unknown_or_future_time_is_not_zero_or_fabricated_age(db, first):
     assert 'synthetic-secret' not in json.dumps(block)
 
 
+def test_incomplete_scan_does_not_visit_complete_patients_history(db):
+    db.executescript('DROP TABLE patients;'
+                     'CREATE TABLE patients(project_id INTEGER PRIMARY KEY, fetch_state TEXT, fetch_reason TEXT, is_archived INTEGER);'
+                     'CREATE INDEX idx_messages_project_time ON messages(project_id);'
+                     'CREATE INDEX idx_messages_parent ON messages(parent_id);')
+    insert(db, pid=1, state='complete', body='full')
+    db.executemany('INSERT INTO messages VALUES(?,1,NULL,"full",100)',
+                   ((mid,) for mid in range(2, 10002)))
+    insert(db, pid=2, mid=10002)
+    steps = 0
+
+    def stop_unrelated_scan():
+        nonlocal steps
+        steps += 100
+        return int(steps > 2000)
+
+    db.set_progress_handler(stop_unrelated_scan, 100)
+    try:
+        counts = diagnostics.incomplete_counts(db, 3700, lambda: None)
+    finally:
+        db.set_progress_handler(None, 0)
+    assert counts['projects'] == counts['parent_bodies'] == 1
+    assert counts['oldest_observed_age_s'] == 3600
+
+
 def test_unknown_reason_and_mixed_ages_do_not_disclose_raw_data(db):
     insert(db, reason='SYNTHETIC-PRIVATE-NAME', first=None)
     insert(db, pid=2, mid=2, first=100)
