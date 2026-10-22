@@ -102,7 +102,7 @@ def route(tmp_path, request):
         send=lambda content, **kw: sent.append({**kw, "text": content["text"]}),
         route_current=LineWorksSender(None, settings, str(data)).route_current)
     if transport == "slack":
-        actions = SlackActions(app, settings, {}, reg, sender, lambda *a, **k: None)
+        actions = SlackActions(app, settings, {"flags": str(flag_path.parent)}, reg, sender, lambda *a, **k: None)
         actions.register()
     elif transport == "lineworks":
         actions = LineWorksActions(settings, {}, reg, sender, lambda *a, **k: None)
