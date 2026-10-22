@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "収集の送信前保留と未読上限時の本文確認を修正",
+  "summary": "アクセス制限で送信せず保留した追加情報の取得は失敗扱いにせず、続きから再開します。未読件数の上限に達した場合も、未読範囲の投稿本文が取得できるまでは既読にしません。",
+  "upgrade": "追加操作は不要です。取得範囲・試行予算・設定の既定値は変わりません。過去の送信前保留が既に失敗記録になっている場合は、従来の再取得時刻まで待ちます。",
+  "details": [
+    "臨床メタデータの送信前rate_limitedでは、失敗artifact・phase・backoffを進めず、保存済みのページcheckpointを維持します。",
+    "スタンプ操作者の送信前保留では、従来の取得観測を上書きせず次の収集へ繰り越します。",
+    "未読上限fallbackは最古未読以降の親投稿にもfull/deletedを要求します。時刻不明の本文未取得は保留し、範囲外の古いunknown投稿は既存どおり妨げません。"
+  ],
+  "refs": [
+    "mcs/ingest/project_metadata.py",
+    "mcs/ingest/collection_stages.py",
+    "mcs/core/ledger.py"
+  ]
+}

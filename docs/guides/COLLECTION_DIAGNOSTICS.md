@@ -2,9 +2,12 @@
 
 監視警報が `stage_errors` や `collection_incomplete` を示したときは、エラーの種類と、まだ取得できていない記録の件数を確認します。診断自体は収集・再送・既読化・修復を実行しません。
 
+導入時に選択したMCS用Pythonの絶対パスを`PY`に指定してください。macOS標準の`python3`とは区別します（[導入ガイド](INSTALLATION.md)）。
+
 ```sh
-python3 mcs/ops/mcs_setup.py doctor --probe data
-python3 mcs/ops/mcs_setup.py doctor --probe data --json
+PY=/absolute/path/to/mcs-python
+"$PY" mcs/ops/mcs_setup.py doctor --probe data
+"$PY" mcs/ops/mcs_setup.py doctor --probe data --json
 ```
 
 `--probe data` がない場合、この診断は状態ファイルもDBも読みません。指定した場合は保存済みの `data/health.json` にある `collection_diagnostics` を読み、直接DBを再走査しません。古い状態ファイルは「古い記録」、項目のない旧版・不正な記録・観測上限超過は「確認できません」とし、正常や0件に置き換えません。

@@ -536,3 +536,40 @@ def test_value_get_requires_canonical_collection_definition(world, karte_id, cha
         assert viewed["state"] == "complete" and viewed["current_known"] is True
         assert viewed["definition_source_artifact_id"] == pin
         assert viewed["rows"][0]["scalar"] == 123
+
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_run_rate_limit_holds_clinical_cursor_without_failed_attempt_or_lost_slice(world, staged):
+    import mcs_adapter
+    db, client, wire, clock = world
+    with db.db:
+        db.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=2")
+    if staged:
+        wire.items, wire.value_rows = 1, 300
+        assert run(db, client)["held"] == "page_slice"
+        assert progress(db)["staging"]["next_page"] == 6
+    else:
+        metadata._clinical_progress(db, 1, {
+            "karte_id": 10, "phase": "medication_periods", "item_cursor": 0, "next_due_at": 0})
+    before = progress(db)
+    attempt_ids = [row["artifact_id"] for row in db.artifacts(project_metadata_contract.ARTIFACT_KIND)]
+    calls = len(wire.calls)
+    client._rate_limited = mcs_adapter.RATE_LIMIT_STOP
+    stats = run(db, client)
+    assert stats["held"] == "rate_limited" and stats["failed"] == stats["requests"] == 0
+    assert len(wire.calls) == calls
+    assert [row["artifact_id"] for row in db.artifacts(project_metadata_contract.ARTIFACT_KIND)] == attempt_ids
+    after = progress(db)
+    for key in ("phase", "item_cursor", "next_due_at", "staging", "cycle_failed", "last_failure"):
+        assert after.get(key) == before.get(key)
+    # A fresh run resumes the original phase/page; it never skips the refused unit.
+    client._rate_limited = 0
+    assert run(db, client)["failed"] == 0
+    resumed = urlsplit(wire.calls[calls]["url"])
+    if staged:
+        assert resumed.path.endswith("/values") and parse_qs(resumed.query)["page"] == ["6"]
+        values = get_project_metadata(db.db, 1, "observation_values", item_id=1, now=clock[0])
+        assert values["state"] == "complete" and len(values["rows"]) == 300
+    else:
+        assert resumed.path.endswith("/medication_periods")

@@ -288,7 +288,14 @@ def sync_metadata(ledger, adapter, project_id: int, dataset: str, *,
                 _, current_items = _clinical_items(ledger.db, project_id, target["entity_id"])
                 if clinical_definition_fingerprint(target["entity_id"], current_items) != definition_fingerprint:
                     raise _ClinicalHold("definition_changed")
-            return adapter._get(path, params, extend_session=extend_session)
+            try:
+                return adapter._get(path, params, extend_session=extend_session)
+            except MCSError as error:
+                if defer_deadline and error.kind == "rate_limited":
+                    # The run refused this GET before transport, so there is no
+                    # failed observation or clinical unit to advance.
+                    raise _ClinicalHold("rate_limited") from None
+                raise
     result = fetch_metadata(get, dataset, target["entity_id"], item_id=item_id,
                             retain_names=retain_names, max_pages=max_pages, per_page=per_page,
                             project_type="group" if dataset == "consultations" else None,
@@ -469,6 +476,10 @@ def sync_clinical_metadata(ledger, adapter, *, enabled=False, deadline):
                                     _checkpoint=checkpoint if phase == "observation_values" else None)
         except _ClinicalHold as hold:
             stats["held"] = str(hold)
+            if str(hold) == "rate_limited":
+                # Any pages fetched before the refusal are already checkpointed.
+                # Keep that checkpoint (or the previous due state) unchanged.
+                break
             if str(hold) in ("staging_invalid", "definition_changed"):
                 state.pop("staging", None)
             _clinical_progress(ledger, pid, state)

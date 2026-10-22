@@ -101,6 +101,19 @@ def test_phase_guards_never_reach_the_tools(tmp_path):
     assert "POST" not in args and "chat/completions" not in args
 
 
+@pytest.mark.parametrize("payload,expected", [
+    ({}, -1), ([], -1), ([{}], -1), ([{"is_processing": "false"}], -1),
+    ([{"is_processing": False}], 0), ([{"is_processing": True}], 1),
+])
+def test_slot_observation_requires_a_complete_boolean_snapshot(tmp_path, payload, expected):
+    runner = _render(tmp_path, curl_body="printf '%s' '" + json.dumps(payload) + "'\n")
+    runner.write_text(runner.read_text().rsplit('main "$@"', 1)[0] + '\nbusy_slots\n')
+    proc = _run(tmp_path, runner)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == str(expected)
+    assert _called(tmp_path) == ["curl"]
+
+
 @pytest.mark.parametrize("curl_rc,server_rc,pgrep_rc", [
     (28, 113, 1), (7, 0, 1), (7, 97, 1), (7, 113, 0), (7, 113, 2),
 ])

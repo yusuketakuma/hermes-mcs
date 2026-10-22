@@ -232,7 +232,7 @@ def _projection(db, mid, chash, content, pid=1):
     db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES ('canonical_projection',?,?,?,?)",
-        (mid, pid, json.dumps(content),
+        (pid, mid, json.dumps(content),
          json.dumps({"hash": chash, "projection_version": PROJECTION_VERSION})))
 
 
@@ -240,8 +240,8 @@ def test_med_change_detected_from_canonical_projection(led):
     """T5: a canonical fact reaching the signal layer — the detector
     reads canonical_projection through the same current_fact_pred rule
     as every other consumer."""
-    _msg(led.db, 1, ts=NOW - 30 * DAY)
-    _projection(led.db, 1, "h1", {
+    _msg(led.db, 11, ts=NOW - 30 * DAY)
+    _projection(led.db, 11, "h1", {
         "meds": [{"name": "薬A", "action": "stop", "subject": "patient"}],
         "canonical_facts": [
             {"fact_id": "f1", "kind": "medication_event",
@@ -252,6 +252,8 @@ def test_med_change_detected_from_canonical_projection(led):
     sig = mcs_signals.current_open(led.db)["items"][0]
     assert sig["type"] == "med_change_no_followup"
     assert sig["evidence"]["med"] == "薬A"
+    assert sig["project_id"] == 1
+    assert sig["evidence"]["message_ids"] == [11]
 
 
 def test_canonical_projection_shadows_extract_llm_in_signals(led):

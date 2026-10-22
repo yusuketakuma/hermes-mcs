@@ -640,20 +640,16 @@ class View:
 
     def _loops(self, pid, limit):
         """Open-Loop candidates and relations; only human-confirmed operations create requests."""
-        from request_loops import effective_loop_state
+        from request_loops import effective_loop_states
 
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("bad_limit")
-        items = []
         policy = self._current_policy()
-        bundles = {}
-        for row in self.db.execute(
+        rows = self.db.execute(
                 "SELECT artifact_id,project_id,message_id,content,meta,created_at "
                 "FROM artifacts WHERE kind='loop_candidate' "
-                "AND project_id=? ORDER BY artifact_id DESC LIMIT ?", (pid, limit)):
-            candidate = effective_loop_state(self.db, row, policy=policy, bundles=bundles)
-            if candidate is not None:
-                items.append(candidate)
+                "AND project_id=? ORDER BY artifact_id DESC LIMIT ?", (pid, limit))
+        items = effective_loop_states(self.db, rows, policy=policy)
         return {"items": items, "scope": "loop_candidates"}
 
     def _receipt(self, project, command_id, payload_hash):

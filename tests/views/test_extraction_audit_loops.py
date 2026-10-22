@@ -46,7 +46,11 @@ def test_open_resolution_closed_and_stale_are_distinct_and_read_only(tmp_path):
         snapshot = ledger.publish_snapshot(str(tmp_path / "ledger.db"), str(tmp_path / "snapshot"))
         view = mcs_view.View(snapshot)
         try:
+            trace = []
+            view.db.set_trace_callback(trace.append)
             result = view.stats({"preset": "extraction_audit"})["stats"]["request_loop_state"]
+            view.db.set_trace_callback(None)
+            assert sum("FROM artifacts" in sql and "loop_event" in sql for sql in trace) == 1
             assert result["status"] == "ok"
             assert next(item for item in result["rows"]["items"] if item["class"] == "leftover") == {
                 "class": "leftover", "open": 1, "resolution_candidate": 1, "closed": 1,

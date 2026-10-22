@@ -942,6 +942,12 @@ def _stage_reaction_actors(adapter, ledger, until, *, skip, cfg=None):
             stats["deferred"] += len(targets) - index
             break
         walk = adapter.fetch_reaction_actors(target["project_id"], target["message_id"])
+        if walk.get("error") == "rate_limited":
+            # This GET was refused before transport; earlier pages may exist.
+            # Retain the last complete set, not a partial observation, and
+            # retry next run without imposing a failed-fetch backoff.
+            stats["deferred"] += len(targets) - index
+            break
         stats["fetched"] += 1
         ledger.save_reaction_actors(target["message_id"], walk["actors"], walk["complete"],
                                     error=walk.get("error"))

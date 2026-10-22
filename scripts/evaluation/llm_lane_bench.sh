@@ -96,7 +96,11 @@ busy_slots() {
 import json, sys
 try:
     slots = json.load(sys.stdin)
-    print(sum(1 for s in slots if isinstance(s, dict) and s.get("is_processing")))
+    if (not isinstance(slots, list) or not slots
+            or any(not isinstance(s, dict) or type(s.get("is_processing")) is not bool
+                   for s in slots)):
+        raise ValueError("invalid slot snapshot")
+    print(sum(s["is_processing"] for s in slots))
 except Exception:
     print(-1)
 '

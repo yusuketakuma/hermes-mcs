@@ -162,3 +162,49 @@ def test_locally_refused_jobs_keep_attempts_and_complete_with_a_fresh_adapter(tm
     assert rows["reply"][0] == rows["thread"][0] == rows["history"][0] == "done"
     assert rows["reconcile"][0] == "pending"     # rotating job: next pass, never failed
     db.close()
+
+
+
+def test_reaction_actor_refresh_defers_unsent_rate_limited_work_without_failure_observations(monkeypatch):
+    adapter, calls, _sleeps = _adapter(monkeypatch, iter([]))
+    adapter._rate_limited = mcs_adapter.RATE_LIMIT_STOP
+    targets = [{"project_id": 1, "message_id": mid} for mid in (11, 12)]
+    monkeypatch.setattr(collection_stages.message_observations, "metadata_watch_targets", lambda _db: [])
+    monkeypatch.setattr(collection_stages.stamp_read, "reaction_actor_targets", lambda _db, **_kw: targets)
+    saved = []
+    store = type("L", (), {"db": None, "save_reaction_actors":
+                          lambda self, *a, **k: saved.append((a, k))})()
+    result = {}
+    collection_stages.stage_metadata_shadow(
+        adapter, store, result, time.monotonic() + 300, actors=True)
+    actors = result["metadata_shadow"]["actors"]
+    assert actors["deferred"] == 2 and actors["fetched"] == actors["complete"] == 0
+    assert actors["errors"] == [] and saved == [] and calls == []
+
+
+def test_reaction_actor_rate_limit_after_a_page_keeps_the_last_complete_observation(monkeypatch):
+    targets = [{"project_id": 1, "message_id": mid} for mid in (11, 12)]
+    monkeypatch.setattr(collection_stages.stamp_read, "reaction_actor_targets", lambda _db, **_kw: targets)
+    calls, saved, walks = [], [], []
+
+    def get(_path, params, **_kw):
+        calls.append(params["page"])
+        if params["page"] == 2:
+            raise MCSError("rate_limited", status=429, retryable=True)
+        return {"reactions": [{"reaction_type": "viewed", "user": {"id": 1}}],
+                "paginate": {"timestamp": 123, "current_page": 1, "has_next": True}}
+
+    def fetch(pid, mid):
+        walk = mcs_adapter.walk_reaction_actors(get, pid, mid)
+        walks.append(walk)
+        return walk
+
+    adapter = type("A", (), {"fetch_reaction_actors": staticmethod(fetch)})()
+    store = type("L", (), {"db": None, "save_reaction_actors":
+                          lambda self, *a, **k: saved.append((a, k))})()
+    result = collection_stages._stage_reaction_actors(
+        adapter, store, time.monotonic() + 300, skip=False)
+    assert calls == [1, 2] and walks[0]["pages"] == 1 and len(walks[0]["actors"]) == 1
+    assert walks[0]["error"] == "rate_limited" and not walks[0]["complete"]
+    assert result == {"due": 2, "fetched": 0, "complete": 0, "deferred": 2, "errors": []}
+    assert saved == []

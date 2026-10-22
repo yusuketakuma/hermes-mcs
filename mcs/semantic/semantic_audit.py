@@ -283,6 +283,7 @@ def _fact_audit_target(fact: dict) -> str:
               f"epistemic:{fact.get('epistemic')}",
               f"workflow:{fact.get('workflow_status')}",
               f"event_time:{fact.get('event_time')}",
+              f"valid_time:{fact.get('valid_time')}",
                f"subject:{fact.get('subject')}",
                f"quantity:{fact.get('quantity', 'unknown')}"]
     if fact.get("kind") == "medication_event":
@@ -385,7 +386,7 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
             "Does the claim in state.target.text follow from the "
             "evidence_quote entries within the evidence_context source "
             "text? The target ends with structured fields in brackets "
-            "(kind/polarity/epistemic/workflow/event_time/subject[/"
+            "(kind/polarity/epistemic/workflow/event_time/valid_time/subject[/"
             "action]/optional patient_context category/text/details) — judge statement AND fields together: a quote "
             "negated, attributed to another subject, or placed at a "
             "different time does NOT support the claim.",

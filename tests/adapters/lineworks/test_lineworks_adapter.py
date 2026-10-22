@@ -743,6 +743,8 @@ CTX = {"card_message_id": "lw:" + "c" * 32}
 def test_body_part_waits_out_a_briefly_held_api_lock(tmp_path, monkeypatch):
     w = world(tmp_path)
     spec = overflow_spec()
+    # A real worker retries only while the runner's sealed spec remains published.
+    Path(w.dirs["render"], spec["delivery_id"] + ".json").write_bytes(envelopes.canonical(spec))
     part = spec["parts"]["manifest"][1]
     held, release = threading.Event(), threading.Event()
 
@@ -778,6 +780,8 @@ def test_unavailable_caption_with_prior_id_is_not_reposted(tmp_path):
 def test_body_part_waits_out_the_shared_cooldown(tmp_path):
     w = world(tmp_path)
     spec = overflow_spec()
+    # A real worker retries only while the runner's sealed spec remains published.
+    Path(w.dirs["render"], spec["delivery_id"] + ".json").write_bytes(envelopes.canonical(spec))
     with open(os.path.join(w.dirs["state"], "rate-limit.json"), "w") as stream:
         json.dump({"until": time.time() + 0.2}, stream)
     out = asyncio.run(_worker(w)._perform_part({"spec": spec}, spec["parts"]["manifest"][1], CTX))
@@ -788,6 +792,8 @@ def test_body_part_waits_out_the_shared_cooldown(tmp_path):
 def test_body_part_retries_a_wire_429_after_the_cooldown(tmp_path, monkeypatch):
     w = world(tmp_path)
     spec = overflow_spec()
+    # A real worker retries only while the runner's sealed spec remains published.
+    Path(w.dirs["render"], spec["delivery_id"] + ".json").write_bytes(envelopes.canonical(spec))
     now = [100.0]
     monkeypatch.setattr(delivery.time, "time", lambda: now[0])
 

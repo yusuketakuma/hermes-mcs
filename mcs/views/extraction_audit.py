@@ -206,7 +206,7 @@ def _drops(document, meta):
 def collect(db, scope):
     """Compute the full audit preset in one source pass, exposing only typed aggregates."""
     from operation_contract import EXTRACT_FEEDBACK_FIELDS
-    from request_loops import effective_loop_state, latest_policy
+    from request_loops import effective_loop_states, latest_policy
 
     omission, validation, prefilter, thin = {}, {}, {}, {}
     readers = Counter(dict.fromkeys(READERS, 0))
@@ -242,6 +242,7 @@ def collect(db, scope):
                 + ELIGIBLE_MESSAGE + where, params):
             loop_rows[row["message_id"]].append(row)
     cue_posts = all_posts = unknown_validation = 0
+    loop_work = []
     for row in iter_audit_rows(db, scope):
         all_posts += 1
         attachments[(row["reader"], row["length"], row["message_id"] in attachment_ids)] += 1
@@ -274,11 +275,17 @@ def collect(db, scope):
                 prefilter.setdefault(key, {"posts": 0})["posts"] += 1
             if row["_meta"].get("thin_retried") is True and not captured:
                 thin.setdefault(key, {"posts": 0})["posts"] += 1
-        for candidate in loop_rows[row["message_id"]]:
-            value = effective_loop_state(db, candidate, policy=policy, bundles=bundles)
-            for code in row["classes"]:
-                if code not in PHARMACY_CODES:
-                    continue
+        codes = [code for code in row["classes"] if code in PHARMACY_CODES]
+        if codes:
+            loop_work.extend((candidate, codes) for candidate in loop_rows[row["message_id"]])
+    # Bound batch retention while avoiding one full history scan per candidate.
+    for offset in range(0, len(loop_work), _BATCH):
+        batch = loop_work[offset:offset + _BATCH]
+        values = {value["artifact_id"]: value for value in effective_loop_states(
+            db, [candidate for candidate, _codes in batch], policy=policy, bundles=bundles)}
+        for candidate, codes in batch:
+            value = values.get(candidate["artifact_id"])
+            for code in codes:
                 counter = loops[code]
                 if value is None or not value.get("current") or not value.get("adoption_eligible"):
                     counter["stale"] += 1

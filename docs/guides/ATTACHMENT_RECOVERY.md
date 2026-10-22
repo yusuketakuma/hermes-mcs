@@ -6,8 +6,11 @@
 
 公開snapshotと添付ディレクトリを明示して実行します。設定からの自動探索はしません。
 
+導入時に選択したMCS用Pythonの絶対パスを`PY`に指定してください。macOS標準の`python3`とは区別します（[導入ガイド](INSTALLATION.md)）。
+
 ```sh
-python3 mcs/ops/mcs_repair.py attachments \
+PY=/absolute/path/to/mcs-python
+"$PY" mcs/ops/mcs_repair.py attachments \
   --snapshot /absolute/path/ledger-snapshot.db \
   --attachment-root /absolute/path/data/attachments \
   --out /absolute/private-dir/attachments-audit.json

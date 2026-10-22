@@ -163,6 +163,8 @@ _LAB_ITEM_UNITS = {
     "height": ("cm", "m"),
     "blood_glucose": ("mg/dl", "mmol/l"),
 }
+# Capture explicit dose/count symbols too; an omitted output unit cannot hide them.
+_LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°錠包袋滴枚本個回単位]|カプセル)*"
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
@@ -243,14 +245,14 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         tail = quote[match.end():]
         if number is not None:
             result = re.match(r"([+-]?[0-9]+(?:\.[0-9]+)?)(?![0-9.])"
-                              r"([a-zμ%/0-9.^²]*)", tail)
+                              f"({_LAB_QUOTED_UNIT})", tail)
             if result and normalized_quantity_number(result[1]) == number:
                 # an omitted unit must not bypass the item's units: the quoted one is checked too
                 if (result[2] == unit_key) if unit_key else (not result[2] or result[2] in allowed_units):
                     readings.append(match)
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
             remainder = tail[len(fold_surface(raw_value)):]
-            result_unit = re.match(r"[a-zμ%/0-9.^²]*", remainder)
+            result_unit = re.match(_LAB_QUOTED_UNIT, remainder)
             suffix = remainder[len(unit_key):] if unit_key else remainder
             # A prefix is not the complete result: 陰性ではありません,
             # 陰性疑い etc. must stay candidates, without guessing their value.
@@ -278,7 +280,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     if flag:
         cues = r"高|↑|high" if flag == "high" else r"低|↓|low"
         tail = quote[readings[0].end():] if readings else ""
-        value_token = re.match(r"[+-]?[0-9]+(?:\.[0-9]+)?[a-zμ%/0-9.^²]*", tail)
+        value_token = re.match(r"[+-]?[0-9]+(?:\.[0-9]+)?" + _LAB_QUOTED_UNIT, tail)
         suffix = tail[value_token.end():] if value_token else ""
         if not re.match(r"(?:ト|デ|ガ|[,、:（(])*(" + cues + ")", suffix):
             supported = False

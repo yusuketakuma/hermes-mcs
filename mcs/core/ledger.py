@@ -623,7 +623,8 @@ class Ledger:
         not show: the server's oldest unread message is stored with a
         full (or server-deleted) body, the certified floor reaches
         at/below its posting time (or the whole timeline, -1), verified
-        coverage is contiguous up to the newest stored message, and no
+        coverage is contiguous up to the newest stored message, all
+        parent bodies in the unread time range are full or deleted, and no
         reply fetch is pending. Anything less keeps the patient
         incomplete (never acknowledged)."""
         row = self.db.execute(
@@ -637,6 +638,16 @@ class Ledger:
             return False
         wm = self.high_watermark(project_id)
         if not (wm > 0 and self.coverage_ts(project_id) >= wm):
+            return False
+        # History traversal may certify unknown/bodyless roots. That is not
+        # enough to acknowledge the unread range; old roots outside it do not
+        # block today's acknowledgement, but an unknown posting time does.
+        if self.db.execute(
+                "SELECT 1 FROM messages WHERE project_id=? "
+                "AND COALESCE(parent_id,0)=0 "
+                "AND COALESCE(body_state,'') NOT IN ('full','deleted') "
+                "AND (typeof(posted_at_ts)!='integer' OR posted_at_ts>=?) "
+                "LIMIT 1", (project_id, row["posted_at_ts"])).fetchone():
             return False
         # a reply whose fetch gave up ('failed' is not pending) still
         # holds only its snippet — acknowledging would hide it for good

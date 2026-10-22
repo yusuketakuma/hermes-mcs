@@ -67,13 +67,15 @@ SENDER_BUSY_TRIES, SENDER_BUSY_WAIT = 10, 0.5
 COOLDOWN_TRIES = 5  # each wait is at most the 60 s official reset
 
 
-async def locked(fn, *args, wait_cooldown=False):
+async def locked(fn, *args, wait_cooldown=False, retry_allowed=None):
     """Run a lock-taking Sender call, waiting out a brief api.lock hold.
 
     sender_busy is a local preflight (nothing sent), so retrying cannot duplicate;
     a journaled part result is terminal, so failing at once would drop the part.
     With wait_cooldown (parts), a 429 — the shared cooldown preflight or a wire
-    rejection, both proving nothing committed — is waited out and retried too."""
+    rejection, both proving nothing committed — is waited out and retried too.
+    A worker borrows its current authority for each retry; losing it preserves
+    the original rejection, never turns a known not_sent into unknown."""
     busy = cooled = 0
     while True:
         try:
@@ -83,11 +85,15 @@ async def locked(fn, *args, wait_cooldown=False):
             if wait_cooldown and until is not None and cooled < COOLDOWN_TRIES - 1:
                 cooled += 1
                 await asyncio.sleep(min(max(until - time.time(), 0), 60) + 0.05)
+                if retry_allowed is not None and not await retry_allowed():
+                    raise
                 continue
             busy += 1
             if exc.error_code != "sender_busy" or busy == SENDER_BUSY_TRIES:
                 raise
-        await asyncio.sleep(SENDER_BUSY_WAIT)
+            await asyncio.sleep(SENDER_BUSY_WAIT)
+            if retry_allowed is not None and not await retry_allowed():
+                raise
 
 
 def failure(exc):
@@ -160,7 +166,7 @@ class Sender:
         return paths.route_open(flags, "lineworks",
                                 spec["delivery"]["route_epoch"])
 
-    async def perform(self, spec):
+    async def perform(self, spec, *, retry_allowed=None):
         if any(spec["delivery"].get(key) != self.settings[key] for key in SCOPE_KEYS) \
                 or not self.route_current(spec):
             return {"result": "not_sent", "error_code": "scope_mismatch"}
@@ -172,7 +178,7 @@ class Sender:
             content = ({"type": "text",
                         "text": "\n".join(filter(None, ("⛔ 取り下げ済み", cards.heading(spec))))}
                        if spec["op"] == "revoke" else cards.render(spec))
-            await locked(self.send, content)
+            await locked(self.send, content, retry_allowed=retry_allowed)
         except ValueError:
             return {"result": "not_sent", "error_code": "bad_render"}
         except Exception as exc:
@@ -211,6 +217,17 @@ class DeliveryWorker(BaseWorker):
     def _verify_grant(self, claim, result):
         return super()._verify_grant(claim, result) and self._sender.route_current(claim["spec"])
 
+    def _retry_gate(self, spec):
+        """Borrow worker authority and the runner's live spec before another write."""
+        async def allowed():
+            if not await self._send_allowed(spec):
+                return False
+            # The runner withdraws the spec when its source/card is revoked.
+            # Match the initial part gate after a cooldown as well.
+            return await asyncio.to_thread(os.path.isfile, os.path.join(
+                self._dirs["render"], spec["delivery_id"] + ".json"))
+        return allowed
+
     async def _perform(self, claim):
         spec = claim["spec"]
         if not self._ours(spec["delivery"]) or not self._sender.route_current(spec):
@@ -219,7 +236,7 @@ class DeliveryWorker(BaseWorker):
         # Retire before HTTP even if the replacement later has an unknown outcome.
         if spec["op"] == "revoke":
             self._reg.retire_card_tokens(spec["card_key"])
-        outcome = await self._sender.perform(claim["spec"])
+        outcome = await self._sender.perform(spec, retry_allowed=self._retry_gate(spec))
         if outcome["result"] == "delivered" and claim["spec"]["op"] != "revoke":
             reused = any(p.get("prior_remote_id") for p in spec["parts"].get("manifest", [])
                          if p["kind"] == "card")
@@ -258,7 +275,8 @@ class DeliveryWorker(BaseWorker):
                 if not 0 <= index < len(chunks):
                     return {"result": "not_sent", "error_code": "body_part_missing"}
                 text = chunk_text(spec, part.get("name") or "", chunks[index])
-                await locked(self._sender.send, {"type": "text", "text": text}, wait_cooldown=True)
+                await locked(self._sender.send, {"type": "text", "text": text},
+                             wait_cooldown=True, retry_allowed=self._retry_gate(spec))
                 rid = "lw:" + hashlib.sha256(
                     (spec["delivery_id"] + part["part_id"]).encode()).hexdigest()[:32]
             elif part["kind"] == "attachment_part":
@@ -269,7 +287,7 @@ class DeliveryWorker(BaseWorker):
                         # Its 取得失敗 line is already in the room — never repeat it.
                         return {"result": "delivered", "remote_id": part["prior_remote_id"]}
                     await locked(self._sender.send, {"type": "text", "text": part["caption"]},
-                                 wait_cooldown=True)
+                                 wait_cooldown=True, retry_allowed=self._retry_gate(spec))
                     return {"result": "delivered", "remote_id": "lw:" + hashlib.sha256(
                         (spec["delivery_id"] + part["part_id"]).encode()).hexdigest()[:32]}
                 if part.get("prior_remote_id"):
@@ -279,7 +297,7 @@ class DeliveryWorker(BaseWorker):
                 if blob is None:
                     return {"result": "not_sent", "error_code": "attachment_mismatch"}
                 rid = await locked(self._sender.attachment, blob, part.get("name") or "file",
-                                   wait_cooldown=True)
+                                   wait_cooldown=True, retry_allowed=self._retry_gate(spec))
             else:
                 return {"result": "not_sent", "error_code": "unsupported_part"}
         except Exception as exc:

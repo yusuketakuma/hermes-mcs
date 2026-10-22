@@ -103,7 +103,7 @@ def attach(record, documents, candidate, cfg):
     """Read exact-generation receipts; never infer a missing stage or audit."""
     from semantic_lifecycle import fact_lifecycle, observed_verified_fact_ids
     from semantic_store import current_artifact
-    from request_loops import effective_loop_state
+    from request_loops import effective_loop_states
     bundle = source_bundle(record, cfg)
     if bundle is None:
         return candidate, None
@@ -221,8 +221,10 @@ def attach(record, documents, candidate, cfg):
         if obs['loop_ids'] != [row['artifact_id'] for row in loop_rows]:
             raise EvaluationError('observation_loop_scope_mismatch')
         loops = []
+        loop_states = {item['artifact_id']: item for item in effective_loop_states(
+            db, loop_rows, policy=policy, bundles={bundle['root_id']: bundle})}
         for row in loop_rows:
-            loop = effective_loop_state(db, row, policy=policy, bundles={bundle['root_id']: bundle})
+            loop = loop_states.get(row['artifact_id'])
             if loop is None or not loop.get('current') or loop['relation_evaluation_unavailable']:
                 raise EvaluationError('observation_loop_incomplete')
             # A reported completion is advisory, never a human-confirmed closure.

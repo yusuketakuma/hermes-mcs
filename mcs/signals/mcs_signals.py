@@ -644,8 +644,9 @@ ADHERENCE_TERMINAL = ("管理は出来ない", "管理はできない",
 # ません covers 「残薬ありません」 (the pattern consumes the あり);
 # an adverb may sit before the negation: 「飲み忘れは特にない」「残薬が全くない」
 _NEGATE_RE = re.compile(
-    r"^[はがも、。\s]*(?:(?:特に|全く|ほとんど|あまり|今のところ)[は、\s]*)?"
-    r"(?:してい|てい|て)?(ない|なし|ありません|なく|ません)")
+    r"[はがも、。\s]*(?:(?:特に|全く|ほとんど|あまり|今のところ)[は、\s]*)?"
+    r"(?:してい|てい|て)?(ない|なし|ありません|なく|ません)"
+    r"(?!\s*(?:わけ|訳|こと|事)(?:では|でも|は|が)?(?:ない|ありません|なく))")
 
 
 def _adherence_phrases(text, *, patient_name=None):
@@ -658,8 +659,7 @@ def _adherence_phrases(text, *, patient_name=None):
     for pat in ADHERENCE_PATTERNS:
         i = text.find(pat)
         while i >= 0:
-            tail = text[i + len(pat): i + len(pat) + 16]
-            if not _NEGATE_RE.match(tail) and clinical_scope.patient_source_scope(
+            if not _NEGATE_RE.match(text, i + len(pat)) and clinical_scope.patient_source_scope(
                     text, i, i + len(pat), patient_name=patient_name) == "patient":
                 hits.append(pat)
                 break

@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "リンクや大きすぎる設定ファイルを空の設定で上書きしないよう修正",
+  "summary": "config.jsonがシンボリックリンク・通常ファイル以外・1 MiB超のとき、mcs_setup.pyのinitとfact-sourceが空の設定から保存し、既存の設定を実質的に消してしまう問題を修正しました。読み込みと同じ条件で判定し、保存せずに停止します。",
+  "upgrade": "操作は不要です。config.jsonをシンボリックリンクにしている場合、initとfact-sourceは保存せずに停止するので、先に実ファイルへ置き換えてください。init --yesではリンク自体をconfig.json.corrupt-日時へ退避し、リンク先のファイルは変更しません。",
+  "details": [
+    "_config_problemをload_configと同じno-follow・通常ファイル限定・1 MiB上限の読込にそろえ、読めないファイルを未設定として扱わない。",
+    "init --yesの退避では、シンボリックリンクの権限変更でリンク先を変えないよう、通常ファイルだけ0600にする。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "tests/ops/test_mcs_setup_config_boundary.py"
+  ]
+}

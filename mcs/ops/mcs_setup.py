@@ -406,14 +406,16 @@ def _config_problem() -> str | None:
     """None when config.json is absent or a JSON object, else why not.
     load_config() maps both cases to {} — a command that REWRITES the
     file must not treat a broken one as empty (it would silently drop
-    every setting)."""
+    every setting). Reads through load_config's own reader, so a symlink,
+    non-regular or oversized file is a problem here, not an empty config."""
     try:
-        with open(CONF_PATH, encoding="utf-8") as f:
-            raw = json.load(f)
+        raw = json.loads(mcs_util._read_local(
+            CONF_PATH, mcs_util.CONFIG_MAX_BYTES).decode("utf-8"))
     except FileNotFoundError:
         return None
     except (OSError, ValueError, RecursionError) as e:
-        return f"{type(e).__name__}: {e}"
+        return f"{type(e).__name__}: {e}" if str(e) else \
+            f"{type(e).__name__}: not a regular file within {mcs_util.CONFIG_MAX_BYTES} bytes"
     return None if isinstance(raw, dict) else \
         f"top level is {type(raw).__name__}, not an object"
 
@@ -437,8 +439,10 @@ def _guard_config(yes: bool) -> bool:
         n += 1
         dst = f"{base}.{n}"
     os.rename(CONF_PATH, dst)
-    with suppress(OSError):
-        os.chmod(dst, 0o600)
+    # a moved-aside symlink is kept as a link; its target is never touched
+    if not os.path.islink(dst):
+        with suppress(OSError):
+            os.chmod(dst, 0o600)
     print(f"設定ファイル{CONF_PATH}を読み取れないか、形式が不正でした（詳細: {why}）。"
           f"{dst}へ退避し、初期値から設定を続けます")
     return True

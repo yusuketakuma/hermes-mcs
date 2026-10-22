@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "推論ベンチで状態不明を空き枠と誤認しない",
+  "summary": "LLM比較ベンチで、空や不正な枠状態が返された場合は空き状態と扱わず、推論の投入を待機します。通常の収集・解析の枠や設定は変わりません。",
+  "upgrade": "通常運用での追加操作は不要です。ベンチは従来どおり実行窓と作業者の停止確認が必要で、この修正による実推論の速度・品質評価は行っていません。",
+  "details": [
+    "枠一覧は空でない配列かつ全要素のis_processingが真偽値の場合だけ観測値として使用する。",
+    "不正な4種類と正常なbusy/idle対照を、実サーバーに接続しないstubで確認する。"
+  ],
+  "refs": [
+    "scripts/evaluation/llm_lane_bench.sh",
+    "tests/meta/test_llm_research_p5_ubatch_bench.py"
+  ]
+}

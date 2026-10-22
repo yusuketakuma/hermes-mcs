@@ -3264,3 +3264,40 @@ def test_run_lock_lost_ends_tick_without_later_stages(
     fd = run_check.acquire_run_lock(str(data / "run.lock"))
     assert fd is not None          # the run lock was released on exit
     os.close(fd)
+
+
+
+@pytest.mark.parametrize("state", ["unknown", "full", "deleted"])
+def test_capped_unread_requires_every_parent_body_in_the_unread_time_range(tmp_path, state):
+    with closing(_ledger(tmp_path)) as db:
+        db.upsert_patient_info(_unread_patient(1))
+        oldest = _message(mid=5, unread=True, posted_at="2026-09-01T00:00:00+09:00")
+        recent = _message(mid=7, unread=True, state=state,
+                          posted_at="2026-09-02T00:00:00+09:00")
+        # Exercise the real history vehicle: unknown roots currently permit floor/coverage.
+        db.job_add("history", 1, payload={"since": 0, "page": 1, "pages": 1})
+        history = SimpleNamespace(fetch_history=lambda *_a, **_k:
+                                  mcs_contract.MessageBatch([oldest, recent], pages=1, reached=True))
+        job_ops.run_history_jobs(history, db, {"errors": []}, time.monotonic() + 300)
+        assert db.history_floor(1) == -1 and db.coverage_ts(1) == db.high_watermark(1)
+        # An old unknown post precedes the oldest unread; it must not hold today's ACK forever.
+        db.save_messages([_message(mid=3, unread=False, state="unknown",
+                                   posted_at="2026-08-01T00:00:00+09:00")], project_id=1)
+        marks = []
+        adapter = SimpleNamespace(
+            list_unread=lambda: mcs_contract.UnreadSnapshot(123, [_unread_patient(1)]),
+            fetch_unread_messages=lambda *_a: mcs_contract.MessageBatch(
+                [], error=mcs_contract.MCSError("http_error", status=400)),
+            fetch_unread_replies=lambda *_a: mcs_contract.ReplyBatch([], []),
+            oldest_unread_id=lambda _pid: 5,
+            fetch_latest=lambda _pid: {"message_id": 7, "is_self_only": False},
+            mark_patient_read=lambda *a, **k: marks.append((a, k)))
+        result = _capped_run(db, adapter)
+        if state == "unknown":
+            assert marks == [] and result["incomplete"] == [1]
+            # A later body upgrade, unlike an old out-of-range unknown, releases the ACK.
+            db.save_messages([_message(mid=7, unread=True,
+                                       posted_at="2026-09-02T00:00:00+09:00")], project_id=1)
+            result = _capped_run(db, adapter)
+        assert marks == [((1, 123), {"fallback_plain": True})]
+        assert result["marked_read"] == [1] and result["incomplete"] == []
