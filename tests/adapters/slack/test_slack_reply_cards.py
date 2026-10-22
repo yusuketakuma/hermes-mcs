@@ -68,7 +68,7 @@ def test_late_reply_gets_its_own_card_in_the_root_thread(led, monkeypatch):
     assert [p["original"] for p in spec["parts"]["slack"]["face_posts"]] == ["合成の後から届いた返信"]
     root_spec = _spec(led, root["card_id"])
     texts = [c.get("text") or "" for c in root_spec["parts"]["containers"]]
-    assert "↳ 返信 1件はスレッド内" in texts
+    assert "↳ 返信 1件を保存済み" in texts
     assert "合成の後から届いた返信" not in json.dumps(root_spec, ensure_ascii=False)
     # the stamp row on each card aims at the post that card shows
     root_content = notify_cards.card_content(led.db, root, cfg=REPLY)

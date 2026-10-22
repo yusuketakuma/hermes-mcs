@@ -35,6 +35,25 @@ def test_edit_only_discord_default_and_old_worker_keys(monkeypatch):
         spec.validate(value)
 
 
+def test_post_source_capability_is_pinned_and_old_workers_hold(monkeypatch):
+    value = planned()
+    value["parts"]["context"] = {"source_message_id": 101}
+    value["parts"]["post_source_id"] = 101
+    assert spec.validate(value) is value
+    monkeypatch.setattr(spec, "PARTS_KEYS", spec.PARTS_KEYS - {"post_source_id"})
+    with pytest.raises(ValueError, match="unsupported_parts_key"):
+        spec.validate(value)
+
+
+@pytest.mark.parametrize("source", [None, True, 0, -1, "101", 102])
+def test_post_source_rejects_invalid_or_different_context(source):
+    value = planned()
+    value["parts"]["context"] = {"source_message_id": 101}
+    value["parts"]["post_source_id"] = source
+    with pytest.raises(ValueError, match="bad_post_source"):
+        spec.validate(value)
+
+
 @pytest.mark.parametrize("fault", ["bool", "null", "string", "prior", "create", "lineworks", "thread", "card"])
 def test_edit_only_rejects_unsealed_or_unsupported_targets(fault):
     value = copy.deepcopy(planned())

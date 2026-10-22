@@ -93,7 +93,7 @@ def _task_blocks(items):
     # JST day computed here: the Hermes card worker never imports
     # _mcs_path, so flat mcs modules (notify_render) are not importable
     today = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
-    blocks = text_sections("📋 タスク（このスレッド）")
+    blocks = text_sections("📋 タスク一覧")
     count = 0
     for task in items:
         blocks.extend(text_sections(_task_text(task, today)))

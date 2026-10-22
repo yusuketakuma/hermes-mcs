@@ -15,7 +15,7 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 |---|---|
 | `01-overview` | `mcs/notify/notify_cards.py`の`_split_reply_targets`・`_bind_reply_thread`と`notify_render.reply_source`（元の投稿のカードと、スレッド内の返信カード）、`docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・添付の配送）、`mcs/notify/notify_parts.py`の`face_posts`（投稿ごとの要約と原文をカード本文へ。スタンプは下部の共通エリアに集約。添付の`📎`行と要約を含まない見出し）、`adapters/slack/presentation.py`の`render_parts`・`_folded_original`（スタンプ行は小さな補足表示、原文は`原文（N字）`の折りたたみブロック）、`present_slack.face_block_count`（収まらない投稿はスレッド本文へ） |
 | `02-notification` | `mcs/notify/notify_render.py`の`card_content`・`_thread_context`・`_footer`（概要・投稿ごとの要約・状態の区画）、`adapters/slack/cards.py`（区画間の区切り線、確認・担当・タスク作成も含めた「操作を選ぶ…」、`MCSで開く`のテキストリンク）、`mcs/notify/notify_action_tokens.py`の`ACTIONS`、`mcs/stamps/stamp_format.py`（スタンプの件数・表示）、`mcs/views/message_metadata.py`（自分の投稿数） |
-| `03-actions` | `notify_cards._stamp_target`・`_action_rows`・`adapters/slack/cards.py`（観測済みスタンプのエリアに送信用`static_select`を配置。メニュー展開→最新投稿への種類選択の2段階。runnerのラベルで絵文字と名前を表示し、自分の種類は`✓（取消）`）。5種類と「🗂 別の投稿」を選択肢として保持する。通常操作は確認・担当・タスク作成を含め元の順で選択メニューへ。患者の検索は常に含み、全体の新着集計・自分のタスク・未確認一覧は集計カードだけ。その他の表示項目は状態・設定に依存 |
+| `03-actions` | `notify_cards._stamp_target`・`_action_rows`・`adapters/slack/cards.py`（観測済みスタンプのエリアに送信用`static_select`を配置。メニュー展開→最新投稿への種類選択の2段階。runnerのラベルで絵文字と名前を表示し、自分の種類は`✓（取消）`）。1投稿を示す新形式では5種類だけを表示する。「🗂 別の投稿」は複数投稿をまとめた従来形式に保持する。通常操作は確認・担当・タスク作成を含め元の順で選択メニューへ。患者の検索は常に含み、全体の新着集計・自分のタスク・未確認一覧は集計カードだけ。その他の表示項目は状態・設定に依存 |
 | `04-task-form` | `adapters/common/forms.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
 | `05-task-preview` | `adapters/common/text.py`の`preview_text`、`adapters/slack/actions.py`の`_preview`（本人向け、確定する／取消） |
 | `06-task-list` | `adapters/slack/actions.py`の`_task_blocks`・`_task_text`（本人向けの一覧。各タスクの直後にその状態操作） |
@@ -62,3 +62,5 @@ CIはSVGの生成結果、PNGの完結性・サイズ・画像データ、両方
 2026-10-21の集約では、カード下部へ観測スタンプを集め、送信はメニュー展開→種類選択へ変更。`01-overview`・`02-notification`・`03-actions`を同じ生成手順で更新した。
 
 同日の表示調整では、重複するスタンプの合計と送信メニューの見出しを省略し、投稿別の件数・押下者・観測時点とメニューを維持。`01-overview`・`02-notification`・`03-actions`を再生成した。
+
+2026-10-23の返信カードhotfixでは、親の返信件数を「保存済み」と表示し、単投稿のスタンプメニューから「別の投稿」を除いた。01〜03のSVG/PNGを既存のQuick Look＋ImageMagick手順で再生成し、保存件数を配送完了と誤認させない説明へ合わせた。

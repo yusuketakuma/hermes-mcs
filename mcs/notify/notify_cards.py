@@ -56,7 +56,7 @@ from notify_render import (
     anchor_keys, card_content, content_fingerprint,
     mmdd, patient_name, preview_header, preview_line, signal_evidence,
     fit_parts,
-    plain_notice, presenter, reply_source)
+    own_post, plain_notice, presenter, reply_source)
 import notify_parts
 import notify_action_context as action_context
 import notify_action_tokens as action_tokens
@@ -407,7 +407,8 @@ def _action_rows(db, card, content, now, context=None,
     if kind == "signal" and len(keys) == 1 \
             and keys[0] in (context.get("signals") or {}):
         btn("dismiss", {"signal_key": keys[0]})
-    if kind == "thread" and positive(pid) and _stamp_enabled(cfg):
+    if kind == "thread" and positive(pid) and _stamp_enabled(cfg) \
+            and not (own_post(card) and len(content["shown"]) == 1):
         btn("stamp")
     flush()
     # row 2b — 💊 medication check / dictionary search (read-only views)
@@ -701,6 +702,9 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         "context": context,
         "preview_text": content["preview_text"],
     }
+    post_source_id = own_post(card)
+    if positive(post_source_id):
+        spec["parts"]["post_source_id"] = post_source_id
     if card["kind"] == "signal" and present.SOURCE_THREAD and card["thread_id"]:
         target = signal_thread_target(db, card, cfg)
         if target is not None and card["thread_id"] == target["thread_id"] and notify_scope.scope_matches(card, target):
@@ -856,6 +860,14 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
             return None
         _clear_thread_hold(db, "event_id IN (SELECT event_id FROM notification_intent_cards "
                                "WHERE card_id=? AND state='pending')", card_id)
+        # Previously sealed channel fallbacks (or stale remote identities)
+        # must not keep a live slot after a safe initial thread binding.
+        for queued in db.execute(
+                "SELECT delivery_id,spec_json FROM notification_renders "
+                "WHERE card_id=? AND state IN ('queued','held')", (card_id,)).fetchall():
+            if not reply_thread_matches(db, card, loads_dict(queued["spec_json"])):
+                _cancel_render(db, queued["delivery_id"], now)
+                force = True
     op = _render_op(card)
     if op is None:
         return None      # revoked & never delivered: nothing to render
@@ -1545,25 +1557,52 @@ def _clear_thread_hold(db, where: str, *params) -> None:
                "THEN json_type(progress,'$.thread_hold') END IS NOT NULL", params)
 
 
-def _bind_reply_thread(db, card, cfg, now) -> tuple[dict, bool]:
-    """Return (card, wait): a reply card renders only inside its root card's
-    delivered thread. Until then its intents wait like a signal's; after the
-    same bounded wait it falls back to the channel (an unreachable reply is
-    worse than one outside its thread)."""
-    if card["thread_id"]:
-        return card, False
+def reply_thread_target(db, card):
+    """Return the canonical root's current thread in the reply's exact scope."""
+    if not reply_source(card):
+        return None
     root_key = card["card_key"].rsplit("|reply:", 1)[0]
     root = db.execute("SELECT * FROM notification_cards WHERE card_key=?", (root_key,)).fetchone()
-    if (root is not None and root["delivery_state"] in ("delivered", "update_failed")
+    if (root is not None and root["kind"] == "thread" and not reply_source(root)
+            and root["project_id"] == card["project_id"]
+            and root["root_message_id"] == card["root_message_id"]
+            and root["delivery_state"] in ("delivered", "update_failed")
             and root["message_id"] and root["thread_state"] == "created" and root["thread_id"]
             # a Slack thread is rooted at the card's own ts; Discord's is its own channel
             and (root["transport"] != "slack" or root["thread_id"] == root["message_id"])
             and notify_scope.scope_matches(root, notify_scope.stored_scope(card))):
+        return dict(root)
+    return None
+
+
+def reply_thread_matches(db, card, spec) -> bool:
+    """Check sealed reply remote identities against its current canonical root."""
+    if not isinstance(spec, dict) or not isinstance(spec.get("delivery"), dict) \
+            or not isinstance(spec.get("parts"), dict):
+        return False
+    root = reply_thread_target(db, card)
+    delivery = spec["delivery"]
+    parts = spec["parts"]
+    return (root is not None and card["thread_state"] == "created"
+            and card["thread_id"] == root["thread_id"]
+            and parts.get("source_thread") is True
+            and delivery.get("thread_id") == root["thread_id"]
+            and delivery.get("message_id") == card["message_id"]
+            and notify_scope.scope_matches(card, delivery))
+
+
+def _bind_reply_thread(db, card, cfg, now) -> tuple[dict, bool]:
+    """Bind an undelivered reply once; retain stale bindings and wait for proof."""
+    root = reply_thread_target(db, card)
+    if (root is not None and card["thread_state"] == "created"
+            and card["thread_id"] == root["thread_id"]):
+        return card, False
+    if root is not None and not card["thread_id"] and not card["message_id"]:
         db.execute("UPDATE notification_cards SET thread_id=?,thread_state='created',updated_at=? "
                    "WHERE card_id=?", (root["thread_id"], now, card["card_id"]))
         return notify_scope.card_row(db, card["card_id"]), False
-    if now - (card["created_at"] or now) > SIGNAL_SOURCE_HOLD_MAX_S:
-        return card, False
+    # Native messages cannot move threads. Keep any delivered/unknown remote
+    # identity intact, and never turn an unproven parent into a channel post.
     for event in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? "
                             "AND state='pending'", (card["card_id"],)).fetchall():
         db.execute("UPDATE notify_outbox SET progress=?,next_try=?,updated_at=? WHERE event_id=?",
@@ -1761,6 +1800,17 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
             if row["kind"] == "signal":
                 for pending in db.execute("SELECT card_id FROM notification_intent_cards WHERE event_id=? AND state='pending'", (event_id,)).fetchall():
                     issue_render(db, pending[0], cfg, now, specs)
+                outcome["dispatched"] = bool(specs)
+            elif row["kind"] == "new_messages":
+                # Initial root and replies share one intent. A root receipt
+                # can leave a reply without any render; resume only those
+                # unbound replies when the already sealed event re-enters.
+                for pending in db.execute(
+                        "SELECT card_id FROM notification_intent_cards WHERE event_id=? "
+                        "AND state='pending' AND delivery_id IS NULL", (event_id,)).fetchall():
+                    card = notify_scope.card_row(db, pending[0])
+                    if card is not None and reply_source(card):
+                        issue_render(db, pending[0], cfg, now, specs)
                 outcome["dispatched"] = bool(specs)
             elif row["kind"] == "attachment_followup":
                 # Retry only unbound work after existing attempts/parts settle.

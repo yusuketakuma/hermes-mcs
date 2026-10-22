@@ -76,7 +76,7 @@ PARTS_KEYS = frozenset({
     "page", "pages", "thread_name", "thread_body_parts", "manifest",
     # "silent": footer text carries <@id> member mentions — Discord sends
     # them with allowed_mentions=none; Slack replaces them with names
-    "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread",
+    "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread", "post_source_id",
     # per-transport presentation (mcs/notify/present_<t>.py); only the
     # spec's own transport may carry its key — see _transport_parts_cost
     "slack", "discord", "lineworks"})
@@ -335,6 +335,12 @@ def validate(spec) -> dict:
         _err("bad_mentions")
     if parts.get("context") is not None and not isinstance(parts["context"], dict):
         _err("bad_context")
+    if "post_source_id" in parts and (
+            spec["kind"] != "thread"
+            or spec["delivery"].get("transport", "discord") not in ("slack", "discord")
+            or type(parts["post_source_id"]) is not int or parts["post_source_id"] <= 0
+            or parts["post_source_id"] != (parts.get("context") or {}).get("source_message_id")):
+        _err("bad_post_source")
     if "preview_text" in parts and not _text(parts["preview_text"], 600):
         _err("bad_preview_text")
     containers = parts.get("containers")

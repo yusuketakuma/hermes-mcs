@@ -401,12 +401,24 @@ def _thread_context(db, card, msgs, waiting=frozenset()) -> str:
     are present; '' when there is nothing to say beyond the posts."""
     live = [m for m in msgs if m["body_state"] != "deleted"]
     parts = [f"{len(msgs)}投稿"] if msgs else []
+    own = own_post(card)
     replies = (msgs[0].get("reply_count") or 0) if msgs else 0
-    if waiting:
+    if waiting or own == card["root_message_id"]:
         root = db.execute("SELECT reply_count FROM messages WHERE message_id=? AND project_id=?",
                           (card["root_message_id"], card["project_id"])).fetchone()
         replies = (root[0] or 0) if root else 0
-    missing = replies - (len(msgs) + len(waiting) - 1)
+    if own == card["root_message_id"]:
+        # A one-post root face does not show its saved replies. Count their
+        # identities, including deleted/held posts, before declaring a gap.
+        saved = db.execute(
+            "SELECT COUNT(*) FROM messages WHERE parent_id=? AND project_id=? "
+            "AND message_id<>?", (card["root_message_id"], card["project_id"],
+                                    card["root_message_id"])).fetchone()[0]
+        missing = replies - saved
+    elif own is not None:
+        missing = 0       # thread-wide fetch gaps belong to the root card
+    else:
+        missing = replies - (len(msgs) + len(waiting) - 1)
     if missing > 0:
         parts.append(f"返信未取得 {missing}件")
     ids = [m["message_id"] for m in live]
@@ -881,7 +893,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
                 (card["root_message_id"], card["project_id"],
                  card["root_message_id"])).fetchone()[0]
             if replies:
-                containers.append({"type": "text", "text": f"↳ 返信 {replies}件はスレッド内"})
+                containers.append({"type": "text", "text": f"↳ 返信 {replies}件を保存済み"})
         # per post: sender line + its full 📋 要約 (or its empty state)
         rendered = []
         for m in msgs:
@@ -1168,9 +1180,11 @@ def feedback_pending(db, card) -> bool:
             JOIN messages hm ON hm.message_id=h.message_id
             WHERE h.kind='{EXTRACT_FEEDBACK_KIND}' AND hm.project_id=?
               AND (hm.message_id=? OR hm.parent_id=?)
+              AND (? IS NULL OR hm.message_id=?)
               AND {feedback_current('h')}
             LIMIT 1""", (card["project_id"], card["root_message_id"],
-                         card["root_message_id"])).fetchone() is not None
+                         card["root_message_id"], own_post(card),
+                         own_post(card))).fetchone() is not None
 
 
 def plain_notice(text, cap) -> str:

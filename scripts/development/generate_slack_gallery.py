@@ -136,13 +136,13 @@ class Screen:
         small time/sender line over its summary and folded source text,
         then one area for observed stamps and their sending menu.
         Reply cards (layout 4) show one post each: the root card adds
-        "↳ 返信 N件はスレッド内", a reply card (post>0) sits in the thread."""
+        "↳ 返信 N件を保存済み", a reply card (post>0) sits in the thread."""
         y = self.paragraph(x, y, HEADING if post == 0 else "↳ " + HEADING, width, 21, INK, True)
         y = self.paragraph(x, y - 4, META.format(n=2 if full else 1), width, 17, MUTED)
         if full:
             y = self.paragraph(x, y - 4, "🆕 返信+1", width, 17, GREEN)
         if replies:
-            y = self.paragraph(x, y - 4, f"↳ 返信 {replies}件はスレッド内", width, 17, GREEN)
+            y = self.paragraph(x, y - 4, f"↳ 返信 {replies}件を保存済み", width, 17, GREEN)
         shown = POSTS[:2] if full else POSTS[post:post + 1]
         for (sender, bullets), stamps in zip(shown, STAMPS[0 if full else post:]):
             y = self.rule(x, y, width)
@@ -201,13 +201,13 @@ def menu():
     x, y = s.app()
     y = s.card(x, y, stamp_controls=True)
     s.actions(x, y)
-    labels = ("👀 見ました", "🙆 承知 ✓（取消）", "🙏 感謝", "👍 いいね", "✅ 完了", "🗂 別の投稿")
+    labels = ("👀 見ました", "🙆 承知 ✓（取消）", "🙏 感謝", "👍 いいね", "✅ 完了")
     mx, my = x + 405, y - 65
     s.text(mx, my - 15, "開いたスタンプメニュー（説明図）", 15, MUTED)
     s.rect(mx, my, 330, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
     for i, label in enumerate(labels):
         s.text(mx + 18, my + 36 + i * 42, label, 19, GREEN if i == 1 else INK)
-    s.text(x, 1130, "「別の投稿」は既存の対象選択・確認画面へ進みます。スタンプは5種類。", 17, MUTED)
+    s.text(x, 1130, "このカードの投稿へ送ります。ほかの返信は、その返信カードから操作します。", 17, MUTED)
     return s.finish()
 
 

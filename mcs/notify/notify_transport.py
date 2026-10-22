@@ -261,10 +261,10 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
                 "updated_at=? WHERE delivery_id=? AND state='queued'",
                 (now, req["delivery_id"]))
         reissued = []
-        if reason == "source_changed":
-            # reissue from the new source now, in the same commit — the
-            # rotating sweep could take many ticks to reach this card,
-            # and a raw arrival notice must not wait on semantic writes
+        if reason in ("source_changed", "reply_thread_changed"):
+            # Re-evaluate source/parent changes in the same commit. An
+            # unproven reply parent cancels only queued work and holds;
+            # a safely bound reply can replace a stale channel spec.
             card_id = db.execute(
                 "SELECT card_id FROM notification_renders "
                 "WHERE delivery_id=?", (req["delivery_id"],)).fetchone()
@@ -298,7 +298,7 @@ def _denial_is_final(db, delivery_id, reason) -> bool:
     may simply be addressed to another worker — keep the file."""
     if reason in _FINAL_DENIALS:
         return True
-    if reason == "not_queued":
+    if reason in ("not_queued", "reply_thread_changed"):
         r = db.execute(
             "SELECT state FROM notification_renders WHERE delivery_id=?",
             (delivery_id,)).fetchone()
@@ -343,6 +343,9 @@ def _begin_check(db, req, cfg) -> str | None:
     card = card_row(db, render["card_id"]) \
         if render["card_id"] is not None else None
     if card is not None:
+        if cards.reply_source(card) and render["op"] != "revoke" \
+                and not cards.reply_thread_matches(db, card, json.loads(render["spec_json"])):
+            return "reply_thread_changed"
         if card["kind"] == "signal" and render["op"] != "revoke" \
                 and card["transport"] in ("slack", "discord"):
             target = cards.signal_thread_target(db, card, cfg)

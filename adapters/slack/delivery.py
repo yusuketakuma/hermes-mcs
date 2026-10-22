@@ -13,7 +13,7 @@ from collections.abc import Mapping
 
 from adapters.common.paths import read_verified_attachment
 from adapters.common import envelopes, eventlog
-from adapters.common.spec import token_map
+from adapters.common.spec import reply_card_key, token_map
 from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
 from .cards import render, validate
@@ -416,7 +416,9 @@ class DeliveryWorker(_BaseWorker):
         # Both callers supply card_message_id only after a successful primary
         # result: _deliver_parts after settlement, _resume_parts from the journal.
         # Reuse that proof instead of scanning the whole journal again per card.
-        face_thread = (spec.get("kind") == "thread" and root == message_id
+        face_thread = (spec.get("kind") == "thread"
+                       and (root == message_id or (spec["parts"].get("source_thread") is True
+                                                   and reply_card_key(spec.get("card_key"))))
                        and bool((spec["parts"].get("slack") or {}).get("face_posts"))
                        and self._ours(spec["delivery"]))
         for part in spec["parts"].get("manifest") or []:
@@ -503,7 +505,15 @@ class DeliveryWorker(_BaseWorker):
         text = escape(text, quote=False)
         if part and part.get("edit_only") is True:
             return await self._edit_only_prior(spec, part, text, ctx, blocks=blocks)
-        if spec["op"] == "update" or spec["delivery"].get("thread_id"):
+        post_scoped = (spec["parts"].get("post_source_id") is not None
+                       or reply_card_key(spec.get("card_key")))
+        if post_scoped and part and part.get("prior_remote_id"):
+            mid = await self._remote_match(thread_ts, text, ctx, prior=part["prior_remote_id"])
+            if mid is not None:
+                return {"result": "delivered", "remote_id": mid}
+            return await self._edit_only_prior(spec, part, text, ctx, blocks=blocks,
+                                               missing_is_settled=False)
+        if not post_scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id")):
             # writing into an existing thread — an identical reply
             # authored by this bot binds the part to its real ts
             # instead of posting a duplicate (remote-verified)
@@ -568,7 +578,8 @@ class DeliveryWorker(_BaseWorker):
         self._log("blocks_rejected", reason="slack_container_unsupported")
         return await call_native(fn, **kwargs)
 
-    async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False, blocks=None):
+    async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False, blocks=None,
+                               missing_is_settled=True):
         """Edit one exact owned reply; no text dedupe, upload or fresh-post fallback."""
         thread_ts, prior = ctx.get("thread_id"), part.get("prior_remote_id")
         if (spec.get("op") != "update" or not isinstance(thread_ts, str) or thread_ts != spec["delivery"].get("thread_id")
@@ -651,11 +662,13 @@ class DeliveryWorker(_BaseWorker):
         except Exception as exc:
             if (getattr(getattr(exc, "response", None), "status_code", None) in (404, 410)
                     or _payload(getattr(exc, "response", None)).get("error") == "message_not_found"):
-                return {"result": "delivered", "remote_id": prior}
+                return ({"result": "delivered", "remote_id": prior} if missing_is_settled else
+                        {"result": "unknown", "error_code": "edit_target_unverified"})
             return _failed(exc, "body_part", thread_ts)
         data = _payload(response)
         if data.get("ok") is False and data.get("error") == "message_not_found":
-            return {"result": "delivered", "remote_id": prior}
+            return ({"result": "delivered", "remote_id": prior} if missing_is_settled else
+                    {"result": "unknown", "error_code": "edit_target_unverified"})
         if (data.get("ok") is not True or data.get("ts") != ts
                 or data.get("channel") not in (None, self._settings["channel_id"])):
             return {"result": "unknown", "error_code": "bad_slack_response"}
@@ -720,6 +733,8 @@ class DeliveryWorker(_BaseWorker):
         if part.get("edit_only") is True:
             return await self._edit_only_prior(spec, part, escape(part["caption"], quote=False), ctx,
                                                attachment=not part.get("unavailable"))
+        post_scoped = (spec["parts"].get("post_source_id") is not None
+                       or reply_card_key(spec.get("card_key")))
         if part.get("unavailable"):
             # no file to send — its caption ("📎 name — 取得失敗") is the
             # visible line, posted and deduped like a body chunk
@@ -727,6 +742,8 @@ class DeliveryWorker(_BaseWorker):
                 return {"result": "not_sent",
                         "error_code": "attachment_unavailable"}
             if part.get("prior_remote_id"):
+                if post_scoped:
+                    return await self._body_part(spec, part["caption"], ctx, part)
                 # already posted — never a second caption post
                 return {"result": "delivered",
                         "remote_id": str(part["prior_remote_id"])}
@@ -743,11 +760,12 @@ class DeliveryWorker(_BaseWorker):
         if upload is None:
             return {"result": "not_sent",
                     "error_code": "sdk_capability_missing"}
-        if spec["op"] == "update" or spec["delivery"].get("thread_id"):
+        if (not post_scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id"))) \
+                or (post_scoped and part.get("prior_remote_id")):
             # an identical file already remote in this thread binds the
             # part to its real file id (remote-verified) — post-seal
             # corruption locally cannot fake a match either way
-            rid = await self._file_remote_match(thread_ts, part, ctx)
+            rid = await self._file_remote_match(thread_ts, part, ctx, prior_only=post_scoped)
             if rid is not None:
                 return {"result": "delivered", "remote_id": rid,
                         "attachment_origin": "remote_match"}
@@ -783,7 +801,7 @@ class DeliveryWorker(_BaseWorker):
                 "attachment_origin": "upload"}
 
     async def _file_remote_match(self, thread_ts: str, part: dict,
-                                 ctx: dict):
+                                 ctx: dict, *, prior_only=False):
         """Bounded replies scan for a bot/app-authored message already
         carrying this file — the remote entry must match the sealed
         name, size and sha256, then the
@@ -807,6 +825,8 @@ class DeliveryWorker(_BaseWorker):
                 if not isinstance(fid, str) or not fid \
                         or fid in ctx["consumed"]:
                     continue
+                if prior_only and fid != part.get("prior_remote_id"):
+                    continue
                 if f.get("name") != name:
                     continue
                 if part.get("bytes") is not None \
@@ -826,7 +846,7 @@ class DeliveryWorker(_BaseWorker):
                 return fid
         return None
 
-    async def _remote_match(self, thread_ts: str, text: str, ctx: dict):
+    async def _remote_match(self, thread_ts: str, text: str, ctx: dict, *, prior=None):
         """Bounded replies scan — a content match binds the part to the
         real reply ts (remote-verified delivery); a miss means send.
         Only replies provably authored by this bot/app may bind: a
@@ -838,7 +858,8 @@ class DeliveryWorker(_BaseWorker):
         for m in ctx["history"]:
             mid = m.get("ts")
             if not isinstance(mid, str) or mid == thread_ts \
-                    or mid in ctx["consumed"] or m.get("text") != text:
+                    or mid in ctx["consumed"] or m.get("text") != text \
+                    or (prior is not None and mid != prior):
                 continue
             if not self._sender.authored(m):
                 continue                # not ours — never binds a part

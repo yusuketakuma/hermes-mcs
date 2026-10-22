@@ -14,7 +14,8 @@ import notify_action_context as action_context
 import notify_action_tokens as tokens
 from mcs_requests import canonical, payload_hash, positive
 from mcs_util import loads_dict
-from notify_render import anchor_keys, card_body_text, card_content, parts_text, source_fingerprint
+from notify_render import (anchor_keys, card_body_text, card_content, own_post,
+                           parts_text, source_fingerprint)
 from notify_scope import card_row, latest_signals, scope_matches
 from notify_views import (drug_search_available, drug_search_view, meds_view, my_tasks_view,
                           patient_search_view, patient_summary_text, unacked_view)
@@ -517,7 +518,9 @@ def _act_task_status(db, base, card, tok, tok_params, cfg, now,
         "SELECT * FROM requests WHERE request_id=? AND project_id=?",
         (rid, card["project_id"])).fetchone()
         if positive(rid) else None)
-    if row is None or to not in ("in_progress", "done"):
+    own = own_post(card)
+    if row is None or to not in ("in_progress", "done") \
+            or (own is not None and row["source_message_id"] != own):
         return {**base, "outcome": "rejected",
                 "error": "request_not_found"}
     if tok["need_request_rev"] is not None \
@@ -547,8 +550,18 @@ def _act_task_status(db, base, card, tok, tok_params, cfg, now,
                     "title": row["title"]}
         return {**base, "outcome": "rejected",
                 "error": "stale_task", "hint": "tasks"}
-    # the card footer lists open tasks — show the change now
-    new_render = cards.issue_render(db, card["card_id"], cfg, now, specs)
+    # Refresh the cards that actually display this task, including an older
+    # collecting card. Stay inside the caller's borrowed-DB transaction.
+    new_render = None
+    for affected in db.execute(
+            "SELECT * FROM notification_cards WHERE kind='thread' "
+            "AND project_id=? AND root_message_id=? AND delivery_state!='revoked'",
+            (card["project_id"], card["root_message_id"])).fetchall():
+        if own_post(affected) not in (None, row["source_message_id"]):
+            continue
+        rendered = cards.issue_render(db, affected["card_id"], cfg, now, specs)
+        if affected["card_id"] == card["card_id"]:
+            new_render = rendered
     return {**base, "outcome": "applied", "action": "task_status",
             "request_id": rid, "status": to, "title": row["title"],
             "revision": row["revision"] + 1, "delivery_id": new_render}
@@ -652,13 +665,14 @@ def _thread_tasks(db, card, tok, now):
            FROM requests WHERE project_id=? AND status!='cancelled'
            AND source_message_id IN (
              SELECT message_id FROM messages
-             WHERE message_id=? OR parent_id=?)
+             WHERE (message_id=? OR parent_id=?) AND (? IS NULL OR message_id=?))
            ORDER BY CASE status WHEN 'open' THEN 0
                     WHEN 'in_progress' THEN 1 ELSE 2 END,
                     due_date IS NULL, due_date, request_id
            LIMIT ?""",
         (card["project_id"], card["root_message_id"],
-         card["root_message_id"], TASK_VIEW_LIMIT)).fetchall()
+         card["root_message_id"], own_post(card), own_post(card),
+         TASK_VIEW_LIMIT)).fetchall()
     need = {"source_gen": tok["need_source_gen"],
             "manifest_id": tok["need_manifest_id"],
             "ui_rev": tok["need_ui_rev"]}

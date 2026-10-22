@@ -248,7 +248,7 @@ def body_messages(result: dict, *, plain: bool = False) -> list:
             for i, c in enumerate(chunks)]
 
 
-NO_TASKS_TEXT = "このスレッドのタスクはありません。"
+NO_TASKS_TEXT = "表示対象のタスクはありません。"
 
 
 STAMP_FORM_PENDING = "スタンプの対象を準備中です。少し待ってからもう一度操作してください。"
@@ -447,7 +447,7 @@ def task_list_text(items: list, *, plain: bool = False) -> str:
     """Ephemeral task list — one line per request, status mark first so
     the scan order matches the transition buttons below it."""
     marks = {"open": "⬜", "in_progress": "⏳", "done": "✅"}
-    lines = ["📋 タスク（このスレッド）" if plain else "📋 **タスク**（このスレッド）"]
+    lines = ["📋 タスク一覧" if plain else "📋 **タスク一覧**"]
     for t in items:
         meta = []
         if t.get("assignee"):

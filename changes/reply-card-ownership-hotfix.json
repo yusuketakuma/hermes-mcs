@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "返信カードの本文・操作・配送先を投稿ごとにそろえる",
+  "summary": "Slack・Discordで同じ内容の返信が別投稿の本文を再利用する問題を防ぎます。Slack返信カードの薬剤詳細、返信の取得件数、タスク一覧、誤り報告、スタンプメニューも、そのカードの投稿に合わせます。",
+  "upgrade": "通知を扱うHermes gatewayまたは独立アダプターを更新・再起動してください。旧workerは新しい投稿所有の配送契約を保留します。親スレッドを確認できない返信は、6時間後もチャンネルへ独立投稿せず保留します。親が再作成されて既存返信と対応しなくなった場合も、既存の送信記録を保持して保留します。送信結果不明の再送、過去投稿の一括再配信、複数添付のカード本体への集約は行いません。",
+  "details": [
+    "layout 4の本文と添付の再利用は、所属カードの配送記録が示すremote IDに限定する。同文だけで別カードの投稿を流用しない。",
+    "親未配送時の返信は保留し、配送先を送信許可の直前にも照合する。親の配送後は既存通知の再確認で未発行の返信を再開する。",
+    "返信件数は保存済み件数として表示し、Slack・Discordへの配送完了と区別する。",
+    "DB schema、既読化、操作者・患者範囲、人承認、送信結果不明の自動再送禁止を維持する。既存の旧形式カードは元の表示範囲を維持する。"
+  ],
+  "refs": [
+    "adapters/common/spec.py",
+    "adapters/slack/delivery.py",
+    "adapters/discord/delivery.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_transport.py",
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_actions.py"
+  ]
+}

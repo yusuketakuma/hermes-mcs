@@ -22,7 +22,7 @@ def test_private_view_uses_plain_headings_and_keeps_literal_special_text(tmp_pat
     assert w.client.calls
     messages = [call[1]["text"] for call in w.client.calls]
     assert messages[0].splitlines()[0] == (
-        "📋 タスク（このスレッド）" if action == "tasks" else "合成見出し")
+        "📋 タスク一覧" if action == "tasks" else "合成見出し")
     assert literal in "\n".join(messages)
     assert "SYNTHETIC-FOREIGN-PROJECT" not in "\n".join(messages)
     assert all(call[2] == {"user_id": "operator", "channel_id": None} for call in w.client.calls)
