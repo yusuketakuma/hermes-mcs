@@ -534,7 +534,8 @@ class DeliveryWorker:
 
     async def _resume_parts(self, spec: dict,
                             records: dict | None = None, *,
-                            card_message_ids: dict | None = None) -> None:
+                            card_message_ids: dict | None = None,
+                            part_owners: dict | None = None) -> None:
         """Restart-resume a settled spec's dependent parts — only parts
         the journal proves never began; a started-only attempt stays
         honestly unknown and is never resent."""
@@ -561,7 +562,24 @@ class DeliveryWorker:
         ctx = {"card_message_id": mid, "thread": None,
                "thread_id": spec["delivery"].get("thread_id"),
                "history": None, "consumed": set()}
+        ctx["part_owners"] = part_owners
         await self._drive_parts(claim, manifest, ctx, records)
+
+    def _part_owners(self, records, primaries=None) -> dict:
+        if primaries is None:
+            primaries, _invalid = journal.primary_results(records)
+        owners = {}
+        for row in journal.all_rows(records):
+            if (row.get("phase") == "result" and row.get("result") == "delivered"
+                    and row.get("kind") in ("body_part", "attachment_part")
+                    and row.get("remote_id")
+                    and isinstance(row.get("receipt_envelope"), dict)
+                    and self._ours(row["receipt_envelope"])):
+                did = row.get("delivery_id")
+                if not isinstance(did, str):
+                    did = None
+                owners.setdefault(str(row["remote_id"]), set()).add((did, primaries.get(did)))
+        return owners
 
     async def _drive_parts(self, claim: dict, manifest: list,
                            ctx: dict, records: dict) -> None:
@@ -571,6 +589,19 @@ class DeliveryWorker:
         marked done — the registry flag bounds resume scans to one
         journal read per pending spec per tick."""
         spec = claim["spec"]
+        if (spec.get("parts", {}).get("post_source_id") is not None
+                or spec_mod.reply_card_key(spec.get("card_key"))):
+            # Old workers could bind two cards to the same body post. A
+            # recorded prior is not safe when another card also owns it.
+            priors = {p["prior_remote_id"] for p in manifest if p.get("prior_remote_id")}
+            if priors:
+                owners = ctx.get("part_owners")
+                if owners is None:
+                    owners = await asyncio.to_thread(self._part_owners, records)
+                ctx["foreign_prior_ids"] = {
+                    remote_id for remote_id in priors
+                    if any(did != spec["delivery_id"] and mid != ctx.get("card_message_id")
+                           for did, mid in owners.get(remote_id, ()))}
         for part in manifest:
             kind = part.get("kind")
             if kind == "card" or (part.get("unavailable")
@@ -643,8 +674,11 @@ class DeliveryWorker:
                       part_id=part["part_id"], kind=part["kind"],
                       receipt_envelope=envelopes.part_receipt(
                           claim, part, "unknown"))
-        outcome = await _outcome_of(
-            self._perform_part(claim, part, ctx))
+        if part.get("prior_remote_id") in ctx.get("foreign_prior_ids", ()):
+            outcome = {"result": "unknown", "error_code": "part_owner_ambiguous"}
+        else:
+            outcome = await _outcome_of(
+                self._perform_part(claim, part, ctx))
         # past the wire — journal the true outcome before any fallible
         # publish so a crash replays fact, never a resend
         env = envelopes.part_receipt(
@@ -937,12 +971,20 @@ class DeliveryWorker:
             return
         records = await asyncio.to_thread(self._jview.refresh)
         card_message_ids, invalid = await asyncio.to_thread(journal.primary_results, records)
+        part_owners = None
+        if any((spec.get("parts", {}).get("post_source_id") is not None
+                or spec_mod.reply_card_key(spec.get("card_key")))
+               and any(p.get("prior_remote_id")
+                       for p in spec.get("parts", {}).get("manifest", ()))
+               for spec in resume):
+            part_owners = await asyncio.to_thread(self._part_owners, records, card_message_ids)
         for spec in resume:
             try:
                 if spec["delivery_id"] in invalid:
                     raise ValueError("card_result_timestamp_invalid")
                 await self._resume_parts(spec, records,
-                                         card_message_ids=card_message_ids)
+                                         card_message_ids=card_message_ids,
+                                         part_owners=part_owners)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
