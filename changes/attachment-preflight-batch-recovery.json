@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "複数添付の未送信をまとめて確認して復旧する",
+  "summary": "Slackの添付説明を更新する前に停止した記録が複数ある場合も、全対象の証拠が揃えば、一括して未送信を確定し現在の内容への編集計画を作れます。いずれかの照合に失敗した場合は全件を保留します。",
+  "upgrade": "自動解除は行いません。管理者が対象一覧を取得し、通知workerの停止と全対象を確認して、人承認付きの既存復旧コマンドを実行します。既存の単件入力は引き続き利用できます。通信開始後の結果不明や、送信先を証明できない記録は対象外です。",
+  "details": [
+    "同一カードの最新計画にある未確定集合と、主plan・related_plansの完全一致を必須にする。各添付について独立した送信前拒否のjournal証拠と一意な既存送信先を照合する。",
+    "同一transactionで全件を確定し、既存投稿への編集専用計画を一つだけ作る。途中失敗時は全件を戻し、新規投稿やファイル再アップロードへ切り替えない。",
+    "人承認、worker停止、患者・送信先境界、既存コマンドの16KB上限を維持する。card_part_plan --include-relatedは識別情報だけを取得し、状態を変更しない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_recovery.py",
+    "mcs/views/mcs_view.py",
+    "docs/guides/NOTIFICATION_RECOVERY.md",
+    "tests/notify/test_card_part_resolve_batch.py"
+  ]
+}

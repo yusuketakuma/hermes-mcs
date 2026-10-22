@@ -908,6 +908,11 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
             if not (ready - delivered) and _presentation_fp(card, content, cfg) == card["content_fp"]:
                 return None  # only the still-waiting posts changed
     gens = _generation_drift(card, content, cfg)
+    # Old Slack parts were bounded before escaping, and can be definitively
+    # rejected even when their source/card fingerprint has not changed.
+    # Rebuild only a proven oversized failed plan; pending/unknown parts still
+    # pass through the existing in-flight gate below without being released.
+    force = force or notify_parts.needs_wire_replan(db, card, latest)
     if not _render_needed(db, card, latest, gens, cfg, now, force, waiting):
         return None                        # delivered/terminal & no drift
     if op == "update" and _parts_in_flight(db, latest):

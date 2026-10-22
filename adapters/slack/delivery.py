@@ -27,6 +27,8 @@ _log = eventlog.make_logger(__name__)
 # long — same idea as registry.CAPABILITY_NEG_S; successes never expire.
 NAME_NEG_S = 900
 NAME_CACHE_MAX = 1024
+# Match the runner's durable Slack wire budget; old sealed specs may predate it.
+BODY_WIRE_MAX = 4000
 
 
 def _upload_file_id(data) -> str | None:
@@ -527,6 +529,8 @@ class DeliveryWorker(_BaseWorker):
                 thread_ts, (part or {}).get("prior_remote_id"), text, ctx, blocks=blocks)
             if edited is not None:
                 return edited
+        if len(text.encode("utf-8")) > BODY_WIRE_MAX:
+            return {"result": "not_sent", "error_code": "body_part_wire_too_long"}
         sender = self._sender.single_attempt()
         if sender is None:
             return {"result": "not_sent",
@@ -653,6 +657,8 @@ class DeliveryWorker(_BaseWorker):
         if not isinstance(ts, str) or not _TS.fullmatch(ts):
             self._log("edit_preflight_held", reason="edit_timestamp_unverified")
             return {"result": "unknown", "error_code": "edit_target_unverified"}
+        if len(text.encode("utf-8")) > BODY_WIRE_MAX:
+            return {"result": "not_sent", "error_code": "body_part_wire_too_long"}
         try:
             response = await self._blocks_call(
                 sender.chat_update, blocks, channel=self._settings["channel_id"],
@@ -700,6 +706,8 @@ class DeliveryWorker(_BaseWorker):
         sender = self._sender.single_attempt()
         if not self._sender.authored(target) or sender is None:
             return None
+        if len(text.encode("utf-8")) > BODY_WIRE_MAX:
+            return {"result": "not_sent", "error_code": "body_part_wire_too_long"}
         try:
             response = await self._blocks_call(
                 sender.chat_update, blocks,

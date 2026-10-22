@@ -5,6 +5,8 @@ adapters/slack/cards.py. Shared safety stays in notify_cards/adapters.
 """
 from __future__ import annotations
 
+from html import escape
+
 
 def parts_text(parts: dict) -> str:
     """mrkdwn text with a bold heading; body text is never formatted."""
@@ -27,6 +29,16 @@ def face(containers, footer, op, cfg):
     return containers, footer
 
 THREAD_HEAD_PATIENT = False    # replies sit under the patient card
+
+# chat.update documents a 4,000-character text limit (unlike postMessage).
+# Bound encoded bytes conservatively too: source characters and wire text
+# differ after escaping, and a delivered part must remain editable.
+THREAD_PART_WIRE_LIMIT = 4000
+
+
+def thread_part_wire_size(text: str) -> int:
+    """Slack's escaped UTF-8 size, conservatively bounded for durable updates."""
+    return len(escape(text, quote=False).encode("utf-8"))
 
 
 def card_link(card) -> str | None:

@@ -879,6 +879,8 @@ def _parser():
     plan = subs.add_parser("card_part_plan", help="Local operator: inspect an unknown part without approving a write")
     plan.add_argument("--delivery-id", required=True)
     plan.add_argument("--part-id", required=True)
+    plan.add_argument("--include-related", action="store_true",
+                      help="Include every unresolved attachment in the same latest Slack update; never approve it")
     for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations", "patient_context"):
         sub = subs.add_parser(kind)
         if kind == "control":
@@ -989,7 +991,8 @@ def main(argv=None):
                     or not valid_text(args["part_id"], 64)):
                 raise ValueError("bad_part_identity")
             from notify_recovery import card_part_resolve_plan
-            result = card_part_resolve_plan(view.db, args["delivery_id"], args["part_id"])
+            result = card_part_resolve_plan(view.db, args["delivery_id"], args["part_id"],
+                                            include_related=args["include_related"])
         elif action in ("create", "update") or args["kind"] == "control":
             req = requests.parse_command(sys.stdin.buffer.read(requests.MAX_COMMAND_BYTES + 1))
             if not isinstance(req, dict) or req.keys() & {"cmd", "version", "project_id", "human_confirmed"}:

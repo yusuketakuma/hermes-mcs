@@ -363,7 +363,7 @@ def _journal_contradiction(ledger, req) -> str | None:
     return None
 
 
-def card_part_resolve_plan(ledger, delivery_id, part_id) -> dict:
+def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=False) -> dict:
     """Read sealed identity on a borrowed ledger/db without writes or source text.
 
     Missing or ineligible parts return an error; transaction ownership stays
@@ -376,11 +376,31 @@ def card_part_resolve_plan(ledger, delivery_id, part_id) -> dict:
         return {"error": "unknown_part"}
     if part["kind"] == "card" or part["state"] != "unknown" or not part["attempt_id"]:
         return {"error": "part_not_resolvable"}
-    return {"version": 1, "cmd": "ops.card_part_resolve", **stored_scope(render),
+    plan = {"version": 1, "cmd": "ops.card_part_resolve", **stored_scope(render),
             "transport": render["transport"],
             "delivery_id": delivery_id, "part_id": part_id, "attempt_id": part["attempt_id"],
             "manifest_sha256": render["payload_hash"], "payload_sha256": part["payload_sha256"],
             "expected_state": "unknown"}
+    if include_related:
+        if render["transport"] != "slack" or render["op"] != "update" or render["card_id"] is None:
+            return {"error": "related_parts_unresolvable"}
+        latest = db.execute("SELECT delivery_id FROM notification_renders WHERE card_id=? ORDER BY render_rev DESC LIMIT 1",
+                            (render["card_id"],)).fetchone()
+        if latest["delivery_id"] != delivery_id:
+            return {"error": "related_parts_unresolvable"}
+        related = []
+        for row in _preflight_unsettled_parts(db, render["card_id"]):
+            if (row["delivery_id"] != delivery_id or row["state"] != "unknown"
+                    or row["kind"] != "attachment_part" or row["error_code"] not in _PREFLIGHT_ERRORS):
+                return {"error": "related_parts_unresolvable"}
+            other = card_part_resolve_plan(db, delivery_id, row["part_id"])
+            if "error" in other:
+                return other
+            if row["part_id"] != part_id:
+                related.append(other)
+        if related:
+            plan["related_plans"] = related
+    return plan
 
 
 # reasons the planner/worker stores on a held or unknown part; others count as 'unknown'
@@ -430,7 +450,7 @@ def validate_card_part_resolve(req) -> str | None:
         return "bad_transport"
     allowed = {"version", "cmd", "command_id", "actor", "human_confirmed", "reason",
                "delivery_id", "attempt_id", "part_id", "manifest_sha256", "payload_sha256",
-               "expected_state", "result", "remote_id", "evidence", "transport"} | set(scope_fields(transport))
+               "expected_state", "result", "remote_id", "evidence", "transport", "related_plans"} | set(scope_fields(transport))
     if req.keys() - allowed:
         return "unknown_field"
     if type(req.get("version")) is not int or req["version"] != 1 or req.get("cmd") != "ops.card_part_resolve":
@@ -456,6 +476,32 @@ def validate_card_part_resolve(req) -> str | None:
         return "bad_evidence"
     if evidence.get("worker_stopped") is not True:
         return "worker_not_proven_stopped"
+    if "related_plans" in req:
+        if (transport != "slack" or req["result"] != "mark_not_sent"
+                or evidence.get("proof") != _PREFLIGHT_PROOF):
+            return "bad_related_resolution"
+        from mcs_requests import MAX_COMMAND_BYTES
+        from notify_parts import MAX_PARTS
+        related = req["related_plans"]
+        if not isinstance(related, list) or not 0 < len(related) < MAX_PARTS:
+            return "bad_related_plans"
+        if len(canonical(req)) > MAX_COMMAND_BYTES:
+            return "command_too_large"
+        keys = {"version", "cmd", "transport", "delivery_id", "part_id", "attempt_id",
+                "manifest_sha256", "payload_sha256", "expected_state"} | set(scope_fields(transport))
+        seen = {req["part_id"]}
+        base = {key: value for key, value in req.items() if key != "related_plans"}
+        for plan in related:
+            if not isinstance(plan, dict) or plan.keys() != keys:
+                return "bad_related_plan"
+            if any(plan[key] != req[key] for key in keys - {"part_id", "attempt_id", "payload_sha256"}):
+                return "related_plan_scope_mismatch"
+            error = validate_card_part_resolve({**base, **plan})
+            if error:
+                return error
+            if plan["part_id"] in seen:
+                return "duplicate_related_part"
+            seen.add(plan["part_id"])
     if evidence.get("proof") == _PREFLIGHT_PROOF:
         if transport != "slack" or req["result"] != "mark_not_sent" or "remote_id" in req:
             return "bad_preflight_resolution"
@@ -522,11 +568,13 @@ def _preflight_journal_error(attempts, incomplete, req, render, part):
     return None
 
 
-def _part_resolution_journal_error(ledger, req):
-    try:
-        attempts, incomplete = notify_journal.scan_journals(notify_spool.notify_dirs(notify_spool.data_root(ledger)))
-    except OSError:
-        return "journal_unverifiable"
+def _part_resolution_journal_error(ledger, req, *, journal_evidence=None):
+    if journal_evidence is None:
+        try:
+            journal_evidence = notify_journal.scan_journals(notify_spool.notify_dirs(notify_spool.data_root(ledger)))
+        except OSError:
+            return "journal_unverifiable"
+    attempts, incomplete = journal_evidence
     if req["evidence"].get("proof") == _PREFLIGHT_PROOF:
         db = cards.connection(ledger)
         render = render_row(db, req["delivery_id"])
@@ -659,46 +707,64 @@ def _delivered_edit_target(db, card, part, through_rev):
     return next(iter(remotes)) if len(remotes) == 1 else None
 
 
+def _preflight_unsettled_parts(db, card_id):
+    rows = db.execute("SELECT p.delivery_id,p.part_id,p.state,p.kind,p.error_code FROM notification_render_parts p "
+                      "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
+                      "WHERE r.card_id=? AND p.state IN ('pending','unknown') ORDER BY p.delivery_id,p.part_id",
+                      (card_id,)).fetchall()
+    cancelled = _unstarted_cancelled_renders(db, card_id)
+    return [row for row in rows if row["state"] == "unknown" or row["delivery_id"] not in cancelled]
+
+
 def _preflight_recovery_target(db, render, card, req):
+    targets = _preflight_recovery_targets(db, render, card, [req])
+    return targets.get(req["part_id"]) if targets is not None else None
+
+
+def _preflight_recovery_targets(db, render, card, plans):
     if (card is None or render["state"] != "delivered" or card["delivery_state"] != "delivered"
             or not scope_matches(render, stored_scope(card)) or not card["message_id"]
             or card["thread_state"] != "created" or not card["thread_id"]):
         return None
     latest = db.execute("SELECT delivery_id FROM notification_renders WHERE card_id=? ORDER BY render_rev DESC LIMIT 1",
                         (card["card_id"],)).fetchone()
-    unsettled = db.execute("SELECT p.delivery_id,p.part_id,p.state FROM notification_render_parts p "
-                          "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
-                          "WHERE r.card_id=? AND p.state IN ('pending','unknown')",
-                          (card["card_id"],)).fetchall()
-    cancelled = _unstarted_cancelled_renders(db, card["card_id"])
-    unsettled = [row for row in unsettled if row["state"] == "unknown" or row["delivery_id"] not in cancelled]
-    if (latest["delivery_id"] != render["delivery_id"] or len(unsettled) != 1
-            or (unsettled[0]["delivery_id"], unsettled[0]["part_id"]) != (req["delivery_id"], req["part_id"])):
+    unsettled = _preflight_unsettled_parts(db, card["card_id"])
+    expected = {(plan["delivery_id"], plan["part_id"]) for plan in plans}
+    if (latest["delivery_id"] != render["delivery_id"] or len(expected) != len(plans)
+            or any(plan["delivery_id"] != render["delivery_id"] for plan in plans)
+            or {(row["delivery_id"], row["part_id"]) for row in unsettled} != expected
+            or any(row["state"] != "unknown" for row in unsettled)):
         return None
     for kind, remote in (("card", card["message_id"]), ("thread", card["thread_id"])):
         if not db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND kind=? "
                           "AND state='delivered' AND remote_id=?",
                           (render["delivery_id"], kind, remote)).fetchone():
             return None
-    part = dict(db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
-                           (req["delivery_id"], req["part_id"])).fetchone())
-    part["sha256"] = part["payload_sha256"]
-    remote = _delivered_edit_target(db, card, part, render["render_rev"])
-    if remote and render["spec_json"] is not None:
-        try:
-            old = json.loads(render["spec_json"])
-            targets = [p for p in old["parts"]["manifest"] if p["part_id"] == part["part_id"]]
-            if (payload_hash(old) != render["payload_hash"] or len(targets) != 1
-                    or targets[0].get("edit_only") is not True
-                    or targets[0].get("prior_remote_id") != remote
-                    or targets[0].get("sha256") != part["sha256"]):
-                return None
-        except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+    targets, used_remotes = {}, set()
+    for plan in plans:
+        part = dict(db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                               (plan["delivery_id"], plan["part_id"])).fetchone())
+        part["sha256"] = part["payload_sha256"]
+        remote = _delivered_edit_target(db, card, part, render["render_rev"])
+        if not remote or remote in used_remotes:
             return None
-    return {**part, "prior_remote_id": remote} if remote else None
+        if render["spec_json"] is not None:
+            try:
+                old = json.loads(render["spec_json"])
+                matches = [p for p in old["parts"]["manifest"] if p["part_id"] == part["part_id"]]
+                if (payload_hash(old) != render["payload_hash"] or len(matches) != 1
+                        or matches[0].get("edit_only") is not True
+                        or matches[0].get("prior_remote_id") != remote
+                        or matches[0].get("sha256") != part["sha256"]):
+                    return None
+            except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+                return None
+        targets[part["part_id"]] = {**part, "prior_remote_id": remote}
+        used_remotes.add(remote)
+    return targets
 
 
-def _seal_preflight_update(db, candidates, delivery_id, render, card, target):
+def _seal_preflight_update(db, candidates, delivery_id, render, card, targets):
     # The ordinary planner supplies current content and source/action gates.
     # Only unpublished, unclaimed candidates may be restricted and re-sealed;
     # the old manifest and its file hash are never reconstructed or replaced.
@@ -722,7 +788,7 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, target):
             or sum(p.get("kind") == "card" for p in manifest) != 1
             or sum(p.get("kind") == "thread" for p in manifest) != 1):
         return "preflight_replan_unsafe"
-    found_target = False
+    found_targets = set()
     used_remotes = set()
     for part in manifest:
         row = saved.get(part.get("part_id"))
@@ -738,13 +804,14 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, target):
                 or part.get("unavailable") is True
                 or (part["kind"] == "attachment_part" and not part.get("caption"))):
             return "preflight_replan_unsafe"
-        if part["part_id"] == target["part_id"]:
+        if part["part_id"] in targets:
+            target = targets[part["part_id"]]
             if any(part.get(key) != target[key] for key in ("kind", "attachment_id", "sha256", "prior_remote_id")):
                 return "preflight_replan_unsafe"
-            found_target = True
+            found_targets.add(part["part_id"])
         part["edit_only"] = True
         used_remotes.add(remote)
-    if not found_target:
+    if found_targets != set(targets):
         return "preflight_replan_unsafe"
     db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?",
                (canonical(spec).decode(), payload_hash(spec), delivery_id))
@@ -752,7 +819,7 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, target):
 
 
 def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
-    """Resolve one unknown part through the normal receipt path under a human receipt."""
+    """Resolve explicitly approved unknown parts through the normal receipt path."""
     db = cards.connection(ledger)
     now = time.time() if now is None else now
     if cfg is None:
@@ -776,25 +843,47 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
             error = plan.get("error")
             if not error and any(req.get(key) != value for key, value in plan.items()):
                 error = "stale_part_plan"
+            plans = [plan]
+            if not error:
+                for related in req.get("related_plans", ()):
+                    saved = card_part_resolve_plan(db, related["delivery_id"], related["part_id"])
+                    if saved != related:
+                        error = "stale_part_plan"
+                        break
+                    plans.append(saved)
         if error is None:
-            error = _part_resolution_journal_error(ledger, req)
+            journal_evidence = None
+            if len(plans) > 1:
+                try:
+                    journal_evidence = notify_journal.scan_journals(notify_spool.notify_dirs(notify_spool.data_root(ledger)))
+                except OSError:
+                    error = "journal_unverifiable"
+            if error is None:
+                for plan in plans:
+                    error = _part_resolution_journal_error(ledger, {**req, **plan}, journal_evidence=journal_evidence)
+                    if error:
+                        break
         if error is None:
             render = render_row(db, req["delivery_id"])
             card = card_row(db, render["card_id"])
             preflight = req["evidence"].get("proof") == _PREFLIGHT_PROOF
-            target = _preflight_recovery_target(db, render, card, req) if preflight else None
-            if preflight and target is None:
+            targets = _preflight_recovery_targets(db, render, card, plans) if preflight else None
+            if preflight and targets is None:
                 error = "preflight_target_unverified"
         if error is None:
-            fact = {**stored_scope(render),
-                    **{key: render[key] for key in ("delivery_id", "render_rev", "payload_hash", "route_epoch", "correlation")},
-                    "part_id": req["part_id"], "attempt_id": req["attempt_id"],
-                    "result": "delivered" if req["result"] == "mark_delivered" else "not_sent",
-                    "remote_id": req.get("remote_id"), "error_code": "operator_part_resolve"}
             db.execute("SAVEPOINT part_resolution")
-            settled = notify_transport.settle_part_receipt(db, fact, now)
-            if not settled["applied"]:
-                error = "part_settle_rejected"
+            settlements = []
+            for plan in plans:
+                fact = {**stored_scope(render),
+                        **{key: render[key] for key in ("delivery_id", "render_rev", "payload_hash", "route_epoch", "correlation")},
+                        "part_id": plan["part_id"], "attempt_id": plan["attempt_id"],
+                        "result": "delivered" if req["result"] == "mark_delivered" else "not_sent",
+                        "remote_id": req.get("remote_id"), "error_code": "operator_part_resolve"}
+                settled = notify_transport.settle_part_receipt(db, fact, now)
+                if not settled["applied"]:
+                    error = "part_settle_rejected"
+                    break
+                settlements.append(settled)
             candidates = []
             if error is None and preflight:
                 if (notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None
@@ -802,13 +891,13 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                     error = "preflight_replan_blocked"
                 else:
                     replacement = cards.issue_render(db, card["card_id"], cfg, now, candidates, force=True)
-                    error = _seal_preflight_update(db, candidates, replacement, render, card, target)
+                    error = _seal_preflight_update(db, candidates, replacement, render, card, targets)
             if error is not None:
                 db.execute("ROLLBACK TO part_resolution")
             db.execute("RELEASE part_resolution")
             if error is None:
                 receipt.update(outcome="applied", scope=stored_scope(render),
-                               projects=card_projects(db, render, card), part_state=settled["part_state"],
+                               projects=card_projects(db, render, card), part_state=settlements[0]["part_state"],
                                manifest_sha256=req["manifest_sha256"], payload_sha256=req["payload_sha256"],
                                attempt_id=req["attempt_id"], evidence=req["evidence"])
                 if preflight:
@@ -816,6 +905,11 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                                    replacement_manifest_sha256=payload_hash(candidates[0]),
                                    content_basis="current_content")
                     specs.extend(candidates)
+                    if len(plans) > 1:
+                        receipt["resolved_parts"] = [
+                            {**plan, "part_state": item["part_state"],
+                             "prior_remote_id": targets[plan["part_id"]]["prior_remote_id"]}
+                            for plan, item in zip(plans, settlements)]
                 if req["transport"] == "lineworks" and req["evidence"].get("proof") == "remote_absent":
                     receipt["evidence_limit"] = "操作者の申告。未送信の確定ではなく、重複送信のリスクが残ります。"
                 if (not preflight and card is not None and card["delivery_state"] != "update_failed"

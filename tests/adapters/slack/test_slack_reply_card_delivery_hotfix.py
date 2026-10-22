@@ -6,7 +6,9 @@ import json
 import pytest
 
 from adapters.common.spec import token_map
+import notify_parts
 import notify_spool
+import present_slack
 from notify_testkit import NOW, _dispatch, _intent, _latest_render, _llm_extract, _msg, _seed_thread
 from slack_card_testkit import _spec
 from slack_testkit import ROOT_TS, SCOPE, SLACK, _granted_card, _mkworld, _updates
@@ -41,7 +43,12 @@ def world(led):
 
 @pytest.mark.parametrize("marker", ["post_source_id", "reply_key"])
 def test_identical_reply_chunks_are_distinct_and_update_only_their_prior(world, marker):
-    chunks = ["合成長文 " + "あ" * 1800, "合成後半 " + "い" * 1800]
+    text = "合成長文 " + "あ" * 1800 + "\n合成後半 " + "い" * 1800
+    chunks = notify_parts.split_body_chunks(
+        text, wire_limit=present_slack.THREAD_PART_WIRE_LIMIT,
+        wire_size=present_slack.thread_part_wire_size)
+    assert len(chunks) > 1 and "".join(chunks) == text
+    assert all(present_slack.thread_part_wire_size(chunk) <= 4000 for chunk in chunks)
     specs = [_post_spec(mid, marker) for mid in (201, 202)]
     remote = []
     for spec in specs:
@@ -52,8 +59,8 @@ def test_identical_reply_chunks_are_distinct_and_update_only_their_prior(world, 
             assert out["result"] == "delivered"
             ids.append(out["remote_id"])
         remote.append(ids)
-    assert len(set(remote[0] + remote[1])) == 4
-    assert len(world.client.thread_posts) == 4
+    assert len(set(remote[0] + remote[1])) == 2 * len(chunks)
+    assert len(world.client.thread_posts) == 2 * len(chunks)
 
     # B's new text already exists on A: only B's exact prior may be edited.
     part = {"kind": "body_part", "part_id": "body:0001", "prior_remote_id": remote[1][0]}
@@ -63,8 +70,8 @@ def test_identical_reply_chunks_are_distinct_and_update_only_their_prior(world, 
     assert [update["ts"] for update in _updates(world)] == [remote[1][0]]
     rows = {row["ts"]: row["text"] for row in world.client.replies[ROOT_TS]}
     assert [rows[mid] for mid in remote[0]] == chunks
-    assert rows[remote[1][0]] == chunks[1]
-    assert len(world.client.thread_posts) == 4
+    assert [rows[mid] for mid in remote[1]] == [chunks[1], *chunks[1:]]
+    assert len(world.client.thread_posts) == 2 * len(chunks)
 
 
 @pytest.mark.parametrize("marker", ["post_source_id", "reply_key"])

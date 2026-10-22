@@ -6,6 +6,7 @@ import json
 import os
 import re
 from collections import deque
+from functools import partial
 
 from mcs_requests import canonical, positive
 from mcs_util import valid_hash
@@ -30,7 +31,8 @@ def text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT) -> list:
+def split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT, *,
+                      wire_limit: int | None = None, wire_size=None) -> list:
     """Lossless chunks <= limit for the durable thread plan —
     ``"".join(chunks) == text`` holds: lines keep their trailing
     newline and overlong lines hard-wrap, so planned parts reassemble
@@ -60,19 +62,56 @@ def split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT) -> list:
         cur += seg
     if cur:
         chunks.append(cur)
-    return _no_blank_chunks(chunks, limit)
+    chunks = _no_blank_chunks(chunks, limit)
+    if wire_limit is None:
+        return chunks
+    if type(wire_limit) is not int or wire_limit <= 0 or not callable(wire_size):
+        raise ValueError("invalid_wire_budget")
+    # Keep existing character/line boundaries whenever their encoded wire
+    # form fits. Subdivide only oversized chunks without cutting an escape
+    # entity or source character. Rebalance newly isolated whitespace using
+    # the same lossless adjustment as the character-bounded plan.
+    bounded = []
+    for chunk in chunks:
+        start, used = 0, 0
+        for end, char in enumerate(chunk):
+            size = wire_size(char)
+            if type(size) is not int or not 0 < size <= wire_limit:
+                raise ValueError("unrepresentable_wire_character")
+            if used + size > wire_limit:
+                bounded.append(chunk[start:end])
+                start, used = end, 0
+            used += size
+        if start < len(chunk):
+            bounded.append(chunk[start:])
+    return _no_blank_chunks(bounded, limit, wire_limit=wire_limit, wire_size=wire_size)
 
 
-def _no_blank_chunks(chunks: list, limit: int) -> list:
+def _no_blank_chunks(chunks: list, limit: int, *,
+                     wire_limit: int | None = None, wire_size=None) -> list:
     """A whitespace-only chunk would be an empty post (Discord rejects
     it): move its whitespace next to a visible character when possible.
     Otherwise keep the lossless chunks; the manifest holds an unrepresentable
     body rather than dropping source whitespace or sending an empty post."""
+    def fits(text):
+        return len(text) <= limit and (wire_limit is None or wire_size(text) <= wire_limit)
+
+    def fitting_prefix(text, prefix=""):
+        room = max(0, limit - len(prefix))
+        if wire_limit is None:
+            return room
+        used = wire_size(prefix)
+        for index, char in enumerate(text[:room]):
+            used += wire_size(char)
+            if used > wire_limit:
+                return index
+        return min(room, len(text))
+
     out: list = []
     queue, carry = deque(chunks), ""
     while queue:
         c, carry = carry + queue.popleft(), ""
-        room = limit - len(out[-1]) if out else 0
+        room = fitting_prefix(c, out[-1]) if out else 0
         if not c.strip():
             # whitespace fills the previous chunk; the rest leads with that
             # chunk's last visible character (if it has another), else
@@ -87,23 +126,57 @@ def _no_blank_chunks(chunks: list, limit: int) -> list:
                     continue
             carry = c
             continue
-        if len(c) <= limit:
+        if fits(c):
             out.append(c)
             continue
         lead = len(c) - len(c.lstrip())
         if out:
             out[-1] += c[:min(room, lead)]
             c, lead = c[min(room, lead):], lead - min(room, lead)
-        if len(c) <= limit:
+        if fits(c):
             out.append(c)
             continue
-        if lead >= limit:
+        take = fitting_prefix(c)
+        if lead >= take:
             return list(chunks)
-        out.append(c[:limit])
-        queue.appendleft(c[limit:])
+        out.append(c[:take])
+        queue.appendleft(c[take:])
     if not out:
         return list(chunks)                # nothing visible at all
     return list(chunks) if carry else out
+
+
+def needs_wire_replan(db, card, latest) -> bool:
+    """Re-plan a proven length rejection only when the sealed part exceeds today's budget."""
+    present = presenter(card["transport"])
+    wire_limit = getattr(present, "THREAD_PART_WIRE_LIMIT", None)
+    if (wire_limit is None or latest is None or latest["state"] != "delivered"
+            or not scope_matches(latest, stored_scope(card))):
+        return False
+    rejected = db.execute(
+        "SELECT part_id,payload_sha256,bytes FROM notification_render_parts "
+        "WHERE delivery_id=? AND kind='body_part' AND state='not_sent' "
+        "AND error_code IN ('msg_too_long','body_part_wire_too_long')",
+        (latest["delivery_id"],)).fetchall()
+    if not rejected:
+        return False
+    try:
+        chunks = json.loads(latest["spec_json"])["parts"]["thread_body_parts"]
+    except (ValueError, TypeError, KeyError):
+        chunks = []
+    for part in rejected:
+        # GC can remove old spec_json. Escaping cannot shrink the stored raw
+        # UTF-8 size, so a larger raw byte count remains sufficient proof.
+        if type(part["bytes"]) is int and part["bytes"] > wire_limit:
+            return True
+        match = re.fullmatch(r"body:([0-9]+)", part["part_id"])
+        index = int(match[1]) - 1 if match else -1
+        if isinstance(chunks, list) and 0 <= index < len(chunks):
+            text = chunks[index]
+            if (isinstance(text, str) and text_sha256(text) == part["payload_sha256"]
+                    and present.thread_part_wire_size(text) > wire_limit):
+                return True
+    return False
 
 
 def _plan_attachments(db, shown) -> list:
@@ -564,13 +637,17 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     cleanup = []
     verified_body, verified_attachments = _same_thread_delivered_parts(db, card) if update else ({}, {})
     present = presenter(card["transport"])
+    split_chunks = (partial(split_body_chunks,
+                           wire_limit=present.THREAD_PART_WIRE_LIMIT,
+                           wire_size=present.thread_part_wire_size)
+                    if hasattr(present, "THREAD_PART_WIRE_LIMIT") else split_body_chunks)
     editable = present.EDITABLE
     slack_thread = card["transport"] == "slack" and card["kind"] == "thread"
     announced = (_announced_ids(db, card, event_ids=set(spec["delivery"]["intent_event_ids"]),
                                body_only=True)
                  if update and slack_thread else set())
     if hasattr(present, "overflow"):
-        keyed.extend(present.overflow(parts, split_body_chunks))
+        keyed.extend(present.overflow(parts, split_chunks))
     for key, mids in _body_groups(db, card, planned, posts):
         man = {"shown": json.dumps(mids, ensure_ascii=False)}
         body = card_body_text(db, card, man, max_chars=None, cfg=cfg)[1]
@@ -588,11 +665,11 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 # broadcasts once; later renders reuse/edit that exact post.
                 header_chunks = [notice]
         elif divider and card["layout"] >= 3:
-            header_chunks = split_body_chunks(header)
-            chunks = split_body_chunks(original)
+            header_chunks = split_chunks(header)
+            chunks = split_chunks(original)
         else:
             # Existing names remain stable until a new source post is issued.
-            chunks = split_body_chunks(body)
+            chunks = split_chunks(body)
         keyed += [(f"{key}:header#{k}", c)
                   for k, c in enumerate(header_chunks, 1)]
         keyed += [(f"{key}#{k}", c) for k, c in enumerate(chunks, 1)]
