@@ -90,7 +90,7 @@ MAX_POST_ACTIONS = 5          # spec.MAX_POST_ACTIONS
 # Card face layout stamped at creation: existing cards keep layout 1/2 (no
 # fingerprint change, no mass re-render / LINE WORKS re-post); cards
 # created from now on use the current one (owner decision 2026-10-08).
-# Layout 4 = Slack reply cards (notify.slack_reply_cards): the root card shows
+# Layout 4 = Slack reply cards (notify.reply_cards): the root card shows
 # the root post only and each later reply gets its own card in the root's
 # thread. CARD_LAYOUT is the newest layout this code can write, so the
 # updater refuses a rollback to code that would misread a layout-4 card.
@@ -253,12 +253,16 @@ def _scoped_card_key(key, scope):
     return key
 
 
+# LINE WORKS has no native thread to hold a reply card; it keeps collecting
+REPLY_CARD_TRANSPORTS = ("slack", "discord")
+
+
 def reply_cards_on(cfg) -> bool:
-    """Slack reply cards (layout 4) are opt-in until checked on a real client."""
+    """Reply cards (layout 4) are opt-in until checked on a real client."""
     # reply cards live in the root card's thread: without card_thread no
     # thread is ever opened and every reply would wait, then hit the channel
-    return (notify_scope.active_transport(cfg) == "slack"
-            and notify_scope.notify_cfg(cfg).get("slack_reply_cards") is True
+    return (notify_scope.active_transport(cfg) in REPLY_CARD_TRANSPORTS
+            and notify_scope.notify_cfg(cfg).get("reply_cards") is True
             and notify_scope.notify_cfg(cfg).get("card_thread") is True)
 
 
@@ -269,7 +273,7 @@ def _split_reply_targets(db, targets, scope, cfg):
     replies (no re-post of history, no double listing); the decision is the
     stored layout, never a date. The root target keeps the whole coverage so
     intent completion and the root-thread attachment route stay unchanged."""
-    if notify_scope.active_transport(cfg) != "slack":
+    if notify_scope.active_transport(cfg) not in REPLY_CARD_TRANSPORTS:
         return targets
     on = reply_cards_on(cfg)
     out = []
@@ -1549,8 +1553,9 @@ def _bind_reply_thread(db, card, cfg, now) -> tuple[dict, bool]:
     root_key = card["card_key"].rsplit("|reply:", 1)[0]
     root = db.execute("SELECT * FROM notification_cards WHERE card_key=?", (root_key,)).fetchone()
     if (root is not None and root["delivery_state"] in ("delivered", "update_failed")
-            and root["message_id"] and root["thread_state"] == "created"
-            and root["thread_id"] == root["message_id"]
+            and root["message_id"] and root["thread_state"] == "created" and root["thread_id"]
+            # a Slack thread is rooted at the card's own ts; Discord's is its own channel
+            and (root["transport"] != "slack" or root["thread_id"] == root["message_id"])
             and notify_scope.scope_matches(root, notify_scope.stored_scope(card))):
         db.execute("UPDATE notification_cards SET thread_id=?,thread_state='created',updated_at=? "
                    "WHERE card_id=?", (root["thread_id"], now, card["card_id"]))

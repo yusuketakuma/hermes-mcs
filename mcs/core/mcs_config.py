@@ -185,8 +185,8 @@ def validate_notify(ntf: dict) -> list[str]:
                       '"slack"、"lineworks"、"off"（無効）から選んでください')
     if "card_thread" in ntf and type(ntf["card_thread"]) is not bool:
         errors.append("notify.card_thread: true（有効）かfalse（無効）を指定してください")
-    if "slack_reply_cards" in ntf and type(ntf["slack_reply_cards"]) is not bool:
-        errors.append("notify.slack_reply_cards: true（有効）かfalse（無効）を指定してください")
+    if "reply_cards" in ntf and type(ntf["reply_cards"]) is not bool:
+        errors.append("notify.reply_cards: true（有効）かfalse（無効）を指定してください")
     for key in ("route_epoch", "card_thread_archive_min"):
         if key in ntf:
             err = _int_range(1, 10 ** 9)(ntf[key])

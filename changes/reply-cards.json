@@ -1,0 +1,25 @@
+{
+  "category": "added",
+  "title": "SlackとDiscordで返信ごとにカードを作る表示（試験提供・既定オフ）",
+  "summary": "notify.reply_cardsとnotify.card_threadをtrueにすると、SlackとDiscordで新しく作られる会話カードは元投稿だけを表示し、その後の返信は1件ごとに専用のカードとして元投稿のスレッド内へ投稿します。返信カードの要約・原文・スタンプ・タスク作成・報告・💊などの操作は、そのカードが表示している投稿だけを対象にします。返信カードはチャンネルには再掲しません。LINE WORKSはスレッドがないため従来どおりです。",
+  "upgrade": "既定はオフで、設定しなければ表示は変わりません。notify.card_threadがオフのときは有効になりません。有効にした後も、すでにあるカードは従来どおり返信をまとめて表示し、過去の返信を再投稿しません。一度返信カード形式で作った会話は、設定をオフに戻しても返信カードで続けます。返信カードの通知はSlack・Discordのスレッド通知の設定に従います。このバージョンは新しいカード形式（layout 4）を書くため、返信カードを作った後は、それを読めない以前のバージョンへの戻しを更新ツールが止めます。",
+  "details": [
+    "kindは増やさず、kind=threadのままanchor_keyに{root, source}を記録する。card_keyは元のキーに|reply:<返信ID>を付けたもの。",
+    "元投稿カードが配送されスレッドができるまで、返信カードは描画を待つ（source_thread_not_ready）。6時間待っても届かない場合はチャンネルへ投稿する。",
+    "元投稿カードは元投稿だけを表示し、「↳ 返信 N件はスレッド内」を出す。返信の本文・新着通知を元投稿スレッドへ出さない。",
+    "返信の添付は返信カードの配送で元投稿のスレッドへ送る。遅れて届いた添付の宛先とsignalのスレッド検索では、返信カードとlayout 4の元投稿カードを取り違えないよう除外する。",
+    "添付を返信カード本体へ統合する（files/chat.update file_ids）のは次の段階で、今回は行わない。",
+    "layout 4のカードは、操作の対象（タスク作成・報告・💊・📋）、元情報の変化の判定、反応の読取りを自分の投稿1件に限る。新しい返信が来ても、それ以前のカードは再描画しない。",
+    "Discordは元投稿カードのスレッド（別チャンネル）が作成済みであることを確認してから、その中へ返信カードを投稿する。"
+  ],
+  "refs": [
+    "adapters/common/spec.py",
+    "mcs/core/mcs_config.py",
+    "mcs/notify/notify_action_context.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_parts.py",
+    "mcs/notify/notify_render.py",
+    "tests/adapters/slack/test_reply_cards.py",
+    "tests/notify/test_discord_reply_cards.py"
+  ]
+}

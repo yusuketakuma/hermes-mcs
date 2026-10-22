@@ -1,4 +1,4 @@
-"""Slack reply cards (layout 4, notify.slack_reply_cards): each later reply gets
+"""Slack reply cards (layout 4, notify.reply_cards): each later reply gets
 its own card inside the root card's thread; existing cards keep collecting.
 Synthetic ledger and fake Slack client only."""
 import asyncio
@@ -14,7 +14,7 @@ from slack_testkit import isolated_slack_ledger as led
 
 __all__ = ["led"]
 
-REPLY = {**SLACK, "notify": {**SLACK["notify"], "slack_reply_cards": True}}
+REPLY = {**SLACK, "notify": {**SLACK["notify"], "reply_cards": True}}
 
 
 def _cards(led):
@@ -108,7 +108,7 @@ def test_an_existing_layout_three_root_keeps_collecting_replies(led, monkeypatch
 @pytest.mark.parametrize("value", ["true", 1, None])
 def test_reply_card_switch_must_be_boolean(value):
     import mcs_config
-    assert any("slack_reply_cards" in e for e in mcs_config.validate_notify({"slack_reply_cards": value}))
+    assert any("reply_cards" in e for e in mcs_config.validate_notify({"reply_cards": value}))
 
 
 def test_a_layout_four_root_keeps_reply_cards_after_the_switch_is_off(led, monkeypatch):
