@@ -1,6 +1,7 @@
 """The local CI-equivalent runner must stay in step with ci.yml jobs and run lines."""
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -144,6 +145,17 @@ def _run(repo, stub, out, *jobs, **extra_env):
 def _summary(out):
     return {row.split("\t")[0]: row.split("\t")[1:3]
             for row in (out / "summary.tsv").read_text().splitlines()[1:]}
+
+
+def test_python_pin_is_unquoted_and_passes_a_real_interpreter_probe(tmp_path):
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    workflow = SYNTHETIC_WORKFLOW.replace('python-version: "3.14"',
+                                          f'python-version: "{version}"')
+    repo, _ = _synthetic_repo(tmp_path, 0, workflow)
+    out = tmp_path / "out"
+    _run(repo, Path(sys.executable), out, "incident-gates")
+    assert _summary(out)["incident-gates"] == ["pass", "0"]
+    assert f"pins: python={version} pytest=" in (out / "meta.txt").read_text()
 
 
 @pytest.mark.parametrize("path", ["scripts/development/ci_local.sh",

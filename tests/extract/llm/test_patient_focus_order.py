@@ -6,6 +6,8 @@ new arrivals. Synthetic temp DB only."""
 import json
 import time
 
+import pytest
+
 import extract_llm
 from extract_llm import EXTRACT_VERSION, KIND
 from extract_testkit import _hash, _ledger, _message
@@ -128,3 +130,20 @@ def test_progress_counts_match_completion_and_focus_without_ids(tmp_path, monkey
     assert out == {"active_patients": 3, "extraction_complete": complete,
                    "focus_eligible": 2, "focus_targets": 1}
     assert complete == 1
+
+
+@pytest.mark.parametrize("attempts,next_try,focus", [(1, 0, 1), (1, 900, 0), (5, 0, 0)])
+def test_progress_does_not_call_exhausted_or_waiting_extraction_complete(
+        tmp_path, attempts, next_try, focus):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="体温は37度です。合成の経過記録。")])
+    db.db.execute("INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES (1,'synthetic')")
+    _old(db, 1, 1)
+    db.artifact_add(KIND, "{}", project_id=1, message_id=1, meta={
+        "error": True, "attempts": attempts, "next_try": time.time() + next_try if next_try else 0,
+        "hash": _hash(db, 1), "extract_version": EXTRACT_VERSION})
+    out = extract_llm.patient_progress_counts(db.db)
+    assert out == {"active_patients": 1, "extraction_complete": 0,
+                   "focus_eligible": focus, "focus_targets": focus}
+    # Exhausted posts still release the worker's existing context scheduling gate.
+    assert extract_llm.patient_extraction_complete(db, 1) is (attempts >= 5)

@@ -2462,15 +2462,14 @@ def _focus_patients(ledger) -> list:
 def patient_progress_counts(db) -> dict:
     """Counts only: active patients, those with every stored post extracted, and focus candidates.
 
-    Uses the same predicates as patient_extraction_complete and
-    _focus_patients (uncapped here, so focus_targets applies the cap);
-    the caller bounds time."""
+    Completion counts pending posts even after retries are exhausted;
+    only focus eligibility follows the worker's retry budget. The caller bounds time."""
     active = db.execute("SELECT COUNT(*) FROM patients WHERE COALESCE(is_archived,0)=0").fetchone()[0]
     rows = db.execute(
-        "SELECT SUM(CASE WHEN COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) "
+        f"SELECT SUM(CASE WHEN ({_retry_budget_sql()}) AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) "
         f"{_ERROR_ROWS_SQL}), 0) <= ? AND NOT {_FRESH_SQL} THEN 1 ELSE 0 END) "
         "FROM messages m JOIN patients p ON p.project_id=m.project_id "
-        f"WHERE COALESCE(p.is_archived,0)=0 AND {pending_pred()} AND ({_retry_budget_sql()}) "
+        f"WHERE COALESCE(p.is_archived,0)=0 AND {pending_pred()} "
         "GROUP BY m.project_id", (KIND, EXTRACT_VERSION, time.time())).fetchall()
     focus = sum(1 for r in rows if r[0])
     return {"active_patients": active, "extraction_complete": max(0, active - len(rows)),

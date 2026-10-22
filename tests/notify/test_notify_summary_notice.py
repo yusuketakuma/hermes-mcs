@@ -298,3 +298,5 @@ def test_notice_with_unrepresentable_blank_part_is_sealed_but_not_publishable(le
     row = led.db.execute("SELECT state,progress FROM notify_outbox WHERE event_id=?", (ev["event_id"],)).fetchone()
     assert row["state"] == "failed"
     assert json.loads(row["progress"])["hold_reason"] == "blank_part_unrepresentable"
+    import notify_spool
+    assert notify_spool.recover(led, DAILY, {})["republished"] == 0

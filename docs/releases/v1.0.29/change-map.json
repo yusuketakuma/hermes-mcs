@@ -4,9 +4,9 @@
     "previous_release": "v1.0.28 6940d135f0e642b932b7164869f199e7cef89503",
     "production_source": "main 8971a025"
   },
-  "public_entries": 16,
+  "public_entries": 17,
   "comparison_rows": 3,
-  "fragment_count": 34,
+  "fragment_count": 35,
   "mapping": [
     {
       "id": "N1",
@@ -169,6 +169,15 @@
         "g1-stats-followup-window",
         "v129-notification-retention"
       ]
+    },
+    {
+      "id": "F8",
+      "changelog_section": "不具合修正",
+      "fragment_category_primary": "fixed",
+      "title": "進捗表示とスタンプ・保留通知の状態更新を修正",
+      "fragment_ids": [
+        "v129-release-review-fixes"
+      ]
     }
   ],
   "notes": [
@@ -210,6 +219,7 @@
     "v129-part-hold-outlook": "4f37a802a749d6b7ddab810c93c28d743ba57093ee7e467d356d86fe406557f1",
     "v129-patient-context-progress": "0a8a56bd9e70375a676a33ce4dce48938cdafdfe4851874927a9bc05a11b4711",
     "v129-snapshot-dirty-generation": "787432e92af337598508e99dafef5147e65d342c907493fac2e9ba59c119c7a0",
-    "view-scope-fail-closed": "e6587768f148cbbbf31e71222504cf09b26c7f8f6ed3ad17103b4657fe0759cb"
+    "view-scope-fail-closed": "e6587768f148cbbbf31e71222504cf09b26c7f8f6ed3ad17103b4657fe0759cb",
+    "v129-release-review-fixes": "26c2e6740b2d1c30f7a7061e24641633512eafc191f5db07050d74a2107334ec"
   }
 }

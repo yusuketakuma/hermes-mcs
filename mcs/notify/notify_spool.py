@@ -158,7 +158,8 @@ def publish_flags(cfg: dict, root: str) -> bool:
 
 def _cleanup_budget_held(db, delivery_id):
     return db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND state='held' "
-                      "AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded') "
+                      "AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded',"
+                      "'blank_part_unrepresentable') "
                       "LIMIT 1", (delivery_id,)).fetchone() is not None
 
 

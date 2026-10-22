@@ -510,12 +510,21 @@ def test_expired_execution_window_leaves_queued_intent_without_api_calls(scene):
 
 
 @pytest.mark.parametrize("status", [400, 404, 409, 422])
-def test_definite_refusal_read_back_unchanged_ends_and_unlocks_the_post(scene, status):
+def test_definite_refusal_read_back_unchanged_ends_and_unlocks_the_post(scene, status, monkeypatch):
     from mcs_contract import MCSError
+    import notify_cards
+    refreshed = []
+    render = notify_cards.rerender_message_cards
+    def rerender(*args, **kwargs):
+        refreshed.append(args[2:4])
+        return render(*args, **kwargs)
+    monkeypatch.setattr(notify_cards, "rerender_message_cards", rerender)
     request = _command(scene)
     assert _apply(scene, request)["stamp_state"] == "queued"
     scene[3].failure = MCSError("http_error", status=status)
+    refreshed.clear()  # queued intent may already refresh its pending indicator
     assert _drain(scene)["rejected"] == 1
+    assert refreshed == [(1, 100)]
     receipt = _receipt(scene, request)
     assert (receipt["stamp_state"], receipt["stamp_error"]) == ("rejected", "stamp_server_rejected")
     assert scene[3].posts == [(100, "viewed", False)]

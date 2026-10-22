@@ -566,8 +566,12 @@ def drain(ledger, adapter, cfg, root, deadline):
             try:
                 _publish_result(ledger, root, value)
                 if value.get("state") == "rejected":
-                    refresh_rejected(ledger, value["request"],
-                                     {"outcome": "rejected", "error": value.get("error")}, cfg)
+                    refreshed = refresh_rejected(ledger, value["request"],
+                                                 {"outcome": "rejected", "error": value.get("error")}, cfg)
+                    if not refreshed.get("stamp_reselect"):
+                        import notify_cards
+                        notify_cards.rerender_message_cards(
+                            ledger, cfg, value["request"]["project_id"], value["request"]["message_id"])
                 elif value.get("state") in {"confirmed", "unknown"}:
                     import notify_cards
                     notify_cards.rerender_message_cards(

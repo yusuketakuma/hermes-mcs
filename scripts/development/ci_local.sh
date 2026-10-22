@@ -72,7 +72,7 @@ clean_before=$(git -C "$src" status --porcelain --untracked-files=all)
 workflow=$src/.github/workflows/ci.yml
 
 # --- pins, read from the clone's ci.yml/Makefile; the runner keeps no copy ---
-pin() { grep -oE "$1" "$workflow" | head -n 1 | sed -E "s/$2//"; }
+pin() { grep -oE "$1" "$workflow" | head -n 1 | sed -E "s/$2//g"; }
 py_pin=$(pin 'python-version: "[0-9.]+"' '^python-version: "|"$')
 pytest_pin=$(pin 'pytest==[0-9.]+' '^pytest==')
 uv_pin=$(pin 'uv==[0-9.]+' '^uv==')
