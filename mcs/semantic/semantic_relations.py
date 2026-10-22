@@ -111,9 +111,9 @@ def _ordered_before(left: dict, right: dict) -> bool:
             # Date-only precision and missing timezone never imply an instant
             # on the other fact's clock. Aware datetime compares UTC instants.
             if type(lt) is not type(rt):
-                return False
+                continue
             if isinstance(lt, datetime) and (lt.tzinfo is None) != (rt.tzinfo is None):
-                return False
+                continue
             return lt < rt
     return False
 

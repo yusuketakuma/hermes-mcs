@@ -220,6 +220,37 @@ def test_workflow_progression_does_not_complete_a_later_plan(axis, planned_at, d
     assert (planned, done) == original
 
 
+@pytest.mark.parametrize("kind", ["workflow", "action", "polarity"])
+@pytest.mark.parametrize("event_left,event_right,earlier", [
+    ("2026-10-23", "2026-10-20T09:00:00+09:00", "fact_bbbb"),
+    ("2026-10-23T09:00:00", "2026-10-20T09:00:00+09:00", "fact_bbbb"),
+    ("2026-10-20", "2026-10-23", "fact_aaaa"),
+    ("2026-10-23", "2026-10-20", "fact_bbbb"),
+    ("2026-10-20", "2026-10-20", None),
+])
+def test_temporal_order_uses_first_comparable_axis(kind, event_left, event_right, earlier):
+    if kind == "workflow":
+        left = _fact("fact_aaaa", "CT検査予定", kind="care_event", workflow="planned")
+        right = _fact("fact_bbbb", "CT検査実施", kind="care_event", workflow="done")
+    elif kind == "action":
+        left = _fact("fact_aaaa", "合成薬剤A開始", action="start")
+        right = _fact("fact_bbbb", "合成薬剤A中止", action="stop")
+    else:
+        left = _fact("fact_aaaa", "頭痛あり", kind="symptom_state", polarity="affirmed")
+        right = _fact("fact_bbbb", "頭痛なし", kind="symptom_state", polarity="negated")
+    left.update(event_time=event_left, valid_time="2026-10-23")
+    right.update(event_time=event_right, valid_time="2026-10-20")
+    relation = sr.classify_pair(left, right)
+    if kind == "workflow":
+        assert relation["type"] == ("COMPLEMENTS" if earlier == "fact_bbbb" else "TRANSITION")
+    elif earlier is None:
+        assert relation["type"] == "CONTRADICTION"
+    else:
+        assert relation["type"] == "EXPLICIT_SUPERSESSION"
+        assert relation["left_fact_id"] == earlier
+    sf.validate_relation(relation)
+
+
 def test_complements_for_distinct_same_entity_facts():
     left = _fact("fact_aaaa", "アムロジピン5mg継続", action="continue")
     right = _fact("fact_bbbb", "アムロジピン朝食後服用", action="continue")
