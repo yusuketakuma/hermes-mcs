@@ -1,12 +1,12 @@
 {
-  "status": "1.0.29 publication candidate draft; 53a0e127 + CR2 follow-up and release records; final suite pending; production apply, operation check and publication pending",
+  "status": "1.0.29 publication candidate draft; main abb0f37b (reply cards on by default + SDC connector) + release records; final CI pending",
   "baseline": {
     "previous_release": "v1.0.28 6940d135f0e642b932b7164869f199e7cef89503",
     "production_source": "main 8971a025"
   },
-  "public_entries": 17,
+  "public_entries": 19,
   "comparison_rows": 3,
-  "fragment_count": 44,
+  "fragment_count": 46,
   "mapping": [
     {
       "id": "N1",
@@ -37,6 +37,24 @@
       "title": "保存済み添付の読取り専用点検",
       "fragment_ids": [
         "v129-attachment-integrity"
+      ]
+    },
+    {
+      "id": "N4",
+      "changelog_section": "新機能",
+      "fragment_category_primary": "added",
+      "title": "Slack・Discordで返信を1件ずつのカードで表示",
+      "fragment_ids": [
+        "reply-cards"
+      ]
+    },
+    {
+      "id": "N5",
+      "changelog_section": "新機能",
+      "fragment_category_primary": "added",
+      "title": "自社Macの版とプロセス状態を送信専用Connectorで確認（未配備・試験段階）",
+      "fragment_ids": [
+        "sdc-self-monitoring"
       ]
     },
     {
@@ -238,6 +256,8 @@
     "v129-adversarial-lineworks-stop": "c68da531afa278ea2a9925fe9e10a013bb0a35202fbcb5a7396d82f6afc24659",
     "v129-adversarial-loop-batching": "d0f910d90a81e90168906610caaed1b7b4e04b7e76f1dffcf6fafc0814cb7fe6",
     "v129-followup-window-metadata": "ed44dedba75d05a17a88375f112b26cdc54207b0450d96a157e10e5038c10507",
-    "v129-worker-route-diagnostics": "fa121bf1479e44734e878a629032fbcf9ea64224f12fd24f13c929406599dcc0"
+    "v129-worker-route-diagnostics": "fa121bf1479e44734e878a629032fbcf9ea64224f12fd24f13c929406599dcc0",
+    "reply-cards": "29b40757c696cbe710ed238b5a8a66249441bb38377ec74e11f92a3f6a965fd6",
+    "sdc-self-monitoring": "359fb76bca8aed31ed4f078e2f09377c1e7c9aa2b0893e30d0e36a946315ba4c"
   }
 }
