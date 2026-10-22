@@ -1320,3 +1320,88 @@ def test_summary_does_not_retry_a_rate_limited_send_after_route_changes(tmp_path
         assert len(attempts) == 1
         assert app.client.messages == []
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change_at", ["before", "during", "between_chunks", "retry"])
+@pytest.mark.parametrize("change", ["interactive_off", "epoch_changed", "host_replaced"])
+def test_native_command_stops_sending_after_authority_changes(tmp_path, monkeypatch,
+                                                            change_at, change):
+    from types import SimpleNamespace
+    from adapters.common import commands
+
+    class RateLimited(Exception):
+        response = SimpleNamespace(status_code=429, data={"error": "ratelimited"},
+                                   headers={"Retry-After": "0"})
+
+    async def scenario():
+        actions, app, _, dirs = fixture(tmp_path)
+        actions._settings["route_epoch"] = 7
+        flags = {"interactive": True, "transport": "slack", "route_epoch": 7}
+        flag_path = Path(dirs["flags"], "notify.json")
+        flag_path.write_text(json.dumps(flags))
+        calls, attempts = [], []
+
+        def invalidate():
+            if change == "host_replaced":
+                actions._native_current = lambda: False
+            else:
+                altered = dict(flags)
+                if change == "interactive_off":
+                    altered["interactive"] = False
+                else:
+                    altered["route_epoch"] = 8
+                flag_path.write_text(json.dumps(altered))
+
+        def answer(*args, **kwargs):
+            calls.append(True)
+            if change_at == "during":
+                invalidate()
+            return "PRIVATE-SYNTHETIC\n" * 200
+
+        post = app.client.chat_postEphemeral
+
+        async def changing_post(**kwargs):
+            attempts.append(kwargs)
+            if change_at == "between_chunks":
+                invalidate()
+            if change_at == "retry":
+                asyncio.get_running_loop().call_soon(invalidate)
+                raise RateLimited()
+            return await post(**kwargs)
+
+        monkeypatch.setattr(commands, "answer", answer)
+        monkeypatch.setattr(actions, "_client", lambda: SimpleNamespace(chat_postEphemeral=changing_post))
+        if change_at == "before":
+            invalidate()
+        await actions._command(ack, {
+            "team_id": SCOPE["team_id"], "api_app_id": SCOPE["application_id"],
+            "user_id": "U_OPERATOR", "channel_id": SCOPE["channel_id"],
+            "text": '{"op":"read","kind":"thread","project_id":123}'})
+        assert len(calls) == (change_at != "before")
+        assert len(attempts) == (change_at in {"between_chunks", "retry"})
+        assert len(app.client.messages) == (change_at == "between_chunks")
+        if app.client.messages:
+            assert app.client.messages[0]["user"] == "U_OPERATOR"
+            assert "PRIVATE-SYNTHETIC" in app.client.messages[0]["text"]
+    asyncio.run(scenario())
+
+
+def test_native_command_sends_all_chunks_while_authority_is_current(tmp_path, monkeypatch):
+    from adapters.common import commands
+
+    async def scenario():
+        actions, app, _, dirs = fixture(tmp_path)
+        actions._settings["route_epoch"] = 7
+        Path(dirs["flags"], "notify.json").write_text(json.dumps(
+            {"interactive": True, "transport": "slack", "route_epoch": 7}))
+        answer = "PRIVATE-SYNTHETIC\n" * 200
+        monkeypatch.setattr(commands, "answer", lambda *_a, **_kw: answer)
+        await actions._command(ack, {
+            "team_id": SCOPE["team_id"], "api_app_id": SCOPE["application_id"],
+            "user_id": "U_OPERATOR", "channel_id": SCOPE["channel_id"],
+            "text": '{"op":"read","kind":"thread","project_id":123}'})
+        assert [message["text"] for message in app.client.messages] == common_text.split_body(
+            answer, max_chunks=None)
+        assert len(app.client.messages) > 1
+        assert all(message["user"] == "U_OPERATOR" for message in app.client.messages)
+    asyncio.run(scenario())

@@ -176,7 +176,8 @@ def _classify_pair(left: dict, right: dict, token_cache=None) -> dict | None:
             lw = left.get("workflow_status")
             rw = right.get("workflow_status")
             if lw in WORKFLOW_ORDER and rw in WORKFLOW_ORDER \
-                    and WORKFLOW_ORDER.index(lw) < WORKFLOW_ORDER.index(rw):
+                    and WORKFLOW_ORDER.index(lw) < WORKFLOW_ORDER.index(rw) \
+                    and not _ordered_before(right, left):
                 rel_type, reason = "TRANSITION", "workflow_progression"
             elif _norm(left.get("statement")) != _norm(right.get("statement")):
                 rel_type, reason = "COMPLEMENTS", "shared_entity"

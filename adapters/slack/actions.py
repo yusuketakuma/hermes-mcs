@@ -243,12 +243,21 @@ class Actions:
                 and body.get("channel_id") == self._settings["channel_id"]):
             return
         from adapters.common import commands, text
+
+        async def current():
+            return (self._native_command_current()
+                    and await self._interactive(require_epoch=True))
+
+        if not await current():
+            return
         answer = await commands.run_native(
             commands.answer, self._settings, body.get("text"),
             user=body["user_id"], channel=body["channel_id"],
             authorized=self._native_command_current)
         for chunk in text.split_body(answer, max_chunks=None):
-            await self._say(body["channel_id"], body["user_id"], chunk)
+            if not await self._say(body["channel_id"], body["user_id"], chunk,
+                                   authorized=current):
+                break
 
     async def _summary(self, ack, body):
         """``/mcs-summary <scope> [name:名前]`` — the clicker-only summary

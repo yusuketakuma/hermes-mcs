@@ -326,8 +326,8 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
             batch = adapter.fetch_unread_messages(p.project_id, snap.timestamp)
             p.messages = batch.messages
             for m in p.messages:
-                if m.body_state == "snippet":
-                    # a truncated parent body has no dedicated fetch
+                if m.body_state not in ("full", "deleted"):
+                    # An unreceived or truncated parent has no dedicated fetch
                     # surface — later list/history reads may upgrade it.
                     # Until then the patient must not be ACKed (F05)
                     p.fetch_state = "incomplete"

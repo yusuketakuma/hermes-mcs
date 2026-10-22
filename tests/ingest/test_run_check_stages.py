@@ -482,18 +482,32 @@ def test_err_str_includes_structured_detail():
     assert mcs_contract.describe_error(ValueError("v")) == "ValueError"
 
 
-def test_snippet_parent_blocks_mark_read(tmp_path):
-    """F05: a truncated parent body must not be ACKed — the patient
+@pytest.mark.parametrize("state", ["snippet", "unknown", "full", "deleted"])
+def test_parent_body_completeness_controls_mark_read(tmp_path, state):
+    """F05: an unreceived or truncated parent must not be ACKed — the patient
     stays incomplete until a later fetch upgrades it."""
+    import mcs_payload
+
+    payload = {"id": 10, "is_unread": True}
+    if state == "snippet":
+        payload["comment_snippet"] = "synthetic partial body"
+    elif state == "full":
+        payload.update(comment="", files=[{"name": "synthetic.pdf",
+                       "url": "https://www.medical-care.net/synthetic-file"}])
+    elif state == "deleted":
+        payload["delete_user"] = {"id": 1}
+    message = mcs_payload.normalize_message(payload, 1)
+    assert message.body_state == state
     db = _ledger(tmp_path)
     marks = []
     adapter = SimpleNamespace(
         list_unread=lambda: mcs_contract.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
         fetch_unread_messages=lambda *_: mcs_contract.MessageBatch(
-            messages=[_message(mid=10, unread=True, state="snippet")],
+            messages=[message],
             reached=True),
         fetch_unread_replies=lambda *_: mcs_contract.ReplyBatch([], []),
+        fetch_latest=lambda *_: {"message_id": 10},
         mark_patient_read=lambda *a, **k: marks.append(a),
     )
     result = {"errors": [], "incomplete": [], "messages": 0,
@@ -502,10 +516,16 @@ def test_snippet_parent_blocks_mark_read(tmp_path):
         adapter, db, result,
         time.monotonic() + 30, db.begin_run(None), mark_read=True)
 
-    assert marks == []
-    assert result["marked_read"] == []
-    assert result["incomplete"] == [1]
-    assert "parent_body_incomplete" in result["errors"][0]
+    incomplete = state in ("snippet", "unknown")
+    assert len(marks) == (not incomplete)
+    assert result["marked_read"] == ([] if incomplete else [1])
+    assert result["incomplete"] == ([1] if incomplete else [])
+    if incomplete:
+        assert "parent_body_incomplete" in result["errors"][0]
+    else:
+        assert result["errors"] == []
+    assert db.db.execute("SELECT fetch_state FROM patients WHERE project_id=1").fetchone()[0] == (
+        "incomplete" if incomplete else "complete")
     db.close()
 
 

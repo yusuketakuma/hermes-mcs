@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from project_metadata_contract import MetadataFetch
 
 from mcs_util import HOME, RETRY_LATER_4XX, env_value, load_config
-from safe_io import atomic_write
+from safe_io import atomic_write, fsync_dir
 from mcs_worker import WorkerError, bounded_call
 
 from mcs_download import disk_error_kind, validate_download_url
@@ -1746,6 +1746,7 @@ class MCSAdapter:
                               partial=tmp)
             self._remaining_timeout(60)
             os.replace(tmp, dest)
+            fsync_dir(os.path.dirname(dest) or ".")
             return result
         except BaseException:
             # _io has already killed and reaped any timed-out writer.

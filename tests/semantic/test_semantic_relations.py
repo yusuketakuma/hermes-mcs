@@ -193,6 +193,33 @@ def test_workflow_progression_is_transition():
     assert rel["type"] == "TRANSITION"
 
 
+@pytest.mark.parametrize("axis", ["event_time", "valid_time"])
+@pytest.mark.parametrize("planned_at,done_at,expected", [
+    ("2026-10-23", "2026-10-20", "COMPLEMENTS"),
+    ("2026-10-20", "2026-10-23", "TRANSITION"),
+    ("2026-10-20", "2026-10-20", "TRANSITION"),
+    ("unknown", "2026-10-20", "TRANSITION"),
+    ("2026-10-20", "unknown", "TRANSITION"),
+    ("2026-10-20", "2026-10-20T09:00:00+09:00", "TRANSITION"),
+    ("2026-10-20T09:00:00", "2026-10-20T08:00:00+09:00", "TRANSITION"),
+    ("2026-10-20T09:00:00+09:00", "2026-10-19T23:00:00Z", "COMPLEMENTS"),
+])
+def test_workflow_progression_does_not_complete_a_later_plan(axis, planned_at, done_at, expected):
+    planned = _fact("fact_aaaa", "CT検査予定", kind="care_event", workflow="planned")
+    done = _fact("fact_bbbb", "CT検査実施", kind="care_event", workflow="done")
+    planned[axis], done[axis] = planned_at, done_at
+    original = copy.deepcopy((planned, done))
+    relation = sr.classify_pair(planned, done)
+    assert relation["type"] == expected
+    assert relation["left_fact_id"] == planned["fact_id"]
+    assert relation["right_fact_id"] == done["fact_id"]
+    sf.validate_relation(relation)
+    result = sr.reconcile_facts([planned], [done])
+    assert result["relations"] == [relation]
+    assert result["active_preserved"] == result["new_preserved"] == 1
+    assert (planned, done) == original
+
+
 def test_complements_for_distinct_same_entity_facts():
     left = _fact("fact_aaaa", "アムロジピン5mg継続", action="continue")
     right = _fact("fact_bbbb", "アムロジピン朝食後服用", action="continue")

@@ -5,6 +5,8 @@ assert_allowed_url.  In-memory fakes only — conftest blocks sockets."""
 import mcs_contract
 
 import base64
+from contextlib import closing
+import errno
 import hashlib
 import json
 import subprocess
@@ -20,7 +22,7 @@ import pytest
 import mcs_adapter
 import mcs_cdp
 import mcs_download
-from ingest_testkit import _message
+from ingest_testkit import _ledger, _message
 
 
 class _ProjectsAdapter(mcs_adapter.MCSAdapter):
@@ -631,6 +633,59 @@ def test_download_uses_private_staging_without_touching_existing_part_link(tmp_p
     assert destination.read_bytes() == b"synthetic"
     assert not destination.is_symlink()
     assert destination.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("sync_failed", [False, True])
+def test_download_syncs_renamed_file_before_recording_downloaded(tmp_path, monkeypatch, sync_failed):
+    import collection_stages
+    import health_report
+    import safe_io
+
+    payload = b"synthetic attachment"
+    events = []
+    replace = mcs_adapter.os.replace
+    sync = safe_io.fsync_dir
+
+    def worker(envelope, **kwargs):
+        Path(envelope["partial"]).write_bytes(payload)
+        return {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+
+    adapter = mcs_adapter.MCSAdapter(worker=worker)
+    adapter._token = "synthetic-token"
+    monkeypatch.setattr(collection_stages, "ATTACH_DIR", str(tmp_path))
+    monkeypatch.setattr(health_report, "attachment_free_mb", lambda *_: None)
+    with closing(_ledger(tmp_path)) as store:
+        message = _message()
+        message.attachments = [mcs_contract.Attachment(
+            "synthetic-file", "synthetic.pdf", "https://www.medical-care.net/f")]
+        store.save_messages([message])
+
+        def renamed(source, destination):
+            replace(source, destination)
+            events.append("renamed")
+
+        def synced(directory):
+            assert directory == str(tmp_path)
+            assert events == ["renamed"]
+            row = store.db.execute("SELECT attachment_id,state FROM attachments").fetchone()
+            assert row["state"] == "pending"
+            assert (tmp_path / str(row["attachment_id"])).read_bytes() == payload
+            events.append("directory_synced")
+            if sync_failed:
+                raise OSError(errno.EIO, "synthetic directory sync failure")
+            sync(directory)
+
+        monkeypatch.setattr(mcs_adapter.os, "replace", renamed)
+        monkeypatch.setattr(mcs_adapter, "fsync_dir", synced, raising=False)
+        result = {"errors": []}
+        collection_stages.stage_attachments(adapter, store, result, time.monotonic() + 60)
+        assert events == ["renamed", "directory_synced"]
+        row = store.db.execute("SELECT state,local_path,sha256 FROM attachments").fetchone()
+        assert row["state"] == ("pending" if sync_failed else "downloaded")
+        assert (row["local_path"] is None) is sync_failed
+        assert (row["sha256"] is None) is sync_failed
+        assert bool(result["errors"]) is sync_failed
+        assert not list(tmp_path.glob(".download-*.part"))
 
 
 @pytest.mark.parametrize("operation", ["api", "cdp_json"])

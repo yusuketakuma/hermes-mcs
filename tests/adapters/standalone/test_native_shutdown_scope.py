@@ -273,7 +273,8 @@ def test_slack_pending_confirmation_rechecks_current_scope(tmp_path, monkeypatch
                 "team_id": "T1", "channel_id": "C1", "route_epoch": 1,
                 "data_root": str(data), "allowed_user_ids": {"U1"}, "project_ids": {1},
                 "snapshot": snapshot, "inbox": str(inbox)}
-    actions = Actions(SimpleNamespace(), settings, {}, None, None, lambda *_a, **_k: None)
+    actions = Actions(SimpleNamespace(), settings, {"flags": str(flags.parent)},
+                      None, None, lambda *_a, **_k: None)
     actions._active = True
     config_current = True
     actions._native_current = lambda: config_current
