@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "薬変更後の統計に実際の追跡日数を記載",
+  "summary": "薬変更後の後続記録を数える統計のローカル出力に、承認済みの設定から採用した追跡日数を記載します。既定の7日以外を設定した場合にも、何日後から数えた結果か確認できます。",
+  "upgrade": "追加操作は不要です。追跡日数の既定値・対象・件数の計算は変わりません。外部向け集計のmcs-read-model/1は従来の項目を維持し、追跡日数はローカル出力で確認してください。",
+  "details": [
+    "ST-T2のwindow_daysに既存のresolved_thresholdsによる値を記載し、固定7日というdocstringを訂正する。",
+    "change_mentions_7d_plusの旧キー、分母、対象、scopeと順序を維持する。外部集計への新field追加は旧receiverが拒否するため採用せず、projectionによる既存wire保持を回帰検証する。"
+  ],
+  "refs": [
+    "mcs/views/mcs_stats.py",
+    "tests/views/test_mcs_stats.py",
+    "tests/ops/test_receipt_contract.py"
+  ]
+}

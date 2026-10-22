@@ -16,6 +16,6 @@
 
 ## 出典と確認範囲
 
-[CHANGELOG](../../../CHANGELOG.md)の1.0.29は、変更記録35件を17項目へまとめています。全件の対応と各記録のhashは[対応表](change-map.json)で確認できます。技術詳細の折りたたみには全35件の詳細と根拠を残しています。
+[CHANGELOG](../../../CHANGELOG.md)の1.0.29は、変更記録44件を17項目へまとめています。全件の対応と各記録のhashは[対応表](change-map.json)で確認できます。技術詳細の折りたたみには全44件の詳細と根拠を残しています。
 
 診断の読み方は[収集の診断](../../guides/COLLECTION_DIAGNOSTICS.md)、添付の点検は[保存済み添付の点検](../../guides/ATTACHMENT_RECOVERY.md)、更新時の操作は[更新ガイド](../../guides/UPGRADE_AGENT.md)の1.0.29節を正本とします。本番への適用、稼働確認、GitHubでの公開は受入記録で別々に確認します。

@@ -65,10 +65,10 @@ def test_signature_moves_on_in_place_request_and_patient_edits(tmp_path):
     db.db.execute("UPDATE patients SET disease='synthetic-change' WHERE project_id=1")
     db.db.commit()
     assert maintenance._content_signature(path) != after_request
+    before_seen = maintenance._content_signature(path)
     db.db.execute("UPDATE patients SET last_seen=12345 WHERE project_id=1")
     db.db.commit()
-    unchanged = maintenance._content_signature(path)
-    assert maintenance._content_signature(path) == unchanged
+    assert maintenance._content_signature(path) == before_seen
     db.close()
 
 

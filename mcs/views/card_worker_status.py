@@ -13,7 +13,8 @@ from safe_io import atomic_write
 
 VERSION = '2026-10-17.1'
 REASONS = frozenset({'worker_started', 'profile_mismatch', 'owner_unverified',
-                     'application_mismatch', 'standalone_owned', 'worker_start_failed'})
+                     'application_mismatch', 'standalone_owned', 'worker_start_failed',
+                     'route_flags_unready'})
 
 
 def _path(root, transport, profile):

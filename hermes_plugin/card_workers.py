@@ -154,6 +154,8 @@ def make_discord_factory(ctx):
                 or flags.get("interactive") is not True
                 or flags.get("transport", "discord") != "discord"
                 or flags.get("runtime_mode") == "standalone"):
+            _event_logger("mcs_discord")("worker_disabled", reason="route_flags_unready")
+            _worker_witness(settings, "discord", "route_flags_unready")
             return None
         settings["route_epoch"] = epoch
         from adapters.discord.tasks import Supervisor
@@ -233,6 +235,8 @@ def make_slack_factory(ctx):
         if flags.get("interactive") is not True \
                 or flags.get("transport") != "slack" \
                 or flags.get("runtime_mode") == "standalone":
+            _event_logger("mcs_slack")("worker_disabled", reason="route_flags_unready")
+            _worker_witness(settings, "slack", "route_flags_unready")
             return None
         # /mcs commands gate on the published route epoch
         settings["route_epoch"] = flags.get("route_epoch")

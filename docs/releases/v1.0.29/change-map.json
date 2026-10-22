@@ -1,12 +1,12 @@
 {
-  "status": "1.0.29 publication candidate draft; release/v1.0.29 1854794e + review follow-up; production apply, operation check and publication pending",
+  "status": "1.0.29 publication candidate draft; 53a0e127 + CR2 follow-up and release records; final suite pending; production apply, operation check and publication pending",
   "baseline": {
     "previous_release": "v1.0.28 6940d135f0e642b932b7164869f199e7cef89503",
     "production_source": "main 8971a025"
   },
   "public_entries": 17,
   "comparison_rows": 3,
-  "fragment_count": 35,
+  "fragment_count": 44,
   "mapping": [
     {
       "id": "N1",
@@ -26,7 +26,8 @@
         "v129-health-early-warnings",
         "v129-part-hold-outlook",
         "v129-nightly-lane-outcomes",
-        "v129-patient-context-progress"
+        "v129-patient-context-progress",
+        "v129-worker-route-diagnostics"
       ]
     },
     {
@@ -54,7 +55,8 @@
       "title": "定期処理と操作の待ち時間を短縮",
       "fragment_ids": [
         "reply-scan-indexes",
-        "v129-notify-lock-scope"
+        "v129-notify-lock-scope",
+        "v129-adversarial-loop-batching"
       ]
     },
     {
@@ -83,7 +85,8 @@
       "title": "接続の切替え後や対象範囲が不明なときに情報を送らない",
       "fragment_ids": [
         "chat-origin-authorization",
-        "view-scope-fail-closed"
+        "view-scope-fail-closed",
+        "v129-adversarial-lineworks-stop"
       ]
     },
     {
@@ -95,7 +98,8 @@
         "local-config-read-hardening",
         "standalone-config-read-hardening",
         "update-files-nofollow",
-        "error-text-redaction"
+        "error-text-redaction",
+        "v129-adversarial-config-boundary"
       ]
     },
     {
@@ -114,7 +118,8 @@
       "fragment_category_primary": "fixed",
       "title": "未取得の投稿・添付・予定を正しく扱う",
       "fragment_ids": [
-        "v129-audit-four-fixes"
+        "v129-audit-four-fixes",
+        "v129-adversarial-collection-boundaries"
       ]
     },
     {
@@ -127,16 +132,18 @@
         "g1-followup-deleted-posts",
         "g1-lab-item-units",
         "g1-signal-window-clamp",
-        "g1-stats-med-patient-scope"
+        "g1-stats-med-patient-scope",
+        "v129-adversarial-clinical-grounding"
       ]
     },
     {
       "id": "F6",
       "changelog_section": "不具合修正",
       "fragment_category_primary": "fixed",
-      "title": "依頼の返信根拠と保存・通知の境界を厳密にする",
+      "title": "依頼・事実の根拠と保存・通知の境界を厳密にする",
       "fragment_ids": [
-        "shortcut-debt-boundaries"
+        "shortcut-debt-boundaries",
+        "v129-adversarial-fact-time-audit"
       ]
     },
     {
@@ -148,7 +155,8 @@
         "v129-cmd-storage-quarantine",
         "v129-snapshot-dirty-generation",
         "v129-log-rotate-leftovers",
-        "llamacpp-idle-restart"
+        "llamacpp-idle-restart",
+        "v129-adversarial-bench-idle"
       ]
     },
     {
@@ -167,7 +175,8 @@
       "title": "統計の追跡日数と通知記録の保存期間",
       "fragment_ids": [
         "g1-stats-followup-window",
-        "v129-notification-retention"
+        "v129-notification-retention",
+        "v129-followup-window-metadata"
       ]
     },
     {
@@ -220,6 +229,15 @@
     "v129-patient-context-progress": "0a8a56bd9e70375a676a33ce4dce48938cdafdfe4851874927a9bc05a11b4711",
     "v129-snapshot-dirty-generation": "787432e92af337598508e99dafef5147e65d342c907493fac2e9ba59c119c7a0",
     "view-scope-fail-closed": "e6587768f148cbbbf31e71222504cf09b26c7f8f6ed3ad17103b4657fe0759cb",
-    "v129-release-review-fixes": "26c2e6740b2d1c30f7a7061e24641633512eafc191f5db07050d74a2107334ec"
+    "v129-release-review-fixes": "26c2e6740b2d1c30f7a7061e24641633512eafc191f5db07050d74a2107334ec",
+    "v129-adversarial-bench-idle": "1c89a4e751c648c1a33b9bf8a46fffba1e1d5366cd8139025fcb9d3d10d1f07b",
+    "v129-adversarial-clinical-grounding": "7f60bc5a25a7ed9dec34b7767c728f29e959937a1051fd63ef5ccfe25c891172",
+    "v129-adversarial-collection-boundaries": "7bb724dab52765f8c3916b4281707a6205a86590b9f0d1fe09059a88d1b7e094",
+    "v129-adversarial-config-boundary": "2c7876ef61d9e334360f329285272156d02e00b3b2b77a78c6b7a46a44297dee",
+    "v129-adversarial-fact-time-audit": "583864b5683983d33f26a429cd2039425fec49a8c24dca11102bd8598ec06595",
+    "v129-adversarial-lineworks-stop": "c68da531afa278ea2a9925fe9e10a013bb0a35202fbcb5a7396d82f6afc24659",
+    "v129-adversarial-loop-batching": "d0f910d90a81e90168906610caaed1b7b4e04b7e76f1dffcf6fafc0814cb7fe6",
+    "v129-followup-window-metadata": "ed44dedba75d05a17a88375f112b26cdc54207b0450d96a157e10e5038c10507",
+    "v129-worker-route-diagnostics": "fa121bf1479e44734e878a629032fbcf9ea64224f12fd24f13c929406599dcc0"
   }
 }

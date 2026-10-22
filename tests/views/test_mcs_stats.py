@@ -125,6 +125,8 @@ def test_med_change_followup_stat(db):
     _msg(db, 3, pid=2, ts=SNAP_TS - 29 * 86400)  # same-room follow-up
     st = run(db, stat="med_change_followup")["med_change_followup"]
     assert st["status"] == "ok"
+    assert st["window_days"] == 7
+    assert "approved follow-up window: 7 days" in st["notes"][0]
     assert st["change_mentions_7d_plus"]["numerator"] == 2
     nf = st["no_followup_record"]
     assert nf["total"] == 1 and nf["items"][0]["message_id"] == 1
@@ -174,7 +176,12 @@ def test_med_change_followup_uses_approved_followup_days(db):
     _msg(db, 1, chash="h1", ts=SNAP_TS - 5 * 86400)
     _extract(db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     _msg(db, 2, ts=SNAP_TS - 1 * 86400)   # 4 days later: outside the approved 3-day window
-    assert run(db, stat="med_change_followup")["med_change_followup"]["no_followup_record"]["total"] == 1
+    st = run(db, stat="med_change_followup")["med_change_followup"]
+    assert st["window_days"] == 3
+    assert "approved follow-up window: 3 days" in st["notes"][0]
+    assert "legacy key" in st["notes"][0]
+    assert st["change_mentions_7d_plus"]["numerator"] == 1
+    assert st["no_followup_record"]["total"] == 1
 
 
 def test_transition_reconciliation_stat(db):

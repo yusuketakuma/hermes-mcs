@@ -264,6 +264,26 @@ def test_export_enums_and_default_presets_match_live_producers():
             export_schema.validate_record(record)
 
 
+@pytest.mark.parametrize("window_days", [3, 7])
+def test_followup_window_keeps_legacy_aggregate_shape(window_days):
+    record = {"type": "stat", "contract": "mcs-read-model/1",
+              "snapshot_generation_id": "synthetic-generation",
+              "name": "med_change_followup", "value": {
+                  "status": "ok", "window_days": window_days,
+                  "change_mentions_7d_plus": {"numerator": 2, "denominator": 2,
+                                              "unit": "messages", "value": 1.0},
+                  "notes": ["synthetic text must stay local"]}}
+    projected = export_schema.project_record(record)
+    assert projected["value"] == {
+        "status": "ok",
+        "change_mentions_7d_plus": record["value"]["change_mentions_7d_plus"]}
+    assert projected["content_omitted"] is True
+    export_schema.validate_record(projected)
+    # The existing aggregate contract rejects unnegotiated fields on receipt.
+    with pytest.raises(ValueError, match="record_field_not_exportable"):
+        export_schema.validate_record(record)
+
+
 def test_unknown_stat_and_nested_clinical_fields_fail_closed():
     value = {"status": "ok", "future_clinical_body": "SYNTHETIC"}
     record = {"type": "stat", "contract": "mcs-read-model/1",

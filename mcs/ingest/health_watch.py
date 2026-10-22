@@ -546,6 +546,8 @@ _REASON_JA = {
                                 "slack_profile / profile と対象gatewayの worker_started を確認"),
     "worker_start_failed": ("通知workerの起動に失敗しました",
                             "gatewayのworker_start_failed記録を確認してください"),
+    "route_flags_unready": ("通知workerの配送条件が整っていません",
+                            "通知設定と公開された配送条件を確認し、対象gatewayの起動記録を確認してください"),
     "worker_restart_required": ("通知workerのコード版が更新前です",
                                 "対象の全profile gatewayを再起動し worker_started を確認"),
     "profile_mismatch": ("通知workerの担当profileが一致しません",

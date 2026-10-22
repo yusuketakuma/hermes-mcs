@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "通知workerの起動条件が揃わない理由を診断へ記録",
+  "summary": "Slack・Discordで所有者確認後に公開された配送条件が揃わず配送workerを開始しない場合、その理由を既存の状態記録とログへ残します。前回起動時の記録だけが残り、現在も稼働しているように見えることを防ぎます。",
+  "upgrade": "Hermes gatewayの再起動後から反映されます。起動条件・通知範囲・認可条件・経路の世代判定は変わりません。",
+  "details": [
+    "所有者確認後の既存の起動拒否分岐でworker_disabled / route_flags_unreadyを記録し、card_worker_statusとhealth_watchへ理由を追加する。",
+    "ログとwitnessには固定の理由だけを追加し、設定・認証情報・接続先識別子を含めない。Discord5条件・Slack3条件と正常系の合成回帰を保持する。"
+  ],
+  "refs": [
+    "hermes_plugin/card_workers.py",
+    "mcs/views/card_worker_status.py",
+    "mcs/ingest/health_watch.py",
+    "tests/plugin/test_card_worker_owner.py"
+  ]
+}

@@ -663,12 +663,14 @@ def st_rx_expiry(db, scope):
 
 
 def st_med_change_followup(db, scope):
-    """ST-T2: retrospective count of med change mentions (>=7d old at
-    as_of) with no subsequent room post within 7d. 'No follow-up
+    """ST-T2: count med change mentions aged at least the approved follow-up window.
+
+    Use the same window (default 7 days) for subsequent room posts. 'No follow-up
     record found' — never 'no follow-up happened'. A request row
     referencing the message counts as a visible follow-up."""
     from signal_policy import resolved_thresholds
-    window = resolved_thresholds(db)["followup_days"] * DAY_S   # the approved signal window (default 7d)
+    window_days = resolved_thresholds(db)["followup_days"]
+    window = window_days * DAY_S
     cutoff = scope["as_of"] - window
     total, no_follow = 0, []
     # archived rooms are excluded as in the med_change_no_followup signal
@@ -699,17 +701,21 @@ def st_med_change_followup(db, scope):
     return stats_contract.stat_result("ok", scope, {
         # a count kept in the export's ratio shape (value is 1.0 whenever
         # counted); never derive a no-follow-up rate from it
+        "window_days": window_days,
         "change_mentions_7d_plus": stats_contract.ratio(total, total, "messages"),
         "no_followup_record": stats_contract.limited_items(
             sorted(no_follow, key=lambda r: r["message_id"]),
             scope["limit"]),
-        "notes": ["'follow-up record' = any later room post OR a "
+        "notes": [f"approved follow-up window: {window_days} days; "
+                  "change_mentions_7d_plus is a legacy key and uses window_days "
+                  "for both minimum mention age and subsequent room posts",
+                  "'follow-up record' = any later room post OR a "
                   "request registered against the message — neither "
                   "proves a clinical response occurred",
                   "absence is reported as 'not confirmable in records', "
                   "not as missed work",
                   "change_mentions_7d_plus counts mentions in its numerator; "
-                  "its value is always 1.0 and is not a follow-up or "
+                  "its value is 1.0 when mentions are counted and is not a follow-up or "
                   "missed-work rate"]})
 
 

@@ -50,6 +50,59 @@ def test_discord_bound_owner_and_native_bot(tmp_path, monkeypatch, owner, user, 
         assert ('worker_disabled', {'reason': reason}) in events
     else:
         assert ('worker_started', {}) in events
+        import card_worker_status
+        assert card_worker_status.status(tmp_path, 'discord', 'owner') == {
+            'state': 'started', 'reason': 'worker_started'}
+
+
+@pytest.mark.parametrize('transport,override', [
+    ('discord', {'interactive': False}),
+    ('discord', {'transport': 'slack'}),
+    ('discord', {'runtime_mode': 'standalone'}),
+    ('discord', {'route_epoch': None}),
+    ('discord', {'route_epoch': True}),
+    ('slack', {'interactive': False}),
+    ('slack', {'transport': 'discord'}),
+    ('slack', {'runtime_mode': 'standalone'}),
+])
+def test_route_flags_rejection_replaces_old_started_witness_without_private_values(
+        monkeypatch, tmp_path, caplog, transport, override):
+    import json
+    import importlib
+    import logging
+    import card_worker_status
+    from adapters.common import paths
+
+    # These values are synthetic sentinels; none belongs in diagnostic output.
+    profile = 'synthetic-private-profile'
+    settings = {'data_root': str(tmp_path), 'profile': profile, 'application_id': '101'}
+    monkeypatch.setattr(cw, '_interactive_settings', lambda *_: dict(settings))
+    monkeypatch.setattr(cw, '_slack_adapter_settings', lambda *_: dict(settings))
+    monkeypatch.setattr(cw, '_standalone_owned', lambda *_: False)
+    flags = {'interactive': True, 'transport': transport, 'route_epoch': 3,
+             'synthetic_private_field': 'synthetic-private-config', **override}
+    monkeypatch.setattr(paths, 'read_flags', lambda *_: dict(flags))
+    def unexpected_supervisor(**_kwargs):
+        pytest.fail('route flags must reject before supervisor construction')
+    monkeypatch.setattr(importlib.import_module(f'adapters.{transport}.tasks'),
+                        'Supervisor', unexpected_supervisor)
+    card_worker_status.record(tmp_path, transport, profile, 'worker_started')
+    assert card_worker_status.status(tmp_path, transport, profile)['state'] == 'started'
+    caplog.set_level(logging.INFO, logger='hermes.plugin')
+    factory = getattr(cw, f'make_{transport}_factory')(NS(get_config=lambda k, d=None: d))
+    assert factory(NS(user=NS(id=101), application_id=101), NS(_owner_profile=profile)) is None
+    assert card_worker_status.status(tmp_path, transport, profile) == {
+        'state': 'disabled', 'reason': 'route_flags_unready'}
+    events = [json.loads(record.getMessage()) for record in caplog.records]
+    assert events == [{'event': 'worker_owner', 'code': 'adapter'},
+                      {'event': 'worker_disabled', 'reason': 'route_flags_unready'}]
+    (witness,) = (tmp_path / 'worker_status').glob('*.json')
+    stored = json.loads(witness.read_text())
+    assert set(stored) == {'version', 'reason', 'pid', 'at'}
+    rendered = '\n'.join(record.getMessage() for record in caplog.records)
+    for private in (profile, str(tmp_path), '101', 'synthetic-private-config'):
+        assert private not in rendered
+    assert profile not in witness.read_text()
 
 
 @pytest.mark.parametrize('transport', ['slack', 'discord'])
