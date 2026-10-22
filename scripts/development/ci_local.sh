@@ -264,7 +264,7 @@ clean_after=$(git -C "$src" status --porcelain --untracked-files=all)
 column -t -s "$(printf '\t')" "$summary" 2>/dev/null || cat "$summary"
 echo "evidence: $out"
 if [ "$all_pass" = 1 ]; then
-    result="ローカル同等チェック: 全6 job pass（$sha）"
+    result="ローカル同等チェック: 全6 job pass（${sha}）"
 else
     result="ローカル同等チェック: 未成立（fail・実行不能・未実行・dirty のいずれかあり）"
 fi

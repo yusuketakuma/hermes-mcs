@@ -234,3 +234,21 @@ def test_hermes_checkout_with_tracked_edits_is_not_runnable(tmp_path, dirty):
     # the untracked .venv alone never blocks; a tracked edit always does
     assert (note[1] == "実行不能") is dirty
     assert ("未commit の変更" in note[-1]) is dirty
+
+
+@pytest.mark.parametrize("all_pass", ["0", "1"])
+def test_final_report_preserves_success_exit_and_exact_sha(tmp_path, all_pass):
+    # Exercise the real reporting tail without repeating the six expensive jobs.
+    reporting = RUNNER.read_text().split('if [ "$all_pass" = 1 ]; then', 1)[1]
+    sha = "a" * 40
+    result = subprocess.run(
+        ["bash", "-u", "-c", 'if [ "$all_pass" = 1 ]; then' + reporting],
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "en_US.UTF-8", "all_pass": all_pass, "sha": sha,
+             "out": str(tmp_path)}, capture_output=True, text=True, errors="replace", timeout=10)
+    assert result.returncode == (0 if all_pass == "1" else 1), result.stderr
+    assert "CI の実行成功ではない" in result.stdout
+    if all_pass == "1":
+        assert f"全6 job pass（{sha}）" in result.stdout
+    else:
+        assert "未成立" in result.stdout
+    assert (tmp_path / "meta.txt").read_text() == result.stdout
