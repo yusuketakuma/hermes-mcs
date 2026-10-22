@@ -131,15 +131,20 @@ class Screen:
         self.text(x, y + 76, "MCSで開く", 18, "#1264a3")
         return y + 100
 
-    def card(self, x, y, width=770, full=False, stamp_controls=False):
+    def card(self, x, y, width=770, full=False, stamp_controls=False, post=0, replies=0):
         """Card zones top to bottom: patient title, meta line, per post a
         small time/sender line over its summary and folded source text,
-        then one area for observed stamps and their sending menu."""
-        y = self.paragraph(x, y, HEADING, width, 21, INK, True)
+        then one area for observed stamps and their sending menu.
+        Reply cards (layout 4) show one post each: the root card adds
+        "↳ 返信 N件はスレッド内", a reply card (post>0) sits in the thread."""
+        y = self.paragraph(x, y, HEADING if post == 0 else "↳ " + HEADING, width, 21, INK, True)
         y = self.paragraph(x, y - 4, META.format(n=2 if full else 1), width, 17, MUTED)
         if full:
             y = self.paragraph(x, y - 4, "🆕 返信+1", width, 17, GREEN)
-        for (sender, bullets), stamps in zip(POSTS[:2 if full else 1], STAMPS):
+        if replies:
+            y = self.paragraph(x, y - 4, f"↳ 返信 {replies}件はスレッド内", width, 17, GREEN)
+        shown = POSTS[:2] if full else POSTS[post:post + 1]
+        for (sender, bullets), stamps in zip(shown, STAMPS[0 if full else post:]):
             y = self.rule(x, y, width)
             y = self.paragraph(x, y, sender, width, 15, MUTED)
             for bullet in bullets:
@@ -148,7 +153,7 @@ class Screen:
         y = self.rule(x, y, width)
         for line in STATE if full else ("📝 タスク 1件",):
             y = self.paragraph(x, y - 2, line, width, 17, MUTED)
-        for (sender, _), stamps in zip(POSTS[:2 if full else 1], STAMPS):
+        for (sender, _), stamps in zip(shown, STAMPS[0 if full else post:]):
             if full:
                 y = self.paragraph(x, y - 2, sender, width, 15, MUTED)
             y = self.paragraph(x, y - 2, stamps, width, 15, GREEN)
@@ -167,24 +172,27 @@ class Screen:
 
 
 def overview():
-    s = Screen(1, "連絡の要点と原文を、同じSlackで。", "要約・スタンプ・折りたたみの原文はカードに。画像やPDFの添付はスレッドへ。", 1200)
+    s = Screen(1, "元の投稿と返信を、1件ずつのカードで。", "元の投稿はチャンネルに、返信は1件ずつのカードとしてスレッドに。添付もスレッドへ。", 1200)
     s.line(662, 194, 662, 1119)
     x, y = s.app(188, 227)
-    s.actions(x, s.card(x, y, 397))
+    s.actions(x, s.card(x, y, 397, replies=1))
     s.text(689, 227, "スレッド", 23, INK, True)
     s.text(689, 257, "# mcs-demo", 16, MUTED)
     s.line(682, 275, 1059, 275)
-    s.text(689, 313, "MCS", 18, INK, True)
-    y = s.paragraph(689, 348, "📎 服薬カレンダー.jpg — 山田 花子 10-01 09:40 佐藤さん", 354, 16)
-    s.rect(689, y - 8, 200, 120, "#f3f6f4", 8, "#dce2dd")
-    s.text(789, y + 58, "画像", 16, MUTED)
+    tx, ty = s.app(689, 297)
+    y = s.card(tx, ty, 322, post=1)
+    y = s.paragraph(tx, y + 4, "📎 服薬カレンダー.jpg — 山田 花子 10-01 09:40 佐藤さん", 322, 16)
+    s.rect(tx, y - 8, 200, 100, "#f3f6f4", 8, "#dce2dd")
+    s.text(tx + 100, y + 48, "画像", 16, MUTED)
     return s.finish()
 
 
 def notification():
-    s = Screen(2, "通知カードから、確認と担当を共有。", "要約と原文の下に、受信したスタンプを集約。複数投稿は対象を区別して表示します。", 1180)
+    s = Screen(2, "返信ごとのカードで、確認と担当を共有。", "各カードの要約・原文・スタンプ・操作は、そのカードの投稿だけが対象です。", 1180)
     x, y = s.app()
-    s.actions(x, s.card(x, y, full=True))
+    y = s.actions(x, s.card(x, y, replies=1))
+    s.text(x, y + 40, "スレッド内の返信カード", 17, MUTED, True)
+    s.card(x, y + 76, post=1)
     return s.finish()
 
 

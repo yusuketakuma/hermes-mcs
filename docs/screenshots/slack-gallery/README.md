@@ -13,7 +13,7 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 
 | 画面 | 根拠 |
 |---|---|
-| `01-overview` | `docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・添付の配送）、`mcs/notify/notify_parts.py`の`face_posts`（投稿ごとの要約と原文をカード本文へ。スタンプは下部の共通エリアに集約。添付の`📎`行と要約を含まない見出し）、`adapters/slack/presentation.py`の`render_parts`・`_folded_original`（スタンプ行は小さな補足表示、原文は`原文（N字）`の折りたたみブロック）、`present_slack.face_block_count`（収まらない投稿はスレッド本文へ） |
+| `01-overview` | `mcs/notify/notify_cards.py`の`_split_reply_targets`・`_bind_reply_thread`と`notify_render.reply_source`（元の投稿のカードと、スレッド内の返信カード）、`docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・添付の配送）、`mcs/notify/notify_parts.py`の`face_posts`（投稿ごとの要約と原文をカード本文へ。スタンプは下部の共通エリアに集約。添付の`📎`行と要約を含まない見出し）、`adapters/slack/presentation.py`の`render_parts`・`_folded_original`（スタンプ行は小さな補足表示、原文は`原文（N字）`の折りたたみブロック）、`present_slack.face_block_count`（収まらない投稿はスレッド本文へ） |
 | `02-notification` | `mcs/notify/notify_render.py`の`card_content`・`_thread_context`・`_footer`（概要・投稿ごとの要約・状態の区画）、`adapters/slack/cards.py`（区画間の区切り線、確認・担当・タスク作成も含めた「操作を選ぶ…」、`MCSで開く`のテキストリンク）、`mcs/notify/notify_action_tokens.py`の`ACTIONS`、`mcs/stamps/stamp_format.py`（スタンプの件数・表示）、`mcs/views/message_metadata.py`（自分の投稿数） |
 | `03-actions` | `notify_cards._stamp_target`・`_action_rows`・`adapters/slack/cards.py`（観測済みスタンプのエリアに送信用`static_select`を配置。メニュー展開→最新投稿への種類選択の2段階。runnerのラベルで絵文字と名前を表示し、自分の種類は`✓（取消）`）。5種類と「🗂 別の投稿」を選択肢として保持する。通常操作は確認・担当・タスク作成を含め元の順で選択メニューへ。患者の検索は常に含み、全体の新着集計・自分のタスク・未確認一覧は集計カードだけ。その他の表示項目は状態・設定に依存 |
 | `04-task-form` | `adapters/common/forms.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
@@ -48,6 +48,7 @@ Inkscapeのない環境では一時コピーのSVG viewportだけを正方形へ
 `verify_png()`と`asset_hashes()`でPNGの完結性・寸法・SVG/PNGのハッシュを検査・同期した。
 2026-10-20の`03-actions`はMCSスタンプを有効にした場合のメニューを追加し、同じQuick Look＋ImageMagickの手順で描画した。ほかの7画面は変更していない。
 同日の1回押しへの変更では、`03-actions`にスタンプ列と本人状態の強調表示を追加し、投稿を選ぶフォームもメニューに残した。ほかの7画面は変更していない。
+2026-10-23の返信カード（layout 4、既定で有効）では、`01-overview`を元の投稿のカードとスレッド内の返信カード・添付に、`02-notification`を元の投稿のカードと返信カードの2枚に描き直し、同じQuick Look＋ImageMagickの手順でPNGを再生成した。ほかの6画面は変更していない。
 小型表示の候補では`01-overview`・`02-notification`・`03-actions`の通常操作をメニューへ集約し、`03-actions`に3組の小型操作欄を描いた。生成器からSVGを更新し、同じQuick Look＋ImageMagickの手順でPNGを再生成する。
 2026-10-21の識別性修正では、実モバイルで親指に固定された小型部品を標準の名前付きボタンへ置き換え、`03-actions`だけを再生成した。6個目の「🗂 別の投稿」は対象選択であり、スタンプは5種類。
 絵文字の描画は環境によって異なり、実アプリの表示とは区別する。
