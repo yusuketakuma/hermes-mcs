@@ -320,7 +320,7 @@ Hermes cronとは併用しません。以下のcron・wrapper配置先はHermes�
   `deployment/scripts/` の render 済みコピーで、checkout 更新だけでは変わらない。
   更新後は `mcs_setup.py services` を実行する。`mcs_setup.py check` は
   配備済み wrapper と現行 render の差分（drift）を error で報告する
-- OpenWiki 等の生成ツールは稼働 checkout で実行しない（別 worktree を使う）
+- 生成ツールは稼働 checkout で実行しない（別 worktree を使う）
 
 ## 履歴取込 (init_data.py)
 

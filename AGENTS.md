@@ -1,184 +1,88 @@
 # AGENTS.md — hermes-mcs
 
-エージェント作業用の最小指示。詳細は `README.md`・`SECURITY.md`。
+<!-- Codex は ~/.codex/AGENTS.md と合わせて project_doc_max_bytes（既定32KiB）までしか読まない。追記は短くし、詳細は docs/ に置く。 -->
 
-このMacへの導入・更新・復旧を頼まれた場合は開発作業ではない。`README.md` 冒頭の「AIエージェントへ」の表で
-`docs/guides/SETUP_AGENT.md`（新規）か `docs/guides/UPGRADE_AGENT.md`（導入済み・復旧）を選んで従う。
+MCS の医療・介護チャットを収集・解析するローカルシステム。詳細は `README.md`・`SECURITY.md`・
+`docs/development/REPOSITORY_STRUCTURE.md`。このMacへの導入・更新・復旧の依頼は開発作業ではない。
+`README.md` 冒頭「AIエージェントへ」から `docs/guides/SETUP_AGENT.md`（新規）か
+`docs/guides/UPGRADE_AGENT.md`（導入済み・復旧）を選んで従う。
 
-## システムと入口
+## 絶対ルール
 
-MCS の医療・介護チャットを収集・解析するローカルシステム。
-MCSサーバーの負荷対策として10分間隔の未読収集、`self_posts` の最新投稿 probe、履歴保管・FTS5検索、
-ルール抽出とローカルLLM抽出、統計・シグナル、人承認の依頼管理を持つ。
-LLM は新着・対話1枠とバックログ2枠。抽出世代・QC・公開条件・モデルの
-既定は `mcs/extract/`・`mcs/semantic/` と仕様を照合し、要約から固定しない。
-`stage_self_probe` は未保管の最新 id を bounded 履歴取得し、取得できない
-id は `patients.probe_mid` に記録して繰返し取得を抑える。
-
-| 領域 | 入口・制約 |
-|---|---|
-| 実行 | `mcs/` の `core/`（保存基盤）・`llm/`（共通推論）・`ingest/`・`extract/`・`patients/`・`medications/`・`signals/`・`semantic/`・`stamps/`（スタンプ管理）・`notify/`・`views/`・`export/`・`ops/`。[責務・依存・移植範囲](docs/development/REPOSITORY_STRUCTURE.md) |
-| import | flat import を維持。エントリポイントは `mcs/` を sys.path に追加し `_mcs_path` を import。`.py` のある配下を任意の深さで登録する。直下の import モジュールは `_mcs_path.py` のみ。同名モジュールが旧配置に残る場合は誤読込せず停止する |
-| 抽出 | `extract/rules/` はルール（v1）、`extract/llm/` は現行LLM（旧配置v4）。`extract/clinical/` は臨床値の共通処理。`patients/rollup.py` と `semantic/` は世代横断。世代番号は配置名と独立。v2/v3 の旧実装は git 履歴。評価・ベンチ用は `extract/eval/`・`semantic/eval/`（定期処理からは読まない） |
-| 通知 | `adapters/{slack,discord,lineworks,common}/`。独立接続も接続先配下に置く。`hermes_plugin/` は Hermes 接続・互換入口、`lineworks_adapter/` は独立CLI入口 |
-| スタンプ | `mcs/stamps/` が種別・読取り・表示・人承認操作を所有する。送信は操作者1人とMCSアカウントの設定時だけ既定ON（`stamps.enabled=false`で無効）。`stamp_write`の承認記録・復元用記録を通し、通信は既存の`MCSAdapter`だけで行う。[契約](docs/specs/stamp-management.md) |
-| 独立実行 | `runtime_mode=standalone` の `mcs_standalone/` が単一host・6定期ジョブ・cmd取込・抽出worker2本を所有。Hermes未指定は従来経路。`docs/guides/STANDALONE.md` |
-| 検証 | `tests/` は実行領域に対応、`integration/` は統合、`evaluation/` は完全合成の評価資産。conftest がヘルパー import と socket 遮断を担う |
-| 配布master | `resources/drug-master/` は公式公開master原本・出典/版/hashのmanifest。実患者データやfixtureではない。リリース時の更新確認・同梱検証と、私有辞書への変換/承認/有効化を分離する |
-| 文書・配備 | 利用は `docs/guides/`、開発は `docs/development/`、契約は `docs/specs/`。`deployment/` は配備候補で、編集だけでは実機適用しない |
-
-Hermes plugin の更新反映には gateway 再起動が必要。旧 worker が新 spec を
-処理すると本文・添付が欠落し得るため、配備が明示範囲にあるときだけ再起動し、
-未適用なら報告する。LINE WORKS は独立アダプターの起動・再起動が必要。
-公開 Callback・常駐手順は `docs/guides/LINEWORKS.md`。
+- push・PR（下書きを含む）・merge・tag・Release 公開・配備・常駐サービスの再起動・本番DBや実データの変更は、ユーザーが明示した範囲だけ行う。
+  この文書はそれらの承認にならない。worktree の作成、読取り、ローカルの検証は確認なしで進めてよい。
+- 収集・解析コアは標準ライブラリのみ。新しい外部依存を足さない。例外（Hermes 同梱 `discord.py` の関数内遅延 import、
+  `runtime_mode=standalone` の `adapters/{slack,discord}/standalone.py` が使う `deployment/requirements-standalone.txt` の固定版 SDK、
+  `adapters/lineworks/` の独自認証・Bot REST・署名Callback、adapter ごとの `asyncio` 許可範囲）の正確な許可リストは
+  `ci/gates.py` が持つ。許可を通常の adapter へ広げない。Hermes モードでは Slack/Discord の独自 Bot・認証情報・REST 接続を作らない。
+  standalone のトークンは root 配下の私有JSON（優先）か `.env`（0600）だけから読み、SDK は関数内で import し、proxy 環境変数は起動時に除去する。
+- テストは一時DB+スタブのみ。実 MCS・Discord・Slack・LINE WORKS・Keychain・原本DB・ローカルLLM・Jev に一切アクセスしない。
+- 患者データ・秘密値を repo に入れない（`data/`・`.env`・`config.json` 等は ignore 済み）。ベンチ・few-shot・fixture は完全合成のみ（実投稿の匿名化も不可）。
+- 安全ゲートを壊さない。既読化は snapshot timestamp 必須、通信は no-redirect/no-proxy、人承認操作は `--confirm-human`+`reason`+receipt 経路だけ。
+- 「記録が見つからない」≠「対応がなかった」。未対応・未返信の候補は断定しない文言で区別し、未取得・取得失敗は明示する。
+  観測済みの0件（スタンプなし等）は行ごと省略してよい。チャット表示に責任回避の但し書きや「AI判定」等の出所ラベルを付けない（所有者 2026-10-08）。
+- `ledger.py`・`mcs_adapter.py`・`semantic_drain.py` を行数だけで機械分割しない。
+- Hermes plugin の変更は gateway 再起動まで反映されず、旧 worker が新 spec を処理すると本文・添付が欠落し得る。LINE WORKS は独立アダプターの
+  再起動が必要（`docs/guides/LINEWORKS.md`）。未適用なら報告する。`deployment/` の編集は実機に適用されない。
 
 ## コマンド
 
 ```bash
-scripts/run_tests.sh                # tests/ 一式（一時HOME・認証環境の隔離）
+scripts/run_tests.sh                     # tests/ 一式（一時HOME・認証環境の隔離）。絞るときも scripts/run_tests.sh tests/<領域>/
 ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ mcs_standalone/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
-python3 scripts/development/update_readme.py    # README 生成ブロック再生成（CI が drift 検出）
-python3 scripts/development/update_readme.py --check
+python3 scripts/development/update_readme.py [--check]   # 生成ブロックの再生成 / drift 検査
 python3 ci/gates.py
 python3 ci/mine_gates.py --check
 ```
 
-`make test|lint|readme|check` も利用可（uv があれば ephemeral 実行）。
-テスト対象を絞る場合も `scripts/run_tests.sh tests/<領域>/` を使う。
-`integration/` は必要な対象を同 runner に指定する。Hermes 実SDKとの統合は
-CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 成功とは区別する。
-`python3 mcs/ops/mcs_setup.py check` / `make setup-check` は実機向けの診断であり、
-合成 fixture によるテストの代わりに実行しない。
+- `make test|lint|readme|check` も使える（uv があれば ephemeral 実行）。`integration/` も同じ runner に対象を指定する。
+- `run_tests.sh` は `MCS_TEST_PYTHON`→`$VIRTUAL_ENV`→repo 直下の `.venv` の順に Python を選ぶ。worktree には `.venv` が無いので、pytest の入った Python を `MCS_TEST_PYTHON` に指定する。
+- 導入先 `~/.mcs`（`MCS_ROOT`）は稼働中の checkout で、原本DB・設定を持つ。開発・検証は git worktree で行い、そこの未commit変更を巻き込まない。
+  全体 suite は同じ Mac の稼働処理と I/O を取り合うので、同時に複数走らせない。
+- macOS の BSD `sed` は `\b` を扱わない。単語境界の置換は `perl -pi` を使う。改名後の呼出元確認は `git grep` の結果を切り詰めずに全件見る。
+- Hermes 実SDKとの統合は CI の pinned Hermes 環境で別に検証される。ローカル pytest の成功と区別する。
+- `python3 mcs/ops/mcs_setup.py check` / `make setup-check` は実機診断。合成 fixture のテストの代わりに実行しない。
 
-## 絶対ルール
+## 構成
 
-- **収集・解析コアの依存は標準ライブラリのみ**。新しい外部依存を加えない。
-  `adapters/discord/{actions,cards}.py` だけは Hermes 同梱の
-  `discord.py` を関数内で遅延 import し、UI と既存 interaction の
-  followup に使う。Hermes モードでは Slack/Discord の独自 Bot・認証情報・REST
-  接続は作らない。例外は `runtime_mode=standalone` の
-  `adapters/{slack,discord}/standalone.py` で、
-  `deployment/requirements-standalone.txt` の固定版公式 SDK（独立 venv）で接続し、
-  トークンはroot配下の私有JSON（優先）または `.env`（0600）だけから読む。
-  SDK import は関数内に限り、
-  proxy 環境変数は起動時に除去する。
-  LINE WORKS はHermesに接続機能がないため `adapters/lineworks/` だけが独自の
-  認証・Bot REST・署名Callbackを所有する（stdlib・OpenSSL、固定公式URL、
-  no-redirect/no-proxy、期限・容量制限、秘密値の環境自動取得なし）。
-  Hermes接続のadapterの `asyncio` は `sleep`・`to_thread`・`CancelledError` に限定する。
-  `adapters/common/commands.py` だけは同期コマンドの終了を待つため、
-  `to_thread`・`create_task`・`wait`・`CancelledError` を使う。通信・SDKは所有しない。
-  独立Slack/Discordの `standalone.py` は接続・task終了待ちのasyncioも使用する。
-  正確なSDK/asyncio許可は `ci/gates.py` に限定し、通常adapterへ拡張しない。
-  独立LINE WORKSの `__main__.py` だけは常駐起動/停止用の
-  `Event`・`get_running_loop`・`wait_for`・`run`・`create_task` も使う
-- テストは一時DB+スタブのみ。実 MCS・Discord・Slack・LINE WORKS・Keychain・原本DB・
-  ローカルLLM・Jev へ**一切アクセスしない**
-- 患者データ・秘密情報は repo に入れない（`data/`・`.env`・`config.json`等は ignore 済み）
-  — ベンチ・few-shot・テスト fixture は**完全合成のみ**（実投稿の匿名化も不可）
-- **安全ゲートを壊さない**: 既読化は snapshot timestamp 必須、no-redirect/no-proxy、
-  人承認操作は `--confirm-human`+`reason`+receipt 経路のみ
-- 「記録が見つからない」≠「対応がなかった」— 未対応・未返信などの候補提示はこの区別を保持する。
-  表示の簡潔さは別扱いで、観測済みの0件（スタンプなし等）は行ごと省略してよい。未取得・取得失敗は明示する
-  区別は文言で保つ（「未対応」と断定しない）。チャット表示に責任回避の但し書きや「AI判定」等の出所ラベルは付けない（所有者 2026-10-08）
-- 大きな凝集モジュール（`ledger.py`/`mcs_adapter.py`/`semantic_drain`）を
-  行数だけで機械分割しない
+- `mcs/`: `core/`（保存基盤）・`llm/`（共通推論）・`ingest/`・`extract/`・`patients/`・`medications/`・`signals/`・`semantic/`・`stamps/`・`notify/`・`views/`・`export/`・`ops/`。
+  flat import を維持する。エントリポイントは `mcs/` を sys.path に追加して `_mcs_path` を import する（`.py` のある配下を任意の深さで登録）。
+  `mcs/` 直下の import モジュールは `_mcs_path.py` だけ。旧配置に同名モジュールが残ると誤読込せず停止する。
+- 抽出: `extract/rules/`＝ルール（v1）、`extract/llm/`＝現行LLM（旧配置v4）、`extract/clinical/`＝臨床値の共通処理。`patients/rollup.py` と
+  `semantic/` は世代横断。世代番号は配置名と独立し、v2/v3 は git 履歴にだけある。`extract/eval/`・`semantic/eval/` は定期処理から読まない。
+  LLM 枠は新着・対話1、バックログ2。抽出世代・QC・公開条件・モデルの既定は `mcs/extract/`・`mcs/semantic/` と仕様で確かめ、要約から固定しない。
+- 収集: MCS サーバー負荷のため未読収集は10分間隔。`stage_self_probe` は未保管の最新 id を bounded 履歴取得し、取れない id は `patients.probe_mid` に記録して再取得を抑える。
+- 通知: `adapters/{slack,discord,lineworks,common}/`（独立接続も接続先配下）。`hermes_plugin/` は Hermes 接続・互換入口、`lineworks_adapter/` は独立CLI入口。
+  推奨通知先と README 先頭画面は Slack、Discord は対応する選択肢として残す。
+- スタンプ: `mcs/stamps/` が種別・読取り・表示・人承認操作を所有。送信は操作者1人と MCS アカウントの設定時だけ既定ON（`stamps.enabled=false` で無効）。
+  `stamp_write` の承認記録・復元用記録を通し、通信は既存の `MCSAdapter` だけ（`docs/specs/stamp-management.md`）。
+- 独立実行: `runtime_mode=standalone` の `mcs_standalone/` が単一host・6定期ジョブ・cmd取込・抽出worker2本を所有（`docs/guides/STANDALONE.md`）。未指定は Hermes 経路。
+- 検証: `tests/` は実行領域に対応、`integration/` は統合、`evaluation/` は完全合成の評価資産。conftest がヘルパー import と socket 遮断を担う。
+- `resources/drug-master/`: 公式公開 master の原本と出典・版・hash の manifest（実患者データでも fixture でもない）。リリース時の更新確認・同梱検証と、私有辞書への変換・承認・有効化を分ける。
+- 文書: 利用は `docs/guides/`、開発は `docs/development/`、契約は `docs/specs/`。第一層ディレクトリを足したら（ブートストラップは自動対応）この節と `deployment/` のパス表記も更新する。
 
-## 並列開発と継続投入
+## 生成物・変更記録・リリース
 
-- 複数の独立した実装がある場合は並列開発を優先する。ファイル所有範囲・依存・受入条件を分け、競合する共有ファイルは同時編集しない。
-- 親は着手可能な未完タスクを保持し、完了通知ごとに結果と差分を確認して、空いたエージェントへ次の独立タスクを継続投入する。全エージェントの終了を待つ一括バリアは置かない。
-- 子の検証・親の統合・文書整合も独立範囲で並行する。親は統合と共有境界の検証を続け、同じ確認や成功済みテストを無変更で繰り返さない。
-- 統合結果・失敗・依存の変更で計画の前提が変わったら、その箇所の計画レビューと再設計を行い、担当範囲・受入条件・次の投入順へ反映して実装を続ける。レビューだけを繰り返して実装を止めず、根拠のない範囲縮小や必須ゲートの省略はしない。
-- 並列化は安全ゲート・人承認・実データ非使用・必須検証を省略する理由にしない。依存待ちや承認待ちは明示し、別の着手可能タスクを先に進める。
+- `mcs/**/*.py` の追加、docstring の変更、検知器・統計・サブコマンドの追加では `update_readme.py` を実行する。生成表は `docs/development/DEVELOPMENT.md`、
+  `README.md` は `GENERATED:release` だけ。生成部分は手編集しない。docstring 先頭文は公開されるので1文要約にする。
+- Slack 画面例は完全合成の説明図。`docs/screenshots/slack-gallery/README.md` のソース対応を確認し、画面変更時は SVG・PNG を一緒に再生成して
+  `python3 scripts/development/generate_slack_gallery.py --check` で検証する。
+- 実行時の挙動を追加・変更・修正・削除したら、同じ作業内で `changes/<識別子>.json` を日本語で作る（形式 `changes/README.md`）。
+  summary は利用者への影響を先に、upgrade に必要な操作と適用条件を書く。モデル・取得範囲・通知・既読化・承認条件・既定値の変更は省略しない。
+  根拠のない性能数値・実患者情報・実投稿の匿名化例は書かない。
+- リリース・準備・リリース前監査は `release-mcs` skill（正本 `~/.agents/skills/release-mcs/SKILL.md`）に従う。毎回公式医薬品マスターの更新を確認し、
+  新版は同じ候補へ組み込んで出典・hash・版・利用条件・変換境界を検証する。確認できない新版を「更新なし」と扱わない。
+  本番辞書を自動で承認・有効化しない。CHANGELOG・GitHub Release の書式と生成は `docs/development/RELEASE_NOTES.md`、
+  README の見直し記録は `docs/development/README_MAINTENANCE.md` に従う。
 
-## README 自動生成
+## 並列開発
 
-`mcs/**/*.py` 追加・docstring 変更・検知器/統計/サブコマンド追加時は
-`python3 scripts/development/update_readme.py` を実行（`GENERATED:*` マーカー内を再生成）。
-生成ブロックは `docs/development/DEVELOPMENT.md`（開発・運用リファレンス）に置く —
-`README.md` は利用者向けなので生成表は持たない。最新の変更要約だけは
-`GENERATED:release`としてCHANGELOGから生成する。
-通知先の推奨とREADMEの先頭画面はSlack。Discordは対応する選択肢として残す。
-Slack画面例は完全合成の説明図を使い、`docs/screenshots/slack-gallery/README.md`の
-ソース対応を確認する。画面変更時はSVG・PNGを一緒に再生成し、
-`python3 scripts/development/generate_slack_gallery.py --check`で画像の整合を検証する。
-新しい第一層サブディレクトリを足す場合はブートストラップが自動対応するが、
-`AGENTS.md` の構成説明と `deployment/` のパス表記も更新する。
-docstring 先頭文は公開されるので1文要約にする。
+- 独立した実装は並列で進める。ファイル所有範囲・依存・受入条件を分け、共有ファイルを同時に編集しない。
+- 親は未完タスクを保持し、完了通知ごとに結果と差分を確認して空いた担当へ次の独立タスクを渡す（全員の終了を待つ一括バリアは置かない）。
+  成功済みの確認を無変更で繰り返さない。統合結果や失敗で前提が変わったら、その箇所を再計画して実装を続ける。根拠のない範囲縮小や必須ゲートの省略はしない。
+- 並列化を、安全ゲート・人承認・実データ非使用・必須検証を省く理由にしない。依存待ち・承認待ちは明示し、ほかの着手可能なタスクを進める。
 
-## リリースノート
+## 連携
 
-- このリポジトリのリリース・準備・リリース前監査には、MCS専用の `release-mcs`（リリースMCS）skillを使う。正本は `~/.agents/skills/release-mcs/SKILL.md`。共通リリース手順に加え、毎回公式医薬品マスターサイトの更新を確認し、新版があれば同じリリース候補へ組み込み、出典・hash・版・利用条件・変換境界を検証する。確認不能・未検証の新版を「更新なし」と扱わない。公開master同梱は認めるが、患者情報・実投稿のfixture化や本番辞書の自動承認/有効化は認めない。
-
-- CHANGELOGとGitHub Releaseは毎回`docs/development/RELEASE_NOTES.md`の共通ルールを守る。
-  段落は「新機能」「改善」「不具合修正」「動作・設定の変更」「更新時の注意」
-  の順。空の分類は出さず、技術詳細は末尾で折りたたむ。
-  各項目は太字の短いタイトルと次行の説明（原則1〜3文）で記載する。
-- 実行時の挙動を追加・変更・修正・削除するときは、同じ作業内で
-  `changes/<識別子>.json`を日本語で作成する。形式は`changes/README.md`。
-- summaryは利用者への影響を先に書き、upgradeには必要な操作と適用条件を記録する。
-  モデル・取得範囲・通知・既読化・承認条件・既定値の変更は省略しない。
-  根拠のない性能数値、実患者情報、実投稿の匿名化例は使用しない。
-- リリース準備を依頼されたら、`docs/development/RELEASE_NOTES.md`の手順に従い、記録から
-  見出しと要約を作成し`release_notes.py build`でCHANGELOGを生成する。
-  GitHub Release本文は同じversionのCHANGELOGからexportし、別に作文しない。
-- 毎回のリリース準備で、READMEの機能・画面例・導入・安全・ドキュメント導線を
-  新しい変更とソースに照らして見直す。`docs/development/README_MAINTENANCE.md`に従い、
-  `docs/development/readme-review.json`に新しいversion・各項目の確認内容と根拠を記録する。
-  変更不要でも照合結果を書く。versionだけの更新で済ませない。
-  buildはREADMEの最新変更も更新する。生成部分は手編集せず、
-  `python3 scripts/development/readme_release.py --check`で同期・記録・リンクを検証する。
-- tag workflowは下書きを作り、mainのCHANGELOGを既存Releaseへ自動同期する。
-  タイトル・本文以外は変更しない。公開済み本文の変更も先にCHANGELOGへ反映する。
-  push・PR・tag・公開の承認は従来の規約に従う。
-
-## 現行の連携方針
-
-ユーザー指示（2026-10-02）により agmsg は廃止。以下の古い managed block の
-agmsg 通知・所有者宣言・受信コマンド・フックは実行しない。保存済み履歴は保持する。
-Devflow の PLAN/STATUS/git/VERIFY/REVIEW 正本、役割分離、書込み所有権、
-人承認・外部操作の境界は維持する。現存しない中央設定を推測で再作成したり、
-別の連携サービス・常駐処理へ自動置換したりしない。
-
-<!-- BEGIN DEVFLOW MANAGED -->
-## Devflow 共通運用（managed block — この block 内のみ devflow が更新する）
-
-- 中央管理: `~/.config/devflow/`（registry/policy/roles/bin）,
-  task 正本: `~/.local/state/devflow/tasks/mcs/<task_id>/`,
-  worktree: `~/.herdr/worktrees/devflow/mcs/<task_id>/`
-- agmsg team `devflow-mcs` seats: planner(codex) / builder(devin) / reviewer(codex)。
-  delivery: codex seats=turn（`.codex/hooks.json` Stop+PostToolUse hook）、
-  builder=off（手動受信 `bash ~/.agents/skills/agmsg/scripts/inbox.sh devflow-mcs builder`）。
-  agmsg は通知用のみ — task 状態の正本は PLAN/STATUS/git/VERIFY/REVIEW。
-- 役割定義: `~/.config/devflow/roles/`（planner=計画のみ / builder=worktree内実装 /
-  reviewer=独立レビュー・修正禁止）
-- 実行権限: Astra planner/reviewer = Auto 相当（codex `-s workspace-write
-  -a on-request` + `approvals_reviewer="user"` + `sandbox_workspace_write.network_access=false`。
-  workspace-write は業務コードへの書込みを技術的に禁止しない — 計画/レビュー専任は
-  role 規約と diff 検査で守る）。Devin builder = Bypass（`--permission-mode dangerous`、
-  OS sandbox 無し — 境界は role 規約と devflow 権限 deny ルール）。
-- task packet: PLAN.md ACCEPTANCE.md STATUS.json HANDOFF.md VERIFY.md REVIEW.md。
-  PLAN/ACCEPTANCE は `devflow ready` で hash 固定。変更は Planner へ差し戻し新版で。
-- 外部操作禁止: push/PR/merge/deploy/外部送信/本番・実データ変更は明示承認のみ。
-  commit は Builder が PLAN の Commit Group 設計に沿った検証済み論理グループ単位で
-  worktree 内の作業 branch にのみ行う。秘密情報・患者情報を agmsg/文書に含めない。
-- 受入: ACCEPTED は技術的受入のみ。merge/deploy の許可ではない。
-<!-- END DEVFLOW MANAGED -->
-
-<!-- OPENWIKI:START -->
-
-## OpenWiki
-
-This repository has a generated `openwiki/` evidence index. It is optional just-in-time context, not required startup reading.
-
-- Do not enumerate, preload, or search wikis at task start. Use retrieval when the user asks for it, when unfamiliar architecture or dependency behavior materially affects the task, or when source inspection leaves an important uncertainty. Stop once the question is grounded.
-- When those conditions apply and OpenWiki retrieval tools are available, use `openwiki_search` for just-in-time context and `openwiki_read` for the relevant complete sections. If search returns `workspace_required`, ask which listed workspace to use and retry with its ID.
-- Use `openwiki_list_workspaces` or `openwiki_list_wikis` when workspace membership itself needs to be discovered.
-- If the retrieval tools are unavailable, read `openwiki/quickstart.md` and follow its links to the relevant pages.
-- Treat source code and tests as authoritative. A brief's unknowns and review items are verification gaps, not automatic requirements.
-- Prefer the narrowest quiet validation that proves the changed behavior. Preserve complete failure output.
-
-The scheduled OpenWiki GitHub Actions workflow refreshes the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
-
-<!-- OPENWIKI:END -->
+agmsg team `devflow-mcs` と devflow の運用は廃止済み（2026-10-02）。その座席・受信コマンド・フックを使わず、中央設定を推測で再作成しない。
+同じ Herdr タブの Codex・Claude 連携はユーザー全体設定の規約に従う。レビューの受入は技術的な受入で、merge・配備の許可ではない。

@@ -1,5 +1,5 @@
 """CI workflow guards: bounded jobs, complete failure output, a weekly run
-and a macOS lane. (The OpenWiki workflow is maintained separately.)"""
+and a macOS lane."""
 import re
 from pathlib import Path
 
