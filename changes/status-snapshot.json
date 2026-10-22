@@ -1,0 +1,16 @@
+{
+  "category": "added",
+  "title": "稼働状況を数値と状態コードだけで書き出す状態スナップショット",
+  "summary": "mcs/ops/status_snapshot.pyが、MCSの稼働状況（全体状態、収集、通知、AI解析、バックアップ、ディスク）と、このMacのCPU負荷・メモリー・スワップ・ディスク・起動時間・ローカルLLMの応答・ネットワーク・MCS/Hermesジョブを、1つのJSONにまとめます。外部の監視（csdc）へ渡すための部品です。患者情報・本文・ホスト名・IPアドレスは含めません。",
+  "upgrade": "操作は不要です。常駐処理や送信は追加しません。外部の監視から呼ぶか、`python3 mcs/ops/status_snapshot.py --out <path>` で所有者だけが読めるファイルに書き出します。項目を増やすときは mcs/ops/status_fields.json に1行追加します（コード変更なし）。",
+  "details": [
+    "項目表に書かれた値だけを、宣言した型（整数・数値・真偽・状態コード・状態コードの一覧・コード別件数）と完全に一致する場合に出す。自由文字列は出さず、型が違う・取得できない項目は名前だけをunavailableに載せ、0と不明を区別する。",
+    "読み取り元はMCSのdataフォルダ内のファイル（リンクを辿らず1 MiB上限）と、このMacのOS付属コマンド（3秒上限）、ループバックのllama-server（プロキシ・リダイレクトなし、2秒・64 KiB上限）だけ。",
+    "ジョブはlaunchctl listの終了コードをそのまま報告する（run_checkはロック待ちで意図的に3を返すため、0以外を障害とは断定しない）。"
+  ],
+  "refs": [
+    "mcs/ops/status_snapshot.py",
+    "mcs/ops/status_fields.json",
+    "tests/ops/test_status_snapshot.py"
+  ]
+}
