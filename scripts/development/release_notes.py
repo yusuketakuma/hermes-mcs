@@ -26,6 +26,23 @@ def version(value):
     return value
 
 
+def check_version_bump(previous, target):
+    """Validate new release numbering without rewriting historical versions."""
+    version(target)
+    new = tuple(map(int, target.split(".")))
+    if target != ".".join(map(str, new)):
+        raise ValueError("新しいversionの各桁に先頭ゼロは使用できません")
+    if previous is None:
+        return
+    old = tuple(map(int, version(previous).split(".")))
+    if new <= old:
+        raise ValueError("新しいversionは直前のversionより大きくしてください")
+    if new[0] > old[0] and new[1:] != (0, 0):
+        raise ValueError("メジャー更新では機能・修正の桁を0にしてください")
+    if new[0] == old[0] and new[1] > old[1] and new[2] != 0:
+        raise ValueError("機能アップデートでは修正の桁を0にしてください")
+
+
 def validate(item):
     required = {"category", "title", "summary", "upgrade", "details", "refs"}
     if not isinstance(item, dict) or set(item) != required:
@@ -243,6 +260,8 @@ def main(argv=None):
             unreleased = re.split(r"^## \[", after, maxsplit=1, flags=re.M)[0]
             if unreleased.strip():
                 raise ValueError("手書きのUnreleasedをchangesへ移してから生成してください")
+            previous = check_changelog(text)
+            check_version_bump(previous[0] if previous else None, args.version)
             archive = args.root / "changes" / "archive" / args.version
             if archive.exists():
                 raise ValueError("archiveが既に存在します")

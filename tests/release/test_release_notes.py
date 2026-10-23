@@ -25,6 +25,19 @@ class ReleaseNotesTest(unittest.TestCase):
                     upgrade="再起動が必要です。", details=["投稿IDを再利用。"],
                     refs=["#20"])
 
+    def test_release_numbering_preserves_numeric_order_and_resets_lower_parts(self):
+        for old, new in (("1.0.29", "1.1.0"), ("1.1.0", "1.1.1"),
+                         ("1.1.7", "1.2.0"), ("1.9.9", "1.10.0"),
+                         ("1.9.9", "2.0.0"), (None, "1.0.0")):
+            with self.subTest(old=old, new=new):
+                notes.check_version_bump(old, new)
+        for old, new in (("1.1.0", "1.1.0"), ("1.1.0", "1.0.30"),
+                         ("1.1.0", "2.1.0"), ("1.1.0", "2.0.1"),
+                         ("1.1.0", "1.2.1"), ("1.1.0", "01.2.0"),
+                         (None, "1.00.0")):
+            with self.subTest(old=old, new=new), self.assertRaises(ValueError):
+                notes.check_version_bump(old, new)
+
     def test_validate_rejects_missing_unknown_and_multiline(self):
         for change in ({"refs": []}, {"category": "unknown"}, {"category": []},
                        {"title": "a\nb"}, {"summary": "<details>"}):
@@ -82,6 +95,25 @@ class ReleaseNotesTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 notes.main(args)
             self.assertEqual(changelog.read_text(encoding="utf-8"), text)
+
+    def test_invalid_bump_leaves_pending_records_and_release_files_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "changes").mkdir()
+            record = root / "changes/fix.json"
+            record.write_text(json.dumps(self.item()), encoding="utf-8")
+            changelog = root / "CHANGELOG.md"
+            changelog.write_text("## [Unreleased]\n\n## [1.1.0] — 2026-10-01\n\n"
+                                 + notes.render([self.item()], "旧版", "旧版です。"), encoding="utf-8")
+            readme = root / "README.md"
+            readme.write_text("unchanged", encoding="utf-8")
+            before = {p: p.read_bytes() for p in (record, changelog, readme)}
+            for target in ("1.0.30", "1.2.1", "2.1.0", "01.2.0"):
+                with self.subTest(target=target), self.assertRaises(SystemExit):
+                    notes.main(["--root", tmp, "build", "--version", target,
+                                "--date", "2026-10-23", "--headline", "変更", "--summary", "説明。"])
+                self.assertEqual({p: p.read_bytes() for p in before}, before)
+                self.assertFalse((root / "changes/archive").exists())
 
     def test_format_rejects_old_empty_and_reordered_headings(self):
         valid = notes.render([self.item()], "通知を改善", "返信を更新します。")

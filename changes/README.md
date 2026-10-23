@@ -23,3 +23,6 @@ schema・運用手順・著名リポジトリとの比較は`docs/development/RE
 性能向上・精度向上の数値は実測がある場合だけ書く。
 
 `build`は記録をversion別の`archive/`へ移動する。archiveは履歴根拠として保持する。
+
+採番は[バージョン番号の方針](../docs/development/RELEASE_NOTES.md#バージョン番号の方針2026-10-23から)に従う。
+categoryだけで桁を自動決定せず、実際の機能と公開契約への影響を確認する。
