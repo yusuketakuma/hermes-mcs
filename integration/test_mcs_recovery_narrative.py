@@ -105,17 +105,23 @@ _td_thread_init = TD.FakeThread.__init__
 def _td_thread_init2(self, tid):
     _td_thread_init(self, tid)
     self.files = []
-    self._next_id = 8000
+    self.parent_id = int(TD.SETTINGS["channel_id"])
+    self.guild = SimpleNamespace(id=int(TD.SETTINGS["guild_id"]))
 
 
 async def _td_thread_send(self, content=None, **kw):
+    message = TD._HistMsg(content, self)
+    message.channel = self
+    message.view = kw.get("view", TD.MISSING)
+    message.attachments = []
     f = kw.get("file")
-    self._next_id += 1
     if f is not None:
         self.files.append({"path": f.path, "filename": f.filename})
-    else:
-        self.sent.append(content)
-    return SimpleNamespace(id=self._next_id)
+        size = f.path.getbuffer().nbytes if hasattr(f.path, "getbuffer") else Path(f.path).stat().st_size
+        message.attachments = [SimpleNamespace(filename=f.filename, size=size)]
+    self.sent.append(content)
+    self.messages.append(message)
+    return message
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +139,50 @@ def isolated_narrative_state(monkeypatch):
         monkeypatch.setattr(mcs_update, name, getattr(mcs_update, name))
     monkeypatch.setattr(service_management, "retire_to_snapshot", service_management.retire_to_snapshot)
     monkeypatch.setattr(mcs_util, "load_config", mcs_util.load_config)
+
+
+class _NarrativeSlackClient(TS.FakeClient):
+    """One synthetic Slack server survives worker changes and assigns unique remote IDs."""
+    def __init__(self):
+        super().__init__()
+        self.file_counter = [0]
+
+    async def chat_postMessage(self, **kwargs):
+        response = await super().chat_postMessage(**kwargs)
+        if "thread_ts" not in kwargs:
+            response["ts"] = self._next_ts()
+        return response
+
+    async def _files_upload_v2(self, **kwargs):
+        self._fid_n = self.file_counter[0]
+        response = await super()._files_upload_v2(**kwargs)
+        self.file_counter[0] = self._fid_n
+        return response
+
+
+def _slack_world(led, cfg, client=None):
+    world = TS._mkworld(led)
+    world.client = client if client is not None else _NarrativeSlackClient()
+    world.sender._client = world.client
+    notify_spool.publish_flags(cfg, str(world.root))
+    return world
+
+
+def _body_posts(client):
+    # Card primaries also live in a thread with layout 4; they use parse=none instead.
+    return [post for post in client.thread_posts if post.get("mrkdwn") is False]
+
+
+async def _deliver_slack(world, led, event, cfg):
+    assert await world.sender.bind()
+    world.worker.acquire_scope_lock()
+    try:
+        for _ in range(8):
+            await world.worker.tick()
+            notify_cmds.drain_int_commands(led, {"errors": []}, cfg, str(world.root))
+            _dispatch(led, event, cfg)
+    finally:
+        world.worker.release_scope_lock()
 
 
 def _threads(bot):
@@ -368,8 +418,10 @@ class _Narrative:
 
 
 @patch("present_slack.BODY_ON_FACE", False)
-def _run_narrative(tmp_path):
-    """The ordered legacy thread-body delivery/restore scenario — returns its probes."""
+def _run_narrative(tmp_path, *, reply_cards=True):
+    """The ordered delivery/restore scenario for legacy and per-reply layouts."""
+    slack_cfg = {**SLACK, "notify": {**SLACK["notify"], "reply_cards": reply_cards}}
+    discord_cfg = {**TD.CFG, "notify": {**TD.CFG["notify"], "reply_cards": reply_cards}}
     N = _Narrative(tmp_path)
     led = _ledger.Ledger(str(N.data / "ledger.db"))
     N.open_admission()
@@ -477,16 +529,21 @@ def _run_narrative(tmp_path):
 
         # ---- 5. Slack: card + ALL thread body parts + file part ----
         ev = _intent(led, payload={"message_ids": [1, 2]})
-        assert _dispatch(led, ev, SLACK)["dispatched"]
-        sw = TS._mkworld(led)
-        asyncio.run(TS._granted_card(sw.worker, led, sw.root))
+        assert _dispatch(led, ev, slack_cfg)["dispatched"]
+        sw = _slack_world(led, slack_cfg)
+        asyncio.run(_deliver_slack(sw, led, ev, slack_cfg))
         render = _latest_render(led, card_id=1)
         did = render["delivery_id"]
         parts = _parts(led, did)
         kinds = {p_["kind"] for p_ in parts.values()}
-        card_ts = "1790000000.000001"
+        card_ts = led.db.execute("SELECT message_id FROM notification_cards WHERE card_id=1").fetchone()[0]
+        slack_cards = led.db.execute(
+            "SELECT delivery_state,layout FROM notification_cards WHERE transport='slack'").fetchall()
         slack_ok = (
             render["parts_state"] == "complete"
+            and len(slack_cards) == (2 if reply_cards else 1)
+            and all(card["delivery_state"] == "delivered" and card["layout"] == (4 if reply_cards else 3)
+                    for card in slack_cards)
             and kinds == {"card", "thread", "body_part",
                           "attachment_part"}
             and sum(1 for p_ in parts.values()
@@ -512,11 +569,11 @@ def _run_narrative(tmp_path):
         ev2 = dict(led.db.execute(
             "SELECT * FROM notify_outbox WHERE event_id=?",
             (eid,)).fetchone())
-        assert notify_cards.dispatch_intent(led, ev2, TD.CFG,
+        assert notify_cards.dispatch_intent(led, ev2, discord_cfg,
                                             now=TD.NOW)["dispatched"]
         # the runner-published flag names the live transport — the
         # discord adapter claims its spec only when ITS transport is up
-        notify_spool.publish_flags(TD.CFG, str(ddata))
+        notify_spool.publish_flags(discord_cfg, str(ddata))
         from adapters.common import registry as _reg_mod
         from adapters.discord import delivery as _discord_delivery
         reg = _reg_mod.Registry(str(ddata / "discord_state"))
@@ -527,10 +584,10 @@ def _run_narrative(tmp_path):
             log=lambda *_a, **_k: None)
 
         async def _ddeliver(w):
-            for _ in range(3):
+            for _ in range(8):
                 await w.tick()
-                notify_cmds.drain_int_commands(led, {}, TD.CFG,
-                                               str(ddata))
+                notify_cmds.drain_int_commands(led, {}, discord_cfg, str(ddata))
+                notify_cards.dispatch_intent(led, ev2, discord_cfg, now=TD.NOW)
 
         asyncio.run(_ddeliver(worker))
         drender = dict(led.db.execute(
@@ -542,8 +599,13 @@ def _run_narrative(tmp_path):
         dcard = dict(led.db.execute(
             "SELECT * FROM notification_cards WHERE transport='discord'"
         ).fetchone())
+        discord_cards = led.db.execute(
+            "SELECT delivery_state,layout FROM notification_cards WHERE transport='discord'").fetchall()
         N.check("discord_card_full_thread_file_parts",
-                dcard["delivery_state"] == "delivered"
+                len(discord_cards) == (2 if reply_cards else 1)
+                and all(card["delivery_state"] == "delivered" and card["layout"] == (4 if reply_cards else 3)
+                        for card in discord_cards)
+                and dcard["delivery_state"] == "delivered"
                 and drender["parts_state"] == "complete"
                 and all(pp["state"] == "delivered"
                         for pp in dparts.values())
@@ -608,8 +670,68 @@ def _run_narrative(tmp_path):
         # PRE-SEND (render+parts exist, no attempts, no wire posts) —
         # the restore below rolls back to exactly this state while the
         # disk journal outlives it.
-        ev3 = _intent(led, payload={"message_ids": [1, 2]})
-        assert _dispatch(led, ev3, SLACK)["dispatched"]
+        # A fresh source must have no prior delivery: re-dispatching [1,2]
+        # correctly reuses their receipts and cannot exercise a new mid-send crash.
+        # The recovery reply gets a short, already-delivered parent. Repeating
+        # the long initial source as BOTH parent and reply would legitimately
+        # exceed the unchanged whole-thread summary context ceiling.
+        if reply_cards:
+            recovery_parent = _patient(led)
+            recovery_parent.messages = [_message(4, body="メド[42]番を投与します。")]
+            led.save_patient(recovery_parent, semantic=True)
+            parent_drain = _drain(led, _NarrativeJev(), llm=semantic_transport.llm_chat)
+            assert parent_drain["done"] >= 1
+            assert led.db.execute(
+                "SELECT 1 FROM artifacts WHERE kind=? AND message_id=4",
+                (v4.KIND_V4,)).fetchone()
+            parent_event = _intent(led, payload={"message_ids": [4]})
+            assert _dispatch(led, parent_event, slack_cfg)["dispatched"]
+            notify_spool.publish_flags(slack_cfg, str(sw.root))
+            asyncio.run(_deliver_slack(sw, led, parent_event, slack_cfg))
+            parent_card = led.db.execute(
+                "SELECT delivery_state,thread_id FROM notification_cards "
+                "WHERE transport='slack' AND root_message_id=4").fetchone()
+            assert parent_card["delivery_state"] == "delivered" and parent_card["thread_id"]
+        fresh = _patient(led)
+        fresh.messages = [_message(3, parent=4 if reply_cards else None,
+                                   body=body + "\n合成の新しい報告です。")]
+        led.save_patient(fresh, semantic=True)
+        fresh_drain = _drain(led, _NarrativeJev(), llm=semantic_transport.llm_chat)
+        fresh_v4 = led.db.execute(
+            "SELECT 1 FROM artifacts WHERE kind=? AND message_id=3",
+            (v4.KIND_V4,)).fetchone()
+        if fresh_v4 is None:
+            jobs = [dict(row) for row in led.db.execute(
+                "SELECT kind,message_id,state,attempts,next_try,payload "
+                "FROM fetch_jobs WHERE kind='semantic'")]
+            diagnostics = []
+            for row in led.db.execute(
+                    "SELECT kind,content,meta FROM artifacts WHERE message_id=3"):
+                content, meta = json.loads(row["content"]), json.loads(row["meta"] or "{}")
+                content = content if isinstance(content, dict) else {}
+                diagnostics.append({"kind": row["kind"],
+                                    "status": content.get("status"),
+                                    "stage": meta.get("stage"),
+                                    "audit_status": meta.get("audit_status"),
+                                    "technical_status": meta.get("technical_status"),
+                                    "codes": [finding.get("code") for finding in
+                                              content.get("findings", [])]})
+            pytest.fail(f"fresh source3 v4 absent: {fresh_drain=}; {jobs=}; {diagnostics=}")
+        _attach(led, N.tmp, mid=3, fid="file-att-3", name="att-03.bin",
+                blob=b"synthetic-recovery-attachment")
+        ev3 = _intent(led, payload={"message_ids": [3]})
+        assert _dispatch(led, ev3, slack_cfg)["dispatched"]
+        recovery_card_id = led.db.execute(
+            "SELECT MAX(card_id) FROM notification_intent_cards WHERE event_id=?",
+            (ev3["event_id"],)).fetchone()[0]
+        recovery_render = _latest_render(led, card_id=recovery_card_id)
+        recovery_delivery_id = recovery_render["delivery_id"]
+        recovery_parts = _parts(led, recovery_delivery_id)
+        assert sum(part["kind"] == "body_part" for part in recovery_parts.values()) > 4
+        assert all(part["state"] == "pending" and part["attempt_id"] is None
+                   for part in recovery_parts.values())
+        body_posts_before_recovery = len(_body_posts(sw.client))
+        uploads_before_recovery = len(sw.client.upload_calls)
         led.db.commit()
         led.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         backup = N.data / "backups" / "pre-send.db"
@@ -617,30 +739,32 @@ def _run_narrative(tmp_path):
         led.close()
         shutil.copy2(N.data / "ledger.db", backup)
         led = _ledger.Ledger(str(N.data / "ledger.db"))
-        sw2 = TS._mkworld(led)
+        sw2 = _slack_world(led, slack_cfg, sw.client)
 
         async def _crash():
             assert await sw2.sender.bind()
             sw2.worker.acquire_scope_lock()
             try:
-                await sw2.worker.tick()
-                notify_cmds.drain_int_commands(led, {"errors": []},
-                                               SLACK, str(sw2.root))
                 orig = sw2.worker._perform_part
 
                 async def exploding(claim, part, ctx):
-                    if part["part_id"].startswith("body:"):
+                    if (claim["spec"]["delivery_id"] == recovery_delivery_id
+                            and part["part_id"].startswith("body:")):
                         raise asyncio.CancelledError()
                     return await orig(claim, part, ctx)
 
                 sw2.worker._perform_part = exploding
-                with suppress(asyncio.CancelledError):
-                    await sw2.worker.tick()
+                with pytest.raises(asyncio.CancelledError):
+                    for _ in range(8):
+                        await sw2.worker.tick()
+                        notify_cmds.drain_int_commands(
+                            led, {"errors": []}, slack_cfg, str(sw2.root))
             finally:
                 sw2.worker.release_scope_lock()
 
         asyncio.run(_crash())
-        posts_at_crash = len(sw2.client.thread_posts)
+        posts_at_crash = len(_body_posts(sw2.client)) - body_posts_before_recovery
+        assert len(sw2.client.upload_calls) == uploads_before_recovery
 
         # the staged update migrated the live schema forward — the
         # restore below must roll back one schema step (live==backup
@@ -695,7 +819,7 @@ def _run_narrative(tmp_path):
                   "attempt_id": "a" * 16, "worker_id": "b" * 8,
                   "delivery_id": "held-probe", "render_rev": 1,
                   "payload_hash": "h", "route_epoch": 1,
-                  **TS.SCOPE}, SLACK, now=NOW)
+                  **TS.SCOPE}, slack_cfg, now=NOW)
         N.check("restore_held_without_receipt",
                 rc == 2
                 and (N.data / "ledger.db").read_bytes() == live_bytes
@@ -712,24 +836,24 @@ def _run_narrative(tmp_path):
         led.close()
         assert mcs_update.recover_interrupted() == 0
         led = _ledger.Ledger(str(N.data / "ledger.db"))
-        rec = notify_reconcile.reconcile_after_restore(led, SLACK)
+        rec = notify_reconcile.reconcile_after_restore(led, slack_cfg)
         N.check("reconcile_after_restore_settles_journal",
                 notify_spool.restore_pending(str(N.data)) is None
                 and rec.get("verdicts") is not None,
                 {"verdicts": [v.get("verdict") for v in
                               rec.get("verdicts") or []],
                  "held": len(rec.get("held") or [])})
-        sw3 = TS._mkworld(led)
+        sw3 = _slack_world(led, slack_cfg, sw.client)
 
         async def _resume():
             assert await sw3.sender.bind()
             sw3.worker.acquire_scope_lock()
             try:
                 await sw3.worker.reconcile()
-                for _ in range(3):
+                for _ in range(8):
                     await sw3.worker.tick()
                     notify_cmds.drain_int_commands(
-                        led, {"errors": []}, SLACK, str(sw3.root))
+                        led, {"errors": []}, slack_cfg, str(sw3.root))
             finally:
                 sw3.worker.release_scope_lock()
 
@@ -740,18 +864,21 @@ def _run_narrative(tmp_path):
         # the part whose send outcome was never proven (worker_crash)
         # must stay 'unknown' — held for reconcile, never re-sent.
         r3 = led.db.execute(
-            "SELECT * FROM notification_renders WHERE transport='slack' "
-            "ORDER BY card_id DESC, render_rev DESC LIMIT 1").fetchone()
+            "SELECT * FROM notification_renders WHERE delivery_id=?",
+            (recovery_delivery_id,)).fetchone()
         parts3 = _parts(led, r3["delivery_id"])
         body3 = [p for p in parts3.values() if p["kind"] == "body_part"]
         delivered3 = [p for p in body3 if p["state"] == "delivered"]
         unknown3 = [p for p in body3 if p["state"] == "unknown"]
-        posts3 = sw3.client.thread_posts
+        posts3 = _body_posts(sw3.client)[body_posts_before_recovery + posts_at_crash:]
         N.check("resume_after_restore_no_duplicates",
                 len(posts3) + posts_at_crash == len(delivered3)
                 and len(unknown3) == 1
                 and unknown3[0]["error_code"] == "worker_crash"
                 and all(p["remote_id"] for p in delivered3)
+                and len({p["remote_id"] for p in delivered3}) == len(delivered3)
+                and len(delivered3) > 0
+                and len(sw3.client.upload_calls) == uploads_before_recovery + 1
                 and r3["parts_state"] == "incomplete",
                 {"posts_before": posts_at_crash,
                  "posts_resumed": len(posts3),
@@ -788,8 +915,9 @@ def _auth(tmp_path, **over):
 # the test
 # ------------------------------------------------------------------
 
-def test_mcs_recovery_narrative(tmp_path):
-    res = _run_narrative(tmp_path)
+@pytest.mark.parametrize("reply_cards", [False, True], ids=["legacy-thread", "per-reply-cards"])
+def test_mcs_recovery_narrative(tmp_path, reply_cards):
+    res = _run_narrative(tmp_path, reply_cards=reply_cards)
     failed = [c["name"] for c in res.checks if not c["met"]]
     assert not failed, f"unmet narrative probes: {failed} " \
         f"-> {[c for c in res.checks if not c['met']]}"

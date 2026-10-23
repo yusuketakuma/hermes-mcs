@@ -243,8 +243,11 @@ def pytest_unconfigure(config) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _collecting_cards_unless_requested(monkeypatch):
+def _collecting_cards_unless_requested():
     """Suites written for the collecting card layout keep it; reply-card tests
     set notify.reply_cards explicitly (the shipped default is pinned separately)."""
     import notify_cards
-    monkeypatch.setattr(notify_cards, "REPLY_CARDS_DEFAULT", False)
+    # Do not prolong the tests' filesystem patches past tmp_path cleanup.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(notify_cards, "REPLY_CARDS_DEFAULT", False)
+        yield
