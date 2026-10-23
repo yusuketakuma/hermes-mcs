@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "ローカル検証と推論比較で不完全な結果を合格扱いしない",
+  "summary": "固定版Hermesを使うローカル検証で、依存環境以外に未コミットのソースがある場合は停止します。推論比較では、JSONとして読めても出力上限で中断した応答を有効な処理件数に含めません。",
+  "upgrade": "通常の収集・通知の設定変更は不要です。過去の比較結果に正常終了以外の応答が含まれる場合は、変更後の集計条件で確認してください。",
+  "details": [
+    "独立venv内の未追跡・ignoreファイルだけを例外とし、venv外の未追跡・ignoreデータとtracked編集を拒否する。",
+    "新着と過去分の双方でfinish_reason=stopを有効結果の条件とする。実LLMを使った再測定は行っていない。"
+  ],
+  "refs": [
+    "scripts/development/ci_local.sh",
+    "scripts/evaluation/llm_lane_bench.sh"
+  ]
+}

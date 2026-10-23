@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import errno
 import fcntl
 import json
+import io
 import plistlib
 import pytest
 from types import SimpleNamespace
@@ -35,7 +36,32 @@ def _host(tmp_path, monkeypatch, events=None):
         monkeypatch.setattr(runtime, "log", lambda event, **f: events.append((event, f)))
     # never a real child process: tests that count starts patch this again
     monkeypatch.setattr(runtime.subprocess, "Popen", lambda argv, **kw: Child())
-    return runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    monkeypatch.setattr(host, "_start_identity", lambda: None)
+    return host
+
+
+def _complete_identity(host, monkeypatch, job, identity, now, operation=None):
+    """Run the isolated-worker protocol on synthetic I/O, then apply its fenced result."""
+    pid = host.orphan_candidates.get(job) or host.children[job]["process"].pid
+    request = {"pid": pid, "argv": list(host.argv[job]), "operation": int(operation) if operation else None,
+               "generation": host.generation, "owner_pid": runtime.os.getpid()}
+    output = io.StringIO()
+    with monkeypatch.context() as worker:
+        if identity is True or identity is False:
+            found = (1, " ".join(request["argv"]) if identity else "synthetic-other-process")
+            worker.setattr(runtime, "_process_args", lambda _pid: found)
+        elif identity == "exited" or isinstance(identity, tuple):
+            # Only inside the isolated worker: exercise exit/self-parent classification.
+            worker.setattr(runtime, "_process_args", lambda _pid: None if identity == "exited" else identity)
+        else:
+            worker.setattr(runtime, "_is_orphan", lambda pid, argv, owner_pid: identity)
+        worker.setattr(runtime.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode())))
+        worker.setattr(runtime.sys, "stdout", output)
+        runtime._identity_worker()
+    result = json.loads(output.getvalue())
+    host._identity_result({**request, "job": job}, result, now)
+    return result
 
 
 # ---------------------------------------------------------------- H1 connector
@@ -385,7 +411,6 @@ def test_children_of_a_killed_host_are_stopped_or_awaited(tmp_path, monkeypatch)
     (data / service.STATUS_FILE).write_text(json.dumps({"pid": 3999, "children": rows}))
     (data / service.STATUS_FILE).chmod(0o600)
     argv = {4001: host.argv["extract-0"], 4002: host.argv["mcs_check"], 4003: ["/bin/other"]}
-    monkeypatch.setattr(runtime, "_process_args", lambda pid: (1, " ".join(argv[pid])))
     alive = {4001, 4002, 4003}
     sent = []
 
@@ -400,6 +425,9 @@ def test_children_of_a_killed_host_are_stopped_or_awaited(tmp_path, monkeypatch)
     monkeypatch.setattr(runtime.subprocess, "Popen",
                         lambda a, **kw: started.append(a) or Child())
     host.adopt_orphans(QUIET)
+    for job, pid in (("extract-0", 4001), ("mcs_check", 4002), ("cmd", 4003)):
+        _complete_identity(host, monkeypatch, job, argv[pid] == host.argv[job], QUIET,
+                           runtime.signal.SIGTERM if job == "extract-0" else None)
     assert set(host.children) == {"extract-0", "mcs_check"}
     assert sent == [(4001, runtime.signal.SIGTERM)]
     host.tick(QUIET + 1)
@@ -418,10 +446,12 @@ def test_live_child_of_this_host_is_never_adopted(tmp_path, monkeypatch):
     (data / service.STATUS_FILE).write_text(json.dumps(
         {"pid": 3999, "children": {"mcs_check": {"pid": 4002, "kind": "core"}}}))
     (data / service.STATUS_FILE).chmod(0o600)
-    monkeypatch.setattr(runtime, "_process_args",
-                        lambda pid: (runtime.os.getpid(), " ".join(host.argv["mcs_check"])))
+    # The worker reports a readable process owned by this host as non-orphan.
     host.adopt_orphans(QUIET)
-    assert host.children == {}
+    result = _complete_identity(host, monkeypatch, "mcs_check",
+                                (runtime.os.getpid(), " ".join(host.argv["mcs_check"])), QUIET)
+    assert result["sent"] is False
+    assert host.children == {} and host.orphan_candidates == {}
 
 
 # ------------------------------------------------------ manual plist template
@@ -437,43 +467,43 @@ def test_manual_plist_template_keeps_the_host_alive_like_the_rendered_one():
 
 # Adopted PIDs are observed identities, not reusable signal capabilities.
 @pytest.mark.parametrize("operation", ["terminate", "kill"])
-def test_adopted_process_checks_identity_before_each_signal(monkeypatch, operation):
-    clock = [0.0]
-    argv = ["synthetic-worker"]
-    found = [(1, " ".join(argv))]
+def test_adopted_process_checks_identity_before_each_signal(tmp_path, monkeypatch, operation):
+    host = _host(tmp_path, monkeypatch)
+    argv = host.argv["mcs_check"]
     sent = []
-    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(runtime, "_process_args", lambda _pid: found[0])
     monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: sent.append((pid, sig)) if sig else None)
-    assert runtime._is_orphan(4001, argv) is True
-    adopted = runtime._Adopted(4001, argv)
-    # Exit and PID reuse happen before the next periodic identity check.
-    found[0] = (1, "synthetic-other-process")
-    clock[0] = 1.0
+    host.orphan_candidates["mcs_check"] = 4001
+    initial = _complete_identity(host, monkeypatch, "mcs_check", True, 0)
+    assert initial["identity"] is True and initial["sent"] is False
+    adopted = host.children["mcs_check"]["process"]
+    assert adopted.argv == argv
+    # Exit and PID reuse happen before the queued signal's worker checks identity.
     getattr(adopted, operation)()
     assert sent == []
+    result = _complete_identity(host, monkeypatch, "mcs_check", False, 1, adopted.operation)
+    assert result["sent"] is False and sent == []
     assert adopted.poll() == 0
 
 
 def test_adopted_background_reuse_during_term_grace_never_receives_kill(tmp_path, monkeypatch):
     host = _host(tmp_path, monkeypatch)
     clock = [0.0]
-    argv = host.argv["extract-0"]
-    found = [(1, " ".join(argv))]
     sent = []
     monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(runtime, "_process_args", lambda _pid: found[0])
     monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: sent.append((pid, sig)) if sig else None)
     status = tmp_path / "data" / service.STATUS_FILE
     status.write_text(json.dumps({"pid": 3999, "children": {"extract-0": {"pid": 4001}}}))
     status.chmod(0o600)
     host.adopt_orphans(100)
+    _complete_identity(host, monkeypatch, "extract-0", True, 100, runtime.signal.SIGTERM)
     assert sent == [(4001, runtime.signal.SIGTERM)]
     host.schedules = []
     monkeypatch.setattr(runtime, "BACKGROUND", {})
-    found[0] = (1, "synthetic-other-process")
     clock[0] = runtime.STOP_GRACE_S + 1
     host.tick(100 + runtime.STOP_GRACE_S + 1, draining=True)
+    assert host.children["extract-0"]["process"].operation == runtime.signal.SIGKILL
+    _complete_identity(host, monkeypatch, "extract-0", False,
+                       100 + runtime.STOP_GRACE_S + 1, runtime.signal.SIGKILL)
     assert sent == [(4001, runtime.signal.SIGTERM)]
     host.tick(100 + runtime.STOP_GRACE_S + 2, draining=True)
     assert "extract-0" not in host.children
@@ -482,56 +512,42 @@ def test_adopted_background_reuse_during_term_grace_never_receives_kill(tmp_path
 
 def test_unreadable_adopted_identity_keeps_child_and_inflight_slot(tmp_path, monkeypatch):
     host = _host(tmp_path, monkeypatch)
-    clock = [0.0]
-    argv = host.argv["mcs_check"]
-    found = [(1, " ".join(argv))]
     sent = []
-    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(runtime, "_process_args", lambda _pid: found[0])
     monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: sent.append((pid, sig)) if sig else None)
-    adopted = runtime._Adopted(4002, argv)
+    adopted = runtime._Adopted(4002, host.argv["mcs_check"])
     host.children["mcs_check"] = {"process": adopted, "kind": "core", "stopping_at": None,
                                    "adopted": True, "unfired": 600}
     host.fired, host.inflight = {"mcs_check": 1200}, {"mcs_check": 600}
-    found[0] = None  # Synthetic ps timeout/read failure while kill(pid, 0) succeeds.
-    clock[0] = 31
+    _complete_identity(host, monkeypatch, "mcs_check", None, 1231)
     host.tick(1231, draining=True)
     assert host.children["mcs_check"]["process"] is adopted
     assert host.inflight == {"mcs_check": 600} and host.fired == {"mcs_check": 1200}
     assert host.exits == {}
     adopted.terminate()
+    _complete_identity(host, monkeypatch, "mcs_check", None, 1232, adopted.operation)
     adopted.kill()
+    _complete_identity(host, monkeypatch, "mcs_check", None, 1233, adopted.operation)
     assert sent == [] and adopted.poll() is None
     # A transient read failure must not permanently discard ownership.
-    found[0] = (1, " ".join(argv))
     adopted.terminate()
+    _complete_identity(host, monkeypatch, "mcs_check", True, 1234, adopted.operation)
     assert sent == [(4002, runtime.signal.SIGTERM)] and adopted.poll() is None
 
 
 def test_unreadable_adopted_liveness_is_not_proof_of_exit(monkeypatch):
-    monkeypatch.setattr(runtime.time, "monotonic", lambda: 0.0)
     adopted = runtime._Adopted(4003, ["synthetic-worker"])
-
     def unreadable(_pid, sig):
         assert sig == 0
         raise PermissionError("synthetic liveness probe unavailable")
-
     monkeypatch.setattr(runtime.os, "kill", unreadable)
     assert adopted.poll() is None
     assert not adopted.ended
 
 
-
 def test_verified_adopted_background_still_terms_kills_and_reaps(tmp_path, monkeypatch):
     host = _host(tmp_path, monkeypatch)
-    clock = [0.0]
-    alive = [True]
-    sent = []
-    argv = host.argv["extract-0"]
+    clock, alive, sent = [0.0], [True], []
     monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(runtime, "_process_args",
-                        lambda _pid: (1, " ".join(argv)) if alive[0] else None)
-
     def signal_process(pid, sig):
         if not alive[0]:
             raise ProcessLookupError("synthetic child gone")
@@ -539,12 +555,12 @@ def test_verified_adopted_background_still_terms_kills_and_reaps(tmp_path, monke
             sent.append((pid, sig))
             if sig == runtime.signal.SIGKILL:
                 alive[0] = False
-
     monkeypatch.setattr(runtime.os, "kill", signal_process)
     status = tmp_path / "data" / service.STATUS_FILE
     status.write_text(json.dumps({"pid": 3999, "children": {"extract-0": {"pid": 4001}}}))
     status.chmod(0o600)
     host.adopt_orphans(100)
+    _complete_identity(host, monkeypatch, "extract-0", True, 100, runtime.signal.SIGTERM)
     host.schedules = []
     monkeypatch.setattr(runtime, "BACKGROUND", {})
     assert sent == [(4001, runtime.signal.SIGTERM)]
@@ -553,6 +569,8 @@ def test_verified_adopted_background_still_terms_kills_and_reaps(tmp_path, monke
     assert sent == [(4001, runtime.signal.SIGTERM)]
     clock[0] = runtime.STOP_GRACE_S
     host.tick(100 + clock[0], draining=True)
+    assert host.children["extract-0"]["process"].operation == runtime.signal.SIGKILL
+    _complete_identity(host, monkeypatch, "extract-0", True, 100 + clock[0], runtime.signal.SIGKILL)
     assert sent == [(4001, runtime.signal.SIGTERM), (4001, runtime.signal.SIGKILL)]
     host.tick(101 + clock[0], draining=True)
     assert host.children == {} and host.exits["extract-0"]["last_exit"] is None
@@ -563,50 +581,43 @@ def test_initial_unreadable_identity_is_not_adopted_or_signalled(tmp_path, monke
     status = tmp_path / "data" / service.STATUS_FILE
     status.write_text(json.dumps({"pid": 3999, "children": {"extract-0": {"pid": 4001}}}))
     status.chmod(0o600)
-    monkeypatch.setattr(runtime, "_process_args", lambda _pid: None)
-
     def no_signal(*_args):
         raise AssertionError("unknown initial identity cannot authorize a signal")
-
     monkeypatch.setattr(runtime.os, "kill", no_signal)
     host.adopt_orphans(100)
-    assert host.children == {}
+    _complete_identity(host, monkeypatch, "extract-0", None, 100, runtime.signal.SIGTERM)
+    assert host.children == {} and host.orphan_candidates == {"extract-0": 4001}
 
 
 @pytest.mark.parametrize("identity", [True, None, False], ids=["same", "unreadable", "reused"])
 def test_adopted_eperm_rechecks_identity_without_releasing_unknown_slot(
         tmp_path, monkeypatch, identity):
     host = _host(tmp_path, monkeypatch)
-    clock = [0.0]
-    argv = host.argv["mcs_check"]
-    found: list[tuple[int, str] | None] = [(1, " ".join(argv))]
     probes, identities = [], []
-    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
-
-    def process_args(pid):
-        identities.append(pid)
-        return found[0]
-
+    worker = runtime._identity_worker
+    def observed_worker():
+        identities.append(json.loads(runtime.sys.stdin.buffer.getvalue())["pid"])
+        return worker()
+    monkeypatch.setattr(runtime, "_identity_worker", observed_worker)
     def denied_probe(pid, sig):
         probes.append((pid, sig))
         assert sig == 0  # no TERM/KILL or real process operation
         raise PermissionError(errno.EPERM, "synthetic liveness denial")
-
-    monkeypatch.setattr(runtime, "_process_args", process_args)
     monkeypatch.setattr(runtime.os, "kill", denied_probe)
     status = tmp_path / "data" / service.STATUS_FILE
     status.write_text(json.dumps({"pid": 3999, "children": {"mcs_check": {"pid": 4005}}}))
     status.chmod(0o600)
     host.fired, host.inflight = {"mcs_check": 1200}, {"mcs_check": 600}
     host.adopt_orphans(1200)
-    adopted = host.children["mcs_check"]["process"]
+    _complete_identity(host, monkeypatch, "mcs_check", True, 1200)
     assert identities == [4005]
-    found[0] = ((1, " ".join(argv)) if identity is True else None
-                if identity is None else (1, "synthetic-unrelated-process"))
-    clock[0] = 31.0
-    host.tick(1231, draining=True)
-    assert identities == [4005, 4005]
+    adopted = host.children["mcs_check"]["process"]
+    # Even EPERM liveness cannot suppress a later isolated identity result.
+    assert adopted.poll() is None
     assert probes == [(4005, 0)]
+    _complete_identity(host, monkeypatch, "mcs_check", identity, 1231)
+    assert identities == [4005, 4005]
+    host.tick(1231, draining=True)
     assert host.fired == {"mcs_check": 1200}
     if identity is False:
         assert adopted.ended and "mcs_check" not in host.children
@@ -618,3 +629,4 @@ def test_adopted_eperm_rechecks_identity_without_releasing_unknown_slot(
         assert host.children["mcs_check"]["process"] is adopted
         assert host.inflight == {"mcs_check": 600}
         assert host.exits == {}
+        assert probes == [(4005, 0), (4005, 0)]

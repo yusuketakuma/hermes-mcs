@@ -505,9 +505,8 @@ def daily_notices(local, root=None):
     so a busy tick or failed enqueue retries on the next check."""
     watched = load_watch(root)["inserts"]  # a damaged state stops here, before any request
     status, detail = check_listing(local)
-    changed = []
     if watched:
-        changed = [item for item, state, _r in formulary_check(root=root) if state == "changed"]
+        formulary_check(root=root)
 
     def record(data):
         owed = []
@@ -516,13 +515,20 @@ def daily_notices(local, root=None):
         if status in ("newer", "mismatch") and data["notified"].get("listing") != key:
             owed.append(("listing", key, "[MCS] 医薬品マスター: " + detail
                          + "。release-mcs の手順で公式原本を確認してください"))
-        for item in changed:
+        insert_notices = 0
+        for item in data["inserts"]:
+            observed = item.get("observed_sha256")
+            if not observed or observed == item["sha256"]:
+                continue
             note_key = "insert:" + item["url"]
-            if data["notified"].get(note_key) != item.get("observed_sha256"):
+            if data["notified"].get(note_key) != observed:
                 revised = item.get("observed_revision") or "改訂情報不明"
                 owed.append((note_key, item.get("observed_sha256"),
                              "[MCS] 添付文書の本文が変わりました: " + item["name"] + "（" + revised + "）。"
                              "読み直してから mcs drug formulary-ack で受け入れてください"))
+                insert_notices += 1
+                if insert_notices == 3:
+                    break  # Keep the previous per-check notification bound, independent of fetch rotation.
         return owed
     return update(record, root)
 

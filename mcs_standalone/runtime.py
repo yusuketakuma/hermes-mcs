@@ -13,6 +13,8 @@ from pathlib import Path
 import plistlib
 import re
 import signal
+import select
+import sys
 import stat
 import subprocess
 import time
@@ -80,35 +82,97 @@ def _try_lock(path):
         return None
 
 
+IDENTITY_BYTES = 16384
+IDENTITY_TIMEOUT_S = 5.0
+IDENTITY_RETRY_S = 30.0
+
+
 def _process_args(pid):
-    """(parent pid, command line) of a live process, or None."""
+    """Read bounded ps output only inside the isolated identity worker."""
+    child = None
     try:
-        result = subprocess.run(["ps", "-ww", "-o", "ppid=", "-o", "args=", "-p", str(pid)],
-                                capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
+        child = subprocess.Popen(["/bin/ps", "-ww", "-o", "ppid=", "-o", "args=", "-p", str(pid)],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        os.set_blocking(child.stdout.fileno(), False)
+        raw = bytearray()
+        until = time.monotonic() + 4.0
+        while time.monotonic() < until:
+            try:
+                chunk = os.read(child.stdout.fileno(), IDENTITY_BYTES + 1 - len(raw))
+            except BlockingIOError:
+                chunk = None
+            if chunk:
+                raw.extend(chunk)
+                if len(raw) > IDENTITY_BYTES:
+                    return None
+            elif chunk == b"" and child.poll() is not None:
+                parts = raw.decode("utf-8", errors="strict").strip().split(None, 1)
+                return ((int(parts[0]), parts[1]) if child.returncode == 0
+                        and len(parts) == 2 and parts[0].isdigit() else None)
+            select.select([child.stdout], [], [], min(0.05, max(0, until - time.monotonic())))
+    except (OSError, UnicodeError, subprocess.SubprocessError):
         return None
-    parts = result.stdout.strip().split(None, 1) if result.returncode == 0 else []
-    if len(parts) != 2 or not parts[0].isdigit():
-        return None
-    return int(parts[0]), parts[1]
+    finally:
+        if child is not None:
+            if child.poll() is None:
+                with suppress(OSError):
+                    child.kill()
+            with suppress(subprocess.SubprocessError):
+                child.wait(timeout=0.1)
+            child.stdout.close()
+    return None
 
 
-def _is_orphan(pid, argv):
-    """True for a matching orphan, False for another process, None if unreadable."""
+def _is_orphan(pid, argv, owner_pid):
     found = _process_args(pid)
     if found is None:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            pass
         return None
-    return found[0] != os.getpid() and found[1] == " ".join(argv)
+    return found[0] != owner_pid and found[1] == " ".join(argv)
+
+
+def _identity_worker():
+    """Probe and optionally signal one exact process; never load host state or credentials."""
+    raw = sys.stdin.buffer.read(IDENTITY_BYTES + 1)
+    request = json.loads(raw)
+    if not isinstance(request, dict) or set(request) != {
+            "pid", "argv", "operation", "generation", "owner_pid"}:
+        raise ValueError("identity_request_invalid")
+    pid, argv, operation = request["pid"], request["argv"], request["operation"]
+    if (len(raw) > IDENTITY_BYTES or type(pid) is not int or not 1 < pid < 2**31
+            or type(request["owner_pid"]) is not int or not 1 < request["owner_pid"] < 2**31
+            or not isinstance(request["generation"], str)
+            or re.fullmatch("[0-9a-f]{32}", request["generation"]) is None
+            or not isinstance(argv, list) or not argv
+            or not all(isinstance(arg, str) and "\0" not in arg for arg in argv)
+            or operation is not None and (type(operation) is not int
+                or operation not in (signal.SIGTERM, signal.SIGKILL))):
+        raise ValueError("identity_request_invalid")
+    identity = _is_orphan(pid, argv, request["owner_pid"])
+    sent = False
+    if identity is True and operation is not None:
+        try:
+            os.kill(pid, operation)
+            sent = True
+        except ProcessLookupError:
+            identity = False
+        except OSError:
+            pass
+    print(json.dumps({"generation": request["generation"], "pid": pid,
+                      "identity": identity, "sent": sent}))
 
 
 class _Adopted:
-    """A child left by a host that was killed; it is watched, never re-parented."""
-
+    """Track an orphan; identity checks and signals belong to the bounded worker."""
     def __init__(self, pid, argv):
-        self.pid = pid
-        self.argv = argv
+        self.pid, self.argv = pid, argv
         self.ended = False
-        self.checked = time.monotonic()
+        self.operation = None
 
     def poll(self):
         if not self.ended:
@@ -117,30 +181,14 @@ class _Adopted:
             except ProcessLookupError:
                 self.ended = True
             except OSError:
-                pass  # An unreadable live process is not proof of exit.
-            # A failed liveness probe is not exit proof, but a readable
-            # different identity still proves this adopted process is gone.
-            if not self.ended and time.monotonic() - self.checked >= 30:
-                self.checked = time.monotonic()
-                self.ended = _is_orphan(self.pid, self.argv) is False
+                pass
         return 0 if self.ended else None
 
-    def _signal(self, sig):
-        if self.ended:
-            return
-        identity = _is_orphan(self.pid, self.argv)
-        if identity is False:
-            self.ended = True
-        elif identity is True:
-            with suppress(OSError):
-                os.kill(self.pid, sig)
-        # Unknown identity holds ownership and sends nothing; a later poll retries.
-
     def terminate(self):
-        self._signal(signal.SIGTERM)
+        self.operation = signal.SIGTERM
 
     def kill(self):
-        self._signal(signal.SIGKILL)
+        self.operation = signal.SIGKILL
 
 
 class Runtime:
@@ -151,6 +199,11 @@ class Runtime:
         self.generation = uuid.uuid4().hex
         self.started_at = time.time()
         self.children = {}
+        self.orphan_candidates = {}
+        self.identity_probe = None
+        self.identity_due = {}
+        self.identity_operation = {}
+        self.identity_after = ""
         self.retry_at = {}
         # job -> last exit code/time, last success and consecutive failed exits
         # (one row per configured job, so bounded): a crash loop is visible in status
@@ -234,8 +287,12 @@ class Runtime:
                 "update_in_progress": updating,
                 "update_marker": dict(self.marker) if self.marker else None,
                 "restarting": self.restarting,
-                "children": {job: {"pid": row["process"].pid, "kind": row["kind"]}
-                             for job, row in self.children.items()},
+                "children": {
+                    **{job: {"pid": pid, "kind": "background" if job in BACKGROUND or job == "lineworks" else "core",
+                             "state": "orphan_identity_unknown"}
+                       for job, pid in self.orphan_candidates.items()},
+                    **{job: {"pid": row["process"].pid, "kind": row["kind"]}
+                       for job, row in self.children.items()}},
                 "exits": self.exits,
                 "connector": {key: value for key, value in self.connector.items()
                               if key != "started_at"}}
@@ -257,7 +314,8 @@ class Runtime:
 
     def start(self, job, kind, now, pending=None):
         # A failed start earlier in this tick requested a restart: start nothing more.
-        if self.restarting or job in self.children or now < self.retry_at.get(job, 0):
+        if (self.restarting or job in self.children or job in self.orphan_candidates
+                or now < self.retry_at.get(job, 0)):
             return
         path = self.data / (job + ".log")
         try:
@@ -294,25 +352,158 @@ class Runtime:
             pid = row.get("pid") if isinstance(row, dict) else None
             if job not in self.argv or job in self.children or type(pid) is not int or pid <= 1:
                 continue
-            if not _is_orphan(pid, self.argv[job]):
+            self.orphan_candidates[job] = pid
+
+    def _identity_result(self, probe, result, now):
+        job, pid = probe["job"], probe["pid"]
+        child = (self.children.get(job) or {}).get("process")
+        pending = self.orphan_candidates.get(job) == pid
+        if (probe["generation"] != self.generation or self.argv.get(job) != probe["argv"]
+                or not pending and not (isinstance(child, _Adopted) and child.pid == pid)):
+            return
+        identity = result.get("identity") if (result.get("pid") == pid
+                    and result.get("generation") == self.generation) else None
+        if identity is not True and identity is not False:
+            identity = None
+        self.identity_due[job] = time.monotonic() + IDENTITY_RETRY_S
+        if pending and identity is not None:
+            del self.orphan_candidates[job]
+            if identity is True:
+                kind = "background" if job in BACKGROUND or job == "lineworks" else "core"
+                child = _Adopted(pid, self.argv[job])
+                self.children[job] = {"process": child, "kind": kind, "pending": None,
+                                      "adopted": True, "stopping_at": None}
+                if job in self.inflight:
+                    self.children[job]["unfired"] = self.inflight[job]
+                if kind == "background":
+                    child.terminate()
+                log("orphan_adopted", job=job, action="stop" if kind == "background" else "wait")
+        if isinstance(child, _Adopted):
+            if identity is False:
+                child.ended = True
+            elif identity is True and result.get("sent") is True:
+                row = self.children[job]
+                if probe["operation"] == signal.SIGTERM and row["stopping_at"] is None:
+                    row["stopping_at"] = now
+                if child.operation == probe["operation"]:
+                    child.operation = None
+        self.recover_inflight()
+
+    def _poll_identity(self, now):
+        probe = self.identity_probe
+        if probe is None:
+            return
+        process = probe["process"]
+        if not probe["discard"]:
+            if probe["input"]:
+                try:
+                    written = os.write(process.stdin.fileno(), probe["input"])
+                    del probe["input"][:written]
+                except BlockingIOError:
+                    pass
+                except OSError:
+                    probe["discard"] = True
+                if not probe["input"]:
+                    with suppress(OSError):
+                        process.stdin.close()
+            try:
+                room = IDENTITY_BYTES + 1 - len(probe["raw"])
+                if room > 0:
+                    probe["raw"].extend(os.read(process.stdout.fileno(), room))
+            except BlockingIOError:
+                pass
+            except OSError:
+                probe["discard"] = True
+        if (probe["discard"] or len(probe["raw"]) > IDENTITY_BYTES
+                or time.monotonic() - probe["started"] >= IDENTITY_TIMEOUT_S):
+            probe["discard"] = True
+            if process.poll() is None:
+                with suppress(OSError):
+                    os.killpg(process.pid, signal.SIGKILL)
+        if process.poll() is None:
+            return
+        # A killed probe may leave an uninterruptible ps in its session. Do not
+        # launch another probe until that group is gone; a reaped leader never authorizes a signal.
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            return
+        else:
+            return
+        # A child can finish between the nonblocking read and poll; drain its final bytes.
+        if not probe["discard"]:
+            try:
+                room = IDENTITY_BYTES + 1 - len(probe["raw"])
+                if room > 0:
+                    probe["raw"].extend(os.read(process.stdout.fileno(), room))
+            except BlockingIOError:
+                pass
+            except OSError:
+                probe["discard"] = True
+        self.identity_probe = None
+        for stream in (process.stdin, process.stdout):
+            with suppress(OSError):
+                stream.close()
+        try:
+            result = (json.loads(probe["raw"]) if not probe["discard"]
+                      and len(probe["raw"]) <= IDENTITY_BYTES and process.returncode == 0 else {})
+            if not isinstance(result, dict):
+                result = {}
+        except (ValueError, UnicodeError):
+            result = {}
+        self._identity_result(probe, result, now)
+
+    def _start_identity(self):
+        if self.identity_probe is not None:
+            return
+        targets = {job: (pid, signal.SIGTERM if job in BACKGROUND or job == "lineworks" else None)
+                   for job, pid in self.orphan_candidates.items()}
+        targets.update({job: (row["process"].pid, row["process"].operation)
+                        for job, row in self.children.items()
+                        if isinstance(row["process"], _Adopted) and not row["process"].ended})
+        for job in sorted(targets, key=lambda name: (name <= self.identity_after, name)):
+            pid, operation = targets[job]
+            if (time.monotonic() < self.identity_due.get(job, 0)
+                    and self.identity_operation.get(job) == operation):
                 continue
-            process = _Adopted(pid, self.argv[job])
-            kind = "background" if job in BACKGROUND or job == "lineworks" else "core"
-            entry = {"process": process, "kind": kind, "stopping_at": None,
-                     "pending": None, "adopted": True}
-            if kind == "background":
-                process.terminate()
-                entry["stopping_at"] = now
-            if job in self.inflight:
-                entry["unfired"] = self.inflight[job]
-            self.children[job] = entry
-            log("orphan_adopted", job=job, action="stop" if kind == "background" else "wait")
+            self.identity_after = job
+            self.identity_operation[job] = operation
+            request = {"pid": pid, "argv": list(self.argv[job]), "operation": int(operation) if operation else None,
+                       "generation": self.generation, "owner_pid": os.getpid()}
+            code = ("import sys; sys.path.insert(0,sys.argv[1]); "
+                    "sys.path.insert(0,sys.argv[1]+'/mcs'); import _mcs_path; "
+                    "from mcs_standalone.runtime import _identity_worker; _identity_worker()")
+            raw = json.dumps(request).encode()
+            if len(raw) > IDENTITY_BYTES:
+                self.identity_due[job] = time.monotonic() + IDENTITY_RETRY_S
+                return
+            try:
+                process = subprocess.Popen([sys.executable, "-I", "-c", code, str(REPO)],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, start_new_session=True)
+            except OSError:
+                self.identity_due[job] = time.monotonic() + IDENTITY_RETRY_S
+                return
+            self.identity_probe = {**request, "job": job, "process": process,
+                                   "started": time.monotonic(), "raw": bytearray(),
+                                   "input": bytearray(raw), "discard": False}
+            try:
+                os.set_blocking(process.stdin.fileno(), False)
+                os.set_blocking(process.stdout.fileno(), False)
+            except OSError:
+                self.identity_probe["discard"] = True
+                with suppress(OSError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            return
 
     def recover_inflight(self):
         """A slot whose run outlived neither the host nor as an adopted
         orphan was cut short by an abrupt shutdown: keep it pending so it
         is caught up (after adopt_orphans)."""
-        lost = [job for job in self.inflight if job not in self.children]
+        lost = [job for job in self.inflight
+                if job not in self.children and job not in self.orphan_candidates]
         for job in lost:
             self.fired[job] = self.inflight.pop(job)
             log("slot_interrupted", job=job)
@@ -439,7 +630,7 @@ class Runtime:
                 continue
             if fired is not None and slot <= fired:
                 continue
-            if job in self.children:
+            if job in self.children or job in self.orphan_candidates:
                 if self.skipped.get(job) != slot:
                     self.skipped[job] = slot
                     log("slot_skipped_running", job=job, slot=int(slot))
@@ -472,6 +663,7 @@ class Runtime:
         if self.restarting and self.restart_since is None:
             self.restart_since = now
         updating = self._updating(now)
+        self._poll_identity(now)
         for job, row in list(self.children.items()):
             child = row["process"]
             code = child.poll()
@@ -479,9 +671,11 @@ class Runtime:
                 self._ended(job, row, code, now, updating)
             elif self._should_stop(job, row, now, updating):
                 if row["stopping_at"] is None:
+                    first = not isinstance(child, _Adopted) or child.operation is None
                     child.terminate()
-                    row["stopping_at"] = now
-                    if row["kind"] == "core":
+                    if not isinstance(child, _Adopted):
+                        row["stopping_at"] = now
+                    if row["kind"] == "core" and first:
                         log("drain_cap_reached", job=job)
                         if row.get("unfired") is not None:
                             # killed before it finished: keep its slot pending
@@ -506,8 +700,10 @@ class Runtime:
                     self.retry_at.pop(job, None)
                 self.start(job, "core", now, names)
             self._schedule(now)
+        self._start_identity()
         self._publish_status(now, updating)
-        return self.restarting and not self.children
+        return (self.restarting and not self.children and not self.orphan_candidates
+                and self.identity_probe is None)
 
     def _restart_requested(self, now):
         path = self.data / service.RESTART_FILE
@@ -612,7 +808,7 @@ async def serve(root, cfg, connector=None):
         finally:
             try:
                 runtime.restarting = True
-                while runtime.children:
+                while runtime.children or runtime.orphan_candidates or runtime.identity_probe:
                     # Log/status failures must not strand children or skip connector cleanup.
                     with suppress(OSError):
                         runtime.tick(draining=True)

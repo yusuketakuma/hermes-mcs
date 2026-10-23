@@ -211,8 +211,8 @@ def test_fetch_installs_only_the_packages_into_the_new_venv(tmp_path):
                     f"{out / 'checkout'}/deployment/requirements-standalone.txt"]
 
 
-@pytest.mark.parametrize("dirty", [False, True])
-def test_hermes_checkout_with_tracked_edits_is_not_runnable(tmp_path, dirty):
+@pytest.mark.parametrize("dirty", [None, "tracked", "untracked", "ignored"])
+def test_hermes_checkout_with_source_edits_is_not_runnable(tmp_path, dirty):
     hermes = tmp_path / "hermes"
     (hermes / ".venv/bin").mkdir(parents=True)
     (hermes / ".venv/bin/python").write_text("#!/bin/sh\n")
@@ -223,17 +223,21 @@ def test_hermes_checkout_with_tracked_edits_is_not_runnable(tmp_path, dirty):
     _git(hermes, "commit", "-q", "-m", "pinned")
     ref = subprocess.run(["git", "-C", str(hermes), "rev-parse", "HEAD"], capture_output=True,
                          text=True, check=True).stdout.strip()
-    if dirty:
+    if dirty == "tracked":
         (hermes / "setup.py").write_text("# local edit\n")
+    elif dirty in ("untracked", "ignored"):
+        (hermes / "untracked_module.py").write_text("# unpinned importable source\n")
+        if dirty == "ignored":
+            (hermes / ".git/info/exclude").write_text("untracked_module.py\n")
     workflow = SYNTHETIC_WORKFLOW.replace("0" * 40, ref)
     repo, stub = _synthetic_repo(tmp_path, 0, workflow)
     out = tmp_path / "out"
     _run(repo, stub, out, "hermes-integration", MCS_CI_HERMES_AGENT=str(hermes))
     row = (out / "summary.tsv").read_text().splitlines()
     note = next(r for r in row if r.startswith("hermes-integration\t")).split("\t")
-    # the untracked .venv alone never blocks; a tracked edit always does
-    assert (note[1] == "実行不能") is dirty
-    assert ("未commit の変更" in note[-1]) is dirty
+    # The dependency venv is allowed; tracked and untracked source are not.
+    assert (note[1] == "実行不能") is (dirty is not None)
+    assert ("未commit の変更" in note[-1]) is (dirty is not None)
 
 
 @pytest.mark.parametrize("all_pass", ["0", "1"])

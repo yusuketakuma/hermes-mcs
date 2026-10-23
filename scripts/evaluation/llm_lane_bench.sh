@@ -361,7 +361,8 @@ else:
         bids = [b["block"] for b in blocks if b["mode"] == mode]
         bg = [r for r in rows if r["mode"] == mode and not r["warmup"]]
         rt = [r for r in rows if r["mode"] == "realtime" and str(r["block"]) in {str(b) for b in bids}]
-        valid = [r for r in bg if r["http_code"] == 200 and r["curl_rc"] == 0 and r["json_valid"]]
+        valid = [r for r in bg if r["http_code"] == 200 and r["curl_rc"] == 0
+                 and r["json_valid"] is True and r.get("finish_reason") == "stop"]
         rt_valid = [r for r in rt if r["http_code"] == 200 and r["curl_rc"] == 0
                     and r["json_valid"] is True and r.get("finish_reason") == "stop"]
         block_s = sum(b["wall_s"] for b in blocks if b["mode"] == mode)

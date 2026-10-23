@@ -716,11 +716,6 @@ def _preflight_unsettled_parts(db, card_id):
     return [row for row in rows if row["state"] == "unknown" or row["delivery_id"] not in cancelled]
 
 
-def _preflight_recovery_target(db, render, card, req):
-    targets = _preflight_recovery_targets(db, render, card, [req])
-    return targets.get(req["part_id"]) if targets is not None else None
-
-
 def _preflight_recovery_targets(db, render, card, plans):
     if (card is None or render["state"] != "delivered" or card["delivery_state"] != "delivered"
             or not scope_matches(render, stored_scope(card)) or not card["message_id"]

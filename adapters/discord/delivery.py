@@ -328,8 +328,7 @@ class DeliveryWorker(worker.DeliveryWorker):
                                            update_view=update_view, prior=part["prior_remote_id"])
             if mid is not None:
                 return {"result": "delivered", "remote_id": str(mid)}
-            return await self._edit_only_prior(spec, thread, part, body, ctx, view=view,
-                                               missing_is_settled=False)
+            return await self._edit_only_prior(spec, thread, part, body, ctx, view=view)
         if not post_scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id")):
             # writing into a pre-existing thread — a chunk whose
             # text is already remote binds to that message id
@@ -436,9 +435,10 @@ class DeliveryWorker(worker.DeliveryWorker):
             return m.id
         return None
 
-    async def _edit_only_prior(self, spec, thread, part, text, ctx, *, view=None, attachment=False,
-                               missing_is_settled=True):
+    async def _edit_only_prior(self, spec, thread, part, text, ctx, *, view=None, attachment=False):
         """Edit only the exact owned thread post; uncertain ownership or edits never POST."""
+        missing_is_settled = (spec["parts"].get("post_source_id") is None
+                              and not reply_card_key(spec.get("card_key")))
         prior = part.get("prior_remote_id")
         delivery = spec["delivery"]
         parent, guild = _thread_parent_guild(thread)

@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "長文の検査値を統合するときに異なる測定結果を残す",
+  "summary": "長文を分けて解析した際、同じ検査名・測定日でも値や単位、原文の根拠が異なる結果を上書きしないようにします。日付の根拠で順序を決められない複数の値は保持し、患者の最新値として一つに断定しません。",
+  "upgrade": "抽出workerを更新・再起動した後の解析に適用されます。既存の保存済み結果を自動で書き換えたり、全投稿を再解析したりはしません。抽出判定コードの変更により候補のfingerprintが変わるため、以前の候補承認・保留記録の再検証が必要になる場合があります。",
+  "details": [
+    "検査結果の重複排除は、値・単位・主体・時制・条件・検証状態・原文根拠を含む結果全体が同一の場合だけ行います。",
+    "extract_validationは既存のロード済みソースdigestとcandidate fingerprintの対象であり、抽出世代・schema・設定既定値は変更しません。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_validation.py",
+    "mcs/patients/rollup.py",
+    "tests/extract/test_lab_merge_identity_audit.py"
+  ]
+}

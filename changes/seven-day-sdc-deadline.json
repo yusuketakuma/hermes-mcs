@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "状態監視の通信が低速応答で待ち続ける問題を修正",
+  "summary": "状態監視の登録・停止・鍵交換で、応答が少しずつ届く場合にも通信の制限時間を適用します。期限後は接続を閉じ、ローカルの操作ロックを解放します。",
+  "upgrade": "追加設定は不要です。通信処理は従来のCLI・監視ジョブと同じくPOSIXのメインスレッドで実行します。",
+  "details": [
+    "通信の開始から応答読取り・検証までに10秒のSIGALRM期限を設け、個別socket timeoutだけに依存しない。",
+    "呼出元の先行するalarmを優先し、終了時は元のhandlerと経過時間を差し引いたtimerを復元する。発火済みのone-shotを復活させない。",
+    "送信先・署名・容量・no-redirect/no-proxyの条件は維持する。スレッド内で有界期限を確立できない場合は送信前に拒否する。"
+  ],
+  "refs": [
+    "adapters/sdc/transport.py",
+    "tests/adapters/sdc/test_sdc_total_deadline_audit.py"
+  ]
+}

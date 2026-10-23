@@ -79,7 +79,9 @@ def test_unverified_reply_prior_never_reuses_another_post_or_resends(world, mark
     assert len(thread.sent) == before and all(message.edits == 0 for message in thread.sent)
 
 
-def test_reply_disappearing_after_verification_stays_unknown_without_repost(world):
+@pytest.mark.parametrize("marker", ["post_source_id", "reply_key"])
+@pytest.mark.parametrize("edit_only", [False, True])
+def test_reply_disappearing_after_verification_stays_unknown_without_repost(world, marker, edit_only):
     worker, thread = world
     target = _HistMsg(6020, "合成旧文")
     thread.sent = [target]
@@ -91,9 +93,9 @@ def test_reply_disappearing_after_verification_stays_unknown_without_repost(worl
         raise FakeHTTP(404)
 
     target.edit = gone
-    spec = _post_spec(202, "post_source_id", ["合成更新文"])
+    spec = _post_spec(202, marker, ["合成更新文"])
     spec["op"] = "update"
-    part = {**spec["parts"]["manifest"][2], "prior_remote_id": "6020"}
+    part = {**spec["parts"]["manifest"][2], "prior_remote_id": "6020", "edit_only": edit_only}
     out = asyncio.run(worker._part(_claim(spec), part, _context(thread)))
     assert out["result"] == "unknown"
     assert attempts == [6020] and not thread.sent
@@ -153,3 +155,26 @@ def test_unavailable_attachment_with_missing_prior_stays_unknown_without_repost(
     out = asyncio.run(worker._part(_claim(spec), part, _context(thread)))
     assert out["result"] == "unknown"
     assert len(thread.sent) == 1 and thread.sent[0].id == 6010 and thread.sent[0].edits == 0
+
+
+@pytest.mark.parametrize("marker", ["post_source_id", "reply_key"])
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_edit_only_attachment_disappearing_after_verification_is_unknown(world, marker, unavailable):
+    worker, thread = world
+    attachment = SimpleNamespace(filename="synthetic.pdf", size=10)
+    target = _HistMsg(6020, "合成旧説明", attachments=[] if unavailable else [attachment])
+    thread.sent = [target]
+    attempts = []
+    async def gone(**kwargs):
+        attempts.append(target.id)
+        thread.sent.clear()
+        raise FakeHTTP(404)
+    target.edit = gone
+    spec = _post_spec(202, marker, [])
+    spec["op"] = "update"
+    part = {"kind": "attachment_part", "part_id": "attach:0001", "edit_only": True,
+            "unavailable": unavailable, "prior_remote_id": "6020", "name": "synthetic.pdf",
+            "bytes": 10, "sha256": "a" * 64, "caption": "合成更新説明"}
+    out = asyncio.run(worker._part(_claim(spec), part, _context(thread)))
+    assert out["result"] == "unknown"
+    assert attempts == [6020] and not thread.sent

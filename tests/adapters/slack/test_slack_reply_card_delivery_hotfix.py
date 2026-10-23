@@ -90,7 +90,9 @@ def test_unverified_reply_prior_never_reuses_another_post_or_resends(world, mark
     assert other["text"] == "合成同文"
 
 
-def test_reply_disappearing_after_verification_stays_unknown_without_repost(world):
+@pytest.mark.parametrize("marker", ["post_source_id", "reply_key"])
+@pytest.mark.parametrize("edit_only", [False, True])
+def test_reply_disappearing_after_verification_stays_unknown_without_repost(world, marker, edit_only):
     prior = "1790000000.000020"
     world.client.replies[ROOT_TS] = [
         {"ts": prior, "text": "合成旧文", "bot_id": world.client.bot_id}]
@@ -101,9 +103,9 @@ def test_reply_disappearing_after_verification_stays_unknown_without_repost(worl
         return {"ok": False, "error": "message_not_found"}
 
     world.client.chat_update = gone
-    part = {"kind": "body_part", "part_id": "body:0001", "prior_remote_id": prior}
+    part = {"kind": "body_part", "part_id": "body:0001", "prior_remote_id": prior, "edit_only": edit_only}
     out = asyncio.run(world.worker._body_part(
-        {**_post_spec(202, "post_source_id"), "op": "update"}, "合成更新文", _context(), part))
+        {**_post_spec(202, marker), "op": "update"}, "合成更新文", _context(), part))
     assert out["result"] == "unknown"
     assert [update["ts"] for update in _updates(world)] == [prior]
     assert not world.client.thread_posts
@@ -187,3 +189,25 @@ def test_short_reply_face_pins_drug_actions_to_parent_thread_and_its_own_card(le
         pin = world.reg.token(token)
         assert pin["verified_thread_id"] == ROOT_TS
         assert pin["verified_card_message_id"] == reply["message_id"]
+
+
+@pytest.mark.parametrize("marker", ["post_source_id", "reply_key"])
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_edit_only_attachment_disappearing_after_verification_is_unknown(world, marker, unavailable):
+    ts = "1790000000.000020"
+    file = {"id": "F_PRIOR", "name": "synthetic.pdf", "size": 10, "sha256": "a" * 64}
+    world.client.replies[ROOT_TS] = [{"ts": ts, "text": "合成旧説明", "bot_id": world.client.bot_id,
+                                    "files": [] if unavailable else [file]}]
+    async def gone(**kwargs):
+        world.client.calls.append(("update", kwargs))
+        world.client.replies[ROOT_TS].clear()
+        return {"ok": False, "error": "message_not_found"}
+    world.client.chat_update = gone
+    part = {"kind": "attachment_part", "part_id": "attach:0001", "edit_only": True,
+            "unavailable": unavailable, "prior_remote_id": ts if unavailable else "F_PRIOR",
+            "name": "synthetic.pdf", "bytes": 10, "sha256": "a" * 64, "caption": "合成更新説明"}
+    spec = {**_post_spec(202, marker), "op": "update"}
+    out = asyncio.run(world.worker._attachment_part(spec, part, _context()))
+    assert out["result"] == "unknown"
+    assert [update["ts"] for update in _updates(world)] == [ts]
+    assert not world.client.upload_calls and not world.client.thread_posts

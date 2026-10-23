@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "構造化表示に残っていた未使用のJSON読取処理を整理する",
+  "summary": "呼出元がなくなっていた内部ヘルパーを削除し、表示データのJSON読取りは既存の共通処理に揃えます。表示内容や取得範囲は変えません。",
+  "upgrade": "通常のコード更新で適用されます。構造化表示のコードも意味チェック候補のfingerprintに含まれるため、この整理で候補識別子が変わり、旧候補の承認・保留記録は現行候補との再照合が必要になる場合があります。",
+  "refs": [
+    "mcs/views/structured_view.py",
+    "mcs/semantic/semantic_candidate.py"
+  ],
+  "details": [
+    "旧private helperの呼出元・動的dispatchがないことを確認し、既存のJSON読取りと表示契約を保持する。"
+  ]
+}

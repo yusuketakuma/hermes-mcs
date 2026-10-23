@@ -513,8 +513,7 @@ class DeliveryWorker(_BaseWorker):
             mid = await self._remote_match(thread_ts, text, ctx, prior=part["prior_remote_id"])
             if mid is not None:
                 return {"result": "delivered", "remote_id": mid}
-            return await self._edit_only_prior(spec, part, text, ctx, blocks=blocks,
-                                               missing_is_settled=False)
+            return await self._edit_only_prior(spec, part, text, ctx, blocks=blocks)
         if not post_scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id")):
             # writing into an existing thread — an identical reply
             # authored by this bot binds the part to its real ts
@@ -582,9 +581,10 @@ class DeliveryWorker(_BaseWorker):
         self._log("blocks_rejected", reason="slack_container_unsupported")
         return await call_native(fn, **kwargs)
 
-    async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False, blocks=None,
-                               missing_is_settled=True):
+    async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False, blocks=None):
         """Edit one exact owned reply; no text dedupe, upload or fresh-post fallback."""
+        missing_is_settled = (spec["parts"].get("post_source_id") is None
+                              and not reply_card_key(spec.get("card_key")))
         thread_ts, prior = ctx.get("thread_id"), part.get("prior_remote_id")
         if (spec.get("op") != "update" or not isinstance(thread_ts, str) or thread_ts != spec["delivery"].get("thread_id")
                 or spec["delivery"].get("channel_id") != self._settings["channel_id"]

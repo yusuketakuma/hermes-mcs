@@ -1,5 +1,6 @@
 """Validate source-grounded extraction fields and merge document chunks without I/O."""
 import clinical_scope
+import json
 import math
 import re
 import unicodedata
@@ -768,7 +769,7 @@ def merge(outs: list[dict]) -> dict:
     seen_context: dict = {}
     med_order: dict = {}
     sym_idx: dict = {}
-    lab_idx: dict = {}
+    seen_labs: set = set()
     for d in outs:
         for m in d.get("meds") or []:
             k = (m["name"], m.get("subject"), m.get("action"))
@@ -785,15 +786,11 @@ def merge(outs: list[dict]) -> dict:
                 sym_idx[key] = len(out.setdefault("symptoms", []))
                 out["symptoms"].append(s)
         for lab in d.get("labs") or []:
-            normalized = lab.get("normalized") or {}
-            key = (lab["name"], lab.get("subject"), lab.get("status"),
-                   lab.get("measured_on", normalized.get("measured_on")),
-                   lab.get("condition"), lab.get("unverified", False))
-            if key in lab_idx:
-                out["labs"][lab_idx[key]] = lab
-            else:
-                lab_idx[key] = len(out.setdefault("labs", []))
-                out["labs"].append(lab)
+            # Different readings or quotations are not a last-wins update.
+            key = json.dumps(lab, sort_keys=True, ensure_ascii=False)
+            if key not in seen_labs:
+                seen_labs.add(key)
+                out.setdefault("labs", []).append(lab)
         for rq in d.get("requests") or []:
             # condition/due_text change what is asked: two chunks'
             # requests differing only there are distinct, never merged

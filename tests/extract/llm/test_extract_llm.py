@@ -2571,7 +2571,7 @@ def test_blood_pressure_at_body_end_keeps_diastolic_side():
     assert out["vitals"] == {"dbp": 80.0}
 
 
-def test_multichunk_labs_survive_and_latest_reading_wins(monkeypatch):
+def test_multichunk_labs_preserve_distinct_readings_and_evidence(monkeypatch):
     body = "合成検査A 1。" + "あ" * 2500 + "\n" + "い" * 1000 + "合成検査A 2。合成検査B 3。"
     replies = iter([
         {"labs": [{"name": "合成検査A", "value": 1, "evidence": "合成検査A 1"}]},
@@ -2580,8 +2580,11 @@ def test_multichunk_labs_survive_and_latest_reading_wins(monkeypatch):
     ])
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **kw: next(replies))
     out = extract_llm.llm_extract(body)
+    # Source order alone cannot establish when either reading was measured.
     assert [(lab["name"], lab["value"]) for lab in out["labs"]] == [
-        ("合成検査A", 2), ("合成検査B", 3)]
+        ("合成検査A", 1), ("合成検査A", 2), ("合成検査B", 3)]
+    assert [lab["evidence"] for lab in out["labs"]] == [
+        "合成検査A 1", "合成検査A 2", "合成検査B 3"]
 
 
 @pytest.mark.parametrize("bad", [

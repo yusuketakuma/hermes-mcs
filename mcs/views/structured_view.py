@@ -41,16 +41,6 @@ import clinical_urgency
 import mcs_queries
 
 
-def _content_dict(r) -> dict | None:
-    """json.loads an artifact content blob — non-object or corrupt JSON
-    is simply absent, never a view-killing error."""
-    return loads_dict(r["content"]) if r else None
-
-
-
-
-
-
 def _drug_refs(db, mid: int) -> list:
     """Annotation failure never suppresses the post's raw medication facts."""
     if db is None:

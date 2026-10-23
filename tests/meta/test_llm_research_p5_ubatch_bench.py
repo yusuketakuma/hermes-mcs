@@ -196,6 +196,31 @@ def test_fast_realtime_failures_cannot_pass_adoption_rule(tmp_path, bad):
     assert _called(tmp_path) == []
 
 
+@pytest.mark.parametrize("finish_reason", ["length", None, "stop"])
+def test_background_truncation_does_not_count_as_valid_throughput(tmp_path, finish_reason):
+    run = tmp_path / OUT / "background"
+    (run / "e2e").mkdir(parents=True)
+    (run / "env.json").write_text(json.dumps({"phase": "e2e", "server_ub": 512}))
+    row = {"mode": "serial", "warmup": False, "block": "1", "http_code": 200,
+           "curl_rc": 0, "json_valid": True, "finish_reason": finish_reason,
+           "timings": None, "wall_ms": 1000, "foreign_busy_before": 0}
+    (run / "e2e/requests.jsonl").write_text(json.dumps(row) + "\n")
+    mem = {"rss_kb": 1000, "swap_used_mb": 0}
+    block = {"block": 1, "mode": "serial", "wall_s": 1, "mem_before": mem, "mem_after": mem}
+    (run / "e2e/blocks.jsonl").write_text(json.dumps(block) + "\n")
+    runner = _render(tmp_path)
+    runner.write_text(runner.read_text().rsplit('main "$@"', 1)[0]
+                      + '\nRUN_DIR="$OUT_ROOT/background"\nsummarize\n')
+    proc = _run(tmp_path, runner)
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads((run / "summary.json").read_text())["e2e"]["serial"]
+    expected = finish_reason == "stop"
+    assert result["json_valid_rate"] == int(expected)
+    assert result["valid_per_hour"] == (3600 if expected else 0)
+    assert result["n"] == 1
+    assert _called(tmp_path) == []
+
+
 @pytest.mark.parametrize("which,valid_n", [("r1", 5), ("r1", None), ("r2", 5), ("r2", None)])
 def test_report_requires_complete_realtime_evidence_for_baseline_and_candidate(tmp_path, which, valid_n):
     for name, ub, rate in (("r1", 512, 100), ("r2", 256, 120)):
