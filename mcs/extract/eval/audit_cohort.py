@@ -328,9 +328,12 @@ def _read_jsonl(path: Path) -> list:
 def write_pin(path: Path, pin: dict) -> None:
     """Atomically replace the private pin.
 
-    A failure before the rename leaves the old pin and re-raises.  A failure
-    after it (the directory fsync) leaves the new pin visible but not proven
-    durable and raises ``pin_not_durable``; either way the pin must be rerun."""
+    Any failure raises and the pin must be rerun.  The error is classified
+    conservatively by what is visible afterwards, not by the failing stage:
+    ``pin_not_durable`` when the file now holds exactly the new bytes (also
+    possible for a pre-rename failure over an identical old pin), otherwise
+    the original OSError (also possible after the rename when the bounded
+    read-back fails).  A pre-rename failure keeps the old pin in place."""
     real = _private_path(path, write=True)
     data = "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
                    for record in [pin["header"], *pin["rows"]]).encode("utf-8")
