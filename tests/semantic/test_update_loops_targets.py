@@ -1,8 +1,10 @@
 """One update_loops call over two target messages revives and drops each
 message's own candidates exactly as separate per-message calls do (synthetic)."""
 import copy
+import gc
 import json
 import time
+import weakref
 
 import semantic_loops
 import semantic_policy
@@ -68,3 +70,49 @@ def test_one_call_revives_and_drops_for_every_target_like_separate_calls(tmp_pat
     finally:
         db.close()
         twin.close()
+
+
+class _Row(dict):
+    """A weakref-able copy of one candidate row."""
+
+
+class _TrackedDb:
+    """Delegates to the real connection; candidate scans return tracked rows."""
+
+    def __init__(self, db):
+        self._db = db
+        self.scans = []          # weakrefs to the rows each candidate scan returned
+        self.first_alive = []    # first-scan rows still owned when each later scan starts
+
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+    def __enter__(self):
+        return self._db.__enter__()
+
+    def __exit__(self, *exc):
+        return self._db.__exit__(*exc)
+
+    def execute(self, sql, *args):
+        cursor = self._db.execute(sql, *args)
+        if not sql.startswith("SELECT artifact_id,message_id,content,meta FROM artifacts"):
+            return cursor
+        if self.scans:
+            gc.collect()
+            self.first_alive.append(sum(ref() is not None for ref in self.scans[0]))
+        rows = [_Row(dict(row)) for row in cursor.fetchall()]
+        self.scans.append([weakref.ref(row) for row in rows])
+        return type("Cursor", (), {"fetchall": lambda _self: rows})()
+
+
+def test_first_candidate_snapshot_is_released_before_the_post_target_reread(tmp_path):
+    db, cfg, bundle, pairs = _prepared(tmp_path / "db")
+    try:
+        tracked_db = _TrackedDb(db.db)
+        tracked = type("TrackedLedger", (), {
+            "db": tracked_db, "__getattr__": lambda _self, name: getattr(db, name)})()
+        _update(tracked, cfg, bundle, {mid: [b] for mid, (_, b) in pairs.items()})
+        assert len(tracked_db.scans[0]) == 4           # one initial scan of the thread's rows
+        assert tracked_db.first_alive[0] == 0          # none is still owned at the re-read
+    finally:
+        db.close()

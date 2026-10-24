@@ -193,6 +193,9 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                     "'$.invalidated',json('true'),'$.invalidated_reason',"
                     "'reinterpreted') WHERE artifact_id=?",
                     [(aid,) for aid in dropped])
+    # The first snapshot served only the targets; drop every reference to
+    # its rows (index and loop variables) before the re-reads below.
+    rows_by_mid = r = row = None
 
     # A new sibling/reply changes the whole-thread fingerprint.  Preserve
     # the historical candidate, but materialize a current-generation copy
