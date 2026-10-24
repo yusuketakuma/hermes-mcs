@@ -1,16 +1,12 @@
 """Synthetic Ledger query integration for structural root/reply pairs."""
 import pytest
 
-from ledger import Ledger
+from common_testkit import ledger_fixture
 from test_interaction_latency import NOW, pair, post
 from mcs_queries import coverage_gaps, incomplete_reply_roots, thread_reply_pairs
 
 
-@pytest.fixture
-def store(tmp_path):
-    lg = Ledger(str(tmp_path / "synthetic-pairs.db"))
-    yield lg
-    lg.close()
+store = ledger_fixture(name="store")
 
 
 def test_root_half_open_scope_and_reply_observation_horizon(store):

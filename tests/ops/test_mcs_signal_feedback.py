@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ledger import Ledger
+from common_testkit import ledger_fixture
 import mcs_requests
 import mcs_signals
 import mcs_stats
@@ -14,11 +14,7 @@ from ops_testkit import DAY, NOW, _msg
 import signal_policy
 
 
-@pytest.fixture
-def led(tmp_path):
-    lg = Ledger(str(tmp_path / "feedback.db"))
-    yield lg
-    lg.close()
+led = ledger_fixture()
 
 
 def fact(db, mid, **fields):

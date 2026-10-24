@@ -9,16 +9,12 @@ import extract_llm
 import mcs_signals
 import rollup
 import structured_view
-from extract_testkit import _hash, _ledger, _message
+from extract_testkit import _hash, _message
+from common_testkit import ledger_fixture
 import clinical_urgency
 
 
-@pytest.fixture
-def store(tmp_path):
-    db = _ledger(tmp_path)
-    db.ensure_patient(1)
-    yield db
-    db.close()
+store = ledger_fixture(name="store", patients=(1,))
 
 
 def seed(store, body, doc, *, age_days=0):

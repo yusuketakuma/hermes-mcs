@@ -9,17 +9,11 @@ import time
 from types import SimpleNamespace
 
 import job_ops
-import pytest
-from ingest_testkit import _ledger, _message
+from common_testkit import ledger_fixture
+from ingest_testkit import _message
 
 
-@pytest.fixture
-def db(tmp_path):
-    store = _ledger(tmp_path)
-    try:
-        yield store
-    finally:
-        store.close()
+db = ledger_fixture(name="db")
 
 
 def _notified(db):

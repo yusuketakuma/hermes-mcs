@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-import ledger
+from common_testkit import ledger_fixture
 import mcs_signals
 from ops_testkit import DAY, NOW, _msg
 import signal_policy
@@ -42,13 +42,7 @@ def _registered(db, mid):
                (mid, mid, f"h{mid}", NOW, NOW))
 
 
-@pytest.fixture
-def store(tmp_path):
-    value = ledger.Ledger(str(tmp_path / "synthetic.db"))
-    try:
-        yield value
-    finally:
-        value.close()
+store = ledger_fixture(name="store")
 
 
 def _mixed_sources(db, name):

@@ -13,16 +13,10 @@ import health_report
 import job_ops
 import maintenance
 import run_check
-from ingest_testkit import _ledger
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def db(tmp_path):
-    store = _ledger(tmp_path)
-    try:
-        yield store
-    finally:
-        store.close()
+db = ledger_fixture(name="db")
 
 
 def _command(path):

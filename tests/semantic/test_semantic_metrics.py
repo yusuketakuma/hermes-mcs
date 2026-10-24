@@ -6,20 +6,14 @@ import json
 import sqlite3
 from types import SimpleNamespace
 
-from ledger import Ledger
+from common_testkit import ledger_fixture
 import pytest
 import semantic_metrics
 from semantic_policy import KIND_AUDIT, KIND_SUMMARY
 from semantic_testkit import _cfg, _message, _audit_pair as _pair
 
 
-@pytest.fixture
-def db(tmp_path):
-    led = Ledger(str(tmp_path / "ledger.db"))
-    try:
-        yield led
-    finally:
-        led.close()
+db = ledger_fixture(name="db")
 
 
 def _raw(value):

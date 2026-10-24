@@ -131,6 +131,11 @@ def file_sha256(path) -> str:
     return h.hexdigest()
 
 
+def text_sha256(text: str) -> str:
+    """Hex sha256 of a string's UTF-8 bytes."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def canonical(value) -> bytes:
     """Canonical JSON bytes (sorted keys, compact, UTF-8, no NaN/inf) —
     the one serialization every stored payload hash is computed over."""
@@ -183,6 +188,28 @@ def json_object(text: str) -> dict | None:
         if isinstance(d, dict):
             return d
     return None
+
+
+def unique_pairs(items):
+    """``object_pairs_hook`` that rejects a repeated key as ``duplicate_key``."""
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError("duplicate_key")
+        result[key] = value
+    return result
+
+
+def reject_constant(_):
+    """``parse_constant`` hook that rejects NaN/Infinity as ``invalid_number``."""
+    raise ValueError("invalid_number")
+
+
+def safe_error_code(exc) -> str:
+    """Error code safe to log: a code-shaped ValueError message, else the type name."""
+    # user text/SQL/paths must never be interpolated into error logs
+    return str(exc) if type(exc) is ValueError and \
+        str(exc).replace("_", "").isalnum() else type(exc).__name__
 
 
 def html_to_text(h: str) -> str:

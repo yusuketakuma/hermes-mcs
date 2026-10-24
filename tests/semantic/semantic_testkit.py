@@ -126,6 +126,16 @@ def _seeded(tmp_path):
 NO_FACTS = {c: "none" for c in sf.MANDATORY_CATEGORIES}
 
 
+def facts_llm(facts, presence=None):
+    """Return an LLM stub that answers with ``facts`` and category presence."""
+    def call(_prompt):
+        return json.dumps(
+            {"facts": facts,
+             "category_presence": dict(NO_FACTS, **(presence or {}))},
+            ensure_ascii=False)
+    return call
+
+
 def _seeded_two(tmp_path):
     """Parent + reply with DISTINCT bodies -> one job, targets {1,2}."""
     db = _ledger(tmp_path)

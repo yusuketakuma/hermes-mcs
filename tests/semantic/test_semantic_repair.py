@@ -8,9 +8,7 @@ import json
 
 import semantic_extraction as extraction
 import semantic_facts as sf
-
-
-NO_FACTS = {c: "none" for c in sf.MANDATORY_CATEGORIES}
+from semantic_testkit import NO_FACTS, facts_llm as _llm
 
 
 def _member(body, **kw):
@@ -20,15 +18,6 @@ def _member(body, **kw):
               "sender": {"id": "s1", "type": "staff", "profession": "dr"}}
     member.update(kw)
     return member
-
-
-def _llm(facts, presence=None):
-    def call(_prompt):
-        return json.dumps(
-            {"facts": facts,
-             "category_presence": dict(NO_FACTS, **(presence or {}))},
-            ensure_ascii=False)
-    return call
 
 
 def _doc():

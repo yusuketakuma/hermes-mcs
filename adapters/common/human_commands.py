@@ -129,6 +129,16 @@ def _current_loop_candidate(view, project_id: int, artifact_id: int,
         return None, str(error)
 
 
+def _loop_ref_of(candidate: dict) -> dict:
+    """The loop_ref a preview carries and confirm re-derives; one builder keeps them equal."""
+    return {
+        "artifact_id": candidate["artifact_id"],
+        "source_fingerprint": candidate["source_fingerprint"],
+        "policy_fingerprint": candidate["policy_fingerprint"],
+        "match_confirmed": True,
+    }
+
+
 def _loop_ref(data: dict, view, project_id: int,
               source_message_id: int):
     error = _loop_input_error(data)
@@ -140,12 +150,7 @@ def _loop_ref(data: dict, view, project_id: int,
         view, project_id, data["loop_artifact_id"], source_message_id)
     if error:
         return None, None, error
-    return {
-        "artifact_id": candidate["artifact_id"],
-        "source_fingerprint": candidate["source_fingerprint"],
-        "policy_fingerprint": candidate["policy_fingerprint"],
-        "match_confirmed": True,
-    }, candidate["candidate"], None
+    return _loop_ref_of(candidate), candidate["candidate"], None
 
 
 def _verify_loop_ref(payload: dict, view, project_id: int,
@@ -162,12 +167,7 @@ def _verify_loop_ref(payload: dict, view, project_id: int,
         view, project_id, loop_ref["artifact_id"], source_message_id)
     if error:
         return error
-    expected = {
-        "artifact_id": current["artifact_id"],
-        "source_fingerprint": current["source_fingerprint"],
-        "policy_fingerprint": current["policy_fingerprint"],
-        "match_confirmed": True,
-    }
+    expected = _loop_ref_of(current)
     if loop_ref != expected:
         return "loop_candidate_stale"
     return None
@@ -600,27 +600,27 @@ def build_control_preview(data: dict, settings: dict[str, Any],
 def _confirmation_parts(data: dict, requests,
                         identity: dict[str, str | None]):
     if set(data) != _CONFIRM_FIELDS or not isinstance(data.get("payload"), dict):
-        return None, None, None, "bad_confirmation"
+        return None, None, "bad_confirmation"
     payload = data["payload"]
     supplied_hash = data.get("payload_hash")
     origin = data.get("origin")
     current_origin = confirmation_origin(identity)
     if not isinstance(origin, dict) or origin != current_origin:
-        return None, None, None, "origin_mismatch"
+        return None, None, "origin_mismatch"
     from mcs_util import valid_hash
     if (not valid_hash(supplied_hash)
             or requests.payload_hash({"payload": payload, "origin": origin})
             != supplied_hash):
-        return None, None, None, "payload_hash_mismatch"
+        return None, None, "payload_hash_mismatch"
     if payload.get("actor") != actor(identity):
-        return None, None, None, "actor_mismatch"
-    return payload, supplied_hash, origin, None
+        return None, None, "actor_mismatch"
+    return payload, supplied_hash, None
 
 
 def confirm(data: dict, settings: dict[str, Any],
              identity: dict[str, str | None], *, operation: str, authorized=None) -> str:
     requests, mcs_view = modules()
-    payload, supplied_hash, origin, error = _confirmation_parts(
+    payload, supplied_hash, error = _confirmation_parts(
         data, requests, identity)
     if error:
         return deny(error)

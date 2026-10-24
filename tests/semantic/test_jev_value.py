@@ -4,24 +4,10 @@ The report must split deterministic findings from Jev-only detections,
 measure mandatory-fact recall, and gate on complete evaluation —
 partial evidence never passes.
 """
-import json
-
 import pytest
 
 import semantic_evaluation as seval
-import semantic_facts as sf
-
-
-NO_FACTS = {c: "none" for c in sf.MANDATORY_CATEGORIES}
-
-
-def _llm(facts, presence=None):
-    def call(_prompt):
-        return json.dumps(
-            {"facts": facts,
-             "category_presence": dict(NO_FACTS, **(presence or {}))},
-            ensure_ascii=False)
-    return call
+from semantic_testkit import facts_llm as _llm
 
 
 class _Jev:

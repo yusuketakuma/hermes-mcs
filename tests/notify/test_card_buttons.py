@@ -26,6 +26,7 @@ from notify_testkit import (
     CFG, NOW, ORIGIN, _add_request, _at, _click, _deliver, _delivered_card, _dispatch,
     _intent, _latest_render, _llm_extract, _msg, _patient, _seed_thread,
     _signal_row, _spec, led, pinned_clock)
+from notify_testkit import _button_ids as _ids
 import clinical_urgency
 import mcs_queries
 
@@ -41,10 +42,6 @@ SLACK_ACTOR = "slack:T0SYN:U0SYN1"
 def _button(spec, action):
     return next(b for row in spec["parts"]["action_rows"] for b in row
                 if b["id"] == action)
-
-
-def _ids(spec):
-    return [b["id"] for row in spec["parts"]["action_rows"] for b in row]
 
 
 def _footer(spec):

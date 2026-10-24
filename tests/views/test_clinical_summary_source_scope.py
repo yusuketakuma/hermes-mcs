@@ -5,16 +5,12 @@ import pytest
 import extract_llm
 import notify_action_context
 import structured_view
-from extract_testkit import _ledger, _message, _hash
+from extract_testkit import _message, _hash
+from common_testkit import ledger_fixture
 import mcs_queries
 
 
-@pytest.fixture
-def store(tmp_path):
-    db = _ledger(tmp_path)
-    db.ensure_patient(1)
-    yield db
-    db.close()
+store = ledger_fixture(name="store", patients=(1,))
 
 
 def seed(store, body, doc, *, name="患者A", group=False):

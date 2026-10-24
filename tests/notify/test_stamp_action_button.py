@@ -9,12 +9,9 @@ import pytest
 
 import notify_action_tokens
 from notify_testkit import _dispatch, _intent, _seed_thread, _spec, led
+from notify_testkit import _button_ids as _ids
 
 __all__ = ["led"]
-
-
-def _ids(spec):
-    return [b["id"] for row in spec["parts"]["action_rows"] for b in row]
 
 
 def _gate(result):

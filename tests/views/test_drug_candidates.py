@@ -9,19 +9,14 @@ import pytest
 import brain_export
 import drug_map
 from export_schema import project_record
-from extract_testkit import _ledger
 import mcs_stats
 import rollup
 from test_drug_map import DOCUMENT, _dictionary, _seed
 from views_testkit import SNAP_TS
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def store(tmp_path):
-    ledger = _ledger(tmp_path)
-    ledger.ensure_patient(1)
-    yield ledger
-    ledger.close()
+store = ledger_fixture(name="store", patients=(1,))
 
 
 def _stats(store):

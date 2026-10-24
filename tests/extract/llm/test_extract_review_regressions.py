@@ -4,16 +4,11 @@ import json
 import pytest
 
 import extract_llm
-from extract_testkit import _hash, _ledger, _message
+from common_testkit import ledger_fixture
+from extract_testkit import _hash, _message
 
 
-@pytest.fixture
-def db(tmp_path):
-    store = _ledger(tmp_path)
-    try:
-        yield store
-    finally:
-        store.close()
+db = ledger_fixture(name="db")
 
 
 def _seed_thin(db, mid=2):

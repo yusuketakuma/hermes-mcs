@@ -14,10 +14,10 @@ import pytest
 import semantic_extraction as extraction
 import semantic_facts as sf
 import semantic_extraction as ex
+from semantic_testkit import NO_FACTS, facts_llm as _llm
 
 
 FP = "sf_v2_test"
-NO_FACTS = {c: "none" for c in sf.MANDATORY_CATEGORIES}
 
 
 def _member(body, **kw):
@@ -27,15 +27,6 @@ def _member(body, **kw):
               "sender": {"id": "s1", "type": "staff", "profession": "dr"}}
     member.update(kw)
     return member
-
-
-def _llm(facts, presence=None):
-    def call(_prompt):
-        return json.dumps(
-            {"facts": facts,
-             "category_presence": dict(NO_FACTS, **(presence or {}))},
-            ensure_ascii=False)
-    return call
 
 
 class _FakeLedger:

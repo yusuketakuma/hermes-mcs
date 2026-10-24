@@ -9,19 +9,13 @@ import pytest
 
 import mcs_signals
 import run_check
-from ingest_testkit import _ledger
+from common_testkit import ledger_fixture
 
 OLD = time.time() - 7 * 3600
 
 
 
-@pytest.fixture
-def db(tmp_path):
-    store = _ledger(tmp_path)
-    try:
-        yield store
-    finally:
-        store.close()
+db = ledger_fixture(name="db")
 
 
 def _store(db, mid, first_seen):

@@ -2,14 +2,10 @@
 import semantic_notice
 import pytest
 
-from ledger import Ledger
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def ledger(tmp_path):
-    result = Ledger(str(tmp_path / "synthetic.db"))
-    yield result
-    result.close()
+ledger = ledger_fixture(name="ledger")
 
 
 def _raw(ledger, payload: str, state: str = "pending",

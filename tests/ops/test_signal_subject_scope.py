@@ -1,19 +1,14 @@
 """旧解析の誤主体ラベルより原文scopeを優先する完全合成シグナル回帰。"""
 import json
-import pytest
-from extract_testkit import _ledger, _message, _hash
+from extract_testkit import _message, _hash
+from common_testkit import ledger_fixture
 import mcs_signals
 import signal_policy
 
 NOW = 1791000000
 
 
-@pytest.fixture
-def store(tmp_path):
-    led = _ledger(tmp_path)
-    led.ensure_patient(1)
-    yield led
-    led.close()
+store = ledger_fixture(name="store", patients=(1,))
 
 
 def seed(store, body, doc, *, mid=1, age=10):

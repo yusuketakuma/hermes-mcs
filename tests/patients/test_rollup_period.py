@@ -4,19 +4,15 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from extract_testkit import _ledger, _message, _hash
+from extract_testkit import _message, _hash
+from common_testkit import ledger_fixture
 import rollup
 
 
 JST = timezone(timedelta(hours=9))
 
 
-@pytest.fixture
-def db(tmp_path):
-    ledger = _ledger(tmp_path)
-    ledger.ensure_patient(1)
-    yield ledger
-    ledger.close()
+db = ledger_fixture(name="db", patients=(1,))
 
 
 def _add_period(db, mid, period, body="合成薬を内服"):

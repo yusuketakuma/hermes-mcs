@@ -9,10 +9,10 @@ import pytest
 import extract
 import extract_bench
 import extract_llm
-from ledger import Ledger
 from mcs_contract import Message
 import rollup
 import clinical_urgency
+from common_testkit import ledger_fixture
 
 
 def _message(mid=1, body="合成本文", day=20):
@@ -24,12 +24,7 @@ def _message(mid=1, body="合成本文", day=20):
                    reply_count=0)
 
 
-@pytest.fixture
-def db(tmp_path):
-    led = Ledger(str(tmp_path / "ledger.db"))
-    led.ensure_patient(1)
-    yield led
-    led.close()
+db = ledger_fixture(name="db", patients=(1,))
 
 
 def artifact(db, mid, content):

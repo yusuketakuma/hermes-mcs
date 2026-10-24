@@ -7,16 +7,12 @@ import pytest
 
 import clinical_values
 import extract
-from extract_testkit import _ledger, _message, _hash
+from extract_testkit import _message, _hash
+from common_testkit import ledger_fixture
 import rollup
 
 
-@pytest.fixture
-def store(tmp_path):
-    led = _ledger(tmp_path)
-    led.ensure_patient(1)
-    yield led
-    led.close()
+store = ledger_fixture(name="store", patients=(1,))
 
 
 def seed(store, body, doc):

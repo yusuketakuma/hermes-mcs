@@ -17,15 +17,11 @@ import extract_llm
 import rollup
 import structured_view
 from semantic_projection import PROJECTION_VERSION
-from extract_testkit import _hash, _ledger, _message
+from extract_testkit import _hash, _message
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def db(tmp_path):
-    ledger = _ledger(tmp_path)
-    ledger.ensure_patient(1)
-    yield ledger
-    ledger.close()
+db = ledger_fixture(name="db", patients=(1,))
 
 
 @pytest.mark.parametrize("change", ["revived", "succeeded", "deleted"])

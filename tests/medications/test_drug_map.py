@@ -15,7 +15,8 @@ import pytest
 import drug_map
 import rollup
 from semantic_projection import PROJECTION_VERSION
-from extract_testkit import _hash, _ledger, _message
+from extract_testkit import _hash, _message
+from common_testkit import ledger_fixture
 
 
 class _FictionalEntryRequired(TypedDict):
@@ -86,12 +87,7 @@ def _seed(store, mid=1, names=("キラナ",), *, kind="extract_llm",
                  if kind in ("canonical_projection", "semantic_facts_v4") else {})})
 
 
-@pytest.fixture
-def store(tmp_path):
-    ledger = _ledger(tmp_path)
-    ledger.ensure_patient(1)
-    yield ledger
-    ledger.close()
+store = ledger_fixture(name="store", patients=(1,))
 
 
 @pytest.mark.parametrize("name,method", [

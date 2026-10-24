@@ -45,6 +45,10 @@ def _uuid(n: int) -> str:
 led = ledger_fixture(data_dir=True)
 
 
+def _button_ids(spec):
+    return [b["id"] for row in spec["parts"]["action_rows"] for b in row]
+
+
 def _patient(led, pid=1, name="患者A", archived=0):
     led.db.execute(
         "INSERT INTO patients(project_id,patient_name,is_archived) "

@@ -8,17 +8,13 @@ import json
 
 import pytest
 
-from extract_testkit import _ledger, _message, _hash
+from extract_testkit import _message, _hash
+from common_testkit import ledger_fixture
 import rollup
 from semantic_projection import PROJECTION_VERSION
 
 
-@pytest.fixture
-def db(tmp_path):
-    ledger = _ledger(tmp_path)
-    ledger.ensure_patient(1)
-    yield ledger
-    ledger.close()
+db = ledger_fixture(name="db", patients=(1,))
 
 
 def _fact(fid, kind, statement, quote="引用"):
