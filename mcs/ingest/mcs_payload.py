@@ -151,7 +151,7 @@ def normalize_message(m: dict, project_id: int, parent_id: int | None = None,
     count = m.get("count") or {}
     if ((comment is not None and not isinstance(comment, str))
             or (snippet is not None and not isinstance(snippet, str))
-            or not isinstance(created, str) or not isinstance(count, dict)):
+            or not isinstance(count, dict)):
         raise SchemaError("message: fields invalid")
     reply_count = count.get("thread_messages", 0)
     if type(reply_count) is not int or not 0 <= reply_count < 2**63:
@@ -198,3 +198,12 @@ def normalize_threads(items, project_id: int, parent_id: int) -> list[Message]:
            for m in items):
         raise SchemaError(f"thread[{parent_id}]: invalid id")
     return [normalize_message(m, project_id, parent_id=parent_id) for m in items]
+
+
+def normalize_root(m, project_id: int, label: str) -> Message:
+    """One listed root post with its embedded thread replies; ``label`` prefixes the invalid-id error."""
+    if not isinstance(m, dict) or not valid_id(m.get("id")):
+        raise SchemaError(f"{label}: invalid id")
+    nm = normalize_message(m, project_id)
+    nm.replies = normalize_threads(m.get("thread_messages") or [], project_id, nm.message_id)
+    return nm

@@ -291,16 +291,6 @@ def carried_since(key: str, active: bool, now: float) -> float | None:
     return at if finite_number(at) and 0 <= at <= now else now
 
 
-def llm_failing(db) -> bool:
-    """The local LLM circuit breaker is open or holds unreset failures
-    (the state file disappears on the first answered call). Read-only."""
-    from llm_availability import circuit_open_s, circuit_state_path
-    try:
-        return circuit_open_s(db) > 0 or circuit_state_path(db).exists()
-    except (OSError, sqlite3.Error, IndexError, TypeError, ValueError):
-        return False
-
-
 def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
     """Degraded reasons for work that silently stopped moving. Each
     check is gated on its feature being enabled and needs BOTH old
@@ -308,10 +298,10 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
     draining backlog (or an idle system) never trips it.
     - card_delivery_stalled: a queued render on the active interactive
       transport not picked up for CARD_STALL_S (worker down/denied).
-    - local_llm_down / llm_endpoint_down: local-model work (semantic jobs
-      or pending legacy extraction) has been due while the local
-      LLM circuit breaker kept failing for BACKLOG_STALL_S (the server
-      is down; deferred jobs never fail, so nothing else would say so).
+    - local_llm_down: local-model work (semantic jobs or pending legacy
+      extraction) is due while the LLM lane's own health record says the
+      local LLM has been down for LOCAL_LLM_DOWN_S (deferred jobs never
+      fail, so nothing else would say so).
     - semantic_backlog_stalled: semantic mode on, no semantic job done
       for BACKLOG_STALL_S while due jobs existed throughout that window
       (tracked across health writes, independent of updated_at: a
@@ -383,25 +373,16 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
             "LIMIT 1", (extract_llm.KIND, extract_llm.EXTRACT_VERSION)
         ).fetchone() is not None
 
-    down_for = getattr(llm_availability, 'llm_down_for_s', None)
-    if callable(down_for):
-        # the LLM lane's own health record (llm_health.json): None means
-        # unknown or healthy and never alerts
-        try:
-            seconds = down_for(db, now=now)
-        except Exception:
-            seconds = None
-        marks["llm_down_since"] = None
-        if (finite_number(seconds) and seconds >= LOCAL_LLM_DOWN_S
-                and llm_due()):
-            reasons.append("local_llm_down")
-    else:
-        # fallback without that record: breaker failing while work waits
-        down = carried_since("llm_down_since",
-                              llm_failing(db) and llm_due(), now)
-        marks["llm_down_since"] = down
-        if down is not None and now - down > BACKLOG_STALL_S:
-            reasons.append("llm_endpoint_down")
+    # the LLM lane's own health record (llm_health.json): None means
+    # unknown or healthy and never alerts
+    try:
+        seconds = llm_availability.llm_down_for_s(db, now=now)
+    except Exception:
+        seconds = None
+    marks["llm_down_since"] = None   # kept in health.json for older readers
+    if (finite_number(seconds) and seconds >= LOCAL_LLM_DOWN_S
+            and llm_due()):
+        reasons.append("local_llm_down")
     if errors:
         return reasons   # reported as stage errors; admission is closed
     blocked = jev_block_reason(db) if scfg["mode"] != "off" else None

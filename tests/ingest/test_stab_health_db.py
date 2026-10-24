@@ -62,25 +62,6 @@ def test_due_episode_ends_when_no_job_is_due(tmp_path, health_file):
     db.close()
 
 
-def test_llm_endpoint_down_needs_failing_breaker_and_due_work(
-        tmp_path, health_file, monkeypatch):
-    # the breaker fallback applies only without the LLM health record
-    monkeypatch.delattr(llm_availability, 'llm_down_for_s', raising=False)
-    db = _ledger(tmp_path)
-    now = time.time()
-    circuit = tmp_path / "llm_circuit.json"
-    _sem_job(db, 1, next_try=now, updated_at=now)
-    health_file(stall_marks={"llm_down_since": now - 7 * H})
-    marks = {}
-    assert "llm_endpoint_down" not in health_report.backlog_stalls(db.db, ON, now, marks=marks)
-    assert marks["llm_down_since"] is None              # breaker healthy
-    circuit.write_text(json.dumps({"failures": 1, "streak": 0}))
-    assert "llm_endpoint_down" in health_report.backlog_stalls(db.db, ON, now)
-    health_file(stall_marks={"llm_down_since": now - H})
-    assert "llm_endpoint_down" not in health_report.backlog_stalls(db.db, ON, now)
-    db.close()
-
-
 def _legacy_extract(db, mid, *, exhausted):
     import extract_llm
     digest = db.db.execute("SELECT content_hash FROM messages WHERE message_id=?",

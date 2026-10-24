@@ -53,7 +53,7 @@ from mcs_download import disk_error_kind, validate_download_url
 from mcs_contract import (API, BASE, BootstrapError, MCSError as MCSError, SessionExpired as SessionExpired, SchemaError as SchemaError, Attachment as Attachment, Message as Message,
                           UnreadPatient as UnreadPatient, UnreadSnapshot as UnreadSnapshot, MessageBatch as MessageBatch, ReplyBatch as ReplyBatch, project_url as project_url, valid_id)
 from mcs_payload import (text_field, sender_name, profession, organization, page_has_next, unread_patient,
-                         message_metadata, normalize_message, normalize_threads)
+                         message_metadata, normalize_message, normalize_root, normalize_threads)
 from stamp_contract import REACTION_LABELS, reaction_kind_ok
 # The MCS unread screen (and its unread=1 route) lists at most this many
 # messages per project — owner-confirmed 2026-09-30. Reaching it means
@@ -78,10 +78,22 @@ KARTE_SUMMARY_MAX_CHARS = 600
 LOGIN_STATE_NAME = "login_state.json"
 LOGIN_BACKOFF_BASE_S = 3600
 LOGIN_BACKOFF_MAX_S = 86400
+# CDP page targets on the MCS host (derived from BASE, never a second literal)
+_MCS_HOST = urllib.parse.urlparse(BASE).hostname
 
 
+def _is_mcs_page(t) -> bool:
+    """A CDP target that is a page on the MCS host."""
+    return t.get("type") == "page" and urllib.parse.urlparse(t.get("url", "")).hostname == _MCS_HOST
 
 
+def _thread_has_next(r) -> bool:
+    """Thread page continuation: no ``paginate`` means the last page; a non-object one is a schema error."""
+    if "paginate" not in r:
+        return False
+    if not isinstance(r["paginate"], dict):
+        raise SchemaError("thread: paginate invalid")
+    return page_has_next(r["paginate"], "thread")
 
 
 class KeychainLocked(Exception):
@@ -406,9 +418,7 @@ class MCSAdapter:
 
     def _token_via_cdp(self) -> str:
         targets = self._cdp_json("/json/list")
-        page = next((t for t in targets if t.get("type") == "page"
-                     and urllib.parse.urlparse(t.get("url", "")).hostname
-                     == "www.medical-care.net"), None)
+        page = next((t for t in targets if _is_mcs_page(t)), None)
         if not page:
             page = self._cdp_json(f"/json/new?{BASE}/unreads", method="PUT")
             self._sleep_bounded(3)
@@ -690,10 +700,9 @@ class MCSAdapter:
 
     def _mcs_pages(self) -> list:
         return [t for t in self._cdp_json("/json/list")
-                if t.get("type") == "page" and isinstance(t.get("id"), str)
-                and re.fullmatch(r"[0-9A-Fa-f]{16,64}", t["id"])
-                and urllib.parse.urlparse(t.get("url", "")).hostname
-                == "www.medical-care.net"]
+                # id first: a malformed URL is only parsed for a well-formed page id, as before
+                if isinstance(t.get("id"), str) and re.fullmatch(r"[0-9A-Fa-f]{16,64}", t["id"])
+                and _is_mcs_page(t)]
 
     def _heal_hung_pages(self) -> int:
         """Close MCS tabs whose renderer no longer answers a trivial
@@ -744,13 +753,12 @@ class MCSAdapter:
                 continue
             u = urllib.parse.urlparse(t.get("url", ""))
             if (u.scheme == "https"
-                    and u.hostname == "www.medical-care.net"
+                    and u.hostname == _MCS_HOST
                     and "authentication/login" in u.path):
                 return t
         # reuse an existing mcs tab or open one
         for t in targets:
-            if t.get("type") == "page" and urllib.parse.urlparse(
-                    t.get("url", "")).hostname == "www.medical-care.net":
+            if _is_mcs_page(t):
                 self._cdp_eval(t["webSocketDebuggerUrl"],
                                f"location.href='{BASE}/authentication/login'")
                 self._sleep_bounded(4)
@@ -1412,14 +1420,7 @@ class MCSAdapter:
                     total = pag["total_entries"]
                 page_messages = []
                 for m in items:
-                    if not isinstance(m, dict) or not valid_id(m.get("id")):
-                        raise SchemaError(
-                            f"messages[{project_id}]: invalid id")
-                    nm = normalize_message(m, project_id)
-                    nm.replies = normalize_threads(
-                        m.get("thread_messages") or [], project_id,
-                        nm.message_id)
-                    page_messages.append(nm)
+                    page_messages.append(normalize_root(m, project_id, f"messages[{project_id}]"))
             except MCSError as e:
                 error = e
                 break
@@ -1470,13 +1471,7 @@ class MCSAdapter:
         r = self._get(
             f"/projects/{project_id}/messages/{message_id}/messages",
             {"keep_read_status": 1, "page": page})
-        if "paginate" in r:
-            pag = r["paginate"]
-            if not isinstance(pag, dict):
-                raise SchemaError("thread: paginate invalid")
-            has_next = page_has_next(pag, "thread")
-        else:
-            has_next = False
+        has_next = _thread_has_next(r)
         return (normalize_threads(r.get("messages"), project_id,
                               message_id), has_next)
 
@@ -1660,12 +1655,7 @@ class MCSAdapter:
                 has_next = page_has_next(pag, f"history[{project_id}]")
                 page_messages = []
                 for m in items:
-                    if not isinstance(m, dict) or not valid_id(m.get("id")):
-                        raise SchemaError(f"history[{project_id}]: invalid id")
-                    nm = normalize_message(m, project_id)
-                    nm.replies = normalize_threads(
-                        m.get("thread_messages") or [], project_id,
-                        nm.message_id)
+                    nm = normalize_root(m, project_id, f"history[{project_id}]")
                     if since_ts and nm.posted_at:
                         try:
                             parent_ts = datetime.fromisoformat(
@@ -1794,12 +1784,7 @@ class MCSAdapter:
                     {"page": page})
                 seen.update(m.message_id for m in normalize_threads(
                     r.get("messages"), project_id, parent_id))
-                if "paginate" not in r:
-                    return seen
-                pag = r["paginate"]
-                if not isinstance(pag, dict):
-                    raise SchemaError("thread: paginate invalid")
-                if not page_has_next(pag, "thread"):
+                if not _thread_has_next(r):
                     return seen
             raise MCSError("thread_incomplete", retryable=True)
         except MCSError as error:

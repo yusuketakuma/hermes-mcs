@@ -317,7 +317,7 @@ def sync_metadata(ledger, adapter, project_id: int, dataset: str, *,
                "names_retained": retain_names, **result}
     if definition_source_artifact_id is not None:
         payload["definition_source_artifact_id"] = definition_source_artifact_id
-        payload["definition_fingerprint"] = clinical_definition_fingerprint(target["entity_id"], items)
+        payload["definition_fingerprint"] = definition_fingerprint     # computed from the same items above
         payload["definition_source"] = "observation_values" if result["definition"] else "observation_items"
         if result["complete"] and payload["definition"] is None:
             payload["definition"] = definition
