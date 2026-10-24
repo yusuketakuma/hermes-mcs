@@ -190,6 +190,9 @@ def message_urgency_details(db, mid: int, *, facts=_Unset, rule=_Unset, source=_
         return result
     row = mcs_queries.message_urgency_source(db, mid) if source is _Unset else source
     if row is None or row["body_state"] not in (None, "full") or not isinstance(row["body_text"], str):
+        # unreadable source: a raw high stays held for review, never promoted
+        if verdict == "high":
+            result.update(verdict="unclear", held=True, scopes=["unknown"])
         return result
     body = row["body_text"]
     default = "unknown" if row["project_type"] == "group" else "patient"

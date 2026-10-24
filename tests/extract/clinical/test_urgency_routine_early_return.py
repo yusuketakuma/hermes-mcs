@@ -72,6 +72,8 @@ def test_explicit_none_is_an_empty_read_not_an_omission(tmp_path, monkeypatch):
         assert clinical_urgency.message_urgency_details(db.db, 1, facts=None)["source"] == "llm"
         monkeypatch.setattr(mcs_queries, "message_urgency_source", unread)
         held = clinical_urgency.message_urgency_details(db.db, 1, rule=None, source=None)
-        assert held["source"] is None and held["verdict"] == "high" and not held["held"]
+        # an unreadable source row holds a raw high for review (owner decision 2026-10-24)
+        assert held["source"] is None and held["verdict"] == "unclear" and held["held"]
+        assert held["raw_verdict"] == "high" and held["scopes"] == ["unknown"]
     finally:
         db.close()
