@@ -13,7 +13,7 @@ import notify_views
 import rollup
 import run_check
 from ingest_testkit import _ledger, _message
-from test_drug_map import _dictionary, _fail_dictionary_io, _seed, store as store
+from medications_testkit import _dictionary, _fail_dictionary_io, _seed, store as store
 
 
 def test_dictionary_candidates_are_derived_before_rollup_and_retired_when_disabled(

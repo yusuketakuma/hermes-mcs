@@ -11,7 +11,7 @@ import safe_io
 import drug_map
 import ledger
 import mcs_requests
-from test_drug_map import DOCUMENT, _seed
+from medications_testkit import DOCUMENT, _seed
 
 
 @pytest.fixture

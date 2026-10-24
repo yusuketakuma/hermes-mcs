@@ -5,7 +5,7 @@ import pytest
 
 import mcs_drug
 import mcs_requests
-from test_drug_map import DOCUMENT
+from medications_testkit import DOCUMENT
 
 
 def test_related_limit_zero_does_not_blame_a_valid_dictionary(tmp_path, capsys):

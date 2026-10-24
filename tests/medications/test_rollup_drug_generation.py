@@ -4,7 +4,7 @@ import json
 
 import drug_map
 import rollup
-from test_drug_map import DOCUMENT, _dictionary, _seed, store as store
+from medications_testkit import DOCUMENT, _dictionary, _seed, store as store
 from ingest_testkit import _message
 
 

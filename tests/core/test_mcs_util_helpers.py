@@ -33,3 +33,18 @@ def test_reject_constant_rejects_nonfinite(raw):
 def test_text_sha256_matches_hashlib():
     text = "合成テキスト sample"
     assert util.text_sha256(text) == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_strict_json_accepts_finite_object():
+    assert util.strict_json('{"a": 1.5, "b": [2]}') == {"a": 1.5, "b": [2]}
+
+
+@pytest.mark.parametrize("raw, code", [
+    ('{"a": 1, "a": 2}', "duplicate_json_key"),
+    ('{"x": NaN}', "nonfinite_json_number"),
+    ('{"x": -Infinity}', "nonfinite_json_number"),
+    ('{"x": 1e999}', "nonfinite_json_number"),
+])
+def test_strict_json_rejects_with_distinct_codes(raw, code):
+    with pytest.raises(ValueError, match=f"^{code}$"):
+        util.strict_json(raw)

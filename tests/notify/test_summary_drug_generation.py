@@ -7,7 +7,7 @@ import pytest
 import drug_map
 import notify_views
 import rollup
-from test_drug_map import DOCUMENT, _dictionary, _seed, store as store
+from medications_testkit import DOCUMENT, _dictionary, _seed, store as store
 
 
 def _summary_cache(store, tmp_path):

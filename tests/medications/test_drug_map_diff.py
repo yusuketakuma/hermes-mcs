@@ -5,7 +5,7 @@ import json
 import pytest
 
 import drug_map
-from test_drug_map import DOCUMENT, _dictionary
+from medications_testkit import DOCUMENT, _dictionary
 
 
 def _pair(tmp_path, edit):

@@ -10,13 +10,19 @@ import semantic_policy
 import semantic_store
 import json
 import re
+import socket
+import threading
 import time
+from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
+
+import pytest
 
 import ledger
 import semantic_evaluation as evaluation
 import semantic_facts as sf
 import semantic_jev as jev
+import mcs_test_guard as test_guard
 from common_testkit import make_ledger
 
 
@@ -522,3 +528,42 @@ def _audit_pair(db, mid, cfg, status="PASS"):
             db, row["project_id"], mid, result, bundle["source_fingerprint"],
             {member["message_id"]: member for member in bundle["members"]},
             status, semantic_policy.policy_fingerprint(scfg), scfg["summary_mode"])
+
+
+def _guard_original(owner, name):
+    for module, attr, original in reversed(test_guard._ORIGINALS):
+        if module is owner and attr == name:
+            return original
+    raise AssertionError(f"missing guarded original {owner!r}.{name}")
+
+
+@pytest.fixture
+def local_http(monkeypatch):
+    """Run only loopback servers after explicitly lifting the socket guard."""
+    # tests/conftest.py blocks all socket connects so an accidental live
+    # call fails.  These three originals are restored only for this fixture;
+    # the endpoint is a temporary loopback server created below.
+    monkeypatch.setattr(socket, "create_connection",
+                        _guard_original(socket, "create_connection"))
+    monkeypatch.setattr(socket.socket, "connect",
+                        _guard_original(socket.socket, "connect"))
+    monkeypatch.setattr(socket.socket, "connect_ex",
+                        _guard_original(socket.socket, "connect_ex"))
+    servers = []
+
+    def start(handler, path):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever,
+                                  name="semantic-test-http", daemon=True)
+        thread.start()
+        servers.append((server, thread))
+        host, port = server.server_address
+        return f"http://{host}:{port}{path}"
+
+    yield start
+
+    for server, thread in servers:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1.0)

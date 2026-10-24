@@ -8,7 +8,7 @@ import drug_reconciliation
 import drug_timeline
 import test_drug_timeline as timeline_kit
 from test_drug_timeline import current, view_of
-from test_drug_map import _dictionary, _source_document
+from medications_testkit import _dictionary, _source_document
 from project_metadata import ARTIFACT_KIND, normalize_rows
 
 

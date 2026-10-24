@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from test_drug_map import DOCUMENT, _dictionary, _source_document
+from medications_testkit import DOCUMENT, _dictionary, _source_document
 
 
 def test_reference_search_keeps_strength_and_form_products_separate(tmp_path):

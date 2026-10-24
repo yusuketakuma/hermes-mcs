@@ -3,54 +3,16 @@
 from __future__ import annotations
 
 import json
-import socket
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import pytest
 
-import mcs_test_guard as test_guard
 import semantic_jev as jev
+from semantic_testkit import local_http
 
-
-def _guard_original(owner, name):
-    for module, attr, original in reversed(test_guard._ORIGINALS):
-        if module is owner and attr == name:
-            return original
-    raise AssertionError(f"missing guarded original {owner!r}.{name}")
-
-
-@pytest.fixture
-def local_http(monkeypatch):
-    """Run only loopback servers after explicitly lifting the socket guard."""
-    # tests/conftest.py blocks all socket connects so an accidental live
-    # call fails.  These three originals are restored only for this fixture;
-    # the endpoint is a temporary loopback server created below.
-    monkeypatch.setattr(socket, "create_connection",
-                        _guard_original(socket, "create_connection"))
-    monkeypatch.setattr(socket.socket, "connect",
-                        _guard_original(socket.socket, "connect"))
-    monkeypatch.setattr(socket.socket, "connect_ex",
-                        _guard_original(socket.socket, "connect_ex"))
-    servers = []
-
-    def start(handler):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        server.daemon_threads = True
-        thread = threading.Thread(target=server.serve_forever,
-                                  name="semantic-test-http", daemon=True)
-        thread.start()
-        servers.append((server, thread))
-        host, port = server.server_address
-        return f"http://{host}:{port}/v1/systemone"
-
-    yield start
-
-    for server, thread in servers:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1.0)
+__all__ = ["local_http"]
 
 
 def _questions():
@@ -86,7 +48,7 @@ def test_slow_trickle_cannot_extend_real_attempt_deadline(local_http,
         def log_message(self, *_args):
             return
 
-    endpoint = local_http(SlowHandler)
+    endpoint = local_http(SlowHandler, "/v1/systemone")
     monkeypatch.setattr(jev, "JEV_ALLOWED_ENDPOINTS",
                         frozenset({endpoint}))
     events = []
@@ -135,7 +97,7 @@ def test_real_transport_keeps_hooks_and_fixed_wire_contract(local_http,
         def log_message(self, *_args):
             return
 
-    endpoint = local_http(Handler)
+    endpoint = local_http(Handler, "/v1/systemone")
     monkeypatch.setattr(jev, "JEV_ALLOWED_ENDPOINTS",
                         frozenset({endpoint}))
     events = []
@@ -184,7 +146,7 @@ def test_real_transport_does_not_follow_redirect_and_caps_body(local_http,
         def log_message(self, *_args):
             return
 
-    endpoint = local_http(Handler)
+    endpoint = local_http(Handler, "/v1/systemone")
     monkeypatch.setattr(jev, "JEV_ALLOWED_ENDPOINTS",
                         frozenset({endpoint}))
     client = jev.JevClient(api_key="synthetic", endpoint=endpoint,

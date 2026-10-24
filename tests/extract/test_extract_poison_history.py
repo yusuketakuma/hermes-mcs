@@ -7,7 +7,7 @@ import extract_llm
 import extract
 import rollup
 from extract_testkit import _extract_artifact, _hash, _ledger, _message, _seed_qc_flagged
-from test_drug_map import _dictionary, _seed
+from medications_testkit import _dictionary, _seed
 
 
 def poison(extra=""):

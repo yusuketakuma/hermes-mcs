@@ -14,7 +14,7 @@ from notify_testkit import (
     CFG, CLICKER, MED, NOW, ORIGIN, _deliver, _dispatch, _drug_card, _drug_click, _extract,
     _intent, _llm_extract, _seed_thread, _spec, led, pinned_clock)
 from notify_testkit import _button_ids as _ids
-from test_drug_map import DOCUMENT
+from medications_testkit import DOCUMENT
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")

@@ -6,57 +6,21 @@ import semantic_runtime
 import semantic_store
 import semantic_transport
 import json
-import socket
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import pytest
 
-import mcs_test_guard as test_guard
 import semantic
-from semantic_testkit import _FakeJev, _cfg, _seeded
+from semantic_testkit import _FakeJev, _cfg, _seeded, local_http
+
+__all__ = ["local_http"]
 
 
 @pytest.fixture(autouse=True)
 def isolated_format_marks(monkeypatch, tmp_path):
     monkeypatch.setattr(semantic_transport, '_FMT_PATH', str(tmp_path / "format.json"))
-
-
-def _guard_original(owner, name):
-    for module, attr, original in reversed(test_guard._ORIGINALS):
-        if module is owner and attr == name:
-            return original
-    raise AssertionError(f"missing guarded original {owner!r}.{name}")
-
-
-@pytest.fixture
-def local_http(monkeypatch):
-    """Permit only the synthetic loopback server for this test."""
-    monkeypatch.setattr(socket, "create_connection",
-                        _guard_original(socket, "create_connection"))
-    monkeypatch.setattr(socket.socket, "connect",
-                        _guard_original(socket.socket, "connect"))
-    monkeypatch.setattr(socket.socket, "connect_ex",
-                        _guard_original(socket.socket, "connect_ex"))
-    servers = []
-
-    def start(handler):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        server.daemon_threads = True
-        thread = threading.Thread(target=server.serve_forever,
-                                  name="semantic-llm-test-http", daemon=True)
-        thread.start()
-        servers.append((server, thread))
-        host, port = server.server_address
-        return f"http://{host}:{port}/v1/chat/completions"
-
-    yield start
-
-    for server, thread in servers:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1.0)
 
 
 def _run_with_missing_model(db):
@@ -152,7 +116,7 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
         def log_message(self, *_args):
             return
 
-    endpoint = local_http(SlowHandler)
+    endpoint = local_http(SlowHandler, "/v1/chat/completions")
     monkeypatch.setattr(semantic_transport, 'LLM_ENDPOINT', endpoint)
     monkeypatch.setattr(semantic_transport, '_probe_format',
                         lambda *a: "plain")   # no format probe

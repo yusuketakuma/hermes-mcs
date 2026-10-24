@@ -13,7 +13,7 @@ import pytest
 
 import ledger
 import mcs_drug
-from test_drug_map import DOCUMENT, _seed
+from medications_testkit import DOCUMENT, _seed
 
 ROOT = Path(__file__).resolve().parents[2]
 _REAL_CONNECT = sqlite3.connect

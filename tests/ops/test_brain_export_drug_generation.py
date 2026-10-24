@@ -8,7 +8,7 @@ import brain_export
 import drug_map
 from ledger import publish_snapshot
 import rollup
-from test_drug_map import DOCUMENT, _dictionary, _seed, store as store
+from medications_testkit import DOCUMENT, _dictionary, _seed, store as store
 
 
 @pytest.mark.parametrize('mode', ['switch', 'disable', 'corrupt'])

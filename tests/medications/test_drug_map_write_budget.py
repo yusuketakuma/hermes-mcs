@@ -1,6 +1,6 @@
 """A drug-map walk over unchanged messages must not commit once per message."""
 import drug_map
-from test_drug_map import _dictionary, _seed, store as store
+from medications_testkit import _dictionary, _seed, store as store
 
 
 def test_unchanged_rewalk_writes_only_progress_bookends(store, tmp_path):

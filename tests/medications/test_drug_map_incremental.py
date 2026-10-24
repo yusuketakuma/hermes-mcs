@@ -3,7 +3,7 @@ from copy import deepcopy
 import json
 
 import drug_map
-from test_drug_map import DOCUMENT, _dictionary, _seed, store as store
+from medications_testkit import DOCUMENT, _dictionary, _seed, store as store
 
 
 def _tick(store, dictionary, monkeypatch, budget=4):

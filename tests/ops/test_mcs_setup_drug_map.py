@@ -9,7 +9,7 @@ import pytest
 
 import drug_map
 import mcs_setup
-from test_drug_map import DOCUMENT, _source_document
+from medications_testkit import DOCUMENT, _source_document
 from test_mcs_drug_bundled import _bundle
 from test_mcs_setup import _init_env
 

@@ -3,7 +3,7 @@
 import drug_map
 import rollup
 from extract_testkit import _ledger
-from test_drug_map import _dictionary, _seed
+from medications_testkit import _dictionary, _seed
 
 
 def test_current_refs_called_only_for_med_ref_messages(tmp_path, monkeypatch):

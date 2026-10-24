@@ -6,7 +6,7 @@ import pytest
 
 import drug_map
 from extract_testkit import _message
-from test_drug_map import DOCUMENT, _dictionary, _seed, store  # noqa: F401
+from medications_testkit import DOCUMENT, _dictionary, _seed, store  # noqa: F401
 
 
 def _after(tmp_path):

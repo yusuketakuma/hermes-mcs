@@ -2,6 +2,7 @@
 import hashlib
 import html
 import json
+import math
 import os
 import re
 import shutil
@@ -203,6 +204,28 @@ def unique_pairs(items):
 def reject_constant(_):
     """``parse_constant`` hook that rejects NaN/Infinity as ``invalid_number``."""
     raise ValueError("invalid_number")
+
+
+def strict_json(raw):
+    """Parse JSON rejecting duplicate keys and nonfinite numbers, including overflowing floats."""
+    # distinct codes from unique_pairs/reject_constant; semantic_candidate keeps its own copy
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate_json_key")
+            result[key] = value
+        return result
+
+    def constant(_):
+        raise ValueError("nonfinite_json_number")
+
+    def number(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError("nonfinite_json_number")
+        return result
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant, parse_float=number)
 
 
 def safe_error_code(exc) -> str:

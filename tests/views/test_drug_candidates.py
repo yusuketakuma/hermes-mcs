@@ -11,7 +11,7 @@ import drug_map
 from export_schema import project_record
 import mcs_stats
 import rollup
-from test_drug_map import DOCUMENT, _dictionary, _seed
+from medications_testkit import DOCUMENT, _dictionary, _seed
 from views_testkit import SNAP_TS
 from common_testkit import ledger_fixture
 
@@ -117,7 +117,7 @@ def test_class_alias_cannot_be_counted_as_resolved_ingredient(store, tmp_path):
 
 
 def test_official_identities_have_separate_blocks_with_one_ref_read_per_message(store, tmp_path, monkeypatch):
-    from test_drug_map import _source_document
+    from medications_testkit import _source_document
     _seed(store, names=("架空製品", "架空ブランド", "架空製品錠10mg", "キラナ"))
     before = _stats(store)
     drug_map.derive(store, _dictionary(tmp_path, _source_document()))
@@ -267,7 +267,7 @@ def test_review_list_is_bounded_while_total_names_and_mentions_are_complete(stor
 
 
 def test_all_new_local_fields_are_omitted_from_c1_export(store, tmp_path):
-    from test_drug_map import _source_document
+    from medications_testkit import _source_document
     _seed(store, names=("架空製品", "架空ブランド", "架空不明"))
     drug_map.derive(store, _dictionary(tmp_path, _source_document()))
     stats = _stats(store)

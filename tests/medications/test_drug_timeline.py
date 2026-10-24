@@ -9,7 +9,7 @@ import drug_timeline
 import extract_llm
 import ledger
 import mcs_view
-from test_drug_map import _seed
+from medications_testkit import _seed
 
 
 def current(store, mid, meds):
@@ -137,7 +137,7 @@ def test_canonical_original_document_and_generation_change(tmp_path):
 
 def test_changed_dictionary_pin_hides_old_candidates(corpus, tmp_path):
     import drug_map
-    from test_drug_map import _dictionary
+    from medications_testkit import _dictionary
     current(corpus, 1, [{"name": "キラナ", "subject": "patient"}])
     drug_map.derive(corpus, _dictionary(tmp_path))
     assert drug_timeline.timeline(view_of(corpus), 1)["items"][0]["candidate"]
@@ -149,7 +149,7 @@ def test_changed_dictionary_pin_hides_old_candidates(corpus, tmp_path):
 
 def test_timeline_reuses_dictionary_progress_in_its_borrowed_snapshot(corpus, tmp_path, monkeypatch):
     import drug_map
-    from test_drug_map import _dictionary
+    from medications_testkit import _dictionary
     for mid in (1, 2, 3):
         current(corpus, mid, [{"name": "キラナ", "subject": "patient"}])
     drug_map.derive(corpus, _dictionary(tmp_path))

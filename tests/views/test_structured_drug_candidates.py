@@ -8,7 +8,7 @@ import drug_map
 import notify_flush
 import notify_render
 import structured_view
-from test_drug_map import DOCUMENT, _dictionary, _seed, store as store
+from medications_testkit import DOCUMENT, _dictionary, _seed, store as store
 
 
 def _facts(store, names=('キラナ',), **fields):

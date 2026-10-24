@@ -3100,7 +3100,7 @@ def test_menu_select_dispatches_like_the_button(world):
 def _drug_thread(world, monkeypatch, *, medication_count=1, older_medication=False):
     import hashlib
     import drug_map
-    from test_drug_map import DOCUMENT
+    from medications_testkit import DOCUMENT
     world.seed()
     medication = {"name": "キラナ", "dose": "5mg", "action": "start",
                   "subject": "patient", "status": "current", "negated": False,
