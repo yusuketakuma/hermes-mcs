@@ -1,0 +1,76 @@
+{
+  "schema_version": "sdc.support.consent-preview-vectors.v1",
+  "description": "Synthetic public PS256 vector only. No private key is exported or saved. Runtime must enforce current registration, local consent receipt and immutable epoch binding separately.",
+  "now": 1792742400000,
+  "binding_excluded_fields": [
+    "preview_id",
+    "issued_at",
+    "not_before",
+    "expires_at",
+    "consent_binding_hash"
+  ],
+  "pinned_keys": [
+    {
+      "kid": "synthetic-preview-3072",
+      "purposes": [
+        "operation",
+        "execution-grant",
+        "consent-preview"
+      ],
+      "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAtqAtmqOVGaWWcgoBcJB3Tnd3leYbtLQYB02sVLWgoGMfcuZZjaJmIKhOIeIh3DLMyJqSaQhih1ZYZldnKuQDhgJ9wz7RayW5dDPaCeyeH_Rzj3WqdmZ-2HswZBO2K0rSSY8WiP69EUH6DZsBEnMpJ89FXqdycVi-Az19wNhnk9RtemTeqhKvmIBeTGT3TZ2u2MRRXtHqzzVgjwhW4HQhH7IjXxi0Ly7kEQkMdO3lDLmWt-Bu5dZMKcHAdjiOW3ZFcQljpKpojNs7pnCC5jMZRWAeOVcLKIoB59XDBwFNLooo5SoKNm9ytL27jKzX9S2n_dXmTjzmRnyAjm41msoPEoJCkgR1BRTCpKYQCU3LJRUKw_Vo1Z_b87VJn8SQOx4veYkkJcyIcL1zbUFcI8QVge2jucdd4lwuOzKqfB-P7gOjqYNkqAWzR45CSJETxodRhPLuqRm303HQEWqMpb_Zsr88QMRNYT5L2APmN2zcqQzpXaabD7169elFfXvEFKgzAgMBAAE",
+      "not_before": 1792742399000,
+      "expires_at": 1792746000000
+    }
+  ],
+  "vectors": [
+    {
+      "purpose": "consent-preview",
+      "payload": {
+        "schema_version": "sdc.support.consent-preview.v1",
+        "preview_id": "99999999-9999-4999-8999-999999999999",
+        "product": "hermes-mcs",
+        "audience": "sdc:synthetic",
+        "tenant": "tenant-a",
+        "installation": "installation-a",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "environment": "synthetic",
+        "case_id": "33333333-3333-4333-8333-333333333333",
+        "claim_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "key_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "purpose_code": "HEALTH_CHECK",
+        "capability_revision": "sdc-support-capabilities-v1",
+        "diagnostic_ids": [
+          "connectivity.status.v1",
+          "notification.health.v1",
+          "runtime.status.v1"
+        ],
+        "operator_refs": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "cc1ccf5b87aff275d697a22df578534f5757e6128e36b4321e764c0b5d146ed4"
+        ],
+        "approved_by": "8f6976c5aba22fc223b8e02f6283e9b09efbe92bc313ad70c4bdf15995d9e5af",
+        "consent_revision": "sdc-support-consent-v1",
+        "realm_epoch": "synthetic-realm-1",
+        "policy_epoch": 1,
+        "device_epoch": 1,
+        "case_epoch": 1,
+        "local_consent_epoch": 1,
+        "issued_at": 1792742400000,
+        "not_before": 1792742400000,
+        "expires_at": 1792742700000,
+        "consent_expires_at": 1792744200000,
+        "consent_binding_hash": "12961cde60da005d2fd9e75a4515835fd84885639b3a6cb85bdaeb23cd6e3551"
+      },
+      "binding_canonical": "{\"approved_by\":\"8f6976c5aba22fc223b8e02f6283e9b09efbe92bc313ad70c4bdf15995d9e5af\",\"audience\":\"sdc:synthetic\",\"capability_revision\":\"sdc-support-capabilities-v1\",\"case_epoch\":1,\"case_id\":\"33333333-3333-4333-8333-333333333333\",\"claim_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"consent_expires_at\":1792744200000,\"consent_revision\":\"sdc-support-consent-v1\",\"device_epoch\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"diagnostic_ids\":[\"connectivity.status.v1\",\"notification.health.v1\",\"runtime.status.v1\"],\"environment\":\"synthetic\",\"installation\":\"installation-a\",\"key_id\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",\"local_consent_epoch\":1,\"operator_refs\":[\"1111111111111111111111111111111111111111111111111111111111111111\",\"cc1ccf5b87aff275d697a22df578534f5757e6128e36b4321e764c0b5d146ed4\"],\"policy_epoch\":1,\"product\":\"hermes-mcs\",\"purpose_code\":\"HEALTH_CHECK\",\"realm_epoch\":\"synthetic-realm-1\",\"schema_version\":\"sdc.support.consent-preview.v1\",\"tenant\":\"tenant-a\"}",
+      "payload_canonical": "{\"approved_by\":\"8f6976c5aba22fc223b8e02f6283e9b09efbe92bc313ad70c4bdf15995d9e5af\",\"audience\":\"sdc:synthetic\",\"capability_revision\":\"sdc-support-capabilities-v1\",\"case_epoch\":1,\"case_id\":\"33333333-3333-4333-8333-333333333333\",\"claim_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"consent_binding_hash\":\"12961cde60da005d2fd9e75a4515835fd84885639b3a6cb85bdaeb23cd6e3551\",\"consent_expires_at\":1792744200000,\"consent_revision\":\"sdc-support-consent-v1\",\"device_epoch\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"diagnostic_ids\":[\"connectivity.status.v1\",\"notification.health.v1\",\"runtime.status.v1\"],\"environment\":\"synthetic\",\"expires_at\":1792742700000,\"installation\":\"installation-a\",\"issued_at\":1792742400000,\"key_id\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",\"local_consent_epoch\":1,\"not_before\":1792742400000,\"operator_refs\":[\"1111111111111111111111111111111111111111111111111111111111111111\",\"cc1ccf5b87aff275d697a22df578534f5757e6128e36b4321e764c0b5d146ed4\"],\"policy_epoch\":1,\"preview_id\":\"99999999-9999-4999-8999-999999999999\",\"product\":\"hermes-mcs\",\"purpose_code\":\"HEALTH_CHECK\",\"realm_epoch\":\"synthetic-realm-1\",\"schema_version\":\"sdc.support.consent-preview.v1\",\"tenant\":\"tenant-a\"}",
+      "signed_ascii": "SDC-SIGNED-v1\nconsent-preview\nsynthetic-preview-3072\n{\"approved_by\":\"8f6976c5aba22fc223b8e02f6283e9b09efbe92bc313ad70c4bdf15995d9e5af\",\"audience\":\"sdc:synthetic\",\"capability_revision\":\"sdc-support-capabilities-v1\",\"case_epoch\":1,\"case_id\":\"33333333-3333-4333-8333-333333333333\",\"claim_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"consent_binding_hash\":\"12961cde60da005d2fd9e75a4515835fd84885639b3a6cb85bdaeb23cd6e3551\",\"consent_expires_at\":1792744200000,\"consent_revision\":\"sdc-support-consent-v1\",\"device_epoch\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"diagnostic_ids\":[\"connectivity.status.v1\",\"notification.health.v1\",\"runtime.status.v1\"],\"environment\":\"synthetic\",\"expires_at\":1792742700000,\"installation\":\"installation-a\",\"issued_at\":1792742400000,\"key_id\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",\"local_consent_epoch\":1,\"not_before\":1792742400000,\"operator_refs\":[\"1111111111111111111111111111111111111111111111111111111111111111\",\"cc1ccf5b87aff275d697a22df578534f5757e6128e36b4321e764c0b5d146ed4\"],\"policy_epoch\":1,\"preview_id\":\"99999999-9999-4999-8999-999999999999\",\"product\":\"hermes-mcs\",\"purpose_code\":\"HEALTH_CHECK\",\"realm_epoch\":\"synthetic-realm-1\",\"schema_version\":\"sdc.support.consent-preview.v1\",\"tenant\":\"tenant-a\"}",
+      "envelope": {
+        "alg": "PS256",
+        "kid": "synthetic-preview-3072",
+        "purpose": "consent-preview",
+        "payload": "eyJhcHByb3ZlZF9ieSI6IjhmNjk3NmM1YWJhMjJmYzIyM2I4ZTAyZjYyODNlOWIwOWVmYmU5MmJjMzEzYWQ3MGM0YmRmMTU5OTVkOWU1YWYiLCJhdWRpZW5jZSI6InNkYzpzeW50aGV0aWMiLCJjYXBhYmlsaXR5X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MSwiY2FzZV9pZCI6IjMzMzMzMzMzLTMzMzMtNDMzMy04MzMzLTMzMzMzMzMzMzMzMyIsImNsYWltX2lkIjoiYWFhYWFhYWEtYWFhYS00YWFhLThhYWEtYWFhYWFhYWFhYWFhIiwiY29uc2VudF9iaW5kaW5nX2hhc2giOiIxMjk2MWNkZTYwZGEwMDVkMmZkOWU3NWE0NTE1ODM1ZmQ4NDg4NTYzOWIzYTZjYjg1YmRhZWIyM2NkNmUzNTUxIiwiY29uc2VudF9leHBpcmVzX2F0IjoxNzkyNzQ0MjAwMDAwLCJjb25zZW50X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MSwiZGV2aWNlX2lkIjoiMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwiZGlhZ25vc3RpY19pZHMiOlsiY29ubmVjdGl2aXR5LnN0YXR1cy52MSIsIm5vdGlmaWNhdGlvbi5oZWFsdGgudjEiLCJydW50aW1lLnN0YXR1cy52MSJdLCJlbnZpcm9ubWVudCI6InN5bnRoZXRpYyIsImV4cGlyZXNfYXQiOjE3OTI3NDI3MDAwMDAsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaXNzdWVkX2F0IjoxNzkyNzQyNDAwMDAwLCJrZXlfaWQiOiJiYmJiYmJiYi1iYmJiLTRiYmItOGJiYi1iYmJiYmJiYmJiYmIiLCJsb2NhbF9jb25zZW50X2Vwb2NoIjoxLCJub3RfYmVmb3JlIjoxNzkyNzQyNDAwMDAwLCJvcGVyYXRvcl9yZWZzIjpbIjExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJjYzFjY2Y1Yjg3YWZmMjc1ZDY5N2EyMmRmNTc4NTM0ZjU3NTdlNjEyOGUzNmI0MzIxZTc2NGMwYjVkMTQ2ZWQ0Il0sInBvbGljeV9lcG9jaCI6MSwicHJldmlld19pZCI6Ijk5OTk5OTk5LTk5OTktNDk5OS04OTk5LTk5OTk5OTk5OTk5OSIsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicHVycG9zZV9jb2RlIjoiSEVBTFRIX0NIRUNLIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVhbG0tMSIsInNjaGVtYV92ZXJzaW9uIjoic2RjLnN1cHBvcnQuY29uc2VudC1wcmV2aWV3LnYxIiwidGVuYW50IjoidGVuYW50LWEifQ",
+        "signature": "h0U13bxal99O9Z6a4qk9rWhWIxU2iVZMN-SgbCNB40haMDha3H6-yPyaDs9xcExAp9cwxg76GKuYnLXCM1KUGZJshBiUSuFqqSPqBEZ1HvQRxfyDZUMUJQU3LzrqyDhi5nreMerG6XdPFbxKpFp06GOB8I-dSOrDZM5PtsuVfpRnwCnxOEO5tq564Gx43E1IMfnHn3JiNqfPqKqLBsHdKA-rUbgC665vvm4GN4QmvPQX8NHAfzPDdt6j-JcwLlxfG4b9n-L6K7wkvnzgDQux8iknHrZj_Yvz6stLdORNQ-aDAxlI0qWfW1nNylJI7F2C0_VI4Hia7zHJAi3osnTt1xZQ8fn4Q239EDCx1bXcPbJpHCbAaWXj14Lntxoido8WGs_h529yx9kTpbcv25_EWnhTk5U6TSzZC5T1GzdzORwkYLlzHu7-89KvhbGbSpbqol9zF6Hn3Vs1oamoMJHDBdepnnZcjuDgEyvATtf3OASfp_EicsUot7w76n3ZV_8i"
+      }
+    }
+  ]
+}

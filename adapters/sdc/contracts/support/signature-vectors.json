@@ -1,0 +1,116 @@
+{
+  "schema_version": "sdc.support.signature-vectors.v1",
+  "description": "Synthetic public verification vectors. Signature input ends in decoded CJSON, not its base64url encoding. Generated with an ephemeral RSA-PSS 3072/e65537 SHA-256 salt32 key; no private key exported or saved. This is not Mac acceptance evidence.",
+  "now": 1792663200000,
+  "pinned_keys": [
+    {
+      "kid": "synthetic-support-3072",
+      "purposes": [
+        "operation",
+        "execution-grant"
+      ],
+      "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+      "not_before": 1792663140000,
+      "expires_at": 1792666800000
+    }
+  ],
+  "approval": {
+    "schema_version": "sdc.support.approval.v1",
+    "approval_id": "44444444-4444-4444-8444-444444444444",
+    "intent_hash": "c1c2958fc4b93a11c65a1fec8d645c9d8dba9d34a57fc44b723aa4cff616eff9",
+    "approved_by": "8f6976c5aba22fc223b8e02f6283e9b09efbe92bc313ad70c4bdf15995d9e5af",
+    "approval_kind": "individual",
+    "consent_revision": "sdc-support-consent-v1",
+    "realm_epoch": "synthetic-realm-1",
+    "policy_epoch": 1,
+    "local_consent_epoch": 1,
+    "case_epoch": 1,
+    "issued_at": 1792663200000,
+    "not_before": 1792663200000,
+    "expires_at": 1792663800000,
+    "approval_hash": "0b4f86174773246b13abfdde588fe4d6795ff4fbdb8b1eb92e69fcb902f17487",
+    "device_epoch": 1
+  },
+  "intent_canonical": "{\"audience\":\"sdc:synthetic\",\"capability_revision\":\"sdc-support-capabilities-v1\",\"case_epoch\":1,\"case_id\":\"33333333-3333-4333-8333-333333333333\",\"consent_revision\":\"sdc-support-consent-v1\",\"device_epoch\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"environment\":\"synthetic\",\"expires_at\":1792663800000,\"installation\":\"installation-a\",\"issued_at\":1792663200000,\"local_consent_epoch\":1,\"not_before\":1792663200000,\"operation_id\":\"11111111-1111-4111-8111-111111111111\",\"params\":{\"diagnostic_id\":\"runtime.status.v1\"},\"policy_epoch\":1,\"product\":\"hermes-mcs\",\"purpose_code\":\"HEALTH_CHECK\",\"realm_epoch\":\"synthetic-realm-1\",\"requested_by\":\"cc1ccf5b87aff275d697a22df578534f5757e6128e36b4321e764c0b5d146ed4\",\"schema_version\":\"sdc.support.operation.v1\",\"tenant\":\"tenant-a\",\"type\":\"diagnostics.read\"}",
+  "vectors": [
+    {
+      "purpose": "operation",
+      "payload": {
+        "schema_version": "sdc.support.operation.v1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "product": "hermes-mcs",
+        "audience": "sdc:synthetic",
+        "tenant": "tenant-a",
+        "installation": "installation-a",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "environment": "synthetic",
+        "case_id": "33333333-3333-4333-8333-333333333333",
+        "type": "diagnostics.read",
+        "params": {
+          "diagnostic_id": "runtime.status.v1"
+        },
+        "purpose_code": "HEALTH_CHECK",
+        "capability_revision": "sdc-support-capabilities-v1",
+        "requested_by": "cc1ccf5b87aff275d697a22df578534f5757e6128e36b4321e764c0b5d146ed4",
+        "consent_revision": "sdc-support-consent-v1",
+        "realm_epoch": "synthetic-realm-1",
+        "policy_epoch": 1,
+        "local_consent_epoch": 1,
+        "case_epoch": 1,
+        "issued_at": 1792663200000,
+        "not_before": 1792663200000,
+        "expires_at": 1792663800000,
+        "approved_by": "8f6976c5aba22fc223b8e02f6283e9b09efbe92bc313ad70c4bdf15995d9e5af",
+        "approval_id": "44444444-4444-4444-8444-444444444444",
+        "approval_hash": "0b4f86174773246b13abfdde588fe4d6795ff4fbdb8b1eb92e69fcb902f17487",
+        "payload_hash": "7413899f37060e5e3afbfddcc3cb1383fb5b87c15d326de0a878d5565ce215a2",
+        "device_epoch": 1
+      },
+      "payload_canonical": "{\"approval_hash\":\"0b4f86174773246b13abfdde588fe4d6795ff4fbdb8b1eb92e69fcb902f17487\",\"approval_id\":\"44444444-4444-4444-8444-444444444444\",\"approved_by\":\"8f6976c5aba22fc223b8e02f6283e9b09efbe92bc313ad70c4bdf15995d9e5af\",\"audience\":\"sdc:synthetic\",\"capability_revision\":\"sdc-support-capabilities-v1\",\"case_epoch\":1,\"case_id\":\"33333333-3333-4333-8333-333333333333\",\"consent_revision\":\"sdc-support-consent-v1\",\"device_epoch\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"environment\":\"synthetic\",\"expires_at\":1792663800000,\"installation\":\"installation-a\",\"issued_at\":1792663200000,\"local_consent_epoch\":1,\"not_before\":1792663200000,\"operation_id\":\"11111111-1111-4111-8111-111111111111\",\"params\":{\"diagnostic_id\":\"runtime.status.v1\"},\"payload_hash\":\"7413899f37060e5e3afbfddcc3cb1383fb5b87c15d326de0a878d5565ce215a2\",\"policy_epoch\":1,\"product\":\"hermes-mcs\",\"purpose_code\":\"HEALTH_CHECK\",\"realm_epoch\":\"synthetic-realm-1\",\"requested_by\":\"cc1ccf5b87aff275d697a22df578534f5757e6128e36b4321e764c0b5d146ed4\",\"schema_version\":\"sdc.support.operation.v1\",\"tenant\":\"tenant-a\",\"type\":\"diagnostics.read\"}",
+      "signed_ascii": "SDC-SIGNED-v1\noperation\nsynthetic-support-3072\n{\"approval_hash\":\"0b4f86174773246b13abfdde588fe4d6795ff4fbdb8b1eb92e69fcb902f17487\",\"approval_id\":\"44444444-4444-4444-8444-444444444444\",\"approved_by\":\"8f6976c5aba22fc223b8e02f6283e9b09efbe92bc313ad70c4bdf15995d9e5af\",\"audience\":\"sdc:synthetic\",\"capability_revision\":\"sdc-support-capabilities-v1\",\"case_epoch\":1,\"case_id\":\"33333333-3333-4333-8333-333333333333\",\"consent_revision\":\"sdc-support-consent-v1\",\"device_epoch\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"environment\":\"synthetic\",\"expires_at\":1792663800000,\"installation\":\"installation-a\",\"issued_at\":1792663200000,\"local_consent_epoch\":1,\"not_before\":1792663200000,\"operation_id\":\"11111111-1111-4111-8111-111111111111\",\"params\":{\"diagnostic_id\":\"runtime.status.v1\"},\"payload_hash\":\"7413899f37060e5e3afbfddcc3cb1383fb5b87c15d326de0a878d5565ce215a2\",\"policy_epoch\":1,\"product\":\"hermes-mcs\",\"purpose_code\":\"HEALTH_CHECK\",\"realm_epoch\":\"synthetic-realm-1\",\"requested_by\":\"cc1ccf5b87aff275d697a22df578534f5757e6128e36b4321e764c0b5d146ed4\",\"schema_version\":\"sdc.support.operation.v1\",\"tenant\":\"tenant-a\",\"type\":\"diagnostics.read\"}",
+      "envelope": {
+        "alg": "PS256",
+        "kid": "synthetic-support-3072",
+        "purpose": "operation",
+        "payload": "eyJhcHByb3ZhbF9oYXNoIjoiMGI0Zjg2MTc0NzczMjQ2YjEzYWJmZGRlNTg4ZmU0ZDY3OTVmZjRmYmRiOGIxZWI5MmU2OWZjYjkwMmYxNzQ4NyIsImFwcHJvdmFsX2lkIjoiNDQ0NDQ0NDQtNDQ0NC00NDQ0LTg0NDQtNDQ0NDQ0NDQ0NDQ0IiwiYXBwcm92ZWRfYnkiOiI4ZjY5NzZjNWFiYTIyZmMyMjNiOGUwMmY2MjgzZTliMDllZmJlOTJiYzMxM2FkNzBjNGJkZjE1OTk1ZDllNWFmIiwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LWNhcGFiaWxpdGllcy12MSIsImNhc2VfZXBvY2giOjEsImNhc2VfaWQiOiIzMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMiLCJjb25zZW50X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MSwiZGV2aWNlX2lkIjoiMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzODAwMDAwLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImlzc3VlZF9hdCI6MTc5MjY2MzIwMDAwMCwibG9jYWxfY29uc2VudF9lcG9jaCI6MSwibm90X2JlZm9yZSI6MTc5MjY2MzIwMDAwMCwib3BlcmF0aW9uX2lkIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicGFyYW1zIjp7ImRpYWdub3N0aWNfaWQiOiJydW50aW1lLnN0YXR1cy52MSJ9LCJwYXlsb2FkX2hhc2giOiI3NDEzODk5ZjM3MDYwZTVlM2FmYmZkZGNjM2NiMTM4M2ZiNWI4N2MxNWQzMjZkZTBhODc4ZDU1NjVjZTIxNWEyIiwicG9saWN5X2Vwb2NoIjoxLCJwcm9kdWN0IjoiaGVybWVzLW1jcyIsInB1cnBvc2VfY29kZSI6IkhFQUxUSF9DSEVDSyIsInJlYWxtX2Vwb2NoIjoic3ludGhldGljLXJlYWxtLTEiLCJyZXF1ZXN0ZWRfYnkiOiJjYzFjY2Y1Yjg3YWZmMjc1ZDY5N2EyMmRmNTc4NTM0ZjU3NTdlNjEyOGUzNmI0MzIxZTc2NGMwYjVkMTQ2ZWQ0Iiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5vcGVyYXRpb24udjEiLCJ0ZW5hbnQiOiJ0ZW5hbnQtYSIsInR5cGUiOiJkaWFnbm9zdGljcy5yZWFkIn0",
+        "signature": "judTiWXisxMBeLWsHfOUBLfSBhK3jN8I6DJhl7XWR2CALQbTUrKxkMfJUry8OZGasH7sRuwrL-9iSYfj9KCLapAkWwjRjw9qEDGHppSBpPlviZxqlsvnCl4-sZpSbXiJnoAHTFJBlc-4DG9EWyrCxr50S4bmq49cLeyGss-cKibJytYwbBZU11_Edwe5mj6k61fW82MpSKbEj9gF9Jf92o2cX4PP1tADg1K5aodjImiQZrNstNiTLXAeqaqcnO1eWclFL3v_iG6onUVE_2zbPyeyyXaIme8Kc5u03RNQS62NWkDi4h5U7o3FqnyGh52qZ04V017cYpajif2flyt9PDyy9UzNkIsQgH49U0GptAqEnVF3zoxlQripcP0kseGXrxtO1odmkFJ0MWObBv5FRFVS3megOSzDfOgnw_SU2DlHi_irK20HjJfmMeu2pn2mf4cPLdjvQxoBDR9h-QHe9qaTdpiK6EOrvVAH59wYGPXJa_lqPC3Y0BXP7OqQ8NCI"
+      }
+    },
+    {
+      "purpose": "execution-grant",
+      "payload": {
+        "schema_version": "sdc.support.execution-grant.v1",
+        "grant_id": "55555555-5555-4555-8555-555555555555",
+        "grant_request_id": "66666666-6666-4666-8666-666666666666",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "payload_hash": "7413899f37060e5e3afbfddcc3cb1383fb5b87c15d326de0a878d5565ce215a2",
+        "tenant": "tenant-a",
+        "installation": "installation-a",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "environment": "synthetic",
+        "case_id": "33333333-3333-4333-8333-333333333333",
+        "receipt_id": "77777777-7777-4777-8777-777777777777",
+        "admission_id": "88888888-8888-4888-8888-888888888888",
+        "owner_generation": "99999999999999999999999999999999",
+        "approval_hash": "0b4f86174773246b13abfdde588fe4d6795ff4fbdb8b1eb92e69fcb902f17487",
+        "realm_epoch": "synthetic-realm-1",
+        "policy_epoch": 1,
+        "local_consent_epoch": 1,
+        "case_epoch": 1,
+        "issued_at": 1792663200000,
+        "not_before": 1792663200000,
+        "expires_at": 1792663230000,
+        "device_epoch": 1
+      },
+      "payload_canonical": "{\"admission_id\":\"88888888-8888-4888-8888-888888888888\",\"approval_hash\":\"0b4f86174773246b13abfdde588fe4d6795ff4fbdb8b1eb92e69fcb902f17487\",\"case_epoch\":1,\"case_id\":\"33333333-3333-4333-8333-333333333333\",\"device_epoch\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"environment\":\"synthetic\",\"expires_at\":1792663230000,\"grant_id\":\"55555555-5555-4555-8555-555555555555\",\"grant_request_id\":\"66666666-6666-4666-8666-666666666666\",\"installation\":\"installation-a\",\"issued_at\":1792663200000,\"local_consent_epoch\":1,\"not_before\":1792663200000,\"operation_id\":\"11111111-1111-4111-8111-111111111111\",\"owner_generation\":\"99999999999999999999999999999999\",\"payload_hash\":\"7413899f37060e5e3afbfddcc3cb1383fb5b87c15d326de0a878d5565ce215a2\",\"policy_epoch\":1,\"realm_epoch\":\"synthetic-realm-1\",\"receipt_id\":\"77777777-7777-4777-8777-777777777777\",\"schema_version\":\"sdc.support.execution-grant.v1\",\"tenant\":\"tenant-a\"}",
+      "signed_ascii": "SDC-SIGNED-v1\nexecution-grant\nsynthetic-support-3072\n{\"admission_id\":\"88888888-8888-4888-8888-888888888888\",\"approval_hash\":\"0b4f86174773246b13abfdde588fe4d6795ff4fbdb8b1eb92e69fcb902f17487\",\"case_epoch\":1,\"case_id\":\"33333333-3333-4333-8333-333333333333\",\"device_epoch\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"environment\":\"synthetic\",\"expires_at\":1792663230000,\"grant_id\":\"55555555-5555-4555-8555-555555555555\",\"grant_request_id\":\"66666666-6666-4666-8666-666666666666\",\"installation\":\"installation-a\",\"issued_at\":1792663200000,\"local_consent_epoch\":1,\"not_before\":1792663200000,\"operation_id\":\"11111111-1111-4111-8111-111111111111\",\"owner_generation\":\"99999999999999999999999999999999\",\"payload_hash\":\"7413899f37060e5e3afbfddcc3cb1383fb5b87c15d326de0a878d5565ce215a2\",\"policy_epoch\":1,\"realm_epoch\":\"synthetic-realm-1\",\"receipt_id\":\"77777777-7777-4777-8777-777777777777\",\"schema_version\":\"sdc.support.execution-grant.v1\",\"tenant\":\"tenant-a\"}",
+      "envelope": {
+        "alg": "PS256",
+        "kid": "synthetic-support-3072",
+        "purpose": "execution-grant",
+        "payload": "eyJhZG1pc3Npb25faWQiOiI4ODg4ODg4OC04ODg4LTQ4ODgtODg4OC04ODg4ODg4ODg4ODgiLCJhcHByb3ZhbF9oYXNoIjoiMGI0Zjg2MTc0NzczMjQ2YjEzYWJmZGRlNTg4ZmU0ZDY3OTVmZjRmYmRiOGIxZWI5MmU2OWZjYjkwMmYxNzQ4NyIsImNhc2VfZXBvY2giOjEsImNhc2VfaWQiOiIzMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMiLCJkZXZpY2VfZXBvY2giOjEsImRldmljZV9pZCI6IjIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMiIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzIzMDAwMCwiZ3JhbnRfaWQiOiI1NTU1NTU1NS01NTU1LTQ1NTUtODU1NS01NTU1NTU1NTU1NTUiLCJncmFudF9yZXF1ZXN0X2lkIjoiNjY2NjY2NjYtNjY2Ni00NjY2LTg2NjYtNjY2NjY2NjY2NjY2IiwiaW5zdGFsbGF0aW9uIjoiaW5zdGFsbGF0aW9uLWEiLCJpc3N1ZWRfYXQiOjE3OTI2NjMyMDAwMDAsImxvY2FsX2NvbnNlbnRfZXBvY2giOjEsIm5vdF9iZWZvcmUiOjE3OTI2NjMyMDAwMDAsIm9wZXJhdGlvbl9pZCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsIm93bmVyX2dlbmVyYXRpb24iOiI5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OSIsInBheWxvYWRfaGFzaCI6Ijc0MTM4OTlmMzcwNjBlNWUzYWZiZmRkY2MzY2IxMzgzZmI1Yjg3YzE1ZDMyNmRlMGE4NzhkNTU2NWNlMjE1YTIiLCJwb2xpY3lfZXBvY2giOjEsInJlYWxtX2Vwb2NoIjoic3ludGhldGljLXJlYWxtLTEiLCJyZWNlaXB0X2lkIjoiNzc3Nzc3NzctNzc3Ny00Nzc3LTg3NzctNzc3Nzc3Nzc3Nzc3Iiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5leGVjdXRpb24tZ3JhbnQudjEiLCJ0ZW5hbnQiOiJ0ZW5hbnQtYSJ9",
+        "signature": "mH6nXXD38cOvAwW9yf9B-nKPSbGZ7rEgK4RPxffjgF2Hs6PFmKzYYS9FwSF7wPwhUNsFajvP5B2kRx3QCNmfJxXz-ZavR9fmHZsSugOlYxU2IukgG6VOf2JP00hXHfcOC8MQCisyr3zRb-2RjE_5j6nLE8XhzMJNyLKnaw4d6taR1K1SvTmS4jGyZ3N2Rd-0uAPLyQUN4SSyJpg4BebTbib9eKsuBvqlSPuuSRO9w2yBuBGPH69soCL_C7Cnd1azC9Wa_FUnR29PCZPltRMCXeVu5UMLKKI2eVU1Nd96IZsNXZglYXAaW-8PrtdpqnWdC-zN-B0QwjIAS3Nonkuw5RzPztNsBO-qZMfWkguu7RP1z8f50KMsmKikrIadsBLrXCZ-D9FS7HSJ8J9So9XH8lmXiFocVUjRiQYZedKom6FEoemVCm5GupEjoPu7cjZ9YB5tOM_m_Y6FXceEhMYt57qSz-VAdVm1dlwnGy-aUdDkzAVVjFFT9L8era7CwQCd"
+      }
+    }
+  ]
+}

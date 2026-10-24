@@ -1,0 +1,13 @@
+{
+  "category": "security",
+  "title": "遠隔支援の公開鍵署名を検証する独立部品を追加",
+  "summary": "固定した公開鍵と用途・期限を照合し、遠隔支援の署名と正確なJSON表現だけを検証する部品を追加しました。操作の認可や実行、遠隔送信はまだ接続していません。",
+  "upgrade": "追加設定やサービス起動はありません。実公開鍵の配布は未完了で、既定の呼出元や顧客向け有効化はありません。監視の同意を遠隔支援の許可へ拡張しません。",
+  "details": [
+    "信頼済み呼出元のpinだけを使い、受信した鍵の採用や自動取得を行わない。RSA3072・指数65537・SHA256・MGF1 SHA256・PSS salt32に限定する。",
+    "閉じたenvelope、ASCII CJSON、重複key、入力サイズ・深さ・safe整数・base64url表現を検証し、エラーは固定コードに限定する。",
+    "秘密鍵やKeychainを使わずOS暗号処理を固定引数・最小環境で呼び、期限や中止時は既存の子プロセス停止・回収経路を通す。",
+    "操作payloadの意味、scope・同意・epoch・operation hash・現在状態の承認は後続runnerの責務であり、署名検証の成功を操作承認と扱わない。"
+  ],
+  "refs": ["mcs/ops/sdc_support_signatures.py", "adapters/sdc/contracts/support/signature-vectors.json"]
+}

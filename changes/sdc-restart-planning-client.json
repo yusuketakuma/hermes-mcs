@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "再起動準備と個別変更同意を前景CLIへ接続",
+  "summary": "本人がplan-restartで登録読取りと稼働中Runtimeのmetadata送信に同意し、Consoleの個別承認後にconsent-restartで変更内容を確認してacceptを登録する開発候補の経路を追加しました。これらのコマンドは再起動を実行しません。",
+  "upgrade": "追加操作は不要です。真正なrestart接続先・pinsの供給とfresh provisionは未接続で、未注入の製品入口はKeychain・通信・採取を行わず停止します。実利用と実機受入には別途SDC02の供給・失効運用が必要です。",
+  "details": [
+    "R4a案件の現在同意・一次ACK・元pinsと、独立したrestart bindingを再検査する。一件の準備記録に本人同意、初回READの同じ本文と合計4送信上限、登録、実ownerの世代、inspection、previewを固定し、欠落・破損・停止をfreshとみなさない。READのHTTPエラーは500〜599だけを再試行対象とし、404を含む他statusとredirect拒否は終端として保持する。",
+    "Runtime観測と未回答のCLI待機は私有metadataだけを照合し、Keychain・provision provider・署名検証・HTTPを呼ばない。送信admission、結果の採用、変更同意確定では実資格情報とpinsを再確認する。",
+    "support→restart→tickの短いlock順を守り、人入力・HTTP・署名検証・owner採取をlock外で行う。受信済み応答の保存とmetadata読取りのlock競合だけを元の期限内で短く待ち、HTTP・署名検証・人入力・保存失敗は再実行しない。各観測は元の前景期限内の一件に限定し、同意後の再採取で世代を置き換えない。",
+    "scope・世代を応答やpreviewで移行せず、初回revisionとRuntime自身の世代だけを別の基線から組み立てる。秘密鍵・pins本文・署名header・grant・実行能力は準備記録へ保存しない。",
+    "statusはローカル証拠だけを表示し、stopは親同意を先に停止する。送信後の不明状態や遅延ACKを実行成功へ昇格せず、inspection/previewは新IDで再送しない。"
+  ],
+  "refs": ["adapters/sdc/restart_planning.py", "adapters/sdc/restart_client.py", "mcs/ops/sdc_support_cli.py"]
+}

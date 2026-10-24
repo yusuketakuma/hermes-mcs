@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "遠隔支援の同意対象を検証するpreview部品を追加",
+  "summary": "同意対象のscope・担当者・診断範囲・期限を固定ハッシュへ束縛する純粋な部品を追加しました。中央の固定schema/vectorに合わせていますが、本人同意・診断送信・runnerには未接続です。",
+  "upgrade": "追加操作やサービス起動はありません。署名検証にはconsent-preview用途を明示した信頼済みpinが必要です。既存operation/grant用pinの用途は自動拡張しません。",
+  "details": [
+    "既存のCJSON・型・ハッシュ・PS256検証を再利用し、署名済みpreviewを本人同意そのものとは扱いません。",
+    "中央の固定契約に基づきpreviewは最大5分、同意期限は発行時から最大30分として検証します。配列はASCII昇順で一意とし、operation・approval・grantにもdevice_epochを必須としてハッシュへ含めます。",
+    "接続先や鍵を遠隔発見せず、この部品だけで顧客有効化や実行許可を成立させません。"
+  ],
+  "refs": ["adapters/sdc/support_contract.py", "mcs/ops/sdc_support_signatures.py"]
+}

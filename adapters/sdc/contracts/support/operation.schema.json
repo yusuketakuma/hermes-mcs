@@ -1,0 +1,523 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "R4a immutable support operation",
+  "description": "Closed R4a diagnostics only; raw UTF-8 <=8192 bytes, ASCII CJSON, safe integers and no duplicate JSON keys. Runtime also requires issued_at <= not_before < expires_at, maximum 30 minutes, current scope/realm/consent/capability and payload/approval hashes. The grant definition has a maximum 30-second lifetime; its expiry must be clamped to current operation/case/authorization deadlines. This schema does not establish authorization.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operation_id",
+    "product",
+    "audience",
+    "tenant",
+    "installation",
+    "device_id",
+    "environment",
+    "case_id",
+    "type",
+    "params",
+    "purpose_code",
+    "capability_revision",
+    "requested_by",
+    "approved_by",
+    "approval_id",
+    "approval_hash",
+    "consent_revision",
+    "realm_epoch",
+    "policy_epoch",
+    "device_epoch",
+    "local_consent_epoch",
+    "case_epoch",
+    "issued_at",
+    "not_before",
+    "expires_at",
+    "payload_hash"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "sdc.support.operation.v1"
+    },
+    "operation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+    },
+    "product": {
+      "const": "hermes-mcs"
+    },
+    "audience": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9:_-]{1,100}$(?![\\s\\S])"
+    },
+    "tenant": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+    },
+    "installation": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+    },
+    "device_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+    },
+    "environment": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]{1,32}$(?![\\s\\S])"
+    },
+    "case_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+    },
+    "type": {
+      "const": "diagnostics.read"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "diagnostic_id"
+      ],
+      "properties": {
+        "diagnostic_id": {
+          "enum": [
+            "runtime.status.v1",
+            "notification.health.v1",
+            "connectivity.status.v1"
+          ]
+        }
+      }
+    },
+    "purpose_code": {
+      "enum": [
+        "NOTIFICATION_FAILURE",
+        "PROCESS_STALL",
+        "CONFIG_MISMATCH",
+        "UPDATE_FAILURE",
+        "HEALTH_CHECK"
+      ]
+    },
+    "capability_revision": {
+      "const": "sdc-support-capabilities-v1"
+    },
+    "requested_by": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+    },
+    "approved_by": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+    },
+    "approval_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+    },
+    "approval_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+    },
+    "consent_revision": {
+      "const": "sdc-support-consent-v1"
+    },
+    "realm_epoch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$(?![\\s\\S])"
+    },
+    "policy_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "device_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "local_consent_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "case_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "issued_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "not_before": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "payload_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+    }
+  },
+  "$defs": {
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "product",
+        "audience",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "case_id",
+        "type",
+        "params",
+        "purpose_code",
+        "capability_revision",
+        "requested_by",
+        "consent_revision",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "local_consent_epoch",
+        "case_epoch",
+        "issued_at",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.operation.v1"
+        },
+        "operation_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "product": {
+          "const": "hermes-mcs"
+        },
+        "audience": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9:_-]{1,100}$(?![\\s\\S])"
+        },
+        "tenant": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+        },
+        "installation": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+        },
+        "device_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]{1,32}$(?![\\s\\S])"
+        },
+        "case_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "type": {
+          "const": "diagnostics.read"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "diagnostic_id"
+          ],
+          "properties": {
+            "diagnostic_id": {
+              "enum": [
+                "runtime.status.v1",
+                "notification.health.v1",
+                "connectivity.status.v1"
+              ]
+            }
+          }
+        },
+        "purpose_code": {
+          "enum": [
+            "NOTIFICATION_FAILURE",
+            "PROCESS_STALL",
+            "CONFIG_MISMATCH",
+            "UPDATE_FAILURE",
+            "HEALTH_CHECK"
+          ]
+        },
+        "capability_revision": {
+          "const": "sdc-support-capabilities-v1"
+        },
+        "requested_by": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+        },
+        "consent_revision": {
+          "const": "sdc-support-consent-v1"
+        },
+        "realm_epoch": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$(?![\\s\\S])"
+        },
+        "policy_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "device_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "issued_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "not_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "approval_id",
+        "intent_hash",
+        "approved_by",
+        "approval_kind",
+        "consent_revision",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "local_consent_epoch",
+        "case_epoch",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "approval_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.approval.v1"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "intent_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+        },
+        "approved_by": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+        },
+        "approval_kind": {
+          "enum": [
+            "individual",
+            "preauthorized"
+          ]
+        },
+        "consent_revision": {
+          "const": "sdc-support-consent-v1"
+        },
+        "realm_epoch": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$(?![\\s\\S])"
+        },
+        "policy_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "device_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "issued_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "not_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "approval_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      }
+    },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "grant_id",
+        "grant_request_id",
+        "operation_id",
+        "payload_hash",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "case_id",
+        "receipt_id",
+        "admission_id",
+        "owner_generation",
+        "approval_hash",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "local_consent_epoch",
+        "case_epoch",
+        "issued_at",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.execution-grant.v1"
+        },
+        "grant_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "grant_request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "operation_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "payload_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+        },
+        "tenant": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+        },
+        "installation": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+        },
+        "device_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]{1,32}$(?![\\s\\S])"
+        },
+        "case_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "receipt_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "admission_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "owner_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+        },
+        "approval_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+        },
+        "realm_epoch": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$(?![\\s\\S])"
+        },
+        "policy_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "device_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "issued_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "not_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    }
+  }
+}

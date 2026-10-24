@@ -56,7 +56,7 @@ def _payload(response):
 def _file_problem(file, part):
     if file.get("name") != part.get("name"):
         return "edit_file_name_mismatch"
-    if file.get("size") != part.get("bytes"):
+    if type(file.get("size")) is not int or file.get("size") != part.get("bytes"):
         return "edit_file_size_mismatch"
     if file.get("sha256") == part.get("sha256"):
         return None
@@ -703,6 +703,8 @@ class DeliveryWorker(_BaseWorker):
                        if m.get("ts") == prior), None)
         if target is None:
             return None
+        if target.get("thread_ts", thread_ts) != thread_ts:
+            raise RuntimeError("reply_history_unverified")
         sender = self._sender.single_attempt()
         if not self._sender.authored(target) or sender is None:
             return None
@@ -822,7 +824,8 @@ class DeliveryWorker(_BaseWorker):
         want_sha = part.get("sha256")
         for m in ctx["history"]:
             mid = m.get("ts")
-            if not isinstance(mid, str) or mid == thread_ts:
+            if (not isinstance(mid, str) or mid == thread_ts
+                    or m.get("thread_ts", thread_ts) != thread_ts):
                 continue
             if not self._sender.authored(m):
                 continue                # not ours — never binds a part
@@ -837,8 +840,8 @@ class DeliveryWorker(_BaseWorker):
                     continue
                 if f.get("name") != name:
                     continue
-                if part.get("bytes") is not None \
-                        and f.get("size") != part["bytes"]:
+                if type(f.get("size")) is not int or (part.get("bytes") is not None
+                        and f.get("size") != part["bytes"]):
                     continue
                 rsha = f.get("sha256")
                 # Slack does not promise a file hash in replies. A sealed
@@ -867,6 +870,7 @@ class DeliveryWorker(_BaseWorker):
             mid = m.get("ts")
             if not isinstance(mid, str) or mid == thread_ts \
                     or mid in ctx["consumed"] or m.get("text") != text \
+                    or m.get("thread_ts", thread_ts) != thread_ts \
                     or (prior is not None and mid != prior):
                 continue
             if not self._sender.authored(m):

@@ -1,0 +1,1711 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "R4b individual-change restart wire candidate v1",
+  "description": "Closed pure wire shapes for isolated restart contracts. Existing R4a schemas, exact request fields and signature vectors are unchanged. Candidate service/profile syntax is not an active registration, approval, executable grant or successful restart. All identities and vectors are synthetic.",
+  "x-max-control-raw-bytes": 16384,
+  "x-max-signed-payload-bytes": 8192,
+  "x-json-max-depth": 8,
+  "$comment": "B has 18 fields, independent E has the 15 B fields except product/capability_revision/consent_revision. Runtime requires independent trusted E and matches additional expected fields against actual payload fields. Strict UTF-8, ASCII CJSON, no BOM/duplicate keys, no negative zero, raw byte ceilings, dynamic time/freshness, hash DAG, cross-record scopes/epochs/receipt bindings, current registration/authorization, human consent, durable owner CAS and actual causal execution are not established by JSON Schema. The first inspection witness is not reused throughout human approval; fresh same-generation trusted owner witnesses are required before grant and drain. The API/DB/owner routes and service activation are not implemented by this component. R4b v1 execution owner is only the existing live Runtime operation continuation that performs final grant retrieval, durable SPENT, final serialized checks and drain transition; a foreground-issued grant persisted to a mailbox is not supported. owner_generation is that Runtime RAM reservation token, not runtime_generation or consent CAS. command_intake_in_progress must include native admission, queued and actually running work throughout its real lifetime; update_in_progress must be projected from the actual update/restart admission barrier, not merely a marker-file read. These semantics require product-owner integration and cannot be proven by schema or HMAC. Causal launch IDs require actual supervisor exit-to-launch correlation and successor acknowledgement, never copying a planned marker.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/intent"
+    },
+    {
+      "$ref": "#/$defs/approval"
+    },
+    {
+      "$ref": "#/$defs/preview"
+    },
+    {
+      "$ref": "#/$defs/operation"
+    },
+    {
+      "$ref": "#/$defs/grant"
+    },
+    {
+      "$ref": "#/$defs/registration"
+    },
+    {
+      "$ref": "#/$defs/result"
+    },
+    {
+      "$ref": "#/$defs/acceptance"
+    },
+    {
+      "$ref": "#/$defs/control_inspection"
+    },
+    {
+      "$ref": "#/$defs/control_preview"
+    },
+    {
+      "$ref": "#/$defs/control_accept"
+    },
+    {
+      "$ref": "#/$defs/control_poll"
+    },
+    {
+      "$ref": "#/$defs/control_admit"
+    },
+    {
+      "$ref": "#/$defs/control_grant"
+    },
+    {
+      "$ref": "#/$defs/control_report"
+    },
+    {
+      "$ref": "#/$defs/control_status"
+    },
+    {
+      "$ref": "#/$defs/local_receipt"
+    }
+  ],
+  "$defs": {
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "owner_generation": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$(?![\\s\\S])",
+      "description": "Alive continuation token, distinct from the managed service runtime generation."
+    },
+    "runtime_generation": {
+      "$ref": "restart-plan.schema.json#/$defs/runtime_generation"
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "audience",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "case_id",
+        "claim_id",
+        "key_id",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "case_epoch",
+        "local_consent_epoch",
+        "service_revision",
+        "params",
+        "capability_revision",
+        "consent_revision",
+        "operation_id",
+        "type",
+        "purpose_code",
+        "requested_by",
+        "inspection_id",
+        "inspection_hash",
+        "completion_timeout_ms",
+        "issued_at",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-intent.v1"
+        },
+        "product": {
+          "const": "hermes-mcs"
+        },
+        "audience": {
+          "$ref": "operation.schema.json#/properties/audience"
+        },
+        "tenant": {
+          "$ref": "operation.schema.json#/properties/tenant"
+        },
+        "installation": {
+          "$ref": "operation.schema.json#/properties/installation"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "environment": {
+          "$ref": "operation.schema.json#/properties/environment"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "claim_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "key_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "realm_epoch": {
+          "$ref": "operation.schema.json#/properties/realm_epoch"
+        },
+        "policy_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "device_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "service_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "params": {
+          "$ref": "restart-plan.schema.json#/properties/params"
+        },
+        "capability_revision": {
+          "const": "sdc-support-restart-capabilities-v1"
+        },
+        "consent_revision": {
+          "const": "sdc-support-restart-consent-v1"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "type": {
+          "const": "service.restart"
+        },
+        "purpose_code": {
+          "$ref": "operation.schema.json#/properties/purpose_code"
+        },
+        "requested_by": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "inspection_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "inspection_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "completion_timeout_ms": {
+          "const": 900000
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "not_before": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "description": "Stable individual-change target, not an executable permission. Runtime enforces ordered safe timestamps and a maximum 30-minute lifetime."
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "audience",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "case_id",
+        "claim_id",
+        "key_id",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "case_epoch",
+        "local_consent_epoch",
+        "service_revision",
+        "params",
+        "capability_revision",
+        "consent_revision",
+        "approval_id",
+        "intent_hash",
+        "approved_by",
+        "approval_kind",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "approval_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-approval.v1"
+        },
+        "product": {
+          "const": "hermes-mcs"
+        },
+        "audience": {
+          "$ref": "operation.schema.json#/properties/audience"
+        },
+        "tenant": {
+          "$ref": "operation.schema.json#/properties/tenant"
+        },
+        "installation": {
+          "$ref": "operation.schema.json#/properties/installation"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "environment": {
+          "$ref": "operation.schema.json#/properties/environment"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "claim_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "key_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "realm_epoch": {
+          "$ref": "operation.schema.json#/properties/realm_epoch"
+        },
+        "policy_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "device_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "service_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "params": {
+          "$ref": "restart-plan.schema.json#/properties/params"
+        },
+        "capability_revision": {
+          "const": "sdc-support-restart-capabilities-v1"
+        },
+        "consent_revision": {
+          "const": "sdc-support-restart-consent-v1"
+        },
+        "approval_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "intent_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "approved_by": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "approval_kind": {
+          "const": "individual"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "not_before": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "approval_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        }
+      },
+      "description": "Individual approval only. Runtime recomputes approval_hash and binds full B, intent_hash and lifetime within intent; a structural record is not evidence of a human action."
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "audience",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "case_id",
+        "claim_id",
+        "key_id",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "case_epoch",
+        "local_consent_epoch",
+        "service_revision",
+        "params",
+        "capability_revision",
+        "consent_revision",
+        "operation_id",
+        "preview_id",
+        "intent",
+        "approval",
+        "intent_hash",
+        "change_consent_id",
+        "change_binding_hash",
+        "issued_at",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-consent-preview.v1"
+        },
+        "product": {
+          "const": "hermes-mcs"
+        },
+        "audience": {
+          "$ref": "operation.schema.json#/properties/audience"
+        },
+        "tenant": {
+          "$ref": "operation.schema.json#/properties/tenant"
+        },
+        "installation": {
+          "$ref": "operation.schema.json#/properties/installation"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "environment": {
+          "$ref": "operation.schema.json#/properties/environment"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "claim_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "key_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "realm_epoch": {
+          "$ref": "operation.schema.json#/properties/realm_epoch"
+        },
+        "policy_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "device_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "service_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "params": {
+          "$ref": "restart-plan.schema.json#/properties/params"
+        },
+        "capability_revision": {
+          "const": "sdc-support-restart-capabilities-v1"
+        },
+        "consent_revision": {
+          "const": "sdc-support-restart-consent-v1"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "intent": {
+          "$ref": "#/$defs/intent"
+        },
+        "approval": {
+          "$ref": "#/$defs/approval"
+        },
+        "intent_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "change_consent_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_binding_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "not_before": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "description": "Signed preview embeds exact intent and individual approval. Runtime validates all B and hash DAG bindings, a maximum five-minute initial acceptance window and containment within immutable intent/approval lifetimes. An already persisted acceptance within this preview window may be used after preview expiry while intent/approval/acceptance/registration remain currently valid; preview renewal never extends them."
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "audience",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "case_id",
+        "claim_id",
+        "key_id",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "case_epoch",
+        "local_consent_epoch",
+        "service_revision",
+        "params",
+        "capability_revision",
+        "consent_revision",
+        "operation_id",
+        "type",
+        "purpose_code",
+        "requested_by",
+        "inspection_id",
+        "inspection_hash",
+        "completion_timeout_ms",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "intent_hash",
+        "approval_id",
+        "approval_hash",
+        "approved_by",
+        "change_consent_id",
+        "change_binding_hash",
+        "local_change_receipt_id",
+        "change_accept_id",
+        "preview_id",
+        "payload_hash",
+        "preview_payload_hash",
+        "local_change_receipt_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-operation.v1"
+        },
+        "product": {
+          "const": "hermes-mcs"
+        },
+        "audience": {
+          "$ref": "operation.schema.json#/properties/audience"
+        },
+        "tenant": {
+          "$ref": "operation.schema.json#/properties/tenant"
+        },
+        "installation": {
+          "$ref": "operation.schema.json#/properties/installation"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "environment": {
+          "$ref": "operation.schema.json#/properties/environment"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "claim_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "key_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "realm_epoch": {
+          "$ref": "operation.schema.json#/properties/realm_epoch"
+        },
+        "policy_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "device_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "service_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "params": {
+          "$ref": "restart-plan.schema.json#/properties/params"
+        },
+        "capability_revision": {
+          "const": "sdc-support-restart-capabilities-v1"
+        },
+        "consent_revision": {
+          "const": "sdc-support-restart-consent-v1"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "type": {
+          "const": "service.restart"
+        },
+        "purpose_code": {
+          "$ref": "operation.schema.json#/properties/purpose_code"
+        },
+        "requested_by": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "inspection_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "inspection_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "completion_timeout_ms": {
+          "const": 900000
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "not_before": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "intent_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "approval_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "approval_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "approved_by": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "change_consent_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_binding_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "local_change_receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_accept_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "preview_payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "local_change_receipt_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        }
+      },
+      "description": "Immutable accepted operation. Runtime recomputes intent/change/payload hashes and checks the persisted acceptance. Old diagnostic operation v1 is a separate closed schema, not a fallback."
+    },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "audience",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "case_id",
+        "claim_id",
+        "key_id",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "case_epoch",
+        "local_consent_epoch",
+        "service_revision",
+        "params",
+        "capability_revision",
+        "consent_revision",
+        "operation_id",
+        "intent_hash",
+        "payload_hash",
+        "approval_hash",
+        "change_consent_id",
+        "change_binding_hash",
+        "local_change_receipt_id",
+        "change_accept_id",
+        "preview_id",
+        "grant_id",
+        "grant_request_id",
+        "receipt_id",
+        "admission_id",
+        "owner_generation",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "preview_payload_hash",
+        "local_change_receipt_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-execution-grant.v1"
+        },
+        "product": {
+          "const": "hermes-mcs"
+        },
+        "audience": {
+          "$ref": "operation.schema.json#/properties/audience"
+        },
+        "tenant": {
+          "$ref": "operation.schema.json#/properties/tenant"
+        },
+        "installation": {
+          "$ref": "operation.schema.json#/properties/installation"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "environment": {
+          "$ref": "operation.schema.json#/properties/environment"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "claim_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "key_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "realm_epoch": {
+          "$ref": "operation.schema.json#/properties/realm_epoch"
+        },
+        "policy_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "device_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "service_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "params": {
+          "$ref": "restart-plan.schema.json#/properties/params"
+        },
+        "capability_revision": {
+          "const": "sdc-support-restart-capabilities-v1"
+        },
+        "consent_revision": {
+          "const": "sdc-support-restart-consent-v1"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "intent_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "approval_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "change_consent_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_binding_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "local_change_receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_accept_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "grant_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "grant_request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "admission_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "owner_generation": {
+          "$ref": "#/$defs/owner_generation"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "not_before": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "preview_payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "local_change_receipt_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        }
+      },
+      "description": "Maximum 30-second start window, clamped to operation/approval/acceptance and current authority. Independent durable admission must match receipt/admission/alive token; saving or consuming the grant is not proof of drain or permission to redispatch. Runtime also matches the exact preview payload hash and durable local-change receipt hash and clamps the grant to accepted_at+900000; replay never renews them."
+    },
+    "registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "service_id",
+        "effects_profile",
+        "service_revision",
+        "state",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "not_before",
+        "expires_at",
+        "causal_evidence_supported"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-registration.v1"
+        },
+        "product": {
+          "const": "hermes-mcs"
+        },
+        "tenant": {
+          "$ref": "operation.schema.json#/properties/tenant"
+        },
+        "installation": {
+          "$ref": "operation.schema.json#/properties/installation"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "environment": {
+          "$ref": "operation.schema.json#/properties/environment"
+        },
+        "service_id": {
+          "const": "mcs.standalone"
+        },
+        "effects_profile": {
+          "const": "mcs.standalone.restart.v1"
+        },
+        "service_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "enum": [
+            "active",
+            "revoked"
+          ]
+        },
+        "realm_epoch": {
+          "$ref": "operation.schema.json#/properties/realm_epoch"
+        },
+        "policy_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "device_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "not_before": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "causal_evidence_supported": {
+          "type": "boolean"
+        }
+      },
+      "description": "Typed registration record only. Current active registration, target/epochs/profile/revision and time must be independently resolved and rechecked in the authority CAS; this schema registers nothing."
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "payload_hash",
+        "receipt_id",
+        "params",
+        "generated_at",
+        "start_receipt_id",
+        "started_at",
+        "drain_completed_at",
+        "old_owner_exit_at",
+        "handoff_receipt_id",
+        "handoff_parent_receipt_id",
+        "successor_runtime_generation",
+        "ready_observed_at",
+        "readiness",
+        "error_code",
+        "grant_id",
+        "service_revision",
+        "supervisor_launch_id",
+        "successor_launch_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-result.v1"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "params": {
+          "$ref": "restart-plan.schema.json#/properties/params"
+        },
+        "generated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "start_receipt_id": {
+          "anyOf": [
+            {
+              "$ref": "operation.schema.json#/properties/operation_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "drain_completed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "old_owner_exit_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handoff_receipt_id": {
+          "anyOf": [
+            {
+              "$ref": "operation.schema.json#/properties/operation_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handoff_parent_receipt_id": {
+          "anyOf": [
+            {
+              "$ref": "operation.schema.json#/properties/operation_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "successor_runtime_generation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/runtime_generation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ready_observed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "readiness": {
+          "enum": [
+            "unknown",
+            "ready",
+            "not_ready"
+          ]
+        },
+        "error_code": {
+          "enum": [
+            "NONE",
+            "IN_PROGRESS",
+            "PRECHECK_FAILED",
+            "START_WINDOW_EXPIRED",
+            "DRAIN_INCOMPLETE",
+            "HANDOFF_UNKNOWN",
+            "READINESS_FAILED",
+            "RESULT_UNKNOWN"
+          ]
+        },
+        "grant_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "service_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "supervisor_launch_id": {
+          "anyOf": [
+            {
+              "$ref": "operation.schema.json#/properties/operation_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "successor_launch_id": {
+          "anyOf": [
+            {
+              "$ref": "operation.schema.json#/properties/operation_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "Fixed causal result metadata. Runtime binds grant/service revision, nonfuture ordered observations, paired handoff IDs, parent=start receipt, different successor generation and complete readiness proof. NONE/succeeded additionally requires identical nonnull supervisor_launch_id and successor_launch_id. Only an existing supervisor observation linking actual old-owner exit to this launch and a genuine successor witness carrying that same launch can justify success; copying a marker or seeing a new generation does not. Current registration causal_evidence_supported=true is required for success. Structure/hashes alone cannot establish this provenance.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "error_code": {
+                "const": "NONE"
+              }
+            },
+            "required": [
+              "error_code"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "start_receipt_id",
+              "started_at",
+              "drain_completed_at",
+              "old_owner_exit_at",
+              "handoff_receipt_id",
+              "handoff_parent_receipt_id",
+              "successor_runtime_generation",
+              "ready_observed_at",
+              "readiness",
+              "error_code",
+              "supervisor_launch_id",
+              "successor_launch_id"
+            ],
+            "properties": {
+              "start_receipt_id": {
+                "$ref": "operation.schema.json#/properties/operation_id"
+              },
+              "started_at": {
+                "$ref": "#/$defs/timestamp"
+              },
+              "drain_completed_at": {
+                "$ref": "#/$defs/timestamp"
+              },
+              "old_owner_exit_at": {
+                "$ref": "#/$defs/timestamp"
+              },
+              "handoff_receipt_id": {
+                "$ref": "operation.schema.json#/properties/operation_id"
+              },
+              "handoff_parent_receipt_id": {
+                "$ref": "operation.schema.json#/properties/operation_id"
+              },
+              "successor_runtime_generation": {
+                "$ref": "#/$defs/runtime_generation"
+              },
+              "ready_observed_at": {
+                "$ref": "#/$defs/timestamp"
+              },
+              "readiness": {
+                "const": "ready"
+              },
+              "error_code": {
+                "const": "NONE"
+              },
+              "supervisor_launch_id": {
+                "$ref": "operation.schema.json#/properties/operation_id"
+              },
+              "successor_launch_id": {
+                "$ref": "operation.schema.json#/properties/operation_id"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "accept_id",
+        "preview_id",
+        "operation_id",
+        "change_consent_id",
+        "change_binding_hash",
+        "local_change_receipt_id",
+        "state",
+        "expires_at",
+        "accepted_at",
+        "preview_payload_hash",
+        "local_change_receipt_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-acceptance.v1"
+        },
+        "accept_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_consent_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_binding_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "local_change_receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "state": {
+          "const": "accepted"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "accepted_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "preview_payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "local_change_receipt_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        }
+      },
+      "description": "ACK of a device declaration of an already durable individual-change receipt, not independent proof of a human action. accepted_at must be within the preview acceptance window, not in the future, and before its immutable expires_at, bounded by local receipt/intent/approval expiry. An accepted preview may be expired during later authorization, but replay cannot extend the stored original expiry. Caller must bind all ACK fields, including accepted_at, to the persisted primary ACK; structure and hashes cannot prove an otherwise valid substituted acceptance time."
+    },
+    "control_inspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "inspection_id",
+        "case_id",
+        "service_revision",
+        "local_planning_consent_id",
+        "preflight"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-control.v1"
+        },
+        "inspection_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "service_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_planning_consent_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preflight": {
+          "$ref": "restart-plan.schema.json#/$defs/preflight"
+        }
+      },
+      "description": "Runtime validates preflight structure and nonfuture freshness <=15000ms. Current authorization, registration, readiness and binding to an independently trusted plan/owner require separate checks; the request is not its own expected authority."
+    },
+    "control_preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "preview_id",
+        "operation_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-control.v1"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "control_accept": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "accept_id",
+        "preview_id",
+        "change_consent_id",
+        "change_binding_hash",
+        "local_change_receipt_id",
+        "preview_payload_hash",
+        "local_change_receipt_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-control.v1"
+        },
+        "accept_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_consent_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_binding_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "local_change_receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preview_payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "local_change_receipt_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        }
+      },
+      "description": "Declaration of a durable human-confirmed local individual-change receipt. Same ID/raw bytes return the original ACK, different bytes conflict, and replay never renews intent/approval/acceptance expiry."
+    },
+    "control_poll": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "poll_id",
+        "case_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-control.v1"
+        },
+        "poll_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "control_admit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "admission_id",
+        "operation_id",
+        "payload_hash",
+        "receipt_id",
+        "owner_generation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-control.v1"
+        },
+        "admission_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "owner_generation": {
+          "$ref": "#/$defs/owner_generation"
+        }
+      },
+      "description": "Register a durable reservation of the existing owner without starting it. An admission ACK is not SPENT, drain, exit or readiness proof."
+    },
+    "control_grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "grant_request_id",
+        "operation_id",
+        "payload_hash",
+        "receipt_id",
+        "admission_id",
+        "preflight"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-control.v1"
+        },
+        "grant_request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "admission_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preflight": {
+          "$ref": "restart-plan.schema.json#/$defs/preflight"
+        }
+      },
+      "description": "Runtime validates preflight structure and nonfuture freshness <=15000ms. Current authorization, registration, readiness and binding to an independently trusted plan/owner require separate checks; the request is not its own expected authority."
+    },
+    "control_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "report_id",
+        "operation_id",
+        "payload_hash",
+        "receipt_id",
+        "state_revision",
+        "state",
+        "observed_at",
+        "result"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-control.v1"
+        },
+        "report_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "enum": [
+            "running",
+            "succeeded",
+            "failed",
+            "unknown"
+          ]
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/result"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "succeeded"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/result"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "start_receipt_id",
+                      "started_at",
+                      "drain_completed_at",
+                      "old_owner_exit_at",
+                      "handoff_receipt_id",
+                      "handoff_parent_receipt_id",
+                      "successor_runtime_generation",
+                      "ready_observed_at",
+                      "readiness",
+                      "error_code",
+                      "supervisor_launch_id",
+                      "successor_launch_id"
+                    ],
+                    "properties": {
+                      "start_receipt_id": {
+                        "$ref": "operation.schema.json#/properties/operation_id"
+                      },
+                      "started_at": {
+                        "$ref": "#/$defs/timestamp"
+                      },
+                      "drain_completed_at": {
+                        "$ref": "#/$defs/timestamp"
+                      },
+                      "old_owner_exit_at": {
+                        "$ref": "#/$defs/timestamp"
+                      },
+                      "handoff_receipt_id": {
+                        "$ref": "operation.schema.json#/properties/operation_id"
+                      },
+                      "handoff_parent_receipt_id": {
+                        "$ref": "operation.schema.json#/properties/operation_id"
+                      },
+                      "successor_runtime_generation": {
+                        "$ref": "#/$defs/runtime_generation"
+                      },
+                      "ready_observed_at": {
+                        "$ref": "#/$defs/timestamp"
+                      },
+                      "readiness": {
+                        "const": "ready"
+                      },
+                      "error_code": {
+                        "const": "NONE"
+                      },
+                      "supervisor_launch_id": {
+                        "$ref": "operation.schema.json#/properties/operation_id"
+                      },
+                      "successor_launch_id": {
+                        "$ref": "operation.schema.json#/properties/operation_id"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "description": "A nonnull result must bind the outer operation/hash/receipt and generated_at=observed_at. Runtime also checks time ordering, parent/start linkage and distinct successor; succeeded requires all complete causal/readiness fields. A null, partial or unknown result never proves success or permits reexecution."
+    },
+    "control_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "status_id",
+        "operation_id",
+        "payload_hash",
+        "receipt_id",
+        "report_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-control.v1"
+        },
+        "status_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "report_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      },
+      "description": "Metadata-only current observation for one known immutable operation/hash/receipt, with current authentication and scope. No list/content/grant is returned. report=null alone proves neither no start nor nonacceptance and never authorizes redispatch."
+    },
+    "local_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "audience",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "case_id",
+        "claim_id",
+        "key_id",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "case_epoch",
+        "local_consent_epoch",
+        "service_revision",
+        "params",
+        "capability_revision",
+        "consent_revision",
+        "operation_id",
+        "intent_hash",
+        "approval_hash",
+        "change_consent_id",
+        "change_binding_hash",
+        "preview_id",
+        "preview_payload_hash",
+        "local_change_receipt_id",
+        "change_accept_id",
+        "confirmed_at",
+        "expires_at",
+        "receipt_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-local-change-receipt.v1"
+        },
+        "product": {
+          "const": "hermes-mcs"
+        },
+        "audience": {
+          "$ref": "operation.schema.json#/properties/audience"
+        },
+        "tenant": {
+          "$ref": "operation.schema.json#/properties/tenant"
+        },
+        "installation": {
+          "$ref": "operation.schema.json#/properties/installation"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "environment": {
+          "$ref": "operation.schema.json#/properties/environment"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "claim_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "key_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "realm_epoch": {
+          "$ref": "operation.schema.json#/properties/realm_epoch"
+        },
+        "policy_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "device_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "service_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "params": {
+          "$ref": "restart-plan.schema.json#/properties/params"
+        },
+        "capability_revision": {
+          "const": "sdc-support-restart-capabilities-v1"
+        },
+        "consent_revision": {
+          "const": "sdc-support-restart-consent-v1"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "intent_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "approval_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "change_consent_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_binding_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preview_payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "local_change_receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "change_accept_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "confirmed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "receipt_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        }
+      },
+      "description": "Durable local declaration of the exact verified preview and individual change. receipt_hash covers canonical fields except itself; preview_payload_hash covers the entire verified preview including ID and transient times. Runtime binds full B and all IDs/hashes, requires confirmation within the preview window and accepted_at>=confirmed_at, and prevents expiry renewal. Hashes do not independently prove a human action or storage durability."
+    }
+  }
+}

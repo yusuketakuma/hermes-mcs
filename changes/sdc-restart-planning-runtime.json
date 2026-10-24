@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "再起動の準備確認で稼働中Runtimeの状態を照合",
+  "summary": "本人が明示した再起動の準備要求に対し、稼働中のstandalone Runtime自身が世代・受付・更新状態を一度採取する入口を追加しました。不明な状態は準備完了にせず、通常の収集や受付を停止しません。",
+  "upgrade": "追加操作は不要です。真正な支援先・公開pinの初期provisionは別途受入が必要で、未provision時は採取・鍵取得・通信を開始しません。update.lockが存在しない環境も保留し、この確認のためにlockを作成しません。実環境の自動有効化や再起動実行は追加しません。",
+  "details": [
+    "既存の単一Runtime loopから私有領域の一件の明示planning要求だけを処理し、新しいservice・thread・schedulerは追加しない。",
+    "実ownerの世代・設定・受付・停止・更新状態を受動的に確認し、markerの掃除や再起動予約を行わない。",
+    "Runtimeのmetadata応答では初期provision provider・資格情報・Keychain・署名検証・HTTPを呼び出さず、私有pendingと親状態の照合だけを行う。送信前の現在権限の照合はCLIが維持する。",
+    "保存metadataは観測時点の情報であり、grantや実行権限、旧ownerの終了や後継起動の成功証拠にはしない。",
+    "既存の実行carrier、本人の変更同意、SPENT、既存restart通信契約は維持する。"
+  ],
+  "refs": ["mcs_standalone/runtime.py", "mcs_standalone/__main__.py"]
+}

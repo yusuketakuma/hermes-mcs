@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "再起動専用の変更同意と受付証拠をローカルに固定",
+  "summary": "再起動の変更同意と受付応答を一件の私有記録に保存し、停止後の再有効化や応答時刻の差替えを拒否する部品を追加しました。本人確認画面や遠隔再起動の実行にはまだ接続していません。",
+  "upgrade": "追加操作は不要です。自動有効化・中央送信・再起動はありません。初回保存領域は明示provisionだけで作成し、既存記録の欠落・破損を自動修復しません。初回信頼情報の供給と実行経路の受入は別途必要です。",
+  "details": [
+    "呼出元が確認したrestart専用署名previewと独立した期待値を受け取り、本人確認後にreceipt IDとaccept IDを同時に固定する。署名検証や本人行為をこの保存部品が証明したとは扱わない。",
+    "最初のaccept送信入場を耐久記録し、結果不明時は同じID・canonical本文・hashだけを返す。primary ACKのaccepted_atとexpires_atを含む全項目は不変で、HTTP追跡request_idだけを切り離す。",
+    "停止と状態読取りは監視lock・Keychain・endpoint・HTTPに依存しない。停止後も一致する既入場要求のACKは保存できるが、同意を再有効化しない。",
+    "専用stateから監視lockの順に短く取得し、現在のroot・endpoint・restart pin・実使用鍵hashを再照合する。書込みまたはfsync失敗は借用Storeに結果不明を保持し、その継続から新たな入場を行わない。",
+    "一件の記録を保持し、未知の履歴の削除・置換・期限延長を行わない。容量は固定wire上限とJSON escapeから計算し、停止時に履歴を増やす必要がない。完全な保存領域の巻戻し検出や別processでの実行権限復元は提供しない。"
+  ],
+  "refs": ["adapters/sdc/restart_state.py", "adapters/sdc/storage.py"]
+}

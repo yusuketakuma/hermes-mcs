@@ -152,9 +152,16 @@ def atomic_publish_text(path: str, text: str) -> None:
     atomic_write(path, lambda f: f.write(text), tmp_prefix=".pub.")
 
 
-def read_private_bytes(path, limit: int = 16384) -> bytes:
-    """Read a bounded regular current-UID private file without links or FIFO waits."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+def read_private_bytes(path, limit: int = 16384, *, dir_fd: int | None = None) -> bytes:
+    """Read a bounded regular current-UID private file without links or FIFO waits.
+
+    A supplied directory descriptor is borrowed; this function closes only its file.
+    """
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+    if dir_fd is None:
+        fd = os.open(path, flags)
+    else:
+        fd = os.open(path, flags, dir_fd=dir_fd)
     stream = fdopen_owned(fd, "rb")
     with stream:
         metadata = os.fstat(stream.fileno())

@@ -1,0 +1,29 @@
+{
+  "schema_version": "sdc.inventory.versions.v1",
+  "pattern": "^(?:[0-9]{1,8}!)?[0-9]{1,8}(?:\\.[0-9]{1,8}){0,7}(?:(?:a|b|rc)[0-9]{1,8})?(?:\\.post[0-9]{1,8})?(?:\\.dev[0-9]{1,8})?$(?![\\s\\S])",
+  "max_length": 128,
+  "notice": "Conservative canonical public version syntax only; not proof that a distribution is authentic or publicly released. Local/free suffixes are excluded, never stripped.",
+  "accepted": [
+    "1",
+    "1.2",
+    "1.2.3",
+    "1!2.3.0rc1",
+    "2.0a1",
+    "2.0b2",
+    "1.0.post1",
+    "1.0.dev2",
+    "1.0rc1.post2.dev3"
+  ],
+  "rejected": [
+    "1.0.0+SYNTHETIC_CUSTOMER_ID",
+    "1.0.0-SYNTHETIC_CUSTOMER_ID",
+    "1.0.0_private",
+    "1.0.0+build.1",
+    "v1.2.3",
+    "1.0.0-rc1",
+    "1.0rcSYNTHETIC",
+    "1.0.0\n",
+    "1.0.0+123",
+    "SYNTHETIC_SECRET"
+  ]
+}

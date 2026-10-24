@@ -1,0 +1,21 @@
+{
+  "category": "security",
+  "title": "個別承認済みの固定支援診断を前景で1回実行",
+  "summary": "mcs support runで、保存済み本人同意・中央受付・署名操作・個別承認・短命grantを照合した固定診断だけを1回実行する経路を追加しました。STARTED以後や結果不明は再実行せず、report受付は元本文hashのmetadataで照合します。機器の健全性とコマンド完了は区別します。",
+  "upgrade": "監視ジョブへの自動組込み・新scheduler・サービス操作はありません。承認済み支援bootstrapと本人同意・受付ACK、operation/execution-grant用途の公開pinがある領域だけが対象です。真正なbootstrap配布・pin発行・実機運用受入は別で、未設定は保留です。未消費admitは既存statusで既知receiptを照合し、ローカルgrant未要求と中央の取消・期限切れがともに確認できた場合だけ終端化します。それ以外はslotを保持し、手編集や新ID再実行で迂回しません。",
+  "details": [
+    "単一私有stateにadmit/grant/report/statusの自前UUID・正確な本文・hashを保存してから通信する。個別操作の生存owner世代を同意CAS世代から分離し、後のprocessへgrantを持ち越さない。",
+    "短いstate→監視lockで現在binding・停止・owner世代を各要求とprovider直前に再確認する。HTTP・crypto・providerの間は監視lockを保持しない。ローカル停止後は新しいmetadata照合も開始しない。",
+    "STARTEDを原子的に保存し、固定3診断だけを注入providerで実行する。任意shell/file/URL/LLM/患者DB/再起動は受け付けない。根拠不足のsource値はunknown/nullのままとし任意例外本文を保存・送信しない。",
+    "grantの最初のID・intent前から単調時計を固定し、秒切捨て分1000msと全待ちを開始期限へ算入する。壁時計の窓・逆行・採取区間を考慮した乖離も別に検証し、実機精度を実証済みとは扱わない。",
+    "未解決operation1件と最大32件の受付証拠を有界保持し、最大16KiB reportのescape保存量と停止tombstoneを副作用前に予約する。満杯で過去の証拠を捨てない。",
+    "ACK喪失後は元report bytesを再送せずmetadata statusでraw bodyhashを照合する。report:nullや中央operation状態だけで未実行・再実行可能・機器正常へ昇格しない。",
+    "ローカル永続ADMITTING・grant未要求・STARTEDなしと、中央の同receipt canceled/expired・revision 0・report:nullの組合せだけを未開始終端として保存する。null単独・非終端・未知receipt・binding変更・ローカル停止でslotを解放しない。"
+  ],
+  "refs": [
+    "adapters/sdc/support_state.py",
+    "adapters/sdc/support_client.py",
+    "mcs/ops/sdc_support_cli.py",
+    "docs/guides/SDC_SELF_MONITORING.md"
+  ]
+}

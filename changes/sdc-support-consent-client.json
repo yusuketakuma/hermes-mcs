@@ -1,0 +1,14 @@
+{
+  "category": "security",
+  "title": "遠隔支援の内容確認・同意登録・ローカル停止を追加",
+  "summary": "mcs support connectで署名済みの支援内容を確認し、Consoleと照合した本人の明示同意だけを登録できる前景経路を追加しました。statusはローカル記録、stopは新規受付停止と開始済み要求の終了確認を区別して表示します。診断送信・操作実行・再起動はまだ接続しません。",
+  "upgrade": "自動有効化や監視service変更はありません。承認済みの支援先・用途別公開pinと初回の無効stateを現地provisionした領域だけが対象です。真正なbootstrap配布・pin発行の運用は未提供で、未設定・欠落・破損は保留とし自動初期化・修復しません。URLやpinの手入力、--yesによる同意代用はありません。",
+  "details": [
+    "初回scopeは固定origin・用途別pinの署名preview、既知監視identity、Consoleと本人の照合を経てreceiptへ固定する。署名だけでは操作を承認しない。",
+    "同意receipt・accept UUID・同一ASCII本文・元期限・送信開始証拠・ACKを単一の私有stateへ保存し、保存成功前は送信しない。結果不明は同じUUIDと本文で元case期限までだけ再試行する。",
+    "専用session lockと短いstate→監視lockで停止との競合を分離する。開始承認済みの要求は終了未確認として表示し、停止後ACKを保存しても再有効化しない。",
+    "本人確認後もroot・監視先・支援先・pin・実使用鍵hash・key IDとローカルowner世代を再確認する。鍵交換中・未完候補・監視無効は保留にする。",
+    "前景全体300秒と既存の親期限、HTTP10秒、署名検証5秒と回収を維持する。患者情報・秘密値・任意例外・任意pathを表示しない。"
+  ],
+  "refs": ["adapters/sdc/support_client.py", "adapters/sdc/support_state.py", "mcs/ops/sdc_support_cli.py", "docs/guides/SDC_SELF_MONITORING.md"]
+}

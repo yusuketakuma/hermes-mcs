@@ -1,0 +1,396 @@
+{
+  "schema_version": "sdc.support.restart-registration-vectors.v1",
+  "description": "Synthetic shape-only registration read vectors reusing the existing R4b wire registration and case values. They prove no current DB authorization, real registration, authentic origin/pin provisioning or deployment. No private key, PHI/PII or live credential. source_sha256 freezes every pre-existing support contract and the R4b OpenAPI bytes.",
+  "now": 1792663200000,
+  "source_sha256": {
+    "approval.schema.json": "dda3d76c5c75203739b4e0dce0cb3f2231280eb37b1d00627632c02a46b4c0fb",
+    "artifact-manifest.schema.json": "fcfec4654a1da0caa212194c77a638de4210499a773952123bd1508346eff73f",
+    "consent-preview-vectors.json": "429f265eeab795c8b014b49162944540dd3b55dfe1ef7fb41956ef82f5de11ff",
+    "consent-preview.schema.json": "6ce35be89be56954465073c8c9a12f9dc8522d84ca42621d70d71da15b2447b1",
+    "control-vectors.json": "f441b4a0653cab01785ba1d1cd99d724b6bca8244f3d0147effc43e83b561a4d",
+    "control.schema.json": "dfa4f3c15d12daf364794d69b98e135b1cc031ab10c06196be1ccdca9de9cb8c",
+    "diagnostic-result.schema.json": "3e053b49b89f08a89d604fcf32659cb881e37c82b4c94de99536ffc346db6d01",
+    "execution-grant.schema.json": "e98307ded94eaca704c0c83e99f7250a96f88a4ac3fb638eb9251c91e0d8034c",
+    "operation.schema.json": "629011cb45251f1eb754bffb2a5269b9bbc8db3ed3d54fbd7c5c58d2c194f899",
+    "restart-api-vectors.json": "2ac562fa25c4b74e86215cc1aea8d0fbd797af878dccd22c8272ec307bb90921",
+    "restart-api.schema.json": "4906f936abcd2bed17007608f13bc4f27292f2ea5afb2928bed123a9557fedf4",
+    "restart-plan.schema.json": "32fc9964701b22082a7ba28e3f47e6dbda3d39568738d81038d78b5ae1cffc0c",
+    "restart-signature-vectors.json": "3a524fcf0e63a4c43ddca16241ef2eec50db8dcd4087898cafcf34768211783d",
+    "restart-wire-vectors.json": "c762292b09d2b2b62d8d244b1724e83151d7d9cc7a8fdbc2a3905869efd9debe",
+    "restart-wire.schema.json": "bb1247e045ad5fa68dd41f0c6e66ffe2b83cef4b99d64d69cd53bee8c99405fd",
+    "signature-vectors.json": "cbbb89418e1018b3845789767aa3119601203e4bb2a1fd26e36b59b5b348cd3c",
+    "../../docs/api/restart-openapi.yaml": "4e0e5d2d6b9ed914d06be36f15534b38a1bec1a1544796238295c50813ca944b"
+  },
+  "positive": [
+    {
+      "name": "Read request",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-read.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032"
+      }
+    },
+    {
+      "name": "Read handler result",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Read HTTP response",
+      "definition": "ReadResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Scope denied error",
+      "definition": "ErrorResponse",
+      "value": {
+        "code": "SCOPE_DENIED",
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "State conflict error",
+      "definition": "ErrorResponse",
+      "value": {
+        "code": "STATE_CONFLICT",
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    }
+  ],
+  "negative": [
+    {
+      "name": "Old restart control version",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-control.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032"
+      }
+    },
+    {
+      "name": "Response version as request",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032"
+      }
+    },
+    {
+      "name": "Missing local receipt",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-read.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002"
+      }
+    },
+    {
+      "name": "Non-v4 case UUID",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-read.v1",
+        "case_id": "00000000-0000-1000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032"
+      }
+    },
+    {
+      "name": "Target device injection",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-read.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "device_id": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "name": "Tenant injection",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-read.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "tenant": "tenant-a"
+      }
+    },
+    {
+      "name": "Revision injection",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-read.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "service_revision": 1
+      }
+    },
+    {
+      "name": "Query injection",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-read.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "query": "service_id=mcs.standalone"
+      }
+    },
+    {
+      "name": "Revoked registration",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "revoked",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Null registration",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "registration": null
+      }
+    },
+    {
+      "name": "Registration extra field",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true,
+          "origin": "https://synthetic.invalid"
+        }
+      }
+    },
+    {
+      "name": "Registration missing revision",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Handler result with request ID",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "HTTP response without request ID",
+      "definition": "ReadResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Business receipt in response",
+      "definition": "ReadResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "inspection_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Pin in response",
+      "definition": "ReadResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-registration-response.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000032",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "pin": "synthetic-refused"
+      }
+    },
+    {
+      "name": "Error with raw message",
+      "definition": "ErrorResponse",
+      "value": {
+        "code": "SCOPE_DENIED",
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "message": "synthetic-refused"
+      }
+    }
+  ]
+}

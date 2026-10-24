@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "再起動候補の純粋な契約検証部品を追加",
+  "upgrade": "追加操作は不要です。既定動作や通信先は変更せず、再起動支援を有効化しません。",
+  "summary": "遠隔再起動候補の閉じた型・ハッシュ・個別同意束縛を検証する純粋な契約部品を追加しました。",
+  "details": [
+    "再起動専用3署名用途、8種類の要求、個別承認・確認済preview・ローカル変更receipt・保存ACK・独立した対象設定・登録・15秒以内のowner情報を照合します。既存の診断R4a契約は変更しません。",
+    "受理済previewの履歴照合は5分経過後も可能ですが、個別承認・同意・grantの期限を延長しません。grantの開始窓は最大30秒、追跡期限は初回受理から900000msへ固定します。",
+    "結果の因果証拠が欠ける場合は成功へ補完せずunknownを保持します。構造照合はowner証拠の真正性を証明しません。",
+    "純粋な整形・検証部品のみで、署名認証・現在権限・本人同意の成立、永続保存、通信、runtime接続、再起動、有効化は未完です。grant_request_idの独立要求照合と同一生存ownerの実開始は後続callerの責務です。"
+  ],
+  "refs": ["adapters/sdc/restart_contract.py", "adapters/sdc/contracts/support/restart-wire.schema.json"]
+}

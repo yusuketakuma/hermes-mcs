@@ -12,7 +12,7 @@ carry no business logic (plan §5). Custom-ID namespaces:
 First-response rules (§6.3): modal-opening clicks answer with
 ``send_modal`` — never a defer first; other component clicks take a
 type-6 defer; modal submits are their own interaction and may defer.
-All filesystem I/O runs off the event loop via ``asyncio.to_thread``.
+All filesystem I/O runs off the event loop through actual-lifetime-owned native workers.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import time
 from typing import Any
 
 from adapters.common import projects
-from adapters.common import confirm, envelopes, paths, registry, forms, text
+from adapters.common import commands, confirm, envelopes, paths, registry, forms, text
 from .cards import ACTION_PREFIX, MENU_ID, no_pings, thread_drug_view
 
 MODAL_PREFIX = "mcs:m:"
@@ -131,8 +131,29 @@ def _same_origin(pinned: dict, current: dict,
 
 
 class Actions:
+    async def _publish_taken_confirm(self, confirm_id, payload):
+        started = False
+        def publish():
+            nonlocal started
+            started = True
+            return envelopes.publish_command(self._dirs["cmd_int"], payload)
+        try:
+            await self._offload(publish)
+        except commands.NativeAdmissionClosed:
+            # Only a denied reservation proves no publish was attempted.
+            # An exception after entering the worker retains unknown evidence.
+            if not started:
+                self._reg.end_confirm(confirm_id)
+                self._reg.drop_followup(payload["command_id"])
+            raise
+
+    async def _offload(self, handler, *args, **kwargs):
+        return await commands.run_native(
+            handler, *args, admission=self._native_admission, **kwargs)
+
     def __init__(self, *, bot: Any, settings: dict, root: str,
-                 reg: registry.Registry, log) -> None:
+                 reg: registry.Registry, log, native_admission=None) -> None:
+        self._native_admission = native_admission
         self._bot = bot
         self._settings = settings
         self._root = root
@@ -176,7 +197,7 @@ class Actions:
     async def _interactive(self) -> bool:
         """The runner flags still route interactive cards to Discord
         (as Slack ``_interactive`` and LINE WORKS ``_allowed``)."""
-        flags = await asyncio.to_thread(paths.read_flags, self._root)
+        flags = await self._offload(paths.read_flags, self._root)
         epoch = self._settings.get("route_epoch")
         return paths.route_open(flags, "discord", epoch,
                                 check_epoch=epoch is not None,
@@ -201,7 +222,7 @@ class Actions:
                            timeout: float, *, request_id=None) -> dict | None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            result = await asyncio.to_thread(
+            result = await self._offload(
                 paths.read_result, self._dirs["cmd_results"], command_id)
             if result is not None and (request_id is None
                                        or result.get("request_id") == request_id):
@@ -214,7 +235,7 @@ class Actions:
         result — (result, True) when published, (None, False) when the
         OSError followup was already sent and the caller must stop."""
         try:
-            await asyncio.to_thread(envelopes.publish_command,
+            await self._offload(envelopes.publish_command,
                                     self._dirs["cmd_int"], env)
         except OSError:
             await self._followup(
@@ -250,6 +271,8 @@ class Actions:
                 await self._on_confirm(interaction,
                                        custom_id[len(CONFIRM_PREFIX):])
             return
+        except commands.NativeAdmissionClosed:
+            await self._ephemeral(interaction, commands.NATIVE_ADMISSION_CLOSED_TEXT)
         except Exception as e:
             self._log("interaction_error", error=type(e).__name__)
 
@@ -272,7 +295,7 @@ class Actions:
                 await self._ephemeral(interaction, "権限がありません。")
                 return
             try:
-                await asyncio.to_thread(
+                await self._offload(
                     envelopes.publish_command, self._dirs["cmd_int"],
                     envelopes.refresh(actor, origin))
                 self._result_log(interaction, "refresh",
@@ -334,7 +357,7 @@ class Actions:
         it and re-validates at submit."""
         env = envelopes.notification(token, actor, origin)
         try:
-            await asyncio.to_thread(envelopes.publish_command,
+            await self._offload(envelopes.publish_command,
                                     self._dirs["cmd_int"], env)
         except OSError:
             await self._ephemeral(
@@ -660,9 +683,8 @@ class Actions:
         # failure that queued nothing keeps the confirm live for a retry
         if not await confirm.publish_confirmed(
                 self._reg, confirm_id,
-                lambda: asyncio.to_thread(envelopes.publish_command,
-                                          self._dirs["cmd_int"], payload),
-                lambda: asyncio.to_thread(envelopes.command_queued,
+                lambda: self._publish_taken_confirm(confirm_id, payload),
+                lambda: self._offload(envelopes.command_queued,
                                           self._dirs["cmd_int"], cid),
                 on_queued=lambda: self._followup(
                     interaction,
@@ -739,7 +761,7 @@ class Actions:
                 self._reg.drop_followup(cid)
                 self._log("followup_dropped", reason="unauthorized")
                 continue
-            result = await asyncio.to_thread(
+            result = await self._offload(
                 paths.read_result, self._dirs["cmd_results"], cid)
             if result is None or (rec.get("request_id") is not None
                                   and result.get("request_id") != rec["request_id"]) \
@@ -787,7 +809,7 @@ class Actions:
         """Register runner-issued private-control tokens before their buttons."""
         token_ctx = result.get("token_ctx") or {}
         if token_ctx:
-            await asyncio.to_thread(self._reg.put_tokens, token_ctx)
+            await self._offload(self._reg.put_tokens, token_ctx)
 
     async def _send_answer(self, interaction, answer: list,
                            result: dict) -> None:

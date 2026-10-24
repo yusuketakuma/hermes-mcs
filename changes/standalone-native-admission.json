@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "独立実行の操作受付と終了待ちを実処理に一致",
+  "summary": "Slack・Discordの独立実行で、停止受付後の新しい操作を拒否し、待機中・実行中の操作が実際に終了するまで終了待ちの対象として保持します。再接続や応答受付だけで処理完了と扱いません。",
+  "upgrade": "追加設定や既定値変更はありません。独立実行の更新適用後に有効です。この変更だけで遠隔再起動を有効にしません。Hermesの既存操作経路は共有受付ownerなしで維持します。",
+  "details": [
+    "Runtimeが所有する単一受付gateをHost・Supervisor・Actionsへ借用し、通常の接続切替で開閉しない。",
+    "executor投入前の待機件数と実workerのfinallyまでの実行件数を同期lock下で管理し、取消・投入失敗・例外でも二重解放しない。カード・モーダル・確認・結果読取り・登録を含む操作のoff-loop処理を同じ受付経路へ通す。",
+    "Host終了は共有した実cleanup完了を全呼出元が待ち、呼出元の取消はcleanup後に返す。R1監視・配送wire・データ形式・人承認条件は変更しない。",
+    "受付停止が受付済みcommandの結果読取りと競合しても、処理失敗や再操作を案内せず、処理状態未確認・既存受付結果の確認待ちと表示する。保存済みcommand・消費済みconfirm・結果通知用記録は保持する。",
+    "commandを実行するworkerへ入る前の受付拒否だけは、両transportで未送信confirmと結果待ち記録を解放する。publish後の不明結果・queued確認の受付拒否では解放しない。Discordのメッセージ受付競合は認可済み本人のDMへ固定案内し、公開チャンネルへは代替送信しない。"
+  ],
+  "refs": [
+    "adapters/common/commands.py",
+    "mcs_standalone/host.py",
+    "adapters/slack/actions.py",
+    "adapters/discord/actions.py"
+  ]
+}

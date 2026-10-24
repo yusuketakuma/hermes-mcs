@@ -35,9 +35,18 @@ def pid_exists(pid):
 
 
 def status(root, *, now=None):
-    path = Path(root).expanduser().resolve() / "data" / STATUS_FILE
     try:
-        value = json.loads(safe_io.read_private_bytes(path, 1024 * 1024))
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        root_fd = os.open(Path(root).expanduser().absolute(), directory_flags)
+        try:
+            data_fd = os.open("data", directory_flags, dir_fd=root_fd)
+            try:
+                raw = safe_io.read_private_bytes(STATUS_FILE, 1024 * 1024, dir_fd=data_fd)
+            finally:
+                os.close(data_fd)
+        finally:
+            os.close(root_fd)
+        value = json.loads(raw)
         if not isinstance(value, dict) or type(value.get("updated_at")) not in (int, float) \
                 or not math.isfinite(value["updated_at"]):
             raise ValueError
@@ -49,6 +58,8 @@ def status(root, *, now=None):
                 or not isinstance(value.get("children"), dict)):
             raise ValueError
         return value
+    except TimeoutError:
+        raise
     except (OSError, ValueError, TypeError, KeyError, RecursionError, UnicodeError, OverflowError):
         raise ValueError("standalone_status_unavailable") from None
 

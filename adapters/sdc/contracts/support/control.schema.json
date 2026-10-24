@@ -1,0 +1,1824 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "R4a support control wire",
+  "description": "Route-specific closed HTTP request and response definitions. Device requests alone use sdc.support.v1 and no flat scope claims; admin requests use csrf with registered IDs and the Console prefix. Choose the matching $defs for a route; the root anyOf is only a request-shape union. Raw UTF-8 JSON <=16384 bytes, identity encoding, depth<=8, duplicate/unknown keys and invalid UTF-8 rejected before schema validation. Schema shape is not authorization or execution evidence. R4a requires case consent plus individual operation approval; automatic preauthorization is not implemented. Console approval persists approved typed payload without a signing key; the Support Broker signs and persists queued operation envelopes during poll after current-authority revalidation. Read-only consent preview returns centrally approved fixed metadata before local consent; it grants no execution authority. Preview requires an explicitly preinstalled consent-preview pin purpose, current registered claim/device/key/full scope and current case/consent/roles. A persisted device declaration of the human-approved local receipt is separately acknowledged by cases/accept before polling/admission/grant. Transport authentication alone is not evidence of local consent. operations/status is metadata-only reconciliation for a known consumed receipt or an exactly matched persisted pregrant admission, including after case expiry or cancellation, while current device/key/realm/tenant authorization remains mandatory.",
+  "x-max-raw-bytes": 16384,
+  "x-json-max-depth": 8,
+  "anyOf": [
+    {
+      "$ref": "#/$defs/PollRequest"
+    },
+    {
+      "$ref": "#/$defs/AdmitRequest"
+    },
+    {
+      "$ref": "#/$defs/GrantRequest"
+    },
+    {
+      "$ref": "#/$defs/ReportRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminOpenRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminConsentRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminAssignRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminCloseRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminReadCaseRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminProposeRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminApproveRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminReadOperationsRequest"
+    },
+    {
+      "$ref": "#/$defs/PreviewRequest"
+    },
+    {
+      "$ref": "#/$defs/AcceptRequest"
+    },
+    {
+      "$ref": "#/$defs/StatusRequest"
+    }
+  ],
+  "$defs": {
+    "SignedEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg",
+        "kid",
+        "purpose",
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "alg": {
+          "const": "PS256"
+        },
+        "kid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$(?![\\s\\S])"
+        },
+        "purpose": {
+          "enum": [
+            "operation",
+            "execution-grant",
+            "consent-preview"
+          ]
+        },
+        "payload": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])",
+          "maxLength": 10923
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{512}$(?![\\s\\S])"
+        }
+      },
+      "description": "Payload is base64url ASCII CJSON; signature covers SDC-SIGNED-v1 LF purpose LF kid LF decoded CJSON, no final LF. PS256 RSA3072/e65537 SHA256 MGF1SHA256 salt32 trailer 0xbc. The current pinned key and purpose/type must be verified separately."
+    },
+    "OperationEnvelope": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/SignedEnvelope"
+        },
+        {
+          "properties": {
+            "purpose": {
+              "const": "operation"
+            }
+          }
+        }
+      ]
+    },
+    "GrantEnvelope": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/SignedEnvelope"
+        },
+        {
+          "properties": {
+            "purpose": {
+              "const": "execution-grant"
+            }
+          }
+        }
+      ]
+    },
+    "PollRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "poll_id",
+        "case_id",
+        "capability_revision",
+        "local_consent_epoch"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "poll_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "capability_revision": {
+          "$ref": "operation.schema.json#/properties/capability_revision"
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "description": " Requires the persisted cases/accept acknowledgment matching the authenticated device/key, case, current epochs and locally approved binding; the central planned consent epoch alone is insufficient."
+    },
+    "AdmitRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "admission_id",
+        "operation_id",
+        "payload_hash",
+        "receipt_id",
+        "local_consent_epoch",
+        "owner_generation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "admission_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "owner_generation": {
+          "$ref": "operation.schema.json#/$defs/grant/properties/owner_generation"
+        }
+      },
+      "description": " Requires the persisted cases/accept acknowledgment matching the authenticated device/key, case, current epochs and locally approved binding; the central planned consent epoch alone is insufficient."
+    },
+    "GrantRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "grant_request_id",
+        "operation_id",
+        "payload_hash",
+        "receipt_id",
+        "admission_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "grant_request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "admission_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      },
+      "description": " Requires the persisted cases/accept acknowledgment matching the authenticated device/key, case, current epochs and locally approved binding; the central planned consent epoch alone is insufficient."
+    },
+    "ReportRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "report_id",
+        "operation_id",
+        "payload_hash",
+        "receipt_id",
+        "state_revision",
+        "state",
+        "observed_at",
+        "result"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "report_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "enum": [
+            "running",
+            "succeeded",
+            "failed",
+            "unknown"
+          ]
+        },
+        "observed_at": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Receipt/report generation time in UTC milliseconds; when result is nonnull this equals result.generated_at, not result.observed_at."
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "diagnostic-result.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "running",
+                  "failed",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Current permitted succeeded requires a nonnull diagnostic DTO with the same diagnostic_id and result.generated_at equal to report.observed_at (receipt generation time). result.observed_at is the separate original source witness time or null; it must not be invented from collection time/counters. Runtime requires result.generated_at >= result.observed_at when nonnull. After case/consent revocation, only this already consumed receipt may report fixed status with result=null. Device/key/realm authorization remains required. state_revision must increase for a new report; late terminal evidence may have an older report generation time while the stored observation watermark never regresses; receipt generation time must not exceed server now+300000. After content-report ACK loss and case cancellation/expiry, use operations/status with the original report ID to reconcile raw body_hash without resending diagnostic bytes or rewriting that report."
+    },
+    "AdminOpenRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "device_id",
+        "product",
+        "purpose_code",
+        "csrf"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "product": {
+          "$ref": "operation.schema.json#/properties/product"
+        },
+        "purpose_code": {
+          "$ref": "operation.schema.json#/properties/purpose_code"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "x-handler-fields": [
+        "case_id",
+        "device_id",
+        "product",
+        "purpose_code"
+      ],
+      "description": "HTTP shape includes csrf; Console validates and removes csrf before the handler exactFields check. No schema_version or caller tenant/installation/environment fields are accepted. IDs are resolved against registered scope and current primary authorization."
+    },
+    "AdminConsentRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consent_id",
+        "case_id",
+        "case_epoch",
+        "consent_revision",
+        "diagnostic_ids",
+        "local_consent_epoch",
+        "csrf"
+      ],
+      "properties": {
+        "consent_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "consent_revision": {
+          "$ref": "operation.schema.json#/properties/consent_revision"
+        },
+        "diagnostic_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "operation.schema.json#/properties/params/properties/diagnostic_id"
+          }
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "x-handler-fields": [
+        "consent_id",
+        "case_id",
+        "case_epoch",
+        "consent_revision",
+        "diagnostic_ids",
+        "local_consent_epoch"
+      ],
+      "description": "HTTP shape includes csrf; Console validates and removes csrf before the handler exactFields check. No schema_version or caller tenant/installation/environment fields are accepted. IDs are resolved against registered scope and current primary authorization."
+    },
+    "AdminAssignRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignment_id",
+        "case_id",
+        "case_epoch",
+        "assignee_ref",
+        "permissions",
+        "enabled",
+        "csrf"
+      ],
+      "properties": {
+        "assignment_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "assignee_ref": {
+          "$ref": "operation.schema.json#/properties/requested_by"
+        },
+        "permissions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "case.read",
+              "case.operate"
+            ]
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "x-handler-fields": [
+        "assignment_id",
+        "case_id",
+        "case_epoch",
+        "assignee_ref",
+        "permissions",
+        "enabled"
+      ],
+      "description": "HTTP shape includes csrf; Console validates and removes csrf before the handler exactFields check. No schema_version or caller tenant/installation/environment fields are accepted. IDs are resolved against registered scope and current primary authorization."
+    },
+    "AdminCloseRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "close_id",
+        "case_id",
+        "case_epoch",
+        "state",
+        "customer_confirmed",
+        "csrf"
+      ],
+      "properties": {
+        "close_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "enum": [
+            "closed",
+            "canceled"
+          ]
+        },
+        "customer_confirmed": {
+          "type": "boolean"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "x-handler-fields": [
+        "close_id",
+        "case_id",
+        "case_epoch",
+        "state",
+        "customer_confirmed"
+      ],
+      "description": "HTTP shape includes csrf; Console validates and removes csrf before the handler exactFields check. No schema_version or caller tenant/installation/environment fields are accepted. IDs are resolved against registered scope and current primary authorization."
+    },
+    "AdminReadCaseRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "device_id",
+        "csrf"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "x-handler-fields": [
+        "case_id",
+        "device_id"
+      ],
+      "description": "HTTP shape includes csrf; Console validates and removes csrf before the handler exactFields check. No schema_version or caller tenant/installation/environment fields are accepted. IDs are resolved against registered scope and current primary authorization."
+    },
+    "AdminProposeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "case_id",
+        "device_id",
+        "case_epoch",
+        "local_consent_epoch",
+        "diagnostic_id",
+        "csrf"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "diagnostic_id": {
+          "$ref": "operation.schema.json#/properties/params/properties/diagnostic_id"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "x-handler-fields": [
+        "operation_id",
+        "case_id",
+        "device_id",
+        "case_epoch",
+        "local_consent_epoch",
+        "diagnostic_id"
+      ],
+      "description": "HTTP shape includes csrf; Console validates and removes csrf before the handler exactFields check. No schema_version or caller tenant/installation/environment fields are accepted. IDs are resolved against registered scope and current primary authorization."
+    },
+    "AdminApproveRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "approval_id",
+        "intent_hash",
+        "csrf"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "approval_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "intent_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "x-handler-fields": [
+        "operation_id",
+        "approval_id",
+        "intent_hash"
+      ],
+      "description": "HTTP shape includes csrf; Console validates and removes csrf before the handler exactFields check. No schema_version or caller tenant/installation/environment fields are accepted. IDs are resolved against registered scope and current primary authorization."
+    },
+    "AdminReadOperationsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "device_id",
+        "csrf"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "x-handler-fields": [
+        "case_id",
+        "device_id"
+      ],
+      "description": "HTTP shape includes csrf; Console validates and removes csrf before the handler exactFields check. No schema_version or caller tenant/installation/environment fields are accepted. IDs are resolved against registered scope and current primary authorization."
+    },
+    "PollResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "poll_id",
+        "operation",
+        "approval",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "poll_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationEnvelope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "operation.schema.json#/$defs/approval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "operation": {
+              "type": "null"
+            },
+            "approval": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "$ref": "#/$defs/OperationEnvelope"
+            },
+            "approval": {
+              "allOf": [
+                {
+                  "$ref": "operation.schema.json#/$defs/approval"
+                },
+                {
+                  "properties": {
+                    "approval_kind": {
+                      "const": "individual"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "operation and approval are both null or both present. The individual approval record is not separately signed: the client validates its complete closed fields, recomputes intent/approval hashes and compares approval_hash/id/approved_by/epochs/lifetime with the verified immutable operation. A current accepted device/key/case/epoch-bound local receipt is required even for an empty poll. No preauthorized approval is emitted."
+    },
+    "AdmitResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "receipt_id",
+        "state",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "state": {
+          "const": "locally_admitted"
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "GrantResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "state",
+        "grant",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "state": {
+          "enum": [
+            "proposed",
+            "approved",
+            "queued",
+            "locally_admitted",
+            "grant_consumed",
+            "running",
+            "succeeded",
+            "failed",
+            "unknown",
+            "canceled",
+            "expired",
+            "denied"
+          ]
+        },
+        "grant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GrantEnvelope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "ReportResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "receipt_id",
+        "state",
+        "state_revision",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "state": {
+          "enum": [
+            "running",
+            "succeeded",
+            "failed",
+            "unknown"
+          ]
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "OpenResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "case_id",
+        "case_epoch",
+        "expires_at",
+        "content_expires_at",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "case_opened"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "content_expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "ConsentResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "case_id",
+        "case_epoch",
+        "local_consent_epoch",
+        "expires_at",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "case_consented"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "AssignResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "case_id",
+        "case_epoch",
+        "assignee_ref",
+        "enabled",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "case_assigned"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "assignee_ref": {
+          "$ref": "operation.schema.json#/properties/requested_by"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "CloseResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "case_id",
+        "case_epoch",
+        "state",
+        "customer_confirmed",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "case_closed"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "enum": [
+            "closed",
+            "canceled"
+          ]
+        },
+        "customer_confirmed": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "OperationSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "case_id",
+        "diagnostic_id",
+        "state",
+        "intent_hash",
+        "payload_hash",
+        "expires_at",
+        "state_revision"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "diagnostic_id": {
+          "$ref": "operation.schema.json#/properties/params/properties/diagnostic_id"
+        },
+        "state": {
+          "enum": [
+            "proposed",
+            "approved",
+            "queued",
+            "locally_admitted",
+            "grant_consumed",
+            "running",
+            "succeeded",
+            "failed",
+            "unknown",
+            "canceled",
+            "expired",
+            "denied"
+          ]
+        },
+        "intent_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "payload_hash": {
+          "anyOf": [
+            {
+              "$ref": "operation.schema.json#/properties/payload_hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "OperationSummaryResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "case_id",
+        "diagnostic_id",
+        "state",
+        "intent_hash",
+        "payload_hash",
+        "expires_at",
+        "state_revision",
+        "request_id"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "diagnostic_id": {
+          "$ref": "operation.schema.json#/properties/params/properties/diagnostic_id"
+        },
+        "state": {
+          "enum": [
+            "proposed",
+            "approved",
+            "queued",
+            "locally_admitted",
+            "grant_consumed",
+            "running",
+            "succeeded",
+            "failed",
+            "unknown",
+            "canceled",
+            "expired",
+            "denied"
+          ]
+        },
+        "intent_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "payload_hash": {
+          "anyOf": [
+            {
+              "$ref": "operation.schema.json#/properties/payload_hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "ReadOperationsResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "operations",
+        "history",
+        "request_id"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "operations": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operation_id",
+              "case_id",
+              "diagnostic_id",
+              "state",
+              "intent_hash",
+              "payload_hash",
+              "expires_at",
+              "state_revision",
+              "diagnostic"
+            ],
+            "properties": {
+              "operation_id": {
+                "$ref": "operation.schema.json#/properties/operation_id"
+              },
+              "case_id": {
+                "$ref": "operation.schema.json#/properties/case_id"
+              },
+              "diagnostic_id": {
+                "$ref": "operation.schema.json#/properties/params/properties/diagnostic_id"
+              },
+              "state": {
+                "enum": [
+                  "proposed",
+                  "approved",
+                  "queued",
+                  "locally_admitted",
+                  "grant_consumed",
+                  "running",
+                  "succeeded",
+                  "failed",
+                  "unknown",
+                  "canceled",
+                  "expired",
+                  "denied"
+                ]
+              },
+              "intent_hash": {
+                "$ref": "operation.schema.json#/properties/payload_hash"
+              },
+              "payload_hash": {
+                "anyOf": [
+                  {
+                    "$ref": "operation.schema.json#/properties/payload_hash"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "expires_at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "state_revision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "diagnostic": {
+                "anyOf": [
+                  {
+                    "$ref": "diagnostic-result.schema.json"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "history": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/OperationHistoryItem"
+          },
+          "description": "Latest 100 merged case open/consent/assign/close and device poll/admit/grant/report entries, descending created_at; each source selection rechecks current case scope/read authority."
+        }
+      }
+    },
+    "ReadCaseResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "case",
+        "consent",
+        "assignees",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "case_detail"
+        },
+        "case": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "case_id",
+            "tenant",
+            "installation",
+            "environment",
+            "device_id",
+            "product",
+            "purpose_code",
+            "state",
+            "case_epoch",
+            "created_by",
+            "created_at",
+            "expires_at",
+            "content_expires_at",
+            "closed_at",
+            "customer_confirmed"
+          ],
+          "properties": {
+            "case_id": {
+              "$ref": "operation.schema.json#/properties/case_id"
+            },
+            "tenant": {
+              "$ref": "operation.schema.json#/properties/tenant"
+            },
+            "installation": {
+              "$ref": "operation.schema.json#/properties/installation"
+            },
+            "environment": {
+              "$ref": "operation.schema.json#/properties/environment"
+            },
+            "device_id": {
+              "$ref": "operation.schema.json#/properties/device_id"
+            },
+            "product": {
+              "$ref": "operation.schema.json#/properties/product"
+            },
+            "purpose_code": {
+              "$ref": "operation.schema.json#/properties/purpose_code"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "closed",
+                "canceled",
+                "expired"
+              ]
+            },
+            "case_epoch": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "created_by": {
+              "$ref": "operation.schema.json#/properties/requested_by"
+            },
+            "created_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "expires_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "content_expires_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "closed_at": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "customer_confirmed": {
+              "type": "boolean"
+            }
+          }
+        },
+        "consent": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "consent_id",
+                "case_epoch",
+                "consent_revision",
+                "diagnostic_ids",
+                "local_consent_epoch",
+                "approved_by",
+                "not_before",
+                "expires_at",
+                "revoked_at",
+                "active"
+              ],
+              "properties": {
+                "consent_id": {
+                  "$ref": "operation.schema.json#/properties/operation_id"
+                },
+                "case_epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "consent_revision": {
+                  "$ref": "operation.schema.json#/properties/consent_revision"
+                },
+                "diagnostic_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "operation.schema.json#/properties/params/properties/diagnostic_id"
+                  }
+                },
+                "local_consent_epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "approved_by": {
+                  "$ref": "operation.schema.json#/properties/approved_by"
+                },
+                "not_before": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "revoked_at": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "active": {
+                  "type": "boolean"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assignees": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "actor_ref",
+              "permission",
+              "case_epoch",
+              "not_before",
+              "expires_at",
+              "revoked_at"
+            ],
+            "properties": {
+              "actor_ref": {
+                "$ref": "operation.schema.json#/properties/requested_by"
+              },
+              "permission": {
+                "enum": [
+                  "case.read",
+                  "case.operate"
+                ]
+              },
+              "case_epoch": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "not_before": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "expires_at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "revoked_at": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$(?![\\s\\S])"
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      }
+    },
+    "OperationHistoryItem": {
+      "description": "Fixed case/device request history only; no raw actor, request body or secret. Source rows are filtered by current scope and case.read in their primary SELECT.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "created_at"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "open",
+                "consent",
+                "assign",
+                "close"
+              ]
+            },
+            "created_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "operation_id",
+            "created_at"
+          ],
+          "properties": {
+            "kind": {
+              "const": "poll"
+            },
+            "operation_id": {
+              "anyOf": [
+                {
+                  "$ref": "operation.schema.json#/properties/operation_id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "created_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "operation_id",
+            "created_at"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "admit",
+                "grant",
+                "report"
+              ]
+            },
+            "operation_id": {
+              "$ref": "operation.schema.json#/properties/operation_id"
+            },
+            "created_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      ]
+    },
+    "ConsentPreviewPayload": {
+      "$ref": "consent-preview.schema.json"
+    },
+    "ConsentPreviewEnvelope": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/SignedEnvelope"
+        },
+        {
+          "properties": {
+            "purpose": {
+              "const": "consent-preview"
+            },
+            "payload": {
+              "contentEncoding": "base64url",
+              "contentMediaType": "application/json",
+              "contentSchema": {
+                "$ref": "#/$defs/ConsentPreviewPayload"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Read-only consent metadata, not an operation or grant. contentSchema is an annotation: runtime must strictly decode ASCII CJSON, validate consent-preview.schema.json, recompute the binding hash, verify PS256 and explicitly pinned consent-preview purpose, and compare registered full scope/claim/current key. Preview lifetime <=5 minutes and consent lifetime <=30 minutes. No dynamic key or origin discovery."
+    },
+    "PreviewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "preview_id",
+        "case_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        }
+      },
+      "description": "Exact device bootstrap request. Device/tenant/installation/environment/claim/key are resolved from the authenticated registration, never caller scope fields. Central case consent and current authority are required; local consent receipt is not yet required. No collection or execution is authorized."
+    },
+    "PreviewResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "preview_id",
+        "preview",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preview": {
+          "$ref": "#/$defs/ConsentPreviewEnvelope"
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      },
+      "description": "Handler returns schema_version/preview_id/preview; the standard HTTP wrapper adds request_id. Same-ID identical raw request bytes return the identical stored preview envelope without extending expiry; changed bytes conflict with 409. Current authorization still applies. This response cannot approve an operation."
+    },
+    "AcceptRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "accept_id",
+        "preview_id",
+        "consent_binding_hash",
+        "local_consent_epoch",
+        "local_receipt_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "accept_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "consent_binding_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      },
+      "description": "Exact declaration of a locally persisted receipt after human confirmation of the signed preview. First acceptance must win its current-authority CAS within the five-minute preview lifetime. This ACK records a device declaration, not independent proof of a human action, diagnosis, execution or grant. owner_generation belongs to per-operation admission, not this case receipt."
+    },
+    "AcceptResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "accept_id",
+        "preview_id",
+        "case_id",
+        "local_receipt_id",
+        "local_consent_epoch",
+        "consent_binding_hash",
+        "state",
+        "expires_at",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "accept_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "preview_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "local_receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "consent_binding_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "state": {
+          "const": "accepted"
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      },
+      "description": "The wrapper adds request_id to the persisted receipt ACK. Identical accept_id and raw request bytes return the same stored ACK without extending expires_at; altered bytes are 409. ACK replay may outlive preview signature expiry only while current case consent and all device/key/scope/epoch/realm authorization remain valid. The planned central local_consent_epoch alone is not this acceptance."
+    },
+    "StatusRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "status_id",
+        "operation_id",
+        "payload_hash",
+        "receipt_id",
+        "report_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "status_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "payload_hash": {
+          "$ref": "operation.schema.json#/properties/payload_hash"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "report_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      },
+      "description": "Exact metadata-only status request for a known operation/payload/receipt with a consumed grant, or a persisted pregrant admission with grant_id null, nonnull admission_id, state_revision 0 and state locally_admitted/canceled/expired. Pregrant also requires the saved admit request to match tenant/device/case/operation/admission_id and its exact canonical four-field admission ACK to match schema/operation/receipt/locally_admitted, with stored raw body_hash in lowercase SHA-256 form. A planned receipt, missing admission, inconsistent ACK or any report row for the pregrant operation is denied. report_id may be the locally persisted UUID of a report not yet sent. No report body is resent. status_id identifies the observation and reserves no immutable response or side-effect receipt: another authenticated read with that ID may observe newer primary state. Fixed transport nonce protections still apply. Unknown or mismatched IDs/hash/scope are denied without revealing existence."
+    },
+    "StatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "receipt_id",
+        "report_id",
+        "report",
+        "operation",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.v1"
+        },
+        "operation_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "receipt_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "report_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        },
+        "report": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "body_hash",
+                "state",
+                "state_revision"
+              ],
+              "properties": {
+                "body_hash": {
+                  "$ref": "operation.schema.json#/properties/payload_hash"
+                },
+                "state": {
+                  "$ref": "#/$defs/ReportResponse/properties/state"
+                },
+                "state_revision": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "description": "Metadata of the saved report with this exact report_id, device, operation, case and receipt. body_hash is SHA-256 of the original raw report bytes, not the diagnostic DTO digest."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "state_revision"
+          ],
+          "properties": {
+            "state": {
+              "$ref": "#/$defs/OperationSummary/properties/state"
+            },
+            "state_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "description": "Current primary operation state; it can be newer than the selected saved report."
+        },
+        "request_id": {
+          "$ref": "operation.schema.json#/properties/operation_id"
+        }
+      },
+      "description": "Current primary metadata only, guarded before and after the audit commit by active device/credential, full scope, ciphertext, device epoch, nonce, signature time, realm and tenant authorization/expiry. A closed/canceled/expired case does not prevent this one consumed receipt or exactly matched persisted pregrant admission from reconciling. A known pregrant admission normally returns report=null and state_revision 0. report=null means no matching saved report was observed; it proves neither no execution nor authoritative nonacceptance, terminal failure or permission to reexecute. A local slot may be resolved as ended without starting only when local evidence of no provider start agrees with this same operation/hash/receipt in central canceled/expired state; locally_admitted or null alone is insufficient. No diagnostic content, operation/grant signature, URL, key or case list is returned. Local disable still forbids all communication."
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "mcsコマンドからdiagnosticsを実行できるように修正",
+  "summary": "導入済みのmcsコマンド（scripts/mcs）がdiagnosticsを未知の操作名として拒否していたため、固定診断コードの送信許可・状態確認・停止を実行できませんでした。入口の受付と使い方表示にdiagnosticsを追加しました。",
+  "upgrade": "設定や既存の同意は変わりません。diagnosticsの内容と必要な確認（--confirm-humanと秘密を含まない半角の--reason）は従来どおりです。",
+  "details": [
+    "入口は操作名と引数をそのまま固定のPythonへ渡すだけで、診断の採取・送信・鍵の読取りは行いません。"
+  ],
+  "refs": [
+    "scripts/mcs",
+    "mcs/ops/mcs_cli.py"
+  ]
+}

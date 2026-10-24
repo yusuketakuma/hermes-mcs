@@ -257,13 +257,13 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(tmp_path):
 
         gate = asyncio.Event()
         publishing = asyncio.Event()
-        real = actions._publish
+        real = actions._publish_taken_confirm
 
-        async def slow_publish(envelope):
+        async def slow_publish(taken_confirm_id, envelope):
             publishing.set()
             await gate.wait()
-            await real(envelope)
-        actions._publish = slow_publish
+            await real(taken_confirm_id, envelope)
+        actions._publish_taken_confirm = slow_publish
         first = asyncio.create_task(actions._confirm(ack, body, confirm_action))
         await asyncio.wait_for(publishing.wait(), timeout=5)
         assert reg.confirm(confirm_id).get("in_flight")

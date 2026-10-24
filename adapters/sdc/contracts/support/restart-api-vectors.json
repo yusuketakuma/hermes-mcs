@@ -1,0 +1,2707 @@
+{
+  "schema_version": "sdc.support.restart-api-vectors.v1",
+  "description": "Synthetic shape-only API vectors reuse existing public PS256 envelopes. They prove no current DB authorization, real service registration, human confirmation, owner identity, process exit or deployment. No private key, PHI/PII or live credential. source_sha256 freezes unchanged R4a and R4b wire inputs.",
+  "now": 1792663200000,
+  "source_sha256": {
+    "operation.schema.json": "629011cb45251f1eb754bffb2a5269b9bbc8db3ed3d54fbd7c5c58d2c194f899",
+    "execution-grant.schema.json": "e98307ded94eaca704c0c83e99f7250a96f88a4ac3fb638eb9251c91e0d8034c",
+    "approval.schema.json": "dda3d76c5c75203739b4e0dce0cb3f2231280eb37b1d00627632c02a46b4c0fb",
+    "consent-preview.schema.json": "6ce35be89be56954465073c8c9a12f9dc8522d84ca42621d70d71da15b2447b1",
+    "signature-vectors.json": "cbbb89418e1018b3845789767aa3119601203e4bb2a1fd26e36b59b5b348cd3c",
+    "consent-preview-vectors.json": "429f265eeab795c8b014b49162944540dd3b55dfe1ef7fb41956ef82f5de11ff",
+    "control.schema.json": "dfa4f3c15d12daf364794d69b98e135b1cc031ab10c06196be1ccdca9de9cb8c",
+    "control-vectors.json": "f441b4a0653cab01785ba1d1cd99d724b6bca8244f3d0147effc43e83b561a4d",
+    "restart-wire.schema.json": "bb1247e045ad5fa68dd41f0c6e66ffe2b83cef4b99d64d69cd53bee8c99405fd",
+    "restart-wire-vectors.json": "c762292b09d2b2b62d8d244b1724e83151d7d9cc7a8fdbc2a3905869efd9debe",
+    "restart-signature-vectors.json": "3a524fcf0e63a4c43ddca16241ef2eec50db8dcd4087898cafcf34768211783d"
+  },
+  "positive": [
+    {
+      "name": "Inspection request",
+      "definition": "InspectionRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-control.v1",
+        "inspection_id": "00000000-0000-4000-8000-00000000000a",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "service_revision": 1,
+        "local_planning_consent_id": "00000000-0000-4000-8000-00000000000b",
+        "preflight": {
+          "schema_version": "sdc.support.restart-preflight.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "service_id": "mcs.standalone",
+          "runtime_generation": "00000000000040008000000000000007",
+          "started_at": 1792576800000,
+          "observed_at": 1792663199000,
+          "owner_alive": true,
+          "update_in_progress": false,
+          "command_intake_in_progress": false,
+          "restarting": false
+        }
+      }
+    },
+    {
+      "name": "Inspection handler result",
+      "definition": "InspectionResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "inspection_id": "00000000-0000-4000-8000-00000000000a",
+        "state": "recorded",
+        "expires_at": 1792663215000,
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Inspection HTTP response",
+      "definition": "InspectionResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "inspection_id": "00000000-0000-4000-8000-00000000000a",
+        "state": "recorded",
+        "expires_at": 1792663215000,
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Preview request",
+      "definition": "PreviewRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-control.v1",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "operation_id": "00000000-0000-4000-8000-00000000000c"
+      }
+    },
+    {
+      "name": "Preview handler result",
+      "definition": "PreviewResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "preview": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-consent-preview",
+          "payload": "eyJhcHByb3ZhbCI6eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92YWxfa2luZCI6ImluZGl2aWR1YWwiLCJhcHByb3ZlZF9ieSI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJhdWRpZW5jZSI6InNkYzpzeW50aGV0aWMiLCJjYXBhYmlsaXR5X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jYXBhYmlsaXRpZXMtdjEiLCJjYXNlX2Vwb2NoIjozLCJjYXNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb25zZW50X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jb25zZW50LXYxIiwiZGV2aWNlX2Vwb2NoIjoyLCJkZXZpY2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJlbnZpcm9ubWVudCI6InN5bnRoZXRpYyIsImV4cGlyZXNfYXQiOjE3OTI2NjM3NDAwMDAsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTUwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jb25zZW50X2Vwb2NoIjo0LCJub3RfYmVmb3JlIjoxNzkyNjYzMTUwMDAwLCJwYXJhbXMiOnsiZWZmZWN0c19wcm9maWxlIjoibWNzLnN0YW5kYWxvbmUucmVzdGFydC52MSIsImV4cGVjdGVkX3J1bnRpbWVfZ2VuZXJhdGlvbiI6IjAwMDAwMDAwMDAwMDQwMDA4MDAwMDAwMDAwMDAwMDA3Iiwic2VydmljZV9pZCI6Im1jcy5zdGFuZGFsb25lIn0sInBvbGljeV9lcG9jaCI6MSwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWFwcHJvdmFsLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifSwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9iaW5kaW5nX2hhc2giOiJmZWRiZmVkOWU2NTUwN2JmNzkzZGFlOGQyYTg0YWMwM2JkZDNiNjUwYTMyZTJkMGM1ZWY2ODFhNWI3NTJhNjIyIiwiY2hhbmdlX2NvbnNlbnRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGUiLCJjbGFpbV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzMyMDAwMCwiaW5zdGFsbGF0aW9uIjoiaW5zdGFsbGF0aW9uLWEiLCJpbnRlbnQiOnsiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29tcGxldGlvbl90aW1lb3V0X21zIjo5MDAwMDAsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzgwMDAwMCwiaW5zcGVjdGlvbl9oYXNoIjoiODkxMDM0NDMxZjNiZTYzNzczMWU2Y2YyNmMwZmJjMDViNGQ4ODdlMmY4NDk1ZDRjYmNiMGVlYmJiMDIxNzIwNCIsImluc3BlY3Rpb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGEiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImlzc3VlZF9hdCI6MTc5MjY2MzE0MDAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwb2xpY3lfZXBvY2giOjEsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicHVycG9zZV9jb2RlIjoiUFJPQ0VTU19TVEFMTCIsInJlYWxtX2Vwb2NoIjoic3ludGhldGljLXJlc3RhcnQtcmVhbG0iLCJyZXF1ZXN0ZWRfYnkiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWludGVudC52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIiwidHlwZSI6InNlcnZpY2UucmVzdGFydCJ9LCJpbnRlbnRfaGFzaCI6ImNkN2Q1YWJmYjNjZmIxODJkMTczZjEyNGRiY2U4YTdiMjM2YWU0NDA1N2NmMDkxZDMzNzFkOTBmMzFmNDRlYzciLCJpc3N1ZWRfYXQiOjE3OTI2NjMxOTAwMDAsImtleV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNCIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTAwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWNvbnNlbnQtcHJldmlldy52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIn0",
+          "signature": "j-T8Tv0ZiiYpxCFhRubejUDeuASdSdnbG1mX7qp0GX1vylJ7h1dvgTwA7xa7_JTq_YjiDD2CG9urLeT5UHZ7_Que9OV5opjvHC6TZMmjxaq5YUEQ69Ev1oxoFbZiDgbMs3PhJWqtGXfNbkOVBu-TuqNR3I55TW-NqG0mdXda9oKE-6O2Z0DLd1E_rHmu2dMXzZrsoZOyEqyXXYzHiMaWS6N4sWVVgRg0JiJaqhUSoNFippqKZjSq1147BLp01ULkGQArm7mtVhjrmxwLyH7RNhM7QahJunDvdw6ab6CIezSaAg4vv_9Sufc_2ph5cAHt7WcyXB61w3s6APf1mW-HiATLsQxwpWB0UBrGC3lq5E7ct6j0yHAsInoYRDK6YG0H3Hdld1IoadWy1gIMhfQtlv0Mkr6p8f3UT_nI58jJmybeXecO7TgzrymRvxu7e-RsMzG4aRhifgOzzWNzRU5JrAlSmwGC1DBazWWCkwdXSFa7QFDoi_iXP3SIxwnOm2UQ"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Preview HTTP response",
+      "definition": "PreviewResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "preview": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-consent-preview",
+          "payload": "eyJhcHByb3ZhbCI6eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92YWxfa2luZCI6ImluZGl2aWR1YWwiLCJhcHByb3ZlZF9ieSI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJhdWRpZW5jZSI6InNkYzpzeW50aGV0aWMiLCJjYXBhYmlsaXR5X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jYXBhYmlsaXRpZXMtdjEiLCJjYXNlX2Vwb2NoIjozLCJjYXNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb25zZW50X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jb25zZW50LXYxIiwiZGV2aWNlX2Vwb2NoIjoyLCJkZXZpY2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJlbnZpcm9ubWVudCI6InN5bnRoZXRpYyIsImV4cGlyZXNfYXQiOjE3OTI2NjM3NDAwMDAsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTUwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jb25zZW50X2Vwb2NoIjo0LCJub3RfYmVmb3JlIjoxNzkyNjYzMTUwMDAwLCJwYXJhbXMiOnsiZWZmZWN0c19wcm9maWxlIjoibWNzLnN0YW5kYWxvbmUucmVzdGFydC52MSIsImV4cGVjdGVkX3J1bnRpbWVfZ2VuZXJhdGlvbiI6IjAwMDAwMDAwMDAwMDQwMDA4MDAwMDAwMDAwMDAwMDA3Iiwic2VydmljZV9pZCI6Im1jcy5zdGFuZGFsb25lIn0sInBvbGljeV9lcG9jaCI6MSwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWFwcHJvdmFsLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifSwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9iaW5kaW5nX2hhc2giOiJmZWRiZmVkOWU2NTUwN2JmNzkzZGFlOGQyYTg0YWMwM2JkZDNiNjUwYTMyZTJkMGM1ZWY2ODFhNWI3NTJhNjIyIiwiY2hhbmdlX2NvbnNlbnRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGUiLCJjbGFpbV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzMyMDAwMCwiaW5zdGFsbGF0aW9uIjoiaW5zdGFsbGF0aW9uLWEiLCJpbnRlbnQiOnsiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29tcGxldGlvbl90aW1lb3V0X21zIjo5MDAwMDAsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzgwMDAwMCwiaW5zcGVjdGlvbl9oYXNoIjoiODkxMDM0NDMxZjNiZTYzNzczMWU2Y2YyNmMwZmJjMDViNGQ4ODdlMmY4NDk1ZDRjYmNiMGVlYmJiMDIxNzIwNCIsImluc3BlY3Rpb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGEiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImlzc3VlZF9hdCI6MTc5MjY2MzE0MDAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwb2xpY3lfZXBvY2giOjEsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicHVycG9zZV9jb2RlIjoiUFJPQ0VTU19TVEFMTCIsInJlYWxtX2Vwb2NoIjoic3ludGhldGljLXJlc3RhcnQtcmVhbG0iLCJyZXF1ZXN0ZWRfYnkiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWludGVudC52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIiwidHlwZSI6InNlcnZpY2UucmVzdGFydCJ9LCJpbnRlbnRfaGFzaCI6ImNkN2Q1YWJmYjNjZmIxODJkMTczZjEyNGRiY2U4YTdiMjM2YWU0NDA1N2NmMDkxZDMzNzFkOTBmMzFmNDRlYzciLCJpc3N1ZWRfYXQiOjE3OTI2NjMxOTAwMDAsImtleV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNCIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTAwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWNvbnNlbnQtcHJldmlldy52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIn0",
+          "signature": "j-T8Tv0ZiiYpxCFhRubejUDeuASdSdnbG1mX7qp0GX1vylJ7h1dvgTwA7xa7_JTq_YjiDD2CG9urLeT5UHZ7_Que9OV5opjvHC6TZMmjxaq5YUEQ69Ev1oxoFbZiDgbMs3PhJWqtGXfNbkOVBu-TuqNR3I55TW-NqG0mdXda9oKE-6O2Z0DLd1E_rHmu2dMXzZrsoZOyEqyXXYzHiMaWS6N4sWVVgRg0JiJaqhUSoNFippqKZjSq1147BLp01ULkGQArm7mtVhjrmxwLyH7RNhM7QahJunDvdw6ab6CIezSaAg4vv_9Sufc_2ph5cAHt7WcyXB61w3s6APf1mW-HiATLsQxwpWB0UBrGC3lq5E7ct6j0yHAsInoYRDK6YG0H3Hdld1IoadWy1gIMhfQtlv0Mkr6p8f3UT_nI58jJmybeXecO7TgzrymRvxu7e-RsMzG4aRhifgOzzWNzRU5JrAlSmwGC1DBazWWCkwdXSFa7QFDoi_iXP3SIxwnOm2UQ"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Accept request",
+      "definition": "AcceptRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-control.v1",
+        "accept_id": "00000000-0000-4000-8000-000000000010",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+        "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+        "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+        "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+        "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+      }
+    },
+    {
+      "name": "Accept handler result",
+      "definition": "AcceptResult",
+      "value": {
+        "schema_version": "sdc.support.restart-acceptance.v1",
+        "accept_id": "00000000-0000-4000-8000-000000000010",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+        "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+        "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+        "state": "accepted",
+        "expires_at": 1792663740000,
+        "accepted_at": 1792663195000,
+        "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+        "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+      }
+    },
+    {
+      "name": "Accept HTTP response",
+      "definition": "AcceptResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-acceptance.v1",
+        "accept_id": "00000000-0000-4000-8000-000000000010",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+        "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+        "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+        "state": "accepted",
+        "expires_at": 1792663740000,
+        "accepted_at": 1792663195000,
+        "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+        "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8",
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Poll request",
+      "definition": "PollRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-control.v1",
+        "poll_id": "00000000-0000-4000-8000-000000000018",
+        "case_id": "00000000-0000-4000-8000-000000000002"
+      }
+    },
+    {
+      "name": "Poll handler result",
+      "definition": "PollResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-operation",
+          "payload": "eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92ZWRfYnkiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9hY2NlcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTAiLCJjaGFuZ2VfYmluZGluZ19oYXNoIjoiZmVkYmZlZDllNjU1MDdiZjc5M2RhZThkMmE4NGFjMDNiZGQzYjY1MGEzMmUyZDBjNWVmNjgxYTViNzUyYTYyMiIsImNoYW5nZV9jb25zZW50X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBlIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb21wbGV0aW9uX3RpbWVvdXRfbXMiOjkwMDAwMCwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzODAwMDAwLCJpbnNwZWN0aW9uX2hhc2giOiI4OTEwMzQ0MzFmM2JlNjM3NzMxZTZjZjI2YzBmYmMwNWI0ZDg4N2UyZjg0OTVkNGNiY2IwZWViYmIwMjE3MjA0IiwiaW5zcGVjdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYSIsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTQwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9oYXNoIjoiZDhjNWZlYzUzMDcyM2E4NDZmMGZjNWY5ODg3N2NhNWFjNTljMjM4ZmRmMGVhZjQzNjliZGFmOWNhOTk2ODZmOCIsImxvY2FsX2NoYW5nZV9yZWNlaXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDExIiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwYXlsb2FkX2hhc2giOiJiMTc0NjFkNzZhZDQ1ZWNlM2EzZjdjZWVlMzc3MWNhYjU2YjYxMzZhNzc1ZTQ3NTNhZmFjZjcwNjY0MjNmYWI0IiwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJldmlld19wYXlsb2FkX2hhc2giOiJlMjgyMjcwYjMyNDJiNzhjODFlOTM4ODM2ZjgxM2RhNmM2MjRlMzU4NTZhN2M3YjRjNzY3N2I4NzkxNjg0N2Q4IiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJwdXJwb3NlX2NvZGUiOiJQUk9DRVNTX1NUQUxMIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlcXVlc3RlZF9ieSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtb3BlcmF0aW9uLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEiLCJ0eXBlIjoic2VydmljZS5yZXN0YXJ0In0",
+          "signature": "gIYIlt494amXpI-yK9ywKIRIgpd48soUKMYvARQgOOG4GGsPXCMB6Edialf17LN7VplUq_k2cKEDqqDLGKRrBcHGTVW6odM4kEozXtzi4LhbQ_4bWxcNSc0QMSF4uhYq7DsOLhnwKhMEn6fYIzxevHPBt6WMoSNlwVlQcnfbFzeeTveAOUmX0kfikr6Po71eqrZje1P3nPVixKdkjPMMpzxbEX2Te3Y8A2NpuYVm8Nfu-SIAFKwbiDvqEEDzHheJ8Kwgch4z9WioN0SLOMIGYWRKWcuX6aoxLsQp1yPpvGqpraTEIQLIfm89Zmpe2PmLNp7GaAW_Zl-S7HLavTOg5Vxor5pZF-SGblP-rPW1dhlRrPqdRLU2mKM57x4iLCT6GDOLAmi29KocxwSqgMvmwHP5WK0hTSIGJnzJua4f0O1lj6ZqBk2MJ974xtSHYhGKfgkhf6EyU2jSmJtEHyI6D875nz1QbAjY5RtrLPhkp1-lNv2coAdmwIvxAyPZF2jh"
+        },
+        "approval": {
+          "schema_version": "sdc.support.restart-approval.v1",
+          "product": "hermes-mcs",
+          "audience": "sdc:synthetic",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "claim_id": "00000000-0000-4000-8000-000000000003",
+          "key_id": "00000000-0000-4000-8000-000000000004",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "case_epoch": 3,
+          "local_consent_epoch": 4,
+          "service_revision": 1,
+          "params": {
+            "service_id": "mcs.standalone",
+            "expected_runtime_generation": "00000000000040008000000000000007",
+            "effects_profile": "mcs.standalone.restart.v1"
+          },
+          "capability_revision": "sdc-support-restart-capabilities-v1",
+          "consent_revision": "sdc-support-restart-consent-v1",
+          "approval_id": "00000000-0000-4000-8000-00000000000d",
+          "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+          "approved_by": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_kind": "individual",
+          "issued_at": 1792663150000,
+          "not_before": 1792663150000,
+          "expires_at": 1792663740000,
+          "approval_hash": "7fd4112806226a12d2dda7d227cf42d40803c3fd07da5c16d1377231b4adca45"
+        },
+        "acceptance": {
+          "schema_version": "sdc.support.restart-acceptance.v1",
+          "accept_id": "00000000-0000-4000-8000-000000000010",
+          "preview_id": "00000000-0000-4000-8000-00000000000f",
+          "operation_id": "00000000-0000-4000-8000-00000000000c",
+          "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+          "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+          "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+          "state": "accepted",
+          "expires_at": 1792663740000,
+          "accepted_at": 1792663195000,
+          "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+          "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Poll HTTP response",
+      "definition": "PollResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-operation",
+          "payload": "eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92ZWRfYnkiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9hY2NlcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTAiLCJjaGFuZ2VfYmluZGluZ19oYXNoIjoiZmVkYmZlZDllNjU1MDdiZjc5M2RhZThkMmE4NGFjMDNiZGQzYjY1MGEzMmUyZDBjNWVmNjgxYTViNzUyYTYyMiIsImNoYW5nZV9jb25zZW50X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBlIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb21wbGV0aW9uX3RpbWVvdXRfbXMiOjkwMDAwMCwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzODAwMDAwLCJpbnNwZWN0aW9uX2hhc2giOiI4OTEwMzQ0MzFmM2JlNjM3NzMxZTZjZjI2YzBmYmMwNWI0ZDg4N2UyZjg0OTVkNGNiY2IwZWViYmIwMjE3MjA0IiwiaW5zcGVjdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYSIsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTQwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9oYXNoIjoiZDhjNWZlYzUzMDcyM2E4NDZmMGZjNWY5ODg3N2NhNWFjNTljMjM4ZmRmMGVhZjQzNjliZGFmOWNhOTk2ODZmOCIsImxvY2FsX2NoYW5nZV9yZWNlaXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDExIiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwYXlsb2FkX2hhc2giOiJiMTc0NjFkNzZhZDQ1ZWNlM2EzZjdjZWVlMzc3MWNhYjU2YjYxMzZhNzc1ZTQ3NTNhZmFjZjcwNjY0MjNmYWI0IiwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJldmlld19wYXlsb2FkX2hhc2giOiJlMjgyMjcwYjMyNDJiNzhjODFlOTM4ODM2ZjgxM2RhNmM2MjRlMzU4NTZhN2M3YjRjNzY3N2I4NzkxNjg0N2Q4IiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJwdXJwb3NlX2NvZGUiOiJQUk9DRVNTX1NUQUxMIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlcXVlc3RlZF9ieSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtb3BlcmF0aW9uLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEiLCJ0eXBlIjoic2VydmljZS5yZXN0YXJ0In0",
+          "signature": "gIYIlt494amXpI-yK9ywKIRIgpd48soUKMYvARQgOOG4GGsPXCMB6Edialf17LN7VplUq_k2cKEDqqDLGKRrBcHGTVW6odM4kEozXtzi4LhbQ_4bWxcNSc0QMSF4uhYq7DsOLhnwKhMEn6fYIzxevHPBt6WMoSNlwVlQcnfbFzeeTveAOUmX0kfikr6Po71eqrZje1P3nPVixKdkjPMMpzxbEX2Te3Y8A2NpuYVm8Nfu-SIAFKwbiDvqEEDzHheJ8Kwgch4z9WioN0SLOMIGYWRKWcuX6aoxLsQp1yPpvGqpraTEIQLIfm89Zmpe2PmLNp7GaAW_Zl-S7HLavTOg5Vxor5pZF-SGblP-rPW1dhlRrPqdRLU2mKM57x4iLCT6GDOLAmi29KocxwSqgMvmwHP5WK0hTSIGJnzJua4f0O1lj6ZqBk2MJ974xtSHYhGKfgkhf6EyU2jSmJtEHyI6D875nz1QbAjY5RtrLPhkp1-lNv2coAdmwIvxAyPZF2jh"
+        },
+        "approval": {
+          "schema_version": "sdc.support.restart-approval.v1",
+          "product": "hermes-mcs",
+          "audience": "sdc:synthetic",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "claim_id": "00000000-0000-4000-8000-000000000003",
+          "key_id": "00000000-0000-4000-8000-000000000004",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "case_epoch": 3,
+          "local_consent_epoch": 4,
+          "service_revision": 1,
+          "params": {
+            "service_id": "mcs.standalone",
+            "expected_runtime_generation": "00000000000040008000000000000007",
+            "effects_profile": "mcs.standalone.restart.v1"
+          },
+          "capability_revision": "sdc-support-restart-capabilities-v1",
+          "consent_revision": "sdc-support-restart-consent-v1",
+          "approval_id": "00000000-0000-4000-8000-00000000000d",
+          "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+          "approved_by": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_kind": "individual",
+          "issued_at": 1792663150000,
+          "not_before": 1792663150000,
+          "expires_at": 1792663740000,
+          "approval_hash": "7fd4112806226a12d2dda7d227cf42d40803c3fd07da5c16d1377231b4adca45"
+        },
+        "acceptance": {
+          "schema_version": "sdc.support.restart-acceptance.v1",
+          "accept_id": "00000000-0000-4000-8000-000000000010",
+          "preview_id": "00000000-0000-4000-8000-00000000000f",
+          "operation_id": "00000000-0000-4000-8000-00000000000c",
+          "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+          "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+          "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+          "state": "accepted",
+          "expires_at": 1792663740000,
+          "accepted_at": 1792663195000,
+          "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+          "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admit request",
+      "definition": "AdmitRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-control.v1",
+        "admission_id": "00000000-0000-4000-8000-000000000013",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "payload_hash": "b17461d76ad45ece3a3f7ceee3771cab56b6136a775e4753afacf7066423fab4",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "owner_generation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      }
+    },
+    {
+      "name": "Admit handler result",
+      "definition": "AdmitResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "locally_admitted"
+      }
+    },
+    {
+      "name": "Admit HTTP response",
+      "definition": "AdmitResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "locally_admitted",
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Grant request",
+      "definition": "GrantRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-control.v1",
+        "grant_request_id": "00000000-0000-4000-8000-000000000015",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "payload_hash": "b17461d76ad45ece3a3f7ceee3771cab56b6136a775e4753afacf7066423fab4",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "admission_id": "00000000-0000-4000-8000-000000000013",
+        "preflight": {
+          "schema_version": "sdc.support.restart-preflight.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "service_id": "mcs.standalone",
+          "runtime_generation": "00000000000040008000000000000007",
+          "started_at": 1792576800000,
+          "observed_at": 1792663199000,
+          "owner_alive": true,
+          "update_in_progress": false,
+          "command_intake_in_progress": false,
+          "restarting": false
+        }
+      }
+    },
+    {
+      "name": "Grant handler result",
+      "definition": "GrantResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "grant": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-execution-grant",
+          "payload": "eyJhZG1pc3Npb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTMiLCJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImF1ZGllbmNlIjoic2RjOnN5bnRoZXRpYyIsImNhcGFiaWxpdHlfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNhcGFiaWxpdGllcy12MSIsImNhc2VfZXBvY2giOjMsImNhc2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjaGFuZ2VfYWNjZXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDEwIiwiY2hhbmdlX2JpbmRpbmdfaGFzaCI6ImZlZGJmZWQ5ZTY1NTA3YmY3OTNkYWU4ZDJhODRhYzAzYmRkM2I2NTBhMzJlMmQwYzVlZjY4MWE1Yjc1MmE2MjIiLCJjaGFuZ2VfY29uc2VudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZSIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzMjI5MDAwLCJncmFudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxNCIsImdyYW50X3JlcXVlc3RfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTUiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImludGVudF9oYXNoIjoiY2Q3ZDVhYmZiM2NmYjE4MmQxNzNmMTI0ZGJjZThhN2IyMzZhZTQ0MDU3Y2YwOTFkMzM3MWQ5MGYzMWY0NGVjNyIsImlzc3VlZF9hdCI6MTc5MjY2MzE5OTAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY2hhbmdlX3JlY2VpcHRfaGFzaCI6ImQ4YzVmZWM1MzA3MjNhODQ2ZjBmYzVmOTg4NzdjYTVhYzU5YzIzOGZkZjBlYWY0MzY5YmRhZjljYTk5Njg2ZjgiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxMSIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTkwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsIm93bmVyX2dlbmVyYXRpb24iOiJjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZCIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicGF5bG9hZF9oYXNoIjoiYjE3NDYxZDc2YWQ0NWVjZTNhM2Y3Y2VlZTM3NzFjYWI1NmI2MTM2YTc3NWU0NzUzYWZhY2Y3MDY2NDIzZmFiNCIsInBvbGljeV9lcG9jaCI6MSwicHJldmlld19pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZiIsInByZXZpZXdfcGF5bG9hZF9oYXNoIjoiZTI4MjI3MGIzMjQyYjc4YzgxZTkzODgzNmY4MTNkYTZjNjI0ZTM1ODU2YTdjN2I0Yzc2NzdiODc5MTY4NDdkOCIsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlY2VpcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTIiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtZXhlY3V0aW9uLWdyYW50LnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifQ",
+          "signature": "X7RDjzRB4KAk57-nVdZ3qzzS4_J8XemFv6AlJHqvl1zyGOs3MJhC9Cm5n5XK3_glxADOqnlldqFdqxhZ8y8y-mxOQWfiFuiiDMV2Zg8_WlEZaTt2tOyxpvMyWlzcJtxvLdLd5a4mqRaJNyMXmrlyKgTDoUr76JC648tYarTiKTS2V3gOODZLy9Q7A0RXGn6cvwiEFm8-I91A9nALJqh52BmFVU2vKH7UniBgCzgujUitqJsaeIU4w4Sw0e59eE9hQ915-gL_C4RqYHfONqNTARO2oNa8dlQ26PHEZq-6OSFJiHV355hMJWL2XfZlOFFmeBg2tKwiWwAIiXZLZS1KDoSPRRh42b7lg-hHa8en_PA-IaFGNOEjtVZGQl15O0jntLzKn4QRogyRAwF8kv8xMZQ6vnI26nnwZzOR7c5pKgKPzNR4E4wvoBqqlje-yP4m8T2S24w-Xtw2oYGyKtaI74syBLQG5QT6veZBIMExD0JkzW6l3OVXgA9f8nP_8NTV"
+        }
+      }
+    },
+    {
+      "name": "Grant HTTP response",
+      "definition": "GrantResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "grant": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-execution-grant",
+          "payload": "eyJhZG1pc3Npb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTMiLCJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImF1ZGllbmNlIjoic2RjOnN5bnRoZXRpYyIsImNhcGFiaWxpdHlfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNhcGFiaWxpdGllcy12MSIsImNhc2VfZXBvY2giOjMsImNhc2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjaGFuZ2VfYWNjZXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDEwIiwiY2hhbmdlX2JpbmRpbmdfaGFzaCI6ImZlZGJmZWQ5ZTY1NTA3YmY3OTNkYWU4ZDJhODRhYzAzYmRkM2I2NTBhMzJlMmQwYzVlZjY4MWE1Yjc1MmE2MjIiLCJjaGFuZ2VfY29uc2VudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZSIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzMjI5MDAwLCJncmFudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxNCIsImdyYW50X3JlcXVlc3RfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTUiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImludGVudF9oYXNoIjoiY2Q3ZDVhYmZiM2NmYjE4MmQxNzNmMTI0ZGJjZThhN2IyMzZhZTQ0MDU3Y2YwOTFkMzM3MWQ5MGYzMWY0NGVjNyIsImlzc3VlZF9hdCI6MTc5MjY2MzE5OTAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY2hhbmdlX3JlY2VpcHRfaGFzaCI6ImQ4YzVmZWM1MzA3MjNhODQ2ZjBmYzVmOTg4NzdjYTVhYzU5YzIzOGZkZjBlYWY0MzY5YmRhZjljYTk5Njg2ZjgiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxMSIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTkwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsIm93bmVyX2dlbmVyYXRpb24iOiJjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZCIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicGF5bG9hZF9oYXNoIjoiYjE3NDYxZDc2YWQ0NWVjZTNhM2Y3Y2VlZTM3NzFjYWI1NmI2MTM2YTc3NWU0NzUzYWZhY2Y3MDY2NDIzZmFiNCIsInBvbGljeV9lcG9jaCI6MSwicHJldmlld19pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZiIsInByZXZpZXdfcGF5bG9hZF9oYXNoIjoiZTI4MjI3MGIzMjQyYjc4YzgxZTkzODgzNmY4MTNkYTZjNjI0ZTM1ODU2YTdjN2I0Yzc2NzdiODc5MTY4NDdkOCIsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlY2VpcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTIiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtZXhlY3V0aW9uLWdyYW50LnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifQ",
+          "signature": "X7RDjzRB4KAk57-nVdZ3qzzS4_J8XemFv6AlJHqvl1zyGOs3MJhC9Cm5n5XK3_glxADOqnlldqFdqxhZ8y8y-mxOQWfiFuiiDMV2Zg8_WlEZaTt2tOyxpvMyWlzcJtxvLdLd5a4mqRaJNyMXmrlyKgTDoUr76JC648tYarTiKTS2V3gOODZLy9Q7A0RXGn6cvwiEFm8-I91A9nALJqh52BmFVU2vKH7UniBgCzgujUitqJsaeIU4w4Sw0e59eE9hQ915-gL_C4RqYHfONqNTARO2oNa8dlQ26PHEZq-6OSFJiHV355hMJWL2XfZlOFFmeBg2tKwiWwAIiXZLZS1KDoSPRRh42b7lg-hHa8en_PA-IaFGNOEjtVZGQl15O0jntLzKn4QRogyRAwF8kv8xMZQ6vnI26nnwZzOR7c5pKgKPzNR4E4wvoBqqlje-yP4m8T2S24w-Xtw2oYGyKtaI74syBLQG5QT6veZBIMExD0JkzW6l3OVXgA9f8nP_8NTV"
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Report request",
+      "definition": "ReportRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-control.v1",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "payload_hash": "b17461d76ad45ece3a3f7ceee3771cab56b6136a775e4753afacf7066423fab4",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state_revision": 3,
+        "state": "succeeded",
+        "observed_at": 1792663200000,
+        "result": {
+          "schema_version": "sdc.support.restart-result.v1",
+          "operation_id": "00000000-0000-4000-8000-00000000000c",
+          "payload_hash": "b17461d76ad45ece3a3f7ceee3771cab56b6136a775e4753afacf7066423fab4",
+          "receipt_id": "00000000-0000-4000-8000-000000000012",
+          "params": {
+            "service_id": "mcs.standalone",
+            "expected_runtime_generation": "00000000000040008000000000000007",
+            "effects_profile": "mcs.standalone.restart.v1"
+          },
+          "generated_at": 1792663200000,
+          "start_receipt_id": "00000000-0000-4000-8000-000000000016",
+          "started_at": 1792663199100,
+          "drain_completed_at": 1792663199400,
+          "old_owner_exit_at": 1792663199700,
+          "handoff_receipt_id": "00000000-0000-4000-8000-000000000017",
+          "handoff_parent_receipt_id": "00000000-0000-4000-8000-000000000016",
+          "successor_runtime_generation": "00000000000040008000000000000008",
+          "ready_observed_at": 1792663199900,
+          "readiness": "ready",
+          "error_code": "NONE",
+          "grant_id": "00000000-0000-4000-8000-000000000014",
+          "service_revision": 1,
+          "supervisor_launch_id": "00000000-0000-4000-8000-00000000001b",
+          "successor_launch_id": "00000000-0000-4000-8000-00000000001b"
+        }
+      }
+    },
+    {
+      "name": "Report handler result",
+      "definition": "ReportResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "succeeded",
+        "state_revision": 3
+      }
+    },
+    {
+      "name": "Report HTTP response",
+      "definition": "ReportResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "succeeded",
+        "state_revision": 3,
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status request",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-control.v1",
+        "status_id": "00000000-0000-4000-8000-00000000001a",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "payload_hash": "b17461d76ad45ece3a3f7ceee3771cab56b6136a775e4753afacf7066423fab4",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019"
+      }
+    },
+    {
+      "name": "Status handler result",
+      "definition": "StatusResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "succeeded",
+          "state_revision": 3
+        }
+      }
+    },
+    {
+      "name": "Status HTTP response",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Empty poll",
+      "definition": "PollResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation": null,
+        "approval": null,
+        "acceptance": null,
+        "registration": null,
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "No matching report is an observation only",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": null,
+        "operation": {
+          "state": "unknown",
+          "state_revision": 4
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Report running",
+      "definition": "ReportResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "running",
+        "state_revision": 3,
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Report succeeded",
+      "definition": "ReportResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "succeeded",
+        "state_revision": 3,
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Report failed",
+      "definition": "ReportResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "failed",
+        "state_revision": 3,
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Report unknown",
+      "definition": "ReportResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "unknown",
+        "state_revision": 3,
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation proposed",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "proposed",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation approved",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "approved",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation queued",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "queued",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation locally_admitted",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "locally_admitted",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation grant_consumed",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "grant_consumed",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation running",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "running",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation succeeded",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "succeeded",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation failed",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "failed",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation unknown",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "unknown",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation canceled",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "canceled",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation expired",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "expired",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status operation denied",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "denied",
+          "state_revision": 0
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin Register handler request",
+      "definition": "AdminRegisterHandlerRequest",
+      "value": {
+        "registration_id": "00000000-0000-4000-8000-000000000031",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "service_revision": 1,
+        "causal_evidence_supported": true
+      }
+    },
+    {
+      "name": "Admin Register HTTP request",
+      "definition": "AdminRegisterRequest",
+      "value": {
+        "registration_id": "00000000-0000-4000-8000-000000000031",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "service_revision": 1,
+        "causal_evidence_supported": true,
+        "csrf": "1792663200.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "Admin Register handler result",
+      "definition": "AdminRegisterResult",
+      "value": {
+        "code": "restart_service_registered",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Admin Register HTTP response",
+      "definition": "AdminRegisterResponse",
+      "value": {
+        "code": "restart_service_registered",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin Revoke handler request",
+      "definition": "AdminRevokeHandlerRequest",
+      "value": {
+        "revocation_id": "00000000-0000-4000-8000-000000000032",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "service_revision": 1
+      }
+    },
+    {
+      "name": "Admin Revoke HTTP request",
+      "definition": "AdminRevokeRequest",
+      "value": {
+        "revocation_id": "00000000-0000-4000-8000-000000000032",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "service_revision": 1,
+        "csrf": "1792663200.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "Admin Revoke handler result",
+      "definition": "AdminRevokeResult",
+      "value": {
+        "code": "restart_service_revoked",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "revoked",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Admin Revoke HTTP response",
+      "definition": "AdminRevokeResponse",
+      "value": {
+        "code": "restart_service_revoked",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "revoked",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin Propose handler request",
+      "definition": "AdminProposeHandlerRequest",
+      "value": {
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "inspection_id": "00000000-0000-4000-8000-00000000000a"
+      }
+    },
+    {
+      "name": "Admin Propose HTTP request",
+      "definition": "AdminProposeRequest",
+      "value": {
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "inspection_id": "00000000-0000-4000-8000-00000000000a",
+        "csrf": "1792663200.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "Admin Propose handler result",
+      "definition": "AdminProposeResult",
+      "value": {
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "state": "proposed",
+        "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+        "payload_hash": null,
+        "expires_at": 1792663800000,
+        "state_revision": 0
+      }
+    },
+    {
+      "name": "Admin Propose HTTP response",
+      "definition": "AdminProposeResponse",
+      "value": {
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "state": "proposed",
+        "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+        "payload_hash": null,
+        "expires_at": 1792663800000,
+        "state_revision": 0,
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin Approve handler request",
+      "definition": "AdminApproveHandlerRequest",
+      "value": {
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "approval_id": "00000000-0000-4000-8000-00000000000d",
+        "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7"
+      }
+    },
+    {
+      "name": "Admin Approve HTTP request",
+      "definition": "AdminApproveRequest",
+      "value": {
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "approval_id": "00000000-0000-4000-8000-00000000000d",
+        "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+        "csrf": "1792663200.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "Admin Approve handler result",
+      "definition": "AdminApproveResult",
+      "value": {
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "state": "approved",
+        "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+        "payload_hash": null,
+        "expires_at": 1792663800000,
+        "state_revision": 1
+      }
+    },
+    {
+      "name": "Admin Approve HTTP response",
+      "definition": "AdminApproveResponse",
+      "value": {
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "state": "approved",
+        "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+        "payload_hash": null,
+        "expires_at": 1792663800000,
+        "state_revision": 1,
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin Read handler request",
+      "definition": "AdminReadHandlerRequest",
+      "value": {
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "name": "Admin Read HTTP request",
+      "definition": "AdminReadRequest",
+      "value": {
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "csrf": "1792663200.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "Admin Read handler result",
+      "definition": "AdminReadResult",
+      "value": {
+        "code": "restart_operations",
+        "operations": [
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "Admin Read HTTP response",
+      "definition": "AdminReadResponse",
+      "value": {
+        "code": "restart_operations",
+        "operations": [
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          }
+        ],
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin read empty",
+      "definition": "AdminReadResponse",
+      "value": {
+        "code": "restart_operations",
+        "operations": [],
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Fixed error only",
+      "definition": "ErrorResponse",
+      "value": {
+        "code": "SUPPORT_RESTART_CONFLICT",
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin Register handler result after revocation",
+      "definition": "AdminRegisterResult",
+      "value": {
+        "code": "restart_service_registered",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "revoked",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Admin Register HTTP response after revocation",
+      "definition": "AdminRegisterResponse",
+      "value": {
+        "code": "restart_service_registered",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "revoked",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    }
+  ],
+  "negative": [
+    {
+      "name": "Old request version",
+      "definition": "PollRequest",
+      "value": {
+        "schema_version": "sdc.support.v1",
+        "poll_id": "00000000-0000-4000-8000-000000000018",
+        "case_id": "00000000-0000-4000-8000-000000000002"
+      }
+    },
+    {
+      "name": "Diagnostic consent cannot declare restart",
+      "definition": "AcceptRequest",
+      "value": {
+        "schema_version": "sdc.support.v1",
+        "accept_id": "00000000-0000-4000-8000-000000000030",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "consent_binding_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "local_consent_epoch": 4,
+        "local_receipt_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Inspection missing HTTP request ID",
+      "definition": "InspectionResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "inspection_id": "00000000-0000-4000-8000-00000000000a",
+        "state": "recorded",
+        "expires_at": 1792663215000,
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Inspection handler cannot accept HTTP wrapper",
+      "definition": "InspectionResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "inspection_id": "00000000-0000-4000-8000-00000000000a",
+        "state": "recorded",
+        "expires_at": 1792663215000,
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Inspection raw content extra",
+      "definition": "InspectionResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "inspection_id": "00000000-0000-4000-8000-00000000000a",
+        "state": "recorded",
+        "expires_at": 1792663215000,
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "raw_log": "synthetic-refused"
+      }
+    },
+    {
+      "name": "Preview missing HTTP request ID",
+      "definition": "PreviewResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "preview": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-consent-preview",
+          "payload": "eyJhcHByb3ZhbCI6eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92YWxfa2luZCI6ImluZGl2aWR1YWwiLCJhcHByb3ZlZF9ieSI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJhdWRpZW5jZSI6InNkYzpzeW50aGV0aWMiLCJjYXBhYmlsaXR5X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jYXBhYmlsaXRpZXMtdjEiLCJjYXNlX2Vwb2NoIjozLCJjYXNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb25zZW50X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jb25zZW50LXYxIiwiZGV2aWNlX2Vwb2NoIjoyLCJkZXZpY2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJlbnZpcm9ubWVudCI6InN5bnRoZXRpYyIsImV4cGlyZXNfYXQiOjE3OTI2NjM3NDAwMDAsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTUwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jb25zZW50X2Vwb2NoIjo0LCJub3RfYmVmb3JlIjoxNzkyNjYzMTUwMDAwLCJwYXJhbXMiOnsiZWZmZWN0c19wcm9maWxlIjoibWNzLnN0YW5kYWxvbmUucmVzdGFydC52MSIsImV4cGVjdGVkX3J1bnRpbWVfZ2VuZXJhdGlvbiI6IjAwMDAwMDAwMDAwMDQwMDA4MDAwMDAwMDAwMDAwMDA3Iiwic2VydmljZV9pZCI6Im1jcy5zdGFuZGFsb25lIn0sInBvbGljeV9lcG9jaCI6MSwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWFwcHJvdmFsLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifSwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9iaW5kaW5nX2hhc2giOiJmZWRiZmVkOWU2NTUwN2JmNzkzZGFlOGQyYTg0YWMwM2JkZDNiNjUwYTMyZTJkMGM1ZWY2ODFhNWI3NTJhNjIyIiwiY2hhbmdlX2NvbnNlbnRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGUiLCJjbGFpbV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzMyMDAwMCwiaW5zdGFsbGF0aW9uIjoiaW5zdGFsbGF0aW9uLWEiLCJpbnRlbnQiOnsiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29tcGxldGlvbl90aW1lb3V0X21zIjo5MDAwMDAsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzgwMDAwMCwiaW5zcGVjdGlvbl9oYXNoIjoiODkxMDM0NDMxZjNiZTYzNzczMWU2Y2YyNmMwZmJjMDViNGQ4ODdlMmY4NDk1ZDRjYmNiMGVlYmJiMDIxNzIwNCIsImluc3BlY3Rpb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGEiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImlzc3VlZF9hdCI6MTc5MjY2MzE0MDAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwb2xpY3lfZXBvY2giOjEsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicHVycG9zZV9jb2RlIjoiUFJPQ0VTU19TVEFMTCIsInJlYWxtX2Vwb2NoIjoic3ludGhldGljLXJlc3RhcnQtcmVhbG0iLCJyZXF1ZXN0ZWRfYnkiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWludGVudC52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIiwidHlwZSI6InNlcnZpY2UucmVzdGFydCJ9LCJpbnRlbnRfaGFzaCI6ImNkN2Q1YWJmYjNjZmIxODJkMTczZjEyNGRiY2U4YTdiMjM2YWU0NDA1N2NmMDkxZDMzNzFkOTBmMzFmNDRlYzciLCJpc3N1ZWRfYXQiOjE3OTI2NjMxOTAwMDAsImtleV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNCIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTAwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWNvbnNlbnQtcHJldmlldy52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIn0",
+          "signature": "j-T8Tv0ZiiYpxCFhRubejUDeuASdSdnbG1mX7qp0GX1vylJ7h1dvgTwA7xa7_JTq_YjiDD2CG9urLeT5UHZ7_Que9OV5opjvHC6TZMmjxaq5YUEQ69Ev1oxoFbZiDgbMs3PhJWqtGXfNbkOVBu-TuqNR3I55TW-NqG0mdXda9oKE-6O2Z0DLd1E_rHmu2dMXzZrsoZOyEqyXXYzHiMaWS6N4sWVVgRg0JiJaqhUSoNFippqKZjSq1147BLp01ULkGQArm7mtVhjrmxwLyH7RNhM7QahJunDvdw6ab6CIezSaAg4vv_9Sufc_2ph5cAHt7WcyXB61w3s6APf1mW-HiATLsQxwpWB0UBrGC3lq5E7ct6j0yHAsInoYRDK6YG0H3Hdld1IoadWy1gIMhfQtlv0Mkr6p8f3UT_nI58jJmybeXecO7TgzrymRvxu7e-RsMzG4aRhifgOzzWNzRU5JrAlSmwGC1DBazWWCkwdXSFa7QFDoi_iXP3SIxwnOm2UQ"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Preview handler cannot accept HTTP wrapper",
+      "definition": "PreviewResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "preview": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-consent-preview",
+          "payload": "eyJhcHByb3ZhbCI6eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92YWxfa2luZCI6ImluZGl2aWR1YWwiLCJhcHByb3ZlZF9ieSI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJhdWRpZW5jZSI6InNkYzpzeW50aGV0aWMiLCJjYXBhYmlsaXR5X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jYXBhYmlsaXRpZXMtdjEiLCJjYXNlX2Vwb2NoIjozLCJjYXNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb25zZW50X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jb25zZW50LXYxIiwiZGV2aWNlX2Vwb2NoIjoyLCJkZXZpY2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJlbnZpcm9ubWVudCI6InN5bnRoZXRpYyIsImV4cGlyZXNfYXQiOjE3OTI2NjM3NDAwMDAsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTUwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jb25zZW50X2Vwb2NoIjo0LCJub3RfYmVmb3JlIjoxNzkyNjYzMTUwMDAwLCJwYXJhbXMiOnsiZWZmZWN0c19wcm9maWxlIjoibWNzLnN0YW5kYWxvbmUucmVzdGFydC52MSIsImV4cGVjdGVkX3J1bnRpbWVfZ2VuZXJhdGlvbiI6IjAwMDAwMDAwMDAwMDQwMDA4MDAwMDAwMDAwMDAwMDA3Iiwic2VydmljZV9pZCI6Im1jcy5zdGFuZGFsb25lIn0sInBvbGljeV9lcG9jaCI6MSwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWFwcHJvdmFsLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifSwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9iaW5kaW5nX2hhc2giOiJmZWRiZmVkOWU2NTUwN2JmNzkzZGFlOGQyYTg0YWMwM2JkZDNiNjUwYTMyZTJkMGM1ZWY2ODFhNWI3NTJhNjIyIiwiY2hhbmdlX2NvbnNlbnRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGUiLCJjbGFpbV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzMyMDAwMCwiaW5zdGFsbGF0aW9uIjoiaW5zdGFsbGF0aW9uLWEiLCJpbnRlbnQiOnsiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29tcGxldGlvbl90aW1lb3V0X21zIjo5MDAwMDAsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzgwMDAwMCwiaW5zcGVjdGlvbl9oYXNoIjoiODkxMDM0NDMxZjNiZTYzNzczMWU2Y2YyNmMwZmJjMDViNGQ4ODdlMmY4NDk1ZDRjYmNiMGVlYmJiMDIxNzIwNCIsImluc3BlY3Rpb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGEiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImlzc3VlZF9hdCI6MTc5MjY2MzE0MDAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwb2xpY3lfZXBvY2giOjEsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicHVycG9zZV9jb2RlIjoiUFJPQ0VTU19TVEFMTCIsInJlYWxtX2Vwb2NoIjoic3ludGhldGljLXJlc3RhcnQtcmVhbG0iLCJyZXF1ZXN0ZWRfYnkiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWludGVudC52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIiwidHlwZSI6InNlcnZpY2UucmVzdGFydCJ9LCJpbnRlbnRfaGFzaCI6ImNkN2Q1YWJmYjNjZmIxODJkMTczZjEyNGRiY2U4YTdiMjM2YWU0NDA1N2NmMDkxZDMzNzFkOTBmMzFmNDRlYzciLCJpc3N1ZWRfYXQiOjE3OTI2NjMxOTAwMDAsImtleV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNCIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTAwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWNvbnNlbnQtcHJldmlldy52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIn0",
+          "signature": "j-T8Tv0ZiiYpxCFhRubejUDeuASdSdnbG1mX7qp0GX1vylJ7h1dvgTwA7xa7_JTq_YjiDD2CG9urLeT5UHZ7_Que9OV5opjvHC6TZMmjxaq5YUEQ69Ev1oxoFbZiDgbMs3PhJWqtGXfNbkOVBu-TuqNR3I55TW-NqG0mdXda9oKE-6O2Z0DLd1E_rHmu2dMXzZrsoZOyEqyXXYzHiMaWS6N4sWVVgRg0JiJaqhUSoNFippqKZjSq1147BLp01ULkGQArm7mtVhjrmxwLyH7RNhM7QahJunDvdw6ab6CIezSaAg4vv_9Sufc_2ph5cAHt7WcyXB61w3s6APf1mW-HiATLsQxwpWB0UBrGC3lq5E7ct6j0yHAsInoYRDK6YG0H3Hdld1IoadWy1gIMhfQtlv0Mkr6p8f3UT_nI58jJmybeXecO7TgzrymRvxu7e-RsMzG4aRhifgOzzWNzRU5JrAlSmwGC1DBazWWCkwdXSFa7QFDoi_iXP3SIxwnOm2UQ"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Preview raw content extra",
+      "definition": "PreviewResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "preview": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-consent-preview",
+          "payload": "eyJhcHByb3ZhbCI6eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92YWxfa2luZCI6ImluZGl2aWR1YWwiLCJhcHByb3ZlZF9ieSI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJhdWRpZW5jZSI6InNkYzpzeW50aGV0aWMiLCJjYXBhYmlsaXR5X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jYXBhYmlsaXRpZXMtdjEiLCJjYXNlX2Vwb2NoIjozLCJjYXNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb25zZW50X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jb25zZW50LXYxIiwiZGV2aWNlX2Vwb2NoIjoyLCJkZXZpY2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJlbnZpcm9ubWVudCI6InN5bnRoZXRpYyIsImV4cGlyZXNfYXQiOjE3OTI2NjM3NDAwMDAsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTUwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jb25zZW50X2Vwb2NoIjo0LCJub3RfYmVmb3JlIjoxNzkyNjYzMTUwMDAwLCJwYXJhbXMiOnsiZWZmZWN0c19wcm9maWxlIjoibWNzLnN0YW5kYWxvbmUucmVzdGFydC52MSIsImV4cGVjdGVkX3J1bnRpbWVfZ2VuZXJhdGlvbiI6IjAwMDAwMDAwMDAwMDQwMDA4MDAwMDAwMDAwMDAwMDA3Iiwic2VydmljZV9pZCI6Im1jcy5zdGFuZGFsb25lIn0sInBvbGljeV9lcG9jaCI6MSwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWFwcHJvdmFsLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifSwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9iaW5kaW5nX2hhc2giOiJmZWRiZmVkOWU2NTUwN2JmNzkzZGFlOGQyYTg0YWMwM2JkZDNiNjUwYTMyZTJkMGM1ZWY2ODFhNWI3NTJhNjIyIiwiY2hhbmdlX2NvbnNlbnRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGUiLCJjbGFpbV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzMyMDAwMCwiaW5zdGFsbGF0aW9uIjoiaW5zdGFsbGF0aW9uLWEiLCJpbnRlbnQiOnsiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29tcGxldGlvbl90aW1lb3V0X21zIjo5MDAwMDAsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzgwMDAwMCwiaW5zcGVjdGlvbl9oYXNoIjoiODkxMDM0NDMxZjNiZTYzNzczMWU2Y2YyNmMwZmJjMDViNGQ4ODdlMmY4NDk1ZDRjYmNiMGVlYmJiMDIxNzIwNCIsImluc3BlY3Rpb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGEiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImlzc3VlZF9hdCI6MTc5MjY2MzE0MDAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwb2xpY3lfZXBvY2giOjEsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicHVycG9zZV9jb2RlIjoiUFJPQ0VTU19TVEFMTCIsInJlYWxtX2Vwb2NoIjoic3ludGhldGljLXJlc3RhcnQtcmVhbG0iLCJyZXF1ZXN0ZWRfYnkiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWludGVudC52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIiwidHlwZSI6InNlcnZpY2UucmVzdGFydCJ9LCJpbnRlbnRfaGFzaCI6ImNkN2Q1YWJmYjNjZmIxODJkMTczZjEyNGRiY2U4YTdiMjM2YWU0NDA1N2NmMDkxZDMzNzFkOTBmMzFmNDRlYzciLCJpc3N1ZWRfYXQiOjE3OTI2NjMxOTAwMDAsImtleV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNCIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTAwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWNvbnNlbnQtcHJldmlldy52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIn0",
+          "signature": "j-T8Tv0ZiiYpxCFhRubejUDeuASdSdnbG1mX7qp0GX1vylJ7h1dvgTwA7xa7_JTq_YjiDD2CG9urLeT5UHZ7_Que9OV5opjvHC6TZMmjxaq5YUEQ69Ev1oxoFbZiDgbMs3PhJWqtGXfNbkOVBu-TuqNR3I55TW-NqG0mdXda9oKE-6O2Z0DLd1E_rHmu2dMXzZrsoZOyEqyXXYzHiMaWS6N4sWVVgRg0JiJaqhUSoNFippqKZjSq1147BLp01ULkGQArm7mtVhjrmxwLyH7RNhM7QahJunDvdw6ab6CIezSaAg4vv_9Sufc_2ph5cAHt7WcyXB61w3s6APf1mW-HiATLsQxwpWB0UBrGC3lq5E7ct6j0yHAsInoYRDK6YG0H3Hdld1IoadWy1gIMhfQtlv0Mkr6p8f3UT_nI58jJmybeXecO7TgzrymRvxu7e-RsMzG4aRhifgOzzWNzRU5JrAlSmwGC1DBazWWCkwdXSFa7QFDoi_iXP3SIxwnOm2UQ"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "raw_log": "synthetic-refused"
+      }
+    },
+    {
+      "name": "Accept missing HTTP request ID",
+      "definition": "AcceptResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-acceptance.v1",
+        "accept_id": "00000000-0000-4000-8000-000000000010",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+        "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+        "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+        "state": "accepted",
+        "expires_at": 1792663740000,
+        "accepted_at": 1792663195000,
+        "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+        "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+      }
+    },
+    {
+      "name": "Accept handler cannot accept HTTP wrapper",
+      "definition": "AcceptResult",
+      "value": {
+        "schema_version": "sdc.support.restart-acceptance.v1",
+        "accept_id": "00000000-0000-4000-8000-000000000010",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+        "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+        "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+        "state": "accepted",
+        "expires_at": 1792663740000,
+        "accepted_at": 1792663195000,
+        "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+        "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8",
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Accept raw content extra",
+      "definition": "AcceptResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-acceptance.v1",
+        "accept_id": "00000000-0000-4000-8000-000000000010",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+        "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+        "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+        "state": "accepted",
+        "expires_at": 1792663740000,
+        "accepted_at": 1792663195000,
+        "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+        "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8",
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "raw_log": "synthetic-refused"
+      }
+    },
+    {
+      "name": "Poll missing HTTP request ID",
+      "definition": "PollResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-operation",
+          "payload": "eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92ZWRfYnkiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9hY2NlcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTAiLCJjaGFuZ2VfYmluZGluZ19oYXNoIjoiZmVkYmZlZDllNjU1MDdiZjc5M2RhZThkMmE4NGFjMDNiZGQzYjY1MGEzMmUyZDBjNWVmNjgxYTViNzUyYTYyMiIsImNoYW5nZV9jb25zZW50X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBlIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb21wbGV0aW9uX3RpbWVvdXRfbXMiOjkwMDAwMCwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzODAwMDAwLCJpbnNwZWN0aW9uX2hhc2giOiI4OTEwMzQ0MzFmM2JlNjM3NzMxZTZjZjI2YzBmYmMwNWI0ZDg4N2UyZjg0OTVkNGNiY2IwZWViYmIwMjE3MjA0IiwiaW5zcGVjdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYSIsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTQwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9oYXNoIjoiZDhjNWZlYzUzMDcyM2E4NDZmMGZjNWY5ODg3N2NhNWFjNTljMjM4ZmRmMGVhZjQzNjliZGFmOWNhOTk2ODZmOCIsImxvY2FsX2NoYW5nZV9yZWNlaXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDExIiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwYXlsb2FkX2hhc2giOiJiMTc0NjFkNzZhZDQ1ZWNlM2EzZjdjZWVlMzc3MWNhYjU2YjYxMzZhNzc1ZTQ3NTNhZmFjZjcwNjY0MjNmYWI0IiwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJldmlld19wYXlsb2FkX2hhc2giOiJlMjgyMjcwYjMyNDJiNzhjODFlOTM4ODM2ZjgxM2RhNmM2MjRlMzU4NTZhN2M3YjRjNzY3N2I4NzkxNjg0N2Q4IiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJwdXJwb3NlX2NvZGUiOiJQUk9DRVNTX1NUQUxMIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlcXVlc3RlZF9ieSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtb3BlcmF0aW9uLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEiLCJ0eXBlIjoic2VydmljZS5yZXN0YXJ0In0",
+          "signature": "gIYIlt494amXpI-yK9ywKIRIgpd48soUKMYvARQgOOG4GGsPXCMB6Edialf17LN7VplUq_k2cKEDqqDLGKRrBcHGTVW6odM4kEozXtzi4LhbQ_4bWxcNSc0QMSF4uhYq7DsOLhnwKhMEn6fYIzxevHPBt6WMoSNlwVlQcnfbFzeeTveAOUmX0kfikr6Po71eqrZje1P3nPVixKdkjPMMpzxbEX2Te3Y8A2NpuYVm8Nfu-SIAFKwbiDvqEEDzHheJ8Kwgch4z9WioN0SLOMIGYWRKWcuX6aoxLsQp1yPpvGqpraTEIQLIfm89Zmpe2PmLNp7GaAW_Zl-S7HLavTOg5Vxor5pZF-SGblP-rPW1dhlRrPqdRLU2mKM57x4iLCT6GDOLAmi29KocxwSqgMvmwHP5WK0hTSIGJnzJua4f0O1lj6ZqBk2MJ974xtSHYhGKfgkhf6EyU2jSmJtEHyI6D875nz1QbAjY5RtrLPhkp1-lNv2coAdmwIvxAyPZF2jh"
+        },
+        "approval": {
+          "schema_version": "sdc.support.restart-approval.v1",
+          "product": "hermes-mcs",
+          "audience": "sdc:synthetic",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "claim_id": "00000000-0000-4000-8000-000000000003",
+          "key_id": "00000000-0000-4000-8000-000000000004",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "case_epoch": 3,
+          "local_consent_epoch": 4,
+          "service_revision": 1,
+          "params": {
+            "service_id": "mcs.standalone",
+            "expected_runtime_generation": "00000000000040008000000000000007",
+            "effects_profile": "mcs.standalone.restart.v1"
+          },
+          "capability_revision": "sdc-support-restart-capabilities-v1",
+          "consent_revision": "sdc-support-restart-consent-v1",
+          "approval_id": "00000000-0000-4000-8000-00000000000d",
+          "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+          "approved_by": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_kind": "individual",
+          "issued_at": 1792663150000,
+          "not_before": 1792663150000,
+          "expires_at": 1792663740000,
+          "approval_hash": "7fd4112806226a12d2dda7d227cf42d40803c3fd07da5c16d1377231b4adca45"
+        },
+        "acceptance": {
+          "schema_version": "sdc.support.restart-acceptance.v1",
+          "accept_id": "00000000-0000-4000-8000-000000000010",
+          "preview_id": "00000000-0000-4000-8000-00000000000f",
+          "operation_id": "00000000-0000-4000-8000-00000000000c",
+          "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+          "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+          "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+          "state": "accepted",
+          "expires_at": 1792663740000,
+          "accepted_at": 1792663195000,
+          "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+          "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        }
+      }
+    },
+    {
+      "name": "Poll handler cannot accept HTTP wrapper",
+      "definition": "PollResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-operation",
+          "payload": "eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92ZWRfYnkiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9hY2NlcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTAiLCJjaGFuZ2VfYmluZGluZ19oYXNoIjoiZmVkYmZlZDllNjU1MDdiZjc5M2RhZThkMmE4NGFjMDNiZGQzYjY1MGEzMmUyZDBjNWVmNjgxYTViNzUyYTYyMiIsImNoYW5nZV9jb25zZW50X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBlIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb21wbGV0aW9uX3RpbWVvdXRfbXMiOjkwMDAwMCwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzODAwMDAwLCJpbnNwZWN0aW9uX2hhc2giOiI4OTEwMzQ0MzFmM2JlNjM3NzMxZTZjZjI2YzBmYmMwNWI0ZDg4N2UyZjg0OTVkNGNiY2IwZWViYmIwMjE3MjA0IiwiaW5zcGVjdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYSIsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTQwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9oYXNoIjoiZDhjNWZlYzUzMDcyM2E4NDZmMGZjNWY5ODg3N2NhNWFjNTljMjM4ZmRmMGVhZjQzNjliZGFmOWNhOTk2ODZmOCIsImxvY2FsX2NoYW5nZV9yZWNlaXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDExIiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwYXlsb2FkX2hhc2giOiJiMTc0NjFkNzZhZDQ1ZWNlM2EzZjdjZWVlMzc3MWNhYjU2YjYxMzZhNzc1ZTQ3NTNhZmFjZjcwNjY0MjNmYWI0IiwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJldmlld19wYXlsb2FkX2hhc2giOiJlMjgyMjcwYjMyNDJiNzhjODFlOTM4ODM2ZjgxM2RhNmM2MjRlMzU4NTZhN2M3YjRjNzY3N2I4NzkxNjg0N2Q4IiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJwdXJwb3NlX2NvZGUiOiJQUk9DRVNTX1NUQUxMIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlcXVlc3RlZF9ieSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtb3BlcmF0aW9uLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEiLCJ0eXBlIjoic2VydmljZS5yZXN0YXJ0In0",
+          "signature": "gIYIlt494amXpI-yK9ywKIRIgpd48soUKMYvARQgOOG4GGsPXCMB6Edialf17LN7VplUq_k2cKEDqqDLGKRrBcHGTVW6odM4kEozXtzi4LhbQ_4bWxcNSc0QMSF4uhYq7DsOLhnwKhMEn6fYIzxevHPBt6WMoSNlwVlQcnfbFzeeTveAOUmX0kfikr6Po71eqrZje1P3nPVixKdkjPMMpzxbEX2Te3Y8A2NpuYVm8Nfu-SIAFKwbiDvqEEDzHheJ8Kwgch4z9WioN0SLOMIGYWRKWcuX6aoxLsQp1yPpvGqpraTEIQLIfm89Zmpe2PmLNp7GaAW_Zl-S7HLavTOg5Vxor5pZF-SGblP-rPW1dhlRrPqdRLU2mKM57x4iLCT6GDOLAmi29KocxwSqgMvmwHP5WK0hTSIGJnzJua4f0O1lj6ZqBk2MJ974xtSHYhGKfgkhf6EyU2jSmJtEHyI6D875nz1QbAjY5RtrLPhkp1-lNv2coAdmwIvxAyPZF2jh"
+        },
+        "approval": {
+          "schema_version": "sdc.support.restart-approval.v1",
+          "product": "hermes-mcs",
+          "audience": "sdc:synthetic",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "claim_id": "00000000-0000-4000-8000-000000000003",
+          "key_id": "00000000-0000-4000-8000-000000000004",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "case_epoch": 3,
+          "local_consent_epoch": 4,
+          "service_revision": 1,
+          "params": {
+            "service_id": "mcs.standalone",
+            "expected_runtime_generation": "00000000000040008000000000000007",
+            "effects_profile": "mcs.standalone.restart.v1"
+          },
+          "capability_revision": "sdc-support-restart-capabilities-v1",
+          "consent_revision": "sdc-support-restart-consent-v1",
+          "approval_id": "00000000-0000-4000-8000-00000000000d",
+          "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+          "approved_by": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_kind": "individual",
+          "issued_at": 1792663150000,
+          "not_before": 1792663150000,
+          "expires_at": 1792663740000,
+          "approval_hash": "7fd4112806226a12d2dda7d227cf42d40803c3fd07da5c16d1377231b4adca45"
+        },
+        "acceptance": {
+          "schema_version": "sdc.support.restart-acceptance.v1",
+          "accept_id": "00000000-0000-4000-8000-000000000010",
+          "preview_id": "00000000-0000-4000-8000-00000000000f",
+          "operation_id": "00000000-0000-4000-8000-00000000000c",
+          "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+          "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+          "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+          "state": "accepted",
+          "expires_at": 1792663740000,
+          "accepted_at": 1792663195000,
+          "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+          "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Poll raw content extra",
+      "definition": "PollResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-operation",
+          "payload": "eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92ZWRfYnkiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9hY2NlcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTAiLCJjaGFuZ2VfYmluZGluZ19oYXNoIjoiZmVkYmZlZDllNjU1MDdiZjc5M2RhZThkMmE4NGFjMDNiZGQzYjY1MGEzMmUyZDBjNWVmNjgxYTViNzUyYTYyMiIsImNoYW5nZV9jb25zZW50X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBlIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb21wbGV0aW9uX3RpbWVvdXRfbXMiOjkwMDAwMCwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzODAwMDAwLCJpbnNwZWN0aW9uX2hhc2giOiI4OTEwMzQ0MzFmM2JlNjM3NzMxZTZjZjI2YzBmYmMwNWI0ZDg4N2UyZjg0OTVkNGNiY2IwZWViYmIwMjE3MjA0IiwiaW5zcGVjdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYSIsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTQwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9oYXNoIjoiZDhjNWZlYzUzMDcyM2E4NDZmMGZjNWY5ODg3N2NhNWFjNTljMjM4ZmRmMGVhZjQzNjliZGFmOWNhOTk2ODZmOCIsImxvY2FsX2NoYW5nZV9yZWNlaXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDExIiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwYXlsb2FkX2hhc2giOiJiMTc0NjFkNzZhZDQ1ZWNlM2EzZjdjZWVlMzc3MWNhYjU2YjYxMzZhNzc1ZTQ3NTNhZmFjZjcwNjY0MjNmYWI0IiwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJldmlld19wYXlsb2FkX2hhc2giOiJlMjgyMjcwYjMyNDJiNzhjODFlOTM4ODM2ZjgxM2RhNmM2MjRlMzU4NTZhN2M3YjRjNzY3N2I4NzkxNjg0N2Q4IiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJwdXJwb3NlX2NvZGUiOiJQUk9DRVNTX1NUQUxMIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlcXVlc3RlZF9ieSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtb3BlcmF0aW9uLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEiLCJ0eXBlIjoic2VydmljZS5yZXN0YXJ0In0",
+          "signature": "gIYIlt494amXpI-yK9ywKIRIgpd48soUKMYvARQgOOG4GGsPXCMB6Edialf17LN7VplUq_k2cKEDqqDLGKRrBcHGTVW6odM4kEozXtzi4LhbQ_4bWxcNSc0QMSF4uhYq7DsOLhnwKhMEn6fYIzxevHPBt6WMoSNlwVlQcnfbFzeeTveAOUmX0kfikr6Po71eqrZje1P3nPVixKdkjPMMpzxbEX2Te3Y8A2NpuYVm8Nfu-SIAFKwbiDvqEEDzHheJ8Kwgch4z9WioN0SLOMIGYWRKWcuX6aoxLsQp1yPpvGqpraTEIQLIfm89Zmpe2PmLNp7GaAW_Zl-S7HLavTOg5Vxor5pZF-SGblP-rPW1dhlRrPqdRLU2mKM57x4iLCT6GDOLAmi29KocxwSqgMvmwHP5WK0hTSIGJnzJua4f0O1lj6ZqBk2MJ974xtSHYhGKfgkhf6EyU2jSmJtEHyI6D875nz1QbAjY5RtrLPhkp1-lNv2coAdmwIvxAyPZF2jh"
+        },
+        "approval": {
+          "schema_version": "sdc.support.restart-approval.v1",
+          "product": "hermes-mcs",
+          "audience": "sdc:synthetic",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "claim_id": "00000000-0000-4000-8000-000000000003",
+          "key_id": "00000000-0000-4000-8000-000000000004",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "case_epoch": 3,
+          "local_consent_epoch": 4,
+          "service_revision": 1,
+          "params": {
+            "service_id": "mcs.standalone",
+            "expected_runtime_generation": "00000000000040008000000000000007",
+            "effects_profile": "mcs.standalone.restart.v1"
+          },
+          "capability_revision": "sdc-support-restart-capabilities-v1",
+          "consent_revision": "sdc-support-restart-consent-v1",
+          "approval_id": "00000000-0000-4000-8000-00000000000d",
+          "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+          "approved_by": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_kind": "individual",
+          "issued_at": 1792663150000,
+          "not_before": 1792663150000,
+          "expires_at": 1792663740000,
+          "approval_hash": "7fd4112806226a12d2dda7d227cf42d40803c3fd07da5c16d1377231b4adca45"
+        },
+        "acceptance": {
+          "schema_version": "sdc.support.restart-acceptance.v1",
+          "accept_id": "00000000-0000-4000-8000-000000000010",
+          "preview_id": "00000000-0000-4000-8000-00000000000f",
+          "operation_id": "00000000-0000-4000-8000-00000000000c",
+          "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+          "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+          "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+          "state": "accepted",
+          "expires_at": 1792663740000,
+          "accepted_at": 1792663195000,
+          "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+          "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "raw_log": "synthetic-refused"
+      }
+    },
+    {
+      "name": "Admit missing HTTP request ID",
+      "definition": "AdmitResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "locally_admitted"
+      }
+    },
+    {
+      "name": "Admit handler cannot accept HTTP wrapper",
+      "definition": "AdmitResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "locally_admitted",
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admit raw content extra",
+      "definition": "AdmitResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "locally_admitted",
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "raw_log": "synthetic-refused"
+      }
+    },
+    {
+      "name": "Grant missing HTTP request ID",
+      "definition": "GrantResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "grant": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-execution-grant",
+          "payload": "eyJhZG1pc3Npb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTMiLCJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImF1ZGllbmNlIjoic2RjOnN5bnRoZXRpYyIsImNhcGFiaWxpdHlfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNhcGFiaWxpdGllcy12MSIsImNhc2VfZXBvY2giOjMsImNhc2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjaGFuZ2VfYWNjZXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDEwIiwiY2hhbmdlX2JpbmRpbmdfaGFzaCI6ImZlZGJmZWQ5ZTY1NTA3YmY3OTNkYWU4ZDJhODRhYzAzYmRkM2I2NTBhMzJlMmQwYzVlZjY4MWE1Yjc1MmE2MjIiLCJjaGFuZ2VfY29uc2VudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZSIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzMjI5MDAwLCJncmFudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxNCIsImdyYW50X3JlcXVlc3RfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTUiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImludGVudF9oYXNoIjoiY2Q3ZDVhYmZiM2NmYjE4MmQxNzNmMTI0ZGJjZThhN2IyMzZhZTQ0MDU3Y2YwOTFkMzM3MWQ5MGYzMWY0NGVjNyIsImlzc3VlZF9hdCI6MTc5MjY2MzE5OTAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY2hhbmdlX3JlY2VpcHRfaGFzaCI6ImQ4YzVmZWM1MzA3MjNhODQ2ZjBmYzVmOTg4NzdjYTVhYzU5YzIzOGZkZjBlYWY0MzY5YmRhZjljYTk5Njg2ZjgiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxMSIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTkwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsIm93bmVyX2dlbmVyYXRpb24iOiJjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZCIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicGF5bG9hZF9oYXNoIjoiYjE3NDYxZDc2YWQ0NWVjZTNhM2Y3Y2VlZTM3NzFjYWI1NmI2MTM2YTc3NWU0NzUzYWZhY2Y3MDY2NDIzZmFiNCIsInBvbGljeV9lcG9jaCI6MSwicHJldmlld19pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZiIsInByZXZpZXdfcGF5bG9hZF9oYXNoIjoiZTI4MjI3MGIzMjQyYjc4YzgxZTkzODgzNmY4MTNkYTZjNjI0ZTM1ODU2YTdjN2I0Yzc2NzdiODc5MTY4NDdkOCIsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlY2VpcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTIiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtZXhlY3V0aW9uLWdyYW50LnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifQ",
+          "signature": "X7RDjzRB4KAk57-nVdZ3qzzS4_J8XemFv6AlJHqvl1zyGOs3MJhC9Cm5n5XK3_glxADOqnlldqFdqxhZ8y8y-mxOQWfiFuiiDMV2Zg8_WlEZaTt2tOyxpvMyWlzcJtxvLdLd5a4mqRaJNyMXmrlyKgTDoUr76JC648tYarTiKTS2V3gOODZLy9Q7A0RXGn6cvwiEFm8-I91A9nALJqh52BmFVU2vKH7UniBgCzgujUitqJsaeIU4w4Sw0e59eE9hQ915-gL_C4RqYHfONqNTARO2oNa8dlQ26PHEZq-6OSFJiHV355hMJWL2XfZlOFFmeBg2tKwiWwAIiXZLZS1KDoSPRRh42b7lg-hHa8en_PA-IaFGNOEjtVZGQl15O0jntLzKn4QRogyRAwF8kv8xMZQ6vnI26nnwZzOR7c5pKgKPzNR4E4wvoBqqlje-yP4m8T2S24w-Xtw2oYGyKtaI74syBLQG5QT6veZBIMExD0JkzW6l3OVXgA9f8nP_8NTV"
+        }
+      }
+    },
+    {
+      "name": "Grant handler cannot accept HTTP wrapper",
+      "definition": "GrantResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "grant": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-execution-grant",
+          "payload": "eyJhZG1pc3Npb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTMiLCJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImF1ZGllbmNlIjoic2RjOnN5bnRoZXRpYyIsImNhcGFiaWxpdHlfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNhcGFiaWxpdGllcy12MSIsImNhc2VfZXBvY2giOjMsImNhc2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjaGFuZ2VfYWNjZXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDEwIiwiY2hhbmdlX2JpbmRpbmdfaGFzaCI6ImZlZGJmZWQ5ZTY1NTA3YmY3OTNkYWU4ZDJhODRhYzAzYmRkM2I2NTBhMzJlMmQwYzVlZjY4MWE1Yjc1MmE2MjIiLCJjaGFuZ2VfY29uc2VudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZSIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzMjI5MDAwLCJncmFudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxNCIsImdyYW50X3JlcXVlc3RfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTUiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImludGVudF9oYXNoIjoiY2Q3ZDVhYmZiM2NmYjE4MmQxNzNmMTI0ZGJjZThhN2IyMzZhZTQ0MDU3Y2YwOTFkMzM3MWQ5MGYzMWY0NGVjNyIsImlzc3VlZF9hdCI6MTc5MjY2MzE5OTAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY2hhbmdlX3JlY2VpcHRfaGFzaCI6ImQ4YzVmZWM1MzA3MjNhODQ2ZjBmYzVmOTg4NzdjYTVhYzU5YzIzOGZkZjBlYWY0MzY5YmRhZjljYTk5Njg2ZjgiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxMSIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTkwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsIm93bmVyX2dlbmVyYXRpb24iOiJjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZCIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicGF5bG9hZF9oYXNoIjoiYjE3NDYxZDc2YWQ0NWVjZTNhM2Y3Y2VlZTM3NzFjYWI1NmI2MTM2YTc3NWU0NzUzYWZhY2Y3MDY2NDIzZmFiNCIsInBvbGljeV9lcG9jaCI6MSwicHJldmlld19pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZiIsInByZXZpZXdfcGF5bG9hZF9oYXNoIjoiZTI4MjI3MGIzMjQyYjc4YzgxZTkzODgzNmY4MTNkYTZjNjI0ZTM1ODU2YTdjN2I0Yzc2NzdiODc5MTY4NDdkOCIsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlY2VpcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTIiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtZXhlY3V0aW9uLWdyYW50LnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifQ",
+          "signature": "X7RDjzRB4KAk57-nVdZ3qzzS4_J8XemFv6AlJHqvl1zyGOs3MJhC9Cm5n5XK3_glxADOqnlldqFdqxhZ8y8y-mxOQWfiFuiiDMV2Zg8_WlEZaTt2tOyxpvMyWlzcJtxvLdLd5a4mqRaJNyMXmrlyKgTDoUr76JC648tYarTiKTS2V3gOODZLy9Q7A0RXGn6cvwiEFm8-I91A9nALJqh52BmFVU2vKH7UniBgCzgujUitqJsaeIU4w4Sw0e59eE9hQ915-gL_C4RqYHfONqNTARO2oNa8dlQ26PHEZq-6OSFJiHV355hMJWL2XfZlOFFmeBg2tKwiWwAIiXZLZS1KDoSPRRh42b7lg-hHa8en_PA-IaFGNOEjtVZGQl15O0jntLzKn4QRogyRAwF8kv8xMZQ6vnI26nnwZzOR7c5pKgKPzNR4E4wvoBqqlje-yP4m8T2S24w-Xtw2oYGyKtaI74syBLQG5QT6veZBIMExD0JkzW6l3OVXgA9f8nP_8NTV"
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Grant raw content extra",
+      "definition": "GrantResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "grant": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-execution-grant",
+          "payload": "eyJhZG1pc3Npb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTMiLCJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImF1ZGllbmNlIjoic2RjOnN5bnRoZXRpYyIsImNhcGFiaWxpdHlfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNhcGFiaWxpdGllcy12MSIsImNhc2VfZXBvY2giOjMsImNhc2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjaGFuZ2VfYWNjZXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDEwIiwiY2hhbmdlX2JpbmRpbmdfaGFzaCI6ImZlZGJmZWQ5ZTY1NTA3YmY3OTNkYWU4ZDJhODRhYzAzYmRkM2I2NTBhMzJlMmQwYzVlZjY4MWE1Yjc1MmE2MjIiLCJjaGFuZ2VfY29uc2VudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZSIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzMjI5MDAwLCJncmFudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxNCIsImdyYW50X3JlcXVlc3RfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTUiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImludGVudF9oYXNoIjoiY2Q3ZDVhYmZiM2NmYjE4MmQxNzNmMTI0ZGJjZThhN2IyMzZhZTQ0MDU3Y2YwOTFkMzM3MWQ5MGYzMWY0NGVjNyIsImlzc3VlZF9hdCI6MTc5MjY2MzE5OTAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY2hhbmdlX3JlY2VpcHRfaGFzaCI6ImQ4YzVmZWM1MzA3MjNhODQ2ZjBmYzVmOTg4NzdjYTVhYzU5YzIzOGZkZjBlYWY0MzY5YmRhZjljYTk5Njg2ZjgiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxMSIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTkwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsIm93bmVyX2dlbmVyYXRpb24iOiJjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZCIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicGF5bG9hZF9oYXNoIjoiYjE3NDYxZDc2YWQ0NWVjZTNhM2Y3Y2VlZTM3NzFjYWI1NmI2MTM2YTc3NWU0NzUzYWZhY2Y3MDY2NDIzZmFiNCIsInBvbGljeV9lcG9jaCI6MSwicHJldmlld19pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZiIsInByZXZpZXdfcGF5bG9hZF9oYXNoIjoiZTI4MjI3MGIzMjQyYjc4YzgxZTkzODgzNmY4MTNkYTZjNjI0ZTM1ODU2YTdjN2I0Yzc2NzdiODc5MTY4NDdkOCIsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlY2VpcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTIiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtZXhlY3V0aW9uLWdyYW50LnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifQ",
+          "signature": "X7RDjzRB4KAk57-nVdZ3qzzS4_J8XemFv6AlJHqvl1zyGOs3MJhC9Cm5n5XK3_glxADOqnlldqFdqxhZ8y8y-mxOQWfiFuiiDMV2Zg8_WlEZaTt2tOyxpvMyWlzcJtxvLdLd5a4mqRaJNyMXmrlyKgTDoUr76JC648tYarTiKTS2V3gOODZLy9Q7A0RXGn6cvwiEFm8-I91A9nALJqh52BmFVU2vKH7UniBgCzgujUitqJsaeIU4w4Sw0e59eE9hQ915-gL_C4RqYHfONqNTARO2oNa8dlQ26PHEZq-6OSFJiHV355hMJWL2XfZlOFFmeBg2tKwiWwAIiXZLZS1KDoSPRRh42b7lg-hHa8en_PA-IaFGNOEjtVZGQl15O0jntLzKn4QRogyRAwF8kv8xMZQ6vnI26nnwZzOR7c5pKgKPzNR4E4wvoBqqlje-yP4m8T2S24w-Xtw2oYGyKtaI74syBLQG5QT6veZBIMExD0JkzW6l3OVXgA9f8nP_8NTV"
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "raw_log": "synthetic-refused"
+      }
+    },
+    {
+      "name": "Report missing HTTP request ID",
+      "definition": "ReportResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "succeeded",
+        "state_revision": 3
+      }
+    },
+    {
+      "name": "Report handler cannot accept HTTP wrapper",
+      "definition": "ReportResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "succeeded",
+        "state_revision": 3,
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Report raw content extra",
+      "definition": "ReportResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "succeeded",
+        "state_revision": 3,
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "raw_log": "synthetic-refused"
+      }
+    },
+    {
+      "name": "Status missing HTTP request ID",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "succeeded",
+          "state_revision": 3
+        }
+      }
+    },
+    {
+      "name": "Status handler cannot accept HTTP wrapper",
+      "definition": "StatusResult",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status raw content extra",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030",
+        "raw_log": "synthetic-refused"
+      }
+    },
+    {
+      "name": "Poll operation without approval",
+      "definition": "PollResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-operation",
+          "payload": "eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92ZWRfYnkiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9hY2NlcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTAiLCJjaGFuZ2VfYmluZGluZ19oYXNoIjoiZmVkYmZlZDllNjU1MDdiZjc5M2RhZThkMmE4NGFjMDNiZGQzYjY1MGEzMmUyZDBjNWVmNjgxYTViNzUyYTYyMiIsImNoYW5nZV9jb25zZW50X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBlIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb21wbGV0aW9uX3RpbWVvdXRfbXMiOjkwMDAwMCwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzODAwMDAwLCJpbnNwZWN0aW9uX2hhc2giOiI4OTEwMzQ0MzFmM2JlNjM3NzMxZTZjZjI2YzBmYmMwNWI0ZDg4N2UyZjg0OTVkNGNiY2IwZWViYmIwMjE3MjA0IiwiaW5zcGVjdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYSIsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTQwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9oYXNoIjoiZDhjNWZlYzUzMDcyM2E4NDZmMGZjNWY5ODg3N2NhNWFjNTljMjM4ZmRmMGVhZjQzNjliZGFmOWNhOTk2ODZmOCIsImxvY2FsX2NoYW5nZV9yZWNlaXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDExIiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwYXlsb2FkX2hhc2giOiJiMTc0NjFkNzZhZDQ1ZWNlM2EzZjdjZWVlMzc3MWNhYjU2YjYxMzZhNzc1ZTQ3NTNhZmFjZjcwNjY0MjNmYWI0IiwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJldmlld19wYXlsb2FkX2hhc2giOiJlMjgyMjcwYjMyNDJiNzhjODFlOTM4ODM2ZjgxM2RhNmM2MjRlMzU4NTZhN2M3YjRjNzY3N2I4NzkxNjg0N2Q4IiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJwdXJwb3NlX2NvZGUiOiJQUk9DRVNTX1NUQUxMIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlcXVlc3RlZF9ieSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtb3BlcmF0aW9uLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEiLCJ0eXBlIjoic2VydmljZS5yZXN0YXJ0In0",
+          "signature": "gIYIlt494amXpI-yK9ywKIRIgpd48soUKMYvARQgOOG4GGsPXCMB6Edialf17LN7VplUq_k2cKEDqqDLGKRrBcHGTVW6odM4kEozXtzi4LhbQ_4bWxcNSc0QMSF4uhYq7DsOLhnwKhMEn6fYIzxevHPBt6WMoSNlwVlQcnfbFzeeTveAOUmX0kfikr6Po71eqrZje1P3nPVixKdkjPMMpzxbEX2Te3Y8A2NpuYVm8Nfu-SIAFKwbiDvqEEDzHheJ8Kwgch4z9WioN0SLOMIGYWRKWcuX6aoxLsQp1yPpvGqpraTEIQLIfm89Zmpe2PmLNp7GaAW_Zl-S7HLavTOg5Vxor5pZF-SGblP-rPW1dhlRrPqdRLU2mKM57x4iLCT6GDOLAmi29KocxwSqgMvmwHP5WK0hTSIGJnzJua4f0O1lj6ZqBk2MJ974xtSHYhGKfgkhf6EyU2jSmJtEHyI6D875nz1QbAjY5RtrLPhkp1-lNv2coAdmwIvxAyPZF2jh"
+        },
+        "approval": null,
+        "acceptance": {
+          "schema_version": "sdc.support.restart-acceptance.v1",
+          "accept_id": "00000000-0000-4000-8000-000000000010",
+          "preview_id": "00000000-0000-4000-8000-00000000000f",
+          "operation_id": "00000000-0000-4000-8000-00000000000c",
+          "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+          "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+          "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+          "state": "accepted",
+          "expires_at": 1792663740000,
+          "accepted_at": 1792663195000,
+          "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+          "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Poll empty with stray registry",
+      "definition": "PollResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation": null,
+        "approval": null,
+        "acceptance": null,
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Old operation signing purpose",
+      "definition": "PollResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "operation",
+          "payload": "eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92ZWRfYnkiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9hY2NlcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTAiLCJjaGFuZ2VfYmluZGluZ19oYXNoIjoiZmVkYmZlZDllNjU1MDdiZjc5M2RhZThkMmE4NGFjMDNiZGQzYjY1MGEzMmUyZDBjNWVmNjgxYTViNzUyYTYyMiIsImNoYW5nZV9jb25zZW50X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBlIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb21wbGV0aW9uX3RpbWVvdXRfbXMiOjkwMDAwMCwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzODAwMDAwLCJpbnNwZWN0aW9uX2hhc2giOiI4OTEwMzQ0MzFmM2JlNjM3NzMxZTZjZjI2YzBmYmMwNWI0ZDg4N2UyZjg0OTVkNGNiY2IwZWViYmIwMjE3MjA0IiwiaW5zcGVjdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYSIsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTQwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9oYXNoIjoiZDhjNWZlYzUzMDcyM2E4NDZmMGZjNWY5ODg3N2NhNWFjNTljMjM4ZmRmMGVhZjQzNjliZGFmOWNhOTk2ODZmOCIsImxvY2FsX2NoYW5nZV9yZWNlaXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDExIiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwYXlsb2FkX2hhc2giOiJiMTc0NjFkNzZhZDQ1ZWNlM2EzZjdjZWVlMzc3MWNhYjU2YjYxMzZhNzc1ZTQ3NTNhZmFjZjcwNjY0MjNmYWI0IiwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJldmlld19wYXlsb2FkX2hhc2giOiJlMjgyMjcwYjMyNDJiNzhjODFlOTM4ODM2ZjgxM2RhNmM2MjRlMzU4NTZhN2M3YjRjNzY3N2I4NzkxNjg0N2Q4IiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJwdXJwb3NlX2NvZGUiOiJQUk9DRVNTX1NUQUxMIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlcXVlc3RlZF9ieSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtb3BlcmF0aW9uLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEiLCJ0eXBlIjoic2VydmljZS5yZXN0YXJ0In0",
+          "signature": "gIYIlt494amXpI-yK9ywKIRIgpd48soUKMYvARQgOOG4GGsPXCMB6Edialf17LN7VplUq_k2cKEDqqDLGKRrBcHGTVW6odM4kEozXtzi4LhbQ_4bWxcNSc0QMSF4uhYq7DsOLhnwKhMEn6fYIzxevHPBt6WMoSNlwVlQcnfbFzeeTveAOUmX0kfikr6Po71eqrZje1P3nPVixKdkjPMMpzxbEX2Te3Y8A2NpuYVm8Nfu-SIAFKwbiDvqEEDzHheJ8Kwgch4z9WioN0SLOMIGYWRKWcuX6aoxLsQp1yPpvGqpraTEIQLIfm89Zmpe2PmLNp7GaAW_Zl-S7HLavTOg5Vxor5pZF-SGblP-rPW1dhlRrPqdRLU2mKM57x4iLCT6GDOLAmi29KocxwSqgMvmwHP5WK0hTSIGJnzJua4f0O1lj6ZqBk2MJ974xtSHYhGKfgkhf6EyU2jSmJtEHyI6D875nz1QbAjY5RtrLPhkp1-lNv2coAdmwIvxAyPZF2jh"
+        },
+        "approval": {
+          "schema_version": "sdc.support.restart-approval.v1",
+          "product": "hermes-mcs",
+          "audience": "sdc:synthetic",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "claim_id": "00000000-0000-4000-8000-000000000003",
+          "key_id": "00000000-0000-4000-8000-000000000004",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "case_epoch": 3,
+          "local_consent_epoch": 4,
+          "service_revision": 1,
+          "params": {
+            "service_id": "mcs.standalone",
+            "expected_runtime_generation": "00000000000040008000000000000007",
+            "effects_profile": "mcs.standalone.restart.v1"
+          },
+          "capability_revision": "sdc-support-restart-capabilities-v1",
+          "consent_revision": "sdc-support-restart-consent-v1",
+          "approval_id": "00000000-0000-4000-8000-00000000000d",
+          "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+          "approved_by": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_kind": "individual",
+          "issued_at": 1792663150000,
+          "not_before": 1792663150000,
+          "expires_at": 1792663740000,
+          "approval_hash": "7fd4112806226a12d2dda7d227cf42d40803c3fd07da5c16d1377231b4adca45"
+        },
+        "acceptance": {
+          "schema_version": "sdc.support.restart-acceptance.v1",
+          "accept_id": "00000000-0000-4000-8000-000000000010",
+          "preview_id": "00000000-0000-4000-8000-00000000000f",
+          "operation_id": "00000000-0000-4000-8000-00000000000c",
+          "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+          "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+          "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+          "state": "accepted",
+          "expires_at": 1792663740000,
+          "accepted_at": 1792663195000,
+          "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+          "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Old preview signing purpose",
+      "definition": "PreviewResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "preview": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "consent-preview",
+          "payload": "eyJhcHByb3ZhbCI6eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92YWxfa2luZCI6ImluZGl2aWR1YWwiLCJhcHByb3ZlZF9ieSI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJhdWRpZW5jZSI6InNkYzpzeW50aGV0aWMiLCJjYXBhYmlsaXR5X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jYXBhYmlsaXRpZXMtdjEiLCJjYXNlX2Vwb2NoIjozLCJjYXNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb25zZW50X3JldmlzaW9uIjoic2RjLXN1cHBvcnQtcmVzdGFydC1jb25zZW50LXYxIiwiZGV2aWNlX2Vwb2NoIjoyLCJkZXZpY2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJlbnZpcm9ubWVudCI6InN5bnRoZXRpYyIsImV4cGlyZXNfYXQiOjE3OTI2NjM3NDAwMDAsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTUwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jb25zZW50X2Vwb2NoIjo0LCJub3RfYmVmb3JlIjoxNzkyNjYzMTUwMDAwLCJwYXJhbXMiOnsiZWZmZWN0c19wcm9maWxlIjoibWNzLnN0YW5kYWxvbmUucmVzdGFydC52MSIsImV4cGVjdGVkX3J1bnRpbWVfZ2VuZXJhdGlvbiI6IjAwMDAwMDAwMDAwMDQwMDA4MDAwMDAwMDAwMDAwMDA3Iiwic2VydmljZV9pZCI6Im1jcy5zdGFuZGFsb25lIn0sInBvbGljeV9lcG9jaCI6MSwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWFwcHJvdmFsLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifSwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9iaW5kaW5nX2hhc2giOiJmZWRiZmVkOWU2NTUwN2JmNzkzZGFlOGQyYTg0YWMwM2JkZDNiNjUwYTMyZTJkMGM1ZWY2ODFhNWI3NTJhNjIyIiwiY2hhbmdlX2NvbnNlbnRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGUiLCJjbGFpbV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzMyMDAwMCwiaW5zdGFsbGF0aW9uIjoiaW5zdGFsbGF0aW9uLWEiLCJpbnRlbnQiOnsiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29tcGxldGlvbl90aW1lb3V0X21zIjo5MDAwMDAsImNvbnNlbnRfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNvbnNlbnQtdjEiLCJkZXZpY2VfZXBvY2giOjIsImRldmljZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50Ijoic3ludGhldGljIiwiZXhwaXJlc19hdCI6MTc5MjY2MzgwMDAwMCwiaW5zcGVjdGlvbl9oYXNoIjoiODkxMDM0NDMxZjNiZTYzNzczMWU2Y2YyNmMwZmJjMDViNGQ4ODdlMmY4NDk1ZDRjYmNiMGVlYmJiMDIxNzIwNCIsImluc3BlY3Rpb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGEiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImlzc3VlZF9hdCI6MTc5MjY2MzE0MDAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwb2xpY3lfZXBvY2giOjEsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicHVycG9zZV9jb2RlIjoiUFJPQ0VTU19TVEFMTCIsInJlYWxtX2Vwb2NoIjoic3ludGhldGljLXJlc3RhcnQtcmVhbG0iLCJyZXF1ZXN0ZWRfYnkiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWludGVudC52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIiwidHlwZSI6InNlcnZpY2UucmVzdGFydCJ9LCJpbnRlbnRfaGFzaCI6ImNkN2Q1YWJmYjNjZmIxODJkMTczZjEyNGRiY2U4YTdiMjM2YWU0NDA1N2NmMDkxZDMzNzFkOTBmMzFmNDRlYzciLCJpc3N1ZWRfYXQiOjE3OTI2NjMxOTAwMDAsImtleV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNCIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTAwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJyZWFsbV9lcG9jaCI6InN5bnRoZXRpYy1yZXN0YXJ0LXJlYWxtIiwic2NoZW1hX3ZlcnNpb24iOiJzZGMuc3VwcG9ydC5yZXN0YXJ0LWNvbnNlbnQtcHJldmlldy52MSIsInNlcnZpY2VfcmV2aXNpb24iOjEsInRlbmFudCI6InRlbmFudC1hIn0",
+          "signature": "j-T8Tv0ZiiYpxCFhRubejUDeuASdSdnbG1mX7qp0GX1vylJ7h1dvgTwA7xa7_JTq_YjiDD2CG9urLeT5UHZ7_Que9OV5opjvHC6TZMmjxaq5YUEQ69Ev1oxoFbZiDgbMs3PhJWqtGXfNbkOVBu-TuqNR3I55TW-NqG0mdXda9oKE-6O2Z0DLd1E_rHmu2dMXzZrsoZOyEqyXXYzHiMaWS6N4sWVVgRg0JiJaqhUSoNFippqKZjSq1147BLp01ULkGQArm7mtVhjrmxwLyH7RNhM7QahJunDvdw6ab6CIezSaAg4vv_9Sufc_2ph5cAHt7WcyXB61w3s6APf1mW-HiATLsQxwpWB0UBrGC3lq5E7ct6j0yHAsInoYRDK6YG0H3Hdld1IoadWy1gIMhfQtlv0Mkr6p8f3UT_nI58jJmybeXecO7TgzrymRvxu7e-RsMzG4aRhifgOzzWNzRU5JrAlSmwGC1DBazWWCkwdXSFa7QFDoi_iXP3SIxwnOm2UQ"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Old grant signing purpose",
+      "definition": "GrantResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "grant": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "execution-grant",
+          "payload": "eyJhZG1pc3Npb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTMiLCJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImF1ZGllbmNlIjoic2RjOnN5bnRoZXRpYyIsImNhcGFiaWxpdHlfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNhcGFiaWxpdGllcy12MSIsImNhc2VfZXBvY2giOjMsImNhc2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjaGFuZ2VfYWNjZXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDEwIiwiY2hhbmdlX2JpbmRpbmdfaGFzaCI6ImZlZGJmZWQ5ZTY1NTA3YmY3OTNkYWU4ZDJhODRhYzAzYmRkM2I2NTBhMzJlMmQwYzVlZjY4MWE1Yjc1MmE2MjIiLCJjaGFuZ2VfY29uc2VudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZSIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzMjI5MDAwLCJncmFudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxNCIsImdyYW50X3JlcXVlc3RfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTUiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImludGVudF9oYXNoIjoiY2Q3ZDVhYmZiM2NmYjE4MmQxNzNmMTI0ZGJjZThhN2IyMzZhZTQ0MDU3Y2YwOTFkMzM3MWQ5MGYzMWY0NGVjNyIsImlzc3VlZF9hdCI6MTc5MjY2MzE5OTAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY2hhbmdlX3JlY2VpcHRfaGFzaCI6ImQ4YzVmZWM1MzA3MjNhODQ2ZjBmYzVmOTg4NzdjYTVhYzU5YzIzOGZkZjBlYWY0MzY5YmRhZjljYTk5Njg2ZjgiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxMSIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTkwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsIm93bmVyX2dlbmVyYXRpb24iOiJjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZCIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicGF5bG9hZF9oYXNoIjoiYjE3NDYxZDc2YWQ0NWVjZTNhM2Y3Y2VlZTM3NzFjYWI1NmI2MTM2YTc3NWU0NzUzYWZhY2Y3MDY2NDIzZmFiNCIsInBvbGljeV9lcG9jaCI6MSwicHJldmlld19pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZiIsInByZXZpZXdfcGF5bG9hZF9oYXNoIjoiZTI4MjI3MGIzMjQyYjc4YzgxZTkzODgzNmY4MTNkYTZjNjI0ZTM1ODU2YTdjN2I0Yzc2NzdiODc5MTY4NDdkOCIsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlY2VpcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTIiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtZXhlY3V0aW9uLWdyYW50LnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifQ",
+          "signature": "X7RDjzRB4KAk57-nVdZ3qzzS4_J8XemFv6AlJHqvl1zyGOs3MJhC9Cm5n5XK3_glxADOqnlldqFdqxhZ8y8y-mxOQWfiFuiiDMV2Zg8_WlEZaTt2tOyxpvMyWlzcJtxvLdLd5a4mqRaJNyMXmrlyKgTDoUr76JC648tYarTiKTS2V3gOODZLy9Q7A0RXGn6cvwiEFm8-I91A9nALJqh52BmFVU2vKH7UniBgCzgujUitqJsaeIU4w4Sw0e59eE9hQ915-gL_C4RqYHfONqNTARO2oNa8dlQ26PHEZq-6OSFJiHV355hMJWL2XfZlOFFmeBg2tKwiWwAIiXZLZS1KDoSPRRh42b7lg-hHa8en_PA-IaFGNOEjtVZGQl15O0jntLzKn4QRogyRAwF8kv8xMZQ6vnI26nnwZzOR7c5pKgKPzNR4E4wvoBqqlje-yP4m8T2S24w-Xtw2oYGyKtaI74syBLQG5QT6veZBIMExD0JkzW6l3OVXgA9f8nP_8NTV"
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Grant cannot substitute operation",
+      "definition": "GrantResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "grant": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-operation",
+          "payload": "eyJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImFwcHJvdmFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBkIiwiYXBwcm92ZWRfYnkiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYXVkaWVuY2UiOiJzZGM6c3ludGhldGljIiwiY2FwYWJpbGl0eV9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY2FwYWJpbGl0aWVzLXYxIiwiY2FzZV9lcG9jaCI6MywiY2FzZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImNoYW5nZV9hY2NlcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTAiLCJjaGFuZ2VfYmluZGluZ19oYXNoIjoiZmVkYmZlZDllNjU1MDdiZjc5M2RhZThkMmE4NGFjMDNiZGQzYjY1MGEzMmUyZDBjNWVmNjgxYTViNzUyYTYyMiIsImNoYW5nZV9jb25zZW50X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBlIiwiY2xhaW1faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJjb21wbGV0aW9uX3RpbWVvdXRfbXMiOjkwMDAwMCwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzODAwMDAwLCJpbnNwZWN0aW9uX2hhc2giOiI4OTEwMzQ0MzFmM2JlNjM3NzMxZTZjZjI2YzBmYmMwNWI0ZDg4N2UyZjg0OTVkNGNiY2IwZWViYmIwMjE3MjA0IiwiaW5zcGVjdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYSIsImluc3RhbGxhdGlvbiI6Imluc3RhbGxhdGlvbi1hIiwiaW50ZW50X2hhc2giOiJjZDdkNWFiZmIzY2ZiMTgyZDE3M2YxMjRkYmNlOGE3YjIzNmFlNDQwNTdjZjA5MWQzMzcxZDkwZjMxZjQ0ZWM3IiwiaXNzdWVkX2F0IjoxNzkyNjYzMTQwMDAwLCJrZXlfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9oYXNoIjoiZDhjNWZlYzUzMDcyM2E4NDZmMGZjNWY5ODg3N2NhNWFjNTljMjM4ZmRmMGVhZjQzNjliZGFmOWNhOTk2ODZmOCIsImxvY2FsX2NoYW5nZV9yZWNlaXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDExIiwibG9jYWxfY29uc2VudF9lcG9jaCI6NCwibm90X2JlZm9yZSI6MTc5MjY2MzE0MDAwMCwib3BlcmF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBjIiwicGFyYW1zIjp7ImVmZmVjdHNfcHJvZmlsZSI6Im1jcy5zdGFuZGFsb25lLnJlc3RhcnQudjEiLCJleHBlY3RlZF9ydW50aW1lX2dlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDA0MDAwODAwMDAwMDAwMDAwMDAwNyIsInNlcnZpY2VfaWQiOiJtY3Muc3RhbmRhbG9uZSJ9LCJwYXlsb2FkX2hhc2giOiJiMTc0NjFkNzZhZDQ1ZWNlM2EzZjdjZWVlMzc3MWNhYjU2YjYxMzZhNzc1ZTQ3NTNhZmFjZjcwNjY0MjNmYWI0IiwicG9saWN5X2Vwb2NoIjoxLCJwcmV2aWV3X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBmIiwicHJldmlld19wYXlsb2FkX2hhc2giOiJlMjgyMjcwYjMyNDJiNzhjODFlOTM4ODM2ZjgxM2RhNmM2MjRlMzU4NTZhN2M3YjRjNzY3N2I4NzkxNjg0N2Q4IiwicHJvZHVjdCI6Imhlcm1lcy1tY3MiLCJwdXJwb3NlX2NvZGUiOiJQUk9DRVNTX1NUQUxMIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlcXVlc3RlZF9ieSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtb3BlcmF0aW9uLnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEiLCJ0eXBlIjoic2VydmljZS5yZXN0YXJ0In0",
+          "signature": "gIYIlt494amXpI-yK9ywKIRIgpd48soUKMYvARQgOOG4GGsPXCMB6Edialf17LN7VplUq_k2cKEDqqDLGKRrBcHGTVW6odM4kEozXtzi4LhbQ_4bWxcNSc0QMSF4uhYq7DsOLhnwKhMEn6fYIzxevHPBt6WMoSNlwVlQcnfbFzeeTveAOUmX0kfikr6Po71eqrZje1P3nPVixKdkjPMMpzxbEX2Te3Y8A2NpuYVm8Nfu-SIAFKwbiDvqEEDzHheJ8Kwgch4z9WioN0SLOMIGYWRKWcuX6aoxLsQp1yPpvGqpraTEIQLIfm89Zmpe2PmLNp7GaAW_Zl-S7HLavTOg5Vxor5pZF-SGblP-rPW1dhlRrPqdRLU2mKM57x4iLCT6GDOLAmi29KocxwSqgMvmwHP5WK0hTSIGJnzJua4f0O1lj6ZqBk2MJ974xtSHYhGKfgkhf6EyU2jSmJtEHyI6D875nz1QbAjY5RtrLPhkp1-lNv2coAdmwIvxAyPZF2jh"
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Preview cannot substitute grant",
+      "definition": "PreviewResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "preview_id": "00000000-0000-4000-8000-00000000000f",
+        "preview": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-execution-grant",
+          "payload": "eyJhZG1pc3Npb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTMiLCJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImF1ZGllbmNlIjoic2RjOnN5bnRoZXRpYyIsImNhcGFiaWxpdHlfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNhcGFiaWxpdGllcy12MSIsImNhc2VfZXBvY2giOjMsImNhc2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjaGFuZ2VfYWNjZXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDEwIiwiY2hhbmdlX2JpbmRpbmdfaGFzaCI6ImZlZGJmZWQ5ZTY1NTA3YmY3OTNkYWU4ZDJhODRhYzAzYmRkM2I2NTBhMzJlMmQwYzVlZjY4MWE1Yjc1MmE2MjIiLCJjaGFuZ2VfY29uc2VudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZSIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzMjI5MDAwLCJncmFudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxNCIsImdyYW50X3JlcXVlc3RfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTUiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImludGVudF9oYXNoIjoiY2Q3ZDVhYmZiM2NmYjE4MmQxNzNmMTI0ZGJjZThhN2IyMzZhZTQ0MDU3Y2YwOTFkMzM3MWQ5MGYzMWY0NGVjNyIsImlzc3VlZF9hdCI6MTc5MjY2MzE5OTAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY2hhbmdlX3JlY2VpcHRfaGFzaCI6ImQ4YzVmZWM1MzA3MjNhODQ2ZjBmYzVmOTg4NzdjYTVhYzU5YzIzOGZkZjBlYWY0MzY5YmRhZjljYTk5Njg2ZjgiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxMSIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTkwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsIm93bmVyX2dlbmVyYXRpb24iOiJjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZCIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicGF5bG9hZF9oYXNoIjoiYjE3NDYxZDc2YWQ0NWVjZTNhM2Y3Y2VlZTM3NzFjYWI1NmI2MTM2YTc3NWU0NzUzYWZhY2Y3MDY2NDIzZmFiNCIsInBvbGljeV9lcG9jaCI6MSwicHJldmlld19pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZiIsInByZXZpZXdfcGF5bG9hZF9oYXNoIjoiZTI4MjI3MGIzMjQyYjc4YzgxZTkzODgzNmY4MTNkYTZjNjI0ZTM1ODU2YTdjN2I0Yzc2NzdiODc5MTY4NDdkOCIsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlY2VpcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTIiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtZXhlY3V0aW9uLWdyYW50LnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifQ",
+          "signature": "X7RDjzRB4KAk57-nVdZ3qzzS4_J8XemFv6AlJHqvl1zyGOs3MJhC9Cm5n5XK3_glxADOqnlldqFdqxhZ8y8y-mxOQWfiFuiiDMV2Zg8_WlEZaTt2tOyxpvMyWlzcJtxvLdLd5a4mqRaJNyMXmrlyKgTDoUr76JC648tYarTiKTS2V3gOODZLy9Q7A0RXGn6cvwiEFm8-I91A9nALJqh52BmFVU2vKH7UniBgCzgujUitqJsaeIU4w4Sw0e59eE9hQ915-gL_C4RqYHfONqNTARO2oNa8dlQ26PHEZq-6OSFJiHV355hMJWL2XfZlOFFmeBg2tKwiWwAIiXZLZS1KDoSPRRh42b7lg-hHa8en_PA-IaFGNOEjtVZGQl15O0jntLzKn4QRogyRAwF8kv8xMZQ6vnI26nnwZzOR7c5pKgKPzNR4E4wvoBqqlje-yP4m8T2S24w-Xtw2oYGyKtaI74syBLQG5QT6veZBIMExD0JkzW6l3OVXgA9f8nP_8NTV"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Poll cannot substitute grant",
+      "definition": "PollResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-execution-grant",
+          "payload": "eyJhZG1pc3Npb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTMiLCJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImF1ZGllbmNlIjoic2RjOnN5bnRoZXRpYyIsImNhcGFiaWxpdHlfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNhcGFiaWxpdGllcy12MSIsImNhc2VfZXBvY2giOjMsImNhc2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjaGFuZ2VfYWNjZXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDEwIiwiY2hhbmdlX2JpbmRpbmdfaGFzaCI6ImZlZGJmZWQ5ZTY1NTA3YmY3OTNkYWU4ZDJhODRhYzAzYmRkM2I2NTBhMzJlMmQwYzVlZjY4MWE1Yjc1MmE2MjIiLCJjaGFuZ2VfY29uc2VudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZSIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzMjI5MDAwLCJncmFudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxNCIsImdyYW50X3JlcXVlc3RfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTUiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImludGVudF9oYXNoIjoiY2Q3ZDVhYmZiM2NmYjE4MmQxNzNmMTI0ZGJjZThhN2IyMzZhZTQ0MDU3Y2YwOTFkMzM3MWQ5MGYzMWY0NGVjNyIsImlzc3VlZF9hdCI6MTc5MjY2MzE5OTAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY2hhbmdlX3JlY2VpcHRfaGFzaCI6ImQ4YzVmZWM1MzA3MjNhODQ2ZjBmYzVmOTg4NzdjYTVhYzU5YzIzOGZkZjBlYWY0MzY5YmRhZjljYTk5Njg2ZjgiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxMSIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTkwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsIm93bmVyX2dlbmVyYXRpb24iOiJjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZCIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicGF5bG9hZF9oYXNoIjoiYjE3NDYxZDc2YWQ0NWVjZTNhM2Y3Y2VlZTM3NzFjYWI1NmI2MTM2YTc3NWU0NzUzYWZhY2Y3MDY2NDIzZmFiNCIsInBvbGljeV9lcG9jaCI6MSwicHJldmlld19pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZiIsInByZXZpZXdfcGF5bG9hZF9oYXNoIjoiZTI4MjI3MGIzMjQyYjc4YzgxZTkzODgzNmY4MTNkYTZjNjI0ZTM1ODU2YTdjN2I0Yzc2NzdiODc5MTY4NDdkOCIsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlY2VpcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTIiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtZXhlY3V0aW9uLWdyYW50LnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifQ",
+          "signature": "X7RDjzRB4KAk57-nVdZ3qzzS4_J8XemFv6AlJHqvl1zyGOs3MJhC9Cm5n5XK3_glxADOqnlldqFdqxhZ8y8y-mxOQWfiFuiiDMV2Zg8_WlEZaTt2tOyxpvMyWlzcJtxvLdLd5a4mqRaJNyMXmrlyKgTDoUr76JC648tYarTiKTS2V3gOODZLy9Q7A0RXGn6cvwiEFm8-I91A9nALJqh52BmFVU2vKH7UniBgCzgujUitqJsaeIU4w4Sw0e59eE9hQ915-gL_C4RqYHfONqNTARO2oNa8dlQ26PHEZq-6OSFJiHV355hMJWL2XfZlOFFmeBg2tKwiWwAIiXZLZS1KDoSPRRh42b7lg-hHa8en_PA-IaFGNOEjtVZGQl15O0jntLzKn4QRogyRAwF8kv8xMZQ6vnI26nnwZzOR7c5pKgKPzNR4E4wvoBqqlje-yP4m8T2S24w-Xtw2oYGyKtaI74syBLQG5QT6veZBIMExD0JkzW6l3OVXgA9f8nP_8NTV"
+        },
+        "approval": {
+          "schema_version": "sdc.support.restart-approval.v1",
+          "product": "hermes-mcs",
+          "audience": "sdc:synthetic",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "claim_id": "00000000-0000-4000-8000-000000000003",
+          "key_id": "00000000-0000-4000-8000-000000000004",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "case_epoch": 3,
+          "local_consent_epoch": 4,
+          "service_revision": 1,
+          "params": {
+            "service_id": "mcs.standalone",
+            "expected_runtime_generation": "00000000000040008000000000000007",
+            "effects_profile": "mcs.standalone.restart.v1"
+          },
+          "capability_revision": "sdc-support-restart-capabilities-v1",
+          "consent_revision": "sdc-support-restart-consent-v1",
+          "approval_id": "00000000-0000-4000-8000-00000000000d",
+          "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+          "approved_by": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_kind": "individual",
+          "issued_at": 1792663150000,
+          "not_before": 1792663150000,
+          "expires_at": 1792663740000,
+          "approval_hash": "7fd4112806226a12d2dda7d227cf42d40803c3fd07da5c16d1377231b4adca45"
+        },
+        "acceptance": {
+          "schema_version": "sdc.support.restart-acceptance.v1",
+          "accept_id": "00000000-0000-4000-8000-000000000010",
+          "preview_id": "00000000-0000-4000-8000-00000000000f",
+          "operation_id": "00000000-0000-4000-8000-00000000000c",
+          "change_consent_id": "00000000-0000-4000-8000-00000000000e",
+          "change_binding_hash": "fedbfed9e65507bf793dae8d2a84ac03bdd3b650a32e2d0c5ef681a5b752a622",
+          "local_change_receipt_id": "00000000-0000-4000-8000-000000000011",
+          "state": "accepted",
+          "expires_at": 1792663740000,
+          "accepted_at": 1792663195000,
+          "preview_payload_hash": "e282270b3242b78c81e938836f813da6c624e35856a7c7b4c7677b87916847d8",
+          "local_change_receipt_hash": "d8c5fec530723a846f0fc5f98877ca5ac59c238fdf0eaf4369bdaf9ca99686f8"
+        },
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "active",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status result is not metadata",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3,
+          "result": {
+            "schema_version": "sdc.support.restart-result.v1",
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "payload_hash": "b17461d76ad45ece3a3f7ceee3771cab56b6136a775e4753afacf7066423fab4",
+            "receipt_id": "00000000-0000-4000-8000-000000000012",
+            "params": {
+              "service_id": "mcs.standalone",
+              "expected_runtime_generation": "00000000000040008000000000000007",
+              "effects_profile": "mcs.standalone.restart.v1"
+            },
+            "generated_at": 1792663200000,
+            "start_receipt_id": "00000000-0000-4000-8000-000000000016",
+            "started_at": 1792663199100,
+            "drain_completed_at": 1792663199400,
+            "old_owner_exit_at": 1792663199700,
+            "handoff_receipt_id": "00000000-0000-4000-8000-000000000017",
+            "handoff_parent_receipt_id": "00000000-0000-4000-8000-000000000016",
+            "successor_runtime_generation": "00000000000040008000000000000008",
+            "ready_observed_at": 1792663199900,
+            "readiness": "ready",
+            "error_code": "NONE",
+            "grant_id": "00000000-0000-4000-8000-000000000014",
+            "service_revision": 1,
+            "supervisor_launch_id": "00000000-0000-4000-8000-00000000001b",
+            "successor_launch_id": "00000000-0000-4000-8000-00000000001b"
+          }
+        },
+        "operation": {
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Status cannot disclose grant",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "grant": {
+          "alg": "PS256",
+          "kid": "synthetic-restart-3072",
+          "purpose": "restart-execution-grant",
+          "payload": "eyJhZG1pc3Npb25faWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTMiLCJhcHByb3ZhbF9oYXNoIjoiN2ZkNDExMjgwNjIyNmExMmQyZGRhN2QyMjdjZjQyZDQwODAzYzNmZDA3ZGE1YzE2ZDEzNzcyMzFiNGFkY2E0NSIsImF1ZGllbmNlIjoic2RjOnN5bnRoZXRpYyIsImNhcGFiaWxpdHlfcmV2aXNpb24iOiJzZGMtc3VwcG9ydC1yZXN0YXJ0LWNhcGFiaWxpdGllcy12MSIsImNhc2VfZXBvY2giOjMsImNhc2VfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjaGFuZ2VfYWNjZXB0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDEwIiwiY2hhbmdlX2JpbmRpbmdfaGFzaCI6ImZlZGJmZWQ5ZTY1NTA3YmY3OTNkYWU4ZDJhODRhYzAzYmRkM2I2NTBhMzJlMmQwYzVlZjY4MWE1Yjc1MmE2MjIiLCJjaGFuZ2VfY29uc2VudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZSIsImNsYWltX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiY29uc2VudF9yZXZpc2lvbiI6InNkYy1zdXBwb3J0LXJlc3RhcnQtY29uc2VudC12MSIsImRldmljZV9lcG9jaCI6MiwiZGV2aWNlX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiZW52aXJvbm1lbnQiOiJzeW50aGV0aWMiLCJleHBpcmVzX2F0IjoxNzkyNjYzMjI5MDAwLCJncmFudF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxNCIsImdyYW50X3JlcXVlc3RfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTUiLCJpbnN0YWxsYXRpb24iOiJpbnN0YWxsYXRpb24tYSIsImludGVudF9oYXNoIjoiY2Q3ZDVhYmZiM2NmYjE4MmQxNzNmMTI0ZGJjZThhN2IyMzZhZTQ0MDU3Y2YwOTFkMzM3MWQ5MGYzMWY0NGVjNyIsImlzc3VlZF9hdCI6MTc5MjY2MzE5OTAwMCwia2V5X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwibG9jYWxfY2hhbmdlX3JlY2VpcHRfaGFzaCI6ImQ4YzVmZWM1MzA3MjNhODQ2ZjBmYzVmOTg4NzdjYTVhYzU5YzIzOGZkZjBlYWY0MzY5YmRhZjljYTk5Njg2ZjgiLCJsb2NhbF9jaGFuZ2VfcmVjZWlwdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxMSIsImxvY2FsX2NvbnNlbnRfZXBvY2giOjQsIm5vdF9iZWZvcmUiOjE3OTI2NjMxOTkwMDAsIm9wZXJhdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwYyIsIm93bmVyX2dlbmVyYXRpb24iOiJjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZCIsInBhcmFtcyI6eyJlZmZlY3RzX3Byb2ZpbGUiOiJtY3Muc3RhbmRhbG9uZS5yZXN0YXJ0LnYxIiwiZXhwZWN0ZWRfcnVudGltZV9nZW5lcmF0aW9uIjoiMDAwMDAwMDAwMDAwNDAwMDgwMDAwMDAwMDAwMDAwMDciLCJzZXJ2aWNlX2lkIjoibWNzLnN0YW5kYWxvbmUifSwicGF5bG9hZF9oYXNoIjoiYjE3NDYxZDc2YWQ0NWVjZTNhM2Y3Y2VlZTM3NzFjYWI1NmI2MTM2YTc3NWU0NzUzYWZhY2Y3MDY2NDIzZmFiNCIsInBvbGljeV9lcG9jaCI6MSwicHJldmlld19pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwZiIsInByZXZpZXdfcGF5bG9hZF9oYXNoIjoiZTI4MjI3MGIzMjQyYjc4YzgxZTkzODgzNmY4MTNkYTZjNjI0ZTM1ODU2YTdjN2I0Yzc2NzdiODc5MTY4NDdkOCIsInByb2R1Y3QiOiJoZXJtZXMtbWNzIiwicmVhbG1fZXBvY2giOiJzeW50aGV0aWMtcmVzdGFydC1yZWFsbSIsInJlY2VpcHRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTIiLCJzY2hlbWFfdmVyc2lvbiI6InNkYy5zdXBwb3J0LnJlc3RhcnQtZXhlY3V0aW9uLWdyYW50LnYxIiwic2VydmljZV9yZXZpc2lvbiI6MSwidGVuYW50IjoidGVuYW50LWEifQ",
+          "signature": "X7RDjzRB4KAk57-nVdZ3qzzS4_J8XemFv6AlJHqvl1zyGOs3MJhC9Cm5n5XK3_glxADOqnlldqFdqxhZ8y8y-mxOQWfiFuiiDMV2Zg8_WlEZaTt2tOyxpvMyWlzcJtxvLdLd5a4mqRaJNyMXmrlyKgTDoUr76JC648tYarTiKTS2V3gOODZLy9Q7A0RXGn6cvwiEFm8-I91A9nALJqh52BmFVU2vKH7UniBgCzgujUitqJsaeIU4w4Sw0e59eE9hQ915-gL_C4RqYHfONqNTARO2oNa8dlQ26PHEZq-6OSFJiHV355hMJWL2XfZlOFFmeBg2tKwiWwAIiXZLZS1KDoSPRRh42b7lg-hHa8en_PA-IaFGNOEjtVZGQl15O0jntLzKn4QRogyRAwF8kv8xMZQ6vnI26nnwZzOR7c5pKgKPzNR4E4wvoBqqlje-yP4m8T2S24w-Xtw2oYGyKtaI74syBLQG5QT6veZBIMExD0JkzW6l3OVXgA9f8nP_8NTV"
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Report null cannot be succeeded",
+      "definition": "ReportRequest",
+      "value": {
+        "schema_version": "sdc.support.restart-control.v1",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "payload_hash": "b17461d76ad45ece3a3f7ceee3771cab56b6136a775e4753afacf7066423fab4",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state_revision": 3,
+        "state": "succeeded",
+        "observed_at": 1792663200000,
+        "result": null
+      }
+    },
+    {
+      "name": "Report revision must be positive",
+      "definition": "ReportResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "state": "succeeded",
+        "state_revision": 0,
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Invented completed status",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.support.restart-response.v1",
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "receipt_id": "00000000-0000-4000-8000-000000000012",
+        "report_id": "00000000-0000-4000-8000-000000000019",
+        "report": {
+          "body_hash": "ffeb9316a0a6acf9ee71968574d7a9b6bdc8a0305bdf3a4a68c9261115a830ef",
+          "state": "succeeded",
+          "state_revision": 3
+        },
+        "operation": {
+          "state": "completed",
+          "state_revision": 3
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin scope injection",
+      "definition": "AdminRegisterRequest",
+      "value": {
+        "registration_id": "00000000-0000-4000-8000-000000000031",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "service_revision": 1,
+        "causal_evidence_supported": true,
+        "tenant": "tenant-b",
+        "csrf": "1792663200.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "Admin arbitrary service",
+      "definition": "AdminRegisterRequest",
+      "value": {
+        "registration_id": "00000000-0000-4000-8000-000000000031",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "service_revision": 1,
+        "causal_evidence_supported": true,
+        "service_id": "arbitrary",
+        "csrf": "1792663200.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "Admin HTTP wrapper is not body",
+      "definition": "AdminRegisterResponse",
+      "value": {
+        "status": 201,
+        "data": {
+          "code": "restart_service_registered",
+          "registration": {
+            "schema_version": "sdc.support.restart-registration.v1",
+            "product": "hermes-mcs",
+            "tenant": "tenant-a",
+            "installation": "installation-a",
+            "device_id": "00000000-0000-4000-8000-000000000001",
+            "environment": "synthetic",
+            "service_id": "mcs.standalone",
+            "effects_profile": "mcs.standalone.restart.v1",
+            "service_revision": 1,
+            "state": "active",
+            "realm_epoch": "synthetic-restart-realm",
+            "policy_epoch": 1,
+            "device_epoch": 2,
+            "not_before": 1792659600000,
+            "expires_at": 1792749600000,
+            "causal_evidence_supported": true
+          }
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin wrong result branch",
+      "definition": "AdminRegisterResponse",
+      "value": {
+        "code": "restart_service_revoked",
+        "registration": {
+          "schema_version": "sdc.support.restart-registration.v1",
+          "product": "hermes-mcs",
+          "tenant": "tenant-a",
+          "installation": "installation-a",
+          "device_id": "00000000-0000-4000-8000-000000000001",
+          "environment": "synthetic",
+          "service_id": "mcs.standalone",
+          "effects_profile": "mcs.standalone.restart.v1",
+          "service_revision": 1,
+          "state": "revoked",
+          "realm_epoch": "synthetic-restart-realm",
+          "policy_epoch": 1,
+          "device_epoch": 2,
+          "not_before": 1792659600000,
+          "expires_at": 1792749600000,
+          "causal_evidence_supported": true
+        },
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin read bounded twenty",
+      "definition": "AdminReadResponse",
+      "value": {
+        "code": "restart_operations",
+        "operations": [
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          },
+          {
+            "operation_id": "00000000-0000-4000-8000-00000000000c",
+            "case_id": "00000000-0000-4000-8000-000000000002",
+            "state": "approved",
+            "intent_hash": "cd7d5abfb3cfb182d173f124dbce8a7b236ae44057cf091d3371d90f31f44ec7",
+            "payload_hash": null,
+            "expires_at": 1792663800000,
+            "state_revision": 1
+          }
+        ],
+        "request_id": "00000000-0000-4000-8000-000000000030"
+      }
+    },
+    {
+      "name": "Admin opaque unknown free field",
+      "definition": "AdminProposeRequest",
+      "value": {
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "inspection_id": "00000000-0000-4000-8000-00000000000a",
+        "reason": "synthetic-refused",
+        "csrf": "1792663200.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ]
+}

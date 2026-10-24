@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "公開構成情報の送信を通常監視とは別の同意で利用可能に",
+  "summary": "mcs inventory enableで公開パッケージ名を明示し、画面で同意した場合だけ、採取した構成情報を防御センターへ送信できます。通常の状態通知を先に送り、構成情報は1回のtickで1ページだけ送るため、未完了の転送で状態監視を止めません。",
+  "upgrade": "既定は無効です。mcs connectの接続後、mcs inventory enable --public-package NAMEで公開名を個別に指定し、表示内容を確認して許可してください。中央側の許可も必要です。確認はmcs inventory status、停止はmcs inventory disableです。既存の状態通知の項目・5分周期・sequenceは変更しません。",
+  "details": [
+    "採取は6時間ごと。コード版・runtime・Python版の既知の変更は未完了転送の終了後に前倒し採取する。1ページ16KiB・最大32ページで、選択済みPythonだけを使い、任意パスやURLを入力しない。",
+    "ACKを確認できない場合は、私有領域に保存した同じsnapshot_idと同じbytesを再送し、内容を作り直さない。拒否・衝突は停止し、混雑・一時障害は専用backoffを使う。",
+    "ローカルの許可は対象deviceと既存接続先に固定し、取消・未接続・時計未確認・中央停止では採取も通信も行わない。"
+  ],
+  "refs": ["adapters/sdc/inventory_sender.py", "mcs/ops/sdc_inventory_cli.py", "mcs/ops/sdc_cli.py"]
+}

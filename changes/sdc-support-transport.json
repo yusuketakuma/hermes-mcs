@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "遠隔支援専用の固定通信部品を追加",
+  "summary": "承認済みの支援専用接続先へ7種類の固定POSTを送る署名・通信部品を追加しました。runtimeやサービスには未接続で、診断送信や遠隔支援を自動有効化しません。",
+  "upgrade": "追加設定やサービス起動はありません。支援接続先の真正性、署名された指示、本人同意、現在のscopeと権限は別途検証が必要です。既存監視の接続先・署名経路・周期は変更しません。",
+  "details": [
+    "R1と支援の許可pathを分離し、支援は完全なHMAC headerと16KiB以下の正規ASCII JSON objectだけを送ります。",
+    "既存のHTTPS・no-proxy・no-redirect・親deadline・main-thread・alarm復元・応答上限と固定エラー処理を共用します。",
+    "接続先は呼出元が承認済み設定を明示注入し、既定接続先・遠隔発見・任意URLやpathの指定を追加しません。"
+  ],
+  "refs": ["adapters/sdc/protocol.py", "adapters/sdc/transport.py"]
+}

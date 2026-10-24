@@ -139,6 +139,7 @@ def test_sweep_sends_done_only_task_list_without_view(monkeypatch):
     monkeypatch.setattr(actions_mod.text, "view_answer",
                         lambda r, allowed: [("タスク一覧", tasks)])
     act = object.__new__(actions_mod.Actions)
+    act._native_admission = None
     logs = []
     act._reg = _Reg({"c1": {"application_id": "1", "token": "t"}})
     act._dirs = {"cmd_results": "unused"}

@@ -1,0 +1,124 @@
+{
+  "schema_version": "mcs.sdc-contract-sources.v1",
+  "authority": "CSDC",
+  "source_directory": "contracts/",
+  "received_message": "2efafbcb223c43678bf78bc6e652bd66",
+  "files": {
+    "support/operation.schema.json": "629011cb45251f1eb754bffb2a5269b9bbc8db3ed3d54fbd7c5c58d2c194f899",
+    "support/diagnostic-result.schema.json": "3e053b49b89f08a89d604fcf32659cb881e37c82b4c94de99536ffc346db6d01",
+    "support/signature-vectors.json": "cbbb89418e1018b3845789767aa3119601203e4bb2a1fd26e36b59b5b348cd3c",
+    "fleet/enrollment-response.schema.json": "a9a636b921646ede27b6ce2814a2e48e0aed06bc5f7207f495766dcf625696a1",
+    "fleet/enrollment-response-vectors.json": "3237226e9cc2138d4b59d74706f22635eda842b131b850f70006a53eb14e95a2",
+    "support/control.schema.json": "dfa4f3c15d12daf364794d69b98e135b1cc031ab10c06196be1ccdca9de9cb8c",
+    "support/control-vectors.json": "f441b4a0653cab01785ba1d1cd99d724b6bca8244f3d0147effc43e83b561a4d",
+    "support/consent-preview.schema.json": "6ce35be89be56954465073c8c9a12f9dc8522d84ca42621d70d71da15b2447b1",
+    "support/consent-preview-vectors.json": "429f265eeab795c8b014b49162944540dd3b55dfe1ef7fb41956ef82f5de11ff",
+    "support/restart-wire.schema.json": "bb1247e045ad5fa68dd41f0c6e66ffe2b83cef4b99d64d69cd53bee8c99405fd",
+    "support/restart-wire-vectors.json": "c762292b09d2b2b62d8d244b1724e83151d7d9cc7a8fdbc2a3905869efd9debe",
+    "support/restart-signature-vectors.json": "3a524fcf0e63a4c43ddca16241ef2eec50db8dcd4087898cafcf34768211783d",
+    "support/restart-api.schema.json": "4906f936abcd2bed17007608f13bc4f27292f2ea5afb2928bed123a9557fedf4",
+    "support/restart-api-vectors.json": "2ac562fa25c4b74e86215cc1aea8d0fbd797af878dccd22c8272ec307bb90921",
+    "support/restart-registration.schema.json": "01a05565e821ab0b134e69903513b97c3608779da1818de217dad6fd87d774d8",
+    "support/restart-registration-vectors.json": "eb6ce02d696631810d3ab58ce98085407d8303da7adb1389eb98439e1338387c",
+    "provision/provision.schema.json": "b2bea5be19d01a3fb3021408145e39aa9f8a4cd2d76fd7acc0d54c404f2b3649",
+    "provision/provision-vectors.json": "d6c49ea2dc62d5780f87b8f26f3cb9106f7b36ca36fa66f88b84bcd396fd81aa",
+    "diagnostics/diagnostics.schema.json": "ada29dd8777db53672e75a14a16fc1ed175135a34c4fdb21e56e29908b3ac427",
+    "diagnostics/diagnostics-vectors.json": "97ee03a1766fc538ac5c505a508b5e16f765b64c698c76b8bf04218a1b561fae"
+  },
+  "status": "contract_snapshot_only",
+  "central_integration": "provided_central_synthetic_427_passed_pregrant_status_real_acceptance_pending",
+  "product_crypto_acceptance": false,
+  "customer_enabled": false,
+  "note": "Copies are byte-identical inputs for product-side compatibility checks. No credentials, live configuration or private signing keys. Updating a local copy does not redefine the central contract.",
+  "central_result_tree_sha256": "d3d6cee60390839155c18712facc5bcd72ad862c874e8a9fcfe07ac9e4e5abd5",
+  "openapi_reference": {
+    "source_path": "docs/api/support-openapi.yaml",
+    "sha256": "de8df39244b8646d094f328081110169de826dc86425399099f27c492cabef31",
+    "vendored": false
+  },
+  "evidence_correction_message": "2efafbcb223c43678bf78bc6e652bd66",
+  "restart_component": {
+    "received_message": "e2dc0a2ffff54d38922548e37af4b2d1",
+    "packet_sha256": "e94e5b7d1485549b77bd1f8c9614ae0071aeed1c386bb1f0f0aea38b58e3d1ba",
+    "central_result_tree_sha256": "746ca9a325b3ba5ef527c4c62dcdc61084a2ba5db6fecfb8eabc181b717424a8",
+    "provided_synthetic_passed": 465,
+    "status": "pure_contract_snapshot_only",
+    "api_runtime_connected": false,
+    "real_environment_accepted": false,
+    "files": [
+      "support/restart-wire.schema.json",
+      "support/restart-wire-vectors.json",
+      "support/restart-signature-vectors.json"
+    ]
+  },
+  "restart_api_component": {
+    "received_message": "97a68f57f2a7401b8a61e4a6ce8857f2",
+    "packet_sha256": "5a4dbfca99d765c192b2cdf8e0cc272fdf263a6b72b74fb5881a05f907ccf5fa",
+    "central_result_tree_sha256": "267e4dbde0d62ee7a5788beee80f8119ae7f2f29bb0e7a26cd88556a9139a9e0",
+    "provided_synthetic_passed": 523,
+    "status": "central_api_synthetic_accepted_product_connection_pending",
+    "product_runtime_connected": false,
+    "real_environment_accepted": false,
+    "files": {
+      "support/restart-api.schema.json": "contracts/support/restart-api.schema.json",
+      "support/restart-api-vectors.json": "contracts/support/restart-api-vectors.json"
+    },
+    "openapi_reference": {
+      "source_path": "docs/api/restart-openapi.yaml",
+      "sha256": "4e0e5d2d6b9ed914d06be36f15534b38a1bec1a1544796238295c50813ca944b",
+      "vendored": false,
+      "reason": "Retain the central relative schema references; use the two byte-identical local JSON inputs for product compatibility."
+    }
+  },
+  "restart_registration_component": {
+    "packet_sha256": "3f38a7fb0e5f1f6f972b4196795da596c7b011d3a837f7098b04350777ec9de9",
+    "central_source_tree_sha256": "cf49b8c94c13c464df975fad94fbaa8a2a08d839df5065ffce81d4bb01eae562",
+    "provided_synthetic_passed": 555,
+    "status": "central_api_synthetic_accepted_product_caller_pending",
+    "product_runtime_connected": false,
+    "real_environment_accepted": false,
+    "trusted_origin_and_pin_distribution_complete": false,
+    "files": {
+      "support/restart-registration.schema.json": "contracts/support/restart-registration.schema.json",
+      "support/restart-registration-vectors.json": "contracts/support/restart-registration-vectors.json"
+    },
+    "openapi_reference": {
+      "source_path": "docs/api/restart-registration-openapi.yaml",
+      "sha256": "c8ac8df14d1b19b397a836c736910e5f57515dc11e5b116985aa7cabb2d67eb9",
+      "vendored": false,
+      "reason": "Retain central relative references to existing restart OpenAPI and schemas."
+    }
+  },
+  "provision_and_diagnostic_events": {
+    "received_message": "1dd4938795e1440ab8d4f3c6612ab33f",
+    "packet_sha256": "c6e6537ad555d75ffda912632628870adc42ad4307c7ada94c8efaba44f6c04c",
+    "central_source_tree_sha256": "cf7a78f24093c5c7d29df28207cc2af7b03950d7e16485de40ec86840a079c42",
+    "provided_synthetic_passed": 660,
+    "central_source_files_verified": 152,
+    "status": "central_contract_received_product_validation_in_progress",
+    "product_runtime_connected": false,
+    "real_environment_accepted": false,
+    "trusted_origin_and_pin_distribution_complete": false,
+    "customer_enabled": false,
+    "files": [
+      "provision/provision.schema.json",
+      "provision/provision-vectors.json",
+      "diagnostics/diagnostics.schema.json",
+      "diagnostics/diagnostics-vectors.json"
+    ],
+    "openapi_references": [
+      {
+        "source_path": "docs/api/provision-openapi.yaml",
+        "sha256": "a1acfba9bda3da090722e0d295097243d96c0fc6f1ac17a3255d67aacc17815e",
+        "vendored": false,
+        "reason": "Preserve central relative schema references; product compatibility reads the byte-identical local JSON copies."
+      },
+      {
+        "source_path": "docs/api/diagnostics-openapi.yaml",
+        "sha256": "d45e84c50073fb1f5515120d4e25f8e85136859a7746b3cad7e68c1897d1fab5",
+        "vendored": false,
+        "reason": "Preserve central relative schema references; product compatibility reads the byte-identical local JSON copies."
+      }
+    ]
+  }
+}

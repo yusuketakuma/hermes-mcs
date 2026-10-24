@@ -264,3 +264,106 @@ def test_native_flags_and_confirmation_cross_transport_fail_closed(route):
     got = json.loads(commands.answer(other, raw, user="operator", channel="789"))
     assert got == {"ok": False, "error": "origin_mismatch"}
     assert not list((route.data / "cmd").glob("*.json"))
+
+
+def test_slack_ack_close_refuses_before_any_native_work(monkeypatch):
+    gate = commands.NativeAdmission()
+    settings = {'team_id': 'team', 'application_id': 'app', 'channel_id': 'channel',
+                'profile': 'synthetic', 'allowed_user_ids': {'operator'}}
+    action = SlackActions(None, settings, {'flags': 'unused'}, None, None,
+                          lambda *a, **k: None, native_admission=gate)
+    action._active = True
+    monkeypatch.setattr(commands, 'answer', lambda *a, **k: pytest.fail('native work'))
+    async def ack():
+        gate.close()
+    asyncio.run(action._command(ack, {'team_id': 'team', 'api_app_id': 'app',
+        'user_id': 'operator', 'channel_id': 'channel', 'text': '{}'}))
+    assert gate.snapshot() == {'open': False, 'queued': 0, 'running': 0}
+
+
+def test_discord_defer_close_refuses_before_native_submission(monkeypatch):
+    from adapters.discord import standalone
+    gate = commands.NativeAdmission()
+    command = object.__new__(standalone._Commands)
+    command.native_admission = gate
+    command.settings = {}
+    command.handler = lambda *a, **k: pytest.fail('native work')
+    monkeypatch.setattr(standalone, '_native_context', lambda *a, **k: {'synthetic': True})
+    async def defer(**kwargs):
+        gate.close()
+    interaction = SimpleNamespace(response=SimpleNamespace(defer=defer))
+    asyncio.run(command._slash(interaction, '{}'))
+    assert gate.snapshot() == {'open': False, 'queued': 0, 'running': 0}
+
+
+def test_slack_gate_race_after_current_check_uses_fixed_private_failure(monkeypatch):
+    gate = commands.NativeAdmission()
+    settings = {'team_id': 'team', 'application_id': 'app', 'channel_id': 'channel',
+                'profile': 'synthetic', 'allowed_user_ids': {'operator'}}
+    action = SlackActions(None, settings, {'flags': 'unused'}, None, None,
+                          lambda *a, **k: None, native_admission=gate)
+    action._active = True
+    sent = []
+    async def ack():
+        pass
+    async def interactive(**kwargs):
+        gate.close()
+        return True
+    async def say(channel, user, text):
+        sent.append((channel, user, text))
+    monkeypatch.setattr(action, '_interactive', interactive)
+    monkeypatch.setattr(action, '_say', say)
+    monkeypatch.setattr(commands, 'answer', lambda *a, **k: pytest.fail('native work'))
+    asyncio.run(action._command(ack, {'team_id': 'team', 'api_app_id': 'app',
+        'user_id': 'operator', 'channel_id': 'channel', 'text': 'CANARY'}))
+    assert sent == [('channel', 'operator', commands.NATIVE_ADMISSION_CLOSED_TEXT)]
+    assert gate.snapshot()['queued'] == gate.snapshot()['running'] == 0
+
+
+@pytest.mark.parametrize('failure', [None, 'create_dm', 'send'])
+def test_discord_message_admission_refusal_is_private_only(monkeypatch, failure):
+    from adapters.discord import standalone
+    gate = commands.NativeAdmission()
+    command = object.__new__(standalone._Commands)
+    command.native_admission, command.bot = gate, object()
+    command.settings = {'allowed_user_ids': {'operator'}, 'allowed_chat_ids': {'channel'},
+                        'guild_id': 'guild', 'profile': 'synthetic'}
+    command.handler = lambda *a, **k: pytest.fail('native work')
+    sent, calls = [], []
+    async def private_send(text, **kwargs):
+        if failure == 'send':
+            raise OSError('synthetic')
+        sent.append((text, kwargs))
+    async def create_dm():
+        calls.append('dm')
+        if failure == 'create_dm':
+            raise OSError('synthetic')
+        return SimpleNamespace(send=private_send)
+    async def single_post(bot, factory):
+        assert bot is command.bot
+        calls.append('single_post')
+        return await factory()
+    no_mentions = object()
+    monkeypatch.setattr(standalone.delivery, 'single_post', single_post)
+    monkeypatch.setattr(standalone.cards, 'no_pings', lambda: no_mentions)
+    original = standalone._native_context
+    def authorize_then_close(*args, **kwargs):
+        identity = original(*args, **kwargs)
+        assert identity is not None
+        gate.close()
+        return identity
+    monkeypatch.setattr(standalone, '_native_context', authorize_then_close)
+    message = SimpleNamespace(content='/mcs CANARY', id='message',
+        author=SimpleNamespace(id='operator', bot=False, create_dm=create_dm),
+        channel=SimpleNamespace(id='channel', send=lambda *a, **k: pytest.fail('public send')),
+        guild=SimpleNamespace(id='guild'), webhook_id=None, message_snapshots=None)
+    asyncio.run(command._message(message))
+    assert calls == (['dm'] if failure == 'create_dm' else ['dm', 'single_post'])
+    assert sent == ([] if failure else [(commands.NATIVE_ADMISSION_CLOSED_TEXT,
+                                        {'allowed_mentions': no_mentions})])
+    # An unapproved actor never reaches the admission gate or any DM fallback.
+    monkeypatch.setattr(standalone, '_native_context', original)
+    message.author.id = 'unapproved'
+    calls.clear()
+    asyncio.run(command._message(message))
+    assert calls == []

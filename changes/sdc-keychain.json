@@ -1,0 +1,12 @@
+{
+  "category": "security",
+  "title": "顧客向け防御センター資格情報のKeychain保存基盤を追加",
+  "summary": "顧客向けConnectorの資格情報を、専用serviceとローカルで生成するランダムIDのKeychain項目だけで読み書きできます。ロック・認証拒否・未登録・利用不可を区別し、平文ファイルや環境変数へ切り替えません。",
+  "upgrade": "この基盤だけでは既存資格情報の移動・削除や顧客接続の有効化は行いません。顧客用の新規私有領域を作る呼出元へ別途接続し、実MacのKeychain受入を完了する必要があります。既存のR1自己検証用ファイル保存は変更しません。",
+  "details": [
+    "標準ライブラリのctypesで固定されたOS標準Security/CoreFoundation frameworksを必要時だけ読み込み、秘密を子プロセスの引数・環境・標準出力へ渡さない。",
+    "汎用Python向けにfile-based Keychainを使う。操作中だけプロセスの認証UI許可を抑止して元へ戻し、unlockやACL変更は行わない。",
+    "JSON blobは4KiB以下。初回追加と同一項目の更新を区別し、他サービスの項目や任意のアカウント名を扱わない。"
+  ],
+  "refs": ["adapters/sdc/keychain.py", "tests/adapters/sdc/test_sdc_keychain.py"]
+}

@@ -28,21 +28,24 @@ def test_connector_failure_removes_handlers_and_releases_runtime_lock(tmp_path, 
         await original_sleep(0)
 
     monkeypatch.setattr(runtime.asyncio, "sleep", yield_once)
-    handlers = {}
+    original_handlers = {sig: object() for sig in (runtime.signal.SIGTERM, runtime.signal.SIGINT)}
+    handlers = dict(original_handlers)
+
+    def register(sig, handler):
+        previous, handlers[sig] = handlers[sig], handler
+        return previous
+
+    monkeypatch.setattr(runtime.signal, "signal", register)
+    monkeypatch.setattr(runtime.signal, "getsignal", handlers.__getitem__)
     calls = []
 
-    async def connector(root, stopping):
+    async def connector(root, stopping, *, native_admission, delivery_admission, delivery_identity):
         calls.append(True)
         raise failure("synthetic connector ended")
 
     async def scenario():
-        loop = asyncio.get_running_loop()
-        monkeypatch.setattr(loop, "add_signal_handler",
-                            lambda sig, *args: handlers.__setitem__(sig, args))
-        monkeypatch.setattr(loop, "remove_signal_handler",
-                            lambda sig: handlers.pop(sig, None))
         assert await runtime.serve(tmp_path, cfg, connector) == 0
-        assert handlers == {}
+        assert handlers == original_handlers
         # one attempt, then the backoff holds the next one
         assert calls == [True] and ticks[-1] == "waiting"
 
@@ -52,22 +55,22 @@ def test_connector_failure_removes_handlers_and_releases_runtime_lock(tmp_path, 
 
 
 def test_partial_signal_registration_is_removed(tmp_path, monkeypatch):
-    handlers = {}
+    original_handlers = {sig: object() for sig in (runtime.signal.SIGTERM, runtime.signal.SIGINT)}
+    handlers = dict(original_handlers)
+
+    def register(sig, handler):
+        if sig == runtime.signal.SIGINT and handler is not original_handlers[sig]:
+            raise OSError("synthetic handler registration failure")
+        previous, handlers[sig] = handlers[sig], handler
+        return previous
+
+    monkeypatch.setattr(runtime.signal, "signal", register)
+    monkeypatch.setattr(runtime.signal, "getsignal", handlers.__getitem__)
 
     async def scenario():
-        loop = asyncio.get_running_loop()
-
-        def register(sig, *args):
-            if handlers:
-                raise OSError("synthetic handler registration failure")
-            handlers[sig] = args
-
-        monkeypatch.setattr(loop, "add_signal_handler", register)
-        monkeypatch.setattr(loop, "remove_signal_handler",
-                            lambda sig: handlers.pop(sig, None))
         with pytest.raises(OSError):
             await runtime.serve(tmp_path, {"runtime_mode": "standalone"})
-        assert handlers == {}
+        assert handlers == original_handlers
 
     asyncio.run(scenario())
 

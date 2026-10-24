@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "R4b restart service registration read contract",
+  "description": "Closed central-only read of the current active restart service registration before the first inspection. Request names only the saved local case receipt; target device, tenant, revision, path and query are never accepted. Handler Result excludes the standard HTTP request_id; Response includes it. Strict UTF-8 ASCII JSON, no BOM/duplicate/unknown fields, depth<=8 and raw body<=16384 bytes precede schema validation. Shape is not current authorization, service registration, origin/pin provisioning or a new signing capability, and issues no receipt, operation, grant, inspection or pin.",
+  "x-max-raw-bytes": 16384,
+  "x-json-max-depth": 8,
+  "x-success-quota": {
+    "resource_prefix": "restart-registration:",
+    "per_device_utc_day": 60,
+    "store": "admission_usage"
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/ReadRequest"
+    }
+  ],
+  "$defs": {
+    "UUID": {
+      "$ref": "operation.schema.json#/properties/operation_id"
+    },
+    "ActiveRegistration": {
+      "allOf": [
+        {
+          "$ref": "restart-wire.schema.json#/$defs/registration"
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "active"
+            }
+          }
+        }
+      ],
+      "description": "Unchanged R4b wire registration record restricted to state=active; revoked or absent registration is 403 SCOPE_DENIED, never null."
+    },
+    "ReadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "case_id",
+        "local_receipt_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-registration-read.v1"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "local_receipt_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "Exact case and saved local case receipt IDs only. Identical body resent is a new read and is counted again."
+    },
+    "ReadResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "case_id",
+        "local_receipt_id",
+        "registration"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-registration-response.v1"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "local_receipt_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "registration": {
+          "$ref": "#/$defs/ActiveRegistration"
+        }
+      },
+      "description": "Handler result. The client must not auto-migrate expected values; it compares with the saved R4a case baseline and local service before fixing the registration baseline."
+    },
+    "ReadResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "case_id",
+        "local_receipt_id",
+        "registration",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-registration-response.v1"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "local_receipt_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "registration": {
+          "$ref": "#/$defs/ActiveRegistration"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not a business receipt or execution evidence.",
+      "x-handler-result": "ReadResult"
+    },
+    "ErrorResponse": {
+      "$ref": "restart-api.schema.json#/$defs/ErrorResponse"
+    }
+  }
+}

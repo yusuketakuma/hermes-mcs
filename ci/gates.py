@@ -245,6 +245,7 @@ _PLUGIN_FORBIDDEN_TEXT = re.compile(r"\bos\.environ\b|\bshutil\.rmtree\b")
 # retain their exact existing sandbox. Privileges belong only to these files.
 _LINEWORKS_IMPORTS = {
     "sdc/transport.py": {"urllib"},  # Fixed-origin SDC transport only.
+    "sdc/keychain_owner.py": {"subprocess"},  # Fixed local native Keychain owner child only.
     "lineworks/client.py": {"subprocess", "urllib"},
     "lineworks/server.py": {"http"},
     "lineworks/__main__.py": {"asyncio"},
@@ -318,6 +319,9 @@ def gate_plugin_sandbox() -> list[str]:
         if identity == "common/commands.py":
             # Native command cancellation must await its owned synchronous work.
             async_members = {"to_thread", "create_task", "wait", "CancelledError"}
+        if identity == "common/worker.py":
+            # Hold scope ownership until the real delivery pass settles.
+            async_members |= {"create_task", "shield"}
         bad.extend(f"{path.name}:{v}" for v in
                    _module_surface(tree, "asyncio", async_members))
         for i, line in enumerate(text.splitlines(), 1):

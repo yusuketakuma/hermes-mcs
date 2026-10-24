@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "固定診断で独立動作の新鮮な稼働記録を確認",
+  "summary": "信頼済み製品rootと明示された実行方式から、独立動作のowner heartbeatとPID存在だけを読む診断providerを追加しました。通知接続の起動状態や再試行待ちを限定表示し、認証成功・配送成功・ロード済みコードの証明とは扱いません。",
+  "upgrade": "追加設定・サービス起動・自動送信はありません。呼出元が製品rootとruntime enumを固定して利用する部品です。監視の私有state rootや遠隔パラメータから読取先を選ばず、本人同意・現在権限・runner接続は別途必要です。",
+  "details": [
+    "既存のbounded private-file readerとPID0確認を再利用し、元時刻が未来でなく15秒以内、開始時刻以下でないこと、世代がUUID4 hexであることを追加確認する。欠落・古い記録・PID不在はstoppedにせずunknownへ保つ。",
+    "mode=standaloneの新鮮なowner記録だけからprocess=runningを返す。connectorのrunningはservice起動だけ、waitingと有限の将来retry_atはbackoffだけに射影する。credential設定有無と認証はunknownのまま保持する。",
+    "generated_atは組立時刻、observed_atは採用したowner記録のupdated_atをミリ秒へ変換した元時刻。採用できる根拠がなければobserved_atはnull、情報が一部だけならpartial/SOURCE_UNKNOWNとする。",
+    "config全体・秘密ファイル・Keychain・患者DB・health counts・doctor全文・生ログは読まない。subprocess・サービス制御・HTTP/DNS/TLS等の疎通probeは追加しない。installed/loaded commitと製品版、中央疎通は未確認のまま保持する。",
+    "既存のpure projectorの出力は変更せず、固定3診断の閉じたASCII DTOだけを返す。内部path・PID・世代・未知field・last_error・原例外は出力しない。"
+  ],
+  "refs": ["mcs/ops/sdc_support_diagnostics.py", "mcs_standalone/service.py", "tests/ops/test_sdc_support_diagnostics.py"]
+}

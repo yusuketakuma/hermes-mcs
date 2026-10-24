@@ -158,7 +158,8 @@ def _native_context(source, settings, *, slash):
 class _Scope:
     """Stop admission and all active native listeners when scope changes."""
 
-    def __init__(self, root, settings, stopping):
+    def __init__(self, root, settings, stopping, *, native_admission=None):
+        self.native_admission = native_admission
         self.root = root
         self.settings = settings
         self.stopping = stopping
@@ -181,7 +182,9 @@ class _Scope:
         return valid
 
     async def invoke(self, callback, *args):
-        if not self.current() or not self.admit_native:
+        if (not self.current() or not self.admit_native
+                or (self.native_admission is not None
+                    and not self.native_admission.snapshot()["open"])):
             return False
         task = asyncio.current_task()
         self.active.add(task)
@@ -218,6 +221,7 @@ class _CheckedHost:
 
 class _Commands:
     def __init__(self, host, bot, settings, scope):
+        self.native_admission = getattr(host, "native_admission", None)
         self.bot = bot
         self.settings = settings
         self.scope = scope
@@ -231,13 +235,22 @@ class _Commands:
                 ephemeral=True, allowed_mentions=cards.no_pings())
 
     async def _slash(self, interaction, raw):
-        identity = _native_context(interaction, self.settings, slash=True)
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        answer = (await native_commands.run_native(self.handler, raw, identity)
-                  if identity else '{"ok":false,"error":"native_context_rejected"}')
-        for chunk in display_text.split_body(answer, max_chunks=None):
-            await interaction.followup.send(
-                chunk, ephemeral=True, allowed_mentions=cards.no_pings())
+        try:
+            identity = _native_context(interaction, self.settings, slash=True)
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            answer = (await native_commands.run_native(
+                self.handler, raw, identity, admission=self.native_admission)
+                      if identity else '{"ok":false,"error":"native_context_rejected"}')
+            for chunk in display_text.split_body(answer, max_chunks=None):
+                await interaction.followup.send(
+                    chunk, ephemeral=True, allowed_mentions=cards.no_pings())
+        except native_commands.NativeAdmissionClosed:
+            try:
+                await interaction.followup.send(
+                    native_commands.NATIVE_ADMISSION_CLOSED_TEXT, ephemeral=True,
+                    allowed_mentions=cards.no_pings())
+            except Exception:
+                pass
 
     async def message(self, message):
         try:
@@ -246,19 +259,29 @@ class _Commands:
             _event("command_failed", error=type(exc).__name__)
 
     async def _message(self, message):
-        content = getattr(message, "content", None)
-        if not isinstance(content, str) or not content.startswith("/mcs "):
-            return
-        identity = _native_context(message, self.settings, slash=False)
-        if identity is None:
-            return
-        answer = await native_commands.run_native(self.handler, content[5:], identity)
-        # Channel input is accepted, but its snapshot/preview is only sent to
-        # the human's own DM. Never fall back to a public channel on failure.
-        target = await message.author.create_dm()
-        for chunk in display_text.split_body(answer, max_chunks=None):
-            await delivery.single_post(self.bot, functools.partial(
-                target.send, chunk, allowed_mentions=cards.no_pings()))
+        try:
+            content = getattr(message, "content", None)
+            if not isinstance(content, str) or not content.startswith("/mcs "):
+                return
+            identity = _native_context(message, self.settings, slash=False)
+            if identity is None:
+                return
+            answer = await native_commands.run_native(
+                self.handler, content[5:], identity, admission=self.native_admission)
+            # Channel input is accepted, but its snapshot/preview is only sent to
+            # the human's own DM. Never fall back to a public channel on failure.
+            target = await message.author.create_dm()
+            for chunk in display_text.split_body(answer, max_chunks=None):
+                await delivery.single_post(self.bot, functools.partial(
+                    target.send, chunk, allowed_mentions=cards.no_pings()))
+        except native_commands.NativeAdmissionClosed:
+            try:
+                target = await message.author.create_dm()
+                await delivery.single_post(self.bot, functools.partial(
+                    target.send, native_commands.NATIVE_ADMISSION_CLOSED_TEXT,
+                    allowed_mentions=cards.no_pings()))
+            except Exception:
+                pass
 
     async def error(self, interaction, error):
         _event("command_failed", error=type(error).__name__)
@@ -279,7 +302,8 @@ class _Commands:
 _event = eventlog.make_logger("mcs.standalone.discord")
 
 
-async def run(root, stopping=None):
+async def run(root, stopping=None, *, native_admission=None,
+              delivery_admission=None, delivery_identity=None):
     """Own one SDK connection and supervisor, including reconnect and shutdown."""
     from mcs_standalone.config import connector_settings, load_credentials
     from mcs_standalone.host import Host
@@ -290,8 +314,9 @@ async def run(root, stopping=None):
     settings = connector_settings(root, "discord")
     credentials = load_credentials(root, "discord")
     bot = _bot(settings, gateway=True)
-    host = Host(settings)
-    scope = _Scope(root, settings, stopping)
+    host = Host(settings, native_admission=native_admission,
+                delivery_admission=delivery_admission, delivery_identity=delivery_identity)
+    scope = _Scope(root, settings, stopping, native_admission=native_admission)
     setattr(bot, _CURRENT, scope.current)
     scope.admit_native = False
     commands = _Commands(host, bot, settings, scope)
@@ -302,16 +327,28 @@ async def run(root, stopping=None):
     bot.tree.on_error = commands.error
     bot.add_listener(commands.message, "on_message")
 
+    gateway_ready = False
+
     async def connected():
         scope.admit_native = True
 
+    async def ready():
+        nonlocal gateway_ready
+        gateway_ready = True
+        await connected()
+
     async def disconnected():
+        nonlocal gateway_ready
+        gateway_ready = False
+        if delivery_admission is not None:
+            delivery_admission.connector_starting(delivery_identity)
         # Discord replays missed Gateway events before RESUMED. Such
         # recovered input must never become a new human confirmation.
         scope.admit_native = False
 
     bot.add_listener(connected, "on_connect")
-    bot.add_listener(connected, "on_resumed")
+    bot.add_listener(ready, "on_ready")
+    bot.add_listener(ready, "on_resumed")
     bot.add_listener(disconnected, "on_disconnect")
     gateway_task = stop_task = monitor_task = None
     try:
@@ -339,26 +376,39 @@ async def run(root, stopping=None):
         stop_task = asyncio.create_task(stopping.wait())
         monitor_task = asyncio.create_task(scope.monitor())
         watched = {gateway_task, supervisor._task, stop_task, monitor_task}
-        done, _ = await asyncio.wait(watched, return_when=asyncio.FIRST_COMPLETED)
-        if not stopping.is_set():
-            for task in done:
-                task.result()
-            raise ValueError("discord_worker_stopped")
+        while not stopping.is_set():
+            if delivery_admission is not None:
+                if supervisor._ready and gateway_ready:
+                    delivery_admission.connector_ready(delivery_identity)
+                else:
+                    delivery_admission.connector_starting(delivery_identity)
+            done, _ = await asyncio.wait(watched, timeout=0.5,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if done and not stopping.is_set():
+                for task in done:
+                    task.result()
+                raise ValueError("discord_worker_stopped")
     finally:
-        try:
-            await scope.close()
-        finally:
+        if delivery_admission is not None:
+            delivery_admission.connector_closing(delivery_identity)
+
+        async def cleanup():
             try:
-                await host.close()
+                await scope.close()
             finally:
                 try:
-                    await bot.close()
+                    await host.close()
                 finally:
-                    tasks = [task for task in (gateway_task, stop_task, monitor_task)
-                             if task is not None]
-                    for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    try:
+                        await bot.close()
+                    finally:
+                        tasks = [task for task in (gateway_task, stop_task, monitor_task)
+                                 if task is not None]
+                        for task in tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+
+        await worker.await_settled(cleanup())
 
 
 def _payload(root, payload):

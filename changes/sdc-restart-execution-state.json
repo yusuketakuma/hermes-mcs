@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "再起動の受付と一度の開始判断を生存中の担当へ固定",
+  "summary": "同じ生存Runtimeだけが再起動の受付・grant照合・消費記録・開始判断へ進む保存境界を追加しました。記録の読み直しや別のStoreから実行権限を復元せず、停止・期限切れ・保存失敗は再実行を保留します。",
+  "upgrade": "追加操作は不要です。CLI・自動有効化・実サービスの再起動は追加していません。真正な登録情報・現在権限・本人同意を供給する実経路と、実機での終了・次起動の受入は別途必要です。",
+  "details": [
+    "admitと元のgrant requestのID・正確な本文・hashを送信前にfsyncし、grant本文や認証鍵を保存しない。借用StoreとRAMだけのopaque能力を固定し、保存されたowner文字列で継続を作らない。",
+    "停止と同じ短いstate lockから監視lockの順に保持し、消費記録のfsync、現在同意・資格情報・一次ACK・全束縛・期限の再検査、同期開始callbackを直列化する。この区間にHTTP・await・人入力を置かない。",
+    "消費記録を書き始める前にRAMの再試行能力を失効する。初回の空予約作成後に完全保存が失敗した場合も予約記録を保留として残し、保存不明・破損・既存phaseを別processで実行再開しない。空予約自体の作成失敗や保存領域全体の削除・巻戻しを耐久記録で証明する保証ではない。",
+    "開始した時刻はcallbackの実観測後だけ保存する。SPENTや開始は実drain・旧processの実exit・後継起動・readinessの成功証拠ではなく、結果はunknownとして保持する。後続の送信準備は既知のREPORT/STATUS metadataに限定する。"
+  ],
+  "refs": ["adapters/sdc/restart_execution.py", "adapters/sdc/storage.py"]
+}

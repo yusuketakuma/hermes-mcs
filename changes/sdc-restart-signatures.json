@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "再起動専用の署名と独立した対象bindingを検証",
+  "summary": "再起動専用の操作・短命grant・変更同意previewについて、固定公開pinと15項目の独立した対象bindingを必須にする署名検証部品を追加しました。既存の診断用R4a用途とは分離し、検証成功だけで再起動を承認・実行しません。",
+  "upgrade": "追加設定・サービス操作・通信・Keychain利用はありません。再起動CLIやruntimeへの接続、真正な公開pin配布と実機受入は別の未完工程です。既存R4aのverify_envelope/validate_pinsと用途集合は維持し、再起動用途を自動追加しません。",
+  "details": [
+    "restart-operation/restart-execution-grant/restart-consent-previewの閉じた用途だけを、新しいverify_restart_envelope/validate_restart_pinsで受け付ける。旧用途・混在用途・未知用途・重複pinは拒否する。",
+    "trusted callerの登録・保存済み承認から独立して渡された15項目を必須にし、paramsの3項目と追加expectedも実在payloadへ正確なCJSON一致で照合する。payloadからexpectedを自動生成しない。",
+    "閉じた型・hash・期限はrestart_contractの公開検証を利用し、record全有効窓がpin窓内に収まることを確認する。allow_expiredの既定はfalse。trueはrecordとpinの現在期限を超えた保存済み証拠の歴史照合だけで、未来のnot_beforeや窓外recordは拒否し、新通信・現在認可・再実行を許可しない。通信前のvalidate_restart_pinsに履歴例外は設けない。",
+    "既存の共通RSA3072/e65537/PS256 SHA256・MGF1 SHA256・salt32と固定OS openssl経路を再利用し、envelope16KiB・payload8KiB・深さ8・safe整数・ASCII CJSON・重複key・base64urlを検証する。別のPSS実装や秘密鍵を追加しない。",
+    "固定引数・最小環境・0600一時公開key/signatureとcleanup、5秒期限・中止時の既存owned_process停止/回収、固定エラーを維持する。中央の公開合成3vectorと改変・旧用途拒否・対象不一致・期限・DER・timeout/cancelの回帰を追加する。"
+  ],
+  "refs": ["mcs/ops/sdc_support_signatures.py", "adapters/sdc/restart_contract.py", "adapters/sdc/contracts/support/restart-signature-vectors.json", "tests/ops/test_sdc_restart_signatures.py"]
+}

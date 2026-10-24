@@ -91,10 +91,30 @@ def _command_parts(command) -> list[str]:
             for part in command]
 
 
+_KEYCHAIN_CHILDREN = ("sdc_keychain.py", "sdc_keychain_read.py")
+
+
+def _shell_tokens(parts, depth=0):
+    for part in parts:
+        yield part
+        if depth < 3 and any(c.isspace() for c in part):
+            yield from _shell_tokens(_command_parts(part), depth + 1)
+
+
+def _keychain_child(token: str) -> bool:
+    token = token.rstrip(";&|)")
+    return (os.path.basename(token) in _KEYCHAIN_CHILDREN
+            or token in {"mcs.ops.sdc_keychain", "mcs.ops.sdc_keychain_read"})
+
+
 def _blocked_process(command, env=None) -> bool:
     parts = _command_parts(command)
     if not parts:
         return False
+    # The native Keychain owner child (and its retired name) must never start in synthetic
+    # tests, including as the entry itself, via `-m`, or inside a `sh -c` script string.
+    if any(_keychain_child(token) for token in _shell_tokens(parts)):
+        return True
     executable = os.path.basename(parts[0]).casefold()
     if executable == "security":
         return True

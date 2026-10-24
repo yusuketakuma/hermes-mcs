@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "遠隔支援の操作と個別承認・実行grantを照合する部品を追加",
+  "summary": "固定診断のoperationと個別承認を信頼済み同意対象へ結び、grantを保存済みreceipt・要求ID・世代へ照合する純粋な部品を追加しました。runnerや送信には未接続です。",
+  "upgrade": "追加操作・サービス起動はありません。この照合だけでは署名の真正性、本人同意、現在の認証情報・権限、実行開始の許可は成立しません。",
+  "details": [
+    "所属・端末・case・audience・全epoch・診断範囲と操作者を照合し、個別承認のintent・actor・hashをoperationへ結びます。case同意の承認者とは区別します。",
+    "previewの表示期限と同意期限を区別し、同意期限内でもoperation・approval・grantそれぞれの現在期限を検証し、grantが個別承認の期限を越えないことも照合します。",
+    "grantの要求ID・receipt・admission・owner generationはローカル保存値と一致させます。同じ生存continuation・単調時刻の残予算・STARTED CASは後続runnerの責務です。"
+  ],
+  "refs": ["adapters/sdc/support_authorization.py", "adapters/sdc/support_contract.py"]
+}

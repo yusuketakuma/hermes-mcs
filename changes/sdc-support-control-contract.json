@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "遠隔支援の操作5POSTを固定DTOで検証する部品を追加",
+  "summary": "poll・admit・grant・report・statusの閉じたrequest/responseを検証する純粋な部品を追加しました。通信・署名実行・runner・有効化は未接続です。",
+  "upgrade": "追加操作・サービス起動はありません。DTOの形が正しくても本人同意・現在の権限・receiptの一致・実行許可は別途必要です。既存preview/acceptは移動しません。",
+  "details": [
+    "正規ASCII JSONと16KiB上限、型・UUID・hash・enum・対応requestのecho IDを検証します。pollの個別承認は歴史的な型と自己hashだけを検証し、署名・現在期限・operationとの結合はrunnerへ残します。",
+    "3種類の診断結果の閉じた項目、生成時刻とsource観測時刻、report生成時刻との一致を検証します。",
+    "statusのreport=nullは未観測のまま保持し、未受理や失敗、再実行許可へ変換しません。body_hashは元raw reportのhashとして返し、ローカル期待値との照合はrunnerが行います。"
+  ],
+  "refs": ["adapters/sdc/support_control.py", "adapters/sdc/contracts/support/control.schema.json"]
+}

@@ -1,0 +1,1614 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ERR-01..07 fixed diagnostic events contract",
+  "description": "Central-owned closed contract for case-independent automatic diagnostic events (ERR-01..05,07) and the case-bound 16KiB fixed artifact (ERR-06). Strict UTF-8 JSON, no BOM, duplicate or unknown keys, depth<=8, raw body<=16384 bytes. Off unless DIAGNOSTICS_ENABLED and a current per-device admin grant exist. Never carries patient data, secrets, paths, URLs, exception text, free text, raw logs, files or commands. R1 heartbeat and every R4 wire are unchanged.",
+  "x-max-raw-bytes": 16384,
+  "x-json-max-depth": 8,
+  "x-limits": {
+    "max_body_bytes": 16384,
+    "events_per_batch": 64,
+    "count_max": 100000,
+    "dropped_max": 1000000,
+    "bucket_ms": 600000,
+    "max_age_ms": 604800000,
+    "max_future_ms": 300000,
+    "device_batches_day": 288,
+    "tenant_batches_day": 20000,
+    "device_status_day": 1440,
+    "status_batch_ids": 16,
+    "case_artifacts": 8,
+    "retention_ms": 604800000,
+    "receipt_retention_ms": 15552000000,
+    "artifact_approval_ms": 1800000,
+    "consent_min_ms": 60000,
+    "consent_max_ms": 7776000000,
+    "read_rows": 500,
+    "spool_events": 1000,
+    "spool_bytes": 1048576,
+    "spool_age_ms": 604800000,
+    "max_retries": 3,
+    "observer_timeout_ms": 2000
+  },
+  "x-quota": {
+    "store": "admission_usage",
+    "device_batches": {
+      "resource_prefix": "diag-events:",
+      "per_utc_day": 288
+    },
+    "tenant_batches": {
+      "resource": "diag-events",
+      "per_utc_day": 20000
+    },
+    "device_status": {
+      "resource_prefix": "diag-status:",
+      "per_utc_day": 1440
+    },
+    "case_artifact_approvals_per_case": 8,
+    "replay_counts": false
+  },
+  "x-retention": {
+    "content_days": 7,
+    "receipt_tombstone_days": 180,
+    "artifact_content": "min(case content_expires_at, accepted+7d)",
+    "delete": "explicit admin deletion removes content only; tombstones keep same-ID 409"
+  },
+  "x-spool": {
+    "max_events": 1000,
+    "max_bytes": 1048576,
+    "max_age_ms": 604800000,
+    "overflow": "drop oldest first and add the count to dropped_events",
+    "retry": "same batch_id and identical bytes, status before resend, at most 3 resends"
+  },
+  "x-replay": "Stored IDs are matched (authenticated scope, then bytes) before freshness; identical bytes replay the receipt even after content expiry, other bytes are 409; only new IDs need fresh buckets.",
+  "x-authorization": "Every replay of a stored admin result rechecks current authority; reads are audited.",
+  "x-status-semantics": "accepted means only that matching stored receipt metadata exists; unknown proves neither absence of sending nor loss; status/read never grants.",
+  "$defs": {
+    "UUID": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "SHA256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "Event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "stage",
+        "code",
+        "severity",
+        "bucket_start",
+        "count"
+      ],
+      "properties": {
+        "component": {
+          "enum": [
+            "runtime",
+            "scheduler",
+            "notification",
+            "connectivity",
+            "update",
+            "storage",
+            "config",
+            "connector"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "startup",
+            "run",
+            "send",
+            "receive",
+            "apply",
+            "verify",
+            "shutdown",
+            "unknown"
+          ]
+        },
+        "code": {
+          "enum": [
+            "TIMEOUT",
+            "UNAVAILABLE",
+            "REJECTED",
+            "INVALID_STATE",
+            "RESOURCE_LIMIT",
+            "PERMISSION_DENIED",
+            "CONFLICT",
+            "INTEGRITY_FAILURE",
+            "CRASH",
+            "UNKNOWN"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ]
+        },
+        "bucket_start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "multipleOf": 600000
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        }
+      },
+      "description": "Fixed enums and integers only; no free text. bucket_start is also bounded to now-7d..now+5min at the receiver."
+    },
+    "Batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "batch_id",
+        "consent_epoch",
+        "events",
+        "dropped_events",
+        "partial"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.events.v1"
+        },
+        "batch_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/Event"
+          },
+          "x-unique-key": [
+            "component",
+            "stage",
+            "code",
+            "severity",
+            "bucket_start"
+          ]
+        },
+        "dropped_events": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "partial": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "batch_id",
+        "state",
+        "content_state",
+        "consent_epoch",
+        "event_count",
+        "dropped_events",
+        "partial",
+        "accepted_at",
+        "content_expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.receipt.v1"
+        },
+        "batch_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "const": "accepted"
+        },
+        "content_state": {
+          "enum": [
+            "stored",
+            "expired",
+            "deleted"
+          ]
+        },
+        "consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "event_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "dropped_events": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "accepted_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "content_expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "StatusRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "batch_ids"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.status-request.v1"
+        },
+        "batch_ids": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/UUID"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "Status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "consent",
+        "batches"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.status.v1"
+        },
+        "consent": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "consent_epoch",
+                "expires_at"
+              ],
+              "properties": {
+                "state": {
+                  "const": "active"
+                },
+                "consent_epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "consent_epoch",
+                "expires_at"
+              ],
+              "properties": {
+                "state": {
+                  "const": "inactive"
+                },
+                "consent_epoch": {
+                  "type": "null"
+                },
+                "expires_at": {
+                  "type": "null"
+                }
+              }
+            }
+          ]
+        },
+        "batches": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "batch_id",
+                  "state",
+                  "content_state"
+                ],
+                "properties": {
+                  "batch_id": {
+                    "$ref": "#/$defs/UUID"
+                  },
+                  "state": {
+                    "const": "accepted"
+                  },
+                  "content_state": {
+                    "enum": [
+                      "stored",
+                      "expired",
+                      "deleted"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "batch_id",
+                  "state",
+                  "content_state"
+                ],
+                "properties": {
+                  "batch_id": {
+                    "$ref": "#/$defs/UUID"
+                  },
+                  "state": {
+                    "const": "unknown"
+                  },
+                  "content_state": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "Artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "case_id",
+        "events",
+        "dropped_events",
+        "partial"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.case-artifact.v1"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/Event"
+          },
+          "x-unique-key": [
+            "component",
+            "stage",
+            "code",
+            "severity",
+            "bucket_start"
+          ]
+        },
+        "dropped_events": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "partial": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ArtifactSubmit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "artifact_id",
+        "approval_id",
+        "case_id",
+        "case_epoch",
+        "local_consent_epoch",
+        "artifact_sha256",
+        "artifact"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.case-artifact-submit.v1"
+        },
+        "artifact_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/SHA256"
+        },
+        "artifact": {
+          "$ref": "#/$defs/Artifact"
+        }
+      },
+      "description": "artifact_sha256 = SHA-256 of the restricted CJSON of artifact; it identifies bytes and is never consent evidence."
+    },
+    "ArtifactReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "artifact_id",
+        "approval_id",
+        "case_id",
+        "artifact_sha256",
+        "state",
+        "content_state",
+        "accepted_at",
+        "content_expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.case-artifact-receipt.v1"
+        },
+        "artifact_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/SHA256"
+        },
+        "state": {
+          "const": "accepted"
+        },
+        "content_state": {
+          "enum": [
+            "stored",
+            "expired",
+            "deleted"
+          ]
+        },
+        "accepted_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "content_expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "ConsentGrantRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consent_id",
+        "device_id",
+        "expires_at"
+      ],
+      "properties": {
+        "consent_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "description": "expires_at within now+60s..now+90d and, for customers, the monitoring contract."
+    },
+    "ConsentRevokeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revocation_id",
+        "consent_id"
+      ],
+      "properties": {
+        "revocation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "consent_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "DeviceReadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device_id"
+      ],
+      "properties": {
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "EventDeleteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deletion_id",
+        "device_id"
+      ],
+      "properties": {
+        "deletion_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "ArtifactApprovalRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id",
+        "artifact_id",
+        "case_id",
+        "device_id",
+        "case_epoch",
+        "local_consent_epoch",
+        "artifact_sha256",
+        "artifact_size"
+      ],
+      "properties": {
+        "approval_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "artifact_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "local_consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/SHA256"
+        },
+        "artifact_size": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 16384
+        }
+      },
+      "description": "Individual approval by the case approver; valid at most 30 minutes and once."
+    },
+    "ArtifactReadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "device_id"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "ConsentScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consent_revision",
+        "target",
+        "fields",
+        "components",
+        "content_retention_days",
+        "receipt_retention_days",
+        "max_validity_days",
+        "excluded"
+      ],
+      "properties": {
+        "consent_revision": {
+          "const": "sdc-diagnostic-events-consent-v1"
+        },
+        "target": {
+          "const": "device"
+        },
+        "fields": {
+          "const": [
+            "component",
+            "stage",
+            "code",
+            "severity",
+            "bucket_start",
+            "count",
+            "dropped_events",
+            "partial"
+          ]
+        },
+        "components": {
+          "const": [
+            "runtime",
+            "scheduler",
+            "notification",
+            "connectivity",
+            "update",
+            "storage",
+            "config",
+            "connector"
+          ]
+        },
+        "content_retention_days": {
+          "const": 7
+        },
+        "receipt_retention_days": {
+          "const": 180
+        },
+        "max_validity_days": {
+          "const": 90
+        },
+        "excluded": {
+          "const": [
+            "patient_data",
+            "secrets",
+            "paths",
+            "urls",
+            "exception_text",
+            "free_text",
+            "raw_logs",
+            "files",
+            "commands"
+          ]
+        }
+      },
+      "description": "Shown to the approver; a status or read is never a grant."
+    },
+    "Consent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consent_id",
+        "device_id",
+        "consent_epoch",
+        "consent_revision",
+        "granted_by",
+        "not_before",
+        "expires_at",
+        "revoked_at",
+        "active"
+      ],
+      "properties": {
+        "consent_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "consent_revision": {
+          "const": "sdc-diagnostic-events-consent-v1"
+        },
+        "granted_by": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "not_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "revoked_at": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active": {
+          "type": "boolean"
+        }
+      }
+    },
+    "PlatformFault": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "component",
+        "code",
+        "bucket_start"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.platform-fault.v1"
+        },
+        "component": {
+          "enum": [
+            "ingest",
+            "console",
+            "support",
+            "diagnostics",
+            "retention"
+          ]
+        },
+        "code": {
+          "enum": [
+            "D1_UNAVAILABLE",
+            "ACCESS_UNAVAILABLE",
+            "KEY_UNAVAILABLE",
+            "SIGNING_UNAVAILABLE",
+            "LIMITS_UNAVAILABLE",
+            "CONFIG_UNAVAILABLE",
+            "UNEXPECTED"
+          ]
+        },
+        "bucket_start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "multipleOf": 600000
+        }
+      },
+      "description": "ERR-05: only to an injected independent observer with a fixed deadline and AbortSignal; never written to the possibly failing D1; absent, false, rejected or late is unavailable, and a late send is neither success nor safe to repeat."
+    },
+    "ConsentGrantResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "scope",
+        "consent"
+      ],
+      "properties": {
+        "code": {
+          "const": "diagnostic_consent_granted"
+        },
+        "scope": {
+          "$ref": "#/$defs/ConsentScope"
+        },
+        "consent": {
+          "$ref": "#/$defs/Consent"
+        }
+      }
+    },
+    "ConsentRevokeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "consent"
+      ],
+      "properties": {
+        "code": {
+          "const": "diagnostic_consent_revoked"
+        },
+        "consent": {
+          "$ref": "#/$defs/Consent"
+        }
+      }
+    },
+    "ConsentList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "device_id",
+        "scope",
+        "consents"
+      ],
+      "properties": {
+        "code": {
+          "const": "diagnostic_consents"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "scope": {
+          "$ref": "#/$defs/ConsentScope"
+        },
+        "consents": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/Consent"
+          }
+        }
+      }
+    },
+    "EventList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "device_id",
+        "events",
+        "batches"
+      ],
+      "properties": {
+        "code": {
+          "const": "diagnostic_events"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "batch_id",
+              "component",
+              "stage",
+              "code",
+              "severity",
+              "bucket_start",
+              "count"
+            ],
+            "properties": {
+              "batch_id": {
+                "$ref": "#/$defs/UUID"
+              },
+              "component": {
+                "enum": [
+                  "runtime",
+                  "scheduler",
+                  "notification",
+                  "connectivity",
+                  "update",
+                  "storage",
+                  "config",
+                  "connector"
+                ]
+              },
+              "stage": {
+                "enum": [
+                  "startup",
+                  "run",
+                  "send",
+                  "receive",
+                  "apply",
+                  "verify",
+                  "shutdown",
+                  "unknown"
+                ]
+              },
+              "code": {
+                "enum": [
+                  "TIMEOUT",
+                  "UNAVAILABLE",
+                  "REJECTED",
+                  "INVALID_STATE",
+                  "RESOURCE_LIMIT",
+                  "PERMISSION_DENIED",
+                  "CONFLICT",
+                  "INTEGRITY_FAILURE",
+                  "CRASH",
+                  "UNKNOWN"
+                ]
+              },
+              "severity": {
+                "enum": [
+                  "info",
+                  "warning",
+                  "error",
+                  "critical"
+                ]
+              },
+              "bucket_start": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "multipleOf": 600000
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000
+              }
+            }
+          }
+        },
+        "batches": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "batch_id",
+              "consent_epoch",
+              "event_count",
+              "dropped_events",
+              "partial",
+              "content_state",
+              "accepted_at",
+              "content_expires_at"
+            ],
+            "properties": {
+              "batch_id": {
+                "$ref": "#/$defs/UUID"
+              },
+              "consent_epoch": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "event_count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "dropped_events": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              },
+              "partial": {
+                "type": "boolean"
+              },
+              "content_state": {
+                "enum": [
+                  "stored",
+                  "expired",
+                  "deleted"
+                ]
+              },
+              "accepted_at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "content_expires_at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        }
+      }
+    },
+    "Deletion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deletion_id",
+        "device_id",
+        "deleted_by",
+        "deleted_at",
+        "expires_at"
+      ],
+      "properties": {
+        "deletion_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "deleted_by": {
+          "$ref": "#/$defs/SHA256"
+        },
+        "deleted_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "description": "Immutable 180-day receipt with opaque ID, actor hash and times only; no content."
+    },
+    "EventDeleteResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "deletion"
+      ],
+      "properties": {
+        "code": {
+          "const": "diagnostic_events_deleted"
+        },
+        "deletion": {
+          "$ref": "#/$defs/Deletion"
+        }
+      }
+    },
+    "DeletionReadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deletion_id"
+      ],
+      "properties": {
+        "deletion_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "DeletionReadResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "deletion"
+      ],
+      "properties": {
+        "code": {
+          "const": "diagnostic_deletion"
+        },
+        "deletion": {
+          "$ref": "#/$defs/Deletion"
+        }
+      }
+    },
+    "ArtifactApprovalResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "approval"
+      ],
+      "properties": {
+        "code": {
+          "const": "diagnostic_artifact_approved"
+        },
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "approval_id",
+            "artifact_id",
+            "case_id",
+            "device_id",
+            "case_epoch",
+            "local_consent_epoch",
+            "artifact_kind",
+            "artifact_sha256",
+            "artifact_size",
+            "approved_by",
+            "created_at",
+            "expires_at",
+            "consumed_at",
+            "revoked_at"
+          ],
+          "properties": {
+            "approval_id": {
+              "$ref": "#/$defs/UUID"
+            },
+            "artifact_id": {
+              "$ref": "#/$defs/UUID"
+            },
+            "case_id": {
+              "$ref": "#/$defs/UUID"
+            },
+            "device_id": {
+              "$ref": "#/$defs/UUID"
+            },
+            "case_epoch": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "local_consent_epoch": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "artifact_kind": {
+              "const": "sdc.diagnostics.case-artifact.v1"
+            },
+            "artifact_sha256": {
+              "$ref": "#/$defs/SHA256"
+            },
+            "artifact_size": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 16384
+            },
+            "approved_by": {
+              "$ref": "#/$defs/SHA256"
+            },
+            "created_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "expires_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "consumed_at": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revoked_at": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "ArtifactList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "case_id",
+        "device_id",
+        "artifacts"
+      ],
+      "properties": {
+        "code": {
+          "const": "diagnostic_case_artifacts"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "artifact_id",
+              "approval_id",
+              "case_id",
+              "artifact_sha256",
+              "state",
+              "content_state",
+              "accepted_at",
+              "content_expires_at",
+              "artifact"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": "sdc.diagnostics.case-artifact-receipt.v1"
+              },
+              "artifact_id": {
+                "$ref": "#/$defs/UUID"
+              },
+              "approval_id": {
+                "$ref": "#/$defs/UUID"
+              },
+              "case_id": {
+                "$ref": "#/$defs/UUID"
+              },
+              "artifact_sha256": {
+                "$ref": "#/$defs/SHA256"
+              },
+              "state": {
+                "const": "accepted"
+              },
+              "content_state": {
+                "enum": [
+                  "stored",
+                  "expired",
+                  "deleted"
+                ]
+              },
+              "accepted_at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "content_expires_at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "artifact": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/Artifact"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "INVALID_DIAGNOSTIC",
+            "INVALID_JSON",
+            "INVALID_FIELDS",
+            "BODY_TOO_LARGE",
+            "UNKNOWN_ROUTE",
+            "UNAUTHENTICATED",
+            "DEVICE_DENIED",
+            "SCOPE_DENIED",
+            "ORIGIN_DENIED",
+            "CSRF_DENIED",
+            "MEMBERSHIP_DENIED",
+            "ACCESS_DENIED",
+            "DIAGNOSTIC_CONSENT_REQUIRED",
+            "DIAGNOSTIC_APPROVAL_REQUIRED",
+            "DIAGNOSTIC_CONFLICT",
+            "STATE_CONFLICT",
+            "REQUEST_LIMIT",
+            "LIMITS_UNAVAILABLE",
+            "GLOBAL_LIMITS_UNAVAILABLE",
+            "KEY_UNAVAILABLE",
+            "CONFIG_UNAVAILABLE",
+            "DIAGNOSTIC_GUARD_UNAVAILABLE",
+            "DIAGNOSTICS_UNAVAILABLE",
+            "STORAGE_UNAVAILABLE",
+            "ACCESS_UNAVAILABLE",
+            "CSRF_UNAVAILABLE",
+            "UNSUPPORTED_MEDIA",
+            "UNSUPPORTED_ENCODING",
+            "EMPTY_BODY",
+            "INVALID_UTF8"
+          ]
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "ReceiptResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "batch_id",
+        "state",
+        "content_state",
+        "consent_epoch",
+        "event_count",
+        "dropped_events",
+        "partial",
+        "accepted_at",
+        "content_expires_at",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.receipt.v1"
+        },
+        "batch_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "const": "accepted"
+        },
+        "content_state": {
+          "enum": [
+            "stored",
+            "expired",
+            "deleted"
+          ]
+        },
+        "consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "event_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "dropped_events": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "accepted_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "content_expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard device wrapper adds request_id to Receipt.",
+      "x-handler-result": "Receipt"
+    },
+    "StatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "consent",
+        "batches",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.status.v1"
+        },
+        "consent": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "consent_epoch",
+                "expires_at"
+              ],
+              "properties": {
+                "state": {
+                  "const": "active"
+                },
+                "consent_epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "consent_epoch",
+                "expires_at"
+              ],
+              "properties": {
+                "state": {
+                  "const": "inactive"
+                },
+                "consent_epoch": {
+                  "type": "null"
+                },
+                "expires_at": {
+                  "type": "null"
+                }
+              }
+            }
+          ]
+        },
+        "batches": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "batch_id",
+                  "state",
+                  "content_state"
+                ],
+                "properties": {
+                  "batch_id": {
+                    "$ref": "#/$defs/UUID"
+                  },
+                  "state": {
+                    "const": "accepted"
+                  },
+                  "content_state": {
+                    "enum": [
+                      "stored",
+                      "expired",
+                      "deleted"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "batch_id",
+                  "state",
+                  "content_state"
+                ],
+                "properties": {
+                  "batch_id": {
+                    "$ref": "#/$defs/UUID"
+                  },
+                  "state": {
+                    "const": "unknown"
+                  },
+                  "content_state": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard device wrapper adds request_id to Status.",
+      "x-handler-result": "Status"
+    },
+    "ArtifactReceiptResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "artifact_id",
+        "approval_id",
+        "case_id",
+        "artifact_sha256",
+        "state",
+        "content_state",
+        "accepted_at",
+        "content_expires_at",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.diagnostics.case-artifact-receipt.v1"
+        },
+        "artifact_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/SHA256"
+        },
+        "state": {
+          "const": "accepted"
+        },
+        "content_state": {
+          "enum": [
+            "stored",
+            "expired",
+            "deleted"
+          ]
+        },
+        "accepted_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "content_expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard device wrapper adds request_id to ArtifactReceipt.",
+      "x-handler-result": "ArtifactReceipt"
+    }
+  }
+}

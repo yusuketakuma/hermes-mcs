@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "遠隔支援の固定診断契約を純粋に検証する部品を追加",
+  "summary": "R4aの診断operationと実行grantの型・期限・正規ASCII JSON、およびpayload・intent・approvalのハッシュを検証する部品を追加しました。runnerには未接続で、遠隔操作や送信の開始ではありません。",
+  "upgrade": "追加設定やサービス起動はありません。この部品だけでは署名の真正性、現在の権限、本人同意、scope一致、診断の実行許可は成立しません。",
+  "details": [
+    "既存の固定契約に従いoperationは最大30分、grantは最大30秒とし、呼出元が渡す現在時刻で有効期間を検証します。",
+    "未知項目・不正型・安全範囲外の整数・Unicode・制御文字・循環・過大入力を拒否します。raw JSONは重複キーや非正規表現を拒否します。",
+    "ハッシュ検証と署名検証を分離し、鍵pinや監視同意を支援同意の代用にしません。"
+  ],
+  "refs": ["adapters/sdc/support_contract.py", "adapters/sdc/contracts/support/operation.schema.json"]
+}

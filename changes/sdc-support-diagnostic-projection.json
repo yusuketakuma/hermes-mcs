@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "遠隔支援用の固定診断を純粋に整形する部品を追加",
+  "summary": "取得済みの共有診断から、実行環境・通知・中央接続の固定DTOを作る部品を追加しました。遠隔送信・権限・署名受入・有効化は未完了で、診断送信機能の提供開始ではありません。",
+  "upgrade": "この部品だけでは追加設定・送信・サービス起動は発生しません。監視の同意を診断や遠隔支援の許可へ拡張しません。",
+  "details": [
+    "実行方式とディスク上のcommitだけを限定投影し、稼働プロセス・ロード済みcommit・製品版・通知認証・中央疎通は未確認として保持します。",
+    "generated_atは呼出元が渡す診断生成時刻です。元sourceの観測時刻に根拠がないためobserved_atはnullとし、collectionの収集時刻を流用しません。",
+    "不正・過大な入力は固定エラーで閉じ、任意文字列や元の診断全体を転送しません。出力は閉じたASCII JSONで16KiB以下です。"
+  ],
+  "refs": ["mcs/ops/sdc_support_diagnostics.py", "adapters/sdc/contracts/support/diagnostic-result.schema.json"]
+}

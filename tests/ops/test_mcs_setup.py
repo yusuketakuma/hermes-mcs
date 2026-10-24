@@ -843,11 +843,11 @@ def test_init_rejects_stale_canonical_on_unrelated_set(monkeypatch, tmp_path):
 
 
 def test_wizard_defaults_and_gates(monkeypatch, tmp_path):
-    """Enter-on-everything accepts defaults; gated blocks stay out."""
+    """Enter keeps defaults; saving alone needs yes, and gated blocks stay out."""
     import json
     _init_env(monkeypatch, tmp_path,
               {"mcs_login_id": "u1", "notify_target": "slack"})
-    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    monkeypatch.setattr("builtins.input", lambda prompt="": "はい" if "setup.save" in prompt else "")
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
     monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
     assert mcs_setup.main() == 0
@@ -872,6 +872,8 @@ def test_wizard_discord_scope_and_answers(monkeypatch, tmp_path):
               {"mcs_login_id": "u1", "notify_target": "slack"})
 
     def answer(prompt=""):
+        if "setup.save" in prompt:
+            return "はい"
         if "setup_detail" in prompt:
             return "2"
         if "notify.interactive" in prompt:
@@ -911,6 +913,8 @@ def test_wizard_slack_scope_and_answers(monkeypatch, tmp_path):
     prompts = []
 
     def answer(prompt=""):
+        if "setup.save" in prompt:
+            return "はい"
         if "setup_detail" in prompt:
             return "2"
         prompts.append(prompt)
@@ -941,12 +945,12 @@ def test_wizard_slack_scope_and_answers(monkeypatch, tmp_path):
 
 
 def test_wizard_keeps_current_values(monkeypatch, tmp_path):
-    """An existing config value is shown and kept on Enter."""
+    """Enter keeps existing values; saving alone needs an explicit yes."""
     import json
     _init_env(monkeypatch, tmp_path, {
         "mcs_login_id": "u1", "notify_target": "discord:9",
         "self_posts": True, "trickle_pages": 7})
-    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    monkeypatch.setattr("builtins.input", lambda prompt="": "はい" if "setup.save" in prompt else "")
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
     monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
     assert mcs_setup.main() == 0
@@ -962,8 +966,9 @@ def test_wizard_dash_removes_optional_key(monkeypatch, tmp_path):
         "notify_max_age_h": 24})
     monkeypatch.setattr(
         "builtins.input",
-        lambda prompt="": "2" if "setup_detail" in prompt else (
-            "-" if "notify_max_age_h" in prompt else ""))
+        lambda prompt="": "はい" if "setup.save" in prompt else (
+            "2" if "setup_detail" in prompt else (
+                "-" if "notify_max_age_h" in prompt else "")))
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
     monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
     assert mcs_setup.main() == 0

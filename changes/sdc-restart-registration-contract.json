@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "再起動の初回登録情報を取得する契約を追加",
+  "summary": "保存済み案件と同意receiptを指定して、現在有効な再起動サービス登録を取得する要求・応答の検証と専用通信経路を追加しました。登録revisionを推測せず初回基線へ採用するための部品です。",
+  "upgrade": "追加操作は不要です。CLI・自動取得・定期poll・有効化は追加していません。本人同意、真正な接続先の供給、取得情報の独立照合と保存、実機の受入は別途必要です。",
+  "details": [
+    "中央の登録読取りschemaと完全合成vectorを同じbytesで固定し、既存14 JSON・再起動8経路・R1と診断の通信許可を維持する。",
+    "要求は専用版名とcase_id・local_receipt_idだけ、応答は同じ2 IDと現在有効なactive registration・HTTP request_idだけを受け入れる。期限切れ・未来・revoked・nullや追加フィールドを拒否する。",
+    "既存の固定HTTPS・HMAC・no-redirect/no-proxy・有限時間のrestart専用transportを使う。初回service_revisionの採用と、既知scopeや世代の移行、planning・変更の本人同意を区別する。",
+    "同じ本文の再読取りも中央の成功枠を消費する新規readであり、この部品は自動再送や新しい署名用途を追加しない。"
+  ],
+  "refs": ["adapters/sdc/restart_control.py", "adapters/sdc/contracts/support/restart-registration.schema.json"]
+}

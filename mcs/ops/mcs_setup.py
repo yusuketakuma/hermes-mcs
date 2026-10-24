@@ -279,6 +279,20 @@ def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
     return failed
 
 
+def _plugin_profile(args, transport):
+    """Resolve the actual Hermes destination before any setup writer runs."""
+    profile = getattr(args, "plugin_profile", None)
+    if profile is not None:
+        return profile
+    if args.yes:
+        return ""
+    label = {"discord": "Discord", "slack": "Slack"}[transport]
+    return input(
+        "\n連携設定を保存するHermesの設定名（プロファイル）"
+        f"。複数の接続設定がある場合は、{label}を担当する設定名を入力してください。"
+        "空欄で既定の設定を使います: ").strip()
+
+
 def _apply_plugin_integration(cfg: dict, args) -> bool:
     """Wire the mcs-discord-commands plugin into hermes through the
     public `hermes config` CLI — writes the serving profile's
@@ -313,15 +327,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
         return False
     nd = ntf.get(transport) if isinstance(ntf.get(transport), dict) else {}
     label = {"discord": "Discord", "slack": "Slack"}[transport]
-    profile = getattr(args, "plugin_profile", None)
-    if profile is None:
-        if args.yes:
-            profile = ""
-        else:
-            profile = input(
-                "\n連携設定を保存するHermesの設定名（プロファイル）"
-                f"。複数の接続設定がある場合は、{label}を担当する設定名を入力してください。"
-                "空欄で既定の設定を使います: ").strip()
+    profile = _plugin_profile(args, transport)
     print(f"\n{label}連携: Hermesの設定「{profile or '既定'}」へ保存します")
 
     fixed, lists = _plugin_settings_plan(transport, nd, args)
@@ -679,9 +685,10 @@ def cmd_init(args) -> int:
     if mcs_runtime.standalone(cfg):
         _init_standalone_grants(cfg, args, standalone_projects)
 
+    wizard_step = 1
     if not args.yes:
         try:
-            setup_wizard.wizard(cfg, home=HOME)
+            wizard_step = setup_wizard.wizard(cfg, home=HOME)
         except (KeyboardInterrupt, EOFError):
             print("\n設定を中止しました。設定ファイルやパスワードは保存していません。"
                   "同じ操作で最初からやり直せます。")
@@ -716,6 +723,14 @@ def cmd_init(args) -> int:
     if args.yes and cfg.get("drug_map") is None:
         print("初期設定: 医薬品辞書は未設定のため薬剤名の照合は行いません。利用条件を確認してから"
               " mcs_drug.py install-bundled で辞書を作成し、init --set drug_map=... で設定してください")
+    if not args.yes:
+        interactive = (cfg.get("notify") or {}).get("interactive")
+        if not mcs_runtime.standalone(cfg) and interactive in ("slack", "discord"):
+            args.plugin_profile = _plugin_profile(args, interactive)
+        if not setup_wizard.confirm_save(cfg, plugin_profile=getattr(args, "plugin_profile", None)):
+            print("設定を中止しました。設定ファイル・辞書・認証情報は保存していません。")
+            return 130
+        setup_wizard.wizard_drug_map(cfg, wizard_step or 1, home=HOME)
     login_id = cfg.get("mcs_login_id")
 
     if _init_store_secrets(args, login_id):
@@ -746,14 +761,17 @@ def cmd_init(args) -> int:
     # a manual `services` rerun as the last step
     ntf = cfg.get("notify")
     gateway_result = 0
-    if isinstance(ntf, dict) and (ntf.get("interactive") == "lineworks" or (
-            mcs_runtime.standalone(cfg)
-            and ntf.get("interactive") in ("discord", "slack"))) \
+    if isinstance(ntf, dict) and ntf.get("interactive") in ("slack", "discord", "lineworks") \
             and not validate_notify(ntf):
-        # Provision runner-owned directories/flags before the independent worker starts.
+        # Every card worker needs the runner's route flags before gateway startup.
         import notify_spool
-        notify_spool.ensure_dirs(os.path.join(HOME, "data"))
-        notify_spool.publish_flags(cfg, os.path.join(HOME, "data"))
+        try:
+            notify_spool.ensure_dirs(os.path.join(HOME, "data"))
+            notify_spool.publish_flags(cfg, os.path.join(HOME, "data"))
+        except (OSError, ValueError):
+            print("設定は保存しましたが、通知先の準備を完了できませんでした。"
+                  "通知サービスの起動・同期へは進んでいません。保存先の権限と空き容量を確認し、mcs setupを再実行してください。")
+            return 1
     if cfg.get("runtime_mode") != "standalone" and isinstance(ntf, dict) \
             and ntf.get("interactive") in ("discord", "slack"):
         exe = mcs_util.hermes_exe(cfg)
@@ -782,6 +800,8 @@ def cmd_init(args) -> int:
     else:
         print("初期設定と動作条件の確認が完了しました。"
               "実際の通知が届くことを、通知先の画面で確認してください。")
+        if not args.yes:
+            setup_wizard.offer_sdc_enrollment(cfg)
     return result
 
 
@@ -1258,7 +1278,10 @@ def cmd_doctor(args) -> int:
               "source": environment_diagnostics.source_status(cfg, probe="services" in probes and not config_errors, paths=_service_paths()),
               "recovery_selection": {"explicit": "recovery_python" in cfg,
                                      "matches_deployed": matches}}
-    if getattr(args, "json", False):
+    if getattr(args, "share", False):
+        from support_diagnostics import shared_report
+        print(json.dumps(shared_report(report), ensure_ascii=False, indent=2))
+    elif getattr(args, "json", False):
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         labels = {
@@ -1449,6 +1472,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_check, yes=True)
     p = sub.add_parser("doctor", help='状態を読取り専用で診断します。未確認は正常扱いしません。設定の修正方法はcheckで確認')
     p.add_argument("--json", action="store_true", help='診断結果を機械処理用のJSONで表示します')
+    p.add_argument("--share", action="store_true", help='設定値・患者件数を除いた共有用JSONを表示します。送信はしません')
     p.add_argument("--probe", action="append", choices=("llm", "services", "data"),
                    help='追加で確認する範囲（llm=AI、services=常駐処理、data=保存データ）。複数指定可能')
     p.set_defaults(fn=cmd_doctor, yes=True)

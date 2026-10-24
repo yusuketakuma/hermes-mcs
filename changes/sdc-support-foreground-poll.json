@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "遠隔支援の前景継続照会を明示起動できるよう追加",
+  "summary": "mcs support watchで、開始時の同意期限内に30/60秒の待機間隔で承認済み診断を確認できます。既定は60秒、全体上限は300秒で、接続や一回実行から自動開始しません。結果不明・保留では記録を保持して終了します。",
+  "upgrade": "新サービス・scheduler・thread・R1 job変更はありません。承認済み支援設定・保存済み同意と中央受付ACKが必要です。connect/runは従来どおり一回だけです。watchは開始時の元期限と早い親期限を延長せず、新しい同意ownerへ乗り換えません。30/60秒は完了時間の保証ではありません。",
+  "details": [
+    "watch全生存と待機中を単一session lockで所有し、一回処理はlock wrapperとprivate本体で共有する。lock省略optionは作らない。",
+    "単調時計で次回を管理し、最大1秒ずつ待機してローカル停止・owner変更・期限を確認する。待機中はstate/監視lockを保持せず、遅延catch-upをしない。",
+    "空poll・確定したreport受付・確定した未開始pregrant終端の後だけ次周期へ進む。unknown/holdや例外ではreceipt・STARTED・ID・正確な本文を保持し、新poll・新IDへ進まない。",
+    "同意/ACKの開始時の元期限でCLI親alarmを短縮する。全体300秒と早い親期限を毎回検査し、再同意でwatch寿命を延長しない。実機時計精度・停止応答・性能を実証済みとは扱わない。",
+    "明示私有rootのstop/status/connectや注入provider実行は製品configを不要にし、破損configで支援停止を妨げない。未指定root不正は固定errorとし、configを補修しない。default診断providerは製品rootと明示runtime_modeだけを引き続き使う。"
+  ],
+  "refs": ["adapters/sdc/support_client.py", "mcs/ops/sdc_support_cli.py", "docs/guides/SDC_SELF_MONITORING.md"]
+}

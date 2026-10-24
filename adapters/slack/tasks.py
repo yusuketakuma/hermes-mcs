@@ -15,7 +15,7 @@ import weakref
 
 from adapters.common import paths as shared_paths
 from adapters.common import registry
-from adapters.common.worker import POLL_S, retry_startup
+from adapters.common.worker import POLL_S, await_settled, retry_startup
 
 from . import paths
 from .actions import Actions
@@ -71,11 +71,17 @@ class Supervisor:
         self._worker = DeliveryWorker(
             sender=self._sender, settings=settings, root=self._root,
             reg=self._reg, worker_id=self._worker_id, log=log)
+        self._delivery = getattr(ctx, "delivery_admission", None)
+        self._delivery_identity = getattr(ctx, "delivery_identity", None)
+        if self._delivery is not None:
+            self._worker.send_admitted = lambda: self._delivery.send_allowed(self._delivery_identity)
         self._actions = Actions(
             app=app, settings=settings, dirs=self._dirs,
-            reg=self._reg, sender=self._sender, log=log)
+            reg=self._reg, sender=self._sender, log=log,
+            native_admission=getattr(ctx, "native_admission", None))
         self._stopping = False
         self._task = None
+        self._ready = False
 
     def start(self):
         key = registry.scope_key(self._settings)
@@ -95,6 +101,8 @@ class Supervisor:
 
     def unload(self):
         self._stopping = True
+        if self._delivery is not None:
+            self._delivery.connector_closing(self._delivery_identity)
         self._worker.stop()
         self._actions.unload()
 
@@ -116,18 +124,27 @@ class Supervisor:
                 self._log("workspace_bind_failed")
                 return False
 
-            if not await retry_startup(ready, lambda: self._stopping,
+            async def prepare():
+                return await await_settled(ready(), on_cancel=self.unload)
+
+            if not await retry_startup(prepare, lambda: self._stopping,
                                        self._log) or self._stopping:
                 return
             self._actions.register()
+            self._ready = True
             while not self._stopping:
+                if self._delivery is not None and not self._delivery.begin_pass(self._delivery_identity):
+                    await asyncio.sleep(POLL_S)
+                    continue
                 try:
-                    await self._worker.tick()
-                    await self._actions.sweep_followups()
+                    await await_settled(self._pass(), on_cancel=self.unload)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     self._log("tick_error", error=type(exc).__name__)
+                finally:
+                    if self._delivery is not None:
+                        self._delivery.end_pass(self._delivery_identity)
                 await asyncio.sleep(POLL_S)
         except asyncio.CancelledError:
             raise
@@ -135,8 +152,17 @@ class Supervisor:
             self._log("worker_exit", error=type(exc).__name__)
             raise
         finally:
+            self._ready = False
+            if self._delivery is not None:
+                self._delivery.connector_closing(self._delivery_identity)
             self._actions.unload()
             self._worker.release_scope_lock()
             key = registry.scope_key(self._settings)
             if _LIVE.get(key) is self:
                 del _LIVE[key]
+
+    async def _pass(self):
+        await self._worker.tick()
+        if not self._stopping and (self._delivery is None
+                or self._delivery.send_allowed(self._delivery_identity)):
+            await self._actions.sweep_followups()

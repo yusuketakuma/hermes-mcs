@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "再起動支援8ルートの純粋な要求・応答検証を追加",
+  "summary": "再起動支援候補の通信データを閉じた型と要求IDで照合する部品を追加しました。通信や再起動は有効化しません。",
+  "upgrade": "追加操作は不要です。既存R4a・R1のルート、認証、既定動作は変更しません。",
+  "details": [
+    "端末用8ルートだけを扱い、署名envelopeの用途・型・ハッシュ、要求に対応するIDを検査します。署名認証、現在権限、本人同意、owner真正性、実行成功の証明は別工程です。管理者ルートや汎用JSON Schema実行器は追加しません。",
+    "保存済み同一ID・同一raw要求の履歴照合は明示オプションとし、経過したpreflight鮮度を新規要求の既定検査へ混ぜません。未来の観測は拒否し、現在の署名付きpreview・operation・grantの窓は検査します。保存済ACKと登録の期限切れ構造検査は現在許可へ昇格しません。",
+    "pollはoperation・個別承認・保存ACK・登録が全てnull又は全て存在する場合だけ受理します。statusのreport=nullやbody_hashはmetadataとして保持し、未開始・失敗・再実行可へ変換しません。",
+    "HTTP request_idは追跡IDとして保持し、保存ACKへは除去して既存の専用validatorを使います。要求の構文検査だけでは、中央handlerの現在権限・冪等性・failed/null等の業務条件が成立したとは扱いません。runtime・保存・transportへの接続は未完です。"
+  ],
+  "refs": ["adapters/sdc/restart_control.py", "adapters/sdc/contracts/support/restart-api.schema.json"]
+}

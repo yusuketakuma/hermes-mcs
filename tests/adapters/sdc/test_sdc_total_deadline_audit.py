@@ -131,7 +131,7 @@ def test_enclosing_tick_deadline_escapes_connector_retry_path(monkeypatch):
               'credential': {'key': 'a1' * 32, 'key_id': 'synthetic-key'},
               'state.json': {'enabled': True, 'state': 'active',
                              'device_id': 'synthetic-device', 'key_id': 'synthetic-key'}}
-    store = SimpleNamespace(read=lambda name, default=None: values.get(name, default),
+    store = SimpleNamespace(customer=False, read=lambda name, default=None: values.get(name, default),
                             write=lambda name, value: saved.append((name, dict(value))))
     client = module.Transport(CONFIG)
     client.opener = SimpleNamespace(open=open_request)

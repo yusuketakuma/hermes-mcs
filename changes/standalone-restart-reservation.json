@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "独立Runtimeのローカル再起動予約部品を追加",
+  "summary": "通常処理を停止せず、新規受付と更新入場を一時的に排他するローカル予約部品を追加しました。製品の遠隔再起動には未接続です。",
+  "upgrade": "追加操作は不要です。既存サービス・SDK callback・600秒drain・10秒grace・更新とコマンドの保護は変更しません。",
+  "details": [
+    "同一Runtimeの世代とRAM objectだけに一件予約を束縛し、固定update.lockを非blockingで保持します。予約中は新規child、schedule発火帳簿の更新、connector再作成を抑止し、既存仕事の終了追跡を続けます。markerと更新journalは読取りだけです。",
+    "正常な未開始取消だけ受付を再開し、通常停止・設定変更・異なる世代や予約・不明なfd退役では再開しません。FIFO・symlink・不正owner等の取得不明も安全側で受付を保持します。",
+    "ローカル状態記録で予約中と解除未確認を区別し、受付を停止している原因を追えるようにします。再起動の許可や成功には読み替えません。",
+    "Slack・Discord設定時は、現在のconnectorのreadyと配送pass・native処理の終了を確認できる場合だけ予約へ進みます。LINE WORKS設定や準備・終了未確認の状態では予約を拒否します。実際のcleanup完了を追跡しますが、遠隔再起動には未接続です。",
+    "HTTP・grant・SPENT・drain実行・永続barrier・wire・TTL・新schedulerは追加しません。予約やupdate.lock保持を本人同意・現在権限・遠隔再起動成功の証拠にはしません。"
+  ],
+  "refs": ["mcs_standalone/runtime.py"]
+}

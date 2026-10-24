@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "独立実行の再接続・停止時に配送処理の完了を待つ",
+  "summary": "Slack・Discordの独立実行で、再起動予約中の新しい配送を止め、すでに始まった配送の結果記録と受領記録が終わるまで接続と配送ロックを保持します。接続開始中・切断中・終了中を配送待機完了と扱わず、再接続しても予約中の停止状態を維持します。",
+  "upgrade": "再起動予約中の配送制御はruntime_mode=standaloneのSlack・Discord接続が対象で、更新の適用には独立実行サービスの再起動が必要です。開始済み処理の取消時に内部I/Oの完了を待つ変更は、共通の配送Supervisorを使うHermesモードにも適用され、こちらはgatewayの再起動後に反映されます。配送先・通知の既定値や人承認の条件は変更しません。",
+  "details": [
+    "実際のSDK接続と配送Supervisorの準備完了を両方確認してから、新しい配送処理を許可します。",
+    "起動時の照合・配送・結果記録を待っている処理がキャンセルされても、その内部のI/Oが終わるまで配送ロックを解放しません。",
+    "予約が閉じた後も開始済み配送のjournalとreceiptを確定し、次の本文・添付の送信は開始しません。結果不明の配送を成功扱いしたり、自動再送したりしません。"
+  ],
+  "refs": ["mcs_standalone/host.py", "adapters/common/worker.py", "adapters/slack/tasks.py", "adapters/discord/tasks.py", "adapters/slack/standalone.py", "adapters/discord/standalone.py"]
+}

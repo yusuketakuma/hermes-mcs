@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from adapters.common import eventlog
 from adapters.common.paths import read_verified_attachment
+from adapters.common.worker import await_settled
 from .delivery import _failed, _payload, _upload_file_id
 from .tasks import Supervisor
 
@@ -250,7 +251,8 @@ async def _socket(client, credentials, inflight):
 _event = eventlog.make_logger("mcs.standalone.slack")
 
 
-async def run(root, stopping=None):
+async def run(root, stopping=None, *, native_admission=None,
+              delivery_admission=None, delivery_identity=None):
     """Own one Socket Mode connection while reusing the existing card supervisor."""
     from mcs_standalone.config import connector_settings, load_credentials
     from mcs_standalone.host import Host
@@ -266,7 +268,8 @@ async def run(root, stopping=None):
 
     stopping = stopping if stopping is not None else asyncio.Event()
     client, session = _client(credentials, current)
-    host = Host(settings)
+    host = Host(settings, native_admission=native_admission,
+                delivery_admission=delivery_admission, delivery_identity=delivery_identity)
     handler = supervisor = connecting = None
     inflight = set()
     try:
@@ -301,36 +304,47 @@ async def run(root, stopping=None):
                 # WebSocket session even after an underlying session closes.
                 if handler.client.closed:
                     raise ValueError("slack_socket_stopped")
+                if delivery_admission is not None:
+                    if supervisor._ready and await handler.client.is_connected():
+                        delivery_admission.connector_ready(delivery_identity)
+                    else:
+                        delivery_admission.connector_starting(delivery_identity)
             try:
                 await asyncio.wait_for(stopping.wait(), timeout=0.5)
             except asyncio.TimeoutError:
                 pass
     finally:
-        if supervisor is not None:
-            # Revoke admission now, but keep the supervisor's scope lock until
-            # every native command thread has ended. Host.close owns its unload.
-            # A startup still awaiting bind must not reopen native admission.
-            supervisor._actions._native_current = lambda: False
-            supervisor._actions.unload()
-            supervisor._worker.stop()
-        try:
-            if handler is not None:
-                await handler.close_async()
-        finally:
-            if connecting is not None:
-                connecting.cancel()
-                with suppress(asyncio.CancelledError, Exception):
-                    await connecting
+        if delivery_admission is not None:
+            delivery_admission.connector_closing(delivery_identity)
+
+        async def cleanup():
+            if supervisor is not None:
+                # Revoke admission now, but keep the supervisor's scope lock until
+                # every native command thread has ended. Host.close owns its unload.
+                # A startup still awaiting bind must not reopen native admission.
+                supervisor._actions._native_current = lambda: False
+                supervisor._actions.unload()
+                supervisor._worker.stop()
             try:
-                for task in tuple(inflight):
-                    task.cancel()
-                if inflight:
-                    await asyncio.gather(*tuple(inflight), return_exceptions=True)
+                if handler is not None:
+                    await handler.close_async()
             finally:
+                if connecting is not None:
+                    connecting.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await connecting
                 try:
-                    await host.close()
+                    for task in tuple(inflight):
+                        task.cancel()
+                    if inflight:
+                        await asyncio.gather(*tuple(inflight), return_exceptions=True)
                 finally:
-                    await session.close()
+                    try:
+                        await host.close()
+                    finally:
+                        await session.close()
+
+        await await_settled(cleanup())
 
 
 def _files(root, payload):

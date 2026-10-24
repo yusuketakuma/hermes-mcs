@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:csdc:fleet:enrollment-response:v1",
+  "title": "Fleet enrollment success responses",
+  "description": "Success JSON body including the request_id response wrapper. Claim returns HTTP 202; status and confirm return HTTP 200. Select the exact route profile. Existing requests, HMAC and consent requirements are unchanged. Error bodies are outside this schema.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/claim"
+    },
+    {
+      "$ref": "#/$defs/status"
+    }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "pendingExpiry": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Authoritative enrollment pending deadline, copied from the committed DB row as Unix epoch milliseconds. Applies only while claimed or admin_approved. After active it is historical metadata: never use this deadline to expire continuing monitoring or infer renewed consent. No client-calculated 24-hour substitute."
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_id",
+        "device_id",
+        "key_id",
+        "request_id",
+        "audience",
+        "state",
+        "pending_expires_at"
+      ],
+      "properties": {
+        "claim_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "device_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "key_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "request_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "audience": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9:_-]{1,100}$"
+        },
+        "state": {
+          "enum": [
+            "claimed",
+            "admin_approved",
+            "active"
+          ]
+        },
+        "pending_expires_at": {
+          "$ref": "#/$defs/pendingExpiry"
+        }
+      },
+      "description": "POST /v2/enrollments/claim, including same-ID replay. Identity and pending deadline come from the current DB row, including after an ACK is lost."
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_id",
+        "device_id",
+        "key_id",
+        "request_id",
+        "audience",
+        "state",
+        "pending_expires_at",
+        "tenant_name",
+        "environment",
+        "alias",
+        "data_scope",
+        "fingerprint",
+        "consent_revision"
+      ],
+      "properties": {
+        "claim_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "device_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "key_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "request_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "audience": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9:_-]{1,100}$"
+        },
+        "state": {
+          "enum": [
+            "claimed",
+            "admin_approved",
+            "active"
+          ]
+        },
+        "pending_expires_at": {
+          "$ref": "#/$defs/pendingExpiry"
+        },
+        "tenant_name": {
+          "type": "string",
+          "description": "Current per-request installation display label, not identity. Nonempty <=512 Unicode code points, no C0 or DEL controls. Invalid stored metadata receives a fixed 503 response and cannot authorize confirmation.",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]{1,32}$"
+        },
+        "alias": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Enrollment alias copied when registration was issued; no pending rename API is exposed. Display changes never authorize monitoring; stable claim/device/key/audience/consent fields and current DB state are authoritative.",
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "data_scope": {
+          "const": "version-process-status-only"
+        },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "consent_revision": {
+          "enum": [
+            "sdc-self-monitoring-v1",
+            "sdc-customer-monitoring-v1"
+          ]
+        }
+      },
+      "description": "POST /v2/enrollments/status. A past pending_expires_at remains valid historical metadata when state is active; this timestamp does not grant monitoring permission."
+    },
+    "confirm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_id",
+        "device_id",
+        "key_id",
+        "request_id",
+        "audience",
+        "state",
+        "pending_expires_at",
+        "tenant_name",
+        "environment",
+        "alias",
+        "data_scope",
+        "fingerprint",
+        "consent_revision"
+      ],
+      "properties": {
+        "claim_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "device_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "key_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "request_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "audience": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9:_-]{1,100}$"
+        },
+        "state": {
+          "const": "active"
+        },
+        "pending_expires_at": {
+          "$ref": "#/$defs/pendingExpiry"
+        },
+        "tenant_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "description": "Current per-request installation display label, not identity. Nonempty <=512 Unicode code points, no C0 or DEL controls. Invalid stored metadata receives a fixed 503 response and cannot authorize confirmation."
+        },
+        "environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]{1,32}$"
+        },
+        "alias": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "data_scope": {
+          "const": "version-process-status-only"
+        },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "consent_revision": {
+          "enum": [
+            "sdc-self-monitoring-v1",
+            "sdc-customer-monitoring-v1"
+          ]
+        }
+      },
+      "description": "POST /v2/enrollments/confirm, including reconciliation after an ACK is lost. Activation does not renew or replace the original pending deadline."
+    }
+  },
+  "$comment": "The root oneOf is a shape summary, not route authorization. Select $defs.claim, $defs.status or $defs.confirm from the exact authenticated route. In particular, a status-shaped claimed/admin_approved response must never be accepted as a confirm result; confirm requires state=active."
+}

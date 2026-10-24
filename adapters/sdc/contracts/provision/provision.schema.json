@@ -1,0 +1,1515 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Authenticated initial provision policy bundle and five controls",
+  "description": "Independent opt-in central provisioning contract. Strict UTF-8 JSON <=16384 raw bytes, depth<=8, no duplicate keys/BOM/unknown fields. Existing ASCII support CJSON and safe integer domain. Shapes do not establish actor/device authorization, genuine first trust, current pins, CAS, quotas, deadlines, restoration safety or deployment acceptance. Runtime rechecks current primary authority in the same atomic receipt/audit batch; legacy realms reject only these new routes. Existing R1/R4 wire and maximum 30-second in-flight grant semantics remain unchanged.",
+  "x-max-raw-bytes": 16384,
+  "x-json-max-depth": 8,
+  "x-success-quota": {
+    "issue_per_installation_utc_day": 10,
+    "read_status_per_root_profile_utc_day": 60,
+    "ack_revoke_per_root_profile_utc_day": 10,
+    "shared_global_admission": true,
+    "heartbeat_fleet_budget_unchanged": true,
+    "same_receipt_replay_increments_dedicated_successes": false
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/IssueRequest"
+    },
+    {
+      "$ref": "#/$defs/ReadRequest"
+    },
+    {
+      "$ref": "#/$defs/RevokeRequest"
+    },
+    {
+      "$ref": "#/$defs/StatusRequest"
+    },
+    {
+      "$ref": "#/$defs/AckRequest"
+    }
+  ],
+  "$defs": {
+    "UUID": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+    },
+    "Hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+    },
+    "Identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+    },
+    "Environment": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]{1,32}$(?![\\s\\S])"
+    },
+    "RealmEpoch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$(?![\\s\\S])"
+    },
+    "Audience": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9:_-]{1,100}$(?![\\s\\S])"
+    },
+    "Origin": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::443)?$(?![\\s\\S])",
+      "maxLength": 265,
+      "description": "Fixed HTTPS DNS origin only, optionally explicit :443. URL normalization, selected server profile and exact current host are runtime checks."
+    },
+    "IssuerRef": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "ChannelRef": {
+      "const": "authenticated-console-manual-v1"
+    },
+    "ProfileID": {
+      "enum": [
+        "monitor",
+        "support",
+        "restart"
+      ]
+    },
+    "Generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "ExpectedGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483646
+    },
+    "Epoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "Timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "CSRF": {
+      "type": "string",
+      "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+    },
+    "SupportPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kid",
+        "purposes",
+        "spki",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "kid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$(?![\\s\\S])"
+        },
+        "purposes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "operation",
+              "execution-grant",
+              "consent-preview"
+            ]
+          }
+        },
+        "spki": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])",
+          "minLength": 1,
+          "maxLength": 2731
+        },
+        "not_before": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "description": "Public SPKI only. Runtime imports RSA3072/e65537/SHA256, rejects duplicate kid, validates key times and current usability; this shape is not key acceptance."
+    },
+    "SupportPins": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/SupportPin"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "operation"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "execution-grant"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "consent-preview"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "RestartPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kid",
+        "purposes",
+        "spki",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "kid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$(?![\\s\\S])"
+        },
+        "purposes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "restart-operation",
+              "restart-execution-grant",
+              "restart-consent-preview"
+            ]
+          }
+        },
+        "spki": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])",
+          "minLength": 1,
+          "maxLength": 2731
+        },
+        "not_before": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "description": "Public SPKI only. Runtime imports RSA3072/e65537/SHA256, rejects duplicate kid, validates key times and current usability; this shape is not key acceptance."
+    },
+    "RestartPins": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/RestartPin"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "restart-operation"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "restart-execution-grant"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "restart-consent-preview"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MonitorProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "origin",
+        "audience",
+        "pins"
+      ],
+      "properties": {
+        "profile_id": {
+          "const": "monitor"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "pins": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "SupportProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "origin",
+        "audience",
+        "pins"
+      ],
+      "properties": {
+        "profile_id": {
+          "const": "support"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "pins": {
+          "$ref": "#/$defs/SupportPins"
+        }
+      }
+    },
+    "RestartProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "origin",
+        "audience",
+        "pins"
+      ],
+      "properties": {
+        "profile_id": {
+          "const": "restart"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "pins": {
+          "$ref": "#/$defs/RestartPins"
+        }
+      }
+    },
+    "Policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "issuer_ref",
+        "policy_revision",
+        "channel_ref",
+        "profiles"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.policy.v1"
+        },
+        "issuer_ref": {
+          "$ref": "#/$defs/IssuerRef"
+        },
+        "policy_revision": {
+          "$ref": "#/$defs/UUID"
+        },
+        "channel_ref": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "profiles": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/MonitorProfile"
+              },
+              {
+                "$ref": "#/$defs/SupportProfile"
+              },
+              {
+                "$ref": "#/$defs/RestartProfile"
+              }
+            ]
+          },
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "profile_id": {
+                    "const": "monitor"
+                  }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "profile_id": {
+                    "const": "support"
+                  }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "profile_id": {
+                    "const": "restart"
+                  }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            }
+          ]
+        }
+      },
+      "description": "Strict server PROVISION_POLICY JSON <=16384 bytes; caller input never supplies or registers authority. Shape checks known profiles/purposes; runtime validates selected current RSA pins, canonical hash and explicit authority CAS.",
+      "x-max-raw-bytes": 16384
+    },
+    "Bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "provision_id",
+        "root_id",
+        "enrollment_id",
+        "policy_revision",
+        "previous_provision_id",
+        "tenant",
+        "installation",
+        "environment",
+        "realm_epoch",
+        "profile_id",
+        "generation",
+        "device_id",
+        "claim_id",
+        "device_epoch",
+        "origin",
+        "audience",
+        "pins",
+        "console_origin",
+        "issuer_ref",
+        "channel_ref",
+        "issued_by",
+        "validator_revision",
+        "policy_hash",
+        "issued_at",
+        "import_expires_at",
+        "expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.bundle.v1"
+        },
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "enrollment_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "policy_revision": {
+          "$ref": "#/$defs/UUID"
+        },
+        "previous_provision_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tenant": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "installation": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "environment": {
+          "$ref": "#/$defs/Environment"
+        },
+        "realm_epoch": {
+          "$ref": "#/$defs/RealmEpoch"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/ProfileID"
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "device_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "claim_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device_epoch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Epoch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "pins": {
+          "type": "array",
+          "maxItems": 8
+        },
+        "console_origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "issuer_ref": {
+          "$ref": "#/$defs/IssuerRef"
+        },
+        "channel_ref": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "issued_by": {
+          "$ref": "#/$defs/Hash"
+        },
+        "validator_revision": {
+          "const": "sdc.provision.validator.v1"
+        },
+        "policy_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "import_expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "profile_id": {
+              "const": "monitor"
+            },
+            "device_id": {
+              "type": "null"
+            },
+            "claim_id": {
+              "type": "null"
+            },
+            "device_epoch": {
+              "type": "null"
+            },
+            "pins": {
+              "type": "array",
+              "maxItems": 0
+            }
+          }
+        },
+        {
+          "properties": {
+            "profile_id": {
+              "const": "support"
+            },
+            "device_id": {
+              "$ref": "#/$defs/UUID"
+            },
+            "claim_id": {
+              "$ref": "#/$defs/UUID"
+            },
+            "device_epoch": {
+              "$ref": "#/$defs/Epoch"
+            },
+            "pins": {
+              "$ref": "#/$defs/SupportPins"
+            }
+          }
+        },
+        {
+          "properties": {
+            "profile_id": {
+              "const": "restart"
+            },
+            "device_id": {
+              "$ref": "#/$defs/UUID"
+            },
+            "claim_id": {
+              "$ref": "#/$defs/UUID"
+            },
+            "device_epoch": {
+              "$ref": "#/$defs/Epoch"
+            },
+            "pins": {
+              "$ref": "#/$defs/RestartPins"
+            }
+          }
+        }
+      ],
+      "description": "Hash every exact field with existing support CJSON; no self hash field. Runtime binds immutable ID/scope/bytes to current policy/realm/head/enrollment/device. issued_at < import_expires_at <= issued_at+30min (monitor <= token deadline); expires_at <= issued_at+30days and shortest selected pin expiry. Shape does not prove authorization or current authority."
+    },
+    "Receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ack_id",
+        "provision_id",
+        "root_id",
+        "bundle_hash",
+        "local_receipt_id",
+        "device_id",
+        "claim_id",
+        "key_id",
+        "generation",
+        "accepted_at",
+        "applied_at"
+      ],
+      "properties": {
+        "ack_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "bundle_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "local_receipt_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "claim_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "key_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "accepted_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "applied_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "description": "Immutable central record of the exact local application claim, not physical device or business-health evidence. Runtime checks issued_at <= applied_at < import_expires_at and applied_at <= now+5min."
+    },
+    "Status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provision_id",
+        "root_id",
+        "bundle_hash",
+        "generation",
+        "current_generation",
+        "current_provision_id",
+        "state",
+        "realm_epoch",
+        "policy_revision",
+        "expires_at",
+        "receipt"
+      ],
+      "properties": {
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "bundle_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "current_generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "current_provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "enum": [
+            "current",
+            "superseded",
+            "revoked",
+            "expired"
+          ]
+        },
+        "realm_epoch": {
+          "$ref": "#/$defs/RealmEpoch"
+        },
+        "policy_revision": {
+          "$ref": "#/$defs/UUID"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "Fresh metadata distinguishes the issuance generation from current head generation. Never returns new trust bytes or a grant to the device."
+    },
+    "IssueRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "issue_id",
+        "root_id",
+        "profile_id",
+        "enrollment_id",
+        "device_id",
+        "expected_generation",
+        "expected_provision_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.issue.v1"
+        },
+        "issue_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/ProfileID"
+        },
+        "enrollment_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_generation": {
+          "$ref": "#/$defs/ExpectedGeneration"
+        },
+        "expected_provision_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "expected_generation": {
+                  "const": 0
+                },
+                "expected_provision_id": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "expected_generation": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 2147483646
+                },
+                "expected_provision_id": {
+                  "$ref": "#/$defs/UUID"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "profile_id": {
+                  "const": "monitor"
+                },
+                "device_id": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "profile_id": {
+                  "enum": [
+                    "support",
+                    "restart"
+                  ]
+                },
+                "device_id": {
+                  "$ref": "#/$defs/UUID"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "ReadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "provision_id",
+        "root_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.read.v1"
+        },
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "RevokeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "revoke_id",
+        "provision_id",
+        "root_id",
+        "bundle_hash",
+        "expected_generation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.revoke.v1"
+        },
+        "revoke_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "bundle_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "expected_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483646
+        }
+      }
+    },
+    "StatusRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "provision_id",
+        "root_id",
+        "bundle_hash",
+        "local_receipt_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.status.v1"
+        },
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "bundle_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "local_receipt_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "AckRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "ack_id",
+        "provision_id",
+        "root_id",
+        "bundle_hash",
+        "local_receipt_id",
+        "applied_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.ack.v1"
+        },
+        "ack_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "bundle_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "local_receipt_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "applied_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      }
+    },
+    "IssueAdminRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "issue_id",
+        "root_id",
+        "profile_id",
+        "enrollment_id",
+        "device_id",
+        "expected_generation",
+        "expected_provision_id",
+        "csrf"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.issue.v1"
+        },
+        "issue_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/ProfileID"
+        },
+        "enrollment_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_generation": {
+          "$ref": "#/$defs/ExpectedGeneration"
+        },
+        "expected_provision_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "csrf": {
+          "$ref": "#/$defs/CSRF"
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "expected_generation": {
+                  "const": 0
+                },
+                "expected_provision_id": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "expected_generation": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 2147483646
+                },
+                "expected_provision_id": {
+                  "$ref": "#/$defs/UUID"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "profile_id": {
+                  "const": "monitor"
+                },
+                "device_id": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "profile_id": {
+                  "enum": [
+                    "support",
+                    "restart"
+                  ]
+                },
+                "device_id": {
+                  "$ref": "#/$defs/UUID"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "description": "HTTP request only: common Console layer verifies/removes csrf before handler validation; immutable request hash uses original raw bytes including csrf."
+    },
+    "ReadAdminRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "provision_id",
+        "root_id",
+        "csrf"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.read.v1"
+        },
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "csrf": {
+          "$ref": "#/$defs/CSRF"
+        }
+      },
+      "description": "HTTP request only: common Console layer verifies/removes csrf before handler validation; immutable request hash uses original raw bytes including csrf."
+    },
+    "RevokeAdminRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "revoke_id",
+        "provision_id",
+        "root_id",
+        "bundle_hash",
+        "expected_generation",
+        "csrf"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.revoke.v1"
+        },
+        "revoke_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "bundle_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "expected_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483646
+        },
+        "csrf": {
+          "$ref": "#/$defs/CSRF"
+        }
+      },
+      "description": "HTTP request only: common Console layer verifies/removes csrf before handler validation; immutable request hash uses original raw bytes including csrf."
+    },
+    "IssueResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "bundle",
+        "bundle_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.issue-response.v1"
+        },
+        "bundle": {
+          "$ref": "#/$defs/Bundle"
+        },
+        "bundle_hash": {
+          "$ref": "#/$defs/Hash"
+        }
+      },
+      "description": "Closed handler result without HTTP request_id."
+    },
+    "IssueResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "bundle",
+        "bundle_hash",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.issue-response.v1"
+        },
+        "bundle": {
+          "$ref": "#/$defs/Bundle"
+        },
+        "bundle_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP wrapper adds request_id only; this ID is not a business receipt.",
+      "x-handler-result": "IssueResult"
+    },
+    "ReadResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "status",
+        "bundle"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.read-response.v1"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "bundle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Bundle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "status": {
+                  "properties": {
+                    "state": {
+                      "const": "current"
+                    }
+                  }
+                },
+                "bundle": {
+                  "$ref": "#/$defs/Bundle"
+                }
+              }
+            },
+            {
+              "properties": {
+                "status": {
+                  "properties": {
+                    "state": {
+                      "enum": [
+                        "superseded",
+                        "revoked",
+                        "expired"
+                      ]
+                    }
+                  }
+                },
+                "bundle": {
+                  "type": "null"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Closed handler result without HTTP request_id."
+    },
+    "ReadResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "status",
+        "bundle",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.read-response.v1"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "bundle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Bundle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "status": {
+                  "properties": {
+                    "state": {
+                      "const": "current"
+                    }
+                  }
+                },
+                "bundle": {
+                  "$ref": "#/$defs/Bundle"
+                }
+              }
+            },
+            {
+              "properties": {
+                "status": {
+                  "properties": {
+                    "state": {
+                      "enum": [
+                        "superseded",
+                        "revoked",
+                        "expired"
+                      ]
+                    }
+                  }
+                },
+                "bundle": {
+                  "type": "null"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "description": "HTTP wrapper adds request_id only; this ID is not a business receipt.",
+      "x-handler-result": "ReadResult"
+    },
+    "RevokeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "revoke_id",
+        "provision_id",
+        "root_id",
+        "bundle_hash",
+        "generation",
+        "revoked_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.revoke-response.v1"
+        },
+        "revoke_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "bundle_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "revoked_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "description": "Closed handler result without HTTP request_id."
+    },
+    "RevokeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "revoke_id",
+        "provision_id",
+        "root_id",
+        "bundle_hash",
+        "generation",
+        "revoked_at",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.revoke-response.v1"
+        },
+        "revoke_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "provision_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "root_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "bundle_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "revoked_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP wrapper adds request_id only; this ID is not a business receipt.",
+      "x-handler-result": "RevokeResult"
+    },
+    "StatusResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "status"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.status-response.v1"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "description": "Closed handler result without HTTP request_id."
+    },
+    "StatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "status",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.status-response.v1"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP wrapper adds request_id only; this ID is not a business receipt.",
+      "x-handler-result": "StatusResult"
+    },
+    "AckResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "receipt"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.ack-response.v1"
+        },
+        "receipt": {
+          "$ref": "#/$defs/Receipt"
+        }
+      },
+      "description": "Closed handler result without HTTP request_id."
+    },
+    "AckResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "receipt",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.provision.ack-response.v1"
+        },
+        "receipt": {
+          "$ref": "#/$defs/Receipt"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP wrapper adds request_id only; this ID is not a business receipt.",
+      "x-handler-result": "AckResult"
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z_]{1,64}$(?![\\s\\S])"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    }
+  }
+}

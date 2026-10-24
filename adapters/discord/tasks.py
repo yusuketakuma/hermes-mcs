@@ -21,7 +21,7 @@ import weakref
 from typing import Any
 
 from adapters.common import paths, registry
-from adapters.common.worker import POLL_S, retry_startup
+from adapters.common.worker import POLL_S, await_settled, retry_startup
 from . import actions, delivery
 from contextlib import suppress
 
@@ -87,11 +87,17 @@ class Supervisor:
             bot=bot, settings=settings,
             root=self._root, reg=self._reg,
             worker_id=self._worker_id, log=log)
+        self._delivery = getattr(ctx, "delivery_admission", None)
+        self._delivery_identity = getattr(ctx, "delivery_identity", None)
+        if self._delivery is not None:
+            self._worker.send_admitted = lambda: self._delivery.send_allowed(self._delivery_identity)
         self._actions = actions.Actions(
             bot=bot, settings=settings, root=self._root,
-            reg=self._reg, log=log)
+            reg=self._reg, log=log,
+            native_admission=getattr(ctx, "native_admission", None))
         self._task = None
         self._stopping = False
+        self._ready = False
 
     # -- lifecycle -------------------------------------------------------
 
@@ -117,9 +123,10 @@ class Supervisor:
             self._bot.remove_listener(
                 self._actions.on_interaction, "on_interaction")
     def unload(self) -> None:
-        """ctx.on_unload callback — stop intake now; the supervised task
-        is cancelled by the host and releases the scope lock itself."""
+        """Stop intake synchronously; the supervised task retains its I/O until settled."""
         self._stopping = True
+        if self._delivery is not None:
+            self._delivery.connector_closing(self._delivery_identity)
         self._worker.stop()
         self._stop_listener()
 
@@ -135,7 +142,7 @@ class Supervisor:
                     lambda: self._stopping or _bot_closed(self._bot)):
                 return
             async def reconcile():
-                await self._worker.reload_reconcile()
+                await await_settled(self._worker.reload_reconcile(), on_cancel=self.unload)
                 return True
 
             if not await retry_startup(
@@ -146,19 +153,25 @@ class Supervisor:
                 return
             self._bot.add_listener(
                 self._actions.on_interaction, "on_interaction")
+            self._ready = True
             while not self._stopping:
                 if _bot_closed(self._bot):
                     # adapter rebuild: the successor wires its own
                     # listener; yield the lock so it can take over
                     self._log("bot_closed")
                     return
+                if self._delivery is not None and not self._delivery.begin_pass(self._delivery_identity):
+                    await asyncio.sleep(POLL_S)
+                    continue
                 try:
-                    await self._worker.tick()
-                    await self._actions.sweep_followups()
+                    await await_settled(self._pass(), on_cancel=self.unload)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
                     self._log("tick_error", error=type(e).__name__)
+                finally:
+                    if self._delivery is not None:
+                        self._delivery.end_pass(self._delivery_identity)
                 await asyncio.sleep(POLL_S)
         except asyncio.CancelledError:
             raise
@@ -166,10 +179,17 @@ class Supervisor:
             self._log("worker_exit", error=type(e).__name__)
             raise
         finally:
-            # released only when the task is truly done — in-flight
-            # cancellation mid-send is an 'unknown' the journal keeps
+            self._ready = False
+            if self._delivery is not None:
+                self._delivery.connector_closing(self._delivery_identity)
             self._stop_listener()
             self._worker.release_scope_lock()
             key = registry.scope_key(self._settings)
             if _LIVE.get(key) is self:
                 del _LIVE[key]
+
+    async def _pass(self):
+        await self._worker.tick()
+        if not self._stopping and (self._delivery is None
+                or self._delivery.send_allowed(self._delivery_identity)):
+            await self._actions.sweep_followups()

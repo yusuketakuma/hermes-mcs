@@ -1,0 +1,18 @@
+{
+  "category": "security",
+  "title": "顧客の状態監視をKeychainと別の私有領域で登録できるようにする",
+  "summary": "mcs connect --customer は顧客用の同意版とKeychainに保存した端末鍵を使い、自社検証用の資格情報を移動・削除せず別領域へ登録します。Keychainがロック中または利用不能なら通信を始めず、平文ファイルへ切り替えません。",
+  "upgrade": "顧客登録には承認済みendpoint.jsonを新しい専用私有領域へ配置し、mcs connect --customer を明示してください。既定は ~/.mcs-security-customer です。既存の自社資格情報や状態がある領域は自動移行しません。接続完了時に単独のConnectorジョブが顧客用領域へ切り替わるため、自社監視へのheartbeat送信は停止します。自社の資格情報とファイルは残ります。登録後の確認・停止・鍵交換は既存サービス設定に記録した領域を使います。Keychainのロック・再起動・ユーザー切替・移行の実機受入と顧客同意が済むまで顧客公開の完了とは扱いません。",
+  "details": [
+    "0600のv2保存方式markerをrootのpath/owner/device/inodeと承認済みendpoint hashへ束縛し、Keychain前に毎回検証する。コピー・移設・接続先変更・旧v1は自動移行せず元鍵を保持して拒否する。",
+    "保存方式markerが不正・欠落した顧客状態を平文方式へ戻さない。削除後もmarkerと監査に必要なローカル状態を保持する。",
+    "顧客の登録・状態照会・確認は sdc-customer-monitoring-v1 と version-process-status-only を照合し、既存の自社用wire契約を維持する。",
+    "接続確認・停止・鍵交換は現在のcfg.sdc.state_rootを使用し、既存サービス管理の単独ジョブと選択済みPythonを再利用する。"
+  ],
+  "refs": [
+    "adapters/sdc/storage.py",
+    "adapters/sdc/connector.py",
+    "adapters/sdc/protocol.py",
+    "mcs/ops/sdc_cli.py"
+  ]
+}

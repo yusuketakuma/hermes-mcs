@@ -47,9 +47,10 @@ def _runtime(transport: str):
     return standalone
 
 
-async def _serve(root: str, cfg: dict, transport: str) -> int:
+async def _serve(root: str, cfg: dict, transport: str, *, restart_provision=None) -> int:
     from .runtime import serve
-    return await serve(root, cfg, _runtime(transport).run if transport else None)
+    return await serve(root, cfg, _runtime(transport).run if transport else None,
+                       restart_provision=restart_provision)
 
 
 def run(root: str) -> int:

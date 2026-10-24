@@ -1,0 +1,19 @@
+{
+  "category": "security",
+  "title": "遠隔支援のローカル同意と停止を単一記録で保存",
+  "summary": "遠隔支援の同意・停止・失効済みepochを、私有領域の単一記録に保存する部品を追加しました。明示同意のない既定状態は無効で、操作実行・中央への送信にはまだ接続していません。",
+  "upgrade": "自動有効化やサービス操作はありません。初回provisionは明示指定した場合だけ無効状態を作ります。既存領域の欠落・破損は自動修復せず、失効証拠を失った復旧には新しい中央epochと現地再承認が必要です。削除や同じ領域全体の巻戻しを、この単一ファイルだけで防げるとは扱いません。",
+  "details": [
+    "短いStore.lock内で、準備時のowner世代と現在のroot・監視先・支援先・pin・実使用鍵hashの一致を確認してから、本人の明示同意を保存する。秘密鍵や認証情報そのものは保存しない。",
+    "同意receiptのlocal_receipt_idは再読込・同じ同意の再確認で保持する。ローカルCAS用owner_generationを操作runnerのwire世代へ流用しない。",
+    "同じscopeとopaqueなrealmでcase epochとlocal consent epochの両方の巻戻し・再利用を拒否し、別caseやrealmとは分ける。期限後の読取りは無効を返すが、元receiptや失効証拠を暗黙更新しない。",
+    "失効記録は128件・単一ファイル64KiB以内に制限し、将来の停止分まで容量を確保してから同意を有効化する。満杯でも過去の証拠を勝手に削除しない。",
+    "ローカル停止はbinding supplierやKeychainを必要とせず、世代を更新して新しい同意の競合を拒否する。lock競合や保存失敗を停止成功として返さない。",
+    "保存済みrootと現在の借用FD・pathの一致を停止時にも検証し、コピーやroot差替えを拒否する。support stateだけは監視用marker/endpointから独立して私有読書きし、それらが破損しても同じrootのローカル停止を妨げない。credentialや監視stateの既存検証は維持する。",
+    "同意state専用の非待機lockを追加し、ローカル停止をR1のHTTP・jitter待ちから独立させる。prepare/confirmは専用state lock→監視lockの順で短く保持し、停止は専用state lockだけで保存する。"
+  ],
+  "refs": [
+    "adapters/sdc/storage.py",
+    "adapters/sdc/support_state.py"
+  ]
+}

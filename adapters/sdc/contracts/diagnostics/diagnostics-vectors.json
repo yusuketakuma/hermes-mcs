@@ -1,0 +1,1278 @@
+{
+  "schema_version": "sdc.diagnostics.vectors.v1",
+  "description": "Synthetic shape vectors only; no real device, tenant, key, PHI/PII or log. They prove no current authorization or deployment.",
+  "now": 1792663200000,
+  "positive": [
+    {
+      "name": "Batch",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "unknown",
+            "code": "UNKNOWN",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 1
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Receipt",
+      "definition": "Receipt",
+      "value": {
+        "schema_version": "sdc.diagnostics.receipt.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "state": "accepted",
+        "content_state": "stored",
+        "consent_epoch": 1,
+        "event_count": 2,
+        "dropped_events": 7,
+        "partial": true,
+        "accepted_at": 1792663200000,
+        "content_expires_at": 1793268000000
+      }
+    },
+    {
+      "name": "Expired receipt",
+      "definition": "Receipt",
+      "value": {
+        "schema_version": "sdc.diagnostics.receipt.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "state": "accepted",
+        "content_state": "expired",
+        "consent_epoch": 1,
+        "event_count": 2,
+        "dropped_events": 7,
+        "partial": true,
+        "accepted_at": 1792663200000,
+        "content_expires_at": 1793268000000
+      }
+    },
+    {
+      "name": "Status request",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.diagnostics.status-request.v1",
+        "batch_ids": [
+          "00000000-0000-4000-8000-000000000001",
+          "00000000-0000-4000-8000-000000000003"
+        ]
+      }
+    },
+    {
+      "name": "Status",
+      "definition": "Status",
+      "value": {
+        "schema_version": "sdc.diagnostics.status.v1",
+        "consent": {
+          "state": "active",
+          "consent_epoch": 1,
+          "expires_at": 1795255200000
+        },
+        "batches": [
+          {
+            "batch_id": "00000000-0000-4000-8000-000000000001",
+            "state": "accepted",
+            "content_state": "stored"
+          },
+          {
+            "batch_id": "00000000-0000-4000-8000-000000000003",
+            "state": "unknown",
+            "content_state": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "Inactive status",
+      "definition": "Status",
+      "value": {
+        "schema_version": "sdc.diagnostics.status.v1",
+        "consent": {
+          "state": "inactive",
+          "consent_epoch": null,
+          "expires_at": null
+        },
+        "batches": []
+      }
+    },
+    {
+      "name": "Artifact submit",
+      "definition": "ArtifactSubmit",
+      "value": {
+        "schema_version": "sdc.diagnostics.case-artifact-submit.v1",
+        "artifact_id": "00000000-0000-4000-8000-000000000004",
+        "approval_id": "00000000-0000-4000-8000-000000000005",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "case_epoch": 2,
+        "local_consent_epoch": 1,
+        "artifact_sha256": "2143e7b49c980692ba0df0b4ffd884499866680d1b4b06b3759b5cf1c7762f81",
+        "artifact": {
+          "schema_version": "sdc.diagnostics.case-artifact.v1",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "events": [
+            {
+              "component": "notification",
+              "stage": "send",
+              "code": "TIMEOUT",
+              "severity": "error",
+              "bucket_start": 1792663200000,
+              "count": 3
+            }
+          ],
+          "dropped_events": 0,
+          "partial": false
+        }
+      }
+    },
+    {
+      "name": "Artifact receipt",
+      "definition": "ArtifactReceipt",
+      "value": {
+        "schema_version": "sdc.diagnostics.case-artifact-receipt.v1",
+        "artifact_id": "00000000-0000-4000-8000-000000000004",
+        "approval_id": "00000000-0000-4000-8000-000000000005",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "artifact_sha256": "2143e7b49c980692ba0df0b4ffd884499866680d1b4b06b3759b5cf1c7762f81",
+        "state": "accepted",
+        "content_state": "stored",
+        "accepted_at": 1792663200000,
+        "content_expires_at": 1793268000000
+      }
+    },
+    {
+      "name": "Consent grant",
+      "definition": "ConsentGrantRequest",
+      "value": {
+        "consent_id": "00000000-0000-4000-8000-000000000006",
+        "device_id": "00000000-0000-4000-8000-000000000007",
+        "expires_at": 1795255200000
+      }
+    },
+    {
+      "name": "Consent revoke",
+      "definition": "ConsentRevokeRequest",
+      "value": {
+        "revocation_id": "00000000-0000-4000-8000-000000000008",
+        "consent_id": "00000000-0000-4000-8000-000000000006"
+      }
+    },
+    {
+      "name": "Artifact approval",
+      "definition": "ArtifactApprovalRequest",
+      "value": {
+        "approval_id": "00000000-0000-4000-8000-000000000005",
+        "artifact_id": "00000000-0000-4000-8000-000000000004",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "00000000-0000-4000-8000-000000000007",
+        "case_epoch": 2,
+        "local_consent_epoch": 1,
+        "artifact_sha256": "2143e7b49c980692ba0df0b4ffd884499866680d1b4b06b3759b5cf1c7762f81",
+        "artifact_size": 267
+      }
+    },
+    {
+      "name": "Consent scope",
+      "definition": "ConsentScope",
+      "value": {
+        "consent_revision": "sdc-diagnostic-events-consent-v1",
+        "target": "device",
+        "fields": [
+          "component",
+          "stage",
+          "code",
+          "severity",
+          "bucket_start",
+          "count",
+          "dropped_events",
+          "partial"
+        ],
+        "components": [
+          "runtime",
+          "scheduler",
+          "notification",
+          "connectivity",
+          "update",
+          "storage",
+          "config",
+          "connector"
+        ],
+        "content_retention_days": 7,
+        "receipt_retention_days": 180,
+        "max_validity_days": 90,
+        "excluded": [
+          "patient_data",
+          "secrets",
+          "paths",
+          "urls",
+          "exception_text",
+          "free_text",
+          "raw_logs",
+          "files",
+          "commands"
+        ]
+      }
+    },
+    {
+      "name": "Platform fault",
+      "definition": "PlatformFault",
+      "value": {
+        "schema_version": "sdc.diagnostics.platform-fault.v1",
+        "component": "ingest",
+        "code": "D1_UNAVAILABLE",
+        "bucket_start": 1792663200000
+      }
+    },
+    {
+      "name": "Consent required",
+      "definition": "ErrorResponse",
+      "value": {
+        "code": "DIAGNOSTIC_CONSENT_REQUIRED",
+        "request_id": "00000000-0000-4000-8000-000000000009"
+      }
+    }
+  ],
+  "negative": [
+    {
+      "name": "Path as code",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "/Users/synthetic/app.log",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "URL as component",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "https://synthetic.invalid/x",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Exception as stage",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "TypeError: synthetic",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Free text message",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3,
+            "message": "synthetic"
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Unknown top field",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "unknown",
+            "code": "UNKNOWN",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 1
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true,
+        "detail": "synthetic"
+      }
+    },
+    {
+      "name": "Unaligned bucket",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200001,
+            "count": 3
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Zero count",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 0
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Count overflow",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 100001
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Empty events",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Too many events",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792662600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792662000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792661400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792660800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792660200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792659600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792659000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792658400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792657800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792657200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792656600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792656000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792655400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792654800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792654200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792653600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792653000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792652400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792651800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792651200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792650600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792650000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792649400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792648800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792648200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792647600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792647000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792646400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792645800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792645200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792644600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792644000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792643400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792642800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792642200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792641600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792641000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792640400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792639800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792639200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792638600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792638000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792637400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792636800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792636200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792635600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792635000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792634400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792633800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792633200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792632600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792632000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792631400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792630800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792630200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792629600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792629000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792628400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792627800000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792627200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792626600000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792626000000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792625400000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792624800000,
+            "count": 3
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Negative drop",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "unknown",
+            "code": "UNKNOWN",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 1
+          }
+        ],
+        "dropped_events": -1,
+        "partial": true
+      }
+    },
+    {
+      "name": "Partial unknown string",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "unknown",
+            "code": "UNKNOWN",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 1
+          }
+        ],
+        "dropped_events": 7,
+        "partial": "unknown"
+      }
+    },
+    {
+      "name": "Zero consent epoch",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.diagnostics.events.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 0,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "unknown",
+            "code": "UNKNOWN",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 1
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Heartbeat version",
+      "definition": "Batch",
+      "value": {
+        "schema_version": "sdc.heartbeat.v1",
+        "batch_id": "00000000-0000-4000-8000-000000000001",
+        "consent_epoch": 1,
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          },
+          {
+            "component": "notification",
+            "stage": "unknown",
+            "code": "UNKNOWN",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 1
+          }
+        ],
+        "dropped_events": 7,
+        "partial": true
+      }
+    },
+    {
+      "name": "Accepted without content state",
+      "definition": "Status",
+      "value": {
+        "schema_version": "sdc.diagnostics.status.v1",
+        "consent": {
+          "state": "inactive",
+          "consent_epoch": null,
+          "expires_at": null
+        },
+        "batches": [
+          {
+            "batch_id": "00000000-0000-4000-8000-000000000001",
+            "state": "accepted",
+            "content_state": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "Inactive with epoch",
+      "definition": "Status",
+      "value": {
+        "schema_version": "sdc.diagnostics.status.v1",
+        "consent": {
+          "state": "inactive",
+          "consent_epoch": 1,
+          "expires_at": null
+        },
+        "batches": []
+      }
+    },
+    {
+      "name": "Status grants consent",
+      "definition": "Status",
+      "value": {
+        "schema_version": "sdc.diagnostics.status.v1",
+        "consent": {
+          "state": "granted",
+          "consent_epoch": 1,
+          "expires_at": 1792663200000
+        },
+        "batches": []
+      }
+    },
+    {
+      "name": "Too many status IDs",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.diagnostics.status-request.v1",
+        "batch_ids": [
+          "00000000-0000-4000-8000-000000000100",
+          "00000000-0000-4000-8000-000000000101",
+          "00000000-0000-4000-8000-000000000102",
+          "00000000-0000-4000-8000-000000000103",
+          "00000000-0000-4000-8000-000000000104",
+          "00000000-0000-4000-8000-000000000105",
+          "00000000-0000-4000-8000-000000000106",
+          "00000000-0000-4000-8000-000000000107",
+          "00000000-0000-4000-8000-000000000108",
+          "00000000-0000-4000-8000-000000000109",
+          "00000000-0000-4000-8000-000000000110",
+          "00000000-0000-4000-8000-000000000111",
+          "00000000-0000-4000-8000-000000000112",
+          "00000000-0000-4000-8000-000000000113",
+          "00000000-0000-4000-8000-000000000114",
+          "00000000-0000-4000-8000-000000000115",
+          "00000000-0000-4000-8000-000000000116"
+        ]
+      }
+    },
+    {
+      "name": "Artifact without approval",
+      "definition": "ArtifactSubmit",
+      "value": {
+        "schema_version": "sdc.diagnostics.case-artifact-submit.v1",
+        "artifact_id": "00000000-0000-4000-8000-000000000004",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "case_epoch": 2,
+        "local_consent_epoch": 1,
+        "artifact_sha256": "2143e7b49c980692ba0df0b4ffd884499866680d1b4b06b3759b5cf1c7762f81",
+        "artifact": {
+          "schema_version": "sdc.diagnostics.case-artifact.v1",
+          "case_id": "00000000-0000-4000-8000-000000000002",
+          "events": [
+            {
+              "component": "notification",
+              "stage": "send",
+              "code": "TIMEOUT",
+              "severity": "error",
+              "bucket_start": 1792663200000,
+              "count": 3
+            }
+          ],
+          "dropped_events": 0,
+          "partial": false
+        }
+      }
+    },
+    {
+      "name": "Artifact free text",
+      "definition": "Artifact",
+      "value": {
+        "schema_version": "sdc.diagnostics.case-artifact.v1",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "events": [
+          {
+            "component": "notification",
+            "stage": "send",
+            "code": "TIMEOUT",
+            "severity": "error",
+            "bucket_start": 1792663200000,
+            "count": 3
+          }
+        ],
+        "dropped_events": 0,
+        "partial": false,
+        "note": "synthetic"
+      }
+    },
+    {
+      "name": "Oversize approval",
+      "definition": "ArtifactApprovalRequest",
+      "value": {
+        "approval_id": "00000000-0000-4000-8000-000000000005",
+        "artifact_id": "00000000-0000-4000-8000-000000000004",
+        "case_id": "00000000-0000-4000-8000-000000000002",
+        "device_id": "00000000-0000-4000-8000-000000000007",
+        "case_epoch": 2,
+        "local_consent_epoch": 1,
+        "artifact_sha256": "2143e7b49c980692ba0df0b4ffd884499866680d1b4b06b3759b5cf1c7762f81",
+        "artifact_size": 16385
+      }
+    },
+    {
+      "name": "Device in grant body as tenant",
+      "definition": "ConsentGrantRequest",
+      "value": {
+        "consent_id": "00000000-0000-4000-8000-000000000006",
+        "device_id": "00000000-0000-4000-8000-000000000007",
+        "expires_at": 1795255200000,
+        "tenant": "tenant-a"
+      }
+    },
+    {
+      "name": "Platform fault detail",
+      "definition": "PlatformFault",
+      "value": {
+        "schema_version": "sdc.diagnostics.platform-fault.v1",
+        "component": "ingest",
+        "code": "D1_UNAVAILABLE",
+        "bucket_start": 1792663200000,
+        "detail": "synthetic"
+      }
+    },
+    {
+      "name": "Platform free code",
+      "definition": "PlatformFault",
+      "value": {
+        "schema_version": "sdc.diagnostics.platform-fault.v1",
+        "component": "ingest",
+        "code": "synthetic",
+        "bucket_start": 1792663200000
+      }
+    },
+    {
+      "name": "Error with message",
+      "definition": "ErrorResponse",
+      "value": {
+        "code": "DIAGNOSTIC_CONFLICT",
+        "request_id": "00000000-0000-4000-8000-000000000009",
+        "message": "synthetic"
+      }
+    }
+  ],
+  "raw_negative": [
+    {
+      "name": "Duplicate key",
+      "definition": "Batch",
+      "text": "{\"schema_version\":\"sdc.diagnostics.events.v1\",\"batch_id\":\"00000000-0000-4000-8000-000000000001\",\"consent_epoch\":1,\"events\":[{\"component\":\"notification\",\"stage\":\"send\",\"code\":\"TIMEOUT\",\"severity\":\"error\",\"bucket_start\":1792663200000,\"count\":3},{\"component\":\"notification\",\"stage\":\"unknown\",\"code\":\"UNKNOWN\",\"severity\":\"error\",\"bucket_start\":1792663200000,\"count\":1}],\"dropped_events\":7,\"partial\":true,\"partial\":false}"
+    },
+    {
+      "name": "BOM",
+      "definition": "Batch",
+      "text": "﻿{\"schema_version\":\"sdc.diagnostics.events.v1\",\"batch_id\":\"00000000-0000-4000-8000-000000000001\",\"consent_epoch\":1,\"events\":[{\"component\":\"notification\",\"stage\":\"send\",\"code\":\"TIMEOUT\",\"severity\":\"error\",\"bucket_start\":1792663200000,\"count\":3},{\"component\":\"notification\",\"stage\":\"unknown\",\"code\":\"UNKNOWN\",\"severity\":\"error\",\"bucket_start\":1792663200000,\"count\":1}],\"dropped_events\":7,\"partial\":true}"
+    }
+  ]
+}

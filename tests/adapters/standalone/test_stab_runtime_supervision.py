@@ -96,7 +96,7 @@ def test_connector_failure_backs_off_without_stopping_the_host(tmp_path, monkeyp
 
     monkeypatch.setattr(runtime.asyncio, "sleep", fast_sleep)
 
-    async def connector(root, stopping):
+    async def connector(root, stopping, *, native_admission, delivery_admission, delivery_identity):
         attempts.append(clock[0])
         if len(attempts) == 3:
             raise ValueError("slack_configuration_changed_restart_required")

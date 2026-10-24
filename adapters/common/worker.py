@@ -56,6 +56,29 @@ NO_BACKUP_HORIZON_S = 90 * 86400.0  # with no local backup set, settled rows
 NOT_SENT_STATUS = frozenset({400, 401, 403, 404, 405, 410})
 
 
+async def await_settled(coroutine, *, on_cancel=None):
+    """Wait for owned I/O to finish even when its outer waiter is cancelled."""
+    try:
+        task = asyncio.create_task(coroutine)
+    except BaseException:
+        coroutine.close()
+        raise
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+            if on_cancel is not None:
+                on_cancel()
+    result = task.result()
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
+
+
 def err_code(exc: BaseException) -> str:
     status = getattr(exc, "status", None)
     if isinstance(status, int):
@@ -124,6 +147,7 @@ class DeliveryWorker:
         self._log = log
         self._lock_fd = None
         self._stopping = False
+        self.send_admitted = None
         self._journal_incomplete = False
         self._segment = 0
         # every per-tick journal read (part dedupe, resume, spent/started
@@ -628,13 +652,13 @@ class DeliveryWorker:
                 continue              # unknown — reconcile reports it
             if kind != "thread" and not ctx.get("thread_id"):
                 continue              # held — dependents need a thread
-            if not await self._send_allowed(spec):
-                return                # retain unfinished parts for resume
             # revocation withdraws the spec file (the worker never reads
             # the DB); the manifest in memory must not outrun it
             if not await asyncio.to_thread(os.path.isfile, os.path.join(
                     self._dirs["render"], spec["delivery_id"] + ".json")):
                 return
+            if not await self._send_allowed(spec):
+                return                # retain unfinished parts for resume
             await self._attempt_part(claim, part, ctx)
         self._reg.put_parts_done(spec["delivery_id"])
 
@@ -813,6 +837,7 @@ class DeliveryWorker:
     async def _send_allowed(self, spec: dict | None = None) -> bool:
         flags = await asyncio.to_thread(paths.read_flags, self._root)
         return (not self._stopping and not self._journal_incomplete
+                and (self.send_admitted is None or self.send_admitted())
                 and paths.route_open(
                     flags, self.transport,
                     None if spec is None else spec["delivery"]["route_epoch"],
@@ -1089,6 +1114,8 @@ class DeliveryWorker:
                         self._log("restore_suspect",
                                   delivery_id=delivery_id)
                         self._reg.mark_dead(delivery_id)
+                        continue
+                    if self.send_admitted is not None and not self.send_admitted():
                         continue
                     claim = await self._fresh_claim(path, spec, now)
                 if claim is not None:

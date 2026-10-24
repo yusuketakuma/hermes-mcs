@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from contextlib import suppress
 import errno
 import fcntl
@@ -18,6 +19,7 @@ import sys
 import stat
 import subprocess
 import time
+import threading
 import uuid
 
 import update_journal
@@ -28,9 +30,12 @@ from scheduled_jobs import (CRON_TIMEOUT_S, TIMEOUT_PERL, calendar_entries,
                             configured_cron_jobs, latest_calendar_slots, render_template)
 from writer_lock import UPDATE_MARKER_NAME
 from safe_io import atomic_write
+from adapters.common.commands import NativeAdmission
+from adapters.common.worker import await_settled
 
 from . import config, service
-from .host import log
+from .restart_transport import RestartCarrier
+from .host import DeliveryAdmission, log
 
 REPO = Path(__file__).resolve().parents[1]
 BACKGROUND = {"extract-0": "ai.mcs.extract-drainer", "extract-2": "ai.mcs.extract-drainer-2"}
@@ -69,17 +74,27 @@ def _error_code(exc):
     return text if _CODE.fullmatch(text) else type(exc).__name__
 
 
-def _try_lock(path):
+def _try_lock(path, *, require_known=False):
+    fd = None
+    retained = False
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    except OSError:
-        return None
-    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
+                     | os.O_NONBLOCK, 0o600)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise OSError(errno.EPERM, "standalone_lock_invalid")
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        retained = True
         return fd
-    except OSError:
-        os.close(fd)
+    except BlockingIOError:
         return None
+    except OSError:
+        if require_known:
+            raise
+        return None
+    finally:
+        if fd is not None and not retained:
+            os.close(fd)
 
 
 IDENTITY_BYTES = 16384
@@ -197,6 +212,17 @@ class Runtime:
         self.data = self.root / "data"
         self.cfg = cfg
         self.generation = uuid.uuid4().hex
+        self.native_admission = NativeAdmission()
+        self.delivery_admission = DeliveryAdmission()
+        self._delivery_identity = None
+        self._reservation_owner_thread = threading.get_ident()
+        self._restart_reservation = None
+        self._restart_reservation_uncertain = False
+        self._restart_carrier = None
+        self._restart_execution_owner = None
+        self._planning_host_fd = None
+        self._support_restart = None
+        self._restart_signal_seen = False
         self.started_at = time.time()
         self.children = {}
         self.orphan_candidates = {}
@@ -287,6 +313,8 @@ class Runtime:
                 "update_in_progress": updating,
                 "update_marker": dict(self.marker) if self.marker else None,
                 "restarting": self.restarting,
+                "restart_reservation": ("uncertain" if self._restart_reservation_uncertain
+                                        else "active" if self._restart_reservation is not None else None),
                 "children": {
                     **{job: {"pid": pid, "kind": "background" if job in BACKGROUND or job == "lineworks" else "core",
                              "state": "orphan_identity_unknown"}
@@ -310,11 +338,332 @@ class Runtime:
         self._write_ok(service.STATUS_FILE)
         self.status_body, self.status_written = text, now
 
+    # ---------------------------------------------------- local reservation
+
+    def _reservation_owner(self):
+        if threading.get_ident() != self._reservation_owner_thread:
+            raise RuntimeError("standalone_restart_owner_required")
+
+    def _reservation_config_current(self, expected):
+        try:
+            return self.cfg == expected and config.load(self.root) == expected
+        except (OSError, ValueError, TypeError):
+            return False
+
+    def _reservation_idle(self):
+        native = self.native_admission.snapshot()
+        return (not native["queued"] and not native["running"]
+                and not self.delivery_admission.snapshot()["active_passes"]
+                and self._delivery_owner_ready()
+                and not any(job in self.children for job in ("cmd", "cmd_int", "update", "lineworks"))
+                and not self.orphan_candidates and self.identity_probe is None
+                and not any(isinstance(row["process"], _Adopted) for row in self.children.values()))
+
+    def _delivery_owner_ready(self):
+        delivery = self.delivery_admission.snapshot()
+        transport = (self.cfg.get("notify") or {}).get("interactive")
+        if transport in ("slack", "discord"):
+            return (self._delivery_identity is not None and delivery["ready"]
+                    and self.connector["state"] == "running")
+        return (not transport and self._delivery_identity is None
+                and delivery["state"] == "off" and self.connector["state"] == "off")
+
+    def _restart_update_ready(self, row):
+        try:
+            held, current = os.fstat(row["fd"]), os.lstat(self.data / "update.lock")
+            if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
+                raise RuntimeError("standalone_restart_update_lock_unknown")
+        except (OSError, TypeError):
+            raise RuntimeError("standalone_restart_update_lock_unknown") from None
+        try:
+            os.lstat(self.data / UPDATE_MARKER_NAME)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            raise RuntimeError("standalone_restart_update_marker_unknown") from None
+        else:
+            raise RuntimeError("standalone_restart_update_pending")
+        state = update_journal.load_state(self.data / "update_state.json")
+        if state.get("_corrupt") or state.get("applying") or state.get("stages"):
+            raise RuntimeError("standalone_restart_update_pending")
+
+    def reserve_restart(self):
+        """Pause local admission with one live RAM reservation, without authorizing a restart.
+
+        Configured chat owners need actual connector readiness. No grant, SPENT, HTTP,
+        durable continuation or drain is created. A returned object is valid
+        only on this Runtime's synchronous owner thread and current generation.
+        """
+        self._reservation_owner()
+        if self._restart_reservation is not None or self._restart_reservation_uncertain or self.restarting:
+            raise RuntimeError("standalone_restart_reservation_busy")
+        if not self._reservation_config_current(self.cfg):
+            raise RuntimeError("standalone_restart_configuration_changed")
+        if not self._delivery_owner_ready():
+            raise RuntimeError("native_owner_unknown")
+        if not self.native_admission.snapshot()["open"] or not self.delivery_admission.snapshot()["open"]:
+            raise RuntimeError("standalone_restart_admission_closed")
+        handle = object()
+        row = {"handle": handle, "generation": self.generation, "config": copy.deepcopy(self.cfg),
+               "admission": self.native_admission, "delivery": self.delivery_admission,
+               "delivery_identity": self._delivery_identity, "fd": None}
+        self._restart_reservation = row
+        self.native_admission.close()
+        self.delivery_admission.close()
+        try:
+            if not self._reservation_idle():
+                raise RuntimeError("standalone_restart_reservation_busy")
+            try:
+                row["fd"] = _try_lock(self.data / "update.lock", require_known=True)
+            except OSError:
+                self._restart_reservation_uncertain = True
+                raise RuntimeError("standalone_restart_update_lock_unknown") from None
+            if row["fd"] is None:
+                raise RuntimeError("standalone_restart_update_busy")
+            self._restart_update_ready(row)
+            if (self.restarting or self._restart_requested(time.time())
+                    or not self._reservation_config_current(row["config"]) or not self._reservation_idle()):
+                raise RuntimeError("standalone_restart_reservation_busy")
+            return handle
+        except BaseException:
+            self.release_restart(handle)
+            raise
+
+    def release_restart(self, handle):
+        """Retire this exact local reservation; reopen only a proven unchanged, unstopped owner.
+
+        Returning True means local admission reopened, never restart permission.
+        Uncertain descriptor retirement keeps admission closed until owner exit.
+        """
+        self._reservation_owner()
+        row = self._restart_reservation
+        if row is None or row["handle"] is not handle:
+            raise RuntimeError("standalone_restart_reservation_invalid")
+        if self._restart_carrier is not None and self._restart_carrier.busy:
+            raise RuntimeError("standalone_restart_transport_busy")
+        if self._restart_execution_owner is not None:
+            raise RuntimeError("standalone_restart_execution_busy")
+        self._restart_reservation = None  # Revoke the live capability before fd retirement.
+        fd, row["fd"] = row["fd"], None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                self._restart_reservation_uncertain = True
+                raise RuntimeError("standalone_restart_retirement_unknown") from None
+        current = (row["generation"] == self.generation and row["admission"] is self.native_admission
+                   and row["delivery"] is self.delivery_admission
+                   and row["delivery_identity"] is self._delivery_identity
+                   and self._reservation_config_current(row["config"]))
+        if not current or self._restart_requested(time.time()):
+            self.restarting = True
+        if current and not self.restarting and not self._restart_reservation_uncertain:
+            self.native_admission.open()
+            self.delivery_admission.open()
+            return True
+        return False
+
+    def _restart_exchange_owner(self, handle):
+        self._reservation_owner()
+        row = self._restart_reservation
+        if row is None or row["handle"] is not handle:
+            raise RuntimeError("standalone_restart_reservation_invalid")
+        if (row["generation"] != self.generation or row["admission"] is not self.native_admission
+                or row["delivery"] is not self.delivery_admission
+                or row["delivery_identity"] is not self._delivery_identity
+                or self.restarting or self._restart_reservation_uncertain
+                or self._restart_requested(time.time())
+                or not self._reservation_config_current(row["config"])
+                or not self._reservation_idle()
+                or self.native_admission.snapshot()["open"]
+                or self.delivery_admission.snapshot()["open"]):
+            raise RuntimeError("standalone_restart_owner_changed")
+
+    async def restart_exchange(self, handle, endpoint, path, raw, headers, *, deadline):
+        """Borrow this live reservation for one bounded request, not restart authority.
+
+        The caller supplies independently approved endpoint and signed request;
+        it must validate the returned evidence and current permission separately.
+        Cancellation waits for actual child retirement before the handle can be
+        released. No request, response or execution continuation is persisted.
+        """
+        self._restart_exchange_owner(handle)
+        if self._restart_carrier is None:
+            self._restart_carrier = RestartCarrier()
+        result = await self._restart_carrier.send(endpoint, path, raw, headers, deadline=deadline)
+        self._restart_exchange_owner(handle)
+        return result
+
+    async def _close_restart_transport(self):
+        if self._restart_execution_owner is not None:
+            owner = self._restart_execution_owner
+            owner.cancel()
+            await owner.wait_closed()
+        if self._restart_carrier is not None:
+            self._restart_carrier.cancel()
+            await self._restart_carrier.wait_closed()
+
+    async def restart_execute(self, store, *, operation_envelope, approval, acceptance,
+                              authority_supplier, deadline, verifier=None,
+                              clock=time.time, monotonic=time.monotonic):
+        """Run one live restart; authority joins its fresh read_credential callback each time."""
+        from .restart_owner import execute
+        return await execute(self, store, operation_envelope=operation_envelope,
+                             approval=approval, acceptance=acceptance,
+                             authority_supplier=authority_supplier, deadline=deadline,
+                             verifier=verifier, clock=clock, monotonic=monotonic)
+
+    def _restart_execution_check(self, owner, handle):
+        if self._restart_execution_owner is not owner:
+            raise RuntimeError("standalone_restart_execution_owner_changed")
+        self._restart_exchange_owner(handle)
+        self._restart_update_ready(self._restart_reservation)
+
+    def _restart_support_start(self, owner, handle, *, operation_id, receipt_id,
+                               start_receipt_id, started_at):
+        self._restart_execution_check(owner, handle)
+        if self._support_restart is not None:
+            raise RuntimeError("standalone_restart_execution_spent")
+        # A support cause exists only after its SPENT barrier, never for a signal/config stop.
+        self._support_restart = {"operation_id": operation_id, "receipt_id": receipt_id,
+                                 "start_receipt_id": start_receipt_id, "started_at": started_at}
+        self.restarting = True
+        if self._restart_signal_seen:
+            self._support_restart = None
+            raise RuntimeError("standalone_restart_owner_changed")
+        return started_at
+
+    def _restart_signal(self, _signal, _frame):
+        self._restart_signal_seen = True
+        self.restarting = True
+
+    # ---------------------------------------------------- passive planning
+
+    def _planning_owner_ready(self, expected_config, expected_generation):
+        self._reservation_owner()
+        if (self._planning_host_fd is None or self.restarting or self._restart_signal_seen
+                or self._restart_reservation is not None or self._restart_reservation_uncertain
+                or self._restart_execution_owner is not None
+                or self.generation != expected_generation
+                or not self._reservation_config_current(expected_config)
+                or not self.native_admission.snapshot()["open"]
+                or not self.delivery_admission.snapshot()["open"]
+                or not self._reservation_idle()):
+            raise RuntimeError("standalone_restart_planning_unavailable")
+        held = os.fstat(self._planning_host_fd)
+        current = os.lstat(self.data / "standalone.lock")
+        if (not stat.S_ISREG(current.st_mode) or current.st_uid != os.getuid()
+                or current.st_mode & 0o077 or current.st_nlink != 1
+                or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+            raise RuntimeError("standalone_restart_planning_unavailable")
+
+    def _planning_controls_clear(self):
+        from adapters.sdc.protocol import strict_json
+
+        try:
+            request = strict_json(safe_io.read_private_bytes(self.data / service.RESTART_FILE))
+        except FileNotFoundError:
+            pass
+        else:
+            if (type(request) is not dict or set(request) != {"generation", "request_id", "requested_at"}
+                    or any(type(request[k]) is not str or re.fullmatch("[0-9a-f]{32}", request[k]) is None
+                           for k in ("generation", "request_id"))
+                    or type(request["requested_at"]) not in (int, float)
+                    or not math.isfinite(request["requested_at"])
+                    or request["requested_at"] < 0
+                    or request["generation"] == self.generation):
+                raise RuntimeError("standalone_restart_planning_unavailable")
+        # No O_CREAT: a missing lock is unknown, not evidence of an idle updater.
+        fd = os.open(self.data / "update.lock", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            held = os.fstat(fd)
+            if (not stat.S_ISREG(held.st_mode) or held.st_uid != os.getuid()
+                    or held.st_mode & 0o077 or held.st_nlink != 1):
+                raise ValueError
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                os.lstat(self.data / UPDATE_MARKER_NAME)
+            except FileNotFoundError:
+                pass
+            else:
+                raise ValueError
+            try:
+                state = strict_json(safe_io.read_private_bytes(self.data / "update_state.json", 1024 * 1024))
+            except FileNotFoundError:
+                state = update_journal.default_state()
+            if (not update_journal.valid_state(state) or state.get("_corrupt")
+                    or state.get("applying") is not None or state.get("stages")):
+                raise ValueError
+            current = os.lstat(self.data / "update.lock")
+            if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
+                raise ValueError
+        finally:
+            os.close(fd)
+
+    def _restart_planning_preflight(self, request):
+        """Observe this serving owner once; no reservation, cleanup or execution authority."""
+        from adapters.sdc.restart_contract import EXPECTED_FIELDS, _preflight
+
+        try:
+            fields = {"request_id", "planning_owner", "phase", "expected_generation", "expires_at", "expected"}
+            now = time.time() * 1000
+            if (type(request) is not dict or set(request) != fields
+                    or type(request["expected"]) is not dict
+                    or set(request["expected"]) != set(EXPECTED_FIELDS) - {"service_revision", "params"}
+                    or request["phase"] not in ("sample", "refresh", "confirm")
+                    or type(request["expires_at"]) is not int
+                    or not 0 <= now < request["expires_at"] <= 2**53 - 1
+                    or (request["expected_generation"] is None and request["phase"] != "sample")
+                    or request["expected_generation"] not in (None, self.generation)):
+                raise ValueError
+            expected_config, generation = copy.deepcopy(self.cfg), self.generation
+            self._planning_owner_ready(expected_config, generation)
+            self._planning_controls_clear()
+            self._planning_owner_ready(expected_config, generation)
+            observed_at = int(time.time() * 1000)
+            if observed_at >= request["expires_at"]:
+                raise ValueError
+            return _preflight({"schema_version": "sdc.support.restart-preflight.v1", "product": "hermes-mcs",
+                **{k: request["expected"][k] for k in ("tenant", "installation", "device_id", "environment", "case_id")},
+                "service_id": "mcs.standalone", "runtime_generation": generation,
+                "started_at": int(self.started_at * 1000), "observed_at": observed_at, "owner_alive": True,
+                "update_in_progress": False, "command_intake_in_progress": False, "restarting": False}, observed_at)
+        except Exception:
+            raise RuntimeError("standalone_restart_planning_unavailable") from None
+
+    def _respond_restart_planning(self, restart_provision):
+        if self.restarting or restart_provision is not None and not callable(restart_provision):
+            return False
+        try:
+            settings = self.cfg.get("sdc")
+            if type(settings) is not dict or type(settings.get("state_root")) is not str or not settings["state_root"]:
+                return False
+            if restart_provision is None:
+                for name in ('provision-state.json', 'restart-planning.json'):
+                    marker = os.stat(Path(settings['state_root']) / name, follow_symlinks=False)
+                    if not stat.S_ISREG(marker.st_mode):
+                        return False
+            self._reservation_owner()
+            from adapters.sdc import provision
+            from adapters.sdc.restart_planning import respond_once
+            from adapters.sdc.storage import Store
+
+            with Store(settings["state_root"]) as store:
+                if restart_provision is None:
+                    provision.profile_snapshot(store, profile='restart', now_ms=int(time.time() * 1000))
+                # Only local metadata is read; the injected provider is never called.
+                return respond_once(store, sample=self._restart_planning_preflight,
+                                    now=lambda: int(time.time() * 1000))
+        except Exception:
+            # An unavailable metadata response must not stop the normal Runtime.
+            return False
+
     # ------------------------------------------------------------- children
 
     def start(self, job, kind, now, pending=None):
         # A failed start earlier in this tick requested a restart: start nothing more.
-        if (self.restarting or job in self.children or job in self.orphan_candidates
+        if (self.restarting or self._restart_reservation is not None or self._restart_reservation_uncertain
+                or job in self.children or job in self.orphan_candidates
                 or now < self.retry_at.get(job, 0)):
             return
         path = self.data / (job + ".log")
@@ -614,6 +963,8 @@ class Runtime:
     # ------------------------------------------------------------- schedule
 
     def _schedule(self, now):
+        if self._restart_reservation is not None or self._restart_reservation_uncertain:
+            return
         minute = int(now // 60)
         if minute != self.last_minute:
             self.last_minute = minute
@@ -662,7 +1013,12 @@ class Runtime:
             self.restarting |= self._restart_requested(now)
         if self.restarting and self.restart_since is None:
             self.restart_since = now
-        updating = self._updating(now)
+        if self.restarting:
+            self.native_admission.close()
+            self.delivery_admission.close()
+        # Our reservation owns update.lock; do not probe/reacquire it as an updater.
+        updating = (False if self._restart_reservation is not None or self._restart_reservation_uncertain
+                    else self._updating(now))
         self._poll_identity(now)
         for job, row in list(self.children.items()):
             child = row["process"]
@@ -683,7 +1039,9 @@ class Runtime:
                             self._save_fired()
                 elif now - row["stopping_at"] >= STOP_GRACE_S:
                     child.kill()
-        if not updating and not self.restarting and not draining:
+        if (not updating and not self.restarting and not draining
+                and self._restart_reservation is None and not self._restart_reservation_uncertain
+                and self.native_admission.snapshot()["open"]):
             for job in [*BACKGROUND, *(["lineworks"] if "lineworks" in self.argv else [])]:
                 self.start(job, "background", now)
             for job in COMMANDS:
@@ -702,8 +1060,13 @@ class Runtime:
             self._schedule(now)
         self._start_identity()
         self._publish_status(now, updating)
+        if self.restarting:
+            self.native_admission.close()
+            self.delivery_admission.close()
+        native = self.native_admission.snapshot()
         return (self.restarting and not self.children and not self.orphan_candidates
-                and self.identity_probe is None)
+                and self.identity_probe is None and not native["queued"]
+                and not native["running"] and not self.delivery_admission.snapshot()["active_passes"])
 
     def _restart_requested(self, now):
         path = self.data / service.RESTART_FILE
@@ -753,7 +1116,9 @@ class Runtime:
         log("connector_ended", code=code, failures=row["failures"], retry_in=delay)
 
 
-async def serve(root, cfg, connector=None):
+async def serve(root, cfg, connector=None, *, restart_provision=None):
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("standalone_main_thread_required")
     runtime = Runtime(root, cfg)
     runtime.data.mkdir(mode=0o700, parents=True, exist_ok=True)
     if runtime.data.is_symlink() or runtime.data.stat().st_uid != os.getuid():
@@ -769,14 +1134,48 @@ async def serve(root, cfg, connector=None):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise config.ConfigError("standalone_already_running") from None
+        runtime._planning_host_fd = fd
         stopping = asyncio.Event()
-        loop = asyncio.get_running_loop()
         registered = []
         worker = None
+
+        async def drain():
+            runtime.restarting = True
+            runtime.native_admission.close()
+            runtime.delivery_admission.close()
+            try:
+                await runtime._close_restart_transport()
+                while runtime.children or runtime.orphan_candidates or runtime.identity_probe:
+                    with suppress(OSError):
+                        runtime.tick(draining=True)
+                    await asyncio.sleep(1)
+            finally:
+                stopping.set()
+                try:
+                    if worker is not None:
+                        try:
+                            await asyncio.wait_for(worker, timeout=30)
+                        except asyncio.TimeoutError:
+                            log("connector_stop_timeout")
+                        except (Exception, asyncio.CancelledError) as exc:
+                            log("connector_ended", code=_error_code(exc), stopping=True)
+                finally:
+                    # A cancelled waiter is not proof that its owned work ended.
+                    while True:
+                        native = runtime.native_admission.snapshot()
+                        delivery = runtime.delivery_admission.snapshot()
+                        if not native["queued"] and not native["running"] and not delivery["active_passes"]:
+                            break
+                        await asyncio.sleep(0.05)
+                    if runtime._delivery_identity is not None:
+                        runtime.delivery_admission.end_connector(runtime._delivery_identity)
+                        runtime._delivery_identity = None
+
         try:
             for sig in (signal.SIGTERM, signal.SIGINT):
-                loop.add_signal_handler(sig, setattr, runtime, "restarting", True)
-                registered.append(sig)
+                # Observe a stop during synchronous SPENT fsync before its final latch.
+                previous = signal.signal(sig, runtime._restart_signal)
+                registered.append((sig, previous))
             # Only after the single-host lock: the previous host is gone.
             runtime.adopt_orphans()
             runtime.recover_inflight()
@@ -794,37 +1193,36 @@ async def serve(root, cfg, connector=None):
                     # scheduler or the workers.
                     now = time.time()
                     if worker is not None and worker.done():
+                        runtime.delivery_admission.end_connector(runtime._delivery_identity)
+                        runtime._delivery_identity = None
                         runtime.connector_ended(worker, now)
                         worker = None
                     elif worker is not None:
                         runtime.connector_running(now)
                     if worker is None and not runtime.restarting \
+                            and runtime._restart_reservation is None and not runtime._restart_reservation_uncertain \
                             and now >= runtime.connector["retry_at"]:
-                        worker = asyncio.create_task(connector(root, stopping))
+                        runtime._delivery_identity = runtime.delivery_admission.begin_connector()
+                        worker = asyncio.create_task(connector(
+                            root, stopping, native_admission=runtime.native_admission,
+                            delivery_admission=runtime.delivery_admission,
+                            delivery_identity=runtime._delivery_identity))
                         runtime.connector_started(now)
                 if runtime.tick():
                     break
+                runtime._respond_restart_planning(restart_provision)
                 await asyncio.sleep(1)
         finally:
             try:
-                runtime.restarting = True
-                while runtime.children or runtime.orphan_candidates or runtime.identity_probe:
-                    # Log/status failures must not strand children or skip connector cleanup.
-                    with suppress(OSError):
-                        runtime.tick(draining=True)
-                    await asyncio.sleep(1)
-                stopping.set()
-                if worker:
-                    try:
-                        await asyncio.wait_for(worker, timeout=30)
-                    except asyncio.TimeoutError:
-                        log("connector_stop_timeout")
-                    except Exception as exc:
-                        # Supervised like any other end: a code, never a crash.
-                        log("connector_ended", code=_error_code(exc), stopping=True)
+                await await_settled(drain())
             finally:
-                for sig in registered:
-                    loop.remove_signal_handler(sig)
+                try:
+                    if runtime._restart_reservation is not None:
+                        runtime.release_restart(runtime._restart_reservation["handle"])
+                finally:
+                    for sig, previous in reversed(registered):
+                        signal.signal(sig, previous)
     finally:
+        runtime._planning_host_fd = None
         os.close(fd)
     return 0

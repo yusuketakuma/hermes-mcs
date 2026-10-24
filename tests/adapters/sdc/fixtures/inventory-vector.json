@@ -1,0 +1,34 @@
+{
+  "provenance": "Synthetic Python standard-library canonical JSON vector; no host metadata",
+  "snapshot": {
+    "schema_version": "sdc.inventory.v1",
+    "runtime": {
+      "mode": "hermes",
+      "python_version": "3.14.0"
+    },
+    "packages": [
+      {
+        "ecosystem": "PyPI",
+        "name": "synthetic-public",
+        "version": "1.0.0",
+        "public": true
+      }
+    ],
+    "complete": true,
+    "coverage": "complete",
+    "fetched_at": 1792663200000,
+    "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "excluded_counts": {
+      "not_public": 0,
+      "direct_source": 0,
+      "invalid_metadata": 0,
+      "metadata_error": 0,
+      "conflicting_distribution": 0
+    },
+    "collection_failed": false,
+    "lock_complete": false,
+    "lock_discrepancies": []
+  },
+  "canonical": "{\"collection_failed\":false,\"complete\":true,\"coverage\":\"complete\",\"excluded_counts\":{\"conflicting_distribution\":0,\"direct_source\":0,\"invalid_metadata\":0,\"metadata_error\":0,\"not_public\":0},\"fetched_at\":1792663200000,\"lock_complete\":false,\"lock_discrepancies\":[],\"packages\":[{\"ecosystem\":\"PyPI\",\"name\":\"synthetic-public\",\"public\":true,\"version\":\"1.0.0\"}],\"runtime\":{\"mode\":\"hermes\",\"python_version\":\"3.14.0\"},\"schema_version\":\"sdc.inventory.v1\",\"source_revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+  "hash": "5ea88a98ddf2690025f2ab4a0f56d46b42bedf87538dd4c4a6b21f0c6185bd25"
+}

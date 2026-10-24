@@ -9,7 +9,7 @@ import re
 import time
 
 from adapters.common import projects
-from adapters.common import confirm, envelopes, paths, registry
+from adapters.common import commands, confirm, envelopes, paths, registry
 from adapters.common.forms import (MODAL_ACTIONS, MODAL_TITLES, VIEW_FORMS,
                                    digest_inputs, modal_fields, search_query)
 from adapters.common.text import (ERR_JA, RECEIPT_TEXT, SEARCH_EMPTY, STAMP_FORM_PENDING,
@@ -205,7 +205,38 @@ def _ephemeral_chunks(text):
 
 
 class Actions:
-    def __init__(self, app, settings, dirs, reg, sender, log):
+    async def _native_refused(self, body):
+        actor, workspace = body.get("user"), body.get("team")
+        user = body.get("user_id") or (actor.get("id") if isinstance(actor, dict) else None)
+        team = body.get("team_id") or (workspace.get("id") if isinstance(workspace, dict) else None)
+        if (isinstance(user, str) and user in self._settings["allowed_user_ids"]
+                and team == self._settings["team_id"]
+                and body.get("api_app_id") == self._settings["application_id"]):
+            await self._say(self._settings["channel_id"], user,
+                            commands.NATIVE_ADMISSION_CLOSED_TEXT)
+
+    async def _publish_taken_confirm(self, confirm_id, payload):
+        started = False
+        def publish():
+            nonlocal started
+            started = True
+            return envelopes.publish_command(self._dirs["cmd_int"], payload)
+        try:
+            await self._offload(publish)
+        except commands.NativeAdmissionClosed:
+            # Only a denied reservation proves no publish was attempted.
+            # An exception after entering the worker retains unknown evidence.
+            if not started:
+                self._reg.end_confirm(confirm_id)
+                self._reg.drop_followup(payload["command_id"])
+            raise
+
+    async def _offload(self, handler, *args, **kwargs):
+        return await commands.run_native(
+            handler, *args, admission=self._native_admission, **kwargs)
+
+    def __init__(self, app, settings, dirs, reg, sender, log, *, native_admission=None):
+        self._native_admission = native_admission
         self._app = app
         self._settings = settings
         self._origin_scope = {key: settings[key] for key in (
@@ -236,82 +267,91 @@ class Actions:
             command(MCS_COMMAND)(self._command)
 
     async def _command(self, ack, body):
-        await ack()
-        if not (self._active and body.get("team_id") == self._settings["team_id"]
-                and body.get("api_app_id") == self._settings["application_id"]
-                and body.get("user_id") in self._settings["allowed_user_ids"]
-                and body.get("channel_id") == self._settings["channel_id"]):
-            return
-        from adapters.common import commands, text
+        try:
+            await ack()
+            if not (self._active and body.get("team_id") == self._settings["team_id"]
+                    and body.get("api_app_id") == self._settings["application_id"]
+                    and body.get("user_id") in self._settings["allowed_user_ids"]
+                    and body.get("channel_id") == self._settings["channel_id"]):
+                return
+            from adapters.common import text
 
-        async def current():
-            return (self._native_command_current()
-                    and await self._interactive(require_epoch=True))
+            async def current():
+                return (self._native_command_current()
+                        and await self._interactive(require_epoch=True))
 
-        if not await current():
-            return
-        answer = await commands.run_native(
-            commands.answer, self._settings, body.get("text"),
-            user=body["user_id"], channel=body["channel_id"],
-            authorized=self._native_command_current)
-        for chunk in text.split_body(answer, max_chunks=None):
-            if not await self._say(body["channel_id"], body["user_id"], chunk,
-                                   authorized=current):
-                break
+            if not await current():
+                return
+            answer = await self._offload(
+                commands.answer, self._settings, body.get("text"),
+                user=body["user_id"], channel=body["channel_id"],
+                authorized=self._native_command_current)
+            for chunk in text.split_body(answer, max_chunks=None):
+                if not await self._say(body["channel_id"], body["user_id"], chunk,
+                                       authorized=current):
+                    break
+        except commands.NativeAdmissionClosed:
+            await self._native_refused(body)
 
     async def _summary(self, ack, body):
         """``/mcs-summary <scope> [name:名前]`` — the clicker-only summary
         from the snapshot. Slash payloads are flat (team_id/api_app_id/
         user_id/channel_id): checked like ``_command``, acked first (3s), computed
         off-loop, answered ephemerally through the existing client."""
-        await ack()
-        if not (self._active
-                and body.get("team_id") == self._settings["team_id"]
-                and body.get("api_app_id") == self._settings["application_id"]
-                and body.get("user_id") in self._settings["allowed_user_ids"]
-                and body.get("channel_id") == self._settings["channel_id"]):
-            return
-        channel = body["channel_id"]
-        user = body["user_id"]
+        try:
+            await ack()
+            if not (self._active
+                    and body.get("team_id") == self._settings["team_id"]
+                    and body.get("api_app_id") == self._settings["application_id"]
+                    and body.get("user_id") in self._settings["allowed_user_ids"]
+                    and body.get("channel_id") == self._settings["channel_id"]):
+                return
+            channel = body["channel_id"]
+            user = body["user_id"]
 
-        async def current():
-            return (self._native_command_current()
-                    and await self._interactive(require_epoch=True))
+            async def current():
+                return (self._native_command_current()
+                        and await self._interactive(require_epoch=True))
 
-        if not await current():
-            return
-        snapshot = self._settings.get("snapshot")
-        if not snapshot:
-            await self._say(channel, user, "サマリーの元データが設定されていません。",
+            if not await current():
+                return
+            snapshot = self._settings.get("snapshot")
+            if not snapshot:
+                await self._say(channel, user, "サマリーの元データが設定されていません。",
+                                authorized=current)
+                return
+            name = ""
+            if {"mine", "担当"} & set(str(body.get("text") or "").lower().split()):
+                name = await self._clicker_name({"id": body["user_id"],
+                                                 "name": body.get("user_name")})
+            from adapters.common import summary
+            if not await current():
+                return
+            got = await self._offload(
+                summary.answer, snapshot, str(body.get("text") or "")[:300],
+                name=name, allowed=projects.summary_scope(self._settings),
+                dialect="slack")
+            if not await current():
+                return
+            if "error" in got:
+                await self._say(channel, user, got["error"], authorized=current)
+                return
+            blocks = _parts_blocks({"action": "digest", "parts": got["parts"]})
+            await self._say(channel, user, got["text"][:3000], blocks=blocks,
                             authorized=current)
-            return
-        name = ""
-        if {"mine", "担当"} & set(str(body.get("text") or "").lower().split()):
-            name = await self._clicker_name({"id": body["user_id"],
-                                             "name": body.get("user_name")})
-        from adapters.common import summary
-        if not await current():
-            return
-        got = await asyncio.to_thread(
-            summary.answer, snapshot, str(body.get("text") or "")[:300],
-            name=name, allowed=projects.summary_scope(self._settings),
-            dialect="slack")
-        if not await current():
-            return
-        if "error" in got:
-            await self._say(channel, user, got["error"], authorized=current)
-            return
-        blocks = _parts_blocks({"action": "digest", "parts": got["parts"]})
-        await self._say(channel, user, got["text"][:3000], blocks=blocks,
-                        authorized=current)
+        except commands.NativeAdmissionClosed:
+            await self._native_refused(body)
 
     def unload(self):
         self._active = False
 
     def _native_command_current(self):
         try:
-            return self._active and (self._native_current is None
-                                     or self._native_current() is True)
+            return (self._active
+                    and (self._native_admission is None
+                         or self._native_admission.snapshot()["open"])
+                    and (self._native_current is None
+                                     or self._native_current() is True))
         except (OSError, ValueError, TypeError):
             return False
 
@@ -326,7 +366,7 @@ class Actions:
 
     async def _interactive(self, *, require_epoch=False):
         """The effective flags still route interactive cards to Slack."""
-        flags = await asyncio.to_thread(
+        flags = await self._offload(
             paths.read_flags, os.path.dirname(self._dirs["flags"]))
         epoch = self._settings.get("route_epoch")
         return ((not require_epoch or type(epoch) is int)
@@ -409,7 +449,7 @@ class Actions:
         return name or user.get("name") or user.get("username") or ""
 
     async def _publish(self, envelope):
-        await asyncio.to_thread(envelopes.publish_command,
+        await self._offload(envelopes.publish_command,
                                 self._dirs["cmd_int"], envelope)
 
     async def _link(self, ack, body, action):
@@ -435,7 +475,7 @@ class Actions:
         """Poll for the runner's result — always looks at least once."""
         deadline = time.monotonic() + timeout
         while True:
-            result = await asyncio.to_thread(
+            result = await self._offload(
                 paths.read_result, self._dirs["cmd_results"], request_id)
             if result is not None \
                     and result.get("request_id") == request_id:
@@ -445,46 +485,49 @@ class Actions:
             await asyncio.sleep(RESULT_POLL_S)
 
     async def _action(self, ack, body, action):
-        await ack()
-        if not self._active:
-            return
-        origin = parse_action_origin(body, action, **self._origin_scope)
-        if origin is None:
-            if self._denied_member(body):
-                await self._say(self._settings["channel_id"],
-                                body["user"]["id"], "権限がありません。")
-            return
-        token = origin.pop("token")
-        actor = origin.pop("actor")
-        user = body["user"]["id"]
-        if self._reg.token(token) is None:   # lapsed card, not a refusal
-            await self._say(origin["channel_id"], user, ERR_JA["unknown_token"])
-            return
-        ctx = self._pinned(token, {**origin, "actor": actor}, actor)
-        if ctx is None:
-            await self._say(origin["channel_id"], user, "権限がありません。")
-            return
-        kind = ctx["action"]
-        stamp_only = (action.get("type") == "feedback_buttons"
-                      or action.get("action_id") == STAMP_MENU_ACTION)
-        if kind not in _KINDS or (stamp_only and kind not in ("stamp", "stamp_press")):
-            await self._say(origin["channel_id"], user, "操作できません。")
-            return
-        clicker = await self._clicker_name(body["user"]) \
-            if kind in ("mytasks", "request", "digest") else ""
-        env = envelopes.notification(
-            token, actor, origin,
-            projects.view_inputs(self._settings, kind, clicker))
         try:
-            await self._publish(env)
-        except (OSError, ValueError):
-            await self._say(origin["channel_id"], user, "送信に失敗しました。")
-            return
-        if kind in MODAL_ACTIONS:
-            await self._open_modal(body, env, token, actor, origin, ctx,
-                                   kind, clicker)
-            return
-        await self._queue_followup(env, origin, actor, token, user)
+            await ack()
+            if not self._active:
+                return
+            origin = parse_action_origin(body, action, **self._origin_scope)
+            if origin is None:
+                if self._denied_member(body):
+                    await self._say(self._settings["channel_id"],
+                                    body["user"]["id"], "権限がありません。")
+                return
+            token = origin.pop("token")
+            actor = origin.pop("actor")
+            user = body["user"]["id"]
+            if self._reg.token(token) is None:   # lapsed card, not a refusal
+                await self._say(origin["channel_id"], user, ERR_JA["unknown_token"])
+                return
+            ctx = self._pinned(token, {**origin, "actor": actor}, actor)
+            if ctx is None:
+                await self._say(origin["channel_id"], user, "権限がありません。")
+                return
+            kind = ctx["action"]
+            stamp_only = (action.get("type") == "feedback_buttons"
+                          or action.get("action_id") == STAMP_MENU_ACTION)
+            if kind not in _KINDS or (stamp_only and kind not in ("stamp", "stamp_press")):
+                await self._say(origin["channel_id"], user, "操作できません。")
+                return
+            clicker = await self._clicker_name(body["user"]) \
+                if kind in ("mytasks", "request", "digest") else ""
+            env = envelopes.notification(
+                token, actor, origin,
+                projects.view_inputs(self._settings, kind, clicker))
+            try:
+                await self._publish(env)
+            except (OSError, ValueError):
+                await self._say(origin["channel_id"], user, "送信に失敗しました。")
+                return
+            if kind in MODAL_ACTIONS:
+                await self._open_modal(body, env, token, actor, origin, ctx,
+                                       kind, clicker)
+                return
+            await self._queue_followup(env, origin, actor, token, user)
+        except commands.NativeAdmissionClosed:
+            await self._native_refused(body)
 
     async def _open_modal(self, body, env, token, actor, origin, ctx, kind,
                           clicker):
@@ -541,68 +584,71 @@ class Actions:
         await self.sweep_followups()
 
     async def _modal(self, ack, body, view):
-        await ack()
-        if not self._scope(body):
-            return
-        modal_id = view.get("private_metadata")
-        pending = self._reg.modal(modal_id)
-        user = body["user"]["id"]
-        if pending is None:
-            await self._say(self._settings["channel_id"], user,
-                            "この入力フォームは期限切れです。"
-                            "もう一度操作してください。")
-            return
-        origin = pending["origin"]
-        actor = f"slack:{origin['team_id']}:{user}"
-        if pending["actor"] != actor:
-            await self._say(origin["channel_id"], user,
-                            "操作した本人のみ送信できます。")
-            return
-        if not self._pinned(pending["token"],
-                            {**origin, "actor": actor}, actor):
-            await self._say(origin["channel_id"], user, "権限がありません。")
-            return
-        values = view.get("state", {}).get("values", {})
-        fields = {}
-        for name in pending.get("field_ids") \
-                or _LEGACY_FIELDS.get(pending["action"], ()):
-            got = (values.get(name) or {}).get(name) or {}
-            picked = got.get("selected_option")
-            fields[name] = (picked.get("value") if isinstance(picked, dict)
-                            else got.get("value")) or ""
-        if pending["action"] in VIEW_FORMS:
-            # 🔎/💊/📊 no preview — the input rides the card token as a view
-            # click and the answer comes back through the followup sweep
-            self._reg.drop_modal(modal_id)
-            if pending["action"] == "digest":
-                clicker = await self._clicker_name(body["user"])
-                inputs = {**(projects.view_inputs(self._settings, "digest", "")
-                             or {}), **digest_inputs(fields, clicker)}
-            else:
-                query = search_query(fields)
-                if query is None:
-                    await self._say(origin["channel_id"], user, SEARCH_EMPTY)
-                    return
-                inputs = {"query": query}
-            env = envelopes.notification(pending["token"], actor, origin,
-                                         inputs)
-            try:
-                await self._publish(env)
-            except (OSError, ValueError):
-                await self._say(origin["channel_id"], user, "送信に失敗しました。")
+        try:
+            await ack()
+            if not self._scope(body):
                 return
-            await self._queue_followup(env, origin, actor, pending["token"],
-                                       user)
-            return
-        pending["fields"] = fields
-        pending["modal_id"] = modal_id
-        self._reg.put_modal(modal_id, pending)
-        cid = f"{pending['token']}:{envelopes.actor_hash(actor)}"
-        self._reg.put_followup(cid, {
-            "kind": "modal", "request_id": pending["request_id"],
-            "origin": origin, "actor": actor, "token": pending["token"],
-            "user": pending["user"], "modal_id": modal_id})
-        await self.sweep_followups()
+            modal_id = view.get("private_metadata")
+            pending = self._reg.modal(modal_id)
+            user = body["user"]["id"]
+            if pending is None:
+                await self._say(self._settings["channel_id"], user,
+                                "この入力フォームは期限切れです。"
+                                "もう一度操作してください。")
+                return
+            origin = pending["origin"]
+            actor = f"slack:{origin['team_id']}:{user}"
+            if pending["actor"] != actor:
+                await self._say(origin["channel_id"], user,
+                                "操作した本人のみ送信できます。")
+                return
+            if not self._pinned(pending["token"],
+                                {**origin, "actor": actor}, actor):
+                await self._say(origin["channel_id"], user, "権限がありません。")
+                return
+            values = view.get("state", {}).get("values", {})
+            fields = {}
+            for name in pending.get("field_ids") \
+                    or _LEGACY_FIELDS.get(pending["action"], ()):
+                got = (values.get(name) or {}).get(name) or {}
+                picked = got.get("selected_option")
+                fields[name] = (picked.get("value") if isinstance(picked, dict)
+                                else got.get("value")) or ""
+            if pending["action"] in VIEW_FORMS:
+                # 🔎/💊/📊 no preview — the input rides the card token as a view
+                # click and the answer comes back through the followup sweep
+                self._reg.drop_modal(modal_id)
+                if pending["action"] == "digest":
+                    clicker = await self._clicker_name(body["user"])
+                    inputs = {**(projects.view_inputs(self._settings, "digest", "")
+                                 or {}), **digest_inputs(fields, clicker)}
+                else:
+                    query = search_query(fields)
+                    if query is None:
+                        await self._say(origin["channel_id"], user, SEARCH_EMPTY)
+                        return
+                    inputs = {"query": query}
+                env = envelopes.notification(pending["token"], actor, origin,
+                                             inputs)
+                try:
+                    await self._publish(env)
+                except (OSError, ValueError):
+                    await self._say(origin["channel_id"], user, "送信に失敗しました。")
+                    return
+                await self._queue_followup(env, origin, actor, pending["token"],
+                                           user)
+                return
+            pending["fields"] = fields
+            pending["modal_id"] = modal_id
+            self._reg.put_modal(modal_id, pending)
+            cid = f"{pending['token']}:{envelopes.actor_hash(actor)}"
+            self._reg.put_followup(cid, {
+                "kind": "modal", "request_id": pending["request_id"],
+                "origin": origin, "actor": actor, "token": pending["token"],
+                "user": pending["user"], "modal_id": modal_id})
+            await self.sweep_followups()
+        except commands.NativeAdmissionClosed:
+            await self._native_refused(body)
 
     async def _preview(self, pending, result):
         origin = pending["origin"]
@@ -644,82 +690,85 @@ class Actions:
     # chat.postEphemeral to the clicking allowed user in the configured
     # channel, so a non-actor learns nothing of the preview it clicked.
     async def _confirm(self, ack, body, action):
-        await ack()
-        if not self._scope(body):
-            return
-        match = _CONFIRM.fullmatch(action.get("action_id", ""))
-        if match is None:
-            return
-        confirm_id, cancel = match.groups()
-        pending = self._reg.confirm(confirm_id)
-        user = body["user"]["id"]
-        if pending is None:
-            await self._say(self._settings["channel_id"], user, _EXPIRED)
-            return
-        origin = pending["origin"]
-        actor = f"slack:{origin['team_id']}:{user}"
-        if pending["actor"] != actor:
-            await self._say(origin["channel_id"], user,
-                            "確認した本人のみ確定できます。")
-            return
-        if (body.get("channel") or {}).get("id") != origin["channel_id"]:
-            await self._say(origin["channel_id"], user,
-                            "確認を開始した場所と送信元が一致しません。")
-            return
-        # the card token lapsed (or no longer pins this card) — start over
-        if not self._card(pending["token"],
-                          {**origin, "actor": actor}, actor):
-            await self._say(origin["channel_id"], user, _EXPIRED)
-            return
-        payload = pending["payload"]
-        # project scope (card and payload) and the interactive route gate
-        # only 確定 — a 取消 drops the actor's own preview and queues nothing
-        if not cancel and not await self._interactive():
-            await self._say(origin["channel_id"], user, ERR_JA["interactive_off"])
-            return
-        allowed = bool(cancel) or (bool(self._pinned(
-                                       pending["token"],
-                                       {**origin, "actor": actor}, actor))
-                                   and projects.project_allowed(
-                                       self._settings, payload["project_id"]))
-        # decided before the publish await: a racing cancel sees in_flight
-        taken = self._reg.take_confirm(confirm_id, bool(cancel),
-                                       allowed=allowed)
-        if taken == "gone":           # expired since the lookup above
-            await self._say(origin["channel_id"], user, _EXPIRED)
-            return
-        if taken == "denied":
-            await self._say(origin["channel_id"], user, "権限がありません。")
-            return
-        if taken == "busy":
-            # a 確定 is queueing this command — never report a cancel
-            await self._say(origin["channel_id"], user,
-                            "この確認は処理中です。結果をお待ちください。")
-            return
-        if taken == "cancelled":
-            await self._say(origin["channel_id"], user, "取り消しました。")
-            return
-        # before the publish: a publish error after the file landed still
-        # owes the receipt (same order as LINE WORKS)
-        self._reg.put_followup(payload["command_id"], {
-            "kind": "human", "origin": origin, "actor": actor,
-            "token": pending["token"], "user": user,
-            "route_epoch": self._settings.get("route_epoch"),
-            "project_id": payload["project_id"]})
-        if not await confirm.publish_confirmed(
-                self._reg, confirm_id,
-                lambda: self._publish(payload),
-                lambda: asyncio.to_thread(envelopes.command_queued,
-                                          self._dirs["cmd_int"],
-                                          payload["command_id"]),
-                on_queued=lambda: self._say(
-                    origin["channel_id"], user,
-                    "受付結果を確認できませんでした。結果の通知をお待ちください。"),
-                on_failed=lambda: self._say(origin["channel_id"], user,
-                                            "送信に失敗しました。もう一度確定してください。")):
-            return
-        await self._say(origin["channel_id"], user, RECEIPT_TEXT)
-        await self.sweep_followups()
+        try:
+            await ack()
+            if not self._scope(body):
+                return
+            match = _CONFIRM.fullmatch(action.get("action_id", ""))
+            if match is None:
+                return
+            confirm_id, cancel = match.groups()
+            pending = self._reg.confirm(confirm_id)
+            user = body["user"]["id"]
+            if pending is None:
+                await self._say(self._settings["channel_id"], user, _EXPIRED)
+                return
+            origin = pending["origin"]
+            actor = f"slack:{origin['team_id']}:{user}"
+            if pending["actor"] != actor:
+                await self._say(origin["channel_id"], user,
+                                "確認した本人のみ確定できます。")
+                return
+            if (body.get("channel") or {}).get("id") != origin["channel_id"]:
+                await self._say(origin["channel_id"], user,
+                                "確認を開始した場所と送信元が一致しません。")
+                return
+            # the card token lapsed (or no longer pins this card) — start over
+            if not self._card(pending["token"],
+                              {**origin, "actor": actor}, actor):
+                await self._say(origin["channel_id"], user, _EXPIRED)
+                return
+            payload = pending["payload"]
+            # project scope (card and payload) and the interactive route gate
+            # only 確定 — a 取消 drops the actor's own preview and queues nothing
+            if not cancel and not await self._interactive():
+                await self._say(origin["channel_id"], user, ERR_JA["interactive_off"])
+                return
+            allowed = bool(cancel) or (bool(self._pinned(
+                                           pending["token"],
+                                           {**origin, "actor": actor}, actor))
+                                       and projects.project_allowed(
+                                           self._settings, payload["project_id"]))
+            # decided before the publish await: a racing cancel sees in_flight
+            taken = self._reg.take_confirm(confirm_id, bool(cancel),
+                                           allowed=allowed)
+            if taken == "gone":           # expired since the lookup above
+                await self._say(origin["channel_id"], user, _EXPIRED)
+                return
+            if taken == "denied":
+                await self._say(origin["channel_id"], user, "権限がありません。")
+                return
+            if taken == "busy":
+                # a 確定 is queueing this command — never report a cancel
+                await self._say(origin["channel_id"], user,
+                                "この確認は処理中です。結果をお待ちください。")
+                return
+            if taken == "cancelled":
+                await self._say(origin["channel_id"], user, "取り消しました。")
+                return
+            # before the publish: a publish error after the file landed still
+            # owes the receipt (same order as LINE WORKS)
+            self._reg.put_followup(payload["command_id"], {
+                "kind": "human", "origin": origin, "actor": actor,
+                "token": pending["token"], "user": user,
+                "route_epoch": self._settings.get("route_epoch"),
+                "project_id": payload["project_id"]})
+            if not await confirm.publish_confirmed(
+                    self._reg, confirm_id,
+                    lambda: self._publish_taken_confirm(confirm_id, payload),
+                    lambda: self._offload(envelopes.command_queued,
+                                              self._dirs["cmd_int"],
+                                              payload["command_id"]),
+                    on_queued=lambda: self._say(
+                        origin["channel_id"], user,
+                        "受付結果を確認できませんでした。結果の通知をお待ちください。"),
+                    on_failed=lambda: self._say(origin["channel_id"], user,
+                                                "送信に失敗しました。もう一度確定してください。")):
+                return
+            await self._say(origin["channel_id"], user, RECEIPT_TEXT)
+            await self.sweep_followups()
+        except commands.NativeAdmissionClosed:
+            await self._native_refused(body)
 
     async def sweep_followups(self):
         """Deliver at most 32 ready results to the original user."""
@@ -761,7 +810,7 @@ class Actions:
             if not allowed:
                 self._reg.drop_followup(cid)
                 continue
-            result = await asyncio.to_thread(
+            result = await self._offload(
                 paths.read_result, self._dirs["cmd_results"],
                 rec.get("request_id") or cid)
             if result is None or (rec.get("request_id") is not None
@@ -827,7 +876,7 @@ class Actions:
                                 "value": button["token"]})
                     navigation = navigation[:5]
                 if token_ctx:
-                    await asyncio.to_thread(self._reg.put_tokens, token_ctx,
+                    await self._offload(self._reg.put_tokens, token_ctx,
                                             durable=bool(thread_ts))
                 cards = ((_parts_blocks(result) or (
                     context_list_blocks(result.get("list"), allowed)

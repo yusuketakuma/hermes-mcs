@@ -1,0 +1,1455 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "R4b restart API contract",
+  "description": "Closed route-specific R4b API shapes, separate from unchanged R4a. Select the matching $defs for each route. Handler Result excludes the standard HTTP request_id; Response includes it. Administration HTTP bodies contain csrf removed before handler validation, and HTTP responses are data plus request_id, never the internal status/data wrapper. Shape is not current authorization, human approval, service registration, authentic owner evidence or execution success. Strict UTF-8 ASCII CJSON, identity encoding, no BOM/duplicate/unknown fields, depth<=8 and raw body<=16384 bytes precede schema validation. No R1 heartbeat commands or attachments.",
+  "x-max-raw-bytes": 16384,
+  "x-json-max-depth": 8,
+  "x-signed-payload-max-bytes": 8192,
+  "anyOf": [
+    {
+      "$ref": "#/$defs/InspectionRequest"
+    },
+    {
+      "$ref": "#/$defs/PreviewRequest"
+    },
+    {
+      "$ref": "#/$defs/AcceptRequest"
+    },
+    {
+      "$ref": "#/$defs/PollRequest"
+    },
+    {
+      "$ref": "#/$defs/AdmitRequest"
+    },
+    {
+      "$ref": "#/$defs/GrantRequest"
+    },
+    {
+      "$ref": "#/$defs/ReportRequest"
+    },
+    {
+      "$ref": "#/$defs/StatusRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminRegisterRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminRevokeRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminProposeRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminApproveRequest"
+    },
+    {
+      "$ref": "#/$defs/AdminReadRequest"
+    }
+  ],
+  "$defs": {
+    "UUID": {
+      "$ref": "operation.schema.json#/properties/operation_id"
+    },
+    "Hash": {
+      "$ref": "operation.schema.json#/properties/payload_hash"
+    },
+    "Timestamp": {
+      "$ref": "restart-wire.schema.json#/$defs/timestamp"
+    },
+    "PositiveInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "OperationState": {
+      "enum": [
+        "proposed",
+        "approved",
+        "queued",
+        "locally_admitted",
+        "grant_consumed",
+        "running",
+        "succeeded",
+        "failed",
+        "unknown",
+        "canceled",
+        "expired",
+        "denied"
+      ]
+    },
+    "ReportState": {
+      "enum": [
+        "running",
+        "succeeded",
+        "failed",
+        "unknown"
+      ]
+    },
+    "RegistrationRecord": {
+      "$ref": "restart-wire.schema.json#/$defs/registration"
+    },
+    "ApprovalRecord": {
+      "$ref": "restart-wire.schema.json#/$defs/approval"
+    },
+    "AcceptanceRecord": {
+      "$ref": "restart-wire.schema.json#/$defs/acceptance"
+    },
+    "SignedEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg",
+        "kid",
+        "purpose",
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "alg": {
+          "const": "PS256"
+        },
+        "kid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$(?![\\s\\S])"
+        },
+        "purpose": {
+          "enum": [
+            "restart-operation",
+            "restart-execution-grant",
+            "restart-consent-preview"
+          ]
+        },
+        "payload": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])",
+          "maxLength": 10923
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{512}$(?![\\s\\S])"
+        }
+      },
+      "description": "PS256 RSA3072/e65537 SHA256 MGF1SHA256 salt32 over SDC-SIGNED-v1 LF purpose LF kid LF decoded ASCII CJSON, no final LF. Payload <=8192 bytes. Independently verify current explicit restart-only pins, purpose, typed payload/hash DAG and all trusted expected bindings. Shape alone proves none of these."
+    },
+    "OperationEnvelope": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/SignedEnvelope"
+        },
+        {
+          "properties": {
+            "purpose": {
+              "const": "restart-operation"
+            }
+          }
+        }
+      ]
+    },
+    "GrantEnvelope": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/SignedEnvelope"
+        },
+        {
+          "properties": {
+            "purpose": {
+              "const": "restart-execution-grant"
+            }
+          }
+        }
+      ]
+    },
+    "PreviewEnvelope": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/SignedEnvelope"
+        },
+        {
+          "properties": {
+            "purpose": {
+              "const": "restart-consent-preview"
+            }
+          }
+        }
+      ]
+    },
+    "InspectionRequest": {
+      "$ref": "restart-wire.schema.json#/$defs/control_inspection"
+    },
+    "PreviewRequest": {
+      "$ref": "restart-wire.schema.json#/$defs/control_preview"
+    },
+    "AcceptRequest": {
+      "$ref": "restart-wire.schema.json#/$defs/control_accept"
+    },
+    "PollRequest": {
+      "$ref": "restart-wire.schema.json#/$defs/control_poll"
+    },
+    "AdmitRequest": {
+      "$ref": "restart-wire.schema.json#/$defs/control_admit"
+    },
+    "GrantRequest": {
+      "$ref": "restart-wire.schema.json#/$defs/control_grant"
+    },
+    "ReportRequest": {
+      "$ref": "restart-wire.schema.json#/$defs/control_report"
+    },
+    "StatusRequest": {
+      "$ref": "restart-wire.schema.json#/$defs/control_status"
+    },
+    "InspectionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "inspection_id",
+        "state",
+        "expires_at",
+        "registration"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "inspection_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "const": "recorded"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "registration": {
+          "$ref": "#/$defs/RegistrationRecord"
+        }
+      }
+    },
+    "InspectionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "inspection_id",
+        "state",
+        "expires_at",
+        "registration",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "inspection_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "const": "recorded"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "registration": {
+          "$ref": "#/$defs/RegistrationRecord"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "InspectionResult"
+    },
+    "PreviewResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "preview_id",
+        "preview",
+        "registration"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "preview_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "preview": {
+          "$ref": "#/$defs/PreviewEnvelope"
+        },
+        "registration": {
+          "$ref": "#/$defs/RegistrationRecord"
+        }
+      }
+    },
+    "PreviewResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "preview_id",
+        "preview",
+        "registration",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "preview_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "preview": {
+          "$ref": "#/$defs/PreviewEnvelope"
+        },
+        "registration": {
+          "$ref": "#/$defs/RegistrationRecord"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "PreviewResult"
+    },
+    "PollResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation",
+        "approval",
+        "acceptance",
+        "registration"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationEnvelope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acceptance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcceptanceRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "registration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RegistrationRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "operation": {
+              "type": "null"
+            },
+            "approval": {
+              "type": "null"
+            },
+            "acceptance": {
+              "type": "null"
+            },
+            "registration": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "$ref": "#/$defs/OperationEnvelope"
+            },
+            "approval": {
+              "$ref": "#/$defs/ApprovalRecord"
+            },
+            "acceptance": {
+              "$ref": "#/$defs/AcceptanceRecord"
+            },
+            "registration": {
+              "$ref": "#/$defs/RegistrationRecord"
+            }
+          }
+        }
+      ]
+    },
+    "PollResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation",
+        "approval",
+        "acceptance",
+        "registration",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationEnvelope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acceptance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcceptanceRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "registration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RegistrationRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "PollResult",
+      "oneOf": [
+        {
+          "properties": {
+            "operation": {
+              "type": "null"
+            },
+            "approval": {
+              "type": "null"
+            },
+            "acceptance": {
+              "type": "null"
+            },
+            "registration": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "$ref": "#/$defs/OperationEnvelope"
+            },
+            "approval": {
+              "$ref": "#/$defs/ApprovalRecord"
+            },
+            "acceptance": {
+              "$ref": "#/$defs/AcceptanceRecord"
+            },
+            "registration": {
+              "$ref": "#/$defs/RegistrationRecord"
+            }
+          }
+        }
+      ]
+    },
+    "AdmitResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "receipt_id",
+        "state"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "receipt_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "const": "locally_admitted"
+        }
+      }
+    },
+    "AdmitResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "receipt_id",
+        "state",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "receipt_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "const": "locally_admitted"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "AdmitResult"
+    },
+    "GrantResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "grant"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "grant": {
+          "$ref": "#/$defs/GrantEnvelope"
+        }
+      },
+      "description": "Nonnull signed execution grant. Same grant_request_id/raw bytes returns the identical stored envelope only while current authority and grant deadline remain valid. Expired/revoked replay is 409, never a null grant; use metadata-only status to reconcile."
+    },
+    "GrantResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "grant",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "grant": {
+          "$ref": "#/$defs/GrantEnvelope"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "GrantResult"
+    },
+    "ReportResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "receipt_id",
+        "state",
+        "state_revision"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "receipt_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "$ref": "#/$defs/ReportState"
+        },
+        "state_revision": {
+          "$ref": "#/$defs/PositiveInteger"
+        }
+      },
+      "description": "Acknowledged monotonic state, not independent owner evidence. unknown, result=null, partial causal evidence and case closure cannot become success. New content after case closure is denied; existing raw report ACK reconciliation and fixed result=null unknown reporting remain narrowly permitted."
+    },
+    "ReportResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "receipt_id",
+        "state",
+        "state_revision",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "receipt_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "$ref": "#/$defs/ReportState"
+        },
+        "state_revision": {
+          "$ref": "#/$defs/PositiveInteger"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "ReportResult"
+    },
+    "StatusResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "receipt_id",
+        "report_id",
+        "report",
+        "operation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "receipt_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "report_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "report": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "body_hash",
+                "state",
+                "state_revision"
+              ],
+              "properties": {
+                "body_hash": {
+                  "$ref": "#/$defs/Hash"
+                },
+                "state": {
+                  "$ref": "#/$defs/ReportState"
+                },
+                "state_revision": {
+                  "$ref": "#/$defs/PositiveInteger"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "state_revision"
+          ],
+          "properties": {
+            "state": {
+              "$ref": "#/$defs/OperationState"
+            },
+            "state_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      },
+      "description": "Current primary metadata only for one known consumed receipt or an exact persisted pregrant admission ACK, current device/key/claim/full scope/realm/tenant/credential validity required even after case cancellation or expiry. status_id does not reserve an immutable response. report=null proves neither no start nor nonacceptance and never permits redispatch; no result content, signature, grant, case list or arbitrary receipt is returned."
+    },
+    "StatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation_id",
+        "receipt_id",
+        "report_id",
+        "report",
+        "operation",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-response.v1"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "receipt_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "report_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "report": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "body_hash",
+                "state",
+                "state_revision"
+              ],
+              "properties": {
+                "body_hash": {
+                  "$ref": "#/$defs/Hash"
+                },
+                "state": {
+                  "$ref": "#/$defs/ReportState"
+                },
+                "state_revision": {
+                  "$ref": "#/$defs/PositiveInteger"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "state_revision"
+          ],
+          "properties": {
+            "state": {
+              "$ref": "#/$defs/OperationState"
+            },
+            "state_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "StatusResult"
+    },
+    "AcceptResult": {
+      "$ref": "restart-wire.schema.json#/$defs/acceptance",
+      "description": "Unchanged durable restart acceptance ACK. Initial accept occurs within the exact preview five-minute window. Same accept_id and original raw bytes replay this stored ACK without extending accepted_at/expires_at; replay may outlive preview only while current case consent and authority remain valid. A diagnostic consent receipt cannot authorize restart."
+    },
+    "AcceptResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "accept_id",
+        "preview_id",
+        "operation_id",
+        "change_consent_id",
+        "change_binding_hash",
+        "local_change_receipt_id",
+        "state",
+        "expires_at",
+        "accepted_at",
+        "preview_payload_hash",
+        "local_change_receipt_hash",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/schema_version"
+        },
+        "accept_id": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/accept_id"
+        },
+        "preview_id": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/preview_id"
+        },
+        "operation_id": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/operation_id"
+        },
+        "change_consent_id": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/change_consent_id"
+        },
+        "change_binding_hash": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/change_binding_hash"
+        },
+        "local_change_receipt_id": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/local_change_receipt_id"
+        },
+        "state": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/state"
+        },
+        "expires_at": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/expires_at"
+        },
+        "accepted_at": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/accepted_at"
+        },
+        "preview_payload_hash": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/preview_payload_hash"
+        },
+        "local_change_receipt_hash": {
+          "$ref": "restart-wire.schema.json#/$defs/acceptance/properties/local_change_receipt_hash"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "AcceptResult"
+    },
+    "Metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "case_id",
+        "state",
+        "intent_hash",
+        "payload_hash",
+        "expires_at",
+        "state_revision"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        },
+        "intent_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "payload_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "description": "Metadata only. A consumed failed result releases the shared device slot only with complete real exit/launch/successor observation and readiness=not_ready/error=READINESS_FAILED causal terminal proof. Otherwise retain unknown; timeout never proves no start."
+    },
+    "AdminRegisterHandlerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registration_id",
+        "case_id",
+        "device_id",
+        "service_revision",
+        "causal_evidence_supported"
+      ],
+      "properties": {
+        "registration_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "service_revision": {
+          "$ref": "#/$defs/PositiveInteger"
+        },
+        "causal_evidence_supported": {
+          "type": "boolean"
+        }
+      }
+    },
+    "AdminRegisterRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registration_id",
+        "case_id",
+        "device_id",
+        "service_revision",
+        "causal_evidence_supported",
+        "csrf"
+      ],
+      "properties": {
+        "registration_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "service_revision": {
+          "$ref": "#/$defs/PositiveInteger"
+        },
+        "causal_evidence_supported": {
+          "type": "boolean"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "description": "Console HTTP request; current Access identity, exact Origin and csrf are checked before csrf is removed and the handler receives only x-handler-fields. No caller-provided scope, arbitrary service/profile or schema_version is accepted.",
+      "x-handler-fields": [
+        "registration_id",
+        "case_id",
+        "device_id",
+        "service_revision",
+        "causal_evidence_supported"
+      ]
+    },
+    "AdminRevokeHandlerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revocation_id",
+        "case_id",
+        "device_id",
+        "service_revision"
+      ],
+      "properties": {
+        "revocation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "service_revision": {
+          "$ref": "#/$defs/PositiveInteger"
+        }
+      }
+    },
+    "AdminRevokeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revocation_id",
+        "case_id",
+        "device_id",
+        "service_revision",
+        "csrf"
+      ],
+      "properties": {
+        "revocation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "service_revision": {
+          "$ref": "#/$defs/PositiveInteger"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "description": "Console HTTP request; current Access identity, exact Origin and csrf are checked before csrf is removed and the handler receives only x-handler-fields. No caller-provided scope, arbitrary service/profile or schema_version is accepted.",
+      "x-handler-fields": [
+        "revocation_id",
+        "case_id",
+        "device_id",
+        "service_revision"
+      ]
+    },
+    "AdminProposeHandlerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "inspection_id"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "inspection_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "AdminProposeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "inspection_id",
+        "csrf"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "inspection_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "description": "Console HTTP request; current Access identity, exact Origin and csrf are checked before csrf is removed and the handler receives only x-handler-fields. No caller-provided scope, arbitrary service/profile or schema_version is accepted.",
+      "x-handler-fields": [
+        "operation_id",
+        "inspection_id"
+      ]
+    },
+    "AdminApproveHandlerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "approval_id",
+        "intent_hash"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "intent_hash": {
+          "$ref": "#/$defs/Hash"
+        }
+      }
+    },
+    "AdminApproveRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "approval_id",
+        "intent_hash",
+        "csrf"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "intent_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "description": "Console HTTP request; current Access identity, exact Origin and csrf are checked before csrf is removed and the handler receives only x-handler-fields. No caller-provided scope, arbitrary service/profile or schema_version is accepted.",
+      "x-handler-fields": [
+        "operation_id",
+        "approval_id",
+        "intent_hash"
+      ]
+    },
+    "AdminReadHandlerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "device_id"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "AdminReadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "device_id",
+        "csrf"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "csrf": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9a-f]{64}$(?![\\s\\S])"
+        }
+      },
+      "description": "Console HTTP request; current Access identity, exact Origin and csrf are checked before csrf is removed and the handler receives only x-handler-fields. No caller-provided scope, arbitrary service/profile or schema_version is accepted.",
+      "x-handler-fields": [
+        "case_id",
+        "device_id"
+      ]
+    },
+    "AdminRegisterResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "registration"
+      ],
+      "properties": {
+        "code": {
+          "const": "restart_service_registered"
+        },
+        "registration": {
+          "$ref": "#/$defs/RegistrationRecord"
+        }
+      },
+      "description": "Registration ACK code is stable; same-ID replay can reflect the current revoked registration. It never reactivates the service or authorizes a new grant."
+    },
+    "AdminRegisterResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "registration",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "restart_service_registered"
+        },
+        "registration": {
+          "$ref": "#/$defs/RegistrationRecord"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "AdminRegisterResult"
+    },
+    "AdminRevokeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "registration"
+      ],
+      "properties": {
+        "code": {
+          "const": "restart_service_revoked"
+        },
+        "registration": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/RegistrationRecord"
+            },
+            {
+              "properties": {
+                "state": {
+                  "const": "revoked"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "AdminRevokeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "registration",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "restart_service_revoked"
+        },
+        "registration": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/RegistrationRecord"
+            },
+            {
+              "properties": {
+                "state": {
+                  "const": "revoked"
+                }
+              }
+            }
+          ]
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "AdminRevokeResult"
+    },
+    "AdminProposeResult": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "AdminProposeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "case_id",
+        "state",
+        "intent_hash",
+        "payload_hash",
+        "expires_at",
+        "state_revision",
+        "request_id"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        },
+        "intent_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "payload_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "AdminProposeResult"
+    },
+    "AdminApproveResult": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "AdminApproveResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "case_id",
+        "state",
+        "intent_hash",
+        "payload_hash",
+        "expires_at",
+        "state_revision",
+        "request_id"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "case_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        },
+        "intent_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "payload_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "AdminApproveResult"
+    },
+    "AdminReadResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "operations"
+      ],
+      "properties": {
+        "code": {
+          "const": "restart_operations"
+        },
+        "operations": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/Metadata"
+          }
+        }
+      }
+    },
+    "AdminReadResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "operations",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "restart_operations"
+        },
+        "operations": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/Metadata"
+          }
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "HTTP response: the standard wrapper adds request_id; this is not an immutable mutation field or execution evidence.",
+      "x-handler-result": "AdminReadResult"
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "request_id"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{0,95}$(?![\\s\\S])"
+        },
+        "request_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "description": "Fixed code and request ID only; no raw input, exception, PHI/PII or secret in errors."
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "category": "changed",
+  "title": "顧客Keychainの書込み・削除を記録付きの1回操作に変更",
+  "summary": "顧客の状態監視で鍵を保存・交換・削除するとき、本人の確認と理由、操作の前後の識別情報を私有領域の記録へ先に保存し、固定の子プロセスが1回だけKeychainを操作するようにしました。結果が確認できない操作は自動で再試行・修復しません。",
+  "upgrade": "顧客の mcs connect --customer・rotate-key・disconnect での資格情報削除には --confirm-human と秘密を含まない半角の --reason が必要です。初期設定wizardは顧客の登録を代行せず、手順を表示します。自社用の私有ファイル保存は変わりません。実Keychain・実機での受入は未完了で、本番には適用していません。",
+  "details": [
+    "記録はsdc.credential-store.v3の単一markerに、pending→verified→completeの順で保存します。verifiedは子プロセスが全native処理と読戻し・後処理を終えた後にだけ書き、その後native呼出しはありません。",
+    "未完了の記録がある間は、その私有領域で資格情報の読取り・送信・新しい鍵や登録IDの生成を止めます。状態表示と停止は鍵なしで使えます。",
+    "結果不明の操作は同じStoreで再実行しません。verifiedの記録だけを、本人が明示した照合で現在の値・識別情報・停止条件と一致した場合に完了させます。値の一致だけからpendingを完了扱いにしません。",
+    "通常の読取りでも、最後に完了した操作の資格情報全体のhashと現在値を照合し、不一致なら保留します。読取りだけで記録や状態を修復しません。",
+    "旧v2の記録は読取り互換のまま残し、最初の明示的な変更でv3へ移行します。",
+    "照合は connect・rotate-key・disconnect の --reconcile-credential だけで行い、本人の理由を記録へ先に保存してから現在値を一度だけ確認します。照合だけで終了し、新しい鍵の操作・通信・送信の再開はしません。",
+    "監視・登録・構成情報・診断・遠隔支援・再起動・配布受領の各送信は、送信直前にも未完了の記録を確認して止めます。"
+  ],
+  "refs": [
+    "adapters/sdc/storage.py",
+    "adapters/sdc/connector.py",
+    "adapters/sdc/credential_mutation.py",
+    "adapters/sdc/keychain_owner.py",
+    "mcs/ops/sdc_keychain.py",
+    "mcs/ops/sdc_cli.py",
+    "mcs/ops/sdc_provision_cli.py",
+    "mcs/ops/setup_wizard.py",
+    "docs/guides/SDC_SELF_MONITORING.md"
+  ]
+}

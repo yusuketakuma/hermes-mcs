@@ -193,8 +193,10 @@ def test_runtime_registers_before_receive_and_closes_all_tasks(
     closed = []
 
     class Host:
-        def __init__(self, _settings):
-            pass
+        def __init__(self, _settings, *, native_admission=None, delivery_admission=None, delivery_identity=None):
+            self.native_admission = native_admission
+            self.delivery_admission = delivery_admission
+            self.delivery_identity = delivery_identity
 
         def spawn_task(self, coroutine, **kwargs):
             task = asyncio.create_task(coroutine, **kwargs)

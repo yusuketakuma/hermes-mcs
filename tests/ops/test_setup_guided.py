@@ -7,6 +7,7 @@ import json
 import pytest
 
 import mcs_setup
+import mcs_util
 from test_mcs_setup import _init_env
 
 
@@ -78,6 +79,7 @@ def test_cancellation_during_password_input_does_not_claim_config_saved(
     if existing:
         path.write_bytes(original)
     monkeypatch.setattr(setup_wizard, 'wizard', lambda cfg, **kwargs: cfg.update(trickle_pages=2))
+    monkeypatch.setattr(setup_wizard, 'confirm_save', lambda cfg, **kwargs: True)
 
     def interrupt(prompt):
         raise interruption('synthetic-private-input')
@@ -107,6 +109,62 @@ def test_cancellation_after_save_reports_partial_progress(monkeypatch, tmp_path,
     assert mcs_setup.main(['init', '--yes']) == 130
     assert (tmp_path / 'c.json').exists()
     assert '途中まで保存した設定は残っています' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('interruption', [EOFError, KeyboardInterrupt])
+@pytest.mark.parametrize('check_status', [0, 1])
+def test_reinit_after_saved_cancellation_keeps_choices_and_returns_check_result(
+        monkeypatch, tmp_path, capsys, interruption, check_status):
+    initial = {'runtime_mode': 'standalone'}
+    _init_env(monkeypatch, tmp_path, initial)
+    path = tmp_path / 'c.json'
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: (
+        json.loads(path.read_text()) if path.exists() else dict(initial)))
+    monkeypatch.setattr(mcs_setup.getpass, 'getpass', lambda _: '')
+    monkeypatch.setattr(lifecycle_io, 'store_keychain', lambda *a: pytest.fail('secret write'))
+    answers = {
+        'setup.save': 'はい',
+        'mcs_login_id': 'synthetic-login', 'notify_target': 'slack:C1234567890',
+        'notify.interactive': '2', 'notify.slack.profile': 'synthetic-profile',
+        'notify.slack.application_id': 'A123', 'notify.slack.team_id': 'T123',
+        'notify.slack.allowed_user_ids': 'U123', 'notify.slack.project_ids': '101',
+    }
+    seen = set()
+
+    def answer(prompt):
+        key = prompt.split('設定項目: ', 1)[1].split()[0].rstrip(':')
+        assert key not in seen, f'fixture answer was rejected: {key}'
+        seen.add(key)
+        return answers.get(key, '')
+
+    def interrupt(*args):
+        raise interruption
+
+    monkeypatch.setattr('builtins.input', answer)
+    monkeypatch.setattr(mcs_setup, '_apply_plugin_integration', interrupt)
+    assert mcs_setup.main(['init']) == 130
+    saved = json.loads(path.read_text())
+    assert saved['runtime_mode'] == 'standalone'
+    assert saved['notify_target'] == 'slack:C1234567890'
+    assert saved['notify']['slack']['allowed_user_ids'] == ['U123']
+    assert saved['notify']['slack']['project_ids'] == [101]
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert '途中まで保存した設定は残っています' in capsys.readouterr().out
+
+    answers.clear()
+    answers['setup.save'] = 'はい'
+    seen.clear()
+    integrated, checked = [], []
+    monkeypatch.setattr(mcs_setup, '_apply_plugin_integration',
+                        lambda cfg, args: integrated.append(cfg) or True)
+    monkeypatch.setattr(mcs_setup, '_init_standalone_connectors', lambda *a: True)
+    monkeypatch.setattr(mcs_setup, 'cmd_check', lambda args: checked.append(True) or check_status)
+    assert mcs_setup.main(['init']) == check_status
+    assert integrated == [saved] and checked == [True]
+    assert json.loads(path.read_text()) == saved
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert not (tmp_path / '.env').exists()
+    assert ('利用開始に必要な確認が残っています' in capsys.readouterr().out) is bool(check_status)
 
 
 def test_choices_follow_the_question_and_explain_slack_recommendation(monkeypatch, capsys):

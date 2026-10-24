@@ -415,7 +415,134 @@ def wizard(cfg: dict, *, home):
             set_key(cfg, key,
                      ask(key, kind, default, desc, get_key(cfg, key),
                           has_key(cfg, key)))
-    wizard_drug_map(cfg, step + 1, home=home)
+    return step + 1
+
+
+def offer_sdc_enrollment(cfg: dict) -> None:
+    """Offer optional monitoring only after core setup has saved its configuration."""
+    from pathlib import Path
+    from adapters.sdc.protocol import endpoint
+    from adapters.sdc import provision
+    from adapters.sdc.storage import Store
+    import sdc_cli
+
+    settings = cfg.get('sdc', {})
+    root = settings.get('state_root') if isinstance(settings, dict) else None
+    try:
+        with Store(root) as store:
+            if provision.monitor_endpoint(store) is not None:
+                from time import time
+                if not provision.status(store, now_ms=int(time() * 1000))['registration_started']:
+                    print('状態監視の配布は保存済みですが、登録は保留しています。本体設定は保存済みです。'
+                          '同じ --state-root と --import-provision FILE でConsoleの内容を再確認し、'
+                          '--confirm-human・--reason を指定して再承認した後、同じ操作内で登録へ進んでください。'
+                          '顧客の登録は --customer も指定します。')
+                    return
+            endpoint(store.read('endpoint.json'))
+            selected = store.root
+            kind = 'customer' if store.customer else ('self' if store.read('credential', {}) or store.read('state.json', {}) else 'new')
+    except (OSError, ValueError, TypeError):
+        print('任意の状態監視は未設定です。信頼済みの送信先が未配置か確認できません。'
+              '本体設定は保存済みです。新規導入は導入担当が mcs connect --prepare-provision-root で専用領域を準備し、'
+              '認証済みConsoleから受け取ったmonitor配布を --import-provision で確認・保存した後に登録できます。'
+              '各操作には同じ --state-root を指定し、保存には --confirm-human と --reason が必要です。既存領域や復元元は作り直しません。')
+        return
+    print('任意の状態監視: 版とプロセス状態だけを中央へ送ります。患者情報・投稿本文は送りません。'
+          '登録コードと管理者の承認が必要です。登録時に送信内容を別途確認します。')
+    try:
+        argv = ['connect', '--state-root', str(Path(selected))]
+        if kind == 'new':
+            choice = input('状態監視をどの用途で登録しますか？ 1: 顧客として登録（Keychain保存） / 2: 自社検証として登録 / 3: 今は登録しない [3]: ').strip()
+            if choice == '1':
+                kind = 'customer'
+            elif choice != '2':
+                return
+        elif input('現在の登録用途を保持して状態監視の登録へ進みますか？ 1: 進む / 2: 今はしない [2]: ').strip() != '1':
+            return
+        if kind == 'customer':
+            # A menu choice is not the credential-change confirmation; the operator gives it explicitly.
+            import shlex
+            print('本体設定は保存済みです。顧客の状態監視の登録は保留しています（Keychainへの保存は本人の明示確認が必要です）。'
+                  '次の操作で登録を再開してください。登録コードは実行時に入力します: '
+                  'mcs connect --customer --state-root ' + shlex.quote(str(Path(selected)))
+                  + " --confirm-human --reason '<秘密を含まない半角の理由>'")
+            return
+        result = sdc_cli.main(argv)
+    except (EOFError, KeyboardInterrupt):
+        result = 1
+    if result:
+        print('状態監視の登録は未完了です。同意記録と本体設定は保持します。mcs connect で再開できます。')
+
+
+def confirm_save(cfg: dict, *, plugin_profile) -> bool:
+    """Show the selected destinations and writes; require an explicit answer before saving."""
+    import stamp_write
+    import local_llm
+    from semantic_policy import semantic_config
+
+    def shown(value):
+        if value is None or value == "":
+            return "未設定"
+        return re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", str(value))[:300]
+
+    ntf = cfg.get("notify") or {}
+    mode = cfg.get("runtime_mode", "hermes")
+    interactive = ntf.get("interactive", "off")
+    scope = ntf.get(interactive) or {}
+    digest = cfg.get("daily_digest") or {}
+    semantic, _ = semantic_config(cfg)
+    print("\n【保存前の確認】設定した送り先と、この後に保存する内容を確認してください。"
+          "\n  ここで中止すると、今回の設定・認証情報・辞書は保存しません。")
+    print(f"  実行方法: {shown(mode)}"
+          f"\n  通常通知先: {shown(cfg.get('notify_target'))}"
+          f"\n  動作状況・エラー通知先: {shown(cfg.get('notify_system_target') or cfg.get('notify_target'))}")
+    if mode == "hermes":
+        print("  通知送信に使うHermes設定名: "
+              + shown(cfg.get("notify_bot_profile") or "未指定（実行環境の既定を使用）"))
+    print("  通知する情報: 患者名・施設、投稿者・日時、要約・投稿本文・送信対象の添付。"
+          "通知先の参加者が閲覧できるため、送り先を確認してください。")
+    if interactive in ("slack", "discord", "lineworks"):
+        print(f"  ボタン付き通知: {shown(interactive)} / 接続設定名 {shown(scope.get('profile'))}"
+              f" / チャンネルID {shown(scope.get('channel_id'))}")
+    else:
+        print("  ボタン付き通知: 使いません（文章のみの通知）")
+    if digest.get("enabled") is True:
+        print("  朝のまとめ通知: 有効 / 一覧の患者名: "
+              + ("表示する" if digest.get("include_names") is True else "表示しない"))
+    else:
+        print("  朝のまとめ通知: 無効")
+    endpoint, _model = local_llm.resolve(cfg)
+    print("  通常の要約・抽出: このMacのAIで処理します。接続先: "
+          + shown(endpoint))
+    features = ("mode", "summary_mode", "loop_mode", "extract_qc")
+    if any(semantic[key] != "off" for key in features) and semantic["daily_request_budget"] > 0:
+        print(f"  外部Jev追加解析: 対象プロジェクト {shown(semantic['project_ids'])} の投稿本文を、"
+              "機能ごとの許可条件がそろった場合にJev APIへ送ります。")
+    else:
+        print("  外部Jev追加解析: 無効（有効な機能と送信予算が必要です）")
+    print("  Jev設定: " + ", ".join(f"{key}={shown(semantic[key])}" for key in features)
+          + f" / 1日の要求上限 {semantic['daily_request_budget']} / 対象 {shown(semantic['project_ids'])}")
+    print("  公開薬情報の照会: 同梱公開マスターで照合した薬品名・一般疾患名・公式URLを"
+          "TinyFishへ送り、トークンファイルがない場合だけ固定の無料Exaへ送ります。患者本文は送りません。"
+          "\n  定期的な薬情報更新確認: "
+          + ("無効" if cfg.get("drug_info_watch") is False else "有効（強制再取得できるTinyFish経路のみ）"))
+    print("  MCSの既読: 定期収集には、取得完了と取得時刻を確認した対象を既読にする経路があります。"
+          "\n  MCSスタンプ送信: "
+          + ("設定上は利用可能。操作者の個別操作と承認記録を経て送信します。"
+             if stamp_write.enabled(cfg) else "現在の設定では無効。"))
+    print("  保存する操作: config.json、入力・環境で渡されたMCSパスワードのKeychainと本人用.env、"
+          "渡された追加解析キーの.env保存。辞書は続く専用手順で選択・承認後に作成します。")
+    if mode == "hermes" and interactive in ("slack", "discord"):
+        profile = "未確定（接続設定を確認してください）" if plugin_profile is None else plugin_profile or "既定"
+        print(f"  Hermesへの接続設定・認証情報の保存先: {shown(profile)}"
+              "。利用条件がそろった場合は通知gateway設定も反映します。")
+    elif mode == "standalone":
+        print("  独立接続: Slack・Discordの認証情報と接続設定は、利用する接続について本人用の保存先へ保存します。"
+              "LINE WORKSの認証情報はこの手順では保存・初期化しません。LINE WORKS接続ガイドの別手順が必要です。")
+    print("  保存後に接続設定を中断した場合、保存済みの内容は残り、同じ手順で再開できます。"
+          "\n  この確認は個別のスタンプ操作の承認や、別サービスへの登録同意を作成しません。"
+          "\n  空欄のまま進むと中止します。保存する場合だけ「はい」または1を選んでください。")
+    return ask("setup.save", "bool", False, "表示した送り先と保存内容で続ける", None) is True
 
 
 def wizard_drug_map(cfg: dict, step: int, *, home) -> None:

@@ -1,0 +1,3046 @@
+{
+  "schema_version": "sdc.provision.vectors.v1",
+  "description": "Synthetic closed-shape vectors only. Public SPKI copied from existing support/restart vectors; the synthetic support profile lists all three known purposes and establishes no genuine trust. No private key, credential, PHI/PII or live deployment setting. Runtime-only vectors deliberately pass the shape; their listed checks remain the runtime suite responsibility.",
+  "now": 1792663200000,
+  "source_sha256": {
+    "../fleet/enrollment-response-vectors.json": "3237226e9cc2138d4b59d74706f22635eda842b131b850f70006a53eb14e95a2",
+    "../fleet/enrollment-response.schema.json": "a9a636b921646ede27b6ce2814a2e48e0aed06bc5f7207f495766dcf625696a1",
+    "../fleet/enrollment.schema.json": "a54daf1090125d10d3bd38a13fc4ca687e1475ba1397e98d78c1af6844e21379",
+    "../fleet/hmac-vectors.json": "0ddf7514e7244e677188bdf0150a4a3af419f26f16b1b3b3239514de2506525a",
+    "../fleet/inventory-vector.json": "4ddf61ac0e54ad8186dd9f2ae097198c45b069e1752936516e24c821ef2a20bd",
+    "../fleet/inventory-versions.json": "118a762811d0273d05a455d25fb216ded75cb6c6c0ad74bca9847475a83f1d73",
+    "../fleet/inventory.schema.json": "1993f96ae3b35a72b8cd1ef86b1d322d2b41e3e71cacd13a951fe8c58cd88d24",
+    "../fleet/tenancy.schema.json": "03c694ed44d5f3e2cfba140180704972dcd0168deb1ce00d882a814d416e4b92",
+    "../support/approval.schema.json": "dda3d76c5c75203739b4e0dce0cb3f2231280eb37b1d00627632c02a46b4c0fb",
+    "../support/artifact-manifest.schema.json": "fcfec4654a1da0caa212194c77a638de4210499a773952123bd1508346eff73f",
+    "../support/consent-preview-vectors.json": "429f265eeab795c8b014b49162944540dd3b55dfe1ef7fb41956ef82f5de11ff",
+    "../support/consent-preview.schema.json": "6ce35be89be56954465073c8c9a12f9dc8522d84ca42621d70d71da15b2447b1",
+    "../support/control-vectors.json": "f441b4a0653cab01785ba1d1cd99d724b6bca8244f3d0147effc43e83b561a4d",
+    "../support/control.schema.json": "dfa4f3c15d12daf364794d69b98e135b1cc031ab10c06196be1ccdca9de9cb8c",
+    "../support/diagnostic-result.schema.json": "3e053b49b89f08a89d604fcf32659cb881e37c82b4c94de99536ffc346db6d01",
+    "../support/execution-grant.schema.json": "e98307ded94eaca704c0c83e99f7250a96f88a4ac3fb638eb9251c91e0d8034c",
+    "../support/operation.schema.json": "629011cb45251f1eb754bffb2a5269b9bbc8db3ed3d54fbd7c5c58d2c194f899",
+    "../support/restart-api-vectors.json": "2ac562fa25c4b74e86215cc1aea8d0fbd797af878dccd22c8272ec307bb90921",
+    "../support/restart-api.schema.json": "4906f936abcd2bed17007608f13bc4f27292f2ea5afb2928bed123a9557fedf4",
+    "../support/restart-plan.schema.json": "32fc9964701b22082a7ba28e3f47e6dbda3d39568738d81038d78b5ae1cffc0c",
+    "../support/restart-registration-vectors.json": "eb6ce02d696631810d3ab58ce98085407d8303da7adb1389eb98439e1338387c",
+    "../support/restart-registration.schema.json": "01a05565e821ab0b134e69903513b97c3608779da1818de217dad6fd87d774d8",
+    "../support/restart-signature-vectors.json": "3a524fcf0e63a4c43ddca16241ef2eec50db8dcd4087898cafcf34768211783d",
+    "../support/restart-wire-vectors.json": "c762292b09d2b2b62d8d244b1724e83151d7d9cc7a8fdbc2a3905869efd9debe",
+    "../support/restart-wire.schema.json": "bb1247e045ad5fa68dd41f0c6e66ffe2b83cef4b99d64d69cd53bee8c99405fd",
+    "../support/signature-vectors.json": "cbbb89418e1018b3845789767aa3119601203e4bb2a1fd26e36b59b5b348cd3c",
+    "../v1-vectors.json": "79c511bc0a4c8e0974c9ffa57c63bec9f88bcb7a142bf4350f407766faf057d5",
+    "../../docs/api/restart-openapi.yaml": "4e0e5d2d6b9ed914d06be36f15534b38a1bec1a1544796238295c50813ca944b",
+    "../../docs/api/restart-registration-openapi.yaml": "c8ac8df14d1b19b397a836c736910e5f57515dc11e5b116985aa7cabb2d67eb9",
+    "../../fleet/crypto.js": "d24d2450f3891998c3b1e33604f38ecd62371833676bcd21c9072ebe11ec6175",
+    "../../fleet/support/contracts.js": "06cc8ec0ed519c2a7bbc6fcf62695f35d0b005c8f790dff47d7670351e9dedb2",
+    "../../src/security.js": "d5f6007b5b0dc87abee6b483a4a689ebf284a764a4a403fdd80bcbf8ce050928"
+  },
+  "canonical": {
+    "policy": "{\"channel_ref\":\"authenticated-console-manual-v1\",\"issuer_ref\":\"synthetic-provision\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"profiles\":[{\"audience\":\"sdc:synthetic\",\"origin\":\"https://ingest.invalid\",\"pins\":[],\"profile_id\":\"monitor\"},{\"audience\":\"sdc:synthetic\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-support-3072\",\"not_before\":1792663140000,\"purposes\":[\"operation\",\"execution-grant\",\"consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE\"}],\"profile_id\":\"support\"},{\"audience\":\"sdc:synthetic\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-restart-3072\",\"not_before\":1792663139000,\"purposes\":[\"restart-operation\",\"restart-execution-grant\",\"restart-consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE\"}],\"profile_id\":\"restart\"}],\"schema_version\":\"sdc.provision.policy.v1\"}",
+    "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+    "bundles": {
+      "monitor": {
+        "canonical": "{\"audience\":\"sdc:synthetic\",\"channel_ref\":\"authenticated-console-manual-v1\",\"claim_id\":null,\"console_origin\":\"https://console.invalid\",\"device_epoch\":null,\"device_id\":null,\"enrollment_id\":\"00000000-0000-4000-8000-000000000003\",\"environment\":\"synthetic\",\"expires_at\":1792749600000,\"generation\":1,\"import_expires_at\":1792664100000,\"installation\":\"self\",\"issued_at\":1792663200000,\"issued_by\":\"1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06\",\"issuer_ref\":\"synthetic-provision\",\"origin\":\"https://ingest.invalid\",\"pins\":[],\"policy_hash\":\"ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"previous_provision_id\":null,\"profile_id\":\"monitor\",\"provision_id\":\"00000000-0000-4000-8000-00000000000a\",\"realm_epoch\":\"synthetic-provision-realm\",\"root_id\":\"00000000-0000-4000-8000-000000000002\",\"schema_version\":\"sdc.provision.bundle.v1\",\"tenant\":\"self\",\"validator_revision\":\"sdc.provision.validator.v1\"}",
+        "sha256": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240"
+      },
+      "support": {
+        "canonical": "{\"audience\":\"sdc:synthetic\",\"channel_ref\":\"authenticated-console-manual-v1\",\"claim_id\":\"00000000-0000-4000-8000-000000000006\",\"console_origin\":\"https://console.invalid\",\"device_epoch\":1,\"device_id\":\"00000000-0000-4000-8000-000000000005\",\"enrollment_id\":\"00000000-0000-4000-8000-000000000003\",\"environment\":\"synthetic\",\"expires_at\":1792665000000,\"generation\":1,\"import_expires_at\":1792664100000,\"installation\":\"self\",\"issued_at\":1792663200000,\"issued_by\":\"1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06\",\"issuer_ref\":\"synthetic-provision\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-support-3072\",\"not_before\":1792663140000,\"purposes\":[\"operation\",\"execution-grant\",\"consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE\"}],\"policy_hash\":\"ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"previous_provision_id\":null,\"profile_id\":\"support\",\"provision_id\":\"00000000-0000-4000-8000-00000000000b\",\"realm_epoch\":\"synthetic-provision-realm\",\"root_id\":\"00000000-0000-4000-8000-000000000002\",\"schema_version\":\"sdc.provision.bundle.v1\",\"tenant\":\"self\",\"validator_revision\":\"sdc.provision.validator.v1\"}",
+        "sha256": "64a64b83643f182fc3125e5f7c56e5b2599ce2135760af4d065d1fe01097c7ae"
+      },
+      "restart": {
+        "canonical": "{\"audience\":\"sdc:synthetic\",\"channel_ref\":\"authenticated-console-manual-v1\",\"claim_id\":\"00000000-0000-4000-8000-000000000006\",\"console_origin\":\"https://console.invalid\",\"device_epoch\":1,\"device_id\":\"00000000-0000-4000-8000-000000000005\",\"enrollment_id\":\"00000000-0000-4000-8000-000000000003\",\"environment\":\"synthetic\",\"expires_at\":1792665000000,\"generation\":1,\"import_expires_at\":1792664100000,\"installation\":\"self\",\"issued_at\":1792663200000,\"issued_by\":\"1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06\",\"issuer_ref\":\"synthetic-provision\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-restart-3072\",\"not_before\":1792663139000,\"purposes\":[\"restart-operation\",\"restart-execution-grant\",\"restart-consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE\"}],\"policy_hash\":\"ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"previous_provision_id\":null,\"profile_id\":\"restart\",\"provision_id\":\"00000000-0000-4000-8000-00000000000c\",\"realm_epoch\":\"synthetic-provision-realm\",\"root_id\":\"00000000-0000-4000-8000-000000000002\",\"schema_version\":\"sdc.provision.bundle.v1\",\"tenant\":\"self\",\"validator_revision\":\"sdc.provision.validator.v1\"}",
+        "sha256": "1d9903313e6e6dd10a0d41fec3f199f55c5212998654b00a91550c04e84847b9"
+      }
+    }
+  },
+  "positive": [
+    {
+      "name": "Three known public profiles",
+      "definition": "Policy",
+      "value": {
+        "schema_version": "sdc.provision.policy.v1",
+        "issuer_ref": "synthetic-provision",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "channel_ref": "authenticated-console-manual-v1",
+        "profiles": [
+          {
+            "profile_id": "monitor",
+            "origin": "https://ingest.invalid",
+            "audience": "sdc:synthetic",
+            "pins": []
+          },
+          {
+            "profile_id": "support",
+            "origin": "https://support.invalid",
+            "audience": "sdc:synthetic",
+            "pins": [
+              {
+                "kid": "synthetic-support-3072",
+                "purposes": [
+                  "operation",
+                  "execution-grant",
+                  "consent-preview"
+                ],
+                "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+                "not_before": 1792663140000,
+                "expires_at": 1792666800000
+              }
+            ]
+          },
+          {
+            "profile_id": "restart",
+            "origin": "https://support.invalid",
+            "audience": "sdc:synthetic",
+            "pins": [
+              {
+                "kid": "synthetic-restart-3072",
+                "purposes": [
+                  "restart-operation",
+                  "restart-execution-grant",
+                  "restart-consent-preview"
+                ],
+                "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE",
+                "not_before": 1792663139000,
+                "expires_at": 1792666800000
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "monitor bundle",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "support bundle",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000b",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "support",
+        "generation": 1,
+        "device_id": "00000000-0000-4000-8000-000000000005",
+        "claim_id": "00000000-0000-4000-8000-000000000006",
+        "device_epoch": 1,
+        "origin": "https://support.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [
+          {
+            "kid": "synthetic-support-3072",
+            "purposes": [
+              "operation",
+              "execution-grant",
+              "consent-preview"
+            ],
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+            "not_before": 1792663140000,
+            "expires_at": 1792666800000
+          }
+        ],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792665000000
+      }
+    },
+    {
+      "name": "restart bundle",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000c",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "restart",
+        "generation": 1,
+        "device_id": "00000000-0000-4000-8000-000000000005",
+        "claim_id": "00000000-0000-4000-8000-000000000006",
+        "device_epoch": 1,
+        "origin": "https://support.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [
+          {
+            "kid": "synthetic-restart-3072",
+            "purposes": [
+              "restart-operation",
+              "restart-execution-grant",
+              "restart-consent-preview"
+            ],
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE",
+            "not_before": 1792663139000,
+            "expires_at": 1792666800000
+          }
+        ],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792665000000
+      }
+    },
+    {
+      "name": "Central ACK receipt",
+      "definition": "Receipt",
+      "value": {
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "device_id": "00000000-0000-4000-8000-000000000005",
+        "claim_id": "00000000-0000-4000-8000-000000000006",
+        "key_id": "00000000-0000-4000-8000-000000000007",
+        "generation": 1,
+        "accepted_at": 1792663202000,
+        "applied_at": 1792663201000
+      }
+    },
+    {
+      "name": "Issue handler request",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "Issue handler result",
+      "definition": "IssueResult",
+      "value": {
+        "schema_version": "sdc.provision.issue-response.v1",
+        "bundle": {
+          "schema_version": "sdc.provision.bundle.v1",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "enrollment_id": "00000000-0000-4000-8000-000000000003",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "previous_provision_id": null,
+          "tenant": "self",
+          "installation": "self",
+          "environment": "synthetic",
+          "realm_epoch": "synthetic-provision-realm",
+          "profile_id": "monitor",
+          "generation": 1,
+          "device_id": null,
+          "claim_id": null,
+          "device_epoch": null,
+          "origin": "https://ingest.invalid",
+          "audience": "sdc:synthetic",
+          "pins": [],
+          "console_origin": "https://console.invalid",
+          "issuer_ref": "synthetic-provision",
+          "channel_ref": "authenticated-console-manual-v1",
+          "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+          "validator_revision": "sdc.provision.validator.v1",
+          "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+          "issued_at": 1792663200000,
+          "import_expires_at": 1792664100000,
+          "expires_at": 1792749600000
+        },
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240"
+      }
+    },
+    {
+      "name": "Issue HTTP response",
+      "definition": "IssueResponse",
+      "value": {
+        "schema_version": "sdc.provision.issue-response.v1",
+        "bundle": {
+          "schema_version": "sdc.provision.bundle.v1",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "enrollment_id": "00000000-0000-4000-8000-000000000003",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "previous_provision_id": null,
+          "tenant": "self",
+          "installation": "self",
+          "environment": "synthetic",
+          "realm_epoch": "synthetic-provision-realm",
+          "profile_id": "monitor",
+          "generation": 1,
+          "device_id": null,
+          "claim_id": null,
+          "device_epoch": null,
+          "origin": "https://ingest.invalid",
+          "audience": "sdc:synthetic",
+          "pins": [],
+          "console_origin": "https://console.invalid",
+          "issuer_ref": "synthetic-provision",
+          "channel_ref": "authenticated-console-manual-v1",
+          "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+          "validator_revision": "sdc.provision.validator.v1",
+          "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+          "issued_at": 1792663200000,
+          "import_expires_at": 1792664100000,
+          "expires_at": 1792749600000
+        },
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Issue HTTP admin request",
+      "definition": "IssueAdminRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null,
+        "csrf": "1792664100.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "Read handler request",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002"
+      }
+    },
+    {
+      "name": "Read handler result",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.provision.read-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 1,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+          "state": "current",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "bundle": {
+          "schema_version": "sdc.provision.bundle.v1",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "enrollment_id": "00000000-0000-4000-8000-000000000003",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "previous_provision_id": null,
+          "tenant": "self",
+          "installation": "self",
+          "environment": "synthetic",
+          "realm_epoch": "synthetic-provision-realm",
+          "profile_id": "monitor",
+          "generation": 1,
+          "device_id": null,
+          "claim_id": null,
+          "device_epoch": null,
+          "origin": "https://ingest.invalid",
+          "audience": "sdc:synthetic",
+          "pins": [],
+          "console_origin": "https://console.invalid",
+          "issuer_ref": "synthetic-provision",
+          "channel_ref": "authenticated-console-manual-v1",
+          "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+          "validator_revision": "sdc.provision.validator.v1",
+          "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+          "issued_at": 1792663200000,
+          "import_expires_at": 1792664100000,
+          "expires_at": 1792749600000
+        }
+      }
+    },
+    {
+      "name": "Read HTTP response",
+      "definition": "ReadResponse",
+      "value": {
+        "schema_version": "sdc.provision.read-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 1,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+          "state": "current",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "bundle": {
+          "schema_version": "sdc.provision.bundle.v1",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "enrollment_id": "00000000-0000-4000-8000-000000000003",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "previous_provision_id": null,
+          "tenant": "self",
+          "installation": "self",
+          "environment": "synthetic",
+          "realm_epoch": "synthetic-provision-realm",
+          "profile_id": "monitor",
+          "generation": 1,
+          "device_id": null,
+          "claim_id": null,
+          "device_epoch": null,
+          "origin": "https://ingest.invalid",
+          "audience": "sdc:synthetic",
+          "pins": [],
+          "console_origin": "https://console.invalid",
+          "issuer_ref": "synthetic-provision",
+          "channel_ref": "authenticated-console-manual-v1",
+          "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+          "validator_revision": "sdc.provision.validator.v1",
+          "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+          "issued_at": 1792663200000,
+          "import_expires_at": 1792664100000,
+          "expires_at": 1792749600000
+        },
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Read HTTP admin request",
+      "definition": "ReadAdminRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "csrf": "1792664100.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "Revoke handler request",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1
+      }
+    },
+    {
+      "name": "Revoke handler result",
+      "definition": "RevokeResult",
+      "value": {
+        "schema_version": "sdc.provision.revoke-response.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "generation": 2,
+        "revoked_at": 1792663203000
+      }
+    },
+    {
+      "name": "Revoke HTTP response",
+      "definition": "RevokeResponse",
+      "value": {
+        "schema_version": "sdc.provision.revoke-response.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "generation": 2,
+        "revoked_at": 1792663203000,
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Revoke HTTP admin request",
+      "definition": "RevokeAdminRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1,
+        "csrf": "1792664100.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "Status handler request",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.status.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015"
+      }
+    },
+    {
+      "name": "Status handler result",
+      "definition": "StatusResult",
+      "value": {
+        "schema_version": "sdc.provision.status-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 1,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+          "state": "current",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        }
+      }
+    },
+    {
+      "name": "Status HTTP response",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.provision.status-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 1,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+          "state": "current",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Ack handler request",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000
+      }
+    },
+    {
+      "name": "Ack handler result",
+      "definition": "AckResult",
+      "value": {
+        "schema_version": "sdc.provision.ack-response.v1",
+        "receipt": {
+          "ack_id": "00000000-0000-4000-8000-000000000014",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+          "device_id": "00000000-0000-4000-8000-000000000005",
+          "claim_id": "00000000-0000-4000-8000-000000000006",
+          "key_id": "00000000-0000-4000-8000-000000000007",
+          "generation": 1,
+          "accepted_at": 1792663202000,
+          "applied_at": 1792663201000
+        }
+      }
+    },
+    {
+      "name": "Ack HTTP response",
+      "definition": "AckResponse",
+      "value": {
+        "schema_version": "sdc.provision.ack-response.v1",
+        "receipt": {
+          "ack_id": "00000000-0000-4000-8000-000000000014",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+          "device_id": "00000000-0000-4000-8000-000000000005",
+          "claim_id": "00000000-0000-4000-8000-000000000006",
+          "key_id": "00000000-0000-4000-8000-000000000007",
+          "generation": 1,
+          "accepted_at": 1792663202000,
+          "applied_at": 1792663201000
+        },
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Support issue after registration",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "support",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": "00000000-0000-4000-8000-000000000005",
+        "expected_generation": 0,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "Restart issue at generation limit",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "restart",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": "00000000-0000-4000-8000-000000000005",
+        "expected_generation": 2147483646,
+        "expected_provision_id": "00000000-0000-4000-8000-000000000009"
+      }
+    },
+    {
+      "name": "superseded read hides bundle",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.provision.read-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 2,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000c",
+          "state": "superseded",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "bundle": null
+      }
+    },
+    {
+      "name": "revoked read hides bundle",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.provision.read-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 2,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000c",
+          "state": "revoked",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "bundle": null
+      }
+    },
+    {
+      "name": "expired read hides bundle",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.provision.read-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 2,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000c",
+          "state": "expired",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "bundle": null
+      }
+    },
+    {
+      "name": "Current status with saved ACK",
+      "definition": "Status",
+      "value": {
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "generation": 1,
+        "current_generation": 1,
+        "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+        "state": "current",
+        "realm_epoch": "synthetic-provision-realm",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "expires_at": 1792749600000,
+        "receipt": {
+          "ack_id": "00000000-0000-4000-8000-000000000014",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+          "device_id": "00000000-0000-4000-8000-000000000005",
+          "claim_id": "00000000-0000-4000-8000-000000000006",
+          "key_id": "00000000-0000-4000-8000-000000000007",
+          "generation": 1,
+          "accepted_at": 1792663202000,
+          "applied_at": 1792663201000
+        }
+      }
+    },
+    {
+      "name": "Fixed error wrapper",
+      "definition": "ErrorResponse",
+      "value": {
+        "code": "SCOPE_DENIED",
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    }
+  ],
+  "negative": [
+    {
+      "name": "Issue missing required field",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "Issue rejects patient_body",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null,
+        "patient_body": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "Issue rejects path",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null,
+        "path": "/synthetic/refused"
+      }
+    },
+    {
+      "name": "Issue rejects secret",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null,
+        "secret": "SYNTHETIC_NOT_A_SECRET"
+      }
+    },
+    {
+      "name": "Issue rejects url",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null,
+        "url": "https://refused.invalid"
+      }
+    },
+    {
+      "name": "Issue rejects pins",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null,
+        "pins": []
+      }
+    },
+    {
+      "name": "Issue rejects request_id",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null,
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Issue rejects csrf",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null,
+        "csrf": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "Issue bad version",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.unknown.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "Issue non-v4 UUID",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-1000-8000-000000000001",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "Issue result refuses HTTP request_id",
+      "definition": "IssueResult",
+      "value": {
+        "schema_version": "sdc.provision.issue-response.v1",
+        "bundle": {
+          "schema_version": "sdc.provision.bundle.v1",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "enrollment_id": "00000000-0000-4000-8000-000000000003",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "previous_provision_id": null,
+          "tenant": "self",
+          "installation": "self",
+          "environment": "synthetic",
+          "realm_epoch": "synthetic-provision-realm",
+          "profile_id": "monitor",
+          "generation": 1,
+          "device_id": null,
+          "claim_id": null,
+          "device_epoch": null,
+          "origin": "https://ingest.invalid",
+          "audience": "sdc:synthetic",
+          "pins": [],
+          "console_origin": "https://console.invalid",
+          "issuer_ref": "synthetic-provision",
+          "channel_ref": "authenticated-console-manual-v1",
+          "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+          "validator_revision": "sdc.provision.validator.v1",
+          "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+          "issued_at": 1792663200000,
+          "import_expires_at": 1792664100000,
+          "expires_at": 1792749600000
+        },
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Issue response requires HTTP request_id",
+      "definition": "IssueResponse",
+      "value": {
+        "schema_version": "sdc.provision.issue-response.v1",
+        "bundle": {
+          "schema_version": "sdc.provision.bundle.v1",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "enrollment_id": "00000000-0000-4000-8000-000000000003",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "previous_provision_id": null,
+          "tenant": "self",
+          "installation": "self",
+          "environment": "synthetic",
+          "realm_epoch": "synthetic-provision-realm",
+          "profile_id": "monitor",
+          "generation": 1,
+          "device_id": null,
+          "claim_id": null,
+          "device_epoch": null,
+          "origin": "https://ingest.invalid",
+          "audience": "sdc:synthetic",
+          "pins": [],
+          "console_origin": "https://console.invalid",
+          "issuer_ref": "synthetic-provision",
+          "channel_ref": "authenticated-console-manual-v1",
+          "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+          "validator_revision": "sdc.provision.validator.v1",
+          "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+          "issued_at": 1792663200000,
+          "import_expires_at": 1792664100000,
+          "expires_at": 1792749600000
+        },
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240"
+      }
+    },
+    {
+      "name": "Read missing required field",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "root_id": "00000000-0000-4000-8000-000000000002"
+      }
+    },
+    {
+      "name": "Read rejects patient_body",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "patient_body": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "Read rejects path",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "path": "/synthetic/refused"
+      }
+    },
+    {
+      "name": "Read rejects secret",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "secret": "SYNTHETIC_NOT_A_SECRET"
+      }
+    },
+    {
+      "name": "Read rejects url",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "url": "https://refused.invalid"
+      }
+    },
+    {
+      "name": "Read rejects pins",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "pins": []
+      }
+    },
+    {
+      "name": "Read rejects request_id",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Read rejects csrf",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "csrf": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "Read bad version",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.unknown.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002"
+      }
+    },
+    {
+      "name": "Read non-v4 UUID",
+      "definition": "ReadRequest",
+      "value": {
+        "schema_version": "sdc.provision.read.v1",
+        "provision_id": "00000000-0000-1000-8000-000000000001",
+        "root_id": "00000000-0000-4000-8000-000000000002"
+      }
+    },
+    {
+      "name": "Read result refuses HTTP request_id",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.provision.read-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 1,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+          "state": "current",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "bundle": {
+          "schema_version": "sdc.provision.bundle.v1",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "enrollment_id": "00000000-0000-4000-8000-000000000003",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "previous_provision_id": null,
+          "tenant": "self",
+          "installation": "self",
+          "environment": "synthetic",
+          "realm_epoch": "synthetic-provision-realm",
+          "profile_id": "monitor",
+          "generation": 1,
+          "device_id": null,
+          "claim_id": null,
+          "device_epoch": null,
+          "origin": "https://ingest.invalid",
+          "audience": "sdc:synthetic",
+          "pins": [],
+          "console_origin": "https://console.invalid",
+          "issuer_ref": "synthetic-provision",
+          "channel_ref": "authenticated-console-manual-v1",
+          "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+          "validator_revision": "sdc.provision.validator.v1",
+          "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+          "issued_at": 1792663200000,
+          "import_expires_at": 1792664100000,
+          "expires_at": 1792749600000
+        },
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Read response requires HTTP request_id",
+      "definition": "ReadResponse",
+      "value": {
+        "schema_version": "sdc.provision.read-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 1,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+          "state": "current",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "bundle": {
+          "schema_version": "sdc.provision.bundle.v1",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "enrollment_id": "00000000-0000-4000-8000-000000000003",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "previous_provision_id": null,
+          "tenant": "self",
+          "installation": "self",
+          "environment": "synthetic",
+          "realm_epoch": "synthetic-provision-realm",
+          "profile_id": "monitor",
+          "generation": 1,
+          "device_id": null,
+          "claim_id": null,
+          "device_epoch": null,
+          "origin": "https://ingest.invalid",
+          "audience": "sdc:synthetic",
+          "pins": [],
+          "console_origin": "https://console.invalid",
+          "issuer_ref": "synthetic-provision",
+          "channel_ref": "authenticated-console-manual-v1",
+          "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+          "validator_revision": "sdc.provision.validator.v1",
+          "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+          "issued_at": 1792663200000,
+          "import_expires_at": 1792664100000,
+          "expires_at": 1792749600000
+        }
+      }
+    },
+    {
+      "name": "Revoke missing required field",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1
+      }
+    },
+    {
+      "name": "Revoke rejects patient_body",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1,
+        "patient_body": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "Revoke rejects path",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1,
+        "path": "/synthetic/refused"
+      }
+    },
+    {
+      "name": "Revoke rejects secret",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1,
+        "secret": "SYNTHETIC_NOT_A_SECRET"
+      }
+    },
+    {
+      "name": "Revoke rejects url",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1,
+        "url": "https://refused.invalid"
+      }
+    },
+    {
+      "name": "Revoke rejects pins",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1,
+        "pins": []
+      }
+    },
+    {
+      "name": "Revoke rejects request_id",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1,
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Revoke rejects csrf",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1,
+        "csrf": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "Revoke bad version",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.unknown.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1
+      }
+    },
+    {
+      "name": "Revoke non-v4 UUID",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-1000-8000-000000000001",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 1
+      }
+    },
+    {
+      "name": "Revoke result refuses HTTP request_id",
+      "definition": "RevokeResult",
+      "value": {
+        "schema_version": "sdc.provision.revoke-response.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "generation": 2,
+        "revoked_at": 1792663203000,
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Revoke response requires HTTP request_id",
+      "definition": "RevokeResponse",
+      "value": {
+        "schema_version": "sdc.provision.revoke-response.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "generation": 2,
+        "revoked_at": 1792663203000
+      }
+    },
+    {
+      "name": "Status missing required field",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.status.v1",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015"
+      }
+    },
+    {
+      "name": "Status rejects patient_body",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.status.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "patient_body": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "Status rejects path",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.status.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "path": "/synthetic/refused"
+      }
+    },
+    {
+      "name": "Status rejects secret",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.status.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "secret": "SYNTHETIC_NOT_A_SECRET"
+      }
+    },
+    {
+      "name": "Status rejects url",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.status.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "url": "https://refused.invalid"
+      }
+    },
+    {
+      "name": "Status rejects pins",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.status.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "pins": []
+      }
+    },
+    {
+      "name": "Status rejects request_id",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.status.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Status rejects csrf",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.status.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "csrf": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "Status bad version",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.unknown.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015"
+      }
+    },
+    {
+      "name": "Status non-v4 UUID",
+      "definition": "StatusRequest",
+      "value": {
+        "schema_version": "sdc.provision.status.v1",
+        "provision_id": "00000000-0000-1000-8000-000000000001",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015"
+      }
+    },
+    {
+      "name": "Status result refuses HTTP request_id",
+      "definition": "StatusResult",
+      "value": {
+        "schema_version": "sdc.provision.status-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 1,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+          "state": "current",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Status response requires HTTP request_id",
+      "definition": "StatusResponse",
+      "value": {
+        "schema_version": "sdc.provision.status-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 1,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+          "state": "current",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        }
+      }
+    },
+    {
+      "name": "Ack missing required field",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000
+      }
+    },
+    {
+      "name": "Ack rejects patient_body",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000,
+        "patient_body": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "Ack rejects path",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000,
+        "path": "/synthetic/refused"
+      }
+    },
+    {
+      "name": "Ack rejects secret",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000,
+        "secret": "SYNTHETIC_NOT_A_SECRET"
+      }
+    },
+    {
+      "name": "Ack rejects url",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000,
+        "url": "https://refused.invalid"
+      }
+    },
+    {
+      "name": "Ack rejects pins",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000,
+        "pins": []
+      }
+    },
+    {
+      "name": "Ack rejects request_id",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000,
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Ack rejects csrf",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000,
+        "csrf": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "Ack bad version",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.unknown.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000
+      }
+    },
+    {
+      "name": "Ack non-v4 UUID",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-1000-8000-000000000001",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663201000
+      }
+    },
+    {
+      "name": "Ack result refuses HTTP request_id",
+      "definition": "AckResult",
+      "value": {
+        "schema_version": "sdc.provision.ack-response.v1",
+        "receipt": {
+          "ack_id": "00000000-0000-4000-8000-000000000014",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+          "device_id": "00000000-0000-4000-8000-000000000005",
+          "claim_id": "00000000-0000-4000-8000-000000000006",
+          "key_id": "00000000-0000-4000-8000-000000000007",
+          "generation": 1,
+          "accepted_at": 1792663202000,
+          "applied_at": 1792663201000
+        },
+        "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "Ack response requires HTTP request_id",
+      "definition": "AckResponse",
+      "value": {
+        "schema_version": "sdc.provision.ack-response.v1",
+        "receipt": {
+          "ack_id": "00000000-0000-4000-8000-000000000014",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+          "device_id": "00000000-0000-4000-8000-000000000005",
+          "claim_id": "00000000-0000-4000-8000-000000000006",
+          "key_id": "00000000-0000-4000-8000-000000000007",
+          "generation": 1,
+          "accepted_at": 1792663202000,
+          "applied_at": 1792663201000
+        }
+      }
+    },
+    {
+      "name": "monitor requires device null",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": "00000000-0000-4000-8000-000000000005",
+        "expected_generation": 0,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "support requires device UUID",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "support",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "generation negative",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": -1,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "generation over range",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 2147483647,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "generation zero with old ID",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": "00000000-0000-4000-8000-000000000009"
+      }
+    },
+    {
+      "name": "generation positive missing old ID",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "monitor",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 1,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "unknown profile",
+      "definition": "IssueRequest",
+      "value": {
+        "schema_version": "sdc.provision.issue.v1",
+        "issue_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "profile_id": "remote",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "device_id": null,
+        "expected_generation": 0,
+        "expected_provision_id": null
+      }
+    },
+    {
+      "name": "monitor claim forbidden",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": "00000000-0000-4000-8000-000000000006",
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "negative device epoch",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "support",
+        "generation": 1,
+        "device_id": "00000000-0000-4000-8000-000000000005",
+        "claim_id": "00000000-0000-4000-8000-000000000006",
+        "device_epoch": -1,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [
+          {
+            "kid": "synthetic-support-3072",
+            "purposes": [
+              "operation",
+              "execution-grant",
+              "consent-preview"
+            ],
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+            "not_before": 1792663140000,
+            "expires_at": 1792666800000
+          }
+        ],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "unsafe timestamp",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 9007199254740992,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "generation zero",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 0,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "generation overflow",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 2147483648,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "uppercase hash",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "invalid hash length",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "scope path",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "../self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "invalid environment",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic/other",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "bad realm epoch",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "https://refused.invalid",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "unknown validator",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v2",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "unknown field",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000,
+        "raw_log": "SYNTHETIC_REFUSED"
+      }
+    },
+    {
+      "name": "origin path",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid/path",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "origin query",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid?x=1",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "origin userinfo",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://user@ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "origin port",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid:444",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "origin empty label",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest..invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "origin fragment",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid#x",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "unknown issuer shape",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "Uppercase",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "Support bundle refuses restart pins",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000b",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "support",
+        "generation": 1,
+        "device_id": "00000000-0000-4000-8000-000000000005",
+        "claim_id": "00000000-0000-4000-8000-000000000006",
+        "device_epoch": 1,
+        "origin": "https://support.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [
+          {
+            "kid": "synthetic-restart-3072",
+            "purposes": [
+              "restart-operation",
+              "restart-execution-grant",
+              "restart-consent-preview"
+            ],
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE",
+            "not_before": 1792663139000,
+            "expires_at": 1792666800000
+          }
+        ],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792665000000
+      }
+    },
+    {
+      "name": "Restart bundle refuses support pins",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000c",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "restart",
+        "generation": 1,
+        "device_id": "00000000-0000-4000-8000-000000000005",
+        "claim_id": "00000000-0000-4000-8000-000000000006",
+        "device_epoch": 1,
+        "origin": "https://support.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [
+          {
+            "kid": "synthetic-support-3072",
+            "purposes": [
+              "operation",
+              "execution-grant",
+              "consent-preview"
+            ],
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+            "not_before": 1792663140000,
+            "expires_at": 1792666800000
+          }
+        ],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792665000000
+      }
+    },
+    {
+      "name": "Support bundle requires nonnull device",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000b",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "support",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": "00000000-0000-4000-8000-000000000006",
+        "device_epoch": 1,
+        "origin": "https://support.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [
+          {
+            "kid": "synthetic-support-3072",
+            "purposes": [
+              "operation",
+              "execution-grant",
+              "consent-preview"
+            ],
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+            "not_before": 1792663140000,
+            "expires_at": 1792666800000
+          }
+        ],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792665000000
+      }
+    },
+    {
+      "name": "Monitor profile refuses pins",
+      "definition": "MonitorProfile",
+      "value": {
+        "profile_id": "monitor",
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [
+          {
+            "kid": "synthetic-support-3072",
+            "purposes": [
+              "operation",
+              "execution-grant",
+              "consent-preview"
+            ],
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+            "not_before": 1792663140000,
+            "expires_at": 1792666800000
+          }
+        ]
+      }
+    },
+    {
+      "name": "Support pins require every purpose",
+      "definition": "SupportPins",
+      "value": [
+        {
+          "kid": "synthetic-support-3072",
+          "purposes": [
+            "operation"
+          ],
+          "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+          "not_before": 1792663140000,
+          "expires_at": 1792666800000
+        }
+      ]
+    },
+    {
+      "name": "Duplicate pin purpose",
+      "definition": "SupportPins",
+      "value": [
+        {
+          "kid": "synthetic-support-3072",
+          "purposes": [
+            "operation",
+            "operation",
+            "consent-preview"
+          ],
+          "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+          "not_before": 1792663140000,
+          "expires_at": 1792666800000
+        }
+      ]
+    },
+    {
+      "name": "Pin refuses private key",
+      "definition": "SupportPin",
+      "value": {
+        "kid": "synthetic-support-3072",
+        "purposes": [
+          "operation",
+          "execution-grant",
+          "consent-preview"
+        ],
+        "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+        "not_before": 1792663140000,
+        "expires_at": 1792666800000,
+        "private_key": "SYNTHETIC_NOT_A_KEY"
+      }
+    },
+    {
+      "name": "Unknown pin purpose",
+      "definition": "RestartPin",
+      "value": {
+        "kid": "synthetic-restart-3072",
+        "purposes": [
+          "ssh"
+        ],
+        "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE",
+        "not_before": 1792663139000,
+        "expires_at": 1792666800000
+      }
+    },
+    {
+      "name": "Too many profiles",
+      "definition": "Policy",
+      "value": {
+        "schema_version": "sdc.provision.policy.v1",
+        "issuer_ref": "synthetic-provision",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "channel_ref": "authenticated-console-manual-v1",
+        "profiles": [
+          {
+            "profile_id": "monitor",
+            "origin": "https://ingest.invalid",
+            "audience": "sdc:synthetic",
+            "pins": []
+          },
+          {
+            "profile_id": "support",
+            "origin": "https://support.invalid",
+            "audience": "sdc:synthetic",
+            "pins": [
+              {
+                "kid": "synthetic-support-3072",
+                "purposes": [
+                  "operation",
+                  "execution-grant",
+                  "consent-preview"
+                ],
+                "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+                "not_before": 1792663140000,
+                "expires_at": 1792666800000
+              }
+            ]
+          },
+          {
+            "profile_id": "restart",
+            "origin": "https://support.invalid",
+            "audience": "sdc:synthetic",
+            "pins": [
+              {
+                "kid": "synthetic-restart-3072",
+                "purposes": [
+                  "restart-operation",
+                  "restart-execution-grant",
+                  "restart-consent-preview"
+                ],
+                "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE",
+                "not_before": 1792663139000,
+                "expires_at": 1792666800000
+              }
+            ]
+          },
+          {
+            "profile_id": "monitor",
+            "origin": "https://ingest.invalid",
+            "audience": "sdc:synthetic",
+            "pins": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "Duplicate profile ID",
+      "definition": "Policy",
+      "value": {
+        "schema_version": "sdc.provision.policy.v1",
+        "issuer_ref": "synthetic-provision",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "channel_ref": "authenticated-console-manual-v1",
+        "profiles": [
+          {
+            "profile_id": "monitor",
+            "origin": "https://ingest.invalid",
+            "audience": "sdc:synthetic",
+            "pins": []
+          },
+          {
+            "profile_id": "monitor",
+            "origin": "https://other.invalid",
+            "audience": "sdc:synthetic",
+            "pins": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "Unknown policy field",
+      "definition": "Policy",
+      "value": {
+        "schema_version": "sdc.provision.policy.v1",
+        "issuer_ref": "synthetic-provision",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "channel_ref": "authenticated-console-manual-v1",
+        "profiles": [
+          {
+            "profile_id": "monitor",
+            "origin": "https://ingest.invalid",
+            "audience": "sdc:synthetic",
+            "pins": []
+          },
+          {
+            "profile_id": "support",
+            "origin": "https://support.invalid",
+            "audience": "sdc:synthetic",
+            "pins": [
+              {
+                "kid": "synthetic-support-3072",
+                "purposes": [
+                  "operation",
+                  "execution-grant",
+                  "consent-preview"
+                ],
+                "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+                "not_before": 1792663140000,
+                "expires_at": 1792666800000
+              }
+            ]
+          },
+          {
+            "profile_id": "restart",
+            "origin": "https://support.invalid",
+            "audience": "sdc:synthetic",
+            "pins": [
+              {
+                "kid": "synthetic-restart-3072",
+                "purposes": [
+                  "restart-operation",
+                  "restart-execution-grant",
+                  "restart-consent-preview"
+                ],
+                "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE",
+                "not_before": 1792663139000,
+                "expires_at": 1792666800000
+              }
+            ]
+          }
+        ],
+        "private_key": "SYNTHETIC_NOT_A_KEY"
+      }
+    },
+    {
+      "name": "Empty profiles",
+      "definition": "Policy",
+      "value": {
+        "schema_version": "sdc.provision.policy.v1",
+        "issuer_ref": "synthetic-provision",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "channel_ref": "authenticated-console-manual-v1",
+        "profiles": []
+      }
+    },
+    {
+      "name": "Read current requires bundle",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.provision.read-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 1,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+          "state": "current",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "bundle": null
+      }
+    },
+    {
+      "name": "Read revoked never exports bundle",
+      "definition": "ReadResult",
+      "value": {
+        "schema_version": "sdc.provision.read-response.v1",
+        "status": {
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+          "generation": 1,
+          "current_generation": 1,
+          "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+          "state": "revoked",
+          "realm_epoch": "synthetic-provision-realm",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "expires_at": 1792749600000,
+          "receipt": null
+        },
+        "bundle": {
+          "schema_version": "sdc.provision.bundle.v1",
+          "provision_id": "00000000-0000-4000-8000-00000000000a",
+          "root_id": "00000000-0000-4000-8000-000000000002",
+          "enrollment_id": "00000000-0000-4000-8000-000000000003",
+          "policy_revision": "00000000-0000-4000-8000-000000000004",
+          "previous_provision_id": null,
+          "tenant": "self",
+          "installation": "self",
+          "environment": "synthetic",
+          "realm_epoch": "synthetic-provision-realm",
+          "profile_id": "monitor",
+          "generation": 1,
+          "device_id": null,
+          "claim_id": null,
+          "device_epoch": null,
+          "origin": "https://ingest.invalid",
+          "audience": "sdc:synthetic",
+          "pins": [],
+          "console_origin": "https://console.invalid",
+          "issuer_ref": "synthetic-provision",
+          "channel_ref": "authenticated-console-manual-v1",
+          "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+          "validator_revision": "sdc.provision.validator.v1",
+          "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+          "issued_at": 1792663200000,
+          "import_expires_at": 1792664100000,
+          "expires_at": 1792749600000
+        }
+      }
+    },
+    {
+      "name": "Ack invalid applied time",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": -1
+      }
+    },
+    {
+      "name": "Status invalid receipt shape",
+      "definition": "Status",
+      "value": {
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "generation": 1,
+        "current_generation": 1,
+        "current_provision_id": "00000000-0000-4000-8000-00000000000a",
+        "state": "current",
+        "realm_epoch": "synthetic-provision-realm",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "expires_at": 1792749600000,
+        "receipt": {
+          "ack_id": "00000000-0000-4000-8000-000000000014"
+        }
+      }
+    },
+    {
+      "name": "RevokeRequest refuses generation zero",
+      "definition": "RevokeRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 0
+      }
+    },
+    {
+      "name": "RevokeAdminRequest refuses generation zero",
+      "definition": "RevokeAdminRequest",
+      "value": {
+        "schema_version": "sdc.provision.revoke.v1",
+        "revoke_id": "00000000-0000-4000-8000-000000000016",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "expected_generation": 0,
+        "csrf": "1792664100.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ],
+  "runtime_only": [
+    {
+      "name": "Same kid across pins",
+      "definition": "SupportPins",
+      "value": [
+        {
+          "kid": "synthetic-support-3072",
+          "purposes": [
+            "operation",
+            "execution-grant",
+            "consent-preview"
+          ],
+          "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+          "not_before": 1792663140000,
+          "expires_at": 1792666800000
+        },
+        {
+          "kid": "synthetic-support-3072",
+          "purposes": [
+            "operation"
+          ],
+          "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+          "not_before": 1792663140000,
+          "expires_at": 1792666800000
+        }
+      ],
+      "required_runtime_check": "Runtime rejects duplicate kid even when pins are distinct objects."
+    },
+    {
+      "name": "Invalid public SPKI binary",
+      "definition": "SupportPins",
+      "value": [
+        {
+          "kid": "synthetic-support-3072",
+          "purposes": [
+            "operation",
+            "execution-grant",
+            "consent-preview"
+          ],
+          "spki": "AQAB",
+          "not_before": 1792663140000,
+          "expires_at": 1792666800000
+        }
+      ],
+      "required_runtime_check": "Runtime RSA3072/e65537/SHA256 import must reject invalid DER."
+    },
+    {
+      "name": "Expired public pin",
+      "definition": "SupportPins",
+      "value": [
+        {
+          "kid": "synthetic-support-3072",
+          "purposes": [
+            "operation",
+            "execution-grant",
+            "consent-preview"
+          ],
+          "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+          "not_before": 1792659600000,
+          "expires_at": 1792663199999
+        }
+      ],
+      "required_runtime_check": "Runtime requires a currently usable selected pin and valid key window."
+    },
+    {
+      "name": "Bundle hash policy mismatch",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792749600000
+      },
+      "required_runtime_check": "Runtime compares the exact configured canonical policy hash and current authority row."
+    },
+    {
+      "name": "Bundle import order",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "monitor",
+        "generation": 1,
+        "device_id": null,
+        "claim_id": null,
+        "device_epoch": null,
+        "origin": "https://ingest.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792663200000,
+        "expires_at": 1792749600000
+      },
+      "required_runtime_check": "Runtime requires issued_at < import_expires_at and all configured lifetime caps."
+    },
+    {
+      "name": "ACK before issuance",
+      "definition": "AckRequest",
+      "value": {
+        "schema_version": "sdc.provision.ack.v1",
+        "ack_id": "00000000-0000-4000-8000-000000000014",
+        "provision_id": "00000000-0000-4000-8000-00000000000a",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "bundle_hash": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240",
+        "local_receipt_id": "00000000-0000-4000-8000-000000000015",
+        "applied_at": 1792663199999
+      },
+      "required_runtime_check": "Runtime rejects applied_at before bundle issued_at despite its valid integer shape."
+    }
+  ]
+}

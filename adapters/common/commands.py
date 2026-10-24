@@ -3,30 +3,115 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import threading
 
 from .dispatch import dispatch, parse
 from .mcs_api import deny
 from . import paths
 
 
-async def run_native(handler, *args, **kwargs):
-    """Keep a native command owned until its synchronous work has actually ended."""
-    work = asyncio.create_task(asyncio.to_thread(handler, *args, **kwargs))
-    cancelled = False
-    while not work.done():
+NATIVE_ADMISSION_CLOSED_TEXT = (
+    "新しい操作の受付を停止しています。処理状態は未確認です。"
+    "既に受付済みの操作は、その結果の確認をお待ちください。")
+
+
+class NativeAdmissionClosed(RuntimeError):
+    """Refuse new native work with a fixed, input-free code."""
+    def __init__(self):
+        super().__init__('native_admission_closed')
+
+
+class NativeAdmission:
+    """Share a synchronous admission gate and actual queued/running work lifetime."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._open, self._queued, self._running = True, 0, 0
+
+    def _snapshot(self):
+        return {'open': self._open, 'queued': self._queued, 'running': self._running}
+
+    def snapshot(self):
+        with self._lock:
+            return self._snapshot()
+
+    def close(self):
+        with self._lock:
+            self._open = False
+            return self._snapshot()
+
+    def open(self):
+        # Only the owning Runtime may explicitly reopen. Connector/Host lifecycle
+        # never invokes this: a reconnect must retain its borrowed closed gate.
+        with self._lock:
+            self._open = True
+            return self._snapshot()
+
+    def _reserve(self):
+        with self._lock:
+            if not self._open:
+                raise NativeAdmissionClosed()
+            ticket = _NativeTicket(self)
+            self._queued += 1
+            return ticket
+
+
+class _NativeTicket:
+    def __init__(self, owner):
+        self.owner, self.stage = owner, 'queued'
+
+    def cancel_queued(self):
+        with self.owner._lock:
+            if self.stage == 'queued':
+                self.owner._queued -= 1
+                self.stage = 'done'
+
+    def invoke(self, handler, *args, **kwargs):
+        with self.owner._lock:
+            if self.stage != 'queued':
+                raise NativeAdmissionClosed()
+            self.owner._queued -= 1
+            self.owner._running += 1
+            self.stage = 'running'
         try:
-            # Cancelling wait() leaves the command task alive. Its caller remains
-            # in the scope's active listeners until this function finishes.
-            await asyncio.wait({work})
-        except asyncio.CancelledError:
-            cancelled = True
-    if cancelled:
-        # Observe a worker failure without turning a possibly published command
-        # into a not-sent answer; the durable queue/receipt owns its outcome.
-        if not work.cancelled():
-            work.exception()
-        raise asyncio.CancelledError
-    return work.result()
+            return handler(*args, **kwargs)
+        finally:
+            with self.owner._lock:
+                self.owner._running -= 1
+                self.stage = 'done'
+
+
+async def run_native(handler, *args, admission=None, **kwargs):
+    """Own native work before executor submission until the real handler finally ends."""
+    ticket = admission._reserve() if admission is not None else None
+    coroutine = None
+    try:
+        coroutine = (asyncio.to_thread(ticket.invoke, handler, *args, **kwargs)
+                     if ticket else asyncio.to_thread(handler, *args, **kwargs))
+        work = asyncio.create_task(coroutine)
+    except BaseException:
+        if coroutine is not None:
+            coroutine.close()
+        if ticket is not None:
+            ticket.cancel_queued()
+        raise
+    cancelled = False
+    try:
+        while not work.done():
+            try:
+                # Cancel only the waiter, never the queued/running actual work.
+                await asyncio.wait({work})
+            except asyncio.CancelledError:
+                cancelled = True
+        if cancelled:
+            if not work.cancelled():
+                work.exception()
+            raise asyncio.CancelledError
+        return work.result()
+    finally:
+        # Executor submission itself can fail before the wrapper ever starts.
+        # A running/done ticket is never decremented by waiter cancellation.
+        if ticket is not None:
+            ticket.cancel_queued()
 
 
 def answer(settings, raw, *, user, channel, authorized=None):

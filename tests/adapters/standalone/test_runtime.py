@@ -176,7 +176,7 @@ def test_log_and_status_failures_still_drain_children_and_close_connector(tmp_pa
         return real_open(path, *args, **kwargs)
     def broken_status(*args, **kwargs):
         raise OSError('synthetic status failure')
-    async def connector(root, stopping):
+    async def connector(root, stopping, *, native_admission, delivery_admission, delivery_identity):
         await stopping.wait()
         closed.append(True)
     sleep = asyncio.sleep

@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "R4a fixed diagnostic result",
+  "description": "Raw UTF-8 <=16384 bytes; closed ASCII JSON only, no duplicate keys or free text. observed means successful collection, not healthy/safe. Unsupported evidence remains unknown/null: loaded runtime commits, product versions, credential/authentication and connectivity must not be inferred or probed implicitly. Runtime enforces strict CJSON, depth and safe integers. generated_at is required; observed_at is nullable original source time. Cross-field generated_at >= observed_at is enforced by runtime. Product versions use the same conservative public version grammar as R3 inventory; local/private suffixes are rejected without stripping. Current product installed/loaded versions remain null until a verified producer exists.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "diagnostic_id",
+    "generated_at",
+    "observed_at",
+    "status",
+    "duration_ms",
+    "error_code",
+    "data"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "sdc.support.diagnostic-result.v1"
+    },
+    "diagnostic_id": {
+      "enum": [
+        "runtime.status.v1",
+        "notification.health.v1",
+        "connectivity.status.v1"
+      ]
+    },
+    "observed_at": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Original verified source witness time in UTC Unix milliseconds, or null when unavailable. Never copy generated_at, collection counts or a different source clock here. Runtime requires generated_at >= observed_at when nonnull."
+    },
+    "status": {
+      "enum": [
+        "observed",
+        "partial",
+        "unknown",
+        "failed"
+      ]
+    },
+    "duration_ms": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1800000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "error_code": {
+      "enum": [
+        "NONE",
+        "SOURCE_UNKNOWN",
+        "SOURCE_STALE",
+        "SOURCE_UNAVAILABLE",
+        "DIAGNOSTIC_FAILED"
+      ]
+    },
+    "data": {},
+    "generated_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Diagnostic DTO generation time in UTC Unix milliseconds. Required, never substituted for source observation time."
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "diagnostic_id": {
+          "const": "runtime.status.v1"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "process",
+            "installed_commit",
+            "loaded_commit",
+            "installed_version",
+            "loaded_version"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "hermes",
+                "standalone",
+                "unknown"
+              ]
+            },
+            "process": {
+              "enum": [
+                "running",
+                "stopped",
+                "unknown"
+              ]
+            },
+            "installed_commit": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$(?![\\s\\S])"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "loaded_commit": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$(?![\\s\\S])"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "installed_version": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^(?:[0-9]{1,8}!)?[0-9]{1,8}(?:\\.[0-9]{1,8}){0,7}(?:(?:a|b|rc)[0-9]{1,8})?(?:\\.post[0-9]{1,8})?(?:\\.dev[0-9]{1,8})?$(?![\\s\\S])",
+                  "description": "Conservative canonical public version syntax only; not proof that a distribution is authentic or publicly released. Local/free suffixes are excluded, never stripped."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "loaded_version": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^(?:[0-9]{1,8}!)?[0-9]{1,8}(?:\\.[0-9]{1,8}){0,7}(?:(?:a|b|rc)[0-9]{1,8})?(?:\\.post[0-9]{1,8})?(?:\\.dev[0-9]{1,8})?$(?![\\s\\S])",
+                  "description": "Conservative canonical public version syntax only; not proof that a distribution is authentic or publicly released. Local/free suffixes are excluded, never stripped."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "diagnostic_id": {
+          "const": "notification.health.v1"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "service",
+            "credential_configured",
+            "authentication",
+            "retry"
+          ],
+          "properties": {
+            "service": {
+              "enum": [
+                "running",
+                "stopped",
+                "unknown"
+              ]
+            },
+            "credential_configured": {
+              "enum": [
+                "configured",
+                "unconfigured",
+                "unknown"
+              ]
+            },
+            "authentication": {
+              "enum": [
+                "valid",
+                "reauth_required",
+                "unknown"
+              ]
+            },
+            "retry": {
+              "enum": [
+                "backoff",
+                "unknown"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "diagnostic_id": {
+          "const": "connectivity.status.v1"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "target_id",
+            "connection",
+            "duration_ms"
+          ],
+          "properties": {
+            "target_id": {
+              "const": "sdc-central"
+            },
+            "connection": {
+              "enum": [
+                "reachable",
+                "timeout",
+                "tls_failed",
+                "unknown"
+              ]
+            },
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1800000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "observed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "error_code": {
+            "const": "NONE"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "error_code": {
+            "enum": [
+              "SOURCE_UNKNOWN",
+              "SOURCE_STALE",
+              "SOURCE_UNAVAILABLE",
+              "DIAGNOSTIC_FAILED"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,297 @@
+{
+  "origin": "Synthetic server response contract examples; no real identities or credentials.",
+  "now": 1792663200000,
+  "vectors": [
+    {
+      "name": "claim-committed-deadline",
+      "profile": "claim",
+      "valid": true,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "claimed",
+        "pending_expires_at": 1792749600000
+      }
+    },
+    {
+      "name": "status-admin-approved",
+      "profile": "status",
+      "valid": true,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "admin_approved",
+        "pending_expires_at": 1792749600000,
+        "tenant_name": "Synthetic installation",
+        "environment": "synthetic",
+        "alias": "Synthetic Mac",
+        "data_scope": "version-process-status-only",
+        "fingerprint": "abcdef0123456789",
+        "consent_revision": "sdc-customer-monitoring-v1"
+      }
+    },
+    {
+      "name": "active-retains-past-pending-deadline",
+      "profile": "status",
+      "valid": true,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "active",
+        "pending_expires_at": 1792663199000,
+        "tenant_name": "Synthetic installation",
+        "environment": "synthetic",
+        "alias": "Synthetic Mac",
+        "data_scope": "version-process-status-only",
+        "fingerprint": "abcdef0123456789",
+        "consent_revision": "sdc-customer-monitoring-v1"
+      }
+    },
+    {
+      "name": "confirm-retains-past-pending-deadline",
+      "profile": "confirm",
+      "valid": true,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "active",
+        "pending_expires_at": 1792663199000,
+        "tenant_name": "Synthetic installation",
+        "environment": "synthetic",
+        "alias": "Synthetic Mac",
+        "data_scope": "version-process-status-only",
+        "fingerprint": "abcdef0123456789",
+        "consent_revision": "sdc-customer-monitoring-v1"
+      }
+    },
+    {
+      "name": "missing-pending-deadline",
+      "profile": "claim",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "claimed"
+      }
+    },
+    {
+      "name": "invalid-pending-deadline-string",
+      "profile": "claim",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "claimed",
+        "pending_expires_at": "1792749600000"
+      }
+    },
+    {
+      "name": "invalid-pending-deadline-fraction",
+      "profile": "claim",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "claimed",
+        "pending_expires_at": 1792749600000.5
+      }
+    },
+    {
+      "name": "invalid-pending-deadline-null",
+      "profile": "claim",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "claimed",
+        "pending_expires_at": null
+      }
+    },
+    {
+      "name": "invalid-pending-deadline-negative",
+      "profile": "claim",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "claimed",
+        "pending_expires_at": -1
+      }
+    },
+    {
+      "name": "invalid-pending-deadline-unsafe",
+      "profile": "claim",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "claimed",
+        "pending_expires_at": 9007199254740992
+      }
+    },
+    {
+      "name": "missing-response-wrapper",
+      "profile": "status",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "audience": "sdc:synthetic",
+        "state": "claimed",
+        "pending_expires_at": 1792749600000,
+        "tenant_name": "Synthetic installation",
+        "environment": "synthetic",
+        "alias": "Synthetic Mac",
+        "data_scope": "version-process-status-only",
+        "fingerprint": "abcdef0123456789",
+        "consent_revision": "sdc-customer-monitoring-v1"
+      }
+    },
+    {
+      "name": "confirm-before-activation",
+      "profile": "confirm",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "claimed",
+        "pending_expires_at": 1792749600000,
+        "tenant_name": "Synthetic installation",
+        "environment": "synthetic",
+        "alias": "Synthetic Mac",
+        "data_scope": "version-process-status-only",
+        "fingerprint": "abcdef0123456789",
+        "consent_revision": "sdc-customer-monitoring-v1"
+      }
+    },
+    {
+      "name": "unknown-field",
+      "profile": "claim",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "claimed",
+        "pending_expires_at": 1792749600000,
+        "unknown": "synthetic"
+      }
+    },
+    {
+      "name": "tenant-empty",
+      "profile": "status",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "admin_approved",
+        "pending_expires_at": 1792749600000,
+        "tenant_name": "",
+        "environment": "synthetic",
+        "alias": "Synthetic Mac",
+        "data_scope": "version-process-status-only",
+        "fingerprint": "abcdef0123456789",
+        "consent_revision": "sdc-customer-monitoring-v1"
+      }
+    },
+    {
+      "name": "tenant-oversized",
+      "profile": "status",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "admin_approved",
+        "pending_expires_at": 1792749600000,
+        "tenant_name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "environment": "synthetic",
+        "alias": "Synthetic Mac",
+        "data_scope": "version-process-status-only",
+        "fingerprint": "abcdef0123456789",
+        "consent_revision": "sdc-customer-monitoring-v1"
+      }
+    },
+    {
+      "name": "tenant-control",
+      "profile": "status",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "admin_approved",
+        "pending_expires_at": 1792749600000,
+        "tenant_name": "Synthetic\u007f",
+        "environment": "synthetic",
+        "alias": "Synthetic Mac",
+        "data_scope": "version-process-status-only",
+        "fingerprint": "abcdef0123456789",
+        "consent_revision": "sdc-customer-monitoring-v1"
+      }
+    },
+    {
+      "name": "alias-control",
+      "profile": "status",
+      "valid": false,
+      "response": {
+        "claim_id": "11111111-1111-4111-8111-111111111111",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "key_id": "33333333-3333-4333-8333-333333333333",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "audience": "sdc:synthetic",
+        "state": "admin_approved",
+        "pending_expires_at": 1792749600000,
+        "tenant_name": "Synthetic installation",
+        "environment": "synthetic",
+        "alias": "Synthetic\n",
+        "data_scope": "version-process-status-only",
+        "fingerprint": "abcdef0123456789",
+        "consent_revision": "sdc-customer-monitoring-v1"
+      }
+    }
+  ]
+}

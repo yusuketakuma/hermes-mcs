@@ -50,6 +50,7 @@ def test_setup_keeps_hidden_secret_input_on_terminal(pinned, monkeypatch, tmp_pa
     monkeypatch.setattr(lifecycle_io, "store_keychain",
                         lambda account, password: calls.append(password) or True)
     monkeypatch.setattr(setup_wizard, "wizard", lambda cfg, **kwargs: None)
+    monkeypatch.setattr("builtins.input", lambda prompt: "1")
     assert mcs_cli.main(["setup"]) == 0
     assert calls == [secret]
     assert secret not in capsys.readouterr().out
@@ -222,14 +223,18 @@ def test_drug_subcommand_routes_literal_arguments_without_setup_or_db(pinned, mo
     assert calls == [arguments]
 
 
-def test_bootstrap_drug_route_uses_only_temporary_pinned_interpreter(tmp_path):
+@pytest.mark.parametrize("arguments", [
+    ["drug", "search", "架空名;$(touch NEVER)", "--limit", "1", "--json"],
+    # The shell launcher forwards the diagnostics command literally; only the fake interpreter runs.
+    ["diagnostics", "status", "--state-root", "/synthetic/private;$(touch NEVER)"],
+])
+def test_bootstrap_drug_route_uses_only_temporary_pinned_interpreter(tmp_path, arguments):
     root = tmp_path / "synthetic-mcs"
     interpreter = root / "venv/bin/python3"
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text(f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n")
     interpreter.chmod(0o700)
     env = dict(os.environ, HOME=str(tmp_path), MCS_ROOT=str(root))
-    arguments = ["drug", "search", "架空名;$(touch NEVER)", "--limit", "1", "--json"]
     result = subprocess.run(["/bin/sh", str(ROOT / "scripts/mcs"), *arguments],
                             env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
@@ -241,7 +246,9 @@ def test_bootstrap_help_and_invalid_command_are_japanese(tmp_path):
     env = dict(os.environ, HOME=str(tmp_path), MCS_ROOT=str(tmp_path / "root"))
     for arguments, code, expected in [
         (["--help"], 0, "初めて導入するとき"),
+        (["--help"], 0, "diagnostics: 固定診断コードの送信許可・停止"),
         (["unknown"], 2, "操作名が正しくありません"),
+        (["diagnostic"], 2, "操作名が正しくありません"),
         (["setup"], 1, "実行に必要なPythonが見つかりません"),
     ]:
         result = subprocess.run(["/bin/sh", str(ROOT / "scripts/mcs"), *arguments],

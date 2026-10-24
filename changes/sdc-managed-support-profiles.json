@@ -1,0 +1,23 @@
+{
+  "category": "added",
+  "title": "個別配布した支援・再起動設定を同じ端末で利用",
+  "summary": "監視登録済みの端末へ、支援と再起動の公開設定を本人確認付きで個別に保存し、既存の案件同意・再起動計画へ接続できるようにしました。配布を保存することと、診断・サービス操作に同意することは別です。",
+  "upgrade": "monitorの登録後、同じ私有領域を対象とするsupport、restartの設定を認証済みConsoleで独立に照合して順番に取り込んでください。--customerは初回monitor登録専用です。途中失敗・欠落・停止を再取り込みで初期化しません。支援・再起動slotのある記録は旧版で未対応として停止するため、旧版への切替・復元は別の受入が必要です。真正な配布・鍵発行・外部復元基線・顧客実機での受入は未完了で、この変更だけでは診断の自動送信や遠隔再起動を有効化しません。",
+  "details": [
+    "各profileの原bytes・hash・対象・期限・用途別公開pin・受領receiptを独立して保存し、利用時は現在のBundleと案件の束縛を確認します。同じ送信先・pinでもBundleが変われば旧同意を継続しません。",
+    "配布のstatus/ACKは既存の監視ingest先とaudienceを使用し、支援・再起動の通常要求はそれぞれの固定送信先・用途別pinを使います。監視R1の本文・送信周期・同意条件を広げません。",
+    "初回の空の支援状態は、明示配布を保存した同じ生存処理で一度だけ作成します。再承認・再openで許可を作り直さず、未完の支援設定だけを理由に既存監視を停止しません。",
+    "CLIとstandaloneの計画応答は現在のmanaged設定を既存の所有者へ渡します。metadata確認は公開鍵の形式を検査しますが、Keychain・署名検証・HTTPやサービス操作を開始しません。",
+    "待ち時間切れは元の例外を維持し、保存や送信結果が不明な記録を成功・未送信へ置き換えません。"
+  ],
+  "refs": [
+    "adapters/sdc/provision.py",
+    "adapters/sdc/storage.py",
+    "adapters/sdc/support_client.py",
+    "adapters/sdc/restart_client.py",
+    "mcs/ops/sdc_provision_cli.py",
+    "mcs/ops/sdc_support_cli.py",
+    "mcs_standalone/runtime.py",
+    "docs/guides/SDC_SELF_MONITORING.md"
+  ]
+}

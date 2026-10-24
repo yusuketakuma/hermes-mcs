@@ -201,6 +201,7 @@ def _wizard_env(monkeypatch, tmp_path, cfg=None, bundle=None):
     prompts = []
 
     def answers(table):
+        table = {"setup.save": "はい", **table}
         def answer(prompt=""):
             prompts.append(prompt)
             for needle, reply in table.items():
@@ -216,7 +217,7 @@ def _saved(tmp_path):
 
 
 def test_wizard_pins_the_bundled_dictionary_on_enter(tmp_path, monkeypatch, capsys):
-    """Enter on every item: dictionary written under HOME, pinned, approved."""
+    """Explicit yes to save, Enter elsewhere: dictionary written, pinned, approved."""
     from datetime import date
     prompts, answers = _wizard_env(monkeypatch, tmp_path)
     monkeypatch.setattr("builtins.input", answers({}))
@@ -296,7 +297,7 @@ def test_wizard_eof_at_an_operator_input_saves_nothing(tmp_path, monkeypatch):
     def answer(prompt=""):
         if "drug_map.confirmed_by" in prompt:
             raise EOFError
-        return ""
+        return "はい" if "setup.save" in prompt else ""
     _wizard_env(monkeypatch, tmp_path)
     monkeypatch.setattr("builtins.input", answer)
     assert mcs_setup.main() == 130
