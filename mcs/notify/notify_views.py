@@ -27,7 +27,8 @@ from mcs_queries import register_search_fold
 from stamp_format import stamp_counts
 import notify_render
 from notify_render import (
-    render_source_generation, posted_hhmm, inline_text, mmdd, patient_name, source_fingerprint,
+    render_source_generation, posted_hhmm, inline_text, mmdd, patient_label, patient_name,
+    source_fingerprint,
     actor_label, card_reaction_lines,
     card_reactions, today_jst)
 
@@ -78,14 +79,15 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
         if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
             lines.append(f"■ 次回予定: {roll['next_planned']}")
         lines.extend(_request_reply_lines(db, project_id, roll))
-    lines.extend(_patient_context_lines(db, project_id, roll))
+    # one current-summary read on this connection serves both sections
+    summary = _karte_summary_from_artifact(db, project_id)
+    lines.extend(_patient_context_lines(db, project_id, roll, summary))
     lines.extend(_pharmacy_state_lines(db, project_id, roll))
     lines.extend(_registered_clinical_lines(db, project_id))
     # the 連携サマリー line always reads the newest artifact: the rollup
     # holds a copy frozen at its last rebuild, which a newer fetch
     # (updated or emptied summary) supersedes
-    lines.append("■ " + _karte_summary_line(
-        _karte_summary_from_artifact(db, project_id)))
+    lines.append("■ " + _karte_summary_line(summary))
     return title, "\n".join(lines)
 
 
@@ -109,12 +111,16 @@ def _open_task_lines(db, project_id) -> list[str]:
     return lines
 
 
-def _patient_context_lines(db, project_id, roll) -> list[str]:
+_UNREAD = object()
+
+
+def _patient_context_lines(db, project_id, roll, summary=_UNREAD) -> list[str]:
     """Private summary excerpts from current source-bound context; identifiers stay in detail reads."""
     context = roll.get("patient_context")
     chat = context.get("chat") if isinstance(context, dict) else None
     chat = chat if isinstance(chat, dict) else {}
-    summary = _karte_summary_from_artifact(db, project_id)
+    if summary is _UNREAD:      # None is a read result (no summary), not an omission
+        summary = _karte_summary_from_artifact(db, project_id)
     comment = summary.get("comment") if isinstance(summary, dict) else None
     memo = {}
     if isinstance(comment, str):
@@ -439,9 +445,7 @@ def my_tasks_view(db, name, now=None, projects=None) -> dict:
     for r in rows[:LIST_FETCH]:
         pid = r["project_id"]
         if pid not in names:
-            names[pid] = ((inline_text(patient_name(db, pid), 30)
-                           or f"project {pid}")
-                          + (ARCHIVED_MARK if pid in archived else ""))
+            names[pid] = patient_label(db, pid) + (ARCHIVED_MARK if pid in archived else "")
         # who it is for, what to do, when — the id last for the CLI
         line = f"・{names[pid]}: {inline_text(r['title'], 60)}"
         if r["due_date"]:
@@ -504,8 +508,7 @@ def unacked_view(db, transport, now=None, projects=None,
     items = []
     self_reacted = unfetched = 0
     for pid, cards in sorted(groups.items(), key=lambda g: g[0] in archived):
-        group = ((inline_text(patient_name(db, pid), 30) or f"project {pid}")
-                 + (ARCHIVED_MARK if pid in archived else ""))
+        group = patient_label(db, pid) + (ARCHIVED_MARK if pid in archived else "")
         with_reactions = [(c, card_reactions(db, c)) for c in cards]
         # Stable partition: acknowledgement remains independent of MCS stamps.
         with_reactions.sort(key=lambda pair: any(
@@ -676,7 +679,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     """💊 one post's medication mentions — the card's own 薬剤 selection
     (structured_view) with each mention's current dictionary candidate.
     Read-only: nothing here confirms a prescription."""
-    name = inline_text(patient_name(db, project_id), 30) or f"project {project_id}"
+    name = patient_label(db, project_id)
     title = f"💊 {name} — 選択した投稿の薬剤"
     row = db.execute("SELECT project_id,posted_at,profession FROM messages "
                      "WHERE message_id=?", (message_id,)).fetchone()
@@ -945,7 +948,7 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             status.append(f"添付 {nightly['attachments']['count']}件（内容は未解析）")
     pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
-    name = inline_text(patient_name(db, project_id), 30) or f"project {project_id}"
+    name = patient_label(db, project_id)
     title = f"{name} — {CONTEXT_SECTIONS[section]}"
     start = page * CONTEXT_PAGE_SIZE
     shown = rows[start:start + CONTEXT_PAGE_SIZE]

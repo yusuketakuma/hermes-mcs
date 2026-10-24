@@ -50,7 +50,7 @@ def _preview_post(text) -> str:
 
 def preview_header(db, pid, message) -> str:
     """保存済み投稿だけから短い5項目表示のヘッダーを作り、欠測を明示する。"""
-    patient = inline_text(patient_name(db, pid), 30) or f"project {pid}"
+    patient = patient_label(db, pid)
     sender = (inline_text(message["sender_name"], 24) if message else "") or "発信者未取得"
     organization = (inline_text(message["organization"], 24) if message else "") or "所属未取得"
     posted = message["posted_at"] if message else None
@@ -77,13 +77,19 @@ def notification_preview(db, card, content, *, limit=600) -> str:
             if message:
                 rows.append((mid, message))
         if not rows:
-            patient = inline_text(patient_name(db, card["project_id"]), 30) or f"project {card['project_id']}"
+            patient = patient_label(db, card["project_id"])
             return f"{patient}: 投稿本文を確認できません。"
+        urgencies = {}      # one verdict per post for this preview
+
+        def urgency_of(m):
+            if m not in urgencies:
+                urgencies[m] = clinical_urgency.message_urgency(db, m)
+            return urgencies[m]
         # the urgent post is what the push must carry, even under newer
         # replies; otherwise the newest post (deleted or not) speaks
         mid, message = next(((m, row) for m, row in rows
                              if row["body_state"] != "deleted"
-                             and clinical_urgency.message_urgency(db, m) == "llm"),
+                             and urgency_of(m) == "llm"),
                             rows[0])
         header = preview_header(db, card["project_id"], message)
         if message["body_state"] == "deleted":
@@ -107,7 +113,7 @@ def notification_preview(db, card, content, *, limit=600) -> str:
         else:
             state = "要約作成失敗" if extraction_failed(db, mid) else "要約処理待ち"
             main = f"原文・{state}: " + (_preview_post(message["body_text"]) or "本文なし")
-        urgency = clinical_urgency.message_urgency(db, mid)
+        urgency = urgency_of(mid)
         badge = URGENCY_PLAIN.get(urgency, "")
         if urgency == "llm":
             badge += structured_view.urgency_qc_suffix(db, mid)
@@ -122,8 +128,7 @@ def notification_preview(db, card, content, *, limit=600) -> str:
         summary = f"{signal_label(signal)}{inline_text(signal.get('note'), 120)}{signal_state_suffix(signal)}"
         if mid is None:
             # a register alert has no post by design: no sender/time to be 未取得
-            patient = inline_text(patient_name(db, signal.get("project_id")), 30) \
-                or f"project {signal.get('project_id')}"
+            patient = patient_label(db, signal.get("project_id"))
             items.append(f"{patient}: {summary}")
             continue
         header = preview_header(db, signal.get("project_id"), message)
@@ -220,7 +225,7 @@ def render_text(parts: dict, head: str = "【{}】", lit=str,
     if foot and lines:
         lines.append(SECTION_RULE)
     lines.extend(footer.format(ln) for ln in foot)
-    return re.sub(r"<@[^>\n]+>", "メンバー", "\n".join(lines))
+    return MENTION_TOKEN_PATTERN.sub("メンバー", "\n".join(lines))
 
 
 def parts_text(parts: dict, dialect: str = "plain") -> str:
@@ -238,6 +243,11 @@ def patient_name(db, pid) -> str:
     r = db.execute("SELECT patient_name FROM patients "
                    "WHERE project_id=?", (pid,)).fetchone()
     return (r["patient_name"] or "").strip() if r else ""
+
+
+def patient_label(db, pid) -> str:
+    """Display label for a patient: the name capped at 30 characters, else ``project <pid>``."""
+    return inline_text(patient_name(db, pid), 30) or f"project {pid}"
 
 
 def mmdd(posted_at) -> str:
@@ -953,11 +963,17 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
                      and notify_cfg(cfg).get("card_thread") is True
                      and card["thread_state"] not in ("failed", "deleted")
                      and card["delivery_state"] != "revoked")
+    # card/generation/stamp_details are fixed for this render; only the shown
+    # set varies, so repacking reuses each page's footer within this call
+    footer_memo = {}
     while True:
         page_states = []
         for p, indices in enumerate(pages_idx):
             shown = [key for i in indices for key in item_shown[i]]
-            footer, toggles = _footer(db, card, shown, generation, stamp_details=stamp_details)
+            key = tuple(shown)
+            if key not in footer_memo:
+                footer_memo[key] = _footer(db, card, shown, generation, stamp_details=stamp_details)
+            footer, toggles = footer_memo[key]
             page_states.append((shown, footer, toggles))
         # the page marker joins the context line after paging; reserve it
         budget = min(budget, CARD_TEXT_BUDGET - _blocks_len(containers)
