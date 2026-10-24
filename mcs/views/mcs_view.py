@@ -1000,7 +1000,14 @@ def main(argv=None):
             command = ("ops." if args["kind"] == "control" else "request.") + action
             if command.startswith("request.") and "reason" not in req:
                 raise ValueError("reason_required")
-            req = {**req, "cmd": command, "version": 1,
+            version = 1
+            if action == "card_resolve":
+                from notify_scope import TRANSPORT_VERSIONS
+                transport = req.get("transport", "discord")
+                if not isinstance(transport, str) or transport not in TRANSPORT_VERSIONS:
+                    raise ValueError("bad_transport")
+                version = TRANSPORT_VERSIONS[transport]
+            req = {**req, "cmd": command, "version": version,
                    "human_confirmed": confirmed}
             if action not in ("card_resolve", "card_part_resolve"):
                 req["project_id"] = args["project"]

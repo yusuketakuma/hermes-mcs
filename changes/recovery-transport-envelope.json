@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "SlackとLINE WORKSのカード本体復旧をCLIから受け付ける",
+  "summary": "人が配送先と証拠を確認したカード本体の復旧で、CLIが接続先に合う既存の受付版を付けるように修正しました。SlackとLINE WORKSの承認済み操作が版の不一致で拒否される問題を解消します。",
+  "upgrade": "追加設定は不要です。ローカルCLIに適用されます。Discordのtransport省略入力、part復旧の版、人承認・理由・証拠・worker停止条件は変更しません。既存unknownの自動解除・再送は行いません。",
+  "details": [
+    "カード本体だけ、共有の接続先と版の対応表を使います。未知または文字列でない接続先、入力JSONへの版の注入は拒否します。",
+    "復元でrenderが失われた経路を保持し、受付時にrenderの存在を追加条件にしません。scope・attempt・復元保留・journalは既存の適用処理が再検証します。",
+    "配送結果の保留理由と、管理者が対象IDを確認する既存の入口をガイドへ追記しました。"
+  ],
+  "refs": ["mcs/views/mcs_view.py", "tests/views/test_card_part_cli.py", "docs/guides/NOTIFICATION_RECOVERY.md"]
+}
