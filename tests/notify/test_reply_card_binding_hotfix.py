@@ -164,7 +164,7 @@ def test_parent_drift_never_releases_unsettled_reply_attempt(led, cfg, state):
 def test_old_queued_channel_fallback_is_resealed_before_grant(led, cfg, monkeypatch):
     # Reproduce the previous version's already sealed fallback, without sending it.
     with monkeypatch.context() as previous:
-        previous.setattr(notify_cards, "_bind_reply_thread", lambda db, card, cfg, now: (card, False))
+        previous.setattr(notify_cards, "_bind_reply_thread", lambda db, card, now: (card, False))
         event, root, reply = _scene(led, cfg)
     old = _latest_render(led, reply["card_id"])
     assert "thread_id" not in json.loads(old["spec_json"])["delivery"]

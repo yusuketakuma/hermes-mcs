@@ -41,7 +41,6 @@ import notify_spool
 
 import hashlib
 import json
-import re
 import os
 import secrets
 import time
@@ -62,9 +61,6 @@ import notify_action_context as action_context
 import notify_action_tokens as action_tokens
 from notify_views import drug_search_available
 
-RENDER_SCHEMA = "mcs-card-render/v1"
-SLACK_RENDER_SCHEMA = "mcs-card-render/v2"
-LINEWORKS_RENDER_SCHEMA = "mcs-card-render/v3"
 
 # outbox kinds that become interactive cards when notify.interactive is
 # on; everything else (ops alerts, semantic notices) stays legacy text.
@@ -854,7 +850,7 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
             _cancel_open_renders(db, card_id, now)
         force = force or changed
     if reply_source(card) and card["delivery_state"] != "revoked":
-        card, wait = _bind_reply_thread(db, card, cfg, now)
+        card, wait = _bind_reply_thread(db, card, now)
         if wait:
             _cancel_open_renders(db, card_id, now)
             return None
@@ -888,7 +884,7 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
                              (card["project_id"], card["root_message_id"], card["root_message_id"])).fetchall()
         delivered = notify_parts.delivered_members(db, card, legacy=True) | notify_parts.delivered_members(db, card, legacy=False)
         for name in notify_parts.prior_body_posts(db, card):
-            match = re.fullmatch(r"m:([1-9][0-9]*)(?::header)?#[1-9][0-9]*", name)
+            match = notify_parts.BODY_POST_KEY.fullmatch(name)
             if match:
                 delivered.add(int(match.group(1)))
         waiting = {row["message_id"] for row in pending
@@ -1304,6 +1300,16 @@ def _close_notice(db, event_id, renders, now, state="suppressed") -> None:
                "updated_at=? WHERE event_id=?", (state, now, event_id))
 
 
+def _cancel_moved_notices(db, event_id, renders, cfg, now) -> list:
+    """Cancel never-sent queued notices whose route the config left; return the fresh renders."""
+    # never sent (queued, no attempt): a fresh render aims at the current route
+    moved = [r for r in renders if r["state"] == "queued"
+             and _notice_route_moved(r, cfg) and _notice_unsent(db, [r])]
+    for r in moved:
+        _cancel_render(db, r["delivery_id"], now)
+    return _notice_renders(db, event_id) if moved else renders
+
+
 def _notice_route_moved(render, cfg) -> bool:
     """A queued notice aimed at a route the config no longer has (epoch,
     transport or destination changed) — begin would deny it forever."""
@@ -1326,7 +1332,6 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
     provably unsent fall back to the frozen text exactly once."""
     import notify_digest
     db = connection(ledger)
-    root = notify_spool.data_root(ledger)
     specs: list = []
     event_id = ev["event_id"]
     with db:
@@ -1339,14 +1344,7 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
             return {"skipped": True}
         renders = _notice_renders(db, event_id)
         if notify_scope.interactive_enabled(cfg):
-            # never sent (queued, no attempt) to a route the config left:
-            # cancel and let a fresh render aim at the current one
-            moved = [r for r in renders if r["state"] == "queued"
-                     and _notice_route_moved(r, cfg) and _notice_unsent(db, [r])]
-            for r in moved:
-                _cancel_render(db, r["delivery_id"], now)
-            if moved:
-                renders = _notice_renders(db, event_id)
+            renders = _cancel_moved_notices(db, event_id, renders, cfg, now)
         if any(r["state"] == "delivered" for r in renders):
             db.execute("UPDATE notify_outbox SET state='accepted',"
                        "next_try=NULL,accepted_ref='notice',updated_at=? "
@@ -1430,9 +1428,7 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
                 specs.append(spec)
                 _reseat(db, event_id, now, "notice_render_issued")
         mark_snapshot_dirty(db)
-    if specs:
-        notify_spool.ensure_dirs(root)
-        notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
+    notify_spool.publish_committed(ledger, db, specs, now)
     return {"dispatched": bool(specs)}
 
 
@@ -1596,7 +1592,15 @@ def reply_thread_matches(db, card, spec) -> bool:
             and notify_scope.scope_matches(card, delivery))
 
 
-def _bind_reply_thread(db, card, cfg, now) -> tuple[dict, bool]:
+def _hold_pending_for_thread(db, card_id, now) -> None:
+    """Defer the card's pending intents until its source thread is ready."""
+    for event in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? "
+                            "AND state='pending'", (card_id,)).fetchall():
+        db.execute("UPDATE notify_outbox SET progress=?,next_try=?,updated_at=? WHERE event_id=?",
+                   (json.dumps({"thread_hold": "source_thread_not_ready"}), now + RESEAT_S, now, event[0]))
+
+
+def _bind_reply_thread(db, card, now) -> tuple[dict, bool]:
     """Bind an undelivered reply once; retain stale bindings and wait for proof."""
     root = reply_thread_target(db, card)
     if (root is not None and card["thread_state"] == "created"
@@ -1608,10 +1612,7 @@ def _bind_reply_thread(db, card, cfg, now) -> tuple[dict, bool]:
         return notify_scope.card_row(db, card["card_id"]), False
     # Native messages cannot move threads. Keep any delivered/unknown remote
     # identity intact, and never turn an unproven parent into a channel post.
-    for event in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? "
-                            "AND state='pending'", (card["card_id"],)).fetchall():
-        db.execute("UPDATE notify_outbox SET progress=?,next_try=?,updated_at=? WHERE event_id=?",
-                   (json.dumps({"thread_hold": "source_thread_not_ready"}), now + RESEAT_S, now, event[0]))
+    _hold_pending_for_thread(db, card["card_id"], now)
     return card, True
 
 
@@ -1629,8 +1630,7 @@ def _bind_signal_thread(db, card, cfg, now) -> tuple[dict, bool, bool]:
             # switch was on is still used above): nothing to wait for
             waited = SIGNAL_SOURCE_HOLD_MAX_S + 1
         if waited <= SIGNAL_SOURCE_HOLD_MAX_S:
-            for event in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? AND state='pending'", (card["card_id"],)).fetchall():
-                db.execute("UPDATE notify_outbox SET progress=?,next_try=?,updated_at=? WHERE event_id=?", (json.dumps({"thread_hold": "source_thread_not_ready"}), now + RESEAT_S, now, event[0]))
+            _hold_pending_for_thread(db, card["card_id"], now)
             return card, False, True
         # a post whose card never arrives (history/probe import, a
         # suppressed notification) would hold the alert forever: after
@@ -1680,13 +1680,7 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
         row = db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (event_id,)).fetchone()
         if row is None or row["state"] not in ("pending", "failed"):
             return {"skipped": True}
-        renders = _notice_renders(db, event_id)
-        moved = [render for render in renders if render["state"] == "queued"
-                 and _notice_route_moved(render, cfg) and _notice_unsent(db, [render])]
-        for render in moved:
-            _cancel_render(db, render["delivery_id"], now)
-        if moved:
-            renders = _notice_renders(db, event_id)
+        renders = _cancel_moved_notices(db, event_id, _notice_renders(db, event_id), cfg, now)
         checked = notify_urgent.check_delivery(ledger, cfg, row, now=now)
         if not checked["ok"]:
             if _notice_unsent(db, renders):
@@ -1743,10 +1737,7 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
                 db.execute("UPDATE notify_outbox SET route='interactive',progress=NULL WHERE event_id=?", (event_id,))
                 _reseat(db, event_id, now, "alert_render_issued")
         mark_snapshot_dirty(db)
-    if specs:
-        root = notify_spool.data_root(ledger)
-        notify_spool.ensure_dirs(root)
-        notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
+    notify_spool.publish_committed(ledger, db, specs, now)
     return {"dispatched": bool(specs)}
 
 
@@ -1967,10 +1958,7 @@ def rerender_message_cards(ledger, cfg, project_id, message_id,
             issue_render(db, r["card_id"], cfg, now, specs)
         if specs:
             mark_snapshot_dirty(db)
-    if specs:
-        root_dir = notify_spool.data_root(ledger)
-        notify_spool.ensure_dirs(root_dir)
-        notify_spool.publish_specs(db, notify_spool.notify_dirs(root_dir), specs, now)
+    notify_spool.publish_committed(ledger, db, specs, now)
     return [s["delivery_id"] for s in specs]
 
 

@@ -12,6 +12,7 @@ import notify_cards as cards
 import notify_spool
 import notify_cmds as cmds
 import notify_transport as transport
+from adapters.common.spec import SCHEMA as RENDER_SCHEMA
 from adapters.slack import cards as slack_cards
 from mcs_requests import canonical
 from notify_testkit import (
@@ -219,7 +220,7 @@ def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatc
     path = root / "slack_render" / (render["delivery_id"] + ".json")
     raw = path.read_bytes()
     spec = json.loads(raw)
-    assert spec["schema"] == cards.SLACK_RENDER_SCHEMA
+    assert spec["schema"] == slack_cards.SCHEMA
     assert spec["delivery"].items() >= SCOPE.items()
     assert "guild_id" not in spec["delivery"]
     assert spec["card_key"].startswith("v2|slack|")
@@ -300,7 +301,7 @@ def test_transport_switch_keeps_discord_bytes_grants_and_batches_isolated(led, t
     discord = _latest_render(led)
     raw = discord["spec_json"]
     spec = json.loads(raw)
-    assert spec["schema"] == cards.RENDER_SCHEMA
+    assert spec["schema"] == RENDER_SCHEMA
     assert "transport" not in spec["delivery"] and "team_id" not in spec["delivery"]
     assert _dispatch(led, ev, SLACK)["error"] == "transport_mismatch"
     cards.sweep(led, SLACK, now=NOW)

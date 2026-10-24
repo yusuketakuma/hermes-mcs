@@ -13,7 +13,8 @@ import notify_cards as cards
 import notify_spool
 import notify_cmds as cmds
 from adapters.common import envelopes, registry
-from adapters.common.spec import validate as validate_v1
+from adapters.common.spec import SCHEMA as RENDER_SCHEMA, validate as validate_v1
+from adapters.lineworks.cards import SCHEMA as LINEWORKS_RENDER_SCHEMA
 from notify_render import display_text
 from present_lineworks import card_split
 from notify_lineworks_testkit import (
@@ -32,12 +33,12 @@ ACTOR = "lineworks:40029600:c72af563-0f21-4736-11e4-045237113344"
 def test_lineworks_render_full_body_and_durable_scope_without_thread_api(led, tmp_path):
     render = _render(led)
     spec = json.loads(render["spec_json"])
-    assert spec["schema"] == cards.LINEWORKS_RENDER_SCHEMA
+    assert spec["schema"] == LINEWORKS_RENDER_SCHEMA
     assert spec["delivery"].items() >= SCOPE.items()
     assert "guild_id" not in spec["delivery"] and render["guild_id"] is None
     assert spec["card_key"].startswith("v3|lineworks|")
     assert render["team_id"] == SCOPE["team_id"]
-    validate_v1({**spec, "schema": cards.RENDER_SCHEMA})
+    validate_v1({**spec, "schema": RENDER_SCHEMA})
     # LINE WORKS always carries the complete content as durable channel
     # parts: card_thread=False cannot silently remove the body/files.
     assert "本文" in "".join(spec["parts"]["thread_body_parts"])
@@ -73,7 +74,7 @@ def test_lineworks_visible_text_overflow_is_lossless_durable_content(led, monkey
     assert len(text) > 1000 and display and len(head) <= 1000
     assert head.endswith("\n↓ 続き") and "".join(c for _, c in display) == rest
     assert text.startswith(head.removesuffix("\n↓ 続き"))
-    validate_v1({**spec, "schema": cards.RENDER_SCHEMA})
+    validate_v1({**spec, "schema": RENDER_SCHEMA})
 
 
 def test_lineworks_grant_receipt_action_updates_and_retires_old_buttons(led):
@@ -197,7 +198,7 @@ def test_lineworks_downloaded_and_unavailable_attachments_remain_in_sealed_plan(
     assert attachments[0]["path"] == str(blob)
     assert attachments[0]["sha256"] == hashlib.sha256(raw).hexdigest()
     assert attachments[1]["unavailable"] is True
-    validate_v1({**spec, "schema": cards.RENDER_SCHEMA})
+    validate_v1({**spec, "schema": RENDER_SCHEMA})
 
 
 def test_lineworks_unknown_delivery_never_reissues_until_factual_resolution(led):

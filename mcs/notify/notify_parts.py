@@ -9,7 +9,7 @@ from collections import deque
 from functools import partial
 
 from mcs_requests import canonical, positive
-from mcs_util import valid_hash
+from mcs_util import text_sha256, valid_hash
 from notify_render import card_body_text, preview_header, notification_preview, presenter
 from notify_scope import (active_transport, interactive_enabled, notify_cfg,
                           scope_matches, stored_scope)
@@ -20,15 +20,14 @@ LINEWORKS_POST_UPDATES = 3
 _TRUNCATED_PART = "（配送上限のため更新を保留 — 原本を参照）"
 _THREAD_BODY_COLLECTED = "（この区画の内容は更新済みの本文に集約しました）"
 
+# a body part's post key: m:<message_id>[:header]#<part>; group 1 is the message id
+BODY_POST_KEY = re.compile(r"m:([1-9][0-9]*)(?::header)?#[1-9][0-9]*")
+
 def late_attachment_thread(cfg: dict) -> bool:
     """Late files join the card's own thread (or LINE WORKS room grouping)."""
     return interactive_enabled(cfg) and (
         notify_cfg(cfg).get("card_thread") is True
         or presenter(active_transport(cfg)).ALWAYS_THREAD)
-
-
-def text_sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT, *,
@@ -336,7 +335,7 @@ def delivered_members(db, card, *, legacy: bool) -> set:
         names = [p.get("name") or "" for p in manifest if p.get("kind") == "body_part"]
         if not legacy and any(re.fullmatch(r"m:[1-9][0-9]*:header#1", name) for name in names):
             out.update(int(match[1]) for name in names
-                       if (match := re.fullmatch(r"m:([1-9][0-9]*)(?::header)?#[1-9][0-9]*", name)))
+                       if (match := BODY_POST_KEY.fullmatch(name)))
             continue
         rows = [r["shown"]] + [c[0] for c in db.execute(
             "SELECT coverage FROM notification_intent_cards "
@@ -722,7 +721,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 entry["prior_remote_id"] = proven[0]
                 entry["edit_only"] = True
         if slack_thread:
-            post = re.fullmatch(r"m:([1-9][0-9]*)(?::header)?#[1-9][0-9]*", key)
+            post = BODY_POST_KEY.fullmatch(key)
             # An edit/page move can create a first thread part beside a new
             # intent. Only that intent's source posts may notify the channel.
             entry["broadcast"] = bool(post and int(post[1]) in announced
