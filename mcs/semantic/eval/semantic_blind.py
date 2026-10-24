@@ -6,7 +6,6 @@ reviewers receive only the worksheet. Text itself may still reveal a method.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import random
@@ -90,7 +89,7 @@ def prepare(records: list[dict]) -> tuple[list[dict], list[dict]]:
                         for c in claims] != choices[-1]["claims"]:
                     raise EvaluationError("evaluation_claims_mismatch")
                 frozen = canonical(candidate)
-                candidate_hashes[label] = hashlib.sha256(frozen).hexdigest()
+                candidate_hashes[label] = payload_hash(candidate)
                 # Show the structured predictions that the evaluator will score.
                 frozen_candidate = json.loads(frozen)
                 choices[-1]["predictions"] = {field: frozen_candidate.get(field)
@@ -102,9 +101,7 @@ def prepare(records: list[dict]) -> tuple[list[dict], list[dict]]:
                      "account_id": account, "project_id": project,
                      "split": split, "bundle_fingerprint": fingerprint,
                      "methods": mapping, "candidate_sha256": candidate_hashes,
-                     "worksheet_sha256": hashlib.sha256(json.dumps(
-                         worksheets[-1], ensure_ascii=False, sort_keys=True,
-                         separators=(",", ":")).encode()).hexdigest()})
+                     "worksheet_sha256": payload_hash(worksheets[-1])})
         if "artifact_ids" in record:
             ids = evaluation_object(record["artifact_ids"], "artifact_ids")
             if set(ids) != {"bundle_id", "candidate_id", "final_id"} or any(
@@ -296,8 +293,10 @@ def unblind(worksheets: list[dict], keys: list[dict]) -> list[dict]:
         seen.add(rid)
         key = index[rid]
         original = dict(worksheet, human_labels=None)
-        digest = hashlib.sha256(json.dumps(original, ensure_ascii=False, sort_keys=True,
-                                           separators=(",", ":")).encode()).hexdigest()
+        try:
+            digest = payload_hash(original)
+        except ValueError:      # a nonfinite number was never in the sealed worksheet
+            raise EvaluationError("worksheet_changed") from None
         if digest != key.get("worksheet_sha256"):
             raise EvaluationError("worksheet_changed")
         labels = evaluation_object(worksheet.get("human_labels"), "human_labels")

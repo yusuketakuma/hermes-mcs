@@ -5,7 +5,6 @@ import argparse
 import copy
 import json
 import os
-import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -17,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import _mcs_path  # noqa: F401
 import extract_validation
 
-from mcs_util import payload_hash
+from mcs_util import payload_hash, valid_hash
 from semantic_candidate import candidate_fingerprint, metrics_only, strict_json
 from semantic_evaluation import EvaluationError, evaluate_records
 from semantic_holdout import holdout_payload
@@ -88,8 +87,8 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
             or (manifest.get('source') == 'fully_synthetic'
                 and snapshot['data_origin'] != 'synthetic')):
         raise EvaluationError('manifest_data_origin_mismatch')
-    if snapshot['data_origin'] == 'real_authorized' and not re.fullmatch(
-            '[0-9a-f]{64}', str(snapshot.get('authorization_receipt_sha256', ''))):
+    if snapshot['data_origin'] == 'real_authorized' and not valid_hash(
+            snapshot.get('authorization_receipt_sha256')):
         raise EvaluationError('authorization_receipt_required')
     if manifest.get('holdout_manifest_sha256') != payload_hash(holdout_payload(records)):
         raise EvaluationError('holdout_seal_mismatch')

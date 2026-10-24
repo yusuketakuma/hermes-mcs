@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 from zoneinfo import ZoneInfo
 
-from mcs_util import payload_hash
+from mcs_util import payload_hash, valid_hash
 
 # Capture loaded source once; an on-disk update cannot bless an old worker.
 _MODULES = ('semantic_extraction', 'semantic_facts', 'semantic_audit',
@@ -122,8 +122,6 @@ def candidate_fingerprint(cfg: dict) -> str:
     if _LOADED_SOURCES is None:
         _LOADED_SOURCES = _sources()
     sem = dict(cfg.get('semantic') or {})
-    for field in ('fact_source_gate', 'fact_source_evidence', 'fact_source_approval'):
-        sem.pop(field, None)
     # Explicit/default spelling must identify the same deployed candidate.
     defaults, _ = semantic_policy.semantic_config({})
     defaults.update(sem)
@@ -195,7 +193,7 @@ def promotion_problem(cfg: dict, report: dict) -> str | None:
             return 'report_not_metrics_only'
     manifest = report.get('manifest', {})
     if (set(manifest) - {'version_sha256', 'bundle_version_sha256', 'candidate_version_sha256', 'label_version_sha256'}
-            or any(not re.fullmatch('[0-9a-f]{64}', str(v)) for v in manifest.values())):
+            or any(not valid_hash(v) for v in manifest.values())):
         return 'report_not_metrics_only'
     numeric_keys = set(semantic_acceptance.METRICS + semantic_acceptance.ADDITIONAL_METRICS) | {
         'dev', 'calibration', 'test', 'cases', 'metrics', 'latency', 'usage', 'fact_lifecycle',
@@ -212,12 +210,12 @@ def promotion_problem(cfg: dict, report: dict) -> str | None:
         return 'candidate_mismatch'
     run = report.get('run', {})
     if (run.get('external_audit_used') is not False or run.get('local_only') is not True
-            or not re.fullmatch('[0-9a-f]{64}', str(run.get('snapshot_sha256', '')))):
+            or not valid_hash(run.get('snapshot_sha256'))):
         return 'sealed_local_run_required'
     evidence = report.get('evidence', {})
     if (evidence.get('reasons') != [] or evidence.get('patients', 0) < criteria['min_patients']
             or evidence.get('threads', 0) < criteria['min_threads']
-            or not re.fullmatch('[0-9a-f]{64}', str(evidence.get('holdout_manifest_sha256', '')))):
+            or not valid_hash(evidence.get('holdout_manifest_sha256'))):
         return 'sealed_holdout_required'
     for name, metric in report.get('splits', {}).get('test', {}).get('metrics', {}).items():
         n, correct, errors = (metric.get(k) for k in ('denominator', 'correct', 'errors'))
@@ -278,7 +276,7 @@ def approval_matches(cfg: dict, report: dict, identity) -> bool:
     """Recheck the separate receipt without trusting report approval booleans."""
     import mcs_util
     from safe_io import read_regular_nofollow
-    if not isinstance(identity, str) or not re.fullmatch('[0-9a-f]{64}', identity):
+    if not valid_hash(identity):
         return False
     binding = approval_binding(cfg, report)
     if payload_hash(binding) != identity:

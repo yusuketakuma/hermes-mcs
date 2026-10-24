@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "意味チェックの評価・候補判定の重複を整理",
+  "summary": "意味チェックの評価用ツールと候補の昇格判定で重複していたハッシュ計算・検査を共通処理にまとめました。通常の評価結果、昇格の条件、承認記録の照合は変わりません。",
+  "upgrade": "追加操作は不要です。変更したのは評価用ツールと候補の昇格判定（semantic_candidate）だけで、変更前後で意味チェック候補のfingerprintが同じであることを、合成設定で確認しました（候補識別子は変わりません）。",
+  "details": [
+    "昇格判定と評価用スナップショットの64桁ハッシュ検査を共通の検査に置き換えました。文字列でない値（64桁の数字だけの整数など）は、これまでと同じエラー区分（sealed_local_run_required / sealed_holdout_required / report_not_metrics_only / authorization_receipt_required）で拒否されるようになりました。",
+    "盲検評価用の作業票と候補のハッシュ計算を共通のハッシュ関数に統一しました。値は従来と同じです。作業票に非有限数が含まれる場合は、従来どおり worksheet_changed として扱います。",
+    "評価器の重複した検証と、同じ働きの識別子取得・重複検出の関数を1つにまとめました。検証の順序とエラー区分は変えていません。",
+    "候補fingerprintの計算で効果のなかった重複処理を削除しました。fingerprintの値は変わりません。",
+    "厳格なJSON読取り（strict_json）は意味チェック側の定義をそのまま残しています。"
+  ],
+  "refs": ["mcs/semantic/semantic_candidate.py", "mcs/semantic/eval/semantic_snapshot.py", "mcs/semantic/eval/semantic_blind.py", "mcs/semantic/eval/semantic_evaluation.py"]
+}

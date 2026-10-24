@@ -225,17 +225,13 @@ def validate_criteria(criteria: dict) -> dict:
     }
 
 
-def _record_identity(record: dict, field: str) -> str:
-    return evaluation_id(record.get(field), field)
-
-
 def _validate_bundle(bundle: dict, record: dict, manifest: dict) -> set:
     evaluation_object(bundle, "bundle")
     if evaluation_id(bundle.get("version"), "bundle_version") != manifest["bundle_version"]:
         raise EvaluationError("bundle_version_mismatch")
     for field in ("account_id", "project_id", "thread_id"):
         if field in bundle and evaluation_id(bundle[field], field) != \
-                _record_identity(record, field):
+                _item_id(record, field):
             raise EvaluationError(f"bundle_{field}_mismatch")
     messages = bundle.get("messages", [])
     if not isinstance(messages, list):
@@ -284,9 +280,9 @@ def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) ->
     if evaluation_id(candidate.get("version"), "candidate_version") != \
             manifest["candidate_version"]:
         raise EvaluationError("candidate_version_mismatch")
-    for field in ("facts", "claims", "loops"):
-        if field in candidate:
-            _items(candidate[field], f"candidate_{field}")
+    facts = _items(candidate.get("facts", []), "candidate_facts")
+    claims = _items(candidate.get("claims", []), "candidate_claims")
+    loops = _items(candidate.get("loops", []), "candidate_loops")
     usage = candidate.get("usage")
     if usage is not None:
         usage = evaluation_object(usage, "candidate_usage")
@@ -300,8 +296,6 @@ def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) ->
     status = candidate.get("status")
     if not isinstance(status, str) or not status.strip():
         raise EvaluationError("candidate_status_missing")
-    facts = _items(candidate.get("facts", []), "candidate_facts")
-    claims = _items(candidate.get("claims", []), "candidate_claims")
     claim_ids = [_item_id(row, "claim_id") for row in claims]
     if len(claim_ids) != len(set(claim_ids)):
         raise EvaluationError("claim_id_duplicate")
@@ -318,7 +312,7 @@ def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) ->
         if any(evaluation_id(ref, "attachment_ref") not in attachment_ids
                for ref in refs):
             raise EvaluationError("candidate_attachment_ref_unknown")
-    for row in _items(candidate.get("loops", []), "candidate_loops"):
+    for row in loops:
         _item_id(row, "loop_id")
         if type(row.get("resolved")) is not bool:
             raise EvaluationError("candidate_loop_resolved_required")
@@ -443,7 +437,7 @@ def validate_records(records: list[dict], manifest: dict) -> dict:
         split = record.get("split")
         if split not in SPLITS:
             raise EvaluationError("split_invalid")
-        identities = {field: _record_identity(record, field)
+        identities = {field: _item_id(record, field)
                       for field in seen}
         for field, value in identities.items():
             previous = seen[field].get(value)
@@ -471,22 +465,12 @@ def validate_records(records: list[dict], manifest: dict) -> dict:
     return {"records": normalized, "provenance": provenance}
 
 
-def _fact_map(rows: list[dict]) -> dict[str, dict]:
+def _id_map(rows: list[dict], field: str) -> dict[str, dict]:
     out = {}
     for row in rows:
-        key = _item_id(row, "fact_id")
+        key = _item_id(row, field)
         if key in out:
-            raise EvaluationError("fact_id_duplicate")
-        out[key] = row
-    return out
-
-
-def _loop_map(rows: list[dict]) -> dict[str, dict]:
-    out = {}
-    for row in rows:
-        key = _item_id(row, "loop_id")
-        if key in out:
-            raise EvaluationError("loop_id_duplicate")
+            raise EvaluationError(f"{field}_duplicate")
         out[key] = row
     return out
 
@@ -518,8 +502,8 @@ def _resolved(row: dict) -> bool | None:
 def _case_counts(record: dict) -> dict:
     label = record.get("label") or {}
     candidate = record["candidate"]
-    gold = _fact_map(_items(label.get("facts", []), "label_facts"))
-    predicted = _fact_map(_items(candidate.get("facts", []), "candidate_facts"))
+    gold = _id_map(_items(label.get("facts", []), "label_facts"), "fact_id")
+    predicted = _id_map(_items(candidate.get("facts", []), "candidate_facts"), "fact_id")
     important = {key for key, row in gold.items()
                  if row.get("important") is True}
     found = important & predicted.keys()
@@ -544,9 +528,8 @@ def _case_counts(record: dict) -> dict:
                     == _normalized(expected, name):
                 attrs[name][0] += 1
 
-    gold_loops = _loop_map(_items(label.get("loops", []), "label_loops"))
-    pred_loops = _loop_map(_items(candidate.get("loops", []),
-                                  "candidate_loops"))
+    gold_loops = _id_map(_items(label.get("loops", []), "label_loops"), "loop_id")
+    pred_loops = _id_map(_items(candidate.get("loops", []), "candidate_loops"), "loop_id")
     loop_correct = 0
     false_resolution = 0
     unresolved = 0
@@ -566,7 +549,7 @@ def _case_counts(record: dict) -> dict:
     mandatory = {key for key, row in gold.items()
                  if row.get("mandatory") is True}
     mandatory_found = mandatory & predicted.keys()
-    # stage ids and refs trimmed like the predicted fact ids (_fact_map)
+    # stage ids and refs trimmed like the predicted fact ids (_id_map)
     stage_ids = {stage: {ref.strip() for ref in
                          candidate.get(f"{stage}_fact_ids") or []}
                  for stage in LIFECYCLE_STAGES}

@@ -110,6 +110,18 @@ def test_missing_new_safety_metrics_block_promotion(field):
     assert candidate.promotion_problem(cfg, report) == 'gate_failed'
 
 
+@pytest.mark.parametrize('place, expected', [
+    (('run', 'snapshot_sha256'), 'sealed_local_run_required'),
+    (('evidence', 'holdout_manifest_sha256'), 'sealed_holdout_required'),
+])
+def test_integer_shaped_hash_is_rejected_like_a_malformed_one(place, expected):
+    cfg = approved_config({'semantic': {'fact_source': 'canonical'}})
+    report = cfg['semantic']['fact_source_evidence']
+    section, key = place
+    report[section][key] = int('1' * 64)      # 64 decimal digits, but not a hex string
+    assert candidate.promotion_problem(cfg, report) == expected
+
+
 @pytest.mark.parametrize('field', ['body', 'text', 'messages', 'source_text', 'patient_id'])
 def test_text_in_report_cannot_activate(field):
     cfg = approved_config({'semantic': {'fact_source': 'canonical'}})
