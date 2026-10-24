@@ -22,6 +22,8 @@ ATTACH_DISK_MARGIN_MB = 2048
 DISK_WARN_MARGIN_MB = 2 * ATTACH_DISK_MARGIN_MB   # warn before disk_low
 WAL_WARN_BYTES = 256 * 1024 * 1024
 SNAPSHOT_VERIFY_WARN_RATIO = 0.6
+DB_MAINT_OVERDUE_FACTOR = 2        # two missed daily runs, not one late tick
+DB_MAINT_STATE_MAX_BYTES = 65536
 
 def prev_health() -> dict:
     """The previously published health block ({} when unreadable)."""
@@ -130,9 +132,61 @@ def early_warnings(db, result: dict, free_mb: float | None) -> dict:
             and free_mb < floor + DISK_WARN_MARGIN_MB:
         out["warnings"].append("disk_space_low_soon")
     try:
-        out["manual_backup_bytes"] = maintenance.manual_backup_bytes()
+        backups = maintenance.backup_bytes_by_class()
     except Exception:
-        out["manual_backup_bytes"] = None
+        backups = None
+    out["manual_backup_bytes"] = None if backups is None else backups["manual"]
+    out["backup_bytes_by_class"] = backups
+    out.update(ledger_capacity(db))
+    deferred = db_maintenance_ages(data, time.time())
+    out.update(deferred)
+    daily = deferred["db_maintenance_daily_age_s"]
+    if deferred["db_maintenance_state"] == "unreadable":
+        out["warnings"].append("db_maintenance_unknown")
+    elif daily is not None and daily > DB_MAINT_OVERDUE_FACTOR * maintenance.DB_MAINT_INTERVAL_S:
+        out["warnings"].append("db_maintenance_overdue")
+    return out
+
+
+def ledger_capacity(db) -> dict:
+    """SQLite page totals from the header (O(1)); free pages are what a
+    VACUUM could return. File allocation size is not this number."""
+    out = {"ledger_bytes": None, "ledger_free_bytes": None}
+    with suppress(sqlite3.Error, TypeError, IndexError):
+        pages, free, size = (db.execute(f"PRAGMA {name}").fetchone()[0]
+                             for name in ("page_count", "freelist_count", "page_size"))
+        if all(type(v) is int and v >= 0 for v in (pages, free, size)) and free <= pages:
+            out.update(ledger_bytes=pages * size, ledger_free_bytes=free * size)
+    return out
+
+
+def db_maintenance_ages(data: str, now: float) -> dict:
+    """Seconds since the last completed daily and weekly maintenance. The
+    record only moves on success, so a growing age means deferral (a
+    deadline or busy reader) that run errors alone would hide."""
+    out = {"db_maintenance_state": "missing", "db_maintenance_daily_age_s": None,
+           "db_maintenance_fts_age_s": None, "db_checkpoint_pending": None}
+    try:
+        value = safe_io.read_json_nofollow(os.path.join(data, "db_maintenance.json"),
+                                           DB_MAINT_STATE_MAX_BYTES)
+    except FileNotFoundError:
+        return out
+    except (OSError, ValueError, RecursionError):
+        out["db_maintenance_state"] = "unreadable"
+        return out
+    if not isinstance(value, dict):
+        out["db_maintenance_state"] = "unreadable"
+        return out
+    out["db_maintenance_state"] = "present"
+    for key, field in (("db_maintenance_daily_age_s", "daily_at"),
+                       ("db_maintenance_fts_age_s", "fts_at")):
+        at = value.get(field)
+        if finite_number(at) and type(at) is not bool and 0 <= at <= now:
+            out[key] = round(now - at)
+    # The writer drops the flag once a checkpoint succeeds, so absence is
+    # False; any value other than a real bool is unknown, never False.
+    flag = value.get("checkpoint_pending", False)
+    out["db_checkpoint_pending"] = flag if type(flag) is bool else None
     return out
 
 
