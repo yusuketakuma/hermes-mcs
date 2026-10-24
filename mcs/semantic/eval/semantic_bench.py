@@ -44,7 +44,7 @@ from semantic_llm import summarize
 from semantic_runtime import LLMNotSent
 from semantic_store import bundle_fingerprint
 
-DB = os.path.join(mcs_util.HOME, "data", "ledger.db")
+DB = mcs_util.DB
 
 
 def _write_json_private(path: str, data) -> None:

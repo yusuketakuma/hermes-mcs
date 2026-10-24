@@ -52,12 +52,10 @@ import semantic_drain
 import semantic_policy
 import semantic_store
 from ledger import Ledger, LedgerReader
-from mcs_util import HOME, load_config, loads_dict
+from mcs_util import CONF_PATH, DB, load_config, loads_dict
 from writer_lock import acquire_run_lock
 import semantic_runtime as runtime
 
-DB = os.path.join(HOME, "data", "ledger.db")
-CONF_PATH = os.path.join(HOME, "config.json")
 
 def seed(ledger, message_id: int, origin: str = "replay",
          cfg_path: str = CONF_PATH) -> int | None:

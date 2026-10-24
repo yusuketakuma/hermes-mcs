@@ -115,6 +115,34 @@ def test_each_medication_event_has_own_detail_target_and_review_finding(tmp_path
         db.close()
 
 
+def test_valid_cache_skips_jev_and_newest_invalid_row_falls_back_to_older(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    bundle, facts, _source = _bundle_and_facts(db)
+    try:
+        first = assessment.evaluate_medication_events(
+            db, bundle, 10, facts, _EventJev(), SCFG, time.monotonic() + 30)
+        assert first["complete"]
+        # a newer complete row whose choice is not an option must not shadow the older valid one
+        assessment._persist_detail(db, 1, 10, "source-v1", assessment._policy_fingerprint(SCFG),
+                                   "f-start", "change_kind", "not-an-option", 0.9)
+        reads = []
+        real_read = assessment.iter_artifacts
+
+        def counted(*args, **kwargs):
+            reads.append(args[1])
+            return real_read(*args, **kwargs)
+        monkeypatch.setattr(assessment, "iter_artifacts", counted)
+        client = _EventJev()
+        second = assessment.evaluate_medication_events(
+            db, bundle, 10, facts, client, SCFG, time.monotonic() + 30)
+        assert client.calls == []
+        assert reads == [assessment.KIND_ASSESS]        # one history read for every fact and dimension
+        assert second["complete"] and second["details"] == first["details"]
+        assert second["details"]["f-start"]["change_kind"] == "start"
+    finally:
+        db.close()
+
+
 def test_failed_dimension_resumes_without_repeating_completed_detail(tmp_path):
     db = _ledger(tmp_path)
     bundle, facts, _source = _bundle_and_facts(db)

@@ -98,7 +98,7 @@ def observe(db_path: str = DB, cfg: dict | None = None, days: int = 14, *,
         # Establish the read view before any of the component queries.
         c.execute("SELECT rootpage FROM sqlite_master LIMIT 1").fetchone()
         snapshot = _observe(c, cfg, days, now=started, checkpoint=budget.checkpoint,
-                            payload_checkpoint=budget.payload, quality=False)
+                            payload_checkpoint=budget.payload)
         budget.checkpoint()
         # The heaviest scan runs last: exhausting the budget there leaves
         # only this component unavailable, not the queues read before it.
@@ -149,12 +149,11 @@ def _bounded_quality(c, cfg, checkpoint, deadline):
 
 
 def _observe(c, cfg, days: int = 14, *, now: float | None = None,
-             checkpoint=lambda: None, payload_checkpoint=lambda raw: None,
-             quality: bool = True) -> dict:
+             checkpoint=lambda: None, payload_checkpoint=lambda raw: None) -> dict:
     now = time.time() if now is None else now
     from operational_status import interrupted_runs
     from operational_progress import collection_progress, pipeline_progress
-    from semantic_metrics import audit_history, current_quality
+    from semantic_metrics import audit_history
     ledger = SimpleNamespace(db=c)
 
     def q(sql, p=()):
@@ -190,8 +189,7 @@ def _observe(c, cfg, days: int = 14, *, now: float | None = None,
         **history,
         "audit_statuses_scope": "history",
         "history": history,
-        "current_quality": (current_quality(ledger, cfg, checkpoint=checkpoint)
-                            if quality else None),
+        "current_quality": None,      # observe() fills it under its own budget
         **usage,
         "jev_daily_budget": _daily_budget(cfg),
         "extract_llm_left": extract_left,

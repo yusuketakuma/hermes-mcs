@@ -40,22 +40,28 @@ def _policy_fingerprint(scfg: dict) -> str | None:
     return semantic_policy.policy_fingerprint(scfg)
 
 
-def _cached_detail(db, project_id, target_id, source_fp, policy_fp,
-                   fact_id, dimension, options: dict) -> dict | None:
-    if db is None:
-        return None
+def _cached_details(db, project_id, target_id, source_fp, policy_fp,
+                    wanted: dict) -> dict:
+    """Newest valid complete detail per wanted (fact_id, dimension) -> options, in one history pass."""
+    found = {}
+    if db is None or not wanted:
+        return found
     rows = iter_artifacts(db, KIND_ASSESS, project_id=project_id,
                           message_id=target_id, descending=True)
     for row in rows:
         meta = loads_dict(row["meta"])
         if meta is None:
             continue
+        fact_id, dimension = meta.get("fact_id"), meta.get("dimension")
+        if not isinstance(fact_id, str) or not isinstance(dimension, str):
+            continue
+        key = (fact_id, dimension)
+        if key in found or key not in wanted:
+            continue
         row_source = meta.get("source_fingerprint", meta.get("fingerprint"))
         if (meta.get("schema") != ASSESSMENT_SCHEMA_VERSION
                 or row_source != source_fp
                 or meta.get("policy_fingerprint") != policy_fp
-                or meta.get("fact_id") != fact_id
-                or meta.get("dimension") != dimension
                 or meta.get("technical_status") != "complete"):
             continue
         content = loads_dict(row["content"])
@@ -63,11 +69,21 @@ def _cached_detail(db, project_id, target_id, source_fp, policy_fp,
             continue
         choice = content.get("choice")
         confidence = _finite_confidence(content.get("confidence"))
-        if not isinstance(choice, str) or choice not in options \
+        if not isinstance(choice, str) or choice not in wanted[key] \
                 or confidence is None:
-            continue
-        return {"choice": choice, "confidence": confidence}
-    return None
+            continue    # an invalid newer row falls back to the next older one
+        found[key] = {"choice": choice, "confidence": confidence}
+        if len(found) == len(wanted):
+            break
+    return found
+
+
+def _cached_detail(db, project_id, target_id, source_fp, policy_fp,
+                   fact_id, dimension, options: dict) -> dict | None:
+    if not isinstance(fact_id, str) or not isinstance(dimension, str):
+        return None
+    return _cached_details(db, project_id, target_id, source_fp, policy_fp,
+                           {(fact_id, dimension): options}).get((fact_id, dimension))
 
 
 def _persist_detail(ledger, project_id, target_id, source_fp, policy_fp,
@@ -259,6 +275,11 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
         _append_finding(findings, "medication_detail_technical_error")
         return _result(details, findings, False, "technical")
 
+    cache = _cached_details(
+        ledger.db if ledger is not None else None,
+        project_id, target_id, source_fp, policy_fp,
+        {(fact["fact_id"], dimension): options for fact in events
+         for dimension, (_, options) in jev.MED_DETAIL_QUESTIONS.items()})
     for fact in events:
         fact_id = fact["fact_id"]
         state, state_error = _event_state(fact, context, members)
@@ -268,10 +289,7 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
         details.setdefault(fact_id, {})
         for dimension, (instructions, options) in \
                 jev.MED_DETAIL_QUESTIONS.items():
-            cached = _cached_detail(
-                ledger.db if ledger is not None else None,
-                project_id, target_id, source_fp, policy_fp,
-                fact_id, dimension, options)
+            cached = cache.get((fact_id, dimension))
             if cached is not None:
                 choice = cached["choice"]
                 confidence = cached["confidence"]

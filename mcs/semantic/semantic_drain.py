@@ -1436,6 +1436,15 @@ def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
 
 _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
                  "WHERE p.project_id=fetch_jobs.project_id AND p.is_archived)")
+# an arrival-seeded job: a real notification event spawned it
+_ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligible'),0)=1"
+
+
+def _class_scope(archived: bool, excluded) -> tuple[str, str]:
+    """(patient-class + excluded-job SQL predicate, its json_each parameter)."""
+    scope = (("" if archived else "NOT ") + _ARCHIVED_JOB
+             + " AND job_id NOT IN (SELECT value FROM json_each(?))")
+    return scope, json.dumps(sorted(excluded))
 
 
 def _due_lanes(ledger, kinds: tuple, max_jobs: int,
@@ -1454,13 +1463,10 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
     Returns (arrival_jobs, backfill_jobs, sched_mutation) — the mutation
     is written by the caller once the batch is consumed."""
     now = time.time()
-    scope = ("" if archived else "NOT ") + _ARCHIVED_JOB
-    scope += " AND job_id NOT IN (SELECT value FROM json_each(?))"
-    excluded_json = json.dumps(sorted(excluded))
+    scope, excluded_json = _class_scope(archived, excluded)
     turn_key = "archived_turn" if archived else "turn"
     kind_ph = ",".join("?" * len(kinds))
-    eligible = ("json_valid(payload) "
-                "AND COALESCE(json_extract(payload,'$.eligible'),0)=1")
+    eligible = _ELIGIBLE_SQL
     arrivals_due = ledger.db.execute(f"""
       SELECT COUNT(*) FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
@@ -1592,9 +1598,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
     ``long_defers`` ({str(job_id): {"g", "n"}}) keeps jobs known to need
     the long-output budget out of the realtime lane.
     """
-    scope = ("" if archived else "NOT ") + _ARCHIVED_JOB
-    scope += " AND job_id NOT IN (SELECT value FROM json_each(?))"
-    excluded_json = json.dumps(sorted(excluded))
+    scope, excluded_json = _class_scope(archived, excluded)
     if lane is None:
         qc_rows = []
         if qc_active and max_jobs > 1:
@@ -1615,8 +1619,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
     else:
         # explicit lane: the fairness/QC selection is never computed
         # (it would be discarded), saving its queries per tick
-        eligible = ("json_valid(payload) AND "
-                    "COALESCE(json_extract(payload,'$.eligible'),0)=1")
+        eligible = _ELIGIBLE_SQL
         # Fresh arrivals use realtime. Background workers may also finish
         # older arrival-seeded jobs; a per-job flock excludes double work.
         if lane == "realtime":

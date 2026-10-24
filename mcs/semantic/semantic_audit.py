@@ -451,7 +451,7 @@ def audit_status_for(code_findings: list, jev_findings: list,
                 if f["code"] in ("evidence_missing",
                                  "evidence_revision_mismatch",
                                  "evidence_span_mismatch",
-                                 "input_oversize", "source_fact_coverage_missing",
+                                 "source_fact_coverage_missing",
                                  "source_fact_coverage_ambiguous",
                                  "source_fact_coverage_low_confidence")
                 or f["code"].startswith("medication_detail_")]
