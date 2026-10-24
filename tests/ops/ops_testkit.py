@@ -5,6 +5,7 @@ DBs and restore-consent receipts, and the path loader for the
 repo-external recovery tool.  Not a test module (no ``test_`` prefix);
 sibling files import it via the tests/ sys.path bootstrap."""
 import restore_evidence
+import hashlib
 import importlib.util
 import json
 import os
@@ -212,3 +213,46 @@ def select_updater_service_python(monkeypatch, updater, python):
     factory = updater._service_paths
     monkeypatch.setattr(updater, "_service_paths",
                         lambda: replace(factory(), hermes_python=python))
+
+
+class _FakeLaunchd:
+    """launchctl stub: bootstrap exit codes come from `outcomes`; a
+    successful bootstrap (or `late_load`) marks the label loaded."""
+
+    def __init__(self, outcomes, late_load=False, loads=True):
+        self.outcomes = list(outcomes)
+        self.late_load = late_load
+        self.loads = loads
+        self.loaded = False
+        self.calls = []
+
+    def __call__(self, argv, *args, **kwargs):
+        verb = argv[1]
+        self.calls.append(verb)
+        rc, out, err = 0, "", ""
+        if verb == "bootout":
+            self.loaded = False
+        elif verb == "bootstrap":
+            rc = self.outcomes.pop(0)
+            if rc == 0:
+                self.loaded = self.loads
+            else:
+                err = "Bootstrap failed: 5: Input/output error"
+                out = "success"          # misleading output is ignored
+                if not self.outcomes and self.late_load:
+                    self.loaded = True
+        elif verb == "print":
+            rc = 0 if self.loaded else 113
+            out = "\tpid = 4242\n" if self.loaded else ""
+        return subprocess.CompletedProcess(argv, rc, out, err)
+
+
+def _tree(root):
+    """Witness contents, names, modes and nanosecond mtimes, not access times."""
+    result = {}
+    for path in [root, *sorted(root.rglob("*"))]:
+        st = path.lstat()
+        content = (os.readlink(path) if path.is_symlink() else
+                   hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None)
+        result[str(path.relative_to(root))] = (st.st_mode, st.st_mtime_ns, st.st_size, content)
+    return result

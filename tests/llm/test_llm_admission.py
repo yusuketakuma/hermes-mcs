@@ -15,14 +15,9 @@ import time
 import pytest
 
 import llm_admission as adm
+from llm_testkit import broker, broker_path
 
-
-@pytest.fixture
-def broker(tmp_path):
-    b = adm.Broker(str(tmp_path / "adm.db"))
-    b.open_epoch(lambda: True)
-    yield b
-    b.close()
+__all__ = ["broker", "broker_path"]
 
 
 class FakeBackend:
@@ -830,22 +825,6 @@ def test_invalid_probe_args_rejected_before_admission(admitted_env, args, reason
 
 # An already-expired deadline must retire the permit as not_sent, never
 # leave it ``unknown`` occupying a BACKLOG slot for good.
-@pytest.fixture
-def broker_path(tmp_path, monkeypatch):
-    import local_llm
-    path = str(tmp_path / "adm.db")
-    b = adm.Broker(path)
-    b.open_epoch(lambda: True)
-    b.close()
-    monkeypatch.setenv("MCS_LLM_ADMISSION", path)
-    local_llm._BROKERS.clear()
-    yield path
-    for b in local_llm._BROKERS.values():
-        with suppress(Exception):
-            b.close()
-    local_llm._BROKERS.clear()
-
-
 def _expired_send(endpoint, method, body, timeout, deadline):
     # mirrors bounded_http's pre-send deadline rejection
     raise TimeoutError("http worker deadline exceeded")

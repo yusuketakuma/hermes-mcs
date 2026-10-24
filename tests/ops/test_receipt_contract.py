@@ -246,6 +246,7 @@ def test_real_synthetic_export_handoff_receive_delete_round_trip(tmp_path):
 def test_export_enums_and_default_presets_match_live_producers():
     import mcs_signals
     import mcs_stats
+    import operation_contract
     import read_model
     import semantic_facts
 
@@ -255,6 +256,10 @@ def test_export_enums_and_default_presets_match_live_producers():
     assert set(export_schema.SIGNAL_TYPES) == {name for name, _ in mcs_signals.DETECTORS}
     assert set(export_schema._KINDS) == set(read_model.EXTRACTION_KINDS)
     assert set(export_schema.STAT_PRESETS) == set(mcs_stats.PRESETS)
+    field = export_schema._STATS["feedback_by_field"]["rows"]["items"][0]["field"]
+    assert set(field.__closure__[0].cell_contents) \
+        == set(operation_contract.EXTRACT_FEEDBACK_FIELDS)
+    assert not field("unknown_field")
     for preset, names in mcs_stats.PRESETS.items():
         for name in names:
             assert name in mcs_stats.REGISTRY

@@ -127,7 +127,6 @@ def _projection_pred(art: str, hash_ref: str, *,
                      engine_version: int | None = None,
                      require_version: bool = True) -> str:
     """Build the shared current-row predicate for both projection kinds."""
-    from semantic_projection import PROJECTION_VERSION
     col = f"{art}." if art else ""
     return (f"CASE WHEN json_valid({col}content) AND json_valid({col}meta) "
             f"THEN json_type({col}content)='object' "
@@ -326,12 +325,10 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
                  AND m.posted_at_ts BETWEEN d.posted_at_ts-?
                                         AND d.posted_at_ts+?
             CROSS JOIN artifacts a ON a.message_id=m.message_id
-            WHERE da.kind IN ('extract_llm','{CANONICAL_PROJECTION_KIND}',
-                              '{V4_PROJECTION_KIND}')
+            WHERE da.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred('da', 'd')}
               AND ev.value IN ({TRANSITION_EVENTS_SQL})
-              AND a.kind IN ('extract_llm','{CANONICAL_PROJECTION_KIND}',
-                             '{V4_PROJECTION_KIND}')
+              AND a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred('a', 'm')}
               {pred_p}AND EXISTS
                   (SELECT 1 FROM json_each({json_or_null('a.content')},
@@ -592,7 +589,6 @@ def posted_epoch(posted_at: str) -> int | None:
     if not posted_at:
         return None
     try:
-        from datetime import datetime
         return int(datetime.fromisoformat(posted_at).timestamp())
     except (ValueError, TypeError, OverflowError):
         return None
@@ -608,6 +604,7 @@ def register_search_fold(db) -> None:
 
 
 EXTRACTION_KINDS = ("extract_v1", "extract_llm", "canonical_projection", "semantic_facts_v4")
+EXTRACTION_KINDS_SQL = ",".join(f"'{kind}'" for kind in EXTRACTION_KINDS)
 _LEGACY_UNSCOPED_KINDS = ("extract_v1", "extract_llm")
 _CONTEXT_KINDS_IN = ",".join("?" * len(EXTRACTION_KINDS))
 _CONTEXT_LEGACY_IN = ",".join("?" * len(_LEGACY_UNSCOPED_KINDS))
@@ -710,10 +707,10 @@ def extraction_kind_map(art_rows, content_hash) -> dict:
 
 
 
-def source_patient_context(db, message, *, by_kind=None, art_rows=None):
-    """Read source-bound context independently of canonical extraction precedence."""
+def _context_inputs(db, message, *, by_kind=None, art_rows=None):
+    """(art_rows, by_kind, body) for a full-body message, or None when it has no body."""
     if message.get("body_state") not in (None, "full"):
-        return []
+        return None
     if art_rows is None:
         art_rows = db.execute(
             "SELECT artifact_id,kind,content,meta FROM artifacts "
@@ -730,7 +727,16 @@ def source_patient_context(db, message, *, by_kind=None, art_rows=None):
                          (message["project_id"], message["message_id"])).fetchone()
         body = row[0] if row else None
     if not isinstance(body, str) or not body:
+        return None
+    return art_rows, by_kind, body
+
+
+def source_patient_context(db, message, *, by_kind=None, art_rows=None):
+    """Read source-bound context independently of canonical extraction precedence."""
+    inputs = _context_inputs(db, message, by_kind=by_kind, art_rows=art_rows)
+    if inputs is None:
         return []
+    art_rows, by_kind, body = inputs
     documents = []
     for kind in ("extract_v1", "extract_llm"):
         artifact_id = by_kind[kind]["artifact_id"]
@@ -758,9 +764,7 @@ def current_extraction_blobs(db, project_id: int) -> dict:
     for a in db.execute(f"""
       SELECT a.message_id, a.kind, a.content FROM artifacts a
       JOIN messages m ON m.message_id=a.message_id
-      WHERE m.project_id=? AND a.kind IN
-          ('extract_v1','extract_llm','canonical_projection',
-           'semantic_facts_v4')
+      WHERE m.project_id=? AND a.kind IN ({EXTRACTION_KINDS_SQL})
         {current_extract_pred()}
         AND (a.kind IN ('extract_v1','extract_llm')
              OR (1=1 {current_fact_pred()}))

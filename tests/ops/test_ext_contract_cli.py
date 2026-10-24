@@ -4,7 +4,6 @@ import c1_envelopes
 import export_contract
 import export_delivery
 import export_schema
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +13,7 @@ import sys
 import pytest
 
 import ext_contract as ext
+from ops_testkit import _tree
 from test_ext_contract import NOW, _auth, _records
 
 
@@ -137,16 +137,6 @@ def _flags(inputs):
 def _cli(capsys, arguments):
     code = ext.main(arguments)
     return code, json.loads(capsys.readouterr().out)
-
-
-def _tree(root):
-    result = {}
-    for path in [root, *sorted(root.rglob("*"))]:
-        st = path.lstat()
-        content = (os.readlink(path) if path.is_symlink() else
-                   hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None)
-        result[str(path.relative_to(root))] = (st.st_mode, st.st_mtime_ns, st.st_size, content)
-    return result
 
 
 def _accepted(inputs, eid):

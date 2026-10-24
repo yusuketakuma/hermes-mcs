@@ -3,27 +3,12 @@
 Pins state, outcome and proof for every post-send path so the shared
 retirement helper cannot drift between the two admitted entry points."""
 import json
-from contextlib import suppress
 
 import pytest
 
-import llm_admission as adm
+from llm_testkit import broker_path
 
-
-@pytest.fixture
-def broker_path(tmp_path, monkeypatch):
-    import local_llm
-    path = str(tmp_path / "adm.db")
-    b = adm.Broker(path)
-    b.open_epoch(lambda: True)
-    b.close()
-    monkeypatch.setenv("MCS_LLM_ADMISSION", path)
-    local_llm._BROKERS.clear()
-    yield path
-    for b in local_llm._BROKERS.values():
-        with suppress(Exception):
-            b.close()
-    local_llm._BROKERS.clear()
+__all__ = ["broker_path"]
 
 
 def _refused(*a):

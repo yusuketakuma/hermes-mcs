@@ -22,18 +22,7 @@ import job_ops
 import ledger
 import mcs_requests
 from ops_testkit import _source
-
-
-class _Context:
-    def __init__(self, settings):
-        self.settings = settings
-        self.command = None
-
-    def get_config(self, key, default=None):
-        return self.settings.get(key, default)
-
-    def register_command(self, name, handler, **kwargs):
-        self.command = (name, handler, kwargs)
+from plugin_testkit import _Context, _context
 
 
 def _settings(tmp_path, *, complete=True):
@@ -47,17 +36,6 @@ def _settings(tmp_path, *, complete=True):
     if not complete:
         values.pop("project_ids")
     return values
-
-
-def _context(**changes):
-    value = {
-        "platform": "discord", "authorized": True, "internal": False,
-        "is_bot": False, "via_upstream_relay": False, "native_input": True,
-        "user_id": "user-1", "chat_id": "chat-1", "scope_id": "scope-1",
-        "profile": "default", "message_id": "discord-message-1",
-    }
-    value.update(changes)
-    return value
 
 
 def _handler(tmp_path, *, complete=True):

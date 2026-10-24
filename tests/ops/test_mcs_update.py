@@ -26,7 +26,7 @@ import pytest
 
 import mcs_update
 import mcs_util
-from ops_testkit import (_git, _make_repo, _mk_schema, _receipts_db,
+from ops_testkit import (_FakeLaunchd, _git, _make_repo, _mk_schema, _receipts_db,
                          _seed_consent)
 
 
@@ -1645,38 +1645,6 @@ def test_manual_rollback_defers_to_recovery_of_interrupted_apply(
     assert mcs_update.journal_store.load_state(mcs_update.STATE_PATH)["applying"]["tag"] == "v1.0.6"
 
 
-class _FakeLaunchd:
-    """launchctl stub: bootstrap exit codes come from `outcomes`; a
-    successful bootstrap (or `late_load`) marks the label loaded."""
-
-    def __init__(self, outcomes, late_load=False, loads=True):
-        self.outcomes = list(outcomes)
-        self.late_load = late_load
-        self.loads = loads
-        self.loaded = False
-        self.calls = []
-
-    def __call__(self, argv, *args, **kwargs):
-        verb = argv[1]
-        self.calls.append(verb)
-        rc, out, err = 0, "", ""
-        if verb == "bootout":
-            self.loaded = False
-        elif verb == "bootstrap":
-            rc = self.outcomes.pop(0)
-            if rc == 0:
-                self.loaded = self.loads
-            else:
-                err = "Bootstrap failed: 5: Input/output error"
-                out = "success"          # misleading output is ignored
-                if not self.outcomes and self.late_load:
-                    self.loaded = True
-        elif verb == "print":
-            rc = 0 if self.loaded else 113
-            out = "\tpid = 4242\n" if self.loaded else ""
-        return subprocess.CompletedProcess(argv, rc, out, err)
-
-
 @pytest.mark.parametrize("outcomes,late,problems,boots,loads", [
     ([5, 0], False, [], 2, True),
     ([5, 5, 5], True, [], 3, True),
@@ -2768,31 +2736,6 @@ def test_stopping_an_update_child_closes_its_pipes(updater):
     child.communicate = real
     assert child.returncode is not None
     assert child.stdout.closed and child.stderr.closed
-
-
-def test_restore_staging_closes_its_fd_when_fstat_fails(updater, tmp_path, monkeypatch):
-    data = tmp_path / "data"
-    data.mkdir(exist_ok=True)
-    monkeypatch.setattr(updater, "LEDGER", str(data / "ledger.db"))
-    monkeypatch.setattr(updater.journal_store, "load_state", lambda path: {"applying": {}})   # journaled, no prior copy
-    made = []
-    real_mkstemp, real_fstat = updater.tempfile.mkstemp, os.fstat
-
-    def mkstemp(*a, **k):
-        made.append(real_mkstemp(*a, **k))
-        return made[-1]
-
-    def fstat(fd):
-        if made and fd == made[-1][0]:
-            raise OSError(5, "synthetic fstat failure")
-        return real_fstat(fd)
-    monkeypatch.setattr(updater.tempfile, "mkstemp", mkstemp)
-    monkeypatch.setattr(updater.os, "fstat", fstat)
-    with pytest.raises(OSError):
-        updater._replace_database(str(tmp_path / "unused.db"), "0" * 64, lambda: None)
-    monkeypatch.undo()
-    with pytest.raises(OSError):
-        os.fstat(made[-1][0])          # closed, not leaked
 
 
 @pytest.mark.parametrize("body, expected", [

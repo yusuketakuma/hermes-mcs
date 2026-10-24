@@ -13,6 +13,7 @@ import mcs_signals
 from semantic_projection import PROJECTION_VERSION
 from ops_testkit import DAY, NOW, _extract_v1, _msg
 from common_testkit import ledger_fixture
+from views_testkit import _extract as _extract_llm
 import message_observations
 import signal_policy
 
@@ -62,16 +63,6 @@ def test_corrupt_latest_roster_never_revives_prior_membership(led, raw):
 
 
 led = ledger_fixture()
-
-
-def _extract_llm(db, mid, chash, meds, events=None):
-    content = {"meds": meds}
-    if events is not None:
-        content["events"] = events
-    db.execute(
-        "INSERT INTO artifacts(kind,message_id,content,meta) "
-        "VALUES ('extract_llm',?,?,?)",
-        (mid, json.dumps(content), json.dumps({"hash": chash})))
 
 
 def _extract_doc(db, mid, chash, **fields):

@@ -7,14 +7,9 @@ import time
 import pytest
 
 import llm_admission as adm
+from llm_testkit import broker
 
-
-@pytest.fixture
-def broker(tmp_path):
-    b = adm.Broker(str(tmp_path / "adm.db"))
-    b.open_epoch(lambda: True)
-    yield b
-    b.close()
+__all__ = ["broker"]
 
 
 def _dead_pid():

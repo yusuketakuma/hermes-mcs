@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from ops_testkit import _git, _load
+from ops_testkit import _FakeLaunchd, _git, _load
 
 
 def _make_repo(tmp_path):
@@ -1187,38 +1187,6 @@ def test_restart_drainers_wait_ignores_wall_clock_jump(rec, monkeypatch):
     assert rec._restart_drainers() == []
 
 
-class _FakeLaunchd:
-    """launchctl stub: bootstrap exit codes come from `outcomes`; a
-    successful bootstrap (or `late_load`) marks the label loaded."""
-
-    def __init__(self, outcomes, late_load=False, loads=True):
-        self.outcomes = list(outcomes)
-        self.late_load = late_load
-        self.loads = loads
-        self.loaded = False
-        self.calls = []
-
-    def __call__(self, argv, *args, **kwargs):
-        verb = argv[1]
-        self.calls.append(verb)
-        rc, out, err = 0, "", ""
-        if verb == "bootout":
-            self.loaded = False
-        elif verb == "bootstrap":
-            rc = self.outcomes.pop(0)
-            if rc == 0:
-                self.loaded = self.loads
-            else:
-                err = "Bootstrap failed: 5: Input/output error"
-                out = "success"          # misleading output is ignored
-                if not self.outcomes and self.late_load:
-                    self.loaded = True
-        elif verb == "print":
-            rc = 0 if self.loaded else 113
-            out = "\tpid = 4242\n" if self.loaded else ""
-        return subprocess.CompletedProcess(argv, rc, out, err)
-
-
 @pytest.mark.parametrize("outcomes,late,problems,boots", [
     ([5, 0], False, [], 2),
     ([5, 5, 5], True, [], 3),
@@ -1666,31 +1634,6 @@ def test_membership_keeps_an_agent_plist_launchd_did_not_report_gone(
     problems = rec._reconcile_membership({"agents": [], "cron": []})
     assert plist.exists()
     assert "agent_retirement_unverifiable:ai.mcs.extract-old" in problems
-
-
-def test_restore_staging_closes_its_fd_when_fstat_fails(rec, tmp_path, monkeypatch):
-    data = tmp_path / "data"
-    data.mkdir(exist_ok=True)
-    monkeypatch.setattr(rec, "LEDGER", str(data / "ledger.db"))
-    monkeypatch.setattr(rec, "_load_state", lambda: {"applying": {}})
-    made = []
-    real_mkstemp, real_fstat = rec.tempfile.mkstemp, os.fstat
-
-    def mkstemp(*a, **k):
-        made.append(real_mkstemp(*a, **k))
-        return made[-1]
-
-    def fstat(fd):
-        if made and fd == made[-1][0]:
-            raise OSError(5, "synthetic fstat failure")
-        return real_fstat(fd)
-    monkeypatch.setattr(rec.tempfile, "mkstemp", mkstemp)
-    monkeypatch.setattr(rec.os, "fstat", fstat)
-    with pytest.raises(OSError):
-        rec._replace_database(str(tmp_path / "unused.db"), "0" * 64, lambda: None)
-    monkeypatch.undo()
-    with pytest.raises(OSError):
-        os.fstat(made[-1][0])          # closed, not leaked
 
 
 @pytest.mark.parametrize("shape", ["previous_clean", "previous_dirty", "merge_head",

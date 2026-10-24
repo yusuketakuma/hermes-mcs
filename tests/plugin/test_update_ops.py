@@ -17,18 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import hermes_plugin
 import mcs_requests
-
-
-class _Context:
-    def __init__(self, settings):
-        self.settings = settings
-        self.command = None
-
-    def get_config(self, key, default=None):
-        return self.settings.get(key, default)
-
-    def register_command(self, name, handler, **kwargs):
-        self.command = (name, handler, kwargs)
+from plugin_testkit import _Context, _context
 
 
 def _handler(tmp_path):
@@ -43,18 +32,6 @@ def _handler(tmp_path):
     hermes_plugin.register(ctx)
     assert ctx.command is not None
     return ctx.command[1]
-
-
-def _context(**changes):
-    value = {
-        "platform": "discord", "authorized": True, "internal": False,
-        "is_bot": False, "via_upstream_relay": False,
-        "native_input": True, "user_id": "user-1", "chat_id": "chat-1",
-        "scope_id": "scope-1", "profile": "default",
-        "message_id": "discord-message-1",
-    }
-    value.update(changes)
-    return value
 
 
 def _call(handler, payload, context=None):
