@@ -13,6 +13,7 @@ from mcs_util import loads_dict, payload_hash, positive
 import semantic_policy
 import semantic_render
 import semantic_store
+import semantic_transport
 from semantic_policy import KIND_PLAN, POLICY_VERSION
 from semantic_send_gate import enforce_block_reason
 
@@ -107,6 +108,7 @@ def emit_degraded(ledger, scfg: dict) -> int:
         "SELECT event_id,project_id,payload,progress FROM notify_outbox "
         "WHERE kind='new_messages' AND state IN ('pending','failed') AND attempts=0 "
         "AND created_at<?", (cutoff,))
+    local_model = None      # resolved once per scan, on the first bundle
     for ev in events:
         progress = loads_dict(ev["progress"] or "{}")
         if not isinstance(progress, dict) or progress.get("sent"):
@@ -123,7 +125,9 @@ def emit_degraded(ledger, scfg: dict) -> int:
             f"SELECT COALESCE(parent_id,message_id) r FROM messages "
             f"WHERE project_id=? AND message_id IN ({marks})", (pid, *ids))}
         for root in roots:
-            bundle = semantic_store.thread_bundle(ledger.db, pid, root)
+            if local_model is None:
+                local_model = semantic_transport.llm_model()
+            bundle = semantic_store.thread_bundle(ledger.db, pid, root, local_model=local_model)
             if bundle is None:
                 continue
             fp = bundle["source_fingerprint"]

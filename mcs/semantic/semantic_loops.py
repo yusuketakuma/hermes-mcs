@@ -113,9 +113,14 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
             "ORDER BY artifact_id",
             (KIND_LOOP, project_id, member_ids)).fetchall()
 
-    seen_candidates = {
-        key for r in _candidate_rows()
-        if isinstance(key := _object(r["meta"]).get("candidate_fp"), str)}
+    # One snapshot serves every target: the loop below only writes rows of
+    # the message it is processing, never another target's rows.
+    rows_by_mid = {}
+    seen_candidates = set()
+    for r in _candidate_rows():
+        rows_by_mid.setdefault(r["message_id"], []).append(r)
+        if isinstance(key := _object(r["meta"]).get("candidate_fp"), str):
+            seen_candidates.add(key)
     created = 0
     for mid, facts in facts_by_target.items():
         member = members.get(mid)
@@ -125,10 +130,9 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
         # an item the facts still yield keeps (or revives) its row, one they
         # no longer yield stops being current but stays as history.
         own = {}
-        for row in _candidate_rows():
+        for row in rows_by_mid.get(mid, ()):
             meta = _object(row["meta"])
-            if row["message_id"] == mid \
-                    and meta.get("fingerprint") == fp \
+            if meta.get("fingerprint") == fp \
                     and meta.get("policy_fingerprint") == policy:
                 own.setdefault(_candidate_identity(_object(row["content"])),
                                []).append((row["artifact_id"], meta))

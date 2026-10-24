@@ -44,11 +44,6 @@ KIND_V4 = "semantic_facts_v4"
 KIND_V4_STAGE = "v4_stage"
 KIND_V4_DIAG = "v4_diagnostic"
 
-STAGES = ("s0_prep", "s1_extract", "s2_fact_audit", "s3_repair",
-          "s4_reaudit", "s5_projection", "s6_summary",
-          "s7_summary_audit", "s8_publish")
-
-
 def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
                  stage: str, status: str, tx: bool = False,
                  **detail) -> None:
@@ -354,8 +349,9 @@ def reproject_stale(ledger, scfg: dict,
         if doc is not None:
             reinterpreted.setdefault(
                 (row["project_id"], row["message_id"]), (doc, meta))
+    local_model = semantic_transport.llm_model() if reinterpreted else None
     for (pid, mid), (doc, meta) in reinterpreted.items():
-        _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out)
+        _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out, local_model)
     used = _rebuild_hint_docs(ledger, scfg, limit - len(rows), out)
     _hold_upgraded_repairs(ledger, scfg, limit - len(rows) - used, out)
     return out
@@ -375,28 +371,28 @@ def _count(out: dict, key: str) -> None:
     out["skip_reasons"][key] = out["skip_reasons"].get(key, 0) + 1
 
 
-def _member_bundle(ledger, pid: int, mid: int, fp):
+def _member_bundle(ledger, pid: int, mid: int, fp, local_model=None):
     """(bundle, member) of the message's live thread, or (None, None)
     when the stored generation ``fp`` is no longer the live one."""
     from semantic_store import thread_bundle
     row = ledger.db.execute(
         "SELECT COALESCE(parent_id,message_id) r FROM messages "
         "WHERE project_id=? AND message_id=?", (pid, mid)).fetchone()
-    bundle = thread_bundle(ledger.db, pid, row["r"]) if row else None
+    bundle = thread_bundle(ledger.db, pid, row["r"], local_model=local_model) if row else None
     if bundle is None or bundle["source_fingerprint"] != fp:
         return None, None
     member = next((m for m in bundle["members"] if m["message_id"] == mid), None)
     return (bundle, member) if member is not None else (None, None)
 
 
-def _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out) -> None:
+def _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out, local_model=None) -> None:
     """Loop candidates follow the current projection of the same audited
     document: items it no longer yields stop being current (no model)."""
     from semantic_projection import project_v2_facts
     if scfg.get("loop_mode", "off") == "off" \
             or meta.get("policy_fingerprint") != policy_fingerprint(scfg):
         return
-    bundle, _ = _member_bundle(ledger, pid, mid, meta.get("fingerprint"))
+    bundle, _ = _member_bundle(ledger, pid, mid, meta.get("fingerprint"), local_model)
     if bundle is None:
         return
     from semantic_loops import update_loops
@@ -508,13 +504,14 @@ def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> int:
             "UPDATE artifacts SET meta=json_set(meta,'$.hint_rebuild',?) "
             "WHERE artifact_id=?", (value, row["artifact_id"]))
 
+    local_model = semantic_transport.llm_model() if rows else None
     for row in rows:
         pid, mid = row["project_id"], row["message_id"]
         meta, doc = loads_dict(row["meta"]) or {}, loads_dict(row["content"])
         fp = meta.get("fingerprint")
         new, reason = None, None
         try:
-            _, member = _member_bundle(ledger, pid, mid, fp)
+            _, member = _member_bundle(ledger, pid, mid, fp, local_model)
             if member is None:
                 reason = "history"   # not the live generation: never reused
             elif meta.get("repaired"):

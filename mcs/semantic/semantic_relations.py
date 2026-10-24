@@ -133,7 +133,8 @@ def _classify_pair(left: dict, right: dict, token_cache=None) -> dict | None:
         return None
     rel_type = None
     reason = None
-    if _norm(left.get("statement")) == _norm(right.get("statement")) \
+    same_statement = _norm(left.get("statement")) == _norm(right.get("statement"))
+    if same_statement \
             and all(left.get(field) == right.get(field) for field in (
                 "kind", "subject", "actor", "polarity", "epistemic",
                 "workflow_status", "event_time", "valid_time", "quantity",
@@ -179,7 +180,7 @@ def _classify_pair(left: dict, right: dict, token_cache=None) -> dict | None:
                     and WORKFLOW_ORDER.index(lw) < WORKFLOW_ORDER.index(rw) \
                     and not _ordered_before(right, left):
                 rel_type, reason = "TRANSITION", "workflow_progression"
-            elif _norm(left.get("statement")) != _norm(right.get("statement")):
+            elif not same_statement:
                 rel_type, reason = "COMPLEMENTS", "shared_entity"
             else:
                 rel_type, reason = "UNRESOLVED", "clinical_attributes_differ"
@@ -206,7 +207,7 @@ def _relation(left: dict, right: dict, rel_type: str, reason: str) -> dict:
 
 
 def reconcile_facts(active_facts: list, new_facts: list,
-                    *, project_id=None, deadline: float | None = None) -> dict:
+                    *, deadline: float | None = None) -> dict:
     """Compare new facts against the active set and return candidate
     relations plus the relation-set fingerprint.
 

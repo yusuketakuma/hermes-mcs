@@ -420,9 +420,11 @@ def extract_facts_resumable(llm_fn, member: dict,
         specs = assembly.manifest_specs(manifest)
     else:
         specs = assembly.chunk_specs(source, chunk_size, chunker(source, chunk_size) if source else [])
-    _persist_manifest(ledger, project_id, message_id, semantic_transport.llm_model(),
+    # one model identity for the manifest, the cache generation and every chunk
+    model = semantic_transport.llm_model()
+    _persist_manifest(ledger, project_id, message_id, model,
                       source_fp, manifest, len(source))
-    generation = _chunk_generation(semantic_transport.llm_model(), semantic_llm._FACT_PROMPT, chunk_size=chunk_size)
+    generation = _chunk_generation(model, semantic_llm._FACT_PROMPT, chunk_size=chunk_size)
     cached = _cached_chunks((ledger.db if ledger is not None else None), project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             generation=generation)
@@ -466,7 +468,7 @@ def extract_facts_resumable(llm_fn, member: dict,
             failure_reason = "model"
             break
         # This is deliberately before the next loop iteration/model call.
-        _persist_chunk(ledger, project_id, message_id, semantic_transport.llm_model(),
+        _persist_chunk(ledger, project_id, message_id, model,
                        source_fp,
                        body_hash, revision, spec, chunk_facts, chunk_dropped,
                        len(specs), generation=generation)
@@ -655,10 +657,11 @@ def extract_facts_v2(llm_fn, member: dict,
     posted_at = member.get("posted_at") or ""
     manifest = assembly.build_manifest(source, source_fp, chunk_size)
     specs = assembly.manifest_specs(manifest)
-    _persist_manifest(ledger, project_id, message_id, semantic_transport.llm_model(),
+    model = semantic_transport.llm_model()
+    _persist_manifest(ledger, project_id, message_id, model,
                       source_fp, manifest, len(source))
     cache_schema = SCHEMA_VERSION_V2 + ("/coverage-retry" if retry_coverage else "")
-    generation = _chunk_generation(semantic_transport.llm_model(), prompt_template, chunk_size=chunk_size)
+    generation = _chunk_generation(model, prompt_template, chunk_size=chunk_size)
     cached = _cached_chunks((ledger.db if ledger is not None else None), project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             kind=KIND_CHUNK_V2, schema=cache_schema,
@@ -682,7 +685,6 @@ def extract_facts_v2(llm_fn, member: dict,
     failure_reason = None
     drop_reasons: dict = {}
     omitted: dict = {}
-    model = semantic_transport.llm_model()
 
     for spec in specs:
         index = spec["index"]
@@ -808,7 +810,7 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
                             specs, source, kind=KIND_CHUNK_V2,
                             schema=SCHEMA_VERSION_V2 + ("/coverage-retry" if retry else ""),
                             extra=assembly.v2_chunk_ok,
-                            generation=_chunk_generation(semantic_transport.llm_model(), semantic_llm._FACT_V2_PROMPT))
+                            generation=v2_generation())
     if any(spec["index"] not in cached for spec in specs):
         return None, "chunk_cache_miss"
     jev_used = any(o.get("source") == "jev_pre" for o in stored_doc.get("obligations") or [])

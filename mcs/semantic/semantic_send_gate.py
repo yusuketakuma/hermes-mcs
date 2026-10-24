@@ -1,6 +1,7 @@
 """Recheck semantic send eligibility and current audited summaries at each delivery boundary."""
 import semantic_policy
 import semantic_store
+import semantic_transport
 import json
 from mcs_util import loads_dict
 
@@ -192,6 +193,7 @@ def semantic_render_state(db, ev, cfg: dict) -> tuple:
     except Exception:
         return ()
     state = []
+    local_model = semantic_transport.llm_model() if isinstance(ids, list) and ids else None
     for mid in ids if isinstance(ids, list) else []:
         if type(mid) is not int:
             continue
@@ -205,7 +207,7 @@ def semantic_render_state(db, ev, cfg: dict) -> tuple:
         cur = current_summary(
             db, project_id, mid,
             lambda r=root, m=mid: semantic_store.thread_bundle(
-                db, project_id, r, [m]),
+                db, project_id, r, [m], local_model=local_model),
             semantic_policy.policy_fingerprint(scfg))
         if cur is None:
             continue
