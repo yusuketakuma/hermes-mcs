@@ -1,6 +1,11 @@
 """One timeline read calls mentions once per stored full post, reuses a cached
-None as unextracted, and still reads a page row the memo did not cover (synthetic)."""
+None as unextracted, still reads a page row the memo did not cover, and keeps
+only the page's payloads alive (synthetic)."""
+import gc
+import weakref
 from collections import Counter
+
+import pytest
 
 import drug_timeline
 from test_drug_timeline import corpus, current, view_of
@@ -56,3 +61,52 @@ def test_a_page_row_outside_the_memo_falls_back_to_a_fresh_read(corpus, monkeypa
     assert calls[3] == 1 and calls[1] == 1
     assert [item["message_id"] for item in report["items"]].count(3) == 1
     assert report["coverage"]["stored_posts"] == 2
+
+
+class _Meds(list):
+    """A weakref-able mention list."""
+
+
+def test_a_long_history_keeps_only_the_page_payloads_alive(corpus, monkeypatch):
+    for mid in range(1, 31):
+        current(corpus, mid, [{"name": f"キラナ{mid}", "subject": "patient"}])
+    corpus.db.commit()
+    real = drug_timeline.mentions
+    payloads, alive = [], []
+
+    def tracked(reader, mid, *, cfg=None):
+        result = real(reader, mid, cfg=cfg)
+        if result is None:
+            return None
+        meds = _Meds(result[1])
+        payloads.append(weakref.ref(meds))
+        return result[0], meds
+    real_change = drug_timeline.change_details
+
+    def counting(*args):
+        if not alive:
+            gc.collect()
+            alive.append(sum(ref() is not None for ref in payloads))
+        return real_change(*args)
+    monkeypatch.setattr(drug_timeline, "mentions", tracked)
+    monkeypatch.setattr(drug_timeline, "change_details", counting)
+    report = drug_timeline.timeline(view_of(corpus), 1, limit=2)
+    assert len(payloads) == 30 and len(report["items"]) == 2
+    assert alive[0] <= 3              # the two page rows and at most the last read
+    assert report["coverage"]["stored_posts"] == 30
+    assert report["coverage"]["no_current_extraction"] == 0
+
+
+def test_request_errors_keep_their_codes_and_now_precede_every_mentions_read(corpus, monkeypatch):
+    _seed(corpus)
+    calls = _counted(monkeypatch)
+    corpus.db.execute("DELETE FROM patients WHERE project_id=1")
+    corpus.db.commit()
+    with pytest.raises(ValueError, match="^unknown_project$"):
+        drug_timeline.timeline(view_of(corpus), 1)
+    corpus.ensure_patient(1)
+    with pytest.raises(ValueError, match="^bad_limit$"):
+        drug_timeline.timeline(view_of(corpus), 1, limit=0)
+    with pytest.raises(ValueError, match="^cursor_scope_or_generation_changed$"):
+        drug_timeline.timeline(view_of(corpus), 1, cursor="not-a-cursor")
+    assert not calls

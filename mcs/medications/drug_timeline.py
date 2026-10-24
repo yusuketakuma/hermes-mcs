@@ -143,10 +143,6 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
     if since is not None and until is not None and since > until:
         raise ValueError("bad_period")
     all_rows = view.db.execute(sql, params).fetchall()
-    # One read per stored full post; a cached None (unextracted) is a hit, not a miss.
-    memo = {r["message_id"]: mentions(view.reader, r["message_id"], cfg=cfg)
-            for r in all_rows if r["body_state"] == "full"}
-    missing = sum(result is None for result in memo.values())
     incomplete = sum(r["body_state"] != "full" for r in all_rows)
     patient = view.db.execute("SELECT fetch_state,history_floor FROM patients WHERE project_id=?",
                               (project_id,)).fetchone()
@@ -172,6 +168,16 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
     from mcs_queries import UNKNOWN_TIME
     page = view._page(sql, params, [f"COALESCE(m.posted_at_ts,{UNKNOWN_TIME})", "m.message_id"],
                       ["drug_timeline", project_id, name, since, until], limit, cursor)
+    # One read per stored full post, in stored order, after the page is known so only
+    # page rows keep their payload; a cached None (unextracted) is a hit, not a miss.
+    on_page = {row["message_id"] for row in page["items"]}
+    memo, missing = {}, 0
+    for r in all_rows:
+        if r["body_state"] == "full":
+            result = mentions(view.reader, r["message_id"], cfg=cfg)
+            missing += result is None
+            if r["message_id"] in on_page:
+                memo[r["message_id"]] = result
     items = []
     matching_pending = 0
     for row in page["items"]:
