@@ -4,12 +4,26 @@
 人承認・定期実行・監視・更新・復旧をhermes-mcsだけで動かします。
 既存の設定はモード未指定なら`hermes`を維持します。
 
-## 2026-10-04追記: 共通入口と未確認の境界
+## 初めて導入する場合
 
-[共通CLI](../../mcs/ops/mcs_cli.py)は導入前の`sh scripts/mcs install --mode standalone`、
-導入後の`mcs setup`・`mcs doctor --json`・`mcs update plan`を提供します。
-下記の`install.sh --mode standalone`、独立venvの`mcs_setup.py`、
-`python -m mcs_standalone`による既存手順は保持します。
+今回の初回受入候補はmacOS・Apple silicon・Slackのstandaloneです。正式対応や新しいMacでの受入完了を示すものではなく、既存のHermes設定とinstallerの既定値は維持します。
+[能力・有効条件と受入の状況](INSTALLATION.md#capabilities-acceptance)は導入ガイドの単一表を参照してください。
+
+[はじめての導入ガイド](EASY_SETUP.md)でMacの準備とリポジトリの取得を済ませ、
+`./install.sh`の連携方式で`2) MCS 単独で使う`を選びます。
+Hermes Agentと連携する標準の導入は`1)`です。独立実行ではHermesを導入せず、
+MCS専用の実行環境がSlack・Discordの接続と定期処理を担当します。
+LINE WORKSの通知先は、どちらの方式でも後の初期設定で選びます。
+
+[共通CLI](../../mcs/ops/mcs_cli.py)から導入する場合は、取得したリポジトリのルートで
+`sh scripts/mcs install --mode standalone`を使えます。
+導入後は`~/.local/bin/mcs setup`で初期設定、`~/.local/bin/mcs doctor`で診断、
+`~/.local/bin/mcs update`で対話形式の更新案内を開きます。
+既存の`install.sh --mode standalone`、独立venvの`mcs_setup.py`、
+`python -m mcs_standalone`による管理手順は下記のとおり利用できます。
+
+## 導入・診断と実機確認の境界
+
 standaloneの外部bootstrap applyはhostの協調停止を駆動できず阻害されるため、
 共通入口の提供を外部apply対応の完了と扱いません。
 
@@ -26,11 +40,17 @@ macOSの前提条件は[インストールガイド](INSTALLATION.md#1-共通の
 ```bash
 ./install.sh --mode standalone --preflight
 ./install.sh --mode standalone
+```
+
+installer内で初期設定を完了した場合は再度initを実行せず、下の診断へ進みます。後回し・中断した場合だけ`~/.local/bin/mcs setup`で再開します。従来の直接入口`$HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py init --runtime-mode standalone`も利用できます。
+
+```bash
 PY="$HOME/.mcs/venv/bin/python3"
-$PY mcs/ops/mcs_setup.py init --runtime-mode standalone
 $PY mcs/ops/mcs_setup.py check
 $PY -m mcs_standalone status
 ```
+
+MCSの収集前にはChromeのログインとCDPポート`:9333`も準備します。[導入ガイドの動作確認](INSTALLATION.md#a-5-動作確認)の冒頭を確認し、同節のHermes用Pythonを使う例では上の`$PY`に読み替えます。収集・通知・既読化の確認は、許可した範囲で行います。
 
 installerはHermesを取得・設定せず、独立venvへ[公式SDKの固定バージョン](../../deployment/requirements-standalone.txt)を導入します。
 ローカルLLM、独立host、repo外の復旧watchdogも登録します。
@@ -44,7 +64,7 @@ installerはHermesを取得・設定せず、独立venvへ[公式SDKの固定バ
 
 Slackは[Slack接続設定](INSTALLATION.md#付録b-slack-接続設定hermes-agent-リポジトリより転記)のApp作成・権限を使い、
 Socket Modeを有効にします。Bot tokenとApp-level tokenを非表示入力で登録します。
-Hermesのmanifest生成・profile設定・gateway起動は使いません。
+付録BのStep 1は`From scratch`を選び、Step 2〜7と9で権限・トークン・ユーザーID・Botの招待を準備します。Step 8のHermes用`.env`設定は使わず、本ガイドの専用ファイルへ登録します。Hermesのmanifest生成・profile設定・gateway起動は使いません。
 
 Discordは[Discord接続設定](INSTALLATION.md#付録a-discord-接続設定hermes-agent-リポジトリより転記)のBot作成・権限を使い、
 Bot tokenを非表示入力で登録します。カード・添付・modal・本人確認・`/mcs`は既存の処理契約を使います。

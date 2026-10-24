@@ -5,6 +5,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 1.0.25の推奨Hermes agentは **[公式v0.22.2](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.2)をベースにしたMCS companion** です。導入とCIは同じcommit `2c08ca7ade8f867d07e4bff6581be54405b0c9d0` に固定します。MCS用の本人確認コンテキストと認証設定の互換性を維持した版を使います。既存checkoutの移行は更新手順に従います。この固定版は依存の既知の問題に対処した版です。配布元からの固定SHAの取得と、実SDKによる合成統合テストを別々に確認しています。実サービスへの接続確認は導入後の診断で行います。本番への反映は更新手順で別途行います。
 
 **初めての方は[日本語の対話形式で進める手順](EASY_SETUP.md)を先にお読みください。** このページは設定の詳細と管理担当者向けの補足です。
+今回の初回受入候補であるmacOS・Apple silicon・Slackのstandaloneは、[独立実行ガイド](STANDALONE.md)から進みます。下記Path Aの最短手順はHermes連携用です。installerの既定値と既存の導入方式は変更しません。
 
 このガイドは現行のinstall/update/setup/doctorと復旧手順に対応します。1.0.25で日本語の対話入口を追加しました。各版の受入状態は版別の受入票で確認してください。
 1.0.25の受入結果は[1.0.25のリリース受入票](../releases/v1.0.25/ACCEPTANCE_1.0.25.md)、1.0.26の受入と公開前の残件は[1.0.26のリリース受入票](../releases/v1.0.26/ACCEPTANCE_1.0.26.md)、版ごとの記録一覧は[リリース記録](../releases/README.md)にあります。過去版の検証記録は[1.0.21のリリース受入票](../releases/v1.0.21/ACCEPTANCE_1.0.21.md)、実機受入の進め方は[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)を参照してください。
@@ -104,9 +105,9 @@ CDP ポート `:9333` 付きで起動してください（§A-5）。
 
 hermes-mcs の新規導入手順。導入形態は次の2つ:
 
-- **Path A — hermes-agent アドオン**（推奨・全機能）: 収集→SQLite→
+- **Path A — hermes-agent アドオン**（installerの既定）: 収集→SQLite→
   Discord/Slack 通知＋対話カード。`./install.sh` が依存一式を導入する
-- **Path B — スタンドアローン**（Hermesなし・全MCS機能）: 収集・保存・閲覧・
+- **Path B — スタンドアローン**（Hermesなし）: 収集・保存・閲覧・
   抽出・Slack/Discord/LINE WORKS通知と操作・定期実行・監視・更新を独立して実行する。
   `./install.sh --mode standalone`で導入する。[専用手順](STANDALONE.md)を参照
 
@@ -115,34 +116,55 @@ hermes-mcs の新規導入手順。導入形態は次の2つ:
 B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場合。
 §3 の独立モードでも、接続先の設定と認証情報を登録すれば Slack/Discord の配送・カードを使える。
 
-| 機能 | A: hermes アドオン | B: スタンドアロン |
-|---|---|---|
-| 未読収集 → SQLite → `mcs_view` 閲覧 | ✓ | ✓ |
-| 全履歴アーカイブ・FTS5 検索 | ✓ | ✓ |
-| 構造化抽出（ルール + ローカルLLM） | ✓ | ✓ |
-| アラートシグナル（検出） | ✓ | ✓ |
-| Discord/Slack への通知配送 | ✓ — Hermes公式接続 | ✓ — 独立公式SDK接続 |
-| Slack/Discordの対話カード・`/mcs` | ✓ | ✓ |
-| LINE WORKSへの通知・本人1:1での操作 | ✓ — 独立接続を設定 | ✓ — 独立接続を設定 |
-| semantic v4（shadow/enforce） | ✓ | ✓ |
-| 定期実行の仕組み | hermes cron + launchd | 独立hostをnative supervisorで常駐 |
-| `mcs_setup.py check` | 全項目検証 | 独立モードの全必須条件を検証 |
+<a id="capabilities-acceptance"></a>
+
+### 1.1.0の能力と確認状況
+
+外部利用は個別に書面契約した顧客が対象です。最初の受入候補はmacOS・Apple silicon・Slackのstandaloneで、installerの既定値変更や正式対応・実機受入済みを意味しません。正式なmacOS対応版・最小RAM・同時提供する構成は未確定です。問い合わせ窓口は当面空欄です。診断送信・遠隔支援も1.1.0の必須対象として追跡し、未実装を理由に対象外とはしません。
+
+「実装済み」は機能の入口があるという意味です。合成確認・実接続・医学的品質・顧客提供の受入は分けます。今回の対象確認は初期設定・通知復旧等の12モジュール668件が合格し、固定候補のCodeRabbit確認は15/15ファイル・指摘0でした。前の検証件数との合算や、全体suite・全機能の合格を意味しません。各行の残条件と[1.1.0作業計画](../roadmap/v1.1.0-public-launch-plan.md)を併せて確認します。
+
+| 能力・方式 | 既定・有効条件 | 実装 | 今回確認した範囲 | 残る受入・根拠 |
+|---|---|---|---|---|
+| 1. OS・CPU・メモリ | 初回候補はmacOS・Apple silicon。資源条件は次節 | 導入条件の検査あり | installer条件と版境界の合成確認 | 正式対応版・最小RAM・新Macでの負荷は未確定。[前提条件](#1-共通の前提条件) |
+| 2. 実行方式と定期実行 | 未指定はHermes、既存設定を保持。standaloneは明示選択 | AはHermes cron＋launchd、Bは独立host。収集・保存・解析・通知・操作の共通機能を提供 | 初期設定・モード選択・再開の対象合成確認 | 専用端末の常駐・再起動後復帰は未受入。[独立実行](STANDALONE.md) |
+| 3. Slack・Discord・LINE WORKS | 通知先・許可範囲・資格情報が必要。初回候補はSlack | AのSlack/DiscordはHermes接続、Bは独立SDK。両方式のLINE WORKSは専用接続・Callback・本人1:1操作 | 接続設定・所有者判定の対象合成確認 | 実SDK接続・実配信・全方式同等の受入は未完。[Slack準備](STANDALONE.md#slackとdiscordの接続準備)・[LINE WORKS](LINEWORKS.md) |
+| 4. 収集・保存・全履歴・検索 | 定期収集は10分間隔。Chrome/CDPとMCSセッションが必要。既読化は取得完了とsnapshot timestampの条件を維持 | SQLite保存・履歴取得・FTS5・`mcs_view`閲覧を両方式で提供 | 今回の設定・通知確認を、全MCS APIや全履歴の確認へ拡張しない | 新Macのログイン・取得・未読保持は別受入。[初回接続](#初回の専用chromeとセッション確認両モード共通)・[取得範囲](USER_GUIDE.md) |
+| 5. 通知・カード・タスク・シグナル | `card_thread`はinit既定ON。`reply_cards`は既定ONで、Slack/Discordかつ`card_thread=true`の場合だけ有効（LINE WORKS対象外）。旧カードの形式を保持。シグナル通知は`signals.notify`既定OFF | 原文・返信・添付、確認・担当、本人向け検索、タスク入力・確定、再確認候補を両方式で提供。Slack/Discordの`/mcs`も両方式で対応 | カード・親待ち・配送結果不明・復旧の対象合成確認 | 実配信・通知到着・実アプリ操作は未受入。タスクは人の確定、配送unknownは自動再送しない。[表示・操作](USER_GUIDE.md) |
+| 6. MCSスタンプ | MCS本人ID・1人の操作者・対話通知が揃うと省略時ON。`stamps.enabled=false`で無効。押下者取得は既定OFF | 投稿を指定した本人操作と承認記録で送信・取消 | 今回のカード確認を実MCSへの送信確認としない | 実送信・取消・未読保持・本人照合は別受入。[スタンプ契約](../specs/stamp-management.md) |
+| 7. ローカルAIの抽出・要約 | ローカルLLMを使う。`--no-llm`では別途準備が必要。未解析・処理待ち・失敗を表示。共有brokerは別の明示opt-in（`MCS_LLM_ADMISSION`）で既定OFF | ルール抽出とローカルLLM抽出・要約を両方式で提供 | モデルファイル整合と対象制御の合成確認 | 実モデルの速度・メモリ・生成品質は未測定。医療判断の確定ではない。[抽出の範囲](USER_GUIDE.md) |
+| 8. 患者コンテキスト・原記録の閲覧 | `patient_context_nightly`の生成・限定閲覧は省略時ON。不正設定は停止。新着抽出への`patient_state_context`は別設定で既定OFF。登録薬剤・検査GETの`clinical_metadata`も既定OFF | 現行世代で全投稿を解析済みの患者を対象に作成。取得範囲・原文根拠とともに本人向け表示 | 設定・表示条件の対象合成確認 | 実生成・長期負荷・人手品質は未受入。未取得を記録なしとしない。[患者情報](USER_GUIDE.md#患者コンテキスト作成既定は有効) |
+| 9. Jev追加解析・canonical | `mode`・`summary_mode`・`loop_mode`・`extract_qc`は既定OFF、要求予算0。本文の外部送信には機能・対象・予算等の条件が必要 | 任意の追加解析経路あり。Jev非採用でもローカル抽出・患者コンテキストは残る | 今回の設定表示確認をJev実行や品質評価としない | canonical昇格・過去参照は未評価のまま有効化しない。brokerの送信制御とは別に判定する。[評価・公開条件](../specs/semantic-facts-v2-rollout.md) |
+| 10. 医薬品照合・公開薬情報 | 辞書は出所・SHA・承認へ束縛。公開マスターの薬品名・一般疾患だけを照会。TinyFishトークンなし時のみExa | 辞書照合・照会と限定Web経路を提供。患者本文や私有辞書をWebへ送らない | Exa限定実接続で1品名のPMDA本文と1疾患のMinds検索を確認。3要求、医学的評価は`unreviewed` | 全品目・医学的品質・鮮度は未受入。強制再取得不可時の定期確認は未取得。[薬情報の条件](USER_GUIDE.md#公開医薬品情報の照会添付文書ガイドライン) |
+| 11. ローカル診断・共有表示 | `mcs doctor`の既定では追加probeなし。`--share`は固定項目の表示と手動コピー | 通常doctorを維持し、設定値・患者件数・生例外等を除く共有JSONを追加 | 共有射影・不正入力・未知状態・既存終了コードの対象合成確認 | 手動コピーは自動送信や遠隔grantではない。`check`も選択方式の必須条件検査で、実配送の証明ではない。[診断共有](COLLECTION_DIAGNOSTICS.md#サポートへ共有する診断) |
+| 12. CSDCの接続監視 | 未登録・未同意は無効。監視は専用同意と登録が必要 | MCSはR1自社監視とR2/R3顧客鍵保管・公開パッケージinventoryの候補実装。heartbeatは送信専用で命令受信なし | R3固定候補の合成416件と独立再現5件が合格。実顧客接続の確認とは別 | 初回自動接続・中央顧客分離の受入・専用実機受入は未完。[R1の境界](SDC_SELF_MONITORING.md) |
+| 13. 診断の自動送信 | 1.1.0必須。監視とは別同意、未同意はOFF | ERR系列は未実装。ローカル`--share`を送信機能とはしない | 外部送信の合成・実接続受入は未完 | 中央契約・保存/保持・顧客分離とMCS射影の一致が必要。[ERR計画](../roadmap/v1.1.0-public-launch-plan.md#err-01-双方の固定診断イベント契約) |
+| 14. 遠隔支援・限定再起動 | 1.1.0必須。案件・顧客同意・署名・短寿命grant・既存操作所有者が必要 | R4a定型診断・R4b再起動は未実装。schema/vectorは中央側で策定予定 | 合成・実署名・顧客環境の受入は未完 | ローカルの人承認をremote grantへ流用しない。R4cは後段計画、R1へ命令を混ぜない。[SUP計画](../roadmap/v1.1.0-public-launch-plan.md#sup-01-顧客担当者端末の支援許可契約) |
+| 15. バックアップ・端末復元 | ローカル静的DBは日次・7世代。暗号化offsiteの`backup.enabled`は既定OFF、鍵・独立receipt・保持等を明示設定 | 日次コピー・暗号化・検証・訓練・復元holdの入口あり | 今回の対象確認は媒体喪失・端末喪失の手動訓練ではない | 添付本体・設定・Keychain・Chrome profile・配送journalはbundle外。別保管鍵/媒体/receiptと復旧範囲の受入が必要。[バックアップ](BACKUP.md) |
+| 16. 更新・中断復旧・rollback | 既存の計画・確認・lock・互換判定を使用。DB復元等の権限を追加しない | 共通CLIと独立復旧入口、方式ごとのプロセス管理あり | モデル整合・初期化・配送復旧の対象合成確認 | 対応更新元と専用環境のapply/rollbackは未受入。固定候補の差分影響を照合する。[更新手順](UPGRADE_AGENT.md) |
+
+実装上の既定値は各機能の設定・仕様を正本とし、この表で変更しません。顧客契約・能力表の整理、合成検証、実機受入、公開・配備は別々の完了判定です。
 
 ## 1. 共通の前提条件
 
 | 項目 | 要件 |
 |---|---|
 | OS | macOS 13 以降（Keychain・launchd を使用。他 OS は収集本体のみ手動で動くが未検証） |
+| CPU・メモリ | ローカルAIはApple siliconを推奨。installerはarm64以外では警告しますが、性能や正式対応を保証しません。RAMの最低値・推奨値は未測定で、installerにRAM容量の合否判定はありません |
 | 実行ユーザー | 普段使いのユーザー。`install.sh` は root / `sudo` 実行を拒否する |
 | Xcode Command Line Tools | `xcode-select --install`（git と Homebrew が必要とする） |
 | Homebrew | `brew` が使えること（Path A で `--no-brew` を使わない場合） |
-| Python | 事前準備は不要 — Path A は `install.sh` が `python@3.14` を導入し、hermes-agent の venv（3.14、`<3.15`）を作る。`mcs_setup.py` 等の実行は Python ≥3.14 が必要で、macOS 標準の `/usr/bin/python3`（3.9 系）では動かない |
+| Python | `install.sh` は両形態でPython 3.14系（`<3.15`）の実行環境を用意する。Hermesはhermes-agentのvenv、独立モードはMCS専用venvを使う。`--no-brew`では必要なPythonを別途準備する。通常の実行・診断はPython ≥3.14が必要。更新前のPython 3.10互換は移行用の限定経路であり、通常動作の対応下限ではない |
 | SQLite | 定期ジョブ・復旧 watchdog を実際に動かす Python がリンクする SQLite が WAL-reset 修正済みであること: 3.51.3 以降、または 3.50 系は 3.50.7 以降・3.44 系は 3.44.6 以降。`sqlite3` コマンドの版ではなく、その Python の `sqlite3.sqlite_version` で判定する。macOS 標準 `/usr/bin/python3` の SQLite（3.51.0 など）は対象外のため、復旧 watchdog には `--recovery-python` で安全な独立 Python を指定するか `--no-recovery` を使う。影響版・版不明は `services`・`update`・installer stage 6 が変更前に停止する |
 | Google Chrome | MCS にログインしたプロファイルで CDP ポート `:9333` を使う |
-| ディスク | 約 12 GB（LLM モデル約 5.7 GB + DB・添付・ログ。`--preflight` が確認する） |
+| ディスク | `--preflight`の導入前閾値は通常12 GB、`--no-llm`またはモデルファイルが既存なら6 GB。モデル約5.7 GBは固定版を別途取得する。閾値は長期運用の必要容量ではなく、DB・添付・ログ・バックアップは利用量に応じた余裕が必要 |
 | MCS アカウント | ログイン ID とパスワード（自動再ログイン `auto_login` で使用） |
 | TYPESAFE_API_KEY | semantic/Jev 連携を使う場合のみ（`~/.mcs/.env` に保存） |
 | 通知先アプリ | Slack app・Discord botは両形態で作成・権限設定（付録A/B）。Path Bでは[独立モード](STANDALONE.md#slackとdiscordの接続準備)へ認証情報を登録する。LINE WORKS Botは両形態で[独立接続](LINEWORKS.md)を設定 |
+
+導入時の取得物と運用中の通信は別です。基本ツールはHomebrew、Python依存はPyPI、Hermes連携本体はGitHub、モデルはHugging Faceから必要に応じて取得します。モデル・Chrome・通知SDKはこのリポジトリへ同梱していません。`--no-llm`はモデル取得とAI常駐の設定を省略しますが、AIの処理が利用可能になったことを意味しません。
+
+上の表は実装上の導入条件です。合成installer・版境界テストの成功と、新しいMacでの導入・通知到着・実モデルの速度やメモリの受入は区別します。1.1.0の正式な提供構成は[作業計画](../roadmap/v1.1.0-public-launch-plan.md)で決定・受入を追跡しています。
 
 ## 2. Path A — hermes-agent アドオン（全機能）
 
@@ -352,10 +374,52 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 
 ### A-5. 動作確認
 
-Chrome を MCS にログインしたプロファイルで CDP ポート `:9333` 付きで
-起動し、`curl -sf -m 3 http://127.0.0.1:9333/json/version` が JSON を返す
-ことを確認します。以下は実データの取得・通知・既読化を伴うので、実行する
-範囲を決めてから進めます。
+#### 初回の専用Chromeとセッション確認（両モード共通）
+
+初回は、専用プロファイルの準備・本人のログイン・CDPの稼働・MCSセッションへの到達・収集を別々に確認します。ソフトの導入やCDPの応答だけでは、MCSへ接続済みとは扱いません。CDPも保存済みトークンもない状態では初期認証が`bootstrap_error`で止まるため、自動再ログインがChromeを準備することを前提にしません。
+
+CDPは同じMacの別ユーザーからも到達できるため、他にログイン可能なアカウントがある、または確認できない環境では、以下のCDP起動・セッション確認へ進まず管理者に相談します。`manual_required:multi_user_host`が出た場合は停止を保持します。専用OSユーザーを追加しただけで解消したとせず、アカウントの削除や安全ゲートの解除で回避しません。
+
+1. 導入時に選んだMCS保存先の`chrome-profile`を専用プロファイルとして使います。普段のChromeプロファイルをコピーしません。次のplaceholderをその絶対パスへ置き換えます。すでに同じプロファイルのChromeが動いている場合は重ねて起動せず、本人が保存中の作業を確認してから対処します。
+
+   ```bash
+   MCS_CHROME_PROFILE="/absolute/path/to/mcs-root/chrome-profile"
+   mkdir -p "$MCS_CHROME_PROFILE"
+   chmod 700 "$MCS_CHROME_PROFILE"
+   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+     --remote-debugging-port=9333 --user-data-dir="$MCS_CHROME_PROFILE" \
+     --no-first-run --no-default-browser-check \
+     --disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel \
+     https://www.medical-care.net/authentication/login
+   ```
+
+2. 開いた専用Chromeで、本人がMCSへログインします。ID・パスワード・Cookie・トークンをチャットへ貼りません。MCSの画面を開けたことを確認し、ログイン操作の代行や秘密値の表示は行いません。
+3. 別のターミナルで`curl --noproxy '*' --max-redirs 0 -sf -m 3 http://127.0.0.1:9333/json/version`がJSONを返すことを確認します。これはChromeの稼働確認で、MCSセッションの有効性とは別です。
+4. MCSへの認証確認が許可された範囲で、同じcheckoutのルートから次を実行します。`PY`は導入時に選んだMCS用Pythonの絶対パスへ置き換えます。既存アダプターでセッションの可否だけを確認し、トークン・患者情報を表示せず、トークンキャッシュも保存しません。
+
+   ```bash
+   PY="/absolute/path/to/selected-mcs-python"
+   "$PY" - <<'PYSESSION'
+   import sys
+   sys.path.insert(0, "mcs")
+   import _mcs_path
+   from mcs_adapter import MCSAdapter
+   from mcs_contract import MCSError
+   adapter = MCSAdapter()
+   try:
+       adapter.bootstrap_token()
+       ok = adapter.check_session()
+   except MCSError as error:
+       print("MCS session: " + error.kind)
+       raise SystemExit(1) from None
+   print("MCS session: " + ("ok" if ok else "unavailable"))
+   raise SystemExit(0 if ok else 1)
+   PYSESSION
+   ```
+
+5. セッション確認が成功してから、承認した範囲の初回収集と通知到着を確認します。未実施・失敗なら、その段階を未確認として残します。standaloneは[独立モード](STANDALONE.md)のPythonを使います。
+
+以下のPath Aの例は実データの取得・通知・既読化を伴うため、その範囲が承認済みの場合だけ進めます。
 
 ```bash
 # 収集（手動で1回実行 — 以後は cron が定期実行）
@@ -730,6 +794,8 @@ token を serving profile の `.env` に自動登録する（§A-3）。
 防止）と `/mcs` コマンドのメッセージ照合に必要。
 
 ## 付録B: Slack 接続設定（hermes-agent リポジトリより転記）
+
+standaloneではStep 1の`From scratch`とStep 2〜7・9を使います。Step 8のHermes用設定は行わず、[独立モードの認証情報登録](STANDALONE.md#slackとdiscordの接続準備)へ進みます。以下のHermes用manifest・profile・gateway設定はPath A向けです。
 
 > 以下は `hermes-agent` リポジトリの
 > `website/docs/user-guide/messaging/slack.md` から転記。Hermes は

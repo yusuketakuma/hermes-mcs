@@ -5,7 +5,7 @@
 **MedicalCareStation（MCS）の記録を、自分のMacで収集・整理・検索。**
 **Slack（推奨）**の通知カードから、連絡の確認、担当の記録、タスクの作成までつなげます。
 在宅医療・介護のチームで交わされた相談や経過を、あとからたどるためのローカルシステムです。
-Slack・DiscordはHermes公式接続、[LINE WORKS](docs/guides/LINEWORKS.md)は独立した独自アダプターを使います。
+Slack・DiscordはHermes連携または独立接続、[LINE WORKS](docs/guides/LINEWORKS.md)は独立した独自アダプターを使います。
 Hermesを入れない[スタンドアローンモード](docs/guides/STANDALONE.md)では、Slack・Discordの直接接続と共通の操作経路を選べます。接続先SDKと実機運用の受入は別に確認します。
 LINE WORKSでは同じ要約・原文・添付をトークルームの連続投稿で配信します。
 Slack・Discordでは、元の投稿をチャンネルのカードに、後から届いた返信を1件ずつのカードとして元の会話のスレッドに表示します。
@@ -37,6 +37,7 @@ MCSサーバーの負荷対策として、自動取得の間隔を5分から10�
 
 **通知先とカード操作はSlackを推奨します。** 要点の確認からタスクの確定・再確認候補まで、8画面で紹介します。
 掲載画像の名前・投稿・数値はすべて架空です。実データや実投稿の匿名化例は使用していません。現行実装に基づく説明図で、実画面のキャプチャではありません。
+[導入前に資格情報なしで画面をたどる](docs/screenshots/slack-gallery/README.md#導入前に画面をたどる)案内では、原文・返信・添付・スタンプと、配送保留の文章シナリオを確認できます。
 
 ![Slackの全体像：チャンネルの元の投稿のカードと、スレッドに届いた返信のカード・添付を並べた画面例](docs/screenshots/slack-gallery/01-overview.png)
 
@@ -268,16 +269,18 @@ LINE WORKSではカードのボタンと本人との1:1トークの `mcs JSON` �
 ## クイックスタート
 
 **導入前提:** macOS 13以降、普段のユーザー（sudo不要）、Xcode Command Line Tools、Homebrew、空き約12GB、利用権限のあるMCSアカウント。Pythonはインストーラーが用意します。
+今回の初回受入候補はmacOS・Apple silicon・Slackのstandaloneです。下の例はこの方式を明示します。正式対応・実機受入は別途確認し、既存環境の方式は維持します。
+[能力・既定条件・確認済み範囲・残る受入](docs/guides/INSTALLATION.md#capabilities-acceptance)は導入ガイドの単一表で確認してください。
 
 ```bash
 git clone https://github.com/yusuketakuma/hermes-mcs.git
 cd hermes-mcs
-./install.sh --preflight   # 読み取り専用の事前チェック
-./install.sh               # 依存一式を導入。途中で止まったら修正して再実行
+./install.sh --mode standalone --preflight   # 読み取り専用の事前チェック
+./install.sh --mode standalone               # 依存一式を導入。途中で止まったら修正して再実行
 ```
 
 事前チェックの「要対処」に表示される`対処:`を確認し、`導入を妨げる問題 0件`になってから導入します。
-初回の`./install.sh`は、Hermes経由かHermesなし（[スタンドアローン](docs/guides/STANDALONE.md)）かを尋ね、導入内容を確認してから進みます。`--mode standalone`で直接指定もできます。
+方式を省略した初回の`./install.sh`は、Hermes経由かHermesなし（[スタンドアローン](docs/guides/STANDALONE.md)）かを尋ねます。Enterの既定は従来どおりHermesです。Hermes連携を選ぶ場合は、上の2コマンドを`--mode hermes`で実行します。
 導入後は、そのまま初期設定へ進むか、後で行うかを選べます。後で行う場合は、完了画面に表示される設定コマンドを使います。
 初期設定の推奨コースは必要な項目を順番に案内し、詳細コースでは全項目を確認できます。分からない必須情報は中止して確認できます。HermesモードのSlack/DiscordではHermesとの同期も行います。[初めての導入・更新・復旧](docs/guides/EASY_SETUP.md)に操作の流れをまとめています。
 本体の初回設定後は、ブラウザーの準備など診断に残った項目を解消します。LINE WORKSの認証・Callback・常駐設定と再診断は[接続ガイド](docs/guides/LINEWORKS.md)で続けます。
@@ -293,7 +296,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 | 次に進む先 | 内容 |
 |---|---|
-| [Slackを設定する（推奨）](docs/guides/INSTALLATION.md) | Slack app・接続・カード操作・許可ユーザーの設定 |
+| [standaloneのSlackを設定する](docs/guides/STANDALONE.md#slackとdiscordの接続準備) | Slack app・接続・許可範囲。Hermes連携は[導入ガイド](docs/guides/INSTALLATION.md)へ |
 | [LINE WORKSを設定する](docs/guides/LINEWORKS.md) | 独自接続アダプター・秘密値入力・Callback・許可範囲の設定 |
 | [Hermesなしで使う](docs/guides/STANDALONE.md) | `install.sh --mode standalone`・Slack/Discordの直接接続・切り替え |
 | [導入ガイド](docs/guides/INSTALLATION.md) | 最短手順・成功の目安・通知先の設定・トラブル対応 |
@@ -452,6 +455,6 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 ## ライセンス
 
 Proprietary — All Rights Reserved。
-利用・改変はリポジトリ管理者の明示許可に従ってください（[LICENSE](LICENSE)）。
+1.1.0からの外部利用は、リポジトリ管理者と個別契約した顧客を対象とします。利用者・導入先・用途・改変や再配布の可否は書面の個別契約に従います。このREADME自体は利用許諾ではありません（[LICENSE](LICENSE)）。
 
 開発者向け: [責務別のコード配置・依存・移植範囲](docs/development/REPOSITORY_STRUCTURE.md)。

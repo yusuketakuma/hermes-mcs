@@ -147,6 +147,8 @@ github.com / huggingface.co への疎通・既存 hermes-agent checkout・
 
 ## Phase 2 — 導入形態の選択【ユーザー確認】
 
+今回の初回受入候補はmacOS・Apple silicon・SlackのPath Bです。この候補が指定済みなら確認を繰り返さず、`--mode standalone`を明示してPhase 6へ進みます。既存設定と指定がある場合はそれを維持します。installerのEnter既定はHermesのままで、候補の選択を正式対応・実機受入済みとは扱いません。
+
 導入形態がまだ決まっていなければ、ユーザーに次を尋ねる:
 
 > 導入形態を選んでください:
@@ -383,9 +385,7 @@ blocker 一覧と launchd agent の状態は `check` で確認する:
 
 ### 5-5. 動作確認
 
-Chrome を MCS ログイン済みプロファイルで `--remote-debugging-port=9333`
-付きで起動し、`curl -sf -m 3 http://127.0.0.1:9333/json/version` が JSON を
-返すことを確認する。未起動ならユーザーの端末で起動を案内する。
+[専用Chromeとセッション確認](INSTALLATION.md#初回の専用chromeとセッション確認両モード共通)に従い、専用profile準備・本人ログイン・CDP稼働・MCSセッション・初回収集を別状態で確認する。CDP応答だけで認証成功とせず、CDPもtoken cacheもない初回の`bootstrap_error`を自動再ログイン待ちだけで解消すると仮定しない。`manual_required:multi_user_host`は停止を保持し、専用OSユーザー追加だけで解決扱いしない。
 実データの取得・通知・既読化が既存の承認範囲に含まれることを確認し、
 範囲外ならその操作の承認だけを得てから実行する。
 
@@ -408,15 +408,23 @@ $PY mcs/views/mcs_view.py status
 
 Hermesなしで全MCS機能を使用する経路です。[STANDALONE.md](STANDALONE.md)と
 INSTALLATION.md §B-1に従い、同じcheckoutから次を実行します。
+Slack・Discordを新しく接続する場合は、先に[アプリと許可範囲の準備](STANDALONE.md#slackとdiscordの接続準備)を確認します。Path AのHermes用manifest・profile・gateway設定は使いません。
 
 ```bash
 ./install.sh --mode standalone --preflight
 ./install.sh --mode standalone
+```
+
+installer内で初期設定を完了した場合は、次の`mcs setup`を繰り返しません。後回し・中断した場合だけ`~/.local/bin/mcs setup`で再開します。既存の直接入口は`$HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py init --runtime-mode standalone`です。
+設定後の診断と独立hostの状態は、同じcheckoutから確認します。
+
+```bash
 PY="$HOME/.mcs/venv/bin/python3"
-$PY mcs/ops/mcs_setup.py init --runtime-mode standalone
 $PY mcs/ops/mcs_setup.py check
 $PY -m mcs_standalone status
 ```
+
+Chromeは[両モード共通の初回準備](INSTALLATION.md#初回の専用chromeとセッション確認両モード共通)に従います。専用profile準備・本人ログイン・CDP稼働・MCSセッション・初回収集は別々に確認し、同節のPath A用Pythonではなく上の`$PY`を使います。収集・通知・既読化は承認した範囲でだけ確認します。
 
 導入・外部配信・既読化の承認は§0の実行契約に従います。既に承認された範囲は
 聞き直さず、未知のMCSログイン・通知先・操作ユーザー・プロジェクト範囲だけ確認します。

@@ -31,7 +31,7 @@
 | 抽出・意味解析を評価する | [意味解析の評価](specs/semantic-evaluation.md) · [封印候補の評価と昇格](specs/SEALED_CANDIDATE_EVALUATION.md) · [段階導入の記録](specs/semantic-facts-v2-rollout.md) · [評価基準と資産](../evaluation/README.md) |
 | リリースやREADMEを更新する | [変更記録の書き方](../changes/README.md) · [リリースノート規則](development/RELEASE_NOTES.md) · [README運用](development/README_MAINTENANCE.md) |
 | 実機へ配置する資産を調べる | [配備資産](../deployment/README.md) · [接続アダプター](../adapters/README.md) |
-| 今後の計画を確認する | [ロードマップ](ROADMAP.md) · [分野ごとの詳細計画](roadmap/) |
+| 今後の計画を確認する | [1.1.0の実装計画](roadmap/v1.1.0-public-launch-plan.md) · [ロードマップ](ROADMAP.md) · [分野ごとの詳細計画](roadmap/) |
 
 ロードマップの冒頭は現行コードと収録記録の確認先を示し、詳細計画は記載された基準版・日付での判断を保持します。実装・合成検証・公開・本番反映は別の状態です。受入票に公開や配備の完了証拠が含まれるとは限りません。
 

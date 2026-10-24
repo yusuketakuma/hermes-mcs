@@ -2,6 +2,12 @@
 
 この手順は、ローカルの運用者が、配送結果が`unknown`になった本文・添付等のpartを個別に確認するためのものです。チャットの操作ツールには公開していません。カード全体の復旧は従来の`control card_resolve`を使います。
 
+管理者は、保存された`data/health.json`の`cards.unknown_parts`で対象の配送IDとpart IDを確認できます。
+一覧は最大20件で、保存時点の情報です。載っていない対象を配送済み・0件とは判断せず、
+以下の公開snapshotと配送先の証拠で個別に確認してください。health全体には他の運用情報も含まれるため、
+外部やチャットへそのまま貼り付けないでください。`mcs doctor`のworker起動・復元保留の表示だけでは、
+個々のpartの配送結果は確定しません。
+
 ## 1. 保存された計画を読む
 
 公開snapshotを指定し、対象の配送IDとpart IDを照合します。
@@ -49,7 +55,11 @@ snapshotは保存時点の情報です。現行状態と異なれば適用時に
 | `edit_reference_missing` | 保存した投稿・ファイルIDが履歴にあるか |
 | `edit_thread_mismatch` | 対象投稿が保存済みスレッド内にあるか |
 | `edit_author_unverified` | 接続時に確認したBot自身の投稿か。ファイルの所有者だけでは確認不可 |
-| `edit_file_unverified` | ファイル名・容量・内容hashまたは不変ファイルの条件が一致するか |
+| `edit_file_name_mismatch` | 保存したファイル名と、同じファイルIDの現在の名前が一致するか |
+| `edit_file_size_mismatch` | 保存したバイト数と、同じファイルIDの整数の容量が一致するか。差だけで元のupload失敗とは判断しない |
+| `edit_file_hash_mismatch` | 保存した内容hashと明示されたremote hashが一致するか |
+| `edit_file_mode_unverified` / `edit_file_external_unverified` / `edit_file_editability_unverified` | hashが返らない場合に、hosted・外部ファイルでない・編集不可の条件を確認できるか |
+| `edit_file_info_unverified` / `edit_file_info_permission` | 同じファイルIDのメタデータを取得・検証できたか。権限不足を内容一致とは扱わない |
 | `edit_target_ambiguous` | 同じファイルを持つ更新先が複数ないか |
 | `edit_native_client_unverified` / `edit_timestamp_unverified` | 送信クライアント・対象時刻IDを検証できたか |
 
@@ -112,6 +122,13 @@ CLIは`version`・`cmd`・`human_confirmed`を付け、既存のcommand inboxへ
 適用時は最新のscope・hash・attempt・状態・journalを再照合します。`mark_not_sent`で計画を作り直す場合も、独立した復元保留や`update_failed`保留は解除しません。既存receiptのチャット向け表示も運用者限定のままです。
 
 `control card_resolve --confirm-human`も引き続きproject指定なしで使えます。どちらの復旧操作もprojectは保存済みrenderから確定し、入力で変更しません。
+カード本体の`card_resolve`では、Discordは従来どおり`transport`を省略し、`guild_id`を指定します。
+Slackは`transport=slack`と`team_id`、LINE WORKSは`transport=lineworks`と`team_id`を指定します。
+CLIが既存契約に従ってDiscord=1・Slack=2・LINE WORKS=3の版を付けるため、
+入力JSONへ`version`を追加しないでください。part用の`card_part_resolve`は全接続先で版1のままです。
+`card_resolve`の受付時にはsnapshot上のrenderの存在を追加条件にしません。
+復元でrenderやattemptが失われた場合も、適用時に既存の復元保留・保存scope・journalを照合します。
+受付できたことは、保留の解除や証拠の成立を意味しません。
 
 ## 4. 未発行のSlack通知を送らず取り消す
 

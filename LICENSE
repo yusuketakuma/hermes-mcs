@@ -2,10 +2,18 @@ Proprietary — All Rights Reserved
 
 Copyright (c) 2026 yusuketakuma
 
-This repository and its contents are private. No permission is granted
+Customer use from version 1.1.0 is subject to a separate written agreement
+with the repository owner. The agreement defines the permitted users,
+installations, purposes, and any other rights granted. This notice alone
+does not grant a trial, use, modification, or redistribution license.
+
+No permission is granted
 to use, copy, modify, merge, publish, distribute, sublicense, or sell
 copies of this software, in whole or in part, except with the explicit
 written permission of the repository owner.
+
+Third-party components and public reference data retain their own licenses;
+this notice does not replace those licenses.
 
 The software handles medical/care records. Any deployment or processing
 of real patient data is the responsibility of the operator and must
