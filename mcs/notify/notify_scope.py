@@ -300,11 +300,16 @@ def retired_transports(cfg) -> tuple[str, ...]:
 def layout_migration_counts(db) -> list:
     """Read-only counts of retained layouts and cards blocked by unknown parts."""
     return [dict(row) for row in db.execute("""
+        WITH unknown_cards AS (
+            SELECT DISTINCT r.card_id
+            FROM notification_render_parts p
+            JOIN notification_renders r USING(delivery_id)
+            WHERE p.state='unknown'
+        )
         SELECT c.transport,c.layout,c.delivery_state,COUNT(*) AS cards,
-               SUM(EXISTS(SELECT 1 FROM notification_render_parts p
-                   JOIN notification_renders r USING(delivery_id)
-                   WHERE r.card_id=c.card_id AND p.state='unknown')) AS unknown_parts
-        FROM notification_cards c GROUP BY c.transport,c.layout,c.delivery_state
+               SUM(CASE WHEN u.card_id IS NOT NULL THEN 1 ELSE 0 END) AS unknown_parts
+        FROM notification_cards c LEFT JOIN unknown_cards u ON u.card_id=c.card_id
+        GROUP BY c.transport,c.layout,c.delivery_state
         ORDER BY c.transport,c.layout,c.delivery_state""")]
 
 
