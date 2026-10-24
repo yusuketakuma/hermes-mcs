@@ -26,6 +26,12 @@ def reconcile(view, project_id, *, since=None, until=None, limit=50, cursor=None
                               "begin_date": period["begin_date"], "end_date": period["end_date"],
                               "information_acquired_at": structured["last_complete_at"]})
     unknown_names = sum(not isinstance(m["name"], str) or not m["name"].strip() for m in medicines)
+    # Per-structured-name values do not depend on the mention; compute them once.
+    references = [(medicine, drug_map.fold(medicine["name"]),
+                   drug_map.split_surface(medicine["name"])["base"],
+                   _identity(dictionary, medicine["name"]))
+                  for medicine in medicines
+                  if isinstance(medicine["name"], str) and medicine["name"].strip()]
     candidates = []
     for item in timeline["items"]:
         med = item["mention"]
@@ -58,16 +64,14 @@ def reconcile(view, project_id, *, since=None, until=None, limit=50, cursor=None
         name = med["name"]
         codes = _identity(dictionary, name)
         surface = drug_map.split_surface(name)
+        folded = drug_map.fold(name)
         comparisons = []
-        for medicine in medicines:
+        for medicine, reference_fold, reference_base, other_codes in references:
             reference = medicine["name"]
-            if not isinstance(reference, str) or not reference.strip():
-                continue
-            other_codes = _identity(dictionary, reference)
             # A shared textual base permits surfacing a strength/form discrepancy;
             # it does not establish official-code identity or clinical equivalence.
-            same_text = drug_map.fold(name) == drug_map.fold(reference)
-            same_base = bool(surface["base"]) and surface["base"] == drug_map.split_surface(reference)["base"]
+            same_text = folded == reference_fold
+            same_base = bool(surface["base"]) and surface["base"] == reference_base
             same_code = bool(codes & other_codes)
             if not (same_text or same_base or same_code):
                 continue

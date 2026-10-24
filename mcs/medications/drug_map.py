@@ -2,6 +2,7 @@
 
 from dataclasses import asdict, dataclass
 from collections.abc import Mapping
+from functools import cached_property
 from datetime import date
 import hashlib
 import json
@@ -127,13 +128,21 @@ class DrugMap:
     def approved(self) -> bool:
         return bool(self.source.approved_by)
 
+    @cached_property
+    def entries(self) -> Mapping[str, Entry]:
+        """Each identity once (the last alias hit wins, as the former per-call scans did).
+
+        Read-only and computed per instance; ``dataclasses.replace`` builds a fresh one.
+        """
+        return MappingProxyType({e.id: e for hits in self.aliases.values() for e in hits})
+
     def related_names(self, name: str, *, limit: int = 200) -> dict:
         """Expand exact official identities without erasing product strength or form."""
         if not valid_text(name) or type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("drug_map_related_argument")
         ref = self.resolve(name)
         codes = {c["code"] for c in ref["cands"]}
-        entries = {e.id: e for hits in self.aliases.values() for e in hits if e.id in codes}
+        entries = {code: e for code, e in self.entries.items() if code in codes}
         names = sorted({a for e in entries.values() for a in e.aliases})
         products = {p.medicine: p for e in entries.values() for p in e.products}
         return {"status": ref["status"], "candidate_only": True,
@@ -204,8 +213,7 @@ class DrugMap:
         """Compare validated dictionary identities; never infer clinical equivalence."""
         if not isinstance(other, DrugMap) or type(limit) is not int or not 0 <= limit <= 200:
             raise ValueError("drug_map_diff_argument")
-        before = {entry.id: entry for hits in self.aliases.values() for entry in hits}
-        after = {entry.id: entry for hits in other.aliases.values() for entry in hits}
+        before, after = self.entries, other.entries
         counts = {"added": 0, "removed": 0, "changed": 0, "display_changed": 0,
                   "kind_changed": 0, "aliases_changed": 0,
                   "new_ambiguous_aliases": 0, "expanded_ambiguous_aliases": 0}
@@ -255,13 +263,14 @@ class DrugMap:
 
     def resolve(self, name: str, i: int = 0) -> Ref:
         """Return identity candidates; official product/general names are exact-only."""
-        hits = self.aliases.get(fold(name), ())
+        folded = fold(name)
+        hits = self.aliases.get(folded, ())
         method = "alias"
         if not hits:
             hits = tuple(entry for entry in self.aliases.get(split_surface(name)["base"], ())
                          if entry.kind in ("ingredient", "class"))
             method = "stem"
-        generic = fold(name) in _GENERIC
+        generic = folded in _GENERIC
         status = ("generic" if generic else "ambiguous" if len(hits) > 1
                   else "generic" if hits and hits[0].kind == "class"
                   else "resolved" if hits else "unresolved")

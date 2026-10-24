@@ -47,10 +47,9 @@ def safe_alias(alias):
 
 def impact_snapshot(db, before, alias, target):
     """Bind aggregate effects to source generations without exporting post IDs/text."""
-    entries = {e.id: e for hits in before.aliases.values() for e in hits}
-    if target not in entries:
+    if target not in before.entries:
         raise ValueError("alias_target_or_collision")
-    after = replace(before, aliases={**before.aliases, alias: (entries[target],)})
+    after = replace(before, aliases={**before.aliases, alias: (before.entries[target],)})
     digest = hashlib.sha256()
     counts = {"posts": 0, "unextracted": 0, "mentions_changed": 0}
     for row in db.execute("SELECT message_id,content_hash,body_state FROM messages ORDER BY message_id"):
@@ -91,10 +90,10 @@ def proposal(db, cfg, alias, target):
     before, error = drug_map.configured(cfg)
     if error or before is None or not before.approved:
         raise ValueError("alias_dictionary_unavailable")
-    entries = {e.id for hits in before.aliases.values() for e in hits}
-    if target not in entries or before.aliases.get(folded):
+    if target not in before.entries or before.aliases.get(folded):
         raise ValueError("alias_target_or_collision")
-    spellings = [a for hits in before.aliases.values() for e in hits if e.id == target for a in e.aliases]
+    # The loader rejects duplicate ids, so every alias hit for target is this one Entry.
+    spellings = before.entries[target].aliases
     if not any(SequenceMatcher(None, folded, drug_map.fold(a)).ratio() >= 0.6 for a in spellings):
         raise ValueError("alias_not_drug_like")
     impact = impact_snapshot(db, before, folded, target)

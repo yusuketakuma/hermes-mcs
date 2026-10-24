@@ -143,8 +143,10 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
     if since is not None and until is not None and since > until:
         raise ValueError("bad_period")
     all_rows = view.db.execute(sql, params).fetchall()
-    missing = sum(mentions(view.reader, r["message_id"], cfg=cfg) is None for r in all_rows
-                  if r["body_state"] == "full")
+    # One read per stored full post; a cached None (unextracted) is a hit, not a miss.
+    memo = {r["message_id"]: mentions(view.reader, r["message_id"], cfg=cfg)
+            for r in all_rows if r["body_state"] == "full"}
+    missing = sum(result is None for result in memo.values())
     incomplete = sum(r["body_state"] != "full" for r in all_rows)
     patient = view.db.execute("SELECT fetch_state,history_floor FROM patients WHERE project_id=?",
                               (project_id,)).fetchone()
@@ -173,7 +175,9 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
     items = []
     matching_pending = 0
     for row in page["items"]:
-        result = mentions(view.reader, row["message_id"], cfg=cfg) if row["body_state"] == "full" else None
+        mid = row["message_id"]
+        result = (None if row["body_state"] != "full" else memo[mid] if mid in memo
+                  else mentions(view.reader, mid, cfg=cfg))
         if result is None:
             continue
         source, meds = result

@@ -807,13 +807,9 @@ def dirty_projects(ledger, *, now=None) -> list:
                 ledger.db, x["project_id"], now)]
 
 
-def rebuild_many(ledger, project_ids, dirty_only: bool = False,
-                 *, deadline: float | None = None) -> int:
+def rebuild_many(ledger, project_ids, *, deadline: float | None = None) -> int:
     if deadline is not None and time.monotonic() >= deadline:
         return 0
-    if dirty_only:
-        dirty = set(dirty_projects(ledger))
-        project_ids = [p for p in project_ids if p in dirty]
     n = 0
     for pid in project_ids:
         if deadline is not None and time.monotonic() >= deadline:

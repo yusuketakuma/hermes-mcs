@@ -18,8 +18,7 @@ def compare(before_path, before_pin, after_path, after_pin, *, adopted=None, lim
     adopted_codes = set()
     missing_metadata = False
     if adopted is not None:
-        entries = {e.id: e for hits in adopted.aliases.values() for e in hits}
-        for entry in entries.values():
+        for entry in adopted.entries.values():
             adopted_codes.update(entry.source_codes)
             missing_metadata |= not bool(entry.source_codes)
     counts, items, total, affected = Counter(), [], 0, 0
