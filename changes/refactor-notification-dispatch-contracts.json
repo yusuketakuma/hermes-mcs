@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "通知の送信・まとめ処理の重複を整理（利用者向けの挙動は変更なし）",
+  "summary": "通知の内容、送信の順序・再試行・保留の判定、エラー区分は変わりません。1日のまとめでのシグナル履歴の読取りと、緊急再通知の判定での初回記録の読取りを、それぞれ1回にまとめ、送信記録の読取りや添付ファイルの確認で重複していた処理を共通化しました。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "送信記録（progress）や内容（payload）を読めない場合は、従来どおり保留または progress_invalid として扱います。",
+    "カードで届ける通知（対話型・緊急・シグナル・後から届いた添付）は、従来どおり送信用の実行ファイルやテキストの送信先がなくても配信されます。",
+    "添付ファイルの照合値（sha256）が確認できない場合、直接送信は従来どおり送らずに失敗として扱います。照合値が文字列でない壊れた記録も、内部エラーではなくこの扱いになります。"
+  ],
+  "refs": ["mcs/notify/notify_flush.py", "mcs/notify/notify_digest.py", "mcs/notify/notify_urgent.py", "mcs/notify/notify_sender.py", "mcs/notify/presentation/present_lineworks.py"]
+}

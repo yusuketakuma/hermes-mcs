@@ -48,8 +48,8 @@ def face(containers, footer, op, cfg):
     """No silent mentions on LINE WORKS: configured names go in now; an
     update is a new post, so it is marked 🔄 更新版."""
     import notify_render
-    notify = (cfg or {}).get("notify")
-    names = ((notify if isinstance(notify, dict) else {}).get("lineworks") or {}).get("user_names")
+    import notify_scope
+    names = (notify_scope.notify_cfg(cfg).get("lineworks") or {}).get("user_names")
     footer = [dict(f, text=notify_render.lineworks_member_names(f["text"], names))
               if f.get("type") == "text" else f for f in footer]
     if op == "update":

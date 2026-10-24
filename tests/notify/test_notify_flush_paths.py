@@ -568,3 +568,58 @@ def test_attachment_followup_keeps_text_file_delivery_without_card_thread(
         assert not db.db.execute("SELECT 1 FROM notification_intent_batches").fetchone()
     finally:
         db.close()
+
+
+def test_card_routed_events_dispatch_without_exe_or_text_destination(monkeypatch):
+    import notify_parts
+    import notify_spool
+    events = [
+        {"event_id": 1, "kind": "new_messages", "route": "interactive"},
+        {"event_id": 2, "kind": "urgent_notice", "route": "interactive"},
+        {"event_id": 3, "kind": "signal", "route": "interactive"},
+        {"event_id": 4, "kind": "attachment_followup", "route": "text"},
+        {"event_id": 5, "kind": "new_messages", "route": "text"},
+    ]
+    for ev in events:
+        ev.update(project_id=1, payload="{}", attempts=0, progress=None)
+
+    class Outbox:
+        def outbox_due(self, limit):
+            return events
+
+        def is_archived(self, project_id):
+            return False
+
+        def outbox_mark(self, *args, **kwargs):
+            pytest.fail("no event may be marked failed without an exe or destination")
+
+    dispatched = []
+    monkeypatch.setattr(notify_flush, "_config", lambda: {})
+    monkeypatch.setattr(mcs_util, "hermes_exe", lambda *a: "/nonexistent/synthetic-hermes")
+    monkeypatch.setattr(notify_sender, "target", lambda cfg, kind: None)
+    monkeypatch.setattr(notify_parts, "late_attachment_thread", lambda cfg: True)
+    monkeypatch.setattr(notify_spool, "data_root", lambda ledger: "/nonexistent")
+    monkeypatch.setattr(notify_spool, "restore_pending", lambda root: None)
+    monkeypatch.setattr(notify_flush, "_dispatch_interactive",
+                        lambda ledger, ev, cfg, res: dispatched.append(ev["event_id"]) or True)
+    res = notify_flush.flush(Outbox())
+    assert dispatched == [1, 2, 3, 4]               # cards need neither the exe nor a text target
+    assert res["skipped"] == 1 and res["failed"] == 0   # the plain text event waits for the exe
+
+
+@pytest.mark.parametrize("stored", [None, "not-a-hash", "A" * 64])
+def test_direct_sender_refuses_an_unverified_attachment(tmp_path, monkeypatch, stored):
+    db = _synthetic_msg_ledger(tmp_path, [(1, "2026-09-24T08:00", None)])
+    try:
+        if stored is not None:
+            db.db.execute("INSERT INTO attachments(message_id,file_id,name,state,local_path,sha256) "
+                          "VALUES(1,'f1','synthetic.txt','downloaded','/synthetic/file',?)", (stored,))
+            db.db.commit()
+        ev = {"event_id": 1, "kind": "attachment_followup", "project_id": 1, "payload": "{}",
+              "attempts": 0, "progress": None}
+        monkeypatch.setattr(notify_flush, "_format_event",
+                            lambda ledger, event: ("synthetic", [("synthetic.txt", "/synthetic/file")]))
+        with pytest.raises(notify_sender.SendFailed, match="attachment_unverified"):
+            notify_flush._send_text(db, ev, {}, ["lineworks"], "lineworks:synthetic", {}, None)
+    finally:
+        db.close()

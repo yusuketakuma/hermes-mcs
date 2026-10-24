@@ -135,8 +135,8 @@ def _initial(db, event_id, mid):
     return json.loads(row[0]) if row else None
 
 
-def _base(db: sqlite3.Connection, row: sqlite3.Row, now) -> sqlite3.Row | None:
-    """First proven delivery of this message, not merely an accepted partial batch."""
+def _base(db: sqlite3.Connection, row: sqlite3.Row, now) -> tuple:
+    """(first proven delivery of this message, its captured initial) or (None, None); an accepted partial batch is not proof."""
     candidates = db.execute("""
         SELECT o.event_id,o.updated_at,
                CASE WHEN EXISTS(SELECT 1 FROM notification_intent_batches b
@@ -167,8 +167,8 @@ def _base(db: sqlite3.Connection, row: sqlite3.Row, now) -> sqlite3.Row | None:
     for base in candidates:
         initial = _initial(db, base["event_id"], row["message_id"])
         if initial is None or initial["hash"] == row["content_hash"]:
-            return base
-    return None
+            return base, initial
+    return None, None
 
 
 def _confirmed(db, mid):
@@ -306,7 +306,7 @@ def _eligible(
         return None, "source_identity_unknown"
     if not _time(row["created_at"]) or row["created_at"] > now:
         return None, "observation_time_unknown"
-    base = _base(ledger.db, row, now)
+    base, initial = _base(ledger.db, row, now)
     if base is None:
         return None, "initial_delivery_unproven"
     reason = _engagement(ledger.db, row, cfg, now)
@@ -314,9 +314,7 @@ def _eligible(
         return None, reason
     if history is None:
         history = _history(ledger.db, opts["mode"] == "shadow")
-    stage, reason = _stage(
-        row, base, history, opts, now,
-        _initial(ledger.db, base["event_id"], row["message_id"]), excluding)
+    stage, reason = _stage(row, base, history, opts, now, initial, excluding)
     if reason:
         return None, reason
     reason = _quota(row, history, opts, now, excluding)

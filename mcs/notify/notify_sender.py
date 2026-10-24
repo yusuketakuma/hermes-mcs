@@ -161,14 +161,18 @@ def _compose_body(content: str,
     return body
 
 
+# entry points that post directly (no hermes CLI between MCS and the platform)
+_DIRECT_ENTRIES = ("/lineworks_adapter/__main__.py", "/mcs_standalone/__main__.py")
+
+
 def send(argv: list[str], content: str,
           files: list[tuple[str, str]] | None = None,
           deadline: float | None = None,
           attachment_pins: dict[str, str] | None = None) -> None:
     """One chunk via `hermes send` (body on stdin; attachments as MEDIA:
     references — the adapter owns upload limits and mention policy)."""
-    if len(argv) > 1 and argv[1].endswith(
-            ("/lineworks_adapter/__main__.py", "/mcs_standalone/__main__.py")):
+    direct = len(argv) > 1 and argv[1].endswith(_DIRECT_ENTRIES)
+    if direct:
         sealed = []
         for name, path in files or []:
             size = 0
@@ -204,8 +208,7 @@ def send(argv: list[str], content: str,
     detail = (r.stderr or r.stdout or "").strip()[:400]
     if r.returncode == 2:
         raise SendUsage(detail or "hermes send usage error")
-    if r.returncode == 75 and argv[1:2] and argv[1].endswith(
-            ("/mcs_standalone/__main__.py", "/lineworks_adapter/__main__.py")):
+    if r.returncode == 75 and direct:
         # EX_TEMPFAIL from a direct sender: the platform provably
         # accepted nothing (failed before the post, or a definitive reject).
         exc = SendFailed(detail or "send not accepted")

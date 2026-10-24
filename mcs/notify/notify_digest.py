@@ -252,13 +252,18 @@ def _response_state(db, r, self_id, as_of) -> tuple:
     return replied, mine, f"自分の返信{reply}・{stamp}"
 
 
+_UNREAD = object()      # an omitted latest-signal read; {} is a real (empty) read
+
+
 def _addressed_unanswered(db, until, ok, room, self_id, signals_on,
-                          archived=frozenset()) -> list:
+                          archived=frozenset(), *, latest=_UNREAD) -> list:
     """自分宛で応答未観測: 既存シグナルと、本人userメンション後の返信・本人反応なし。
     アーカイブ済み患者の行はアクティブ患者の後に並べる。"""
     rows, signal_mids = [], set()
     if signals_on:
-        for c in mcs_signals.latest_signal_states(db).values():
+        if latest is _UNREAD:
+            latest = mcs_signals.latest_signal_states(db)
+        for c in latest.values():
             mids = ((c.get("evidence") or {}).get("message_ids") or []) if c else []
             if not (c and c["state"] == "open" and ok(c["project_id"])
                     and c["type"] == "pharmacist_request_unanswered" and mids):
@@ -311,13 +316,14 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on,
             *notes, *_listed(rows)]
 
 
-def _stale_open_unacked(db, now: float) -> list:
+def _stale_open_unacked(db, now: float, *, latest=_UNREAD) -> list:
     """[(key, latest content)] — open alert keys first detected more
     than STALE_ALERT_D days ago whose key no live card acknowledgement
     has ever covered. The open-since clock starts at the key's first
     signal_v1 row: a resolve+reopen keeps the original timestamp, which
     reads as 'this condition persists' rather than 'new alert'."""
-    latest = mcs_signals.latest_signal_states(db)
+    if latest is _UNREAD:
+        latest = mcs_signals.latest_signal_states(db)
     open_by_key = {k: c for k, c in latest.items()
                    if c and c["state"] == "open"}
     if not open_by_key:
@@ -414,13 +420,15 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     # are counted in the total but listed after active ones, marked
     by_type: dict = {False: {}, True: {}}
     stale_by: dict = {False: {}, True: {}}
+    # one read of the signal history serves every digest section
+    latest = mcs_signals.latest_signal_states(db) if signals_on else _UNREAD
     if signals_on:
-        for c in mcs_signals.latest_signal_states(db).values():
+        for c in latest.values():
             if c and c["state"] == "open" and ok(c["project_id"]) \
                     and c["type"] not in EXCLUDED_SIGNALS:
                 part = by_type[c["project_id"] in archived]
                 part[c["type"]] = part.get(c["type"], 0) + 1
-        for _key, c in _stale_open_unacked(db, until):
+        for _key, c in _stale_open_unacked(db, until, latest=latest):
             if ok(c["project_id"]):
                 part = stale_by[c["project_id"] in archived]
                 part[c["type"]] = part.get(c["type"], 0) + 1
@@ -465,7 +473,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         for p, m, u in urgent], fold=True)
     section(f"自分宛で返信の記録なし（直近{OWN_POST_DAYS}日）",
             _addressed_unanswered(db, until, ok, room, self_id, signals_on,
-                                  archived), fold=True)
+                                  archived, latest=latest), fold=True)
 
     per: dict = {}
     for r in rows:

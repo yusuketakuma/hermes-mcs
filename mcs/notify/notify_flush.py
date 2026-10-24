@@ -20,7 +20,6 @@ Send-time mode/generation checks live in semantic_send_gate.
 Audited summary presentation and provenance-preserving chunks live in
 semantic_render; this module owns delivery and resolves current config.
 """
-import hashlib
 import json
 import os
 import re
@@ -33,9 +32,9 @@ import semantic_send_gate
 import semantic_render
 import structured_view
 from mcs_queries import HOLD_PROGRESS_SET
-from mcs_util import CONF_PATH, html_to_text, load_config
+from mcs_util import CONF_PATH, file_sha256, html_to_text, load_config
 from mcs_requests import positive
-from notify_render import (SECTION_RULE, extraction_failed, signal_evidence,
+from notify_render import (SECTION_RULE, extraction_failed, patient_name, signal_evidence,
                            thread_stamp_row)
 import clinical_urgency
 TEXT_CHUNK_WIDTH = 1900
@@ -101,15 +100,12 @@ def _collect_files(att_map: dict, order: list[int],
             if not a["sha256"]:
                 skip(a, "未送信")
                 continue
-            h = hashlib.sha256()
             try:
-                with open(a["local_path"], "rb") as f:
-                    for block in iter(lambda: f.read(1024 * 1024), b""):
-                        h.update(block)
+                digest = file_sha256(a["local_path"])
             except OSError:
                 skip(a, "未送信")
                 continue
-            if h.hexdigest() != a["sha256"]:
+            if digest != a["sha256"]:
                 skip(a, "未送信")
                 continue
             fname = os.path.basename(str(a["name"] or a["file_id"] or "file"))
@@ -136,10 +132,7 @@ def _signal_text(ledger, payload: dict, latest: dict):
     lines = text.split("\n")
     pid = payload.get("project_id")
     if type(pid) is int and len(lines) > 1:
-        r = ledger.db.execute(
-            "SELECT patient_name FROM patients WHERE project_id=?",
-            (pid,)).fetchone()
-        name = r["patient_name"].strip() if r and r["patient_name"] else ""
+        name = patient_name(ledger.db, pid)
         if name:
             lines[1] = f"{name}（{lines[1]}）"
         _, m = signal_evidence(ledger.db, {**latest, "project_id": pid})
@@ -444,11 +437,8 @@ def _message_notice(ledger, ev, payload: dict):
 
 
 def _has_sent_progress(ev) -> bool:
-    try:
-        progress = json.loads(ev["progress"] or "{}")
-    except (ValueError, TypeError, RecursionError):
-        return False
-    return (isinstance(progress, dict)
+    progress = mcs_util.loads_dict(ev["progress"] or "{}")
+    return (progress is not None
             and type(progress.get("next")) is int and progress["next"] > 0)
 
 
@@ -461,11 +451,8 @@ def _send_never_began(ev) -> bool:
     raw = ev["progress"]
     if not raw:
         return True
-    try:
-        progress = json.loads(raw)
-    except (ValueError, TypeError, RecursionError):
-        return False
-    if not isinstance(progress, dict):
+    progress = mcs_util.loads_dict(raw)
+    if progress is None:
         return False
     if "invalid_progress" in progress:
         return False
@@ -494,11 +481,8 @@ def hold_event(ledger, ev, cfg, proven_undelivered=False,
     # guessed negative acknowledgement.
     if rescue and (proven_undelivered or _send_never_began(ev)) \
             and not _has_sent_progress(ev):
-        try:
-            payload = json.loads(ev["payload"])
-        except (ValueError, TypeError, RecursionError):
-            payload = None
-        if isinstance(payload, dict):
+        payload = mcs_util.loads_dict(ev["payload"])
+        if payload is not None:
             ids = payload.get("message_ids")
             mids = [mid for mid in ids if positive(mid)] if isinstance(ids, list) else []
             rescuable = (payload.get("rescue_of") is None and bool(mids)
@@ -593,11 +577,8 @@ def _send_marked(ledger, ev, i: int, sent_ids: list[str],
 
 def _progress(raw: str, count: int) -> tuple[int, list[str], str | None,
                                             int | None]:
-    try:
-        d = json.loads(raw or "{}")
-    except (ValueError, TypeError, RecursionError) as e:
-        raise ValueError("progress_invalid") from e
-    if (not isinstance(d, dict) or "invalid_progress" in d
+    d = mcs_util.loads_dict(raw or "{}")
+    if (d is None or "invalid_progress" in d
             or type(d.get("next", 0)) is not int):
         raise ValueError("progress_invalid")
     next_chunk = d.get("next", 0)
@@ -727,11 +708,8 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
     # An unknown send outcome is held before formatting: a stale/closed
     # source would otherwise suppress the event and lose the receipt.
     if ev["progress"]:
-        try:
-            early_progress = json.loads(ev["progress"])
-        except (ValueError, TypeError, RecursionError):
-            raise ValueError("progress_invalid") from None
-        if not isinstance(early_progress, dict):
+        early_progress = mcs_util.loads_dict(ev["progress"])
+        if early_progress is None:
             raise ValueError("progress_invalid")
         if early_progress.get("sending") is not None:
             hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
@@ -755,7 +733,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
         for _, path in files:
             hashes = {r[0] for r in ledger.db.execute(
                 "SELECT sha256 FROM attachments WHERE local_path=? AND state='downloaded'", (path,))}
-            if len(hashes) != 1 or not re.fullmatch(r"[0-9a-f]{64}", next(iter(hashes)) or ""):
+            if len(hashes) != 1 or not mcs_util.valid_hash(next(iter(hashes))):
                 raise notify_sender.SendFailed("attachment_unverified")
             attachment_pins[path] = next(iter(hashes))
     render_state = (semantic_send_gate.semantic_render_state(ledger.db, ev, _config())
@@ -907,11 +885,15 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     due = ledger.outbox_due(limit)
     import notify_parts
     thread_attachments = notify_parts.late_attachment_thread(cfg)
+
+    def card_route(e) -> bool:
+        """Delivered as a card: needs neither the hermes exe nor a text destination."""
+        return (_route(e) == "interactive" or e["kind"] in ("urgent_notice", "signal")
+                or bool(thread_attachments and e["kind"] == "attachment_followup"))
     exe = mcs_util.hermes_exe(cfg)
     exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(
-            _route(e) == "interactive" or e["kind"] in ("urgent_notice", "signal")
-            or (thread_attachments and e["kind"] == "attachment_followup")
+            card_route(e)
             or notify_sender.hermes_free(cfg, notify_sender.target(cfg, e["kind"])) for e in due):
         res["skipped"] = len(due)
         return res
@@ -925,15 +907,12 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             # not count as sent OR as a retryable failure (Oracle F2).
             # A send that began with unknown outcome is held instead,
             # so the receipt is counted as send_outcome_unknown.
-            try:
-                progress = json.loads(ev["progress"] or "{}")
-                if not isinstance(progress, dict):
-                    raise ValueError("progress_invalid")
-                began = progress.get("sending")
-            except (ValueError, TypeError, RecursionError):
+            progress = mcs_util.loads_dict(ev["progress"] or "{}")
+            if progress is None:
                 hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid", rescue=False)
                 res["failed"] += 1
                 continue
+            began = progress.get("sending")
             if began is not None:
                 hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
                 res["uncertain"] = res.get("uncertain", 0) + 1
@@ -943,9 +922,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             continue
         # A missing text destination is a pre-send configuration error;
         # no SQLite/restore lookup or native delivery can be attempted here.
-        if (exe_ok and _route(ev) == "text"
-                and ev["kind"] not in ("urgent_notice", "signal")
-                and not (thread_attachments and ev["kind"] == "attachment_followup")
+        if (exe_ok and _route(ev) == "text" and not card_route(ev)
                 and not notify_sender.target(cfg, ev["kind"])):
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
@@ -966,9 +943,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                 continue
             ledger.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (ev["event_id"],))
             ledger.db.commit()
-        if (_route(ev) == "interactive" or ev["kind"] in ("urgent_notice", "signal")
-                or (thread_attachments and ev["kind"] == "attachment_followup")) \
-                and _dispatch_interactive(ledger, ev, cfg, res):
+        if card_route(ev) and _dispatch_interactive(ledger, ev, cfg, res):
             continue
         if not exe_ok and not notify_sender.hermes_free(cfg, notify_sender.target(cfg, ev["kind"])):
             # no hermes exe — text events can't send, but an interactive
