@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401,E402
-from safe_io import atomic_write  # noqa: E402
+from safe_io import atomic_write, read_regular_nofollow  # noqa: E402
 
 SCHEMA = "mcs-audit-cohort/v1"
 # The plan migrates generation 7 to 8 once; no general version setting.
@@ -332,15 +332,15 @@ def write_pin(path: Path, pin: dict) -> None:
     after it (the directory fsync) leaves the new pin visible but not proven
     durable and raises ``pin_not_durable``; either way the pin must be rerun."""
     real = _private_path(path, write=True)
-    text = "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
-                   for record in [pin["header"], *pin["rows"]])
+    data = "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+                   for record in [pin["header"], *pin["rows"]]).encode("utf-8")
     try:
-        atomic_write(str(real), lambda handle: handle.write(text), mode=0o600,
-                     tmp_prefix=".audit-cohort-", makedirs=False)
+        atomic_write(str(real), lambda handle: handle.write(data), mode=0o600,
+                     tmp_prefix=".audit-cohort-", makedirs=False, binary=True)
     except OSError:
-        try:
-            published = real.read_text(encoding="utf-8") == text
-        except (OSError, UnicodeError):
+        try:   # bounded: an unrelated old pin is never read in full
+            published = read_regular_nofollow(real, len(data), OSError) == data
+        except OSError:
             published = False
         if published:
             raise CohortError("pin_not_durable") from None

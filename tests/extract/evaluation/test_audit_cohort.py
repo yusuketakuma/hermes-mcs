@@ -256,6 +256,28 @@ def test_failure_after_the_rename_reports_a_visible_but_unproven_pin(data_root, 
     assert sorted(os.listdir(data_root)) == ["cohort.jsonl"]
 
 
+def test_failed_write_reads_back_at_most_the_new_pin_size(data_root, monkeypatch):
+    path = data_root / "cohort.jsonl"
+    ac.write_pin(path, pin_of([row(i) for i in range(40)]))    # old pin larger than the new one
+    before = path.read_bytes()
+    limits = []
+    real_read = ac.read_regular_nofollow
+
+    def spy(target, limit, error, **kwargs):
+        limits.append(limit)
+        return real_read(target, limit, error, **kwargs)
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(ac, "read_regular_nofollow", spy)
+    monkeypatch.setattr(ac.os, "fsync", broken)
+    with pytest.raises(OSError, match="disk full"):
+        ac.write_pin(path, pin_of([row(1)]))
+    monkeypatch.undo()
+    assert len(limits) == 1 and limits[0] < len(before)        # bounded by the new pin, not the old file
+    assert path.read_bytes() == before
+
+
 def test_report_is_ascii_aggregates_without_row_content():
     pinned, after = _big_fix()
     text = json.dumps(compare(pinned, after, _labels(pinned, after)), ensure_ascii=False)
