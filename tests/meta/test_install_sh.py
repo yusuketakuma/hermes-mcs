@@ -1084,6 +1084,82 @@ def test_model_checksum_mismatch_is_fatal(tmp_path):
     assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf").exists()
 
 
+@pytest.mark.parametrize("model_bytes", [b"", b"corrupt-existing-model"])
+def test_existing_invalid_model_is_preserved_and_stops_before_llm_publication(tmp_path, model_bytes):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    models = hermes_home / "models"
+    models.mkdir(parents=True)
+    model = models / "Qwen3.5-9B-Q4_K_M.gguf"
+    model.write_bytes(model_bytes)
+    part = model.with_suffix(".gguf.part")
+    part.write_bytes(b"prior-part-must-remain")
+    agents = home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    plist = agents / "ai.mcs.llamaserver.plist"
+    plist.write_bytes(b"prior-plist-must-remain")
+    r = _run(env, hermes_home)
+    assert r.returncode == 1 and "既存モデルの整合性が確認できません" in r.stderr
+    assert "ファイルは保持しました" in r.stderr
+    assert model.read_bytes() == model_bytes
+    assert part.read_bytes() == b"prior-part-must-remain"
+    assert plist.read_bytes() == b"prior-plist-must-remain"
+    assert not plist.with_suffix(".plist.tmp").exists()
+    assert not _bootstraps(stub_root, "ai.mcs.llamaserver")
+    assert not (home / ".mcs-recovery").exists()
+    calls = _calls(stub_root)
+    assert not any(c.startswith("curl") and ("huggingface.co" in c or ".part" in c) for c in calls)
+    assert not any("mcs_setup.py services" in c for c in calls)
+
+
+def test_existing_valid_model_is_verified_without_retrieval(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    model = hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf"
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"stub-model-bytes\n")
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert "AI モデルは取得済みで、整合性を確認しました" in r.stdout
+    assert model.read_bytes() == b"stub-model-bytes\n"
+    assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 1
+    assert not any(c.startswith("curl") and "huggingface.co" in c for c in _calls(stub_root))
+
+
+def test_existing_model_hash_override_still_requires_explicit_opt_in(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    model = hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf"
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"stub-model-bytes\n")
+    del env["MCS_ALLOW_MODEL_SHA_OVERRIDE"]
+    r = _run(env, hermes_home)
+    assert r.returncode == 1 and "既存モデルの整合性が確認できません" in r.stderr
+    assert "MCS_ALLOW_MODEL_SHA_OVERRIDE=1 がないため無視" in r.stderr
+    assert model.read_bytes() == b"stub-model-bytes\n"
+    assert not _bootstraps(stub_root, "ai.mcs.llamaserver")
+
+
+@pytest.mark.parametrize("owner", ["opt-out", "hermes", "external"])
+def test_non_mcs_model_ownership_does_not_inspect_or_replace_existing_model(tmp_path, owner):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    model = hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf"
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"unmanaged-model")
+    flags = ()
+    if owner == "opt-out":
+        flags = ("--no-llm",)
+    elif owner == "hermes":
+        agents = home / "Library" / "LaunchAgents"
+        agents.mkdir(parents=True)
+        (agents / "ai.hermes.llamacpp.plist").write_text("<plist/>")
+    else:
+        env["STUB_LLM_SERVING"] = "1"
+    r = _run(env, hermes_home, *flags)
+    assert r.returncode == 0, r.stderr
+    assert model.read_bytes() == b"unmanaged-model"
+    assert not _bootstraps(stub_root, "ai.mcs.llamaserver")
+    assert not (home / "Library" / "LaunchAgents" / "ai.mcs.llamaserver.plist").exists()
+    assert not any(c.startswith("curl") and "huggingface.co" in c for c in _calls(stub_root))
+
+
 def test_model_download_is_pinned_and_verified_by_default(tmp_path):
     """The GGUF comes from a fixed revision and is checked against its
     published sha256 even when MCS_MODEL_SHA256 is not set."""

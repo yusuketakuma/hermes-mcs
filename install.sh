@@ -1101,7 +1101,11 @@ else
             die "llama-server が見つかりません。brew install llama.cpp で導入して再実行してください（別サーバーをポート8080で動かす場合は --no-llm）"
         fi
         if [ -f "$MODEL_FILE" ]; then
-            skip "AI モデルは取得済みです"
+            _got="$(shasum -a 256 < "$MODEL_FILE" | awk '{print $1}')"
+            if [ "$_got" != "$MODEL_SHA256" ]; then
+                die "既存モデルの整合性が確認できません（SHA256: ${_got}）。ファイルは保持しました。出典と内容を確認し、固定版のモデルを別途準備して再実行してください（別サーバーを使う場合は --no-llm）"
+            fi
+            skip "AI モデルは取得済みで、整合性を確認しました"
         else
             printf '  AI モデルを取得中（約5.7 GB、中断後に再開できます）: %s\n' "$MODEL_FILE"
             mkdir -p "$MODEL_DIR"

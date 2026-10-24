@@ -66,6 +66,7 @@ def test_interactive_install_asks_for_the_runtime(tmp_path, setup_answer, setup_
     from test_install_sh import INSTALL
     home, hermes_home, stub_root, env = _world(tmp_path)
     env["STUB_SETUP_EXIT"] = str(setup_status)
+    env["STUB_REAL_PYTHON"] = sys.executable
     # The pipe retains the exact prompt until subscribed; answer only on that signal.
     with subprocess.Popen(
         ["script", "-q", "/dev/null", "sh", str(INSTALL), "--no-llm", "--no-brew"],
@@ -115,6 +116,14 @@ def test_interactive_install_asks_for_the_runtime(tmp_path, setup_answer, setup_
     assert "LINE WORKS を選んだ場合".encode() in output
     assert "自動実行の登録を省略した場合".encode() in output
     assert any("mcs_setup.py init" in call for call in _calls(stub_root)) == (setup_answer == b"1\n")
+    config = home / ".mcs/config.json"
+    saved = config.read_bytes()
+    assert json.loads(saved)["runtime_mode"] == "standalone"
+    assert config.stat().st_mode & 0o777 == 0o600
+    rerun = _run(env, None, "--preflight", "--no-llm", "--no-brew")
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
+    assert "接続方法: standalone" in rerun.stdout
+    assert config.read_bytes() == saved
 
 
 def test_rerun_on_an_existing_install_never_prompts_or_writes(tmp_path):
