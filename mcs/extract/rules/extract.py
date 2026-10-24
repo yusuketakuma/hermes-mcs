@@ -74,6 +74,9 @@ _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm
              (r"報告(?:いたします|します|をお願い)", "report"))
 
 _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬|座薬|注射")
+# rx_actions keep at most RX_ACTIONS_CAP entries, each ctx starting RX_CTX_BACK chars before its word
+RX_ACTIONS_CAP = 10
+RX_CTX_BACK = 14
 # date range like 8/17-9/6 or 9/24-10/7 (med periods)
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
@@ -286,7 +289,7 @@ def extract_message(body: str, posted_at: str) -> dict:
     for m in re.finditer(r"(変更なし|変更|開始|中止|減量|増量|追加|停止|終了)",
                          body):
         s = m.group(1)
-        ctx = body[max(0, m.start() - 14):m.end() + 4]
+        ctx = body[max(0, m.start() - RX_CTX_BACK):m.end() + 4]
         before = body[max(0, m.start() - 10):m.start()]
         if not (_MED_CTX.search(ctx)
                 or re.search(r"[ァ-ヶー・]{3,}$", before)):
@@ -296,18 +299,14 @@ def extract_message(body: str, posted_at: str) -> dict:
                 "減量": "decrease", "増量": "increase"}.get(s, "change")
         acts.append({"action": code, "ctx": ctx.strip()})
     if acts:
-        out["rx_actions"] = acts[:10]
+        out["rx_actions"] = acts[:RX_ACTIONS_CAP]
 
     # --- vitals ---
     vit, mentions = {}, []
     for k, pat in clinical_values.VITAL_PATTERNS.items():
         for m in re.finditer(pat, body):
             scope = clinical_scope.patient_source_scope(body, m.start(), m.end(), measurement=True)
-            if k == "sbp":
-                values = {"sbp": int(m.group(1)), "dbp": int(m.group(2))}
-            else:
-                v = m.group(1).replace("．", ".")  # int/float take full-width digits
-                values = {k: float(v) if "." in v else int(v)}
+            values = clinical_values.vital_match_values(k, m)
             mentions.append({"scope": scope, "values": values, "evidence": m.group(0)})
             if scope == "patient":
                 for key, value in values.items():

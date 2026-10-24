@@ -4,10 +4,15 @@ import json
 import re
 
 import clinical_values
+import extract
 import extract_schema
 import extract_validation
 from mcs_queries import med_is_patient_current
 from mcs_util import locate_quote_span
+
+# a clause containing any of these is not a current, still-open statement
+_NEGATED_CLAUSE = r"ない|なし|なく|ません|不要|未使用|未測定|中止|済み|ありがとう"
+
 
 def drop_total(v: dict | None) -> float:
     """Validation-loss score for comparing an output with its repair —
@@ -142,7 +147,7 @@ def _current_cue(body, surface):
             continue
         left = re.split(r"[。！？!?;；\r\n]", body[:match.start()])[-1]
         right = re.split(r"[。！？!?;；\r\n]", body[match.end():])[0]
-        if not re.search(r"ない|なし|なく|ません|不要|未使用|未測定|中止|済み|ありがとう", left + surface + right):
+        if not re.search(_NEGATED_CLAUSE, left + surface + right):
             return True
     return False
 
@@ -353,8 +358,6 @@ _RX_ALONG = r"と(?:共に|ともに|同時に|一緒に|いっしょに|併せ�
 # an unnamed object reads as a medication only with v1's own medication words
 _RX_MED_WORD = r"薬|処方|内服|外用|点眼|貼付|錠|剤|坐薬|座薬|注射"
 
-_RX_HINT_CAP = 10       # extract.extract_message keeps rx_actions[:10]
-
 
 def _rx_med_like(text):
     """An unnamed object reads as a medication: v1's medication words or a dose."""
@@ -427,8 +430,8 @@ def _rx_positions(hints, names, body):
         word = _RX_NO_CHANGE if code == "no_change" else _RX_WORDS.get(code)
         if not word or not isinstance(ctx, str) or not ctx:
             continue
-        # v1 cuts ctx 14 characters before its change word
-        words = [m for m in re.finditer(word, ctx) if m.start() <= 14]
+        # v1 cuts ctx RX_CTX_BACK characters before its change word
+        words = [m for m in re.finditer(word, ctx) if m.start() <= extract.RX_CTX_BACK]
         for found in re.finditer(re.escape(ctx), body) if words else ():
             start = found.start() + words[-1].start()
             if re.match(_RX_NOUN_AFTER, body[found.start() + words[-1].end():]):
@@ -740,7 +743,7 @@ def _rx_superseded(prior, candidate, hints, body):
     action instead. Every other field (dose, freq, route, subject, negation) must stay equal."""
     if (not isinstance(hints, dict) or not isinstance(prior, dict) or not isinstance(candidate, dict)
             # v1 keeps 10 rx_actions: a full list cannot prove a drug has only one change
-            or len(hints.get("rx_actions") or []) >= _RX_HINT_CAP):
+            or len(hints.get("rx_actions") or []) >= extract.RX_ACTIONS_CAP):
         return set()
     names = _rx_names(candidate, hints) | _rx_names(prior, hints)
     action_names = _rx_action_names(names, hints, body)
@@ -870,7 +873,7 @@ def _request_current(body, ctx, clause):
     """The request sentence is patient-scoped and its own clause is not negated."""
     for match in re.finditer(re.escape(ctx), body):
         if (clinical_scope.patient_source_scope(body, *match.span()) == "patient"
-                and not re.search(r"ない|なし|なく|ません|不要|未使用|未測定|中止|済み|ありがとう", clause)):
+                and not re.search(_NEGATED_CLAUSE, clause)):
             return True
     return False
 

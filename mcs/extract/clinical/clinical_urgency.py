@@ -163,24 +163,32 @@ def message_urgency(db, mid: int) -> str | None:
 
 
 
-def message_urgency_details(db, mid: int) -> dict:
-    """Report guarded urgency separately from the model's raw verdict and preserve review holds."""
+class _Unset:
+    """Marks an omitted preloaded read; a class so the candidate fingerprint hashes its code."""
 
-    document = mcs_queries.current_message_facts(db, mid) or {}
+
+def message_urgency_details(db, mid: int, *, facts=_Unset, rule=_Unset, source=_Unset) -> dict:
+    """Report guarded urgency separately from the model's raw verdict and preserve review holds."""
+    # facts/rule/source: preloaded reads (None included); omitted ones are read here
+    document = (mcs_queries.current_message_facts(db, mid) if facts is _Unset else facts) or {}
     verdict = document.get("urgency")
     if verdict not in ("high", "routine", "unclear"):
         document = mcs_queries.current_message_extract(db, "extract_llm", mid) or {}
         verdict = document.get("urgency")
     result = {"source": None, "subject": "unknown", "reasons": [], "raw_verdict": verdict,
               "verdict": verdict, "held": False, "kind": "clinical"}
-    rule = mcs_queries.current_message_extract(db, "extract_v1", mid) or {}
-    if verdict not in ("high", "routine", "unclear") and rule.get("urgency") != "high":
+    if verdict == "routine":
+        return result
+    if rule is _Unset:
+        rule = mcs_queries.current_message_extract(db, "extract_v1", mid)
+    rule = rule or {}
+    if verdict not in ("high", "unclear") and rule.get("urgency") != "high":
         return result
     if db is None:
         if verdict == "high":
             result.update(verdict="unclear", held=True, scopes=["unknown"])
         return result
-    row = mcs_queries.message_urgency_source(db, mid)
+    row = mcs_queries.message_urgency_source(db, mid) if source is _Unset else source
     if row is None or row["body_state"] not in (None, "full") or not isinstance(row["body_text"], str):
         return result
     body = row["body_text"]
@@ -201,8 +209,6 @@ def message_urgency_details(db, mid: int) -> dict:
         if reasons and any(urgent_request_quote(quote) for quote in reasons):
             result.update(kind="request", reasons=reasons[:2])
         result.update(verdict="unclear", held=True, scopes=scopes or ["unknown"])
-    if verdict == "routine":
-        return result
     # "unclear" is an abstention, not a clearance — it falls through to
     # the lexical net exactly like a missing verdict does.
     if rule.get("urgency") == "high":
@@ -211,7 +217,7 @@ def message_urgency_details(db, mid: int) -> dict:
         clinical = [quote for quote in scoped if clinical_urgency_quote(quote)]
         if not clinical and any(urgent_request_quote(quote) for quote in scoped):
             clinical = patient_clinical_quotes(body, patient_name=row["patient_name"])
-        if clinical and default == "patient":
+        if clinical:
             result.update(source="rule", subject="patient", reasons=clinical[:2])
         elif reasons:
             result.update(kind="request", reasons=reasons[:2])

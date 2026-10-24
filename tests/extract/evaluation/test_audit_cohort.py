@@ -320,6 +320,7 @@ def test_retention_compares_the_unrounded_fraction():
     report = compare(pinned, after)
     assert report["retention"] == 0.8 and report["lexical_gate"] == "not_evaluable"
     assert compare(pinned, after + [row(1999, version=8)])["lexical_gate"] != "not_evaluable"
+    assert type(report["min_retention"]) is float and report["min_retention"] == 0.8
 
 
 @pytest.mark.parametrize("after", [
@@ -399,7 +400,7 @@ def test_a_duplicated_pin_row_is_refused_and_a_valid_pin_still_compares():
         compare(pinned, [row(1, version=8), row(2, version=8)])
 
 
-@pytest.mark.parametrize("failure", ["adoption", "fchmod", "fsync"])
+@pytest.mark.parametrize("failure", ["adoption", "chmod", "fsync"])
 def test_pin_descriptor_is_closed_before_failed_staging_is_removed(
         data_root, monkeypatch, failure):
     import errno
@@ -409,7 +410,7 @@ def test_pin_descriptor_is_closed_before_failed_staging_is_removed(
     ac.write_pin(path, pin_of([row(1)]))
     original = path.read_bytes()
     descriptors, removed = [], []
-    mkstemp, unlink = ac.tempfile.mkstemp, ac.os.unlink
+    mkstemp, unlink = safe_io.tempfile.mkstemp, ac.os.unlink
 
     def owned_temp(*args, **kwargs):
         descriptor, name = mkstemp(*args, **kwargs)
@@ -426,7 +427,7 @@ def test_pin_descriptor_is_closed_before_failed_staging_is_removed(
         removed.append(name)
         return unlink(name)
 
-    monkeypatch.setattr(ac.tempfile, "mkstemp", owned_temp)
+    monkeypatch.setattr(safe_io.tempfile, "mkstemp", owned_temp)
     monkeypatch.setattr(ac.os, "unlink", remove_after_close)
     if failure == "adoption":
         monkeypatch.setattr(safe_io.os, "fdopen", fail)

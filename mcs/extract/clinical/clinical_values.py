@@ -568,9 +568,7 @@ def patient_vitals(values, body, *, patient_name=None):
             if clinical_scope.patient_source_scope(body, match.start(), match.end(), patient_name=patient_name,
                                     measurement=True) != "patient":
                 continue
-            actual = ({"sbp": int(match[1]), "dbp": int(match[2])} if key == "sbp" else
-                      {key: float(match[1].replace("．", ".")) if "." in match[1].replace("．", ".")
-                       else int(match[1])})
+            actual = vital_match_values(key, match)
             present = [field for field in actual if type(values.get(field)) in (int, float)]
             if len(present) == 2 and any(values[field] != actual[field] for field in present):
                 continue            # both sides cached: only this whole reading may match
@@ -586,7 +584,7 @@ def patient_vitals(values, body, *, patient_name=None):
         if _nearest_vital_label(body, start, end) != "bp":
             continue
         side = _bp_side(body, start, end)
-        label = re.search(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$", body[max(0, start - 14):start])
+        label = _BP_SIDE_WORD.search(body[max(0, start - _VITAL_WIN_BACK):start])
         if side is None and label is not None:
             side = "sbp" if label[1] == "収縮期" else "dbp"
         if side is None or clinical_scope.patient_source_scope(body, start, end, patient_name=patient_name,
@@ -613,6 +611,14 @@ VITAL_PATTERNS = {
             r"(?!\s*(?:[LＬlℓ]|リットル))\s*[%％]?",
     "bs":   r"(?:血糖|BS|Glu)[:：は]?\s*(\d{2,3})(?![\d.．])",
 }
+
+
+def vital_match_values(key: str, match) -> dict:
+    """Values one VITAL_PATTERNS match reads: both blood-pressure sides, else one int or float."""
+    if key == "sbp":
+        return {"sbp": int(match[1]), "dbp": int(match[2])}
+    value = match[1].replace("．", ".")  # int/float take full-width digits
+    return {key: float(value) if "." in value else int(value)}
 
 
 def absolute_date(text: str) -> str | None:

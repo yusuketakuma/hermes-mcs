@@ -19,8 +19,8 @@ import json
 import os
 import re
 import sys
-import tempfile
 from collections import Counter
+from fractions import Fraction
 from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401,E402
-from safe_io import fdopen_owned  # noqa: E402
+from safe_io import atomic_write  # noqa: E402
 
 SCHEMA = "mcs-audit-cohort/v1"
 # The plan migrates generation 7 to 8 once; no general version setting.
@@ -39,7 +39,7 @@ QUALITIES = frozenset({"complete", "attention", "no_output"})
 LABEL_SOURCES = frozenset({"internal_agent", "human"})
 LABEL_SAMPLE = 50
 # A conservative engineering gate for this cohort, not a universal statistic.
-MIN_RETENTION = 0.8
+MIN_RETENTION = Fraction(4, 5)
 EXCLUSIONS = ("deleted", "hash_changed", "reader_changed", "not_yet_reanalysed", "other_version")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
@@ -137,7 +137,7 @@ def _overall(gates) -> str:
 
 def _retained(kept: int, baseline: int) -> bool:
     # integer comparison: 1999 of 2500 is below 0.8 even though it rounds to it
-    return baseline > 0 and kept * 5 >= baseline * 4
+    return baseline > 0 and kept * MIN_RETENTION.denominator >= baseline * MIN_RETENTION.numerator
 
 
 def _semantic(cohort: list[tuple[dict, dict | None]], labels, needed_cap: int,
@@ -291,7 +291,7 @@ def compare(pin: dict, rows, definition: str, cue_codes, labels=None) -> dict:
                         "after_failures": failures, "classes": classes},
         "excluded": excluded, "inventory": inventory,
         "new_posts": sum(mid not in pinned_ids for mid in now),
-        "retention": retention, "min_retention": MIN_RETENTION,
+        "retention": retention, "min_retention": float(MIN_RETENTION),
         "lexical_gate": lexical, "semantic_gate": semantic, "quality_gate": quality,
     }
 
@@ -328,19 +328,11 @@ def _read_jsonl(path: Path) -> list:
 def write_pin(path: Path, pin: dict) -> None:
     """Atomically replace the private pin; a failed write leaves the old file."""
     real = _private_path(path, write=True)
-    fd, tmp = tempfile.mkstemp(dir=real.parent, prefix=".audit-cohort-")
-    try:
-        with fdopen_owned(fd, "w", encoding="utf-8") as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            for record in [pin["header"], *pin["rows"]]:
-                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, real)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
+
+    def write(handle):
+        for record in [pin["header"], *pin["rows"]]:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    atomic_write(str(real), write, mode=0o600, tmp_prefix=".audit-cohort-", makedirs=False)
 
 
 def read_pin(path: Path) -> dict:
