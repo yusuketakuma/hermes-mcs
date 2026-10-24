@@ -273,29 +273,55 @@ _ROTATED_BACKUP = re.compile(
     r"(ledger-\d{8}\.db(\.ok)?|preupdate-.*\.db|.*\.tmp(-journal|-wal|-shm)?)")
 
 
-def manual_backup_bytes() -> int | None:
-    """Total bytes of regular files in data/backups that no rotation or
-    prune owns (copies an operator made by hand). A number for health
-    only: these are never deleted. None when the scan is unbounded or
-    unreadable; 0 when the directory is missing."""
-    total = 0
+BACKUP_CLASSES = ("daily", "daily_ok", "preupdate", "staging", "manual")
+
+
+_BACKUP_CLASS_PATTERNS = (("daily", re.compile(r"ledger-\d{8}\.db")),
+                          ("daily_ok", re.compile(r"ledger-\d{8}\.db\.ok")),
+                          ("preupdate", re.compile(r"preupdate-.*\.db")),
+                          ("staging", re.compile(r".*\.tmp(-journal|-wal|-shm)?")))
+
+
+def _backup_class(name: str) -> str:
+    # Same names as _ROTATED_BACKUP; anything else is a hand-made copy.
+    for owner, pattern in _BACKUP_CLASS_PATTERNS:
+        if pattern.fullmatch(name):
+            return owner
+    return "manual"
+
+
+def backup_bytes_by_class() -> dict | None:
+    """Bytes of regular files in data/backups by the owner that keeps them
+    (daily rotation, its .ok markers, pre-update copies, in-flight staging,
+    hand-made copies). Names and stat only — no DB open. A number for
+    health only: nothing here deletes. None when the scan is unbounded or
+    unreadable; all zero when the directory is missing."""
+    totals = dict.fromkeys(BACKUP_CLASSES, 0)
     stop = monotonic() + LOCAL_STATUS_SCAN_S
     try:
         with os.scandir(BACKUP_DIR) as entries:
             for n, entry in enumerate(entries):
                 if n >= LOCAL_STATUS_SCAN_MAX or monotonic() > stop:
                     return None
-                if _ROTATED_BACKUP.fullmatch(entry.name):
-                    continue
                 with suppress(FileNotFoundError):
                     st = entry.stat(follow_symlinks=False)
                     if stat.S_ISREG(st.st_mode):
-                        total += st.st_size
+                        totals[_backup_class(entry.name)] += st.st_size
     except FileNotFoundError:
-        return 0
+        return totals
     except OSError:
         return None
-    return total
+    # A scan finished past its budget is late, not a settled total.
+    return None if monotonic() > stop else totals
+
+
+def manual_backup_bytes() -> int | None:
+    """Total bytes of regular files in data/backups that no rotation or
+    prune owns (copies an operator made by hand). A number for health
+    only: these are never deleted. None when the scan is unbounded or
+    unreadable; 0 when the directory is missing."""
+    totals = backup_bytes_by_class()
+    return None if totals is None else totals["manual"]
 
 
 def backup_overdue() -> bool:
