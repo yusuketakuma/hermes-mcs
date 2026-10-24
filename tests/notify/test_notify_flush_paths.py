@@ -623,3 +623,22 @@ def test_direct_sender_refuses_an_unverified_attachment(tmp_path, monkeypatch, s
             notify_flush._send_text(db, ev, {}, ["lineworks"], "lineworks:synthetic", {}, None)
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("pid,outcome", [
+    (1, "named"), (2, "unnamed"), (2 ** 63, OverflowError), (-(2 ** 63) - 1, OverflowError)])
+def test_signal_text_patient_lookup_keeps_its_sqlite_id_boundary(tmp_path, pid, outcome):
+    """An out-of-range project id fails the lookup as before; it is never rendered as unnamed."""
+    db = _synthetic_msg_ledger(tmp_path, [(1, "2026-09-24T08:00", None)])
+    try:
+        db.db.execute("UPDATE patients SET patient_name='合成患者' WHERE project_id=1")
+        db.db.commit()
+        payload = {"text": "合成シグナル\n所在行", "project_id": pid}
+        if outcome is OverflowError:
+            with pytest.raises(OverflowError):
+                notify_flush._signal_text(db, payload, {})
+            return
+        lines = notify_flush._signal_text(db, payload, {}).split("\n")
+        assert lines[1] == ("合成患者（所在行）" if outcome == "named" else "所在行")
+    finally:
+        db.close()

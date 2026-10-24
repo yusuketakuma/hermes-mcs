@@ -34,7 +34,7 @@ import structured_view
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import CONF_PATH, file_sha256, html_to_text, load_config
 from mcs_requests import positive
-from notify_render import (SECTION_RULE, extraction_failed, patient_name, signal_evidence,
+from notify_render import (SECTION_RULE, extraction_failed, signal_evidence,
                            thread_stamp_row)
 import clinical_urgency
 TEXT_CHUNK_WIDTH = 1900
@@ -132,7 +132,10 @@ def _signal_text(ledger, payload: dict, latest: dict):
     lines = text.split("\n")
     pid = payload.get("project_id")
     if type(pid) is int and len(lines) > 1:
-        name = patient_name(ledger.db, pid)
+        r = ledger.db.execute(
+            "SELECT patient_name FROM patients WHERE project_id=?",
+            (pid,)).fetchone()
+        name = r["patient_name"].strip() if r and r["patient_name"] else ""
         if name:
             lines[1] = f"{name}（{lines[1]}）"
         _, m = signal_evidence(ledger.db, {**latest, "project_id": pid})
