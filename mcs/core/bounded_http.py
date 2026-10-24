@@ -14,10 +14,11 @@ This module owns the MECHANISM only — which endpoints a credential may
 be sent to is the caller's policy, passed in as ``allowed_endpoints``
 (and re-declared to the worker through the stdin envelope). An
 ``api_key=None`` request is pinned to an unauthenticated loopback URL
-regardless of the allowlist.
+unless the explicit anonymous public-MCP mode validates a public HTTPS allowlist.
 """
 import base64
 import json
+import ipaddress
 import math
 import os
 import subprocess
@@ -58,6 +59,25 @@ def loopback_endpoint_allowed(endpoint: str) -> bool:
             and not parts.fragment)
 
 
+def _public_mcp_allowed(endpoint, method, api_key, allowed):
+    if not isinstance(endpoint, str) or endpoint not in allowed or method != "POST" or api_key is not None:
+        return False
+    try:
+        parts = urlsplit(endpoint)
+        host = parts.hostname or ""
+        if (parts.scheme != "https" or parts.username is not None or parts.password is not None
+                or parts.query or parts.fragment or parts.port not in (None, 443)
+                or "." not in host or host.endswith((".localhost", ".local", ".internal"))):
+            return False
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            return True  # Only caller-declared public DNS endpoints, never IP literals.
+        return False
+    except ValueError:
+        return False
+
+
 def _worker_endpoint_allowed(endpoint: str, allowed) -> bool:
     """Worker-side check: the caller-declared allowlist (already
     enforced parent-side) plus unauthenticated loopback."""
@@ -87,6 +107,7 @@ def _http_worker_main() -> int:
         timeout = envelope.get("timeout")
         body = envelope.get("body")
         allowed = envelope.get("allowed_endpoints") or []
+        public_mcp = envelope.get("public_mcp", False)
         if (not isinstance(endpoint, str)
                 or not isinstance(allowed, list)
                 or not all(isinstance(e, str) for e in allowed)
@@ -96,12 +117,16 @@ def _http_worker_main() -> int:
                 or isinstance(timeout, bool) or not math.isfinite(timeout)
                 or timeout <= 0
                 or (api_key is not None and not isinstance(api_key, str))
-                or (api_key is None
+                or not isinstance(public_mcp, bool)
+                or (public_mcp and not _public_mcp_allowed(endpoint, method, api_key, allowed))
+                or (not public_mcp and api_key is None
                     and not loopback_endpoint_allowed(endpoint))):
             raise ValueError("request_invalid")
         raw = None if body is None else json.dumps(
             body, ensure_ascii=False, allow_nan=False).encode("utf-8")
         headers = {"User-Agent": "mcs-adapter-semantic/1.0"}
+        if public_mcp:
+            headers["Accept"] = "application/json, text/event-stream"
         if api_key is not None:
             headers["Authorization"] = f"Bearer {api_key}"
         if raw is not None:
@@ -153,21 +178,26 @@ class NotSentTimeout(TimeoutError):
 def bounded_http_request(endpoint: str, method: str, body,
                          timeout: float, api_key: str | None = None,
                          deadline: float | None = None,
-                         allowed_endpoints=()):
+                         allowed_endpoints=(), _public_mcp=False):
     """Make one bounded request through a short-lived, reaped worker.
 
     An ``api_key`` request must target ``allowed_endpoints`` — the
     caller's own allowlist (semantic_jev passes its fixed Jev set).  An
     ``api_key=None`` request is restricted to an unauthenticated
-    loopback URL.  Request bodies and credentials are sent through stdin
-    only; the worker follows neither proxies nor redirects and returns
+    loopback URL unless explicit public-MCP mode is selected. Request bodies
+    and credentials are sent through stdin only; the worker follows neither proxies nor redirects and returns
     at most ``MAX_RESPONSE_BYTES + 1`` bytes so callers can reject an
     oversized response without retaining an unbounded body.
     """
     if not isinstance(endpoint, str) or method not in ("GET", "POST"):
         raise ValueError("request_invalid")
     allowed = {e for e in allowed_endpoints if isinstance(e, str)}
-    if api_key is None:
+    if not isinstance(_public_mcp, bool):
+        raise ValueError("request_invalid")
+    if _public_mcp:
+        if not _public_mcp_allowed(endpoint, method, api_key, allowed):
+            raise ValueError("public_mcp_endpoint_not_allowed")
+    elif api_key is None:
         if not loopback_endpoint_allowed(endpoint):
             raise ValueError("local_endpoint_not_allowed")
     elif not isinstance(api_key, str) or endpoint not in allowed:
@@ -194,6 +224,7 @@ def bounded_http_request(endpoint: str, method: str, body,
         "body": body,
         "timeout": remaining,
         "allowed_endpoints": sorted(allowed),
+        "public_mcp": _public_mcp,
     }
     payload = json.dumps(envelope, ensure_ascii=False,
                          allow_nan=False).encode("utf-8")
@@ -242,6 +273,12 @@ def bounded_http_request(endpoint: str, method: str, body,
             or len(raw) > MAX_RESPONSE_BYTES + 1):
         raise OSError("http worker response invalid")
     return status, headers, raw
+
+
+def public_mcp_request(endpoint, body, timeout, *, deadline=None, allowed_endpoints=()):
+    """POST anonymous MCP JSON to a caller-allowlisted public HTTPS endpoint."""
+    return bounded_http_request(endpoint, "POST", body, timeout, deadline=deadline,
+                                allowed_endpoints=allowed_endpoints, _public_mcp=True)
 
 
 if __name__ == "__main__":

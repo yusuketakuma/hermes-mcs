@@ -340,7 +340,7 @@ def _workflow(args):
 
 
 def _drug_info(args) -> int:
-    """Public drug-information commands (local TinyFish gateway; master names and disease keywords only)."""
+    """Public drug-information commands using master names and disease keywords only."""
     import import_drug_master as importer
     import drug_info
     try:

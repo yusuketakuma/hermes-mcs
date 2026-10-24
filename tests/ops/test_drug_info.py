@@ -303,7 +303,7 @@ def test_valid_private_token_is_sent(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("case", ["missing", "symlink", "fifo", "directory", "oversize", "loose_mode",
                                   "foreign_uid", "not_ascii", "short"])
-def test_unusable_token_is_refused_before_any_request(tmp_path, monkeypatch, case):
+def test_token_state_controls_available_transport(tmp_path, monkeypatch, case):
     if case == "missing":
         _token_file(tmp_path, monkeypatch, content=None)
     elif case == "symlink":
@@ -335,8 +335,25 @@ def test_unusable_token_is_refused_before_any_request(tmp_path, monkeypatch, cas
         _token_file(tmp_path, monkeypatch, content="short-token")
     wire = Wire([])
     monkeypatch.setattr(drug_info, "_request", wire)
-    with pytest.raises(drug_info.DrugInfoError, match="^gateway_unconfigured$"):
-        drug_info.search("架空", drug_info.PMDA)
+    if case == "missing":
+        import bounded_http
+        sent = []
+        monkeypatch.setattr(drug_info.time, "monotonic", lambda: 100.0)
+
+        def public_wire(endpoint, body, timeout, **kwargs):
+            sent.append((endpoint, body, timeout, kwargs))
+            return 200, {}, json.dumps({"jsonrpc": "2.0", "id": 1, "result": {
+                "content": [{"type": "text", "text": "No results found."}]}}).encode()
+
+        monkeypatch.setattr(bounded_http, "public_mcp_request", public_wire)
+        assert drug_info.search("架空", drug_info.PMDA) == []
+        assert sent == [(drug_info.EXA_URL, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": "web_search_exa", "arguments": {
+                            "query": "site:pmda.go.jp 架空", "numResults": 5}}}, 30.0,
+                        {"deadline": 175.0, "allowed_endpoints": (drug_info.EXA_URL,)})]
+    else:
+        with pytest.raises(drug_info.DrugInfoError, match="^gateway_unconfigured$"):
+            drug_info.search("架空", drug_info.PMDA)
     assert wire.calls == []
 
 
