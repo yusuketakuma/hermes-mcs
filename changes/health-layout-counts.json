@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "通知形式の診断集計で同じ配送履歴を繰り返し調べる処理を修正",
+  "summary": "health.jsonのカードlayout集計で、結果不明部品を持つカードを一度集計して結合するようにしました。診断中にカードごとに同じ履歴を繰り返し調べる経路を除きます。",
+  "upgrade": "追加操作はありません。schema・index・安全ゲート・期限・版は変更せず、旧layoutを含む全transportと配送状態の件数、保存済み配送履歴を維持します。本番反映と実機検証は別途必要です。",
+  "details": [
+    "同じカードに結果不明の部品や過去renderが複数あっても、unknown_partsは従来どおりカード単位の1件として数えます。最新renderだけに限定しません。",
+    "完全合成の結果一致とSQLite VM操作数の増加を検証する回帰を追加しました。実機の所要時間や今回の遅延原因を確定した記録ではありません。"
+  ],
+  "refs": ["mcs/notify/notify_scope.py", "tests/notify/test_health_layout_count_scaling.py"]
+}
