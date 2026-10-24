@@ -5,7 +5,8 @@ import re
 
 import extract_quality
 from clinical_values import patient_item_scope
-from mcs_queries import ELIGIBLE_MESSAGE, JST, current_fact_pred, current_v4_id, json_or_null
+from mcs_queries import (ELIGIBLE_MESSAGE, FACT_KINDS_SQL, JST, current_fact_pred, current_v4_id,
+                         json_or_null)
 from mcs_util import loads_dict
 from mcs_util import payload_hash as _digest
 from patient_context import reference_item
@@ -93,7 +94,7 @@ def history(db, target, *, version):
           {_held_sql(version)} AS held
         FROM earlier m
         LEFT JOIN artifacts a ON a.message_id=m.message_id
-          AND a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
+          AND a.kind IN ({FACT_KINDS_SQL})
           {current_fact_pred()}
         ORDER BY m.posted_at_ts DESC,m.message_id DESC,a.artifact_id DESC
     """, (target["project_id"], target["message_id"], stamp))
@@ -133,7 +134,7 @@ def reference_current(db, target, reference, *, version):
     row = db.execute(f"""SELECT m.*,a.artifact_id,a.kind,a.content,a.meta,a.model,
         {_held_sql(version)} AS held
         FROM messages m JOIN artifacts a ON a.message_id=m.message_id
-          AND a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
+          AND a.kind IN ({FACT_KINDS_SQL})
           {current_fact_pred()}
         WHERE m.project_id=? AND m.message_id=? AND {ELIGIBLE_MESSAGE}
         ORDER BY a.artifact_id DESC LIMIT 1""", (reference["project_id"], reference["message_id"])).fetchone()
@@ -192,8 +193,7 @@ def format_state(reports, *, budget=STATE_MAX):
 
 
 def _binding(target, model, contract, attempt, enabled):
-    return _digest({"target": {key: target.get(key) for key in (
-        "project_id", "message_id", "content_hash", "posted_at", "posted_at_ts", "parent_id")},
+    return _digest({"target": _source(target),
         "model": model, "contract": contract, "attempt": attempt, "enabled": enabled})
 
 

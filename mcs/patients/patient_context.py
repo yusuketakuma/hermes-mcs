@@ -132,6 +132,13 @@ for label, key in _DETAIL_ALIAS.items():
         "followup" if key in ("followup", "assignee", "due_text", "last_confirmed_on", "confirmed_by", "certainty") else
         "care_level" if key == "valid_period" else "skin_wound" if key == "body_site" else
         "nutrition" if key == "food_texture" else "medication_management")
+# casefold -> value with the FIRST label in table order winning, as the former next() scans did
+_CATEGORY_FOLD: dict = {}
+for label, key in _CATEGORY.items():
+    _CATEGORY_FOLD.setdefault(label.casefold(), key)
+_DETAIL_FOLD: dict = {}
+for label, key in _DETAIL_ALIAS.items():
+    _DETAIL_FOLD.setdefault(label.casefold(), key)
 _HEADING = re.compile(
     r"^[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?(?:[【［\[（(][ \t　]*)?"
     r"(?P<label>" + "|".join(map(re.escape, sorted(_CATEGORY, key=len, reverse=True))) + r")"
@@ -278,8 +285,7 @@ def extract_context(body: str) -> list[dict]:
             # Labelled attributes retain raw values; no clinical status or dates are inferred.
             header = _HEADING.match(body[start:end].splitlines()[0])
             alias = header["label"] if header else ""
-            key = next((value for label, value in _DETAIL_ALIAS.items()
-                        if label.casefold() == alias.casefold()), None)
+            key = _DETAIL_FOLD.get(alias.casefold())
             if key:
                 item["details"] = [{"key": key, "value": text, "evidence": item["evidence"]}]
             elif category == "observations" and alias.casefold() in ("体重", "身長", "cr", "egfr", "ast", "alt", "血糖"):
@@ -303,8 +309,10 @@ def extract_context(body: str) -> list[dict]:
             active = None
             if match:
                 label = match["label"]
-                category = next(key for key in _CATEGORY if key.casefold() == label.casefold())
-                active = (offset, offset + match.end(), _CATEGORY[category])
+                value = _CATEGORY_FOLD.get(label.casefold())
+                if value is None:   # IGNORECASE matched a label casefold does not: fail as before
+                    value = _CATEGORY[next(key for key in _CATEGORY if key.casefold() == label.casefold())]
+                active = (offset, offset + match.end(), value)
         offset += len(line)
     finish(len(body))
     return result

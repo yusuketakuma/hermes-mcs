@@ -10,7 +10,7 @@ import time
 
 import local_llm
 from clinical_chunking import PLAN_VERSION
-from mcs_queries import JST
+from mcs_queries import EXTRACTION_KINDS_SQL, JST
 from mcs_util import loads_dict
 from writer_lock import acquire_run_lock
 from patient_context import CATEGORIES, context_items, extract_context, project_context_items
@@ -107,7 +107,7 @@ def _sources(db, pid, *, hydrate=True, mid=None):
             "SELECT a.message_id,a.artifact_id,a.kind,a.content,a.model,a.meta FROM artifacts a "
             "JOIN messages m ON m.message_id=a.message_id WHERE m.project_id=? "
             "AND (a.project_id=? OR (a.project_id IS NULL AND a.kind IN ('extract_v1','extract_llm'))) AND a.kind IN "
-            "('extract_v1','extract_llm','canonical_projection','semantic_facts_v4') "
+            f"({EXTRACTION_KINDS_SQL}) "
             + ("AND m.message_id=? " if mid is not None else "")
             + "ORDER BY a.artifact_id", (pid, pid, mid) if mid is not None else (pid, pid)):
         extractions.setdefault(row[0], []).append(row)
@@ -272,8 +272,7 @@ def nightly_view_input(db, pid, *, cfg=None):
         current["source_sig"] = _digest([current["scope"], current["contract"], signed])
     if current["source_sig"] != meta.get("source_sig"):
         return None
-    if (not current["scope"] or current["scope"].get("is_archived")
-            or current["scope"].get("fetch_reason") in ("forbidden", "permission_denied", "access_revoked")):
+    if _out_of_scope(current) or current["scope"].get("is_archived"):
         return None
     sources = {s["message_id"]: s for s in current["sources"]}
     facts = doc.get("facts")
@@ -355,6 +354,13 @@ def _pending(db, pid, cfg, *, now=None):
                "B": any(not scan.get("complete") and _ready(scan, now) for scan in scans),
                "C": any(scan.get("complete") and not scan.get("audited") and _ready(scan, now) for scan in scans)}
     return snapshot, progress, pending
+
+
+def _scan_sig(db, pid) -> str:
+    """Digest of the patient's per-source scan rows, read at the caller's observation point."""
+    return _digest([tuple(r) for r in db.execute(
+        "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
+        (SCAN, pid))])
 
 
 def _out_of_scope(snapshot) -> bool:
@@ -573,9 +579,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
         if hydrated["source_sig"] != snapshot["source_sig"]:
             return {"status": "source_changed", "done": 0, **stats}
         snapshot = hydrated
-    frozen_scan_sig = _digest([tuple(r) for r in ledger.db.execute(
-        "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
-        (SCAN, pid))])
+    frozen_scan_sig = _scan_sig(ledger.db, pid)
     meta = {"source_sig": snapshot["source_sig"], "contract": snapshot["contract"],
             "model": snapshot["contract"]["model"], "night_id": night_id}
     result = None
@@ -628,9 +632,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
     # fence seals the read against any concurrent writer before publication.
     version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
     fresh = _snapshot(ledger.db, pid, cfg, hydrate=False)
-    scans_now = _digest([tuple(r) for r in ledger.db.execute(
-        "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
-        (SCAN, pid))])
+    scans_now = _scan_sig(ledger.db, pid)
     # A finished inference is worth a short wait: the tick and lane 2 hold
     # the run lock for minutes, and dropping the result would send the
     # same prompt again on the next iteration.
@@ -653,9 +655,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None):
             if ledger.db.execute("PRAGMA data_version").fetchone()[0] != version:
                 # An unrelated writer does not invalidate completed inference.
                 fresh = _snapshot(ledger.db, pid, cfg, hydrate=False)
-                scans_now = _digest([tuple(r) for r in ledger.db.execute(
-                    "SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
-                    (SCAN, pid))])
+                scans_now = _scan_sig(ledger.db, pid)
             if (fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
                     or _published_version(ledger.db, pid) != frozen_ver
                     or time.monotonic() >= deadline or time.time() >= end):
