@@ -239,6 +239,23 @@ def test_an_interrupted_write_keeps_the_old_pin_and_leaves_no_temp(data_root, mo
     assert sorted(os.listdir(data_root)) == ["cohort.jsonl"]
 
 
+def test_failure_after_the_rename_reports_a_visible_but_unproven_pin(data_root, monkeypatch):
+    import safe_io
+
+    path = data_root / "cohort.jsonl"
+    ac.write_pin(path, pin_of([row(1)]))
+    before = path.read_bytes()
+
+    def broken(*args, **kwargs):
+        raise OSError("synthetic directory fsync failure")
+    monkeypatch.setattr(safe_io, "fsync_dir", broken)
+    with pytest.raises(ac.CohortError, match="pin_not_durable"):
+        ac.write_pin(path, pin_of([row(2)]))
+    assert path.read_bytes() != before         # the new pin is published, not restored
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert sorted(os.listdir(data_root)) == ["cohort.jsonl"]
+
+
 def test_report_is_ascii_aggregates_without_row_content():
     pinned, after = _big_fix()
     text = json.dumps(compare(pinned, after, _labels(pinned, after)), ensure_ascii=False)

@@ -326,13 +326,25 @@ def _read_jsonl(path: Path) -> list:
 
 
 def write_pin(path: Path, pin: dict) -> None:
-    """Atomically replace the private pin; a failed write leaves the old file."""
-    real = _private_path(path, write=True)
+    """Atomically replace the private pin.
 
-    def write(handle):
-        for record in [pin["header"], *pin["rows"]]:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-    atomic_write(str(real), write, mode=0o600, tmp_prefix=".audit-cohort-", makedirs=False)
+    A failure before the rename leaves the old pin and re-raises.  A failure
+    after it (the directory fsync) leaves the new pin visible but not proven
+    durable and raises ``pin_not_durable``; either way the pin must be rerun."""
+    real = _private_path(path, write=True)
+    text = "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+                   for record in [pin["header"], *pin["rows"]])
+    try:
+        atomic_write(str(real), lambda handle: handle.write(text), mode=0o600,
+                     tmp_prefix=".audit-cohort-", makedirs=False)
+    except OSError:
+        try:
+            published = real.read_text(encoding="utf-8") == text
+        except (OSError, UnicodeError):
+            published = False
+        if published:
+            raise CohortError("pin_not_durable") from None
+        raise
 
 
 def read_pin(path: Path) -> dict:

@@ -164,7 +164,7 @@ def message_urgency(db, mid: int) -> str | None:
 
 
 class _Unset:
-    """Marks an omitted preloaded read; a class so the candidate fingerprint hashes its code."""
+    """Marks an omitted preloaded read; a class because the fingerprint accepts no object() constant."""
 
 
 def message_urgency_details(db, mid: int, *, facts=_Unset, rule=_Unset, source=_Unset) -> dict:
