@@ -85,9 +85,7 @@ def _apply_hold(db, aid, delivery_id, reason, dirs, now,
     """Freeze one disputed scope — render held, card delivery_unknown,
     pending linked intents quarantined — plus a durable
     notification_restore_holds row the operator resolves against."""
-    render = db.execute(
-        "SELECT * FROM notification_renders WHERE delivery_id=?",
-        (delivery_id,)).fetchone() if delivery_id else None
+    render = notify_scope.render_row(db, delivery_id) if delivery_id else None
     card = card_row(db, render["card_id"]) \
         if render is not None and render["card_id"] is not None else None
     if scope is None:
@@ -189,9 +187,7 @@ def _reconcile_part(ledger, db, cfg, aid, info, dirs, now) -> dict:
     last = rows[-1]
     delivery_id = last.get("delivery_id")
     part_id = last.get("part_id")
-    render = db.execute(
-        "SELECT * FROM notification_renders WHERE delivery_id=?",
-        (delivery_id,)).fetchone() if delivery_id else None
+    render = notify_scope.render_row(db, delivery_id) if delivery_id else None
     if render is None:
         return _apply_hold(db, aid, delivery_id, "part_lost:no_render",
                            dirs, now)
@@ -308,9 +304,7 @@ def _reconcile_attempt(ledger, db, cfg, aid, info, dirs, now) -> dict:
     attempt = db.execute(
         "SELECT * FROM notification_delivery_attempts "
         "WHERE attempt_id=?", (aid,)).fetchone()
-    render = db.execute(
-        "SELECT * FROM notification_renders WHERE delivery_id=?",
-        (delivery_id,)).fetchone() if delivery_id else None
+    render = notify_scope.render_row(db, delivery_id) if delivery_id else None
 
     if len(distinct) > 1:
         return _apply_hold(db, aid, delivery_id, "journal_conflict",

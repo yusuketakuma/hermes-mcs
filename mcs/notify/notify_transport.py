@@ -403,10 +403,7 @@ def _begin_result(db, attempt) -> dict:
     """The durable grant/denial record a worker consumes once — it
     echoes the render identity fields so the worker can verify the
     grant still matches the spec file it claimed."""
-    render = db.execute(
-        "SELECT * "
-        "FROM notification_renders WHERE delivery_id=?",
-        (attempt["delivery_id"],)).fetchone()
+    render = render_row(db, attempt["delivery_id"])
     granted = attempt["state"] == "granted"
     out = {"granted": granted, "command_id": attempt["begin_command_id"],
            "attempt_id": attempt["attempt_id"],
@@ -470,10 +467,7 @@ def apply_transport_receipt(ledger, req, cfg, now=None) -> dict:
                 if render["card_id"] is not None:
                     cards.issue_render(db, render["card_id"], cfg, now, specs)
         cards.mark_snapshot_dirty(db)
-    if specs:
-        root = notify_spool.data_root(ledger)
-        notify_spool.ensure_dirs(root)
-        notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
+    notify_spool.publish_committed(ledger, db, specs, now)
     return receipt
 
 

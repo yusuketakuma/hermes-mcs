@@ -69,10 +69,7 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
                 (command_id, digest, receipt.get("project_id"),
                  None, receipt["outcome"], canonical(kept).decode(), now))
         cards.mark_snapshot_dirty(db)
-    if specs:
-        root = notify_spool.data_root(ledger)
-        notify_spool.ensure_dirs(root)
-        notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
+    notify_spool.publish_committed(ledger, db, specs, now)
     return receipt
 
 
@@ -793,7 +790,5 @@ def apply_refresh(ledger, req, cfg, now=None) -> dict:
             (command_id, payload_hash(req), receipt.get("project_id"),
              None, receipt["outcome"], canonical(receipt).decode(), now))
         cards.mark_snapshot_dirty(db)
-    root = notify_spool.data_root(ledger)
-    notify_spool.ensure_dirs(root)
-    notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
+    notify_spool.publish_committed(ledger, db, specs, now)
     return receipt

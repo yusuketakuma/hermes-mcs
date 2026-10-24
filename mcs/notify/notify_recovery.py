@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import time
 
-from mcs_requests import canonical, payload_hash, positive, valid_uuid
+from mcs_requests import canonical, payload_hash, positive, replay_receipt, valid_uuid
 import notify_cards as cards
 import notify_spool
 import notify_journal
@@ -20,6 +20,16 @@ from notify_scope import (card_projects, card_row, render_row, stored_scope,
 _RESOLVE_RESULTS = ("mark_not_sent", "mark_delivered")
 _PREFLIGHT_PROOF = "local_preflight_rejected"
 _PREFLIGHT_ERRORS = ("edit_target_unverified", "edit_history_unverified")
+
+
+# receipt note for an operator-declared LINE WORKS remote absence
+_LINEWORKS_ABSENT_LIMIT = "操作者の申告。未送信の確定ではなく、重複送信のリスクが残ります。"
+
+
+def _latest_delivery_id(db, card_id):
+    """Row of the card's newest render (``delivery_id``), or None."""
+    return db.execute("SELECT delivery_id FROM notification_renders WHERE card_id=? "
+                      "ORDER BY render_rev DESC LIMIT 1", (card_id,)).fetchone()
 
 
 def validate_card_resolve(req) -> str | None:
@@ -99,13 +109,9 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
     specs = []
     with db:
         db.execute("BEGIN IMMEDIATE")
-        old = db.execute(
-            "SELECT payload_hash,receipt_json FROM command_receipts "
-            "WHERE command_id=?", (req["command_id"],)).fetchone()
-        if old:
-            if old["payload_hash"] != digest:
-                return {"outcome": "rejected", "error": "command_id_conflict"}
-            return json.loads(old["receipt_json"])
+        found, old = replay_receipt(db, req["command_id"], digest)
+        if found:
+            return old
         error = validate_card_resolve(req)
         receipt = {"kind": "ops.card_resolve", "command_id": req["command_id"],
                    "actor": req.get("actor"), "reason": req.get("reason"),
@@ -188,16 +194,13 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
             receipt["outcome"] = "rejected"
             receipt["error"] = error
         if req.get("transport") == "lineworks" and req.get("evidence", {}).get("proof") == "remote_absent":
-            receipt["evidence_limit"] = "操作者の申告。未送信の確定ではなく、重複送信のリスクが残ります。"
+            receipt["evidence_limit"] = _LINEWORKS_ABSENT_LIMIT
         db.execute(
             "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
             (req["command_id"], digest, None, None,
              receipt["outcome"], canonical(receipt).decode(), now))
         cards.mark_snapshot_dirty(db)
-    if specs:
-        root = notify_spool.data_root(ledger)
-        notify_spool.ensure_dirs(root)
-        notify_spool.publish_specs(db, notify_spool.notify_dirs(root), specs, now)
+    notify_spool.publish_committed(ledger, db, specs, now)
     return receipt
 
 
@@ -384,8 +387,7 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
     if include_related:
         if render["transport"] != "slack" or render["op"] != "update" or render["card_id"] is None:
             return {"error": "related_parts_unresolvable"}
-        latest = db.execute("SELECT delivery_id FROM notification_renders WHERE card_id=? ORDER BY render_rev DESC LIMIT 1",
-                            (render["card_id"],)).fetchone()
+        latest = _latest_delivery_id(db, render["card_id"])
         if latest["delivery_id"] != delivery_id:
             return {"error": "related_parts_unresolvable"}
         related = []
@@ -721,8 +723,7 @@ def _preflight_recovery_targets(db, render, card, plans):
             or not scope_matches(render, stored_scope(card)) or not card["message_id"]
             or card["thread_state"] != "created" or not card["thread_id"]):
         return None
-    latest = db.execute("SELECT delivery_id FROM notification_renders WHERE card_id=? ORDER BY render_rev DESC LIMIT 1",
-                        (card["card_id"],)).fetchone()
+    latest = _latest_delivery_id(db, card["card_id"])
     unsettled = _preflight_unsettled_parts(db, card["card_id"])
     expected = {(plan["delivery_id"], plan["part_id"]) for plan in plans}
     if (latest["delivery_id"] != render["delivery_id"] or len(expected) != len(plans)
@@ -823,11 +824,9 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
     digest, specs = payload_hash(req), []
     with db:
         db.execute("BEGIN IMMEDIATE")
-        old = db.execute("SELECT payload_hash,receipt_json FROM command_receipts WHERE command_id=?",
-                         (req.get("command_id"),)).fetchone()
-        if old:
-            return (json.loads(old["receipt_json"]) if old["payload_hash"] == digest
-                    else {"outcome": "rejected", "error": "command_id_conflict"})
+        found, old = replay_receipt(db, req.get("command_id"), digest)
+        if found:
+            return old
         error = validate_card_part_resolve(req)
         receipt = {"kind": "ops.card_part_resolve", "command_id": req.get("command_id"),
                    "actor": req.get("actor"), "reason": req.get("reason"),
@@ -906,7 +905,7 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                              "prior_remote_id": targets[plan["part_id"]]["prior_remote_id"]}
                             for plan, item in zip(plans, settlements)]
                 if req["transport"] == "lineworks" and req["evidence"].get("proof") == "remote_absent":
-                    receipt["evidence_limit"] = "操作者の申告。未送信の確定ではなく、重複送信のリスクが残ります。"
+                    receipt["evidence_limit"] = _LINEWORKS_ABSENT_LIMIT
                 if (not preflight and card is not None and card["delivery_state"] != "update_failed"
                         and notify_spool.restore_pending(notify_spool.data_root(ledger)) is None
                         and not cards.resend_exhausted(db, card["card_id"])):

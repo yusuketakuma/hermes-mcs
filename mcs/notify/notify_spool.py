@@ -186,6 +186,15 @@ def publish_specs(db, dirs, specs, now) -> list:
     return published
 
 
+def publish_committed(ledger, db, specs, now) -> list:
+    """Publish specs of a committed render transaction; call only after the commit."""
+    if not specs:
+        return []
+    root = data_root(ledger)
+    ensure_dirs(root)
+    return publish_specs(db, notify_dirs(root), specs, now)
+
+
 def recover(ledger, cfg, result) -> dict:
     """Startup/periodic recovery for the file-published plane: republish
     queued/held renders and delivered plans with pending parts whose

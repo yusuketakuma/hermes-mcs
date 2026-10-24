@@ -12,7 +12,7 @@ from datetime import date
 from pathlib import Path
 
 # canonical/payload_hash/positive live in core; re-exported for callers
-from mcs_util import canonical, payload_hash, positive, valid_text  # noqa: F401
+from mcs_util import canonical, payload_hash, positive, reject_constant, unique_pairs, valid_text  # noqa: F401
 from safe_io import fsync_dir, read_regular_nofollow, fdopen_owned
 
 MAX_COMMAND_BYTES = 16384
@@ -20,21 +20,10 @@ STATUSES = ("open", "in_progress", "done", "cancelled")
 
 
 def parse_command(raw):
-    def pairs(items):
-        result = {}
-        for key, value in items:
-            if key in result:
-                raise ValueError("duplicate_key")
-            result[key] = value
-        return result
-
-    def constant(_):
-        raise ValueError("invalid_number")
-
     if len(raw) > MAX_COMMAND_BYTES:
         raise ValueError("command_too_large")
     try:
-        command = json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
+        command = json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=reject_constant)
     except RecursionError:
         raise ValueError("command_too_deep") from None
     return command
@@ -169,6 +158,20 @@ def validate(req):
     return "unknown_cmd"
 
 
+def replay_receipt(db, command_id, digest) -> tuple:
+    """(found, result) for ``command_id``: a conflict for another payload, else the stored original result.
+
+    Call it inside the caller's BEGIN IMMEDIATE so the replay check and the
+    receipt insert stay one transaction."""
+    old = db.execute("SELECT payload_hash,receipt_json FROM command_receipts WHERE command_id=?",
+                     (command_id,)).fetchone()
+    if old is None:
+        return False, None
+    if old["payload_hash"] != digest:
+        return True, {"outcome": "rejected", "error": "command_id_conflict"}
+    return True, json.loads(old["receipt_json"])
+
+
 def apply_command(ledger, req, *, cfg=None, data_dir=None):
     """Receipt-first transaction; exceptions leave the queue input retryable."""
     if not isinstance(req, dict) or not valid_uuid(req.get("command_id")):
@@ -196,12 +199,9 @@ def apply_command(ledger, req, *, cfg=None, data_dir=None):
     # SQLite exits first, so a failed COMMIT still unwinds file promotions.
     with ExitStack() as filesystem_changes, db:
         db.execute("BEGIN IMMEDIATE")
-        old = db.execute("SELECT payload_hash,receipt_json FROM command_receipts WHERE command_id=?",
-                         (req["command_id"],)).fetchone()
-        if old:
-            if old["payload_hash"] != digest:
-                return {"outcome": "rejected", "error": "command_id_conflict"}
-            return json.loads(old["receipt_json"])
+        found, old = replay_receipt(db, req["command_id"], digest)
+        if found:
+            return old
         error = validate(req)
         before = after = None
         pid = req.get("project_id") if positive(req.get("project_id")) else None
@@ -425,7 +425,7 @@ def candidates(db, message):
         return []
     # Select the same artifact as stats/signals, including when a newer
     # malformed or expired projection follows a usable one.
-    from mcs_queries import current_projection_id, current_v4_id
+    from mcs_queries import EXTRACTION_KINDS_SQL, current_projection_id, current_v4_id
     current = db.execute(f"""
       SELECT {current_projection_id('m')}, {current_v4_id('m')}
       FROM messages m
@@ -435,10 +435,9 @@ def candidates(db, message):
     projection_id = current[0] if current else None
     v4_id = current[1] if current else None
     seen, result = set(), []
-    for row in db.execute("""
+    for row in db.execute(f"""
       SELECT * FROM artifacts WHERE message_id=?
-        AND kind IN ('extract_v1','extract_llm','canonical_projection',
-                     'semantic_facts_v4')
+        AND kind IN ({EXTRACTION_KINDS_SQL})
       ORDER BY artifact_id DESC
     """, (message["message_id"],)):
         if row["kind"] == "semantic_facts_v4" \
