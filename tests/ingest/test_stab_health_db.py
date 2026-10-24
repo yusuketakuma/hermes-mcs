@@ -104,7 +104,7 @@ def test_local_llm_down_uses_the_llm_health_record(
             _legacy_extract(db, 1, exhausted=due == "legacy_exhausted")
     reasons = health_report.backlog_stalls(db.db, cfg, now)
     assert ("local_llm_down" in reasons) is alerted
-    assert "llm_endpoint_down" not in reasons   # fallback only without the record
+    assert "llm_endpoint_down" not in reasons   # the retired fallback reason is never emitted
     db.close()
 
 
