@@ -9,19 +9,15 @@ from __future__ import annotations
 import semantic_store
 
 import difflib
-import json
 import sqlite3
 
 from mcs_requests import parse_command, payload_hash, positive, validate
-from mcs_util import valid_hash
+from mcs_util import loads_dict, valid_hash
 
 
 def _json_object(value, code: str) -> dict:
-    try:
-        parsed = json.loads(value)
-    except (TypeError, ValueError, RecursionError):
-        raise ValueError(code) from None
-    if not isinstance(parsed, dict):
+    parsed = loads_dict(value)
+    if parsed is None:
         raise ValueError(code)
     return parsed
 
@@ -117,10 +113,8 @@ def _current_candidate(db, project_id: int, message_id: int,
         reasons.append("target_missing")
         return False, bundle, None
 
-    policy_row = db.execute(
-        "SELECT content FROM artifacts WHERE kind=? "
-        "ORDER BY artifact_id DESC LIMIT 1", ("semantic_policy",)).fetchone()
-    policy = policy_row["content"] if policy_row else None
+    from request_loops import latest_policy
+    policy = latest_policy(db)
     fresh = True
     if bundle.get("content_quality") != "full" or bundle.get("context_complete") is not True:
         reasons.append("context_incomplete")

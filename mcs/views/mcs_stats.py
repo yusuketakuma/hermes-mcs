@@ -59,14 +59,12 @@ def _as_of_day(scope):
 def st_data_quality(db, scope):
     """ST-002: three-stage coverage — fetched / parsed / stat-ready."""
     w, p = stats_contract.message_scope_sql(scope)
-    total = db.execute(
-        f"SELECT COUNT(*) FROM messages m WHERE 1=1{w}", p).fetchone()[0]
-    fetched = db.execute(
-        f"SELECT COUNT(*) FROM messages m WHERE body_state='full'{w}",
-        p).fetchone()[0]
     body_states = db.execute(
         f"SELECT COALESCE(body_state,'null'), COUNT(*) FROM messages m"
         f" WHERE 1=1{w} GROUP BY 1", p).fetchall()
+    # the per-state counts partition the scope, so they also give both totals
+    total = sum(n for _, n in body_states)
+    fetched = sum(n for state, n in body_states if state == "full")
     # parsed = the message has a current extraction of any fact
     # generation — the same current_fact_pred rule the fact stats read,
     # so a v4-current message (no current extract_llm row by design)
@@ -178,12 +176,12 @@ def st_overview(db, scope):
     # a project-scoped caller sees only its own room, never deployment totals
     pw, pp = ((" WHERE project_id = ?", [scope["project_id"]])
               if scope["project_id"] is not None else ("", []))
-    rooms = db.execute(f"SELECT COUNT(*) FROM patients{pw}", pp).fetchone()[0]
     state_rows = db.execute(
         "SELECT CASE WHEN is_archived=1 THEN 'archived' "
         "       WHEN fetch_state IS NULL THEN 'unknown' "
         f"       ELSE fetch_state END s, COUNT(*) FROM patients{pw} "
         "GROUP BY s", pp).fetchall()
+    rooms = sum(n for _, n in state_rows)
     posts = db.execute(
         f"SELECT COUNT(*) FROM messages m WHERE 1=1{w}", p).fetchone()[0]
     active_rooms = db.execute(
@@ -1403,35 +1401,14 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
     return result
 
 
-def st_validation_drops(db, scope):
-    return extraction_audit.collect(db, scope)["validation_drops"]
-
-def st_prefilter_cue_conflict(db, scope):
-    return extraction_audit.collect(db, scope)["prefilter_cue_conflict"]
-
-def st_thin_residual(db, scope):
-    return extraction_audit.collect(db, scope)["thin_residual"]
-
-def st_feedback_by_field(db, scope):
-    return extraction_audit.collect(db, scope)["feedback_by_field"]
-
-def st_omission_proxy(db, scope):
-    return extraction_audit.collect(db, scope)["omission_proxy"]
-
-def st_attachment_share(db, scope):
-    return extraction_audit.collect(db, scope)["attachment_share"]
-
-def st_request_loop_state(db, scope):
-    return extraction_audit.collect(db, scope)["request_loop_state"]
-
 REGISTRY = {
-    "validation_drops": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_validation_drops},
-    "prefilter_cue_conflict": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_prefilter_cue_conflict},
-    "thin_residual": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_thin_residual},
-    "feedback_by_field": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_feedback_by_field},
-    "omission_proxy": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_omission_proxy},
-    "attachment_share": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_attachment_share},
-    "request_loop_state": {"tier": "T1", "needs": ["extraction_audit"], "fn": st_request_loop_state},
+    "validation_drops": {"tier": "T1", "needs": ["extraction_audit"]},   # served by extraction_audit.collect
+    "prefilter_cue_conflict": {"tier": "T1", "needs": ["extraction_audit"]},   # served by extraction_audit.collect
+    "thin_residual": {"tier": "T1", "needs": ["extraction_audit"]},   # served by extraction_audit.collect
+    "feedback_by_field": {"tier": "T1", "needs": ["extraction_audit"]},   # served by extraction_audit.collect
+    "omission_proxy": {"tier": "T1", "needs": ["extraction_audit"]},   # served by extraction_audit.collect
+    "attachment_share": {"tier": "T1", "needs": ["extraction_audit"]},   # served by extraction_audit.collect
+    "request_loop_state": {"tier": "T1", "needs": ["extraction_audit"]},   # served by extraction_audit.collect
     # name -> {tier, needs, fn}
     "overview": {"tier": "T1", "needs": ["metadata"], "fn": st_overview},
     "data_quality": {"tier": "T0", "needs": ["metadata"],

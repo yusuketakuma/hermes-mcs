@@ -10,13 +10,18 @@ def mentions_self(metadata, self_id) -> bool | None:
                for m in metadata["mentions"])
 
 
-def flag_lines(db, metadata) -> list:
+_UNSET = object()      # an omitted preloaded self_sender_id; None means "self unknown"
+
+
+def flag_lines(db, metadata, *, self_id=_UNSET) -> list:
     """メンション・しおり・ピン留めの取得状態付き表示（CLI/evidence用）。"""
     def state(value, status, yes="あり", no="なし"):
         return (yes if value else no) if status == "observed" else (
             "取得不正" if status == "invalid" else "未取得")
-    import self_identity
-    hit = mentions_self(metadata, self_identity.self_sender_id(db))
+    if self_id is _UNSET:
+        import self_identity
+        self_id = self_identity.self_sender_id(db)
+    hit = mentions_self(metadata, self_id)
     mention = (state(hit, "observed", "本人宛あり", "本人宛なし") if hit is not None
                else "本人判定不可（本人ID不明）"
                if metadata["mentions_status"] == "observed"
@@ -26,7 +31,9 @@ def flag_lines(db, metadata) -> list:
             "ピン留め: " + state(metadata["is_pinned"], metadata["pin_status"])]
 
 
-def is_self_sender(db, sender_id) -> bool:
+def is_self_sender(db, sender_id, *, self_id=_UNSET) -> bool:
     """氏名の一致ではなく本人の送信者IDとの一致で判定する。"""
     import self_identity
-    return self_identity.is_self_message(db, sender_id)
+    if self_id is _UNSET:
+        return self_identity.is_self_message(db, sender_id)
+    return self_identity.is_self_message(db, sender_id, self_id=self_id)

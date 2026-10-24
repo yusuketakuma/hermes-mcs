@@ -22,8 +22,9 @@ from project_metadata_contract import CLINICAL_DATASETS
 from project_metadata_view import physician_viewed_status
 from mcs_contract import project_url
 from mcs_queries import incomplete_reply_roots
+import self_identity
 from self_identity import is_own_station_message
-from mcs_util import HOME, loads_dict, search_fold, valid_text, valid_hash
+from mcs_util import HOME, loads_dict, safe_error_code, search_fold, valid_text, valid_hash
 from mcs_queries import register_search_fold
 from snapshot_access import snapshot_meta
 from read_model import message_patient_context
@@ -135,7 +136,8 @@ class View:
             row.pop("_key", None)
         return {"items": rows, "next_cursor": next_cursor}
 
-    def _message(self, pid, mid):
+    def _require_message(self, pid, mid):
+        """The message row in this project, or ``bad_message_id``/``message_not_found`` (no decoration)."""
         if not requests.positive(mid):
             raise ValueError("bad_message_id")
         row = self.db.execute("""
@@ -147,7 +149,18 @@ class View:
         """, (pid, mid)).fetchone()
         if row is None:
             raise ValueError("message_not_found")
-        return self._evidence(dict(row))
+        return row
+
+    def _message(self, pid, mid):
+        return self._evidence(dict(self._require_message(pid, mid)))
+
+    def _identity(self):
+        """(self_sender_id, own_sender_ids) of this view's one snapshot, read on first use."""
+        cached = getattr(self, "_identity_cache", None)
+        if cached is None:
+            cached = self._identity_cache = (self_identity.self_sender_id(self.db),
+                                             self_identity.own_sender_ids(self.db))
+        return cached
 
     def _evidence(self, row):
         pid, mid = row["project_id"], row["message_id"]
@@ -161,11 +174,12 @@ class View:
         """, (mid,))]
         row["body_complete"] = row["body_state"] == "full"
         sender_id = row.pop("sender_id", None)
-        row["is_self_sender"] = is_self_sender(self.db, sender_id)
-        row["is_own_station_sender"] = is_own_station_message(self.db, sender_id)
+        self_id, own = self._identity()
+        row["is_self_sender"] = is_self_sender(self.db, sender_id, self_id=self_id)
+        row["is_own_station_sender"] = is_own_station_message(self.db, sender_id, own=own)
         row["message_metadata"] = get_message_metadata(
-            self.db, mid, as_of=self.meta["generated_at"])
-        row["metadata_flags"] = flag_lines(self.db, row["message_metadata"])
+            self.db, mid, as_of=self.meta["generated_at"], self_id=self_id)
+        row["metadata_flags"] = flag_lines(self.db, row["message_metadata"], self_id=self_id)
         row["metadata_shadow"] = get_metadata_shadow_status(
             self.db, mid, as_of=self.meta["generated_at"])
         row["patient_context"] = message_patient_context(self.db, row)
@@ -189,7 +203,7 @@ class View:
         if kind == "timeline":
             sql += " AND m.parent_id IS NULL"
         if kind == "thread":
-            self._message(pid, message_id)
+            self._require_message(pid, message_id)
             sql += " AND m.parent_id=?"
             params.append(message_id)
         if kind == "search":
@@ -297,12 +311,7 @@ class View:
             row["attachment_failure_reasons"] = reasons
             row["history_jobs"] = []
             for job in self.db.execute("SELECT payload,state FROM fetch_jobs WHERE project_id=? AND kind='history'", (pid,)):
-                try:
-                    payload = json.loads(job["payload"])
-                except (ValueError, TypeError, RecursionError):
-                    payload = {}
-                if not isinstance(payload, dict):
-                    payload = {}
+                payload = loads_dict(job["payload"]) or {}
                 row["history_jobs"].append({"state": job["state"], **{
                     key: payload.get(key) if type(payload.get(key)) is int else None
                     for key in ("since", "page", "pages")}})
@@ -443,12 +452,7 @@ class View:
             f"          IS NOT json_extract({content},'$.urgency.extracted')))",
             [pid], ["a.artifact_id"], ["qc", pid], limit, cursor)
         for row in page["items"]:
-            try:
-                content = json.loads(row.pop("content") or "{}")
-            except (ValueError, TypeError, RecursionError):
-                content = {}
-            if not isinstance(content, dict):
-                content = {}
+            content = loads_dict(row.pop("content") or "{}") or {}
             row["qc_state"] = content.get("qc")
             row["coverage"] = content.get("coverage")
             items = content.get("items")
@@ -486,11 +490,7 @@ class View:
         from mcs_queries import extract_feedback
         reports = []
         for r in extract_feedback(self.db, pid, limit=20):
-            try:
-                c = json.loads(r["content"] or "{}")
-            except (ValueError, TypeError, RecursionError):
-                c = {}
-            c = c if isinstance(c, dict) else {}
+            c = loads_dict(r["content"] or "{}") or {}
             # ids, field and state only — the note/actor stay in the ledger
             reports.append({"message_id": r["message_id"],
                             "artifact_id": c.get("artifact_id"),
@@ -527,7 +527,7 @@ class View:
         return loop_links(self.db, pid, request_id=request_id, loop_id=loop_id)
 
     def _attachments(self, project, message_id, limit, cursor):
-        self._message(project, message_id)
+        self._require_message(project, message_id)
         result = self._page("""SELECT attachment_id AS _key,attachment_id,message_id,name,state,
               downloaded_at,created_at,bytes,sha256,error FROM attachments WHERE message_id=?""",
                             [message_id], ["attachment_id"], ["attachments", project, message_id], limit, cursor)
@@ -542,10 +542,7 @@ class View:
         generation in this snapshot, including same-thread context."""
 
 
-        self._message(pid, mid)
-        row = self.db.execute(
-            "SELECT parent_id FROM messages WHERE message_id=?",
-            (mid,)).fetchone()
+        row = self._require_message(pid, mid)
         keys = [mid] + ([row["parent_id"]] if row and row["parent_id"]
                         else [])
         bundle = semantic_store.thread_bundle(self.db, pid, row["parent_id"] or mid)
@@ -595,7 +592,7 @@ class View:
 
     def _comparison(self, pid, mid):
         from summary_review import comparison
-        self._message(pid, mid)
+        self._require_message(pid, mid)
         return comparison(self.db, pid, mid)
 
     def _staff(self, pid, limit):
@@ -692,11 +689,8 @@ class View:
         if payload_hash is not None \
                 and row["payload_hash"] != payload_hash:
             return {"outcome": "rejected", "error": "command_id_conflict"}
-        try:
-            receipt = json.loads(row["receipt_json"])
-        except (ValueError, TypeError, RecursionError):
-            receipt = None
-        if not isinstance(receipt, dict):
+        receipt = loads_dict(row["receipt_json"])
+        if receipt is None:
             return {"outcome": "rejected", "error": "receipt_corrupt"}
         if context is None:
             return receipt
@@ -1029,7 +1023,7 @@ def main(argv=None):
                      (args["kind"] == "card_part_plan" and "error" in result)) else 0
     except (ValueError, OSError, sqlite3.Error, RecursionError) as error:
         # User text/SQL/paths must never be interpolated into error logs.
-        code = str(error) if type(error) is ValueError and str(error).replace("_", "").isalnum() else type(error).__name__
+        code = safe_error_code(error)
         print(json.dumps({"ok": False, "error": code}))
         return 1
     finally:

@@ -106,10 +106,15 @@ def own_sender_ids(db) -> frozenset[int]:
                      is not None)
 
 
-def is_own_station_message(db, sender_id) -> bool | None:
+class _Unset:
+    """Marks an omitted preloaded identity; a class because candidate constants are typed values."""
+
+
+def is_own_station_message(db, sender_id, *, own=_Unset) -> bool | None:
     """Match roster IDs only; absent sender or roster IDs remain unknown."""
     sid = normalize_sender_id(sender_id)
-    own = own_sender_ids(db)
+    if own is _Unset:
+        own = own_sender_ids(db)
     return sid in own if sid is not None and own else None
 
 
@@ -123,10 +128,12 @@ def self_sender_id(db) -> int | None:
     return normalize_sender_id(latest_self_profile(db).get("sender_id"))
 
 
-def is_self_message(db, sender_id) -> bool:
-    """Whether a known sender ID belongs to the logged-in MCS user."""
+def is_self_message(db, sender_id, *, self_id=_Unset) -> bool:
+    """Whether a known sender ID belongs to the logged-in MCS user (``self_id``: a preloaded self_sender_id)."""
     sid = normalize_sender_id(sender_id)
-    return sid is not None and sid == self_sender_id(db)
+    if sid is None:
+        return False
+    return sid == (self_sender_id(db) if self_id is _Unset else self_id)
 
 
 def self_sets(sig_cfg, db=None):

@@ -5,6 +5,7 @@ import re
 import time
 
 from mcs_util import loads_dict
+from snapshot_access import table_exists
 from stamp_contract import REACTION_LABELS, valid_stored_reactions
 
 METADATA_SHADOW_INTERVAL_S = 30 * 60
@@ -125,8 +126,7 @@ ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 def _read_metadata(db, mid, source) -> dict:
     row = None
-    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
-                  "AND name='message_metadata'").fetchone():
+    if table_exists(db, "message_metadata"):
         row = db.execute("SELECT content,checked_at,last_error FROM message_metadata "
                          "WHERE message_id=? AND source=?", (mid, source)).fetchone()
     return decode_metadata(row)
@@ -181,7 +181,10 @@ def _observation_age(metadata, as_of):
             and observation_timestamp(as_of) is not None else None)
 
 
-def get_message_metadata(db, mid, *, as_of=None) -> dict:
+_UNSET = object()      # an omitted preloaded self_sender_id; None means "self unknown"
+
+
+def get_message_metadata(db, mid, *, as_of=None, self_id=_UNSET) -> dict:
     """capture のみを読み、未取得と空配列を区別する（旧snapshotにも対応）。"""
     result = _read_metadata(db, mid, "capture")
     if as_of is not None:
@@ -191,16 +194,17 @@ def get_message_metadata(db, mid, *, as_of=None) -> dict:
             freshness_note="通常収集時の観測です。古い投稿の反応更新には遅延があり、"
                            "shadowの再取得結果はこの表示に反映しません。")
         result["response_observation"] = response_observation(
-            db, mid, result, as_of=as_of)
+            db, mid, result, as_of=as_of, self_id=self_id)
     return result
 
 
 def response_observation(
-        db, mid, metadata, *, as_of
+        db, mid, metadata, *, as_of, self_id=_UNSET
 ) -> dict[str, dict[str, str | float | list[str] | None] | str | None]:
     """保存済み返信と本人のUI操作を別々に示し、業務完了や未対応を推定しない。"""
     import self_identity
-    self_id = self_identity.self_sender_id(db)
+    if self_id is _UNSET:
+        self_id = self_identity.self_sender_id(db)
     row = db.execute(
         "SELECT project_id,parent_id,posted_at_ts FROM messages WHERE message_id=?",
         (mid,)).fetchone()
