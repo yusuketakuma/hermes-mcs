@@ -1,8 +1,10 @@
 """既存updater内でreleaseの子processと一回実行境界を所有する。"""
 from contextlib import contextmanager
+from dataclasses import dataclass
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -11,6 +13,7 @@ import select
 import stat
 import subprocess
 import time
+import threading
 
 CHILD_FDS_ENV = 'MCS_RELEASE_CHILD_FDS'
 
@@ -20,6 +23,119 @@ class ReleaseApplyError(ValueError):
     def __init__(self, code='HOLD'):
         self.code = 'RELEASE_APPLY_' + code
         super().__init__(self.code)
+
+
+class _EffectCapability:
+    __slots__ = ()
+
+
+@dataclass(frozen=True, eq=False, repr=False)
+class _StartedEffect:
+    owner: object
+    process_id: int
+    store: object
+    locks: tuple
+    lock_identities: tuple
+    runtime_home: str
+    repository: str
+    reference: dict
+    spent: dict
+    published_revision: int
+    journal: dict
+    configuration: dict
+    start_deadline: float
+    prequiesce_deadline: float
+
+
+# Constructors never publish authority. Only the verified live factory may populate these.
+_EFFECT_MUTEX = threading.Lock()
+_EFFECT_PROCESS_ID = os.getpid()
+_EFFECT_CAPS = {}
+_EFFECT_PARENTS = {}
+_EFFECT_CLAIMED = set()
+_EFFECT_RUNNING = set()
+
+
+def _effect_fd_identity(fd):
+    if type(fd) is not int or fd < 0:
+        raise ReleaseApplyError('EFFECT_HOLD')
+    info = os.fstat(fd)
+    return info.st_dev, info.st_ino, info.st_uid, info.st_mode
+
+
+def _claim_effect_entry(capability, *, arguments, runtime_home, repository, journal_path):
+    """同一processの登録済みRAM capabilityだけを一回消費する。保存値からは発行しない。"""
+    if type(capability) is not _EffectCapability or os.getpid() != _EFFECT_PROCESS_ID:
+        raise ReleaseApplyError('EFFECT_HOLD')
+    import update_journal
+    from adapters.sdc import release_state
+    with _EFFECT_MUTEX:
+        entry = _EFFECT_CAPS.pop(capability, None)
+        if (type(entry) is not _StartedEffect or entry.process_id != os.getpid()
+                or _EFFECT_PARENTS.get(entry.owner) is not entry or entry in _EFFECT_CLAIMED):
+            raise ReleaseApplyError('EFFECT_HOLD')
+        _EFFECT_CLAIMED.add(entry)
+    try:
+        ref = entry.reference
+        expected_arguments = (None, ref['target_commit'], None, entry.spent['preconditions']['current_commit'],
+                              False, (), None, False, None)
+        if (type(arguments) is not tuple or len(arguments) != len(expected_arguments)
+                or any(type(a) is not type(b) or a != b for a, b in zip(arguments, expected_arguments))
+                or os.path.realpath(runtime_home) != os.path.realpath(entry.runtime_home)
+                or os.path.realpath(repository) != os.path.realpath(entry.repository)
+                or os.path.realpath(journal_path) != os.path.realpath(Path(entry.runtime_home) / 'data/update_state.json')
+                or entry.store.root != _control_root(runtime_home)
+                or not update_journal.valid_release_ref(ref)
+                or ref['repo_fingerprint'] != _repository_fingerprint(repository)
+                or any(type(value) not in (int, float) or not math.isfinite(value)
+                       for value in (entry.start_deadline, entry.prequiesce_deadline))
+                or time.monotonic() >= min(entry.start_deadline, entry.prequiesce_deadline)
+                or len(entry.locks) != 3 or len(entry.lock_identities) != 3
+                or entry.store._release_entry_fd != entry.locks[0]
+                or entry.store._release_entry_shared is not False):
+            raise ReleaseApplyError('EFFECT_HOLD')
+        paths = (entry.store.root / 'release-entry.lock', Path(runtime_home) / 'data/update.lock',
+                 Path(runtime_home) / 'data/run.lock')
+        for fd, expected, path in zip(entry.locks, entry.lock_identities, paths):
+            current = path.stat(follow_symlinks=False)
+            if (_effect_fd_identity(fd) != expected
+                    or (current.st_dev, current.st_ino, current.st_uid, current.st_mode) != expected):
+                raise ReleaseApplyError('EFFECT_HOLD')
+        if update_journal.load_state(journal_path) != entry.journal or entry.journal.get('applying') or entry.journal.get('stages'):
+            raise ReleaseApplyError('EFFECT_HOLD')
+        with entry.store.release_owner_lock():
+            saved = release_state._read(entry.store)
+            expected_state = {**entry.spent['witness_state'], 'unresolved': {
+                'operation_id': entry.spent['operation']['operation_id'],
+                'plan_sha256': entry.spent['operation']['plan_hash'], 'phase': 'unknown'}}
+            if (saved['revision'] != entry.published_revision or saved['state'] != expected_state
+                    or not saved['spent'] or saved['spent'][-1] != entry.spent
+                    or saved['root_fingerprint'] != ref['root_fingerprint']
+                    or saved['repo_fingerprint'] != ref['repo_fingerprint']
+                    or any(ref[key] != value for key, value in {
+                        'operation_id': entry.spent['operation']['operation_id'],
+                        'grant_id': entry.spent['grant']['grant_id'],
+                        'plan_sha256': entry.spent['operation']['plan_hash'],
+                        'release_id': entry.spent['operation']['release_id'],
+                        'target_code_seq': entry.spent['operation']['target_code_seq'],
+                        'start_receipt_id': entry.spent['start_receipt_id'],
+                        'started_at': entry.spent['started_at']}.items())):
+                raise ReleaseApplyError('EFFECT_HOLD')
+        with _EFFECT_MUTEX:
+            if (_EFFECT_PARENTS.get(entry.owner) is not entry or entry in _EFFECT_RUNNING
+                    or time.monotonic() >= min(entry.start_deadline, entry.prequiesce_deadline)):
+                raise ReleaseApplyError('EFFECT_HOLD')
+            _EFFECT_RUNNING.add(entry)
+        return entry
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        raise ReleaseApplyError('EFFECT_HOLD') from None
+
+
+def _finish_effect_entry(entry):
+    if os.getpid() != _EFFECT_PROCESS_ID:
+        return
+    with _EFFECT_MUTEX:
+        _EFFECT_RUNNING.discard(entry)
 
 
 def _child_ticket(reference):
