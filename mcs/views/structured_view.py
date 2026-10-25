@@ -151,7 +151,8 @@ def _source_context_columns(db, message="m"):
     name = "p.patient_name" if "patient_name" in columns else "NULL"
     kind = "p.project_type" if "project_type" in columns else "NULL"
     join = f"LEFT JOIN patients p ON p.project_id={message}.project_id" if columns else ""
-    return f"{message}.body_text,{message}.body_state,{name},{kind}", join
+    return (f"{message}.body_text,{message}.body_state,{name} patient_name,{kind} project_type",
+            join)
 
 
 def _source_context_row(row):
@@ -161,13 +162,19 @@ def _source_context_row(row):
     return body, row[2], "unknown" if row[3] == "group" else "patient"
 
 
-def _source_context(db, mid):
-    if db is None:
-        return None, None, "patient"
+def _source_row(db, mid):
+    """(row, patients joined) for one message, with the columns and names
+    message_urgency_source reads, so both readers can share it."""
     fields, join = _source_context_columns(db)
     row = db.execute(f"SELECT {fields} FROM messages m {join} WHERE m.message_id=?",
                      (mid,)).fetchone()
-    return _source_context_row(row)
+    return row, bool(join)
+
+
+def _source_context(db, mid):
+    if db is None:
+        return None, None, "patient"
+    return _source_context_row(_source_row(db, mid)[0])
 
 
 def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> list[str]:
@@ -581,7 +588,10 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     llm = selected or {}
     if not v1 and not llm:
         return []
-    details = clinical_urgency.message_urgency_details(db, mid)
+    source, joined = (None, False) if db is None else _source_row(db, mid)
+    # without a patients table the urgency read keeps its own source query (and its error)
+    details = clinical_urgency.message_urgency_details(
+        db, mid, facts=selected, rule=v1, **({"source": source} if joined else {}))
     urgency = details["source"]
     # Fact artifacts (canonical projections) carry no urgency fields —
     # the extract_llm row behind them holds evidence and vital_flags.
@@ -601,7 +611,7 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
                      "緊急度: 要確認（対象人物・時点の根拠を確認。元の判定は高）")
     elif details["kind"] == "request":
         lines.append("急ぎの確認依頼（本人の緊急状態とは別）")
-    context = _source_context(db, mid)
+    context = (None, None, "patient") if db is None else _source_context_row(source)
     body, patient_name, default = context
     # Public source-less views cannot prove a measurement. Direct helpers and
     # nullable-body legacy rows retain their parsed-only compatibility.
