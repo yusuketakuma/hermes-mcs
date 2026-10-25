@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "収集処理の時間上限の説明と内部の説明文を現在のコードに合わせる（動作は変更なし）",
+  "summary": "開発者向けの収集処理の時間上限の表（docs/roadmap/acquisition.md）を、現在のコードの締切の確認方法に合わせて直しました。あわせて、外部への通信を担う共通処理と意味チェックの処理の説明文（docstring）に、利用元と結果の種類を正しく書き加えました。利用者が見る表示や、処理の動作は変わりません。",
+  "upgrade": "利用者の操作は不要です。説明文の変更だけなので、再起動の有無にかかわらず動作は同じです。このコードは意味チェック候補のfingerprintと抽出コードのdigestの対象外です。設定・保存済みの記録の書換えはありません。",
+  "details": [],
+  "refs": [
+    "docs/roadmap/acquisition.md",
+    "mcs/core/bounded_http.py",
+    "mcs/semantic/semantic_drain.py"
+  ]
+}
