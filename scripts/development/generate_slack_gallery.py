@@ -399,9 +399,9 @@ def verify_png(path, svg):
         raise ValueError(f"invalid PNG image data: {path.name}")
 
 
-def asset_hashes():
-    return {name: {ext: hashlib.sha256((OUT / f"{name}.{ext}").read_bytes()).hexdigest()
-                   for ext in ("svg", "png")} for name in SCREENS}
+def asset_hashes(out=OUT, screens=SCREENS):
+    return {name: {ext: hashlib.sha256((out / f"{name}.{ext}").read_bytes()).hexdigest()
+                   for ext in ("svg", "png")} for name in screens}
 
 
 def main():

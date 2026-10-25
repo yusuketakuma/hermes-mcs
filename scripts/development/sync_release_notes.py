@@ -16,11 +16,14 @@ IDENTITY = ("id", "tag_name", "draft", "prerelease", "target_commitish",
             "created_at", "published_at")
 
 
+STABLE_TAG = r"v[0-9]+\.[0-9]+\.[0-9]+"   # vX.Y.Z only; prerelease tags are outside the policy
+
+
 def release_record(value):
     """Reject missing or ill-typed release identity before planning or writing."""
     if not isinstance(value, dict) or not isinstance(value.get("tag_name"), str):
         raise ValueError("Release応答の形式が不正です")
-    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", value["tag_name"]):
+    if not re.fullmatch(STABLE_TAG, value["tag_name"]):
         return value  # Non-stable tags are outside the synchronization policy.
     if (type(value.get("id")) is not int or value["id"] <= 0
             or any(type(value.get(k)) is not bool for k in ("draft", "prerelease"))
@@ -43,7 +46,7 @@ def api(repo, endpoint, payload=None):
     if payload is not None:
         if (set(payload) != {"name", "body", "tag_name"}
                 or not isinstance(payload["tag_name"], str)
-                or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", payload["tag_name"])):
+                or not re.fullmatch(STABLE_TAG, payload["tag_name"])):
             raise ValueError("name・bodyと保持する安定版tag_nameのみ指定できます")
         command += ["--input", "-"]
     result = subprocess.run(command, input=json.dumps(payload) if payload is not None else None,
@@ -67,7 +70,7 @@ def synchronize(text, request, apply=False):
     for release in releases:
         release = release_record(release)
         tag = release["tag_name"]
-        if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        if not re.fullmatch(STABLE_TAG, tag):
             continue  # prerelease tags are outside this stable-release policy.
         if tag in seen or tag[1:] not in versions:
             raise ValueError(f"{tag}: 重複またはCHANGELOGの対応版がありません")

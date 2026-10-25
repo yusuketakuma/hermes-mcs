@@ -2,7 +2,6 @@
 """Generate source-based, fully synthetic LINE WORKS illustrations for README."""
 
 import argparse
-import hashlib
 from html import escape
 import json
 from pathlib import Path
@@ -12,13 +11,12 @@ import sys
 import tempfile
 import zlib
 
-from generate_slack_gallery import (BODY, FONT, HEADING, INK, META, MUTED, POSTS, RULE,
-                                    SENDER, Screen, verify_png)
+from generate_slack_gallery import (BODY, FONT, GREEN, HEADING, INK, META, MUTED, POSTS, RULE,
+                                    SENDER, Screen, asset_hashes, verify_png)
 
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "docs/screenshots/lineworks-gallery"
-GREEN = "#087f5b"
 BLUE = "#176cc2"
 
 
@@ -190,8 +188,7 @@ def main():
     if args.check or args.png:
         for name, build in SCREENS.items():
             verify_png(OUT / f"{name}.png", build())
-        hashes = {name: {ext: hashlib.sha256((OUT / f"{name}.{ext}").read_bytes()).hexdigest()
-                         for ext in ("svg", "png")} for name in SCREENS}
+        hashes = asset_hashes(OUT, SCREENS)
         manifest = OUT / "assets.json"
         if args.check:
             if json.loads(manifest.read_text(encoding="utf-8")) != hashes:
