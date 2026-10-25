@@ -241,7 +241,20 @@ def approve(destination: str, *, source_sha256: str, plan_sha256: str,
         # unreadable receipt that would also block any later approval.
         if len(canonical(receipt)) > MAX_COMMAND_BYTES:
             raise RestoreConsentError("restore_receipt_too_large")
-        _publish(fd, APPROVAL, receipt)
+        try:
+            _publish(fd, APPROVAL, receipt)
+        except FileExistsError:
+            # a receipt already stands (even one left by a changed-during-approval
+            # run): never replace or remove it here, just say so
+            try:
+                os.lstat(APPROVAL, dir_fd=fd)       # the pinned directory, as _publish
+            except FileNotFoundError:
+                exists = False
+            else:
+                exists = True
+            if not exists:
+                raise                               # some other name collided: unchanged
+            raise RestoreConsentError("restore_approval_exists") from None
         if _binding(path, fd, source_sha256) != binding:
             raise RestoreConsentError("restore_changed_during_approval")
         return {"receipt_sha256": payload_hash(receipt),

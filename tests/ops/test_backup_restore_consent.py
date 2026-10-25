@@ -462,3 +462,49 @@ def test_oversized_receipt_is_refused_before_publication(restored):
     assert not (restored / restore.APPROVAL).exists()
     resumed(restored, approved(restored))
     assert restore.writers_resumed(str(restored))
+
+
+def test_second_approval_names_the_standing_receipt_and_keeps_it(restored):
+    first = approved(restored)
+    receipt_bytes = (restored / restore.APPROVAL).read_bytes()
+    with pytest.raises(restore.RestoreConsentError, match="^restore_approval_exists$"):
+        approved(restored)
+    assert (restored / restore.APPROVAL).read_bytes() == receipt_bytes   # never replaced
+    assert sorted(p.name for p in restored.iterdir() if p.name.startswith(".backup-consent-")) == []
+    held(restored)
+    resumed(restored, first)                                             # the standing grant still works
+    assert restore.writers_resumed(str(restored))
+
+
+def test_receipt_left_by_a_changed_approval_blocks_with_its_own_reason(restored, monkeypatch):
+    publish = restore._publish
+
+    def replaced(fd, name, value):
+        publish(fd, name, value)
+        if name == restore.APPROVAL:                                     # change after publication
+            path = restored / "ledger.db"
+            replacement = restored / "replacement"
+            replacement.write_bytes(path.read_bytes())
+            replacement.chmod(0o600)
+            replacement.replace(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(restore, "_publish", replaced)
+        with pytest.raises(restore.RestoreConsentError, match="restore_changed_during_approval"):
+            approved(restored)
+    left = (restored / restore.APPROVAL).read_bytes()
+    with pytest.raises(restore.RestoreConsentError, match="^restore_approval_exists$"):
+        approved(restored)
+    assert (restored / restore.APPROVAL).read_bytes() == left            # no unlink, no re-approval
+    held(restored)
+
+
+def test_approve_cli_reports_the_fixed_token(restored, capsys):
+    approved(restored)
+    report = restore.plan(str(restored), source_sha256="a" * 64)
+    rc = restore.main(["approve", "--destination", str(restored), "--source-sha256", "a" * 64,
+                       "--plan-sha256", report["plan_sha256"], "--confirm-human",
+                       "--actor", "synthetic-owner", "--reason", "synthetic loss reviewed",
+                       "--custody-ref", "synthetic-owner-policy", "--delivery-policy", "hold_all"])
+    assert rc == 1
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "restore_approval_exists"}
