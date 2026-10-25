@@ -121,3 +121,42 @@ def test_sealed_attachments_stay_confined_to_data_attachments(tmp_path, monkeypa
                 {**_pin(attachments / "a", blob), "path": str(attachments / "missing")}):
         with pytest.raises(config.ConfigError, match="^payload_invalid$"):
             payload([pin])
+
+
+def test_init_reports_a_failed_staging_cleanup_instead_of_success(tmp_path, monkeypatch, capsys):
+    write_root(tmp_path, env=DISCORD_ENV)
+    real_unlink = os.unlink
+
+    data = str(tmp_path / "data")
+
+    def failing(path, *args, **kwargs):
+        # any staging copy beside the credentials file, whatever its name
+        if os.path.dirname(os.fspath(path)) == data and not os.fspath(path).endswith("-credentials.json"):
+            raise PermissionError("synthetic unlink failure")
+        return real_unlink(path, *args, **kwargs)
+    monkeypatch.setattr(cli.os, "unlink", failing)
+    with pytest.raises(PermissionError):
+        cli.initialize(str(tmp_path), "discord", yes=True)
+    assert "認証設定を保存しました" not in capsys.readouterr().out
+
+
+def test_symlinked_data_accepts_only_its_resolved_attachments(tmp_path, monkeypatch):
+    write_root(tmp_path, env=DISCORD_ENV)
+    real = tmp_path / "real-data"
+    (real / "attachments").mkdir(parents=True)
+    os.symlink(real, tmp_path / "data")
+    blob = b"synthetic"
+    (real / "attachments" / "a").write_bytes(blob)
+    (real / "sibling").write_bytes(blob)
+    (tmp_path / "other").write_bytes(blob)
+
+    def payload(files):
+        raw = json.dumps({"text": "合成", "files": files}).encode()
+        monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(raw)))
+        return cli._payload(str(tmp_path))
+
+    for inside in (tmp_path / "data" / "attachments" / "a", real / "attachments" / "a"):
+        assert payload([_pin(inside, blob)])["files"][0]["path"] == str(inside)
+    for outside in (real / "sibling", tmp_path / "other", tmp_path / "data" / "sibling"):
+        with pytest.raises(config.ConfigError, match="^payload_invalid$"):
+            payload([_pin(outside, blob)])
