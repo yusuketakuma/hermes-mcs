@@ -155,33 +155,6 @@ def restore_marker_present(root: str) -> bool:
     return True
 
 
-def config_generation(root: str, transport: str) -> tuple | None:
-    """lstat identity of config.json, the transport's credentials file and .env.
-
-    A change observation only, never proof of content or authorization: an
-    absent file is ("absent",), any other OSError returns None so the caller
-    runs its full validation. No file body is read.
-    """
-    if transport not in ("slack", "discord"):
-        raise ValueError("standalone_transport_invalid")
-    try:
-        base = Path(root).expanduser().resolve()
-    except (OSError, RuntimeError):
-        return None
-    out = []
-    for path in (base / "config.json", base / "data" / f"{transport}-credentials.json",
-                 base / ".env"):
-        try:
-            st = os.lstat(path)
-        except FileNotFoundError:
-            out.append(("absent",))
-            continue
-        except OSError:
-            return None
-        out.append((st.st_dev, st.st_ino, st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns))
-    return tuple(out)
-
-
 def read_verified_attachment(path: str | None, part: dict,
                              root: str | None = None) -> bytes | None:
     """Return the sealed bytes once, bounded by the collector's 64 MiB

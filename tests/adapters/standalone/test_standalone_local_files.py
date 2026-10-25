@@ -1,5 +1,5 @@
-"""Standalone config generation, transport scope, private init and sealed
-attachment confinement (synthetic roots only, no network or SDK)."""
+"""Standalone transport scope, private init and sealed attachment
+confinement (synthetic roots only, no network or SDK)."""
 import hashlib
 import io
 import json
@@ -9,7 +9,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from adapters.common.paths import config_generation
 from mcs_standalone import __main__ as cli
 from mcs_standalone import config
 from standalone_testkit import write_root
@@ -17,63 +16,9 @@ from standalone_testkit import write_root
 DISCORD_ENV = "DISCORD_BOT_TOKEN=synthetic-discord-token\n"
 
 
-def _changed(tmp_path, before):
-    after = config_generation(str(tmp_path), "discord")
-    assert after is not None and after != before
-    return after
-
-
-def test_generation_observes_every_metadata_change(tmp_path):
-    absent = config_generation(str(tmp_path), "discord")
-    assert absent == (("absent",), ("absent",), ("absent",))
-    write_root(tmp_path, env=DISCORD_ENV)
-    current = _changed(tmp_path, absent)
-    assert config_generation(str(tmp_path), "discord") == current   # unchanged files, same tuple
-    os.chmod(tmp_path / ".env", 0o400)                              # chmod only
-    current = _changed(tmp_path, current)
-    cfg = tmp_path / "config.json"
-    cfg.write_text(cfg.read_text() + " ")                           # content edit
-    current = _changed(tmp_path, current)
-    replacement = tmp_path / "config.json.new"
-    replacement.write_text(cfg.read_text())
-    os.replace(replacement, cfg)                                    # atomic replace
-    current = _changed(tmp_path, current)
-    credentials = tmp_path / "data" / "discord-credentials.json"
-    credentials.parent.mkdir()
-    credentials.write_text("{}")                                    # credentials take over from .env
-    current = _changed(tmp_path, current)
-    assert current[1] != ("absent",)
-    credentials.unlink()
-    assert _changed(tmp_path, current)[1] == ("absent",)
-
-
-def test_generation_keeps_links_and_fifos_as_their_own_identity(tmp_path):
-    write_root(tmp_path, env=DISCORD_ENV)
-    (tmp_path / "data").mkdir()
-    os.symlink(tmp_path / ".env", tmp_path / "data" / "discord-credentials.json")
-    os.mkfifo(tmp_path / "data" / "slack-credentials.json")
-    link = config_generation(str(tmp_path), "discord")[1]
-    fifo = config_generation(str(tmp_path), "slack")[1]
-    assert stat.S_ISLNK(link[2]) and stat.S_ISFIFO(fifo[2])          # lstat, never the target
-
-
-def test_unreadable_metadata_forces_full_validation(tmp_path):
-    write_root(tmp_path, env=DISCORD_ENV)
-    (tmp_path / "data").mkdir()
-    os.chmod(tmp_path / "data", 0)
-    try:
-        if os.access(tmp_path / "data", os.X_OK):
-            pytest.skip("privileged user can traverse a 000 directory")
-        assert config_generation(str(tmp_path), "discord") is None
-    finally:
-        os.chmod(tmp_path / "data", 0o700)
-
-
-def test_generation_and_connector_settings_reject_unknown_transports(tmp_path):
+def test_connector_settings_reject_unknown_transports(tmp_path):
     write_root(tmp_path, env=DISCORD_ENV)
     for transport in ("lineworks", "../x"):
-        with pytest.raises(ValueError, match="^standalone_transport_invalid$"):
-            config_generation(str(tmp_path), transport)
         with pytest.raises(ValueError, match="^standalone_transport_invalid$"):
             config.connector_settings(tmp_path, transport, require_interactive=False)
 
