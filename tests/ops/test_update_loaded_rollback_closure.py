@@ -92,7 +92,7 @@ if diagnostic is not None and local is not None:
 loaded = {name: module for name, module in sys.modules.items()
           if name in {"notify_spool", "notify_reconcile", "environment_diagnostics", "notify_flush",
                       "notify_sender", "local_llm", "llm_admission", "mcs_restore",
-                      "present_discord", "present_slack", "present_lineworks"}}
+                      "present_discord", "present_slack", "present_lineworks", "release_apply_owner"}}
 
 def cut(args):
     assert args == ["reset", "--hard", "old"]
@@ -196,7 +196,7 @@ for name, module in loaded.items():
     assert sys.modules.get(name) is module, name
 assert {"notify_spool", "notify_reconcile", "environment_diagnostics", "notify_flush",
         "notify_sender", "local_llm", "llm_admission", "mcs_restore",
-        "present_discord", "present_slack", "present_lineworks"} <= loaded.keys()
+        "present_discord", "present_slack", "present_lineworks", "release_apply_owner"} <= loaded.keys()
 print("synthetic cross-generation closure ok")
 '''
 

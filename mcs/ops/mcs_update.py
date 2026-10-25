@@ -80,6 +80,7 @@ import present_lineworks  # noqa: E402,F401 - restored card presentation
 import local_llm  # noqa: E402,F401 - postcheck model/admission diagnostics
 import llm_admission  # noqa: E402,F401 - postcheck admission diagnostics
 import mcs_restore  # noqa: E402,F401 - existing backup-adoption marker gate
+import release_apply_owner  # noqa: E402,F401 - legacy gate must survive an old-tree cut
 from mcs_requests import read_scheduled_receipt  # noqa: E402
 
 from mcs_util import HOME, REPO
