@@ -140,9 +140,7 @@ def install_bundled(args, *, directory: Path = BUNDLE, home: str = HOME) -> dict
     Config, the ledger and the network are not touched."""
     import import_drug_master as importer
     manifest, archive = load_bundled_master(directory)
-    pin = {"schema": importer.PIN_SCHEMA, "layout": importer.LAYOUT,
-           "edition": importer.EDITION, "sha256": manifest["archive_sha256"],
-           "member": manifest["member"], "as_of": date.today().isoformat(),
+    pin = {**importer.bundled_pin(manifest, date.today()),
            "terms_checked_on": args.terms_checked_on,
            "terms_record": args.terms_record or manifest["terms"]["url"],
            "status_policy": {**BUNDLED_POLICY, "confirmed_by": args.confirmed_by}}
@@ -353,12 +351,14 @@ def _drug_info(args) -> int:
             report = drug_info.formulary_ack(args.name, args.sha256)
         elif args.command == "formulary-list":
             report = drug_info.status()
+        elif args.command == "info-master":
+            # The listing comparison needs only the validated manifest, not the archive's rows.
+            manifest, _ = importer.load_bundled_master()
+            status, detail = drug_info.check_listing((manifest["edition"], manifest["rows"]))
+            report = {"status": status, "detail": detail, "source": drug_info.MENU}
         else:
             manifest, rows = drug_info.master_rows()
-            if args.command == "info-master":
-                status, detail = drug_info.check_listing((manifest["edition"], manifest["rows"]))
-                report = {"status": status, "detail": detail, "source": drug_info.MENU}
-            elif args.command == "formulary-add":
+            if args.command == "formulary-add":
                 names = importer.read_master_input(args.list, 1024 * 1024).decode("utf-8").splitlines()[:500]
                 report = {"master_edition": manifest["edition"],
                           "report": drug_info.formulary_add(names, rows, limit=args.limit)}

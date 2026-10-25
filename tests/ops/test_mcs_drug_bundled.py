@@ -250,3 +250,47 @@ def test_status_text_separates_an_unknown_boundary_from_none(tmp_path, monkeypat
     monkeypatch.setattr(mcs_drug, "load_config", lambda: config)
     assert mcs_drug.main(["status"]) == 0
     assert line() in capsys.readouterr().out
+
+
+def _info_master(tmp_path, monkeypatch, bundle, capsys):
+    import drug_info
+    real = importer.load_bundled_master
+    monkeypatch.setattr(importer, "load_bundled_master", lambda directory=bundle: real(directory))
+    monkeypatch.setattr(drug_info, "check_listing", lambda local: ("current", f"同梱 {local[0]} {local[1]}行"))
+
+    def never(*args, **kwargs):
+        raise AssertionError("info-master must not parse the archive")
+    monkeypatch.setattr(drug_info, "master_rows", never)
+    monkeypatch.setattr(importer, "catalog", never)
+    code = mcs_drug.main(["info-master"])
+    out = capsys.readouterr()
+    return code, out
+
+
+def test_info_master_reads_only_the_validated_manifest(tmp_path, monkeypatch, capsys):
+    import drug_info
+    bundle = _bundle(tmp_path)
+    # the listing check validates the manifest only: archive bytes are not hashed or parsed here
+    (bundle / importer.EDITION / f"y_{importer.EDITION}.zip").write_bytes(b"not the pinned archive")
+    code, out = _info_master(tmp_path, monkeypatch, bundle, capsys)
+    assert code == 0
+    assert json.loads(out.out) == {"status": "current", "detail": f"同梱 {importer.EDITION} 2行",
+                                   "source": drug_info.MENU}
+
+
+def test_info_master_still_refuses_a_malformed_manifest(tmp_path, monkeypatch, capsys):
+    bundle = _bundle(tmp_path)
+    path = bundle / importer.EDITION / "manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["rows"] = True
+    path.write_text(json.dumps(manifest))
+    code, out = _info_master(tmp_path, monkeypatch, bundle, capsys)
+    assert code == 1 and out.out == "" and "ValueError" in out.err
+
+
+def test_bundled_pin_keeps_each_caller_as_of():
+    manifest = {"archive_sha256": "a" * 64, "member": f"y_{importer.EDITION}.csv"}
+    day = date(2026, 10, 1)
+    assert importer.bundled_pin(manifest, day) == {
+        "schema": importer.PIN_SCHEMA, "layout": importer.LAYOUT, "edition": importer.EDITION,
+        "sha256": "a" * 64, "member": f"y_{importer.EDITION}.csv", "as_of": "2026-10-01"}

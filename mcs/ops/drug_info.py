@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _mcs_path  # noqa: E402,F401
-from mcs_util import HOME  # noqa: E402
+from mcs_util import HOME, strict_json  # noqa: E402
 from safe_io import atomic_write, read_private_bytes  # noqa: E402
 from stats_math import finite_number  # noqa: E402
 
@@ -139,27 +139,6 @@ def _gateway_absent():
     return False
 
 
-def _strict_web_json(text):
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError
-            result[key] = value
-        return result
-
-    def finite(value):
-        number = float(value)
-        if not math.isfinite(number):
-            raise ValueError
-        return number
-
-    def invalid(_value):
-        raise ValueError
-
-    return json.loads(text, object_pairs_hook=unique, parse_float=finite, parse_constant=invalid)
-
-
 def _exa_text(tool, arguments, deadline=None, timeout=30.0):
     import bounded_http
     payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -187,7 +166,7 @@ def _exa_text(tool, arguments, deadline=None, timeout=30.0):
                 if lines:
                     candidates.append("\n".join(lines))
         for candidate in candidates:
-            data = _strict_web_json(candidate)
+            data = strict_json(candidate)
             if not isinstance(data, dict) or data.get("jsonrpc") != "2.0":
                 raise ValueError
             if data.get("error"):
@@ -351,9 +330,7 @@ def master_rows():
     """Validated rows of the converter's bundled edition (read-only, via the existing importer)."""
     import import_drug_master as importer
     manifest, archive = importer.load_bundled_master()
-    pin = {"schema": importer.PIN_SCHEMA, "layout": importer.LAYOUT, "edition": importer.EDITION,
-           "sha256": manifest["archive_sha256"], "member": manifest["member"],
-           "as_of": max(date.today(), importer.EDITION_DATE).isoformat()}
+    pin = importer.bundled_pin(manifest, max(date.today(), importer.EDITION_DATE))
     catalog = importer.catalog(archive, pin)
     return manifest, list(catalog["rows"].values())
 

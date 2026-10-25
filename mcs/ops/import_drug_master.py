@@ -87,6 +87,13 @@ def load_bundled_master(directory: Path = BUNDLE):
     return manifest, folder / manifest["archive"]
 
 
+def bundled_pin(manifest, as_of: date) -> dict:
+    """The mechanical pin fields of the bundled edition; as_of stays the caller's choice."""
+    return {"schema": PIN_SCHEMA, "layout": LAYOUT, "edition": EDITION,
+            "sha256": manifest["archive_sha256"], "member": manifest["member"],
+            "as_of": as_of.isoformat()}
+
+
 def _iso(value: JSON) -> date:
     if not isinstance(value, str):
         raise MasterError("pin_date_invalid")
