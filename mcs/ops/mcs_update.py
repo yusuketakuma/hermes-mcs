@@ -297,6 +297,14 @@ def _git(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S
     except update_discovery.DiscoveryError as exc:
         raise UpdateError(str(exc)) from exc
 
+def _current_version() -> tuple[str | None, str]:
+    """(nearest release tag, HEAD sha) of the checkout; Git failures become UpdateError."""
+    try:
+        return update_discovery.current_version(checkout=REPO, environment=os.environ)
+    except update_discovery.DiscoveryError as exc:
+        raise UpdateError(str(exc)) from exc
+
+
 def _git_out(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S) -> str:
     r = _git(args, timeout)
     if r.returncode != 0:
@@ -795,10 +803,7 @@ def plan(tag: str | None = None, *, candidate_sha: str | None = None,
     if candidate and (tag is not None or not _candidate_args_valid(candidate_sha, base_sha)):
         return {"route": "blocked", "blockers": ["candidate_arguments_invalid"]}
     cfg = mcs_util.load_config()
-    try:
-        cur_tag, cur_sha = update_discovery.current_version(checkout=REPO, environment=os.environ)
-    except update_discovery.DiscoveryError as exc:
-        raise UpdateError(str(exc)) from exc
+    cur_tag, cur_sha = _current_version()
     state = journal_store.load_state(STATE_PATH)
     schema = restore_evidence.database_version(LEDGER)
     current = {"tag": cur_tag, "sha": cur_sha, "schema": schema}
@@ -3341,16 +3346,10 @@ def cmd_check() -> int:
     tag = sha = None
     if mode != "off":
         try:
-            try:
-                tag, sha = update_discovery.detect_latest(bool(upd.get("include_prerelease")), checkout=REPO, environment=os.environ)
-            except update_discovery.DiscoveryError as exc:
-                raise UpdateError(str(exc)) from exc
-        except UpdateError:
+            tag, sha = update_discovery.detect_latest(bool(upd.get("include_prerelease")), checkout=REPO, environment=os.environ)
+        except update_discovery.DiscoveryError:
             tag = sha = None            # receipts still get processed
-    try:
-        cur_tag, cur_sha = update_discovery.current_version(checkout=REPO, environment=os.environ)
-    except update_discovery.DiscoveryError as exc:
-        raise UpdateError(str(exc)) from exc
+    cur_tag, cur_sha = _current_version()
     notes = impact = None
     newer = _tag_is_newer(tag, sha, cur_sha)
     # --- serialized state update + decision --------------------------
@@ -3444,10 +3443,7 @@ def cmd_status() -> int:
     if state.get("_corrupt"):
         print("update_state.jsonを読み取れず、更新状況を確認できません。削除せず管理者に確認してください")
         return 2
-    try:
-        cur_tag, cur_sha = update_discovery.current_version(checkout=REPO, environment=os.environ)
-    except update_discovery.DiscoveryError as exc:
-        raise UpdateError(str(exc)) from exc
+    cur_tag, cur_sha = _current_version()
     print(json.dumps({"current_tag": cur_tag, "current_sha": cur_sha,
                       "state": state}, ensure_ascii=False, indent=2,
                      default=str))

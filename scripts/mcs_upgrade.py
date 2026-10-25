@@ -320,7 +320,7 @@ def _main(argv=None) -> int:
         repo = os.path.realpath(_git(args.repo, "rev-parse", "--show-toplevel").strip())
         if not args.no_fetch and candidate_sha is None:
             _git(repo, "fetch", "--tags", "origin")
-        if args.keep_hermes_checkout and not re.fullmatch(r"[0-9a-f]{40}", args.keep_hermes_checkout):
+        if args.keep_hermes_checkout and not COMMIT_SHA_RE.fullmatch(args.keep_hermes_checkout):
             raise SystemExit("--keep-hermes-checkout には省略しない40桁の16進数のコミット識別子が必要です")
         tag = candidate_sha or args.to or latest_tag(repo)
         if candidate_sha is not None:
@@ -335,10 +335,7 @@ def _main(argv=None) -> int:
             raise SystemExit(f"更新する版の指定が正しくありません（例: v1.0.23）: {tag}")
         tmp = tempfile.mkdtemp(prefix="mcs_upgrade_")
         try:
-            if candidate_sha is None:
-                extract(repo, tag, tmp)
-            else:
-                extract(repo, tag, tmp, local_candidate=True)
+            extract(repo, tag, tmp, local_candidate=candidate_sha is not None)
             updater = os.path.join(tmp, "mcs", "ops", "mcs_update.py")
             if not os.path.exists(updater):
                 raise SystemExit(f"{tag} に更新プログラム mcs/ops/mcs_update.py がありません")
