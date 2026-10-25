@@ -855,8 +855,10 @@ class Actions:
                                 "value": button["token"]})
                     navigation = navigation[:5]
                 if token_ctx:
-                    await self._offload(self._reg.put_tokens, token_ctx,
-                                            durable=bool(thread_ts))
+                    # the followup is already consumed: its tokens must land even while closing
+                    await commands.run_native(self._reg.put_tokens, token_ctx,
+                                              durable=bool(thread_ts),
+                                              admission=self._native_admission, admitted=True)
                 cards = ((_parts_blocks(result) or (
                     context_list_blocks(result.get("list"), self._allowed_pid)
                     if result.get("action") == "list" else None))

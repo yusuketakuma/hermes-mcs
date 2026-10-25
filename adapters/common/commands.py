@@ -46,9 +46,9 @@ class NativeAdmission:
             self._open = True
             return self._snapshot()
 
-    def _reserve(self):
+    def _reserve(self, *, admitted=False):
         with self._lock:
-            if not self._open:
+            if not self._open and not admitted:
                 raise NativeAdmissionClosed()
             ticket = _NativeTicket(self)
             self._queued += 1
@@ -80,9 +80,12 @@ class _NativeTicket:
                 self.stage = 'done'
 
 
-async def run_native(handler, *args, admission=None, **kwargs):
-    """Own native work before executor submission until the real handler finally ends."""
-    ticket = admission._reserve() if admission is not None else None
+async def run_native(handler, *args, admission=None, admitted=False, **kwargs):
+    """Own native work before executor submission until the real handler finally ends.
+
+    admitted=True is the answer of already-admitted work: a closed gate still tracks it but never refuses it.
+    """
+    ticket = admission._reserve(admitted=admitted) if admission is not None else None
     coroutine = None
     try:
         coroutine = (asyncio.to_thread(ticket.invoke, handler, *args, **kwargs)

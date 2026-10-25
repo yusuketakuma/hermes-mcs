@@ -797,7 +797,9 @@ class Actions:
         """Register runner-issued private-control tokens before their buttons."""
         token_ctx = result.get("token_ctx") or {}
         if token_ctx:
-            await self._offload(self._reg.put_tokens, token_ctx)
+            # the answer of already-admitted work: tokens land even while closing
+            await commands.run_native(self._reg.put_tokens, token_ctx,
+                                      admission=self._native_admission, admitted=True)
 
     async def _send_answer(self, interaction, answer: list,
                            result: dict) -> None:
