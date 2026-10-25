@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "1.1.0ではCSDCへ接続しない（コードは同梱・既定OFF）",
+  "summary": "1.1.0では、状態監視・診断の自動送信・遠隔支援（CSDC）を有効化・接続して提供しません。コードは同梱しますが、新規導入では config.sdc.enabled が未設定のため専用ジョブは登録されません。接続は中央側と実機の受入が整った後の版で行います。以前の計画で「1.1.0必須」としていた扱いを、この方針に置き換えます。",
+  "upgrade": "利用者の操作は不要です。すでに sdc.enabled=true を設定している環境を、この更新が自動で停止・変更することはありません（停止は別の明示操作です）。optional_features.csdc は初期設定の案内の表示だけを決める設定で、通信を止める設定ではありません。",
+  "details": [
+    "初期設定の任意機能の案内（CSDC）は、これまでどおり既定で省略です。案内を表示しても、登録・送信は始まりません。"
+  ],
+  "refs": [
+    "docs/guides/INSTALLATION.md",
+    "docs/guides/SDC_SELF_MONITORING.md",
+    "docs/guides/UPGRADE_AGENT.md"
+  ]
+}
