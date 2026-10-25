@@ -260,7 +260,7 @@ def _local_changes_outside(prev, target) -> list[str]:
                             (["ls-tree", "-rz", target], False),
                             (["ls-files", "--stage", "-v", "-z"], True)):
             result = _git(args)
-            if result is None or result.returncode != 0:
+            if result.returncode != 0:
                 raise ValueError("tree/index unreadable")
             versions = {}
             for record in filter(None, result.stdout.split("\0")):
@@ -276,9 +276,7 @@ def _local_changes_outside(prev, target) -> list[str]:
                 if (last != "0" if index else middle != "blob") or mode not in {
                         "100644", "100755", "120000"}:
                     raise ValueError("tree/index type unknown")
-                parts = path.split("/")
-                if (path.startswith("/") or any(ord(c) < 32 for c in path)
-                        or any(p in {"", ".", ".."} for p in parts)):
+                if not _safe_relpath(path):
                     raise ValueError("tree/index path invalid")
                 versions[path] = (mode, blob)
             snapshots.append(versions)
@@ -286,7 +284,7 @@ def _local_changes_outside(prev, target) -> list[str]:
         for visibility in ("--ita-visible-in-index", "--ita-invisible-in-index"):
             result = _git(["diff", "--cached", "--raw", "--no-renames", "--no-ext-diff",
                            "--no-textconv", "--no-abbrev", "--no-relative", "-z", visibility, prev])
-            if result is None or result.returncode != 0:
+            if result.returncode != 0:
                 raise ValueError("index intent unreadable")
             ita_views.append(result.stdout)
         if ita_views[0] != ita_views[1]:
@@ -369,7 +367,6 @@ def fetch_notes(tag: str) -> str | None:
     url = (f"https://api.github.com/repos/{m.group(1)}/{m.group(2)}"
            f"/releases/tags/{tag}")
     try:
-        import mcs_util
         req = urllib.request.Request(
             url, headers={"Accept": "application/vnd.github+json",
                           "User-Agent": "mcs-update"})
@@ -736,15 +733,7 @@ def plan(tag: str | None = None, *, candidate_sha: str | None = None,
     except update_discovery.DiscoveryError as exc:
         raise UpdateError(str(exc)) from exc
     state = journal_store.load_state(STATE_PATH)
-    try:
-        con = sqlite3.connect(Path(LEDGER).resolve().as_uri() + "?mode=ro",
-                              uri=True)
-        try:
-            schema = con.execute("PRAGMA user_version").fetchone()[0]
-        finally:
-            con.close()
-    except sqlite3.Error:
-        schema = None
+    schema = restore_evidence.database_version(LEDGER)
     current = {"tag": cur_tag, "sha": cur_sha, "schema": schema}
     try:
         target_sha = (_candidate_commit(candidate_sha) if candidate else
@@ -1336,11 +1325,7 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
         errors.append("ledger_open_failed")
     try:
         cfg = mcs_util.load_config()
-        errs, _ = environment_diagnostics.check_environment(
-            cfg, paths=_service_paths(), chrome_bin=mcs_util.CHROME_BIN,
-            credential_paths=(os.path.join(mcs_util.HOME, ".env"),
-                              os.path.expanduser("~/.hermes/.env")),
-            agents_dir=os.path.expanduser("~/Library/LaunchAgents"))
+        errs, _ = _check_environment(cfg)
         baseline = {update_policy.environment_error_identity(e)
                     for e in (state.get("baseline_check") or [])}
         new = [e for e in errs if update_policy.environment_error_identity(e) not in baseline]
@@ -2116,13 +2101,18 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                 os.close(fd)
 
 
+def _check_environment(cfg: dict):
+    """environment_diagnostics.check_environment with the updater's paths."""
+    return environment_diagnostics.check_environment(
+        cfg, paths=_service_paths(), chrome_bin=mcs_util.CHROME_BIN,
+        credential_paths=(os.path.join(mcs_util.HOME, ".env"),
+                          os.path.expanduser("~/.hermes/.env")),
+        agents_dir=AGENTS_DIR)
+
+
 def _baseline_check(cfg: dict) -> list[str]:
     try:
-        errs, _ = environment_diagnostics.check_environment(
-            cfg, paths=_service_paths(), chrome_bin=mcs_util.CHROME_BIN,
-            credential_paths=(os.path.join(mcs_util.HOME, ".env"),
-                              os.path.expanduser("~/.hermes/.env")),
-            agents_dir=os.path.expanduser("~/Library/LaunchAgents"))
+        errs, _ = _check_environment(cfg)
         return errs
     except Exception:
         return []
@@ -2634,7 +2624,7 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
     if live_ver is None:
         raise UpdateError("live_db_unreadable")
     back_ver = restore_evidence.database_version(backup_path)
-    if live_ver is not None and live_ver == back_ver:
+    if live_ver == back_ver:
         # A remaining restore marker still requires reconciliation. A prior
         # swap may already have restored the backup version; version equality
         # alone must not finish a schema-blocked or interrupted reconcile.
