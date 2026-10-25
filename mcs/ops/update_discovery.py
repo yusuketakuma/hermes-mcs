@@ -42,14 +42,16 @@ def git_output(args: list[str], timeout: int = LOCAL_TIMEOUT_S, *,
 
 
 def remote_tag_sha(tag: str, *, checkout, environment) -> str | None:
-    """Peeled commit sha for <tag> at origin, or None. Queries both the
+    """Peeled commit sha for <tag> at origin, or None when origin has no
+    such tag; a failed query raises DiscoveryError. Queries both the
     ref and its ^{} peel — a lightweight tag returns only the direct
     line, whose sha IS the commit (S15)."""
     r = git(["ls-remote", "origin",
               f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
              timeout=REMOTE_TIMEOUT_S, checkout=checkout, environment=environment)
     if r.returncode != 0:
-        return None
+        # a failed query is not "the tag moved": None stays "no such ref at origin"
+        raise DiscoveryError(f"git_failed: ls-remote (exit={r.returncode})")
     direct = peeled = None
     for line in r.stdout.splitlines():
         sha, _, ref = line.partition("\t")
@@ -99,9 +101,20 @@ def detect_latest(include_prerelease: bool = False, *, checkout,
 
 
 def current_version(*, checkout, environment) -> tuple[str | None, str | None]:
-    """(nearest ancestor tag, HEAD sha)."""
+    """(nearest ancestor release tag under update_policy.release_tag, HEAD sha).
+    Tags that only look like versions (v1garbage) are excluded by name, so an
+    older valid release behind them is still found; None when there is none."""
+    patterns = ["--match", "v[0-9]*", "--match", "[0-9]*"]
     try:
-        tag = git_output(["describe", "--tags", "--abbrev=0"], checkout=checkout, environment=environment).strip()
+        names = git_output(["tag", "--list", "v[0-9]*", "[0-9]*"],
+                           checkout=checkout, environment=environment).split()
+        # refnames cannot hold *, ? or [, so a tag name is its own exact pattern
+        excludes = [arg for name in names if not update_policy.release_tag(name)
+                    for arg in ("--exclude", name)]
+        tag = git_output(["describe", "--tags", "--abbrev=0", *patterns, *excludes],
+                         checkout=checkout, environment=environment).strip()
     except DiscoveryError:
+        tag = None
+    if not update_policy.release_tag(tag):
         tag = None
     return tag, git_output(["rev-parse", "HEAD"], checkout=checkout, environment=environment).strip()
