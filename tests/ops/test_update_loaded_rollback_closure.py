@@ -21,7 +21,21 @@ socket.create_connection = forbidden
 socket.socket.connect = forbidden
 subprocess.run = forbidden
 subprocess.Popen = forbidden
+if case == "missing_gate":
+    (checkout / "mcs/ops/release_apply_owner.py").unlink()
 import mcs_update as updater
+if case == "missing_gate":
+    import contextlib, io
+    assert updater._release_legacy_scope is None
+    assert updater._build_parser().parse_args(["status"]).cmd == "status"
+    (checkout / "mcs/ops/release_apply_owner.py").write_text("raise AssertionError('new generation imported')\n")
+    called = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert updater._call_legacy(lambda: called.append(True)) == 2
+    assert called == []
+    assert updater._release_legacy_blocked({}) is True
+    print("synthetic cross-generation closure ok")
+    sys.exit(0)
 import ledger
 root.mkdir()
 data = root / "data"
@@ -93,6 +107,9 @@ loaded = {name: module for name, module in sys.modules.items()
           if name in {"notify_spool", "notify_reconcile", "environment_diagnostics", "notify_flush",
                       "notify_sender", "local_llm", "llm_admission", "mcs_restore",
                       "present_discord", "present_slack", "present_lineworks", "release_apply_owner"}}
+gate_scope = updater._release_legacy_scope
+gate_globals = gate_scope.__wrapped__.__globals__
+assert gate_globals is sys.modules["release_apply_owner"].__dict__
 
 def cut(args):
     assert args == ["reset", "--hard", "old"]
@@ -100,6 +117,8 @@ def cut(args):
     shutil.rmtree(checkout / "mcs")
     (checkout / "mcs" / "core").mkdir(parents=True)
     (checkout / "mcs" / "core" / "ledger.py").write_text("raise AssertionError('mixed generation import')\n")
+    assert updater._release_legacy_scope is gate_scope
+    assert updater._release_legacy_scope.__wrapped__.__globals__ is gate_globals
 updater._git_out = cut
 if case == "postcheck":
     cut(["reset", "--hard", "old"])
@@ -201,7 +220,7 @@ print("synthetic cross-generation closure ok")
 '''
 
 
-@pytest.mark.parametrize("case", ["hold", "approved", "postcheck", "rollback", "recover",
+@pytest.mark.parametrize("case", ["missing_gate", "hold", "approved", "postcheck", "rollback", "recover",
                                       "rollback:save_failure", "rollback:unreadable",
                                       "recover:save_failure", "recover:unreadable"])
 def test_cold_updater_uses_loaded_restore_and_postcheck_after_old_tree_cut(tmp_path, case):

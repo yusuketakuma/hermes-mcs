@@ -80,7 +80,10 @@ import present_lineworks  # noqa: E402,F401 - restored card presentation
 import local_llm  # noqa: E402,F401 - postcheck model/admission diagnostics
 import llm_admission  # noqa: E402,F401 - postcheck admission diagnostics
 import mcs_restore  # noqa: E402,F401 - existing backup-adoption marker gate
-import release_apply_owner  # noqa: E402,F401 - legacy gate must survive an old-tree cut
+try:
+    from release_apply_owner import _legacy_scope as _release_legacy_scope  # noqa: E402
+except ImportError:
+    _release_legacy_scope = None  # Preserve diagnostic startup; never reload from a switched tree.
 from mcs_requests import read_scheduled_receipt  # noqa: E402
 
 from mcs_util import HOME, REPO
@@ -218,8 +221,9 @@ def _release_legacy_blocked(state):
     if 'release_ref' in state or any('release_ref' in row for row in records):
         return True
     try:
-        from release_apply_owner import _legacy_scope
-        with _legacy_scope(HOME) as current:
+        if _release_legacy_scope is None:
+            return True
+        with _release_legacy_scope(HOME) as current:
             held = _RELEASE_GATE_FD.get()
             if held is not None:
                 before, after = os.fstat(held), os.fstat(current)
@@ -244,8 +248,9 @@ def _call_legacy(function, *args, **kwargs):
     # Only entry/cleanup failures are converted to hold; preserve the old body's exception contract.
     with ExitStack() as stack:
         try:
-            from release_apply_owner import _legacy_scope
-            fd = stack.enter_context(_legacy_scope(HOME))
+            if _release_legacy_scope is None:
+                raise ImportError('release gate unavailable at startup')
+            fd = stack.enter_context(_release_legacy_scope(HOME))
             stack.enter_context(owned_process.lifetime_fds((fd,)))
         except (OSError, ValueError, ImportError):
             print('release制御の確認中または状態が不明なため、通常の更新・復旧を停止しました。')
