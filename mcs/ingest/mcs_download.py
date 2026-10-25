@@ -25,35 +25,32 @@ def _allowed_port(u) -> bool:
         return False  # malformed port — refuse, never follow
 
 
+def _url_allowed(url, hosts) -> bool:
+    """https on an allowlisted host and port with no userinfo or fragment; malformed is never allowed."""
+    try:
+        u = urllib.parse.urlparse(url)
+        return (u.scheme == "https" and u.hostname in hosts and _allowed_port(u)
+                and u.username is None and u.password is None and not u.fragment)
+    except ValueError:
+        return False
+
+
 class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
     """Follow redirects only when the target stays on an allowlisted host."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        try:
-            u = urllib.parse.urlparse(newurl)
-            ok = (u.scheme == "https"
-                  and u.hostname in _ALLOWED_DOWNLOAD_HOSTS
-                  and _allowed_port(u)
-                  and u.username is None and u.password is None and not u.fragment)
-        except ValueError:
-            ok = False  # malformed redirect target — refuse, never follow
-        if not ok:
-            return None
+        if not _url_allowed(newurl, _ALLOWED_DOWNLOAD_HOSTS):
+            return None  # off-list or malformed redirect target — refuse, never follow
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def validate_download_url(url: str):
     try:
-        u = urllib.parse.urlparse(url)
-        ok_port = _allowed_port(u)
-        host = u.hostname
+        urllib.parse.urlparse(url).hostname
     except ValueError:
-        # urlparse/.hostname/.port raise on bad brackets or malformed
-        # ports — a stored malformed URL must fail as MCSError, not
-        # escape as a bare ValueError
+        # urlparse/.hostname raise on bad brackets — a stored malformed URL
+        # must fail as MCSError, not escape as a bare ValueError
         raise MCSError("url_not_allowed", "unparseable") from None
-    if (u.scheme != "https" or host not in _ALLOWED_DOWNLOAD_HOSTS
-            or not ok_port or u.username is not None or u.password is not None
-            or u.fragment):
+    if not _url_allowed(url, _ALLOWED_DOWNLOAD_HOSTS):
         raise MCSError("url_not_allowed", "download origin invalid")
 
 
@@ -83,16 +80,7 @@ def _open_download(url: str, token, deadline, opener):
             if e.code in (301, 302, 303, 307, 308):
                 loc = e.headers.get("location")
                 if loc:
-                    try:
-                        u = urllib.parse.urlparse(loc)
-                        ok = (u.scheme == "https"
-                              and u.hostname in _ALLOWED_REDIRECT_HOSTS
-                              and _allowed_port(u)
-                              and u.username is None and u.password is None
-                              and not u.fragment)
-                    except ValueError:
-                        ok = False  # malformed Location — never follow
-                    if ok:
+                    if _url_allowed(loc, _ALLOWED_REDIRECT_HOSTS):
                         # signed CDN URL authenticates itself — follow with
                         # a fresh request carrying NO Authorization header
                         return opener.open(
