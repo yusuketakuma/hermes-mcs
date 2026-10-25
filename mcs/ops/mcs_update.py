@@ -297,6 +297,34 @@ def _git(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S
     except update_discovery.DiscoveryError as exc:
         raise UpdateError(str(exc)) from exc
 
+def _checkout_git(checkout: str, *args: str) -> subprocess.CompletedProcess:
+    """A bounded Git read of another checkout (OSError/TimeoutExpired propagate)."""
+    return _run_with_lifetime(["git", "-C", checkout, *args], capture_output=True,
+                              text=True, timeout=30)
+
+
+def _index_has_flags(ls_files_v: str) -> bool:
+    """True when `ls-files -v -z` shows any entry not tracked as plain 'H'."""
+    return any(not row.startswith("H ") for row in ls_files_v.split("\0") if row)
+
+
+def _record_executed(state: dict, command_id: str, result: str,
+                     detail: str | None = None) -> None:
+    """Record a consumed operator command once, in the journal's fixed shape."""
+    entry = {"result": result}
+    if detail is not None:
+        entry["detail"] = detail[:200]
+    entry["at"] = time.time()
+    state.setdefault("executed", {})[command_id] = entry
+
+
+def _restore_hold_active() -> bool:
+    """A writer-hold marker, a pending restore consent or an incomplete restore."""
+    return bool(_restore_writer_hold_marker() is not None
+                or journal_store.load_state(STATE_PATH).get("restore_consent")
+                or (journal_store.load_state(STATE_PATH).get("applying") or {}).get("restore_incomplete"))
+
+
 def _current_version() -> tuple[str | None, str]:
     """(nearest release tag, HEAD sha) of the checkout; Git failures become UpdateError."""
     try:
@@ -521,24 +549,21 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
         return None          # the runtime gate already reports a bad selection
     if checkout is None:
         return None
-    def git(*args):
-        return _run_with_lifetime(["git", "-C", checkout, *args], capture_output=True,
-                              text=True, timeout=30)
     try:
-        head = git("rev-parse", "HEAD")
-        index = git("ls-files", "-v", "-z")
+        head = _checkout_git(checkout, "rev-parse", "HEAD")
+        index = _checkout_git(checkout, "ls-files", "-v", "-z")
     except (OSError, subprocess.TimeoutExpired):
         return "hermes_checkout_unreadable"
     if head.returncode != 0 or not update_discovery.COMMIT_SHA_RE.fullmatch(head.stdout.strip()) or index.returncode != 0:
         return "hermes_checkout_unreadable"
-    if any(not row.startswith("H ") for row in index.stdout.split("\0") if row):
+    if _index_has_flags(index.stdout):
         return "hermes_checkout_branch_or_dirty"
     keep = os.environ.get(KEEP_CHECKOUT_ENV)
     if not keep and not _needs_migration(venv) and not _refresh_runtime_pin(venv, head.stdout.strip()):
         return None
     try:
-        branch = git("symbolic-ref", "-q", "HEAD")
-        dirty = git("status", "--porcelain", "--untracked-files=no")
+        branch = _checkout_git(checkout, "symbolic-ref", "-q", "HEAD")
+        dirty = _checkout_git(checkout, "status", "--porcelain", "--untracked-files=no")
     except (OSError, subprocess.TimeoutExpired):
         return "hermes_checkout_unreadable"
     if dirty.returncode != 0 or branch.returncode not in (0, 1):
@@ -633,7 +658,8 @@ def precheck_tag(tag: str) -> list[str]:
     if standalone and not _standalone_target_supported(tag):
         errors.append("standalone_runtime_missing_in_target")
     paths = []
-    for mode, otype, _sha, path in _ls_tree_paths(tag):
+    entries = _ls_tree_paths(tag)
+    for mode, otype, _sha, path in entries:
         if mode not in ("100644", "100755", "040000") or \
                 otype not in ("blob", "tree"):
             errors.append(f"bad_entry_type: {mode} {path}")
@@ -684,20 +710,10 @@ def precheck_tag(tag: str) -> list[str]:
             errors.append("schema_version_unparseable")
         else:
             new_ver = int(m.group(1))
-            try:
-                con = sqlite3.connect(
-                    Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
-                try:
-                    cur_ver = con.execute(
-                        "PRAGMA user_version").fetchone()[0]
-                finally:
-                    con.close()
-            except sqlite3.Error:
-                # unknown is not zero: never report a bump from 0
-                cur_ver = None
-                errors.append("schema_version_unknown")
+            cur_ver = restore_evidence.database_version(LEDGER)
             if cur_ver is None:
-                pass
+                # unknown is not zero: never report a bump from 0
+                errors.append("schema_version_unknown")
             elif new_ver < cur_ver:
                 errors.append(f"schema_downgrade:{cur_ver}->{new_ver}")
             elif new_ver > cur_ver:
@@ -707,8 +723,8 @@ def precheck_tag(tag: str) -> list[str]:
     # candidate preflight: exact blobs, not git archive (S3)
     tmp = tempfile.mkdtemp(prefix="mcs_preflight_")
     try:
-        for mode, otype, bsha, path in _ls_tree_paths(tag, "mcs"):
-            if otype != "blob":
+        for mode, otype, bsha, path in entries:
+            if otype != "blob" or not (path == "mcs" or path.startswith("mcs/")):
                 continue
             if not _safe_relpath(path):
                 raise UpdateError("unsafe_path: " + path)
@@ -1595,20 +1611,17 @@ def _check_runtime_restore(entry: dict) -> str | None:
             or not isinstance(target, str) or not update_discovery.COMMIT_SHA_RE.fullmatch(target):
         raise UpdateError("runtime_restore_checkout_unreadable")
     try:
-        def git(*args):
-            return _run_with_lifetime(["git", "-C", checkout, *args], capture_output=True,
-                                  text=True, timeout=30)
-        now = git("rev-parse", "HEAD")
-        branch = git("symbolic-ref", "-q", "HEAD")
-        dirty = git("status", "--porcelain", "--untracked-files=no")
-        index = git("ls-files", "-v", "-z")
+        now = _checkout_git(checkout, "rev-parse", "HEAD")
+        branch = _checkout_git(checkout, "symbolic-ref", "-q", "HEAD")
+        dirty = _checkout_git(checkout, "status", "--porcelain", "--untracked-files=no")
+        index = _checkout_git(checkout, "ls-files", "-v", "-z")
     except (OSError, subprocess.TimeoutExpired):
         raise UpdateError("runtime_restore_checkout_unreadable") from None
     if now.returncode != 0 or dirty.returncode != 0 or index.returncode != 0 \
             or branch.returncode not in (0, 1):
         raise UpdateError("runtime_restore_checkout_unreadable")
     current = now.stdout.strip()
-    if dirty.stdout.strip() or any(not row.startswith("H ") for row in index.stdout.split("\0") if row) \
+    if dirty.stdout.strip() or _index_has_flags(index.stdout) \
             or current not in {head, target} \
             or branch.returncode == 0 and not migration.get("kept_checkout") \
             or migration.get("kept_checkout") and current != head:
@@ -1753,9 +1766,7 @@ def _hold_rollback_for_consent(state, e, tag, command_id,
             entry, entry.get("sha"), command_id or entry.get("command_id"))
     reason += " (rollback held: consent pending " + rid[:16] + "…)"
     if command_id:
-        state.setdefault("executed", {})[command_id] = {
-            "result": "failed", "detail": reason[:200],
-            "at": time.time()}
+        _record_executed(state, command_id, "failed", reason)
     _record_attempt(state, tag, "failed", reason)
     _consent_hold(state, e, state["applying"].get("backup_path"))
     return 2
@@ -2005,9 +2016,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                           f"{type(qe).__name__}: {qe}"[:200])
                 return rc
             except Exception as e:
-                if (_restore_writer_hold_marker() is not None
-                        or journal_store.load_state(STATE_PATH).get("restore_consent")
-                        or (journal_store.load_state(STATE_PATH).get("applying") or {}).get("restore_incomplete")):
+                if _restore_hold_active():
                     consent_hold = True
                     _report("restore_consent_blocked", str(e))
                     try:
@@ -2036,9 +2045,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             journal_store.save_state(STATE_PATH, state)
             return 2
         if command_id:
-            state.setdefault("executed", {})[command_id] = {
-                "result": "failed", "detail": reason[:200],
-                "at": time.time()}
+            _record_executed(state, command_id, "failed", reason)
         _record_attempt(state, tag, "failed", reason)
         journal_store.save_state(STATE_PATH, state)
         if rollback_failed and state["applying"].get("restore_incomplete"):
@@ -2136,8 +2143,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             # idempotent: already on the target — record and exit
             state["stages"] = []
             if command_id:
-                state.setdefault("executed", {})[command_id] = {
-                    "result": "already_applied", "at": time.time()}
+                _record_executed(state, command_id, "already_applied")
             journal_store.save_state(STATE_PATH, state)
             return 0
         if command_id and state.get("executed", {}).get(command_id):
@@ -2417,8 +2423,7 @@ def rollback(command_id: str | None = None) -> int:
         entry = applied[-1] if applied else None
         if not entry or not entry.get("prev_sha"):
             if command_id:
-                state.setdefault("executed", {})[command_id] = {
-                    "result": "nothing_to_rollback", "at": time.time()}
+                _record_executed(state, command_id, "nothing_to_rollback")
                 journal_store.save_state(STATE_PATH, state)
             print("元に戻す更新はありません（nothing_to_rollback）")
             return 0
@@ -2466,9 +2471,7 @@ def rollback(command_id: str | None = None) -> int:
                 consent_hold = True
                 return 2
             except Exception as e:
-                if (_restore_writer_hold_marker() is not None
-                        or journal_store.load_state(STATE_PATH).get("restore_consent")
-                        or (journal_store.load_state(STATE_PATH).get("applying") or {}).get("restore_incomplete")):
+                if _restore_hold_active():
                     consent_hold = True
                     _report("restore_consent_blocked", str(e))
                     return 2
@@ -2495,8 +2498,7 @@ def rollback(command_id: str | None = None) -> int:
                 entry.get("tag") or "?"] = {
                 "result": "rolled_back", "at": time.time()}
             if command_id:
-                state.setdefault("executed", {})[command_id] = {
-                    "result": "rolled_back", "at": time.time()}
+                _record_executed(state, command_id, "rolled_back")
             journal_store.save_state(STATE_PATH, state)
             # gateway restart AFTER the durable save (self-deadlock)
             restart_services(mcs_util.load_config(), entry.get("plugin_changed"))
@@ -2515,9 +2517,7 @@ def rollback(command_id: str | None = None) -> int:
             # consume the receipt — the attempt genuinely ran and the
             # human must see a result, not an infinite retry
             if command_id:
-                state.setdefault("executed", {})[command_id] = {
-                    "result": "rollback_failed", "detail": str(e)[:200],
-                    "at": time.time()}
+                _record_executed(state, command_id, "rollback_failed", str(e))
                 journal_store.save_state(STATE_PATH, state)
             _enqueue_notice(f"[MCS] ロールバックに失敗しました: {e}",
                             use_run_lock=run_fd is None)
@@ -2859,8 +2859,7 @@ def _complete_done_bookkeeping(state: dict) -> int:
     applied = state.get("applied") or []
     cid = (applied[-1] or {}).get("command_id") if applied else None
     if cid:
-        state.setdefault("executed", {})[cid] = {
-            "result": "applied", "at": time.time()}
+        _record_executed(state, cid, "applied")
     state["stages"] = []
     journal_store.save_state(STATE_PATH, state)
     _remove_marker()
@@ -2888,8 +2887,7 @@ def _finish_resumed(state: dict, applying: dict) -> int:
     state.pop("restore_consent", None)
     cid = applying.get("command_id")
     if cid:
-        state.setdefault("executed", {})[cid] = {
-            "result": result, "at": time.time()}
+        _record_executed(state, cid, result)
     journal_store.save_state(STATE_PATH, state)
     _remove_marker()
     _report("resumed", "post-merge completed after crash")
@@ -2998,9 +2996,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 return 1
             cid = (applying or {}).get("command_id")
             if cid:
-                state.setdefault("executed", {})[cid] = {
-                    "result": "escalated", "detail": detail[:200],
-                    "at": time.time()}
+                _record_executed(state, cid, "escalated", detail)
                 journal_store.save_state(STATE_PATH, state)
             key = _alert_key(state, detail)
             if (applying or {}).get("restore_incomplete"):
@@ -3206,7 +3202,7 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
         "result": "rolled_back", "at": time.time()}
     cid = record.get("command_id")
     if cid:
-        state.setdefault("executed", {})[cid] = {"result": "rolled_back", "at": time.time()}
+        _record_executed(state, cid, "rolled_back")
     state["applying"] = None
     state["stages"] = []
     state.pop("restore_consent", None)
@@ -3236,8 +3232,7 @@ def _finish_recovery(state: dict, result: str, removed: list) -> int:
     if cid:
         # consume the receipt — without this the next check would
         # re-apply the tag and loop crash→recover→apply (S9 followup)
-        state.setdefault("executed", {})[cid] = {
-            "result": "interrupted_recovered", "at": time.time()}
+        _record_executed(state, cid, "interrupted_recovered")
     if applying.get("tag"):
         state.setdefault("attempts", {})[applying["tag"]] = {
             "result": result, "at": time.time()}
@@ -3407,8 +3402,7 @@ def cmd_check() -> int:
         if not held:
             pendings, consumed = scan_pending_approvals(state)
             for cid, result in consumed:
-                state.setdefault("executed", {})[cid] = {
-                    "result": result, "at": time.time()}
+                _record_executed(state, cid, result)
             picked = pendings[0] if pendings else None
             if not picked and mode == "auto" and newer:
                 delay = upd.get("auto_delay_h", 24)
