@@ -1,5 +1,6 @@
 """Verify local routing and transport with complete synthetic doubles."""
 import io
+import json
 from pathlib import Path
 import ssl
 from types import SimpleNamespace
@@ -77,6 +78,9 @@ def test_service_contract_is_opt_in_in_both_modes_and_uses_selected_python():
         cfg = {'runtime_mode': mode}
         original = service_contract.desired_agent_labels(cfg)
         assert service_contract.SDC_LABEL not in original
+        for settings in ({}, {'enabled': False}):
+            cfg['sdc'] = settings
+            assert service_contract.SDC_LABEL not in service_contract.desired_agent_labels(cfg)
         cfg['sdc'] = {'enabled': True, 'state_root': '/synthetic/private'}
         assert service_contract.desired_agent_labels(cfg) == original + [service_contract.SDC_LABEL]
         values = service_contract.service_substitutions(cfg, root='/synthetic/root', checkout='/synthetic/repo', standalone_runtime_home='/synthetic/runtime', hermes_runtime_home='/synthetic/hermes', hermes_python='/synthetic/pinned/python')
@@ -86,6 +90,94 @@ def test_service_contract_is_opt_in_in_both_modes_and_uses_selected_python():
         assert '<integer>300</integer>' in body
         assert '<key>RunAtLoad</key><false/>' in body
         assert 'sdc_tick.py' in body
+
+
+@pytest.mark.parametrize('phase', ['pending', 'active'])
+@pytest.mark.parametrize('kind', ['missing', 'unset', 'empty', 'false', 'string', 'number',
+                                  'wrong_root', 'missing_root', 'non_object', 'broken', 'symlink'])
+def test_stale_job_cannot_start_with_current_owner_off_or_invalid(tmp_path, monkeypatch, phase, kind):
+    root, config = tmp_path / 'private', tmp_path / 'config.json'
+    with Store(root, create=True) as store, store.lock():
+        store.write('endpoint.json', CONFIG)
+        store.write('state.json', {'state': phase, 'enabled': phase == 'active'})
+    cfg = {'sdc': {'enabled': True, 'state_root': str(root)}}
+    if kind == 'unset':
+        cfg = {}
+    elif kind == 'empty':
+        cfg = {'sdc': {}}
+    elif kind in ('false', 'string', 'number'):
+        cfg['sdc']['enabled'] = {'false': False, 'string': 'true', 'number': 1}[kind]
+    elif kind == 'wrong_root':
+        cfg['sdc']['state_root'] = str(tmp_path / 'other')
+    elif kind == 'missing_root':
+        cfg['sdc'].pop('state_root')
+    elif kind == 'non_object':
+        cfg = []
+    if kind != 'missing':
+        config.write_text('{' if kind == 'broken' else json.dumps(cfg))
+    if kind == 'symlink':
+        target = tmp_path / 'other-config.json'
+        config.rename(target)
+        config.symlink_to(target)
+    monkeypatch.setattr(sdc_cli.mcs_util, 'CONF_PATH', str(config))
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('disabled owner reached credentials, registration or sending')
+
+    for name in ('Transport', 'Connector', 'InventorySender', 'facts', 'service'):
+        monkeypatch.setattr(sdc_cli, name, forbidden)
+    monkeypatch.setattr(Store, '_keychain', forbidden)
+    before = {p.name: p.read_bytes() for p in root.iterdir()}
+    assert sdc_cli.tick(root) == (1 if kind in ('non_object', 'broken', 'symlink') else 0)
+    assert {p.name: p.read_bytes() for p in root.iterdir()} == before
+
+
+@pytest.mark.parametrize('revoke_at,expected', [
+    ('none', ['heartbeat', 'inventory', 'diagnostic']), ('jitter', []), ('facts', []),
+    ('heartbeat', ['heartbeat']), ('inventory', ['heartbeat', 'inventory']),
+])
+def test_tick_rechecks_actual_owner_config_between_sending_stages(tmp_path, monkeypatch, revoke_at, expected):
+    from adapters.sdc import diagnostic_sender, diagnostic_state
+    root, config = tmp_path / 'private', tmp_path / 'config.json'
+    cfg = {'runtime_mode': 'standalone', 'sdc': {'enabled': True, 'state_root': str(root)}}
+    config.write_text(json.dumps(cfg))
+    with Store(root, create=True) as store, store.lock():
+        store.write('endpoint.json', CONFIG)
+        store.write('state.json', {'state': 'active', 'enabled': True})
+    calls = []
+
+    def revoke(stage):
+        if revoke_at == stage:
+            config.write_text(json.dumps({**cfg, 'sdc': {**cfg['sdc'], 'enabled': False}}))
+
+    class Heartbeat:
+        def __init__(self, *_args, **_kwargs):
+            pass
+        def tick(self, _facts):
+            calls.append('heartbeat')
+            revoke('heartbeat')
+
+    class Inventory(Heartbeat):
+        def tick(self, _facts):
+            calls.append('inventory')
+            revoke('inventory')
+
+    def facts():
+        revoke('facts')
+        return {'mode': 'standalone'}
+
+    monkeypatch.setattr(sdc_cli.mcs_util, 'CONF_PATH', str(config))
+    monkeypatch.setattr(sdc_cli.mcs_util, 'load_config', lambda: cfg)
+    monkeypatch.setattr(sdc_cli.mcs_runtime, 'python_executable', lambda _: sdc_cli.sys.executable)
+    monkeypatch.setattr(sdc_cli, 'Transport', lambda _: object())
+    monkeypatch.setattr(sdc_cli, 'Connector', Heartbeat)
+    monkeypatch.setattr(sdc_cli, 'InventorySender', Inventory)
+    monkeypatch.setattr(sdc_cli, 'facts', facts)
+    monkeypatch.setattr(sdc_cli.time, 'sleep', lambda _: revoke('jitter'))
+    monkeypatch.setattr(diagnostic_state, 'status', lambda *_a, **_k: {'enabled': True})
+    monkeypatch.setattr(diagnostic_sender, 'run_managed_once', lambda *_a, **_k: calls.append('diagnostic'))
+    assert sdc_cli.tick(root) == 0
+    assert calls == expected
 
 
 def test_cli_failed_claim_does_not_print_token_or_key(tmp_path, monkeypatch, capsys):

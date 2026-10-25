@@ -202,6 +202,9 @@ def tick(root=None):
         signal.setitimer(signal.ITIMER_REAL, max(1e-6, end - time.monotonic()))
         with Store(root, credential_deadline=end) as store, store.lock():
             check_budget()
+            # A leftover job must follow the current owner config, not a stale active state.
+            if not _enrollment_admitted(store.root):
+                return 0
             state = store.read('state.json', {})
             try:
                 store.guard_credential()
@@ -223,11 +226,18 @@ def tick(root=None):
             if not state.get('enabled'):
                 return 0
             time.sleep(secrets.randbelow(31))
+            check_budget()
+            if not _enrollment_admitted(store.root):
+                return 0
             transport = Transport(store.read('endpoint.json'))
             connector = Connector(store, transport)
             observed = facts()
+            if not _enrollment_admitted(store.root):
+                return 0
             connector.tick(observed)
             check_budget()
+            if not _enrollment_admitted(store.root):
+                return 0
             try:
                 inventory_policy = store.read('inventory-policy.json')
                 if inventory_policy and inventory_policy.get('enabled'):
@@ -243,6 +253,8 @@ def tick(root=None):
             except Exception:
                 print('SDC_INVENTORY_UNAVAILABLE', file=sys.stderr)
             check_budget()
+            if not _enrollment_admitted(store.root):
+                return 0
             try:
                 from adapters.sdc import diagnostic_sender, diagnostic_state
                 if diagnostic_state.status(store, now_ms=int(time.time() * 1000))['enabled']:

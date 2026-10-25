@@ -307,7 +307,9 @@ def test_inventory_exception_cannot_turn_a_successful_heartbeat_into_failure(wor
     monkeypatch.setattr(sdc_cli, 'InventorySender', Inventory)
     monkeypatch.setattr(sdc_cli, 'Transport', lambda _: object())
     monkeypatch.setattr(sdc_cli, 'facts', lambda: FACTS)
-    monkeypatch.setattr(sdc_cli.mcs_util, 'load_config', lambda: {'runtime_mode': 'standalone'})
+    cfg = {'runtime_mode': 'standalone', 'sdc': {'enabled': True, 'state_root': str(store.root)}}
+    monkeypatch.setattr(sdc_cli.mcs_util, 'load_config', lambda: cfg)
+    monkeypatch.setattr(sdc_cli.lifecycle_io, 'read_owner_config', lambda _: cfg)
     monkeypatch.setattr(sdc_cli.mcs_runtime, 'python_executable', lambda _: sys.executable)
     monkeypatch.setattr(sdc_cli.time, 'sleep', lambda _: None)
     assert sdc_cli.tick(store.root) == 0
@@ -328,7 +330,9 @@ def test_stale_launchd_interpreter_cannot_collect_after_successful_heartbeat(wor
     monkeypatch.setattr(sdc_cli, 'InventorySender', lambda *_: pytest.fail('mismatched runtime must not collect'))
     monkeypatch.setattr(sdc_cli, 'Transport', lambda _: object())
     monkeypatch.setattr(sdc_cli, 'facts', lambda: FACTS)
-    monkeypatch.setattr(sdc_cli.mcs_util, 'load_config', lambda: {'runtime_mode': 'standalone'})
+    cfg = {'runtime_mode': 'standalone', 'sdc': {'enabled': True, 'state_root': str(store.root)}}
+    monkeypatch.setattr(sdc_cli.mcs_util, 'load_config', lambda: cfg)
+    monkeypatch.setattr(sdc_cli.lifecycle_io, 'read_owner_config', lambda _: cfg)
     monkeypatch.setattr(sdc_cli.mcs_runtime, 'python_executable', lambda _: '/synthetic/other-venv/bin/python')
     monkeypatch.setattr(sdc_cli.time, 'sleep', lambda _: None)
     assert sdc_cli.tick(store.root) == 0
