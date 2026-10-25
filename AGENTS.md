@@ -18,7 +18,7 @@ MCS の医療・介護チャットを収集・解析するローカルシステ�
   standalone のトークンは root 配下の私有JSON（優先）か `.env`（0600）だけから読み、SDK は関数内で import し、proxy 環境変数は起動時に除去する。
 - テストは一時DB+スタブのみ。実 MCS・Discord・Slack・LINE WORKS・Keychain・原本DB・ローカルLLM・Jev に一切アクセスしない。
 - 患者データ・秘密値を repo に入れない（`data/`・`.env`・`config.json` 等は ignore 済み）。ベンチ・few-shot・fixture は完全合成のみ（実投稿の匿名化も不可）。
-- 安全ゲートを壊さない。既読化は snapshot timestamp 必須、通信は no-redirect/no-proxy、人承認操作は `--confirm-human`+`reason`+receipt 経路だけ。
+- 安全ゲートを壊さない。既読化は snapshot timestamp 必須、通信は no-redirect/no-proxy（例外は `SECURITY.md` の添付取得だけ）、人承認操作は `--confirm-human`+`reason`+receipt 経路だけ。
 - 「記録が見つからない」≠「対応がなかった」。未対応・未返信の候補は断定しない文言で区別し、未取得・取得失敗は明示する。
   観測済みの0件（スタンプなし等）は行ごと省略してよい。チャット表示に責任回避の但し書きや「AI判定」等の出所ラベルを付けない（所有者 2026-10-08）。
 - `ledger.py`・`mcs_adapter.py`・`semantic_drain.py` を行数だけで機械分割しない。

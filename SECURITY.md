@@ -25,6 +25,10 @@
   確認後に届いた返信も既読になる場合があり、読取り時に見つかった追加返信は取得ジョブへ
   登録する。失敗・確認不能は未確認のまま再試行する
 - API はリダイレクト拒否・proxy 無効。Bearer は許可 origin 以外へ送らない
+  - 限定例外は添付ファイルの取得（GET）だけ。取得元は `https://www.medical-care.net`（443）に限る。
+    同じ host 内の redirect と、署名付き URL を返す `files.medical-care.net` への redirect（1回）だけを追い、
+    後者は Authorization を付けない新しい要求で取得する。それ以外の redirect 先は拒否し（`url_not_allowed`）、
+    proxy は常に無効（`mcs/ingest/mcs_download.py`）
 - MCSスタンプの追加・変更・取消は、操作者1人とMCSアカウントを明示した場合だけ既定で有効（`stamps.enabled=false`で無効）。操作できるのはその操作者だけで、カードのスタンプ列の1回押し（理由は自動記録）またはフォームの確認画面を通して依頼する。
   保存済みの承認・投稿の版・患者範囲を照合し、同じセッションの本人IDを再取得してから送る。
   送信前に私有領域`data/stamp_operations/`へ記録を同期し、POSTは1回だけ試みる。

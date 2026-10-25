@@ -4,7 +4,7 @@
 Marked blocks (each between BEGIN/END GENERATED markers) are rebuilt from
 the code itself, so the docs track feature additions automatically:
 
-    <!-- BEGIN GENERATED:modules -->  mcs/*.py docstring first lines
+    <!-- BEGIN GENERATED:modules -->  mcs/**/*.py docstring first lines
     <!-- BEGIN GENERATED:signals -->  mcs_signals.DETECTORS
     <!-- BEGIN GENERATED:stats   -->  mcs_stats.REGISTRY + PRESETS
     <!-- BEGIN GENERATED:cli     -->  mcs_view subcommands
@@ -18,7 +18,8 @@ Usage:
     python3 scripts/development/update_readme.py           # rewrite docs in place
     python3 scripts/development/update_readme.py --check   # exit 1 if any doc is stale
 
-CI runs --check on pull requests and auto-commits the rewrite on main.
+CI regenerates on pull requests and fails on any diff (git diff --exit-code);
+nothing is committed automatically.
 Keep module/function docstrings' first line a one-line summary — it is
 published.
 """
