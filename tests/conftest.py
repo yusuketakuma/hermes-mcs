@@ -47,6 +47,11 @@ def _reset_environment() -> None:
         upper = key.upper()
         if any(part in upper for part in _SENSITIVE_ENV):
             os.environ.pop(key, None)
+    # mcs_util derives HOME/REPO from these at import: an exported live
+    # root must never reach a direct pytest run (the runner's env -i drops it)
+    for key in ("MCS_ROOT", "MCS_UPDATE_REPO"):
+        os.environ.pop(key, None)
+    os.environ["MCS_TEST_SANDBOX"] = "1"
     os.environ["HOME"] = _TEST_HOME
     os.environ["XDG_CONFIG_HOME"] = os.path.join(_TEST_HOME, "config")
     os.environ["XDG_CACHE_HOME"] = os.path.join(_TEST_HOME, "cache")
@@ -58,10 +63,11 @@ def _reset_environment() -> None:
     os.environ["MCS_EXTRACT_PREFILTER"] = "off"
     # Child processes do not pass through the subprocess guard: drop every
     # PATH entry that resolves a real Hermes CLI, so `hermes` is unreachable.
-    # launchctl lives in /bin, so shadow both with fail-closed guards first.
+    # launchctl lives in /bin and security in /usr/bin, so shadow them with
+    # fail-closed guards first (a bare-name call only; an absolute path is not caught).
     guard = os.path.join(_TEST_HOME, "guard-bin")
     os.makedirs(guard, exist_ok=True)
-    for name in ("hermes", "launchctl"):
+    for name in ("hermes", "launchctl", "security"):
         script = os.path.join(guard, name)
         with open(script, "w") as stream:
             stream.write("#!/bin/sh\necho 'real %s is disabled in MCS tests' >&2\nexit 97\n" % name)
