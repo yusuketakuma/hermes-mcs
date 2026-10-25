@@ -33,7 +33,8 @@ import json
 import math
 from datetime import datetime
 from mcs_queries import ELIGIBLE_MESSAGE, JST, EXTRACTION_KINDS
-from mcs_queries import extraction_kind_map, source_patient_context
+from mcs_queries import (_LEGACY_UNSCOPED_KINDS, _context_inputs, extraction_kind_map,
+                         source_patient_context)
 from snapshot_access import snapshot_meta, table_exists
 from registered_data import registered_data
 
@@ -42,9 +43,7 @@ from patient_context import context_items, extract_context, reference_item, proj
 CONTRACT = "mcs-read-model/1"
 SCOPES = ("aggregate", "detail")
 # legacy rows with no project_id bind through the globally unique message ID
-_LEGACY_UNSCOPED_KINDS = ("extract_v1", "extract_llm")
 _KINDS_IN = ",".join("?" * len(EXTRACTION_KINDS))
-_LEGACY_IN = ",".join("?" * len(_LEGACY_UNSCOPED_KINDS))
 
 
 
@@ -310,18 +309,8 @@ def _coverage(db, records, attachments, project_id=None) -> dict:
             "attachments": att_counts}
 
 
-def read_model(db, scope: str = "aggregate", project_id=None,
-               limit=None) -> dict:
-    """The complete machine read for one opened connection.
-
-    `db` is the caller's already-validated snapshot connection (the
-    View's single-generation rule applies — this function never opens
-    or re-opens a database itself). `limit` bounds the records list
-    honestly (``truncated`` + ``total``), never slicing JSON."""
-    if scope not in SCOPES:
-        raise ValueError("read_model_scope_invalid")
-    if limit is not None and (type(limit) is not int or limit < 1):
-        raise ValueError("bad_limit")
+def _records_coverage(db, scope, project_id, limit):
+    """(records, coverage, attachments) of one read; the other read_model sections are not read."""
     # coverage describes the whole scope like `total` does — never just
     # the page `limit` cut
     records = []
@@ -337,7 +326,22 @@ def read_model(db, scope: str = "aggregate", project_id=None,
             yield rec
 
     attachments = _attachments(db, scope, project_id)
-    coverage = _coverage(db, counted_records(), attachments, project_id)
+    return records, _coverage(db, counted_records(), attachments, project_id), attachments
+
+
+def read_model(db, scope: str = "aggregate", project_id=None,
+               limit=None) -> dict:
+    """The complete machine read for one opened connection.
+
+    `db` is the caller's already-validated snapshot connection (the
+    View's single-generation rule applies — this function never opens
+    or re-opens a database itself). `limit` bounds the records list
+    honestly (``truncated`` + ``total``), never slicing JSON."""
+    if scope not in SCOPES:
+        raise ValueError("read_model_scope_invalid")
+    if limit is not None and (type(limit) is not int or limit < 1):
+        raise ValueError("bad_limit")
+    records, coverage, attachments = _records_coverage(db, scope, project_id, limit)
     total = coverage["collection"]["messages"]
     return {
         "contract": CONTRACT,
@@ -355,25 +359,10 @@ def read_model(db, scope: str = "aggregate", project_id=None,
 
 def message_patient_context(db, message, scope="detail", *, by_kind=None, art_rows=None):
     """Decorate source-bound context for a detail or aggregate display."""
-    if message.get("body_state") not in (None, "full"):
+    inputs = _context_inputs(db, message, by_kind=by_kind, art_rows=art_rows)
+    if inputs is None:
         return []
-    if art_rows is None:
-        art_rows = db.execute(
-            "SELECT artifact_id,kind,content,meta FROM artifacts "
-            "WHERE (project_id=? OR (project_id IS NULL AND kind IN (" + _LEGACY_IN + ")))"
-            " AND message_id=? AND kind IN (" + _KINDS_IN + ") "
-            "ORDER BY artifact_id DESC",
-            (message["project_id"], *_LEGACY_UNSCOPED_KINDS, message["message_id"],
-             *EXTRACTION_KINDS)).fetchall()
-    if by_kind is None:
-        by_kind = extraction_kind_map(art_rows, message["content_hash"])
-    body = message.get("body_text")
-    if body is None:
-        row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?",
-                         (message["project_id"], message["message_id"])).fetchone()
-        body = row[0] if row else None
-    if not isinstance(body, str) or not body:
-        return []
+    art_rows, by_kind, body = inputs
     items = source_patient_context(db, {**message, "body_text": body}, by_kind=by_kind, art_rows=art_rows)
     source = {key: message.get(key) for key in
               ("project_id", "message_id", "content_hash", "posted_at_ts")}

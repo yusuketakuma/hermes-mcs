@@ -11,7 +11,8 @@ from datetime import timedelta
 import re
 
 from patient_context import LABELS
-from read_model import read_model
+from read_model import _records_coverage
+from snapshot_access import snapshot_meta
 
 # One source for every role surface (CLI --role, chat 表示順 buttons): labels and order only,
 # never authorization. "" is the default order.
@@ -81,11 +82,11 @@ def evidence(db, project_id, *, cfg=None) -> dict:
     deleted, foreign or unmatched quotes never appear). Nightly facts are
     added only when the core helper returns a published, still-valid row."""
     import patient_nightly
-    model = read_model(db, scope="detail", project_id=project_id)
+    records, coverage, _ = _records_coverage(db, "detail", project_id, None)
     senders = {r[0]: (r[1], r[2]) for r in db.execute(
         "SELECT message_id, sender_name, profession FROM messages WHERE project_id=?", (project_id,))}
     items = []
-    for record in model["records"]:
+    for record in records:
         for item in record["patient_context"]:
             source = item["source"]
             entry = {"category": item["category"], "text": item["text"], "quote": item["evidence"],
@@ -115,12 +116,12 @@ def evidence(db, project_id, *, cfg=None) -> dict:
                       "posted_at_ts": fact.get("posted_at_ts"), "sender": fact.get("sender"),
                       "source": fact.get("source", "chat"), **extra})
     items.sort(key=lambda i: (i["posted_at_ts"] or 0, i["message_id"] or 0), reverse=True)
-    return {"project_id": project_id, "snapshot": model["snapshot"], "items": items,
+    return {"project_id": project_id, "snapshot": snapshot_meta(db), "items": items,
             "summary": (nightly or {}).get("summary") or [],
             # summary fact_ids resolve here; empty when unpublished or no longer valid
             "nightly_facts": (nightly or {}).get("facts") or [],
             "as_of": (nightly or {}).get("as_of"),
-            "coverage": {"read_model": model["coverage"], "nightly": (nightly or {}).get("coverage")}}
+            "coverage": {"read_model": coverage, "nightly": (nightly or {}).get("coverage")}}
 
 
 def background(ev) -> dict:
