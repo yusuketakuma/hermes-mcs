@@ -420,3 +420,22 @@ def test_attachments_follow_the_resolved_data_root_with_unchanged_codes(tmp_path
             st._files(tmp_path, {"text": "x", "files": [pin(outside)]})
     with pytest.raises(ValueError, match="^slack_attachment_mismatch$"):
         st._files(tmp_path, {"text": "x", "files": [pin(real / "attachments" / "a", bytes=1)]})
+
+
+def test_a_file_swapped_outside_after_the_check_is_never_read(tmp_path, monkeypatch):
+    (tmp_path / "data" / "attachments").mkdir(parents=True)
+    inside, outside = tmp_path / "data" / "attachments" / "a", tmp_path / "secret-outside"
+    blob = b"fictional attachment"
+    inside.write_bytes(blob)
+    outside.write_bytes(blob)                               # same bytes, so only the root can refuse
+    real = st.read_verified_attachment
+
+    def swap_then_read(path, part, root=None):
+        os.unlink(path)
+        os.symlink(outside, path)                           # replaced between the check and the read
+        return real(path, part, root=root)
+    monkeypatch.setattr(st, "read_verified_attachment", swap_then_read)
+    pin = {"path": str(inside), "name": "a.txt", "bytes": len(blob),
+           "sha256": hashlib.sha256(blob).hexdigest()}
+    with pytest.raises(ValueError, match="^slack_attachment_mismatch$"):
+        st._files(tmp_path, {"text": "x", "files": [pin]})

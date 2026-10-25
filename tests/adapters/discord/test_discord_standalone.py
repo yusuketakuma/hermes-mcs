@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import sys
 from types import SimpleNamespace
 
@@ -490,3 +491,22 @@ def test_run_already_stopped_does_not_load_credentials_or_connect(tmp_path, monk
         # There is deliberately no configuration or credential file.
         await runtime.run(tmp_path, stopping)
     asyncio.run(exercise())
+
+
+def test_a_file_swapped_outside_after_the_check_is_never_read(tmp_path, monkeypatch):
+    (tmp_path / "data" / "attachments").mkdir(parents=True)
+    inside, outside = tmp_path / "data" / "attachments" / "a", tmp_path / "secret-outside"
+    blob = b"fictional"
+    inside.write_bytes(blob)
+    outside.write_bytes(blob)
+    real = runtime.paths.read_verified_attachment
+
+    def swap_then_read(path, part, root=None):
+        os.unlink(path)
+        os.symlink(outside, path)
+        return real(path, part, root=root)
+    monkeypatch.setattr(runtime.paths, "read_verified_attachment", swap_then_read)
+    pin = {"path": str(inside), "bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest(),
+           "name": "a.txt"}
+    with pytest.raises(ValueError, match="discord_payload_invalid"):
+        runtime._payload(tmp_path, {"text": "x", "files": [pin]})

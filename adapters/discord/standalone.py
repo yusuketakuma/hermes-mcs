@@ -421,7 +421,8 @@ def _payload(root, payload):
                 or len(content.encode("utf-8")) > 8 * 1024 * 1024 \
                 or not isinstance(files, list) or len(files) > 10:
             raise ValueError
-        attachment_root = Path(root).resolve() / "data" / "attachments"
+        data_root = Path(root).resolve() / "data"
+        attachment_root = data_root / "attachments"
         blobs = []
         for pin in files:
             if not isinstance(pin, dict):
@@ -435,7 +436,7 @@ def _payload(root, payload):
             path = Path(pin["path"]).resolve(strict=True)
             if not path.is_relative_to(attachment_root):
                 raise ValueError
-            blob = paths.read_verified_attachment(str(path), pin)
+            blob = paths.read_verified_attachment(str(path), pin, root=str(data_root))
             if blob is None:
                 raise ValueError
             blobs.append((blob, name))

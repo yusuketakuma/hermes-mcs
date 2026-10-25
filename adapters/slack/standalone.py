@@ -355,7 +355,8 @@ def _files(root, payload):
     if not isinstance(files, list) or len(files) > 10:
         raise ValueError("slack_payload_invalid")
     # the resolved data root, as read_verified_attachment(root=data_root) confines it
-    allowed = (Path(root).expanduser().resolve() / "data").resolve() / "attachments"
+    data_root = (Path(root).expanduser().resolve() / "data").resolve()
+    allowed = data_root / "attachments"
     blobs = []
     for part in files:
         if not isinstance(part, dict):
@@ -371,7 +372,8 @@ def _files(root, payload):
             raise ValueError("slack_attachment_invalid") from None
         if not path.is_relative_to(allowed):
             raise ValueError("slack_attachment_invalid")
-        blob = read_verified_attachment(str(path), part)
+        # the read re-checks the same root at open time
+        blob = read_verified_attachment(str(path), part, root=str(data_root))
         if blob is None:
             raise ValueError("slack_attachment_mismatch")
         blobs.append((name, blob))

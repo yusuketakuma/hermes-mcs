@@ -991,3 +991,23 @@ def test_confirmation_preview_send_failure_prevents_later_buttons(tmp_path, fail
                     [{"type": "message", "label": "確定する", "postback": "mcs:c:synthetic"}]))
     assert attempts == fail_at
     assert all(content["type"] == "text" for _, content, _ in w.client.calls)
+
+
+def test_initialize_publishes_a_private_file_and_leaves_no_staging(monkeypatch, tmp_path):
+    world(tmp_path)
+    (tmp_path / "config.json").write_text(json.dumps(CONFIG))
+    key = tmp_path / "private-synthetic.pem"
+    key.write_text("synthetic-not-real-key")
+    key.chmod(0o600)
+    path = config.credentials_path(tmp_path)
+    entries = iter(("entry-synthetic", "entry-secret", "entry@example.invalid", SECRET))
+    monkeypatch.setattr(cli.getpass, "getpass", lambda _: next(entries))
+    monkeypatch.setattr("builtins.input", lambda _: str(key))
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(cli, "_sign", lambda *a: b"synthetic-signature")
+    if path.exists():
+        path.unlink()
+    assert cli.main(["init", "--root", str(tmp_path)]) == 0
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert json.loads(path.read_text())["bot_secret"] == SECRET
+    assert not [p for p in path.parent.iterdir() if p.name.endswith(".tmp")]   # no staging left
