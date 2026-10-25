@@ -2,7 +2,7 @@
   "title": "1.1.0 外部公開初版の作業計画",
   "version": "1.1.0",
   "basis_sha": "e541b697550d0da52fef027094a841c1139aa3a0",
-  "approval_scope": "ユーザーは1.1.0を外部顧客向け初版とし、計画→実装→独立レビューの継続を指示。開発用worktreeで実装・合成の対象検証を行う。全体suiteは禁止。push/PR/merge/tag/公開/配備/実データ操作・実サービス受入の追加承認は含めない。",
+  "approval_scope": "開発・検証・独立レビューを継続し、2026-10-26のユーザー直接指示によりMCS側の変更をrelease/1.1.0へローカル集約する。CSDC中央の変更は中央リポジトリに所属させる。接続・有効化・本番操作・push・公開はこの集約指示では実施しない。過去の個別承認は対象と担当ごとに保持する。",
   "status": "implementation_in_progress",
   "task_count": 63,
   "open_decisions": [
@@ -13,7 +13,7 @@
     "窓口は所有者指示で当面空欄。公開時のサポート条件/連絡経路の受入は未完で、架空の連絡先や対応時間を記載しない。"
   ],
   "implementation_checkout": {
-    "branch": "feat/v1.1.0",
+    "branch": "release/1.1.0",
     "base_sha": "e541b697550d0da52fef027094a841c1139aa3a0",
     "isolation": "本番と分離した開発worktree。設定・資格情報・実データを持ち込まない。"
   },
@@ -315,7 +315,7 @@
           "同梱master 20261013/20260930の原本・出典・terms manifest",
           "Qwen3.5-9B-Q4_K_M.gguf: HF revision 3885219b6810b007914f3a7950a8d1b469d598a5 / sha256 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
           "Hermes companion 2c08ca7ade8f867d07e4bff6581be54405b0c9d0。root MITだけでskill/plugin全件を保証しない",
-          "standalone13件はversion固定、wheel hash/全noticeは未照合",
+          "standalone13件は同版とLICENSE/NOTICE原文16件のRECORD一致を確認済み。取得wheel全体digest・正式配布物の受入は未完。",
           "Homebrew: git/python@3.14/uv/llama.cpp/Chrome caskは必要時自動取得"
         ],
         "remaining": [
@@ -334,7 +334,10 @@
         },
         "standalone_legal_files": "現requirementsの13/13件が既存隔離環境の同版と一致。LICENSE/NOTICE等16/16原文を読み、同梱RECORDのhash/sizeとの一致を確認。aiohttpはApache-2.0 AND MIT（vendor/llhttp MIT原文を含む）、propcacheとyarlは各NOTICEを含む。MCSの個別契約LICENSEで第三者原文を置換しない。",
         "standalone_dependency_scope": "macOS arm64・CPython3.14・extrasなしの必須依存14辺は固定13件内で充足。別OS/Python/architecture/extra、取得wheel全体digest・配布元署名・正式配布物の受入は未確認。",
-        "standalone_requirements_sha256": "ab009024efabd6650185c2792033563a97e5ec15eddea551b7b0c271d2e973ab"
+        "standalone_requirements_sha256": "ab009024efabd6650185c2792033563a97e5ec15eddea551b7b0c271d2e973ab",
+        "hermes_dependency_notices": "固定Hermes 2c08ca7aの隔離SDK環境で104distributionを棚卸し。core+messagingの現環境到達87、CI等17を区別し、全104を顧客配布扱いにしない。法務ファイル参照139件・内容118種のRECORD hash/sizeは全一致。環境はmacOS/CPython3.14.8。別環境・配布wheel全体・全vendor/素材の適合は未確認。",
+        "hermes_missing_notice_followup": "配布物内に原文未発見の3件を追跡。firecrawl-anydoc0.2.4は同版公開tagのMIT全文を観測。davey0.1.7は現masterのMIT全文のみで版の拘束未完。fetch-use0.4.0は固定PyPIのMIT宣言のみ、掲載repoは404。全3のwheelとの対応・配布用原文bytes/hashは未確認。404を利用不可/違反と断定しない。",
+        "hermes_source_scope": "同固定pinのarchive18,675fileを照合。名前によるLICENSE/NOTICE等20件の原文を確認したが、全skill/plugin/画像/依存の法的受入を意味しない。"
       }
     },
     {
@@ -2494,12 +2497,13 @@
     "canonical": "docs/roadmap/v1.1.0-public-launch-plan.json",
     "presentation": "docs/roadmap/v1.1.0-public-launch-plan.md",
     "status": "開発中。部分実装・対象検証済みの範囲と、未実装・契約判断・実機受入を区別する。",
-    "external_references": "CSDC: 接頭辞のpathは別リポジトリの契約・責務。未作成の候補配置も含む。"
+    "external_references": "CSDC: 接頭辞のpathは別リポジトリの契約・責務。未作成の候補配置も含む。",
+    "ownership_precedence": "現在のCSDC製品adapter/Keychain/provision/診断送信/遠隔支援の実装はcsdcタブだけ。shared_file_policyの初期担当候補は編集予約/現在所有/再開承認ではない。MCS本体・共有ファイルは正式台帳と現担当を照合する。"
   },
   "verification_policy": {
-    "full_suite": "ユーザーの現在の明示指示により実行しない。未実施を合格と扱わない。",
+    "full_suite": "全体検証は担当Claudeの会話での個別承認に基づき実行中。864e4713の1回目は300秒hangで中断、2回目は既知1件を除く診断用実行。統合後releaseの全件合格ではなく、固定最終候補で必要な検証を判断する。",
     "targeted": "変更領域ごとの静的検査と合成対象テストを節目にまとめて実行。実データ/実ネット/Keychain/LLMなし。",
-    "publication": "push/PR/merge/tag/Release/deploy/本番有効化はこの開発goalでは実行しない。"
+    "publication": "ローカル集約mergeは2026-10-26のユーザー直接指示で実施。push/PR/tag/Release/配備/本番有効化は対象ごとの個別承認・受入に従い、この計画だけでは実行しない。"
   },
   "execution_records": [
     {
@@ -3204,6 +3208,18 @@
       "artifacts": "release-goal-wave1/diagnostic-caller/py310-preflight-result.json",
       "full_suite": false,
       "actual_update_rollback_accepted": false
+    },
+    {
+      "task": "v110-sdk-integration-6b3a7560",
+      "candidate": "6b3a7560658f30a089831ab93199a7117c515828",
+      "hermes_pin": "2c08ca7ade8f867d07e4bff6581be54405b0c9d0",
+      "verification": "既存固定SDK runnerをOSネットワーク拒否・私有情報隔離で直列実行。実SDK＋fake transport。",
+      "standalone_passed": 12,
+      "hermes_passed": 28,
+      "failed": 0,
+      "skipped": 0,
+      "full_suite_executed": false,
+      "reuse": "この固定候補だけ。後続refactorのsource/fixture/依存変更は影響判定が必要。実通知・Keychain・OS再起動・公開受入は未実施。"
     }
   ],
   "supplement_scope_policy": "ART/CFGは追加仕様の全件追跡であり現在R1への実装指示ではない。PUB-01で1.1能力に含める段階を明示判断し、REL-01/02で照合する。required=falseを理由に自動除外しない。",
@@ -3308,5 +3324,21 @@
       "ART-01",
       "CFG-01"
     ]
+  },
+  "initial_approval_scope": "ユーザーは1.1.0を外部顧客向け初版とし、計画→実装→独立レビューの継続を指示。開発用worktreeで実装・合成の対象検証を行う。全体suiteは禁止。push/PR/merge/tag/公開/配備/実データ操作・実サービス受入の追加承認は含めない。",
+  "current_release_policy": {
+    "decided_at_jst": "2026-10-26",
+    "integration_branch": "release/1.1.0",
+    "csdc": {
+      "implementation": "製品コードと固定契約はMCSへ同梱。中央API・管理画面・配布正本はCSDCリポジトリ。実装担当はcsdcタブ。",
+      "provided_connection": false,
+      "default_enabled": false,
+      "guidance_key": "optional_features.csdc（案内だけ。通信の停止設定ではない）",
+      "connection_key": "sdc.enabled（未設定/falseは専用ジョブ登録対象外）",
+      "existing_configuration": "既存の有効設定・同意・資格情報を更新で自動停止/変更しない。本番停止は別の明示操作。",
+      "readiness": "1.1で有効接続を提供せず、中央・実機の受入が整った後に接続を判断する。OFFを理由に実装回帰や安全検証を省略しない。",
+      "known_gap": "保存済みactive状態と現在の設定未指定/空/falseで送信へ進む経路を中央担当が合成再現。固定修正の統合・回帰確認は未完。"
+    },
+    "scope_precedence": "この決定は過去の「診断送信・遠隔支援を1.1で有効提供する」必須条件と古い担当表より優先する。過去の実装・検証記録の事実は変更しない。"
   }
 }
