@@ -17,7 +17,7 @@ import notify_digest
 import notify_render
 import notify_views
 import rollup
-from stamp_format import actor_line, stamp_line
+from stamp_format import actor_line, thread_stamp_line
 from message_metadata import flag_lines, mentions_self
 from message_observations import get_message_metadata
 from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _msg, _patient, _signal_row, led
@@ -67,15 +67,15 @@ def test_own_post_text_counts_others_and_keeps_unfetched_distinct(led):
     _msg(led, 100)
 
     def own():
-        return stamp_line(get_message_metadata(led.db, 100) | {"own_post": True})
+        return thread_stamp_line(get_message_metadata(led.db, 100) | {"own_post": True})
     assert own() == "スタンプ 未取得"
     _meta(led, 100, reactions=[_r("viewed", 3, True), _r("accepted", 1), _r("good", 0)])
-    assert own().startswith("スタンプ 👀2 🙆1（自分 👀） · 観測 ")
+    assert own().startswith("スタンプ 👀2 🙆1 · 自分 👀 · ") and own().endswith("時点")
     assert "👍" not in own()
     _meta(led, 100, reactions=[_r("viewed", 1, True)])
-    assert own().startswith("スタンプ 他者なし（自分 👀）")
+    assert own().startswith("スタンプ なし · 自分 👀 · ")      # only one's own stamp
     _meta(led, 100, reactions=[])
-    assert own().startswith("スタンプ なし · 観測 ")
+    assert own().startswith("スタンプ なし · ") and "自分" not in own()
 
 
 def test_card_footer_uses_sender_id_not_same_name(led):

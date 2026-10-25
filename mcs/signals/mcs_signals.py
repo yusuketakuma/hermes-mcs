@@ -45,6 +45,7 @@ from self_identity import self_sets
 
 from signal_policy import (
     approved_policy,
+    resolve_policy,
     resolved_policy,
 )
 import clinical_urgency
@@ -774,10 +775,10 @@ def _discharge_notice(db, now, th, sig_cfg):
         (lookback, *self_params)).fetchall()
     engaged = _engagement_checker(db, rows, profs, orgs)
     for pid, mid, ts in rows:
-        if not _patient_transition(db, pid, mid):
-            continue
         if mid in covered:
             continue                    # transition_reconciliation owns it
+        if not _patient_transition(db, pid, mid):
+            continue
         if engaged(pid, mid, ts):
             continue
         yield _key("discharge_notice", pid, mid), {
@@ -974,7 +975,7 @@ def _resolution(db, old, now, th, sig_cfg):
                 "discharge_notice": th["transition_lookback_d"],
                 "transition_reconciliation": th["transition_lookback_d"],
             }.get(stype)
-            anchors = messages[:1] if stype == "transition_reconciliation" else messages
+            anchors = messages
             if stype == "transition_reconciliation":
                 anchor = db.execute(
                     "SELECT posted_at_ts,body_state FROM messages WHERE message_id=?",
@@ -1598,8 +1599,8 @@ def current_open(db, project_id=None, limit=50):
     last_run = db.execute(
         "SELECT MAX(finished_at) FROM runs WHERE status != 'failed'"
     ).fetchone()[0]
-    thresholds, policy_warnings = resolved_policy(db)
-    approved = approved_policy(db)
+    approved = approved_policy(db)          # one read for thresholds and provenance
+    thresholds, policy_warnings = resolve_policy(approved)
     policy = None
     if approved is not None:
         aid, pc = approved

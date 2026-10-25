@@ -69,10 +69,14 @@ def resolved_policy(db):
     """(thresholds, warnings): resolved_thresholds plus fixed warning codes
     (threshold_window_clamped:<max-age key>) for combinations that were
     clamped because they would leave a detector window empty."""
+    return resolve_policy(approved_policy(db))
+
+
+def resolve_policy(approved):
+    """resolved_policy for an approved_policy result the caller already read."""
     th = {name: default for name, (default, lo, hi)
           in THRESHOLDS.items()}
     warnings = []
-    approved = approved_policy(db)
     policy = approved[1].get("policy") if approved is not None else None
     if isinstance(policy, dict):
         for name, (_default, lo, hi) in THRESHOLDS.items():

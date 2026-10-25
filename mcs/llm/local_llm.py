@@ -758,8 +758,7 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                          or _json_obj(content) == {"probe": "schema"})):
                 return mode
         except (OSError, ValueError):
-            if error_out is not None:
-                error_out.setdefault("kind", "transport")
+            error_out.setdefault("kind", "transport")
             break                   # transport dead — stop probing
     return "plain"
 

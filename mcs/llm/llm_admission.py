@@ -233,12 +233,10 @@ class Broker:
     """The admission broker. Owns its own SQLite store so a ledger
     restore cannot resurrect retired permits into a live epoch."""
 
-    def __init__(self, path: str, routes: dict | None = None,
-                 bg_window_s: float = 120.0, slots: int = 2):
+    def __init__(self, path: str, routes: dict | None = None, slots: int = 2):
         self._mutex = RLock()
         self.path = path
         self.routes = dict(routes or DEFAULT_ROUTES)
-        self.bg_window_s = bg_window_s
         # T19: same-class concurrency is bounded by the measured slot
         # count — beyond it a permit defers ('class_full'), never
         # queues silently past the backend's parallel width

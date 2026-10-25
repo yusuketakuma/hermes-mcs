@@ -1,6 +1,7 @@
 """スタンプ表示はcaptureの観測だけを使い、業務状態と本文配送を維持する。"""
 import self_identity
 import json
+import re
 import sqlite3
 from contextlib import closing
 
@@ -12,7 +13,7 @@ import notify_digest
 import notify_render
 import notify_views
 from message_observations import get_message_metadata, get_metadata_shadow_status
-from stamp_format import stamp_line
+from stamp_format import thread_stamp_line
 from notify_testkit import (
     CFG, NOW, _add_request, _card, _delivered_card, _dispatch, _intent, _msg, _patient,
     led, pinned_clock,
@@ -39,7 +40,7 @@ def test_old_snapshot_and_shadow_are_unfetched(led):
     with closing(sqlite3.connect(":memory:")) as old, old:
         meta = get_message_metadata(old, 100)
         assert meta["reactions"] is None
-        assert stamp_line(meta) == "スタンプ 未取得"
+        assert thread_stamp_line(meta) == "スタンプ 未取得"
         shadow = get_metadata_shadow_status(old, 100, as_of=NOW)
         assert shadow["state"] == "not_attempted"
         assert shadow["reactions_observed_at"] is None
@@ -49,7 +50,9 @@ def test_old_snapshot_and_shadow_are_unfetched(led):
     _metadata(led, 100, [_react()], source="shadow")
     assert get_message_metadata(led.db, 100)["reactions"] is None
     _metadata(led, 100, [])
-    assert stamp_line(get_message_metadata(led.db, 100)).startswith("スタンプ なし · 観測 ")
+    # observed zero is "なし" with its observation time, never 未取得
+    assert re.fullmatch(r"スタンプ なし · \d\d-\d\d \d\d:\d\d時点",
+                        thread_stamp_line(get_message_metadata(led.db, 100)))
     _metadata(led, 100, None)
     assert get_message_metadata(led.db, 100)["reactions"] is None
 

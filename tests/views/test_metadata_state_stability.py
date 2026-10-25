@@ -76,13 +76,14 @@ def test_mentions_invalid_keeps_reactions_observed():
     assert meta["reactions_status"] == "observed"
     assert meta["mentions_status"] == "invalid"
     assert meta["last_error"] is None
-    assert "再取得失敗" not in stamp_format.stamp_line(meta)
+    assert "再取得失敗" not in stamp_format.thread_stamp_line(meta)
     assert observations.get_metadata_shadow_status(db, 5)["state"] != "failed"
 
 
 def test_reaction_and_fetch_errors_still_reported():
-    assert observations.get_message_metadata(_db("reactions_invalid"), 5)["last_error"] \
-        == "reactions_invalid"
+    meta = observations.get_message_metadata(_db("reactions_invalid"), 5)
+    assert meta["last_error"] == "reactions_invalid"
+    assert stamp_format.thread_stamp_line(meta).endswith("・再取得失敗")
     assert observations.get_message_metadata(_db("network_error"), 5)["last_error"] \
         == "network_error"
     assert observations.get_message_metadata(

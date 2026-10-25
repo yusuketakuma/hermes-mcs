@@ -41,15 +41,9 @@ def _circuit_state(db) -> dict:
 def circuit_open_s(db) -> float:
     """Seconds the breaker stays open; 0 when closed. An unreadable or
     corrupt state file fails closed-open — it never blocks the lane."""
-    import time as _time
-    until = _circuit_state(db).get("open_until")
-    if type(until) not in (int, float):
-        return 0.0
-    try:
-        until = float(until)
-    except OverflowError:
-        return 0.0
-    return max(0.0, until - _time.time()) if math.isfinite(until) else 0.0
+    # A negative stamp reads as unknown here and as already past before: 0 either way.
+    until = _finite_ts(_circuit_state(db).get("open_until"))
+    return 0.0 if until is None else max(0.0, until - time.time())
 
 
 @contextmanager
@@ -181,9 +175,7 @@ def circuit_failure(db) -> None:
             out["open_until"] = time.time() + min(
                 _CIRCUIT_MAX_S, _CIRCUIT_BASE_S * 2 ** out["streak"])
             out["failures"] = 0
-        payload = json.dumps(out)
-        with suppress(OSError):
-            safe_io.atomic_write(str(path), lambda f: f.write(payload))
+        _health_write(path, out)
         _mark_llm_down(db)
 
 

@@ -32,22 +32,6 @@ def self_stamps(metadata) -> str:
         for r in metadata["reactions"] or [] if r["self_reacted"]))
 
 
-def stamp_line(metadata) -> str:
-    """One compact line for a single post: emoji counts, own stamps and
-    the observation time (never the press time)."""
-    counts = stamp_counts(metadata)
-    if counts is None:
-        return "スタンプ 未取得"
-    when = datetime.fromtimestamp(metadata["reactions_observed_at"], JST)
-    mine = self_stamps(metadata)
-    text = "スタンプ " + (" ".join(f"{e}{n}" for e, n in counts.items())
-                       or ("他者なし" if mine else "なし"))
-    if mine:
-        text += f"（自分 {mine}）"
-    return (text + f" · 観測 {when:%m-%d %H:%M}"
-            + ("・再取得失敗" if metadata["last_error"] else ""))
-
-
 ACTOR_NAMES_MAX = 12
 
 
