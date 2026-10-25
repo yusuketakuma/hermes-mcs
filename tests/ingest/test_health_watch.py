@@ -959,9 +959,16 @@ def test_alert_counts_pending_notifications_and_names_a_jev_block():
 
 
 def test_degraded_flapping_does_not_realert_until_interval(tmp_path):
+    import collection_diagnostics
+
     def tick(now, overall, reasons):
-        _health_file(tmp_path, {"overall": overall, "at": now - 1,
-                                "state_reasons": reasons})
+        health = {"overall": overall, "at": now - 1, "state_reasons": reasons}
+        if "stage_errors" in reasons:    # a transient-only error breakdown (time-outs)
+            health["collection_diagnostics"] = {
+                "observed_at": now - 1,
+                "errors": collection_diagnostics.error_counts(["deadline_exceeded"]),
+                "incomplete": collection_diagnostics.unknown_incomplete()}
+        _health_file(tmp_path, health)
         return health_watch.evaluate(str(tmp_path), now, cfg={})["alert"]
     assert not tick(400, "degraded", ["stage_errors"])        # transient: held twice
     assert not tick(700, "degraded", ["stage_errors"])

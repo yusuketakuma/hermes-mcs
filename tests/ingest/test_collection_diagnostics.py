@@ -283,3 +283,11 @@ def test_the_user_guide_lists_every_category_with_its_action():
     guide = (Path(__file__).resolve().parents[2] / "docs/guides/COLLECTION_DIAGNOSTICS.md").read_text(encoding="utf-8")
     for label, _legacy, transient, what, todo in diagnostics.CATEGORIES.values():
         assert f"| {label} | {what} | {'はい' if transient else 'いいえ'} | {todo} |" in guide
+
+
+@pytest.mark.parametrize("error", ["cmd_sweep:OSError", "restore_reconcile:KeyError", "cmd_invalid: unparsable"])
+def test_command_errors_never_advise_an_unconditional_retry(error):
+    category = diagnostics.classify(error)
+    assert category == "command"
+    todo = diagnostics.CATEGORIES[category][4]
+    assert "反映されていないと確認できた場合だけ" in todo and "確認できない場合はやり直さず" in todo

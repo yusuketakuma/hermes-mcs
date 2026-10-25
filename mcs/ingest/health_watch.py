@@ -317,10 +317,36 @@ def _apply_standalone(obs: dict, home: str, now: float, cfg: dict) -> None:
         obs["state_reasons"] = list(reasons)
 
 
+def _state_unreadable(path: str) -> bool:
+    """A present state file that is no regular JSON object.
+
+    load_config reads it as {} exactly like an absent file; only absence (or a
+    readable object) may start a streak, so this never holds an alert back."""
+    try:
+        raw = safe_io.read_regular_nofollow(path, 1024 * 1024, OSError)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    try:
+        return len(raw) > 1024 * 1024 or not isinstance(json.loads(raw), dict)
+    except (ValueError, RecursionError):
+        return True
+
+
+def _errors_transient(obs: dict) -> bool:
+    """stage_errors may wait only when every recorded error category is transient."""
+    from collection_diagnostics import CATEGORIES
+    errors = (obs.get("collection_diagnostics") or {}).get("errors") or {}
+    counts = errors.get("categories")
+    return (errors.get("state") == "known" and isinstance(counts, dict) and any(counts.values())
+            and all(CATEGORIES[k][2] for k, n in counts.items() if n))
+
+
 def _streak(state: dict, obs: dict) -> tuple[dict | None, bool]:
     """(streak block to persist, whether it can be trusted for holding an alert back)."""
     prior = state.get("streak")
-    valid = prior is None or (
+    valid = "streak" not in state or (
         isinstance(prior, dict) and finite_number(prior.get("health_at"))
         and isinstance(prior.get("count"), dict) and isinstance(prior.get("first_at"), dict)
         and all(r in TRANSIENT_REASONS and type(n) is int and n >= 1
@@ -329,9 +355,9 @@ def _streak(state: dict, obs: dict) -> tuple[dict | None, bool]:
     if obs["status"] not in OVERALL_STATUS or not finite_number(at):
         return (prior if valid else None), valid      # not a fresh observation: nothing to count
     reasons = {r.split(":")[0] for r in obs.get("state_reasons") or []} & TRANSIENT_REASONS
-    if valid and prior is not None and at == prior["health_at"]:
+    if valid and prior and at == prior["health_at"]:
         return prior, True                            # the same observation read again
-    newer = valid and prior is not None and at > prior["health_at"]
+    newer = bool(valid and prior and at > prior["health_at"])
     count = {r: (prior["count"].get(r, 0) + 1 if newer else 1) for r in reasons}
     first = {r: (prior["first_at"].get(r, at) if newer and r in prior["count"] else at)
              for r in reasons}
@@ -431,9 +457,11 @@ def evaluate(home: str = HOME, now: float | None = None,
     alert = obs["status"] != "ok" and (
         (transition and not reflap) or realert or new_reason)
     streak, trusted = _streak(state, obs)
+    trusted = trusted and not _state_unreadable(state_path)
     bases = {r.split(":")[0] for r in reasons}
     transient_only = (obs["status"] == "degraded" and bool(bases)
-                      and bases <= TRANSIENT_REASONS)
+                      and bases <= TRANSIENT_REASONS
+                      and ("stage_errors" not in bases or _errors_transient(obs)))
     ready = bool(streak) and any(streak["count"].get(r, 0) >= STREAK_ALERT for r in bases)
     held = False
     if transient_only and trusted:

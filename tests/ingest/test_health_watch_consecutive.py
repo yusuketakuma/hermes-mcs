@@ -7,14 +7,21 @@ from pathlib import Path
 import pytest
 import safe_io
 
+import collection_diagnostics
 import health_watch
 
 
-def _tick(home, now, overall="degraded", reasons=("stage_errors",), at=None):
+def _tick(home, now, overall="degraded", reasons=("stage_errors",), at=None,
+          errors=("deadline_exceeded",), diagnostics=True):
     p = Path(home) / "data" / "health.json"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"overall": overall, "at": now - 1 if at is None else at,
-                             "state_reasons": list(reasons)}))
+    at = now - 1 if at is None else at
+    health = {"overall": overall, "at": at, "state_reasons": list(reasons)}
+    if diagnostics:     # a transient-only error breakdown unless a test says otherwise
+        health["collection_diagnostics"] = {
+            "observed_at": at, "errors": collection_diagnostics.error_counts(list(errors)),
+            "incomplete": collection_diagnostics.unknown_incomplete()}
+    p.write_text(json.dumps(health))
     return health_watch.evaluate(str(home), now, cfg={})
 
 
@@ -111,3 +118,43 @@ def test_alert_text_states_the_observed_count_and_elapsed_time(tmp_path):
     assert any(line.startswith("継続: 同じ異常を3回続けて観測（初回 ") and "約20分継続" in line
                for line in lines)
     assert not any("30分" in line for line in lines)
+
+
+@pytest.mark.parametrize("errors", [("project 7: db_write_failed",), ("mark 7: no_token",),
+                                    ("import 7: forbidden",), ("config: semantic_not_object",),
+                                    ("run_lock_lost",), ("brand_new_code",),
+                                    ("deadline_exceeded", "project 7: db_write_failed")])
+def test_stage_errors_with_a_non_transient_category_alert_at_once(tmp_path, errors):
+    report = _tick(tmp_path, 1000, errors=errors)
+    assert report["alert"] and not report["alert_held"]
+
+
+def test_stage_errors_without_a_readable_breakdown_alert_at_once(tmp_path):
+    assert _tick(tmp_path, 1000, diagnostics=False)["alert"]               # pre-1.1.0 health
+    legacy = tmp_path / "legacy"
+    p = legacy / "data" / "health.json"
+    p.parent.mkdir(parents=True)
+    block = {"observed_at": 999, "errors": collection_diagnostics.error_counts(["deadline_exceeded"]),
+             "incomplete": collection_diagnostics.unknown_incomplete()}
+    del block["errors"]["categories"]                                         # legacy nine only
+    p.write_text(json.dumps({"overall": "degraded", "at": 999, "state_reasons": ["stage_errors"],
+                             "collection_diagnostics": block}))
+    assert health_watch.evaluate(str(legacy), 1000, cfg={})["alert"]
+
+
+@pytest.mark.parametrize("content", ["{broken", "[]", '"text"', json.dumps({"streak": None})])
+def test_a_present_but_unreadable_state_file_never_holds(tmp_path, content):
+    state = Path(tmp_path) / health_watch.STATE_REL
+    state.parent.mkdir(parents=True)
+    state.write_text(content)
+    report = _tick(tmp_path, 1000)
+    assert report["alert"] and not report["alert_held"]
+
+
+def test_a_missing_or_old_state_file_starts_the_count(tmp_path):
+    assert _tick(tmp_path, 1000)["alert_held"]                               # no file
+    old = tmp_path / "old"
+    state = Path(old) / health_watch.STATE_REL
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({"last": {"status": "ok", "health_at": 900, "evidence_at": 900}}))
+    assert _tick(old, 1000)["alert_held"]                                    # no streak key yet
