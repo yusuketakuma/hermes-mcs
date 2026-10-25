@@ -85,7 +85,7 @@ def test_wizard_only_collects_settings_and_returns_dictionary_step(monkeypatch, 
     cfg = {"mcs_login_id": "synthetic", "notify_target": "slack:C123", "trickle_pages": 7}
     monkeypatch.setattr("builtins.input", lambda prompt: "")
     monkeypatch.setattr(setup_wizard, "wizard_drug_map", lambda *a, **k: pytest.fail("dictionary write"))
-    step = setup_wizard.wizard(cfg, home=str(tmp_path))
+    step = setup_wizard.wizard(cfg)
     assert type(step) is int and step > 1
     assert cfg["trickle_pages"] == 7
     assert not list(tmp_path.iterdir())

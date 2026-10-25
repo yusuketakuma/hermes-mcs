@@ -59,7 +59,7 @@ def test_unused_connectors_have_no_empty_steps(monkeypatch, capsys):
         return "いいえ" if key == "drug_map.bundled" else ""
 
     monkeypatch.setattr("builtins.input", answer)
-    setup_wizard.wizard(cfg, home=mcs_setup.HOME)
+    setup_wizard.wizard(cfg)
     output = capsys.readouterr().out
     assert "【手順 1】" in output
     assert "朝のまとめ通知" in output

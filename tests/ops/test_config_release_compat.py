@@ -77,10 +77,10 @@ def test_fresh_channel_default_reuses_the_operators_notification_target(monkeypa
     replies = iter(['', '', 'いいえ'] * 2)
     monkeypatch.setattr('builtins.input', lambda *a: next(replies))
     cfg = {'notify_target': transport + ':' + channel}
-    setup_wizard.wizard(cfg, home=mcs_setup.HOME)
+    setup_wizard.wizard(cfg)
     assert cfg['notify'][transport]['channel_id'] == channel
     cfg['notify'][transport]['channel_id'] = 'keep-existing'
-    setup_wizard.wizard(cfg, home=mcs_setup.HOME)
+    setup_wizard.wizard(cfg)
     assert cfg['notify'][transport]['channel_id'] == 'keep-existing'
 
 
@@ -109,7 +109,7 @@ def test_secondary_system_transport_is_selected_before_its_scope_prompts(monkeyp
         return answers.get(key, '')
 
     monkeypatch.setattr('builtins.input', answer)
-    setup_wizard.wizard(cfg, home=mcs_setup.HOME)
+    setup_wizard.wizard(cfg)
     assert seen.index('notify_system_target') < seen.index('notify.slack.profile')
     assert cfg['notify']['slack']['channel_id'] == 'C1234567890'
     assert cfg['notify']['discord']['channel_id'] == '1234567890'

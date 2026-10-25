@@ -2434,3 +2434,22 @@ def test_japanese_cli_guidance_does_not_read_or_change_config(monkeypatch, capsy
         assert "オプション" in output.out
         assert "変更しません" in output.out
         assert "show this help message" not in output.out
+
+
+def test_help_starts_with_the_japanese_usage(capsys):
+    with pytest.raises(SystemExit):
+        mcs_setup.main(["--help"])
+    assert capsys.readouterr().out.startswith("使い方: ")
+
+
+def test_init_replaces_malformed_signal_and_semantic_sections(capsys):
+    from types import SimpleNamespace
+    cfg = {"signals": ["bad"], "semantic": "bad", "keep": 1}
+    args = SimpleNamespace(semantic_mode="off", project_ids=None, signals_notify=False,
+                           self_orgs=["合成事業所"], self_professions=None)
+    mcs_setup._init_apply_section_flags(cfg, args)
+    out = capsys.readouterr().out
+    assert out.count("既存のアラート設定（signals）の形式が不正です。この設定項目を空にして設定し直します") == 1
+    assert out.count("既存の意味解析設定（semantic）の形式が不正です。この設定項目を空にして設定し直します") == 1
+    assert cfg == {"signals": {"notify": False, "self_organizations": ["合成事業所"]},
+                   "semantic": {"mode": "off"}, "keep": 1}

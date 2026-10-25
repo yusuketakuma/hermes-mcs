@@ -380,7 +380,7 @@ def ask(key: str, kind: str, default, desc: str, cur, present=False):
         print(f"    {val}")
 
 
-def wizard(cfg: dict, *, home):
+def wizard(cfg: dict):
     """Walk every config key in sections — Enter accepts the shown
     current/default value, so a beginner can step through safely.
     Recommended setup skips advanced items while retaining existing values.

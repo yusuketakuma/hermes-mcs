@@ -68,6 +68,7 @@ import mcs_util
 import service_contract
 import lifecycle_io
 from lifecycle_io import KEYCHAIN_SERVICE
+from cli_args import JapaneseArgumentParser
 from mcs_config import transport_enabled, validate_config, validate_notify
 import environment_diagnostics
 import mcs_runtime
@@ -492,25 +493,25 @@ def _init_apply_set_overrides(cfg: dict, set_args) -> int | None:
     return None
 
 
+def _reset_section(cfg: dict, key: str, label: str) -> dict:
+    """cfg[key] as a dict; a malformed value is announced and replaced by an empty one."""
+    section = cfg.get(key)
+    if not isinstance(section, dict):
+        if section is not None:
+            print(f"既存の{label}（{key}）の形式が不正です。この設定項目を空にして設定し直します")
+        section = cfg[key] = {}
+    return section
+
+
 def _init_apply_section_flags(cfg: dict, args) -> None:
     """Apply the semantic/signals flags and the manual self-identity override."""
     if args.semantic_mode:
-        sem = cfg.get("semantic")
-        if not isinstance(sem, dict):
-            if sem is not None:
-                print("既存の意味解析設定（semantic）の形式が不正です。"
-                      "この設定項目を空にして設定し直します")
-            sem = cfg["semantic"] = {}
+        sem = _reset_section(cfg, "semantic", "意味解析設定")
         sem["mode"] = args.semantic_mode
         if args.project_ids is not None:
             sem["project_ids"] = args.project_ids
     if args.signals_notify is not None:
-        sig = cfg.get("signals")
-        if not isinstance(sig, dict):
-            if sig is not None:
-                print("既存のアラート設定（signals）の形式が不正です。"
-                      "この設定項目を空にして設定し直します")
-            sig = cfg["signals"] = {}
+        sig = _reset_section(cfg, "signals", "アラート設定")
         sig["notify"] = args.signals_notify
 
     # own facility/professions — manual OVERRIDE of the self identity
@@ -528,12 +529,7 @@ def _init_apply_section_flags(cfg: dict, args) -> None:
                  if isinstance(cur_sig.get("self_professions"), list)
                  else None))
     if orgs or profs:
-        sig = cfg.get("signals")
-        if not isinstance(sig, dict):
-            if sig is not None:
-                print("既存のアラート設定（signals）の形式が不正です。"
-                      "この設定項目を空にして設定し直します")
-            sig = cfg["signals"] = {}
+        sig = _reset_section(cfg, "signals", "アラート設定")
         if orgs:
             sig["self_organizations"] = orgs
         if profs:
@@ -690,7 +686,7 @@ def cmd_init(args) -> int:
     wizard_step = 1
     if not args.yes:
         try:
-            wizard_step = setup_wizard.wizard(cfg, home=HOME)
+            wizard_step = setup_wizard.wizard(cfg)
             setup_wizard.wizard_optional_features(cfg)
         except (KeyboardInterrupt, EOFError):
             print("\n設定を中止しました。設定ファイルやパスワードは保存していません。"
@@ -1468,7 +1464,7 @@ RECOVERY_DIR = os.path.expanduser("~/.mcs-recovery")
 # = mcs_standalone.service.HEALTH_*: the standalone host's external watcher
 
 
-class _SetupParser(argparse.ArgumentParser):
+class _SetupParser(JapaneseArgumentParser):
     """設定コマンド共通の、日本語のヘルプと引数エラー。"""
 
     def __init__(self, *args, **kwargs):
@@ -1476,12 +1472,6 @@ class _SetupParser(argparse.ArgumentParser):
         self._positionals.title = "コマンド・必須の指定"
         self._optionals.title = "オプション"
         self.add_argument("-h", "--help", action="help", help="使い方を表示して終了します（変更しません）")
-
-    def format_help(self):
-        return super().format_help().replace("usage: ", "使い方: ", 1)
-
-    def format_usage(self):
-        return super().format_usage().replace("usage: ", "使い方: ", 1)
 
     def error(self, message):
         self.print_usage(sys.stderr)

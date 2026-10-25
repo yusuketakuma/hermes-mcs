@@ -36,7 +36,7 @@ def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
         return answers.get(key, '')
 
     monkeypatch.setattr('builtins.input', answer)
-    setup_wizard.wizard(cfg, home=mcs_setup.HOME)
+    setup_wizard.wizard(cfg)
     assert 'trickle_pages' not in seen and cfg['trickle_pages'] == 7
     assert 'semantic.mode' not in seen and cfg['semantic']['mode'] == 'off'
     assert cfg['notify']['slack']['allowed_user_ids'] == ['U123']
