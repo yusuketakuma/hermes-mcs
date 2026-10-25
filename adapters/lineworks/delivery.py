@@ -19,6 +19,18 @@ from . import cards
 from .client import ClientError
 
 
+def _card_prior(spec):
+    """The delivered card's remote id when the runner proved it reusable; validated
+    specs carry at most one card, always first."""
+    return next((p.get("prior_remote_id") for p in spec["parts"].get("manifest", [])
+                 if p["kind"] == "card"), None)
+
+
+def _part_remote_id(spec, part) -> str:
+    """Deterministic id for a part LINE WORKS posts without returning one."""
+    return "lw:" + hashlib.sha256((spec["delivery_id"] + part["part_id"]).encode()).hexdigest()[:32]
+
+
 def notify_dirs(root):
     dirs = paths.notify_dirs(root)
     dirs.update(render=os.path.join(root, "lineworks_render"),
@@ -29,7 +41,7 @@ def notify_dirs(root):
 @contextmanager
 def api_lock(root):
     """Serialize all adapter and text-CLI writes to the configured resource."""
-    state = os.path.join(root, "lineworks_state")
+    state = notify_dirs(root)["state"]
     os.makedirs(state, mode=0o700, exist_ok=True)
     fd = os.open(os.path.join(state, "api.lock"), os.O_CREAT | os.O_RDWR, 0o600)
     try:
@@ -170,8 +182,7 @@ class Sender:
         if any(spec["delivery"].get(key) != self.settings[key] for key in SCOPE_KEYS) \
                 or not self.route_current(spec):
             return {"result": "not_sent", "error_code": "scope_mismatch"}
-        reused = next((p.get("prior_remote_id") for p in spec["parts"].get("manifest", [])
-                       if p["kind"] == "card"), None)
+        reused = _card_prior(spec)
         if reused:
             return {"result": "delivered", "message_id": reused}
         try:
@@ -238,9 +249,7 @@ class DeliveryWorker(BaseWorker):
             self._reg.retire_card_tokens(spec["card_key"])
         outcome = await self._sender.perform(spec, retry_allowed=self._retry_gate(spec))
         if outcome["result"] == "delivered" and claim["spec"]["op"] != "revoke":
-            reused = any(p.get("prior_remote_id") for p in spec["parts"].get("manifest", [])
-                         if p["kind"] == "card")
-            if reused:
+            if _card_prior(spec):
                 return outcome  # keep the original token lifetime and confirmation state
             self._reg.retire_card_tokens(spec["card_key"])
             tokens = {token: {**context, **self.scope(),
@@ -277,8 +286,7 @@ class DeliveryWorker(BaseWorker):
                 text = chunk_text(spec, part.get("name") or "", chunks[index])
                 await locked(self._sender.send, {"type": "text", "text": text},
                              wait_cooldown=True, retry_allowed=self._retry_gate(spec))
-                rid = "lw:" + hashlib.sha256(
-                    (spec["delivery_id"] + part["part_id"]).encode()).hexdigest()[:32]
+                rid = _part_remote_id(spec, part)
             elif part["kind"] == "attachment_part":
                 if part.get("unavailable"):
                     if not part.get("caption"):
@@ -288,8 +296,7 @@ class DeliveryWorker(BaseWorker):
                         return {"result": "delivered", "remote_id": part["prior_remote_id"]}
                     await locked(self._sender.send, {"type": "text", "text": part["caption"]},
                                  wait_cooldown=True, retry_allowed=self._retry_gate(spec))
-                    return {"result": "delivered", "remote_id": "lw:" + hashlib.sha256(
-                        (spec["delivery_id"] + part["part_id"]).encode()).hexdigest()[:32]}
+                    return {"result": "delivered", "remote_id": _part_remote_id(spec, part)}
                 if part.get("prior_remote_id"):
                     return {"result": "delivered", "remote_id": part["prior_remote_id"]}
                 blob = await asyncio.to_thread(paths.read_verified_attachment,

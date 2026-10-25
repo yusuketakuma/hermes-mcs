@@ -274,7 +274,7 @@ def main(argv=None):
             return 0
         if args.command == "status":
             scope = settings(args.root)
-            callbacks = Path(scope["data_root"]) / "lineworks_state" / "callbacks"
+            callbacks = Path(notify_dirs(scope["data_root"])["state"]) / "callbacks"
             unknown = sum(1 for _ in callbacks.glob("*.working"))
             unknown += sum(callback_result(p) == "unknown"
                            for p in callbacks.glob("*.done"))

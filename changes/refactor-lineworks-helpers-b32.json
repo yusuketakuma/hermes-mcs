@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "LINE WORKS 接続の重複した判定と保存先の指定を整理（挙動は変更なし）",
+  "summary": "LINE WORKS 接続で、送信済みカードの再利用の判定、部品の識別子の作成、状態フォルダの場所、受信した通知の重複キー検査を、それぞれ1か所の定義にまとめました。送信・再送しない判定、識別子の値、保存先、受信の受付・拒否は変わりません。",
+  "upgrade": "既存の更新手順（mcs_update.py）に従って、再起動処理を含めて稼働中のプロセスへ反映されます。Git の差分だけを直接反映した場合は、独立 LINE WORKS アダプターを別途再起動するまで新しいコードは使われません（未実施なら未反映です）。このコードは意味チェック候補のfingerprintと抽出コードのdigestの対象外です。設定・認証情報・保存済みの記録の書換えはありません。",
+  "details": [
+    "状態フォルダは従来どおりデータの lineworks_state です。",
+    "受信した通知に同じキーが重なっていれば、従来どおり受け付けません（400）。"
+  ],
+  "refs": ["adapters/lineworks/delivery.py", "adapters/lineworks/__main__.py", "adapters/lineworks/server.py"]
+}

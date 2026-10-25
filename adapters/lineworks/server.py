@@ -40,15 +40,6 @@ def callback_result(path):
     return "unknown"
 
 
-def _object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate_key")
-        result[key] = value
-    return result
-
-
 class CallbackInbox:
     def __init__(self, directory, settings, bot_secret, *, clock=time.time):
         self.directory = Path(directory)
@@ -62,8 +53,9 @@ class CallbackInbox:
         if bot_id != self.settings["application_id"] or not verify_signature(
                 body, signature, self.bot_secret):
             return 403
+        from mcs_util import unique_pairs        # adapters import core helpers inside functions
         try:
-            event = json.loads(body.decode("utf-8"), object_pairs_hook=_object)
+            event = json.loads(body.decode("utf-8"), object_pairs_hook=unique_pairs)
             if not isinstance(event, dict):
                 return 400
             source = event.get("source")
